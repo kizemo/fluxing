@@ -24,9 +24,6 @@ compile_commands.json
 /output/*.ime
 /output/*.txt
 /output/*.bat
-/output/data/essay.txt
-/output/data/opencc/
-/output/data/*.yaml
 /output/archives
 /include/glog
 /include/rime*.h
@@ -56,3 +53,5 @@ arm64x_wrapper/*.dll
 arm64x_wrapper/*.ime
 arm64x_wrapper/*.lib
 arm64x_wrapper/*.exp
+# 临时备份: 旧 weasel.yaml (rime-ice 替换前的版本), 留工作树作回滚参考, 不入库
+/output/data/weasel.yaml.bak
