@@ -39,7 +39,7 @@ static LPCWSTR GetWeaselRegName() {
   if (is_wow64())
     WEASEL_REG_NAME_ = L"Software\\WOW6432Node\\Rime\\Weasel";
   else
-    WEASEL_REG_NAME_ = L"Software\\Rime\\Weasel";
+    WEASEL_REG_NAME_ = L"Software\\Fluxing\\Weasel";
 
   return WEASEL_REG_NAME_;
 }
@@ -311,7 +311,7 @@ void WeaselTSF::_HandleLangBarMenuSelect(UINT wID) {
       }
       break;
     case ID_WEASELTRAY_USERCONFIG:
-      if (FAILED(RegGetStringValue(HKEY_CURRENT_USER, L"Software\\Rime\\Weasel",
+      if (FAILED(RegGetStringValue(HKEY_CURRENT_USER, L"Software\\Fluxing\\Weasel",
                                    L"RimeUserDir", dir)) ||
           dir.empty()) {
         WCHAR _path[MAX_PATH] = {0};
