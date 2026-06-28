@@ -19,7 +19,8 @@ Unicode true
 !define WEASEL_BUILD 0
 !endif
 
-!define WEASEL_ROOT $INSTDIR\weasel-${FLUXING_VERSION}
+!define WEASEL_ROOT $INSTDIR\weasel
+!define FLUXING_ROOT $INSTDIR\fluxing
 !define REG_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Fluxing"
 
 ; The name of the installer
@@ -48,6 +49,7 @@ RequestExecutionLevel admin
 ; Pages
 
 !insertmacro MUI_PAGE_LICENSE "LICENSE.txt"
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE "ForceFluxingSuffix"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -122,6 +124,8 @@ toquit:
     Quit
   ${EndIf}
 
+  ReadRegStr $R0 HKLM "Software\Fluxing\Weasel" "InstallDir"
+  StrCmp $R0 "" 0 skip
   ReadRegStr $R0 HKLM "Software\Rime\Weasel" "InstallDir"
   StrCmp $R0 "" 0 skip
   ; The default installation directory
@@ -197,7 +201,7 @@ FunctionEnd
 
 ; Registry key to check for directory (so if you install again, it will
 ; overwrite the old one automatically)
-InstallDirRegKey HKLM "Software\Rime\Weasel" "InstallDir"
+InstallDirRegKey HKLM "Software\Fluxing\Weasel" "InstallDir"
 
 ; The stuff to install
 Section "Fluxing"
@@ -207,7 +211,7 @@ Section "Fluxing"
   ; Write the new installation path into the registry
   ; redirect on 64 bit system
   ; HKLM SOFTWARE\WOW6432Node\Rime\Weasel "InstallDir" "$INSTDIR"
-  WriteRegStr HKLM SOFTWARE\Rime\Weasel "InstallDir" "$INSTDIR"
+  WriteRegStr HKLM SOFTWARE\Fluxing\Weasel "InstallDir" "$INSTDIR"
 
   ; Reset INSTDIR for the new version
   StrCpy $INSTDIR "${WEASEL_ROOT}"
@@ -414,3 +418,35 @@ Section "Uninstall"
 
 SectionEnd
 
+
+
+Function ForceFluxingSuffix
+  ; Enforce fluxing suffix on $INSTDIR (idempotent: typing fluxing stays fluxing).
+  Push $INSTDIR
+  Call IsFluxingPath
+  Pop $0
+  StrCmp $0 "yes" done
+  StrCpy $INSTDIR "$INSTDIR\fluxing"
+done:
+FunctionEnd
+
+Function IsFluxingPath
+  ; Input on stack: path; output on stack: "yes" or "no"
+  Exch $0
+  ; strip trailing backslash if any
+  StrCpy $1 $0 1 -1
+  StrCmp $1 "\" 0 +2
+    StrCpy $0 $0 -1
+  ; compare last 7 chars to "fluxing" or "Fluxing"
+  StrCpy $2 $0 7 -7
+  StrCmp $2 "fluxing" yes 0
+  StrCmp $2 "Fluxing" yes 0
+  Push "no"
+  Goto end
+yes:
+  Push "yes"
+end:
+  Exch $0
+  Exch $1
+  Pop $0
+FunctionEnd
