@@ -1,8 +1,8 @@
 ﻿#pragma once
 
-#define WEASEL_CODE_NAME "Weasel"
-#define WEASEL_REG_KEY L"Software\\Rime\\Weasel"
-#define RIME_REG_KEY L"Software\\Rime"
+#define WEASEL_CODE_NAME "Fluxing"
+#define WEASEL_REG_KEY L"Software\\Fluxing\\Fluxing"
+#define RIME_REG_KEY L"Software\\Fluxing"
 
 #define STRINGIZE(x) #x
 #define VERSION_STR(x) STRINGIZE(x)
