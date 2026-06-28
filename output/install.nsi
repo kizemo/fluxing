@@ -1,4 +1,5 @@
-﻿; weasel installation script
+﻿﻿﻿﻿; weasel installation script
+; Attribution: built on the upstream RIME / 中州韻輸入法引擎 (https://rime.im/)
 !include FileFunc.nsh
 !include LogicLib.nsh
 !include MUI2.nsh
@@ -30,7 +31,7 @@ OutFile "archives\fluxing-${PRODUCT_VERSION}-installer.exe"
 VIProductVersion "${FLUXING_VERSION}.${WEASEL_BUILD}"
 VIAddVersionKey /LANG=2052 "ProductName" "火流猩输入法"
 VIAddVersionKey /LANG=2052 "Comments" "Powered by Fluxing & RIME"
-VIAddVersionKey /LANG=2052 "CompanyName" "式恕堂"
+VIAddVersionKey /LANG=2052 "CompanyName" "aiec.fun"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyleft RIME Developers"
 VIAddVersionKey /LANG=2052 "FileDescription" "火流猩輸入法"
 VIAddVersionKey /LANG=2052 "FileVersion" "${FLUXING_VERSION}"
@@ -312,7 +313,7 @@ program_files:
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayIcon" '"$INSTDIR\WeaselServer.exe"'
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayVersion" "${FLUXING_VERSION}.${WEASEL_BUILD}"
   WriteRegStr HKLM "${REG_UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
-  WriteRegStr HKLM "${REG_UNINST_KEY}" "Publisher" "式恕堂"
+  WriteRegStr HKLM "${REG_UNINST_KEY}" "Publisher" "aiec.fun"
   WriteRegStr HKLM "${REG_UNINST_KEY}" "URLInfoAbout" "https://rime.im/"
   WriteRegStr HKLM "${REG_UNINST_KEY}" "HelpLink" "https://rime.im/docs/"
   WriteRegDWORD HKLM "${REG_UNINST_KEY}" "NoModify" 1
