@@ -10,30 +10,30 @@ Unicode true
 ;--------------------------------
 ; General
 
-!ifndef WEASEL_VERSION
-!define WEASEL_VERSION 0.1.0
+!ifndef FLUXING_VERSION
+!define FLUXING_VERSION 0.1.0
 !endif
 
 !ifndef WEASEL_BUILD
 !define WEASEL_BUILD 0
 !endif
 
-!define WEASEL_ROOT $INSTDIR\weasel-${WEASEL_VERSION}
+!define WEASEL_ROOT $INSTDIR\weasel-${FLUXING_VERSION}
 !define REG_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Fluxing"
 
 ; The name of the installer
-Name "Fluxing ${WEASEL_VERSION}"
+Name "Fluxing ${FLUXING_VERSION}"
 
 ; The file to write
 OutFile "archives\fluxing-${PRODUCT_VERSION}-installer.exe"
 
-VIProductVersion "${WEASEL_VERSION}.${WEASEL_BUILD}"
+VIProductVersion "${FLUXING_VERSION}.${WEASEL_BUILD}"
 VIAddVersionKey /LANG=2052 "ProductName" "火流猩输入法"
-VIAddVersionKey /LANG=2052 "Comments" "Powered by RIME | 中州韻輸入法引擎"
+VIAddVersionKey /LANG=2052 "Comments" "Powered by Fluxing & RIME"
 VIAddVersionKey /LANG=2052 "CompanyName" "式恕堂"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyleft RIME Developers"
 VIAddVersionKey /LANG=2052 "FileDescription" "火流猩輸入法"
-VIAddVersionKey /LANG=2052 "FileVersion" "${WEASEL_VERSION}"
+VIAddVersionKey /LANG=2052 "FileVersion" "${FLUXING_VERSION}"
 
 !define MUI_ICON ..\resource\weasel.ico
 SetCompressor /SOLID lzma
@@ -310,7 +310,7 @@ program_files:
   ; Write the uninstall keys for Windows
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayName" "$(DISPLAYNAME)"
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayIcon" '"$INSTDIR\WeaselServer.exe"'
-  WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayVersion" "${WEASEL_VERSION}.${WEASEL_BUILD}"
+  WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayVersion" "${FLUXING_VERSION}.${WEASEL_BUILD}"
   WriteRegStr HKLM "${REG_UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegStr HKLM "${REG_UNINST_KEY}" "Publisher" "式恕堂"
   WriteRegStr HKLM "${REG_UNINST_KEY}" "URLInfoAbout" "https://rime.im/"
