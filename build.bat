@@ -12,17 +12,17 @@ if not defined VERSION_MAJOR set VERSION_MAJOR=0
 if not defined VERSION_MINOR set VERSION_MINOR=17
 if not defined VERSION_PATCH set VERSION_PATCH=4
 
-if not defined WEASEL_VERSION set WEASEL_VERSION=%VERSION_MAJOR%.%VERSION_MINOR%.%VERSION_PATCH%
+if not defined FLUXING_VERSION set FLUXING_VERSION=%VERSION_MAJOR%.%VERSION_MINOR%.%VERSION_PATCH%
 if not defined WEASEL_BUILD set WEASEL_BUILD=0
 
 rem use numeric build version for release build
-set PRODUCT_VERSION=%WEASEL_VERSION%.%WEASEL_BUILD%
+set PRODUCT_VERSION=%FLUXING_VERSION%.%WEASEL_BUILD%
 rem for non-release build, try to use git commit hash as product build version
 if not defined RELEASE_BUILD (
   rem check if git is installed and available, then get the short commit id of head
   git --version >nul 2>&1
   if not errorlevel 1 (
-    for /f "delims=" %%i in ('git tag --sort=-creatordate ^| findstr /r "%WEASEL_VERSION%"') do (
+    for /f "delims=" %%i in ('git tag --sort=-creatordate ^| findstr /r "%FLUXING_VERSION%"') do (
       set LAST_TAG=%%i
       goto found_tag
     )
@@ -31,15 +31,15 @@ if not defined RELEASE_BUILD (
       set WEASEL_BUILD=%%i
     )
     rem get short commmit id of head
-    for /F %%i in ('git rev-parse --short HEAD') do (set PRODUCT_VERSION=%WEASEL_VERSION%.%WEASEL_BUILD%.%%i)
+    for /F %%i in ('git rev-parse --short HEAD') do (set PRODUCT_VERSION=%FLUXING_VERSION%.%WEASEL_BUILD%.%%i)
   )
 )
 
 rem FILE_VERSION is always 4 numbers; same as PRODUCT_VERSION in release build
-if not defined FILE_VERSION set FILE_VERSION=%WEASEL_VERSION%.%WEASEL_BUILD%
+if not defined FILE_VERSION set FILE_VERSION=%FLUXING_VERSION%.%WEASEL_BUILD%
 
 echo PRODUCT_VERSION=%PRODUCT_VERSION%
-echo WEASEL_VERSION=%WEASEL_VERSION%
+echo FLUXING_VERSION=%FLUXING_VERSION%
 echo WEASEL_BUILD=%WEASEL_BUILD%
 echo WEASEL_ROOT=%WEASEL_ROOT%
 echo WEASEL_BUNDLED_RECIPES=%WEASEL_BUNDLED_RECIPES%
@@ -224,7 +224,7 @@ if %build_arm64% == 1 (
 
 if %build_installer% == 1 (
   "%ProgramFiles(x86)%"\NSIS\Bin\makensis.exe ^
-  /DWEASEL_VERSION=%WEASEL_VERSION% ^
+  /DFLUXING_VERSION=%FLUXING_VERSION% ^
   /DWEASEL_BUILD=%WEASEL_BUILD% ^
   /DPRODUCT_VERSION=%PRODUCT_VERSION% ^
   output\install.nsi

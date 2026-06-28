@@ -96,7 +96,7 @@ void RimeWithWeaselHandler::_Setup() {
   std::string distribution_name = wtou8(get_weasel_ime_name());
   weasel_traits.distribution_name = distribution_name.c_str();
   weasel_traits.distribution_code_name = WEASEL_CODE_NAME;
-  weasel_traits.distribution_version = WEASEL_VERSION;
+  weasel_traits.distribution_version = FLUXING_VERSION;
   weasel_traits.app_name = "rime.weasel";
   std::string log_dir = WeaselLogPath().u8string();
   weasel_traits.log_dir = log_dir.c_str();
