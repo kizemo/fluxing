@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <filesystem>
 #include <string>
 #include <sstream>
@@ -34,6 +34,40 @@ inline std::wstring getUsername() {
 // data directories
 std::filesystem::path WeaselSharedDataPath();
 std::filesystem::path WeaselUserDataPath();
+
+// Enforce the `fluxing` suffix on a user-data path (spec 002 FR-002).
+// Idempotent. Treats the path case-insensitively for the last segment; appends
+// `\fluxing` if and only if the last path component is not already `fluxing`.
+// Preserves any trailing backslash the caller originally supplied.
+inline std::wstring EnsureFluxingUserDataSuffix(const std::wstring& path) {
+  if (path.empty())
+    return path;
+  std::wstring p = path;
+  while (!p.empty() && (p.back() == L'\\' || p.back() == L'/'))
+    p.pop_back();
+  if (p.empty())
+    return path;
+  size_t sep = p.find_last_of(L"\\/");
+  std::wstring last = (sep == std::wstring::npos) ? p : p.substr(sep + 1);
+  auto ieq = [](const std::wstring& a, const std::wstring& b) {
+    if (a.size() != b.size())
+      return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+      wchar_t ca = a[i];
+      if (ca >= L'A' && ca <= L'Z') ca = (wchar_t)(ca - L'A' + L'a');
+      wchar_t cb = b[i];
+      if (cb >= L'A' && cb <= L'Z') cb = (wchar_t)(cb - L'A' + L'a');
+      if (ca != cb) return false;
+    }
+    return true;
+  };
+  if (ieq(last, L"fluxing"))
+    return path;
+  std::wstring out = p + L"\\fluxing";
+  if (path.back() == L'\\' || path.back() == L'/')
+    out += path.back();
+  return out;
+}
 inline fs::path WeaselLogPath() {
   WCHAR _path[MAX_PATH] = {0};
   // default location

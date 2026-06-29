@@ -16,9 +16,12 @@ fs::path WeaselUserDataPath() {
         RegQueryValueEx(hKey, L"RimeUserDir", NULL, &type, (LPBYTE)_path, &len);
     RegCloseKey(hKey);
     if (ret == ERROR_SUCCESS && type == REG_SZ && _path[0]) {
-      return fs::path(_path);
+      // spec 002 FR-002: enforce fluxing suffix (safety net for tools that
+      // may have written a non-fluxing path to the registry)
+      std::wstring enforced = EnsureFluxingUserDataSuffix(std::wstring(_path));
+      return fs::path(enforced);
     }
-  }
+   }
   // default location
   ExpandEnvironmentStringsW(L"%AppData%\\fluxing", _path, _countof(_path));
   return fs::path(_path);
