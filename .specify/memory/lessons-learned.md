@@ -223,3 +223,22 @@ key_binder binding 字段支持 4 类 action：
 - RIME yaml / spec 文档 / 我们项目的所有文本文件 → **UTF-8 NO BOM**
 - 工具：用 `[System.IO.File]::WriteAllText(path, content, [System.Text.UTF8Encoding]::new($false))`
 - **不要用** `Out-File -Encoding utf8`（会污染 BOM）
+---
+
+## L08 · GitHub API PATCH repository endpoint 的中文处理 quirk
+
+**事故**：用 GitHub REST API PATCH /repos/{owner}/{repo} 修改 description 字段时，全中文 description 被替换为问号，Topics 也被丢弃（topics 必须用 /repos/{owner}/{repo}/topics 端点）。
+
+**根因**：
+
+- GitHub API PATCH /repos/{owner}/{repo} 端点在某些场景下会把全非 ASCII 描述里的中文字符替换为问号 — 已知行为，不是字符编码问题（request body 是干净 UTF-8）
+- 修复：把 description 写成英文为主 + 中文括号的形式，GitHub 服务端会保留作为整体的 description 内的非 ASCII 片段
+- Topics 字段在 PATCH /repos/{owner}/{repo} 端点不会修改（即使 body 里写 topics:[...] 也被忽略）
+- 必须用独立端点 PUT /repos/{owner}/{repo}/topics + accept 头 application/vnd.github.mercy-preview+json + body {"names":[...]}
+
+**教训**：
+
+- GitHub About 改 Description 时：全英文或英文为主 + 中文括号，不要用全中文 description
+- Topics 必须用独立 /topics 端点 (PUT)，不是 /repos/{owner}/{repo} 的 PATCH 里的 topics 字段
+- 验证：改完后 GET 仓库信息，byte-level 检查 description UTF-8 字节序列是否完整 (0xE0-0xEF 起始，无 0x3F 替代)
+- 不能用 Invoke-RestMethod | Select-Object 验证 — PS 5.1 GBK 化会把中文显示成乱码，误判 API 失败
