@@ -1,117 +1,168 @@
-﻿【小狼毫】輸入法
-================
+# 火流猩输入法 / Fluxing
 
-基於 中州韻輸入法引擎／Rime Input Method Engine 等開源技術
+> **RIME 引擎的 Windows 原生前端 fork，基于 [rime/weasel](https://github.com/rime/weasel)**
+>
+> 品牌：中文名"火流猩输入法"，英文名 `Fluxing`。
+> 派生分支：`Fluxing`（基于 weasel 0.17.x）
+> 安装目录：`%ProgramFiles%\Fluxing\weasel`
+> 用户数据：`%LocalAppData%\Fluxing`
 
-式恕堂 版權所無
+[![Download](https://img.shields.io/badge/download-fluxing--0.17.5.0-blue)](https://github.com/kizemo/Fluxing/releases)
+[![License: GPLv3](https://img.shields.io/badge/license-GPLv3-green.svg)](LICENSE.txt)
 
-[![Download](https://img.shields.io/github/v/release/rime/weasel)](https://github.com/rime/weasel/releases/latest)
-[![Build status](https://github.com/rime/weasel/actions/workflows/commit-ci.yml/badge.svg)](https://github.com/rime/weasel/actions/workflows/commit-ci.yml)
-[![GitHub Tag](https://img.shields.io/github/tag/rime/weasel.svg)](https://github.com/rime/weasel)
+---
 
-授權條款：GPLv3
+## 这是什么
 
-項目主頁：https://rime.im
+火流猩输入法是 RIME（中州韻）输入法引擎的 **Windows 客户端**。它保留 RIME 引擎的全部灵活性（高度可定制、支持任意方案），同时提供原生 Windows 输入法框架（TSF）集成、系统托盘、自动部署等"装上就能用"的体验。
 
-您可能還需要 RIME 用於其他操作系統的發行版：
+与上游 rime/weasel 的关键差异：
 
-  * ibus-rime、fcitx5-rime 或 fcitx-rime 用於 Linux
-  * 【鼠鬚管】用於 macOS （64位）
+- **品牌化**：产品名、安装目录、注册表路径、托盘资源均替换为 `Fluxing` / `火流猩输入法`，与上游 weasel 互不冲突。
+- **用户数据隔离**：默认用户数据目录为 `%LocalAppData%\Fluxing`（而非 `%AppData%\Rime`），安装路径强制 `fluxing` 后缀，便于多套输入法并存。
+- **预装数据扩展**：默认捆绑 rime_ice / 八股文 等实用方案的数据文件，开箱即用。
+- **v2 路线图（开发中）**：见 `.specify/specs/004-fluxing-v2-roadmap/spec.md` —— mac 风可视化设置面板、跨设备云同步、候选字右键编辑、常用短语独立库、暗色主题跟随系统等。
 
-安裝輸入法
-----------
+---
 
-本品適用於 Windows 8.1 ~ Windows 11
+## 安装
 
-初次安裝時，安裝程序將顯示「安裝選項」對話框。
+### Windows 8.1 / 10 / 11
 
-若要將【小狼毫】註冊到繁體中文（臺灣）鍵盤佈局，請在「輸入語言」欄選擇「中文（臺灣）」，再點擊「安裝」按鈕。
+1. 从 [Releases](https://github.com/kizemo/Fluxing/releases) 下载最新 installer（`fluxing-X.Y.Z-installer.exe`）。
+2. 双击运行；选择安装路径（默认 `C:\Program Files\Fluxing\weasel`）。
+3. 选择用户数据目录（默认 `%LocalAppData%\Fluxing`，强制 `fluxing` 后缀）。
+4. 安装完成后，任务栏出现 Fluxing 输入法指示器；在系统输入法列表启用"火流猩输入法"。
 
-安裝完成後，仍可由開始菜單打開「安裝選項」更改輸入語言。
+### 验证
 
-使用輸入法
-----------
+- 打开任意编辑器（notepad / Word / VS Code），切换到火流猩输入法。
+- 输入拼音"nihao"，候选"你好"等字词出现。
+- 按 `F4` 调出方案选择；按 `Ctrl+grave` 反查。
 
-選取輸入法指示器菜單裏的【中】字樣圖標，開始用小狼毫寫字。
+---
 
-可通過快捷鍵 <kbd>Ctrl+`</kbd> 或 <kbd>F4</kbd> 呼出方案選單、切換輸入方式。
+## 快速上手
 
-定製輸入法
-----------
+### 常用快捷键（v2.0.0 默认）
 
-通過 開始菜單 » 小狼毫輸入法 訪問設定工具及常用位置。
+| 功能 | 快捷键 |
+|---|---|
+| 翻页（下一页 / 上一页） | `,` / `.` |
+| 切换中英文 | `Shift_L` 或 `Shift_R` |
+| 上屏第 2 / 第 3 候选 | `Shift_L` / `Shift_R`（有候选时） |
+| 切换中英标点 | `Ctrl+Shift+9` |
+| 切换简繁 | `Ctrl+Shift+0` |
+| 调出方案选择 | `F4` |
+| 反查 | `Ctrl+grave` |
 
-用戶詞庫、配置文件位於 `%AppData%\Rime`，可通過菜單中的「用戶文件夾」打開。高水平玩家調教 Rime 輸入法常會用到。
+> v2.0.0 之前的 weasel 默认快捷键（`-`/`=` 翻页、`Control+Shift+1..9` 选候选）已替换为以上"vim 风格"快捷键。详见 spec 005。
 
-修改詞庫、配置文件後，須「重新部署」方可生效。
+### 配置文件
 
-定製 Rime 的方法，請參考 Wiki [《定製指南》](https://github.com/rime/home/wiki/CustomizationGuide)。如需定製 Weasel 獨有的樣式和行為，請參考本倉庫 [Wiki 頁面](https://github.com/rime/weasel/wiki)。
+用户数据目录结构：
 
-致謝
-----
+```
+%LocalAppData%\Fluxing\
+├─ default.yaml          # 全局快捷键 / 方案列表 / 行为
+├─ weasel.yaml           # 样式（颜色 / 字体 / 布局）
+├─ <schema>.schema.yaml  # 方案定义（朙月拼音 / rime_ice / ...）
+├─ user.db              # 用户词典（自动维护）
+└─ installation.yaml    # 安装器写入的元数据
+```
 
-### 輸入方案設計：
+通过托盘菜单的"用户文件夹"快捷打开。修改任意 yaml 后，点击托盘 → "重新部署"生效。
 
-  * 【朙月拼音】系列及【八股文】詞典
-    - 部分數據來源於 CC-CEDICT、Android 拼音、新酷音、opencc 等開源項目
-    - 維護者：佛振、瑾昀
-  * 【注音／地球拼音】
-    - 維護者：佛振、瑾昀
-  * 【倉頡五代】
-    - 發明人：朱邦復先生
-    - 碼表源自 www.chinesecj.com
-    - 構詞碼表作者：惜緣
+### 定制 RIME
 
-  【五笔】【粵拼】【上海／蘇州吳語】【中古漢語拼音】【國際音標】等衆多方案
-  不再以安裝包預裝形式提供。可由 <https://github.com/rime/plum> 下載安裝。
+- **方案**：参考 [RIME 定制指南](https://github.com/rime/home/wiki/CustomizationGuide)。
+- **样式**：修改 `weasel.yaml` 的 `style.color_scheme` / `style.layout_type`。
+- **快捷键**：修改 `default.yaml` 的 `key_binder/bindings`。
+- **进阶**：可用 [plum](https://github.com/rime/plum) 一键安装社区方案。
 
-### 程序設計：
+---
 
-  * [佛振](https://github.com/lotem)
-  * [鄒旭](https://github.com/zouxu09)
-  * [Xiangyan Sun](https://github.com/wishstudio)
-  * [Prcuvu](https://github.com/Prcuvu)
-  * [nameoverflow](https://github.com/nameoverflow)
-  * [fxliang](https://github.com/fxliang)
-  * [Azuk 443](https://github.com/determ1ne)
+## v2 路线图
 
-  查看更多 [代碼貢獻者](https://github.com/rime/weasel/graphs/contributors)
+完整规划见 `.specify/specs/004-fluxing-v2-roadmap/spec.md`。P1（v2.0.0）核心特性：
 
-### 美術：
+1. **默认快捷键 rev2**（spec 005）— `,`/`.` 翻页、Shift_L/R 单键上屏候选
+2. **候选字右键编辑**（spec 008）— 右键一键删除用户词典词条
+3. **托盘快速设置面板**（spec 006）— mac 风 `Alt+,` 弹窗，零菜单深度
+4. **常用短语独立库**（spec 009）— `Alt+K` 弹列表，独立于用户词典
+5. **yaml 可视化编辑**（spec 007）— 不再手编 yaml，UI 编辑快捷键/方案/词典
+6. **暗色主题跟随系统**（F11 横切）— 200ms 渐变切换
 
-  * 圖標設計／[Patricivs](https://github.com/Patricivs)
-  * 配色方案／Aben、P1461、Patricivs、skoj、佛振、五磅兔
+后续版本：
 
-### 本品引用了以下開源軟件：
+- **v2.1.0**：跨设备云同步（spec 010，Vercel + 邮箱 + Passkey）
+- **v2.2.0**：现代化安装器 / 首启引导（spec 011）
 
-  * [Boost C++ Libraries](http://www.boost.org/) (Boost Software License)
-  * [curl](https://curl.haxx.se/) (MIT/X derivate license)
-  * [google-glog](https://github.com/google/glog) (BSD 3-Clause License)
-  * [Google Test](https://github.com/google/googletest) (BSD 3-Clause License)
-  * [LevelDB](https://github.com/google/leveldb) (BSD 3-Clause License)
-  * [librime](https://github.com/rime/librime) (BSD 3-Clause License)
-  * [marisa-trie](https://github.com/s-yata/marisa-trie) (BSD 2-Clause License, LGPL 2.1)
-  * [OpenCC / 開放中文轉換](https://github.com/BYVoid/OpenCC) (Apache License 2.0)
-  * [plum](https://github.com/rime/plum) (GNU Lesser General Public License v3.0)
-  * [WinSparkle](https://github.com/vslavik/winsparkle) (MIT License)
-  * [yaml-cpp](https://github.com/jbeder/yaml-cpp) (MIT License)
-  * [7-Zip](https://www.7-zip.org) (GNU LGPLv2.1+ with unRAR restriction)
+---
 
-問題與反饋
-----------
+## 开发
 
-發現程序有 bug，請到 GitHub 反饋
-<https://github.com/rime/weasel/issues>
+### 构建
 
-歡迎提交 pull request
-<https://github.com/rime/weasel/pulls>
+```cmd
+# 一次性：安装 Boost 1.83+、NSIS 3.x、VS 2022 BuildTools
+# 详见 INSTALL.md
 
-Rime 輸入法（不限於 Windows 平臺）功能、使用方法與配置相關的問題，請反饋到
-<https://github.com/rime/home/issues>
+# x64 + Win32 全构建
+build.bat
+```
 
-聯繫方式
---------
+输出：`release/fluxing-X.Y.Z-installer.exe`。
 
-技術交流，歡迎光臨 [Rime 代碼之家](https://github.com/rime/home)，或致信 Rime 開發者 <rimeime@gmail.com>
+### Spec / Plan / Tasks
 
-謝謝！
+所有重大变更遵循 `.specify/memory/constitution.md` 与 `spec-driven-development` 工作流：
+
+- `.specify/specs/NNN-<name>/spec.md` — 意图 / 用户故事 / FR / SC
+- `.specify/specs/NNN-<name>/plan.md` — 技术方案
+- `.specify/specs/NNN-<name>/tasks.md` — 实施分解
+
+---
+
+## 致谢
+
+### 上游
+
+- **RIME 引擎**：基于 [rime/librime](https://github.com/rime/librime)（BSD 3-Clause）。
+- **Weasel 前端**：基于 [rime/weasel](https://github.com/rime/weasel)（GPLv3）。
+- **方案与词库**：
+  - 【朙月拼音】系列及【八股文】词典 — 佛振、瑾昀
+  - 【注音／地球拼音】— 佛振、瑾昀
+  - 【仓颉五代】— 朱邦复先生（码表源自 chinesecj.com）
+  - rime_ice 方案 — iDvel
+
+### 贡献者
+
+- 当前 fork 维护者：[duanyi](https://github.com/kizemo) <duanyi@aiec.fun>
+- 上游贡献者：佛振、邹旭、Xiangyan Sun、Prcuvu、nameoverflow、fxliang、Azuk 443 等（见 [contributors](https://github.com/rime/weasel/graphs/contributors)）
+
+### 美术
+
+- 图标设计：Patricivs
+- 配色方案：Aben、P1461、Patricivs、skoj、佛振、五磅兔
+
+### 引用的开源软件
+
+Boost C++ Libraries、curl、google-glog、Google Test、LevelDB、librime、marisa-trie、OpenCC、plum、WinSparkle、yaml-cpp、7-Zip（完整许可见 [LICENSE.txt](LICENSE.txt)）。
+
+---
+
+## 反馈与交流
+
+- Bug 反馈：[github.com/kizemo/Fluxing/issues](https://github.com/kizemo/Fluxing/issues)
+- Pull Request：[github.com/kizemo/Fluxing/pulls](https://github.com/kizemo/Fluxing/pulls)
+- RIME 引擎与方案：[github.com/rime/home/issues](https://github.com/rime/home/issues)
+- 联系维护者：<duanyi@aiec.fun>
+
+---
+
+## 许可
+
+本仓库代码遵循 **GPLv3**（与上游 weasel 一致）。详见 [LICENSE.txt](LICENSE.txt)。
+
+RIME 引擎遵循 BSD 3-Clause；本仓库引用 / 链接的所有第三方开源项目许可见各项目仓库。

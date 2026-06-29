@@ -225,8 +225,11 @@ key_binder:
     # has_menu 始终不会输出。
 
     # 翻页 - =
-    - { when: has_menu, accept: minus, send: Page_Up }
-    - { when: has_menu, accept: equal, send: Page_Down }
+    - { when: has_menu, accept: period, send: Page_Up }
+    - { when: has_menu, accept: comma, send: Page_Down }
+    # 火流猩 v2: Shift_L/R 上屏第 2/3 候选（优先级高于中英切换）
+    - { when: has_menu, accept: shift+l, send: 2 }
+    - { when: has_menu, accept: shift+r, send: 3 }
 
     # 翻页 , .
     # - { when: has_menu, accept: comma, send: Page_Up }
@@ -242,9 +245,12 @@ key_binder:
     # - { when: always, select: .next, accept: Control+Shift+exclam }             # 在最近的两个方案之间切换
     # - { when: always, toggle: ascii_mode, accept: Control+Shift+2 }             # 切换中英
     # - { when: always, toggle: ascii_mode, accept: Control+Shift+at }            # 切换中英
-    - { when: always, toggle: ascii_punct, accept: Control+Shift+3 }              # 切换中英标点
+    - { when: always, toggle: ascii_punct, accept: Control+Shift+9 }              # 切换中英标点
+    # 火流猩 v2: Shift_L/R 中英切换（无候选时）
+    - { when: always, toggle: ascii_mode, accept: shift+l }
+    - { when: always, toggle: ascii_mode, accept: shift+r }
     - { when: always, toggle: ascii_punct, accept: Control+Shift+numbersign }     # 切换中英标点
-    - { when: always, toggle: traditionalization, accept: Control+Shift+4 }       # 切换简繁
+    - { when: always, toggle: traditionalization, accept: Control+Shift+0 }       # 切换简繁
     - { when: always, toggle: traditionalization, accept: Control+Shift+dollar }  # 切换简繁
     # - { when: always, toggle: full_shape, accept: Control+Shift+5 }             # 切换全半角
     # - { when: always, toggle: full_shape, accept: Control+Shift+percent }       # 切换全半角
