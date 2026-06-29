@@ -55,3 +55,30 @@ arm64x_wrapper/*.lib
 arm64x_wrapper/*.exp
 # 临时备份: 旧 weasel.yaml (rime-ice 替换前的版本), 留工作树作回滚参考, 不入库
 /output/data/weasel.yaml.bak
+
+# Build logs (added during spec 003)
+*.log.err
+*.build.log
+build-*.log
+manual_*.bat
+manual_*.err
+run_librime_*.bat
+debug_env.bat
+install_x86.bat
+test_x86.bat
+patch_build_bat.py
+
+# PerMonitorHighDPIAware.manifest (weasel.props copies it to repo root)
+PerMonitorHighDPIAware.manifest
+
+# Build shim transient directories (parent repo hosts the tracked shims)
+/librime/include
+/librime/dist
+/librime/dist_x64
+/librime/dist_x86
+/librime/dist_x86_v2
+/librime/build
+/librime/lib_x64
+/librime/include_x64
+/librime/lib_x86_backup
+/librime/include/marisa
