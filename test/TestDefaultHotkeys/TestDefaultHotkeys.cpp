@@ -35,8 +35,8 @@ int main(int argc, char** argv) {
   std::cout << "spec 005: default hotkeys rev2" << std::endl;
 
   // F1 翻页: , = Page_Down, . = Page_Up
-  check("翻页下页 = comma (',')", Contains(content, "accept: comma, send: Page_Down"));
-  check("翻页上页 = period ('.')", Contains(content, "accept: period, send: Page_Up"));
+  check("翻页上页 = comma (',')", Contains(content, "accept: comma, send: Page_Up"));
+  check("翻页下页 = period ('.')", Contains(content, "accept: period, send: Page_Down"));
 
   // 旧 -/= 翻页必须已废弃 (注释或不在 active 段)
   // 注: 注释里保留 "," "." 是说明, 我们检查不在 has_menu active 段
@@ -68,7 +68,18 @@ int main(int argc, char** argv) {
   check("Shift_R 中英切换 (always ascii_mode)",
         Contains(content, "toggle: ascii_mode, accept: shift+r"));
 
-  // 顺序检查: shift+l has_menu 必须在 shift+l always 之前 (RIME 引擎按列表顺序)
+  // F1 中英切换: 单键 Shift_L / Shift_R 单独按 (搜狗拼音 习惯)
+  check("Shift_L 单键 has_menu 上屏第 2 候选", Contains(content, "accept: Shift_L, send: 2"));
+  check("Shift_R 单键 has_menu 上屏第 3 候选", Contains(content, "accept: Shift_R, send: 3"));
+  check("Shift_L 单键 always 切中英", Contains(content, "toggle: ascii_mode, accept: Shift_L"));
+  check("Shift_R 单键 always 切中英", Contains(content, "toggle: ascii_mode, accept: Shift_R"));
+
+  // F1 ascii_composer.switch_key.Shift_L/R 必须是 noop (避免与 key_binder 冲突)
+  check("ascii_composer.Shift_L: noop (让 key_binder 接管)", Contains(content, "Shift_L: noop"));
+  check("ascii_composer.Shift_R: noop", Contains(content, "Shift_R: noop"));
+  check("ascii_composer.Shift_L: commit_code 已废弃", !Contains(content, "Shift_L: commit_code"));
+
+  // 顺序检查: has_menu 必须在 always 之前 (RIME 引擎按列表顺序 匹配)
   size_t pos_menu_l = content.find("accept: shift+l, send: 2");
   size_t pos_always_l = content.find("toggle: ascii_mode, accept: shift+l");
   check("Shift_L 顺序: has_menu 在 always 之前 (优先级正确)",
