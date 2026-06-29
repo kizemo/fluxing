@@ -7,6 +7,19 @@
   - 上游 RIME / 中州韻输入法引擎与开发者归属信息保持不变。
   - 关联：内部常量与图标重命名见 9f2b217（Fluxing 分枝首提交）。
 <a name="0.17.4"></a>
+
+- 端到端 Windows 构建流水线（spec 003）
+  - 在 x64 与 x86 (Win32) 两种架构上完成 librime 1.13.1 的构建（glog/gtest/leveldb/marisa/opencc/yaml-cpp 六个第三方依赖 + rime 引擎本身）。
+  - 通过 msbuild 在 Release|x64 与 Release|Win32 下构建 weasel.sln（WeaselTSF/WeaselUI/WeaselIPC/WeaselServer/WeaselDeployer/WeaselSetup/RimeWithWeasel），产物落到 output\ 与 output\Win32\。
+  - 通过 NSIS 3.x 生成 output\archives\fluxing-0.17.4.0-installer.exe（约 10.5 MB）并复制到 elease\。
+  - 新增 	ools\win-shims\include\ 仓库级 shim 头文件（X11/keysym.h、utf8.h、darts.h），通过 	ools\win-shims\setup-shims.ps1 复制到 librime/include/。
+  - 修正 output/install.nsi：
+    - 5 处默认安装路径 $PROGRAMFILES*\Rime 改为 $PROGRAMFILES*\Fluxing（L135/137/139/144/146），使默认建议路径即以 \Fluxing 结尾。
+    - 移除多余的 UTF-8 BOM（4× → 1×），NSIS 3.x 不再解析失败。
+  - 说明：本次提交**不**包含 librime 子模块内的 librime/build.bat 调试 echo 与 cmake 引用修复（仍保留在工作区为 dirty 状态）。后续若建立 kizemo/librime 派生仓库，可将这些补丁合入子模块。
+
+- 相关 spec/plan/tasks：.specify/specs/003-windows-build-pipeline/{spec,plan,tasks}.md。
+
 ## [0.17.4](https://github.com/rime/weasel/compare/0.17.3...0.17.4)(2025-06-04)
 
 ### 主要更新
