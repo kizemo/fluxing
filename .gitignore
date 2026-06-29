@@ -46,6 +46,8 @@ Thumbs.db
 *.VC.db
 release-notes.html
 *.7z
+release/*token*
+release/*secret*
 RELEASE_CHANGELOG.md
 deps/
 arm64x_wrapper/*.o

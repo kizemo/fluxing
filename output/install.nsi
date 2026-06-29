@@ -27,7 +27,7 @@ Unicode true
 Name "Fluxing ${FLUXING_VERSION}"
 
 ; The file to write
-OutFile "archives\fluxing-${PRODUCT_VERSION}-installer.exe"
+OutFile "archives\fluxing-0.18.0.0-installer.exe"
 
 VIProductVersion "${FLUXING_VERSION}.${WEASEL_BUILD}"
 VIAddVersionKey /LANG=2052 "ProductName" "火流猩输入法"
