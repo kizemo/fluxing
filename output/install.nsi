@@ -12,7 +12,7 @@ Unicode true
 ; General
 
 !ifndef FLUXING_VERSION
-!define FLUXING_VERSION 0.1.0
+!define FLUXING_VERSION 0.17.5
 !endif
 
 !ifndef WEASEL_BUILD
@@ -289,10 +289,27 @@ program_files:
   File "data\*.yaml"
   File /nonfatal "data\*.txt"
   File /nonfatal "data\*.gram"
+  ; cn_dicts (rime_ice dependencies)
+  SetOutPath $INSTDIR\data\cn_dicts
+  File "data\cn_dicts\*.dict.yaml"
+  ; en_dicts (melt_eng dependencies)
+  SetOutPath $INSTDIR\data\en_dicts
+  File "data\en_dicts\*"
+  ; lua extensions (rime_ice features)
+  SetOutPath $INSTDIR\data\lua
+  File "data\lua\*.lua"
+  File "data\lua\*.db"
+  File /nonfatal "data\lua\*.txt"
+  SetOutPath $INSTDIR\data\lua\cold_word_drop
+  File "data\lua\cold_word_drop\*.lua"
   ; opencc data files
   SetOutPath $INSTDIR\data\opencc
   File "data\opencc\*.json"
   File "data\opencc\*.ocd*"
+  ; prebuilt compiled dictionaries (instant first-run, no deploy wait)
+  SetOutPath $INSTDIR\data\build
+  File "data\build\*.bin"
+  File "data\build\*.yaml"
   ; images
   SetOutPath $INSTDIR\data\preview
   File "data\preview\*.png"
