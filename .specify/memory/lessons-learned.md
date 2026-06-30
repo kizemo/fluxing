@@ -242,3 +242,31 @@ key_binder binding 字段支持 4 类 action：
 - Topics 必须用独立 /topics 端点 (PUT)，不是 /repos/{owner}/{repo} 的 PATCH 里的 topics 字段
 - 验证：改完后 GET 仓库信息，byte-level 检查 description UTF-8 字节序列是否完整 (0xE0-0xEF 起始，无 0x3F 替代)
 - 不能用 Invoke-RestMethod | Select-Object 验证 — PS 5.1 GBK 化会把中文显示成乱码，误判 API 失败
+
+## L09 - NSIS install.nsi: BOM + OutFile hard-coded + line endings
+
+**Incident**: Building fluxing-0.18.1.0-installer.exe failed with:
+
+`
+makensis.exe : Bad text encoding: output\install.nsi:69
+`
+
+After fixing, the installer built and copied to rchives/fluxing-0.18.0.0-installer.exe (overwriting the previous release silently) instead of luxing-0.18.1.0-installer.exe.
+
+**Root causes** (3 distinct NSIS pitfalls discovered simultaneously):
+
+1. **NSIS Unicode true requires UTF-8 BOM**. Without BOM, NSIS decodes bytes as ANSI (system codepage). When the script contains non-ASCII bytes (Chinese, emoji), NSIS errors out on the first non-ASCII line. PowerShell's [System.IO.File]::ReadAllBytes + WriteAllBytes (byte-level) does NOT add BOM; must prepend  xEF 0xBB 0xBF manually after byte-level edits.
+
+2. **OutFile was hard-coded**: OutFile "archives\fluxing-0.18.0.0-installer.exe". Every build silently overwrote the previous release file at the same path. Fix: OutFile "archives\fluxing-\.\-installer.exe".
+
+3. **NSIS tolerates lone CR ( x0D without  x0A) but should be CRLF**. Byte-level LF→CRLF conversion (PowerShell) must check ytes[i] == 0x0A { prepend 0x0D } BEFORE appending  x0A. Reversing the order produces  x0A 0x0D (LF-CR, Mac classic) which is technically valid NSIS line ending but inconsistent.
+
+**Lesson**:
+- Before NSIS build: verify output/install.nsi has BOM (ytes[0..2] == EF BB BF), 100% CRLF (CRLF count == LF count + 1 for BOM-less file, == for BOM file), no  xC0/0xC1 overlong bytes.
+- OutFile must always use NSIS variable interpolation: \.\.
+- Installer artifact copy: NSIS doesn't copy to elease/; xbuild.bat/uild.bat also don't. Add a manual Copy-Item output/archives/<name> release/<name> step at the end of any release build.
+- Verification: after build, Test-Path release/fluxing-\.0-installer.exe and Get-Item ... | Length (44 MB order of magnitude).
+
+**NSIS install-path bug for user data**: \ is reset to \\weasel (${WEASEL_ROOT}) inside the install section (line 217 of upstream weasel install.nsi). Any reference to \ after that point gives the *engine* install path, not the user-visible root. To use the user-visible root, save it BEFORE the reset: StrCpy \ "\" then StrCpy \ "\".
+
+**Avoid WeaselSetup /userdir:<path>** for paths that end in user1 etc. — WeaselSetup.cpp::Run() does EnsureFluxingUserDataSuffix on the path and appends \fluxing if the last segment isn't luxing. So /userdir:foo\user1 becomes oo\user1\fluxing in the registry. If you need the exact path, write the registry key directly from NSIS: WriteRegStr HKCU "Software\Fluxing\Weasel" "RimeUserDir" "<path>" (and pre-create the dir with CreateDirectory).
