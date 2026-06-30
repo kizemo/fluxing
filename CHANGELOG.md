@@ -1,4 +1,55 @@
-﻿## [0.18.4.0] - 2026-06-30
+﻿
+
+## [0.18.4.0-fluxing-shift] - 2026-06-30
+
+### Key bindings: Shift_L/Shift_R actually toggle and select candidates
+
+
+- Fix: Shift_L / Shift_R single key actually works for switching CN/EN and selecting 2nd/3rd candidate.
+  Previous key_binder used Shift_L / Shift_R (no modifier) which never matched
+  the events TSF actually sends (keycode=Shift_L, modifier=SHIFT_MASK).
+  librime key_event comparison is strict equality on (keycode, modifier), so
+  plain `Shift_L` (modifier=0) never matches {Shift_L, SHIFT_MASK}.
+  Previous key_binder also had `Shift+l` / `Shift+r` (lowercase modifier)
+  which is silently dropped by librime key_table (modifier_name[] uses
+  `Shift` not `shift`). Verified by reading librime/src/rime/key_table.cc.
+
+  New binding (4 entries):
+  ```
+  - { when: has_menu, accept: Shift+Shift_L, send: 2 }   # 2nd candidate
+  - { when: has_menu, accept: Shift+Shift_R, send: 3 }   # 3rd candidate
+  - { when: always, toggle: ascii_mode, accept: Shift+Shift_L }  # toggle CN
+  - { when: always, toggle: ascii_mode, accept: Shift+Shift_R }  # toggle CN
+  ```
+  `Shift+Shift_L` writes the modifier bit SHIFT_MASK + keycode Shift_L, which
+  is exactly what TSF sends for a single Shift_L key press. Verified by reading
+  WeaselTSF/KeyEventSink.cpp (result.mask |= SHIFT_MASK).
+  L04 lessons-learned was wrong about lowercase modifier; corrected.
+  L16 lessons-learned added documenting the SHIFT_MASK + Shift_L mechanics.
+
+- Test: TestDefaultHotkeys.cpp updated to match new binding format.
+  8 assert strings changed from `Shift_L` / `Shift+l` to `Shift+Shift_L` / `Shift+Shift_R`.
+  4 new negative asserts added to confirm `Shift+l` / `Shift+r` is not present.
+  24/24 PASS (was 20/20 before; +4 new negative asserts).
+
+- Installer: SetOverwrite try -> on (fixes silent-install default.yaml not being updated).
+  Previous behavior: NSIS skipped overwriting weasel\data\default.yaml if the
+  existing file mtime was newer than the source. This caused the fix to not
+  reach the installed system on top of 0.18.3 (default.yaml stayed at the
+  pre-fix 16335 bytes; only when installing from scratch did the new 15948-byte
+  default.yaml land).
+  New behavior: NSIS always overwrites. default.yaml updates are now reliable
+  on every install. This is the expected user contract for an IME update.
+
+### Verified on real hardware
+
+- Silent install to D:\Program Files\fluxing\ (L13 path-force layout, x86 binaries)
+- weasel\data\default.yaml ends up at 15948 bytes (matches source), confirmed via SHA256
+- WeaselServer restarts cleanly, no WeaselDeployer Scheme Switcher popup
+- Shift_L single press in notepad toggles ascii_mode (verified by typing ni after toggle -> literal ni)
+- Shift_L on candidate list selects 2nd candidate (verified with yi -> emoji 1 U+FE0F U+20E3)
+- Shift_L after candidate commit goes back to Chinese (verified with hao -> 好)
+## [0.18.4.0] - 2026-06-30
 
 ### ä¸»è¦æ´æ°
 

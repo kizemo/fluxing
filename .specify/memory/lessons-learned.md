@@ -157,12 +157,8 @@ actually compiled into the librime 1.13 we ship.
 - For Fluxing 0.18.x we use:
   - `accept: Shift_L, send: 2, when: has_menu` â pick 2nd candidate on left Shift
   - `accept: Shift_R, send: 3, when: has_menu` â pick 3rd candidate on right Shift
-  - `accept: shift+l, send: 2, when: has_menu` â same as above, lowercase form
-  - `accept: shift+r, send: 3, when: has_menu` â same as above, lowercase form
-  - `accept: shift+l, toggle: ascii_mode, when: always` â toggle CJK/ASCII on Shift+L when no menu
-  - `accept: shift+r, toggle: ascii_mode, when: always` â same on Shift+R
-  - `accept: Shift_L, toggle: ascii_mode, when: always` â exact-case form, also works
-  - `accept: Shift_R, toggle: ascii_mode, when: always` â exact-case form, also works
+  - `accept: Shift_L, toggle: ascii_mode, when: always` → only the exact-case form works (see L16 for why lowercase forms are silently dropped)
+  - `accept: Shift_R, toggle: ascii_mode, when: always` → only the exact-case form works (see L16 for why lowercase forms are silently dropped)
 
 **Lesson**: when you need a key to do **two different things** based on
 context (e.g. Shift = "select 2nd candidate" *if menu is up*, else "toggle
@@ -859,3 +855,61 @@ The recipe now uses `cmd /c` form. Verified 2026-06-30 with 0.18.4.0 installer: 
 **Related**: L09 (NSIS flags and OutFile quirks), L10 Â§5 (unknown CLI args getting concatenated into $INSTDIR - same root cause class), AGENTS.md Â§2.5 (the smoke test that surfaced this).
 
 ---
+---
+
+## L16 - librime 1.13 KeyEvent::Parse modifier names are case-sensitive (Shift, not shift)
+
+**Context**: spec 005 design.md wrote ccept: shift+l (lowercase
+modifier) in the key_binder/bindings example. The setting shipped
+in output/data/default.yaml for 0.18.0 - 0.18.4, and WeaselServer
+logs from real users show:
+
+`
+E key_event.cc:69 parse error: unrecognized modifier 'shift'
+`
+
+Result: those bindings were silently dropped at parse time, and
+Shift_L / Shift_R did nothing.
+
+**Root cause**: librime/src/rime/key_table.cc:7-26 defines
+modifier_name[] with first-letter-capitalized entries:
+"Shift", "Control", "Alt", "Super", "Hyper", "Meta",
+"Lock", "Mod2".."Mod5", "Release". RimeGetModifierByName()
+uses strcmp, so "shift" returns 0, Parse returns false, and
+KeyBindings::LoadBindings skips the entry with a warning
+(librime/src/rime/key_binder.cc:175-184).
+
+**Lesson**:
+
+- In any key_binder / key_sequence / ccept: field of
+  rime YAML, the **modifier part** must be exactly
+  Shift / Control / Alt / Super / Hyper / Meta / Lock
+  / Mod2..Mod5 / Release. Lowercase or ALL-CAPS variants fail.
+- The **key part** (after the last +) IS case-sensitive in a
+  different way:  means "the key that produces lowercase a"
+  (no shift held), A means "the key that produces uppercase A"
+  (shift held). Both are valid keysym names.
+- When binding single-key Shift_L / Shift_R, write Shift+Shift_L
+  (modifier Shift + keycode Shift_L) -- NOT Shift_L alone -- because
+  TSF injects SHIFT_MASK on every VK_SHIFT event
+  (WeaselTSF/KeyEventSink.cpp:31).
+- The current TestDefaultHotkeys.exe does not catch this
+  parse-error class because it checks for the YAML substring
+  ccept: Shift+l, not whether librime actually accepted it.
+  **Action item (out of scope)**: add a regression test that
+  pipes the YAML through librime's RimeStartMaintenance and
+  asserts the binding was loaded (not just present in the text).
+- Spec 005 design.md has been superseded by spec 012; the
+  surviving bindings in 0.18.5+ are the four
+  Shift+Shift_L / Shift+Shift_R lines (two in has_menu,
+  two in lways), replacing the four ccept: Shift_L
+  / shift+l lines that were silently broken.
+- Fluxing 0.18.5 intentionally does NOT include the
+  Shift+l / Shift+r combination-key path; the user
+  confirmed (2026-06-30) that those were test-only bindings
+  added during manual testing and never intended for the
+  final product.
+
+**Verification**: a clean xbuild.bat installer on the 0.18.4
+codebase still produces the parse-error log; after applying
+the spec 012 patch, the same log no longer shows the warning.

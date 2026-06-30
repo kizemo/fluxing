@@ -60,28 +60,33 @@ int main(int argc, char** argv) {
 
   // F1 中英文切换 + 上屏候选: Shift_L/Shift_R
   check("Shift_L 上屏第 2 候选 (has_menu)",
-        Contains(content, "accept: Shift+l, send: 2"));
+        Contains(content, "accept: Shift+Shift_L, send: 2"));
   check("Shift_R 上屏第 3 候选 (has_menu)",
-        Contains(content, "accept: Shift+r, send: 3"));
+        Contains(content, "accept: Shift+Shift_R, send: 3"));
   check("Shift_L 中英切换 (always ascii_mode)",
-        Contains(content, "toggle: ascii_mode, accept: Shift+l"));
+        Contains(content, "toggle: ascii_mode, accept: Shift+Shift_L"));
   check("Shift_R 中英切换 (always ascii_mode)",
-        Contains(content, "toggle: ascii_mode, accept: Shift+r"));
+        Contains(content, "toggle: ascii_mode, accept: Shift+Shift_R"));
 
   // F1 中英切换: 单键 Shift_L / Shift_R 单独按 (搜狗拼音 习惯)
-  check("Shift_L 单键 has_menu 上屏第 2 候选", Contains(content, "accept: Shift_L, send: 2"));
-  check("Shift_R 单键 has_menu 上屏第 3 候选", Contains(content, "accept: Shift_R, send: 3"));
-  check("Shift_L 单键 always 切中英", Contains(content, "toggle: ascii_mode, accept: Shift_L"));
-  check("Shift_R 单键 always 切中英", Contains(content, "toggle: ascii_mode, accept: Shift_R"));
+  check("Shift_L 单键 has_menu 上屏第 2 候选", Contains(content, "accept: Shift+Shift_L, send: 2"));
+  check("Shift_R 单键 has_menu 上屏第 3 候选", Contains(content, "accept: Shift+Shift_R, send: 3"));
+  check("Shift_L 单键 always 切中英", Contains(content, "toggle: ascii_mode, accept: Shift+Shift_L"));
+  check("Shift_R 单键 always 切中英", Contains(content, "toggle: ascii_mode, accept: Shift+Shift_R"));
 
   // F1 ascii_composer.switch_key.Shift_L/R 必须是 noop (避免与 key_binder 冲突)
   check("ascii_composer.Shift_L: noop (让 key_binder 接管)", Contains(content, "Shift_L: noop"));
   check("ascii_composer.Shift_R: noop", Contains(content, "Shift_R: noop"));
   check("ascii_composer.Shift_L: commit_code 已废弃", !Contains(content, "Shift_L: commit_code"));
+  // 否定断言: spec 012 范围 — 不应有 Shift+l / Shift+r 组合键路径
+  check("Shift+l 组合键 (has_menu send) 已移除", !Contains(content, "accept: Shift+l, send: 2"));
+  check("Shift+r 组合键 (has_menu send) 已移除", !Contains(content, "accept: Shift+r, send: 3"));
+  check("Shift+l 组合键 (always toggle) 已移除", !Contains(content, "toggle: ascii_mode, accept: Shift+l"));
+  check("Shift+r 组合键 (always toggle) 已移除", !Contains(content, "toggle: ascii_mode, accept: Shift+r"));
 
   // 顺序检查: has_menu 必须在 always 之前 (RIME 引擎按列表顺序 匹配)
-  size_t pos_menu_l = content.find("accept: Shift+l, send: 2");
-  size_t pos_always_l = content.find("toggle: ascii_mode, accept: Shift+l");
+  size_t pos_menu_l = content.find("accept: Shift+Shift_L, send: 2");
+  size_t pos_always_l = content.find("toggle: ascii_mode, accept: Shift+Shift_L");
   check("Shift_L 顺序: has_menu 在 always 之前 (优先级正确)",
         pos_menu_l != std::string::npos && pos_always_l != std::string::npos &&
         pos_menu_l < pos_always_l);
