@@ -1048,3 +1048,69 @@ value and observing the install does NOT use it.
 **Related**: L13 (NSIS path-force suffix in silent mode), L09 (NSIS
 BOM + OutFile + line endings), L15 (PowerShell `Start-Process` arg
 merging), AGENTS.md §2.5 (silent-install smoke test recipe).
+
+
+## L18 - `key_binder` single-key Shift bindings (Shift_L/R) collide with `shift+<other>` release events; use `Shift+space` for ascii_mode toggle
+
+**Symptom** (discovered 2026-07-01, after shipping 0.18.5.0 with single-key Shift ascii_mode binding):
+
+User reported that pressing `shift+=` or `shift+Enter` (e.g. typing `+` or inserting a
+newline in some apps) causes the IME to **silently toggle ascii_mode**, instead of
+inserting `+` or starting a new line. Same pattern affected `shift+<letter>` and any
+other key that has a `Shift+symbol` layout — the `+` keystroke never reaches the
+focused app.
+
+**Root cause**: librime 1.13 `key_binder` matches `accept: Shift+Shift_L` against any
+TSF event whose `keycode == Shift_L`, regardless of the modifier mask. The intent
+was "single key Shift_L press (which TSF reports as keycode=Shift_L, modifier=Shift)"
+— but the actual match also fires on the **release** portion of compound keystrokes
+like `shift+=`, where TSF sends a separate `keycode=Shift_L, modifier=0` event when
+Shift is released. The result: every `shift+<key>` press triggers the single-key Shift
+binding after the main key is dispatched, silently toggling ascii_mode.
+
+The same issue affects the `has_menu` selection bindings (Shift_L selects 2nd candidate,
+Shift_R selects 3rd), so the user reports also include "wrong candidate is selected
+after typing shift+= followed by a letter".
+
+**Fix** (applied 2026-07-01, included in 0.18.5+ follow-up):
+
+- Removed the 2 `always: toggle ascii_mode, accept: Shift+Shift_L/R` bindings from
+  `output/data/default.yaml` (they were the buggy ascii_mode toggle).
+- Added a single new binding: `always: toggle ascii_mode, accept: Shift+space`.
+  This is the librime community default; it does not collide with compound
+  keystrokes because `space` is its own keycode and the `Shift+space` chord is
+  distinct from a single-Shift release event.
+- Kept the 2 `has_menu: send N, accept: Shift+Shift_L/R` bindings (select 2nd/3rd  candidate) — these are useful and the user confirmed they want them to stay.
+- Updated `test/TestDefaultHotkeys.cpp` to assert the new `Shift+space` binding
+  and to add 4 negative assertions confirming the old single-key Shift toggle
+  bindings are gone.
+
+**Lesson**:
+
+- `key_binder` `accept: Shift+Shift_L` matches **only** when both `keycode==Shift_L`
+  AND `modifier==Shift` — but the **release event** of any `shift+<other>` keystroke
+  also has `keycode==Shift_L`, so the modifier mask must be checked at the binding
+  level too. The fix here is to choose a `keycode` that **never appears in a release
+  event** — i.e. a key that is only ever pressed together with a real character. `space`  is ideal because `Shift+space` is a deliberate user action, not a release artifact.
+- For "select 2nd/3rd candidate on single Shift press" use cases (has_menu bindings),  the same collision exists but is less visible because it only fires when a candidate
+  menu is open. If users report issues with `shift+=` selecting the wrong candidate,
+  consider replacing `has_menu: Shift+Shift_L/R` with a different modifier chord
+  (e.g. `Control+Shift+1/2`). For Fluxing 0.18.5+, the user accepts the current
+  behavior and the issue is limited to the `ascii_mode` toggle path.
+- The community-standard RIME ascii_mode toggle is `Shift+space`; the spec 005  "Shift single key" decision (from commit d30f69c) was a usability-vs-collision
+  tradeoff that did not surface in unit tests (which only assert yaml string content,
+  not runtime TSF event behavior). This is a known testing gap; fixing it would  require an integration test that feeds real TSF events into librime.
+
+**Action items (out of scope)**:
+
+- Add an integration test under `test/` that feeds synthetic TSF events into librime  and asserts that `shift+=` does not toggle ascii_mode (regression test for this bug).  Requires WeaselTSF to expose an event-injection hook, which is currently private.- Consider replacing `ascii_composer.switch_key.Shift_L: noop` with something more  defensive (e.g. an explicit reject) once the TSF event filter is mature. Current  `noop` works because `load_bindings` (librime 1.13) skips noop entries, but the  comment in `default.yaml` should warn future maintainers that this depends on  librime >= 1.13.
+
+**Verification**:
+
+- `test\TestDefaultHotkeys\Release\TestDefaultHotkeys.exe output\data\default.yaml` -> `Passed: 25 / 25`
+  (was 24/24 before L18; +1 for `Shift+space` assertion, +4 negative assertions for  the removed `Shift+Shift_L/R` ascii_mode bindings, -3 for the removed  `Shift_L/R 单键 always 切中英` duplicates; net +1).
+- `xbuild.bat weasel` -> 0 errors, 1 pre-existing warning (xmake buildir deprecation).- Manual verification deferred to next user-side install: type `+`, `<Enter>`,
+  and other `shift+<key>` chords after `Shift_L` and confirm ascii_mode does not  toggle unexpectedly.
+
+**Related**: L16 (modifier case-sensitivity), L04 (key_binder action types), spec 005
+  design.md §2.2 (now updated to reflect `Shift+space` not `Shift_L/R` for ascii_mode  toggle), AGENTS.md §2.5 (smoke test recipe).

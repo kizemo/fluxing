@@ -247,10 +247,9 @@ key_binder:
     # - { when: always, toggle: ascii_mode, accept: Control+Shift+2 }             # 切换中英
     # - { when: always, toggle: ascii_mode, accept: Control+Shift+at }            # 切换中英
     - { when: always, toggle: ascii_punct, accept: Control+Shift+9 }              # 切换中英标点
-    # 火流猩 v2: Shift_L/R 中英切换（无候选时 — has_menu 行的 Shift_L 优先匹配选候选）
-    # 单键（Shift_L / Shift_R 单独按）— 兼容搜狗拼音单击 Shift 切中英
-    - { when: always, toggle: ascii_mode, accept: Shift+Shift_L }
-    - { when: always, toggle: ascii_mode, accept: Shift+Shift_R }
+    # 火流猩 v2: Shift+space 切中英（spec 018 / L18 修复 — 单键 Shift 切中英的副作用：shift+= shift+enter 等 release Shift_L 事件会被 key_binder 误匹配切中英或上屏候选。改为 Shift+space 解决）
+    # 沿用 RIME 社区默认键位；与 librime default.yaml 内置键位一致。
+    - { when: always, toggle: ascii_mode, accept: Shift+space }
     - { when: always, toggle: ascii_punct, accept: Control+Shift+numbersign }     # 切换中英标点
     - { when: always, toggle: traditionalization, accept: Control+Shift+0 }       # 切换简繁
     - { when: always, toggle: traditionalization, accept: Control+Shift+dollar }  # 切换简繁
