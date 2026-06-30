@@ -229,7 +229,7 @@ Section "Fluxing"
   IfFileExists "$INSTDIR\WeaselServer.exe" 0 +2
   ExecWait '"$INSTDIR\WeaselServer.exe" /quit'
 
-  SetOverwrite try
+  SetOverwrite on
   ; Set output path to the installation directory.
   SetOutPath $INSTDIR
 
@@ -460,4 +460,3 @@ Function ForceFluxingSuffix
 suffix_done:
   Pop $0
 FunctionEnd
-
