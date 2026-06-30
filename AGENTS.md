@@ -158,6 +158,55 @@ CI only releases when **both** are true (see `.github/workflows/ci.yml`):
 For local Fluxing releases, push `Fluxing` to `kizemo/Fluxing` and announce
 manually; do not create upstream tags from this worktree.
 
+### 3.5 Branches vs Tags (project convention)
+
+Branches and tags solve different problems in this repo; do not use them
+interchangeably.
+
+| Type | Purpose | Examples in this repo | When to create |
+|---|---|---|---|
+| Branch | A **live baseline** that can be checked out, edited, and pushed. Use it when this commit may become the **start of a new line of work**. | `master`, `Fluxing`, `Fluxing-snapshot-2026-06-30` | When the snapshot might be reopened (e.g. rollback point, parallel fork, milestone). |
+| Tag | A **fixed reference** to a commit that is now immutable. Use it for **milestones** that should be citable by name (releases, named pre-states). | `v0.18.2.0`, `pre-AGENTS-lessons-snapshot` | When the commit is "done" and will not be edited again. |
+
+**Conventions for this repo** (ratified 2026-06-30):
+
+- **Version releases** (`v0.18.2.0`, `v0.19.0.0`, etc.) → **tag** (lightweight
+  unless noted otherwise). Pushed with `git push kizemo --tags` or
+  `git push kizemo <tagname>` for a single tag. The `Fluxing` branch continues
+  to move forward independently; the tag stays at the release commit.
+- **Pre-state snapshots** ("snapshot before big refactor", "snapshot before
+  docs migration") → **branch** named `<base>-snapshot-YYYY-MM-DD`, **plus**
+  an annotated tag with the same logical name. The branch is the "I want to
+  open a new line from here" affordance; the tag is the "I want to cite this
+  exact commit by name" affordance. Both are pushed.
+- **Long-lived baselines** (`Fluxing`, `master`) → **branch** (already
+  established, not a snapshot).
+- **Never** create a branch or tag in `origin` (the upstream `rime/weasel`
+  remote). Only `kizemo` is writable from this worktree.
+
+**Recovery recipes**:
+
+```bash
+# View-only: jump to a snapshot and look around
+git checkout pre-AGENTS-lessons-snapshot      # detached HEAD, safe to read
+git checkout Fluxing                          # back to current work
+
+# Open a new line from a snapshot (typical rollback / parallel fork)
+git checkout -b Fluxing-v2 Fluxing-snapshot-2026-06-30
+git push kizemo Fluxing-v2
+
+# Cite a release by tag (e.g. in a bug report)
+git log --oneline v0.18.2.0..HEAD              # commits since v0.18.2.0
+```
+
+**Anti-patterns** (see also §7):
+
+- A11: Creating a branch for every release (pollutes `git branch -a`).
+- A12: Creating a tag for a work-in-progress snapshot (tags should be
+  immutable; WIP commits move under them).
+- A13: Deleting a snapshot branch / tag "to clean up". Snapshot refs are
+  cheap; keep them unless they are demonstrably wrong.
+
 ---
 
 ## 4. Dangerous Zones (do not poke without reading L## first)
