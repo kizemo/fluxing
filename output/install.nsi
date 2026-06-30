@@ -27,7 +27,7 @@ Unicode true
 Name "Fluxing ${FLUXING_VERSION}"
 
 ; The file to write
-OutFile "archives\fluxing-0.18.0.0-installer.exe"
+OutFile "archives\fluxing-${FLUXING_VERSION}.${WEASEL_BUILD}-installer.exe"
 
 VIProductVersion "${FLUXING_VERSION}.${WEASEL_BUILD}"
 VIAddVersionKey /LANG=2052 "ProductName" "火流猩输入法"
@@ -214,6 +214,8 @@ Section "Fluxing"
   WriteRegStr HKLM SOFTWARE\Fluxing\Weasel "InstallDir" "$INSTDIR"
 
   ; Reset INSTDIR for the new version
+  ; spec 002/005: save user-facing install path before $INSTDIR is reset
+  StrCpy $R3 "$INSTDIR"
   StrCpy $INSTDIR "${WEASEL_ROOT}"
 
   IfFileExists "$INSTDIR\WeaselServer.exe" 0 +2
@@ -326,9 +328,20 @@ program_files:
   ${GetOptions} $R0 "/T" $R1
   IfErrors +2 0
   StrCpy $R2 "/t"
+  ; === v2.0: Force user data directory to $R3\fluxing\user1 (spec 002/005) ===
+  ; $R3 holds the user-facing install path (saved before $INSTDIR was reset to WEASEL_ROOT).
+  ; No user choice: co-located with engine. Future account login can rename user1 per user.
+  CreateDirectory "$R3\fluxing\user1\fluxing"
+  WriteRegStr HKCU "Software\Fluxing\Weasel" "RimeUserDir" "$R3\fluxing\user1\fluxing"
+  ; (No exec wait needed; WriteRegStr is synchronous. Kept block for future logging.)
 
-  ExecWait '"$INSTDIR\WeaselSetup.exe" $R2'
-
+  ; === v2.0: Register WeaselTSF as TSF text input processor (fix TSF TIP not registered) ===
+  ; regsvr32 calls DllRegisterServer in WeaselTSF.dll which writes HKLM\SOFTWARE\...\CTF\TIP\{GUID}
+  ; Without this, Windows doesn't know Fluxing is installed and won't show it in input switcher.
+  ExecWait 'regsvr32 /s "$INSTDIR\weaselx64.dll"' $0
+  ${If} $0 != 0
+    DetailPrint "Fluxing: regsvr32 weaselx64.dll failed (exit $0); TSF TIP may not be registered. Run 'regsvr32 $INSTDIR\weaselx64.dll' as admin manually."
+  ${EndIf}
   ; Write the uninstall keys for Windows
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayName" "$(DISPLAYNAME)"
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayIcon" '"$INSTDIR\WeaselServer.exe"'
