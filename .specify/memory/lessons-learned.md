@@ -666,3 +666,79 @@ GBK-mojibake Chinese):
 **Related**: L01 (the original GBK trap), L05 (the verify template),
 L07 (the BOM trap), L11 (the BOM-by-parser rule). The L## index in
 this file is the single source of truth.
+
+
+---
+
+## L13 - NSIS custom functions: never use Exch for return values, and wire path-force logic to .onInit not to MUI_PAGE_CUSTOMFUNCTION_LEAVE
+
+**Symptom** (discovered 2026-06-30, after a user installed 0.18.2.0 with `/D=D:\Program Files` and got a fragmented layout):
+
+```
+D:\Program Files\weasel\              ← engine binaries (WRONG location)
+   ├─ WeaselServer.exe
+   ├─ rime.dll
+   └─ data\
+D:\Program Files\fluxing\             ← should contain the weasel\ subdir
+   └─ user1\
+        └─ fluxing\                   ← user-data (partial layout from broken code)
+```
+
+Two things were wrong, both rooted in `output/install.nsi`'s `ForceFluxingSuffix` / `IsFluxingPath` pair.
+
+### Root cause 1: broken `IsFluxingPath` return value
+
+The original code (per spec 002 T002) used `Exch` to swap the user stack with a register for the return value. The trailing `Exch / Exch / Pop` sequence was consuming arbitrary stack items, not the pushed `"yes"` / `"no"`. The caller got undefined data, treated the path as "already ends in fluxing" by accident, and `ForceFluxingSuffix` skipped the suffix append.
+
+### Root cause 2: `MUI_PAGE_CUSTOMFUNCTION_LEAVE` does not fire in silent mode
+
+`ForceFluxingSuffix` was wired to `!define MUI_PAGE_CUSTOMFUNCTION_LEAVE "ForceFluxingSuffix"` (install.nsi L52). This only fires when the user **clicks Next** in the GUI directory chooser. In silent mode (`installer.exe /S /D=<path>`):
+
+- No directory chooser is shown.
+- `$INSTDIR` is set from the `/D=` flag **before** `.onInit` runs.
+- `MUI_PAGE_CUSTOMFUNCTION_LEAVE` never fires.
+- The suffix is never appended.
+
+So even if `IsFluxingPath` had been correct, **silent installs silently produced the wrong layout** — and our smoke test always ran the installer in silent mode, so we never caught it across 4 versions (0.17.5 / 0.18.0 / 0.18.1 / 0.18.2).
+
+### Fix (released in 0.18.3.0)
+
+1. **Rewrote `ForceFluxingSuffix`** to use label-based logic with `StrCmp`, no `Exch` / `Pop` juggling:
+
+   ```nsi
+   Function ForceFluxingSuffix
+     Push $0
+     StrCpy $0 "$INSTDIR" "" -7
+     StrCmp $0 "fluxing" 0 not_fluxing
+     StrCmp $0 "Fluxing" 0 not_fluxing
+     Goto suffix_done
+   not_fluxing:
+     StrCpy $INSTDIR "$INSTDIR\fluxing"
+   suffix_done:
+     Pop $0
+   FunctionEnd
+   ```
+
+2. **Added explicit `Call ForceFluxingSuffix` in `.onInit`** after the `skip:` label, so it runs for **all** install paths (default, registry-detected upgrade, and silent `/D=`).
+
+3. **Fixed user-data path** in the Section block (L534-535): `$R3\fluxing\user1\fluxing` → `$R3\user1\fluxing` (avoids the `fluxing\fluxing` double-segment after the suffix is appended).
+
+4. **Removed dead `IsFluxingPath` function** (it was only called by the original broken `ForceFluxingSuffix`; not referenced after the rewrite).
+
+5. **Verified** with silent install `/D=C:\TEMP\fluxing-0183-test`:
+   - `fluxing-0183-test\fluxing\weasel\` (engine) ✓
+   - `fluxing-0183-test\fluxing\user1\fluxing\` (user-data) ✓
+   - `HKLM\...\InstallDir` = `<root>\fluxing` ✓
+   - `HKCU\...\RimeUserDir` = `<root>\fluxing\user1\fluxing` ✓
+
+### Lessons
+
+1. **Never use `Exch` in a custom NSIS function for return values** unless you are 100% sure of the stack discipline. Prefer passing values via global vars (`StrCpy $MyFuncResult ...`) and using `Push` / `Pop` only for `$0` save/restore. The `Exch` approach is clever but a single mistake in the dance produces silent failures — no compile error, no runtime error, just "doesn't work" with no way to know why.
+
+2. **Always wire path-force / pre-condition logic to `.onInit`, not to a `MUI_PAGE_CUSTOMFUNCTION_*` hook.** Page hooks only fire in the GUI flow. Silent mode (`/S`) skips all pages and runs `.onInit` only. Any path normalization / validation / force-suffix MUST happen in `.onInit` to cover all install modes.
+
+3. **Silent-install smoke tests are mandatory for installer changes.** Add to AGENTS.md §2.5: for every installer change, verify the layout via `installer.exe /S /D=<test_root>` + filesystem + registry inspection.
+
+4. **`MUI_PAGE_CUSTOMFUNCTION_LEAVE` is the right hook for user-driven changes** (e.g. "after user picks a directory, validate the choice and warn if it ends in a space"). It is **the wrong hook for installer invariants** (e.g. "the install path MUST end in `fluxing` regardless of user input").
+
+**Related**: L09 (NSIS BOM + OutFile + line endings — the same `install.nsi` has a long history of silent failures; this L13 is another entry in that pattern). L11 (BOM rule — `install.nsi` itself must have a BOM, per the parser-dependent rule).

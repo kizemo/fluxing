@@ -147,6 +147,8 @@ toquit:
     ${Endif}
   ${Endif}
 skip:
+  ; spec 002 FR-001: enforce fluxing suffix on $INSTDIR (works in silent + GUI)
+  Call ForceFluxingSuffix
   ReadRegStr $R0 HKLM \
   "Software\Microsoft\Windows\CurrentVersion\Uninstall\Weasel" \
   "UninstallString"
@@ -331,8 +333,8 @@ program_files:
   ; === v2.0: Force user data directory to $R3\fluxing\user1 (spec 002/005) ===
   ; $R3 holds the user-facing install path (saved before $INSTDIR was reset to WEASEL_ROOT).
   ; No user choice: co-located with engine. Future account login can rename user1 per user.
-  CreateDirectory "$R3\fluxing\user1\fluxing"
-  WriteRegStr HKCU "Software\Fluxing\Weasel" "RimeUserDir" "$R3\fluxing\user1\fluxing"
+  CreateDirectory "$R3\user1\fluxing"
+  WriteRegStr HKCU "Software\Fluxing\Weasel" "RimeUserDir" "$R3\user1\fluxing"
   ; (No exec wait needed; WriteRegStr is synchronous. Kept block for future logging.)
 
   ; === v2.0: Register WeaselTSF as TSF text input processor (fix TSF TIP not registered) ===
@@ -450,33 +452,22 @@ SectionEnd
 
 
 
+
+
+
+
 Function ForceFluxingSuffix
-  ; Enforce fluxing suffix on $INSTDIR (idempotent: typing fluxing stays fluxing).
-  Push $INSTDIR
-  Call IsFluxingPath
-  Pop $0
-  StrCmp $0 "yes" done
+  ; Enforce fluxing suffix on $INSTDIR (idempotent). Bug fix 0.18.3.0.
+  ; Original IsFluxingPath had broken Exch/Pop chain that returned garbage.
+  Push $0
+  StrCpy $0 "$INSTDIR" "" -7
+  StrCmp $0 "fluxing" 0 not_fluxing
+  StrCmp $0 "Fluxing" 0 not_fluxing
+  ; already ends in fluxing/Fluxing - no change
+  Goto suffix_done
+not_fluxing:
   StrCpy $INSTDIR "$INSTDIR\fluxing"
-done:
+suffix_done:
+  Pop $0
 FunctionEnd
 
-Function IsFluxingPath
-  ; Input on stack: path; output on stack: "yes" or "no"
-  Exch $0
-  ; strip trailing backslash if any
-  StrCpy $1 $0 1 -1
-  StrCmp $1 "\" 0 +2
-    StrCpy $0 $0 -1
-  ; compare last 7 chars to "fluxing" or "Fluxing"
-  StrCpy $2 $0 7 -7
-  StrCmp $2 "fluxing" yes 0
-  StrCmp $2 "Fluxing" yes 0
-  Push "no"
-  Goto end
-yes:
-  Push "yes"
-end:
-  Exch $0
-  Exch $1
-  Pop $0
-FunctionEnd
