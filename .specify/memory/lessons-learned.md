@@ -1,18 +1,18 @@
-# Lessons Learned — Fluxing (rime/weasel fork)
+﻿# Lessons Learned â Fluxing (rime/weasel fork)
 
-> **Scope**: `Fluxing` project (`rime/weasel` fork), reusable lessons distilled from dev incidents. Each entry: **Incident → Root cause → Lesson** format, source-recorded.
-> **Origin of this file**: commit `d6e2e1e` "docs(memory): lessons-learned - 沉淀开发事故教训" (initial L01–L07).
+> **Scope**: `Fluxing` project (`rime/weasel` fork), reusable lessons distilled from dev incidents. Each entry: **Incident â Root cause â Lesson** format, source-recorded.
+> **Origin of this file**: commit `d6e2e1e` "docs(memory): lessons-learned - æ²æ·å¼åäºææè®­" (initial L01âL07).
 
 > **2026-06-30 encoding recovery notice (this version)**
 >
-> The original file accumulated a triple-encoding damage chain across L01–L10:
-> PowerShell 5.1 + `chcp 936` (GBK) read UTF-8 Chinese as GBK bytes → re-encode as
-> UTF-16 LE (via `Out-File` / `Set-Content` with default encoding) → corrupt on
+> The original file accumulated a triple-encoding damage chain across L01âL10:
+> PowerShell 5.1 + `chcp 936` (GBK) read UTF-8 Chinese as GBK bytes â re-encode as
+> UTF-16 LE (via `Out-File` / `Set-Content` with default encoding) â corrupt on
 > next checkout. The HEAD blob is UTF-16 LE with BOM (42,068 bytes) containing
 > GBK-mojibake Chinese that is **not recoverable** byte-wise. This version is a
 > full English rewrite. English is the chosen replacement because:
 > 1. L08, L09, L10 commit messages already contain the full English lesson
->    summary; L01–L07 topics are recoverable from headings and this session's
+>    summary; L01âL07 topics are recoverable from headings and this session's
 >    history.
 > 2. Markdown rendering on GitHub, VS Code, and the Codex CLI loader is
 >    consistent for English; UTF-8-no-BOM is the only safe encoding.
@@ -24,26 +24,26 @@
 
 ---
 
-## L01 - Chinese UTF-8 file read/write — PowerShell 5.1 + GBK codepage trap
+## L01 - Chinese UTF-8 file read/write â PowerShell 5.1 + GBK codepage trap
 
 **Incident**: Commit `c0951ca` shipped 8 spec files whose body was supposedly
 "Chinese UTF-8" but was actually the result of "GBK bytes being decoded as
-Unicode then re-encoded as UTF-8" — a hybrid mess. `git hash-object` confirmed
+Unicode then re-encoded as UTF-8" â a hybrid mess. `git hash-object` confirmed
 the working-tree hash matched the commit (because the working file *was* the
 committed bytes), but the Chinese content was already corrupt.
 
 **Root cause** (PowerShell 5.1 + `chcp 936`):
 
 1. `Get-Content -Raw path` reads a UTF-8 file but **decodes the UTF-8 bytes
-   using the current codepage (936 = GBK)** → returns a "GBK-decoded Unicode"
+   using the current codepage (936 = GBK)** â returns a "GBK-decoded Unicode"
    string (i.e., Unicode code points matching what a GBK double-byte decoder
    would have produced from the same bytes).
 2. Any PS string-layer operation (`$s.Substring(...)`, `-replace`, `+`, etc.)
    works on the **wrong** code points.
 3. `[IO.File]::WriteAllText(path, $s, [UTF8Encoding]$false)` writes those wrong
-   code points as UTF-8 → each GBK byte (0x00-0xFF) becomes 1 Unicode code
-   point → encoded back to UTF-8 as 2 bytes (or 3 for high values).
-4. `Get-Content` reads it back the same way → looks "self-consistent" → the
+   code points as UTF-8 â each GBK byte (0x00-0xFF) becomes 1 Unicode code
+   point â encoded back to UTF-8 as 2 bytes (or 3 for high values).
+4. `Get-Content` reads it back the same way â looks "self-consistent" â the
    corruption goes undetected.
 
 **Why `git hash-object` didn't catch it**: Git hashes bytes. The working file
@@ -79,12 +79,12 @@ git cat-file -p <hash> | git hash-object --stdin   # round-trip
 
 ---
 
-## L02 - Chinese content edits must use byte-level replace — avoid PS string layer
+## L02 - Chinese content edits must use byte-level replace â avoid PS string layer
 
 **Incident**: While cleaning up `lessons-learned.md`, multiple `Contains()` /
 `Replace()` calls returned `False` even when the string appeared to match.
 
-**Root cause**: PowerShell 5.1 + `chcp 936` — `[char]0x987A`-style Unicode
+**Root cause**: PowerShell 5.1 + `chcp 936` â `[char]0x987A`-style Unicode
 literals inside `here-string` blocks get mis-encoded by the PS parser (PS
 treats the here-string body as GBK first, then re-encodes the resulting
 code points as Unicode). The resulting in-memory string **does not match**
@@ -119,7 +119,7 @@ for ($i = 0; $i -le $bytes.Length - $marker.Length; $i++) {
 
 ---
 
-## L03 - librime 1.13 `key_binder` config — what is supported, what is hypothetical
+## L03 - librime 1.13 `key_binder` config â what is supported, what is hypothetical
 
 **Context**: When designing the Fluxing default hotkey scheme (spec 005), the
 librime source `librime/src/rime/gear/key_binder.cc:185-220` was the source
@@ -128,7 +128,7 @@ actually compiled into the librime 1.13 we ship.
 
 **Lesson**:
 
-- **Always cite source for librime behavior** — `librime/src/rime/gear/*.cc`
+- **Always cite source for librime behavior** â `librime/src/rime/gear/*.cc`
   is the implementation, not third-party docs. The RIME wiki is community-
   maintained and lags behind.
 - **Verify every action** in the wiki against the source before depending on
@@ -152,17 +152,17 @@ actually compiled into the librime 1.13 we ship.
 
 **Notes**:
 
-- `accept` is the default — when no other action is given, the binding
+- `accept` is the default â when no other action is given, the binding
   absorbs the key.
 - For Fluxing 0.18.x we use:
-  - `accept: Shift_L, send: 2, when: has_menu` → pick 2nd candidate on left Shift
-  - `accept: Shift_R, send: 3, when: has_menu` → pick 3rd candidate on right Shift
-  - `accept: shift+l, send: 2, when: has_menu` → same as above, lowercase form
-  - `accept: shift+r, send: 3, when: has_menu` → same as above, lowercase form
-  - `accept: shift+l, toggle: ascii_mode, when: always` → toggle CJK/ASCII on Shift+L when no menu
-  - `accept: shift+r, toggle: ascii_mode, when: always` → same on Shift+R
-  - `accept: Shift_L, toggle: ascii_mode, when: always` → exact-case form, also works
-  - `accept: Shift_R, toggle: ascii_mode, when: always` → exact-case form, also works
+  - `accept: Shift_L, send: 2, when: has_menu` â pick 2nd candidate on left Shift
+  - `accept: Shift_R, send: 3, when: has_menu` â pick 3rd candidate on right Shift
+  - `accept: shift+l, send: 2, when: has_menu` â same as above, lowercase form
+  - `accept: shift+r, send: 3, when: has_menu` â same as above, lowercase form
+  - `accept: shift+l, toggle: ascii_mode, when: always` â toggle CJK/ASCII on Shift+L when no menu
+  - `accept: shift+r, toggle: ascii_mode, when: always` â same on Shift+R
+  - `accept: Shift_L, toggle: ascii_mode, when: always` â exact-case form, also works
+  - `accept: Shift_R, toggle: ascii_mode, when: always` â exact-case form, also works
 
 **Lesson**: when you need a key to do **two different things** based on
 context (e.g. Shift = "select 2nd candidate" *if menu is up*, else "toggle
@@ -222,7 +222,7 @@ fallback before the first commit that needs the API.
 **Lesson**: PowerShell 5.1's `Out-File -Encoding utf8` **silently prepends
 a UTF-8 BOM** to the output. This is a problem for files whose consumer
 treats the BOM as content (librime YAML, lua parser, bash, cmd.exe shebang,
-markdown renderers — see **L11** for the full table).
+markdown renderers â see **L11** for the full table).
 
 **Correct way to write a UTF-8-no-BOM file in PS 5.1**:
 
@@ -241,7 +241,7 @@ Set-Content -Encoding utf8 $path
 "..." | Set-Content -Encoding UTF8 $path
 ```
 
-**Verify** with the `Test-Bom` function from **L05 §1**.
+**Verify** with the `Test-Bom` function from **L05 Â§1**.
 
 ---
 
@@ -264,13 +264,13 @@ must use a separate `PUT /repos/{owner}/{repo}/topics` call with header
 **Fix**:
 
 1. Write `description` as **English-first with Chinese in parentheses**
-   (e.g. `Fluxing input method (火流猩输入法) for Windows`).
+   (e.g. `Fluxing input method (ç«æµç©è¾å¥æ³) for Windows`).
 2. Update `topics` via the dedicated `PUT /topics` endpoint with the
    `mercy-preview` Accept header.
 3. Verify the result via `Invoke-RestMethod -Headers @{...}` and
    **byte-level check** (e.g. `0xE0-0xEF` for CJK, not `0x3F` for `?`).
 4. **Do not** pipe the response through `Select-Object` and `Format-Table`
-   in PS 5.1 — that re-encodes the Chinese as GBK on output and you can't
+   in PS 5.1 â that re-encodes the Chinese as GBK on output and you can't
    tell whether the corruption happened on the API side or in your pipe.
 
 **Lesson**:
@@ -290,7 +290,7 @@ PUT `/topics` succeeded (9/9 topics set).
 
 Captures **4 distinct NSIS pitfalls** hit while building `fluxing-0.18.1.0`,
 plus one installer-args lesson (added in 0.18.2.0 follow-up). All 5 were
-**silent failures** — no NSIS error, just a broken installer.
+**silent failures** â no NSIS error, just a broken installer.
 
 ### Pitfall 1: `Unicode true` requires UTF-8 BOM
 
@@ -314,7 +314,7 @@ $encBom = [Text.UTF8Encoding]::new($true)
 `OutFile "fluxing-0.18.0.0-installer.exe"` silently **overwrites the
 previous release** with a same-named EXE. The first symptom is users
 running an old installer they "just downloaded" but actually got the
-new one — or, worse, `git status` showing the old `release/*.exe`
+new one â or, worse, `git status` showing the old `release/*.exe`
 mtime changed with no new build.
 
 **Fix**: parameterize `OutFile` via `!define FLUXING_VERSION` /
@@ -359,7 +359,7 @@ Then use `$SavedInstallDir` in all custom directory-creation code.
 
 NSIS silently **concatenates all unknown CLI flags** to `$INSTDIR`. So
 `WeaselSetup /S /userdir=D:\foo\bar` would set `$INSTDIR` to
-`C:\Program Files\Fluxing /userdir=D:\foo\bar` — breaking the registry
+`C:\Program Files\Fluxing /userdir=D:\foo\bar` â breaking the registry
 write that expects a clean path.
 
 The `/userdir=` handling is implemented in the `WeaselSetup` C++ side
@@ -396,7 +396,7 @@ Documents the **3-layer root cause and fixes** from `fluxing-0.18.2.0`
 
 The rime_ice schema (iDvel/rime-ice) is **heavily lua-dependent** (6
 `lua_translator`, 6 `lua_filter`, 1 `lua_processor`). Without a librime
-build with the lua plugin compiled in, every lookup silently degrades —
+build with the lua plugin compiled in, every lookup silently degrades â
 **no candidates, no error popup**, just an empty page.
 
 The librime 1.13 CMakeLists auto-discovers `plugins/lua` if the source
@@ -466,10 +466,10 @@ pattern is preferred over `git submodule` because:
 17.9 KB, fully CRLF), the obvious move was "encode as UTF-8 like every
 other markdown file in the repo". But then we remembered:
 `output/install.nsi` (**L09**) **must** have a UTF-8 BOM because it is
-consumed by NSIS 3.x with `Unicode true` at the top — without the BOM,
+consumed by NSIS 3.x with `Unicode true` at the top â without the BOM,
 NSIS parses the script as ANSI/CP1252 and Chinese literals (e.g.
-`${PRODUCT_NAME} "火流猩输入法"`, `${PRODUCT_PUBLISHER} "AIEC Studio"`)
-become mojibake (`?火流猩输入法?`, etc.) or, worse, silently break the
+`${PRODUCT_NAME} "ç«æµç©è¾å¥æ³"`, `${PRODUCT_PUBLISHER} "AIEC Studio"`)
+become mojibake (`?ç«æµç©è¾å¥æ³?`, etc.) or, worse, silently break the
 installer's `LangString` / `MessageBox` calls. So "always BOM" and
 "never BOM" are both wrong. The rule is **parser-dependent**.
 
@@ -480,7 +480,7 @@ the file. Different parsers in this repo have different opinions:
   Affected: `output/install.nsi`, any `output/*.nsh` include.
 - **Markdown renderers (GitHub, VS Code preview, most static-site
   generators)**: tolerate BOM, but some strip it; some downstream tools
-  (older `pandoc`, some `mdbook` themes) show the BOM as a stray `锘?`
+  (older `pandoc`, some `mdbook` themes) show the BOM as a stray `é?`
   at the top of the rendered page.
 - **YAML parsers (librime, snakeyaml, PyYAML, GitHub Actions)**: BOM in
   the first 3 bytes causes a parse error or a key-name with a hidden
@@ -494,7 +494,7 @@ the file. Different parsers in this repo have different opinions:
   the binary.
 - **`cmd.exe` batch files (`.bat`, `.cmd`)**: BOM in line 1 produces
   `The system cannot find the path specified.` because `cmd` tries to
-  execute `锘?@echo off` and `锘?` is not a command.
+  execute `é?@echo off` and `é?` is not a command.
 - **PowerShell 5.1**: PS 5.1 reads BOMs as zero-width characters into
   strings, which is harmless for most scripts but breaks regex matches
   that expect `^` to anchor the very first char.
@@ -559,7 +559,7 @@ $body     = [Text.Encoding]::UTF8.GetBytes($content)
 [IO.File]::WriteAllBytes($path, $preamble + $body)
 ```
 
-**Verify after writing** (L05 §1 byte-health check, abbreviated):
+**Verify after writing** (L05 Â§1 byte-health check, abbreviated):
 
 ```powershell
 function Test-Bom {
@@ -576,7 +576,7 @@ function Test-Bom {
 **Why this matters for `AGENTS.md` specifically**: `AGENTS.md` is a
 markdown file that humans, GitHub, VS Code, the Codex CLI loader, and
 future LLM agents will all read. The Codex CLI's "load AGENTS.md" code
-path (as of the 2026-06 snapshot) does **not** strip a BOM — it just
+path (as of the 2026-06 snapshot) does **not** strip a BOM â it just
 reads the file. A BOM would surface as a literal `\ufeff` at the start
 of the rendered file. So: no BOM, period. Same rule for any new `*.md`
 we add (specs, plans, tasks, this lessons file).
@@ -589,9 +589,9 @@ consumer (NSIS) actually needs the BOM; every other consumer is happier
 without it. Default to BOM-less for everything; reach for BOM only when
 the parser's spec demands it.
 
-**Related**: **L07** (`Out-File -Encoding utf8` adds a BOM — this is
+**Related**: **L07** (`Out-File -Encoding utf8` adds a BOM â this is
 the same trap re-discovered in reverse while writing `AGENTS.md`),
-**L09** (NSIS BOM requirement — the original discovery of the
+**L09** (NSIS BOM requirement â the original discovery of the
 parser-dependent rule).
 
 ---
@@ -599,34 +599,34 @@ parser-dependent rule).
 ## L12 - Meta: how lessons-learned.md itself got damaged (and the fix)
 
 **This is the post-mortem on the 2026-06-30 encoding recovery**. The full
-English rewrite above (L01–L11) is the fix; this L12 is the cause analysis
+English rewrite above (L01âL11) is the fix; this L12 is the cause analysis
 so the next person doesn't re-discover it.
 
 **Damage chain** (how HEAD ended up as 42,068 bytes of UTF-16 LE with
 GBK-mojibake Chinese):
 
-1. **2026-06-28, commit `d6e2e1e`** — initial L01–L07 added. Authored in
+1. **2026-06-28, commit `d6e2e1e`** â initial L01âL07 added. Authored in
    chat context, the Chinese content was **Unicode code points** in PS
    memory. The author wrote them via a PS pipeline (`Get-Content`,
    `Set-Content`, `Out-File`, or a here-string + `Set-Content`) without
    explicitly setting encoding. Under PS 5.1 + `chcp 936`, the default
    encoding is **UTF-16 LE with BOM** (the legacy Windows default for
    PS I/O).
-2. The file was committed as UTF-16 LE with BOM. Bytes 0–2: `FF FE`.
+2. The file was committed as UTF-16 LE with BOM. Bytes 0â2: `FF FE`.
    42,068 bytes for 21,034 Unicode code points.
 3. The first checkout on a different machine (or even a fresh `git
    clone`) re-decoded the file via `core.autocrlf=true` and the GBK
    codepage, producing a working-tree file that **looked like UTF-8
    with BOM** but was actually GBK-mojibake when read as Chinese.
-4. **L01–L07 (English-friendly)** in commit messages were always fine;
+4. **L01âL07 (English-friendly)** in commit messages were always fine;
    it was **only the body prose in the .md file** that was damaged.
 5. **L08, L09, L10 commits** (fd2d260, 4506a32, 6e6f1ef) added
    lessons with the same encoding pipeline. Same damage. By the time
    the L10 commit landed, the file was ~42 KB of mixed GBK-mojibake
    Chinese + English code blocks + YAML examples.
 6. **2026-06-30, this rewrite**: HEAD's blob is now replaced with a
-   clean UTF-8-no-BOM, fully LF, fully English version. L01–L07 are
-   recovered from chat history + commit headings. L08–L10 are
+   clean UTF-8-no-BOM, fully LF, fully English version. L01âL07 are
+   recovered from chat history + commit headings. L08âL10 are
    recovered from the commit messages (which are the authoritative
    English summary). L11 is added as a new lesson.
 
@@ -634,8 +634,8 @@ GBK-mojibake Chinese):
 
 - The Chinese content is **GBK bytes re-encoded as Unicode code points,
   re-encoded as UTF-16 LE bytes**. Going backwards requires
-  (a) UTF-16 LE → Unicode code points, (b) Unicode code points → GBK
-  bytes, (c) GBK bytes → GBK code points, (d) GBK code points → UTF-8
+  (a) UTF-16 LE â Unicode code points, (b) Unicode code points â GBK
+  bytes, (c) GBK bytes â GBK code points, (d) GBK code points â UTF-8
   bytes. Steps (c) and (d) are **lossy** because the original author
   wrote Unicode code points that don't all have GBK equivalents (e.g.
   `\u987A` is a valid GBK char, `\ufeff` is not).
@@ -675,13 +675,13 @@ this file is the single source of truth.
 **Symptom** (discovered 2026-06-30, after a user installed 0.18.2.0 with `/D=D:\Program Files` and got a fragmented layout):
 
 ```
-D:\Program Files\weasel\              ← engine binaries (WRONG location)
-   ├─ WeaselServer.exe
-   ├─ rime.dll
-   └─ data\
-D:\Program Files\fluxing\             ← should contain the weasel\ subdir
-   └─ user1\
-        └─ fluxing\                   ← user-data (partial layout from broken code)
+D:\Program Files\weasel\              â engine binaries (WRONG location)
+   ââ WeaselServer.exe
+   ââ rime.dll
+   ââ data\
+D:\Program Files\fluxing\             â should contain the weasel\ subdir
+   ââ user1\
+        ââ fluxing\                   â user-data (partial layout from broken code)
 ```
 
 Two things were wrong, both rooted in `output/install.nsi`'s `ForceFluxingSuffix` / `IsFluxingPath` pair.
@@ -699,7 +699,7 @@ The original code (per spec 002 T002) used `Exch` to swap the user stack with a 
 - `MUI_PAGE_CUSTOMFUNCTION_LEAVE` never fires.
 - The suffix is never appended.
 
-So even if `IsFluxingPath` had been correct, **silent installs silently produced the wrong layout** — and our smoke test always ran the installer in silent mode, so we never caught it across 4 versions (0.17.5 / 0.18.0 / 0.18.1 / 0.18.2).
+So even if `IsFluxingPath` had been correct, **silent installs silently produced the wrong layout** â and our smoke test always ran the installer in silent mode, so we never caught it across 4 versions (0.17.5 / 0.18.0 / 0.18.1 / 0.18.2).
 
 ### Fix (released in 0.18.3.0)
 
@@ -721,27 +721,27 @@ So even if `IsFluxingPath` had been correct, **silent installs silently produced
 
 2. **Added explicit `Call ForceFluxingSuffix` in `.onInit`** after the `skip:` label, so it runs for **all** install paths (default, registry-detected upgrade, and silent `/D=`).
 
-3. **Fixed user-data path** in the Section block (L534-535): `$R3\fluxing\user1\fluxing` → `$R3\user1\fluxing` (avoids the `fluxing\fluxing` double-segment after the suffix is appended).
+3. **Fixed user-data path** in the Section block (L534-535): `$R3\fluxing\user1\fluxing` â `$R3\user1\fluxing` (avoids the `fluxing\fluxing` double-segment after the suffix is appended).
 
 4. **Removed dead `IsFluxingPath` function** (it was only called by the original broken `ForceFluxingSuffix`; not referenced after the rewrite).
 
 5. **Verified** with silent install `/D=C:\TEMP\fluxing-0183-test`:
-   - `fluxing-0183-test\fluxing\weasel\` (engine) ✓
-   - `fluxing-0183-test\fluxing\user1\fluxing\` (user-data) ✓
-   - `HKLM\...\InstallDir` = `<root>\fluxing` ✓
-   - `HKCU\...\RimeUserDir` = `<root>\fluxing\user1\fluxing` ✓
+   - `fluxing-0183-test\fluxing\weasel\` (engine) â
+   - `fluxing-0183-test\fluxing\user1\fluxing\` (user-data) â
+   - `HKLM\...\InstallDir` = `<root>\fluxing` â
+   - `HKCU\...\RimeUserDir` = `<root>\fluxing\user1\fluxing` â
 
 ### Lessons
 
-1. **Never use `Exch` in a custom NSIS function for return values** unless you are 100% sure of the stack discipline. Prefer passing values via global vars (`StrCpy $MyFuncResult ...`) and using `Push` / `Pop` only for `$0` save/restore. The `Exch` approach is clever but a single mistake in the dance produces silent failures — no compile error, no runtime error, just "doesn't work" with no way to know why.
+1. **Never use `Exch` in a custom NSIS function for return values** unless you are 100% sure of the stack discipline. Prefer passing values via global vars (`StrCpy $MyFuncResult ...`) and using `Push` / `Pop` only for `$0` save/restore. The `Exch` approach is clever but a single mistake in the dance produces silent failures â no compile error, no runtime error, just "doesn't work" with no way to know why.
 
 2. **Always wire path-force / pre-condition logic to `.onInit`, not to a `MUI_PAGE_CUSTOMFUNCTION_*` hook.** Page hooks only fire in the GUI flow. Silent mode (`/S`) skips all pages and runs `.onInit` only. Any path normalization / validation / force-suffix MUST happen in `.onInit` to cover all install modes.
 
-3. **Silent-install smoke tests are mandatory for installer changes.** Add to AGENTS.md §2.5: for every installer change, verify the layout via `installer.exe /S /D=<test_root>` + filesystem + registry inspection.
+3. **Silent-install smoke tests are mandatory for installer changes.** Add to AGENTS.md Â§2.5: for every installer change, verify the layout via `installer.exe /S /D=<test_root>` + filesystem + registry inspection.
 
 4. **`MUI_PAGE_CUSTOMFUNCTION_LEAVE` is the right hook for user-driven changes** (e.g. "after user picks a directory, validate the choice and warn if it ends in a space"). It is **the wrong hook for installer invariants** (e.g. "the install path MUST end in `fluxing` regardless of user input").
 
-**Related**: L09 (NSIS BOM + OutFile + line endings — the same `install.nsi` has a long history of silent failures; this L13 is another entry in that pattern). L11 (BOM rule — `install.nsi` itself must have a BOM, per the parser-dependent rule).
+**Related**: L09 (NSIS BOM + OutFile + line endings â the same `install.nsi` has a long history of silent failures; this L13 is another entry in that pattern). L11 (BOM rule â `install.nsi` itself must have a BOM, per the parser-dependent rule).
 ## L14 - Installer arch-mismatch: librime is Win32-only so all Weasel binaries must be x86; never use `${If} ${RunningX64}` to pick x64 Weasel.exe
 
 **Symptom** (discovered 2026-06-30, after a user installed 0.18.3.0 and got a `0xC000007B` STATUS_INVALID_IMAGE_FORMAT error from `WeaselDeployer.exe`):
@@ -761,7 +761,7 @@ The installer claimed success. The 0.18.3.0 release notes stated "fresh install 
 
 | File | Arch | Notes |
 |---|---|---|
-| `output\rime.dll` | x86 | librime is Win32-only (per L10 §3). |
+| `output\rime.dll` | x86 | librime is Win32-only (per L10 Â§3). |
 | `output\weasel.dll` | x86 | the TSF 32-bit shim. |
 | `output\WeaselDeployer.exe` | x64 | built by `weasel.sln` Release\|x64. |
 | `output\WeaselServer.exe` | x64 | built by `weasel.sln` Release\|x64. |
@@ -793,21 +793,21 @@ The old `${If} ${RunningX64}` conditional picked x64 Weasel*.exe on x64 Windows.
 4. Fixed the `ForceFluxingSuffix` logic bug in the same .onInit (the `StrCmp` chain fall-through that always routed to `not_fluxing` - see L13 for context).
 5. Added a doc-only comment in `.onInit` about `/LOG=path` for NSIS install logging. Standard NSIS does not support `LogSet on` (requires `NSIS_CONFIG_LOG` build flag); users and deploy scripts can pass `/LOG=path\to\file.log` to get a full install log for post-mortem.
 
-### Verification (AGENTS.md §2.5 silent-install smoke test)
+### Verification (AGENTS.md Â§2.5 silent-install smoke test)
 
 ```
 fluxing-0184-test8\
-  └─ ProgramFiles\fluxing\
-       ├─ weasel\
-       │    ├─ WeaselServer.exe   (x86, 1120768 bytes)
-       │    ├─ WeaselDeployer.exe (x86,  984064 bytes)
-       │    ├─ WeaselSetup.exe    (x86,  286208 bytes)
-       │    ├─ rime.dll           (x86, 3039744 bytes, lua-linked)
-       │    ├─ weasel.dll         (x86,  985600 bytes)
-       │    ├─ weaselx64.dll      (x64, 1135104 bytes, TSF 64-bit shim)
-       │    ├─ WinSparkle.dll     (x86, 1930240 bytes)
-       │    └─ uninstall.exe      (x86,  135790 bytes)
-       └─ user1\fluxing\             <- user-data, co-located
+  ââ ProgramFiles\fluxing\
+       ââ weasel\
+       â    ââ WeaselServer.exe   (x86, 1120768 bytes)
+       â    ââ WeaselDeployer.exe (x86,  984064 bytes)
+       â    ââ WeaselSetup.exe    (x86,  286208 bytes)
+       â    ââ rime.dll           (x86, 3039744 bytes, lua-linked)
+       â    ââ weasel.dll         (x86,  985600 bytes)
+       â    ââ weaselx64.dll      (x64, 1135104 bytes, TSF 64-bit shim)
+       â    ââ WinSparkle.dll     (x86, 1930240 bytes)
+       â    ââ uninstall.exe      (x86,  135790 bytes)
+       ââ user1\fluxing\             <- user-data, co-located
 ```
 
 All Weasel EXE/DLL are x86. `weaselx64.dll` is x64 (TSF text input processor must be x64 to match the 64-bit TSF service). `rime.dll` is x86 (librime is Win32-only). WoW64 loads all x86 binaries on the x64 Windows host without conflict.
@@ -815,18 +815,18 @@ All Weasel EXE/DLL are x86. `weaselx64.dll` is x64 (TSF text input processor mus
 ### Lessons
 
 1. Never mix x64 EXE with x86 DLL in a single install. Check the machine type (PE header offset 0x3C, then offset +4 is the machine field: 0x14C = x86, 0x8664 = x64, 0xAA64 = ARM64) of every binary in the install set. A single mismatch produces 0xC000007B with no actionable error message.
-2. WoW64 is process-level, not module-level. The L10 §3 / AGENTS.md §4.4 comment "works on x64 OS via WoW64" is correct only when all DLLs in the process are the same arch as the EXE. The standard deployment for 32-bit rime/weasel is x86 Weasel.exe + x86 rime.dll + x64 weaselx64.dll (the last one only for TSF 64-bit shim, loaded by Windows TSF service not by Weasel).
-3. Always inspect installed binary architectures in the silent-install smoke test. Add to AGENTS.md §2.5: after every `xbuild.bat installer`, verify the PE header of every `*.exe` and `*.dll` in the test install root and fail if any EXE is not the expected arch.
+2. WoW64 is process-level, not module-level. The L10 Â§3 / AGENTS.md Â§4.4 comment "works on x64 OS via WoW64" is correct only when all DLLs in the process are the same arch as the EXE. The standard deployment for 32-bit rime/weasel is x86 Weasel.exe + x86 rime.dll + x64 weaselx64.dll (the last one only for TSF 64-bit shim, loaded by Windows TSF service not by Weasel).
+3. Always inspect installed binary architectures in the silent-install smoke test. Add to AGENTS.md Â§2.5: after every `xbuild.bat installer`, verify the PE header of every `*.exe` and `*.dll` in the test install root and fail if any EXE is not the expected arch.
 4. `${If} ${RunningX64}` to install x64 Weasel binaries is a footgun. The conditional tempts the installer to "do the right thing" for the host arch, but the only x64 thing we install is `weaselx64.dll` (TSF shim). All actual Weasel process binaries must be x86 to match `rime.dll`.
 5. Build output directories are arch-fragmented. `output\` is x64 (msbuild default); `output\Win32\` is x86 (xmake `-a x86`). A spec/AGENTS.md note that all release installs use the `output\Win32\*` binaries is now mandatory.
 
-**Related**: L10 §3 (librime is Win32-only), L13 (the previous path-force bug - same install.nsi file, same silent-smoke-test-blindness pattern), AGENTS.md §2.5 (the silent-install smoke test that finally caught this), AGENTS.md §4.4 (the dangerous zone note that did not anticipate this particular failure mode).
+**Related**: L10 Â§3 (librime is Win32-only), L13 (the previous path-force bug - same install.nsi file, same silent-smoke-test-blindness pattern), AGENTS.md Â§2.5 (the silent-install smoke test that finally caught this), AGENTS.md Â§4.4 (the dangerous zone note that did not anticipate this particular failure mode).
 
 ---
 
 ## L15 - PowerShell `Start-Process -ArgumentList` with mixed `/D=` and `/LOG=` causes NSIS to concatenate paths
 
-**Symptom** (discovered 2026-06-30, while writing the AGENTS.md §2.5 silent-install smoke test):
+**Symptom** (discovered 2026-06-30, while writing the AGENTS.md Â§2.5 silent-install smoke test):
 
 ```powershell
 Start-Process -FilePath "installer.exe" -ArgumentList @("/S","/D=$dst\ProgramFiles","/LOG=$logPath") -Wait -PassThru
@@ -846,7 +846,7 @@ The `/LOG=` part of the command line gets concatenated into the `/D=` install pa
 
 The exact failure mode is brittle and depends on PowerShell version + Windows build. The robust workaround is: never use `Start-Process -ArgumentList` with key=value pairs from PowerShell. Use `cmd /c` invocation instead.
 
-### Fix (in AGENTS.md §2.5 smoke test recipe)
+### Fix (in AGENTS.md Â§2.5 smoke test recipe)
 
 The recipe now uses `cmd /c` form. Verified 2026-06-30 with 0.18.4.0 installer: `cmd /c "F:\soft\00selfmade\rime\release\fluxing-0.18.4.0-installer.exe /S /D=$dst\ProgramFiles"` produced the expected layout, no concatenation.
 
@@ -854,8 +854,8 @@ The recipe now uses `cmd /c` form. Verified 2026-06-30 with 0.18.4.0 installer: 
 
 1. PowerShell `Start-Process -ArgumentList` with `key=value` pairs is fragile. Use `cmd /c` for any installer invocation in scripts. It is one more shell hop, but eliminates the entire class of "PowerShell-merged-args" bugs.
 2. AGENTS.md smoke-test recipes must be copy-paste safe. When a recipe is published, it must work the first time, every time, on a clean dev box. `cmd /c` invocation is the safest cross-Shell default.
-3. This is the same class of bug as L10 §5 ("`/userdir=<x>` got concatenated into `$INSTDIR`") - the same underlying rule applies: any CLI flag the installer does not explicitly handle can end up concatenated into the previous flag's value. The `/D=` flag is particularly vulnerable because its value is a free-form path with no terminator.
+3. This is the same class of bug as L10 Â§5 ("`/userdir=<x>` got concatenated into `$INSTDIR`") - the same underlying rule applies: any CLI flag the installer does not explicitly handle can end up concatenated into the previous flag's value. The `/D=` flag is particularly vulnerable because its value is a free-form path with no terminator.
 
-**Related**: L09 (NSIS flags and OutFile quirks), L10 §5 (unknown CLI args getting concatenated into $INSTDIR - same root cause class), AGENTS.md §2.5 (the smoke test that surfaced this).
+**Related**: L09 (NSIS flags and OutFile quirks), L10 Â§5 (unknown CLI args getting concatenated into $INSTDIR - same root cause class), AGENTS.md Â§2.5 (the smoke test that surfaced this).
 
 ---
