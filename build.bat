@@ -145,7 +145,8 @@ if %build_rime% == 1 (
   if not exist librime\build.bat (
     git submodule update --init --recursive
   )
-  cd %WEASEL_ROOT%\librime
+  call scripts\prepare-librime-lua.bat
+  if errorlevel 1 exit /b 1
   rem clean cache before building
   for %%a in ( build dist lib ^
     deps\glog\build ^
@@ -358,6 +359,9 @@ rem %3 : target_path of rime.dll, base %WEASEL_ROOT% or abs path
 
   cd %WEASEL_ROOT%\librime
   call :stash_build %1 push
+
+  copy /Y %WEASEL_ROOT%\librime\build_%1\src\Release\rime.lib %WEASEL_ROOT%\librime\dist_%1\lib\rime.lib
+  if errorlevel 1 goto error
 
   copy /Y %WEASEL_ROOT%\librime\dist_%1\include\rime_*.h %WEASEL_ROOT%\include\
   if errorlevel 1 goto error
