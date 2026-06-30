@@ -24,7 +24,7 @@
 | Vendored ext | `thirdparty/librime-lua/` | Tracked in git. Hooked into librime build via `scripts/prepare-librime-lua.bat`. See L10. |
 | Constitution | `.specify/memory/constitution.md` | Binding principles. Read first, follow always. |
 | Specs | `.specify/specs/NNN-*/` (11 active specs as of 0.18.2.0) | spec/plan/tasks per spec-init. |
-| Lessons | `.specify/memory/lessons-learned.md` (L01–L10) | Each L## is a post-mortem. Read before any non-trivial fix. |
+| Lessons | `.specify/memory/lessons-learned.md` (L01-L15) | Each L## is a post-mortem. Read before any non-trivial fix. |
 | Installer script | `output/install.nsi` | Tracked. **NSIS BOM required** (L09). |
 | User-visible strings | `output/data/*.yaml`, `*.rc` | All user-facing strings stay in Simplified Chinese (P2/P5). |
 | Test code | `test/TestDefaultHotkeys/`, `test/TestResponseParser/`, `test/TestWeaselIPC/` | Built via `weasel.sln` (msbuild) only. xmake path is build-only. |
@@ -125,9 +125,10 @@ Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $dst | Out-Null
 
 # 2. Silent install with /D=<no-fluxing-suffix> to exercise the force-suffix path
-$proc = Start-Process -FilePath $installer `
-    -ArgumentList @("/S","/D=$dst\ProgramFiles") -Wait -PassThru
-Write-Host "exit code: $($proc.ExitCode)"
+# Use cmd /c (NOT Start-Process -ArgumentList - L15: PS 5.1 merges /D= and /LOG= at the = boundary)
+cmd /c "`"$installer`" /S /D=`"$dst\ProgramFiles`""
+if ($LASTEXITCODE -ne 0) { $failures += "cmd /c installer exit code was $LASTEXITCODE" }
+Write-Host "exit code: $LASTEXITCODE"
 
 # 3. Verify layout invariants (L13 + spec 002 FR-001 / FR-002)
 $failures = @()
@@ -172,6 +173,30 @@ if (-not (Test-Path "$dst\ProgramFiles\fluxing\weasel\data\build\rime_ice.table.
     $failures += "prebuilt rime_ice.table.bin missing - first-run will be slow"
 }
 
+#    h. L14: all Weasel*.exe are x86 (PE machine 0x14C); only weaselx64.dll is x64
+function Test-Arch($path) {
+  $b = [System.IO.File]::ReadAllBytes($path)
+  $peOff = [BitConverter]::ToInt32(($b[0x3C..0x3F]), 0)
+  return [BitConverter]::ToUInt16(($b[($peOff+4)..($peOff+5)]), 0)
+}
+$expectedArch = @{
+  'WeaselServer.exe'  = 0x14C  # x86
+  'WeaselDeployer.exe'= 0x14C  # x86
+  'WeaselSetup.exe'   = 0x14C  # x86
+  'uninstall.exe'     = 0x14C  # x86
+  'weaselx64.dll'     = 0x8664 # x64 (TSF 64-bit shim)
+  'rime.dll'          = 0x14C  # x86 (librime Win32-only)
+}
+foreach ($f in $expectedArch.Keys) {
+  $p = Join-Path "$dst\ProgramFiles\fluxing\weasel" $f
+  if (Test-Path $p) {
+    $actual = Test-Arch $p
+    if ($actual -ne $expectedArch[$f]) {
+      $failures += "$f arch = 0x$($actual.ToString('X4')) (expected 0x$($expectedArch[$f].ToString('X4'))) - L14 arch mismatch"
+    }
+  }
+}
+
 # 4. Cleanup
 Get-ChildItem $dst -Recurse -Force -ErrorAction SilentlyContinue |
     ForEach-Object { attrib -h $_.FullName 2>$null }
@@ -203,6 +228,7 @@ if ($failures.Count -eq 0) {
   before the L10 fix).
 - **Wrong InstallDir / RimeUserDir registry values** - causes
   TSF not to find the user-data dir, schema files not loading.
+- **Mixed arch in installed binaries** (L14) - 0.18.3.0 shipped with x64 Weasel*.exe + x86 rime.dll, crashing with 0xC000007B on first run. The new arch check (step h above) catches this deterministically.
 
 #### When you can SKIP this test
 
@@ -351,6 +377,10 @@ Also:
 - `MUI_ICON ..\resource\weasel.ico` is **cwd-relative**, not
   install.nsi-relative. `xbuild.bat` cds to `output/` before invoking
   makensis to make this work. (L10 §4)
+
+⚠️ **L14 trap — architecture consistency**: librime is Win32-only (`output\rime.dll` is x86). All Weasel process binaries (WeaselServer.exe, WeaselDeployer.exe, WeaselSetup.exe, uninstall.exe) must also be x86. The installer must install from `output\Win32\*.exe,*.dll` exclusively for those binaries. `weaselx64.dll` is the one x64 file we ship (TSF 64-bit shim, loaded by the Windows TSF service, not by Weasel). NEVER use `${If} ${RunningX64}` to install x64 Weasel*.exe on x64 Windows — the resulting x64 process cannot load the x86 rime.dll, producing `0xC000007B STATUS_INVALID_IMAGE_FORMAT` and an instant crash.
+
+**Verification** (mandatory per §2.5 silent-install smoke test): check the PE header machine type of every `*.exe` and `*.dll` in the test install root. x86 = 0x14C, x64 = 0x8664, ARM64 = 0xAA64. The only x64 file expected in the install is `weaselx64.dll`. See L14 for the full post-mortem.
 
 ### 4.2 `env.bat` (local-only, gitignored)
 
@@ -509,6 +539,8 @@ When you start a session and the user gives a non-trivial task:
 | A7 | Editing `librime/plugins/lua/` directly | L10 §4. It gets wiped on the next `build.bat rime`; edit the source at `thirdparty/librime-lua/` and let `prepare-librime-lua.bat` re-copy. |
 | A8 | Trusting `git describe --tags` to give a clean version in `build.bat` | L10 §6. Set `RELEASE_BUILD=1` in `env.bat` for release builds. |
 | A9 | Modifying the CI matrix to add an "x64 librime build" without first verifying the entire rime API surface compiles in 64-bit | L10 §3 deferral — this is a separate, multi-week task. |
+| A11 | Installing x64 Weasel*.exe on x64 Windows because `${If} ${RunningX64}` "looks right" | L14. librime is Win32-only; `output\rime.dll` is x86; an x64 EXE process cannot load x86 DLL. The resulting install crashes with `0xC000007B` on first run. Always install from `output\Win32\*` (x86); `weaselx64.dll` is the only x64 file shipped (TSF shim). |
+| A12 | Using Start-Process -ArgumentList with mixed /D= and /LOG= to launch an NSIS installer in PowerShell | L15. PowerShell 5.1 merges array elements at = boundary; the install path becomes ProgramFiles LOG=... and the entire install is dumped into a deeply nested garbage directory. Use cmd /c with the installer instead. |
 | A10 | Calling `git add .` from the project root | Will sweep up `weasel.props`, `env.bat`, `*.log`, and the next session's `github_token.txt`. Stage files explicitly by path. |
 
 ---
