@@ -1,3 +1,31 @@
+## [0.18.3.0] - 2026-06-30
+
+### 主要更新
+
+- **安装路径强制以 `fluxing` 结尾** (修复 0.18.2.0 路径布局 bug)
+  - `output/install.nsi` 的 `IsFluxingPath` 函数之前有 broken Exch/Pop 链，导致返回值恒为垃圾；`ForceFluxingSuffix` 实际从未生效。
+  - 旧版本下，用户在 GUI 选 `D:\Program Files` 时，安装器把引擎二进制写到 `D:\Program Files\weasel\`、把用户数据写到 `D:\Program Files\fluxing\user1\fluxing\` —— 引擎与用户数据"分裂"在两处。
+  - 修复后：
+    - 重写 `ForceFluxingSuffix` 为基于 label + `StrCmp` 的简单逻辑（不再依赖 Exch stack juggling）。
+    - 在 `.onInit` 的 `skip:` 标签之后显式 `Call ForceFluxingSuffix` —— 之前仅靠 `MUI_PAGE_CUSTOMFUNCTION_LEAVE` 触发，**silent install (`/S` + `/D=`) 下根本不会执行**。
+    - `output/install.nsi` L534-535 的 user-data 路径由 `$R3\fluxing\user1\fluxing` 修正为 `$R3\user1\fluxing`（避免与 `$R3` 末尾的 `\fluxing` 重复成 `\fluxing\fluxing`）。
+  - 验证：`xbuild.bat installer` + silent install `/D=C:\TEMP\fluxing-0183-test` → 产生
+    ```
+    fluxing-0183-test\
+      └─ fluxing\              ← 安装根
+           ├─ weasel\          ← 引擎二进制
+           └─ user1\           ← 用户数据
+                └─ fluxing\
+    ```
+    注册表 `HKLM\...\InstallDir` 与 `HKCU\...\RimeUserDir` 同步更新。
+  - **L13** lessons-learned 记录了根因 + 修复全过程 + 教训。
+
+### 验收
+
+- 全新安装：GUI 与 silent (`/S` + `/D=`) 都得到 `<chosen>\fluxing\weasel\` 布局。
+- 注册表 `HKLM\SOFTWARE\Fluxing\Weasel\InstallDir` = 安装根（含 `\fluxing`）。
+- 注册表 `HKCU\Software\Fluxing\Weasel\RimeUserDir` = `<install-root>\user1\fluxing`。
+
 ## [Unreleased] - 2026-06-28
 
 ### 主要更新
