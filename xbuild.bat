@@ -175,10 +175,10 @@ if %build_arm64% == 1 (
   xmake
   if errorlevel 1 goto error
 )
-xmake f -a x64 -m %build_config% %build_sdk_option%
-if %build_rebuild% == 1 ( xmake clean )
-xmake
-if errorlevel 1 goto error
+rem x64 build skipped: librime is Win32-only (rime.dll is 32-bit), so lib64\rime.lib is 32-bit;
+rem xmake x64 build can't link WeaselServer.exe against 32-bit rime.lib.
+rem Installer copies output\rime.dll (which is 32-bit) and works on x64 OS via WoW64.
+rem See: librime is built with -AWin32; weasel x64 build is therefore unsupported.
 xmake f -a x86 -m %build_config% %build_sdk_option%
 if %build_rebuild% == 1 ( xmake clean )
 xmake
@@ -194,12 +194,14 @@ if %build_arm64% == 1 (
   if errorlevel 1 goto error
 )
 if %build_installer% == 1 (
+  cd /d %WEASEL_ROOT%\output
   "%ProgramFiles(x86)%"\NSIS\Bin\makensis.exe ^
   /DFLUXING_VERSION=%FLUXING_VERSION% ^
   /DWEASEL_BUILD=%WEASEL_BUILD% ^
   /DPRODUCT_VERSION=%PRODUCT_VERSION% ^
-  output\install.nsi
+  install.nsi
   if errorlevel 1 goto error
+  cd /d %WEASEL_ROOT%
 )
 goto end
 
