@@ -232,8 +232,8 @@ key_binder:
     - { when: has_menu, accept: Shift_L, send: 2 }
     - { when: has_menu, accept: Shift_R, send: 3 }
     # 组合键 Shift+L / Shift+R — 兼容按住 Shift 不松 + 按字母的操作
-    - { when: has_menu, accept: shift+l, send: 2 }
-    - { when: has_menu, accept: shift+r, send: 3 }
+    - { when: has_menu, accept: Shift+l, send: 2 }
+    - { when: has_menu, accept: Shift+r, send: 3 }
 
     # 翻页 , .
     # - { when: has_menu, accept: comma, send: Page_Up }
@@ -252,8 +252,8 @@ key_binder:
     - { when: always, toggle: ascii_punct, accept: Control+Shift+9 }              # 切换中英标点
     # 火流猩 v2: Shift_L/R 中英切换（无候选时 — has_menu 行的 Shift_L 优先匹配选候选）
     # 组合键（Shift+L / Shift+R）— 兼容搜狗拼音按住 Shift 不松 + 字母的操作
-    - { when: always, toggle: ascii_mode, accept: shift+l }
-    - { when: always, toggle: ascii_mode, accept: shift+r }
+    - { when: always, toggle: ascii_mode, accept: Shift+l }
+    - { when: always, toggle: ascii_mode, accept: Shift+r }
     # 单键（Shift_L / Shift_R 单独按）— 兼容搜狗拼音单击 Shift 切中英
     - { when: always, toggle: ascii_mode, accept: Shift_L }
     - { when: always, toggle: ascii_mode, accept: Shift_R }
