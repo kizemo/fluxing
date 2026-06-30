@@ -89,8 +89,56 @@ unins000.exe (安装器)
 
 ### 2.3 安装器 silent + Bootstrapper 通信
 
-- 安装器调用 `FluxingBootstrapper.exe --stage=...` 时，通过 stdin pipe 发送命令（JSON 一行一事件）。
-- Bootstrapper 完成后通过 stdout 返回 JSON。
+**进程模型**：
+
+- 安装器 (NSIS) 是父进程，**仅**负责解压 + 写注册表 + 调起 Bootstrapper 子 exe。
+- Bootstrapper 是独立 exe 进程，承担所有 UI 渲染（mac 风安装窗 + 首启引导 + 卸载窗）。
+- 通信走 stdin/stdout pipe，**每行一个 JSON 事件**，UTF-8 无 BOM + LF（与 spec 004 §5 全局约束一致）。
+
+**Bootstrapper 调用约定**（CLI 参数）：
+
+```
+FluxingBootstrapper.exe --stage=<install|firstrun|uninstall> [--log=<path>]
+```
+
+**Stdin JSON 事件（安装器 → Bootstrapper）**：
+
+```json
+// 1. 启动：安装器传 install_args 给 Bootstrapper
+{ "event": "init", "install_dir": "C:\\Program Files\\Fluxing", "user_data_dir": "C:\\Users\\<u>\\AppData\\Local\\Fluxing" }
+
+// 2. 进度：安装器解压时实时回调
+{ "event": "progress", "phase": "extract", "current": 42, "total": 100, "message": "正在解压 rime.dll..." }
+
+// 3. 完成：安装器解压结束
+{ "event": "phase_done", "phase": "extract" }
+
+// 4. 错误：安装器遇到非致命错误（如可选组件失败）
+{ "event": "warning", "code": "OPTIONAL_COMPONENT_FAILED", "message": "..." }
+```
+
+**Stdout JSON 事件（Bootstrapper → 安装器）**：
+
+```json
+// 1. 用户选好路径，回传给安装器（仅 install 阶段）
+{ "event": "user_choice", "install_dir": "D:\\Tools\\Fluxing", "user_data_dir": "D:\\FluxData" }
+
+// 2. 用户取消
+{ "event": "user_cancel" }
+
+// 3. Bootstrapper 完成（全部阶段）
+{ "event": "done", "result": "ok" }
+
+// 4. Bootstrapper 错误
+{ "event": "error", "code": "DISK_FULL", "message": "..." }
+```
+
+**协议约束**（与 spec 004 §5 IPC 约束一致）：
+
+- 单行 JSON，UTF-8 无 BOM + LF（不是 CRLF，避免跨平台问题）。
+- 事件名 snake_case（与 RIME 社区一致）。
+- 不在事件中嵌入二进制（大文件用单独的 `--file=<path>` 传）。
+- 安装器超时 = 60s 无 stdin 事件 → Bootstrapper 视作用户取消。
 - 进度条：Bootstrapper 自渲染。
 - 安装器仅做解压 + 注册表；不渲染 UI。
 

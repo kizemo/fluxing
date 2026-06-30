@@ -130,23 +130,11 @@
 
 ## X. 暗色主题集成（F11 横切）
 
-本 spec 涉及的所有 mac 风窗口都必须在 v2.0.0 整合时支持暗色主题。具体集成点：
+> 详细规范见 [spec 004 §9 F11 暗色主题横切规范](../004-fluxing-v2-roadmap/spec.md#9-f11-暗色主题横切规范spec-004-统一收口)。
+> 本 spec 实施时引用之，不重复定义。
 
-- **主题源**：`%LocalAppData%\Fluxing\weasel.yaml` 的 `style.color_scheme`；新增 `theme.light` / `theme.dark` 双套色板。
-- **触发**：监听 Windows `WM_SETTINGCHANGE` (lParam = `SPI_SETDESKWALLPAPER` 等) 主题变更 → 走 `FluxingDarkModeBridge` 广播给所有 mac 风窗口。
-- **过渡**：色板切换 200ms 渐变（使用 `ID2D1SolidColorBrush` 的 `ColorF` 插值）。
-- **存储**：颜色缓存按主题名索引（`LightColors` / `DarkColors`），切换时换指针；不重新分配资源。
-- **DPI**：暗色切换不触发 `dpiScaleLayout` 重新计算。
-- **候选面板**：与本 spec 的 mac 风窗口同步（共享色板缓存）。
-- **测试**：`TestDarkModeBridge.cpp` mock `WM_SETTINGCHANGE`，断言所有订阅窗口收到回调 + 色板指针更新。
-
-涉及文件：
-- `FluxingComponents/Theme.{h,cpp}`（spec 006 引入，**所有 spec 共用**）
-- `FluxingPanelHost/DarkModeBridge.{h,cpp}`（spec 006 引入）
-- `RimeWithWeasel/WeaselUtility.{h,cpp}` 加主题切换广播
-- `WeaselUI/WeaselPanel.cpp` 接收主题切换
-
-依赖：spec 006（Theme/DarkModeBridge 必先 ship），spec 008/009/007 在 006 之后 ship。
+涉及本 spec 的窗口：
+- 托盘快速设置面板（FluxingPanelHost/QuickSettingsWindow.cpp 订阅 FluxingDarkModeBridge）
 
 ## 3. Out of scope
 

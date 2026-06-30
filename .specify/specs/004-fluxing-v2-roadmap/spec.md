@@ -205,7 +205,81 @@
 - **SC-005**：跨子 spec 整合后无 yaml 冲突（用 `rime_deployer --debug` 验证 deploy 通过）。
 - **SC-006**：所有新增 UI 元素在 Windows 8.1 / 10 / 11 三平台视觉一致（DPI 100% / 150% / 200% 各验证一次）。
 
+## 9. F11 暗色主题横切规范（spec 004 统一收口）
+
+> **来源**：原本在 006/008/009 各自的 design.md §X 段重复描述，本 spec 统一收口。
+> 子 spec 实施时**只引用本节**，不重复定义。
+
+### 9.1 用户故事（US6 详细化）
+
+- Given Fluxing v2.0.0 运行中
+- When 用户在系统设置里把"个性化 → 颜色 → 模式"从"浅色"切到"深色"
+- Then **候选面板 + 托盘快速设置面板 + 常用短语列表 + 设置 UI + 屏蔽规则浮窗** 在 200ms 内（渐变过渡）切换为暗色
+- And 不重启服务、不丢当前输入
+
+### 9.2 全局主题源
+
+- **配置位置**：`%LocalAppData%\Fluxing\weasel.yaml` 的 `style.color_scheme`。
+- **结构**：
+  ```yaml
+  style:
+    color_scheme:
+      name: system           # light | dark | system（system = 跟随 Windows 设置）
+      light: { ...色板... }  # 可选；缺省用 RIME 内置 light 调色
+      dark:  { ...色板... }  # 可选；缺省用 RIME 内置 dark 调色
+  ```
+- **色板字段**（与现有 weasel.yaml `style.color_scheme` 字段对齐，新增 `name` 顶层字段）：
+  `back_color` / `border_color` / `text_color` / `hilited_text_color` / `hilited_back_color` / `hilited_candidate_text_color` / 
+  `hilited_candidate_back_color` / `comment_text_color` / `comment_back_color`。
+
+### 9.3 主题切换机制
+
+- **触发信号**：监听 Windows `WM_SETTINGCHANGE` (lParam = `SPI_SETDESKWALLPAPER` 等主题变更)。
+- **广播组件**：`FluxingDarkModeBridge` (位于 `RimeWithWeasel/DarkModeBridge.{h,cpp}`，由 spec 006 引入)。
+  - 维护订阅者列表（候选面板 / 托盘面板 / 短语列表窗 / 设置 UI 各注册一个订阅）。
+  - 收到 `WM_SETTINGCHANGE` → 读 weasel.yaml 的 `name` → 决定用 light / dark 色板 → 通知所有订阅者刷新色板指针。
+- **过渡**：色板切换 200ms 渐变，使用 `ID2D1SolidColorBrush::SetColor` 的 `ColorF` 插值。
+- **存储**：颜色缓存按主题名索引（`LightColors` / `DarkColors`），切换时换指针；不重新分配资源。
+- **DPI**：暗色切换不触发 `dpiScaleLayout` 重新计算（color brush 替换不改变布局）。
+
+### 9.4 跨子 spec 集成点
+
+| 子 spec | 涉及文件 | 行为 |
+|---|---|---|
+| 005 | `output/data/default.yaml` | 不涉及（无 mac 风 UI） |
+| 006 | `FluxingPanelHost/QuickSettings/*`, `FluxingComponents/Theme.*` | 托盘面板订阅 `FluxingDarkModeBridge` |
+| 007 | `FluxingConfigEditor/*` | 设置 UI 订阅 `FluxingDarkModeBridge`；界面外观页加"暗色 / 亮色 / 跟随系统"单选 |
+| 008 | `WeaselUI/WeaselPanel.*` | 候选面板订阅 `FluxingDarkModeBridge`；右键屏蔽规则浮窗也订阅 |
+| 009 | `FluxingPersonalShortcuts/PhrasesWindow.*` | 短语列表订阅 `FluxingDarkModeBridge` |
+| 010 / 011 | 不涉及 | mac 风 UI 不参与 v2 暗色集成（P2/P3 阶段） |
+
+### 9.5 测试
+
+- **TDD**：`test/TestDarkModeBridge.cpp`（由 spec 006 引入）：
+  - mock `WM_SETTINGCHANGE` 事件，断言所有订阅窗口收到回调 + 色板指针更新为 dark。
+  - 验证 200ms 渐变的起始/结束时间点（在 5ms 误差内）。
+- **手动验证**：Win10/11 + DPI 100/150/200 × 暗色/亮色各一遍；候选面板 + 托盘面板 + 短语列表各 1 次切换。
+
+### 9.6 依赖关系
+
+- **006 是 F11 的 ship 起点**：006 引入 `FluxingComponents/Theme` + `FluxingDarkModeBridge` + `QuickSettingsWindow` 首次集成示范。
+- **007/008/009 在 006 ship 之后**才能 ship，否则暗色主题在 007/008/009 中无法生效。
+- spec 004 §4「P1 实施顺序」已体现此约束：006 在 005/008 之后，007/009 依赖 006。
+
+## 10. v2 范围与子 spec 状态快照（2026-07-01）
+
+| 子 spec | 状态 | 备注 |
+|---|---|---|
+| 005 default-hotkeys | **已 ship 0.18.0-0.18.5** | 4 commits；L18 修复（Shift+space 切中英）待 0.18.6 release |
+| 006 tray-quick-settings | design 完成，代码未开始 | 依赖 005 的 Shift+space 切中英键位 |
+| 007 yaml-config-ui | design 完成，代码未开始 | 依赖 006 + 009 |
+| 008 candidate-edit | design 完成，代码未开始 | 独立可 ship；librime `is_user_dict` 字段需 task 阶段验证 |
+| 009 personal-shortcuts | design 完成，代码未开始 | 依赖 006 组件库 |
+| 010 cloud-sync | P2 仅设计 | 同步对象与冲突策略见 design.md §1.3（增补后）| 
+| 011 fluxing-bootstrapper | P3 仅设计 | 安装器/卸载器协议见 design.md §2.3（增补后） |
+
 ## 8. 风险登记
+
 
 | 风险 | 概率 | 影响 | 缓解 |
 |---|---|---|---|
