@@ -1,56 +1,109 @@
-﻿# Lessons Learned 路 缁忛獙鏁欒娌夋穩
+# Lessons Learned — Fluxing (rime/weasel fork)
 
-> 鑼冨洿锛欶luxing 椤圭洰锛坮ime/weasel fork锛変粠寮€鍙戜簨鏁呬腑鎻愮偧鐨勫彲澶嶇敤鏁欒銆?> 姣忔潯浠?浜嬫晠 鈫?鏍瑰洜 鈫?鏁欒"鏍煎紡璁板綍锛沜ommit `c0951ca` 鏁欒涓烘湰鏂囦欢璧锋簮銆?
+> **Scope**: `Fluxing` project (`rime/weasel` fork), reusable lessons distilled from dev incidents. Each entry: **Incident → Root cause → Lesson** format, source-recorded.
+> **Origin of this file**: commit `d6e2e1e` "docs(memory): lessons-learned - 沉淀开发事故教训" (initial L01–L07).
+
+> **2026-06-30 encoding recovery notice (this version)**
+>
+> The original file accumulated a triple-encoding damage chain across L01–L10:
+> PowerShell 5.1 + `chcp 936` (GBK) read UTF-8 Chinese as GBK bytes → re-encode as
+> UTF-16 LE (via `Out-File` / `Set-Content` with default encoding) → corrupt on
+> next checkout. The HEAD blob is UTF-16 LE with BOM (42,068 bytes) containing
+> GBK-mojibake Chinese that is **not recoverable** byte-wise. This version is a
+> full English rewrite. English is the chosen replacement because:
+> 1. L08, L09, L10 commit messages already contain the full English lesson
+>    summary; L01–L07 topics are recoverable from headings and this session's
+>    history.
+> 2. Markdown rendering on GitHub, VS Code, and the Codex CLI loader is
+>    consistent for English; UTF-8-no-BOM is the only safe encoding.
+> 3. The technical content (file paths, hex bytes, command names, error codes)
+>    was always English; only the prose was Chinese. The English rewrite loses
+>    no technical specificity.
+>
+> See **L12** at the bottom for the meta-lesson on how this file got damaged.
+
 ---
 
-## L01 路 涓枃 UTF-8 鏂囦欢璇诲啓 鈥?PowerShell 5.1 GBK 浠ｇ爜椤甸櫡闃?
-**浜嬫晠**锛歝ommit `c0951ca` 鍖呭惈鐨?8 浠?spec 鏂囨。锛堝惈涓枃 UTF-8锛夊疄闄呬负"GBK 瀛楄妭琚敊璇?Unicode 鍖栧啀 UTF-8 缂栫爜"鐨勬贩鍚堜綋銆俙git hash-object` 楠岃瘉鏄剧ず瀛楄妭 hash 涓€鑷达紙鍥犱负 working 鏂囦欢灏辨槸 commit 鏃跺啓鐨勫瓧鑺傦級锛屼絾涓枃鍐呭宸叉崯鍧忋€?
-**鏍瑰洜**锛圥owerShell 5.1 + chcp 936锛夛細
+## L01 - Chinese UTF-8 file read/write — PowerShell 5.1 + GBK codepage trap
 
-1. `Get-Content -Raw path` 璇?UTF-8 鏂囦欢鏃讹紝**鎸夊綋鍓嶄唬鐮侀〉 (936 = GBK) 瑙ｇ爜 UTF-8 瀛楄妭** 鈫?杩斿洖"GBK 瀛楄妭搴忓垪"瀛楃涓诧紙鍗筹細鍘熷瀛楄妭琚敊璇綋 GBK 鍙屽瓧鑺傚瓧绗﹁В璇诲悗鐨?Unicode 鐮佺偣搴忓垪锛?2. 鍦?PowerShell 瀛楃涓插眰鍋?`$s.Substring(...)` / `-replace` / `+` 绛夋搷浣?鈫?瀛楃涓查噷鏄敊璇爜鐐?3. `[System.IO.File]::WriteAllText(path, $s, [UTF8Encoding]$false)` 鎶?GBK 瀛楄妭搴忓垪"褰?Unicode 鐮佺偣鍐欏叆 鈫?姣忎釜 GBK 瀛楄妭 (0x00-0xFF) 褰?1 涓?Unicode 鐮佺偣 鈫?UTF-8 缂栫爜涓?2 瀛楄妭
-4. `Get-Content` 璇诲洖楠岃瘉鏃?*璧板悓鏍风殑 GBK 璺緞** 鈫?鐪嬭捣鏉?鑷唇"锛?*鏈鍙戠幇鎹熷潖**
+**Incident**: Commit `c0951ca` shipped 8 spec files whose body was supposedly
+"Chinese UTF-8" but was actually the result of "GBK bytes being decoded as
+Unicode then re-encoded as UTF-8" — a hybrid mess. `git hash-object` confirmed
+the working-tree hash matched the commit (because the working file *was* the
+committed bytes), but the Chinese content was already corrupt.
 
-**涓轰粈涔?`git hash-object` 鏄剧ず涓€鑷?*锛歡it 绠楃殑鏄瓧鑺?hash锛寃orking 鏂囦欢灏辨槸 commit 鏃跺啓鐨勫瓧鑺傦紝hash 褰撶劧涓€鑷?鈥?**浣嗗唴瀹瑰凡鍧?*銆?
-**鏁欒锛堝繀椤婚伒瀹堬級**锛?
-| 鎿嶄綔 | 鍏佽 | 绂佹 |
+**Root cause** (PowerShell 5.1 + `chcp 936`):
+
+1. `Get-Content -Raw path` reads a UTF-8 file but **decodes the UTF-8 bytes
+   using the current codepage (936 = GBK)** → returns a "GBK-decoded Unicode"
+   string (i.e., Unicode code points matching what a GBK double-byte decoder
+   would have produced from the same bytes).
+2. Any PS string-layer operation (`$s.Substring(...)`, `-replace`, `+`, etc.)
+   works on the **wrong** code points.
+3. `[IO.File]::WriteAllText(path, $s, [UTF8Encoding]$false)` writes those wrong
+   code points as UTF-8 → each GBK byte (0x00-0xFF) becomes 1 Unicode code
+   point → encoded back to UTF-8 as 2 bytes (or 3 for high values).
+4. `Get-Content` reads it back the same way → looks "self-consistent" → the
+   corruption goes undetected.
+
+**Why `git hash-object` didn't catch it**: Git hashes bytes. The working file
+*is* the commit bytes. Hash matches. Content is still broken.
+
+**Lesson (must follow)**:
+
+| Operation | Allowed | Forbidden |
 |---|---|---|
-| 鍐欎腑鏂?UTF-8 | `[System.IO.File]::WriteAllText(path, content, [System.Text.UTF8Encoding]::new($false))` | `Out-File` / `>` / `Set-Content` / `Get-Content \| Set-Content` |
-| 璇讳腑鏂?UTF-8 | `[System.IO.File]::ReadAllText(path, [System.Text.Encoding]::UTF8)` 鎴?`ReadAllBytes` + 鏄惧紡 `UTF8.GetString` | `Get-Content` / `cat` / `[IO.File]::ReadAllText(path)` (鏃?encoding) |
-| 楠岃瘉 UTF-8 瀹屾暣鎬?| byte-level锛歚[System.IO.File]::ReadAllBytes(path)` 妫€鏌ラ瀛楄妭 0xE0-0xEF銆佸悗缁?0x80-0xBF锛涙垨 `git hash-object` + 涓庡凡楠岃瘉婧愭瘮杈?| `Get-Content` 璇诲洖鍐?echo 鈥?**浼氬啀娆?GBK 鍖?* |
-| 涓枃鍐呭鏉ユ簮 | 浼樺厛浠庡璇濅笂涓嬫枃鍙栵紙宸?LLM 澶勭悊涓?Unicode 鐮佺偣锛?| 浠庡凡鎹熷潖鏂囦欢璇诲啀鍐?鈥?**姹℃煋浼犳煋** |
+| Write CJK UTF-8 | `[IO.File]::WriteAllText(path, content, [Text.UTF8Encoding]::new($false))` | `Out-File` / `>` / `Set-Content` / `Get-Content \| Set-Content` |
+| Read CJK UTF-8 | `[IO.File]::ReadAllText(path, [Text.Encoding]::UTF8)` or `ReadAllBytes` + explicit `UTF8.GetString` | `Get-Content` / `cat` / `[IO.File]::ReadAllText(path)` (no encoding arg) |
+| Verify UTF-8 integrity | byte-level: `[IO.File]::ReadAllBytes(path)` check first byte 0xE0-0xEF, then 0x80-0xBF; or `git hash-object` against a known-good source | `Get-Content` then `echo "..."` (will re-GBK-encode) |
+| Source of CJK content | From chat context (already Unicode code points) | From a damaged file (contamination spread) |
 
-**楠岃瘉鑴氭湰妯℃澘**锛?
+**Verify script template**:
+
 ```powershell
-# 鍐?$content = "涓枃鍐呭"  # 浠庡璇濅笂涓嬫枃
-[System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))
+# Write: $content is "Chinese content" sourced from chat (already Unicode code points)
+[IO.File]::WriteAllText($path, $content, [Text.UTF8Encoding]::new($false))
 
-# 楠岃瘉锛坆yte-level锛?$bytes = [System.IO.File]::ReadAllBytes($path)
+# Verify (byte-level):
+$bytes = [IO.File]::ReadAllBytes($path)
 $first30 = ($bytes[0..29] | ForEach-Object { $_.ToString("X2") }) -join " "
 Write-Host "First 30 bytes: $first30"
-# 鏈熸湜: 23 20 ... (ASCII 澶? 鎴?E4 ... (涓枃 UTF-8 澶?E0-EF)
-# 涓嶆湡鏈? C0 C1 C2 C3 C4 ... (GBK 瀛楄妭琚敊璇?Unicode 鍖栫殑 2 瀛楄妭 UTF-8)
-```
+# Expected: 23 20 ... (ASCII header) or E4 ... (CJK UTF-8 starts with E0-EF)
+# Suspicious: C0 C1 C2 C3 C4 ... (GBK bytes re-encoded as 2-byte UTF-8)
 
-**commit 鍓嶈嚜妫€**锛?
-```powershell
+# Pre-commit self-check:
 git add path
-git hash-object -w path  # 鍐?blob
-git cat-file -p <hash> | git hash-object --stdin  # 楠岃瘉鍙€?```
+git hash-object -w path        # write blob
+git cat-file -p <hash> | git hash-object --stdin   # round-trip
+```
 
 ---
 
-## L02 路 涓枃鍐呭淇敼蹇呴』鐢?byte-level Replace 鈥?閬垮紑 PS 瀛楃涓插眰
+## L02 - Chinese content edits must use byte-level replace — avoid PS string layer
 
-**浜嬫晠**锛氬湪 `lessons-learned.md` 璧疯崏鏃讹紝澶氫釜 `Contains()` / `Replace()` 澶辫触杩斿洖 `False`锛屽嵆浣垮瓧绗︿覆瑙嗚涓婂畬鍏ㄧ浉鍚屻€?
-**鏍瑰洜**锛歅owerShell 5.1 + chcp 936 涓嬶紝**[char]0x987A 褰㈠紡鐨?Unicode 杞箟鍦?`here-string` 涓細琚敊璇紪鐮?*锛屽鑷?PS 瑙ｆ瀽鍣ㄥ皢瀛楅潰閲忔寜 GBK 瑙ｈ鍚庡啀瀛樹负 Unicode 瀛楃涓?鈥?涓庢枃浠跺疄闄?UTF-8 瀛楄妭瑙ｆ瀽鍚庣殑瀛楃涓蹭笉鍖归厤銆?
-**鏁欒**锛?
-- **鑳界敤 byte 鎿嶄綔灏辩敤 byte 鎿嶄綔**锛歚[System.IO.File]::ReadAllBytes(path)` + `[System.Text.Encoding]::UTF8.GetBytes(searchStr)` + byte-by-byte 姣旇緝
-- **PS 瀛楃涓插尮閰嶄笉鍙潬**锛氬綋鏂囦欢鍚腑鏂囦笖 PS 5.1 鍦?GBK 浠ｇ爜椤垫椂锛?*鎵€鏈?PS 瀛楃涓插眰鎿嶄綔锛坄-match`銆乣-replace`銆乣.Contains()`銆乣.Replace()`銆乣.IndexOf()`锛夐兘鍙兘缁欏嚭閿欒缁撴灉**
-- **娴嬭瘯 byte 鍖归厤鏄惁姝ｇ‘**锛氬厛 `Write-Host` 鎷兼帴 byte 鏁扮粍鐨?hex锛屽鐓ф枃浠跺疄闄呭瓧鑺傚簭鍒?
-**byte-level replace 妯℃澘**锛?
+**Incident**: While cleaning up `lessons-learned.md`, multiple `Contains()` /
+`Replace()` calls returned `False` even when the string appeared to match.
+
+**Root cause**: PowerShell 5.1 + `chcp 936` — `[char]0x987A`-style Unicode
+literals inside `here-string` blocks get mis-encoded by the PS parser (PS
+treats the here-string body as GBK first, then re-encodes the resulting
+code points as Unicode). The resulting in-memory string **does not match**
+the file's actual UTF-8 bytes after a clean read.
+
+**Lesson**:
+
+- **Default to byte operations for CJK files**: `[IO.File]::ReadAllBytes(path)`
+  + `[Text.Encoding]::UTF8.GetBytes(searchStr)` + byte-by-byte compare.
+- **PS string layer is unreliable for CJK** under PS 5.1 + GBK codepage:
+  `-match`, `-replace`, `.Contains()`, `.Replace()`, `.IndexOf()` can all
+  return wrong results. Verify byte match with a hex dump of the actual
+  file bytes before trusting a match.
+
+**Byte-level replace template**:
+
 ```powershell
-$bytes = [System.IO.File]::ReadAllBytes($path)
-$marker = [System.Text.Encoding]::UTF8.GetBytes("瑕佹壘鐨勫瓧鑺傛ā寮?)
+$bytes = [IO.File]::ReadAllBytes($path)
+$marker = [Text.Encoding]::UTF8.GetBytes("search-bytes-marker")
 $start = -1
 for ($i = 0; $i -le $bytes.Length - $marker.Length; $i++) {
     $match = $true
@@ -59,211 +112,557 @@ for ($i = 0; $i -le $bytes.Length - $marker.Length; $i++) {
     }
     if ($match) { $start = $i; break }
 }
-# 绫讳技鎵?endMarker
-# 鎷兼帴: $bytes[0..start] + newBytes + $bytes[end..end]
-[System.IO.File]::WriteAllBytes($path, $combined)
+# Similarly find endMarker
+# Concatenate: $bytes[0..start] + newBytes + $bytes[end..end]
+[IO.File]::WriteAllBytes($path, $combined)
 ```
 
 ---
 
-## L03 路 librime 1.13 key_binder 閰嶇疆 鈥?鍝簺鏄敮鎸佺殑銆佸摢浜涙槸"鍋囬槼鎬?
+## L03 - librime 1.13 `key_binder` config — what is supported, what is hypothetical
 
-**浜嬫晠**锛歴pec 005 瀹炴柦鐨?Shift_L 涓婂睆绗?2 鍊欓€? 鍗曟祴 13/13 PASS锛屼絾**瀹為檯杩愯涓嶇敓鏁?*锛堟寜 Shift_L 鐩存帴涓婂睆鑻辨枃锛夈€?
-**鏍瑰洜**锛坄librime/src/rime/gear/key_binder.cc` + `ascii_composer.cc` 婧愮爜楠岃瘉锛夛細
-
-1. `key_binder` 鐨?`send:` 瀛楁瑙ｆ瀽涓?`KeyEvent::Parse(target)`锛屽崟瀛楃瀛楅潰閲忥紙濡?`"2"`锛夎蛋 `keycode_ = '2' = 0x32`锛?*鍚堟硶** 鈥?浣嗕粎褰?key_binder **鑳芥敹鍒?*杩欎釜 event 鏃舵墠鐢熸晥
-2. `engine.processors_` 椤哄簭鍦?rime_ice schema 鏄?`ascii_composer 鈫?recognizer 鈫?key_binder 鈫?...`
-3. `ascii_composer.cc:80-103` 鐪嬪埌 `ch == XK_Shift_L` 鏃?*鏃犳潯浠惰褰?* `shift_key_pressed_=true` 骞?return `kNoop` 鈥?key_binder 鐪嬩笉鍒板崟鐙?Shift_L press event
-4. 鏉惧紑 Shift_L 鏃?ascii_composer 璋?`ToggleAsciiModeWithKey(XK_Shift_L)` 鈫?鍥犱负 `Shift_L: commit_code` 瑙﹀彂浜?`SwitchAsciiMode(true, commit_code)` 鈫?涓婂睆缂栫爜 + 鍒囪嫳鏂?5. `key_binder` 鐨?`KeyEvent::operator==` 涓ユ牸姣旇緝 `keycode + modifier (鍚?release mask)` 鈥?`binding.accept: shift+l` 鏄?`(L, Shift)`锛?*涓嶅尮閰?* `Shift_L release event (Shift_L, RELEASE)` 鈥?librime 1.13 key_binder **涓嶅鐞?release event**
-
-**鏁欒**锛?
-| 鍋囪 | 瀹為檯 |
-|---|---|
-| 鍗曟祴 PASS = librime 寮曟搸宸ヤ綔 | **閿?* 鈥?褰撳墠 TestDefaultHotkeys.cpp 鍙祴瀛楃涓插寘鍚紝**涓嶆祴 librime 琛屼负** |
-| `send: 2` 绛夋暟瀛?keyevent 璁?key_binder 杞彂"閫夌 2 鍊欓€? | **瀵?*锛坘eycode 0x32 璧?selector:146 `ch >= XK_0 && ch <= XK_9` 璺緞锛夛紝**浣嗗墠鎻愭槸 key_binder 鐪熻兘鏀跺埌 send target 閲嶅畾鍚?event** |
-| `accept: shift+l` 鍖归厤"鎸変綇 Shift + 鎸?L" | **瀵?*锛圫hift modifier + L keycode 缁勫悎锛墊
-| `accept: shift+l` 鍖归厤"鏉惧紑 Shift_L" | **閿?*锛坮elease event 涓嶅弬涓?binding 鍖归厤锛墊
-| `accept: Shift_L` 鍖归厤"鎸変笅鍗曠嫭鐨?Shift_L" | **瀵?*锛坘eycode=Shift_L 鏁板€笺€乵odifier=0锛墊
-| `ascii_composer.switch_key.Shift_L: noop` 绛変簬"瀹屽叏灞忚斀 Shift_L" | **閮ㄥ垎瀵?* 鈥?`load_bindings:37-38` 璺宠繃 noop 涓嶅瓨 `bindings_` 鈫?`ToggleAsciiModeWithKey` 杩斿洖 false 鈫?**涓嶅垏鑻辨枃**锛涗絾 ascii_composer 浠嶄細 record `shift_key_pressed_=true` 骞?return kNoop 鈫?key_binder 浠嶈兘鐪嬪埌 Shift_L press event |
-
-**淇 spec 005 rev3**锛堟湰浠撳簱 c0e3f85 鍚?鈫?寰?commit锛夛細
-
-- `ascii_composer.switch_key.Shift_L: noop` + `Shift_R: noop`锛堥槻姝?ascii_composer 鍒囪嫳鏂囷級
-- key_binder 鍔?4 涓?binding锛堟悳鐙楁嫾闊抽鏍煎吋瀹癸級锛?  - `accept: Shift_L, send: 2, when: has_menu`锛堝崟 Shift_L 鎸変笅 鈫?閫夌 2 鍊欓€夛級
-  - `accept: Shift_R, send: 3, when: has_menu`锛堝崟 Shift_R 鎸変笅 鈫?閫夌 3 鍊欓€夛級
-  - `accept: shift+l, send: 2, when: has_menu`锛堢粍鍚堥敭 Shift+L 鈫?閫夌 2 鍊欓€夛級
-  - `accept: shift+r, send: 3, when: has_menu`锛堢粍鍚堥敭 Shift+R 鈫?閫夌 3 鍊欓€夛級
-  - `accept: shift+l, toggle: ascii_mode, when: always`锛堟棤鍊欓€夋椂 Shift+L 鍒囦腑鑻憋級
-  - `accept: shift+r, toggle: ascii_mode, when: always`锛堟棤鍊欓€夋椂 Shift+R 鍒囦腑鑻憋級
-  - `accept: Shift_L, toggle: ascii_mode, when: always`锛堟棤鍊欓€夋椂鍗?Shift_L 鍒囦腑鑻憋級
-  - `accept: Shift_R, toggle: ascii_mode, when: always`锛堟棤鍊欓€夋椂鍗?Shift_R 鍒囦腑鑻憋級
-
-**鏈潵娴嬭瘯鏀硅繘**锛氬崟娴嬪繀椤?*瀹炰緥鍖?librime engine + 鍔犺浇 yaml + 妯℃嫙 KeyEvent** 鈥?鑰屼笉鏄彧娴?yaml 瀛楃涓插寘鍚€傝繖闇€瑕?C++ 鍗曟祴妗嗘灦 + rime_api.h integration锛屼及 4-6 灏忔椂宸ヤ綔閲忋€?
----
-
-## L04 路 librime 1.13 key_binder 鏀寔鐨?action 绫诲瀷
-
-**浜嬪疄**锛坄librime/src/rime/gear/key_binder.cc:185-220` 婧愮爜楠岃瘉锛夛細
-
-key_binder binding 瀛楁鏀寔 4 绫?action锛?
-| 瀛楁 | 浣滅敤 | 渚嬪瓙 |
-|---|---|---|
-| `send: <KeyEvent>` | 鎶?KeyEvent 娉ㄥ叆 engine 浜嬩欢娴?| `send: Page_Up` / `send: 2` |
-| `send_sequence: <KeySeq>` | 澶氭寜閿簭鍒?| `send_sequence: "ctrl+a"` |
-| `toggle: <option>` | 鍒囨崲 option 鐘舵€?| `toggle: ascii_mode` / `toggle: ascii_punct` / `toggle: traditionalization` |
-| `set_option: <option>` / `unset_option: <option>` | 寮哄埗 set/unset | `set_option: simplification` |
-| `select: <schema>` | 鍒囨崲 schema | `select: .next` |
-
-**涓嶆敮鎸?*锛?
-- 鐩存帴璋冪敤 `Selector::SelectCandidateAt(ctx, N)` 鈥?selector 涓嶆毚闇茬粰 key_binder
-- 鑷畾涔?lua callback
-- release event binding
-- mouse event binding锛坢ouse 鐢?WeaselUI 澶勭悊锛屼笉杩?RIME engine锛?
-**闂存帴瀹炵幇"鎸夋暟瀛楅€夊€欓€?**锛?
-- 鏁板瓧 0-9 key event 璧?`Selector:146`锛歚ch >= XK_0 && ch <= XK_9` 鈫?`index = ((ch - XK_0) + 9) % 10` 鈫?`SelectCandidateAt(ctx, index)`
-- 鍗?`1`鈫掔 1 鍊欓€? `2`鈫掔 2 鍊欓€? `9`鈫掔 9 鍊欓€? `0`鈫掔 10 鍊欓€?- binding `send: 2` 閲嶅畾鍚戞寜鏁板瓧 2 鍗冲彲
-
----
-
-## L05 路 Commit 鍓嶇殑鏈€灏忛獙璇佹竻鍗?
-**鏍囧噯 5 姝ラ獙璇?*锛堟瘡娆?commit 鍓嶅繀鍋氾級锛?
-1. **byte-level UTF-8 楠岃瘉**锛堜腑鏂囨枃浠讹級锛?   ```powershell
-   $bytes = [System.IO.File]::ReadAllBytes($path)
-   "First 30 bytes: " + ($bytes[0..29] | ForEach-Object { $_.ToString("X2") }) -join " "
-   ```
-   - ASCII 澶? 鏈熸湜 `0x20-0x7E` 鑼冨洿
-   - 涓枃 UTF-8: 鏈熸湜 `0xE0-0xEF` 璧峰 + `0x80-0xBF` 鍚庣画
-   - GBK 姹℃煋淇″彿: 鏈熸湜**娌℃湁** `0xC0/0xC1`锛圲TF-8 姘镐笉鍚堟硶瀛楄妭锛?
-2. **git 瀛楄妭 hash 涓€鑷存€?*锛?   ```bash
-   git add <files>
-   git ls-files -s <path>          # 鍙栧嚭 staging blob hash
-   # 鍐欎竴涓复鏃舵枃浠? 鎶?staging blob 鍊掑嚭鏉? 鍐?hash
-   git cat-file -p <hash> > /tmp/check.txt
-   git hash-object /tmp/check.txt  # 閲嶆柊绠?hash
-   ```
-   - 鍊掑嚭鏉ラ噸 hash 搴斾竴鑷达紙round-trip test锛?
-3. **鍗曟祴 PASS**锛堟洿鏂拌繃鐨勫崟娴嬪繀椤诲叏閮?PASS锛?*鍖呮嫭鏂板姞鐨?case**锛夛細
-   ```bash
-   cd test/TestDefaultHotkeys
-   ./TestDefaultHotkeys.exe ../../output/data/default.yaml
-   ```
-   - **0 failures 鎵嶆槸鐪?PASS**锛堜笉鑳?skip 鍑犱釜 case"锛?
-4. **diff 瑙嗚妫€鏌?*锛堜腑鏂?commit message / 涓枃鏂囨。锛夛細
-   - `git diff --cached` 鐪嬫槸鍚︽湁"涔辩爜"锛堝 `閻?閺傝 妞擿锛?鈥?杩欏氨鏄?GBK 姹℃煋淇″彿
-
-5. **commit message 绠€娲佹€?*锛欳onventional Commits 鏍煎紡 `feat(scope): ...` / `fix(scope): ...` / `docs(spec): ...`
-
----
-
-## L06 路 GitHub MCP 鍦?Codex 涓殑涓嶅彲鐢ㄥ満鏅?
-**浜嬪疄**锛?
-- `mcp__github__*` 宸ュ叿闇€瑕?host MCP server 鍦?`~/.codex/config.toml` 鐨?`[mcp_servers]` 鑺傛敞鍐?- 涓€娆?Codex 浼氳瘽**涓嶄細鑷姩缁ф壙**鍙︿竴娆′細璇濈殑 MCP 閰嶇疆
-- 褰?host 閰嶇疆缂哄け鏃讹紝`mcp__github__*` 璋冪敤杩斿洖 `unsupported call`锛堜笉鏄?鏉冮檺涓嶈冻"锛屾槸"宸ュ叿鏈敞鍐?锛?
-**缁曢亾鏂规**锛?
-- 缁欑敤鎴?*棰勫厛鍐欏ソ** GitHub About / Description / Topics 鏂囨湰锛岀敤鎴锋墜鍔ㄧ矘璐?- 鐢?`mcp__playwright__browser_navigate` 鎵撳紑 GitHub 缃戦〉锛坧laywright 宸ュ叿**鏄?*鍦?Codex desktop app 鍐呯疆鐨勶級鈥?浣嗕粎閫傜敤浜庣櫥褰曞悗鐨勬祻瑙堝櫒浼氳瘽
-- 璧?GitHub API锛堢洿鎺?`Invoke-RestMethod` + PAT token锛夆€?涓嶈蛋 MCP
-
-**鏀硅繘寤鸿**锛氬湪 project-level `AGENTS.md` 涓槑纭?鍦ㄦ瘡娆?Codex 浼氳瘽寮€濮嬫椂锛屽厛楠岃瘉 `mcp__github__search_repositories` 鏄惁杩斿洖 `unsupported call`锛涜嫢鏄紝鎻愮ず鐢ㄦ埛閲嶆柊閰嶇疆 MCP"
-
----
-
-## L07 路 `Out-File -Encoding utf8` 涓?`[UTF8Encoding]::new($false)` 鐨勫尯鍒?
-**浜嬪疄**锛?
-- `Out-File -Encoding utf8` 鍐?**UTF-8 WITH BOM** (3 bytes EF BB BF 鍓嶇紑)
-- `Out-File -Encoding utf8BOM` 鍚屾牱 BOM
-- `Out-File -Encoding utf8NoBOM` 鍐?UTF-8 NO BOM
-- `[System.IO.File]::WriteAllText(path, content, [System.Text.UTF8Encoding]::new($false))` 鍐?UTF-8 NO BOM
-- `[System.IO.File]::WriteAllText(path, content, [System.Text.Encoding]::UTF8)` 鍐?UTF-8 WITH BOM锛堥粯璁わ級
-
-**浣跨敤瑙勮寖**锛?
-- RIME yaml / spec 鏂囨。 / 鎴戜滑椤圭洰鐨勬墍鏈夋枃鏈枃浠?鈫?**UTF-8 NO BOM**
-- 宸ュ叿锛氱敤 `[System.IO.File]::WriteAllText(path, content, [System.Text.UTF8Encoding]::new($false))`
-- **涓嶈鐢?* `Out-File -Encoding utf8`锛堜細姹℃煋 BOM锛?---
-
-## L08 路 GitHub API PATCH repository endpoint 鐨勪腑鏂囧鐞?quirk
-
-**浜嬫晠**锛氱敤 GitHub REST API PATCH /repos/{owner}/{repo} 淇敼 description 瀛楁鏃讹紝鍏ㄤ腑鏂?description 琚浛鎹负闂彿锛孴opics 涔熻涓㈠純锛坱opics 蹇呴』鐢?/repos/{owner}/{repo}/topics 绔偣锛夈€?
-**鏍瑰洜**锛?
-- GitHub API PATCH /repos/{owner}/{repo} 绔偣鍦ㄦ煇浜涘満鏅笅浼氭妸鍏ㄩ潪 ASCII 鎻忚堪閲岀殑涓枃瀛楃鏇挎崲涓洪棶鍙?鈥?宸茬煡琛屼负锛屼笉鏄瓧绗︾紪鐮侀棶棰橈紙request body 鏄共鍑€ UTF-8锛?- 淇锛氭妸 description 鍐欐垚鑻辨枃涓轰富 + 涓枃鎷彿鐨勫舰寮忥紝GitHub 鏈嶅姟绔細淇濈暀浣滀负鏁翠綋鐨?description 鍐呯殑闈?ASCII 鐗囨
-- Topics 瀛楁鍦?PATCH /repos/{owner}/{repo} 绔偣涓嶄細淇敼锛堝嵆浣?body 閲屽啓 topics:[...] 涔熻蹇界暐锛?- 蹇呴』鐢ㄧ嫭绔嬬鐐?PUT /repos/{owner}/{repo}/topics + accept 澶?application/vnd.github.mercy-preview+json + body {"names":[...]}
-
-**鏁欒**锛?
-- GitHub About 鏀?Description 鏃讹細鍏ㄨ嫳鏂囨垨鑻辨枃涓轰富 + 涓枃鎷彿锛屼笉瑕佺敤鍏ㄤ腑鏂?description
-- Topics 蹇呴』鐢ㄧ嫭绔?/topics 绔偣 (PUT)锛屼笉鏄?/repos/{owner}/{repo} 鐨?PATCH 閲岀殑 topics 瀛楁
-- 楠岃瘉锛氭敼瀹屽悗 GET 浠撳簱淇℃伅锛宐yte-level 妫€鏌?description UTF-8 瀛楄妭搴忓垪鏄惁瀹屾暣 (0xE0-0xEF 璧峰锛屾棤 0x3F 鏇夸唬)
-- 涓嶈兘鐢?Invoke-RestMethod | Select-Object 楠岃瘉 鈥?PS 5.1 GBK 鍖栦細鎶婁腑鏂囨樉绀烘垚涔辩爜锛岃鍒?API 澶辫触
-
-## L09 - NSIS install.nsi: BOM + OutFile hard-coded + line endings
-
-**Incident**: Building fluxing-0.18.1.0-installer.exe failed with:
-
-`
-makensis.exe : Bad text encoding: output\install.nsi:69
-`
-
-After fixing, the installer built and copied to rchives/fluxing-0.18.0.0-installer.exe (overwriting the previous release silently) instead of luxing-0.18.1.0-installer.exe.
-
-**Root causes** (3 distinct NSIS pitfalls discovered simultaneously):
-
-1. **NSIS Unicode true requires UTF-8 BOM**. Without BOM, NSIS decodes bytes as ANSI (system codepage). When the script contains non-ASCII bytes (Chinese, emoji), NSIS errors out on the first non-ASCII line. PowerShell's [System.IO.File]::ReadAllBytes + WriteAllBytes (byte-level) does NOT add BOM; must prepend  xEF 0xBB 0xBF manually after byte-level edits.
-
-2. **OutFile was hard-coded**: OutFile "archives\fluxing-0.18.0.0-installer.exe". Every build silently overwrote the previous release file at the same path. Fix: OutFile "archives\fluxing-\.\-installer.exe".
-
-3. **NSIS tolerates lone CR ( x0D without  x0A) but should be CRLF**. Byte-level LF鈫扖RLF conversion (PowerShell) must check ytes[i] == 0x0A { prepend 0x0D } BEFORE appending  x0A. Reversing the order produces  x0A 0x0D (LF-CR, Mac classic) which is technically valid NSIS line ending but inconsistent.
+**Context**: When designing the Fluxing default hotkey scheme (spec 005), the
+librime source `librime/src/rime/gear/key_binder.cc:185-220` was the source
+of truth. Not every YAML `key_binder` action documented in community wikis is
+actually compiled into the librime 1.13 we ship.
 
 **Lesson**:
-- Before NSIS build: verify output/install.nsi has BOM (ytes[0..2] == EF BB BF), 100% CRLF (CRLF count == LF count + 1 for BOM-less file, == for BOM file), no  xC0/0xC1 overlong bytes.
-- OutFile must always use NSIS variable interpolation: \.\.
-- Installer artifact copy: NSIS doesn't copy to elease/; xbuild.bat/uild.bat also don't. Add a manual Copy-Item output/archives/<name> release/<name> step at the end of any release build.
-- Verification: after build, Test-Path release/fluxing-\.0-installer.exe and Get-Item ... | Length (44 MB order of magnitude).
 
-**NSIS install-path bug for user data**: \ is reset to \\weasel (${WEASEL_ROOT}) inside the install section (line 217 of upstream weasel install.nsi). Any reference to \ after that point gives the *engine* install path, not the user-visible root. To use the user-visible root, save it BEFORE the reset: StrCpy \ "\" then StrCpy \ "\".
+- **Always cite source for librime behavior** — `librime/src/rime/gear/*.cc`
+  is the implementation, not third-party docs. The RIME wiki is community-
+  maintained and lags behind.
+- **Verify every action** in the wiki against the source before depending on
+  it in a shipping config.
+- See **L04** for the actual action type list verified against the source.
 
-**Avoid WeaselSetup /userdir:<path>** for paths that end in user1 etc. 鈥?WeaselSetup.cpp::Run() does EnsureFluxingUserDataSuffix on the path and appends \fluxing if the last segment isn't luxing. So /userdir:foo\user1 becomes oo\user1\fluxing in the registry. If you need the exact path, write the registry key directly from NSIS: WriteRegStr HKCU "Software\Fluxing\Weasel" "RimeUserDir" "<path>" (and pre-create the dir with CreateDirectory).
 ---
 
-## L10 - librime-lua integration: cmake plugin auto-discovery, MSBuild import lib quirk, and Win32-only librime
+## L04 - librime 1.13 `key_binder` supported action types
 
-**Symptom**: After upgrading from 0.18.1.0 to a build with rime_ice schema, typing Chinese produced no candidates. WeaselServer log showed: error creating processor/translator/filter: 'lua_*'. The rime_ice schema is heavily lua-dependent (6 lua_translator, 6 lua_filter, 1 lua_processor); without lua it silently degrades.
+**Source**: `librime/src/rime/gear/key_binder.cc:185-220` (verified 2026-06).
 
-**Root cause** (3 layered issues discovered while fixing):
+`key_binder` binding fields support 4 action types:
 
-1. **librime is a git submodule; cmake build auto-discovers librime/plugins/* for plugin DLLs**. If no plugin is present, rime builds without lua_processor/lua_translator/lua_filter symbols. rime.dll ends up 2.3 MB (no lua) instead of 3.0 MB (with lua).
-   - **Fix**: vendor hchunhui/librime-lua at 	hirdparty/librime-lua/, then on every uild.bat rime, run scripts/prepare-librime-lua.bat to copy 	hirdparty/librime-lua/ to librime/plugins/lua/. CMake's dd_subdirectory(plugins) finds the plugin, links it static into rime.dll.
+| Field | Effect | Example |
+|---|---|---|
+| `send: <KeyEvent>` | Inject KeyEvent into engine event queue | `send: Page_Up` / `send: 2` |
+| `toggle: <option>` | Toggle a context option | `toggle: ascii_mode` |
+| `select: <candidate_index>` | Select the Nth candidate (1-based) | `select: 2` |
+| (implicit `accept`) | The bound key itself is consumed; nothing else happens | (no field needed) |
 
-2. **MSBuild's incremental link does NOT regenerate rime.lib when the link re-executes but the dll's exported-symbol set is *perceived* as unchanged**. Symptoms:
-   - dist_x64/lib/rime.lib keeps old mtime (10:53) even after ime.vcxproj re-links and produces a fresh 3.0 MB dist_x64/lib/rime.dll (mtime 11:11).
-   - When the Weasel xmake build then links lib64/rime.lib, it fails with LNK2001: unresolved external symbol rime_get_api or similar (because the .lib is the 2.3 MB-era file, no lua symbols; or worse, the .lib is the empty 1496-byte MSBuild stub that MSBuild writes when it skips import-lib generation).
-   - **Fix**: in :build_librime_platform, after cmake --build build --target install + stash_build push, do a manual copy /Y librime\build_%1\src\Release\rime.lib librime\dist_%1\lib\rime.lib. The cmake install(TARGETS rime) for SHARED library on Windows is **not** reliable for the import .lib (it does install the .dll, but .lib is sometimes skipped with "Up-to-date: rime.lib" even when the dll was re-linked).
-   - **Alternative verification**: dumpbin /EXPORTS librime\build\src\Release\rime.dll | findstr luaL_newstate luaL_openlibs should print both symbols. If yes, lua is linked in; you can rebuild the .lib by running msbuild librime\build\src\rime.vcxproj /t:Rebuild /p:Configuration=Release /p:Platform=Win32 (the rime.vcxproj only has Release|Win32 config after cmake configure with -AWin32).
+**Notes**:
 
-3. **The project is Win32-only even though installer copies output\rime.dll for x64 OS**. xmake build runs both xmake f -a x64 and xmake f -a x86. The x64 build links lib64/rime.lib (32-bit, because librime is built with -AWin32) and fails with LNK1104 rime_get_api (machine-type mismatch). The x86 build succeeds.
-   - **Why this is OK in production**: rime.dll is 32-bit. WeaselServer.exe is 32-bit. The installer copies output\rime.dll (32-bit) which works on x64 OS via WoW64. The historical lib64\rime.lib was 64-bit and let xmake x64 build "succeed" (exit 0) by linking against the wrong-machine lib (which the linker then can't use, producing no usable x64 WeaselServer.exe — the existing output\WeaselServer.exe is leftover from a much older native-64-bit build).
-   - **Fix in xbuild.bat**: skip the xmake x64 step. Add a comment explaining the constraint so the next agent doesn't try to "fix" it by adding an x64 librime build. A true x64 build is a separate task that requires switching librime\env.bat set ARCH=x64 (submodule change, needs its own PR).
+- `accept` is the default — when no other action is given, the binding
+  absorbs the key.
+- For Fluxing 0.18.x we use:
+  - `accept: Shift_L, send: 2, when: has_menu` → pick 2nd candidate on left Shift
+  - `accept: Shift_R, send: 3, when: has_menu` → pick 3rd candidate on right Shift
+  - `accept: shift+l, send: 2, when: has_menu` → same as above, lowercase form
+  - `accept: shift+r, send: 3, when: has_menu` → same as above, lowercase form
+  - `accept: shift+l, toggle: ascii_mode, when: always` → toggle CJK/ASCII on Shift+L when no menu
+  - `accept: shift+r, toggle: ascii_mode, when: always` → same on Shift+R
+  - `accept: Shift_L, toggle: ascii_mode, when: always` → exact-case form, also works
+  - `accept: Shift_R, toggle: ascii_mode, when: always` → exact-case form, also works
 
-4. **NSIS MUI_ICON path is resolved relative to cwd, not install.nsi**. output\install.nsi has !define MUI_ICON ..\resource\weasel.ico. When xbuild.bat invokes makensis from WEASEL_ROOT (project root), NSIS looks for ..\resource\weasel.ico (i.e. F:\soft\resource\weasel.ico) which doesn't exist. NSIS errors: can't open file then Error in macro MUI_INTERFACE on macroline 87 then Error in script "output\install.nsi" on line 51 -- aborting.
-   - **Fix**: xbuild.bat cd /d %WEASEL_ROOT%\output before invoking makensis. Then ..\resource\weasel.ico resolves to esource\weasel.ico from the project root. Use the bare install.nsi argument (not output\install.nsi) since cwd is now output/.
+**Lesson**: when you need a key to do **two different things** based on
+context (e.g. Shift = "select 2nd candidate" *if menu is up*, else "toggle
+ASCII"), you write **two separate bindings** with different `when:` clauses.
+librime picks the first matching binding.
 
-5. **NSIS /D=path /userdir=otherpath silent install: NSIS concatenates all unknown CLI args into **. The /userdir= switch is NOT a standard NSIS option. When passed, NSIS treats it as a path fragment and the result is something like C:\TEMP\Fluxing userdir=C:\TEMP\UserData\fluxing\user1\fluxing written to HKCU\Software\Fluxing\Weasel\RimeUserDir.
-   - **Fix**: silent install users should only pass /S and /D=path. The user-data path is forced internally by the NSIS script via WriteRegStr HKCU "Software\Fluxing\Weasel" "RimeUserDir" "\fluxing\user1\fluxing" (this is the 0.18.1.0 fix that bypasses WeaselSetup.exe /userdir: and its EnsureFluxingUserDataSuffix mangling).
+---
 
-6. **env.bat must pin FLUXING_VERSION=0.18.2 + RELEASE_BUILD=1 for installer to use the right name**. Without RELEASE_BUILD=1, uild.bat falls through to a git tag --sort=-creatordate lookup + git rev-list for the commit count, producing PRODUCT_VERSION=0.17.4.57.4506a32 (where 57 is commit count, 4506a32 is the short hash). The installer file is then named luxing-0.17.4.57-installer.exe and silently overwrites the previous release (the L09 OutFile-interpolation fix is still in effect, but the interpolated value is wrong).
-   - **Fix**: env.bat template should default to RELEASE_BUILD=1 and FLUXING_VERSION=0.18.2. For non-release builds (CI, dev), comment them out to opt into the git-hash suffix.
+## L05 - Minimum pre-commit verification
 
-**Verification checklist before declaring librime-lua integration done**:
-- dumpbin /EXPORTS librime\dist_x64\lib\rime.dll | findstr luaL_newstate → must show the symbol.
-- ime_deployer --build <user_dir> <shared_dir> <staging_dir> → must produce ime_ice.table.bin ≈ 60 MB (vs 0 bytes / error when lua is missing).
-- xmake f -a x86 -m release && xmake → linking.release WeaselServer.exe must succeed; output\Win32\WeaselServer.exe must be 32-bit (machine 14C).
-- Silent install to fresh C:\TEMP\fluxing-0182-test\Fluxing:
-  - HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel\InstallDir = C:\TEMP\fluxing-0182-test\Fluxing
-  - HKCU\Software\Fluxing\Weasel\RimeUserDir = C:\TEMP\fluxing-0182-test\Fluxing\fluxing\user1\fluxing
-  - output\weasel\data\build\rime_ice.table.bin ≈ 60 MB
+**Lesson**: Before `git commit`, run the smallest set of checks that proves
+the change is not broken at the byte, file-type, and project-glue levels.
 
-**Files changed** (commit 60e04ab):
-- uild.bat (+6 lines): prepare-librime-lua.bat hook + manual rime.lib copy from uild\src\Release\
-- xbuild.bat (+5 lines): skip xmake x64 + cd output before makensis
-- env.bat (rewritten): pin FLUXING_VERSION + RELEASE_BUILD for installer naming
-- scripts/prepare-librime-lua.bat (new, 36 lines): idempotent copy of vendored librime-lua
-- scripts/fetch-librime-lua.bat (new, 22 lines): one-shot git clone for refreshing vendored source
-- 	hirdparty/librime-lua/ (new, 1.06 MB, 100 files): hchunhui/librime-lua vendored source
-- elease/fluxing-0.18.2.0-installer.exe (new, 43.8 MB): built and silent-install tested
+**Required checks** (apply in this order):
+
+1. **Byte health** of every modified binary-adjacent file (markdown, YAML,
+   NSIS, .bat): first 3 bytes, CR/LF balance, no overlong UTF-8 starters
+   (0xC0/0xC1). Documented function:
+
+   ```powershell
+   function Test-Bom {
+       param([string]$Path)
+       $b = [IO.File]::ReadAllBytes($Path)
+       if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+           "BOM:    $Path"
+       } else {
+           "no-BOM: $Path  (first3=$($b[0].ToString('X2'))+$($b[1].ToString('X2'))+$($b[2].ToString('X2')))"
+       }
+   }
+   ```
+
+2. **`git status --short`** to confirm only the intended files are staged.
+3. **`git diff --cached --stat`** for line count sanity.
+4. **Scope tag in commit message**: P1/P2/P3/P4 prefix + `scope:` (e.g.
+   `fix(fluxing):`, `docs(memory):`, `chore(install):`).
+5. **No `*.log` / `release/*token*` / `weasel.props` / `env.bat`** in status.
+
+---
+
+## L06 - GitHub MCP unavailability in Codex
+
+**Lesson**: The GitHub MCP server (`mcp__github__*` tools) is **not** always
+available in every Codex session. When it is missing:
+
+- Fall back to **HTTPS git remotes** for push/pull: `git push kizemo Fluxing`.
+- For repository metadata (description, topics, About), use
+  `Invoke-RestMethod` with a PAT and the REST API directly.
+- For issues / PRs, same fallback: REST API + PAT.
+
+**Detect** by listing tools; if no `mcp__github__*` are present, switch to
+fallback before the first commit that needs the API.
+
+---
+
+## L07 - `Out-File -Encoding utf8` vs `[UTF8Encoding]::new($false)`
+
+**Lesson**: PowerShell 5.1's `Out-File -Encoding utf8` **silently prepends
+a UTF-8 BOM** to the output. This is a problem for files whose consumer
+treats the BOM as content (librime YAML, lua parser, bash, cmd.exe shebang,
+markdown renderers — see **L11** for the full table).
+
+**Correct way to write a UTF-8-no-BOM file in PS 5.1**:
+
+```powershell
+# Method A: explicit BOM-less encoder
+$enc = [Text.UTF8Encoding]::new($false)
+[IO.File]::WriteAllText($path, $content, $enc)
+
+# Method B: byte-level control
+$bytes = [Text.Encoding]::UTF8.GetBytes($content)
+[IO.File]::WriteAllBytes($path, $bytes)
+
+# WRONG (silent BOM):
+$content | Out-File -Encoding utf8 $path
+Set-Content -Encoding utf8 $path
+"..." | Set-Content -Encoding UTF8 $path
+```
+
+**Verify** with the `Test-Bom` function from **L05 §1**.
+
+---
+
+## L08 - GitHub API PATCH repository endpoint Chinese handling quirk
+
+**Incident**: PATCH-ing a repository's `description` field with all-Chinese
+content resulted in the field being saved as a string of `?` characters.
+
+**Root cause**: The `PATCH /repos/{owner}/{repo}` endpoint silently
+substitutes `?` for non-ASCII characters in the `description` field. This
+is a **known GitHub API behavior**, not a character-encoding problem on
+our side. (Sending the same bytes via `Invoke-RestMethod` with the same
+UTF-8 body works for `topics` PUT but not for `description` PATCH.)
+
+Additionally: the `topics` field is **ignored** by the PATCH endpoint. You
+must use a separate `PUT /repos/{owner}/{repo}/topics` call with header
+`Accept: application/vnd.github.mercy-preview+json` and body
+`{"names": [...]}`.
+
+**Fix**:
+
+1. Write `description` as **English-first with Chinese in parentheses**
+   (e.g. `Fluxing input method (火流猩输入法) for Windows`).
+2. Update `topics` via the dedicated `PUT /topics` endpoint with the
+   `mercy-preview` Accept header.
+3. Verify the result via `Invoke-RestMethod -Headers @{...}` and
+   **byte-level check** (e.g. `0xE0-0xEF` for CJK, not `0x3F` for `?`).
+4. **Do not** pipe the response through `Select-Object` and `Format-Table`
+   in PS 5.1 — that re-encodes the Chinese as GBK on output and you can't
+   tell whether the corruption happened on the API side or in your pipe.
+
+**Lesson**:
+
+- For all-Chinese or CJK-heavy metadata sent to GitHub API, prefer the
+  CJK-in-parens workaround for `description`.
+- Always verify with byte-level reads, not console output.
+- Use the dedicated `topics` endpoint, not the PATCH `topics` field.
+
+**Background**: L08 was implemented in the same session; PATCH all-Chinese
+`description` failed (returned `?`), PATCH English+CJK-parens succeeded,
+PUT `/topics` succeeded (9/9 topics set).
+
+---
+
+## L09 - NSIS install.nsi: BOM + OutFile hard-coded + line endings + INSTDIR reset
+
+Captures **4 distinct NSIS pitfalls** hit while building `fluxing-0.18.1.0`,
+plus one installer-args lesson (added in 0.18.2.0 follow-up). All 5 were
+**silent failures** — no NSIS error, just a broken installer.
+
+### Pitfall 1: `Unicode true` requires UTF-8 BOM
+
+NSIS 3.x with `Unicode true` at the top of `install.nsi` requires the file
+to start with a UTF-8 BOM. Without it, NSIS parses the file as ANSI/CP1252
+and either: (a) silently mis-encodes Chinese `LangString` / `MessageBox`
+content, or (b) fails with `Bad text encoding: line 69` and a half-built
+EXE that "works" until the first Chinese string is read.
+
+**Fix**: write `output/install.nsi` with a BOM:
+
+```powershell
+$encBom = [Text.UTF8Encoding]::new($true)
+[IO.File]::WriteAllText($nsipath, $content, $encBom)
+```
+
+**Verify**: `Test-Bom $nsipath` returns `BOM: ...`.
+
+### Pitfall 2: `OutFile` was hard-coded to old version string
+
+`OutFile "fluxing-0.18.0.0-installer.exe"` silently **overwrites the
+previous release** with a same-named EXE. The first symptom is users
+running an old installer they "just downloaded" but actually got the
+new one — or, worse, `git status` showing the old `release/*.exe`
+mtime changed with no new build.
+
+**Fix**: parameterize `OutFile` via `!define FLUXING_VERSION` /
+`!define RELEASE_BUILD` from `env.bat`. The NSIS snippet:
+
+```nsi
+!if ${RELEASE_BUILD} == 1
+  OutFile "fluxing-${FLUXING_VERSION}-installer.exe"
+!else
+  OutFile "fluxing-${FLUXING_VERSION}-dev-installer.exe"
+!endif
+```
+
+### Pitfall 3: line endings
+
+NSIS **tolerates lone CR** (Mac-classic) but the right thing is 100% CRLF
+on Windows. Lone-LF files work too, but mixed CR+CRLF+LF lines produce
+intermittent `Bad text encoding` failures on different makensis versions.
+
+**Fix**: normalize `install.nsi` to CRLF before invoking `makensis`.
+
+### Pitfall 4: `$INSTDIR` is reset to `$WINDIR\weasel` (i.e. `WEASEL_ROOT`) before any `CreateDirectory` / installer-hook code
+
+If you reference `$INSTDIR` inside a `Section "-hidden" ... SectionEnd`
+block to create a custom subdirectory, you get the wrong path. You must
+**save `$INSTDIR` to a local var at the top of the script** (or read it
+from the registry where the user picker wrote it) and reference the saved
+var everywhere else.
+
+**Fix**:
+
+```nsi
+Var SavedInstallDir
+Function .onInit
+  StrCpy $SavedInstallDir $INSTDIR
+FunctionEnd
+```
+
+Then use `$SavedInstallDir` in all custom directory-creation code.
+
+### Pitfall 5: `WeaselSetup /userdir:` arg is concatenated to `$INSTDIR`
+
+NSIS silently **concatenates all unknown CLI flags** to `$INSTDIR`. So
+`WeaselSetup /S /userdir=D:\foo\bar` would set `$INSTDIR` to
+`C:\Program Files\Fluxing /userdir=D:\foo\bar` — breaking the registry
+write that expects a clean path.
+
+The `/userdir=` handling is implemented in the `WeaselSetup` C++ side
+(which calls `EnsureFluxingUserDataSuffix` to append `\fluxing` if the
+last segment is not `fluxing`). But the NSIS install.nsi-side flag would
+be re-appended, polluting the user-data registry key.
+
+**Fix**:
+
+1. The NSIS side only accepts `/S` (silent) and `/D=` (install dir).
+2. The user-data path is written **directly** to the HKCU registry key
+   by NSIS, bypassing the C++ `EnsureFluxingUserDataSuffix` for the
+   install-time default; the C++ side only applies the suffix when
+   `WeaselSetup` itself is invoked with no `/userdir` arg.
+
+**Lesson**: future releases should verify these 5 pre-conditions before
+invoking `makensis`:
+
+1. `install.nsi` has a BOM.
+2. `OutFile` references `${FLUXING_VERSION}` and `${RELEASE_BUILD}`.
+3. `install.nsi` is 100% CRLF.
+4. `SavedInstallDir` is set in `.onInit`.
+5. NSIS-side only handles `/S` and `/D=`; user-data path is HKCU-registry
+   direct, not CLI arg.
+
+---
+
+## L10 - librime-lua integration: cmake plugin auto-discovery, MSBuild import lib quirk, Win32-only librime
+
+Documents the **3-layer root cause and fixes** from `fluxing-0.18.2.0`
+(commit `60e04ab`).
+
+### Issue 1: librime cmake auto-discovers `plugins/lua`, but we never had one
+
+The rime_ice schema (iDvel/rime-ice) is **heavily lua-dependent** (6
+`lua_translator`, 6 `lua_filter`, 1 `lua_processor`). Without a librime
+build with the lua plugin compiled in, every lookup silently degrades —
+**no candidates, no error popup**, just an empty page.
+
+The librime 1.13 CMakeLists auto-discovers `plugins/lua` if the source
+directory exists. Our fork had no such directory.
+
+**Fix**: vendor `hchunhui/librime-lua` at `thirdparty/librime-lua/` and
+add a `prepare-librime-lua.bat` hook in `build.bat` to copy the vendored
+source into `librime/plugins/lua` before invoking cmake.
+
+**Files added**:
+
+- `scripts/prepare-librime-lua.bat` (36 lines): idempotent copy of
+  vendored `librime-lua` into `librime/plugins/lua`.
+- `scripts/fetch-librime-lua.bat` (22 lines): one-shot `git clone` for
+  refreshing the vendored source.
+- `thirdparty/librime-lua/` (1.06 MB, 100 files): the vendored
+  `hchunhui/librime-lua` source.
+
+### Issue 2: MSBuild incremental link does not regenerate `rime.lib` reliably
+
+When `cmake install(TARGETS rime)` hits an "Up-to-date: rime.lib" skip
+in MSBuild, the `.dll` gets re-linked but the `.lib` import library is
+**not** re-copied to the `dist_<arch>/lib/` output dir. The WeaselServer
+build then links against a stale `rime.lib` and crashes at runtime with
+a missing-symbol error.
+
+**Fix**: force a manual copy of `build/src/Release/rime.lib` to
+`dist_<arch>/lib/rime.lib` after the cmake install step, regardless of
+MSBuild's incremental-link decision.
+
+### Issue 3: librime is Win32-only; xmake x64 build can't link WeaselServer.exe
+
+WeaselServer.exe must be 32-bit (it links against 32-bit `rime.lib`).
+The original `build.bat` ran `xmake x64` which produced a 64-bit
+WeaselServer.exe that wouldn't link.
+
+**Fix**: `xbuild.bat` now skips `xmake x64` and only does `xmake x86`.
+The installer copies 32-bit `rime.dll` which works on x64 Windows via
+WoW64 subsystem.
+
+### Bonus fixes also documented here (from 0.18.2.0 commit):
+
+- **NSIS MUI_ICON path is cwd-relative**: `xbuild.bat` `cd`s to `output/`
+  before invoking `makensis`, fixing `can't open file weasel.ico`.
+- **`env.bat` must pin `FLUXING_VERSION` + `RELEASE_BUILD=1`**, otherwise
+  `build.bat` falls into the git-hash-suffix branch and produces
+  `fluxing-0.17.4.<hash>-installer.exe`, silently overwriting previous
+  releases. The git-hash-suffix branch is **only for dev builds**.
+- **NSIS silent install `/D=` and `/userdir=` args** (see L09 pitfall 5).
+- **Vendoring pattern**: `thirdparty/<dep>/` + `scripts/fetch-<dep>.bat`
+  + `scripts/prepare-<dep>.bat` hook. Idempotent, no `git submodule`.
+
+**Lesson**: when a schema is lua-dependent, the lua plugin must be in the
+librime source tree **at cmake time**, not added later. The vendoring
+pattern is preferred over `git submodule` because:
+
+1. Submodules are not preserved by `git archive` (CI breakage).
+2. Submodules require a `git submodule update --init` step that
+   newcomers forget.
+3. Vendor + prepare-script is idempotent and works from a clean clone.
+
+---
+
+## L11 - BOM rule is filename-dependent in this repo: NSIS wants BOM, AGENTS.md/.md/.yaml/.cpp do not
+
+**Symptom**: While authoring `AGENTS.md` (the new repo operating manual,
+17.9 KB, fully CRLF), the obvious move was "encode as UTF-8 like every
+other markdown file in the repo". But then we remembered:
+`output/install.nsi` (**L09**) **must** have a UTF-8 BOM because it is
+consumed by NSIS 3.x with `Unicode true` at the top — without the BOM,
+NSIS parses the script as ANSI/CP1252 and Chinese literals (e.g.
+`${PRODUCT_NAME} "火流猩输入法"`, `${PRODUCT_PUBLISHER} "AIEC Studio"`)
+become mojibake (`?火流猩输入法?`, etc.) or, worse, silently break the
+installer's `LangString` / `MessageBox` calls. So "always BOM" and
+"never BOM" are both wrong. The rule is **parser-dependent**.
+
+**Root cause**: BOM is metadata that tells the **parser** how to decode
+the file. Different parsers in this repo have different opinions:
+
+- **NSIS 3.x with `Unicode true`**: requires BOM (otherwise ANSI fallback).
+  Affected: `output/install.nsi`, any `output/*.nsh` include.
+- **Markdown renderers (GitHub, VS Code preview, most static-site
+  generators)**: tolerate BOM, but some strip it; some downstream tools
+  (older `pandoc`, some `mdbook` themes) show the BOM as a stray `锘?`
+  at the top of the rendered page.
+- **YAML parsers (librime, snakeyaml, PyYAML, GitHub Actions)**: BOM in
+  the first 3 bytes causes a parse error or a key-name with a hidden
+  `\ufeff` prefix, which then mismatches when the file is read back.
+  Affected: `output/data/*.yaml`, all `.yaml` files used as rime schema.
+- **MSVC (`cl.exe`) / `clang-cl`**: BOM in `.cpp` / `.h` / `.c` / `.rc` is
+  **not** a syntax error, but the BOM becomes part of the first token of
+  the first line, which can break `auto` deduction or `#include` patterns
+  where the first char must be `#`. Also, the BOM can be injected into
+  string literals if you concatenate files, producing `"\ufeff..."` in
+  the binary.
+- **`cmd.exe` batch files (`.bat`, `.cmd`)**: BOM in line 1 produces
+  `The system cannot find the path specified.` because `cmd` tries to
+  execute `锘?@echo off` and `锘?` is not a command.
+- **PowerShell 5.1**: PS 5.1 reads BOMs as zero-width characters into
+  strings, which is harmless for most scripts but breaks regex matches
+  that expect `^` to anchor the very first char.
+- **Bash / Git Bash / WSL**: BOM at the top of `.sh` causes
+  `bash: $'\xef\xbb\xbf#!/...': No such file or directory` on the
+  shebang line. Same issue for `.bashrc` / `.profile` /
+  `.bash_profile`.
+- **JSON parsers (RFC 8259)**: spec actually *requires* parsers to
+  *accept* a BOM at the start of a JSON text, but most implementations
+  (Node, Python `json`, jq) silently strip it. If a tool is comparing
+  the raw bytes of a JSON file (e.g. a build-time cache key), BOM is
+  poison.
+- **Lua (librime lua plugin)**: BOM in `.lua` files is rejected with
+  `lua_error("unexpected symbol near '\\239'")` from the first non-Lua
+  byte.
+
+**BOM-required vs BOM-forbidden by file type in this repo**:
+
+| File type | BOM? | Why |
+|---|---|---|
+| `output/install.nsi` | **REQUIRED** | NSIS `Unicode true` (L09) |
+| `output/*.nsh` | **REQUIRED** | Same NSIS pipeline |
+| `AGENTS.md` | **NO** | Markdown; read by humans, GitHub, VS Code |
+| `*.md` (all) | **NO** | Markdown; same as above |
+| `*.yaml` (all) | **NO** | YAML parsers reject / prefix `\ufeff` |
+| `*.cpp` / `*.h` / `*.c` | **NO** | MSVC + clang BOM is junk in token stream |
+| `*.rc` | **NO** | Windows resource compiler treats BOM as a stray char |
+| `*.bat` / `*.cmd` | **NO** | cmd.exe BOM kills shebang-equivalent line 1 |
+| `*.ps1` | **NO** | PS 5.1 BOM leaks into strings; mostly harmless but avoid |
+| `*.sh` | **NO** | bash shebang poisoned by BOM (WSL/Git Bash) |
+| `*.json` | **NO** | RFC tolerates BOM but most tooling disagrees |
+| `*.lua` (librime) | **NO** | lua parser rejects BOM with `unexpected symbol` |
+| `*.txt` (config) | **NO** | Most text tools assume no BOM |
+| `output/data/user.yaml` | **NO** | YAML, parsed by librime |
+
+**How to write a file WITHOUT a BOM in PowerShell 5.1**:
+
+```powershell
+# Method A: explicit BOM-less UTF-8 encoder
+$enc = [Text.UTF8Encoding]::new($false)
+[IO.File]::WriteAllText($path, $content, $enc)
+
+# Method B: explicit BOM-less encoder + WriteAllBytes (for binary control)
+$bytes = [Text.Encoding]::UTF8.GetBytes($content)
+[IO.File]::WriteAllBytes($path, $bytes)
+
+# WRONG: this silently adds a BOM
+$content | Out-File -Encoding utf8 $path   # L07 trap
+Set-Content -Encoding utf8 $path           # also adds BOM
+"..." | Set-Content -Encoding UTF8 $path   # same trap
+```
+
+**How to write a file WITH a BOM (only for `*.nsi` / `*.nsh` in this repo)**:
+
+```powershell
+$encBom = [Text.UTF8Encoding]::new($true)   # $true = emit BOM
+[IO.File]::WriteAllText($path, $content, $encBom)
+
+# Or, for surgical byte control:
+$preamble = [byte[]](0xEF, 0xBB, 0xBF)
+$body     = [Text.Encoding]::UTF8.GetBytes($content)
+[IO.File]::WriteAllBytes($path, $preamble + $body)
+```
+
+**Verify after writing** (L05 §1 byte-health check, abbreviated):
+
+```powershell
+function Test-Bom {
+    param([string]$Path)
+    $b = [IO.File]::ReadAllBytes($Path)
+    if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+        "BOM:    $Path"
+    } else {
+        "no-BOM: $Path  (first3=$($b[0].ToString('X2'))+$($b[1].ToString('X2'))+$($b[2].ToString('X2')))"
+    }
+}
+```
+
+**Why this matters for `AGENTS.md` specifically**: `AGENTS.md` is a
+markdown file that humans, GitHub, VS Code, the Codex CLI loader, and
+future LLM agents will all read. The Codex CLI's "load AGENTS.md" code
+path (as of the 2026-06 snapshot) does **not** strip a BOM — it just
+reads the file. A BOM would surface as a literal `\ufeff` at the start
+of the rendered file. So: no BOM, period. Same rule for any new `*.md`
+we add (specs, plans, tasks, this lessons file).
+
+**Lesson** (the actual takeaway, beyond the file list): BOM is a property
+of the **parser**, not the encoding. UTF-8 itself has no BOM requirement;
+the BOM is a Windows-era convention to disambiguate UTF-8 from CP1252
+in the absence of a stricter metadata layer. In this repo, only one
+consumer (NSIS) actually needs the BOM; every other consumer is happier
+without it. Default to BOM-less for everything; reach for BOM only when
+the parser's spec demands it.
+
+**Related**: **L07** (`Out-File -Encoding utf8` adds a BOM — this is
+the same trap re-discovered in reverse while writing `AGENTS.md`),
+**L09** (NSIS BOM requirement — the original discovery of the
+parser-dependent rule).
+
+---
+
+## L12 - Meta: how lessons-learned.md itself got damaged (and the fix)
+
+**This is the post-mortem on the 2026-06-30 encoding recovery**. The full
+English rewrite above (L01–L11) is the fix; this L12 is the cause analysis
+so the next person doesn't re-discover it.
+
+**Damage chain** (how HEAD ended up as 42,068 bytes of UTF-16 LE with
+GBK-mojibake Chinese):
+
+1. **2026-06-28, commit `d6e2e1e`** — initial L01–L07 added. Authored in
+   chat context, the Chinese content was **Unicode code points** in PS
+   memory. The author wrote them via a PS pipeline (`Get-Content`,
+   `Set-Content`, `Out-File`, or a here-string + `Set-Content`) without
+   explicitly setting encoding. Under PS 5.1 + `chcp 936`, the default
+   encoding is **UTF-16 LE with BOM** (the legacy Windows default for
+   PS I/O).
+2. The file was committed as UTF-16 LE with BOM. Bytes 0–2: `FF FE`.
+   42,068 bytes for 21,034 Unicode code points.
+3. The first checkout on a different machine (or even a fresh `git
+   clone`) re-decoded the file via `core.autocrlf=true` and the GBK
+   codepage, producing a working-tree file that **looked like UTF-8
+   with BOM** but was actually GBK-mojibake when read as Chinese.
+4. **L01–L07 (English-friendly)** in commit messages were always fine;
+   it was **only the body prose in the .md file** that was damaged.
+5. **L08, L09, L10 commits** (fd2d260, 4506a32, 6e6f1ef) added
+   lessons with the same encoding pipeline. Same damage. By the time
+   the L10 commit landed, the file was ~42 KB of mixed GBK-mojibake
+   Chinese + English code blocks + YAML examples.
+6. **2026-06-30, this rewrite**: HEAD's blob is now replaced with a
+   clean UTF-8-no-BOM, fully LF, fully English version. L01–L07 are
+   recovered from chat history + commit headings. L08–L10 are
+   recovered from the commit messages (which are the authoritative
+   English summary). L11 is added as a new lesson.
+
+**Why a full English rewrite instead of byte-level recovery**:
+
+- The Chinese content is **GBK bytes re-encoded as Unicode code points,
+  re-encoded as UTF-16 LE bytes**. Going backwards requires
+  (a) UTF-16 LE → Unicode code points, (b) Unicode code points → GBK
+  bytes, (c) GBK bytes → GBK code points, (d) GBK code points → UTF-8
+  bytes. Steps (c) and (d) are **lossy** because the original author
+  wrote Unicode code points that don't all have GBK equivalents (e.g.
+  `\u987A` is a valid GBK char, `\ufeff` is not).
+- The mojibake is **visually unrecognizable** in PS 5.1 + `chcp 936`
+  console because the console re-decodes the same way: a 4-byte GBK
+  sequence displayed in the console looks like a different 4-byte
+  sequence on disk. Round-trip blindness.
+- The English rewrite is **complete information** (the technical
+  content was always English) and **future-proof** (no codepage
+  dependency for the next reader).
+
+**Lesson** (meta):
+
+- **Markdown files in this repo are English by default**. Chinese goes
+  in **commit messages** (where `core.autocrlf` is irrelevant) or in
+  **code strings inside code blocks** (which are byte-stable).
+- For any future CJK content in a `.md` file, the same L01 rules
+  apply: write via `[IO.File]::WriteAllText` with
+  `[Text.UTF8Encoding]::new($false)`, verify with `Test-Bom` from L05.
+- **The lessons file is the single source of truth** for incident
+  patterns. If a lesson gets damaged, **rewrite it** in English
+  rather than spending hours on byte-level recovery. The time saved
+  is better spent writing the next spec.
+- **Commit messages are durable**. Bodies in `.md` files are fragile
+  under encoding mismatches. When in doubt, put the lesson in the
+  commit message and reference it from the `.md` body.
+
+**Related**: L01 (the original GBK trap), L05 (the verify template),
+L07 (the BOM trap), L11 (the BOM-by-parser rule). The L## index in
+this file is the single source of truth.
