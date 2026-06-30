@@ -1,4 +1,70 @@
-﻿
+﻿## [0.18.5.0-fluxing] - 2026-06-30
+
+### Installer hardening: smoke-test path guard + TSF shim lock-skip
+
+- **L13-fix-2**: install-side guard against smoke-test paths left behind in
+  the registry. When a previous silent-install smoke test (AGENTS.md §2.5)
+  leaves `HKLM\Software\Fluxing\Weasel\InstallDir` pointing under
+  `C:\TEMP\` or `C:\Users\test\`, the new install would inherit that path.
+  The guard detects the smoke-test prefix (most-specific first:
+  `C:\Users\test\` (13 chars), `C:\TEMP\test\` (12 chars), `C:\TEMP\` (8 chars))
+  and falls through to the default install path `$PROGRAMFILES64\fluxing`.
+
+  The matching uninstall-side fix (clearing `HKLM\Software\Fluxing\Weasel\InstallDir`
+  on uninstall) is tracked separately as spec 012 C1; it is the actual root
+  cause. L13-fix-2 is the defense-in-depth band-aid until spec 012 C1 lands.
+
+- **L14-fix (TSF shim lock-skip)**: on x64 Windows, `weaselx64.dll` is the
+  64-bit TSF TextInputProcessor. Once Windows TSF has loaded it (per user
+  login session), it holds an open file handle for the entire session.
+  NSIS cannot overwrite a locked file; the user-facing dialog
+  "Cannot open the file for writing" + Abort/Retry/Ignore appeared on every
+  upgrade.
+
+  Workaround: wrap the `weaselx64.dll` `File` call in `IfFileExists` +
+  `SetOverwrite try`. If the file does not exist (fresh install), copy
+  normally. If it exists and is locked by TSF, the File call sets the
+  error flag silently; we keep the old shim and surface a single
+  `DetailPrint` line. The new shim is picked up at the next user
+  log-out -> log-in cycle.
+
+  Note: the original draft comment claimed a "size-equality check"; the
+  actual logic is overwrite-try + skip-on-error. The comment has been
+  corrected to match the code.
+
+- **L17 lessons-learned**: 3 NSIS gotchas surfaced while building + testing:
+  - `StrCpy $R1 $R0 N` copies the first N characters; if N does not
+    equal the literal length in the subsequent `StrCmp`, the prefix
+    check silently never matches (off-by-one).
+  - `InstallDirRegKey` directive pre-loads `$INSTDIR` from the registry
+    BEFORE `.onInit` runs. Any "is `$INSTDIR` empty?" check in `.onInit`
+    is always false. The override must be an explicit assignment.
+  - `/D=path` on the silent-install command line is broken in this
+    installer (`InstallDirRegKey` overrides it). Tracked separately,
+    not in this release.
+
+### Verified on real hardware
+
+- L13-fix-2 functional test: seeded
+  `HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel\InstallDir = C:\TEMP\smoke-OLD\fluxing`,
+  ran silent install, observed final `InstallDir = C:\Program Files\fluxing`
+  (default, NOT the seeded smoke-test value).
+- Silent install to `C:\TEMP\fluxing-test\ProgramFiles\fluxing\` (L13 path-force
+  layout) produced all expected binaries with correct x86 arch (per L14).
+- `weaselx64.dll` is the only x64 file; `SetOverwrite try` path verified
+  by code review (`weaselx64.dll` is not currently locked on this dev box;
+  the locked-file branch can only be tested when a user is actively
+  logged in and TSF has loaded the shim).
+- `TestDefaultHotkeys.exe`: 24/24 PASS (no spec 012 hotkey regression).
+
+### Tracked follow-ups (not in 0.18.5.0)
+
+- spec 012 C1: uninstall-side cleanup of `HKLM\Software\Fluxing\Weasel\InstallDir`
+  (root cause of why L13-fix-2 was needed).
+- spec 013 (proposed): fix `/D=path` silent-install override. Currently
+  `/D=` is ignored because `InstallDirRegKey` pre-loads `$INSTDIR` and
+  the `.onInit` logic cannot detect the /D= intent.
+- spec 005 follow-up: `weasel.yaml` / schema files unrelated to installer.
 
 ## [0.18.4.0-fluxing-shift] - 2026-06-30
 
