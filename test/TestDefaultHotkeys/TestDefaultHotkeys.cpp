@@ -60,13 +60,13 @@ int main(int argc, char** argv) {
 
   // F1 中英文切换 + 上屏候选: Shift_L/Shift_R
   check("Shift_L 上屏第 2 候选 (has_menu)",
-        Contains(content, "accept: shift+l, send: 2"));
+        Contains(content, "accept: Shift+l, send: 2"));
   check("Shift_R 上屏第 3 候选 (has_menu)",
-        Contains(content, "accept: shift+r, send: 3"));
+        Contains(content, "accept: Shift+r, send: 3"));
   check("Shift_L 中英切换 (always ascii_mode)",
-        Contains(content, "toggle: ascii_mode, accept: shift+l"));
+        Contains(content, "toggle: ascii_mode, accept: Shift+l"));
   check("Shift_R 中英切换 (always ascii_mode)",
-        Contains(content, "toggle: ascii_mode, accept: shift+r"));
+        Contains(content, "toggle: ascii_mode, accept: Shift+r"));
 
   // F1 中英切换: 单键 Shift_L / Shift_R 单独按 (搜狗拼音 习惯)
   check("Shift_L 单键 has_menu 上屏第 2 候选", Contains(content, "accept: Shift_L, send: 2"));
@@ -80,8 +80,8 @@ int main(int argc, char** argv) {
   check("ascii_composer.Shift_L: commit_code 已废弃", !Contains(content, "Shift_L: commit_code"));
 
   // 顺序检查: has_menu 必须在 always 之前 (RIME 引擎按列表顺序 匹配)
-  size_t pos_menu_l = content.find("accept: shift+l, send: 2");
-  size_t pos_always_l = content.find("toggle: ascii_mode, accept: shift+l");
+  size_t pos_menu_l = content.find("accept: Shift+l, send: 2");
+  size_t pos_always_l = content.find("toggle: ascii_mode, accept: Shift+l");
   check("Shift_L 顺序: has_menu 在 always 之前 (优先级正确)",
         pos_menu_l != std::string::npos && pos_always_l != std::string::npos &&
         pos_menu_l < pos_always_l);
