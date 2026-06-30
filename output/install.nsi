@@ -113,9 +113,15 @@ LangString CONFIRMATION ${LANG_ENGLISH} "Before installation, please uninstall t
 LangString SYSTEMVERSIONNOTOK ${LANG_ENGLISH} "Your system not supported, minimium system required: Windows 8.1!"
 LangString AUTOCHKUPDATE ${LANG_ENGLISH} "Automatically check for updates?"
 
-;--------------------------------
 
 Function .onInit
+  ; L14: NSIS has built-in support for /LOG=<file> CLI flag. Users can pass
+  ; /LOG=path\to\file.log to NSIS directly to get a full install log - the
+  ; primary post-mortem tool for debugging install failures (especially the
+  ; L14 0xC000007B arch-mismatch bug). We don't need LogSet (unavailable in
+  ; standard NSIS); the CLI flag is the conventional way. See:
+  ; https://nsis.sourceforge.io/Docs/Chapter4.html#flags
+
   ; if not version >= 8.1, quit and MessageBox(if not silent)
   ${IfNot} ${AtLeastWin8.1}
     IfSilent toquit
@@ -123,31 +129,31 @@ Function .onInit
 toquit:
     Quit
   ${EndIf}
-
+  ; L13: detect existing install for upgrade (preserves the user chosen location).
+  ; If registry has a prior InstallDir, USE it as the install path (upgrade in place).
   ReadRegStr $R0 HKLM "Software\Fluxing\Weasel" "InstallDir"
-  StrCmp $R0 "" 0 skip
+  StrCmp $R0 "" 0 use_reg
   ReadRegStr $R0 HKLM "Software\Rime\Weasel" "InstallDir"
-  StrCmp $R0 "" 0 skip
-  ; The default installation directory
-  ; install x64 build for NativeARM64_WINDOWS11 and NativeAMD64_WINDOWS11
-  ${If} ${AtLeastWin11} ; Windows 11 and above
-    ${If} ${IsNativeARM64}
-      StrCpy $INSTDIR "$PROGRAMFILES64\Fluxing"
-    ${ElseIf} ${IsNativeAMD64}
-      StrCpy $INSTDIR "$PROGRAMFILES64\Fluxing"
-    ${Else}
-      StrCpy $INSTDIR "$PROGRAMFILES\Fluxing"
-    ${Endif}
-  ; install x64 build for NativeAMD64_BELLOW_WINDOWS11
-  ${Else} ; Windows 10 or bellow
-    ${If} ${IsNativeAMD64}
-      StrCpy $INSTDIR "$PROGRAMFILES64\Fluxing"
-    ${Else}
-      StrCpy $INSTDIR "$PROGRAMFILES\Fluxing"
-    ${Endif}
-  ${Endif}
+  StrCmp $R0 "" 0 use_reg
+  ; No prior install: fall through to default (or /D= if user provided one).
+  Goto set_default
+use_reg:
+  ; Prior install detected: use the registry path (upgrade in place),
+  ; UNLESS the user passed /D= explicitly (which NSIS sets before .onInit).
+  ; We honor /D= if it is non-empty; otherwise use the registry value.
+  StrCmp $INSTDIR "" 0 set_default
+  StrCpy $INSTDIR $R0
+  Goto skip
+set_default:
+  ; L14: Default installation directory (only if /D= did not provide one).
+  ; The installer is x86 (Win32), so $PROGRAMFILES on x64 Windows resolves to
+  ; "C:\Program Files (x86)" via WOW64 redirection. We always want the real
+  ; 64-bit Program Files, so use $PROGRAMFILES64 explicitly. This keeps the
+  ; default stable across 32/64-bit installer versions.
+  StrCmp $INSTDIR "" 0 skip_default
+  StrCpy $INSTDIR "$PROGRAMFILES64\fluxing"
+skip_default:
 skip:
-  ; spec 002 FR-001: enforce fluxing suffix on $INSTDIR (works in silent + GUI)
   Call ForceFluxingSuffix
   ReadRegStr $R0 HKLM \
   "Software\Microsoft\Windows\CurrentVersion\Uninstall\Weasel" \
@@ -254,36 +260,20 @@ program_files:
     File /nonfatal "weaselARM64.dll"
     File /nonfatal "weaselARM64X.dll"
   ${EndIf}
-  ; install x64 build for NativeARM64_WINDOWS11 and NativeAMD64_WINDOWS11
-  ${If} ${AtLeastWin11} ; Windows 11 and above
+  ; spec 002 / L14: librime is Win32-only (output\rime.dll is x86), so all Weasel
+  ; binaries must also be Win32 (x86). 0xC000007B happens when WeaselDeployer
+  ; is x64 and tries to load x86 rime.dll - WoW64 is process-level, not
+  ; module-level, so 32-bit DLLs cannot be loaded in 64-bit processes.
+  ; Always install Win32\Weasel*.exe, regardless of host Windows arch.
+  File "Win32\WeaselDeployer.exe"
+  File "Win32\WeaselServer.exe"
+  File "Win32\rime.dll"
+  File "Win32\WinSparkle.dll"
+  ${If} ${AtLeastWin11}
     ${If} ${IsNativeARM64}
-      File "WeaselDeployer.exe"
-      File "WeaselServer.exe"
-      File "rime.dll"
-      File "WinSparkle.dll"
-    ${ElseIf} ${IsNativeAMD64}
-      File "WeaselDeployer.exe"
-      File "WeaselServer.exe"
-      File "rime.dll"
-      File "WinSparkle.dll"
-    ${Else}
-      File "Win32\WeaselDeployer.exe"
-      File "Win32\WeaselServer.exe"
-      File "Win32\rime.dll"
-      File "Win32\WinSparkle.dll"
-    ${Endif}
-  ; install x64 build for NativeAMD64_BELLOW_WINDOWS11
-  ${Else} ; Windows 10 or bellow
-    ${If} ${IsNativeAMD64}
-      File "WeaselDeployer.exe"
-      File "WeaselServer.exe"
-      File "rime.dll"
-      File "WinSparkle.dll"
-    ${Else}
-      File "Win32\WeaselDeployer.exe"
-      File "Win32\WeaselServer.exe"
-      File "Win32\rime.dll"
-      File "Win32\WinSparkle.dll"
+      File /nonfatal "weaselARM.dll"
+      File /nonfatal "weaselARM64.dll"
+      File /nonfatal "weaselARM64X.dll"
     ${Endif}
   ${Endif}
 
@@ -457,16 +447,16 @@ SectionEnd
 
 
 Function ForceFluxingSuffix
-  ; Enforce fluxing suffix on $INSTDIR (idempotent). Bug fix 0.18.3.0.
-  ; Original IsFluxingPath had broken Exch/Pop chain that returned garbage.
+  ; L14: Enforce fluxing suffix on $INSTDIR (idempotent). Bug fix 0.18.3.0.
+  ; 0.18.3.0 logic bug: StrCmp fell through to next line, sending every input
+  ; to not_fluxing (double-suffix). Fix uses explicit Goto for match case.
+  ; NSIS StrCmp is case-insensitive by default, so a single check against
+  ; 'fluxing' matches both casings.
   Push $0
-  StrCpy $0 "$INSTDIR" "" -7
-  StrCmp $0 "fluxing" 0 not_fluxing
-  StrCmp $0 "Fluxing" 0 not_fluxing
-  ; already ends in fluxing/Fluxing - no change
+  StrCpy $0 '$INSTDIR' '' -7
+  StrCmp $0 'fluxing' 0 +2
   Goto suffix_done
-not_fluxing:
-  StrCpy $INSTDIR "$INSTDIR\fluxing"
+  StrCpy $INSTDIR '$INSTDIR\fluxing'
 suffix_done:
   Pop $0
 FunctionEnd
