@@ -89,24 +89,143 @@ If you are on Windows without bash, use the PowerShell equivalent:
 .\clang-format.ps1 -i
 ```
 
-### 2.5 End-to-end silent-install smoke test
+### 2.5 End-to-end silent-install smoke test (MANDATORY for any install.nsi change)
+
+**This test is MANDATORY** before committing any change to `output/install.nsi`.
+It is the only test that exercises the silent-mode code path, which is
+the only mode CI / scripted upgrades / mass deployment use. The GUI
+path has its own hooks (e.g. `MUI_PAGE_CUSTOMFUNCTION_LEAVE`) that
+do NOT fire in silent mode; bugs that only manifest in silent mode
+will pass every GUI inspection and only surface in production.
+
+**Why this is mandatory** (see L13 for the full post-mortem): the
+`ForceFluxingSuffix` function in `install.nsi` was wired to
+`MUI_PAGE_CUSTOMFUNCTION_LEAVE` for 4 release versions (0.17.5 through
+0.18.2). The hook never fires in silent mode (`/S` + `/D=`), so the
+fluxing suffix was never appended. The bug shipped to production 4
+times because the smoke test was running silent installs without
+inspecting the resulting layout.
+
+**Rule**: any commit that modifies `output/install.nsi` MUST include
+in its commit message a reference to a successful smoke-test run on
+that commit's installer binary. The run MUST verify the layout
+invariants below. A commit that only changes `install.nsi` comments
+or whitespace still requires the smoke test (the build process can
+introduce surprises).
+
+#### Smoke-test recipe (run after every `xbuild.bat installer`)
 
 ```powershell
-# Always run this after a release build, before tagging.
 $dst = "C:\TEMP\fluxing-test"
+$ver = "0.18.3"   # <-- bump to current FLUXING_VERSION
+$installer = ".\release\fluxing-$ver.0-installer.exe"
+
+# 1. Clean test root
 Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue
-$proc = Start-Process -FilePath ".\release\fluxing-<ver>-installer.exe" `
-    -ArgumentList @("/S","/D=$dst\Fluxing") -Wait -PassThru
-# Required invariants (each verified in 0.18.1.0 / 0.18.2.0):
-#   exit code == 0
-#   HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel\InstallDir = "$dst\Fluxing"
-#   HKCU\Software\Fluxing\Weasel\RimeUserDir   = "$dst\Fluxing\fluxing\user1\fluxing"
-#   "$dst\Fluxing\weasel\rime.dll"             exists, ~3.0 MB (lua-linked)
-#   "$dst\Fluxing\weasel\data\build\rime_ice.table.bin" exists, ~60 MB
-#   Do NOT pass /userdir=<x> in the args. NSIS concatenates unknown CLI
-#   flags into $INSTDIR and corrupts the user-data registry key. (L10 §5)
+New-Item -ItemType Directory -Path $dst | Out-Null
+
+# 2. Silent install with /D=<no-fluxing-suffix> to exercise the force-suffix path
+$proc = Start-Process -FilePath $installer `
+    -ArgumentList @("/S","/D=$dst\ProgramFiles") -Wait -PassThru
+Write-Host "exit code: $($proc.ExitCode)"
+
+# 3. Verify layout invariants (L13 + spec 002 FR-001 / FR-002)
+$failures = @()
+
+#    a. exit code == 0
+if ($proc.ExitCode -ne 0) { $failures += "exit code was $($proc.ExitCode)" }
+
+#    b. fluxing suffix was forced (engine binaries are under fluxing\weasel, not weasel\)
+if (-not (Test-Path "$dst\ProgramFiles\fluxing\weasel\WeaselServer.exe")) {
+    $failures += "engine binaries not under fluxing\weasel\ - path-force fix not working"
+}
+if (Test-Path "$dst\ProgramFiles\weasel\WeaselServer.exe") {
+    $failures += "engine binaries at WRONG location $dst\ProgramFiles\weasel\ - path-force broken"
+}
+
+#    c. user-data dir is co-located under fluxing\user1\fluxing\
+if (-not (Test-Path "$dst\ProgramFiles\fluxing\user1\fluxing")) {
+    $failures += "user-data dir $dst\ProgramFiles\fluxing\user1\fluxing missing"
+}
+
+#    d. registry: InstallDir is the fluxing root
+$installDir = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Fluxing\Weasel" -ErrorAction SilentlyContinue).InstallDir
+if ($installDir -ne "$dst\ProgramFiles\fluxing") {
+    $failures += "HKLM InstallDir = '$installDir' (expected '$dst\ProgramFiles\fluxing')"
+}
+
+#    e. registry: RimeUserDir is under user1\fluxing\
+$userDir = (Get-ItemProperty "HKCU:\Software\Fluxing\Weasel" -ErrorAction SilentlyContinue).RimeUserDir
+if ($userDir -ne "$dst\ProgramFiles\fluxing\user1\fluxing") {
+    $failures += "HKCU RimeUserDir = '$userDir' (expected '$dst\ProgramFiles\fluxing\user1\fluxing')"
+}
+
+#    f. rime.dll is present and ~3 MB (lua-linked)
+$rimeDll = "$dst\ProgramFiles\fluxing\weasel\rime.dll"
+if (-not (Test-Path $rimeDll)) { $failures += "rime.dll missing" }
+elseif ((Get-Item $rimeDll).Length -lt 2MB -or (Get-Item $rimeDll).Length -gt 5MB) {
+    $failures += "rime.dll size = $((Get-Item $rimeDll).Length) - not in 2-5 MB range"
+}
+
+#    g. prebuilt dicts present
+if (-not (Test-Path "$dst\ProgramFiles\fluxing\weasel\data\build\rime_ice.table.bin")) {
+    $failures += "prebuilt rime_ice.table.bin missing - first-run will be slow"
+}
+
+# 4. Cleanup
+Get-ChildItem $dst -Recurse -Force -ErrorAction SilentlyContinue |
+    ForEach-Object { attrib -h $_.FullName 2>$null }
+& "$dst\ProgramFiles\fluxing\weasel\uninstall.exe" /S
+Start-Sleep 2
+Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue
+
+# 5. Report
+if ($failures.Count -eq 0) {
+    Write-Host "SMOKE TEST PASSED" -ForegroundColor Green
+} else {
+    Write-Host "SMOKE TEST FAILED:" -ForegroundColor Red
+    $failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    exit 1
+}
 ```
 
+#### What the test catches (real bugs that this caught in 0.18.3.0)
+
+- **Path-force not firing in silent mode** (L13) - 4 release
+  versions shipped with this bug.
+- **NSIS concatenating unknown CLI flags** (L09 / L10 §5) - never
+  pass `/userdir=<x>` to the installer; the user-data dir is set
+  via HKCU registry, not CLI.
+- **Missing prebuilt dicts** - causes a 5-10 minute first-run
+  deploy on slow disks.
+- **Wrong rime.dll size** - indicates the librime build failed to
+  link the lua plugin (regressed between 0.18.1.0 and 0.18.2.0
+  before the L10 fix).
+- **Wrong InstallDir / RimeUserDir registry values** - causes
+  TSF not to find the user-data dir, schema files not loading.
+
+#### When you can SKIP this test
+
+Only if the commit touches install.nsi for **non-functional** changes
+only (purely comment / whitespace edits, version string bumps, no
+`Section`, `Function`, `.onInit`, or registry-write changes). Even
+then, the smoke test is cheap (~10 s) and catches accidental
+regressions; default to running it.
+
+#### Anti-patterns (do NOT do these)
+
+- A1 in spirit: "It compiled, ship it" - NSIS has no compile-time
+  path-coverage checks; the only path coverage is the smoke test.
+- "I tested the GUI locally" - GUI and silent paths are different;
+  a GUI install can pass and silent can fail (this is exactly what
+  happened across 0.17.5 - 0.18.2).
+- "I bumped the version in install.nsi but didn't change logic" -
+  string concat with `OutFile` (L09) silently overwrites previous
+  release; verify by inspecting the resulting exe name.
+
+**Related**: L09 (NSIS BOM + OutFile + line endings), L10 §5
+(`/userdir` arg quirk), L13 (full root-cause post-mortem of the
+path-force silent-mode bug).
 ---
 
 ## 3. Branch & Release Workflow
