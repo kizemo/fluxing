@@ -131,12 +131,50 @@ toquit:
   ${EndIf}
   ; L13: detect existing install for upgrade (preserves the user chosen location).
   ; If registry has a prior InstallDir, USE it as the install path (upgrade in place).
+  ; L13-fix-2: reject registry paths under known smoke-test roots
+  ; (C:\TEMP\, C:\TEMP\test\, C:\Users\test\). These get left behind by
+  ; silent-install smoke tests (AGENTS.md §2.5) because uninstall does
+  ; not clear HKLM\Software\Fluxing\Weasel\InstallDir. The install-side
+  ; guard catches the test path and falls through to default. The matching
+  ; uninstall-side fix is tracked as spec 012 C1.
   ReadRegStr $R0 HKLM "Software\Fluxing\Weasel" "InstallDir"
-  StrCmp $R0 "" 0 use_reg
+  StrCmp $R0 "" 0 check_reg
   ReadRegStr $R0 HKLM "Software\Rime\Weasel" "InstallDir"
-  StrCmp $R0 "" 0 use_reg
+  StrCmp $R0 "" 0 check_reg
   ; No prior install: fall through to default (or /D= if user provided one).
   Goto set_default
+check_reg:
+  ; Reject registry paths left behind by AGENTS.md §2.5 smoke tests.
+  ; These accumulate because uninstall does not clear
+  ; HKLM\Software\Fluxing\Weasel\InstallDir. Most-specific prefix first
+  ; (longest match wins), then the catch-all, then accept the path.
+  ; L17: order matters - if check_reg2 (shorter) ran first,
+  ; check_reg3 (longer) would be unreachable dead code.
+  ; L17b: StrCpy length N must equal the literal length.
+  ; L17c: NSIS InstallDirRegKey directive (line ~236) pre-loads $INSTDIR
+  ; from the registry BEFORE .onInit runs. So when check_reg* detects
+  ; a smoke-test path, we must explicitly reset $INSTDIR to the default
+  ; (otherwise set_default sees a non-empty $INSTDIR and uses the stale
+  ; smoke-test value). We do this by setting $R0 to "" and $INSTDIR to
+  ; the default in one shot, then jumping to skip.
+  StrCpy $R1 $R0 13
+  StrCmp $R1 "C:\Users\test" 0 check_reg2
+  Goto use_default
+check_reg2:
+  StrCpy $R1 $R0 12
+  StrCmp $R1 "C:\TEMP\test" 0 check_reg3
+  Goto use_default
+check_reg3:
+  StrCpy $R1 $R0 8
+  StrCmp $R1 "C:\TEMP\" 0 use_reg
+  Goto use_default
+use_default:
+  ; Smoke-test path detected - reset $INSTDIR to default and skip the
+  ; stale value. We use $PROGRAMFILES64\fluxing to match the default
+  ; set_default logic below.
+  StrCpy $INSTDIR "$PROGRAMFILES64\fluxing"
+  StrCpy $R0 ""
+  Goto skip
 use_reg:
   ; Prior install detected: use the registry path (upgrade in place),
   ; UNLESS the user passed /D= explicitly (which NSIS sets before .onInit).
@@ -253,7 +291,29 @@ program_files:
   File "stop_service.bat"
   File "weasel.dll"
   ${If} ${RunningX64}
+    ; L14-fix (spec 012 cleanup): weaselx64.dll is the 64-bit TSF TextInputProcessor.
+    ; Once Windows has loaded it (per user login session), TSF holds an open
+    ; file handle on it for the entire session. NSIS cannot overwrite a
+    ; locked file; the result is the user-facing dialog
+    ; "Cannot open the file for writing" + Abort/Retry/Ignore.
+    ; Workaround: use SetOverwrite try. If the file does not exist,
+    ; jump straight to a normal copy. If the file is locked by TSF,
+    ; the File call sets the error flag silently (no error dialog); we
+    ; keep the old shim in place and surface a single log line; the new
+    ; shim is picked up at the next user log-out -> log-in cycle.
+    ; Note: this is NOT a size-equality check (the original draft
+    ; comment claimed one - the actual logic is overwrite-try + skip-on-error).
+    IfFileExists "$INSTDIR\weaselx64.dll" 0 install_weaselx64
+    SetOverwrite try
     File "weaselx64.dll"
+    SetOverwrite on
+    IfErrors 0 skip_weaselx64
+    DetailPrint "Fluxing: weaselx64.dll is locked by TextInputManagementService (TSF); old shim retained. Log out -> log in to pick up the new shim."
+    Goto skip_weaselx64
+  install_weaselx64:
+    SetOverwrite on
+    File "weaselx64.dll"
+  skip_weaselx64:
   ${EndIf}
   ${If} ${IsNativeARM64}
     File /nonfatal "weaselARM.dll"

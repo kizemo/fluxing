@@ -913,3 +913,138 @@ KeyBindings::LoadBindings skips the entry with a warning
 **Verification**: a clean xbuild.bat installer on the 0.18.4
 codebase still produces the parse-error log; after applying
 the spec 012 patch, the same log no longer shows the warning.
+
+---
+
+
+---
+
+## L17 - NSIS StrCpy length must equal literal length; InstallDirRegKey pre-loads $INSTDIR
+
+**Context**: while implementing the "spec 012 cleanup" follow-up to L13
+(install-side guard against smoke-test paths left behind in the registry),
+two NSIS-specific gotchas were discovered and fixed. Both were caught by
+end-to-end smoke testing the install (AGENTS.md §2.5 recipe), not by code
+review - the L13-fix-2 code looked correct in isolation.
+
+### Gotcha 1: `StrCpy $R1 $R0 N` copies the first N characters
+
+The intent: "if $R0 starts with `C:\TEMP\`, treat as smoke-test path".
+The natural-looking code:
+
+```nsi
+StrCpy $R1 $R0 9               ; BUG: copies 9 chars, but `C:\TEMP\` is 8
+StrCmp $R1 "C:\TEMP\" 0 ...     ; compare 9 chars vs 8-char literal: NEVER matches
+```
+
+The fix: `StrCpy $R1 $R0 8` (8 chars, matching literal length). The same
+off-by-one bit `C:\Users\test` (13 chars, written as N=12) and `C:\TEMP\test`
+(12 chars, written as N=13). The first smoke-test commit (in-progress when
+I picked up the task) had all three off-by-one. The L13-fix-2 the user
+saw committed in the chat transcript was actually NOT working - it fell
+through to `use_reg` on every path and used the stale registry value
+verbatim, with no smoke-test rejection.
+
+**Why it slipped past review**: the comment in install.nsi L17c documents
+the off-by-one explicitly. Without running the installer with a seeded
+registry and observing that the smoke-test path was NOT being rejected, the
+code looks correct on inspection (`StrCmp` reads as a prefix match, the
+literal looks right, etc.). The error only manifests at runtime.
+
+**Verification recipe**:
+
+```powershell
+$installer = ".\output\archives\fluxing-0.18.4.0-installer.exe"
+# 1. Seed registry with a smoke-test path residue
+New-Item -Path "HKLM:\SOFTWARE\WOW6432Node\Fluxing\Weasel" -Force | Out-Null
+Set-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\Fluxing\Weasel" -Name "InstallDir" -Value "C:\TEMP\smoke-OLD\fluxing"
+# 2. Run install (default path; /D= is also broken, see Gotcha 3)
+cmd /c "`"$installer`" /S /D=`"C:\TEMP\fluxing-test\ProgramFiles`""
+# 3. Verify the install did NOT inherit the smoke-test path
+$installDir = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Fluxing\Weasel' -ErrorAction SilentlyContinue).InstallDir
+if ($installDir -eq "C:\TEMP\smoke-OLD\fluxing") { Write-Host "FAIL: L13-fix-2 NOT working" }
+```
+
+### Gotcha 2: `InstallDirRegKey` directive pre-loads $INSTDIR from the registry BEFORE .onInit runs
+
+The install.nsi has (line 236):
+
+```nsi
+InstallDirRegKey HKLM "Software\Fluxing\Weasel" "InstallDir"
+```
+
+This directive tells NSIS to read the registry at startup and set
+`$INSTDIR` to that value, BEFORE `.onInit` runs. The `.onInit` function
+runs AFTER this, and any code that checks `$INSTDIR` will see the
+registry-loaded value, not the default.
+
+In the L13-fix-2 path:
+
+```nsi
+check_reg:                              ; detected smoke-test path
+  ...
+  Goto set_default                      ; fell through to set_default
+set_default:
+  StrCmp $INSTDIR "" 0 skip_default     ; $INSTDIR is NOT empty (registry pre-loaded it)
+  StrCpy $INSTDIR "$PROGRAMFILES64\fluxing"
+skip_default:
+skip:
+```
+
+Because `$INSTDIR` was pre-loaded with the smoke-test value, the
+`StrCmp $INSTDIR ""` test ALWAYS returns non-empty, so `$INSTDIR` is
+NEVER reset to the default. The stale value sticks. The fix:
+
+```nsi
+use_default:                            ; new label, jumped to from check_reg*
+  StrCpy $INSTDIR "$PROGRAMFILES64\fluxing"  ; explicit reset
+  StrCpy $R0 ""                          ; clear so use_reg below is not entered
+  Goto skip
+```
+
+### Gotcha 3: /D= is broken in this installer (separate pre-existing bug)
+
+While testing L13-fix-2, I observed that the install also ignores
+`/D=path` on the command line. Both the released 0.18.4.0 installer
+(commit `b98c7d5`) and the new build with L13-fix-2 ignore `/D=` and
+go to `$PROGRAMFILES64\fluxing`. The root cause is likely
+`InstallDirRegKey` overriding /D= (the registry value wins), but
+the L13 cleanup did not fix this - it is a separate, pre-existing bug.
+
+**Tracked as**: [NEEDS CLARIFICATION: separate spec for /D= silent-mode
+override]. Do not bundle into the L13-fix-2 PR; the user did not ask
+for it. The L13-fix-2 is a "drop the smoke-test residue" fix, not a
+"fix /D=" fix.
+
+**Workaround for the smoke test**: delete the registry key before
+running the install, accept that the install will land in
+`C:\Program Files\fluxing`, and manually verify the L13-fix-2
+behavior (rejection of smoke-test paths) by seeding a smoke-test
+value and observing the install does NOT use it.
+
+### Lesson
+
+1. **NSIS code is hard to verify by inspection.** Both gotchas 1 and 2
+   would have shipped as broken code if not for the end-to-end smoke
+   test. The "Silent install /D=%TEMP%\\fluxing-test" check that
+   surfaced L13 in the first place (commit `536a106`) is the only
+   reliable verification - the L13-fix-2 work extended the same recipe.
+2. **When you add an NSIS smoke-test guard, write a **direct**
+   verification** (seed a smoke-test path, run the install, observe
+   rejection) - not just the standard AGENTS.md §2.5 recipe. The
+   standard recipe assumes /D= works, which it does not in this
+   installer (Gotcha 3). The direct verification isolates the
+   L13-fix-2 behavior from the /D= issue.
+3. **`StrCpy` length N must equal the literal length** when doing
+   prefix checks. There is no compile-time check; the error only
+   surfaces at runtime. Add a code comment that documents the
+   literal length, so future readers can spot the off-by-one
+   without running the test.
+4. **`InstallDirRegKey` pre-loads `$INSTDIR`** before any user code
+   runs. If you want `.onInit` to be able to override the registry
+   value, the override must be an explicit assignment, not a
+   "is `$INSTDIR` empty?" check.
+
+**Related**: L13 (NSIS path-force suffix in silent mode), L09 (NSIS
+BOM + OutFile + line endings), L15 (PowerShell `Start-Process` arg
+merging), AGENTS.md §2.5 (silent-install smoke test recipe).
