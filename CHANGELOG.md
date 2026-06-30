@@ -1,3 +1,34 @@
+## [0.18.4.0] - 2026-06-30
+
+### 主要更新
+
+- **架构一致性：始终安装 Win32 二进制** (修复 0xC000007B STATUS_INVALID_IMAGE_FORMAT bug)
+  - librime 是 Win32-only（`output\rime.dll` 是 x86，~3MB 含 lua 插件）。但 `output\WeaselDeployer.exe` / `WeaselServer.exe` 是 x64。把 x64 进程加载 x86 rime.dll 会触发 WoW64 进程级架构冲突：0xC000007B。
+  - 之前 0.17.5-0.18.3 的 installer 有个 `${If} ${RunningX64}` 条件分支，在 x64 Windows 上装 x64 版本的 `Weasel*.exe`。这条路径产出的安装包在目标机器上会立刻 crash。
+  - 修复：删掉 x64 / Win32 条件分支，**始终**装 `Win32\Weasel*.exe` + `Win32\rime.dll`（全部 x86）。x64 OS 通过 WoW64 加载 32-bit EXE，rime.dll 也是 32-bit，架构统一。
+  - **L14** lessons-learned 记录了完整根因 + 修复 + 教训。
+
+- **默认安装路径简化为 `C:\Program Files\fluxing`**
+  - 之前 `.onInit` 有 `${If} ${AtLeastWin11}` 嵌套 `${If} ${IsNativeARM64}` 等 4 路分支（Win11+ARM64 / Win11+AMD64 / Win11+x86 / Win10+AMD64 / Win10+x86），逻辑复杂且全用了 `$PROGRAMFILES64`（x86 installer 在 x64 Windows 上会被 WOW64 重定向到 `C:\Program Files (x86)`，导致奇怪路径）。
+  - 简化为单行 `StrCpy $INSTDIR "$PROGRAMFILES64\fluxing"`。
+  - 同时修了 `ForceFluxingSuffix` 的 logic bug（0.18.3.0 版本里 `StrCmp` 链路 fall-through，导致所有路径都进 `not_fluxing` 分支，强制追加 `\fluxing`，出现 `fluxing\fluxing` 双重后缀）。
+  - 同时修了 upgrade 路径逻辑：之前 `.onInit` 的 `ReadRegStr $R0 ...; StrCmp $R0 "" 0 skip` 读了注册表但没用它，$INSTDIR 始终是 /D= 值或默认值。现在加了 `StrCpy $INSTDIR $R0` 真正使用注册表值，实现"原地升级"（用户首次装在 D:\foo\fluxing，再升级时仍用 D:\foo\fluxing，除非显式传 /D= 覆盖）。
+
+- **安装日志**
+  - NSIS 原生支持 `/LOG=path` CLI flag，无需在脚本里 `LogSet`（`LogSet` 在标准 NSIS 不可用，需要自定义编译）。
+  - 在 `.onInit` 加了文档说明，提示用户 / 部署脚本传 `/LOG=path\to\file.log` 来获得完整安装日志，作为 post-mortem 工具。
+  - **注意**：使用 `/LOG=` 时**必须**用 cmd /c 调用，否则 PowerShell `Start-Process` 会把 `/LOG=` 合并到 `/D=` 里（NSIS 行为：unknown CLI args 串入 $INSTDIR）。
+
+### 验收
+
+- 全新 silent install（`/S /D=C:\TEMP\fluxing-0184-test`）得到 `fluxing-0184-test\ProgramFiles\fluxing\weasel\` 布局。
+- 所有 `WeaselServer.exe` / `WeaselDeployer.exe` / `WeaselSetup.exe` / `uninstall.exe` / `rime.dll` / `weasel.dll` / `WinSparkle.dll` 都是 x86。
+- `weaselx64.dll` 是 x64（TSF text input processor 必须是 x64）。
+- `rime.dll` 约 3MB（lua plugin 已链接）。
+- 注册表 `HKLM\SOFTWARE\Fluxing\Weasel\InstallDir` = 安装根（含 `\fluxing`）。
+- 注册表 `HKCU\Software\Fluxing\Weasel\RimeUserDir` = `<install-root>\user1\fluxing`。
+- AGENTS.md §2.5 强制 silent-install smoke test 通过。
+
 ## [0.18.3.0] - 2026-06-30
 
 ### 主要更新

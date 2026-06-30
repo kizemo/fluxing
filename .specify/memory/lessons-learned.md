@@ -742,3 +742,120 @@ So even if `IsFluxingPath` had been correct, **silent installs silently produced
 4. **`MUI_PAGE_CUSTOMFUNCTION_LEAVE` is the right hook for user-driven changes** (e.g. "after user picks a directory, validate the choice and warn if it ends in a space"). It is **the wrong hook for installer invariants** (e.g. "the install path MUST end in `fluxing` regardless of user input").
 
 **Related**: L09 (NSIS BOM + OutFile + line endings — the same `install.nsi` has a long history of silent failures; this L13 is another entry in that pattern). L11 (BOM rule — `install.nsi` itself must have a BOM, per the parser-dependent rule).
+## L14 - Installer arch-mismatch: librime is Win32-only so all Weasel binaries must be x86; never use `${If} ${RunningX64}` to pick x64 Weasel.exe
+
+**Symptom** (discovered 2026-06-30, after a user installed 0.18.3.0 and got a `0xC000007B` STATUS_INVALID_IMAGE_FORMAT error from `WeaselDeployer.exe`):
+
+```
+Application Error
+WeaselDeployer.exe - Application Error
+The application was unable to start correctly (0xc000007b).
+Click OK to close the application.
+```
+
+The installer claimed success. The 0.18.3.0 release notes stated "fresh install verified by silent smoke test". But the moment the user clicked "OK" on the WeaselDeployer dialog, the app crashed.
+
+### Root cause: mixed architecture in installed binaries
+
+**Build outputs (librime + weasel):**
+
+| File | Arch | Notes |
+|---|---|---|
+| `output\rime.dll` | x86 | librime is Win32-only (per L10 §3). |
+| `output\weasel.dll` | x86 | the TSF 32-bit shim. |
+| `output\WeaselDeployer.exe` | x64 | built by `weasel.sln` Release\|x64. |
+| `output\WeaselServer.exe` | x64 | built by `weasel.sln` Release\|x64. |
+| `output\weaselx64.dll` | x64 | the TSF 64-bit shim. Correctly x64. |
+| `output\Win32\*.exe,*.dll` | x86 | the Win32 build. |
+
+**WoW64 rule (the gotcha):** WoW64 is process-level, not module-level. A 64-bit Windows process can load 64-bit DLLs; a 32-bit Windows process can load 32-bit DLLs. There is no in-process bridge. A 64-bit EXE cannot load a 32-bit DLL, and vice versa. When Windows detects this mismatch, it returns `0xC000007B STATUS_INVALID_IMAGE_FORMAT` and the process fails to start.
+
+**Install.nsi File block (L455-486 in 0.18.3.0):**
+
+```nsi
+File "weasel.dll"
+${If} ${RunningX64}
+  File "weaselx64.dll"           ; x64, correct for TSF TIP
+${EndIf}
+File "WeaselSetup.exe"           ; x86, OK
+File "WeaselDeployer.exe"        ; x64 -> loads x86 rime.dll -> CRASH
+File "WeaselServer.exe"          ; x64 -> loads x86 rime.dll -> CRASH
+File "rime.dll"                  ; x86
+```
+
+The old `${If} ${RunningX64}` conditional picked x64 Weasel*.exe on x64 Windows. `rime.dll` (from `output\rime.dll`) is always x86. The 0xC000007B happens deterministically on every x64 Windows install.
+
+### Fix (released in 0.18.4.0)
+
+1. Always install `Win32\Weasel*.exe` + `Win32\rime.dll` (all x86). The x64 Windows host runs them via WoW64, which is well-supported and the standard deployment model for 32-bit rime/weasel on 64-bit Windows.
+2. Removed the `${If} ${RunningX64}` conditional for Weasel EXE selection. `weaselx64.dll` (the TSF 64-bit shim) is still installed unconditionally on x64 hosts - that part was correct and is preserved.
+3. Simplified default `$INSTDIR` setup in `.onInit` to a single `StrCpy $INSTDIR "$PROGRAMFILES64\fluxing"`. The old 4-way `${If} ${AtLeastWin11}` / `${If} ${IsNativeARM64}` / etc. branching was unnecessary complexity.
+4. Fixed the `ForceFluxingSuffix` logic bug in the same .onInit (the `StrCmp` chain fall-through that always routed to `not_fluxing` - see L13 for context).
+5. Added a doc-only comment in `.onInit` about `/LOG=path` for NSIS install logging. Standard NSIS does not support `LogSet on` (requires `NSIS_CONFIG_LOG` build flag); users and deploy scripts can pass `/LOG=path\to\file.log` to get a full install log for post-mortem.
+
+### Verification (AGENTS.md §2.5 silent-install smoke test)
+
+```
+fluxing-0184-test8\
+  └─ ProgramFiles\fluxing\
+       ├─ weasel\
+       │    ├─ WeaselServer.exe   (x86, 1120768 bytes)
+       │    ├─ WeaselDeployer.exe (x86,  984064 bytes)
+       │    ├─ WeaselSetup.exe    (x86,  286208 bytes)
+       │    ├─ rime.dll           (x86, 3039744 bytes, lua-linked)
+       │    ├─ weasel.dll         (x86,  985600 bytes)
+       │    ├─ weaselx64.dll      (x64, 1135104 bytes, TSF 64-bit shim)
+       │    ├─ WinSparkle.dll     (x86, 1930240 bytes)
+       │    └─ uninstall.exe      (x86,  135790 bytes)
+       └─ user1\fluxing\             <- user-data, co-located
+```
+
+All Weasel EXE/DLL are x86. `weaselx64.dll` is x64 (TSF text input processor must be x64 to match the 64-bit TSF service). `rime.dll` is x86 (librime is Win32-only). WoW64 loads all x86 binaries on the x64 Windows host without conflict.
+
+### Lessons
+
+1. Never mix x64 EXE with x86 DLL in a single install. Check the machine type (PE header offset 0x3C, then offset +4 is the machine field: 0x14C = x86, 0x8664 = x64, 0xAA64 = ARM64) of every binary in the install set. A single mismatch produces 0xC000007B with no actionable error message.
+2. WoW64 is process-level, not module-level. The L10 §3 / AGENTS.md §4.4 comment "works on x64 OS via WoW64" is correct only when all DLLs in the process are the same arch as the EXE. The standard deployment for 32-bit rime/weasel is x86 Weasel.exe + x86 rime.dll + x64 weaselx64.dll (the last one only for TSF 64-bit shim, loaded by Windows TSF service not by Weasel).
+3. Always inspect installed binary architectures in the silent-install smoke test. Add to AGENTS.md §2.5: after every `xbuild.bat installer`, verify the PE header of every `*.exe` and `*.dll` in the test install root and fail if any EXE is not the expected arch.
+4. `${If} ${RunningX64}` to install x64 Weasel binaries is a footgun. The conditional tempts the installer to "do the right thing" for the host arch, but the only x64 thing we install is `weaselx64.dll` (TSF shim). All actual Weasel process binaries must be x86 to match `rime.dll`.
+5. Build output directories are arch-fragmented. `output\` is x64 (msbuild default); `output\Win32\` is x86 (xmake `-a x86`). A spec/AGENTS.md note that all release installs use the `output\Win32\*` binaries is now mandatory.
+
+**Related**: L10 §3 (librime is Win32-only), L13 (the previous path-force bug - same install.nsi file, same silent-smoke-test-blindness pattern), AGENTS.md §2.5 (the silent-install smoke test that finally caught this), AGENTS.md §4.4 (the dangerous zone note that did not anticipate this particular failure mode).
+
+---
+
+## L15 - PowerShell `Start-Process -ArgumentList` with mixed `/D=` and `/LOG=` causes NSIS to concatenate paths
+
+**Symptom** (discovered 2026-06-30, while writing the AGENTS.md §2.5 silent-install smoke test):
+
+```powershell
+Start-Process -FilePath "installer.exe" -ArgumentList @("/S","/D=$dst\ProgramFiles","/LOG=$logPath") -Wait -PassThru
+```
+
+produces:
+
+```
+$dst\ProgramFiles LOG=$logPath\fluxing\weasel\
+```
+
+The `/LOG=` part of the command line gets concatenated into the `/D=` install path, creating a deeply nested garbage path that NSIS then creates as literal subdirectories. The install claims success, but everything is in the wrong place.
+
+### Root cause
+
+`Start-Process -ArgumentList` in PowerShell 5.1 with an array of strings containing `=` characters has a parser quirk: when `-PassThru` is appended and the array elements include key=value pairs, the elements are sometimes merged at the `=` boundary, producing `ProgramFiles LOG=$logPath` as a single arg. NSIS then sees `/D=ProgramFiles LOG=$logPath` (the rest got concatenated) and uses that as the install path.
+
+The exact failure mode is brittle and depends on PowerShell version + Windows build. The robust workaround is: never use `Start-Process -ArgumentList` with key=value pairs from PowerShell. Use `cmd /c` invocation instead.
+
+### Fix (in AGENTS.md §2.5 smoke test recipe)
+
+The recipe now uses `cmd /c` form. Verified 2026-06-30 with 0.18.4.0 installer: `cmd /c "F:\soft\00selfmade\rime\release\fluxing-0.18.4.0-installer.exe /S /D=$dst\ProgramFiles"` produced the expected layout, no concatenation.
+
+### Lessons
+
+1. PowerShell `Start-Process -ArgumentList` with `key=value` pairs is fragile. Use `cmd /c` for any installer invocation in scripts. It is one more shell hop, but eliminates the entire class of "PowerShell-merged-args" bugs.
+2. AGENTS.md smoke-test recipes must be copy-paste safe. When a recipe is published, it must work the first time, every time, on a clean dev box. `cmd /c` invocation is the safest cross-Shell default.
+3. This is the same class of bug as L10 §5 ("`/userdir=<x>` got concatenated into `$INSTDIR`") - the same underlying rule applies: any CLI flag the installer does not explicitly handle can end up concatenated into the previous flag's value. The `/D=` flag is particularly vulnerable because its value is a free-form path with no terminator.
+
+**Related**: L09 (NSIS flags and OutFile quirks), L10 §5 (unknown CLI args getting concatenated into $INSTDIR - same root cause class), AGENTS.md §2.5 (the smoke test that surfaced this).
+
+---
