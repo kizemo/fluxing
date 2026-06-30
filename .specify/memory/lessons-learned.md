@@ -1,74 +1,56 @@
-# Lessons Learned · 经验教训沉淀
+﻿# Lessons Learned 路 缁忛獙鏁欒娌夋穩
 
-> 范围：Fluxing 项目（rime/weasel fork）从开发事故中提炼的可复用教训。
-> 每条以"事故 → 根因 → 教训"格式记录；commit `c0951ca` 教训为本文件起源。
-
+> 鑼冨洿锛欶luxing 椤圭洰锛坮ime/weasel fork锛変粠寮€鍙戜簨鏁呬腑鎻愮偧鐨勫彲澶嶇敤鏁欒銆?> 姣忔潯浠?浜嬫晠 鈫?鏍瑰洜 鈫?鏁欒"鏍煎紡璁板綍锛沜ommit `c0951ca` 鏁欒涓烘湰鏂囦欢璧锋簮銆?
 ---
 
-## L01 · 中文 UTF-8 文件读写 — PowerShell 5.1 GBK 代码页陷阱
+## L01 路 涓枃 UTF-8 鏂囦欢璇诲啓 鈥?PowerShell 5.1 GBK 浠ｇ爜椤甸櫡闃?
+**浜嬫晠**锛歝ommit `c0951ca` 鍖呭惈鐨?8 浠?spec 鏂囨。锛堝惈涓枃 UTF-8锛夊疄闄呬负"GBK 瀛楄妭琚敊璇?Unicode 鍖栧啀 UTF-8 缂栫爜"鐨勬贩鍚堜綋銆俙git hash-object` 楠岃瘉鏄剧ず瀛楄妭 hash 涓€鑷达紙鍥犱负 working 鏂囦欢灏辨槸 commit 鏃跺啓鐨勫瓧鑺傦級锛屼絾涓枃鍐呭宸叉崯鍧忋€?
+**鏍瑰洜**锛圥owerShell 5.1 + chcp 936锛夛細
 
-**事故**：commit `c0951ca` 包含的 8 份 spec 文档（含中文 UTF-8）实际为"GBK 字节被错误 Unicode 化再 UTF-8 编码"的混合体。`git hash-object` 验证显示字节 hash 一致（因为 working 文件就是 commit 时写的字节），但中文内容已损坏。
+1. `Get-Content -Raw path` 璇?UTF-8 鏂囦欢鏃讹紝**鎸夊綋鍓嶄唬鐮侀〉 (936 = GBK) 瑙ｇ爜 UTF-8 瀛楄妭** 鈫?杩斿洖"GBK 瀛楄妭搴忓垪"瀛楃涓诧紙鍗筹細鍘熷瀛楄妭琚敊璇綋 GBK 鍙屽瓧鑺傚瓧绗﹁В璇诲悗鐨?Unicode 鐮佺偣搴忓垪锛?2. 鍦?PowerShell 瀛楃涓插眰鍋?`$s.Substring(...)` / `-replace` / `+` 绛夋搷浣?鈫?瀛楃涓查噷鏄敊璇爜鐐?3. `[System.IO.File]::WriteAllText(path, $s, [UTF8Encoding]$false)` 鎶?GBK 瀛楄妭搴忓垪"褰?Unicode 鐮佺偣鍐欏叆 鈫?姣忎釜 GBK 瀛楄妭 (0x00-0xFF) 褰?1 涓?Unicode 鐮佺偣 鈫?UTF-8 缂栫爜涓?2 瀛楄妭
+4. `Get-Content` 璇诲洖楠岃瘉鏃?*璧板悓鏍风殑 GBK 璺緞** 鈫?鐪嬭捣鏉?鑷唇"锛?*鏈鍙戠幇鎹熷潖**
 
-**根因**（PowerShell 5.1 + chcp 936）：
-
-1. `Get-Content -Raw path` 读 UTF-8 文件时，**按当前代码页 (936 = GBK) 解码 UTF-8 字节** → 返回"GBK 字节序列"字符串（即：原始字节被错误当 GBK 双字节字符解读后的 Unicode 码点序列）
-2. 在 PowerShell 字符串层做 `$s.Substring(...)` / `-replace` / `+` 等操作 → 字符串里是错误码点
-3. `[System.IO.File]::WriteAllText(path, $s, [UTF8Encoding]$false)` 把"GBK 字节序列"当 Unicode 码点写入 → 每个 GBK 字节 (0x00-0xFF) 当 1 个 Unicode 码点 → UTF-8 编码为 2 字节
-4. `Get-Content` 读回验证时**走同样的 GBK 路径** → 看起来"自洽"，**未被发现损坏**
-
-**为什么 `git hash-object` 显示一致**：git 算的是字节 hash，working 文件就是 commit 时写的字节，hash 当然一致 — **但内容已坏**。
-
-**教训（必须遵守）**：
-
-| 操作 | 允许 | 禁止 |
+**涓轰粈涔?`git hash-object` 鏄剧ず涓€鑷?*锛歡it 绠楃殑鏄瓧鑺?hash锛寃orking 鏂囦欢灏辨槸 commit 鏃跺啓鐨勫瓧鑺傦紝hash 褰撶劧涓€鑷?鈥?**浣嗗唴瀹瑰凡鍧?*銆?
+**鏁欒锛堝繀椤婚伒瀹堬級**锛?
+| 鎿嶄綔 | 鍏佽 | 绂佹 |
 |---|---|---|
-| 写中文 UTF-8 | `[System.IO.File]::WriteAllText(path, content, [System.Text.UTF8Encoding]::new($false))` | `Out-File` / `>` / `Set-Content` / `Get-Content \| Set-Content` |
-| 读中文 UTF-8 | `[System.IO.File]::ReadAllText(path, [System.Text.Encoding]::UTF8)` 或 `ReadAllBytes` + 显式 `UTF8.GetString` | `Get-Content` / `cat` / `[IO.File]::ReadAllText(path)` (无 encoding) |
-| 验证 UTF-8 完整性 | byte-level：`[System.IO.File]::ReadAllBytes(path)` 检查首字节 0xE0-0xEF、后续 0x80-0xBF；或 `git hash-object` + 与已验证源比较 | `Get-Content` 读回再 echo — **会再次 GBK 化** |
-| 中文内容来源 | 优先从对话上下文取（已 LLM 处理为 Unicode 码点） | 从已损坏文件读再写 — **污染传染** |
+| 鍐欎腑鏂?UTF-8 | `[System.IO.File]::WriteAllText(path, content, [System.Text.UTF8Encoding]::new($false))` | `Out-File` / `>` / `Set-Content` / `Get-Content \| Set-Content` |
+| 璇讳腑鏂?UTF-8 | `[System.IO.File]::ReadAllText(path, [System.Text.Encoding]::UTF8)` 鎴?`ReadAllBytes` + 鏄惧紡 `UTF8.GetString` | `Get-Content` / `cat` / `[IO.File]::ReadAllText(path)` (鏃?encoding) |
+| 楠岃瘉 UTF-8 瀹屾暣鎬?| byte-level锛歚[System.IO.File]::ReadAllBytes(path)` 妫€鏌ラ瀛楄妭 0xE0-0xEF銆佸悗缁?0x80-0xBF锛涙垨 `git hash-object` + 涓庡凡楠岃瘉婧愭瘮杈?| `Get-Content` 璇诲洖鍐?echo 鈥?**浼氬啀娆?GBK 鍖?* |
+| 涓枃鍐呭鏉ユ簮 | 浼樺厛浠庡璇濅笂涓嬫枃鍙栵紙宸?LLM 澶勭悊涓?Unicode 鐮佺偣锛?| 浠庡凡鎹熷潖鏂囦欢璇诲啀鍐?鈥?**姹℃煋浼犳煋** |
 
-**验证脚本模板**：
-
+**楠岃瘉鑴氭湰妯℃澘**锛?
 ```powershell
-# 写
-$content = "中文内容"  # 从对话上下文
+# 鍐?$content = "涓枃鍐呭"  # 浠庡璇濅笂涓嬫枃
 [System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))
 
-# 验证（byte-level）
-$bytes = [System.IO.File]::ReadAllBytes($path)
+# 楠岃瘉锛坆yte-level锛?$bytes = [System.IO.File]::ReadAllBytes($path)
 $first30 = ($bytes[0..29] | ForEach-Object { $_.ToString("X2") }) -join " "
 Write-Host "First 30 bytes: $first30"
-# 期望: 23 20 ... (ASCII 头) 或 E4 ... (中文 UTF-8 头 E0-EF)
-# 不期望: C0 C1 C2 C3 C4 ... (GBK 字节被错误 Unicode 化的 2 字节 UTF-8)
+# 鏈熸湜: 23 20 ... (ASCII 澶? 鎴?E4 ... (涓枃 UTF-8 澶?E0-EF)
+# 涓嶆湡鏈? C0 C1 C2 C3 C4 ... (GBK 瀛楄妭琚敊璇?Unicode 鍖栫殑 2 瀛楄妭 UTF-8)
 ```
 
-**commit 前自检**：
-
+**commit 鍓嶈嚜妫€**锛?
 ```powershell
 git add path
-git hash-object -w path  # 写 blob
-git cat-file -p <hash> | git hash-object --stdin  # 验证可逆
-```
+git hash-object -w path  # 鍐?blob
+git cat-file -p <hash> | git hash-object --stdin  # 楠岃瘉鍙€?```
 
 ---
 
-## L02 · 中文内容修改必须用 byte-level Replace — 避开 PS 字符串层
+## L02 路 涓枃鍐呭淇敼蹇呴』鐢?byte-level Replace 鈥?閬垮紑 PS 瀛楃涓插眰
 
-**事故**：在 `lessons-learned.md` 起草时，多个 `Contains()` / `Replace()` 失败返回 `False`，即使字符串视觉上完全相同。
-
-**根因**：PowerShell 5.1 + chcp 936 下，**[char]0x987A 形式的 Unicode 转义在 `here-string` 中会被错误编码**，导致 PS 解析器将字面量按 GBK 解读后再存为 Unicode 字符串 — 与文件实际 UTF-8 字节解析后的字符串不匹配。
-
-**教训**：
-
-- **能用 byte 操作就用 byte 操作**：`[System.IO.File]::ReadAllBytes(path)` + `[System.Text.Encoding]::UTF8.GetBytes(searchStr)` + byte-by-byte 比较
-- **PS 字符串匹配不可靠**：当文件含中文且 PS 5.1 在 GBK 代码页时，**所有 PS 字符串层操作（`-match`、`-replace`、`.Contains()`、`.Replace()`、`.IndexOf()`）都可能给出错误结果**
-- **测试 byte 匹配是否正确**：先 `Write-Host` 拼接 byte 数组的 hex，对照文件实际字节序列
-
-**byte-level replace 模板**：
-
+**浜嬫晠**锛氬湪 `lessons-learned.md` 璧疯崏鏃讹紝澶氫釜 `Contains()` / `Replace()` 澶辫触杩斿洖 `False`锛屽嵆浣垮瓧绗︿覆瑙嗚涓婂畬鍏ㄧ浉鍚屻€?
+**鏍瑰洜**锛歅owerShell 5.1 + chcp 936 涓嬶紝**[char]0x987A 褰㈠紡鐨?Unicode 杞箟鍦?`here-string` 涓細琚敊璇紪鐮?*锛屽鑷?PS 瑙ｆ瀽鍣ㄥ皢瀛楅潰閲忔寜 GBK 瑙ｈ鍚庡啀瀛樹负 Unicode 瀛楃涓?鈥?涓庢枃浠跺疄闄?UTF-8 瀛楄妭瑙ｆ瀽鍚庣殑瀛楃涓蹭笉鍖归厤銆?
+**鏁欒**锛?
+- **鑳界敤 byte 鎿嶄綔灏辩敤 byte 鎿嶄綔**锛歚[System.IO.File]::ReadAllBytes(path)` + `[System.Text.Encoding]::UTF8.GetBytes(searchStr)` + byte-by-byte 姣旇緝
+- **PS 瀛楃涓插尮閰嶄笉鍙潬**锛氬綋鏂囦欢鍚腑鏂囦笖 PS 5.1 鍦?GBK 浠ｇ爜椤垫椂锛?*鎵€鏈?PS 瀛楃涓插眰鎿嶄綔锛坄-match`銆乣-replace`銆乣.Contains()`銆乣.Replace()`銆乣.IndexOf()`锛夐兘鍙兘缁欏嚭閿欒缁撴灉**
+- **娴嬭瘯 byte 鍖归厤鏄惁姝ｇ‘**锛氬厛 `Write-Host` 鎷兼帴 byte 鏁扮粍鐨?hex锛屽鐓ф枃浠跺疄闄呭瓧鑺傚簭鍒?
+**byte-level replace 妯℃澘**锛?
 ```powershell
 $bytes = [System.IO.File]::ReadAllBytes($path)
-$marker = [System.Text.Encoding]::UTF8.GetBytes("要找的字节模式")
+$marker = [System.Text.Encoding]::UTF8.GetBytes("瑕佹壘鐨勫瓧鑺傛ā寮?)
 $start = -1
 for ($i = 0; $i -le $bytes.Length - $marker.Length; $i++) {
     $match = $true
@@ -77,171 +59,139 @@ for ($i = 0; $i -le $bytes.Length - $marker.Length; $i++) {
     }
     if ($match) { $start = $i; break }
 }
-# 类似找 endMarker
-# 拼接: $bytes[0..start] + newBytes + $bytes[end..end]
+# 绫讳技鎵?endMarker
+# 鎷兼帴: $bytes[0..start] + newBytes + $bytes[end..end]
 [System.IO.File]::WriteAllBytes($path, $combined)
 ```
 
 ---
 
-## L03 · librime 1.13 key_binder 配置 — 哪些是支持的、哪些是"假阳性"
+## L03 路 librime 1.13 key_binder 閰嶇疆 鈥?鍝簺鏄敮鎸佺殑銆佸摢浜涙槸"鍋囬槼鎬?
 
-**事故**：spec 005 实施的"Shift_L 上屏第 2 候选" 单测 13/13 PASS，但**实际运行不生效**（按 Shift_L 直接上屏英文）。
+**浜嬫晠**锛歴pec 005 瀹炴柦鐨?Shift_L 涓婂睆绗?2 鍊欓€? 鍗曟祴 13/13 PASS锛屼絾**瀹為檯杩愯涓嶇敓鏁?*锛堟寜 Shift_L 鐩存帴涓婂睆鑻辨枃锛夈€?
+**鏍瑰洜**锛坄librime/src/rime/gear/key_binder.cc` + `ascii_composer.cc` 婧愮爜楠岃瘉锛夛細
 
-**根因**（`librime/src/rime/gear/key_binder.cc` + `ascii_composer.cc` 源码验证）：
+1. `key_binder` 鐨?`send:` 瀛楁瑙ｆ瀽涓?`KeyEvent::Parse(target)`锛屽崟瀛楃瀛楅潰閲忥紙濡?`"2"`锛夎蛋 `keycode_ = '2' = 0x32`锛?*鍚堟硶** 鈥?浣嗕粎褰?key_binder **鑳芥敹鍒?*杩欎釜 event 鏃舵墠鐢熸晥
+2. `engine.processors_` 椤哄簭鍦?rime_ice schema 鏄?`ascii_composer 鈫?recognizer 鈫?key_binder 鈫?...`
+3. `ascii_composer.cc:80-103` 鐪嬪埌 `ch == XK_Shift_L` 鏃?*鏃犳潯浠惰褰?* `shift_key_pressed_=true` 骞?return `kNoop` 鈥?key_binder 鐪嬩笉鍒板崟鐙?Shift_L press event
+4. 鏉惧紑 Shift_L 鏃?ascii_composer 璋?`ToggleAsciiModeWithKey(XK_Shift_L)` 鈫?鍥犱负 `Shift_L: commit_code` 瑙﹀彂浜?`SwitchAsciiMode(true, commit_code)` 鈫?涓婂睆缂栫爜 + 鍒囪嫳鏂?5. `key_binder` 鐨?`KeyEvent::operator==` 涓ユ牸姣旇緝 `keycode + modifier (鍚?release mask)` 鈥?`binding.accept: shift+l` 鏄?`(L, Shift)`锛?*涓嶅尮閰?* `Shift_L release event (Shift_L, RELEASE)` 鈥?librime 1.13 key_binder **涓嶅鐞?release event**
 
-1. `key_binder` 的 `send:` 字段解析为 `KeyEvent::Parse(target)`，单字符字面量（如 `"2"`）走 `keycode_ = '2' = 0x32`，**合法** — 但仅当 key_binder **能收到**这个 event 时才生效
-2. `engine.processors_` 顺序在 rime_ice schema 是 `ascii_composer → recognizer → key_binder → ...`
-3. `ascii_composer.cc:80-103` 看到 `ch == XK_Shift_L` 时**无条件记录** `shift_key_pressed_=true` 并 return `kNoop` — key_binder 看不到单独 Shift_L press event
-4. 松开 Shift_L 时 ascii_composer 调 `ToggleAsciiModeWithKey(XK_Shift_L)` → 因为 `Shift_L: commit_code` 触发了 `SwitchAsciiMode(true, commit_code)` → 上屏编码 + 切英文
-5. `key_binder` 的 `KeyEvent::operator==` 严格比较 `keycode + modifier (含 release mask)` — `binding.accept: shift+l` 是 `(L, Shift)`，**不匹配** `Shift_L release event (Shift_L, RELEASE)` — librime 1.13 key_binder **不处理 release event**
-
-**教训**：
-
-| 假设 | 实际 |
+**鏁欒**锛?
+| 鍋囪 | 瀹為檯 |
 |---|---|
-| 单测 PASS = librime 引擎工作 | **错** — 当前 TestDefaultHotkeys.cpp 只测字符串包含，**不测 librime 行为** |
-| `send: 2` 等数字 keyevent 让 key_binder 转发"选第 2 候选" | **对**（keycode 0x32 走 selector:146 `ch >= XK_0 && ch <= XK_9` 路径），**但前提是 key_binder 真能收到 send target 重定向 event** |
-| `accept: shift+l` 匹配"按住 Shift + 按 L" | **对**（Shift modifier + L keycode 组合）|
-| `accept: shift+l` 匹配"松开 Shift_L" | **错**（release event 不参与 binding 匹配）|
-| `accept: Shift_L` 匹配"按下单独的 Shift_L" | **对**（keycode=Shift_L 数值、modifier=0）|
-| `ascii_composer.switch_key.Shift_L: noop` 等于"完全屏蔽 Shift_L" | **部分对** — `load_bindings:37-38` 跳过 noop 不存 `bindings_` → `ToggleAsciiModeWithKey` 返回 false → **不切英文**；但 ascii_composer 仍会 record `shift_key_pressed_=true` 并 return kNoop → key_binder 仍能看到 Shift_L press event |
+| 鍗曟祴 PASS = librime 寮曟搸宸ヤ綔 | **閿?* 鈥?褰撳墠 TestDefaultHotkeys.cpp 鍙祴瀛楃涓插寘鍚紝**涓嶆祴 librime 琛屼负** |
+| `send: 2` 绛夋暟瀛?keyevent 璁?key_binder 杞彂"閫夌 2 鍊欓€? | **瀵?*锛坘eycode 0x32 璧?selector:146 `ch >= XK_0 && ch <= XK_9` 璺緞锛夛紝**浣嗗墠鎻愭槸 key_binder 鐪熻兘鏀跺埌 send target 閲嶅畾鍚?event** |
+| `accept: shift+l` 鍖归厤"鎸変綇 Shift + 鎸?L" | **瀵?*锛圫hift modifier + L keycode 缁勫悎锛墊
+| `accept: shift+l` 鍖归厤"鏉惧紑 Shift_L" | **閿?*锛坮elease event 涓嶅弬涓?binding 鍖归厤锛墊
+| `accept: Shift_L` 鍖归厤"鎸変笅鍗曠嫭鐨?Shift_L" | **瀵?*锛坘eycode=Shift_L 鏁板€笺€乵odifier=0锛墊
+| `ascii_composer.switch_key.Shift_L: noop` 绛変簬"瀹屽叏灞忚斀 Shift_L" | **閮ㄥ垎瀵?* 鈥?`load_bindings:37-38` 璺宠繃 noop 涓嶅瓨 `bindings_` 鈫?`ToggleAsciiModeWithKey` 杩斿洖 false 鈫?**涓嶅垏鑻辨枃**锛涗絾 ascii_composer 浠嶄細 record `shift_key_pressed_=true` 骞?return kNoop 鈫?key_binder 浠嶈兘鐪嬪埌 Shift_L press event |
 
-**修复 spec 005 rev3**（本仓库 c0e3f85 后 → 待 commit）：
+**淇 spec 005 rev3**锛堟湰浠撳簱 c0e3f85 鍚?鈫?寰?commit锛夛細
 
-- `ascii_composer.switch_key.Shift_L: noop` + `Shift_R: noop`（防止 ascii_composer 切英文）
-- key_binder 加 4 个 binding（搜狗拼音风格兼容）：
-  - `accept: Shift_L, send: 2, when: has_menu`（单 Shift_L 按下 → 选第 2 候选）
-  - `accept: Shift_R, send: 3, when: has_menu`（单 Shift_R 按下 → 选第 3 候选）
-  - `accept: shift+l, send: 2, when: has_menu`（组合键 Shift+L → 选第 2 候选）
-  - `accept: shift+r, send: 3, when: has_menu`（组合键 Shift+R → 选第 3 候选）
-  - `accept: shift+l, toggle: ascii_mode, when: always`（无候选时 Shift+L 切中英）
-  - `accept: shift+r, toggle: ascii_mode, when: always`（无候选时 Shift+R 切中英）
-  - `accept: Shift_L, toggle: ascii_mode, when: always`（无候选时单 Shift_L 切中英）
-  - `accept: Shift_R, toggle: ascii_mode, when: always`（无候选时单 Shift_R 切中英）
+- `ascii_composer.switch_key.Shift_L: noop` + `Shift_R: noop`锛堥槻姝?ascii_composer 鍒囪嫳鏂囷級
+- key_binder 鍔?4 涓?binding锛堟悳鐙楁嫾闊抽鏍煎吋瀹癸級锛?  - `accept: Shift_L, send: 2, when: has_menu`锛堝崟 Shift_L 鎸変笅 鈫?閫夌 2 鍊欓€夛級
+  - `accept: Shift_R, send: 3, when: has_menu`锛堝崟 Shift_R 鎸変笅 鈫?閫夌 3 鍊欓€夛級
+  - `accept: shift+l, send: 2, when: has_menu`锛堢粍鍚堥敭 Shift+L 鈫?閫夌 2 鍊欓€夛級
+  - `accept: shift+r, send: 3, when: has_menu`锛堢粍鍚堥敭 Shift+R 鈫?閫夌 3 鍊欓€夛級
+  - `accept: shift+l, toggle: ascii_mode, when: always`锛堟棤鍊欓€夋椂 Shift+L 鍒囦腑鑻憋級
+  - `accept: shift+r, toggle: ascii_mode, when: always`锛堟棤鍊欓€夋椂 Shift+R 鍒囦腑鑻憋級
+  - `accept: Shift_L, toggle: ascii_mode, when: always`锛堟棤鍊欓€夋椂鍗?Shift_L 鍒囦腑鑻憋級
+  - `accept: Shift_R, toggle: ascii_mode, when: always`锛堟棤鍊欓€夋椂鍗?Shift_R 鍒囦腑鑻憋級
 
-**未来测试改进**：单测必须**实例化 librime engine + 加载 yaml + 模拟 KeyEvent** — 而不是只测 yaml 字符串包含。这需要 C++ 单测框架 + rime_api.h integration，估 4-6 小时工作量。
-
+**鏈潵娴嬭瘯鏀硅繘**锛氬崟娴嬪繀椤?*瀹炰緥鍖?librime engine + 鍔犺浇 yaml + 妯℃嫙 KeyEvent** 鈥?鑰屼笉鏄彧娴?yaml 瀛楃涓插寘鍚€傝繖闇€瑕?C++ 鍗曟祴妗嗘灦 + rime_api.h integration锛屼及 4-6 灏忔椂宸ヤ綔閲忋€?
 ---
 
-## L04 · librime 1.13 key_binder 支持的 action 类型
+## L04 路 librime 1.13 key_binder 鏀寔鐨?action 绫诲瀷
 
-**事实**（`librime/src/rime/gear/key_binder.cc:185-220` 源码验证）：
+**浜嬪疄**锛坄librime/src/rime/gear/key_binder.cc:185-220` 婧愮爜楠岃瘉锛夛細
 
-key_binder binding 字段支持 4 类 action：
-
-| 字段 | 作用 | 例子 |
+key_binder binding 瀛楁鏀寔 4 绫?action锛?
+| 瀛楁 | 浣滅敤 | 渚嬪瓙 |
 |---|---|---|
-| `send: <KeyEvent>` | 把 KeyEvent 注入 engine 事件流 | `send: Page_Up` / `send: 2` |
-| `send_sequence: <KeySeq>` | 多按键序列 | `send_sequence: "ctrl+a"` |
-| `toggle: <option>` | 切换 option 状态 | `toggle: ascii_mode` / `toggle: ascii_punct` / `toggle: traditionalization` |
-| `set_option: <option>` / `unset_option: <option>` | 强制 set/unset | `set_option: simplification` |
-| `select: <schema>` | 切换 schema | `select: .next` |
+| `send: <KeyEvent>` | 鎶?KeyEvent 娉ㄥ叆 engine 浜嬩欢娴?| `send: Page_Up` / `send: 2` |
+| `send_sequence: <KeySeq>` | 澶氭寜閿簭鍒?| `send_sequence: "ctrl+a"` |
+| `toggle: <option>` | 鍒囨崲 option 鐘舵€?| `toggle: ascii_mode` / `toggle: ascii_punct` / `toggle: traditionalization` |
+| `set_option: <option>` / `unset_option: <option>` | 寮哄埗 set/unset | `set_option: simplification` |
+| `select: <schema>` | 鍒囨崲 schema | `select: .next` |
 
-**不支持**：
-
-- 直接调用 `Selector::SelectCandidateAt(ctx, N)` — selector 不暴露给 key_binder
-- 自定义 lua callback
+**涓嶆敮鎸?*锛?
+- 鐩存帴璋冪敤 `Selector::SelectCandidateAt(ctx, N)` 鈥?selector 涓嶆毚闇茬粰 key_binder
+- 鑷畾涔?lua callback
 - release event binding
-- mouse event binding（mouse 由 WeaselUI 处理，不进 RIME engine）
-
-**间接实现"按数字选候选"**：
-
-- 数字 0-9 key event 走 `Selector:146`：`ch >= XK_0 && ch <= XK_9` → `index = ((ch - XK_0) + 9) % 10` → `SelectCandidateAt(ctx, index)`
-- 即 `1`→第 1 候选, `2`→第 2 候选, `9`→第 9 候选, `0`→第 10 候选
-- binding `send: 2` 重定向按数字 2 即可
+- mouse event binding锛坢ouse 鐢?WeaselUI 澶勭悊锛屼笉杩?RIME engine锛?
+**闂存帴瀹炵幇"鎸夋暟瀛楅€夊€欓€?**锛?
+- 鏁板瓧 0-9 key event 璧?`Selector:146`锛歚ch >= XK_0 && ch <= XK_9` 鈫?`index = ((ch - XK_0) + 9) % 10` 鈫?`SelectCandidateAt(ctx, index)`
+- 鍗?`1`鈫掔 1 鍊欓€? `2`鈫掔 2 鍊欓€? `9`鈫掔 9 鍊欓€? `0`鈫掔 10 鍊欓€?- binding `send: 2` 閲嶅畾鍚戞寜鏁板瓧 2 鍗冲彲
 
 ---
 
-## L05 · Commit 前的最小验证清单
-
-**标准 5 步验证**（每次 commit 前必做）：
-
-1. **byte-level UTF-8 验证**（中文文件）：
-   ```powershell
+## L05 路 Commit 鍓嶇殑鏈€灏忛獙璇佹竻鍗?
+**鏍囧噯 5 姝ラ獙璇?*锛堟瘡娆?commit 鍓嶅繀鍋氾級锛?
+1. **byte-level UTF-8 楠岃瘉**锛堜腑鏂囨枃浠讹級锛?   ```powershell
    $bytes = [System.IO.File]::ReadAllBytes($path)
    "First 30 bytes: " + ($bytes[0..29] | ForEach-Object { $_.ToString("X2") }) -join " "
    ```
-   - ASCII 头: 期望 `0x20-0x7E` 范围
-   - 中文 UTF-8: 期望 `0xE0-0xEF` 起始 + `0x80-0xBF` 后续
-   - GBK 污染信号: 期望**没有** `0xC0/0xC1`（UTF-8 永不合法字节）
-
-2. **git 字节 hash 一致性**：
-   ```bash
+   - ASCII 澶? 鏈熸湜 `0x20-0x7E` 鑼冨洿
+   - 涓枃 UTF-8: 鏈熸湜 `0xE0-0xEF` 璧峰 + `0x80-0xBF` 鍚庣画
+   - GBK 姹℃煋淇″彿: 鏈熸湜**娌℃湁** `0xC0/0xC1`锛圲TF-8 姘镐笉鍚堟硶瀛楄妭锛?
+2. **git 瀛楄妭 hash 涓€鑷存€?*锛?   ```bash
    git add <files>
-   git ls-files -s <path>          # 取出 staging blob hash
-   # 写一个临时文件, 把 staging blob 倒出来, 再 hash
+   git ls-files -s <path>          # 鍙栧嚭 staging blob hash
+   # 鍐欎竴涓复鏃舵枃浠? 鎶?staging blob 鍊掑嚭鏉? 鍐?hash
    git cat-file -p <hash> > /tmp/check.txt
-   git hash-object /tmp/check.txt  # 重新算 hash
+   git hash-object /tmp/check.txt  # 閲嶆柊绠?hash
    ```
-   - 倒出来重 hash 应一致（round-trip test）
-
-3. **单测 PASS**（更新过的单测必须全部 PASS，**包括新加的 case**）：
+   - 鍊掑嚭鏉ラ噸 hash 搴斾竴鑷达紙round-trip test锛?
+3. **鍗曟祴 PASS**锛堟洿鏂拌繃鐨勫崟娴嬪繀椤诲叏閮?PASS锛?*鍖呮嫭鏂板姞鐨?case**锛夛細
    ```bash
    cd test/TestDefaultHotkeys
    ./TestDefaultHotkeys.exe ../../output/data/default.yaml
    ```
-   - **0 failures 才是真 PASS**（不能"skip 几个 case"）
+   - **0 failures 鎵嶆槸鐪?PASS**锛堜笉鑳?skip 鍑犱釜 case"锛?
+4. **diff 瑙嗚妫€鏌?*锛堜腑鏂?commit message / 涓枃鏂囨。锛夛細
+   - `git diff --cached` 鐪嬫槸鍚︽湁"涔辩爜"锛堝 `閻?閺傝 妞擿锛?鈥?杩欏氨鏄?GBK 姹℃煋淇″彿
 
-4. **diff 视觉检查**（中文 commit message / 中文文档）：
-   - `git diff --cached` 看是否有"乱码"（如 `鐨 鏂规 椔`） — 这就是 GBK 污染信号
-
-5. **commit message 简洁性**：Conventional Commits 格式 `feat(scope): ...` / `fix(scope): ...` / `docs(spec): ...`
-
----
-
-## L06 · GitHub MCP 在 Codex 中的不可用场景
-
-**事实**：
-
-- `mcp__github__*` 工具需要 host MCP server 在 `~/.codex/config.toml` 的 `[mcp_servers]` 节注册
-- 一次 Codex 会话**不会自动继承**另一次会话的 MCP 配置
-- 当 host 配置缺失时，`mcp__github__*` 调用返回 `unsupported call`（不是"权限不足"，是"工具未注册"）
-
-**绕道方案**：
-
-- 给用户**预先写好** GitHub About / Description / Topics 文本，用户手动粘贴
-- 用 `mcp__playwright__browser_navigate` 打开 GitHub 网页（playwright 工具**是**在 Codex desktop app 内置的）— 但仅适用于登录后的浏览器会话
-- 走 GitHub API（直接 `Invoke-RestMethod` + PAT token）— 不走 MCP
-
-**改进建议**：在 project-level `AGENTS.md` 中明确"在每次 Codex 会话开始时，先验证 `mcp__github__search_repositories` 是否返回 `unsupported call`；若是，提示用户重新配置 MCP"
+5. **commit message 绠€娲佹€?*锛欳onventional Commits 鏍煎紡 `feat(scope): ...` / `fix(scope): ...` / `docs(spec): ...`
 
 ---
 
-## L07 · `Out-File -Encoding utf8` 与 `[UTF8Encoding]::new($false)` 的区别
+## L06 路 GitHub MCP 鍦?Codex 涓殑涓嶅彲鐢ㄥ満鏅?
+**浜嬪疄**锛?
+- `mcp__github__*` 宸ュ叿闇€瑕?host MCP server 鍦?`~/.codex/config.toml` 鐨?`[mcp_servers]` 鑺傛敞鍐?- 涓€娆?Codex 浼氳瘽**涓嶄細鑷姩缁ф壙**鍙︿竴娆′細璇濈殑 MCP 閰嶇疆
+- 褰?host 閰嶇疆缂哄け鏃讹紝`mcp__github__*` 璋冪敤杩斿洖 `unsupported call`锛堜笉鏄?鏉冮檺涓嶈冻"锛屾槸"宸ュ叿鏈敞鍐?锛?
+**缁曢亾鏂规**锛?
+- 缁欑敤鎴?*棰勫厛鍐欏ソ** GitHub About / Description / Topics 鏂囨湰锛岀敤鎴锋墜鍔ㄧ矘璐?- 鐢?`mcp__playwright__browser_navigate` 鎵撳紑 GitHub 缃戦〉锛坧laywright 宸ュ叿**鏄?*鍦?Codex desktop app 鍐呯疆鐨勶級鈥?浣嗕粎閫傜敤浜庣櫥褰曞悗鐨勬祻瑙堝櫒浼氳瘽
+- 璧?GitHub API锛堢洿鎺?`Invoke-RestMethod` + PAT token锛夆€?涓嶈蛋 MCP
 
-**事实**：
+**鏀硅繘寤鸿**锛氬湪 project-level `AGENTS.md` 涓槑纭?鍦ㄦ瘡娆?Codex 浼氳瘽寮€濮嬫椂锛屽厛楠岃瘉 `mcp__github__search_repositories` 鏄惁杩斿洖 `unsupported call`锛涜嫢鏄紝鎻愮ず鐢ㄦ埛閲嶆柊閰嶇疆 MCP"
 
-- `Out-File -Encoding utf8` 写 **UTF-8 WITH BOM** (3 bytes EF BB BF 前缀)
-- `Out-File -Encoding utf8BOM` 同样 BOM
-- `Out-File -Encoding utf8NoBOM` 写 UTF-8 NO BOM
-- `[System.IO.File]::WriteAllText(path, content, [System.Text.UTF8Encoding]::new($false))` 写 UTF-8 NO BOM
-- `[System.IO.File]::WriteAllText(path, content, [System.Text.Encoding]::UTF8)` 写 UTF-8 WITH BOM（默认）
-
-**使用规范**：
-
-- RIME yaml / spec 文档 / 我们项目的所有文本文件 → **UTF-8 NO BOM**
-- 工具：用 `[System.IO.File]::WriteAllText(path, content, [System.Text.UTF8Encoding]::new($false))`
-- **不要用** `Out-File -Encoding utf8`（会污染 BOM）
 ---
 
-## L08 · GitHub API PATCH repository endpoint 的中文处理 quirk
+## L07 路 `Out-File -Encoding utf8` 涓?`[UTF8Encoding]::new($false)` 鐨勫尯鍒?
+**浜嬪疄**锛?
+- `Out-File -Encoding utf8` 鍐?**UTF-8 WITH BOM** (3 bytes EF BB BF 鍓嶇紑)
+- `Out-File -Encoding utf8BOM` 鍚屾牱 BOM
+- `Out-File -Encoding utf8NoBOM` 鍐?UTF-8 NO BOM
+- `[System.IO.File]::WriteAllText(path, content, [System.Text.UTF8Encoding]::new($false))` 鍐?UTF-8 NO BOM
+- `[System.IO.File]::WriteAllText(path, content, [System.Text.Encoding]::UTF8)` 鍐?UTF-8 WITH BOM锛堥粯璁わ級
 
-**事故**：用 GitHub REST API PATCH /repos/{owner}/{repo} 修改 description 字段时，全中文 description 被替换为问号，Topics 也被丢弃（topics 必须用 /repos/{owner}/{repo}/topics 端点）。
+**浣跨敤瑙勮寖**锛?
+- RIME yaml / spec 鏂囨。 / 鎴戜滑椤圭洰鐨勬墍鏈夋枃鏈枃浠?鈫?**UTF-8 NO BOM**
+- 宸ュ叿锛氱敤 `[System.IO.File]::WriteAllText(path, content, [System.Text.UTF8Encoding]::new($false))`
+- **涓嶈鐢?* `Out-File -Encoding utf8`锛堜細姹℃煋 BOM锛?---
 
-**根因**：
+## L08 路 GitHub API PATCH repository endpoint 鐨勪腑鏂囧鐞?quirk
 
-- GitHub API PATCH /repos/{owner}/{repo} 端点在某些场景下会把全非 ASCII 描述里的中文字符替换为问号 — 已知行为，不是字符编码问题（request body 是干净 UTF-8）
-- 修复：把 description 写成英文为主 + 中文括号的形式，GitHub 服务端会保留作为整体的 description 内的非 ASCII 片段
-- Topics 字段在 PATCH /repos/{owner}/{repo} 端点不会修改（即使 body 里写 topics:[...] 也被忽略）
-- 必须用独立端点 PUT /repos/{owner}/{repo}/topics + accept 头 application/vnd.github.mercy-preview+json + body {"names":[...]}
+**浜嬫晠**锛氱敤 GitHub REST API PATCH /repos/{owner}/{repo} 淇敼 description 瀛楁鏃讹紝鍏ㄤ腑鏂?description 琚浛鎹负闂彿锛孴opics 涔熻涓㈠純锛坱opics 蹇呴』鐢?/repos/{owner}/{repo}/topics 绔偣锛夈€?
+**鏍瑰洜**锛?
+- GitHub API PATCH /repos/{owner}/{repo} 绔偣鍦ㄦ煇浜涘満鏅笅浼氭妸鍏ㄩ潪 ASCII 鎻忚堪閲岀殑涓枃瀛楃鏇挎崲涓洪棶鍙?鈥?宸茬煡琛屼负锛屼笉鏄瓧绗︾紪鐮侀棶棰橈紙request body 鏄共鍑€ UTF-8锛?- 淇锛氭妸 description 鍐欐垚鑻辨枃涓轰富 + 涓枃鎷彿鐨勫舰寮忥紝GitHub 鏈嶅姟绔細淇濈暀浣滀负鏁翠綋鐨?description 鍐呯殑闈?ASCII 鐗囨
+- Topics 瀛楁鍦?PATCH /repos/{owner}/{repo} 绔偣涓嶄細淇敼锛堝嵆浣?body 閲屽啓 topics:[...] 涔熻蹇界暐锛?- 蹇呴』鐢ㄧ嫭绔嬬鐐?PUT /repos/{owner}/{repo}/topics + accept 澶?application/vnd.github.mercy-preview+json + body {"names":[...]}
 
-**教训**：
-
-- GitHub About 改 Description 时：全英文或英文为主 + 中文括号，不要用全中文 description
-- Topics 必须用独立 /topics 端点 (PUT)，不是 /repos/{owner}/{repo} 的 PATCH 里的 topics 字段
-- 验证：改完后 GET 仓库信息，byte-level 检查 description UTF-8 字节序列是否完整 (0xE0-0xEF 起始，无 0x3F 替代)
-- 不能用 Invoke-RestMethod | Select-Object 验证 — PS 5.1 GBK 化会把中文显示成乱码，误判 API 失败
+**鏁欒**锛?
+- GitHub About 鏀?Description 鏃讹細鍏ㄨ嫳鏂囨垨鑻辨枃涓轰富 + 涓枃鎷彿锛屼笉瑕佺敤鍏ㄤ腑鏂?description
+- Topics 蹇呴』鐢ㄧ嫭绔?/topics 绔偣 (PUT)锛屼笉鏄?/repos/{owner}/{repo} 鐨?PATCH 閲岀殑 topics 瀛楁
+- 楠岃瘉锛氭敼瀹屽悗 GET 浠撳簱淇℃伅锛宐yte-level 妫€鏌?description UTF-8 瀛楄妭搴忓垪鏄惁瀹屾暣 (0xE0-0xEF 璧峰锛屾棤 0x3F 鏇夸唬)
+- 涓嶈兘鐢?Invoke-RestMethod | Select-Object 楠岃瘉 鈥?PS 5.1 GBK 鍖栦細鎶婁腑鏂囨樉绀烘垚涔辩爜锛岃鍒?API 澶辫触
 
 ## L09 - NSIS install.nsi: BOM + OutFile hard-coded + line endings
 
@@ -259,7 +209,7 @@ After fixing, the installer built and copied to rchives/fluxing-0.18.0.0-instal
 
 2. **OutFile was hard-coded**: OutFile "archives\fluxing-0.18.0.0-installer.exe". Every build silently overwrote the previous release file at the same path. Fix: OutFile "archives\fluxing-\.\-installer.exe".
 
-3. **NSIS tolerates lone CR ( x0D without  x0A) but should be CRLF**. Byte-level LF→CRLF conversion (PowerShell) must check ytes[i] == 0x0A { prepend 0x0D } BEFORE appending  x0A. Reversing the order produces  x0A 0x0D (LF-CR, Mac classic) which is technically valid NSIS line ending but inconsistent.
+3. **NSIS tolerates lone CR ( x0D without  x0A) but should be CRLF**. Byte-level LF鈫扖RLF conversion (PowerShell) must check ytes[i] == 0x0A { prepend 0x0D } BEFORE appending  x0A. Reversing the order produces  x0A 0x0D (LF-CR, Mac classic) which is technically valid NSIS line ending but inconsistent.
 
 **Lesson**:
 - Before NSIS build: verify output/install.nsi has BOM (ytes[0..2] == EF BB BF), 100% CRLF (CRLF count == LF count + 1 for BOM-less file, == for BOM file), no  xC0/0xC1 overlong bytes.
@@ -269,4 +219,51 @@ After fixing, the installer built and copied to rchives/fluxing-0.18.0.0-instal
 
 **NSIS install-path bug for user data**: \ is reset to \\weasel (${WEASEL_ROOT}) inside the install section (line 217 of upstream weasel install.nsi). Any reference to \ after that point gives the *engine* install path, not the user-visible root. To use the user-visible root, save it BEFORE the reset: StrCpy \ "\" then StrCpy \ "\".
 
-**Avoid WeaselSetup /userdir:<path>** for paths that end in user1 etc. — WeaselSetup.cpp::Run() does EnsureFluxingUserDataSuffix on the path and appends \fluxing if the last segment isn't luxing. So /userdir:foo\user1 becomes oo\user1\fluxing in the registry. If you need the exact path, write the registry key directly from NSIS: WriteRegStr HKCU "Software\Fluxing\Weasel" "RimeUserDir" "<path>" (and pre-create the dir with CreateDirectory).
+**Avoid WeaselSetup /userdir:<path>** for paths that end in user1 etc. 鈥?WeaselSetup.cpp::Run() does EnsureFluxingUserDataSuffix on the path and appends \fluxing if the last segment isn't luxing. So /userdir:foo\user1 becomes oo\user1\fluxing in the registry. If you need the exact path, write the registry key directly from NSIS: WriteRegStr HKCU "Software\Fluxing\Weasel" "RimeUserDir" "<path>" (and pre-create the dir with CreateDirectory).
+---
+
+## L10 - librime-lua integration: cmake plugin auto-discovery, MSBuild import lib quirk, and Win32-only librime
+
+**Symptom**: After upgrading from 0.18.1.0 to a build with rime_ice schema, typing Chinese produced no candidates. WeaselServer log showed: error creating processor/translator/filter: 'lua_*'. The rime_ice schema is heavily lua-dependent (6 lua_translator, 6 lua_filter, 1 lua_processor); without lua it silently degrades.
+
+**Root cause** (3 layered issues discovered while fixing):
+
+1. **librime is a git submodule; cmake build auto-discovers librime/plugins/* for plugin DLLs**. If no plugin is present, rime builds without lua_processor/lua_translator/lua_filter symbols. rime.dll ends up 2.3 MB (no lua) instead of 3.0 MB (with lua).
+   - **Fix**: vendor hchunhui/librime-lua at 	hirdparty/librime-lua/, then on every uild.bat rime, run scripts/prepare-librime-lua.bat to copy 	hirdparty/librime-lua/ to librime/plugins/lua/. CMake's dd_subdirectory(plugins) finds the plugin, links it static into rime.dll.
+
+2. **MSBuild's incremental link does NOT regenerate rime.lib when the link re-executes but the dll's exported-symbol set is *perceived* as unchanged**. Symptoms:
+   - dist_x64/lib/rime.lib keeps old mtime (10:53) even after ime.vcxproj re-links and produces a fresh 3.0 MB dist_x64/lib/rime.dll (mtime 11:11).
+   - When the Weasel xmake build then links lib64/rime.lib, it fails with LNK2001: unresolved external symbol rime_get_api or similar (because the .lib is the 2.3 MB-era file, no lua symbols; or worse, the .lib is the empty 1496-byte MSBuild stub that MSBuild writes when it skips import-lib generation).
+   - **Fix**: in :build_librime_platform, after cmake --build build --target install + stash_build push, do a manual copy /Y librime\build_%1\src\Release\rime.lib librime\dist_%1\lib\rime.lib. The cmake install(TARGETS rime) for SHARED library on Windows is **not** reliable for the import .lib (it does install the .dll, but .lib is sometimes skipped with "Up-to-date: rime.lib" even when the dll was re-linked).
+   - **Alternative verification**: dumpbin /EXPORTS librime\build\src\Release\rime.dll | findstr luaL_newstate luaL_openlibs should print both symbols. If yes, lua is linked in; you can rebuild the .lib by running msbuild librime\build\src\rime.vcxproj /t:Rebuild /p:Configuration=Release /p:Platform=Win32 (the rime.vcxproj only has Release|Win32 config after cmake configure with -AWin32).
+
+3. **The project is Win32-only even though installer copies output\rime.dll for x64 OS**. xmake build runs both xmake f -a x64 and xmake f -a x86. The x64 build links lib64/rime.lib (32-bit, because librime is built with -AWin32) and fails with LNK1104 rime_get_api (machine-type mismatch). The x86 build succeeds.
+   - **Why this is OK in production**: rime.dll is 32-bit. WeaselServer.exe is 32-bit. The installer copies output\rime.dll (32-bit) which works on x64 OS via WoW64. The historical lib64\rime.lib was 64-bit and let xmake x64 build "succeed" (exit 0) by linking against the wrong-machine lib (which the linker then can't use, producing no usable x64 WeaselServer.exe — the existing output\WeaselServer.exe is leftover from a much older native-64-bit build).
+   - **Fix in xbuild.bat**: skip the xmake x64 step. Add a comment explaining the constraint so the next agent doesn't try to "fix" it by adding an x64 librime build. A true x64 build is a separate task that requires switching librime\env.bat set ARCH=x64 (submodule change, needs its own PR).
+
+4. **NSIS MUI_ICON path is resolved relative to cwd, not install.nsi**. output\install.nsi has !define MUI_ICON ..\resource\weasel.ico. When xbuild.bat invokes makensis from WEASEL_ROOT (project root), NSIS looks for ..\resource\weasel.ico (i.e. F:\soft\resource\weasel.ico) which doesn't exist. NSIS errors: can't open file then Error in macro MUI_INTERFACE on macroline 87 then Error in script "output\install.nsi" on line 51 -- aborting.
+   - **Fix**: xbuild.bat cd /d %WEASEL_ROOT%\output before invoking makensis. Then ..\resource\weasel.ico resolves to esource\weasel.ico from the project root. Use the bare install.nsi argument (not output\install.nsi) since cwd is now output/.
+
+5. **NSIS /D=path /userdir=otherpath silent install: NSIS concatenates all unknown CLI args into **. The /userdir= switch is NOT a standard NSIS option. When passed, NSIS treats it as a path fragment and the result is something like C:\TEMP\Fluxing userdir=C:\TEMP\UserData\fluxing\user1\fluxing written to HKCU\Software\Fluxing\Weasel\RimeUserDir.
+   - **Fix**: silent install users should only pass /S and /D=path. The user-data path is forced internally by the NSIS script via WriteRegStr HKCU "Software\Fluxing\Weasel" "RimeUserDir" "\fluxing\user1\fluxing" (this is the 0.18.1.0 fix that bypasses WeaselSetup.exe /userdir: and its EnsureFluxingUserDataSuffix mangling).
+
+6. **env.bat must pin FLUXING_VERSION=0.18.2 + RELEASE_BUILD=1 for installer to use the right name**. Without RELEASE_BUILD=1, uild.bat falls through to a git tag --sort=-creatordate lookup + git rev-list for the commit count, producing PRODUCT_VERSION=0.17.4.57.4506a32 (where 57 is commit count, 4506a32 is the short hash). The installer file is then named luxing-0.17.4.57-installer.exe and silently overwrites the previous release (the L09 OutFile-interpolation fix is still in effect, but the interpolated value is wrong).
+   - **Fix**: env.bat template should default to RELEASE_BUILD=1 and FLUXING_VERSION=0.18.2. For non-release builds (CI, dev), comment them out to opt into the git-hash suffix.
+
+**Verification checklist before declaring librime-lua integration done**:
+- dumpbin /EXPORTS librime\dist_x64\lib\rime.dll | findstr luaL_newstate → must show the symbol.
+- ime_deployer --build <user_dir> <shared_dir> <staging_dir> → must produce ime_ice.table.bin ≈ 60 MB (vs 0 bytes / error when lua is missing).
+- xmake f -a x86 -m release && xmake → linking.release WeaselServer.exe must succeed; output\Win32\WeaselServer.exe must be 32-bit (machine 14C).
+- Silent install to fresh C:\TEMP\fluxing-0182-test\Fluxing:
+  - HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel\InstallDir = C:\TEMP\fluxing-0182-test\Fluxing
+  - HKCU\Software\Fluxing\Weasel\RimeUserDir = C:\TEMP\fluxing-0182-test\Fluxing\fluxing\user1\fluxing
+  - output\weasel\data\build\rime_ice.table.bin ≈ 60 MB
+
+**Files changed** (commit 60e04ab):
+- uild.bat (+6 lines): prepare-librime-lua.bat hook + manual rime.lib copy from uild\src\Release\
+- xbuild.bat (+5 lines): skip xmake x64 + cd output before makensis
+- env.bat (rewritten): pin FLUXING_VERSION + RELEASE_BUILD for installer naming
+- scripts/prepare-librime-lua.bat (new, 36 lines): idempotent copy of vendored librime-lua
+- scripts/fetch-librime-lua.bat (new, 22 lines): one-shot git clone for refreshing vendored source
+- 	hirdparty/librime-lua/ (new, 1.06 MB, 100 files): hchunhui/librime-lua vendored source
+- elease/fluxing-0.18.2.0-installer.exe (new, 43.8 MB): built and silent-install tested
