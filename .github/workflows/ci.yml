@@ -189,3 +189,59 @@ jobs:
             ./output/archives/weasel*.exe
             ./output/archives/debug_symbols.7z
           body_path: ${{ github.workspace }}/RELEASE_CHANGELOG.md
+
+
+  test:
+    needs: build
+    runs-on: windows-2022
+    env:
+      boost_version: 1.84.0
+      BOOST_ROOT: ${{ github.workspace }}\deps\boost_1_84_0
+      SDKVER: 10.0.19041.0
+    steps:
+      - name: Checkout last commit
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Configure build environment
+        shell: bash
+        run: cp env.vs2022.bat env.bat
+
+      - name: Cache Boost
+        id: cache-boost
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.BOOST_ROOT }}
+          key: ${{ runner.os }}-boost-${{ env.boost_version }}
+
+      - name: Install Boost
+        if: steps.cache-boost.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          ./install_boost.bat
+          ./build.bat boost arm64
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          sdk: ${{ env.SDKVER }}
+
+      - name: Build test projects
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          msbuild weasel.sln /t:TestDefaultHotkeys;TestResponseParser;TestWeaselIPC /p:Configuration=Release /p:Platform=Win32 /v:minimal /nologo
+          if ($LASTEXITCODE -ne 0) { throw "Test projects build failed" }
+
+      - name: Run unit tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          test\TestDefaultHotkeys\Release\TestDefaultHotkeys.exe output\data\default.yaml
+          if ($LASTEXITCODE -ne 0) { throw "TestDefaultHotkeys failed" }
+          Release\TestResponseParser.exe
+          if ($LASTEXITCODE -ne 0) { throw "TestResponseParser failed" }
+          Release\TestWeaselIPC.exe
+          if ($LASTEXITCODE -ne 0) { throw "TestWeaselIPC failed" }
