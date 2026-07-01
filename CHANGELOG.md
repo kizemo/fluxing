@@ -30,7 +30,63 @@
   - 候选窗打开时 `Control+1` / `Control+2` 选第 2/3 候选
 
 - **Refs**: L18（被 L19 替代）、L16、spec 005 v1.1 plan.md §2.2。
-## [0.18.5.0-fluxing] - 2026-06-30
+
+## [0.18.7.0-fluxing] - 2026-07-01
+
+### CI: TestDefaultHotkeys vcxproj + sln registration + ci.yml test job (TDD.md sec 6.1 P1)
+
+- **Problem**: TDD.md sec 6.1 P1 + R-008 (PRD.md) - `TestDefaultHotkeys` had
+  a working test exe (manually compiled with `cl /EHsc /std:c++17`, 31/31 PASS)
+  but no vcxproj, no sln entry, no CI hook. `TestResponseParser` and
+  `TestWeaselIPC` had vcxproj + sln entries but their `Release|Win32`
+  configuration had no `Build.0` directive, so `msbuild weasel.sln
+  /p:Configuration=Release /p:Platform=Win32` never produced the test exes.
+  The CI workflow (`.github/workflows/ci.yml`) had no `test:` job, so unit
+  tests were a manual `cl` step documented in TDD.md sec 6.1 only.
+
+- **Fix (commit `e8db8c1`)**: full CI infrastructure for the 3 test projects.
+
+  - `test/TestDefaultHotkeys/TestDefaultHotkeys.vcxproj` (new, 18960 bytes):
+    MSBuild project based on `TestResponseParser` template, 8 platform
+    matrix (Debug|Release x ARM|ARM64|Win32|x64), `stdcpp17`, no
+    `stdafx.h` / no `ProjectReference` (independent console app).
+  - `test/TestDefaultHotkeys/TestDefaultHotkeys.vcxproj.filters` (new):
+    Solution Explorer filter file.
+  - `weasel.sln`: 1 `Project()` block + 12 `ProjectConfigurationPlatforms`
+    entries (Debug+Release, Build.0 set on Win32+x64 to actually compile;
+    ARM/ARM64 fallback to Win32/x64 like `WeaselDeployer`).
+  - `.github/workflows/ci.yml`: new `test:` job with `needs: build`,
+    `runs-on: windows-2022`. Steps: checkout + submodules, env.bat
+    bootstrap, Boost cache + install, msvc-dev-cmd, Build test projects
+    (msbuild weasel.sln /t:TestDefaultHotkeys;TestResponseParser;TestWeaselIPC),
+    Run unit tests. All 3 test exes run; failure of any one throws and
+    fails the job.
+  - `.gitignore`: 4 new patterns to keep `release/Test*.exe`,
+    `release/Test*.pdb`, `test/**/Release/`, `test/**/Debug/` out of
+    future commits. Verified that `release/fluxing-*-installer.exe` is
+    NOT matched (those binaries are git-tracked per AGENTS.md sec 4.7).
+
+- **Test coverage**: `TestDefaultHotkeys` 31/31 PASS (post-vcxproj rebuild).
+  `TestResponseParser` and `TestWeaselIPC` now reach Release|Win32 in
+  CI for the first time; their pre-existing vcxproj files compile
+  cleanly under the new sln entries.
+
+- **Verified locally**:
+  - `msbuild weasel.sln /t:TestDefaultHotkeys /p:Configuration=Release /p:Platform=Win32`
+    -> `Release\TestDefaultHotkeys.exe` 31/31 PASS.
+  - `python yaml.safe_load(ci.yml)` -> "YAML valid".
+  - `git check-ignore` confirms new patterns match test exes/pdbs and
+    installer binaries are not matched.
+
+- **Unverified**: full CI run on `github.com/rime/weasel` (this is a
+  brand-fork PR candidate; CI release workflow guarded by
+  `github.repository == 'rime/weasel'`, so Fluxing fork must be merged
+  upstream to exercise the test job on real GitHub Actions). Real Windows
+  runtime behavior unchanged from 0.18.6.0 - this is a CI infra release
+  with zero user-facing change.
+
+- **Refs**: TDD.md sec 6.1 P1, TDD.md sec 6.3, PRD.md R-008, L19
+  (`e2c36b1`, parent feature), spec 005 v1.1 plan.md sec 2.2.## [0.18.5.0-fluxing] - 2026-06-30
 
 ### Installer hardening: smoke-test path guard + TSF shim lock-skip
 
