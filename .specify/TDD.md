@@ -1,0 +1,251 @@
+# Fluxing v2 · Technical Design Document / Test Strategy (TDD)
+
+> **项目级 TDD 策略**。定义测试金字塔、各层测试覆盖目标、CI 集成方案、当前缺口。
+> 与子 spec 的关系：子 spec `plan.md` 的"风险"段列了各自的单测点；本文是"v2 整体测试架构"，子 spec 是局部实施。
+> 撰写人：AI 助手（基于宪法 R6「evidence before assertion」+ AGENTS.md §2.5 + ci.yml 现状 + T011 评审发现的 CI 缺口）。
+> 维护周期：每次新增 / 调整测试时同步；每月评审覆盖率。
+
+---
+
+## 0. 项目当前测试现状（2026-07-01 体检）
+
+| 测试层 | 现状 | 工具 |
+|---|---|---|
+| **静态分析 / lint** | ✅ `clang-format.sh` 已在 ci.yml 跑 | clang-format 18 |
+| **构建** | ✅ `xbuild.bat` / `build.bat` 在 ci.yml 跑（msbuild + xmake 双矩阵） | msbuild 2022, xmake 2.9.4+ |
+| **单元测试** | ⚠️ 3 个 test project 存在但**只有 1 个能跑** | cl.exe 手动编译 |
+| **集成测试** | ❌ 0 个 | 缺 |
+| **E2E 测试** | ❌ 0 个；仅 manual 验证 | 缺 |
+| **覆盖率** | ❌ 未测量 | 缺 |
+| **CI test job** | ❌ ci.yml 缺 test job；测试完全靠人肉跑 | 缺 |
+
+**关键缺口**：
+1. **TestDefaultHotkeys**（spec 005 配套，25/25 PASS）有 Release exe，但**没 vcxproj，不在 sln 里**。
+2. **TestResponseParser / TestWeaselIPC** 有 vcxproj + 在 sln 里，但 **Release exe 不存在**（需要先 msbuild）。
+3. **没有任何 test job** 出现在 `.github/workflows/ci.yml`。
+
+---
+
+## 1. 测试金字塔（v2 目标架构）
+
+```
+        ┌─────────────────────┐
+        │  E2E (manual 验证清单) │  ← spec 005/008/009 各列 manual 步骤
+        │  集成 (mock librime)  │  ← 新增：test/Integration/
+        │  单元 (现有 3 套 + 5 新套) │
+        └─────────────────────┘
+        ↑ 速度  ↑ 隔离度   ↑ 真实度
+```
+
+**比例目标**（v2.0.0 release 前）：
+- 单元测试 70%：8 个 test project 全部能跑；覆盖率 ≥ 60% 行覆盖（关键路径：key_binder / CandidateEdit / PhrasesStore / YamlRoundTrip / DarkModeBridge / Bootstrapper）
+- 集成测试 20%：librime mock 框架下 4-6 个集成场景（spec 005 binding 解析、008 user_dict_update、009 phrases round-trip、006 dark-mode 广播）
+- E2E / manual 20%：spec 005-009 各列 manual 验证清单（3 平台 × 3 DPI × 暗/亮色）
+
+---
+
+## 2. 单元测试策略
+
+### 2.1 现状测试套件
+
+| Project | vcxproj | 在 sln | Release exe | 现状 | 修复 |
+|---|---|---|---|---|---|
+| TestDefaultHotkeys | ❌ | ❌ | ✅ | 25/25 PASS（手 cl 编译） | 加 vcxproj + 加 sln |
+| TestResponseParser | ✅ | ✅ | ❌ | 未运行 | ci.yml 加 test job 自动 build |
+| TestWeaselIPC | ✅ | ✅ | ❌ | 未运行 | 同上 |
+
+### 2.2 v2 新增测试套件
+
+| 配套子 spec | Test project | 覆盖内容 | 优先级 |
+|---|---|---|---|
+| 005 | TestDefaultHotkeys (扩展) | Shift+space 切中英 + L18 回归 + 25 项断言 | P1（已 25/25 PASS） |
+| 006 | TestDarkModeBridge | mock WM_SETTINGCHANGE 验证订阅者通知 + 200ms 渐变 | P1 |
+| 006 | TestFluxingIPCClient | mock WeaselServer IPC 协议 | P1 |
+| 007 | TestYamlRoundTrip | 注释保留 + key 顺序保留 round-trip | P1 |
+| 007 | TestConflictChecker | 与系统 / IDE 已知快捷键冲突检测 | P2 |
+| 008 | TestCandidateEdit | mock 候选 + mock user_dict_update + 防抖 100ms | P1 |
+| 009 | TestPhrasesStore | phrases.json 读写 + 并发安全（10 线程） | P1 |
+| 009 | TestPinyinHint | text → 拼音首字母（如"邮箱"→"yx"） | P1 |
+| 010 | TestSyncClient | mock Vercel API + LWW 冲突解决 | P2（v2.1+ 实施） |
+| 011 | TestBootstrapper | mock NSIS silent 模式 + 路径合法化 | P3（v2.2+ 实施） |
+
+**总目标**：v2.0.0 release 前至少 8 个 test project 全部纳入 sln + 加 CI test job。
+
+### 2.3 单元测试约定
+
+- **每个 test project 必须**有 `.vcxproj` + 加入 `weasel.sln`。
+- **每个 test project 编译输出**固定到 `Release` 目录（与 x86 矩阵一致，spec 005 L10 §3）。
+- **每个 test project 必须有** `main()` 入口，返回 0 = pass / 非 0 = fail；CI 检查 exit code。
+- **断言**用标准 C++ `assert()` 或自己写的 `EXPECT_*` / `ASSERT_*` 宏（不引入 GoogleTest 等大依赖）。
+
+---
+
+## 3. 集成测试策略（v2 新增）
+
+### 3.1 测试目录
+
+```
+test/
+├── Integration/
+│   ├── TestBindingResolution.cpp  # 解析 spec 005 yaml 实际 binding 是否被 librime 接受（L18 关键）
+│   ├── TestUserDictUpdate.cpp     # spec 008 mock RimeUserDict 验证 user_dict_update(-1) 真的删词
+│   ├── TestPhrasesRoundTrip.cpp   # spec 009 phrases.json write → read 一致性
+│   ├── TestDarkModeBroadcast.cpp  # spec 004 §9 WM_SETTINGCHANGE → 所有订阅者回调
+│   ├── TestYamlRoundTripE2E.cpp   # spec 007 实际 default.yaml → YamlRoundTrip → 写回 → diff 无变更
+│   └── TestBootstrapperStdio.cpp  # spec 011 NSIS silent pipe JSON 协议 round-trip
+```
+
+### 3.2 集成测试原则
+
+- **mock librime**：`librime/src/rime/...` 子模块用本地实现的 stub（C++ 头文件 + 实现 stub 文件），避免依赖实际 librime 二进制。
+- **集成测试编译目标**：`test/Integration/Release/`（与单元测试目录对齐）。
+- **不依赖 RIME 引擎 dll**：集成测试是用户态，不需要 `rime.dll` 加载。
+
+### 3.3 集成测试在 CI 中的位置
+
+- ci.yml 加 `test-integration` job：先 build 单元测试 exe，再跑集成测试 exe。
+- 集成测试失败 = ci.yml red = merge block。
+
+---
+
+## 4. E2E / Manual 验证清单（v2 整体 hard gate）
+
+每份子 spec 的 `design.md §2.3 / §2.5` 列了 manual 验证步骤。v2 整合时必须跑：
+
+| 场景 | 配套子 spec | 步骤数 | 验证人 | 频率 |
+|---|---|---|---|---|
+| 翻页 + Shift 选候选 + Shift+space 切中英 + L18 回归 | 005 | 4 步 | 用户 | 每次 release |
+| 托盘面板启动 + Alt+, + 失焦 1s 关闭 | 006 | 3 步 | 用户 | 每次 release |
+| yaml UI 改快捷键立即生效 | 007 | 1 步 | 用户 | 每次 release |
+| 右键候选删除不弹窗 | 008 | 1 步 | 用户 | 每次 release |
+| 常用短语 Alt+K 列表 + Enter 上屏 | 009 | 2 步 | 用户 | 每次 release |
+| 暗色主题 200ms 渐变 | 004 §9 | 1 步 | 用户 | 每次 release |
+| 三平台 × 三 DPI 一致 | 全部 | 9 步 | 用户 | 每次 release |
+
+**Manual 验证 = v2 release 的 hard gate**。任何一项失败 = release block。
+
+---
+
+## 5. AGENTS.md §2.5 静默安装 smoke test（已落地）
+
+来源：AGENTS.md §2.5；本节确认其与本 TDD 的集成。
+
+- **触发**：每次 `xbuild.bat installer` 后必跑。
+- **内容**：13 项 invariants（exit code / 安装目录布局 / HKLM InstallDir / HKCU RimeUserDir / rime.dll 大小 / prebuilt dicts / PE arch 等）。
+- **CI 集成**：可加 `ci.yml` 步骤自动跑（在 windows-2022 镜像装 `fluxing-X.Y.Z-installer.exe` 到 `C:\TEMP\smoke` + 跑 PS 脚本验证）。
+- **L13 / L14 / L17 防御**：smoke test 正是 0.17.5-0.18.2 path-force 漏 4 个版本的"事后诸葛亮"。**永远跑**。
+
+---
+
+## 6. CI 集成方案（修复 R-008）
+
+### 6.1 当前 ci.yml 的缺口
+
+`lint` job + `build` job（msbuild + xmake 双矩阵），但**完全没 test job**。结果：
+- 单测 PASS 状态 = 不可观测
+- 集成测试 = 不存在
+- 任何 commit 都能 merge 不会红
+
+### 6.2 推荐 ci.yml 新增 test job（在 build 之后）
+
+```yaml
+  test:
+    needs: build
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        variant: [msbuild, xmake]
+    steps:
+      - name: Build test executables
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32
+          # 单独编译 TestDefaultHotkeys（无 vcxproj 的）
+          cd test/TestDefaultHotkeys
+          cl /EHsc /std:c++17 /utf-8 /I ../../include TestDefaultHotkeys.cpp /Fe:Release/TestDefaultHotkeys.exe
+          cd ../..
+
+      - name: Run unit tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          test\TestDefaultHotkeys\Release\TestDefaultHotkeys.exe output\data\default.yaml
+          if ($LASTEXITCODE -ne 0) { throw "TestDefaultHotkeys failed" }
+          test\TestResponseParser\Release\TestResponseParser.exe
+          if ($LASTEXITCODE -ne 0) { throw "TestResponseParser failed" }
+          test\TestWeaselIPC\Release\TestWeaselIPC.exe
+          if ($LASTEXITCODE -ne 0) { throw "TestWeaselIPC failed" }
+
+      - name: Run integration tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # (v2.1+ 实施) test/Integration/Release/*.exe 各跑一次
+          # 当前 v0.18.5 阶段集成测试未落地，本步空操作
+          Write-Host "Integration tests: not yet implemented (v2.1+ milestone)"
+```
+
+### 6.3 优先级
+
+- **P1 (v0.18.6)**：把 TestDefaultHotkeys vcxproj 加上 + 加 sln + 加 test job（最低限度 CI 跑单测）
+- **P1 (v2.0.0)**：6 个新 test project 全部 ship + 集成测试 4 个场景
+- **P2 (v2.1+)**：覆盖率门槛 60% 行覆盖
+- **P3 (v2.2+)**：Fuzz 测试（librime 边界条件）+ property-based testing
+
+---
+
+## 7. 覆盖率策略（v2.1+ 目标）
+
+### 7.1 测量工具
+
+- **Windows**：OpenCppCoverage（开源，cmake-friendly） + GitHub Action `esbenbritt/OOpenCppCoverage`。
+- **生成报告**：`coverage.xml`（Cobertura 格式）+ 覆盖率徽章。
+
+### 7.2 目标
+
+- **v2.1+**：关键模块（`output/data/default.yaml` 相关 / `RimeWithWeasel/` / `WeaselUI/WeaselPanel.cpp`）≥ 60% 行覆盖。
+- **v2.2+**：≥ 80% 行覆盖 + ≥ 70% 分支覆盖。
+
+### 7.3 关键模块优先级
+
+1. **`output/data/default.yaml` 解析路径**（spec 005）— L18 测试 gap
+2. **`RimeWithWeasel/CandidateEdit.cpp`**（spec 008）— 删除 / 屏蔽逻辑
+3. **`RimeWithWeasel/DarkModeBridge.cpp`**（spec 006）— 跨切关键路径
+4. **`FluxingConfigEditor/YamlRoundTrip.cpp`**（spec 007）— 数据完整性
+5. **`FluxingPersonalShortcuts/PhrasesStore.cpp`**（spec 009）— 并发读写
+
+---
+
+## 8. 已知测试 gap（与 lessons-learned 联动）
+
+| Gap | 关联 lesson | 状态 |
+|---|---|---|
+| `key_binder` binding 是否真被 librime 接受（vs 仅字符串包含） | L16 / L18 | 缺（spec 005 §2.3 标注"单测只验证 yaml 字符串包含, 不验证 librime 引擎行为"） |
+| `WM_SETTINGCHANGE` → 候选面板实际切色 | L17 关联 | 缺（spec 004 §9.5 仅 mock WM_SETTINGCHANGE） |
+| `user_dict_update(-1)` 真删词条（vs 仅 API 调用成功） | L10 关联 | 缺（spec 008 §2.5 mock user_dict_update） |
+| `rime_deployer --debug` deploy 实际通过（vs 仅文件存在） | L10 关联 | spec 004 §7 SC-005 列了但无 test project |
+
+**L19 待加 lessons-learned 章节**：L18 修复不完整（用户 2026-07-01 实测发现 `shift+Enter` 仍切中英）— 根因诊断 + 完整修复方案（见 PRD.md §7 R-007 升级）。
+
+---
+
+## 9. 文档组织（与 PRD.md 对齐）
+
+- `PRD.md`：产品视角全局视图（已写）
+- `TDD.md`：技术视角全局视图（本文件）
+- `constitution.md`：5 原则 + 9 硬规则 + P1-P8
+- `lessons-learned.md`：L01-L18（待加 L19）踩坑库
+- `specs/NNN-*/{spec,plan,tasks,design}.md`：局部 3 件套 + 详细设计
+- `AGENTS.md §2.5`：smoke test 配方（与 TDD.md §5 联动）
+- `AGENTS.md §5`：pre-commit 5 步检查清单（与 TDD.md §6 CI 集成）
+
+---
+
+## 10. 状态快照（2026-07-01）
+
+- **TDD v1.0**（本文）首次撰写。
+- 当前测试套件：3 个（TestDefaultHotkeys 25/25 PASS / TestResponseParser 未跑 / TestWeaselIPC 未跑）。
+- v2 新增 6 个 test project 待 ship。
+- **P1 修复**：TestDefaultHotkeys 加 vcxproj + sln + ci.yml test job（v0.18.6 release 前完成）。
+- **R-008**（CI 不跑测试）风险待 P1 修复后 close。
