@@ -1167,3 +1167,46 @@ L18 修复（commit `e4095f2`）在 0.18.5.0 release 中只移除了 `always: Sh
 - L18（被 L19 替代）：只切走了 `always: Shift+Shift_L/R`，未切 `has_menu: Shift+Shift_L/R`。
 - L16：spec 012 上 `Shift+l/r` 组合键 ascii_mode toggle 已移除。
 - spec 005 v1.1（plan.md §2.2）：`Shift+space` 切中英 + `Control+1/2/3..9` 选候选的最终形态。
+## L20 - NSIS silent install via PowerShell 5.1 Start-Process hangs; use cmd /c wrapper (extends L15)
+
+**时间**: 2026-07-01
+**影响版本**: 0.18.5.0 / 0.18.6.0 release build
+**修复版本**: 0.18.6.0 build script 已改用 cmd /c wrapper
+
+### 症状
+
+跑 AGENTS.md §2.5 silent-install smoke test 时，`Start-Process -FilePath installer.exe -ArgumentList '/S /D=...' -Wait -PassThru` 在 PowerShell 5.1 下 5 分钟仍不返回。改用 `Start-Process cmd.exe -ArgumentList '/c', 'start /B ...' -PassThru` 同样 60s 仍卡住。直接 `cmd /c` 同步执行 40.3s 完成，exit 0。
+
+### 根因
+
+L15 描述的 PS 5.1 + NSIS 边界（/D= 与 /LOG= 在 = 处合并）只是表面问题。L20 发现更深的问题：Start-Process -Wait 在 PS 5.1 下创建 NSIS 进程后，由于 NSIS silent mode 与 PS 5.1 process job object 交互差异，-Wait 永不返回。
+
+**workaround**（已采纳）：所有 NSIS installer 调用必须用 cmd /c 包裹：cmd /c "installer.exe /S /D=C:\TEMP\..."
+
+### 附带的 0.18.6.0 build 踩坑（应一并记录）
+
+1. **librime build.bat CMAKE_GENERATOR 空格分词 bug**：env.bat 中 `set "CMAKE_GENERATOR=Visual Studio 17 2022"`，但 librime/build.bat 第 78 行 `set common_cmake_flags=%common_cmake_flags% -G%CMAKE_GENERATOR%` 没加引号，cmd 把 "Visual Studio 17 2022" 拆成 4 个 token 写入 common_cmake_flags，cmake 收到 -GVisual + Studio + 17 + 2022 报错。**workaround**：直接调 cmake 而不通过 build.bat；用 -G "Visual Studio 17 2022" 显式引号。
+
+2. **WinSparkle.lib stub**：lib64/WinSparkle.lib (10460 bytes) 是个不含导出符号 import 表的 stub，WeaselServer 链接报 __imp__win_sparkle_* 6 个未解析符号。**workaround**：从 output\Win32\WinSparkle.dll 用 dumpbin /EXPORTS 提取 23 个 win_sparkle_* 符号，写 WinSparkle.def，`lib /DEF:WinSparkle.def /MACHINE:X86 /OUT:lib\WinSparkle.lib` 生成真 import lib。x64 同理。
+
+3. **xmake x86 build 不自动 cp weasel.dll / WeaselSetup.exe 到 output\Win32**：WeaselServer/Deployer after_build hook 显式 cp 到 output\Win32，但 WeaselSetup after_build cp 到 output\ 顶层，weasel.dll from WeaselTSF after_build cp 到 output\ 顶层。**workaround**：手动从 build\windows\x86\release\WeaselTSF\weasel.dll 和 build\windows\x86\release\WeaselSetup\WeaselSetup.exe cp 到 output\ 顶层。
+
+4. **xmake x86 build 默认 build_dir = build\windows\x86\release**，不是 xbuild.bat 注释里写的 output\Win32。所有 weasel.dll / WeaselSetup.exe 的实际产物在 build\windows\x86\release\WeaselTSF\ / build\windows\x86\release\WeaselSetup\，xmake.lua 的 after_build hook 应做这个 cp 动作，但当前 hook 只 cp weasel*.dll 通配符到 output\，遗漏了 WeaselSetup 顶层目标。
+
+### 验证
+
+- 0.18.6.0 silent install: cmd /c wrapper 40.3s 完成；exit 0；8 项 invariants 全部通过。
+- L19 修复验证：装出的 default.yaml 含 Control+1, send: 2 + Control+2, send: 3，不含 Shift+Shift_L, send: 2，含 Shift+space toggle ascii_mode。
+- 字节健康：installer 42612608 bytes（40.6 MB）；CR/LF/overlong 全合规。
+
+### 防 L20 复发
+
+- AGENTS.md §2.5 smoke test recipe 改用 cmd /c wrapper（下次修 AGENTS.md 时同步）。
+- 修 librime/build.bat 第 78 行引号 bug 应作为 spec 提交给 librime 上游。
+- 修 xmake.lua 的 after_build hook 让 weasel.dll / WeaselSetup.exe 正确 cp 到 output\Win32\ 是 weasel 自己的 PR。
+
+### 相关
+
+- L15: PowerShell 5.1 + NSIS /D=//LOG= 边界 bug（被 L20 扩展为整体 Start-Process hang）。
+- L13-fix-2: install-side guard against smoke-test path（被 L20 验证仍工作）。
+- L19: 0.18.6.0 的功能性修复（被 L20 验证装出正确 default.yaml）。

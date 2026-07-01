@@ -1,4 +1,36 @@
-﻿## [0.18.5.0-fluxing] - 2026-06-30
+﻿﻿## [0.18.6.0-fluxing] - 2026-07-01
+
+### L19: defensive remove of all keycode=Shift_L/R bindings (spec 005 v1.1)
+
+- **Problem**: 0.18.5.0 用户实测反馈 `shift+Enter` / `shift+<letter>` release
+  event 仍触发 ascii_mode 切换。L18 修复（commit `e4095f2`）只移除了
+  `always: Shift+Shift_L/R toggle ascii_mode`，但保留了
+  `has_menu: Shift+Shift_L/R send 2/3` 的 binding。L18 字符串断言
+  25/25 PASS 不能证明运行时 binding 表行为；0.18.6 安装包未 build（L18
+  修复未真实安装验证）。
+
+- **Fix (L19)**: 防御性原则——`output/data/default.yaml` 中
+  `keycode=Shift_L/R` 的所有 binding **全部不存在**（含 `always` 与
+  `has_menu` 两条路径）。
+
+  - 候选选择改用 RIME 社区默认键位 `Control+1/2/3..9`
+    （keycode=`1`/`2`/`3`..`9` 与 `Shift_L/R` release event 不重叠）
+  - 切中英保留 `Shift+space`（keycode=`space`）
+  - ascii_composer `switch_key.Shift_L/R: noop` 保留（让 key_binder 接管）
+
+- **Test coverage**: `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp` 从
+  25/25 升级到 **31/31 PASS**，新增 6 个 L19 负断言（覆盖所有
+  `Shift_L/R` 形态的 binding）+ 1 个 L19 正断言（active ascii_mode
+  toggle 路径数 == 1，仅 `Shift+space`）。
+
+- **Unverified**: 真实安装包行为（librime submodule 污染，0.18.6 build
+  状态待 release 验收）。用户重装 0.18.6 后必须手动验证：
+  - `shift+Enter` / `shift+<letter>` 不再切中英
+  - `Shift+space` 仍能切中英
+  - 候选窗打开时 `Control+1` / `Control+2` 选第 2/3 候选
+
+- **Refs**: L18（被 L19 替代）、L16、spec 005 v1.1 plan.md §2.2。
+## [0.18.5.0-fluxing] - 2026-06-30
 
 ### Installer hardening: smoke-test path guard + TSF shim lock-skip
 
