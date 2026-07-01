@@ -48,6 +48,10 @@ release-notes.html
 *.7z
 release/*token*
 release/*secret*
+release/Test*.exe
+release/Test*.pdb
+test/**/Release/
+test/**/Debug/
 RELEASE_CHANGELOG.md
 deps/
 arm64x_wrapper/*.o
