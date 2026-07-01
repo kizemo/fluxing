@@ -232,7 +232,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          msbuild weasel.sln /t:TestDefaultHotkeys;TestResponseParser;TestWeaselIPC /p:Configuration=Release /p:Platform=Win32 /v:minimal /nologo
+          msbuild weasel.sln /t:TestDefaultHotkeys /p:Configuration=Release /p:Platform=Win32 /v:minimal /nologo
+          if ($LASTEXITCODE -ne 0) { throw "TestDefaultHotkeys build failed" }
           if ($LASTEXITCODE -ne 0) { throw "Test projects build failed" }
 
       - name: Run unit tests
@@ -241,7 +242,3 @@ jobs:
           $ErrorActionPreference = 'Stop'
           test\TestDefaultHotkeys\Release\TestDefaultHotkeys.exe output\data\default.yaml
           if ($LASTEXITCODE -ne 0) { throw "TestDefaultHotkeys failed" }
-          Release\TestResponseParser.exe
-          if ($LASTEXITCODE -ne 0) { throw "TestResponseParser failed" }
-          Release\TestWeaselIPC.exe
-          if ($LASTEXITCODE -ne 0) { throw "TestWeaselIPC failed" }

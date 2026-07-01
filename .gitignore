@@ -50,6 +50,8 @@ release/*token*
 release/*secret*
 release/Test*.exe
 release/Test*.pdb
+release/*.exp
+release/*.lib
 test/**/Release/
 test/**/Debug/
 RELEASE_CHANGELOG.md
