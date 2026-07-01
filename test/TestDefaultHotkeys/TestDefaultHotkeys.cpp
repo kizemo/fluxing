@@ -1,6 +1,6 @@
 // TestDefaultHotkeys.cpp
-// spec 005 验收: 验证 default.yaml 已按 v2 规范调整快捷键
-// 编译: cl /EHsc /std:c++17 /I include TestDefaultHotkeys.cpp /Fe:test.exe
+// spec 005 v1.1 hotkey validation: verifies default.yaml is adjusted per v2 spec.
+// compile: cl /EHsc /std:c++17 /I include TestDefaultHotkeys.cpp /Fe:test.exe
 
 #include <iostream>
 #include <fstream>
