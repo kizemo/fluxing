@@ -174,7 +174,7 @@
 | R-004 | RIME 引擎 1.13 `user_ignore` 钩子不存在 | 中 | 中 | spec 008 双方案：customization 钩子（首选）/ schema patch fallback | 008 plan R2 |
 | R-005 | 云同步需求范围扩张（用户想要"输入历史同步"） | 中 | 中 | spec 004 明确"v2 同步范围不含输入历史" | 010 spec §2 |
 | R-006 | mac 风在 Windows 上违反 MS 风格指南 → 用户被投诉"非原生" | 低 | 低 | spec 007 UI 加"主题模式"开关（mac / 原生 Win11），默认 mac，可切 | 007 plan |
-| R-007 | `shift+<key>` release event 误匹配 key_binder | 中 | 中 | **L18 修复（`Shift+space` 切中英）；待 0.18.6 release 实测** | 005 spec §2.4 R3 |
+| R-007 | `shift+<key>` release event 误匹配 key_binder | 中 | 中 | **L19 修复（commit `e2c36b1`）：`default.yaml` 中 `keycode=Shift_L/R` 全部 binding 移除，候选选择改用 `Control+1/2`；切中英保留 `Shift+space`**。0.18.6.0 已 ship (commit `db70099` + tag `v0.18.6.0`)，L20 验证装出 default.yaml 字符串内容正确（含 `Control+1, send: 2`、不含 `Shift+Shift_L, send: 2`、含 `Shift+space` toggle）；**待用户重装 0.18.6 实测运行时 binding 行为** | 005 spec §2.4 R3 |
 | R-008 | CI 不执行单测（`ci.yml` 缺 test job） | 高 | 高 | **TDD.md §6 提出补 test job 方案** | 全局 |
 
 ---
@@ -215,10 +215,22 @@
 
 ---
 
-## 10. 状态快照（2026-07-01）
+## 10. 状态快照
+
+### 2026-07-01: v0.18.6.0 已 ship
+
+- **v0.18.6.0 已 ship**（commit db70099 + tag v0.18.6.0）— installer /release/fluxing-0.18.6.0-installer.exe (40.6 MB)。
+- **L19 修复**（commit e2c36b1）：default.yaml 中 keycode=Shift_L/R 全部 binding 移除；候选选择改用 Control+1/2；切中英保留 Shift+space。
+- **L20 lessons-learned**（commit db70099）：NSIS silent install via PS 5.1 Start-Process -Wait hangs；workaround 用 cmd /c wrapper。同步记录 librime build.bat CMAKE_GENERATOR 空格分词 bug、WinSparkle.lib stub 问题、xmake after_build hook 遗漏。
+- **Smoke test 8/8 PASS**（AGENTS.md §2.5）：fluxing\weasel\ 路径正确；HKLM InstallDir / HKCU RimeUserDir 正确；rime.dll 2.9 MB；prebuilt /rime_ice.table.bin 存在；L14 架构一致性（Weasel*.exe x86 + weaselx64.dll x64）合规。
+- **装出 default.yaml L19 验证**（L20）：含 Control+1, send: 2 + Control+2, send: 3；不含 Shift+Shift_L, send: 2；含 Shift+space toggle ascii_mode。
+- **TestDefaultHotkeys 31/31 PASS**（commit e2c36b1）：从 25/25 升级；新增 6 个 L19 负断言 + 1 个 L19 正断言（active toggle 路径数 == 1）。
+- **待用户重装 0.18.6 实测**：shift+Enter / shift+<letter> 是否仍切中英（应不切）；Shift+space 是否仍切中英（应切）；候选窗打开时 Control+1 / Control+2 是否选第 2/3 候选（应选）。
+
+### 2026-07-01: PRD v1.0 + TDD v1.0 首次撰写
 
 - **PRD v1.0**（本文）首次撰写。
-- 7 份子 spec 已 ship spec.md/plan.md/tasks.md 3 件套（commit 0fe1cd9）。
-- spec 005 已 ship 0.18.0-0.18.5；L18 修复（commit e4095f2）待 0.18.6 release + 用户实测。
+- **8 份子 spec** 已 ship spec.md/plan.md/tasks.md 3 件套（commit 0fe1cd9：004 + 005 + 006 + 007 + 008 + 009 + 010 + 011）。注：早期 PRD 草稿写"7 份"是少算了 spec 004 元 spec，**实际是 8 份**。
+- spec 005 已 ship 0.18.0-0.18.5；L18 修复（commit e4095f2）**已被 L19 替代**（commit e2c36b1）。
 - 6 份 sub-spec（006-011）design 完成，代码未开始。
 - TDD.md v1.0 同日撰写。
