@@ -227,10 +227,13 @@ key_binder:
     # 翻页 , .（火流猩 v2: , = 上页 Page_Up, . = 下页 Page_Down — vim 风格）
     - { when: has_menu, accept: comma, send: Page_Up }
     - { when: has_menu, accept: period, send: Page_Down }
-    # 火流猩 v2: Shift_L/R 上屏第 2/3 候选（兼容搜狗拼音习惯）
-    # 单键 Shift_L / Shift_R 触发 — 由 key_binder 看到单独的 Shift 键事件
-    - { when: has_menu, accept: Shift+Shift_L, send: 2 }
-    - { when: has_menu, accept: Shift+Shift_R, send: 3 }
+    # 火流猩 v2: 选第 N 候选：Control+1/2 (L19 防御：移除 Shift+Shift_L/R binding 避免 shift+<key> release event 误匹配；librime 1.13 key_binder 对 keycode=Shift_L 的匹配行为未充分验证，保守改用 Control+1/2 keycode=1/2 与 Shift_L release 完全不重叠)
+    # 用户反馈 2026-07-01：shift+Enter / shift+<letter> release 事件在 0.18.5.0 仍触发 ascii_mode 切换。
+    # L18 修复（commit e4095f2）只移除了 always: Shift+Shift_L/R binding，但 has_menu: Shift+Shift_L/R 选候选 2/3 的 binding
+    # 仍可能与 release event 冲突。L19 一并移除，候选选择改用 RIME 社区默认键位 Control+1/2/3..9。
+    # 候选第 1 个用数字键 1 / 空格 / Enter 上屏（librime 默认），第 2/3 用 Control+1/2。
+    - { when: has_menu, accept: Control+1, send: 2 }
+    - { when: has_menu, accept: Control+2, send: 3 }
 
     # 翻页 , .
     # - { when: has_menu, accept: comma, send: Page_Up }
