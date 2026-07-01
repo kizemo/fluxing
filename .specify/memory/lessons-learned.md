@@ -1050,6 +1050,7 @@ BOM + OutFile + line endings), L15 (PowerShell `Start-Process` arg
 merging), AGENTS.md §2.5 (silent-install smoke test recipe).
 
 
+# 被 L19 替代说明 (2026-07-01): L18 仅切走了 `always: Shift+Shift_L/R` ascii_mode toggle，但保留了 `has_menu: Shift+Shift_L/R send 2/3` binding。0.18.5.0 用户实测: `shift+Enter` / `shift+<letter>` release event 仍可触发 ascii_mode 切换。L18 修复未真实安装验证，是因为字符串断言（TestDefaultHotkeys 25/25 PASS）不能证明运行时 binding 表行为。L19 防御性原则：`default.yaml` 中 `keycode=Shift_L/R` 的所有 binding 全部不存在；候选选择改用 RIME 社区默认 `Control+1/2/3..9`。
 ## L18 - `key_binder` single-key Shift bindings (Shift_L/R) collide with `shift+<other>` release events; use `Shift+space` for ascii_mode toggle
 
 **Symptom** (discovered 2026-07-01, after shipping 0.18.5.0 with single-key Shift ascii_mode binding):
@@ -1114,3 +1115,55 @@ after typing shift+= followed by a letter".
 
 **Related**: L16 (modifier case-sensitivity), L04 (key_binder action types), spec 005
   design.md §2.2 (now updated to reflect `Shift+space` not `Shift_L/R` for ascii_mode  toggle), AGENTS.md §2.5 (smoke test recipe).
+## L19 - `key_binder` 任何 `keycode=Shift_L/R` binding 都可能与 `shift+<other>` release event 冲突；候选选择改用 `Control+1/2/3..9`
+
+**时间**: 2026-07-01
+**影响版本**: 0.18.5.0 (librime 1.13)
+**修复版本**: 0.18.6.0 (待发)
+
+### 症状
+
+用户装 0.18.5.0 后实测反馈：
+
+1. `shift+Enter` / `shift+<letter>` —— ascii_mode 仍会切换，在换行或输入上位字母符号时同步切换了中英文和中英文标点。
+2. `shift` 与 `shift+space` 都会切换中英文。
+
+L18 修复（commit `e4095f2`）在 0.18.5.0 release 中只移除了 `always: Shift+Shift_L/R toggle ascii_mode` 一条 binding，但 `has_menu: Shift+Shift_L/R send 2/3 选第 2/3 候选` 的 binding 仍存在。
+
+### 根因
+
+1. librime 1.13 `key_binder` 对 `keycode=Shift_L` 的 release event 匹配行为未充分验证；任何以 `Shift_L/R` 为 keycode 的 binding 都可能与 `shift+<other>` 复合键的 release event 误匹配。
+2. L18 修复仅做了字符串断言（`TestDefaultHotkeys 25/25 PASS`），但 0.18.6 安装包未 build（librime submodule 污染），所以 L18 修复**未真实安装验证**。
+3. 字符串断言只能证明 yaml 文本里某条 binding 存在/不存在，不能证明运行时 binding 表的行为。
+
+### 防御性原则
+
+- `default.yaml` 中 `keycode=Shift_L/R` 的所有 binding **全部不存在**（包括 `always` 与 `has_menu` 两条路径）。
+- 候选选择改用 **RIME 社区默认键位** `Control+1/2/3..9` —— keycode=`1`/`2`/`3`..`9` 与 `Shift_L/R` release event 完全不重叠。
+- 切中英保留 `Shift+space`（keycode=`space`）—— librime 1.13 `key_binder` 对 `Shift+space` 的 release event 匹配行为已有先例（0.18.5.0 用户未报问题）。
+- ascii_composer 段 `switch_key.Shift_L/R: noop` 保留（让 key_binder 接管）。
+- 移除（防止用户自定义再次引入）`keycode=Shift_L/R` 的 binding：L19 在 yaml 中加注释明确说明该原则。
+
+### 修复内容 (commit pending)
+
+1. `output/data/default.yaml`: 移除 `has_menu: Shift+Shift_L, send: 2` 与 `has_menu: Shift+Shift_R, send: 3`，新增 `has_menu: Control+1, send: 2` 与 `has_menu: Control+2, send: 3`。
+2. `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp`: 从 25/25 升级到 **31/31 PASS**，新增 6 个 L19 负断言 + 1 个 L19 正断言。
+3. 顺序检查改用 `Control+1` 在 `Shift+space` 之前。
+
+### 验证
+
+- 字符串断言：TestDefaultHotkeys 31/31 PASS（可重复）。
+- 字节健康：`output/data/default.yaml` UTF-8 无 BOM + CRLF=418；测试源 UTF-8 无 BOM + LF=130。
+- **未验证**：真实安装包行为（librime submodule 污染，0.18.6 待 build）；用户重装实测。
+
+### 防 L19 复发
+
+- L19 在 `default.yaml` 中加注释：任何 `keycode=Shift_L/R` 的 binding 都可能与 release event 冲突，禁止再次添加。
+- L19 在 `TestDefaultHotkeys` 加 6 个负断言，覆盖所有 `Shift_L/R` 形态的 binding。
+- 后续 0.18.6 release 必须在 AGENTS.md §2.5 silent-install smoke test 之外，**额外**跑 `shift+Enter` / `shift+<letter>` / `Control+1` / `Control+2` 手动验收。
+
+### 相关
+
+- L18（被 L19 替代）：只切走了 `always: Shift+Shift_L/R`，未切 `has_menu: Shift+Shift_L/R`。
+- L16：spec 012 上 `Shift+l/r` 组合键 ascii_mode toggle 已移除。
+- spec 005 v1.1（plan.md §2.2）：`Shift+space` 切中英 + `Control+1/2/3..9` 选候选的最终形态。
