@@ -1290,3 +1290,50 @@ librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) 严格比�
 - spec 005 v1.1 design.md §2.2 (Shift+Shift_L/R binding 形式的设计文档)
 - spec 012 (L16): Shift+Shift_L/R binding 形式的实现路径, 但未真实 ship
 - spec 014 (L21 修复): 在 spec 012 基础上 + 测试覆盖 + 真实 ship
+
+## L22 - system("pause") in test code + if errorlevel 1 in batch scripts = two related CI-killer anti-patterns surfaced by spec 015
+
+**时间**: 2026-07-02
+**影响版本**: 0.18.6.0 / 0.18.7.0 / 0.18.8.0 (all test projects affected; pre-existing bug)
+**修复版本**: 0.18.9.0 (spec 015)
+
+### 症状 1: system("pause")
+
+spec 015 在 build + 试运行 TestResponseParser / TestWeaselIPC 时发现：两个 .cpp 末尾都有 system("pause"); 调用，紧跟在 return 之前。这是 Windows 控制台交互式 UX 模式（双击 .exe 时阻塞等待按键），但在非交互环境（CI、脚本、stdin 重定向）下，关闭 stdin 会让 system("pause") 触发  xC0000005 ACCESS_VIOLATION，测试直接 crash，CI 全绿过不了。
+
+TestDefaultHotkeys + TestShiftSelectBinding (spec 014 新增) 都没这个 anti-pattern，所以能在非交互环境正常工作。TestResponseParser + TestWeaselIPC 自打 2024-02 clang-format 提交（commit 21d2bf9）以来就一直有这个 pattern，但 CI test job 一直只跑 TestDefaultHotkeys（commit 10b72e2 scope 限制），所以 bug 从未 surface。
+
+### 症状 2: if errorlevel 1 in batch
+
+spec 015 编写 scripts\run-tests.bat 时发现：删除 system(pause) 后，TestResponseParser 因为 test_4 的 BOOST_ASSERT(2 == c.candies.size()) 失败，调用 bort()，abort 在 Windows Release 构建里转成  xC0000005 STATUS_FATAL_APP_EXIT，即 -1073741819。
+
+批处理脚本里 if errorlevel 1 的语义是 if errorlevel >= 1，但 -1073741819 作为 signed 32-bit 是负数，< 1，结果 batch 误判为 "no error"，脚本继续报告 === ALL TESTS PASSED === + exit 0。
+
+### 修复
+
+1. **TestResponseParser.cpp + TestWeaselIPC.cpp**: 删除   system("pause"); 行（byte-level 编辑，UTF-8 无 BOM，CRLF）。
+2. **scripts\run-tests.bat**: 改用 setlocal enableextensions enabledelayedexpansion + if !errorlevel! NEQ 0 set "FAIL=1" + set "FINAL_RC=!FAIL!" + endlocal & set "OUTER_RC=%FINAL_RC%" 模式正确传递 -1073741819 等负值给外层。
+3. **scripts\run-tests.bat**: 用 set "SOL_DIR=%CD%"（绝对路径无尾反斜杠）传给 msbuild 解决 standalone-build SolutionDir 解析问题。
+4. **scripts\run-tests.bat**: 用 8.3 短路径（C:\PROGRA~2\...）避开 set "VCVARS=C:\Program Files (x86)\..." 里的反斜杠-括号-CMD-解析冲突。
+
+### 验证
+
+- scripts\run-tests.bat 在当前 HEAD（TestResponseParser test_4 fail）下：exit 1，输出 === TESTS FAILED ===。
+- TestDefaultHotkeys: 35/35 PASS
+- TestShiftSelectBinding: 13/13 PASS
+- TestWeaselIPC: PASS
+- TestResponseParser: test_4 失败（spec 015 sec 5 记录为 out-of-scope WeaselIPC bug，需要 spec 016+ 修复）
+
+### 防 L22 复发
+
+- AGENTS.md / spec 015 / L22 互相引用：test code 不写 system("pause") 或等价物（getchar、_getch 等）。
+- 任何新增 test project 必须在 scripts\run-tests.bat 里登记；不允许"test by hand"。
+- 任何使用 exit code 做 gate 的 .bat 脚本，必须用 if !errorlevel! NEQ 0 模式，不用 if errorlevel 1。
+- L22 与 L11 / L17 / L20 / L21 一脉相承："Windows-isms in code that should be cross-platform"。任何 Windows-only 代码模式进 test 或 build 工具前必须 grep L## 列表。
+
+### 相关
+
+- L20: NSIS silent install via PowerShell 5.1 Start-Process hangs (cmd /c wrapper 解)。
+- L11: BOM double rule。
+- L21: spec 014 L19 over-correction（独立 test pattern，spec 015 沿用并扩展）。
+- spec 014 / 015: "两个独立 test + 一条 lesson" pattern。

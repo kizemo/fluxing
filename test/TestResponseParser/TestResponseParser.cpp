@@ -91,6 +91,6 @@ int _tmain(int argc, _TCHAR* argv[]) {
   test_3();
   test_4();
 
-  system("pause");
   return boost::report_errors();
 }
+

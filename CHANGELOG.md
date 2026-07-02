@@ -1,4 +1,79 @@
-﻿## [0.18.8.0-fluxing] - 2026-07-02
+﻿
+## [0.18.9.0-fluxing] - 2026-07-02
+
+### spec 015: fix test infrastructure (TestResponseParser + TestWeaselIPC + system(pause) anti-pattern)
+
+- **Problem (L22)**: TestResponseParser.exe + TestWeaselIPC.exe had been
+  unable to build since the vcxproj files were added (TDD.md sec 2.1).
+  The test projects use $(SolutionDir)\include for headers, but when
+  built standalone, $(SolutionDir) resolves to the vcxproj's own
+  directory. Even with that fix, the test .exe files contained
+  system("pause"); as the last line before return (a Windows-console
+  interactive UX anti-pattern from the 2024-02 clang-format pass,
+  commit 21d2bf9), which crashes with 0xC0000005 in non-interactive
+  environments (CI, scripts, redirected stdin). The crash was masked in
+  double-click Explorer launches but blocks CI / scripted runs.
+
+- **Fix (spec 015)**: 3 changes:
+  1. **Byte-level remove system("pause");** from
+     test\TestResponseParser\TestResponseParser.cpp and
+     test\TestWeaselIPC\TestWeaselIPC.cpp (UTF-8 no BOM, CRLF, byte-level
+     edit to preserve existing file state; L01 / A1 anti-pattern)
+  2. **NEW scripts\run-tests.bat**: single-command wrapper that builds
+     + runs all 4 test projects (TestDefaultHotkeys, TestShiftSelectBinding,
+     TestResponseParser, TestWeaselIPC). The script:
+     - Calls vcvars32.bat via 8.3 short path
+       (C:\PROGRA~2\...) to avoid the backslash-paren CMD-parse trap
+     - For each test project, calls
+       msbuild <project>.vcxproj /t:Build /p:Configuration=Release
+       /p:Platform=Win32 /p:SolutionDir=<absolute-path> (no trailing
+       backslash) to work around the standalone-build SolutionDir issue
+     - Runs each test exe with stdin redirected to nul (< nul)
+     - Uses if !errorlevel! NEQ 0 set "FAIL=1" (delayed expansion) to
+       correctly detect negative Windows STATUS codes (e.g. 0xC0000005
+       = -1073741819) that if errorlevel 1 misinterprets as success
+     - Reports === ALL TESTS PASSED === or === TESTS FAILED === and
+       returns the correct exit code via the
+       endlocal & set "OUTER_RC=%FINAL_RC%" propagation pattern
+  3. **ci.yml test job (TDD.md sec 6.2)**: replaced the
+     TestDefaultHotkeys-only job (commit 10b72e2) with a single call to
+     scripts\run-tests.bat
+
+- **L22 lesson (recorded in lessons-learned.md)**:
+  1. system("pause") in test code is a Windows-console interactive UX
+     anti-pattern that crashes in non-interactive environments. Right
+     pattern: tests should return 0; directly.
+  2. if errorlevel 1 in batch scripts misinterprets negative Windows
+     STATUS codes (e.g. 0xC0000005 = -1073741819) as "no error" because
+     -1073741819 < 1 numerically. Right pattern:
+     if !errorlevel! NEQ 0 with delayed expansion.
+
+- **Test status as of 2026-07-02**:
+  - TestDefaultHotkeys: 35/35 PASS
+  - TestShiftSelectBinding: 13/13 PASS
+  - TestWeaselIPC: PASS
+  - TestResponseParser: test_4 FAILS (BOOST_ASSERT(2 == c.candies.size())
+    because WeaselIPC's ContextUpdater does not implement ctx.cand.0 /
+    ctx.cand.1 array-style deserialization)
+  - **The TestResponseParser test_4 failure is a pre-existing WeaselIPC
+    bug**, NOT a test infrastructure issue. Out of scope for spec 015;
+    filed for spec 016+. The scripts\run-tests.bat correctly reports
+    === TESTS FAILED === + exit 1 for it, which is the right CI gate
+    behavior.
+
+- **Build**:
+  - xbuild.bat installer -> output/archives/fluxing-0.18.9.0-installer.exe
+    (~42 MB, NSIS 3.x Unicode)
+  - 7z comparison with 0.18.8.0: only data\default.yaml is identical;
+    no new binary changes (this is a test-infra-only release; the
+    behavior fix in 0.18.8.0 is preserved)
+
+- **Out of scope (deferred to spec 016+)**:
+  - Fixing the WeaselIPC ContextUpdater cand.0/cand.1 deserialization
+  - Adding the TestBindingResolution integration test (TDD.md sec 3)
+  - Fixing the pre-existing RC errors in WeaselTSF.rc / WeaselServer.rc /
+    WeaselDeployer.rc / WeaselSetup.rc (STRZ2 macro)
+## [0.18.8.0-fluxing] - 2026-07-02
 
 ### spec 014: restore Shift_L/R select 2nd/3rd candidate (L21)
 

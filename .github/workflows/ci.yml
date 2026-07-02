@@ -228,17 +228,13 @@ jobs:
         with:
           sdk: ${{ env.SDKVER }}
 
-      - name: Build test projects
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          msbuild weasel.sln /t:TestDefaultHotkeys /p:Configuration=Release /p:Platform=Win32 /v:minimal /nologo
-          if ($LASTEXITCODE -ne 0) { throw "TestDefaultHotkeys build failed" }
-          if ($LASTEXITCODE -ne 0) { throw "Test projects build failed" }
-
-      - name: Run unit tests
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          test\TestDefaultHotkeys\Release\TestDefaultHotkeys.exe output\data\default.yaml
-          if ($LASTEXITCODE -ne 0) { throw "TestDefaultHotkeys failed" }
+      # spec 015 (2026-07-02): use scripts\run-tests.bat to build + run all 4
+      # test projects in one documented call. Per spec 015 sec 2.2, the
+      # script passes explicit /p:SolutionDir= to msbuild to work around
+      # the standalone-build SolutionDir-resolution issue, and uses
+      # if !errorlevel! NEQ 0 (delayed expansion) to correctly detect
+      # negative Windows STATUS codes (e.g. 0xC0000005 from BOOST_ASSERT
+      # abort). See L22.
+      - name: Build + run all test projects
+        shell: cmd
+        run: scripts\run-tests.bat
