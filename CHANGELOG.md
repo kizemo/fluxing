@@ -1,4 +1,46 @@
-﻿﻿## [0.18.6.0-fluxing] - 2026-07-01
+﻿## [0.18.8.0-fluxing] - 2026-07-02
+
+### spec 014: restore Shift_L/R select 2nd/3rd candidate (L21)
+
+- **Problem**: 用户装 0.18.7.0 后实测反馈 "在候选字词窗口, 无法选择第二/
+  第三候选字词"。spec 005 v1.1 US1-B 承诺的 "按 Shift_L/R 选第 2/3 候选" 在
+  0.18.6.0 之后被 L19 误删, 0.18.7.0 修复 CI 基础设施但未恢复该能力。
+
+- **Fix (spec 014)**: 在 key_binder/bindings has_menu 段, 在 Control+1/2
+  之前加回 2 行 binding, 使用 spec 012 plan.md §2.2 设计的 ccept: Shift+Shift_L/R
+  形式 (modifier=Shift, 不会被 TSF release event 误匹配):
+  `yaml
+  - { when: has_menu, accept: Shift+Shift_L, send: 2 }
+  - { when: has_menu, accept: Shift+Shift_R, send: 3 }
+  `
+
+- **L21 教训**: L19 是 over-correction - 移除了所有 keycode=Shift_L/R binding,
+  包括 spec 005 v1.1 承诺的 has_menu binding。L19 自我审查写 "字符串断言只能证
+  明 yaml 文本里某条 binding 存在/不存在", 但 L19 自己却依赖 TestDefaultHotkeys
+  31/31 PASS 来"验证"修复, 反讽地证明了字符串测试的局限。
+
+- **测试覆盖**:
+  - TestDefaultHotkeys.exe output\data\default.yaml -> Passed: 35 / 35
+    (4 个 L19 负翻正 + 4 个新正)
+  - TestShiftSelectBinding.exe output\data\default.yaml -> Passed: 13 / 13 (新)
+  - 两套独立 runtime 测试交叉验证 spec 014 修复, 避免 L18/L19 的 "passing
+    test, regressed behavior" 陷阱。
+
+- **Build**:
+  - xbuild.bat installer -> output/archives/fluxing-0.18.8.0-installer.exe
+    (42631276 字节, ~40.7 MB)
+  - 7z 解包对比 0.18.7.0 vs 0.18.8.0: 唯一差异 data\default.yaml 16607
+    -> 17200 字节 (+593 字节), 23 个 binary 100% 相同 (rime.dll / WeaselServer.exe
+    等 SHA256 全等)
+
+- **Verified by**: silent install 0.18.8.0 -> exit 0, HKLM InstallDir =
+  C:\Program Files\fluxing, HKCU RimeUserDir = C:\Program Files\fluxing
+  \user1\fluxing, default.yaml 含 spec 014 修复
+
+- **Refs**: L19 (被 L21 替代), L20 (silent-install cmd /c wrapper 沿用), spec 012
+  (L16 计划但未 ship), spec 014 (L21 修复), spec 005 v1.1 US1-B (恢复承诺)
+
+﻿## [0.18.6.0-fluxing] - 2026-07-01
 
 ### L19: defensive remove of all keycode=Shift_L/R bindings (spec 005 v1.1)
 
