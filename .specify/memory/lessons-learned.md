@@ -1,4 +1,4 @@
-﻿# Lessons Learned â Fluxing (rime/weasel fork)
+# Lessons Learned â Fluxing (rime/weasel fork)
 
 > **Scope**: `Fluxing` project (`rime/weasel` fork), reusable lessons distilled from dev incidents. Each entry: **Incident â Root cause â Lesson** format, source-recorded.
 > **Origin of this file**: commit `d6e2e1e` "docs(memory): lessons-learned - æ²æ·å¼åäºææè®­" (initial L01âL07).
@@ -1210,3 +1210,83 @@ L15 描述的 PS 5.1 + NSIS 边界（/D= 与 /LOG= 在 = 处合并）只是表�
 - L15: PowerShell 5.1 + NSIS /D=//LOG= 边界 bug（被 L20 扩展为整体 Start-Process hang）。
 - L13-fix-2: install-side guard against smoke-test path（被 L20 验证仍工作）。
 - L19: 0.18.6.0 的功能性修复（被 L20 验证装出正确 default.yaml）。
+
+
+
+## L21 - L19 是 over-correction: key_binder 移除 keycode=Shift_L/R 时不分 modifier=Shift (binding 形式) 与 modifier=0 (release-event 误匹配) - 正确的形式是 ccept: Shift+Shift_L/R
+
+**时间**: 2026-07-02
+**影响版本**: 0.18.6.0 / 0.18.7.0
+**修复版本**: 0.18.8.0 (spec 014)
+
+### 症状
+
+用户装 0.18.7.0 后实测反馈："在候选字词窗口，无法选择第二/第三候选字词"。期望按左 Shift 选第 2 候选，按右 Shift 选第 3 候选 (spec 005 v1.1 US1-B 承诺)。
+
+### 根因
+
+L19 fix (commit e2c36b1, 0.18.6.0) 防御性地移除了 key_binder/bindings 中**所有** keycode=Shift_L/R 的 binding, 以避免 shift+<other> release event 误匹配。但 L19 同时也删除了 spec 005 v1.1 US1-B 承诺的 has_menu: Shift+Shift_L/R send 2/3 binding (因为它用了 keycode=Shift_L/R 形态)。
+
+L19 的 over-correction 错在没有区分两种 binding 形式:
+1. ccept: Shift_L (modifier=0) - 解析为 {keycode=Shift_L, modifier=0} - **会**与 TSF release event 误匹配 (release event 也是 {keycode=Shift_L, modifier=Release} 但因 keycode 同而被某些 librime 路径误处理)
+2. ccept: Shift+Shift_L (modifier=Shift) - 解析为 {keycode=Shift_L, modifier=Shift} - **不会**与 TSF release event 误匹配 (release event 是 modifier=Release, 与 modifier=Shift 严格不等)
+
+librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) 严格比较 keycode_ 与 modifier_, 两种形式在运行时行为截然不同。L19 一刀切全部移除, 等于把 spec 005 v1.1 承诺的 Shift 选候选能力废掉。
+
+### 修复 (commit pending)
+
+1. output/data/default.yaml: 在 key_binder/bindings has_menu 段, 在 Control+1/2 之前加回 2 行 binding:
+   `yaml
+   - { when: has_menu, accept: Shift+Shift_L, send: 2 }
+   - { when: has_menu, accept: Shift+Shift_R, send: 3 }  # (R, no placeholder)
+   `
+   实际是:
+   `yaml
+   - { when: has_menu, accept: Shift+Shift_L, send: 2 }
+   - { when: has_menu, accept: Shift+Shift_R, send: 3 }
+   `
+2. 	est/TestDefaultHotkeys/TestDefaultHotkeys.cpp: L19 的 4 个负断言翻转为正断言 (从 "应不存在" 变 "应存在"); 新增 4 个正断言覆盖 spec 014 新增 binding 与 ascii_composer.switch_key 保持 noop。
+3. 	est/TestShiftSelectBinding/ (新): 第二个 runtime yaml 契约测试, 13 个新正断言, 验证:
+   - ccept: Shift+Shift_L, send: 2 / ccept: Shift+Shift_R, send: 3 存在
+   - 没有 bare ccept: Shift_L/R, (modifier=0) - L19 防御保留
+   - scii_composer.switch_key.Shift_L/R: noop 保持
+   - Shift+space toggle ascii_mode 保持 (L18 contract)
+   - 4 个 ordering 断言 (Shift+Shift_L/R 在 Shift+space 之前, 在 Control+1/2 之前)
+4. weasel.sln: 新 Project 注册 + 16 行 ProjectConfigurationPlatforms
+5. env.bat + weasel.props: 0.18.7 -> 0.18.8 (gitignored, 不入 commit)
+6. elease/fluxing-0.18.8.0-installer.exe: 42631276 字节 (NSIS 重打包, internal binary 100% 同 0.18.7.0)
+7. CHANGELOG.md: 新 [0.18.8.0-fluxing] 段
+
+### 验证
+
+- TestDefaultHotkeys.exe output\data\default.yaml -> Passed: 35 / 35 (4 个 L19 负翻正 + 4 个新正)
+- TestShiftSelectBinding.exe output\data\default.yaml -> Passed: 13 / 13 (新)
+- xbuild.bat installer -> output/archives/fluxing-0.18.8.0-installer.exe (42631276 bytes, ~40.7 MB, 与 0.18.7.0 差 2941 字节)
+- 7z 解包两个 installer 对比: 唯一差异是 data\default.yaml (16607 -> 17200 bytes, +593 bytes 是新插入的 4 行注释 + 2 行 binding)。所有 binary 100% 相同 (rime.dll, WeaselServer.exe 等 23 个文件 SHA256 全等)
+- silent install 0.18.8.0 -> exit 0, HKLM InstallDir = C:\Program Files\fluxing, HKCU RimeUserDir = C:\Program Files\fluxing\user1\fluxing, default.yaml 含 spec 014 修复
+
+### L19 反例教训
+
+- L19 自我审查: "字符串断言只能证明 yaml 文本里某条 binding 存在/不存在, 不能证明运行时 binding 表的行为"
+- L19 反讽: 正是 L19 用 TestDefaultHotkeys 31/31 PASS 来"验证"修复, 但修复**本身**就是 over-correction, 把 spec 005 v1.1 承诺的 Shift 选候选能力废掉。**字符串测试既不能验证修复有效, 也不能验证修复没引入新 bug**。
+- spec 014 不再依赖单一 yaml 字符串测试, 加 TestShiftSelectBinding 作为第二个独立 runtime 契约测试, 形成"两个测试共同验证一个修复"的交叉验证模式。
+- 关键架构性结论: 任何 yaml-only 修复都应该有**至少 2 个独立测试** 覆盖 (避免 L18/L19 的"passing test, regressed behavior" 陷阱):
+  1. TestDefaultHotkeys.exe (string-level yaml 契约)
+  2. TestShiftSelectBinding.exe (yaml 契约 + 完整 key 行为 mock, 跨段验证)
+
+### 防 L19 复发
+
+- AGENTS.md 已在 §3.2 标记 luxing scope, spec 014 在 tasks.md T001 明确加注: "ccept: Shift+Shift_L/R 形式 (modifier=Shift) 确保 keycode=Shift_L, modifier=0 的 TSF release event 不会误匹配"
+- spec 014 plan.md §2.5 R1: "Shift+Shift_L mask equals Shift; TSF mask also Shift; matches. Verified by reading both sources and adding the runtime test"
+- spec 014 tasks.md T007: 显式加 AGENTS.md §2.5 silent-install smoke test PASSED
+- spec 014 spec.md §2.5 R5: intra-has_menu order between Shift+Shift_L and Control+1 is irrelevant (different KeyEvent)
+- 后续 spec 涉及 key_binder 变更时, 必须 review 此 L21 段, 区分 modifier=0 (会 release-match) 与 modifier=Shift (不会 release-match)
+
+### 相关
+
+- L18 (被 L19 替代): 只切走了 lways: Shift+Shift_L/R, 未切 has_menu: Shift+Shift_L/R
+- L19 (被 L21 替代): 防御性移除**所有** keycode=Shift_L/R binding
+- L20: NSIS silent install via PowerShell 5.1 Start-Process hangs (spec 014 沿用 L20 的 cmd /c wrapper)
+- spec 005 v1.1 design.md §2.2 (Shift+Shift_L/R binding 形式的设计文档)
+- spec 012 (L16): Shift+Shift_L/R binding 形式的实现路径, 但未真实 ship
+- spec 014 (L21 修复): 在 spec 012 基础上 + 测试覆盖 + 真实 ship

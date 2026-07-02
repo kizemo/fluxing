@@ -232,6 +232,13 @@ key_binder:
     # L18 修复（commit e4095f2）只移除了 always: Shift+Shift_L/R binding，但 has_menu: Shift+Shift_L/R 选候选 2/3 的 binding
     # 仍可能与 release event 冲突。L19 一并移除，候选选择改用 RIME 社区默认键位 Control+1/2/3..9。
     # 候选第 1 个用数字键 1 / 空格 / Enter 上屏（librime 默认），第 2/3 用 Control+1/2。
+
+    # 火流猩 v2: 选第 N 候选：Shift_L/R 单键 + Control+1/2 (spec 014 / L21 恢复 L19 误删的 has_menu: Shift+Shift_L/R binding)
+    # Shift+Shift_L/R 形式（modifier=Shift）确保 keycode=Shift_L, modifier=0 的 TSF release event 不会误匹配
+    # (librime 1.13 key_event.h:64 KeyEvent::operator== 严格比较 keycode + modifier)
+    # 候选第 1 个用数字键 1 / 空格 / Enter 上屏（librime 默认），第 2/3 用 Shift_L/R 或 Control+1/2
+    - { when: has_menu, accept: Shift+Shift_L, send: 2 }
+    - { when: has_menu, accept: Shift+Shift_R, send: 3 }
     - { when: has_menu, accept: Control+1, send: 2 }
     - { when: has_menu, accept: Control+2, send: 3 }
 
