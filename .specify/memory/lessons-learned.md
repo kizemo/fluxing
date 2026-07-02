@@ -1337,3 +1337,131 @@ spec 015 编写 scripts\run-tests.bat 时发现：删除 system(pause) 后，Tes
 - L11: BOM double rule。
 - L21: spec 014 L19 over-correction（独立 test pattern，spec 015 沿用并扩展）。
 - spec 014 / 015: "两个独立 test + 一条 lesson" pattern。
+
+## L23 - Adding a new test project requires BOTH vcxproj GUID AND sln ProjectConfigurationPlatforms; PowerShell script variable interpolation can silently write empty `{}` into sln
+
+`date`: 2026-07-02
+`spec`: 016 (behavior-level test framework)
+`commits`: 9f4f925 (handoff) + (this spec 016 fix)
+
+### Incident
+
+Adding `test\TestBindingResolution` (spec 016) required registering the
+new project in `weasel.sln`. The handoff build attempted this with a
+PowerShell script that read the GUID from a regex match and substituted
+it into a templated `Project(...)` line. The script's
+`$matches[0].Groups[1].Value` returned `$null` at the substitution call,
+so the sln ended up with:
+
+```
+Project("{8BC9CEB8-...}") = "TestBindingResolution", "test\TestBindingResolution\TestBindingResolution.vcxproj", "{}"
+```
+
+`{}` with empty GUID. At the same time the `ProjectConfigurationPlatforms`
+section was never written, so sln and vcxproj were inconsistent; VS
+shows an `inconsistent project GUID` warning on open and the solution
+build skips the new project.
+
+### Root cause
+
+Three things combined:
+
+1. PowerShell regex `(-match $pattern).matches[0].Groups[1].Value`
+   silently returns `$null` if the match group was empty or the regex
+   didn't compile cleanly. No error, no exception, the script keeps going.
+2. Sln file format is not validated by any tool we run. VS only warns
+   on open; `git diff` does not catch it; `grep` only sees the string.
+   The only CI-phase check is `devenv /Build` or
+   `msbuild weasel.sln /t:Build` -- and spec 015's `run-tests.bat`
+   builds individual vcxprojs, NOT the sln, so a broken sln sails
+   through spec 015.
+3. vcxproj `ProjectGuid` vs sln `ProjectConfigurationPlatforms` count
+   are independent axes. Even if you correctly write the GUID you
+   must ALSO write the right number of `Build.0` / `ActiveCfg` lines
+   for the project's actual config count. sln does not auto-derive
+   these from vcxproj.
+
+### Fix (spec 016 / 2026-07-02)
+
+Two byte-level patches on `weasel.sln`:
+
+1. Replace `, "{}"` with `, "{99277F52-0973-411A-8171-E65FA3FF6D69}"`
+   (the real GUID read from `TestBindingResolution.vcxproj` via
+   `Select-String -Pattern "ProjectGuid"`).
+2. Insert 4 lines after the last line of the E3A7B91D (TestShiftSelectBinding)
+   block in `ProjectConfigurationPlatforms`:
+   - `{...}.Debug|Win32.ActiveCfg = Debug|Win32`
+   - `{...}.Debug|Win32.Build.0 = Debug|Win32`
+   - `{...}.Release|Win32.ActiveCfg = Release|Win32`
+   - `{...}.Release|Win32.Build.0 = Release|Win32`
+
+Verification:
+
+- byte count: 15796 -> 16148 (+352 = 4 lines * 88 bytes/line)
+- CRLF count: 225 -> 229 (+4)
+- lone LF/CR: 0 (no newlines introduced)
+- `Select-String -Pattern 'TestBindingResolution.vcxproj", "{}"'` returns 0 matches
+- `Select-String -Pattern "99277F52"` returns 5 matches (1 Project + 4 config)
+- `msbuild test\TestBindingResolution\TestBindingResolution.vcxproj` exit 0
+
+### Pattern: scaffold-by-default + assertions-when-librime-built
+
+The vcxproj does NOT link `rime.lib` in spec 016 because librime is
+not pre-built on a clean checkout (AGENTS.md sec 4.4 + L10 sec 2).
+The .cpp is a stub `main() { std::cout << "SCAFFOLD MODE"; return 0; }`
+that builds in ~2s and exits 0. spec 017+ can fill in real assertions
+after a one-time `build.bat rime` pre-step, conditional on
+`__has_include(<rime_api.h>)` or a runtime file-exists check on
+`librime\build\lib\Release\rime.lib`. This pattern:
+
+- Lets the new test project exist + register + compile without
+  blocking anyone
+- Doesn't add librime build time to the inner loop
+- Makes the "is this test enabled" question a property of the
+  environment, not a property of the source
+
+Any new test that needs real librime state should follow this pattern.
+
+### Pattern: byte-level patch + post-write byte-count verification
+
+For any file edited via PowerShell, the robust pattern is:
+
+```powershell
+$str = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+$str = $str.Replace($oldSubstr, $newSubstr)
+[System.IO.File]::WriteAllBytes($path, (New-Object System.Text.UTF8Encoding($false)).GetBytes($str))
+$bytes = [System.IO.File]::ReadAllBytes($path)
+$str2 = [System.Text.Encoding]::UTF8.GetString($bytes)
+$crlf = [regex]::Matches($str2, "`r`n").Count
+$loneLf = [regex]::Matches($str2, "(?<!" + "`r)" + "`n").Count
+$loneCr = [regex]::Matches($str2, "`r(?!" + "`n)").Count
+# assert: $crlf -eq $expectedDelta, $loneLf -eq 0, $loneCr -eq 0
+```
+
+The byte-count delta is a strong sanity check: it must match the
+expected number of inserted bytes exactly. If it doesn't, the script
+aborted mid-write or a regex matched the wrong string.
+
+### Anti-patterns (avoid these)
+
+- AP-L23-A: Use `(-match $p).matches[0].Groups[1].Value` then concatenate
+  into sln content. Null replacement is silent. Correct: byte-level
+  read vcxproj, regex match, then inject into sln in the same
+  atomic operation.
+- AP-L23-B: Assume sln auto-reads ProjectGuid and configs from
+  vcxproj. It does not. sln and vcxproj are independent.
+- AP-L23-C: Insert lines into sln sections using string
+  interpolation without verifying byte count. Unmatched regex will
+  silently 0-byte-replace, sln is corrupted but script exits 0.
+- AP-L23-D: Assume `msbuild <one-vcxproj>` exit 0 is enough. The
+  sln itself can be broken while every individual vcxproj builds.
+  Proof of sln health is opening in VS / `devenv /Build Release weasel.sln`,
+  not running individual vcxproj builds.
+
+### Related
+
+- AGENTS.md sec 3.3 (version bump procedure, env.bat/weasel.props gitignored)
+- spec 015 (test infra; run-tests.bat + L22)
+- spec 014 / L21 (Shift_L/R select 2nd/3rd candidate fix, dual-test pattern)
+- L10 sec 4 (librime is Win32-only, build with cmake -AWin32)
+- L18 / L19 (the testing gap that TestBindingResolution exists to close)

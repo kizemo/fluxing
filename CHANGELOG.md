@@ -1,4 +1,65 @@
 ﻿
+## [0.18.10.0-fluxing] - 2026-07-02
+
+### spec 016: behavior-level test framework (TestBindingResolution scaffold + L23)
+
+- **Problem (L23)**: Adding a new test project (TestBindingResolution)
+  to close the L18 / L19 testing gap required registering the project
+  in `weasel.sln` with the right GUID AND the right number of
+  `ProjectConfigurationPlatforms` entries. The handoff build attempt
+  used a PowerShell script that read the GUID from a regex match and
+  substituted it into a templated `Project(...)` line; the regex match
+  returned `$null` at the substitution call, so the sln ended up with
+  an empty `{}` GUID and zero `ProjectConfigurationPlatforms` entries.
+  VS would show `inconsistent project GUID` on open and the solution
+  build would skip the project. The string-only test layer in spec 014
+  / 015 cannot prove that librime's `key_binder` actually matches the
+  binding on a real KeyEvent -- L18 / L19 both shipped 100%
+  string-passing / 100% runtime-regressing fixes because the test layer
+  had no real runtime coverage.
+
+- **Fix (spec 016)**: 3 changes:
+  1. **NEW test\TestBindingResolution\**: scaffold test project with
+     vcxproj + .cpp + .filters + stdafx.h + stdafx.cpp + targetver.h
+     (modeled on TestWeaselIPC, no ATL/MFC, Win32-only configs). The
+     .cpp is a stub `main() { std::cout << "SCAFFOLD MODE"; return 0; }`
+     that builds in ~2s and exits 0. Real assertions (parse default.yaml,
+     build rime::KeyEvent, drive librime's key_binder) are stubbed in
+     comments and deferred to spec 017+ which requires a one-time
+     `build.bat rime` pre-step.
+  2. **Byte-level fix weasel.sln**: replaced empty GUID with the real
+     GUID `{99277F52-0973-411A-8171-E65FA3FF6D69}` read from
+     `TestBindingResolution.vcxproj`, then inserted 4
+     `ProjectConfigurationPlatforms` lines (Debug|Win32 + Release|Win32,
+     each with ActiveCfg + Build.0) after the E3A7B91D
+     (TestShiftSelectBinding) block. Byte count: 15796 -> 16148 (+352);
+     CRLF: 225 -> 229 (+4); no newlines introduced.
+  3. **Update scripts\run-tests.bat**: added TestBindingResolution to
+     both the BUILD loop and the RUN loop. The script now builds and
+     runs 5 test projects (added TestBindingResolution to the existing
+     list of TestDefaultHotkeys, TestShiftSelectBinding,
+     TestResponseParser, TestWeaselIPC).
+
+- **L23 entry** added to `.specify\memory\lessons-learned.md` documenting
+  the vcxproj-GUID + sln-ProjectConfigurationPlatforms contract and the
+  scaffold-by-default / assertions-when-librime-built pattern.
+
+- **Test results (scripts\run-tests.bat)**:
+  - TestDefaultHotkeys: 35/35 PASS
+  - TestShiftSelectBinding: 13/13 PASS
+  - TestBindingResolution: SCAFFOLD MODE - no assertions yet (exit 0)
+  - TestResponseParser: 3/4 PASS (test_4 pre-existing WeaselIPC bug)
+  - TestWeaselIPC: PASS (WeaselServer roundtrip)
+
+- **Spec**: .specify\specs\016-behavior-level-test-framework\
+  - spec.md 8033 bytes (intent + US + GWT acceptance)
+  - plan.md 7070 bytes (approach + Constitution Check + verification matrix)
+  - tasks.md 9729 bytes (T001..T008 implementation checklist)
+
+- **Installer**: `release\fluxing-0.18.10.0-installer.exe` (~42 MB).
+  env.bat + weasel.props bumped 0.18.9 -> 0.18.10 (gitignored, NOT
+  committed). Smoke test deferred to CI / clean machine (user's
+  WeaselServer.exe is running, per spec 015 sec 5).
 ## [0.18.9.0-fluxing] - 2026-07-02
 
 ### spec 015: fix test infrastructure (TestResponseParser + TestWeaselIPC + system(pause) anti-pattern)
