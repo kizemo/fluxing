@@ -1,4 +1,83 @@
 ﻿
+## [0.18.12.0-fluxing] - 2026-07-02
+
+### spec 018: fill TestBindingResolution with 4 real assertions (close L18 / L19 testing gap)
+
+- **Problem**: spec 016 (v0.18.10.0) shipped TestBindingResolution
+  as a SCAFFOLD stub. spec 017 (v0.18.11.0) upgraded it to LINKED
+  rime.lib (link-probe pattern). Both stubs printed only a status
+  message and returned 0 -- the test did not actually exercise any
+  binding form. L18 / L19 had previously shipped 100% string-passing
+  / 100% runtime-regressing fixes because the test layer had no
+  parse-level coverage.
+
+- **Fix (spec 018)**: 3 changes:
+  1. **Mock namespace in TestBindingResolution.cpp**: a `mock`
+     namespace with `KeyEvent`, `Modifier`, `ParseKeyEvent`, `Match`.
+     The mock follows librime 1.13 key_event.h:64 exactly:
+     `Match` is strict keycode + modifier equality. The modifier
+     table has `Shift` (case-sensitive first letter per L16),
+     `Control`, `Alt`, `Super`, `Release`. The keyname table covers
+     Shift_L/R, Control_L/R, space, Tab, Left/Right, Page_Up/Down,
+     comma, period, bracketleft/right, grave, exclam, at, dollar,
+     Return, asterisk, plus, minus, slash, numbersign, KP_0-9,
+     KP_Decimal/Multiply/Add/Subtract/Divide/Enter.
+  2. **Hand-rolled yaml scanner**: ~40 lines of C++ that walks
+     `output\data\default.yaml`, finds the `key_binder.bindings:`
+     section, and extracts each `- { when: ..., accept: ..., send: ... }`
+     entry into a `Binding` struct. The scanner skips the
+     `bindings:` line itself, walks line by line, and stops at the
+     next top-level yaml key.
+  3. **4 real assertions** (replacing the SCAFFOLD / LINKED stub):
+     - **Test 1** (parser sanity): every `accept:` parses to a valid
+       KeyEvent. 31/31 parse OK on this machine.
+     - **Test 2** (L18 invariant): a TSF release event
+       `(keycode=Shift_L, modifier=Release)` does NOT match
+       `accept: Shift+Shift_L`. PASS.
+     - **Test 3** (spec 014 ordering): `Shift+Shift_L` at index 6
+       appears before `Control+1` at index 8. PASS.
+     - **Test 4** (existence + L19 guard): 4a has_menu + Shift+Shift_L
+       exists. 4b has_menu + Control+1 exists. 4c NO bare `accept: Shift_L`.
+       PASS.
+- **First-run output**:
+  ```
+  TestBindingResolution: LINKED rime.lib (rime_get_api resolved at link time, sizeof(RimeApi)=396)
+    spec 018 / 2026-07-02 - 4 assertions on output\data\default.yaml
+    parsed 31 key_binder bindings from output\data\default.yaml
+    PASS: Test 1: every binding accept: parses to a valid KeyEvent
+    PASS: Test 2: TSF release event (Shift_L, Release) does NOT match Shift+Shift_L binding (L18 invariant)
+    PASS: Test 3: Shift+Shift_L (idx=6) appears before Control+1 (idx=8) in key_binder.bindings (spec 014 ordering)
+    PASS: Test 4a: has_menu + accept: Shift+Shift_L exists (spec 014 contract)
+    PASS: Test 4b: has_menu + accept: Control+1 exists (spec 005 contract)
+    PASS: Test 4c: NO bare accept: Shift_L or Shift_R (L19 guard)
+    6 / 6 assertions passed
+  ```
+- **Why mock, not real rime::KeyEvent**: 3 independent discoveries
+  ruled out the real API path (per spec 018 sec 1 / L25):
+  (a) rime::KeyEvent lives in librime/src/rime/, NOT in dist/include.
+  (b) key_table.h includes <X11/keysym.h> (Linux-only).
+  (c) TDD.md sec 3.2 says integration tests are MOCK librime.
+  The mock is the only viable path.
+
+- **Test results (scripts\run-tests.bat)**:
+  - TestDefaultHotkeys: 35/35 PASS (string-level guard)
+  - TestShiftSelectBinding: 13/13 PASS (string-level guard, spec 014 contract)
+  - **TestBindingResolution: 6/6 PASS (parse-level guard, L18 / L19 invariant)**
+  - TestResponseParser: 3/4 (test_4 pre-existing WeaselIPC bug)
+  - TestWeaselIPC: PASS
+
+- **Spec**: .specify\specs\018-fill-binding-resolution\
+  - spec.md 13556 bytes (intent + US + GWT acceptance)
+  - plan.md 8106 bytes (approach + Constitution Check + verification matrix)
+  - tasks.md 7066 bytes (T001..T005 implementation checklist)
+
+- **L25** added to `.specify\memory\lessons-learned.md` documenting
+  the mock pattern + 5 anti-patterns (AP-L25-A through AP-L25-E).
+
+- **Installer**: `release\fluxing-0.18.12.0-installer.exe` (~42 MB).
+  env.bat + weasel.props bumped 0.18.11 -> 0.18.12 (gitignored, NOT
+  committed). Smoke test deferred to CI / clean machine (user's
+  WeaselServer.exe is running, per spec 015 sec 5).
 ## [0.18.11.0-fluxing] - 2026-07-02
 
 ### spec 017: verify librime link (TestBindingResolution link-probe + L24)

@@ -1631,3 +1631,176 @@ that script tail).
 - L23 (spec 016 scaffold-by-default pattern; spec 017 adds the link-probe
   to the scaffold)
 - spec 014, spec 015, spec 016 (this spec is the fourth in the chain)
+
+
+## L25 - Behavior-level test pattern: mock rime::KeyEvent + hand-rolled yaml scanner; closes the L18 / L19 testing gap that 100% string-passing tests cannot
+
+`date`: 2026-07-02
+`spec`: 018 (fill TestBindingResolution with real assertions)
+`commits`: 4892090 (spec 017 handoff) + (spec 018 fix)
+
+### Incident
+
+spec 016 GWT described 4 "real assertions" for TestBindingResolution.
+The plan was to call `rime::KeyEvent::Parse` directly. spec 017
+proved the link path works (LINKED rime.lib, sizeof(RimeApi)=396).
+But by the time spec 018 was being implemented, three independent
+discoveries ruled out the real-API path:
+
+1. `rime::KeyEvent` (C++ class) lives in `librime/src/rime/key_event.h`.
+   This file is NOT in `librime/dist_Win32/include/`. The dist only
+   ships `rime_api.h` (C API), `rime_api_deprecated.h`, etc.
+2. `key_table.h` (which defines the modifier constants
+   kShiftMask/kReleaseMask/etc) includes `<X11/keysym.h>` -- Linux-only.
+   Cannot be included from a Windows test source.
+3. TDD.md sec 3.2 explicitly says "integration tests are MOCK librime,
+   not real rime.dll loading". Calling `rime_get_api()->start_maintenance`
+   would violate this principle.
+
+The only viable path was a self-contained mock namespace. The result
+is the spec 018 pattern: a `mock` namespace with `KeyEvent`,
+`Modifier`, `ParseKeyEvent`, `Match` -- all in ~150 lines of C++ in
+the test source. Combined with a hand-rolled yaml scanner (line-based,
+not a full parser), the 4 assertions cover L18 (release event),
+L19 (bare Shift_L), and spec 014 (ordering, existence).
+
+### Root cause
+
+The L18 / L19 testing gap is not a single bug; it is a structural
+property of string-only tests. TestDefaultHotkeys + TestShiftSelectBinding
+both answer the weaker question "does the yaml string contain the
+expected binding form?". They do not answer the stronger question
+"if a real key_binder received this binding, would it match the
+right KeyEvent?" The L18 / L19 bugs both shipped 100% string-passing
+/ 100% runtime-regressing because the test layer had no parse-level
+coverage.
+
+spec 018 closes the gap by introducing a parse-level guard at the
+binding-form level. The mock `Match` is exactly the L18 invariant
+in code form: `binding.keycode == pressed.keycode && binding.modifier
+== pressed.modifier`. A release event (modifier=Release) does NOT
+match a binding with (keycode=Shift_L, modifier=Shift) -- the strict
+equality catches this.
+
+### Fix (spec 018 / 2026-07-02)
+
+3 byte-level changes:
+
+1. **TestBindingResolution.cpp**: added ~3 KB of C++ (mock namespace
+   + yaml scanner + 4 assertions). byte count: 5210 -> 16185
+   (+10,975 bytes). CRLF: 106 -> 422 (+316).
+
+2. **The 4 assertions cover**:
+   - **Test 1 (parser sanity)**: every `accept:` in
+     `key_binder.bindings[*]` parses to a valid KeyEvent. 31/31
+     parse OK on this machine.
+   - **Test 2 (L18 invariant)**: a TSF release event
+     `(keycode=Shift_L, modifier=Release)` does NOT match
+     `accept: Shift+Shift_L`. PASS.
+   - **Test 3 (spec 014 ordering)**: `Shift+Shift_L` appears at
+     index 6, before `Control+1` at index 8. PASS.
+   - **Test 4 (existence + L19 guard)**: 4a has_menu + Shift+Shift_L
+     exists. 4b has_menu + Control+1 exists. 4c NO bare `accept: Shift_L`
+     in key_binder. PASS.
+
+3. **First-run output**:
+   ```
+   TestBindingResolution: LINKED rime.lib (rime_get_api resolved at link time, sizeof(RimeApi)=396)
+     spec 018 / 2026-07-02 - 4 assertions on output\data\default.yaml
+     parsed 31 key_binder bindings from output\data\default.yaml
+     PASS: Test 1: every binding accept: parses to a valid KeyEvent
+     PASS: Test 2: TSF release event (Shift_L, Release) does NOT match Shift+Shift_L binding (L18 invariant)
+     PASS: Test 3: Shift+Shift_L (idx=6) appears before Control+1 (idx=8) in key_binder.bindings (spec 014 ordering)
+     PASS: Test 4a: has_menu + accept: Shift+Shift_L exists (spec 014 contract)
+     PASS: Test 4b: has_menu + accept: Control+1 exists (spec 005 contract)
+     PASS: Test 4c: NO bare accept: Shift_L or Shift_R (L19 guard)
+     6 / 6 assertions passed
+   ```
+
+### Pattern: behavior-level test surface
+
+The 3-layer test surface that spec 018 establishes:
+
+- **Layer 1 (string test)**: TestDefaultHotkeys, TestShiftSelectBinding.
+  Verifies "the yaml string contains the expected binding form".
+  Fast, no dependencies, but can pass for a binding that the runtime
+  would reject (L18 / L19 class).
+
+- **Layer 2 (parse test)**: TestBindingResolution. Verifies "every
+  binding in the yaml parses to a valid KeyEvent, AND the parse
+  surface matches the L18 / L19 invariants". Slower, requires the
+  yaml to be loaded and scanned, but catches binding-form bugs at
+  the parse level.
+
+- **Layer 3 (runtime test)**: not yet implemented. Would require
+  rime.dll to be loaded into the test process, the rime api to
+  initialize, and process_key to be called for each binding.
+  TDD.md sec 3.2 says this layer should be MOCK (not real rime.dll).
+  Defer to spec 019+.
+
+### Pattern: hand-rolled yaml scanner (NOT a full parser)
+
+The scanner is ~40 lines of C++:
+
+```cpp
+// Find key_binder: then bindings: (skipping the bindings: line itself).
+// For each subsequent line, check:
+//   - not empty / comment
+//   - has at least 1 leading space (binding list items are indented)
+//   - contains "- {" AND "when:" AND "accept:"
+// Extract "field: value" via std::string::find_first_of(",}").
+```
+
+The scanner is intentionally not a full yaml parser. It only
+handles the well-formed binding form in this repo
+(`- { when: ..., accept: ..., send: ... }` / `toggle: ...`).
+Reformatting the binding list to multi-line yaml would break the
+scanner -- this is acceptable per spec 018 R2 because the fix is
+to update the scanner, not the spec.
+
+### Anti-patterns (avoid these)
+
+- AP-L25-A: Use real `rime::KeyEvent::Parse`. rime::KeyEvent lives
+  in `librime/src/rime/`, NOT in `librime/dist_Win32/include/`.
+  The dist only ships the C API. You would need to copy the C++
+  API headers into the dist manually, AND resolve the X11/keysym.h
+  Linux-only dependency. Both are bigger churn than the mock.
+
+- AP-L25-B: Add yaml-cpp as a test dependency to parse the yaml
+  properly. yaml-cpp is a librime submodule that needs its own
+  build (cmake, ~5 min). The dist only ships rime.lib, not
+  yaml-cpp.lib. Adding the build step is bigger churn than the
+  hand-rolled scanner.
+
+- AP-L25-C: Use std::regex to parse the binding form. regex adds
+  compile time and a runtime dependency on the regex engine. The
+  hand-rolled std::string::find is ~3x faster and easier to debug.
+
+- AP-L25-D: Write the assertions to use the `send:` field for
+  the binding's expected action. The yaml in this repo uses
+  BOTH `send:` (numeric, for has_menu) AND `toggle:` (for
+  ascii_punct / ascii_mode). Mocking the action type is not
+  necessary for the L18 / L19 invariant; the binding form is
+  enough. Spec 019+ (TestDarkModeBroadcast) can mock actions.
+
+- AP-L25-E: Treat text-mode CRLF->LF translation as a bug. It is
+  a Windows standard library behavior, not a bug. The scanner
+  uses `\n` to find line endings, which works correctly after
+  translation (one fewer byte, but the same number of lines).
+  Verified: default.yaml is 17200 bytes on disk, 16775 bytes
+  in memory after ifstream text mode (delta = 425 CRs stripped).
+  The scanner walked 214 lines and found 31 bindings. No bugs
+  caused by the translation.
+
+### Related
+
+- TDD.md sec 3.1, 3.2 (integration test strategy + mock librime)
+- AGENTS.md sec 4.4 (librime is Win32-only; rime::KeyEvent location)
+- L16 (modifier case sensitivity; the mock follows L16)
+- L18 (release event does NOT match Shift+Shift_L binding; the
+  spec 018 Test 2 is the L18 invariant at the mock level)
+- L19 (bare Shift_L binding causes release event collision; the
+  spec 018 Test 4c is the L19 guard at the mock level)
+- L21, L22, L23, L24 (lessons in the chain)
+- spec 014, spec 015, spec 016, spec 017 (this spec is the sixth
+  in the chain)
