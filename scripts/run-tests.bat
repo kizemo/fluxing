@@ -1,7 +1,7 @@
 @echo off
 rem ====================================================================
 rem scripts\run-tests.bat
-rem Build + run all 4 test projects for Fluxing.
+rem Build + run all 5 test projects for Fluxing.
 rem Usage: scripts\run-tests.bat
 rem Exit code: 0 = all pass, non-zero = at least one failed
 rem
@@ -14,6 +14,10 @@ rem
 rem Spec 015 (2026-07-02) - replaces ad-hoc developer recall of
 rem the msbuild-with-SolutionDir incantation. See
 rem .specify\specs\015-fix-test-infrastructure\spec.md for context.
+rem
+rem Spec 016 (2026-07-02) - added TestBindingResolution (behavior-level
+rem test framework scaffold). See
+rem .specify\specs\016-behavior-level-test-framework\spec.md for context.
 rem ====================================================================
 
 setlocal enableextensions enabledelayedexpansion
@@ -48,7 +52,7 @@ rem Note: SolutionDir must be the absolute path WITHOUT a trailing
 rem backslash (otherwise MSBuild parses the escaped quote wrong and
 rem the OutDir ends up nested under test\<name>\Release\ instead of
 rem the top-level Release\).
-for %%P in (test\TestDefaultHotkeys test\TestShiftSelectBinding test\TestResponseParser test\TestWeaselIPC) do (
+for %%P in (test\TestDefaultHotkeys test\TestShiftSelectBinding test\TestBindingResolution test\TestResponseParser test\TestWeaselIPC) do (
     echo === Building %%P ===
     "%MSBUILD%" "%%P\%%~nP.vcxproj" /t:Build /p:Configuration=Release /p:Platform=Win32 /p:SolutionDir="%SOL_DIR%" /m:1 /nologo /v:minimal
     if !errorlevel! NEQ 0 set "FAIL=1"
@@ -57,7 +61,7 @@ for %%P in (test\TestDefaultHotkeys test\TestShiftSelectBinding test\TestRespons
 rem Run each test exe. Stdin redirected to nul to avoid system(pause) hangs
 rem (defensive - the spec 015 fix removed system(pause) from all test sources,
 rem but this is cheap insurance against future test code regression).
-for %%E in (TestDefaultHotkeys TestShiftSelectBinding TestResponseParser TestWeaselIPC) do (
+for %%E in (TestDefaultHotkeys TestShiftSelectBinding TestBindingResolution TestResponseParser TestWeaselIPC) do (
     echo === Running %%E.exe ===
     rem Use NEQ 0 (not "if errorlevel 1") because BOOST_ASSERT
     rem failures in optimized Release builds raise 0xC0000005 (signed
