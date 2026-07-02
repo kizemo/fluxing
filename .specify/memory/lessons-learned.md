@@ -1465,3 +1465,169 @@ aborted mid-write or a regex matched the wrong string.
 - spec 014 / L21 (Shift_L/R select 2nd/3rd candidate fix, dual-test pattern)
 - L10 sec 4 (librime is Win32-only, build with cmake -AWin32)
 - L18 / L19 (the testing gap that TestBindingResolution exists to close)
+
+
+## L24 - librime 1.13.1 rime.lib is linkable from msbuild; __has_include + extern function-pointer is the "link-probe" pattern for behavior-level tests
+
+`date`: 2026-07-02
+`spec`: 017 (verify librime link)
+`commits`: 2836f78 (spec 016 handoff) + (spec 017 fix)
+
+### Incident
+
+spec 016 shipped TestBindingResolution as a SCAFFOLD MODE stub
+(intentional -- "real assertions deferred to spec 017+ pending
+build.bat rime"). After spec 016 v0.18.10.0 shipped, the next
+spec (017) needed to actually wire librime into the test. The
+build had two layers to verify:
+
+1. **Is rime.lib actually buildable + linkable on this machine?**
+   Per AGENTS.md sec 4.4, librime is a Win32-only cmake build
+   that takes 5-15 minutes. The pre-built rime.lib at
+   `librime/dist_Win32/lib/rime.lib` on this machine was 293,342
+   bytes (built 2026-07-01). The smoke test
+   (`cl /nologo /EHsc /I include _t.cpp /link /LIBPATH:librime\dist_Win32\lib rime.lib`)
+   succeeded in 1.7s, producing a 89,600-byte exe with no
+   LNK2001. **rime.lib is linkable.**
+
+2. **Can TestBindingResolution actually consume the include + lib paths?**
+   The vcxproj was a near-copy of TestWeaselIPC, with no librime
+   include or lib paths wired. spec 017 needed to:
+   - Add `$(SolutionDir)\librime\include` to AdditionalIncludeDirectories
+   - Add `$(SolutionDir)\librime\dist_Win32\lib` to AdditionalLibraryDirectories
+   - Add a `__has_include(<rime_api.h>)` guard to the .cpp so
+     the test still builds on a clean checkout without librime
+   - Declare a function pointer `RimeApi* (*get_api_ptr)() = rime_get_api;`
+     inside the guard -- this forces the linker to resolve
+     `rime_get_api` from rime.lib. If rime.lib is missing or
+     misconfigured, the link fails with LNK2001 (build fails
+     loud, not silent).
+
+### Root cause
+
+spec 016 designed the SCAFFOLD mode assuming librime would NOT
+be available at test-build time. This was the right call for
+spec 016 (TDD.md sec 3.2 says integration tests are MOCK librime,
+not real rime.dll). But spec 016 "real assertions in spec 017+"
+language left the link path unbuilt. The unbuilt link path is
+exactly the kind of "the test passes locally but the build
+system is not actually wired" trap that L18 / L19 exemplify.
+
+### Fix (spec 017 / 2026-07-02)
+
+Three byte-level changes:
+
+1. **TestBindingResolution.vcxproj**: added
+   `$(SolutionDir)\librime\include` to AdditionalIncludeDirectories
+   and `$(SolutionDir)\librime\dist_Win32\lib` to
+   AdditionalLibraryDirectories, in both Debug|Win32 and
+   Release|Win32 ItemDefinitionGroup. byte count: 4888 -> 5026
+   (+138 bytes = 2 paths x 2 configs x ~34 char path + 4 CRLF).
+
+2. **TestBindingResolution.cpp**: added the `__has_include` guard
+   around `#include <rime_api.h>` and the link-probe branch
+   (`RimeApi* (*get_api_ptr)() = rime_get_api;`). The .cpp now
+   prints "LINKED rime.lib" (link succeeded) or
+   "SCAFFOLD MODE - rime_api.h not found" (clean checkout
+   fallback). byte count: 4360 -> 5210 (+850 bytes).
+
+3. **First-run output**:
+   ```
+   TestBindingResolution: LINKED rime.lib (rime_get_api resolved at link time, sizeof(RimeApi)=396)
+     spec 017 / 2026-07-02 - librime 1.13.1 link verified
+     Real assertions deferred to spec 018+ (mock key_binder,
+     per TDD.md sec 3.2).
+   ```
+   The `sizeof(RimeApi)=396` is a sanity check that the
+   rime_api.h we are including is the one librime 1.13.1
+   actually exports. If the size were 0 or wildly different,
+   it would mean we are linking a different librime version.
+
+### Pattern: link-probe (declare but do not call)
+
+The key pattern: **declare the function pointer; do not call it.**
+
+```cpp
+#if __has_include(<rime_api.h>)
+#include <rime_api.h>
+#define RIME_API_H_PRESENT 1
+#else
+#define RIME_API_H_PRESENT 0
+#endif
+
+int main() {
+#if RIME_API_H_PRESENT
+    RimeApi* (*get_api_ptr)() = rime_get_api;  // <-- link-probe
+    (void)get_api_ptr;
+    std::cout << "LINKED rime.lib" << std::endl;
+#else
+    std::cout << "SCAFFOLD MODE - rime_api.h not found" << std::endl;
+#endif
+    return 0;
+}
+```
+
+The function-pointer declaration forces the linker to resolve
+`rime_get_api` from rime.lib. If rime.lib is missing,
+`LNK2001: unresolved external symbol rime_get_api` -- the
+build fails loud at the link step, not silent at runtime.
+
+The pointer is never dereferenced (`(void)get_api_ptr;` after
+declaration). Calling `get_api_ptr()` would require rime.dll
+to be loaded (via rime_start_maintenance setup), which is a
+runtime test, not a link test. Per TDD.md sec 3.2, integration
+tests are MOCK librime -- spec 018+ will write a mock key_binder
+that simulates the rime::KeyEvent API surface in pure C++,
+and the link-probe here is the bridge: it proves the build
+system can reach the real librime symbols, but the test itself
+never depends on rime.dll.
+
+### Pattern: smoke-test any new rime.lib consumer
+
+For any future test project that needs to link rime.lib,
+the 1.7-second smoke test pattern is:
+
+```powershell
+$test = "#include <rime_api.h>`nint main() { RimeApi* a = rime_get_api(); (void)a; return 0; }"
+[System.IO.File]::WriteAllBytes("_t.cpp", $utf8NoBom.GetBytes($test))
+cmd /c "vcvars32.bat && cl /nologo /EHsc /I include _t.cpp /link /LIBPATH:librime\dist_Win32\lib rime.lib /OUT:_t.exe"
+# Expect: exit 0, _t.exe ~89 KB
+```
+
+If this fails with LNK2001, the dev needs to run `build.bat rime`
+first. If this fails with a missing vcvars32.bat, fix the script
+VCVARS path. If this fails with `rime_api.h not found`, the dev
+needs to re-run `build.bat rime` (the include copy is part of
+that script tail).
+
+### Anti-patterns (avoid these)
+
+- AP-L24-A: Use `RIME_VERSION` macro to print librime version.
+  librime 1.13.1 does NOT export `RIME_VERSION` in rime_api.h
+  (verified by Select-String). Use `sizeof(RimeApi)` instead as
+  a sanity-check proxy.
+- AP-L24-B: Call `rime_get_api()` directly in the test. This
+  returns a pointer to functions in rime.dll, which is not loaded
+  by the test exe. Calling a function in an unloaded DLL raises
+  0xC0000005 (access violation) and the test aborts. Declare
+  the function pointer; do not call it.
+- AP-L24-C: Add `rime.lib` to AdditionalDependencies
+  unconditionally. If librime is not built, the link fails with
+  LNK1104. The `__has_include` guard lets the test project build
+  without rime.lib present (the lib is only linked when the
+  function pointer is declared, which only happens in the
+  RIME_API_H_PRESENT branch -- but for now we DO want to link
+  it always; spec 018+ will revisit if needed).
+- AP-L24-D: Rebuild rime.lib as part of spec 017. The existing
+  build is sufficient and a rebuild takes 5-15 min. Only rebuild
+  when librime source has changed (commit hash differs from
+  the pre-built rime.lib source).
+
+### Related
+
+- AGENTS.md sec 4.4 (librime is Win32-only, build.bat rime flow)
+- TDD.md sec 3.2 (integration tests are MOCK librime)
+- L18, L19 (testing gap that this link-probe is the precondition for)
+- L23 (spec 016 scaffold-by-default pattern; spec 017 adds the link-probe
+  to the scaffold)
+- spec 014, spec 015, spec 016 (this spec is the fourth in the chain)

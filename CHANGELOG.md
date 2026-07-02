@@ -1,4 +1,79 @@
 ﻿
+## [0.18.11.0-fluxing] - 2026-07-02
+
+### spec 017: verify librime link (TestBindingResolution link-probe + L24)
+
+- **Problem**: spec 016 (v0.18.10.0) shipped TestBindingResolution
+  as a SCAFFOLD stub. The "real assertions deferred to spec 017+
+  pending build.bat rime" language left the link path unbuilt.
+  L18 / L19 both shipped 100% string-passing / 100% runtime-
+  regressing fixes; the link-probe is the precondition for any
+  behavior-level test that drives librime symbols.
+
+- **Fix (spec 017)**: 3 changes:
+  1. **Wire librime include + lib paths into
+     TestBindingResolution.vcxproj**: added
+     `$(SolutionDir)\librime\include` to
+     AdditionalIncludeDirectories and
+     `$(SolutionDir)\librime\dist_Win32\lib` to
+     AdditionalLibraryDirectories, in both Debug|Win32 and
+     Release|Win32 ItemDefinitionGroup. Byte count: 4888 -> 5026
+     (+138). CRLF: 82 (unchanged).
+  2. **Add link-probe branch in TestBindingResolution.cpp**:
+     `#if __has_include(<rime_api.h>)` guard around the
+     `#include <rime_api.h>`, then declare a function pointer
+     `RimeApi* (*get_api_ptr)() = rime_get_api;` inside the
+     guard. The declaration forces the linker to resolve
+     `rime_get_api` from rime.lib (link-fails-loud if rime.lib
+     is missing). The pointer is never dereferenced (would need
+     rime.dll loaded; per TDD.md sec 3.2 integration tests are
+     MOCK librime, not real rime.dll). The .cpp prints
+     "LINKED rime.lib (rime_get_api resolved at link time,
+     sizeof(RimeApi)=396)" on success or "SCAFFOLD MODE -
+     rime_api.h not found" on a clean checkout. Byte count:
+     4360 -> 5210 (+850). CRLF: 84 -> 106 (+22).
+  3. **L24 entry** added to `.specify\memory\lessons-learned.md`
+     documenting the link-probe pattern (declare function
+     pointer, do not call it) and 4 anti-patterns (AP-L24-A
+     through AP-L24-D).
+
+- **First-run output** (scripts\run-tests.bat on this machine):
+  ```
+  TestBindingResolution: LINKED rime.lib (rime_get_api resolved at link time, sizeof(RimeApi)=396)
+    spec 017 / 2026-07-02 - librime 1.13.1 link verified
+    Real assertions deferred to spec 018+ (mock key_binder,
+    per TDD.md sec 3.2).
+  ```
+
+- **Smoke test verification** (already executed 2026-07-02):
+  ```
+  cl /nologo /EHsc /I include _t.cpp /link /LIBPATH:librime\dist_Win32\lib rime.lib /OUT:_t.exe
+  # exit 0, _t.exe 89,600 bytes
+  ```
+
+- **Test results (scripts\run-tests.bat)**:
+  - TestDefaultHotkeys: 35/35 PASS
+  - TestShiftSelectBinding: 13/13 PASS
+  - TestBindingResolution: LINKED rime.lib (exit 0) — was SCAFFOLD
+    in spec 016, now LINKED
+  - TestResponseParser: 3/4 PASS (test_4 pre-existing WeaselIPC bug)
+  - TestWeaselIPC: PASS (WeaselServer roundtrip)
+
+- **Spec**: .specify\specs\017-verify-librime-link\
+  - spec.md 11173 bytes (intent + US + GWT acceptance)
+  - plan.md 7866 bytes (approach + Constitution Check + verification matrix)
+  - tasks.md 9085 bytes (T001..T005 implementation checklist)
+
+- **Installer**: `release\fluxing-0.18.11.0-installer.exe` (~42 MB).
+  env.bat + weasel.props bumped 0.18.10 -> 0.18.11 (gitignored, NOT
+  committed). Smoke test deferred to CI / clean machine (user's
+  WeaselServer.exe is running, per spec 015 sec 5).
+
+- **Next spec (018+)**: fill in real TestBindingResolution assertions
+  using a MOCK key_binder (TDD.md sec 3.2), not real rime.dll. The
+  link-probe is the bridge: it proves the build system can reach
+  real librime symbols, but the test itself will never depend on
+  rime.dll at runtime.
 ## [0.18.10.0-fluxing] - 2026-07-02
 
 ### spec 016: behavior-level test framework (TestBindingResolution scaffold + L23)
