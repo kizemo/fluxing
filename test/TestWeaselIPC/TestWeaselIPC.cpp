@@ -124,7 +124,6 @@ int client_main() {
   }
   client.EndSession();
 
-  system("pause");
   return 0;
 }
 
