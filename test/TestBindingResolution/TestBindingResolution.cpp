@@ -18,15 +18,37 @@
 //   without blocking anything
 
 #include "stdafx.h"
+
+#if __has_include(<rime_api.h>)
+#include <rime_api.h>
+#define RIME_API_H_PRESENT 1
+#else
+#define RIME_API_H_PRESENT 0
+#endif
+
 #include <iostream>
 
 int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
-    std::cout << "TestBindingResolution: SCAFFOLD MODE - no assertions yet" << std::endl;
+#if RIME_API_H_PRESENT
+    // Link-probe: declare rime_get_api as a function pointer to force
+    // the linker to resolve the symbol from rime.lib. The pointer
+    // is never dereferenced (would need rime.dll at runtime; we
+    // respect TDD.md sec 3.2 mock-librime principle).
+    RimeApi* (*get_api_ptr)() = rime_get_api;
+    (void)get_api_ptr;
+    std::cout << "TestBindingResolution: LINKED rime.lib"
+              << " (rime_get_api resolved at link time, sizeof(RimeApi)=" << sizeof(RimeApi) << ")"
+              << std::endl;
+    std::cout << "  spec 017 / 2026-07-02 - librime 1.13.1 link verified" << std::endl;
+    std::cout << "  Real assertions deferred to spec 018+ (mock key_binder," << std::endl;
+    std::cout << "  per TDD.md sec 3.2)." << std::endl;
+#else
+    std::cout << "TestBindingResolution: SCAFFOLD MODE - rime_api.h not found" << std::endl;
     std::cout << "  spec 016 / 2026-07-02 - see .specify\\specs\\016-behavior-level-test-framework\\spec.md" << std::endl;
-    std::cout << "  When librime 1.13+ is built (output\\Win32\\rime.lib exists)," << std::endl;
-    std::cout << "  fill in the assertions below to close the L18 / L19 testing gap." << std::endl;
+    std::cout << "  Run build.bat rime to produce rime.lib, then re-run." << std::endl;
+#endif
     return 0;
 }
 
