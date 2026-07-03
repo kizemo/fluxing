@@ -1,3 +1,39 @@
+## [0.18.16.0-fluxing] - 2026-07-03
+
+
+### spec 027: test infra hardening (L22/L28/L30/L31 promoted to scripts)
+
+- **Problem**: specs 015-026 accumulated four infra lessons (L22, L28, L30, L31) all in prose form in `lessons-learned.md`. The next spec author repeatedly re-introduced the same bug (verified across 4 specs in the silent -2 case - the TestWeaselIPC bug went undiagnosed for the entire 015-026 window). Prose lessons decay; scripts do not.
+
+- **Solution**: package each infra lesson into a `.bat` wrapper that the next spec author calls by NAME, not by re-deriving the incantation from prose. Three new scripts in `scripts\test-infra\`:
+  1. `install_smoke_test.bat` - named entry point for the AGENTS.md sec 2.5 NSIS smoke test recipe (L28 cure: `.bat` wrapper, not PowerShell shim).
+  2. `run-test-suite.bat` - the actual meat. Contains the proven `scripts\run-tests.bat` body verbatim (L22 + L30 cures baked in) and is callable by name from any spec that needs to verify test infra.
+  3. `verify-test-binaries-fresh.bat` - L31 stale-binary detector. Iterates the 6 test projects, compares mtimes, exits 1 if any source is newer than its `.exe`.
+
+- **Two new lessons discovered during implementation** (recorded in `lessons-learned.md`):
+  - **L33**: PowerShell `$` parsing eats PowerShell -Command "$..." variables. The `verify-test-binaries-fresh.bat` originally used inline `powershell -Command "$e = ..."`; the `$` characters were dropped by PowerShell before the string reached PowerShell (a `cmd /c` argument-parse round-trip). Fix: use `-File` with a sibling `.ps1` (the `.ps1` is gitignored, the `.bat` is the tracked entry point).
+  - **L34**: cmd `rem` lines containing `(` start a sub-block that ends at the next `)`. The `run-test-suite.bat` originally had a rem line `rem failures ... raise 0xC0000005 (signed`; the `(` opened a sub-block inside the rem, and the `)` on a later `echo ... (see spec 027).` line closed it - the post-`)` text was then parsed as a new command (`"misinterprets"` appeared 4 times on stderr). Fix: avoid `(` and `)` in `rem` text; use `-`, `,`, or words instead. Symptom is cosmetic (does not affect RC) but the underlying block-parse corruption can skip real commands.
+
+- **L32** (new): documents the lesson-to-script promotion pattern itself - 3 questions to ask when writing a new infra lesson: (1) Has it bitten us in 2+ specs? (2) Is the fix a one-liner that is easy to forget? (3) Can a thin wrapper enforce it without changing product behavior? If all yes, promote to a script.
+
+- **Files (4 new + 2 modified)**:
+  - NEW: `scripts\test-infra\install_smoke_test.bat` (entry point)
+  - NEW: `scripts\test-infra\run-test-suite.bat` (the meat)
+  - NEW: `scripts\test-infra\verify-test-binaries-fresh.bat` (L31 detector)
+  - NEW: `scripts\test-infra\verify-stale-temp.ps1` (sibling .ps1, gitignored)
+  - MOD: `scripts\run-tests.bat` (5-line thin wrapper around `run-test-suite.bat`)
+  - MOD: `.gitignore` (added `scripts/test-infra/verify-stale-temp.ps1`)
+  - MOD: `.specify\memory\lessons-learned.md` (L32, L33, L34 appended)
+
+- **Verification (post-impl, all 3 wrappers + thin wrapper)**:
+  - `cmd /c scripts\test-infra\run-test-suite.bat` -> RC 0, `=== ALL TESTS PASSED ===`, 6/6 test projects (no stderr errors after L34 fix).
+  - `cmd /c scripts\test-infra\verify-test-binaries-fresh.bat` -> RC 0, all 6 FRESH (stale detection verified by touching a .cpp and re-running -> RC 1, project marked STALE).
+  - `cmd /c scripts\test-infra\install_smoke_test.bat` -> RC 0, prints the AGENTS.md sec 2.5 pointer.
+  - `cmd /c scripts\run-tests.bat` -> RC 0 (backward-compat preserved).
+
+- **No product code change, no installer change, no CI change. No version bump in `env.bat` / `weasel.props` (gitignored; this is a bookkeeping sub-release). Tag is `v0.18.16.0` per P8 / P4 scope convention.**
+
+
 
 ## [0.18.14.0-fluxing] - 2026-07-03
 ### spec 026: fix TestWeaselIPC integration test orchestration (4-spec-long silent -2 closed)
