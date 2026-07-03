@@ -22,6 +22,7 @@ class ClientImpl {
   bool ClearComposition();
   bool SelectCandidateOnCurrentPage(size_t index);
   bool HighlightCandidateOnCurrentPage(size_t index);
+  bool DeleteCandidateOnCurrentPage(size_t index);
   bool ChangePage(bool backward);
   void UpdateInputPosition(RECT const& rc);
   void FocusIn();

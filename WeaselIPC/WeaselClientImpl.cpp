@@ -88,6 +88,14 @@ bool ClientImpl::SelectCandidateOnCurrentPage(size_t index) {
   return ret != 0;
 }
 
+bool ClientImpl::DeleteCandidateOnCurrentPage(size_t index) {
+  if (!_Active())
+    return false;
+  LRESULT ret = _SendMessage(WEASEL_IPC_DELETE_CANDIDATE_ON_CURRENT_PAGE, index,
+                             session_id);
+  return ret != 0;
+}
+
 bool ClientImpl::HighlightCandidateOnCurrentPage(size_t index) {
   if (!_Active())
     return false;
@@ -234,6 +242,10 @@ bool Client::ClearComposition() {
 
 bool Client::SelectCandidateOnCurrentPage(size_t index) {
   return m_pImpl->SelectCandidateOnCurrentPage(index);
+}
+
+bool Client::DeleteCandidateOnCurrentPage(size_t index) {
+  return m_pImpl->DeleteCandidateOnCurrentPage(index);
 }
 
 bool Client::HighlightCandidateOnCurrentPage(size_t index) {

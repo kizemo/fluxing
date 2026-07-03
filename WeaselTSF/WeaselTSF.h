@@ -151,10 +151,12 @@ class WeaselTSF : public ITfTextInputProcessorEx,
                         size_t* const hov,
                         bool* const next,
                         bool* const scroll_next);
+  void HandleDeleteCandidate(const size_t index);
 
  private:
   /* ui callback functions private */
   void _SelectCandidateOnCurrentPage(const size_t index);
+  void _DeleteCandidateOnCurrentPage(const size_t index);
   void _HandleMouseHoverEvent(const size_t index);
   void _HandleMousePageEvent(bool* const nextPage, bool* const scrollNextPage);
   /* TSF Related */
