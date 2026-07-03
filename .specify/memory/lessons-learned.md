@@ -1978,3 +1978,66 @@ A .bat wrapper removes the PowerShell quoting layer entirely.
 - **AP-L28-C**: Mixing `/D=` and `/LOG=` in a single PowerShell `& cmd /c`
   invocation. The L15 anti-pattern at the `=` boundary.
 
+## L29 - git autocrlf=true silently strips CRs on `git add`; baseline files (byte-faithful diff sources) MUST be staged with autocrlf=false
+
+**Incident (spec 025, 0.18.14.1 bookkeeping commit)**: when
+committing the pre-staged `.specify/specs/001-user-visible-strings/baseline/*`
+files (pre-image snapshot per spec 001 T016 byte-level diff), the
+first commit stripped 414 CR bytes from `install.nsi` (15,329 ->
+14,915 bytes) and similar amounts from the 4 `.rc` files. The
+working tree still showed CRLF; the stored blob did not. Symptom:
+a byte-faithful baseline was silently destroyed.
+
+**Root cause**: this worktree has `core.autocrlf=true` set BOTH
+globally (`~/.gitconfig`) AND locally (`.git/config`). The local
+autocrlf runs the CRLF filter on every `git add` for text files,
+converting CRLF to LF in the index. `git -c core.autocrlf=false
+add ...` did NOT override it because the filter is already in the
+index cache; the override only takes effect on a fresh `git add`
+after `git reset HEAD <file>` AND only if the local config has been
+changed to `core.autocrlf=false`.
+
+**Fix** (recipe for future baseline-style commits):
+1. `git reset HEAD -- <files>` to unstage.
+2. `git config core.autocrlf false` (writes to local `.git/config`,
+   scoped to this worktree; does not affect other worktrees).
+3. `git add <files>` - now stage byte-faithful.
+4. `git commit ...`.
+5. Optionally restore: `git config core.autocrlf true` if other
+commits in this session need CRLF->LF normalization.
+
+**Why this matters for spec 001 T016 (byte-level diff)**: the
+baseline MUST be byte-faithful to the upstream rime/weasel
+`9f2b217` commit it was snapshotted from. If autocrlf strips
+CRs on commit, the spec 001 diff at T016 will report a phantom
+"line ending change" between baseline and current source - a false
+positive that hides real diffs. The spec 025 commit verified
+`working tree == HEAD` for all 23 files (15 KB install.nsi,
+41 KB WeaselDeployer.rc, etc.) before tagging.
+
+**Verification recipe (R6 - evidence before assertion)**:
+```javascript
+// node script - compare working tree bytes to staged blob bytes
+const fs = require('fs');
+const { execSync } = require('child_process');
+const files = execSync('git diff --cached --name-only', {encoding:'utf8'})
+  .trim().split(String.fromCharCode(10));
+for (const t of files) {
+  const wt = fs.readFileSync(t);
+  const hd = execSync('git show :'+JSON.stringify(t), {encoding:'buffer'});
+  const same = wt.length === hd.length && Buffer.compare(wt, hd) === 0;
+  console.log(t, same ? 'OK' : 'MISMATCH', wt.length, hd.length);
+}
+```
+
+**Anti-patterns to avoid (extending L09)**:
+- **AP-L29-A**: Committing baseline / pre-image files without
+  verifying `working tree == HEAD` after the commit. Autocrlf will
+  silently destroy byte-faithfulness.
+- **AP-L29-B**: Trusting `git -c core.autocrlf=false add` to bypass
+  the filter when local `core.autocrlf=true` is already cached in the
+  index. It does not - the filter is per-blob, not per-command.
+- **AP-L29-C**: Setting autocrlf=false globally. Limit the change to
+  the local worktree (`.git/config`) so other worktrees and the
+  user's other repos are unaffected.
+
