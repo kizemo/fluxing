@@ -41,6 +41,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestUserDictUpdate", "test\
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestCandidateRButtonDown", "test\TestCandidateRButtonDown\TestCandidateRButtonDown.vcxproj", "{B5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F41}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestCandidateIgnoreFilter", "test\TestCandidateIgnoreFilter\TestCandidateIgnoreFilter.vcxproj", "{C5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F42}"
+EndProject
 
 
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestWeaselIPC", "test\TestWeaselIPC\TestWeaselIPC.vcxproj", "{9C1CC4BA-18FF-4890-908E-E545881C5586}"
@@ -182,6 +184,10 @@ Global
 		{B5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F41}.Debug|Win32.Build.0 = Debug|Win32
 		{B5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F41}.Release|Win32.ActiveCfg = Release|Win32
 		{B5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F41}.Release|Win32.Build.0 = Release|Win32
+		{C5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F42}.Debug|Win32.ActiveCfg = Debug|Win32
+		{C5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F42}.Debug|Win32.Build.0 = Debug|Win32
+		{C5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F42}.Release|Win32.ActiveCfg = Release|Win32
+		{C5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F42}.Release|Win32.Build.0 = Release|Win32
 
 
 		{26930622-CFA2-43DF-A9F3-4AA4A313B2A4}.Debug|ARM.ActiveCfg = Debug|ARM

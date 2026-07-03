@@ -1,5 +1,7 @@
 #pragma once
 #include <WeaselIPCData.h>
+#include <unordered_set>
+#include <string>
 #include <WeaselUI.h>
 #include "StandardLayout.h"
 #include "Layout.h"
@@ -66,6 +68,7 @@ class WeaselPanel
   void SetDeleteCandidateCallback(std::function<void(size_t)> const& func) {
     m_deleteCallback = func;
   }
+  void LoadIgnoreList(const std::wstring& schema_id);
   void Refresh();
   void DoPaint(CDCHandle dc);
   bool GetIsReposition() { return m_istorepos; }
@@ -85,6 +88,10 @@ class WeaselPanel
   }
   void _InitFontRes(bool forced = false);
   void _CaptureRect(CRect& rect);
+  void _IgnoreCurrentCandidate();
+  void _FilterIgnoredCandidates();
+  std::unordered_set<std::wstring> m_ignoreList;
+  std::wstring m_ignoreFilePath;
   bool m_mouse_entry = false;
   CPoint m_lastMousePos = {-1, -1};
   void _CreateLayout();
