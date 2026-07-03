@@ -78,6 +78,13 @@ class UI {
           func) {
     _UICallback = func;
   }
+  std::function<void(size_t)>& deleteCandidateCallback() {
+    return _deleteCandidateCallback;
+  }
+  void SetDeleteCandidateCallback(
+      std::function<void(size_t)> const& func) {
+    _deleteCandidateCallback = func;
+  }
 
  private:
   UIImpl* pimpl_;
@@ -91,6 +98,7 @@ class UI {
   bool in_server_;
   std::function<void(size_t* const, size_t* const, bool* const, bool* const)>
       _UICallback;
+  std::function<void(size_t)> _deleteCandidateCallback;
 };
 
 class DirectWriteResources {

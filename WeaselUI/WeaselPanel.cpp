@@ -525,6 +525,30 @@ LRESULT WeaselPanel::OnMouseLeave(UINT uMsg,
   return 0;
 }
 
+LRESULT WeaselPanel::OnRButtonDown(UINT uMsg,
+                                   WPARAM wParam,
+                                   LPARAM lParam,
+                                   BOOL& bHandled) {
+  if (hide_candidates || m_hoverIndex < 0) {
+    bHandled = true;
+    return 0;
+  }
+  static DWORD s_lastTick = 0;
+  static int s_lastIndex = -1;
+  DWORD now = GetTickCount();
+  if (m_hoverIndex == s_lastIndex && (now - s_lastTick) < 100) {
+    bHandled = true;
+    return 0;
+  }
+  s_lastTick = now;
+  s_lastIndex = m_hoverIndex;
+  if (m_deleteCallback) {
+    m_deleteCallback(static_cast<size_t>(m_hoverIndex));
+  }
+  bHandled = true;
+  return 0;
+}
+
 void WeaselPanel::_HighlightText(CDCHandle& dc,
                                  const CRect& rc,
                                  const COLORREF& color,

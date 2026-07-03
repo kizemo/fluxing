@@ -302,6 +302,8 @@ void CCandidateList::StartUI() {
                               bool* const next, bool* const scroll_next) {
       _tsf->HandleUICallback(sel, hov, next, scroll_next);
     });
+    _ui->SetDeleteCandidateCallback(
+        [this](size_t index) { _tsf->HandleDeleteCandidate(index); });
   pUIElementMgr->BeginUIElement(this, &_pbShow, &uiid);
   // pUIElementMgr->UpdateUIElement(uiid);
   if (_pbShow) {
@@ -388,6 +390,16 @@ void WeaselTSF::_SelectCandidateOnCurrentPage(size_t index) {
   inputs[1].type = INPUT_KEYBOARD;
   inputs[1].ki = {VK_SELECT, 0, KEYEVENTF_KEYUP, 0, 0};
   ::SendInput(sizeof(inputs) / sizeof(INPUT), inputs, sizeof(INPUT));
+}
+
+void WeaselTSF::_DeleteCandidateOnCurrentPage(size_t index) {
+  m_client.DeleteCandidateOnCurrentPage(index);
+  // 不模拟 VK_SELECT — server 端 DeleteCandidateOnCurrentPage
+  // 内部已 _UpdateUI，候选窗自动刷新。
+}
+
+void WeaselTSF::HandleDeleteCandidate(size_t index) {
+  _DeleteCandidateOnCurrentPage(index);
 }
 
 void WeaselTSF::_HandleMousePageEvent(bool* const nextPage,

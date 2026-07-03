@@ -31,6 +31,7 @@ enum WEASEL_IPC_COMMAND {
   WEASEL_IPC_TRAY_COMMAND,
   WEASEL_IPC_SELECT_CANDIDATE_ON_CURRENT_PAGE,
   WEASEL_IPC_HIGHLIGHT_CANDIDATE_ON_CURRENT_PAGE,
+  WEASEL_IPC_DELETE_CANDIDATE_ON_CURRENT_PAGE,
   WEASEL_IPC_CHANGE_PAGE,
   WEASEL_IPC_LAST_COMMAND
 };
@@ -66,6 +67,7 @@ struct RequestHandler {
   virtual void CommitComposition(DWORD session_id) {}
   virtual void ClearComposition(DWORD session_id) {}
   virtual void SelectCandidateOnCurrentPage(size_t index, DWORD session_id) {}
+  virtual void DeleteCandidateOnCurrentPage(size_t index, DWORD session_id) {}
   virtual bool HighlightCandidateOnCurrentPage(size_t index,
                                                DWORD session_id,
                                                EatLine eat) {
@@ -130,6 +132,8 @@ class Client {
   bool SelectCandidateOnCurrentPage(size_t index);
   // 高亮当前页面编号为index的候选
   bool HighlightCandidateOnCurrentPage(size_t index);
+  // 删除当前页面编号为index的候选（右键删除）
+  bool DeleteCandidateOnCurrentPage(size_t index);
   // 翻页，backward = true 向前翻，false向后翻
   bool ChangePage(bool backward);
   // 更新输入位置
