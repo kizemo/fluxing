@@ -53,7 +53,7 @@ rem Note: SolutionDir must be the absolute path WITHOUT a trailing
 rem backslash (otherwise MSBuild parses the escaped quote wrong and
 rem the OutDir ends up nested under test\<name>\Release\ instead of
 rem the top-level Release\). See L31.
-for %%P in (test\TestDefaultHotkeys test\TestShiftSelectBinding test\TestBindingResolution test\TestResponseParser test\TestWeaselIPC test\TestYamlRoundTripE2E) do (
+for %%P in (test\TestDefaultHotkeys test\TestShiftSelectBinding test\TestBindingResolution test\TestResponseParser test\TestWeaselIPC test\TestYamlRoundTripE2E test\TestUserDictUpdate) do (
     echo === Building %%P ===
     "%MSBUILD%" "%%P\%%~nP.vcxproj" /t:Build /p:Configuration=Release /p:Platform=Win32 /p:SolutionDir="%SOL_DIR%" /m:1 /nologo /v:minimal
     if !errorlevel! NEQ 0 set "FAIL=1"
@@ -65,7 +65,7 @@ rem but this is cheap insurance against future test code regression).
 rem TestWeaselIPC is intentionally NOT in this loop: it is an integration test
 rem that requires server-spawn + client + shutdown orchestration. See the
 rem dedicated TestWeaselIPC block below (spec 026).
-for %%E in (TestDefaultHotkeys TestShiftSelectBinding TestBindingResolution TestResponseParser TestYamlRoundTripE2E) do (
+for %%E in (TestDefaultHotkeys TestShiftSelectBinding TestBindingResolution TestResponseParser TestYamlRoundTripE2E TestUserDictUpdate) do (
     echo === Running %%E.exe ===
     rem Use NEQ 0 (not "if errorlevel 1") because BOOST_ASSERT
     rem failures in optimized Release builds raise 0xC0000005 - signed
