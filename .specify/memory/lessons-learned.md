@@ -2186,3 +2186,132 @@ The fix in spec 026:
 - **AP-L31-D**: Adding a project to `weasel.sln` with only `ActiveCfg` and
   no `Build.0`. The project is in the solution for IDE navigation but
   will never be built by `msbuild weasel.sln`. Add both.
+
+
+## L32 - Integration-test infra hardening (lesson-to-script promotion)
+
+**Date:** 2026-07-03
+**Spec:** 027 (`test-infra-hardening`)
+**Status:** active
+**Affected:** `scripts\test-infra\`, `scripts\run-tests.bat`
+
+### Problem
+
+Specs 015-026 accumulated four infra lessons (L22, L28, L30, L31) that all shared the same shape: a footgun in the test infra, stored only as prose in `lessons-learned.md`, and re-introduced by the next spec author who did not re-read the lesson (verified across 4 specs in the silent -2 case - the TestWeaselIPC bug went undiagnosed for the entire 015-026 window).
+
+The pattern: prose lessons decay. Scripts do not. Every infra lesson that has bitten us more than once should be promoted to a named entry point (a `.bat` wrapper) that the next spec author calls by name, not by re-deriving the incantation from prose.
+
+### Solution: lesson-to-script promotion
+
+When a new infra lesson is written, ask three questions:
+
+1. **Has it bitten us in 2+ specs?** If yes, the lesson is infra-grade and worth promoting to a script. If no, it may be a one-off; keep as prose and re-evaluate later.
+2. **Is the fix a one-liner that is easy to forget?** If yes, the script is the only way to enforce it. If no (the fix is a long procedure that the spec author is unlikely to forget), prose is fine.
+3. **Can a thin wrapper enforce it without changing product behavior?** If yes, build the wrapper. If the only way to enforce it requires product code changes, this is a feature, not infra; treat as a normal spec.
+
+For spec 027, all three questions were "yes" for three of the four lessons:
+
+| Lesson | Bitten 2+ times? | One-liner? | Thin wrapper? | Promoted to |
+|---|---|---|---|---|
+| L22 (`!errorlevel! NEQ 0`) | yes (silent -2) | yes (one keyword) | yes (no behavior change) | embedded in `run-test-suite.bat` |
+| L28 (NSIS smoke test `.bat` wrapper) | yes (PowerShell `/D=` break) | yes (`.bat` not `.ps1`) | yes (no behavior change) | `install_smoke_test.bat` |
+| L30 (PowerShell `cmd /c` false-positive) | yes (silent -2 false PASS) | yes (the `endlocal & set` pattern) | yes (no behavior change) | embedded in `run-test-suite.bat` |
+| L31 (vcxproj OutDir path-glue) | yes (stale-binary diagnosis) | yes (add `\` after `$(SolutionDir)`) | **detection** only (cannot prevent the path-glue in vcxproj) | `verify-test-binaries-fresh.bat` |
+
+L31 is the interesting one: the L31 fix itself (add `\` to vcxproj) is not a thin wrapper (it requires editing `.vcxproj`). But the L31 **detection** (mtime check) is a thin wrapper. The promotion is from "detection via 4-spec-long post-mortem" to "detection via 5-line script".
+
+### Result of the promotion
+
+After spec 027, the `scripts\test-infra\` directory contains:
+
+- `install_smoke_test.bat` - named entry point for the AGENTS.md sec 2.5 NSIS smoke test recipe. Exits 0 today; will be filled in if/when the recipe is ported to pure cmd.
+- `run-test-suite.bat` - the actual meat. Contains the proven `run-tests.bat` body (L22 + L30 cures baked in) and is callable by name from any spec that needs to verify test infra.
+- `verify-test-binaries-fresh.bat` - L31 stale-binary detector. Iterates the 6 test projects, compares mtimes, exits 1 if any source is newer than its .exe.
+
+`scripts\run-tests.bat` is now a 5-line thin wrapper that calls `scripts\test-infra\run-test-suite.bat %*`. Backward-compat preserved.
+
+### Anti-patterns to avoid
+
+- **AP-L32-A**: Writing infra lessons only as prose. They decay; the next spec author re-derives the incantation, gets it wrong, and the bug returns. Always ask the 3 promotion questions when writing a new infra lesson.
+- **AP-L32-B**: Promoting a lesson to a script that does NOT enforce the lesson. If the script is a thin wrapper that just prints a pointer ("see AGENTS.md sec 2.5"), the script must be honest about that (header documents the deferral). A wrapper that pretends to enforce a lesson but does not is worse than no wrapper, because it gives a false sense of safety.
+- **AP-L32-C**: Bundling the L22 + L30 cures into a `.ps1` script because "PowerShell is more readable". L28 says no: NSIS / batch infra must use `.bat` wrappers, not PowerShell shims. The L22 + L30 cures are part of the test infra, so they live in `.bat`.
+
+### Related
+
+- L22 (the `!errorlevel! NEQ 0` cure, embedded in `run-test-suite.bat`).
+- L28 (the `.bat` wrapper mandate, followed by `install_smoke_test.bat`).
+- L30 (the `endlocal & set` cure, embedded in `run-test-suite.bat` and `verify-test-binaries-fresh.bat`).
+- L31 (the L31 detection, codified in `verify-test-binaries-fresh.bat`).
+
+
+## L33 - PowerShell `$` parsing eats PowerShell -Command "$..." variables
+
+**Date:** 2026-07-03
+**Spec:** 027 (`test-infra-hardening`)
+**Status:** active
+**Affected:** any `.bat` that shells out to PowerShell via `-Command "..."`
+
+### Problem
+
+When a `.bat` file calls `powershell -NoProfile -Command "$e = ...; if(-not $e){...}"`, the cmd parser hands the entire double-quoted string to PowerShell verbatim. The bug surfaces when the .bat is invoked from PowerShell (or from another tool that goes through PowerShell argument parsing) - PowerShell parses the `-Command` string ITSELF and interprets the `$` characters as variable expansions BEFORE the string is passed to cmd. The `$e` becomes empty, `$s` becomes empty, and PowerShell sees syntax like `if (-not ){` - syntax error - exit 1, regardless of mtimes.
+
+### Solution: -File, not -Command
+
+Put the PowerShell in a sibling `.ps1` file and call `powershell -NoProfile -ExecutionPolicy Bypass -File script.ps1 arg1`. The `-File` mode does not go through PowerShell command-string parsing, so `$` survives intact.
+
+In spec 027, `scripts/test-infra/verify-stale-temp.ps1` is the sibling, and `verify-test-binaries-fresh.bat` calls it via `-File`. The `.ps1` is gitignored (see `scripts/test-infra/verify-stale-temp.ps1` in `.gitignore`); the `.bat` wrapper is the tracked entry point.
+
+### Anti-patterns to avoid
+
+- **AP-L33-A**: Calling `powershell -Command "$x = ...; ...; exit 1"` from a `.bat` invoked through PowerShell. Always use `-File` with a sibling `.ps1`.
+- **AP-L33-B**: Trying to escape `$` as `` `$ `` or `^^$` in the `-Command` string. The escaping rules are subtle (cmd vs PowerShell) and break in edge cases. Just use `-File`.
+- **AP-L33-C**: Generating the `.ps1` from the `.bat` at runtime via `> file echo ...` - cmd echo mangles `(`, `)`, `;`, `|` in the output. Keep the `.ps1` as a tracked-or-gitignored file with literal PowerShell content.
+
+### Related
+
+- L34 (the other cmd parsing bug discovered in spec 027 - rem-line `(`/`)` block parsing).
+- L28 (the `.bat` wrapper mandate - the .bat IS the wrapper, the .ps1 is the interop detail).
+
+---
+
+## L34 - cmd `rem` lines containing `(` start a sub-block that ends at the next `)`
+
+**Date:** 2026-07-03
+**Spec:** 027 (`test-infra-hardening`)
+**Status:** active
+**Affected:** any `.bat` whose `rem` comments contain parentheses
+
+### Problem
+
+cmd `rem` lines are supposed to be comments, but the `(` and `)` characters inside a rem line still affect cmd block-parse state. A rem line like `rem raise 0xC0000005 (signed -1073741819)` opens a sub-block at `(`; the next `)` in the script (often on a later rem line, or on an `echo` line, or in the same rem line) closes it. The text after that `)` is then parsed as a new command, leading to errors like `'.misinterprets' is not recognized as an internal or external command` if the post-`)` text happens to look like a command.
+
+Symptom: a `.bat` runs (exit 0, all tests pass) but prints phantom "is not recognized as an internal or external command" errors to stderr. The errors are cosmetic (do not affect the exit code) but they pollute logs and hide real failures.
+
+### Solution
+
+Avoid `(` and `)` in `rem` lines. Replace with words (`Lparen`, `Rparen`, `signed hex`, etc.) or punctuation (`-`, `,`):
+
+```batch
+rem BAD - the (signed ... ) pair breaks block-parse state
+rem failures in optimized Release builds raise 0xC0000005 (signed
+rem -1073741819), which is < 1 numerically, so "if errorlevel 1"
+misinterprets a real failure as a pass.   <- NO rem prefix! cmd now
+                                           tries to run "misinterprets"
+
+rem GOOD - dash instead of parens, no block-parse interference
+rem Use NEQ 0 - not "if errorlevel 1" - because BOOST_ASSERT
+rem failures in optimized Release builds raise 0xC0000005 - signed
+rem -1073741819 - which is less than 1 numerically, so "if errorlevel 1"
+rem misinterprets a real failure as a pass - see L22.
+```
+
+### Anti-patterns to avoid
+
+- **AP-L34-A**: Writing a rem line with a function-call style description like `rem call foo(x, y)`. Use `rem call foo with x and y` instead.
+- **AP-L34-B**: Writing `rem (see spec 027)` in an `if not exist ... (` block. The `(` opens a sub-block inside the rem, and the `)` in the rem closes the if-block. The next command after the rem then runs unconditionally. Use `rem - see spec 027` instead.
+- **AP-L34-C**: Trusting "exit 0, all tests pass" without reading stderr. Phantom "is not recognized" errors are a tell that a rem line has a `(` or `)` in the wrong place. The error is cosmetic (does not affect RC) but the underlying block-parse corruption can cause real commands to be skipped.
+
+### Related
+
+- L33 (the other cmd parsing bug - `$` in PowerShell -Command).
+- L30 (the OUTER_RC false-positive lesson; phantom stderr from L34 does not affect OUTER_RC, so do not be fooled by OUTER_RC=0 into ignoring L34 symptoms).
