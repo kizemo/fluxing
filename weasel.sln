@@ -35,6 +35,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestShiftSelectBinding", "t
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestBindingResolution", "test\TestBindingResolution\TestBindingResolution.vcxproj", "{99277F52-0973-411A-8171-E65FA3FF6D69}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestYamlRoundTripE2E", "test\TestYamlRoundTripE2E\TestYamlRoundTripE2E.vcxproj", "{7B4E8F2A-1D3C-4E5F-8A9B-6C7D8E9F0241}"
+EndProject
 
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestWeaselIPC", "test\TestWeaselIPC\TestWeaselIPC.vcxproj", "{9C1CC4BA-18FF-4890-908E-E545881C5586}"
 EndProject
@@ -162,6 +164,10 @@ Global
 		{99277F52-0973-411A-8171-E65FA3FF6D69}.Debug|Win32.Build.0 = Debug|Win32
 		{99277F52-0973-411A-8171-E65FA3FF6D69}.Release|Win32.ActiveCfg = Release|Win32
 		{99277F52-0973-411A-8171-E65FA3FF6D69}.Release|Win32.Build.0 = Release|Win32
+		{7B4E8F2A-1D3C-4E5F-8A9B-6C7D8E9F0241}.Debug|Win32.ActiveCfg = Debug|Win32
+		{7B4E8F2A-1D3C-4E5F-8A9B-6C7D8E9F0241}.Debug|Win32.Build.0 = Debug|Win32
+		{7B4E8F2A-1D3C-4E5F-8A9B-6C7D8E9F0241}.Release|Win32.ActiveCfg = Release|Win32
+		{7B4E8F2A-1D3C-4E5F-8A9B-6C7D8E9F0241}.Release|Win32.Build.0 = Release|Win32
 
 		{26930622-CFA2-43DF-A9F3-4AA4A313B2A4}.Debug|ARM.ActiveCfg = Debug|ARM
 		{26930622-CFA2-43DF-A9F3-4AA4A313B2A4}.Debug|ARM64.ActiveCfg = Debug|ARM64
