@@ -2364,3 +2364,60 @@ So the correct stage 1 design for spec 008 (which spec 028 implements) is: just 
 - librime 1.13 `librime/src/rime/context.cc:146` - `Context::DeleteCandidate` engine-side implementation.
 - L09 (NSIS BOM - reminds us to read the file as bytes, not as a model of what we want it to be).
 - L32 (lesson-to-script promotion - the lesson here is: add a pre-flight step that reads the C API .h file, even for 'well-known' libraries).
+
+
+## L36 - L## fix coverage gap: fix in 1 file is not fix in N files
+
+**Date:** 2026-07-04
+**Spec:** 029 (`l31-fix-coverage`)
+**Status:** active
+**Affected:** any repo-wide "fix one instance" lesson; especially vcxproj / .sln / config-file patterns
+
+### Problem
+
+Spec 026 fixed the L31 vcxproj OutDir path-glue bug in `TestWeaselIPC.vcxproj` (1 of 4 test vcxproj files). The fix was correct for that file. It was **wrong as a repo-wide fix** because the other 3 test vcxproj files (TestDefaultHotkeys, TestShiftSelectBinding, TestBindingResolution, TestYamlRoundTripE2E - 4 files total) had the **same broken pattern** but were not touched.
+
+The 4 affected files were discovered only because spec 028 added a 5th test project (TestUserDictUpdate) with the L31 fix applied as a matter of course. The build output of the 4 old projects still showed the L31 glue path (e.g. `F:\soft\00selfmade\rimemsbuild\Release\Win32\TestResponseParser.exe`) - 4 releases of broken path that the L31 lesson did NOT catch.
+
+The root cause: when an L## lesson is written, the author fixes the **one instance they are touching** and writes the lesson as if the fix is now repo-wide. The lesson reads 'always use `$(SolutionDir)\X` with the explicit backslash' - but the broken pattern is still sitting in 3 other .vcxproj files that nobody grepped for.
+
+### Solution: the L## coverage audit
+
+When writing any new L## lesson, add a **coverage audit step** that:
+
+1. Identifies the broken pattern by string (e.g. `$(SolutionDir)$(Configuration)\`).
+2. `rg` (or grep) the entire repo for that pattern.
+3. Lists every match and decides: is this match also broken, or is it an unrelated intentional usage?
+4. If broken, fix ALL of them in the same spec, not in a follow-up.
+5. If the audit is too large for the current spec, open a new spec (like this one) but do not leave the partial fix in place.
+
+For the L31 vcxproj case, the audit was:
+
+```powershell
+# After fixing 1 file, audit the remaining 3
+rg '\$\(SolutionDir\)\$\(' test/
+# -> TestDefaultHotkeys.vcxproj: 8 matches (Win32 + ARM + ARM64 + x64, Release + Debug)
+# -> TestShiftSelectBinding.vcxproj: 8 matches
+# -> TestBindingResolution.vcxproj: 2 matches
+# -> TestYamlRoundTripE2E.vcxproj: 2 matches
+# -> TestResponseParser.vcxproj: 2 matches (Pattern B - `$(SolutionDir)msbuild\...`)
+```
+
+20 matches total across 5 files. Spec 029 fixes all 5.
+
+### Anti-patterns to avoid
+
+- **AP-L36-A**: 'I fixed it in the test exe I was touching.' The 3 others still have the bug; they just happen to still build because the wrong path is also a valid path on disk (L31 'silent build success' pattern). Always run the coverage audit.
+- **AP-L36-B**: Trusting the L## lesson to be 'applied repo-wide' when in fact it was applied to one file. The lesson is **written** repo-wide, but the **fix** is per-file. Always re-grep after writing the lesson.
+- **AP-L36-C**: Leaving stale binaries at the wrong path 'because they still build and run'. They will be picked up by future ad-hoc invocations (e.g. a developer who runs the .exe directly from the old path) and confuse the next agent. After fixing the vcxproj, `Rebuild` + `Remove-Item` the old-path .exe.
+- **AP-L36-D**: Assuming msbuild 'Rebuild' will clean the old-path .exe. It does not - msbuild writes the new .exe to the new path but leaves the old .exe untouched (it is not in any known location to msbuild, so msbuild does not consider it 'stale'). Manual `Remove-Item` is required.
+
+### Related
+
+- L31 (vcxproj OutDir path-glue - the original lesson, now with full coverage).
+- spec 026 (test-weasel-ipc-orchestration - where L31 was first written; fixed 1 of 4).
+- spec 028 (candidate-delete-core - added the 5th test project, exposed the gap).
+- spec 029 (l31-fix-coverage - this spec; fixes the remaining 3 of 4).
+- spec 027 (test-infra-hardening - the `verify-test-binaries-fresh.bat` that would have caught this earlier if the binaries were at the right path; the wrong-path .exe was outside its check scope).
+- L22 (test detection - same shape: a one-line fix that is silent if applied incompletely).
+- L32 (lesson-to-script promotion - applies the other direction: lesson -> script. L36 is lesson -> audit checklist, complementary pattern).
