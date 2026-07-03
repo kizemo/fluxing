@@ -52,7 +52,7 @@ if not exist "%PS_SCRIPT%" (
 
 set "FAIL=0"
 
-for %%P in (TestDefaultHotkeys TestShiftSelectBinding TestBindingResolution TestResponseParser TestWeaselIPC TestYamlRoundTripE2E) do (
+for %%P in (TestDefaultHotkeys TestShiftSelectBinding TestBindingResolution TestResponseParser TestWeaselIPC TestYamlRoundTripE2E TestUserDictUpdate) do (
     powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" %%P
     if !errorlevel! NEQ 0 set "FAIL=1"
 )
