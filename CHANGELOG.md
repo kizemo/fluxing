@@ -1,3 +1,34 @@
+## [0.18.18.0-fluxing] - 2026-07-04
+
+
+### spec 029: L31 fix 范围扩展 (3/4 test vcxproj coverage gap closed)
+
+- **Problem**: spec 026 修了 L31 vcxproj OutDir path-glue bug 但只覆盖 1/4 test vcxproj（TestWeaselIPC）。其他 3 个 test vcxproj (TestResponseParser, TestBindingResolution, TestYamlRoundTripE2E) 仍用 `$(SolutionDir)$(Configuration)\`（无反斜杠）→ `.exe` 写到错位置 `F:\soft\00selfmade\rimemsbuild\Release\Win32\`（路径黏连）。Spec 028 加第 5 个 test project 时强制用 L31 fix 才暴露这个 gap。
+
+- **Solution**: 把 L31 fix 扩展到全部 4 个 test vcxproj（实际是 5 个：TestDefaultHotkeys、TestShiftSelectBinding、TestBindingResolution、TestYamlRoundTripE2E、TestResponseParser）。每个的 OutDir 都改为 `$(SolutionDir)\$(Configuration)\`（带反斜杠）。一次 build 全部到 `F:\soft\00selfmade\rime\Release\`，符合 L31 原则。
+
+- **Files (3 modified + 1 lesson + 1 spec 文档):**
+  - MOD: `test\TestResponseParser\TestResponseParser.vcxproj` (Pattern B 修复: `$(SolutionDir)msbuild\...` → `$(SolutionDir)\$(Configuration)\`)
+  - MOD: `test\TestBindingResolution\TestBindingResolution.vcxproj` (Pattern A 修复)
+  - MOD: `test\TestYamlRoundTripE2E\TestYamlRoundTripE2E.vcxproj` (Pattern A 修复)
+  - MOD: `test\TestDefaultHotkeys\TestDefaultHotkeys.vcxproj` (Pattern A 修复, 8 处: Release/Debug + Win32/ARM/ARM64/x64)
+  - MOD: `test\TestShiftSelectBinding\TestShiftSelectBinding.vcxproj` (Pattern A 修复, 8 处)
+  - MOD: `.specify\memory\lessons-learned.md` (L36 appended)
+  - NEW: `.specify\specs\029-l31-fix-coverage\{spec,plan,tasks}.md`
+  - CLEANUP: 删除 stale binaries at wrong path (`F:\soft\00selfmade\rimemsbuild\Release\Win32\TestBindingResolution\`, `TestYamlRoundTripE2E\` 等空目录)
+
+- **L36 (new)**: L## fix coverage gap pattern. 关键教训：写 L## lesson 时只 fix 1 个 file 不够，必须 run coverage audit (rg pattern across repo)，找到所有 sibling 匹配一起修。
+  - AP-L36-A: 'Fixed it in the test exe I was touching' (其他 3 个仍 broken)
+  - AP-L36-B: 信任 L## lesson 已经是 'applied repo-wide' 但只 applied 1 个 file
+  - AP-L36-C: 留 stale binaries at wrong path 'because they still build' — 错位置 .exe 会被未来 ad-hoc 运行拾到
+  - AP-L36-D: 假设 msbuild Rebuild 会清 old-path .exe — 它不会；msbuild 不知道 old-path .exe 存在。手动 Remove-Item。
+
+- **Verification (post-impl):**
+  - `cmd /c scripts\test-infra\run-test-suite.bat` -> RC 0, `=== ALL TESTS PASSED ===`, **7/7** test projects, 全部 .exe 写到 `F:\soft\00selfmade\rime\Release\<name>.exe` 正确位置。
+  - `cmd /c scripts\test-infra\verify-test-binaries-fresh.bat` -> RC 0, 7 FRESH (L31 detection 现在真正生效——因为 .exe 在 verify 检查的路径上)。
+
+- **No installer change, no `env.bat` / `weasel.props` bump. Tag is `v0.18.18.0` per P8 / P4 scope convention.**
+
 ## [0.18.17.0-fluxing] - 2026-07-04
 
 
