@@ -35,6 +35,7 @@ class WeaselPanel
   MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
   MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
   MESSAGE_HANDLER(WM_MOUSELEAVE, OnMouseLeave)
+  MESSAGE_HANDLER(WM_RBUTTONDOWN, OnRButtonDown)
   CHAIN_MSG_MAP(CDoubleBufferImpl<WeaselPanel>)
   END_MSG_MAP()
 
@@ -56,11 +57,15 @@ class WeaselPanel
   LRESULT OnMouseWheel(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
   LRESULT OnMouseMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
   LRESULT OnMouseLeave(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+  LRESULT OnRButtonDown(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 
   WeaselPanel(weasel::UI& ui);
   ~WeaselPanel();
 
   void MoveTo(RECT const& rc);
+  void SetDeleteCandidateCallback(std::function<void(size_t)> const& func) {
+    m_deleteCallback = func;
+  }
   void Refresh();
   void DoPaint(CDCHandle dc);
   bool GetIsReposition() { return m_istorepos; }
@@ -144,6 +149,7 @@ class WeaselPanel
   PDWR pDWR;
   std::function<void(size_t* const, size_t* const, bool* const, bool* const)>&
       _UICallback;
+  std::function<void(size_t)> m_deleteCallback;
   float bar_scale_ = 1.0;
   float dpiScaleLayout = 1.0f;
   int m_hoverIndex = -1;

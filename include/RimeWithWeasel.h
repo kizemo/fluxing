@@ -50,7 +50,7 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   virtual void SelectCandidateOnCurrentPage(size_t index,
                                             WeaselSessionId ipc_id);
   // spec 028: delete candidate on current page (librime 1.13 delete_candidate API)
-  virtual void DeleteCandidateOnCurrentPage(size_t index, WeaselSessionId ipc_id);
+  void DeleteCandidateOnCurrentPage(size_t index, WeaselSessionId ipc_id) override;
   virtual bool HighlightCandidateOnCurrentPage(size_t index,
                                                WeaselSessionId ipc_id,
                                                EatLine eat);
