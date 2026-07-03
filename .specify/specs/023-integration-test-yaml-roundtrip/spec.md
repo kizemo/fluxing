@@ -7,12 +7,21 @@
 > This placeholder exists so the v0.18.13.0 release records the
 > tracking item.
 
-## 0. Status: BLOCKED on spec 007
+## 0. Status: CLOSED (merged into spec 024)
 
-- spec 007 production code: NOT YET SHIPPED.
-- Integration test file: NOT YET CREATED.
-- vcxproj + sln entry: NOT YET CREATED.
-- run-tests.bat entry: NOT YET CREATED.
+- **Closed in v0.18.14.0, commit 4dbcced** (2026-07-03).
+- The YamlRoundTrip module + TestYamlRoundTripE2E test that this
+  placeholder was tracking were shipped as **spec 024**
+  (yaml round-trip key-order preserve) per the user's "选项 1"
+  decision on spec 019: ship the standalone YamlRoundTrip sub-module
+  carved out in spec 007 sec 2, deferring the full mac-style settings
+  UI to a future spec.
+- This spec file remains in the tree as a historical record of the
+  v0.18.13.0 placeholder period. Do not delete.
+- See spec 024 spec.md for the shipped work; see L27 for the
+  yaml-cpp comment-strip contract that spec 024 documents.
+- See spec 025-bootstrapper-stdio-placeholder for the next TDD 3.1
+  placeholder (test #5, blocked on spec 011).
 
 ## 1. Plan (when unblocked)
 
