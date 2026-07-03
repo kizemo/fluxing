@@ -1,6 +1,47 @@
 
 ## [0.18.14.0-fluxing] - 2026-07-03
-
+### spec 026: fix TestWeaselIPC integration test orchestration (4-spec-long silent -2 closed)
+
+- **Problem**: every spec since 015 (4 specs: 017, 018, 019, 024, 025) shipped
+  under "ALL TESTS PASSED" claims, but TestWeaselIPC.exe was actually
+  returning -2 (STATUS_INVALID_HANDLE) every run. The `=== TESTS FAILED ===`
+  message that prints in run-tests.bat was mis-classified as "pre-existing
+  / not in scope / smoke test" by every spec author since 015. The PowerShell
+  `cmd /c` exit code of 0 (false-positive) reinforced the mis-classification.
+
+- **Two root causes (L31)**:
+  1. C++ virtual function HIDING (not overriding) in TestRequestHandler. The
+     1-arg `AddSession(LPWSTR)` hid the 2-arg base virtual `AddSession(LPWSTR, EatLine)`,
+     so OnStartSession always called the base default (returns 0).
+  2. vcxproj OutDir path-glue: `$(SolutionDir)msbuild\...` with no separator
+     after `$(SolutionDir)` (which has no trailing slash) produced the malformed
+     `F:\soft\00selfmade\rimemsbuild\...` path. The linker wrote the .exe
+     to this junk path; run-tests.bat ran a STALE binary from a prior build.
+
+- **Fixes** (8 files):
+  1. `scripts\run-tests.bat` - extract TestWeaselIPC out of the test loop into
+     a dedicated orchestration block (`start /B /start` + ping wait + client + /stop).
+  2. `test\TestWeaselIPC\TestWeaselIPC.cpp` - add `override` keyword to
+     TestRequestHandler virtuals; change AddSession signature to match base.
+  3. `test\TestWeaselIPC\TestWeaselIPC.vcxproj` - fix OutDir/IntDir to use
+     explicit `$(SolutionDir)\$(Configuration)\...` (add trailing backslash).
+  4. `weasel.sln` - add missing `Build.0 = Release|Win32` for the TestWeaselIPC
+     project (had only ActiveCfg, so `msbuild weasel.sln` never built it).
+  5. `.specify\memory\lessons-learned.md` - L30 (PowerShell OUTER_RC false-positive)
+     + L31 (the two root causes + 4 anti-patterns AP-L31-A/B/C/D).
+  6. `.specify\specs\026-fix-test-weasel-ipc-orchestration\{spec,plan,tasks}.md`
+     - the new spec three-piece set.
+
+- **Test results (first true PASS for TestWeaselIPC since pre-spec-015):**
+  - TestDefaultHotkeys: 35 / 35
+  - TestShiftSelectBinding: 13 / 13
+  - TestBindingResolution: 6 / 6
+  - TestResponseParser: 4 / 4
+  - **TestWeaselIPC: real round-trip (AddSession 1, FindSession 1, RemoveClient 1)**
+  - TestYamlRoundTripE2E: 6 / 6
+  - `=== ALL TESTS PASSED ===` for the first time in repo history.
+
+
 ### spec 025: close 023 placeholder, create 025 placeholder, commit pre-staged atlas + 001 baseline (bookkeeping only)
 
 - **Bookkeeping-only release**, no production code change. Same code
