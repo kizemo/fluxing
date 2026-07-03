@@ -1,6 +1,38 @@
 
 ## [0.18.14.0-fluxing] - 2026-07-03
 
+### spec 025: close 023 placeholder, create 025 placeholder, commit pre-staged atlas + 001 baseline (bookkeeping only)
+
+- **Bookkeeping-only release**, no production code change. Same code
+  version (0.18.14.0). Sub-bumped to 0.18.14.1 to record the spec
+  close/create + atlas/baseline commit.
+
+- **Closes spec 023 placeholder**: the TestYamlRoundTripE2E
+  integration test placeholder (created in v0.18.13.0) was
+  effectively closed by spec 024 (v0.18.14.0, commit 4dbcced),
+  which shipped the YamlRoundTrip module + the test. The 023 spec
+  file remains in git as a historical record with its `0. Status`
+  section updated to `CLOSED (merged into spec 024)`.
+
+- **Creates spec 025 placeholder** at
+  `.specify/specs/025-bootstrapper-stdio-placeholder/` for the
+  next TDD sec 3.1 integration test (#5, TestBootstrapperStdio).
+  Blocked on spec 011 (Fluxing Bootstrapper).
+
+- **Commits pre-staged materials** that have been in the working
+  tree since before v0.18.10.0:
+  - `docs/Fluxing-code-map/*` (7 files) - the project atlas for
+    future agents / developers. LF-only line endings (docs do not
+    need CRLF).
+  - `.specify/specs/001-user-visible-strings/baseline/*` (8 files) -
+    the pre-image snapshot for spec 001 T016 byte-level diff at end
+    of spec 001. Encoding/line endings preserved as-is (some files
+    are GBK-polluted from the upstream rime/weasel 0.17.4 base;
+    the baseline must stay byte-faithful to support the diff).
+
+- **No code, no test, no installer change.** `scripts/run-tests.bat`
+  still 6/6 green. The new 025 directory is text-only.
+
 ### spec 024: YamlRoundTrip module + TestYamlRoundTripE2E (close 1 of 4 TDD sec 3.1 integration tests; L27 yaml-cpp comment limit)
 
 - **Problem**: TDD.md sec 3.1 lists 4 integration tests for the
@@ -52,7 +84,7 @@
     TestShiftSelectBinding 13/13, TestBindingResolution 6/6,
     TestResponseParser 4/4, TestWeaselIPC smoke).
 
-ÿ
+ï¿½
 ## [0.18.12.0-fluxing] - 2026-07-02
 
 ### spec 018: fill TestBindingResolution with 4 real assertions (close L18 / L19 testing gap)
@@ -346,76 +378,76 @@
 
 ### spec 014: restore Shift_L/R select 2nd/3rd candidate (L21)
 
-- **Problem**: (7Å 0.18.7.0 KÍˆ "(	WÍ—ã, àÕ	é,Œ/
-  ,		WÍ"spec 005 v1.1 US1-B ú„ "	 Shift_L/R 	, 2/3 	" (
-  0.18.6.0 K« L19 ï , 0.18.7.0 î CI ú@¾½F*båı›
+- **Problem**: (7ï¿½ 0.18.7.0 ï¿½KÍˆ "(	WÍ—ï¿½, ï¿½ï¿½	ï¿½,ï¿½/
+  ,		Wï¿½"spec 005 v1.1 US1-B ï¿½ï¿½ "	 Shift_L/R 	, 2/3 	" (
+  0.18.6.0 Kï¿½ L19 ï¿½ , 0.18.7.0 ï¿½ CI ï¿½@ï¿½ï¿½F*bï¿½ï¿½ï¿½
 
-- **Fix (spec 014)**: ( key_binder/bindings has_menu µ, ( Control+1/2
-  KM Ş 2 L binding, ( spec 012 plan.md §2.2 ¾¡„ ccept: Shift+Shift_L/R
-  b (modifier=Shift, « TSF release event ï9M):
+- **Fix (spec 014)**: ( key_binder/bindings has_menu ï¿½, ( Control+1/2
+  KMï¿½ï¿½ 2 L binding, ( spec 012 plan.md ï¿½2.2 ï¿½ï¿½ï¿½ ccept: Shift+Shift_L/R
+  b (modifier=Shift, ï¿½ TSF release event ï¿½9M):
   `yaml
   - { when: has_menu, accept: Shift+Shift_L, send: 2 }
   - { when: has_menu, accept: Shift+Shift_R, send: 3 }
   `
 
-- **L21 Y­**: L19 / over-correction - ûd†@	 keycode=Shift_L/R binding,
-  ì spec 005 v1.1 ú„ has_menu bindingL19 ê¡å™ "W&2­ êıÁ
-   yaml ‡,ÌĞa binding X(/X(", F L19 êñtV TestDefaultHotkeys
-  31/31 PASS e"ŒÁ"î, Í½0Á†W&2KÕ„@P
+- **L21 Yï¿½**: L19 / over-correction - ï¿½dï¿½@	 keycode=Shift_L/R binding,
+  ï¿½ spec 005 v1.1 ï¿½ï¿½ has_menu bindingL19 ï¿½ï¿½ï¿½ "W&2ï¿½ ï¿½ï¿½ï¿½
+   yaml ï¿½,ï¿½ï¿½a binding X(/X(", F L19 ï¿½ï¿½tï¿½V TestDefaultHotkeys
+  31/31 PASS e"ï¿½ï¿½"ï¿½, Í½0ï¿½ï¿½W&2KÕ„@P
 
-- **KÕ†Ö**:
+- **KÕ†ï¿½**:
   - TestDefaultHotkeys.exe output\data\default.yaml -> Passed: 35 / 35
-    (4 * L19 ûc + 4 *°c)
-  - TestShiftSelectBinding.exe output\data\default.yaml -> Passed: 13 / 13 (°)
-  - $WìË runtime KÕ¤ÉŒÁ spec 014 î, M L18/L19 „ "passing
+    (4 * L19 ï¿½c + 4 *ï¿½c)
+  - TestShiftSelectBinding.exe output\data\default.yaml -> Passed: 13 / 13 (ï¿½)
+  - $Wï¿½ï¿½ runtime KÕ¤ÉŒï¿½ spec 014 ï¿½, M L18/L19 ï¿½ "passing
     test, regressed behavior" w1
 
 - **Build**:
   - xbuild.bat installer -> output/archives/fluxing-0.18.8.0-installer.exe
-    (42631276 W‚, ~40.7 MB)
-  - 7z ãùÔ 0.18.7.0 vs 0.18.8.0: / î data\default.yaml 16607
-    -> 17200 W‚ (+593 W‚), 23 * binary 100% ø (rime.dll / WeaselServer.exe
+    (42631276 Wï¿½, ~40.7 MB)
+  - 7z ï¿½ï¿½ï¿½ 0.18.7.0 vs 0.18.8.0: / ï¿½ data\default.yaml 16607
+    -> 17200 Wï¿½ (+593 Wï¿½), 23 * binary 100% ï¿½ (rime.dll / WeaselServer.exe
     I SHA256 hI)
 
 - **Verified by**: silent install 0.18.8.0 -> exit 0, HKLM InstallDir =
   C:\Program Files\fluxing, HKCU RimeUserDir = C:\Program Files\fluxing
-  \user1\fluxing, default.yaml + spec 014 î
+  \user1\fluxing, default.yaml + spec 014 ï¿½
 
-- **Refs**: L19 (« L21 ÿã), L20 (silent-install cmd /c wrapper ¿(), spec 012
-  (L16 ¡F* ship), spec 014 (L21 î), spec 005 v1.1 US1-B (bú)
+- **Refs**: L19 (ï¿½ L21 ï¿½ï¿½), L20 (silent-install cmd /c wrapper ï¿½(), spec 012
+  (L16 ï¿½F* ship), spec 014 (L21 ï¿½), spec 005 v1.1 US1-B (bï¿½)
 
-ÿ## [0.18.6.0-fluxing] - 2026-07-01
+ï¿½## [0.18.6.0-fluxing] - 2026-07-01
 
 ### L19: defensive remove of all keycode=Shift_L/R bindings (spec 005 v1.1)
 
-- **Problem**: 0.18.5.0 (7KÍˆ `shift+Enter` / `shift+<letter>` release
-  event ÍæÑ ascii_mode bL18 îcommit `e4095f2`	êûd†
-  `always: Shift+Shift_L/R toggle ascii_mode`FİY†
-  `has_menu: Shift+Shift_L/R send 2/3` „ bindingL18 W&2­ 
-  25/25 PASS ıÁĞLö binding hL:0.18.6 ‰Å* buildL18
-  î*‰ÅŒÁ	
+- **Problem**: 0.18.5.0 (7ï¿½KÍˆ `shift+Enter` / `shift+<letter>` release
+  event ï¿½ï¿½ï¿½ ascii_mode bL18 ï¿½commit `e4095f2`	ï¿½ï¿½dï¿½
+  `always: Shift+Shift_L/R toggle ascii_mode`Fï¿½Yï¿½
+  `has_menu: Shift+Shift_L/R send 2/3` ï¿½ bindingL18 W&2ï¿½ 
+  25/25 PASS ï¿½ï¿½ï¿½Lï¿½ binding hL:0.18.6 ï¿½ï¿½* buildL18
+  ï¿½*ï¿½ï¿½ÅŒï¿½	
 
-- **Fix (L19)**: 2¡'Ÿ`output/data/default.yaml` -
-  `keycode=Shift_L/R` „@	 binding **hèX(**+ `always` 
-  `has_menu` $aï„	
+- **Fix (L19)**: 2ï¿½'ï¿½`output/data/default.yaml` -
+  `keycode=Shift_L/R` ï¿½@	 binding **hï¿½X(**+ `always` 
+  `has_menu` $aï¿½	
 
-  - 		é9( RIME >:Ø¤.M `Control+1/2/3..9`
-    keycode=`1`/`2`/`3`..`9`  `Shift_L/R` release event Íà	
-  - -ñİY `Shift+space`keycode=`space`	
-  - ascii_composer `switch_key.Shift_L/R: noop` İY© key_binder ¥¡	
+  - 		ï¿½9( RIME >:Ø¤.M `Control+1/2/3..9`
+    keycode=`1`/`2`/`3`..`9`  `Shift_L/R` release event ï¿½ï¿½	
+  - -ï¿½ï¿½Y `Shift+space`keycode=`space`	
+  - ascii_composer `switch_key.Shift_L/R: noop` ï¿½Yï¿½ key_binder ï¿½ï¿½	
 
-- **Test coverage**: `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp` Î
-  25/25 G§0 **31/31 PASS**° 6 * L19 ­ †Ö@	
-  `Shift_L/R` b„ binding	+ 1 * L19 c­ active ascii_mode
-  toggle ï„p == 1Å `Shift+space`	
+- **Test coverage**: `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp` ï¿½
+  25/25 Gï¿½0 **31/31 PASS**ï¿½ï¿½ 6 * L19 ï¿½ ï¿½ï¿½@	
+  `Shift_L/R` bï¿½ binding	+ 1 * L19 cï¿½ active ascii_mode
+  toggle ï¿½p == 1ï¿½ `Shift+space`	
 
-- **Unverified**: ‰ÅL:librime submodule aÓ0.18.6 build
-  ¶… release Œ6	(7ÍÅ 0.18.6 Å{K¨ŒÁ
-  - `shift+Enter` / `shift+<letter>` -ñ
-  - `Shift+space` Íı-ñ
-  - 	—S ö `Control+1` / `Control+2` 	, 2/3 	
+- **Unverified**: ï¿½ï¿½ï¿½L:librime submodule aï¿½0.18.6 build
+  ï¿½ï¿½ release ï¿½6	(7ï¿½ï¿½ 0.18.6 ï¿½{Kï¿½ï¿½ï¿½
+  - `shift+Enter` / `shift+<letter>` ï¿½-ï¿½
+  - `Shift+space` ï¿½ï¿½-ï¿½
+  - 	ï¿½S ï¿½ `Control+1` / `Control+2` 	, 2/3 	
 
-- **Refs**: L18« L19 ÿã	L16spec 005 v1.1 plan.md §2.2
+- **Refs**: L18ï¿½ L19 ï¿½ï¿½	L16spec 005 v1.1 plan.md ï¿½2.2
 
 ## [0.18.7.0-fluxing] - 2026-07-01
 
@@ -477,7 +509,7 @@
 ### Installer hardening: smoke-test path guard + TSF shim lock-skip
 
 - **L13-fix-2**: install-side guard against smoke-test paths left behind in
-  the registry. When a previous silent-install smoke test (AGENTS.md §2.5)
+  the registry. When a previous silent-install smoke test (AGENTS.md ï¿½2.5)
   leaves `HKLM\Software\Fluxing\Weasel\InstallDir` pointing under
   `C:\TEMP\` or `C:\Users\test\`, the new install would inherit that path.
   The guard detects the smoke-test prefix (most-specific first:
@@ -1901,7 +1933,7 @@ refactorÃ¯(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
   fails" line is removed. The full TDD.md sec 8 known gaps list is
   now: L16/L18 test gap (closed by spec 018), user_dict_update
   integration (spec 020 placeholder), WM_SETTINGCHANGE broadcast
-  (spec 022 placeholder), rime_deployer --debug (spec 004 §7 SC-005
+  (spec 022 placeholder), rime_deployer --debug (spec 004 ï¿½7 SC-005
   no test project). Three of the four are now blocked-on-parent-spec
   placeholders.
 
@@ -1910,7 +1942,7 @@ refactorÃ¯(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
   TestDarkModeBroadcast, TestYamlRoundTripE2E). Each is now a
   spec-stage placeholder at `.specify\specs\020-023-*/` with
   spec/plan/tasks 3-piece sets pointing to the parent spec (008 /
-  009 / 004 §9 / 007). The production code for those tests does
+  009 / 004 ï¿½9 / 007). The production code for those tests does
   not exist yet (CandidateEdit, PhrasesStore, DarkModeBridge,
   YamlRoundTrip), so the test code is blocked on the parent spec
   shipping. This is a tracking release, not an implementation
