@@ -1361,3 +1361,83 @@ void WeaselPanel::_TextOut(const CRect& rc,
 #endif
   }
 }
+
+
+void WeaselPanel::LoadIgnoreList(const std::wstring& schema_id) {
+  m_ignoreList.clear();
+  if (schema_id.empty()) return;
+  std::wstring userDir = WeaselUserDataPath().wstring();
+  if (userDir.empty()) return;
+  m_ignoreFilePath = userDir + L"\\" + schema_id + L".user_ignore.txt";
+  HANDLE h = CreateFileW(m_ignoreFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                         nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return;
+  DWORD fileSize = GetFileSize(h, nullptr);
+  if (fileSize == 0 || fileSize == INVALID_FILE_SIZE) {
+    CloseHandle(h);
+    return;
+  }
+  std::vector<unsigned char> raw(fileSize);
+  DWORD read = 0;
+  ReadFile(h, raw.data(), fileSize, &read, nullptr);
+  CloseHandle(h);
+  std::wstring content;
+  if (raw.size() >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) {
+    std::string utf8((char*)raw.data() + 3, raw.size() - 3);
+    content = u8tow(utf8);
+  } else if (raw.size() >= 2 && raw[0] == 0xFF && raw[1] == 0xFE) {
+    content = std::wstring((wchar_t*)(raw.data() + 2),
+                           (raw.size() - 2) / sizeof(wchar_t));
+  } else {
+    std::string utf8((char*)raw.data(), raw.size());
+    content = u8tow(utf8);
+  }
+  size_t pos = 0;
+  while (pos < content.size()) {
+    size_t eol = content.find_first_of(L"\r\n", pos);
+    if (eol == std::wstring::npos) eol = content.size();
+    std::wstring line = content.substr(pos, eol - pos);
+    while (!line.empty() && (line.back() == L' ' || line.back() == L'\t'))
+      line.pop_back();
+    if (!line.empty()) m_ignoreList.insert(line);
+    pos = eol;
+    if (pos < content.size() && content[pos] == L'\r') pos++;
+    if (pos < content.size() && content[pos] == L'\n') pos++;
+  }
+}
+
+void WeaselPanel::_FilterIgnoredCandidates() {
+  if (m_ignoreList.empty()) return;
+  auto& candies = m_ctx.cinfo.candies;
+  for (size_t i = candies.size(); i > 0; --i) {
+    if (m_ignoreList.count(candies[i - 1].str) > 0) {
+      candies.erase(candies.begin() + (i - 1));
+    }
+  }
+}
+
+void WeaselPanel::_IgnoreCurrentCandidate() {
+  if (m_hoverIndex < 0) return;
+  auto& candies = m_ctx.cinfo.candies;
+  if (m_hoverIndex >= (int)candies.size()) return;
+  const std::wstring& text = candies[m_hoverIndex].str;
+  if (text.empty()) return;
+  m_ignoreList.insert(text);
+  if (m_ignoreFilePath.empty()) {
+    LoadIgnoreList(m_status.schema_id);
+  }
+  if (m_ignoreFilePath.empty()) return;
+  HANDLE h = CreateFileW(m_ignoreFilePath.c_str(),
+                         FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
+                         OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return;
+  std::string utf8 = wtou8(text);
+  std::vector<char> line;
+  line.insert(line.end(), utf8.begin(), utf8.end());
+  line.push_back('\r');
+  line.push_back('\n');
+  DWORD written = 0;
+  WriteFile(h, line.data(), (DWORD)line.size(), &written, nullptr);
+  CloseHandle(h);
+  RedrawWindow();
+}

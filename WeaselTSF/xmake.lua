@@ -2,7 +2,8 @@ target("WeaselTSF")
   set_kind("shared")
   add_files("./*.cpp", "WeaselTSF.def")
   add_rules("add_rcfiles", "use_weaselconstants")
-  add_deps("WeaselIPC", "WeaselUI")
+  add_deps("WeaselIPC", "WeaselUI", "RimeWithWeasel")
+  add_links("RimeWithWeasel")
   local fname = ''
   if is_arch("x86") then
     fname = "weasel.dll"
@@ -16,7 +17,7 @@ target("WeaselTSF")
   set_filename(fname)
 
   add_files("$(projectdir)/PerMonitorHighDPIAware.manifest")
-  add_shflags("/DEBUG /OPT:REF /OPT:ICF")
+  add_shflags("/DEBUG /OPT:REF /OPT:ICF /LTCG")
   before_build(function(target)
     local target_dir = path.join(target:targetdir(), target:name())
     if not os.exists(target_dir) then
