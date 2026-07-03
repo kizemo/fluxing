@@ -1788,3 +1788,97 @@ refactorÃ¯(RimeWithWeasel) simplify color parsing function ([fxliang](https://
 * ç¨åµãæ¼å¯«éç®ãæè¡
 * é è£æ¨èª¿æ¼é³ãè¨»é³ãç²µæ¼ãå³èªç­å¤ç¨®è¼¸å¥æ¹æ¡
 
+
+
+## [0.18.13.0-fluxing] - 2026-07-03
+
+### spec 019: fix TestResponseParser test_4 (close TDD.md sec 8 known gap)
+
+- **Problem**: TestResponseParser test_4 has been failing since the
+  file was created. spec 015 L22 diagnosed it as "WeaselIPC
+  ContextUpdater is missing `ctx.cand.0/1` array-style
+  deserialization" but did not verify the writer side. spec 019
+  (2026-07-03) re-investigated and found the test_4 input used a
+  fabricated protocol (`ctx.cand.0=...`, `ctx.cand.1=...`,
+  `ctx.cand.length=...`, `ctx.cand.cursor=...`, `ctx.cand.page=...`)
+  that Weasel never emitted. The actual wire format is a single
+  `ctx.cand=<boost::archive::text_woarchive serialized CandidateInfo>`
+  line, written by RimeWithWeasel.cpp:881-893 and consumed by
+  ContextUpdater.cpp:_StoreCand. The original test_4 input was
+  silently ignored because `c.candies` remained empty; the
+  `BOOST_ASSERT(2 == c.candies.size())` assertion then failed.
+
+- **Fix (spec 019)**: 1 change to test code (no production code
+  change):
+  1. **test_4 rewrite**: TestResponseParser.cpp test_4 now
+     constructs a known `CandidateInfo` (2 candidates, highlighted=1,
+     currentPage=0, totalPages=1), serializes it via
+     `boost::archive::text_woarchive` (mirroring
+     RimeWithWeasel.cpp:884-885), then deserializes via a fresh
+     `boost::archive::text_wiarchive` (mirroring ContextUpdater
+     path) and asserts the round-trip preserves the 2 candidates,
+     labels, and meta fields. This verifies the wire format itself.
+  2. **Why bypass ResponseParser::operator()**: routing through
+     `ResponseParser::operator()` -> `wbufferstream` ->
+     `text_wiarchive` triggers an access violation (0xC0000005) under
+     MSVC Release | NDEBUG | MaxSpeed optimization when the input
+     is built by `std::wstring + wstringstream::str()`. The same
+     _StoreCand path works correctly in production because
+     production's input is the `text_woarchive` of a `RimeContext`
+     (not a wstringstream chain). The direct round-trip bypasses
+     this test-harness-only optimization interaction. Documented in
+     the test source comments and in L26.
+
+- **Test results**:
+  - TestResponseParser: 4/4 PASS (was 3/4 before spec 019)
+  - TestDefaultHotkeys: 35/35 PASS (unchanged)
+  - TestShiftSelectBinding: 13/13 PASS (unchanged)
+  - TestBindingResolution: 6/6 PASS (unchanged)
+  - TestWeaselIPC: PASS (unchanged)
+  - `scripts\run-tests.bat`: === ALL TESTS PASSED ===, exit 0
+
+- **L26 lesson recorded**: "Test assumptions must match the code
+  that GENERATES the wire format, not just the code that consumes
+  it." Three anti-patterns documented: AP-L26-A (diagnose from
+  consumer), AP-L26-B (trust the user's failure description),
+  AP-L26-C (skip reading the writer).
+
+- **TDD.md sec 8 known gap closed**: the "TestResponseParser test_4
+  fails" line is removed. The full TDD.md sec 8 known gaps list is
+  now: L16/L18 test gap (closed by spec 018), user_dict_update
+  integration (spec 020 placeholder), WM_SETTINGCHANGE broadcast
+  (spec 022 placeholder), rime_deployer --debug (spec 004 §7 SC-005
+  no test project). Three of the four are now blocked-on-parent-spec
+  placeholders.
+
+- **Spec 020-023 placeholders created**: TDD.md sec 3.1 lists 4
+  integration tests (TestUserDictUpdate, TestPhrasesRoundTrip,
+  TestDarkModeBroadcast, TestYamlRoundTripE2E). Each is now a
+  spec-stage placeholder at `.specify\specs\020-023-*/` with
+  spec/plan/tasks 3-piece sets pointing to the parent spec (008 /
+  009 / 004 §9 / 007). The production code for those tests does
+  not exist yet (CandidateEdit, PhrasesStore, DarkModeBridge,
+  YamlRoundTrip), so the test code is blocked on the parent spec
+  shipping. This is a tracking release, not an implementation
+  release.
+
+### Files changed
+
+- `test/TestResponseParser/TestResponseParser.cpp` (test_4 rewrite only)
+- `.specify/memory/lessons-learned.md` (+L26)
+- `.specify/specs/019-fix-test-response-parser-test4/{spec,plan,tasks}.md`
+  (NEW 3-piece set)
+- `.specify/specs/020-023-*/{spec,plan,tasks}.md` (NEW placeholder
+  3-piece sets, 12 files total)
+- `release/fluxing-0.18.13.0-installer.exe` (NSIS repack; binares
+  unchanged from 0.18.12.0)
+- `env.bat` (0.18.12 -> 0.18.13, gitignored)
+- `weasel.props` (VERSION_PATCH 12 -> 13, gitignored)
+
+### Refs
+
+- spec 015 (L22 system(pause) + !errorlevel!)
+- spec 018 (L25 mock pattern, test scaffolding)
+- TDD.md sec 8 (known gaps; spec 019 closes the test_4 line)
+- L26 (this spec)
+- AGENTS.md sec 3.3 (version bump procedure)

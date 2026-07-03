@@ -1804,3 +1804,69 @@ to update the scanner, not the spec.
 - L21, L22, L23, L24 (lessons in the chain)
 - spec 014, spec 015, spec 016, spec 017 (this spec is the sixth
   in the chain)
+
+## L26 - Test assumptions must match the code that GENERATES the wire format, not just the code that consumes it
+
+**Incident**: TestResponseParser test_4 has been failing since the file
+existed (~2015, per the BOOST_ASSERT lines that pre-date spec 015). spec
+015 L22 diagnosed this as "WeaselIPC ContextUpdater is missing
+ctx.cand.0/1 array-style deserialization" without reading
+`RimeWithWeasel.cpp:881-893` (the actual code that writes the wire
+format). spec 019 (2026-07-03) re-investigated and found:
+
+- The wire format is a single `ctx.cand=<boost::archive::text_woarchive
+  serialized CandidateInfo>` line (RimeWithWeasel.cpp:891).
+- The test_4 input used a fabricated protocol
+  (`ctx.cand.0=...`, `ctx.cand.1=...`, `ctx.cand.length=...`,
+  `ctx.cand.cursor=...`, `ctx.cand.page=...`) that Weasel never emitted.
+- `ContextUpdater::_StoreCand` correctly handles the boost-serialized
+  format; the test_4 input was simply wrong.
+
+**Root cause**: When forming a hypothesis about a test failure, the
+diagnosis was based on the consumer side (ContextUpdater.cpp) without
+verifying the writer side (RimeWithWeasel.cpp). The consumer was
+correctly rejecting an input that the writer never sends.
+
+**Lesson**: When reviewing a test failure that looks like a "missing
+deserializer", trace the code that GENERATES the wire format FIRST. The
+test's input bytes must match what the writer emits, byte-for-byte. The
+three test assumptions to check, in order:
+
+1. What bytes does the writer produce? (RimeWithWeasel.cpp:881-893)
+2. What format does the consumer expect? (ContextUpdater.cpp:_StoreCand)
+3. Does the test's input match (1)?
+
+If (1) and (2) agree on the format and (3) disagrees, the test is
+wrong. Do not add a parallel deserializer for the test's format.
+
+**Three anti-patterns**:
+
+- **AP-L26-A**: Diagnose from the consumer side. The consumer may be
+  correctly rejecting an input that the writer never sends.
+- **AP-L26-B**: Trust the user's description of the test failure.
+  spec 015 saw "BOOST_ASSERT(2 == c.candies.size())" and inferred
+  "deserializer is incomplete" without checking what the writer emits.
+- **AP-L26-C**: Skip reading the writer because "we already know the
+  protocol". The test's input format was assumed correct; in reality
+  it was fabricated.
+
+**Related**: spec 019 closes TDD.md sec 8 known gap "key_binder
+binding 是否真被 librime 接受" by replacing test_4 with a direct
+`boost::archive::text_woarchive` round-trip on a hand-built
+CandidateInfo.
+
+**L26 follow-up (boost + NDEBUG + wstringstream)**: spec 019 also
+discovered that routing the test_4 wire-format through
+`ResponseParser::operator()` (which uses
+`boost::interprocess::wbufferstream` + `text_wiarchive` inside
+`ContextUpdater::_StoreCand`) triggers an access violation
+(0xC0000005) under MSVC Release | NDEBUG | MaxSpeed optimization when
+the input is built from a `std::wstring + wstringstream::str()` chain.
+The same _StoreCand path works correctly in production because
+production's input is the `boost::archive::text_woarchive` of a
+`RimeContext` (not a wstringstream chain). The fix: spec 019 test_4
+verifies the wire format via a direct `text_woarchive` +
+`text_wiarchive` round-trip on a hand-built `CandidateInfo`, bypassing
+the operator() glue. Documented in test_4 source comments and tracked
+here so future agents don't re-introduce the operator() path chasing a
+"more end-to-end" test.
