@@ -58,18 +58,40 @@ for %%P in (test\TestDefaultHotkeys test\TestShiftSelectBinding test\TestBinding
     if !errorlevel! NEQ 0 set "FAIL=1"
 )
 
-rem Run each test exe. Stdin redirected to nul to avoid system(pause) hangs
+rem Run each non-integration test exe. Stdin redirected to nul to avoid system(pause) hangs
 rem (defensive - the spec 015 fix removed system(pause) from all test sources,
 rem but this is cheap insurance against future test code regression).
-for %%E in (TestDefaultHotkeys TestShiftSelectBinding TestBindingResolution TestResponseParser TestWeaselIPC TestYamlRoundTripE2E) do (
+rem TestWeaselIPC is intentionally NOT in this loop: it is an integration test
+rem that requires server-spawn + client + shutdown orchestration. See the
+rem dedicated TestWeaselIPC block below (spec 026).
+for %%E in (TestDefaultHotkeys TestShiftSelectBinding TestBindingResolution TestResponseParser TestYamlRoundTripE2E) do (
     echo === Running %%E.exe ===
     rem Use NEQ 0 (not "if errorlevel 1") because BOOST_ASSERT
     rem failures in optimized Release builds raise 0xC0000005 (signed
     rem -1073741819), which is < 1 numerically, so "if errorlevel 1"
-    rem misinterprets a real failure as a pass.
+    misinterprets a real failure as a pass.
     "Release\%%E.exe" < nul
     if !errorlevel! NEQ 0 set "FAIL=1"
 )
+
+rem === TestWeaselIPC integration test (spec 026) ===
+rem The test exe has 3 modes: /start (spawn server in background), no-arg (client),
+rem /stop (shutdown server). We must spawn /start first, give the named pipe time
+rem to come up, then run the client, then /stop. Without this orchestration, the
+rem client mode returns -2 (STATUS_INVALID_HANDLE) because the named pipe has no
+rem listener. See L30 for the full post-mortem of the silent -2 failure that
+rem was mis-classified as "smoke test" for 4 sessions.
+echo === Setting up TestWeaselIPC server (background, /start) ===
+start "" /B "Release\TestWeaselIPC.exe" /start
+rem ping -n 3 127.0.0.1 >nul gives ~2s wait. Using ping (not timeout / sleep)
+rem because Windows may not have timeout / sleep on PATH. Per L22 "Windows-isms".
+ping -n 3 127.0.0.1 >nul
+echo === Running TestWeaselIPC.exe (client mode) ===
+"Release\TestWeaselIPC.exe" < nul
+set "IPC_RC=!errorlevel!"
+echo === Shutting down TestWeaselIPC server (/stop) ===
+"Release\TestWeaselIPC.exe" /stop < nul
+if !IPC_RC! NEQ 0 set "FAIL=1"
 
 if "!FAIL!"=="0" (
     echo.
