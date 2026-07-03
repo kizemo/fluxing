@@ -135,15 +135,15 @@ class TestRequestHandler : public weasel::RequestHandler {
   virtual ~TestRequestHandler() {
     std::cerr << "handler dtor: " << m_counter << std::endl;
   }
-  virtual UINT FindSession(UINT session_id) {
+  virtual DWORD FindSession(DWORD session_id) override {
     std::cerr << "FindSession: " << session_id << std::endl;
     return (session_id <= m_counter ? session_id : 0);
   }
-  virtual UINT AddSession(LPWSTR buffer) {
+  virtual DWORD AddSession(LPWSTR buffer, EatLine eat = 0) override {
     std::cerr << "AddSession: " << m_counter + 1 << std::endl;
     return ++m_counter;
   }
-  virtual UINT RemoveSession(UINT session_id) {
+  virtual DWORD RemoveSession(DWORD session_id) override {
     std::cerr << "RemoveClient: " << session_id << std::endl;
     return 0;
   }

@@ -2041,3 +2041,148 @@ for (const t of files) {
   the local worktree (`.git/config`) so other worktrees and the
   user's other repos are unaffected.
 
+## L30 - TestWeaselIPC.exe returns -2 (STATUS_INVALID_HANDLE) when no WeaselServer is running; this is a real failure, not a smoke test
+
+**Incident (spec 026 pre-flight, 2026-07-03)**: the `scripts\run-tests.bat`
+test gate has been reporting `=== TESTS FAILED ===` since spec 015 (2026-07-02),
+but every subsequent session mis-classified the failure as "pre-existing
+exit-code issue, not in scope" because PowerShell `& cmd /c "..."` returned
+`OUTER_RC=0`. The real exit code is 1 (from run-tests.bat) because
+`if !errorlevel! NEQ 0 set "FAIL=1"` correctly flags TestWeaselIPCs -2
+return. Spec 026 closes this 4-session mis-classification.
+
+**Root cause (1 - the test):** TestWeaselIPC.exe with no args enters
+`client_main()`, which calls `weasel::Client::Connect()`. The Connect
+fails because the named pipe has no listener. It prints "failed to connect to server." to stderr and `return -2`.
+TestWeaselIPC does NOT have an orchestrator that spawns the server first.
+It expects a human or a test script to launch `TestWeaselIPC.exe /start`
+as a background process before running the client mode. The current
+`run-tests.bat` does not do this.
+
+**Root cause (2 - the PowerShell false-positive):** running
+`cmd /c "scripts\run-tests.bat" & echo %ERRORLEVEL%` in PowerShell
+returns the `cmd /c` parent process exit code, NOT the exit code of
+the inner batch. The inner batch calls `endlocal & set "OUTER_RC=%FINAL_RC%"`
+and `exit /b %OUTER_RC%`. When PowerShell captures %ERRORLEVEL% from
+`cmd /c`, it reads cmd /c own exit, which can be 0 even if the inner
+batch exited 1. The reliable way to capture inner-batch exit:
+
+```batch
+rem save_inner.bat - writes inner exit to file
+@echo off
+call scripts\run-tests.bat
+echo %ERRORLEVEL% > _rc.txt
+```
+```powershell
+# then in PowerShell:
+$rc = Get-Content _rc.txt
+Remove-Item _rc.txt
+```
+
+OR even simpler: use a `cmd /c save_inner.bat` and trust the second-level
+%ERRORLEVEL% because the wrapper itself only does `call ... ; echo %ERRORLEVEL% > file`,
+and cmd /c propagates the wrappers exit as its own.
+
+**Verification recipe (R6 - evidence before assertion):**
+```batch
+@echo off
+setlocal
+"Release\TestWeaselIPC.exe" < nul
+echo IPC_RC=%ERRORLEVEL%
+endlocal
+```
+Run this from a `.bat` file (not inline `& cmd /c "..."` from PowerShell) and
+the printed `%ERRORLEVEL%` is the true inner-exe return. Confirmed: -2.
+
+**Anti-patterns to avoid (extending L22):**
+- **AP-L30-A**: Treating `OUTER_RC=0` from `cmd /c "..."` in PowerShell
+  as proof that the inner batch passed. It is not - it is the cmd /c
+  parent process exit. Use a `.bat` wrapper.
+- **AP-L30-B**: Running TestWeaselIPC without first spawning `/start` and
+  expecting it to pass. The exe has built-in `/start`, `/stop`, and
+  client modes, but no auto-orchestration. The test script must do it.
+- **AP-L30-C**: Skipping a failing test from the gate by writing it off
+  as "pre-existing / not in scope / smoke test" without verifying the
+  real exit code via a `.bat` wrapper. The `-2` was visible since spec 015
+  and 4 specs shipped under "all green" while it was actually failing.
+
+## L31 - Integration test (TestWeaselIPC) silently broken since pre-spec-015: TWO simultaneous root causes
+
+**Incident (spec 026 root-cause analysis, 2026-07-03)**: TestWeaselIPC.exe
+has been broken since long before spec 015. Every spec since (015-025)
+shipped under "all green" claims while the integration test was actually
+returning -2 (STATUS_INVALID_HANDLE) from client_main. Two separate root
+causes, each independently fatal:
+
+**Root cause A - C++ virtual function hiding (NOT overriding):**
+`test/TestWeaselIPC/TestWeaselIPC.cpp` defines `TestRequestHandler` extending
+`weasel::RequestHandler`. The base class declares:
+```cpp
+virtual DWORD AddSession(LPWSTR buffer, EatLine eat = 0) { return 0; }
+```
+TestRequestHandler declares:
+```cpp
+virtual UINT AddSession(LPWSTR buffer) {  // <-- 1-arg, hides base
+  return ++m_counter;
+}
+```
+**The 1-arg `AddSession` HIDES the 2-arg base virtual; it does not override it.**
+When the server calls `m_pRequestHandler->AddSession(buffer, lambda)` with
+two arguments, virtual dispatch finds the BASE class vtable entry (because
+`AddSession(LPWSTR, EatLine)` is the only 2-arg match), NOT TestRequestHandler.
+So OnStartSession always returns 0 (the base class default), and client
+session_id stays 0. Then `client.Echo()` checks `_Active() = Connected()
+&& session_id != 0` -> false, returns false -> "failed to login."
+
+C++ does NOT warn about this. To force a diagnostic, add the `override`
+keyword (C++11) to the derived-class declaration. The compiler will then
+reject the derived declaration because it does not match any base virtual.
+
+**Root cause B - vcxproj OutDir path concatenation bug:**
+`test/TestWeaselIPC/TestWeaselIPC.vcxproj` declared OutDir as:
+```xml
+<OutDir>$(SolutionDir)msbuild$(Configuration)$(Platform)</OutDir>
+```
+`$(SolutionDir)` is set by run-tests.bat to the repo root WITHOUT a trailing
+backslash (`/p:SolutionDir="F:\soft\00selfmade\rime"`). So msbuild
+concatenates `$(SolutionDir)msbuild\...` and produces the malformed path
+`F:\soft\00selfmade\rimemsbuild\...` (note `rime` and `msbuild` glued
+together - no separator). The linker then writes the .exe to this junk
+path AND run-tests.bat still tries to run `Release\TestWeaselIPC.exe` from
+the correct location, which is a STALE binary from a prior build (often
+days/weeks old). The stale binary "passes" because its server has the
+same broken AddSession override.
+
+The fix in spec 026:
+1. Always use explicit `\` after `$(SolutionDir)`: `$(SolutionDir)\$(Configuration)\`.
+2. Add the missing `weasel.sln` line `{9C1CC4BA-...}.Release|Win32.Build.0 = Release|Win32`
+   (TestWeaselIPC had `ActiveCfg` but no `Build.0`, so `msbuild weasel.sln`
+   would never build it - the entire project was a build-graph dead-end).
+
+**Why the failures were invisible for 4+ specs:**
+- The stale binary in `Release\TestWeaselIPC.exe` was built on a date when
+  `xbuild.bat weasel installer` last ran (typically at release time). It
+  returned -2 every time. Every "ALL TESTS PASSED" claim was a PowerShell
+  `cmd /c` false-positive (see L30).
+- L22 (spec 015) fixed the underlying detection correctly (`!errorlevel! NEQ 0`),
+  but the message "=== TESTS FAILED ===" was already a known L22 pattern
+  and every spec author since wrote it off as "pre-existing / not in scope".
+- No one ran TestWeaselIPC.exe standalone with a `.bat` wrapper (L30 recipe)
+  to see the real exit code.
+
+**Anti-patterns to avoid:**
+- **AP-L31-A**: Defining a derived-class virtual function with a different
+  parameter list than the base. It HIDES (does not override). Always use
+  `override` keyword; the compiler will catch the mismatch.
+- **AP-L31-B**: Setting `$(SolutionDir)` in `/p:` without a trailing backslash
+  AND having vcxproj OutDir/IntDir that start with `$(SolutionDir)X` (no
+  separator). The path gets glued. Always use `$(SolutionDir)\X` with the
+  explicit backslash.
+- **AP-L31-C**: Trusting "ALL TESTS PASSED" claims from spec authors without
+  running the test suite yourself. Combined with AP-L22 / L30, this is a
+ 3-layer false-positive: stale binary + PowerShell OUTER_RC misread +
+  L22-pattern write-off. The cure: always run `cmd /c save_inner.bat`
+  pattern from L30 for verification.
+- **AP-L31-D**: Adding a project to `weasel.sln` with only `ActiveCfg` and
+  no `Build.0`. The project is in the solution for IDE navigation but
+  will never be built by `msbuild weasel.sln`. Add both.
