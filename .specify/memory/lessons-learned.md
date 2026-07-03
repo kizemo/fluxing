@@ -2546,3 +2546,142 @@ For any **non-trivial** line-based edit in a CRLF file:
 - AGENTS.md sec 5 step 1 (byte health check) — the
   `$cr -eq $lf` verify is the same one we use for NSIS, just
   re-applied to every CRLF file we touch.
+
+## L38 - spec-incremental-shipping exposes build-time deps that earlier specs silently relied on
+
+**Date:** 2026-07-04
+**Spec:** 031 (`candidate-ignore-filter`)
+**Status:** active
+**Affected:** any future spec that adds a new method / file / include
+in WeaselUI that pulls in a function defined in RimeWithWeasel or
+another `static` xmake target, and links that .obj into a shared
+library (weasel.dll) via WeaselUI.lib.
+
+### Symptom
+
+During spec 031, after adding `LoadIgnoreList` to WeaselPanel.cpp
+which calls `WeaselUserDataPath().wstring()` (defined in
+`RimeWithWeasel/WeaselUtility.cpp` inside the `RimeWithWeasel`
+static lib target), the build failed at:
+
+```
+weasel.dll : fatal error LNK1120: 1 个无法解析的外部命令
+  WeaselUI.lib(WeaselPanel.cpp.obj) : error LNK2001: 无法解析的外部符号
+  "class std::filesystem::path __cdecl WeaselUserDataPath(void)"
+```
+
+`weasel.dll` (the WeaselTSF shared library) was not transitively
+linking `RimeWithWeasel.lib` even though `WeaselUI.lib` (which
+*it* does link) was now pulling in a symbol that lives in
+RimeWithWeasel. xmake's `add_deps` only expresses *build order*
+between targets; it does not express *link order* unless the
+target is also in `add_links`.
+
+The same issue applies to `/LTCG` and `/GL`: xmake's top-level
+`add_ldflags("/LTCG /INCREMENTAL:NO", {force = true})` (xmake.lua
+line 64) was not being applied to the WeaselTSF target's final
+link step, because `add_shflags("/DEBUG /OPT:REF /OPT:ICF")` in
+`WeaselTSF/xmake.lua` re-wrote the shflags without preserving the
+top-level `add_ldflags`. The MSVC linker warned
+"找到 MSIL .netmodule 或使用 /GL 编译的模块" and refused to
+link.
+
+### Why spec 030 did NOT trip this
+
+spec 030 added:
+- `SetDeleteCandidateCallback` to WeaselUI.h (UI class API)
+- `m_deleteCallback` to WeaselPanel.h
+- `OnRButtonDown` to WeaselPanel.cpp
+- `m_hoverIndex` and the dispatch to `m_deleteCallback` (a
+  `std::function<void(size_t)>` member, no external symbol)
+
+None of these reference any function in a *separate* xmake target.
+They all resolve inside the WeaselUI target itself or to system
+APIs. So the missing transitive link was not exercised.
+
+spec 031 added `LoadIgnoreList` which calls
+`WeaselUserDataPath()` (a function in a *different* xmake target).
+This is the first new external reference in WeaselPanel.cpp since
+spec 026 (which only edited `RimeWithWeasel.cpp` internals). The
+missing link was exposed for the first time in spec 031.
+
+### Root cause (two distinct xmake.lua gaps)
+
+1. **WeaselTSF target had no `add_deps` / `add_links` to
+   RimeWithWeasel.** The dep was implicit before spec 031 because
+   no WeaselUI symbol pulled in a RimeWithWeasel symbol that the
+   WeaselTSF target itself also referenced. After spec 031,
+   WeaselUI.lib (used by WeaselTSF) pulls in WeaselUserDataPath,
+   so WeaselTSF must also link RimeWithWeasel.lib.
+
+2. **WeaselTSF's `add_shflags` did not preserve top-level
+   `add_ldflags("/LTCG", {force=true})`.** xmake's `add_*flags`
+   functions append to the target's flags; `add_shflags` (shared
+   library ldflags) was set in WeaselTSF/xmake.lua without
+   referencing the top-level `add_ldflags`. The `/LTCG` flag was
+   thus not present in the actual weasel.dll link command, but
+   `/GL` was set on every compile via the top-level
+   `add_cxflags("/GL")` - producing the inconsistent state that
+   MSVC linker rejects.
+
+### Fix (in spec 031)
+
+In `WeaselTSF/xmake.lua`:
+- `add_deps("WeaselIPC", "WeaselUI", "RimeWithWeasel")` so the
+  RimeWithWeasel target is built before WeaselTSF.
+- `add_links("RimeWithWeasel")` so RimeWithWeasel.lib is passed
+  to the weasel.dll link command.
+- Added `/LTCG` to `add_shflags("/DEBUG /OPT:REF /OPT:ICF
+  /LTCG")` so the top-level add_ldflags is preserved on the
+  shared library.
+
+### Cure (for future specs)
+
+When adding a new method / include in WeaselUI that references a
+symbol defined in another xmake target (RimeWithWeasel,
+WeaselIPCServer, etc.):
+
+1. **Predict the link impact before running xbuild.** If the
+   new symbol is in a `static` target (RimeWithWeasel,
+   WeaselIPCServer), and it will be transitively linked into
+   `weasel.dll` (via WeaselUI.lib or WeaselIPCServer.lib), then
+   the WeaselTSF target needs both `add_deps` and `add_links`
+   for that target.
+
+2. **L36 already covers this in spirit** ("fix in 1 file is
+   not fix in N files"). The corollary for build files
+   (xmake.lua / .vcxproj / weasel.sln) is: when you add a new
+   reference to an external target's symbol, audit the link
+   graph for *every* target that transitively depends on the
+   target that now references the external symbol. Spec 030
+   did not do this audit; spec 031 had to.
+
+3. **The cleanest preventive measure** would be to add
+   `add_deps("RimeWithWeasel")` and
+   `add_links("RimeWithWeasel")` to WeaselTSF at the same time
+   the project was first set up. The fact that it works without
+   is accidental (L37 family of "silent until exercised"
+   problems).
+
+4. **For the `/LTCG /GL` consistency check**, a quick smoke
+   test is: after a build, check the link command of every
+   `.dll` (or `.exe` if it links multiple .obj with /GL).
+   The flag set must be consistent: either all `.obj` use
+   `/GL` and the link uses `/LTCG`, or none do. xmake's
+   `add_cxflags` / `add_ldflags` with `force=true` is not
+   a guarantee that the flag survives per-target overrides
+   like `add_shflags`.
+
+### Cross-references
+
+- L36 (L## fix coverage gap) - same pattern, different surface.
+- L37 (PowerShell line-based array ops) - same family of
+  "silent until exercised" problems; both L36 and L38 are
+  about coverage gaps that only surface on a follow-up change.
+- L10 (librime Win32-only constraint) - same family of "build
+  config that works in the happy path but breaks when a new
+  symbol is added".
+- xmake.lua line 64 - the top-level `/LTCG` add_ldflags that
+  did not propagate to WeaselTSF.
+- WeaselTSF/xmake.lua line 19 - the fixed shflags including
+  `/LTCG` (after spec 031).
