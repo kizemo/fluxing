@@ -2421,3 +2421,128 @@ rg '\$\(SolutionDir\)\$\(' test/
 - spec 027 (test-infra-hardening - the `verify-test-binaries-fresh.bat` that would have caught this earlier if the binaries were at the right path; the wrong-path .exe was outside its check scope).
 - L22 (test detection - same shape: a one-line fix that is silent if applied incompletely).
 - L32 (lesson-to-script promotion - applies the other direction: lesson -> script. L36 is lesson -> audit checklist, complementary pattern).
+
+
+## L37 - PowerShell line-based array ops corrupt CRLF files (use byte-level replace for line-precise edits)
+
+**Date:** 2026-07-04
+**Spec:** 030 (`candidate-rbutton-ui`)
+**Status:** active
+**Affected:** any PowerShell session that needs to insert / replace a
+contiguous block of lines in an existing CRLF file.
+
+### Symptom
+
+When you do `$t = Get-Content $f; $lines = $t -split "`n"; ... ;
+($lines2 -join "`n")`, the original file's CRLF line endings get
+broken:
+
+- `-split "`n"` on a CRLF file yields lines that **end with `CR`**
+  (the `\r` is the last char of each line).
+- If you join the array with `"`n"` (LF), the new content has
+  **lone LF** line endings — not CRLF.
+- If you then byte-level write the result with
+  `[System.IO.File]::WriteAllBytes`, the file's CR count and LF
+  count will diverge, and CRLF-sensitive tooling (clang-format on
+  C++, msbuild preprocessor on .bat, NSIS on .nsi) will misbehave
+  or fail.
+
+Concrete case (spec 030, WeaselPanel.cpp patch):
+
+1. `Get-Content WeaselUI/WeaselPanel.cpp | Select-String OnMouseLeave`
+   to find the line to insert after. Got `LineNumber = 518`.
+2. Computed `endLine = $start - 1 + 7` and sliced lines 0..endLine-1,
+   inserted new content for the OnRButtonDown function, joined with
+   `"`n"`, wrote with `WriteAllBytes`.
+3. Result: WeaselPanel.cpp had 24 lone LFs (CR=1338 LF=1362). The
+   file also had a **truncated** OnMouseLeave function (I sliced
+   past its closing `return 0;` and `}` because my line-index math
+   was off by 1 — Get-Content's LineNumber is 1-based; `$lines[i]`
+   is 0-based).
+4. Fix path: re-read the file, do a **byte-level replace** of a
+   unique multi-line needle that includes the existing trailing
+   context, then re-check `CR == LF` after writing.
+
+### Cause
+
+`Get-Content` returns each line with its native line terminator
+stripped in PS 5.1 (PS 7 may keep it; behavior differs). `-split "`n"`
+on CRLF content leaves trailing `CR` on each line element. `-join
+"`n"` drops those trailing CRs. Net result: lone LF.
+
+The line-index math is also easy to get wrong because rg /
+Select-String return 1-based line numbers but `$lines[i]` is 0-based.
+
+### Cure
+
+For any **non-trivial** line-based edit in a CRLF file:
+
+1. **Prefer byte-level replace**: build a unique multi-line needle
+   that includes the line above and below the insertion point, then
+   `$t.Replace($needle, $needle + $insertedBlock)` and
+   `[IO.File]::WriteAllBytes($f, [Text.Encoding]::UTF8.GetBytes($t2))`.
+   The needle carries the original CRLF; the inserted block must
+   use `` `r`n `` explicitly.
+
+2. **After every write**, verify byte health (AGENTS.md sec 5):
+   ```powershell
+   $b = [IO.File]::ReadAllBytes($f)
+   $cr = ($b | Where-Object {$_ -eq 0x0D}).Count
+   $lf = ($b | Where-Object {$_ -eq 0x0A}).Count
+   # For any file that was CRLF before, $cr -eq $lf must hold.
+   ```
+
+3. **If you must use line-based array ops** (e.g. for a multi-line
+   rewrite that's not amenable to a simple needle match): after
+   the rewrite, run `$t2 = $t.Replace("`n", "`r`n")` to restore CRLF.
+   But note this can convert pre-existing CR-only lines (rare) and
+   can also touch content the user did not intend to change. So the
+   **post-write verify** in step 2 is mandatory.
+
+4. **Sanity check the insertion end-line**: if the file is
+   syntactically broken (e.g. msbuild C1004 / C1075 / C2017 errors
+   about unclosed #if), the most likely cause is that you sliced
+   off the closing brace of the function you inserted into. Verify
+   by re-reading the file and inspecting the section between the
+   end of the previous function and the start of the next.
+
+### Verification (already applied during spec 030)
+
+```powershell
+# spec 030 WeaselUI/WeaselPanel.cpp after the OnRButtonDown insert
+# had CR=1338 LF=1362 (24 lone LFs). One byte-level replace
+# ("m_mouse_entry = false;\r\n" -> "m_mouse_entry = false;\r\n  return 0;\r\n}\r\n\r\n"
+# + separate replace of the trailing "  return 0;\r\n}\r\n\r\n}\r\n\r\n" ->
+# "  return 0;\r\n}\r\n\r\n" to remove the orphan "}" that the
+# initial insert left behind) restored CR=1363 LF=1363.
+```
+
+### Why this is L## -worthy (not just a fix)
+
+- The bug is silent — the file still compiles the changed function
+  and the inserted OnRButtonDown, but the **truncated OnMouseLeave
+  function** would have caused a runtime crash the first time the
+  user moved the mouse out of the candidate window. There is no
+  test in the repo that exercises OnMouseLeave at the GUI level
+  (tests are behavior-level, no live GUI).
+- The fix took 2 iterations of byte-level replace. The first
+  iteration fixed CR/LF divergence but I had to spot the missing
+  OnMouseLeave closing brace on a second read.
+- The pattern (line-based array ops on CRLF files) is going to
+  come up again every time we add a new message handler / new
+  function in WeaselPanel.cpp / WeaselTSF.cpp / RimeWithWeasel.cpp.
+  Future sessions should reach for byte-level replace as the
+  default, not line-based arrays.
+
+### Cross-references
+
+- L01 (Chinese UTF-8 file read/write) — same family of "PowerShell
+  string layer corrupts binary file" bugs; cure is the same:
+  byte-level APIs.
+- L02 (Chinese content edits) — same family.
+- L09 (NSIS BOM + line endings) — same pattern in a different
+  context; NSIS also requires strict CRLF, and PowerShell line
+  ops can break it.
+- AGENTS.md sec 5 step 1 (byte health check) — the
+  `$cr -eq $lf` verify is the same one we use for NSIS, just
+  re-applied to every CRLF file we touch.
