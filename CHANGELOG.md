@@ -1,3 +1,34 @@
+## [0.18.17.0-fluxing] - 2026-07-04
+
+
+### spec 028: candidate delete core (stage 1 of spec 008; TDD 3.1 unblocked)
+
+- **Problem**: spec 008 (`008-candidate-edit`) was a placeholder for 4+ specs, blocking TDD 3.1 '`TestUserDictUpdate`' (spec 020). The spec 008 plan assumed librime 1.13 's C API exposes `is_user_dict` in `rime_candidate_t` (annotated '1.13+ adding? needs verification') - **that field is not in the C API**. The 1.13 surface is only `text`, `comment`, `reserved`. The C++ class `rime::Candidate` has `type()` and `is_user_dict` but the C API does not project them.
+
+- **Solution (stage 1 only)**: the correct design for spec 008 stage 1 is to just call `rime_api->delete_candidate_on_current_page(index)`. The engine internally does the is_user_dict check (in `Context::DeleteCandidate` at `librime/src/rime/context.cc:146`) and removes the user.db entry if it is a user-dict entry, no-ops otherwise. The application layer cannot and should not try to inspect `is_user_dict` at the C API level. Stages 2-4 (WeaselUI WM_RBUTTONDOWN, user_ignore.txt fallback, dark-mode integration) are deferred to a later spec.
+
+- **Files (4 new + 3 modified):**
+  - NEW: `test\TestUserDictUpdate\TestUserDictUpdate.cpp` (4 behavior-level assertions)
+  - NEW: `test\TestUserDictUpdate\TestUserDictUpdate.vcxproj` (L31 OutDir fix applied)
+  - NEW: `test\TestUserDictUpdate\stdafx.{h,cpp}` + `targetver.h` (boilerplate)
+  - NEW: `.specify\specs\028-candidate-delete-core\{spec,plan,tasks}.md` (3 files)
+  - MOD: `include\RimeWithWeasel.h` (added `DeleteCandidateOnCurrentPage` declaration, 3 lines)
+  - MOD: `RimeWithWeasel\RimeWithWeasel.cpp` (added `DeleteCandidateOnCurrentPage` impl, 14 lines)
+  - MOD: `weasel.sln` (added `TestUserDictUpdate` project + Win32 ActiveCfg/Build.0 entries)
+  - MOD: `scripts\test-infra\run-test-suite.bat` (added `TestUserDictUpdate` to build + run loops)
+  - MOD: `.specify\memory\lessons-learned.md` (L35 appended - documents the C API surface limitation)
+
+- **L35 (new)**: documents that `rime_api.h` does NOT expose `is_user_dict` in `rime_candidate_t` - the field is only in the C++ class. The 3 anti-patterns: (AP-L35-A) planning around an unverified C API field, (AP-L35-B) assuming C++ class member means C API exposes it, (AP-L35-C) designing a 'two-path' dispatch in the app layer when the engine already does the dispatch.
+
+- **TDD 3.1 status**: 7/7 integration tests defined (the 6 prior + new `TestUserDictUpdate`). The remaining 2 (TestPhrasesRoundTrip, TestDarkModeBroadcast, TestBootstrapperStdio) are still placeholders, blocked on their respective parent specs.
+
+- **Verification (post-impl):**
+  - `cmd /c scripts\test-infra\run-test-suite.bat` -> RC 0, `=== ALL TESTS PASSED ===`, **7/7** test projects.
+  - `cmd /c scripts\test-infra\verify-test-binaries-fresh.bat` -> RC 0, all 7 FRESH.
+  - TestUserDictUpdate outputs 4/4 PASS.
+
+- **No installer change, no `env.bat` / `weasel.props` bump, no spec 008 UI changes. Tag is `v0.18.17.0` per P8 / P4 scope convention.**
+
 ## [0.18.16.0-fluxing] - 2026-07-03
 
 

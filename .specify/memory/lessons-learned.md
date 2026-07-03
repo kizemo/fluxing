@@ -2315,3 +2315,52 @@ rem misinterprets a real failure as a pass - see L22.
 
 - L33 (the other cmd parsing bug - `$` in PowerShell -Command).
 - L30 (the OUTER_RC false-positive lesson; phantom stderr from L34 does not affect OUTER_RC, so do not be fooled by OUTER_RC=0 into ignoring L34 symptoms).
+
+
+## L35 - rime_api.h does NOT expose rime_candidate_t.is_user_dict
+
+**Date:** 2026-07-04
+**Spec:** 028 (`candidate-delete-core`)
+**Status:** active
+**Affected:** any spec that plans candidate-level dispatch based on user-dict vs shared-dict origin
+
+### Problem
+
+Spec 008 (`008-candidate-edit`) plan.md §2.2 assumed that librime 1.13 's
+`rime_candidate_t` exposes an `is_user_dict` field (annotated '1.13+ adding? needs verification').
+**That field is NOT in the C API.** Reading the actual librime 1.13 `rime_api.h:3256` shows:
+
+```c
+typedef struct rime_candidate_t {
+  char* text;
+  char* comment;
+  void* reserved;
+} RimeCandidate;
+```
+
+Only `text`, `comment`, `reserved`. The `is_user_dict` member exists in the C++ class `rime::Candidate` (with a `type()` method) but the C API deliberately exposes a narrower surface. The C++ 'is_user_dict' accessor calls `type() == 'user_dict'` internally, but this is NOT projected to the C API.
+
+### Implication
+
+Any spec that plans to do 'is_user_dict==true -> delete' at the C API layer (or any candidate-level dispatch based on origin) is impossible. The C API only lets you call `delete_candidate_on_current_page(index)` and the engine does the right thing internally:
+
+- librime/src/rime/context.cc:146 - `Context::DeleteCandidate(index)` sets `selected_index = index` and then calls `commit_history` which removes the user.db entry if the candidate is a user-dict entry, or no-ops otherwise.
+- librime/src/rime_api_impl.h:34106 - `RimeDeleteCandidate` wraps the above.
+
+So the correct stage 1 design for spec 008 (which spec 028 implements) is: just call `delete_candidate_on_current_page(index)`. The engine decides what to do. The application layer cannot and should not try to inspect `is_user_dict` at the C API level.
+
+### Anti-patterns to avoid
+
+- **AP-L35-A**: Planning around a C API field before grepping the .h file to confirm it is exposed. The cost is one `IndexOf('is_user_dict', rime_api.h)` call; the benefit is catching the gap before writing 200 lines of code that depend on it.
+- **AP-L35-B**: Assuming that because librime C++ has a class member / accessor, the C API exposes it. The C API surface is a deliberate subset of the C++ surface, not a 1:1 mirror. Always treat the .h file as the source of truth.
+- **AP-L35-C**: Designing a 'two-path' feature (is_user_dict -> delete, otherwise -> ignore) that requires the application layer to inspect candidate origin. Push the dispatch into the engine by calling a single C API function and trusting the engine to do the right thing. The engine has more context (e.g. knows which dict the entry lives in) than the application layer ever will.
+
+### Related
+
+- spec 008 (`008-candidate-edit`) - the parent spec that made the wrong assumption. Stage 1 of spec 008 = spec 028. Stages 2-4 (UI + user_ignore.txt + dark mode) deferred to a later spec.
+- librime 1.13 `rime_api.h:3256` - the actual struct definition (C API surface).
+- librime 1.13 `rime_api.h:15635` - `delete_candidate` / `delete_candidate_on_current_page` C API functions.
+- librime 1.13 `librime/src/rime_api_impl.h:34106` - `RimeDeleteCandidate` C-to-C++ wrapper.
+- librime 1.13 `librime/src/rime/context.cc:146` - `Context::DeleteCandidate` engine-side implementation.
+- L09 (NSIS BOM - reminds us to read the file as bytes, not as a model of what we want it to be).
+- L32 (lesson-to-script promotion - the lesson here is: add a pre-flight step that reads the C API .h file, even for 'well-known' libraries).

@@ -319,6 +319,22 @@ void RimeWithWeaselHandler::SelectCandidateOnCurrentPage(
   rime_api->select_candidate_on_current_page(to_session_id(ipc_id), index);
 }
 
+void RimeWithWeaselHandler::DeleteCandidateOnCurrentPage(
+    size_t index,
+    WeaselSessionId ipc_id) {
+  DLOG(INFO) << "delete candidate on current page, ipc_id = " << ipc_id
+             << ", index = " << index;
+  if (m_disabled)
+    return;
+  // spec 028: librime 1.13 delete_candidate C API.
+  // Engine-side: Context::DeleteCandidate(index) at librime/src/rime/context.cc:146.
+  // The engine does the is_user_dict check internally; the C API does NOT
+  // expose is_user_dict in rime_candidate_t (see L35). When the engine
+  // decides the candidate is a user-dict entry, it removes it from user.db.
+  rime_api->delete_candidate_on_current_page(to_session_id(ipc_id), index);
+  _UpdateUI(ipc_id);
+}
+
 bool RimeWithWeaselHandler::HighlightCandidateOnCurrentPage(
     size_t index,
     WeaselSessionId ipc_id,
