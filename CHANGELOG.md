@@ -1,3 +1,37 @@
+## [0.18.19.0-fluxing] - 2026-07-04
+
+### Release hygiene + L40 (PRD/TDD corruption documented)
+
+- **Problem**: tags v0.18.15.0 through v0.18.18.0 were created with CHANGELOG-only commits, no new installer binary in `release/`. The last actual installer shipped is 0.18.14.0 (or 0.18.14.1). This violates AGENTS.md sec 3.3 (release = CHANGELOG + new installer binary + version bump in env.bat / weasel.props).
+
+- **Solution for 0.18.19.0**: build a new installer, copy to `release/`, commit (CHANGELOG + installer only, NOT env.bat / weasel.props per A3), tag v0.18.19.0, push to kizemo/Fluxing. Closes the "no installer for 5 versions" gap.
+
+- **L40 (new)**: `.specify/PRD.md` and `.specify/TDD.md` corruption is **literal `?` (0x3F) characters**, not GBK->UTF-8 mojibake as L39 diagnosed. The previous L39 fix was a no-op: it restored a corrupted blob from commit 54cdd2d and re-verified by SHA, missing that the source was already broken. The byte pattern (0x3F runs separated by 0x20) cannot be the result of GBK->UTF-8 misdecoding (which produces 0xC2 / 0xE2 / 0x80-range bytes). The data is unrecoverable from git history; reconstruction deferred to a future spec using spec 004 + constitution + AGENTS.md + sub-specs 005-032 as authoritative sources. See L40 for the full post-mortem and the verification discipline (`0x3F` count + `0xE4..0xE9` CJK lead-byte count + visual inspection, NOT just `git hash-object` SHA match).
+
+- **Files (1 modified + 1 new installer):**
+  - MOD: `CHANGELOG.md` (this entry, prepended)
+  - NEW: `release/fluxing-0.18.19.0-installer.exe` (built by xbuild.bat weasel installer from env.bat FLUXING_VERSION=0.18.19 + RELEASE_BUILD=1)
+  - MOD: `env.bat` (FLUXING_VERSION 0.18.15 -> 0.18.19; VERSION_PATCH 15 -> 19; PRODUCT_VERSION 0.18.15.0 -> 0.18.19.0) - local-only, NOT committed
+  - MOD: `weasel.props` (VERSION_PATCH 15 -> 19; PRODUCT_VERSION 0.18.15.0 -> 0.18.19.0; FILE_VERSION 0.18.15.0 -> 0.18.19.0) - local-only, NOT committed
+  - MOD: `.specify/memory/lessons-learned.md` (L40 appended, 86 lines, byte-level verified)
+
+- **L40 (new)**: documents the wrong-diagnosis (L39 GBK->UTF-8 theory was wrong; actual is literal `?` substitution from the initial commit 6f6fcbf) and the verification discipline (SHA match is structural, not content; need 0x3F count + visual inspection). Recovery path: reconstruct from spec 004 + constitution + AGENTS.md + sub-specs, not from git history.
+
+- **Anti-patterns (AP-L40-A/B/C/D)**:
+  - AP-L40-A: declaring "fixed" because `git hash-object` matches a known-clean SHA (the known-clean SHA was also broken)
+  - AP-L40-B: assuming L01 (GBK pollution) applies to every Chinese corruption - check the actual byte pattern
+  - AP-L40-C: tagging a release without a corresponding `release/*-installer.exe` binary (the 0.18.15-0.18.18 tags did this)
+  - AP-L40-D: trusting `Get-Content` output to reveal corruption - it shows `?` as `?`, indistinguishable from real text
+
+- **Verification (post-impl):**
+  - `cmd /c scripts\test-infra\run-test-suite.bat` -> RC 0, `=== ALL TESTS PASSED ===`, **11/11** test projects.
+  - `cmd /c scripts\test-infra\verify-test-binaries-fresh.bat` -> RC 0, 11 FRESH.
+  - AGENTS.md sec 2.5 silent-install smoke test against `release\fluxing-0.18.19.0-installer.exe` -> all 8 invariants pass (exit code 0; fluxing\weasel\ layout; HKLM InstallDir; HKCU RimeUserDir; rime.dll size 2-5 MB; prebuilt dicts present; PE arch: Weasel*.exe x86, weaselx64.dll x64, rime.dll x86).
+
+- **No PRD.md / TDD.md content fix in this release** - L40 documents the corruption; reconstruction is deferred to a future spec (likely 033). The 0.18.19.0 release ships the installer, closes the no-installer-for-5-versions gap, and adds the L40 lesson; the PRD/TDD reconstruction is a separate work item.
+
+- **Tag is `v0.18.19.0`** per AGENTS.md sec 3.5 (lightweight). Pushed to kizemo/Fluxing.
+
 ## [0.18.18.0-fluxing] - 2026-07-04
 
 
