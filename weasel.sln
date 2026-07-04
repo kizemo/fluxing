@@ -46,6 +46,7 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestPanelDarkModeSubscribe", "test\TestPanelDarkModeSubscribe\TestPanelDarkModeSubscribe.vcxproj", "{D5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F44}"
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestDarkModeBridge", "test\TestDarkModeBridge\TestDarkModeBridge.vcxproj", "{17A3918C-FFDF-41EA-8AE6-E1AD2E0D2C79}"
 EndProject
+EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestDarkModeBroadcast", "test\TestDarkModeBroadcast\TestDarkModeBroadcast.vcxproj", "{B220A318-9188-459D-ABC0-C571C21E5829}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestTrayRestoreIgnored", "test\TestTrayRestoreIgnored\TestTrayRestoreIgnored.vcxproj", "{E5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F45}"

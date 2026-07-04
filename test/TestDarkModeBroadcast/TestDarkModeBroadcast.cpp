@@ -290,12 +290,8 @@ int main() {
           "T3b: subscriber 2 fired exactly once on state change");
     Check(call_order.size() == 2,
           "T3c: total subscriber calls == 2 (FIFO order)");
-    if (call_order.size() == 2) {
-      Check(call_order[0] == true && call_order[1] == true,
-            "T3d: both subscribers received the new dark=true state");
-    } else {
-      Check(false, "T3d: skipped (call_order size != 2)");
-    }
+    Check(call_order[0] == true && call_order[1] == true,
+          "T3d: both subscribers received the new dark=true state");
     // restore for the next test.
     WriteAppsUseLightTheme(1);
     bridge->Refresh();
