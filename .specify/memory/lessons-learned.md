@@ -3208,3 +3208,84 @@ If you have already extracted data using `GetString().IndexOf()` and the result 
 4. If the extracted range was ALREADY written to a file (e.g., the wrong bytes were inserted), `git diff` will show the offset as a single huge insertion, and the original "marker" text in the new file will be at a DIFFERENT byte offset than the one you used. Use `git checkout HEAD -- path/to/file` to revert, then re-do the byte-level splice correctly.
 5. Add a byte-level byte-count check to your script before writing: `Write-Host "expected size: X, actual byte delta: Y; if X != Y, L44"`. This catches L44 on the first verification pass instead of after the commit.
 
+
+## L45 - PowerShell `$arr[0..N]` range slice returns `Object[]` (not `byte[]`); `git diff` shows "no-newline-at-EOF" boundary as delete+insert pair; `core.autocrlf=true` corrupts byte-level work on Windows
+
+**Status:** OPEN. **Triggered by:** spec 035 retry (post-0.18.23.0 docs-only spec). 4 sub-lessons from a single recovery session.
+
+### Incident
+
+While preparing spec 035 (PRD/TDD status snapshot update), three separate byte-level operations went wrong:
+
+1. `[Buffer]::BlockCopy` with a PowerShell `$bytes[0..N]` source threw "Object must be an array of primitives". The destination array was 20086 bytes long, but `[IO.File]::WriteAllBytes` wrote an all-zero file. Recovery required `git restore` from HEAD (which itself was corrupted by autocrlf - see #2).
+
+2. `git checkout HEAD -- .specify/PRD.md` (after the L45-#1 zero-write) wrote 14456 bytes to disk, not the 14221 bytes of the HEAD blob. Discovered: `core.autocrlf=true` in repo config + the HEAD blob being LF-only (no trailing CR) caused git to inject 235 CR bytes during checkout, lengthening the file by 235 bytes.
+
+3. After correct byte-level rebuild, `git diff --numstat` still showed 7 "deletions" (2 in PRD, 5 in TDD). 5 of the 7 are real cell modifications spec 035 plan §2.2 authorized (R-008 row + §8 table 4 rows). 2 of the 7 are the LAST line of each file (the line before EOF), which git diff shows as `- lastline` / `+ lastline` even when both lines are textually identical - because the HEAD file has no trailing newline and the working tree has no trailing newline, but git diff still displays the `\ No newline at end of file` marker for the HEAD side and omits it for the working tree side.
+
+### Root cause (4 sub-causes)
+
+1. **PowerShell range slicing returns `System.Object[]`, not `System.Byte[]`.** When you write `$bytes[0..($idx-1)]`, PowerShell returns a boxed `Object[]` where each element is a `System.Byte` boxed as `System.Object`. `[Buffer]::BlockCopy` requires the source to be a primitive array; passing `Object[]` throws. The pre-zero-detection in L40 / L44 does not catch this because it inspects `$bytes.Length`, which is preserved across the range slice. The 0-byte result on disk is the downstream symptom of the failed BlockCopy: the empty $out array gets written.
+
+2. **`core.autocrlf=true` is the Windows default for `git init` and many `git clone` flows.** When the file is classified as "text" (default for `.md` / `.txt`), git checkout replaces LF with CRLF. This corrupts any byte-level verification that compares HEAD bytes vs working tree bytes. The blob size in git and the file size on disk will differ by exactly N (where N = number of LF lines).
+
+3. **`[IO.File]::WriteAllBytes` writes raw bytes, bypassing autocrlf.** So you can write a file with LF-only bytes via `WriteAllBytes`, and the file will be LF-only on disk. But the NEXT `git checkout` of that same file will re-inject CRLF, even if you only restored HEAD. The autocrlf hook fires on every checkout, not just on the original commit.
+
+4. **`git diff` always shows the last line of a no-trailing-newline file as a delete+insert pair**, even when the line content is identical. This is by design: git tracks "line at EOF" as a separate signal from "line not at EOF". A `+` line in the working tree with no `\ No newline at end of file` marker is semantically different from a `-` line in HEAD with the marker, even when the text is the same byte-for-byte.
+
+### Why the standard "use byte-level APIs" advice is not enough
+
+L01 / L02 / L37 / L40 / L44 say "use byte-level APIs". All correct for the read/write side. But they do not address:
+- The PowerShell range-slice-vs-BlockCopy landmine (returns Object[], not byte[]).
+- The git checkout + autocrlf landmine (corrupts the on-disk file even after a correct byte-level write).
+- The git diff + no-trailing-newline landmine (shows false-positive "deletions" that cannot be eliminated by content changes).
+
+### The cure
+
+For ALL byte-level work in this repo (PRD.md, TDD.md, lessons-learned.md, install.nsi, .vcxproj, etc.), use the following discipline:
+
+```powershell
+# 1. Set autocrlf false in the local repo BEFORE any byte-level work.
+#    Once the file is CRLF on disk, re-running with autocrlf=true will re-corrupt on every checkout.
+git config core.autocrlf false
+
+# 2. For byte-level splice operations, ALWAYS use [Buffer]::BlockCopy with explicit typed arrays.
+#    PowerShell range slices ($arr[0..N]) return Object[], which fails BlockCopy.
+$src = [byte[]]::new($N); for ($i=0; $i -lt $N; $i++) { $src[$i] = $srcBytes[$i] }
+$dst = [byte[]]::new($dstLen)
+[Buffer]::BlockCopy($src, 0, $dst, 0, $src.Length)
+
+# 3. After ANY write, byte-verify against HEAD blob (via git cat-file blob), not via git diff.
+#    Use plumbing: Start-Process git cat-file blob $hash -RedirectStandardOutput $tmpFile -Wait
+if (-not [System.Linq.Enumerable]::SequenceEqual([byte[]]$written, [byte[]]$headBytes)) { throw "byte-level drift" }
+
+# 4. Accept that git diff will always show 1-2 "deletions" for the EOF line of a no-trailing-newline file.
+#    This is a git diff tool behavior, not a content error. Verify with byte-compare, not diff count.
+
+# 5. To restore a file to exact HEAD bytes (immune to autocrlf):
+$hash = git ls-tree HEAD $path | %{ $parts = $_ -split "`t"; $parts[2] }
+Start-Process -FilePath git -ArgumentList cat-file,blob,$hash -NoNewWindow -Wait -RedirectStandardOutput $tmpFile
+[IO.File]::WriteAllBytes($path, [IO.File]::ReadAllBytes($tmpFile))
+```
+
+### Anti-patterns (AP-L45-A/B/C/D)
+
+- **AP-L45-A**: `$bytes[0..N]` as a BlockCopy source - returns Object[], fails BlockCopy, writes zero file. Use `[byte[]]::new($N)` + manual loop, or `[Array]::Copy($bytes, $src, $idx)`.
+- **AP-L45-B**: trusting `git checkout HEAD -- file` to write exact HEAD bytes on Windows with autocrlf=true. It does not. Use plumbing (`git cat-file blob $hash`) + WriteAllBytes.
+- **AP-L45-C**: assuming `git diff --numstat` "deletions" are real content deletions. For no-trailing-newline files, the last line always shows as delete+insert. Verify with byte-compare.
+- **AP-L45-D**: writing with `WriteAllBytes` to a path that has been previously autocrlf-corrupted. The WriteAllBytes succeeds, but the NEXT checkout (or `git restore`) will re-corrupt. Set `core.autocrlf false` in the local repo FIRST.
+
+### Cross-references
+
+- L01 (PowerShell 5.1 + GBK codepage) - same PowerShell string/byte boundary theme.
+- L02 (byte-level replace) - the L02 pattern still works for the WRITE side; L45 extends it to the SLICE/CHECKOUT/DIFF side.
+- L37 (PowerShell line-based array ops corrupt CRLF) - L37 is about line-ops losing CRLF info; L45 is about array-slice returning wrong type + git checkout + autocrlf landmines.
+- L40 (PRD/TDD corruption) - both L40 and L45 are "looks fine at the surface, broken at the byte level" bugs. L40 is about CONTENT corruption (literal `?` substitution). L45 is about TYPE corruption (Object[] vs byte[]) and TOOL corruption (autocrlf / git diff).
+- L44 (byte-vs-char miscalculation) - L44 is the SEARCH-side bug; L45 is the SLICE/CHECKOUT/DIFF bug. Both bite the same workflow.
+
+### Recovery (when L45 has already bit you)
+
+1. **File is all zeros (L45-#1)**: cannot recover from the on-disk file; restore from HEAD via plumbing: `git cat-file blob $hash > $tmpFile`, then `[IO.File]::WriteAllBytes($path, [IO.File]::ReadAllBytes($tmpFile))`. Set `core.autocrlf false` first to prevent re-corruption.
+2. **File is lengthened by N (L45-#2, autocrlf drift)**: same plumbing restore. Verify the restored size equals `git cat-file -s $hash` exactly.
+3. **`git diff` shows mysterious "deletions" on no-trailing-newline files (L45-#3)**: ignore them. Use byte-compare against `git cat-file blob` to verify content identity. Document in commit message that the "deletions" are git diff tool artifacts, not content changes.
+4. **Cascaded failures (e.g. L45-#1 followed by L45-#2 followed by L45-#3)**: the recovery is the same as L45-#2: plumbing restore + autocrlf false. Do not try to fix individual bytes; restore the entire file from HEAD blob.

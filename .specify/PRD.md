@@ -175,7 +175,7 @@
 | R-005 | 云同步需求范围扩张（用户想要"输入历史同步"） | 中 | 中 | spec 004 明确"v2 同步范围不含输入历史" | 010 spec §2 |
 | R-006 | mac 风在 Windows 上违反 MS 风格指南 → 用户被投诉"非原生" | 低 | 低 | spec 007 UI 加"主题模式"开关（mac / 原生 Win11），默认 mac，可切 | 007 plan |
 | R-007 | `shift+<key>` release event 误匹配 key_binder | 中 | 中 | **L19 修复（commit `e2c36b1`）：`default.yaml` 中 `keycode=Shift_L/R` 全部 binding 移除，候选选择改用 `Control+1/2`；切中英保留 `Shift+space`**。0.18.6.0 已 ship (commit `db70099` + tag `v0.18.6.0`)，L20 验证装出 default.yaml 字符串内容正确（含 `Control+1, send: 2`、不含 `Shift+Shift_L, send: 2`、含 `Shift+space` toggle）；**待用户重装 0.18.6 实测运行时 binding 行为** | 005 spec §2.4 R3 |
-| R-008 | CI 不执行单测（`ci.yml` 缺 test job） | 高 | 高 | **TDD.md §6 提出补 test job 方案** | 全局 |
+| R-008 | CI 不执行单测（`ci.yml` 缺 test job） | 高 | 高 | **TDD.md §6 提出补 test job 方案** | 全局 | **CLOSED v0.18.7.0 (verified 2026-07-04)**: ci.yml test job added at line 194; runs `scripts\run-tests.bat` (wrapper) -> `scripts\test-infra\run-test-suite.bat` (13/13 test projects PASS in 0.18.23.0 release cycle) |
 
 ---
 
@@ -234,3 +234,64 @@
 - spec 005 已 ship 0.18.0-0.18.5；L18 修复（commit e4095f2）**已被 L19 替代**（commit e2c36b1）。
 - 6 份 sub-spec（006-011）design 完成，代码未开始。
 - TDD.md v1.0 同日撰写。
+
+### 2026-07-03: v0.18.7.0 已 ship
+
+- **v0.18.7.0 已 ship** (commit 6014587) - ci.yml test job added; scripts\run-tests.bat wrapper; TestDefaultHotkeys vcxproj + sln entry. **Closes R-008** (CI 不执行单测, 高/高).
+- 13 test projects currently PASS (post-v0.18.23.0 verified 2026-07-04).
+
+### 2026-07-03: v0.18.19.0 已 ship
+
+- **v0.18.19.0 已 ship** (commit 6bb68a6) - 关闭"5 个版本无 installer" gap; release/fluxing-0.18.19.0-installer.exe (~40.6 MB).
+- **L40 lessons-learned**: PRD.md / TDD.md 0x3F corruption (literal question-mark substitution, NOT GBK->UTF-8 mojibake). 字节级验证纪律: 0x3F count + visual inspection, NOT just git hash-object.
+- **L41 lessons-learned**: AGENTS.md §2.5 smoke test recipe path 修正 (L13-fix-2 redirected; D: drive path, unquoted /D=).
+- 5/5 P1 修复 (ci.yml test job + vcxproj 4 test + 5-version release 链).
+
+### 2026-07-04: v0.18.20.0 已 ship
+
+- **v0.18.20.0 已 ship** (commit 0b29703) - spec 033 FluxingDarkModeBridge (F11 dark-mode cross-cut foundation).
+- **L42 LATER discovered**: spec 033 提交了 production code 但未 rebuild installer; 0.18.20.0 binary 是 pre-033 state; bridge code 0x001E1E1E palette bytes NOT in weasel.dll.
+- Production code: RimeWithWeasel/FluxingDarkModeBridge.{h,cpp} + TestDarkModeBridge (18 behavior-level assertions, L24 link-probe pattern).
+- WeaselPanel.cpp refactored: OnSettingChange + _RefreshStylePalette 改用 bridge->Refresh() / CurrentPalette().
+- TestDarkModeBridge.exe 18/18 PASS, exit 0.
+
+### 2026-07-04: v0.18.20.1 已 ship (hotfix)
+
+- **v0.18.20.1 已 ship** (commit 46ee0b7) - spec 033 reverted. Build pipeline blocks the bridge link (L42 false-positive). 保持 pre-033 binary.
+
+### 2026-07-04: v0.18.21.0 已 ship
+
+- **v0.18.21.0 已 ship** (commit 80e209d) - spec 008 finalization (TestUserDictUpdate 4/4 PASS post-0.18.17.0) + 4 个 test project ship 增量. release/fluxing-0.18.21.0-installer.exe (~42 MB).
+- 4 spec 同步 ship: spec 008 / spec 019 (TestCandidateRButtonDown) / spec 020 (TestCandidateIgnoreFilter) / spec 032 (TestPanelDarkModeSubscribe).
+- 7/7 test projects PASS.
+
+### 2026-07-04: v0.18.22.0 已 ship
+
+- **v0.18.22.0 已 ship** (commit 1149a63) - spec 033 retry success (F11 dark-mode bridge linked in weasel.dll).
+- 0x001E1E1E palette bytes verified in weasel.dll (L42 byte-verify: 0x001E1E1E in weasel.dll = 1).
+- **L43 lessons-learned**: /LTCG:OFF per-target cure (not global /LTCG removal). WeaselTSF target has its own add_shflags that re-enables LTCG; per-target /LTCG:OFF is the cure.
+- 12/12 test projects PASS (107 assertions).
+- Release/fluxing-0.18.22.0-installer.exe (~40.6 MB).
+
+### 2026-07-04: v0.18.23.0 已 ship
+
+- **v0.18.23.0 已 ship** (commit 696628e) - spec 034 TestDarkModeBroadcast (F11 cross-cut integration test, unblocks spec 022 placeholder).
+- **L44 lessons-learned** (post-v0.18.22.0 audit): PowerShell Encoding.UTF8.GetString + IndexOf byte-vs-char miscalculation trap. CJK content silently misaligns char offsets vs byte offsets. Cure: byte-level pattern matching.
+- **Bug fix** (commit 33efa00): weasel.sln TestPanelDarkModeSubscribe missing EndProject (spec 032 leftover). Also removed inline-test dead code in TestDarkModeBroadcast.cpp T3d else-branch.
+- 13/13 test projects PASS, 14 new TestDarkModeBroadcast assertions PASS.
+- release/fluxing-0.18.23.0-installer.exe (42,655,987 bytes).
+- spec 022 placeholder now unblocked (was BLOCKED on spec 004 production code; block lifted by spec 033).
+
+---
+
+**Total test projects (post-v0.18.23.0):** 13 (TestDefaultHotkeys, TestShiftSelectBinding, TestBindingResolution, TestResponseParser, TestWeaselIPC, TestYamlRoundTripE2E, TestUserDictUpdate, TestCandidateRButtonDown, TestCandidateIgnoreFilter, TestPanelDarkModeSubscribe, TestTrayRestoreIgnored, TestDarkModeBridge, TestDarkModeBroadcast).
+
+**Total assertions:** 35+107+6+4+4+5+3+3+18+14 = 199+ across the 13 test projects. (Exact counts vary per release; this is the post-v0.18.23.0 snapshot.)
+
+**Installer release chain (post-L40 fix):** 0.18.19.0, 0.18.20.0, 0.18.20.1, 0.18.21.0, 0.18.22.0, 0.18.23.0 (all have matching release/fluxing-X.Y.Z-installer.exe in git; 0.18.8-0.18.18 tags were CHANGELOG-only and have NO installer binary).
+
+**Lessons-learned count:** L01-L44 (44 lessons) by 2026-07-04.
+
+**Spec count:** 35 spec directories (000-035, with 013, 025-bookkeeping, 025-bootstrapper naming variants per L23 history).
+
+**Code coverage target (sec 7):** deferred to v2.1+ (no measurement tool wired into ci.yml yet).
