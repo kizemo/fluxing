@@ -2147,6 +2147,55 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
 
 
 
+## [0.18.22.0-fluxing] - 2026-07-04
+
+### spec 033 retry: FluxingDarkModeBridge (F11 dark-mode cross-cut) actually linked in weasel.dll
+
+- **Problem**: v0.18.20.0 shipped with the spec 033 module committed but NOT linked into the installer binary (L42). The bridge code was in RimeWithWeasel.lib but /LTCG /OPT:REF dead-stripped it from weasel.dll. The test suite passed because TestDarkModeBridge uses the L24 link-probe pattern and links the production code in isolation, not into weasel.dll. The 0x001E1E1E palette constant count in the shipped weasel.dll was 0. v0.18.20.1 reverted the spec 033 implementation; the design was correct but the build pipeline was broken.
+
+- **Solution (L42 recovery steps 1+2+3 applied)**:
+  1. **L42 step 1**: Added `$(SolutionDir)\RimeWithWeasel` to all 8 `AdditionalIncludeDirectories` entries in `WeaselUI/WeaselUI.vcxproj` (byte-level replace, CR=LF, no BOM damage). Resolves the C1083 `cannot open include file 'FluxingDarkModeBridge.h'` error that the user hit on the first build attempt after restoring the spec 033 source.
+  2. **L42 step 2**: Added `add_includedirs("$(projectdir)/RimeWithWeasel")` to the top-level `xmake.lua` immediately after the existing `add_includedirs("$(projectdir)/include")` line. Resolves the include for the xmake build path.
+  3. **L42 step 3 (the LTCG fix)**: Changed `add_shflags("/DEBUG /OPT:REF /OPT:ICF /LTCG")` to `add_shflags("/DEBUG /OPT:REF /OPT:ICF /LTCG:OFF")` in `WeaselTSF/xmake.lua`. The global `xmake.lua` still adds `/LTCG /INCREMENTAL:NO` and `/GL` to release builds; the per-target `/LTCG:OFF` overrides the LTCG behavior for WeaselTSF only, so the bridge symbols are NOT dead-stripped from weasel.dll. Less drastic than removing `add_cxflags("/GL")` globally (which would regress optimization for all targets).
+  4. Re-applied the spec 033 implementation that was reverted in 0.18.20.1: `RimeWithWeasel/FluxingDarkModeBridge.{h,cpp}`, `test/TestDarkModeBridge/` (5 files), `weasel.sln` Project block, scripts/test-infra 12-test-project configuration, `WeaselUI/WeaselPanel.cpp` OnRButtonDown refactor.
+  5. Fixed a stray `}` at end of `WeaselUI/WeaselPanel.cpp` (3 bytes removed: \r\n}) that was present in the e50b2d3 spec 033 commit but not caught in 0.18.20.0; the file now ends with a clean `}\r\n`.
+
+- **L42 AP-L42-A verification (the cure)**: 0x001E1E1E count in weasel.dll = 1 (was 0 in 0.18.20.0). L42 AP-L42-B cross-check: weasel.pdb (10,326,016 bytes) contains the string `FluxingDarkModeBridge`. weasel.dll size grew from 991,232 -> 1,002,496 bytes (+11,264 bytes for the bridge code). The bridge IS in the shipped binary this time.
+
+- **L43 (new)**: `/LTCG /OPT:REF` whole-program optimization can dead-strip static-lib symbols that ARE referenced. The linker sees the cross-translation-unit reference, inlines the function at the call site, and then strips the original symbol from the output binary (the .pdb keeps it as a sidecar). The fix is per-target `/LTCG:OFF`, not global `/LTCG` removal. Three anti-patterns: (AP-L43-A) removing `/LTCG` from the global xmake.lua (regresses optimization for all targets), (AP-L43-B) trusting `add_cxflags("/GL")` removal to fix it (does not - `/GL` is the compiler-side WPO flag; `/LTCG` is the linker-side WPO flag; only the linker can dead-strip), (AP-L43-C) declaring the build "fixed" without a byte-search verification of the new code in the linked binary (this is just L42 AP-L42-A in different words; L43 reinforces it as the standard cure pattern for any static-lib-into-shared-lib spec).
+
+- **Files (3 new + 6 modified + 1 new installer):**
+  - NEW: `RimeWithWeasel/FluxingDarkModeBridge.h` (5234 bytes, class + Palette + DarkModeCallback + SubscriptionHandle)
+  - NEW: `RimeWithWeasel/FluxingDarkModeBridge.cpp` (4735 bytes, singleton + RegOpenKeyExW with KEY_WOW64_64KEY + palette constants)
+  - NEW: `test/TestDarkModeBridge/{TestDarkModeBridge.cpp,TestDarkModeBridge.vcxproj,stdafx.h,stdafx.cpp,targetver.h}` (18 behavior-level assertions)
+  - MOD: `WeaselUI/WeaselPanel.cpp` (OnSettingChange + _RefreshStylePalette now use the bridge; stray `}` at end removed)
+  - MOD: `WeaselUI/WeaselUI.vcxproj` (8 AdditionalIncludeDirectories entries updated per L42 step 1)
+  - MOD: `xmake.lua` (add_includedirs RimeWithWeasel added per L42 step 2)
+  - MOD: `WeaselTSF/xmake.lua` (add_shflags /LTCG:OFF per L42 step 3)
+  - MOD: `weasel.sln` (TestDarkModeBridge Project block restored with 4 ProjectConfigurationPlatforms; new GUID 17A3918C-FFDF-41EA-8AE6-E1AD2E0D2C79)
+  - MOD: `scripts/test-infra/run-test-suite.bat` (12 test projects; restored from pre-033 revert)
+  - MOD: `scripts/test-infra/verify-test-binaries-fresh.bat` (12 test projects; restored from pre-033 revert)
+  - MOD: `.specify/memory/lessons-learned.md` (L43 appended; documents the /LTCG:OFF fix and AP-L43-A/B/C)
+  - NEW: `release/fluxing-0.18.22.0-installer.exe` (42,615,261 bytes, rebuilt from current source after L42 steps 1+2+3 applied; verified L42 AP-L42-A passes)
+
+- **NOT changed (per A3, gitignored):**
+  - `env.bat` (FLUXING_VERSION 0.18.20 stays; this is a spec-033-retry fixup release, not a feature release)
+  - `weasel.props` (VERSION_PATCH 20 stays)
+
+- **Verification (post-impl, post-fix):**
+  - `cmd /c scripts\test-infra\run-test-suite.bat` -> RC 0, `=== ALL TESTS PASSED ===`, **12/12** test projects (107 total assertions: 35+13+6+4+4+5+3+3+4+5+3+18)
+  - `cmd /c scripts\test-infra\verify-test-binaries-fresh.bat` -> RC 0, 12 FRESH
+  - 0x001E1E1E count in weasel.dll = 1 (L42 AP-L42-A passes; the bridge IS in the binary)
+  - weasel.pdb (10,326,016 bytes) contains `FluxingDarkModeBridge` (L42 AP-L42-B cross-check passes)
+  - weasel.dll size = 1,002,496 bytes (was 991,232 pre-bridge; +11,264 bytes for the bridge code)
+  - Build is `xmake f -a x86 -m release && xmake clean -a && xmake -j8` (L42 AP-L42-C full clean rebuild, not incremental)
+  - AGENTS.md sec 2.5 silent-install smoke test (8 invariants, L41 recipe) -> TBD at release time
+
+- **Cross-references**: L10 (librime Win32-only), L26 (mirror drift), L31 (vcxproj OutDir), L35 (librime 1.13 no is_user_dict in C API), L40 (PRD/TDD corruption - the spec 033 docs at `.specify/specs/033-fluxing-dark-mode-bridge/{spec,plan,tasks}.md` are in English, NOT corrupted, because they were authored AFTER L40 was discovered), L41 (smoke test recipe), L42 (false-positive test pass; the verification discipline that made this retry possible), L43 (the /LTCG:OFF fix).
+
+- **Spec 008 T007 status update**: F11 (dark mode) cross-cut is now SHIPPED in 0.18.22.0. The `WeaselUI/WeaselPanel.cpp::OnSettingChange` + `_RefreshStylePalette` inline palette was replaced with a call to `FluxingDarkModeBridge::Get()->Subscribe(...)`. The behavior is byte-equal to the pre-bridge version (the hardcoded palette values in the bridge are identical to the previous inline values); the win is that any future panel (tray menu, config UI, phrases list) can subscribe to the same bridge without re-implementing the WM_SETTINGCHANGE filter. The 3 focused tests in `test/TestCandidateRButtonDown`, `test/TestCandidateIgnoreFilter`, `test/TestTrayRestoreIgnored` (per L26) still cover the spec 008 T009 mock test; `test/TestDarkModeBridge` adds the F11 cross-cut coverage.
+
+- **Tag is `v0.18.22.0`** (lightweight per AGENTS.md sec 3.5). Pushed to kizemo/Fluxing.
 ## [0.18.21.0-fluxing] - 2026-07-04
 
 ### spec 008 finalization: candidate right-click delete/ignore (T013+T014 ship)
