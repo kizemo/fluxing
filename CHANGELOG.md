@@ -2143,6 +2143,30 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
 - AGENTS.md sec 3.3 (version bump procedure)
 
 
+
+
+## [0.18.20.1-fluxing] - 2026-07-04
+
+### Hotfix: spec 033 reverted (build pipeline blocks the bridge link)
+
+- **Problem**: v0.18.20.0 was released with the spec 033 code committed but the actual installer binary was NOT rebuilt from the spec 033 source. The installer ships the pre-spec-033 binary. Root cause: xmake incremental rebuild failed to relink weasel.dll after the WeaselUI.cpp / RimeWithWeasel changes (the bridge obj is in RimeWithWeasel.lib but /LTCG /OPT:REF dead-strips it from weasel.dll; 0x1E1E1E palette constant count in weasel.dll = 0). The test suite was misleading because TestDarkModeBridge tests the production code in isolation, not the linked weasel.dll.
+
+- **Solution for 0.18.20.1**:
+  1. Revert spec 033 implementation: deleted the bridge module and test project, reverted WeaselPanel.cpp, weasel.sln, and the test-infra scripts to the pre-033 state.
+  2. KEEP the spec 033 docs for the future re-attempt. The design is correct; only the build pipeline is broken.
+  3. Rebuild the installer from the reverted source; ship release/fluxing-0.18.20.1-installer.exe.
+  4. Add L42 lesson documenting the false-positive test pass pattern.
+
+- **L42 (new)**: When a spec introduces a new module + a new test for it, the test passing does NOT prove the module is actually linked into the production binary. Verification must include: (a) count a unique byte pattern from the new code in the linked binary; (b) check the link command includes the new source; (c) check the .pdb for the symbol (pdb may be misleading - weasel.pdb had the symbol even though weasel.dll did not); (d) actually exercise the new behavior in a real installer smoke test.
+
+- **v0.18.20.0 release note** (kept for history): the v0.18.20.0 release was technically broken - installer lacks the spec 033 code, even though CHANGELOG claims otherwise. Users who installed v0.18.20.0 got a working WeaselServer (pre-033 binary) with no new dark-mode behavior. v0.18.20.1 fixes the CHANGELOG/source mismatch by removing the false spec 033 entry. The v0.18.20.0 tag and release commit remain in git history for reference; do not install v0.18.20.0 if you want the v0.18.20.1+ fixes.
+
+- **Anti-patterns (AP-L42-A/B/C):**
+  - AP-L42-A: declaring "spec shipped" because tests pass and a build succeeds, without verifying the new code is actually linked into the production binary.
+  - AP-L42-B: trusting the .pdb to indicate binary contents.
+  - AP-L42-C: relying on incremental xmake rebuilds to catch all dependency changes.
+
+- **Tag is v0.18.20.1** (lightweight per AGENTS.md sec 3.5). Pushed to kizemo/Fluxing.
 ## [0.18.20.0-fluxing] - 2026-07-04
 
 

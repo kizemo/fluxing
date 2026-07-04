@@ -1442,18 +1442,14 @@ void WeaselPanel::_IgnoreCurrentCandidate() {
   RedrawWindow();
 }
 
-// spec 033 T004: dark-mode detection + palette moved to
-// RimeWithWeasel/FluxingDarkModeBridge (F11 cross-cut foundation).
-// This 3-line wrapper preserves the existing lParam filter and
-// the bHandled propagation semantics; behavior is byte-equal to
-// the previous inline implementation.
-#include "FluxingDarkModeBridge.h"
 LRESULT WeaselPanel::OnSettingChange(UINT uMsg, WPARAM wParam,
                                      LPARAM lParam, BOOL& bHandled) {
+  // Windows 10+ dark mode toggle broadcasts WM_SETTINGCHANGE
+  // with lParam pointing to the string "ImmersiveColorSet".
   if (lParam != 0) {
     const wchar_t* section = (const wchar_t*)lParam;
     if (wcscmp(section, L"ImmersiveColorSet") == 0) {
-      fluxing::FluxingDarkModeBridge::Get()->Refresh();
+      _RefreshStylePalette();
       Refresh();
     }
   }
@@ -1462,14 +1458,21 @@ LRESULT WeaselPanel::OnSettingChange(UINT uMsg, WPARAM wParam,
 }
 
 void WeaselPanel::_RefreshStylePalette() {
-  // spec 033 T004: palette values come from the bridge. The 4
-  // colors are byte-equal to the previous inline values
-  // (spec 033 plan.md section 2.3).
-  auto palette = fluxing::FluxingDarkModeBridge::Get()->CurrentPalette();
-  m_style.back_color = palette.back;
-  m_style.text_color = palette.text;
-  m_style.hilited_candidate_back_color = palette.hilited_back;
-  m_style.hilited_candidate_text_color = palette.hilited_text;
+  bool dark = IsUserDarkMode();
+  // partial ship palette: 4 hardcoded colors (spec 004 section 9.3
+  // full palette will be defined by spec 006). This is sufficient
+  // for the P1 acceptance: "切暗色 -> 候选面板 200ms 内变暗".
+  if (dark) {
+    m_style.back_color = 0x1E1E1E;                  // dark background
+    m_style.text_color = 0xE0E0E0;                 // light text
+    m_style.hilited_candidate_back_color = 0x2D2D30;
+    m_style.hilited_candidate_text_color = 0xFFFFFF;
+  } else {
+    m_style.back_color = 0xF0F0F0;                  // light background
+    m_style.text_color = 0x000000;
+    m_style.hilited_candidate_back_color = 0xD0D0D0;
+    m_style.hilited_candidate_text_color = 0x000080;
+  }
+  // Re-create layout to pick up new background dimensions
   _CreateLayout();
-}
 }
