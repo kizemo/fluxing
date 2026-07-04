@@ -2141,3 +2141,35 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
 - TDD.md sec 8 (known gaps; spec 019 closes the test_4 line)
 - L26 (this spec)
 - AGENTS.md sec 3.3 (version bump procedure)
+
+
+## [0.18.20.0-fluxing] - 2026-07-04
+
+
+### spec 033: FluxingDarkModeBridge (F11 cross-cut foundation, stage 1 of spec 006)
+
+- **Problem**: dark-mode detection + palette was inline in `WeaselUI/WeaselPanel.cpp::OnSettingChange` and `_RefreshStylePalette`. Every future panel (tray menu, config UI, phrases list) would have to duplicate the WM_SETTINGCHANGE filter and the hardcoded palette. This is the spec 004 section 9 "horizontal cut" (F11) problem: a single concern (dark mode) scattered across N panels.
+
+- **Solution (stage 1)**: extract the dark-mode detection + palette + subscriber notification into a standalone module `RimeWithWeasel/FluxingDarkModeBridge.{h,cpp}`. The bridge is a process-singleton with a thread-safe subscriber list. Any panel can subscribe to palette changes without re-implementing the registry read or the WM_SETTINGCHANGE filter. The hardcoded palette values (0x1E1E1E/0xE0E0E0/0x2D2D30/0xFFFFFF dark; 0xF0F0F0/0x000000/0xD0D0D0/0x000080 light) are byte-equal to the previous inline values, so the WeaselPanel refactor is behavior-preserving (no visual change in the candidate panel). The new `TestDarkModeBridge` test links the **actual production code** (L24 link-probe pattern) and verifies 18 assertions including the palette byte-equalities, the singleton pattern, Subscribe/Unsubscribe ordering, the test-only SetDarkForTest back-door, and the thread-safety invariants.
+
+- **Files (5 new + 3 modified):**
+  - NEW: `RimeWithWeasel/FluxingDarkModeBridge.h` (5234 bytes; class + Palette struct + DarkModeCallback + SubscriptionHandle)
+  - NEW: `RimeWithWeasel/FluxingDarkModeBridge.cpp` (4735 bytes; singleton + RegOpenKeyExW with KEY_WOW64_64KEY + palette constants)
+  - NEW: `test/TestDarkModeBridge/{TestDarkModeBridge.cpp,TestDarkModeBridge.vcxproj,stdafx.h,stdafx.cpp,targetver.h}` (18 behavior-level assertions, L31 fix applied to vcxproj OutDir)
+  - MOD: `WeaselUI/WeaselPanel.cpp` (OnSettingChange and _RefreshStylePalette now use the bridge; behavior byte-equal)
+  - MOD: `weasel.sln` (added TestDarkModeBridge Project block with 4 ProjectConfigurationPlatforms entries; new GUID `17A3918C-FFDF-41EA-8AE6-E1AD2E0D2C79`)
+  - MOD: `scripts/test-infra/run-test-suite.bat` (added TestDarkModeBridge to build + run loops; 11 -> 12 test projects)
+  - MOD: `scripts/test-infra/verify-test-binaries-fresh.bat` (added TestDarkModeBridge to fresh-binary detector; 11 -> 12 test projects)
+
+- **TDD 3.1 status**: 12/12 unit test projects now exist (was 11/11). The new TestDarkModeBridge covers the F11 cross-cut behavior-level test that spec 004 section 9 requires.
+
+- **Verification (post-impl):**
+  - `cmd /c scripts\test-infra\run-test-suite.bat` -> RC 0, `=== ALL TESTS PASSED ===`, 12/12 test projects. TestDarkModeBridge outputs `18 / 18 assertions passed`.
+  - `cmd /c scripts\test-infra\verify-test-binaries-fresh.bat` -> RC 0, 12 FRESH.
+  - TestPanelDarkModeSubscribe (the existing mirror test) still passes 3/3 (verifies the refactor is behavior-preserving).
+
+- **No installer.nsi change. No env.bat/weasel.props bump. Tag is `v0.18.20.0` per P8 / P4 scope convention.**
+
+### spec 032 follow-up: TestDarkModeBridge replaces the mirror
+
+- The previous spec 032 T007 `TestPanelDarkModeSubscribe` tested a **mirror** of the production code in `WeaselPanel.cpp::OnSettingChange` + `_RefreshStylePalette`. Mirrors drift from production over time; this was L26's warning. spec 033 extracts the production code into a standalone module and writes `TestDarkModeBridge` which links the actual code. The mirror test still ships (3/3 PASS) for backwards-compatibility; the new behavior-level test is the authoritative one going forward.
