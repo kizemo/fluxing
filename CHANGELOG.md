@@ -1,3 +1,78 @@
+## [0.18.24.0-fluxing] - 2026-07-04
+
+### spec 036 - Tray QuickPanel v0 (Alt+, / left-click trigger + ASCII toggle + Deploy buttons)
+
+- **Problem (R1 intent)**: spec 006 描述了完整的 mac 风格托盘设置面板 (8-12 入口), spec 036 是该设计的 v0 YAGNI 切片, 只 ship ASCII toggle + 1 Deploy button, 留 spec 037/038+ 做后续迭代.
+
+- **Solution for 0.18.24.0**:
+  - New `WeaselServer/QuickPanelDialog.{h,cpp}`: 300x150 win32 HWND pop-up, 2 buttons (ASCII toggle / Deploy) + close X, ESC closes, 1s focus-loss debounce closes.
+  - `WeaselServer/resource.h` adds `ID_HOTKEY_QUICK_PANEL=9001` + `ID_WEASELTRAY_QUICK_PANEL=40018` + `ID_QUICKPANEL_BTN_ASCII=41001` + `ID_QUICKPANEL_BTN_DEPLOY=41002`.
+  - `WeaselIPCServer/WeaselServerImpl.{h,cpp}` adds `MESSAGE_HANDLER(WM_HOTKEY, OnHotkey)` + `RegisterHotKey(m_hWnd, ID_HOTKEY_QUICK_PANEL, MOD_ALT, VK_OEM_COMMA)` in OnCreate + UnregisterHotKey in cleanup.
+  - `WeaselServer/WeaselServerApp.cpp` adds menu handler for `ID_WEASELTRAY_QUICK_PANEL` -> opens QuickPanelDialog.
+  - `WeaselServer/SystemTraySDK.cpp` adds `WM_LBUTTONUP` branch -> posts ID_WEASELTRAY_QUICK_PANEL (preserves WM_LBUTTONDBLCLK = Settings, see AP-036-E).
+  - `WeaselServer/WeaselServer.rc` adds QuickPanel menu item in 3 languages (SimpChinese "快速面板 (&K)", TradChinese "快速面板 (&K)", English "QuickPanel (&K)"). Uses (&K) instead of (&Q) to avoid conflict with Quit item.
+  - `include/RimeWithWeasel.h` adds public `IsAsciiMode()` accessor.
+  - `WeaselServer/WeaselServer.vcxproj` adds QuickPanelDialog.cpp to ClCompile.
+  - New `test/TestQuickPanelDialog/` (5 files: vcxproj, cpp, stdafx.h, stdafx.cpp, targetver.h). Tests T1-T6 spec 036 plan §2.6 (10 assertions, all PASS).
+  - `weasel.sln` adds TestQuickPanelDialog project (3 lines) + 4 platform config entries.
+  - `scripts/test-infra/run-test-suite.bat` + `verify-test-binaries-fresh.bat` updated to handle 14 test projects (was 13).
+
+- **msbuild path bug fixes (uncovered during spec 036 build)**:
+  - **weasel.props** PreprocessorDefinitions was empty literal `;VERSION_MAJOR=;VERSION_MINOR=;...` causing RC2127 errors in all .rc files. Fixed to use msbuild template `VERSION_MAJOR=$(VERSION_MAJOR);...` to expand PropertyGroup values into the ResourceCompile preprocessor.
+  - **WeaselUI.vcxproj** was missing `..\RimeWithWeasel\FluxingDarkModeBridge.cpp` + `..\RimeWithWeasel\WeaselUtility.cpp` in ClCompile. spec 033 (0.18.22.0) shipped with these missing because the xmake path doesn't need them, but the msbuild path does. Fixed in spec 036 (the L42-missed sibling bug).
+  - **RimeWithWeasel.vcxproj** was missing `FluxingDarkModeBridge.cpp` in ClCompile. spec 033 (0.18.22.0) shipped with this missing. Fixed in spec 036.
+  - **FluxingDarkModeBridge.cpp** was missing `#include "stdafx.h"` (the PCH include). Adding it under WeaselUI vcxproj requires the PCH include. Fixed in spec 036.
+  - These are **L46 (new)** - spec 033 (0.18.22.0) release passed all its tests via the xmake path but broke the msbuild path silently. 4 of the 5 fixes (weasel.props + 2 vcxproj + 1 .cpp) are all part of one root cause: **the xmake-only verification path missed transitive build dependencies**. Lesson: every release MUST be built + tested via BOTH xmake AND msbuild paths.
+
+- **Test suite (T015-T017)**:
+  - `cmd /c scripts\test-infra\run-test-suite.bat` -> RC 0, `=== ALL TESTS PASSED ===`, **14/14** test projects (was 13/13, +1 for TestQuickPanelDialog).
+  - Total assertions: 35+13+6+4+4+5+3+3+18+10+TestWeaselIPC = **103+** (TestWeaselIPC returns 0/non-zero only).
+  - `cmd /c scripts\test-infra\verify-test-binaries-fresh.bat` -> RC 0, 14 FRESH.
+
+- **Smoke test (T019, AGENTS.md sec 2.5)**:
+  - silent install of `release\fluxing-0.18.24.0-installer.exe` -> RC 0.
+  - 8 invariants pass: fluxing suffix path, no weasel\ path, user data dir, HKLM InstallDir, HKCU RimeUserDir, rime.dll size 2-5 MB, prebuilt dicts present, L14 PE arch consistency (6 files: Weasel*.exe x86, weaselx64.dll x64, rime.dll x86).
+
+- **Files (5 production + 3 vcxproj + 5 test + 1 rc + 1 include + 3 sln/bat + 1 new installer + 1 CHANGELOG + 1 L46 lesson):**
+  - MOD: `WeaselIPCServer/WeaselServerImpl.{h,cpp}` (OnHotkey, RegisterHotKey)
+  - MOD: `WeaselServer/WeaselServerApp.cpp` (menu handler)
+  - MOD: `WeaselServer/SystemTraySDK.cpp` (WM_LBUTTONUP branch)
+  - MOD: `WeaselServer/WeaselServer.rc` (3 menu items)
+  - MOD: `WeaselServer/WeaselServer.vcxproj` (QuickPanelDialog.cpp to ClCompile)
+  - MOD: `WeaselServer/resource.h` (4 #define)
+  - MOD: `include/RimeWithWeasel.h` (IsAsciiMode public)
+  - NEW: `WeaselServer/QuickPanelDialog.{h,cpp}` (2243 + 7830 bytes)
+  - NEW: `test/TestQuickPanelDialog/{TestQuickPanelDialog.cpp, TestQuickPanelDialog.vcxproj, stdafx.h, stdafx.cpp, targetver.h}` (5 files)
+  - MOD: `weasel.sln` (TestQuickPanelDialog project + 4 config entries)
+  - MOD: `scripts/test-infra/run-test-suite.bat` (14 test projects)
+  - MOD: `scripts/test-infra/verify-test-binaries-fresh.bat` (14 test projects)
+  - MOD: `WeaselUI/WeaselUI.vcxproj` (add FluxingDarkModeBridge.cpp + WeaselUtility.cpp to ClCompile, L46 fix)
+  - MOD: `RimeWithWeasel/RimeWithWeasel.vcxproj` (add FluxingDarkModeBridge.cpp to ClCompile, L46 fix)
+  - MOD: `RimeWithWeasel/FluxingDarkModeBridge.cpp` (add #include "stdafx.h", L46 fix)
+  - MOD: `weasel.props` (PreprocessorDefinitions template syntax, L46 fix)
+  - MOD: `CHANGELOG.md` (this entry, prepended)
+  - MOD: `.specify/memory/lessons-learned.md` (L46 appended)
+  - MOD: `.specify/specs/036-tray-quick-panel-v0/{spec,plan,tasks}.md` (already on Fluxing)
+  - NEW: `release/fluxing-0.18.24.0-installer.exe` (42,651,950 bytes)
+  - MOD: `env.bat` (FLUXING_VERSION 0.18.23 -> 0.18.24; VERSION_PATCH 23 -> 24) - local-only, NOT committed
+  - MOD: `weasel.props` (VERSION_PATCH 23 -> 24; PRODUCT_VERSION 0.18.23.0 -> 0.18.24.0; FILE_VERSION 0.18.23.0 -> 0.18.24.0) - local-only, NOT committed
+
+- **Anti-patterns (AP-036-A through L)**:
+  - AP-036-A: no new dependencies (D2D/WPF/Qt/ImGui) - spec 004 sec 5 global ban. YAGNI.
+  - AP-036-B: do NOT abstract QuickPanelDialog to a mac-style panel library. v0.20 refactor.
+  - AP-036-C: do NOT skip TestQuickPanelDialog. R6 evidence before assertion.
+  - AP-036-D: do NOT modify install.nsi. v0 release ships new WeaselServer.exe bundled.
+  - AP-036-E: do NOT change "double-click tray = Settings" behavior. spec 036 adds new WM_LBUTTONUP branch.
+  - AP-036-F: RegisterHotKey failure does NOT show UI. v0.20 add log.
+  - AP-036-G: Alt+, conflict (Vim/Sourcetree/IDE) is documented in plan §4 R1, not addressed in v0.
+  - AP-036-H: Show() destroys previous instance first.
+  - AP-036-I: cursor not moved (no SetCursorPos/SetCapture).
+  - AP-036-J: OnCommand toggle calls callback then DestroyWindow.
+  - AP-036-K: OnKillFocus sets 1s timer; OnTimer only destroys if GetFocus() != hwnd.
+  - AP-036-L: pre-state capture prevents the "user clicks back" case from auto-closing.
+
+- **Cross-references**: L04, L24, L25, L40, L42, L46 (new). spec 033, 034.
+
 ## [0.18.19.0-fluxing] - 2026-07-04
 
 ### Release hygiene + L40 (PRD/TDD corruption documented)

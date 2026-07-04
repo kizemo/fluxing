@@ -494,6 +494,7 @@
     <ClCompile Include="WeaselServerApp.cpp" />
     <ClCompile Include="WeaselService.cpp" />
     <ClCompile Include="WeaselTrayIcon.cpp" />
+    <ClCompile Include="QuickPanelDialog.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />
