@@ -43,6 +43,10 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestCandidateRButtonDown", 
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestCandidateIgnoreFilter", "test\TestCandidateIgnoreFilter\TestCandidateIgnoreFilter.vcxproj", "{C5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F42}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestPanelDarkModeSubscribe", "test\TestPanelDarkModeSubscribe\TestPanelDarkModeSubscribe.vcxproj", "{D5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F44}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestTrayRestoreIgnored", "test\TestTrayRestoreIgnored\TestTrayRestoreIgnored.vcxproj", "{E5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F45}"
+EndProject
 
 
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestWeaselIPC", "test\TestWeaselIPC\TestWeaselIPC.vcxproj", "{9C1CC4BA-18FF-4890-908E-E545881C5586}"
@@ -188,6 +192,14 @@ Global
 		{C5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F42}.Debug|Win32.Build.0 = Debug|Win32
 		{C5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F42}.Release|Win32.ActiveCfg = Release|Win32
 		{C5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F42}.Release|Win32.Build.0 = Release|Win32
+		{D5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F44}.Debug|Win32.ActiveCfg = Debug|Win32
+		{D5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F44}.Debug|Win32.Build.0 = Debug|Win32
+		{D5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F44}.Release|Win32.ActiveCfg = Release|Win32
+		{D5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F44}.Release|Win32.Build.0 = Release|Win32
+		{E5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F45}.Debug|Win32.ActiveCfg = Debug|Win32
+		{E5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F45}.Debug|Win32.Build.0 = Debug|Win32
+		{E5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F45}.Release|Win32.ActiveCfg = Release|Win32
+		{E5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F45}.Release|Win32.Build.0 = Release|Win32
 
 
 		{26930622-CFA2-43DF-A9F3-4AA4A313B2A4}.Debug|ARM.ActiveCfg = Debug|ARM
