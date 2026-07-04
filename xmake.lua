@@ -10,6 +10,7 @@ add_defines("WINDOWS")
 add_defines("MSVC")
 
 add_includedirs("$(projectdir)/include")
+add_includedirs("$(projectdir)/RimeWithWeasel")
 -- 设置Boost库的全局路径
 boost_root = os.getenv("BOOST_ROOT")
 boost_include_path = boost_root

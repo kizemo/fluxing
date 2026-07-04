@@ -3056,3 +3056,85 @@ The spec 033 design is correct. The build pipeline is broken. The retry must:
 - L39 (2013 invalid function arguments) - L42 is the 2013-protection follow-up; the systematic-debugging skill must be invoked whenever a spec adds a new module.
 - L40 (PRD/TDD corruption) - related; L40 is about file content corruption, L42 is about binary content corruption. Same class of "looks fine at the surface, broken at the byte level" bug.
 - L41 (smoke test recipe path redirect) - L42 extends L41: L41 is "smoke test path can fail"; L42 is "smoke test can pass but not exercise the specd behavior".
+## L43 - /LTCG /OPT:REF dead-strips static-lib symbols that ARE referenced (per-target /LTCG:OFF is the cure, not global /LTCG removal)
+
+**Date:** 2026-07-04
+**Status:** OPEN (will close after 1.0 release with no recurrence)
+**Triggered by:** spec 033 retry (0.18.22.0) - the L42 verification discipline revealed the link-stage cause of the false-positive test pass
+**Related:** L10 (librime Win32-only), L24 (link-probe pattern), L26 (mirror drift), L36 (fix-coverage audit), L38 (spec-incremental-shipping exposes build-time deps), L42 (false-positive test pass; the verification discipline), L40 (PRD/TDD corruption - same class of "looks fine at the surface, broken at the byte level" bug)
+
+### Symptom
+
+A spec adds a new module (RimeWithWeasel/FluxingDarkModeBridge.{h,cpp}) and calls one of its functions from another translation unit (WeaselUI/WeaselPanel.cpp via the bridge Get()->Subscribe()). The xmake build reports success. The .pdb for the production binary (weasel.pdb) contains the new symbol. The test suite passes (12/12 test projects, 107 assertions). A byte search for a unique constant from the new code (0x001E1E1E palette) in the linked production binary (weasel.dll) returns 0. The shipped installer does NOT contain the new code.
+
+This is L42 in a more specific framing: L42 is "the test passed but the binary is empty"; L43 is "WHY is the binary empty - the linker dead-stripped a referenced symbol".
+
+### Root cause
+
+1. **Whole-program optimization (WPO) is two stages, not one**:
+   - `/GL` is the COMPILER-side WPO flag. It tells the compiler to emit whole-program-compatible intermediate code (no inline-only decisions baked in).
+   - `/LTCG` is the LINKER-side WPO flag. It tells the linker to re-run optimization across all input .obj files AND to dead-strip any symbol that is not transitively reachable from a kept entry point.
+   - The global `xmake.lua` in this project sets `add_cxflags("/GL")` for release builds AND adds `/LTCG /INCREMENTAL:NO` to `add_shflags` for shared libraries. Both WPO stages are active.
+
+2. **LTCG can dead-strip symbols that ARE referenced.** The classic mental model is "the linker keeps anything that is referenced" - this is true for non-LTCG builds. Under `/LTCG /OPT:REF`, the linker can:
+   - See that a referenced function is small enough to inline at the call site.
+   - Decide that the inlined copy is sufficient.
+   - Remove the original symbol from the .text section.
+   - KEEP the original symbol in the .pdb (the pdb is a debug-info sidecar; it always contains all linked symbols, whether or not they are in the binary).
+
+3. **The /LTCG behavior in WeaselTSF is set per-target, not globally.** The global `xmake.lua` does NOT add /LTCG to all targets `add_shflags`; it adds it indirectly via the WPO bundle. WeaselTSF has its own `add_shflags("/DEBUG /OPT:REF /OPT:ICF /LTCG")` that EXPLICITLY re-enables LTCG for the shared library. The global `xmake.lua` also adds `/LTCG` via the optimization bundle. The result is: WeaselTSF gets LTCG twice, and `weasel.dll` is built with the most aggressive WPO settings.
+
+### The cure
+
+1. **Add `/LTCG:OFF` to the specific target `add_shflags`** that is experiencing the dead-strip. In our case, the change was:
+   ```lua
+   -- WeaselTSF/xmake.lua, before:
+   add_shflags("/DEBUG /OPT:REF /OPT:ICF /LTCG")
+   -- WeaselTSF/xmake.lua, after:
+   add_shflags("/DEBUG /OPT:REF /OPT:ICF /LTCG:OFF")
+   ```
+   This disables LTCG for WeaselTSF only, leaving other targets WPO behavior unchanged. The bridge symbols are no longer dead-stripped; the byte search for 0x001E1E1E in weasel.dll returns 1 (was 0).
+
+2. **Do NOT remove `/LTCG` from the global `xmake.lua`** as a quick fix. The global WPO is desired for performance; removing it would regress optimization for all targets. The per-target override is the surgical fix.
+
+3. **Do NOT remove `add_cxflags("/GL")`** as a quick fix. `/GL` is the compiler-side flag; it does NOT cause dead-stripping (only `/LTCG` does). Removing `/GL` would lose some cross-translation-unit inlining opportunities without fixing the actual problem.
+
+4. **Always verify the fix with a byte search** in the linked binary before declaring success (L42 AP-L42-A). The .pdb is misleading (L42 AP-L42-B); the test suite is misleading (L42 AP-L42-D); the build success is misleading (L42 AP-L42-C). The byte search is the only ground truth.
+
+### Verification (the standard cure pattern, now a 4-step recipe)
+
+For ANY spec that adds new code to a new module and references it from another translation unit:
+
+1. **Build from clean**: `xmake f -a x86 -m release && xmake clean -a && xmake -j8`. Do NOT trust incremental builds.
+2. **Byte search in the linked binary**: pick a unique byte pattern from the new code (a constant, a specific string). Count occurrences. Must be > 0.
+3. **Cross-check the .pdb**: the .pdb should contain the symbol. If it does NOT, the code is not even being compiled (different bug). If it does, the code IS compiled AND linked; if the byte search also passes, the code IS in the binary.
+4. **Install + smoke test**: the AGENTS.md sec 2.5 silent-install smoke test. The 8 invariants verify the install layout; for F-class (cross-cut) specs, add a functionality-specific check (e.g., for F11 dark mode, flip the AppsUseLightTheme registry value and verify the live process picks it up).
+
+This is a 4-step recipe that subsumes L42 AP-L42-A, B, C, D. L43 does NOT replace L42; L43 is the "what to do" once L42 has identified the problem.
+
+### Anti-patterns (AP-L43-A/B/C/D)
+
+- **AP-L43-A**: removing `/LTCG` from the global `xmake.lua` to fix a dead-strip in one target. This regresses optimization for all targets and is a "shotgun fix" that hides the real per-target configuration issue.
+- **AP-L43-B**: removing `add_cxflags("/GL")` thinking it will fix dead-stripping. It will not - `/GL` is the compiler flag, not the linker flag. The linker is what dead-strips.
+- **AP-L43-C**: adding `__declspec(dllexport)` to force the linker to keep the symbol. This works (the linker cannot dead-strip an exported symbol) but pollutes the public ABI of weasel.dll. The bridge is an internal detail; exporting it would be a security and maintainability regression.
+- **AP-L43-D**: declaring the build "fixed" after a successful incremental build. The LTCG state machine is sticky; an incremental build that does not relink the dependent .dll will not pick up the .lib change. Always do a `xmake clean -a` before the verification build.
+
+### Cross-references
+
+- L10 (librime Win32-only) - related; the x64 build is intentionally broken (L10 section 3), so all our ship builds are x86 + weasel.dll, which is exactly the artifact that gets dead-stripped.
+- L24 (link-probe pattern) - related; the link-probe pattern in TestDarkModeBridge IS the pattern that L42 AP-L42-D identifies as misleading. L43 does not say "stop using link-probe"; L43 says "link-probe + byte search in the production binary".
+- L26 (mirror drift) - related; the alternative to link-probe is mirroring the production code in the test, which drifts. L43 reinforces that the right cure is "link-probe + production-binary verification", not "go back to mirrors".
+- L36 (fix-coverage audit) - related; L43 is the per-target-specific application of L36 "find all sibling configs and fix them together" pattern. The sibling configs here are: WeaselTSF/xmake.lua (the one with the bug), WeaselUI/xmake.lua (does it have /LTCG? verify), WeaselServer/xmake.lua (does it have /LTCG? verify), WeaselDeployer/xmake.lua (does it have /LTCG? verify). For 0.18.22.0 we only fixed WeaselTSF; the others do not link the bridge so they are not affected, but the audit pattern is "for every target that links RimeWithWeasel.lib, verify the LTCG behavior".
+- L38 (spec-incremental-shipping exposes build-time deps) - related; spec 033 is a cross-cut refactor (F11 dark mode, used by future panels). L38 says incremental shipping exposes build-time dependencies that earlier specs did not hit. L43 is one such dependency: the LTCG behavior of WeaselTSF.
+- L42 (false-positive test pass) - L43 is the "what to do" once L42 has identified the problem. L42 says "the test passed but the binary is empty"; L43 says "the binary is empty because of LTCG, here is the per-target fix".
+- L40 (PRD/TDD corruption) - related; L40 is "file content corruption", L43 is "binary content corruption" (the code is in the .pdb but not in the .dll). Same class of "looks fine at the surface, broken at the byte level" bug.
+
+### Recovery (already applied in 0.18.22.0)
+
+The spec 033 retry applied the L43 cure in 3 steps:
+- **L42 step 1**: `WeaselUI/WeaselUI.vcxproj` AdditionalIncludeDirectories +RimeWithWeasel (8 entries). This was a build-time include path fix; without it, the bridge header was not findable, and the build failed with C1083.
+- **L42 step 2**: `xmake.lua` add_includedirs RimeWithWeasel. This was the xmake-side include path fix.
+- **L42 step 3 (the L43 cure)**: `WeaselTSF/xmake.lua` add_shflags /LTCG:OFF. This was the per-target override that prevents LTCG from dead-stripping the bridge.
+- **Verification**: 0x001E1E1E count in weasel.dll = 1 (L42 AP-L42-A + L43 verification); weasel.pdb contains FluxingDarkModeBridge (L42 AP-L42-B); weasel.dll size grew from 991,232 to 1,002,496 bytes (+11,264 for the bridge code); build was `xmake f -a x86 -m release && xmake clean -a && xmake -j8` (L42 AP-L42-C + L43 AP-L43-D).
+- **Ship**: `release/fluxing-0.18.22.0-installer.exe` (42,615,261 bytes) + tag v0.18.22.0.
+
