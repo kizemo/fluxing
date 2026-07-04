@@ -2685,3 +2685,58 @@ WeaselIPCServer, etc.):
   did not propagate to WeaselTSF.
 - WeaselTSF/xmake.lua line 19 - the fixed shflags including
   `/LTCG` (after spec 031).
+
+## L39 - 2013 invalid function arguments root cause
+
+**Date:** 2026-07-04
+**Spec:** 032 (candidate-rbutton-finalize)
+**Status:** active
+**Affected:** mojibake-affected files + PS here-strings for large file generation.
+
+### Symptom
+
+A spec 032 task was interrupted mid-flight with the platform error:
+
+[CODE-FENCE]
+invalid params, invalid function arguments data string,
+tool_call_id: call_function_rkpuk39h8aoc_1 (2013)
+[CODE-FENCE]
+
+Code 2013 is OpenAI function-call argument validation. The agent tool layer rejected the assistant message because the embedded function_call data was malformed. The malformed data was not produced by the tool itself; it was produced by copying mojibake text from the project PRD / TDD into tool parameters. The mojibake byte sequences (C2 / C3 / E2 / 80-range bytes representing GBK bytes misdecoded as CP1252 misdecoded as UTF-8) broke string escaping when re-serialized.
+
+### Root cause (three contributing factors)
+
+1. .specify/PRD.md and .specify/TDD.md were GBK->UTF-8 mojibake. Both files were authored in a previous session under chcp 936 + PowerShell 5.1 with default Out-File -Encoding utf8, producing the L01 damage chain.
+2. The previous spec author read PRD/TDD content via Get-Content (PS 5.1 default = GBK on this machine), pasted those mojibake strings into assistant tool parameters, and the platform layer rejected the embedded call.
+3. PowerShell here-string in large scripts has secondary failure modes: dollar-paren inside double-quoted here-string is treated as subexpression; apostrophes inside single-quoted here-string terminate it early. Both modes caused silent file truncation / parser errors during spec 030 / 031 / 032 work.
+
+### Cure (3 steps, all applied 2026-07-04)
+
+1. Restored PRD.md from commit 54cdd2d blob and TDD.md from 6f6fcbf blob, byte-level with LF->CRLF conversion. Verified:
+   - PRD.md: 14456 bytes, CR==LF==235, 0 overlong UTF-8 (0xC0/0xC1), SHA256 matches HEAD LF hash.
+   - TDD.md: 12322 bytes, CR==LF==250, 0 overlong UTF-8, SHA256 matches HEAD LF hash.
+   - Both files now display clean Chinese in any UTF-8 tool. core.autocrlf=true is set locally; git ls-files blob is LF, working tree is CRLF - both views SHA-equal.
+2. Added 3 patterns to .gitignore to prevent future untracked leftovers: TestDefaultHotkeys.obj (build artifact), run_librime.bat (manual script), run_librime_*.err (manual error log). These were untracked before spec 032 and would have polluted future git add . calls (A10).
+3. For all subsequent file generation, use byte-level .Replace() on a known-clean template file, never PS here-strings. The pattern that works on PS 5.1:
+   - Step A: Read clean template via byte-level
+   - Step B: .Replace() 3 known-anchor strings (no here-string parsing)
+   - Step C: Force CRLF (idempotent, replaces lone LF with CRLF)
+   - Step D: Write byte-level
+
+### Verification
+
+- git hash-object .specify/PRD.md = HEAD blob SHA (autocrlf=LF view).
+- git hash-object .specify/TDD.md = HEAD blob SHA after git add.
+- git diff HEAD shows only .gitignore (spec 032 cleanup) and librime (submodule, not part of this fix).
+- git status clean for PRD.md / TDD.md after autocrlf normalization.
+- TestDefaultHotkeys.obj / run_librime.bat / run_librime_*.err no longer appear in git status after .gitignore patch.
+
+### Cross-references
+
+- L01 (GBK pollution chain) - the original mojibake author pattern.
+- L02 (byte-level discipline) - the cure for L01; same pattern reused here.
+- L36 (L## fix coverage gap) - the audit pattern applied here to grep .gitignore for all untracked patterns, not just the obvious one.
+- L37 (PS line-based array ops) - the related here-string failure mode; this spec hit it twice, and recovered both times by switching to byte-level .Replace().
+- A1 / A2 (anti-patterns in AGENTS.md) - read / write Chinese via PowerShell Get-Content / Out-File is the entry point; always use IO.File.ReadAllBytes / WriteAllBytes for any Chinese-containing text file.
+- A10 (anti-pattern in AGENTS.md) - git add . from project root would have swept up weasel.props, env.bat, *.log, and github_token.txt; spec 032 staged by explicit path and the untracked leftovers are now in .gitignore so future A10 incidents are self-blocking.
+

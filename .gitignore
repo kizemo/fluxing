@@ -91,4 +91,8 @@ PerMonitorHighDPIAware.manifest
 /librime/lib_x86_backup
 /librime/include/marisa
 scripts/test-infra/verify-stale-temp.ps1
-# Generated PowerShell helper for verify-test-binaries-fresh.bat (see spec 027, L33)
+# Generated PowerShell helper for verify-test-binaries-fresh.bat (see spec 027, L33)# spec 032 cleanup: untracked leftovers from earlier sessions
+TestDefaultHotkeys.obj
+run_librime.bat
+run_librime_*.err
+# end spec 032 cleanup
