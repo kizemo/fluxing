@@ -38,6 +38,7 @@ class WeaselPanel
   MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
   MESSAGE_HANDLER(WM_MOUSELEAVE, OnMouseLeave)
   MESSAGE_HANDLER(WM_RBUTTONDOWN, OnRButtonDown)
+  MESSAGE_HANDLER(WM_SETTINGCHANGE, OnSettingChange)
   CHAIN_MSG_MAP(CDoubleBufferImpl<WeaselPanel>)
   END_MSG_MAP()
 
@@ -60,6 +61,7 @@ class WeaselPanel
   LRESULT OnMouseMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
   LRESULT OnMouseLeave(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
   LRESULT OnRButtonDown(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+  LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 
   WeaselPanel(weasel::UI& ui);
   ~WeaselPanel();
@@ -90,6 +92,7 @@ class WeaselPanel
   void _CaptureRect(CRect& rect);
   void _IgnoreCurrentCandidate();
   void _FilterIgnoredCandidates();
+  void _RefreshStylePalette();
   std::unordered_set<std::wstring> m_ignoreList;
   std::wstring m_ignoreFilePath;
   bool m_mouse_entry = false;

@@ -1441,3 +1441,38 @@ void WeaselPanel::_IgnoreCurrentCandidate() {
   CloseHandle(h);
   RedrawWindow();
 }
+
+LRESULT WeaselPanel::OnSettingChange(UINT uMsg, WPARAM wParam,
+                                     LPARAM lParam, BOOL& bHandled) {
+  // Windows 10+ dark mode toggle broadcasts WM_SETTINGCHANGE
+  // with lParam pointing to the string "ImmersiveColorSet".
+  if (lParam != 0) {
+    const wchar_t* section = (const wchar_t*)lParam;
+    if (wcscmp(section, L"ImmersiveColorSet") == 0) {
+      _RefreshStylePalette();
+      Refresh();
+    }
+  }
+  bHandled = false;  // propagate to other handlers
+  return 0;
+}
+
+void WeaselPanel::_RefreshStylePalette() {
+  bool dark = IsUserDarkMode();
+  // partial ship palette: 4 hardcoded colors (spec 004 section 9.3
+  // full palette will be defined by spec 006). This is sufficient
+  // for the P1 acceptance: "切暗色 -> 候选面板 200ms 内变暗".
+  if (dark) {
+    m_style.back_color = 0x1E1E1E;                  // dark background
+    m_style.text_color = 0xE0E0E0;                 // light text
+    m_style.hilited_candidate_back_color = 0x2D2D30;
+    m_style.hilited_candidate_text_color = 0xFFFFFF;
+  } else {
+    m_style.back_color = 0xF0F0F0;                  // light background
+    m_style.text_color = 0x000000;
+    m_style.hilited_candidate_back_color = 0xD0D0D0;
+    m_style.hilited_candidate_text_color = 0x000080;
+  }
+  // Re-create layout to pick up new background dimensions
+  _CreateLayout();
+}

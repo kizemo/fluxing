@@ -73,4 +73,23 @@ void WeaselServerApp::SetupMenuHandlers() {
                           std::bind(explore, WeaselUserDataPath()));
   m_server.AddMenuHandler(ID_WEASELTRAY_LOGDIR,
                           std::bind(explore, WeaselLogPath()));
+
+  m_server.AddMenuHandler(
+      ID_WEASELTRAY_RESTORE_IGNORED, [this] {
+    std::wstring userDir = WeaselUserDataPath().wstring();
+    if (userDir.empty()) return true;  // no user-data dir -> no-op
+    WIN32_FIND_DATAW fd;
+    std::wstring pattern = userDir + L"\\*.user_ignore.txt";
+    HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return true;  // no ignore files -> success
+    do {
+      std::wstring path = userDir + L"\\" + fd.cFileName;
+      DeleteFileW(path.c_str());
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    // Spec 032 R2: no auto-refresh of the candidate list.
+    // Next input event / schema switch triggers Refresh,
+    // restoring previously-ignored candidates.
+    return true;
+  });
 }
