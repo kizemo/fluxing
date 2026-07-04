@@ -3138,3 +3138,73 @@ The spec 033 retry applied the L43 cure in 3 steps:
 - **Verification**: 0x001E1E1E count in weasel.dll = 1 (L42 AP-L42-A + L43 verification); weasel.pdb contains FluxingDarkModeBridge (L42 AP-L42-B); weasel.dll size grew from 991,232 to 1,002,496 bytes (+11,264 for the bridge code); build was `xmake f -a x86 -m release && xmake clean -a && xmake -j8` (L42 AP-L42-C + L43 AP-L43-D).
 - **Ship**: `release/fluxing-0.18.22.0-installer.exe` (42,615,261 bytes) + tag v0.18.22.0.
 
+## L44 - PowerShell `Encoding.UTF8.GetString` returns a STRING (char-indexed), not bytes; `string.IndexOf` returns CHAR offset, not BYTE offset (CJK content silently misaligns all subsequent byte-level math)
+
+**Date:** 2026-07-04
+**Status:** OPEN
+**Triggered by:** spec 034 (post-0.18.22.0 bug audit) - the systematic-debugging skill (Phase 1 multi-component evidence gathering) hit a near-miss when byte-verifying the 0.18.22.0 CHANGELOG entry. The byte math was correct; the where-is-the-entry probe was wrong. The actual binary + source + docs are all healthy; the lesson is about the VERIFICATION DISCIPLINE, not the artifact.
+**Related:** L01 (Chinese UTF-8 read/write - PowerShell 5.1 codepage trap), L02 (Chinese edits - byte-level replace), L37 (PowerShell line-based array ops corrupt CRLF), L40 (PRD/TDD corruption - same class of "looks fine at the surface, broken at the byte level" bug), L41 (smoke test recipe), L42 (false-positive test pass), L43 (/LTCG:OFF cure)
+
+### Symptom
+
+You read a file as bytes, decode it to a string with `[System.Text.Encoding]::UTF8.GetString(bytes)`, then use `string.IndexOf("## [0.18.22.0")` to find the offset of a known marker. The offset LOOKS plausible. You then do `[bytes][start..start+size-1]` to extract a "known range" - and the extracted range contains UNEXPECTED content (in our case, 1539 bytes of CJK content from a completely different part of the file).
+
+The bytes you extracted are real bytes from the file. The size is right. But the START OFFSET IS WRONG. The string operations silently assumed 1 char = 1 byte, which is false for UTF-8 CJK content (1 CJK char = 3 bytes in UTF-8).
+
+### Root cause (2 sub-causes)
+
+1. **`[System.Text.Encoding]::UTF8.GetString(bytes)` returns a `System.String`.** A `System.String` in .NET is a sequence of `System.Char` (UTF-16 code units). It is NOT a sequence of bytes. For ASCII, 1 char happens to map to 1 byte. For CJK (U+4E00..U+9FFF range), 1 UTF-16 char maps to 3 UTF-8 bytes. For BMP edge cases (surrogate pairs), 2 UTF-16 chars map to 4 UTF-8 bytes. For combining marks, the math is worse.
+
+2. **`string.IndexOf(string)` returns the CHAR offset, not the BYTE offset.** When you `GetString` then `IndexOf`, you get a char offset that is mathematically unrelated to the byte offset by a per-file multiplicative factor that depends on the CJK density. For a file with 0 CJK chars, char offset == byte offset. For a file with 1539 CJK chars, the char offset is 3078 BYTES smaller than the byte offset (1539 chars * (3-1) byte gap per char = 3078 byte shift, plus surrogate pair adjustments).
+
+### Why the standard "write a byte-search function" is not enough
+
+Most bug fixes for L01/L02/L37 say "use byte-level APIs". That is correct for the WRITE side. For the SEARCH side, the standard "loop through `bytes[i]` and compare to pattern" works (L42 verification does this). But the moment you use `Encoding.UTF8.GetString` + `IndexOf` for ergonomics, you have already lost the byte-level guarantee. There is no `Encoding.UTF8.IndexOf(bytes, "## [0.18.22.0")` API. You must either:
+   - Loop through the bytes (verbose, but correct).
+   - Use `[System.Text.Encoding]::UTF8.GetByteCount(stringSoFar)` to convert a char offset to a byte offset (correct, but obscure).
+   - Or never convert to string in the first place.
+
+### The cure
+
+For ALL byte-level work in this repo (CHANGELOG, lessons-learned.md, .vcxproj with BOM, install.nsi with BOM, etc.), use the byte-level pattern:
+
+```powershell
+# Find a byte pattern in a byte array (NOT a string)
+$pat = [System.Text.Encoding]::UTF8.GetBytes("## [0.18.22.0-fluxing]")
+$offset = -1
+for ($i = 0; $i -le $bytes.Length - $pat.Length; $i++) {
+  $match = $true
+  for ($j = 0; $j -lt $pat.Length; $j++) {
+    if ($bytes[$i+$j] -ne $pat[$j]) { $match = $false; break }
+  }
+  if ($match) { $offset = $i; break }
+}
+if ($offset -lt 0) { throw "pattern not found" }
+```
+
+This is the same pattern L42 uses to find `0x001E1E1E` in `weasel.dll`. The same pattern is the cure for any "find a known string in a known binary" task.
+
+### Anti-patterns (AP-L44-A/B/C)
+
+- **AP-L44-A**: `[System.Text.Encoding]::UTF8.GetString($bytes).IndexOf("marker")` - returns char offset, NOT byte offset. The CJK density of the file determines the size of the silent miscalculation. Files with 0 CJK chars work; files with 1000+ CJK chars are off by 2000+ bytes.
+- **AP-L44-B**: trusting `string.Substring(charOffset, length)` to extract bytes - same root cause as AP-L44-A; the Substring length is in chars, the offset is in chars, neither is in bytes.
+- **AP-L44-C**: assuming that "I wrote the file with `Set-Content` and read it back, so the byte offsets must match my expected count" - this only works if the file has no CJK content between the write point and the read point. CHANGELOG.md and lessons-learned.md both have CJK content, so this is a per-file trap.
+
+### Cross-references
+
+- L01 (PowerShell 5.1 + GBK codepage) - the broader PowerShell-on-Chinese trap; L44 is the byte-vs-char specific instance.
+- L02 (Chinese edits must use byte-level replace) - the WRITE-side pattern; L44 is the SEARCH-side pattern.
+- L37 (PowerShell line-based array ops corrupt CRLF) - same family of PowerShell 5.1 string/byte boundary bugs; L44 is the IndexOf-specific instance.
+- L40 (PRD/TDD corruption) - both L40 and L44 are "looks fine at the surface, broken at the byte level" bugs. L40 is about CONTENT corruption (literal `?` substitution). L44 is about OFFSET corruption (char offset != byte offset).
+- L42 (false-positive test pass) - L42 verification uses the byte-level search pattern; L44 documents WHY the byte-level pattern is the only correct approach for binary+text hybrid files.
+- L43 (/LTCG:OFF cure) - L43 is about LINKER content; L44 is about VERIFICATION content. Same "the byte-level view is the only ground truth" theme.
+
+### Recovery (when L44 has already bit you)
+
+If you have already extracted data using `GetString().IndexOf()` and the result looked plausible but you suspect L44:
+1. Re-do the search with the byte-level loop (see The cure above). The byte-level offset will differ from the char-level offset by the CJK density.
+2. Verify the extracted range with `Get-Content -Encoding Byte | Select-Object -First N` style byte slice. The text at the new byte offset should match what you expected.
+3. Re-run any byte-search verifications (L42 AP-L42-A, etc.) on the corrected range.
+4. If the extracted range was ALREADY written to a file (e.g., the wrong bytes were inserted), `git diff` will show the offset as a single huge insertion, and the original "marker" text in the new file will be at a DIFFERENT byte offset than the one you used. Use `git checkout HEAD -- path/to/file` to revert, then re-do the byte-level splice correctly.
+5. Add a byte-level byte-count check to your script before writing: `Write-Host "expected size: X, actual byte delta: Y; if X != Y, L44"`. This catches L44 on the first verification pass instead of after the commit.
+
