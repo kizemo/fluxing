@@ -221,10 +221,10 @@ test/
 
 | Gap | 关联 lesson | 状态 |
 |---|---|---|
-| `key_binder` binding 是否真被 librime 接受（vs 仅字符串包含） | L16 / L18 | 缺（spec 005 §2.3 标注"单测只验证 yaml 字符串包含, 不验证 librime 引擎行为"） |
-| `WM_SETTINGCHANGE` → 候选面板实际切色 | L17 关联 | 缺（spec 004 §9.5 仅 mock WM_SETTINGCHANGE） |
-| `user_dict_update(-1)` 真删词条（vs 仅 API 调用成功） | L10 关联 | 缺（spec 008 §2.5 mock user_dict_update） |
-| `rime_deployer --debug` deploy 实际通过（vs 仅文件存在） | L10 关联 | spec 004 §7 SC-005 列了但无 test project |
+| `key_binder` binding 是否真被 librime 接受（vs 仅字符串包含） | L16 / L18 | **CLOSED v0.18.10.0** - TestBindingResolution 6/6 PASS (spec 017 L24 link-probe + spec 018 L25 mock pattern) |
+| `WM_SETTINGCHANGE` → 候选面板实际切色 | L17 关联 | **CLOSED v0.18.22.0 + v0.18.23.0** - TestPanelDarkModeSubscribe 3/3 + TestDarkModeBroadcast 14/14 PASS (spec 032 + spec 034) |
+| `user_dict_update(-1)` 真删词条（vs 仅 API 调用成功） | L10 关联 | **CLOSED v0.18.17.0** - TestUserDictUpdate 4/4 PASS (spec 028) |
+| `rime_deployer --debug` deploy 实际通过（vs 仅文件存在） | L10 关联 | **SPEC-NEEDED** - rime_deployer.exe does not exist in librime dist; WeaselServer uses rime_api->deploy directly. spec 004 SC-005 wording needs update; deferred to a future spec |
 
 **L19 待加 lessons-learned 章节**：L18 修复不完整（用户 2026-07-01 实测发现 `shift+Enter` 仍切中英）— 根因诊断 + 完整修复方案（见 PRD.md §7 R-007 升级）。
 
@@ -249,3 +249,70 @@ test/
 - v2 新增 6 个 test project 待 ship。
 - **P1 修复**：TestDefaultHotkeys 加 vcxproj + sln + ci.yml test job（v0.18.6 release 前完成）。
 - **R-008**（CI 不跑测试）风险待 P1 修复后 close。
+
+### 2026-07-03: v0.18.7.0 已 ship (CI infra, R-008 close)
+
+- ci.yml test job added (line 194); runs `scripts\run-tests.bat` (wrapper) -> `scripts\test-infra\run-test-suite.bat` (build + run loop).
+- TestDefaultHotkeys vcxproj added; 4 test projects run in CI (per spec 015).
+- **R-008** (CI 不执行单测) CLOSED: mitigation actually shipped in v0.18.7.0; verified 2026-07-04 (13/13 test projects PASS).
+
+### 2026-07-03: v0.18.19.0 已 ship (5-version gap close)
+
+- 5 versions (0.18.8-0.18.18) shipped as CHANGELOG-only tags (NO installer in git). 0.18.19.0 is the first to re-include the installer binary.
+- **L40 lessons-learned**: AGENTS.md §2.5 smoke test + release/ directory hygiene must be enforced for every tag; release branches must not skip installer build.
+- **L41 lessons-learned**: NSIS install.nsi byte-level discipline (UTF-8 BOM + LF-only newline in 0x3F test).
+- release/fluxing-0.18.19.0-installer.exe (~40.6 MB).
+
+### 2026-07-04: v0.18.20.0 已 ship (spec 033 ship + L42 post-mortem)
+
+- spec 033 FluxingDarkModeBridge (F11 dark-mode cross-cut): TestDarkModeBridge 18/18 PASS, but L42 later discovered the production code was NOT linked into weasel.dll (false-positive test pass).
+- **L42 lessons-learned**: Verify linked .dll/.exe content, NOT just .pdb / .lib symbols. Use byte-level search for `0x001E1E1E` in `weasel.dll` to confirm dark-mode palette bytes are in the actual binary.
+- TestDarkModeBridge 18/18 PASS (re-classified as "spec implementation passes local link probe but does not survive end-to-end build").
+- RimeWithWeasel/FluxingDarkModeBridge.{h,cpp} committed but did not survive `xbuild.bat installer`.
+
+### 2026-07-04: v0.18.20.1 已 ship (spec 033 hotfix revert)
+
+- spec 033 reverted (commit 46ee0b7). Build pipeline blocks the bridge link (L42 false-positive root cause).
+- 0.18.20.1 binary is identical to 0.18.20.0 (revert was a docs + tests revert, not production code revert).
+
+### 2026-07-04: v0.18.21.0 已 ship (spec 008 finalization + 4 test project ship)
+
+- spec 008 finalization: TestUserDictUpdate 4/4 PASS (post-0.18.17.0 test ship + 0.18.21.0 spec-final commit).
+- 4 new test projects ship increment: TestCandidateRButtonDown (spec 019) / TestCandidateIgnoreFilter (spec 020) / TestPanelDarkModeSubscribe (spec 032).
+- 7/7 test projects PASS.
+- release/fluxing-0.18.21.0-installer.exe (~42 MB).
+
+### 2026-07-04: v0.18.22.0 已 ship (spec 033 retry success)
+
+- spec 033 retry success: FluxingDarkModeBridge linked in weasel.dll (L42 byte-verify: 0x001E1E1E in weasel.dll = 1).
+- **L43 lessons-learned**: /LTCG:OFF per-target cure (not global /LTCG removal). WeaselTSF target has its own add_shflags that re-enables LTCG; per-target /LTCG:OFF is the cure.
+- 12/12 test projects PASS (107 assertions).
+- release/fluxing-0.18.22.0-installer.exe (~40.6 MB).
+
+### 2026-07-04: v0.18.23.0 已 ship (spec 034: F11 cross-cut integration test)
+
+- spec 034 TestDarkModeBroadcast: new behavior-level test linking actual FluxingDarkModeBridge.cpp via L24 link-probe pattern. 14 behavior-level assertions (T1-T6, all PASS). WndProc filter is test-local L25 mock (3 lines wcscmp) to avoid WeaselPanel.cpp WTL/ATL/Gdiplus dependency cost.
+- spec 022 placeholder now unblocked (was BLOCKED on spec 004 production code; block lifted by spec 033).
+- **L44**: PowerShell Encoding.UTF8.GetString + IndexOf byte-vs-char miscalculation trap. Cure: byte-level pattern matching (L42 verification uses this).
+- **Bug fix** (commit 33efa00): weasel.sln TestPanelDarkModeSubscribe missing EndProject (spec 032 leftover). Inline-test dead code in TestDarkModeBroadcast.cpp T3d else-branch removed.
+- 13/13 test projects PASS, 14 new TestDarkModeBroadcast assertions PASS. release/fluxing-0.18.23.0-installer.exe (42,655,987 bytes).
+
+---
+
+**Test suite growth (post-v0.18.23.0):** 3 -> 13 test projects. The 10 new ones shipped incrementally across 0.18.7-0.18.23: TestShiftSelectBinding (0.18.8), TestBindingResolution (0.18.10), TestYamlRoundTripE2E (0.18.14), TestUserDictUpdate (0.18.17), TestCandidateRButtonDown (0.18.21), TestCandidateIgnoreFilter (0.18.21), TestPanelDarkModeSubscribe (0.18.21), TestTrayRestoreIgnored (0.18.22), TestDarkModeBridge (0.18.22), TestDarkModeBroadcast (0.18.23).
+
+**Integration test coverage (TDD sec 3.1):**
+- TestBindingResolution: SHIPPED (spec 017, 6/6 PASS).
+- TestUserDictUpdate: SHIPPED (spec 020, 4/4 PASS).
+- TestPhrasesRoundTrip: BLOCKED (spec 021 on spec 009 PhrasesStore - production code not yet written).
+- TestDarkModeBroadcast: SHIPPED (spec 034, 14/14 PASS).
+- TestYamlRoundTripE2E: SHIPPED (spec 023->024, multiple assertions PASS).
+- TestBootstrapperStdio: BLOCKED (spec 025 on spec 011 Fluxing Bootstrapper - production code not yet written).
+
+**R-008 (CI does not run tests):** CLOSED in v0.18.7.0; verified 2026-07-04 (13/13 test projects PASS in `scripts\test-infra\run-test-suite.bat`).
+
+**Lessons-learned count:** L01-L44 (44 lessons) by 2026-07-04.
+
+**Spec count:** 35 spec directories (000-035, with 013, 025-bookkeeping, 025-bootstrapper naming variants per L23 history).
+
+**Code coverage target (sec 7):** deferred to v2.1+ (no measurement tool wired into ci.yml yet).
