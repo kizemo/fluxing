@@ -308,6 +308,8 @@
     </ClCompile>
     <ClCompile Include="VerticalLayout.cpp" />
     <ClCompile Include="VHorizontalLayout.cpp" />
+    <ClCompile Include="..\RimeWithWeasel\FluxingDarkModeBridge.cpp" />
+    <ClCompile Include="..\RimeWithWeasel\WeaselUtility.cpp" />
     <ClCompile Include="WeaselPanel.cpp" />
     <ClCompile Include="WeaselUI.cpp" />
   </ItemGroup>

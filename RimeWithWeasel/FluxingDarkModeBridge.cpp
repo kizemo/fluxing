@@ -1,5 +1,9 @@
 // FluxingDarkModeBridge.cpp - spec 033 T002 (2026-07-04)
 //
+// spec 036: include stdafx.h for WeaselUI vcxproj PCH (was missing in spec 033 release).
+#include "stdafx.h"
+#include "FluxingDarkModeBridge.h"
+//
 // Implementation of the F11 dark-mode bridge. See header for
 // contract. Key invariants:
 //   * ReadAppsUseLightTheme uses KEY_WOW64_64KEY so a 32-bit

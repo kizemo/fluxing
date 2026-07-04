@@ -2,7 +2,7 @@
 #include "WeaselServerImpl.h"
 #include <mutex>
 #include <Windows.h>
-#include <resource.h>
+#include "../WeaselServer/resource.h"  // spec 036: ID_HOTKEY_QUICK_PANEL + ID_WEASELTRAY_QUICK_PANEL
 #include <WeaselUtility.h>
 
 namespace weasel {
@@ -70,6 +70,10 @@ LRESULT ServerImpl::OnCreate(UINT uMsg,
                              BOOL& bHandled) {
   // not neccessary...
   ::SetWindowText(m_hWnd, WEASEL_IPC_WINDOW);
+
+  // spec 036: register Alt+, global hotkey for QuickPanel
+  // AP-036-F: ignore failure (hotkey may be registered by another app).
+  ::RegisterHotKey(m_hWnd, ID_HOTKEY_QUICK_PANEL, MOD_ALT, VK_OEM_COMMA);
   return 0;
 }
 
@@ -86,6 +90,9 @@ LRESULT ServerImpl::OnDestroy(UINT uMsg,
                               LPARAM lParam,
                               BOOL& bHandled) {
   bHandled = FALSE;
+
+  // spec 036: unregister Alt+, global hotkey
+  ::UnregisterHotKey(m_hWnd, ID_HOTKEY_QUICK_PANEL);
   return 1;
 }
 
@@ -137,6 +144,25 @@ DWORD ServerImpl::OnCommand(WEASEL_IPC_COMMAND uMsg,
   BOOL handled = TRUE;
   OnCommand(uMsg, wParam, lParam, handled);
   return handled;
+}
+
+// spec 036: Alt+, global hotkey handler. Dispatch to QuickPanel via
+// PostMessage(WM_COMMAND, ID_WEASELTRAY_QUICK_PANEL, 0) so the existing
+// WM_COMMAND handler picks it up (same path as left-click tray icon).
+LRESULT ServerImpl::OnHotkey(UINT uMsg,
+                             WPARAM wParam,
+                             LPARAM lParam,
+                             BOOL& bHandled) {
+  if (wParam == ID_HOTKEY_QUICK_PANEL) {
+    // AP-036-G: only fire if the request handler is alive (avoid
+    // firing during shutdown when m_pRequestHandler may be null).
+    if (m_pRequestHandler) {
+      ::PostMessage(m_hWnd, WM_COMMAND, ID_WEASELTRAY_QUICK_PANEL, 0);
+    }
+    return 0;
+  }
+  bHandled = FALSE;
+  return 1;
 }
 
 HWND ServerImpl::Start() {

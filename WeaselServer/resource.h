@@ -29,6 +29,13 @@
 #define ID_WEASELTRAY_LOGDIR            40016
 #define ID_WEASELTRAY_RESTORE_IGNORED   40017
 
+// spec 036: tray quick panel v0
+#define ID_HOTKEY_QUICK_PANEL          9001
+#define ID_WEASELTRAY_QUICK_PANEL      40018
+#define ID_QUICKPANEL_BTN_ASCII        41001
+#define ID_QUICKPANEL_BTN_DEPLOY       41002
+
+
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
