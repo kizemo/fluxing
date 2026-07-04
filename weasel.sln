@@ -49,6 +49,9 @@ EndProject
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestDarkModeBroadcast", "test\TestDarkModeBroadcast\TestDarkModeBroadcast.vcxproj", "{B220A318-9188-459D-ABC0-C571C21E5829}"
 EndProject
+
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestQuickPanelDialog", "test\TestQuickPanelDialog\TestQuickPanelDialog.vcxproj", "{B220A319-9188-459D-ABC1-C571C21E5830}"
+EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestTrayRestoreIgnored", "test\TestTrayRestoreIgnored\TestTrayRestoreIgnored.vcxproj", "{E5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F45}"
 EndProject
 
@@ -209,6 +212,10 @@ Global
 		{B220A318-9188-459D-ABC0-C571C21E5829}.Debug|Win32.Build.0 = Debug|Win32
 		{B220A318-9188-459D-ABC0-C571C21E5829}.Release|Win32.ActiveCfg = Release|Win32
 		{B220A318-9188-459D-ABC0-C571C21E5829}.Release|Win32.Build.0 = Release|Win32
+		{B220A319-9188-459D-ABC1-C571C21E5830}.Debug|Win32.ActiveCfg = Debug|Win32
+		{B220A319-9188-459D-ABC1-C571C21E5830}.Debug|Win32.Build.0 = Debug|Win32
+		{B220A319-9188-459D-ABC1-C571C21E5830}.Release|Win32.ActiveCfg = Release|Win32
+		{B220A319-9188-459D-ABC1-C571C21E5830}.Release|Win32.Build.0 = Release|Win32
 		{E5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F45}.Debug|Win32.ActiveCfg = Debug|Win32
 		{E5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F45}.Debug|Win32.Build.0 = Debug|Win32
 		{E5C9D3E1-7B2F-4F6A-9D8E-3C1B5A7E9F45}.Release|Win32.ActiveCfg = Release|Win32

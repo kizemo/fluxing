@@ -65,6 +65,10 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
                          bool val);
   virtual void UpdateColorTheme(BOOL darkMode);
 
+  // spec 036: return current global ASCII mode (for QuickPanel initial state).
+  // Reads the cached m_global_ascii_mode which is updated by SetOption.
+  bool IsAsciiMode() const { return m_global_ascii_mode; }
+
   void OnUpdateUI(std::function<void()> const& cb);
 
  private:

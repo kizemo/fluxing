@@ -38,6 +38,7 @@ static char THIS_FILE[] = __FILE__;
 
 #ifndef ASSERT
 #include <assert.h>
+#include "resource.h"  // spec 036: ID_WEASELTRAY_QUICK_PANEL
 #define ASSERT assert
 #endif
 
@@ -834,6 +835,11 @@ LRESULT CSystemTray::OnTrayNotification(WPARAM wParam, LPARAM lParam) {
       uItem = m_DefaultMenuItemID;
 
     ::PostMessage(hTargetWnd, WM_COMMAND, uItem, 0);
+  }
+
+  // spec 036: tray quick panel v0 - left-click tray icon triggers QuickPanel
+  else if (LOWORD(lParam) == WM_LBUTTONUP) {
+    ::PostMessage(hTargetWnd, WM_COMMAND, ID_WEASELTRAY_QUICK_PANEL, 0);
   }
 
   return 1;

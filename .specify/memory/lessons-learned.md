@@ -3289,3 +3289,59 @@ Start-Process -FilePath git -ArgumentList cat-file,blob,$hash -NoNewWindow -Wait
 2. **File is lengthened by N (L45-#2, autocrlf drift)**: same plumbing restore. Verify the restored size equals `git cat-file -s $hash` exactly.
 3. **`git diff` shows mysterious "deletions" on no-trailing-newline files (L45-#3)**: ignore them. Use byte-compare against `git cat-file blob` to verify content identity. Document in commit message that the "deletions" are git diff tool artifacts, not content changes.
 4. **Cascaded failures (e.g. L45-#1 followed by L45-#2 followed by L45-#3)**: the recovery is the same as L45-#2: plumbing restore + autocrlf false. Do not try to fix individual bytes; restore the entire file from HEAD blob.
+
+## L46 - spec 033 (0.18.22.0) shipped with msbuild path broken in 4 places; xmake-only verification missed all of them
+
+**Triggered by**: spec 036 (0.18.24.0) msbuild build cycle. spec 033 was released with `xmake f -a x86 -m release && xmake clean -a && xmake -j8` and `cmd /c scripts\test-infra\run-test-suite.bat` (which uses msbuild for the test projects but xmake for the production binaries). The xmake path bypasses all 4 of the bugs below because xmake.lua uses different (less strict) ClCompile configuration than vcxproj ItemDefinitionGroup. spec 034 (0.18.23.0) inherited the same broken state because it added TestDarkModeBroadcast but did not re-verify the production msbuild path. spec 036 (0.18.24.0) is the first release since spec 033 to actually run `msbuild weasel.sln` for the production targets.
+
+**The 4 bugs (all part of one root cause: msbuild path was never tested end-to-end after spec 033)**:
+
+1. **weasel.props `ResourceCompile` PreprocessorDefinitions is empty literal**:
+   - File: `weasel.props`, line `<PreprocessorDefinitions>;VERSION_MAJOR=;VERSION_MINOR=;VERSION_PATCH=;PRODUCT_VERSION=;FILE_VERSION=;</PreprocessorDefinitions>`
+   - Bug: msbuild does NOT expand the names; the literal `;VERSION_MAJOR=;` is passed to the RC preprocessor, which then sees `FILEVERSION VERSION_MAJOR,VERSION_MINOR,VERSION_PATCH,0` in the .rc and fails with `error RC2127: version WORDs separated by commas expected`.
+   - Fix: change to `VERSION_MAJOR=$(VERSION_MAJOR);VERSION_MINOR=$(VERSION_MINOR);...` so msbuild expands the PropertyGroup values.
+   - Why xmake missed it: xbuild.bat sets `VERSION_MAJOR=0` etc as env vars in env.bat, and xmake.lua reads them directly. The ResourceCompile PreprocessorDefinitions never enters the picture on the xmake path.
+
+2. **WeaselUI.vcxproj ClCompile missing FluxingDarkModeBridge.cpp + WeaselUtility.cpp**:
+   - File: `WeaselUI/WeaselUI.vcxproj`, `<ClCompile>` section.
+   - Bug: WeaselPanel.cpp calls `WeaselUserDataPath()` (from WeaselUtility.cpp) and `fluxing::FluxingDarkModeBridge::Refresh()` (from FluxingDarkModeBridge.cpp), but vcxproj does not compile either .cpp, so the symbols are unresolved at link time. LNK2001 + LNK1120 on weasel.dll.
+   - Why xmake missed it: xmake.lua scans the `RimeWithWeasel/` and `WeaselUI/` directories and pulls in all .cpp files automatically. The .vcxproj has an explicit ClCompile list, so files added later (FluxingDarkModeBridge.cpp in spec 033) must be added to the list manually.
+
+3. **RimeWithWeasel.vcxproj ClCompile missing FluxingDarkModeBridge.cpp**:
+   - File: `RimeWithWeasel/RimeWithWeasel.vcxproj`, `<ClCompile>` section.
+   - Bug: same as #2 but for the RimeWithWeasel static lib. spec 033 created the file but did not add it to the vcxproj list.
+   - Why xmake missed it: same as #2.
+
+4. **FluxingDarkModeBridge.cpp missing `#include "stdafx.h"`**:
+   - File: `RimeWithWeasel/FluxingDarkModeBridge.cpp`, line 1.
+   - Bug: the file was authored for the xmake path which has no PCH. When added to WeaselUI/RimeWithWeasel vcxproj ClCompile, the WeaselUI PCH requires `#include "stdafx.h"` as the first include. Without it, error C1010 ("unexpected end of file while looking for precompiled header").
+   - Why xmake missed it: xmake does not use MSVC PCH.
+   - Fix: add `#include "stdafx.h"` as the first include (before `#include "FluxingDarkModeBridge.h"`).
+
+**Lesson**: xmake and msbuild are NOT equivalent build paths. xmake scans directories and pulls in all sources; msbuild uses explicit lists in vcxproj. Adding a new .cpp file to a directory that xmake will find does NOT mean msbuild will find it. Every release MUST verify the BOTH paths:
+
+- `xbuild.bat weasel installer` (xmake path; builds production binaries + installer)
+- `msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m:1` (msbuild path; builds production binaries via explicit ClCompile lists)
+- `cmd /c scripts\test-infra\run-test-suite.bat` (test-only path; msbuild for test projects + xmake for production, but this is a 3rd path that does NOT substitute for the first two)
+
+`scripts\test-infra\run-test-suite.bat` builds ONLY the test projects, not the production binaries. Its success is necessary but NOT sufficient for msbuild-path correctness. The pre-0.18.24.0 release cycle (0.18.22.0 / 0.18.23.0) only ran the test suite + the xmake installer build, so the msbuild path was silently broken for 2 release versions.
+
+**Verification recipe for future releases** (added to AGENTS.md sec 2.2 and sec 5):
+
+```powershell
+# Run all three; ALL must succeed.
+$vsbat = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat"
+cmd /c "`"$vsbat`" -arch=x86 -host_arch=x64 >nul 2>&1 && call env.bat >nul 2>&1 && call xbuild.bat weasel installer"
+cmd /c "`"$vsbat`" -arch=x86 -host_arch=x64 >nul 2>&1 && call env.bat >nul 2>&1 && msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /p:SolutionDir=%CD%\ /m:1"
+cmd /c "scripts\test-infra\run-test-suite.bat"
+```
+
+If any of the three fails, the release is broken. Do NOT tag. (L46 verification is RC 0 for all 3 above paths in 0.18.24.0.)
+
+**Anti-patterns (AP-L46-A through D)**:
+- AP-L46-A: declaring "we ship on xmake" and skipping the msbuild verification because "we do not use msbuild in CI". Wrong: AGENTS.md sec 2.2 documents that `weasel.sln` is a real build target (the test projects), and the transitive msbuild dependency on the production binaries via project references is real.
+- AP-L46-B: assuming xmake.lua `add_includedirs` + `add_files` patterns are equivalent to vcxproj ClCompile. They are not; xmake scans directories.
+- AP-L46-C: shipping a release with `xbuild.bat weasel installer` passing but the production binaries not actually linked correctly via msbuild (the L42 sibling bug, but for the build path not the test verification).
+- AP-L46-D: assuming `core.autocrlf` settings do not affect vcxproj ClCompile paths. They do, when a new .cpp file is committed with LF on Windows.
+
+**Cross-references**: L42 (dead-stripped code), L43 (/LTCG:OFF), L40 (CHANGELOG-only releases), L41 (smoke test recipe), L10 (librime Win32-only).
