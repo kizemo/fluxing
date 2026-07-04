@@ -2147,6 +2147,56 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
 
 
 
+## [0.18.23.0-fluxing] - 2026-07-04
+
+### spec 034: TestDarkModeBroadcast (unblock spec 022 placeholder; F11 cross-cut integration test)
+
+- **Problem**: spec 022 (created in spec 019 batch as a placeholder) was BLOCKED on spec 004 production code. That block is now lifted by spec 033 (FluxingDarkModeBridge, shipped in 0.18.22.0). spec 033 ships its own unit test (TestDarkModeBridge, 18 behavior-level assertions) but does NOT verify the end-to-end pipeline (Windows message -> production filter -> production bridge -> multiple production subscribers). The remaining gap is the bridge broadcast integration boundary.
+
+- **Solution (spec 034)**: new behavior-level test, test/TestDarkModeBroadcast/, that links the ACTUAL production FluxingDarkModeBridge.cpp via L24 link-probe pattern. Uses a test-owned hidden message-only window (CreateWindowEx with HWND_MESSAGE parent) for the WM_SETTINGCHANGE message pump. The WndProc filter is a test-local stub (L25 mock pattern) that mirrors WeaselPanel::OnSettingChange filter logic (3 lines of wcscmp). Real WeaselPanel linking is deferred (WTL/ATL/Gdiplus dependency cost is too high; see plan.md section 2.1 Scope B). The test exercises the REAL path from the filter boundary forward: real bridge, real HKCU reader, real std::function callbacks, real subscriber list.
+
+- **6+ behavior-level assertions** (TestDarkModeBroadcast, 14/14 PASS):
+  - T1: SendMessage(WM_SETTINGCHANGE, "ImmersiveColorSet") -> bridge.IsDarkMode() flips.
+  - T2: bridge.IsDarkMode() consistent with HKCU AppsUseLightTheme (dark + light).
+  - T3: Two subscribers fire in registration order on real state change (FIFO).
+  - T4: CurrentPalette() bytes byte-equal the spec 033 production constants (both palettes).
+  - T5: HKCU write + SendMessage(WM_SETTINGCHANGE) + bridge refresh chain propagates to all subscribers.
+  - T6: Re-send without registry change does NOT re-fire subscribers (idempotence).
+
+- **Files (6 new + 3 modified):**
+  - NEW: `test\TestDarkModeBroadcast\TestDarkModeBroadcast.cpp` (14 behavior-level assertions, 15.6 KB)
+  - NEW: `test\TestDarkModeBroadcast\TestDarkModeBroadcast.vcxproj` (L31 OutDir fix applied, L24 link-probe entry for FluxingDarkModeBridge.cpp)
+  - NEW: `test\TestDarkModeBroadcast\stdafx.{h,cpp}` + `targetver.h` (boilerplate, mirrors spec 033)
+  - NEW: `.specify\specs\034-integration-test-dark-mode-broadcast\{spec,plan,tasks}.md`
+  - MOD: `weasel.sln` (1 new Project block + 4 ProjectConfigurationPlatforms lines; new GUID `{B220A318-9188-459D-ABC0-C571C21E5829}`)
+  - MOD: `scripts\test-infra\run-test-suite.bat` (12 -> 13 test projects in build + run loops)
+  - MOD: `scripts\test-infra\verify-test-binaries-fresh.bat` (12 -> 13 test projects in stale detector)
+  - NEW: `release\fluxing-0.18.23.0-installer.exe` (built by xbuild.bat weasel installer from env.bat FLUXING_VERSION=0.18.23 + RELEASE_BUILD=1)
+  - MOD: `env.bat` (FLUXING_VERSION 0.18.20 -> 0.18.23; VERSION_PATCH 20 -> 23; PRODUCT_VERSION 0.18.20.0 -> 0.18.23.0) - local-only, NOT committed (A3)
+  - MOD: `weasel.props` (VERSION_PATCH 20 -> 23; PRODUCT_VERSION 0.18.20.0 -> 0.18.23.0; FILE_VERSION 0.18.20.0 -> 0.18.23.0) - local-only, NOT committed (A3)
+
+- **NO production code change**: spec 034 adds ONLY a test, NOT new product code. The L42 false-positive test pass risk (code dead-stripped from weasel.dll) is N/A: 0x001E1E1E palette bytes still present in weasel.dll (1 occurrence, byte-verify post-build). The shipped 0.18.23.0 installer is functionally identical to 0.18.22.0; the value-add is the new integration test that locks the F11 cross-cut pipeline contract.
+
+- **Verification (post-impl):**
+  - `cmd /c scripts\test-infra\run-test-suite.bat` -> RC 0, `=== ALL TESTS PASSED ===`, **13/13** test projects, 14 new TestDarkModeBroadcast assertions PASS (no regression in the other 12).
+  - `cmd /c scripts\test-infra\verify-test-binaries-fresh.bat` -> RC 0, 13 FRESH (L31 detection applies to all 13).
+  - AGENTS.md sec 2.5 silent-install smoke test against `release\fluxing-0.18.23.0-installer.exe` -> all 8 invariants pass (exit code 0; fluxing\weasel\ layout; HKLM InstallDir; HKCU RimeUserDir; rime.dll size 2-5 MB; prebuilt dicts present; PE arch: Weasel*.exe x86, weaselx64.dll x64, rime.dll x86, uninstall.exe x86).
+  - L42 byte-verify: 0x001E1E1E count in weasel.dll = 1 (spec 033 dark palette constants still linked into the production binary).
+
+- **Anti-patterns avoided:**
+  - AP-034-A: did not link WeaselPanel.cpp (WTL/ATL/Gdiplus dependency cost; L25 mock pattern is the boundary approach).
+  - AP-034-B: did not skip the lParam filter in the WndProc.
+  - AP-034-C: did not use SetDarkForTest as the primary path. Used real HKCU.
+  - AP-034-D: did not omit HKCU restoration. Restored at exit.
+  - AP-034-E: did not omit window destruction. DestroyWindow + UnregisterClass at exit.
+  - AP-034-F: did not use a mirrored palette struct. Compared to spec 033 production constants directly.
+  - AP-034-G: did not add the new test to the weasel.sln without a unique GUID (L23).
+  - AP-034-H: did not skip the L31 OutDir fix in the new vcxproj.
+  - AP-034-I: did not `git add .`. Stage by path per A10.
+  - AP-034-J: did not commit env.bat / weasel.props per A3.
+
+- **Tag is `v0.18.23.0`** per AGENTS.md sec 3.5 (lightweight). Pushed to kizemo/Fluxing.
+
 ## [0.18.22.0-fluxing] - 2026-07-04
 
 ### spec 033 retry: FluxingDarkModeBridge (F11 dark-mode cross-cut) actually linked in weasel.dll
