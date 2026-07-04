@@ -1,6 +1,6 @@
 @echo off
 rem ====================================================================
-rem scripts\test-infra\verify-test-binaries-fresh.bat - 9 test projects (spec 031 adds TestCandidateIgnoreFilter)
+rem scripts\test-infra\verify-test-binaries-fresh.bat - 11 test projects (spec 032 adds TestCandidateIgnoreFilter)
 rem L31 stale-binary detector. For each of the 6 test projects, compares
 rem the mtime of 'Release\<Name>.exe' against the newest source mtime
 rem under 'test\<Name>\'. Exits 0 if all are fresh, 1 if any are stale.
@@ -26,7 +26,7 @@ rem enabledelayedexpansion, '!errorlevel!' is expanded at parse time
 rem (when it is empty / 0) and the FAIL flag never gets set. This
 rem bit spec 027 the first time; see L33.
 rem
-rem Usage: scripts\test-infra\verify-test-binaries-fresh.bat - 9 test projects (spec 031 adds TestCandidateIgnoreFilter)
+rem Usage: scripts\test-infra\verify-test-binaries-fresh.bat - 11 test projects (spec 032 adds TestCandidateIgnoreFilter)
 rem Exit code: 0 = all fresh, 1 = at least one stale
 rem
 rem Spec 027 (2026-07-03) - see .specify\specs\027-test-infra-hardening.
@@ -52,7 +52,7 @@ if not exist "%PS_SCRIPT%" (
 
 set "FAIL=0"
 
-for %%P in (TestDefaultHotkeys TestShiftSelectBinding TestBindingResolution TestResponseParser TestWeaselIPC TestYamlRoundTripE2E TestUserDictUpdate TestCandidateRButtonDown TestCandidateIgnoreFilter) do (
+for %%P in (TestDefaultHotkeys TestShiftSelectBinding TestBindingResolution TestResponseParser TestWeaselIPC TestYamlRoundTripE2E TestUserDictUpdate TestCandidateRButtonDown TestCandidateIgnoreFilter TestPanelDarkModeSubscribe TestTrayRestoreIgnored) do (
     powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" %%P
     if !errorlevel! NEQ 0 set "FAIL=1"
 )
