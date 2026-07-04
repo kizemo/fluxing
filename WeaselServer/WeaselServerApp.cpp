@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "WeaselServerApp.h"
 #include <filesystem>
+#include "QuickPanelDialog.h"
 
 WeaselServerApp::WeaselServerApp()
     : m_handler(std::make_unique<RimeWithWeaselHandler>(&m_ui)),
@@ -90,6 +91,26 @@ void WeaselServerApp::SetupMenuHandlers() {
     // Spec 032 R2: no auto-refresh of the candidate list.
     // Next input event / schema switch triggers Refresh,
     // restoring previously-ignored candidates.
+    return true;
+  });
+  // spec 036: QuickPanel trigger. Same handler is used by:
+  //   - Alt+, global hotkey (via WM_COMMAND post from OnHotkey).
+  //   - Left-click tray icon (via WM_COMMAND post from SystemTraySDK).
+  //   - "QuickPanel" menu item in the right-click tray menu (rc file).
+  m_server.AddMenuHandler(ID_WEASELTRAY_QUICK_PANEL, [this] {
+    bool currentAscii = m_handler ? m_handler->IsAsciiMode() : false;
+    QuickPanelDialog::Show(
+        currentAscii,
+        [this](bool newAscii) {
+          if (m_handler) {
+            m_handler->SetOption(0, "ascii_mode", newAscii);
+          }
+        },
+        [this]() {
+          std::filesystem::path deployer = install_dir() / L"WeaselDeployer.exe";
+          ShellExecuteW(NULL, NULL, deployer.c_str(), L"/deploy", NULL,
+                         SW_SHOWNORMAL);
+        });
     return true;
   });
 }
