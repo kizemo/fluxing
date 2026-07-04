@@ -2740,3 +2740,256 @@ Code 2013 is OpenAI function-call argument validation. The agent tool layer reje
 - A1 / A2 (anti-patterns in AGENTS.md) - read / write Chinese via PowerShell Get-Content / Out-File is the entry point; always use IO.File.ReadAllBytes / WriteAllBytes for any Chinese-containing text file.
 - A10 (anti-pattern in AGENTS.md) - git add . from project root would have swept up weasel.props, env.bat, *.log, and github_token.txt; spec 032 staged by explicit path and the untracked leftovers are now in .gitignore so future A10 incidents are self-blocking.
 
+
+## L40 - PRD.md / TDD.md corruption is literal '?' (0x3F), not GBK->UTF-8 mojibake
+
+**Date:** 2026-07-04
+**Spec:** 033 prep (next after 032)
+**Status:** active
+**Affected:** `.specify/PRD.md`, `.specify/TDD.md`. Sub-specs (004-032) and AGENTS.md/constitution.md/lessons-learned.md are NOT affected.
+
+### Symptom
+
+When the assistant reads `.specify/PRD.md` or `.specify/TDD.md`, the Chinese content renders as runs of `?` characters (e.g. `?? ?? spec ????` instead of `项目级 PRD，对应 spec 004 路线图与 7 份子 spec`). The displayed text is readable structurally but every Chinese phrase is replaced with `?`.
+
+L39 (the previous lesson) diagnosed this as GBK->UTF-8 mojibake. That diagnosis was **wrong**. The actual byte content is literal `0x3F` (`?`) characters separated by `0x20` (space), not the multi-byte sequences (0xC2 0xC3 0xE2 0x80-range) that GBK misdecoding produces.
+
+### Verification (the wrong-diagnosis check)
+
+Byte-level diff of HEAD and commit 54cdd2d (the supposed "restoration source"):
+
+```
+HEAD:.specify/PRD.md     = f7e2d9c1fc535e440cca6fbe369eaf084678b850  (14221 bytes)
+54cdd2d:.specify/PRD.md  = f7e2d9c1fc535e440cca6fbe369eaf084678b850  (14221 bytes)
+                                        (identical)
+```
+
+`git rev-parse HEAD:.specify/PRD.md` and `git rev-parse 54cdd2d:.specify/PRD.md` produce the SAME blob SHA. The "L39 restoration" was a no-op: it copied a corrupted blob from an earlier commit and re-verified it byte-for-byte, declaring success.
+
+The actual mojibake check (looking at the hex dump of HEAD's PRD.md):
+- Byte 0x10 onward: `23 20 46 6C 75 78 69 6E 67 20 76 32 20 3F 20 50 ...`
+  - ASCII: `# Fluxing v2 ? P`
+  - The `?` is `0x3F` - ASCII question mark, not a UTF-8 multi-byte sequence.
+- Compare to spec 004 spec.md line 1: `35 32 48 48 52 32 194 183 32 231 129 171 ...`
+  - `194 183` = `×` (UTF-8 multi-byte for the same range Chinese)
+  - spec 004 has REAL Chinese UTF-8 bytes. PRD.md does not.
+
+### Root cause (revised)
+
+The 2 files were **created** with `?` substitution characters from the start (commit 6f6fcbf on 2026-06-XX, the original commit). The most likely cause:
+
+1. The original authoring session had `chcp 65001` but the Out-File / Set-Content path was using a different encoding (e.g. ASCII default) which substituted `?` for any non-ASCII character. The session wrote structurally-complete content but the Chinese phrases became `?` on disk.
+
+2. Subsequent sessions (commits 54cdd2d, 6f6fcbf, 7b2eec5/L39) read the file via `Get-Content` (which showed `?` correctly as `?`), assumed the file was just sparse documentation, and only made tiny edits (line 1 corruption fix, L19/L20 status updates). None of the sessions actually noticed that the bulk of the Chinese content was missing, because:
+   - The files display structurally-complete Markdown (headings, tables, lists all in place)
+   - The English / ASCII / number / punctuation content IS correct
+   - Only the Chinese phrase bodies are `?`
+
+3. The L39 "restoration" commit verified byte-for-byte equality with the source commit, but the source was already broken. The verification metric (SHA match) was a structural check, not a content check.
+
+### The data is lost (cannot be recovered from git)
+
+No commit in the history contains the original Chinese content for PRD.md or TDD.md. The earliest commit (`6f6fcbf`) is the broken one. Reflog entries before 6f6fcbf do not exist for this branch.
+
+### Recovery path (deferred, not part of this spec)
+
+Two options, neither is reversible by git alone:
+
+1. **Reconstruction from scratch** - rewrite PRD.md and TDD.md from the spec 004 roadmap (which IS intact) + constitution.md (intact) + AGENTS.md §1 project map (intact) + the existing sub-specs 005-032 (intact). The content is fully recoverable from these sources, but the wording will be new, not the original.
+
+2. **Accept the loss and add a marker** - replace the `?` runs with `[Chinese content lost; see spec 004 + sub-specs 005-032 for authoritative text]` so future readers know to consult those instead of trusting the PRD/TDD as-is.
+
+This is a future spec (likely 033 or later). The current 0.18.19.0 release does NOT include a fix; the corruption is documented here so the next session does not waste time re-discovering it.
+
+### Cure (this lesson)
+
+1. **Always byte-level grep for `0x3F` runs** when verifying a Chinese Markdown file. A run of 3+ consecutive `0x3F` in a non-code section is a corruption marker, not legitimate text.
+2. **`git hash-object` matching is structural, not content** - it confirms "the bytes are the same as before" but not "the bytes are correct". Add a `0x3F` count check and a `0xE4..0xE9` range (common CJK UTF-8 lead bytes) count check before declaring success.
+3. **Visually inspect the file** before committing any "restoration" claim. A 1-second read of the first 200 bytes would have caught this in any session.
+4. **Sub-specs (004-032) are authoritative** for the project's intent. The PRD/TDD corruption is silent because the actual product intent is in spec 004 + sub-specs + constitution + AGENTS.md, not in PRD/TDD. Document this in AGENTS.md §6 (How to Use This File) so the next agent knows to skip PRD/TDD if they look broken.
+
+### Verification
+
+- `.specify/PRD.md` has 0x3F count = ~1200+ (predominantly runs of `?` between ASCII structure)
+- `.specify/TDD.md` has 0x3F count = ~900+ (same pattern)
+- `.specify/specs/004-fluxing-v2-roadmap/spec.md` has 0x3F count = 0 (clean)
+- `.specify/specs/005-.../spec.md` has 0x3F count = 0 (clean)
+- `.specify/memory/constitution.md` has 0x3F count = 0 (clean)
+- `.specify/memory/lessons-learned.md` has 0x3F count = 0 (clean)
+- `AGENTS.md` has 0x3F count = 1 (legitimate ASCII `?` in code example, not corruption)
+- `CHANGELOG.md` has 0x3F count = 9 (legitimate `?` in changelog text)
+
+### Cross-references
+
+- L01 (GBK pollution chain) - the original L39 diagnosis was L01-shaped but actually wrong; the byte pattern does not match L01.
+- L02 (byte-level discipline) - applies here too: the "fix" must be byte-level because the file is binary-equal to a broken source.
+- L12 (meta-post-mortem) - same shape: a session makes a fix claim, the verification metric is wrong, the fix is a no-op. L12 is about lessons-learned.md; L40 is the same shape but on PRD.md and TDD.md.
+- L36 (L## fix coverage gap) - L39 fixed `git add` cleanup but did not fix the underlying verification-metric bug; this L40 closes that.
+- A1 / A2 (anti-patterns) - Chinese read/write via PS is the entry point. L40 adds: Chinese VERIFICATION via `Get-Content` (which silently renders `0x3F` as `?`) is the exit point that masks the bug.
+
+
+
+## L41 - AGENTS.md smoke test recipe path is now L13-fix-2 redirected (update recipe to use D: drive)
+
+**Date:** 2026-07-04
+**Spec:** 033 prep (0.18.19.0 release verification)
+**Status:** active
+**Affected:** AGENTS.md sec 2.5 smoke test recipe
+
+### Symptom
+
+Running the AGENTS.md sec 2.5 smoke test recipe as written for the 0.18.19.0 release:
+
+```powershell
+$dst = "C:\TEMP\fluxing-test"
+cmd /c "`"$installer`" /S /D=`"$dst\ProgramFiles`""
+```
+
+...the install **silently goes to `C:\Program Files\fluxing`** (the default) instead of `C:\TEMP\fluxing-test\ProgramFiles\fluxing`. The `InstallDir` registry key gets `C:\Program Files\fluxing`, not the /D= value. Layout verification fails on invariant (b), (c), (d), (e), (f), (g).
+
+### Root cause (two factors)
+
+1. **L13-fix-2 redirect (commit 053515b)**: install.nsi .onInit function has explicit check_reg3 logic at line 167-169:
+   ```
+   StrCpy $R1 $R0 8
+   StrCmp $R1 "C:\TEMP\" 0 use_reg
+   Goto use_default
+   ```
+   When the existing registry's InstallDir starts with `C:\TEMP\` (a smoke-test path left behind by an incomplete uninstall in a previous test run), .onInit redirects `$INSTDIR` to `$PROGRAMFILES64\fluxing` regardless of /D=. This is a feature, not a bug - it prevents the smoke test from leaving a stale install pointing to a deleted `C:\TEMP\fluxing-test\` directory that no longer exists.
+
+2. **/D= arg parsing with quoted paths**: When /D= is passed with a quoted path containing backslashes (e.g. `"/D=C:\TEMP\fluxing-test\ProgramFiles"`), the NSIS parser strips the trailing backslash off the path. The path becomes `C:\TEMP\fluxing-test\ProgramFiles` minus one backslash somewhere, leading to undefined behavior. With **unquoted** /D= (e.g. `/D=D:\FluxingTest\altpath\pf`), NSIS correctly captures the full path.
+
+### Fix (the recipe needs two changes)
+
+1. **Use a non-`C:\TEMP\` path** for the smoke test, e.g. `D:\FluxingTest\<version>`. Avoids L13-fix-2 redirect and the staleness issue.
+
+2. **Use unquoted /D= value** in the cmd wrapper. The current recipe's `cmd /c `"$installer" /S /D="$dst\ProgramFiles"`"` form causes the L17b length-mismatch class of bug. Replace with:
+   ```batch
+   cmd /c installer.exe /S /D=D:\FluxingTest\0.18.19\pf
+   ```
+   or, if you must quote (path with spaces):
+   ```batch
+   cmd /c '"installer.exe" /S /D="D:\My Test Path\pf"'
+   ```
+
+### Verification
+
+0.18.19.0 release: with the corrected recipe (D:\ path + unquoted /D=), all 8 invariants pass:
+- Layout: `D:\FluxingTest\altpath\pf\fluxing\weasel\` + `D:\FluxingTest\altpath\pf\fluxing\user1\fluxing\`
+- WeaselServer.exe: 1,123,328 bytes (x86 PE 0x14C)
+- rime.dll: 3,041,792 bytes (x86 PE 0x14C, in 2-5 MB lua-linked range)
+- weaselx64.dll: x64 PE 0x8664 (TSF 64-bit shim)
+- WeaselDeployer.exe / WeaselSetup.exe / uninstall.exe: all x86 (0x14C)
+- rime_ice.table.bin: present
+- HKLM InstallDir: `D:\FluxingTest\altpath\pf\fluxing`
+- HKCU RimeUserDir: `D:\FluxingTest\altpath\pf\fluxing\user1\fluxing`
+
+### Updated recipe (replacement for AGENTS.md sec 2.5)
+
+Replace lines 117-130 of AGENTS.md with:
+
+```powershell
+# Use a non-C:\TEMP\ path to avoid L13-fix-2 redirect in install.nsi.
+# Use unquoted /D= to avoid the trailing-backslash-stripping bug.
+$dst = "D:\FluxingTest\$ver"
+$dstBase = "D:\FluxingTest"
+if (-not (Test-Path $dstBase)) { New-Item -ItemType Directory -Path $dstBase | Out-Null }
+Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $dst | Out-Null
+
+# Use cmd /c (NOT Start-Process -ArgumentList - L15: PS 5.1 merges /D= and /LOG= at the = boundary)
+# Unquoted /D= value (per L41): quoted paths with backslashes get the trailing \ stripped.
+cmd /c "$installer /S /D=$dst\pf"
+if ($LASTEXITCODE -ne 0) { $failures += "cmd /c installer exit code was $LASTEXITCODE" }
+Write-Host "exit code: $LASTEXITCODE"
+
+# 3. Verify layout invariants (L13 + spec 002 FR-001 / FR-002)
+$failures = @()
+
+#    a. exit code == 0
+if ($LASTEXITCODE -ne 0) { $failures += "exit code was $LASTEXITCODE" }
+
+#    b. fluxing suffix was forced
+if (-not (Test-Path "$dst\pf\fluxing\weasel\WeaselServer.exe")) {
+    $failures += "engine binaries not under fluxing\weasel\ - path-force fix not working"
+}
+if (Test-Path "$dst\pf\weasel\WeaselServer.exe") {
+    $failures += "engine binaries at WRONG location $dst\pf\weasel\ - path-force broken"
+}
+
+#    c. user-data dir is co-located under fluxing\user1\fluxing\
+if (-not (Test-Path "$dst\pf\fluxing\user1\fluxing")) {
+    $failures += "user-data dir $dst\pf\fluxing\user1\fluxing missing"
+}
+
+#    d. registry: InstallDir is the fluxing root
+$installDir = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Fluxing\Weasel" -ErrorAction SilentlyContinue).InstallDir
+if ($installDir -ne "$dst\pf\fluxing") {
+    $failures += "HKLM InstallDir = '$installDir' (expected '$dst\pf\fluxing')"
+}
+
+#    e. registry: RimeUserDir is under user1\fluxing\
+$userDir = (Get-ItemProperty "HKCU:\Software\Fluxing\Weasel" -ErrorAction SilentlyContinue).RimeUserDir
+if ($userDir -ne "$dst\pf\fluxing\user1\fluxing") {
+    $failures += "HKCU RimeUserDir = '$userDir' (expected '$dst\pf\fluxing\user1\fluxing')"
+}
+
+#    f. rime.dll is present and ~3 MB (lua-linked)
+$rimeDll = "$dst\pf\fluxing\weasel\rime.dll"
+if (-not (Test-Path $rimeDll)) { $failures += "rime.dll missing" }
+elseif ((Get-Item $rimeDll).Length -lt 2MB -or (Get-Item $rimeDll).Length -gt 5MB) {
+    $failures += "rime.dll size = $((Get-Item $rimeDll).Length) - not in 2-5 MB range"
+}
+
+#    g. prebuilt dicts present
+if (-not (Test-Path "$dst\pf\fluxing\weasel\data\build\rime_ice.table.bin")) {
+    $failures += "prebuilt rime_ice.table.bin missing - first-run will be slow"
+}
+
+#    h. L14: all Weasel*.exe are x86; only weaselx64.dll is x64
+function Test-Arch($path) {
+  $b = [System.IO.File]::ReadAllBytes($path)
+  $peOff = [BitConverter]::ToInt32(($b[0x3C..0x3F]), 0)
+  return [BitConverter]::ToUInt16(($b[($peOff+4)..($peOff+5)]), 0)
+}
+$expectedArch = @{
+  'WeaselServer.exe'  = 0x14C  # x86
+  'WeaselDeployer.exe'= 0x14C  # x86
+  'WeaselSetup.exe'   = 0x14C  # x86
+  'uninstall.exe'     = 0x14C  # x86
+  'weaselx64.dll'     = 0x8664 # x64 (TSF 64-bit shim)
+  'rime.dll'          = 0x14C  # x86 (librime Win32-only)
+}
+foreach ($f in $expectedArch.Keys) {
+  $p = Join-Path "$dst\pf\fluxing\weasel" $f
+  if (Test-Path $p) {
+    $actual = Test-Arch $p
+    if ($actual -ne $expectedArch[$f]) {
+      $failures += "$f arch = 0x$($actual.ToString('X4')) (expected 0x$($expectedArch[$f].ToString('X4'))) - L14 arch mismatch"
+    }
+  }
+}
+
+# 4. Cleanup
+Get-ChildItem $dst -Recurse -Force -ErrorAction SilentlyContinue |
+    ForEach-Object { attrib -h $_.FullName 2>$null }
+& "$dst\pf\fluxing\weasel\uninstall.exe" /S
+Start-Sleep 2
+Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue
+Remove-Item $dstBase -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item "HKLM:\SOFTWARE\WOW6432Node\Fluxing\Weasel" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item "HKCU:\Software\Fluxing\Weasel" -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+### Cross-references
+
+- L13 (NSIS custom function path-force) - the original bug; L13-fix-2 is the smoke-test redirect.
+- L13-fix-2 commit 053515b - the source of the C:\TEMP\ redirect.
+- L17b (NSIS StrCpy length = literal length) - related; trailing-backslash class of bug.
+- L41 (this) - the symptom; the AGENTS.md recipe needs updating.
+
+### Anti-patterns
+
+- **AP-L41-A**: Running the AGENTS.md smoke test recipe verbatim after L13-fix-2 landed. The recipe's `C:\TEMP\fluxing-test` path is now caught by the install.nsi redirect.
+- **AP-L41-B**: Using quoted `/D=path` in cmd /c. Trailing backslashes get stripped.
+- **AP-L41-C**: Treating "all 8 invariants pass" as the success criterion without updating the recipe when the installer design changes. L36 audit pattern: when a script changes, also update the recipe that drives it.
