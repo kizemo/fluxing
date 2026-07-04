@@ -2992,4 +2992,67 @@ Remove-Item "HKCU:\Software\Fluxing\Weasel" -Recurse -Force -ErrorAction Silentl
 
 - **AP-L41-A**: Running the AGENTS.md smoke test recipe verbatim after L13-fix-2 landed. The recipe's `C:\TEMP\fluxing-test` path is now caught by the install.nsi redirect.
 - **AP-L41-B**: Using quoted `/D=path` in cmd /c. Trailing backslashes get stripped.
-- **AP-L41-C**: Treating "all 8 invariants pass" as the success criterion without updating the recipe when the installer design changes. L36 audit pattern: when a script changes, also update the recipe that drives it.
+- **AP-L41-C**: Treating "all 8 invariants pass" as the success criterion without updating the recipe when the installer design changes. L36 audit pattern: when a script changes, also update the recipe that drives it.﻿
+
+## L42 - False-positive test pass when new code is dead-stripped from the production binary (verify linked .dll/.exe contents, not just .pdb)
+
+**Date:** 2026-07-04
+**Status:** OPEN
+**Triggered by:** spec 033 (FluxingDarkModeBridge) 0.18.20.0 release + 0.18.20.1 hotfix
+**Related:** L04 (librime / Win32 fallback), L10 (librime Win32-only), L24 (link-probe pattern), L26 (mirror drift), L31 (vcxproj OutDir), L36 (fix-coverage audit), L38 (spec-incremental-shipping), L39 (2013 invalid function arguments), L40 (PRD/TDD corruption), L41 (smoke test recipe)
+
+### Symptom
+
+A spec added a new module (RimeWithWeasel/FluxingDarkModeBridge.{h,cpp}) with a new test (test/TestDarkModeBridge/, 18 behavior-level assertions, L24 link-probe pattern). The test passed. The xmake build reported success. The .pdb for the production binary (weasel.pdb) contained the new symbol. The CHANGELOG entry for 0.18.20.0 declared the spec shipped. The installer was copied to release/fluxing-0.18.20.0-installer.exe. The smoke test against the installer passed all 8 invariants. **The new code was NOT in the shipped installer.** A byte search for the dark palette constant 0x001E1E1E in weasel.dll returned 0 occurrences. The pre-033 binary shipped.
+
+### Root cause (3 contributing factors)
+
+1. **The spec 033 commit was not actually built before the release.** The spec author committed feat(fluxing): spec 033 - FluxingDarkModeBridge (commit e50b2d3) but did not rebuild the installer. The pre-033 binary in output/Win32/WeaselServer.exe was carried forward. The release/fluxing-0.18.20.0-installer.exe was built by xbuild.bat installer from the pre-033 state.
+
+2. **Even when an xmake build was run after the spec 033 changes, the link of weasel.dll did not include the bridge.** The bridge is in RimeWithWeasel.lib (a static lib, kind = static). WeaselTSF (which builds weasel.dll) lists add_deps(WeaselUI, RimeWithWeasel) and add_links(RimeWithWeasel). The link command does include RimeWithWeasel.lib and the bridge .obj is in the .lib. But the linker (/LTCG /OPT:REF) dead-strips the bridge from weasel.dll. The 0x001E1E1E palette constant count in weasel.dll is 0. The bridge IS in weasel.pdb because pdbs are debug-info sidecars that always contain all linked symbols.
+
+3. **The test suite passed despite (1) and (2).** TestDarkModeBridge uses the L24 link-probe pattern (links the actual RimeWithWeasel/FluxingDarkModeBridge.cpp directly via a <ClCompile Include="..\..\RimeWithWeasel\FluxingDarkModeBridge.cpp" /> entry in the vcxproj). This means the test is a separate, isolated binary that links the bridge into ITSELF, not into the production weasel.dll. The test passing proved only that the bridge code compiles and runs correctly in isolation, NOT that the production binary contains it.
+
+### Why the smoke test missed it
+
+The AGENTS.md sec 2.5 smoke test verifies: (a) exit code 0, (b) layout under fluxing\weasel\, (c) HKLM/HKCU registry keys, (d) rime.dll size, (e) prebuilt dicts, (f) PE arch of binaries. None of these checks verify the new spec 033 functionality (the dark palette). The smoke test would pass with the pre-033 binary because the dark palette is in WeaselPanel.cpps .text section as immediate operands in both the pre-033 and post-033 binaries (just at different code locations).
+
+### Verification discipline (the cure)
+
+For ANY spec that adds new code to a new module, the post-impl verification MUST include ALL of the following, in order:
+
+1. **Byte search in the linked binary** for at least one unique byte pattern from the new code (constants, specific strings, etc.). For spec 033, this is 0x001E1E1E in weasel.dll. The count must be > 0.
+2. **Link command audit** via xmake -v <target>: confirm the new source file is in the link command. For spec 033, this means build/.objs/RimeWithWeasel/windows/x86/release/RimeWithWeasel/FluxingDarkModeBridge.cpp.obj (or equivalent) in the link command for weasel.dll.
+3. **.pdb symbol check** is necessary but NOT sufficient. The pdb will have the symbol even if /OPT:REF strips it from the binary. Verify the .pdb has the symbol, then cross-check with (1).
+4. **Installer smoke test** per AGENTS.md sec 2.5: confirms the install path is correct, but does NOT confirm functionality. Add functionality-specific checks for F-class (cross-cut) specs: e.g., for F11 (dark mode), after the smoke install, flip HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme and verify the registry read in the live process returns the new value (would require WeaselServer.exe to expose this for test, which is not currently done).
+5. **Full clean rebuild** (xmake clean -a && xmake -j8) before any release tag, not an incremental build. LTCG / OPT:REF can hide stale .lib state from incremental rebuilds.
+
+### Anti-patterns (AP-L42-A/B/C/D)
+
+- **AP-L42-A**: declaring "spec shipped" because tests pass and a build succeeds, without verifying the new code is actually linked into the production binary.
+- **AP-L42-B**: trusting the .pdb to indicate binary contents. Pdbs always contain all linked symbols, including ones stripped from the binary by /OPT:REF.
+- **AP-L42-C**: relying on incremental xmake rebuilds to catch all dependency changes. When the changed code is in a static lib, xmake may not relink dependents that depend on the .lib transitively.
+- **AP-L42-D**: using the L24 link-probe pattern in a test that links the production code in ISOLATION. The test proves the code works; the BUILD proves the code is included; you need BOTH to prove the code is in the production binary.
+
+### Recovery (for spec 033 retry)
+
+The spec 033 design is correct. The build pipeline is broken. The retry must:
+
+1. Add $(SolutionDir)/RimeWithWeasel to AdditionalIncludeDirectories in WeaselUI/WeaselUI.vcxproj (so the #include "FluxingDarkModeBridge.h" resolves). This is the immediate cause of the build failure (compile error C1083 in the users first attempt at building the spec 033 changes).
+2. Add add_includedirs("$(projectdir)/RimeWithWeasel") to the top-level xmake.lua (so the xmake build also resolves the include).
+3. Investigate the /LTCG /OPT:REF dead-strip behavior. Possible fixes: (a) remove /LTCG from WeaselTSFs add_shflags; (b) add /OPT:NOREF to the WeaselTSF link; (c) use __declspec(dllexport) on the bridge class to force the linker to keep it. Option (a) is the simplest and least likely to regress.
+4. Re-build from clean (xmake clean -a); verify 0x001E1E1E count in weasel.dll > 0 before tagging the release.
+5. Add a functionality-specific smoke check: after the silent install, set HKCU\...\AppsUseLightTheme = 0 and run a quick test exe that calls FluxingDarkModeBridge::Get()->IsDarkMode() and prints the result. (Requires a new test utility, or extending TestDarkModeBridge to expose this as a CLI mode.)
+
+### Cross-references
+
+- L04 (librime / Win32 fallback pattern) - related; the dead-strip is a similar class of "build pipeline silently breaks specd behavior" bug.
+- L10 (librime Win32-only) - related; explains why the build only runs in x86 mode and why the issue surfaced here.
+- L24 (link-probe pattern) - the test pattern that enabled the false-positive pass.
+- L26 (mirror drift) - the original reason for switching from mirror to link-probe; the link-probe has its own failure mode (AP-L42-D).
+- L31 (vcxproj OutDir backslash) - the include path / vcxproj issue (L42 step 1) is in the same family of vcxproj pitfalls.
+- L36 (fix-coverage audit) - the L42 audit pattern: when fixing one false-positive verification, audit all sibling verifications. Apply to: (a) the AGENTS.md smoke test recipe (add byte-search step); (b) the spec-init checklist (add "link .dll contents" step); (c) the test-infra scripts (add "verify linked binary contains new symbols" step).
+- L38 (spec-incremental-shipping exposes build-time deps) - L38 is the upstream cause: spec 033 was a cross-cut refactor that exposed the LTCG dead-strip dependency that earlier specs did not hit.
+- L39 (2013 invalid function arguments) - L42 is the 2013-protection follow-up; the systematic-debugging skill must be invoked whenever a spec adds a new module.
+- L40 (PRD/TDD corruption) - related; L40 is about file content corruption, L42 is about binary content corruption. Same class of "looks fine at the surface, broken at the byte level" bug.
+- L41 (smoke test recipe path redirect) - L42 extends L41: L41 is "smoke test path can fail"; L42 is "smoke test can pass but not exercise the specd behavior".
