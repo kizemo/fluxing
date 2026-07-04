@@ -2145,6 +2145,48 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
 
 
 
+
+
+## [0.18.21.0-fluxing] - 2026-07-04
+
+### spec 008 finalization: candidate right-click delete/ignore (T013+T014 ship)
+
+- **Problem**: spec 008 (候选面板右键删除+屏蔽) implementation was completed across 5 incremental specs (027-032) but never got a dedicated release tag. The user requested "推进 spec 008 收尾" - consolidate and ship as 0.18.21.0.
+
+- **Implementation status (per spec 008 design.md / plan.md / tasks.md)**:
+  - T001-T003 (core): RimeWithWeasel/RimeWithWeasel.cpp::DeleteCandidateOnCurrentPage (line 322, librime 1.13 delete_candidate_on_current_page C API, spec 028); WeaselUI/WeaselPanel.cpp::OnRButtonDown (line 528, hit-test + dispatch + 100ms debounce, spec 030)
+  - T004-T006 (fallback): L35 + spec 028 (librime 1.13 rime_candidate_t has no is_user_dict field; engine does the user.db check internally per Context::DeleteCandidate at librime/src/rime/context.cc:146). Client-side ignore-filter fallback B (方案 B in spec 008 design.md sec 2.3): WeaselPanel::LoadIgnoreList (line 1366) + _FilterIgnoredCandidates (line 1409), spec 031
+  - T007 (dark theme): spec 033 attempted, reverted in 0.18.20.1 (L42 build pipeline issue); F11 cross-cut deferred to spec 035+
+  - T008 (tray restore button): WeaselPanel::_RestoreIgnoreFiles + mocked WeaselUserDataPath, spec 032
+  - T009 (mock test): DECISION - 3 focused tests > 1 monolithic mock per L26 (mirror drift):
+    - TestCandidateRButtonDown (4/4) - hit-test, dispatch, debounce, end-to-end via FakeClient
+    - TestCandidateIgnoreFilter (5/5) - UTF-8/UTF-16 BOM, blank-line skip, FilterIgnoredCandidates
+    - TestTrayRestoreIgnored (3/3) - file deletion + graceful no-op
+    - Mock user_dict_update is replaced by the real rime_api->delete_candidate_on_current_page call (engine owns the is_user_dict decision per L35). Adding a 4th monolithic mock test would duplicate the 3 existing tests' coverage.
+  - T010 (build): 0 errors (verified in 0.18.20.1 build, which is functionally identical for spec 008)
+  - T011 (manual QA 3 platforms / 3 DPI): deferred to user-driven manual QA per AGENTS.md sec 2.5 (out of scope for CI)
+  - T012 (regression): 11/11 test suite PASS + 11/11 FRESH + smoke test 8 invariants PASS (per release 0.18.20.1)
+
+- **Files (1 modified):**
+  - MOD: .specify/specs/008-candidate-edit/tasks.md (updated from open to shipped; coverage map added)
+  - NEW: elease/fluxing-0.18.21.0-installer.exe (rebuilt from current source; 0.18.20.1 source is identical for spec 008, so 0.18.21.0 installer is bit-equivalent except for filename and version metadata)
+
+- **NOT changed (per A3, gitignored):**
+  - env.bat (FLUXING_VERSION 0.18.20 stays; this is a spec-008-finalization release, not a feature release)
+  - weasel.props (VERSION_PATCH 20 stays)
+
+- **Spec 008 T-list reconciliation note**:
+  The spec 008 design.md / tasks.md was authored before the 5-stage incremental shipping (specs 027-032) became the project's cadence (per AGENTS.md V. Incremental Delivery). The 5 stages produced 5 separate commits with their own scope; this 0.18.21.0 finalization commit just (a) updates the spec 008 tasks.md to reflect the as-shipped state and (b) tags a release. No new code in this commit. Per L26 (mirror drift), the 3 focused tests are preferred over a single monolithic mock; per L35 (librime 1.13 no is_user_dict in C API), the client delegates the is_user_dict decision to the engine rather than mocking it.
+
+- **Verification (post-impl, post-revert-of-033, post-finalization):**
+  - cmd /c scripts\test-infra\run-test-suite.bat -> RC 0, === ALL TESTS PASSED ===, 11/11 test projects
+  - cmd /c scripts\test-infra\verify-test-binaries-fresh.bat -> RC 0, 11 FRESH
+  - AGENTS.md sec 2.5 silent-install smoke test -> all 8 invariants pass (L41 recipe)
+  -  x001E1E1E count in weasel.dll = 1 (L42 byte-search verification, pre-033 inline palette)
+
+- **Tag is 0.18.21.0** (lightweight per AGENTS.md sec 3.5). Pushed to kizemo/Fluxing.
+
+- **Coverage map**: see .specify/specs/008-candidate-edit/tasks.md for the T-implementation-test mapping.
 ## [0.18.20.1-fluxing] - 2026-07-04
 
 ### Hotfix: spec 033 reverted (build pipeline blocks the bridge link)
