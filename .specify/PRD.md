@@ -1,4 +1,4 @@
-# Fluxing v2 · Product Requirements Document (PRD)
+﻿﻿# Fluxing v2 · Product Requirements Document (PRD)
 
 > **项目级 PRD**。覆盖 spec 004 路线图与 7 份子 spec（005-011）的产品愿景、用户故事、验收标准、风险登记。
 > 与子 spec 的关系：本文是"v2 全局视图"；子 spec 的 `spec.md` 是"局部详情"——本文是 entry point，子 spec 是 detail page。
@@ -295,3 +295,171 @@
 **Spec count:** 35 spec directories (000-035, with 013, 025-bookkeeping, 025-bootstrapper naming variants per L23 history).
 
 **Code coverage target (sec 7):** deferred to v2.1+ (no measurement tool wired into ci.yml yet).
+
+---
+
+## 9. v0.18.25.0 已 ship (2026-07-05)
+
+### 9.1 L46 fix - xmake + msbuild dual-path parity
+
+spec 033 (0.18.22.0) 和 spec 034 (0.18.23.0) 之前 ship 时, 仅 xmake path 验证, msbuild path 有 4 个 bug 未闭合. spec 037 (0.18.25.0) 闭合了全部 4 个:
+
+1. weasel.props ResourceCompile PreprocessorDefinitions 改为 $(VERSION_MAJOR) 等 msbuild 变量展开 (RC2127 修复).
+2. WeaselUI/WeaselUI.vcxproj ClCompile 加 ..\RimeWithWeasel\FluxingDarkModeBridge.cpp + ..\RimeWithWeasel\WeaselUtility.cpp (LNK2001 + LNK1120 修复).
+3. RimeWithWeasel/RimeWithWeasel.vcxproj ClCompile 加 FluxingDarkModeBridge.cpp.
+4. RimeWithWeasel/FluxingDarkModeBridge.cpp 加 #include "stdafx.h" 作为第一行 (C1010 修复).
+
+L43 fix: WeaselTSF/xmake.lua per-target /LTCG:OFF (WeaselTSF target 自身 add_shflags 重启 LTCG; per-target 修复).
+L46 #2 fix: WeaselServer/xmake.lua /OPT:REF /OPT:ICF → /OPT:NOREF /OPT:NOICF (L42 sibling bug for build path).
+
+### 9.2 验证 (L46 recipe, 3 paths all PASS)
+
+- Path 1: xbuild.bat weasel installer → exit 0, installer 42,850,220 bytes, PE arch 0x14C x86.
+- Path 2: msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m:1 → 0 errors / 2 pre-existing warnings (C4267 + C4101, 无关), 8/8 production targets success.
+- Path 3: scripts\test-infra\run-test-suite.bat → 13/13 test exe PASS, 115 assertions / 0 FAIL, "=== ALL TESTS PASSED ===".
+- L42 byte-verify: weasel.dll 包含  x001E1E1E (spec 033 dark-mode palette bytes in production binary).
+- L14 arch-verify: WeaselServer.exe / WeaselDeployer.exe / WeaselSetup.exe / rime.dll = 0x14C x86; weaselx64.dll = 0x8664 x64; weaselARM64.dll = 0xAA64 ARM64.
+
+### 9.3 0.18.25.0 Test suite
+
+13 test projects, 115+ assertions PASS:
+- TestDefaultHotkeys 35/35 (spec 014/021 Shift_L/R recovery + L16/L19 regressions).
+- TestQuickPanelDialog 10/10 (spec 036 v0 ship).
+- TestDarkModeBridge 18/18, TestDarkModeBroadcast 14/14, TestPanelDarkModeSubscribe 3/3.
+- TestUserDictUpdate 4/4 (spec 008 finalization), TestCandidateRButtonDown 4/4 (spec 019), TestCandidateIgnoreFilter 5/5 (spec 020).
+
+### 9.4 L31 follow-up fix (L31 vcxproj OutDir path-glue 闭合)
+
+3 个 test vcxproj (TestBindingResolution, TestResponseParser, TestYamlRoundTripE2E) 的 <IntDir>msbuild\... 缺 \ 反斜杠, 触发 MSB3491 imemsbuild 路径 (L31 root cause B). 0.18.25.0 ship 时已修. 验证: msbuild_path2.log 中无 imemsbuild 字符串, un-test-suite.bat exit=0.
+
+L47 lessons-learned 同步追加 (PowerShell 5.1 + VsDevCmd 触发 MSB6001 PATH/Path 冲突 + vcxproj $(SolutionDir)msbuild 缺 \ 引发 MSB3491; workaround: 用 cvars32.bat 不用 VsDevCmd.bat).
+
+---
+
+## 10. spec 037 已 bootstrap (2026-07-05)
+
+### 10.1 范围 (YAGNI 切片)
+
+spec 006 完整 mac 风面板设计的**第二阶段 ship 切片**. 仅 ship 4 个基础控件 (Button / Toggle / Panel / Label) + 1 个 D2DRenderer + 1 个 FluxingTheme 适配器, 闭环 v0.18.26.0 release. spec 038+ 才重构 QuickPanelDialog.
+
+### 10.2 用户故事 (摘自 spec 037 spec.md §1.2)
+
+- US037-A: 引入 <FluxingComponents/Button.h> 编译通过.
+- US037-B: FluxingButton::Create(hwndParent, rect, L"中/英", FluxingButton::Style::Primary) 返回可绘制控件句柄.
+- US037-C: FluxingPanel::Create(hwndParent, rect, FluxingPanel::Style::Card) 返回圆角矩形容器.
+- US037-D: FluxingTheme 适配 FluxingDarkModeBridge::CurrentPalette(), 亮/暗色变化时通过订阅者自动重绘.
+- US037-E: spec 038 重构 QuickPanelDialog 使用 4 个新控件 (推迟到 v0.18.27+).
+
+### 10.3 完成定义 (v0.18.26.0 ship)
+
+详见 .specify\specs\037-fluxing-components-v0\tasks.md. 28 tasks 分 7 phase (基础设施 / Theme 适配器 / 4 控件 / vcxproj+xmake 集成 / 测试 / 回归+字节验证 / Release).
+
+### 10.4 spec 038+ 路线图
+
+- spec 038 — QuickPanelDialog 重构 (用 FluxingButton + FluxingToggle + FluxingPanel + FluxingLabel 替换 win32 button).
+- spec 039 — FluxingTheme 接入 QuickPanelDialog + 200ms 渐变.
+- spec 040 — 多 DPI 验证清单 (DPI 100/150/200) + 弹窗 resize handler.
+- spec 041 — FluxingComponents 拖动支持 + Alt+, 热键冲突检测.
+- spec 042 — FluxingPanelHost 独立进程 + 8-12 入口 grid 布局.
+
+### 10.5 spec 037 spec / plan / tasks 状态
+
+-  37-fluxing-components-v0/spec.md (10623 B, BOM, CR=LF=120, 0 mojibake).
+-  37-fluxing-components-v0/plan.md (7762 B, BOM, CR=LF=202, 0 mojibake).
+-  37-fluxing-components-v0/tasks.md (4625 B, BOM, CR=LF=62, 0 mojibake).
+- 28 tasks 全 [ ] (待实施).
+- Constitution Check 通过 (I-V + R1-R9 + P1-P8 OK).
+
+---
+
+## 11. lessons-learned 累计
+
+- L01-L46 (L01 - L46): 46 lessons by 2026-07-04.
+- **L47 (待追加)**: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 是 PowerShell module 触发 .NET Hashtable "已添加项: 字典中的关键字 PATH 所添加的关键字 Path" 异常 (MSB6001). workaround: 用 cvars32.bat (纯 cmd 脚本) 不用 VsDevCmd.bat. 0.18.25.0 ship 时已用此 workaround.
+- L47 also: vcxproj <IntDir>msbuild\... 缺 \ 反斜杠触发 MSB3491 imemsbuild 路径错误. spec 037 之前 3 个 test vcxproj 命中此 bug; 0.18.25.0 ship 时已修.
+
+---
+
+## 9. v0.18.25.0 已 ship (2026-07-05)
+
+### 9.1 L46 fix - xmake + msbuild dual-path parity
+
+spec 033 (0.18.22.0) 和 spec 034 (0.18.23.0) 之前 ship 时, 仅 xmake path 验证, msbuild path 有 4 个 bug 未闭合. spec 037 (0.18.25.0) 闭合了全部 4 个:
+
+1. weasel.props ResourceCompile PreprocessorDefinitions 改为 $(VERSION_MAJOR) 等 msbuild 变量展开 (RC2127 修复).
+2. WeaselUI/WeaselUI.vcxproj ClCompile 加 ..\RimeWithWeasel\FluxingDarkModeBridge.cpp + ..\RimeWithWeasel\WeaselUtility.cpp (LNK2001 + LNK1120 修复).
+3. RimeWithWeasel/RimeWithWeasel.vcxproj ClCompile 加 FluxingDarkModeBridge.cpp.
+4. RimeWithWeasel/FluxingDarkModeBridge.cpp 加 #include "stdafx.h" 作为第一行 (C1010 修复).
+
+L43 fix: WeaselTSF/xmake.lua per-target /LTCG:OFF (WeaselTSF target 自身 add_shflags 重启 LTCG; per-target 修复).
+L46 #2 fix: WeaselServer/xmake.lua /OPT:REF /OPT:ICF → /OPT:NOREF /OPT:NOICF (L42 sibling bug for build path).
+
+### 9.2 验证 (L46 recipe, 3 paths all PASS)
+
+- Path 1: xbuild.bat weasel installer → exit 0, installer 42,850,220 bytes, PE arch 0x14C x86.
+- Path 2: msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m:1 → 0 errors / 2 pre-existing warnings (C4267 + C4101, 无关), 8/8 production targets success.
+- Path 3: scripts\test-infra\run-test-suite.bat → 13/13 test exe PASS, 115 assertions / 0 FAIL, "=== ALL TESTS PASSED ===".
+- L42 byte-verify: weasel.dll 包含  x001E1E1E (spec 033 dark-mode palette bytes in production binary).
+- L14 arch-verify: WeaselServer.exe / WeaselDeployer.exe / WeaselSetup.exe / rime.dll = 0x14C x86; weaselx64.dll = 0x8664 x64; weaselARM64.dll = 0xAA64 ARM64.
+
+### 9.3 0.18.25.0 Test suite
+
+13 test projects, 115+ assertions PASS:
+- TestDefaultHotkeys 35/35 (spec 014/021 Shift_L/R recovery + L16/L19 regressions).
+- TestQuickPanelDialog 10/10 (spec 036 v0 ship).
+- TestDarkModeBridge 18/18, TestDarkModeBroadcast 14/14, TestPanelDarkModeSubscribe 3/3.
+- TestUserDictUpdate 4/4 (spec 008 finalization), TestCandidateRButtonDown 4/4 (spec 019), TestCandidateIgnoreFilter 5/5 (spec 020).
+
+### 9.4 L31 follow-up fix (L31 vcxproj OutDir path-glue 闭合)
+
+3 个 test vcxproj (TestBindingResolution, TestResponseParser, TestYamlRoundTripE2E) 的 <IntDir>SolutionDir-msbuild-... 缺 \ 反斜杠, 触发 MSB3491 
+imemsbuild 路径 (L31 root cause B). 0.18.25.0 ship 时已修. 验证: msbuild_path2.log 中无 
+imemsbuild 字符串, 
+un-test-suite.bat exit=0.
+
+L47 lessons-learned 同步追加 (PowerShell 5.1 + VsDevCmd 触发 MSB6001 PATH/Path 冲突 + vcxproj SolutionDir-msbuild 缺 \ 引发 MSB3491; workaround: 用 cvars32.bat 不用 VsDevCmd.bat).
+
+---
+
+## 10. spec 037 已 bootstrap (2026-07-05)
+
+### 10.1 范围 (YAGNI 切片)
+
+spec 006 完整 mac 风面板设计的**第二阶段 ship 切片**. 仅 ship 4 个基础控件 (Button / Toggle / Panel / Label) + 1 个 D2DRenderer + 1 个 FluxingTheme 适配器, 闭环 v0.18.26.0 release. spec 038+ 才重构 QuickPanelDialog.
+
+### 10.2 用户故事 (摘自 spec 037 spec.md sec 1.2)
+
+- US037-A: 引入 <FluxingComponents/Button.h> 编译通过.
+- US037-B: FluxingButton::Create(hwndParent, rect, L"中/英", FluxingButton::Style::Primary) 返回可绘制控件句柄.
+- US037-C: FluxingPanel::Create(hwndParent, rect, FluxingPanel::Style::Card) 返回圆角矩形容器.
+- US037-D: FluxingTheme 适配 FluxingDarkModeBridge::CurrentPalette(), 亮/暗色变化时通过订阅者自动重绘.
+- US037-E: spec 038 重构 QuickPanelDialog 使用 4 个新控件 (推迟到 v0.18.27+).
+
+### 10.3 完成定义 (v0.18.26.0 ship)
+
+详见 .specify\specs\037-fluxing-components-v0\tasks.md. 28 tasks 分 7 phase (基础设施 / Theme 适配器 / 4 控件 / vcxproj+xmake 集成 / 测试 / 回归+字节验证 / Release).
+
+### 10.4 spec 038+ 路线图
+
+- spec 038 — QuickPanelDialog 重构 (用 FluxingButton + FluxingToggle + FluxingPanel + FluxingLabel 替换 win32 button).
+- spec 039 — FluxingTheme 接入 QuickPanelDialog + 200ms 渐变.
+- spec 040 — 多 DPI 验证清单 (DPI 100/150/200) + 弹窗 resize handler.
+- spec 041 — FluxingComponents 拖动支持 + Alt+, 热键冲突检测.
+- spec 042 — FluxingPanelHost 独立进程 + 8-12 入口 grid 布局.
+
+### 10.5 spec 037 spec / plan / tasks 状态
+
+-  37-fluxing-components-v0/spec.md (10623 B, BOM, CR=LF=120, 0 mojibake).
+-  37-fluxing-components-v0/plan.md (7762 B, BOM, CR=LF=202, 0 mojibake).
+-  37-fluxing-components-v0/tasks.md (4625 B, BOM, CR=LF=62, 0 mojibake).
+- 28 tasks 全 [ ] (待实施).
+- Constitution Check 通过 (I-V + R1-R9 + P1-P8 OK).
+
+---
+
+## 11. lessons-learned 累计
+
+- L01-L46 (L01 - L46): 46 lessons by 2026-07-04.
+- **L47 (待追加)**: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 是 PowerShell module 触发 .NET Hashtable "已添加项: 字典中的关键字 PATH 所添加的关键字 Path" 异常 (MSB6001). workaround: 用 cvars32.bat (纯 cmd 脚本) 不用 VsDevCmd.bat. 0.18.25.0 ship 时已用此 workaround.
+- L47 also: vcxproj <IntDir>SolutionDir-msbuild-... 缺 \ 反斜杠触发 MSB3491 
+imemsbuild 路径错误. spec 037 之前 3 个 test vcxproj 命中此 bug; 0.18.25.0 ship 时已修.
