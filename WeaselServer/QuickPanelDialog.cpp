@@ -1,15 +1,31 @@
-// spec 036: QuickPanelDialog implementation. See QuickPanelDialog.h for
-// design notes. This file is intentionally lightweight:
-//   - Plain Win32 (no WTL/ATL/MFC to keep TestQuickPanelDialog build cost
-//     low; see L24 link-probe pattern in spec 034 plan.md \xC2\xA72.1).
-//   - One static class; only one panel may be shown at a time.
-//   - All state is per-class-static; thread-affinity is the WeaselServer
-//     main UI thread (the dialog is created/destroyed from message-pump
-//     context, never from a worker thread).
+// spec 036 + spec 038: QuickPanelDialog implementation. See
+// QuickPanelDialog.h for design notes.
+//
+// L47 include order (Windows SDK 10.0.26100.0): the FluxingComponents
+// .h files reference D2D/DirectWrite types (ID2D1Factory, IDWriteFactory)
+// and ComPtr<>, so the PCH must include <unknwn.h> + <d2d1.h> +
+// <dwrite.h> + <wrl/client.h> in that order. WeaselServer stdafx.h
+// (WTL/ATL) does not include these, so we include them here after
+// stdafx.h. Order matters per L47-#4: d2d1.h transitively includes
+// dcommon.h which requires IUnknown from unknwn.h.
 
 #include "stdafx.h"
+
+// L47-#4: include order is load-bearing. WeaselServer/stdafx.h does
+// NOT include d2d1/dwrite (it pulls in WTL/ATL instead), so we add
+// them here in the documented safe order for Windows SDK 10.0.26100.0.
+#include <unknwn.h>
+#include <d2d1.h>
+#include <dwrite.h>
+#include <wrl/client.h>
+
 #include "QuickPanelDialog.h"
 #include "resource.h"
+
+#include "FluxingComponents/Button.h"
+#include "FluxingComponents/Toggle.h"
+#include "FluxingComponents/Label.h"
+#include "FluxingComponents/Panel.h"
 
 // spec 036 win32 constants. Defined here to keep the header light.
 #define QP_TIMER_AUTOCLOSE 1
@@ -22,12 +38,21 @@
 // Window class name. Registered once on first Show() call.
 static const wchar_t kClassName[] = L"FluxingQuickPanel_v0";
 
-// Static state.
+// Static state (private members; class methods can access them
+// directly, lambdas must use the public accessors).
 HWND QuickPanelDialog::s_hwnd = NULL;
 std::function<void(bool)> QuickPanelDialog::s_onAsciiToggle;
 std::function<void()> QuickPanelDialog::s_onDeploy;
+std::unique_ptr<fluxing::ui::FluxingButton>
+    QuickPanelDialog::s_deploy_button_;
+std::unique_ptr<fluxing::ui::FluxingToggle>
+    QuickPanelDialog::s_ascii_toggle_;
+std::unique_ptr<fluxing::ui::FluxingLabel>
+    QuickPanelDialog::s_title_label_;
+std::unique_ptr<fluxing::ui::FluxingPanel>
+    QuickPanelDialog::s_card_panel_;
 
-// Current displayed ASCII state (drives the toggle button label).
+// Current displayed ASCII state (drives the toggle knob position).
 static bool s_currentAscii = false;
 
 namespace {
@@ -43,8 +68,6 @@ bool RegisterClassOnce(HINSTANCE hInst) {
   wc.hCursor = LoadCursor(NULL, IDC_ARROW);
   wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
   wc.lpszClassName = kClassName;
-  // RegisterClassEx returns 0 on failure (e.g. class already exists).
-  // We use a sentinel: if the class exists, FindClass returns non-NULL.
   if (GetClassInfoExW(hInst, kClassName, &wc)) {
     return true;
   }
@@ -63,6 +86,81 @@ POINT ComputePanelOrigin() {
   return origin;
 }
 
+// AP-038-F: Tear down all 4 FluxingComponents unique_ptrs. The
+// destructors run deterministically: Destroy() -> KillTimer (toggle
+// animation) + Unsubscribe (theme) + ReleaseHwndRenderTarget (D2D)
+// + DestroyWindow (child HWND). After this returns, the FluxingToggle
+// 200ms slide timer is guaranteed dead.
+void DestroyFluxingControls() {
+  QuickPanelDialog::DeployButton().reset();
+  QuickPanelDialog::AsciiToggle().reset();
+  QuickPanelDialog::TitleLabel().reset();
+  QuickPanelDialog::CardPanel().reset();
+}
+
+// T002: Instantiate the 4 spec 037 Fluxing controls under the
+// dialog HWND. The card panel is the visual container (8px rounded
+// fill); the title label sits above it; the ASCII toggle and Deploy
+// button are children of the card panel.
+//
+// spec 037 R3: FluxingButton/Toggle fire on_click / on_changed
+// directly from WM_LBUTTONUP - they do NOT route through WM_COMMAND.
+// This is the entire point of using the spec 037 controls - the
+// ASCII toggle callback fires inside the toggle's WndProc, the
+// Deploy callback fires inside the button's WndProc, and we never
+// see WM_COMMAND for them. The native close (IDCANCEL) button
+// continues to fire WM_COMMAND.
+void CreateFluxingControls(HWND hwnd) {
+  using namespace fluxing::ui;
+
+  RECT client;
+  GetClientRect(hwnd, &client);
+
+  // Title label: "Quick Panel" at the top of the dialog (17pt Large).
+  RECT title_rc = {10, 5, client.right - 10, 25};
+  QuickPanelDialog::TitleLabel() = FluxingLabel::Create(
+      hwnd, title_rc, L"Quick Panel", FluxingLabel::FontSize::Large);
+
+  // Card panel: the rounded background container under the title.
+  RECT card_rc = {5, 30, client.right - 5, client.bottom - 5};
+  QuickPanelDialog::CardPanel() = FluxingPanel::Create(
+      hwnd, card_rc, FluxingPanel::Style::Card);
+
+  // ASCII toggle (FluxingToggle): inside the card panel, left side.
+  // Initial position reflects the current ASCII state (Chinese on
+  // entry = off; ASCII = on).
+  HWND card = QuickPanelDialog::CardPanel()->Hwnd();
+  RECT toggle_rc = {15, 10, 75, 30};
+  QuickPanelDialog::AsciiToggle() = FluxingToggle::Create(
+      card, toggle_rc, /*initial=*/s_currentAscii);
+  QuickPanelDialog::AsciiToggle()->SetOnChanged(
+      [](bool on) {
+        s_currentAscii = on;
+        if (QuickPanelDialog::OnAsciiToggle()) {
+          QuickPanelDialog::OnAsciiToggle()(on);
+        }
+        HWND h = QuickPanelDialog::ActiveHwnd();
+        if (h && IsWindow(h)) {
+          DestroyWindow(h);
+        }
+      });
+
+  // Deploy button (FluxingButton::Primary): inside the card panel,
+  // right side.
+  RECT deploy_rc = {client.right - 110, 5, client.right - 15, 35};
+  QuickPanelDialog::DeployButton() = FluxingButton::Create(
+      card, deploy_rc, L"Deploy", FluxingButton::Style::Primary);
+  QuickPanelDialog::DeployButton()->SetOnClick([]() {
+    if (QuickPanelDialog::OnDeploy()) {
+      QuickPanelDialog::OnDeploy()();
+    }
+    HWND h = QuickPanelDialog::ActiveHwnd();
+    if (h && IsWindow(h)) {
+      DestroyWindow(h);
+    }
+  });
+}
+
 }  // namespace
 
 void QuickPanelDialog::Show(bool currentAscii,
@@ -74,6 +172,8 @@ void QuickPanelDialog::Show(bool currentAscii,
     DestroyWindow(s_hwnd);
     s_hwnd = NULL;
   }
+  // Tear down any leftover Fluxing controls from a prior Show().
+  DestroyFluxingControls();
 
   s_onAsciiToggle = onAsciiToggle;
   s_onDeploy = onDeploy;
@@ -99,16 +199,13 @@ void QuickPanelDialog::Show(bool currentAscii,
   if (!s_hwnd) {
     return;
   }
-
-  // AP-036-I: center cursor in the panel and show it (UX nicety; user
-  // can immediately click the toggle without re-aiming). Skipped if the
-  // system has accessibility settings that disallow it.
-  // NOTE: For v0 we do NOT call SetCursorPos or SetCapture - keep it
-  // simple, the user can move the mouse themselves. Toggle is large
-  // enough to be a generous click target.
 }
 
 void QuickPanelDialog::Hide() {
+  // AP-038-F: Tear down Fluxing controls BEFORE DestroyWindow so
+  // the FluxingToggle 200ms animation timer is killed while its
+  // HWND is still valid (its KillTimer needs a live hwnd_).
+  DestroyFluxingControls();
   if (s_hwnd && IsWindow(s_hwnd)) {
     DestroyWindow(s_hwnd);
   }
@@ -141,31 +238,12 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT uMsg,
 }
 
 LRESULT QuickPanelDialog::OnCreate(HWND hwnd, WPARAM, LPARAM) {
-  // 2 buttons side-by-side: ASCII toggle (left) and Deploy (right).
-  // Layout: 10px left margin, 10px right margin, 10px between buttons,
-  // 30px top margin, 36px height, 10px bottom margin.
-  int y = 30;
-  int asciiX = 10;
-  int deployX = asciiX + QP_BUTTON_W + 10;
+  // T002: instantiate the 4 spec 037 Fluxing components.
+  CreateFluxingControls(hwnd);
 
-  // ASCII toggle. Label reflects current state. We update the label on
-  // every Show() call (in case state changed between Show invocations).
-  const wchar_t* label = s_currentAscii ? L"英文 [切 ASCII]"
-                                          : L"中文 [切 ASCII]";
-  CreateWindowExW(0, L"BUTTON", label,
-                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                  asciiX, y, QP_BUTTON_W, QP_BUTTON_H,
-                  hwnd, (HMENU)(UINT_PTR)ID_QUICKPANEL_BTN_ASCII,
-                  GetModuleHandle(NULL), NULL);
-
-  // Deploy button.
-  CreateWindowExW(0, L"BUTTON", L"重新部署",
-                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                  deployX, y, QP_BUTTON_W, QP_BUTTON_H,
-                  hwnd, (HMENU)(UINT_PTR)ID_QUICKPANEL_BTN_DEPLOY,
-                  GetModuleHandle(NULL), NULL);
-
-  // Close (X) button at the top-right corner of the panel.
+  // spec 036 AP-036-M: native close (X) button preserved at the
+  // top-right corner. TestQuickPanelDialog T1 + T6 verify that
+  // this HWND exists and that WM_COMMAND IDCANCEL fires DestroyWindow.
   CreateWindowExW(0, L"BUTTON", L"X",
                   WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                   QP_WIDTH - 30, 5, 22, 22,
@@ -177,6 +255,12 @@ LRESULT QuickPanelDialog::OnCreate(HWND hwnd, WPARAM, LPARAM) {
 
 LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
   KillTimer(hwnd, QP_TIMER_AUTOCLOSE);
+  // AP-038-F: clean up Fluxing components here too. WM_DESTROY
+  // fires after the user clicks any button (callback already
+  // triggered DestroyWindow). The destructors run KillTimer +
+  // Unsubscribe + ReleaseHwndRenderTarget + DestroyWindow in the
+  // documented order.
+  DestroyFluxingControls();
   if (s_hwnd == hwnd) {
     s_hwnd = NULL;
   }
@@ -185,27 +269,18 @@ LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
   return 0;
 }
 
-LRESULT QuickPanelDialog::OnCommand(HWND hwnd, WPARAM wParam, LPARAM) {
+LRESULT QuickPanelDialog::OnCommand(HWND, WPARAM wParam, LPARAM) {
   WORD id = LOWORD(wParam);
+  // Only the native close (X) button routes through WM_COMMAND in
+  // the spec 038 layout. The ASCII toggle and Deploy button fire
+  // their callbacks directly from their own WndProcs via
+  // SetOnChanged / SetOnClick.
   switch (id) {
-    case ID_QUICKPANEL_BTN_ASCII:
-      // AP-036-J: toggle the state, fire the callback, then destroy.
-      // The callback is responsible for invoking m_pRequestHandler->SetOption.
-      s_currentAscii = !s_currentAscii;
-      if (s_onAsciiToggle) {
-        s_onAsciiToggle(s_currentAscii);
-      }
-      DestroyWindow(hwnd);
-      return 0;
-    case ID_QUICKPANEL_BTN_DEPLOY:
-      if (s_onDeploy) {
-        s_onDeploy();
-      }
-      DestroyWindow(hwnd);
-      return 0;
     case IDCANCEL:
-      // X button.
-      DestroyWindow(hwnd);
+      // X button -> DestroyWindow; OnDestroy tears down controls.
+      if (s_hwnd && IsWindow(s_hwnd)) {
+        DestroyWindow(s_hwnd);
+      }
       return 0;
   }
   return 0;
@@ -225,7 +300,6 @@ LRESULT QuickPanelDialog::OnTimer(HWND hwnd, WPARAM wParam, LPARAM) {
   if (wParam == QP_TIMER_AUTOCLOSE) {
     KillTimer(hwnd, QP_TIMER_AUTOCLOSE);
     // AP-036-L: only destroy if the panel still does not have focus.
-    // This guards against the "user clicks back into the panel" case.
     if (GetFocus() != hwnd) {
       DestroyWindow(hwnd);
     }
