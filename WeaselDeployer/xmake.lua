@@ -5,7 +5,7 @@ target("WeaselDeployer")
   add_links("imm32", "kernel32", "rime")
   add_deps("WeaselIPC", "RimeWithWeasel")
   add_files("$(projectdir)/PerMonitorHighDPIAware.manifest")
-  add_ldflags("/DEBUG /OPT:ICF /LARGEADDRESSAWARE /ERRORREPORT:QUEUE")
+  add_ldflags("/DEBUG /LARGEADDRESSAWARE /ERRORREPORT:QUEUE /OPT:NOREF /OPT:NOICF")
   before_build(function(target)
     local target_dir = path.join(target:targetdir(), target:name())
     if not os.exists(target_dir) then
