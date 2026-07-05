@@ -1,4 +1,4 @@
--- 工作区的xmake.lua
+﻿-- 工作区的xmake.lua
 set_project("weasel")
 
 -- 定义全局变量
@@ -62,7 +62,7 @@ if is_mode("debug") then
   includes("test/TestResponseParser")
 else
   add_cxflags("/GL")
-  add_ldflags("/LTCG /INCREMENTAL:NO", {force = true})
+  add_ldflags("/LTCG:OFF /INCREMENTAL:NO", {force = true})
 end
 
 rule("subcmd")
