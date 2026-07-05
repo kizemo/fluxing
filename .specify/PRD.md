@@ -47,14 +47,14 @@
 
 ### 3.1 P1 实施（5 项 + 1 横切）
 
-| 编号 | 需求 | 优先级 | 子 spec | 状态（2026-07-01） |
+| 编号 | 需求 | 优先级 | 子 spec | 状态（2026-07-05, 0.18.26.0） |
 |---|---|---|---|---|
 | F1 | 默认快捷键（`,`/`.` 翻页 / `Shift_L/R` 选候选 / `Shift+space` 切中英 / `Ctrl+Shift+9/0` 标点/简繁） | P1 | 005 | **已 ship 0.18.0-0.18.5** |
-| F2 | 托盘快速设置面板（`Alt+,` / 左键单击托盘 → 8-12 个常用入口） | P1 | 006 | design 完成，代码未开始 |
+| F2 | 托盘快速设置面板（`Alt+,` / 左键单击托盘 → 8-12 个常用入口） | P1 | 006/036/038 | **ship 0.18.24.0-0.18.25.0** (spec 036) + spec 038 待 ship (QuickPanelDialog 重构) |
 | F3 | yaml 可视化设置 UI（4 类配置可视化编辑） | P1 | 007 | design 完成，代码未开始 |
 | F4 | 候选字右键一键删除/屏蔽 | P1 | 008 | design 完成，代码未开始 |
 | F5 | 常用短语独立于用户词典（`Alt+K` 列表） | P1 | 009 | design 完成，代码未开始 |
-| F6 | 暗色主题跟随系统（横切 006/007/008/009） | P1 | 004 §9 | spec 004 已收口 |
+| F6 | 暗色主题跟随系统（横切 006/007/008/009） | P1 | 004/033/037 | **ship 0.18.22.0 + 0.18.26.0** (spec 037 FluxingComponents 控件库 v0) |
 
 ### 3.2 P2 仅设计（2 项）
 
@@ -64,7 +64,7 @@
 | F8 | 中英混合输入 / ASCII 模式 auto | P2 | 005 扩展 | 推迟到 v2.1+ |
 | F9 | 托盘图标合成叠点 | P2 | 006 扩展 | 推迟到 v2.1+ |
 | F10 | 导出/导入方案（rime.zip） | P2 | 010 | P2 设计中 |
-| F11 | 暗色主题跟随系统 | P1 | 004 §9 | spec 004 已收口（与 F6 同义） |
+| F11 | 暗色主题跟随系统 | P1 | 033/034 | **ship 0.18.22.0-0.18.25.0** (spec 033 FluxingDarkModeBridge + 034 TestDarkModeBroadcast) |
 | F12 | Emoji 面板（`Alt+E`） | P2 | 009 扩展 | 推迟到 v2.1+ |
 
 ### 3.3 P3 仅设计（1 项）
@@ -372,9 +372,21 @@ spec 006 完整 mac 风面板设计的**第二阶段 ship 切片**. 仅 ship 4 �
 
 ---
 
+## 10.6 v0.18.26.0 已 ship (2026-07-05)
+
+spec 037 (FluxingComponents 控件库 v0) 28 tasks 全 [x]. 14 production files (Button / Toggle / Panel / Label + D2DRenderer + FluxingTheme) + 4 test files (TestFluxingButton / Toggle / Panel / Theme + TestFluxingMain) + vcxproj + xmake.lua 集成 + weasel.sln 1 project 注册.
+
+TestFluxingComponents: 35+ assertions PASS (Button 8/8 + Toggle 12/12 + Panel 6/6 + Theme 9/9). 
+
+15/15 test projects, ALL TESTS PASSED. L42 byte-verify: 0x001E1E1E 仍在 weasel.dll. L14 arch-verify: 6 binary x86=0x14C, weaselx64.dll=0x8664.
+
+release/fluxing-0.18.26.0-installer.exe (42,853,196 bytes).
+
+L47 正式追加 (6 byte/syntax bugs from spec 037 reactive fix cascade). spec 038 bootstrap (QuickPanelDialog 重构使用 spec 037 4 个控件) 已创建.
+
 ## 11. lessons-learned 累计
 
-- L01-L46 (L01 - L46): 46 lessons by 2026-07-04.
+- L01-L47 (L01 - L47): 47 lessons by 2026-07-05.
 - **L47 (待追加)**: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 是 PowerShell module 触发 .NET Hashtable "已添加项: 字典中的关键字 PATH 所添加的关键字 Path" 异常 (MSB6001). workaround: 用 cvars32.bat (纯 cmd 脚本) 不用 VsDevCmd.bat. 0.18.25.0 ship 时已用此 workaround.
 - L47 also: vcxproj <IntDir>msbuild\... 缺 \ 反斜杠触发 MSB3491 imemsbuild 路径错误. spec 037 之前 3 个 test vcxproj 命中此 bug; 0.18.25.0 ship 时已修.
 
