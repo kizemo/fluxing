@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|ARM">
@@ -311,6 +311,13 @@
     <ClCompile Include="..\RimeWithWeasel\FluxingDarkModeBridge.cpp" />
     <ClCompile Include="..\RimeWithWeasel\WeaselUtility.cpp" />
     <ClCompile Include="WeaselPanel.cpp" />
+    <ClCompile Include="FluxingComponents\Button.cpp" />
+    <ClCompile Include="FluxingComponents\D2DRenderer.cpp" />
+    <ClCompile Include="FluxingComponents\FluxingTheme.cpp" />
+    <ClCompile Include="FluxingComponents\Label.cpp" />
+    <ClCompile Include="FluxingComponents\Panel.cpp" />
+
+    <ClCompile Include="FluxingComponents\Toggle.cpp" />
     <ClCompile Include="WeaselUI.cpp" />
   </ItemGroup>
   <ItemGroup>
