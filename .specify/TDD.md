@@ -419,6 +419,33 @@ PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 触
 - AGENTS.md sec 2.5 smoke test 13+1/13+1 PASS
 - "=== ALL TESTS PASSED ===" 出现
 
+### 9.6 v0.18.27.0 ship gate (2026-07-05, 实际 ship 完成)
+
+- **15 test projects all PASS** (14 现有 + 1 new TestQuickPanelRefactor) - 实测 ALL TESTS PASSED
+- **TestQuickPanelRefactor 8/8 assertions** (T1 5 descendants + T2a/T2b toggle initial state + T3a/T3b WM_LBUTTONUP no crash + T4 dark-mode re-invalidate + T5 Deploy button Primary style)
+- **TestQuickPanelDialog 15/15 assertions** (ExitProcess 跳过 atexit, L48 防御性测试退出模式)
+- L42 byte-verify: 0x001E1E1E 仍在 weasel.dll (15 triple matches)
+- L14 arch-verify: 6 binary 全部 arch 一致 (x86=0x14C, x64=0x8664, ARM64=0xAA64, ARM=0x01C4)
+- L47 byte-verify: 全部 source file byte-healthy (C0=0 C1=0, .h/.cpp LF, .sln/.bat CRLF)
+- L48 lessons-learned 正式追加 (7 root-causes: FluxingD2DRenderer atexit crash + GetClassNameW NULL buffer bug + sln ProjectConfiguration line-separation + msbuild vcxproj-direct SolutionDir trap + QuickPanelDialog s_hwnd lifecycle + unique_ptr<Fluxing*> accessor pattern AP-038-A + WM_LBUTTONUP callback contract)
+- spec 039 bootstrap: 40 tasks / 8 phase, FluxingComponents 动画扩展 + 4 新控件 (Slider/Dropdown/Checkbox/Radio)
+
+### 9.7 v0.18.27.0 TestQuickPanelRefactor 详情
+
+| 测试 | assertions | 状态 |
+|---|---|---|
+| TestQuickPanelRefactor | 8/8 | PASS (T1 5 descendants + T2a/toggle initial false + T2b/initial state + T3a/toggle exists + T3b/WM_LBUTTONUP no crash + T3b/toggle still valid + T4/dark-mode subscribers + T5/Deploy button Primary) |
+| TestQuickPanelDialog | 15/15 | PASS (15 assertions spec 038 adapted, ExitProcess(rc) 跳过 atexit) |
+| TestQuickPanelRefactor 总计 | **8/8** | **PASS** |
+
+- 15 test projects all PASS (14 现有 + 1 new TestQuickPanelRefactor)
+- 234+8 = 242+ assertions
+- L42 byte-verify 0x001E1E1E 仍在 weasel.dll
+- L14 arch-verify 6 binary 全部 arch 一致
+- L47 byte-verify source files byte-healthy
+- "=== ALL TESTS PASSED ===" 出现
+
+
 ---
 
 ## 10. code coverage (deferred)
