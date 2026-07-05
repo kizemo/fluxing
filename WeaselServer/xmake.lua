@@ -6,7 +6,7 @@ target("WeaselServer")
   add_deps("WeaselUI", "WeaselIPC", "RimeWithWeasel", "WeaselIPCServer")
 
   add_files("$(projectdir)/PerMonitorHighDPIAware.manifest")
-  add_ldflags("/DEBUG /OPT:REF /OPT:ICF /LARGEADDRESSAWARE /ERRORREPORT:QUEUE")
+  add_ldflags("/DEBUG /LARGEADDRESSAWARE /ERRORREPORT:QUEUE /OPT:NOREF /OPT:NOICF")
   set_policy("windows.manifest.uac", "invoker")
   before_build(function(target)
     local target_dir = path.join(target:targetdir(), target:name())
