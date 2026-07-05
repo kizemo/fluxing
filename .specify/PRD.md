@@ -1,4 +1,4 @@
-﻿﻿# Fluxing v2 · Product Requirements Document (PRD)
+﻿# Fluxing v2 · Product Requirements Document (PRD)
 
 > **项目级 PRD**。覆盖 spec 004 路线图与 7 份子 spec（005-011）的产品愿景、用户故事、验收标准、风险登记。
 > 与子 spec 的关系：本文是"v2 全局视图"；子 spec 的 `spec.md` 是"局部详情"——本文是 entry point，子 spec 是 detail page。
@@ -330,7 +330,28 @@ L46 #2 fix: WeaselServer/xmake.lua /OPT:REF /OPT:ICF → /OPT:NOREF /OPT:NOICF (
 
 ### 9.4 L31 follow-up fix (L31 vcxproj OutDir path-glue 闭合)
 
-3 个 test vcxproj (TestBindingResolution, TestResponseParser, TestYamlRoundTripE2E) 的 <IntDir>msbuild\... 缺 \ 反斜杠, 触发 MSB3491 imemsbuild 路径 (L31 root cause B). 0.18.25.0 ship 时已修. 验证: msbuild_path2.log 中无 imemsbuild 字符串, un-test-suite.bat exit=0.
+3 个 test vcxproj (TestBindingResolution, TestResponseParser, TestYamlRoundTripE2E) 的 <IntDir>msbuild\... 缺 \ 反斜杠, 触发 MSB3491 imemsbuild 路径 (L31 root cause B). 0.18.25.0 ship 时已修.
+
+## 10.7 v0.18.27.0 已 ship (2026-07-05)
+
+spec 038 (QuickPanelDialog 重构 + FluxingComponents 化) + L48 防御性测试退出模式追加. 5 production files (QuickPanelDialog.h+.cpp 重写, WeaselServer.vcxproj + xmake.lua 加 include paths) + 7 test files (TestQuickPanelRefactor/ 全套 7 文件 + TestQuickPanelDialog.cpp 改写为 spec 038 适配 15 assertions) + weasel.sln + TestQuickPanelDialog.vcxproj + run-test-suite.bat 更新.
+
+**TestQuickPanelRefactor** (新项目): 8 assertions PASS (T1 5 descendants + T2a/T2b toggle initial state + T3a/T3b WM_LBUTTONUP no crash + T4 dark-mode re-invalidate + T5 Deploy button Primary style).
+
+**TestQuickPanelDialog** (改写): 15 assertions PASS + ExitProcess(rc) 跳过 atexit static destructors (L48 防御性测试退出模式, FluxingD2DRenderer singleton 析构 crash 防护).
+
+15/15 test projects (含 TestQuickPanelRefactor 新项目), ALL TESTS PASSED. L42 byte-verify: 0x001E1E1E 仍在 weasel.dll (15 triple matches). L14 arch-verify: WeaselServer/Deployer/Setup/rime.dll = 0x14C x86, weaselx64.dll = 0x8664 x64, weaselARM64.dll = 0xAA64 ARM64, weaselARM.dll = 0x01C4 ARM. L47 byte-verify: 全部 source file byte-healthy (C0=0 C1=0, .h/.cpp LF, .sln/.bat CRLF).
+
+release/fluxing-0.18.27.0-installer.exe (42,873,668 bytes, +20,472 bytes from 0.18.26.0).
+
+L48 正式追加 (7 root-causes from spec 038 verification: FluxingD2DRenderer atexit crash + GetClassNameW NULL buffer bug + sln ProjectConfiguration line-separation + msbuild vcxproj-direct SolutionDir trap + QuickPanelDialog s_hwnd lifecycle + unique_ptr<Fluxing*> accessor pattern AP-038-A + WM_LBUTTONUP callback contract). spec 039 bootstrap (FluxingComponents 动画扩展 + 4 新控件 Slider/Dropdown/Checkbox/Radio) 已创建.
+
+## 11. lessons-learned 累计 (更新)
+
+- L01-L48 (L01 - L48): 48 lessons by 2026-07-05 (L47 + L48 added).
+- L47: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), VsDevCmd.bat 触发 .NET Hashtable 异常. workaround: vcvars32.bat (纯 cmd). vcxproj <IntDir> 缺 \ 反斜杠触发 MSB3491. 0.18.25.0/0.18.26.0 ship 时已修.
+- L48 (新): spec 038 期间发现 7 个 root-causes (FluxingD2DRenderer atexit crash → ExitProcess + GetClassNameW NULL buffer → 0 + sln ProjectConfiguration 必须 line-separated + msbuild vcxproj-direct SolutionDir 是 project-local + QuickPanelDialog s_hwnd 仅 Show() 设置 + unique_ptr 静态成员需要 public accessors + WM_LBUTTONUP callback contract). 0.18.27.0 ship 时已应用全部 fix.
+ 验证: msbuild_path2.log 中无 imemsbuild 字符串, un-test-suite.bat exit=0.
 
 L47 lessons-learned 同步追加 (PowerShell 5.1 + VsDevCmd 触发 MSB6001 PATH/Path 冲突 + vcxproj $(SolutionDir)msbuild 缺 \ 引发 MSB3491; workaround: 用 cvars32.bat 不用 VsDevCmd.bat).
 
