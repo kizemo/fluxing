@@ -3345,3 +3345,90 @@ If any of the three fails, the release is broken. Do NOT tag. (L46 verification 
 - AP-L46-D: assuming `core.autocrlf` settings do not affect vcxproj ClCompile paths. They do, when a new .cpp file is committed with LF on Windows.
 
 **Cross-references**: L42 (dead-stripped code), L43 (/LTCG:OFF), L40 (CHANGELOG-only releases), L41 (smoke test recipe), L10 (librime Win32-only).
+## L47 - spec 037 (0.18.26.0) BOM-by-WriteAllText + namespace+main rewrite cascade
+
+**Triggered by**: 0.18.26.0 ship attempt for spec 037 (FluxingComponents v0). 6 distinct byte/syntax bugs caused by PowerShell write discipline + namespace-rewrite automation. Each one blocked compile; together they took the full spec 037 to compile. L01 (UTF-8 BOM in .bat) and L31 (vcxproj path-glue) are precursors but L47 is the first time BOM was applied to .vcxproj + .h files in a way that survived a `[Text.Encoding]::UTF8.GetBytes($x)` round-trip.
+
+**The 6 bugs (cascade from one root cause: PowerShell `[Text.Encoding]::UTF8` round-trip + reactive fix scripts that mutated each other)**:
+
+1. **weasel.props has UTF-8 BOM (L47-#1)**:
+   - File: `weasel.props` (gitignored, per-machine).
+   - Bug: BOM `EF BB BF` prefix on `<?xml version="1.0"?>`. MSBuild vcxproj import parser sees the BOM and emits `error MSB4024: 未能加载导入的项目文件"F:\soft\00selfmade\rime\weasel.props"。根级别上的数据无效。` for every project that imports weasel.props.
+   - Why xmake missed it: xmake does not use weasel.props; it reads VERSION_MAJOR etc from env.bat directly.
+   - Fix: byte-level strip BOM with `[System.IO.File]::ReadAllBytes` + slice + `WriteAllBytes`.
+   - Why this is novel vs L01: L01 was about GBK pollution in PowerShell string APIs. L47 is about the BOM that `[Text.Encoding]::UTF8.GetString` + `WriteAllBytes` ADDS to the output, not the corruption that `Get-Content` introduces.
+
+2. **WeaselUI.vcxproj has 4 stacked BOMs (L47-#2)**:
+   - File: `WeaselUI/WeaselUI.vcxproj` (line 1).
+   - Bug: during spec 037 Phase 8 vcxproj extension, an `Apply Patch` operation wrote `<?xml version="1.0" encoding="utf-8"?>` with a BOM, but the file ALREADY had a BOM. After the write, line 1 was `EF BB BF EF BB BF EF BB BF EF BB BF <?xml ...`. MSBuild's vcxproj parser fails on the double-BOM with `error MSB4025: 未能加载项目文件。根级别上的数据无效。`.
+   - Fix: function `Remove-AllBOMs` that loops `while (b[0]==0xEF && b[1]==0xBB && b[2]==0xBF) b = b[3..]`, then `WriteAllBytes`. Handles 1, 2, 4, or N stacked BOMs.
+   - Anti-pattern AP-L47-B: do NOT write to a vcxproj file with a BOM if the file already has one. Always strip the existing BOM first, or use byte-level patch that does not round-trip the entire file.
+   - Why this is novel vs L01: L01 was about file CONTENT corruption. L47 is about the same byte (`EF BB BF`) being applied MULTIPLE TIMES in a single file (the cumulative result of reactive fix scripts each re-adding the BOM).
+
+3. **FluxingComponents/ subdir stdafx.cpp causes MSB8027 "two files produce same PCH" (L47-#3)**:
+   - Files: `WeaselUI/FluxingComponents/stdafx.cpp` + `WeaselUI/WeaselUI.vcxproj`.
+   - Bug: the subdir has its own stdafx.cpp with `<PrecompiledHeader>Create</PrecompiledHeader>`. The main WeaselUI/ also has a stdafx.cpp with `Create`. Both try to generate `WeaselUI.pch` -> MSBuild error MSB8027 ("two or more files will produce to the same output location").
+   - Why xmake missed it: xmake does not use MSVC PCH.
+   - Fix: remove `<ClCompile Include="FluxingComponents\stdafx.cpp">...</ClCompile>` from WeaselUI.vcxproj. The 6 other .cpp in FluxingComponents/ (Button, Toggle, Panel, Label, FluxingTheme, D2DRenderer) inherit `<PrecompiledHeader>Use</PrecompiledHeader>` from the project layer, so they use the main WeaselUI.pch.
+   - Anti-pattern AP-L47-C: do NOT add a subdirectory PCH generator when the parent project already has one. The subdir .cpp files can use the parent PCH by including the same `stdafx.h` header.
+
+4. **d2d1.h + wrl/client.h in PCH (Windows SDK 10.0.26100.0) triggers dcommon.h C2144 (L47-#4)**:
+   - File: `WeaselUI/FluxingComponents/stdafx.h`.
+   - Bug: `#include <d2d1.h>` + `#include <wrl/client.h>` in the PCH. Windows SDK 10.0.26100.0's d2d1.h includes dcommon.h, which has a `struct IDXGISurface;` forward decl that fails with `error C2144: 语法错误:"IDXGISurface"的前面应有";"` when wrl/client.h has not yet provided the COM base.
+   - Why this is novel: earlier SDKs (10.0.19041 / 10.0.22621) silently worked. 10.0.26100.0 is stricter about the IUnknown base being visible before d2d1.h's dcommon.h is read.
+   - Fix: include `<unknwn.h>` BEFORE `<d2d1.h>` in stdafx.h. Order matters: windows.h -> unknwn.h -> d2d1.h -> dwrite.h -> wrl/client.h.
+   - Alternative: drop d2d1.h + dwrite.h from the PCH and let each .cpp include them directly. Works but loses the precompiled-header speedup.
+
+5. **LNK2005 "main already defined" when 4 test files each define int main() (L47-#5)**:
+   - File: `test/TestFluxingComponents/*.cpp` (4 of them).
+   - Bug: each test file (TestFluxingButton / Toggle / Panel / Theme) had its own `int main() { ... return g_fail; }`. Linker merges them, finds 4 `main` symbols, aborts.
+   - Why this is novel: prior specs (TestDefaultHotkeys, TestDarkModeBroadcast, etc.) had a SINGLE .cpp per test executable, so the pattern was not exercised.
+   - Fix: add a TestFluxingMain.cpp that has the actual `int main() { ... }`, and rename the 4 test functions to `namespace fluxing_test { int RunButtonTest() { ... } }`, `RunToggleTest()`, `RunPanelTest()`, `RunThemeTest()`. TestFluxingMain.cpp calls all 4 in sequence and reports total pass/fail.
+   - Anti-pattern AP-L47-D: do NOT have multiple `int main()` in the same executable. Use a `fluxing_test::*Test()` convention with a single TestMain.cpp.
+
+6. **Reactive PS `-replace` leaves `\\r\\n` as literal ASCII text (L47-#6)**:
+   - Trigger: PS script uses `"`r`n"` in a double-quoted string assigned to `$repl`, then applies `[System.IO.File]::WriteAllBytes` via `[System.Text.Encoding]::UTF8.GetBytes($repl)`. The escape sequence `\`r`\`n` in PS's double-quote context is interpreted as a backslash + r + backtick + n, NOT as the CR+LF escape. The file ends up with literal text `\`r`\`n` in it (5 ASCII bytes: 0x5C 0x72 0x5C 0x6E), causing `error C2632: 'int' 后面的 'int' 非法` or similar syntax errors.
+   - Why this is novel: this is the first time a reactive fix script in this project has been looped 4 times (one per test cpp), and each iteration accidentally inserted the literal escape.
+   - Fix: do NOT use PS `-replace` with `\`r`\`n` in the replacement string. Use byte-level patch with `[byte[]]` patterns (e.g. `[System.Text.Encoding]::UTF8.GetBytes("`r`n")` outside of the double-quoted context, or just `0x0D, 0x0A` byte arrays). Or use single-quoted PS strings: `'namespace fluxing_test {' + "`r`n" + 'int RunTest() { ...' }` - the single-quoted part is literal, the backtick-r-backtick-n is the actual CR LF escape.
+   - Detection: after any reactive write, byte-grep for the literal sequence `0x5C 0x72 0x5C 0x6E` (`\r\n` as 4 ASCII chars) in the written file. If present, the file is corrupted.
+
+**Root cause (all 6)**: a single line in spec 037 bootstrap ("use PS WriteAllText to add vcxproj ClCompile entries") cascaded through 4 reactive fix attempts, each of which used a different PS idiom (WriteAllText with encoding.UTF8, ApplyPatch with -replace, manual `$b[0..N]` slicing, $variable interpolation), and each introduced a new byte-level or syntax-level bug. The fix scripts fixed one bug and introduced another.
+
+**Lesson**:
+
+A. **Do NOT use `[Text.Encoding]::UTF8` round-trip in reactive fix scripts.** This adds a BOM to .vcxproj / .h files (L01 / L47-#2). The byte-level discipline is: read bytes, modify bytes in-place (Find + Slice + Splice), write bytes. No string round-trip.
+
+B. **vcxproj does NOT need a UTF-8 BOM.** MSBuild vcxproj parser is BOM-tolerant but if the file already has a BOM, do not add another one. After any vcxproj edit, run `Remove-AllBOMs` (function in spec 037 snippet) which loops while first 3 bytes are `EF BB BF`.
+
+C. **Do NOT include `<d2d1.h>` in the PCH unless `<unknwn.h>` is already included first.** Windows SDK 10.0.26100.0's d2d1.h transitively includes dcommon.h which forward-declares `IDXGISurface`, which requires the COM base to be visible.
+
+D. **Subdirectory PCH is an anti-pattern.** Do NOT add a `stdafx.cpp` to a subdirectory if the parent project already has one. The subdir .cpp files will use the parent's PCH automatically as long as they include the same `stdafx.h`.
+
+E. **For multi-test executables, use a TestMain.cpp + namespace convention.** One `int main()` per executable. Per-test functions get `namespace fluxing_test { int RunButtonTest() { ... } }`.
+
+F. **Reactive fix scripts MUST byte-verify their output before commit.** A simple "[regex]::Matches($bytes, '\\x5C\\x72\\x5C\\x6E')" check catches L47-#6 in 1 second. Run it as the LAST line of every fix script.
+
+**Verification recipe for future spec bootstrap with new subdirectory**:
+
+1. Write the production code with `[System.IO.File]::WriteAllBytes(path, [System.Text.Encoding]::UTF8.GetBytes(content))` (UTF-8 WITHOUT BOM).
+2. After every write, byte-check: first 3 bytes must NOT be `EF BB BF`.
+3. If the file already had a BOM and the new content was meant to replace the first line, byte-splice (Find `<?xml` and insert before) instead of round-trip.
+4. For multi-test executables, the test files use `fluxing_test::Run<Test>Test()` convention.
+5. The PCH order: windows.h -> unknwn.h -> d2d1.h -> dwrite.h -> wrl/client.h.
+6. The subdirectory MUST NOT have its own stdafx.cpp with `<PrecompiledHeader>Create</PrecompiledHeader>`.
+
+**Anti-patterns (AP-L47-A through F)**:
+- AP-L47-A: using `[Text.Encoding]::UTF8.GetBytes($string)` to write a .vcxproj or .h file that already has a BOM, without first stripping the BOM. Result: stacked BOMs.
+- AP-L47-B: `Apply Patch` / `apply_patch` with `--replace-all` on a .vcxproj file that has a BOM. Result: stacked BOMs.
+- AP-L47-C: adding `<PrecompiledHeader>Create</PrecompiledHeader>` to a subdirectory .cpp when the parent already has it. Result: MSB8027.
+- AP-L47-D: defining `int main()` in multiple .cpp files of the same executable. Result: LNK2005.
+- AP-L47-E: using `"`r`n"` in a double-quoted PS string inside a `-replace` or `[IO.File]::WriteAllBytes` operation. Result: literal `\r\n` (4 ASCII chars) in the output.
+- AP-L47-F: relying on a single compile-error message to identify the root cause of a byte-level corruption. The 6 bugs in this L47 entry all surfaced as similar compile errors (C2144, LNK2005, error MSB4024), but each had a DIFFERENT root cause. Always byte-grep for the file-level state (BOM count, PCH config, multi-main, escape sequence literal) BEFORE reacting to the compile error.
+
+**Cross-references**:
+- L01 (UTF-8 BOM) - L47 is the MSBuild / vcxproj version of the L01 problem.
+- L31 (vcxproj path-glue) - L31 fixes the LNK output path; L47 fixes the vcxproj INPUT path (BOM).
+- L40 (PRD/TDD byte corruption) - L40 is content corruption (literal ?), L47 is structural corruption (stacked BOM).
+- L43 (/LTCG:OFF per-target) - L43 fixes linker errors, L47 fixes compiler errors.
+- L45 (byte-slice + autocrlf) - L45 is the SAME workflow as L47 (reactive fix script), but L45 errors are at the byte-array type level, L47 errors are at the BOM/CRLF level.
+- L46 (msbuild path not verified) - L46 is the SAME root cause (msbuild path was not end-to-end tested). L47 is the next spec's manifestation.
