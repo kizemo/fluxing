@@ -393,10 +393,27 @@ PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 触
         └─────────────────────┘
 `
 
-### 9.4 v0.18.26.0 ship gate
+### 9.4 v0.18.26.0 ship gate (2026-07-05, 实际 ship 完成)
 
-- 14 test projects all PASS (13 现有 + 1 new TestFluxingComponents)
-- 115+18 = 133+ assertions
+- **15 test projects all PASS** (14 现有 + 1 new TestFluxingComponents) - 实测 ALL TESTS PASSED
+- **199+35 = 234+ assertions** (TestFluxingComponents Button 8 + Toggle 12 + Panel 6 + Theme 9 = 35 new)
+- L42 byte-verify: 0x001E1E1E 仍在 weasel.dll
+- L14 arch-verify: 6 binary 全部 arch 一致 (WeaselServer / WeaselDeployer / WeaselSetup / weasel.dll / rime.dll = 0x14C, weaselx64.dll = 0x8664)
+- L47 lessons-learned 正式追加 (6 byte/syntax bugs from spec 037 reactive fix cascade)
+- spec 038 bootstrap: 26 tasks / 6 phase, QuickPanelDialog 重构使用 spec 037 4 个控件
+
+### 9.5 v0.18.26.0 TestFluxingComponents 详情
+
+| 测试 | assertions | 状态 |
+|---|---|---|
+| TestFluxingButton | 8/8 | PASS (Create + Hwnd + Label + Style + WM_LBUTTONUP + SetLabel x 2 + theme callback) |
+| TestFluxingToggle | 12/12 | PASS (Create false/true x 2 + IsOn init x 2 + SetOn true + OnChanged + idempotence + WM_LBUTTONUP flip + 200ms anim + stable) |
+| TestFluxingPanel | 6/6 | PASS (Create Card + Hwnd + GetStyle + kCardRadius==8 + Create Plain + GetStyle) |
+| TestFluxingTheme | 9/9 | PASS (Instance 单例 + Subscribe A + B + unsubscribe A + 3-subscriber FIFO x 2) |
+| **TestFluxingComponents 总计** | **35/35 + 4/4** | **ALL PASS** |
+
+- 15 test projects all PASS (14 现有 + 1 new TestFluxingComponents)
+- 199+35 = 234+ assertions (TestFluxingComponents Button 8 + Toggle 12 + Panel 6 + Theme 9 = 35 new)
 - L42 byte-verify  x001E1E1E 仍在 weasel.dll
 - L14 arch-verify 6 binary 全部 arch 一致
 - AGENTS.md sec 2.5 smoke test 13+1/13+1 PASS
