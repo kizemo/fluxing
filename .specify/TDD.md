@@ -1,4 +1,4 @@
-# Fluxing v2 · Technical Design Document / Test Strategy (TDD)
+﻿# Fluxing v2 · Technical Design Document / Test Strategy (TDD)
 
 > **项目级 TDD 策略**。定义测试金字塔、各层测试覆盖目标、CI 集成方案、当前缺口。
 > 与子 spec 的关系：子 spec `plan.md` 的"风险"段列了各自的单测点；本文是"v2 整体测试架构"，子 spec 是局部实施。
@@ -316,3 +316,94 @@ test/
 **Spec count:** 35 spec directories (000-035, with 013, 025-bookkeeping, 025-bootstrapper naming variants per L23 history).
 
 **Code coverage target (sec 7):** deferred to v2.1+ (no measurement tool wired into ci.yml yet).
+
+---
+
+## 8. v0.18.25.0 测试基础设施更新 (2026-07-05)
+
+### 8.1 L46 verification recipe 落地 (3 paths all PASS)
+
+- **Path 1 (xmake)**: xbuild.bat weasel installer → exit 0, installer 42,850,220 bytes.
+- **Path 2 (msbuild)**: msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m:1 → 0 errors / 2 pre-existing warnings (C4267 + C4101).
+- **Path 3 (test suite)**: scripts\test-infra\run-test-suite.bat → 13/13 test exe PASS, 115 assertions / 0 FAIL, "=== ALL TESTS PASSED ===".
+
+L46 三路径全部成功是 release 0.18.25.0 的 hard gate. 任何一个路径 fail → 不能 tag.
+
+### 8.2 L31 vcxproj OutDir 修复
+
+3 个 test vcxproj (TestBindingResolution, TestResponseParser, TestYamlRoundTripE2E) 的 <IntDir>SolutionDir-msbuild-... 缺 \ 反斜杠, 触发 MSB3491 
+imemsbuild 路径 (L31 root cause B). 修复: 加 \ → <IntDir>SolutionDir\-msbuild-....
+
+0.18.25.0 ship 时已修. 验证: 
+un-test-suite.bat exit=0 (之前是 exit=1 因为 build 步骤 fail).
+
+### 8.3 MSB6001 workaround (L47 precursor)
+
+PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 触发 .NET Hashtable "已添加项: 字典中的关键字 PATH 所添加的关键字 Path" 异常 (MSB6001). workaround: 用 cvars32.bat 不用 VsDevCmd.bat (cvars32.bat 是纯 cmd 脚本, 不触发此 .NET 冲突).
+
+0.18.25.0 ship 时已统一用 cvars32.bat 路径. 0.18.25.0 之前几个 release 误以为 "xbuild 路径全过就 ship" 但 msbuild 路径被 VsDevCmd 阻塞, 是 L46 发现的盲点.
+
+### 8.4 Test suite total (post-0.18.25.0)
+
+- 13 test projects: TestDefaultHotkeys, TestShiftSelectBinding, TestBindingResolution, TestResponseParser, TestWeaselIPC, TestYamlRoundTripE2E, TestUserDictUpdate, TestCandidateRButtonDown, TestCandidateIgnoreFilter, TestPanelDarkModeSubscribe, TestTrayRestoreIgnored, TestDarkModeBridge, TestDarkModeBroadcast.
+- 115+ assertions PASS / 0 FAIL across all 13 projects.
+- TestDefaultHotkeys 35/35 (was 25/25 pre-0.18.5; spec 014/021 added Shift_L/R recovery + L16/L19 regressions).
+- TestQuickPanelDialog 10/10 (spec 036 v0 ship).
+- TestDarkModeBridge 18/18 (spec 033).
+- TestDarkModeBroadcast 14/14 (spec 034 integration test).
+
+---
+
+## 9. spec 037 测试策略 (2026-07-05)
+
+### 9.1 测试目标 (摘自 spec 037 plan.md sec 2.7)
+
+- **TestFluxingButton** (4 assertions):
+  - T1: Create(hwnd, rect, label, style) 返回非空 unique_ptr
+  - T2: 模拟 WM_LBUTTONUP 触发 OnClick callback
+  - T3: SetLabel 更新 HWND 文本 (GetWindowText 验证)
+  - T4: 主题变化时 InvalidateRect 被调用 (mock WndProc 计数)
+- **TestFluxingToggle** (4 assertions):
+  - T1: Create 初始状态 IsOn() == initial
+  - T2: SetOn(true) 改变状态 + 触发 OnChanged
+  - T3: WM_LBUTTONUP 翻转状态
+  - T4: 200ms 滑动动画完成后状态稳定
+- **TestFluxingPanel** (3 assertions):
+  - T1: Create 成功
+  - T2: Card style 圆角半径 8px (内部状态)
+  - T3: Plain style 无圆角
+- **TestFluxingTheme** (3+ assertions):
+  - T1: Instance() 返回同一引用
+  - T2: Subscribe/Unsubscribe 正确管理订阅者
+  - T3: CurrentPalette() 调 FluxingDarkModeBridge
+  - T4: dark mode 切换触发订阅者 callback
+
+### 9.2 字节级验证 (L42 + L44)
+
+- **L42 byte-verify**:  x001E1E1E 仍在 weasel.dll (spec 033 dark-mode palette bytes, 新增 7 个 .cpp 不能 dead-strip 这 4 字节).
+- **L44 byte-level search**: PowerShell Encoding.UTF8.GetString + IndexOf 会有 byte-vs-char miscalculation, 用 ReadAllBytes + 数组 IndexOf 替代.
+
+### 9.3 测试金字塔 (post-spec-037)
+
+`
+        ┌─────────────────────┐
+        │  E2E (manual 验证清单) │  ← spec 037/038 各列 manual 步骤 (DPI 100/150/200)
+        │  集成 (mock librime)  │  ← spec 037 TestFluxingTheme (mock FluxingDarkModeBridge)
+        │  单元 (现有 14 套 + 4 新套) │  ← spec 037 TestFluxingButton/Toggle/Panel + 现有 13 test
+        └─────────────────────┘
+`
+
+### 9.4 v0.18.26.0 ship gate
+
+- 14 test projects all PASS (13 现有 + 1 new TestFluxingComponents)
+- 115+18 = 133+ assertions
+- L42 byte-verify  x001E1E1E 仍在 weasel.dll
+- L14 arch-verify 6 binary 全部 arch 一致
+- AGENTS.md sec 2.5 smoke test 13+1/13+1 PASS
+- "=== ALL TESTS PASSED ===" 出现
+
+---
+
+## 10. code coverage (deferred)
+
+如 2026-07-04 现状, code coverage tool 未 wired into ci.yml. v2.0.0 推迟, v2.1+ 引入 OpenCppCoverage 或类似工具.
