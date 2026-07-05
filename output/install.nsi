@@ -19,7 +19,9 @@ Unicode true
 !define WEASEL_BUILD 0
 !endif
 
+!ifndef WEASEL_ROOT
 !define WEASEL_ROOT $INSTDIR\weasel
+!endif
 !define FLUXING_ROOT $INSTDIR\fluxing
 !define REG_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Fluxing"
 
