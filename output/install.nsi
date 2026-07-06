@@ -442,6 +442,13 @@ program_files:
   StrCmp $0 "Upgrade" 0 +2
   SetRebootFlag true
 
+  ; L51: notify the user to restart WeaselServer / sign out and back in
+  ; after the install completes. Silent installs (/S) skip this prompt
+  ; because the messagebox blocks unattended mass-deployment.
+  IfSilent skip_post_install_message
+  MessageBox MB_OK|MB_ICONINFORMATION "火流猩输入法已安装。$\r$\n$\r$\n请重启 WeaselServer.exe 或注销后重新登录以应用新版本。$\r$\n$\r$\n(快捷设置栏:按 Alt+, 或点击任务栏中英文图标)"
+  skip_post_install_message:
+
 SectionEnd
 
 ; Optional section (can be disabled by the user)

@@ -1,4 +1,4 @@
-﻿// Label.cpp - spec 037 T012 (2026-07-05)
+// Label.cpp - spec 037 T012 (2026-07-05)
 //
 // Implementation of FluxingLabel. Text is rendered centered
 // (DWRITE_TEXT_ALIGNMENT_CENTER + DWRITE_PARAGRAPH_ALIGNMENT_CENTER)
@@ -116,7 +116,33 @@ LRESULT FluxingLabel::HandlePaint() {
   if (!hdc) return 0;
   auto rt =
       FluxingD2DRenderer::Instance().CreateHwndRenderTarget(hwnd_);
-  if (!rt) { EndPaint(hwnd_, &ps); return 0; }
+  if (!rt) {
+    // L50 fallback: D2D unavailable. Fall back to GDI DrawTextW so the
+    // label is still visible (otherwise the title shows only the D2D
+    // rt background which on a blank rt is black).
+    auto pal = FluxingTheme::Instance().CurrentPalette();
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, pal.text);
+    HFONT hf = nullptr;
+    LOGFONTW lf = {};
+    lf.lfHeight = -static_cast<LONG>(FontSizeToPt(size_) * 96.0f / 72.0f + 0.5f);
+    lf.lfWeight = FW_NORMAL;
+    lf.lfOutPrecision = OUT_DEFAULT_PRECIS;
+    lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
+    lf.lfQuality = CLEARTYPE_QUALITY;
+    lf.lfPitchAndFamily = DEFAULT_PITCH | FF_SWISS;
+    wcscpy_s(lf.lfFaceName, L"Segoe UI");
+    hf = CreateFontIndirectW(&lf);
+    HFONT old_hf = nullptr;
+    if (hf) old_hf = (HFONT)SelectObject(hdc, hf);
+    RECT rc;
+    GetClientRect(hwnd_, &rc);
+    DrawTextW(hdc, text_.c_str(), (int)text_.size(), &rc,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    if (hf) { SelectObject(hdc, old_hf); DeleteObject(hf); }
+    EndPaint(hwnd_, &ps);
+    return 0;
+  }
   rt->BeginDraw();
 
   auto pal = FluxingTheme::Instance().CurrentPalette();

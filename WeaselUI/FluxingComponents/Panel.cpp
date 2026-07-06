@@ -1,4 +1,4 @@
-﻿// Panel.cpp - spec 037 T011 (2026-07-05)
+// Panel.cpp - spec 037 T011 (2026-07-05)
 //
 // Implementation of FluxingPanel. Card style draws a filled
 // rounded rectangle in the current palette.back color; Plain
@@ -120,7 +120,22 @@ LRESULT FluxingPanel::HandlePaint() {
   if (!hdc) return 0;
   auto rt =
       FluxingD2DRenderer::Instance().CreateHwndRenderTarget(hwnd_);
-  if (!rt) { EndPaint(hwnd_, &ps); return 0; }
+  if (!rt) {
+    // L50 fallback: D2D unavailable. Fall back to GDI FillRect with
+    // palette.back so the card is still visually distinct from the
+    // dialog background (COLOR_WINDOW+1). Without this fallback the user
+    // sees a transparent region showing the dialog background through.
+    auto pal = FluxingTheme::Instance().CurrentPalette();
+    HBRUSH bg = CreateSolidBrush(pal.back);
+    if (bg) {
+      RECT rc;
+      GetClientRect(hwnd_, &rc);
+      FillRect(hdc, &rc, bg);
+      DeleteObject(bg);
+    }
+    EndPaint(hwnd_, &ps);
+    return 0;
+  }
   rt->BeginDraw();
 
   auto pal = FluxingTheme::Instance().CurrentPalette();
