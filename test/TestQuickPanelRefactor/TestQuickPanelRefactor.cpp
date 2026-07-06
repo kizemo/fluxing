@@ -148,6 +148,18 @@ int RunRefactorTest() {
   g_deploy_count = 0;
 
   // ----------------------------------------------------------------
+  // T0: Initial state invariant. Before any Show() is called,
+  // QuickPanelDialog::ActiveHwnd() must return NULL (no active panel).
+  // This is the precondition that makes the WM_LBUTTONUP callback safe
+  // no-op in T3b (ActiveHwnd()=NULL -> DestroyWindow(NULL) is safe).
+  // Also documents the L48 spec 038 lifecycle contract: s_hwnd is
+  // only set in Show(), never in OnCreate or WndProc. If Show() is
+  // not called by the test driver, s_hwnd stays NULL.
+  // ----------------------------------------------------------------
+  Check(QuickPanelDialog::ActiveHwnd() == nullptr,
+        "T0: ActiveHwnd() == NULL before any Show() call");
+
+  // ----------------------------------------------------------------
   // T1: Show() instantiates all 4 Fluxing controls and each has
   //     a non-null HWND. We drive the static Show() / Hide() API
   //     directly; the dialog's WM_CREATE handler instantiates the

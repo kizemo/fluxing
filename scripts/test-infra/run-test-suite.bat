@@ -46,6 +46,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem L49 regression guard: WeaselServerImpl.h MUST have MESSAGE_HANDLER(WM_HOTKEY, OnHotkey)
+rem in its msg map. spec 036 (0.18.24.0) shipped without it (function declared but
+rem never routed), making Alt+, global hotkey a no-op for 3 release versions
+rem (0.18.24.0 / 0.18.25.0 / 0.18.26.0 / 0.18.27.0) before L49 + 0.18.27.1 fixed it.
+rem This pre-flight check catches any future commit that removes the line again.
+findstr /C:"MESSAGE_HANDLER(WM_HOTKEY, OnHotkey)" WeaselIPCServer\WeaselServerImpl.h >nul
+if errorlevel 1 (
+    echo [L49 GUARD FAIL] WeaselServerImpl.h missing MESSAGE_HANDLER^(WM_HOTKEY, OnHotkey^).
+    echo                 Alt+, global hotkey will not route to OnHotkey. Restore the line
+    echo                 in BEGIN_MSG_MAP^(WEASEL_IPC_WINDOW^) ^< END_MSG_MAP^(^).
+    exit /b 1
+)
+
 set "FAIL=0"
 
 rem Build each test project standalone with explicit SolutionDir.
