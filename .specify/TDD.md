@@ -1,4 +1,4 @@
-﻿# Fluxing v2 · Technical Design Document / Test Strategy (TDD)
+# Fluxing v2 · Technical Design Document / Test Strategy (TDD)
 
 > **项目级 TDD 策略**。定义测试金字塔、各层测试覆盖目标、CI 集成方案、当前缺口。
 > 与子 spec 的关系：子 spec `plan.md` 的"风险"段列了各自的单测点；本文是"v2 整体测试架构"，子 spec 是局部实施。
@@ -479,3 +479,58 @@ PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 触
 ## 10. code coverage (deferred)
 
 如 2026-07-04 现状, code coverage tool 未 wired into ci.yml. v2.0.0 推迟, v2.1+ 引入 OpenCppCoverage 或类似工具.
+
+## 11. spec 041 测试策略 (2026-07-06)
+
+### 11.1 测试目标 (摘自 spec 041 plan.md sec 2.7 + tasks.md T014-T018)
+
+spec 041 修复 v0.18.27.x QuickPanelDialog 在 144 DPI 显示器的视觉 bug. 测试目标分两层:
+
+- **Layer 1 - 现有测试不退化**: TestQuickPanelDialog 10/10 + TestQuickPanelRefactor 9/9 + TestFluxingComponents 4/4 (含 Button 8/8 + Toggle 12/12 + Panel 6/6 + Theme 9/9) + TestDefaultHotkeys 35/35 + 11 other tests 全部 PASS. 这一层是 spec 041 的 hard gate - 任何 production code DPI 修复都不能破坏现有 spec 036/037/038 的测试覆盖.
+
+- **Layer 2 - 新增 DPI 测试用例 (推迟到 spec 044+ 与 QP 重新设计合并)**: 
+  - **T014-T018 (P2)**: TestFluxingComponents 加 DPI 100/150/200 单元测试, 每个 DPI ≥ 2 assertions (backing store physical size 正确 + GetPhysicalClientRect 返回正确 + WM_DPICHANGED handler 正确 resize). 推迟原因: spec 041 R4 接受 "visual improved but not perfect" + TestFluxingComponents 现有 4/4 PASS 已验证 control API + D2DRenderer behavior, 新增 DPI 测试需要 SetProcessDpiAwarenessContext(PER_MONITOR_V2) 切换 per-test DPI, 与 test infra 升级到 V2 同步做更合理 (spec 044+ scope).
+  - **T027 (P2)**: TestQuickPanelDialog 加 DPI 150 baseline 截图回归测试 (PrintWindow + CompareToBaseline). 推迟原因同上, 需要 V2-aware test infra + baseline image stable (目前 visual 仍有 spec 041 R4 接受的 partial fix artifact, baseline 还没稳定).
+  - **T028 (P3)**: TestQuickPanelRefactor 加 DPI 150 集成测试 (真实 instantiate QP + DPI 切换 + child resize). 同上.
+  - **T029 (P3)**: QP dialog DPI 切换 (move between monitors) 集成测试. 同上, V2 infra 必需.
+
+### 11.2 实测 test suite (0.18.28.0 ship 验证)
+
+| 测试 | assertions | 状态 | 备注 |
+|---|---|---|---|
+| TestDefaultHotkeys | 35/35 | PASS | spec 014/021 + L16/L19 回归 |
+| TestShiftSelectBinding | 13/13 | PASS | spec 014/021 |
+| TestResponseParser | 全部 | PASS | 0 FAIL |
+| TestWeaselIPC | integration | PASS | client + server mode |
+| TestYamlRoundTripE2E | 全部 | PASS | |
+| TestUserDictUpdate | 4/4 | PASS | spec 008 finalization |
+| TestCandidateRButtonDown | 4/4 | PASS | spec 019 |
+| TestCandidateIgnoreFilter | 5/5 | PASS | spec 020 |
+| TestPanelDarkModeSubscribe | 3/3 | PASS | |
+| TestTrayRestoreIgnored | 全部 | PASS | |
+| TestDarkModeBridge | 18/18 | PASS | spec 033 |
+| TestDarkModeBroadcast | 14/14 | PASS | spec 034 |
+| **TestQuickPanelDialog** | 10/10 | PASS | **spec 038 adapted** (DPI 修复后不变) |
+| **TestFluxingComponents** | 4/4 + 35 sub-assertions | PASS | **Button 8/8 + Toggle 12/12 + Panel 6/6 + Theme 9/9** |
+| **TestQuickPanelRefactor** | 9/9 | PASS | **spec 038 refactor** (DPI 修复后不变) |
+
+- **15 test projects all PASS** - 实测 "=== ALL TESTS PASSED ===".
+- **~250+ assertions PASS / 0 FAIL** (具体数字随每次 sub-assertion 变化).
+- **L42 byte-verify**: 0x001E1E1E 仍在 weasel.dll (palette 字节序列未损).
+- **L14 arch-verify**: 6 binary 全部 arch 一致 (x86=0x14C, x64=0x8664, ARM64=0xAA64, ARM=0x01C4).
+- **L47 byte-verify**: 全部 source file byte-healthy (C0=0 C1=0, .h/.cpp LF, .sln/.bat CRLF).
+- **L52 visual verify (144 DPI 实机)**: QP dialog 物理 200×100, child rect 全部正确 (Label 171×17, Panel 194×74, Toggle 33×13, Button 67×16, X 13×13), 文字 / 圆角 / 形状可见, 接受 spec 041 R4 "visual improved but not perfect".
+
+### 11.3 Layer 2 DPI 测试设计 (spec 044+ 推迟)
+
+推迟理由 (L52 lessons-learned):
+1. **TestFluxingComponents 当前是 in-process unit test** (run in same process as FluxingD2DRenderer singleton), 不能切换 per-test DPI. 改用 SetProcessDpiAwarenessContext(PER_MONITOR_V2) 影响整个 test process, 跨 test 副作用不可控.
+2. **144 DPI 是开发机单一配置**, 没有 multi-DPI test rig (没有 100 DPI 96 + 150 DPI 144 + 200 DPI 192 三个物理显示器). 即使加 test, 也只能 mock GetDpiForWindow return, 不能真实验证 D2D 渲染.
+3. **Test infra 升级到 V2** 涉及 weasel.props + WeaselServer.vcxproj + 4 test vcxproj 改 `PerMonitorV2` manifest, 与 spec 041 R3 mitigation "TestFluxingComponents 内部用 SetProcessDpiAwarenessContext(PER_MONITOR_V2)" 同步做, 推迟到 spec 044+ "QP 重新设计 + 多 DPI / 多 monitor / hover 200ms 渐变 完整重设计" 时一并做.
+
+### 11.4 L52 test impact
+
+L52 lessons-learned 不直接影响现有 test 通过率, 但提供未来 DPI 测试的 pattern:
+- DPI 测试用 mock `GetDpiForWindow` (linker symbol override) 比真 DPI switching 更可控.
+- 144 DPI 视觉 regression 用 PrintWindow + image diff baseline (参考 spec 044+).
+- WM_DPICHANGED handler 必须 test "Release + Invalidate" 而不仅是 "compile passes" (L49 教训: ATL/WTL message map 是 runtime construct, 编译通过 != 路由正确).

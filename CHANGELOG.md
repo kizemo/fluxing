@@ -1,3 +1,33 @@
+
+
+## [0.18.28.0-fluxing] - 2026-07-06
+
+### spec 041 ship - FluxingComponents 144 DPI 视觉修复
+
+- **Problem (L52 root cause)**: v0.18.27.2 ship 后用户在 144 DPI 显示器 (1.5x 缩放) 反馈 QuickPanelDialog 显示错乱: 黑顶条覆盖 dialog 顶部 26px, 标题 "Quick Panel" 文字看不到, CardPanel 不显示圆角背景, Deploy 按钮文字看不到. spec 037 R2 已明确推迟 DPI validation 到 v0.18.28+, 0.18.27.x 多版本 hotfix (L50 / L51) 均未真正修复 DPI 处理. v0.18.27.3 / 0.18.27.4 hotfix 尝试 5+ 路径 (Clear rt / backing store physical / D2D rt dpi / dpi != 96 GDI fallback / rect scale) 均失败 (L52).
+
+- **Cure (5 production files + 5 targetver.h + 0 test 增量)**:
+  1. WeaselUI/FluxingComponents/D2DRenderer.cpp - CreateHwndRenderTarget 用 raw GetClientRect (= HWND 物理 size, V1 child physical = logical × 96/dpi, 与 top-level logical × dpi/96 方向相反). D2D1_RENDER_TARGET_PROPERTIES dpiX/dpiY 默认 96 (不传 dpi), backing store = HWND 物理 size. GetPhysicalClientRect 返回 raw physical (不再 scale).
+  2. WeaselUI/FluxingComponents/Label.cpp - HandlePaint 加 t->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f)) 防止 D2D backing store opaque-black 透出. WM_DPICHANGED handler ReleaseHwndRenderTarget + InvalidateRect.
+  3. WeaselUI/FluxingComponents/Panel.cpp - 同上 Clear() + WM_DPICHANGED handler.
+  4. WeaselUI/FluxingComponents/Button.cpp - 同上 Clear() + WM_DPICHANGED handler.
+  5. WeaselUI/FluxingComponents/Toggle.cpp - 同上 Clear() + WM_DPICHANGED handler.
+  6. WeaselUI/FluxingComponents/targetver.h + WeaselUI/targetver.h - 升 _WIN32_WINNT_WIN10 (GetDpiForWindow 可用).
+  7. WeaselServer/stdafx.h - _WIN32_WINNT 0x0603 → 0x0A00 (C4005 macro redefine 修复).
+  8. 	est/{TestFluxingComponents,TestQuickPanelDialog,TestQuickPanelRefactor}/targetver.h - 同步升 WIN10.
+
+- **Verification (L46 recipe, 3 paths all PASS)**:
+  - xbuild.bat weasel installer → exit 0, installer 42,859,365 bytes (vs 0.18.27.2 42,873,293 bytes; -13,928 bytes 因 D2D/DPI 路径优化).
+  - msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m → 0 errors, 0 warnings.
+  - scripts/test-infra/run-test-suite.bat → 15/15 test projects PASS, ~250+ assertions, "=== ALL TESTS PASSED ===" (TestDefaultHotkeys 35/35 + TestShiftSelectBinding 13/13 + TestQuickPanelDialog 10/10 + TestQuickPanelRefactor 9/9 + TestFluxingComponents 4/4 + 10 others).
+  - L42 byte-verify: weasel.dll 0x001E1E1E palette 字节序列仍在.
+  - L14 arch-verify: 6 binary x86=0x14C, weaselx64.dll=0x8664.
+  - L47 byte-verify: 全部 source file byte-healthy (C0=0 C1=0, .h/.cpp LF, .sln/.bat CRLF).
+  - L52 visual verify (144 DPI 实机): QP 物理 200×100, Label "Quick" 文字可见, CardPanel 圆角浅色背景, Toggle knob 圆形 + 灰白轨道, Deploy 按钮位置正确. 接受 spec 041 R4 "visual improved but not perfect" (Label "Panel" 部分超出 child physical width 170, Deploy "Deploy" 文字 13pt > button 67 物理宽度的可用空间, Toggle 圆心略偏) — 完整 QP 重设计留给 spec 044+ (违反 spec 041 AP-041-B "不改 QP 几何").
+
+- **L52 正式追加 (DPI handling 完整 pattern)**: 6 个关键 D2D+V1 PerMonitor DPI 技术要点 + V1 child vs top-level 物理缩放方向相反 (本 spec 041 plan 未察觉这一不对称) + D2D rt backing store 默认 opaque black 必须 t->Clear(). 0.18.28.0 ship 时已应用.
+
+- **release/fluxing-0.18.28.0-installer.exe**: 42,859,365 bytes, SHA256 5F051468E0C0FFF3245AD5883B99C636CC3D5C83265F01C38DED2B4A0C6A6205, 部署到 C:\Program Files\fluxing\weasel\ (weasel.dll 1,737,728 / WeaselServer.exe 1,981,952 / WeaselDeployer.exe 591,360), user1/fluxing\ 数据保留.
 ## [0.18.27.2-fluxing] - 2026-07-06
 
 ### L51 hotfix - QuickPanelDialog layout + lang bar QuickPanel integration + post-install restart prompt
