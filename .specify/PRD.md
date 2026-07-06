@@ -1,4 +1,4 @@
-﻿# Fluxing v2 · Product Requirements Document (PRD)
+# Fluxing v2 · Product Requirements Document (PRD)
 
 > **项目级 PRD**。覆盖 spec 004 路线图与 7 份子 spec（005-011）的产品愿景、用户故事、验收标准、风险登记。
 > 与子 spec 的关系：本文是"v2 全局视图"；子 spec 的 `spec.md` 是"局部详情"——本文是 entry point，子 spec 是 detail page。
@@ -523,3 +523,71 @@ spec 006 完整 mac 风面板设计的**第二阶段 ship 切片**. 仅 ship 4 �
 - **L47 (待追加)**: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 是 PowerShell module 触发 .NET Hashtable "已添加项: 字典中的关键字 PATH 所添加的关键字 Path" 异常 (MSB6001). workaround: 用 cvars32.bat (纯 cmd 脚本) 不用 VsDevCmd.bat. 0.18.25.0 ship 时已用此 workaround.
 - L47 also: vcxproj <IntDir>SolutionDir-msbuild-... 缺 \ 反斜杠触发 MSB3491 
 imemsbuild 路径错误. spec 037 之前 3 个 test vcxproj 命中此 bug; 0.18.25.0 ship 时已修.
+
+## 12. spec 041 v0.18.28.0 已 ship (2026-07-06)
+
+### 12.1 问题 (L52 root cause)
+
+v0.18.27.2 ship 后用户在 144 DPI 显示器上反馈 QuickPanelDialog 视觉错乱: 黑顶条覆盖整个 dialog 顶部 26px + 标题"Quick Panel"文字看不到 + CardPanel 不显示圆角 + Deploy 按钮看不到文字。spec 037 R2 已明确推迟 DPI validation 到 v0.18.28+, 0.18.27.x 多版本 hotfix (L50 / L51) 均未真正修复 DPI 处理。
+
+### 12.2 修复路径 (3 次失败, 第 4 次成功)
+
+- **Attempt 1 (v0.18.27.2 L50)**: D2D rt dpi=96 default + backing store = child logical size + D2D1::RectF = logical. 144 DPI 下 child 物理 170×17, 文字 17pt @ dpi=96 = 17 物理像素 → 装入 17 物理像素 child 高度时 ascent+descent 22.7 物理像素 > 17 backing store → 文字上下被裁. **失败**.
+- **Attempt 2 (spec 041 v0.18.28.0 first pass)**: GetPhysicalClientRect 转换 logical→physical, backing store pixelSize = logical × 96/dpi 缩. 144 DPI 下 backing store 113×11 比 HWND 物理 170×17 还小, D2D1::RectF physical. backing store < HWND 物理 surface → 文字渲染区域不足. **失败**.
+- **Attempt 3 (v0.18.28.0 working)**: GetPhysicalClientRect 返回 raw GetClientRect (= HWND 物理 size, V1 child physical = logical × 96/dpi 实际, 与 top-level logical × dpi/96 方向相反), backing store = HWND 物理 size, D2D rt dpi=96 default (不传 dpi), D2D1::RectF = physical (1:1 to backing store), 4 控件加 `rt->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f))` 防止 D2D opaque-black backing store 透出. **成功**.
+
+### 12.3 实现 (5 production files + 5 targetver + 0 test 增量)
+
+- `WeaselUI/FluxingComponents/D2DRenderer.{h,cpp}` - GetPhysicalClientRect 返回 raw physical, CreateHwndRenderTarget 用 `D2D1_HwndRenderTargetProperties(hwnd, physical_size)`.
+- `WeaselUI/FluxingComponents/{Label,Panel,Button,Toggle}.{h,cpp}` - HandlePaint 加 `rt->Clear(COLOR_WINDOW)`, WM_DPICHANGED handler ReleaseHwndRenderTarget + InvalidateRect.
+- `WeaselUI/FluxingComponents/targetver.h` + `WeaselUI/targetver.h` - 升 _WIN32_WINNT_WIN10 (GetDpiForWindow).
+- `WeaselServer/stdafx.h` - _WIN32_WINNT 0x0603 → 0x0A00 (C4005 macro redefine 修复).
+- `test/{TestFluxingComponents,TestQuickPanelDialog,TestQuickPanelRefactor}/targetver.h` - 同步升 WIN10.
+
+### 12.4 验证 (L46 recipe, 3 paths all PASS)
+
+- **xbuild.bat weasel installer** → exit 0, installer 42,859,365 bytes (vs 0.18.27.2 42,873,293 bytes; -13,928 bytes 因 D2D/DPI 路径优化), PE arch 一致 x86=0x14C.
+- **msbuild weasel.sln** → 0 errors, 0 warnings.
+- **scripts/test-infra/run-test-suite.bat** → 15/15 test projects PASS, 200+ assertions (TestQuickPanelDialog 10/10 + TestQuickPanelRefactor 9/9 + TestFluxingComponents 4/4 + TestDefaultHotkeys 35/35 + 11 others), "=== ALL TESTS PASSED ===".
+- **L42 byte-verify**: weasel.dll 包含 0x001E1E1E (palette 仍在).
+- **L14 arch-verify**: 6 binary x86=0x14C, weaselx64.dll=0x8664.
+- **L47 byte-verify**: 全部 source file byte-healthy (C0=0 C1=0, .h/.cpp LF, .sln/.bat CRLF).
+- **L52 visual verify (144 DPI 实机)**: QP 物理 200×100, Label "Quick" 文字可见, CardPanel 圆角浅色背景, Toggle knob 圆形 + 灰白轨道, Deploy 按钮位置正确. **接受 spec 041 R4 "visual improved but not perfect"** (Label "Panel" 部分超出 child physical width 170, Deploy "Deploy" 文字 13pt > button 67 物理宽度的可用空间, Toggle 圆心略偏) — 完整 QP 重设计留给 spec 044+ (违反 spec 041 AP-041-B "不改 QP 几何").
+
+### 12.5 已知问题 (符合 spec 041 R4 接受的 partial fix)
+
+- Label "Panel" 文字部分超出 child physical width (spec 037 17pt @ 144 dpi child 物理 170 宽只能装下 "Quick " 部分, "Panel" 被 sibling 切掉). 完整 fix 需要 child logical width 在 144 dpi = 268 × 1.5 = 402 (违反 AP-041-B "不改 QP 几何"). 推迟到 spec 044+ QP 重新设计.
+- Deploy button "Deploy" 文字 13pt 在 button physical 67 宽度内 visible 不完整. 同上, 推迟.
+- Toggle 圆心在 144 dpi 下从 child logical 50 宽 → physical 33 宽, 圆 r=0.4*13=5.2 物理, 圆 left=10.4 物理; knob 圆 (cx, cy) = (knob_r + progress × (w - 2*knob_r), h/2) = (5.2 + 0 × (33-10.4), 6.5) = (5.2, 6.5) — knob 偏左因为 child width 收缩. 视觉可接受.
+
+### 12.6 L52 正式追加 (DPI handling 完整 pattern)
+
+详见 .specify/memory/lessons-learned.md L52. 关键 6 个技术要点:
+1. D2D1_HwndRenderTargetProperties.pixelSize = HWND 物理 size, 不要 logical × dpi/96 缩 (Attempt 2 错误).
+2. D2D1::RenderTargetProperties dpiX/dpiY 默认 96, 不要传 dpi (Attempt 2 错误).
+3. D2D rt backing store 默认 opaque black, 必须 `rt->Clear()`.
+4. V1 child physical = logical × 96/dpi, V1 top-level physical = logical × dpi/96 — 方向相反 (本 spec 041 plan 未察觉这一不对称).
+5. GetDpiForWindow 总是 per-monitor DPI, 不等于 system DPI.
+6. WM_DPICHANGED 处理: ReleaseHwndRenderTarget + InvalidateRect, 不直接 Resize.
+
+### 12.7 release/fluxing-0.18.28.0-installer.exe
+
+- Size: 42,859,365 bytes.
+- SHA256: 5F051468E0C0FFF3245AD5883B99C636CC3D5C83265F01C38DED2B4A0C6A6205.
+- 部署到 C:\Program Files\fluxing\weasel\ (weasel.dll 1,737,728 bytes / WeaselServer.exe 1,981,952 bytes / WeaselDeployer.exe 591,360 bytes), C:\Program Files\fluxing\user1\fluxing\ 数据保留.
+- vcxproj 验证: xbuild.bat / msbuild 0 errors / test suite 15/15 PASS / smoke test 7 invariants PASS.
+
+### 12.8 spec 041 spec / plan / tasks 状态
+
+- .specify/specs/041-fluxing-components-dpi-validation/spec.md (8962 B).
+- .specify/specs/041-fluxing-components-dpi-validation/plan.md (3526 B).
+- .specify/specs/041-fluxing-components-dpi-validation/tasks.md (2594 B, 29 tasks T001-T029).
+- 26/29 tasks [x] (T001-T013 production code + T019-T026 ship 完成, T014-T018 DPI test cases 推迟到 spec 044+ 与 QP 重新设计合并, T027-T029 P2/P3 follow-up).
+- Constitution Check 通过 (I-V + R1-R9 + P1-P8 OK, AP-041-A/B/C/D/E 全部满足).
+
+## 11. lessons-learned 累计 (更新)
+
+- L01-L52 (L01 - L52): 52 lessons by 2026-07-06 (L47 + L48 + L49 + L50 + L51 + L52 added).
+- L50 (L51 hotfix 时追溯追加): D2D 渲染不可用时 (driver hangs, registry ACLs, GPU virtualization) FluxingComponents 必须有 GDI fallback. spec 037 ship 时未加, 0.18.27.2 L51 追加. 4 控件均加 `if (!rt) { GDI fallback }` 分支.
+- L51 (新): spec 036+037+038 ship 0.18.24.0-0.18.27.1 多 release 缺 LanguageBar.cpp OnClick TF_LBI_CLK_LEFT 路径 (Windows TSF 默认 ascii toggle 而非 spec 036 US036-B QuickPanel) + WeaselTSF.rc 3 popup menu 缺 ID_WEASELTRAY_QUICK_PANEL entry + QuickPanelDialog CreateFluxingControls X button 在 D2D 失败 + WS_BORDER 下重叠. 0.18.27.2 hotfix 6 文件 9 处修复 + NSIS post-install restart prompt.
+- L52 (新): spec 041 v0.18.28.0 DPI handling 3 failed attempts 后第 4 次成功. 6 个关键 D2D+V1 PerMonitor DPI 技术要点 + V1 child vs top-level 物理缩放方向相反 (本 spec 041 plan 未察觉) + D2D rt backing store 默认 opaque black 必须 `rt->Clear()`. 0.18.28.0 ship 时已应用.

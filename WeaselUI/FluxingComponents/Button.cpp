@@ -150,6 +150,7 @@ LRESULT CALLBACK FluxingButton::WndProc(HWND hwnd, UINT msg,
   }
   switch (msg) {
     case WM_PAINT: return self->HandlePaint();
+    case WM_DPICHANGED: return self->HandleDpiChanged(wParam, lParam);
     case WM_LBUTTONUP: return self->HandleLButtonUp();
     case WM_DESTROY: return self->HandleDestroy();
     default: return DefWindowProc(hwnd, msg, wParam, lParam);
@@ -171,7 +172,7 @@ LRESULT FluxingButton::HandlePaint() {
     auto pal = FluxingTheme::Instance().CurrentPalette();
     auto colors = ComputeColors(style_, pal);
     RECT rc;
-    GetClientRect(hwnd_, &rc);
+    FluxingD2DRenderer::GetPhysicalClientRect(hwnd_, &rc);
     HBRUSH bg = CreateSolidBrush(colors.fill);
     if (bg) {
       FillRect(hdc, &rc, bg);
@@ -198,6 +199,10 @@ LRESULT FluxingButton::HandlePaint() {
     return 0;
   }
   rt->BeginDraw();
+  // spec 041 fix: clear to dialog window color (D2D backing store
+  // defaults to opaque black, which would show as a black bar
+  // where the button's rounded corners are transparent).
+  rt->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f));
   auto pal = FluxingTheme::Instance().CurrentPalette();
   auto colors = ComputeColors(style_, pal);
 
@@ -207,7 +212,7 @@ LRESULT FluxingButton::HandlePaint() {
 
   D2D1_ROUNDED_RECT rr;
   RECT rc;
-  GetClientRect(hwnd_, &rc);
+  FluxingD2DRenderer::GetPhysicalClientRect(hwnd_, &rc);
   rr.rect = D2D1::RectF(
       static_cast<FLOAT>(rc.left), static_cast<FLOAT>(rc.top),
       static_cast<FLOAT>(rc.right), static_cast<FLOAT>(rc.bottom));
@@ -253,6 +258,16 @@ LRESULT FluxingButton::HandleLButtonUp() {
   return 0;
 }
 
+LRESULT FluxingButton::HandleDpiChanged(WPARAM, LPARAM lParam) {
+  // spec 041 T006: on DPI change, release the cached backing store
+  // (the old physical size is now wrong) and trigger a repaint so
+  // the next WM_PAINT re-creates the rt at the new DPI. The new
+  // window rect from lParam is already applied by Windows before
+  // WM_DPICHANGED fires; we just need to invalidate.
+  FluxingD2DRenderer::Instance().ReleaseHwndRenderTarget(hwnd_);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+  return 0;
+}
 LRESULT FluxingButton::HandleDestroy() {
   // WM_DESTROY fires before the destructor; release the render
   // target here so the next paint (on a re-Create) starts clean.

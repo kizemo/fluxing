@@ -105,6 +105,7 @@ LRESULT CALLBACK FluxingLabel::WndProc(HWND hwnd, UINT msg,
   }
   switch (msg) {
     case WM_PAINT: return self->HandlePaint();
+    case WM_DPICHANGED: return self->HandleDpiChanged(wParam, lParam);
     case WM_DESTROY: return self->HandleDestroy();
     default: return DefWindowProc(hwnd, msg, wParam, lParam);
   }
@@ -136,7 +137,7 @@ LRESULT FluxingLabel::HandlePaint() {
     HFONT old_hf = nullptr;
     if (hf) old_hf = (HFONT)SelectObject(hdc, hf);
     RECT rc;
-    GetClientRect(hwnd_, &rc);
+    FluxingD2DRenderer::GetPhysicalClientRect(hwnd_, &rc);
     DrawTextW(hdc, text_.c_str(), (int)text_.size(), &rc,
               DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     if (hf) { SelectObject(hdc, old_hf); DeleteObject(hf); }
@@ -144,6 +145,11 @@ LRESULT FluxingLabel::HandlePaint() {
     return 0;
   }
   rt->BeginDraw();
+
+  // spec 041 fix: D2D backing store is opaque black by default.
+  // Clear to dialog window color so non-text pixels do not show
+  // the black backing store through.
+  rt->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f));
 
   auto pal = FluxingTheme::Instance().CurrentPalette();
   Microsoft::WRL::ComPtr<IDWriteTextFormat> fmt;
@@ -159,7 +165,7 @@ LRESULT FluxingLabel::HandlePaint() {
     rt->CreateSolidColorBrush(
         D2D1::ColorF(pal.text, 1.0f), &brush);
     RECT rc;
-    GetClientRect(hwnd_, &rc);
+    FluxingD2DRenderer::GetPhysicalClientRect(hwnd_, &rc);
     rt->DrawText(
         text_.c_str(), static_cast<UINT32>(text_.size()), fmt.Get(),
         D2D1::RectF(0.0f, 0.0f,
@@ -176,6 +182,16 @@ LRESULT FluxingLabel::HandlePaint() {
   return 0;
 }
 
+LRESULT FluxingLabel::HandleDpiChanged(WPARAM, LPARAM lParam) {
+  // spec 041 T006: on DPI change, release the cached backing store
+  // (the old physical size is now wrong) and trigger a repaint so
+  // the next WM_PAINT re-creates the rt at the new DPI. The new
+  // window rect from lParam is already applied by Windows before
+  // WM_DPICHANGED fires; we just need to invalidate.
+  FluxingD2DRenderer::Instance().ReleaseHwndRenderTarget(hwnd_);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+  return 0;
+}
 LRESULT FluxingLabel::HandleDestroy() {
   FluxingD2DRenderer::Instance().ReleaseHwndRenderTarget(hwnd_);
   return 0;
