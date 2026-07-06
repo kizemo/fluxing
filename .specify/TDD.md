@@ -432,7 +432,22 @@ PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 触
 
 
 
-### 9.8 v0.18.27.1 hotfix ship gate (2026-07-06, 实际 ship 完成)
+
+### 9.9 v0.18.27.2 hotfix ship gate (2026-07-06, 实际 ship 完成)
+
+- **L50 layout fix**: QuickPanelDialog.cpp title_rc height 20->26 + X button client.right-25 (not QP_WIDTH-30) + card_rc right client.right-5 -> client.right-2 + toggle/deploy card-local coords + deploy_rc width 95->100.
+- **L50 D2D fallback (4 files)**: Panel/Label/Button/Toggle.cpp HandlePaint 的 if (!rt) 分支加 GDI fallback (CreateSolidBrush + FillRect + CreateFontIndirectW + DrawTextW + Ellipse for knob). 用户在任何 D2D 不可用场景下仍能看到 UI.
+- **L51 lang bar integration**: WeaselTSF/LanguageBar.cpp OnClick TF_LBI_CLK_LEFT -> _HandleLangBarMenuSelect(ID_WEASELTRAY_QUICK_PANEL) (m_client.TrayCommand IPC -> WeaselServer.AddMenuHandler -> QuickPanelDialog::Show). 实现 spec 036 US036-B.
+- **L51 menu items**: WeaselTSF.rc 3 个 popup menu (IDR_MENU_POPUP/POPUP_HANS/POPUP_HANT) 加 MENUITEM 快捷设置栏 (&K)/tAlt+, ID_WEASELTRAY_QUICK_PANEL. Handler 在 WeaselServerApp::SetupMenuHandlers 已注册.
+- **L51 include/resource.h**: 加 ID_HOTKEY_QUICK_PANEL 9001 + ID_WEASELTRAY_QUICK_PANEL 40018 (WeaselTSF 通过 include path 用). 之前只在 WeaselServer/resource.h 有.
+- **L51 post-install prompt**: output/install.nsi Section Fluxing 完成前加 IfSilent-wrapped MessageBox MB_OK|MB_ICONINFORMATION 提示用户重启 WeaselServer.exe 或注销后重新登录.
+- **L47 BOM + line ending cleanup**: Panel/Label/Button/Toggle.cpp + LanguageBar.cpp 移除 stray UTF-8 BOMs (L47 violation), 统一为 LF only (匹配 HEAD convention).
+- **16 test projects all PASS** (L46 三路径 hard gate): xbuild.bat weasel installer (42,873,293 bytes) + msbuild weasel.sln (0 errors) + run-test-suite.bat (16/16 PASS, 含 TestQuickPanelRefactor 9/9 + TestFluxingComponents 4/4 + TestDefaultHotkeys 20/20).
+- **L46 silent-install smoke test 8 invariants PASS** (AGENTS.md sec 2.5): WeaselServer.exe at fluxing\weasel\ + user-data at fluxing\user1\fluxing\ + HKLM InstallDir = fluxing root + HKCU RimeUserDir has fluxing + rime.dll = 3,041,792 bytes (2-5 MB) + prebuilt rime_ice.table.bin + L14 arch-verify (6 binary arch consistent) + L42 byte-verify (0x1E1E1E triple in weasel.dll 15 occurrences).
+- **L49 pre-flight guard** 验证仍 PASS: MESSAGE_HANDLER(WM_HOTKEY, OnHotkey) 在 WeaselServerImpl.h, findstr exit 0.
+- **L51 lessons-learned** 正式追加: D2D fallback mandatory for production UI; Windows TSF standard lang bar 左键 conflicts with spec 036 US036-B; post-install restart prompt mandatory for Windows-locked binaries.
+- **Note for user**: 安装 v0.18.27.2 后必须重启 WeaselServer.exe 或注销后重新登录 (Windows 锁定 weaselx64.dll 直到 login session 结束). Installer 现在弹 messagebox 提示.
+- **spec 038 follow-up**: spec 039 路线图不变 (FluxingComponents 动画扩展 + 4 新控件). L51 hotfix 不改变 spec 039 scope, 仅修复 spec 036/038 ship 的 layout/lang bar/post-install UX 问题.### 9.8 v0.18.27.1 hotfix ship gate (2026-07-06, 实际 ship 完成)
 
 - **L49 root cause fix**: WeaselIPCServer/WeaselServerImpl.h line 31 加 MESSAGE_HANDLER(WM_HOTKEY, OnHotkey) 到 message map. 修复 spec 036 (0.18.24.0) 起的 Alt+, global hotkey 4-release bug.
 - **15 test projects all PASS** - 实测 ALL TESTS PASSED (含 TestQuickPanelRefactor 9/9, was 8/8 before T0).

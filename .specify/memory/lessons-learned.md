@@ -3473,3 +3473,82 @@ spec 036 (0.18.24.0) introduced the Alt+, global hotkey via `RegisterHotKey(m_hW
 - "I tested the menu item, so the hotkey also works" — they are separate code paths even when they share the same handler.
 - "OnHotkey function exists, so the hotkey works" — function existence ≠ message routing.
 - "It worked locally with the GUI, ship it" without an automated smoke test that exercises the actual hotkey path.
+
+## L51 - v0.18.27.2 hotfix (spec 036 US036-B + L50 D2D fallback + L51 lang bar + L51 post-install prompt + L47 BOM/line ending cleanup)
+
+**Triggered by**: 0.18.27.2 hotfix to fix 3 user-reported issues after installing 0.18.27.1:
+1. QuickPanelDialog displays incorrectly: title shows black bar (no text), card panel shows no rounded background, deploy button text truncated (Deplo).
+2. Left-click on lang bar item (中英文状态托盘图标) toggles ASCII mode instead of opening QuickPanel. Right-click lang bar menu has no QuickPanel item. User expectation (per spec 036 US036-B) is left-click -> QuickPanel.
+3. After installing the new version, the user did not restart WeaselServer.exe, so all fixes were invisible. Installer gave no prompt.
+
+**L50 root cause #1 (QuickPanelDialog layout)**: 
+- title_rc = {10, 5, client.right-10, 25} had height=20px, too small for 17pt Large font (~28px needed). Title text was clipped, only the D2D rt default black background remained visible.
+- card_rc = {5, 30, client.right-5, client.bottom-5} had right=client.right-5 which overflowed under WS_BORDER (1-2px insets). The card panel strayed outside the client area and was clipped.
+- X button CreateWindowExW(..., QP_WIDTH-30, 5, 22, 22, ...) used QP_WIDTH (window dimension 300) instead of client.right (~298 after WS_BORDER). Button straddled the WS_BORDER and overlapped TitleLabel.
+- deploy_rc width=95 was too narrow for Deploy text plus 6px corner radius + padding, so text appeared as Deplo (truncated).
+
+**Cure #1 (L50 layout)**: 
+- title_rc = {10, 4, client.right-32, 30} -> height=26, right boundary moved to client.right-32 to give X button space.
+- card_rc = {5, 32, client.right-2, client.bottom-5} -> right boundary moved to client.right-2 (clean inside WS_BORDER).
+- X button client.right-25, 4, 20, 20 -> uses client.right not QP_WIDTH.
+- Toggle/deploy switched to card-local coords with explicit GetClientRect(card, ...) + width=50/100.
+
+**L50 root cause #2 (D2D fallback missing)**: 
+- When FluxingD2DRenderer::Instance().CreateHwndRenderTarget(hwnd) returns null (e.g. D2D unavailable, registry ACL issue, GPU driver hang), HandlePaint() called EndPaint + return 0 WITHOUT drawing anything. The HWND hbrBackground was nullptr (so Windows used the dialog COLOR_WINDOW+1 background), so the user saw a blank area where the title/card/toggle/button should be.
+
+**Cure #2 (L50 fallback)**: For each of Panel/Label/Button/Toggle, in the if (!rt) branch, draw via GDI before EndPaint:
+- Panel: CreateSolidBrush(pal.back) + FillRect + DeleteObject (fills card with palette background).
+- Label: CreateFontIndirectW(Segoe UI, 17pt) + SetTextColor(pal.text) + DrawTextW(DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX) + DeleteObject.
+- Button: same GDI FillRect + DrawText pattern with style-specific colors and 14pt label.
+- Toggle: CreateSolidBrush(track_color) + FillRect + Ellipse(cx-knob_r, cy-knob_r, cx+knob_r, cy+knob_r) for the knob. Progress interpolation preserved (track_color blends palette.hilited_back at progress=1, mid-gray at progress=0).
+
+**L51 root cause #3 (lang bar left-click)**: 
+- LanguageBar.cpp::OnClick had if (click == TF_LBI_CLK_LEFT) { _HandleLangBarMenuSelect(ascii_mode ? ID_WEASELTRAY_DISABLE_ASCII : ID_WEASELTRAY_ENABLE_ASCII); ... }. This is Windows TSF standard behavior (the system lang bar icon toggles the input mode by default), but spec 036 US036-B explicitly says 左键单击托盘图标 -> 弹同一浮窗. spec 036 only wired up WeaselServer/SystemTraySDK.cpp::OnTrayNotification (the WeaselServer tray icon, not the lang bar icon) to post ID_WEASELTRAY_QUICK_PANEL on WM_LBUTTONUP. The lang bar OnClick was never updated.
+
+**Cure #3 (L51 lang bar)**: 
+- OnClick TF_LBI_CLK_LEFT -> _HandleLangBarMenuSelect(ID_WEASELTRAY_QUICK_PANEL). Routing: _HandleLangBarMenuSelect default case -> m_client.TrayCommand(wID) -> IPC to WeaselServer -> AddMenuHandler(ID_WEASELTRAY_QUICK_PANEL) (already registered in WeaselServerApp::SetupMenuHandlers) -> QuickPanelDialog::Show. Same path as the WeaselServer tray icon left-click.
+- ASCII toggle remains reachable via Shift+Space global hotkey (spec 005) and the toggle inside QuickPanelDialog itself. WeaselServer tray icon behavior unchanged (still posts ID_WEASELTRAY_QUICK_PANEL on WM_LBUTTONUP).
+- WeaselTSF.rc IDR_MENU_POPUP/IDR_MENU_POPUP_HANS/IDR_MENU_POPUP_HANT 3 popup menus gain MENUITEM 快捷设置栏 (&K)/tAlt+, ID_WEASELTRAY_QUICK_PANEL after the Settings entry. Handler was already wired in spec 036; only the menu item was missing.
+- include/resource.h gains ID_HOTKEY_QUICK_PANEL 9001 + ID_WEASELTRAY_QUICK_PANEL 40018. Was only in WeaselServer/resource.h (which WeaselTSF cannot include). This is a separate file from WeaselServer/resource.h because they were forked at different times.
+
+**L51 root cause #4 (no restart prompt)**: 
+- The WeaselServer.exe process (and weaselx64.dll loaded by the Windows TSF service) stay mapped into the login session. Even after a successful installer run, the old binary remains in memory. The user must restart WeaselServer.exe or sign out and back in for the new binary to take effect.
+- Installer gave no notification. User reports that the new version does not work because they did not know they needed to restart.
+
+**Cure #4 (L51 post-install prompt)**: 
+- In output/install.nsi, before the SectionEnd of Section Fluxing, add (IfSilent-wrapped):
+`
+si
+  IfSilent skip_post_install_message
+  MessageBox MB_OK|MB_ICONINFORMATION 火流猩输入法已安装。$\\r$\\n$\\r$\\n请重启 WeaselServer.exe 或注销后重新登录以应用新版本...
+  skip_post_install_message:
+`
+- IfSilent guards against unattended /S installs (mass-deployment / CI upgrade) where a modal messagebox would block the script.
+- This is the FIRST time the Fluxing installer has post-install user-facing text. Previous installers relied on the Windows Programs and Features entry to indicate version, but did not explicitly prompt for restart.
+
+**L47 root cause #5 (BOM + line ending cleanup)**: 
+- During prior spec 037 + spec 038 byte-level patches, WeaselUI/FluxingComponents/{Panel,Label,Button,Toggle}.cpp + WeaselTSF/LanguageBar.cpp had UTF-8 BOMs (EF BB BF) prepended. L47 requires .h/.cpp files have BOM=False. The BOMs did not break compilation (MSVC tolerates BOMs in C++ source files), but they were L47 violations and would have caused UTF-8 BOM detector scripts in CI to flag them.
+- Same files had mixed CRLF + LF line endings (CRLF lines from my byte-level patch using .Replace(n, rn) overwriting the original LF-only style). HEAD convention is pure LF (verified via git show HEAD: >  byte count).
+- Cure: byte-level strip BOM (slice [3..]), then convert all CRLF to LF (loop replacing 0x0D 0x0A with 0x0A).
+
+**Verification (L46 三路径 hard gate, all 0 errors)**: 
+- xbuild.bat weasel installer -> installer 42,873,293 bytes.
+- msbuild weasel.sln /t:Rebuild /p:Configuration=Release /p:Platform=Win32 /m /v:minimal -> 0 errors. First attempt failed with error C2065: ID_WEASELTRAY_QUICK_PANEL not declared in LanguageBar.cpp because include/resource.h did not have the ID. Cure: added #define ID_HOTKEY_QUICK_PANEL 9001 + #define ID_WEASELTRAY_QUICK_PANEL 40018 to include/resource.h. The fix-coverage audit caught this regression deterministically.
+- scripts/test-infra/run-test-suite.bat -> ALL TESTS PASSED. 16 test projects (TestQuickPanelRefactor 9/9, TestFluxingComponents 4/4, TestDefaultHotkeys 20/20, TestWeaselIPC integration, 12 others).
+- AGENTS.md sec 2.5 silent-install smoke test 8 invariants PASS + L14 arch-verify (all binary arch consistent: x86=0x14C for WeaselServer/Deployer/Setup/rime.dll, x64=0x8664 for weaselx64.dll).
+- L42 byte-verify: 0x1E1E1E triple in weasel.dll 15 occurrences (palette data preserved).
+- L47 byte-verify: all modified .cpp/.h BOM=False LF only; install.nsi BOM=True CRLF only.
+- L49 pre-flight guard: findstr /C:MESSAGE_HANDLER(WM_HOTKEY, OnHotkey) WeaselIPCServer\\WeaselServerImpl.h exit 0 (guard still passes after L51 edits).
+
+**Related L##**: L40 (BOM/line ending damage chain), L46 (msbuild + xbuild + run-test-suite 三路径), L47 (BOM cascade + Windows SDK 10.0.26100 include order), L48 (link-probe test exit pattern), L49 (ATL message map wiring + pre-flight guard). L51 is the FIRST instance of a user-facing silent-fallback UX bug (D2D fallback missing) combined with a Windows-TSF standard behavior that conflicts with the project spec (lang bar left-click behavior). The combination of bugs was reportable in 1 session because the user provided a screenshot.
+
+**Pattern (D2D fallback + lang bar integration + post-install UX)**: 
+- Direct2D rendering is not always available (driver hangs, registry ACLs, GPU virtualization). Any production UI component relying on D2D MUST have a GDI fallback. The spec 037 components shipped without this fallback because the team assumed D2D was always available. L51 added the fallback retroactively (post-ship).
+- Windows TSF standard behavior (lang bar left-click = toggle input mode) conflicts with our spec 036 US036-B (left-click = QuickPanel). The spec is the source of truth; we changed the lang bar behavior. The Windows TSF standard is documented but not enforced by the OS; we are free to override.
+- Post-install UX: installers that replace binaries locked by Windows (TSF shim, system services) MUST prompt the user to restart. Otherwise the user will report the new version does not work without realizing they need to restart. L51 adds this prompt via NSIS MessageBox.
+
+**Anti-pattern (do NOT do)**: 
+- Ship D2D-only components without GDI fallback. Test in environments where D2D may be unavailable (Windows Server Core, RDP sessions, GPU driver crash).
+- Implement only 1 of 3 QuickPanel trigger paths (Alt+, + tray icon left-click + lang bar left-click) and assume the user will figure out the others. Spec 036 US036-B lists 3 paths; spec 036 + 037 + 038 only implemented 2 (Alt+, + tray icon left-click).
+- Assume the user will restart after an installer run. Windows locks TSF shims + service executables; restart (or sign out + back in) is mandatory. Prompt the user.
+- Add BOM or mix line endings via byte-level patch scripts. Always strip existing BOM first, and match the file original line ending style (CRLF for install.nsi, LF for .cpp/.h).
