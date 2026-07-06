@@ -56,6 +56,7 @@ class FluxingToggle {
   LRESULT HandlePaint();
   LRESULT HandleLButtonUp();
   LRESULT HandleTimer(WPARAM timer_id);
+  LRESULT HandleDpiChanged(WPARAM, LPARAM);
   LRESULT HandleDestroy();
   void SubscribeTheme();
 

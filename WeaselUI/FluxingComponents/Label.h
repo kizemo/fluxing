@@ -38,6 +38,7 @@ class FluxingLabel {
  public:
   static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
   LRESULT HandlePaint();
+  LRESULT HandleDpiChanged(WPARAM, LPARAM);
   LRESULT HandleDestroy();
   void SubscribeTheme();
 

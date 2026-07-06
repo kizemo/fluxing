@@ -7,6 +7,6 @@
 
 #include <WinSDKVer.h>
 
-#define _WIN32_WINNT _WIN32_WINNT_WINBLUE // Specifies that the minimum required platform is Windows 8.1.
+#define _WIN32_WINNT _WIN32_WINNT_WIN10 // spec 041 T001: Win 10 1607+ for GetDpiForWindow (PerMonitor V1 DPI)
 
 #include <SDKDDKVer.h>

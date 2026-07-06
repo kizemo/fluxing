@@ -120,6 +120,7 @@ LRESULT CALLBACK FluxingToggle::WndProc(HWND hwnd, UINT msg,
   }
   switch (msg) {
     case WM_PAINT: return self->HandlePaint();
+    case WM_DPICHANGED: return self->HandleDpiChanged(wParam, lParam);
     case WM_LBUTTONUP: return self->HandleLButtonUp();
     case WM_TIMER: return self->HandleTimer(wParam);
     case WM_DESTROY: return self->HandleDestroy();
@@ -142,7 +143,7 @@ LRESULT FluxingToggle::HandlePaint() {
     DWORD track_color = static_cast<DWORD>(
         (1.0f - progress_) * track_off + progress_ * pal.hilited_back);
     RECT rc;
-    GetClientRect(hwnd_, &rc);
+    FluxingD2DRenderer::GetPhysicalClientRect(hwnd_, &rc);
     HBRUSH track_brush = CreateSolidBrush(track_color);
     if (track_brush) {
       FillRect(hdc, &rc, track_brush);
@@ -166,6 +167,10 @@ LRESULT FluxingToggle::HandlePaint() {
   }
   rt->BeginDraw();
 
+  // spec 041 fix: clear to dialog window color before drawing
+  // the track. D2D backing store defaults to opaque black.
+  rt->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f));
+
   auto pal = FluxingTheme::Instance().CurrentPalette();
   // Track color: hilited_back when on, mid-gray when off.
   // Use palette.hilited_back at progress and a computed
@@ -179,7 +184,7 @@ LRESULT FluxingToggle::HandlePaint() {
       D2D1::ColorF(track_color, 1.0f), &brush);
 
   RECT rc;
-  GetClientRect(hwnd_, &rc);
+  FluxingD2DRenderer::GetPhysicalClientRect(hwnd_, &rc);
   FLOAT h = static_cast<FLOAT>(rc.bottom - rc.top);
   D2D1_ROUNDED_RECT track;
   track.rect = D2D1::RectF(0.0f, 0.0f,
@@ -238,6 +243,16 @@ LRESULT FluxingToggle::HandleTimer(WPARAM timer_id) {
   return 0;
 }
 
+LRESULT FluxingToggle::HandleDpiChanged(WPARAM, LPARAM lParam) {
+  // spec 041 T006: on DPI change, release the cached backing store
+  // (the old physical size is now wrong) and trigger a repaint so
+  // the next WM_PAINT re-creates the rt at the new DPI. The new
+  // window rect from lParam is already applied by Windows before
+  // WM_DPICHANGED fires; we just need to invalidate.
+  FluxingD2DRenderer::Instance().ReleaseHwndRenderTarget(hwnd_);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+  return 0;
+}
 LRESULT FluxingToggle::HandleDestroy() {
   if (timer_id_ != 0) {
     KillTimer(hwnd_, timer_id_);
