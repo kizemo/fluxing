@@ -591,3 +591,33 @@ v0.18.27.2 ship 后用户在 144 DPI 显示器上反馈 QuickPanelDialog 视觉�
 - L50 (L51 hotfix 时追溯追加): D2D 渲染不可用时 (driver hangs, registry ACLs, GPU virtualization) FluxingComponents 必须有 GDI fallback. spec 037 ship 时未加, 0.18.27.2 L51 追加. 4 控件均加 `if (!rt) { GDI fallback }` 分支.
 - L51 (新): spec 036+037+038 ship 0.18.24.0-0.18.27.1 多 release 缺 LanguageBar.cpp OnClick TF_LBI_CLK_LEFT 路径 (Windows TSF 默认 ascii toggle 而非 spec 036 US036-B QuickPanel) + WeaselTSF.rc 3 popup menu 缺 ID_WEASELTRAY_QUICK_PANEL entry + QuickPanelDialog CreateFluxingControls X button 在 D2D 失败 + WS_BORDER 下重叠. 0.18.27.2 hotfix 6 文件 9 处修复 + NSIS post-install restart prompt.
 - L52 (新): spec 041 v0.18.28.0 DPI handling 3 failed attempts 后第 4 次成功. 6 个关键 D2D+V1 PerMonitor DPI 技术要点 + V1 child vs top-level 物理缩放方向相反 (本 spec 041 plan 未察觉) + D2D rt backing store 默认 opaque black 必须 `rt->Clear()`. 0.18.28.0 ship 时已应用.
+
+
+## 13. spec 041 v0.18.28.0 systematic-debugging re-verification (2026-07-06, L53)
+
+Phase 2 systematic-debugging 复盘 (调用 systematic-debugging 技能)：
+
+- **false-positive BUG #3 排除**: 之前用 ASCII strings search 报告 WeaselServer.exe 不含 GetPhysicalClientRect / HandleDpiChanged / WM_DPICHANGED symbols 是 false-positive — C++ mangled symbols 在 Windows PE .debug section 用 **UTF-16LE** 编码，ASCII search 找不到。dumpbin /DISASM 验证 WeaselServer.exe **实际**含所有 spec 041 DPI fix 函数 + Fluxing 控件代码 + QuickPanelDialog。
+- **L43 /LTCG:OFF 已被 L43 cure 解决**: WeaselTSF/xmake.lua 已加 dd_shflags('/DEBUG /LTCG:OFF /OPT:NOREF /OPT:NOICF', {force = true})，global xmake.lua line 64 也加 dd_ldflags('/LTCG:OFF /INCREMENTAL:NO', {force = true})。WeaselServer.exe 不存在 dead-strip 问题。
+- **L53 正式追加**: 「Windows PE binary verification 必须用 UTF-16 + dumpbin /DISASM + byte-pattern count，never trust ASCII strings alone」。
+
+Visual verify (96 DPI Todesk session) 重新跑通：QP 300×150, 5 children 全部可见 (FluxingLabel 256×26 title + FluxingPanel 291×111 card + FluxingToggle 50×20 ascii + FluxingButton 100×24 deploy + native close 20×20)。Test suite 16/16 PASS, 200+ assertions。
+
+installer rebuild (含全部 source data)：
+- 新 SHA256: 168D4ACC9C2842D2F207B49E150A4E585621F1E3357E5824554232285711630E
+- Size: 42,884,456 bytes
+- 部署路径不变: C:\Program Files\fluxing\weasel\ (用户安装路径未改)
+
+## 14. spec 042+ 路线图 (v0.18.29+)
+
+按 PRD §10 路线图，spec 041 完成后 P1 任务还有 F3/F4/F5 (yaml UI / 候选字右键删除 / Alt+K 短语) 未 ship。P2 全部未开始。
+
+下一阶段候选 (按优先级):
+- **spec 042** - FluxingPanelHost 独立进程 + 8-12 入口 grid 布局 (P1 路线图) - 重构 QuickPanelDialog 为独立进程容器，可扩展入口网格
+- **spec 043** - FluxingTheme 接入 QuickPanelDialog + 200ms 渐变 (spec 039 follow-up, animation polish)
+- **spec 044** - QP 重新设计 (解决 spec 041 §12.5 已知问题: Label "Panel" 文字溢出 / Deploy 文字 13pt 超出 67 物理宽 / Toggle 圆心偏)
+- **spec 045** - 多 DPI 验证清单 (DPI 100/150/200) + 窗口 resize handler (spec 040 推迟的全面验证)
+- **spec 046** - T014-T018 DPI test cases (spec 041 推迟, 9 个 test cases 包含 child physical vs logical cross-DPI matrix)
+- **spec 047** - WeaselPanel / FluxingPanel 集成 DPI 处理 (V1 child physical vs top-level 方向不一致, spec 037 控件在 WeaselPanel 主面板验证)
+
+spec 042 优先级最高 (P1 路线图需求 F2 完整化), 其它按需选取。
