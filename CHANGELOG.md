@@ -2605,3 +2605,51 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
 - **Test suite (post-0.18.26.0)**: 14 test projects, 133+ assertions PASS.
   - TestFluxingButton 4/4, TestFluxingToggle 4/4, TestFluxingPanel 3/3, TestFluxingTheme 4/4.
   - 回归: TestDefaultHotkeys 35/35, TestQuickPanelDialog 10/10, TestDarkModeBridge 18/18, TestDarkModeBroadcast 14/14, etc.
+## [0.18.29.0-fluxing] - 2026-07-06
+
+### spec 045 ship - QuickPanel 8 entry mac style completion
+
+- **Problem (L44 + spec 006 design.md sec 1.2 contract)**: v0.18.28.0 QuickPanelDialog
+  only had 2 entries (ascii toggle + Deploy) per spec 036 v0 minimal scope. spec 006
+  design.md sec 1.2 requires 8-12 entries: 3 toggles (zh/en, simp/trad, full/half) +
+  current schema label + switch button + sync status (placeholder) + user folder +
+  program folder + deploy + quit + more (legacy menu). User feedback: Alt+, panel
+  looked nothing like the original design and missing most buttons.
+
+- **Cure (3 production files, ~250 lines net, no spec doc, no test, no lesson)**:
+  1. WeaselServer/QuickPanelDialog.h - extend Show() signature with 5 new callbacks
+     (onSimpToggle, onFullwidthToggle, onSelectSchema, onOpenUserFolder,
+     onOpenProgramFolder) + 6 new FluxingComponents accessors.
+  2. WeaselServer/QuickPanelDialog.cpp - extend CreateFluxingControls from 2-control
+     300x150 to 5-row 8-entry 480x220: title + 3 toggles + schema row + 2 folder
+     buttons + Deploy/Quit. CardPanel 8px rounded, native IDCANCEL close X preserved.
+  3. WeaselServer/WeaselServerApp.cpp - ID_WEASELTRAY_QUICK_PANEL handler now forwards
+     6 new callbacks (3 toggles use SetOption; onSelectSchema -> handler.SelectSchema;
+     folder buttons -> explore(); onDeploy -> WeaselDeployer /deploy; onQuit ->
+     WeaselServer /q). Reads handler state for initial toggle state and current schema.
+  4. include/RimeWithWeasel.h + RimeWithWeasel/RimeWithWeasel.cpp - add 4 new APIs:
+     GetCurrentSchemaId(), GetAvailableSchemas(), SelectSchema(id), IsSimplification(),
+     IsFullShape(). Cache m_current_schema_id on every _GetStatus call (lazy
+     config_get_bool for option bools).
+
+- **Layout (5 rows, 8 entries per spec 006 design.md sec 1.2)**:
+  - Row 1: gear Fluxing title + native close X
+  - Row 2: 3 toggles: 中/英, 简/繁, 全/半角 (with caption labels below)
+  - Row 3: 当前方案: <schema> label + 切换 button (cycles to next schema)
+  - Row 4: user folder + program folder buttons
+  - Row 5: Deploy (Primary) + Quit (Destructive) buttons
+
+- **Verification (L46 recipe, 3 paths all PASS)**:
+  - xbuild.bat weasel installer -> exit 0, installer 42,899,125 bytes
+    (vs 0.18.28.0 42,880,454 bytes; +18,671 bytes).
+  - WeaselServer.exe 1,981,952 -> 2,029,568 bytes (+47 KB, new controls + SelectSchema).
+  - 0 errors, 1 unrelated C4005 _WIN32_WINNT warning (pre-existing L52).
+  - Direct file deployment verified byte-identical to build output.
+  - Caveat: PID 2060 WeaselServer is PPL-protected daemon (L17/L18) - user logout
+    or restart required to load new binary in-process.
+  - L14 arch-verify: WeaselServer.exe = 0x14C (x86), weaselx64.dll = 0x8664 (x64).
+  - L47 byte-verify: all source files byte-healthy.
+
+- **Caveat - 切换 button placeholder**: spec 046 (next ship) will replace the
+  cycle-to-next behavior with a real popup list. Current implementation calls
+  rime_api->select_schema with a fresh create_session id.
