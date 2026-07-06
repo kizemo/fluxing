@@ -3676,3 +3676,55 @@ All confirmed via dumpbin /DISASM. Visual verify at 96 DPI Todesk session: QP 30
 ### Action item
 
 Add L53 to the systematic-debugging checklist in AGENTS.md §6 and erification-before-completion skill: "When verifying Windows PE binary contents, use UTF-16 string decode + dumpbin /DISASM + byte-pattern count. Never rely on ASCII strings alone."
+## L54 - silent install /D= ignored when InstallDirRegKey registry key is stale
+
+### Incident (2026-07-06 v0.18.29.0 ship)
+
+After running `cmd /c installer.exe /S /D=C:\Program Files\fluxing /LOG=D:\TEMP\foo.log` during 0.18.29.0 ship verification, three problems compounded:
+
+1. **Wrong install path**: silently installed to `C:\Program Files\fluxing` even though the user had a pre-existing install at `D:\Program Files\fluxing`. The agent assumed `C:\Program Files` was the default and never queried the existing registry InstallDir first.
+
+2. **/D= ignored silently**: subsequent `cmd /c installer.exe /S /D=D:\Program Files\fluxing` invocations all wrote `HKLM\Software\Fluxing\Weasel\InstallDir = C:\Program Files\fluxing` because NSIS `InstallDirRegKey` directive pre-loads `$INSTDIR` from registry BEFORE `.onInit` runs. The `.onInit` logic preserves non-empty `$INSTDIR`, so `/D=` is ignored.
+
+3. **L15 re-trigger**: passing `/D="..."` and `/LOG="..."` as separate PowerShell arguments (or via cmd /c without single-quote wrapper) caused NSIS to concatenate `/D=` and `/LOG=` into a single deeply-nested garbage path `C:\Program Files\fluxing LOG=D\TEMP\fluxing-install-...log\fluxing`. Registry InstallDir got polluted with this string.
+
+### Root cause
+
+- The agent never queried `Get-ItemProperty HKLM:\SOFTWARE\WOW6432Node\Fluxing\Weasel InstallDir` (or HKCU equivalent) BEFORE running any silent install. It assumed `C:\Program Files` was the user's path.
+- The agent then layered silent install + manual `Copy-Item` file deployment, generating **two parallel installations** (one in `C:\Program Files\fluxing`, one in `D:\Program Files\fluxing`). The installer auto-launched the C: copy as PID 12564, which then locked the files and prevented clean uninstall.
+- NSIS `uninst` function (install.nsi ~line 195) deletes `HKLM\Software\Rime` and `Uninstall\Fluxing` but NOT `HKLM\Software\Fluxing\Weasel` -- so the InstallDir pollution survives every uninstall. Every subsequent install reads the stale value via `InstallDirRegKey`.
+
+### Lesson (5 rules)
+
+1. **Before ANY install/uninstall, query the existing deployment location** (3 reads):
+   ```
+   Get-ItemProperty HKLM:\SOFTWARE\WOW6432Node\Fluxing\Weasel -ErrorAction SilentlyContinue
+   Get-ItemProperty HKCU:\Software\Fluxing\Weasel -ErrorAction SilentlyContinue
+   Get-ItemProperty HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Fluxing -ErrorAction SilentlyContinue
+   ```
+2. **Silent install must pass the user-confirmed path explicitly via /D= and that path MUST match the registry InstallDir**. If they don't match, the installer's `InstallDirRegKey` directive will silently use the registry value and ignore /D=. Fix this by deleting `HKLM\Software\Fluxing\Weasel` and `HKCU\Software\Fluxing\Weasel` BEFORE the silent install.
+
+3. **Never combine Copy-Item manual deployment with silent install in the same iteration** -- they create duplicate deployments, and the silent install auto-launches the new copy as a daemon that locks files. Pick ONE: either silent install OR manual Copy-Item.
+
+4. **L15 always-on**: every silent install command must use single-quote-wrapped cmd /c, never array-ArgumentList:
+   ```
+   cmd /c "call `"$installer`" /S /D=`"$dst`" /LOG=`"$logPath`""
+   ```
+   The /LOG= must be its own NSIS argument, not concatenated to /D=.
+
+5. **Always clean BOTH registry AND filesystem in lock-step**. The uninstall function deletes some registry keys but not all. After any install/uninstall cycle, run:
+   ```
+   Remove-Item HKLM:\SOFTWARE\WOW6432Node\Fluxing -Recurse -Force
+   Remove-Item HKLM:\SOFTWARE\Fluxing -Recurse -Force
+   Remove-Item HKCU:\Software\Fluxing -Recurse -Force
+   Remove-Item HKLM:\SOFTWARE\WOW6432Node\Rime -Recurse -Force
+   Remove-Item HKLM:\SOFTWARE\Rime -Recurse -Force
+   Remove-Item HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Fluxing -Recurse -Force
+   ```
+   then verify `[System.IO.Directory]::GetDirectories('C:\Program Files', 'fluxing*')` returns empty.
+
+### Action item
+
+- [ ] Patch install.nsi `uninst` function to also delete `HKLM\Software\Fluxing\Weasel` (currently only deletes `HKLM\Software\Rime`). Future installer versions will then self-clean the InstallDir pollution.
+- [x] This L54 entry written 2026-07-06 immediately after the 0.18.29.0 ship mis-step. The shipping product itself (binary, installer) is correct -- the bug was in the deploy procedure.
+- [x] D:\Program Files\fluxing verified clean deployment: HKLM InstallDir = D:\Program Files\fluxing\weasel, HKCU RimeUserDir = D:\Program Files\fluxing\user1\fluxing, WeaselServer.exe = 2029568 bytes (0.18.29.0). User data (rime_ice.userdb, user.yaml 183 bytes) preserved unchanged.
