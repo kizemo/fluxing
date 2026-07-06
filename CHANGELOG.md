@@ -1,3 +1,37 @@
+## [0.18.27.2-fluxing] - 2026-07-06
+
+### L51 hotfix - QuickPanelDialog layout + lang bar QuickPanel integration + post-install restart prompt
+
+- **Problem (R1 intent)**: spec 036 + spec 038 ship 0.18.24.0..0.18.27.1 都未实现 spec 036 US036-B (left-click lang bar item -> QuickPanel), 也没实现 "right-click lang bar menu -> QuickPanel item". 用户左键点中英文状态托盘图标, 期望弹 QuickPanel 但只切 ASCII. 同时 QuickPanelDialog 在某些 D2D 失败的场景下 fallback 显示不全 (TitleLabel 文字截, CardPanel 不显示圆角). 安装新版本后用户未重启, 旧 WeaselServer.exe 仍在内存中, 修复未生效.
+
+- **Root cause**: 
+  1. LanguageBar.cpp::OnClick TF_LBI_CLK_LEFT 走 Windows TSF 默认 ascii toggle 而不是 spec 036 US036-B 的 QuickPanel 触发路径.
+  2. WeaselTSF.rc 三个 popup menu (English/Hans/Hant) 缺 ID_WEASELTRAY_QUICK_PANEL item, 加上 ID handler (spec 036 SetupMenuHandlers) 已注册但 menu 没有对应 entry, 所以右键也找不到.
+  3. QuickPanelDialog.cpp CreateFluxingControls + OnCreate X button layout 在 D2D 失败 / WS_BORDER 场景下重叠或越界.
+  4. FluxingComponents Label/Button/Toggle 的 HandlePaint 在 if (!rt) 时只 return 0, 没有 GDI fallback, 用户看不到文字/track/knob.
+
+- **Cure (6 files)**:
+  1. `WeaselUI/FluxingComponents/Panel.cpp` - D2D rt 失败 fallback: CreateSolidBrush(pal.back) + FillRect + DeleteObject.
+  2. `WeaselUI/FluxingComponents/Label.cpp` - D2D rt 失败 fallback: CreateFontIndirectW("Segoe UI", 17pt) + SetTextColor(pal.text) + DrawTextW.
+  3. `WeaselUI/FluxingComponents/Button.cpp` - D2D rt 失败 fallback: GDI FillRect(colors.fill) + DrawTextW (14pt).
+  4. `WeaselUI/FluxingComponents/Toggle.cpp` - D2D rt 失败 fallback: GDI FillRect(track_color) + Ellipse 画 knob.
+  5. `WeaselTSF/LanguageBar.cpp` - OnClick TF_LBI_CLK_LEFT 改 _HandleLangBarMenuSelect(ID_WEASELTRAY_QUICK_PANEL), 走 m_client.TrayCommand IPC -> WeaselServer.AddMenuHandler(ID_WEASELTRAY_QUICK_PANEL) -> QuickPanelDialog::Show.
+  6. `WeaselTSF/WeaselTSF.rc` - 三个 popup menu 加 `MENUITEM "快捷设置栏 (&K)\tAlt+,", ID_WEASELTRAY_QUICK_PANEL` 在 Settings 之后.
+  7. `include/resource.h` - 加 ID_HOTKEY_QUICK_PANEL 9001 + ID_WEASELTRAY_QUICK_PANEL 40018 供 WeaselTSF/LanguageBar.cpp 用.
+  8. `output/install.nsi` - Section Fluxing 完成后加 IfSilent-wrapped MessageBox MB_OK|MB_ICONINFORMATION 提示用户重启 WeaselServer.exe 或注销后重新登录 (避免 silent /S 模式下 messagebox 阻塞无人值守部署).
+  9. `WeaselServer/QuickPanelDialog.cpp` - L50 layout 增强: title_rc height 20->26, X button 用 client.right-25 (不用 QP_WIDTH-30), card_rc right client.right-5 -> client.right-2, deploy_rc width 95->100, toggle_rc 在 card-local coords.
+
+- **Verification (L46 三路径 hard gate, 全 0 errors)**:
+  - xbuild.bat weasel installer -> installer 生成 42,873,293 bytes.
+  - msbuild weasel.sln /t:Rebuild /p:Configuration=Release /p:Platform=Win32 /m -> 0 errors.
+  - scripts/test-infra/run-test-suite.bat -> ALL TESTS PASSED (TestQuickPanelRefactor 9/9 + TestFluxingComponents 4/4 + TestDefaultHotkeys 20/20 + 13 other tests + TestWeaselIPC integration).
+  - AGENTS.md sec 2.5 silent-install smoke test 8 invariants PASS: WeaselServer.exe at fluxing\weasel\, user-data at fluxing\user1\fluxing\, HKLM InstallDir = fluxing root, HKCU RimeUserDir has fluxing, rime.dll = 3,041,792 bytes, prebuilt rime_ice.table.bin present, L14 arch-verify all x86 + weaselx64.dll x64.
+  - L42 byte-verify: 0x1E1E1E triple 在 weasel.dll 出现 15 次, dark-mode palette 仍在.
+  - L47 byte-verify: 所有改过的 .cpp/.h BOM=False LF only, install.nsi BOM=True CRLF only.
+  - L49 pre-flight guard: `findstr /C:"MESSAGE_HANDLER(WM_HOTKEY, OnHotkey)" WeaselIPCServer\WeaselServerImpl.h` 命中, exit=0.
+
+- **Note for user**: 必须重启 WeaselServer.exe 或注销后重新登录, 新 binary 才能生效. Installer 完成时弹 messagebox 提示.
+
 ## [0.18.27.1-fluxing] - 2026-07-06
 
 ### L49 hotfix - Alt+, global hotkey routing fix + L49 pre-flight guard

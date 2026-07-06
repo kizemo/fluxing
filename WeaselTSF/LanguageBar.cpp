@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include <resource.h>
 #include <thread>
 #include <shellapi.h>
@@ -153,9 +153,18 @@ STDAPI CLangBarItemButton::OnClick(TfLBIClick click,
                                    POINT pt,
                                    const RECT* prcArea) {
   if (click == TF_LBI_CLK_LEFT) {
-    _pTextService->_HandleLangBarMenuSelect(
-        ascii_mode ? ID_WEASELTRAY_DISABLE_ASCII : ID_WEASELTRAY_ENABLE_ASCII);
-    ascii_mode = !ascii_mode;
+    // L51: spec 036 US036-B - left-click on the lang bar item triggers
+    // the QuickPanelDialog instead of toggling ASCII mode. The ASCII
+    // toggle is still reachable via:
+    //   - Shift+Space global hotkey (spec 005)
+    //   - The ASCII toggle inside the QuickPanelDialog itself
+    // This matches user expectation (visible tray item produces the
+    // QuickPanel when clicked) and matches the WeaselServer tray icon
+    // behavior that spec 036 already wired in SystemTraySDK.cpp.
+    // Routing: _HandleLangBarMenuSelect default case -> m_client.TrayCommand
+    // -> IPC -> WeaselServer.AddMenuHandler(ID_WEASELTRAY_QUICK_PANEL) ->
+    // QuickPanelDialog::Show.
+    _pTextService->_HandleLangBarMenuSelect(ID_WEASELTRAY_QUICK_PANEL);
     if (_pLangBarItemSink) {
       _pLangBarItemSink->OnUpdate(TF_LBI_STATUS | TF_LBI_ICON);
     }
