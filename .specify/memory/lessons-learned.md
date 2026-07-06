@@ -3552,3 +3552,58 @@ si
 - Implement only 1 of 3 QuickPanel trigger paths (Alt+, + tray icon left-click + lang bar left-click) and assume the user will figure out the others. Spec 036 US036-B lists 3 paths; spec 036 + 037 + 038 only implemented 2 (Alt+, + tray icon left-click).
 - Assume the user will restart after an installer run. Windows locks TSF shims + service executables; restart (or sign out + back in) is mandatory. Prompt the user.
 - Add BOM or mix line endings via byte-level patch scripts. Always strip existing BOM first, and match the file original line ending style (CRLF for install.nsi, LF for .cpp/.h).
+
+## L52 - spec 041 v0.18.28.0 DPI handling (3 failed attempts before success)
+
+**Triggered by**: v0.18.28.0 ship to fix the v0.18.27.x QuickPanelDialog visual bug on 144 DPI monitors. Three separate attempts at DPI handling all produced black top bars / invisible text / clipped controls. The fourth attempt (D2D rt dpi=96 default + backing store = HWND physical size + `rt->Clear()` for transparent backgrounds) was the one that worked.
+
+**What went wrong, by attempt**:
+
+- **Attempt 1 (L50, v0.18.27.2)**: `D2D1::RenderTargetProperties()` default dpi=96, backing store = child logical size (no DPI scaling), `D2D1::RectF` = logical. On 144 DPI child logical 170x17 ¡ú backing store 170x17, D2D treats DIP as physical (dpi=96 ¡ú no scale) ¡ú text and rounded rects drawn at 170x17 logical into a 170x17 backing store. **Result**: text overflows the smaller child HWND (logical 26 = physical 17 ¡ú 17pt text = 22.7 physical pixels rendered into 17-pixel child). No D2D `Clear()` call, so D2D backing store is opaque black by default and shows through anywhere a pixel is not overdrawn.
+
+- **Attempt 2 (spec 041 v0.18.28.0 first pass)**: `D2DRenderer::GetPhysicalClientRect` converts logical ¡ú physical via `MulDiv(rc, 96, dpi)`. Backing store pixelSize = logical ¡Á 96 / dpi (i.e. `physical_w = logical * 96 / dpi` shrink). `D2D1::RectF` = physical. On 144 DPI child logical 170x17 ¡ú physical 113x11 ¡ú backing store 113x11, `D2D1::RectF(0, 0, 113, 11)`. D2D rt dpi still default 96 ¡ú D2D treats DIP=physical, so 113x11 written 1:1. **Result**: backing store now smaller than HWND physical surface (170x17), and text rendered at physical pixel size is too small to read.
+
+- **Attempt 3 (the one that works)**: `D2DRenderer::GetPhysicalClientRect` returns the raw `GetClientRect` value (== HWND physical size on V1 PerMonitor DPI aware process; child logical = child physical on V1 ¡ª verified empirically with `GetWindowDpiAwarenessContext` returning V1, `GetDpiForWindow` returning 144, and the child physical size exactly matching `logical ¡Á 96/144`). Backing store = HWND physical size. D2D rt dpi = 96 (default). `D2D1::RectF` = physical (1:1 to backing store). All 4 controls add `rt->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f))` after `BeginDraw` so non-text pixels do not show the opaque-black D2D backing store.
+
+**Key technical facts about D2D HwndRenderTarget on V1 PerMonitor DPI aware processes**:
+
+1. **`D2D1_HwndRenderTargetProperties.pixelSize` is in PHYSICAL pixels**, not logical. It must match the HWND physical client area. Passing logical coords here shrinks the backing store below the HWND; passing logical ¡Á dpi/96 makes it larger than the HWND and Windows clips on EndDraw.
+
+2. **`D2D1::RenderTargetProperties` dpiX/dpiY default to 0 (= D2D1_DEVICE_CONTEXT_DEFAULT_DPI = 96)**, NOT to the HWND's DPI. If you do not explicitly set dpiX/dpiY to the per-window DPI, D2D treats `D2D1::RectF` DIP coords as if they were 1:1 physical pixels at 96 DPI. To get correct DPI scaling you MUST pass `static_cast<float>(dpi)` to both dpiX and dpiY.
+
+3. **The simplest correct configuration for V1 PerMonitor DPI + D2D HwndRenderTarget is `dpi=96` + `pixelSize=physical` + `D2D1::RectF=physical`**, which is identical to GDI's coordinate model. The "DPI-aware" semantics come from the HWND itself (the HWND physical surface is sized in physical pixels at whatever DPI the monitor is), not from D2D. D2D is just a GDI replacement that also happens to support antialiasing.
+
+4. **D2D HwndRenderTarget backing store is opaque black by default.** Unlike GDI, there is no implicit "transparent" or "window color" Clear. You MUST call `rt->Clear()` after `BeginDraw` if you want the HWND to be visually transparent or show a non-black background. This is the **single most common source of "black bar / black background" bugs** in D2D HwndRenderTarget code.
+
+5. **On V1 PerMonitor DPI aware process, child HWND physical size = logical size passed to `CreateWindowExW` ¡Á 96/dpi** (i.e. **inverted** from the top-level behavior where physical = logical ¡Á dpi/96). Verified on a 144 DPI monitor: title_rc logical (10, 4, 268, 30) width 258 ¡ú child physical 171 (= 258 ¡Á 96/144), height 26 ¡ú child physical 17. Top-level dialog logical 300¡Á150 ¡ú physical 200¡Á100 (= 300 ¡Á 144/96) follows the top-level pattern. This asymmetry is **the single most confusing thing** about V1 DPI and is undocumented in the Microsoft Per-Monitor DPI whitepaper; you have to discover it empirically with `GetWindowDpiAwarenessContext` + `GetClientRect` + `GetDpiForWindow` on each HWND.
+
+6. **`GetDpiForWindow` returns the DPI of the monitor the HWND currently lives on**, not the system DPI. For child HWNDs, the value matches the parent top-level's monitor. This is what we feed into D2D's dpiX/dpiY.
+
+**Why 3 attempts were needed** (meta-lesson):
+
+- The first attempt assumed "D2D is DPI-aware out of the box". It is not. D2D HwndRenderTarget is only DPI-aware if you tell it what DPI to use.
+- The second attempt assumed `GetClientRect` in a V1 process returns logical coords and you must scale to physical. For **top-level** windows on V1 that is true, but for **child** windows on V1 it is false (the child physical size is `logical ¡Á 96/dpi`, not `logical ¡Á dpi/96`). The spec 041 plan was written for top-level and applied to child, which is why it "made the backing store 1.5x too large" ¡ª the comment in the code was technically right for top-level and wrong for child.
+- The third attempt was a deliberate reset: pass `GetClientRect` through unchanged, set backing store to that, do not pass dpiX/dpiY, and Clear() the backing store. This is the GDI model and is correct because D2D HwndRenderTarget in the default config is essentially a GDI-with-antialiasing.
+
+**How we caught it** (verification):
+
+- `D:\TEMP\qp-trace9.ps1` posts Alt+, (WM_HOTKEY id 9001) to the WeaselIPC HWND, then `EnumChildWindows` on the `FluxingQuickPanel_v0` class to print each child's logical + physical rect, then `PrintWindow` with `PW_RENDERFULLCONTENT` to a PNG. Running this after every code change gave a 5-second visual diff loop. Without this, we would have shipped black bars to production (this is what v0.18.27.2 did ¡ª the L50 fallback existed in source but was never tested with a real 144 DPI monitor).
+- `GetWindowDpiAwarenessContext(hwnd)` returning 2 (V1) + `GetDpiForWindow(hwnd)` returning 144 was the empirical proof that the V1 DPI virtualization model was in effect.
+
+**Pattern (D2D + V1 PerMonitor DPI + GDI compat model)**:
+
+- Use `D2D1::RenderTargetProperties()` with default dpiX/dpiY (= 0 ¡ú D2D1_DEVICE_CONTEXT_DEFAULT_DPI = 96). Do NOT pass `static_cast<float>(dpi)`.
+- Use `D2D1_HwndRenderTargetProperties(hwnd, physical_size)` where `physical_size = GetClientRect` (no scaling). This works for both top-level and child HWNDs in V1.
+- Use `D2D1::RectF(0, 0, w, h)` in physical pixels. The D2D1_RENDER_TARGET_PROPERTIES dpi=96 default treats DIP = physical 1:1.
+- Always call `rt->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f))` after `BeginDraw` for child controls that should show the dialog background through.
+- For per-monitor DPI changes mid-session, handle `WM_DPICHANGED` on each control: `FluxingD2DRenderer::Instance().ReleaseHwndRenderTarget(hwnd)` + `InvalidateRect(hwnd, nullptr, FALSE)`. Do NOT call `ID2D1HwndRenderTarget::Resize(&new_size)` directly; the v0 spec 037 R2 decision is to recreate on next paint.
+
+**Anti-pattern (do NOT do)**:
+
+- Do not assume `GetClientRect` returns the same coordinate system on top-level vs child HWNDs in V1 PerMonitor DPI. Top-level: `physical = logical ¡Á dpi/96`. Child: `physical = logical ¡Á 96/dpi`. The two are opposite. Verify with `GetDpiForWindow(hwnd)` on the specific HWND before writing the size calc.
+- Do not pass `static_cast<float>(dpi)` to `D2D1::RenderTargetProperties` dpiX/dpiY unless you also feed `D2D1::RectF` in logical (DIP) coords. Mixing the two scales causes the 1.5x overflow / 0.67x shrinkage that produced the v0.18.27.x and the v0.18.28.0-first-pass bugs respectively.
+- Do not skip `rt->Clear()` for D2D child controls. The opaque-black backing store is the #1 visual artifact on high-DPI displays.
+- Do not assume child HWND DPI is the same as the system DPI. Use `GetDpiForWindow(hwnd)` to get the per-window DPI. For multi-monitor setups (spec 040+ scope), each monitor's child will report a different DPI.
+- Do not modify `WeaselServer/QuickPanelDialog.cpp` (QP geometry) to "fix" a DPI rendering bug ¡ª the QP physical 200¡Á100 in 144 DPI is intentionally small (spec 038 anti-pattern AP-041-B). The fix belongs in the 4 control WM_PAINT handlers, not the dialog.
+
+**Related L##**: L48 (FluxingD2DRenderer atexit crash ¡ª also rt lifecycle), L51 (D2D fallback for unavailable D2D ¡ª orthogonal to this; L52's fix does not regress L51), L47 (BOM/line ending damage chain ¡ª same PCH include order constraint, but D2D-specific). L52 is the **first instance** of a v0 DPI handling post-mortem; future PerMonitor V2 / multi-monitor work in spec 044+ should reference L52's empirical proof + pattern.

@@ -6,8 +6,8 @@
 #pragma once
 
 // Change these values to use different versions
-#define WINVER		0x0603
-#define _WIN32_WINNT	0x0603
+#define WINVER		0x0A00 // spec 041 T001: Win 10 1607+
+#define _WIN32_WINNT	0x0A00 // spec 041 T001: Win 10 1607+
 #define _WIN32_IE	0x0600
 #define _RICHEDIT_VER	0x0200
 #define NTDDI_VERSION  NTDDI_WINBLUE

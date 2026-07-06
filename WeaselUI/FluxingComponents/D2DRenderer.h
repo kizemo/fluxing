@@ -51,6 +51,20 @@ class FluxingD2DRenderer {
   // if HWND is unknown.
   void ReleaseHwndRenderTarget(HWND hwnd);
 
+  // spec 041 T002: convert logical-pixel client rect (returned by
+  // GetClientRect in a PerMonitor DPI aware process) to PHYSICAL
+  // device pixels for D2D drawing. ID2D1HwndRenderTarget is sized
+  // in physical pixels; D2D FillRectangle/RectF coordinates are
+  // physical device units. Without this helper, the backing store
+  // ends up 1.5x too large on a 144 DPI monitor and text/rounded
+  // rects overflow the child HWND bounds (the v0.18.27.x visual
+  // bug root cause).
+  static void GetPhysicalClientRect(HWND hwnd, RECT* out_rc);
+
+  // spec 041 T002: per-window DPI lookup (Win 10 1607+). Returns
+  // 96 if hwnd is null or the API is unavailable.
+  static UINT GetDpi(HWND hwnd);
+
   // Test-only: reset the singleton (for unit tests that need
   // a clean Instance()). Production code MUST NOT call this.
   // Forward-declared in the .cpp to avoid pulling <mutex> into

@@ -71,6 +71,7 @@ class FluxingButton {
   // Actual message handlers.
   LRESULT HandlePaint();
   LRESULT HandleLButtonUp();
+  LRESULT HandleDpiChanged(WPARAM, LPARAM);
   LRESULT HandleDestroy();
 
   // Subscribe to the theme and cache our handle. Called by

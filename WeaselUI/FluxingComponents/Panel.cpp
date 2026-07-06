@@ -104,6 +104,7 @@ LRESULT CALLBACK FluxingPanel::WndProc(HWND hwnd, UINT msg,
   }
   switch (msg) {
     case WM_PAINT: return self->HandlePaint();
+    case WM_DPICHANGED: return self->HandleDpiChanged(wParam, lParam);
     case WM_DESTROY: return self->HandleDestroy();
     default: return DefWindowProc(hwnd, msg, wParam, lParam);
   }
@@ -129,7 +130,7 @@ LRESULT FluxingPanel::HandlePaint() {
     HBRUSH bg = CreateSolidBrush(pal.back);
     if (bg) {
       RECT rc;
-      GetClientRect(hwnd_, &rc);
+      FluxingD2DRenderer::GetPhysicalClientRect(hwnd_, &rc);
       FillRect(hdc, &rc, bg);
       DeleteObject(bg);
     }
@@ -138,13 +139,18 @@ LRESULT FluxingPanel::HandlePaint() {
   }
   rt->BeginDraw();
 
+  // spec 041 fix: D2D backing store is opaque black by default.
+  // Clear to the dialog's window color before drawing the card so
+  // any pixel not covered by the rounded rect is not black.
+  rt->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f));
+
   auto pal = FluxingTheme::Instance().CurrentPalette();
   Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
   rt->CreateSolidColorBrush(
       D2D1::ColorF(pal.back, 1.0f), &brush);
 
   RECT rc;
-  GetClientRect(hwnd_, &rc);
+  FluxingD2DRenderer::GetPhysicalClientRect(hwnd_, &rc);
   D2D1_ROUNDED_RECT rr;
   rr.rect = D2D1::RectF(0.0f, 0.0f,
                          static_cast<FLOAT>(rc.right - rc.left),
@@ -161,6 +167,16 @@ LRESULT FluxingPanel::HandlePaint() {
   return 0;
 }
 
+LRESULT FluxingPanel::HandleDpiChanged(WPARAM, LPARAM lParam) {
+  // spec 041 T006: on DPI change, release the cached backing store
+  // (the old physical size is now wrong) and trigger a repaint so
+  // the next WM_PAINT re-creates the rt at the new DPI. The new
+  // window rect from lParam is already applied by Windows before
+  // WM_DPICHANGED fires; we just need to invalidate.
+  FluxingD2DRenderer::Instance().ReleaseHwndRenderTarget(hwnd_);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+  return 0;
+}
 LRESULT FluxingPanel::HandleDestroy() {
   FluxingD2DRenderer::Instance().ReleaseHwndRenderTarget(hwnd_);
   return 0;
