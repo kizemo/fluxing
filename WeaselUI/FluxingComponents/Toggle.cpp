@@ -1,4 +1,4 @@
-﻿// Toggle.cpp - spec 037 T010 (2026-07-05)
+// Toggle.cpp - spec 037 T010 (2026-07-05)
 //
 // Implementation of FluxingToggle. The 200ms slide animation
 // uses SetTimer(hwnd, 1, 10, NULL) and stops the timer when
@@ -133,7 +133,37 @@ LRESULT FluxingToggle::HandlePaint() {
   if (!hdc) return 0;
   auto rt =
       FluxingD2DRenderer::Instance().CreateHwndRenderTarget(hwnd_);
-  if (!rt) { EndPaint(hwnd_, &ps); return 0; }
+  if (!rt) {
+    // L50 fallback: D2D unavailable. Fall back to GDI so the toggle
+    // track + knob are still visible (otherwise the user sees a
+    // blank area where the switch should be).
+    auto pal = FluxingTheme::Instance().CurrentPalette();
+    DWORD track_off = 0x808080;
+    DWORD track_color = static_cast<DWORD>(
+        (1.0f - progress_) * track_off + progress_ * pal.hilited_back);
+    RECT rc;
+    GetClientRect(hwnd_, &rc);
+    HBRUSH track_brush = CreateSolidBrush(track_color);
+    if (track_brush) {
+      FillRect(hdc, &rc, track_brush);
+      DeleteObject(track_brush);
+    }
+    LONG h_rc = rc.bottom - rc.top;
+    LONG knob_r = max(2L, (LONG)(h_rc * 0.4f));
+    LONG cx = knob_r + (LONG)(progress_ * (LONG)(rc.right - rc.left - 2 * knob_r));
+    LONG cy = h_rc / 2;
+    HBRUSH knob_brush = CreateSolidBrush(RGB(255, 255, 255));
+    if (knob_brush) {
+      HPEN old_pen = (HPEN)SelectObject(hdc, GetStockObject(NULL_PEN));
+      HBRUSH old_brush = (HBRUSH)SelectObject(hdc, knob_brush);
+      Ellipse(hdc, cx - knob_r, cy - knob_r, cx + knob_r, cy + knob_r);
+      SelectObject(hdc, old_brush);
+      SelectObject(hdc, old_pen);
+      DeleteObject(knob_brush);
+    }
+    EndPaint(hwnd_, &ps);
+    return 0;
+  }
   rt->BeginDraw();
 
   auto pal = FluxingTheme::Instance().CurrentPalette();

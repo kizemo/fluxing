@@ -116,21 +116,35 @@ void CreateFluxingControls(HWND hwnd) {
   RECT client;
   GetClientRect(hwnd, &client);
 
+  // L50 + AP-050 layout fix: enforce minimum height for TitleLabel (17pt Large
+  // needs ~28px; original 20px truncated the text glyphs and showed only the
+  // D2D rt background). Also align CardPanel top to leave room, and
+  // stop CardPanel right edge from overflowing client.right (which
+  // would silently clip under WS_BORDER).
   // Title label: "Quick Panel" at the top of the dialog (17pt Large).
-  RECT title_rc = {10, 5, client.right - 10, 25};
+  // L50: rect.top=4, rect.bottom=30 -> height=26 -> enough for 17pt text
+  // and 4px padding both sides.
+  RECT title_rc = {10, 4, client.right - 32, 30};
   QuickPanelDialog::TitleLabel() = FluxingLabel::Create(
       hwnd, title_rc, L"Quick Panel", FluxingLabel::FontSize::Large);
 
   // Card panel: the rounded background container under the title.
-  RECT card_rc = {5, 30, client.right - 5, client.bottom - 5};
+  // L50: card_rc.top=32 (was 30) gives 2px breathing room under title.
+  // L50: card_rc.right=client.right-2 (was -5) ensures the CardPanel
+  // stays inside client area even with WS_BORDER insets (typically 1-2px).
+  RECT card_rc = {5, 32, client.right - 2, client.bottom - 5};
   QuickPanelDialog::CardPanel() = FluxingPanel::Create(
       hwnd, card_rc, FluxingPanel::Style::Card);
 
   // ASCII toggle (FluxingToggle): inside the card panel, left side.
   // Initial position reflects the current ASCII state (Chinese on
   // entry = off; ASCII = on).
+  // L50: use card-local coords (parent=card), width 50, height 20.
   HWND card = QuickPanelDialog::CardPanel()->Hwnd();
-  RECT toggle_rc = {15, 10, 75, 30};
+  RECT card_client;
+  GetClientRect(card, &card_client);
+  LONG card_local_width = card_client.right;
+  RECT toggle_rc = {15, 12, 65, 32};
   QuickPanelDialog::AsciiToggle() = FluxingToggle::Create(
       card, toggle_rc, /*initial=*/s_currentAscii);
   QuickPanelDialog::AsciiToggle()->SetOnChanged(
@@ -147,7 +161,10 @@ void CreateFluxingControls(HWND hwnd) {
 
   // Deploy button (FluxingButton::Primary): inside the card panel,
   // right side.
-  RECT deploy_rc = {client.right - 110, 5, client.right - 15, 35};
+  // L50: use card-local coords. client.right in card context = card width.
+  // width=100 (was 95), height=24 (was 30), top=10 (was 5) gives 12px
+  // vertical breathing room inside the 20px-tall card padding.
+  RECT deploy_rc = {static_cast<LONG>(card_local_width - 115), 10, static_cast<LONG>(card_local_width - 15), 34};
   QuickPanelDialog::DeployButton() = FluxingButton::Create(
       card, deploy_rc, L"Deploy", FluxingButton::Style::Primary);
   QuickPanelDialog::DeployButton()->SetOnClick([]() {
@@ -244,9 +261,17 @@ LRESULT QuickPanelDialog::OnCreate(HWND hwnd, WPARAM, LPARAM) {
   // spec 036 AP-036-M: native close (X) button preserved at the
   // top-right corner. TestQuickPanelDialog T1 + T6 verify that
   // this HWND exists and that WM_COMMAND IDCANCEL fires DestroyWindow.
+  // L50 fix: native close X button now uses client.right (not QP_WIDTH) for
+  // x position, because WS_BORDER reduces client area by ~2px each side.
+  // old code: QP_WIDTH - 30 = 270 -> with WS_BORDER the button straddled
+  // the client area border and overlapped TitleLabel.
+  // new code: client.right - 25 = ~267 (cleanly inside client area), top=4
+  // aligns with title_rc.top=4.
+  RECT client_for_x;
+  GetClientRect(hwnd, &client_for_x);
   CreateWindowExW(0, L"BUTTON", L"X",
                   WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                  QP_WIDTH - 30, 5, 22, 22,
+                  client_for_x.right - 25, 4, 20, 20,
                   hwnd, (HMENU)(UINT_PTR)IDCANCEL,
                   GetModuleHandle(NULL), NULL);
 

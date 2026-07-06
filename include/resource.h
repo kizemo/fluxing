@@ -28,6 +28,10 @@
 #define ID_WEASELTRAY_RERUN_SERVICE     40015
 #define ID_WEASELTRAY_LOGDIR            40016
 
+// spec 036 + L51: tray quick panel v0
+#define ID_HOTKEY_QUICK_PANEL          9001
+#define ID_WEASELTRAY_QUICK_PANEL      40018
+
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
