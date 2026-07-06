@@ -332,7 +332,30 @@ L46 #2 fix: WeaselServer/xmake.lua /OPT:REF /OPT:ICF → /OPT:NOREF /OPT:NOICF (
 
 3 个 test vcxproj (TestBindingResolution, TestResponseParser, TestYamlRoundTripE2E) 的 <IntDir>msbuild\... 缺 \ 反斜杠, 触发 MSB3491 imemsbuild 路径 (L31 root cause B). 0.18.25.0 ship 时已修.
 
-## 10.7 v0.18.27.0 已 ship (2026-07-05)
+## 
+
+## 10.8 v0.18.27.1 hotfix 已 ship (2026-07-06)
+
+L49 hotfix 修复 spec 036 (0.18.24.0) 起的 Alt+, global hotkey bug (4 个 release 版本未工作).
+
+**Root cause**: WeaselIPCServer/WeaselServerImpl.h 声明了 OnHotkey 函数 + WeaselServerImpl.cpp:76 注册 hotkey + 函数体正确实现 (PostMessage WM_COMMAND, ID_WEASELTRAY_QUICK_PANEL), 但 BEGIN_MSG_MAP 块未加 MESSAGE_HANDLER(WM_HOTKEY, OnHotkey). WM_HOTKEY 消息无 handler 路由, 被 ATL 默认 handler 丢弃.
+
+**Cure (3 changes)**:
+1. WeaselServerImpl.h line 31 加 MESSAGE_HANDLER(WM_HOTKEY, OnHotkey)
+2. TestQuickPanelRefactor.cpp 加 T0: ActiveHwnd() == NULL before any Show() call (9/9, was 8/8)
+3. scripts/test-infra/run-test-suite.bat 加 L49 pre-flight guard: findstr /C:"MESSAGE_HANDLER(WM_HOTKEY, OnHotkey)" WeaselIPCServer\\WeaselServerImpl.h. 缺失该行就 [L49 GUARD FAIL] 退出 with code 1
+
+**Verification (L46 recipe, 3 paths all PASS)**: xbuild.bat weasel installer (42.86 MB) + msbuild weasel.sln (0 errors) + run-test-suite.bat (15/15 PASS, TestQuickPanelRefactor 9/9). L49 guard 验证: 临时删 MESSAGE_HANDLER 行 + 跑 run-test-suite -> 在 build 之前就 [L49 GUARD FAIL] 退出 with code 1. 恢复后 PASS.
+
+release/fluxing-0.18.27.1-installer.exe (42,861,509 bytes, vs 0.18.27.0 42,873,668 bytes; -12,159 bytes 因 VERSION string tables 变化).
+
+L49 正式追加 (ATL/WTL 消息映射是 runtime construct, 编译器无法静态验证 function reachable via message map; 编译通过 != 消息路由正确; "OnHotkey 函数存在 != hotkey 工作"; 长期修复 spec 039 follow-up: 加 GUI-loop 集成测试真实 instantiate ServerImpl + RegisterHotKey + 发 WM_HOTKEY + verify handler fired).
+
+## 11. lessons-learned 累计 (更新)
+
+- L01-L49 (L01 - L49): 49 lessons by 2026-07-06 (L47 + L48 + L49 added).
+- L49 (新): spec 036 (0.18.24.0) 起 OnHotkey 函数存在但 MESSAGE_HANDLER 缺失, 4 个 release 版本 (0.18.24.0-0.18.27.0) Alt+, 全无效. ATL/WTL message map 是 runtime construct, 编译通过 != 路由正确. Cure: 加 MESSAGE_HANDLER(WM_HOTKEY, OnHotkey) + L49 pre-flight guard 防止再删 + T0 lifecycle invariant test. 0.18.27.1 hotfix 已应用.
+10.7 v0.18.27.0 已 ship (2026-07-05)
 
 spec 038 (QuickPanelDialog 重构 + FluxingComponents 化) + L48 防御性测试退出模式追加. 5 production files (QuickPanelDialog.h+.cpp 重写, WeaselServer.vcxproj + xmake.lua 加 include paths) + 7 test files (TestQuickPanelRefactor/ 全套 7 文件 + TestQuickPanelDialog.cpp 改写为 spec 038 适配 15 assertions) + weasel.sln + TestQuickPanelDialog.vcxproj + run-test-suite.bat 更新.
 
