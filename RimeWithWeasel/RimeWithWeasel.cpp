@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include <logging.h>
 #include <RimeWithWeasel.h>
 #include <StringAlgorithm.hpp>
@@ -193,7 +193,11 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
   RIME_STRUCT(RimeStatus, status);
   if (rime_api->get_status(session_id, &status)) {
     std::string schema_id = status.schema_id;
-    m_last_schema_id = schema_id;
+    
+  // spec 045 v0.18.29.0: cache current schema id for QuickPanel Row 3 label.
+  m_current_schema_id = status.schema_id ? status.schema_id : std::string();
+  if (m_available_schemas.empty()) _RefreshSchemaList();
+m_last_schema_id = schema_id;
     _LoadSchemaSpecificSettings(ipc_id, schema_id);
     _LoadAppInlinePreeditSet(ipc_id, true);
     _UpdateInlinePreeditStatus(ipc_id);
@@ -516,6 +520,51 @@ void RimeWithWeaselHandler::SetOption(WeaselSessionId ipc_id,
   } else {
     rime_api->set_option(to_session_id(ipc_id), opt.c_str(), val);
   }
+  // spec 045: cache 简/繁 / 全/半角 / ascii mode for QuickPanel initial state.
+  if (opt == "simplification") m_simplification = val;
+  else if (opt == "full_shape") m_full_shape = val;
+  else if (opt == "ascii_mode") m_global_ascii_mode = val;
+}
+
+void RimeWithWeaselHandler::SelectSchema(const std::string& schema_id) {
+  // spec 045 v0.18.29.0: QuickPanel 切换 button handler.
+  // If schema_id is empty, cycle to next available (legacy behavior
+  // when the user pressed the button without specifying a target).
+  if (!rime_api) return;
+  if (!schema_id.empty()) {
+    if (rime_api->select_schema(rime_api->create_session(), schema_id.c_str())) {
+      m_current_schema_id = schema_id;
+      if (_UpdateUICallback) _UpdateUICallback();
+    }
+    return;
+  }
+  // Cycle: find current schema index, advance.
+  if (m_available_schemas.empty()) _RefreshSchemaList();
+  if (m_available_schemas.empty()) return;
+  auto it = std::find(m_available_schemas.begin(),
+                      m_available_schemas.end(), m_current_schema_id);
+  size_t next = (it == m_available_schemas.end())
+                    ? 0
+                    : ((it - m_available_schemas.begin() + 1) %
+                       m_available_schemas.size());
+  std::string next_id = m_available_schemas[next];
+  if (rime_api->select_schema(rime_api->create_session(), next_id.c_str())) {
+    m_current_schema_id = next_id;
+    if (_UpdateUICallback) _UpdateUICallback();
+  }
+}
+
+void RimeWithWeaselHandler::_RefreshSchemaList() {
+  m_available_schemas.clear();
+  if (!rime_api) return;
+  RimeSchemaList sl = {0};
+  if (rime_api->get_schema_list(&sl)) {
+    for (size_t i = 0; i < sl.size; ++i) {
+      if (sl.list[i].schema_id)
+        m_available_schemas.emplace_back(sl.list[i].schema_id);
+  }
+  rime_api->free_schema_list(&sl);
+}
 }
 
 void RimeWithWeaselHandler::OnUpdateUI(std::function<void()> const& cb) {
@@ -1524,4 +1573,30 @@ void RimeWithWeaselHandler::_UpdateInlinePreeditStatus(WeaselSessionId ipc_id) {
   rime_api->set_option(session_id, "inline_preedit", Bool(inline_preedit));
   // show soft cursor on weasel panel but not inline
   rime_api->set_option(session_id, "soft_cursor", Bool(!inline_preedit));
+}
+
+bool RimeWithWeaselHandler::IsSimplification() const {
+  if (m_cached_options) return m_simplification;
+  RimeConfig config = {0};
+  Bool v = False;
+  if (rime_api && rime_api->user_config_open("default", &config)) {
+    if (rime_api->config_get_bool(&config, "simplification", &v))
+      m_simplification = !!v;
+    rime_api->config_close(&config);
+  }
+  m_cached_options = true;
+  return m_simplification;
+}
+
+bool RimeWithWeaselHandler::IsFullShape() const {
+  if (m_cached_options) return m_full_shape;
+  RimeConfig config = {0};
+  Bool v = False;
+  if (rime_api && rime_api->user_config_open("default", &config)) {
+    if (rime_api->config_get_bool(&config, "full_shape", &v))
+      m_full_shape = !!v;
+    rime_api->config_close(&config);
+  }
+  m_cached_options = true;
+  return m_full_shape;
 }

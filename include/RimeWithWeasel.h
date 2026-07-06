@@ -68,6 +68,19 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   // spec 036: return current global ASCII mode (for QuickPanel initial state).
   // Reads the cached m_global_ascii_mode which is updated by SetOption.
   bool IsAsciiMode() const { return m_global_ascii_mode; }
+  // spec 045 v0.18.29.0: read current scheme id + list available
+  // schemes + select scheme (for QuickPanel Row 3 schema label +
+  // 切换 button). The handler caches m_current_schema_id updated by
+  // _GetStatus on each IPC roundtrip; this avoids needing to call
+  // rime_api directly from the QP dialog.
+  std::string GetCurrentSchemaId() const { return m_current_schema_id; }
+  std::vector<std::string> GetAvailableSchemas() const {
+    return m_available_schemas;
+  }
+  void SelectSchema(const std::string& schema_id);
+  // Read the cached 简/繁 / 全/半角 option bools.
+  bool IsSimplification() const;
+  bool IsFullShape() const;
 
   void OnUpdateUI(std::function<void()> const& cb);
 
@@ -83,6 +96,7 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   bool _Respond(WeaselSessionId ipc_id, EatLine eat);
   void _ReadClientInfo(WeaselSessionId ipc_id, LPWSTR buffer);
   void _GetCandidateInfo(weasel::CandidateInfo& cinfo, RimeContext& ctx);
+  void _RefreshSchemaList();
   void _GetStatus(weasel::Status& stat,
                   WeaselSessionId ipc_id,
                   weasel::Context& ctx);
@@ -104,6 +118,12 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   AppOptionsByAppName m_app_options;
   weasel::UI* m_ui;  // reference
   DWORD m_active_session;
+  // spec 045: cached scheme + option bools (refreshed by _GetStatus).
+  std::string m_current_schema_id;
+  std::vector<std::string> m_available_schemas;
+  mutable bool m_simplification = false;
+  mutable bool m_full_shape = false;
+  mutable bool m_cached_options = false;
   bool m_disabled;
   std::string m_last_schema_id;
   std::string m_last_app_name;
