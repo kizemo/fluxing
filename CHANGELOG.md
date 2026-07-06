@@ -1,3 +1,34 @@
+## [0.18.27.1-fluxing] - 2026-07-06
+
+### L49 hotfix - Alt+, global hotkey routing fix + L49 pre-flight guard
+
+- **Problem (R1 intent)**: spec 036 (0.18.24.0) ship 的 Alt+, global hotkey 从未工作。安装 0.18.24.0 / 0.18.25.0 / 0.18.26.0 / 0.18.27.0 任何版本,按 Alt+, 不会弹出 QuickPanelDialog。鼠标左键托盘图标 + 右键菜单 QuickPanel 项 均能正常打开 dialog,但 Alt+, 完全无效。
+
+- **Root cause (L49)**: spec 036 commit (501a2ce) 在 WeaselIPCServer/WeaselServerImpl.h 声明了 `LRESULT OnHotkey(...)` 函数 + 在 WeaselServerImpl.cpp:76 加了 `RegisterHotKey(m_hWnd, ID_HOTKEY_QUICK_PANEL, MOD_ALT, VK_OEM_COMMA)` + 实现了 OnHotkey 函数体 (PostMessage WM_COMMAND, ID_WEASELTRAY_QUICK_PANEL),但**从未**在 BEGIN_MSG_MAP 块加 `MESSAGE_HANDLER(WM_HOTKEY, OnHotkey)`。Windows 发 WM_HOTKEY 时消息路由失败,被 ATL 默认 handler 丢弃。spec 037/038 多个 ship commit 也没发现这个 bug,因为 link-probe 测试 + smoke test + 3-path hard gate 都不验证 GUI-loop 消息路由。
+
+- **Cure (3 changes)**:
+  1. WeaselIPCServer/WeaselServerImpl.h line 31 加 `MESSAGE_HANDLER(WM_HOTKEY, OnHotkey)` 到 message map (在 WM_COMMAND handler 之后, END_MSG_MAP 之前)。
+  2. test/TestQuickPanelRefactor/TestQuickPanelRefactor.cpp 加 T0 assertion: `ActiveHwnd() == NULL before any Show() call` (9/9 assertions, was 8/8)。T0 文档化 L48 spec 038 lifecycle contract 作为可测试不变量。
+  3. scripts/test-infra/run-test-suite.bat 加 L49 pre-flight guard: `findstr /C:"MESSAGE_HANDLER(WM_HOTKEY, OnHotkey)" WeaselIPCServer\WeaselServerImpl.h`。如果该行被未来 commit 误删,脚本在测试 build 之前就退出 with code 1 + 打印 `[L49 GUARD FAIL]`。
+
+- **Verification (L46 recipe, 3 paths all PASS)**:
+  - Path 1 xbuild.bat weasel installer -> exit 0, installer 42,861,509 bytes (vs 0.18.27.0 42,873,668 bytes; -12,159 bytes 因为 VERSION_PATCH=27 + PRODUCT_VERSION=0.18.27.1 字符串表变化), PE arch 0x14C x86.
+  - Path 2 msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m -> 0 errors.
+  - Path 3 scripts\test-infra\run-test-suite.bat -> 15/15 PASS, TestQuickPanelRefactor 9/9 (T0 + T1 + T2a + T2b + T3a + T3b + T3b + T4 + T5)。
+  - L49 guard 验证: 临时删 MESSAGE_HANDLER 行 + 跑 run-test-suite -> 在测试 build 之前就 `[L49 GUARD FAIL]` 退出 with code 1。恢复后重新验证 PASS。
+
+- **Files modified**:
+  - WeaselIPCServer/WeaselServerImpl.h (+1 行 MESSAGE_HANDLER(WM_HOTKEY, OnHotkey))
+  - test/TestQuickPanelRefactor/TestQuickPanelRefactor.cpp (+12 行 T0 + comments)
+  - scripts/test-infra/run-test-suite.bat (+12 行 L49 guard)
+  - .specify/memory/lessons-learned.md (+L49 entry, 详细 root-cause + cure + pattern + anti-pattern)
+
+- **L49 lessons-learned 正式追加** (本次 hotfix 发现的核心 pattern):
+  - ATL/WTL 消息映射是 runtime construct,编译器无法静态验证每个声明的函数是否真的 reachable via message map。
+  - 编译通过 ≠ 消息路由正确。
+  - "OnHotkey 函数存在,所以 hotkey 工作" — function existence ≠ message routing。
+  - 长期修复 (spec 039 follow-up): 加一个 GUI-loop 集成测试,真实 instantiate ServerImpl + 创建 HWND + RegisterHotKey + 发 WM_HOTKEY + verify handler fired。
+  - 当前 stopgap: 静态检查 pre-flight guard + T0 lifecycle invariant test。
 ## [0.18.27.0-fluxing] - 2026-07-05
 
 ### spec 038 - QuickPanelDialog 重构 (FluxingComponents 化 + FluxingPanel::Card 容器 + native close X 保留) + v0.18.27.0 release + L48 防御性测试退出模式
