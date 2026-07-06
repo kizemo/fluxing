@@ -430,6 +430,19 @@ PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 触
 - L48 lessons-learned 正式追加 (7 root-causes: FluxingD2DRenderer atexit crash + GetClassNameW NULL buffer bug + sln ProjectConfiguration line-separation + msbuild vcxproj-direct SolutionDir trap + QuickPanelDialog s_hwnd lifecycle + unique_ptr<Fluxing*> accessor pattern AP-038-A + WM_LBUTTONUP callback contract)
 - spec 039 bootstrap: 40 tasks / 8 phase, FluxingComponents 动画扩展 + 4 新控件 (Slider/Dropdown/Checkbox/Radio)
 
+
+
+### 9.8 v0.18.27.1 hotfix ship gate (2026-07-06, 实际 ship 完成)
+
+- **L49 root cause fix**: WeaselIPCServer/WeaselServerImpl.h line 31 加 MESSAGE_HANDLER(WM_HOTKEY, OnHotkey) 到 message map. 修复 spec 036 (0.18.24.0) 起的 Alt+, global hotkey 4-release bug.
+- **15 test projects all PASS** - 实测 ALL TESTS PASSED (含 TestQuickPanelRefactor 9/9, was 8/8 before T0).
+- **TestQuickPanelRefactor 9/9 assertions** (T0 ActiveHwnd()=NULL + T1 5 descendants + T2a/T2b toggle initial state + T3a/T3b WM_LBUTTONUP no crash + T3b toggle still valid + T4 dark-mode re-invalidate + T5 Deploy button Primary style).
+- **L49 pre-flight guard** in scripts/test-infra/run-test-suite.bat: findstr 检查 MESSAGE_HANDLER(WM_HOTKEY, OnHotkey) 存在. 缺失就 [L49 GUARD FAIL] 退出. 验证: 临时删 + 跑 -> fail; 恢复 + 跑 -> pass.
+- **L42 byte-verify**: 0x001E1E1E 仍在 weasel.dll.
+- **L14 arch-verify**: 6 binary 全部 arch 一致 (x86=0x14C, x64=0x8664, ARM64=0xAA64, ARM=0x01C4).
+- **L47 byte-verify**: 全部 source file byte-healthy (C0=0 C1=0).
+- **L49 lessons-learned** 正式追加 (ATL/WTL 消息映射是 runtime construct, 编译通过 != 消息路由正确; OnHotkey 函数存在 != hotkey 工作).
+- **spec 039 follow-up**: 加 GUI-loop 集成测试真实 instantiate ServerImpl + RegisterHotKey + 发 WM_HOTKEY + verify handler fired (L49 长期修复).
 ### 9.7 v0.18.27.0 TestQuickPanelRefactor 详情
 
 | 测试 | assertions | 状态 |
