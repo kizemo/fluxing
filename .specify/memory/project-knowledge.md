@@ -600,3 +600,288 @@ cmd /c "cd /d ""D:\Program Files\fluxing\weasel"" && rime_dict_manager.exe -e ri
 | P4 | spec 050 | 偏好设置 UI（改 key_binder / ascii_composer） | v0.18.34.0 |
 | P5 | spec 051 | yaml 可视化配置 UI（spec 007） | v0.18.35.0+ |
 | P6 | spec 052 | Alt+K 短语 | 未来 |
+## 附录 A：从 rimetrae cursor 项目学到的实战经验（2026-07-07）
+
+> 来源：F:\soft\02office\rimetrae\weasel\（cursor 之前二次开发的完整工作副本）。
+> cursor 在 2026-06 用 2 天时间独立完成了所有 UI + 后端 + 部署，build 产物完整保留在 msbuild/Release/Win32/。
+> 我们要学习但不复用——把他的设计思想提炼出来，按 rime/weasel 现有架构重新实现。
+
+### A1. cursor 实现的全景（已经 100% 编译通过的组件）
+
+**WeaselDeployer 新增 5 文件**（F:\soft\02office\rimetrae\weasel\WeaselDeployer\）：
+
+| 文件 | 行数 | 作用 |
+|---|---|---|
+| CustomPhraseListDialog.{h,cpp} | ~984 | 主列表 UI，可查看/增删改/导入导出，区分固定短语和学习词条 |
+| CustomPhraseDialog.{h,cpp} | ~中等 | 单条编辑对话框（编码 + 短语） |
+| CommonPhraseEditDialog.{h,cpp} | ~中等 | 批量编辑入口（startup_mode 参数） |
+| HotkeySettingsDialog.{h,cpp} | ~中等 | 快捷键设置面板（KeyCaptureEdit 抓键） |
+| KeyCaptureEdit.{h,cpp} | ~中等 | 单个按键抓取控件（替换原来的 EDIT 控件） |
+
+**WeaselServer 新增 1 文件**：
+
+| 文件 | 作用 |
+|---|---|
+| TrayCommonPhrasePanel.{h,cpp} | 托盘弹出短语面板（独立短语列表，键盘钩子支持） |
+
+**include 新增 1 文件**：
+
+| 文件 | 作用 |
+|---|---|
+| CommonPhraseStore.h | 独立短语面板的数据 store，存 weasel_common_phrases.txt |
+
+**WeaselDeployer 新增 1 header-only 库**：
+
+| 文件 | 作用 |
+|---|---|
+| DeployerUiHelper.h | 高 DPI / 暗色标题栏 / 窗口几何持久化 / 字体 / 焦点抓取（inline 函数库） |
+
+
+### A2. cursor 实现 UI 编辑用户词典 的真实机制（修正之前的错误判断）
+
+**重要修正**：用户说之前 cursor 实现了 UI 编辑用户词典和常用短语——经查证，cursor **没有**实现用户词典（rime_ice.userdb leveldb）的逐条 UI 编辑。**它只实现了常用短语（custom_phrase.txt）的 UI 编辑**。这与我们 spec 048（P2 用户词典 UI 编辑器）是不同的事。
+
+具体三步流程（参考 CustomPhraseListDialog::SaveEntries 实现，约 603-635 行）：
+
+`
+1. UI 编辑（OnAdd/OnEdit/OnDelete/OnApplyEdit）
+   ↓ 修改内存中的 custom_entries_ vector<CustomPhraseEntry>{code, phrase, source_file, learned:false}>
+2. SaveEntries():
+   a. 把 custom_entries_ 写回 custom_phrase.txt 和 custom_phrase_double.txt：
+      - header: # Rime table\n# coding: utf-8\n#@/db_name\tcustom_phrase\n#@/db_type\ttabledb\n...\n
+        （custom_phrase_double.txt 时 db_name = custom_phrase_double）
+      - body: phrase<TAB>code 逐行（用 wtou8 转 UTF-8）
+   b. 调用 rime_get_api()->deploy(); // 让 WeaselDeployer 触发 RIME 重新编译 .bin
+   c. RefreshServerUserDictSnapshot():  // ~行 130-134（匿名 namespace）
+        weasel::Client client; client.EndMaintenance(); client.StartMaintenance();
+        // 通过 IPC 通知 WeaselServer 释放 userdb lock + 重新加载快照（顺序反着的技巧）
+3. ReloadList() 刷新 UI（PopulateListBox + UpdateStatsLabel + UpdateDetailPanel）
+`
+
+**关键限制**（cursor 也没绕过去）：
+
+- 学习词条（来自 rime_ice.userdb 的 leveldb）**不能**在 UI 中编辑，只能查看 + 删除——必须通过输入时右键候选词触发 Memory::OnDeleteEntry（删除 commit 计数）或导出为 custom_phrase 后再编辑。cursor 在 CustomPhraseListDialog::UpdateDetailPanel 里检测 IsLearnedSelection(index)，如果是 learned entry 就禁用编辑控件并提示请在输入时通过候选词右键删除。
+- Cursor 用 looks_like_code() 函数自动判断左右列谁是编码谁是短语（编码必须是字母数字下划线 + 短横线 + 撇号 + 空格），避免用户填反了。ParsePhraseLineImpl（行 40-80）就靠这个判断。
+- custom_phrase.txt header **必须**包含 #@/db_name\tcustom_phrase 才能被 RIME 识别——cursor 在 PhraseFileHeader(filename) 里强制写。删掉这行 RIME 会忽略整个文件。
+- GetPhraseFileName()（行 132-153）智能选择：优先用 custom_phrase_double.txt（如果 default.custom.yaml 里写了 double_pinyin 方案），否则用 custom_phrase.txt。
+
+
+### A3. cursor 实现的两套短语系统（关键区分！）
+
+| 维度 | 常用短语（custom_phrase.txt） | 独立短语（weasel_common_phrases.txt） |
+|---|---|---|
+| **数据载体** | RIME 内置 tabledb | 纯文本，每行一条 |
+| **触发方式** | 输入编码（如 oa） | 直接选（无编码） |
+| **关联文件** | user_dir/custom_phrase.txt | user_dir/weasel_common_phrases.txt |
+| **管理 UI** | CustomPhraseListDialog | TrayCommonPhrasePanel（托盘面板） |
+| **调用引擎** | RIME deploy() 重新编译 | 不需要，纯文本读写 |
+| **用途** | oa → 常用语 快捷触发 | 即时贴 无编码短语 |
+
+**对我们的启发**：
+
+- spec 049（常用短语 UI 编辑器）= cursor 的 CustomPhraseListDialog 三件套（CustomPhraseListDialog + CustomPhraseDialog + CommonPhraseEditDialog）——**完整可用**。但 spec 049 当前是 P3，建议提升为 **P1 spec 046**，因为它 1-2 天就能 ship，是 spec 048 的良好过渡。
+- cursor 的 TrayCommonPhrasePanel（独立短语面板）+ CommonPhraseStore（数据 store）我们**不需要**——已经被 QuickPanelDialog（spec 045，8 入口 mac 风格）替代，而且独立短语在 RIME 内没有触发入口，没用户场景。**建议从路线图里删除 spec 049 的独立短语部分**。
+
+### A4. cursor 的 DeployerUiHelper.h 设计（强烈推荐复用）
+
+这是个**纯 header 库**（7.7KB，372 行，inline 函数），核心 8 个工具（按使用频率）：
+
+`cpp
+namespace deployer_ui {
+  // 7.7KB, ~372 行, 纯 inline, 零编译开销, 零链接依赖（除 shcore.lib/Dwmapi.lib 已通过 pragma 引入）
+  constexpr wchar_t kUiRegistryKey[] = L" Software\\\\Rime\\\\Weasel\\\\UI\; // 几何持久化用此 key
+ constexpr int kTitleBarHeightDp = weasel_ui::kTitleBarHeightDp; // 32dp
+
+ inline void EnableDarkTitleBar(HWND hwnd); // DWMWA_USE_IMMERSIVE_DARK_MODE = 20, BOOL=TRUE
+ inline UINT GetDpiForWindow(HWND hwnd); // GetDpiForMonitor(MDT_EFFECTIVE_DPI) + GetDeviceCaps fallback
+ inline int Scale(int v, UINT dpi); // MulDiv(v, dpi, 96)
+ inline HFONT CreateUiFont(int pt, UINT dpi, bool bold = false); // Microsoft YaHei UI, 负 height
+ inline void BringDialogToFront(HWND hwnd); // AttachThreadInput(cur_tid, fg_tid, TRUE/FALSE) 技巧
+ inline void EnableResizableFrame(HWND hwnd); // WS_THICKFRAME | WS_MAXIMIZEBOX, 清 DS_MODALFRAME
+ inline bool LoadWindowGeometry(...); // HKCU\Software\Rime\Weasel\UI\<key>X/Y/W/H (REG_DWORD)
+ inline bool SaveWindowGeometry(...); // 持久化到同一注册表位置
+}
+`
+
+**优点**：
+
+- header-only，零编译开销，零链接依赖
+- 高 DPI 全套工具，比单文件 Scale() 强很多
+- 暗色标题栏一句调用（DWMWA 20 = Win10 1903+）
+- 几何持久化自动写到注册表（不是文件，避免 %APPDATA% 路径问题）
+- 字体用 Microsoft YaHei UI（中文环境默认字体）
+
+**移植路径**：直接 copy 到 WeaselDeployer/DeployerUiHelper.h（与 cursor 一致），所有现有 Dialog 改用它替换当前散落的代码。**预计可让我们省的 30% UI 代码**——DictManagementDialog、UIStyleSettingsDialog、SwitcherSettingsDialog 都能受益。
+
+### A5. cursor 的 UI 渲染技术栈选择（避免我们再踩 D2D 坑）
+
+cursor 用的：
+
+- **CDialogImpl + WTL**（不是 MFC）→ 与 weasel 现有风格一致
+- **GDI**（HDC + SetBkColor/SetTextColor）→ 与现有 DictManagementDialog 一致
+- **DWMAPI** → 暗色标题栏
+- **shcore.lib** → GetDpiForMonitor
+- **注册表 HKCU\Software\Rime\Weasel\UI** → 窗口几何持久化
+- **未用 Direct2D / DWrite** → 简化构建
+
+**对我们的启发**：cursor 没用 D2D 是对的——QuickPanelDialog（spec 045）之前用 D2D 在 144 DPI 上有 layout 错位问题（spec 041 修复过）。**新 UI 都走 GDI + DeployerUiHelper**，避免再踩 D2D 的坑。WeaselUI/FluxingComponents/ 里的 D2D 控件（Button/Toggle/Label/Panel）只用于托盘弹出层，不要混进 Dialog 里。
+
+### A6. cursor 解决 shift 快捷键问题的核心代码
+
+cursor 在 Configurator::EnsureDeployAsciiConfig() 里写了 deploy 钩子。每次 deploy 时强制把所有 Shift 绑定打成 noop（三个文件全部覆盖：weasel_hotkeys.yaml + default.yaml + default.custom.yaml）。TSF 层 _ToggleAsciiMode 处理单击 Shift，RIME 层不做任何反应——避免 spec 041/L43/L46 修的 shift 其它键误触问题再次发生。
+
+覆盖的 5 种 mode：commit_code / inline_ascii / set_ascii_mode / unset_ascii_mode / clear，全部打成 noop。
+
+如果 hotkeys 文件没有 Control+Space 自动加上 key_binder/bindings/+ 段：
+`
+key_binder/bindings/+:
+  - { when: always, toggle: ascii_mode, accept: Control+space }
+`
+
+**对我们的启发**：这正是我们 spec 045 修复的核心——但 cursor 用 deploy 钩子自动修复，比我们手动改 yaml 文件更优雅。**未来 spec 目标**：把 EnsureDeployAsciiConfig 移植到 Configurator::Run 里。
+
+
+### A7. cursor 的 IPC 通信模式（推荐学习）
+
+cursor 在所有需要 WeaselServer 释放 userdb lock 的操作前都用：
+
+`cpp
+weasel::Client client;
+if (client.Connect()) {
+  client.StartMaintenance();   // 让 WeaselServer 进入维护模式（释放 userdb lock）
+}
+
+// ... 做 RIME 操作（deploy / 配置变更 / 词典导入导出）...
+
+if (client.Connect()) {
+  client.EndMaintenance();     // 让 WeaselServer 退出维护模式（重新加载）
+}
+`
+
+**关键点**：
+
+- 用 Mutex WeaselDeployerMutex + StartMaintenance/EndMaintenance 双重保护（CreateMutex(NULL, TRUE, ...) + GetLastError() == ERROR_ALREADY_EXISTS 检查）
+- Deploy 时 client.Connect() 可能失败（WeaselServer 没启动），需要 graceful degradation
+- Export/Import 必须先 StartMaintenance，否则会撞 userdb lock——L10 lesson 已记录此问题
+- RefreshServerUserDictSnapshot（A2 提到）顺序反着：先 EndMaintenance 再 StartMaintenance，目的是让 WeaselServer 重新走一遍 maintenance 流程，主动丢弃内存缓存
+
+### A8. cursor 的 keyboard hook 实现细节（参考但不要照搬）
+
+虽然我们不需要 TrayCommonPhrasePanel，但 cursor 的键盘钩子写法值得学：
+
+`cpp
+HHOOK keyboard_hook_ = NULL;
+void StartKeyboardHook() {
+  keyboard_hook_ = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc,
+                                     GetModuleHandle(NULL), 0);
+}
+void StopKeyboardHook() {
+  if (keyboard_hook_) UnhookWindowsHookEx(keyboard_hook_);
+}
+void HandleHookKey(WPARAM vk) {
+  // 处理 Esc 关闭、Enter 提交、Up/Down 选择等
+}
+`
+
+**注意**：WH_KEYBOARD_LL 是系统级钩子，性能敏感——cursor 在 panel 隐藏时立刻 StopKeyboardHook。**我们 spec 046（如果做 UI 编辑面板）不要用系统级钩子**，改用 Dialog 内的 PreTranslateMessage 即可。
+
+### A9. cursor 的 Configurator::EnsureDeployAsciiConfig 完整逻辑
+
+cursor 在每次 deploy 时强制执行 4 件事：
+
+1. Shift_L/R 全部 noop（5 种 mode 都覆盖：commit_code/inline_ascii/set_ascii_mode/unset_ascii_mode/clear）
+2. 如果 hotkeys 文件没有 Control+Space 自动加上（key_binder/bindings/+ 模式）
+3. 同步处理三个文件：weasel_hotkeys.yaml + default.yaml + default.custom.yaml
+4. 修改后调用 rime->deploy() 触发重新加载（注意顺序：先 Apply 再 deploy）
+
+**对我们的启发**：spec 045 已经 ship，但 hotkeys 修复应该做成**自动 deploy 钩子**，而不是让用户手动改 yaml。**这是一个未来 spec（待编号）的目标**：把 EnsureDeployAsciiConfig 移植到 Configurator::Run 里，并在 L43/L46 lessons-learned 中标注自动修复模式作为后续计划。
+
+### A10. cursor 的 DictManagementDialog 没改 4 按钮（反例：用户词典 UI 编辑的边界）
+
+这是反例：cursor 在 WeaselDeployer 添加了 5 个新 Dialog，但**没有**改 DictManagementDialog 的 4 按钮（backup/restore/import/export）。说明 cursor 也认为用户词典的逐条 UI 编辑超出 2 天工作量。
+
+**对我们的启发**：
+
+- spec 048（用户词典 UI 编辑器）= 真正难点，需要 librime 扩展 commit_entry/delete_entry/lookup_entries API（参考 UserDictionary::UpdateEntry(DictEntry, commits=-N, prefix)）
+- 优先级 P2 是合理的——不能 1 周内完成
+- 短期方案仍是 DictManagementDialog 的 4 按钮（export/import）
+- **不要在 spec 046 里尝试同时做 spec 048**——会失控
+
+
+### A11. cursor 的 MSBuild 工程改动模式（vcxproj 维护）
+
+cursor 给 WeaselDeployer.vcxproj 加 5 个文件，给 WeaselServer.vcxproj 加 1 个文件。
+
+**关键改动清单**：
+
+- 资源 ID 在 resource.h 里新增：IDD_CUSTOM_PHRASE、IDD_HOTKEY_SETTINGS、IDC_USER_DICT_LIST、IDC_KEY_CAPTURE 等
+- .rc 文件要加对应控件定义（LTEXT ..., IDC_LABEL_CODE, ...）
+- vcxproj 必须用 ClCompile Include + ClInclude Include 两个标签
+- 如果用 xmake 构建，xmake.lua 的 add_files(WeaselDeployer/*.cpp) 模式已经自动包含，无需改
+- **Cursor 没碰 librime-lua 集成**（rimetrae 项目里 thirdparty/librime-lua/ 是空的）
+
+### A12. cursor 没做的事情（反推我们不该做）
+
+- 没动 librime C++ 源码（用户词典 API 没扩展）
+- 没实现 IPC 双向消息（只有 maintenance 模式开关）
+- 没做 yaml 可视化 UI
+- 没做 Direct2D/DWrite 重构
+- 没集成 librime-lua
+- 没改 weaselx64.dll（保持原样）
+
+**启发**：cursor 2 天完成的**边界**就是 GDI + WTL Dialog + IPC maintenance + 文件读写。**我们要保持这个边界**，不要为了看起来更高级引入 D2D/WebView/yaml 解析器。FluxingComponents 控件库（D2D）只用于托盘弹出层（spec 045 验证过 OK），不要进 Dialog。
+
+### A13. cursor 的 build 输出对照表（验证编译完整性）
+
+`
+F:\soft\02office\rimetrae\weasel\msbuild\Release\Win32\
+├── WeaselDeployer\
+│   ├── CommonPhraseEditDialog.obj    ✓
+│   ├── CustomPhraseDialog.obj        ✓
+│   ├── CustomPhraseListDialog.obj    ✓
+│   └── ... 其他现有 .obj
+└── WeaselServer\
+    └── TrayCommonPhrasePanel.obj     ✓
+`
+
+**对照我们项目**：
+
+- F:\soft\00selfmade\rime\output\Win32\ 没有 CustomPhrase*.obj（缺 3 文件）—— spec 046 需要补
+- F:\soft\00selfmade\rime\output\Win32\ 有 QuickPanelDialog.obj（spec 045 ship 过）
+
+
+### A14. 把 cursor 经验映射到我们路线图
+
+| Cursor 已实现 | 我们路线图对应 | 优先级 |
+|---|---|---|
+| CustomPhraseListDialog 三件套 | **建议提升为 spec 046**（从 spec 049 提前） | **P1** |
+| HotkeySettingsDialog + KeyCaptureEdit | spec 050（偏好设置 UI） | P3 |
+| DeployerUiHelper.h | 立即 copy，作为所有新 UI 的基础设施 | **P0** |
+| EnsureDeployAsciiConfig deploy 钩子 | spec 045 后续增强（待编号） | P2 |
+| TrayCommonPhrasePanel | **不需要**（已被 QuickPanelDialog 替代） | — |
+| CommonPhraseStore.h | **不需要**（同上） | — |
+
+**结论**：我们下一步高 ROI 任务是 **spec 046 = 移植 cursor 的 CustomPhraseListDialog + DeployerUiHelper**，预计 1-2 天可 ship。spec 048（用户词典 UI 编辑器）继续 P2 推后。
+
+### A15. rimetrae cursor 项目保留价值（永久 reference）
+
+- **可作为 reference 永久保留**——F:\soft\02office\rimetrae\weasel\ 不要再删（用户已确认）
+- **每次移植前先 diff rimetrae vs rime/weasel**——看 cursor 改了哪些文件，定位源码
+- **可以直接 copy-paste 的代码**：
+  - WeaselDeployer/DeployerUiHelper.h（header-only 工具库，最容易复用）
+  - WeaselDeployer/CustomPhraseListDialog.h（WTL Dialog 框架，~50 行 header）
+  - WeaselDeployer/CustomPhraseDialog.h（单条编辑 Dialog 框架）
+  - include/CommonPhraseStore.h（如需要独立短语面板）
+- **不能直接 copy**：
+  - TrayCommonPhrasePanel.*（我们用 QuickPanelDialog 替代）
+  - CommonPhraseStore.h（如不需要独立短语面板）
+- **需要本地化的**：
+  - 资源 ID（resource.h 已有的不冲突）
+  - 字符串（要翻译成 rime/weasel 现有用词，如小鹤 → 火流猩）
+  - vcxproj + xmake.lua（加入新文件）
+  - DPI 缩放适配（cursor 用 96/120/144 DPI 测试过，我们要测 100%/125%/150%/175%）
+  - 暗色/亮色主题适配（rimetrae 测了暗色，我们要测亮色）
+
+**约定**：所有移植的 cursor 代码在 commit message 里加 origin: rimetrae 前缀，便于后续追溯。
+
+
