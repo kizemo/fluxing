@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>快捷设置栏 v3 · 设计系统式 · frontend-ui-engineering</title>
+<style>
+:root{
+--space-1:4px; --space-2:8px; --space-3:12px;
+--text:#1c1c1e; --muted:#8a8a8e;
+--surface:#ffffff; --bg:#f4f4f5; --border:#e5e5ea;
+--hover:#f0f0f3; --pressed:#e6e6ea; --focus:rgba(10,132,255,.35);
+--accent:#0a84ff; --accent-soft:#e6f0ff;
+--radius:6px;
+--font:13px;
+}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);padding:24px;font-size:var(--font);line-height:1.4}
+h1{font-size:18px;margin:0}
+h2{font-size:14px;margin:24px 0 8px}
+.meta{color:var(--muted);font-size:12px;margin:4px 0 16px}
+.tag{display:inline-block;padding:2px 8px;border-radius:10px;background:#e6f0ff;color:#0a84ff;font-size:11px;margin-right:6px}
+.bar{
+width:288px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+padding:var(--space-1) var(--space-2);display:flex;gap:var(--space-1);align-items:center;
+}
+.ib{
+appearance:none;background:transparent;border:1px solid transparent;
+width:32px;height:28px;border-radius:var(--radius);display:inline-flex;align-items:center;justify-content:center;
+cursor:pointer;color:var(--text);font:inherit;position:relative;
+}
+.ib .ico{width:16px;height:16px;display:block}
+.ib:hover{background:var(--hover)}
+.ib:active{background:var(--pressed)}
+.ib:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.ib[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
+.ib[disabled]{opacity:.4;cursor:not-allowed}
+.ib[disabled]:hover{background:transparent}
+.sep{width:1px;height:18px;background:var(--border);margin:0 var(--space-1)}
+.preview{display:flex;justify-content:flex-end;background:#e8e8ed;padding:24px;border-radius:8px}
+table{width:100%;border-collapse:collapse;margin-top:8px}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;vertical-align:top}
+th{background:#fafafa;font-weight:600;width:30%}
+code{background:#f0f0f3;padding:1px 5px;border-radius:3px;font-size:11px}
+.swatch{display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;margin-right:4px;border:1px solid var(--border)}
+</style>
+</head>
+<body>
+<h1>快捷设置栏 v3 · 设计系统式</h1>
+<div class="meta">
+<span class="tag">技能：$frontend-ui-engineering</span>
+核心思路：每个按钮复用 <code>IconButton</code> 组件；用设计令牌驱动样式；键盘可达；三态严格；可达性优先。
+规格：宽 288px；按钮 7 个，32×28px；总高 36px。
+</div>
+<h2>视觉预览（鼠标 / 键盘都能用）</h2>
+<div class="preview">
+<div class="bar" role="toolbar" aria-label="快捷设置栏">
+<button class="ib" aria-label="方案切换（F4）" title="方案切换 (F4)">
+<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h8M2 12h10"/></svg>
+</button>
+<span class="sep"></span>
+<button class="ib" aria-label="用户字典编辑" title="用户字典">
+<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="10" rx="1"/><path d="M5 6h6M5 9h6"/></svg>
+</button>
+<button class="ib" aria-label="常用短语编辑" title="常用短语">
+<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 2L14 5L6 13H3V10L11 2Z"/></svg>
+</button>
+<span class="sep"></span>
+<button class="ib" aria-label="中英文切换（Shift）" aria-pressed="false" title="中 / 英 (Shift)">
+<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h7M5.5 3v10M3 8h6M9 6c2 0 4 1.5 4 5M13 11c0 1-1 2-2 2"/></svg>
+</button>
+<button class="ib" aria-label="全半角标点切换（Ctrl + .）" aria-pressed="true" title="全 / 半角 (Ctrl+.)">
+<svg class="ico" viewBox="0 0 16 16" fill="currentColor"><circle cx="4" cy="13" r="1"/><path d="M11 2v8a3 3 0 0 1-6 0" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+</button>
+<button class="ib" aria-label="软键盘（特殊符号 表情）" title="软键盘">
+<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="3.5" width="13" height="9" rx="1"/><path d="M4 6h.01M7 6h.01M10 6h.01M13 6h.01M4 9h.01M7 9h.01M10 9h.01M13 9h.01M4 11h8"/></svg>
+</button>
+<span class="sep"></span>
+<button class="ib" aria-label="登录（云同步 · 即将上线）" title="登录（即将上线）" disabled>
+<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="6" r="3"/><path d="M2 14c1-3 3-4 6-4s5 1 6 4"/></svg>
+</button>
+</div>
+</div>
+<h2>设计令牌（design tokens）</h2>
+<table>
+<tr><th>spacing</th><td><code>--space-1</code>=4px, <code>--space-2</code>=8px, <code>--space-3</code>=12px</td></tr>
+<tr><th>radius</th><td><code>--radius</code>=6px（统一圆角，不许随意改）</td></tr>
+<tr><th>color</th><td>
+<span class="swatch" style="background:#1c1c1e"></span> text&nbsp;
+<span class="swatch" style="background:#8a8a8e"></span> muted&nbsp;
+<span class="swatch" style="background:#f0f0f3"></span> hover&nbsp;
+<span class="swatch" style="background:#e6e6ea"></span> pressed&nbsp;
+<span class="swatch" style="background:#e6f0ff"></span> accent-soft&nbsp;
+<span class="swatch" style="background:#0a84ff"></span> accent
+</td></tr>
+<tr><th>typography</th><td>系统字体栈；正文 13px / 标题 18px</td></tr>
+<tr><th>motion</th><td>状态切换 200ms ease-out；透明度（窗口层）90% → 0%，200ms</td></tr>
+</table>
+<h2>IconButton 组件规范</h2>
+<table>
+<tr><th>size</th><td>32×28px；图标 16×16px 内嵌 SVG</td></tr>
+<tr><th>state · default</th><td>背景 transparent，文字 --text</td></tr>
+<tr><th>state · hover</th><td>背景 --hover (#f0f0f3)</td></tr>
+<tr><th>state · pressed</th><td>背景 --pressed (#e6e6ea)</td></tr>
+<tr><th>state · focused (键盘)</th><td>2px outline --focus (rgba 蓝)</td></tr>
+<tr><th>state · aria-pressed=true</th><td>背景 --accent-soft，文字 --accent</td></tr>
+<tr><th>state · disabled</th><td>opacity .4，cursor not-allowed，不响应 hover</td></tr>
+<tr><th>a11y</th><td>必须 <code>aria-label</code>；toggle 用 <code>aria-pressed</code>；icon 用内嵌 SVG 不当装饰</td></tr>
+<tr><th>tooltip</th><td>用原生 <code>title</code>，文案：动作 + 快捷键（如"中 / 英 (Shift)"）</td></tr>
+</table>
+<h2>键盘可达（Tab 顺序即按钮顺序）</h2>
+<p>1.方案 → 2.字典 → 3.短语 → 4.中英 → 5.全半角 → 6.符号 → 7.登录（disabled，焦点跳过）</p>
+<p>回车 = 点击；<code>Esc</code> = 关闭设置栏；<code>Tab</code> 在按钮间切换聚焦。</p>
+<h2>为什么这样设计</h2>
+<ul>
+<li>图标按钮省空间（v2 占 300×36，本版 288×36）；不依赖 emoji 字体，避免 Windows 上字体替换导致的渲染差异。</li>
+<li>SVG 内嵌矢量，HiDPI 不糊；颜色用 <code>currentColor</code> 自动跟随主题。</li>
+<li>所有按钮用同一个 <code>.ib</code> 类，新增按钮无需写新样式。</li>
+<li>设计令牌集中在 <code>:root</code>，暗色主题切 <code>data-theme="dark"</code> 即可。</li>
+<li>三个 toggle（中英、全半角、登录态）一律用 <code>aria-pressed</code>，屏幕阅读器能听懂。</li>
+</ul>
+<h2>验收</h2>
+<ul>
+<li>设置栏 288×36px，7 个按钮均匀分布，无文本遮挡。</li>
+<li>键盘 Tab 7 次可依次聚焦，<code>Esc</code> 关窗口；登录按钮聚焦跳过。</li>
+<li>中英 / 全半角 toggle 用 <code>aria-pressed</code> 反映状态。</li>
+<li>悬停整行 200ms 内变 0% 透明；离开回 90% 透明。</li>
+<li>暗色主题下 <code>data-theme="dark"</code> 自动切换配色（spec 033 集成）。</li>
+</ul>
+<h2>技能适配说明</h2>
+<p>本稿借 <code>$frontend-ui-engineering</code> 的设计系统思路：tokens → 组件 → 状态 → 可达性。不足：每个按钮的"调用契约"（状态来源 / 事件 / 副作用）写在 v2 表里更清楚，正式实现时两表合并。</p>
+</body>
+</html>

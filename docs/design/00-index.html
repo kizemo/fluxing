@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>快捷设置栏 · 设计对比 v1 / v2 / v3 / v3-macos</title>
+<style>
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#fafafa;color:#1c1c1e;padding:24px;font-size:13px;line-height:1.55}
+h1{font-size:20px;margin:0 0 6px}
+h2{font-size:14px;margin:24px 0 8px}
+.meta{color:#8a8a8e;font-size:12px;margin-bottom:18px}
+.tag{display:inline-block;padding:2px 8px;border-radius:10px;background:#e6f0ff;color:#0a84ff;font-size:11px;margin-right:6px}
+.warn{display:inline-block;padding:2px 8px;border-radius:10px;background:#ffe5e5;color:#c00;font-size:11px;margin-right:6px}
+.ok{display:inline-block;padding:2px 8px;border-radius:10px;background:#e8f5e8;color:#0a7c0a;font-size:11px;margin-right:6px}
+table{width:100%;border-collapse:collapse;margin:12px 0}
+th,td{padding:6px 10px;border-bottom:1px solid #e5e5ea;font-size:12px;text-align:left;vertical-align:top}
+th{background:#f2f2f5;font-weight:600}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+.card{background:#fff;border:1px solid #e5e5ea;border-radius:8px;padding:12px}
+.card h3{margin:0 0 8px;font-size:13px}
+iframe{width:100%;height:520px;border:1px solid #e5e5ea;border-radius:6px;background:#fff}
+.reject{background:#fff5f5;border-left:3px solid #c00;padding:10px 12px;border-radius:4px;margin:8px 0}
+.recommend{background:#f0fff4;border-left:3px solid #0a7c0a;padding:10px 12px;border-radius:4px;margin:8px 0}
+</style>
+</head>
+<body>
+<h1>快捷设置栏 · 四版对比</h1>
+<div class="meta">2026-07-07  ·  T1 设计稿评审入口</div>
+<h2>v1 · 已废弃</h2>
+<div class="reject">
+<strong><span class="warn">废弃</span></strong>
+原因：紫蓝调 + 大号 emoji + 巨 padding，占位 320×230px，遮挡屏幕；按钮超出用户要求的 7 个。
+结论：不进入候选。保留 v1 文件 <a href="01-quick-settings-panel.html">01-quick-settings-panel.html</a> 仅作反例。
+</div>
+<h2>三版特性对比</h2>
+<table>
+<tr><th></th><th>v2 契约式</th><th>v3 设计系统</th><th>v3-macos ⭐推荐</th></tr>
+<tr><th>使用技能</th><td><span class="tag">$api-and-interface-design</span></td><td><span class="tag">$frontend-ui-engineering</span></td><td><span class="tag">$frontend-ui-engineering</span></td></tr>
+<tr><th>核心思路</th><td>按钮是一份调用契约</td><td>按钮复用 IconButton 组件</td><td>在 v3 基础上做 macOS 视觉语言</td></tr>
+<tr><th>视觉尺寸</th><td>300×36px</td><td>288×36px</td><td>300×36px</td></tr>
+<tr><th>背景</th><td>纯白不透明</td><td>纯白不透明</td><td><strong>半透明毛玻璃</strong>（vibrancy）</td></tr>
+<tr><th>圆角</th><td>5px</td><td>6px</td><td><strong>14px 卡片 + 7px 按钮</strong>（macOS 标准）</td></tr>
+<tr><th>投影</th><td>无</td><td>无</td><td>三层叠加（内描边 + 主投影 + 微高光）</td></tr>
+<tr><th>hover 视觉</th><td><code>#f0f0f3</code> 实色</td><td><code>#f0f0f3</code> 实色</td><td><strong>rgba(0,0,0,0.04)</strong> 4% 微变</td></tr>
+<tr><th>激活态视觉</th><td><code>#e6f0ff</code> 浅蓝实色</td><td><code>#e6f0ff</code> 浅蓝实色</td><td><strong>rgba(10,132,255,0.12)</strong> 透明</td></tr>
+<tr><th>图标风格</th><td>Unicode 字符</td><td>SVG 1.5px stroke</td><td>SVG <strong>1.5px + round cap/join</strong>（SF Symbols）</td></tr>
+<tr><th>图标尺寸</th><td>14×14px</td><td>16×16px</td><td><strong>18×18px</strong></td></tr>
+<tr><th>过渡时长</th><td>—</td><td>—</td><td><strong>120ms ease</strong></td></tr>
+<tr><th>暗色主题</th><td>未规划</td><td>令牌切换</td><td>令牌切换（已给暗色令牌）</td></tr>
+<tr><th>新增按钮</th><td>手写状态逻辑</td><td>复用 .ib</td><td>复用 .ib</td></tr>
+<tr><th>技能适配度</th><td><span class="ok">低-中</span></td><td><span class="ok">高</span></td><td><span class="ok">高</span></td></tr>
+</table>
+<h2>v3-macos 推荐理由</h2>
+<div class="recommend">
+<strong><span class="ok">推荐落地</span></strong>
+v3-macos 是在 v3 之上做的"视觉语言升级"，没有牺牲任何 v3 的可达性 / 组件化优势，反而补齐了：
+<ul>
+<li><strong>毛玻璃</strong>：和原项目 WeaselPanel 风格一致，符合 macOS 用户的视觉习惯。</li>
+<li><strong>大圆角</strong>：14px 是 macOS Big Sur+ 标志性数值，比 v3 的 6px 更符合"原生 macOS 感"。</li>
+<li><strong>SF Symbols 风格</strong>：1.5px 细线条 + round line-cap，比 v3 的"工程硬角"更柔和。</li>
+<li><strong>微变 hover</strong>：4% 黑叠加，比 v3 的实色 hover 更克制。</li>
+</ul>
+</div>
+<h2>并排预览（v2 / v3）</h2>
+<div class="row">
+<div class="card">
+<h3>v2 契约式</h3>
+<iframe src="02-quick-settings-v2-contract.html"></iframe>
+</div>
+<div class="card">
+<h3>v3 设计系统式</h3>
+<iframe src="03-quick-settings-v3-system.html"></iframe>
+</div>
+</div>
+<h2>v3-macos · macOS 化（推荐落地）</h2>
+<div class="row">
+<div class="card">
+<h3>v3-macos 毛玻璃 + SF Symbols 风格</h3>
+<iframe src="04-quick-settings-v3-macos.html"></iframe>
+</div>
+<div class="card">
+<h3>视觉重点说明</h3>
+<ul>
+<li>背景半透明，可见下方桌面渐变（蓝紫）</li>
+<li>14px 圆角，柔和大方</li>
+<li>按钮 hover/pressed 4% / 8% 黑叠加，微变</li>
+<li>激活态（中英、全半角）蓝色透明背景</li>
+<li>图标细线条 + 圆角端点，SF Symbols 风</li>
+</ul>
+</div>
+</div>
+<h2>技能适配评价</h2>
+<ul>
+<li><span class="tag">$api-and-interface-design</span> 在本任务里<span style="color:#c00;font-weight:600">不是好选择</span>。技能本意是 REST / GraphQL / 模块契约，硬套 UI 按钮只能产出 v2 这种"按钮契约表"，可视部分凭感觉。建议只在"按钮触发的事件跨进程 / 跨服务"时再用（如登录按钮未来接云同步）。</li>
+<li><span class="tag">$frontend-ui-engineering</span> <span style="color:#0a7c0a;font-weight:600">对位精确</span>。技能核心（设计令牌 / 组件规范 / 键盘可达 / 三态 / ARIA）和本任务完全对齐，v3 和 v3-macos 都是它该产出的样子。</li>
+</ul>
+<h2>实施建议</h2>
+<p>正式实现按 <strong>v3-macos</strong> 落地；同时把 v2 的"按钮契约表"作为注释写在每个按钮的 <code>onClick</code> 上方，注明"输入 / 状态来源 / 输出事件 / 前置条件"，合并两版优势。</p>
+</body>
+</html>

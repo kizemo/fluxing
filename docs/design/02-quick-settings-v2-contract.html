@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>快捷设置栏 v2 · 契约式 · api-and-interface-design</title>
+<style>
+  :root{
+    --bg:#f4f4f5; --card:#ffffff; --text:#1c1c1e; --muted:#8a8a8e;
+    --border:#e5e5ea; --accent:#0a84ff; --bg-hover:#f0f0f3; --active:#e6f0ff;
+  }
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);padding:24px;font-size:13px}
+  h1{font-size:18px;margin:0}
+  .meta{color:var(--muted);font-size:12px;margin:4px 0 16px}
+  .tag{display:inline-block;padding:2px 8px;border-radius:10px;background:#e6f0ff;color:#0a84ff;font-size:11px;margin-right:6px}
+  .panel{
+    width:300px;background:var(--card);border:1px solid var(--border);border-radius:8px;
+    padding:6px 8px;display:flex;gap:2px;align-items:center;
+  }
+  .panel button{
+    appearance:none;background:transparent;border:0;padding:4px 6px;border-radius:5px;
+    font:inherit;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:4px;
+    line-height:1;min-height:24px;
+  }
+  .panel button:hover{background:var(--bg-hover)}
+  .panel button.on{background:var(--active);color:var(--accent);font-weight:600}
+  .panel button .ico{width:14px;height:14px;display:inline-block}
+  .panel .sep{width:1px;height:18px;background:var(--border);margin:0 2px}
+  .preview{display:flex;justify-content:flex-end;background:#e8e8ed;padding:24px;border-radius:8px}
+  table{width:100%;border-collapse:collapse;margin-top:16px}
+  th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;vertical-align:top}
+  th{background:#fafafa;font-weight:600}
+  code{background:#f0f0f3;padding:1px 5px;border-radius:3px;font-size:11px}
+  .ic{display:inline-flex;width:14px;height:14px;align-items:center;justify-content:center}
+</style>
+</head>
+<body>
+
+<h1>快捷设置栏 v2 · 契约式</h1>
+<div class="meta">
+  <span class="tag">技能：$api-and-interface-design</span>
+  核心思路：每个按钮是一份"调用契约"——输入、状态来源、点击事件、副作用全部写清。
+  对应规格：宽 ≈ 300px；按钮 7 个，每个 24px 高；总高 36px。
+</div>
+
+<h2>视觉预览（点哪个都有反应）</h2>
+<div class="preview">
+  <div class="panel" role="toolbar" aria-label="快捷设置栏">
+    <button title="方案切换（F4）">
+      <span class="ic">⌘</span>方案
+    </button>
+    <span class="sep"></span>
+    <button title="用户字典编辑">
+      <span class="ic">▤</span>字典
+    </button>
+    <button title="常用短语编辑">
+      <span class="ic">✎</span>短语
+    </button>
+    <span class="sep"></span>
+    <button class="on" title="中/英切换（Shift）">
+      <span class="ic">中</span>英
+    </button>
+    <button title="全/半角标点切换（Ctrl+.）">
+      <span class="ic">。</span>角
+    </button>
+    <button title="软键盘（特殊符号 / 表情）">
+      <span class="ic">⌨</span>符号
+    </button>
+    <span class="sep"></span>
+    <button title="登录（云同步 · 预留）" disabled>
+      <span class="ic">☺</span>登录
+    </button>
+  </div>
+</div>
+
+<h2>按钮契约清单（一行一个）</h2>
+<table>
+  <tr><th>按钮</th><th>显示状态</th><th>点击行为（契约）</th><th>前置条件</th></tr>
+  <tr>
+    <td>方案</td>
+    <td>始终可用</td>
+    <td>弹出方案子菜单（与 <code>F4</code> 行为一致）；选中后切换方案 + 收起设置栏</td>
+    <td>—</td>
+  </tr>
+  <tr>
+    <td>字典</td>
+    <td>始终可用</td>
+    <td>打开"用户字典编辑"窗口（spec 007 §1.2.4）；不收起设置栏</td>
+    <td>—</td>
+  </tr>
+  <tr>
+    <td>短语</td>
+    <td>始终可用</td>
+    <td>打开"常用短语编辑"窗口（spec 009）；不收起设置栏</td>
+    <td>—</td>
+  </tr>
+  <tr>
+    <td>中/英</td>
+    <td>高亮 = 当前中文模式</td>
+    <td>切换 <code>ascii_mode</code>，状态同步到托盘图标；<code>Shift</code> 同样触发</td>
+    <td>—</td>
+  </tr>
+  <tr>
+    <td>全/半角</td>
+    <td>高亮 = 当前全角</td>
+    <td>切换 <code>full_shape</code>；<code>Ctrl + .</code> 同样触发</td>
+    <td>—</td>
+  </tr>
+  <tr>
+    <td>符号</td>
+    <td>始终可用</td>
+    <td>弹出软键盘面板（特殊符号 + 表情），点选上屏后收起</td>
+    <td>—</td>
+  </tr>
+  <tr>
+    <td>登录</td>
+    <td>预留位，未登录：显示 <code>登录</code>；已登录：显示用户名首字 + 悬停提示"已登录 / 退出登录"</td>
+    <td>本期：点击 → 弹"云同步功能即将上线"toast；spec 010 上线后接注册/登录流程</td>
+    <td>云同步 spec 010 上线</td>
+  </tr>
+</table>
+
+<h2>契约版本</h2>
+<p>按钮契约 <code>v1.0</code>，与设置栏窗口类 <code>FluxingQuickPanel_v1</code> 同生命周期；后续若加按钮，按 v1.1 递增，并在 <code>include/resource.h</code> 新增 ID。</p>
+
+<h2>交互细节</h2>
+<ul>
+  <li>每个按钮 24px 高，按钮间无空白用 <code>2px</code> 间距，分组间用 <code>1px</code> 浅分割线。</li>
+  <li>激活态：浅蓝底 + 蓝字 + 加粗；非激活态：透明底，悬停时变 <code>#f0f0f3</code>。</li>
+  <li>工具提示 <code>title</code> 含快捷键；预留按钮置灰且不响应。</li>
+  <li>整体高度 ≤ 36px；窗口默认 90% 透明，鼠标悬停 0% 透明，200ms 过渡（spec 049）。</li>
+</ul>
+
+<h2>验收</h2>
+<ul>
+  <li>7 个按钮全部能看见、能点击；视觉一行不超 300px。</li>
+  <li>"中/英""全/半角"激活态正确反映当前状态。</li>
+  <li>"方案"按钮与 <code>F4</code> 都能弹出方案菜单。</li>
+  <li>"登录"按钮置灰，悬停提示"功能即将上线"。</li>
+</ul>
+
+<h2>技能适配说明</h2>
+<p>本稿借 <code>$api-and-interface-design</code> 的"契约优先"思想：每个按钮 = 一份调用契约（输入 / 状态 / 输出 / 前置）。文档化每个按钮的副作用，避免按钮功能"含混"。不足：未规定视觉态，依赖实现者自由发挥。</p>
+
+</body>
+</html>
