@@ -1,10 +1,11 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include "WeaselDeployer.h"
 #include "Configurator.h"
 #include "SwitcherSettingsDialog.h"
 #include "UIStyleSettings.h"
 #include "UIStyleSettingsDialog.h"
 #include "DictManagementDialog.h"
+#include "MaintenanceGuard.h"
 #include <WeaselConstants.h>
 #include <WeaselIPC.h>
 #include <WeaselIPCData.h>
@@ -133,10 +134,7 @@ int Configurator::UpdateWorkspace(bool report_errors) {
   }
 
   weasel::Client client;
-  if (client.Connect()) {
-    LOG(INFO) << "Turning WeaselServer into maintenance mode.";
-    client.StartMaintenance();
-  }
+  weasel::deployer::MaintenanceGuard<weasel::Client> guard(client);
 
   {
     RimeApi* rime = rime_get_api();
@@ -147,11 +145,7 @@ int Configurator::UpdateWorkspace(bool report_errors) {
   }
 
   CloseHandle(hMutex);  // should be closed before resuming service.
-
-  if (client.Connect()) {
-    LOG(INFO) << "Resuming service.";
-    client.EndMaintenance();
-  }
+  // guard destructor: EndMaintenance() called here
   return 0;
 }
 
@@ -172,26 +166,25 @@ int Configurator::DictManagement() {
   }
 
   weasel::Client client;
-  if (client.Connect()) {
-    LOG(INFO) << "Turning WeaselServer into maintenance mode.";
-    client.StartMaintenance();
-  }
+  weasel::deployer::MaintenanceGuard<weasel::Client> guard(client);
 
   {
     RimeApi* rime = rime_get_api();
     if (RIME_API_AVAILABLE(rime, run_task)) {
       rime->run_task("installation_update");  // setup user data sync dir
     }
+    // spec 042 Fix 2 (L55 R2): run_task is async; before opening the
+    // modal dialog, wait for the maintenance thread to finish so
+    // user dict operations happen on a quiesced state.
+    if (RIME_API_AVAILABLE(rime, join_maintenance_thread)) {
+      rime->join_maintenance_thread();
+    }
     DictManagementDialog dlg;
     dlg.DoModal();
   }
 
   CloseHandle(hMutex);  // should be closed before resuming service.
-
-  if (client.Connect()) {
-    LOG(INFO) << "Resuming service.";
-    client.EndMaintenance();
-  }
+  // guard destructor: EndMaintenance() called here
   return 0;
 }
 
@@ -212,26 +205,19 @@ int Configurator::SyncUserData() {
   }
 
   weasel::Client client;
-  if (client.Connect()) {
-    LOG(INFO) << "Turning WeaselServer into maintenance mode.";
-    client.StartMaintenance();
-  }
+  weasel::deployer::MaintenanceGuard<weasel::Client> guard(client);
 
   {
     RimeApi* rime = rime_get_api();
     if (!rime->sync_user_data()) {
       LOG(ERROR) << "Error synching user data.";
       CloseHandle(hMutex);
-      return 1;
+      return 1;  // guard dtor still calls EndMaintenance (R4 fix)
     }
     rime->join_maintenance_thread();
   }
 
   CloseHandle(hMutex);  // should be closed before resuming service.
-
-  if (client.Connect()) {
-    LOG(INFO) << "Resuming service.";
-    client.EndMaintenance();
-  }
+  // guard destructor: EndMaintenance() called here
   return 0;
 }
