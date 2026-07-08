@@ -191,10 +191,15 @@ use_default:
   StrCpy $R0 ""
   Goto skip
 use_reg:
-  ; Prior install detected: use the registry path (upgrade in place),
-  ; UNLESS the user passed /D= explicitly (which NSIS sets before .onInit).
-  ; We honor /D= if it is non-empty; otherwise use the registry value.
-  StrCmp $INSTDIR "" 0 set_default
+  ; spec 053 fix v3: ALWAYS use the registry value (upgrade in place).
+  ; The previous logic used StrCmp $INSTDIR " 0 set_default which
+  ; would either fall through to set_default (overwriting $INSTDIR with
+  ; $PROGRAMFILES64\fluxing = C:\Program Files\fluxing) or preserve a
+  ; stale /D= user value. The registry is the source of truth for
+  ; upgrade-in-place; use $R0 to set $INSTDIR explicitly here.
+  ; L17c: the use_default branch already handles the 'registry path
+  ; is a smoke-test root' case (resets $INSTDIR to default), so this
+  ; use_reg branch only runs when $R0 is a known-valid path.
   StrCpy $INSTDIR $R0
   Goto skip
 set_default:
