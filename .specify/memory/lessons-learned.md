@@ -3959,3 +3959,55 @@ CPU=0s WS=0MB Handles=0 Threads=0 Responding=True Path=(empty)
 - [x] 6 image-deleted kernel zombies cannot be killed by NSIS taskkill; they require Windows reboot.
 - [x] L57bis written; action item for future: investigate `waitForInputIdle` or process-tree enumeration in NSIS to detect lone zombies BEFORE attempting file ops, so the install can prompt "Lone zombie detected: please reboot before reinstalling" instead of silently leaving them.
 
+
+
+## L58 - Iron Rule: install only at D:\Program Files\fluxing (debug sessions)
+
+**Date:** 2026-07-08
+**Status:** IRON RULE (applies to all future debug sessions)
+**Triggered by:** User feedback 2026-07-08 22:35. Debug sessions for v0.18.32.0 / v0.18.33.0 produced unwanted C:\Program Files\fluxing installations, causing user confusion and making install paths inconsistent.
+
+**The rule (binding for all future debug work):**
+
+> During debug sessions for the Fluxing installer or any related
+> component, **NEVER install Fluxing at any path other than
+> `D:\Program Files\fluxing`**. All test installs, smoke tests, debug
+> installs, and any other temporary installations during this
+> conversation and all future conversations **MUST** go to
+> `D:\Program Files\fluxing` (or be cleaned up immediately if
+> accidentally created elsewhere).
+
+**Why this rule exists:**
+
+1. **C:\Program Files requires elevated privileges** to write to (Program Files is UAC-protected in 64-bit Windows). Debug-session installs that land in C:\ often leave behind files the user cannot clean up without elevated PowerShell (which is how the user ended up needing `taskkill /F` that I should never have suggested in the first place).
+
+2. **The user's previous installation was at D:\Program Files\fluxing**. Any debug install that goes elsewhere creates ambiguity about which install is "the real" one. When the user reports symptoms like "algorithm service has fault" or "I see a C: path in the install dialog", the first hypothesis must be "the user is running the right binary from the right path" - this is only possible if the debug install matches the production install path.
+
+3. **Two parallel install locations are the root cause of the L17/L55/L57bis zombie loops**: every failed install leaves a zombie at C:\Program Files\fluxing\weasel\WeaselServer.exe, which then blocks subsequent installs, which leaves more zombies. Once you let C:\ in, you cannot reliably get back to a clean state without a Windows reboot.
+
+4. **The iron rule makes root-cause analysis tractable**: when v0.18.32.0 install 21:30 wrote to C:\ instead of D:\, the user reported "I see a C: path", and the analysis that followed (v0.18.33.0 default path discussion) was polluted by having two parallel install locations. If only D:\ existed, every variable in the analysis (registry, file system, process list) would have a single value.
+
+**Enforcement:**
+
+- All `cmd /c installer /S /D=...` invocations use `/D=D:\TEMP\test-install-...` (sub-paths of D:\TEMP). Never `/D=C:\...`.
+- All `Remove-Item -Recurse -Force "C:\Program Files\fluxing"` must be followed by **immediate verification** that the path is gone, and if not gone, by `taskkill /F /IM WeaselServer.exe` (admin) before retry.
+- The L17 smoke test recipe (AGENTS.md sec 2.5) is updated to use `D:\TEMP\test-...` paths only, not `C:\TEMP\test-...`.
+- If a v0.18.32.0+ install ever lands in C:\ during this or any future conversation, **stop the conversation and clean up C:\Program Files\fluxing before continuing**. Do not reason about install paths while a stray C:\ install exists.
+
+**What triggered the need for this rule (2026-07-08 22:35):**
+
+The v0.18.32.0 silent install (release/fluxing-0.18.32.0-installer.exe) ran with empty HKLM registry (user had cleaned it). NSIS pre-load saw no 32-bit InstallDir, `.onInit` ran `set_default`, `$INSTDIR` became `C:\Program Files\fluxing`, the file copy step succeeded (because `C:\Program Files\fluxing` already existed in the user's session from a previous run), and the install wrote to C:\. The v0.18.32.0 installer then started a WeaselServer.exe at `C:\Program Files\fluxing\weasel\` (PID 40324, started 23:29:52), which the user noticed as "I see a C: path" but I had not flagged as a debug-session problem.
+
+The PID 40324 WeaselServer.exe at C:\Program Files\fluxing\weasel\WeaselServer.exe had mtime 22:41:50 (the R6-fix-rebuilt binary from this session), so the binary itself was correct - the install path was the only problem. The user later uninstalled and clean-registry'd, but the C:\Program Files\fluxing\ folder was still there because:
+- C:\Program Files requires elevated PowerShell to delete
+- WeaselServer.exe at C:\ was still running (lock on the .exe file)
+- The user could not delete C:\Program Files\fluxing from non-elevated PowerShell (L17/L57bis)
+
+The fix sequence was: `taskkill /F /PID 40324` (admin) -> `Remove-Item -Recurse -Force C:\Program Files\fluxing` (admin) -> verify gone. This is exactly the kind of debug-session mess the iron rule prevents.
+
+**Action items:**
+
+- [x] C:\Program Files\fluxing removed (after taskkill /F /PID 40324).
+- [x] HKLM registry fully cleaned.
+- [x] Iron rule written to L58.
+- [ ] Future install.nsi default path: change `set_default` line 207 from `$PROGRAMFILES64\fluxing` to `D:\Program Files\fluxing` (user's actual production path) - this is a one-line install.nsi fix that prevents the iron-rule violation from being reachable in the first place.
