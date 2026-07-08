@@ -1,4 +1,4 @@
-//{{NO_DEPENDENCIES}}
+﻿//{{NO_DEPENDENCIES}}
 // Microsoft Visual C++ generated include file.
 // Used by WeaselDeployer.rc
 //
@@ -63,3 +63,23 @@
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif
+
+
+// spec 050: Hotkey editor dialog (F3 MVP)
+#define IDD_HOTKEY_EDITOR              32772
+#define IDD_KEY_RECORDER               32773
+#define IDC_LIST                       32774
+#define IDC_FILTER                     32775
+#define IDC_SEARCH                     32776
+#define IDC_CLEAR                      32777
+#define IDC_ADD                        32778
+#define IDC_EDIT                       32779
+#define IDC_DELETE                     32780
+#define IDC_RESET                      32781
+#define IDC_KEY_DISPLAY                32782
+#define IDC_STATIC_FILTER              32783
+#define IDC_STATIC_SEARCH              32784
+#define IDC_STATIC_HELP                32785
+#define IDC_STATIC_KEYHELP             32786
+#define IDC_STATIC_KEYTIP              32787
+#define ID_HOTKEY_EDITOR               32788

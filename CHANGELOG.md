@@ -6,6 +6,36 @@
 
 ### spec 049 ship - QuickPanelDialog v4 macOS 风格设计意图文档化（design-only）
 
+## [0.18.30.0-prep] - 2026-07-08 (continued)
+
+### spec 050 ship (partial) - yaml 快捷键可视化编辑器 (F3 MVP)
+
+- **问题 (F3 用户痛点)**: 用户想改 key_binder 必须手编辑 yaml,容易破坏 YAML 语法,L18/L19 单键 Shift binding 风险也不知道。
+- **Cure (8 文件, +1563 lines)**:
+  1. `FluxingConfigEditor/HotkeyBinding.{h,cpp}` - 数据结构 + accept 字符串解析 + NormalizeAccept + L17/L18/L19 linter
+  2. `FluxingConfigEditor/KeyRecorder.{h,cpp}` - 按键录制器 (VK 码 → librime accept 字符串)
+  3. `WeaselDeployer/HotkeyEditorDialog.{h,cpp}` - 主对话框 (WTL ListView + 添加/修改/删除/重置/搜索/过滤)
+  4. `WeaselDeployer/WeaselDeployer.rc` - 加 2 个对话框资源 (IDD_HOTKEY_EDITOR 600x500 + IDD_KEY_RECORDER 400x200)
+  5. `WeaselDeployer/WeaselDeployer.cpp` - 加 `/hotkey` 命令行参数启动编辑器
+  6. `WeaselDeployer/resource.h` - 加 17 个新 ID (IDD_HOTKEY_EDITOR 32772+)
+  7. `WeaselDeployer/xmake.lua` - 加 FluxingConfigEditor 源 + yaml-cpp 链接 + YAML_CPP_STATIC_DEFINE
+- **用法**: `WeaselDeployer.exe /hotkey` 打开 GUI 编辑器;编辑后保存触发 `/deploy`,新 key_binder 立即生效。
+- **验证**:
+  - `xmake -y` build ok 10.4s,0 errors
+  - `WeaselDeployer.exe` 1.46MB (vs 0.7MB 之前,grow 760KB)
+  - 二进制包含 "快捷键编辑器" / "/hotkey" 字符串
+  - `test\TestOrphanRecovery\Release\TestOrphanRecovery.exe` 6/6 PASS
+  - `scripts\test-infra\run-test-suite.bat` 35+13 PASS,2 SKIP,0 FAIL
+- **未完成**:
+  - T008: TestHotkeyEditor 行为级测试项目 (推迟,GUI 测试复杂)
+  - T011: 用户实机手动验证 (需要用户安装 0.18.30 后做)
+  - T015-T018: StylePage / SchemaPage / UserDictPage (spec 051-053)
+- **MVP 限制**:
+  - SaveToYaml 当前是 "替换式" 而非 "合并式" (会丢弃 custom.yaml 的其他字段)
+  - Edit/Add 共用 KeyRecorder,不改 action_type 和 action_value
+  - 无 ConflictChecker 完整静态 db
+- **风险**: L17/L18/L19 linter 已就位,但 SaveToYaml 替换策略可能让用户失去其他自定义配置。spec 051+ 会改用真正的 YamlRoundTrip merge pass。
+
 - **意图**: 把 v0.19.0.0 路线图中的 QuickPanelDialog v4 macOS 风格重写设计意图记录下来，方便未来 session 接手时直接继续。本 spec **不实施**，仅文档化。
 - **设计稿 4 选 1**: v1（废弃） / v2 契约式 / v3 设计系统 / **v3-macos ⭐推荐**（毛玻璃 + SF Symbols + 14px 圆角 + 4% hover）
 - **设计资产已就位**:
@@ -2711,5 +2741,6 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
 - **Caveat - 切换 button placeholder**: spec 046 (next ship) will replace the
   cycle-to-next behavior with a real popup list. Current implementation calls
   rime_api->select_schema with a fresh create_session id.
+
 
 
