@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>快捷设置栏 · macOS 风格 v4 · frontend-ui-engineering</title>
+<style>
+:root{
+--surface:rgba(246,246,246,0.72);
+--border:rgba(0,0,0,0.08);
+--text:#1d1d1f;
+--muted:rgba(60,60,67,0.6);
+--hover:rgba(0,0,0,0.04);
+--pressed:rgba(0,0,0,0.08);
+--accent:#0a84ff;
+--accent-hover:rgba(10,132,255,0.18);
+--accent-soft:rgba(10,132,255,0.12);
+--focus:rgba(10,132,255,0.5);
+--radius:14px;
+--btn-radius:7px;
+}
+*{-webkit-font-smoothing:antialiased}
+body{
+margin:0;
+font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif;
+background:linear-gradient(135deg,#a8c0ff 0%,#3f2b96 100%);
+min-height:100vh;color:var(--text);padding:24px;font-size:13px;line-height:1.4;
+}
+h1{font-size:20px;margin:0;font-weight:600;letter-spacing:-0.01em}
+h2{font-size:14px;margin:24px 0 8px;font-weight:600;letter-spacing:-0.005em}
+.meta{color:rgba(255,255,255,0.85);font-size:12px;margin:4px 0 16px}
+.tag{display:inline-block;padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.85);color:#0a84ff;font-size:11px;font-weight:600;margin-right:6px}
+.preview{padding:60px 32px;display:flex;justify-content:flex-end;align-items:flex-start;flex-wrap:wrap;gap:32px}
+.bar{
+width:fit-content;
+background:var(--surface);
+border:1px solid var(--border);
+border-radius:var(--radius);
+box-shadow:
+0 0 0 0.5px rgba(0,0,0,0.04),
+0 8px 24px rgba(0,0,0,0.10),
+0 1px 2px rgba(0,0,0,0.04);
+backdrop-filter:blur(24px) saturate(180%);
+-webkit-backdrop-filter:blur(24px) saturate(180%);
+padding:6px 10px;
+display:flex;gap:4px;align-items:center;
+}
+.brand{
+width:26px;height:26px;
+display:inline-flex;align-items:center;justify-content:center;
+border-radius:8px;
+background:linear-gradient(135deg,#0a84ff 0%,#5e5ce6 100%);
+box-shadow:inset 0 0 0 0.5px rgba(255,255,255,0.18);
+flex:none;overflow:hidden;
+}
+.brand img{width:18px;height:18px;display:block;filter:brightness(0) invert(1)}
+.ib{
+appearance:none;background:transparent;border:0;
+width:32px;height:28px;border-radius:var(--btn-radius);
+display:inline-flex;align-items:center;justify-content:center;
+cursor:pointer;color:var(--text);font:inherit;
+transition:background-color 120ms ease;
+position:relative;
+}
+.ib .ico{width:18px;height:18px;display:block}
+.ib .ico.halfwidth{display:none}
+.ib[aria-pressed="false"] .ico.fullwidth{display:none}
+.ib[aria-pressed="false"] .ico.halfwidth{display:block}
+.ib:hover{background:var(--hover)}
+.ib:active{background:var(--pressed)}
+.ib:focus-visible{outline:2px solid var(--focus);outline-offset:1px;border-radius:7px}
+.ib[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
+.ib[aria-pressed="true"]:hover{background:var(--accent-hover)}
+.ib[disabled]{opacity:.35;cursor:not-allowed;pointer-events:none}
+.sep{width:1px;height:18px;background:rgba(0,0,0,0.08);margin:0 2px;flex:none}
+table{width:100%;border-collapse:collapse;margin-top:8px}
+th,td{padding:6px 10px;border-bottom:1px solid rgba(0,0,0,0.08);font-size:12px;text-align:left;vertical-align:top}
+th{background:rgba(255,255,255,0.6);font-weight:600;color:#1d1d1d}
+code{background:rgba(0,0,0,0.06);padding:1px 5px;border-radius:3px;font-size:11px}
+.cap{font-size:11px;color:rgba(255,255,255,0.75);margin-top:6px;text-align:right}
+</style>
+</head>
+<body>
+<h1>快捷设置栏 · macOS 风格 v4</h1>
+<div class="meta">
+<span class="tag">技能：$frontend-ui-engineering</span>
+相对 v3 改了什么：品牌图标用火流猩 logo（白化叠在渐变方块上）；全半角按钮根据 aria-pressed 显示"中文标点"或"英文标点"。
+</div>
+<h2>视觉预览（默认全角）</h2>
+<div class="preview">
+<div>
+<div class="bar" role="toolbar" aria-label="快捷设置栏 默认全角">
+<div class="brand" aria-label="Fluxing 火流猩输入法" title="Fluxing 火流猩输入法">
+<img src="fluxing-logo.png" alt="">
+</div>
+<span class="sep"></span>
+<button class="ib" aria-label="方案切换（F4）" title="方案切换 (F4)">
+<svg class="ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="3.5" rx="1"/><rect x="3" y="8.25" width="14" height="3.5" rx="1"/><rect x="3" y="13.5" width="14" height="3.5" rx="1"/></svg>
+</button>
+<span class="sep"></span>
+<button class="ib" aria-label="用户字典编辑" title="用户字典">
+<svg class="ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5C3 3.67 3.67 3 4.5 3H15.5C16.33 3 17 3.67 17 4.5V15.5C17 16.33 16.33 17 15.5 17H4.5C3.67 17 3 16.33 3 15.5V4.5Z"/><path d="M6 7H14M6 10H14M6 13H11"/></svg>
+</button>
+<button class="ib" aria-label="常用短语编辑" title="常用短语">
+<svg class="ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3.5L16.5 6.5L7 16H4V13L13.5 3.5Z"/></svg>
+</button>
+<span class="sep"></span>
+<button class="ib" aria-label="全 / 半角标点切换（Ctrl + .）" aria-pressed="true" title="全角标点 (Ctrl+.) 点击切到半角">
+<svg class="ico fullwidth" viewBox="0 0 20 20" fill="currentColor">
+<path d="M3.5 5.5 C3.5 8 4.5 10.5 6 11.5 L5 12.5 L7 12.5 L7 9.5 C5.5 8.5 4.5 7 4.5 5.5 Z"/>
+<circle cx="14" cy="13.5" r="2.4"/>
+</svg>
+<svg class="ico halfwidth" viewBox="0 0 20 20" fill="currentColor">
+<path d="M4.5 11.5 C4.5 13 5.2 14 6.2 14 L5.5 14.8 L6.8 14.8 L6.8 13.2 C6 12.8 5.5 12.2 5.5 11.5 Z"/>
+<circle cx="13.5" cy="15" r="0.9"/>
+</svg>
+</button>
+<button class="ib" aria-label="软键盘（特殊符号 表情）" title="软键盘">
+<svg class="ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4.5" width="16" height="11" rx="2"/><path d="M5 8H5.01M8 8H8.01M11 8H11.01M14 8H14.01M17 8H17.01"/><path d="M5 11.5H5.01M8 11.5H8.01M11 11.5H11.01M14 11.5H14.01M17 11.5H17.01"/><path d="M6 13.5H14"/></svg>
+</button>
+<span class="sep"></span>
+<button class="ib" aria-label="登录（云同步 · 即将上线）" title="登录（即将上线）" disabled>
+<svg class="ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7.5" r="3"/><path d="M3 17C4 13.5 6.5 12 10 12C13.5 12 16 13.5 17 17"/></svg>
+</button>
+</div>
+<div class="cap">全角态 · 中文标点</div>
+</div>
+<div>
+<div class="bar" role="toolbar" aria-label="快捷设置栏 半角态">
+<div class="brand" aria-label="Fluxing 火流猩输入法" title="Fluxing 火流猩输入法">
+<img src="fluxing-logo.png" alt="">
+</div>
+<span class="sep"></span>
+<button class="ib" aria-label="方案切换（F4）" title="方案切换 (F4)">
+<svg class="ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="3.5" rx="1"/><rect x="3" y="8.25" width="14" height="3.5" rx="1"/><rect x="3" y="13.5" width="14" height="3.5" rx="1"/></svg>
+</button>
+<span class="sep"></span>
+<button class="ib" aria-label="用户字典编辑" title="用户字典">
+<svg class="ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5C3 3.67 3.67 3 4.5 3H15.5C16.33 3 17 3.67 17 4.5V15.5C17 16.33 16.33 17 15.5 17H4.5C3.67 17 3 16.33 3 15.5V4.5Z"/><path d="M6 7H14M6 10H14M6 13H11"/></svg>
+</button>
+<button class="ib" aria-label="常用短语编辑" title="常用短语">
+<svg class="ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3.5L16.5 6.5L7 16H4V13L13.5 3.5Z"/></svg>
+</button>
+<span class="sep"></span>
+<button class="ib" aria-label="全 / 半角标点切换（Ctrl + .）" aria-pressed="false" title="半角标点 (Ctrl+.) 点击切到全角">
+<svg class="ico fullwidth" viewBox="0 0 20 20" fill="currentColor">
+<path d="M3.5 5.5 C3.5 8 4.5 10.5 6 11.5 L5 12.5 L7 12.5 L7 9.5 C5.5 8.5 4.5 7 4.5 5.5 Z"/>
+<circle cx="14" cy="13.5" r="2.4"/>
+</svg>
+<svg class="ico halfwidth" viewBox="0 0 20 20" fill="currentColor">
+<path d="M4.5 11.5 C4.5 13 5.2 14 6.2 14 L5.5 14.8 L6.8 14.8 L6.8 13.2 C6 12.8 5.5 12.2 5.5 11.5 Z"/>
+<circle cx="13.5" cy="15" r="0.9"/>
+</svg>
+</button>
+<button class="ib" aria-label="软键盘（特殊符号 表情）" title="软键盘">
+<svg class="ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4.5" width="16" height="11" rx="2"/><path d="M5 8H5.01M8 8H8.01M11 8H11.01M14 8H14.01M17 8H17.01"/><path d="M5 11.5H5.01M8 11.5H8.01M11 11.5H11.01M14 11.5H14.01M17 11.5H17.01"/><path d="M6 13.5H14"/></svg>
+</button>
+<span class="sep"></span>
+<button class="ib" aria-label="登录（云同步 · 即将上线）" title="登录（即将上线）" disabled>
+<svg class="ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7.5" r="3"/><path d="M3 17C4 13.5 6.5 12 10 12C13.5 12 16 13.5 17 17"/></svg>
+</button>
+</div>
+<div class="cap">半角态 · 英文标点</div>
+</div>
+</div>
+<h2>改动明细</h2>
+<table>
+<tr><th>改动点</th><th>v3（旧）</th><th>v4（新）</th></tr>
+<tr><td>品牌图标内容</td><td>键盘 + F 字母（自绘 SVG）</td><td><strong>火流猩 logo</strong>（用户提供的红褐猩猩剪影，白化叠在渐变方块上）</td></tr>
+<tr><td>品牌图标实现</td><td>内嵌 SVG path</td><td><code>&lt;img src="fluxing-logo.png"&gt;</code> + <code>filter:brightness(0) invert(1)</code></td></tr>
+<tr><td>全半角图标</td><td>单图标（圆点 + 弧线）</td><td><strong>双图标</strong>，aria-pressed 切换：true = 中文标点（，。） / false = 英文标点（,.）</td></tr>
+<tr><td>全角视觉特征</td><td>—</td><td>逗号粗 + 句号大（搜索习惯）</td></tr>
+<tr><td>半角视觉特征</td><td>—</td><td>逗号细 + 句号小（半角比例）</td></tr>
+</table>
+<h2>全半角图标设计</h2>
+<ul>
+<li><strong>全角</strong>（中文标点）：左下粗逗号（大弧度弯钩）+ 右下大句号（2.4px 半径实心圆），呼应搜狗/微软中文标点风格。</li>
+<li><strong>半角</strong>（英文标点）：左下细逗号（小弧度弯钩）+ 右下小句号（0.9px 半径实心圆），比例约为全角的 1/2。</li>
+<li><strong>切换实现</strong>：CSS 选择器 <code>.ib[aria-pressed="false"] .ico.fullwidth { display: none }</code>，无需 JS。</li>
+</ul>
+<h2>品牌图标设计</h2>
+<ul>
+<li>26×26 圆角方块（圆角 8px），蓝→紫渐变背景。</li>
+<li>中央 18×18 <code>&lt;img&gt;</code> 引用 <code>fluxing-logo.png</code>。</li>
+<li><code>filter:brightness(0) invert(1)</code> 把红褐剪影转为白色（叠在渐变上）。</li>
+<li>内描边 0.5px 白色 18% 透明，模拟 macOS 图标高光。</li>
+</ul>
+<h2>验收</h2>
+<ul>
+<li>品牌图标显示火流猩猩猩剪影（白色，与蓝紫渐变方块融为一体）。</li>
+<li>全半角按钮在两种状态下分别显示中文标点 / 英文标点。</li>
+<li>视觉一致性和任务栏输入法图标风格相符。</li>
+</ul>
+</body>
+</html>
