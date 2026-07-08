@@ -117,6 +117,19 @@ LangString AUTOCHKUPDATE ${LANG_ENGLISH} "Automatically check for updates?"
 
 
 Function .onInit
+  ; L13 fix: pre-install cleanup. Force-kill any zombie WeaselServer.exe
+  ; BEFORE any other NSIS logic. This is needed because:
+  ;  (1) the polite /quit in call_uninstaller may hang on a crashed process
+  ;  (2) the user may be running with non-elevated PowerShell where taskkill fails
+  ;      with 'Access is denied' (zombie owned by SYSTEM / admin). NSIS is
+  ;      RequestExecutionLevel admin (see header), so the in-installer taskkill
+  ;      has the right to kill those zombies.
+  ;  (3) We do this as the very first line so a fresh install (no prior version)
+  ;      also benefits: if some prior install left a WeaselServer zombie, it
+  ;      gets cleaned before any file copy is attempted.
+  ;  (4) /T also kills child processes spawned by WeaselServer (e.g. fluxing panel).
+  ExecWait 'taskkill /F /IM WeaselServer.exe /T'
+
   ; L14: NSIS has built-in support for /LOG=<file> CLI flag. Users can pass
   ; /LOG=path\to\file.log to NSIS directly to get a full install log - the
   ; primary post-mortem tool for debugging install failures (especially the

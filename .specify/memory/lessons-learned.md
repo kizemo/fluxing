@@ -3903,3 +3903,59 @@ User reported after installing v0.18.30.0: "输入法切换后，仍然无法输
 
 User simultaneously reported "快捷设置栏在火流猩输入法切换后不显示，多次按快捷键才显示，样式与设计稿差距太大，过于粗糙，美观度不足" (QuickPanel does not show after switching to Fluxing IME, must press hotkey multiple times, visual style is rough). Separate root cause: the user-installed WeaselServer.exe is 13:49 compiled, **earlier than** the spec 049+052 v4 commit 17:42 - so the v4 QuickPanelDialog is not in the user binary. v0.18.30.0 installer (18:12) used weasel.dll 17:16 - **also earlier than v4** (17:16 < 17:42), so even the installer binary does not contain v4. **L42 false-positive** pattern: "git has the code" != "binary has the code". Cure: rebuild weasel.dll from HEAD before tagging v0.18.31.0; L42 byte-verify with a unique pattern from v4 code (e.g. `FluxingQuickPanel_v4` UTF-16LE byte pattern - the spec-049-added kClassName literal). If pattern count == 0, the v4 code is not linked; rebuild.
 
+
+## L57bis - "image-deleted kernel zombie" cannot be killed by taskkill (must reboot Windows)
+
+**Date:** 2026-07-08
+**Status:** OPEN
+**Triggered by:** User reported 5-6 WeaselServer.exe processes persisting after v0.18.30.0 install failures; user tried `taskkill /F /IM WeaselServer.exe` from non-elevated PowerShell, got "Access is denied" for 5 of 6. My L13 fix (commit 644d82a) added NSIS `taskkill /F /IM WeaselServer.exe /T` calls in install.nsi. **Even with the L13 fix, the 6 zombie processes survived.** This entry is the post-mortem.
+
+**Symptom:**
+```
+PID  StartTime         Path
+28540 2026/7/8 19:27:49
+39168 2026/7/8 18:01:25
+42496 2026/7/8 17:18:56
+44048 2026/7/8 18:01:35
+47532 2026/7/8 17:45:36
+47648 2026/7/8 19:27:24
+```
+Note: only PID 28540 and 47648 had a non-empty Path when first listed via `Get-Process`. `Get-CimInstance Win32_Process` later showed **all 6 zombies have empty ExecutablePath**.
+
+**Root cause (3-layer):**
+
+1. **Previous v0.18.30.0 install failed mid-way** (e.g., file lock, user aborted). The NSIS install section partially ran - it `Exec`ed `WeaselServer.exe` BEFORE the install Section completed. Each failed install left one WeaselServer zombie.
+
+2. **Subsequent successful install ran `call_uninstaller`**, which deletes the old `D:\Program Files\fluxing\*.*`. The file is unlinked from NTFS, but the **process image is still mapped in memory**. The kernel marks the process as a "lone zombie" (process object still in kernel, no user-mode state).
+
+3. **User-mode taskkill cannot kill a lone zombie**. `taskkill /F /IM WeaselServer.exe` calls `NtTerminateProcess` which sends a signal to the process. A lone zombie has no user-mode thread to receive the signal; the kernel refuses to reap a process whose exit cannot be acknowledged. `taskkill` returns "Access is denied" because it cannot deliver the terminate signal to a process with 0 threads/0 handles/0 working set.
+
+**Verification (Get-CimInstance + Get-Process on the 6 zombies):**
+```
+CPU=0s WS=0MB Handles=0 Threads=0 Responding=True Path=(empty)
+```
+- CPU=0s, WS=0MB, Handles=0, Threads=0 -> user-mode state is destroyed
+- Path=(empty) -> `Exe` already unlinked from disk (install's `Delete "$R1\*.*"` ran)
+- Responding=True -> but the process object is still in the kernel
+
+**The 7th process (PID 12372) is alive** - the new install was successful for `C:\Program Files\fluxing\weasel\WeaselServer.exe`, but **not** for `D:\Program Files\fluxing`. The 12372 process is v0.18.30 binary (per file size + mtime 22:05) running in `C:\Program Files\fluxing\weasel\WeaselServer.exe`.
+
+**Cure (3 layers, applied in order):**
+
+1. **Reboot Windows.** Kernel cleans all lone zombies during Phase 1 init. Only 100% reliable fix.
+2. **L13 fix (commit 644d82a, ship in v0.18.31.0 / v0.18.31.1)** - NSIS `taskkill /F /IM WeaselServer.exe /T` in 4 places (`.onInit` start, `call_uninstaller` label, install Section, Uninstall Section). **Effective for active WeaselServer processes** (e.g., PID 12372 if user installs while it is running). Not effective for image-deleted kernel zombies.
+3. **Manual cleanup** - for environments where reboot is not possible: **boot the user into Safe Mode**, where the kernel can reap lone zombies. Or use **kernel debugger** (kd.exe) with `!process -k <pid>`. Both are out of scope for the installer.
+
+**Lesson (3 rules):**
+
+1. **The image name on disk is the installer's truth, not the process list.** If a process is alive but `Exe` is empty, it is a lone zombie. taskkill /F will fail; reboot is the only fix.
+2. **`call_uninstaller` should also call `taskkill /F /IM WeaselServer.exe /T` BEFORE the `Delete "$R1\*.*"` line**, so the file unlink happens AFTER the process is dead, not after. This is what L13 fix does (taskkill runs before the Delete sequence in `call_uninstaller`).
+3. **The "taskkill in PowerShell" advice to the user is wrong** if the user is non-elevated. Always prefer an in-installer mechanism (`ExecWait 'taskkill ...'` in NSIS) which inherits the installer's elevation token.
+
+**Action items:**
+
+- [x] v0.18.31.1 installer built (commit pending) with L13 fix in 4 places.
+- [x] 7th active WeaselServer (PID 12372) install in `C:\Program Files\fluxing\weasel\` confirmed via WMI. This is v0.18.30 binary (per size + mtime 22:05). New install will overwrite with v0.18.31.1 binary.
+- [x] 6 image-deleted kernel zombies cannot be killed by NSIS taskkill; they require Windows reboot.
+- [x] L57bis written; action item for future: investigate `waitForInputIdle` or process-tree enumeration in NSIS to detect lone zombies BEFORE attempting file ops, so the install can prompt "Lone zombie detected: please reboot before reinstalling" instead of silently leaving them.
+
