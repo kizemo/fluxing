@@ -1,9 +1,11 @@
-﻿// WeaselServer.cpp : main source file for WeaselServer.exe
+// WeaselServer.cpp : main source file for WeaselServer.exe
 //
 //	WTL MessageLoop 封装了消息循环. 实现了 getmessage/dispatchmessage....
 
 #include "stdafx.h"
 #include "resource.h"
+#include <GdiPlus.h>
+#pragma comment(lib, "gdiplus.lib")
 #include "WeaselService.h"
 #include <WeaselIPC.h>
 #include <WeaselUI.h>
@@ -117,7 +119,11 @@ int WINAPI _tWinMain(HINSTANCE hInstance,
   try {
     WeaselServerApp app;
     RegisterApplicationRestart(NULL, 0);
+    ULONG_PTR gdiplusToken;
+    Gdiplus::GdiplusStartupInput gdiplusInput;
+    Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusInput, NULL);
     nRet = app.Run();
+    Gdiplus::GdiplusShutdown(gdiplusToken);
   } catch (...) {
     // bad luck...
     nRet = -1;
