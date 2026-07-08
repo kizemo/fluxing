@@ -1,3 +1,4 @@
+#include "stdafx.h"
 // spec 050 T001 - HotkeyBinding.cpp
 //
 // Implementation of the parsing/serialization helpers declared in

@@ -146,6 +146,48 @@ void TestEndThrows() {
   EXPECT(mc.end_calls == 1);  // End was called; throw was caught internally
 }
 
+// spec 053 R6 fix (L55): the deployer-process died but the named
+// mutex is still held by the kernel. _IsDeployerRunning() must
+// detect WAIT_ABANDONED (holder thread died without releasing) and
+// return false, NOT true. This is the test for the *new* R6-aware
+// _IsDeployerRunning behavior. We use a real Win32 named mutex
+// because the production code under test (RimeWithWeaselHandler::
+// _IsDeployerRunning) calls OpenMutex + WaitForSingleObject, not
+// any injected client method.
+void TestAbandonedMutexR6() {
+  std::printf("[T7] R6: abandoned mutex (holder died) detected as not running...\n");
+  const wchar_t* test_mutex = L"TestOrphanRecovery_R6_Mutex_DO_NOT_USE";
+
+  // Spawn a child thread that holds the mutex and exits without releasing.
+  // OS tracks this as an abandoned mutex on next OpenMutex.
+  HANDLE hThread = ::CreateThread(NULL, 0,
+      [](LPVOID) -> DWORD {
+        HANDLE h = ::CreateMutex(NULL, FALSE, L"TestOrphanRecovery_R6_Mutex_DO_NOT_USE");
+        if (h) {
+          ::WaitForSingleObject(h, INFINITE);
+          // intentionally do NOT ReleaseMutex; thread exit will mark
+          // the mutex as abandoned by the kernel.
+        }
+        return 0;
+      },
+      NULL, 0, NULL);
+  EXPECT(hThread != NULL);
+  ::WaitForSingleObject(hThread, INFINITE);
+  ::CloseHandle(hThread);
+
+  // Now OpenMutex + WaitForSingleObject(0) should return WAIT_ABANDONED.
+  HANDLE hMutexB = ::OpenMutex(SYNCHRONIZE, FALSE, test_mutex);
+  EXPECT(hMutexB != NULL);
+  if (hMutexB) {
+    DWORD result = ::WaitForSingleObject(hMutexB, 0);
+    EXPECT(result == WAIT_ABANDONED);
+    if (result == WAIT_OBJECT_0 || result == WAIT_ABANDONED) {
+      ::ReleaseMutex(hMutexB);
+    }
+    ::CloseHandle(hMutexB);
+  }
+}
+
 void TestNonCopyable() {
   std::printf("[T6] Non-copyable / non-movable: static_assert...\n");
   // Compile-time test: if these weren't deleted, the line below would
@@ -167,6 +209,7 @@ int main() {
   TestConnectFailedNoEnter();
   TestConnectFailedInDtor();
   TestEndThrows();
+  TestAbandonedMutexR6();
   TestNonCopyable();
 
   if (g_failures == 0) {

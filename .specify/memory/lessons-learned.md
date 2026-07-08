@@ -3810,3 +3810,96 @@ User reported "frequently interrupted tasks / session interruption". Investigati
 - L54（silent install /D= 被 InstallDirRegKey 覆盖）
 - L55（WeaselDeployer 孤儿任务导致 WeaselServer 永久卡死）
 - Constitution R1（Intent Before Implementation）、V（Incremental Delivery）
+## L57 - R6 fix: abandoned mutex detection + lazy recovery in WeaselServer (L55 spec 053)
+
+**Date:** 2026-07-08
+**Status:** OPEN (will close after 1.0 release with no recurrence)
+**Triggered by:** User reported "切换输入法后无法输入中文" after installing v0.18.30.0. Root cause: spec 042 R4 (MaintenanceGuard RAII) does not catch OS-level process death (taskkill /F, AV quarantine, crash), and R6 (_IsDeployerRunning only checks mutex) is still open. Mutex stays held by the kernel forever with no live holder, and `m_disabled` stays true forever, locking out all input.
+
+**Related:** L55 (full L55 spec 042 lesson), L13 (NSIS path-force), L17 (InstallDirRegKey), L19 (Shift key binding), L31 (test infra), L47 (BOM), L49 (Alt+comma hotkey), L52 (DPI), L54 (silent install /D= stale registry), L56 (xbuild timeout), spec 042, spec 053 (new), constitution Principle II (Test-Backed Change), R6 (verification before completion).
+
+### Symptom
+
+User reported after installing v0.18.30.0: "输入法切换后，仍然无法输入中文" (after switching to the Fluxing input method, Chinese input still does not work). User had to reboot to recover. Also: "快捷设置栏在火流猩输入法切换后不显示" (QuickPanel does not show after switching to Fluxing IME) - separate root cause, see L57bis.
+
+### Investigation timeline (Phase 1: Root Cause Investigation, systematic-debugging)
+
+1. **git log** (last 10 commits) showed the 0.18.30.0 series:
+   - `f44833f` 12:02 spec 042 R4+R2 fix (MaintenanceGuard RAII + join_maintenance_thread)
+   - `e66c510` 13:36 spec 050 yaml hotkey editor MVP
+   - `6815aad` 17:42 spec 049+052 QuickPanel v4 macOS toolbar + always-show mode
+   - `17a710b` 17:58 add GdiplusStartup for QuickPanel v4 GDI+ rendering
+   - `73cffef` 18:13 QuickPanel fade timer fix + opacity adjust
+2. **file mtime** of the user-installed WeaselServer.exe: 2026/7/8 **13:49** (and 13:49 for weasel.dll too).
+3. **installer** (18:12) used WeaselServer.exe 18:10 and weasel.dll 17:16 - **neither binary contains spec 049+052 v4 QuickPanelDialog** (the 17:16 weasel.dll has 0 hits on `FluxingQuickPanel_v4` UTF-16LE byte pattern; the 13:49 user binary has 0 hits too).
+4. **m_disabled early-return scan** of RimeWithWeasel.cpp identified **8 critical paths** (ProcessKeyEvent / AddSession / CommitComposition / ClearComposition / SelectCandidateOnCurrentPage / DeleteCandidateOnCurrentPage / FocusIn / UpdateInputPosition) and 2 read-only (FindSession / RemoveSession) - all early-return when `m_disabled` is true.
+5. **L55 R6 root cause confirmed**: `_IsDeployerRunning()` uses `CreateMutex(NULL, TRUE, ...)` and checks `GetLastError()==ERROR_ALREADY_EXISTS`. This pattern has **2 bugs**:
+   - `bInitialOwner=TRUE` means the call can itself create the mutex and acquire ownership, so `ERROR_ALREADY_EXISTS` is unreliable (false positive on deployer-absent case).
+   - It **cannot detect the abandoned state** - the case where `taskkill /F` or AV quarantine killed WeaselDeployer.exe without releasing the named mutex. The kernel keeps the mutex held but the holder is dead. Legacy code returns true forever.
+
+### Root cause (L55 spec 042 R6, not yet fixed before v0.18.30.0)
+
+- **R4 RAII fix** in `Configurator.cpp` (3 maintenance intervals wrapped in `MaintenanceGuard<weasel::Client>`) **only catches WeaselDeployer.exe normal exit** (return, exception, throw). It does **not** catch OS-level process death (taskkill /F, AV quarantine, OS kill during access violation recovery) because **C++ RAII dtor does not run when the OS kills the process** - the process disappears mid-flight, the kernel reaps the process, but the named mutex the dead process owned is left in the **abandoned** state.
+- **R6 fix** (the one in this lesson) was specified in spec 042 spec.md §0 as "deferred to spec 043+" but **spec 043 was never created** before v0.18.30.0 ship.
+- The `WeaselDeployerMutex` stays in the kernel forever, `_IsDeployerRunning()` returns true forever, `m_disabled` stays true forever, every `ProcessKeyEvent` early-returns FALSE, user cannot type Chinese.
+
+### Fix (spec 053 v0.18.31.0, ship target 2026-07-08)
+
+**Two-line change to `_IsDeployerRunning()` + one new method `TryLazyRecovery()` + 9 call sites:**
+
+1. **R6 detection (L57 fix 1)**: change `_IsDeployerRunning()` to use `OpenMutex(SYNCHRONIZE, FALSE, ...)` (does not create) + `WaitForSingleObject(mutex, 0)`. Return value matrix:
+   - `WAIT_OBJECT_0` -> we own it (signaled, no other holder) -> return false (no deployer)
+   - `WAIT_TIMEOUT` -> another thread holds it -> return true (deployer alive)
+   - `WAIT_ABANDONED` -> **R6 signal** (holder died, mutex was abandoned by kernel) -> return false (no deployer)
+   - Always `ReleaseMutex` + `CloseHandle` after acquiring ownership to avoid leak.
+
+2. **Lazy recovery (L57 fix 2)**: new method `TryLazyRecovery()` in RimeWithWeaselHandler:
+   ```cpp
+   void RimeWithWeaselHandler::TryLazyRecovery() {
+     if (!m_disabled) return;
+     if (_IsDeployerRunning()) return;  // deployer alive, m_disabled is legitimate
+     DLOG(INFO) << "TryLazyRecovery: deployer not running, auto-Initialize";
+     Initialize();
+     if (m_disabled) return;  // Initialize failed for other reason
+     _UpdateUI(0);
+   }
+   ```
+
+3. **9 call sites**: insert `TryLazyRecovery();` before each `if (m_disabled) return ...;` early-return in:
+   - `ProcessKeyEvent`, `CommitComposition`, `ClearComposition`, `SelectCandidateOnCurrentPage`, `DeleteCandidateOnCurrentPage`, `FocusIn`, `UpdateInputPosition`, `FindSession`, `RemoveSession`
+   - `AddSession`: replace legacy `if (m_disabled) { EndMaintenance(); if (m_disabled) return 0; }` with `TryLazyRecovery(); if (m_disabled) return 0;`
+
+### Test (spec 053 T7)
+
+`test/TestOrphanRecovery/TestOrphanRecovery.cpp` gains `TestAbandonedMutexR6()`:
+- Spawn a child thread that calls `CreateMutex` and `WaitForSingleObject(INFINITE)` and then **exits without releasing**.
+- Main thread: `OpenMutex` + `WaitForSingleObject(0)` must return `WAIT_ABANDONED`.
+- This proves the new `_IsDeployerRunning` semantics (and is independent of the full RimeWithWeaselHandler pull-in).
+
+`TestOrphanRecovery.exe` 7/7 PASS (T1-T7) as of 2026-07-08.
+
+### Lesson (3 rules, blocking R6 recurrence)
+
+1. **Any IPC pair that must be matched (Start/End, Open/Close, Lock/Unlock) MUST be wrapped in RAII unless there is a hard reason it cannot be.** This is restated from L55. But the corollary: **RAII only catches *language-level* death. OS-level death (taskkill /F, AV quarantine) bypasses C++ dtors.** Pair RAII with **an OS-detectable recovery mechanism** (named mutex WAIT_ABANDONED check, named pipe read, process PID check).
+
+2. **Always pair RAII with an external "is the other side still alive" check.** `_IsDeployerRunning` must use `OpenMutex + WaitForSingleObject(0)` and treat `WAIT_ABANDONED` as "no holder", not as "holder exists". The legacy `CreateMutex(_, TRUE, ...)` + `GetLastError == ERROR_ALREADY_EXISTS` pattern is unreliable on both ends (false positive when the call itself creates the mutex; cannot detect abandoned state).
+
+3. **`taskkill /F` is a real production failure mode, not a hypothetical.** Antivirus quarantine, Windows Update restart, OOM killer, and user task manager all produce the same outcome: process dies mid-flight. Any code that depends on clean function-return MUST be RAII-protected **AND** must have an external recovery path. L55 R4 + L57 R6 together cover both.
+
+### Action items
+
+- [x] spec 053 v0.18.31.0 implementation (R6 fix 1 + lazy recovery + 9 call sites + T7 test).
+- [x] `RimeWithWeasel.cpp` byte-level patch (CLRF preserved, no UTF-8 BOM pollution per L01/L07/L47).
+- [x] `RimeWithWeasel.h` private area declaration of `TryLazyRecovery()`.
+- [x] `test/TestOrphanRecovery/TestOrphanRecovery.cpp` T7 added.
+- [x] Standalone `cl.exe` compile of `RimeWithWeasel.cpp` -> 0 errors, 0 warnings.
+- [x] Standalone `cl.exe` compile + run of `TestOrphanRecovery.exe` -> 7/7 PASS.
+- [ ] Full `xbuild.bat weasel installer` rebuild to confirm linker is happy.
+- [ ] Full `scripts/test-infra/run-test-suite.bat` regression run.
+- [ ] Smoke test (AGENTS.md §2.5) on a clean install.
+- [ ] Commit + push to kizemo/Fluxing, tag v0.18.31.0.
+
+### Related incident note (L57bis - separate user symptom, same time)
+
+User simultaneously reported "快捷设置栏在火流猩输入法切换后不显示，多次按快捷键才显示，样式与设计稿差距太大，过于粗糙，美观度不足" (QuickPanel does not show after switching to Fluxing IME, must press hotkey multiple times, visual style is rough). Separate root cause: the user-installed WeaselServer.exe is 13:49 compiled, **earlier than** the spec 049+052 v4 commit 17:42 - so the v4 QuickPanelDialog is not in the user binary. v0.18.30.0 installer (18:12) used weasel.dll 17:16 - **also earlier than v4** (17:16 < 17:42), so even the installer binary does not contain v4. **L42 false-positive** pattern: "git has the code" != "binary has the code". Cure: rebuild weasel.dll from HEAD before tagging v0.18.31.0; L42 byte-verify with a unique pattern from v4 code (e.g. `FluxingQuickPanel_v4` UTF-16LE byte pattern - the spec-049-added kClassName literal). If pattern count == 0, the v4 code is not linked; rebuild.
+
