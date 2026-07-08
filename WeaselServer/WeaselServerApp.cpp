@@ -36,6 +36,9 @@ int WeaselServerApp::Run() {
   tray_icon.Create(m_server.GetHWnd());
   tray_icon.Refresh();
 
+  // spec 052: auto-show QuickPanel in always-show mode on service start
+  QuickPanelDialog::EnableAlwaysShowMode();
+
   int ret = m_server.Run();
 
   m_handler->Finalize();
@@ -98,61 +101,38 @@ void WeaselServerApp::SetupMenuHandlers() {
   //   - Left-click tray icon (via WM_COMMAND post from SystemTraySDK).
   //   - "QuickPanel" menu item in the right-click tray menu (rc file).
   m_server.AddMenuHandler(ID_WEASELTRAY_QUICK_PANEL, [this] {
-    bool currentAscii = m_handler ? m_handler->IsAsciiMode() : false;
-    bool currentSimp = m_handler ? m_handler->IsSimplification() : false;
-    bool currentFull = m_handler ? m_handler->IsFullShape() : false;
-    std::wstring currentSchema;
-    std::vector<std::wstring> availableSchemas;
-    if (m_handler) {
-      std::string s = m_handler->GetCurrentSchemaId();
-      currentSchema = std::wstring(s.begin(), s.end());
-      for (const auto& id : m_handler->GetAvailableSchemas()) {
-        availableSchemas.emplace_back(std::wstring(id.begin(), id.end()));
-      }
+    // spec 052: Alt+, toggles always-show mode (hide if visible, show if hidden)
+    if (QuickPanelDialog::CurrentMode() != QuickPanelDialog::Mode::kHidden) {
+      QuickPanelDialog::Hide();
+      return true;
     }
+    bool currentFull = m_handler ? m_handler->IsFullShape() : false;
     QuickPanelDialog::Show(
-        currentAscii, currentSimp, currentFull, currentSchema, availableSchemas,
-        // onAsciiToggle
-        [this](bool newAscii) {
-          if (m_handler) m_handler->SetOption(0, "ascii_mode", newAscii);
+        currentFull,
+        // 1. 方案 -> launch deployer /hotkey (spec 050 visual editor)
+        [this]() {
+          std::filesystem::path deployer = install_dir() / L"WeaselDeployer.exe";
+          ShellExecuteW(NULL, NULL, deployer.c_str(), L"/hotkey", NULL, SW_SHOWNORMAL);
         },
-        // onSimpToggle
-        [this](bool newSimp) {
-          if (m_handler) m_handler->SetOption(0, "simplification", newSimp);
-        },
-        // onFullwidthToggle
-        [this](bool newFull) {
-          if (m_handler) m_handler->SetOption(0, "full_shape", newFull);
-        },
-        // onSelectSchema
-        [this](const std::wstring& schemaId) {
-          if (!m_handler) return;
-          std::string id(schemaId.begin(), schemaId.end());
-          m_handler->SelectSchema(id);
-        },
-        // onOpenUserFolder
+        // 2. 词典 -> open user data folder
         [this]() {
           explore(WeaselUserDataPath());
         },
-        // onOpenProgramFolder
+        // 3. 短语 -> placeholder (spec 009 F5)
         [this]() {
           explore(install_dir());
         },
-        // onDeploy
+        // 4. 全半角 -> toggle full/half width
+        [this](bool newFull) {
+          if (m_handler) m_handler->SetOption(0, "full_shape", newFull);
+        },
+        // 5. 符号 -> placeholder (deploy for now)
         [this]() {
           std::filesystem::path deployer = install_dir() / L"WeaselDeployer.exe";
-          ShellExecuteW(NULL, NULL, deployer.c_str(), L"/deploy", NULL,
-                         SW_SHOWNORMAL);
+          ShellExecuteW(NULL, NULL, deployer.c_str(), L"/deploy", NULL, SW_SHOWNORMAL);
         },
-        // onQuit
-        [this]() {
-          // spec 045: launch WeaselServer.exe /q to exit cleanly. Using
-          // m_server.Stop() would shut down the IPC server and break the
-          // current session; WeaselServer /q is the documented exit path
-          // (matches tray right-click 退出).
-          std::filesystem::path server = install_dir() / L"WeaselServer.exe";
-          ShellExecuteW(NULL, NULL, server.c_str(), L"/q", NULL, SW_SHOWNORMAL);
-        });
+        // 6. 登录 -> placeholder (v2.1+ cloud sync)
+        []() {});
     return true;
   });
 }
