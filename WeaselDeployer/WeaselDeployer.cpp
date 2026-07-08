@@ -5,6 +5,7 @@
 #include <fstream>
 #include "WeaselDeployer.h"
 #include "Configurator.h"
+#include "HotkeyEditorDialog.h"
 
 CAppModule _Module;
 
@@ -96,5 +97,15 @@ static int Run(LPTSTR lpCmdLine) {
   }
 
   bool installing = !wcscmp(L"/install", lpCmdLine);
+  if (installing) return configurator.Run(installing);
+
+  // spec 050 T005: /hotkey - open hotkey editor (F3 MVP)
+  if (!wcscmp(L"/hotkey", lpCmdLine)) {
+    HotkeyEditorDialog dlg;
+    dlg.DoModal();
+    return 0;
+  }
+
+  // Default: full configuration (legacy behavior)
   return configurator.Run(installing);
 }
