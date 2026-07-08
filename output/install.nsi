@@ -215,6 +215,11 @@ uninst:
 
 call_uninstaller:
   ExecWait '"$R1\WeaselServer.exe" /quit'
+  ; L13 fix: force-kill any zombie WeaselServer.exe (taskkill /F).
+  ; /quit is a polite request; if the process is hung / crashed / lock-held
+  ; the polite exit never completes and the file lock persists. taskkill /F
+  ; is the unconditional fallback. /T also kills child processes.
+  ExecWait 'taskkill /F /IM WeaselServer.exe /T'
   ExecWait '"$R1\WeaselSetup.exe" /u'
   ; Remove registry keys
   DeleteRegKey HKLM SOFTWARE\Rime
@@ -268,6 +273,8 @@ Section "Fluxing"
 
   IfFileExists "$INSTDIR\WeaselServer.exe" 0 +2
   ExecWait '"$INSTDIR\WeaselServer.exe" /quit'
+  ; L13 fix: force-kill any zombie WeaselServer.exe (see call_uninstaller above).
+  ExecWait 'taskkill /F /IM WeaselServer.exe /T'
 
   SetOverwrite on
   ; Set output path to the installation directory.
@@ -476,6 +483,8 @@ SectionEnd
 Section "Uninstall"
 
   ExecWait '"$INSTDIR\WeaselServer.exe" /quit'
+  ; L13 fix: force-kill any zombie WeaselServer.exe (see call_uninstaller above).
+  ExecWait 'taskkill /F /IM WeaselServer.exe /T'
 
   ExecWait '"$INSTDIR\WeaselSetup.exe" /u'
 
