@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>火流猩 快捷设置栏 设计稿 v1</title>
+<style>
+  :root{
+    --bg:#f5f5f7; --card:#ffffff; --text:#1d1d1f; --muted:#6e6e73;
+    --accent:#0a84ff; --border:#d2d2d7; --shadow:0 8px 24px rgba(0,0,0,.12);
+  }
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);padding:32px}
+  h1{font-size:20px;margin:0 0 4px}
+  h2{font-size:15px;margin:24px 0 8px}
+  .meta{color:var(--muted);font-size:12px;margin-bottom:24px}
+  .preview{background:#e8e8ed;padding:48px 32px;border-radius:12px;display:flex;justify-content:flex-end}
+  .panel{
+    width:320px;border-radius:14px;background:var(--card);box-shadow:var(--shadow);
+    padding:14px 14px 16px;font-size:13px;line-height:1.45;border:1px solid var(--border);
+  }
+  .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+  .title{font-weight:600;font-size:14px;display:flex;gap:6px;align-items:center}
+  .title .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block}
+  .x{cursor:pointer;color:var(--muted);font-size:16px;border:none;background:transparent}
+  .row{display:flex;gap:10px;margin-top:8px}
+  .toggle{flex:1;background:#f2f2f5;border-radius:10px;padding:8px 10px;text-align:center;cursor:pointer;border:1px solid transparent}
+  .toggle.on{background:#e6f0ff;border-color:#0a84ff;color:#0a84ff;font-weight:600}
+  .toggle .cap{display:block;font-size:11px;color:var(--muted);margin-top:2px}
+  .schema{display:flex;gap:8px;align-items:center;margin-top:12px;padding:10px;background:#fafafa;border-radius:10px}
+  .schema .name{flex:1;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .btn{padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:#fff;cursor:pointer;font-size:12px}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.danger{background:#ff453a;color:#fff;border-color:#ff453a}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+  .pair .btn{width:100%}
+  .note{font-size:11px;color:var(--muted);margin-top:6px}
+  .checks{margin-top:24px}
+  .checks li{margin:4px 0}
+  code{background:#eee;padding:1px 6px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+
+<h1>快捷设置栏（QuickSettings Panel） v1</h1>
+<div class="meta">spec 006 + spec 049 微调  ·  2026-07-07  ·  验收用 mockup，组件与正式版本一致</div>
+
+<h2>用户视角（你看到什么）</h2>
+<div class="preview">
+  <div class="panel" role="dialog" aria-label="快捷设置栏">
+    <div class="head">
+      <div class="title"><span class="dot"></span> Fluxing</div>
+      <button class="x" aria-label="关闭">×</button>
+    </div>
+
+    <div class="row">
+      <div class="toggle on">中/英<span class="cap">中文</span></div>
+      <div class="toggle">简/繁<span class="cap">简体</span></div>
+      <div class="toggle on">全/半角<span class="cap">全角</span></div>
+    </div>
+
+    <div class="schema">
+      <div class="name">当前方案：朙月拼音</div>
+      <button class="btn">切换</button>
+    </div>
+
+    <div class="pair">
+      <button class="btn">📁 用户文件夹</button>
+      <button class="btn">📂 程序文件夹</button>
+    </div>
+    <div class="pair">
+      <button class="btn primary">🚀 部署</button>
+      <button class="btn danger">⏻ 退出</button>
+    </div>
+
+    <div class="note">默认 90% 透明；鼠标移上去变清晰；3 秒不操作自动收起。</div>
+  </div>
+</div>
+
+<h2>何时出现 / 何时消失</h2>
+<ul>
+  <li>切到火流猩输入法 → 自动出现在屏幕右下角（距屏幕右 32px、距底部 48px）</li>
+  <li>切到其它输入法 → 自动收起，不抢屏幕</li>
+  <li>未激活火流猩时按 <code>Alt + ,</code> → 不响应（避免误触）</li>
+  <li>激活火流猩时按 <code>Alt + ,</code> → 在 显示 / 隐藏 之间切换</li>
+  <li>鼠标移开 → 3 秒后自动收起</li>
+  <li>点右上角 <code>×</code> 或按 <code>Esc</code> → 立即收起</li>
+</ul>
+
+<h2>控件清单（每个控件能做什么）</h2>
+<dl>
+  <dt>标题 "Fluxing"</dt><dd>说明这是火流猩的设置栏，不可点。</dd>
+  <dt>关闭 ×</dt><dd>立即收起本面板。</dd>
+  <dt>中/英（开关）</dt><dd>点一下 → 输入法在"中文模式 / 英文模式"之间切换；当前是哪个，文字会高亮成蓝色。</dd>
+  <dt>简/繁（开关）</dt><dd>点一下 → 在"简体输出 / 繁体输出"之间切换。</dd>
+  <dt>全/半角（开关）</dt><dd>点一下 → 在"全角字符 / 半角字符"之间切换（影响中文标点 / 英文标点）。</dd>
+  <dt>当前方案 + 切换</dt><dd>显示你正在用的输入方案（例如"朙月拼音"）；点"切换"→ 弹出方案列表，选一个就换成它。本期按钮可以先不连后端，留空响应。</dd>
+  <dt>用户文件夹</dt><dd>打开系统文件管理器，定位到你的个人配置目录（你的用户词典、自定义短语都在这里）。</dd>
+  <dt>程序文件夹</dt><dd>打开系统文件管理器，定位到火流猩的安装目录（默认配置文件、皮肤都在这里）。</dd>
+  <dt>部署</dt><dd>让火流猩立刻把改动同步到引擎，相当于重启引擎但更轻量。</dd>
+  <dt>退出</dt><dd>关闭火流猩，停止打字上屏。</dd>
+</dl>
+
+<h2>视觉规范（一眼看过去是什么样）</h2>
+<dl>
+  <dt>风格</dt><dd>macOS 浅色卡片，圆角 14px，轻投影；不抢戏，跟系统主题协调。</dd>
+  <dt>位置</dt><dd>屏幕右下角，距屏幕右 32px、距底部 48px（贴任务栏上方 8px）。</dd>
+  <dt>尺寸</dt><dd>宽 320px × 高自适应（约 230px）。</dd>
+  <dt>透明度</dt><dd>默认 90% 透明（看得到但模糊）；鼠标移上去 → 0% 透明（完全清晰）；切换有 200ms 平滑过渡。</dd>
+  <dt>暗色主题</dt><dd>跟随 Windows 系统主题（浅 / 深），过渡 200ms；用户不改也基本可用。</dd>
+  <dt>字体</dt><dd>系统默认中文字体；标题 14px、正文 13px、说明 11px。</dd>
+</dl>
+
+<h2>交互细节（让用户用得顺手）</h2>
+<ul>
+  <li>所有按钮在键盘上按 <code>Tab</code> 可逐个聚焦，回车 = 点击。</li>
+  <li>鼠标悬停时按钮颜色加深 5%，给出"可点"的反馈。</li>
+  <li>透明度切换有 200ms 过渡，不是突然变。</li>
+  <li>关闭按钮（X）和"退出"是两个不同概念：X 只收面板，退出是真的关掉输入法。</li>
+</ul>
+
+<h2>本期先不实现的部分（按钮留空）</h2>
+<ul>
+  <li>"切换"方案 → 弹出列表选方案（本期先不连，按钮可点但无反应或弹"即将上线"）</li>
+  <li>"用户文件夹 / 程序文件夹 / 部署 / 退出" → 先做到按钮显示正常、文案正常、悬停效果正常；点击功能后面单独做。</li>
+</ul>
+
+<h2>验收（怎么算"做好了"）</h2>
+<ul class="checks">
+  <li>切到火流猩输入法 → 设置栏出现在右下角，时间 &lt; 200ms。</li>
+  <li>切到其它输入法 → 设置栏立刻消失。</li>
+  <li>按 <code>Alt + ,</code>（激活态） → 在显示 / 隐藏 之间切换。</li>
+  <li>按 <code>Alt + ,</code>（未激活态） → 没反应。</li>
+  <li>鼠标移上去 → 1 秒内变清晰；离开 → 1 秒内变模糊（90% 透明）。</li>
+  <li>鼠标离开后 3 秒 → 面板自动消失。</li>
+  <li>点 X 或按 Esc → 面板立刻消失。</li>
+  <li>面板出现期间，原有打字功能不受影响。</li>
+  <li>右键托盘 → 菜单中"快速面板 (K)"仍能手动唤出。</li>
+</ul>
+
+<h2>关联 spec</h2>
+<ul>
+  <li>spec 006 托盘快捷设置面板（产品视角详细稿）</li>
+  <li>spec 049 TSF 激活联动 + 透明度（本期新增）</li>
+  <li>spec 033 暗色主题桥（跟随系统主题）</li>
+</ul>
+
+</body>
+</html>
