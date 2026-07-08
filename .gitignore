@@ -105,3 +105,5 @@ run_librime_*.err
 
 # test build artifacts (2026-07-08 spec 042)
 /test/TestOrphanRecovery/*.obj
+# FluxingConfigEditor build artifacts (2026-07-08 spec 050)
+/FluxingConfigEditor/*.obj
