@@ -24,8 +24,8 @@ using Gdiplus::UnitPixel;
 #define QP_WIDTH         292
 #define QP_HEIGHT         38
 #define QP_TIMER_FADE      1
-#define QP_FADE_STEP      23   // (255-51)/9 ≈ 23
-#define QP_ALPHA_DEFAULT  51   // 20% opaque (80% transparent) per spec 052
+#define QP_FADE_STEP      34   // (255-179)/3 ≈ 25, fewer timer ticks
+#define QP_ALPHA_DEFAULT 179   // 70% opaque (30% transparent) per spec 052 user feedback
 #define QP_ALPHA_HOVER   255   // fully opaque
 
 static const wchar_t kClassName[] = L"FluxingQuickPanel_v4";
@@ -153,7 +153,6 @@ VOID CALLBACK FadeTimerProc(PVOID, BOOLEAN) {
     QuickPanelDialog::s_alpha = QuickPanelDialog::s_targetAlpha;
   }
   SetLayeredWindowAttributes(hwnd, 0, (BYTE)QuickPanelDialog::s_alpha, LWA_ALPHA);
-  InvalidatePanel(hwnd);
 }
 
 void StartFadeTo(HWND hwnd, int target) {
@@ -161,7 +160,7 @@ void StartFadeTo(HWND hwnd, int target) {
   if (QuickPanelDialog::s_alpha == target) { StopFadeTimer(); return; }
   StopFadeTimer();
   CreateTimerQueueTimer(&s_hFadeTimer, NULL, FadeTimerProc, NULL,
-                        20, 20, WT_EXECUTEDEFAULT);
+                        50, 50, WT_EXECUTEDEFAULT);
 }
 
 // ─── Button fire ───────────────────────────────────────────────────────
@@ -383,10 +382,6 @@ void QuickPanelDialog::Show(bool currentFullwidth,
 
   ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
   InvalidatePanel(s_hwnd);
-
-  // Start fade animation loop
-  CreateTimerQueueTimer(&s_hFadeTimer, NULL, FadeTimerProc, NULL,
-                        20, 20, WT_EXECUTEDEFAULT);
 }
 
 void QuickPanelDialog::Hide() {
@@ -448,9 +443,6 @@ void QuickPanelDialog::EnableAlwaysShowMode() {
 
   ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
   InvalidatePanel(s_hwnd);
-
-  CreateTimerQueueTimer(&s_hFadeTimer, NULL, FadeTimerProc, NULL,
-                        20, 20, WT_EXECUTEDEFAULT);
 }
 
 // ─── WndProc ───────────────────────────────────────────────────────────
