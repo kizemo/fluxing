@@ -12,11 +12,11 @@
 
 #include "resource.h"
 #include <atlbase.h>
-#include <atlapp.h>
-#include <atlwin.h>
-#include <atlcrack.h>
-#include <atlctrls.h>
-#include <atldlgs.h>
+#include <atlwin.h>         // MSVC ATL (from VC\\atlmfc\\include)
+#include <wtl/atlapp.h>     // WTL extensions (from include\\wtl\\)
+#include <wtl/atlcrack.h>
+#include <wtl/atlctrls.h>
+#include <wtl/atldlgs.h>
 #include <string>
 #include <vector>
 #include "../FluxingConfigEditor/HotkeyBinding.h"

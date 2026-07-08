@@ -1,3 +1,4 @@
+#include "stdafx.h"
 // spec 050 T002 - KeyRecorder.cpp
 //
 // Implementation of the key capture dialog. See KeyRecorder.h for

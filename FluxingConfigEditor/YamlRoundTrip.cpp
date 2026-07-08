@@ -1,3 +1,4 @@
+#include "stdafx.h"
 // FluxingConfigEditor/YamlRoundTrip.cpp
 //
 // spec 024 (2026-07-03) - see YamlRoundTrip.h for the module
