@@ -87,6 +87,12 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
  private:
   void _Setup();
   bool _IsDeployerRunning();
+  // spec 053 R6 fix (L55): if m_disabled is true but the deployer
+  // is actually gone (taskkill /F, AV quarantine, AV-induced crash),
+  // the WeaselDeployerMutex stays held by the kernel with no live
+  // holder. TryLazyRecovery re-checks the deployer state and, if the
+  // deployer has died, re-runs Initialize() to clear m_disabled.
+  void TryLazyRecovery();
   void _UpdateUI(WeaselSessionId ipc_id);
   void _LoadSchemaSpecificSettings(WeaselSessionId ipc_id,
                                    const std::string& schema_id);
@@ -147,3 +153,4 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   int m_show_notifications_time;
   DWORD m_pid;
 };
+
