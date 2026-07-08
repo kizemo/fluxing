@@ -3728,3 +3728,42 @@ After running `cmd /c installer.exe /S /D=C:\Program Files\fluxing /LOG=D:\TEMP\
 - [ ] Patch install.nsi `uninst` function to also delete `HKLM\Software\Fluxing\Weasel` (currently only deletes `HKLM\Software\Rime`). Future installer versions will then self-clean the InstallDir pollution.
 - [x] This L54 entry written 2026-07-06 immediately after the 0.18.29.0 ship mis-step. The shipping product itself (binary, installer) is correct -- the bug was in the deploy procedure.
 - [x] D:\Program Files\fluxing verified clean deployment: HKLM InstallDir = D:\Program Files\fluxing\weasel, HKCU RimeUserDir = D:\Program Files\fluxing\user1\fluxing, WeaselServer.exe = 2029568 bytes (0.18.29.0). User data (rime_ice.userdb, user.yaml 183 bytes) preserved unchanged.
+
+
+## L55 - WeaselDeployer.exe killed mid-flight freezes WeaselServer forever (R4 + R2 maintenance mode trap)
+
+**Incident (2026-07-08, Codex session interrupt investigation)**:
+User reported "frequently interrupted tasks / session interruption". Investigation traced to:
+- User right-click tray → "重新部署/词典管理/同步" → `WeaselServerApp::execute(WeaselDeployer.exe /dict)`
+- `WeaselDeployer.exe` enters `Configurator::DictManagement()` → `client.StartMaintenance()` (librime finalized)
+- WeaselDeployer.exe is killed mid-flight by task manager / AV quarantine / access violation
+- The naked `client.StartMaintenance() ... client.EndMaintenance()` pair never gets to EndMaintenance
+- WeaselServer stays in `m_disabled = true` state forever
+- `ProcessKeyEvent` early-returns at the `if (m_disabled) return 0;` line at RimeWithWeasel.cpp:167-171
+- User must reboot to recover
+
+**Root cause** (6 confirmed locations):
+- R1 (P1) WeaselServer/WeaselServerApp.h:13-17 - `ShellExecuteW` with no PID, no Job Object, no heartbeat
+- R2 (P1) WeaselDeployer/Configurator.cpp:182-187 - `DictManagement()` calls `rime->run_task("installation_update")` (async) then opens modal dialog; never `join_maintenance_thread()`s
+- R3 (P2) RimeWithWeasel/RimeWithWeasel.cpp:495-499 - `StartMaintenance()` directly finalizes, no refcount
+- R4 (P1) WeaselDeployer/Configurator.cpp - three maintenance intervals are naked Start->End pairs with no try/finally and no RAII
+- R5 (P3) RimeWithWeasel/RimeWithWeasel.cpp:495-499 - `m_session_status_map.clear()` does not notify TSF clients
+- R6 (P3) RimeWithWeasel/RimeWithWeasel.cpp:574-576 - `_IsDeployerRunning()` only checks mutex, cannot detect process hang
+
+**Cure (spec 042 v0.18.30, ship target)**:
+- Fix 1: `MaintenanceGuard<ClientT>` RAII in `WeaselDeployer/MaintenanceGuard.h`; constructor calls StartMaintenance, destructor calls EndMaintenance (no-throw, swallows all exceptions). Non-copyable, non-movable, single owner per maintenance interval. Template on ClientT so test can pass a MockClient.
+- Fix 2: `DictManagement()` in Configurator.cpp adds `RIME_API_AVAILABLE(rime, join_maintenance_thread)` after `run_task("installation_update")`.
+- Fix 3-6: deferred to spec 043 (WeaselServer-side hardening).
+
+**Lesson** (3 rules):
+1. **Any IPC pair that must be matched (Start/End, Open/Close, Lock/Unlock) MUST be wrapped in RAII** unless there is a hard reason it cannot be. Naked pair = guaranteed leak on process death. This applies to ALL future process-interaction patterns in this project, not just maintenance mode.
+2. **Async API calls (`run_task`, `submit`, `post`) MUST be paired with their sync counterparts (`join`, `wait`, `flush`) at every call site** - not just at the obvious one. Audit other `run_task` call sites in the codebase.
+3. **`taskkill /F` is a real production failure mode**, not a hypothetical. Antivirus quarantine, Windows Update restart, OOM killer, and user task manager all produce the same outcome: process dies mid-flight. Any code that depends on clean function-return MUST be RAII-protected.
+
+**Cure verification** (L46 recipe, 3 paths must all PASS before ship):
+- xbuild.bat weasel → 0 errors, 0 warnings
+- msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 → 0 errors
+- scripts/test-infra/run-test-suite.bat → 17+ test projects PASS (16 + TestOrphanRecovery)
+- `TestOrphanRecovery` covers 4 paths: happy / exception-in-scope / connect-failed / end-throws
+
+**Related**: L13 (NSIS path-force), L17 (InstallDirRegKey pre-load), L19 (Shift key binding), L31 (test infra), L47 (BOM), L49 (Alt+ comma hotkey), L52 (DPI), L54 (silent install /D= stale registry).
