@@ -187,7 +187,7 @@ use_default:
   ; Smoke-test path detected - reset $INSTDIR to default and skip the
   ; stale value. We use $PROGRAMFILES64\fluxing to match the default
   ; set_default logic below.
-  StrCpy $INSTDIR "$PROGRAMFILES64\fluxing"
+  StrCpy $INSTDIR "D:\Program Files\fluxing"
   StrCpy $R0 ""
   Goto skip
 use_reg:
@@ -209,7 +209,7 @@ set_default:
   ; 64-bit Program Files, so use $PROGRAMFILES64 explicitly. This keeps the
   ; default stable across 32/64-bit installer versions.
   StrCmp $INSTDIR "" 0 skip_default
-  StrCpy $INSTDIR "$PROGRAMFILES64\fluxing"
+  StrCpy $INSTDIR "D:\Program Files\fluxing"
 skip_default:
 skip:
   Call ForceFluxingSuffix
@@ -289,7 +289,20 @@ Section "Fluxing"
   StrCpy $R3 "$INSTDIR"
   StrCpy $INSTDIR "${WEASEL_ROOT}"
 
-  IfFileExists "$INSTDIR\WeaselServer.exe" 0 +2
+  ; spec 053 fix v4: CreateDirectory $INSTDIR + subdirs. SetOutPath does NOT
+  ; auto-create missing parent dirs, and File commands silently fail if
+  ; the parent dir does not exist. Without this, a fresh install to a
+  ; non-existent C:\Program Files\fluxing\ (default for empty registry) writes
+  ; InstallDir to C:\ but copies ZERO files.
+  CreateDirectory $INSTDIR
+  CreateDirectory $INSTDIR\data
+  CreateDirectory $INSTDIR\data\cn_dicts
+  CreateDirectory $INSTDIR\data\en_dicts
+  CreateDirectory $INSTDIR\data\lua
+  CreateDirectory $INSTDIR\data\lua\cold_word_drop
+  CreateDirectory $INSTDIR\data\opencc
+  CreateDirectory $INSTDIR\data\build
+  CreateDirectory $INSTDIR\data\preview
   ExecWait '"$INSTDIR\WeaselServer.exe" /quit'
   ; L13 fix: force-kill any zombie WeaselServer.exe (see call_uninstaller above).
   ExecWait 'taskkill /F /IM WeaselServer.exe /T'
