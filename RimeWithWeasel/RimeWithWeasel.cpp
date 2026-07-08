@@ -164,11 +164,15 @@ DWORD RimeWithWeaselHandler::FindSession(WeaselSessionId ipc_id) {
 }
 
 DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
+  // spec 053 R6 fix: legacy code called EndMaintenance() here, but
+  // EndMaintenance only re-Initializes if deployer is *gone* - it did
+  // not detect the abandoned-mutex case (taskkill /F / AV). TryLazyRecovery
+  // explicitly re-checks _IsDeployerRunning() (now with WAIT_ABANDONED
+  // detection) and recovers the user without requiring a reboot.
+  TryLazyRecovery();
   if (m_disabled) {
-    DLOG(INFO) << "Trying to resume service.";
-    EndMaintenance();
-    if (m_disabled)
-      return 0;
+    DLOG(INFO) << "AddSession: m_disabled still true after TryLazyRecovery";
+    return 0;
   }
   RimeSessionId session_id = (RimeSessionId)rime_api->create_session();
   if (m_global_ascii_mode) {
@@ -221,6 +225,7 @@ m_last_schema_id = schema_id;
 DWORD RimeWithWeaselHandler::RemoveSession(WeaselSessionId ipc_id) {
   if (m_ui)
     m_ui->Hide();
+  TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return 0;
   DLOG(INFO) << "Remove session: session_id = " << to_session_id(ipc_id);
@@ -270,6 +275,7 @@ BOOL RimeWithWeaselHandler::ProcessKeyEvent(KeyEvent keyEvent,
                                             EatLine eat) {
   DLOG(INFO) << "Process key event: keycode = " << keyEvent.keycode
              << ", mask = " << keyEvent.mask << ", ipc_id = " << ipc_id;
+  TryLazyRecovery();  // spec 053 R6 fix: auto-recover if deployer died
   if (m_disabled)
     return FALSE;
   RimeSessionId session_id = to_session_id(ipc_id);
@@ -297,6 +303,7 @@ BOOL RimeWithWeaselHandler::ProcessKeyEvent(KeyEvent keyEvent,
 
 void RimeWithWeaselHandler::CommitComposition(WeaselSessionId ipc_id) {
   DLOG(INFO) << "Commit composition: ipc_id = " << ipc_id;
+  TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return;
   rime_api->commit_composition(to_session_id(ipc_id));
@@ -306,6 +313,7 @@ void RimeWithWeaselHandler::CommitComposition(WeaselSessionId ipc_id) {
 
 void RimeWithWeaselHandler::ClearComposition(WeaselSessionId ipc_id) {
   DLOG(INFO) << "Clear composition: ipc_id = " << ipc_id;
+  TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return;
   rime_api->clear_composition(to_session_id(ipc_id));
@@ -318,6 +326,7 @@ void RimeWithWeaselHandler::SelectCandidateOnCurrentPage(
     WeaselSessionId ipc_id) {
   DLOG(INFO) << "select candidate on current page, ipc_id = " << ipc_id
              << ", index = " << index;
+  TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return;
   rime_api->select_candidate_on_current_page(to_session_id(ipc_id), index);
@@ -328,6 +337,7 @@ void RimeWithWeaselHandler::DeleteCandidateOnCurrentPage(
     WeaselSessionId ipc_id) {
   DLOG(INFO) << "delete candidate on current page, ipc_id = " << ipc_id
              << ", index = " << index;
+  TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return;
   // spec 028: librime 1.13 delete_candidate C API.
@@ -366,6 +376,7 @@ bool RimeWithWeaselHandler::ChangePage(bool backward,
 void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
   DLOG(INFO) << "Focus in: ipc_id = " << ipc_id
              << ", client_caps = " << client_caps;
+  TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return;
   _UpdateUI(ipc_id);
@@ -386,6 +397,7 @@ void RimeWithWeaselHandler::UpdateInputPosition(RECT const& rc,
              << ", m_active_session = " << m_active_session;
   if (m_ui)
     m_ui->UpdateInputPosition(rc);
+  TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return;
   if (m_active_session != ipc_id) {
@@ -571,14 +583,72 @@ void RimeWithWeaselHandler::OnUpdateUI(std::function<void()> const& cb) {
   _UpdateUICallback = cb;
 }
 
+// spec 053 R6 fix (L55): detect WeaselDeployer process actually alive.
+// Before: CreateMutex bInitialOwner=TRUE caused a false negative
+// (the call could itself create the mutex and immediately own it, so
+// GetLastError()==ERROR_ALREADY_EXISTS was unreliable). And it could
+// not detect the *abandoned* state - the exact case where taskkill /F
+// or AV quarantine killed WeaselDeployer.exe without releasing the
+// named mutex. The kernel keeps the mutex held but the holder is dead;
+// legacy code returned true forever, locking out all input.
+//
+// After: OpenMutex does not create. WaitForSingleObject(_, 0) returns
+//   WAIT_OBJECT_0   -> we own it (signaled, no other holder)
+//   WAIT_TIMEOUT     -> another thread holds it
+//   WAIT_ABANDONED   -> holder died without releasing (R6 signal!)
+// We also release ownership we may have acquired in the OBJECT_0 case
+// so we do not leak the mutex.
 bool RimeWithWeaselHandler::_IsDeployerRunning() {
-  HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerMutex");
-  bool deployer_detected = hMutex && GetLastError() == ERROR_ALREADY_EXISTS;
-  if (hMutex) {
-    CloseHandle(hMutex);
+  HANDLE hMutex = ::OpenMutex(SYNCHRONIZE, FALSE, L"WeaselDeployerMutex");
+  if (!hMutex) {
+    // mutex does not exist -> no deployer
+    return false;
   }
-  return deployer_detected;
+  DWORD result = ::WaitForSingleObject(hMutex, 0);
+  if (result == WAIT_OBJECT_0 || result == WAIT_ABANDONED) {
+    // We have ownership in both cases. Release so we do not leak.
+    ::ReleaseMutex(hMutex);
+    ::CloseHandle(hMutex);
+    if (result == WAIT_ABANDONED) {
+      // R6 signal: holder died, mutex was abandoned by kernel.
+      DLOG(INFO) << "_IsDeployerRunning: WAIT_ABANDONED -> deployer dead";
+    }
+    return false;
+  }
+  if (result == WAIT_TIMEOUT) {
+    ::CloseHandle(hMutex);
+    return true;  // some live thread holds it
+  }
+  // WAIT_FAILED or other error: be conservative
+  ::CloseHandle(hMutex);
+  return true;
 }
+
+// spec 053 R6 fix (L55): if m_disabled is true but the deployer
+// process has actually died (taskkill /F, AV quarantine, crash), the
+// named mutex stays held by the kernel with no live holder. Legacy
+// _IsDeployerRunning() returned true forever, so every
+// ProcessKeyEvent / AddSession / FocusIn / etc. early-returned FALSE
+// and the user could not type. TryLazyRecovery re-checks the deployer
+// state and, if the deployer has died, re-runs Initialize() to clear
+// m_disabled. Called at the top of every public m_disabled early-return
+// path so the user does not have to reboot WeaselServer to recover.
+void RimeWithWeaselHandler::TryLazyRecovery() {
+  if (!m_disabled) return;
+  if (_IsDeployerRunning()) {
+    // deployer is actually running, m_disabled is legitimate
+    return;
+  }
+  DLOG(INFO) << "TryLazyRecovery: deployer not running, auto-Initialize";
+  Initialize();
+  if (m_disabled) {
+    DLOG(WARNING) << "TryLazyRecovery: Initialize still disabled after retry";
+    return;
+  }
+  _UpdateUI(0);
+  DLOG(INFO) << "TryLazyRecovery: success, m_disabled = false";
+}
+
 
 void RimeWithWeaselHandler::_UpdateUI(WeaselSessionId ipc_id) {
   // if m_ui nullptr, _UpdateUI meaningless

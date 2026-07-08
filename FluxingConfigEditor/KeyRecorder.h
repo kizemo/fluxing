@@ -28,11 +28,11 @@
 
 
 #include <string>
-#include <atlbase.h>
-#include <atlapp.h>
-#include <atlwin.h>
-#include <atlcrack.h>
-#include <atlctrls.h>
+#include <atlbase.h>     // MSVC ATL (from VC\\atlmfc\\include)
+#include <atlwin.h>      // MSVC ATL
+#include <wtl/atlapp.h>  // WTL extensions
+#include <wtl/atlcrack.h>
+#include <wtl/atlctrls.h>
 
 class KeyRecorderDialog : public ATL::CDialogImpl<KeyRecorderDialog> {
  public:
