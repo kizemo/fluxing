@@ -8,6 +8,7 @@ target("WeaselServer")
 
   add_files("$(projectdir)/PerMonitorHighDPIAware.manifest")
   add_ldflags("/DEBUG /LARGEADDRESSAWARE /ERRORREPORT:QUEUE /OPT:NOREF /OPT:NOICF")
+  add_ldflags("/LTCG:OFF", {force = true})
   set_policy("windows.manifest.uac", "invoker")
   before_build(function(target)
     local target_dir = path.join(target:targetdir(), target:name())

@@ -32,6 +32,10 @@
 // spec 036: tray quick panel v0
 #define ID_HOTKEY_QUICK_PANEL          9001
 #define ID_WEASELTRAY_QUICK_PANEL      40018
+
+// spec 052 v0.18.31.0: enable QuickPanel always-show mode (20% alpha)
+#define ID_QUICKPANEL_ALWAYS_SHOW      40019
+#define IDR_FLUXING_LOGO                108
 #define ID_QUICKPANEL_BTN_ASCII        41001
 #define ID_QUICKPANEL_BTN_DEPLOY       41002
 

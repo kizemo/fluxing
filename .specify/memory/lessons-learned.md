@@ -3767,3 +3767,46 @@ User reported "frequently interrupted tasks / session interruption". Investigati
 - `TestOrphanRecovery` covers 4 paths: happy / exception-in-scope / connect-failed / end-throws
 
 **Related**: L13 (NSIS path-force), L17 (InstallDirRegKey pre-load), L19 (Shift key binding), L31 (test infra), L47 (BOM), L49 (Alt+ comma hotkey), L52 (DPI), L54 (silent install /D= stale registry).
+## L56 — xbuild 超时 + 2.1 GB 崩溃日志导致连续 4 次会话中断（2026-07-08）
+
+### 事件
+
+2026-07-08 下午，spec 052 QuickPanel 长显模式的构建过程中，会话连续 4 次自动中止。事后分析 log/ 目录构建日志发现三个核心原因：
+
+1. **Shell 命令默认超时 10 秒**（致命）。xbuild.bat 构建需 30-90 秒，但 shell_command 默认 timeout_ms=10000，命令还没产生输出就被杀掉。Agent 看到"失败"→重试→又超时→循环，4 次后会话被强制终止。4 个日志文件（rebuild_after_ltcg_fix.log、rebuild_x86_proper.log、rebuild_with_ltcg.log、rebuild_with_ltcg2.log）均为 0 字节。
+
+2. **2.1 GB 崩溃日志撑爆上下文**（致命）。log/weasel.crash.log 从 2026-06-15 起累积，UTF-16 编码，2.05 GB。如果 agent 尝试用 Get-Content 或 rg 读取此文件（搜索错误信息），会瞬间耗尽内存和上下文窗口，导致会话崩溃。
+
+3. **x64 构建反复触发 L10 陷阱**（浪费）。link_verbose.log 显示 agent 反复尝试 x64 构建，每次都遇到 rime_get_api LNK2019（已知 L10：librime 是 Win32-only）。每次"修复"尝试消耗一次完整构建周期。
+
+4. **试错式调试 + 上下文膨胀**（累积）。20+ 个构建日志（rebuild1-rebuild10，rebuild_v，rebuild_ltcg 等）+ 14KB 完整编译器输出，每次构建都往上下文追加大量内容，会话越来越慢直至超出限制。
+
+5. **env.bat ARCH=x64**（隐患）。env.bat 写了 ARCH=x64，可能误导直接读 env.bat 的工具。已修复为 ARCH=x86（xbuild.bat 本已正确 hardcode x86）。
+
+### 修复（已执行）
+
+- 删除 log/weasel.crash.log（释放 2.05 GB）
+- 删除所有临时构建/调试日志（24 个文件）
+- env.bat: ARCH=x64 → ARCH=x86 + 注释
+
+### 教训（6 条规则）
+
+1. **构建命令始终设置超时**。`xbuild.bat weasel` → timeout_ms: 120000（2 分钟），`xbuild.bat all` → timeout_ms: 3600000（60 分钟）。不要在构建命令中使用默认的 10 秒超时。
+
+2. **读取文件前检查大小**。特别是 log/、output/ 下的文件。超过 1 MB 的日志不要用 Get-Content 全量读，用 -Tail 或 Select-String 搜索。
+
+3. **构建失败 3 次就停**。不要进入"改一行→构建→失败→再改"的循环。3 次失败后切换到 systematic-debugging 技能做根因分析。这也是 Constitution R1（Intent Before Implementation）的要求。
+
+4. **遇 LNK2019 rime_get_api 立即停止**。这是已知 L10 约束（librime 是 Win32-only），不是 bug。xbuild.bat 已经 skip x64，不要手动跑 `xmake f -a x64`。
+
+5. **定期清理 log/**。崩溃日志（weasel.crash.log）会无限增长。建议在 xbuild.bat 中加 `if exist log\weasel.crash.log del log\weasel.crash.log`，或至少在每次 release 前手动清理。
+
+6. **使用 incremental-implementation 技能**。每次只改 1-3 个文件、只构建一次验证，避免积攒大量修改后一次性构建（Constitution V 要求）。
+
+### Related
+
+- L10（librime Win32-only 约束）
+- L53（PE binary verify must use dumpbin + UTF-16，not ASCII strings）
+- L54（silent install /D= 被 InstallDirRegKey 覆盖）
+- L55（WeaselDeployer 孤儿任务导致 WeaselServer 永久卡死）
+- Constitution R1（Intent Before Implementation）、V（Incremental Delivery）
