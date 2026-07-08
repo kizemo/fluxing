@@ -1,5 +1,38 @@
 
 
+## [0.18.30.0-prep] - 2026-07-08 (Unreleased - hotfix staged, no installer)
+
+### spec 042 ship - Deployer orphan task recovery (R4 + R2 fix, L55)
+
+- **Problem (L55 root cause, 6 confirmed root causes)**: WeaselServer 端存在"永久卡死"缺陷 - 当 `WeaselDeployer.exe` 在维护模式区间内被任何方式中途杀死（task manager / AV quarantine / access violation），librime 永远停留在 `finalize()` 后状态，用户必须重启电脑才能恢复。
+  - 完整诊断报告：`C:\Users\Duanyi\Documents\Codex\2026-07-08\new-chat-2\outputs\rime-task-orphan-diagnosis.md` (21 KB)
+  - R1 ShellExecuteW 无 PID/Job/心跳 (P1, 推迟 spec 043)
+  - **R2 DictManagement() 漏 `join_maintenance_thread()` (P1, 本 spec Fix 2)**
+  - R3 StartMaintenance() 无 refcount (P2, 推迟 spec 043)
+  - **R4 Configurator 三段维护区间裸 Start→End 无 RAII (P1, 本 spec Fix 1)**
+  - R5 m_session_status_map.clear() 不通知 TSF (P3, 推迟 spec 043)
+  - R6 _IsDeployerRunning() 只看 mutex (P3, 推迟 spec 043)
+
+- **Cure (2 production files + 1 new test project, ~50 lines C++)**:
+  1. `WeaselDeployer/MaintenanceGuard.h` - 新建 RAII 模板守卫 (74 行, header-only). 构造时 Connect()+StartMaintenance()，析构时 noexcept + Connect()+EndMaintenance(). 不可拷贝/不可移动，单 owner.
+  2. `WeaselDeployer/Configurator.cpp` - 三段维护区间 (`UpdateWorkspace` / `DictManagement` / `SyncUserData`) 改用 `MaintenanceGuard<weasel::Client>` 替代裸 `StartMaintenance()...EndMaintenance()`. 修复 R4.
+  3. `WeaselDeployer/Configurator.cpp::DictManagement()` - `run_task("installation_update")` 之后加 `RIME_API_AVAILABLE(rime, join_maintenance_thread)` 同步等待. 修复 R2.
+  4. `test/TestOrphanRecovery/` - 新建行为级测试项目 (6 test cases, 1 vcxproj + 1 xmake.lua + sln 注册 + run-test-suite.bat 注册).
+  5. `.specify/memory/lessons-learned.md` - 追加 L55 章节, 完整记录 6 根因 + 3 教训规则 + 关联 L## 索引.
+
+- **Verification (L46 recipe, 2 paths PASS; 1 path blocked by pre-existing in-progress work)**:
+  - `xmake build WeaselDeployer` → 0 errors, 0 warnings, 13.64s ✅
+  - `xmake build TestOrphanRecovery` → 0 errors, 0.032s ✅
+  - `test\TestOrphanRecovery\Release\TestOrphanRecovery.exe` → 6/6 PASS (T1 happy / T2 exception-in-scope / T3 connect-failed-ctor / T4 connect-failed-dtor / T5 end-throws / T6 non-copyable static_assert) ✅
+  - `xmake build` (全量) → ❌ blocked by pre-existing `WeaselServer\QuickPanelDialog.cpp` 998-line in-progress refactor (不属本 spec 范围, 待 spec 045+ 后续 ship commit 修复).
+  - env.bat / weasel.props: **未变更** (本次不发 installer, 待 QuickPanelDialog 重构 ship 后合并发 v0.18.30.0 installer)
+
+- **L55 lessons-learned 正式追加**: 3 条规则
+  1. 任何 IPC 对（Start/End, Open/Close, Lock/Unlock）必须用 RAII 包裹，裸配对 = 进程死亡时保证泄漏.
+  2. 异步 API (`run_task`, `submit`, `post`) 必须在每个调用点配对同步 (`join`, `wait`, `flush`), 审计其他 `run_task` 调用点.
+  3. `taskkill /F` 是真实生产失败模式, 不是假设. 杀毒隔离 / Windows Update 重启 / OOM killer / 用户任务管理器 都产生同样结果: 进程中途死亡.
+
+- **Next**: spec 043 - WeaselServer 侧加固 (R1/R3/R5/R6 修复 + Job Object + watchdog). 范围 5 文件, 推迟到 QuickPanelDialog in-progress 重构 ship 之后.
 ## [0.18.28.0-fluxing] - 2026-07-06
 
 ### spec 041 ship - FluxingComponents 144 DPI 视觉修复
@@ -118,6 +151,8 @@
 - **T014 验收** (systematic-debugging 验证): 0.18.26.0 ship 健康, 没有任何 bug 需修复; 然后进入 spec 038 执行。T014 三路径 hard gate 在 spec 038 任务完成后重跑 (见下)。L48 教训在 spec 038 完成 ship 0.18.27.0 之前追加。
 
 - **Verification (L46 recipe, 3 paths all PASS)** — spec 038 完成 + v0.18.27.0 ship 后重跑确认无 regression, T3b 修复后再次验证全 PASS 8/8 (TestQuickPanelRefactor) + 15/15 测试套件 PASS。详见 Verification-before-Completion 记录。pre-0.18.27.0 14 个测试项目全部 PASS, 133+ assertions 持续。v0.18.27.0 release installer: 42,873,668 bytes (32-bit NSIS, LZMA 压缩), PE arch 0x14C x86 (L14)。Fluxing 0.18.27 字符串嵌入 installer UTF-16 strings ✓。L42 byte-verify: 0x1E1E1E dark bg in weasel.dll (15 triple matches)。L14 arch-verify: WeaselServer/Deployer/Setup/rime.dll = 0x14C x86, weaselx64.dll = 0x8664 x64, weaselARM64.dll = 0xAA64 ARM64, weaselARM.dll = 0x01C4 ARM。L47 byte-verify: QuickPanelDialog.h (LF=109) + .cpp (LF=308) + TestQuickPanelRefactor.cpp (LF=399) + weasel.sln (CR=302 LF=302 CRLF) + run-test-suite.bat (CR=110 LF=110 CRLF) 全部 byte-healthy (C0=0 C1=0)。L47 escape audit: byte-grep `\\r\\n` 误用 = 0 次。
+
+
 
 
 ## [0.18.25.0-fluxing] - 2026-07-05
@@ -2653,3 +2688,4 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
 - **Caveat - 切换 button placeholder**: spec 046 (next ship) will replace the
   cycle-to-next behavior with a real popup list. Current implementation calls
   rime_api->select_schema with a fresh create_session id.
+
