@@ -4085,3 +4085,102 @@ Codex wrote 179 (70% opaque) but spec 052 US052-A says 20% (51 of 255). 0.18.34.
 
 L09 (NSIS BOM + CRLF + OutFile) / L13 (silent mode MUI hook) / L17 (InstallDirRegKey overrides /D=) / L49 (ATL message map) / L54 (silent install /D= ignored) / L55 (MaintenanceGuard) / L58 (Iron rule: D:\Program Files\fluxing)
 
+## L60 - WeaselTSF focus events never wired to m_client.FocusIn/FocusOut (v0.18.36.0)
+
+**Date:** 2026-07-09
+**Status:** OPEN (committed in v0.18.36.0, ship 326b64f)
+**Triggered by:** User re-test of v0.18.35.0 reporting 4 runtime bugs (separate from spec 056 visual bugs):
+- QuickPanel not auto-showing on Fluxing activation (Bug A)
+- QuickPanel auto-disappeared after appearing (Bug C)
+- Right-click "QuickPanel" menu item no-op (Bug D - looked like a "deadlock")
+- Logo not displayed (Bug E - purple gradient fallback only)
+
+### Bug A/C - WeaselTSF focus events were a no-op on the IPC layer
+
+**Root cause:** WeaselTSF.cpp implements three TSF focus callbacks:
+- `OnSetThreadFocus` (line 172): only calls `m_client.ProcessKeyEvent(0)`
+- `OnKillThreadFocus` (line 186): only calls `_AbortComposition()`
+- `OnActivated` (line 208): only calls `_ShowLanguageBar` / `_UpdateLanguageBar`
+
+**None of them called `m_client.FocusIn()` or `m_client.FocusOut()`.** These client methods exist (WeaselIPC/WeaselClientImpl.cpp:140-147) and send the WEASEL_IPC_FOCUS_IN / _FOCUS_OUT commands, but the TSF side never invoked them. So the server-side `RimeWithWeaselHandler::FocusIn` handler (which calls `EnableAlwaysShowMode()` per spec 056) was dead code from the start.
+
+**Spec 056 added a call site for `EnableAlwaysShowMode()` but did NOT add the call site for `m_client.FocusIn()` in the TSF side.** The 0.18.35.0 fix was half done - the server was ready, but the trigger was never pulled.
+
+**Fix:** Added `m_client.FocusIn()` to `OnActivated(true)` and `OnKillThreadFocus()`. Added `m_client.FocusOut()` to `OnActivated(false)` and `OnKillThreadFocus()`. The `if (m_client.Echo())` guard ensures we only send the IPC when a session is already established.
+
+### Bug D - Right-click menu handler inverted ToggleMode logic
+
+**Root cause:** WeaselServerApp.cpp:116 originally had:
+```cpp
+if (QuickPanelDialog::CurrentMode() != QuickPanelDialog::Mode::kHidden) {
+  QuickPanelDialog::Hide();
+  return true;
+}
+QuickPanelDialog::Show(...);
+```
+
+This "Hide if visible, else Show" logic worked for Alt+, (case c) but broke the right-click menu (case a): in always-show mode the menu item would Hide the panel. Then with Bug A not wired, the user could not re-open the panel via Alt+, (also broken), creating the illusion of a deadlock / loading cursor.
+
+**Fix:** Replaced the if/else with a single `QuickPanelDialog::ToggleMode()` call. ToggleMode() (in QuickPanelDialog.cpp:414-424) is the unified toggle that handles the show/hide transition for both spec 052 US052-D (Alt+, to hide) and US052-E (Alt+, to re-show).
+
+### Bug E - Logo resource was never registered in .rc
+
+**Root cause:** WeaselServer/WeaselServer.rc (UTF-16) had NO entry for IDR_FLUXING_LOGO. The `include/resource.h` (central) also had no `#define IDR_FLUXING_LOGO`. So `QuickPanelDialog::LoadLogo()` (line 66) called `FindResourceW(NULL, MAKEINTRESOURCEW(IDR_FLUXING_LOGO), RT_RCDATA)` and got NULL, set s_logo = nullptr, and DoPaint fell back to the purple `LinearGradientBrush` brand slot only (no actual logo image).
+
+This bug was hidden by the fact that QuickPanelDialog.cpp:11 `static std::unique_ptr<Image> s_logo;` - the static was always nullptr but never asserted.
+
+**Fix:**
+1. Copied `docs/design/fluxing-logo_small.png` (20x20 RGBA, 1015 bytes) to `resource/fluxing-logo.png` (replacing the 700x700 47KB file which was too large for a 20px brand slot).
+2. Added to `WeaselServer.rc`: `IDR_FLUXING_LOGO RCDATA "..\\resource\\fluxing-logo.png"`
+3. Added to `output/install.nsi`: `File "fluxing-logo.png"` (so NSIS packs the file into the installer).
+4. Copied to `output/fluxing-logo.png` (NSIS packer needs the file in its cwd at pack time).
+
+The `WeaselServer/resource.h` (module-local) already had `#define IDR_FLUXING_LOGO 108` - the central `include/resource.h` did NOT need a definition since the .rc file uses the module-local one.
+
+**RC path escape gotcha (subtle):** The .rc compiler reads C-string escapes, so a literal source of `"..\resource\fluxing-logo.png"` is read as `..\resource\fluxing-logo.png` (one backslash, which is a path separator). For the path to work, the source must contain `"..\\resource\\..."` (two backslashes). Easy to get wrong - had to fix via Python in UTF-16 mode.
+
+### RC4005 redefinition warning - pre-existing duplicate IDR definition
+
+Initially I added `#define IDR_FLUXING_LOGO 60000` to `include/resource.h`. But `WeaselServer/resource.h` (the .rc file's primary include) already had `#define IDR_FLUXING_LOGO 108`. The .rc compiler pulled in BOTH (because include/resource.h is included by WeaselTSF.rc, and WeaselServer.rc includes WeaselServer/resource.h), causing RC4005 warning + potentially using the wrong ID value.
+
+**Fix:** Removed my `IDR_FLUXING_LOGO` from `include/resource.h` (the central one). The WeaselServer module's local one (108) is the one used by `WeaselServer.rc` since `WeaselServer.rc` includes `WeaselServer/resource.h` (which is auto-included via the AFX generated include block).
+
+### Verification (L46 3-path gate, ALL PASS after spec 060)
+
+- `xmake -a x86 -m release`: 0 errors, 17.5s build ok
+- `msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m:1`: 0 errors, 0 warnings (RC4005 fixed), 1 pre-existing warning (C4267 WeaselPanel.cpp:138 size_t to BYTE)
+- `scripts\test-infra\run-test-suite.bat`: ALL TESTS PASSED
+- L14 arch verify: 5 binaries all x86 Intel i386 (WeaselServer.exe, WeaselDeployer.exe, WeaselSetup.exe, weasel.dll, rime.dll)
+- L42 byte verify: `0x001E1E1E` (dark-mode palette) found 1x in weasel.dll
+- L47 byte verify: WeaselTSF.cpp + WeaselServerApp.cpp + QuickPanelDialog.cpp + RimeWithWeasel.cpp all 100% CRLF, no 0xC0/0xC1
+- L09 byte verify: install.nsi BOM + 100% CRLF + no 0xC0/0xC1
+
+### Installer
+
+`release/fluxing-0.18.36.0-installer.exe` (43,153,407 bytes, SHA256 `82ac7c5a136af92106640f34a879988c02b0b455a856b2bd724e526ac1b007f2`)
+
+### Anti-patterns (AP-L60-A, B, C, D, E)
+
+- **AP-L60-A**: Adding a server-side handler without wiring the TSF-side trigger. The half-fix leaves the IPC channel unwired. Always trace the full path: TSF event -> m_client.X -> IPC cmd -> server handler -> action.
+- **AP-L60-B**: Using 'if visible then Hide else Show' for a toggle UI. The semantic is 'toggle', not 'conditionally hide or show' - use a dedicated Toggle function (we already had `ToggleMode()`) to avoid duplicating the show/hide logic.
+- **AP-L60-C**: Shipping code that references a resource ID (IDR_*) that is never registered in any .rc file. Always verify with `grep -r 'IDR_X' include/ WeaselServer/ WeaselTSF/ WeaselDeployer/ WeaselSetup/ WeaselUI/` that the ID is defined in at least one .rc-compatible header.
+- **AP-L60-D**: Adding a `#define` to a central `include/resource.h` when a module-local `WeaselServer/resource.h` already has it. RC4005 warning + conflicting ID value. Always check both before adding.
+- **AP-L60-E**: Writing `"..\resource\..."` in a .rc file (one backslash). RC compiler reads C-string escapes - needs `"..\\resource\\..."` (two backslashes) so the literal path is `..\resource\` (one separator). Edit .rc files in UTF-16 mode (Visual Studio generates them this way) - use Python, not sed.
+
+### Action items
+
+- [x] v0.18.36.0 shipped (commit 326b64f, tag v0.18.36.0, pushed to kizemo)
+- [ ] Test by user: install, log out, log in, switch to Fluxing - QuickPanel should auto-show with logo on left, semi-transparent, no auto-disappear on focus change, right-click menu works
+- [ ] spec 052 US052-A should now be finally working end-to-end (TSF -> IPC -> server -> EnableAlwaysShowMode)
+- [ ] spec 049 v4 design SVG: the v3-macos design icons in spec 056 are still GDI+ DrawLine placeholders. spec 049 v4 full SVG implementation is still pending.
+
+### Related
+
+- L09 (NSIS BOM + CRLF + OutFile)
+- L13 (silent mode MUI hook)
+- L17 (InstallDirRegKey overrides /D=)
+- L49 (ATL message map is runtime)
+- L54 (silent install /D= ignored)
+- L55 (MaintenanceGuard RAII for IPC)
+- L58 (Iron rule: D:\\Program Files\\fluxing)
+- L59 (4-bug post-mortem from v0.18.34.0, including Bug A-D from spec 056)
