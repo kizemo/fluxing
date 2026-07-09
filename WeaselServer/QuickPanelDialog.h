@@ -20,7 +20,21 @@ class QuickPanelDialog {
                    OnClick onLogin);
   static void Hide();
   static void ToggleMode();
-  static void EnableAlwaysShowMode();
+
+  // spec 061: EnableAlwaysShowMode now takes the same 6 callbacks
+  // as Show(), stored as static members. This ensures that when
+  // ToggleMode() triggers EnableAlwaysShowMode (e.g. from right-click
+  // menu), the buttons have real callbacks - not null lambdas.
+  // The previous spec 060 fix called EnableAlwaysShowMode() without
+  // callbacks, so button clicks were no-ops (FireButton checked
+  // if (s_onSchema) and skipped when null).
+  static void EnableAlwaysShowMode(
+      OnClick onSchema,
+      OnClick onUserFolder,
+      OnClick onPhrases,
+      OnToggle onFullwidth,
+      OnClick onSymbols,
+      OnClick onLogin);
 
   static Mode CurrentMode() { return s_mode; }
   static HWND ActiveHwnd() { return s_hwnd; }

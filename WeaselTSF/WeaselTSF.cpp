@@ -184,12 +184,20 @@ STDMETHODIMP WeaselTSF::OnSetThreadFocus() {
   return S_OK;
 }
 STDMETHODIMP WeaselTSF::OnKillThreadFocus() {
-  _AbortComposition();
-  // spec 060 bugfix: TSF kills focus to other IMEs. Tell the server
-  // so the spec 052 always-show mode (FocusOut -> Hide) can fire.
-  if (m_client.Echo()) {
-    m_client.FocusOut();
-  }
+  // spec 061: do NOT call _AbortComposition() here. OnKillThreadFocus
+  // fires on EVERY TSF focus event (cursor move, menu pop, compartment
+  // state change) - way more often than "user switched to a different
+  // IME". The previous behavior aborted the composition on every focus
+  // jitter, which broke Chinese input (the composition state was lost
+  // on every focus event).
+  //
+  // _AbortComposition is now called ONLY from:
+  //   1. Deactivate() (clean shutdown)
+  //   2. OnKillThreadFocus was the only "jitter" caller - removed.
+  //
+  // Composition state is preserved across focus events and only
+  // reset when the user explicitly commits (Enter / number key) or
+  // actually deactivates the IME.
   return S_OK;
 }
 BOOL WeaselTSF::_InitThreadFocusSink() {
@@ -217,19 +225,30 @@ STDMETHODIMP WeaselTSF::OnActivated(REFCLSID clsid,
     return S_OK;
   }
 
+  // spec 061: ITfActiveLanguageProfileNotifySink::OnActivated is the
+  // CORRECT trigger for "user switched to/from Fluxing IME". Unlike
+  // OnKillThreadFocus (which fires on every focus jitter, see the
+  // L60 fix that broke Bug 3/4), OnActivated fires exactly once
+  // per real IME switch.
+  //
+  // But: isActivated is "is Fluxing now the active text service",
+  // NOT "is the user typing". So:
+  //   isActivated = true  -> user just switched TO Fluxing ->
+  //                       m_client.FocusIn() tells server to show
+  //                       QuickPanel + open a TSF session
+  //   isActivated = false -> user just switched AWAY from Fluxing ->
+  //                       m_client.FocusOut() tells server to hide
+  //                       QuickPanel + close the TSF session
+  //
+  // (FocusIn is also fired from _Reconnect() success path, which
+  // is the right place during the initial connection. The duplicate
+  // here is intentional: reconnect on session loss will re-arm
+  // QuickPanel if the user is still on Fluxing.)
   if (isActivated) {
-    _ShowLanguageBar(TRUE);
-    _UpdateLanguageBar(_status);
-    // spec 060 bugfix: WeaselTSF never called m_client.FocusIn/FocusOut,
-    // so the server never knew the IME was activated/deactivated and
-    // the spec 052 long-show mode (EnableAlwaysShowMode on FocusIn)
-    // was never triggered. Wire FocusIn/FocusOut here:
     if (m_client.Echo()) {
       m_client.FocusIn();
     }
   } else {
-    _DeleteCandidateList();
-    _ShowLanguageBar(FALSE);
     if (m_client.Echo()) {
       m_client.FocusOut();
     }
@@ -245,6 +264,15 @@ void WeaselTSF::_Reconnect() {
   bool ok = m_client.GetResponseData(std::ref(parser));
   if (ok) {
     _UpdateLanguageBar(_status);
+    // spec 061: tell server "client just connected" so it can
+    // EnableAlwaysShowMode (spec 052 US052-A). This replaces the
+    // L60 OnActivated trigger which had a race condition (TSF
+    // sink subscribed before m_client.Connect/StartSession).
+    m_client.FocusIn();
+  } else {
+    // Connection failed - ensure server-side QuickPanel is hidden
+    // (don't show stale QuickPanel from a previous session).
+    m_client.FocusOut();
   }
 }
 
