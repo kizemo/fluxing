@@ -36,8 +36,21 @@ int WeaselServerApp::Run() {
   tray_icon.Create(m_server.GetHWnd());
   tray_icon.Refresh();
 
-  // spec 052: auto-show QuickPanel in always-show mode on service start
-  QuickPanelDialog::EnableAlwaysShowMode();
+  // spec 055 bugfix: QuickPanel MUST NOT auto-show on service start.
+  // spec 052's "always-show mode" was a design intention; the original
+  // implementation called EnableAlwaysShowMode() here, which made the
+  // panel appear in the bottom-right corner even when the user was not
+  // using the Fluxing IME (user-reported bug).
+  //
+  // Correct behavior (per spec 052 US052-A, US052-D, US052-E):
+  // - Show on Alt+, hotkey (spec 036)         - handled by tray menu
+  // - Show on left-click tray icon            - handled by SystemTraySDK
+  // - Hide on Alt+, when visible              - handled by QuickPanelDialog::ToggleMode
+  // - Show on tray "QuickPanel" menu item    - handled by ID_WEASELTRAY_QUICK_PANEL handler
+  //
+  // No auto-show call here. EnableAlwaysShowMode() remains as a public
+  // API for the "remembered" state across IPC reconnects (if needed
+  // later), but is no longer called on every Run().
 
   int ret = m_server.Run();
 

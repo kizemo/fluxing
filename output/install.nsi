@@ -430,9 +430,18 @@ program_files:
   ; === v2.0: Register WeaselTSF as TSF text input processor (fix TSF TIP not registered) ===
   ; regsvr32 calls DllRegisterServer in WeaselTSF.dll which writes HKLM\SOFTWARE\...\CTF\TIP\{GUID}
   ; Without this, Windows doesn't know Fluxing is installed and won't show it in input switcher.
+  ;
+  ; spec 055 bugfix: BOTH weaselx64.dll (64-bit TSF shim) AND weasel.dll (32-bit TSF shim)
+  ; must be registered. weasel.dll is the shim that x86 processes (notepad, VSCode etc)
+  ; load via WoW64. Without it, HKCU\Software\Microsoft\CTF\Assemblies\0x00000804
+  ; has no entry → user cannot activate Fluxing IME → candidate window never appears.
   ExecWait 'regsvr32 /s "$INSTDIR\weaselx64.dll"' $0
   ${If} $0 != 0
     DetailPrint "Fluxing: regsvr32 weaselx64.dll failed (exit $0); TSF TIP may not be registered. Run 'regsvr32 $INSTDIR\weaselx64.dll' as admin manually."
+  ${EndIf}
+  ExecWait 'regsvr32 /s "$INSTDIR\weasel.dll"' $1
+  ${If} $1 != 0
+    DetailPrint "Fluxing: regsvr32 weasel.dll failed (exit $1); x86 TSF TIP may not be registered. Run 'regsvr32 $INSTDIR\weasel.dll' as admin manually."
   ${EndIf}
   ; Write the uninstall keys for Windows
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayName" "$(DISPLAYNAME)"
