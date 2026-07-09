@@ -9,45 +9,27 @@ paths:
   - "**/*.props"
 ---
 
-# Build & toolchain rules
+# Build & toolchain
 
-The project uses **two stacked build systems**. Pick the right one based on
-what you are trying to verify.
-
-| System | Entry point | Use case | Latency |
+| System | Entry | When | Latency |
 |---|---|---|---|
-| xmake | `xbuild.bat` | inner-loop (most edits) | 30–90 s |
-| MSBuild | `build.bat all` + `weasel.sln` | CI parity / monthly hygiene | 5–60 min |
+| xmake | `xbuild.bat` | inner loop | 30–90s |
+| MSBuild | `build.bat all` + `weasel.sln` | CI parity / 月度 hygiene | 5–60min |
 
 ## Hard rules
 
-- **Release build requires `RELEASE_BUILD=1` in `env.bat`**. Do **not** use
-  `git describe --tags` for the release version — L10 §6, the tag is
-  unreliable across forks. Set the env var explicitly.
-- **`weasel.props` and `env.bat` are gitignored**. Never commit them. If you
-  need an env value to be reproducible, write a `setup-shims.ps1` under
-  `tools/` instead.
-- **VS solution is the source of truth for project membership** (P3). `xmake.lua`
-  is a mirror. If they disagree, update the `.sln` first, then mirror to xmake.
-- **PowerShell on CJK text must be byte-level**. UTF-8 BOM on
-  `output/install.nsi`, otherwise install.rb treats it as GBK. See
-  `lessons-learned.md` L01, L02, anti-pattern A1.
+- Release build → `RELEASE_BUILD=1` in `env.bat`。**禁用** `git describe --tags`
+  取版本号 (L10 §6, fork 上不可靠)。
+- `weasel.props` / `env.bat` 已 gitignored;**绝不** commit。需持久化的值,
+ 写到 `tools/setup-shims.ps1`。
+- `.sln` 为 project membership 真相 (P3),`xmake.lua` 是镜像;不同则 .sln 优先。
+- PowerShell 处理 CJK 文本 byte-level:`[IO.File]::ReadAllBytes`,
+  或 `[Console]::OutputEncoding = UTF8` + `Out-File -Encoding utf8`。
+  `output/install.nsi` **必须 UTF-8 + `EF BB BF` + CRLF** (L01 / L02 / A1 / L09)。
 
-## NSIS install / uninstall (`output/install.nsi`)
+## `output/install.nsi` 变更 — pre-flight (in order)
 
-Cumulative pre-flight (do in order):
-
-1. `clang-format` is irrelevant here; this is a NSIS script.
-2. **BOM must be `EF BB BF`** (UTF-8); line endings must be CRLF.
-   Do **not** read it via plain `File.ReadAllText`. Use
-   `File.ReadAllBytes` then check `[0..2] == 0xEF 0xBB 0xBF`.
-3. Silent install must pass `/D=<path>` explicitly. Unknown CLI args get
-   concatenated into `$INSTDIR` and corrupt the user-data registry key
-   (L13, L17).
-4. **Before silent-install tests, clear these HKLM/HKCU keys** (L54):
-   - `HKLM\Software\Fluxing\Weasel`
-   - `HKCU\Software\Fluxing`
-   (Otherwise the installer uses a stale path.)
-5. Run the **end-to-end silent-install smoke test** defined in
-   `AGENTS.md §2.5`. This is mandatory for any `install.nsi` change — not
-   skippable.
+1. `[0..2] == 0xEF 0xBB 0xBF`,行尾 CRLF — byte-level 验证。
+2. 不带 `/D=<path>` 的 silent install → 未知参数污染 `$INSTDIR` 与注册表 (L13 / L17)。
+3. Silent-install 测试前清: `HKLM\Software\Fluxing\Weasel` + `HKCU\Software\Fluxing` (L54)。
+4. 跑 `AGENTS.md §2.5` 端到端 smoke test (NSIS 改动强制,不可跳过)。

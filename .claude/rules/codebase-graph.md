@@ -7,50 +7,33 @@ paths:
   - "RimeWithWeasel/**/*"
 ---
 
-# Codebase graph exploration rules
+# Codebase graph
 
-**Skill-mandated order** before any `Grep` / `Read` of source. If this
-project is indexed under `codebase-memory-mcp`, the graph is the
-authoritative navigation layer.
+This project is indexed under `codebase-memory-mcp`
+(`F-soft-00selfmade-rime_claude`, 12,679 nodes / 38,137 边).
 
-## Lookup order (do not skip)
+## Lookup order (must)
 
-1. `search_graph(name_pattern=...)` or `search_graph(query=...)`
-2. `trace_path(function_name=..., mode=calls|data_flow)` for chains
-3. `get_code_snippet(qualified_name=...)` for exact ranges
-4. `query_graph(...)` for multi-hop patterns
-5. `get_architecture(aspects=[...])` for the high-level map
+`search_graph` → `trace_path` → `get_code_snippet` → `query_graph` → `get_architecture`。
 
-## Fallback rules — when Grep / Read is the right move
+## Downgrade to Grep / Read (and **state why** in the response)
 
-Downgrade to `Grep` / `Read` (and **state why** in the response) only if:
+- `search_graph` 返回 0 命中且符号理应在 scope
+- 需要 `git blame` / commit history (图谱无时间轴)
+- 二进制 / 非代码 (图、NSIS、exe)
+- MCP 不可用 / 超时 / `expected_nodes=0`
+- 会话中途源码改动 (先 `index_repository` 再继续)
 
-1. `search_graph` returns 0 results *and* the symbol is plausibly in scope.
-2. You need `git blame` / commit history — graph has no time axis.
-3. You need a non-source artifact (binary, image, NSIS script).
-4. The MCP server is unavailable, the tool call timed out, or `expected_nodes = 0`.
-5. You are verifying a transient build-state change (e.g. the file was
-   edited mid-session and the indexer hasn't re-run; in that case trigger
-   `index_repository` first, then continue).
+## Defaults (saves 3 hops otherwise)
 
-## Filter conventions
+- `path_filter="^(Weasel|RimeWithWeasel|include|tools/win-shims|test)/"`
+  drops `librime/` `thirdparty/` `plum/` leakage.
+- `trace_path(function, direction="inbound", mode="calls")` 加
+  `mode="data_flow"` 看参数传播。
+- `min_degree: 5` 在 `HotkeyBinding` / `PipeChannel` 这种 hotspot 上过滤掉一过性函数。
 
-- Default `path_filter="^(Weasel|RimeWithWeasel|include|tools/win-shims|test)/"`
-  to drop `librime/`, `thirdparty/`, `plum/` leakage from upstream hits.
-- When searching for "the call that triggers this", use
-  `trace_path(function_name, mode="calls", direction="inbound")` plus
-  `mode="data_flow"` for parameter propagation.
-- For hotspots inside the codebase layer (e.g. `HotkeyBinding`, `PipeChannel`),
-  set `min_degree: 5` to skip one-off utility functions.
+## Anti-patterns (踩过的坑)
 
-## Anti-patterns (do not do)
-
-- **Do not** trust the entry-points list: it still surfaces
-  `librime/build_Win32/.../main` symbols despite the directory being
-  marked excluded — pass `exclude_entry_points=true` if fan-out matters.
-- **Do not** search on the `Macro` label without filtering: ~25 % of nodes
-  are SAL/ATL macros brought in by `<windows.h>`; they have no architectural
-  value. Filter label to `Function|Method|Class` unless you really want macros.
-- **Do not** assume `get_code_snippet(qualified_name=...)` returns
-  line-numbered source on a short name — when in doubt pass the fully
-  qualified name exactly as `search_graph` returned it.
+- `entry_points` 仍含 `librime/build_Win32/.../main` 即使该 dir 标记 excluded;需要时设 `exclude_entry_points=true`。
+- `Macro` label 占 ~25% (SAL/ATL 由 `<windows.h>` 带入);搜代码时排除它。
+- `get_code_snippet` 用 short name 不一定返回 source;传 `search_graph` 返回的完整 `qualified_name`。
