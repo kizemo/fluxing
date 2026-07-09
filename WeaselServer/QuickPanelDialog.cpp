@@ -391,10 +391,13 @@ void DoPaint(HWND hwnd) {
   brand_path.CloseFigure();
   g.FillPath(&gradient, &brand_path);
   if (s_logo) {
-    int drawW = 18, drawH = 18;
-    int ox = br.left + (br.right - br.left - drawW) / 2;
-    int oy = br.top + (br.bottom - br.top - drawH) / 2;
-    // Draw logo as-is; it appears as a white silhouette due to logo color
+    // spec 061: logo now fills the entire brand area to eliminate
+    // the "blue border" effect (blue gradient bleeding through
+    // the logo's transparent margin). The 700x700 logo scales down
+    // to drawW x drawH = 26x26, matching the brand rect exactly.
+    int drawW = 26, drawH = 26;
+    int ox = br.left;
+    int oy = br.top;
     g.DrawImage(s_logo.get(), ox, oy, drawW, drawH);
   }
 
@@ -444,13 +447,18 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   // If the panel is already visible in always-show mode, just refresh
   // callbacks and keep showing (do NOT toggle).
   if (s_hwnd && IsWindow(s_hwnd)) {
-    // Panel already visible - update callbacks only, don''t hide
+    // Panel already visible - update callbacks only, don't hide
     s_onSchema    = onSchema;
     s_onUserFolder = onUserFolder;
     s_onPhrases   = onPhrases;
     s_onFullwidth = onFullwidth;
     s_onSymbols   = onSymbols;
     s_onLogin     = onLogin;
+    // spec 061: the buttons in the panel were created during the
+    // initial Show() call - they each hold a lambda that captures
+    // `s_onSchema` etc by REFERENCE. Setting the new lambda here
+    // is enough; the next click will fire the new callback. No
+    // recreate-window needed (which would cause a visual flicker).
     return;
   }
 
@@ -504,29 +512,54 @@ void QuickPanelDialog::Hide() {
 
 void QuickPanelDialog::ToggleMode() {
   if (s_mode == Mode::kHidden) {
-    // Re-show in always-show mode
-    // Use the stored fullwidth state and empty callbacks
-    // (the actual callbacks will be set by the next Show/EnableAlwaysShowMode call)
-    EnableAlwaysShowMode();
+    // Re-show in always-show mode. spec 061: re-show using the LAST
+    // stored callbacks. WeaselServerApp.cpp::SetupMenuHandlers calls
+    // Show() right before triggering ToggleMode, which stored the
+    // 6 callbacks in s_onSchema..s_onLogin. If ToggleMode is called
+    // from somewhere else (e.g. Alt+, handler) the stored callbacks
+    // may still be the ones from the most recent explicit Show().
+    EnableAlwaysShowMode(s_onSchema, s_onUserFolder, s_onPhrases,
+                        s_onFullwidth, s_onSymbols, s_onLogin);
   } else {
     // Hide the panel
     Hide();
   }
 }
 
-void QuickPanelDialog::EnableAlwaysShowMode() {
+void QuickPanelDialog::EnableAlwaysShowMode(
+    OnClick onSchema,
+    OnClick onUserFolder,
+    OnClick onPhrases,
+    OnToggle onFullwidth,
+    OnClick onSymbols,
+    OnClick onLogin) {
   if (s_hwnd && IsWindow(s_hwnd)) {
-    // Already visible, just ensure it''s in always-show mode
+    // Already visible - just ensure it's in always-show mode and
+    // refresh the callbacks (the user may have changed them via a
+    // subsequent Show() call).
     s_mode = Mode::kAlwaysShow;
+    s_onSchema    = onSchema;
+    s_onUserFolder = onUserFolder;
+    s_onPhrases   = onPhrases;
+    s_onFullwidth = onFullwidth;
+    s_onSymbols   = onSymbols;
+    s_onLogin     = onLogin;
     ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
     StartFadeTo(s_hwnd, QP_ALPHA_DEFAULT);
     return;
   }
 
-  // Create a minimal panel in always-show mode with empty callbacks.
-  // The actual callbacks will be set by the next explicit Show() call.
-  s_fullwidth = false;  // default state
-  s_mode = Mode::kAlwaysShow;
+  // Create a minimal panel in always-show mode. spec 061: the
+  // callbacks are now passed in (not null) so button clicks work
+  // immediately after panel creation.
+  s_fullwidth   = false;  // default state (can be updated by next Show call)
+  s_mode        = Mode::kAlwaysShow;
+  s_onSchema    = onSchema;
+  s_onUserFolder = onUserFolder;
+  s_onPhrases   = onPhrases;
+  s_onFullwidth = onFullwidth;
+  s_onSymbols   = onSymbols;
+  s_onLogin     = onLogin;
 
   LoadLogo();
 

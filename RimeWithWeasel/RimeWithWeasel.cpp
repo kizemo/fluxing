@@ -383,17 +383,33 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
     return;
   _UpdateUI(ipc_id);
   m_active_session = ipc_id;
-  // spec 056 bugfix: spec 052 US052-A requires QuickPanel to show
+  // spec 061: spec 052 US052-A requires QuickPanel to show
   // automatically when the user activates Fluxing IME. Earlier 0.18.34.0
-  // removed the EnableAlwaysShowMode() call entirely (mistakenly
-  // treating spec 052 as a bug). Correct implementation: trigger
-  // EnableAlwaysShowMode() on TSF FocusIn and Hide() on FocusOut.
+  // removed the EnableAlwaysShowMode() call entirely.
   //
-  // ipc_id > 0 means a real TSF session exists (Fluxing IME is active).
-  // If ipc_id == 0 (no session), do nothing - focus is on a non-Fluxing
-  // application.
+  // The 6 button callbacks are default fallback lambdas (open user
+  // dir / deployer / etc). WeaselServerApp::SetupMenuHandlers
+  // also wires its own callbacks via the menu handler and the
+  // IP_WEASELTRAY_QUICK_PANEL TriggerMode path. RimeWithWeaselHandler
+  // is the FALLBACK for the case when WeaselServerApp hasn't called
+  // Show() yet (e.g. immediately on session start before tray menu
+  // has been hit).
   if (ipc_id > 0) {
-    QuickPanelDialog::EnableAlwaysShowMode();
+    QuickPanelDialog::EnableAlwaysShowMode(
+        []() { /* 1. 方案: no-op (no schema picker UI in v0.18.36) */ },
+        []() {
+          // 2. 词典: open user data folder
+          ShellExecuteW(NULL, NULL, WeaselUserDataPath().c_str(),
+                        NULL, NULL, SW_SHOWNORMAL);
+        },
+        []() { /* 3. 短语: no-op (spec 009 not yet) */ },
+        [](bool) { /* 4. 全半角: no-op (no rime_api handle here) */ },
+        []() {
+          // 5. 符号: open deployer
+          ShellExecuteW(NULL, NULL, L"WeaselDeployer.exe", L"/deploy",
+                        NULL, SW_SHOWNORMAL);
+        },
+        []() { /* 6. 登录: no-op (v2.1+ cloud sync) */ });
   }
 }
 
