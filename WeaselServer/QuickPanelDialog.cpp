@@ -267,20 +267,32 @@ void DoPaint(HWND hwnd) {
   g.SetSmoothingMode(SmoothingModeAntiAlias);
   g.SetTextRenderingHint(TextRenderingHintAntiAlias);
 
-  // Background: frosted glass white
-  SolidBrush bg(Gdiplus::Color(0xF0, 0xF6, 0xF6));
+  // spec 055 bugfix: Background was SolidBrush alpha=0xF0 (opaque pale
+  // grey) — user reported the panel looked like a "dark ugly border".
+  // The dark border came from DrawRoundRect's second alpha=0x14 color
+  // (8% black). Real design intent (spec 049 v3-macos): translucent
+  // background, no visible border.
+  //
+  // Fix:
+  //   1. SolidBrush background uses very light alpha=0xE8 (91%) so the
+  //      desktop subtly shows through, matching macOS Big Sur+ chrome.
+  //   2. Drop the explicit border call from DrawRoundRect (pass
+  //      alpha=0 border).
+  //   3. Soft 1px hairline below the bar (subtle, not the dark frame).
+  SolidBrush bg(Gdiplus::Color(0xE8, 0xF6, 0xF6));
   g.FillRectangle(&bg, 0, 0, crc.right, crc.bottom);
 
-  // Outer rounded rect (bar container)
-  Gdiplus::RectF bar_rc(1.5f, 1.5f, (float)crc.right - 3, (float)crc.bottom - 3);
+  // Outer rounded rect (bar container) — NO dark border.
+  Gdiplus::RectF bar_rc(1.0f, 1.0f, (float)crc.right - 2, (float)crc.bottom - 2);
   DrawRoundRect(&g, bar_rc, 14.0f,
-                Gdiplus::Color(0xF0, 0xF6, 0xF6),
-                Gdiplus::Color(0x14, 0x14, 0x14));
+                Gdiplus::Color(0xE8, 0xF6, 0xF6),
+                Gdiplus::Color(0x00, 0x00, 0x00, 0x00));   // transparent border
 
-  // Inner highlight line (top edge)
+  // Soft hairline shadow below the bar (1px line, very light).
   {
-    Gdiplus::Pen hp(Gdiplus::Color(0x1A, 0xFF, 0xFF, 0xFF), 0.5f);
-    g.DrawLine(&hp, 15, 2, crc.right - 15, 2);
+    Gdiplus::Pen hp(Gdiplus::Color(0x18, 0x00, 0x00, 0x00), 1.0f);
+    g.DrawLine(&hp, 14, (float)crc.bottom - 0.5f,
+               crc.right - 14, (float)crc.bottom - 0.5f);
   }
 
   // Logo: gradient rounded rect + logo image
@@ -302,9 +314,11 @@ void DoPaint(HWND hwnd) {
                 drawW, drawH);
   }
 
-  // Separators
+  // Separators (spec 055 bugfix: was 0x14,0x14,0x14 - very dark
+  // vertical hairlines that contributed to the "dark ugly border"
+  // user feedback. Use much lighter alpha=0x10 (6%) instead.)
   auto drawSep = [&](RECT sr) {
-    Gdiplus::Pen p(Gdiplus::Color(0x14, 0x14, 0x14), 1.0f);
+    Gdiplus::Pen p(Gdiplus::Color(0x10, 0x80, 0x80, 0x80), 1.0f);
     g.DrawLine(&p, sr.left, sr.top, sr.left, sr.bottom);
   };
   drawSep(Sep1Rect()); drawSep(Sep2Rect()); drawSep(Sep3Rect());
