@@ -1,0 +1,11 @@
+{
+    "schema_version": 2,
+    "commit": "1c6667ba54651d5ba9ecd5c60b8aab6e052100e5",
+    "indexed_at": "2026-07-09T13:31:11Z",
+    "project": "F-soft-00selfmade-rime_claude",
+    "nodes": 19254,
+    "edges": 57995,
+    "original_size": 52953088,
+    "compressed_size": 10751356,
+    "compression_level": 3
+}
