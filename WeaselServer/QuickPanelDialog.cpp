@@ -20,12 +20,24 @@ using Gdiplus::ImageAttributes;
 using Gdiplus::SmoothingModeAntiAlias;
 using Gdiplus::TextRenderingHintAntiAlias;
 using Gdiplus::UnitPixel;
+using Gdiplus::REAL;
+using Gdiplus::LineCap;
+using Gdiplus::LineJoin;
+using Gdiplus::LineCapRound;
+using Gdiplus::LineCapSquare;
+using Gdiplus::LineJoinRound;
+using Gdiplus::RectF;
+using Gdiplus::LinearGradientBrush;
+using Gdiplus::LinearGradientModeHorizontal;
 
 #define QP_WIDTH         292
 #define QP_HEIGHT         38
 #define QP_TIMER_FADE      1
 #define QP_FADE_STEP      34   // (255-179)/3 ≈ 25, fewer timer ticks
-#define QP_ALPHA_DEFAULT 179   // 70% opaque (30% transparent) per spec 052 user feedback
+// spec 052 §1 + US052-A: "切到火流猩输入法 → 屏幕右下角自动出现 ...
+// 20% 透明度（淡灰感）". 20% of 255 = 51. codex 0.18.30.0 wrote 179
+// (70%) which violated the spec; spec 056 bugfix restores 51.
+#define QP_ALPHA_DEFAULT  51   // 20% opaque (80% transparent) per spec 052
 #define QP_ALPHA_HOVER   255   // fully opaque
 
 static const wchar_t kClassName[] = L"FluxingQuickPanel_v4";
@@ -97,20 +109,36 @@ POINT ComputeOrigin() {
 }
 
 // ─── Layout ────────────────────────────────────────────────────────────
+// spec 056 bugfix: layout rewritten to match design (04-quick-settings-v3-macos.html):
+//   bar       14px radius
+//   brand     26x26 logo with 8px radius and gradient (blue→purple)
+//   button    32x28 with 7px radius, hover 4% black overlay
+//   separator 1px wide, 18px tall, rgba(0,0,0,0.08)
+// 6 icons: schema / dict / phrase / full-half / symbols / login
+// (was using GDI+ DrawLine placeholders — spec 056 replaces with
+//  GDIplus::GraphicsPath SVG-like paths per design)
 
-RECT LogoRect()  { RECT r = {6, 5, 32, 31}; return r; }
-RECT Sep1Rect()  { RECT r = {38, 9, 40, 27}; return r; }
-RECT Btn1Rect()  { RECT r = {46, 4, 78, 32}; return r; }
-RECT Sep2Rect()  { RECT r = {84, 9, 86, 27}; return r; }
-RECT Btn2Rect()  { RECT r = {92, 4, 124, 32}; return r; }
-RECT Sep3Rect()  { RECT r = {130, 9, 132, 27}; return r; }
-RECT Btn3Rect()  { RECT r = {138, 4, 170, 32}; return r; }
-RECT Sep4Rect()  { RECT r = {176, 9, 178, 27}; return r; }
-RECT Btn4Rect()  { RECT r = {184, 4, 216, 32}; return r; }
-RECT Sep5Rect()  { RECT r = {222, 9, 224, 27}; return r; }
-RECT Btn5Rect()  { RECT r = {230, 4, 262, 32}; return r; }
-RECT Sep6Rect()  { RECT r = {268, 9, 270, 27}; return r; }
-RECT Btn6Rect()  { RECT r = {276, 4, 286, 32}; return r; }
+RECT BrandRect()  { RECT r = {6, 6, 32, 32}; return r; }     // 26x26 brand
+RECT Sep1Rect()   { RECT r = {36, 11, 37, 27}; return r; }
+RECT Btn1Rect()   { RECT r = {40, 6, 72, 34}; return r; }    // 32x28 buttons
+RECT Sep2Rect()   { RECT r = {76, 11, 77, 27}; return r; }
+RECT Btn2Rect()   { RECT r = {80, 6, 112, 34}; return r; }
+RECT Sep3Rect()   { RECT r = {116, 11, 117, 27}; return r; }
+RECT Btn3Rect()   { RECT r = {120, 6, 152, 34}; return r; }
+RECT Sep4Rect()   { RECT r = {156, 11, 157, 27}; return r; }
+RECT Btn4Rect()   { RECT r = {160, 6, 192, 34}; return r; }
+RECT Sep5Rect()   { RECT r = {196, 11, 197, 27}; return r; }
+RECT Btn5Rect()   { RECT r = {200, 6, 232, 34}; return r; }
+RECT Sep6Rect()   { RECT r = {236, 11, 237, 27}; return r; }
+RECT Btn6Rect()   { RECT r = {240, 6, 272, 34}; return r; }
+
+// Now total width = 278, fits QP_WIDTH=292 with 14px right padding.
+// Update QP_WIDTH to match new layout:
+#undef QP_WIDTH
+#define QP_WIDTH  278
+// Height: design is 38 (6 padding top + 26 brand + 6 padding bottom)
+#undef QP_HEIGHT
+#define QP_HEIGHT 38
 
 BOOL InRect(int x, int y, RECT r) {
   return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
@@ -123,7 +151,7 @@ int HitTest(int x, int y) {
   if (InRect(x, y, Btn4Rect())) return 4;
   if (InRect(x, y, Btn5Rect())) return 5;
   if (InRect(x, y, Btn6Rect())) return 6;
-  if (InRect(x, y, LogoRect())) return -1;
+  if (InRect(x, y, BrandRect())) return -1;
   return 0;
 }
 
@@ -203,57 +231,121 @@ void DrawRoundRect(Graphics* g, const Gdiplus::RectF& rc, float r,
   }
 }
 
-void DrawIcon(Graphics* g, int btnId, bool isPressed, int cx, int cy) {
-  Gdiplus::Color fill(0x1d, 0x1d, 0x1f);
-  if (isPressed) fill.SetValue(0xFF0a84ff);
-  Gdiplus::Pen pen(fill, 1.5f);
-  Gdiplus::SolidBrush br(fill);
-  int s = 10;
-  // Btn 1: 方案 → 3 horizontal lines
-  if (btnId == 1) {
-    g->DrawLine(&pen, (INT)(cx-s), (INT)(cy-s+2), (INT)(cx+s), (INT)(cy-s+2));
-    g->DrawLine(&pen, (INT)(cx-s), (INT)cy, (INT)(cx+s), (INT)cy);
-    g->DrawLine(&pen, (INT)(cx-s), (INT)(cy+s-2), (INT)(cx+s), (INT)(cy+s-2));
-  }
-  // Btn 2: 词典 → document with lines
-  else if (btnId == 2) {
-    Gdiplus::RectF doc(cx-s*0.6f, cy-s*0.7f, s*1.2f, s*1.4f);
-    g->DrawRectangle(&pen, doc);
-    g->DrawLine(&pen, (INT)(cx-s*0.4f), (INT)(cy-s*0.3f), (INT)(cx+s*0.4f), (INT)(cy-s*0.3f));
-    g->DrawLine(&pen, (INT)(cx-s*0.4f), (INT)cy, (INT)(cx+s*0.2f), (INT)cy);
-    g->DrawLine(&pen, (INT)(cx-s*0.4f), (INT)(cy+s*0.3f), (INT)(cx+s*0.1f), (INT)(cy+s*0.3f));
-  }
-  // Btn 3: 短语 → pencil shape
-  else if (btnId == 3) {
-    g->DrawLine(&pen, (INT)(cx-s), (INT)(cy+s), (INT)cx, (INT)(cy+s));
-    g->DrawLine(&pen, (INT)cx, (INT)(cy+s), (INT)(cx+s), (INT)cy);
-    g->DrawLine(&pen, (INT)(cx+s), (INT)cy, (INT)(cx+s), (INT)(cy-s));
-  }
-  // Btn 4: 全半角 → large circle (full) or small filled dot (half)
-  else if (btnId == 4) {
-    if (QuickPanelDialog::IsFullwidth()) {
-      g->DrawEllipse(&pen, cx-s, cy-s, s*2, s*2);
-    } else {
-      g->FillEllipse(&br, cx-2, cy-2, 4, 4);
-    }
-  }
-  // Btn 5: 符号 → keyboard grid
-  else if (btnId == 5) {
-    float k = 3.5f, gap = 1.5f;
-    for (int row = -1; row <= 1; ++row) {
-      for (int col = -1; col <= 1; ++col) {
-        g->FillRectangle(&br, cx + col*(k+gap) - k/2,
-                              cy + row*(k+gap) - k/2, k, k);
+// spec 056 bugfix: DrawIcon rewritten with GDI+ GraphicsPath
+// (SVG-style vector paths). Each icon is a 16x16 unit path centered
+// at (cx, cy), matching SF Symbols stroke style (1.5 stroke width,
+// round cap/join). Old code drew 3-5 lines as placeholders — that
+// was just a "temp placeholder", not real design implementation.
+
+// Build a SF-Symbols-style icon path. viewBox 0 0 20 20, drawn at
+// (cx-8, cy-8) with width=16. Returns GraphicsPath sized 16x16.
+static std::unique_ptr<GraphicsPath> MakeIconPath(int btnId) {
+  auto path = std::make_unique<GraphicsPath>();
+  const float s = 16.0f;
+  // Map design viewBox 0..20 to 0..16 (offset drawn at cx-8)
+  const float k = s / 20.0f;
+  switch (btnId) {
+    case 1: { // schema: 3 rounded rectangles (list.bullet.rectangle)
+      for (int i = 0; i < 3; ++i) {
+        float y = 3.0f + i * 5.25f;
+        path->AddRectangle(RectF((REAL)3*k, (REAL)y*k, (REAL)14*k, (REAL)3.5f*k));
       }
+      break;
+    }
+    case 2: { // dict: document with 3 lines (book.closed)
+      path->AddRectangle(RectF((REAL)3*k, (REAL)4.5f*k, (REAL)14*k, (REAL)11*k));
+      // inner horizontal lines
+      path->AddLine((REAL)6*k, (REAL)7*k, (REAL)14*k, (REAL)7*k);
+      path->AddLine((REAL)6*k, (REAL)10*k, (REAL)14*k, (REAL)10*k);
+      path->AddLine((REAL)6*k, (REAL)13*k, (REAL)11*k, (REAL)13*k);
+      break;
+    }
+    case 3: { // phrase: pencil shape
+      path->AddLine((REAL)13.5f*k, (REAL)3.5f*k, (REAL)16.5f*k, (REAL)6.5f*k);
+      path->AddLine((REAL)16.5f*k, (REAL)6.5f*k, (REAL)7*k, (REAL)16*k);
+      path->AddLine((REAL)7*k, (REAL)16*k, (REAL)4*k, (REAL)16*k);
+      path->AddLine((REAL)4*k, (REAL)16*k, (REAL)4*k, (REAL)13*k);
+      path->AddLine((REAL)4*k, (REAL)13*k, (REAL)13.5f*k, (REAL)3.5f*k);
+      path->CloseFigure();
+      break;
+    }
+    case 4: { // full-half: filled dot (current is full; alternate via s_fullwidth)
+      if (QuickPanelDialog::IsFullwidth()) {
+        // large circle outline
+        path->AddEllipse(4*k, 4*k, 12*k, 12*k);
+      } else {
+        // small filled dot
+        path->AddEllipse(8*k, 8*k, 4*k, 4*k);
+      }
+      break;
+    }
+    case 5: { // symbols: keyboard grid (3x3 dots + bottom bar)
+      for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 5; ++c) {
+          float cx = (3 + c*3.5f)*k;
+          float cy = (5 + r*2.5f)*k;
+          path->AddEllipse(cx - 0.5f*k, cy - 0.5f*k, 1*k, 1*k);
+        }
+      }
+      path->AddLine(5*k, 14*k, 15*k, 14*k);
+      break;
+    }
+    case 6: { // login: person silhouette (head + body)
+      // head circle
+      path->AddEllipse(RectF((REAL)7*k, (REAL)3.5f*k, (REAL)6*k, (REAL)6*k));
+      // body rectangle
+      path->AddRectangle(RectF((REAL)3*k, (REAL)11*k, (REAL)14*k, (REAL)6*k));
+      break;
     }
   }
-  // Btn 6: 登录 → person silhouette (dimmed / disabled look)
-  else if (btnId == 6) {
-    g->FillEllipse(&br, cx-3, (INT)(cy-s*0.6f), 6, 6);
-    Gdiplus::RectF body(cx-s*0.7f, cy+s*0.1f, s*1.4f, s*0.8f);
-    g->FillEllipse(&br, body);
+  return path;
+}
+
+void DrawIcon(Graphics* g, int btnId, bool isPressed, bool isHover, int cx, int cy) {
+  // Color: design uses #1d1d1f (28,28,31) text color
+  Gdiplus::Color fgColor(0xFF, 0x1d, 0x1d, 0x1f);
+  if (isPressed) fgColor = Gdiplus::Color(0xFF, 0x0a, 0x84, 0xff);  // accent
+  // dim login (btn 6) - design uses 35% opacity
+  if (btnId == 6) fgColor = Gdiplus::Color(0x59, 0x60, 0x60, 0x67);
+
+  // Translate path to (cx-8, cy-8)
+  Gdiplus::Matrix m;
+  m.Translate((REAL)(cx - 8), (REAL)(cy - 8));
+  auto path = MakeIconPath(btnId);
+  if (!path) return;
+  path->Transform(&m);
+
+  if (isPressed) {
+    // accent background (rgba(10,132,255,0.12))
+    SolidBrush accent(Gdiplus::Color(0x1f, 0x0a, 0x84, 0xff));
+    g->FillRectangle(&accent, cx - 16, cy - 14, 32, 28);
+  } else if (isHover) {
+    // hover background (rgba(0,0,0,0.04))
+    SolidBrush hover(Gdiplus::Color(0x0a, 0x00, 0x00, 0x00));
+    g->FillRectangle(&hover, cx - 16, cy - 14, 32, 28);
+  }
+
+  if (btnId == 6) {
+    // Login is disabled (design aria-disabled). Fill with dim color.
+    SolidBrush dim(fgColor);
+    g->FillPath(&dim, path.get());
+  } else {
+    // Stroke only (SF Symbols outline style)
+    Gdiplus::Pen pen(fgColor, 1.5f);
+    pen.SetLineCap((Gdiplus::LineCap)Gdiplus::LineCapRound,
+                   (Gdiplus::LineCap)Gdiplus::LineCapRound,
+                   (Gdiplus::DashCap)Gdiplus::LineCapRound);
+    pen.SetLineJoin((Gdiplus::LineJoin)Gdiplus::LineJoinRound);
+    g->DrawPath(&pen, path.get());
   }
 }
+
+// spec 056 bugfix: DoPaint rewritten to match design (04-quick-settings-v3-macos.html):
+//   background: rgba(246,246,246,0.72) translucent (we use alpha 184 = 0.72*255)
+//   border:     1px solid rgba(0,0,0,0.08)
+//   shadow:     0 8px 24px rgba(0,0,0,0.10)
+//   radius:     14px outer (bar), 8px brand, 7px buttons
+//   brand gradient: linear-gradient(135deg, #0a84ff 0%, #5e5ce6 100%)
 
 void DoPaint(HWND hwnd) {
   PAINTSTRUCT ps;
@@ -267,69 +359,68 @@ void DoPaint(HWND hwnd) {
   g.SetSmoothingMode(SmoothingModeAntiAlias);
   g.SetTextRenderingHint(TextRenderingHintAntiAlias);
 
-  // spec 055 bugfix: Background was SolidBrush alpha=0xF0 (opaque pale
-  // grey) — user reported the panel looked like a "dark ugly border".
-  // The dark border came from DrawRoundRect's second alpha=0x14 color
-  // (8% black). Real design intent (spec 049 v3-macos): translucent
-  // background, no visible border.
-  //
-  // Fix:
-  //   1. SolidBrush background uses very light alpha=0xE8 (91%) so the
-  //      desktop subtly shows through, matching macOS Big Sur+ chrome.
-  //   2. Drop the explicit border call from DrawRoundRect (pass
-  //      alpha=0 border).
-  //   3. Soft 1px hairline below the bar (subtle, not the dark frame).
-  SolidBrush bg(Gdiplus::Color(0xE8, 0xF6, 0xF6));
+  // 1. Background fill (translucent pale grey, design surface)
+  SolidBrush bg(Gdiplus::Color(0xB8, 0xF6, 0xF6, 0xF6));
   g.FillRectangle(&bg, 0, 0, crc.right, crc.bottom);
 
-  // Outer rounded rect (bar container) — NO dark border.
-  Gdiplus::RectF bar_rc(1.0f, 1.0f, (float)crc.right - 2, (float)crc.bottom - 2);
+  // 2. Outer bar (14px radius, design color)
+  Gdiplus::RectF bar_rc(0.5f, 0.5f, (float)crc.right - 1, (float)crc.bottom - 1);
   DrawRoundRect(&g, bar_rc, 14.0f,
-                Gdiplus::Color(0xE8, 0xF6, 0xF6),
-                Gdiplus::Color(0x00, 0x00, 0x00, 0x00));   // transparent border
+                Gdiplus::Color(0xB8, 0xF6, 0xF6, 0xF6),
+                Gdiplus::Color(0x14, 0x00, 0x00, 0x00));   // rgba(0,0,0,0.08) border
 
-  // Soft hairline shadow below the bar (1px line, very light).
-  {
-    Gdiplus::Pen hp(Gdiplus::Color(0x18, 0x00, 0x00, 0x00), 1.0f);
-    g.DrawLine(&hp, (INT)14, (INT)((float)crc.bottom - 0.5f),
-                   (INT)(crc.right - 14), (INT)((float)crc.bottom - 0.5f));
-  }
-
-  // Logo: gradient rounded rect + logo image
-  RECT lr = LogoRect();
-  Gdiplus::RectF logo_rc((float)lr.left, (float)lr.top,
-                          (float)(lr.right - lr.left), (float)(lr.bottom - lr.top));
-  DrawRoundRect(&g, logo_rc, 8.0f,
-                Gdiplus::Color(0xE6, 0x5E, 0xFF),
-                Gdiplus::Color(0x30, 0xFF, 0xFF, 0xFF), 0.5f);
+  // 3. Brand (26x26 logo with gradient blue→purple)
+  RECT br = BrandRect();
+  Gdiplus::RectF brand_rc((float)br.left, (float)br.top,
+                         (float)(br.right - br.left), (float)(br.bottom - br.top));
+  // Gradient fill: blue (#0a84ff) to purple (#5e5ce6)
+  Gdiplus::LinearGradientBrush gradient(
+      brand_rc,
+      Gdiplus::Color(0xFF, 0x0a, 0x84, 0xff),    // top-left blue
+      Gdiplus::Color(0xFF, 0x5e, 0x5c, 0xe6),    // bottom-right purple
+      Gdiplus::LinearGradientModeHorizontal);
+  GraphicsPath brand_path;
+  brand_path.AddLine(brand_rc.X + 8, brand_rc.Y, brand_rc.GetRight() - 8, brand_rc.Y);
+  brand_path.AddArc((REAL)brand_rc.GetRight() - 16, (REAL)brand_rc.Y, (REAL)16, (REAL)16, (REAL)270, (REAL)90);
+  brand_path.AddLine(brand_rc.GetRight(), brand_rc.Y + 8, brand_rc.GetRight(), brand_rc.GetBottom() - 8);
+  brand_path.AddArc((REAL)brand_rc.GetRight() - 16, (REAL)brand_rc.GetBottom() - 16, (REAL)16, (REAL)16, (REAL)0, (REAL)90);
+  brand_path.AddLine(brand_rc.GetRight() - 8, brand_rc.GetBottom(), brand_rc.X + 8, brand_rc.GetBottom());
+  brand_path.AddArc((REAL)brand_rc.X, (REAL)brand_rc.GetBottom() - 16, (REAL)16, (REAL)16, (REAL)90, (REAL)90);
+  brand_path.AddLine(brand_rc.X, brand_rc.Y + 8, brand_rc.X, brand_rc.Y + 8);
+  brand_path.AddArc((REAL)brand_rc.X, (REAL)brand_rc.Y, (REAL)16, (REAL)16, (REAL)180, (REAL)90);
+  brand_path.CloseFigure();
+  g.FillPath(&gradient, &brand_path);
   if (s_logo) {
-    int imgW = s_logo->GetWidth();
-    int imgH = s_logo->GetHeight();
     int drawW = 18, drawH = 18;
-    int ox = lr.left + (lr.right - lr.left - drawW) / 2;
-    int oy = lr.top  + (lr.bottom - lr.top - drawH) / 2;
-    // Draw logo as-is (no color tint - will appear in original colors on gradient)
-    g.DrawImage(s_logo.get(), (int)(lr.left + (lr.right - lr.left - drawW) / 2),
-                (int)(lr.top + (lr.bottom - lr.top - drawH) / 2),
-                drawW, drawH);
+    int ox = br.left + (br.right - br.left - drawW) / 2;
+    int oy = br.top + (br.bottom - br.top - drawH) / 2;
+    // Draw logo as-is; it appears as a white silhouette due to logo color
+    g.DrawImage(s_logo.get(), ox, oy, drawW, drawH);
   }
 
-  // Separators (spec 055 bugfix: was 0x14,0x14,0x14 - very dark
-  // vertical hairlines that contributed to the "dark ugly border"
-  // user feedback. Use much lighter alpha=0x10 (6%) instead.)
+  // 4. Separators (1px, very light, design rgba(0,0,0,0.08))
   auto drawSep = [&](RECT sr) {
-    Gdiplus::Pen p(Gdiplus::Color(0x10, 0x80, 0x80, 0x80), 1.0f);
+    Gdiplus::Pen p(Gdiplus::Color(0x14, 0x00, 0x00, 0x00), 1.0f);
     g.DrawLine(&p, sr.left, sr.top, sr.left, sr.bottom);
   };
   drawSep(Sep1Rect()); drawSep(Sep2Rect()); drawSep(Sep3Rect());
   drawSep(Sep4Rect()); drawSep(Sep5Rect()); drawSep(Sep6Rect());
 
-  // Buttons
+  // 5. Icons (6 SF-Symbols-style paths via GDI+ GraphicsPath)
+  // Track hover state: button highlighted if mouse is inside its rect.
+  // For spec 056, we approximate hover via mouse position from last WM_MOUSEMOVE.
+  POINT mousePt;
+  GetCursorPos(&mousePt);
+  ScreenToClient(hwnd, &mousePt);
   for (int i = 1; i <= 6; ++i) {
-    RECT br = (i==1 ? Btn1Rect():i==2?Btn2Rect():i==3?Btn3Rect():i==4?Btn4Rect():i==5?Btn5Rect():Btn6Rect());
-    int cx = (br.left + br.right) / 2;
-    int cy = (br.top + br.bottom) / 2;
-    DrawIcon(&g, i, false, cx, cy);
+    RECT btnr = (i==1 ? Btn1Rect():i==2?Btn2Rect():i==3?Btn3Rect():i==4?Btn4Rect():i==5?Btn5Rect():Btn6Rect());
+    int cx = (btnr.left + btnr.right) / 2;
+    int cy = (btnr.top + btnr.bottom) / 2;
+    bool isHover = InRect(mousePt.x, mousePt.y, btnr);
+    // isPressed: tracked via LButtonDown state. For simplicity we
+    // approximate via button #4 state (fullwidth toggle).
+    bool isPressed = (i == 4 && QuickPanelDialog::IsFullwidth());
+    DrawIcon(&g, i, isPressed, isHover, cx, cy);
   }
 
   BitBlt(hdc, 0, 0, crc.right, crc.bottom, memDC, 0, 0, SRCCOPY);
