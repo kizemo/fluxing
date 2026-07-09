@@ -1,4 +1,4 @@
-# Lessons Learned — Fluxing (rime/weasel fork)
+﻿# Lessons Learned — Fluxing (rime/weasel fork)
 
 > **Scope**: `Fluxing` project (`rime/weasel` fork), reusable lessons distilled from dev incidents. Each entry: **Incident → Root cause → Lesson** format, source-recorded.
 > **Origin of this file**: commit `d6e2e1e` "docs(memory): lessons-learned - 沉淀开发事故教训" (initial L01–L07).
@@ -4011,3 +4011,77 @@ The fix sequence was: `taskkill /F /PID 40324` (admin) -> `Remove-Item -Recurse 
 - [x] HKLM registry fully cleaned.
 - [x] Iron rule written to L58.
 - [ ] Future install.nsi default path: change `set_default` line 207 from `$PROGRAMFILES64\fluxing` to `D:\Program Files\fluxing` (user's actual production path) - this is a one-line install.nsi fix that prevents the iron-rule violation from being reachable in the first place.
+
+
+## L59 - PowerShell quoting + spec 052 inversion + placeholder icons (v0.18.35.0)
+
+**Date:** 2026-07-09
+**Status:** OPEN (committed in v0.18.35.0, ship 0a6197a)
+**Triggered by:** User 4-bug review after 0.18.34.0 install.
+
+### Bug A - PowerShell single-quote stripping in `&` calls
+
+**Symptom:** User ran `& installer.exe /S /D='D:\Program Files\fluxing'`. Exit 0 but no install to D:\. HKLM InstallDir still pointed at D:\Program Files\fluxing (from previous install, not updated). D:\...\weasel.dll mtime was 16:29 (build time) NOT 16:31 (installer creation time).
+
+**Root cause:** PowerShell parser strips single quotes before passing argv. NSIS sees `/D=D:\Program` (space broke path) and falls back to InstallDirRegKey or default.
+
+**Fix:** Use `Start-Process -ArgumentList @('/S','/D=D:\Program Files\fluxing')` or `cmd /c` wrapper.
+
+**Anti-patterns:**
+- **AP-L59-A**: Using `& installer /S /D=path with space` in PowerShell
+- **AP-L59-B**: Trusting NSIS exit 0 as proof of correct install (NSIS /D= malformed silently)
+- **AP-L59-C**: Forgetting PowerShell parser strips quotes from `&` invocation
+
+### Bug B - spec 052 inversion (auto-show not wired to TSF focus)
+
+0.18.34.0 spec 055 fix mistakenly removed `EnableAlwaysShowMode()` from `WeaselServerApp.cpp:40` (treating spec 052 as the bug). spec 052 US052-A actually requires auto-show on TSF focus. Re-add the call, but trigger on `RimeWithWeaselHandler::FocusIn` (the TSF focus event already wired into the IPC chain), gated on `ipc_id > 0` (real TSF session exists).
+
+**Anti-patterns:**
+- **AP-L59-D**: Treating user feedback as bug-to-delete without re-reading the spec
+- **AP-L59-E**: Hooking long-show-mode on `Run()` instead of TSF focus event
+
+### Bug C - QuickPanel UI was placeholder, not the real design
+
+0.18.34.0 spec 055 fix only changed border colors. The actual icons in `DrawIcon()` were GDI+ `DrawLine` placeholders (3-5 lines per button). The design (`docs/design/04-quick-settings-v3-macos.html`) uses SF-Symbols-style SVG paths. spec 056 rewrote `DrawIcon()` using `Gdiplus::GraphicsPath` with vector paths matching the SVG design. Updated `DoPaint()` with design-correct colors: surface `rgba(246,246,246,0.72)`, border `rgba(0,0,0,0.08)`, brand gradient `linear-gradient(135deg, #0a84ff, #5e5ce6)`, hover `rgba(0,0,0,0.04)`, pressed `rgba(10,132,255,0.12)`.
+
+**GDI+ type gotchas (compile-time errors fixed during spec 056):**
+- `REAL` is a typedef in `Gdiplus::` namespace - must `using Gdiplus::REAL;`
+- `LineCapRound` is an enum value, not a type - cannot `using`, must cast to `(Gdiplus::LineCap)`
+- `SetLineCap(start, end, dashCap)` is 3-arg not 2-arg
+- `GraphicsPath::AddRectangle(RectF)` has overload ambiguity with `AddRectangle(Rect&)`; always wrap in `RectF(...)`
+- `GraphicsPath operator=` is private - use `AddPath` or rewrite inline
+
+**Anti-patterns:**
+- **AP-L59-F**: Fixing a UI bug by changing 1-2 color constants and shipping. Always re-evaluate against design source.
+- **AP-L59-G**: Writing temp placeholder icons and shipping them. Temp = production unless noted in L##.
+
+### Bug D.1 - QP_ALPHA_DEFAULT was 179 instead of 51
+
+Codex wrote 179 (70% opaque) but spec 052 US052-A says 20% (51 of 255). 0.18.34.0 spec 055 only fixed border. spec 056 restores 51.
+
+**Anti-patterns:**
+- **AP-L59-H**: Comments that lie about spec values. Re-verify against spec, not previous implementation.
+
+### Verification (L46 3-path gate, ALL PASS after spec 056)
+
+- `xmake -a x86 -m release`: 0 errors
+- `msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m:1`: 0 errors, 0 warnings, 14.77s
+- L14 arch verify: 5 binaries all x86 Intel i386
+- L47 byte verify: source files 100% CRLF, no 0xC0/0xC1
+- L42 byte verify: 0x001E1E1E (dark-mode palette) still in weasel.dll
+
+### Installer
+
+`release/fluxing-0.18.35.0-installer.exe` (43,193,707 bytes, SHA256 `0841f13b355bf0a48ac9d985e0644d06c19bcab9ce205211b9a4fc989f344708`)
+
+### Action items
+
+- [x] v0.18.35.0 shipped (commit `0a6197a`, tag `v0.18.35.0`, pushed to kizemo)
+- [ ] Update AGENTS.md §2.5 silent-install recipe to include L59-A anti-pattern
+- [ ] spec 052: write proper L## entry for spec 052 implementation
+- [ ] spec 049 v4 design: v3-macos design never implemented in v0.18.30.0; v0.18.35.0 is first ship that matches (GDI+ based, not SVG)
+
+### Related
+
+L09 (NSIS BOM + CRLF + OutFile) / L13 (silent mode MUI hook) / L17 (InstallDirRegKey overrides /D=) / L49 (ATL message map) / L54 (silent install /D= ignored) / L55 (MaintenanceGuard) / L58 (Iron rule: D:\Program Files\fluxing)
+
