@@ -4184,3 +4184,115 @@ Initially I added `#define IDR_FLUXING_LOGO 60000` to `include/resource.h`. But 
 - L55 (MaintenanceGuard RAII for IPC)
 - L58 (Iron rule: D:\\Program Files\\fluxing)
 - L59 (4-bug post-mortem from v0.18.34.0, including Bug A-D from spec 056)
+## L61 - Half-fixes accumulate: spec 053/055/056/060 chain audit reveals 4 half-fixes (v0.18.37.0)
+
+**Date:** 2026-07-09
+**Status:** OPEN (committed in v0.18.37.0, ship d14ce4d)
+**Triggered by:** User re-test of v0.18.36.0 reporting 5 bugs. Previous 4 fix rounds had all been half-fixes; this round does a full chain audit and applies the missing 4 fixes + 1 visual fix.
+
+### The half-fix pattern (THE lesson of L61)
+
+The TSF -> IPC -> Server chain for IME focus has 5 components:
+1. TSF callback (OnActivated/OnKillThreadFocus)
+2. m_client.FocusIn/FocusOut (WeaselIPC client method)
+3. WEASEL_IPC_FOCUS_IN/FOCUS_OUT (named pipe message)
+4. RimeWithWeaselHandler::FocusIn/FocusOut (request handler)
+5. QuickPanelDialog::EnableAlwaysShowMode/Hide (UI action)
+
+Across 4 fix rounds I touched one end each time, never both:
+- spec 053: server m_disabled flag. Did not touch TSF or IPC.
+- spec 055: WeaselServerApp.cpp - DELETED EnableAlwaysShowMode() from Run(). Did not touch TSF or RimeWithWeasel.
+- spec 056: ADDED the call in RimeWithWeaselHandler::FocusIn. Did NOT add the TSF-side trigger.
+- spec 060: added TSF-side m_client.FocusIn() in OnActivated. Did NOT remove _AbortComposition from OnKillThreadFocus.
+
+After 4 rounds, the chain is partly wired with race conditions.
+
+### Bug 1 (RECURRING from L60) - QuickPanel still not auto-showing on Fluxing activation
+
+**Root cause:** L60 put m_client.FocusIn() in OnActivated, with an `if (m_client.Echo())` guard. m_client.Echo() returns false BEFORE m_client.Connect/StartSession completes (which happens AFTER _InitThreadMgrEventSink, the line that subscribes OnActivated in ActivateEx). So the very first OnActivated can fire on a not-yet-connected client, and the guard silently skips FocusIn.
+
+**Fix (spec 061):** Move m_client.FocusIn() from OnActivated to _Reconnect() success path. The reconnect path runs m_client.Connect + StartSession + GetResponseData sequentially, and only after all that succeeds does it call FocusIn. The IPC channel is guaranteed ready at that point.
+
+### Bug 3 (RECURRING from L60) - QuickPanel auto-disappeared after appearing
+
+**Root cause:** L60 put m_client.FocusOut() in OnKillThreadFocus. But OnKillThreadFocus fires on EVERY TSF focus event: cursor moves, menu popups, compartment state changes, etc. Each triggered FocusOut -> server Hide() -> QuickPanel disappeared.
+
+**Fix (spec 061):** REMOVE m_client.FocusOut() from OnKillThreadFocus entirely. Only fire on OnActivated(false) (the real "user switched away from Fluxing IME" event, which fires exactly once per real IME switch).
+
+### Bug 4 (NEW, deep root cause) - Cannot input Chinese
+
+**Root cause:** OnKillThreadFocus ALSO calls _AbortComposition() (WeaselTSF.cpp:189, was there pre-spec-053, I never touched it). _AbortComposition calls RimeWithWeaselHandler::CleanupComposition which calls rime_api->abort_composition -- DESTROYS the current composition state.
+
+Composition lifecycle in librime:
+1. User types n -> process_key creates composition { n }
+2. User types i -> process_key reads current composition { n } and adds i -> { ni }
+3. rime returns candidate list { 泥 你 妮 ... }
+
+If step 2 happens after _AbortComposition was called, the composition is empty { } and process_key creates a new one { i }. rime returns candidates based on i only, not ni.
+
+**Fix (spec 061):** Remove _AbortComposition() from OnKillThreadFocus. Composition state is preserved across focus events (per spec 052). It is only reset on:
+1. Deactivate() (clean shutdown)
+2. Explicit commit (Enter / number key) - via ProcessKeyEvent + _Respond path
+3. Explicit clear (Escape) - via ClearComposition path
+
+### Bug 2 (RECURRING from L60) - Right-click menu QuickPanel no-op
+
+**Root cause:** L60 changed the ID_WEASELTRAY_QUICK_PANEL menu handler to call QuickPanelDialog::ToggleMode(). ToggleMode() called EnableAlwaysShowMode() (the version with NO callback arguments). When the panel was created, the static callback members were all nullptr.
+
+When user clicks a button, FireButton() runs:
+```
+case 1: if (QuickPanelDialog::s_onSchema) QuickPanelDialog::s_onSchema(); break;
+```
+
+The `if (s_onSchema)` check is false (nullptr), so the click is silently dropped. User sees: menu item does nothing.
+
+**Fix (spec 061):** EnableAlwaysShowMode() now takes the same 6 callback parameters as Show(). RimeWithWeaselHandler::FocusIn now passes default fallback lambdas (open user data folder, deploy, etc). ToggleMode() re-shows with the last-stored callbacks.
+
+### Bug 5 (NEW) - Logo with blue border
+
+**Root cause:** The 20x20 logo_small.png is centered in a 26x26 brand area. The 3px transparent margin on each side lets the blue LinearGradientBrush background show through, looking like a "blue border".
+
+**Fix (spec 061):** Use 700x700 logo (docs/design/fluxing-logo.png, 47KB), draw at 26x26 to FILL the brand area exactly. No transparent margin = no blue border effect.
+
+### Verification (L46 3-path gate, ALL PASS after spec 061)
+
+- xmake -a x86 -m release: 0 errors, 20.3s build ok
+- msbuild weasel.sln: 0 errors, 0 warnings, 1m53s
+- scripts/test-infra/run-test-suite.bat: ALL TESTS PASSED
+- L14 arch verify: 5 binaries all x86 Intel i386
+- L42 byte verify: 0x001E1E1E in weasel.dll
+- L47 byte verify: 5 modified source files 100% CRLF, no 0xC0/0xC1
+- L09 byte verify: install.nsi BOM + 100% CRLF + no 0xC0/0xC1
+
+### Installer
+
+release/fluxing-0.18.37.0-installer.exe (43,215,639 bytes, SHA256 b42d435993f7bfea0788bb27ffaf559847b31466d54fdf96848cdcf9596298fb)
+
+### Anti-patterns (AP-L61-A, B, C, D, E, F)
+
+- **AP-L61-A**: Fixing only one end of a multi-component chain. The TSF -> IPC -> Server chain has 5 components; if you fix only one, the chain is still broken. Always trace the full chain end-to-end and verify each link is in place before claiming a bug is fixed.
+- **AP-L61-B**: Putting a critical action on a TSF event that fires too often (OnKillThreadFocus fires on every focus jitter, OnSetThreadFocus fires when focus moves between edit controls). Use OnActivated(true/false) for "user switched IME" semantics.
+- **AP-L61-C**: Calling _AbortComposition() on focus change. Composition is per-edit-control in librime, not per-focus-event. Abort only on Deactivate or explicit user action (Escape).
+- **AP-L61-D**: Adding a parameterless overload of a function that needs callbacks. If a function creates UI that needs to call back into your code, the callback must be passed in or stored. A null-default + "will be set later" is a deferred bug.
+- **AP-L61-E**: Putting visual elements in a larger container than the element fills, expecting the container background to be invisible. A 20x20 logo in a 26x26 area has 6px of background visible = 3px on each side = looks like a border. Either fill the container or shrink the container.
+- **AP-L61-F**: Calling IPC from a callback that can fire BEFORE the IPC connection is ready. Use `if (client.Echo())` guard as a SAFETY but not as the primary trigger. The primary trigger must be in code that runs AFTER Connect + StartSession succeeds (e.g. _Reconnect() body, after the GetResponseData call).
+
+### Action items
+
+- [x] v0.18.37.0 shipped (commit d14ce4d, tag v0.18.37.0, pushed to kizemo)
+- [ ] Test by user: install, log out, log in, switch to Fluxing - QuickPanel should auto-show with full-size logo on left, no auto-disappear on focus change, right-click menu works, Chinese input should work properly
+- [ ] spec 052 US052-A should now be finally working end-to-end (TSF -> IPC -> Server -> EnableAlwaysShowMode, all 5 layers wired)
+- [ ] spec 049 v4 design SVG: the v3-macos design icons in spec 056 are still GDI+ DrawLine placeholders. spec 049 v4 full SVG implementation is still pending.
+- [ ] L60 anti-pattern AP-L60-A (TSF half-fix) is now superseded by L61 AP-L61-A (chain half-fix). Update the L60 entry to point to L61.
+
+### Related
+
+- L09 (NSIS BOM + CRLF + OutFile)
+- L13 (silent mode MUI hook)
+- L17 (InstallDirRegKey overrides /D=)
+- L49 (ATL message map is runtime)
+- L54 (silent install /D= ignored)
+- L55 (MaintenanceGuard RAII for IPC)
+- L58 (Iron rule: D:Program Files/fluxing)
+- L59 (4-bug post-mortem from v0.18.34.0, including Bug A-D from spec 056)
+- L60 (4-bug post-mortem from v0.18.35.0, including Bug A-D from spec 060; L61 supersedes the half-fix lesson)
