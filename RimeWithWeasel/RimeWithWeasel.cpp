@@ -4,6 +4,8 @@
 #include <StringAlgorithm.hpp>
 #include <WeaselConstants.h>
 #include <WeaselUtility.h>
+#include <QuickPanelDialog.h>   // spec 056: FocusIn/FocusOut call
+                                //   QuickPanelDialog::EnableAlwaysShowMode/Hide
 
 #include <filesystem>
 #include <map>
@@ -381,6 +383,18 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
     return;
   _UpdateUI(ipc_id);
   m_active_session = ipc_id;
+  // spec 056 bugfix: spec 052 US052-A requires QuickPanel to show
+  // automatically when the user activates Fluxing IME. Earlier 0.18.34.0
+  // removed the EnableAlwaysShowMode() call entirely (mistakenly
+  // treating spec 052 as a bug). Correct implementation: trigger
+  // EnableAlwaysShowMode() on TSF FocusIn and Hide() on FocusOut.
+  //
+  // ipc_id > 0 means a real TSF session exists (Fluxing IME is active).
+  // If ipc_id == 0 (no session), do nothing - focus is on a non-Fluxing
+  // application.
+  if (ipc_id > 0) {
+    QuickPanelDialog::EnableAlwaysShowMode();
+  }
 }
 
 void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
@@ -388,6 +402,9 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
   if (m_ui)
     m_ui->Hide();
   m_active_session = 0;
+  // spec 056 bugfix: when user switches away from Fluxing IME, hide
+  // the QuickPanel (spec 052 US052-D).
+  QuickPanelDialog::Hide();
 }
 
 void RimeWithWeaselHandler::UpdateInputPosition(RECT const& rc,
