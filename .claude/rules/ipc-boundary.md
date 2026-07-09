@@ -9,60 +9,37 @@ paths:
   - "**/*PipeChannel*"
 ---
 
-# Cross-process IPC boundary rules
+# Cross-process IPC
 
-Cross-process boundaries in this project are **sealed and slow to change**.
-Treat any IPC change as architecture work, not refactor work.
+Wire protocol in `include/WeaselIPCData.h` (`weasel::Status`, `Context`,
+`Response`, `TextRange` 等 POD), 格式 `key=value` + `.\n` 终止, per-user
+named-pipe transport via `PipeChannel`.
 
-## Wire protocol (current)
+## Hard rule — change in lockstep
 
-Per-project protocols live in `include/WeaselIPCData.h`
-(`weasel::Status`, `weasel::Context`, `weasel::Response`, `weasel::TextRange`).
-On-the-wire format is `key=value` lines + `.\n` terminator.
-Transport is per-user named pipe (`\\.\pipe\<user>...`) via `PipeChannel`.
+`WeaselIPCData.h` 任何变更必须一次性同步 4 处 + 一个 ADR + 一个测试:
 
-## Hard rule — change the protocol in lockstep
-
-A new IPC message type, a new field on an existing struct, or a renamed
-enum value **must** be updated in **all four** call sites **at once**:
-
-| Layer | Files |
+| 端 | 文件 |
 |---|---|
 | Wire structs | `include/WeaselIPCData.h` |
-| Server (writer / owner of the rime session) | `WeaselServer/`, `WeaselIPCServer/` |
+| Server (writer) | `WeaselServer/`, `WeaselIPCServer/` |
 | TSF (reader) | `WeaselTSF/` |
 | Deployer (reader) | `WeaselDeployer/` |
+| ADR | `docs/adr/NNNN-*.md` (MADR) |
+| Test | `test/TestWeaselIPC/<...>.cpp` |
 
-Then:
+不对称变更 (e.g. 只在 server 端读新字段) → 停下写 ADR 说明为何安全, 不要静默放过。
 
-1. Open an ADR first (`docs/adr/NNNN-*.md`, MADR format). Cite spec / issue.
-2. Update `CHANGELOG.md` under `### 主要更新` (since this is a protocol break
-   visible to anyone tracing `WeaselServer.exe`).
-3. Add or extend a test under `test/TestWeaselIPC/` to lock the new message
-   shape (P2 + R2).
+## TSF thread — must not block I/O
 
-If the change is asymmetric (e.g. only the server reads a new field), **stop**
-and write an ADR describing why the asymmetry is safe — do not proceed
-silently.
+P2: `ITfTextInputProcessor::OnXxx` 回调内禁止 `CreateFile` / 同步注册表 /
+`BeginWaitForSingleObject`。长操作 → `WeaselServer` 单 supervisor (P7) →
+通过 pipe 异步回。
 
-## TSF thread — never block
+> L10 / L17 / L18 / L21 反复打破过这条。
 
-Per constitution P2 (`constitution.md` §Project-Specific Rules), the TSF
-thread must never block on I/O. Specifically:
+## Concurrency
 
-- No `std::ifstream` / `CreateFile` / synchronous registry call inside an
-  `ITfTextInputProcessor::OnXxx` callback.
-- No `BeginWaitForSingleObject` on the TSF thread.
-- Long operations must be deferred to `WeaselServer` (single supervisor per P7)
-  and returned asynchronously through the pipe.
-
-History: this rule has been broken before — see `lessons-learned.md` L10,
-L17, L18, L21.
-
-## Concurrency caveats
-
-- `WeaselServer` is **PPL** on Windows; you cannot `taskkill /F` it. Inner-loop
-  testing requires logout/reboot per cumulative binary change (L17/L18).
-- User-dictionary operations (`export_user_dict`, `import_user_dict`) **must**
-  be wrapped in `client.StartMaintenance()` / `client.EndMaintenance()` —
-  otherwise the leveldb LOCK held by `WeaselServer` denies the access.
+- `WeaselServer.exe` 是 **PPL** — `taskkill /F` 无效;累计二进制变更后
+  inner-loop 测试需 logout/reboot (L17 / L18)。
+- `RimeLeversApi::{export,import}_user_dict` **必须** `client.StartMaintenance()` → 操作 → `client.EndMaintenance()`, 否则 leveldb LOCK 拒绝。
