@@ -12,49 +12,36 @@ paths:
   - "test/TestResponseParser/**"
 ---
 
-# Hotkey, key binding & shift-modifier rules
+# Hotkey / Shift / Binding
 
-The hotkey handling model on the `Fluxing` branch has been incrementally
-fixed since `0.18.x`. Several bugfix batches (spec 012, 014, 018, 019) and
-incidents (L18, L19, L21) all touched this layer. **When the prompt is
-"hotkeys behave wrong" or "shift doesn't do X", read this file first.**
+此层在 0.18.x 多次被打破 (spec 012 / 014 / 018 / 019; L18 / L19 / L21)。
+"hotkeys behave wrong" 或 "shift doesn't do X" → 先读本文件。
 
-## Canonical rules
+## 双层语义 (这是项目特有的)
 
-- **`ascii_composer/switch_key` must set `Shift_L: noop` and `Shift_R: noop`**
-  to neutralize the default modifier behaviour. Actual shift-select logic
-  lives in `key_binder/bindings`, not in `switch_key`. The two layers have
-  different semantics in librime.
-- **The 2nd / 3rd candidate select-by-shift flows are now bound at the
-  `key_binder` level** (per spec 014). Use `WeaselIPCData.h::Hotkey` to
-  drive the activate-2nd-candidate message; do not call into librime
-  directly.
-- **Hotkey state is owned by `WeaselIPC::Client::HotkeyBinding`** and shared
-  via the IPC pipe (single source of truth). Do not duplicate state in TSF
-  or Deployer local memory — they will drift and create phantom shifts.
+- `default.yaml` 的 `ascii_composer/switch_key/Shift_L: noop` + `Shift_R: noop`
+  — **必须**, 中和 librime 默认 Shift 行为。
+- 实际的 shift-select (e.g. 上屏第 2 / 第 3 候选) 在 `key_binder/bindings` —
+  不是 `switch_key`, 两层在 librime 里有不同语义。
 
-## Tests that must pass for any change in this layer
+## Hotkey 单一真相
 
-Located under `test/`:
+`WeaselIPC::Client::HotkeyBinding` 单 source of truth, 通过 IPC pipe 共享。
+不要在 `WeaselTSF` / `WeaselServer` / `WeaselDeployer` 维护私有 hotkey 表 — 一周内会漂移并产生 phantom shifts。
 
-- `TestDefaultHotkeys` — the canonical hotkey table.
-- `TestShiftSelectBinding` — spec 014 regression.
-- `TestBindingResolution` — resolution logic for compound bindings.
-- `TestCandidateIgnoreFilter`, `TestCandidateRButtonDown`,
-  `TestUserDictUpdate` — candidate-list state machine, all touched by hotkey
-  chains.
-- `TestResponseParser` — confirms the wire-side response when shift-select
-  fires.
+## Shift 候选上屏 (spec 014) — 必须通过
+
+`WeaselIPCData.h::Hotkey` 激活;不要直接调 librime。
+
+## Tests 必须 pass
+
+`test/TestDefaultHotkeys` (hotkey 表) · `test/TestShiftSelectBinding` (spec 014) ·
+`test/TestBindingResolution` (复合键) · `test/TestCandidateIgnoreFilter` ·
+`test/TestCandidateRButtonDown` · `test/TestUserDictUpdate` ·
+`test/TestResponseParser`。
 
 ## Anti-patterns
 
-- **Do not** invent a private hotkey table in `WeaselTSF` or `WeaselServer`
-  — they diverge within a week. Always go through `HotkeyBinding`.
-- **Do not** change the TSF-thread-vs-IPC-thread split when wiring a new
-  binding — P2 still applies. Shifts are wired through key events, not by
-  posting to TSF directly.
-- **Do not** "fix" `Shift_L` to do nothing as a global default in
-  `default.yaml` — `ascii_composer/switch_key/Shift_L: noop` is the only
-  acceptable form; touching the global would break other schemas.
-- **Do not** mix Yaml-level binding edits with C++ hotkey code in the same
-  commit; they have different reviewers and different test runs.
+- 给 `Shift_L` 在全局 `default.yaml` 写 `noop` 而非 `switch_key` — 破坏其他 schemas。
+- 在新 binding 上改变 TSF-thread / IPC-thread 分工 — P2 仍生效;shift 走 key event, 不直接 post TSF。
+- YAML 层 binding 编辑与 C++ hotkey 代码同 commit — 不同 reviewer、不同测试, 应拆。
