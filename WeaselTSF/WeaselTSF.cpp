@@ -185,6 +185,11 @@ STDMETHODIMP WeaselTSF::OnSetThreadFocus() {
 }
 STDMETHODIMP WeaselTSF::OnKillThreadFocus() {
   _AbortComposition();
+  // spec 060 bugfix: TSF kills focus to other IMEs. Tell the server
+  // so the spec 052 always-show mode (FocusOut -> Hide) can fire.
+  if (m_client.Echo()) {
+    m_client.FocusOut();
+  }
   return S_OK;
 }
 BOOL WeaselTSF::_InitThreadFocusSink() {
@@ -215,9 +220,19 @@ STDMETHODIMP WeaselTSF::OnActivated(REFCLSID clsid,
   if (isActivated) {
     _ShowLanguageBar(TRUE);
     _UpdateLanguageBar(_status);
+    // spec 060 bugfix: WeaselTSF never called m_client.FocusIn/FocusOut,
+    // so the server never knew the IME was activated/deactivated and
+    // the spec 052 long-show mode (EnableAlwaysShowMode on FocusIn)
+    // was never triggered. Wire FocusIn/FocusOut here:
+    if (m_client.Echo()) {
+      m_client.FocusIn();
+    }
   } else {
     _DeleteCandidateList();
     _ShowLanguageBar(FALSE);
+    if (m_client.Echo()) {
+      m_client.FocusOut();
+    }
   }
   return S_OK;
 }

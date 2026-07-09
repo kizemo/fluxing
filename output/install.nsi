@@ -320,6 +320,7 @@ program_files:
   File "LICENSE.txt"
   File "README.txt"
   File "7-zip-license.txt"
+  File "fluxing-logo.png"
   File "7z.dll"
   File "7z.exe"
   File "COPYING-curl.txt"
