@@ -291,8 +291,8 @@ void DoPaint(HWND hwnd) {
   // Soft hairline shadow below the bar (1px line, very light).
   {
     Gdiplus::Pen hp(Gdiplus::Color(0x18, 0x00, 0x00, 0x00), 1.0f);
-    g.DrawLine(&hp, 14, (float)crc.bottom - 0.5f,
-               crc.right - 14, (float)crc.bottom - 0.5f);
+    g.DrawLine(&hp, (INT)14, (INT)((float)crc.bottom - 0.5f),
+                   (INT)(crc.right - 14), (INT)((float)crc.bottom - 0.5f));
   }
 
   // Logo: gradient rounded rect + logo image
