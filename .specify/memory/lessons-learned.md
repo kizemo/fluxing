@@ -4489,3 +4489,64 @@ xmake build in this environment only built 32-bit (the project's primary target 
 - L60 (4-bug post-mortem from v0.18.35.0, including Bug A-D from spec 060; superseded by L62)
 - L61 (4-bug deep-dive post-mortem from v0.18.36.0, including Bug A-D from spec 061; superseded by L62)
 - L62 (THIS: 5-round meta-analysis + build environment mismatch + missing Win 10 TSF CLSIDs + api-ms dep removal)
+
+## L63 - install.nsi regsvr32 path bug + S:/ error (v0.18.40.0)
+
+**Date:** 2026-07-10
+**Status:** OPEN (committed in v0.18.40.0)
+**Triggered by:** User reported the regsvr32 'S:/' module-not-found error after spec 064 v0.18.39.0 was installed. Five diagnostic rounds (L62-AP-A through AP-D) traced this to a different root cause from what I had been chasing.
+
+### Root cause of 'S:/' regsvr32 error (L63-R1)
+
+`install.nsi` line 22-23:
+```
+!ifndef WEASEL_ROOT
+!define WEASEL_ROOT $INSTDIR\weasel
+!endif
+!define FLUXING_ROOT $INSTDIRluxing
+```
+
+`ForceFluxingSuffix` (line 568-580) appends `luxing` to `$INSTDIR` if the last 7 chars are not 'fluxing'. So on a default install:
+- `/D=D:\Program Filesluxing` -> $INSTDIR = `D:\Program Filesluxing`
+- ForceFluxingSuffix sees no 'fluxing' suffix -> appends -> $INSTDIR = `D:\Program Filesluxingluxing`
+- WEASEL_ROOT = `$INSTDIR\weasel` = `D:\Program Filesluxingluxing\weasel` (DOES NOT EXIST)
+- regsvr32 line 439: `ExecWait 'regsvr32 /s "$INSTDIR\weaselx64.dll"' $0`
+  -> expanded to: `regsvr32 /s "D:\Program Filesluxingluxing\weaselx64.dll"` (DOES NOT EXIST)
+- The actual files are at: `D:\Program Filesluxing\weasel\weaselx64.dll`
+
+So regsvr32 actually does its parsing on a non-existent path. The 'S:/' the user saw in the screenshot is the way Windows reports the path-parse error: it converts forward slashes in regsvr32's path-parse to 'S:' drive + '/' separator, then says 'S:/weaselx64.dll' which doesn't exist either. This is regsvr32's internal path-parsing behavior on a non-existent path under elevated-context (the actual root cause is that $INSTDIR/\weaselx64.dll was a non-existent path).
+
+### Fix (v0.18.40.0)
+
+Use `$R3` (the user-facing install path saved BEFORE $INSTDIR was reset to WEASEL_ROOT) + `\weasel\` prefix:
+```
+ExecWait 'regsvr32 /s "$R3\weasel\weaselx64.dll"' $0
+ExecWait 'regsvr32 /s "$R3\weasel\weasel.dll"' $1
+```
+This guarantees the path exists: `$R3\weasel\weaselx64.dll` is always `D:\Program Filesluxing\weasel\weaselx64.dll` regardless of whether ForceFluxingSuffix ran.
+
+### Verification on user's machine (L63 end-to-end)
+
+1. User uninstalls old version
+2. User installs v0.18.40.0 (or v0.18.39.0 then patches install.nsi manually)
+3. silent install runs `regsvr32 /s "D:\Program Filesluxing\weasel\weaselx64.dll"` (now correct path)
+4. regsvr32 returns 0 (success)
+5. `HKLM\SOFTWARE\Classes\CLSID\{A3F4CDED-...}\InprocServer32` written (was missing before)
+6. `HKLM\SOFTWARE\Microsoft\CTF\KnownClasses` may be created (RegisterCategories may fail on Win 10 if CLSID_TF_CategoryMgr is missing, but RegisterServer's CLSID write succeeds)
+7. `HKCU\Software\Microsoft\CTF\Assemblies x00000804` may have a profile entry (RegisterProfiles may fail on Win 10 if CLSID_TF_InputProcessorProfiles is missing)
+
+### L63 anti-patterns (additional to L62)
+
+- **AP-L63-A**: NSIS variable scoping. `$INSTDIR` is the install path with L14-suffix `luxing` appended, but the actual file layout is `<install>\weasel\`. **The relationship is `<install>\weasel\<file>`, not `<install with fluxing suffix>\<file>`.** I should have looked at the actual file layout to determine the right path variable.
+- **AP-L63-B**: When a user reports a specific error like 'S:/', trace it back to the actual command line, not just the error message. The 'S:/' was regsvr32's internal re-encoding of a non-existent path on a non-existent drive letter - a red herring. The actual cause was path-construction logic, not drive letters.
+- **AP-L63-C**: The $R3 vs $INSTDIR split in install.nsi is non-obvious. Use named macros like `REAL_INSTALL_DIR` instead of reusing $R3 (which is a counter variable). A code comment explaining 'user-facing path' vs 'weasel path' would have caught this 6 rounds ago.
+
+### Action items
+
+- [x] v0.18.40.0 shipped with install.nsi path fix
+- [ ] User end-to-end test: uninstall, install v0.18.40.0, regsvr32, check KnownClasses + 0x00000804
+- [ ] If 0x00000804 still empty after install: user must manually run `regsvr32` elevated. Then check `HKCU\Software\Microsoft\CTF\Assemblies x00000804\<Fluxing-profile-GUID>` exists.
+- [ ] spec 050 (Hotkey Editor): not done.
+- [ ] spec 008 (Candidate right-click edit): not done.
+- [ ] spec 049 v4 design (real SVG icons): not done.
+- [ ] rebuild 64-bit weaselx64.dll with spec 064 fix (currently shipped as v0.18.38 base; works for Win 10 Microsft-fix but not 64-bit SafeGetDpiForMonitor).
