@@ -6,7 +6,7 @@
 #define CLSID_STRLEN 38  // strlen("{xxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxx}")
 
 static const char c_szInfoKeyPrefix[] = "CLSID\\";
-static const char c_szTipKeyPrefix[] = "Software\\Microsft\\CTF\\TIP\\";
+static const char c_szTipKeyPrefix[] = "Software\\Microsoft\\CTF\\TIP\\";
 static const char c_szInProcSvr32[] = "InprocServer32";
 static const char c_szModelName[] = "ThreadingModel";
 
