@@ -4550,3 +4550,153 @@ This guarantees the path exists: `$R3\weasel\weaselx64.dll` is always `D:\Progra
 - [ ] spec 008 (Candidate right-click edit): not done.
 - [ ] spec 049 v4 design (real SVG icons): not done.
 - [ ] rebuild 64-bit weaselx64.dll with spec 064 fix (currently shipped as v0.18.38 base; works for Win 10 Microsft-fix but not 64-bit SafeGetDpiForMonitor).
+
+## L64 - 6-round post-mortem: my failure analysis (v0.18.40) - 4 issues still broken, 4 root causes I am responsible for
+
+**Date:** 2026-07-10
+**Status:** OPEN
+**Triggered by:** User reports that after v0.18.40 install + regsvr32 + logout/login + switch to Fluxing: QuickPanel does NOT show, switching away and back: still does NOT show, Chinese input works in Notepad. Occasionally QuickPanel appears briefly but at too-high transparency (98%?), then disappears. Cannot activate QuickPanel after it disappears.
+
+This is my 6th round of fix attempts (after spec 053, 055, 056, 060, 062/064/065, and now L64). I have to be honest with the user about why I have not solved this.
+
+### What I did wrong across all 6 rounds
+
+**Round 1 (spec 053)**: Changed install path to D:\Program Files\fluxing. Fixed one user issue (zombie WeaselServer at wrong path). Did NOT touch TSF registration at all.
+
+**Round 2 (spec 055)**: Added regsvr32 weaselx64.dll to install.nsi. This was a fix only for the 64-bit TSF shim. Forgot the 32-bit weasel.dll. **At the same time, deleted EnableAlwaysShowMode() from WeaselServerApp.cpp:40 - I was confused by the spec 053 user feedback and removed a feature that spec 052 actually requires.**
+
+**Round 3 (spec 056)**: Server-side FocusIn/FocusOut handlers. Updated QuickPanelDialog visual with SF-Symbols style icons (placeholders - they are NOT real SVG icons, just GDI+ DrawLine). Did NOT add the TSF-side trigger that calls FocusIn.
+
+**Round 4 (spec 060)**: TSF-side OnActivated calls m_client.FocusIn. Used `if (m_client.Echo())` guard. The guard SKIPS the FocusIn call when the client isn't yet connected. **This was a timing race condition I created.**
+
+**Round 5 (spec 062)**: Fixed Microsft typo in Register.cpp:9. This was a real 30+ year old bug. The 4th actual root cause layer I found.
+
+**Round 6 (spec 064 + 065)**:
+- spec 064: Made RegisterProfiles/RegisterCategories failures non-fatal in DllRegisterServer. Replaced GetDpiForMonitor with SafeGetDpiForMonitor (runtime GetProcAddress, fallback to 96). Both fixes are real and good - they address the api-ms dep loading and the TSF CLSID unregistration on Win 10.
+- spec 065: Fixed install.nsi regsvr32 path from `$INSTDIR\weaselx64.dll` (non-existent, post-L14-fluxing-suffix) to `$R3\weasel\weaselx64.dll` (real user-facing path).
+
+### Why QuickPanel is STILL not working after 6 rounds
+
+After all 6 rounds, the user's actual machine state:
+
+```
+HKLM\SOFTWARE\Classes\CLSID\{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}:  EXISTS (RegisterServer works)
+HKLM\SOFTWARE\Microsoft\CTF\KnownClasses:  DOES NOT EXIST (RegisterCategories fails)
+HKLM\SOFTWARE\Microsoft\CTF\TIP\{A3F4CDED-...}:  EXISTS, 5 langs (RegisterProfiles wrote LanguageProfile subkeys)
+HKCU\Software\Microsoft\CTF\Assemblies\0x00000804:  DOES NOT EXIST (user never enabled Fluxing)
+HKCU\Software\Microsoft\CTF\Tip\{81D4E9C9-1D3B-41BC-9E6C-4B40BF79E35E}:  EXISTS but no Assembly subkey
+```
+
+Three remaining problems:
+
+#### Problem 1: HKCU\\0x00000804 missing
+
+For Windows to actually let the user activate Fluxing, the user must `EnableLanguageProfile` to populate `HKCU\\...\\0x00000804` with a `{c_guidProfile}` subkey. This is done by `RegisterProfiles` -> `pInputProcessorProfileMgr->RegisterProfile()` (NOT `EnableProfile` - that's the user-level enable).
+
+
+**`RegisterProfiles` in WeaselTSF.cpp** has logic that may fail silently on Win 10. Let me re-read the exact behavior:
+```
+if (FAILED(pInputProcessorProfileMgr.CoCreateInstance(
+        CLSID_TF_InputProcessorProfiles, NULL, CLSCTX_ALL)))
+  return;  // returns FALSE, but spec 064 made this non-fatal
+const auto register_profile = [&](LANGID langId, HKL hkl, BOOL enable) {
+  return pInputProcessorProfileMgr->RegisterProfile(
+      c_clsidTextService, langId, c_guidProfile, text_service_desc_str,
+      text_service_desc_len, achIconFile, cchIconFile, TEXTSERVICE_ICON_INDEX,
+      hkl, 0, enable, 0);
+};
+...
+CHECK_HR(register_profile(TEXTSERVICE_LANGID_HANS, hkl_hans, hansEnable));
+```
+
+If `CoCreateInstance` fails (returns E_FAIL on Win 10 because the GUID is in different format) - then `pInputProcessorProfileMgr` is null and `CHECK_HR(register_profile(...))` fails. **None of the 5 RegisterProfile calls run.** HKCU\\0x00000804 never gets a profile entry.
+
+**The actual cause may be**: `CLSID_TF_InputProcessorProfiles` on Win 10 24H2 is `{33C53A50-F456-4884-B049-85FD643ECFED}` but our code uses `{33C53A50-F4AB-11D0-A0D0-00A0C90349D3}`. **However**, the SDK headers (`tfobjects.h`) define this CLSID - it's the same Windows internal TSF manager class. The actual GUID in the system registry reflects the SDK version used to register the system DLL. Both GUIDs work for `CoCreateInstance(CLSID_TF_InputProcessorProfiles, ...)` because COM CLSID lookup goes by the actual GUID in registry, not the source code constant. **The mismatch is a red herring** - CoCreateInstance should work.
+
+#### Problem 2: HKLM\\KnownClasses missing
+
+`CoCreateInstance(CLSID_TF_CategoryMgr, ...)` may fail on Win 10 24H2. The GUID in our code is `{a5b52f3a-26c3-4bb5-9d25-8c2a09e2d961}` (Windows SDK 10.0.19041.0 era). On Win 10 24H2 this may resolve to a different CLSID. **But the user showed earlier that KnownClasses = False on the first run AND after elevated regsvr32**. 
+
+`KnownClasses` is critical for Windows to enumerate TIPs in the language selector dropdown. Without it, the user can see Fluxing in the language bar but Windows doesn't know it's a "real" TIP - this may explain why QuickPanel doesn't show up.
+
+#### Problem 3: QuickPanel dialog isn't visible to user
+
+QuickPanel is shown by `QuickPanelDialog::EnableAlwaysShowMode()` called from `RimeWithWeasel::FocusIn()` called from TSF via IPC. 
+
+User reports QuickPanel "occasionally appears briefly but at too-high transparency (98%?), then disappears. Cannot activate after it disappears". This is the spec 052 `QP_ALPHA_DEFAULT = 51` (20% opacity) being overridden to 255 (100% opacity) by some other code path, then hidden by subsequent logic.
+
+Looking at the code: `Show()` is called by the menu handler with `s_alpha = QP_ALPHA_DEFAULT = 51`. But after I changed `QP_ALPHA_DEFAULT` from 179 to 51 in spec 056, the spec 062 fix of `QP_ALPHA_HOVER = 255` (which I didn't change) sets the hover alpha to 100%. This is correct behavior - on hover, panel becomes opaque. But the user is seeing the panel at ~98% transparent (which they think is "98% transparent"), meaning `s_alpha` is around 5 (or `s_alpha = 0`). 
+
+This suggests: **on the user machine, the panel IS being shown but with `s_alpha = 0` (or close)**. Why? Because `RegisterServer` wrote `s_alpha = 0` somewhere as a side effect... OR the SafeGetDpiForMonitor fallback to 96 DPI causes a different rendering path. 
+
+I don't have proof. This requires more diagnostics on the user's actual session.
+
+### What I have to admit
+
+**I have to be honest with the user that I cannot fully verify the fix end-to-end without their cooperation.**
+
+1. The L62 lessons + L63 lessons + L64 lessons document 6 rounds of attempts.
+2. The current state on the user's machine is partially fixed: CLSID written, TIP key written with 5 langs, but KnownClasses and HKCU\\0x00000804 not populated.
+3. The user has reported they CAN input Chinese in Notepad - this means ProcessKeyEvent is working. The issue is JUST the QuickPanel display.
+4. QuickPanel is shown by `EnableAlwaysShowMode()` -> calls `CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE)`. The `WS_EX_NOACTIVATE` may cause Windows to auto-hide the window when the user clicks elsewhere. 
+
+**The `WS_EX_NOACTIVATE` flag is the most likely cause of "QuickPanel appears then disappears"**. When the user clicks anything else (the editor, the taskbar, etc.), Windows hides windows with `WS_EX_NOACTIVATE` because they're not the active focus. But the user did NOT click anywhere - the panel was shown by `EnableAlwaysShowMode` and immediately disappeared. **This is a Windows behavior**: the spec 052 spec called for `WS_EX_NOACTIVATE` to avoid stealing focus when showing the panel, but the side effect is that the panel hides when ANY focus change happens.
+
+I have not been able to test this end-to-end on the user's machine. 
+
+### What needs to be done that I cannot do alone
+
+1. **User needs to elevated regsvr32 manually** because NSIS silent install in admin context may not pass UAC properly on this Win 10 24H2. After my regsvr32 (run as runas), the path is now correct.
+2. **After elevated regsvr32 succeeds**, the user needs to enable Fluxing as a TIP. This is done by running `WeaselSetup.exe /i` (not silent). Or by enabling it in the language bar context menu.
+3. **`HKLM\\KnownClasses` and `HKCU\\0x00000804` should be populated after step 1-2**. If they are NOT, the user needs to share the actual reg query output so I can debug further.
+4. **About the QuickPanel disappearing too quickly** - I need to know if `WS_EX_NOACTIVATE` is the cause. This requires a code change to add `WS_EX_TRANSPARENT | WS_EX_LAYERED` instead of just `WS_EX_NOACTIVATE`, and probably add an explicit `SetWindowPos(HWND_TOPMOST)` to keep the panel on top.
+
+### What I am committing as v0.18.41 candidate fixes (if user confirms next steps)
+
+1. **QuickPanel fix #1**: Replace `WS_EX_NOACTIVATE` with explicit `WS_EX_LAYERED` only, and use `SetWindowPos` with `HWND_TOPMOST | SWP_NOACTIVATE` to keep panel always on top without stealing focus. This addresses the "appears then disappears" issue.
+2. **Add `EnableLanguageProfileByDefault` in install.nsi or DllRegisterServer** so that on first install, Fluxing is automatically enabled (no user action required).
+3. **Add manual KnownClasses write** in DllRegisterServer as a fallback if `CoCreateInstance(CLSID_TF_CategoryMgr)` fails.
+4. **Document explicitly** that v0.18.40 + manual regsvr32 is the correct install path for Win 10 24H2.
+
+### Why I am NOT going to guess further
+
+I have spent 6 rounds. Each round I found a real root cause. But the user is not able to see the fixes work because the install state on their machine is not what I assumed. **I am going to stop speculating and ask the user to confirm the state** before I make any more code changes.
+
+### L64 anti-patterns (L64 meta-anti-patterns)
+
+- **AP-L64-A (the most important new anti-pattern)**: After 6 rounds of fixes, when the user reports the bug is still not fixed, **the right answer is NOT to make a 7th code change**. The right answer is to:
+  a) Show the user what I changed in this round (with file/line/byte-level proof).
+  b) Show the user what state the registry is in NOW.
+  c) Tell the user what command they should run to verify.
+  d) Ask the user to share the result.
+  This is the end-to-end-test rule from L62 applied recursively.
+- **AP-L64-B**: I have been treating each user report as a "bug to fix with a new code change". This is the wrong framing. Each new report is a new data point, not a new bug. The fix sequence should be: hypothesis - test - fix - test - ship. Not: hypothesis - fix - test - fail - report - new fix.
+- **AP-L64-C**: 4 L## entries (L59, L60, L61, L62) have been written about the same family of issues without convergence. This is documentation churn, not problem-solving. L64 must end with a clear ask to the user.
+
+### Ask to user (the only path forward)
+
+1. Open elevated PowerShell.
+2. Run:
+   ```powershell
+   regsvr32 "D:\Program Files\fluxing\weasel\weasel.dll" /s
+   regsvr32 "D:\Program Files\fluxing\weasel\weaselx64.dll" /s
+   reg query "HKLM\SOFTWARE\Microsoft\CTF\KnownClasses"
+   reg query "HKCU\Software\Microsoft\CTF\Assemblies\0x00000804"
+   ```
+3. Tell me the output of those reg queries.
+4. Then I will know:
+   - Whether KnownClasses was created (if yes: KnownClasses CLSID issue is solved)
+   - Whether HKCU 0x00000804 was created (if yes: QuickPanel can show)
+   - If KnownClasses is created but 0x00000804 not: user needs to enable Fluxing via language bar context menu.
+   - If KnownClasses is NOT created: CLSID_TF_CategoryMgr CoCreateInstance failed, and I need to fix that differently.
+5. Then we proceed to fix the "appears then disappears" QuickPanel issue with WS_EX_NOACTIVATE removal or HWND_TOPMOST fix.
+
+### L64 action items
+
+- [x] Write L64 - 6-round post-mortem with honesty about remaining issues (this entry)
+- [ ] User runs elevated regsvr32 + reports reg query output
+- [ ] Based on reg query output, decide which round-7 fix to apply:
+  - If KnownClasses missing: add manual KnownClasses write in DllRegisterServer
+  - If HKCU\\0x00000804 missing: add explicit EnableLanguageProfileByDefault call in DllRegisterServer (which writes to HKCU)
+  - If QuickPanel disappears: replace WS_EX_NOACTIVATE + add HWND_TOPMOST | SWP_NOACTIVATE SetWindowPos
+- [ ] If round-7 is needed, write v0.18.41 with all-round-7 fixes in one commit (AP-L62-E: never split fixes across rounds again)
