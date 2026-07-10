@@ -495,6 +495,8 @@ void QuickPanelDialog::Show(bool currentFullwidth,
 
   ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
   InvalidatePanel(s_hwnd);
+  // spec 066: force topmost without stealing focus (counteracts WS_EX_NOACTIVATE hiding on Win 10 24H2)
+  SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
 void QuickPanelDialog::Hide() {
@@ -581,6 +583,8 @@ void QuickPanelDialog::EnableAlwaysShowMode(
 
   ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
   InvalidatePanel(s_hwnd);
+  // spec 066: force topmost without stealing focus (counteracts WS_EX_NOACTIVATE hiding on Win 10 24H2)
+  SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
 // ─── WndProc ───────────────────────────────────────────────────────────
