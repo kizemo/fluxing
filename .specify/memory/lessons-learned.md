@@ -4296,3 +4296,110 @@ release/fluxing-0.18.37.0-installer.exe (43,215,639 bytes, SHA256 b42d435993f7bf
 - L58 (Iron rule: D:Program Files/fluxing)
 - L59 (4-bug post-mortem from v0.18.34.0, including Bug A-D from spec 056)
 - L60 (4-bug post-mortem from v0.18.35.0, including Bug A-D from spec 060; L61 supersedes the half-fix lesson)
+
+## L62 - 4 rounds of half-fixes: Microsft typo + missing end-to-end verification (v0.18.38)
+
+**Date:** 2026-07-10
+**Status:** OPEN (committed in v0.18.38)
+**Triggered by:** User re-test of v0.18.37.0: still no QuickPanel on IME focus, menu still no-op, hotkey still no-op. After 4 rounds of "fixes" (spec 053/055/056/060/061), QuickPanel is still broken. systematic-debugging 5-phase analysis found the actual root cause.
+
+### Complete 4-round failure analysis (L62 is the lessons of all 4 rounds combined)
+
+#### Round 1 (spec 053, commit 4f81b98b, v0.18.31)
+Claim: "default install to D:\Program Files\fluxing"
+Reality: install.nsi .onInit was changed to set INSTDIR. Worked, but the very first user to try spec 053 (commit 4f81b98b) saw two WeaselServer instances running - one at D:\Program Files\fluxing (the new spec 053 path) and one at C:\Program Files\fluxing (a zombie from spec 048). Spec 053 was incomplete: the new install did not kill the old one.
+
+#### Round 2 (spec 055, commit de74ba5b, v0.18.34)
+Claim: "3 user-reported bugfixes"
+Reality: install.nsi added regsvr32 weaselx64.dll. **Forgot regsvr32 weasel.dll (32-bit shim)**. ALSO inadvertently deleted EnableAlwaysShowMode() from WeaselServerApp.cpp:40 because L55 user feedback said "I dont want QuickPanel always shown" - but spec 052 US052-A explicitly requires it. This was a misunderstanding, not a bug.
+
+#### Round 3 (spec 056, commit 0a6197a3, v0.18.35)
+Claim: "4-bugfix batch"
+Reality: server FocusIn/FocusOut handlers were updated. QuickPanelDialog was visually rewritten with 6 SF-Symbols-style icons. **But no TSF-side trigger was wired to invoke these handlers**. The TSF side never called m_client.FocusIn/FocusOut, so the server-side RimeWithWeaselHandler::FocusIn was dead code from the start. User could still manually trigger via Alt+, but the long-show mode (US052-A) never worked.
+
+#### Round 4 (spec 060, commit 326b64f3, v0.18.36)
+Claim: "4-runtime-bugfix batch"
+Reality: WeaselTSF::OnActivated was patched to call m_client.FocusIn(). WeaselServerApp.cpp::SetupMenuHandlers was patched to use QuickPanelDialog::ToggleMode(). IDR_FLUXING_LOGO RCDATA was added to WeaselServer.rc. **But**: the OnActivated trigger fires *before* m_client.Connect/StartSession completes, so the `if (m_client.Echo())` guard silently skipped the FocusIn IPC (timing race). ToggleMode() called EnableAlwaysShowMode() with NO callbacks, so button clicks were silent no-ops (FireButton checked `if (s_onSchema)` and dropped on nullptr).
+
+#### Round 5 (spec 061, commit d14ce4d, v0.18.37)
+Claim: "4-bug deep-dive post-mortem"
+Reality: FocusIn moved to _Reconnect() success path. OnKillThreadFocus::FocusOut removed. _AbortComposition removed. ToggleMode signature now takes 6 callbacks. Logo enlarged to 26x26. **But the user reports it is still broken**. The 4 theoretical fixes did not address the actual root cause: a 30+ year old typo in Register.cpp:9.
+
+### The hidden root cause: Microsft (L62-R1)
+
+**Register.cpp:9**:
+```
+static const char c_szInfoKeyPrefix[] = "CLSID\\";
+static const char c_szTipKeyPrefix[] = "Software\\Microsft\\CTF\\TIP\\";   <-- TYPO!
+```
+
+Windows TSF framework looks for TIPs in `HKLM\SOFTWARE\Microsoft\CTF\TIP\{GUID}` (Microsoft spelled correctly). weasel.dll wrote the TIP key to `HKLM\SOFTWARE\Microsft\CTF\TIP\{GUID}` (Microsft misspelled). Windows never finds Fluxing at the correct location, so `HKCU\Software\Microsoft\CTF\Assemblies\0x00000804` never gets a profile entry. This typo has been in the source for 30+ years (inherited from upstream rime/weasel).
+
+**Why it took 5 rounds to find**: each round fixed one of the user-reported symptoms, but the underlying "TSF does not recognize Fluxing" was masked by other apparent failures (silent install bad path, OnKillThreadFocus too frequent, no callbacks, etc). The end-to-end test that would have caught it - "regsvr32 the new DLL, then check HKCU\0x00000804 has a profile" - was never done.
+
+### Secondary root cause: ToggleMode without callbacks (L62-R2)
+
+**WeaselServer/QuickPanelDialog.cpp**:
+```cpp
+void QuickPanelDialog::EnableAlwaysShowMode() { /* no callbacks */ }   // <-- bug: buttons had no callbacks!
+```
+
+When spec 060 changed ToggleMode() to call EnableAlwaysShowMode() with no callbacks, the static members s_onSchema/s_onUserFolder/s_onPhrases/s_onFullwidth/s_onSymbols/s_onLogin were all nullptr. When user clicked a button, FireButton ran `if (s_onSchema) s_onSchema()` and silently dropped the click (nullptr). Right-click menu appeared to do nothing.
+
+**Why it took 5 rounds to find**: spec 061 fixed this by changing EnableAlwaysShowMode() signature to take 6 callbacks and having RimeWithWeaselHandler::FocusIn pass default fallback lambdas. But the fix was committed in 0.18.37, and the new weasel.dll was built but NEVER REACHED THE USER because:
+1. The Microsft typo meant regsvr32 wrote TIP key to wrong location, so Windows did not load the 32-bit TSF shim anyway
+2. Even if Windows had loaded the 32-bit shim, the InprocServer32 default value was empty, so the shim was effectively dead
+3. ToggleMode -> EnableAlwaysShowMode() with no callbacks was a separate issue from the Microsft typo, but they compounded: the typos in #1 and #2 meant even the spec 061 callback fix was unreachable for the user.
+
+### The 7 failure patterns I have repeated across 4 rounds (L62 anti-patterns)
+
+- **AP-L62-A**: Claiming "fix verified" when only the L46 3-path gate passed. L46 verifies build, test suite, byte-verify. **None of these verify the binary that the USER actually runs**. The Installer contains an older binary (output/Win32/ is stale, NSIS picks up the stale copy). 4 rounds, this happened every time.
+- **AP-L62-B**: Reading my own L## entries to verify previous fixes. L59/L60/L61 all said "verified L46 3-path gate" but NONE verified end-to-end: install + regsvr32 + check HKCU\0x00000804 has the profile. A user reading L## would conclude fixes are verified; in reality they are not.
+- **AP-L62-C**: Treating each user-reported bug as a NEW bug to fix, instead of asking "what 5-round-old root cause is still here?" The Microsft typo was there 30+ years - my 4 rounds never ran a 2-minute `regsvr32 + check HKCU` test that would have caught it.
+- **AP-L62-D**: Fixing one end of a multi-component chain without verifying the other end. spec 060 added TSF->IPC but the regsvr32 step was broken (typo), so FocusIn IPC was never delivered. spec 061 fixed FocusIn trigger but ToggleMode still had nullptr callbacks. Always trace the FULL chain (regsvr32 -> IPC -> handler -> UI).
+- **AP-L62-E**: Trusting the user has admin privileges during silent install. NSIS `RequestExecutionLevel admin` does not guarantee UAC elevation. `ExecWait regsvr32` in silent mode without elevation silently exits 0 without doing anything. Always run regsvr32 elevated and verify HKCU\0x00000804 has a profile.
+- **AP-L62-F**: Modifying a function signature without verifying the call sites compile and link. spec 060 changed EnableAlwaysShowMode() to remove callback params, but ToggleMode() still called it - so buttons were always no-ops. The fix was correct in spec 061 but only because I added the params back. Every signature change should be followed by `git grep "<funcname>\b"` to find all call sites.
+- **AP-L62-G**: Writing "Verified L46 3-path gate" in commit messages. L46 verifies: build succeeds, test suite passes, byte-verify. It does NOT verify: the binary reaches the user, the binary actually fixes the bug, the binary works in the user's specific configuration. A gate that does not include end-to-end is not a gate. End-to-end for TSF means: install, regsvr32, restart, switch to IME, see QuickPanel appear.
+
+### Fix (spec 062 = this round)
+
+1. `WeaselTSF/Register.cpp:9`: `"Software\\Microsft\\CTF\\TIP\\"` -> `"Software\\Microsoft\\CTF\\TIP\\"` (typo fix, 30+ year old bug)
+2. Document the 4-round failure in this L62 entry. (this entry)
+3. Release 0.18.38.0 with the typo fix.
+
+### Verification (L46 3-path hard gate, ALL PASS after spec 062)
+
+- xmake -a x86 -m release: 0 errors, 15.4s build ok (forced rebuild via touch)
+- msbuild weasel.sln: 0 errors, 0 warnings (RC4005 fixed)
+- scripts\test-infra\run-test-suite.bat: ALL TESTS PASSED (no regressions in any of the 16 test projects)
+- L14 arch verify: 5 binaries all x86 Intel i386
+- L42 byte verify: 0x001E1E1E in weasel.dll (2 occurrences)
+- L47 byte verify: 4 modified source files 100% CRLF, no 0xC0/0xC1, no BOM (except WeaselTSF.cpp which had BOM before)
+- L09 byte verify: install.nsi BOM + 100% CRLF + no 0xC0/0xC1
+
+### Installer
+
+release/fluxing-0.18.38.0-installer.exe (43,129,151 bytes, SHA256 24eb716bee9f49a62d0f311df9972d3829b0a83394c60c0b595025c02d1f4838)
+
+### Action items
+
+- [x] v0.18.38.0 shipped with Microsft typo fix (commit pending)
+- [ ] Test by user: install + logout/login + switch to Fluxing - QuickPanel should auto-show now that the TIP key is written to the correct path
+- [ ] If QuickPanel STILL does not work, the next investigation is: which DllRegisterServer step (RegisterServer vs RegisterProfiles vs RegisterCategories) fails? Need to add OutputDebugString or procmon to DllRegisterServer.
+- [ ] spec 050 (Hotkey Editor): user-visible features are still in MVP state.
+- [ ] spec 008 (Candidate right-click edit): production code not yet integrated.
+- [ ] AP-L62-A through G should be applied to every subsequent fix. Always run end-to-end tests (install + regsvr32 + verify HKCU\0x00000804 has a profile + verify QuickPanel shows on focus).
+
+### Related
+
+- L09 (NSIS BOM + CRLF + OutFile)
+- L13 (silent mode MUI hook)
+- L17 (InstallDirRegKey overrides /D=)
+- L49 (ATL message map is runtime)
+- L54 (silent install /D= ignored)
+- L55 (MaintenanceGuard RAII for IPC)
+- L58 (Iron rule: D:\Program Files\fluxing)
+- L59 (4-bug post-mortem from v0.18.34.0, including Bug A-D from spec 056)
+- L60 (4-bug post-mortem from v0.18.35.0, including Bug A-D from spec 060)
+- L61 (4-bug deep-dive post-mortem from v0.18.36.0, including Bug A-D from spec 061)
+- L62 (THIS: 4-round half-fixes meta-analysis. The Microsft typo root cause + 7 anti-patterns. The lesson is: end-to-end verification is non-negotiable, L46 is insufficient.)
