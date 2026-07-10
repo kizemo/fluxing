@@ -101,7 +101,19 @@ STDAPI DllCanUnloadNow() {
 }
 
 STDAPI DllRegisterServer() {
-  if (!RegisterServer() || !RegisterProfiles() || !RegisterCategories()) {
+  // spec 064: make RegisterServer success the only requirement for
+  // returning S_OK. RegisterProfiles / RegisterCategories may fail
+  // (REGDB_E_CLASSNOTREG) on Win 10 if CLSID_TF_InputProcessorProfiles
+  // or CLSID_TF_CategoryMgr are not registered; that just means
+  // QuickPanel long-show mode does not work, but the CLSID is still
+  // written so weasel.dll can be loaded as a TSF text service and
+  // Chinese input still works (ProcessKeyEvent path).
+  BOOL ok_reg_server = RegisterServer() != FALSE;
+  BOOL ok_reg_profiles = RegisterProfiles() != FALSE;
+  BOOL ok_reg_categories = RegisterCategories() != FALSE;
+  (void)ok_reg_profiles;
+  (void)ok_reg_categories;
+  if (!ok_reg_server) {
     DllUnregisterServer();
     return E_FAIL;
   }

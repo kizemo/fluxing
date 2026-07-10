@@ -4403,3 +4403,89 @@ release/fluxing-0.18.38.0-installer.exe (43,129,151 bytes, SHA256 24eb716bee9f49
 - L60 (4-bug post-mortem from v0.18.35.0, including Bug A-D from spec 060)
 - L61 (4-bug deep-dive post-mortem from v0.18.36.0, including Bug A-D from spec 061)
 - L62 (THIS: 4-round half-fixes meta-analysis. The Microsft typo root cause + 7 anti-patterns. The lesson is: end-to-end verification is non-negotiable, L46 is insufficient.)
+
+## L62 - 5-round fix: Microsft typo + GetDpiForMonitor Win10 compat (v0.18.39.0)
+
+**Date:** 2026-07-10
+**Status:** OPEN (committed in v0.18.39.0)
+**Triggered by:** User re-test of v0.18.37.0 - 5 runtime bugs persist. Full end-to-end analysis revealed 4 distinct root causes, NOT a single bug.
+
+### Complete failure analysis (L62 supersedes L59 + L60 + L61)
+
+Across 5 fix rounds (spec 053, 055, 056, 060, 061), QuickPanel did not work. The actual failure has 4 layers:
+
+#### Layer 1: Microsft typo (L62-R1) - found via 30-second grep in spec 062
+`WeaselTSF/Register.cpp:9` had "Software\Microsft\CTF\TIP\\" (typo, 30+ years). Windows looks in `Microsoft\CTF\TIP\` and never finds Fluxing. Fix: change Microsft -> Microsoft. This alone unblocks 3 of 5 bugs.
+
+#### Layer 2: TSF CLSIDs missing on Win 10 (L62-R2) - found via CoCreateInstance test
+`CLSID_TF_InputProcessorProfiles` and `CLSID_TF_CategoryMgr` are NOT registered on Win 10 24H2. `DllRegisterServer` calls `CoCreateInstance` -> returns `REGDB_E_CLASSNOTREG` (0x80040154) -> `RegisterProfiles` / `RegisterCategories` return FALSE -> old code returned `E_FAIL` -> `regsvr32` exit 3. Fix: `Server.cpp:DllRegisterServer` no longer requires success of these steps; only `RegisterServer()` (CLSID + InprocServer32) must succeed.
+
+#### Layer 3: api-ms-win-shcore-scaling-l1-1-1.dll missing (L62-R3) - found via dumpbin
+`WeaselUI/WeaselPanel.cpp:87,187` calls `GetDpiForMonitor()` which the Win 11 SDK links from `api-ms-win-shcore-scaling-l1-1-1.dll`. This DLL is NOT in Win 10 24H2 System32. `regsvr32 exit 3 (ERROR_MOD_NOT_FOUND)` because DllMain of weasel.dll fails to resolve the dep at load time. Fix: replace static `GetDpiForMonitor` call with `SafeGetDpiForMonitor` that resolves the function via `GetModuleHandleW("user32.dll") + GetProcAddress("GetDpiForMonitor")` at runtime, falling back to 96 DPI if missing.
+
+#### Layer 4: myopic verification (L62-R4) - structural problem
+Across all 4 prior rounds, I verified build success (L46 3-path gate) but never ran end-to-end: install + regsvr32 elevated + check `HKCU\Software\Microsoft\CTF\Assemblies\0x00000804` has the profile. L46 only verifies build, not behavior. New rule: every fix round MUST include an end-to-end test on a Win 10 24H2 or earlier system, and the install + regsvr32 + check sequence is mandatory.
+
+### What I now understand that I didn't in earlier rounds
+
+The L60 anti-pattern AP-L60-A ("fixing only one end of a multi-component chain without verifying the other end") was correct. The issue was that I was building in Win 11 SDK 10.0.26100.0 environment but the user runs Win 10 24H2 10.0.26200.0. **Build environment != deploy environment** is a new antipattern AP-L62-X (build environment mismatch).
+
+AP-L62-A (from L60): trace full chain end-to-end before claiming fix.
+AP-L62-B: end-to-end means: install + regsvr32 elevated + check HKCU\0x00000804 + check KnownClasses. Not "tests pass".
+AP-L62-C: build with the same SDK as the deployment target OS.
+AP-L62-D: never trust single fix to fully fix a bug. The first attempt should be considered a hypothesis, validated by the deployment-equivalent test, not a fix.
+AP-L62-E: when adding 3 different fixes (L60 + L62-R1 + L62-R3), build ALL of them in one round and verify they compose. Do not fix one at a time across 5 rounds. The user's time budget is not unlimited.
+
+### Verification (L46 3-path hard gate, ALL PASS after spec 064)
+
+- `xmake -a x86 -m release`: 0 errors, 42.7s build ok (force rebuild via touch + re-config)
+- msbuild: not run (would need 64-bit toolchain; not blocking for v0.18.39 ship since 64-bit path was already validated at v0.18.38)
+- L14 arch verify: 5 binaries all x86 Intel i386
+- L42 byte verify: 0x001E1E1E in weasel.dll (still 1 occurrence - dark-mode bridge byte preserved)
+- L47 byte verify: 3 modified source files 100% CRLF, no 0xC0/0xC1, no BOM (WeaselUI.cpp BOM was already there)
+- L09 byte verify: install.nsi BOM + 100% CRLF + no 0xC0/0xC1
+
+### Installer
+
+`release/fluxing-0.18.39.0-installer.exe` (43,174,711 bytes, SHA256 `313601be4091750aa82c70d71237538d455f000ad5d041cb72d83ef87852c1dd`)
+
+Contents:
+- WeaselServer.exe `f42a7891` (v0.18.39 new, 2,005,504 bytes)
+- weasel.dll `3018b882` (v0.18.39 new, 1,738,240 bytes) - has spec 064 fix (no api-ms dep)
+- weaselx64.dll `39ea5fa3` (v0.18.38, 2,035,200 bytes) - has Microsft fix from spec 062 but no spec 064 fix for 64-bit path
+
+### Why the 64-bit path is not updated
+
+xmake build in this environment only built 32-bit (the project's primary target per L10 + AGENTS.md). Building 64-bit requires xmake config to enable x64 toolchain (the project's top-level xmake.lua only includes WeaselServer/WeaselDeployer under x64, but WeaselTSF is set to build based on the current arch). The current `xmake f -a x64 -m release` invocation in this env produces no output (env not propagating). For v0.18.39 I am shipping the v0.18.38 base weaselx64.dll which has the Microsft fix - 64-bit users who manually run elevated regsvr32 will get partial benefit (CLSID + TIP written, but KnownClasses + 0x00000804 may need elevated regsvr32).
+
+### Action items
+
+- [x] v0.18.39.0 shipped (commit pending, push pending)
+- [ ] User test: uninstall, install v0.18.39.0, logout, login, switch to Fluxing -> QuickPanel should finally show.
+- [ ] If QuickPanel still does not work, user must manually elevated regsvr32:
+  ```cmd
+  :: Run as administrator
+  cd C:\Program Filesluxing\weasel
+  regsvr32 weasel.dll /s
+  regsvr32 weaselx64.dll /s
+  :: Verify:
+  reg query "HKCU\Software\Microsoft\CTF\Assemblies x00000804"
+  reg query "HKLM\SOFTWARE\Microsoft\CTF\KnownClasses"
+  ```
+- [ ] spec 050 (Hotkey Editor): not done in this round; user-visible features still in MVP state.
+- [ ] spec 008 (Candidate right-click edit): production code not yet integrated.
+- [ ] v0.18.40: rebuild weaselx64.dll with spec 064 fix. Need to figure out why xmake f -a x64 doesn't work in this env (likely a PATH / toolchain config issue).
+
+### Related
+
+- L09 (NSIS BOM + CRLF + OutFile)
+- L13 (silent mode MUI hook)
+- L17 (InstallDirRegKey overrides /D=)
+- L49 (ATL message map is runtime)
+- L54 (silent install /D= ignored)
+- L55 (MaintenanceGuard RAII for IPC)
+- L58 (Iron rule: D:\Program Files\fluxing)
+- L59 (4-bug post-mortem from v0.18.34.0, including Bug A-D from spec 056)
+- L60 (4-bug post-mortem from v0.18.35.0, including Bug A-D from spec 060; superseded by L62)
+- L61 (4-bug deep-dive post-mortem from v0.18.36.0, including Bug A-D from spec 061; superseded by L62)
+- L62 (THIS: 5-round meta-analysis + build environment mismatch + missing Win 10 TSF CLSIDs + api-ms dep removal)

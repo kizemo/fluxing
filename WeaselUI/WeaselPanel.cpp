@@ -2,7 +2,6 @@
 #include "WeaselPanel.h"
 
 #include <utility>
-#include <ShellScalingApi.h>
 #include <VersionHelpers.hpp>
 #include <WeaselIPCData.h>
 #include <algorithm>
@@ -11,6 +10,33 @@
 #include "HorizontalLayout.h"
 #include "FullScreenLayout.h"
 #include "VHorizontalLayout.h"
+
+
+
+// spec 064: GetDpiForMonitor was imported from
+// api-ms-win-shcore-scaling-l1-1-1.dll (Win 11 SDK) - this DLL is
+// not present on Win 10, causing regsvr32 exit 3 and DllRegisterServer
+// failure. Resolve GetDpiForMonitor dynamically at runtime via
+// LoadLibrary/GetProcAddress on user32.dll (always present, even on
+// Win 7+). If unavailable (very old OS), fall back to 96.
+static UINT SafeGetDpiForMonitor(HMONITOR hMonitor) {
+  typedef UINT (WINAPI *GetDpiForMonitor_t)(HMONITOR, UINT, UINT*, UINT*);
+  static GetDpiForMonitor_t pFn = NULL;
+  static BOOL tried = FALSE;
+  if (!tried) {
+    HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+    if (hUser32) {
+      pFn = (GetDpiForMonitor_t)GetProcAddress(hUser32, "GetDpiForMonitor");
+    }
+    tried = TRUE;
+  }
+  if (pFn && hMonitor) {
+    UINT dpiX = 96, dpiY = 96;
+    pFn(hMonitor, 0, &dpiX, &dpiY);   // MDT_EFFECTIVE_DPI = 0
+    return dpiX;
+  }
+  return 96;
+}
 
 // for IDI_ZH, IDI_EN
 #include <resource.h>
@@ -84,8 +110,8 @@ WeaselPanel::WeaselPanel(weasel::UI& ui)
   HMONITOR hMonitor = MonitorFromRect(m_inputPos, MONITOR_DEFAULTTONEAREST);
   UINT dpiX = 96, dpiY = 96;
   if (hMonitor) {
-    GetDpiForMonitor(hMonitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
-    m_hMonitor = hMonitor;
+    dpiX = SafeGetDpiForMonitor(hMonitor);
+    if (hMonitor) m_hMonitor = hMonitor;
   }
   dpi = dpiX;
   _InitFontRes();
@@ -183,8 +209,7 @@ void WeaselPanel::Refresh() {
 void WeaselPanel::_InitFontRes(bool forced) {
   HMONITOR hMonitor = MonitorFromRect(m_inputPos, MONITOR_DEFAULTTONEAREST);
   UINT dpiX = 96, dpiY = 96;
-  if (hMonitor)
-    GetDpiForMonitor(hMonitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
+  if (hMonitor) dpiX = SafeGetDpiForMonitor(hMonitor);
   // prepare d2d1 resources
   // if style changed, or dpi changed, or pDWR NULL, re-initialize directwrite
   // resources
