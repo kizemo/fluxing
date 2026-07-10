@@ -443,6 +443,14 @@ program_files:
   ExecWait 'regsvr32 /s "$R3\weasel\weasel.dll"' $1
   ${If} $1 != 0
     DetailPrint "Fluxing: regsvr32 weasel.dll failed (exit $1); x86 TSF TIP may not be registered. Run 'regsvr32 $R3\weasel\weasel.dll' as admin manually."
+
+  ; spec 066: workaround for CoCreateInstance(CLSID_TF_CategoryMgr)
+  ; failing in elevated context on Win 10 24H2. Manually
+  ; write KnownClasses + HKCU\0x00000804 so user can enable.
+  WriteRegStr HKLM "SOFTWARE\Microsoft\CTF\KnownClasses" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}" "Fluxing Text Service"
+  WriteRegStr HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "Default" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}"
+  WriteRegStr HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "Profile" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}"
+  WriteRegDWORD HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "KeyboardLayout" 0x08040804
   ${EndIf}
   ; Write the uninstall keys for Windows
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayName" "$(DISPLAYNAME)"
