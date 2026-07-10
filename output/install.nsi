@@ -443,15 +443,22 @@ program_files:
   ExecWait 'regsvr32 /s "$R3\weasel\weasel.dll"' $1
   ${If} $1 != 0
     DetailPrint "Fluxing: regsvr32 weasel.dll failed (exit $1); x86 TSF TIP may not be registered. Run 'regsvr32 $R3\weasel\weasel.dll' as admin manually."
+  ${EndIf}
 
   ; spec 066: workaround for CoCreateInstance(CLSID_TF_CategoryMgr)
   ; failing in elevated context on Win 10 24H2. Manually
   ; write KnownClasses + HKCU\0x00000804 so user can enable.
+  ; L66-fix: these writes MUST run UNCONDITIONALLY (not gated on regsvr32
+  ; exit code). regsvr32 success on a non-elevated install still does not
+  ; write KnownClasses or the user-input-method binding at HKCU\0x00000804.
+  ; These two keys are what the user toggles via "中文(简体, 中国)" in
+  ; Settings -> Time & Language; if missing, the IME does not appear in the
+  ; language list and QuickPanel never shows. Always write them as a safety
+  ; net regardless of whether regsvr32 above succeeded or failed.
   WriteRegStr HKLM "SOFTWARE\Microsoft\CTF\KnownClasses" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}" "Fluxing Text Service"
   WriteRegStr HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "Default" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}"
   WriteRegStr HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "Profile" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}"
   WriteRegDWORD HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "KeyboardLayout" 0x08040804
-  ${EndIf}
   ; Write the uninstall keys for Windows
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayName" "$(DISPLAYNAME)"
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayIcon" '"$INSTDIR\WeaselServer.exe"'
