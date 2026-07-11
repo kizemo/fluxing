@@ -23,15 +23,15 @@
 // SetUnhandledExceptionFilter and no DLOG/LOG output (WEASEL_ENABLE_LOGGING
 // not defined), so when WeaselServer.exe crashed we could not diagnose the
 // root cause from a post-mortem. Now we capture a minidump to a stable
-// path under %LOCALAPPDATA%\\fluxing\\crash\\<timestamp>.dmp and let the OS
-// continue with its default handler (which usually pops up the WER dialog).
+// path under LOCALAPPDATA_fluxing_crash and let the OS continue with its
+// default handler (which usually pops up the WER dialog).
 #include <DbgHelp.h>
 #pragma comment(lib, "dbghelp.lib")
 
 namespace {
 
 LONG WINAPI WriteMinidumpOnCrash(EXCEPTION_POINTERS* ex) {
-  // Pick a writable location: %LOCALAPPDATA%\fluxing\crash\
+  // Pick a writable location: %LOCALAPPDATA%\fluxing\crash
   wchar_t dir[MAX_PATH] = {0};
   if (!GetEnvironmentVariableW(L"LOCALAPPDATA", dir, _countof(dir)))
     return EXCEPTION_EXECUTE_HANDLER;
