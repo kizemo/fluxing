@@ -314,12 +314,21 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
   if (!hdc || !s_hdcMem) { EndPaint(hwnd, &ps); return 0; }
 
   // 1. 画到 off-screen DC (避免闪烁)
-  // L78-fix v2: GradientFill 在 SDK 26100 32-bit DIB 上失效(silent fail → 黑 panel)
-  // 改用 solid white 底 (LWA_ALPHA 衰减,translucent 效果好)
+  // L79-fix: 圆角 panel + 浅边 + hover 只改 icon stroke
   RECT panelRect = {0, 0, kPanelW, kPanelH};
-  FillRect(s_hdcMem, &panelRect, (HBRUSH)GetStockObject(WHITE_BRUSH));
-  // 顶 1px 高光
-  RECT topHL = {0, 0, kPanelW, 1};
+
+  // 1a. 圆角 panel 背景 (用 FillRgn + round-rect-region,不用 FillRect 方角)
+  HRGN panelRgn = CreateRoundRectRgn(0, 0, kPanelW, kPanelH, kPanelRadius, kPanelRadius);
+  FillRgn(s_hdcMem, panelRgn, (HBRUSH)GetStockObject(WHITE_BRUSH));
+  DeleteObject(panelRgn);
+
+  // 1b. 1px 半透白边(v3-rev3 设计)
+  HRGN borderRgn = CreateRoundRectRgn(0, 0, kPanelW, kPanelH, kPanelRadius, kPanelRadius);
+  FrameRgn(s_hdcMem, borderRgn, (HBRUSH)GetStockObject(WHITE_BRUSH), 1, 1);
+  DeleteObject(borderRgn);
+
+  // 1c. 顶 1px 高光 (设计: top highlight 用白 0.85 alpha)
+  RECT topHL = {kPanelRadius, 0, kPanelW - kPanelRadius, 1};
   FillRect(s_hdcMem, &topHL, s_hBrushHighlight);
 
   // 2. 画 logo (Fluxing 红色猿猴)
@@ -332,9 +341,8 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
   }
 
   // 3. 画 5 个按钮
-  // L78-fix: hover 改图标 stroke 颜色为品牌橙(不是填充背景为橙)
-  // 背景:  active=橙, hover=白色半透(由 LWA 86% 衰减),默认=无填充
-  // 图标: active=白, hover=橙,默认=灰
+  // L79-fix: hover 只改 icon stroke 颜色(不画 bg 填充,符合 v3-rev3 设计)
+  // active: bg 橙渐变 + icon 白
   int buttonStartX = kPanelPadding + kBrandSize + 4;
   for (int i = 0; i < 5; i++) {
     int x0 = buttonStartX + i * (kBtnSize + 2);
@@ -343,10 +351,9 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
     bool isActive = (i == s_activeIdx);
     bool isHover = (i == s_hoveredIdx);
 
-    // 选背景 brush (L78-fix: hover 用白色半透,不是橙色填充)
+    // 选背景 brush (仅 active 画渐变 BG;hover 不画 bg)
     HBRUSH bgBrush = NULL;
-    if (isActive) bgBrush = s_hBrushActive;       // active: 橙
-    else if (isHover) bgBrush = s_hBrushHighlight;  // hover: 白色半透(由 LWA 衰减)
+    if (isActive) bgBrush = s_hBrushActive;  // active: 橙
 
     if (bgBrush) {
       HRGN rgn = CreateRoundRectRgn(x0, y0, x0 + kBtnSize, y0 + kBtnSize, kBtnRadius, kBtnRadius);

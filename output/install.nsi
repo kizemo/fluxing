@@ -320,6 +320,11 @@ Section "Fluxing"
   ; Set output path to the installation directory.
   SetOutPath $INSTDIR
 
+  ; L79-fix: 装 fluxing-logo.png 到 weasel subdir(QuickPanel 找它)
+  SetOutPath $INSTDIR\weasel
+  File "fluxing-logo.png"
+  SetOutPath $INSTDIR
+
   IfFileExists $TEMP\weasel-backup\*.* 0 program_files
   CreateDirectory $INSTDIR\data
   CopyFiles $TEMP\weasel-backup\*.* $INSTDIR\data
