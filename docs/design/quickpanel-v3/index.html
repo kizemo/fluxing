@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>QuickPanel v3 · Liquid Glass 强玻璃 (revised: 大图标 + 区分 + hover 变色)</title>
+<style>
+  :root {
+    --bg-top: rgba(255, 255, 255, 0.55);
+    --bg-bot: rgba(255, 255, 255, 0.32);
+    --highlight: rgba(255, 255, 255, 0.85);
+    --border: rgba(255, 255, 255, 0.50);
+    --fg: rgb(28, 28, 30);
+    --fg-dim: rgba(60, 60, 67, 0.55);
+    /* L70-fix: hover 把图标 stroke 染品牌橙(参照搜狗悬停反馈) */
+    --accent: rgb(255, 95, 49);
+    --accent-2: rgb(155, 81, 224);
+    --radius-pill: 28px;
+    --shadow: 0 12px 32px rgba(0,0,0,0.18), 0 4px 8px rgba(0,0,0,0.10);
+    --btn-size: 56px;
+    /* L70-rev2: 图标从 30 → 38 (+27%) */
+    --ico-size: 38px;
+  }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(circle at 20% 30%, #ff8a4c 0%, transparent 40%),
+      radial-gradient(circle at 80% 70%, #9b51e0 0%, transparent 40%),
+      linear-gradient(135deg, #ffd9b3 0%, #b8c5e8 100%);
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, "PingFang SC", sans-serif;
+    color: var(--fg);
+  }
+  /* v3 revised: panel padding 缩小让位给大图标;按钮尺寸 +33% 从 44 → 56 */
+  .qp {
+    position: relative;
+    background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bot) 100%);
+    -webkit-backdrop-filter: blur(40px) saturate(200%);
+    backdrop-filter: blur(40px) saturate(200%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    box-shadow: var(--shadow);
+    padding: 6px 8px;
+    display: flex; align-items: center; gap: 2px;
+    overflow: hidden;
+  }
+  /* 顶部高光线 */
+  .qp::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 14px; right: 14px; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--highlight), transparent);
+    pointer-events: none;
+  }
+
+  .qp .brand {
+    width: var(--btn-size); height: var(--btn-size);
+    border-radius: 14px;
+    /* L70-rev3: PNG 本身就是品牌色背景,不需要再加渐变底 */
+    background: transparent;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    overflow: hidden;            /* 让 PNG 圆角被 button 圆角裁掉 */
+    box-shadow: 0 2px 6px rgba(0,0,0,0.20);
+    margin-right: 4px;
+    transition: transform 150ms ease-out;
+  }
+  .qp .brand:hover { transform: scale(1.05); }
+  /* L70-rev3: PNG 占满 brand 块 */
+  .qp .brand img { width: 100%; height: 100%; object-fit: cover; }
+
+  /* L70-rev: 图标加大 + hover 变品牌橙(搜狗风格) */
+  .qp button {
+    width: var(--btn-size); height: var(--btn-size);
+    border: 0;
+    border-radius: 14px;
+    background: transparent;
+    color: var(--fg-dim);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    padding: 0;
+    /* 过渡:背景 + 颜色 + 缩放(搜狗悬停反馈有 ~150ms 过渡) */
+    transition: background-color 150ms ease-out,
+                color        150ms ease-out,
+                transform    150ms ease-out;
+    position: relative;
+  }
+  /* hover:背景玻璃提亮 + 图标变品牌橙 + scale 1.08 */
+  .qp button:hover {
+    background: rgba(255,255,255,0.45);
+    color: var(--accent);
+    transform: scale(1.08);
+  }
+  .qp button:active { transform: scale(0.96); }
+  .qp button[aria-pressed="true"] {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: white;
+    box-shadow: 0 2px 8px rgba(155, 81, 224, 0.40);
+  }
+  /* hover 时 aria-pressed 也走橙色(因为 svg stroke="currentColor") */
+  .qp button:hover svg { stroke: currentColor; }
+  /* active 态时 hover 不变白,保持橙色更协调 */
+  .qp button[aria-pressed="true"]:hover {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: white;
+    transform: scale(1.08);
+  }
+  /* L70-rev2: 图标从 30 → 38 (+27% 累计 +73% 相对 v3 原版) */
+  .qp button svg { width: var(--ico-size); height: var(--ico-size); }
+  /* L70-rev: 默认 stroke 较粗,确保 38px 时也清晰 */
+  .qp button svg { stroke-width: 1.7; }
+
+  .annotate {
+    position: fixed; bottom: 16px; left: 16px;
+    background: rgba(0,0,0,0.55); color: white;
+    padding: 8px 12px; border-radius: 8px;
+    font-size: 12px; max-width: 520px;
+    line-height: 1.5;
+  }
+  code { font-family: ui-monospace, Menlo, monospace; background: rgba(255,255,255,0.10); padding: 1px 4px; border-radius: 3px; }
+  .chg { color: #FFA070; font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="qp" role="toolbar" aria-label="Fluxing 快速面板 v3 revised">
+    <!-- L70-rev3: 品牌区 = 真正的火流猩 PNG logo (F:\soft\00selfmade\rime_claude\docs\design\fluxing-logo.png, 700×700, 红棕色猿猴戴墨镜头像) -->
+    <button class="brand" aria-label="Fluxing 火流猩">
+      <img src="../fluxing-logo.png" alt="Fluxing 火流猩" />
+    </button>
+
+    <!-- L70-rev: 方案 — 双箭头"切换"图标,与"短语"的文档完全不同 -->
+    <button aria-label="方案" title="方案 — 切换 RIME 输入方案(占位)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <!-- 上箭头: 4 → 20 -->
+        <path d="M4 9 H17"/>
+        <path d="M14 6 L17 9 L14 12"/>
+        <!-- 下箭头: 20 → 7 -->
+        <path d="M20 15 H7"/>
+        <path d="M10 12 L7 15 L10 18"/>
+      </svg>
+    </button>
+
+    <!-- L70-rev: 自定义短语 — 对话气泡(完全区别于方案的箭头) -->
+    <button aria-label="自定义短语" title="自定义短语(占位)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <!-- 气泡圆角矩形 + 尾巴 -->
+        <path d="M4 6 H20 A2 2 0 0 1 22 8 V15 A2 2 0 0 1 20 17 H12 L7 21 V17 H4 A2 2 0 0 1 2 15 V8 A2 2 0 0 1 4 6 Z"/>
+        <!-- 三条短线代表"短语" -->
+        <path d="M7 11 H17"/>
+        <path d="M7 14 H13"/>
+      </svg>
+    </button>
+
+    <button aria-label="符号" title="符号(占位)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <!-- L70-rev: 符号 = 键盘(参照搜狗输入法) -->
+        <!-- 键盘外壳 -->
+        <rect x="2" y="5" width="20" height="14" rx="2"/>
+        <!-- 行分隔线 -->
+        <line x1="2" y1="9.5" x2="22" y2="9.5"/>
+        <line x1="2" y1="13" x2="22" y2="13"/>
+        <!-- 顶行按键分隔 -->
+        <line x1="6.5" y1="5" x2="6.5" y2="9.5"/>
+        <line x1="11" y1="5" x2="11" y2="9.5"/>
+        <line x1="15.5" y1="5" x2="15.5" y2="9.5"/>
+        <line x1="20" y1="5" x2="20" y2="9.5"/>
+        <!-- 中行按键分隔 -->
+        <line x1="9" y1="13" x2="9" y2="16.5"/>
+        <line x1="15" y1="13" x2="15" y2="16.5"/>
+        <!-- 空格键(下方长线,稍粗) -->
+        <line x1="6" y1="16.5" x2="18" y2="16.5" stroke-width="2.4"/>
+      </svg>
+    </button>
+
+    <button aria-label="设置" title="设置(占位)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M12 3 L12 5 M12 19 L12 21 M3 12 L5 12 M19 12 L21 12 M5.5 5.5 L7 7 M17 17 L18.5 18.5 M5.5 18.5 L7 17 M17 7 L18.5 5.5"/>
+      </svg>
+    </button>
+
+    <button aria-label="账号" title="账号(占位)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="8" r="3.2"/>
+        <path d="M5 20 C5 16 8 14 12 14 C16 14 19 16 19 20"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="annotate">
+    <strong>v3 · Liquid Glass 强玻璃 <span class="chg">[revised rev3]</span></strong><br>
+    <span class="chg">L70-rev3:</span> 左侧品牌区换为真正的火流猩 PNG logo(<code>fluxing-logo.png</code> 700×700,红棕色猿猴戴墨镜头像);右侧图标 38 px。<br>
+    技术栈:<code>ID2D1HwndRenderTarget</code> + <code>ID2D1BitmapRenderTarget</code>(画 PNG) 或 <code>WIC</code> 解码 PNG<br>
+    避雷:WIC → ID2D1Bitmap → DrawBitmap;不用 GDI+ Bitmap,不用 IStream 缓存(详见 L67-L69)。<br>
+    尺寸:~392 × 68 px;backdrop-filter: blur(40px) saturate(200%) — Win 11 默认支持,Win 10 降级到普通半透<br>
+    适合:Win 11 旗舰视觉 + 真品牌露出
+  </div>
+</body>
+</html>
