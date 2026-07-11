@@ -131,23 +131,29 @@ void WeaselServerApp::SetupMenuHandlers() {
   //   - 左键单击托盘图标 (via WM_COMMAND post from SystemTraySDK)
   //   - 右键托盘菜单 "QuickPanel" 项 (rc file)
   m_server.AddMenuHandler(ID_WEASELTRAY_QUICK_PANEL, [this] {
+    // L70-bugfix: 用 ToggleMode 替代 Show,让 Alt+, 第二次按能隐藏
     bool currentFull = m_handler ? m_handler->IsFullShape() : false;
-    QuickPanelDialog::Show(
-        currentFull,
-        [this]() {
-          fs::path deployer = install_dir() / L"WeaselDeployer.exe";
-          ShellExecuteW(NULL, NULL, deployer.c_str(), L"/hotkey", NULL, SW_SHOWNORMAL);
-        },
-        [this]() { explore(WeaselUserDataPath()); },
-        [this]() { explore(install_dir()); },
-        [this](bool newFull) {
-          if (m_handler) m_handler->SetOption(0, "full_shape", newFull);
-        },
-        [this]() {
-          fs::path deployer = install_dir() / L"WeaselDeployer.exe";
-          ShellExecuteW(NULL, NULL, deployer.c_str(), L"/deploy", NULL, SW_SHOWNORMAL);
-        },
-        []() {});
+    if (QuickPanelDialog::ActiveHwnd() &&
+        IsWindowVisible(QuickPanelDialog::ActiveHwnd())) {
+      QuickPanelDialog::Hide();
+    } else {
+      QuickPanelDialog::Show(
+          currentFull,
+          [this]() {
+            fs::path deployer = install_dir() / L"WeaselDeployer.exe";
+            ShellExecuteW(NULL, NULL, deployer.c_str(), L"/hotkey", NULL, SW_SHOWNORMAL);
+          },
+          [this]() { explore(WeaselUserDataPath()); },
+          [this]() { explore(install_dir()); },
+          [this](bool newFull) {
+            if (m_handler) m_handler->SetOption(0, "full_shape", newFull);
+          },
+          [this]() {
+            fs::path deployer = install_dir() / L"WeaselDeployer.exe";
+            ShellExecuteW(NULL, NULL, deployer.c_str(), L"/deploy", NULL, SW_SHOWNORMAL);
+          },
+          []() {});
+    }
     return true;
   });
 }

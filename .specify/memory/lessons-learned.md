@@ -5358,3 +5358,74 @@ V007 (L67/L68/L69 regression): pending - automated checks pass:
 - T103 (P2): hover tooltips
 - T201-T205 (P3): FocusIn auto-show, persistence, real functions,
   themes, high-DPI
+
+
+### L70 supplement (v0.19.0.1) - 3 implementation bugs found in user testing
+
+User reported (post-ship testing of v0.19.0):
+1. **Style mismatch**: Actual QuickPanel rendering did not match v3-rev3
+   design. OnPaint used a flat `ColorF(1,1,1,0.75)` solid color instead of
+   the v3-rev3 double-layer gradient (0.55 alpha top, 0.32 alpha bottom).
+2. **Second Alt+, does not hide**: The ID_WEASELTRAY_QUICK_PANEL handler
+   in WeaselServerApp::SetupMenuHandlers called `QuickPanelDialog::Show`
+   instead of `ToggleMode`. So Alt+, always showed, never hid.
+3. **Logo not visible**: WIC `CreateDecoderFromFilename` was called with
+   `L"fluxing-logo.png"` (relative to cwd). When WeaselServer.exe was
+   launched from a shortcut, cwd != install dir, so the WIC load failed
+   silently.
+
+All 3 fixed in v0.19.0.1:
+- OnPaint now uses `s_pBrushPanel` (LinearGradientBrush, top 0.55 alpha to
+  bottom 0.32 alpha) created once in CreateD2DResources and reused per
+  paint. The 1px top highlight line now uses `s_pBrushHighlight` (also a
+  LinearGradientBrush, transparent -> white -> transparent). Both stored
+  as static fields.
+- WeaselServerApp handler now toggles: if `ActiveHwnd()` is visible,
+  call `Hide()`; else call `Show()`. Same lambda body reused.
+- WIC `CreateDecoderFromFilename` now uses absolute path built from
+  `GetModuleFileNameW(NULL, ...)` (executable directory) + `"luxing-logo.png"`.
+  `cwd` no longer matters.
+
+Also fixed in this rebuild:
+- s_pBrushHighlight was declared `ID2D1SolidColorBrush*` in the header
+  but the .cpp tried to assign `LinearGradientBrush*` to it. Type
+  mismatch. Header updated to `ID2D1LinearGradientBrush*`.
+- `RimeWithWeasel.cpp` was missing `#include <shellapi.h>` for
+  `ShellExecuteW` (used in lambdas passed to QuickPanelDialog). The L70
+  commit added these lambdas but the include was missing. Compilation
+  error fixed by adding `#include <shellapi.h>` to the top of the file.
+- Icon stroke reduced from 1.8 to 1.5 to prevent the 38px icons from
+  looking too thick (D2D scales geometry but stroke proportionally).
+- Icon dim color changed from `ColorF(0.55,0.55,0.55,0.55)` (mid-grey)
+  to `ColorF(0.20,0.20,0.20,0.55)` (dark grey) to be visible on the
+  light-translucent panel background.
+
+v0.19.0.1 installer SHA256:
+  35846865d1b6a1ce25d87559a178e218c9fc4022b3dc3452be60bf4703981b9e
+
+Lessons:
+- Implementation rarely matches design on first ship. Always do a
+  visual verification (screenshot) BEFORE tagging a release. The v0.19.0
+  build claimed success ("build ok, spent 18.265s") but visually
+  delivered a flat panel instead of the gradient.
+- `os.getenv` / `cwd`-relative paths in C++ are fragile. Use the
+  executable's directory (`GetModuleFileNameW(NULL, ...)` -> strip
+  filename) for any file that should always be next to the .exe.
+- `ID2D1SolidColorBrush*` and `ID2D1LinearGradientBrush*` look
+  similar but the `CreateSolidColorBrush` /
+  `CreateLinearGradientBrush` methods require the correct type for the
+  out parameter. Type mismatches don't always show as warnings.
+- Atl-style chained lambda assignments through std::function will pull
+  in headers that the surrounding code may not have. Run a full
+  compile (not just the modified file) before tagging.
+
+### Anti-patterns (additional)
+- **AP-L70-E**: Declare a `*Brush` field with one type, then try to
+  create with a different factory method. Always match types in
+  header / cpp.
+- **AP-L70-F**: Ship a release based on `xmake build` exit code 0
+  alone. The build log does not show visual output. Always run the
+  app locally and screenshot before pushing.
+- **AP-L70-G**: Use `L"relative.png"` for assets. CWD != install dir
+  in most Windows contexts (Start Menu, Task Scheduler, shortcuts).
+  Use `GetModuleFileNameW(NULL, ...)` for absolute path.
