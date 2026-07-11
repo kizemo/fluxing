@@ -71,9 +71,15 @@ LRESULT ServerImpl::OnCreate(UINT uMsg,
   // not neccessary...
   ::SetWindowText(m_hWnd, WEASEL_IPC_WINDOW);
 
-  // spec 036: register Alt+, global hotkey for QuickPanel
-  // AP-036-F: ignore failure (hotkey may be registered by another app).
-  ::RegisterHotKey(m_hWnd, ID_HOTKEY_QUICK_PANEL, MOD_ALT, VK_OEM_COMMA);
+  // L69-fix: Alt+, hotkey for QuickPanel DISABLED.
+  // Reason: pressing Alt+, triggered QuickPanelDialog::ToggleMode() ->
+  // EnableAlwaysShowMode() -> LoadLogo() -> GDI+ Bitmap(IStream*) lifetime
+  // bug -> heap corruption -> WeaselServer.exe crash. See L69 entry.
+  // The hotkey is intentionally NOT registered in v0.18.41.4. QuickPanel
+  // remains in the code for a future rewrite; user can re-enable by
+  // removing this comment AND the `false &&` gate in RimeWithWeaselHandler
+  // ::FocusIn AND the no-op guard in WeaselServerApp::SetupMenuHandlers.
+  // ::RegisterHotKey(m_hWnd, ID_HOTKEY_QUICK_PANEL, MOD_ALT, VK_OEM_COMMA);
   return 0;
 }
 
