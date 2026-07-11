@@ -5241,3 +5241,120 @@ When ready to bring QuickPanel back, the rewrite should:
      QuickPanel can be disabled without rebuilding
   5. Add unit tests for the lifetime (Bitmap construction + immediate
      destroy + first paint simulation)
+
+---
+
+## L70 - spec 070 v0.19.0: QuickPanelDialog v3-rev3 D2D rewrite (no more GDI+)
+
+### Symptom (carried from L69)
+v0.18.41.4 (L69) shipped with QuickPanel completely disabled. User had no
+way to access the 6-entry quick settings panel. WeaselServer.exe was
+stable (no more crashes from GDI+ Bitmap lifetime bug), but UX regressed.
+
+### Phase 1 (root cause investigation - completed in L67/L68/L69)
+The L67/L68 fix attempts for QuickPanel's GDI+ Bitmap(IStream*) lifetime
+bug failed to converge. L69 hard-stopped: spec 070 specifies a complete
+D2D rewrite that bypasses the entire GDI+ Bitmap code path.
+
+### Phase 2 (technical design - completed in spec 070)
+
+Three design alternatives:
+A) Keep GDI+, fix the IStream lifetime properly: rejected. L68 tried this
+   and the heap still got corrupted because GDI+ lazy pixel-decode is
+   internal and unverifiable.
+B) Move to Direct2D (D2D) with PathGeometry for icons: chosen. D2D has
+   NO equivalent of GDI+ lazy pixel-decode, NO IStream lifetime contract.
+C) Move to Win32 GDI (FillRect, DrawIcon): kept as P3 fallback. Simpler
+   but uglier.
+
+Chosen path: B (D2D). For the logo PNG, use WIC (Windows Imaging
+Component) -> CreateBitmapFromWicBitmap. WIC frame goes directly to D2D
+ID2D1Bitmap. NO CreateStreamOnHGlobal, NO IStream. Lifetime = render
+target lifetime.
+
+### Phase 3 (implementation - completed)
+
+Tasks T001-T010 of spec 070 executed. Notable details:
+
+Files touched:
+- WeaselServer/QuickPanelDialog.h - new D2D field declarations
+- WeaselServer/QuickPanelDialog.cpp - full D2D rewrite (~400 lines)
+- WeaselServer/WeaselServerApp.cpp - D2D factory init, QuickPanel handler
+  re-enabled (was L69-disabled no-op)
+- WeaselIPCServer/WeaselServerImpl.cpp - RegisterHotKey re-enabled
+- output/fluxing-logo.png - real 700x700 logo (was 20x20 placeholder)
+
+Build: `python build-via-py.py` succeeds (~20s WeaselServer compile + NSIS).
+Output: release/fluxing-0.19.0.0-installer.exe (43.2 MB),
+SHA256: e95b6ab8b8f2da8b4b5acb427517e29af1260e83ad63ac9d17d515b89ac902a5.
+
+### Phase 4 (verification - V001 to V007)
+
+V001 (build + NSIS): pass
+V002 (manual): deferred to user (sandbox cannot interactive-test)
+V003 (Windows Event Viewer): deferred to user
+V004 (CrashDumps dir): deferred to user
+V005 (L70 entry): this file
+V006 (git log + installer SHA match): pending
+V007 (L67/L68/L69 regression): pending - automated checks pass:
+  - 0 `CreateStreamOnHGlobal` calls in QuickPanelDialog.cpp
+  - 0 `new Bitmap(stream)` constructions
+  - 0 `stream->Release()` patterns
+  - 0 actual `Gdiplus::Bitmap` usage (just a `using` declaration)
+
+### Lessons (numbered)
+1. **GDI+ Bitmap(IStream*) is unfixable from the outside.** The lazy
+   pixel-decode mechanism is internal to gdiplus.dll and we cannot
+   audit or guarantee its behavior. The only safe path is to bypass
+   GDI+ entirely for the use case.
+2. **D2D + WIC is the natural replacement for GDI+ image loading.**
+   WIC reads the PNG into memory once, hands the IWICBitmapFrameDecode
+   to D2D via CreateBitmapFromWicBitmap. No IStream. No lazy decode.
+   The resulting ID2D1Bitmap lifetime = render target lifetime.
+3. **SDK name changes matter.** Win SDK 26100 renamed `FillRoundedRect`
+   to `FillRoundedRectangle` (and `DrawRoundedRect` to
+   `DrawRoundedRectangle`). Code written against older SDKs fails to
+   compile. Always check the actual SDK on the build machine.
+4. **Hold parent class pointer, not leaf class pointer.** If a method
+   exists only on ID2D1RenderTarget (parent of ID2D1HwndRenderTarget),
+   keep the pointer typed as ID2D1RenderTarget* so all inherited
+   methods are visible. Using a leaf-class pointer hides inherited
+   methods.
+5. **NSIS `File` directive silently fails if source file is missing.**
+   The build log shows success but the file is not in the installer.
+   Always copy the source file into the NSIS working directory
+   (`output/`) BEFORE running NSIS.
+
+### Anti-patterns (named)
+- **AP-L70-A**: Use GDI+ Bitmap(IStream*) for any UI work that needs
+  to survive the lifetime of a containing window. Use D2D + WIC
+  instead. The GDI+ bug class is not a "fix the IStream release
+  timing" problem; it is "GDI+ does lazy things you cannot observe".
+- **AP-L70-B**: Keep D2D render target leaves in the leaf class
+  (ID2D1HwndRenderTarget*). Use the parent (ID2D1RenderTarget*) so all
+  common methods (FillRectangle, FillRoundedRectangle, DrawGeometry,
+  etc.) are visible without casting.
+- **AP-L70-C**: Copy assets to build directory ad-hoc in the build
+  script. Bake the copy into the build pipeline (e.g. always run
+  `cp docs/design/*.png output/` before NSIS).
+- **AP-L70-D**: Re-enable QuickPanel triggers without first verifying
+  the rewritten implementation compiles + doesn't use forbidden APIs.
+  Always grep for `CreateStreamOnHGlobal`, `new Bitmap(stream)`,
+  `stream->Release` in the changed file before re-enabling.
+
+### Files touched (v0.19.0)
+- WeaselServer/QuickPanelDialog.h - D2D field declarations
+- WeaselServer/QuickPanelDialog.cpp - D2D rewrite (no GDI+)
+- WeaselServer/WeaselServerApp.cpp - D2D factory init, QuickPanel handler
+- WeaselIPCServer/WeaselServerImpl.cpp - RegisterHotKey re-enabled
+- output/fluxing-logo.png - real 700x700 logo
+- env.bat (gitignored): version bumped to 0.19.0
+- build-via-py.py (gitignored): version bumped to 0.19.0.0
+- release/fluxing-0.19.0.0-installer.exe - new
+
+### Future work
+- T101 (P2): Dark mode auto-follow (v0.19.1)
+- T102 (P2): pixel-level alpha (Margins API)
+- T103 (P2): hover tooltips
+- T201-T205 (P3): FocusIn auto-show, persistence, real functions,
+  themes, high-DPI

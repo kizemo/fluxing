@@ -2,6 +2,9 @@
 #include "WeaselServerApp.h"
 #include <filesystem>
 #include "QuickPanelDialog.h"
+// spec 070 T007: D2D factory 创建 (在 WeaselServerApp::Run 入口)
+#include <d2d1.h>
+#pragma comment(lib, "d2d1.lib")
 
 WeaselServerApp::WeaselServerApp()
     : m_handler(std::make_unique<RimeWithWeaselHandler>(&m_ui)),
@@ -16,6 +19,15 @@ WeaselServerApp::~WeaselServerApp() {}
 int WeaselServerApp::Run() {
   if (!m_server.Start())
     return -1;
+
+  // spec 070: T007 — 创建 D2D factory (QuickPanel 需要,共享)
+  ID2D1Factory* pD2DFactory = nullptr;
+  if (SUCCEEDED(D2D1CreateFactory(
+          D2D1_FACTORY_TYPE_SINGLE_THREADED,
+          __uuidof(ID2D1Factory),
+          (void**)&pD2DFactory))) {
+    QuickPanelDialog::InitializeD2D(pD2DFactory);
+  }
 
   // win_sparkle_set_appcast_url("http://localhost:8000/weasel/update/appcast.xml");
   win_sparkle_set_registry_path("Software\\Rime\\Weasel\\Updates");
@@ -58,6 +70,10 @@ int WeaselServerApp::Run() {
   m_ui.Destroy();
   tray_icon.RemoveIcon();
   win_sparkle_cleanup();
+
+  // spec 070 T007: 释放 QuickPanelDialog 的 D2D resources + 释放 factory
+  QuickPanelDialog::ShutdownD2D();
+  if (pD2DFactory) pD2DFactory->Release();
 
   return ret;
 }
@@ -109,18 +125,29 @@ void WeaselServerApp::SetupMenuHandlers() {
     // restoring previously-ignored candidates.
     return true;
   });
-  // spec 036: QuickPanel trigger. Same handler is used by:
-  //   - Alt+, global hotkey (via WM_COMMAND post from OnHotkey).
-  //   - Left-click tray icon (via WM_COMMAND post from SystemTraySDK).
-  //   - "QuickPanel" menu item in the right-click tray menu (rc file).
-  // L69-fix: QuickPanel DISABLED to avoid GDI+ heap corruption crash.
-  // The handler is kept but it does nothing. To re-enable QuickPanel in
-  // a future build, remove this comment block AND the false && gate in
-  // RimeWithWeaselHandler::FocusIn AND the unregistration in
-  // WeaselServerImpl::OnCreate.
+  // spec 070 T007: 解禁 QuickPanel 触发 (L69 临时关闭已解除)
+  // QuickPanel 触发的 3 个来源:
+  //   - Alt+, 全局热键 (via WM_COMMAND post from OnHotkey)
+  //   - 左键单击托盘图标 (via WM_COMMAND post from SystemTraySDK)
+  //   - 右键托盘菜单 "QuickPanel" 项 (rc file)
   m_server.AddMenuHandler(ID_WEASELTRAY_QUICK_PANEL, [this] {
-    // L69-fix: no-op. QuickPanel triggers crash (see L69 entry).
-    (void)this;
+    bool currentFull = m_handler ? m_handler->IsFullShape() : false;
+    QuickPanelDialog::Show(
+        currentFull,
+        [this]() {
+          fs::path deployer = install_dir() / L"WeaselDeployer.exe";
+          ShellExecuteW(NULL, NULL, deployer.c_str(), L"/hotkey", NULL, SW_SHOWNORMAL);
+        },
+        [this]() { explore(WeaselUserDataPath()); },
+        [this]() { explore(install_dir()); },
+        [this](bool newFull) {
+          if (m_handler) m_handler->SetOption(0, "full_shape", newFull);
+        },
+        [this]() {
+          fs::path deployer = install_dir() / L"WeaselDeployer.exe";
+          ShellExecuteW(NULL, NULL, deployer.c_str(), L"/deploy", NULL, SW_SHOWNORMAL);
+        },
+        []() {});
     return true;
   });
 }
