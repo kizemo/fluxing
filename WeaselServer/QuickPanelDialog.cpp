@@ -220,7 +220,8 @@ ID2D1SolidColorBrush*     QuickPanelDialog::s_pBrushDim       = nullptr;
 ID2D1SolidColorBrush*     QuickPanelDialog::s_pBrushAccent    = nullptr;
 ID2D1SolidColorBrush*     QuickPanelDialog::s_pBrushPressed   = nullptr;
 ID2D1LinearGradientBrush* QuickPanelDialog::s_pBrushActive    = nullptr;
-ID2D1SolidColorBrush*     QuickPanelDialog::s_pBrushHighlight = nullptr;
+ID2D1LinearGradientBrush* QuickPanelDialog::s_pBrushHighlight = nullptr;
+ID2D1LinearGradientBrush* QuickPanelDialog::s_pBrushPanel      = nullptr;
 ID2D1PathGeometry*        QuickPanelDialog::s_pIconGeometries[5] = {};
 
 // ===== T001: D2D factory inject (由 WeaselServerApp::Run 调一次) =====
@@ -248,23 +249,50 @@ HRESULT QuickPanelDialog::CreateD2DResources(HWND hwnd) {
   if (FAILED(hr) || !s_pRT) return hr;
 
   // 3 个 SolidColorBrush
-  s_pRT->CreateSolidColorBrush(D2D1::ColorF(0.55f, 0.55f, 0.55f, 0.55f), &s_pBrushDim);     // kFgDim 半透明灰
+  s_pRT->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.20f, 0.55f), &s_pBrushDim);     // kFgDim 半透明深灰
   s_pRT->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.37f, 0.19f, 1.0f), &s_pBrushAccent);  // kAccent 品牌橙
   s_pRT->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f), &s_pBrushPressed); // kPressed 白
-  s_pRT->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.85f), &s_pBrushHighlight);
+  // 注:s_pBrushHighlight 在下方独立创建为 LinearGradientBrush(顶部高光)
 
   // active 态 橙→紫 LinearGradientBrush
-  D2D1_GRADIENT_STOP stops[2];
-  stops[0].position = 0.0f;  stops[0].color = D2D1::ColorF(1.0f, 0.37f, 0.19f);   // #FF5F31
-  stops[1].position = 1.0f;  stops[1].color = D2D1::ColorF(0.61f, 0.32f, 0.88f);  // #9B51E0
-  s_pRT->CreateGradientStopCollection(stops, 2, & (ID2D1GradientStopCollection*&) stops);
-  // 创建 gradient brush 需 stop collection;为简化,我们使用 linear gradient via brush API
-  ID2D1GradientStopCollection* pStopCol = nullptr;
-  s_pRT->CreateGradientStopCollection(stops, 2, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pStopCol);
+  D2D1_GRADIENT_STOP activeStops[2];
+  activeStops[0].position = 0.0f;  activeStops[0].color = D2D1::ColorF(1.0f, 0.37f, 0.19f);
+  activeStops[1].position = 1.0f;  activeStops[1].color = D2D1::ColorF(0.61f, 0.32f, 0.88f);
+  ID2D1GradientStopCollection* pActiveStops = nullptr;
+  s_pRT->CreateGradientStopCollection(activeStops, 2, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pActiveStops);
   s_pRT->CreateLinearGradientBrush(
       D2D1::LinearGradientBrushProperties(D2D1::Point2F(0, 0), D2D1::Point2F(100, 100)),
-      pStopCol, &s_pBrushActive);
-  if (pStopCol) pStopCol->Release();
+      pActiveStops, &s_pBrushActive);
+  if (pActiveStops) pActiveStops->Release();
+
+  // L70-bugfix: panel 背景用 v3-rev3 设计稿的双层渐变(0.55→0.32 alpha)
+  // 创建一次永久复用
+  D2D1_GRADIENT_STOP panelStops[2];
+  panelStops[0].position = 0.0f;  panelStops[0].color = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.55f);  // 顶部 0.55
+  panelStops[1].position = 1.0f;  panelStops[1].color = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.32f);  // 底部 0.32
+  ID2D1GradientStopCollection* pPanelStops = nullptr;
+  s_pRT->CreateGradientStopCollection(panelStops, 2, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pPanelStops);
+  ID2D1LinearGradientBrush* pPanelBrush = nullptr;
+  s_pRT->CreateLinearGradientBrush(
+      D2D1::LinearGradientBrushProperties(D2D1::Point2F(0, 0), D2D1::Point2F(0, 100)),
+      pPanelStops, &pPanelBrush);
+  if (pPanelStops) pPanelStops->Release();
+  // 存到 static 以便 OnPaint 复用(避免每帧创建)
+  // 注:为简单起见,这里直接传到 OnPaint(下一行)而不是存 static
+  // 改:存为 static 字段
+  s_pBrushPanel = pPanelBrush;  // s_pBrushPanel 已在 header 中声明
+
+  // L70-bugfix: 顶部高光 1px 渐变,永久存 static
+  D2D1_GRADIENT_STOP hlStops[3];
+  hlStops[0].position = 0.0f;  hlStops[0].color = D2D1::ColorF(1, 1, 1, 0);
+  hlStops[1].position = 0.5f;  hlStops[1].color = D2D1::ColorF(1, 1, 1, 0.85f);
+  hlStops[2].position = 1.0f;  hlStops[2].color = D2D1::ColorF(1, 1, 1, 0);
+  ID2D1GradientStopCollection* pHlCol = nullptr;
+  s_pRT->CreateGradientStopCollection(hlStops, 3, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pHlCol);
+  s_pRT->CreateLinearGradientBrush(
+      D2D1::LinearGradientBrushProperties(D2D1::Point2F(0, 0), D2D1::Point2F(100, 0)),
+      pHlCol, &s_pBrushHighlight);
+  if (pHlCol) pHlCol->Release();
 
   // T002: 用 WIC 加载 logo PNG (无 IStream!)
   LoadLogoWIC();
@@ -282,6 +310,7 @@ void QuickPanelDialog::ReleaseD2DResources() {
   }
   if (s_pBrushActive)     { s_pBrushActive->Release();     s_pBrushActive = nullptr; }
   if (s_pBrushHighlight)  { s_pBrushHighlight->Release();  s_pBrushHighlight = nullptr; }
+  if (s_pBrushPanel)      { s_pBrushPanel->Release();      s_pBrushPanel = nullptr; }
   if (s_pBrushPressed)    { s_pBrushPressed->Release();    s_pBrushPressed = nullptr; }
   if (s_pBrushAccent)     { s_pBrushAccent->Release();     s_pBrushAccent = nullptr; }
   if (s_pBrushDim)        { s_pBrushDim->Release();        s_pBrushDim = nullptr; }
@@ -302,12 +331,17 @@ HRESULT QuickPanelDialog::LoadLogoWIC() {
                                IID_PPV_ARGS(&pWic));
   if (FAILED(hr)) return hr;
 
-  // 从 exe 相对路径加载 fluxing-logo.png
-  // IDR_FLUXING_LOGO 是 700x700 PNG,装包到 $INSTDIR\fluxing-logo.png
-  // WeaselServer 启动时 cwd = $INSTDIR,直接相对路径即可
+  // L70-bugfix: 用 exe 所在目录而非 cwd,避免快捷方式启动时 cwd 不对
+  wchar_t exeDir[MAX_PATH] = {0};
+  GetModuleFileNameW(nullptr, exeDir, MAX_PATH);
+  wchar_t* lastSlash = wcsrchr(exeDir, L'\\');
+  if (lastSlash) *lastSlash = L'\0';
+  wchar_t logoPath[MAX_PATH];
+  _snwprintf_s(logoPath, _TRUNCATE, L"%s\\fluxing-logo.png", exeDir);
+
   IWICBitmapDecoder* pDec = nullptr;
   hr = pWic->CreateDecoderFromFilename(
-      L"fluxing-logo.png", nullptr, GENERIC_READ,
+      logoPath, nullptr, GENERIC_READ,
       WICDecodeMetadataCacheOnLoad, &pDec);
   if (FAILED(hr)) { pWic->Release(); return hr; }
 
@@ -379,10 +413,13 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
   D2D1_ROUNDED_RECT panelRect = D2D1::RoundedRect(
       D2D1::RectF(0, 0, W, H), kPanelRadius, kPanelRadius);
   // 用 alpha=240 的半透白(没渐变但视觉效果接近)
-  ID2D1SolidColorBrush* pBg = nullptr;
-  s_pRT->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.75f), &pBg);
-  s_pRT->FillRoundedRectangle(&panelRect, pBg);
-  if (pBg) pBg->Release();
+  // L70-bugfix: 用 v3-rev3 双层渐变(0.55→0.32 alpha),不再用单色
+  if (s_pBrushPanel) {
+    // 重设渐变方向为 panel 实际尺寸
+    s_pBrushPanel->SetStartPoint(D2D1::Point2F(0, 0));
+    s_pBrushPanel->SetEndPoint(D2D1::Point2F(0, H));
+    s_pRT->FillRoundedRectangle(&panelRect, s_pBrushPanel);
+  }
 
   // 1px 边框
   ID2D1SolidColorBrush* pBorder = nullptr;
@@ -390,22 +427,13 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
   s_pRT->DrawRoundedRectangle(&panelRect, pBorder, 1.0f);
   if (pBorder) pBorder->Release();
 
-  // 2. 顶部高光(1px 渐变线)
-  D2D1_POINT_2F hlStart = {14, 0.5f}, hlEnd = {W - 14, 0.5f};
-  ID2D1GradientStopCollection* pHlCol = nullptr;
-  D2D1_GRADIENT_STOP hlStops[3] = {
-      {0.0f, D2D1::ColorF(1, 1, 1, 0)},
-      {0.5f, D2D1::ColorF(1, 1, 1, 0.85f)},
-      {1.0f, D2D1::ColorF(1, 1, 1, 0)}
-  };
-  s_pRT->CreateGradientStopCollection(hlStops, 3, &pHlCol);
-  ID2D1LinearGradientBrush* pHlBrush = nullptr;
-  s_pRT->CreateLinearGradientBrush(
-      D2D1::LinearGradientBrushProperties(hlStart, hlEnd),
-      pHlCol, &pHlBrush);
-  s_pRT->DrawLine(hlStart, hlEnd, pHlBrush, 1.0f);
-  if (pHlBrush) pHlBrush->Release();
-  if (pHlCol) pHlCol->Release();
+  // 2. 顶部高光(1px 渐变线,L70-bugfix: 永久 s_pBrushHighlight)
+  if (s_pBrushHighlight) {
+    D2D1_POINT_2F hlStart = {14, 0.5f}, hlEnd = {W - 14, 0.5f};
+    s_pBrushHighlight->SetStartPoint(hlStart);
+    s_pBrushHighlight->SetEndPoint(hlEnd);
+    s_pRT->DrawLine(hlStart, hlEnd, s_pBrushHighlight, 1.0f);
+  }
 
   // 3. logo (brand 块 56x56,padding 内)
   if (s_pLogo) {
@@ -461,11 +489,11 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
           D2D1::Matrix3x2F::Translation(iconX, iconY),
           &pTransformed);
       if (pTransformed) {
-        // 选 brush:active→白,hovered→橙,其它→灰
+        // 选 brush:active→白,hovered→橙,其它→深灰
         ID2D1Brush* pBrush = s_pBrushDim;
         if (i == s_activeIdx) pBrush = s_pBrushPressed;
         else if (i == s_hoveredIdx) pBrush = s_pBrushAccent;
-        s_pRT->DrawGeometry(pTransformed, pBrush, 1.8f);
+        s_pRT->DrawGeometry(pTransformed, pBrush, 1.5f);  // L70-bugfix: 1.8→1.5(适配 38px 大图标,避免 stroke 盖住中心)
         pTransformed->Release();
       }
     }
