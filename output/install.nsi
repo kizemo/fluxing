@@ -339,35 +339,62 @@ program_files:
   File "rime-install-config.bat"
   File "start_service.bat"
   File "stop_service.bat"
-  ; L71-bugfix: 装新版前先 Delete 旧 weasel.dll。L13 + L71 的 ctfmon/TextInputHost
-  ; taskkill 应已释放 mapped handle,但若用户刚 kill 失败或 mapped handle 残留,
-  ; Delete 至少让 File 用新文件,避免"无法打开要写入的文件"错误。
-  Delete /REBOOTOK "$INSTDIR\weasel.dll"
-  File "weasel.dll"
+  ; L72-bugfix: Rename-then-File 模式。原 L71 Delete/REBOOTOK 不能立刻删除
+  ; (文件还锁),导致后续 File 仍报"无法打开要写入的文件"。
+  ; 新模式:Rename 是原子的,即使失败也能 SetOverwrite try 跳过
+  ; (NSIS 不会弹错对话框)。当 Rename 成功时,后续 File 一定能写新文件。
+  ; 当 Rename 失败(文件仍被 TSF 宿主锁)时,fallback 到 SetOverwrite try +
+  ; IfErrors 跳过,装旧版,dwFlags on 还原,DetailPrint 提示用户注销重登。
+  Push $R0
+  Push $R1
+  ${If} ${FileExists} "$INSTDIR\weasel.dll"
+    ClearErrors
+    Rename "$INSTDIR\weasel.dll" "$INSTDIR\weasel.dll.old.tmp"
+    ${If} ${Errors}
+      ; Rename 失败(还锁)→ 试 SetOverwrite try,失败就 skip
+      SetOverwrite try
+      File "weasel.dll"
+      IfErrors 0 weasel_done
+      DetailPrint "Fluxing: weasel.dll locked by TSF host; old shim retained. Log out -> log in to pick up the new shim."
+      SetOverwrite on
+      Goto weasel_done
+    ${EndIf}
+    ; Rename 成功,旧文件已经不在 $INSTDIR\weasel.dll
+    File "weasel.dll"
+    ; 清理 .old.tmp(用 REBOOTOK 防止正在运行时还占用)
+    Delete /REBOOTOK "$INSTDIR\weasel.dll.old.tmp"
+  ${Else}
+    ; 全新装,直接 File
+    File "weasel.dll"
+  ${EndIf}
+  weasel_done:
+  Pop $R1
+  Pop $R0
+
   ${If} ${RunningX64}
     ; L14-fix (spec 012 cleanup): weaselx64.dll is the 64-bit TSF TextInputProcessor.
-    ; Once Windows has loaded it (per user login session), TSF holds an open
-    ; file handle on it for the entire session. NSIS cannot overwrite a
-    ; locked file; the result is the user-facing dialog
-    ; "Cannot open the file for writing" + Abort/Retry/Ignore.
-    ; Workaround: use SetOverwrite try. If the file does not exist,
-    ; jump straight to a normal copy. If the file is locked by TSF,
-    ; the File call sets the error flag silently (no error dialog); we
-    ; keep the old shim in place and surface a single log line; the new
-    ; shim is picked up at the next user log-out -> log-in cycle.
-    ; Note: this is NOT a size-equality check (the original draft
-    ; comment claimed one - the actual logic is overwrite-try + skip-on-error).
-    IfFileExists "$INSTDIR\weaselx64.dll" 0 install_weaselx64
-    SetOverwrite try
-    File "weaselx64.dll"
-    SetOverwrite on
-    IfErrors 0 skip_weaselx64
-    DetailPrint "Fluxing: weaselx64.dll is locked by TextInputManagementService (TSF); old shim retained. Log out -> log in to pick up the new shim."
-    Goto skip_weaselx64
-  install_weaselx64:
-    SetOverwrite on
-    File "weaselx64.dll"
-  skip_weaselx64:
+    ; 同样 L72-bugfix Rename-then-File 模式
+    Push $R0
+    Push $R1
+    ${If} ${FileExists} "$INSTDIR\weaselx64.dll"
+      ClearErrors
+      Rename "$INSTDIR\weaselx64.dll" "$INSTDIR\weaselx64.dll.old.tmp"
+      ${If} ${Errors}
+        SetOverwrite try
+        File "weaselx64.dll"
+        IfErrors 0 weaselx64_done
+        DetailPrint "Fluxing: weaselx64.dll locked by TSF host; old shim retained. Log out -> log in to pick up the new shim."
+        SetOverwrite on
+        Goto weaselx64_done
+      ${EndIf}
+      File "weaselx64.dll"
+      Delete /REBOOTOK "$INSTDIR\weaselx64.dll.old.tmp"
+    ${Else}
+      File "weaselx64.dll"
+    ${EndIf}
+    weaselx64_done:
+    Pop $R1
+    Pop $R0
   ${EndIf}
   ${If} ${IsNativeARM64}
     File /nonfatal "weaselARM.dll"
