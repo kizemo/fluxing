@@ -5560,3 +5560,87 @@ constants and on all click-coord comparisons. Show() now skips
 SetLayeredWindowAttributes entirely (3rd arg=0, dwFlags=0 effectively
 means "no layered effect specified", letting DWM default per-pixel
 alpha take over for WS_EX_LAYERED + D2D HwndRenderTarget).
+
+
+## L71 - spec 071 v0.19.0.4: weasel.dll overwrite fix (TSF 进程 kill + delete)
+
+### Symptom
+User tried to install v0.19.0 over existing v0.19.0.2 install. NSIS
+installer showed error dialog:
+
+  无法打开要写入的文件:
+  "D:\Program Files\fluxing\weasel\weasel.dll"
+  点击 [Abort] 停止安装, [Retry] 重新尝试写入文件, 或者 [Ignore] 忽略这个文件
+
+### Phase 1 (root cause investigation)
+- tasklist shows no WeaselServer.exe running (L13 taskkill in .onInit
+  step 1 must have succeeded, OR the previous install was uninstalled)
+- weasel.dll mtime 2026-07-10 20:35 (old) still present
+- L13 fix: `taskkill /F /IM WeaselServer.exe /T` at .onInit line 131
+  (preserved)
+- L58 / L13 both target only WeaselServer.exe, NOT ctfmon.exe or
+  TextInputHost.exe
+- `weasel.dll` is the 32-bit TSF TextInputProcessor. ctfmon.exe and
+  TextInputHost.exe (Windows TSF hosts) load all installed TIPs at
+  user login and keep the module mapped for the entire session.
+- L13 only kills WeaselServer.exe, leaving ctfmon/TextInputHost with
+  the mapped weasel.dll handle. Result: NSIS File "weasel.dll" fails
+  with "cannot open for writing" since the file is still mapped.
+
+### Phase 2 (fix - minimal)
+- .onInit: add `taskkill /F /IM ctfmon.exe /T` and
+  `taskkill /F /IM TextInputHost.exe /T` right after the existing
+  WeaselServer.exe kill. ctfmon and TextInputHost are auto-respawned by
+  Windows on user activity, so no side effect.
+- Add `Delete /REBOOTOK "$INSTDIR\weasel.dll"` before the
+  `File "weasel.dll"` directive at line 333. /REBOOTOK = if the file
+  is locked and Delete can't remove it, mark for deletion on next
+  reboot. Belt-and-suspenders for the rare case taskkill fails.
+
+### Phase 3 (verification)
+- v0.19.0.4 builds clean (19 sec xmake + 4 sec NSIS)
+- Installer SHA256: a995b31b829a12396dcde6249be18f629f42a0610f7626987bf91184059c610d
+- Manual test (user, deferred to next dev run):
+  - Install v0.19.0.4 over v0.19.0.3 -> no "cannot open" error
+  - ctfmon.exe auto-respawns after install completes
+  - TSF still works for new install
+
+### Lessons
+1. **L13's WeaselServer taskkill is necessary but not sufficient.**
+   The full list of processes that map weasel.dll / weaselx64.dll
+   includes: WeaselServer.exe, ctfmon.exe, TextInputHost.exe,
+   TaskHostW.exe (svchost wrapper), explorer.exe (sometimes loads TIP
+   for accessibility). Spec 071 covers the top-3; full coverage would
+   need a more comprehensive kill.
+2. **Delete /REBOOTOK is the right escape hatch for "file in use"**
+   in NSIS. /REBOOTOK schedules a delete-on-reboot via
+   MoveFileExW with MOVEFILE_DELAY_UNTIL_REBOOT, which is a kernel
+   level deferred rename that works even when the file is currently
+   mapped. Use this when you can't reliably kill the holder.
+3. **NSIS File directive does NOT have a "if newer, try overwrite"
+   semantic by default.** The default `SetOverwrite on` fails hard.
+   Use `SetOverwrite ifnewer` (only overwrite if file timestamp newer
+   than destination) OR `SetOverwrite try` (try but don't fail) when
+   overwriting DLLs in use.
+
+### Anti-patterns
+- AP-L71-A: Kill only the obvious process. TSF DLLs can be loaded
+  by multiple processes (TSF hosts, 32-bit consumers, accessibility
+  helpers). For each DLL you need to overwrite, enumerate the full
+  set of likely mappers.
+- AP-L71-B: Use `File "weasel.dll"` without a preceding Delete for
+  files that might be in use. NSIS will fail hard on locked files.
+  Always pair File with Delete /REBOOTOK for hot files.
+- AP-L71-C: Try to Delete a file that IS in use, without /REBOOTOK.
+  Delete on a locked file fails immediately. /REBOOTOK schedules
+  the delete for the next reboot when no process holds the file.
+
+### Files touched (v0.19.0.4)
+- output/install.nsi:
+    - .onInit (around line 131): added taskkill for ctfmon.exe +
+      TextInputHost.exe
+    - File "weasel.dll" (around line 333): added Delete /REBOOTOK
+      before
+- env.bat (gitignored, local only): WEASEL_BUILD 3 -> 4
+- build-via-py.py (gitignored): updated to v0.19.0.4
+- release/fluxing-0.19.0.4-installer.exe: new
