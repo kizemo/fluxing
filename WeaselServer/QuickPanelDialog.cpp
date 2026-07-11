@@ -75,15 +75,31 @@ void LoadLogo() {
   const void* data = LockResource(hglob);
   DWORD size = SizeofResource(NULL, hrsrc);
   if (!data || size == 0) return;
+
+  // L67-fix: Resource HGLOBAL is process-lifetime (held by the .exe module's
+  // resource table). Wrap it with fDeleteOnRelease=FALSE so stream->Release()
+  // does NOT free the underlying buffer. After Bitmap construction, force
+  // eager decode via GetLastStatus() + GetWidth() / GetHeight() so all pixels
+  // are materialized into GDI+ internal buffers. Without the eager decode,
+  // GDI+ can defer parsing until the first DrawImage call, by which time
+  // our IStream pointer may already be invalid (Use-After-Free on the IStream
+  // COM object's vtable). One concrete chain we observed in the v0.18.34.0
+  // minidump: cdb resolved the crash as WeaselServer!_sqrt_common+0xb0b6
+  // with ecx=0x027318f8 (freed heap pointer). The chain (parse_command_line
+  // -> count_env_block -> __crt_strtox::multiply -> std::num_put::do_put)
+  // suggests the stack was corrupted by an earlier Use-After-Free; the
+  // GDI+ Bitmap lazy-decode is a strong candidate for that earlier UAF.
+  //
+  // See .specify/memory/lessons-learned.md L67 for full analysis.
   IStream* stream = NULL;
-  CreateStreamOnHGlobal(NULL, TRUE, &stream);
-  if (!stream) return;
-  ULONG written = 0;
-  stream->Write(data, size, &written);
-  LARGE_INTEGER zero = {0};
-  stream->Seek(zero, STREAM_SEEK_SET, NULL);
-  s_logo.reset(new Bitmap(stream));
+  if (FAILED(CreateStreamOnHGlobal(hglob, FALSE, &stream))) return;
+
+  std::unique_ptr<Bitmap> bmp(new Bitmap(stream));
   stream->Release();
+
+  if (bmp->GetLastStatus() != Ok || bmp->GetWidth() == 0 || bmp->GetHeight() == 0)
+    return;  // decode failed; leave s_logo null, draw code will skip
+  s_logo = std::move(bmp);
 }
 
 BOOL RegisterClassOnce(HINSTANCE hInst) {
