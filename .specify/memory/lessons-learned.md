@@ -5644,3 +5644,93 @@ installer showed error dialog:
 - env.bat (gitignored, local only): WEASEL_BUILD 3 -> 4
 - build-via-py.py (gitignored): updated to v0.19.0.4
 - release/fluxing-0.19.0.4-installer.exe: new
+
+
+## L72 - spec 072 v0.19.0.5: install.nsi Rename-then-File for locked TSF shims
+
+### Symptom
+User installed v0.19.0.4 and got the same "无法打开要写入的文件: weasel.dll"
+error. L71 fix (taskkill ctfmon / TextInputHost) was insufficient.
+
+### Phase 1 (root cause investigation)
+L71 added `taskkill /F /IM ctfmon.exe /T` and
+`taskkill /F /IM TextInputHost.exe /T` to .onInit. But this is racy:
+1. .onInit runs FIRST, in a phase before any File directive
+2. Between .onInit and the first File directive, several seconds can
+   elapse (Section preamble, .onSelChange callbacks, etc.)
+3. During that window, ctfmon.exe and TextInputHost.exe can respawn
+   (especially on user action) and remap weasel.dll
+4. Even with /T (kill children), any notepad/WordPad/32-bit consumer
+   that was running already has weasel.dll mapped
+5. L71 also had `Delete /REBOOTOK` which only schedules for next
+   reboot - does nothing for the current install
+
+So L71 reduced the failure rate but didn't fix it.
+
+### Phase 2 (fix - rename-then-file pattern)
+NSIS has a `Rename` instruction that calls MoveFile. If Rename succeeds
+the destination path is freed, so a subsequent File directive can
+write the new file. The 3-step flow:
+
+1. If weasel.dll exists, Rename it to weasel.dll.old.tmp
+2. If Rename fails (file still mapped), fall back to SetOverwrite try +
+   IfErrors skip
+3. If Rename succeeded, File writes the new weasel.dll
+
+Same flow for weaselx64.dll (the 64-bit TSF shim).
+
+Why this works:
+- Rename is atomic. If it succeeds, weasel.dll no longer exists at
+  the target path. File can write.
+- If Rename fails (mapped handle), we can't move the file, but we
+  also can't write to it. SetOverwrite try + IfErrors silently skips
+  the file (no Abort/Retry/Ignore dialog). The old TSF shim keeps
+  working. The user sees a DetailPrint message asking them to log out
+  / log back in to activate the new shim.
+
+### Phase 3 (verification)
+v0.19.0.5 builds clean (NSIS pass). Manual test deferred to user:
+- Install v0.19.0.5 over v0.19.0.3 (or any prior version with locked
+  weasel.dll)
+- The error dialog should no longer appear
+- If Rename fails, NSIS silently skips the file (no dialog) and the
+  install continues
+- After install, if Rename failed: log out and back in to load the
+  new weasel.dll
+
+### Lessons
+1. **taskkill + Delete is racy**. Between .onInit and the first
+   File directive, a 32-bit TSF consumer can remap the DLL. The
+   robust fix is to use atomic Rename to remove the locked file from
+   the target path before the File write.
+2. **NSIS Rename can succeed when Delete fails.** On Windows,
+   Rename via MoveFileEx can succeed in some cases where Delete fails
+   (the file can be moved to a different name even if it can't be
+   unlinked). For a DLL in use, the move-out-of-the-way is usually
+   possible if no consumer has an open write handle.
+3. **Always have a silent fallback path.** SetOverwrite try + IfErrors
+   + DetailPrint lets the install complete even if the shim update
+   fails. The user gets a one-line message instead of being stuck on
+   an error dialog.
+
+### Anti-patterns
+- AP-L72-A: Use only `Delete /REBOOTOK` for files in use. /REBOOTOK
+  defers to next boot - it does NOT free the file for the current
+  install. Pair with a rename attempt.
+- AP-L72-B: Show an error dialog for an optional shim update. The
+  user wants the rest of the install to succeed even if the shim is
+  stuck. Always provide a silent fallback.
+- AP-L72-C: Trust that taskkill has released the file handle. TSF
+  hosts (ctfmon, TextInputHost) and TSF consumers (notepad, WordPad)
+  can remap the DLL milliseconds after taskkill returns. The only
+  guarantee is to physically remove the file from the target path
+  before writing the new one.
+
+### Files touched (v0.19.0.5)
+- output/install.nsi:
+    - File "weasel.dll" block: replaced Delete/REBOOTOK with Rename-
+      then-File pattern (with SetOverwrite try fallback)
+    - File "weaselx64.dll" block: same pattern applied
+- env.bat (gitignored, local only): WEASEL_BUILD 4 -> 5
+- build-via-py.py (gitignored): updated to v0.19.0.5
+- release/fluxing-0.19.0.5-installer.exe: new
