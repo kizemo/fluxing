@@ -5734,3 +5734,86 @@ v0.19.0.5 builds clean (NSIS pass). Manual test deferred to user:
 - env.bat (gitignored, local only): WEASEL_BUILD 4 -> 5
 - build-via-py.py (gitignored): updated to v0.19.0.5
 - release/fluxing-0.19.0.5-installer.exe: new
+
+
+## L73 - v0.19.0.5: 5 轮 v0.19.0.x 全失败的根本原因 = 流程错,不是代码错
+
+### 复盘
+v0.19.0.0 / v0.19.0.1 / v0.19.0.2 / v0.19.0.3 / v0.19.0.4 / v0.19.0.5
+共 6 个版本,累积修了 5 个不同的 bug(QuickPanel 视觉黑 / Toggle 不工作 /
+按钮挤左边 / alpha 失效 / 装包 weasel.dll 锁),**没有一个版本用户装上
+后能正常用 QuickPanel**。
+
+v0.19.0.5 装上 + 重启后 Alt+, 完全无法调出 panel — 这是新症状(之前
+v0.19.0.3 / v0.19.0.4 至少 panel 出现,只是渲染有 bug)。
+
+### 根因(关于"为什么找不到真正根因")
+不是某一行代码错。根因是我每次**只修发现的那个 bug,从未 end-to-end
+验证上一版是否还能工作**。结果:
+
+- v0.19.0.0 build ok (compiles) -> user tested -> visual 黑 -> fix to v0.19.0.1
+- v0.19.0.1 build ok -> user tested -> 视觉仍黑 -> fix to v0.19.0.2
+- v0.19.0.2 build ok -> user tested -> 按钮挤 + alpha 失效 -> fix to v0.19.0.3
+- v0.19.0.3 build ok -> user tested -> HitTest 错位 + LWA 砍白 -> fix to v0.19.0.4
+- v0.19.0.4 build ok -> user tested -> 装包 weasel.dll 锁 -> fix to v0.19.0.5
+- v0.19.0.5 build ok -> user tested -> Alt+, 完全无反应
+
+每版单点修对的,**但累积效应没人在 sandbox 里看**。
+
+### 系统性问题
+1. **凭 build 成功声称 done**。`xmake build` exit 0 不等于
+   `Alt+, 触发 + panel 显示 + 视觉对 + 点击可交互 + 多次无崩`。
+2. **沙箱无 GUI 交互测试能力**,但我从不用 Phase 4 alternatives
+   (cdb 静态 dump、用户补 log、build 产物 diff) 补全 evidence。
+3. **没按 debugging-and-error-recovery Step 8**。
+   该 skill 明确说"fix 不 work 时 STOP,回 Phase 1"。
+   我没停过,直接 pile 下一版。
+4. **L## entry 写成 胜利叙事**(都用"修法" 句式),
+   不是 failure post-mortem。后续 reviewer 看不出哪个版本是 risk。
+
+### 修流程(不是修代码)
+1. 沙箱里能跑的验证,必须**全部跑过**:
+   - xmake build: 已经过
+   - cdb on output\Win32\WeaselServer.exe:能拿到导出表,确认
+     RegisterHotKey / CreateWindowExW 在符号表里
+   - NSIS embedded .nsi:解压看 fix 是否在(grep "ctfmon")
+   - output\Win32\*.dll 字节校验 (L14):确认 QuickPanel 资源在
+2. **每版 ship 前**:
+   - 重新跑全套验证
+   - 让用户**只**做一件事:装包 + 截图 + Alt+ 测试
+   - 不做其他
+3. **fix 不 work 立即 STOP**(debugging-and-error-recovery Step 8)
+4. **承认不知道**:不再 pile fix,说"我需要 X 证据"
+
+### 这次 v0.19.0.5 Alt+ 无反应(新症状)
+**我**没**有**任何证据能解释为什么。沙箱**不能**复现(无 GUI 交互)。
+需要用户跑 diag-v19-0-5-alt-plus.ps1 拿 4 项证据:
+1. WeaselServer.exe 在跑?(若不在跑,Alt+ 当然无效)
+2. weasel.dll 时间戳 + 是不是 v0.19.0.5(若仍是 v0.19.0.3 时间戳,我的 install 没成功)
+3. 24h 内 WeaselServer.exe Application Error
+4. CrashDumps dir 有新 dump 吗
+
+不要**再**piling fix。**等** 4 项证据再决定根因。
+
+### Anti-patterns(增加)
+- AP-L73-A: 凭 build ok exit code 0 声称 done。exit 0 只代表
+  编译器接受语法,不代表运行时行为正确。
+- AP-L73-B: 沙箱里 build 5 遍都通过 = 用户的机器上能 work。
+  Build 在沙箱里能完全成功但用户机器上崩的 case 一抓一大把
+  (registry ACL、UAC、DPI 缩放、locale、TSF consumer、AV 软件)。
+- AP-L73-C: 一个 fix 不 work,继续 pile 下一个 fix。Per
+  debugging-and-error-recovery Step 8:STOP,回 Phase 1 重查根因。
+  沙箱限制不是继续 pile 的理由。
+- AP-L73-D: 把 L## 写成"修法 + 验证 + lessons" 三段,看起来像
+  post-mortem,实际是 self-congratulation。Failure post-mortem 必须
+  包含"我做错了什么、下次怎么避免"。
+
+### 下次(v0.19.0.x 任何版本) ship checklist
+- [ ] xmake build 0 errors
+- [ ] cdb on output\WeaselServer.exe: 关键 symbol 在(RegisterHotKey, CreateWindowExW)
+- [ ] NSIS installer embedded install.nsi: 关键指令在(grep fix-specific strings)
+- [ ] 字节级 diff: installer size、uninstall.exe size
+- [ ] L## entry 写"失败模式 + 我做错了什么"
+- [ ] **绝不**没经过上面 5 项就声称 done
+- [ ] fix 不 work,**绝不**pile 下一版,先 STOP
+- [ ] 让用户跑一个**单一**验证(装包 + Alt+, 截图)
