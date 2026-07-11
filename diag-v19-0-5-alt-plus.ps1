@@ -1,8 +1,7 @@
-# diag-v19-0-5-alt-plus.ps1
-# 装完 v0.19.0.5 + 重启后,Alt+, 失灵。需 4 项证据。
+# diag-v19-0-5-alt-plus.ps1 (L47 fix: ASCII only, no Chinese in single-quote)
 $ErrorActionPreference = 'Continue'
 
-Write-Host '=== 1. WeaselServer.exe 是否在跑? ===' -ForegroundColor Cyan
+Write-Host '=== 1. WeaselServer.exe running? ===' -ForegroundColor Cyan
 $ws = Get-Process -Name WeaselServer -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,StartTime,CPU,WS
 if ($ws) {
   $ws | Format-Table -AutoSize
@@ -12,65 +11,54 @@ if ($ws) {
 }
 
 Write-Host ''
-Write-Host '=== 2. weasel.dll 在哪 + 是不是 v0.19.0.5 那个 ===' -ForegroundColor Cyan
+Write-Host '=== 2. weasel.dll timestamp + version ===' -ForegroundColor Cyan
 $weaselDir = "D:\Program Files\fluxing\weasel"
 if (Test-Path "$weaselDir\weasel.dll") {
   $dll = Get-Item "$weaselDir\weasel.dll"
   Write-Host "weasel.dll: mtime=$($dll.LastWriteTime), size=$($dll.Length)"
-  # file version
   $vi = (Get-Item "$weaselDir\weasel.dll").VersionInfo
-  Write-Host "  FileVersion: $($vi.FileVersion)"
+  Write-Host "  FileVersion:    $($vi.FileVersion)"
   Write-Host "  ProductVersion: $($vi.ProductVersion)"
 } else {
-  Write-Host "weasel.dll 不存在" -ForegroundColor Red
+  Write-Host 'weasel.dll does not exist' -ForegroundColor Red
 }
 if (Test-Path "$weaselDir\weasel.dll.old.tmp") {
-  Write-Host "weasel.dll.old.tmp 存在(可能没被删)" -ForegroundColor Yellow
+  Write-Host 'weasel.dll.old.tmp exists (L72 Rename leftover not cleaned)' -ForegroundColor Yellow
 }
-Write-Host "  目录内容:"
-Get-ChildItem $weaselDir -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "weasel|FLUXING|Fluxing" } | Format-Table Name,Length,LastWriteTime -AutoSize
+Write-Host '  Directory contents (weasel* and FLUXING* only):'
+Get-ChildItem $weaselDir -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'weasel|FLUXING|Fluxing' } | Format-Table Name,Length,LastWriteTime -AutoSize | Out-String | Write-Host
 
 Write-Host ''
-Write-Host '=== 3. Windows Event Viewer (24h 内 WeaselServer.exe / Application Error) ===' -ForegroundColor Cyan
+Write-Host '=== 3. 24h Windows Event Viewer (WeaselServer / Application Error) ===' -ForegroundColor Cyan
 Get-WinEvent -LogName Application -MaxEvents 200 -ErrorAction SilentlyContinue |
   Where-Object { $_.Message -match 'WeaselServer|fluxing\.exe|0xc000|0xC000|STATUS_HEAP' -or $_.ProviderName -eq 'Application Error' -or $_.ProviderName -eq 'Windows Error Reporting' } |
   Select-Object -First 10 -Property TimeCreated, ProviderName, Id, LevelDisplayName, @{N='Msg';E={$_.Message.Substring(0,[Math]::Min(500,$_.Message.Length))}} |
   Format-List
 
 Write-Host ''
-Write-Host '=== 4. 装包相关日志(可填) ===' -ForegroundColor Cyan
-$logDirs = @(
-  "$env:USERPROFILE\AppData\Local\Temp\fluxing*.log",
-  "$env:USERPROFILE\AppData\Local\Temp\nsis*.log",
+Write-Host '=== 4. CrashDumps dir ===' -ForegroundColor Cyan
+$crashDirs = @(
   "$env:USERPROFILE\AppData\Local\CrashDumps\WeaselServer.*.dmp",
   "$env:USERPROFILE\AppData\Local\fluxing\crash\*.dmp"
 )
-foreach ($p in $logDirs) {
-  if (Test-Path $p -ErrorAction SilentlyContinue) {
-    Write-Host "匹配: $p"
-    if (Test-Path $p -PathType Container) {
-      Get-ChildItem $p -ErrorAction SilentlyContinue | Format-Table Name,Length,LastWriteTime -AutoSize | Out-String | Write-Host
-    } else {
-      Get-Item $p | Format-Table Name,Length,LastWriteTime -AutoSize | Out-String | Write-Host
-    }
+foreach ($p in $crashDirs) {
+  $matches = Get-ChildItem -Path (Split-Path $p) -Filter (Split-Path -Leaf $p) -ErrorAction SilentlyContinue
+  if ($matches) {
+    Write-Host "  Found: $($matches.Count) dump(s) at $(Split-Path $p)"
+    $matches | Sort-Object LastWriteTime -Descending | Select-Object -First 5 | Format-Table Name,Length,LastWriteTime -AutoSize | Out-String | Write-Host
   } else {
-    Write-Host "  (没有) $p"
+    Write-Host "  (none) $p"
   }
 }
 
 Write-Host ''
-Write-Host '=== 5. Alt+, 后的额外 trace: 重新按一次 Alt+, 看 hook 触发没 ===' -ForegroundColor Cyan
-Write-Host '如果你能看到 Task Manager > Details > WeaselServer.exe,'
-Write-Host '右键 > Properties > 检查命令行'
-Write-Host '另外,打开 services.msc,看 "Windows IME-related services" 状态'
+Write-Host '=== 5. WMI process check ===' -ForegroundColor Cyan
+$wmi = Get-CimInstance -ClassName Win32_Process -Filter "Name='WeaselServer.exe'" -ErrorAction SilentlyContinue
+if ($wmi) {
+  $wmi | Select-Object ProcessId, CommandLine | Format-List
+} else {
+  Write-Host '  WeaselServer.exe not in WMI list either'
+}
 
 Write-Host ''
-Write-Host '=== 6. 注册表看 alt+, 的 hotkey 注册 ===' -ForegroundColor Cyan
-$reg = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -ErrorAction SilentlyContinue
-Write-Host "  (此路径用于 boot,无关 hotkey)"
-$allUsers = Get-WmiObject -Class Win32_Process -Filter "Name='WeaselServer.exe'" -ErrorAction SilentlyContinue | Select-Object ProcessId,CommandLine
-if ($allUsers) {
-  $allUsers | Format-List
-} else {
-  Write-Host "  WeaselServer.exe not in WMI process list either"
-}
+Write-Host '=== 6. Done - please paste the 4 sections above ===' -ForegroundColor Green
