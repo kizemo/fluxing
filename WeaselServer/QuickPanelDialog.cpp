@@ -383,18 +383,25 @@ HRESULT QuickPanelDialog::CreateIconPaths() {
 
 // ===== T005: HitTest (返回 brand=−2, 5 按钮=0..4, 无=−1) =====
 int QuickPanelDialog::HitTest(int x, int y) {
-  // panel padding 8, brand 在最左 (4+56=60 宽含 margin)
-  // 假设 panel layout:brand(56) + 4 gap + 5 buttons(56 each)
-  const int padding = kPanelPadding;
-  int bx = padding;                   // brand 起点 x
-  int by = padding - 4;               // brand 起点 y(panel padding 减品牌略上)
-  if (x >= bx && x < bx + kBrandSize && y >= by && y < by + kBrandSize) return -2; // brand
+  // L70-bugfix v3: 物理像素坐标 (来自 WM_MOUSEMOVE 物理),需用 dpr 缩进,
+  // 否则 DPI != 1.0x 时点击坐标与 OnPaint 渲染位置不匹配
+  if (!s_pRT) return -1;
+  FLOAT dpiX = 96.0f, dpiY = 96.0f;
+  s_pRT->GetDpi(&dpiX, &dpiY);
+  const float dpr = dpiX / 96.0f;
+  const int padding = (int)(kPanelPadding * dpr);
+  const int brandSize = (int)(kBrandSize * dpr);
+  const int btnSize = (int)(kBtnSize * dpr);
+  const int btnGap = (int)(2 * dpr);
 
-  // 5 个按钮起点 x
-  const int buttonStartX = padding + kBrandSize + 4;  // 8 + 56 + 4 = 68
+  int bx = padding;
+  int by = padding - (int)(4 * dpr);
+  if (x >= bx && x < bx + brandSize && y >= by && y < by + brandSize) return -2;  // brand
+
+  const int buttonStartX = padding + brandSize + (int)(4 * dpr);
   for (int i = 0; i < 5; i++) {
-    int x0 = buttonStartX + i * (kBtnSize + 2);
-    if (x >= x0 && x < x0 + kBtnSize && y >= padding && y < padding + kBtnSize) return i;
+    int x0 = buttonStartX + i * (btnSize + btnGap);
+    if (x >= x0 && x < x0 + btnSize && y >= padding && y < padding + btnSize) return i;
   }
   return -1;
 }
@@ -663,9 +670,10 @@ void QuickPanelDialog::Show(bool currentFullwidth,
       x, y, physW, physH,
       NULL, NULL, GetModuleHandle(NULL), NULL);
   if (!s_hwnd) return;
-  // L70-bugfix v2: 不调 SetLayeredWindowAttributes(LWA_ALPHA),那个会覆写 per-pixel alpha 为整窗 alpha=240(几乎不透明)
-  // 改用 LWA_COLORKEY 0xFFFFFFFF 完全透明 + WS_EX_LAYERED 让 D2D 的 per-pixel alpha 生效
-  SetLayeredWindowAttributes(s_hwnd, RGB(255, 255, 255), 255, LWA_COLORKEY);
+  // L70-bugfix v3: 不调 SetLayeredWindowAttributes,让 DWM 默认 per-pixel alpha
+  // 之前 v0.19.0.2 的 LWA_COLORKEY(0xFFFFFFFF=白)会让 s_pBrushPressed(active 白)和
+  // 顶部 1px 高光被砍掉。现在不调,所有 RGB 通道保留,D2D per-pixel alpha 自动生效。
+  // SetLayeredWindowAttributes(s_hwnd, 0, 0, 0);  // 也可以这样写,但调用无意义
   ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
   InvalidateRect(s_hwnd, NULL, FALSE);
 }
