@@ -130,6 +130,15 @@ Function .onInit
   ;  (4) /T also kills child processes spawned by WeaselServer (e.g. fluxing panel).
   ExecWait 'taskkill /F /IM WeaselServer.exe /T'
 
+  ; L71-bugfix: ctfmon.exe + TextInputHost.exe 是 TSF 宿主进程,加载 weasel.dll
+  ; 作为 32-bit TSF TextInputProcessor(被 notepad/VSCode 等 32-bit 进程加载)。
+  ; L13 fix 只 kill WeaselServer.exe, 但 ctfmon/TextInputHost 持有的 weasel.dll
+  ; mapped handle 让 NSIS File "weasel.dll" 报"无法打开"错误。
+  ; 修:在 .onInit 一并 kill 这两个进程,确保安装时 weasel.dll 没有 mapped handle。
+  ; 用户重新登录后 ctfmon.exe + TextInputHost.exe 会被系统自动重启,无副作用。
+  ExecWait 'taskkill /F /IM ctfmon.exe /T'
+  ExecWait 'taskkill /F /IM TextInputHost.exe /T'
+
   ; L14: NSIS has built-in support for /LOG=<file> CLI flag. Users can pass
   ; /LOG=path\to\file.log to NSIS directly to get a full install log - the
   ; primary post-mortem tool for debugging install failures (especially the
@@ -330,6 +339,10 @@ program_files:
   File "rime-install-config.bat"
   File "start_service.bat"
   File "stop_service.bat"
+  ; L71-bugfix: 装新版前先 Delete 旧 weasel.dll。L13 + L71 的 ctfmon/TextInputHost
+  ; taskkill 应已释放 mapped handle,但若用户刚 kill 失败或 mapped handle 残留,
+  ; Delete 至少让 File 用新文件,避免"无法打开要写入的文件"错误。
+  Delete /REBOOTOK "$INSTDIR\weasel.dll"
   File "weasel.dll"
   ${If} ${RunningX64}
     ; L14-fix (spec 012 cleanup): weaselx64.dll is the 64-bit TSF TextInputProcessor.
