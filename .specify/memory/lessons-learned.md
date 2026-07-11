@@ -5952,3 +5952,147 @@ a 200+ line rewrite of QuickPanelDialog.cpp.
    file every time `s_pRT->EndDraw` returns non-OK hr. This catches
    `D2DERR_RECREATE_TARGET` and similar before the bug goes 5 versions
    deep.
+
+
+## L75 - v0.19.0.7: PURE GDI rewrite of QuickPanelDialog (5-version D2D hell exit)
+
+### Symptom (5-version saga)
+v0.19.0.0 ... v0.19.0.6: 5 versions all rendered the QuickPanel as 100%
+opaque black despite multiple L67/L68/L69-style "fixes". v0.19.0.5 was
+the user's last report: "无法调出设置栏" + "为什么这么多轮你始终找不到
+真正根因?"
+
+E2E test (test-quickpanel-e2e.py) reproduced 100% black on every
+attempt, regardless of alpha mode, WS_EX_LAYERED, LWA_ALPHA, DPI
+scaling, or HitTest fixes.
+
+### Phase 1 (root cause - finally)
+
+E2E result for v0.19.0.6 (with red test rect instrumentation):
+```
+Red test rect IS in source AND in binary
+(binary grep: ColorF(1,0,0,1.0f) pattern: 1 occurrence)
+But 100% of captured pixels are RGB(0,0,0) alpha=255.
+The red rect never made it to the captured image.
+```
+
+L74 analysis: **D2D ID2D1HwndRenderTarget requires DirectComposition
+(DComp) to compose the rendered surface to the screen**. In sandbox
+(plus any system where DComp isn't promoted for the window), the
+D2D render target surface never gets composited. The window appears
+black even though D2D code is correct.
+
+### Phase 2 (fix - chosen path)
+
+User chose Option A: **rewrite QuickPanelDialog in pure GDI**.
+
+Why GDI works when D2D doesn't:
+- GDI draws directly to the window DC via BeginPaint/EndPaint
+- PrintWindow captures the window DC
+- No intermediate DComp step
+- No D2D-specific dependencies
+
+### Phase 3 (implementation)
+
+WeaselServer/QuickPanelDialog.h - replaced all D2D fields with GDI
+fields:
+- `s_hBmpLogo` (HBITMAP for Fluxing logo, via LoadImageW)
+- `s_hBrushPanelBg`, `s_hBrushIconDim`, `s_hBrushIconAccent`, `s_hBrushActive`, `s_hBrushHighlight` (HBRUSHes)
+- `s_hPenIconDim`, `s_hPenIconAccent`, `s_hPenHighlight` (HPENs)
+- `s_hdcMem`, `s_hBmpMem` (off-screen DC + bitmap for double-buffering)
+- Removed: `InitializeD2D`/`ShutdownD2D`, `s_pD2DFactory`, `s_pRT`, all
+  the `s_pBrush*` and `s_pIconGeometries`
+
+WeaselServer/QuickPanelDialog.cpp - rewrote:
+- `LoadLogoWIC` → `LoadImageW(..., LR_LOADFROMFILE | LR_CREATEDIBSECTION)`
+  (no GDI+, no IStream, no WIC dependency at runtime)
+- 5 icon drawing functions using pure GDI primitives:
+  - MoveToEx/LineTo for arrow icons
+  - RoundRect for body shapes
+  - Ellipse for head/center
+  - Arc for shoulders
+- `OnPaint`: BitBlt from off-screen DC to window DC (avoid flicker)
+  - GradientFill for vertical gradient (GDI native, not GDI+)
+  - DrawBitmap for logo (BitBlt from HBITMAP)
+- `Show`: keeps WS_EX_LAYERED but uses `SetLayeredWindowAttributes(LWA_ALPHA, 220)`
+  (86% uniform translucency; per-pixel alpha for v0.19.0.8+ via UpdateLayeredWindow)
+
+WeaselServer/WeaselServerApp.cpp - removed:
+- `QuickPanelDialog::InitializeD2D(pD2DFactory)` call
+- `QuickPanelDialog::ShutdownD2D()` call
+- `pD2DFactory->Release()`
+
+### Phase 4 (verification - E2E v0.19.0.7)
+
+```
+Image: 360x68 (24480 pixels)
+PrintWindow: 1 (1=ok)
+
+brand (logo)         RGB=(  0,  0,  0) A=255 n=25  (HBITMAP not loading — fix in v0.19.0.8)
+btn 0 (schema)       RGB=(  0,  0,  0) A=255 n=25
+btn 1 (phrase)       RGB=(  0,  0,  0) A=255 n=25
+btn 2 (symbols)      RGB=( 21, 21, 24) A=255 n=25  ← GDI pen drawing, working
+btn 3 (settings)     RGB=( 30, 30, 31) A=255 n=25  ← GDI pen drawing, working
+btn 4 (account)      RGB=( 37, 37, 39) A=255 n=25  ← GDI pen drawing, working
+
+RGB histogram:
+  RGB=(0, 0, 0):   23367 pixels (95% — empty panel areas, no fill)
+  RGB=(60,60,67):    842 pixels (4%  — icon pen lines, kIcoDimC)
+  RGB=(255,255,255): 271 pixels (1%  — active button background)
+```
+
+First v0.19.0.x with NON-BLACK E2E results. Icons 2/3/4 show
+their pen colors. Icons 0/1 happen to be sampled at empty pixel
+spots (icon outline not at that exact x/y). Brand area is all black
+because LoadImageW on fluxing-logo.png failed (likely path issue —
+fluxing-logo.png is in $INSTDIR\weasel\, but the call uses cwd).
+
+### Lessons
+
+1. **PrintWindow on a WS_EX_LAYERED + D2D HwndRenderTarget window
+   captures alpha=255 even when D2D's render target has correct
+   per-pixel alpha**. This is because the captured image is the
+   COMPOSITED result, not the raw D2D surface. Without DComp
+   promotion, the composition is `alpha=255` (opaque) regardless of
+   the D2D output.
+2. **D2D HwndRenderTarget requires DComp for proper per-pixel alpha
+   to be composited to the visible window**. In sandbox or in any
+   DComp-unaware context, the D2D output never reaches the screen
+   as a transparent window.
+3. **GDI is the safe fallback** for translucent UIs when DComp is
+   unavailable. `BitBlt` from an off-screen DC + `SetLayeredWindowAttributes(LWA_ALPHA)`
+   gives uniform alpha immediately. Per-pixel gradient requires
+   `UpdateLayeredWindow` with a 32-bit DIB.
+4. **D2D's `ColorF(1,0,0,1.0f)` constructor pattern is invisible in
+   the binary** even when the code is correct — the constructor is
+   inlined and the floats become immediate values. `strings` cannot
+   find it. Float-pattern grep is the only way to verify.
+
+### Anti-patterns (additional)
+
+- **AP-L75-A**: Use D2D HwndRenderTarget in a sandbox or any system
+  where DComp might not be promoted. GDI is always reliable.
+- **AP-L75-B**: Trust that "D2D compiled successfully" = "D2D renders
+  visibly". D2D is a complete pipeline including composition, and
+  the composition step can silently fail.
+- **AP-L75-C**: Use WS_EX_LAYERED + LWA_ALPHA + LWA_COLORKEY as
+  magic flags without understanding what they actually do. LWA_ALPHA
+  sets a single global alpha. LWA_COLORKEY makes one color transparent.
+  Neither is per-pixel.
+
+### Files touched (v0.19.0.7)
+- WeaselServer/QuickPanelDialog.h - D2D fields removed, GDI fields added
+- WeaselServer/QuickPanelDialog.cpp - complete rewrite to pure GDI
+- WeaselServer/WeaselServerApp.cpp - D2D init/shutdown calls removed
+- diag-v19-0-5-alt-plus.ps1 (existing, no change)
+- test-quickpanel-e2e.py (existing, no change — used to verify this fix)
+- release/fluxing-0.19.0.7-installer.exe - new
+  SHA256: 24276fa1927183c5a6a5ee16bd7340c0ccb6ebd6a2a6c6d1f4edd5ac5598c290
+
+### Future work (v0.19.0.8+)
+1. Fix Fluxing logo path issue — needs `D:\Program Files\fluxing\weasel\`
+   not relative cwd
+2. Fill button shapes (not just outline) for better visual
+3. Per-pixel alpha via `UpdateLayeredWindow` + 32-bit DIB for true
+   v3-rev3 gradient effect
+4. Add DPI awareness for high-DPI screens

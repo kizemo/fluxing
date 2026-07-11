@@ -20,14 +20,8 @@ int WeaselServerApp::Run() {
   if (!m_server.Start())
     return -1;
 
-  // spec 070: T007 — 创建 D2D factory (QuickPanel 需要,共享)
-  ID2D1Factory* pD2DFactory = nullptr;
-  if (SUCCEEDED(D2D1CreateFactory(
-          D2D1_FACTORY_TYPE_SINGLE_THREADED,
-          __uuidof(ID2D1Factory),
-          (void**)&pD2DFactory))) {
-    QuickPanelDialog::InitializeD2D(pD2DFactory);
-  }
+  // spec 074 (L75): QuickPanel 改纯 GDI 后,不再需要 ID2D1Factory 注入
+  // QuickPanelDialog::InitializeD2D / ShutdownD2D 已删除
 
   // win_sparkle_set_appcast_url("http://localhost:8000/weasel/update/appcast.xml");
   win_sparkle_set_registry_path("Software\\Rime\\Weasel\\Updates");
@@ -71,9 +65,7 @@ int WeaselServerApp::Run() {
   tray_icon.RemoveIcon();
   win_sparkle_cleanup();
 
-  // spec 070 T007: 释放 QuickPanelDialog 的 D2D resources + 释放 factory
-  QuickPanelDialog::ShutdownD2D();
-  if (pD2DFactory) pD2DFactory->Release();
+  // spec 074 (L75): QuickPanel 改纯 GDI 后,不需要 ShutdownD2D 也没有 factory 释放
 
   return ret;
 }
