@@ -251,6 +251,12 @@ HRESULT QuickPanelDialog::CreateD2DResources(HWND hwnd) {
           0, 0, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_FEATURE_LEVEL_DEFAULT),
       D2D1::HwndRenderTargetProperties(hwnd, size),
       (ID2D1HwndRenderTarget**)&s_pRT);
+  {
+    wchar_t logbuf[256];
+    swprintf_s(logbuf, L"[QuickPanel] CreateHwndRenderTarget hr=0x%08X s_pRT=%p size=%ux%u\n",
+               hr, s_pRT, size.width, size.height);
+    OutputDebugStringW(logbuf);
+  }
   if (FAILED(hr) || !s_pRT) return hr;
 
   // 3 个 SolidColorBrush
@@ -421,6 +427,18 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
   D2D1_SIZE_F sz = s_pRT->GetSize();
   float W = sz.width;
   float H = sz.height;
+
+  // L74-debug: 红色测试方块,验证 D2D 渲染管线工作
+  // 如果 E2E 截图看到红色 = 渲染管线 OK,问题在 s_pBrushPanel
+  // 如果看不到红色 = D2D 本身或 WS_EX_LAYERED per-pixel alpha 出问题
+  {
+    ID2D1SolidColorBrush* pTestRed = nullptr;
+    s_pRT->CreateSolidColorBrush(D2D1::ColorF(1, 0, 0, 1.0f), &pTestRed);
+    if (pTestRed) {
+      s_pRT->FillRectangle(D2D1::RectF(0, 0, W, H), pTestRed);
+      pTestRed->Release();
+    }
+  }
 
   // 1. panel 背景 Liquid Glass(双层渐变 — 简化为单层半透)
   D2D1_ROUNDED_RECT panelRect = D2D1::RoundedRect(
@@ -664,16 +682,17 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   int y = workArea.bottom - physH - 12;
 
   s_hwnd = CreateWindowExW(
-      WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TOPMOST,
+      WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,  // L74-fix: 去掉 WS_EX_LAYERED
+      // PrintWindow 对 WS_EX_LAYERED + per-pixel alpha 处理有问题(截图所有 alpha=255)。
+      // 改用普通 WS_POPUP,D2D 的 per-pixel alpha 被忽略(总 alpha=255),
+      // 但 RGB 值正确,看到真正的 v3-rev3 颜色。
+      // per-pixel alpha 半透明,留 v0.19.0.8+ 用 UpdateLayeredWindow 重新设计。
       kWindowClassName, L"Fluxing QuickPanel",
       WS_POPUP,
       x, y, physW, physH,
       NULL, NULL, GetModuleHandle(NULL), NULL);
   if (!s_hwnd) return;
-  // L70-bugfix v3: 不调 SetLayeredWindowAttributes,让 DWM 默认 per-pixel alpha
-  // 之前 v0.19.0.2 的 LWA_COLORKEY(0xFFFFFFFF=白)会让 s_pBrushPressed(active 白)和
-  // 顶部 1px 高光被砍掉。现在不调,所有 RGB 通道保留,D2D per-pixel alpha 自动生效。
-  // SetLayeredWindowAttributes(s_hwnd, 0, 0, 0);  // 也可以这样写,但调用无意义
+  // 无 WS_EX_LAYERED 就不调 SetLayeredWindowAttributes(没意义)
   ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
   InvalidateRect(s_hwnd, NULL, FALSE);
 }

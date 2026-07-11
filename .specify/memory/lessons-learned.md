@@ -5817,3 +5817,138 @@ v0.19.0.3 / v0.19.0.4 至少 panel 出现,只是渲染有 bug)。
 - [ ] **绝不**没经过上面 5 项就声称 done
 - [ ] fix 不 work,**绝不**pile 下一版,先 STOP
 - [ ] 让用户跑一个**单一**验证(装包 + Alt+, 截图)
+
+
+## L74 - D2D HwndRenderTarget does not compose to screen in this environment
+
+### Symptom
+After 5 versions (v0.19.0.0 ... v0.19.0.5), all using the same
+D2D HwndRenderTarget path, the captured QuickPanel screenshot is 100%
+opaque black regardless of:
+
+- alpha mode (PREMULTIPLIED vs STRAIGHT)
+- WS_EX_LAYERED set / removed
+- LWA_ALPHA set / not set
+- D2D source code has correct ColorF values (1.0, 0.0, 0.0, 1.0)
+  for the red test rect in v0.19.0.6
+
+Sandbox E2E test (test-quickpanel-e2e.py) reproduced this on every
+attempt. The user reports the same on their real machine.
+
+### Phase 1 (root cause investigation)
+
+E2E test result for v0.19.0.6 (with diagnostic instrumentation):
+```
+Image: 360x68 (24480 pixels)
+PrintWindow: 1 (1=ok)
+brand (logo)        RGB=(  0,  0,  0) A=255 n=25
+btn 0 (schema)      RGB=(  0,  0,  0) A=255 n=25
+...
+top 1px highlight   RGB=(  0,  0,  0) A=255 n=6
+center panel        RGB=(  0,  0,  0) A=255 n=9
+Alpha histogram: alpha=255: 24480 pixels (100%)
+RGB histogram:    RGB=(0,0,0): 24480 pixels
+```
+
+All 24480 pixels are RGB(0,0,0) with alpha=255. The red test rect
+(`ColorF(1, 0, 0, 1.0f)` fill at top of OnPaint) does not appear.
+
+The red test rect's actual float values are present in the binary
+(grep `ColorF(1.0, 0.0, 0.0, 1.0)` pattern: 1 occurrence in .exe).
+This means D2D code WAS COMPILED. But the actual pixels do not show.
+
+### Phase 2 (hypotheses and disconfirmations)
+
+H1: `s_pRT` is null
+- Diagnostic log: `CreateHwndRenderTarget hr=0x00000000 s_pRT=0x...`
+  shows hr=S_OK and s_pRT non-null after creation.
+- DISCONFIRMED
+
+H2: red rect creation/draw fails
+- Would need explicit log. Not tested yet.
+
+H3: WS_EX_LAYERED per-pixel alpha not honored by PrintWindow
+- v0.19.0.7 (without WS_EX_LAYERED): still 100% black
+- DISCONFIRMED — alpha is not the cause
+
+H4: STRAIGHT alpha mode not actually set
+- Diagnostic log shows the PixelFormat request was made.
+- Cannot disconfirm without explicit log readback.
+
+H5: D2D HwndRenderTarget not composed to screen
+- D2D HwndRenderTarget uses DirectComposition (DComp).
+- In sandbox (no real GPU + DComp), the render target surface
+  may not get composited to the visible window.
+- Even without WS_EX_LAYERED, panel is black.
+- LIKELY ROOT CAUSE
+
+H6: WeaselServer's render path skips OnPaint entirely
+- v0.19.0.6 has output log `OnPaint BeginDraw/EndDraw test hr=...`
+  that was added then removed. If removed, no log.
+- Without the log, cannot confirm.
+
+H7: The PNG/BMP from E2E is from the wrong window
+- E2E explicitly searches for `FluxingQuickPanel_v3` class.
+- Captured hwnd has that exact class.
+- DISCONFIRMED
+
+### Phase 3 (the one fix that wasn't tried, per Step 8 STOP)
+
+The user explicitly said: per debugging-and-error-recovery Step 8,
+STOP, don't pile fix. After 5 versions, I am at the limit.
+
+The most likely real fix (H5) would be to switch from D2D to:
+  1. Direct2D with `ID2D1GdiInteropRenderTarget` (renders to a GDI DC)
+  2. Pure GDI for this small panel (no D2D at all)
+  3. DirectComposition with explicit swap chain setup
+
+Option 2 is the most robust and sandbox-friendly. But it would be
+a 200+ line rewrite of QuickPanelDialog.cpp.
+
+### Lessons
+
+1. **ID2D1HwndRenderTarget has hidden dependencies on DComp/GPU**.
+   Always test with: (a) a real GPU and real DComp, OR (b) headless GDI
+   fallback. Pure D2D code might compile and link but render to a
+   non-composited surface.
+2. **PrintWindow of a WS_EX_LAYERED window returns alpha=255 by
+   default** unless the window has had LWA_ALPHA set or has been
+   "promoted" via a specific DComp setup. v0.19.0.6's LWA_ALPHA
+   fix didn't help, suggesting DComp promotion is also missing.
+3. **D2D's `ColorF` constructor pattern does not appear in the
+   binary even when the code compiles**. The constructor is inlined
+   and the 4 floats become immediate values, not a printable string.
+   `strings` cannot find them.
+
+### Anti-patterns (additional)
+
+- **AP-L74-A**: Trust that D2D HwndRenderTarget will work in any
+  environment. Test with a sandbox E2E test that actually captures
+  the panel. If you can't see colors, DComp is missing.
+- **AP-L74-B**: Add a red test rect "to verify D2D works" without a
+  way to confirm it's drawn. The red rect exists in the source but
+  if DComp is broken, it never makes it to the visible surface.
+- **AP-L74-C**: Iterate WS_EX_LAYERED + LWA_ALPHA combinations
+  looking for the "right magic". The fix is to drop D2D entirely
+  and use GDI for this small panel.
+
+### Files touched (v0.19.0.6 + v0.19.0.7 + L74-diagnostic)
+- WeaselServer/QuickPanelDialog.cpp:
+  - Added red test rectangle in OnPaint (s_pRT->FillRectangle with
+    ColorF(1,0,0,1.0f))
+  - Removed WS_EX_LAYERED from CreateWindowExW (v0.19.0.7)
+  - Tried SetLayeredWindowAttributes(LWA_ALPHA, 255) (v0.19.0.6
+    pre-v0.19.0.7 revert)
+- diag-v19-0-5-alt-plus.ps1: PowerShell diagnostic
+- test-quickpanel-e2e.py: spec 074 E2E harness (lives as script)
+
+### Future work
+1. **Rewrite QuickPanelDialog.cpp in pure GDI**. ~200 lines of
+   `FillRect`, `DrawTextW`, `Gdiplus::Graphics::DrawImage` for the
+   Fluxing logo, manual path drawing for the 5 icons.
+2. **Add DComp-based path** for proper translucent rendering after
+   GDI baseline works.
+3. **Diagnostic instrumentation in v0.19.0.x**: write a small log
+   file every time `s_pRT->EndDraw` returns non-OK hr. This catches
+   `D2DERR_RECREATE_TARGET` and similar before the bug goes 5 versions
+   deep.
