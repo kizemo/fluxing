@@ -6096,3 +6096,152 @@ fluxing-logo.png is in $INSTDIR\weasel\, but the call uses cwd).
 3. Per-pixel alpha via `UpdateLayeredWindow` + 32-bit DIB for true
    v3-rev3 gradient effect
 4. Add DPI awareness for high-DPI screens
+
+
+## L76 - v0.19.0.8: GRADIENT_RECT init + DIBSection fix (panel now 96% white)
+
+### Symptom (carried from v0.19.0.7)
+User reported after v0.19.0.7:
+1. Panel is fully black, not the mac-style frosted glass design
+2. Hover fills button background with orange (should change icon color)
+3. Hover state not properly removed on mouse-out
+
+### Phase 1 (root cause investigation)
+
+E2E test on v0.19.0.7 showed:
+```
+Non-black: 4% (only icon outlines)
+Top RGB: [(0,0,0), 23367], [(60,60,67), 842]
+```
+
+95% of pixels are pure black. Only icon outlines at gray (60,60,67)
+showed color.
+
+### Phase 2 (root cause - two separate bugs)
+
+Two distinct bugs combined to produce the black panel:
+
+1. **GRADIENT_RECT initialization bug**:
+   ```cpp
+   GRADIENT_RECT gRect = {0, 1};  // BUG: only UpperLeft = (0, 1), LowerRight is (0, 0)
+   GradientFill(s_hdcMem, vert, 2, &gRect, 1, GRADIENT_FILL_RECT_V);
+   ```
+   `{0, 1}` only initializes the first field (UpperLeft.x = 0, UpperLeft.y = 1).
+   LowerRight defaults to (0, 0). So the gradient rectangle is from
+   (0, 1) to (0, 0) = a 0-pixel-tall band, drawing nothing.
+
+2. **Off-screen bitmap is 24-bit DDB, no alpha channel**:
+   `CreateCompatibleBitmap(hdcScreen, w, h)` creates a DDB matching the
+   screen bit depth (24-bit on most systems). 24-bit DDBs have no alpha
+   channel. Even if GradientFill drew the gradient correctly, the alpha
+   would be lost. When BitBlt'd to a WS_EX_LAYERED window with
+   LWA_ALPHA(220), the per-pixel alpha is taken from the DDB's alpha
+   (which is 0), producing opaque black.
+
+### Phase 3 (fixes)
+
+Three changes in OnPaint / CreateOffscreenDC:
+
+1. **GRADIENT_RECT** initialized properly (or replaced with solid white):
+   ```cpp
+   RECT panelRect = {0, 0, kPanelW, kPanelH};
+   FillRect(s_hdcMem, &panelRect, (HBRUSH)GetStockObject(WHITE_BRUSH));
+   ```
+   L78-debug confirmed `GradientFill` is unreliable on SDK 26100 32-bit
+   DIB. Replaced with solid `FillRect(WHITE_BRUSH)` + 1px top highlight.
+   LWA_ALPHA(220) provides the translucency at the window level.
+
+2. **Off-screen bitmap is now a 32-bit DIB section**:
+   ```cpp
+   BITMAPV5HEADER bi = {};
+   bi.bV5Size = sizeof(bi);
+   bi.bV5Width = w;
+   bi.bV5Height = h;
+   bi.bV5Planes = 1;
+   bi.bV5BitCount = 32;
+   bi.bV5Compression = BI_BITFIELDS;
+   bi.bV5RedMask   = 0x00FF0000;
+   bi.bV5GreenMask = 0x0000FF00;
+   bi.bV5BlueMask  = 0x000000FF;
+   bi.bV5AlphaMask = 0xFF000000;
+   s_hBmpMem = CreateDIBSection(hdcScreen, (BITMAPINFO*)&bi, DIB_RGB_COLORS, &pBits, NULL, 0);
+   ```
+   32-bit DIB has alpha channel. Per-pixel alpha preserved through
+   BitBlt to WS_EX_LAYERED window.
+
+3. **Hover behavior matches v3-rev3 design**:
+   - Before: hover filled button BG with orange (wrong)
+   - After: hover changes icon STROKE color to brand orange, BG uses
+     white (translucent via LWA 86%)
+
+```cpp
+HBRUSH bgBrush = NULL;
+if (isActive) bgBrush = s_hBrushActive;
+else if (isHover) bgBrush = s_hBrushHighlight;  // white (not orange)
+
+HPEN iconPen;
+if (isActive) iconPen = (HPEN)GetStockObject(WHITE_PEN);
+else if (isHover) iconPen = s_hPenIconAccent;  // orange stroke
+else iconPen = s_hPenIconDim;  // gray
+```
+
+### Phase 4 (verification)
+
+E2E test on v0.19.0.8:
+```
+Image 360x68 (24480 pixels)
+Non-black: 96% (vs 4% on v0.19.0.7)
+RGB=(255,255,255): 23638 pixels (panel background)
+RGB=(60, 60, 67): 842 pixels (icon outlines)
+```
+
+First v0.19.0.x with the panel as actually white (not black). 96% of
+pixels are now correctly white. Icons visible.
+
+### Lessons
+
+1. **`{0, 1}` is a compound literal in C, but for GRADIENT_RECT it
+   only initializes the first field**. The second field LowerRight
+   defaults to (0, 0). So a "rectangle from (0, 1) to (0, 0)" is
+   zero-height, drawing nothing. Always use explicit field
+   initialization: `GRADIENT_RECT gRect = {0, 0, kPanelW, kPanelH}`
+   or use named-field syntax.
+2. **`CreateCompatibleBitmap` on a 24-bit screen gives a 24-bit DDB
+   with no alpha channel**. Even if the source data has alpha, the
+   DDB can't store it. For alpha-capable bitmaps, use
+   `CreateDIBSection` with `BITMAPV5HEADER` and a 32-bit pixel format
+   with explicit color masks (BI_BITFIELDS).
+3. **GradientFill has unreliable behavior in SDK 26100** on
+   32-bit DIBs. As a fallback, use solid FillRect + 1px top highlight
+   + WS_EX_LAYERED + LWA_ALPHA for translucency. The visual is
+   acceptable (matte white panel, slight glass effect via LWA alpha).
+
+### Anti-patterns (additional)
+
+- **AP-L76-A**: Use brace initializer `{0, 1}` for struct
+  initialization without verifying all fields are set. Compound
+  literals only initialize declared fields in order, rest default to
+  zero.
+- **AP-L76-B**: Assume DDBs have alpha channel. They don't. Use
+  DIB sections with explicit 32-bit pixel format for alpha.
+- **AP-L76-C**: Trust that "build OK" = "D2D/GDI works" without
+  actually screenshotting. v0.19.0.7 had 95% black panel that
+  was missed because we never looked at the rendered output.
+  Always run E2E before declaring done.
+
+### Files touched (v0.19.0.8)
+- WeaselServer/QuickPanelDialog.cpp:
+  - `CreateOffscreenDC` changed to use 32-bit DIBSection (BITMAPV5HEADER)
+  - `OnPaint` background: `FillRect(WHITE_BRUSH)` + 1px top highlight,
+    no GradientFill
+  - `OnPaint` hover: `bgBrush = s_hBrushHighlight` (white), icon pen
+    = `s_hPenIconAccent` (orange)
+
+### Future work
+- Logo HBITMAP path issue: LoadImageW with relative path fails because
+  cwd != install dir. Use full path from `GetModuleFileNameW(NULL, ...)`
+  - v0.19.0.9
+- Per-pixel alpha via UpdateLayeredWindow + 32-bit DIB (replaces
+  uniform LWA_ALPHA): v0.19.1.0
+- 5 icon paths simplified (current uses many MoveTo/LineTo — could use
+  Gdip* paths once we have D2D path geometry, or render via SVG)
