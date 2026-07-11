@@ -61,6 +61,18 @@ QuickPanelDialog::OnClick  QuickPanelDialog::s_onSymbols;
 QuickPanelDialog::OnClick  QuickPanelDialog::s_onLogin;
 
 static std::unique_ptr<Image> s_logo;
+// L68-fix: GDI+ Bitmap internally caches the IStream pointer for lazy
+// pixel-decode (defers actual pixel read until first DrawImage). The v0.18.41.2
+// L67-fix Released() the stream immediately, leaving the IStream vtable
+// dangling. First WM_PAINT -> DoPaint -> DrawImage -> Bitmap lazy-decode via
+// freed IStream = Use-After-Free -> heap corruption -> next heap operation
+// (NtSetValueKey -> RtlIsZeroMemory) detects STATUS_HEAP_CORRUPTION.
+// Confirmed via cdb analysis of the Windows-LocalCrashDump
+// WeaselServer.exe.22688.dmp (2026-07-11 09:04, v0.18.41.2).
+//
+// Fix: hold the IStream alive for the entire lifetime of the Bitmap. Release
+// the stream ONLY when we release the bitmap (OnDestroy/Hide).
+static IStream* s_logo_stream = NULL;
 
 // ─── Logo resource loading ────────────────────────────────────────────
 
@@ -76,30 +88,40 @@ void LoadLogo() {
   DWORD size = SizeofResource(NULL, hrsrc);
   if (!data || size == 0) return;
 
-  // L67-fix: Resource HGLOBAL is process-lifetime (held by the .exe module's
-  // resource table). Wrap it with fDeleteOnRelease=FALSE so stream->Release()
-  // does NOT free the underlying buffer. After Bitmap construction, force
-  // eager decode via GetLastStatus() + GetWidth() / GetHeight() so all pixels
-  // are materialized into GDI+ internal buffers. Without the eager decode,
-  // GDI+ can defer parsing until the first DrawImage call, by which time
-  // our IStream pointer may already be invalid (Use-After-Free on the IStream
-  // COM object's vtable). One concrete chain we observed in the v0.18.34.0
-  // minidump: cdb resolved the crash as WeaselServer!_sqrt_common+0xb0b6
-  // with ecx=0x027318f8 (freed heap pointer). The chain (parse_command_line
-  // -> count_env_block -> __crt_strtox::multiply -> std::num_put::do_put)
-  // suggests the stack was corrupted by an earlier Use-After-Free; the
-  // GDI+ Bitmap lazy-decode is a strong candidate for that earlier UAF.
-  //
-  // See .specify/memory/lessons-learned.md L67 for full analysis.
+  // L68-fix: Allocate a fresh HGLOBAL with fDeleteOnRelease=TRUE so the
+  // IStream owns and frees its own memory (we are NOT using the resource
+  // HGLOBAL here because LockResource returns a pointer that is valid only
+  // while the .exe module is loaded; we still hold s_logo for the process
+  // lifetime so this is safe, but copying into an owned HGLOBAL lets the
+  // stream manage its own lifetime cleanly).
   IStream* stream = NULL;
-  if (FAILED(CreateStreamOnHGlobal(hglob, FALSE, &stream))) return;
+  if (FAILED(CreateStreamOnHGlobal(NULL, TRUE, &stream))) return;
+  // Copy resource bytes into the stream's owned HGLOBAL.
+  ULONG written = 0;
+  if (FAILED(stream->Write(data, size, &written)) || written != size) {
+    stream->Release();
+    return;
+  }
+  LARGE_INTEGER zero = {0};
+  stream->Seek(zero, STREAM_SEEK_SET, NULL);
 
+  // L68: Pass the IStream to Bitmap. Bitmap ctor stores the IStream pointer
+  // for lazy pixel decode. DO NOT Release the stream here - keep it alive
+  // alongside the Bitmap. (v0.18.41.2 L67-fix Released() here, which is the
+  // bug we're fixing now.)
   std::unique_ptr<Bitmap> bmp(new Bitmap(stream));
-  stream->Release();
+  if (bmp->GetLastStatus() != Gdiplus::Ok) {
+    // Bitmap failed to parse; release stream ourselves.
+    stream->Release();
+    return;
+  }
 
-  if (bmp->GetLastStatus() != Ok || bmp->GetWidth() == 0 || bmp->GetHeight() == 0)
-    return;  // decode failed; leave s_logo null, draw code will skip
+  // Bitmap is valid. Hand the stream to s_logo_stream so it stays alive for
+  // the lifetime of the bitmap. The bitmap will Release the stream when
+  // it's destroyed (no, actually GDI+ does NOT release the stream - we own
+  // it until we destroy the bitmap).
   s_logo = std::move(bmp);
+  s_logo_stream = stream;
 }
 
 BOOL RegisterClassOnce(HINSTANCE hInst) {
@@ -634,6 +656,13 @@ LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
   s_mouseTracked = false;
   if (s_hwnd == hwnd) s_hwnd = NULL;
   s_logo.reset();
+  // L68-fix: release the IStream now that the Bitmap (its only reference) is
+  // gone. Releasing the stream before destroying the Bitmap would re-introduce
+  // the UAF (L67-fix bug).
+  if (s_logo_stream) {
+    s_logo_stream->Release();
+    s_logo_stream = NULL;
+  }
   return 0;
 }
 

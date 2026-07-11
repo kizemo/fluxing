@@ -4954,3 +4954,141 @@ syntax visually validated) but need a real xmake run locally.
 - **AP-L67-C**: Diagnose a recurring crash without ever looking at a
   crash dump. WER auto-cleans WER dumps; reproduce + grab them yourself
   via SetUnhandledExceptionFilter BEFORE WER can.
+
+
+---
+
+## L68 - spec 068 v0.18.41.3: GDI+ IStream MUST stay alive alongside Bitmap (correct fix for L67)
+
+### Symptom (carried from L67 / L66)
+After v0.18.41.2 install: Alt+, briefly opens QuickPanel, panel disappears.
+Switch IME away and back: cannot input Chinese. WeaselServer.exe dies
+shortly after Alt+, press.
+
+### Phase 1 (root cause investigation)
+
+After L67-fix shipped as v0.18.41.2 (commit 5eacef7a + b0a7759), the
+symptom persisted. Per systematic-debugging Phase 4, dump files would tell
+the truth. The user's `~/AppData/Local/fluxing/crash/` did NOT exist
+(my L67 SetUnhandledExceptionFilter never fired), but Windows
+`~/AppData/Local/CrashDumps/` had full 17MB dumps automatically captured.
+
+Dumps available (Windows-LocalCrashDumps, dated 2026-07-11 09:04):
+  WeaselServer.exe.22688.dmp   <- v0.18.41.2, freshly triggered by user
+
+### Phase 2 (cdb analysis with PDB-loaded symbols)
+
+GUID: e752bb355eacf54ab02ac0902d92d813, age=1 (verified v0.18.41.2 build)
+
+Exception: `0xC0000374 = STATUS_HEAP_CORRUPTION`
+EIP: ntdll!RtlIsZeroMemory+0xff (inside RtlpNtSetValueKey)
+
+**Real call chain (with PDB symbols resolved):**
+```
+wWinMain+0x4a2
+  WeaselServerApp::Run+0x11b
+    weasel::ServerImpl::Run+0x1bb
+      ATL WindowProc
+        weasel::ServerImpl::ProcessWindowMessage+0x141
+          weasel::ServerImpl::OnCommand+0x7d  <-- Alt+, post WM_COMMAND
+            std::_Func_impl_no_alloc<bool (lambda)>+0x1b
+              QuickPanelDialog::ToggleMode+0x13a
+                QuickPanelDialog::EnableAlwaysShowMode+0x2d9
+                  QuickPanelDialog::LoadLogo
+                    00b36693 call [ecx+8]    <- IStream::Release()  <-- BUG
+                  Gdiplus::Bitmap vftable
+                (next-frame)
+              (next-frame)
+            (next-frame)
+          KERNELBASE+0x17b810           <- RegSetValueEx
+        ntdll!RtlpNtSetValueKey          <- registry write
+      RtlIsZeroMemory+0xff              <- CRASH (heap corruption detected)
+```
+
+Disassembly at LoadLogo's IStream::Release (00b36693) and subsequent
+`mov [esi+8],0; test eax,eax; jne +0x152` (00b36696-00b366a4) confirms:
+Bitmap stores IStream pointer internally for lazy pixel-decode. Releasing
+the stream RIGHT after Bitmap ctor leaves the IStream vtable dangling.
+First WM_PAINT -> DoPaint -> DrawImage -> Bitmap lazy pixel decode
+through freed IStream vtable = Use-After-Free on COM vtable = heap
+corruption. Subsequent heap operation (here: NtSetValueKey during
+class registration or layered-window setup) detects corruption via
+RtlIsZeroMemory and crashes with STATUS_HEAP_CORRUPTION.
+
+### L67 was wrong
+My previous "fix" (commit 1045ee41 + b0a7759) used `fDeleteOnRelease=FALSE`
+and "GetLastStatus/GetWidth/GetHeight to force eager decode". This was
+INSufficient:
+  - GetLastStatus/GetWidth/GetHeight only force header-level decode
+  - GDI+ Bitmap caches IStream COM pointer for pixel-level lazy decode
+  - stream->Release() = UAF on COM vtable at first paint
+
+### Phase 3 (minimal fix)
+Hold the IStream alive for the ENTIRE lifetime of the Bitmap. Release
+the stream ONLY when the Bitmap is destroyed (OnDestroy/Hide).
+
+Code change in QuickPanelDialog.cpp::LoadLogo + OnDestroy:
+  - New `static IStream* s_logo_stream = NULL;`
+  - LoadLogo: after Bitmap ctor succeeds, save stream pointer
+    `s_logo_stream = stream;`. Do NOT release the stream.
+  - OnDestroy: after `s_logo.reset()`, also `s_logo_stream->Release()`.
+
+### Phase 4 (verify)
+Rebuilt as v0.18.41.3, installer SHA256:
+  5196c18d818648945836b5c96420cb4bec9ff6d9c771dc67ee6447f57df52521
+
+User must install, retest the Alt+, scenario, and confirm:
+  - Panel stays visible after fade
+  - WeaselServer.exe stays alive in tasklist
+  - Switch IME away and back, can still type Chinese
+  - %LOCALAPPDATA%luxing\crash\ does NOT accumulate new dumps
+
+### Lessons (numbered)
+1. **GDI+ Bitmap(IStream*) caches the IStream internally for lazy
+   decode.** Releasing the stream in your code = UAF on COM vtable at
+   first DrawImage. This is documented GDI+ behavior; the "eager decode"
+   idiom (GetWidth/GetHeight) is NOT sufficient.
+2. **The `fDeleteOnRelease` parameter does NOT affect IStream lifetime**
+   - it only controls whether the underlying HGLOBAL is freed. The IStream
+   COM object itself follows standard COM refcount. You must hold a
+   reference for the entire consumer lifetime.
+3. **`/GS` cookie check is the SECOND line of defense.** When /GS
+   misses a UAF, the corruption propagates until something validates
+   heap metadata (RtlIsZeroMemory here, free() elsewhere). The crash site
+   is NEVER the actual bug site.
+4. **When dump dir doesn't exist but Windows LocalCrashDumps does**,
+   the SET handlers are never installed (handler bug), OR they run in
+   a process where SetUnhandledExceptionFilter was already called and
+   consumed. Either way, Windows' built-in LocalDumps registry key
+   (configured by user/admin) can capture the dump for free.
+5. **cdb's `ln` with bad unwind info is misleading.** Without PDB-
+   loaded unwind tables, cdb stack walker labels frames by CLOSEST
+   symbol, not by actual return address. The `IsFullwidth+0xa4` label
+   was wrong - actual function was EnableAlwaysShowMode. ALWAYS
+   verify with `.reload /f` + `ln <addr>` after loading symbols.
+
+### Anti-patterns
+- **AP-L68-A (boss-level)**: Call `stream->Release()` immediately after
+  `new Bitmap(stream)` because "the bitmap read everything already".
+  GDI+ Bitmap does NOT fully read the stream in its constructor. ALWAYS
+  hold the IStream alive alongside the Bitmap for the bitmap's entire
+  lifetime, or use a non-stream-based construction (e.g. read bytes
+  into a vector and construct from buffer).
+- **AP-L68-B**: Trust `GetLastStatus() + GetWidth() + GetHeight()` to
+  force eager decode. These only force the metadata decode. Use
+  LockBits/UnlockBits or LockBits(Read) to force pixel decode.
+- **AP-L68-C**: Ship a crash handler that doesn't write to disk.
+  Verify by checking the dump directory exists AFTER first install.
+- **AP-L68-D**: Trust cdb's stack labels without PDB symbols.
+  Load symbols FIRST, then read labels.
+
+### Files touched (v0.18.41.3)
+- WeaselServer/QuickPanelDialog.cpp
+    LoadLogo: stream->Release() REMOVED. s_logo_stream holds the
+    IStream for the lifetime of the bitmap.
+    OnDestroy: s_logo_stream->Release() added.
+- env.bat (gitignored, local only): WEASEL_BUILD 2 -> 3
+- build-via-py.py (gitignored): updated to v0.18.41.3
+- output/Win32/WeaselServer.exe + pdb: rebuilt from above
+- output/archives/fluxing-0.18.41.3-installer.exe: new
+- release/fluxing-0.18.41.3-installer.exe: copy of above
