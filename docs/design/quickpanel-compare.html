@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>QuickPanel 5 版设计对比 · Fluxing v0.19</title>
+<style>
+  body {
+    margin: 0;
+    padding: 24px;
+    background: #1a1a1f;
+    color: #e8e8ec;
+    font-family: -apple-system, "PingFang SC", sans-serif;
+  }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
+  .sub { color: #999; font-size: 13px; margin-bottom: 28px; line-height: 1.6; }
+  .sub code { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 3px; font-family: ui-monospace, monospace; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+  .card {
+    background: #2a2a32;
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .card .frame {
+    height: 200px;
+    background:
+      linear-gradient(135deg, #ffd9b3 0%, #c5b8e8 60%, #b8c5e8 100%);
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+    position: relative;
+  }
+  .card.v4 .frame { background: linear-gradient(180deg, #fafafa 0%, #ececec 100%); }
+  .card.v2 .frame { background: linear-gradient(135deg, #f3e7fd 0%, #fde7f3 100%); }
+  .card.v5 .frame { background: linear-gradient(135deg, #fff5e8 0%, #f0e8ff 100%); }
+  .card.v3 .frame {
+    background:
+      radial-gradient(circle at 20% 30%, #ff8a4c 0%, transparent 40%),
+      radial-gradient(circle at 80% 70%, #9b51e0 0%, transparent 40%),
+      linear-gradient(135deg, #ffd9b3 0%, #b8c5e8 100%);
+  }
+  .card .meta { padding: 14px 16px; }
+  .card .meta h2 { font-size: 14px; margin: 0 0 6px; font-weight: 600; }
+  .card .meta .tech {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px; color: #b4b4d0; margin-bottom: 8px; line-height: 1.5;
+  }
+  .card .meta .why {
+    font-size: 12px; color: #cfcfdc; line-height: 1.5; margin-bottom: 8px;
+  }
+  .card .meta .dim { color: #7a7a8e; font-size: 11px; }
+  .card .meta .dim b { color: #e0e0f0; font-weight: 600; }
+  .card a {
+    display: inline-block;
+    color: #FFA070;
+    text-decoration: none;
+    font-size: 12px;
+    padding: 4px 10px;
+    border: 1px solid rgba(255,160,112,0.40);
+    border-radius: 6px;
+    transition: background-color 150ms;
+  }
+  .card a:hover { background: rgba(255,160,112,0.16); }
+
+  /* 风险标注 */
+  .legend {
+    background: #2a2a32;
+    border-radius: 14px;
+    padding: 18px 22px;
+    margin-bottom: 24px;
+    border-left: 4px solid #FF5F31;
+  }
+  .legend h3 { margin: 0 0 8px; font-size: 14px; color: #FFA070; }
+  .legend p { margin: 0 0 8px; font-size: 12.5px; color: #d8d8e8; line-height: 1.6; }
+  .legend code { background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 3px; font-family: ui-monospace, monospace; font-size: 12px; }
+
+  /* 在 frame 里嵌入缩小版预览 */
+  .card.v1 .frame .mini { transform: scale(0.95); }
+  .card.v2 .frame .mini { transform: scale(0.85); }
+  .card.v3 .frame .mini { transform: scale(0.85); }
+  .card.v4 .frame .mini { transform: scale(1.0); }
+  .card.v5 .frame .mini { transform: scale(0.95); }
+
+  .verdict {
+    background: #1e2a1e;
+    border-left: 4px solid #5BD173;
+    padding: 16px 22px;
+    border-radius: 0 14px 14px 0;
+    margin-bottom: 24px;
+  }
+  .verdict h3 { margin: 0 0 8px; font-size: 14px; color: #B6F5C2; }
+  .verdict p { margin: 0; font-size: 12.5px; color: #d0e8d5; line-height: 1.6; }
+</style>
+</head>
+<body>
+  <h1>QuickPanel 5 版设计对比 · Fluxing v0.19</h1>
+  <div class="sub">
+    <b>约束条件</b>(来自 L67-L69 教训):新设计必须避开 GDI+ <code>Bitmap(IStream*)</code> 生命周期雷区。<br>
+    <b>本对比</b>展示 5 种视觉方案,每种都明确标注实现技术栈与避雷路径。
+  </div>
+
+  <div class="legend">
+    <h3>为什么 QuickPanel 之前一直在崩</h3>
+    <p>v0.18.29.0 - v0.18.41.3 共 4 个版本都在用 GDI+ <code>Bitmap(IStream*)</code> 渲染 logo。
+       GDI+ 内部为 lazy pixel-decode 缓存 IStream 指针;在 <code>stream->Release()</code> 后,
+       首次 paint 触发 vtable UAF → heap corruption → 后续任意堆操作(NtSetValueKey / RtlDeleteTimer)
+       检测损坏 → STATUS_HEAP_CORRUPTION → WeaselServer.exe 退出 → TSF pipe 断开 → 用户无法输入中文。
+    </p>
+    <p><b>5 版全部用 Direct2D 或原生 GDI,完全不用 GDI+ Bitmap/IStream。</b></p>
+  </div>
+
+  <div class="grid">
+    <!-- v1 -->
+    <div class="card v1">
+      <div class="frame">
+        <iframe src="quickpanel-v1/index.html" width="320" height="100" frameborder="0" style="border:0; background:transparent;"></iframe>
+      </div>
+      <div class="meta">
+        <h2>v1 · macOS Big Sur 透明胶囊</h2>
+        <div class="tech">D2D RadialGradientBrush<br>+ DwmExtendFrameIntoClientArea<br>(毛玻璃)</div>
+        <div class="why">横排 6 入口 + logo 区。最小占地、最快识别、贴右下角不抢戏。</div>
+        <div class="dim"><b>尺寸:</b>280 × 44px<br><b>推荐:</b> Mac 用户 / 简洁优先</div>
+        <a href="quickpanel-v1/index.html" target="_blank">打开 →</a>
+      </div>
+    </div>
+
+    <!-- v2 -->
+    <div class="card v2">
+      <div class="frame">
+        <iframe src="quickpanel-v2/index.html" width="320" height="100" frameborder="0" style="border:0; background:transparent;"></iframe>
+      </div>
+      <div class="meta">
+        <h2>v2 · Material You 3 卡片</h2>
+        <div class="tech">D2D SolidColorBrush<br>+ IDWrite 小标签</div>
+        <div class="why">每个按钮带中文小标签 + filled tonal 按下态。可读性最高。</div>
+        <div class="dim"><b>尺寸:</b>336 × 64px<br><b>推荐:</b> Android 习惯用户 / 标签必要</div>
+        <a href="quickpanel-v2/index.html" target="_blank">打开 →</a>
+      </div>
+    </div>
+
+    <!-- v3 -->
+    <div class="card v3">
+      <div class="frame">
+        <iframe src="quickpanel-v3/index.html" width="440" height="120" frameborder="0" style="border:0; background:transparent;"></iframe>
+      </div>
+      <div class="meta">
+        <h2>v3 · Liquid Glass 强玻璃 <span style="color:#FFA070;font-size:11px">[rev2]</span></h2>
+        <div class="tech">D2D LinearGradientBrush<br>+ 真火流猩 logo (SVG)<br>+ 38px 右侧图标<br>+ hover 变品牌橙</div>
+        <div class="why">品牌 logo 当第一公民 / 5 按钮图标 38px / 键盘/箭头/气泡各不同形。</div>
+        <div class="dim"><b>尺寸:</b>392 × 68px<br><b>推荐:</b> Win 11 / 旗舰视觉 + 品牌露出</div>
+        <a href="quickpanel-v3/index.html" target="_blank">打开 →</a>
+      </div>
+    </div>
+
+    <!-- v4 -->
+    <div class="card v4">
+      <div class="frame">
+        <iframe src="quickpanel-v4/index.html" width="320" height="100" frameborder="0" style="border:0; background:transparent;"></iframe>
+      </div>
+      <div class="meta">
+        <h2>v4 · Pure Icon Row (Win32 GDI)</h2>
+        <div class="tech"><b>Win32 GDI only</b><br>FillRect + DrawIcon + DrawText</div>
+        <div class="why">极窄、极稳。<b>零 D2D 零 GDI+</b>,雷区概率 = 0。</div>
+        <div class="dim"><b>尺寸:</b>196 × 30px<br><b>推荐:</b> 稳定性优先 / 低端 GPU / Server Core</div>
+        <a href="quickpanel-v4/index.html" target="_blank">打开 →</a>
+      </div>
+    </div>
+
+    <!-- v5 -->
+    <div class="card v5">
+      <div class="frame">
+        <iframe src="quickpanel-v5/index.html" width="320" height="200" frameborder="0" style="border:0; background:transparent;"></iframe>
+      </div>
+      <div class="meta">
+        <h2>v5 · Branded Bento Grid 2×3</h2>
+        <div class="tech">D2D LinearGradientBrush<br>+ IDWrite + manual grid layout</div>
+        <div class="why">把 Fluxing logo 当第一公民。最显眼的品牌露出。</div>
+        <div class="dim"><b>尺寸:</b>280 × 138px<br><b>推荐:</b> 重视品牌曝光 / 大屏用户</div>
+        <a href="quickpanel-v5/index.html" target="_blank">打开 →</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <h3>评审建议</h3>
+    <p>
+      <b>v4 (Pure Icon Row / GDI)</b> 作为 <b>v0.19.0.0 ship 切片</b> 优先:<br>
+      - 完全脱离 GDI+ Bitmap/IStream 雷区,L67/L68/L69 历史问题零概率复发<br>
+      - 实现只需 Win32 GDI + WM_PAINT,~150 行 C++,无 Direct2D 依赖<br>
+      - 编译产物小、运行稳定、跨 Win 10/11 视觉一致<br>
+      v1 / v3 / v5 是 <b>v0.19.1+ 设计升级</b> 备选,v2 在中文标签需求更强时考虑。
+    </p>
+  </div>
+</body>
+</html>

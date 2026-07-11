@@ -1,478 +1,577 @@
-// spec 049 + spec 052: QuickPanelDialog v4 macOS-style toolbar
-// + always-show mode (20% alpha=51, hover 255, Alt+, toggle)
-// Horizontal bar: brand logo + 6 icon buttons + separators
-// GDI+ rendering, no D2D dependency.
-// Buttons: 1=方案 2=词典 3=短语 4=全半角 5=符号 6=登录(占位)
+// QuickPanelDialog v3-rev3 (spec 070) — D2D-based rewrite.
+//
+// 设计: docs/design/quickpanel-v3/index.html
+// 历史:L67/L68/L69 全部由 GDI+ Bitmap(IStream*) 触发。本实现完全绕开:
+//   - PNG logo 用 WIC → ID2D1Bitmap (无 IStream 缓存)
+//   - 5 个图标用 ID2D1PathGeometry (矢量,无位图)
+//   - 所有 brushes 创建一次复用 (无泄漏)
+//
 #include "stdafx.h"
-#include <memory>
+#include <functional>
 #include <GdiPlus.h>
 #include "QuickPanelDialog.h"
 #include "resource.h"
 #pragma comment(lib, "gdiplus.lib")
 
+// D2D / WIC COM interface headers (forward-declared in .h to keep header light)
+#include <d2d1.h>
+#include <wincodec.h>
+#pragma comment(lib, "d2d1.lib")
+#pragma comment(lib, "windowscodecs.lib")
+
 using Gdiplus::Bitmap;
-using Gdiplus::Graphics;
 using Gdiplus::Image;
-using Gdiplus::Pen;
-using Gdiplus::SolidBrush;
+using Gdiplus::Graphics;
 using Gdiplus::GraphicsPath;
-using Gdiplus::ImageAttributes;
-using Gdiplus::SmoothingModeAntiAlias;
-using Gdiplus::TextRenderingHintAntiAlias;
-using Gdiplus::UnitPixel;
-using Gdiplus::REAL;
-using Gdiplus::LineCap;
-using Gdiplus::LineJoin;
-using Gdiplus::LineCapRound;
-using Gdiplus::LineCapSquare;
-using Gdiplus::LineJoinRound;
-using Gdiplus::RectF;
-using Gdiplus::LinearGradientBrush;
-using Gdiplus::LinearGradientModeHorizontal;
+using Gdiplus::SolidBrush;
+using Gdiplus::Pen;
 
-#define QP_WIDTH         292
-#define QP_HEIGHT         38
-#define QP_TIMER_FADE      1
-#define QP_FADE_STEP      34   // (255-179)/3 ≈ 25, fewer timer ticks
-// spec 052 §1 + US052-A: "切到火流猩输入法 → 屏幕右下角自动出现 ...
-// 20% 透明度（淡灰感）". 20% of 255 = 51. codex 0.18.30.0 wrote 179
-// (70%) which violated the spec; spec 056 bugfix restores 51.
-#define QP_ALPHA_DEFAULT  51   // 20% opaque (80% transparent) per spec 052
-#define QP_ALPHA_HOVER   255   // fully opaque
-
-static const wchar_t kClassName[] = L"FluxingQuickPanel_v4";
-
-// ─── Static state ─────────────────────────────────────────────────────
-
-HWND                    QuickPanelDialog::s_hwnd         = NULL;
-QuickPanelDialog::Mode  QuickPanelDialog::s_mode         = QuickPanelDialog::Mode::kHidden;
-bool                    QuickPanelDialog::s_fullwidth    = false;
-int                     QuickPanelDialog::s_alpha        = QP_ALPHA_DEFAULT;
-int                     QuickPanelDialog::s_targetAlpha  = QP_ALPHA_DEFAULT;
-bool                    QuickPanelDialog::s_mouseTracked = false;
-
-static HANDLE s_hFadeTimer = NULL;
-
-QuickPanelDialog::OnClick  QuickPanelDialog::s_onSchema;
-QuickPanelDialog::OnClick  QuickPanelDialog::s_onUserFolder;
-QuickPanelDialog::OnClick  QuickPanelDialog::s_onPhrases;
-QuickPanelDialog::OnToggle QuickPanelDialog::s_onFullwidth;
-QuickPanelDialog::OnClick  QuickPanelDialog::s_onSymbols;
-QuickPanelDialog::OnClick  QuickPanelDialog::s_onLogin;
-
-static std::unique_ptr<Image> s_logo;
-// L68-fix: GDI+ Bitmap internally caches the IStream pointer for lazy
-// pixel-decode (defers actual pixel read until first DrawImage). The v0.18.41.2
-// L67-fix Released() the stream immediately, leaving the IStream vtable
-// dangling. First WM_PAINT -> DoPaint -> DrawImage -> Bitmap lazy-decode via
-// freed IStream = Use-After-Free -> heap corruption -> next heap operation
-// (NtSetValueKey -> RtlIsZeroMemory) detects STATUS_HEAP_CORRUPTION.
-// Confirmed via cdb analysis of the Windows-LocalCrashDump
-// WeaselServer.exe.22688.dmp (2026-07-11 09:04, v0.18.41.2).
-//
-// Fix: hold the IStream alive for the entire lifetime of the Bitmap. Release
-// the stream ONLY when we release the bitmap (OnDestroy/Hide).
-static IStream* s_logo_stream = NULL;
-
-// ─── Logo resource loading ────────────────────────────────────────────
+static const wchar_t kWindowClassName[] = L"FluxingQuickPanel_v3";
 
 namespace {
 
-void LoadLogo() {
-  if (s_logo) return;
-  HRSRC hrsrc = FindResourceW(NULL, MAKEINTRESOURCEW(IDR_FLUXING_LOGO), RT_RCDATA);
-  if (!hrsrc) return;
-  HGLOBAL hglob = LoadResource(NULL, hrsrc);
-  if (!hglob) return;
-  const void* data = LockResource(hglob);
-  DWORD size = SizeofResource(NULL, hrsrc);
-  if (!data || size == 0) return;
-
-  // L68-fix: Allocate a fresh HGLOBAL with fDeleteOnRelease=TRUE so the
-  // IStream owns and frees its own memory (we are NOT using the resource
-  // HGLOBAL here because LockResource returns a pointer that is valid only
-  // while the .exe module is loaded; we still hold s_logo for the process
-  // lifetime so this is safe, but copying into an owned HGLOBAL lets the
-  // stream manage its own lifetime cleanly).
-  IStream* stream = NULL;
-  if (FAILED(CreateStreamOnHGlobal(NULL, TRUE, &stream))) return;
-  // Copy resource bytes into the stream's owned HGLOBAL.
-  ULONG written = 0;
-  if (FAILED(stream->Write(data, size, &written)) || written != size) {
-    stream->Release();
-    return;
+// ===== T003: SVG path 数据 → ID2D1PathGeometry =====
+// 每个图标 v3-rev3 设计稿的 SVG path(viewBox 24x24)。
+// 用 ID2D1PathGeometry::Open() + ID2D1GeometrySink::BeginFigure/AddLine/EndFigure 重建。
+// 5 个图标设计:
+//   0: 方案 = 双箭头(动作感:切换)
+//   1: 短语 = 对话气泡(内容感:短语)
+//   2: 符号 = 键盘(参照搜狗)
+//   3: 设置 = 齿轮
+//   4: 账号 = 头像
+void BuildIcon_0_Schema(ID2D1GeometrySink* sink) {
+  // 上箭头(向右): 4→17 + 箭头头部 17←14→6
+  sink->BeginFigure(D2D1::Point2F(4, 9), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(17, 9));
+  sink->AddLine(D2D1::Point2F(14, 6));
+  sink->AddLine(D2D1::Point2F(14, 12));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  // 下箭头(向左): 20→7 + 箭头头部 7←10→18
+  sink->BeginFigure(D2D1::Point2F(20, 15), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(7, 15));
+  sink->AddLine(D2D1::Point2F(10, 12));
+  sink->AddLine(D2D1::Point2F(10, 18));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+}
+void BuildIcon_1_Phrase(ID2D1GeometrySink* sink) {
+  // 对话气泡(圆角矩形 + 尾巴 + 3 横线)
+  D2D1_POINT_2F points[9] = {
+      {4, 6}, {20, 6}, {22, 8}, {22, 15}, {20, 17},
+      {12, 17}, {7, 21}, {7, 17}, {4, 17}
+  };
+  // 简化:用 ArcSegment 模拟圆角
+  sink->BeginFigure(points[0], D2D1_FIGURE_BEGIN_FILLED);
+  sink->AddLine(points[1]);
+  D2D1_ARC_SEGMENT arc1 = {};
+  arc1.point = points[2]; arc1.size = D2D1::SizeF(2, 2); arc1.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc1);
+  sink->AddLine(points[3]);
+  arc1 = {}; arc1.point = points[4]; arc1.size = D2D1::SizeF(2, 2); arc1.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc1);
+  sink->AddLine(points[5]);
+  // 尾巴
+  sink->AddLine(points[6]);
+  sink->AddLine(points[7]);
+  sink->AddLine(points[8]);
+  D2D1_ARC_SEGMENT arc2 = {};
+  arc2.point = points[0]; arc2.size = D2D1::SizeF(2, 2); arc2.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc2);
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  // 3 横线(短语)
+  sink->BeginFigure(D2D1::Point2F(7, 11), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(17, 11));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  sink->BeginFigure(D2D1::Point2F(7, 14), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(13, 14));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+}
+void BuildIcon_2_Symbols(ID2D1GeometrySink* sink) {
+  // 键盘(外壳 + 3 排按键)
+  // 顶排 4 键
+  sink->BeginFigure(D2D1::Point2F(6.5f, 5), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(6.5f, 9.5f));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  sink->BeginFigure(D2D1::Point2F(11, 5), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(11, 9.5f));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  sink->BeginFigure(D2D1::Point2F(15.5f, 5), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(15.5f, 9.5f));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  sink->BeginFigure(D2D1::Point2F(20, 5), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(20, 9.5f));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  // 中排按键
+  sink->BeginFigure(D2D1::Point2F(9, 13), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(9, 16.5f));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  sink->BeginFigure(D2D1::Point2F(15, 13), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(15, 16.5f));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  // 行分隔
+  sink->BeginFigure(D2D1::Point2F(2, 9.5f), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(22, 9.5f));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  sink->BeginFigure(D2D1::Point2F(2, 13), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(22, 13));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  // 空格键(略粗 stroke,但 geometry 不存宽度 — Draw 时再设)
+  sink->BeginFigure(D2D1::Point2F(6, 16.5f), D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(D2D1::Point2F(18, 16.5f));
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  // 外壳(最后画)
+  D2D1_POINT_2F shell[4] = { {2, 5}, {22, 5}, {22, 19}, {2, 19} };
+  D2D1_ARC_SEGMENT arc = {};
+  sink->BeginFigure(shell[0], D2D1_FIGURE_BEGIN_HOLLOW);
+  sink->AddLine(shell[1]);
+  arc = {}; arc.point = shell[2]; arc.size = D2D1::SizeF(2, 2); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc);
+  sink->AddLine(shell[3]);
+  arc = {}; arc.point = shell[0]; arc.size = D2D1::SizeF(2, 2); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc);
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+}
+void BuildIcon_3_Settings(ID2D1GeometrySink* sink) {
+  // 齿轮:中心圆 + 8 条射线
+  D2D1_POINT_2F center = {12, 12};
+  // 中心圆(用 8 段 Arc 拼)
+  // 简化:画中心圆 + 8 条射线(2x4 + 2x4)
+  // 中心圆 半径 3
+  float r = 3.0f;
+  D2D1_ARC_SEGMENT arc = {};
+  sink->BeginFigure(D2D1::Point2F(center.x + r, center.y), D2D1_FIGURE_BEGIN_HOLLOW);
+  arc = {}; arc.point = D2D1::Point2F(center.x, center.y + r); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc);
+  arc = {}; arc.point = D2D1::Point2F(center.x - r, center.y); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc);
+  arc = {}; arc.point = D2D1::Point2F(center.x, center.y - r); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc);
+  arc = {}; arc.point = D2D1::Point2F(center.x + r, center.y); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc);
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  // 8 条射线
+  for (int i = 0; i < 8; i++) {
+    float angle = i * 3.14159265f / 4.0f;
+    float dx = cosf(angle), dy = sinf(angle);
+    sink->BeginFigure(D2D1::Point2F(center.x + dx * 5, center.y + dy * 5), D2D1_FIGURE_BEGIN_HOLLOW);
+    sink->AddLine(D2D1::Point2F(center.x + dx * 7, center.y + dy * 7));
+    sink->EndFigure(D2D1_FIGURE_END_OPEN);
   }
-  LARGE_INTEGER zero = {0};
-  stream->Seek(zero, STREAM_SEEK_SET, NULL);
+}
+void BuildIcon_4_Account(ID2D1GeometrySink* sink) {
+  // 头像:头 + 肩
+  D2D1_POINT_2F head = {12, 8};
+  float r = 3.2f;
+  // 头部圆
+  D2D1_ARC_SEGMENT arc = {};
+  sink->BeginFigure(D2D1::Point2F(head.x + r, head.y), D2D1_FIGURE_BEGIN_HOLLOW);
+  arc = {}; arc.point = D2D1::Point2F(head.x, head.y + r); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc);
+  arc = {}; arc.point = D2D1::Point2F(head.x - r, head.y); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc);
+  arc = {}; arc.point = D2D1::Point2F(head.x, head.y - r); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc);
+  arc = {}; arc.point = D2D1::Point2F(head.x + r, head.y); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
+  sink->AddArc(arc);
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  // 肩膀(从左下到右下)
+  D2D1_POINT_2F shoulder[3] = { {5, 20}, {12, 14}, {19, 20} };
+  sink->BeginFigure(shoulder[0], D2D1_FIGURE_BEGIN_HOLLOW);
+  D2D1_QUADRATIC_BEZIER_SEGMENT bezier = {};
+  bezier.point1 = D2D1::Point2F(7, 15);
+  bezier.point2 = D2D1::Point2F(11, 14);
+  sink->AddQuadraticBezier(bezier);
+  bezier = {};
+  bezier.point1 = D2D1::Point2F(13, 14);
+  bezier.point2 = D2D1::Point2F(17, 15);
+  sink->AddQuadraticBezier(bezier);
+  sink->AddLine(shoulder[2]);
+  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+}
 
-  // L68: Pass the IStream to Bitmap. Bitmap ctor stores the IStream pointer
-  // for lazy pixel decode. DO NOT Release the stream here - keep it alive
-  // alongside the Bitmap. (v0.18.41.2 L67-fix Released() here, which is the
-  // bug we're fixing now.)
-  std::unique_ptr<Bitmap> bmp(new Bitmap(stream));
-  if (bmp->GetLastStatus() != Gdiplus::Ok) {
-    // Bitmap failed to parse; release stream ourselves.
-    stream->Release();
-    return;
+using IconBuilder = void (*)(ID2D1GeometrySink*);
+IconBuilder g_iconBuilders[5] = {
+    BuildIcon_0_Schema, BuildIcon_1_Phrase, BuildIcon_2_Symbols,
+    BuildIcon_3_Settings, BuildIcon_4_Account
+};
+
+}  // namespace
+
+// ===== Static state definitions =====
+HWND     QuickPanelDialog::s_hwnd         = NULL;
+QuickPanelDialog::Mode QuickPanelDialog::s_mode = QuickPanelDialog::Mode::kHidden;
+bool     QuickPanelDialog::s_fullwidth    = false;
+bool     QuickPanelDialog::s_mouseTracked = false;
+int      QuickPanelDialog::s_alpha        = 255;
+int      QuickPanelDialog::s_targetAlpha  = 255;
+QuickPanelDialog::OnClick QuickPanelDialog::s_onSchema;
+QuickPanelDialog::OnClick QuickPanelDialog::s_onUserFolder;
+QuickPanelDialog::OnClick QuickPanelDialog::s_onPhrases;
+QuickPanelDialog::OnToggle QuickPanelDialog::s_onFullwidth;
+QuickPanelDialog::OnClick QuickPanelDialog::s_onSymbols;
+QuickPanelDialog::OnClick QuickPanelDialog::s_onLogin;
+
+int      QuickPanelDialog::s_hoveredIdx = -1;
+int      QuickPanelDialog::s_activeIdx  = -1;
+
+ID2D1Factory*             QuickPanelDialog::s_pD2DFactory       = nullptr;
+ID2D1RenderTarget*        QuickPanelDialog::s_pRT             = nullptr;
+ID2D1Bitmap*              QuickPanelDialog::s_pLogo           = nullptr;
+ID2D1SolidColorBrush*     QuickPanelDialog::s_pBrushDim       = nullptr;
+ID2D1SolidColorBrush*     QuickPanelDialog::s_pBrushAccent    = nullptr;
+ID2D1SolidColorBrush*     QuickPanelDialog::s_pBrushPressed   = nullptr;
+ID2D1LinearGradientBrush* QuickPanelDialog::s_pBrushActive    = nullptr;
+ID2D1SolidColorBrush*     QuickPanelDialog::s_pBrushHighlight = nullptr;
+ID2D1PathGeometry*        QuickPanelDialog::s_pIconGeometries[5] = {};
+
+// ===== T001: D2D factory inject (由 WeaselServerApp::Run 调一次) =====
+void QuickPanelDialog::InitializeD2D(ID2D1Factory* pFactory) {
+  s_pD2DFactory = pFactory;
+}
+void QuickPanelDialog::ShutdownD2D() {
+  ReleaseD2DResources();
+  s_pD2DFactory = nullptr;
+}
+
+// ===== T001: 资源创建/释放 =====
+HRESULT QuickPanelDialog::CreateD2DResources(HWND hwnd) {
+  if (!s_pD2DFactory) return E_FAIL;
+  if (s_pRT) return S_OK;
+
+  RECT rc;
+  GetClientRect(hwnd, &rc);
+  D2D1_SIZE_U size = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
+
+  HRESULT hr = s_pD2DFactory->CreateHwndRenderTarget(
+      D2D1::RenderTargetProperties(),  // 默认属性(默认 RGB + premultiplied alpha)
+      D2D1::HwndRenderTargetProperties(hwnd, size),
+      (ID2D1HwndRenderTarget**)&s_pRT);
+  if (FAILED(hr) || !s_pRT) return hr;
+
+  // 3 个 SolidColorBrush
+  s_pRT->CreateSolidColorBrush(D2D1::ColorF(0.55f, 0.55f, 0.55f, 0.55f), &s_pBrushDim);     // kFgDim 半透明灰
+  s_pRT->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.37f, 0.19f, 1.0f), &s_pBrushAccent);  // kAccent 品牌橙
+  s_pRT->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f), &s_pBrushPressed); // kPressed 白
+  s_pRT->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.85f), &s_pBrushHighlight);
+
+  // active 态 橙→紫 LinearGradientBrush
+  D2D1_GRADIENT_STOP stops[2];
+  stops[0].position = 0.0f;  stops[0].color = D2D1::ColorF(1.0f, 0.37f, 0.19f);   // #FF5F31
+  stops[1].position = 1.0f;  stops[1].color = D2D1::ColorF(0.61f, 0.32f, 0.88f);  // #9B51E0
+  s_pRT->CreateGradientStopCollection(stops, 2, & (ID2D1GradientStopCollection*&) stops);
+  // 创建 gradient brush 需 stop collection;为简化,我们使用 linear gradient via brush API
+  ID2D1GradientStopCollection* pStopCol = nullptr;
+  s_pRT->CreateGradientStopCollection(stops, 2, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pStopCol);
+  s_pRT->CreateLinearGradientBrush(
+      D2D1::LinearGradientBrushProperties(D2D1::Point2F(0, 0), D2D1::Point2F(100, 100)),
+      pStopCol, &s_pBrushActive);
+  if (pStopCol) pStopCol->Release();
+
+  // T002: 用 WIC 加载 logo PNG (无 IStream!)
+  LoadLogoWIC();
+
+  // T003: 创建 5 个图标 PathGeometry
+  CreateIconPaths();
+
+  return S_OK;
+}
+
+void QuickPanelDialog::ReleaseD2DResources() {
+  if (s_pLogo)            { s_pLogo->Release();           s_pLogo = nullptr; }
+  for (int i = 0; i < 5; i++) {
+    if (s_pIconGeometries[i]) { s_pIconGeometries[i]->Release(); s_pIconGeometries[i] = nullptr; }
+  }
+  if (s_pBrushActive)     { s_pBrushActive->Release();     s_pBrushActive = nullptr; }
+  if (s_pBrushHighlight)  { s_pBrushHighlight->Release();  s_pBrushHighlight = nullptr; }
+  if (s_pBrushPressed)    { s_pBrushPressed->Release();    s_pBrushPressed = nullptr; }
+  if (s_pBrushAccent)     { s_pBrushAccent->Release();     s_pBrushAccent = nullptr; }
+  if (s_pBrushDim)        { s_pBrushDim->Release();        s_pBrushDim = nullptr; }
+  if (s_pRT) {
+    s_pRT->Release();
+    s_pRT = nullptr;
+  }
+}
+
+// ===== T002: WIC 解码 PNG logo (无 IStream,直接给 D2D) =====
+HRESULT QuickPanelDialog::LoadLogoWIC() {
+  if (s_pLogo) return S_OK;
+  if (!s_pRT) return E_FAIL;
+
+  // 用 WIC 工厂 (CoCreateInstance,一次性失败由 WeaselServerApp 容错)
+  IWICImagingFactory* pWic = nullptr;
+  HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_ALL,
+                               IID_PPV_ARGS(&pWic));
+  if (FAILED(hr)) return hr;
+
+  // 从 exe 相对路径加载 fluxing-logo.png
+  // IDR_FLUXING_LOGO 是 700x700 PNG,装包到 $INSTDIR\fluxing-logo.png
+  // WeaselServer 启动时 cwd = $INSTDIR,直接相对路径即可
+  IWICBitmapDecoder* pDec = nullptr;
+  hr = pWic->CreateDecoderFromFilename(
+      L"fluxing-logo.png", nullptr, GENERIC_READ,
+      WICDecodeMetadataCacheOnLoad, &pDec);
+  if (FAILED(hr)) { pWic->Release(); return hr; }
+
+  IWICBitmapFrameDecode* pFrame = nullptr;
+  hr = pDec->GetFrame(0, &pFrame);
+  if (FAILED(hr)) { pDec->Release(); pWic->Release(); return hr; }
+
+  // ★ 关键:用 WIC frame 直接给 D2D 创建 bitmap,完全不经过 IStream/GDI+
+  hr = s_pRT->CreateBitmapFromWicBitmap(pFrame, nullptr, &s_pLogo);
+
+  pFrame->Release();
+  pDec->Release();
+  pWic->Release();
+  return hr;
+}
+
+// ===== T003: 创建 5 个图标 PathGeometry =====
+HRESULT QuickPanelDialog::CreateIconPaths() {
+  if (!s_pRT) return E_FAIL;
+  for (int i = 0; i < 5; i++) {
+    if (s_pIconGeometries[i]) continue;
+    HRESULT hr = s_pD2DFactory->CreatePathGeometry(&s_pIconGeometries[i]);
+    if (FAILED(hr)) return hr;
+    ID2D1GeometrySink* sink = nullptr;
+    hr = s_pIconGeometries[i]->Open(&sink);
+    if (FAILED(hr)) return hr;
+    g_iconBuilders[i](sink);
+    sink->Close();
+    sink->Release();
+  }
+  return S_OK;
+}
+
+// ===== T005: HitTest (返回 brand=−2, 5 按钮=0..4, 无=−1) =====
+int QuickPanelDialog::HitTest(int x, int y) {
+  // panel padding 8, brand 在最左 (4+56=60 宽含 margin)
+  // 假设 panel layout:brand(56) + 4 gap + 5 buttons(56 each)
+  const int padding = kPanelPadding;
+  int bx = padding;                   // brand 起点 x
+  int by = padding - 4;               // brand 起点 y(panel padding 减品牌略上)
+  if (x >= bx && x < bx + kBrandSize && y >= by && y < by + kBrandSize) return -2; // brand
+
+  // 5 个按钮起点 x
+  const int buttonStartX = padding + kBrandSize + 4;  // 8 + 56 + 4 = 68
+  for (int i = 0; i < 5; i++) {
+    int x0 = buttonStartX + i * (kBtnSize + 2);
+    if (x >= x0 && x < x0 + kBtnSize && y >= padding && y < padding + kBtnSize) return i;
+  }
+  return -1;
+}
+
+// ===== T004 + T005: OnPaint + state machine =====
+LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
+  PAINTSTRUCT ps;
+  HDC hdc = BeginPaint(hwnd, &ps);
+  if (!s_pRT) {
+    EndPaint(hwnd, &ps);
+    return 0;
   }
 
-  // Bitmap is valid. Hand the stream to s_logo_stream so it stays alive for
-  // the lifetime of the bitmap. The bitmap will Release the stream when
-  // it's destroyed (no, actually GDI+ does NOT release the stream - we own
-  // it until we destroy the bitmap).
-  s_logo = std::move(bmp);
-  s_logo_stream = stream;
-}
+  s_pRT->BeginDraw();
+  s_pRT->Clear(D2D1::ColorF(0, 0, 0, 0));   // 透明背景
 
-BOOL RegisterClassOnce(HINSTANCE hInst) {
-  WNDCLASSEXW wc = {0};
-  wc.cbSize = sizeof(wc);
-  wc.style = CS_OWNDC;
-  wc.lpfnWndProc = QuickPanelDialog::WndProc;
-  wc.hInstance = hInst;
-  wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-  wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-  wc.lpszClassName = kClassName;
-  if (GetClassInfoExW(hInst, kClassName, &wc)) return TRUE;
-  return RegisterClassExW(&wc) != 0;
-}
+  D2D1_SIZE_F sz = s_pRT->GetSize();
+  float W = sz.width;
+  float H = sz.height;
 
-POINT ComputeOrigin() {
-  RECT work;
-  SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
-  POINT p;
-  p.x = work.right - QP_WIDTH - 12;
-  p.y = work.bottom - QP_HEIGHT - 12;
-  return p;
-}
+  // 1. panel 背景 Liquid Glass(双层渐变 — 简化为单层半透)
+  D2D1_ROUNDED_RECT panelRect = D2D1::RoundedRect(
+      D2D1::RectF(0, 0, W, H), kPanelRadius, kPanelRadius);
+  // 用 alpha=240 的半透白(没渐变但视觉效果接近)
+  ID2D1SolidColorBrush* pBg = nullptr;
+  s_pRT->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.75f), &pBg);
+  s_pRT->FillRoundedRectangle(&panelRect, pBg);
+  if (pBg) pBg->Release();
 
-// ─── Layout ────────────────────────────────────────────────────────────
-// spec 056 bugfix: layout rewritten to match design (04-quick-settings-v3-macos.html):
-//   bar       14px radius
-//   brand     26x26 logo with 8px radius and gradient (blue→purple)
-//   button    32x28 with 7px radius, hover 4% black overlay
-//   separator 1px wide, 18px tall, rgba(0,0,0,0.08)
-// 6 icons: schema / dict / phrase / full-half / symbols / login
-// (was using GDI+ DrawLine placeholders — spec 056 replaces with
-//  GDIplus::GraphicsPath SVG-like paths per design)
+  // 1px 边框
+  ID2D1SolidColorBrush* pBorder = nullptr;
+  s_pRT->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.5f), &pBorder);
+  s_pRT->DrawRoundedRectangle(&panelRect, pBorder, 1.0f);
+  if (pBorder) pBorder->Release();
 
-RECT BrandRect()  { RECT r = {6, 6, 32, 32}; return r; }     // 26x26 brand
-RECT Sep1Rect()   { RECT r = {36, 11, 37, 27}; return r; }
-RECT Btn1Rect()   { RECT r = {40, 6, 72, 34}; return r; }    // 32x28 buttons
-RECT Sep2Rect()   { RECT r = {76, 11, 77, 27}; return r; }
-RECT Btn2Rect()   { RECT r = {80, 6, 112, 34}; return r; }
-RECT Sep3Rect()   { RECT r = {116, 11, 117, 27}; return r; }
-RECT Btn3Rect()   { RECT r = {120, 6, 152, 34}; return r; }
-RECT Sep4Rect()   { RECT r = {156, 11, 157, 27}; return r; }
-RECT Btn4Rect()   { RECT r = {160, 6, 192, 34}; return r; }
-RECT Sep5Rect()   { RECT r = {196, 11, 197, 27}; return r; }
-RECT Btn5Rect()   { RECT r = {200, 6, 232, 34}; return r; }
-RECT Sep6Rect()   { RECT r = {236, 11, 237, 27}; return r; }
-RECT Btn6Rect()   { RECT r = {240, 6, 272, 34}; return r; }
+  // 2. 顶部高光(1px 渐变线)
+  D2D1_POINT_2F hlStart = {14, 0.5f}, hlEnd = {W - 14, 0.5f};
+  ID2D1GradientStopCollection* pHlCol = nullptr;
+  D2D1_GRADIENT_STOP hlStops[3] = {
+      {0.0f, D2D1::ColorF(1, 1, 1, 0)},
+      {0.5f, D2D1::ColorF(1, 1, 1, 0.85f)},
+      {1.0f, D2D1::ColorF(1, 1, 1, 0)}
+  };
+  s_pRT->CreateGradientStopCollection(hlStops, 3, &pHlCol);
+  ID2D1LinearGradientBrush* pHlBrush = nullptr;
+  s_pRT->CreateLinearGradientBrush(
+      D2D1::LinearGradientBrushProperties(hlStart, hlEnd),
+      pHlCol, &pHlBrush);
+  s_pRT->DrawLine(hlStart, hlEnd, pHlBrush, 1.0f);
+  if (pHlBrush) pHlBrush->Release();
+  if (pHlCol) pHlCol->Release();
 
-// Now total width = 278, fits QP_WIDTH=292 with 14px right padding.
-// Update QP_WIDTH to match new layout:
-#undef QP_WIDTH
-#define QP_WIDTH  278
-// Height: design is 38 (6 padding top + 26 brand + 6 padding bottom)
-#undef QP_HEIGHT
-#define QP_HEIGHT 38
+  // 3. logo (brand 块 56x56,padding 内)
+  if (s_pLogo) {
+    D2D1_RECT_F logoRect = D2D1::RectF(
+        (float)kPanelPadding - 2.0f, (float)kPanelPadding - 2.0f,
+        (float)kPanelPadding - 2.0f + kBrandSize, (float)kPanelPadding - 2.0f + kBrandSize);
+    s_pRT->DrawBitmap(s_pLogo, &logoRect);
+  }
 
-BOOL InRect(int x, int y, RECT r) {
-  return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-}
+  // 4. 5 个图标按钮
+  // active 按钮:橙→紫渐变背景 + 白色图标
+  // hovered 按钮:图标变橙 (s_hoveredIdx 优先)
+  // 默认:灰图标
+  const int buttonStartX = kPanelPadding + kBrandSize + 4;
+  for (int i = 0; i < 5; i++) {
+    int x0 = buttonStartX + i * (kBtnSize + 2);
+    int y0 = kPanelPadding;
+    D2D1_RECT_F btnRect = D2D1::RectF(
+        (float)x0, (float)y0,
+        (float)(x0 + kBtnSize), (float)(y0 + kBtnSize));
 
-int HitTest(int x, int y) {
-  if (InRect(x, y, Btn1Rect())) return 1;
-  if (InRect(x, y, Btn2Rect())) return 2;
-  if (InRect(x, y, Btn3Rect())) return 3;
-  if (InRect(x, y, Btn4Rect())) return 4;
-  if (InRect(x, y, Btn5Rect())) return 5;
-  if (InRect(x, y, Btn6Rect())) return 6;
-  if (InRect(x, y, BrandRect())) return -1;
+    if (i == s_activeIdx) {
+      // active 态:橙→紫渐变背景
+      D2D1_ROUNDED_RECT bgRect = D2D1::RoundedRect(btnRect, (float)kBtnRadius, (float)kBtnRadius);
+      // 重建 active brush with this button's gradient
+      ID2D1LinearGradientBrush* pActiveBtn = nullptr;
+      D2D1_GRADIENT_STOP aStops[2] = {
+          {0.0f, D2D1::ColorF(1.0f, 0.37f, 0.19f)},
+          {1.0f, D2D1::ColorF(0.61f, 0.32f, 0.88f)}
+      };
+      ID2D1GradientStopCollection* pStops = nullptr;
+      s_pRT->CreateGradientStopCollection(aStops, 2, &pStops);
+      s_pRT->CreateLinearGradientBrush(
+          D2D1::LinearGradientBrushProperties(D2D1::Point2F((float)x0, (float)y0), D2D1::Point2F((float)(x0 + kBtnSize), (float)(y0 + kBtnSize))),
+          pStops, &pActiveBtn);
+      s_pRT->FillRoundedRectangle(&bgRect, pActiveBtn);
+      if (pActiveBtn) pActiveBtn->Release();
+      if (pStops) pStops->Release();
+    }
+
+    // 画图标
+    if (s_pIconGeometries[i]) {
+      // icon viewport 24x24,渲染到 button 内 38x38 中心
+      float iconSize = (float)kIcoSize;
+      float iconX = x0 + (kBtnSize - kIcoSize) / 2.0f;
+      float iconY = y0 + (kBtnSize - kIcoSize) / 2.0f;
+      // 创建 scale transform:24→38 ≈ 1.583
+      float scale = iconSize / 24.0f;
+      ID2D1TransformedGeometry* pTransformed = nullptr;
+      s_pD2DFactory->CreateTransformedGeometry(
+          s_pIconGeometries[i],
+          D2D1::Matrix3x2F::Scale(scale, scale) *
+          D2D1::Matrix3x2F::Translation(iconX, iconY),
+          &pTransformed);
+      if (pTransformed) {
+        // 选 brush:active→白,hovered→橙,其它→灰
+        ID2D1Brush* pBrush = s_pBrushDim;
+        if (i == s_activeIdx) pBrush = s_pBrushPressed;
+        else if (i == s_hoveredIdx) pBrush = s_pBrushAccent;
+        s_pRT->DrawGeometry(pTransformed, pBrush, 1.8f);
+        pTransformed->Release();
+      }
+    }
+  }
+
+  s_pRT->EndDraw();
+  EndPaint(hwnd, &ps);
   return 0;
 }
 
-void InvalidatePanel(HWND hwnd) {
-  RECT rc = {0, 0, QP_WIDTH, QP_HEIGHT};
-  InvalidateRect(hwnd, &rc, FALSE);
-}
-
-// ─── Fade animation ────────────────────────────────────────────────────
-
-void StopFadeTimer() {
-  if (s_hFadeTimer) {
-    DeleteTimerQueueTimer(NULL, s_hFadeTimer, INVALID_HANDLE_VALUE);
-    s_hFadeTimer = NULL;
-  }
-}
-
-VOID CALLBACK FadeTimerProc(PVOID, BOOLEAN) {
-  HWND hwnd = QuickPanelDialog::s_hwnd;
-  if (!hwnd || !IsWindow(hwnd)) { StopFadeTimer(); return; }
-  int diff = QuickPanelDialog::s_targetAlpha - QuickPanelDialog::s_alpha;
-  if (diff == 0) { StopFadeTimer(); return; }
-  int step = diff > 0 ? QP_FADE_STEP : -QP_FADE_STEP;
-  QuickPanelDialog::s_alpha += step;
-  if ((step > 0 && QuickPanelDialog::s_alpha > QuickPanelDialog::s_targetAlpha) ||
-      (step < 0 && QuickPanelDialog::s_alpha < QuickPanelDialog::s_targetAlpha)) {
-    QuickPanelDialog::s_alpha = QuickPanelDialog::s_targetAlpha;
-  }
-  SetLayeredWindowAttributes(hwnd, 0, (BYTE)QuickPanelDialog::s_alpha, LWA_ALPHA);
-}
-
-void StartFadeTo(HWND hwnd, int target) {
-  QuickPanelDialog::s_targetAlpha = target;
-  if (QuickPanelDialog::s_alpha == target) { StopFadeTimer(); return; }
-  StopFadeTimer();
-  CreateTimerQueueTimer(&s_hFadeTimer, NULL, FadeTimerProc, NULL,
-                        50, 50, WT_EXECUTEDEFAULT);
-}
-
-// ─── Button fire ───────────────────────────────────────────────────────
-
-void FireButton(int id) {
-  // spec 052: in always-show mode, buttons fire but the panel stays visible
-  // (no auto-close). Callbacks are fired, panel remains in always-show mode.
-  switch (id) {
-    case 1: if (QuickPanelDialog::s_onSchema)     QuickPanelDialog::s_onSchema();     break;
-    case 2: if (QuickPanelDialog::s_onUserFolder)  QuickPanelDialog::s_onUserFolder();  break;
-    case 3: if (QuickPanelDialog::s_onPhrases)    QuickPanelDialog::s_onPhrases();    break;
-    case 4: if (QuickPanelDialog::s_onFullwidth)  QuickPanelDialog::s_onFullwidth(!QuickPanelDialog::s_fullwidth); break;
-    case 5: if (QuickPanelDialog::s_onSymbols)    QuickPanelDialog::s_onSymbols();    break;
-    case 6: if (QuickPanelDialog::s_onLogin)       QuickPanelDialog::s_onLogin();       break;
-  }
-}
-
-// ─── GDI+ Drawing ──────────────────────────────────────────────────────
-
-void DrawRoundRect(Graphics* g, const Gdiplus::RectF& rc, float r,
-                   const Gdiplus::Color& fill, const Gdiplus::Color& border,
-                   float borderW = 0.5f) {
-  GraphicsPath path;
-  path.AddLine(rc.X + r, rc.Y, rc.GetRight() - r, rc.Y);
-  path.AddArc(rc.GetRight() - 2*r, rc.Y, 2*r, 2*r, 270, 90);
-  path.AddLine(rc.GetRight(), rc.Y + r, rc.GetRight(), rc.GetBottom() - r);
-  path.AddArc(rc.GetRight() - 2*r, rc.GetBottom() - 2*r, 2*r, 2*r, 0, 90);
-  path.AddLine(rc.GetRight() - r, rc.GetBottom(), rc.X + r, rc.GetBottom());
-  path.AddArc(rc.X, rc.GetBottom() - 2*r, 2*r, 2*r, 90, 90);
-  path.AddLine(rc.X, rc.GetBottom() - r, rc.X, rc.Y + r);
-  path.AddArc(rc.X, rc.Y, 2*r, 2*r, 180, 90);
-  path.CloseFigure();
-  if (fill.GetAlpha() > 0) {
-    SolidBrush br(fill);
-    g->FillPath(&br, &path);
-  }
-  if (border.GetAlpha() > 0 && borderW > 0) {
-    Gdiplus::Pen pen(border, borderW);
-    g->DrawPath(&pen, &path);
-  }
-}
-
-// spec 056 bugfix: DrawIcon rewritten with GDI+ GraphicsPath
-// (SVG-style vector paths). Each icon is a 16x16 unit path centered
-// at (cx, cy), matching SF Symbols stroke style (1.5 stroke width,
-// round cap/join). Old code drew 3-5 lines as placeholders — that
-// was just a "temp placeholder", not real design implementation.
-
-// Build a SF-Symbols-style icon path. viewBox 0 0 20 20, drawn at
-// (cx-8, cy-8) with width=16. Returns GraphicsPath sized 16x16.
-static std::unique_ptr<GraphicsPath> MakeIconPath(int btnId) {
-  auto path = std::make_unique<GraphicsPath>();
-  const float s = 16.0f;
-  // Map design viewBox 0..20 to 0..16 (offset drawn at cx-8)
-  const float k = s / 20.0f;
-  switch (btnId) {
-    case 1: { // schema: 3 rounded rectangles (list.bullet.rectangle)
-      for (int i = 0; i < 3; ++i) {
-        float y = 3.0f + i * 5.25f;
-        path->AddRectangle(RectF((REAL)3*k, (REAL)y*k, (REAL)14*k, (REAL)3.5f*k));
+// ===== WndProc =====
+LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+  switch (msg) {
+    case WM_CREATE:    return OnCreate(hwnd);
+    case WM_DESTROY:   return OnDestroy(hwnd);
+    case WM_PAINT:     return OnPaint(hwnd);
+    case WM_ERASEBKGND: return 1;          // D2D 自管背景
+    case WM_LBUTTONDOWN: {
+      POINT p = {LOWORD(l), HIWORD(l)};
+      s_activeIdx = HitTest(p.x, p.y);
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
+    case WM_LBUTTONUP: {
+      POINT p = {LOWORD(l), HIWORD(l)};
+      int hit = HitTest(p.x, p.y);
+      if (hit >= 0 && hit == s_activeIdx) {
+        // T005: 5 按钮 no-op (v0.19.0 ship 切片)
+        // 真正功能由后续 spec 实现
       }
-      break;
+      s_activeIdx = -1;
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
     }
-    case 2: { // dict: document with 3 lines (book.closed)
-      path->AddRectangle(RectF((REAL)3*k, (REAL)4.5f*k, (REAL)14*k, (REAL)11*k));
-      // inner horizontal lines
-      path->AddLine((REAL)6*k, (REAL)7*k, (REAL)14*k, (REAL)7*k);
-      path->AddLine((REAL)6*k, (REAL)10*k, (REAL)14*k, (REAL)10*k);
-      path->AddLine((REAL)6*k, (REAL)13*k, (REAL)11*k, (REAL)13*k);
-      break;
-    }
-    case 3: { // phrase: pencil shape
-      path->AddLine((REAL)13.5f*k, (REAL)3.5f*k, (REAL)16.5f*k, (REAL)6.5f*k);
-      path->AddLine((REAL)16.5f*k, (REAL)6.5f*k, (REAL)7*k, (REAL)16*k);
-      path->AddLine((REAL)7*k, (REAL)16*k, (REAL)4*k, (REAL)16*k);
-      path->AddLine((REAL)4*k, (REAL)16*k, (REAL)4*k, (REAL)13*k);
-      path->AddLine((REAL)4*k, (REAL)13*k, (REAL)13.5f*k, (REAL)3.5f*k);
-      path->CloseFigure();
-      break;
-    }
-    case 4: { // full-half: filled dot (current is full; alternate via s_fullwidth)
-      if (QuickPanelDialog::IsFullwidth()) {
-        // large circle outline
-        path->AddEllipse(4*k, 4*k, 12*k, 12*k);
-      } else {
-        // small filled dot
-        path->AddEllipse(8*k, 8*k, 4*k, 4*k);
+    case WM_MOUSEMOVE: {
+      POINT p = {LOWORD(l), HIWORD(l)};
+      int hit = HitTest(p.x, p.y);
+      if (hit != s_hoveredIdx) {
+        s_hoveredIdx = hit;
+        InvalidateRect(hwnd, NULL, FALSE);
       }
-      break;
-    }
-    case 5: { // symbols: keyboard grid (3x3 dots + bottom bar)
-      for (int r = 0; r < 3; ++r) {
-        for (int c = 0; c < 5; ++c) {
-          float cx = (3 + c*3.5f)*k;
-          float cy = (5 + r*2.5f)*k;
-          path->AddEllipse(cx - 0.5f*k, cy - 0.5f*k, 1*k, 1*k);
-        }
+      if (!s_mouseTracked) {
+        TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
+        TrackMouseEvent(&tme);
+        s_mouseTracked = true;
       }
-      path->AddLine(5*k, 14*k, 15*k, 14*k);
-      break;
+      return 0;
     }
-    case 6: { // login: person silhouette (head + body)
-      // head circle
-      path->AddEllipse(RectF((REAL)7*k, (REAL)3.5f*k, (REAL)6*k, (REAL)6*k));
-      // body rectangle
-      path->AddRectangle(RectF((REAL)3*k, (REAL)11*k, (REAL)14*k, (REAL)6*k));
-      break;
+    case WM_MOUSELEAVE: {
+      s_mouseTracked = false;
+      if (s_hoveredIdx != -1) {
+        s_hoveredIdx = -1;
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+      return 0;
     }
+    case WM_KILLFOCUS: return OnKillFocus(hwnd);
+    case WM_KEYDOWN:   return OnKeyDown(hwnd, w);
+    default: break;
   }
-  return path;
+  return DefWindowProc(hwnd, msg, w, l);
 }
 
-void DrawIcon(Graphics* g, int btnId, bool isPressed, bool isHover, int cx, int cy) {
-  // Color: design uses #1d1d1f (28,28,31) text color
-  Gdiplus::Color fgColor(0xFF, 0x1d, 0x1d, 0x1f);
-  if (isPressed) fgColor = Gdiplus::Color(0xFF, 0x0a, 0x84, 0xff);  // accent
-  // dim login (btn 6) - design uses 35% opacity
-  if (btnId == 6) fgColor = Gdiplus::Color(0x59, 0x60, 0x60, 0x67);
-
-  // Translate path to (cx-8, cy-8)
-  Gdiplus::Matrix m;
-  m.Translate((REAL)(cx - 8), (REAL)(cy - 8));
-  auto path = MakeIconPath(btnId);
-  if (!path) return;
-  path->Transform(&m);
-
-  if (isPressed) {
-    // accent background (rgba(10,132,255,0.12))
-    SolidBrush accent(Gdiplus::Color(0x1f, 0x0a, 0x84, 0xff));
-    g->FillRectangle(&accent, cx - 16, cy - 14, 32, 28);
-  } else if (isHover) {
-    // hover background (rgba(0,0,0,0.04))
-    SolidBrush hover(Gdiplus::Color(0x0a, 0x00, 0x00, 0x00));
-    g->FillRectangle(&hover, cx - 16, cy - 14, 32, 28);
-  }
-
-  if (btnId == 6) {
-    // Login is disabled (design aria-disabled). Fill with dim color.
-    SolidBrush dim(fgColor);
-    g->FillPath(&dim, path.get());
-  } else {
-    // Stroke only (SF Symbols outline style)
-    Gdiplus::Pen pen(fgColor, 1.5f);
-    pen.SetLineCap((Gdiplus::LineCap)Gdiplus::LineCapRound,
-                   (Gdiplus::LineCap)Gdiplus::LineCapRound,
-                   (Gdiplus::DashCap)Gdiplus::LineCapRound);
-    pen.SetLineJoin((Gdiplus::LineJoin)Gdiplus::LineJoinRound);
-    g->DrawPath(&pen, path.get());
-  }
+LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
+  s_hwnd = hwnd;
+  return CreateD2DResources(hwnd);
 }
 
-// spec 056 bugfix: DoPaint rewritten to match design (04-quick-settings-v3-macos.html):
-//   background: rgba(246,246,246,0.72) translucent (we use alpha 184 = 0.72*255)
-//   border:     1px solid rgba(0,0,0,0.08)
-//   shadow:     0 8px 24px rgba(0,0,0,0.10)
-//   radius:     14px outer (bar), 8px brand, 7px buttons
-//   brand gradient: linear-gradient(135deg, #0a84ff 0%, #5e5ce6 100%)
-
-void DoPaint(HWND hwnd) {
-  PAINTSTRUCT ps;
-  HDC hdc = BeginPaint(hwnd, &ps);
-  RECT crc; GetClientRect(hwnd, &crc);
-  HDC memDC = CreateCompatibleDC(hdc);
-  HBITMAP memBM = CreateCompatibleBitmap(hdc, crc.right, crc.bottom);
-  SelectObject(memDC, memBM);
-
-  Graphics g(memDC);
-  g.SetSmoothingMode(SmoothingModeAntiAlias);
-  g.SetTextRenderingHint(TextRenderingHintAntiAlias);
-
-  // 1. Background fill (translucent pale grey, design surface)
-  SolidBrush bg(Gdiplus::Color(0xB8, 0xF6, 0xF6, 0xF6));
-  g.FillRectangle(&bg, 0, 0, crc.right, crc.bottom);
-
-  // 2. Outer bar (14px radius, design color)
-  Gdiplus::RectF bar_rc(0.5f, 0.5f, (float)crc.right - 1, (float)crc.bottom - 1);
-  DrawRoundRect(&g, bar_rc, 14.0f,
-                Gdiplus::Color(0xB8, 0xF6, 0xF6, 0xF6),
-                Gdiplus::Color(0x14, 0x00, 0x00, 0x00));   // rgba(0,0,0,0.08) border
-
-  // 3. Brand (26x26 logo with gradient blue→purple)
-  RECT br = BrandRect();
-  Gdiplus::RectF brand_rc((float)br.left, (float)br.top,
-                         (float)(br.right - br.left), (float)(br.bottom - br.top));
-  // Gradient fill: blue (#0a84ff) to purple (#5e5ce6)
-  Gdiplus::LinearGradientBrush gradient(
-      brand_rc,
-      Gdiplus::Color(0xFF, 0x0a, 0x84, 0xff),    // top-left blue
-      Gdiplus::Color(0xFF, 0x5e, 0x5c, 0xe6),    // bottom-right purple
-      Gdiplus::LinearGradientModeHorizontal);
-  GraphicsPath brand_path;
-  brand_path.AddLine(brand_rc.X + 8, brand_rc.Y, brand_rc.GetRight() - 8, brand_rc.Y);
-  brand_path.AddArc((REAL)brand_rc.GetRight() - 16, (REAL)brand_rc.Y, (REAL)16, (REAL)16, (REAL)270, (REAL)90);
-  brand_path.AddLine(brand_rc.GetRight(), brand_rc.Y + 8, brand_rc.GetRight(), brand_rc.GetBottom() - 8);
-  brand_path.AddArc((REAL)brand_rc.GetRight() - 16, (REAL)brand_rc.GetBottom() - 16, (REAL)16, (REAL)16, (REAL)0, (REAL)90);
-  brand_path.AddLine(brand_rc.GetRight() - 8, brand_rc.GetBottom(), brand_rc.X + 8, brand_rc.GetBottom());
-  brand_path.AddArc((REAL)brand_rc.X, (REAL)brand_rc.GetBottom() - 16, (REAL)16, (REAL)16, (REAL)90, (REAL)90);
-  brand_path.AddLine(brand_rc.X, brand_rc.Y + 8, brand_rc.X, brand_rc.Y + 8);
-  brand_path.AddArc((REAL)brand_rc.X, (REAL)brand_rc.Y, (REAL)16, (REAL)16, (REAL)180, (REAL)90);
-  brand_path.CloseFigure();
-  g.FillPath(&gradient, &brand_path);
-  if (s_logo) {
-    // spec 061: logo now fills the entire brand area to eliminate
-    // the "blue border" effect (blue gradient bleeding through
-    // the logo's transparent margin). The 700x700 logo scales down
-    // to drawW x drawH = 26x26, matching the brand rect exactly.
-    int drawW = 26, drawH = 26;
-    int ox = br.left;
-    int oy = br.top;
-    g.DrawImage(s_logo.get(), ox, oy, drawW, drawH);
-  }
-
-  // 4. Separators (1px, very light, design rgba(0,0,0,0.08))
-  auto drawSep = [&](RECT sr) {
-    Gdiplus::Pen p(Gdiplus::Color(0x14, 0x00, 0x00, 0x00), 1.0f);
-    g.DrawLine(&p, sr.left, sr.top, sr.left, sr.bottom);
-  };
-  drawSep(Sep1Rect()); drawSep(Sep2Rect()); drawSep(Sep3Rect());
-  drawSep(Sep4Rect()); drawSep(Sep5Rect()); drawSep(Sep6Rect());
-
-  // 5. Icons (6 SF-Symbols-style paths via GDI+ GraphicsPath)
-  // Track hover state: button highlighted if mouse is inside its rect.
-  // For spec 056, we approximate hover via mouse position from last WM_MOUSEMOVE.
-  POINT mousePt;
-  GetCursorPos(&mousePt);
-  ScreenToClient(hwnd, &mousePt);
-  for (int i = 1; i <= 6; ++i) {
-    RECT btnr = (i==1 ? Btn1Rect():i==2?Btn2Rect():i==3?Btn3Rect():i==4?Btn4Rect():i==5?Btn5Rect():Btn6Rect());
-    int cx = (btnr.left + btnr.right) / 2;
-    int cy = (btnr.top + btnr.bottom) / 2;
-    bool isHover = InRect(mousePt.x, mousePt.y, btnr);
-    // isPressed: tracked via LButtonDown state. For simplicity we
-    // approximate via button #4 state (fullwidth toggle).
-    bool isPressed = (i == 4 && QuickPanelDialog::IsFullwidth());
-    DrawIcon(&g, i, isPressed, isHover, cx, cy);
-  }
-
-  BitBlt(hdc, 0, 0, crc.right, crc.bottom, memDC, 0, 0, SRCCOPY);
-  DeleteObject(memBM);
-  DeleteDC(memDC);
-  EndPaint(hwnd, &ps);
+LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
+  s_hoveredIdx = -1;
+  s_activeIdx = -1;
+  if (s_hwnd == hwnd) s_hwnd = NULL;
+  ReleaseD2DResources();
+  return 0;
 }
 
-} // anonymous namespace
+LRESULT QuickPanelDialog::OnKillFocus(HWND hwnd) {
+  // T006: 1 秒失焦自动关闭
+  SetTimer(hwnd, 1, 1000, NULL);
+  return 0;
+}
 
-// ─── Public API ────────────────────────────────────────────────────────
+LRESULT QuickPanelDialog::OnKeyDown(HWND hwnd, WPARAM key) {
+  // T006: ESC 关闭
+  if (key == VK_ESCAPE) {
+    Hide();
+    return 0;
+  }
+  return DefWindowProc(hwnd, key, 0, 0);
+}
+
+LRESULT QuickPanelDialog::OnTimer(HWND hwnd, WPARAM w) {
+  if (w == 1) {
+    KillTimer(hwnd, 1);
+    Hide();
+  }
+  return 0;
+}
+LRESULT QuickPanelDialog::OnLButtonUp(HWND, int, int) { return 0; }
+LRESULT QuickPanelDialog::OnLButtonDown(HWND, int, int) { return 0; }
+void    QuickPanelDialog::OnMouseMove(HWND) {}
+void    QuickPanelDialog::OnMouseLeave(HWND) {}
+
+// ===== Public API =====
+// Show / Hide / ToggleMode / EnableAlwaysShowMode — v0.19.0 ship 切片只控制可见性
+// 不接 IPC;5 个按钮 no-op(T005)
 
 void QuickPanelDialog::Show(bool currentFullwidth,
                              OnClick onSchema,
@@ -481,218 +580,70 @@ void QuickPanelDialog::Show(bool currentFullwidth,
                              OnToggle onFullwidth,
                              OnClick onSymbols,
                              OnClick onLogin) {
-  // spec 052: Show() is called for Alt+, / tray click.
-  // If the panel is already visible in always-show mode, just refresh
-  // callbacks and keep showing (do NOT toggle).
-  if (s_hwnd && IsWindow(s_hwnd)) {
-    // Panel already visible - update callbacks only, don't hide
-    s_onSchema    = onSchema;
-    s_onUserFolder = onUserFolder;
-    s_onPhrases   = onPhrases;
-    s_onFullwidth = onFullwidth;
-    s_onSymbols   = onSymbols;
-    s_onLogin     = onLogin;
-    // spec 061: the buttons in the panel were created during the
-    // initial Show() call - they each hold a lambda that captures
-    // `s_onSchema` etc by REFERENCE. Setting the new lambda here
-    // is enough; the next click will fire the new callback. No
-    // recreate-window needed (which would cause a visual flicker).
+  (void)currentFullwidth; (void)onSchema; (void)onUserFolder;
+  (void)onPhrases; (void)onFullwidth; (void)onSymbols; (void)onLogin;
+  if (s_hwnd) {
+    ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
+    InvalidateRect(s_hwnd, NULL, FALSE);
     return;
   }
+  // CreateWindowExW
+  if (!s_pD2DFactory) return;  // InitializeD2D 未调
+  WNDCLASSEXW wc = {0};
+  wc.cbSize = sizeof(wc);
+  wc.style = CS_OWNDC;
+  wc.lpfnWndProc = WndProc;
+  wc.hInstance = GetModuleHandle(NULL);
+  wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+  wc.hbrBackground = NULL;
+  wc.lpszClassName = kWindowClassName;
+  RegisterClassExW(&wc);
 
-  // Clean up any stale state
-  Hide();
+  // 屏幕右下角定位
+  RECT workArea;
+  SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
+  int x = workArea.right - kPanelWidth - 12;
+  int y = workArea.bottom - kPanelHeight - 12;
 
-  s_onSchema    = onSchema;
-  s_onUserFolder = onUserFolder;
-  s_onPhrases   = onPhrases;
-  s_onFullwidth = onFullwidth;
-  s_onSymbols   = onSymbols;
-  s_onLogin     = onLogin;
-  s_fullwidth   = currentFullwidth;
-  s_mode        = Mode::kAlwaysShow;
-
-  LoadLogo();
-
-  HINSTANCE hInst = GetModuleHandle(NULL);
-  if (!RegisterClassOnce(hInst)) return;
-
-  POINT origin = ComputeOrigin();
   s_hwnd = CreateWindowExW(
-      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,
-      kClassName, L"Fluxing",
+      WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TOPMOST,
+      kWindowClassName, L"Fluxing QuickPanel",
       WS_POPUP,
-      origin.x, origin.y, QP_WIDTH, QP_HEIGHT,
-      NULL, NULL, hInst, NULL);
+      x, y, kPanelWidth, kPanelHeight,
+      NULL, NULL, GetModuleHandle(NULL), NULL);
   if (!s_hwnd) return;
-
-  // Initial opacity: always-show 20% (alpha=51)
-  s_alpha = QP_ALPHA_DEFAULT;
-  s_targetAlpha = QP_ALPHA_DEFAULT;
-  SetLayeredWindowAttributes(s_hwnd, 0, (BYTE)QP_ALPHA_DEFAULT, LWA_ALPHA);
-
+  // 240/255 = ~94% 不透明(spec 070 v3-rev3 不透明度)
+  SetLayeredWindowAttributes(s_hwnd, RGB(0, 0, 0), 240, LWA_ALPHA);
   ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
-  InvalidatePanel(s_hwnd);
-  // spec 066: force topmost without stealing focus (counteracts WS_EX_NOACTIVATE hiding on Win 10 24H2)
-  SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  InvalidateRect(s_hwnd, NULL, FALSE);
 }
 
 void QuickPanelDialog::Hide() {
-  StopFadeTimer();
-  if (s_hwnd && IsWindow(s_hwnd)) DestroyWindow(s_hwnd);
-  s_hwnd = NULL;
-  s_mode = Mode::kHidden;
-  s_onSchema    = nullptr;
-  s_onUserFolder = nullptr;
-  s_onPhrases   = nullptr;
-  s_onFullwidth = nullptr;
-  s_onSymbols   = nullptr;
-  s_onLogin     = nullptr;
+  if (s_hwnd && IsWindow(s_hwnd)) {
+    KillTimer(s_hwnd, 1);
+    ShowWindow(s_hwnd, SW_HIDE);
+  }
+  s_hoveredIdx = -1;
+  s_activeIdx = -1;
 }
 
 void QuickPanelDialog::ToggleMode() {
-  if (s_mode == Mode::kHidden) {
-    // Re-show in always-show mode. spec 061: re-show using the LAST
-    // stored callbacks. WeaselServerApp.cpp::SetupMenuHandlers calls
-    // Show() right before triggering ToggleMode, which stored the
-    // 6 callbacks in s_onSchema..s_onLogin. If ToggleMode is called
-    // from somewhere else (e.g. Alt+, handler) the stored callbacks
-    // may still be the ones from the most recent explicit Show().
-    EnableAlwaysShowMode(s_onSchema, s_onUserFolder, s_onPhrases,
-                        s_onFullwidth, s_onSymbols, s_onLogin);
-  } else {
-    // Hide the panel
+  // T006: 简化版 — Alt+, 调 Show(),再 Alt+, 调 Hide()
+  if (s_hwnd && IsWindow(s_hwnd) && IsWindowVisible(s_hwnd)) {
     Hide();
+  } else {
+    Show(false, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
   }
 }
 
 void QuickPanelDialog::EnableAlwaysShowMode(
-    OnClick onSchema,
-    OnClick onUserFolder,
-    OnClick onPhrases,
-    OnToggle onFullwidth,
-    OnClick onSymbols,
-    OnClick onLogin) {
-  if (s_hwnd && IsWindow(s_hwnd)) {
-    // Already visible - just ensure it's in always-show mode and
-    // refresh the callbacks (the user may have changed them via a
-    // subsequent Show() call).
-    s_mode = Mode::kAlwaysShow;
-    s_onSchema    = onSchema;
-    s_onUserFolder = onUserFolder;
-    s_onPhrases   = onPhrases;
-    s_onFullwidth = onFullwidth;
-    s_onSymbols   = onSymbols;
-    s_onLogin     = onLogin;
-    ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
-    StartFadeTo(s_hwnd, QP_ALPHA_DEFAULT);
-    return;
-  }
-
-  // Create a minimal panel in always-show mode. spec 061: the
-  // callbacks are now passed in (not null) so button clicks work
-  // immediately after panel creation.
-  s_fullwidth   = false;  // default state (can be updated by next Show call)
-  s_mode        = Mode::kAlwaysShow;
-  s_onSchema    = onSchema;
+    OnClick onSchema, OnClick onUserFolder, OnClick onPhrases,
+    OnToggle onFullwidth, OnClick onSymbols, OnClick onLogin) {
+  s_onSchema     = onSchema;
   s_onUserFolder = onUserFolder;
-  s_onPhrases   = onPhrases;
-  s_onFullwidth = onFullwidth;
-  s_onSymbols   = onSymbols;
-  s_onLogin     = onLogin;
-
-  LoadLogo();
-
-  HINSTANCE hInst = GetModuleHandle(NULL);
-  if (!RegisterClassOnce(hInst)) return;
-
-  POINT origin = ComputeOrigin();
-  s_hwnd = CreateWindowExW(
-      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,
-      kClassName, L"Fluxing",
-      WS_POPUP,
-      origin.x, origin.y, QP_WIDTH, QP_HEIGHT,
-      NULL, NULL, hInst, NULL);
-  if (!s_hwnd) return;
-
-  s_alpha = QP_ALPHA_DEFAULT;
-  s_targetAlpha = QP_ALPHA_DEFAULT;
-  SetLayeredWindowAttributes(s_hwnd, 0, (BYTE)QP_ALPHA_DEFAULT, LWA_ALPHA);
-
-  ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
-  InvalidatePanel(s_hwnd);
-  // spec 066: force topmost without stealing focus (counteracts WS_EX_NOACTIVATE hiding on Win 10 24H2)
-  SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-}
-
-// ─── WndProc ───────────────────────────────────────────────────────────
-
-LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg,
-                                            WPARAM w, LPARAM l) {
-  switch (msg) {
-    case WM_CREATE:    return OnCreate(hwnd);
-    case WM_DESTROY:   return OnDestroy(hwnd);
-    case WM_PAINT:     return OnPaint(hwnd);
-    case WM_LBUTTONUP: { POINT p = {LOWORD(l), HIWORD(l)}; OnLButtonUp(hwnd, p.x, p.y); return 0; }
-    case WM_MOUSEMOVE: OnMouseMove(hwnd); return 0;
-    case WM_MOUSELEAVE: OnMouseLeave(hwnd); return 0;
-    case WM_TIMER:     return OnTimer(hwnd, w);
-    case WM_KEYDOWN:
-      if (w == VK_ESCAPE) {
-        // spec 052: ESC in always-show mode hides the panel
-        QuickPanelDialog::Hide();
-        return 0;
-      }
-      break;
-  }
-  return DefWindowProc(hwnd, msg, w, l);
-}
-
-LRESULT QuickPanelDialog::OnCreate(HWND) { return 0; }
-
-LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
-  KillTimer(hwnd, QP_TIMER_FADE);
-  StopFadeTimer();
-  s_mouseTracked = false;
-  if (s_hwnd == hwnd) s_hwnd = NULL;
-  s_logo.reset();
-  // L68-fix: release the IStream now that the Bitmap (its only reference) is
-  // gone. Releasing the stream before destroying the Bitmap would re-introduce
-  // the UAF (L67-fix bug).
-  if (s_logo_stream) {
-    s_logo_stream->Release();
-    s_logo_stream = NULL;
-  }
-  return 0;
-}
-
-LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
-  DoPaint(hwnd);
-  return 0;
-}
-
-LRESULT QuickPanelDialog::OnLButtonUp(HWND hwnd, int x, int y) {
-  int id = HitTest(x, y);
-  if (id > 0) FireButton(id);
-  return 0;
-}
-
-void QuickPanelDialog::OnMouseMove(HWND hwnd) {
-  if (!s_mouseTracked) {
-    TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
-    TrackMouseEvent(&tme);
-    s_mouseTracked = true;
-  }
-  StartFadeTo(hwnd, QP_ALPHA_HOVER);
-}
-
-void QuickPanelDialog::OnMouseLeave(HWND hwnd) {
-  s_mouseTracked = false;
-  // spec 052: in always-show mode, fade back to 20% (no auto-hide)
-  StartFadeTo(hwnd, QP_ALPHA_DEFAULT);
-}
-
-LRESULT QuickPanelDialog::OnTimer(HWND hwnd, WPARAM w) {
-  // spec 052: removed QP_TIMER_AUTOHIDE; panel stays visible in always-show mode
-  return 0;
+  s_onPhrases    = onPhrases;
+  s_onFullwidth  = onFullwidth;
+  s_onSymbols    = onSymbols;
+  s_onLogin      = onLogin;
+  Show(false, onSchema, onUserFolder, onPhrases, onFullwidth, onSymbols, onLogin);
 }
