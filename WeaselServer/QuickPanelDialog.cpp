@@ -168,8 +168,23 @@ HRESULT QuickPanelDialog::CreateOffscreenDC(int w, int h) {
   HDC hdcScreen = GetDC(NULL);
   s_hdcMem = CreateCompatibleDC(hdcScreen);
   if (!s_hdcMem) { ReleaseDC(NULL, hdcScreen); return E_FAIL; }
-  s_hBmpMem = CreateCompatibleBitmap(hdcScreen, w, h);
-  if (!s_hBmpMem) { ReleaseDC(NULL, hdcScreen); return E_FAIL; }
+
+  // L78-fix: 改用 32-bit DIB section(带 alpha channel)
+  // 之前 CreateCompatibleBitmap 是 24-bit DDB,GradientFill 的 alpha 被丢掉 → 全黑
+  BITMAPV5HEADER bi = {};
+  bi.bV5Size = sizeof(bi);
+  bi.bV5Width = w;
+  bi.bV5Height = h;
+  bi.bV5Planes = 1;
+  bi.bV5BitCount = 32;
+  bi.bV5Compression = BI_BITFIELDS;
+  bi.bV5RedMask   = 0x00FF0000;
+  bi.bV5GreenMask = 0x0000FF00;
+  bi.bV5BlueMask  = 0x000000FF;
+  bi.bV5AlphaMask = 0xFF000000;
+  void* pBits = nullptr;
+  s_hBmpMem = CreateDIBSection(hdcScreen, (BITMAPINFO*)&bi, DIB_RGB_COLORS, &pBits, NULL, 0);
+  if (!s_hBmpMem) { DeleteDC(s_hdcMem); s_hdcMem = NULL; ReleaseDC(NULL, hdcScreen); return E_FAIL; }
   SelectObject(s_hdcMem, s_hBmpMem);
   ReleaseDC(NULL, hdcScreen);
   return S_OK;
@@ -299,17 +314,13 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
   if (!hdc || !s_hdcMem) { EndPaint(hwnd, &ps); return 0; }
 
   // 1. 画到 off-screen DC (避免闪烁)
-  // 背景渐变:简单的 GDI GradientFill (垂直)
-  TRIVERTEX vert[2] = {
-    {0, 0, kBgTop & 0xFFFFFF, 0xFF00},  // top
-    {0, kPanelH, kBgBot & 0xFFFFFF, 0xFF00}  // bottom (full alpha, 86% LWA will dim)
-  };
-  GRADIENT_RECT gRect = {0, 1};
-  GradientFill(s_hdcMem, vert, 2, &gRect, 1, GRADIENT_FILL_RECT_V);
-
-  // 圆角面板效果(用 RoundRect 画边框)
+  // L78-fix v2: GradientFill 在 SDK 26100 32-bit DIB 上失效(silent fail → 黑 panel)
+  // 改用 solid white 底 (LWA_ALPHA 衰减,translucent 效果好)
   RECT panelRect = {0, 0, kPanelW, kPanelH};
-  // 不画边框(去 WS_EX_LAYERED 后,D2D 边框不画了)
+  FillRect(s_hdcMem, &panelRect, (HBRUSH)GetStockObject(WHITE_BRUSH));
+  // 顶 1px 高光
+  RECT topHL = {0, 0, kPanelW, 1};
+  FillRect(s_hdcMem, &topHL, s_hBrushHighlight);
 
   // 2. 画 logo (Fluxing 红色猿猴)
   if (s_hBmpLogo) {
@@ -321,17 +332,21 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
   }
 
   // 3. 画 5 个按钮
+  // L78-fix: hover 改图标 stroke 颜色为品牌橙(不是填充背景为橙)
+  // 背景:  active=橙, hover=白色半透(由 LWA 86% 衰减),默认=无填充
+  // 图标: active=白, hover=橙,默认=灰
   int buttonStartX = kPanelPadding + kBrandSize + 4;
   for (int i = 0; i < 5; i++) {
     int x0 = buttonStartX + i * (kBtnSize + 2);
     int y0 = kPanelPadding;
 
-    // 选 brush:  active 态用品牌色,hover 态用品牌色,默认用 dim
     bool isActive = (i == s_activeIdx);
     bool isHover = (i == s_hoveredIdx);
+
+    // 选背景 brush (L78-fix: hover 用白色半透,不是橙色填充)
     HBRUSH bgBrush = NULL;
-    if (isActive) bgBrush = s_hBrushActive;
-    else if (isHover) bgBrush = s_hBrushIconAccent;
+    if (isActive) bgBrush = s_hBrushActive;       // active: 橙
+    else if (isHover) bgBrush = s_hBrushHighlight;  // hover: 白色半透(由 LWA 衰减)
 
     if (bgBrush) {
       HRGN rgn = CreateRoundRectRgn(x0, y0, x0 + kBtnSize, y0 + kBtnSize, kBtnRadius, kBtnRadius);
@@ -339,10 +354,15 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
       DeleteObject(rgn);
     }
 
-    // 画 icon
+    // 选 icon PEN: active=白, hover=品牌橙,默认=灰
+    HPEN iconPen;
+    if (isActive) iconPen = (HPEN)GetStockObject(WHITE_PEN);
+    else if (isHover) iconPen = s_hPenIconAccent;
+    else iconPen = s_hPenIconDim;
+    HPEN oldPen = (HPEN)SelectObject(s_hdcMem, iconPen);
+
     int iconX = x0 + (kBtnSize - kIcoSize) / 2;
     int iconY = y0 + (kBtnSize - kIcoSize) / 2;
-    HPEN oldPen = (HPEN)SelectObject(s_hdcMem, isActive ? GetStockObject(WHITE_PEN) : (isHover ? s_hPenIconAccent : s_hPenIconDim));
     switch (i) {
       case 0: DrawIconSchema(s_hdcMem, iconX, iconY); break;
       case 1: DrawIconPhrase(s_hdcMem, iconX, iconY); break;
