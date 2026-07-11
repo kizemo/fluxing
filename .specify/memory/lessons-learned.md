@@ -5429,3 +5429,76 @@ Lessons:
 - **AP-L70-G**: Use `L"relative.png"` for assets. CWD != install dir
   in most Windows contexts (Start Menu, Task Scheduler, shortcuts).
   Use `GetModuleFileNameW(NULL, ...)` for absolute path.
+
+
+### L70 supplement v2 (v0.19.0.2) - 3 visual rendering bugs from user testing
+
+User reported (post-v0.19.0.1 testing):
+- Panel background is opaque black, not the v3-rev3 translucent white
+- Icons and logo are clustered at the left of the panel
+- Hover and click work but color is wrong
+
+Root causes (3 separate issues, all visible from one screenshot):
+
+1. **Alpha mode default = PREMULTIPLIED**. D2D HwndRenderTarget defaults to
+   D2D1_ALPHA_MODE_PREMULTIPLIED. ColorF(1,1,1,0.55) in premult mode is
+   stored as (0.55, 0.55, 0.55) actual RGB. Composited on dark taskbar
+   the panel reads as medium-dark gray, not translucent white.
+
+2. **Logical-pixel positions, physical-pixel window**. Show() passes
+   kPanelWidth=360 (logical) to CreateWindowExW. With DPI 1.5x, the
+   window is 540 physical pixels wide. But OnPaint uses kBtnSize=56
+   (logical) for button positions. D2D's GetSize() returns physical
+   pixels (540x100), so all button positions are at the left half
+   of the window. Buttons clustered left.
+
+3. **SetLayeredWindowAttributes(LWA_ALPHA) overrides per-pixel alpha**.
+   LWA_ALPHA sets uniform window opacity (alpha=240 in our call,
+   i.e. 94% opaque). This overrides whatever per-pixel alpha D2D
+   produces. Even though the design has 0.55 alpha white at the
+   top fading to 0.32 at the bottom, the whole window renders as
+   94% opaque. The user sees a nearly-opaque panel.
+
+Fixes (all in QuickPanelDialog.cpp):
+- RenderTargetProperties now explicitly set:
+  `D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_STRAIGHT)`
+- OnPaint layout uses `s_pRT->GetDpi(&dpiX, &dpiY)` and multiplies
+  all k*Size constants by `dpi/96` device pixel ratio
+- Window creation uses `GetDeviceCaps(LOGPIXELSX)` to compute
+  physical-pixel width/height for CreateWindowExW
+- `SetLayeredWindowAttributes` now uses `LWA_COLORKEY` (color
+  0xFFFFFFFF = full transparency) so D2D's per-pixel alpha takes
+  effect
+- Panel gradient bumped from 0.55->0.32 to 0.85->0.65 (more
+  visible against taskbar)
+- Icon dim color bumped from 0.20 to 0.45 (more visible against
+  the now-brighter panel)
+
+v0.19.0.2 installer SHA256:
+  2a41f3e95a757814c8e37659a876c86acc73e8863e792c429891910ec7f1e828
+
+Lessons (additional):
+1. **D2D defaults are NOT what you want for translucent UI**. Always
+   set PixelFormat explicitly with D2D1_ALPHA_MODE_STRAIGHT (or
+   PREMULTIPLIED + premultiply colors manually). The default
+   "UNKNOWN" mode picks PREMULTIPLIED in most cases.
+2. **Logical vs physical pixels in D2D**. Window sizes passed to
+   CreateWindowExW are LOGICAL, but everything inside D2D's render
+   target is PHYSICAL. Either compensate explicitly
+   (GetDeviceCaps + multiply) or set DpiAwareness on the window so
+   Windows does the conversion for you.
+3. **WS_EX_LAYERED semantics**. With LWA_ALPHA, the whole window
+   has uniform opacity. With LWA_COLORKEY, the colorkeyed pixels
+   are fully transparent and D2D's per-pixel alpha takes effect. For
+   a translucent UI element with a gradient, use LWA_COLORKEY.
+
+### Anti-patterns (additional)
+- **AP-L70-H**: Trust D2D default pixel format. Always set
+  PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_STRAIGHT)
+  for translucent UI.
+- **AP-L70-I**: Mix logical-pixel constants (kBtnSize=56) with
+  physical-pixel render targets (s_pRT->GetSize() returns physical).
+  Always scale by GetDpi()/96 inside OnPaint.
+- **AP-L70-J**: SetLayeredWindowAttributes(LWA_ALPHA, 240) thinking
+  it's 94% opacity. It's actually a uniform-opacity override that
+  eliminates per-pixel alpha. Use LWA_COLORKEY + D2D per-pixel alpha.
