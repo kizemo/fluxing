@@ -5502,3 +5502,61 @@ Lessons (additional):
 - **AP-L70-J**: SetLayeredWindowAttributes(LWA_ALPHA, 240) thinking
   it's 94% opacity. It's actually a uniform-opacity override that
   eliminates per-pixel alpha. Use LWA_COLORKEY + D2D per-pixel alpha.
+
+
+### L70 supplement v3 (v0.19.0.3) - 2 more bugs found via fluxing-bug-hunter
+
+User reported visual still off after v0.19.0.2. Bug-hunter (systematic-debugging
+Phase 1-4) found 2 more bugs in the v0.19.0.2 changes:
+
+1. HitTest uses logical pixels (kBtnSize=56), but OnPaint uses physical
+   pixels (s_pRT->GetDpi dpr-scaled). WM_MOUSEMOVE x/y are physical pixels
+   from CreateWindowExW. At DPI 1.5x:
+   - OnPaint puts button 0 at physical x=12..96 (logical 8..64)
+   - HitTest at physical x=100: computes x >= 68 && x < 124 -> button 0
+   - But actual button 0 is at x=12..96
+   - Result: clicking button 0 always misses, never registers.
+   Fix: HitTest now multiplies all constants by dpr (same as OnPaint).
+
+2. SetLayeredWindowAttributes(LWA_COLORKEY, RGB(255,255,255)) made
+   all white pixels transparent. Side effects:
+   - s_pBrushPressed (active state, white) disappears
+   - 1px white top highlight disappears
+   - D2D edge anti-aliasing produces near-white pixels at icon edges,
+     those get cut off -> jagged edges
+   Fix: don't call SetLayeredWindowAttributes at all. DWM uses default
+   per-pixel alpha with WS_EX_LAYERED + D2D HwndRenderTarget.
+
+v0.19.0.3 installer SHA256:
+  fefddb44447dde5604665b7327c350bd294a9933ae37ef30756ea67954d49da9
+
+Lessons (additional):
+1. DPI scaling must be applied to ALL mouse-input and layout code,
+   not just OnPaint. Once you use dpr in OnPaint, every function
+   that converts mouse coords (HitTest, OnLButtonUp, OnLButtonDown,
+   OnMouseMove, OnMouseLeave) must also use dpr. Forgetting one means
+   a button works visually but doesn't accept clicks.
+2. LWA_COLORKEY = color key, not "no colorkey". Setting colorkey
+   to white (0xFFFFFFFF = RGB 255,255,255) is not "no colorkey" - it's
+   "white is transparent". The actual no-colorkey value is
+   CLR_INVALID = 0xFFFFFFFF in COLORREF semantics, but in practice
+   the safest path is to NOT call SetLayeredWindowAttributes at all
+   for D2D-rendered translucent windows.
+
+### Anti-patterns (additional)
+- AP-L70-K: Modify only the painting code for DPI scaling, forget
+  the input handling. HitTest, OnLButtonUp, etc. must use the same
+  dpr scale as OnPaint. Search for int x / int y / POINT /
+  LOWORD / HIWORD / mouse event handlers and verify they all
+  convert through dpr.
+- AP-L70-L: SetLayeredWindowAttributes(LWA_COLORKEY, 0xFFFFFFFF)
+  for "no colorkey". 0xFFFFFFFF in RGB is white, not "unset". Either
+  don't call SetLayeredWindowAttributes at all (let DWM default take
+  over) or use a sentinel like CLR_INVALID explicitly.
+
+### Phase 5 minimal fix summary
+QuickPanelDialog.cpp: HitTest rewritten to use dpr scale on all
+constants and on all click-coord comparisons. Show() now skips
+SetLayeredWindowAttributes entirely (3rd arg=0, dwFlags=0 effectively
+means "no layered effect specified", letting DWM default per-pixel
+alpha take over for WS_EX_LAYERED + D2D HwndRenderTarget).
