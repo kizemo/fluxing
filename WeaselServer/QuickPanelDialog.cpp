@@ -242,14 +242,20 @@ HRESULT QuickPanelDialog::CreateD2DResources(HWND hwnd) {
   GetClientRect(hwnd, &rc);
   D2D1_SIZE_U size = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
 
+  // L70-bugfix v2: 改用 STRAIGHT alpha,确保 alpha 通道不被自动 premultiply
+  // 否则 0.55 alpha white 在 premult 后变成 (0.55, 0.55, 0.55) 真值,叠加在深色 taskbar 上 → 看起来就是中灰
   HRESULT hr = s_pD2DFactory->CreateHwndRenderTarget(
-      D2D1::RenderTargetProperties(),  // 默认属性(默认 RGB + premultiplied alpha)
+      D2D1::RenderTargetProperties(
+          D2D1_RENDER_TARGET_TYPE_DEFAULT,
+          D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_STRAIGHT),
+          0, 0, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_FEATURE_LEVEL_DEFAULT),
       D2D1::HwndRenderTargetProperties(hwnd, size),
       (ID2D1HwndRenderTarget**)&s_pRT);
   if (FAILED(hr) || !s_pRT) return hr;
 
   // 3 个 SolidColorBrush
-  s_pRT->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.20f, 0.55f), &s_pBrushDim);     // kFgDim 半透明深灰
+  // L70-bugfix v2: 提亮 icon 颜色(从 0.20 → 0.45),在半透白 panel 上更清楚
+  s_pRT->CreateSolidColorBrush(D2D1::ColorF(0.45f, 0.45f, 0.45f, 0.90f), &s_pBrushDim);     // kFgDim 中灰
   s_pRT->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.37f, 0.19f, 1.0f), &s_pBrushAccent);  // kAccent 品牌橙
   s_pRT->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f), &s_pBrushPressed); // kPressed 白
   // 注:s_pBrushHighlight 在下方独立创建为 LinearGradientBrush(顶部高光)
@@ -266,10 +272,10 @@ HRESULT QuickPanelDialog::CreateD2DResources(HWND hwnd) {
   if (pActiveStops) pActiveStops->Release();
 
   // L70-bugfix: panel 背景用 v3-rev3 设计稿的双层渐变(0.55→0.32 alpha)
-  // 创建一次永久复用
+  // L70-bugfix v2: 提亮到 0.85→0.65,STRAIGHT alpha,确保半透明白能看清
   D2D1_GRADIENT_STOP panelStops[2];
-  panelStops[0].position = 0.0f;  panelStops[0].color = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.55f);  // 顶部 0.55
-  panelStops[1].position = 1.0f;  panelStops[1].color = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.32f);  // 底部 0.32
+  panelStops[0].position = 0.0f;  panelStops[0].color = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.85f);  // 顶部 0.85
+  panelStops[1].position = 1.0f;  panelStops[1].color = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.65f);  // 底部 0.65
   ID2D1GradientStopCollection* pPanelStops = nullptr;
   s_pRT->CreateGradientStopCollection(panelStops, 2, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pPanelStops);
   ID2D1LinearGradientBrush* pPanelBrush = nullptr;
@@ -436,10 +442,21 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
   }
 
   // 3. logo (brand 块 56x56,padding 内)
+  // L70-bugfix v2: 用 GetSize() + GetDpi() 算物理像素布局,避免 DPI 缩放导致按钮挤左边
+  FLOAT dpiX = 96.0f, dpiY = 96.0f;
+  s_pRT->GetDpi(&dpiX, &dpiY);
+  const float dpr = dpiX / 96.0f;             // device pixel ratio
+  const float scale = dpr;                     // 1.0=100%, 1.5=150%
+  const float btnSize = (float)kBtnSize * scale;
+  const float brandSize = (float)kBrandSize * scale;
+  const float icoSize = (float)kIcoSize * scale;
+  const float padding = (float)kPanelPadding * scale;
+  const float btnGap = 2.0f * scale;
+
   if (s_pLogo) {
     D2D1_RECT_F logoRect = D2D1::RectF(
-        (float)kPanelPadding - 2.0f, (float)kPanelPadding - 2.0f,
-        (float)kPanelPadding - 2.0f + kBrandSize, (float)kPanelPadding - 2.0f + kBrandSize);
+        padding, padding,
+        padding + brandSize, padding + brandSize);
     s_pRT->DrawBitmap(s_pLogo, &logoRect);
   }
 
@@ -447,17 +464,16 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
   // active 按钮:橙→紫渐变背景 + 白色图标
   // hovered 按钮:图标变橙 (s_hoveredIdx 优先)
   // 默认:灰图标
-  const int buttonStartX = kPanelPadding + kBrandSize + 4;
+  // L70-bugfix v2: 物理像素位置
+  const float buttonStartX = padding + brandSize + 4.0f * scale;
   for (int i = 0; i < 5; i++) {
-    int x0 = buttonStartX + i * (kBtnSize + 2);
-    int y0 = kPanelPadding;
-    D2D1_RECT_F btnRect = D2D1::RectF(
-        (float)x0, (float)y0,
-        (float)(x0 + kBtnSize), (float)(y0 + kBtnSize));
+    float x0 = buttonStartX + i * (btnSize + btnGap);
+    float y0 = padding;
+    D2D1_RECT_F btnRect = D2D1::RectF(x0, y0, x0 + btnSize, y0 + btnSize);
 
     if (i == s_activeIdx) {
       // active 态:橙→紫渐变背景
-      D2D1_ROUNDED_RECT bgRect = D2D1::RoundedRect(btnRect, (float)kBtnRadius, (float)kBtnRadius);
+      D2D1_ROUNDED_RECT bgRect = D2D1::RoundedRect(btnRect, (float)kBtnRadius * scale, (float)kBtnRadius * scale);
       // 重建 active brush with this button's gradient
       ID2D1LinearGradientBrush* pActiveBtn = nullptr;
       D2D1_GRADIENT_STOP aStops[2] = {
@@ -467,7 +483,7 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
       ID2D1GradientStopCollection* pStops = nullptr;
       s_pRT->CreateGradientStopCollection(aStops, 2, &pStops);
       s_pRT->CreateLinearGradientBrush(
-          D2D1::LinearGradientBrushProperties(D2D1::Point2F((float)x0, (float)y0), D2D1::Point2F((float)(x0 + kBtnSize), (float)(y0 + kBtnSize))),
+          D2D1::LinearGradientBrushProperties(D2D1::Point2F(x0, y0), D2D1::Point2F(x0 + btnSize, y0 + btnSize)),
           pStops, &pActiveBtn);
       s_pRT->FillRoundedRectangle(&bgRect, pActiveBtn);
       if (pActiveBtn) pActiveBtn->Release();
@@ -477,15 +493,14 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
     // 画图标
     if (s_pIconGeometries[i]) {
       // icon viewport 24x24,渲染到 button 内 38x38 中心
-      float iconSize = (float)kIcoSize;
-      float iconX = x0 + (kBtnSize - kIcoSize) / 2.0f;
-      float iconY = y0 + (kBtnSize - kIcoSize) / 2.0f;
-      // 创建 scale transform:24→38 ≈ 1.583
-      float scale = iconSize / 24.0f;
+      float iconX = x0 + (btnSize - icoSize) / 2.0f;
+      float iconY = y0 + (btnSize - icoSize) / 2.0f;
+      // 创建 scale transform:24→38
+      float icoScale = icoSize / 24.0f;
       ID2D1TransformedGeometry* pTransformed = nullptr;
       s_pD2DFactory->CreateTransformedGeometry(
           s_pIconGeometries[i],
-          D2D1::Matrix3x2F::Scale(scale, scale) *
+          D2D1::Matrix3x2F::Scale(icoScale, icoScale) *
           D2D1::Matrix3x2F::Translation(iconX, iconY),
           &pTransformed);
       if (pTransformed) {
@@ -630,18 +645,27 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   // 屏幕右下角定位
   RECT workArea;
   SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
-  int x = workArea.right - kPanelWidth - 12;
-  int y = workArea.bottom - kPanelHeight - 12;
+  // L70-bugfix v2: 改用 GetSystemMetrics SM_CXSCREEN/SM_CYDPI 算物理像素
+  HDC hdc = GetDC(nullptr);
+  int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
+  int dpiY = GetDeviceCaps(hdc, LOGPIXELSY);
+  ReleaseDC(nullptr, hdc);
+  float dpr = (float)dpiX / 96.0f;
+  int physW = (int)((float)kPanelWidth * dpr);
+  int physH = (int)((float)kPanelHeight * dpr);
+  int x = workArea.right - physW - 12;
+  int y = workArea.bottom - physH - 12;
 
   s_hwnd = CreateWindowExW(
       WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TOPMOST,
       kWindowClassName, L"Fluxing QuickPanel",
       WS_POPUP,
-      x, y, kPanelWidth, kPanelHeight,
+      x, y, physW, physH,
       NULL, NULL, GetModuleHandle(NULL), NULL);
   if (!s_hwnd) return;
-  // 240/255 = ~94% 不透明(spec 070 v3-rev3 不透明度)
-  SetLayeredWindowAttributes(s_hwnd, RGB(0, 0, 0), 240, LWA_ALPHA);
+  // L70-bugfix v2: 不调 SetLayeredWindowAttributes(LWA_ALPHA),那个会覆写 per-pixel alpha 为整窗 alpha=240(几乎不透明)
+  // 改用 LWA_COLORKEY 0xFFFFFFFF 完全透明 + WS_EX_LAYERED 让 D2D 的 per-pixel alpha 生效
+  SetLayeredWindowAttributes(s_hwnd, RGB(255, 255, 255), 255, LWA_COLORKEY);
   ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
   InvalidateRect(s_hwnd, NULL, FALSE);
 }
