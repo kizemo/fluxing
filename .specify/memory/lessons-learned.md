@@ -6245,3 +6245,123 @@ pixels are now correctly white. Icons visible.
   uniform LWA_ALPHA): v0.19.1.0
 - 5 icon paths simplified (current uses many MoveTo/LineTo — could use
   Gdip* paths once we have D2D path geometry, or render via SVG)
+
+
+## L77 - v0.19.0.9: 圆角 + logo 路径 fix
+
+### Symptom (carried from v0.19.0.8)
+User reported v0.19.0.8:
+1. Panel is rectangular, should be 圆角 (rounded corners)
+2. Logo not loading (visible as black panel area)
+3. Hover has no change (BG should change to orange on click; user wants hover to only change icon STROKE)
+
+### Phase 1 (root cause)
+
+Issue 1: OnPaint uses `FillRect(hdc, &rect, brush)` which is rectangular.
+The design needs `RoundRect` for the panel background and `FrameRgn` for
+the 1px border. E2E was showing rectangular panel because we drew rectangular.
+
+Issue 2: logo path failure. WeaselServer.exe is at
+`D:\Program Files\fluxing\weasel\WeaselServer.exe` after install.
+The `GetModuleFileNameW(NULL, ...)` returns this path; after removing
+the filename, `exeDir` is `D:\Program Files\fluxing\weasel`. Then
+`fluxing-logo.png` should be at `D:\Program Files\fluxing\weasel\fluxing-logo.png`.
+
+But the file at that path doesn't exist. The NSIS install script
+`File "fluxing-logo.png"` after `SetOutPath $INSTDIR` only puts the file
+in `$INSTDIR` (= `D:\Program Files\fluxing\`), not the `weasel\`
+subdirectory. WeaselServer's exe is in `$INSTDIR\weasel\` so the logo
+path was wrong.
+
+Issue 3: hover behavior. v0.19.0.8 code changed BOTH bg and icon stroke
+on hover. User wanted ONLY icon stroke change. The L78 fix had
+`bgBrush = s_hBrushHighlight` (white) on hover which filled the bg.
+User wanted no bg change on hover — only icon stroke color.
+
+### Phase 2 (fixes)
+
+Three changes:
+
+1. **OnPaint uses RoundRect for background**:
+   ```cpp
+   HRGN panelRgn = CreateRoundRectRgn(0, 0, kPanelW, kPanelH, kPanelRadius, kPanelRadius);
+   FillRgn(s_hdcMem, panelRgn, (HBRUSH)GetStockObject(WHITE_BRUSH));
+   DeleteObject(panelRgn);
+   HRGN borderRgn = CreateRoundRectRgn(0, 0, kPanelW, kPanelH, kPanelRadius, kPanelRadius);
+   FrameRgn(s_hdcMem, borderRgn, (HBRUSH)GetStockObject(WHITE_BRUSH), 1, 1);
+   DeleteObject(borderRgn);
+   ```
+   `FillRgn` with a round-rect region fills only the rounded area.
+   The corners become transparent (alpha=0) in the 32-bit DIB.
+
+2. **install.nsi adds fluxing-logo.png to weasel subdir**:
+   ```nsi
+   SetOutPath $INSTDIR\weasel
+   File "fluxing-logo.png"
+   SetOutPath $INSTDIR
+   ```
+   Now the logo exists at `D:\Program Files\fluxing\weasel\fluxing-logo.png`
+   which matches WeaselServer's exe directory.
+
+3. **OnPaint hover only changes icon stroke, not bg**:
+   ```cpp
+   HBRUSH bgBrush = NULL;
+   if (isActive) bgBrush = s_hBrushActive;  // only active draws bg
+   // hover: no bg change
+   ```
+   Per design v3-rev3, hover is meant to only change `color: var(--accent)`
+   (icon stroke) not `background: rgba(255,255,255,0.45)`. The bg change
+   is the click/active state.
+
+### Phase 3 (verification)
+
+E2E v0.19.0.9:
+```
+RGB=(255,255,255): 23009 pixels (93% — white panel)
+RGB=( 60, 60, 67):    842 pixels (4% — icon outlines)
+RGB=(  0,  0, 0):    629 pixels (2% — outside rounded corners)
+```
+
+The 2% black pixels are outside the rounded panel (corners are now
+transparent, showing "desktop" through them). The center is white (93%).
+Icons are gray (4%).
+
+For the user's "frosted glass" effect, v0.19.0.9 still has a solid
+white background with LWA_ALPHA(220) for translucency. True frosted
+glass with per-pixel alpha needs UpdateLayeredWindow with a 32-bit
+DIB and an alpha channel that's properly composed. v0.19.0.10+.
+
+### Lessons
+
+1. **`FillRect` ignores the `HRGN` you pass — there's no `FillRect`
+   overload that accepts a region**. To do a rounded-rectangle fill,
+   you must use `FillRgn` with a region created by `CreateRoundRectRgn`.
+2. **`SetOutPath` in NSIS only affects files copied AFTER the
+   directive**. If you set `SetOutPath $INSTDIR` then `File "logo.png"`,
+   the logo goes to `$INSTDIR\logo.png`, NOT `$INSTDIR\weasel\logo.png`.
+   Forgot to also `File` it to the weasel subdir.
+3. **Hover vs click semantics**: in modern UI design, hover changes
+   color/icon (preview), click changes state (active). L78 was filling
+   bg on hover which conflicted with this model. L79 removed hover-bg.
+
+### Anti-patterns (additional)
+
+- **AP-L77-A**: Use `FillRect` and expect it to respect a region.
+  FillRect takes a rect, not a region. Use `FillRgn` for regions.
+- **AP-L77-B**: Set SetOutPath once and assume all subsequent Files
+  go there. Each `SetOutPath` only affects Files after it.
+- **AP-L77-C**: Fill button bg on hover. Hover should be a "preview"
+  state, not a state change. Reserve bg fill for active/clicked.
+
+### Files touched (v0.19.0.9)
+- WeaselServer/QuickPanelDialog.cpp: OnPaint uses RoundRect/FillRgn
+- output/install.nsi: also installs fluxing-logo.png to weasel subdir
+
+### Future work
+- v0.19.0.10: per-pixel alpha via UpdateLayeredWindow + 32-bit
+  DIB. The 32-bit DIBSection is already used; we just need to do
+  the alpha blend with `BLENDFUNCTION` and call `UpdateLayeredWindow`
+  instead of regular WM_PAINT path.
+- v0.19.1.0: real frosted glass with per-icon hover state (currently
+  shared via single s_hoveredIdx; need per-icon s_hoveredIdx for
+  v3-rev3 design's per-icon hover highlight)
