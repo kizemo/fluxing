@@ -179,30 +179,48 @@ class BIH(ctypes.Structure):
         ('biYPelsPerMeter', ctypes.c_int), ('biClrUsed', wt.DWORD), ('biClrImportant', wt.DWORD)
     ]
 
+# v0.19.0.10 bug-fix: BI_RGB strips alpha from GetDIBits result.
+# Use BI_BITFIELDS (3) + RGBA masks so per-pixel alpha is preserved.
+# See https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-getdibits
+# "the function sets the biClrUsed member to zero and stores the alpha channel
+#  values for each pixel in the high byte of each 32-bit word" - only when BI_BITFIELDS.
 bi = BIH()
 bi.biSize = 40
 bi.biWidth = w
 bi.biHeight = -h  # top-down
 bi.biPlanes = 1
 bi.biBitCount = 32
-bi.biCompression = 0  # BI_RGB
+bi.biCompression = 3  # BI_BITFIELDS
 bi.biSizeImage = w * h * 4
 bi.biXPelsPerMeter = 2835  # 96 DPI
 bi.biYPelsPerMeter = 2835
 
 bits_size = w * h * 4
 bits = ctypes.create_string_buffer(bits_size)
-gdi32.GetDIBits(hdc_mem, hbm, 0, h, bits, ctypes.byref(bi), 0)
+# Pass full BITMAPINFO with BI_BITFIELDS + RGBA masks
+class BMI(ctypes.Structure):
+    _fields_ = [
+        ('bmiHeader', BIH),
+        ('bmiColors', wt.DWORD * 3),  # 3 masks: R, G, B; alpha implied by BitCount=32
+    ]
+bmi = BMI()
+bmi.bmiHeader = bi
+bmi.bmiColors[0] = 0x00FF0000  # R
+bmi.bmiColors[1] = 0x0000FF00  # G
+bmi.bmiColors[2] = 0x000000FF  # B
+# alpha mask is the remaining byte (0xFF000000) when masks sum to 32 bits
+gdi32.GetDIBits(hdc_mem, hbm, 0, h, bits, ctypes.byref(bmi), 0)
 gdi32.DeleteObject(hbm)
 gdi32.DeleteDC(hdc_mem)
 user32.ReleaseDC(hwnd_panel, hdc)
 
-# Save BMP (raw)
+# Save BMP (raw) — v0.19.0.10 update: include BI_BITFIELDS color masks in BMP header
 bmp_path = ROOT / "qp.bmp"
-bfh = struct.pack('<HIHHI', 0x4D42, 14 + 40 + bits_size, 0, 0, 14 + 40)
+bfh = struct.pack('<HIHHI', 0x4D42, 14 + 40 + 12 + bits_size, 0, 0, 14 + 40 + 12)
 with open(bmp_path, 'wb') as f:
     f.write(bfh)
     f.write(bytes(bi))
+    f.write(struct.pack('<III', 0x00FF0000, 0x0000FF00, 0x000000FF))  # RGB masks
     f.write(bits.raw)
 print(f"BMP saved: {bmp_path} ({bmp_path.stat().st_size} bytes)")
 

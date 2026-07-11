@@ -1,23 +1,53 @@
-// QuickPanelDialog v3-rev3 — PURE GDI implementation (spec 074 L75)
+// QuickPanelDialog v3-rev3 — PURE GDI + per-pixel alpha (spec 074 v0.19.0.10)
 //
 // 设计: docs/design/quickpanel-v3/index.html
 // 历史雷区(plan.md 强制):
 //   ❌ 绝对不用 GDI+ Bitmap(IStream*) (L67-L69 崩溃链)
 //   ❌ 绝对不 CreateStreamOnHGlobal + Release() (L67 根因)
 //   ❌ 绝对不用 D2D ID2D1HwndRenderTarget (L74 黑 panel,DComp 未 promote)
+//   ❌ 绝对不用 LWA_ALPHA uniform (L77 — 不是 liquid glass,只是 86% 全白)
+//   ❌ 绝对不在 WS_EX_LAYERED 后 BitBlt 到 window DC (双路径会闪烁)
+//   → 用 UpdateLayeredWindow + 32-bit DIB 一次性提交
 //
-// 本实现纯 Win32 GDI:
+// 本实现纯 Win32 GDI + per-pixel alpha:
 //   - LoadImageW 直接从 PNG 文件创建 HBITMAP(无 GDI+ 路径)
 //   - 全部 painting 用 HDC + SelectObject(无 D2D、无 GDI+)
 //   - 5 个图标用 MoveTo/LineTo/Ellipse/Rectangle 画
-//   - WS_EX_LAYERED + SetLayeredWindowAttributes(LWA_ALPHA, 220)
-//     86% uniform translucency(per-pixel alpha 留给 v0.19.0.8+ UpdateLayeredWindow)
+//   - 32-bit DIBSection (BGRA) 存放 layered surface
+//   - PaintOpaqueContent() 画 opaque 内容到 s_hdcMem (logo + icons + 圆角边)
+//   - ApplyAlphaGradient() 改 pBits alpha 通道:圆角内按 y 渐变 140→82,圆角外 0
+//   - WS_EX_LAYERED + UpdateLayeredWindow(ULW_ALPHA) 提交到 screen
 //
 #include "stdafx.h"
 #include <functional>
 #include "QuickPanelDialog.h"
 
 static const wchar_t kWindowClassName[] = L"FluxingQuickPanel_v3";
+
+namespace {
+// 圆角掩码测试:4 corner cells 用 circle equation,其余 (W-r)..(H-r) 范围内的 inside=true。
+// per-pixel 内调用 ~54K 次 (360x68,1x DPI),避免 CreateRoundRectRgn / PtInRegion 开销。
+inline bool IsInsideRoundedRect(int x, int y, int W, int H, int r) {
+  if (x < 0 || x >= W || y < 0 || y >= H) return false;
+  if (x < r && y < r) {
+    int dx = r - x, dy = r - y;
+    return (dx * dx + dy * dy) <= (r * r);
+  }
+  if (x >= W - r && y < r) {
+    int dx = x - (W - r - 1), dy = r - y;
+    return (dx * dx + dy * dy) <= (r * r);
+  }
+  if (x < r && y >= H - r) {
+    int dx = r - x, dy = y - (H - r - 1);
+    return (dx * dx + dy * dy) <= (r * r);
+  }
+  if (x >= W - r && y >= H - r) {
+    int dx = x - (W - r - 1), dy = y - (H - r - 1);
+    return (dx * dx + dy * dy) <= (r * r);
+  }
+  return true;
+}
+}  // anonymous namespace
 
 // 颜色常量(在文件作用域,本地作用域,kIcoDimC 等)
 constexpr COLORREF kIcoDimC   = RGB(60, 60, 67);     // 灰
@@ -308,34 +338,29 @@ LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
   return 0;
 }
 
-LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
-  PAINTSTRUCT ps;
-  HDC hdc = BeginPaint(hwnd, &ps);
-  if (!hdc || !s_hdcMem) { EndPaint(hwnd, &ps); return 0; }
-
-  // 1. 画到 off-screen DC (避免闪烁)
-  // L79-fix: 圆角 panel + 浅边 + hover 只改 icon stroke
-  RECT panelRect = {0, 0, kPanelW, kPanelH};
-
+// PaintOpaqueContent: v0.19.0.10 新抽出。把原 OnPaint 的"画 opaque 内容到 s_hdcMem"
+// 部分抽出来 — roundRgn WHITE bg + 1px border + top highlight + logo + 5 icons。
+// 不再 BitBlt 到 window DC (WS_EX_LAYERED 后双路径会闪烁,见 file header 雷区)。
+void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // 1a. 圆角 panel 背景 (用 FillRgn + round-rect-region,不用 FillRect 方角)
   HRGN panelRgn = CreateRoundRectRgn(0, 0, kPanelW, kPanelH, kPanelRadius, kPanelRadius);
-  FillRgn(s_hdcMem, panelRgn, (HBRUSH)GetStockObject(WHITE_BRUSH));
+  FillRgn(hdc, panelRgn, (HBRUSH)GetStockObject(WHITE_BRUSH));
   DeleteObject(panelRgn);
 
   // 1b. 1px 半透白边(v3-rev3 设计)
   HRGN borderRgn = CreateRoundRectRgn(0, 0, kPanelW, kPanelH, kPanelRadius, kPanelRadius);
-  FrameRgn(s_hdcMem, borderRgn, (HBRUSH)GetStockObject(WHITE_BRUSH), 1, 1);
+  FrameRgn(hdc, borderRgn, (HBRUSH)GetStockObject(WHITE_BRUSH), 1, 1);
   DeleteObject(borderRgn);
 
   // 1c. 顶 1px 高光 (设计: top highlight 用白 0.85 alpha)
   RECT topHL = {kPanelRadius, 0, kPanelW - kPanelRadius, 1};
-  FillRect(s_hdcMem, &topHL, s_hBrushHighlight);
+  FillRect(hdc, &topHL, s_hBrushHighlight);
 
   // 2. 画 logo (Fluxing 红色猿猴)
   if (s_hBmpLogo) {
-    HDC hdcMemLogo = CreateCompatibleDC(s_hdcMem);
+    HDC hdcMemLogo = CreateCompatibleDC(hdc);
     SelectObject(hdcMemLogo, s_hBmpLogo);
-    BitBlt(s_hdcMem, kPanelPadding, kPanelPadding, kBrandSize, kBrandSize,
+    BitBlt(hdc, kPanelPadding, kPanelPadding, kBrandSize, kBrandSize,
            hdcMemLogo, 0, 0, SRCCOPY);
     DeleteDC(hdcMemLogo);
   }
@@ -351,38 +376,162 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
     bool isActive = (i == s_activeIdx);
     bool isHover = (i == s_hoveredIdx);
 
-    // 选背景 brush (仅 active 画渐变 BG;hover 不画 bg)
     HBRUSH bgBrush = NULL;
     if (isActive) bgBrush = s_hBrushActive;  // active: 橙
 
     if (bgBrush) {
-      HRGN rgn = CreateRoundRectRgn(x0, y0, x0 + kBtnSize, y0 + kBtnSize, kBtnRadius, kBtnRadius);
-      FillRgn(s_hdcMem, rgn, bgBrush);
+      HRGN rgn = CreateRoundRectRgn(x0, y0, x0 + kBtnSize, y0 + kBtnSize,
+                                     kBtnRadius, kBtnRadius);
+      FillRgn(hdc, rgn, bgBrush);
       DeleteObject(rgn);
     }
 
-    // 选 icon PEN: active=白, hover=品牌橙,默认=灰
     HPEN iconPen;
     if (isActive) iconPen = (HPEN)GetStockObject(WHITE_PEN);
     else if (isHover) iconPen = s_hPenIconAccent;
     else iconPen = s_hPenIconDim;
-    HPEN oldPen = (HPEN)SelectObject(s_hdcMem, iconPen);
+    HPEN oldPen = (HPEN)SelectObject(hdc, iconPen);
 
     int iconX = x0 + (kBtnSize - kIcoSize) / 2;
     int iconY = y0 + (kBtnSize - kIcoSize) / 2;
     switch (i) {
-      case 0: DrawIconSchema(s_hdcMem, iconX, iconY); break;
-      case 1: DrawIconPhrase(s_hdcMem, iconX, iconY); break;
-      case 2: DrawIconSymbols(s_hdcMem, iconX, iconY); break;
-      case 3: DrawIconSettings(s_hdcMem, iconX, iconY); break;
-      case 4: DrawIconAccount(s_hdcMem, iconX, iconY); break;
+      case 0: DrawIconSchema(hdc, iconX, iconY); break;
+      case 1: DrawIconPhrase(hdc, iconX, iconY); break;
+      case 2: DrawIconSymbols(hdc, iconX, iconY); break;
+      case 3: DrawIconSettings(hdc, iconX, iconY); break;
+      case 4: DrawIconAccount(hdc, iconX, iconY); break;
     }
-    SelectObject(s_hdcMem, oldPen);
+    SelectObject(hdc, oldPen);
+  }
+}
+
+// ApplyAlphaGradient: v0.19.0.10 新增 per-pixel alpha pipeline。
+// 把 32-bit DIB 的 alpha 通道从默认 alpha=255 (GDI 写入默认) 改成 liquid glass 形状:
+// - 圆角外 (corner & outside) alpha = 0 → 桌面可见
+// - 圆角内,RGB == 纯白 (panel bg / border / top highlight): 按 y 渐变
+//   top alpha=kAlphaPanelTop (140 = 0x88),bot alpha=kAlphaPanelBot (82 = 0x52)
+//   Linear interpolate by row ratio
+// - 圆角内,RGB 含色 (icons / logo / active orange bg): 保留 alpha=255 (opaque 图形)
+//
+// 为什么按 RGB 区分?GDI Brush 没有 alpha 通道,在 32-bit BI_BITFIELDS DIB 上画出来一律
+// alpha=255。区分 bg vs icon 的廉价办法是看 RGB:panel bg 是 WHITE_BRUSH,纯白;
+// icons 用 kIcoDimC(60,60,67)/kAccentC(255,95,49)/kAccent2C(155,81,224),非纯白;
+// logo 是 fluxing 品牌色 PNG,非纯白; 边框 1px white — 仅 border 这一处会被设成 alpha=gradient
+// (轻量损失,1px 的 opaque vs 半透明差异肉眼几乎不可察)。
+void QuickPanelDialog::ApplyAlphaGradient() {
+  if (!s_hBmpMem || s_panelW_phys <= 0 || s_panelH_phys <= 0) return;
+  BITMAP bm = {};
+  if (!GetObject(s_hBmpMem, sizeof(bm), &bm) || !bm.bmBits) return;
+
+  DWORD* p = static_cast<DWORD*>(bm.bmBits);
+  const int W = s_panelW_phys;
+  const int H = s_panelH_phys;
+  const int r = kPanelRadius;
+  const int Hminus1 = (H > 1) ? (H - 1) : 1;
+
+  for (int y = 0; y < H; y++) {
+    // linear gradient: alpha = top at y=0 → bottom at y=H-1
+    // 用定点数 (16.16) 避免浮点 perf 抖动,但小数足够小用整数足够精确
+    int aPanel = kAlphaPanelTop +
+                 ((int)(kAlphaPanelBot - kAlphaPanelTop) * y / Hminus1);
+
+    for (int x = 0; x < W; x++) {
+      DWORD* px = &p[(size_t)y * W + x];
+      if (!IsInsideRoundedRect(x, y, W, H, r)) {
+        *px = 0;  // alpha=0 (BGRA all zero) — fully transparent (桌面可见)
+        continue;
+      }
+      // 圆角内:RGB == 纯白 → 渐变 alpha (panel bg / 1px border / top highlight)
+      BYTE r8 = (*px >> 16) & 0xFF;
+      BYTE g8 = (*px >> 8)  & 0xFF;
+      BYTE b8 =  *px        & 0xFF;
+      if (r8 >= 250 && g8 >= 250 && b8 >= 250) {
+        *px = ((DWORD)aPanel << 24) | 0x00FFFFFF;  // BGRA: 半透明白
+      }
+      // else: icons / logo / active bg (含色的 RGB) 保留 GDI 默认 alpha=255
+    }
+  }
+}
+
+// RepaintLayered: v0.19.0.10 新 layered surface 提交。
+// - PaintOpaqueContent → ApplyAlphaGradient → UpdateLayeredWindow
+// - UpdateLayeredWindow 从 s_hdcMem 读 32-bit BGRA → 提交整个 panel 到 screen,
+//   屏幕合成器按 per-pixel alpha 决定哪些像素透桌面。
+//
+// WS_EX_LAYERED 后 WM_PAINT 路径不再有效 (BeginPaint/EndPaint 拿到 DC 但 layered
+// window 不在那画) — 改成走 UpdateLayeredWindow 一次性提交。Screen 上看是
+// 透明 + 半透明白底图标,符合 Liquid Glass 设计意图。
+void QuickPanelDialog::RepaintLayered(HWND hwnd) {
+  if (!hwnd || !s_hdcMem || !s_hBmpMem ||
+      s_panelW_phys <= 0 || s_panelH_phys <= 0) return;
+
+  PaintOpaqueContent(s_hdcMem);
+  ApplyAlphaGradient();
+
+  // v0.19.0.10 diag-dump: 把 s_hBmpMem 的 raw 32-bit BGRA 写到文件便于
+  // 验证 ApplyAlphaGradient 真的把 alpha 写到 pBits 了 (PrintWindow 在
+  // WS_EX_LAYERED 路径上可能把 alpha composite 掉,看不真切)。
+  // 当 FLUXING_QP_DIAG_DUMP=1 才写文件。
+  if (GetEnvironmentVariableW(L"FLUXING_QP_DIAG_DUMP", nullptr, 0) != 0) {
+    BITMAP bm = {};
+    if (GetObject(s_hBmpMem, sizeof(bm), &bm) && bm.bmBits) {
+      HANDLE f = CreateFileW(L"F:\\soft\\00selfmade\\rime_claude\\qp-dump.bmp",
+                             GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (f != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        BITMAPFILEHEADER bfh = {};
+        bfh.bfType = 0x4D42;
+        DWORD dibSize = 40 + 12;
+        bfh.bfSize = 14 + dibSize + (DWORD)bm.bmWidthBytes * bm.bmHeight;
+        bfh.bfOffBits = 14 + dibSize;
+        BITMAPINFOHEADER bi = {};
+        bi.biSize = 40;
+        bi.biWidth = bm.bmWidth;
+        bi.biHeight = -bm.bmHeight;  // top-down
+        bi.biPlanes = 1;
+        bi.biBitCount = 32;
+        bi.biCompression = 3;  // BI_BITFIELDS
+        bi.biSizeImage = (DWORD)bm.bmWidthBytes * bm.bmHeight;
+        WriteFile(f, &bfh, sizeof(bfh), &written, nullptr);
+        WriteFile(f, &bi, sizeof(bi), &written, nullptr);
+        DWORD masks[3] = {0x00FF0000, 0x0000FF00, 0x000000FF};
+        WriteFile(f, masks, sizeof(masks), &written, nullptr);
+        WriteFile(f, bm.bmBits, bi.biSizeImage, &written, nullptr);
+        CloseHandle(f);
+      }
+    }
   }
 
-  // 4. Blit 到屏幕
-  BitBlt(hdc, 0, 0, kPanelW, kPanelH, s_hdcMem, 0, 0, SRCCOPY);
+  // window position: client → screen, 给 UpdateLayeredWindow 的 destination origin
+  POINT ptPos = {0, 0};
+  RECT rcClient;
+  GetClientRect(hwnd, &rcClient);
+  MapWindowPoints(hwnd, NULL, (POINT*)&rcClient, 2);
+  ptPos.x = rcClient.left;
+  ptPos.y = rcClient.top;
+
+  POINT ptSrc = {0, 0};
+  SIZE sizeWnd = {s_panelW_phys, s_panelH_phys};
+  // AC_SRC_OVER + AC_SRC_ALPHA: source per-pixel alpha 通道生效
+  BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+
+  if (!UpdateLayeredWindow(hwnd, NULL, &ptPos, &sizeWnd, s_hdcMem,
+                           &ptSrc, 0, &blend, ULW_ALPHA)) {
+    // UpdateLayeredWindow 失败 — 调试钩子 (L74 教训)
+    DWORD err = GetLastError();
+    (void)err;
+  }
+}
+
+LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
+  // v0.19.0.10 layered path:BeginPaint 必须配对 EndPaint,但 layered window 不在
+  // window DC 上画 — 走 RepaintLayered 提交 UpdateLayeredWindow 路径。
+  PAINTSTRUCT ps;
+  HDC hdc = BeginPaint(hwnd, &ps);
+  (void)hdc;
   EndPaint(hwnd, &ps);
+  RepaintLayered(hwnd);
   return 0;
 }
 
@@ -421,7 +570,8 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   (void)onPhrases; (void)onFullwidth; (void)onSymbols; (void)onLogin;
   if (s_hwnd) {
     ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
-    InvalidateRect(s_hwnd, NULL, FALSE);
+    // v0.19.0.10: layered path — InvalidateRect 无意义,直接重画提交
+    RepaintLayered(s_hwnd);
     return;
   }
   WNDCLASSEXW wc = {0};
@@ -446,10 +596,11 @@ void QuickPanelDialog::Show(bool currentFullwidth,
       x, y, kPanelW, kPanelH,
       NULL, NULL, GetModuleHandle(NULL), NULL);
   if (!s_hwnd) return;
-  // L75: 86% uniform translucency(per-pixel 留 v0.19.0.8+ UpdateLayeredWindow)
-  SetLayeredWindowAttributes(s_hwnd, 0, kAlphaPanel, LWA_ALPHA);
+  // v0.19.0.10: 不再 SetLayeredWindowAttributes(LWA_ALPHA) — 那种 uniform 半透明
+  // 不是 liquid glass (面板整体 86% 不透明)。 per-pixel alpha 走 RepaintLayered →
+  // ApplyAlphaGradient → UpdateLayeredWindow(ULW_ALPHA)。
   ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
-  InvalidateRect(s_hwnd, NULL, FALSE);
+  RepaintLayered(s_hwnd);  // 第一次提交 layered surface (带渐变 alpha)
 }
 
 void QuickPanelDialog::Hide() {
