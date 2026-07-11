@@ -94,7 +94,8 @@ class QuickPanelDialog {
   static ID2D1SolidColorBrush*     s_pBrushAccent;    // hover 后品牌橙 #FF5F31
   static ID2D1SolidColorBrush*     s_pBrushPressed;   // active 白
   static ID2D1LinearGradientBrush* s_pBrushActive;    // active 橙→紫渐变
-  static ID2D1SolidColorBrush*     s_pBrushHighlight; // 顶部高光白
+  static ID2D1LinearGradientBrush* s_pBrushHighlight; // 顶部高光 1px 渐变(transparent→white→transparent)
+  static ID2D1LinearGradientBrush* s_pBrushPanel;     // L70-bugfix: panel 背景 0.55→0.32 alpha 渐变
   // 5 个图标几何:0=方案,1=短语,2=符号,3=设置,4=账号
   static ID2D1PathGeometry*        s_pIconGeometries[5];
 

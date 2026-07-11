@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include <shellapi.h>  // L70-bugfix: FocusIn lambda uses ShellExecuteW
 #include <logging.h>
 #include <RimeWithWeasel.h>
 #include <StringAlgorithm.hpp>
