@@ -1,5 +1,124 @@
 
 
+## [0.19.0.10-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.10 - QuickPanel per-pixel alpha Liquid Glass (L77→v0.19.0.10 Future Work realized)
+
+- **User pain**: v0.19.0.7~v0.19.0.9 ships had a "uniform 86% opaque white panel"
+  via `SetLayeredWindowAttributes(LWA_ALPHA, 220)`. Visually it looked like a
+  flat opaque box, NOT the macOS-style Liquid Glass panel in the v3-rev3 design.
+  Per lessons-learned L77 "Future work", the right fix is `UpdateLayeredWindow`
+  with a 32-bit DIB carrying per-pixel alpha.
+
+- **Cure (2 files, +~110 lines net)**:
+  1. `WeaselServer/QuickPanelDialog.h`:
+     - Add `kAlphaPanelTop = 140` (0x88, 55%) + `kAlphaPanelBot = 82` (0x52, 32%)
+       constants (replacing uniform `kAlphaPanel = 220`)
+     - Add `ApplyAlphaGradient()`, `PaintOpaqueContent()`, `RepaintLayered()`
+       static method declarations
+  2. `WeaselServer/QuickPanelDialog.cpp`:
+     - Add `IsInsideRoundedRect()` helper (top-left/right/bottom-left/right
+       4-corner circle equation + 0 for outside panel rect)
+     - Extract `PaintOpaqueContent(HDC)` from old `OnPaint` body — keeps
+       FillRgn WHITE round-rect bg + 1px border + top highlight + logo (PNG) +
+       5 icons (MoveTo/LineTo/...) drawing code intact
+     - New `ApplyAlphaGradient()` scans `s_hBmpMem`'s `bmBits` directly:
+       - 圆角外 (corner & outside): `*px = 0` (BGRA = 0, alpha=0, 桌面可见)
+       - 圆角内 RGB ≥ 250,250,250 (panel bg / 1px border / top highlight):
+         `(aPanel << 24) | 0x00FFFFFF` (BGRA: 半透明白, alpha = gradient)
+       - 圆角内 RGB 含色 (icons / logo / active orange bg): 保留 GDI 默认 alpha=255
+     - New `RepaintLayered(HWND)`:
+       - Calls `PaintOpaqueContent(s_hdcMem)` + `ApplyAlphaGradient()` + `UpdateLayeredWindow(hwnd, NULL, &ptPos, &sizeWnd, s_hdcMem, ..., ULW_ALPHA, blend={AC_SRC_OVER, 0, 255, AC_SRC_ALPHA})`
+     - `OnPaint()` simplified: BeginPaint/EndPaint (for proper state) + `RepaintLayered(hwnd)` (the actual paint path; layered windows don't BitBlt to window DC)
+     - `Show()`: `WS_EX_LAYERED` flag kept; **`SetLayeredWindowAttributes(LWA_ALPHA, ...)` REMOVED** (uniform alpha is the anti-pattern); ShowWindow + first `RepaintLayered()` to submit initial layered surface
+     - Optional diagnostic: when env var `FLUXING_QP_DIAG_DUMP=1`, dump raw 32-bit
+       BGRA `s_hBmpMem` to `F:\...\qp-dump.bmp` (BI_BITFIELDS, top-down) for
+       verifying alpha pipeline independent of PrintWindow's alpha-blending
+     - Header comment updated to mark v0.19.0.10 + 5 雷区 entry
+
+- **Why `PrintWindow` shows alpha=255 even though alpha is correct**:
+  `PrintWindow` + `PW_RENDERFULLCONTENT` for a WS_EX_LAYERED window captures
+  the **DWM-composited** image. DWM treats visible pixels as opaque, so the
+  captured alpha is 255 for any visible portion. The real per-pixel alpha
+  is verified by inspecting `s_hBmpMem` directly (via the optional diag-dump
+  or by reading `bmBits` via `GetObject`).
+
+- **Verification (3 axes, all PASS)**:
+
+  **1. code compile + unit tests**:
+  - xmake build ok, 0 errors, 0 new warnings
+  - msbuild weasel.sln (Release|Win32) build ok
+  - `Release\TestDefaultHotkeys.exe` → 35/35 PASS
+  - `Release\TestQuickPanelRefactor.exe` → 1/1 PASS
+  - `Release\TestResponseParser.exe` → 5/5 PASS
+  - `Release\TestWeaselIPC.exe` → no errors detected
+  - `Release\TestQuickPanelDialog.exe` → SKIP (legacy, intentionally, per spec 046/047)
+
+  **2. PE arch check (L14 invariant)**:
+  - `output\Win32\WeaselServer.exe` → 0x014C x86 ✓
+  - `output\Win32\WeaselDeployer.exe` → 0x014C x86 ✓
+  - `output\Win32\rime.dll` → 0x014C x86 ✓
+  - `output\weaselx64.dll` → **0x8664 x64** ✓ (TSF 64-bit shim)
+  - `output\WeaselSetup.exe` → 0x014C x86 ✓
+  - (No x64 EXE in Win32 dir → no `0xC000007B` risk per L14/A11)
+
+  **3. Per-pixel alpha (raw DIB diagnostic dump)**:
+  - Set `FLUXING_QP_DIAG_DUMP=1`, run E2E
+  - `qp-dump.bmp` (`output\Win32\WeaselServer.exe` in-memory DIB after
+    `ApplyAlphaGradient`):
+    - Center pixel (180, 34): BGR=(255,255,255) **A=111** ✓ (within
+      gradient range 82~140)
+    - Alpha histogram (top 5):
+      - alpha=0:   1954 pixels (圆角外, BGRA = 0)
+      - alpha=95:  704 pixels (bottom gradient)
+      - alpha=102: 716 pixels
+      - alpha=128: 704 pixels
+      - alpha=134: 682 pixels (top gradient)
+    - 4 corner regions: pure BGRA=0 (`*px = 0`) → desktop shows through
+    - 5 icons + logo: alpha=255 (opaque) ✓ (RGB ≠ pure white, gradient
+      step skipped, GDI default preserved)
+
+- **What the user sees**: actual screen vs PrintWindow capture differ.
+  PrintWindow composes layered windows into opaque, so visual checker
+  needs to **see the panel on the actual desktop** to confirm Liquid Glass
+  effect. Round corner transparency + panel alpha=82-140 gradient is the
+  design intent — visible only against a non-uniform desktop background.
+
+- **Installer**:
+  - `release\fluxing-0.19.0.10-installer.exe` 43,192,301 bytes
+  - SHA256 `f69238aba4ef0297e5d2e1464168473f4c8ff7aaa2519da440b4125954ede32b`
+  - Includes: WeaselServer.exe (NEW), WeaselDeployer.exe, WeaselSetup.exe,
+    weasel.dll, weaselx64.dll, weaselARM{,64}{,.dll,_X.dll} variants,
+    fluxing-logo.png (now in weasel\ subdir per L77/L79)
+  - Verified content via `7z l -slt`
+
+- **What weasel.props / env.bat need locally** (NOT committed, .gitignored):
+  - `env.bat`: `FLUXING_VERSION=0.19.0` (unchanged), `WEASEL_BUILD=9 → 10`,
+    `RELEASE_BUILD=1` (unchanged)
+  - `weasel.props`: `VERSION_MINOR=18 → 19`, `VERSION_PATCH=30 → 0`,
+    `PRODUCT_VERSION=0.18.30.0 → 0.19.0.10`, `FILE_VERSION` same
+
+- **Files touched (v0.19.0.10, ~110 lines net)**:
+  1. `WeaselServer/QuickPanelDialog.h` — comment + 2 alpha constants
+     + 3 method declarations (+25 lines)
+  2. `WeaselServer/QuickPanelDialog.cpp` — `IsInsideRoundedRect` helper +
+     `PaintOpaqueContent` extract + `ApplyAlphaGradient` + `RepaintLayered`
+     + `OnPaint` simplified + `Show()` 改 RepaintLayered + diag-dump (-10/+90)
+  3. `test-quickpanel-e2e.py` — switch from `BI_RGB` to `BI_BITFIELDS`
+     + masks for proper alpha preservation in GetDIBits
+  4. `CHANGELOG.md` — this entry
+
+- **Future work** (deferred):
+  - v0.19.0.11: per-icon hover state (currently shared via single
+    `s_hoveredIdx`; need per-icon for v3-rev3 design's per-icon hover)
+  - v0.19.1.0: per-pixel gradient via halftone-filled geometry or
+    `AlphaBlend` of pre-composed bitmaps (instead of RGB >= white trick)
+  - v0.19.2.0: user custom transparent color, persistence to
+    `HKCU\Software\Fluxing\QuickPanel`
+
+spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)
@@ -960,11 +1079,11 @@ spec 055/TaskTracker [P0]
 
 - **Verified by**: silent install 0.18.8.0 -> exit 0, HKLM InstallDir =
   C:\Program Files\fluxing, HKCU RimeUserDir = C:\Program Files\fluxing
-  \user1\fluxing, default.yaml + spec 014 �
+  \user1\fluxing, default.yaml + spec 014 �
 
 - **Refs**: L19 (� L21 ��), L20 (silent-install cmd /c wrapper �(), spec 012
   (L16 �F* ship), spec 014 (L21 �), spec 005 v1.1 US1-B (b�)
-
+
 �## [0.18.6.0-fluxing] - 2026-07-01
 
 ### L19: defensive remove of all keycode=Shift_L/R bindings (spec 005 v1.1)

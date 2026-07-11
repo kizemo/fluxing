@@ -1,18 +1,23 @@
 #pragma once
 //
-// QuickPanelDialog v3-rev3 — GDI rewrite (spec 074 L75)
+// QuickPanelDialog v3-rev3 — GDI rewrite + per-pixel alpha (spec 074 L77→v0.19.0.10)
 //
 // 设计: docs/design/quickpanel-v3/index.html
 // - 6 元素横排 (logo + 5 占位按钮)
-// - 真火流猩 PNG (WIC → HBITMAP,无 GDI+ 无 IStream)
+// - 真火流猩 PNG (LoadImageW → HBITMAP,无 GDI+ 无 IStream)
 // - 5 个矢量图标 (GDI 路径 drawing,纯 MoveTo/LineTo)
-// - hover 染品牌橙,active 橙→紫渐变(用 brush 替换)
-// - uniform alpha 86% via WS_EX_LAYERED + LWA_ALPHA(220)
+// - hover 染品牌橙(active 才 fill bg,符合 v3-rev3 设计)
+// - **per-pixel alpha Liquid Glass** via WS_EX_LAYERED + UpdateLayeredWindow +
+//   32-bit DIBSection (BGRA),panel 内 alpha 顶部 0x88→底部 0x52 渐变,
+//   panel 外 (圆角角落 + 屏幕透出区) alpha=0,桌面可见。
 //
 // 历史雷区:
 // ❌ 绝对不用 GDI+ Bitmap(IStream*) (L67-L69 崩溃链)
 // ❌ 绝对不 CreateStreamOnHGlobal + Release() (L67 根因)
 // ❌ 绝对不用 D2D ID2D1HwndRenderTarget (L74 黑 panel,DComp 未 promote)
+// ❌ 绝对不用 LWA_ALPHA uniform (L77 — 不是 liquid glass,只是 86% 全白)
+// ❌ 绝对不在 WS_EX_LAYERED 后 BitBlt 到 window DC (双路径会闪烁)
+//   → 用 UpdateLayeredWindow + 32-bit DIB 一次性提交
 //
 #include <functional>
 #include <string>
@@ -100,7 +105,12 @@ class QuickPanelDialog {
   static constexpr COLORREF kAccent   = RGB(255, 95, 49);    // 品牌橙
   static constexpr COLORREF kAccent2  = RGB(155, 81, 224);  // 品牌紫
   static constexpr COLORREF kHighlight = RGB(255, 255, 255); // 顶部高光
-  static constexpr int kAlphaPanel  = 220;                  // 86% uniform
+
+  // v0.19.0.10: per-pixel alpha gradient (替换 L77 uniform kAlphaPanel=220)
+  // 顶部 kAlphaPanelTop (140 = 0x88 = 55%) → 底部 kAlphaPanelBot (82 = 0x52 = 32%)
+  // 圆角外 alpha = 0 (桌面可见)
+  static constexpr BYTE kAlphaPanelTop = 140;
+  static constexpr BYTE kAlphaPanelBot = 82;
 
   // ===== Internal =====
   static LRESULT OnCreate(HWND);
@@ -131,4 +141,18 @@ class QuickPanelDialog {
   static void DrawIconSymbols(HDC hdc, int x, int y);
   static void DrawIconSettings(HDC hdc, int x, int y);
   static void DrawIconAccount(HDC hdc, int x, int y);
+
+  // v0.19.0.10: per-pixel alpha pipeline (L77 per lessons-learned "Future work")
+  // ApplyAlphaGradient 扫描 s_hBmpMem 的 pBits,按 y 轴改 alpha 通道。
+  // - 圆角 panel 外: alpha = 0 (桌面可见)
+  // - 圆角 panel 内,RGB == 纯白 (panel bg / border / top highlight): 渐变 alpha 写入
+  // - 圆角 panel 内,RGB 含色 (icons / logo / active bg): 保留 GDI 默认 alpha=255
+  // 为什么按 RGB 区分? GDI Brush 不带 alpha 通道,32-bit DIB 上画出来一律 alpha=255。
+  // 重画 bg 渐变 alpha 不破坏 icons / logo 的形状 (RGB ≠ 纯白)。
+  static void    ApplyAlphaGradient();
+  // RepaintLayered: 调 PaintOpaqueContent 到 s_hdcMem + ApplyAlphaGradient +
+  //   UpdateLayeredWindow 把 layered surface 提交到 screen。
+  // PaintOpaqueContent 抽出来是为了让 OnPaint / Show() 都能复用同一份绘制逻辑。
+  static void    PaintOpaqueContent(HDC hdc);
+  static void    RepaintLayered(HWND hwnd);
 };

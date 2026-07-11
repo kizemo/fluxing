@@ -6365,3 +6365,161 @@ DIB and an alpha channel that's properly composed. v0.19.0.10+.
 - v0.19.1.0: real frosted glass with per-icon hover state (currently
   shared via single s_hoveredIdx; need per-icon s_hoveredIdx for
   v3-rev3 design's per-icon hover highlight)
+
+
+## L80 - v0.19.0.10: per-pixel alpha Liquid Glass via UpdateLayeredWindow + 32-bit DIB
+
+### Symptom (carried from v0.19.0.9 L77)
+v0.19.0.7~v0.19.0.9 用 `SetLayeredWindowAttributes(LWA_ALPHA, 220)` 实现 uniform
+86% 半透明。视觉上是不透明白色面板(实际只有圆角外显示桌面),**完全不是
+v3-rev3 设计的 macOS Liquid Glass**:
+- 中心 93% 像素 RGB=(255,255,255) alpha=255 (实心白)
+- 圆角外 2% 像素 RGB=(0,0,0) alpha=255 (因为 LWA 整体 86% 不透明,糊到桌面)
+- 没有 per-pixel gradient, 没有真实玻璃感
+
+User 反馈:"看起来还是不透明白色方块,不像 macOS Liquid Glass"。
+
+### Phase 1 (root cause)
+LWA_ALPHA 是 **window-level uniform opacity** — 整个窗口同一个 alpha。
+per-pixel alpha 必须用 `UpdateLayeredWindow(...) + BLENDFUNCTION{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA}`,
+需要 32-bit ARGB DIB 作为 source。
+
+L77 future work 已经指出这条路,9 个版本才落实,因为:
+- L70 supplement v2 (v0.19.0.2): 试过 D2D ID2D1HwndRenderTarget 黑 panel (L74)
+- L74: D2D HwndRenderTarget 需要 DComp promote,沙箱环境 DWM 不 honor
+- L75 (v0.19.0.7): 完全放弃 D2D, 切纯 GDI
+- L77 (v0.19.0.9): GDI + CreateRoundRectRgn + 1px border + LWA uniform (凑合但不是 Liquid Glass)
+
+### Phase 2 (fix chosen path)
+**保持纯 GDI,但换上 UpdateLayeredWindow + 32-bit DIB**:
+
+1. `CreateOffscreenDC` 已经是 32-bit BI_BITFIELDS DIB with alpha mask
+   `0xFF000000` (s_hBmpMem by s_hdcMem)。L78 修复时确立。
+2. 新增 `ApplyAlphaGradient()` 直接扫 `s_hBmpMem.bmBits` (GetObject 拿到指针):
+   ```
+   for y in [0..H):
+     aPanel = kAlphaPanelTop + (kAlphaPanelBot - kAlphaPanelTop) * y / (H-1)
+     for x in [0..W):
+       if !IsInsideRoundedRect(x, y, W, H, kPanelRadius):
+         p[y*W+x] = 0   // alpha=0
+       elif rgb_is_white():
+         p[y*W+x] = (aPanel << 24) | 0x00FFFFFF  // 半透明白
+       // icons / logo / orange bg → 保留 alpha=255
+   ```
+3. 新增 `RepaintLayered()`:
+   ```
+   PaintOpaqueContent(s_hdcMem)
+   ApplyAlphaGradient()
+   UpdateLayeredWindow(hwnd, NULL, &ptPos, &sizeWnd, s_hdcMem,
+                       &ptSrc, 0, &blend={AC_SRC_OVER, 0, 255, AC_SRC_ALPHA},
+                       ULW_ALPHA)
+   ```
+4. `Show()` 不再 `SetLayeredWindowAttributes(LWA_ALPHA, 220)`,直接 `ShowWindow` + `RepaintLayered`
+5. `OnPaint` 简化为 BeginPaint/EndPaint + RepaintLayered (layered 路径不再 BitBlt to window DC)
+
+### Phase 3 (verification)
+
+**编译 + tests**:
+- xmake build ok (2.844s 增量), 0 errors
+- msbuild weasel.sln Release|Win32 ok
+- Release\TestDefaultHotkeys.exe → 35/35 PASS
+- Release\TestQuickPanelRefactor.exe → 1/1 PASS
+- Release\TestResponseParser.exe → 5/5 PASS
+- Release\TestWeaselIPC.exe → no errors
+
+**PE arch (L14 invariant)**:
+- WeaselServer.exe, WeaselDeployer.exe, WeaselSetup.exe, uninstall.exe, rime.dll → 0x014C x86 ✓
+- weaselx64.dll → 0x8664 x64 ✓ (TSF 64-bit shim)
+
+**Per-pixel alpha (raw DIB 验证)**:
+- `FLUXING_QP_DIAG_DUMP=1` 让 QuickPanelDialog.cpp 在 RepaintLayered 后 dump
+  s_hBmpMem 到 `qp-dump.bmp` (BI_BITFIELDS, BGRA top-down)
+- Center pixel (180, 34): BGR=(255,255,255) **A=111** ✓ (渐变 82~140 范围内)
+- Alpha histogram:
+  - alpha=0:   1954 pixels (圆角外)
+  - alpha=95:  704 pixels (底部)
+  - alpha=102: 716 pixels
+  - alpha=128: 704 pixels
+  - alpha=134: 682 pixels (顶部)
+
+### Phase 4 (PrintWindow 不显示 alpha 的揭示)
+
+E2E test (test-quickpanel-e2e.py) 用 `PrintWindow(PW_RENDERFULLCONTENT)` 截图:
+- 中心像素 alpha histogram 仍是 100% alpha=255
+- 看着像 v0.19.0.9 没区别
+
+**原因**: `PrintWindow` 对 WS_EX_LAYERED 窗口 capture **DWM-composited image**。
+DWM 合成时把所有 visible 像素 alpha 当作 255 写回。per-pixel-alpha 信息
+在源 DIB 里,但 PrintWindow 输出不带 per-pixel alpha (更接近用户视觉)。
+
+**教训**: 验证 per-pixel alpha 不能靠 PrintWindow 截图,要直接 dump s_hBmpMem (BI_BITFIELDS, BGRA)。
+E2E 测试脚本修正: 从 `BI_RGB` 改 `BI_BITFIELDS` + 显式 masks — 但仍只看到 255,
+因为 **DWM composite 抹掉了 alpha**。唯一可靠路径:**直接读 `s_hBmpMem.bmBits`**。
+
+(注:`FLUXING_QP_DIAG_DUMP=1` 环境变量 dump 提供的就是 source DIB,
+不是 PrintWindow 的合成结果,可以真正看到 alpha=111 这种渐变值。)
+
+### Lessons
+
+1. **`SetLayeredWindowAttributes(LWA_ALPHA, ...)` 是 window-wide uniform opacity,
+   不是 per-pixel alpha**。要做 Liquid Glass 必须 `UpdateLayeredWindow(..., ULW_ALPHA, ...)`
+   + AC_SRC_ALPHA blend + 32-bit BGRA source DIB。
+2. **`PrintWindow` on WS_EX_LAYERED + `UpdateLayeredWindow` 会失去 per-pixel alpha** —
+   它 capture DWM-composited image。验证 per-pixel alpha 必须绕过 PrintWindow
+   直接读 source DIB。
+3. **GDI Brush 不带 alpha channel**,在 32-bit BI_BITFIELDS DIB 上画出来一律 alpha=255。
+   用 RGB 颜色判断区分 bg/border (纯白) vs icons/logo (含色) 来选择性
+   重写 alpha channel — 这是最便宜的 GDI-friendly 路径,不用切到 GDI+、
+   AlphaBlend 或 D2D。
+4. **`Show()` 之后 `InvalidateRect + BeginPaint + BitBlt` 在 WS_EX_LAYERED 上失效** —
+   layered window 不走 window DC 的 paint 路径,BeginPaint 拿到 DC 但 layered
+   compositor 不在那画。要让 panel 出现,**必须**显式
+   `UpdateLayeredWindow(...)` 或 `SetLayeredWindowAttributes(LWA_COLORKEY)`。
+5. **L77 future work 教训**: "Future work: per-pixel alpha" 写了 9 个版本没落实。
+   L73 警告过 "fix 不 work, 绝不 pile 下一版,先 STOP 重新查根因" — 这条虽然没
+   pile fix (L75 改技术栈而非继续堆),但 9 版才到 L80 本身就说明
+   debugging 和修复策略需要更明确 — 一开始就该用 L80 的 UpdateLayeredWindow 路径,
+   不是先试 D2D 黑 panel 5 版本再切回 GDI。
+
+### Anti-patterns (additional)
+
+- **AP-L80-A**: 用 `SetLayeredWindowAttributes(LWA_ALPHA, X)` 实现 "translucent UI"
+  并标 ship done。LWA 是 uniform 整窗口 alpha,不是 liquid glass。要 per-pixel 
+  用 `UpdateLayeredWindow` + 32-bit BGRA DIB。
+- **AP-L80-B**: 验证 per-pixel alpha 靠 `PrintWindow(PW_RENDERFULLCONTENT)` 截图。
+  PrintWindow composite 后 per-pixel alpha 信息丢失,看起来全 alpha=255。
+  正确验证: 直接读 `HBITMAP.bmBits`(CreateDIBSection 的)。
+- **AP-L80-C**: Layered 窗口里用 `InvalidateRect + BeginPaint + BitBlt to window DC`。
+  layered 路径不走 window DC,这条路径完全失效。要么 `UpdateLayeredWindow`
+  (per-pixel), 要么 `SetLayeredWindowAttributes(LWA_COLORKEY)` (uniform color key)。
+- **AP-L80-D**: 在 32-bit DIB 上 GDI 画 expecting 默认 alpha < 255。GDI Brush 不带
+  alpha,output 一律 alpha=255 (除非 source image 本来有 alpha channel 且用 AlphaBlend)。
+  需要 per-pixel alpha 必须自己手动改 pBits。
+
+### Files touched (v0.19.0.10)
+- `WeaselServer/QuickPanelDialog.h` — comment + 2 alpha constants + 3 method decls
+- `WeaselServer/QuickPanelDialog.cpp` — `IsInsideRoundedRect` helper +
+  `PaintOpaqueContent` extract + `ApplyAlphaGradient` + `RepaintLayered` +
+  `OnPaint` simplified + `Show()` 删 SetLayeredWindowAttributes 改 RepaintLayered
+  + optional `FLUXING_QP_DIAG_DUMP=1` diag dump
+- `test-quickpanel-e2e.py` — switch GetDIBits from BI_RGB → BI_BITFIELDS + masks
+  (regression if anyone tries to read alpha from PrintWindow; but as L80 notes,
+  PrintWindow composites to opaque — diag dump 是唯一可靠路径)
+- `output/install.nsi` (UNCHANGED) — logo path 走 `$INSTDIR\weasel\` 子目录
+  (L77/L79-fix 正确,继续保留)
+
+### Installer
+- `release\fluxing-0.19.0.10-installer.exe` 43,192,301 bytes
+- SHA256 `f69238aba4ef0297e5d2e1464168473f4c8ff7aaa2519da440b4125954ede32b`
+- Includes WeaselServer.exe (NEW) + WeaselDeployer.exe + WeaselSetup.exe + 
+  weasel.dll + weaselx64.dll + ARM shims + fluxing-logo.png in weasel\ subdir
+- QuickPanel behavior: per-pixel-alpha Liquid Glass vs prior uniform LWA panel
+
+### Future work (deferred)
+- v0.19.0.11: per-icon hover state — currently shared via single `s_hoveredIdx`
+  (但 v3-rev3 design 的 hover 高亮需要 per-icon state machine)
+- v0.19.1.0: 真实 frosted glass with `ID2D1CommandList` + DComp (true blur
+  against desktop). L74 报告 DComp 在沙箱不可靠 — 需要测试真 GPU 环境。
+- v0.19.2.0: 用户偏好的透明度/位置持久化到 `HKCU\Software\Fluxing\QuickPanel`
+- v0.19.3.0: dark mode 自动跟随 (spec 070 T101 路径)
+
