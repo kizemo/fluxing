@@ -383,18 +383,36 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
     return;
   _UpdateUI(ipc_id);
   m_active_session = ipc_id;
-  // spec 061: spec 052 US052-A requires QuickPanel to show
-  // automatically when the user activates Fluxing IME. Earlier 0.18.34.0
-  // removed the EnableAlwaysShowMode() call entirely.
+  // L69-fix: QuickPanel DISABLED to avoid heap corruption crash.
   //
-  // The 6 button callbacks are default fallback lambdas (open user
-  // dir / deployer / etc). WeaselServerApp::SetupMenuHandlers
-  // also wires its own callbacks via the menu handler and the
-  // IP_WEASELTRAY_QUICK_PANEL TriggerMode path. RimeWithWeaselHandler
-  // is the FALLBACK for the case when WeaselServerApp hasn't called
-  // Show() yet (e.g. immediately on session start before tray menu
-  // has been hit).
-  if (ipc_id > 0) {
+  // Background: spec 066 (v0.18.41.0) added EnableAlwaysShowMode() here to
+  // auto-show the QuickPanel when Fluxing IME is activated. This triggered a
+  // GDI+ Bitmap(IStream*) lifetime bug:
+  //   - LoadLogo() in QuickPanelDialog.cpp creates Bitmap from an IStream
+  //   - Bitmap internally caches the IStream pointer for lazy pixel decode
+  //   - stream->Release() in our code frees the IStream COM vtable
+  //   - First WM_PAINT -> DoPaint -> DrawImage -> Bitmap lazy pixel read
+  //     through freed vtable -> UAF -> STATUS_HEAP_CORRUPTION
+  //     (detected in NtSetValueKey, RtlDeleteTimer, etc - any heap op)
+  //
+  // The user's symptom: WeaselServer.exe dies shortly after any QuickPanel
+  // show (auto on FocusIn, or manual via Alt+,). After death, TSF cannot
+  // reach the pipe (Echo() fails), so user can't input Chinese.
+  //
+  // L67/L68 attempted to fix the IStream lifetime but did NOT solve the
+  // underlying bug - the heap is still corrupted, and 2 different dumps
+  // from v0.18.41.3 show crashes at NtSetValueKey and RtlDeleteTimer.
+  // Per debugging-and-error-recovery Step 8: STOP, don't pile fixes.
+  //
+  // v0.18.41.4 disables ALL QuickPanel triggers until QuickPanel is
+  // rewritten (the GDI+ Bitmap/IStream lifetime requires a deeper
+  // redesign - see L69). The 6 button callbacks are also not wired
+  // here because EnableAlwaysShowMode would invoke them on first show.
+  //
+  // QuickPanel code remains in QuickPanelDialog.cpp for future rewrite;
+  // nothing is deleted. WeaselServer can be built and run without
+  // triggering any of the GDI+ crash paths.
+  if (false && ipc_id > 0) {  // L69-fix: disabled
     QuickPanelDialog::EnableAlwaysShowMode(
         []() { /* 1. 方案: no-op (no schema picker UI in v0.18.36) */ },
         []() {
@@ -418,9 +436,14 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
   if (m_ui)
     m_ui->Hide();
   m_active_session = 0;
-  // spec 056 bugfix: when user switches away from Fluxing IME, hide
-  // the QuickPanel (spec 052 US052-D).
-  QuickPanelDialog::Hide();
+  // L69-fix: QuickPanel hidden automatically when switching away from
+  // Fluxing IME. Note this is only a hide() call - it doesn't trigger
+  // GDI+ Bitmap creation (the crash path was in EnableAlwaysShowMode,
+  // not Hide). Still, since QuickPanel is disabled, we guard with a
+  // no-op flag to be safe.
+  if (false) {  // L69-fix: disabled
+    QuickPanelDialog::Hide();
+  }
 }
 
 void RimeWithWeaselHandler::UpdateInputPosition(RECT const& rc,

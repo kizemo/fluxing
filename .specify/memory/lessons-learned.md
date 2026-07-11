@@ -5092,3 +5092,152 @@ User must install, retest the Alt+, scenario, and confirm:
 - output/Win32/WeaselServer.exe + pdb: rebuilt from above
 - output/archives/fluxing-0.18.41.3-installer.exe: new
 - release/fluxing-0.18.41.3-installer.exe: copy of above
+---
+
+## L69 - spec 069 v0.18.41.4: QuickPanel DISABLED - hard stop on fix-then-test loop
+
+### Symptom (carried from L66 / L67 / L68)
+WeaselServer.exe crashes shortly after Alt+, press or on Fluxing IME
+activation. Two different crash sites captured in Windows-LocalCrashDumps:
+  - WeaselServer.exe.17020.dmp (v0.18.41.3, 09:54): STATUS_HEAP_CORRUPTION
+    inside RtlpNtSetValueKey -> RtlIsZeroMemory (registry write)
+  - WeaselServer.exe.31648.dmp (v0.18.41.3, 09:57): STATUS_STACK_BUFFER_OVERRUN
+    (FAST_FAIL_CORRUPT_LIST_ENTRY) inside RtlDeleteTimer (timer cleanup)
+
+Both crashes share the same upstream trigger (QuickPanel GDI+ Bitmap/IStream
+lifetime bug). Each lands in a different heap validation site. The fix-then-
+test loop in v0.18.41.0/1/2/3 produced 4 broken versions without convergence.
+
+### Phase 1 (root cause investigation - completed in L67/L68)
+
+L67: misdiagnosed as "missing eager decode", used GetLastStatus/GetWidth/
+    GetHeight (only force HEADER decode, not pixel decode).
+L68: fixed L67 by keeping IStream alive alongside Bitmap. Symptom
+    persisted because the heap was corrupted by the earlier L67 run;
+    the L68 build crashes in DIFFERENT places (RtlDeleteTimer vs
+    NtSetValueKey) confirming it's the same root cause but at
+    different detection sites.
+
+### Phase 2 (additional cdb analysis)
+Analyzed 17020.dmp and 31648.dmp with PDB loaded (GUID matches v0.18.41.3
+exe: f0ec9384afa97e4da6de6211e94cc36f age=2).
+
+The dumps themselves do not contain .text memory (saved with limited
+scope), so we cannot disassemble LoadLogo at the actual offsets. The
+stack traces confirm same call chain but with cdb labels that may be
+off due to limited unwind info. The reliable signal: STATUS_HEAP_CORRUPTION
+detected at multiple heap operation sites, all originating from QuickPanel.
+
+### Phase 3 (decision: revert, don't pile fixes)
+
+Per debugging-and-error-recovery Step 8:
+> If fix doesn't work, STOP. Re-enter Phase 1 of systematic-debugging.
+> Don't pile on fixes.
+
+After 4 versions (41.0/41.1/41.2/41.3) with broken QuickPanel, the
+correct response is to remove the trigger and ship a stable version.
+QuickPanel is a non-essential feature; the user explicitly asked for
+"version without settings bar".
+
+### Phase 4 (minimal revert in v0.18.41.4)
+
+Disable ALL 4 QuickPanel entry points:
+  1. RimeWithWeaselHandler::FocusIn  - the `if (ipc_id > 0)` block that
+     called EnableAlwaysShowMode is now `if (false && ipc_id > 0)`.
+  2. RimeWithWeaselHandler::FocusOut - the `QuickPanelDialog::Hide()`
+     call is now `if (false) { ... }`.
+  3. WeaselServerImpl::OnCreate    - the `RegisterHotKey(... Alt+, )`
+     call is now commented out.
+  4. WeaselServerApp::SetupMenuHandlers - the
+     `ID_WEASELTRAY_QUICK_PANEL` handler is now a no-op (returns true).
+
+What is preserved:
+  - spec 066 KnownClasses + HKCU writes (L66 unconditional fix) -
+    this was the real fix and is independent of QuickPanel
+  - L67 SetUnhandledExceptionFilter (writes %LOCALAPPDATA%\fluxing\crash\
+    dumps on future crashes)
+  - L68 IStream lifetime fix (kept for when QuickPanel is rewritten;
+    the now-dead code in LoadLogo does not run because ToggleMode
+    returns to a no-op handler)
+
+The 4 disabled paths can be re-enabled when QuickPanel is rewritten.
+The new L69-fix style uses `if (false) { ... }` and commented-out lines
+so that a future re-enable is a single git-blame-and-revert.
+
+### Phase 5 (ship v0.18.41.4)
+
+Built locally. Installer:
+  release/fluxing-0.18.41.4-installer.exe
+  SHA256: 6bd5ad75a42f11ead34ad1d25e5f694fbd0619bb5ae044e42a2d7025124628cf
+  Size: 43,138,681 bytes
+
+User must install, retest:
+  - Login -> Fluxing default IME (no auto-show)
+  - Alt+, -> does nothing (intentional)
+  - Tray icon left/right click -> no QuickPanel (intentional)
+  - Can type Chinese continuously, switch IME, switch back, type more
+  - WeaselServer.exe should NOT crash
+
+### Lessons (numbered)
+1. **Fix-then-test convergence**: When N fix iterations do not converge
+   in the same fault class, the problem is not a bug - it is an
+   architectural mistake. Per debugging-and-error-recovery Step 8,
+   STOP and revert instead of trying fix #N+1.
+2. **GDI+ Bitmap(IStream*) lifetime is non-trivial.** Do not trust
+   "I called GetWidth after construction so it must have decoded"
+   - that only forces header decode. Use LockBits(Read) for true
+   pixel-level decode, OR hold the IStream alive for the bitmap full
+   lifetime.
+3. **Heap corruption manifests at MULTIPLE detection sites** with
+   different exception codes (0xC0000374 vs 0xC0000409 subcode 0x3)
+   depending on which heap operation runs first. Do not fix one
+   crash signature; fix the underlying memory error.
+4. **Windows LocalDumps registry value (admin-set) gives free
+   post-mortem dumps** even if your own SetUnhandledExceptionFilter
+   handler is buggy or does not fire. Use it.
+5. **Different crash sites after same upstream fix** = the original
+   fix did not solve the problem. L68 was wrong even though it
+   "made sense" (held IStream alive). The L68 path did not actually
+   run because QuickPanel itself triggers the issue somewhere else.
+
+### Anti-patterns (named)
+- **AP-L69-A**: Continuing to pile fixes on the same fault class after
+  3+ iterations without convergence. STOP. Revert. Re-architect.
+- **AP-L69-B**: Treating "stack trace says function X" as ground truth
+  without verifying with PDB-loaded symbols. cdb labels frames by
+  closest symbol when unwind info is missing. Verify with `ln <addr>`.
+- **AP-L69-C**: Trusting Windows-LocalCrashDumps or WER reports to
+  fully replace your own crash handler. They save code/stack, but
+  may not save full memory needed for source-level debugging.
+- **AP-L69-D**: Designing features that require COM + GDI+ + ATL
+  callbacks + lambda captures without a written lifetime contract.
+  QuickPanel alone has 5+ interlocking lifetime bugs (IStream, HGLOBAL,
+  std::function, ATL message map, GDI+ Bitmap). Each is solvable but
+  not in isolation.
+
+### Files touched (v0.18.41.4)
+- RimeWithWeasel/RimeWithWeasel.cpp
+    FocusIn: EnableAlwaysShowMode wrapped in `if (false)`.
+    FocusOut: QuickPanelDialog::Hide() wrapped in `if (false)`.
+- WeaselIPCServer/WeaselServerImpl.cpp
+    OnCreate: RegisterHotKey commented out.
+- WeaselServer/WeaselServerApp.cpp
+    SetupMenuHandlers: ID_WEASELTRAY_QUICK_PANEL handler is no-op.
+- env.bat (gitignored): WEASEL_BUILD 3 -> 4
+- build-via-py.py (gitignored): updated to 0.18.41.4
+- output/Win32/WeaselServer.exe + pdb: rebuilt
+- output/archives/fluxing-0.18.41.4-installer.exe: new
+- release/fluxing-0.18.41.4-installer.exe: copy
+
+### Future: QuickPanel rewrite plan
+When ready to bring QuickPanel back, the rewrite should:
+  1. Hold IStream alive for full Bitmap lifetime (L68 fix is correct
+     in isolation, kept the dead code for reference)
+  2. Use LockBits(Read) to force true pixel decode before release,
+     not just GetWidth/GetHeight
+  3. Move all lambda captures to plain functions + private state
+     to avoid std::function lifetime concerns
+  4. Add a "QuickPanel" gate (build flag or runtime setting) so
+     QuickPanel can be disabled without rebuilding
+  5. Add unit tests for the lifetime (Bitmap construction + immediate
+     destroy + first paint simulation)

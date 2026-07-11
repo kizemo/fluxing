@@ -113,56 +113,14 @@ void WeaselServerApp::SetupMenuHandlers() {
   //   - Alt+, global hotkey (via WM_COMMAND post from OnHotkey).
   //   - Left-click tray icon (via WM_COMMAND post from SystemTraySDK).
   //   - "QuickPanel" menu item in the right-click tray menu (rc file).
+  // L69-fix: QuickPanel DISABLED to avoid GDI+ heap corruption crash.
+  // The handler is kept but it does nothing. To re-enable QuickPanel in
+  // a future build, remove this comment block AND the false && gate in
+  // RimeWithWeaselHandler::FocusIn AND the unregistration in
+  // WeaselServerImpl::OnCreate.
   m_server.AddMenuHandler(ID_WEASELTRAY_QUICK_PANEL, [this] {
-    // spec 060 bugfix: this handler is called from THREE sources:
-    // (a) the right-click "QuickPanel" menu item,
-    // (b) the left-click tray icon, and
-    // (c) the global Alt+, hotkey (via WM_COMMAND post from OnHotkey).
-    //
-    // Spec 052 US052-D: "Press Alt+, -> panel hide".
-    // Spec 052 US052-E: "Re-press Alt+, or activate Fluxing IME ->
-    // panel re-show in always-show mode".
-    //
-    // The original code was "if visible then Hide else Show", which
-    // broke case (a): when in always-show mode the menu item click
-    // would Hide the panel, but user could not re-open it because
-    // FocusIn (case b/c) was not wired (see spec 060 Bug A).
-    //
-    // Correct logic: let ToggleMode() handle the show/hide transition
-    // uniformly. ToggleMode() inspects s_mode: if kHidden, it
-    // calls EnableAlwaysShowMode() (case c); otherwise Hide() (case d).
-    QuickPanelDialog::ToggleMode();
-
-    // Refresh callbacks after ToggleMode, in case ToggleMode went
-    // from kHidden -> kAlwaysShow (EnableAlwaysShowMode created the
-    // window without the user-supplied callbacks).
-    if (QuickPanelDialog::CurrentMode() != QuickPanelDialog::Mode::kHidden) {
-      bool currentFull = m_handler ? m_handler->IsFullShape() : false;
-      QuickPanelDialog::Show(
-          currentFull,
-          [this]() {
-            std::filesystem::path deployer = install_dir() / L"WeaselDeployer.exe";
-            ShellExecuteW(NULL, NULL, deployer.c_str(), L"/hotkey", NULL, SW_SHOWNORMAL);
-          },
-          [this]() {
-            explore(WeaselUserDataPath());
-          },
-        // 3. 短语 -> placeholder (spec 009 F5)
-        [this]() {
-          explore(install_dir());
-        },
-        // 4. 全半角 -> toggle full/half width
-        [this](bool newFull) {
-          if (m_handler) m_handler->SetOption(0, "full_shape", newFull);
-        },
-        // 5. 符号 -> placeholder (deploy for now)
-        [this]() {
-          std::filesystem::path deployer = install_dir() / L"WeaselDeployer.exe";
-          ShellExecuteW(NULL, NULL, deployer.c_str(), L"/deploy", NULL, SW_SHOWNORMAL);
-        },
-        // 6. 登录 -> placeholder (v2.1+ cloud sync)
-        []() {});
-    }
+    // L69-fix: no-op. QuickPanel triggers crash (see L69 entry).
+    (void)this;
     return true;
   });
 }
