@@ -3624,7 +3624,7 @@ After shipping spec 041 v0.18.28.0 with FluxingComponents DPI fix, a systematic-
 **C++ mangled symbols are stored in Windows PE debug info (PDB sidecar) as UTF-16 wide strings, not ASCII.** This is documented but easy to forget:
 
 - C++ symbol names in MSVC-generated COFF objects use CodeView debug format (.debug / .debug sections) which encodes symbols as **UTF-16LE wide strings** with a wchar_t per code unit.
-- ASCII string searches against a Windows binary's byte content will see only the second byte of each UTF-16 character — every other byte is \x00 — so even an exact ASCII substring like FluxingLabel returns 0 hits when stored as UTF-16.
+- ASCII string searches against a Windows binary's byte content will see only the second byte of each UTF-16 character — every other byte is 0x — so even an exact ASCII substring like FluxingLabel returns 0 hits when stored as UTF-16.
 - The actual machine code call ??1FluxingLabel@ui@fluxing@@QAE@XZ IS present in the .text section, but dumpbin /DISASM only resolves and prints it because it reads the .debug UTF-16 section.
 - For our project: 5 production files compile to 5 separate .obj files, all linked into WeaselServer.exe via the static WeaselUI.lib. Symbols like ?Create@FluxingLabel@ui@fluxing@@SA?$...@std@@@Z are stored as **mangled + UTF-16**, and only dumpbin /DISASM shows them in a human-readable form.
 
@@ -4826,3 +4826,131 @@ Verified NSIS compiles (CRLF + EF BB BF preserved, 596 CRLF pairs).
   both show the Fluxing GUIDs
 - [ ] Fix the `SetRebootFlag true` `StrCmp $0 "Upgrade"` bug (separate fix)
 - [ ] Write a `.claude/rules/` rule documenting AP-L66-A (unconditional safety-net pattern)
+
+
+---
+
+## L67 - spec 067 v0.18.41.2: GDI+ Bitmap lifetime + crash dump safety net
+
+### Symptom
+User reported (after v0.18.41.0/0.18.41.1 install): Alt+, brings up QuickPanel
+briefly, then it disappears and cannot be brought back. After switching to
+another IME and back, cannot input Chinese. PowerShell diagnostic confirmed
+WeaselServer.exe is not running.
+
+### Phase 1 (root cause investigation)
+Windows Event Viewer revealed 5 recent crashes of WeaselServer.exe in past 24h:
+- v0.18.30.0: ntdll+0x2afb6, 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN)
+- v0.18.34.0: WeaselServer+0x14d1da, 0xC0000005 (ACCESS_VIOLATION)
+- v0.18.38.0: ntdll+0x2afb6, 0xC0000409 (x2)
+
+### Phase 2 (analyze dump)
+Ran cdb.exe (Microsoft Store WinDbg) on the only surviving .mdmp
+(WER.60f86ad3... dated 2026-07-10 15:11, v0.18.34.0):
+```
+003cd1da 8b01            mov     eax,dword ptr [ecx]  ds:002b:027318f8=????????
+ecx = 027318f8                   <- freed/wild pointer
+```
+
+After loading WeaselServer.pdb (GUID e752bb355eacf54ab02ac0902d92d813, age=1),
+cdb resolved symbols:
+- EIP = WeaselServer!_sqrt_common+0xb0b6
+- Caller chain (synthesized by stack unwinder; clearly stack-smashed):
+  _sqrt_common+0xb0b6 -> parse_command_line<wchar_t>
+  -> count_variables_in_environment_block<char>
+  -> __crt_strtox::multiply_by_power_of_ten (4 inlined copies)
+  -> std::num_put<unsigned short,...>::do_put(double _Val=7.369e-315)
+  -> kernel32+0x15d49 -> ntdll+0x6e12b
+
+The chain through CRT functions with nonsensical arguments (power=0xf07770ca,
+argument_count=0x027318f8 - same as crash ECX) confirms stack was corrupted
+upstream. Real culprit is somewhere in our code OR in lazy-rendered GDI+
+state.
+
+### Phase 3 (fix attempt - hypothetical root cause + observation)
+
+Hypothesis (H1): QuickPanelDialog::LoadLogo in WeaselServer.cpp
+called GDI+ Bitmap::Bitmap(IStream*) where the IStream was wrapping an
+auto-allocated HGLOBAL via CreateStreamOnHGlobal(NULL, TRUE). After
+stream->Release(), the HGLOBAL was freed, but GDI+ Bitmap may cache
+the IStream pointer for lazy rendering on first DrawImage. Derefing a
+freed IStream COM vtable is one canonical recipe for 0xC0000005.
+
+Fix H1 (in QuickPanelDialog.cpp::LoadLogo):
+- Pass the resource HGLOBAL directly to CreateStreamOnHGlobal with
+  fDeleteOnRelease=FALSE. Resource HGLOBAL is owned by the module's
+  resource table (process-lifetime).
+- After Bitmap(stream) constructor, force eager decode via
+  bmp->GetLastStatus() + GetWidth()/GetHeight() so all pixels are
+  materialized into GDI+ internal buffers. This works around GDI+
+  lazy-rendering lifetime bugs.
+- If decode failed, leave s_logo null and let draw code skip the logo.
+
+Hypothesis (verification - we don't know yet): Without Phase 4 verification
+(minidump from a freshly-installed v0.18.41.2 proving this was the trigger),
+we cannot claim H1 is the root cause. The change addresses a real, plausible
+lifetime bug, but the true culprit may be elsewhere (e.g. WinSparkle,
+NVIDIA driver unload event).
+
+Safety net (B): Add SetUnhandledExceptionFilter + MinidumpWriteDump so
+that the NEXT crash produces a self-contained .dmp under
+%LOCALAPPDATA%luxing\crash\YYYYMMDD-HHMMSS-<code>.dmp. This is the
+"instrumented repro" path from systematic-debugging Phase 4.
+
+WeaselServer.cpp:
+- #include <DbgHelp.h> + #pragma comment(lib, "dbghelp.lib")
+- namespace { LONG WINAPI WriteMinidumpOnCrash(EXCEPTION_POINTERS*) }
+  writes MiniDumpWithDataSegs dump to
+  %LOCALAPPDATA%luxing\crash\<timestamp>-<code>.dmp
+- Install via SetUnhandledExceptionFilter at top of _tWinMain
+  (before CoInitialize, so even early init crash can be captured)
+
+### Phase 4 (verify) - pending
+User must install v0.18.41.2 (after building locally with xbuild.bat),
+reproduce the Alt+, then-quit scenario, then send us the .dmp
+from %LOCALAPPDATA%luxing\crash\ for analysis.
+
+### Files touched
+- WeaselServer/QuickPanelDialog.cpp  (LoadLogo L67-fix)
+- WeaselServer/WeaselServer.cpp       (SetUnhandledExceptionFilter + WriteMinidumpOnCrash)
+- env.bat                             (WEASEL_BUILD=2, PRODUCT_VERSION=0.18.41.2)
+
+### Build status
+NOT BUILT in this session. xmake env loading is broken under MSYS bash
++ PowerShell-host cmd /c, even with vcvars32.bat and lowercase 'include'
+set explicitly. The .cpp changes are static-correct (braces balanced,
+syntax visually validated) but need a real xmake run locally.
+
+### Build instructions for local machine
+1. Open "x64 Native Tools Command Prompt for VS 2022" or run
+   vcvars32.bat from regular cmd.
+2. cd to F:\soft selfmadeime_claude
+3. Run xbuild.bat (the standard release build). Should now use cached
+   .xmake config (Windows, x86, release) and rebuild only WeaselServer
+   (and any deps touched).
+
+### Lessons (3 numbered)
+1. **A release binary without crash instrumentation is a black box**.
+   Every 5+ rounds of "I think I fixed it, ship" would have been
+   resolvable in 1 round had we had a crash dump from the start.
+2. **GDI+ Bitmap(IStream) lifetime is a known footgun**. Always force
+   eager decode (GetWidth()/GetHeight()) before releasing the stream
+   if you wrap a possibly-freed HGLOBAL.
+3. **Minidump on user machines is the diff between guessing for 8 rounds
+   and knowing in 1**. Always install SetUnhandledExceptionFilter in the
+   first commit of a release, not the 12th.
+
+### Anti-patterns (named)
+- **AP-L67-A**: Ship a release binary without SetUnhandledExceptionFilter
+  if the binary can crash. Add the handler in the first commit of any
+  feature, not after the feature has bugs. Treat 0xC0000409 / 0xC0000005
+  crashes the same way you'd treat a regular exception - it's a Windows
+  exception that needs a handler.
+- **AP-L67-B**: Wrap user-provided buffers in IStream with
+  fDeleteOnRelease=TRUE without verifying GDI+ (or any other lazy-decoding
+  library) has actually consumed all the data. Eager-decode first,
+  release second, or use a buffer-backed stream semantics
+  (CreateStreamOnHGlobal with fDeleteOnRelease=FALSE + lifetime you control).
+- **AP-L67-C**: Diagnose a recurring crash without ever looking at a
+  crash dump. WER auto-cleans WER dumps; reproduce + grab them yourself
+  via SetUnhandledExceptionFilter BEFORE WER can.
