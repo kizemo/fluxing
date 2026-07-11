@@ -1,202 +1,117 @@
-// QuickPanelDialog v3-rev3 (spec 070) — D2D-based rewrite.
+// QuickPanelDialog v3-rev3 — PURE GDI implementation (spec 074 L75)
 //
 // 设计: docs/design/quickpanel-v3/index.html
-// 历史:L67/L68/L69 全部由 GDI+ Bitmap(IStream*) 触发。本实现完全绕开:
-//   - PNG logo 用 WIC → ID2D1Bitmap (无 IStream 缓存)
-//   - 5 个图标用 ID2D1PathGeometry (矢量,无位图)
-//   - 所有 brushes 创建一次复用 (无泄漏)
+// 历史雷区(plan.md 强制):
+//   ❌ 绝对不用 GDI+ Bitmap(IStream*) (L67-L69 崩溃链)
+//   ❌ 绝对不 CreateStreamOnHGlobal + Release() (L67 根因)
+//   ❌ 绝对不用 D2D ID2D1HwndRenderTarget (L74 黑 panel,DComp 未 promote)
+//
+// 本实现纯 Win32 GDI:
+//   - LoadImageW 直接从 PNG 文件创建 HBITMAP(无 GDI+ 路径)
+//   - 全部 painting 用 HDC + SelectObject(无 D2D、无 GDI+)
+//   - 5 个图标用 MoveTo/LineTo/Ellipse/Rectangle 画
+//   - WS_EX_LAYERED + SetLayeredWindowAttributes(LWA_ALPHA, 220)
+//     86% uniform translucency(per-pixel alpha 留给 v0.19.0.8+ UpdateLayeredWindow)
 //
 #include "stdafx.h"
 #include <functional>
-#include <GdiPlus.h>
 #include "QuickPanelDialog.h"
-#include "resource.h"
-#pragma comment(lib, "gdiplus.lib")
-
-// D2D / WIC COM interface headers (forward-declared in .h to keep header light)
-#include <d2d1.h>
-#include <wincodec.h>
-#pragma comment(lib, "d2d1.lib")
-#pragma comment(lib, "windowscodecs.lib")
-
-using Gdiplus::Bitmap;
-using Gdiplus::Image;
-using Gdiplus::Graphics;
-using Gdiplus::GraphicsPath;
-using Gdiplus::SolidBrush;
-using Gdiplus::Pen;
 
 static const wchar_t kWindowClassName[] = L"FluxingQuickPanel_v3";
 
-namespace {
+// 颜色常量(在文件作用域,本地作用域,kIcoDimC 等)
+constexpr COLORREF kIcoDimC   = RGB(60, 60, 67);     // 灰
+constexpr COLORREF kAccentC  = RGB(255, 95, 49);    // 品牌橙
+constexpr COLORREF kAccent2C = RGB(155, 81, 224);  // 品牌紫
+constexpr COLORREF kWhiteC   = RGB(255, 255, 255); // 白色(active icon)
 
-// ===== T003: SVG path 数据 → ID2D1PathGeometry =====
-// 每个图标 v3-rev3 设计稿的 SVG path(viewBox 24x24)。
-// 用 ID2D1PathGeometry::Open() + ID2D1GeometrySink::BeginFigure/AddLine/EndFigure 重建。
-// 5 个图标设计:
-//   0: 方案 = 双箭头(动作感:切换)
-//   1: 短语 = 对话气泡(内容感:短语)
-//   2: 符号 = 键盘(参照搜狗)
-//   3: 设置 = 齿轮
-//   4: 账号 = 头像
-void BuildIcon_0_Schema(ID2D1GeometrySink* sink) {
-  // 上箭头(向右): 4→17 + 箭头头部 17←14→6
-  sink->BeginFigure(D2D1::Point2F(4, 9), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(17, 9));
-  sink->AddLine(D2D1::Point2F(14, 6));
-  sink->AddLine(D2D1::Point2F(14, 12));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  // 下箭头(向左): 20→7 + 箭头头部 7←10→18
-  sink->BeginFigure(D2D1::Point2F(20, 15), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(7, 15));
-  sink->AddLine(D2D1::Point2F(10, 12));
-  sink->AddLine(D2D1::Point2F(10, 18));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+void QuickPanelDialog::DrawIconSchema(HDC hdc, int x, int y) {
+  // 双向切换箭头(viewBox 24x24,scale 到 30x30)
+  // 上箭头 →: (4,9)→(17,9) + 箭头头
+  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, kIcoDimC));
+  MoveToEx(hdc, x + 5, y + 11, nullptr);
+  LineTo(hdc, x + 23, y + 11);
+  MoveToEx(hdc, x + 19, y + 8, nullptr);
+  LineTo(hdc, x + 23, y + 11);
+  LineTo(hdc, x + 19, y + 14);
+  // 下箭头 ←: (20,15)→(7,15) + 箭头头
+  MoveToEx(hdc, x + 25, y + 19, nullptr);
+  LineTo(hdc, x + 7, y + 19);
+  MoveToEx(hdc, x + 11, y + 16, nullptr);
+  LineTo(hdc, x + 7, y + 19);
+  LineTo(hdc, x + 11, y + 22);
+  DeleteObject(SelectObject(hdc, pen));
 }
-void BuildIcon_1_Phrase(ID2D1GeometrySink* sink) {
-  // 对话气泡(圆角矩形 + 尾巴 + 3 横线)
-  D2D1_POINT_2F points[9] = {
-      {4, 6}, {20, 6}, {22, 8}, {22, 15}, {20, 17},
-      {12, 17}, {7, 21}, {7, 17}, {4, 17}
-  };
-  // 简化:用 ArcSegment 模拟圆角
-  sink->BeginFigure(points[0], D2D1_FIGURE_BEGIN_FILLED);
-  sink->AddLine(points[1]);
-  D2D1_ARC_SEGMENT arc1 = {};
-  arc1.point = points[2]; arc1.size = D2D1::SizeF(2, 2); arc1.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc1);
-  sink->AddLine(points[3]);
-  arc1 = {}; arc1.point = points[4]; arc1.size = D2D1::SizeF(2, 2); arc1.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc1);
-  sink->AddLine(points[5]);
-  // 尾巴
-  sink->AddLine(points[6]);
-  sink->AddLine(points[7]);
-  sink->AddLine(points[8]);
-  D2D1_ARC_SEGMENT arc2 = {};
-  arc2.point = points[0]; arc2.size = D2D1::SizeF(2, 2); arc2.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc2);
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  // 3 横线(短语)
-  sink->BeginFigure(D2D1::Point2F(7, 11), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(17, 11));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  sink->BeginFigure(D2D1::Point2F(7, 14), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(13, 14));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+
+void QuickPanelDialog::DrawIconPhrase(HDC hdc, int x, int y) {
+  // 对话气泡:圆角矩形 + 尾巴
+  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, kIcoDimC));
+  HBRUSH brush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+  // 主体:圆角矩形
+  RoundRect(hdc, x + 5, y + 5, x + 25, y + 20, 6, 6);
+  // 尾巴:斜线
+  MoveToEx(hdc, x + 10, y + 20, nullptr);
+  LineTo(hdc, x + 8, y + 25);
+  LineTo(hdc, x + 13, y + 20);
+  // 三条短横线代表文本
+  MoveToEx(hdc, x + 9, y + 10, nullptr);
+  LineTo(hdc, x + 21, y + 10);
+  MoveToEx(hdc, x + 9, y + 14, nullptr);
+  LineTo(hdc, x + 18, y + 14);
+  DeleteObject(SelectObject(hdc, pen));
+  DeleteObject(SelectObject(hdc, brush));
 }
-void BuildIcon_2_Symbols(ID2D1GeometrySink* sink) {
-  // 键盘(外壳 + 3 排按键)
-  // 顶排 4 键
-  sink->BeginFigure(D2D1::Point2F(6.5f, 5), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(6.5f, 9.5f));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  sink->BeginFigure(D2D1::Point2F(11, 5), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(11, 9.5f));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  sink->BeginFigure(D2D1::Point2F(15.5f, 5), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(15.5f, 9.5f));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  sink->BeginFigure(D2D1::Point2F(20, 5), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(20, 9.5f));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  // 中排按键
-  sink->BeginFigure(D2D1::Point2F(9, 13), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(9, 16.5f));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  sink->BeginFigure(D2D1::Point2F(15, 13), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(15, 16.5f));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  // 行分隔
-  sink->BeginFigure(D2D1::Point2F(2, 9.5f), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(22, 9.5f));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  sink->BeginFigure(D2D1::Point2F(2, 13), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(22, 13));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  // 空格键(略粗 stroke,但 geometry 不存宽度 — Draw 时再设)
-  sink->BeginFigure(D2D1::Point2F(6, 16.5f), D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(D2D1::Point2F(18, 16.5f));
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  // 外壳(最后画)
-  D2D1_POINT_2F shell[4] = { {2, 5}, {22, 5}, {22, 19}, {2, 19} };
-  D2D1_ARC_SEGMENT arc = {};
-  sink->BeginFigure(shell[0], D2D1_FIGURE_BEGIN_HOLLOW);
-  sink->AddLine(shell[1]);
-  arc = {}; arc.point = shell[2]; arc.size = D2D1::SizeF(2, 2); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc);
-  sink->AddLine(shell[3]);
-  arc = {}; arc.point = shell[0]; arc.size = D2D1::SizeF(2, 2); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc);
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+
+void QuickPanelDialog::DrawIconSymbols(HDC hdc, int x, int y) {
+  // 键盘(viewBox 24x24)
+  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, kIcoDimC));
+  // 外壳
+  RoundRect(hdc, x + 3, y + 6, x + 27, y + 24, 2, 2);
+  // 顶行按键分隔(4个)
+  MoveToEx(hdc, x + 8, y + 6, nullptr); LineTo(hdc, x + 8, y + 12);
+  MoveToEx(hdc, x + 13, y + 6, nullptr); LineTo(hdc, x + 13, y + 12);
+  MoveToEx(hdc, x + 18, y + 6, nullptr); LineTo(hdc, x + 18, y + 12);
+  MoveToEx(hdc, x + 22, y + 6, nullptr); LineTo(hdc, x + 22, y + 12);
+  // 中行分隔
+  MoveToEx(hdc, x + 3, y + 12, nullptr); LineTo(hdc, x + 27, y + 12);
+  MoveToEx(hdc, x + 3, y + 16, nullptr); LineTo(hdc, x + 27, y + 16);
+  // 中行内部
+  MoveToEx(hdc, x + 11, y + 16, nullptr); LineTo(hdc, x + 11, y + 20);
+  MoveToEx(hdc, x + 18, y + 16, nullptr); LineTo(hdc, x + 18, y + 20);
+  // 空格(底部加粗)
+  HPEN penBold = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 3, kIcoDimC));
+  MoveToEx(hdc, x + 8, y + 22, nullptr); LineTo(hdc, x + 22, y + 22);
+  DeleteObject(SelectObject(hdc, penBold));
+  DeleteObject(SelectObject(hdc, pen));
 }
-void BuildIcon_3_Settings(ID2D1GeometrySink* sink) {
-  // 齿轮:中心圆 + 8 条射线
-  D2D1_POINT_2F center = {12, 12};
-  // 中心圆(用 8 段 Arc 拼)
-  // 简化:画中心圆 + 8 条射线(2x4 + 2x4)
-  // 中心圆 半径 3
-  float r = 3.0f;
-  D2D1_ARC_SEGMENT arc = {};
-  sink->BeginFigure(D2D1::Point2F(center.x + r, center.y), D2D1_FIGURE_BEGIN_HOLLOW);
-  arc = {}; arc.point = D2D1::Point2F(center.x, center.y + r); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc);
-  arc = {}; arc.point = D2D1::Point2F(center.x - r, center.y); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc);
-  arc = {}; arc.point = D2D1::Point2F(center.x, center.y - r); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc);
-  arc = {}; arc.point = D2D1::Point2F(center.x + r, center.y); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc);
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  // 8 条射线
+
+void QuickPanelDialog::DrawIconSettings(HDC hdc, int x, int y) {
+  // 齿轮(中心圆 + 8 辐射线)
+  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, kIcoDimC));
+  // 中心圆
+  Ellipse(hdc, x + 9, y + 9, x + 21, y + 21);
+  // 8 辐射线
   for (int i = 0; i < 8; i++) {
-    float angle = i * 3.14159265f / 4.0f;
-    float dx = cosf(angle), dy = sinf(angle);
-    sink->BeginFigure(D2D1::Point2F(center.x + dx * 5, center.y + dy * 5), D2D1_FIGURE_BEGIN_HOLLOW);
-    sink->AddLine(D2D1::Point2F(center.x + dx * 7, center.y + dy * 7));
-    sink->EndFigure(D2D1_FIGURE_END_OPEN);
+    double angle = i * 3.14159265 / 4.0;
+    double dx = cos(angle), dy = sin(angle);
+    MoveToEx(hdc, int(x + 15 + dx * 7), int(y + 15 + dy * 7), nullptr);
+    LineTo(hdc, int(x + 15 + dx * 11), int(y + 15 + dy * 11));
   }
-}
-void BuildIcon_4_Account(ID2D1GeometrySink* sink) {
-  // 头像:头 + 肩
-  D2D1_POINT_2F head = {12, 8};
-  float r = 3.2f;
-  // 头部圆
-  D2D1_ARC_SEGMENT arc = {};
-  sink->BeginFigure(D2D1::Point2F(head.x + r, head.y), D2D1_FIGURE_BEGIN_HOLLOW);
-  arc = {}; arc.point = D2D1::Point2F(head.x, head.y + r); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc);
-  arc = {}; arc.point = D2D1::Point2F(head.x - r, head.y); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc);
-  arc = {}; arc.point = D2D1::Point2F(head.x, head.y - r); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc);
-  arc = {}; arc.point = D2D1::Point2F(head.x + r, head.y); arc.size = D2D1::SizeF(r, r); arc.sweepDirection = D2D1_SWEEP_DIRECTION_CLOCKWISE;
-  sink->AddArc(arc);
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
-  // 肩膀(从左下到右下)
-  D2D1_POINT_2F shoulder[3] = { {5, 20}, {12, 14}, {19, 20} };
-  sink->BeginFigure(shoulder[0], D2D1_FIGURE_BEGIN_HOLLOW);
-  D2D1_QUADRATIC_BEZIER_SEGMENT bezier = {};
-  bezier.point1 = D2D1::Point2F(7, 15);
-  bezier.point2 = D2D1::Point2F(11, 14);
-  sink->AddQuadraticBezier(bezier);
-  bezier = {};
-  bezier.point1 = D2D1::Point2F(13, 14);
-  bezier.point2 = D2D1::Point2F(17, 15);
-  sink->AddQuadraticBezier(bezier);
-  sink->AddLine(shoulder[2]);
-  sink->EndFigure(D2D1_FIGURE_END_OPEN);
+  DeleteObject(SelectObject(hdc, pen));
 }
 
-using IconBuilder = void (*)(ID2D1GeometrySink*);
-IconBuilder g_iconBuilders[5] = {
-    BuildIcon_0_Schema, BuildIcon_1_Phrase, BuildIcon_2_Symbols,
-    BuildIcon_3_Settings, BuildIcon_4_Account
-};
+void QuickPanelDialog::DrawIconAccount(HDC hdc, int x, int y) {
+  // 头像(头 + 肩)
+  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, kIcoDimC));
+  // 头
+  Ellipse(hdc, x + 9, y + 5, x + 21, y + 17);
+  // 肩(开口向下的弧) - Arc 需要 8 个 int
+  Arc(hdc, x + 5, y + 16, x + 25, y + 28, x + 5, y + 28, x + 25, y + 28);
+  DeleteObject(SelectObject(hdc, pen));
+}
 
-}  // namespace
 
-// ===== Static state definitions =====
+// ===== 静态成员定义 =====
 HWND     QuickPanelDialog::s_hwnd         = NULL;
 QuickPanelDialog::Mode QuickPanelDialog::s_mode = QuickPanelDialog::Mode::kHidden;
 bool     QuickPanelDialog::s_fullwidth    = false;
@@ -210,347 +125,83 @@ QuickPanelDialog::OnToggle QuickPanelDialog::s_onFullwidth;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onSymbols;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onLogin;
 
-int      QuickPanelDialog::s_hoveredIdx = -1;
-int      QuickPanelDialog::s_activeIdx  = -1;
+int QuickPanelDialog::s_hoveredIdx = -1;
+int QuickPanelDialog::s_activeIdx  = -1;
 
-ID2D1Factory*             QuickPanelDialog::s_pD2DFactory       = nullptr;
-ID2D1RenderTarget*        QuickPanelDialog::s_pRT             = nullptr;
-ID2D1Bitmap*              QuickPanelDialog::s_pLogo           = nullptr;
-ID2D1SolidColorBrush*     QuickPanelDialog::s_pBrushDim       = nullptr;
-ID2D1SolidColorBrush*     QuickPanelDialog::s_pBrushAccent    = nullptr;
-ID2D1SolidColorBrush*     QuickPanelDialog::s_pBrushPressed   = nullptr;
-ID2D1LinearGradientBrush* QuickPanelDialog::s_pBrushActive    = nullptr;
-ID2D1LinearGradientBrush* QuickPanelDialog::s_pBrushHighlight = nullptr;
-ID2D1LinearGradientBrush* QuickPanelDialog::s_pBrushPanel      = nullptr;
-ID2D1PathGeometry*        QuickPanelDialog::s_pIconGeometries[5] = {};
+HBITMAP  QuickPanelDialog::s_hBmpLogo     = NULL;
+HBRUSH   QuickPanelDialog::s_hBrushPanelBg   = NULL;
+HBRUSH   QuickPanelDialog::s_hBrushIconDim   = NULL;
+HBRUSH   QuickPanelDialog::s_hBrushIconAccent= NULL;
+HBRUSH   QuickPanelDialog::s_hBrushActive    = NULL;
+HBRUSH   QuickPanelDialog::s_hBrushHighlight = NULL;
+HPEN     QuickPanelDialog::s_hPenIconDim     = NULL;
+HPEN     QuickPanelDialog::s_hPenIconAccent  = NULL;
+HPEN     QuickPanelDialog::s_hPenHighlight   = NULL;
+HDC      QuickPanelDialog::s_hdcMem       = NULL;
+HBITMAP  QuickPanelDialog::s_hBmpMem      = NULL;
+int      QuickPanelDialog::s_panelW_phys  = 0;
+int      QuickPanelDialog::s_panelH_phys  = 0;
 
-// ===== T001: D2D factory inject (由 WeaselServerApp::Run 调一次) =====
-void QuickPanelDialog::InitializeD2D(ID2D1Factory* pFactory) {
-  s_pD2DFactory = pFactory;
-}
-void QuickPanelDialog::ShutdownD2D() {
-  ReleaseD2DResources();
-  s_pD2DFactory = nullptr;
-}
-
-// ===== T001: 资源创建/释放 =====
-HRESULT QuickPanelDialog::CreateD2DResources(HWND hwnd) {
-  if (!s_pD2DFactory) return E_FAIL;
-  if (s_pRT) return S_OK;
-
-  RECT rc;
-  GetClientRect(hwnd, &rc);
-  D2D1_SIZE_U size = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
-
-  // L70-bugfix v2: 改用 STRAIGHT alpha,确保 alpha 通道不被自动 premultiply
-  // 否则 0.55 alpha white 在 premult 后变成 (0.55, 0.55, 0.55) 真值,叠加在深色 taskbar 上 → 看起来就是中灰
-  HRESULT hr = s_pD2DFactory->CreateHwndRenderTarget(
-      D2D1::RenderTargetProperties(
-          D2D1_RENDER_TARGET_TYPE_DEFAULT,
-          D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_STRAIGHT),
-          0, 0, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_FEATURE_LEVEL_DEFAULT),
-      D2D1::HwndRenderTargetProperties(hwnd, size),
-      (ID2D1HwndRenderTarget**)&s_pRT);
-  {
-    wchar_t logbuf[256];
-    swprintf_s(logbuf, L"[QuickPanel] CreateHwndRenderTarget hr=0x%08X s_pRT=%p size=%ux%u\n",
-               hr, s_pRT, size.width, size.height);
-    OutputDebugStringW(logbuf);
-  }
-  if (FAILED(hr) || !s_pRT) return hr;
-
-  // 3 个 SolidColorBrush
-  // L70-bugfix v2: 提亮 icon 颜色(从 0.20 → 0.45),在半透白 panel 上更清楚
-  s_pRT->CreateSolidColorBrush(D2D1::ColorF(0.45f, 0.45f, 0.45f, 0.90f), &s_pBrushDim);     // kFgDim 中灰
-  s_pRT->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.37f, 0.19f, 1.0f), &s_pBrushAccent);  // kAccent 品牌橙
-  s_pRT->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f), &s_pBrushPressed); // kPressed 白
-  // 注:s_pBrushHighlight 在下方独立创建为 LinearGradientBrush(顶部高光)
-
-  // active 态 橙→紫 LinearGradientBrush
-  D2D1_GRADIENT_STOP activeStops[2];
-  activeStops[0].position = 0.0f;  activeStops[0].color = D2D1::ColorF(1.0f, 0.37f, 0.19f);
-  activeStops[1].position = 1.0f;  activeStops[1].color = D2D1::ColorF(0.61f, 0.32f, 0.88f);
-  ID2D1GradientStopCollection* pActiveStops = nullptr;
-  s_pRT->CreateGradientStopCollection(activeStops, 2, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pActiveStops);
-  s_pRT->CreateLinearGradientBrush(
-      D2D1::LinearGradientBrushProperties(D2D1::Point2F(0, 0), D2D1::Point2F(100, 100)),
-      pActiveStops, &s_pBrushActive);
-  if (pActiveStops) pActiveStops->Release();
-
-  // L70-bugfix: panel 背景用 v3-rev3 设计稿的双层渐变(0.55→0.32 alpha)
-  // L70-bugfix v2: 提亮到 0.85→0.65,STRAIGHT alpha,确保半透明白能看清
-  D2D1_GRADIENT_STOP panelStops[2];
-  panelStops[0].position = 0.0f;  panelStops[0].color = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.85f);  // 顶部 0.85
-  panelStops[1].position = 1.0f;  panelStops[1].color = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.65f);  // 底部 0.65
-  ID2D1GradientStopCollection* pPanelStops = nullptr;
-  s_pRT->CreateGradientStopCollection(panelStops, 2, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pPanelStops);
-  ID2D1LinearGradientBrush* pPanelBrush = nullptr;
-  s_pRT->CreateLinearGradientBrush(
-      D2D1::LinearGradientBrushProperties(D2D1::Point2F(0, 0), D2D1::Point2F(0, 100)),
-      pPanelStops, &pPanelBrush);
-  if (pPanelStops) pPanelStops->Release();
-  // 存到 static 以便 OnPaint 复用(避免每帧创建)
-  // 注:为简单起见,这里直接传到 OnPaint(下一行)而不是存 static
-  // 改:存为 static 字段
-  s_pBrushPanel = pPanelBrush;  // s_pBrushPanel 已在 header 中声明
-
-  // L70-bugfix: 顶部高光 1px 渐变,永久存 static
-  D2D1_GRADIENT_STOP hlStops[3];
-  hlStops[0].position = 0.0f;  hlStops[0].color = D2D1::ColorF(1, 1, 1, 0);
-  hlStops[1].position = 0.5f;  hlStops[1].color = D2D1::ColorF(1, 1, 1, 0.85f);
-  hlStops[2].position = 1.0f;  hlStops[2].color = D2D1::ColorF(1, 1, 1, 0);
-  ID2D1GradientStopCollection* pHlCol = nullptr;
-  s_pRT->CreateGradientStopCollection(hlStops, 3, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pHlCol);
-  s_pRT->CreateLinearGradientBrush(
-      D2D1::LinearGradientBrushProperties(D2D1::Point2F(0, 0), D2D1::Point2F(100, 0)),
-      pHlCol, &s_pBrushHighlight);
-  if (pHlCol) pHlCol->Release();
-
-  // T002: 用 WIC 加载 logo PNG (无 IStream!)
-  LoadLogoWIC();
-
-  // T003: 创建 5 个图标 PathGeometry
-  CreateIconPaths();
-
-  return S_OK;
-}
-
-void QuickPanelDialog::ReleaseD2DResources() {
-  if (s_pLogo)            { s_pLogo->Release();           s_pLogo = nullptr; }
-  for (int i = 0; i < 5; i++) {
-    if (s_pIconGeometries[i]) { s_pIconGeometries[i]->Release(); s_pIconGeometries[i] = nullptr; }
-  }
-  if (s_pBrushActive)     { s_pBrushActive->Release();     s_pBrushActive = nullptr; }
-  if (s_pBrushHighlight)  { s_pBrushHighlight->Release();  s_pBrushHighlight = nullptr; }
-  if (s_pBrushPanel)      { s_pBrushPanel->Release();      s_pBrushPanel = nullptr; }
-  if (s_pBrushPressed)    { s_pBrushPressed->Release();    s_pBrushPressed = nullptr; }
-  if (s_pBrushAccent)     { s_pBrushAccent->Release();     s_pBrushAccent = nullptr; }
-  if (s_pBrushDim)        { s_pBrushDim->Release();        s_pBrushDim = nullptr; }
-  if (s_pRT) {
-    s_pRT->Release();
-    s_pRT = nullptr;
-  }
-}
-
-// ===== T002: WIC 解码 PNG logo (无 IStream,直接给 D2D) =====
-HRESULT QuickPanelDialog::LoadLogoWIC() {
-  if (s_pLogo) return S_OK;
-  if (!s_pRT) return E_FAIL;
-
-  // 用 WIC 工厂 (CoCreateInstance,一次性失败由 WeaselServerApp 容错)
-  IWICImagingFactory* pWic = nullptr;
-  HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_ALL,
-                               IID_PPV_ARGS(&pWic));
-  if (FAILED(hr)) return hr;
-
-  // L70-bugfix: 用 exe 所在目录而非 cwd,避免快捷方式启动时 cwd 不对
+// ===== 内部 =====
+HRESULT QuickPanelDialog::LoadLogoWIC(HWND hwnd, HBITMAP& hBmpOut) {
+  hBmpOut = NULL;
+  // L75 避雷:不用 GDI+ Bitmap(IStream*),不用 CreateStreamOnHGlobal。
+  // 直接 LoadImageW 从 PNG 文件创建 HBITMAP(纯 Win32 GDI,无 IStream 生命周期)。
   wchar_t exeDir[MAX_PATH] = {0};
-  GetModuleFileNameW(nullptr, exeDir, MAX_PATH);
+  GetModuleFileNameW(NULL, exeDir, MAX_PATH);  // hwnd 是 HWND 不是 HMODULE,必须传 NULL
   wchar_t* lastSlash = wcsrchr(exeDir, L'\\');
   if (lastSlash) *lastSlash = L'\0';
   wchar_t logoPath[MAX_PATH];
   _snwprintf_s(logoPath, _TRUNCATE, L"%s\\fluxing-logo.png", exeDir);
 
-  IWICBitmapDecoder* pDec = nullptr;
-  hr = pWic->CreateDecoderFromFilename(
-      logoPath, nullptr, GENERIC_READ,
-      WICDecodeMetadataCacheOnLoad, &pDec);
-  if (FAILED(hr)) { pWic->Release(); return hr; }
-
-  IWICBitmapFrameDecode* pFrame = nullptr;
-  hr = pDec->GetFrame(0, &pFrame);
-  if (FAILED(hr)) { pDec->Release(); pWic->Release(); return hr; }
-
-  // ★ 关键:用 WIC frame 直接给 D2D 创建 bitmap,完全不经过 IStream/GDI+
-  hr = s_pRT->CreateBitmapFromWicBitmap(pFrame, nullptr, &s_pLogo);
-
-  pFrame->Release();
-  pDec->Release();
-  pWic->Release();
-  return hr;
+  // LR_LOADFROMFILE 加载文件,LR_CREATEDIBSECTION 返回 DIB section(可 AlphaBlend)
+  hBmpOut = (HBITMAP)LoadImageW(
+      NULL, logoPath, IMAGE_BITMAP,
+      0, 0, LR_LOADFROMFILE | LR_CREATEDIBSECTION);
+  return hBmpOut ? S_OK : HRESULT_FROM_WIN32(GetLastError());
 }
 
-// ===== T003: 创建 5 个图标 PathGeometry =====
-HRESULT QuickPanelDialog::CreateIconPaths() {
-  if (!s_pRT) return E_FAIL;
-  for (int i = 0; i < 5; i++) {
-    if (s_pIconGeometries[i]) continue;
-    HRESULT hr = s_pD2DFactory->CreatePathGeometry(&s_pIconGeometries[i]);
-    if (FAILED(hr)) return hr;
-    ID2D1GeometrySink* sink = nullptr;
-    hr = s_pIconGeometries[i]->Open(&sink);
-    if (FAILED(hr)) return hr;
-    g_iconBuilders[i](sink);
-    sink->Close();
-    sink->Release();
-  }
+HRESULT QuickPanelDialog::CreateOffscreenDC(int w, int h) {
+  DestroyOffscreenDC();
+  s_panelW_phys = w;
+  s_panelH_phys = h;
+  HDC hdcScreen = GetDC(NULL);
+  s_hdcMem = CreateCompatibleDC(hdcScreen);
+  if (!s_hdcMem) { ReleaseDC(NULL, hdcScreen); return E_FAIL; }
+  s_hBmpMem = CreateCompatibleBitmap(hdcScreen, w, h);
+  if (!s_hBmpMem) { ReleaseDC(NULL, hdcScreen); return E_FAIL; }
+  SelectObject(s_hdcMem, s_hBmpMem);
+  ReleaseDC(NULL, hdcScreen);
   return S_OK;
 }
 
-// ===== T005: HitTest (返回 brand=−2, 5 按钮=0..4, 无=−1) =====
+void QuickPanelDialog::DestroyOffscreenDC() {
+  if (s_hdcMem) { DeleteDC(s_hdcMem); s_hdcMem = NULL; }
+  if (s_hBmpMem) { DeleteObject(s_hBmpMem); s_hBmpMem = NULL; }
+}
+
 int QuickPanelDialog::HitTest(int x, int y) {
-  // L70-bugfix v3: 物理像素坐标 (来自 WM_MOUSEMOVE 物理),需用 dpr 缩进,
-  // 否则 DPI != 1.0x 时点击坐标与 OnPaint 渲染位置不匹配
-  if (!s_pRT) return -1;
-  FLOAT dpiX = 96.0f, dpiY = 96.0f;
-  s_pRT->GetDpi(&dpiX, &dpiY);
-  const float dpr = dpiX / 96.0f;
-  const int padding = (int)(kPanelPadding * dpr);
-  const int brandSize = (int)(kBrandSize * dpr);
-  const int btnSize = (int)(kBtnSize * dpr);
-  const int btnGap = (int)(2 * dpr);
-
-  int bx = padding;
-  int by = padding - (int)(4 * dpr);
-  if (x >= bx && x < bx + brandSize && y >= by && y < by + brandSize) return -2;  // brand
-
-  const int buttonStartX = padding + brandSize + (int)(4 * dpr);
+  if (s_panelW_phys == 0) return -1;
+  if (x < 0 || y < 0 || x >= s_panelW_phys || y >= s_panelH_phys) return -1;
+  int padding = kPanelPadding;
+  int brandX = padding;
+  int brandY = padding;
+  if (x >= brandX && x < brandX + kBrandSize && y >= brandY && y < brandY + kBrandSize) return -2;  // brand
+  int buttonStartX = padding + kBrandSize + 4;
   for (int i = 0; i < 5; i++) {
-    int x0 = buttonStartX + i * (btnSize + btnGap);
-    if (x >= x0 && x < x0 + btnSize && y >= padding && y < padding + btnSize) return i;
+    int x0 = buttonStartX + i * (kBtnSize + 2);
+    if (x >= x0 && x < x0 + kBtnSize && y >= padding && y < padding + kBtnSize) return i;
   }
   return -1;
 }
 
-// ===== T004 + T005: OnPaint + state machine =====
-LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
-  PAINTSTRUCT ps;
-  HDC hdc = BeginPaint(hwnd, &ps);
-  if (!s_pRT) {
-    EndPaint(hwnd, &ps);
-    return 0;
-  }
-
-  s_pRT->BeginDraw();
-  s_pRT->Clear(D2D1::ColorF(0, 0, 0, 0));   // 透明背景
-
-  D2D1_SIZE_F sz = s_pRT->GetSize();
-  float W = sz.width;
-  float H = sz.height;
-
-  // L74-debug: 红色测试方块,验证 D2D 渲染管线工作
-  // 如果 E2E 截图看到红色 = 渲染管线 OK,问题在 s_pBrushPanel
-  // 如果看不到红色 = D2D 本身或 WS_EX_LAYERED per-pixel alpha 出问题
-  {
-    ID2D1SolidColorBrush* pTestRed = nullptr;
-    s_pRT->CreateSolidColorBrush(D2D1::ColorF(1, 0, 0, 1.0f), &pTestRed);
-    if (pTestRed) {
-      s_pRT->FillRectangle(D2D1::RectF(0, 0, W, H), pTestRed);
-      pTestRed->Release();
-    }
-  }
-
-  // 1. panel 背景 Liquid Glass(双层渐变 — 简化为单层半透)
-  D2D1_ROUNDED_RECT panelRect = D2D1::RoundedRect(
-      D2D1::RectF(0, 0, W, H), kPanelRadius, kPanelRadius);
-  // 用 alpha=240 的半透白(没渐变但视觉效果接近)
-  // L70-bugfix: 用 v3-rev3 双层渐变(0.55→0.32 alpha),不再用单色
-  if (s_pBrushPanel) {
-    // 重设渐变方向为 panel 实际尺寸
-    s_pBrushPanel->SetStartPoint(D2D1::Point2F(0, 0));
-    s_pBrushPanel->SetEndPoint(D2D1::Point2F(0, H));
-    s_pRT->FillRoundedRectangle(&panelRect, s_pBrushPanel);
-  }
-
-  // 1px 边框
-  ID2D1SolidColorBrush* pBorder = nullptr;
-  s_pRT->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.5f), &pBorder);
-  s_pRT->DrawRoundedRectangle(&panelRect, pBorder, 1.0f);
-  if (pBorder) pBorder->Release();
-
-  // 2. 顶部高光(1px 渐变线,L70-bugfix: 永久 s_pBrushHighlight)
-  if (s_pBrushHighlight) {
-    D2D1_POINT_2F hlStart = {14, 0.5f}, hlEnd = {W - 14, 0.5f};
-    s_pBrushHighlight->SetStartPoint(hlStart);
-    s_pBrushHighlight->SetEndPoint(hlEnd);
-    s_pRT->DrawLine(hlStart, hlEnd, s_pBrushHighlight, 1.0f);
-  }
-
-  // 3. logo (brand 块 56x56,padding 内)
-  // L70-bugfix v2: 用 GetSize() + GetDpi() 算物理像素布局,避免 DPI 缩放导致按钮挤左边
-  FLOAT dpiX = 96.0f, dpiY = 96.0f;
-  s_pRT->GetDpi(&dpiX, &dpiY);
-  const float dpr = dpiX / 96.0f;             // device pixel ratio
-  const float scale = dpr;                     // 1.0=100%, 1.5=150%
-  const float btnSize = (float)kBtnSize * scale;
-  const float brandSize = (float)kBrandSize * scale;
-  const float icoSize = (float)kIcoSize * scale;
-  const float padding = (float)kPanelPadding * scale;
-  const float btnGap = 2.0f * scale;
-
-  if (s_pLogo) {
-    D2D1_RECT_F logoRect = D2D1::RectF(
-        padding, padding,
-        padding + brandSize, padding + brandSize);
-    s_pRT->DrawBitmap(s_pLogo, &logoRect);
-  }
-
-  // 4. 5 个图标按钮
-  // active 按钮:橙→紫渐变背景 + 白色图标
-  // hovered 按钮:图标变橙 (s_hoveredIdx 优先)
-  // 默认:灰图标
-  // L70-bugfix v2: 物理像素位置
-  const float buttonStartX = padding + brandSize + 4.0f * scale;
-  for (int i = 0; i < 5; i++) {
-    float x0 = buttonStartX + i * (btnSize + btnGap);
-    float y0 = padding;
-    D2D1_RECT_F btnRect = D2D1::RectF(x0, y0, x0 + btnSize, y0 + btnSize);
-
-    if (i == s_activeIdx) {
-      // active 态:橙→紫渐变背景
-      D2D1_ROUNDED_RECT bgRect = D2D1::RoundedRect(btnRect, (float)kBtnRadius * scale, (float)kBtnRadius * scale);
-      // 重建 active brush with this button's gradient
-      ID2D1LinearGradientBrush* pActiveBtn = nullptr;
-      D2D1_GRADIENT_STOP aStops[2] = {
-          {0.0f, D2D1::ColorF(1.0f, 0.37f, 0.19f)},
-          {1.0f, D2D1::ColorF(0.61f, 0.32f, 0.88f)}
-      };
-      ID2D1GradientStopCollection* pStops = nullptr;
-      s_pRT->CreateGradientStopCollection(aStops, 2, &pStops);
-      s_pRT->CreateLinearGradientBrush(
-          D2D1::LinearGradientBrushProperties(D2D1::Point2F(x0, y0), D2D1::Point2F(x0 + btnSize, y0 + btnSize)),
-          pStops, &pActiveBtn);
-      s_pRT->FillRoundedRectangle(&bgRect, pActiveBtn);
-      if (pActiveBtn) pActiveBtn->Release();
-      if (pStops) pStops->Release();
-    }
-
-    // 画图标
-    if (s_pIconGeometries[i]) {
-      // icon viewport 24x24,渲染到 button 内 38x38 中心
-      float iconX = x0 + (btnSize - icoSize) / 2.0f;
-      float iconY = y0 + (btnSize - icoSize) / 2.0f;
-      // 创建 scale transform:24→38
-      float icoScale = icoSize / 24.0f;
-      ID2D1TransformedGeometry* pTransformed = nullptr;
-      s_pD2DFactory->CreateTransformedGeometry(
-          s_pIconGeometries[i],
-          D2D1::Matrix3x2F::Scale(icoScale, icoScale) *
-          D2D1::Matrix3x2F::Translation(iconX, iconY),
-          &pTransformed);
-      if (pTransformed) {
-        // 选 brush:active→白,hovered→橙,其它→深灰
-        ID2D1Brush* pBrush = s_pBrushDim;
-        if (i == s_activeIdx) pBrush = s_pBrushPressed;
-        else if (i == s_hoveredIdx) pBrush = s_pBrushAccent;
-        s_pRT->DrawGeometry(pTransformed, pBrush, 1.5f);  // L70-bugfix: 1.8→1.5(适配 38px 大图标,避免 stroke 盖住中心)
-        pTransformed->Release();
-      }
-    }
-  }
-
-  s_pRT->EndDraw();
-  EndPaint(hwnd, &ps);
-  return 0;
-}
-
-// ===== WndProc =====
+// ===== Window procedure =====
 LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
   switch (msg) {
     case WM_CREATE:    return OnCreate(hwnd);
     case WM_DESTROY:   return OnDestroy(hwnd);
     case WM_PAINT:     return OnPaint(hwnd);
-    case WM_ERASEBKGND: return 1;          // D2D 自管背景
+    case WM_ERASEBKGND: return 1;          // GDI 双缓冲,不让 Windows 清背景
     case WM_LBUTTONDOWN: {
       POINT p = {LOWORD(l), HIWORD(l)};
       s_activeIdx = HitTest(p.x, p.y);
@@ -561,8 +212,7 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
       POINT p = {LOWORD(l), HIWORD(l)};
       int hit = HitTest(p.x, p.y);
       if (hit >= 0 && hit == s_activeIdx) {
-        // T005: 5 按钮 no-op (v0.19.0 ship 切片)
-        // 真正功能由后续 spec 实现
+        // T005: 5 按钮 no-op (v0.19.0.7 ship 切片)
       }
       s_activeIdx = -1;
       InvalidateRect(hwnd, NULL, FALSE);
@@ -592,6 +242,7 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
     }
     case WM_KILLFOCUS: return OnKillFocus(hwnd);
     case WM_KEYDOWN:   return OnKeyDown(hwnd, w);
+    case WM_TIMER:      return OnTimer(hwnd, w);
     default: break;
   }
   return DefWindowProc(hwnd, msg, w, l);
@@ -599,31 +250,119 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
 
 LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
   s_hwnd = hwnd;
-  return CreateD2DResources(hwnd);
+  RECT rc;
+  GetClientRect(hwnd, &rc);
+  int w = rc.right - rc.left;
+  int h = rc.bottom - rc.top;
+  if (w <= 0 || h <= 0) return 0;
+
+  // 创建资源
+  LoadLogoWIC(hwnd, s_hBmpLogo);
+  s_hBrushPanelBg    = CreateSolidBrush(kBgTop);
+  s_hBrushIconDim    = CreateSolidBrush(kIcoDimC);
+  s_hBrushIconAccent = CreateSolidBrush(kAccentC);
+  s_hBrushActive     = CreateSolidBrush(kAccentC);
+  s_hBrushHighlight  = CreateSolidBrush(kHighlight);
+  s_hPenIconDim      = CreatePen(PS_SOLID, 2, kIcoDimC);
+  s_hPenIconAccent   = CreatePen(PS_SOLID, 2, kAccentC);
+  s_hPenHighlight    = CreatePen(PS_SOLID, 1, kHighlight);
+
+  // off-screen DC
+  CreateOffscreenDC(w, h);
+
+  // 渐变背景:GDI GradientFill (GDI 原生,不是 GDI+)
+  // (v0.19.0.7 用 LWA_ALPHA 86% uniform 简化,gradient 留 v0.19.0.8+)
+
+  return 0;
 }
 
 LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
   s_hoveredIdx = -1;
   s_activeIdx = -1;
+  DestroyOffscreenDC();
+  if (s_hBmpLogo) { DeleteObject(s_hBmpLogo); s_hBmpLogo = NULL; }
+  if (s_hBrushPanelBg)   { DeleteObject(s_hBrushPanelBg);   s_hBrushPanelBg   = NULL; }
+  if (s_hBrushIconDim)   { DeleteObject(s_hBrushIconDim);   s_hBrushIconDim   = NULL; }
+  if (s_hBrushIconAccent){ DeleteObject(s_hBrushIconAccent);s_hBrushIconAccent= NULL; }
+  if (s_hBrushActive)    { DeleteObject(s_hBrushActive);    s_hBrushActive    = NULL; }
+  if (s_hBrushHighlight) { DeleteObject(s_hBrushHighlight); s_hBrushHighlight = NULL; }
+  if (s_hPenIconDim)     { DeleteObject(s_hPenIconDim);     s_hPenIconDim     = NULL; }
+  if (s_hPenIconAccent)  { DeleteObject(s_hPenIconAccent);  s_hPenIconAccent  = NULL; }
+  if (s_hPenHighlight)   { DeleteObject(s_hPenHighlight);   s_hPenHighlight   = NULL; }
   if (s_hwnd == hwnd) s_hwnd = NULL;
-  ReleaseD2DResources();
   return 0;
 }
 
-LRESULT QuickPanelDialog::OnKillFocus(HWND hwnd) {
-  // T006: 1 秒失焦自动关闭
-  SetTimer(hwnd, 1, 1000, NULL);
-  return 0;
-}
+LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
+  PAINTSTRUCT ps;
+  HDC hdc = BeginPaint(hwnd, &ps);
+  if (!hdc || !s_hdcMem) { EndPaint(hwnd, &ps); return 0; }
 
-LRESULT QuickPanelDialog::OnKeyDown(HWND hwnd, WPARAM key) {
-  // T006: ESC 关闭
-  if (key == VK_ESCAPE) {
-    Hide();
-    return 0;
+  // 1. 画到 off-screen DC (避免闪烁)
+  // 背景渐变:简单的 GDI GradientFill (垂直)
+  TRIVERTEX vert[2] = {
+    {0, 0, kBgTop & 0xFFFFFF, 0xFF00},  // top
+    {0, kPanelH, kBgBot & 0xFFFFFF, 0xFF00}  // bottom (full alpha, 86% LWA will dim)
+  };
+  GRADIENT_RECT gRect = {0, 1};
+  GradientFill(s_hdcMem, vert, 2, &gRect, 1, GRADIENT_FILL_RECT_V);
+
+  // 圆角面板效果(用 RoundRect 画边框)
+  RECT panelRect = {0, 0, kPanelW, kPanelH};
+  // 不画边框(去 WS_EX_LAYERED 后,D2D 边框不画了)
+
+  // 2. 画 logo (Fluxing 红色猿猴)
+  if (s_hBmpLogo) {
+    HDC hdcMemLogo = CreateCompatibleDC(s_hdcMem);
+    SelectObject(hdcMemLogo, s_hBmpLogo);
+    BitBlt(s_hdcMem, kPanelPadding, kPanelPadding, kBrandSize, kBrandSize,
+           hdcMemLogo, 0, 0, SRCCOPY);
+    DeleteDC(hdcMemLogo);
   }
-  return DefWindowProc(hwnd, key, 0, 0);
+
+  // 3. 画 5 个按钮
+  int buttonStartX = kPanelPadding + kBrandSize + 4;
+  for (int i = 0; i < 5; i++) {
+    int x0 = buttonStartX + i * (kBtnSize + 2);
+    int y0 = kPanelPadding;
+
+    // 选 brush:  active 态用品牌色,hover 态用品牌色,默认用 dim
+    bool isActive = (i == s_activeIdx);
+    bool isHover = (i == s_hoveredIdx);
+    HBRUSH bgBrush = NULL;
+    if (isActive) bgBrush = s_hBrushActive;
+    else if (isHover) bgBrush = s_hBrushIconAccent;
+
+    if (bgBrush) {
+      HRGN rgn = CreateRoundRectRgn(x0, y0, x0 + kBtnSize, y0 + kBtnSize, kBtnRadius, kBtnRadius);
+      FillRgn(s_hdcMem, rgn, bgBrush);
+      DeleteObject(rgn);
+    }
+
+    // 画 icon
+    int iconX = x0 + (kBtnSize - kIcoSize) / 2;
+    int iconY = y0 + (kBtnSize - kIcoSize) / 2;
+    HPEN oldPen = (HPEN)SelectObject(s_hdcMem, isActive ? GetStockObject(WHITE_PEN) : (isHover ? s_hPenIconAccent : s_hPenIconDim));
+    switch (i) {
+      case 0: DrawIconSchema(s_hdcMem, iconX, iconY); break;
+      case 1: DrawIconPhrase(s_hdcMem, iconX, iconY); break;
+      case 2: DrawIconSymbols(s_hdcMem, iconX, iconY); break;
+      case 3: DrawIconSettings(s_hdcMem, iconX, iconY); break;
+      case 4: DrawIconAccount(s_hdcMem, iconX, iconY); break;
+    }
+    SelectObject(s_hdcMem, oldPen);
+  }
+
+  // 4. Blit 到屏幕
+  BitBlt(hdc, 0, 0, kPanelW, kPanelH, s_hdcMem, 0, 0, SRCCOPY);
+  EndPaint(hwnd, &ps);
+  return 0;
 }
+
+LRESULT QuickPanelDialog::OnLButtonUp(HWND, int, int) { return 0; }
+LRESULT QuickPanelDialog::OnLButtonDown(HWND, int, int) { return 0; }
+void    QuickPanelDialog::OnMouseMove(HWND) {}
+void    QuickPanelDialog::OnMouseLeave(HWND) {}
 
 LRESULT QuickPanelDialog::OnTimer(HWND hwnd, WPARAM w) {
   if (w == 1) {
@@ -632,22 +371,25 @@ LRESULT QuickPanelDialog::OnTimer(HWND hwnd, WPARAM w) {
   }
   return 0;
 }
-LRESULT QuickPanelDialog::OnLButtonUp(HWND, int, int) { return 0; }
-LRESULT QuickPanelDialog::OnLButtonDown(HWND, int, int) { return 0; }
-void    QuickPanelDialog::OnMouseMove(HWND) {}
-void    QuickPanelDialog::OnMouseLeave(HWND) {}
+
+LRESULT QuickPanelDialog::OnKillFocus(HWND hwnd) {
+  SetTimer(hwnd, 1, 1000, NULL);
+  return 0;
+}
+
+LRESULT QuickPanelDialog::OnKeyDown(HWND hwnd, WPARAM key) {
+  if (key == VK_ESCAPE) {
+    Hide();
+    return 0;
+  }
+  return DefWindowProc(hwnd, key, 0, 0);
+}
 
 // ===== Public API =====
-// Show / Hide / ToggleMode / EnableAlwaysShowMode — v0.19.0 ship 切片只控制可见性
-// 不接 IPC;5 个按钮 no-op(T005)
-
 void QuickPanelDialog::Show(bool currentFullwidth,
-                             OnClick onSchema,
-                             OnClick onUserFolder,
-                             OnClick onPhrases,
-                             OnToggle onFullwidth,
-                             OnClick onSymbols,
-                             OnClick onLogin) {
+                             OnClick onSchema, OnClick onUserFolder,
+                             OnClick onPhrases, OnToggle onFullwidth,
+                             OnClick onSymbols, OnClick onLogin) {
   (void)currentFullwidth; (void)onSchema; (void)onUserFolder;
   (void)onPhrases; (void)onFullwidth; (void)onSymbols; (void)onLogin;
   if (s_hwnd) {
@@ -655,8 +397,6 @@ void QuickPanelDialog::Show(bool currentFullwidth,
     InvalidateRect(s_hwnd, NULL, FALSE);
     return;
   }
-  // CreateWindowExW
-  if (!s_pD2DFactory) return;  // InitializeD2D 未调
   WNDCLASSEXW wc = {0};
   wc.cbSize = sizeof(wc);
   wc.style = CS_OWNDC;
@@ -667,32 +407,20 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   wc.lpszClassName = kWindowClassName;
   RegisterClassExW(&wc);
 
-  // 屏幕右下角定位
   RECT workArea;
   SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
-  // L70-bugfix v2: 改用 GetSystemMetrics SM_CXSCREEN/SM_CYDPI 算物理像素
-  HDC hdc = GetDC(nullptr);
-  int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
-  int dpiY = GetDeviceCaps(hdc, LOGPIXELSY);
-  ReleaseDC(nullptr, hdc);
-  float dpr = (float)dpiX / 96.0f;
-  int physW = (int)((float)kPanelWidth * dpr);
-  int physH = (int)((float)kPanelHeight * dpr);
-  int x = workArea.right - physW - 12;
-  int y = workArea.bottom - physH - 12;
+  int x = workArea.right - kPanelW - 12;
+  int y = workArea.bottom - kPanelH - 12;
 
   s_hwnd = CreateWindowExW(
-      WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,  // L74-fix: 去掉 WS_EX_LAYERED
-      // PrintWindow 对 WS_EX_LAYERED + per-pixel alpha 处理有问题(截图所有 alpha=255)。
-      // 改用普通 WS_POPUP,D2D 的 per-pixel alpha 被忽略(总 alpha=255),
-      // 但 RGB 值正确,看到真正的 v3-rev3 颜色。
-      // per-pixel alpha 半透明,留 v0.19.0.8+ 用 UpdateLayeredWindow 重新设计。
+      WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TOPMOST,
       kWindowClassName, L"Fluxing QuickPanel",
       WS_POPUP,
-      x, y, physW, physH,
+      x, y, kPanelW, kPanelH,
       NULL, NULL, GetModuleHandle(NULL), NULL);
   if (!s_hwnd) return;
-  // 无 WS_EX_LAYERED 就不调 SetLayeredWindowAttributes(没意义)
+  // L75: 86% uniform translucency(per-pixel 留 v0.19.0.8+ UpdateLayeredWindow)
+  SetLayeredWindowAttributes(s_hwnd, 0, kAlphaPanel, LWA_ALPHA);
   ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
   InvalidateRect(s_hwnd, NULL, FALSE);
 }
@@ -707,7 +435,6 @@ void QuickPanelDialog::Hide() {
 }
 
 void QuickPanelDialog::ToggleMode() {
-  // T006: 简化版 — Alt+, 调 Show(),再 Alt+, 调 Hide()
   if (s_hwnd && IsWindow(s_hwnd) && IsWindowVisible(s_hwnd)) {
     Hide();
   } else {
