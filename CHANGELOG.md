@@ -315,6 +315,46 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **Files touched**: QuickPanelDialog.h, QuickPanelDialog.cpp, install.nsi, build-v0_19_0_12.py (new), env.bat, weasel.props, CHANGELOG.md, lessons-learned.md
 
 
+## [0.19.0.13-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.13 - DPI scaling + WIC BitmapScaler + mac Liquid Glass (L83 round 2)
+
+- **User feedback (post v0.19.0.12)**:
+  1. **logo 仍不显示** — 实际是 v0.19.0.12 用了错的文件 (`fluxing-logo.png` 700x700 大 logo) + AlphaBlend **不支持拉伸** (MS docs 显式说)
+  2. **设置栏仍是纯白** — 浅色 wallpaper 下 panel BG + 1px WHITE_BRUSH border 都 invisible
+  3. **不置顶** — 误诊,真正问题是 panel 边界在 sub-100% DPI 下 sub-pixel invisible
+  4. **悬停没变** — 真正的 bug: WM_MOUSEMOVE lParam 是 **physical pixels** (PerMonitor DPI 缩放后) 但 HitTest 用 logical 常量 → 错位
+  5. **切其他 IME** ✓ 已 v0.19.0.11 修
+
+- **Root cause (Phase 1 systematic-debugging)**:
+  - **Bug #1**: PNG decode + 缩放错位。`AlphaBlend` 不支持拉伸 (MS docs 显式说 "does not support stretching")。L82 误以为会拉伸
+  - **Bug #2-3**: panel bg (245,245,250) 浅色 + border 1px WHITE_BRUSH 在浅色桌 invisible + FrameRgn brush 1px 在 sub-100% DPI sub-pixel
+  - **Bug #4**: WM_MOUSEMOVE lParam 在 PerMonitor DPI 进程下是 physical pixels,但 HitTest 用 logical kPanelW=360 等常量 → mouse 位置 (物理) 与 layout 逻辑位置 mismatch
+
+- **Cure (2 文件, +300 lines net, 5 处关键改动)**:
+  1. **DPI scaling 全面应用** (`s_*_phys` 常量):OnCreate 计算 `dpr = s_panelW_phys / kPanelW`,所有 layout 常量按 dpr 缩放
+  2. **WIC BitmapScaler logo**:LoadLogoWIC 加 `IWICBitmapScaler` 把 20x20 PNG 预缩放到 `s_brandSize_phys`,AlphaBlend 1:1 (不需拉伸)
+  3. **mac Liquid Glass 视觉**: border 改用 `RoundRect() + dim pen` (line primitive,不参与 brush sub-pixel),pen 宽度 `max(1, dpr+0.5)` 保证 ≥ 1 物理像素
+  4. **Hover DPI fix**: HitTest 用 `s_panelPadding_phys` / `s_brandSize_phys` 等物理常量 (与 lParam 物理坐标一致)
+  5. **ApplyAlphaGradient 用 PtInRegion** 替代手算 `IsInsideRoundedRect`(GDI 的 rgn corner 跟手算数学不完全一致)
+
+- **Verification (Phase 4)**:
+  - **Raw DIB** (qp-dump.bmp 360x68):
+    - ✅ Logo 红猿猴清晰可见
+    - ✅ 5 icons (schema/phrase/symbols/settings/account) outline 黑色
+    - ✅ Border 1px 深灰 (60,50,50) 可见
+    - ✅ Panel bg gradient alpha 140→82
+    - ✅ 圆角 corners outside alpha=0
+  - **Tests**: 35/35 hotkey + 1/1 QuickPanel PASS
+  - **PE arch (L14)**: x86 + x64 不变
+  - **Visual** (`qp-dump-l83-final-big.png` 3x 放大): Fluxing 红色猿猴 logo + 5 个干净的 icon outlines + 圆角 + 边框 + 浅玻璃底
+
+- **Files touched**: QuickPanelDialog.h, QuickPanelDialog.cpp, env.bat, weasel.props, CHANGELOG.md, lessons-learned.md
+
+- **Installer**: `release\fluxing-0.19.0.13-installer.exe` 43,195,065 bytes
+- **SHA256**: `35071844a5603647f874cfe53e76e9d0c4df85ca9d6021123c950e8348334061`
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)
