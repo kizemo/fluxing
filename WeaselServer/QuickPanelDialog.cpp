@@ -57,7 +57,11 @@ inline bool IsInsideRoundedRect(int x, int y, int W, int H, int r) {
 }  // anonymous namespace
 
 // 颜色常量(在文件作用域,本地作用域,kIcoDimC 等)
-constexpr COLORREF kIcoDimC   = RGB(60, 60, 67);     // 灰
+// L82-fix: panel bg 从纯白 RGB(255,255,255) 改成 RGB(245,245,250) 浅玻璃冷色。
+// 原因(L82 user feedback):在浅色桌面 wallpaper 上,纯白 BG + 白边框 = 完全隐形。
+// 浅玻璃色 仍保留 macOS Liquid Glass 视觉感,但**任何背景下**都能看出 panel 形状。
+constexpr COLORREF kIcoDimC   = RGB(50, 50, 60);     // 深灰 — 改深 10 step,作为 panel 边框色
+                                              //   (之前 RGB(60,60,67),user 报告 panel 边界 transparent)
 constexpr COLORREF kAccentC  = RGB(255, 95, 49);    // 品牌橙
 constexpr COLORREF kAccent2C = RGB(155, 81, 224);  // 品牌紫
 constexpr COLORREF kWhiteC   = RGB(255, 255, 255); // 白色(active icon)
@@ -180,9 +184,13 @@ int      QuickPanelDialog::s_panelW_phys  = 0;
 int      QuickPanelDialog::s_panelH_phys  = 0;
 
 // ===== 内部 =====
-// L81: LoadLogoWIC 用 WIC 解码 PNG(不用 LoadImageW/IMAGE_BITMAP,后者不支持 PNG)。
+// L81 + L82: LoadLogoWIC 用 WIC 解码 PNG(不用 LoadImageW/IMAGE_BITMAP,后者不支持 PNG)。
 // 流程:CoCreateInstance(IWICImagingFactory) → CreateDecoderFromFilename →
 // GetFrame(0) → FormatConverter(32bppBGRA) → CopyPixels 到 32-bit DIBSection。
+//
+// L82: 文件名改 `fluxing-logo_small.png` (用户实际 logo,20x20 PNG icon)。
+// 之前 v0.19.0.10/0.11 用 `fluxing-logo.png` (700x700 大 logo,中心裁切后
+// 渲染出来是橘红色块,不是 design 上的小 icon)。
 HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
   hBmpOut = NULL;
   wchar_t exeDir[MAX_PATH] = {0};
@@ -190,7 +198,7 @@ HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
   wchar_t* lastSlash = wcsrchr(exeDir, L'\\');
   if (lastSlash) *lastSlash = L'\0';
   wchar_t logoPath[MAX_PATH];
-  _snwprintf_s(logoPath, _TRUNCATE, L"%s\\fluxing-logo.png", exeDir);
+  _snwprintf_s(logoPath, _TRUNCATE, L"%s\\fluxing-logo_small.png", exeDir);
 
   // 确保 thread 上 COM 已初始化(WIC STA)。失败也不致命 → 仅显示空 logo
   HRESULT hrInit = EnsureComInit();
@@ -438,14 +446,19 @@ LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
 // 部分抽出来 — roundRgn WHITE bg + 1px border + top highlight + logo + 5 icons。
 // 不再 BitBlt 到 window DC (WS_EX_LAYERED 后双路径会闪烁,见 file header 雷区)。
 void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
-  // 1a. 圆角 panel 背景 (用 FillRgn + round-rect-region,不用 FillRect 方角)
+  // 1a. 圆角 panel 背景 — L82-fix: 从 WHITE_BRUSH 改成 s_hBrushPanelBg
+  // (s_hBrushPanelBg = CreateSolidBrush(kBgTop = RGB(245,245,250))。
+  // 在浅色 wallpaper 上不再是"panel 与背景融为一体"。)
   HRGN panelRgn = CreateRoundRectRgn(0, 0, kPanelW, kPanelH, kPanelRadius, kPanelRadius);
-  FillRgn(hdc, panelRgn, (HBRUSH)GetStockObject(WHITE_BRUSH));
+  FillRgn(hdc, panelRgn, s_hBrushPanelBg);
   DeleteObject(panelRgn);
 
-  // 1b. 1px 半透白边(v3-rev3 设计)
+  // 1b. 1px 边框 — L82-fix: 从 WHITE_BRUSH(浅色桌面隐形)改成 kIcoDimC
+  // (RGB(50,50,60) 深灰,任何背景下可见)。Border RGB 不在 ApplyAlphaGradient 的
+  // "panel bg" 范围 (r>=240 检查不通过),所以 border 保持 opaque alpha=255,
+  // 给 panel 一个**稳定的轮廓**,per-pixel alpha 仅作用于 bg fill。
   HRGN borderRgn = CreateRoundRectRgn(0, 0, kPanelW, kPanelH, kPanelRadius, kPanelRadius);
-  FrameRgn(hdc, borderRgn, (HBRUSH)GetStockObject(WHITE_BRUSH), 1, 1);
+  FrameRgn(hdc, borderRgn, s_hBrushIconDim, 1, 1);
   DeleteObject(borderRgn);
 
   // 1c. 顶 1px 高光 (设计: top highlight 用白 0.85 alpha)
@@ -464,25 +477,43 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // 整张 logo 在 panel 上看起来是黑底 + 红 logo。
   // AlphaBlend(AC_SRC_ALPHA) 是 GDI 唯一能保留 per-pixel alpha 的合成操作。
   //
-  // L81-fix2: source rect 不是 (0,0,56,56) 而是 PNG 的中心 56x56,因为 PNG 是 700x700
-  // 带透明背景,top-left 56x56 是空白(纯白 RGB),采不到 logo。只有中心有红 Fluxing 猿猴。
-  // 中心 700x700 / 2 - 28 = 322。
+  // L81-fix2: 大 PNG (700x700) 中心裁切。
+  // L82-fix: 小 PNG (20x20 用户实际 logo `fluxing-logo_small.png`) 用全画布
+  // + AlphaBlend 拉伸 (20→56)。GDI AlphaBlend 自带线性拉伸,这是 WIC + AlphaBlend
+  // 路径相对 StretchBlt(SRCCOPY 剥 alpha) 的优势。
   if (s_hBmpLogo) {
     HDC hdcMemLogo = CreateCompatibleDC(hdc);
     if (hdcMemLogo) {
       HGDIOBJ prev = SelectObject(hdcMemLogo, s_hBmpLogo);
+      BITMAP bm = {};
+      GetObject(s_hBmpLogo, sizeof(bm), &bm);
+      int logoW = bm.bmWidth;
+      int logoH = bm.bmHeight;
       BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-      // 取 logo 中心 56x56 区域(假设 logo 是 700x700,中心点是 (350, 350))
-      // 如果以后 logo 尺寸变了,改这里。
-      constexpr int logoSourceW = 700;
-      constexpr int logoSourceCx = logoSourceW / 2;  // 350
-      int srcL = logoSourceCx - kBrandSize / 2;        // 350 - 28 = 322
-      int srcT = srcL;  // 正方形 src
+
+      // L82: 自适应 source rect
+      // - 大 logo (>= 2x brand area):中心裁切 (避免空白边缘)
+      // - 小 logo (< 2x brand area):全画布 + AlphaBlend 拉伸到 kBrandSize
+      int srcL, srcT, srcW, srcH;
+      if (logoW >= kBrandSize * 2 && logoH >= kBrandSize * 2) {
+        // 大 logo:中心裁切
+        srcL = (logoW - kBrandSize) / 2;
+        srcT = (logoH - kBrandSize) / 2;
+        srcW = kBrandSize;
+        srcH = kBrandSize;
+      } else {
+        // 小 logo:全画布拉伸
+        srcL = 0;
+        srcT = 0;
+        srcW = logoW;
+        srcH = logoH;
+      }
+
       AlphaBlend(hdc,
                  kPanelPadding, kPanelPadding,
                  kBrandSize, kBrandSize,
                  hdcMemLogo,
-                 srcL, srcT, kBrandSize, kBrandSize,
+                 srcL, srcT, srcW, srcH,
                  bf);
       SelectObject(hdcMemLogo, prev);
       DeleteDC(hdcMemLogo);
@@ -565,14 +596,30 @@ void QuickPanelDialog::ApplyAlphaGradient() {
         *px = 0;  // alpha=0 (BGRA all zero) — fully transparent (桌面可见)
         continue;
       }
-      // 圆角内:RGB == 纯白 → 渐变 alpha (panel bg / 1px border / top highlight)
+      // 圆角内:RGB 是 panel bg 浅玻璃色 → 渐变 alpha (panel bg)
+      // L82-fix: 之前判 `r >= 250 && g >= 250 && b >= 250` 配纯白 panel bg。
+      // 现在 panel bg = kBgTop = RGB(245,245,250) 浅玻璃冷色,放宽阈值到
+      // `r >= 240 && g >= 240 && b >= 240`,确保 panel bg (245,245,250) 命中
+      // gradient alpha,top highlight (255,255,255) 也命中。
+      //
+      // L82-fix2: **else 分支必须强制设 alpha=255**。原因:GDI 在 32-bit BI_BITFIELDS
+      // DIB 上,MoveTo/LineTo (pen) 和 FrameRgn (border brush) 写入 RGB 但
+      // **alpha = 0**(它们不管理 alpha 通道)。只有 FillRgn/FillRect 写 alpha=255。
+      // 如果我们 leave-as-is,icon lines + border 都是 alpha=0 → 完全透明,
+      // 用户看不到。这是 v0.19.0.11 user 反馈的"border transparent"的根因。
+      // 修复:else 分支强制设 alpha=255 保留 RGB,让所有非-bg 像素(border, icons,
+      // logo, active bg) 保持完全 opaque,配合 gradient panel bg 形成
+      // **深色 border 在浅色 bg 上明显可见** 的视觉差。
       BYTE r8 = (*px >> 16) & 0xFF;
       BYTE g8 = (*px >> 8)  & 0xFF;
       BYTE b8 =  *px        & 0xFF;
-      if (r8 >= 250 && g8 >= 250 && b8 >= 250) {
-        *px = ((DWORD)aPanel << 24) | 0x00FFFFFF;  // BGRA: 半透明白
+      if (r8 >= 240 && g8 >= 240 && b8 >= 240) {
+        // panel bg / top highlight:gradient alpha + 保留 RGB
+        *px = ((DWORD)aPanel << 24) | (r8 << 16) | (g8 << 8) | b8;
+      } else {
+        // border / icons / logo / active bg:opaque alpha=255 + 保留 RGB
+        *px = 0xFF000000u | (r8 << 16) | (g8 << 8) | b8;
       }
-      // else: icons / logo / active bg (含色的 RGB) 保留 GDI 默认 alpha=255
     }
   }
 }

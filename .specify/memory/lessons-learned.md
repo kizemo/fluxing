@@ -6679,3 +6679,146 @@ DWM 合成 layered 窗口到 desktop 时 alpha=255 visible。这是 L80 lessons 
 - **IMPORTANT**: User must re-install over v0.19.0.10 (or fresh). v0.19.0.10 装机 logo/alpha
   问题是 silent install (升级 silent install 即可)。视觉 must 在 **非纯白 desktop
   wallpaper** 上验证 liquid glass effect。
+
+
+## L82 - v0.19.0.12: QuickPanel 真"毛玻璃" — panel bg light glass + dark border + GDI A=0 反转
+
+### Symptom (post v0.19.0.11 ship)
+
+User installed v0.19.0.11 and ran again. 4 issues remained:
+
+1. **logo 是橘红色块** — 不是 design 上的小 icon
+2. **设置栏仍是纯白背景** — v3-rev3 设计的"毛玻璃"看不见
+3. **不置顶误诊** — 用户正确诊断:不是 z-order 问题,是 panel 边界 (1px border) transparent, 浅色桌面上 panel 整体融入背景
+4. **hover 不变** — panel 整体隐形, 看不出 hover 变化
+
+**Critical insight (Bug #3 用户纠正)**: 我之前 v0.19.0.11 L81 报告里说
+"WS_EX_LAYERED + WS_EX_TOPMOST z-order 不稳,加 SetWindowPos 强制置顶"。
+**实际错了** — 用户真实问题是 **panel 边界 transparent**。SetWindowPos 加了
+但 panel 视觉上还是 "没在屏幕" 因为 panel 边缘 transparent。
+
+### Phase 1 (root cause re-investigation)
+
+**Bug #1 logo**:
+- v0.19.0.11 用 `fluxing-logo.png` (700x700 大 logo),中心裁切 (322, 322, 56, 56) 后
+  渲染出来是 solid red 块,因为采到的是大 logo 的中心实色区。
+- **用户实际 logo**: `docs\design\fluxing-logo_small.png` (20x20 PNG icon)
+- 修复: 改文件名 + 自适应 source rect (大 logo 中心裁切,小 logo 全画布拉伸)。
+
+**Bug #2/3/4 panel invisible**:
+- v0.19.0.11 panel bg = WHITE_BRUSH (纯白),1px border = WHITE_BRUSH
+- 在浅色 desktop wallpaper 上,panel 内部(白)和 border (白) 都跟桌面接近 → 看不出 panel 形状
+- 真正毛玻璃效果应该是 **panel bg 浅玻璃色 (任何背景下能看出)** + **border 深灰 (稳定轮廓)**
+
+**GDI A=0 反转 (Bug #3 真正根因 — 新发现)**:
+- 我之前假定 GDI 在 32-bit BI_BITFIELDS DIB 上,MoveTo/LineTo/FrameRgn 写入 alpha=255
+- **错!** 实际是 alpha=0 — GDI pen / FrameRgn 不管理 alpha channel
+- v0.19.0.11 `ApplyAlphaGradient` else 分支 `// leave as-is` 实际让所有
+  icon lines + border 都是 alpha=0 → **完全 transparent**
+- 加上 panel bg 是 WHITE_BRUSH (FillRgn 写 alpha=255) → bg 像素保留 alpha,
+  ApplyAlphaGradient 给 bg 设 gradient alpha → panel 中间有半透明白
+  (但浅色桌面上看不见)
+- **border transparent 看起来像"panel 没有边界"** → 用户误以为"不置顶"
+
+### Phase 2 (fix chosen)
+
+Minimal scope:
+
+- **Panel bg**: `kBgTop = RGB(245, 245, 250)` 浅玻璃冷色 (之前纯白)
+  - 在浅色 desktop 上仍能区分 panel 形状 (rgb(245) - rgb(255) = 10 灰阶差)
+  - 任何背景下可见
+
+- **Panel border 1px**: `s_hBrushIconDim` (= `kIcoDimC = RGB(50, 50, 60)` 深灰)
+  - 之前: `WHITE_BRUSH` (浅色桌面上隐形)
+  - 现在: 深灰 (rgb(50)) 任何 wallpaper 下可见
+
+- **ApplyAlphaGradient else 分支**:
+  ```cpp
+  if (r8 >= 240 && g8 >= 240 && b8 >= 240) {
+    // bg gradient
+    *px = ((DWORD)aPanel << 24) | (r8 << 16) | (g8 << 8) | b8;
+  } else {
+    // L82-fix2: GDI 默认 alpha=0 (pen/FrameRgn),force 设 alpha=255 保留 RGB
+    *px = 0xFF000000u | (r8 << 16) | (g8 << 8) | b8;
+  }
+  ```
+
+- **Logo path**: `LoadLogoWIC` 改 `fluxing-logo_small.png` (20x20)
+  - 自适应 source rect: 宽高 < 2x brand area 用全画布 + AlphaBlend 拉伸
+
+- **NSIS install.nsi**: 加 `File "fluxing-logo_small.png"` 到 `$INSTDIR\weasel\`
+
+- **Build script**: NSIS 之前复制 `docs\design\fluxing-logo_small.png` 到
+  `output\Win32\` 和 `output\`。**顺序很关键** — v0.19.0.11 第一次修复时把
+  copy 放在 NSIS 之后 → NSIS 找不到文件报错。L82 调整顺序到 NSIS 之前。
+
+### Phase 3 (verification)
+
+**Raw DIB** (`FLUXING_QP_DIAG_DUMP=1`):
+- Border (0, 30): `RGB=(50,50,60) A=255` ✓ (之前 A=0!)
+- Icon line (149-152, 30): `RGB=(50,50,60) A=255` ✓ (之前 A=0!)
+- Panel bg gradient: `RGB=(245,245,250)` A=136→89 ✓
+- Brand area small logo: `RGB=(200,113,103) A=255` ✓ Fluxing red 可见
+- Alpha histogram: alpha=255: 3601 px (之前 1607 — opaque 内容 x2)
+
+**Visual** (`qp-dump-l82.png`):
+- 深色 border 围绕 panel 形状可见
+- 浅玻璃 bg 在白背景下能看出 panel
+- 5 icons (黑色) + red Fluxing logo 清晰可见
+- 圆角 corners outside panel alpha=0 透明
+
+**Tests**:
+- TestDefaultHotkeys: 35/35 PASS
+- TestQuickPanelRefactor: 1/1 PASS
+- TestResponseParser: no errors
+- TestWeaselIPC: sandbox 缺 `data` 目录 (非回归)
+
+**PE arch (L14)**:
+- WeaselServer / Deployer / Setup / rime.dll: 0x014C x86
+- weaselx64.dll: 0x8664 x64
+
+### Lessons
+
+1. **GDI 在 32-bit BI_BITFIELDS DIB 上 MoveTo/LineTo / FrameRgn 写 alpha=0**(不管理 alpha channel)。
+   只有 FillRgn / FillRect / AlphaBlend 才正确处理 alpha。设计 per-pixel alpha 透明 UI
+   必须 **强制写 alpha=255** 给 non-bg 像素,否则整个 panel 在浅色桌面上"消失"。
+2. **Panel 设计: bg 用 light glass color + border 用 dark opaque color** —— 即使桌面是白色,
+   panel 形状仍可见(深色 border 提供稳定轮廓)。设计稿"纯白毛玻璃"在浅色桌面上视觉上是
+   "透明 panel",需要妥协。
+3. **用户纠错 (Bug #3)**: 不要假设 user 报告的"不置顶"是 z-order 问题。要看真实截图
+   + 视觉分析 panel 在屏幕上的可见性。在 diagnostic 中区分"逻辑状态"(s_hwnd 存在,
+   WS_EX_TOPMOST 已设) vs "视觉状态"(屏幕上能否看见)。
+4. **NSIS `File` 顺序**: NSIS `File "foo.png"` 读取 cwd (`output/`) 的文件。
+   在 build script 里复制 logo → 必须在 NSIS 调用**之前**完成,否则 NSIS
+   "file not found" 报错。
+5. **Build script 错误处理**: v0.19.0.11 第一次 "fix" 把 logo copy 放在 NSIS 之后。
+   失败时报 "no files found" 但 NSIS 还在 proceed,然后 NSIS exit 0,因为 NSIS
+   把 "no files" 视为 warning 而非 fatal (with `/nonfatal` only,这里是 error)。
+   **永远在 build script 里 test step order**——而不是 "build exit 0 → ship"。
+
+### Anti-patterns (additional)
+
+- **AP-L82-A**: 用 `WHITE_BRUSH` 画 panel bg 或 border。浅色 desktop 上 panel 完全隐形。
+  必须 light glass color (rgb(245)) bg + dark opaque border (rgb(50))。
+- **AP-L82-B**: GDI pen / FrameRgn 之后 "leave as-is alpha" 假设是 opaque。
+  GDI 默认 alpha=0,**必须**强制写 `0xFF000000u | rgb` 保留。
+- **AP-L82-C**: NSIS build 流程中,cwd 依赖的文件 (File "x.png") 必须**先**
+  从源码目录复制到 NSIS cwd (`output/`),否则 NSIS 失败。
+- **AP-L82-D**: 用户报"不置顶"直接相信用户的字面诊断。**实际可能是** panel 不可见
+  → 用户认为是 z-order 问题,但真实是 bg/border invisible。要看真实截图分析。
+- **AP-L82-E**: 大 logo 中心裁切 solid 区 → 看起来是 "red rectangle" 而不是 design icon。
+  对 Fluxing logo 这种 transparent-BG-centered-content 风格,**用全画布小 icon (`_small.png`)** 比
+  中心裁切大 logo 更符合设计意图。
+
+### Files touched
+- `WeaselServer/QuickPanelDialog.h` (kBgTop constant)
+- `WeaselServer/QuickPanelDialog.cpp` (panel bg/border + ApplyAlphaGradient else 分支 + logo file + adaptive source rect)
+- `output/install.nsi` (File "fluxing-logo_small.png")
+- `build-v0_19_0_12.py` (new — copies logo BEFORE NSIS)
+- `env.bat` / `weasel.props` (本地不 commit)
+- `CHANGELOG.md`
+- `.specify/memory/lessons-learned.md` (this entry)
+
+### Ship
+- `release\fluxing-0.19.0.12-installer.exe` 43,188,258 bytes
+- SHA256 `e82c4bba070a204f8f30b194e10289252920e0f4d34584ff26f6fc2257a78709`
