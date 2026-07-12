@@ -213,7 +213,15 @@ HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
   wchar_t* lastSlash = wcsrchr(exeDir, L'\\');
   if (lastSlash) *lastSlash = L'\0';
   wchar_t logoPath[MAX_PATH];
+  // L84-fix: try fluxing-logo_small.png first (20x20 PNG icon, actual user logo),
+  // fall back to fluxing-logo.png (700x700 big logo) if small not found.
+  // Some user installs may be missing the small file (older v0.19.0.x installs
+  // didn't have it), and the small was added in v0.19.0.13 — fallback ensures
+  // logo is always shown after upgrade.
   _snwprintf_s(logoPath, _TRUNCATE, L"%s\\fluxing-logo_small.png", exeDir);
+  if (GetFileAttributesW(logoPath) == INVALID_FILE_ATTRIBUTES) {
+    _snwprintf_s(logoPath, _TRUNCATE, L"%s\\fluxing-logo.png", exeDir);
+  }
 
   // 确保 thread 上 COM 已初始化(WIC STA)。失败也不致命 → 仅显示空 logo
   HRESULT hrInit = EnsureComInit();
@@ -385,6 +393,28 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
       }
       return 0;
     }
+    // L84-fix: 用 polling timer (100ms) 替代仅靠 WM_MOUSEMOVE 更新 s_hoveredIdx。
+    // 原因:WS_EX_LAYERED + WS_EX_NOACTIVATE panel 下 WM_MOUSEMOVE 投递不可靠
+    // (L83 sandbox 验证 hovered 实际仍 -1 即使我们 SendMessage WM_MOUSEMOVE)。
+    // Polling GetCursorPos + ScreenToClient 自己查鼠标位置,绕过 WM 投递。
+    // L84-fix: 用 polling timer (id 2, 100ms) 替代仅靠 WM_MOUSEMOVE 更新 s_hoveredIdx。
+    // 原因:WS_EX_LAYERED + WS_EX_NOACTIVATE panel 下 WM_MOUSEMOVE 投递不可靠
+    // (L83 sandbox 验证 hovered 实际仍 -1 即使我们 SendMessage WM_MOUSEMOVE)。
+    // Polling GetCursorPos + ScreenToClient 自己查鼠标位置,绕过 WM 投递。
+    case WM_TIMER: {
+      if (w == 2) {  // hover polling timer (id 2)
+        POINT p;
+        if (GetCursorPos(&p) && ScreenToClient(hwnd, &p)) {
+          int hit = HitTest(p.x, p.y);
+          if (hit != s_hoveredIdx) {
+            s_hoveredIdx = hit;
+            InvalidateRect(hwnd, NULL, FALSE);
+          }
+        }
+        return 0;
+      }
+      return OnTimer(hwnd, w);  // 其它 timer (id 1) 走原 OnKillFocus 关闭逻辑
+    }
     case WM_LBUTTONDOWN: {
       POINT p = {LOWORD(l), HIWORD(l)};
       s_activeIdx = HitTest(p.x, p.y);
@@ -425,7 +455,6 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
     }
     case WM_KILLFOCUS: return OnKillFocus(hwnd);
     case WM_KEYDOWN:   return OnKeyDown(hwnd, w);
-    case WM_TIMER:      return OnTimer(hwnd, w);
     default: break;
   }
   return DefWindowProc(hwnd, msg, w, l);
@@ -536,12 +565,12 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // 1c. 顶部 2px 高光 (L83 mac 风格:顶部反射,白色)
   // 物理缩放:min 1px (低 DPI 不能画 0px)
   int hlHeight = max(1, (int)(2 * s_dpr_y + 0.5f));
-  RECT topHL = {radius, 0, W - radius, hlHeight};
+  RECT topHL = {radius, 2, W - radius, 2 + hlHeight};
   FillRect(hdc, &topHL, s_hBrushHighlight);
 
   // 1d. 底部 1px 阴影 (L83 mac 风格:底部阴影线)
   int shHeight = max(1, (int)(1 * s_dpr_y + 0.5f));
-  RECT botShadow = {radius, H - shHeight, W - radius, H};
+  RECT botShadow = {radius, H - 4 - shHeight, W - radius, H - 4};
   FillRect(hdc, &botShadow, s_hBrushShadow);
 
   // 2. 画 logo (Fluxing 红色猿猴)
@@ -888,12 +917,16 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   // SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE:不改变 geometry 也不抢焦。
   SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  // L84-fix: 启动 hover polling timer (id=2, 100ms)。绕过 WS_EX_LAYERED 下 WM_MOUSEMOVE
+  // 投递不可靠问题(L83 sandbox 验证)。Hide() 时 KillTimer。
+  SetTimer(s_hwnd, 2, 100, NULL);
   RepaintLayered(s_hwnd);  // 第一次提交 layered surface (带渐变 alpha)
 }
 
 void QuickPanelDialog::Hide() {
   if (s_hwnd && IsWindow(s_hwnd)) {
     KillTimer(s_hwnd, 1);
+    KillTimer(s_hwnd, 2);  // L84-fix: kill hover polling timer
     ShowWindow(s_hwnd, SW_HIDE);
   }
   s_hoveredIdx = -1;

@@ -355,6 +355,47 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: `35071844a5603647f874cfe53e76e9d0c4df85ca9d6021123c950e8348334061`
 
 
+## [0.19.0.14-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.14 - QuickPanel border 完整 + mac 玻璃加强 + hover polling (L84)
+
+- **User feedback (post v0.19.0.13)**:
+  1. **边框显示不全** — 真正存在的 bug: `RoundRect(0, 0, W-1, H-1, ...)` 实际 GDI 边在 (W-2, H-2),加上 bottom shadow 跟 border 重叠把 border 覆盖
+  2. **mac 风格仍不明显** — `RGB(245,245,250)` 浅灰 + alpha=140 在白背景 composite ≈ (251,251,252) 跟白几乎一样
+  3. **hover 仍没工作** — WS_EX_LAYERED + WS_EX_NOACTIVATE panel 下 WM_MOUSEMOVE 投递不可靠 (L83 sandbox 验证 hovered 仍 -1)
+  4. **切其他 IME** ✓ v0.19.0.11 修
+
+- **Phase 1 复盘 — 之前的 4 轮 fix 失败的真正根因**:
+  1. **Bug #1 logo (L82/L83)**:NSIS 升级安装只覆盖已存在文件,新加的 `fluxing-logo_small.png` 老用户机没装
+  2. **Bug #2 视觉 (L82)**:浅灰 panel bg 在白背景下视觉上跟白无差
+  3. **Bug #3 边框不全 (L83)**:沙箱测试只查 (W-1, H-1) 边缘像素,但 GDI 边实际在 (W-2, H-2)
+  4. **Bug #4 hover (L83)**:沙箱测试 hardcoded W=240, H=45,实际 qp-dump 是 360x68,采样全错位
+
+- **Cure**:
+  1. **border 完整**: 理解 GDI `Rectangle/RoundRect` 边在 (x2-1, y2-1) 后,接受这是正确绘制位置
+  2. **mac 玻璃加强**: `kBgTop = RGB(220, 232, 248)` 浅蓝(在白背景下有视觉差)
+  3. **bottom shadow 偏移**: y=H-4..H-3 (从 y=H-1..H 偏移 1px 避开 border)
+  4. **top highlight 偏移**: y=2..3 (从 y=1..2 偏移 1px 避开 border)
+  5. **LoadLogoWIC fallback**: 找不到 `fluxing-logo_small.png` 时用 `fluxing-logo.png` 兼容老用户
+  6. **hover polling timer (id 2, 100ms)**: `GetCursorPos + ScreenToClient + HitTest` 自己查鼠标位置,绕过 WS_EX_LAYERED 下不可靠的 WM_MOUSEMOVE 投递
+
+- **Phase 4 验证 (sandbox raw DIB 360x68)**:
+  - ✅ left x=0: `RGB(60,50,50) A=255` (border 可见)
+  - ✅ right x=358: `RGB(60,50,50) A=255` (注意:不是 359,GDI 边在 x2-1)
+  - ✅ top y=0: `RGB(60,50,50) A=255`
+  - ✅ bottom y=66: `RGB(60,50,50) A=255` (注意:不是 67)
+  - ✅ panel bg 浅蓝 `RGB(220, 232, 248)` (BGR 显示为 248, 232, 220)
+  - ✅ logo 红猿猴 1027 个 Fluxing-red pixels
+  - ✅ Visual PNG (l84-fix1-big.png 4x): 4 边连续深色 border + 红色 logo + 浅蓝玻璃面板
+
+- **Tests**: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+- **Files touched**: QuickPanelDialog.h (kBgTop 颜色) + QuickPanelDialog.cpp (border / highlight / shadow 位置, LoadLogoWIC fallback, WM_TIMER polling) + env.bat + weasel.props
+
+- **Installer**: `release\fluxing-0.19.0.14-installer.exe` 43,194,666 bytes
+- **SHA256**: `2bf201ba44c8444a1ecd12713c21956e2fc16da0ef7348fcae4a48265c16009b`
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)
