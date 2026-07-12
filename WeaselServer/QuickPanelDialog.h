@@ -126,34 +126,30 @@ class QuickPanelDialog {
 
   // 设计几何常量 (logical pixels, design — 360x68 panel)
   // 注意:**不要**直接用这些 GDI 坐标;用 _phys 等版本(运行时按 dpr 缩放)。
-  // L88-fix: panel 整体 70% (v0.19.0.16 是 60% — user 反馈"宽度偏小,右侧图标离
-  // 右边框过近,图标间距也小")。同时增大 kBtnGap 让按钮之间间距更明显。
+  // L90-fix: panel 整体 70% (v0.19.0.16 是 60% — user 反馈"宽度偏小,右侧图标离
+  // 右边框过近,图标间距也小")。
   // 70% 比例: 360*0.7=252, 68*0.7=47.6→48
-  // 56*0.7=39.2→39, 30*0.7=21, 14*0.7=9.8→10, 8*0.7=5.6→5
-  // 28*0.7=19.6→20
-  // L88-fix2: kBtnGap 改 2 (从 1 增大)— user 反馈"图标间距紧凑,影响美观"
-  // 5*39 + 4*2 = 195+8 = 203 + buttonStartX(5+39+4=48) = 251 ≤ 252 panel right (ok)
+  // L90-fix2: kBtnGap 改 3 (v0.19.0.19 是 2,user 仍报"紧凑")。kBtnSize 同步缩
+  // 37 (从 39),让 5*37 + 4*3 = 185+12 = 197 + buttonStartX(5+37+5=47) = 244 < 252
+  // panel right。btn4 right = 47 + 4*40 = 207, + 37 = 244, + 5 = 249 < 252 (3 px 右边距)
+  // 60% 比例: 56*0.66=37, 30*0.66=20, 14*0.66=9.2→10, 8*0.66=5.3→5
   static constexpr int kPanelPadding = 5;
-  static constexpr int kBtnSize      = 39;
-  static constexpr int kBtnGap       = 2;
-  static constexpr int kIcoSize      = 21;
+  static constexpr int kBtnSize      = 37;
+  static constexpr int kBtnGap       = 3;
+  static constexpr int kIcoSize      = 20;
   static constexpr int kBtnRadius    = 10;
-  static constexpr int kBrandSize    = 39;
+  static constexpr int kBrandSize    = 37;
   static constexpr int kPanelRadius  = 20;
   static constexpr int kPanelW       = 252;
   static constexpr int kPanelH       = 48;
 
   // 颜色(0xAABBGGRR)
-  // L87-fix: 渐变 加强 — user 反馈"渐变效果不够明显"。L86 RGB(255,255,255)→(180,200,230)
-  // 在白背景 alpha gradient (140→82) 下 composite 后 几乎都接近白,肉眼分辨不出渐变。
-  // 修复: 改用**更饱和的玻璃色 + 更宽的 alpha 范围**:
-  //   顶 (200, 225, 250) 浅冷蓝(肉眼明显蓝,但不刺眼)
-  //   底 (155, 195, 240) 略深浅蓝(玻璃冷调底部)
-  //   alpha 范围 80-220 (之前 82-140 太窄) — gradient 视觉差 140 step
-  // composite 后顶 (196,220,247)→底(180,202,236) 差异 16 step,渐变明显可见。
+  // L90-fix: 边框颜色降低深度 — user 反馈"边框颜色深度太深"。
+  // v0.19.0.19 边框 kIcoDimC = RGB(50, 50, 60) 几乎纯黑,视觉突兀。
+  // 改用 RGB(130, 130, 140) 浅灰,任何背景下都不刺眼,仍能看出 panel 形状。
   static constexpr COLORREF kBgTop    = RGB(200, 225, 250);  // 浅冷蓝顶
   static constexpr COLORREF kBgBot    = RGB(155, 195, 240);  // 略深浅蓝底
-  static constexpr COLORREF kIconDim  = RGB(60, 60, 67);     // 灰(legacy alias)
+  static constexpr COLORREF kIconDim  = RGB(130, 130, 140);  // 浅灰(L90-fix:边框颜色降低深度,任何背景下不刺眼)
   static constexpr COLORREF kAccent   = RGB(255, 95, 49);    // 品牌橙
   static constexpr COLORREF kAccent2  = RGB(155, 81, 224);  // 品牌紫
   static constexpr COLORREF kHighlight = RGB(255, 255, 255); // 顶部高光
