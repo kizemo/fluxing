@@ -237,6 +237,84 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
   - v0.19.0.12: per-icon hover state (per L80 future work)
 
 
+## [0.19.0.12-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.12 - QuickPanel 真"毛玻璃"可见性 + 小 logo (L82 batch)
+
+- **User feedback (post-v0.19.0.11)**: 装机实跑后,4 项使用问题仍未解决:
+  1. **logo 是橘红色块**:v0.19.0.11 用了 `fluxing-logo.png` (700x700 大 logo, 中心裁切后是 solid red) — 用户实际要 `fluxing-logo_small.png` (20x20 PNG icon)
+  2. **设置栏仍是纯白背景 / 看不到 panel**: panel bg 是 WHITE_BRUSH + 1px border 也是 WHITE → 在浅色 wallpaper 上**panel 整体隐形**,看不到边界
+  3. **Bug #3 误诊纠正**: 用户正确诊断 — 不是置顶失效,**而是 panel 边界 (1px border) 设置成了 WHITE, 在浅色桌面下 transparent → 整个 panel 视觉上"无边界"**
+  4. **Bug #4 hover 不变**: 同一个 panel 隐形根因。Panel 不可见 → hover 看不到变化
+  5. **Bug #5**: 已修复 (v0.19.0.11)
+
+- **Root cause (Phase 1-2 systematic-debugging)**:
+
+  1. **Logo**: v0.19.0.11 用了 `fluxing-logo.png` (大 logo)。用户指定 `docs\design\fluxing-logo_small.png` (20x20 PNG)。
+  2. **Panel invisible (浅色 desktop)**:
+     - `PaintOpaqueContent` 用 `(HBRUSH)GetStockObject(WHITE_BRUSH)` 画 panel bg 和 border → 任何浅色 wallpaper 上看不到 panel 形状
+     - `ApplyAlphaGradient` 的 "panel bg" 判定阈值是 `r >= 250 && g >= 250 && b >= 250` (纯白);即使改用 light gray bg 也需要相应放宽
+  3. **Border transparent (L82-fix2 新发现)**:
+     - **GDI 在 32-bit BI_BITFIELDS DIB 上 MoveTo/LineTo (pen) 和 FrameRgn (border brush) 写入 RGB 但 alpha = 0**!
+     - `ApplyAlphaGradient` 的 else 分支 "leave as-is" 实际让 icon lines + border 全部 transparent
+     - 之前以为是 border color transparent,实际上是 GDI 默认 alpha=0 的固有问题
+
+- **Cure (3 文件, +30/-15 lines)**:
+
+  1. `WeaselServer/QuickPanelDialog.h`:
+     - `kBgTop = RGB(255,255,255)` → `RGB(245,245,250)` (浅玻璃冷色, 任何 wallpaper 下都能区分)
+  2. `WeaselServer/QuickPanelDialog.cpp`:
+     - **Panel bg**: `WHITE_BRUSH` → `s_hBrushPanelBg` (= kBgTop)
+     - **Panel border**: `WHITE_BRUSH` → `s_hBrushIconDim` (= `RGB(50,50,60)` 深灰)
+     - `ApplyAlphaGradient` else 分支: **强制 alpha=255** (else "leave as-is" 实际是 alpha=0,因为 GDI 默认 A=0)
+     - 阈值放宽: `r8 >= 250` → `r8 >= 240 && g8 >= 240 && b8 >= 240` (覆盖浅玻璃色)
+     - `LoadLogoWIC` 文件名: `fluxing-logo.png` → `fluxing-logo_small.png`
+     - Logo paint 自适应 source rect: 小 PNG (< 2x brand area) 全画布拉伸, 大 PNG (>= 2x) 中心裁切
+     - `kIcoDimC`: `RGB(60, 60, 67)` → `RGB(50, 50, 60)` (border 用, 略加深以增强 visibility)
+  3. `output/install.nsi`:
+     - 加 `File "fluxing-logo_small.png"` 到 `$INSTDIR\weasel\`
+  4. `build-v0_19_0_12.py`:
+     - NSIS 之前复制 `docs\design\fluxing-logo_small.png` → `output\Win32\` 和 `output\`
+     - 否则 NSIS 找不到文件 (v0.19.0.11 修过一次但顺序错)
+
+- **Verification (Phase 4 sandbox)**:
+
+  **编译**: xmake 0 errors / 0 new warnings;msbuild ok
+
+  **单元测试**:
+  - TestDefaultHotkeys: 35/35 PASS
+  - TestQuickPanelRefactor: 1/1 PASS
+  - TestResponseParser: no errors
+  - TestWeaselIPC: sandbox 缺 `data` 目录,非回归
+
+  **PE arch (L14)**:
+  - WeaselServer / WeaselDeployer / WeaselSetup / rime.dll: 0x014C x86
+  - weaselx64.dll: 0x8664 x64
+
+  **Raw DIB diagnostic** (`FLUXING_QP_DIAG_DUMP=1`):
+  - Border (0, 30): `RGB=(50,50,60) A=255` ✓ (之前 A=0)
+  - Icon line (149-152, 30): `RGB=(50,50,60) A=255` ✓ (之前 A=0)
+  - Panel bg gradient: A=136 (top) → A=89 (bottom) ✓
+  - Brand area (small logo): `RGB=(200,113,103) A=255` ✓ (Fluxing red small icon visible)
+  - Alpha histogram: alpha=0: 796 px (3.3%); alpha=100-140: 14482 px (gradient); alpha=255: 3601 px (opaque content, 之前 1607)
+  - `qp-dump-l82.png`: 渲染出 panel 形状 (深色 border + 浅玻璃 bg + red Fluxing logo + 5 个黑色 icons)
+
+- **What changed on user's actual screen**:
+  - Panel 边界可见 (深色 1px border 在所有 wallpaper 下可见)
+  - Logo 显示为 Fluxing 红色品牌图标 (20x20 拉伸到 56x56)
+  - Hover: 鼠标移到按钮 → icon stroke 变橙 (在 panel visible 后能看见)
+  - Click active: bg 变橙 → release → 自动清除 (memset 保证)
+  - IME switch: Win+Space 切走 → panel 自动 Hide (v0.19.0.11 修)
+
+- **What weasel.props / env.bat locally** (NOT committed, .gitignored):
+  - `env.bat`: `WEASEL_BUILD=11 → 12`, `PRODUCT_VERSION=0.19.0.11 → 0.19.0.12`
+  - `weasel.props`: `PRODUCT_VERSION=0.19.0.11 → 0.19.0.12`
+
+- **Installer**: `release\fluxing-0.19.0.12-installer.exe` 43,188,258 bytes
+- **SHA256**: `e82c4bba070a204f8f30b194e10289252920e0f4d34584ff26f6fc2257a78709`
+- **Files touched**: QuickPanelDialog.h, QuickPanelDialog.cpp, install.nsi, build-v0_19_0_12.py (new), env.bat, weasel.props, CHANGELOG.md, lessons-learned.md
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)

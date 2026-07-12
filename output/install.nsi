@@ -321,8 +321,10 @@ Section "Fluxing"
   SetOutPath $INSTDIR
 
   ; L79-fix: 装 fluxing-logo.png 到 weasel subdir(QuickPanel 找它)
+  ; L82: 加 fluxing-logo_small.png (20x20 PNG icon,实际 QuickPanel 用的 logo)
   SetOutPath $INSTDIR\weasel
   File "fluxing-logo.png"
+  File "fluxing-logo_small.png"
   SetOutPath $INSTDIR
 
   IfFileExists $TEMP\weasel-backup\*.* 0 program_files
