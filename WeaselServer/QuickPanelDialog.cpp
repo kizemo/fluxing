@@ -499,7 +499,7 @@ LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
   s_hBrushIconAccent = CreateSolidBrush(kAccentC);
   s_hBrushActive     = CreateSolidBrush(kAccentC);
   s_hBrushHighlight  = CreateSolidBrush(kHighlight);
-  s_hBrushShadow     = CreateSolidBrush(RGB(0, 0, 0));  // 底部阴影 (L83 mac 风格)
+  s_hBrushShadow     = CreateSolidBrush(RGB(200, 215, 235));  // 底部阴影 (L85:浅蓝,避免黑线)
   s_hPenIconDim      = CreatePen(PS_SOLID, 2, kIcoDimC);
   s_hPenIconAccent   = CreatePen(PS_SOLID, 2, kAccentC);
   s_hPenHighlight    = CreatePen(PS_SOLID, 1, kHighlight);
@@ -616,16 +616,37 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     int y0 = pad;
 
     bool isActive = (i == s_activeIdx);
-    bool isHover = (i == s_hoveredIdx);
+    bool isHover  = (i == s_hoveredIdx);
 
+    // L85-fix: hover 视觉加强。v0.19.0.14 user 反馈"hover 没视觉变化" — 之前只改
+    // icon stroke 颜色(深灰 → 橙),在 30px icon 上视觉差异太弱。
+    // 现在:hover 时**先画 bg 浅橙填充** + 1px 橙描边 + icon 用橙笔 — 三重视觉反馈
+    // 确保用户能清晰看到 hover 状态。
     HBRUSH bgBrush = NULL;
-    if (isActive) bgBrush = s_hBrushActive;  // active: 橙
+    if (isActive) {
+      bgBrush = s_hBrushActive;  // active: 实橙(RGB 255,95,49)
+    } else if (isHover) {
+      bgBrush = s_hBrushIconAccent;  // hover: 实橙(同 active brush 但语义区分)
+    }
 
     if (bgBrush) {
       HRGN rgn = CreateRoundRectRgn(x0, y0, x0 + s_btnSize_phys, y0 + s_btnSize_phys,
                                      s_btnRadius_phys, s_btnRadius_phys);
       FillRgn(hdc, rgn, bgBrush);
       DeleteObject(rgn);
+    }
+
+    // hover/active 时画 1px 描边(更显眼)
+    if (isHover || isActive) {
+      HPEN outlinePen = CreatePen(PS_SOLID, max(1, (int)(1.0f * s_dpr_x + 0.5f)),
+                                isActive ? RGB(220, 60, 30) : RGB(255, 130, 90));
+      HPEN oldOutline = (HPEN)SelectObject(hdc, outlinePen);
+      HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+      RoundRect(hdc, x0, y0, x0 + s_btnSize_phys, y0 + s_btnSize_phys,
+                s_btnRadius_phys, s_btnRadius_phys);
+      SelectObject(hdc, oldBrush);
+      SelectObject(hdc, oldOutline);
+      DeleteObject(outlinePen);
     }
 
     HPEN iconPen;

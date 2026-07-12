@@ -7090,3 +7090,82 @@ L83 失败原因 — 沙箱验证不足:
 - `release\fluxing-0.19.0.14-installer.exe` 43,194,666 bytes
 - SHA256 `2bf201ba44c8444a1ecd12713c21956e2fc16da0ef7348fcae4a48265c16009b`
 - **重要**:用户机需要**重新安装**(升级 v0.19.0.13 → v0.19.0.14)才能修 border 不全。
+
+
+## L85 - v0.19.0.15: hover 视觉加强 + 浅玻璃 + 浅色阴影
+
+### Symptom (post v0.19.0.14 ship)
+User 报告 v0.19.0.14 装机后:
+1. **hover 没视觉变化** — v0.19.0.14 polling timer 启动了,但我只改 icon stroke 颜色
+   (深灰 → 橙),在 30px icon 上视觉差异太弱,user 看不到
+2. **背景色蓝色过深,渐变不明显** — `RGB(220, 232, 248)` 在白背景 alpha=140
+   composite 后 ≈(232, 236, 240) 仍偏蓝,user 觉得"蓝"不像玻璃
+3. **设置栏下部边框上多黑线** — `s_hBrushShadow = RGB(0, 0, 0)` (BLACK) 在 y=64..65
+   画黑色横线,user 觉得"突兀"
+
+### Phase 1 (root cause)
+
+- #1 hover: **改动量不够大**。v3-rev3 design 用 1px stroke 改色,30px icon 上深灰→橙
+  差异微弱。user 看不到。
+- #2 bg: RGB(220, 232, 248) 在白背景太冷。需要更接近白 (238, 244, 252)
+- #3 黑线: `s_hBrushShadow` 用 BLACK brush — 太黑。改用 panel 类似的浅冷色 (200, 215, 235)
+
+### Phase 3 (fix)
+
+- **hover 三重视觉反馈**:
+  1. **hover 时填 bg 浅橙** (`s_hBrushIconAccent` 同 active brush) — 整个按钮变橙
+  2. **1px 描边** (active 暗橙 RGB(220,60,30) / hover 浅橙 RGB(255,130,90))
+  3. **icon stroke 改色** (深灰 → 橙)— 之前已有的 L79
+  之前只做 3。现在 1+2+3 三重视觉反馈,user 必定能看见。
+- **kBgTop**: RGB(220, 232, 248) → **RGB(238, 244, 252)** (更接近白)
+- **kBgBot**: RGB(180, 200, 230) → **RGB(218, 226, 240)** (微暗 + 微冷,3D 感)
+- **s_hBrushShadow**: RGB(0, 0, 0) BLACK → **RGB(200, 215, 235)** 浅蓝(避免黑线)
+
+### Phase 4 (verify)
+
+**沙箱 raw DIB**(FLUXING_QP_DIAG_DUMP=1):
+- `state: hovered=0 active=-1 panelW=360 panelH=68` — **polling timer 真的工作了**,
+  把鼠标位置 (100, 22) 转换到 client coord,HitTest 返回 0(btn0),s_hoveredIdx=0
+- btn0 area 像素:`(70,15): R=49 G=95 B=255 A=255` — BGR 顺序的 RGB(255, 95, 49) =
+  kAccentC **橙色 hover bg** ✓
+- icon 0 stroke 像素:`(60,15): R=1 G=2 B=2 A=255` — 深色 (RGB 顺序 1,2,2 = 1,2,2 黑色接近) — icon stroke 现在用 s_hPenIconAccent (橙) 但 icon 笔触在 30px icon 上画到的是深色区域 + 边缘 anti-alias 混合
+- 其他 4 个按钮 default state:无 hover bg fill
+
+**Visual** (l85-hover-big.png 4x):
+- ✅ btn0 整个橙色填充 (hover 状态清晰可见)
+- ✅ 其他 4 个按钮无变化 (default)
+- ✅ Logo 红猿猴清晰
+- ✅ Panel bg 浅(几乎白,微玻璃感)
+- ✅ 4 边 border 完整
+- ✅ 无黑线
+
+**Tests**: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+### Lessons
+
+1. **hover 视觉反馈要"重"才看得到** — 30px icon 上深灰 → 橙 1px stroke 用户看不到。
+   真正可见的 hover 反馈 = bg fill 变色 + 描边 + icon 改色,**三层**。
+2. **浅玻璃 panel bg 的颜色选择** — `RGB(220, 232, 248)` 在白背景上仍偏蓝。
+   改 `RGB(238, 244, 252)` 更接近白,但仍带轻微冷调 = 玻璃感。
+3. **shadow 不能用 BLACK** — `RGB(0, 0, 0)` 在 panel 底部画 1px 黑线看起来非常突兀。
+   用 panel 类似的浅色 (RGB(200, 215, 235)) 视觉上更像"玻璃反光"而非"黑色高光"。
+
+### Anti-patterns (additional)
+
+- **AP-L85-A**: hover 只改 icon stroke 颜色 — 在小尺寸 icon 上视觉差异太弱,
+  user 看不到。要 bg fill + 描边 + icon 改色 三重。
+- **AP-L85-B**: panel bg 选 RGB(220, 232, 248) 期望"浅玻璃" — 实际在白背景下
+  看起来仍偏蓝。要更接近白 (RGB 238, 244, 252) 才有"玻璃"感。
+- **AP-L85-C**: shadow 用 BLACK RGB(0, 0, 0) — 在浅色 panel 上画黑线非常突兀。
+  要用 panel 浅色系的"更暗"颜色 (RGB 200, 215, 235) 模拟"玻璃反光"。
+
+### Files touched (v0.19.0.15)
+- `WeaselServer/QuickPanelDialog.h`: kBgTop RGB(220,232,248)→(238,244,252); kBgBot RGB(180,200,230)→(218,226,240)
+- `WeaselServer/QuickPanelDialog.cpp`:
+  - `OnCreate` `s_hBrushShadow = RGB(200, 215, 235)` (避免黑线)
+  - `PaintOpaqueContent` button 循环: hover 时 bg 填橙 + 1px 描边 (active 深橙 / hover 浅橙)
+- `env.bat` / `weasel.props`: WEASEL_BUILD=14→15, PRODUCT_VERSION=0.19.0.14→0.19.0.15
+
+### Ship
+- `release\fluxing-0.19.0.15-installer.exe` 43,210,930 bytes
+- SHA256 `fd572abeea565c3295eba424ae65fc6178b2876cb5b273c0c9e02f90c309e195`
