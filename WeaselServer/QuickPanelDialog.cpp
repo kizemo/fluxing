@@ -66,10 +66,11 @@ constexpr COLORREF kAccentC  = RGB(255, 95, 49);    // 品牌橙
 constexpr COLORREF kAccent2C = RGB(155, 81, 224);  // 品牌紫
 constexpr COLORREF kWhiteC   = RGB(255, 255, 255); // 白色(active icon)
 
-void QuickPanelDialog::DrawIconSchema(HDC hdc, int x, int y) {
+void QuickPanelDialog::DrawIconSchema(HDC hdc, int x, int y, COLORREF penColor) {
   // 双向切换箭头(viewBox 24x24,scale 到 30x30)
   // 上箭头 →: (4,9)→(17,9) + 箭头头
-  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, kIcoDimC));
+  // L86-fix: pen color 从 caller 传入(default 灰 / hover 橙 / active 白)
+  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
   MoveToEx(hdc, x + 5, y + 11, nullptr);
   LineTo(hdc, x + 23, y + 11);
   MoveToEx(hdc, x + 19, y + 8, nullptr);
@@ -84,9 +85,10 @@ void QuickPanelDialog::DrawIconSchema(HDC hdc, int x, int y) {
   DeleteObject(SelectObject(hdc, pen));
 }
 
-void QuickPanelDialog::DrawIconPhrase(HDC hdc, int x, int y) {
+void QuickPanelDialog::DrawIconPhrase(HDC hdc, int x, int y, COLORREF penColor) {
   // 对话气泡:圆角矩形 + 尾巴
-  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, kIcoDimC));
+  // L86-fix: pen color 从 caller 传入
+  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
   HBRUSH brush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
   // 主体:圆角矩形
   RoundRect(hdc, x + 5, y + 5, x + 25, y + 20, 6, 6);
@@ -103,9 +105,10 @@ void QuickPanelDialog::DrawIconPhrase(HDC hdc, int x, int y) {
   DeleteObject(SelectObject(hdc, brush));
 }
 
-void QuickPanelDialog::DrawIconSymbols(HDC hdc, int x, int y) {
+void QuickPanelDialog::DrawIconSymbols(HDC hdc, int x, int y, COLORREF penColor) {
   // 键盘(viewBox 24x24)
-  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, kIcoDimC));
+  // L86-fix: pen color 从 caller 传入
+  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
   // 外壳
   RoundRect(hdc, x + 3, y + 6, x + 27, y + 24, 2, 2);
   // 顶行按键分隔(4个)
@@ -126,9 +129,10 @@ void QuickPanelDialog::DrawIconSymbols(HDC hdc, int x, int y) {
   DeleteObject(SelectObject(hdc, pen));
 }
 
-void QuickPanelDialog::DrawIconSettings(HDC hdc, int x, int y) {
+void QuickPanelDialog::DrawIconSettings(HDC hdc, int x, int y, COLORREF penColor) {
   // 齿轮(中心圆 + 8 辐射线)
-  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, kIcoDimC));
+  // L86-fix: pen color 从 caller 传入
+  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
   // 中心圆
   Ellipse(hdc, x + 9, y + 9, x + 21, y + 21);
   // 8 辐射线
@@ -141,9 +145,10 @@ void QuickPanelDialog::DrawIconSettings(HDC hdc, int x, int y) {
   DeleteObject(SelectObject(hdc, pen));
 }
 
-void QuickPanelDialog::DrawIconAccount(HDC hdc, int x, int y) {
+void QuickPanelDialog::DrawIconAccount(HDC hdc, int x, int y, COLORREF penColor) {
   // 头像(头 + 肩)
-  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, kIcoDimC));
+  // L86-fix: pen color 从 caller 传入
+  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
   // 头
   Ellipse(hdc, x + 9, y + 5, x + 21, y + 17);
   // 肩(开口向下的弧) - Arc 需要 8 个 int
@@ -385,6 +390,18 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
     case WM_DESTROY:   return OnDestroy(hwnd);
     case WM_PAINT:     return OnPaint(hwnd);
     case WM_ERASEBKGND: return 1;          // GDI 双缓冲,不让 Windows 清背景
+    // L86-fix: panel 拖动支持 — user 需求"鼠标长按移动位置"。
+    // 方法:WM_NCHITTEST 在非按钮区返回 HTCAPTION — Windows 看到 HTCAPTION 时启动
+    // system drag (DefWindowProc 内的拖动逻辑)。button area 返回 HTCLIENT 正常
+    // 处理 mouse event(hover/active)。这样用户在 panel bg 或 brand area 长按拖动
+    // 即可移动 panel,在 button area 拖动不移动 panel(允许 hover/click)。
+    case WM_NCHITTEST: {
+      POINT p = {LOWORD(l), HIWORD(l)};
+      ScreenToClient(hwnd, &p);
+      int hit = HitTest(p.x, p.y);
+      if (hit == -1) return HTCAPTION;  // outside button — 拖动
+      return HTCLIENT;  // inside button — 正常 click/hover
+    }
     // L81-fix: 切到其他 IME (en-US 等) 时 WeaselServer 进程会失焦 → WM_ACTIVATEAPP 触发。
     // 自动 Hide() 让 panel 跟着前台 app 切走,不残留屏幕上。
     case WM_ACTIVATEAPP: {
@@ -618,16 +635,14 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     bool isActive = (i == s_activeIdx);
     bool isHover  = (i == s_hoveredIdx);
 
-    // L85-fix: hover 视觉加强。v0.19.0.14 user 反馈"hover 没视觉变化" — 之前只改
-    // icon stroke 颜色(深灰 → 橙),在 30px icon 上视觉差异太弱。
-    // 现在:hover 时**先画 bg 浅橙填充** + 1px 橙描边 + icon 用橙笔 — 三重视觉反馈
-    // 确保用户能清晰看到 hover 状态。
+    // L86-fix: hover **只改 icon stroke 颜色** — user 明确要求"hover 时 bg 不变,
+    // 只 icon 线条变橙"。v0.19.0.15 我加的"三重视觉反馈"(bg 填橙 + 描边)是过度,
+    // user 不要 bg 变化。移除 hover 时的 bg fill + 描边,只保留 icon stroke 改色。
     HBRUSH bgBrush = NULL;
     if (isActive) {
-      bgBrush = s_hBrushActive;  // active: 实橙(RGB 255,95,49)
-    } else if (isHover) {
-      bgBrush = s_hBrushIconAccent;  // hover: 实橙(同 active brush 但语义区分)
+      bgBrush = s_hBrushActive;  // active: 实橙 (RGB 255,95,49) — spec 070 T007 设计
     }
+    // hover: NO bg change. Only icon stroke color changes below.
 
     if (bgBrush) {
       HRGN rgn = CreateRoundRectRgn(x0, y0, x0 + s_btnSize_phys, y0 + s_btnSize_phys,
@@ -636,10 +651,10 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
       DeleteObject(rgn);
     }
 
-    // hover/active 时画 1px 描边(更显眼)
-    if (isHover || isActive) {
+    // 1px 描边(只 active,hover 不描边)
+    if (isActive) {
       HPEN outlinePen = CreatePen(PS_SOLID, max(1, (int)(1.0f * s_dpr_x + 0.5f)),
-                                isActive ? RGB(220, 60, 30) : RGB(255, 130, 90));
+                                RGB(220, 60, 30));  // active: 暗橙
       HPEN oldOutline = (HPEN)SelectObject(hdc, outlinePen);
       HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
       RoundRect(hdc, x0, y0, x0 + s_btnSize_phys, y0 + s_btnSize_phys,
@@ -655,14 +670,22 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     else iconPen = s_hPenIconDim;
     HPEN oldPen = (HPEN)SelectObject(hdc, iconPen);
 
+    // L86-fix: 把 pen 颜色 RGB 直接传给 DrawIcon*,而不是 hardcoded kIcoDimC。
+    // hover=橙 kAccentC,active=白 (WHITE_PEN),default=灰 kIcoDimC。
+    // 之前 v0.19.0.15 DrawIcon* hardcoded kIcoDimC,hover 状态机的 pen 选择完全
+    // 被忽略。
+    DWORD penRgb = isActive ? RGB(255, 255, 255) :
+                    isHover  ? kAccentC :
+                               kIcoDimC;
+
     int iconX = x0 + (s_btnSize_phys - s_icoSize_phys) / 2;
     int iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2;
     switch (i) {
-      case 0: DrawIconSchema(hdc, iconX, iconY); break;
-      case 1: DrawIconPhrase(hdc, iconX, iconY); break;
-      case 2: DrawIconSymbols(hdc, iconX, iconY); break;
-      case 3: DrawIconSettings(hdc, iconX, iconY); break;
-      case 4: DrawIconAccount(hdc, iconX, iconY); break;
+      case 0: DrawIconSchema(hdc, iconX, iconY, penRgb); break;
+      case 1: DrawIconPhrase(hdc, iconX, iconY, penRgb); break;
+      case 2: DrawIconSymbols(hdc, iconX, iconY, penRgb); break;
+      case 3: DrawIconSettings(hdc, iconX, iconY, penRgb); break;
+      case 4: DrawIconAccount(hdc, iconX, iconY, penRgb); break;
     }
     SelectObject(hdc, oldPen);
   }

@@ -7169,3 +7169,120 @@ User 报告 v0.19.0.14 装机后:
 ### Ship
 - `release\fluxing-0.19.0.15-installer.exe` 43,210,930 bytes
 - SHA256 `fd572abeea565c3295eba424ae65fc6178b2876cb5b273c0c9e02f90c309e195`
+
+
+## L86 - v0.19.0.16: panel 缩到 3/5 + 渐变白→蓝 + 拖动 + hover 只改 icon stroke
+
+### Symptom (post v0.19.0.15 ship)
+User 报告 4 项:
+1. **logo 显示正常** ✓
+2. **hover 时 bg 变橙** — v0.19.0.15 我加的"三重视觉反馈"(bg 填橙 + 描边 + icon 改色)过度,
+   user 不要 bg 变化,只要 icon stroke 变橙
+3. **panel 整体太大** — 缩到现在的 3/5
+4. **渐变不明显** — 顶纯白,底浅蓝
+5. **panel 不能拖动** — 长按移动位置
+
+### Phase 1 (root cause)
+
+- **#1 hover bg 变橙**: 之前 v0.19.0.15 L85 我加的"三重视觉反馈"过度 — user 明确
+  "hover 时 bg 不变,只 icon stroke 变橙"。**真正的根因不是 hover 视觉** 而是 v0.19.0.15
+  加了 bg 填橙 + 描边,user 不需要。修复:**只保留 icon stroke 改色**。
+- **#2 hover icon 实际没变橙 (L85-fix 没生效)**: **DrawIconSchema/Phrase/Symbols/
+  Settings/Account 全部 hardcoded `CreatePen(PS_SOLID, 2, kIcoDimC)` (灰),完全忽略 caller
+  选的 pen**。L85 状态机选了 s_hPenIconAccent (橙),但 DrawIcon* 自己又 new 灰 pen,
+  caller 的 pen 被覆盖。修复:DrawIcon* 接受 `COLORREF penColor` 参数,不再 hardcoded kIcoDimC。
+- **#3 panel 太大**: const 360x68 → 216x41 (60%)
+- **#4 渐变不明显**: kBgTop RGB(238,244,252) → RGB(255,255,255) (纯白);
+  kBgBot RGB(218,226,240) → RGB(180,200,230) (浅蓝)。75 step 差异,3D 玻璃感强烈。
+- **#5 不能拖动**: 处理 WM_NCHITTEST 在非按钮区返回 HTCAPTION,Windows 启动 system drag
+
+### Phase 2 (fix 实施)
+
+- **L86 panel size**: 所有 layout constants × 0.6:
+  - kPanelW 360→216, kPanelH 68→41
+  - kPanelPadding 8→5, kBtnSize 56→34, kBtnGap 2→1
+  - kIcoSize 30→18, kBtnRadius 14→8, kBrandSize 56→34
+  - kPanelRadius 28→17
+- **L86 gradient**:
+  - kBgTop = RGB(255, 255, 255) 纯白
+  - kBgBot = RGB(180, 200, 230) 浅蓝 (差异 75 step)
+- **L86 hover visual**: 移除 v0.19.0.15 加的"bg 填橙" + "1px 描边" — **只保留
+  icon stroke 改色**。active 仍 bg 填橙 + 白 icon(spec 070 T007 设计)。
+- **L86 DrawIcon 修复**:
+  - 5 个 DrawIcon* 函数签名加 `COLORREF penColor` 参数
+  - 不再 hardcoded `CreatePen(PS_SOLID, 2, kIcoDimC)`,改用传入的 penColor
+  - button 循环里:`penRgb = isActive ? RGB(255,255,255) : isHover ? kAccentC : kIcoDimC`
+- **L86 拖动**:
+  - `WndProc` 加 `case WM_NCHITTEST`:HitTest inside button → HTCLIENT;outside button
+    (空白 / brand area) → HTCAPTION(Windows 启动 system drag)
+  - 配合 polling timer + GetCursorPos 的 hover 仍然工作(drag 移动 panel
+    不影响 polling,因为 GetCursorPos 是 absolute screen coords)
+
+### Phase 3 (verify)
+
+**沙箱 raw DIB**(W=216, H=41,panel 缩 60%):
+- `state: hovered=0 active=-1 panelW=216 panelH=41 dpr=1.000 radius_phys=17`
+- btn0 center scan 显示 hover icon stroke 是 **橙 (49, 95, 255 BGR = kAccentC)**
+- **106 个 orange 像素** 集中在 btn0 icon 区域 (双向箭头)
+- bg 在 btn0 area 是 (255, 255, 255) 白色 — **bg 不变** ✓ 符合 user 要求
+- 其他 4 个按钮:default 灰 icon
+- panel bg 渐变: 顶 (255, 255, 255) → 底 (浅蓝)
+- 4 边 border 完整 (kIcoDimC = RGB 50,50,60)
+
+**Visual** (l86-hover2-big.png 5x):
+- ✅ btn0 schema icon 是橙色双向箭头(bg 仍白,符合 user 要求)
+- ✅ 其他 4 个按钮 default 灰
+- ✅ Logo 红猿猴
+- ✅ 4 边 border 完整
+- ✅ 渐变 顶纯白 → 底浅蓝(75 step 差异 3D 玻璃感)
+
+**Tests**: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+### Lessons
+
+1. **DrawIcon* 函数的 pen 应该是参数传入,不是 hardcoded** — 之前
+   `CreatePen(PS_SOLID, 2, kIcoDimC)` 在 DrawIcon* 内部 hardcoded,完全忽略 caller
+   选的 pen(L85 hover fix 没生效就是这个原因)。修复:`DrawIcon(hdc, x, y, COLORREF penColor)`。
+2. **hover 状态机只改 1 个变量 (iconPen) 但不直接相关于画** — pen 跟 pen color 是不同概念。
+   pen 是 HPEN handle,color 是 COLORREF。DrawIcon* 自己 CreatePen 时如果 hardcoded
+   color,即使 caller 选了 hover pen,DrawIcon* 内部又 new 了一个 gray pen,
+   覆盖了 hover pen。**所以 DrawIcon* 必须接受 COLORREF penColor 参数,自己 CreatePen。**
+3. **panel 缩 60% 不会丢失视觉细节** — `kBtnSize=34, kIcoSize=18` 在 18px icon
+   上 hover 橙 stroke 仍清晰可见 (`106 orange pixels in btn0 area`)。
+4. **L85 教训再被证明: user feedback 是真实信号** — v0.19.0.15 我加"三重视觉反馈"是
+   过度,user 明确说"hover 只改 icon 不变 bg",L85 没生效(因为 DrawIcon hardcoded
+   pen),L86 才真正落实 user 要求。
+5. **WM_NCHITTEST + HTCAPTION 是 panel 拖动最简实现** — 不需要手动处理
+   WM_LBUTTONDOWN / WM_MOUSEMOVE / WM_LBUTTONUP。Windows 自己处理 system drag,
+   自动调用 SetWindowPos 移动 window。
+
+### Anti-patterns (additional)
+
+- **AP-L86-A**: DrawIcon* hardcoded 创建 `kIcoDimC` 灰 pen — 完全忽略 hover/active
+  状态机选的 pen color。修复:接受 `COLORREF penColor` 参数。
+- **AP-L86-B**: hover 反馈加"bg 填橙 + 1px 描边"是过度 — user 明确要"只改 icon
+  stroke"。要做 mac-style hover,只改 1 个变量(iconPen)就行。
+- **AP-L86-C**: panel size 改动 → 所有 layout constants 等比缩放。直接改 const
+  值到 60% 即可,kBtnSize 56→34, kIcoSize 30→18 等。但要保持
+  `constexpr` 表达 design 比例,实际用 const value。
+- **AP-L86-D**: 渐变 panel bg 颜色选择 — 顶 255 (纯白) + 底 浅蓝 (180,200,230),
+  75 step 差异明显 3D 感,白色桌面下能看出 Liquid Glass 渐变反射。
+- **AP-L86-E**: panel 拖动用 `WM_NCHITTEST + HTCAPTION` — Windows 自己处理
+  system drag。**不要**手动处理 WM_LBUTTONDOWN/MOUSEMOVE 测距离算位移
+  (SetWindowPos),跟 Windows system drag 容易冲突。
+
+### Files touched (v0.19.0.16)
+- `WeaselServer/QuickPanelDialog.h`:
+  - kPanelW/H/Padding/BtnSize/BtnGap/IcoSize/BtnRadius/BrandSize/PanelRadius 全部 × 0.6
+  - kBgTop = RGB(255,255,255) 纯白,kBgBot = RGB(180,200,230) 浅蓝
+  - DrawIcon* 加 COLORREF penColor 参数
+- `WeaselServer/QuickPanelDialog.cpp`:
+  - 5 个 DrawIcon* 函数用传入 penColor 替代 hardcoded kIcoDimC
+  - button 循环里:penRgb 由 isActive/isHover 决定
+  - WndProc 加 `case WM_NCHITTEST`(button 区域 HTCLIENT,其他 HTCAPTION)
+  - 移除 v0.19.0.15 的"hover 填 bg" + "1px 描边"(user 不要)
+- `env.bat` / `weasel.props`: WEASEL_BUILD=15→16, PRODUCT_VERSION=0.19.0.15→0.19.0.16
+
+### Ship
+- `release\fluxing-0.19.0.16-installer.exe` 43,196,057 bytes
+- SHA256 `252fb0d9a746de13c2ca564117de6f7129c5c4161cb13d5ebcb233a41838515e`
