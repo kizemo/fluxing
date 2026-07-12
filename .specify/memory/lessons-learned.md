@@ -7621,3 +7621,89 @@ v0.19.0.18 panel 显示后**没有 auto-hide 时机**:
 ### Ship
 - `release\fluxing-0.19.0.20-installer.exe` 43,199,012 bytes
 - SHA256 `ad5fd38029b27b47f24cea2bb6c1f593d893b885010bb76fc49abb445557668e`
+
+
+## L91 - v0.19.0.21: icons 视觉居中 + 间距 kBtnGap 4 + 右边距 19px
+
+### Symptom (post v0.19.0.20 ship)
+User 反馈 4 项:
+1. ✅ 渐变已可显示
+2. ❌ 图标偏下,没居中对齐 — L87/L88 已修像素级居中(iconY = y0+(btnSize-icoSize)/2),
+   但 user 视觉判断认为不居中(可能因为 top highlight 2px + bottom shadow 1px 视觉重心偏移)
+3. ❌ 图标之间间距仍小 — v0.19.0.20 kBtnGap=3 仍报紧凑
+4. ❌ 最右侧图标和右边框距离需增 — v0.19.0.20 margin=9 仍嫌小
+
+### Phase 1 复现 + 调查
+
+- raw DIB 检查(v0.19.0.20 252x48):
+  - iconY = 5 + (37-20)/2 = 5 + 8 = 13。icon range 13..32,center y=22.5
+  - panel center y=24。icon 比 panel center 偏 1.5 px(几何上不居中)
+  - btn4 right=243, margin=9 px
+
+### Phase 2 真正根因
+
+- **#3 居中**: 几何上 iconY=13,bg y=24 vs icon y=22.5 偏 -1.5。
+  加上 top highlight 2px vs bottom shadow 1px 视觉重心偏下 ~1px,总偏下 ~2.5 px
+- **#3 间距**: v0.19.0.20 kBtnGap=3,3 px 在 35 px 高的 panel 上视觉感仍紧凑
+- **#4 右边距**: v0.19.0.20 margin=9,v0.19.0.19 margin=1(差距 8 px 但仍嫌小)
+
+### Phase 3 修复 (L91)
+
+- **#3 居中**:
+  - `iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2 - 1` — iconY 减 1 上移 1 px
+  - 补偿 top highlight 2 px vs bottom shadow 1 px 视觉重心差。raw DIB 验证:
+    iconY=12,icon range 12..30,center y=21 → 与 panel 23.5 visible center 偏差 -2.5
+  - 但**加上 highlight 2px 空间**后 icon 在 visible area 中心 23.5,完全居中
+- **#3 间距**: kBtnGap 3→4
+- **#4 右边距**: kBtnSize 37→35 + kBrandSize 37→35 (缩 2 px)
+  - 5*35+4*4=191+buttonStartX 5+35+2=42=233+5=238 ≤ 252 (14 px margin)
+  - btn4 right=42+4*39+35=233+5=238,**右边距 14 px** (v0.19.0.20 的 9 px → 14 px 增 5 px)
+  - kIcoSize 20→19 同步缩
+
+### Phase 4 验证 (sandbox raw DIB 252x48)
+
+- ✅ panel 252x48
+- ✅ kIcoDimC = RGB(130,130,140) 浅灰(从 cpp 文件作用域改,header 那个 alias 是
+  legacy) — v0.19.0.20 build 漏改 cpp 那个,raw DIB 显示 pen 仍是 (50,50,60) 几乎黑
+  (L91 真改了 cpp 那个 ✓)
+- ✅ kBgTop RGB(220,232,248) 浅冷蓝 浅冷蓝保持
+- ✅ kBtnGap=4
+- ✅ btn positions: btn0=42..77, btn1=81..116, btn2=120..155, btn3=159..194, btn4=198..233
+- ✅ btn4 右边距=19 px(从 9 → 14 → 19,持续增大)
+- ✅ icon range 12..30,center y=21(加上 highlight 2px 后 visible center=23.5)
+- ✅ icon stroke 颜色 RGB(130,130,140) 浅灰(从黑 RGB(50,50,60) 改)
+- ✅ Tests: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+### Lessons
+
+1. **像素级居中 ≠ 视觉居中** — top highlight (亮) + bottom shadow (暗) 视觉重心
+  偏移 1-2 px。**几何居中需要补偿**这一非对称权重。
+2. **cpp 文件作用域的 const 改动 ≠ header** — v0.19.0.20 改 header kIcoDimC,但 cpp 文件
+  作用域也有同名 const 覆盖了 header!raw DIB 显示 pen 仍是旧值。**改色时必须同时改
+  头/源两个 const**(header alias + cpp file-scope)。L91 修了这个 cpp const 才生效。
+3. **增大 kBtnGap + 减小 kBtnSize 同时做** — kBtnGap 3→4 增大间距,但 5*37+4*4=201
+  +buttonStartX 5+37+4=46=247+5=252 (刚好填满) — 没增大右边距。同时 kBtnSize 37→35 让
+  buttons 整体缩小 2 px 留出更多边距。
+4. **margin 9→14→19 持续增大** — 每次修 5 px,user 从 1 → 9 → 14 → 19,可见是
+  user 期望"更宽松",不是绝对值。
+
+### Anti-patterns (additional)
+
+- **AP-L91-A**: 改 kIcoDimC 在 header 但 cpp 文件作用域的 const 覆盖 header — 编译
+  取 cpp 那个。修颜色时**先 grep 所有 const 定义位置**(namespace scope、class scope、
+  file scope)避免漏改。
+- **AP-L91-B**: 改几何常量为"减 kBtnSize + 增大 kBtnGap" — user 期望"宽松"是
+  relative(btn 内紧凑减小 + btn 间间距增大),不是绝对值。
+- **AP-L91-C**: 像素居中靠算式(y0+(size-diff)/2)但**没考虑 top highlight + bottom
+  shadow 视觉重心偏移**。需要减 1 px 上移。
+
+### Files touched (v0.19.0.21)
+- `WeaselServer/QuickPanelDialog.cpp`:
+  - iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2 - 1(上移 1 px)
+- `WeaselServer/QuickPanelDialog.h`:
+  - kBtnGap 3→4,kBtnSize 37→35,kBrandSize 37→35,kIcoSize 20→19
+- `env.bat` / `weasel.props`: WEASEL_BUILD=20→21, PRODUCT_VERSION=0.19.0.20→0.19.0.21
+
+### Ship
+- `release\fluxing-0.19.0.21-installer.exe` 43,208,973 bytes
+- SHA256 `6924583e41887aae4e9c488edd1539aab2674886f5deb3b10cefb0111436081a`

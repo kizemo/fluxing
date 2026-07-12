@@ -672,6 +672,51 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: `ad5fd38029b27b47f24cea2bb6c1f593d893b885010bb76fc49abb445557668e`
 
 
+## [0.19.0.21-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.21 - QuickPanel icons 视觉居中 + 间距加大 + 右边距 19px (L91)
+
+- **User feedback (post v0.19.0.20)**:
+  1. ✅ 渐变已可显示
+  2. ❌ 图标偏下,没居中对齐 — L87/L88 已修像素级居中,但 top highlight 2px +
+     bottom shadow 1px 视觉重心偏移,user 视觉觉得不居中
+  3. ❌ 图标之间间距仍小 — v0.19.0.20 kBtnGap=3 仍报紧凑
+  4. ❌ 最右侧图标和右边框距离需增 — v0.19.0.20 margin=9 仍嫌小
+
+- **Phase 1 复现 + 调查**:
+  - raw DIB 检查 v0.19.0.20 (252x48):
+    - iconY=13,icon range 13..32,center y=22.5 (比 panel center 24 偏 -1.5 px)
+    - top highlight 2px + bottom shadow 1px 视觉重心偏下 ~1px
+  - v0.19.0.20 修改 kIcoDimC 在 header,但**raw DIB 显示 pen 仍是 (50,50,60) 几乎黑** —
+    **cpp 文件作用域有同名 const 覆盖 header!**
+
+- **Phase 3 修复 (L91)**:
+  1. **改 cpp 文件作用域 kIcoDimC = RGB(50,50,60) → RGB(130,130,140) 浅灰** — 修
+     file-scope 那个 const(不是只改 header)
+  2. **iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2 - 1** — 上移 1 px 补偿
+     highlight 视觉重心偏移
+  3. **kBtnGap 3→4** + **kBtnSize 37→35** + **kBrandSize 37→35** + **kIcoSize 20→19**
+     - 5*35+4*4=191 + buttonStartX(5+35+2=42) = 233
+     - btn4 right=233+5=238, 右边距=14 px(之前 9 → 14 → 持续增大)
+
+- **Phase 4 验证 (sandbox raw DIB 252x48)**:
+  - ✅ panel 252x48
+  - ✅ kIcoDimC pen 颜色 RGB(130,130,140) 浅灰(v0.19.0.20 raw DIB 显示
+    RGB(60,50,50) 几乎黑,L91 真修了 cpp const 生效)
+  - ✅ kBgTop RGB(220,232,248) 浅冷蓝
+  - ✅ btn positions: btn0=42..77, btn1=81..116, btn2=120..155,
+    btn3=159..194, btn4=198..233
+  - ✅ btn4 右边距=14 px(v0.19.0.20 是 9,增大 5 px)
+  - ✅ icon range 12..30,center y=21(visible center 23.5,补偿 highlight 2px)
+  - ✅ Tests: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+- **Files touched**: QuickPanelDialog.cpp (iconY -1) + QuickPanelDialog.h
+  (kBtnGap 3→4 + kBtnSize 37→35) + env.bat + weasel.props
+
+- **Installer**: `release\fluxing-0.19.0.21-installer.exe` 43,208,973 bytes
+- **SHA256**: `6924583e41887aae4e9c488edd1539aab2674886f5deb3b10cefb0111436081a`
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)
