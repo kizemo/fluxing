@@ -130,12 +130,12 @@ class QuickPanelDialog {
   static constexpr int kPanelH       = 68;
 
   // 颜色(0xAABBGGRR)
-  // L84-fix: kBgTop 从 RGB(245,245,250) 改成 RGB(220, 232, 248) 浅蓝玻璃。
-  // 原因(L84): RGB(245,245,250) 在白背景 + alpha=140 渲染为 ≈(251,251,252) 跟白几乎
-  // 一样,看上去仍是"白面板"。改用浅蓝 (220, 232, 248) + 同样的 alpha gradient,
-  // 在白背景上 composite 后是 ≈(232, 236, 240) 浅玻璃蓝,明显区别于白。
-  static constexpr COLORREF kBgTop    = RGB(220, 232, 248);  // 浅玻璃蓝顶(高 alpha)
-  static constexpr COLORREF kBgBot    = RGB(180, 200, 230);  // 浅玻璃蓝底(冷调 + 略暗)
+  // L85-fix: kBgTop 从 RGB(220, 232, 248) 改成 RGB(238, 244, 252) 更浅的玻璃蓝。
+  // L84 用户反馈"蓝色过深,渐变不明显" — RGB(220,232,248) 在白背景 alpha=140
+  // composite 后 ≈(232, 236, 240) 仍偏蓝。改 RGB(238, 244, 252) 更接近白,在白背景
+  // 下视觉上更"玻璃"而不是"蓝"。渐变顶(238,244,252) → 底(218,226,240),3D 感更强。
+  static constexpr COLORREF kBgTop    = RGB(238, 244, 252);  // 浅玻璃顶(接近白,微冷)
+  static constexpr COLORREF kBgBot    = RGB(218, 226, 240);  // 浅玻璃底(微暗 + 微冷)
   static constexpr COLORREF kIconDim  = RGB(60, 60, 67);     // 灰(legacy alias)
   static constexpr COLORREF kAccent   = RGB(255, 95, 49);    // 品牌橙
   static constexpr COLORREF kAccent2  = RGB(155, 81, 224);  // 品牌紫

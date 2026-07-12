@@ -396,6 +396,40 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: `2bf201ba44c8444a1ecd12713c21956e2fc16da0ef7348fcae4a48265c16009b`
 
 
+## [0.19.0.15-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.15 - QuickPanel hover 视觉加强 + 浅玻璃 + 浅色阴影 (L85)
+
+- **User feedback (post v0.19.0.14)**:
+  1. **hover 没视觉变化** — 之前只改 icon stroke 颜色(深灰→橙),在 30px icon 上视觉差异太弱
+  2. **背景色蓝色过深,渐变不明显** — `RGB(220, 232, 248)` 在白背景 alpha=140 composite 后 ≈(232, 236, 240) 仍偏蓝
+  3. **设置栏下部边框上多黑线** — `s_hBrushShadow` 用 BLACK 在 panel 底部画 1px 黑线,突兀
+
+- **Phase 3 修复 (3 处关键改动)**:
+  1. **hover 三重视觉反馈**:
+     - bg 填浅橙 (`s_hBrushIconAccent` 同 active brush)— 整个按钮变橙
+     - 1px 描边 (active 暗橙 RGB(220,60,30) / hover 浅橙 RGB(255,130,90))
+     - icon stroke 改色 (L79 已有)
+     之前只 3,现在 1+2+3 三重视觉反馈,user 必定能看见
+  2. **kBgTop**: RGB(220, 232, 248) → **RGB(238, 244, 252)** (更接近白)
+  3. **kBgBot**: RGB(180, 200, 230) → **RGB(218, 226, 240)** (微暗 + 微冷,3D 感)
+  4. **s_hBrushShadow**: RGB(0, 0, 0) BLACK → **RGB(200, 215, 235)** 浅蓝(避免黑线)
+
+- **Phase 4 验证 (sandbox raw DIB 360x68 + SetCursorPos 模拟 hover)**:
+  - ✅ `state: hovered=0 active=-1` — polling timer 真的把 GetCursorPos 转成 hover state
+  - ✅ btn0 area 像素 (70, 15): `RGB(255, 95, 49) A=255` — BGR 顺序的 hover 橙 ✓
+  - ✅ icon 0 stroke 像素:深色 (1, 2, 2) — pen 描边
+  - ✅ 其他 4 个按钮:无 hover bg fill (default)
+  - ✅ Visual (l85-hover-big.png 4x):btn0 整个橙色填充 + 其他按钮无变化 + Logo + 边框 + 浅玻璃 bg
+
+- **Tests**: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+- **Files touched**: QuickPanelDialog.h (kBgTop / kBgBot 颜色) + QuickPanelDialog.cpp (hover 三重反馈 + s_hBrushShadow 浅蓝) + env.bat + weasel.props
+
+- **Installer**: `release\fluxing-0.19.0.15-installer.exe` 43,210,930 bytes
+- **SHA256**: `fd572abeea565c3295eba424ae65fc6178b2876cb5b273c0c9e02f90c309e195`
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)
