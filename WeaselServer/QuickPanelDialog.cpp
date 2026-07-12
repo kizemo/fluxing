@@ -162,6 +162,9 @@ HWND     QuickPanelDialog::s_hwnd         = NULL;
 QuickPanelDialog::Mode QuickPanelDialog::s_mode = QuickPanelDialog::Mode::kHidden;
 bool     QuickPanelDialog::s_fullwidth    = false;
 bool     QuickPanelDialog::s_mouseTracked = false;
+bool     QuickPanelDialog::s_dragging     = false;   // L87-fix 手动 drag 状态
+POINT    QuickPanelDialog::s_dragStartCursor = {0, 0}; // L87-fix drag 开始时 cursor
+RECT     QuickPanelDialog::s_dragStartWindow = {0, 0, 0, 0}; // L87-fix drag 开始时 window pos
 int      QuickPanelDialog::s_alpha        = 255;
 int      QuickPanelDialog::s_targetAlpha  = 255;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onSchema;
@@ -390,17 +393,82 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
     case WM_DESTROY:   return OnDestroy(hwnd);
     case WM_PAINT:     return OnPaint(hwnd);
     case WM_ERASEBKGND: return 1;          // GDI 双缓冲,不让 Windows 清背景
-    // L86-fix: panel 拖动支持 — user 需求"鼠标长按移动位置"。
-    // 方法:WM_NCHITTEST 在非按钮区返回 HTCAPTION — Windows 看到 HTCAPTION 时启动
-    // system drag (DefWindowProc 内的拖动逻辑)。button area 返回 HTCLIENT 正常
-    // 处理 mouse event(hover/active)。这样用户在 panel bg 或 brand area 长按拖动
-    // 即可移动 panel,在 button area 拖动不移动 panel(允许 hover/click)。
+    // L87-fix: panel 拖动支持 — 改用 **手动 drag** 替代 v0.19.0.16 L86 的 WM_NCHITTEST
+    // + HTCAPTION。L86 的 HTCAPTION 在 WS_POPUP + WS_EX_LAYERED 窗口下 Windows
+    // DefWindowProc 没有处理 system drag(L86 报告"无法拖动"是 user 反馈)。
+    // 手动 drag 方法:
+    //   WM_LBUTTONDOWN:HitTest 不在 button 内,SetCapture + 记录原 cursor pos + 原 window pos
+    //   WM_MOUSEMOVE:如果 captured,计算 delta + SetWindowPos 移动 window
+    //   WM_LBUTTONUP:ReleaseCapture 结束 drag
+    // 这样 button 区域正常 click,空白区域可以拖动。
     case WM_NCHITTEST: {
       POINT p = {LOWORD(l), HIWORD(l)};
       ScreenToClient(hwnd, &p);
       int hit = HitTest(p.x, p.y);
-      if (hit == -1) return HTCAPTION;  // outside button — 拖动
-      return HTCLIENT;  // inside button — 正常 click/hover
+      if (hit == -1) return HTCAPTION;  // 空白/品牌区 — 拖动
+      return HTCLIENT;  // 按钮区 — 正常 click/hover
+    }
+    case WM_LBUTTONDOWN: {
+      POINT p = {LOWORD(l), HIWORD(l)};
+      int hit = HitTest(p.x, p.y);
+      if (hit == -1) {  // 空白/品牌区才启动 drag
+        SetCapture(hwnd);
+        s_dragging = TRUE;
+        GetCursorPos(&s_dragStartCursor);
+        RECT rc;
+        GetWindowRect(hwnd, &rc);
+        s_dragStartWindow = rc;
+      } else {
+        s_activeIdx = hit;
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+      return 0;
+    }
+    case WM_MOUSEMOVE: {
+      if (s_dragging) {
+        POINT cur;
+        GetCursorPos(&cur);
+        int dx = cur.x - s_dragStartCursor.x;
+        int dy = cur.y - s_dragStartCursor.y;
+        SetWindowPos(hwnd, NULL,
+                     s_dragStartWindow.left + dx,
+                     s_dragStartWindow.top + dy,
+                     0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+      } else {
+        // L87-fix 替代 v0.19.0.14 L84 polling timer 的 WM_MOUSEMOVE 路径
+        // (L86 仍保留 polling timer,这里双保险)
+        POINT p = {LOWORD(l), HIWORD(l)};
+        int hit = HitTest(p.x, p.y);
+        if (hit != s_hoveredIdx) {
+          s_hoveredIdx = hit;
+          InvalidateRect(hwnd, NULL, FALSE);
+        }
+        if (!s_mouseTracked) {
+          TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
+          TrackMouseEvent(&tme);
+          s_mouseTracked = true;
+        }
+      }
+      return 0;
+    }
+    case WM_LBUTTONUP: {
+      if (s_dragging) {
+        s_dragging = FALSE;
+        ReleaseCapture();
+        // drag 结束后清 hover
+        s_hoveredIdx = -1;
+        InvalidateRect(hwnd, NULL, FALSE);
+      } else {
+        POINT p = {LOWORD(l), HIWORD(l)};
+        int hit = HitTest(p.x, p.y);
+        if (hit >= 0 && hit == s_activeIdx) {
+          // 5 按钮 no-op (spec 070 T007)
+        }
+        s_activeIdx = -1;
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+      return 0;
     }
     // L81-fix: 切到其他 IME (en-US 等) 时 WeaselServer 进程会失焦 → WM_ACTIVATEAPP 触发。
     // 自动 Hide() 让 panel 跟着前台 app 切走,不残留屏幕上。
@@ -432,36 +500,9 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
       }
       return OnTimer(hwnd, w);  // 其它 timer (id 1) 走原 OnKillFocus 关闭逻辑
     }
-    case WM_LBUTTONDOWN: {
-      POINT p = {LOWORD(l), HIWORD(l)};
-      s_activeIdx = HitTest(p.x, p.y);
-      InvalidateRect(hwnd, NULL, FALSE);
-      return 0;
-    }
-    case WM_LBUTTONUP: {
-      POINT p = {LOWORD(l), HIWORD(l)};
-      int hit = HitTest(p.x, p.y);
-      if (hit >= 0 && hit == s_activeIdx) {
-        // T005: 5 按钮 no-op (v0.19.0.7 ship 切片)
-      }
-      s_activeIdx = -1;
-      InvalidateRect(hwnd, NULL, FALSE);
-      return 0;
-    }
-    case WM_MOUSEMOVE: {
-      POINT p = {LOWORD(l), HIWORD(l)};
-      int hit = HitTest(p.x, p.y);
-      if (hit != s_hoveredIdx) {
-        s_hoveredIdx = hit;
-        InvalidateRect(hwnd, NULL, FALSE);
-      }
-      if (!s_mouseTracked) {
-        TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
-        TrackMouseEvent(&tme);
-        s_mouseTracked = true;
-      }
-      return 0;
-    }
+    // L87-fix: WM_LBUTTONDOWN/UP/MOUSEMOVE 合并到上面新的 manual-drag 实现
+    // (case 411/427/455 已处理 button click + manual drag),所以这里删除老的
+    // duplicates (case 503/509/519),避免 C2196 "case 重复" 错误。
     case WM_MOUSELEAVE: {
       s_mouseTracked = false;
       if (s_hoveredIdx != -1) {
@@ -626,8 +667,9 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
 
   // 3. 画 5 个按钮 — L83-fix: 用 s_*_phys 常量
   // L79-fix: hover 只改 icon stroke 颜色(不画 bg 填充,符合 v3-rev3 设计)
-  // active: bg 橙渐变 + icon 白
-  int buttonStartX = pad + s_brandSize_phys + max(1, (int)(4 * s_dpr_x + 0.5f));
+  // L87-fix: brand→btns 间距 4 logical (dpr=1 → 4 物理,dpr=0.7 → 2.8→2 物理)。
+  // 给个 max(2, ...) 保证 ≥ 2 物理像素(在 dpr=0.7 时也能看到间距)。
+  int buttonStartX = pad + s_brandSize_phys + max(2, (int)(4 * s_dpr_x + 0.5f));
   for (int i = 0; i < 5; i++) {
     int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
     int y0 = pad;
@@ -729,7 +771,12 @@ void QuickPanelDialog::ApplyAlphaGradient() {
       BYTE r8 = (*px >> 16) & 0xFF;
       BYTE g8 = (*px >> 8)  & 0xFF;
       BYTE b8 =  *px        & 0xFF;
-      if (r8 >= 240 && g8 >= 240 && b8 >= 240) {
+      // L87-fix: 阈值从 r >= 240 改成 r >= 130 + g >= 150 + b >= 180。
+      // 之前 kBgTop = (255, 255, 255) 接近白,255 阈值 work。L87 改 kBgTop = (200, 225, 250)
+      // (浅冷蓝),200 < 240,else 分支 (alpha=255) 生效,**gradient 完全没作用**。
+      // 新阈值匹配 kBgBot = (155, 195, 240) — b8 >= 180 确保 panel bg 像素 (含冷蓝) 命中
+      // gradient alpha 分支。
+      if (r8 >= 130 && g8 >= 150 && b8 >= 180) {
         *px = ((DWORD)aPanel << 24) | (r8 << 16) | (g8 << 8) | b8;
       } else {
         *px = 0xFF000000u | (r8 << 16) | (g8 << 8) | b8;

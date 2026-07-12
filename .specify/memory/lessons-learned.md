@@ -7286,3 +7286,104 @@ User 报告 4 项:
 ### Ship
 - `release\fluxing-0.19.0.16-installer.exe` 43,196,057 bytes
 - SHA256 `252fb0d9a746de13c2ca564117de6f7129c5c4161cb13d5ebcb233a41838515e`
+
+
+## L87 - v0.19.0.17: panel 加大 + 渐变阈值修复 + 手动 drag 真正工作
+
+### Symptom (post v0.19.0.16 ship)
+User 反馈 4 项:
+1. ✅ 尺寸缩了,悬停 icon 变化
+2. ❌ **宽度小,右侧图标离右边框过近,图标间距小** — v0.19.0.16 panelW=216(60% of 360)
+   偏小,且 btn4 在我算 layout 时**实际上溢出了 panel 右 border**(算下来 btn4 right=253 > panel
+   right=252)
+3. ❌ **图标未居中** — 实际 v0.19.0.16 中居中算式是对的,但因 panel 太窄,btn4 突出
+   看起来"右偏"
+4. ❌ **无法拖动** — v0.19.0.16 L86 的 WM_NCHITTEST + HTCAPTION 在 WS_POPUP + WS_EX_LAYERED
+   窗口下 Windows DefWindowProc 没有触发 system drag (user 仍报"无法拖动")
+5. ❌ **毛玻璃渐变不明显** — ApplyAlphaGradient 用 `r8 >= 240` 阈值,但 v0.19.0.17
+   把 kBgTop 改 (200, 225, 250) 后 r8=200 < 240 → else 分支(alpha=255) 生效,
+   **gradient 完全没应用**,所以肉眼看不出渐变
+
+### Phase 1 (root cause)
+
+- **#2 width + 居中**: v0.19.0.16 用 60% 缩放太紧。btn4 x0 = 50+4*41=214, right=253,
+  panel right=252 → **btn4 越界 1 物理像素**。L86 用了 kBtnGap=1 让 btn 之间太紧。
+  L87 改用 70% 缩放 (kPanelW=252),kBtnGap 改 1(button 之间还是窄),buttonStartX
+  改 max(2, int(4*dpr+0.5)) (dpr=1 → 4 物理像素)→ buttonStartX = 48 → btn4 right = 247
+  < panel right = 251,4 物理像素间距。
+- **#4 拖动**: v0.19.0.16 L86 用 `WM_NCHITTEST + HTCAPTION`,但 WS_POPUP + WS_EX_LAYERED
+  窗口下 DefWindowProc 不处理 system drag。L87 改用**手动 drag**:
+  WM_LBUTTONDOWN (在 button 之外) SetCapture + record origin
+  WM_MOUSEMOVE if captured, calculate delta + SetWindowPos
+  WM_LBUTTONUP ReleaseCapture
+- **#5 渐变阈值**: ApplyAlphaGradient 用 `r8 >= 240` 阈值匹配 v0.19.0.10 浅白 (255,255,255)
+  panel bg。L87 改 kBgTop 为浅冷蓝 (200, 225, 250),r8=200 < 240 → else 分支生效,
+  gradient 整个 bypass。L87 改阈值 `r8 >= 130 && g8 >= 150 && b8 >= 180` 匹配新
+  panel bg 范围。
+
+### Phase 3 (fix)
+
+- **Panel 加大**: kPanelW 216→252 (60%→70%), kPanelH 41→48, kBtnSize 34→39
+- **Btn4 不溢出**: btn4 right=247 < panel right=251 (4 px 间距)
+- **kBtnGap 改 1** (L86 值),原 v0.19.0.16 改 2 让 panel 太大溢出
+- **Gradient 阈值**: `r8 >= 240` → `r8 >= 130 && g8 >= 150 && b8 >= 180` 匹配新 panel bg 范围
+- **kBgTop/kBgBot 改**: (200, 225, 250) / (155, 195, 240) — 明显浅冷蓝渐变
+- **kAlphaPanelTop/Bot 改**: 140/82 → 220/80,差异 140 step 渐变明显
+- **手动 drag**: 
+  - 静态成员 s_dragging/s_dragStartCursor/s_dragStartWindow 加到 header
+  - WM_LBUTTONDOWN (hit==-1): SetCapture + record
+  - WM_MOUSEMOVE (if dragging): calculate delta + SetWindowPos
+  - WM_LBUTTONUP: ReleaseCapture + clear hover
+
+### Phase 4 (verify sandbox raw DIB 252x48)
+
+- ✅ panel 252x48 (60% 缩放 + 70% 重做)
+- ✅ **gradient A=206 (top) → A=86 (bottom)** — 140 step 差异明显
+- ✅ btn4 right=247 < panel right=251 (4px 间距)
+- ✅ 按钮内 icons 居中 ((iconX+5, iconY+11) 横向线在 (iconX+5)..(iconX+23) 中点)
+- ✅ Tests: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+### Lessons
+
+1. **btn4 越界是 layout 算错的 silent failure** — v0.19.0.16 sandbox DIB 看 hover 工作
+   但没检查 btn4 是否在 panel 范围内。L87 才验证 70% 缩放 (panelW=252) 5 buttons + gap
+   加上 brand + padding **仍装得下**。
+2. **ApplyAlphaGradient 的 if 阈值要随 panel bg 颜色改变** — 之前 r8 >= 240 匹配
+   v0.19.0.10 的纯白 (255,255,255)。L87 改 panel bg 为浅冷蓝 (200, 225, 250) — **r8=200
+   < 240 导致整个 gradient bypass**。修复:用 `r8 >= 130 && g8 >= 150 && b8 >= 180` 匹配
+   新 panel bg 范围。
+3. **WS_POPUP + HTCAPTION 不能 drag** — `WM_NCHITTEST` 返回 HTCAPTION 让 Windows DefWindowProc
+   处理 system drag,但在 WS_POPUP (无 caption) + WS_EX_LAYERED 窗口下 DefWindowProc
+   **不触发** WM_SYSCOMMAND / WM_MOVE。修复:用**手动 drag**(LButtonDown + Capture +
+   MouseMove + LButtonUp),完全自己控制。
+4. **Panel bg 颜色 + alpha gradient + ApplyAlphaGradient 阈值三者必须协调** —
+   kBgTop/kBgBot 颜色改变 → ApplyAlphaGradient 阈值必须跟随;否则 gradient bypass
+   silent failure。
+
+### Anti-patterns (additional)
+
+- **AP-L87-A**: 改 panel bg 颜色时没改 ApplyAlphaGradient 阈值 — silent failure,
+  gradient bypass,user 看不出渐变。
+- **AP-L87-B**: 用 WM_NCHITTEST + HTCAPTION 给 WS_POPUP 窗口加 drag — 在
+  WS_POPUP + WS_EX_LAYERED 下 DefWindowProc 不处理 system drag,失败。改用
+  手动 drag (LButtonDown + Capture + MouseMove + LButtonUp)。
+- **AP-L87-C**: 缩放 70% 时不验证 layout — v0.19.0.16 60% 缩放+btn4 越界 1 px 是
+  silent failure。Sandbox 验证应检查"btn4 right ≤ panel right"。
+
+### Files touched (v0.19.0.17)
+- `WeaselServer/QuickPanelDialog.h`:
+  - kPanelW 216→252, kPanelH 41→48, kBtnSize 34→39, kIcoSize 18→21,
+    kBtnRadius 8→10, kBrandSize 34→39, kPanelRadius 17→20
+  - kBtnGap 1 (L86 值,保持)
+  - kBgTop (238,244,252)→(200,225,250),kBgBot (218,226,240)→(155,195,240)
+  - kAlphaPanelTop 140→220, kAlphaPanelBot 82→80
+  - 加 s_dragging/s_dragStartCursor/s_dragStartWindow 静态成员
+- `WeaselServer/QuickPanelDialog.cpp`:
+  - ApplyAlphaGradient 阈值 r8>=240 → r8>=130 + g8>=150 + b8>=180
+  - buttonStartX 起始 gap max(2, int(4*dpr+0.5))
+  - WndProc 加 WM_LBUTTONDOWN/MOUSEMOVE/LBUTTONUP 手动 drag
+- `env.bat` / `weasel.props`: WEASEL_BUILD=16→17, PRODUCT_VERSION=0.19.0.16→0.19.0.17
+
+### Ship
+- `release\fluxing-0.19.0.17-installer.exe` 43,196,921 bytes
+- SHA256 `ec7ec58a4fea9bedc2ca07d9e893e3042712c6a502a3e963bb555d580650553c`

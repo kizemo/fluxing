@@ -482,6 +482,55 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: `252fb0d9a746de13c2ca564117de6f7129c5c4161cb13d5ebcb233a41838515e`
 
 
+## [0.19.0.17-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.17 - QuickPanel 加大 + 渐变明显 + 真正 drag + icons 居中 (L87)
+
+- **User feedback (post v0.19.0.16)**:
+  1. ✅ 尺寸缩了,hover icon 变化
+  2. ❌ 宽度小,右侧图标离右边框过近,图标间距小 — v0.19.0.16 btn4 **越出 panel right border 1 像素**(silent)
+  3. ❌ 图标未居中 — 实际 v0.19.0.16 居中算式对,但因 panel 太窄,btn4 突出看起来"右偏"
+  4. ❌ 无法拖动 — L86 的 `WM_NCHITTEST + HTCAPTION` 在 WS_POPUP + WS_EX_LAYERED 窗口下
+     Windows DefWindowProc **不处理 system drag**(user 仍报"无法拖动")
+  5. ❌ 毛玻璃渐变不明显 — ApplyAlphaGradient 用 `r8 >= 240` 阈值,但 L87 改 kBgTop 为
+     (200, 225, 250) 后 r8=200 < 240 → else 分支生效,**gradient bypass silent failure**
+
+- **Phase 1 复盘 (5 项 root cause)**:
+  1. **btn4 越界**: 60% 缩放下 buttonStartX + 4*btnSize + btnSize + padding > kPanelW
+  2. **居中看起来错**: 实际居中算式对,因 panel 太窄,btn4 突出"右偏"
+  3. **拖动失败**: WS_POPUP 窗口 DefWindowProc 不响应 HTCAPTION
+  4. **渐变 bypass**: ApplyAlphaGradient 阈值 r8>=240 跟新 panel bg 颜色不匹配
+  5. **btn4 越界是 silent failure**: 沙箱验证只检查"hover 工作",没检查"btn4 ≤ panel right"
+
+- **Phase 3 修复**:
+  1. **Panel 加大 60% → 70%**: kPanelW 216→252, kPanelH 41→48, kBtnSize 34→39,
+     kIcoSize 18→21, kBtnRadius 8→10, kBrandSize 34→39, kPanelRadius 17→20
+  2. **kBtnGap 改回 1** (L86 值),buttonStartX 起始 gap max(2, int(4*dpr+0.5)) → dpr=1 时
+     buttonStartX = padding + s_brandSize_phys + 4 = 48。btn4 right = 48+4*40 = 247 < 251
+     panel right = 4 物理像素间距
+  3. **手动 drag 实现** (L86 的 HTCAPTION 在 WS_POPUP 不工作):
+     - 加 s_dragging/s_dragStartCursor/s_dragStartWindow 静态成员
+     - WM_LBUTTONDOWN (hit==-1,空白/品牌区): SetCapture + record origin
+     - WM_MOUSEMOVE (if captured): calculate delta + SetWindowPos 移动 window
+     - WM_LBUTTONUP: ReleaseCapture + clear hover
+  4. **ApplyAlphaGradient 阈值修复**: r8>=240 → r8>=130 + g8>=150 + b8>=180
+     匹配新 panel bg 范围 (200,225,250) - (155,195,240)
+  5. **kBgTop/kBgBot 改明显浅冷蓝**: (200,225,250) → (155,195,240),RGB 差异 45+30+10 明显
+  6. **kAlphaPanelTop/Bot 改**: 140/82 → 220/80,差异 140 step 渐变明显
+
+- **Phase 4 验证 (sandbox raw DIB 252x48)**:
+  - ✅ panel 252x48 (60% → 70% 缩放)
+  - ✅ **gradient A=206 (top) → A=86 (bottom)** — 140 step 差异 明显可见
+  - ✅ btn4 right=247 < panel right=251 (4 px 间距, 不溢出)
+  - ✅ 5 按钮 icons 居中 (iconX = btn0_x0 + (btnSize-icoSize)/2 = 居中)
+  - ✅ Tests: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+- **Files touched**: QuickPanelDialog.h (size 70% + 渐变色 + drag statics) + QuickPanelDialog.cpp (gradient threshold + 手动 drag WndProc) + env.bat + weasel.props
+
+- **Installer**: `release\fluxing-0.19.0.17-installer.exe` 43,196,921 bytes
+- **SHA256**: `ec7ec58a4fea9bedc2ca07d9e893e3042712c6a502a3e963bb555d580650553c`
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)
