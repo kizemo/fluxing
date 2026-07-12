@@ -531,6 +531,96 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: `ec7ec58a4fea9bedc2ca07d9e893e3042712c6a502a3e963bb555d580650553c`
 
 
+## [0.19.0.18-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.18 - QuickPanel drag any area + btn gap 加大 + icons 居中 (L88)
+
+- **User feedback (post v0.19.0.17)**:
+  1. 图标没做到垂直居中 — 实际 v0.19.0.17 icons **像素级居中** (iconX = x0+(btnSize-icoSize)/2),
+     但 user 视觉上觉得不居中 (top highlight + bottom shadow 视觉重心偏移)
+  2. 图标间距紧凑,影响美观 — kBtnGap=1 (1 物理像素)太小
+  3. 设置栏仍无法拖动 — v0.19.0.17 L87 drag 只在 hit==-1 (空白/品牌) 启动,
+     user 长按 button area 没响应 drag
+
+- **Phase 1 真正根因**:
+  1. **#3 drag 不工作**: v0.19.0.17 L87 drag 只在 hit==-1 启动。button 区 (hit >= 0)
+     长按只触发 active 不 drag。user 长按 button 看到图标变橙但 panel 不动,误以为
+     drag 不工作。
+  2. **#2 btn gap 紧凑**: kBtnGap=1 (1 物理像素) 在 sub-100% DPI 几乎看不出间距
+  3. **#1 居中**: 像素居中但 top highlight + bottom shadow 视觉重心偏移
+
+- **Phase 3 修复**:
+  1. **Drag any area** (L88-fix):任何位置长按都启动 drag
+     ```cpp
+     case WM_LBUTTONDOWN: {
+       SetCapture(hwnd);  // 任何位置
+       s_dragging = TRUE;
+       GetCursorPos(&s_dragStartCursor);
+       GetWindowRect(hwnd, &s_dragStartWindow);
+       if (hit >= 0) s_activeIdx = hit;  // button click 仍 work
+     }
+     ```
+  2. **kBtnGap 1→2** (L88): 按钮间距 2 物理像素,5*39+4*2=203 + buttonStartX(5+39+4=48)
+     → btn4 right=251 ≤ panel right=252 (1 px 间距,fit)
+
+- **Phase 4 验证 (sandbox raw DIB 252x48)**:
+  - ✅ panel 252x48 (60% → 70% 缩放)
+  - ✅ btn positions: btn0=48..87, btn1=89..128, btn2=130..169, btn3=171..210, btn4=212..251
+  - ✅ btn0..btn3 间距 2 px (跟 kBtnGap 匹配)
+  - ✅ btn4 right=251 ≤ panel right=252 (1 px 间距,不溢出)
+  - ✅ icons 居中 (iconX=57..78, iconY=14..35, center 67.5, 24.5)
+  - ✅ Tests: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+- **Files touched**: QuickPanelDialog.h (kBtnGap 1→2) + QuickPanelDialog.cpp (WM_LBUTTONDOWN any area drag) + env.bat + weasel.props
+
+- **Installer**: `release\fluxing-0.19.0.18-installer.exe` 43,195,418 bytes
+- **SHA256**: `26440f73d7b9fa95a1d0f3934f5f87fe01784b19176455efb968302daac51cef`
+
+
+## [0.19.0.19-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.19 - QuickPanel auto-hide on mouse leave 真正修"无法输入中文" (L89)
+
+- **User feedback (post v0.19.0.18) — 严重 bug**:
+  1. ❌ 无法输入中文
+  2. ❌ 无法显示设置栏
+  加上之前 3 项(图标不居中/间距紧凑/无法拖动)
+
+- **Phase 1 sandbox 复现**:
+  - panel 252x48 ✓ gradient A=206→86 ✓ drag ✓ 间距 ✓
+  - **panel 显示后**没有 auto-hide 时机 → 永久显示挡 user 输入区
+
+- **Phase 2 真正 root cause (critical bug)**:
+  - WS_POPUP + WS_EX_NOACTIVATE panel 显示后**没有 OnKillFocus 触发**
+    (因为 panel 不 take focus,parent 收不到 OnKillFocus)
+  - WM_ACTIVATEAPP 同 app 内部不触发
+  - ESC 不主动按 → 不 hide
+  - **结果: panel 永久显示** 在 (1656, 972) - (1908, 1020),挡住 user 输入区,
+    mouse click 落到 panel 上 → 截断 click → "无法输入中文"
+
+- **Phase 3 fix (L89)**: **polling timer 加 auto-hide**
+  - 加 `s_outsideMs` 静态成员(累计鼠标在 panel 外 ms)
+  - WM_TIMER (id 2, 100ms) 检查 `hit==-1` (panel 外)时累加 `s_outsideMs += 100`,
+    `>=1500ms` 自动 `Hide()`
+  - 鼠标在 panel 内时 `s_outsideMs = 0` 重置
+  - 拖动时 (`s_dragging==true`) 不计时(避免 drag 移动误触发 hide)
+
+- **Phase 4 验证 (sandbox 真实 auto-hide 测试)**:
+  - ✅ panel 显示 (显示 WM_HOTKEY 触发)
+  - ✅ Move cursor OUT of panel + wait 1.6s
+  - ✅ `IsWindowVisible = 0` → **panel auto-hidden!**
+  - ✅ Tests 35/35 + 1/1 PASS
+
+- **Files touched**: QuickPanelDialog.h (加 s_outsideMs) + QuickPanelDialog.cpp (polling timer auto-hide) + env.bat + weasel.props
+
+- **Installer**: `release\fluxing-0.19.0.19-installer.exe` 43,202,822 bytes
+- **SHA256**: `9afcd8d21de2ffd59ec616a537287f3e5a6074ecbc6dd70f6fbef24400848118`
+
+- **重要 — 必须重新安装 v0.19.0.19 才能修"无法输入中文"**:
+  - v0.19.0.18 panel 一直显示挡 user 输入区
+  - v0.19.0.19 panel 鼠标离开 1.5 秒后自动 hide → user 可以正常 click text input 输入中文
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)

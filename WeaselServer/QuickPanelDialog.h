@@ -122,6 +122,7 @@ class QuickPanelDialog {
   static bool      s_dragging;          // 是否正在拖动
   static POINT     s_dragStartCursor;   // 拖动开始时 cursor screen pos
   static RECT      s_dragStartWindow;   // 拖动开始时 window screen pos
+  static int       s_outsideMs;         // L89-fix: 鼠标在 panel 外的累计毫秒(>=1500→Hide)
 
   // 设计几何常量 (logical pixels, design — 360x68 panel)
   // 注意:**不要**直接用这些 GDI 坐标;用 _phys 等版本(运行时按 dpr 缩放)。
