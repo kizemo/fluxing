@@ -6955,3 +6955,138 @@ Minimal scope:
 ### Ship
 - `release\fluxing-0.19.0.13-installer.exe` 43,195,065 bytes
 - SHA256 `35071844a5603647f874cfe53e76e9d0c4df85ca9d6021123c950e8348334061`
+
+
+## L84 - v0.19.0.14: border 完整 + mac 玻璃加强 + hover polling 兜底
+
+### Symptom (post v0.19.0.13 ship)
+User 报告 v0.19.0.13 装机后:
+1. **设置栏边框显示不全** (右下边不见) — 这是真正在用户机存在的 bug
+2. **logo 仍不显示** (实际 sandbox 测试显示 logo 已 work — 用户机可能 install 升级时
+   logo 文件没被覆盖)
+3. **mac 风格仍不明显** — RGB(245,245,250) 在白背景 + alpha=140 渲染为 ≈(251,251,252) 跟白
+   几乎一样,视觉上无 Liquid Glass 感
+4. **hover 仍没工作** — WS_EX_LAYERED + WS_EX_NOACTIVATE panel 下 WM_MOUSEMOVE 投递不可靠
+5. 切其他 IME — v0.19.0.11 修过 ✓
+
+### Phase 1 (root cause 复盘)
+
+**Bug #3 边框不全 — 真正根因 (sandbox DIB 直接验证)**:
+- 之前以为 `RoundRect(0, 0, W-1, H-1, ...)` 边在 (W-1, H-1)。**错!**
+- 实际 MSDN 文档:**`Rectangle(x1, y1, x2, y2)` outline 边在 (x1, y1) 到 (x2-1, y2-1)**。
+  `RoundRect` 同样。所以 `RoundRect(0, 0, W-1=359, H-1=67, r, r)` 边在:
+    - top edge: y=0
+    - bottom edge: y=66 (不是 y=67!)
+    - left edge: x=0
+    - right edge: x=358 (不是 x=359!)
+- 我之前画的 bottom shadow `RECT={radius, H-1-shHeight, W-radius, H-1} = {28, 66, 332, 67}` — RECT bottom 是 exclusive,所以 shadow 实际在 **y=66** (跟 border 重叠!)
+- **重叠结果**: border y=66 被 BLACK shadow 覆盖 → 用户看到黑色而非 border
+- 这是 RoundRect 边在 (x2-1, y2-1) 的 GDI 语义不熟 + shadow 位置错叠加导致
+
+**Bug #2 mac 风格不明显**:
+- 浅玻璃 `RGB(245,245,250)` alpha=140 + 白色桌面 = composite ≈(251,251,252) 跟白几乎一样
+- 视觉上无 macOS 玻璃感
+- 真修复:用更饱和的浅蓝 `RGB(220, 232, 248)` + alpha gradient,白色桌面下能看出
+
+**Bug #4 hover 不工作**:
+- WS_EX_LAYERED + WS_EX_NOACTIVATE panel 下 WM_MOUSEMOVE 投递**不可靠**(L83 sandbox 验证)
+- 真修复:加 **polling timer (id 2, 100ms)** 主动 `GetCursorPos + ScreenToClient + HitTest`,
+  完全绕过 WM 投递路径
+
+**Bug #1 logo (用户机)**:
+- install.nsi 含 `File "fluxing-logo_small.png"` ✓
+- 7z listing 显示 installer payload 包含 `weasel\fluxing-logo_small.png` ✓
+- **但用户机可能没装 small 文件**:老版本(v0.19.0.10/0.11/0.12)没有 small 文件,
+  NSIS 升级安装**只覆盖已存在文件**,不删除/创建 new file
+- 真修复:加 fallback — 找不到 small 时用 big (`fluxing-logo.png` 700x700)
+
+### Phase 2 (test 复盘)
+
+L83 失败原因 — 沙箱验证不足:
+1. **没真正用 raw DIB 验 4 边 border** — L83 sandbox 测试只看了 top/left,right/bottom 因为 RoundRect 边在 (x2-1, y2-1) 实际在 (W-2, H-2) 而不是 (W-1, H-1)
+2. **shadow 跟 border 位置重叠** — 没看到这一层,因为 shadow 用 BLACK brush 把 border 覆盖了
+3. **panel bg 在白背景下无视觉差异** — 假设 (245,245,250) 跟白 alpha=140 后能看出,实际 composite 后跟白几乎一样
+4. **hover 测试 hardcoded W=240 H=45** 实际 qp-dump 是 360x68,采样位置全错
+5. **没真正测试用户视觉** — sandbox 是 sub-100% DPI 显示器,跟用户机不同
+
+### Phase 3 (fix)
+
+最小修改:
+1. **border 4 边都画**: `RoundRect(0, 0, W-1, H-1, ...)` 边在 (x2-1, y2-1) = 实际绘制
+   在 (358, 66)。1px pen 半像素在 (357, 66) 和 (358, 66)。
+2. **top highlight 位置**: y=2..3 (border y=0 留 1px gap)
+3. **bottom shadow 位置**: y=H-4..H-3 = 64..65 (border y=66 留 1px gap)— 之前 y=66
+   跟 border 重叠被覆盖
+4. **panel bg 颜色**: `RGB(220, 232, 248)` 浅蓝(之前 RGB(245,245,250) 几乎白)
+5. **LoadLogoWIC fallback**: 找不到 `fluxing-logo_small.png` 时用 `fluxing-logo.png`
+6. **hover polling timer (id 2)**: 100ms 间隔,`GetCursorPos + ScreenToClient + HitTest`,
+   绕过 WM_MOUSEMOVE 投递路径
+
+### Phase 4 (verify)
+
+**沙箱 raw DIB 检查**(W-1=359, H-1=67):
+- left x=0: `RGB(60,50,50) A=255` ✓
+- right x=358: `RGB(60,50,50) A=255` ✓ (不是 359,因为 GDI 边在 x2-1)
+- top y=0: `RGB(60,50,50) A=255` ✓
+- bottom y=66: `RGB(60,50,50) A=255` ✓ (不是 67)
+- logo brand area: 1027 个 Fluxing-red 像素
+- panel bg: `RGB(248,232,220)` (BGR 顺序的浅蓝 RGB(220,232,248))
+- 4 边 border + mac 玻璃 + logo 全部正常显示
+
+**Visual** (l84-fix1-big.png 4x 放大):4 边连续深色 border + 红色 logo + 浅蓝面板
+
+**Tests**: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+### Lessons
+
+1. **`Rectangle/RoundRect(hdc, x1, y1, x2, y2)` 边在 (x1, y1) 到 (x2-1, y2-1)** —
+   MSDN 显式说 "outlined rectangle from (x1, y1) to (x2-1, y2-1)"。我用 (W-1, H-1) 当
+   "边界"时,实际边在 (W-2, H-2)。要画真正的"边界"在 (W-1, H-1),需要 (W, H) 边界
+   或者用 `Rectangle(0, 0, W, H)` 边自动在 (W-1, H-1)。这次 sandbox raw DIB 验证
+   才发现。
+2. **shadow/highlight 跟 border 重叠是 silent failure** — shadow 用 BLACK brush
+   覆盖了 border,用户看到黑色看不到深灰 border。Border 在 y=66,shadow 之前在 y=66
+   (因为我的 `H-1-shHeight=66` 算错 — 应该是 H-3-shHeight=64 留 1px gap)。
+3. **panel bg 颜色在白背景下的视觉差**: 浅灰 `RGB(245,245,250)` alpha=140 在白桌面
+   composite ≈(251,251,252) 跟白几乎一样,看不出 Liquid Glass。**需要更饱和的颜色**
+   (浅蓝 `RGB(220,232,248)`) 才能在白背景下有视觉差。
+4. **NSIS 升级安装不创建 new file** — 只覆盖已存在文件。所以新加 logo 文件
+   时,加 fallback 找老文件确保老用户也能看到 logo。
+5. **WS_EX_LAYERED + WS_EX_NOACTIVATE + WM_MOUSEMOVE 投递不可靠** — Polling timer
+   (`GetCursorPos + ScreenToClient + HitTest`) 是唯一可靠路径。每 100ms 一次,perf
+   ok(panel 36px 高 × 4 icons × 几次 GetCursorPos = 几乎无开销)。
+6. **沙箱测试不能只验证 raw 像素值** — 必须用 PNG 视觉看整体效果(sandbox 测试报告
+   "border 完整" 但视觉上明显有断口,因为 GDI 边在 (W-2, H-2) 而不是 (W-1, H-1) —
+   这是 raw DIB 数值检查的盲点。
+
+### Anti-patterns (additional)
+
+- **AP-L84-A**: 假设 `RoundRect(0, 0, W-1, H-1, ...)` 边在 (W-1, H-1) — 实际 GDI 边
+  在 (W-2, H-2)。要"画到最后一像素"用 `(0, 0, W, H)` 边界(让 GDI 自己 -1)。
+- **AP-L84-B**: shadow/highlight 跟 border 用同一行 (overlap) — 永远 silent failure
+  (border 看起来正常但被覆盖)。要预留 ≥1px gap。
+- **AP-L84-C**: 浅灰 panel bg 在白背景下"假设有视觉差" — 实际 alpha-composite 后跟
+  白几乎一样。要用更饱和的颜色(浅蓝/淡绿/米色)创造视觉差。
+- **AP-L84-D**: NSIS 升级安装后,新加的 file 不自动出现 — 加 fallback 兼容老用户
+  (找不到 new file 时用老 file)。
+- **AP-L84-E**: WS_EX_LAYERED panel 上 hover 依赖 WM_MOUSEMOVE — 不可靠。改用 polling
+  timer + GetCursorPos + ScreenToClient 自己查鼠标位置。
+- **AP-L84-F**: 沙箱 raw DIB 像素检查只看 surface 内 → 看 (W-1, H-1) 边缘像素看似在
+  panel 内 — 实际 GDI 边在 (W-2, H-2),(W-1, H-1) 是 panel rgn 圆角外,transparent。
+  必须从 rgn 角度想而不是"看最后一行/一列"。
+
+### Files touched (v0.19.0.14)
+- `WeaselServer/QuickPanelDialog.h`: `kBgTop` RGB(245,245,250) → RGB(220,232,248) 浅蓝
+- `WeaselServer/QuickPanelDialog.cpp`:
+  - `PaintOpaqueContent`: top highlight y=1..2 → y=2..3 (border gap)
+  - bottom shadow y=H-1..H → y=H-4..H-3 (远离 border 不 overlap)
+  - `LoadLogoWIC`: 加 fallback small → big
+  - `WndProc`: 加 `case WM_TIMER` for id 2 hover polling
+  - `Show`: `SetTimer(2, 100, NULL)` 启动 hover polling
+  - `Hide`: `KillTimer(2)` 停止 hover polling
+- `env.bat` / `weasel.props`: `WEASEL_BUILD=13→14`, `PRODUCT_VERSION=0.19.0.13→0.19.0.14`
+
+### Ship
+- `release\fluxing-0.19.0.14-installer.exe` 43,194,666 bytes
+- SHA256 `2bf201ba44c8444a1ecd12713c21956e2fc16da0ef7348fcae4a48265c16009b`
+- **重要**:用户机需要**重新安装**(升级 v0.19.0.13 → v0.19.0.14)才能修 border 不全。

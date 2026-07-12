@@ -130,11 +130,12 @@ class QuickPanelDialog {
   static constexpr int kPanelH       = 68;
 
   // 颜色(0xAABBGGRR)
-  // L82-fix: kBgTop 从 RGB(255,255,255) 改成 RGB(245,245,250) 浅玻璃冷色 — 浅色
-  // wallpaper 上仍能看出 panel 形状(不再是"panel 与桌面融为一体")。kIconDim
-  // 不再独立(用全局 kIcoDimC 取代),但保留兼容。
-  static constexpr COLORREF kBgTop    = RGB(245, 245, 250);  // 浅玻璃冷色 — 任何背景下可见
-  static constexpr COLORREF kBgBot    = RGB(220, 220, 230);  // 底部稍暗(冷调)
+  // L84-fix: kBgTop 从 RGB(245,245,250) 改成 RGB(220, 232, 248) 浅蓝玻璃。
+  // 原因(L84): RGB(245,245,250) 在白背景 + alpha=140 渲染为 ≈(251,251,252) 跟白几乎
+  // 一样,看上去仍是"白面板"。改用浅蓝 (220, 232, 248) + 同样的 alpha gradient,
+  // 在白背景上 composite 后是 ≈(232, 236, 240) 浅玻璃蓝,明显区别于白。
+  static constexpr COLORREF kBgTop    = RGB(220, 232, 248);  // 浅玻璃蓝顶(高 alpha)
+  static constexpr COLORREF kBgBot    = RGB(180, 200, 230);  // 浅玻璃蓝底(冷调 + 略暗)
   static constexpr COLORREF kIconDim  = RGB(60, 60, 67);     // 灰(legacy alias)
   static constexpr COLORREF kAccent   = RGB(255, 95, 49);    // 品牌橙
   static constexpr COLORREF kAccent2  = RGB(155, 81, 224);  // 品牌紫
