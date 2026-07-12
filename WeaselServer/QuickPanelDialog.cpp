@@ -60,8 +60,10 @@ inline bool IsInsideRoundedRect(int x, int y, int W, int H, int r) {
 // L82-fix: panel bg 从纯白 RGB(255,255,255) 改成 RGB(245,245,250) 浅玻璃冷色。
 // 原因(L82 user feedback):在浅色桌面 wallpaper 上,纯白 BG + 白边框 = 完全隐形。
 // 浅玻璃色 仍保留 macOS Liquid Glass 视觉感,但**任何背景下**都能看出 panel 形状。
-constexpr COLORREF kIcoDimC   = RGB(50, 50, 60);     // 深灰 — 改深 10 step,作为 panel 边框色
-                                              //   (之前 RGB(60,60,67),user 报告 panel 边界 transparent)
+// L91-fix: kIcoDimC RGB(50,50,60) → RGB(130,130,140) 浅灰 — user 反馈"边框颜色深度太深"
+// 任何背景下不刺眼,仍能看出 panel 形状。DrawIcon* 全部用 kIcoDimC 创建 pen,
+// 必须修这里(不在 header 那个 alias)。
+constexpr COLORREF kIcoDimC   = RGB(130, 130, 140); // L91-fix: 边框颜色降低深度
 constexpr COLORREF kAccentC  = RGB(255, 95, 49);    // 品牌橙
 constexpr COLORREF kAccent2C = RGB(155, 81, 224);  // 品牌紫
 constexpr COLORREF kWhiteC   = RGB(255, 255, 255); // 白色(active icon)
@@ -686,7 +688,10 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // L79-fix: hover 只改 icon stroke 颜色(不画 bg 填充,符合 v3-rev3 设计)
   // L87-fix: brand→btns 间距 4 logical (dpr=1 → 4 物理,dpr=0.7 → 2.8→2 物理)。
   // 给个 max(2, ...) 保证 ≥ 2 物理像素(在 dpr=0.7 时也能看到间距)。
-  int buttonStartX = pad + s_brandSize_phys + max(2, (int)(4 * s_dpr_x + 0.5f));
+  // L91-fix: buttonStartX 起始 gap 4→2 (v0.19.0.20 是 4 dpr=1 → 4 logical = 4 物理 px)。
+  // 现在 kBtnGap 改 4,buttons 之间有足够间距,起始 gap 不用再大。减到 2 px 让
+  // brand→btns 间距合理,btn4 右边距 +2 px (panelW=252 5*37+4*4=201+44+5=250 < 252)
+  int buttonStartX = pad + s_brandSize_phys + max(2, (int)(2 * s_dpr_x + 0.5f));
   for (int i = 0; i < 5; i++) {
     int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
     int y0 = pad;
@@ -738,7 +743,11 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
                                kIcoDimC;
 
     int iconX = x0 + (s_btnSize_phys - s_icoSize_phys) / 2;
-    int iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2;
+    // L91-fix: iconY 上移 1 px 补偿 top highlight (2px) + bottom shadow (1px) 视觉
+    // 重心偏移 — user 持续报"图标不居中"。几何上 icon 已居中(iconY = y0+(btnSize-
+    // icoSize)/2),但 top highlight 看起来"亮"占 2px vs bottom shadow "暗"占 1px,视觉
+    // 重心偏下 1 px。让 iconY 减 1 让视觉上对称。
+    int iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2 - 1;
     switch (i) {
       case 0: DrawIconSchema(hdc, iconX, iconY, penRgb); break;
       case 1: DrawIconPhrase(hdc, iconX, iconY, penRgb); break;

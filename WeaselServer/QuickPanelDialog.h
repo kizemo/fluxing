@@ -133,12 +133,15 @@ class QuickPanelDialog {
   // 37 (从 39),让 5*37 + 4*3 = 185+12 = 197 + buttonStartX(5+37+5=47) = 244 < 252
   // panel right。btn4 right = 47 + 4*40 = 207, + 37 = 244, + 5 = 249 < 252 (3 px 右边距)
   // 60% 比例: 56*0.66=37, 30*0.66=20, 14*0.66=9.2→10, 8*0.66=5.3→5
+  // L91-fix2: kBtnSize 37→35 (从 37 缩 2 px,让 btn4 右边距 7→14 px 增大)。
+  // 5*35+4*4 = 191+5+35+2=233 — 14 px 右边距(比 v0.19.0.20 的 9 px 还大)。
+  // icons 19 像素 仍清晰可读(品牌 + 5 个 icon 视觉大小差不多)。
   static constexpr int kPanelPadding = 5;
-  static constexpr int kBtnSize      = 37;
-  static constexpr int kBtnGap       = 3;
-  static constexpr int kIcoSize      = 20;
+  static constexpr int kBtnSize      = 35;
+  static constexpr int kBtnGap       = 4;
+  static constexpr int kIcoSize      = 19;
   static constexpr int kBtnRadius    = 10;
-  static constexpr int kBrandSize    = 37;
+  static constexpr int kBrandSize    = 35;
   static constexpr int kPanelRadius  = 20;
   static constexpr int kPanelW       = 252;
   static constexpr int kPanelH       = 48;
