@@ -125,16 +125,16 @@ class QuickPanelDialog {
 
   // 设计几何常量 (logical pixels, design — 360x68 panel)
   // 注意:**不要**直接用这些 GDI 坐标;用 _phys 等版本(运行时按 dpr 缩放)。
-  // L87-fix: panel 整体 70% (v0.19.0.16 是 60% — user 反馈"宽度偏小,右侧图标离
+  // L88-fix: panel 整体 70% (v0.19.0.16 是 60% — user 反馈"宽度偏小,右侧图标离
   // 右边框过近,图标间距也小")。同时增大 kBtnGap 让按钮之间间距更明显。
   // 70% 比例: 360*0.7=252, 68*0.7=47.6→48
   // 56*0.7=39.2→39, 30*0.7=21, 14*0.7=9.8→10, 8*0.7=5.6→5
   // 28*0.7=19.6→20
-  // L87-fix2: kBtnGap 改回 1(L86 值),加 buttonStartX 起始 gap max(2, int(4*dpr+0.5))。
-  // 5*39 + 4*1 = 199 + buttonStartX(5+39+4=48) + 199 = 247 < 252 panel right — ok
+  // L88-fix2: kBtnGap 改 2 (从 1 增大)— user 反馈"图标间距紧凑,影响美观"
+  // 5*39 + 4*2 = 195+8 = 203 + buttonStartX(5+39+4=48) = 251 ≤ 252 panel right (ok)
   static constexpr int kPanelPadding = 5;
   static constexpr int kBtnSize      = 39;
-  static constexpr int kBtnGap       = 1;
+  static constexpr int kBtnGap       = 2;
   static constexpr int kIcoSize      = 21;
   static constexpr int kBtnRadius    = 10;
   static constexpr int kBrandSize    = 39;

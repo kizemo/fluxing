@@ -411,15 +411,18 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
     case WM_LBUTTONDOWN: {
       POINT p = {LOWORD(l), HIWORD(l)};
       int hit = HitTest(p.x, p.y);
-      if (hit == -1) {  // 空白/品牌区才启动 drag
-        SetCapture(hwnd);
-        s_dragging = TRUE;
-        GetCursorPos(&s_dragStartCursor);
-        RECT rc;
-        GetWindowRect(hwnd, &rc);
-        s_dragStartWindow = rc;
-      } else {
-        s_activeIdx = hit;
+      // L88-fix: drag **任何位置**都启动(button + brand + 空白)。之前 v0.19.0.17
+      // L87 只在 hit==-1 时启动,user 长按 brand area 不响应。修复:无论 hit 是什么,
+      // SetCapture + record,这样整个 panel 任何地方长按都拖动。button click 仍然
+      // 通过 s_activeIdx 处理(LButtonUp 时检查 s_activeIdx 是否释放前还在同一按钮)。
+      SetCapture(hwnd);
+      s_dragging = TRUE;
+      GetCursorPos(&s_dragStartCursor);
+      RECT rc;
+      GetWindowRect(hwnd, &rc);
+      s_dragStartWindow = rc;
+      if (hit >= 0) {
+        s_activeIdx = hit;  // button click 仍然 work
         InvalidateRect(hwnd, NULL, FALSE);
       }
       return 0;
