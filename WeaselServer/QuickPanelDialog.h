@@ -119,23 +119,29 @@ class QuickPanelDialog {
 
   // 设计几何常量 (logical pixels, design — 360x68 panel)
   // 注意:**不要**直接用这些 GDI 坐标;用 _phys 等版本(运行时按 dpr 缩放)。
-  static constexpr int kPanelPadding = 8;
-  static constexpr int kBtnSize      = 56;
-  static constexpr int kBtnGap       = 2;
-  static constexpr int kIcoSize      = 30;
-  static constexpr int kBtnRadius    = 14;
-  static constexpr int kBrandSize    = 56;
-  static constexpr int kPanelRadius  = 28;
-  static constexpr int kPanelW       = 360;
-  static constexpr int kPanelH       = 68;
+  // L86-fix: panel 整体缩到 60% (=3/5,user 要求"现在的 3/5")。
+  // 之前 v0.19.0.15: kPanelW=360, kPanelH=68 太大。改为:
+  //   360*0.6=216, 68*0.6=41 (rounded)
+  //   56*0.6=34 (btn/brand), 30*0.6=18 (icon), 14*0.6=8 (radius)
+  //   8*0.6=5 (padding), 28*0.6=17 (panel radius), 2*0.6=1 (gap)
+  static constexpr int kPanelPadding = 5;
+  static constexpr int kBtnSize      = 34;
+  static constexpr int kBtnGap       = 1;
+  static constexpr int kIcoSize      = 18;
+  static constexpr int kBtnRadius    = 8;
+  static constexpr int kBrandSize    = 34;
+  static constexpr int kPanelRadius  = 17;
+  static constexpr int kPanelW       = 216;
+  static constexpr int kPanelH       = 41;
 
   // 颜色(0xAABBGGRR)
-  // L85-fix: kBgTop 从 RGB(220, 232, 248) 改成 RGB(238, 244, 252) 更浅的玻璃蓝。
-  // L84 用户反馈"蓝色过深,渐变不明显" — RGB(220,232,248) 在白背景 alpha=140
-  // composite 后 ≈(232, 236, 240) 仍偏蓝。改 RGB(238, 244, 252) 更接近白,在白背景
-  // 下视觉上更"玻璃"而不是"蓝"。渐变顶(238,244,252) → 底(218,226,240),3D 感更强。
-  static constexpr COLORREF kBgTop    = RGB(238, 244, 252);  // 浅玻璃顶(接近白,微冷)
-  static constexpr COLORREF kBgBot    = RGB(218, 226, 240);  // 浅玻璃底(微暗 + 微冷)
+  // L86-fix: kBgTop 改成 RGB(255, 255, 255) **纯白**,kBgBot = RGB(180, 200, 230) 浅蓝。
+  // L85 反馈"蓝色过深,渐变不明显" — 之前 RGB(238, 244, 252) → (218, 226, 240) 差异
+  // 仅 20 step 仍不够。改 纯白(255) → 浅蓝(180, 200, 230) — 75 step 差异,3D 玻璃感
+  // 强烈。**渐变(gradient alpha + RGB 双向)产生 macOS-style Liquid Glass 顶白底蓝的
+  // 渐变反射**。
+  static constexpr COLORREF kBgTop    = RGB(255, 255, 255);  // 纯白(顶部,反射最强)
+  static constexpr COLORREF kBgBot    = RGB(180, 200, 230);  // 浅蓝(底部,渐变)
   static constexpr COLORREF kIconDim  = RGB(60, 60, 67);     // 灰(legacy alias)
   static constexpr COLORREF kAccent   = RGB(255, 95, 49);    // 品牌橙
   static constexpr COLORREF kAccent2  = RGB(155, 81, 224);  // 品牌紫
@@ -170,12 +176,15 @@ class QuickPanelDialog {
   static void    DestroyOffscreenDC();
 
   // 5 个图标 drawing
-  static void DrawIcon(HDC hdc, int idx, int x0, int y0);
-  static void DrawIconSchema(HDC hdc, int x, int y);
-  static void DrawIconPhrase(HDC hdc, int x, int y);
-  static void DrawIconSymbols(HDC hdc, int x, int y);
-  static void DrawIconSettings(HDC hdc, int x, int y);
-  static void DrawIconAccount(HDC hdc, int x, int y);
+  // L86-fix: 增加 COLORREF 参数传入 pen 颜色,让 hover/active 状态机生效。
+  // 之前 v0.19.0.15 DrawIcon* hardcoded kIcoDimC (灰) 画 pen,完全忽略 caller
+  // 选的 pen(hover 橙 / active 白)。L85-fix 没生效就是这个原因。
+  static void DrawIcon(HDC hdc, int idx, int x0, int y0, COLORREF penColor);
+  static void DrawIconSchema(HDC hdc, int x, int y, COLORREF penColor);
+  static void DrawIconPhrase(HDC hdc, int x, int y, COLORREF penColor);
+  static void DrawIconSymbols(HDC hdc, int x, int y, COLORREF penColor);
+  static void DrawIconSettings(HDC hdc, int x, int y, COLORREF penColor);
+  static void DrawIconAccount(HDC hdc, int x, int y, COLORREF penColor);
 
   // L81: COM 一次性初始化(WIC 创建需要 STA)。返回 S_OK 表示已初始化,
   // S_FALSE 表示已初始化过(无需重复),失败错误码需要退出。我们仅 initialize

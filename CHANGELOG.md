@@ -430,6 +430,58 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: `fd572abeea565c3295eba424ae65fc6178b2876cb5b273c0c9e02f90c309e195`
 
 
+## [0.19.0.16-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.16 - QuickPanel 缩 3/5 + 渐变 + 拖动 + hover 只改 icon (L86)
+
+- **User feedback (post v0.19.0.15)**:
+  1. ✅ logo 正确显示 (v0.19.0.15 修过)
+  2. ❌ hover 仍是 bg 变橙 — v0.19.0.15 我加的"三重视觉反馈"过度,user 只要 icon stroke 变橙
+  3. panel 太大 → 缩到 3/5
+  4. 渐变不明显 → 顶纯白 + 底浅蓝
+  5. panel 不能拖动
+
+- **Phase 1 真正根因 (复盘 v0.19.0.15 L85 没生效)**:
+  - hover 状态机选了 `s_hPenIconAccent` (橙),但 **DrawIcon* 函数 hardcoded 创建 `kIcoDimC` (灰) pen**。
+    每次 DrawIcon* 都 `SelectObject(hdc, CreatePen(PS_SOLID, 2, kIcoDimC))`,覆盖了 caller
+    选的 pen。这就是 L85 hover fix 没生效的真正根因。修复:DrawIcon* 接受 `COLORREF
+    penColor` 参数,不再 hardcoded。
+
+- **Phase 3 修复**:
+  1. **DrawIcon* 加 COLORREF penColor 参数**:
+     - 5 个 DrawIcon* 函数签名加 `COLORREF penColor` 参数
+     - 内部用 `CreatePen(PS_SOLID, 2, penColor)` 替代 hardcoded kIcoDimC
+     - button 循环:`penRgb = isActive ? WHITE : isHover ? kAccentC : kIcoDimC`
+  2. **Panel 缩 3/5**:所有 layout constants × 0.6
+     - kPanelW 360→216, kPanelH 68→41
+     - kPanelPadding 8→5, kBtnSize 56→34, kBtnGap 2→1
+     - kIcoSize 30→18, kBtnRadius 14→8, kBrandSize 56→34, kPanelRadius 28→17
+  3. **渐变(顶纯白 → 底浅蓝)**:
+     - kBgTop = RGB(255, 255, 255) 纯白 (之前 RGB 238, 244, 252)
+     - kBgBot = RGB(180, 200, 230) 浅蓝 (之前 RGB 218, 226, 240)
+     - 差异 75 step,3D 玻璃感强烈
+  4. **拖动支持**:
+     - `WndProc` 加 `case WM_NCHITTEST`:HitTest inside button → HTCLIENT;outside
+       button → HTCAPTION(Windows 启动 system drag)
+  5. **移除 v0.19.0.15 "hover 填 bg + 1px 描边"** — user 只要 icon stroke 变橙
+
+- **Phase 4 验证 (sandbox raw DIB 216x41 + SetCursorPos 模拟 hover)**:
+  - ✅ `state: hovered=0 active=-1 panelW=216 panelH=41 dpr=1.000` — panel 缩到 60%
+  - ✅ btn0 center scan 显示 hover icon stroke 是 **橙 (49, 95, 255 BGR = kAccentC)**
+  - ✅ **106 个 orange 像素** 集中在 btn0 icon (双向箭头) — hover 真的工作
+  - ✅ bg 在 btn0 area 是 (255, 255, 255) 白色 — **bg 不变**(符合 user 要求)
+  - ✅ Visual (l86-hover2-big.png 5x):btn0 橙色双向箭头 + 其他 4 个按钮 default 灰
+  - ✅ 渐变 顶纯白 → 底浅蓝 (alpha 130~80)
+  - ✅ 4 边 border 完整
+
+- **Tests**: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+- **Files touched**: QuickPanelDialog.h (尺寸×0.6 + 渐变色 + DrawIcon 参数) + QuickPanelDialog.cpp (DrawIcon 用 penColor + 拖动 + 移除 hover bg fill) + env.bat + weasel.props
+
+- **Installer**: `release\fluxing-0.19.0.16-installer.exe` 43,196,057 bytes
+- **SHA256**: `252fb0d9a746de13c2ca564117de6f7129c5c4161cb13d5ebcb233a41838515e`
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)
