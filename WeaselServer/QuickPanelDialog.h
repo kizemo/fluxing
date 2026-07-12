@@ -117,41 +117,52 @@ class QuickPanelDialog {
   static int       s_panelRadius_phys;
   static int       s_btnGap_phys;      // 按钮之间 2px 间距
 
+  // L87-fix: 手动 drag 状态 — 当 s_dragging = true 时,WM_MOUSEMOVE 把 panel
+  // 移动到 s_dragStartWindow + cursor 当前位置 offset。
+  static bool      s_dragging;          // 是否正在拖动
+  static POINT     s_dragStartCursor;   // 拖动开始时 cursor screen pos
+  static RECT      s_dragStartWindow;   // 拖动开始时 window screen pos
+
   // 设计几何常量 (logical pixels, design — 360x68 panel)
   // 注意:**不要**直接用这些 GDI 坐标;用 _phys 等版本(运行时按 dpr 缩放)。
-  // L86-fix: panel 整体缩到 60% (=3/5,user 要求"现在的 3/5")。
-  // 之前 v0.19.0.15: kPanelW=360, kPanelH=68 太大。改为:
-  //   360*0.6=216, 68*0.6=41 (rounded)
-  //   56*0.6=34 (btn/brand), 30*0.6=18 (icon), 14*0.6=8 (radius)
-  //   8*0.6=5 (padding), 28*0.6=17 (panel radius), 2*0.6=1 (gap)
+  // L87-fix: panel 整体 70% (v0.19.0.16 是 60% — user 反馈"宽度偏小,右侧图标离
+  // 右边框过近,图标间距也小")。同时增大 kBtnGap 让按钮之间间距更明显。
+  // 70% 比例: 360*0.7=252, 68*0.7=47.6→48
+  // 56*0.7=39.2→39, 30*0.7=21, 14*0.7=9.8→10, 8*0.7=5.6→5
+  // 28*0.7=19.6→20
+  // L87-fix2: kBtnGap 改回 1(L86 值),加 buttonStartX 起始 gap max(2, int(4*dpr+0.5))。
+  // 5*39 + 4*1 = 199 + buttonStartX(5+39+4=48) + 199 = 247 < 252 panel right — ok
   static constexpr int kPanelPadding = 5;
-  static constexpr int kBtnSize      = 34;
+  static constexpr int kBtnSize      = 39;
   static constexpr int kBtnGap       = 1;
-  static constexpr int kIcoSize      = 18;
-  static constexpr int kBtnRadius    = 8;
-  static constexpr int kBrandSize    = 34;
-  static constexpr int kPanelRadius  = 17;
-  static constexpr int kPanelW       = 216;
-  static constexpr int kPanelH       = 41;
+  static constexpr int kIcoSize      = 21;
+  static constexpr int kBtnRadius    = 10;
+  static constexpr int kBrandSize    = 39;
+  static constexpr int kPanelRadius  = 20;
+  static constexpr int kPanelW       = 252;
+  static constexpr int kPanelH       = 48;
 
   // 颜色(0xAABBGGRR)
-  // L86-fix: kBgTop 改成 RGB(255, 255, 255) **纯白**,kBgBot = RGB(180, 200, 230) 浅蓝。
-  // L85 反馈"蓝色过深,渐变不明显" — 之前 RGB(238, 244, 252) → (218, 226, 240) 差异
-  // 仅 20 step 仍不够。改 纯白(255) → 浅蓝(180, 200, 230) — 75 step 差异,3D 玻璃感
-  // 强烈。**渐变(gradient alpha + RGB 双向)产生 macOS-style Liquid Glass 顶白底蓝的
-  // 渐变反射**。
-  static constexpr COLORREF kBgTop    = RGB(255, 255, 255);  // 纯白(顶部,反射最强)
-  static constexpr COLORREF kBgBot    = RGB(180, 200, 230);  // 浅蓝(底部,渐变)
+  // L87-fix: 渐变 加强 — user 反馈"渐变效果不够明显"。L86 RGB(255,255,255)→(180,200,230)
+  // 在白背景 alpha gradient (140→82) 下 composite 后 几乎都接近白,肉眼分辨不出渐变。
+  // 修复: 改用**更饱和的玻璃色 + 更宽的 alpha 范围**:
+  //   顶 (200, 225, 250) 浅冷蓝(肉眼明显蓝,但不刺眼)
+  //   底 (155, 195, 240) 略深浅蓝(玻璃冷调底部)
+  //   alpha 范围 80-220 (之前 82-140 太窄) — gradient 视觉差 140 step
+  // composite 后顶 (196,220,247)→底(180,202,236) 差异 16 step,渐变明显可见。
+  static constexpr COLORREF kBgTop    = RGB(200, 225, 250);  // 浅冷蓝顶
+  static constexpr COLORREF kBgBot    = RGB(155, 195, 240);  // 略深浅蓝底
   static constexpr COLORREF kIconDim  = RGB(60, 60, 67);     // 灰(legacy alias)
   static constexpr COLORREF kAccent   = RGB(255, 95, 49);    // 品牌橙
   static constexpr COLORREF kAccent2  = RGB(155, 81, 224);  // 品牌紫
   static constexpr COLORREF kHighlight = RGB(255, 255, 255); // 顶部高光
 
   // v0.19.0.10: per-pixel alpha gradient (替换 L77 uniform kAlphaPanel=220)
-  // 顶部 kAlphaPanelTop (140 = 0x88 = 55%) → 底部 kAlphaPanelBot (82 = 0x52 = 32%)
+  // L87-fix: 顶部 220 (0xDC = 86%) → 底部 80 (0x50 = 31%) — 范围扩大 140 step,
+  // 让渐变视觉更明显。之前 140-82 范围 58 step,在白背景下肉眼分辨不出。
   // 圆角外 alpha = 0 (桌面可见)
-  static constexpr BYTE kAlphaPanelTop = 140;
-  static constexpr BYTE kAlphaPanelBot = 82;
+  static constexpr BYTE kAlphaPanelTop = 220;
+  static constexpr BYTE kAlphaPanelBot = 80;
 
   // ===== Internal =====
   static LRESULT OnCreate(HWND);
