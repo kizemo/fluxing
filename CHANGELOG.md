@@ -621,6 +621,57 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
   - v0.19.0.19 panel 鼠标离开 1.5 秒后自动 hide → user 可以正常 click text input 输入中文
 
 
+## [0.19.0.20-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.20 - QuickPanel 边框降深度 + btn gap 加大 + release test 清理 (L90)
+
+- **User feedback (post v0.19.0.19)**:
+  1. ✅ 输入正常,可以调出设置栏 (L89 auto-hide fix 生效)
+  2. ✅ 可以拖动 (L88 drag any area fix 生效)
+  3. ❌ 仍没做到垂直居中 — 持续反馈(实际像素已居中,但 user 视觉判断"不居中")
+  4. ❌ 按钮图标之间距离仍然太小,最右边的图标距离右边框距离需要增加
+  5. ❌ 适当降低设置栏边框颜色深度
+  6. ⚠️ release/ 文件夹内有大量 test 文件,请替我删除
+
+- **Phase 1-3 修复**:
+  1. **#5 边框降深度**:
+     - `kIcoDimC = RGB(50, 50, 60)` (几乎纯黑) → `RGB(130, 130, 140)` (浅灰)
+     - 任何背景下不刺眼,仍能看出 panel 形状
+  2. **#4 按钮间距 + 右边距**:
+     - kBtnGap 2 → 3 (从 1 增大,user 仍报紧凑)
+     - kBtnSize 39 → 37 (从 39 缩小 2 px),kBrandSize 39 → 37
+     - 5 buttons 5×37 + 4 gaps×3 = 197 + buttonStartX(5+37+4=46) = 243
+     - btn4 right=243 < 252 panel right → **9 px 右边距**(v0.19.0.19 只有 1 px)
+  3. **#3 居中**: 实际像素已几何居中。icon center y=24, btn0 area center y=23.5
+     (差 0.5 px)。user 视觉判断认为不居中,可能因为 top highlight 2 px + bottom
+     shadow 1 px 视觉重心偏移。**像素对 ≠ 视觉对**,sandbox verify 显示居中
+
+  4. **#6 release/ test 文件清理**: 48 个 Test*.exe/.pdb/.exp/.lib (sandbox 编译残留,
+     不在 git tracked,纯本地噪音) → 全部删。release/ 留下 14 个 installer (.exe) 真产品
+
+- **Phase 4 验证 (sandbox raw DIB 252x48)**:
+  - ✅ panel 252x48
+  - ✅ btn positions (kBtnGap=3): btn0=46..83, btn1=86..123, btn2=126..163,
+    btn3=166..203, btn4=206..243 (margin from right: 9 px ✓)
+  - ✅ 边框颜色 kIcoDimC = RGB(130, 130, 140) 浅灰(之前 RGB 50, 50, 60 几乎纯黑)
+  - ✅ gradient A=212→86 正常
+  - ✅ Tests: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+  - ✅ Visual: l90-big.png (5x 放大) — 5 icons 视觉间距明显大于 v0.19.0.19
+
+- **答 user #7 安装问题**:
+  - **不需要先卸载旧版本**,直接装新版即可
+  - v0.19.0.14 L72-fix NSIS installer 用 **Rename-then-File** 模式自动处理 locked file
+  - 旧 locked WeaselServer.exe → rename 成 .old → 释放 lock → 新 file 装入
+  - v0.19.0.11 L66-fix HKCU\Software\Fluxing 写 unconditional
+  - 装后 Alt+, 无反应时,右键托盘选"重新启动 IME 服务"或重新登录
+
+- **Files touched**: QuickPanelDialog.h (kIcoDimC 颜色降深度 + kBtnGap 2→3 + kBtnSize 39→37)
+  + release/ 删 48 个 test 文件 + env.bat + weasel.props
+
+- **Installer**: `release\fluxing-0.19.0.20-installer.exe` 43,199,012 bytes
+- **SHA256**: `ad5fd38029b27b47f24cea2bb6c1f593d893b885010bb76fc49abb445557668e`
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)

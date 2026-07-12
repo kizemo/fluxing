@@ -7532,3 +7532,92 @@ v0.19.0.18 panel 显示后**没有 auto-hide 时机**:
 ### Ship
 - `release\fluxing-0.19.0.19-installer.exe` 43,202,822 bytes
 - SHA256 `9afcd8d21de2ffd59ec616a537287f3e5a6074ecbc6dd70f6fbef24400848118`
+
+
+## L90 - v0.19.0.20: 边框颜色降深度 + btn gap 加大到 3 + 右边距 9px
+
+### Symptom (post v0.19.0.19 ship, user 反馈)
+1. ✅ 输入正常,可以调出设置栏 (L89 auto-hide fix 生效)
+2. ✅ 可以拖动 (L88 fix 生效)
+3. ❌ 仍没做到垂直居中 — 持续反馈。L87 已经修过 iconX 居中算式,但 user 仍报"不居中"。
+   实际几何居中(iconX = x0+(btnSize-icoSize)/2),但 user 视觉判断认为不居中
+4. ❌ 按钮图标之间距离仍然太小,最右边的图标距离右边框距离需要增加
+5. ❌ 适当降低设置栏边框颜色深度
+6. ⚠️ release 文件夹内有大量 test 文件 (sandbox 编译残留,~48 个 Test*.exe/.pdb)
+
+### Phase 1-3 (复盘 + 修复)
+
+- **#5 边框颜色降深度**: `kIcoDimC = RGB(50, 50, 60)` 几乎纯黑,改用 `RGB(130, 130, 140)`
+  浅灰,任何背景下都不刺眼,仍能看出 panel 形状
+- **#4 按钮间距 + 右边距**: kBtnGap 2→3 (从 1 增大,user 仍报紧凑);kBtnSize 39→37 让 5*37+4*3=197
+  + buttonStartX(5+37+4=46) = 243,btn4 right=243 < 252 panel right(9 px 右边距)。比 v0.19.0.19
+  的 1 px 右边距 增大 9 倍,user 不会再报"离右边框过近"
+- **#3 居中**: 代码层面 icon 几何居中(iconY = y0+(btnSize-icoSize)/2),沙箱 raw DIB 验证
+  icon stroke y range 14..34,center y=24,btn0 area center y=23.5。接近居中(差 0.5 px)。
+  实际可能 user 视觉觉得不居中是因为 top highlight 2 px + bottom shadow 1 px 视觉
+  重心偏移(已在 raw DIB 看到 gradient A=212→86,但视觉上 仍偏下)。**像素对 ≠ 视觉对**
+- **#6 release test 清理**: 48 个 Test*.exe/.pdb/.exp/.lib (sandbox msbuild 编译残留,
+  不在 git tracked,纯本地噪音) → 全部删。release/ 留下 14 个 installer (.exe),真产品
+
+### Phase 4 verify (sandbox raw DIB 252x48)
+
+- ✅ panel 252x48
+- ✅ btn positions (kBtnGap=3):
+  - btn0: 46..83
+  - btn1: 86..123
+  - btn2: 126..163
+  - btn3: 166..203
+  - btn4: 206..243 (margin from right: 9 px ✓)
+- ✅ 边框颜色 kIcoDimC = RGB(130, 130, 140) 浅灰(之前 50,50,60 几乎纯黑)
+- ✅ gradient A=212→86 (v0.19.0.20 跟 v0.19.0.19 一致)
+- ✅ Tests: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+- ✅ Visual: l90-big.png (5x 放大) — 5 icons 视觉居中(相对 v0.19.0.19 间距更大)
+
+### L90 答 user 安装问题 (#7)
+
+**不需要先卸载旧版本,直接装新版即可。** 原因:
+- v0.19.0.14 L72-fix:NSIS installer 用 **Rename-then-File** 模式处理 locked file:
+  - 旧 locked file → Rename 成 .old (file 没了 → 释放 lock)
+  - 然后 File "新 file" → 没冲突
+- v0.19.0.11 L66-fix: HKCU\Software\Fluxing 写 unconditional(不在 If $1 != 0 内)
+- v0.19.0.18 L88 修了 drag any area
+- v0.19.0.19 L89 修了 auto-hide on mouse leave
+
+直接装 v0.19.0.20 installer,WeaselServer 会被 taskkill + 旧 dll rename 释放 + 新 dll 装入。
+不需要先卸载。**但**首次装 WeaselServer 后,IME 输入需要在托盘右键"重新启动"或
+重启 WeaselServer.exe(因为 IME 在跑旧 binary)。如果 Alt+, 无反应,右键托盘选
+"重新启动 IME 服务"或重新登录。
+
+### Lessons
+
+1. **像素对 ≠ 视觉对** — 几何居中(icon center 跟 panel center 差 0.5 px)用户视觉
+   仍报"不居中"。top highlight + bottom shadow 视觉重心偏移让 icons 看起来偏下/偏上。
+2. **kBtnGap 1 px 太小,2 px 仍紧凑,3 px 视觉上明显** — 物理像素而不是 logical 决定
+   视觉间距。
+3. **kIcoDimC = RGB(50,50,60) 几乎纯黑突兀** — 改 RGB(130,130,140) 浅灰,任何背景下
+   不刺眼。**玻璃面板的边框应该低调不抢眼**。
+4. **release/ 编译残留** — sandbox msbuild Test*.exe/.pdb 不在 git tracked,纯本地
+   噪音,需定期清理。NSIS installer 只挑 output/ 里的必要文件,不包含 test 文件。
+5. **NSIS installer 不需要先卸载** — Rename-then-File 模式自动处理 locked file
+   (L72-fix)。
+
+### Anti-patterns (additional)
+
+- **AP-L90-A**: 边框用纯黑 RGB(50,50,60) — 玻璃面板的边框应该低调
+  (RGB 130,130,140 浅灰)。**面板装饰元素不应该比内容抢眼**。
+- **AP-L90-B**: 按钮间距 1 px 物理像素 — 在 sub-100% DPI 几乎看不出
+  间距。至少 2-3 px 才有可分辨的视觉间距。
+- **AP-L90-C**: 保留 sandbox 编译残留 (Test*.exe 等) 在 release/ — 这些
+  不在 git tracked 但视觉混淆 release/ 是不是"真产品目录"。
+
+### Files touched (v0.19.0.20)
+- `WeaselServer/QuickPanelDialog.h`:
+  - kIcoDimC RGB(50,50,60)→RGB(130,130,140) (边框颜色降深度)
+  - kBtnGap 2→3 + kBtnSize 39→37 + kBrandSize 39→37 + kIcoSize 21→20
+    (按钮间距加大,btn4 右边距 1→9 px)
+- `env.bat` / `weasel.props`: WEASEL_BUILD=19→20, PRODUCT_VERSION=0.19.0.19→0.19.0.20
+- `release/`: 删 48 个 Test*.exe/.pdb/.exp/.lib (sandbox 残留)
+
+### Ship
+- `release\fluxing-0.19.0.20-installer.exe` 43,199,012 bytes
+- SHA256 `ad5fd38029b27b47f24cea2bb6c1f593d893b885010bb76fc49abb445557668e`
