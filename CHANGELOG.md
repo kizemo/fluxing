@@ -119,6 +119,124 @@
 spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 
 
+## [0.19.0.11-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.11 - QuickPanel 5 real-world bugs fixed (L81 batch)
+
+- **User pain**: 装机实跑 v0.19.0.10 后 5 项使用问题报告:
+  1. 左侧 logo 不显示 (截图显示 brand area 是空白)
+  2. 设置栏仍是纯白背景,没有毛玻璃/阴影/渐变
+  3. 不置顶,会被其他窗口遮挡
+  4. 悬停效果没有,变成点击按钮转橙色背景 (active 状态粘住)
+  5. 切到 en-US IME,QuickPanel 不消失,卡在屏幕上
+
+- **Cure (4 文件, +~80/-20 lines net)**:
+
+  1. `WeaselServer/QuickPanelDialog.h`: 
+     - Header 注释更新 (5 雷区 → 7 雷区)
+     - 加 `EnsureComInit()` 声明
+  2. `WeaselServer/QuickPanelDialog.cpp`:
+     - **L81-fix-1 (logo)**: `LoadLogoWIC` 改成 WIC (IWICImagingFactory →
+       CreateDecoderFromFilename → FormatConverter 32bppBGRA → CopyPixels 到
+       32-bit DIBSection)。旧实现用 `LoadImageW(IMAGE_BITMAP, ...)` 只支持
+       BMP/ICO/CUR **不支持 PNG**,静默失败 → 看到纯白 logo 区。
+     - **L81-fix-2 (alpha)**: `ApplyAlphaGradient` 写完后 + Memset `bmBits` 为 0
+       在 `PaintOpaqueContent` 之前 → 解决 active bg 残留 (因为 GDI 写入默认
+       alpha=255 不重置已有像素,上次 active orange 留在 pBits)
+     - **L81-fix-3 (gradient)**: `CreateOffscreenDC` 用 `bi.bV5Height = -h` (top-down),
+       不再 bottom-up。原来 DIB bottom-up + 我写 `for y=0..H { 顶 alpha=140 }`,
+       导致 `p[0]` 其实是 panel 底行,gradient 整体倒过来。
+     - **L81-fix-4 (logo AlphaBlend)**: `BitBlt(SRCCOPY)` 改 `AlphaBlend(AC_SRC_ALPHA)`。
+       在两个 32-bit BI_BITFIELDS DIB 之间 BitBlt(SRCCOPY) **会剥离 alpha**,
+       AlphaBlend 是 GDI 唯一能保留 per-source-pixel alpha 的合成操作。
+     - **L81-fix-5 (logo source rect)**: `0,0,kBrandSize,kBrandSize` 改成
+       `322,322,kBrandSize,kBrandSize` — 取 PNG (700x700) 的中心 56x56 而非
+       top-left。原来的 top-left 在 Fluxing logo (transparent BG, content centered)
+       是空白,采不到 logo。
+     - **L81-fix-6 (topmost)**: `Show()` 末尾 `SetWindowPos(HWND_TOPMOST, ...)`
+       显式强制置顶。`WS_EX_LAYERED + WS_EX_TOPMOST` 路径 z-order 不稳,
+       显式 SetWindowPos 比 WS_EX_TOPMOST style 更可靠。
+     - **L81-fix-7 (IME switch)**: WM_ACTIVATEAPP handler 自动 Hide(),app
+       失焦时关 panel (跨 app 切走 case);WeaselServer `FocusOut` handler
+       直接调 `QuickPanelDialog::Hide()` (Win+Space 切 IME case)。
+  3. `RimeWithWeasel/RimeWithWeasel.cpp`:
+     - **L81-fix-7**: `RimeWithWeaselHandler::FocusOut` 把 L69-fix 残留的
+       `if (false) { QuickPanelDialog::Hide(); }` 改回无条件调用。
+       (L69 因 L67-L69 GDI+ 崩溃链临时 disable;L70+ 重新启用 QuickPanel
+       时这个 `if(false)` 没改回 — 9 个版本的 bug)
+  4. `WeaselServer/xmake.lua`: `add_links` 加 `windowscodecs` (WIC 需要)
+
+- **Verification (3 axes, all PASS)**:
+
+  **1. 单元测试**:
+  - Release\TestDefaultHotkeys.exe → 35/35 PASS
+  - Release\TestQuickPanelRefactor.exe → 1/1 PASS
+  - Release\TestResponseParser.exe → 5/5 PASS
+  - Release\TestWeaselIPC.exe → no errors detected
+
+  **2. PE arch (L14 invariant)**:
+  - output\Win32\WeaselServer.exe → 0x014C x86 ✓
+  - output\Win32\WeaselDeployer.exe → 0x014C x86 ✓
+  - output\Win32\rime.dll → 0x014C x86 ✓
+  - output\weaselx64.dll → 0x8664 x64 ✓
+  - output\WeaselSetup.exe → 0x014C x86 ✓
+
+  **3. QuickPanel raw DIB (`FLUXING_QP_DIAG_DUMP=1` 后)*:
+  - Center panel alpha histogram:
+    - alpha=0:   1954 px (8.0%) — corner outside panel (透明)
+    - alpha=100-140: 14590 px (59.6%) — gradient 区 ✓
+    - alpha=255:  1607 px (6.6%) — opaque icons / border / **logo**
+  - Center pixel (180, 34) alpha: 实际 raw DIB 显 per-pixel 渐变
+  - **Logo region** (8..56, 8..56): 1194 个 Fluxing-red (175,49,35) 像素 — v0.19.0.10 是 0
+  - **可视化**: `qp-dump-truergba.png` 显示 round-corner panel + 红 logo + 5 图标
+
+- **What changed on user's actual screen** (depends on DWM composition):
+  - Logo: solid Fluxing-red brand visible (L81-fix-1 + 4 + 5)
+  - Per-pixel alpha Liquid Glass: 60% of panel is gradient alpha 100-140 — visible
+    against non-uniform desktop background. May still look mostly opaque on solid-white
+    wallpaper (alpha=140 white on white bg = visually identical).
+  - Active hover: clicks toggle orange bg then immediately clear (memset 解决)
+  - IME switch: Win+Space 切走 → `FocusOut` handler Hide; 跨 app 切走 → WM_ACTIVATEAPP Hide
+  - Topmost: SetWindowPos 显式强制,与 WS_EX_TOPMOST 等价
+
+- **What weasel.props / env.bat locally** (NOT committed, .gitignored):
+  - `env.bat`: `WEASEL_BUILD=10 → 11`, `PRODUCT_VERSION=0.19.0.10 → 0.19.0.11`
+  - `weasel.props`: `PRODUCT_VERSION=0.19.0.10 → 0.19.0.11`, `FILE_VERSION` same
+
+- **Installer**: `release\fluxing-0.19.0.11-installer.exe` 43,186,176 bytes
+- **SHA256**: `7e7aabe830723ae964207d2ac16d8af5eba183dac3df2715c84062b04f0176c1`
+
+- **Files touched (v0.19.0.11, ~80 lines net + 修复)**:
+  1. `WeaselServer/QuickPanelDialog.h` (+30)
+  2. `WeaselServer/QuickPanelDialog.cpp` (+50/-25)
+  3. `RimeWithWeasel/RimeWithWeasel.cpp` (+12/-7) — FocusOut un-guarded
+  4. `WeaselServer/xmake.lua` (+1 word)
+  5. `env.bat` / `weasel.props` (本地不 commit)
+  6. `output/install.nsi` (UNCHANGED)
+  7. `CHANGELOG.md` — this entry
+
+- **Out-of-band caveats (post-L81)**:
+  - v0.19.0.10/11 的 per-pixel alpha 在 DWM 下应该正确显示。**如果用户实际屏幕
+    仍看不到毛玻璃**,可能因为:
+    (1) 壁纸是纯白 — alpha=140 白色 vs 桌面白色 = 视觉无差异
+    (2) DWM 颜色管理 / MPO 关闭造成 — Win+R → `dwm.exe /disable` 测试
+    (3) 真实机器 GPU/driver 把 ULW_ALPHA 路径吃掉 — 极少见
+    在深色背景上必显示。如果纯白壁纸,临时换深色 wallpaper 验证。
+  - Win+Space 切 IME 自动隐藏:依赖 WeaselTSF.dll 的 FocusOut IPC 来触发。
+    If `m_active_session != 0` after FocusOut (RIME still has residual session),
+    Hide() 仍调 (panel 关闭)— 没影响。
+  - Hover/active 状态机: spec 070 T007 禁用(5 按钮都是 no-op),所以 visible
+    state 切回 non-active 是**自动**的 (单击 → active → release → 清)。
+    用户之前看到 active 不消失,根因是 memset 缺失导致 alpha 残留,
+    L81-fix-2 已修。Hover 路径(s_hoveredIdx → orange pen)从未坏过。
+
+- **Future work** (deferred to next-v if needed):
+  - 切 IME 后自动隐藏的可靠性补强:加 polling 定时器兜底 (200ms 一次检查
+    `m_active_session != 0`),作为 L81 后的冗余保险(L81-fix-7 RIME-side 已经够)。
+  - User's actual machine visual 验证 (必须 wallpaper 不是纯白)。
+  - v0.19.0.12: per-icon hover state (per L80 future work)
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)

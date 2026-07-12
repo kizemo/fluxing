@@ -437,14 +437,19 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
   if (m_ui)
     m_ui->Hide();
   m_active_session = 0;
-  // L69-fix: QuickPanel hidden automatically when switching away from
-  // Fluxing IME. Note this is only a hide() call - it doesn't trigger
-  // GDI+ Bitmap creation (the crash path was in EnableAlwaysShowMode,
-  // not Hide). Still, since QuickPanel is disabled, we guard with a
-  // no-op flag to be safe.
-  if (false) {  // L69-fix: disabled
-    QuickPanelDialog::Hide();
-  }
+  // L81-fix: 把 L69-fix 残留的 `if (false)` 重新启用。
+  // L69 因 GDI+ heap-corruption (L67-L69 崩溃链) 临时禁掉 QuickPanel。
+  // L70+ spec 070 重新启用并改纯 GDI (L75)。但 L69 的 `if (false) QuickPanelDialog::Hide()`
+  // 一直没改回 `if (true)` — 导致用户切走 (Win+Space → en-US) 时 panel 残留在屏幕上。
+  //
+  // L81 实现: FocusOut 是从 WeaselTSF 来的 IPC,**当用户切换到 en-US IME 时**,
+  // WeaselTSF 收到 ITfTextInputProcessorEventSink::OnDeactivate → 通过
+  // WeaselIPC 发 FocusOut → 这次 m_active_session = 0 + 这里 Hide() panel。
+  // 这是最干净的 IME switch path:不依赖 TSF manager 广播 WM_INPUTLANGCHANGE,
+  // 不依赖前景 app 变化,直接走 RIME event chain。
+  //
+  // 这是 no-op 保护 (Hide 在 panel 未显示时是 safe no-op):
+  QuickPanelDialog::Hide();
 }
 
 void RimeWithWeaselHandler::UpdateInputPosition(RECT const& rc,
