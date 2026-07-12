@@ -22,6 +22,13 @@
 #include <functional>
 #include "QuickPanelDialog.h"
 
+// L81-fix: PNG logo 加载改用 WIC 不用 GDI+ Bitmap(IStream*) (L67-L69 雷区) 也不用
+// LoadImageW(IMAGE_BITMAP) (L81 — IMAGE_BITMAP 不含 PNG,静默失败)。
+// 需要 <wincodec.h> + windowscodecs.lib (在 xmake.lua 已加)。
+#include <wincodec.h>
+#include <wrl/client.h>
+#pragma comment(lib, "windowscodecs.lib")
+
 static const wchar_t kWindowClassName[] = L"FluxingQuickPanel_v3";
 
 namespace {
@@ -173,22 +180,101 @@ int      QuickPanelDialog::s_panelW_phys  = 0;
 int      QuickPanelDialog::s_panelH_phys  = 0;
 
 // ===== 内部 =====
-HRESULT QuickPanelDialog::LoadLogoWIC(HWND hwnd, HBITMAP& hBmpOut) {
+// L81: LoadLogoWIC 用 WIC 解码 PNG(不用 LoadImageW/IMAGE_BITMAP,后者不支持 PNG)。
+// 流程:CoCreateInstance(IWICImagingFactory) → CreateDecoderFromFilename →
+// GetFrame(0) → FormatConverter(32bppBGRA) → CopyPixels 到 32-bit DIBSection。
+HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
   hBmpOut = NULL;
-  // L75 避雷:不用 GDI+ Bitmap(IStream*),不用 CreateStreamOnHGlobal。
-  // 直接 LoadImageW 从 PNG 文件创建 HBITMAP(纯 Win32 GDI,无 IStream 生命周期)。
   wchar_t exeDir[MAX_PATH] = {0};
-  GetModuleFileNameW(NULL, exeDir, MAX_PATH);  // hwnd 是 HWND 不是 HMODULE,必须传 NULL
+  GetModuleFileNameW(NULL, exeDir, MAX_PATH);
   wchar_t* lastSlash = wcsrchr(exeDir, L'\\');
   if (lastSlash) *lastSlash = L'\0';
   wchar_t logoPath[MAX_PATH];
   _snwprintf_s(logoPath, _TRUNCATE, L"%s\\fluxing-logo.png", exeDir);
 
-  // LR_LOADFROMFILE 加载文件,LR_CREATEDIBSECTION 返回 DIB section(可 AlphaBlend)
-  hBmpOut = (HBITMAP)LoadImageW(
-      NULL, logoPath, IMAGE_BITMAP,
-      0, 0, LR_LOADFROMFILE | LR_CREATEDIBSECTION);
-  return hBmpOut ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+  // 确保 thread 上 COM 已初始化(WIC STA)。失败也不致命 → 仅显示空 logo
+  HRESULT hrInit = EnsureComInit();
+  if (FAILED(hrInit)) return hrInit;
+
+  Microsoft::WRL::ComPtr<IWICImagingFactory> wic;
+  HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_ALL,
+                                IID_PPV_ARGS(&wic));
+  if (FAILED(hr)) return hr;
+
+  Microsoft::WRL::ComPtr<IWICBitmapDecoder> dec;
+  hr = wic->CreateDecoderFromFilename(logoPath, nullptr, GENERIC_READ,
+                                      WICDecodeMetadataCacheOnLoad, &dec);
+  if (FAILED(hr)) return hr;  // 文件可能不存在 — 用户没装 logo,或路径错
+
+  Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
+  hr = dec->GetFrame(0, &frame);
+  if (FAILED(hr)) return hr;
+
+  Microsoft::WRL::ComPtr<IWICFormatConverter> fmtConv;
+  hr = wic->CreateFormatConverter(&fmtConv);
+  if (FAILED(hr)) return hr;
+
+  hr = fmtConv->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGRA,
+                            WICBitmapDitherTypeNone, nullptr, 0.0,
+                            WICBitmapPaletteTypeCustom);
+  if (FAILED(hr)) return hr;
+
+  UINT w = 0, h = 0;
+  hr = fmtConv->GetSize(&w, &h);
+  if (FAILED(hr) || w == 0 || h == 0) return hr;
+
+  // 创建 32-bit BGRA DIB Section (top-down,负 height) 接收 CopyPixels 输出。
+  // 与 CreateOffscreenDC 的 s_hBmpMem 用同样的 masks,保证 BitBlt/AlphaBlend 时 alpha
+  // 通道结构一致。
+  BITMAPV5HEADER bi = {};
+  bi.bV5Size = sizeof(bi);
+  bi.bV5Width = w;
+  bi.bV5Height = -(LONG)h;  // top-down
+  bi.bV5Planes = 1;
+  bi.bV5BitCount = 32;
+  bi.bV5Compression = BI_BITFIELDS;
+  bi.bV5RedMask   = 0x00FF0000;
+  bi.bV5GreenMask = 0x0000FF00;
+  bi.bV5BlueMask  = 0x000000FF;
+  bi.bV5AlphaMask = 0xFF000000;
+
+  void* bits = nullptr;
+  HBITMAP hbmp = CreateDIBSection(nullptr, (BITMAPINFO*)&bi, DIB_RGB_COLORS,
+                                   &bits, nullptr, 0);
+  if (!hbmp || !bits) {
+    if (hbmp) DeleteObject(hbmp);
+    return E_OUTOFMEMORY;
+  }
+
+  UINT stride = w * 4;
+  UINT total = stride * h;
+  hr = fmtConv->CopyPixels(nullptr, stride, total, (BYTE*)bits);
+  if (FAILED(hr)) {
+    DeleteObject(hbmp);
+    return hr;
+  }
+
+  hBmpOut = hbmp;
+  return S_OK;
+}
+
+// L81:COM 一次性初始化。CoInitializeEx 返回 S_OK 表示初始化成功,
+// S_FALSE 表示**已**初始化过(无需重复)。我们 idempotent 调用一次。
+HRESULT QuickPanelDialog::EnsureComInit() {
+  static bool s_initialized = false;
+  if (s_initialized) return S_OK;
+  HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  if (SUCCEEDED(hr)) {
+    s_initialized = true;
+    return S_OK;
+  }
+  // RPC_E_CHANGED_MODE:thread 已经被初始化成不同的模式 — 通常由 WinSparkle 等
+  // CoInitializeEx(COINIT_MULTITHREADED) 在前。WIC 在 STA/MTA 都 ok,容忍。
+  if (hr == RPC_E_CHANGED_MODE) {
+    s_initialized = true;  // 不要再重试
+    return S_FALSE;
+  }
+  return hr;
 }
 
 HRESULT QuickPanelDialog::CreateOffscreenDC(int w, int h) {
@@ -201,10 +287,12 @@ HRESULT QuickPanelDialog::CreateOffscreenDC(int w, int h) {
 
   // L78-fix: 改用 32-bit DIB section(带 alpha channel)
   // 之前 CreateCompatibleBitmap 是 24-bit DDB,GradientFill 的 alpha 被丢掉 → 全黑
+  // L81-fix: 用 top-down DIB (负 height) 让 y=0 ↔ top, y=H-1 ↔ bottom 直观一致,
+  // 否则 ApplyAlphaGradient 的 gradient 计算和实际像素位置是反的。
   BITMAPV5HEADER bi = {};
   bi.bV5Size = sizeof(bi);
   bi.bV5Width = w;
-  bi.bV5Height = h;
+  bi.bV5Height = -h;  // top-down (负值)
   bi.bV5Planes = 1;
   bi.bV5BitCount = 32;
   bi.bV5Compression = BI_BITFIELDS;
@@ -247,6 +335,14 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
     case WM_DESTROY:   return OnDestroy(hwnd);
     case WM_PAINT:     return OnPaint(hwnd);
     case WM_ERASEBKGND: return 1;          // GDI 双缓冲,不让 Windows 清背景
+    // L81-fix: 切到其他 IME (en-US 等) 时 WeaselServer 进程会失焦 → WM_ACTIVATEAPP 触发。
+    // 自动 Hide() 让 panel 跟着前台 app 切走,不残留屏幕上。
+    case WM_ACTIVATEAPP: {
+      if (w == FALSE) {  // app 被 deactivate (前台切走)
+        Hide();
+      }
+      return 0;
+    }
     case WM_LBUTTONDOWN: {
       POINT p = {LOWORD(l), HIWORD(l)};
       s_activeIdx = HitTest(p.x, p.y);
@@ -357,12 +453,40 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   FillRect(hdc, &topHL, s_hBrushHighlight);
 
   // 2. 画 logo (Fluxing 红色猿猴)
+  // L81-fix: 用 AlphaBlend + AC_SRC_ALPHA 替代 BitBlt(SRCCOPY)。
+  // 原因:v0.19.0.10 用 BitBlt(SRCCOPY) 把 WIC 加载的 32-bit BGRA logo 画到 32-bit BGRA panel,
+  // GDI 在两个 32-bit DIB 之间 BitBlt(SRCCOPY) 行为:
+  //   - dest 是 BI_BITFIELDS DIB
+  //   - src 是 BI_BITFIELDS DIB
+  //   - SRCCOPY 在这种情况下**会剥离 alpha** — dest alpha 全部被写成 255
+  //     (GDI 不区分 source alpha channel,直接当 RGB 复制)
+  // 加上 source 的 transparent pixels (alpha=0) 会变成 RGB only 的黑色,
+  // 整张 logo 在 panel 上看起来是黑底 + 红 logo。
+  // AlphaBlend(AC_SRC_ALPHA) 是 GDI 唯一能保留 per-pixel alpha 的合成操作。
+  //
+  // L81-fix2: source rect 不是 (0,0,56,56) 而是 PNG 的中心 56x56,因为 PNG 是 700x700
+  // 带透明背景,top-left 56x56 是空白(纯白 RGB),采不到 logo。只有中心有红 Fluxing 猿猴。
+  // 中心 700x700 / 2 - 28 = 322。
   if (s_hBmpLogo) {
     HDC hdcMemLogo = CreateCompatibleDC(hdc);
-    SelectObject(hdcMemLogo, s_hBmpLogo);
-    BitBlt(hdc, kPanelPadding, kPanelPadding, kBrandSize, kBrandSize,
-           hdcMemLogo, 0, 0, SRCCOPY);
-    DeleteDC(hdcMemLogo);
+    if (hdcMemLogo) {
+      HGDIOBJ prev = SelectObject(hdcMemLogo, s_hBmpLogo);
+      BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+      // 取 logo 中心 56x56 区域(假设 logo 是 700x700,中心点是 (350, 350))
+      // 如果以后 logo 尺寸变了,改这里。
+      constexpr int logoSourceW = 700;
+      constexpr int logoSourceCx = logoSourceW / 2;  // 350
+      int srcL = logoSourceCx - kBrandSize / 2;        // 350 - 28 = 322
+      int srcT = srcL;  // 正方形 src
+      AlphaBlend(hdc,
+                 kPanelPadding, kPanelPadding,
+                 kBrandSize, kBrandSize,
+                 hdcMemLogo,
+                 srcL, srcT, kBrandSize, kBrandSize,
+                 bf);
+      SelectObject(hdcMemLogo, prev);
+      DeleteDC(hdcMemLogo);
+    }
   }
 
   // 3. 画 5 个按钮
@@ -465,6 +589,23 @@ void QuickPanelDialog::RepaintLayered(HWND hwnd) {
   if (!hwnd || !s_hdcMem || !s_hBmpMem ||
       s_panelW_phys <= 0 || s_panelH_phys <= 0) return;
 
+  // L81-fix: 必须在 PaintOpaqueContent 之前 memset s_hBmpMem pBits = 0!
+  // 原因:s_hBmpMem 是 32-bit BGRA DIB Section,pBits 是 raw buffer。GDI 写入时
+  // 默认 alpha=255 + RGB,Pixel 没被画到的位置仍然保留**上一次的 RGB+alpha**。
+  // 这导致:
+  //   - 上一次 active=true 的橙色 button0 在下次 active=false 时仍然显示橙色
+  //     (PaintOpaqueContent 不画它,但残留在 pBits 里)
+  //   - hover 状态变化时残影同样存在
+  //   - icon 在某个像素位置偶然被画过一次,下次 GetClientRect 重设也不会清理
+  //
+  // memset 0 = BGRA(0,0,0,0) = fully transparent black。后续 PaintOpaqueContent
+  // 只画必要内容;ApplyAlphaGradient 把圆角内白色像素改 alpha=gradient,
+  // 圆角外保留 alpha=0(已经是 0 from memset)。
+  BITMAP bm = {};
+  if (GetObject(s_hBmpMem, sizeof(bm), &bm) && bm.bmBits) {
+    SecureZeroMemory(bm.bmBits, bm.bmHeight * bm.bmWidthBytes);
+  }
+
   PaintOpaqueContent(s_hdcMem);
   ApplyAlphaGradient();
 
@@ -473,6 +614,9 @@ void QuickPanelDialog::RepaintLayered(HWND hwnd) {
   // WS_EX_LAYERED 路径上可能把 alpha composite 掉,看不真切)。
   // 当 FLUXING_QP_DIAG_DUMP=1 才写文件。
   if (GetEnvironmentVariableW(L"FLUXING_QP_DIAG_DUMP", nullptr, 0) != 0) {
+    // v0.19.0.11 L81 diag: dump TWO files for full verification
+    // (a) qp-dump.bmp = s_hBmpMem (panel after RepaintLayered)
+    // (b) qp-logo.bmp = s_hBmpLogo (raw logo bitmap from LoadLogoWIC)
     BITMAP bm = {};
     if (GetObject(s_hBmpMem, sizeof(bm), &bm) && bm.bmBits) {
       HANDLE f = CreateFileW(L"F:\\soft\\00selfmade\\rime_claude\\qp-dump.bmp",
@@ -499,6 +643,38 @@ void QuickPanelDialog::RepaintLayered(HWND hwnd) {
         WriteFile(f, masks, sizeof(masks), &written, nullptr);
         WriteFile(f, bm.bmBits, bi.biSizeImage, &written, nullptr);
         CloseHandle(f);
+      }
+    }
+
+    // (b) logo bitmap dump to verify WIC actually loaded PNG
+    if (s_hBmpLogo) {
+      BITMAP bmL = {};
+      if (GetObject(s_hBmpLogo, sizeof(bmL), &bmL) && bmL.bmBits) {
+        HANDLE fL = CreateFileW(L"F:\\soft\\00selfmade\\rime_claude\\qp-logo.bmp",
+                                GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (fL != INVALID_HANDLE_VALUE) {
+          DWORD written = 0;
+          BITMAPFILEHEADER bfhL = {};
+          bfhL.bfType = 0x4D42;
+          DWORD dibSizeL = 40 + 12;
+          bfhL.bfSize = 14 + dibSizeL + (DWORD)bmL.bmWidthBytes * bmL.bmHeight;
+          bfhL.bfOffBits = 14 + dibSizeL;
+          BITMAPINFOHEADER biL = {};
+          biL.biSize = 40;
+          biL.biWidth = bmL.bmWidth;
+          biL.biHeight = -bmL.bmHeight;
+          biL.biPlanes = 1;
+          biL.biBitCount = 32;
+          biL.biCompression = 3;
+          biL.biSizeImage = (DWORD)bmL.bmWidthBytes * bmL.bmHeight;
+          WriteFile(fL, &bfhL, sizeof(bfhL), &written, nullptr);
+          WriteFile(fL, &biL, sizeof(biL), &written, nullptr);
+          DWORD masksL[3] = {0x00FF0000, 0x0000FF00, 0x000000FF};
+          WriteFile(fL, masksL, sizeof(masksL), &written, nullptr);
+          WriteFile(fL, bmL.bmBits, biL.biSizeImage, &written, nullptr);
+          CloseHandle(fL);
+        }
       }
     }
   }
@@ -570,6 +746,9 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   (void)onPhrases; (void)onFullwidth; (void)onSymbols; (void)onLogin;
   if (s_hwnd) {
     ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
+    // L81-fix: reuse 路径也强制置顶(防止其他窗口在 hide→show 间隙盖上面板)
+    SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     // v0.19.0.10: layered path — InvalidateRect 无意义,直接重画提交
     RepaintLayered(s_hwnd);
     return;
@@ -600,6 +779,11 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   // 不是 liquid glass (面板整体 86% 不透明)。 per-pixel alpha 走 RepaintLayered →
   // ApplyAlphaGradient → UpdateLayeredWindow(ULW_ALPHA)。
   ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
+  // L81-fix: WS_EX_TOPMOST + WS_EX_LAYERED 路径 z-order 不稳,经常被其他窗口盖住。
+  // 显式 SetWindowPos(HWND_TOPMOST) 强制置顶,与 WS_EX_TOPMOST 等价但更可靠。
+  // SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE:不改变 geometry 也不抢焦。
+  SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   RepaintLayered(s_hwnd);  // 第一次提交 layered surface (带渐变 alpha)
 }
 

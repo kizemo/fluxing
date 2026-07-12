@@ -1,23 +1,35 @@
 #pragma once
 //
-// QuickPanelDialog v3-rev3 — GDI rewrite + per-pixel alpha (spec 074 L77→v0.19.0.10)
+// QuickPanelDialog v3-rev3 — GDI rewrite + per-pixel alpha + WIC PNG
 //
 // 设计: docs/design/quickpanel-v3/index.html
 // - 6 元素横排 (logo + 5 占位按钮)
-// - 真火流猩 PNG (LoadImageW → HBITMAP,无 GDI+ 无 IStream)
+// - 真火流猩 PNG:通过 WIC (IWICImagingFactory::CreateDecoderFromFilename) 解码
+//   到 32-bit BGRA DIB Section。无 GDI+ Bitmap(IStream*) (L67-L69),无 IStream。
+//   v0.19.0.10 之前的 LoadImageW(IMAGE_BITMAP, LR_LOADFROMFILE) 实际**不支持 PNG**,
+//   静默失败 → 看到的是纯白 logo 区域(L81 修复)。
 // - 5 个矢量图标 (GDI 路径 drawing,纯 MoveTo/LineTo)
-// - hover 染品牌橙(active 才 fill bg,符合 v3-rev3 设计)
-// - **per-pixel alpha Liquid Glass** via WS_EX_LAYERED + UpdateLayeredWindow +
-//   32-bit DIBSection (BGRA),panel 内 alpha 顶部 0x88→底部 0x52 渐变,
-//   panel 外 (圆角角落 + 屏幕透出区) alpha=0,桌面可见。
+// - hover 染品牌橙线条(active 才 fill bg,符合 v3-rev3 设计)
+// - per-pixel alpha Liquid Glass via WS_EX_LAYERED + UpdateLayeredWindow +
+//   32-bit DIBSection (BGRA),panel 内 alpha 顶 0x88→底 0x52 渐变,
+//   圆角外 alpha=0 (桌面可见)
 //
-// 历史雷区:
+// 历史雷区 (不重复犯错):
 // ❌ 绝对不用 GDI+ Bitmap(IStream*) (L67-L69 崩溃链)
 // ❌ 绝对不 CreateStreamOnHGlobal + Release() (L67 根因)
 // ❌ 绝对不用 D2D ID2D1HwndRenderTarget (L74 黑 panel,DComp 未 promote)
 // ❌ 绝对不用 LWA_ALPHA uniform (L77 — 不是 liquid glass,只是 86% 全白)
 // ❌ 绝对不在 WS_EX_LAYERED 后 BitBlt 到 window DC (双路径会闪烁)
-//   → 用 UpdateLayeredWindow + 32-bit DIB 一次性提交
+// ❌ 绝对不用 LoadImageW(IMAGE_BITMAP) 加载 PNG (L81 — 支持列表不含 PNG,失败)
+// ✅ 用 WIC CreateDecoderFromFilename → FormatConverter (32bppBGRA) →
+//   CopyPixels 到 32-bit DIBSection
+// ✅ PaintOpaqueContent 调用前 **必须 memset s_hBmpMem pBits 为 0** (L81) —
+//   否则 active bg 残留导致 false 状态;UpdateLayeredWindow 提交的是增量,但 pBits
+//   是 base raw,不 memset 会被旧位的 RGB/alpha 覆盖
+// ✅ Show() 后 SetWindowPos(HWND_TOPMOST) 强制置顶 (L81 — WS_EX_LAYERED +
+//   WS_EX_TOPMOST 路径 z-order 不稳,需要 explicit SetWindowPos)
+// ✅ WM_ACTIVATEAPP handler:Hide() 在 app 失焦时 (L81 — 切到 en-US 时 panel
+//   必须随 IME 切换消失,否则用户多次反映"卡死")
 //
 #include <functional>
 #include <string>
@@ -74,7 +86,7 @@ class QuickPanelDialog {
   static int      s_activeIdx;
 
   // ===== GDI 资源(无 D2D,无 GDI+) =====
-  static HBITMAP  s_hBmpLogo;        // Fluxing logo PNG → HBITMAP
+  static HBITMAP  s_hBmpLogo;        // Fluxing logo PNG → HBITMAP (WIC 解码)
   static HBRUSH   s_hBrushPanelBg;   // panel 背景(白色半透)
   static HBRUSH   s_hBrushIconDim;   // 默认图标色(中灰)
   static HBRUSH   s_hBrushIconAccent;// hover 色(品牌橙)
@@ -84,7 +96,7 @@ class QuickPanelDialog {
   static HPEN     s_hPenIconAccent;
   static HPEN     s_hPenHighlight;
   static HDC       s_hdcMem;          // off-screen DC (避免闪烁)
-  static HBITMAP  s_hBmpMem;         // off-screen bitmap
+  static HBITMAP  s_hBmpMem;         // off-screen bitmap (32-bit BGRA)
   static int       s_panelW_phys;     // panel 物理像素宽
   static int       s_panelH_phys;     // panel 物理像素高
 
@@ -141,6 +153,11 @@ class QuickPanelDialog {
   static void DrawIconSymbols(HDC hdc, int x, int y);
   static void DrawIconSettings(HDC hdc, int x, int y);
   static void DrawIconAccount(HDC hdc, int x, int y);
+
+  // L81: COM 一次性初始化(WIC 创建需要 STA)。返回 S_OK 表示已初始化,
+  // S_FALSE 表示已初始化过(无需重复),失败错误码需要退出。我们仅 initialize
+  // 一次,失败也不致命 — LoadLogoWIC 会无 logo 显示但 panel 仍可工作。
+  static HRESULT EnsureComInit();
 
   // v0.19.0.10: per-pixel alpha pipeline (L77 per lessons-learned "Future work")
   // ApplyAlphaGradient 扫描 s_hBmpMem 的 pBits,按 y 轴改 alpha 通道。

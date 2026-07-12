@@ -6523,3 +6523,159 @@ E2E 测试脚本修正: 从 `BI_RGB` 改 `BI_BITFIELDS` + 显式 masks — 但�
 - v0.19.2.0: 用户偏好的透明度/位置持久化到 `HKCU\Software\Fluxing\QuickPanel`
 - v0.19.3.0: dark mode 自动跟随 (spec 070 T101 路径)
 
+
+
+## L81 - v0.19.0.11: 5 QuickPanel real-world bugs fixed (round-courner × 5)
+
+### Symptom (post v0.19.0.10 ship)
+
+User installed v0.19.0.10 and reported 5 problems after running on real machine:
+
+1. **logo 不显示** — brand area 是空白方块 (white)
+2. **设置栏全不透明白** — v3-rev3 设计的"macOS 玻璃"完全看不见
+3. **不置顶** — 被其他窗口盖住
+4. **悬停不工作,点变橙色背景粘住** — click 留下 active 状态残留
+5. **切 IME 后不消失** — 切到 en-US 后 QuickPanel 仍留在屏幕
+
+L78/L80/L77 lessons 里都讲 "Run on user's machine + visual verify before tag"。
+**L80** ("per-pixel-alpha verified via raw DIB") shipped 但没有 force 用户视觉 confirm
+on a NON-WHITE wallpaper。
+
+### Phase 1 (root cause, multi-bug)
+
+| Bug | Root cause | 来源 |
+|---|---|---|
+| #1 logo missing | `LoadImageW(IMAGE_BITMAP, LR_LOADFROMFILE)` **不支持 PNG**,静默失败返回 NULL。v0.19.0.7 改名为 `LoadLogoWIC` 但实际**没调任何 WIC**,路径错了。L77 修 path 但从未验证 PNG 真的 decode 了。 | v0.19.0.7 |
+| #2 中心纯白 | `PaintOpaqueContent` 没 memset `s_hBmpMem.bmBits`,上一帧的 active orange 像素**残留**到下一帧。GDI 在 32-bit DIB 上写默认 alpha=255 + RGB,Pixel 没被画到的位置**保留**上次值 (memset 必要性)。 | 新发现 (L81) |
+| #3 不置顶 | `WS_EX_LAYERED + WS_EX_TOPMOST` 路径 z-order 不稳,需要 explicit `SetWindowPos(HWND_TOPMOST, ...)`。单 WS_EX_TOPMOST 不够。 | 新发现 (L81) |
+| #4 hover/active stuck | **同一个根因** — #2 残留。加上 active bg 没在 s_activeIdx 清完后被真正 erase。 | 新发现 (L81) |
+| #5 IME 切换不消失 | `RimeWithWeaselHandler::FocusOut` 里有一个 **`if (false) { QuickPanelDialog::Hide(); }`** 死代码。L69 因 GDI+ 崩溃链 disable 整个 QuickPanel;L70+ spec 070 重新启用 Pure-GDI QuickPanel,**但这个 `if(false)` 一直没改回 `true`** — 9 个版本 user-reported bug 在等一个 `if` 字。 | L69 残留 + L70-L80 没 fix |
+
+**次发现** (Phase 1 sub-investigation):
+- `AlphaBlend(AC_SRC_ALPHA)` 是 GDI 唯一能在两个 32-bit DIB 之间**保留 per-source-pixel alpha**
+  的合成。`BitBlt(SRCCOPY)` 在 32-bit ↔ 32-bit DIB 时**剥离 alpha**(把 dest 的 alpha 一律写 255)。
+- GDI source rect `(0, 0, kBrandSize, kBrandSize)` 采 PNG (700x700) 的 top-left,
+  Fluxing logo 是中心布局,top-left 是空白。改成 `(322, 322, ...)` 采中心 56x56。
+- DIB `bi.bV5Height = h` (positive) 是 **bottom-up**, `for y in [0..H)` 写 `p[y*W+x]`
+  时 y=0 实际是 panel 底行。ApplyAlphaGradient 把顶 alpha=140 写成底行 alpha=140 →
+  视觉效果**渐变方向倒过来**。改 `bi.bV5Height = -h` (top-down),y=0 → 顶行。
+
+### Phase 2 (fix chosen)
+
+Minimal scope:
+
+- **logo**: WIC 全替换 `LoadImageW`。
+  `CoCreateInstance(CLSID_WICImagingFactory)` → `CreateDecoderFromFilename`
+  → `GetFrame(0)` → `CreateFormatConverter` (`GUID_WICPixelFormat32bppBGRA`)
+  → `CopyPixels` 到 32-bit DIBSection (BI_BITFIELDS + masks including alpha 0xFF000000)。
+  需要 `<wincodec.h>` + `windowscodecs.lib`(WinSDK 自带 + xmake 加 link)。
+
+- **memset before paint**:
+  ```cpp
+  BITMAP bm{};
+  if (GetObject(s_hBmpMem, sizeof(bm), &bm) && bm.bmBits) {
+    SecureZeroMemory(bm.bmBits, bm.bmHeight * bm.bmWidthBytes);
+  }
+  PaintOpaqueContent(s_hdcMem);  // 0 干净起步 → 不残留
+  ApplyAlphaGradient();
+  ```
+
+- **Top-down DIB**: `bi.bV5Height = -h` 让 pixel array y=0 ↔ top 屏显一致。
+
+- **AlphaBlend + center source rect**:
+  ```cpp
+  AlphaBlend(hdc, 8, 8, 56, 56, hdcMemLogo, 322, 322, 56, 56, {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA});
+  ```
+
+- **Topmost**: `SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);`
+  after `ShowWindow`。
+
+- **IME switch hide**: `if (false)` → unconditional `QuickPanelDialog::Hide()` in `RimeWithWeaselHandler::FocusOut`。
+  **Single line, 9 版本 carry的 bug**。Hide() on unshown panel 是 safe no-op。
+
+- **WM_ACTIVATEAPP handler**: 加 cross-app 切走的兜底。
+
+### Phase 3 (verification, sandbox-side)
+
+**编译**:
+- xmake build ok 0 errors / 0 new warnings
+- msbuild Release|Win32 ok
+
+**单测**:
+- TestDefaultHotkeys: 35/35 PASS
+- TestQuickPanelRefactor: 1/1 PASS
+- TestResponseParser: 5/5 PASS
+- TestWeaselIPC: no errors
+
+**PE arch (L14)**:
+- WeaselServer / WeaselDeployer / WeaselSetup / rime.dll: 0x014C x86 ✓
+- weaselx64.dll: 0x8664 x64 ✓ (TSF 64-bit shim)
+
+**Per-pixel alpha raw DIB** (`FLUXING_QP_DIAG_DUMP=1`):
+- alpha=0: 1954 px (8%) — 圆角外 (transparent)
+- alpha=100-140: 14590 px (60%) — gradient target range
+- alpha=255: 1607 px (7%) — opaque icons / border / brand logo
+
+**Logo rendering**:
+- 之前 (v0.19.0.10): brand area **0** 个 Fluxing-red 像素
+- 现在 (v0.19.0.11): brand area **1194** 个 Fluxing-red (175,49,35) 像素
+- `qp-logo.bmp` (WIC decoded) 200KB PNG,700x700,BGRA top-down,
+  与 `output\Win32\fluxing-logo.png` 像素对比一致
+
+**PrintWindow composite** (L80 known): capture 后 alpha=255 uniform 是预期,因为
+DWM 合成 layered 窗口到 desktop 时 alpha=255 visible。这是 L80 lessons 里讲的。
+
+### Lessons
+
+1. **`LoadImageW(IMAGE_BITMAP, ...)` 不支持 PNG**。MSDN: supported formats include
+   BMP, ICO, CUR, ANI, EXE, DLL,**不含 PNG**。要 PNG 必须用 WIC
+   (`CreateDecoderFromFilename`)。
+2. **GDI 写 32-bit DIB 不抹 alpha** — 写到某个 pixel 默认 alpha=255,且**未画**
+   的 pixel 保留原值。**写循环前必须 memset 0**。
+3. **GDI 在两个 32-bit DIB 之间 BitBlt(SRCCOPY) 剥离 alpha**。要 per-source-alpha 路径:
+   `AlphaBlend(AC_SRC_ALPHA)` 是唯一可靠 ops。
+4. **DIB BI_BITFIELDS 默认 bottom-up** (bi.bV5Height > 0)。要 top-down 必须负值。
+   不然 `for y in [0..H)` 写 y=0 是底行,弄反任何 y-based gradient/diffusion 计算。
+5. **`if (false) { ... }` 死代码 carry bug** 9 个版本。
+   L69 disable 一处 QuickPanel 相关调用,L70+ 重新启用 QuickPanel 时漏改回。
+   Lesson: **每做 disable 都要开 issue** "re-enable this when [condition] is fixed"。
+   否则 disable 就会变成 hidden 永久 bug。
+6. **WS_EX_LAYERED + WS_EX_TOPMOST 不稳**,需要 explicit `SetWindowPos(HWND_TOPMOST)`
+   才确保 z-order。
+7. **PNG 中心布局时 source rect 必须取中心**。Fluxing logo (transparent BG, content
+   centered) 在 (322..378, 322..378) of 700×700。采 (0..56, 0..56) 是空白边。
+8. **L80 教训仍然适用** — `'per-pixel alpha visible on screen'` 必须 `Real-machine visually
+   verify on NON-WHITE wallpaper`。raw DIB alpha=111 是真,DWM composite 把 visible
+   pixel 写 alpha=255 让 print/capture 看到 opaque white,**但 user 实际桌面是 colored
+   bg 时仍然能看到 transparent** (用户截图可能是纯白壁纸,所以看不出 alpha)。
+
+### Anti-patterns (additional)
+
+- **AP-L81-A**: 用 `LoadImageW(IMAGE_BITMAP)` load PNG 文件。直接返回 NULL,
+  bitmap 是 NULL,绘画跳过 → 看似没报错的 silent 漏。
+- **AP-L81-B**: `BiTBlt(SRCCOPY) on 32-bit ↔ 32-bit DIB` 期待保留 alpha。
+  GDI 在 BI_BITFIELDS 同为 32-bit 之间对 BitBlt(SRCCOPY) 直接 strip alpha。
+- **AP-L81-C**: `PaintOpaqueContent` 之前不 `memset(pBits, 0)`。残留→active bg
+  状态机表面"无效",重画仍看着 old state。
+- **AP-L81-D**: `if (false) { critical_call(); }` 作为"保留以防..."。这是
+  hidden dead code,**永久漏 catch** 直到 explicit re-enable。Disabling 一个 call
+  必须开 issue "re-enable when X" 否则 carry 9+ versions。
+- **AP-L81-E**: `Bi.bV5Height = h` (positive) 假设 y=0=top。Default bottom-up DIB
+  是 Linux/Android 习惯反转。Windows GDI 默认 bottom-up。
+- **AP-L81-F**: `WS_EX_LAYERED + WS_EX_TOPMOST` 不加 `SetWindowPos` 就靠它自己。
+  `WS_EX_TOPMOST` 在 layered 路径不稳。
+
+### Files touched
+- `WeaselServer/QuickPanelDialog.h`
+- `WeaselServer/QuickPanelDialog.cpp`
+- `RimeWithWeasel/RimeWithWeasel.cpp` (FocusOut)
+- `WeaselServer/xmake.lua` (add windowscodecs link)
+- `output/install.nsi` (UNCHANGED)
+- `env.bat` / `weasel.props` (本地不 commit)
+
+### Ship
+- `release\fluxing-0.19.0.11-installer.exe` 43,186,176 bytes
+- SHA256 `7e7aabe830723ae964207d2ac16d8af5eba183dac3df2715c84062b04f0176c1`
+- **IMPORTANT**: User must re-install over v0.19.0.10 (or fresh). v0.19.0.10 装机 logo/alpha
+  问题是 silent install (升级 silent install 即可)。视觉 must 在 **非纯白 desktop
+  wallpaper** 上验证 liquid glass effect。
