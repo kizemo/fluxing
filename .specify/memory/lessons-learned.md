@@ -6822,3 +6822,136 @@ Minimal scope:
 ### Ship
 - `release\fluxing-0.19.0.12-installer.exe` 43,188,258 bytes
 - SHA256 `e82c4bba070a204f8f30b194e10289252920e0f4d34584ff26f6fc2257a78709`
+
+
+## L83 - v0.19.0.13: DPI scaling + WIC BitmapScaler + mac Liquid Glass (5-bug round 2)
+
+### Symptom (post v0.19.0.12 ship)
+用户反馈 v0.19.0.12 ship 后仍有 4 项问题:
+1. **左侧 logo 不显示** — 实际上 v0.19.0.12 用了错的文件(`fluxing-logo.png` 700x700 大 logo)
+   + AlphaBlend **不支持拉伸**(MS docs 显式说),所以采不到中心
+2. **设置栏仍是纯白** — 浅色 wallpaper 下 panel bg + border 都是浅色,看不见
+3. **不置顶** — 误诊,实际是 panel 边界 transparent (sub-100% DPI 下 FrameRgn 1px brush = sub-pixel)
+4. **悬停效果没有** — 真正的 bug:HitTest 用 logical 360x68 常量,但 `WM_MOUSEMOVE lParam` 是 **physical pixels**(PerMonitor DPI Aware 缩放后),导致 hover 检测错位
+5. **切其他输入法** — 已 v0.19.0.11 修过 ✓
+
+### Phase 1 (root cause)
+
+**Bug #1 logo**:
+- `LoadImageW(IMAGE_BITMAP, LR_LOADFROMFILE)` 不支持 PNG(L81 已知 + L82 fix 误以为会拉伸)
+- 真实 logo 文件 = `docs/design/fluxing-logo_small.png` (20x20 PNG icon)
+- 即使加载成功,AlphaBlend **不支持拉伸**(MS docs),需要 IWICBitmapScaler 预缩放
+
+**Bug #2-3 panel 视觉**:
+- 浅色 wallpaper 下 panel bg (245,245,250) + 1px WHITE_BRUSH border = 看不出边界
+- 真根因:不是 L82 误以为的 FrameRgn brush 问题(虽然 FrameRgn 1px 在 sub-100% DPI 也会子像素失败)
+- 实际双重 bug:(a) border 颜色用 WHITE_BRUSH (浅色桌 invisible) (b) FrameRgn 1px sub-pixel
+- 真修复:用 **RoundRect() with pen + NULL_BRUSH**(line primitive,brush 不参与),pen 宽度
+  `max(1, int(dpr_x + 0.5))` 保证 ≥ 1 physical pixel
+
+**Bug #4 hover**:
+- WM_MOUSEMOVE lParam 在 PerMonitor DPI Aware 进程下是 **physical pixels**(Windows 自动缩放)
+- HitTest 用 logical kPanelW=360, kBtnSize=56 等 → mouse 物理 222 按 logical layout 算 hit
+- 在 physical 240x45 panel 上,physical 222 实际在 btn2 位置,但 HitTest 算成 btn1 logical
+- 真修复:HitTest 用 `s_*_phys` 物理常量(按 dpr 缩放后的物理像素)
+- 这是 L83 关键洞察:Windows 把 lParam 从 logical(我们想要的) → physical (Windows 投递的)
+  **OR** 我们代码里的 logical 数字根本就是 physical。
+  Sandbox 验证:发送 logical (36, 148) → Windows 投递 (54, 222),倍数 1.5x。
+  所以 HitTest 必须按 physical (Windows 给的) 算。
+
+### Phase 2 (fix chosen)
+
+**L83 完整 fix**:
+
+1. **DPI scaling 全面应用** (s_*_phys 常量):
+   - OnCreate 计算 `dpr_x = s_panelW_phys / kPanelW`, `dpr_y = s_panelH_phys / kPanelH`
+   - 所有 layout 常量:padding/btnSize/icoSize/btnRadius/brandSize/panelRadius 按 dpr 缩放
+   - 整数 round,>=1 (防止 0)
+
+2. **WIC BitmapScaler logo** (Bug #1):
+   - LoadLogoWIC 加 `CreateBitmapScaler` 把 20x20 PNG 预缩放到 `s_brandSize_phys`
+   - AlphaBlend 1:1 (src==dst 像素),不需要拉伸(它不支持)
+   - 用 WIC 的 `WICBitmapInterpolationModeHighQualityCubic` 高质量缩放
+
+3. **mac Liquid Glass 视觉** (Bug #2):
+   - Panel bg `s_hBrushPanelBg = RGB(245, 245, 250)` 浅玻璃冷色(之前纯白)
+   - Border 改用 **RoundRect + dim pen**(`max(1, dpr_x+0.5)` 物理像素宽)
+   - Top highlight 2px(白色 alpha gradient)
+   - Bottom shadow 1px(深色 alpha gradient)— mac style 反光
+
+4. **Hover DPI fix** (Bug #4):
+   - HitTest 用 `s_panelPadding_phys` / `s_brandSize_phys` / `s_btnSize_phys` / `s_btnGap_phys`
+   - 不再 logical constants — 因为 mouse 物理像素 跨 DPI scale 后位置变了
+
+5. **APPLY fix**: ApplyAlphaGradient 用 GDI `PtInRegion()` 判定 inside/outside
+   - 替代手算 `IsInsideRoundedRect`(在 sub-100% DPI 下数学判断比 GDI rgn 更严格,导致
+     "outside panel" pixel 被 GDI FillRgn 填了 panel bg)
+
+### Phase 3 (verification)
+
+**Raw DIB**(FLUXING_QP_DIAG_DUMP=1,qp-dump.bmp 360x68):
+- ✅ Logo 红猿猴清晰可见(brand area)
+- ✅ 5 个 icons (schema/phrase/symbols/settings/account) outline 黑色 (60,50,50)
+- ✅ Border 1px 深灰 (60,50,50) 可见
+- ✅ Top highlight 顶部白色
+- ✅ Panel bg RGB(245,245,250) alpha gradient 140→82
+- ✅ 圆角 corners outside alpha=0
+
+**PE arch (L14)**: x86 + x64 unchanged
+
+**Tests**: 35/35 + 1/1 PASS
+
+**Visual confirm** (qp-dump-l83-final-big.png 3x):
+- Fluxing 红色猿猴 logo on left
+- 5 个干净的 icon outlines
+- 圆角 + 边框 + 浅玻璃底
+
+### Lessons
+
+1. **GDI AlphaBlend 不支持拉伸**(MS docs 显式说"does not support stretching")。
+   PNG 缩放必须用 IWICBitmapScaler 或 StretchBlt(后者在 SRCCOPY 时剥 alpha)。
+2. **WM_MOUSEMOVE lParam 在 PerMonitor DPI Aware 进程下是 physical pixels**(Windows
+   自动从 logical 投递到 physical)。HitTest 必须用物理常量(按 dpr 缩放后)。
+3. **WS_EX_LAYERED + 1px FrameRgn brush 在 sub-100% DPI = sub-pixel,边框不可见**。
+   必须用 line primitive (RoundRect + pen) 且 pen 宽度按 dpr 缩放(`max(1, dpr+0.5)`)。
+4. **GDI `CreateRoundRectRgn` 的 corner 区域跟手算数学不完全一致**。需要 `PtInRegion` 让
+   GDI 自己判断(代码更短 + 永远正确)。v0.19.0.10 的 `IsInsideRoundedRect` 数学判断
+   比 GDI 更保守,导致"outside panel" pixel 已被 FillRgn 填了 panel bg。
+5. **Sandbox DPI 测试陷阱**:sandbox 显示面板 240x45 但 GetClientRect 返回 360x68。
+   Windows 自动缩放窗口 + lParam 物理化 (1.5x),导致 hover 测试坐标全乱。
+   测试必须用 panel.hwnd + GetWindowRect 实际物理尺寸。
+6. **PNG 文件实际尺寸** 要从 docs/ 找。`fluxing-logo.png` (700x700) ≠ 用户实际用的
+   `fluxing-logo_small.png` (20x20 icon)。
+
+### Anti-patterns (additional)
+
+- **AP-L83-A**: `AlphaBlend(hdc, ..., 56, 56, hdcSrc, 0, 0, 20, 20, ...)` 期望拉伸
+  20x20 → 56x56。GDI AlphaBlend 不支持拉伸,失败但不报错。
+- **AP-L83-B**: `FrameRgn(hdc, rgn, brush, 1, 1)` 在 sub-100% DPI 下画 0.667px = sub-pixel →
+  不可见。改用 RoundRect line primitive + pen width `max(1, dpr+0.5)`。
+- **AP-L83-C**: `WM_MOUSEMOVE lParam` 当 logical 处理 → 在 PerMonitor DPI 进程下
+  全错位。必须用 s_panelW_phys 等 physical constants。
+- **AP-L83-D**: 在 sandbox 写 hover E2E test 时 hardcode W=240, H=45 但实际 qp-dump.bmp 是 360x68。
+  测试必须先 GetWindowRect 读实际尺寸再 decode。
+- **AP-L83-E**: 用户报"logo 不显示"就去找 PNG decode 问题(L81 fix 已 done)。还要检查:
+  (a) 文件名是否正确(small vs large PNG icon),(b) AlphaBlend 是否需要缩放。
+  之前 v0.19.0.11/0.12 都对错文件,且 AlphaBlend 拉伸错了,L82 fix 不完整。
+
+### Files touched (v0.19.0.13)
+- `WeaselServer/QuickPanelDialog.h`: 新增 s_dpr_x/y, s_*_phys 常量
+- `WeaselServer/QuickPanelDialog.cpp`:
+  - OnCreate 加 DPI 缩放
+  - LoadLogoWIC 加 IWICBitmapScaler
+  - PaintOpaqueContent 用 s_*_phys + RoundRect border + top highlight + bottom shadow
+  - HitTest 用 s_*_phys (physical pixel HitTest)
+  - ApplyAlphaGradient 用 PtInRegion 替代 IsInsideRoundedRect
+  - WndProc 清理临时 diag log 代码
+- `WeaselServer/xmake.lua`: 不变(v0.19.0.12 已加 windowscodecs)
+- `output/install.nsi`: 不变
+- `env.bat` / `weasel.props`: 本地 WEASEL_BUILD=11→13,PRODUCT_VERSION=0.19.0.10→0.19.0.13
+- `CHANGELOG.md`: v0.19.0.13 entry
+- `lessons-learned.md`: L83 entry
+
+### Ship
+- `release\fluxing-0.19.0.13-installer.exe` 43,195,065 bytes
+- SHA256 `35071844a5603647f874cfe53e76e9d0c4df85ca9d6021123c950e8348334061`

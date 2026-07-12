@@ -175,6 +175,7 @@ HBRUSH   QuickPanelDialog::s_hBrushIconDim   = NULL;
 HBRUSH   QuickPanelDialog::s_hBrushIconAccent= NULL;
 HBRUSH   QuickPanelDialog::s_hBrushActive    = NULL;
 HBRUSH   QuickPanelDialog::s_hBrushHighlight = NULL;
+HBRUSH   QuickPanelDialog::s_hBrushShadow    = NULL;
 HPEN     QuickPanelDialog::s_hPenIconDim     = NULL;
 HPEN     QuickPanelDialog::s_hPenIconAccent  = NULL;
 HPEN     QuickPanelDialog::s_hPenHighlight   = NULL;
@@ -182,6 +183,15 @@ HDC      QuickPanelDialog::s_hdcMem       = NULL;
 HBITMAP  QuickPanelDialog::s_hBmpMem      = NULL;
 int      QuickPanelDialog::s_panelW_phys  = 0;
 int      QuickPanelDialog::s_panelH_phys  = 0;
+float    QuickPanelDialog::s_dpr_x        = 1.0f;
+float    QuickPanelDialog::s_dpr_y        = 1.0f;
+int      QuickPanelDialog::s_panelPadding_phys = 0;
+int      QuickPanelDialog::s_btnSize_phys  = 0;
+int      QuickPanelDialog::s_icoSize_phys  = 0;
+int      QuickPanelDialog::s_btnRadius_phys = 0;
+int      QuickPanelDialog::s_brandSize_phys = 0;
+int      QuickPanelDialog::s_panelRadius_phys = 0;
+int      QuickPanelDialog::s_btnGap_phys   = 0;
 
 // ===== 内部 =====
 // L81 + L82: LoadLogoWIC 用 WIC 解码 PNG(不用 LoadImageW/IMAGE_BITMAP,后者不支持 PNG)。
@@ -191,6 +201,11 @@ int      QuickPanelDialog::s_panelH_phys  = 0;
 // L82: 文件名改 `fluxing-logo_small.png` (用户实际 logo,20x20 PNG icon)。
 // 之前 v0.19.0.10/0.11 用 `fluxing-logo.png` (700x700 大 logo,中心裁切后
 // 渲染出来是橘红色块,不是 design 上的小 icon)。
+//
+// L83-fix: 加 IWICBitmapScaler 在 WIC 阶段把 PNG 预缩放到 s_brandSize_phys (DPI-aware
+// 物理像素)。原因:GDI AlphaBlend **不支持拉伸**(MS docs 显式说 "AlphaBlend does not
+// support stretching or compressing"),L82 误以为会拉伸。预缩放到 dest 大小后
+// AlphaBlend 1:1 OK。
 HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
   hBmpOut = NULL;
   wchar_t exeDir[MAX_PATH] = {0};
@@ -218,11 +233,23 @@ HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
   hr = dec->GetFrame(0, &frame);
   if (FAILED(hr)) return hr;
 
+  // L83: IWICBitmapScaler 预缩放到 brand area 物理大小。保证 GDI AlphaBlend 1:1,
+  // 不需要 AlphaBlend 拉伸(它不支持)。
+  // 用 s_brandSize_phys(DPI 缩放后的物理像素),不是 logical kBrandSize。
+  Microsoft::WRL::ComPtr<IWICBitmapScaler> scaler;
+  hr = wic->CreateBitmapScaler(&scaler);
+  if (FAILED(hr)) return hr;
+  UINT targetSize = (UINT)s_brandSize_phys;
+  if (targetSize < 1) targetSize = 1;  // 保护 0
+  hr = scaler->Initialize(frame.Get(), targetSize, targetSize,
+                          WICBitmapInterpolationModeHighQualityCubic);
+  if (FAILED(hr)) return hr;
+
   Microsoft::WRL::ComPtr<IWICFormatConverter> fmtConv;
   hr = wic->CreateFormatConverter(&fmtConv);
   if (FAILED(hr)) return hr;
 
-  hr = fmtConv->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGRA,
+  hr = fmtConv->Initialize(scaler.Get(), GUID_WICPixelFormat32bppBGRA,
                             WICBitmapDitherTypeNone, nullptr, 0.0,
                             WICBitmapPaletteTypeCustom);
   if (FAILED(hr)) return hr;
@@ -324,14 +351,21 @@ void QuickPanelDialog::DestroyOffscreenDC() {
 int QuickPanelDialog::HitTest(int x, int y) {
   if (s_panelW_phys == 0) return -1;
   if (x < 0 || y < 0 || x >= s_panelW_phys || y >= s_panelH_phys) return -1;
-  int padding = kPanelPadding;
+  // L83-fix: WM_MOUSEMOVE lParam 在 PerMonitor DPI Aware 进程下是 **physical pixels**
+  // (Windows 自动缩放从 logical → physical 投递)。HitTest 必须用 physical 像素常量
+  // (s_*_phys 按 dpr 缩放后的)。之前用 logical kPanelPadding 等,在 sub-100% DPI 显示器
+  // 上 mouse 物理 222 → logical 148 → 按 360x68 layout 算 hit = btn2,但 user 实际在物理
+  // btn1 (x=148/240=61% 横向位置)。Hover 完全错位。改用 physical 常量后,physical 222
+  // → btn1 (btn1 在 physical x=83..120)。
+  int padding = s_panelPadding_phys;
   int brandX = padding;
   int brandY = padding;
-  if (x >= brandX && x < brandX + kBrandSize && y >= brandY && y < brandY + kBrandSize) return -2;  // brand
-  int buttonStartX = padding + kBrandSize + 4;
+  if (x >= brandX && x < brandX + s_brandSize_phys && y >= brandY && y < brandY + s_brandSize_phys) return -2;  // brand
+  int buttonStartX = padding + s_brandSize_phys +
+                     max(1, (int)(4 * s_dpr_x + 0.5f));
   for (int i = 0; i < 5; i++) {
-    int x0 = buttonStartX + i * (kBtnSize + 2);
-    if (x >= x0 && x < x0 + kBtnSize && y >= padding && y < padding + kBtnSize) return i;
+    int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
+    if (x >= x0 && x < x0 + s_btnSize_phys && y >= padding && y < padding + s_btnSize_phys) return i;
   }
   return -1;
 }
@@ -405,6 +439,30 @@ LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
   int h = rc.bottom - rc.top;
   if (w <= 0 || h <= 0) return 0;
 
+  // L83-fix: DPI 缩放。计算 dpr 并把所有设计常量 (logical 360x68) 缩放到
+  // 物理 surface 大小。sandbox 显示器 sub-100% DPI (Windows auto-scale 窗口到 240x45
+  // physical),不缩放的话 drawing 用 logical 360 出界 → icons 2-4 看不见 / HitTest 错位。
+  s_panelW_phys = w;
+  s_panelH_phys = h;
+  s_dpr_x = (float)w / (float)kPanelW;
+  s_dpr_y = (float)h / (float)kPanelH;
+  // DPI 缩放 round-down (>=1) 避免 0 出现 — 保护 drawing 不会 sub-pixel 全部丢失
+  auto scale_x = [&](int logical) {
+    int v = (int)(logical * s_dpr_x + 0.5f);
+    return v < 1 ? 1 : v;
+  };
+  auto scale_y = [&](int logical) {
+    int v = (int)(logical * s_dpr_y + 0.5f);
+    return v < 1 ? 1 : v;
+  };
+  s_panelPadding_phys  = scale_x(kPanelPadding);
+  s_btnSize_phys       = scale_x(kBtnSize);
+  s_icoSize_phys       = scale_y(kIcoSize);
+  s_btnRadius_phys     = scale_x(kBtnRadius);
+  s_brandSize_phys     = scale_x(kBrandSize);
+  s_panelRadius_phys   = scale_x(kPanelRadius);
+  s_btnGap_phys        = scale_x(kBtnGap);
+
   // 创建资源
   LoadLogoWIC(hwnd, s_hBmpLogo);
   s_hBrushPanelBg    = CreateSolidBrush(kBgTop);
@@ -412,15 +470,13 @@ LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
   s_hBrushIconAccent = CreateSolidBrush(kAccentC);
   s_hBrushActive     = CreateSolidBrush(kAccentC);
   s_hBrushHighlight  = CreateSolidBrush(kHighlight);
+  s_hBrushShadow     = CreateSolidBrush(RGB(0, 0, 0));  // 底部阴影 (L83 mac 风格)
   s_hPenIconDim      = CreatePen(PS_SOLID, 2, kIcoDimC);
   s_hPenIconAccent   = CreatePen(PS_SOLID, 2, kAccentC);
   s_hPenHighlight    = CreatePen(PS_SOLID, 1, kHighlight);
 
   // off-screen DC
   CreateOffscreenDC(w, h);
-
-  // 渐变背景:GDI GradientFill (GDI 原生,不是 GDI+)
-  // (v0.19.0.7 用 LWA_ALPHA 86% uniform 简化,gradient 留 v0.19.0.8+)
 
   return 0;
 }
@@ -435,6 +491,7 @@ LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
   if (s_hBrushIconAccent){ DeleteObject(s_hBrushIconAccent);s_hBrushIconAccent= NULL; }
   if (s_hBrushActive)    { DeleteObject(s_hBrushActive);    s_hBrushActive    = NULL; }
   if (s_hBrushHighlight) { DeleteObject(s_hBrushHighlight); s_hBrushHighlight = NULL; }
+  if (s_hBrushShadow)    { DeleteObject(s_hBrushShadow);    s_hBrushShadow    = NULL; }
   if (s_hPenIconDim)     { DeleteObject(s_hPenIconDim);     s_hPenIconDim     = NULL; }
   if (s_hPenIconAccent)  { DeleteObject(s_hPenIconAccent);  s_hPenIconAccent  = NULL; }
   if (s_hPenHighlight)   { DeleteObject(s_hPenHighlight);   s_hPenHighlight   = NULL; }
@@ -446,24 +503,46 @@ LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
 // 部分抽出来 — roundRgn WHITE bg + 1px border + top highlight + logo + 5 icons。
 // 不再 BitBlt 到 window DC (WS_EX_LAYERED 后双路径会闪烁,见 file header 雷区)。
 void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
-  // 1a. 圆角 panel 背景 — L82-fix: 从 WHITE_BRUSH 改成 s_hBrushPanelBg
-  // (s_hBrushPanelBg = CreateSolidBrush(kBgTop = RGB(245,245,250))。
-  // 在浅色 wallpaper 上不再是"panel 与背景融为一体"。)
-  HRGN panelRgn = CreateRoundRectRgn(0, 0, kPanelW, kPanelH, kPanelRadius, kPanelRadius);
+  // L83-fix: 全部用 physical 像素。surface 物理大小 = s_panelW_phys × s_panelH_phys,
+  // layout 物理常量已按 dpr 缩放。
+  const int W = s_panelW_phys;
+  const int H = s_panelH_phys;
+  const int pad = s_panelPadding_phys;
+  const int radius = s_panelRadius_phys;
+
+  // 1a. 圆角 panel 背景 — 浅玻璃冷色,L82-fix:任何背景下都可见
+  HRGN panelRgn = CreateRoundRectRgn(0, 0, W, H, radius, radius);
   FillRgn(hdc, panelRgn, s_hBrushPanelBg);
   DeleteObject(panelRgn);
 
-  // 1b. 1px 边框 — L82-fix: 从 WHITE_BRUSH(浅色桌面隐形)改成 kIcoDimC
-  // (RGB(50,50,60) 深灰,任何背景下可见)。Border RGB 不在 ApplyAlphaGradient 的
-  // "panel bg" 范围 (r>=240 检查不通过),所以 border 保持 opaque alpha=255,
-  // 给 panel 一个**稳定的轮廓**,per-pixel alpha 仅作用于 bg fill。
-  HRGN borderRgn = CreateRoundRectRgn(0, 0, kPanelW, kPanelH, kPanelRadius, kPanelRadius);
-  FrameRgn(hdc, borderRgn, s_hBrushIconDim, 1, 1);
-  DeleteObject(borderRgn);
+  // 1b. 1px 深灰 border — L82-fix:border RGB(50,50,60) opaque 永远可见
+  // L83-fix: FrameRgn 在 sub-100% DPI scale (e.g. dpr=0.667) 下 1px brush = 0.667 physical
+  // = sub-pixel → GDI 不绘制。改用 **RoundRect() with pen + NULL_BRUSH** 画 outline。
+  // RoundRect() 在所有 DPI 下都会画出 outline(因为它是 line primitive,不是 brush
+  // fill)。注意 RoundRect 边界是 (x1, y1) 到 (x2, y2) inclusive,不填内部。
+  // border 宽度至少 1 physical pixel:对于 dpr=0.667,取 2 logical (1.33 physical);
+  // 对于 dpr=1.0,取 1 logical (=1 physical);对于 dpr>=1.5,取 max(1, 1)=1 logical。
+  int borderW = max(1, (int)(1.0f * s_dpr_x + 0.5f));
+  HPEN borderPen = CreatePen(PS_SOLID, borderW, kIcoDimC);
+  if (borderPen) {
+    HPEN oldPen = (HPEN)SelectObject(hdc, borderPen);
+    HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    RoundRect(hdc, 0, 0, W - 1, H - 1, radius, radius);
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(borderPen);
+  }
 
-  // 1c. 顶 1px 高光 (设计: top highlight 用白 0.85 alpha)
-  RECT topHL = {kPanelRadius, 0, kPanelW - kPanelRadius, 1};
+  // 1c. 顶部 2px 高光 (L83 mac 风格:顶部反射,白色)
+  // 物理缩放:min 1px (低 DPI 不能画 0px)
+  int hlHeight = max(1, (int)(2 * s_dpr_y + 0.5f));
+  RECT topHL = {radius, 0, W - radius, hlHeight};
   FillRect(hdc, &topHL, s_hBrushHighlight);
+
+  // 1d. 底部 1px 阴影 (L83 mac 风格:底部阴影线)
+  int shHeight = max(1, (int)(1 * s_dpr_y + 0.5f));
+  RECT botShadow = {radius, H - shHeight, W - radius, H};
+  FillRect(hdc, &botShadow, s_hBrushShadow);
 
   // 2. 画 logo (Fluxing 红色猿猴)
   // L81-fix: 用 AlphaBlend + AC_SRC_ALPHA 替代 BitBlt(SRCCOPY)。
@@ -479,54 +558,33 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   //
   // L81-fix2: 大 PNG (700x700) 中心裁切。
   // L82-fix: 小 PNG (20x20 用户实际 logo `fluxing-logo_small.png`) 用全画布
-  // + AlphaBlend 拉伸 (20→56)。GDI AlphaBlend 自带线性拉伸,这是 WIC + AlphaBlend
-  // 路径相对 StretchBlt(SRCCOPY 剥 alpha) 的优势。
+  // 2. 画 logo (Fluxing 红色猿猴)
+  // L83-fix: 用 IWICBitmapScaler 在 WIC 阶段把 PNG 预缩放到 brand area 大小
+  // (s_brandSize_phys),AlphaBlend 1:1 不需要拉伸。**GDI AlphaBlend 不支持拉伸**
+  // (MS docs 显式说),所以必须预缩放。L82 误以为 AlphaBlend 会拉伸。
   if (s_hBmpLogo) {
     HDC hdcMemLogo = CreateCompatibleDC(hdc);
     if (hdcMemLogo) {
       HGDIOBJ prev = SelectObject(hdcMemLogo, s_hBmpLogo);
-      BITMAP bm = {};
-      GetObject(s_hBmpLogo, sizeof(bm), &bm);
-      int logoW = bm.bmWidth;
-      int logoH = bm.bmHeight;
       BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-
-      // L82: 自适应 source rect
-      // - 大 logo (>= 2x brand area):中心裁切 (避免空白边缘)
-      // - 小 logo (< 2x brand area):全画布 + AlphaBlend 拉伸到 kBrandSize
-      int srcL, srcT, srcW, srcH;
-      if (logoW >= kBrandSize * 2 && logoH >= kBrandSize * 2) {
-        // 大 logo:中心裁切
-        srcL = (logoW - kBrandSize) / 2;
-        srcT = (logoH - kBrandSize) / 2;
-        srcW = kBrandSize;
-        srcH = kBrandSize;
-      } else {
-        // 小 logo:全画布拉伸
-        srcL = 0;
-        srcT = 0;
-        srcW = logoW;
-        srcH = logoH;
-      }
-
+      // AlphaBlend src/dst 都是 s_brandSize_phys → 1:1 复制
       AlphaBlend(hdc,
-                 kPanelPadding, kPanelPadding,
-                 kBrandSize, kBrandSize,
+                 pad, pad, s_brandSize_phys, s_brandSize_phys,
                  hdcMemLogo,
-                 srcL, srcT, srcW, srcH,
+                 0, 0, s_brandSize_phys, s_brandSize_phys,
                  bf);
       SelectObject(hdcMemLogo, prev);
       DeleteDC(hdcMemLogo);
     }
   }
 
-  // 3. 画 5 个按钮
+  // 3. 画 5 个按钮 — L83-fix: 用 s_*_phys 常量
   // L79-fix: hover 只改 icon stroke 颜色(不画 bg 填充,符合 v3-rev3 设计)
   // active: bg 橙渐变 + icon 白
-  int buttonStartX = kPanelPadding + kBrandSize + 4;
+  int buttonStartX = pad + s_brandSize_phys + max(1, (int)(4 * s_dpr_x + 0.5f));
   for (int i = 0; i < 5; i++) {
-    int x0 = buttonStartX + i * (kBtnSize + 2);
-    int y0 = kPanelPadding;
+    int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
+    int y0 = pad;
 
     bool isActive = (i == s_activeIdx);
     bool isHover = (i == s_hoveredIdx);
@@ -535,8 +593,8 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     if (isActive) bgBrush = s_hBrushActive;  // active: 橙
 
     if (bgBrush) {
-      HRGN rgn = CreateRoundRectRgn(x0, y0, x0 + kBtnSize, y0 + kBtnSize,
-                                     kBtnRadius, kBtnRadius);
+      HRGN rgn = CreateRoundRectRgn(x0, y0, x0 + s_btnSize_phys, y0 + s_btnSize_phys,
+                                     s_btnRadius_phys, s_btnRadius_phys);
       FillRgn(hdc, rgn, bgBrush);
       DeleteObject(rgn);
     }
@@ -547,8 +605,8 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     else iconPen = s_hPenIconDim;
     HPEN oldPen = (HPEN)SelectObject(hdc, iconPen);
 
-    int iconX = x0 + (kBtnSize - kIcoSize) / 2;
-    int iconY = y0 + (kBtnSize - kIcoSize) / 2;
+    int iconX = x0 + (s_btnSize_phys - s_icoSize_phys) / 2;
+    int iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2;
     switch (i) {
       case 0: DrawIconSchema(hdc, iconX, iconY); break;
       case 1: DrawIconPhrase(hdc, iconX, iconY); break;
@@ -564,15 +622,13 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
 // 把 32-bit DIB 的 alpha 通道从默认 alpha=255 (GDI 写入默认) 改成 liquid glass 形状:
 // - 圆角外 (corner & outside) alpha = 0 → 桌面可见
 // - 圆角内,RGB == 纯白 (panel bg / border / top highlight): 按 y 渐变
-//   top alpha=kAlphaPanelTop (140 = 0x88),bot alpha=kAlphaPanelBot (82 = 0x52)
-//   Linear interpolate by row ratio
 // - 圆角内,RGB 含色 (icons / logo / active orange bg): 保留 alpha=255 (opaque 图形)
 //
-// 为什么按 RGB 区分?GDI Brush 没有 alpha 通道,在 32-bit BI_BITFIELDS DIB 上画出来一律
-// alpha=255。区分 bg vs icon 的廉价办法是看 RGB:panel bg 是 WHITE_BRUSH,纯白;
-// icons 用 kIcoDimC(60,60,67)/kAccentC(255,95,49)/kAccent2C(155,81,224),非纯白;
-// logo 是 fluxing 品牌色 PNG,非纯白; 边框 1px white — 仅 border 这一处会被设成 alpha=gradient
-// (轻量损失,1px 的 opaque vs 半透明差异肉眼几乎不可察)。
+// L83-fix: 使用 GDI 的 `PtInRegion(rgn)` 判定 inside/outside,不是手算 IsInsideRoundedRect。
+// 原因:sub-100% DPI scale (e.g. dpr=0.667) 下,`CreateRoundRectRgn(0,0,W,H,r,r)` 实际 rgn
+// 跟数学 r² 圆不完全一致(尤其在 corners 圆弧),导致 IsInsideRoundedRect 数学判断
+// 比 GDI 的 rgn 更严格(认为 outside 的 pixel,GDI 反而认为 inside — 已被 FillRgn
+// 填 panel bg)。直接用 PtInRegion(rgn, x, y) 完全匹配 GDI 实际填充区域。
 void QuickPanelDialog::ApplyAlphaGradient() {
   if (!s_hBmpMem || s_panelW_phys <= 0 || s_panelH_phys <= 0) return;
   BITMAP bm = {};
@@ -581,47 +637,33 @@ void QuickPanelDialog::ApplyAlphaGradient() {
   DWORD* p = static_cast<DWORD*>(bm.bmBits);
   const int W = s_panelW_phys;
   const int H = s_panelH_phys;
-  const int r = kPanelRadius;
+  const int r = s_panelRadius_phys;
   const int Hminus1 = (H > 1) ? (H - 1) : 1;
 
+  // 复用 CreateRoundRectRgn 创建的 region,让 GDI 自己判断 inside/outside
+  HRGN panelRgn = CreateRoundRectRgn(0, 0, W, H, r, r);
+
   for (int y = 0; y < H; y++) {
-    // linear gradient: alpha = top at y=0 → bottom at y=H-1
-    // 用定点数 (16.16) 避免浮点 perf 抖动,但小数足够小用整数足够精确
     int aPanel = kAlphaPanelTop +
                  ((int)(kAlphaPanelBot - kAlphaPanelTop) * y / Hminus1);
 
     for (int x = 0; x < W; x++) {
       DWORD* px = &p[(size_t)y * W + x];
-      if (!IsInsideRoundedRect(x, y, W, H, r)) {
-        *px = 0;  // alpha=0 (BGRA all zero) — fully transparent (桌面可见)
+      if (!PtInRegion(panelRgn, x, y)) {
+        *px = 0;
         continue;
       }
-      // 圆角内:RGB 是 panel bg 浅玻璃色 → 渐变 alpha (panel bg)
-      // L82-fix: 之前判 `r >= 250 && g >= 250 && b >= 250` 配纯白 panel bg。
-      // 现在 panel bg = kBgTop = RGB(245,245,250) 浅玻璃冷色,放宽阈值到
-      // `r >= 240 && g >= 240 && b >= 240`,确保 panel bg (245,245,250) 命中
-      // gradient alpha,top highlight (255,255,255) 也命中。
-      //
-      // L82-fix2: **else 分支必须强制设 alpha=255**。原因:GDI 在 32-bit BI_BITFIELDS
-      // DIB 上,MoveTo/LineTo (pen) 和 FrameRgn (border brush) 写入 RGB 但
-      // **alpha = 0**(它们不管理 alpha 通道)。只有 FillRgn/FillRect 写 alpha=255。
-      // 如果我们 leave-as-is,icon lines + border 都是 alpha=0 → 完全透明,
-      // 用户看不到。这是 v0.19.0.11 user 反馈的"border transparent"的根因。
-      // 修复:else 分支强制设 alpha=255 保留 RGB,让所有非-bg 像素(border, icons,
-      // logo, active bg) 保持完全 opaque,配合 gradient panel bg 形成
-      // **深色 border 在浅色 bg 上明显可见** 的视觉差。
       BYTE r8 = (*px >> 16) & 0xFF;
       BYTE g8 = (*px >> 8)  & 0xFF;
       BYTE b8 =  *px        & 0xFF;
       if (r8 >= 240 && g8 >= 240 && b8 >= 240) {
-        // panel bg / top highlight:gradient alpha + 保留 RGB
         *px = ((DWORD)aPanel << 24) | (r8 << 16) | (g8 << 8) | b8;
       } else {
-        // border / icons / logo / active bg:opaque alpha=255 + 保留 RGB
         *px = 0xFF000000u | (r8 << 16) | (g8 << 8) | b8;
       }
     }
   }
+  DeleteObject(panelRgn);
 }
 
 // RepaintLayered: v0.19.0.10 新 layered surface 提交。
@@ -664,6 +706,21 @@ void QuickPanelDialog::RepaintLayered(HWND hwnd) {
     // v0.19.0.11 L81 diag: dump TWO files for full verification
     // (a) qp-dump.bmp = s_hBmpMem (panel after RepaintLayered)
     // (b) qp-logo.bmp = s_hBmpLogo (raw logo bitmap from LoadLogoWIC)
+    // (c) qp-state.txt = s_hoveredIdx / s_activeIdx / s_panelW_phys at paint time
+    {
+      HANDLE hf = CreateFileW(L"F:\\soft\\00selfmade\\rime_claude\\qp-state.txt",
+                              GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (hf != INVALID_HANDLE_VALUE) {
+        DWORD written;
+        char mb[256];
+        int len = _snprintf_s(mb, _TRUNCATE,
+          "state: hovered=%d active=%d panelW=%d panelH=%d dpr=%.3f radius_phys=%d\n",
+          s_hoveredIdx, s_activeIdx, s_panelW_phys, s_panelH_phys, s_dpr_x, s_panelRadius_phys);
+        WriteFile(hf, mb, len, &written, nullptr);
+        CloseHandle(hf);
+      }
+    }
     BITMAP bm = {};
     if (GetObject(s_hBmpMem, sizeof(bm), &bm) && bm.bmBits) {
       HANDLE f = CreateFileW(L"F:\\soft\\00selfmade\\rime_claude\\qp-dump.bmp",

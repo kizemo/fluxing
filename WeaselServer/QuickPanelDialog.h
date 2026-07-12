@@ -87,11 +87,12 @@ class QuickPanelDialog {
 
   // ===== GDI 资源(无 D2D,无 GDI+) =====
   static HBITMAP  s_hBmpLogo;        // Fluxing logo PNG → HBITMAP (WIC 解码)
-  static HBRUSH   s_hBrushPanelBg;   // panel 背景(白色半透)
+  static HBRUSH   s_hBrushPanelBg;   // panel 背景(浅玻璃冷色)
   static HBRUSH   s_hBrushIconDim;   // 默认图标色(中灰)
   static HBRUSH   s_hBrushIconAccent;// hover 色(品牌橙)
   static HBRUSH   s_hBrushActive;    // active 背景(橙→紫)
   static HBRUSH   s_hBrushHighlight; // 顶部高光
+  static HBRUSH   s_hBrushShadow;    // 底部阴影 (L83 mac 风格)
   static HPEN     s_hPenIconDim;
   static HPEN     s_hPenIconAccent;
   static HPEN     s_hPenHighlight;
@@ -100,9 +101,27 @@ class QuickPanelDialog {
   static int       s_panelW_phys;     // panel 物理像素宽
   static int       s_panelH_phys;     // panel 物理像素高
 
-  // 几何常量(物理像素,not logical)
+  // L83-fix: DPI 缩放(scale 全部几何常量到 physical pixels)
+  // 之前 v0.19.0.0~0.12 直接用 logical kPanelW=360 / kBtnSize=56 等 GDI 坐标,在 sandbox
+  // 显示器为 sub-100% DPI scale (Windows 自动缩放窗口到 240x45 physical) 时,
+  // 所有 drawing 用 logical 360 但 surface 只有 240 wide → icons 2-4 出界、HitTest
+  // 错位、logo 看不见。修:dpr_x = s_panelW_phys / kPanelW,所有 _phys 常量按 dpr
+  // 缩放(整除,>=1)。
+  static float     s_dpr_x;            // panel dpr x = s_panelW_phys / kPanelW
+  static float     s_dpr_y;            // panel dpr y = s_panelH_phys / kPanelH
+  static int       s_panelPadding_phys;
+  static int       s_btnSize_phys;
+  static int       s_icoSize_phys;
+  static int       s_btnRadius_phys;
+  static int       s_brandSize_phys;
+  static int       s_panelRadius_phys;
+  static int       s_btnGap_phys;      // 按钮之间 2px 间距
+
+  // 设计几何常量 (logical pixels, design — 360x68 panel)
+  // 注意:**不要**直接用这些 GDI 坐标;用 _phys 等版本(运行时按 dpr 缩放)。
   static constexpr int kPanelPadding = 8;
   static constexpr int kBtnSize      = 56;
+  static constexpr int kBtnGap       = 2;
   static constexpr int kIcoSize      = 30;
   static constexpr int kBtnRadius    = 14;
   static constexpr int kBrandSize    = 56;
