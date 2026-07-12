@@ -165,6 +165,7 @@ bool     QuickPanelDialog::s_mouseTracked = false;
 bool     QuickPanelDialog::s_dragging     = false;   // L87-fix 手动 drag 状态
 POINT    QuickPanelDialog::s_dragStartCursor = {0, 0}; // L87-fix drag 开始时 cursor
 RECT     QuickPanelDialog::s_dragStartWindow = {0, 0, 0, 0}; // L87-fix drag 开始时 window pos
+int      QuickPanelDialog::s_outsideMs     = 0;      // L89-fix: 鼠标在 panel 外累计 ms
 int      QuickPanelDialog::s_alpha        = 255;
 int      QuickPanelDialog::s_targetAlpha  = 255;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onSchema;
@@ -490,13 +491,26 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
     // (L83 sandbox 验证 hovered 实际仍 -1 即使我们 SendMessage WM_MOUSEMOVE)。
     // Polling GetCursorPos + ScreenToClient 自己查鼠标位置,绕过 WM 投递。
     case WM_TIMER: {
-      if (w == 2) {  // hover polling timer (id 2)
+      if (w == 2) {  // hover polling timer (id 2, 100ms) — 同时负责 auto-hide
         POINT p;
         if (GetCursorPos(&p) && ScreenToClient(hwnd, &p)) {
           int hit = HitTest(p.x, p.y);
           if (hit != s_hoveredIdx) {
             s_hoveredIdx = hit;
             InvalidateRect(hwnd, NULL, FALSE);
+          }
+          // L89-fix: auto-hide 当鼠标在 panel 外超过 1.5 秒。之前 v0.19.0.18 panel
+          // 显示后没有 auto-hide 时机(WS_EX_NOACTIVATE 收不到 OnKillFocus),挡 user
+          // 输入区 → "无法输入中文"。修复:polling timer 检查 hit==-1 (panel 外)
+          // 时累加 s_outsideMs,达到 1500ms 自动 Hide。
+          if (hit == -1 && !s_dragging) {
+            s_outsideMs += 100;
+            if (s_outsideMs >= 1500) {
+              s_outsideMs = 0;
+              Hide();
+            }
+          } else {
+            s_outsideMs = 0;
           }
         }
         return 0;

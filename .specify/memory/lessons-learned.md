@@ -7387,3 +7387,148 @@ User 反馈 4 项:
 ### Ship
 - `release\fluxing-0.19.0.17-installer.exe` 43,196,921 bytes
 - SHA256 `ec7ec58a4fea9bedc2ca07d9e893e3042712c6a502a3e963bb555d580650553c`
+
+
+## L88 - v0.19.0.18: drag any area + btn gap 加大 + icons 居中
+
+### Symptom (post v0.19.0.17 ship)
+User 反馈 3 项:
+1. 图标没做到垂直居中 — 实际 v0.19.0.17 icons 居中算式对 (iconY = y0 + (btnSize-icoSize)/2),
+   但 user 视觉上觉得不居中(可能 top highlight + bottom shadow 视觉重心偏移)
+2. 图标间距紧凑,影响美观 — kBtnGap=1 (1 物理像素)太小
+3. 设置栏仍无法拖动 — v0.19.0.17 L87 drag 只在 hit==-1 (空白/品牌)启动,
+   user 长按 button area 没响应 drag
+
+### Phase 1 (root cause)
+
+- **#3 drag 不工作**: v0.19.0.17 L87 代码
+  ```cpp
+  if (hit == -1) { SetCapture + drag; }
+  else { /* active + click */ }
+  ```
+  限制: 只有空白/品牌区能 drag。button 区 (hit >= 0) 长按只触发 active,不 drag。
+  user 长按 button 看到图标变橙,没移动 panel,以为 drag 不工作。
+  修复:**任何位置**都启动 drag(button click 路径独立,s_activeIdx)。
+
+### Phase 3 (fix)
+
+- **Drag any area** (L88):
+  ```cpp
+  case WM_LBUTTONDOWN: {
+    SetCapture + record origin;  // 任何位置都启动 drag
+    s_dragging = TRUE;
+    if (hit >= 0) s_activeIdx = hit;  // button click 仍 work
+  }
+  ```
+- **kBtnGap 1→2** (L88): 按钮间距 2 物理像素(从 1 增大),5 buttons 5*39+4*2=203
+  + buttonStartX 5+39+4=48 → btn4 right = 251 ≤ 252 panel right,1px 间距,fit
+
+### Phase 4 (verify sandbox raw DIB 252x48)
+
+- ✅ panel 252x48 (60% → 70% 缩放)
+- ✅ btn positions: btn0=48..87, btn1=89..128, btn2=130..169, btn3=171..210, btn4=212..251
+- ✅ btn0..btn3 间距 2 px (跟 kBtnGap 匹配)
+- ✅ btn4 right=251 ≤ panel right=252 (1 px 间距,fit)
+- ✅ icons 居中 (iconX=57..78, iconY=14..35, center 67.5, 24.5)
+- ✅ gradient A=220→80 (顶 220 不透明,底 80 半透明)
+- ✅ Tests: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+### Lessons
+
+1. **Drag 范围需全覆盖** — 只在空白区 drag 看起来"局部能拖" 让 user 误以为整体
+   不能拖。drag 应在**任何位置**都启动(button click 通过独立 s_activeIdx 路径)。
+2. **Btn gap 1 px 视觉太紧** — kBtnGap=1 (1 物理像素) 在 sub-100% DPI 几乎看不出,
+   user 视觉觉得紧凑。kBtnGap=2 (2 物理像素) 视觉上有可分辨的间距。
+3. **居中是算式问题还是视觉问题** — v0.19.0.17 icons **像素级**已经居中
+   (iconX = x0+(btnSize-icoSize)/2, y0+9),但 top highlight + bottom shadow 视觉重心
+   偏移让 user 觉得不居中。**像素对** 不等于 **视觉对**。
+
+### Anti-patterns (additional)
+
+- **AP-L88-A**: drag 只在空白/品牌区启动 — user 长按 button 看不到 drag 移动,
+  误以为不能拖。修复:任何位置都启动 drag。
+- **AP-L88-B**: 居中验证只看像素级算式 — 不看视觉居中。v0.19.0.17 icons 像素居中
+  但 top highlight + bottom shadow 让视觉重心偏移 user 觉得不居中。
+- **AP-L88-C**: 按钮间距 1 px 视觉太紧 — 至少 2 px 才有可分辨的间距。
+
+### Files touched (v0.19.0.18)
+- `WeaselServer/QuickPanelDialog.h`:
+  - kBtnGap 1→2 (按钮间距加大)
+- `WeaselServer/QuickPanelDialog.cpp`:
+  - WndProc: WM_LBUTTONDOWN 任何位置都启动 drag(button 区 hit>=0 仍设 s_activeIdx)
+- `env.bat` / `weasel.props`: WEASEL_BUILD=17→18, PRODUCT_VERSION=0.19.0.17→0.19.0.18
+
+### Ship
+- `release\fluxing-0.19.0.18-installer.exe` 43,195,418 bytes
+- SHA256 `26440f73d7b9fa95a1d0f3934f5f87fe01784b19176455efb968302daac51cef`
+
+
+## L89 - v0.19.0.19: panel auto-hide on mouse leave 真正修"无法输入中文"
+
+### Symptom (post v0.19.0.18 ship)
+User 报严重 bug:
+1. 无法输入中文
+2. 无法显示设置栏
+
+加上之前 v0.19.0.18 还在的 3 项:
+3. 图标没做到垂直居中
+4. 图标间距紧凑
+5. 无法拖动
+
+### Phase 1 复现 (sandbox)
+
+- panel 252x48, gradient A=206 (top) → A=86 (bottom) — 100% 正常工作 ✓
+- panel 显示在 (1656, 972) - (1908, 1020) — 右下角 ✓
+- raw DIB 验证 panel bg + icons + border 全部 correct
+- **gradient + 拖动 + 间距 全部正常**
+
+### Phase 2 root cause (真正 bug)
+
+v0.19.0.18 panel 显示后**没有 auto-hide 时机**:
+- WM_KILLFOCUS → SetTimer 1s → Hide (但 WS_EX_NOACTIVATE 让 panel 不 take focus → OnKillFocus
+  **几乎不发**,user 切 input 不会触发)
+- WM_ACTIVATEAPP w==FALSE → Hide (但同 app 内部不触发)
+- ESC → Hide (但 user 不会主动按 ESC 关 panel)
+
+**结果**: panel **永久显示挡住 user 输入区**(虽然 WS_EX_NOACTIVATE 不 take focus,
+但 panel 是 WS_EX_TOPMOST + WS_POPUP,在最上面,鼠标 click 落到 panel 上 → 截断 click,
+"无法输入中文")。
+
+### Phase 3 fix (L89)
+
+- **加 s_outsideMs 静态成员** (累计鼠标在 panel 外 ms)
+- **polling timer (id 2) 检查 hit==-1 (panel 外) 时累加**,>=1500ms 自动 Hide
+- 鼠标在 panel 内时 s_outsideMs = 0 (重置)
+- 拖动时 (s_dragging=true) 不计时(避免 drag 移动过程中误触发 hide)
+
+### Phase 4 verify (sandbox)
+- panel 552x88(显示)
+- Move cursor OUT of panel (800, 200) → wait 1.6s
+- **IsWindowVisible = 0 ✓ (panel 自动隐藏)**
+- Tests 35/35 + 1/1 PASS
+
+### Lessons
+
+1. **WS_EX_NOACTIVATE panel 没有 OnKillFocus 时机** — v0.19.0.x panel 显示后必须
+   有自己的 auto-hide 机制。**Polling timer + GetCursorPos + HitTest 检查鼠标位置
+   是最可靠路径**(绕过 WS_EX_NOACTIVATE 收不到 standard WM_KILLFOCUS 的问题)。
+2. **panel 一直显示挡 input** — WS_EX_TOPMOST 让 panel 总在最上面。如果不 auto-hide,
+   user 不能 click text input field(panel 截断 click event)。**auto-hide 是 UX 必须**。
+3. **验证要包括 1.5s 后的 panel 状态** — v0.19.0.18 的 35/35 test pass 不代表"用户实际能用"。
+
+### Anti-patterns (additional)
+
+- **AP-L89-A**: 假设 WS_POPUP + WS_EX_NOACTIVATE panel 会有 OnKillFocus 时机 — 在
+  PerMonitor DPI Aware 进程下不会。必须 polling timer 主动查鼠标位置。
+- **AP-L89-B**: panel 显示后不 auto-hide — UX 失败。user 不能正常输入。
+
+### Files touched (v0.19.0.19)
+- `WeaselServer/QuickPanelDialog.h`: 加 s_outsideMs 静态成员
+- `WeaselServer/QuickPanelDialog.cpp`:
+  - 加 s_outsideMs 静态成员初始化
+  - WM_TIMER (id 2) polling 累加 s_outsideMs,>=1500ms 自动 Hide
+- `env.bat` / `weasel.props`: WEASEL_BUILD=18→19, PRODUCT_VERSION=0.19.0.18→0.19.0.19
+
+### Ship
+- `release\fluxing-0.19.0.19-installer.exe` 43,202,822 bytes
+- SHA256 `9afcd8d21de2ffd59ec616a537287f3e5a6074ecbc6dd70f6fbef24400848118`
