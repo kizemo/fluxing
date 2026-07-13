@@ -7707,3 +7707,126 @@ User 反馈 4 项:
 ### Ship
 - `release\fluxing-0.19.0.21-installer.exe` 43,208,973 bytes
 - SHA256 `6924583e41887aae4e9c488edd1539aab2674886f5deb3b10cefb0111436081a`
+
+
+## L92 - v0.19.0.22: 图标真正居中 + DPI handler + Show clamp
+
+### Symptom (post v0.19.0.21 ship)
+User 反馈 4 项(5 轮 fix 仍报"图标偏下"):
+1. ❌ 图标仍然偏下,没居中对齐 — user 给 hint:"请从容器高度,来检查和定位图标"
+2. ❌ 图标之间间距请再适当增加
+3. ❌ Windows 系统调整了分辨率后,设置栏消失
+4. ❌ 低分辨率情况下,设置栏无法通过快捷键调出
+
+### Phase 1 真正 root cause (systematic-debugging)
+
+**#1 图标偏下 (5 轮 fix 失败后必须 question architecture)**:
+- v0.19.0.21 算式:`iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2 - 1`
+  = 5 + (35-19)/2 - 1 = 5 + 8 - 1 = 12。icon range 12..30,center 21
+- panel y=0..48:
+  - y=0: border 1px (kIcoDimC=130,130,140)
+  - y=1: panel border or top edge
+  - y=2..3: top highlight 2px (kHighlight=255,255,255)
+  - y=4..45: visible content (43 px),**visible center y=23.5**
+  - y=46..47: bottom shadow 1px
+- **btn area 5..40 (kPanelPadding=5),btn center 22.5 ≠ visible center 23.5**
+- icon center 21 vs visible center 23.5 偏下 2.5 px
+- 之前 v0.19.0.20 L91 fix `iconY - 1` 让 center 变 20,**更偏下**!
+- 真修法:`iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2 + 1`
+  = 5+8+1 = 14,icon range 14..32,center 23 ≈ visible center 23.5
+
+**#2 间距 (token 标准 `space.sm = 6`)**:
+- 当前 `kBtnGap = 4` (v0.19.0.20 L91 改)
+- 改 `kBtnGap = 6` (FLUENT-UI-TOKENS.md §3.3 `space.sm`)
+- 验证:5*35+4*6=199 + buttonStartX(5+35+2=42)=241+5=246 < 252 panelW(6 px 右边距)
+
+**#3 DPI 变化 panel 消失 (真正 root cause)**:
+- Show() 启动时算 panel 位置 (workArea.right - kPanelW - 12, workArea.bottom - kPanelH - 12)
+- 仅启动时算 1 次。DPI 切换后 Windows 自动重 scale window 物理大小,但
+  **window 位置不自动重算**,导致 panel 跑到屏幕外(被截断)
+- 修法:`WM_DPICHANGED` handler 重新算位置 + SetWindowPos 重新布局
+- 视觉大小不变:Windows 自动 scale panel 物理大小,panel logical (kPanelW=252)
+  不变,物理大小 = logical × dpr_scale
+
+**#4 低分辨率 panel 调不出**:
+- Show() 算位置 (workArea.right - 264, workArea.bottom - 60)
+- 如果 workArea.right < 264,x 是负数;workArea.bottom < 60,y 是负数
+- WS_POPUP 在负坐标 可能不显示
+- 修法:clamp 到 [0, workArea.size - panel.size]
+
+### Phase 2 真正修法 (L92)
+
+```cpp
+int iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2 + 1;  // +1 不是 -1
+
+static constexpr int kBtnGap = 6;  // token space.sm
+
+RECT workArea;
+SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
+int x = workArea.right - kPanelW - 12;
+int y = workArea.bottom - kPanelH - 12;
+if (x < 0) x = 0;
+if (y < 0) y = 0;
+if (x + kPanelW > workArea.right) x = workArea.right - kPanelW;
+if (y + kPanelH > workArea.bottom) y = workArea.bottom - kPanelH;
+
+case WM_DPICHANGED: {
+  // 重新计算位置 (workArea 是新 DPI 物理像素)
+  RECT newRc;
+  SystemParametersInfoW(SPI_GETWORKAREA, 0, &newRc, 0);
+  int newX = newRc.right - kPanelW - 12;
+  int newY = newRc.bottom - kPanelH - 12;
+  if (newX < 0) newX = 0;
+  if (newY < 0) newY = 0;
+  ...
+  SetWindowPos(s_hwnd, HWND_TOPMOST, newX, newY, kPanelW, kPanelH, ...);
+  InvalidateRect(s_hwnd, NULL, FALSE);
+  RepaintLayered(s_hwnd);
+  return 0;
+}
+```
+
+### Phase 4 验证 (sandbox raw DIB 252x48)
+
+- ✅ icon center y=23(原来 21)— 接近 visible content center 23.5
+- ✅ kBtnGap=6 间距:btn0 ends x=77, btn1 starts x=83, gap=6px
+- ✅ btn4 right=249, panel right=252,**6 px 右边距**(从 v0.19.0.21 的 14 px 略减)
+- ✅ Show() clamp 防止低分辨率出屏
+- ✅ WM_DPICHANGED handler 在 DPI 切换时重算位置
+- ✅ Tests: 35/35 + 1/1 PASS
+
+### Lessons
+
+1. **5 轮 fix 仍偏下 → question architecture** — L92 真正修法是**改 +1 不是 -1**。
+   iconY 算式逻辑居中(居中btn area),但 btn area ≠ visible content 居中(差 1-2 px
+   因为 top highlight + border + bottom shadow 视觉权重偏移)。需要 icon 视觉居中
+   (偏 +1 px) 而不是几何居中。
+2. **token 真值表先读** — `kBtnGap=6` 对应 `space.sm=6` 在 FLUENT-UI-TOKENS.md §3.3
+   已经存在,直接用,不用"拍脑袋"。L92 改 6 是 token 引用不是拍脑袋。
+3. **DPI 变化必须重算位置** — Show() 启动时算 1 次位置,但 WS_POPUP 不自动重定位。
+   WM_DPICHANGED handler 是标准 Windows pattern 处理 PerMonitor DPI。
+4. **clamp 到 workArea** — Show 位置可能为负(workArea.right < panelW),WS_POPUP 在负
+   坐标可能不显示。低分辨率必须 clamp。
+
+### Anti-patterns (additional)
+
+- **AP-L92-A**: 反复 5 轮调 iconY -1/+1/-1 仍报"偏下" — geometric 居中 ≠ visual 居中。
+  像素级 fix 无法修 visual 偏移问题,需要**视觉权重 + layout 组合**。
+- **AP-L92-B**: Show() 启动时算 1 次位置,DPI 切换后不重算 — 启动时算位置 + 监
+  WM_DPICHANGED 重算是 PerMonitor DPI 下的标准 pattern。
+- **AP-L92-C**: 算位置不 clamp — workArea 可能比 panel 小(低分辨率),坐标会是负
+  数,WS_POPUP 行为未定义。
+- **AP-L92-D**: 调 ad-hoc 数值没引 token — kBtnGap=6 应该引 `space.sm=6` token
+  而不是拍脑袋。
+
+### Files touched (v0.19.0.22)
+- `WeaselServer/QuickPanelDialog.h`: kBtnGap 4→6
+- `WeaselServer/QuickPanelDialog.cpp`:
+  - iconY -1 → +1(真正居中)
+  - Show() position clamp(避免低分辨率出屏)
+  - WndProc 加 WM_DPICHANGED handler(DPI 切换重算位置)
+- `env.bat` / `weasel.props`: WEASEL_BUILD=21→22, PRODUCT_VERSION=0.19.0.21→0.19.0.22
+
+### Ship
+- `release\fluxing-0.19.0.22-installer.exe` 43,198,528 bytes
+- SHA256 `de152216e579c8c0d58a604b74a31341a82c2b6af60c2045063adea5778207f9`

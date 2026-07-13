@@ -411,6 +411,28 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
       if (hit == -1) return HTCAPTION;  // 空白/品牌区 — 拖动
       return HTCLIENT;  // 按钮区 — 正常 click/hover
     }
+    // L92-fix: WM_DPICHANGED 重新计算 panel 位置
+    // Phase 1 root cause:Show() 在启动时计算位置 (workArea.right - kPanelW - 12, ...) 单次。
+    // DPI 切换后 panel 不动,可能出屏。修复:监 WM_DPICHANGED 重新计算并 SetWindowPos。
+    // 保持视觉大小不变(panel logical 尺寸 kPanelW/kPanelH 不变,Windows 自动 scale)。
+    case WM_DPICHANGED: {
+      // 重新计算右下角位置(workArea 是新 DPI 物理像素)
+      RECT newRc;
+      SystemParametersInfoW(SPI_GETWORKAREA, 0, &newRc, 0);
+      int newX = newRc.right - kPanelW - 12;
+      int newY = newRc.bottom - kPanelH - 12;
+      // L92-fix: clamp 到 workArea,避免低分辨率下 panel 出屏
+      if (newX < 0) newX = 0;
+      if (newY < 0) newY = 0;
+      if (newX + kPanelW > newRc.right) newX = newRc.right - kPanelW;
+      if (newY + kPanelH > newRc.bottom) newY = newRc.bottom - kPanelH;
+      SetWindowPos(s_hwnd, HWND_TOPMOST, newX, newY, kPanelW, kPanelH,
+                   SWP_NOZORDER | SWP_NOACTIVATE);
+      // 重新画 panel
+      InvalidateRect(s_hwnd, NULL, FALSE);
+      RepaintLayered(s_hwnd);
+      return 0;
+    }
     case WM_LBUTTONDOWN: {
       POINT p = {LOWORD(l), HIWORD(l)};
       int hit = HitTest(p.x, p.y);
@@ -747,7 +769,11 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     // 重心偏移 — user 持续报"图标不居中"。几何上 icon 已居中(iconY = y0+(btnSize-
     // icoSize)/2),但 top highlight 看起来"亮"占 2px vs bottom shadow "暗"占 1px,视觉
     // 重心偏下 1 px。让 iconY 减 1 让视觉上对称。
-    int iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2 - 1;
+    int iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2 + 1;
+    // L92-fix: iconY 改 + 1 (原 -1)。Phase 1 root cause:btn area 几何 center 22.5
+    // ≠ 可见内容 center 23.5 (top highlight 2px 视觉重心偏下)。
+    // -1 让 icon 移到 y=12, center 21,更偏下。+1 让 icon 移到 y=14, center 23,
+    // 接近可见内容 center 23.5。User 5 轮反馈"图标偏下"→真正修法是 + 1(原 -1 错)。
     switch (i) {
       case 0: DrawIconSchema(hdc, iconX, iconY, penRgb); break;
       case 1: DrawIconPhrase(hdc, iconX, iconY, penRgb); break;
@@ -1017,6 +1043,11 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
   int x = workArea.right - kPanelW - 12;
   int y = workArea.bottom - kPanelH - 12;
+  // L92-fix: clamp 到 workArea,避免低分辨率下 panel 出屏(Phase 1 root cause)
+  if (x < 0) x = 0;
+  if (y < 0) y = 0;
+  if (x + kPanelW > workArea.right) x = workArea.right - kPanelW;
+  if (y + kPanelH > workArea.bottom) y = workArea.bottom - kPanelH;
 
   s_hwnd = CreateWindowExW(
       WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TOPMOST,

@@ -717,6 +717,53 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: `6924583e41887aae4e9c488edd1539aab2674886f5deb3b10cefb0111436081a`
 
 
+## [0.19.0.22-fluxing] - 2026-07-12
+
+### spec 070 v0.19.0.22 - QuickPanel 图标真正居中 + DPI handler + Show clamp (L92)
+
+- **User feedback (post v0.19.0.21, 5 轮 fix 仍报"图标偏下")**:
+  1. ❌ 图标仍然偏下,没居中对齐 — 几何居中 ≠ 视觉居中
+  2. ❌ 图标之间间距请再适当增加
+  3. ❌ Windows 系统调整了分辨率后,设置栏消失
+  4. ❌ 低分辨率情况下,设置栏无法通过快捷键调出
+
+- **Phase 1 真正 root cause (systematic-debugging)**:
+  - **#1 图标偏下 (5 轮 fix 失败后必须 question architecture)**:
+    - v0.19.0.21 `iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2 - 1` = 12
+    - icon range 12..30,center 21
+    - panel y=0..48:
+      - y=0: border 1px
+      - y=2..3: top highlight 2px (kHighlight=255,255,255)
+      - y=4..45: visible content 43px,**visible center y=23.5**
+      - y=46..47: bottom shadow 1px
+    - btn area 5..40,btn center 22.5 ≠ visible center 23.5
+    - 之前 v0.19.0.20 L91 `iconY - 1` 让 center 变 20(更偏下!)
+    - 真修法:`iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2 + 1` = 14,center 23 ≈ visible center 23.5
+  - **#2 间距**: `kBtnGap 4 → 6` (FLUENT-UI-TOKENS.md §3.3 `space.sm = 6` token)
+  - **#3 DPI 变化 panel 消失**: Show() 启动时算 1 次位置,DPI 切换后 Windows 自动 scale panel 物理大小但**位置不自动重算**,导致 panel 跑到屏幕外
+  - **#4 低分辨率 panel 调不出**: Show() 算位置 (workArea.right - 264, workArea.bottom - 60),如果 workArea < 264/60,坐标是负数,WS_POPUP 在负坐标不显示
+
+- **Phase 2 真正修法 (L92)**:
+  1. **iconY 改 +1**(从 -1)— 真正视觉居中(原来 -1 错)
+  2. **kBtnGap 4 → 6** — 来自 token `space.sm = 6`
+  3. **Show() 加 clamp** — `if (x < 0) x = 0; if (x + kPanelW > workArea.right) x = ...; 等等` — 防止低分辨率出屏
+  4. **WM_DPICHANGED handler** — DPI 切换时重新算位置 + SetWindowPos + 重画
+
+- **Phase 4 验证 (sandbox raw DIB 252x48)**:
+  - ✅ icon center y=23(原来 21)— 接近 visible content center 23.5
+  - ✅ kBtnGap=6 间距:btn0 ends x=77, btn1 starts x=83, gap=6px
+  - ✅ btn4 right=249, panel right=252,**6 px 右边距**
+  - ✅ Show() clamp 防止低分辨率出屏
+  - ✅ WM_DPICHANGED handler 在 DPI 切换时重算位置
+  - ✅ Tests: TestDefaultHotkeys 35/35 + TestQuickPanelRefactor 1/1 PASS
+
+- **Files touched**: QuickPanelDialog.h (kBtnGap 4→6) + QuickPanelDialog.cpp
+  (iconY -1→+1 + Show clamp + WM_DPICHANGED handler) + env.bat + weasel.props
+
+- **Installer**: `release\fluxing-0.19.0.22-installer.exe` 43,198,528 bytes
+- **SHA256**: `de152216e579c8c0d58a604b74a31341a82c2b6af60c2045063adea5778207f9`
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)

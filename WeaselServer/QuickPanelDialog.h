@@ -138,7 +138,10 @@ class QuickPanelDialog {
   // icons 19 像素 仍清晰可读(品牌 + 5 个 icon 视觉大小差不多)。
   static constexpr int kPanelPadding = 5;
   static constexpr int kBtnSize      = 35;
-  static constexpr int kBtnGap       = 4;
+  // L92-fix: kBtnGap 4→6 — token `space.sm = 6` (FLUENT-UI-TOKENS.md §3.3)
+  // 5*35+4*6=199 + buttonStartX(5+35+2=42) = 241+5=246 < 252 panelW
+  // (6px 右边距)。5*35=175 buttons + 4*6=24 gaps = 199。
+  static constexpr int kBtnGap       = 6;
   static constexpr int kIcoSize      = 19;
   static constexpr int kBtnRadius    = 10;
   static constexpr int kBrandSize    = 35;
