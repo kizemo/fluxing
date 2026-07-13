@@ -8018,3 +8018,66 @@ L93 之前是"自 fix 自 verify",5 轮 fix 失败。L94 改用**科学辩论**:
 ### Ship
 - `release\fluxing-0.19.0.24-installer.exe` 43,191,326 bytes
 - SHA256 `fa9cf15370dafedcdd953f74bc8f4126e2f538cfab86cb808d32913c7971a7ac`
+
+
+## L95 - v0.19.0.25: 常用短语 UI 完整 ship (Phrase button + Alt+. 热键 + 树形分类)
+
+**User feedback (post v0.19.0.24)**:
+1. ❌ L86 至今 Phrase 按钮 no-op (spec 070 T007),user 期望点击触发常用短语 UI
+2. ❌ 需要 Alt+. 全局热键激活常用短语 UI
+3. ❌ 常用短语需要分类字段(可选),支持 ←/→ 展开/折叠
+
+### 调研方法 (3 个并行 track + 双验收)
+
+跟 L94 同 pattern:
+- spec 042 spec 写完 + user 审批通过
+- Track 2 (实现 PhrasesDialog) + Track 3 (绑定 QuickPanel Phrase 按钮 + WeaselServerApp Alt+. 热键) 并行 dispatch
+- 双验收:Reality Checker + Test Results Analyzer
+- **第 1 轮双验收 FAIL**(ship blocker:Phrase button click 死代码)
+- **第 2 轮修复迭代 + 再验收 PASS**
+
+### Phase 1 根因 (Test Analyzer 找出 ship blocker)
+
+- **L88 drag-any-area + L94 Fix A 组合**让 LButtonUp 几乎总走 if-d 分支 → else 分支 (含 `s_onPhrases` invoke) 死代码 → Phrase 按钮点击永远不触发 PhrasesDialog
+- 副发现:CHANGELOG 缺 v0.19.0.25 条目 (P5 违规) + Test 5 line 300 leak 真 SendInput
+
+### Phase 2 修法 (L95)
+
+1. **drag 分支加 dragThreshold 检测**:mouse 实际位移 ≥ 4 物理像素才算 drag,否则 fall through click 路由 invoke 回调。`s_activeIdx` 在 reset 前用 `oldActiveIdx` 记住 index
+2. **Test 5 删 line 300 leak**:`DefaultInject(L"abc")` 真发 SendInput 改为只调 mock
+3. **CHANGELOG v0.19.0.25 条目**已加
+
+### Phase 4 验证
+
+- ✅ TestPhrasesDialog: 48 PASS / 0 FAIL (Track 2)
+- ✅ TestQuickPanelRefactor: 1/1 PASS
+- ✅ TestQuickPanelDialog: SKIP (已知)
+- ✅ click branch ship blocker 修复 (dragThreshold 4 px 检测)
+- ✅ Test 5 leak 已修
+- ✅ CHANGELOG v0.19.0.25 条目
+
+### Anti-patterns 新增 (L95 教训)
+
+- **AP-L95-A**: L88 drag-any-area 设计让 click 路径几乎走不到。drag 分支必须加 dragThreshold 检测,鼠标未实际位移 fall through 到 click 路由 invoke 回调,不能假设 click 分支会被走到。
+- **AP-L95-B**: 双验收发现 Track 2 单元测试 PASS **不代表集成正确**。Track 2 的 TestPhrasesDialog 48 PASS 不覆盖 Track 3 的 click 分支集成。**集成后必须再 dispatch 集成级双验收**。L94 spec §13 (Ship 顺序) 已经写"双验收",这次严格执行发现 ship blocker,**L94 流程得到验证**。
+- **AP-L95-C**: Mock 函数 + DefaultInject 直接调用 双模式要小心。Mock 测试**只调 mock**,不调 DefaultInject(否则真发)。测试代码注释要写明"不真发 SendInput"以警示后续 contributor。
+- **AP-L95-D**: Test 5 mock 路径应"路径覆盖而非函数覆盖"。spec §11 要求 mock 是为了测试 mock **本身**,不是为了触发真代码路径。Test 5 之前的代码把 DefaultInject 也调了一次,等于同时测了 mock 和真代码,**违反 mock 原则**。
+- **AP-L95-E**: 双路径 click 路由需要抽公共函数。当前 drag 分支和 else 分支都 check `oldActiveIdx==1 / hit==1` 双重 invoke 风险低,但下个版本加 button2-5 callback 时必须抽 `TryInvokeButtonClick(idx)` 共享。
+- **AP-L95-F**: dragThreshold 用物理像素 (4 px) 而非 DPI-scaled,跨 DPI 手感略有差异 (100% → 4 DIP / 150% → 2.67 DIP / 67% → 5.97 DIP)。用户大概率察觉不到 0.5 px 差异,可接受。后续若 user 反馈,改成 DPI-scaled threshold。
+- **AP-L95-G**: 新功能的 visual constants (颜色/几何) 必须**先入 token 表再写代码**(per ui-design-tokens.md 铁律 1)。Track 2 直接在 .cpp 里写 `constexpr COLORREF kBgTop = RGB(245, 245, 248);` 没有先入 token 表,ship 前 fix 时补 token 表(本 L95 修复)。**正确流程**:spec 阶段就建 token entry,代码引用 token 而非 hardcode。L96+ 改进。
+- **AP-L95-H**: User 拆分的需求(track 1/2/3) 不代表可并行度。Track 2 (新建文件) 和 Track 3 (改既有文件) 物理独立,但**集成级 bug** 只能 Track 2+3 都 ship 后才发现 (click 分支死代码)。**双验收是集成验证,不是单元验证**。
+
+### Files touched (v0.19.0.25, 8)
+- `WeaselServer/PhrasesDialog.{h,cpp}` (新建,125 + 917 行)
+- `WeaselServer/QuickPanelDialog.cpp` (drag 分支加 dragThreshold)
+- `WeaselServer/WeaselServerApp.{h,cpp}` (Alt+. 热键 + 子类化拦截 WM_HOTKEY)
+- `WeaselServer/resource.h` (ID_HOTKEY_PHRASES_DOT=9002)
+- `WeaselServer/xmake.lua` (PhrasesDialog.cpp 自动包含)
+- `test/TestPhrasesDialog/TestPhrasesDialog.{cpp,vcxproj}` (新建,48 PASS)
+- `.specify/specs/042-phrases-ui/spec.md` (348 行 spec)
+- `CHANGELOG.md` (v0.19.0.25 条目)
+- `docs/design/FLUENT-UI-TOKENS.md` (§3.6 PhrasesDialog tokens 补)
+
+### Ship
+- `release\fluxing-0.19.0.25-installer.exe` 43,224,112 bytes
+- SHA256 `af238fb193ac6b10e9e1b32a2cee59447f64359b410fdde906055d5cafe13e60`
