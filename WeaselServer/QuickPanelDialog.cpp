@@ -459,7 +459,11 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
       s_dragStartWindow = rc;
       if (hit >= 0) {
         s_activeIdx = hit;  // button click 仍然 work
-        InvalidateRect(hwnd, NULL, FALSE);
+        // L97-fix(Fix A):WS_EX_LAYERED 路径下 InvalidateRect 是死代码
+        // (cpp:1060 注释:layered window 不在那画),必须直接 RepaintLayered。
+        // 之前每像素 mouse 都触发 WM_MOUSEMOVE/InvalidateRect 但 screen 不更新,
+        // 100ms 后 timer 才补画 → hover/active 滞后 + 重叠残留 → icons 扭曲感。
+        RepaintLayered(hwnd);
       }
       return 0;
     }
@@ -481,7 +485,8 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
         int hit = HitTest(p.x, p.y);
         if (hit != s_hoveredIdx) {
           s_hoveredIdx = hit;
-          InvalidateRect(hwnd, NULL, FALSE);
+          // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered,InvalidateRect 死代码。
+          RepaintLayered(hwnd);
         }
         if (!s_mouseTracked) {
           TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
@@ -519,7 +524,8 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
         // reset s_dragging + s_hoveredIdx,没 reset s_activeIdx,导致 PaintOpaqueContent
         // 看到 isActive=true 画橙 bg,永久残留。Fix A:补这一行(对称 else 分支已有)。
         s_activeIdx = -1;
-        InvalidateRect(hwnd, NULL, FALSE);
+        // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered。
+        RepaintLayered(hwnd);
 
         // v0.19.0.25-fix: drag 分支 fall-through click 路由。如果鼠标未实际位移,
         // 等同"按下并释放同一按钮" → invoke 回调。只接 Phrase 按钮 (oldActiveIdx==1),
@@ -543,7 +549,8 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
           }
         }
         s_activeIdx = -1;
-        InvalidateRect(hwnd, NULL, FALSE);
+        // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered。
+        RepaintLayered(hwnd);
       }
       return 0;
     }
@@ -570,7 +577,8 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
           int hit = HitTest(p.x, p.y);
           if (hit != s_hoveredIdx) {
             s_hoveredIdx = hit;
-            InvalidateRect(hwnd, NULL, FALSE);
+            // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered。
+            RepaintLayered(hwnd);
           }
           // L89-fix: auto-hide 当鼠标在 panel 外超过 1.5 秒。之前 v0.19.0.18 panel
           // 显示后没有 auto-hide 时机(WS_EX_NOACTIVATE 收不到 OnKillFocus),挡 user
@@ -603,7 +611,8 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
       s_mouseTracked = false;
       if (s_hoveredIdx != -1) {
         s_hoveredIdx = -1;
-        InvalidateRect(hwnd, NULL, FALSE);
+        // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered。
+        RepaintLayered(hwnd);
       }
       return 0;
     }
