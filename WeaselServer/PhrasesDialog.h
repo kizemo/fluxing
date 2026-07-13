@@ -84,6 +84,25 @@ class PhrasesDialog {
   // 折叠状态:key = category(L"" = 未分类)
   static std::unordered_map<std::wstring, bool> m_expanded;
 
+  // v0.19.0.26-cleanup(issue 2-cleanup):grace 计时 — 移植 QuickPanel L94 (kShowGraceMs=2000)。
+  // Show() 末尾设 s_showTime,WM_ACTIVATEAPP/WM_KILLFOCUS grace 内不立即 Hide。
+  // 移除原 no-op polling timer (cleanup item 2):modal dialog 设计就 Esc/X/Cancel/Enter 关,
+  // 不用 polling,见 lessons-learned "polling 是 no-op"。
+  // kShowGraceMs 走 design-md "show 出来能看一会儿" 期望。
+  static constexpr DWORD kShowGraceMs = 2000;
+  static DWORD s_showTime;       // Show() 时刻(GetTickCount),auto-hide grace
+
+  // v0.19.0.26-cleanup(issue 1-cleanup):HFONT 静态持有,OnDestroy 释放(原 OnCreate 局部变量
+  // 漏 DeleteObject 泄漏 GDI handle)。Segoe UI Variable 失败时 Win32 font mapper
+  // 自动 substitute,见 OnCreate 注释。
+  static HFONT s_hFontUi;
+
+  // v0.19.0.26-fix(issue 2a):Tree 高度自适应,避免 378 > 370 撞 button。
+  // kTreeH 改成 = kDialogH - kTitleH - kBtnH - 3*gap,在 OnCreate 之前算一次。
+  // kTreeH 设计常量保留供 test / 其它 reference 使用,运行时用 kTreeH_phys。
+  static int kTreeH_phys;        // 物理 tree 高度,OnCreate 末尾算
+  static int kBtnY_phys;         // 物理 button 起点 y
+
  private:
   // 内部 helpers(测试可达)
   static std::wstring Trim(const std::wstring& s);

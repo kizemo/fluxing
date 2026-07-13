@@ -8081,3 +8081,92 @@ L93 之前是"自 fix 自 verify",5 轮 fix 失败。L94 改用**科学辩论**:
 ### Ship
 - `release\fluxing-0.19.0.25-installer.exe` 43,224,112 bytes
 - SHA256 `af238fb193ac6b10e9e1b32a2cee59447f64359b410fdde906055d5cafe13e60`
+
+
+## L96 - v0.19.0.26: PhrasesDialog bug fix (grace + mac style + cleanup)
+
+**User feedback (post v0.19.0.25 ship, 2 bug 报告)**:
+1. ❌ 首次 hotkey (Alt+.) 调出 PhrasesDialog 时, panel 短暂消失后第二次才正常
+2. ❌ PhrasesDialog UI 显示不完整, 没有 Add/Edit 等按钮, 不符合 mac 风格
+
+### 调研方法 (5 phase 三角验证)
+
+L96 不仅是 "fix bug",而是建立完整的 ship 前流程:
+- Phase 1: **Investigator** agent 深挖 2 个 bug 真 root cause
+- Phase 2: **Fixer** agent 修两个 bug (grace + mac style 完整化)
+- Phase 3: **三轴验证** — Reality Checker (visual) + Test Results Analyzer (functional) + Code Review (quality)
+- Phase 4: 双验收 FAIL (Code Review 找到 5 个 cleanup blocker)
+- Phase 5: **Cleanup Fixer** 一次清 5 项
+- Phase 6: 再次验证 PASS, build + commit
+
+**Bug 1 根因**:
+- `PhrasesDialog.cpp:352-358` WM_ACTIVATEAPP(wp=FALSE) 无条件 `Hide()`
+- QuickPanel L94 用 polling timer + grace period 修过,但 PhrasesDialog 移植**漏**了 grace 机制
+- 跟前台 app 切换焦点 → WM_ACTIVATEAPP 立即触发 → Hide
+
+**Bug 1 修法**:
+- 加 `kShowGraceMs=2000` + `s_showTime` 静态字段
+- Show() 末尾设 `s_showTime=GetTickCount()`
+- WM_ACTIVATEAPP / WM_KILLFOCUS grace 守卫 `(now-s_showTime) >= kShowGraceMs` 才 Hide
+- (后续 cleanup 删除 no-op timer,grace 守卫已够)
+
+**Bug 2 根因**:
+- **2a UI 不完整**: `kTreeH=340` 太小写死, `btnY=378` 撞 tree 底 370
+- **2b 按钮被覆盖**: OnPaint GradientFill 涂整个 client, 按钮区被涂没
+- **2c mac 风格缺**: WS_CAPTION Windows chrome, 无圆角, 无 hairline
+
+**Bug 2 修法**:
+- `kTreeH_phys` 自适应 (`kDialogH-kTitleH-kBtnH-3*kGap`)
+- WS_CLIPCHILDREN (主窗) + WS_CLIPSIBLINGS (子控件)
+- OnPaint 重构只画 title bar + hairline border (tree/button 让 native 自绘)
+- WS_POPUP 替 WS_CAPTION|WS_SYSMENU + SetWindowRgn 圆角 (radius.lg=14)
+- CreateFontW + WM_SETFONT 应用 Segoe UI Variable
+
+### Phase 4 验证 (第一次) FAIL — Code Review 找的 5 cleanup
+
+1. **HFONT 泄漏** blocker — 局部变量 hfUi, OnDestroy 没 DeleteObject, 每次 Show 泄漏 1 GDI handle
+2. **No-op timer** blocker — polling timer 唯一动作 "in grace 时 reset s_outsideMs=0", s_outsideMs 本来就 0, 100ms 唤醒无功能
+3. **误导注释** "per-pixel alpha 我们自己画" 实际是 LWA_ALPHA=255 uniform
+4. **Dead GetClientRect** — `RECT rc; GetClientRect(hwnd, &rc);` rc 后续没用, 用固定 kDialogH
+5. **Font fallback 假象** — `if (!hfUi) ... CreateFontW` 三层 fallback, 但 Win32 font substitution 让 !hfUi 几乎不成立
+
+### Phase 5 Cleanup (5 项)
+
+1. HFONT 改为 `static HFONT s_hFontUi` + OnDestroy `DeleteObject(s_hFontUi)`
+2. 移除 SetTimer/KillTimer/IDT_PHRASE_POLL/WM_TIMER handler 全套 (modal 不需 polling)
+3. 误导注释改 "uniform alpha 255, per-pixel 由 region 控制"
+4. 删除 dead `RECT rc; GetClientRect(hwnd, &rc);`
+5. Font fallback 注释 "Win32 font mapper 会 substitute"
+
+### Phase 6 验证
+
+- ✅ TestPhrasesDialog: 48 PASS / 0 FAIL
+- ✅ TestQuickPanelRefactor: 1/1 PASS
+- ✅ TestQuickPanelDialog: SKIP (已知)
+- ✅ xmake build WeaselServer: exit=0
+- ✅ NSIS installer: built
+
+### Anti-patterns 新增 (L96 教训)
+
+- **AP-L96-A**: Modal dialog 不需 polling timer。QuickPanel L94 grace mechanism 移植到 modal dialog 时, **只**移植 grace 守卫 (WM_ACTIVATEAPP / WM_KILLFOCUS), **不**移植 polling timer。Modal 设计靠 Esc/X/Cancel 关闭, 无需 auto-hide polling。第一轮 Fixer 多移植 timer 是 dead code, 第二轮 cleanup 删除。
+- **AP-L96-B**: HFONT / HPEN / HBRUSH 等 GDI 资源必须存为 member + OnDestroy `DeleteObject`。CreateFontW 返回 HFONT, Windows GDI **不**自动回收 (不像 HICON 或 HGLOBAL 自动)。局部变量 + scope exit 不是 RAII (GDI 不是 C++ object)。
+- **AP-L96-C**: `CreateFontW` 几乎从不返回 NULL — Win32 font substitution: 请求 "Segoe UI Variable", 系统找不到时 substitute 到 "Segoe UI" 等。`if (!hfUi)` fallback chain 是**假代码**, 装饰而已。真 fallback 需 `EnumFontFamiliesExW` 检测字体存在。
+- **AP-L96-D**: `WS_CAPTION|WS_SYSMENU` 移除后失去系统拖动 + 系统关闭按钮。mac 风格 modal 不需要 (居中显示), 但要拖动需在 `WM_NCHITTEST` 给 title bar 区返回 `HTCAPTION` (QuickPanel L86 模式)。
+- **AP-L96-E**: Layered window 注释要准。`SetLayeredWindowAttributes(LWA_ALPHA=255)` 是 uniform alpha, **不是** per-pixel。RoundRect region 决定窗口形状 (圆角), 区域外不画。RoundRect + uniform 255 alpha 是合法组合, 但注释必须说清。
+- **AP-L96-F**: OnPaint 不能涂覆盖整个 client area — 必须 `WS_CLIPCHILDREN` (主窗) + `WS_CLIPSIBLINGS` (子控件) 让 Windows 自动 clip。如不剪, native 子控件 (button/tree) 被 GDI GradientFill 涂没。
+- **AP-L96-G**: 双验收 + Code Review **三角验证** 很重要。双验收 (Reality+Test) 看到 grace + mac style 正确, 但**功能测试看不到资源泄漏、死代码、误导注释**。Code Review 抓 5 个 cleanup issue — L96 流程价值证明。
+- **AP-L96-H**: clean code 必须 ship 前做, 不能 "functionally works = ship"。三个 verifier (Reality+Test+Review) 三轴覆盖 = correctness + behavior + quality。L95 ship 时只有双验收, 漏掉了 Code Review, 所以 v0.19.0.25 有 HFONT leak + 误导注释留到 v0.19.0.26。**L96 起加 Code Review 入 ship 前流程**。
+- **AP-L96-I**: 端口不一致的子控件坐标算错。直接 `kTreeH = 340` 写死 → btnY 撞 tree底 → 自适应公式 `kDialogH-kTitleH-kBtnH-3*kGap` 才稳。任何 layout 常量应**派生**而非**写死**。QuickPanel L94 已用 `_phys` 模式 (logical → dpr scaled), PhrasesDialog 没继承, L96 引入 `_phys` 模式。
+- **AP-L96-J**: release/ 目录应该只含 installer .exe。test exe/lib/exp/pdb 是 build 临时文件,**不该** commit 也不会 commit (untracked), 但应在 ship 前 `rm -f` 清掉 — v0.19.0.26 实施时已清掉 12 个临时文件。
+
+### Files touched (v0.19.0.26, 5)
+- `WeaselServer/PhrasesDialog.h` (grace 字段 + HFONT 静态成员)
+- `WeaselServer/PhrasesDialog.cpp` (grace 守卫 + mac style + cleanup 5 项)
+- `release/fluxing-0.19.0.26-installer.exe` (43.2 MB)
+- `build-v0_19_0_26.py` (新)
+- `CHANGELOG.md` (v0.19.0.26 条目)
+- `release/` 清理: 移除 12 个临时 test artifacts
+
+### Ship
+- `release\fluxing-0.19.0.26-installer.exe` 43,220,232 bytes
+- SHA256 `92ffc5e2d14d2d90ca57fdce9e9249e2fd8e2fbc086f843711cba31ac78572f0`
