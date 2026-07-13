@@ -110,6 +110,7 @@ class QuickPanelDialog {
   static float     s_dpr_x;            // panel dpr x = s_panelW_phys / kPanelW
   static float     s_dpr_y;            // panel dpr y = s_panelH_phys / kPanelH
   static int       s_panelPadding_phys;
+  static int       s_btnYOffset_phys;   // v0.19.0.24 新增:Y 方向按钮起点(=(kPanelH-kBtnSize)/2,dpr 缩放)
   static int       s_btnSize_phys;
   static int       s_icoSize_phys;
   static int       s_btnRadius_phys;
@@ -123,31 +124,52 @@ class QuickPanelDialog {
   static POINT     s_dragStartCursor;   // 拖动开始时 cursor screen pos
   static RECT      s_dragStartWindow;   // 拖动开始时 window screen pos
   static int       s_outsideMs;         // L89-fix: 鼠标在 panel 外的累计毫秒(>=1500→Hide)
+  static DWORD     s_showTime;          // v0.19.0.24-fix:Show() 时刻(GetTickCount),auto-hide grace
 
-  // 设计几何常量 (logical pixels, design — 360x68 panel)
+  // 设计几何常量 (logical pixels)。
   // 注意:**不要**直接用这些 GDI 坐标;用 _phys 等版本(运行时按 dpr 缩放)。
-  // L90-fix: panel 整体 70% (v0.19.0.16 是 60% — user 反馈"宽度偏小,右侧图标离
-  // 右边框过近,图标间距也小")。
-  // 70% 比例: 360*0.7=252, 68*0.7=47.6→48
-  // L90-fix2: kBtnGap 改 3 (v0.19.0.19 是 2,user 仍报"紧凑")。kBtnSize 同步缩
-  // 37 (从 39),让 5*37 + 4*3 = 185+12 = 197 + buttonStartX(5+37+5=47) = 244 < 252
-  // panel right。btn4 right = 47 + 4*40 = 207, + 37 = 244, + 5 = 249 < 252 (3 px 右边距)
-  // 60% 比例: 56*0.66=37, 30*0.66=20, 14*0.66=9.2→10, 8*0.66=5.3→5
-  // L91-fix2: kBtnSize 37→35 (从 37 缩 2 px,让 btn4 右边距 7→14 px 增大)。
-  // 5*35+4*4 = 191+5+35+2=233 — 14 px 右边距(比 v0.19.0.20 的 9 px 还大)。
-  // icons 19 像素 仍清晰可读(品牌 + 5 个 icon 视觉大小差不多)。
-  static constexpr int kPanelPadding = 5;
-  static constexpr int kBtnSize      = 35;
-  // L92-fix: kBtnGap 4→6 — token `space.sm = 6` (FLUENT-UI-TOKENS.md §3.3)
-  // 5*35+4*6=199 + buttonStartX(5+35+2=42) = 241+5=246 < 252 panelW
-  // (6px 右边距)。5*35=175 buttons + 4*6=24 gaps = 199。
-  static constexpr int kBtnGap       = 6;
-  static constexpr int kIcoSize      = 19;
-  static constexpr int kBtnRadius    = 10;
-  static constexpr int kBrandSize    = 35;
-  static constexpr int kPanelRadius  = 20;
-  static constexpr int kPanelW       = 252;
-  static constexpr int kPanelH       = 48;
+  //
+  // v0.19.0.24-fix(issue 1+2):user 反馈 v0.19.0.23 后"按钮偏上 + 间距不够"。
+  // 几何重算:
+  //   - issue 1 按钮偏上:btn y0 之前用 pad=5,但 (48-35)/2=6.5 取整 6 才让 btn 几何
+  //     中心 23.5 接近 panel 中心 24。新增 `kPanelVPadding = (kPanelH - kBtnSize) / 2 = 6`,
+  //     跟 `kPanelPadding=5` 区分(X/Y 独立 padding)。
+  //   - issue 2 间距+3:user 再要 +3 px。保守路线保留 rightPad=16 不变,扩 panelW:
+  //     pad 5 + brand 35 + brandGap 2 + 5*35 + 4*kBtnGap + 16 = 5+35+2+175+4*kBtnGap+16
+  //     = 233 + 4*kBtnGap;kBtnGap=14 → 233+56=289
+  //   激进备选(§3.2.3):kPanelW=277,rightPad=4,user 觉得 289 太宽时切回
+  static constexpr int kPanelPadding = 5;          // X 方向 padding (L93,v0.19.0.24 不变)
+  static constexpr int kPanelVPadding = 6;         // v0.19.0.24 新增:Y 方向 padding=(48-35)/2
+  static constexpr int kBtnSize      = 35;         // v0.19.0.24 不变
+  static constexpr int kBtnGap       = 14;         // v0.19.0.24:11→14 (L93 6→11→14 累计 +8)
+  static constexpr int kIcoSize      = 19;         // L93:30→19
+  static constexpr int kBtnRadius    = 10;         // L93:14→10
+  static constexpr int kBrandSize    = 35;         // L93:56→35
+  static constexpr int kPanelRadius  = 20;         // L93:28→20
+  static constexpr int kPanelW       = 289;        // v0.19.0.24:277→289 (保守 +12 = 4×3 gap)
+  static constexpr int kPanelH       = 48;         // L93:68→48
+  // v0.19.0.24 新增:Show() 后 auto-hide grace period(毫秒)。
+  // 之前 L89-fix 直接累加 outsideMs,Show 启动时 cursor 在 panel 外 → 1.5s 内 Hide。
+  // 改:Show 时记 s_showTime,polling timer 在 (now - s_showTime) < kShowGraceMs 时
+  // 不累加 outsideMs。2s = 跟 design-md "show 出来能看一会儿" 期望。
+  static constexpr DWORD kShowGraceMs = 2000;
+
+  // L93-fix(图标真视觉居中根本 fix,7 轮 fudge ±1 失败的原因):
+  // 所有 DrawIcon* 描线 viewBox:Schema X[5..25] Y[8..22] / Phrase X[5..25] Y[5..25] /
+  // Symbols X[3..27] Y[6..24] / Settings X[4..26] Y[4..26] / Account X[5..25] Y[5..28]。
+  // 所有 5 个 icon 的 X bbox mid = 15,前 4 个 Y bbox mid = 15,Account Y bbox mid = 16.5
+  // (肩弧延到 y+28)。统一用 kIconBboxCyOff=15(Account 1.5 px 视觉差可忽略)。
+  // 之前 7 轮 fix 都用 `iconX = x0 + (s_btnSize_phys - s_icoSize_phys) / 2 ± 1`,
+  // 假设 icon visual bbox = kIcoSize box(19×19)。错!实际描线 bbox 21..25×15..24
+  // 中心在 viewBox (15, 15),远大于 kIcoSize box。这导致:btn 35 时 iconX = x0 + 8,
+  // bbox X 落在 [x0+13..x0+33],bbox mid 23 vs btn mid 17.5 → 偏右 5.5 px(等同
+  // user 报告"水平未居中,图标居于右下角")。Y 同样:iconY = y0 + 9,bbox Y [y0+17..y0+31],
+  // mid y0+24 vs btn mid y0+17.5 → 偏下 6.5 px。
+  // 真正修法:iconX = x0 + btn_center − bbox_center × dpr。
+  //   btn=35, dpr=1: iconX = x0 + 17.5 − 15 = x0 + 2.5(bbox 真正居中)
+  //   旧算法:iconX = x0 + 8(偏右 5.5)。ico bbox X [x0+7.5..x0+27.5] mid x0+17.5(btn mid 一致)。
+  static constexpr int kIconBboxCxOff = 15;        // L93 新增:icon visual bbox X 中心(viewBox 局部)
+  static constexpr int kIconBboxCyOff = 15;        // L93 新增:icon visual bbox Y 中心(Account 略 16,统一 15)
 
   // 颜色(0xAABBGGRR)
   // L90-fix: 边框颜色降低深度 — user 反馈"边框颜色深度太深"。

@@ -168,6 +168,7 @@ bool     QuickPanelDialog::s_dragging     = false;   // L87-fix 手动 drag 状�
 POINT    QuickPanelDialog::s_dragStartCursor = {0, 0}; // L87-fix drag 开始时 cursor
 RECT     QuickPanelDialog::s_dragStartWindow = {0, 0, 0, 0}; // L87-fix drag 开始时 window pos
 int      QuickPanelDialog::s_outsideMs     = 0;      // L89-fix: 鼠标在 panel 外累计 ms
+DWORD    QuickPanelDialog::s_showTime      = 0;      // v0.19.0.24:Show() 时刻 grace 计时
 int      QuickPanelDialog::s_alpha        = 255;
 int      QuickPanelDialog::s_targetAlpha  = 255;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onSchema;
@@ -197,6 +198,7 @@ int      QuickPanelDialog::s_panelH_phys  = 0;
 float    QuickPanelDialog::s_dpr_x        = 1.0f;
 float    QuickPanelDialog::s_dpr_y        = 1.0f;
 int      QuickPanelDialog::s_panelPadding_phys = 0;
+int      QuickPanelDialog::s_btnYOffset_phys = 0;  // v0.19.0.24 新增
 int      QuickPanelDialog::s_btnSize_phys  = 0;
 int      QuickPanelDialog::s_icoSize_phys  = 0;
 int      QuickPanelDialog::s_btnRadius_phys = 0;
@@ -380,11 +382,20 @@ int QuickPanelDialog::HitTest(int x, int y) {
   int brandX = padding;
   int brandY = padding;
   if (x >= brandX && x < brandX + s_brandSize_phys && y >= brandY && y < brandY + s_brandSize_phys) return -2;  // brand
+  // L93-fix:brand→btn gap 从 max(1,4*dpr) 修正为 max(2,2*dpr) — 跟 PaintOpaqueContent
+  // 的 `buttonStartX = pad + s_brandSize_phys + max(2,2*dpr)` 保持一致。L91 改
+  // PaintOpaqueContent 时漏 HitTest,导致 HitTest 算的 button0 起点 (44 when dpr=1)
+  // 跟 visual button0 起点 (42 when dpr=1) 偏右 2 px,点击 button0 最左 2 px 区域
+  // 走 HTCAPTION 拖动而非 click。Fix。
   int buttonStartX = padding + s_brandSize_phys +
-                     max(1, (int)(4 * s_dpr_x + 0.5f));
+                     max(2, (int)(2 * s_dpr_x + 0.5f));
   for (int i = 0; i < 5; i++) {
     int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
-    if (x >= x0 && x < x0 + s_btnSize_phys && y >= padding && y < padding + s_btnSize_phys) return i;
+    // v0.19.0.24-fix(issue 1):Y 范围从 `padding`(kPanelPadding=5 X padding)改 `s_btnYOffset_phys`
+    // (=(kPanelH-kBtnSize)/2=6 dpr 缩放),跟 PaintOpaqueContent 的 y0 同步,避免 paint
+    // 跟 hit 区域错位。L93 时 y0=pad=5 跟 HitTest 的 `y >= padding` 一致,所以未暴露 bug;
+    // v0.19.0.24 改 y0=6 后必须同步 HitTest,否则按钮视觉下移 1 px 但 click hit 上 1 px。
+    if (x >= x0 && x < x0 + s_btnSize_phys && y >= s_btnYOffset_phys && y < s_btnYOffset_phys + s_btnSize_phys) return i;
   }
   return -1;
 }
@@ -486,6 +497,11 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
         ReleaseCapture();
         // drag 结束后清 hover
         s_hoveredIdx = -1;
+        // v0.19.0.24-fix(issue 3):补 s_activeIdx = -1。L88-fix (cpp:449) 让 LButtonDown
+        // 无条件 s_dragging=TRUE,所以 LButtonUp 几乎总走 if-d 分支;之前 if-d 分支只
+        // reset s_dragging + s_hoveredIdx,没 reset s_activeIdx,导致 PaintOpaqueContent
+        // 看到 isActive=true 画橙 bg,永久残留。Fix A:补这一行(对称 else 分支已有)。
+        s_activeIdx = -1;
         InvalidateRect(hwnd, NULL, FALSE);
       } else {
         POINT p = {LOWORD(l), HIWORD(l)};
@@ -527,7 +543,13 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
           // 显示后没有 auto-hide 时机(WS_EX_NOACTIVATE 收不到 OnKillFocus),挡 user
           // 输入区 → "无法输入中文"。修复:polling timer 检查 hit==-1 (panel 外)
           // 时累加 s_outsideMs,达到 1500ms 自动 Hide。
-          if (hit == -1 && !s_dragging) {
+          // v0.19.0.24-fix(issue 4):Show() 后 grace period (kShowGraceMs=2000ms)。
+          // 之前 L89-fix 无 grace,首次 Show 时 cursor 还在 panel 外,直接 1.5s 内 Hide。
+          // 修法:在 grace 期间 (now - s_showTime) < kShowGraceMs 不累加 outsideMs,
+          // 但 polling 仍更新 s_hoveredIdx(让 user 移 cursor 进 panel 时立即 hover)。
+          DWORD nowTick = GetTickCount();
+          bool inGrace = (nowTick - s_showTime) < kShowGraceMs;
+          if (hit == -1 && !s_dragging && !inGrace) {
             s_outsideMs += 100;
             if (s_outsideMs >= 1500) {
               s_outsideMs = 0;
@@ -584,6 +606,8 @@ LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
     return v < 1 ? 1 : v;
   };
   s_panelPadding_phys  = scale_x(kPanelPadding);
+  // v0.19.0.24-fix(issue 1):Y 方向 padding 独立算,scale_y 让跨 DPI 跟随
+  s_btnYOffset_phys    = scale_y(kPanelVPadding);
   s_btnSize_phys       = scale_x(kBtnSize);
   s_icoSize_phys       = scale_y(kIcoSize);
   s_btnRadius_phys     = scale_x(kBtnRadius);
@@ -661,10 +685,13 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     DeleteObject(borderPen);
   }
 
-  // 1c. 顶部 2px 高光 (L83 mac 风格:顶部反射,白色)
-  // 物理缩放:min 1px (低 DPI 不能画 0px)
-  int hlHeight = max(1, (int)(2 * s_dpr_y + 0.5f));
-  RECT topHL = {radius, 2, W - radius, 2 + hlHeight};
+  // 1c. 顶部 1px 高光(L83 mac 风格:顶部反射,白色) — L93-fix(v0.19.0.23):
+  // 物理缩放:min 1px(低 DPI 不能画 0px)。
+  // 历史:v0.19.0.18 之前只占 1 物理像素(y=1 那行),v0.19.0.20 误改 2 px 让 icons
+  // 视觉偏下。L93 (v0.19.0.23 撤销的 wrong 方案) 也回 1 px — **v0.19.0.23 保留
+  // 这次 1 px 修改**(同时改了真正的 icon 居中算法,1px highlight 不再需要 ±1 fudge)。
+  int hlHeight = max(1, (int)(1 * s_dpr_y + 0.5f));
+  RECT topHL = {radius, 1, W - radius, 1 + hlHeight};
   FillRect(hdc, &topHL, s_hBrushHighlight);
 
   // 1d. 底部 1px 阴影 (L83 mac 风格:底部阴影线)
@@ -716,7 +743,11 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   int buttonStartX = pad + s_brandSize_phys + max(2, (int)(2 * s_dpr_x + 0.5f));
   for (int i = 0; i < 5; i++) {
     int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
-    int y0 = pad;
+    // v0.19.0.24-fix(issue 1):Y 起点改用 s_btnYOffset_phys(=(kPanelH-kBtnSize)/2 dpr 缩放)。
+    // 之前 y0=pad=5,btn at y=[5..40] 距顶 5 距底 8 偏上 1.5 px。改 y0=6 → btn at
+    // y=[6..41] 距顶 6 距底 7(整数下最接近对称);btn 中心 23.5 vs panel 中心 24,差 0.5 px
+    // 不可避免(48-35=13 奇数,1 px 离散)。同步 HitTest Y 范围。
+    int y0 = s_btnYOffset_phys;
 
     bool isActive = (i == s_activeIdx);
     bool isHover  = (i == s_hoveredIdx);
@@ -764,16 +795,33 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
                     isHover  ? kAccentC :
                                kIcoDimC;
 
-    int iconX = x0 + (s_btnSize_phys - s_icoSize_phys) / 2;
-    // L91-fix: iconY 上移 1 px 补偿 top highlight (2px) + bottom shadow (1px) 视觉
-    // 重心偏移 — user 持续报"图标不居中"。几何上 icon 已居中(iconY = y0+(btnSize-
-    // icoSize)/2),但 top highlight 看起来"亮"占 2px vs bottom shadow "暗"占 1px,视觉
-    // 重心偏下 1 px。让 iconY 减 1 让视觉上对称。
-    int iconY = y0 + (s_btnSize_phys - s_icoSize_phys) / 2 + 1;
-    // L92-fix: iconY 改 + 1 (原 -1)。Phase 1 root cause:btn area 几何 center 22.5
-    // ≠ 可见内容 center 23.5 (top highlight 2px 视觉重心偏下)。
-    // -1 让 icon 移到 y=12, center 21,更偏下。+1 让 icon 移到 y=14, center 23,
-    // 接近可见内容 center 23.5。User 5 轮反馈"图标偏下"→真正修法是 + 1(原 -1 错)。
+    // L93-fix(v0.19.0.23,7 轮 ±1 fudge 失败的根本修法):
+    // 真正视觉居中 = 把每个 icon 的 viewBox bbox 中心对准按钮中心。
+    // 之前 7 轮 fix 一直在 fudge `iconX = x0 + (s_btnSize_phys - s_icoSize_phys)/2 ± 1`,
+    // 假设 icon visual bbox = 19×19 (kIcoSize box)。错!DrawIcon* 描线实际 bbox:
+    //   Schema X[5..25] Y[8..22]    → mid (15, 15)
+    //   Phrase X[5..25] Y[5..25]    → mid (15, 15)
+    //   Symbols X[3..27] Y[6..24]   → mid (15, 15)
+    //   Settings X[4..26] Y[4..26]  → mid (15, 15)
+    //   Account X[5..25] Y[5..28]   → mid (15, 16.5)
+    // 实际 bbox 21..25 × 15..24,中心 (15, 15),远大于 icoSize box(19)。btn=35 时
+    // 旧算法 iconX = x0+8,bbox X 落 [x0+13..x0+33],mid 23 vs btn mid 17.5 → 偏右 5.5
+    // px(等同 user "水平未居中,图标居于右下角")。Y 同样 ±1 fudge 后 = x0+9,bbox Y
+    // [y0+17..y0+31],mid y0+24 vs btn mid y0+17.5 → 偏下 6.5 px。
+    // 任何 ±1 fudge 都不可能让 35-btn 中心对齐 21-wide bbox 中心。
+    //
+    // 真修法:iconX = x0 + s_btnSize_phys/2 − kIconBboxCxOff(不 × dpr)
+    //        iconY = y0 + s_btnSize_phys/2 − kIconBboxCyOff(不 × dpr)
+    // kIconBboxCxOff=15 是**屏幕像素**不是 viewBox logical 比例 — 因为 DrawIcon*
+    // 内部坐标(5, 25 等)是 raw pixel 偏移,不乘 dpr。所以居中常量也用 raw pixel。
+    // btn=35 dpr=1:iconX = x0 + 17.5 − 15 = x0 + 2.5(int truncation: 17 - 15 = 2),
+    // bbox X [x0+7..x0+27] mid x0+17(int 中点),btn pixel mid x0+17 ✓。
+    // dpr=1.5:s_btnSize=53,iconX = x0 + 26 − 15 = x0 + 11,bbox [x0+16..x0+36] mid x0+26
+    // (int 中点),btn pixel mid x0+26 ✓(53/2 = 26.5,int mid = 26)。
+    // 跨 DPI 都对齐。注意:icon 描线 raw pixel 不缩放,设计固定 5..25 宽度 (20 px)
+    // 在所有 DPI 都一样,designer 刻意 — 高 DPI 不会按比例放大,保持视觉清晰度。
+    int iconX = x0 + s_btnSize_phys / 2 - kIconBboxCxOff;
+    int iconY = y0 + s_btnSize_phys / 2 - kIconBboxCyOff;
     switch (i) {
       case 0: DrawIconSchema(hdc, iconX, iconY, penRgb); break;
       case 1: DrawIconPhrase(hdc, iconX, iconY, penRgb); break;
@@ -1025,6 +1073,12 @@ void QuickPanelDialog::Show(bool currentFullwidth,
     // L81-fix: reuse 路径也强制置顶(防止其他窗口在 hide→show 间隙盖上面板)
     SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    // v0.19.0.24-fix(issue 4):reuse 路径也要重置 grace period 和 outsideMs。
+    // 之前 Hide() reset 了 outsideMs,但 Show() 复用路径没 reset,导致第二次 Show
+    // 立刻累加 outsideMs 到 1500 再 Hide。同时 s_showTime 必须更新,grace period
+    // 重新计时。
+    s_showTime = GetTickCount();
+    s_outsideMs = 0;
     // v0.19.0.10: layered path — InvalidateRect 无意义,直接重画提交
     RepaintLayered(s_hwnd);
     return;
@@ -1068,6 +1122,13 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   // L84-fix: 启动 hover polling timer (id=2, 100ms)。绕过 WS_EX_LAYERED 下 WM_MOUSEMOVE
   // 投递不可靠问题(L83 sandbox 验证)。Hide() 时 KillTimer。
   SetTimer(s_hwnd, 2, 100, NULL);
+  // v0.19.0.24-fix(issue 4):首次 Show 也设 s_showTime,reset s_outsideMs。
+  // L89-fix auto-hide 用 s_outsideMs 累加,首次 Show 时 cursor 还在 panel 外,直接
+  // 累加到 1500ms → Hide。Fix:Show 启动 grace period (kShowGraceMs=2000ms),polling
+  // timer 在 (now - s_showTime) < grace 时不累加 outsideMs。s_outsideMs reset 保证
+  // 不带旧值。
+  s_showTime = GetTickCount();
+  s_outsideMs = 0;
   RepaintLayered(s_hwnd);  // 第一次提交 layered surface (带渐变 alpha)
 }
 

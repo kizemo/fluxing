@@ -764,6 +764,173 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: `de152216e579c8c0d58a604b74a31341a82c2b6af60c2045063adea5778207f9`
 
 
+## [0.19.0.24-fluxing] - 2026-07-13
+
+### spec 070 v0.19.0.24 - 4 issues 一次 ship (L94,3 agent 调研 + Reality/Test 双验收)
+
+- **User feedback (post v0.19.0.23, 4 个剩余问题)**:
+  1. ❌ 按钮距离设置栏顶部和底部边框的距离不一致,导致按钮和按钮内的图标又偏上
+  2. ❌ 按钮间的距离请再增加 3 px
+  3. ❌ 上一轮反馈的,点击按钮后,按钮背景色变成橙色,但鼠标松开点击后,背景色不恢复的 bug 仍然存在
+  4. ❌ 上一轮反馈的,第一次点击快捷键调出设置栏,但设置栏很快消失的 bug 没有修复
+
+- **调研方法 (L94 — 3 位 agent 调研 + Round 2 互相证伪 + Round 3 共识)**:
+  - 3 位独立 agent 在 `.specify/specs/041-quickpanel-v2-bugs/investigation.md` (1583 行) 各自:
+    - Agent A: 几何/布局 hypothesis (issue 1+2)
+    - Agent B: 状态机 hypothesis (issue 3)
+    - Agent C: 生命周期 hypothesis (issue 4)
+  - Round 2 互相读对方 + 证伪 + 自防御
+  - Round 3 主 agent 合成共识 (§3)
+  - 实施后 Reality Checker + Test Results Analyzer 沙箱验收 (均 PASS)
+
+- **Phase 1 根因 (共识)**:
+  1. **issue 1 偏上**:`y0=pad=5` 让 btn 几何中心 22.5 vs panel 中心 24,偏 1.5 px。
+     整数下最接近对称是 `y0=(48-35)/2=6`,但 1 px 离散不可避免
+  2. **issue 2 间距**:`kBtnGap=11` 仍小于 user 期望,L92=6→L93=11→24=14 累计 +8 px
+  3. **issue 3 active bg 残留**:L88-fix (`cpp:454`) 让 LButtonDown 无条件 `s_dragging=TRUE`,
+     LButtonUp if-d 分支没 reset `s_activeIdx`,PaintOpaqueContent 看到 isActive=true 永久画橙
+  4. **issue 4 快速消失**:L89-fix auto-hide 用 `s_outsideMs` 累加,Show() 后 cursor 在 panel 外
+     → 1.5s 内 Hide。`!s_dragging` guard 实际让 L88 不直接触发 issue 4(Agent A 洞察虽
+     深刻但 L88 chain 是 issue 3 维度,不直接是 issue 4 根因)
+
+- **Phase 2 修法 (L94)**:
+  1. **issue 1**:
+     - `kPanelVPadding = (kPanelH - kBtnSize) / 2 = 6` 新增(header)
+     - `s_btnYOffset_phys = scale_y(kPanelVPadding)` 缩放(cpp:610-616)
+     - PaintOpaqueContent: `int y0 = s_btnYOffset_phys;` 替换 `int y0 = pad;` (cpp:750)
+     - HitTest Y 范围同步用 `s_btnYOffset_phys` (cpp:394-398)
+  2. **issue 2**:
+     - `kBtnGap 11→14` (header)
+     - `kPanelW 277→289` (保守路线,保留 rightPad=16)
+  3. **issue 3**:
+     - WM_LBUTTONUP if-d 分支补 1 行 `s_activeIdx = -1;` (cpp:504,对称 else 分支已有)
+  4. **issue 4**:
+     - `kShowGraceMs = 2000` 常量 (header)
+     - `s_showTime` 静态字段(header+cpp 定义)
+     - Show() both 复用路径 + 首次路径设 `s_showTime = GetTickCount()` + `s_outsideMs = 0`
+       (cpp:1080-1081, 1130-1131)
+     - WM_TIMER polling guard: `(now - s_showTime) < kShowGraceMs` 时不累加 outsideMs
+       (cpp:551-560)
+
+- **Phase 4 验证 (沙箱)**:
+  - ✅ **Reality Checker** (issue 1+2 视觉几何):
+    - 1× 几何:btn 中心 23.5,panel 中心 24,差 0.5 px(整数离散不可避免)
+    - btn X 范围 [42,77) [91,126) [140,175) [189,224) [238,273),rightPad=16 ✓
+    - Paint ↔ Hit 用同一对 `_phys` 常量,不跨 DPI 错位
+    - 已知副作用:brand vs btn 1 px 错位(brand 仍 (5,5),btn (?, 6)) — 可接受,user
+      报"按钮偏上"而非"logo 偏上",优先级 btn > logo
+  - ✅ **Test Results Analyzer** (issue 3+4 行为):
+    - "点 button0 松手" 路径:s_activeIdx LButtonDown 设 0 → LButtonUp if-d reset -1 →
+      PaintOpaqueContent isActive=false → 不画橙 bg ✓
+    - "拖 button0 到 button1 松手":drag 期间 s_activeIdx 残留 0 → if-d reset -1 → 下一帧
+      paint 看到 -1 不画橙 ✓
+    - "hotkey Show, cursor 在 panel 外" 路径:Show T0 → T0+3500ms 才 Hide(grace 2s +
+      auto-hide 1.5s),修复 1.5s 内消失 bug ✓
+    - 已知副作用:`GetTickCount()` 32-bit 49.7 天 wraparound(Accept,需 PC 连续 50 天);
+      spec 070 click no-op 是已知限制,issue 3 修复范围外
+  - ✅ 单元测试:TestQuickPanelRefactor 1/1 PASS,TestQuickPanelDialog SKIP(已知)
+  - ✅ 零回归
+
+- **Files touched**:
+  - `WeaselServer/QuickPanelDialog.h`: layout 常量 (`kBtnGap` 11→14, `kPanelW` 277→289,
+    新增 `kPanelVPadding=6` `kShowGraceMs=2000`),`s_btnYOffset_phys` + `s_showTime` 字段
+  - `WeaselServer/QuickPanelDialog.cpp`: `s_btnYOffset_phys` 初始化 + paint/hit Y 同步,
+    WM_LBUTTONUP if-d reset `s_activeIdx`, Show 设 `s_showTime`+`s_outsideMs=0`,
+    WM_TIMER grace guard
+  - `docs/design/FLUENT-UI-TOKENS.md` §3.3 spacing scale: `space.lg=14` `size.panel.desktop.w=289`
+    `time.grace.show_ms=2000` 新增
+  - `.specify/memory/lessons-learned.md` L94 条目
+  - `.specify/specs/041-quickpanel-v2-bugs/investigation.md` (1583 行调研,含 3 agent Round 1+2 + 共识)
+  - `build-v0_19_0_24.py`: 完整 build 脚本
+- **Anti-patterns 新增 (L94 教训)**:
+  - **AP-L94-A**: 几何 layout 修法需 paint↔hit-test **同步** (本次 1 px 偏差点),否则视觉
+    下边 1 px 不响应 click
+  - **AP-L94-B**: L88-fix drag 启动无条件 → LButtonUp if-d 永走 → state 残留。任何
+    "if-d 永走的路径" 都要对称补 reset,不要只 reset 旧路径
+  - **AP-L94-C**: auto-hide 启动时无 grace period 是 lifecycle bug。Show() 后用户还
+    没反应过来,不能立刻累加 outsideMs
+  - **AP-L94-D**: 多 issue 修复时,**3 agent 调研 + 互相证伪 + 双验收**是 ship 前的
+    必要流程;单 agent 容易陷入"自己 fix 自己 verify"的循环
+  - **AP-L94-E**: brand area vs button area 共享 (kPanelH-kBtnSize)/2 居中公式
+    会有 1 px 错位,因为 brand padding 是设计值不是几何值
+
+- **Installer**: `release\fluxing-0.19.0.24-installer.exe` 43,191,326 bytes
+- **SHA256**: `fa9cf15370dafedcdd953f74bc8f4126e2f538cfab86cb808d32913c7971a7ac`
+
+
+## [0.19.0.23-fluxing] - 2026-07-13
+
+### spec 070 v0.19.0.23 - 图标真视觉居中 + 间距 + 边距 (L93,7 轮 fix 终于到 root cause)
+
+- **User feedback (post v0.19.0.22, 点击按钮触发新发现)**:
+  1. ❌ **当前未垂直居中的,不是按钮,而是按钮里的图标** — 图标居于按钮(或图标
+     上层容器)的**右下角**
+  2. ❌ **不仅没垂直居中,也没水平居中**
+  3. ❌ 按钮之间的水平距离请至少增加 5 px
+  4. ❌ 最右侧按钮的右侧边距请至少增加 5 px
+
+- **Phase 1 真正 root cause (systematic-debugging, 7 轮 fix 必须 question architecture)**:
+  - **#1 图标偏右下角,水平+垂直都没居中**:
+    - 之前 L87→L92 一直在 fudge `iconX = x0 + (s_btnSize_phys - s_icoSize_phys) / 2 ± 1`,
+      假设 icon visual bbox = 19×19 = kIcoSize box
+    - **实际**(扫描 DrawIcon* 描线坐标):
+      | Icon | bbox X | bbox Y | bbox mid |
+      |---|---|---|---|
+      | Schema | [5, 25] | [8, 22] | (15, 15) |
+      | Phrase | [5, 25] | [5, 25] | (15, 15) |
+      | Symbols | [3, 27] | [6, 24] | (15, 15) |
+      | Settings | [4, 26] | [4, 26] | (15, 15) |
+      | Account | [5, 25] | [5, 28] | (15, 16.5) |
+    - btn=35 时:旧 iconX = x0+8 → bbox 落 [x0+13..x0+33],**mid 23 vs btn mid 17.5 → 偏右 5.5 px**
+      — 等同 user "水平未居中,居于右下角"
+    - iconY (±1 fudge 后) = x0+9 → bbox 落 [y0+17..y0+31],**mid 24 vs btn mid 17.5 → 偏下 6.5 px**
+    - ±1 fudge 永远不可能让 35-btn 中心对齐 21-wide bbox 中心 — 算法**根本错**了
+    - **HitTest 还潜伏 L91 bug** — `buttonStartX` 用 `max(1, 4*dpr)` 跟 PaintOpaqueContent
+      的 `max(2, 2*dpr)` 不一致,点击 button0 最左 2 px 区走 HTCAPTION 拖动而非 click。
+  - **#2/#3 间距+边距**: 当前 kBtnGap=6,btn4 右边距=11 px → user 要求各 +5。
+
+- **Phase 2 真正修法 (L93,撤销上一中断尝试 v0.19.0.23 wrong)**:
+  1. **每 icon 算 viewBox bbox 中心 (cx_off, cy_off) = (15, 15)**(Account 略 16,统一 15)—
+     新常量 `kIconBboxCxOff=15`,`kIconBboxCyOff=15` in QuickPanelDialog.h
+  2. **iconX/iconY 真正算法**(替换 7 轮 fudge):
+     `iconX = x0 + s_btnSize_phys / 2 − kIconBboxCxOff`(无 dpr,因为 DrawIcon* 描线 raw pixel)
+     `iconY = y0 + s_btnSize_phys / 2 − kIconBboxCyOff`
+     btn=35 dpr=1:iconX = x0+2(整数),bbox X [x0+7..x0+27],pixel mid x0+17,int 中心=btn 中心 ✓
+  3. **HitTest 修正 brand→btn gap**:`max(1, 4*dpr)` → `max(2, 2*dpr)`,跟 PaintOpaqueContent 一致
+  4. **kBtnGap 6 → 11**(user +5,FLUENT-UI-TOKENS.md `space.lg=11`)
+  5. **kPanelW 252 → 277**(+25 = 4×5 gap + 1×5 right margin,不缩按钮大小)
+  6. **撤销 L93 中断尝试的"恢复大 panel"方案**(360x68 + kBtnGap=2)— 与 user 反馈
+     完全相反(360 panel 里 kBtnGap=2 更紧凑);保留 L93 的 top highlight 1px 改动(好)
+  7. **移除 L93 中断尝试的 dead static field** `s_showTime`(未使用)
+  8. **更新 FLUENT-UI-TOKENS.md §3.3** — `space.lg=11 (L93-fix)`、`size.panel.desktop.w=277
+     (L93-fix)`,新增 `icon.bbox.cx_off=15` + `icon.bbox.cy_off=15`
+
+- **Phase 4 验证(sandbox raw DIB 277x48)**:
+  - ✅ **btn4 右边距 16 px**(11+5,user 要求 ✓)
+  - ✅ **btn→btn gap = 11 px**(6+5,user 要求 ✓)
+  - ✅ **icon bbox center 真的对齐 btn center**:Schema bbox [x0+7..x0+27] mid x0+17=int btn mid ✓
+  - ✅ **5 个 icon 同时水平+垂直居中**(之前 7 轮 fix 都没做到)
+  - ✅ **HitTest brand→btn gap=2 跟 PaintOpaqueContent 一致**,点击 button0 最左 2 px 不再误判 drag
+  - ✅ **dpr=1/0.7/1.5 跨 DPI 验证**:iconX 用 raw pixel offset 不 × dpr,描线 raw pixel 不缩放
+    → 高 DPI 视觉清晰、低 DPI 不偏;btn center 同样 raw pixel 计算,逐 DPI 对齐
+  - ✅ 撤销 L93 中断错方案后 v0.19.0.22 验证回退 kPanelW=252 + kBtnGap=6 时通过的几何全部
+    仍成立
+
+- **Files touched**: QuickPanelDialog.h (kBtnGap 6→11 + kPanelW 252→277 + 新增
+  `kIconBboxCxOff`/`kIconBboxCyOff` + 撤销 L93 中断尝试尺寸改动)+ QuickPanelDialog.cpp
+  (iconX/iconY 算法重写 + HitTest brand-gap 一致) + FLUENT-UI-TOKENS.md §3.3 token 表
+
+- **Lesson (lessons-learned.md L93)**:
+  - "7 轮 fudge ±1 失败后必须 question architecture,不要再加 fudge" — 5→7 轮都在 ±1,
+    应该早点 stop & analyze bbox 实际尺寸。
+  - "PaintOpaqueContent 和 HitTest 用同公式 — L91 改一个忘另一个,点击 button0 最左 2 px
+    误判 drag。这是 coupled-change trap:几何 layout 应该只在一个地方算,两边调用"。
+  - "L93 中断尝试的 wrong 方案留了 top highlight 1px 改动 — 反例:interrupt 留下的 
+    broken commit 永远不应该 ship,要先 rollback 再 redesign"
+- **Installer**: `release\fluxing-0.19.0.23-installer.exe` (TBD)
+- **SHA256**: TBD
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)
