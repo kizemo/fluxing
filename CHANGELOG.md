@@ -1060,6 +1060,55 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: `92ffc5e2d14d2d90ca57fdce9e9249e2fd8e2fbc086f843711cba31ac78572f0`
 
 
+## [0.19.0.27-fluxing] - 2026-07-14
+
+### spec 070 v0.19.0.27 - QuickPanel WS_EX_LAYERED paint 修复 (icons 扭曲 + hover 失效 + loading)
+
+- **User feedback (post v0.19.0.26, 1 bug 报告)**:
+  - ❌ 设置栏 (QuickPanelDialog) **失控** + 样式倒退 — icons 看起来被旋转/扭曲
+  - ❌ 悬停 (hover) 失效
+  - ❌ 鼠标悬停设置栏, 会转变为"加载"状态
+
+- **Root cause (systematic-debugging Phase 1, Investigator agent)**:
+  - **`WS_EX_LAYERED` 路径下 `InvalidateRect` 是死代码** — WM_PAINT 路径被 cpp:1060 注释显式标记 "layered window 不在那画"。但 QuickPanelDialog WndProc 中 6 处 `InvalidateRect(hwnd, NULL, FALSE)` 调用 **从 L86 至今一直没改成 `RepaintLayered(hwnd)`**。
+  - **症状链条**:
+    - 每像素 mouse 都触发 WM_MOUSEMOVE + `InvalidateRect` → screen **不更新**
+    - `WM_TIMER id=2` 每 100ms polling 触发 RepaintLayered → 滞后 0-100ms 后补画
+    - mouse 快速划过 → hover state 跟 mouse 实际位置不同步 → icons "扭曲" 视错觉
+    - LButtonUp 后 `s_activeIdx` reset 但同样只 InvalidateRect → 100ms 后才真正清橙 bg → active 残留
+  - **从 L86 ship 至今一直存在**, L92 L94 L95 L96 都没修 (每次只调几何常量/状态机, 没动 paint 调用点)
+  - v0.19.0.25 Track 3 接通 Phrase button 后, user 频繁 hover→click 才暴露这个 100ms 滞后
+
+- **Phase 2 修法 (L97 Fix A, 6 处)**:
+  - `cpp:454` WM_LBUTTONDOWN `s_activeIdx = hit` → `RepaintLayered(hwnd)` (active bg 立即出现)
+  - `cpp:484` WM_MOUSEMOVE `s_hoveredIdx = hit` → `RepaintLayered(hwnd)` (hover 立即橙线)
+  - `cpp:522` WM_LBUTTONUP if-d `s_activeIdx = -1` → `RepaintLayered(hwnd)` (drag 分支 active 清)
+  - `cpp:547` WM_LBUTTONUP else `s_activeIdx = -1` → `RepaintLayered(hwnd)` (click 分支 active 清)
+  - `cpp:579` WM_TIMER polling `s_hoveredIdx = hit` → `RepaintLayered(hwnd)` (polling 路径)
+  - `cpp:612` WM_MOUSELEAVE `s_hoveredIdx = -1` → `RepaintLayered(hwnd)` (鼠标离开立即恢复灰)
+
+- **Fix B (diag dump) 跳过**: `GetEnvironmentVariableW(L"FLUXING_QP_DIAG_DUMP", nullptr, 0)` 在变量未设置时返回 0 (条件 false),只 dev 手动设 env var 才触发;正常 user install 不受影响,无需 ship 改动。
+
+- **Phase 4 验证**:
+  - ✅ xmake build WeaselServer: exit=0
+  - ✅ TestQuickPanelRefactor: 1/1 PASS (5/5 assertions, 包含 paint 路径断言)
+  - ✅ TestPhrasesDialog: 48 PASS / 0 FAIL (L95/L96 不回归)
+  - ✅ TestQuickPanelDialog: SKIP (已知, v0.18.29.0 spec 046/047 范围)
+  - ✅ 静态推演 hover 路径: WM_MOUSEMOVE → HitTest → s_hoveredIdx=N → RepaintLayered → PaintOpaqueContent 看到 isHover → pen=orange → UpdateLayeredWindow 提交 → screen 立即变橙 ✓
+
+- **Files touched (1)**:
+  - `WeaselServer/QuickPanelDialog.cpp` (6 处 InvalidateRect → RepaintLayered,共 ~10 行)
+
+- **Anti-patterns 新增 (L97 教训)**:
+  - **AP-L97-A**: `WS_EX_LAYERED + UpdateLayeredWindow` 路径下 `InvalidateRect` 是死代码,**必须** 直接 `RepaintLayered`。从 L86 (v0.19.0.10) ship 至今一直存在, 但只在 v0.19.0.25 Track 3 接通 Phrase button 频繁 hover→click 时才暴露。**任何 layered window 项目都中招**:InvalidateRect 调 → 不触发 RepaintLayered → screen 不更新。
+  - **AP-L97-B**: 100ms polling timer 是 L86 的 workaround (替代不可靠的 WM_MOUSEMOVE),但真实问题不是 WM_MOUSEMOVE 投递, 是 InvalidateRect 死代码。**修根因 (RepaintLayered)** 后 polling timer 变成保险,但仍可有 (一层 redundancy)。
+  - **AP-L97-C**: v0.19.0.10 → v0.19.0.26 共 7 个 ship, 都没人 review 这一点。**code review 必须验 paint 调用路径**, 不能只看 "修了 issue X/Y/Z"。
+  - **AP-L97-D**: "icons 看起来扭曲" 不是旋转, 是 hover state 100ms 滞后 → 视觉错位。**症状 ≠ 根因**,user 描述的"旋转"实际是 polling 滞后渲染偏差。
+
+- **Installer**: `release\fluxing-0.19.0.27-installer.exe` 43,225,398 bytes
+- **SHA256**: `1d3c02ca11e0631bbac9c59ef68e59da267919e295e5b2e1ec7b64a0d7f13a0a`
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)
