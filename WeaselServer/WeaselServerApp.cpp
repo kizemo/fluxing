@@ -1,7 +1,9 @@
 #include "stdafx.h"
 #include "WeaselServerApp.h"
 #include <filesystem>
+#include <iostream>  // v0.19.0.25-fix(spec 042 §12 风险):RegisterHotKey 失败 wcerr log
 #include "QuickPanelDialog.h"
+#include "PhrasesDialog.h"  // v0.19.0.25-fix(spec 042 §3):Track 3 wiring
 // spec 070 T007: D2D factory 创建 (在 WeaselServerApp::Run 入口)
 #include <d2d1.h>
 #pragma comment(lib, "d2d1.lib")
@@ -15,6 +17,70 @@ WeaselServerApp::WeaselServerApp()
 }
 
 WeaselServerApp::~WeaselServerApp() {}
+
+// v0.19.0.25-fix(spec 042 §3 + §10.4):单实例,子类 WNDPROC 静态用。
+// Run 期间唯一,Stop 后 nullptr;子类 WNDPROC 命中 ALT+. 时通过此指针调 instance。
+WeaselServerApp* WeaselServerApp::s_phrasesHotkeyOwner = nullptr;
+
+// v0.19.0.25-fix(spec 042 §10.4):子类 WNDPROC,拦截 WM_HOTKEY (ID_HOTKEY_PHRASES_DOT)
+// → PhrasesDialog::Show();其它 message 透传给原 WNDPROC(其中含 ServerImpl::OnHotkey
+// 处理 ID_HOTKEY_QUICK_PANEL)。不能改 ServerImpl(在 WeaselIPCServer/ 下,scope 之外),
+// 用 SetWindowLongPtr(GWLP_WNDPROC) 在 IPC server window 上子类化。
+LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
+                                                           UINT msg,
+                                                           WPARAM w,
+                                                           LPARAM l) {
+  if (msg == WM_HOTKEY && w == ID_HOTKEY_PHRASES_DOT) {
+    // spec 042 §12 风险:Alt+. 全局热键可能跟其他 app 冲突 → RegisterHotKey 失败时
+    // 仅 log warning,不 crash。这里成功路径就直接调。
+    PhrasesDialog::Show();
+    return 0;
+  }
+  // 透传:必须 CallWindowProc 回原 WNDPROC(否则破坏 ServerImpl OnHotkey/WM_COMMAND 等)
+  WeaselServerApp* owner = s_phrasesHotkeyOwner;
+  if (owner && owner->m_ipcServerOrigWndProc) {
+    return ::CallWindowProc(owner->m_ipcServerOrigWndProc, hwnd, msg, w, l);
+  }
+  return ::DefWindowProc(hwnd, msg, w, l);
+}
+
+void WeaselServerApp::RegisterPhrasesHotkey() {
+  HWND hwndServer = m_server.GetHWnd();
+  if (!hwndServer) {
+    // IPC server 还没启起来(spec 036 会在 ServerImpl::OnCreate 注册 Alt+,),spec 042
+    // 也得在 IPC server window 上注册,延迟到 Run 之后调用即可。
+    return;
+  }
+  // 1) 子类化前先保存原 WNDPROC
+  m_ipcServerOrigWndProc = reinterpret_cast<WNDPROC>(
+      ::GetWindowLongPtr(hwndServer, GWLP_WNDPROC));
+  if (!m_ipcServerOrigWndProc) return;
+  s_phrasesHotkeyOwner = this;
+  ::SetWindowLongPtr(hwndServer, GWLP_WNDPROC,
+                     reinterpret_cast<LONG_PTR>(
+                         &WeaselServerApp::PhrasesHotkeySubclassProc));
+
+  // 2) 注册全局热键 ALT+. (VK_OEM_PERIOD 是 US 键盘的 . 键)
+  //    AP-036-F: 失败仅 log warning,不 crash。失败可能是被其他 app 占用了。
+  if (!::RegisterHotKey(hwndServer, ID_HOTKEY_PHRASES_DOT, MOD_ALT, VK_OEM_PERIOD)) {
+    // 输出到 stderr;ConsoleAllocatorStatus L05 不影响 GUI。
+    std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Alt+.) failed, err="
+               << ::GetLastError() << std::endl;
+  }
+}
+
+void WeaselServerApp::UnregisterPhrasesHotkey() {
+  HWND hwndServer = m_server.GetHWnd();
+  if (hwndServer) {
+    ::UnregisterHotKey(hwndServer, ID_HOTKEY_PHRASES_DOT);
+    if (m_ipcServerOrigWndProc) {
+      ::SetWindowLongPtr(hwndServer, GWLP_WNDPROC,
+                         reinterpret_cast<LONG_PTR>(m_ipcServerOrigWndProc));
+      m_ipcServerOrigWndProc = nullptr;
+    }
+  }
+  s_phrasesHotkeyOwner = nullptr;
+}
 
 int WeaselServerApp::Run() {
   if (!m_server.Start())
@@ -58,7 +124,16 @@ int WeaselServerApp::Run() {
   // API for the "remembered" state across IPC reconnects (if needed
   // later), but is no longer called on every Run().
 
+  // v0.19.0.25-fix(spec 042 §3 + §10.4):Alt+. 全局热键注册。
+  // 必须在 m_server.Run() 之前调(m_server.Run() 进入消息循环前 IPC server window 已经
+  // 在 m_server.Start() 时创建,WM_CREATE 已经发出 → ServerImpl::OnCreate 注册了 Alt+,;
+  // 现在再加 Alt+.)。失败仅 log warning,不 crash(spec 042 §12 风险)。
+  RegisterPhrasesHotkey();
+
   int ret = m_server.Run();
+
+  // m_server.Run() 返回后消息循环已退出,unregister 子类化(避免下次 start 残留状态)
+  UnregisterPhrasesHotkey();
 
   m_handler->Finalize();
   m_ui.Destroy();

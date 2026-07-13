@@ -147,6 +147,24 @@
 
 > QuickPanel 当前 4 层 shadow 叠加（`v3-macos.html:38-44`）实际**只用了 1 层视觉**：per-pixel alpha gradient 已吃掉背景深度，多余 shadow 是从 macOS CSS 照搬的 dead weight → spec 040 收敛到 `elevation.flat` + `glass.panel`
 
+### 3.6 PhrasesDialog (v0.19.0.25)
+
+| Token | Value | 当前位置 | 来源 |
+|---|---|---|---|
+| `size.modal.dialog.w` | `360` | `PhrasesDialog.cpp:29` `kDialogW` | WE-PICK（spec 042 §5 草图） |
+| `size.modal.dialog.h` | `420` | `PhrasesDialog.cpp:30` `kDialogH` | WE-PICK |
+| `size.modal.tree.h` | `340` | `PhrasesDialog.cpp:31` `kTreeH` | WE-PICK |
+| `size.modal.btn.w` | `76` | `PhrasesDialog.cpp:33` `kBtnW` | WE-PICK（4 按钮等宽） |
+| `size.modal.btn.h` | `32` | `PhrasesDialog.cpp:32` `kBtnH` | WE-PICK（按钮高度） |
+| `size.modal.title.h` | `30` | `PhrasesDialog.cpp:38` `kTitleH` | WE-PICK |
+| `space.modal.btn.gap` | `8` | `PhrasesDialog.cpp:34` `kBtnGap` | WE-PICK |
+| `space.modal.btn.margin_x` | `12` | `PhrasesDialog.cpp:35` `kBtnMarginX` | WE-PICK |
+| `color.modal.bg.top` | `RGB(245, 245, 248)` | `PhrasesDialog.cpp:39` `kBgTop` | WE-PICK（跟 QuickPanel bg 风格一致,浅玻璃冷色） |
+| `color.modal.bg.bot` | `RGB(220, 222, 230)` | `PhrasesDialog.cpp:40` `kBgBot` | WE-PICK |
+| `color.modal.text` | `RGB(30, 30, 40)` | `PhrasesDialog.cpp:41` `kTextColor` | WE-PICK（深灰,匹配 macOS HIG） |
+| `color.modal.sel_bg` | `RGB(255, 235, 220)` | `PhrasesDialog.cpp:42` `kSelBg` | WE-PICK（浅橙底,跟 QuickPanel active bg 同色系） |
+| `time.drag_threshold_px` | `4` 物理像素 | `QuickPanelDialog.cpp:509` `kDragThresholdPx` (L95 新增) | WE-PICK（spec 042 §3 click-vs-drag 判定） |
+
 ---
 
 ## 4. 落地路径（Migration Plan）

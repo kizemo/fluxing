@@ -931,6 +931,60 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: TBD
 
 
+## [0.19.0.25-fluxing] - 2026-07-13
+
+### spec 042 v0.19.0.25 - 常用短语 UI 完整 ship (Phrase button + Alt+. 热键 + 树形分类)
+
+- **User feedback (post v0.19.0.24)**:
+  1. ❌ L86 至今 Phrase 按钮 no-op (spec 070 T007),user 期望点击触发常用短语 UI
+  2. ❌ 需要 Alt+. 全局热键激活常用短语 UI
+  3. ❌ 常用短语需要分类字段(可选),支持 ←/→ 展开/折叠
+
+- **调研方法 (3 个并行 track)**:
+  - spec 042 spec 写完 + user 审批通过
+  - Track 2 (实现) + Track 3 (绑定) 并行 dispatch
+  - 双验收:Reality Checker + Test Results Analyzer
+  - **第 1 轮双验收 FAIL**(ship blocker:Phrase button click 死代码)
+  - **第 2 轮修复迭代 + 再验收**
+
+- **Phase 1 根因 (Test Analyzer 找出 ship blocker)**:
+  - L88 drag-any-area (`cpp:449`) 让 LButtonDown 无条件 `s_dragging=TRUE`
+  - L94 Fix A (`cpp:504`) 在 drag 分支 reset `s_activeIdx=-1`
+  - 组合结果:LButtonUp 几乎总走 if-d 分支 → else 分支 (含 `s_onPhrases` invoke) 死代码
+  - 后果:Phrase 按钮点击永远不触发 PhrasesDialog,只有 Alt+. 热键路径工作
+  - 副发现:CHANGELOG 缺 v0.19.0.25 条目 (P5 违规) + Test 5 line 300 leak 真 SendInput
+
+- **Phase 2 修法 (v0.19.0.25-fix, L95)**:
+  - **drag 分支加 dragThreshold 检测**:mouse 实际位移 ≥ 4 物理像素才算 drag,否则 fall through click 路由 invoke 回调。`s_activeIdx` 在 reset 前用 `oldActiveIdx` 记住 index
+  - **Test 5 删 line 300**:`DefaultInject(L"abc")` 真发 SendInput,改为只直接调 mock
+  - **CHANGELOG v0.19.0.25 条目**(本节)
+
+- **Phase 4 验证 (双验收)**:
+  - ✅ TestPhrasesDialog: 48 PASS / 0 FAIL (Track 2 单元测试)
+  - ✅ TestQuickPanelRefactor: 1/1 PASS
+  - ✅ TestDefaultHotkeys: 35/35 PASS
+  - ✅ click branch ship blocker 修复 (dragThreshold 4 px 检测)
+
+- **Files touched (8)**:
+  - `WeaselServer/PhrasesDialog.{h,cpp}` (新增,125 + 917 行)
+  - `WeaselServer/QuickPanelDialog.cpp` (click 分支 dragThreshold fall-through)
+  - `WeaselServer/WeaselServerApp.{h,cpp}` (Alt+. 热键 + 子类化拦截 WM_HOTKEY)
+  - `WeaselServer/resource.h` (ID_HOTKEY_PHRASES_DOT=9002)
+  - `WeaselServer/xmake.lua` (glob 自动包含 PhrasesDialog.cpp)
+  - `test/TestPhrasesDialog/TestPhrasesDialog.{cpp,vcxproj}` (新建,48 PASS)
+  - `.specify/specs/042-phrases-ui/spec.md` (348 行 spec)
+  - `CHANGELOG.md` (本节)
+
+- **Anti-patterns 新增 (L95 教训)**:
+  - **AP-L95-A: L88 drag-any-area 设计让 click 路径几乎走不到**。drag 分支必须加 dragThreshold 检测,鼠标未实际位移 fall through 到 click 路由 invoke 回调,不能假设 click 分支被走到。
+  - **AP-L95-B: 双验收发现 Track 2 单元测试 PASS 不代表集成正确**。Track 2 的 TestPhrasesDialog 48 PASS 不覆盖 Track 3 的 click 分支集成。**集成后必须再 dispatch 集成级双验收**。
+  - **AP-L95-C: "Mock 函数 + DefaultInject 直接调用" 双模式**。Mock 时只调 mock,不调 DefaultInject(否则真发)。测试代码注释要写明"不真发 SendInput"。
+  - **AP-L95-D: 新功能 ship 前必**写 spec + user 审批**(L94 经验沿用),但审批后实施也必须**双验收**才能 ship。L94 沿用 pattern。
+
+- **Installer**: `release\fluxing-0.19.0.25-installer.exe` (TBD)
+- **SHA256**: TBD
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)

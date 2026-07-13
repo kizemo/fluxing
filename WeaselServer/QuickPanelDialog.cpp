@@ -493,6 +493,23 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
     }
     case WM_LBUTTONUP: {
       if (s_dragging) {
+        // v0.19.0.25-fix(ship blocker,Test Results Analyzer v0.19.0.25 验收发现):
+        // L88 drag-any-area (cpp:449) + L94 Fix A (cpp:504) 让 LButtonUp 几乎总走
+        // if-d 分支,且 if-d 分支只 reset state 不 invoke click,导致 else 分支的
+        // s_onPhrases() 调用永远走不到 — Phrase 按钮 click 死代码。
+        // 修法:在 if-d 分支内检测鼠标实际位移 (cur - s_dragStartCursor),未超过
+        // dragThreshold (4 物理像素) 视为 click → fall through invoke 回调。
+        // 注意:必须 reset s_activeIdx 之后再判断 (L94 Fix A 是 reset,不能漏),
+        // 但要在 reset 之前用 oldActiveIdx 记住 index 用于路由。
+        POINT cur;
+        GetCursorPos(&cur);
+        int dx = cur.x - s_dragStartCursor.x;
+        int dy = cur.y - s_dragStartCursor.y;
+        int dragDist2 = dx*dx + dy*dy;
+        constexpr int kDragThresholdPx = 4;  // 4 物理像素,经验值(防手指抖动)
+        bool actualDrag = (dragDist2 >= kDragThresholdPx * kDragThresholdPx);
+        int oldActiveIdx = s_activeIdx;     // 记住 index 用于 click 路由
+
         s_dragging = FALSE;
         ReleaseCapture();
         // drag 结束后清 hover
@@ -503,11 +520,27 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
         // 看到 isActive=true 画橙 bg,永久残留。Fix A:补这一行(对称 else 分支已有)。
         s_activeIdx = -1;
         InvalidateRect(hwnd, NULL, FALSE);
+
+        // v0.19.0.25-fix: drag 分支 fall-through click 路由。如果鼠标未实际位移,
+        // 等同"按下并释放同一按钮" → invoke 回调。只接 Phrase 按钮 (oldActiveIdx==1),
+        // 其它 4 个按钮 callback 仍 no-op(spec 070 T007 历史遗留,本次不扩)。
+        if (!actualDrag && oldActiveIdx == 1 && s_onPhrases) {
+          s_onPhrases();
+        }
       } else {
         POINT p = {LOWORD(l), HIWORD(l)};
         int hit = HitTest(p.x, p.y);
         if (hit >= 0 && hit == s_activeIdx) {
-          // 5 按钮 no-op (spec 070 T007)
+          // v0.19.0.25-fix(spec 042 §3 调用链):接通 s_onPhrases callback。
+          // L88-fix (cpp:449) 让 LButtonDown 无条件 s_dragging=TRUE,所以 click 分支
+          // 只在 hit==s_activeIdx 时才表示"按下与释放同一按钮"(否则算 drag start)。
+          // L94-fix A (cpp:504) 在 drag 分支 reset s_activeIdx,所以这里对称:
+          // click 分支先检查 hit==s_activeIdx 再 invoke。
+          // 只接 Phrase 按钮 (hit==1,见 cpp:827 DrawIconPhrase switch case),
+          // 其它 4 个按钮 callback 仍 no-op(spec 070 T007 历史遗留,本次不扩)。
+          if (hit == 1 && s_onPhrases) {
+            s_onPhrases();
+          }
         }
         s_activeIdx = -1;
         InvalidateRect(hwnd, NULL, FALSE);
