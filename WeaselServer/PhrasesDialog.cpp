@@ -23,23 +23,42 @@ PhrasesDialog::InjectFn PhrasesDialog::s_injectFn = &PhrasesDialog::DefaultInjec
 std::unordered_map<std::wstring, bool> PhrasesDialog::m_expanded;
 std::vector<PhrasesDialog::Phrase> PhrasesDialog::m_phrases;
 int PhrasesDialog::m_selectedIndex = -1;
+// v0.19.0.26-cleanup(issue 1+2-cleanup):grace 计时字段(移除 s_outsideMs / IDT_PHRASE_POLL)
+DWORD PhrasesDialog::s_showTime = 0;
+// v0.19.0.26-cleanup(issue 1-cleanup):HFONT 静态持有,OnDestroy 释放
+HFONT PhrasesDialog::s_hFontUi = nullptr;
+// v0.19.0.26-fix(issue 2a):Tree 高度 / 按钮 Y 自适应
+int   PhrasesDialog::kTreeH_phys = 340;
+int   PhrasesDialog::kBtnY_phys = 378;
 
 // ===== 设计常量 =====
 namespace {
 constexpr int kDialogW = 360;
 constexpr int kDialogH = 420;
-constexpr int kTreeH = 340;
+// v0.19.0.26-fix(issue 2a):Tree 高度 / Button 起点改成自适应,常量保留作为 reference。
+// 运行时 kTreeH_phys = kDialogH - kTitleH - kBtnH - 3*kGap,见 OnCreate。
+constexpr int kTreeH = 340;        // reference(测试可达)
 constexpr int kBtnH = 32;
 constexpr int kBtnW = 76;
 constexpr int kBtnGap = 8;
 constexpr int kBtnMarginX = 12;
-constexpr int kBtnY = kTreeH + 12;
+constexpr int kGap = 8;            // title→tree / tree→btn / btn→bottom 通用间距
 constexpr int kTitleH = 30;
+
+// v0.19.0.26-fix(issue 2c):圆角 radius(对应 FLUENT-UI-TOKENS.md radius.lg=14, 2x 用于
+// GDI 椭圆 = 28)。同时画 hairline 边框(8% 黑 ≈ RGB(217,217,217))。
+constexpr int kDlgRadius = 14;
+constexpr COLORREF kBorderColor = RGB(217, 217, 217);
 
 constexpr COLORREF kBgTop = RGB(245, 245, 248);
 constexpr COLORREF kBgBot = RGB(220, 222, 230);
 constexpr COLORREF kTextColor = RGB(30, 30, 40);
 constexpr COLORREF kSelBg = RGB(255, 235, 220);  // 选中行浅橙底
+
+// v0.19.0.26-fix(issue 2c):Segoe UI Variable 是 Windows 11 新 UI 字(mac 风格首选),
+// 缺时 fallback 到系统默认 GUI font。size 14px ≈ font.ui.size.body (FLUENT-UI-TOKENS)。
+// Test/mock 路径可能无 system font,设 fallback 链。
+constexpr int kUiFontSize = 14;
 
 constexpr UINT ID_BTN_ADD = 1001;
 constexpr UINT ID_BTN_EDIT = 1002;
@@ -66,6 +85,9 @@ void PhrasesDialog::Show() {
   if (s_hwnd && IsWindow(s_hwnd)) {
     SetForegroundWindow(s_hwnd);
     SetFocus(s_hTree);
+    // v0.19.0.26-cleanup(issue 2-cleanup):reuse 路径重置 grace 计时。
+    // 移植自 QuickPanelDialog::Show 1109-1114 段(同 L94 pattern)。
+    s_showTime = GetTickCount();
     return;
   }
 
@@ -94,11 +116,12 @@ void PhrasesDialog::Show() {
   InitCommonControlsEx(&icc);
 
   // 3. 创建 modal 窗口
-  // WS_POPUP | WS_EX_LAYERED:跟 QuickPanel 一致的 Liquid Glass 路径
-  // WS_EX_TOOLWINDOW:不在任务栏
-  // WS_EX_TOPMOST:跟 QuickPanel 一致强制置顶
+  // v0.19.0.26-fix(issue 2c):WS_CAPTION | WS_SYSMENU 移除 → 自绘 title bar(mac 风格)。
+  // WS_CLIPCHILDREN:OnPaint 涂 client 时不覆盖子控件(防 button 被涂没)。
+  // WS_CLIPSIBLINGS:子控件之间互不覆盖。
+  // WS_EX_LAYERED:per-pixel alpha 圆角路径(panel 外 alpha=0,见 QuickPanel pattern)。
   DWORD exStyle = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
-  DWORD style = WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU;
+  DWORD style = WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 
   // 注册 window class(幂等)
   static bool s_classRegistered = false;
@@ -136,8 +159,24 @@ void PhrasesDialog::Show() {
   CenterOnPrimaryMonitor(s_hwnd, kDialogW, kDialogH);
   SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+  // v0.19.0.26-fix(issue 2c):SetWindowRgn 圆角(mac 风格;同 QuickPanel 路径)。
+  // radius.lg = 14 (FLUENT-UI-TOKENS.md §3.6 line 152)。
+  // CreateRoundRectRgn 第 5/6 参数是椭圆宽高,2*r=28 让 GDI 画圆角。
+  {
+    HRGN rgn = CreateRoundRectRgn(0, 0, kDialogW, kDialogH,
+                                  kDlgRadius * 2, kDlgRadius * 2);
+    if (rgn) {
+      SetWindowRgn(s_hwnd, rgn, TRUE);
+      // SetWindowRgn 接管 rgn 生命周期,不要 DeleteObject。
+    }
+  }
   ShowWindow(s_hwnd, SW_SHOW);
   UpdateWindow(s_hwnd);
+
+  // v0.19.0.26-cleanup(issue 2-cleanup):grace 计时 — modal dialog 设计就
+  // Esc/X/Cancel/Enter 关,不需要 polling timer。s_showTime 用于 WM_ACTIVATEAPP /
+  // WM_KILLFOCUS grace guard(见 WndProc case WM_ACTIVATEAPP)。
+  s_showTime = GetTickCount();
 }
 
 void PhrasesDialog::Hide() {
@@ -147,6 +186,7 @@ void PhrasesDialog::Hide() {
   s_hwnd = nullptr;
   s_hTree = nullptr;
   s_hBtnAdd = s_hBtnEdit = s_hBtnDel = s_hBtnCancel = nullptr;
+  // s_showTime 在下次 Show 重新设(复用路径已设),无需在此重置。
 }
 
 void PhrasesDialog::SetInjectFn(InjectFn fn) { s_injectFn = fn; }
@@ -349,62 +389,114 @@ LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd, UINT msg, WPARAM wp,
       return OnNotify(hwnd, lp);
     case WM_COMMAND:
       return OnCommand(hwnd, wp);
-    case WM_ACTIVATEAPP:
-      // 跟 QuickPanel 一致:失焦关闭(避免卡死,spec §12)
-      if (wp == FALSE) Hide();
+    case WM_ACTIVATEAPP: {
+      // v0.19.0.26-fix(issue 1):失焦关闭走 grace guard。
+      // 移植自 QuickPanel L94 pattern (kShowGraceMs=2000, s_showTime 在 Show 末尾设)。
+      // 修法:在 grace 期间 (now - s_showTime) < kShowGraceMs 不 Hide。
+      // 根因(原 PhrasesDialog.cpp:352-358):无条件 Hide() → Show 启动瞬间
+      // 切到 en-US / focus 切走时被系统 WM_ACTIVATEAPP 立即关掉,用户看到"短暂消失"。
+      if (wp == FALSE) {
+        DWORD nowTick = GetTickCount();
+        if ((nowTick - s_showTime) >= kShowGraceMs) {
+          Hide();
+        }
+      }
       return 0;
-    case WM_KILLFOCUS:
-      // 同上,有的版本 WM_ACTIVATEAPP 不到
+    }
+    case WM_KILLFOCUS: {
+      // v0.19.0.26-fix(issue 1):同 grace guard。原 cpp:356-358 完全 no-op,
+      // 但有的版本 WM_ACTIVATEAPP 不到;补 KILLFOCUS 关闭路径走 grace。
+      DWORD nowTick = GetTickCount();
+      if ((nowTick - s_showTime) >= kShowGraceMs) {
+        Hide();
+      }
       return 0;
+    }
     default:
       return DefWindowProcW(hwnd, msg, wp, lp);
   }
 }
 
 LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
-  // Layered window:设 alpha 255(per-pixel alpha 由我们自己画)
+  // Layered window: 设为 uniform alpha 255 (GDI 画, per-pixel 由 region 控制)
   SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
 
-  RECT rc;
-  GetClientRect(hwnd, &rc);
+  // v0.19.0.26-fix(issue 2a):Tree 高度 / 按钮 Y 自适应,避免 btnY=378 撞 tree 底 370。
+  // 公式:kTreeH_phys = kDialogH - kTitleH - kBtnH - 3*kGap,留 8px 底 padding。
+  // 同理 kBtnY_phys = kTitleH + kTreeH_phys + kGap(tree 顶 = titleH, tree 底 = titleH+treeH)。
+  kTreeH_phys = kDialogH - kTitleH - kBtnH - 3 * kGap;
+  kBtnY_phys  = kTitleH + kTreeH_phys + kGap;
+  // 防御:负值保护(测试或 resize 异常时)
+  if (kTreeH_phys < 80) kTreeH_phys = 80;
+  if (kBtnY_phys + kBtnH > kDialogH) kBtnY_phys = kDialogH - kBtnH - 2;
+
+  // v0.19.0.26-cleanup(issue 3-cleanup):Segoe UI Variable 字体(mac 风格; FLUENT-UI-TOKENS.md
+  // §3.4 font.ui.size.body = 14px)。Win32 font mapper 找不到时会自动 substitute 退到
+  // Segoe UI / 系统默认,所以单次 CreateFontW 足够,不再写假象 fallback 链。HFONT 持有到
+  // 静态成员 s_hFontUi,OnDestroy 释放(原 OnCreate 局部变量漏 DeleteObject 泄漏 GDI handle)。
+  s_hFontUi = CreateFontW(kUiFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                          CLEARTYPE_QUALITY, VARIABLE_PITCH | FF_SWISS,
+                          L"Segoe UI Variable");
+  HFONT hfUi = s_hFontUi;
 
   // Tree (SysTreeView32)
+  // v0.19.0.26-fix(issue 2b):子控件加 WS_CLIPSIBLINGS 避免 sibling 互相覆盖。
+  // WS_EX_CLIENTEDGE 给 tree 1px 内边,跟 native 视觉一致(老版已经这样)。
   DWORD treeEx = WS_EX_CLIENTEDGE;
-  DWORD treeStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS |
-                    TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_FULLROWSELECT;
+  DWORD treeStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS |
+                    TVS_HASBUTTONS | TVS_LINESATROOT | TVS_SHOWSELALWAYS |
+                    TVS_FULLROWSELECT;
   s_hTree = CreateWindowExW(treeEx, WC_TREEVIEWW, L"",
-                            treeStyle, 8, kTitleH, kDialogW - 16, kTreeH,
+                            treeStyle, kGap, kTitleH + kGap,
+                            kDialogW - 2 * kGap, kTreeH_phys,
                             hwnd, reinterpret_cast<HMENU>(ID_TREE),
                             GetModuleHandle(nullptr), nullptr);
+  if (s_hTree && hfUi) {
+    SendMessageW(s_hTree, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
+  }
 
   // 按钮行
-  int btnY = kTreeH + kTitleH + 8;
+  int btnY = kBtnY_phys;
   int totalW = kBtnW * 4 + kBtnGap * 3;
   int btnX = (kDialogW - totalW) / 2;
 
+  // v0.19.0.26-fix(issue 2b):button 加 WS_CLIPSIBLINGS 避免 gradient 涂没。
   s_hBtnAdd = CreateWindowExW(0, L"BUTTON", L"+ \x6dfb\x52a0",  // + 添加
-                              WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                              WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS |
+                                  BS_PUSHBUTTON,
                               btnX, btnY, kBtnW, kBtnH, hwnd,
                               reinterpret_cast<HMENU>(ID_BTN_ADD),
                               GetModuleHandle(nullptr), nullptr);
   btnX += kBtnW + kBtnGap;
   s_hBtnEdit = CreateWindowExW(0, L"BUTTON", L"\u270e \x7f16\x8f91",  // ✎ 编辑
-                               WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                               WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS |
+                                   BS_PUSHBUTTON,
                                btnX, btnY, kBtnW, kBtnH, hwnd,
                                reinterpret_cast<HMENU>(ID_BTN_EDIT),
                                GetModuleHandle(nullptr), nullptr);
   btnX += kBtnW + kBtnGap;
   s_hBtnDel = CreateWindowExW(0, L"BUTTON", L"- \x5220\x9664",  // - 删除
-                              WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                              WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS |
+                                  BS_PUSHBUTTON,
                               btnX, btnY, kBtnW, kBtnH, hwnd,
                               reinterpret_cast<HMENU>(ID_BTN_DEL),
                               GetModuleHandle(nullptr), nullptr);
   btnX += kBtnW + kBtnGap;
   s_hBtnCancel = CreateWindowExW(0, L"BUTTON", L"\x53d6\x6d88",  // 取消
-                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS |
+                                     BS_PUSHBUTTON,
                                  btnX, btnY, kBtnW, kBtnH, hwnd,
                                  reinterpret_cast<HMENU>(ID_BTN_CANCEL),
                                  GetModuleHandle(nullptr), nullptr);
+
+  // button 也用新字体
+  if (hfUi) {
+    SendMessageW(s_hBtnAdd,    WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
+    SendMessageW(s_hBtnEdit,   WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
+    SendMessageW(s_hBtnDel,    WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
+    SendMessageW(s_hBtnCancel, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
+  }
 
   PopulateTree(s_hTree);
 
@@ -426,6 +518,11 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
 }
 
 LRESULT PhrasesDialog::OnDestroy(HWND hwnd) {
+  // v0.19.0.26-cleanup(issue 1-cleanup):释放 HFONT,否则每次 Show 泄漏一个 GDI handle。
+  if (s_hFontUi) {
+    DeleteObject(s_hFontUi);
+    s_hFontUi = nullptr;
+  }
   s_hwnd = nullptr;
   s_hTree = nullptr;
   s_hBtnAdd = s_hBtnEdit = s_hBtnDel = s_hBtnCancel = nullptr;
@@ -438,30 +535,50 @@ LRESULT PhrasesDialog::OnPaint(HWND hwnd) {
   RECT rc;
   GetClientRect(hwnd, &rc);
 
-  // 简单 GDI 渐变 bg:用 GradientFill 画 from kBgTop → kBgBot(spec 不强制渐变,
-  // 这里走"轻量 Liquid Glass")。失败 fallback 纯 kBgTop。
-  TRIVERTEX v[2] = {};
-  v[0].x = rc.left;
-  v[0].y = rc.top;
-  v[0].Red = static_cast<COLOR16>(GetRValue(kBgTop)) << 8;
-  v[0].Green = static_cast<COLOR16>(GetGValue(kBgTop)) << 8;
-  v[0].Blue = static_cast<COLOR16>(GetBValue(kBgTop)) << 8;
-  v[0].Alpha = 0xFF00;
-  v[1].x = rc.right;
-  v[1].y = rc.bottom;
-  v[1].Red = static_cast<COLOR16>(GetRValue(kBgBot)) << 8;
-  v[1].Green = static_cast<COLOR16>(GetGValue(kBgBot)) << 8;
-  v[1].Blue = static_cast<COLOR16>(GetBValue(kBgBot)) << 8;
-  v[1].Alpha = 0xFF00;
-  GRADIENT_RECT g = {0, 1};
-  if (!GradientFill(hdc, v, 2, &g, 1, GRADIENT_FILL_RECT_V)) {
-    // 失败 fallback:纯色 brush
-    HBRUSH bg = CreateSolidBrush(kBgTop);
-    FillRect(hdc, &rc, bg);
-    DeleteObject(bg);
+  // v0.19.0.26-fix(issue 2b):OnPaint 不再 GradientFill 整个 client(会把 button 涂没)。
+  // 改为:1) 画 title bar bg [0, kTitleH) 渐变(自绘 title 用),2) 画 hairline 边框
+  // 沿 rgn 圆角矩形,3) 画 title text。
+  // Tree [kTitleH, btnY) 和 button [btnY, kDialogH) 区域**不画** — 子控件自己画,
+  // 配合 WS_CLIPCHILDREN Windows 自动 clip,button 跟 tree 永远可见。
+  //
+  // 1) Title bar bg(渐变 kBgTop → 中色,只在 [0, kTitleH) 范围)
+  {
+    RECT titleBg = {0, 0, kDialogW, kTitleH};
+    TRIVERTEX v[2] = {};
+    v[0].x = titleBg.left;
+    v[0].y = titleBg.top;
+    v[0].Red = static_cast<COLOR16>(GetRValue(kBgTop)) << 8;
+    v[0].Green = static_cast<COLOR16>(GetGValue(kBgTop)) << 8;
+    v[0].Blue = static_cast<COLOR16>(GetBValue(kBgTop)) << 8;
+    v[0].Alpha = 0xFF00;
+    v[1].x = titleBg.right;
+    v[1].y = titleBg.bottom;
+    v[1].Red = static_cast<COLOR16>(GetRValue(kBgBot)) << 8;
+    v[1].Green = static_cast<COLOR16>(GetGValue(kBgBot)) << 8;
+    v[1].Blue = static_cast<COLOR16>(GetBValue(kBgBot)) << 8;
+    v[1].Alpha = 0xFF00;
+    GRADIENT_RECT g = {0, 1};
+    if (!GradientFill(hdc, v, 2, &g, 1, GRADIENT_FILL_RECT_V)) {
+      HBRUSH bg = CreateSolidBrush(kBgTop);
+      FillRect(hdc, &titleBg, bg);
+      DeleteObject(bg);
+    }
   }
 
-  // 标题
+  // 2) Hairline 边框(mac 风格; FLUENT-UI-TOKENS.md §3.6 line 158 8% 黑 = RGB(217,217,217))。
+  // 注意:画在 client 坐标,inset 1px 让边框不被 SetWindowRgn clip 切到。
+  {
+    HPEN hPen = CreatePen(PS_SOLID, 1, kBorderColor);
+    HPEN hOld = static_cast<HPEN>(SelectObject(hdc, hPen));
+    HBRUSH hOldBr = static_cast<HBRUSH>(SelectObject(hdc, GetStockObject(NULL_BRUSH)));
+    RoundRect(hdc, 0, 0, kDialogW - 1, kDialogH - 1,
+              kDlgRadius * 2, kDlgRadius * 2);
+    SelectObject(hdc, hOld);
+    SelectObject(hdc, hOldBr);
+    DeleteObject(hPen);
+  }
+
+  // 3) 标题文字(自绘 title bar,跟 mac 风格一致)
   HFONT hf = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
   HFONT hfOld = static_cast<HFONT>(SelectObject(hdc, hf));
   SetBkMode(hdc, TRANSPARENT);
