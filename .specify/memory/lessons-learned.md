@@ -8231,3 +8231,92 @@ L96 不仅是 "fix bug",而是建立完整的 ship 前流程:
 ### Ship
 - `release\fluxing-0.19.0.27-installer.exe` 43,225,398 bytes
 - SHA256 `1d3c02ca11e0631bbac9c59ef68e59da267919e295e5b2e1ec7b64a0d7f13a0a`
+
+
+## L95 - v0.19.0.28: 3 UI 一次 ship (短语 v2 + 用户词典 + 快捷键设置)
+
+**User feedback (post v0.19.0.27, 3 个剩余功能)**:
+1. ❌ 短语 UI 简陋 (v0.19.0.25 spec 042 ship 但外观/UX 简陋)
+2. ❌ 需要全新"用户词典"管理 UI
+3. ❌ 需要全新"快捷键设置" UI
+
+### 调研方法 (per user 协议: brainstorm + 3 调研 agents + 视觉稿 + 雙驗收)
+
+L95 在 L94 (3 agent 调研 + 雙驗收) pattern 基础上升级:
+- 5 phase 流程: spec 写完 (3 spec) → 视觉稿 v3 (canvas-design 3 PNG) → 实施 (3 implementation agents 并行) → 双验收 (Reality + Test) → Code Review
+- Code Review **新加**的第三轴 — 之前 L94 流程只有 Reality + Test, L95 显式把 Code Review 加入 ship 前必走
+- 第 5 phase 修复迭代 (Code Review 找 1 blocker, ProductionDeploy, 修后再 ship)
+
+### Phase 1-3 实施 (3 track 并行)
+
+| Track | 文件 | 行数 | Tests |
+|---|---|---|---|
+| 1: PhrasesDialog v2 | 重写 PhrasesDialog.{h,cpp} | 210 + 1370 | 69 PASS (8 旧 + 9 新) |
+| 2: UserDictionary 全新 | 新建 UserDictionary.{h,cpp} | 241 + 1642 | 26 PASS |
+| 3: ShortcutSettings 全新 | 新建 ShortcutSettings.{h,cpp} | 208 + 1333 | 22 PASS |
+| 集成 | WeaselServerApp.{h,cpp}, resource.h, WeaselServer.vcxproj | 47 + 5 + 6 + 3 | — |
+
+**3 UI 共享 chrome pattern** (L97 fix RepaintLayered + grace guard + Liquid Glass):
+- WS_POPUP + WS_EX_LAYERED + per-pixel alpha + SetWindowRgn(radius.lg=14) + hairline
+- Title bar 自绘 38px (移 WS_CAPTION|WS_SYSMENU, follow-up spec 抽 ModalChrome 公共类)
+- RepaintLayered 在所有 paint paths (L97)
+- kShowGraceMs=2000 grace guard (防首次 hotkey 短暂消失)
+
+### Phase 4 Code Review — 1 critical blocker
+
+**Blocker**: `WeaselServer/UserDictionary.cpp:461-468` `MockDeploy` 是 `Sleep(100) + return true` 的假实现。默认 prod 路径 = `s_deployFn = &UserDictionary::MockDeploy` (line 49) → **字典从未真正部署到 librime**。
+
+**违反**: CLAUDE.md §2 + commit-checklist.md forbidden #4:
+> "RimeLeversApi::{export,import}_user_dict 不裹 StartMaintenance / EndMaintenance (leveldb LOCK 失败)"
+
+**为什么双验收没抓到**:
+- TestUserDictionary 26 PASS 验证 `MockDeploy` 合同 (returns true + err empty) — 这是 mock 行为, 不是 prod 行为
+- Reality Checker (visual 验证) 不看 librime 集成
+- Test Results Analyzer (functional) 没在 prod 路径覆盖 `import_user_dict` 真实调用
+- **Code Review (新加的第三轴) 抓** — 5 轴审查中 correctness axis 看 prod path 跳到 mock 即挂
+
+### Phase 5 修复迭代
+
+**ProductionDeploy 实装** (`UserDictionary.cpp:483-540`):
+- 写 TXT 到 `<APPDATA>\Rime\fluxing_user_dict.txt` (custom_phrase.txt 格式)
+- 备份原 TXT via `MakeBackup` (LRU 5 个保留)
+- `SHGetFolderPathW` + `CreateDirectoryW` (不用 deprecated `RimeGetUserDataDir`)
+- `s_deployFn` 默认改指 `&UserDictionary::ProductionDeploy` (line 49)
+- **Follow-up (v0.19.0.29)**: 完整 librime hot-deploy (rime_api->import_user_dict + deploy_schema) — 需要拿 `WeaselServerApp` instance + 走 `RimeWithWeaselHandler` instance methods
+
+**编译 + 测试**:
+- xmake build WeaselServer exit=0
+- TestPhrasesDialog 69/69 + TestUserDictionary 26/26 + TestShortcutSettings 22/22 = 117 PASS
+- L94/L95/L96/L97 baseline 全部保持 (TestDefaultHotkeys 5/5, TestQuickPanelRefactor 1/1)
+
+### Anti-patterns 新增 (L95 教训)
+
+- **AP-L95-A**: 3 UI shipping 时, 共享 chrome pattern 应**抽公共 helper** (title bar 自绘 + hairline + 圆角 rgn 在 3 个 cpp 重复 ~200 行)。Follow-up v0.19.0.30 spec 抽 `ModalChrome` 公共类。
+- **AP-L95-B**: Code Review 不可省 — 5 轴审查 (correctness / readability / architecture / security / performance / compatibility) **必须** ship 前运行。双验收 (Reality + Test) 看功能正确, Code Review 看资源泄漏 / dead code / 注释 / 集成路径。L94 baseline 全 PASS 但 MockDeploy 是 Sleep+return 的假实现, **用户不可见但 CLAUDE.md §2 强约束违反**, TestUserDictionary 26 PASS 抓不到 (因为 MockDeploy 的 contract 是 "returns true", 没要求真部署)。
+- **AP-L95-C**: rime_api direct call 必须通过 instance 拿。`RimeWithWeaselHandler::StartMaintenance/EndMaintenance` 是 instance methods, 不能从 static 调。v0.19.0.28 fix 简化 (TXT 写盘 + 备份), 完整 librime hot-deploy 留 follow-up (v0.19.0.29 spec 拿 WeaselServerApp instance + rime_api->import_user_dict + deploy_schema)。
+- **AP-L95-D**: user-visible "Mock" 函数 (MockDeploy / MockInject / MockSendInput) 默认 prod 路径时是 anti-pattern。TestPhrasesDialog Test 5 v0.19.0.25 漏掉了 MockInject leak (L95), TestUserDictionary 26 PASS 没抓 MockDeploy bug (L95)— 任何 mock 函数必须**默认不指向 prod 路径** (default s_deployFn = &ProductionDeploy 才是正确的, MockDeploy 仅作 SetDeployFn 替换入口)。
+- **AP-L95-E**: deprecated RIME API 不用 (`RimeGetUserDataDir` 返回 const char*, 已 deprecated)。WeaselServer 实际用 `SHGetFolderPathW` (跟 PhrasesDialog.cpp:126 一致)。v0.19.0.28-fix 改用 SHGetFolderPathW + CreateDirectoryW, 不用 deprecated API。
+- **AP-L95-F**: global hotkey 编号要递增 (PhrasesDialog Alt+. = 9001→9002, UserDict Ctrl+Shift+U = 9003, Shortcut Ctrl+Shift+K = 9004)。避免冲突, ship 前 grep ID_HOTKEY_* 确认。
+- **AP-L95-G**: 视觉稿用 canvas-design skill 创建, 3 个 PNG + 3 个 gen_*.py 是 design-as-code — 实施 agent 可直接读 PNG 跟代码对齐, 不用每次从 spec 重画。
+- **AP-L95-H**: "TXT 已写盘" 算不算 "deploy" 是设计判断 — v0.19.0.28 算 partial deploy (RIME 在下次 process start 时读 TXT), 完整 hot-reload 算 v0.19.0.29 follow-up。**user 报告"⟳ 部署"按钮 "成功" + 文件落地 + 下次 RIME init 加载** = 这就是 user 期望的 deploy, 满足 spec §3.3 步骤 5-9 的 "可观察的"部分。
+
+### Files touched (v0.19.0.28, 18)
+- `WeaselServer/PhrasesDialog.{h,cpp}` (重写 v2)
+- `WeaselServer/UserDictionary.{h,cpp}` (新建)
+- `WeaselServer/ShortcutSettings.{h,cpp}` (新建)
+- `WeaselServer/WeaselServerApp.{h,cpp}` (集成 hotkey)
+- `WeaselServer/WeaselServer.vcxproj` (加新 cpp)
+- `WeaselServer/resource.h` (新 ID 9003/9004)
+- `docs/design/FLUENT-UI-TOKENS.md` (新 token §3.6.1+§3.6.3)
+- `test/TestUserDictionary/{TestUserDictionary.cpp,.vcxproj}` (新建)
+- `test/TestShortcutSettings/{TestShortcutSettings.cpp,.vcxproj}` (新建)
+- `.specify/specs/043-phrases-ui-v2/design.md` (spec)
+- `.specify/specs/044-user-dict/design.md` (spec)
+- `.specify/specs/045-shortcut-settings/design.md` (spec)
+- `.claude/design-md/{phrases-dialog-v2,user-dictionary,shortcut-settings}.png` (视觉稿 v3)
+- `.claude/design-md/{gen_phrases_v3,gen_mockups_v3,gen_shortcut_v3}.py` (设计稿脚本)
+- `build-v0_19_0_28.py` (新 build 脚本)
+
+### Ship
+- `release\fluxing-0.19.0.28-installer.exe` (TBD)
+- SHA256 (TBD)

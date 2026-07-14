@@ -147,23 +147,97 @@
 
 > QuickPanel 当前 4 层 shadow 叠加（`v3-macos.html:38-44`）实际**只用了 1 层视觉**：per-pixel alpha gradient 已吃掉背景深度，多余 shadow 是从 macOS CSS 照搬的 dead weight → spec 040 收敛到 `elevation.flat` + `glass.panel`
 
-### 3.6 PhrasesDialog (v0.19.0.25)
+### 3.6 PhrasesDialog (v0.19.0.25 / v0.19.0.27 v2)
 
 | Token | Value | 当前位置 | 来源 |
 |---|---|---|---|
 | `size.modal.dialog.w` | `360` | `PhrasesDialog.cpp:29` `kDialogW` | WE-PICK（spec 042 §5 草图） |
-| `size.modal.dialog.h` | `420` | `PhrasesDialog.cpp:30` `kDialogH` | WE-PICK |
-| `size.modal.tree.h` | `340` | `PhrasesDialog.cpp:31` `kTreeH` | WE-PICK |
+| `size.modal.dialog.h` | `460` (v0.19.0.25=420, v0.19.0.27=460, +40 给 search box) | `PhrasesDialog.cpp:30` `kDialogH` | WE-PICK |
+| `size.modal.tree.h` | `340` | `PhrasesDialog.cpp:31` `kTreeH` (reference,运行时 = `kDialogH - kTitleH - kSearchH - kStatusBarH - kBtnH - 4*kGap`) | WE-PICK |
+| `size.modal.search.h` | `32` | `PhrasesDialog.cpp` `kSearchH` | WE-PICK（spec 043 §7.2） |
+| `size.modal.status.h` | `24` | `PhrasesDialog.cpp` `kStatusBarH`（warn bar,YAML 解析失败时显示） | WE-PICK |
 | `size.modal.btn.w` | `76` | `PhrasesDialog.cpp:33` `kBtnW` | WE-PICK（4 按钮等宽） |
 | `size.modal.btn.h` | `32` | `PhrasesDialog.cpp:32` `kBtnH` | WE-PICK（按钮高度） |
+| `size.modal.btn.radius` | `6` | `PhrasesDialog.cpp` `kBtnRadius` | WE-PICK（`radius.xs` 等价） |
 | `size.modal.title.h` | `30` | `PhrasesDialog.cpp:38` `kTitleH` | WE-PICK |
 | `space.modal.btn.gap` | `8` | `PhrasesDialog.cpp:34` `kBtnGap` | WE-PICK |
 | `space.modal.btn.margin_x` | `12` | `PhrasesDialog.cpp:35` `kBtnMarginX` | WE-PICK |
+| `space.modal.search.margin_x` | `12` | `PhrasesDialog.cpp` `kSearchMarginX` | WE-PICK（spec 043 §7.2） |
 | `color.modal.bg.top` | `RGB(245, 245, 248)` | `PhrasesDialog.cpp:39` `kBgTop` | WE-PICK（跟 QuickPanel bg 风格一致,浅玻璃冷色） |
 | `color.modal.bg.bot` | `RGB(220, 222, 230)` | `PhrasesDialog.cpp:40` `kBgBot` | WE-PICK |
 | `color.modal.text` | `RGB(30, 30, 40)` | `PhrasesDialog.cpp:41` `kTextColor` | WE-PICK（深灰,匹配 macOS HIG） |
 | `color.modal.sel_bg` | `RGB(255, 235, 220)` | `PhrasesDialog.cpp:42` `kSelBg` | WE-PICK（浅橙底,跟 QuickPanel active bg 同色系） |
+| `color.modal.border` | `RGB(217, 217, 217)` (8% 黑 hairline,1px) | `PhrasesDialog.cpp` `kBorderColor` | WE-PICK（spec 043 §7.1） |
+| `color.modal.warn_bg` | `RGB(255, 244, 220)` (status bar 浅黄) | `PhrasesDialog.cpp` `kWarnBg` | WE-PICK |
+| `color.modal.warn_text` | `RGB(120, 80, 30)` (status bar 棕字) | `PhrasesDialog.cpp` `kWarnText` | WE-PICK |
+| `color.modal.search_bg` | `RGB(255, 255, 255)` (search box 白底) | `PhrasesDialog.cpp` `kSearchBg` | WE-PICK |
+| `color.modal.search_border` | `RGB(220, 220, 225)` | `PhrasesDialog.cpp` `kSearchBorder` | WE-PICK |
+| `color.modal.edit_bg` | `RGB(255, 252, 240)` (inline edit 高亮浅黄) | `PhrasesDialog.cpp` `kEditBg` | WE-PICK |
+| `color.modal.button_bg` | `RGB(245, 245, 248)` (button fill,跟 title 同色) | `PhrasesDialog.cpp` `kButtonBg` | WE-PICK |
+| `color.modal.button_bg.hover` | `RGB(230, 232, 240)` | `PhrasesDialog.cpp` `kButtonBgHover` | WE-PICK |
+| `color.modal.button_bg.pressed` | `RGB(255, 235, 220)` (浅橙,跟 sel_bg 同色) | `PhrasesDialog.cpp` `kButtonBgPressed` | WE-PICK |
+| `time.save.debounce_ms` | `500` | `PhrasesDialog.cpp` `kSaveDebounceMs` (IDT_SAVE one-shot) | WE-PICK（spec 043 §7.5 防连续 edit 多次 I/O） |
+| `time.save.retry_ms` | `2000` | `PhrasesDialog.cpp` `kRetryMs` (失败后重试 1 次延迟) | WE-PICK |
+| `time.toast.show_ms` | `3000` | `PhrasesDialog.cpp` `kToastMs` (IDT_TOAST 隐藏) | WE-PICK |
+| `time.grace.show_ms` | `2000` (沿用 v0.19.0.26) | `PhrasesDialog.cpp` `kShowGraceMs` | WE-PICK |
 | `time.drag_threshold_px` | `4` 物理像素 | `QuickPanelDialog.cpp:509` `kDragThresholdPx` (L95 新增) | WE-PICK（spec 042 §3 click-vs-drag 判定） |
+
+### 3.6.1 UserDict (v0.19.0.28 — spec 044)
+
+> 复用 PhrasesDialog modal pattern (`size.modal.*`/`color.modal.*`/`time.save.*`)。本表只列 UserDict 独有 token;共享 token 不重复。
+
+| Token | Value | 当前位置 (本 spec 落地) | 来源 |
+|---|---|---|---|
+| `size.dict.dialog.w` | `920` (v3 mockup 920×600, +160 vs PhrasesDialog 760) | `UserDictionary.cpp` `kDialogW` | WE-PICK（spec 044 §2.1 + mockup v3） |
+| `size.dict.dialog.h` | `600` | `UserDictionary.cpp` `kDialogH` | WE-PICK |
+| `size.dict.title.h` | `38` | `UserDictionary.cpp` `kTitleH` | WE-PICK（spec 044 mockup v3 TITLE_H） |
+| `size.dict.search.h` | `38` | `UserDictionary.cpp` `kSearchH` | WE-PICK（mockup SEARCH_H=38） |
+| `size.dict.row.h` | `38` | `UserDictionary.cpp` `kRowH` | WE-PICK（mockup ROW_H=38） |
+| `size.dict.header.h` | `30` | `UserDictionary.cpp` `kHeaderH` | WE-PICK（mockup HEADER_H=30） |
+| `size.dict.btn.h` | `38` | `UserDictionary.cpp` `kBtnH` | WE-PICK（mockup BTN_H=38） |
+| `size.dict.modal.w` | `360` | `UserDictionary.cpp` `kModalW`（Add/Edit 子 dialog） | WE-PICK（spec 044 §2.2;复用 `size.modal.dialog.w`） |
+| `size.dict.modal.h` | `280` | `UserDictionary.cpp` `kModalH` | WE-PICK |
+| `size.dict.col.text` | `240` | `UserDictionary.cpp` `kColText` | WE-PICK（spec 044 §8.2） |
+| `size.dict.col.code` | `160` | `UserDictionary.cpp` `kColCode` | WE-PICK |
+| `size.dict.col.weight` | `80` | `UserDictionary.cpp` `kColWeight` | WE-PICK |
+| `size.dict.col.schema` | `120` | `UserDictionary.cpp` `kColSchema` | WE-PICK |
+| `size.dict.slider.h` | `22` | `UserDictionary.cpp` `kSliderH`（weight trackbar） | WE-PICK（spec 044 §2.2） |
+| `color.weight.slider.thumb` | `RGB(255,95,49)` (light/dark 品牌橙一致) | `UserDictionary.cpp` `kWeightThumb` | WE-PICK（spec 044 决策5 品牌橙→slider thumb） |
+| `color.weight.slider.track.fill` | `RGB(255,95,49)` @ 60% alpha | `UserDictionary.cpp` `kWeightTrackFill` | WE-PICK |
+| `color.weight.slider.track.empty` | `RGB(196,196,203)` @ 41% alpha | `UserDictionary.cpp` `kWeightTrackEmpty` | WE-PICK（mockup K_HAIRLINE 半透明） |
+| `color.weight.range.low` | `RGB(255,95,49)` (weight ≤30) | `UserDictionary.cpp` `kWeightLow` | WE-PICK（mockup weight_color()） |
+| `color.weight.range.mid` | `RGB(225,156,45)` (weight 31-70) | `UserDictionary.cpp` `kWeightMid` | WE-PICK（amber） |
+| `color.weight.range.high` | `RGB(55,166,92)` (weight 71-100) | `UserDictionary.cpp` `kWeightHigh` | WE-PICK（green） |
+| `color.dict.status_deployed` | `RGB(52,176,94)` (绿点) | `UserDictionary.cpp` `kStatusDeployed` | WE-PICK（mockup pill dot） |
+| `color.dict.status_deploying` | `RGB(225,156,45)` (橙点) | `UserDictionary.cpp` `kStatusDeploying` | WE-PICK |
+| `color.dict.status_error` | `RGB(208,69,69)` (红点) | `UserDictionary.cpp` `kStatusError` | WE-PICK |
+| `time.deploy.toast_ms` | `4000` | `UserDictionary.cpp` `kDeployToastMs` | WE-PICK（spec 044 §2.4 toast auto-hide;比 PhrasesDialog kToastMs=3000 多 1s 给用户读 msg） |
+| `time.deploy.timeout_ms` | `30000` | `UserDictionary.cpp` `kDeployTimeoutMs` | WE-PICK（spec 044 §11 risk;deploy 线程 panic 兜底） |
+| `time.save.debounce_ms` | `500` (复用 §3.6 PhrasesDialog) | 共用 `kSaveDebounceMs` | WE-PICK |
+| `time.backup.keep_count` | `5` | `UserDictionary.cpp` `kBackupKeepCount` | WE-PICK（spec 044 §6.4 LRU=5） |
+
+### 3.6.3 ShortcutSettings (spec 045, v0.19.0.28+)
+
+> 复用 §3.6 PhrasesDialog v2 的 chrome (`size.modal.*`, `color.modal.*`, `radius.lg=14`, `time.grace.show_ms=2000`)。
+> 新增：800×680 主对话框（v3 enlarged，避免 v2 按钮 overlap）、240 宽键捕获 popover、5 个 hotkey 专用 color tokens。
+
+| Token | Value | 当前位置 | 来源 |
+|---|---|---|---|
+| `size.shortcut.dialog.w` | `800` | `ShortcutSettings.cpp` `kDialogW` (Track 3, spec 045 §9.3 + design v3) | WE-PICK（spec 045 v3 enlarged 800×680，避免 v2 按钮 overlap） |
+| `size.shortcut.dialog.h` | `680` | `ShortcutSettings.cpp` `kDialogH` | WE-PICK（同上） |
+| `size.shortcut.popover.w` | `240` | `ShortcutSettings.cpp` `kPopoverW`（capture popover 紧凑尺寸） | WE-PICK（spec 045 §4.1） |
+| `size.shortcut.popover.h` | `100` | `ShortcutSettings.cpp` `kPopoverH` | WE-PICK |
+| `color.scheme.hotkey.conflict_bg` | `RGB(255, 218, 210)` (浅红底) | `ShortcutSettings.cpp` `kConflictBg` | WE-PICK（spec 045 §9.1；destructive 14% alpha 等价） |
+| `color.scheme.hotkey.warning_text` | `RGB(196, 110, 28)` (warning 棕) | `ShortcutSettings.cpp` `kWarningText` | WE-PICK（FLUENT Warning 近似） |
+| `color.scheme.hotkey.success_text` | `RGB(36, 138, 61)` (saved 绿) | `ShortcutSettings.cpp` `kSuccessText` | WE-PICK（FLUENT Success 近似） |
+| `color.scheme.hotkey.unchanged_text` | `RGB(140, 140, 150)` (unchanged badge 灰) | `ShortcutSettings.cpp` `kUnchangedText` | WE-PICK |
+| `color.scheme.hotkey.changed_text` | `RGB(255, 95, 49)` (changed 橙，跟 accent primary 同色) | `ShortcutSettings.cpp` `kChangedText` | WE-PICK（沿用 `color.accent.primary` 火流猩品牌橙） |
+| `time.shortcut.capture_blink_ms` | `500` (1Hz 闪烁) | `ShortcutSettings.cpp` `kCaptureBlinkMs`（caret blink 模拟实时捕获） | WE-PICK |
+| `time.shortcut.popover_show_ms` | `150` | `ShortcutSettings.cpp` `kPopoverShowMs`（fade-in） | WE-PICK（spec 045 §4.1） |
+
+> 颜色原则：`color.scheme.hotkey.*` 都跟 §3.1 的 `color.accent.primary` / `color.destructive` 同源，
+> 不重复发明新色；这里抽出是因为「冲突 / 警告 / 成功」是 hotkey 域专属语义，
+> 复用 `color.destructive` 反而会让 hover / active button 等通用场景抢色。
 
 ---
 

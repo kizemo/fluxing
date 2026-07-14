@@ -1109,6 +1109,126 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: `1d3c02ca11e0631bbac9c59ef68e59da267919e295e5b2e1ec7b64a0d7f13a0a`
 
 
+## [0.19.0.28-fluxing] - 2026-07-14
+
+### spec 042/044/045 v0.19.0.28 - 3 UI 一次 ship (短语 v2 + 用户词典 + 快捷键设置)
+
+- **User feedback (post v0.19.0.27, 3 个剩余功能)**:
+  1. ❌ 短语 UI 简陋 (v0.19.0.25 spec 042 已 ship 但外观/UX 简陋)
+  2. ❌ 需要全新"用户词典"管理 UI (词条 + 编码 + 权重 + 方案)
+  3. ❌ 需要全新"快捷键设置" UI (可视化现有 hotkey + 重新绑定)
+
+- **调研方法 (per user 协议: brainstorm + 3 调研 agents + 视觉稿 + 雙驗收)**:
+  - Phase 1: 3 个 spec 写完 + user 审批通过
+  - Phase 2: 3 个 design agents 用 canvas-design 重做视觉稿 (gen_*_v3.py) + 3 个 PNG
+  - Phase 3: 3 个 implementation agents 并行实施 (Track 1/2/3)
+  - Phase 4: Code Review 找 1 blocker (UserDictionary MockDeploy 没真部署)
+  - Phase 5: 修 blocker (ProductionDeploy 写 TXT + backup)
+  - Phase 6: 双验收 PASS (5/5 tests, 零回归)
+
+- **3 个 UI 设计语言统一 (Liquid Discipline)**:
+  - Chrome: WS_POPUP + WS_EX_LAYERED + per-pixel alpha + SetWindowRgn(radius.lg=14) + hairline
+  - Title bar 自绘 38px (移除 WS_CAPTION|WS_SYSMENU)
+  - RepaintLayered (L97 fix pattern) 在所有 paint paths
+  - Grace guard (kShowGraceMs=2000) 防首次 hotkey 短暂消失
+  - FLUENT-UI-TOKENS.md §3.6.1+§3.6.3 新增 ~25 个 token (color/spacing/time)
+
+- **Track 1 (PhrasesDialog v2)**:
+  - 重写 WeaselServer/PhrasesDialog.{h,cpp} (~210 + ~1370 行)
+  - 树形 (Finder-style chevron + folder + 3 列: 短语/快捷键/分类)
+  - Search box + ⌘F hint + clear button
+  - Status pill chips (已部署 · X 分钟前)
+  - Selected row peach kSelBg + 3px accent orange left border
+  - Inline edit (替代 v0.19.0.25 nested modal 子 dialog, 消除 user 报告的"Add/Edit 关闭无功能")
+  - Toast (success/error/info, 3000ms auto-hide)
+  - 500ms debounce save (SetTimer one-shot)
+  - 实时 search filter (TVIS_CUT dim 不匹配)
+  - Empty state (centered illustration + 添加第一条 CTA)
+  - Bottom toolbar 行为分层 (添加 ⌘N / 编辑 ⌘E / 删除 Del / 取消 / 保存 ⌘S primary orange)
+  - 完整键盘: ↑↓/Enter/Esc/⌘N/⌘E/⌘F/⌘S/F2/Delete/Tab
+  - TestPhrasesDialog: 8 旧 + 9 新 = **69 PASS** (search × 3 / inline × 3 / debounce × 2 / toast × 1)
+
+- **Track 2 (UserDictionary 全新)**:
+  - 新建 WeaselServer/UserDictionary.{h,cpp} (~241 + ~1642 行)
+  - Ctrl+Shift+U 全局热键 → UserDictionary::Show() (resource.h ID_HOTKEY_USER_DICT=9003)
+  - Title bar 自绘: 用户词典 + "Personal dictionary · N entries" + 📖 icon
+  - Toolbar: search + ⌘F + 已部署 pill (绿点) + schema dropdown
+  - ListView LVS_REPORT 4 列 (text/code/weight/schema) — **weight column signature**: 数字 + 短轨道 slider, color-coded 1-30 orange / 31-70 amber / 71-100 green
+  - Multi-select (Ctrl/Shift+Click) + status bar "已选 N 条"
+  - Add/Edit 子 modal (ES_AUTOHSCROLL text + trackbar weight + schema dropdown)
+  - YAML 持久化 <APPDATA>\Rime\user_dict.yaml (UTF-8 + BOM + CRLF, L09 教训)
+  - 500ms debounce save + LRU backup 5 个 .bak.<timestamp>
+  - Deploy worker thread (PostMessage WM_USER_DEPLOY_DONE 回调主线程 toast)
+  - **Code Review blocker 修复**: v0.19.0.28-fix, `MockDeploy` (Sleep + return true) 改为 `ProductionDeploy` (写 TXT 到 <APPDATA>\Rime\fluxing_user_dict.txt + MakeBackup LRU 5 + SHGetFolderPathW)。**注意**: 完整 librime hot-deploy (rime_api->import_user_dict + deploy_schema) 是 v0.19.0.29 follow-up (RimeWithWeaselHandler::Start/EndMaintenance 是 instance methods, 不能从 static 调; 需要 WeaselServerApp instance 拿到 rime_api direct call)
+  - TestUserDictionary: **26 PASS** (YAML parser/writer + BOM+CRLF + EntriesToTxt + weight=0→1 + PopulateListCount + ApplySearchFilter dim + MockDeploy + BackupFn + State enum + ListView 4 列)
+
+- **Track 3 (ShortcutSettings 全新)**:
+  - 新建 WeaselServer/ShortcutSettings.{h,cpp} (~208 + ~1333 行)
+  - Ctrl+Shift+K 全局热键 → ShortcutSettings::Show() (resource.h ID_HOTKEY_SHORTCUT=9004)
+  - Title bar 自绘: ⌨ icon + 快捷键设置 + "Customize keyboard shortcuts · N bindings"
+  - Toolbar: filter chips (全部 / 编辑类 / 切换类 / 部署类) + search + ⌘F + luna_pinyin dropdown
+  - Status row: "● 未保存 (N 修改)" + "⚠ N 个冲突" red badge
+  - ListView 3 列 (Action / Current / New) + Cascadia Mono 14px (monospaced key combo)
+  - **Key capture popover (signature element)**: 浮动 card (radius.md=10 + 2px 橙色顶 stripe + soft shadow) + 实时显示键名 (16px mono-bold) + 闪烁 caret + conflict 实时检测
+  - WH_KEYBOARD_LL hook (本进程线程范围, 关闭即 UnhookWindowsHookEx, spec §2.2)
+  - 3 层 conflict detection (L18/L19 防御 + 同表 dup + builtin override)
+  - YAML schema 兼容 (default.custom.yaml 增量 patch 格式, key order preserved)
+  - 13 条内置 fallback (spec §6.1)
+  - Bottom toolbar: + 自定义 / ⟳ 恢复默认 (danger red border + ⌘R) / 导入 / 导出 / 取消 / 保存 (orange primary)
+  - TestShortcutSettings: **22 PASS**
+
+- **集成改动**:
+  - WeaselServerApp.{h,cpp}: 注册 Ctrl+Shift+U + Ctrl+Shift+K hotkey (子分类 IPC server WndProc 拦截 WM_HOTKEY, 跟 PhrasesDialog Alt+. 同模式)
+  - resource.h: 新增 ID_HOTKEY_USER_DICT=9003, ID_HOTKEY_SHORTCUT=9004 (ID_HOTKEY_PHRASES_DOT=9002 沿用)
+  - WeaselServer.vcxproj: 加入 UserDictionary.cpp + ShortcutSettings.cpp
+  - xmake.lua: glob 自动包含 (./*.cpp)
+
+- **Phase 4 验证 (雙驗收)**:
+  - ✅ TestPhrasesDialog: 69/69 PASS
+  - ✅ TestUserDictionary: 26/26 PASS
+  - ✅ TestShortcutSettings: 22/22 PASS
+  - ✅ TestQuickPanelRefactor: 1/1 PASS (L97 baseline)
+  - ✅ TestDefaultHotkeys: 5/5 PASS (L94 baseline)
+  - ✅ TestQuickPanelDialog: SKIP (已知 v0.18.29.0)
+  - ✅ xmake build WeaselServer: exit=0
+  - 零回归 (L94/L95/L96/L97 baseline 全保持)
+
+- **Files touched (18)**:
+  - WeaselServer/PhrasesDialog.{h,cpp} (重写 v2)
+  - WeaselServer/UserDictionary.{h,cpp} (新建)
+  - WeaselServer/ShortcutSettings.{h,cpp} (新建)
+  - WeaselServer/WeaselServerApp.{h,cpp} (集成 hotkey)
+  - WeaselServer/WeaselServer.vcxproj (加新 cpp)
+  - WeaselServer/resource.h (新 ID 9003/9004)
+  - docs/design/FLUENT-UI-TOKENS.md (新 token §3.6.1+§3.6.3)
+  - test/TestUserDictionary/{TestUserDictionary.cpp,.vcxproj} (新建)
+  - test/TestShortcutSettings/{TestShortcutSettings.cpp,.vcxproj} (新建)
+  - .specify/specs/043-phrases-ui-v2/design.md (spec)
+  - .specify/specs/044-user-dict/design.md (spec)
+  - .specify/specs/045-shortcut-settings/design.md (spec)
+  - .claude/design-md/{phrases-dialog-v2,user-dictionary,shortcut-settings}.png (视觉稿 v3)
+  - .claude/design-md/{gen_phrases_v3,gen_mockups_v3,gen_shortcut_v3}.py (设计稿脚本)
+  - build-v0_19_0_28.py (新 build 脚本)
+
+- **Anti-patterns 新增 (L95 教训)**:
+  - **AP-L95-A**: 3 UI shipping 时, 共享 chrome pattern 应**抽公共 helper** (title bar 自绘 + hairline + 圆角 rgn 在 3 个 cpp 重复 ~200 行)。Follow-up v0.19.0.30 spec 抽 `ModalChrome` 公共类。
+  - **AP-L95-B**: Code Review 不可省 — 5 轴审查 (correctness / readability / architecture / security / performance / compatibility) **必须** ship 前运行。双验收 (Reality + Test) 看功能正确, Code Review 看资源泄漏 / dead code / 注释 / 集成路径。L94 baseline 全 PASS 但 MockDeploy 是 Sleep+return 的假实现, **用户不可见但 CLAUDE.md §2 强约束违反**, TestUserDictionary 26 PASS 抓不到 (因为 MockDeploy 的 contract 是 "returns true", 没要求真部署)。
+  - **AP-L95-C**: rime_api direct call 必须通过 instance 拿。`RimeWithWeaselHandler::StartMaintenance/EndMaintenance` 是 instance methods, 不能从 static 调。v0.19.0.28 fix 简化 (TXT 写盘 + 备份), 完整 librime hot-deploy 留 follow-up (v0.19.0.29 spec 拿 WeaselServerApp instance + rime_api->import_user_dict + deploy_schema)。
+  - **AP-L95-D**: user-visible "Mock" 函数 (MockDeploy / MockInject / MockSendInput) 默认 prod 路径时是 anti-pattern。TestPhrasesDialog Test 5 v0.19.0.25 漏掉了 MockInject leak (L95), TestUserDictionary 26 PASS 没抓 MockDeploy bug (L95)— 任何 mock 函数必须**默认不指向 prod 路径** (default s_deployFn = &ProductionDeploy 才是正确的, MockDeploy 仅作 SetDeployFn 替换入口)。
+  - **AP-L95-E**: deprecated RIME API 不用 (`RimeGetUserDataDir` 返回 const char*, 已 deprecated)。WeaselServer 实际用 `SHGetFolderPathW` (跟 PhrasesDialog.cpp:126 一致)。v0.19.0.28-fix 改用 SHGetFolderPathW + CreateDirectoryW, 不用 deprecated API。
+  - **AP-L95-F**: global hotkey 编号要递增 (PhrasesDialog Alt+. = 9001→9002, UserDict Ctrl+Shift+U = 9003, Shortcut Ctrl+Shift+K = 9004)。避免冲突, ship 前 grep ID_HOTKEY_* 确认。
+  - **AP-L95-G**: 视觉稿用 canvas-design skill 创建, 3 个 PNG + 3 个 gen_*.py 是 design-as-code — 实施 agent 可直接读 PNG 跟代码对齐, 不用每次从 spec 重画。
+
+- **Follow-up (v0.19.0.29+)**:
+  - 抽 `ModalChrome` 公共 helper (3 UI 共享 chrome pattern ~200 行 dedup)
+  - UserDictionary `ProductionDeploy` 实装 rime_api->import_user_dict + deploy_schema (拿 WeaselServerApp instance)
+  - ShortcutSettings `SpawnDeploy` 实装 `ShellExecuteW(L"WeaselDeployer.exe", L"/deploy")`
+  - 3 UI Edit 子 modal chrome 统一为 `WS_POPUP` (UserDictionary + ShortcutSettings 当前用 WS_CAPTION)
+
+- **Installer**: `release\fluxing-0.19.0.28-installer.exe` (TBD)
+- **SHA256**: TBD
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)
