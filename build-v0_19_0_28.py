@@ -9,7 +9,7 @@ VCVARS = r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Aux
 OVERRIDES = {
     "BOOST_ROOT": r"F:\b183",
     "FLUXING_VERSION": "0.19.0",
-    ""WEASEL_BUILD": "28",
+    "WEASEL_BUILD": "28",
     "PRODUCT_VERSION": "0.19.0.28",
     "FILE_VERSION": "0.19.0.28",
     "VERSION_MAJOR": "0",
