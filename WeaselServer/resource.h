@@ -36,6 +36,12 @@
 // spec 042: Alt+. global hotkey → PhrasesDialog::Show
 #define ID_HOTKEY_PHRASES_DOT          9002
 
+// spec 044: Ctrl+Shift+U global hotkey → UserDictionary::Show
+#define ID_HOTKEY_USER_DICT            9003
+
+// spec 045 v0.19.0.28: Ctrl+Shift+K global hotkey → ShortcutSettings::Show()
+#define ID_HOTKEY_SHORTCUT             9004
+
 // spec 052 v0.18.31.0: enable QuickPanel always-show mode (20% alpha)
 #define ID_QUICKPANEL_ALWAYS_SHOW      40019
 #define IDR_FLUXING_LOGO                108

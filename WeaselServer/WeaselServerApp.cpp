@@ -4,6 +4,8 @@
 #include <iostream>  // v0.19.0.25-fix(spec 042 §12 风险):RegisterHotKey 失败 wcerr log
 #include "QuickPanelDialog.h"
 #include "PhrasesDialog.h"  // v0.19.0.25-fix(spec 042 §3):Track 3 wiring
+#include "UserDictionary.h"  // v0.19.0.28(spec 044 §3.2):Track 3 wiring
+#include "ShortcutSettings.h"  // spec 045 v0.19.0.28: Track 3 wiring
 // spec 070 T007: D2D factory 创建 (在 WeaselServerApp::Run 入口)
 #include <d2d1.h>
 #pragma comment(lib, "d2d1.lib")
@@ -30,11 +32,23 @@ LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
                                                            UINT msg,
                                                            WPARAM w,
                                                            LPARAM l) {
-  if (msg == WM_HOTKEY && w == ID_HOTKEY_PHRASES_DOT) {
-    // spec 042 §12 风险:Alt+. 全局热键可能跟其他 app 冲突 → RegisterHotKey 失败时
-    // 仅 log warning,不 crash。这里成功路径就直接调。
-    PhrasesDialog::Show();
-    return 0;
+  if (msg == WM_HOTKEY) {
+    if (w == ID_HOTKEY_PHRASES_DOT) {
+      // spec 042 §12 风险:Alt+. 全局热键可能跟其他 app 冲突 → RegisterHotKey 失败时
+      // 仅 log warning,不 crash。这里成功路径就直接调。
+      PhrasesDialog::Show();
+      return 0;
+    }
+    if (w == ID_HOTKEY_USER_DICT) {
+      // spec 044 §3.2:Ctrl+Shift+U → UserDictionary::Show
+      UserDictionary::Show();
+      return 0;
+    }
+    if (w == ID_HOTKEY_SHORTCUT) {
+      // spec 045 v0.19.0.28:Ctrl+Shift+K → ShortcutSettings::Show
+      ShortcutSettings::Show();
+      return 0;
+    }
   }
   // 透传:必须 CallWindowProc 回原 WNDPROC(否则破坏 ServerImpl OnHotkey/WM_COMMAND 等)
   WeaselServerApp* owner = s_phrasesHotkeyOwner;
@@ -67,12 +81,30 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
     std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Alt+.) failed, err="
                << ::GetLastError() << std::endl;
   }
+
+  // 3) v0.19.0.28(spec 044 §3.2):注册全局热键 Ctrl+Shift+U → UserDictionary::Show
+  //    字母 U 的虚拟键码是 0x55 (ASCII 'U')
+  if (!::RegisterHotKey(hwndServer, ID_HOTKEY_USER_DICT,
+                        MOD_CONTROL | MOD_SHIFT, 0x55)) {
+    std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Ctrl+Shift+U) failed, err="
+               << ::GetLastError() << std::endl;
+  }
+
+  // 4) spec 045 v0.19.0.28: Ctrl+Shift+K → ShortcutSettings::Show
+  //    字母 K 的虚拟键码是 0x4B (ASCII 'K')
+  if (!::RegisterHotKey(hwndServer, ID_HOTKEY_SHORTCUT,
+                        MOD_CONTROL | MOD_SHIFT, 0x4B)) {
+    std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Ctrl+Shift+K) failed, err="
+               << ::GetLastError() << std::endl;
+  }
 }
 
 void WeaselServerApp::UnregisterPhrasesHotkey() {
   HWND hwndServer = m_server.GetHWnd();
   if (hwndServer) {
     ::UnregisterHotKey(hwndServer, ID_HOTKEY_PHRASES_DOT);
+    ::UnregisterHotKey(hwndServer, ID_HOTKEY_USER_DICT);  // spec 044
+    ::UnregisterHotKey(hwndServer, ID_HOTKEY_SHORTCUT);   // spec 045
     if (m_ipcServerOrigWndProc) {
       ::SetWindowLongPtr(hwndServer, GWLP_WNDPROC,
                          reinterpret_cast<LONG_PTR>(m_ipcServerOrigWndProc));

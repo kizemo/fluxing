@@ -12,6 +12,7 @@
 #include <winsparkle.h>
 
 #include "WeaselTrayIcon.h"
+#include "ShortcutSettings.h"  // spec 045 v0.19.0.28: Track 3 wiring
 
 namespace fs = std::filesystem;
 
@@ -73,6 +74,10 @@ class WeaselServerApp {
   //   Stop 路径在 m_server.Run() 返回后,UnregisterHotKey + 还原 WNDPROC。
   void RegisterPhrasesHotkey();
   void UnregisterPhrasesHotkey();
+
+  // spec 045 v0.19.0.28: Ctrl+Shift+K → ShortcutSettings::Show()
+  void RegisterShortcutHotkey();
+  void UnregisterShortcutHotkey();
 
   // IPC server window 原 WNDPROC(子类化前保存,UnregisterPhrasesHotkey 时还原)
   static LRESULT CALLBACK PhrasesHotkeySubclassProc(HWND, UINT, WPARAM, LPARAM);
