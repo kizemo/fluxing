@@ -13,6 +13,8 @@
 
 #include "WeaselTrayIcon.h"
 #include "ShortcutSettings.h"  // spec 045 v0.19.0.28: Track 3 wiring
+#include "UserDictionary.h"    // spec 044 v0.19.0.28: Track 3 wiring
+#include "QuickPanelDialog.h"  // v0.19.0.29: SetOnUserDict / SetOnShortcut setter call
 
 namespace fs = std::filesystem;
 
@@ -78,6 +80,13 @@ class WeaselServerApp {
   // spec 045 v0.19.0.28: Ctrl+Shift+K → ShortcutSettings::Show()
   void RegisterShortcutHotkey();
   void UnregisterShortcutHotkey();
+
+  // v0.19.0.29(mockups-v0.19.0.28 设计稿):把 UserDict / Shortcut 入口从 QuickPanel
+  // 接到对应 dialog。让 QuickPanel 第 3 个按钮 (Symbols, hit==2) → UserDict::Show,
+  // 第 4 个按钮 (Settings, hit==3) → ShortcutSettings::Show。Setter 转发给 QuickPanel
+  // 内部静态字段,与 s_onPhrases 注入路径平行。
+  static void SetQuickPanelUserDictCallback(QuickPanelDialog::OnShowUserDict fn);
+  static void SetQuickPanelShortcutCallback(QuickPanelDialog::OnShowShortcut fn);
 
   // IPC server window 原 WNDPROC(子类化前保存,UnregisterPhrasesHotkey 时还原)
   static LRESULT CALLBACK PhrasesHotkeySubclassProc(HWND, UINT, WPARAM, LPARAM);

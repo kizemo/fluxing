@@ -177,6 +177,15 @@ QuickPanelDialog::OnClick QuickPanelDialog::s_onPhrases;
 QuickPanelDialog::OnToggle QuickPanelDialog::s_onFullwidth;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onSymbols;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onLogin;
+// v0.19.0.29:hit==2/3 走 SetOn* setter 注入 callback。
+QuickPanelDialog::OnShowUserDict QuickPanelDialog::s_onUserDict;
+QuickPanelDialog::OnShowShortcut QuickPanelDialog::s_onShortcut;
+
+// v0.19.0.29 setter 实现。SetOn* 在 WeaselServerApp::Run() 末尾(after m_server
+// Start + RegisterPhrasesHotkey,before m_server.Run 进入消息循环)调一次,
+// 跟 m_server 同 lifecycle。
+void QuickPanelDialog::SetOnUserDict(OnShowUserDict fn) { s_onUserDict = fn; }
+void QuickPanelDialog::SetOnShortcut(OnShowShortcut fn) { s_onShortcut = fn; }
 
 int QuickPanelDialog::s_hoveredIdx = -1;
 int QuickPanelDialog::s_activeIdx  = -1;
@@ -528,10 +537,17 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
         RepaintLayered(hwnd);
 
         // v0.19.0.25-fix: drag 分支 fall-through click 路由。如果鼠标未实际位移,
-        // 等同"按下并释放同一按钮" → invoke 回调。只接 Phrase 按钮 (oldActiveIdx==1),
-        // 其它 4 个按钮 callback 仍 no-op(spec 070 T007 历史遗留,本次不扩)。
-        if (!actualDrag && oldActiveIdx == 1 && s_onPhrases) {
-          s_onPhrases();
+        // 等同"按下并释放同一按钮" → invoke 回调。
+        // v0.19.0.29:扩展为 5 按钮部分接通 — 0/4 仍 no-op (历史 placeholder,follow-up
+        // spec 加 ASCII mode toggle / 登录);1 Phrase / 2 UserDict / 3 Shortcut 真接通。
+        // 见 docs/design/mockups-v0.19.0.28/ 设计稿(3 个 dialog 都应从 QuickPanel 进入)。
+        // hit 与 button 映射:0 Schema, 1 Phrase, 2 Symbols→UserDict, 3 Settings→Shortcut,
+        // 4 Account(no-op)。
+        if (!actualDrag) {
+          if (oldActiveIdx == 1 && s_onPhrases) s_onPhrases();
+          else if (oldActiveIdx == 2 && s_onUserDict) s_onUserDict();
+          else if (oldActiveIdx == 3 && s_onShortcut) s_onShortcut();
+          // hit 0/4: no-op (follow-up spec 加 ASCII mode toggle / 登录)
         }
       } else {
         POINT p = {LOWORD(l), HIWORD(l)};
@@ -542,11 +558,15 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
           // 只在 hit==s_activeIdx 时才表示"按下与释放同一按钮"(否则算 drag start)。
           // L94-fix A (cpp:504) 在 drag 分支 reset s_activeIdx,所以这里对称:
           // click 分支先检查 hit==s_activeIdx 再 invoke。
-          // 只接 Phrase 按钮 (hit==1,见 cpp:827 DrawIconPhrase switch case),
-          // 其它 4 个按钮 callback 仍 no-op(spec 070 T007 历史遗留,本次不扩)。
+          // v0.19.0.29:扩展 hit 分支 — 1 Phrase / 2 UserDict / 3 Shortcut。0/4 仍 no-op。
           if (hit == 1 && s_onPhrases) {
             s_onPhrases();
+          } else if (hit == 2 && s_onUserDict) {
+            s_onUserDict();
+          } else if (hit == 3 && s_onShortcut) {
+            s_onShortcut();
           }
+          // hit 0/4: no-op (follow-up spec 加 ASCII mode toggle / 登录)
         }
         s_activeIdx = -1;
         // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered。

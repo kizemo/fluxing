@@ -42,6 +42,16 @@ class QuickPanelDialog {
 
   enum class Mode { kHidden, kAlwaysShow };
 
+  // v0.19.0.29(spec 070 T007 follow-up + mockups-v0.19.0.28 设计稿):
+  // 5 按钮中 0/4 仍 no-op (历史 placeholder,follow-up spec 加 ASCII mode toggle
+  // / 登录);1 Phrase / 2 UserDict (NEW) / 3 Shortcut (NEW)。
+  // UserDict / Shortcut 通过 SetOn* setter 注入,与现有 s_onPhrases (Show 时传)
+  // 路径平行。
+  using OnShowUserDict = std::function<void()>;
+  using OnShowShortcut = std::function<void()>;
+  static void SetOnUserDict(OnShowUserDict fn);
+  static void SetOnShortcut(OnShowShortcut fn);
+
   // Public API (与 D2D 版本完全兼容)
   static void Show(bool currentFullwidth,
                    OnClick onSchema,
@@ -80,6 +90,10 @@ class QuickPanelDialog {
   static OnToggle s_onFullwidth;
   static OnClick  s_onSymbols;
   static OnClick  s_onLogin;
+  // v0.19.0.29:hit==2 → UserDict,hit==3 → Shortcut。Setter 注入(与 Show() 7 参
+  // 路径并存;Show 路径的 onSymbols/onLogin 仍是 placeholder)。
+  static OnShowUserDict s_onUserDict;
+  static OnShowShortcut s_onShortcut;
 
   // T005: hover/active 索引 (-1 = none)
   static int      s_hoveredIdx;

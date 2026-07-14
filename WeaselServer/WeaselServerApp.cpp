@@ -10,6 +10,19 @@
 #include <d2d1.h>
 #pragma comment(lib, "d2d1.lib")
 
+// v0.19.0.29:QuickPanel button 2/3 callback 转发 setter。static 实现,
+// 把 fn 存到 QuickPanelDialog 内部 static 字段(QuickPanelDialog::s_onUserDict /
+// s_onShortcut),WeaselServerApp::Run() 在 m_server.Start 后调一次。
+void WeaselServerApp::SetQuickPanelUserDictCallback(
+    QuickPanelDialog::OnShowUserDict fn) {
+  QuickPanelDialog::SetOnUserDict(fn);
+}
+
+void WeaselServerApp::SetQuickPanelShortcutCallback(
+    QuickPanelDialog::OnShowShortcut fn) {
+  QuickPanelDialog::SetOnShortcut(fn);
+}
+
 WeaselServerApp::WeaselServerApp()
     : m_handler(std::make_unique<RimeWithWeaselHandler>(&m_ui)),
       tray_icon(m_ui) {
@@ -161,6 +174,14 @@ int WeaselServerApp::Run() {
   // 在 m_server.Start() 时创建,WM_CREATE 已经发出 → ServerImpl::OnCreate 注册了 Alt+,;
   // 现在再加 Alt+.)。失败仅 log warning,不 crash(spec 042 §12 风险)。
   RegisterPhrasesHotkey();
+
+  // v0.19.0.29(mockups-v0.19.0.28 设计稿):把 QuickPanel hit==2 (Symbols) → UserDict,
+  // hit==3 (Settings) → Shortcut 接线。QuickPanelDialog::SetOn* setter 内部存 static
+  // std::function,callback 在 QuickPanelDialog::WndProc WM_LBUTTONUP click 路由触发。
+  // 这里调一次,SetOn* 是 idempotent(fn null 即清空),但 lifecycle 与 WeaselServerApp
+  // 同,只在 Run 入口调一次即可。
+  SetQuickPanelUserDictCallback([]() { UserDictionary::Show(); });
+  SetQuickPanelShortcutCallback([]() { ShortcutSettings::Show(); });
 
   int ret = m_server.Run();
 

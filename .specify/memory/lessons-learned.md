@@ -8320,3 +8320,61 @@ L95 在 L94 (3 agent 调研 + 雙驗收) pattern 基础上升级:
 ### Ship
 - `release\fluxing-0.19.0.28-installer.exe` (TBD)
 - SHA256 (TBD)
+
+
+## L96 - v0.19.0.29: QuickPanel 5 按钮 partial 接通 (Phrase + UserDict + Shortcut)
+
+**User feedback (post v0.19.0.28, 1 bug)**:
+- ❌ QuickPanel 5 按钮 (hit 0-4) 实际只有 1 个接通 (Phrase → s_onPhrases), 其他 4 个是 no-op placeholder
+- ❌ 视觉稿 (docs/design/mockups-v0.19.0.28/) 展示 3 个 dialog 都应从 QuickPanel 进入, 但实际 UserDict + Shortcut 只能通过 global hotkey 触发
+- ✅ 设计稿本身 OK (PNG + DESIGN-PHILOSOPHY.md)
+
+### Root cause
+
+v0.19.0.28 ship 的 UserDict + Shortcut 只接 `RegisterHotKey` 路径, 没接 QuickPanel button 路径:
+- `s_onPhrases` 走 Show() 7 参 inline 传入 (5 OnClick + 1 OnToggle)
+- 7 参已固定: onSchema / onUserFolder / onPhrases / onFullwidth / onSymbols / onLogin
+- 4 个现有 OnClick (onSchema / onUserFolder / onSymbols / onLogin) 都是 placeholder
+- UserDict/Shortcut 塞不进 7 参
+
+L95 spec 042 没考虑 QuickPanel 集成, 留下这个 follow-up。**L95 流程教训**: spec 写完 + 视觉稿批准 后, 实施前必须问 "这个 dialog 怎么从 user 现有 flow 进入"。
+
+### Phase 2 修法 (L96)
+
+- `QuickPanelDialog.h` 加 2 个 typedef (`OnShowUserDict`/`OnShowShortcut`) + 2 个 Setter 声明 + 2 个 static 字段 (`s_onUserDict`/`s_onShortcut`)
+- `QuickPanelDialog.cpp` WM_LBUTTONUP drag 分支 + else 分支 各加 2 个 hit routing (hit==2 → s_onUserDict, hit==3 → s_onShortcut)
+- `WeaselServerApp.cpp` Run() 末尾 (在 m_server.Run 之前) wiring 2 个闭包 → `UserDictionary::Show()` / `ShortcutSettings::Show()`
+
+### Phase 4 驗收 (雙 PASS)
+
+- ✅ TestPhrasesDialog: 69/69
+- ✅ TestUserDictionary: 26/26
+- ✅ TestShortcutSettings: 22/22
+- ✅ Code Review: PASS (2 suggestions, 0 must-fix)
+- ✅ 5 按钮 click 路径全过 (drag + else 分支互斥, 无双 invoke)
+- ✅ L94/L95/L96/L97 baseline 不回归
+
+### Anti-patterns 新增 (L96)
+
+- **AP-L96-A**: QuickPanel 5 按钮设计 (Schema/Phrase/Symbols/Settings/Account) 是从上游 weasel 0.17.4 沿用的, 已经固化了 8 年。UserDict + Shortcut 是 v0.19.0.28 新增, **不适合硬塞进 5 按钮** (会破坏 L86 hover/active design)。正确做法: **保留 5 按钮原设计, 用 OnShowUserDict/OnShowShortcut setter 模式 + alt+hotkey 双入口**。L95 spec 042 没考虑 QuickPanel 集成, 留下这个 follow-up。
+- **AP-L96-B**: 5 按钮 Show() 7 参 (5 OnClick + 1 OnToggle) 是 history-locked。后续加新 dialog 用 SetOn* setter 模式, 不破坏 inline API。
+- **AP-L96-C**: 闭包 wiring 时机必须在 `m_server.Run()` 之前 (QuickPanel hotkey + click 路径依赖 static field 就绪)。L96 wiring 位置正确 (WeaselServerApp.cpp:183-184 在 L186 m_server.Run 之前)。
+- **AP-L96-D**: hit 0/4 仍是 no-op placeholder, 缺视觉反馈 (无 hover 选中、active bg 残留)。L96 follow-up 加 ASCII mode toggle / 登录, hit 0/4 也能进 callback。
+- **AP-L96-E**: design 稿 (.claude/design-md/) 不入 git 默认。L96 移到 docs/design/mockups-v0.19.0.28/ 跟踪 (commit a62856f6), 防止 design-as-code 漂移。
+- **AP-L96-F**: vcxproj 默认 PlatformToolset=v142 (VS2019), 系统只有 v143 (VS2022)。Override `/p:PlatformToolset=v143` 才能 build。L96 文档化此环境要求。
+
+### Files touched (v0.19.0.29, 5)
+- `WeaselServer/QuickPanelDialog.h` (+14)
+- `WeaselServer/QuickPanelDialog.cpp` (+26/-6)
+- `WeaselServer/WeaselServerApp.h` (+9)
+- `WeaselServer/WeaselServerApp.cpp` (+21)
+- `docs/design/mockups-v0.19.0.28/` (commit a62856f6, PNG + PHILOSOPHY 跟踪)
+
+### Follow-up (v0.19.0.30+)
+- QuickPanel 5 按钮 show() inline 模式 vs SetOn* setter 模式统一为单一 setter pattern
+- hit 0/4 callback 加 `std::wcerr` warn log, hit 5/6 (新增) 加 ASCII toggle / 登录
+- 全套 vcxproj `PlatformToolset` 升 v143 (避免 override 命令行)
+
+### Ship
+- `release\fluxing-0.19.0.29-installer.exe` (TBD)
+- SHA256 (TBD)

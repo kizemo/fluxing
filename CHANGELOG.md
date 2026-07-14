@@ -1229,6 +1229,31 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: TBD
 
 
+## [0.19.0.29-fluxing] - 2026-07-14
+
+### spec 070 v0.19.0.29 - QuickPanel 5 按钮 partial 接通 (Phrase + UserDict + Shortcut)
+
+- **User feedback (post v0.19.0.28)**: QuickPanel 5 按钮 (hit 0-4) 实际只有 1 个接通 (Phrase → s_onPhrases), 其他 4 个是 no-op placeholder。视觉稿 (docs/design/mockups-v0.19.0.28/) 展示 3 个 dialog 都应从 QuickPanel 进入, 但实际 UserDict + Shortcut 只能通过 global hotkey 触发。
+- **Root cause**: UserDict + Shortcut 只接 RegisterHotKey, 没接 QuickPanel button 路径。Show() 7 参已固定 (5 OnClick + 1 OnToggle), 无法塞进 UserDict/Shortcut。
+- **修法 (L96)**: 加 2 个 setter (OnShowUserDict/OnShowShortcut) + 2 个 static 字段, 不破坏 Show() 7 参 inline pattern。WeaselServerApp.cpp Run() 末尾 wiring 2 个闭包。
+- **5 按钮 hit 映射 (per design 稿)**:
+  - 0 Schema (no-op, follow-up 加 ASCII mode toggle)
+  - 1 Phrase → s_onPhrases() → PhrasesDialog v0.19.0.28 ✓
+  - 2 Symbols → s_onUserDict() (NEW) → UserDictionary v0.19.0.28
+  - 3 Settings → s_onShortcut() (NEW) → ShortcutSettings v0.19.0.28
+  - 4 Account (no-op, follow-up 加登录)
+- **驗收 (雙 PASS)**:
+  - TestPhrasesDialog: 69/69, TestUserDictionary: 26/26, TestShortcutSettings: 22/22
+  - Code Review: PASS (2 follow-up suggestions, no must-fix)
+  - 5 按钮 click 路径全过, drag/else 互斥无双 invoke
+  - L94/L95/L96/L97 baseline 不回归
+- **Files touched (5)**: WeaselServer/QuickPanelDialog.{h,cpp} + WeaselServerApp.{h,cpp} + docs/design/mockups-v0.19.0.28/
+- **Anti-patterns (L96)**: AP-L96-A (5 按钮 hardcode, UserDict/Shortcut 不塞) / B (7 参 history-lock) / C (wiring 必须在 m_server.Run 前) / D (hit 0/4 no-op 视觉) / E (design 稿 git 跟踪) / F (vcxproj v142→v143)
+- **Follow-up (v0.19.0.30+)**: 统一 SetOn* setter pattern, hit 0/4 加 log + ASCII toggle / 登录, vcxproj 升 v143
+- **Installer**: release/fluxing-0.19.0.29-installer.exe (TBD)
+- **SHA256**: TBD
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)
@@ -1389,7 +1414,8 @@ spec 055/TaskTracker [P0]
 
 - **Cure (5 production files + 5 targetver.h + 0 test 增量)**:
   1. WeaselUI/FluxingComponents/D2DRenderer.cpp - CreateHwndRenderTarget 用 raw GetClientRect (= HWND 物理 size, V1 child physical = logical × 96/dpi, 与 top-level logical × dpi/96 方向相反). D2D1_RENDER_TARGET_PROPERTIES dpiX/dpiY 默认 96 (不传 dpi), backing store = HWND 物理 size. GetPhysicalClientRect 返回 raw physical (不再 scale).
-  2. WeaselUI/FluxingComponents/Label.cpp - HandlePaint 加 t->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f)) 防止 D2D backing store opaque-black 透出. WM_DPICHANGED handler ReleaseHwndRenderTarget + InvalidateRect.
+  2. WeaselUI/FluxingComponents/Label.cpp - HandlePaint 加 
+t->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f)) 防止 D2D backing store opaque-black 透出. WM_DPICHANGED handler ReleaseHwndRenderTarget + InvalidateRect.
   3. WeaselUI/FluxingComponents/Panel.cpp - 同上 Clear() + WM_DPICHANGED handler.
   4. WeaselUI/FluxingComponents/Button.cpp - 同上 Clear() + WM_DPICHANGED handler.
   5. WeaselUI/FluxingComponents/Toggle.cpp - 同上 Clear() + WM_DPICHANGED handler.
@@ -1406,7 +1432,8 @@ spec 055/TaskTracker [P0]
   - L47 byte-verify: 全部 source file byte-healthy (C0=0 C1=0, .h/.cpp LF, .sln/.bat CRLF).
   - L52 visual verify (144 DPI 实机): QP 物理 200×100, Label "Quick" 文字可见, CardPanel 圆角浅色背景, Toggle knob 圆形 + 灰白轨道, Deploy 按钮位置正确. 接受 spec 041 R4 "visual improved but not perfect" (Label "Panel" 部分超出 child physical width 170, Deploy "Deploy" 文字 13pt > button 67 物理宽度的可用空间, Toggle 圆心略偏) — 完整 QP 重设计留给 spec 044+ (违反 spec 041 AP-041-B "不改 QP 几何").
 
-- **L52 正式追加 (DPI handling 完整 pattern)**: 6 个关键 D2D+V1 PerMonitor DPI 技术要点 + V1 child vs top-level 物理缩放方向相反 (本 spec 041 plan 未察觉这一不对称) + D2D rt backing store 默认 opaque black 必须 t->Clear(). 0.18.28.0 ship 时已应用.
+- **L52 正式追加 (DPI handling 完整 pattern)**: 6 个关键 D2D+V1 PerMonitor DPI 技术要点 + V1 child vs top-level 物理缩放方向相反 (本 spec 041 plan 未察觉这一不对称) + D2D rt backing store 默认 opaque black 必须 
+t->Clear(). 0.18.28.0 ship 时已应用.
 
 - **release/fluxing-0.18.28.0-installer.exe**: 42,859,365 bytes, SHA256 5F051468E0C0FFF3245AD5883B99C636CC3D5C83265F01C38DED2B4A0C6A6205, 部署到 C:\Program Files\fluxing\weasel\ (weasel.dll 1,737,728 / WeaselServer.exe 1,981,952 / WeaselDeployer.exe 591,360), user1/fluxing\ 数据保留.
 ## [0.18.27.2-fluxing] - 2026-07-06
@@ -1737,7 +1764,8 @@ spec 055/TaskTracker [P0]
 
 
 ## [0.18.14.0-fluxing] - 2026-07-03
-### spec 026: fix TestWeaselIPC integration test orchestration (4-spec-long silent -2 closed)
+
+### spec 026: fix TestWeaselIPC integration test orchestration (4-spec-long silent -2 closed)
 
 - **Problem**: every spec since 015 (4 specs: 017, 018, 019, 024, 025) shipped
   under "ALL TESTS PASSED" claims, but TestWeaselIPC.exe was actually
@@ -2158,11 +2186,14 @@ spec 055/TaskTracker [P0]
 
 - **Problem**: (7� 0.18.7.0 �K͈ "(	W͗�, ��	�,�/
   ,		W�"spec 005 v1.1 US1-B �� "	 Shift_L/R 	, 2/3 	" (
-  0.18.6.0 K� L19 � , 0.18.7.0 � CI �@��F*b���
+  0.18.6.0 K� L19 � , 0.18.7.0 �
+ CI �@��F*b
+���
 
 - **Fix (spec 014)**: ( key_binder/bindings has_menu �, ( Control+1/2
   KM�� 2 L binding, ( spec 012 plan.md �2.2 ��� ccept: Shift+Shift_L/R
-  b (modifier=Shift, � TSF release event �9M):
+  b (modifier=Shift, 
+� TSF release event �9M):
   `yaml
   - { when: has_menu, accept: Shift+Shift_L, send: 2 }
   - { when: has_menu, accept: Shift+Shift_R, send: 3 }
@@ -2170,14 +2201,17 @@ spec 055/TaskTracker [P0]
 
 - **L21 Y�**: L19 / over-correction - �d�@	 keycode=Shift_L/R binding,
   � spec 005 v1.1 �� has_menu bindingL19 ��� "W&2� ���
-   yaml �,��a binding X(/X(", F L19 ��t�V TestDefaultHotkeys
-  31/31 PASS e"��"�, ͽ0��W&2KՄ@P
+   yaml �,��a binding X(/
+X(", F L19 ��t�V TestDefaultHotkeys
+  31/31 PASS e"��"�
+, ͽ0��W&2KՄ@P
 
 - **KՆ�**:
   - TestDefaultHotkeys.exe output\data\default.yaml -> Passed: 35 / 35
     (4 * L19 �c + 4 *�c)
   - TestShiftSelectBinding.exe output\data\default.yaml -> Passed: 13 / 13 (�)
-  - $W�� runtime KդɌ� spec 014 �, M L18/L19 � "passing
+  - $W�� runtime KդɌ� spec 014 �
+, M L18/L19 � "passing
     test, regressed behavior" w1
 
 - **Build**:
@@ -2192,25 +2226,32 @@ spec 055/TaskTracker [P0]
   \user1\fluxing, default.yaml + spec 014 �
 
 - **Refs**: L19 (� L21 ��), L20 (silent-install cmd /c wrapper �(), spec 012
-  (L16 �F* ship), spec 014 (L21 �), spec 005 v1.1 US1-B (b�)
+  (L16 �F* ship), spec 014 (L21 �
+), spec 005 v1.1 US1-B (b
+�)
 
 �## [0.18.6.0-fluxing] - 2026-07-01
 
 ### L19: defensive remove of all keycode=Shift_L/R bindings (spec 005 v1.1)
 
 - **Problem**: 0.18.5.0 (7�K͈ `shift+Enter` / `shift+<letter>` release
-  event ��� ascii_mode bL18 �commit `e4095f2`	��d�
+  event ��� ascii_mode bL18 �
+commit `e4095f2`	��d�
   `always: Shift+Shift_L/R toggle ascii_mode`F�Y�
   `has_menu: Shift+Shift_L/R send 2/3` � bindingL18 W&2� 
-  25/25 PASS ���L� binding hL:0.18.6 ��* buildL18
-  �*��Ō�	
+  25/25 PASS 
+���L� binding hL:0.18.6 ��* buildL18
+  �
+*��Ō�	
 
 - **Fix (L19)**: 2�'�`output/data/default.yaml` -
-  `keycode=Shift_L/R` �@	 binding **h�X(**+ `always` 
+  `keycode=Shift_L/R` �@	 binding **h�
+X(**+ `always` 
   `has_menu` $a�	
 
   - 		�9( RIME >:ؤ.M `Control+1/2/3..9`
-    keycode=`1`/`2`/`3`..`9`  `Shift_L/R` release event ��	
+    keycode=`1`/`2`/`3`..`9`  `Shift_L/R` release event 
+��	
   - -��Y `Shift+space`keycode=`space`	
   - ascii_composer `switch_key.Shift_L/R: noop` �Y� key_binder ��	
 
@@ -2221,7 +2262,8 @@ spec 055/TaskTracker [P0]
 
 - **Unverified**: ���L:librime submodule a�0.18.6 build
   �� release �6	(7�� 0.18.6 �{K���
-  - `shift+Enter` / `shift+<letter>` �-�
+  - `shift+Enter` / `shift+<letter>` 
+�-�
   - `Shift+space` ��-�
   - 	�S � `Control+1` / `Control+2` 	, 2/3 	
 
@@ -3873,7 +3915,8 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
 
 - **Files (1 modified):**
   - MOD: .specify/specs/008-candidate-edit/tasks.md (updated from open to shipped; coverage map added)
-  - NEW: elease/fluxing-0.18.21.0-installer.exe (rebuilt from current source; 0.18.20.1 source is identical for spec 008, so 0.18.21.0 installer is bit-equivalent except for filename and version metadata)
+  - NEW: 
+elease/fluxing-0.18.21.0-installer.exe (rebuilt from current source; 0.18.20.1 source is identical for spec 008, so 0.18.21.0 installer is bit-equivalent except for filename and version metadata)
 
 - **NOT changed (per A3, gitignored):**
   - env.bat (FLUXING_VERSION 0.18.20 stays; this is a spec-008-finalization release, not a feature release)
