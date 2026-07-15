@@ -6,6 +6,7 @@
                      // 之前 PhrasesDialog.cpp 不在 WeaselServer.vcxproj,所以此
                      // 问题被掩盖;v0.19.0.30 加进 vcxproj 后 PCH 扫描失败。
 #include "PhrasesDialog.h"
+#include "ModalChrome.h"  // v0.19.0.31: 抽出的 BG+Border paint helper
 
 #include <algorithm>
 #include <cassert>
@@ -897,42 +898,13 @@ LRESULT PhrasesDialog::OnPaint(HWND hwnd) {
   RECT rc;
   GetClientRect(hwnd, &rc);
 
-  // 1) Title bar bg (渐变 kBgTop → kBgBot, [0, kTitleH))
-  {
-    RECT titleBg = {0, 0, kDialogW, kTitleH};
-    TRIVERTEX v[2] = {};
-    v[0].x = titleBg.left; v[0].y = titleBg.top;
-    v[0].Red   = static_cast<COLOR16>(GetRValue(kBgTop)) << 8;
-    v[0].Green = static_cast<COLOR16>(GetGValue(kBgTop)) << 8;
-    v[0].Blue  = static_cast<COLOR16>(GetBValue(kBgTop)) << 8;
-    v[0].Alpha = 0xFF00;
-    v[1].x = titleBg.right; v[1].y = titleBg.bottom;
-    v[1].Red   = static_cast<COLOR16>(GetRValue(kBgBot)) << 8;
-    v[1].Green = static_cast<COLOR16>(GetGValue(kBgBot)) << 8;
-    v[1].Blue  = static_cast<COLOR16>(GetBValue(kBgBot)) << 8;
-    v[1].Alpha = 0xFF00;
-    GRADIENT_RECT g = {0, 1};
-    if (!GradientFill(hdc, v, 2, &g, 1, GRADIENT_FILL_RECT_V)) {
-      HBRUSH bg = CreateSolidBrush(kBgTop);
-      FillRect(hdc, &titleBg, bg);
-      DeleteObject(bg);
-    }
-  }
+  // v0.19.0.31: WS_POPUP+WS_EX_LAYERED 模式不自动填背景 → paint 全 client
+  // 渐变 (原 v0.19.0.27-30 bug 只画 [0,kTitleH)=30px, body 透明 → 空 body)。
+  ModalChrome::PaintBackgroundAndBorder(hdc, kDialogW, kDialogH,
+                                         kBgTop, kBgBot,
+                                         kDlgRadius, kBorderColor);
 
-  // 2) Hairline 边框 (kBorderColor)
-  {
-    HPEN hPen = CreatePen(PS_SOLID, 1, kBorderColor);
-    HPEN hOld = static_cast<HPEN>(SelectObject(hdc, hPen));
-    HBRUSH hOldBr =
-        static_cast<HBRUSH>(SelectObject(hdc, GetStockObject(NULL_BRUSH)));
-    RoundRect(hdc, 0, 0, kDialogW - 1, kDialogH - 1,
-              kDlgRadius * 2, kDlgRadius * 2);
-    SelectObject(hdc, hOld);
-    SelectObject(hdc, hOldBr);
-    DeleteObject(hPen);
-  }
-
-  // 3) 标题文字
+  // 标题文字 — 覆盖在 [0, kTitleH) 渐变之上
   HFONT hf = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
   HFONT hfOld = static_cast<HFONT>(SelectObject(hdc, hf));
   SetBkMode(hdc, TRANSPARENT);

@@ -6,6 +6,7 @@
 //
 #include "stdafx.h"
 #include "ShortcutSettings.h"
+#include "ModalChrome.h"  // v0.19.0.31: BG+Border paint helper
 
 #include <algorithm>
 #include <cassert>
@@ -912,7 +913,11 @@ LRESULT CALLBACK ShortcutSettings::WndProc(HWND hwnd, UINT msg, WPARAM wp,
 }
 
 LRESULT ShortcutSettings::OnCreate(HWND hwnd) {
-  SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+  // v0.19.0.31 fix: 删 SetLayeredWindowAttributes(LWA_ALPHA)。
+  // ShortcutSettings 没有 UpdateLayeredWindow 路径 (RedrawWindow),
+  // 但保留 LWA_ALPHA 跟后续可能在 WndProc 加的 ULW_ALPHA / memDc 画 chrome
+  // 路径互斥。原 v0.19.0.28-30 chrome 只画 title bar 30-56px, body 空。
+  // 修法:删 LWA_ALPHA + OnPaint 改画整 client (见 OnPaint fix)。
 
   // 几何 (runtime)
   kTableH_phys = kDialogH - kTitleH - kToolbarH - kStatusBarH - kBtnH - 6 * kGap;
@@ -1053,40 +1058,10 @@ LRESULT ShortcutSettings::OnPaint(HWND hwnd) {
   RECT rc;
   GetClientRect(hwnd, &rc);
 
-  // 1) Title bar bg 渐变 [0, kTitleH)
-  {
-    RECT titleBg = {0, 0, kDialogW, kTitleH};
-    TRIVERTEX v[2] = {};
-    v[0].x = titleBg.left; v[0].y = titleBg.top;
-    v[0].Red   = static_cast<COLOR16>(GetRValue(kBgTop)) << 8;
-    v[0].Green = static_cast<COLOR16>(GetGValue(kBgTop)) << 8;
-    v[0].Blue  = static_cast<COLOR16>(GetBValue(kBgTop)) << 8;
-    v[0].Alpha = 0xFF00;
-    v[1].x = titleBg.right; v[1].y = titleBg.bottom;
-    v[1].Red   = static_cast<COLOR16>(GetRValue(kBgBot)) << 8;
-    v[1].Green = static_cast<COLOR16>(GetGValue(kBgBot)) << 8;
-    v[1].Blue  = static_cast<COLOR16>(GetBValue(kBgBot)) << 8;
-    v[1].Alpha = 0xFF00;
-    GRADIENT_RECT g = {0, 1};
-    if (!GradientFill(hdc, v, 2, &g, 1, GRADIENT_FILL_RECT_V)) {
-      HBRUSH bg = CreateSolidBrush(kBgTop);
-      FillRect(hdc, &titleBg, bg);
-      DeleteObject(bg);
-    }
-  }
-
-  // 2) Hairline 圆角边框
-  {
-    HPEN hPen = CreatePen(PS_SOLID, 1, kBorderColor);
-    HPEN hOld = static_cast<HPEN>(SelectObject(hdc, hPen));
-    HBRUSH hOldBr =
-        static_cast<HBRUSH>(SelectObject(hdc, GetStockObject(NULL_BRUSH)));
-    RoundRect(hdc, 0, 0, kDialogW - 1, kDialogH - 1,
-              kDlgRadius * 2, kDlgRadius * 2);
-    SelectObject(hdc, hOld);
-    SelectObject(hdc, hOldBr);
-    DeleteObject(hPen);
-  }
+  // v0.19.0.31: 整 client 渐变 (原 v0.19.0.28-30 只画 [0, kTitleH) 56px)。
+  ModalChrome::PaintBackgroundAndBorder(hdc, kDialogW, kDialogH,
+                                         kBgTop, kBgBot,
+                                         kDlgRadius, kBorderColor);
 
   // 3) Title text ("快捷键设置" 21px bold)
   {

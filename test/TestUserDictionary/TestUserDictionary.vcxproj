@@ -96,6 +96,8 @@
   <ItemGroup>
     <ClCompile Include="TestUserDictionary.cpp" />
     <ClCompile Include="..\..\WeaselServer\UserDictionary.cpp" />
+    <!-- v0.19.0.31: RepaintLayered uses ModalChrome helper -->
+    <ClCompile Include="..\..\WeaselServer\ModalChrome.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

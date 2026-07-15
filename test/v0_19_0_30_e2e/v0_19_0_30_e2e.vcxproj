@@ -105,6 +105,12 @@
     <!-- link-probe: link production code by direct ClCompile, NOT mirror. -->
     <ClCompile Include="..\..\WeaselServer\PhrasesDialog.cpp" />
     <ClCompile Include="..\..\WeaselServer\QuickPanelDialog.cpp" />
+    <!-- v0.19.0.31 fix: add UserDictionary + ShortcutSettings + ModalChrome
+         so T_Render_Bitmap_* + T_Populate_* can verify chrome paint + populate
+         (pixel-level & tree/list view count assertions). -->
+    <ClCompile Include="..\..\WeaselServer\UserDictionary.cpp" />
+    <ClCompile Include="..\..\WeaselServer\ShortcutSettings.cpp" />
+    <ClCompile Include="..\..\WeaselServer\ModalChrome.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -96,6 +96,8 @@
   <ItemGroup>
     <ClCompile Include="TestShortcutSettings.cpp" />
     <ClCompile Include="..\..\WeaselServer\ShortcutSettings.cpp" />
+    <!-- v0.19.0.31: OnPaint uses ModalChrome helper -->
+    <ClCompile Include="..\..\WeaselServer\ModalChrome.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -19,6 +19,7 @@
                      // 缺此行 PCH 扫描会 C1010 失败。v0.19.0.28 ship 漏掉,
                      // 之前是 build cache 掩盖了。
 #include "UserDictionary.h"
+#include "ModalChrome.h"  // v0.19.0.31: BG+Border paint helper
 
 #include <algorithm>
 #include <cassert>
@@ -1004,40 +1005,10 @@ void UserDictionary::RepaintLayered(HWND hwnd) {
   HBITMAP bmp = CreateCompatibleBitmap(screenDc, rc.right, rc.bottom);
   HGDIOBJ oldBmp = SelectObject(memDc, bmp);
 
-  // 背景: 渐变
-  {
-    TRIVERTEX v[2] = {};
-    v[0].x = 0; v[0].y = 0;
-    v[0].Red   = static_cast<COLOR16>(GetRValue(kBgTop)) << 8;
-    v[0].Green = static_cast<COLOR16>(GetGValue(kBgTop)) << 8;
-    v[0].Blue  = static_cast<COLOR16>(GetBValue(kBgTop)) << 8;
-    v[0].Alpha = 0xFF00;
-    v[1].x = rc.right; v[1].y = rc.bottom;
-    v[1].Red   = static_cast<COLOR16>(GetRValue(kBgBot)) << 8;
-    v[1].Green = static_cast<COLOR16>(GetGValue(kBgBot)) << 8;
-    v[1].Blue  = static_cast<COLOR16>(GetBValue(kBgBot)) << 8;
-    v[1].Alpha = 0xFF00;
-    GRADIENT_RECT g = {0, 1};
-    if (!GradientFill(memDc, v, 2, &g, 1, GRADIENT_FILL_RECT_V)) {
-      HBRUSH bg = CreateSolidBrush(kBgTop);
-      RECT r = rc;
-      FillRect(memDc, &r, bg);
-      DeleteObject(bg);
-    }
-  }
-
-  // 边框 (hairline)
-  {
-    HPEN hPen = CreatePen(PS_SOLID, 1, kBorderColor);
-    HPEN hOld = static_cast<HPEN>(SelectObject(memDc, hPen));
-    HBRUSH hOldBr = static_cast<HBRUSH>(
-        SelectObject(memDc, GetStockObject(NULL_BRUSH)));
-    RoundRect(memDc, 0, 0, rc.right - 1, rc.bottom - 1,
-              kDlgRadius * 2, kDlgRadius * 2);
-    SelectObject(memDc, hOld);
-    SelectObject(memDc, hOldBr);
-    DeleteObject(hPen);
-  }
+  // v0.19.0.31: 抽出 BG + Border 到 ModalChrome helper (DRY)
+  ModalChrome::PaintBackgroundAndBorder(memDc, rc.right, rc.bottom,
+                                         kBgTop, kBgBot,
+                                         kDlgRadius, kBorderColor);
 
   // Title bar 自绘: 17px bold + "Personal dictionary · N entries" 11px gray
   {
@@ -1237,7 +1208,12 @@ LRESULT CALLBACK UserDictionary::WndProc(HWND hwnd, UINT msg, WPARAM wp,
 }
 
 LRESULT UserDictionary::OnCreate(HWND hwnd) {
-  SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+  // v0.19.0.31 fix: 删 SetLayeredWindowAttributes(LWA_ALPHA)。
+  // 原因:UpdateLayeredWindow(ULW_ALPHA) (cpp:1143 内部) 跟 LWA_ALPHA 互斥。
+  // 两种 layered driver 不能共存, 先调过 LWA_ALPHA 后,
+  // UpdateLayeredWindow 的 memDc 内容 从不到屏 (RepaintLayered 假死)。
+  // WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST (cpp:195) 保留,
+  // UpdateLayeredWindow 是真正的 present 路径。
 
   // 物理几何: list = dialog - title - search - status - toolbar - btn - gaps
   kListH_phys = kDialogH - kTitleH - kSearchH - kStatusBarH - kBtnH -
