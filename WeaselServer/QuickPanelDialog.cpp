@@ -895,7 +895,12 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     switch (i) {
       case 0: DrawIconSchema(hdc, iconX, iconY, penRgb); break;
       case 1: DrawIconPhrase(hdc, iconX, iconY, penRgb); break;
-      case 2: DrawIconSymbols(hdc, iconX, iconY, penRgb); break;
+      // v0.19.0.32-fix (Bug 3a): hit==2 是 UserDict 按钮(WndProc cpp:564 invoke
+      // s_onUserDict),但 v0.19.0.29 留的是 DrawIconSymbols(键盘图标)。视觉跟
+      // 实际功能不符 → user 看不到 user dict 暗示。改成 DrawIconAccount (人头像)
+      // 视觉上暗示 user dictionary。注释同步更新:
+      //   0 Schema / 1 Phrase / 2 UserDict / 3 Shortcut / 4 Account (no-op)
+      case 2: DrawIconAccount(hdc, iconX, iconY, penRgb); break;
       case 3: DrawIconSettings(hdc, iconX, iconY, penRgb); break;
       case 4: DrawIconAccount(hdc, iconX, iconY, penRgb); break;
     }
@@ -1105,8 +1110,11 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
   return 0;
 }
 
-LRESULT QuickPanelDialog::OnLButtonUp(HWND, int, int) { return 0; }
-LRESULT QuickPanelDialog::OnLButtonDown(HWND, int, int) { return 0; }
+// v0.19.0.32-fix (Bug 2): 删除 OnLButtonUp / OnLButtonDown stub 函数(原 cpp:1108-1109)。
+// 这两个 stub 在 v0.19.0.10 layered 重构时留作 placeholder,但 WndProc cpp:562-569
+// 已经把 WM_LBUTTONUP 真 fire 路径(s_onPhrases / s_onUserDict / s_onShortcut)内联
+// 实现了,所以 stub 永远不会被调用 — 是 dead code。删除以免误导后续 reader 以为
+// 按钮路由通过 stub 走(实际是 WndProc 内联 case)。
 void    QuickPanelDialog::OnMouseMove(HWND) {}
 void    QuickPanelDialog::OnMouseLeave(HWND) {}
 
@@ -1136,8 +1144,15 @@ void QuickPanelDialog::Show(bool currentFullwidth,
                              OnClick onSchema, OnClick onUserFolder,
                              OnClick onPhrases, OnToggle onFullwidth,
                              OnClick onSymbols, OnClick onLogin) {
-  (void)currentFullwidth; (void)onSchema; (void)onUserFolder;
-  (void)onPhrases; (void)onFullwidth; (void)onSymbols; (void)onLogin;
+  // v0.19.0.32-fix: Show() 必须保存 callback, 否则 onPhrases 永远 null,
+  // click button 1 死代码 (同 L96 路径)。原 (void)X 注释掉了。
+  s_onSchema     = onSchema;
+  s_onUserFolder = onUserFolder;
+  s_onPhrases    = onPhrases;
+  s_onFullwidth  = onFullwidth;
+  s_onSymbols    = onSymbols;
+  s_onLogin      = onLogin;
+  (void)currentFullwidth;
   if (s_hwnd) {
     ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
     // L81-fix: reuse 路径也强制置顶(防止其他窗口在 hide→show 间隙盖上面板)

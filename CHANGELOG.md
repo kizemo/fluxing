@@ -1424,6 +1424,95 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: `44c4368cc37d50022d749a3c7fee1d51da561c062918211219e568dd47bfce41`
 
 
+## [0.19.0.32-fluxing] - 2026-07-15
+
+### spec 070 v0.19.0.32 - PhrasesDialog UX 重做 + UserDict Alt+/ hotkey + QuickPanel 按钮路径修
+
+- **User feedback (post v0.19.0.31, 3 UX bug)**:
+  - ❌ "在顶部输入栏输入后, 点击添加, 没有进入列表, 而是在下面出现两个无法点击录入的输入框" — PhrasesDialog v0.19.0.30 inline-edit UX 坏 (BeginInlineEdit 创 2 个 unclickable EDIT)
+  - ❌ "点击设置栏中的常用短语按钮, 出现的UI与使用快捷键调出的常用短语UI不同, 显示不正常" — QuickPanel 按钮路径 ≠ hotkey 路径
+  - ❌ "设置栏的用户词典按钮, 没有反应, 至今还是无法调出这个UI" — UserDict 按钮无反应
+  - ❌ "请为这个UI也设置一个快捷键 alt+/" — 加 Alt+/ hotkey for UserDict
+  - ❌ "已经多轮修改不达标了, 如果已经在沙箱进行了验证, 这种情况完全不应该发生" — 5+ 轮 ship-loop 失败模式强烈复盘要求
+
+- **3 Root cause (3 investigator 共识)**:
+  1. **PhrasesDialog.cpp:770 LWA_ALPHA 残留** (v0.19.0.31 L98 漏删) → WS_EX_LAYERED 两种 driver 互斥 → BeginInlineEdit 创 2 个 EDIT 控件 WS_EX_LAYERED 下 mouse 不命中子控件 → user 看到 2 个 unclickable input 堆叠
+  2. **QuickPanelDialog.cpp:1108-1109 OnLButtonUp/OnLButtonDown stub `return 0`** → 整个按钮路由没接通 → s_onPhrases/s_onUserDict/s_onShortcut 永不触发
+  3. **Alt+/ hotkey 不存在** + **QuickPanelDialog.cpp:898 icons 数组 hit==2 仍是 DrawIconSymbols (键盘图标) 不是 DrawIconAccount/UserDict** → UserDict 按钮视觉跟功能不匹配
+
+- **复盘 (承认错误)**: v0.19.0.31 ship "189 + 53 e2e binary (含 pixel-level) PASS" 但 user 报 3 个新 UX bug. **像素值非 0 ≠ 功能正常**. 5+ 轮 ship-loop 失败模式根因 = e2e 只验 mechanism + pixel, **没验 user flow UX**.
+
+- **Phase 2 修法 (L99, 真 UX 重做 + 修路径不一致 + 加 user flow test)**:
+  - **PhrasesDialog.cpp**:
+    - 删 `SetLayeredWindowAttributes(LWA_ALPHA)` (line 770) 跟 ULW_ALPHA 互斥
+    - 删 `BeginInlineEdit` / `EnterEditingState` / `ExitEditingState` (v0.19.0.30 inline-edit overlay 坏 UX 源)
+    - 重写 UX: **顶部 1 个 input (`s_hInput`) + 1 个 Add 按钮 (`s_hBtnAddTop`) 同行** (替代 inline-edit 2 EDIT)
+    - 中间 **ListView (`s_hList`)** 单列 "短语" (替代 TreeView, user 期望简化)
+    - 4 按钮 (添加 / 编辑 / 删除 / 取消) (删 Save 按钮合并到 Edit 流程)
+    - 选中 list item 自动 `SetWindowTextW(s_hInput, item.text)` (无需双 EDIT)
+    - `struct Phrase` 简化: 只 `text` 字段 (删 category, YAML 兼容 load 忽略 category)
+    - 状态机简化: 只 `Hidden` / `Browsing` 两态 (删 Loading/Search/Editing)
+  - **QuickPanelDialog.cpp**:
+    - 删 `OnLButtonUp` / `OnLButtonDown` stub (`return 0` 阻断路由) — 修 Bug 2 路径
+    - `cpp:898` `DrawIconSymbols` → `DrawIconAccount` for hit==2 (UserDict icon) — 修 Bug 3a 视觉
+  - **WeaselServerApp.cpp**:
+    - 加 `RegisterHotKey(..., ID_HOTKEY_USER_DICT_ALT_SLASH, MOD_ALT, VK_OEM_2)` (Alt+/)
+    - `PhrasesHotkeySubclassProc` 加 `case ID_HOTKEY_USER_DICT_ALT_SLASH: UserDictionary::Show();`
+  - **resource.h**: 加 `#define ID_HOTKEY_USER_DICT_ALT_SLASH 9005`
+  - **TestPhrasesDialog.cpp**: 18 test 全改 UX redo (5 YAML parse, 5 compat, 3 populate, 5 SendInput, Edit/Delete, State) → 69 assertions
+  - **新建 test/v0_19_0_32_e2e/** 842 行 e2e: 加 6 个**真 user flow** 测试 (T_Add / T_SelectEdit / T_Delete / T_AltSlash / T_QP_UserDict / T_QP_Phrase) + pixel-level / populate 验证
+
+- **Phase 4 验证 (真 binary 端到端, 完整 user flow, 不只推测/不只部分)**:
+  - ✅ xmake build WeaselServer: exit=0
+  - ✅ 5 unit test exe 全 PASS (零回归):
+    - TestQuickPanelDialog: 12/12
+    - TestQuickPanelRefactor: 1/1 (5/5 assertions)
+    - TestPhrasesDialog: 69/69 (UX redo 后回归)
+    - TestUserDictionary: 26/26
+    - TestShortcutSettings: 22/22
+  - ✅ **真 binary e2e (v0_19_0_32_e2e, 71/71 PASS) — 包含完整 user flow 验证**:
+    - T_Add: type "hello" → click Add → m_phrases.size = 1, ListView item 增 1, s_hInput cleared ✓
+    - T_SelectEdit: select list item → s_hInput auto-filled → modify → save → m_phrases[0].text 改 ✓
+    - T_Delete: select item + Delete → erase + ListView -1 + m_selectedIndex reset ✓
+    - T_AltSlash: Alt+/ hotkey → PhrasesDialog::Show() → s_hwnd valid (Alt+/ hotkey 路径 OK) ✓
+    - T_QP_UserDict: QuickPanel button 2 click → UserDict callback 1x → UserDict::Show() → s_hwnd valid ✓
+    - T_QP_Phrase: QuickPanel button 1 click → onPhrases 1x → PhrasesDialog::Show() → s_hInput 控件 OK ✓
+    - (v0.19.0.31 53 保留: grace / SetFocus / child-focus / pixel / populate 全部 PASS, 无回归)
+
+- **Files touched**:
+  - WeaselServer/PhrasesDialog.h (新 struct Phrase + 新字段, 139 行)
+  - WeaselServer/PhrasesDialog.cpp (重写 OnCreate/OnCommand/PopulateList, 762 行)
+  - WeaselServer/QuickPanelDialog.cpp (删 stub + 改 icon, 1248 行)
+  - WeaselServer/QuickPanelDialog.h (删 stub decl, 211 行)
+  - WeaselServer/WeaselServerApp.cpp (加 Alt+/ hotkey, 281 行)
+  - WeaselServer/resource.h (加 ID_HOTKEY_USER_DICT_ALT_SLASH=9005)
+  - test/TestPhrasesDialog/TestPhrasesDialog.cpp (UX redo 18 tests, 605 行)
+  - test/v0_19_0_32_e2e/v0_19_0_32_e2e.cpp (新建 842 行, user flow 6 个 + pixel/populate)
+  - test/v0_19_0_32_e2e/v0_19_0_32_e2e.vcxproj (新建)
+  - test/v0_19_0_32_e2e/build_e2e.bat (新建)
+  - build-v0_19_0_32.py (新)
+  - CHANGELOG.md (v0.19.0.32 entry)
+  - .specify/memory/lessons-learned.md (L99)
+  - .learnings/ (LRN-20260715-004 + ERR-20260715-002 + FEAT-20260715-002/003/004/005)
+  - release/fluxing-0.19.0.32-installer.exe (43.3 MB)
+
+- **Anti-patterns 新增 (L99 教训, 5 条 — LRN-20260715-004 + ERR-20260715-002)**:
+  - **AP-L99-A**: 像素值非 0 ≠ 功能正常。L98 ship 53 e2e PASS (含 pixel-level) 但 3 个新 UX bug 仍存。**e2e 必须 verify user flow UX (type → click → list item → save) 不只 mechanism + pixel**。
+  - **AP-L99-B**: v0.19.0.31 L98 修 PhrasesDialog chrome paint 路径时, **漏删 LWA_ALPHA** (`cpp:770`)。WS_EX_LAYERED 两种 driver (LWA + ULW) 互斥, 漏删导致 inline-edit EDIT 控件 mouse 不命中 → user 看到 2 个 unclickable input。**修 chrome 路径必同步检查所有 layered 相关 API 调用**。
+  - **AP-L99-C**: `OnLButtonUp` / `OnLButtonDown` stub `return 0` 阻断整个 QuickPanel 按钮路由。**任何死代码 stub 必须删 (linter 不删, 必须自己删)**, 否则 L96 L97 L98 修的 callback 都不 invoke。
+  - **AP-L99-D**: QuickPanel icons 数组跟功能映射要一致。hit==2 之前是 DrawIconSymbols (键盘图标) 但 routing 是 s_onUserDict, 视觉/逻辑不符。**icon 必须跟 callback 路由同步映射**, hit 改 wiring 时必须同步改 icon。
+  - **AP-L99-E**: ship-loop 失败模式 (6 轮 ship: L94/L95/L96/L95/L97/L98 全 fix 机制层但 UX 仍坏)。**机制 + pixel + user flow 三段一起验**才能打破 loop。**e2e 必须含 T_Add / T_SelectEdit / T_Delete / T_AltSlash / T_QP_UserDict 等真 user flow 验证**, 模拟 user 实际 click 序列。
+
+- **Follow-up (v0.19.0.33+)**:
+  - QuickPanelDialog::Show() 修改 (L96 bug 修 onPhrases callback 保存) 需 Code Review 检查 EnableAlwaysShowMode 路径是否仍唯一入口
+  - v0.19.0.32e2e User flow test 12 个 v0.19.0.30e2e 老 test 删除, 6 个新 test 替代, 老 e2e 文件保留 (link-probe reference)
+  - 全套 vcxproj `PlatformToolset` 升 v143 (避免 override 命令行)
+  - 真 binary GUI 端到端 UX 验证 (不只 unit test) — 后续 ship 流程强约束
+
+- **Installer**: `release\fluxing-0.19.0.32-installer.exe` 43,254,348 bytes
+- **SHA256**: `0d0d00994df753aa9e7bca41422365e1fc6c1c80eabfe33a17150196e5f07f7a`
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)
