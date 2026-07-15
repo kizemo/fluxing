@@ -2,6 +2,9 @@
 // PhrasesDialog.cpp — 常用短语 Modal 实现 v2 (spec 043)
 // spec: .specify/specs/043-phrases-ui-v2/design.md
 //
+#include "stdafx.h"  // v0.19.0.30 fix: 同 UserDictionary.cpp 漏 include。
+                     // 之前 PhrasesDialog.cpp 不在 WeaselServer.vcxproj,所以此
+                     // 问题被掩盖;v0.19.0.30 加进 vcxproj 后 PCH 扫描失败。
 #include "PhrasesDialog.h"
 
 #include <algorithm>
@@ -557,6 +560,12 @@ bool PhrasesDialog::BeginInlineEdit(int phraseIndex, const std::wstring& newText
     SendMessageW(s_hEditText, WM_SETFONT, reinterpret_cast<WPARAM>(s_hFontUi), TRUE);
     SendMessageW(s_hEditCat, WM_SETFONT, reinterpret_cast<WPARAM>(s_hFontUi), TRUE);
   }
+  // v0.19.0.30-fix(issue 3a): SetFocus 之前先 set s_state = State_Editing。
+  // 之前 SetFocus 触发 WM_KILLFOCUS(parent 失去焦点),但此时 s_state 还是
+  // State_Browsing,WM_KILLFOCUS handler 走 grace check → grace 满后 Hide()。
+  // 修法:SetFocus 之前先切到 Editing 态,WM_KILLFOCUS handler 看到 State_Editing
+  // 直接 return 0 (cpp:732) 不走 grace Hide 路径。
+  s_state = State_Editing;
   if (s_hEditText) {
     SetFocus(s_hEditText);
     if (!newText.empty()) {
@@ -568,7 +577,6 @@ bool PhrasesDialog::BeginInlineEdit(int phraseIndex, const std::wstring& newText
       // (实际 UX 改进留给后续 spec)
     }
   }
-  s_state = State_Editing;
   SetButtonsForEditing();
   return true;
 }
@@ -731,6 +739,21 @@ LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd, UINT msg, WPARAM wp,
     case WM_KILLFOCUS: {
       // v0.19.0.27: editing 态时焦点进 tree 也保留 edit
       if (s_state == State_Editing) return 0;
+      // v0.19.0.30-fix(issue 3b): 子控件夺焦点例外。
+      // 触发链:Browsing 态 user 点 tree / search box / button → WM_KILLFOCUS(parent)
+      // → grace 满后 Hide(),但 user 还在 dialog 内操作,不应关。
+      // 修法:检查新焦点是否为本 dialog 内的子控件,是则 return 0 不 Hide。
+      // 旧判定只走 State_Editing,browsing 态点 tree/search 也会误关。
+      HWND newFocus = (HWND)wp;
+      auto isChild = [newFocus](HWND h) {
+        return h && newFocus == h;
+      };
+      if (isChild(s_hTree) || isChild(s_hSearch) || isChild(s_hStatus) ||
+          isChild(s_hToast) || isChild(s_hBtnAdd) || isChild(s_hBtnEdit) ||
+          isChild(s_hBtnDel) || isChild(s_hBtnCancel) ||
+          isChild(s_hBtnSave) || isChild(s_hEditText) || isChild(s_hEditCat)) {
+        return 0;
+      }
       DWORD nowTick = GetTickCount();
       if ((nowTick - s_showTime) >= kShowGraceMs) {
         Hide();
