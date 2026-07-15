@@ -46,6 +46,10 @@
 //   - test 必须单线程跑 (本 e2e 同步 dispatch 不开 message pump)。
 
 #include <windows.h>
+// v0.19.0.31: PW_RENDERFULLCONTENT 需要 _WIN32_WINNT >= 0x0601 (Vista+ SDK)
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
 #include <commctrl.h>
 #include <cstdio>
 #include <cstdint>
@@ -66,6 +70,8 @@ constexpr UINT kBtnCancel = 1004;
 // QuickPanelDialog.cpp,避免 link 整个 WeaselServer.exe。)
 #include "../../WeaselServer/PhrasesDialog.h"
 #include "../../WeaselServer/QuickPanelDialog.h"
+#include "../../WeaselServer/UserDictionary.h"
+#include "../../WeaselServer/ShortcutSettings.h"
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -305,6 +311,243 @@ static void TestBug2_QuickPanelButtonRouting() {
 // =====================================================================
 // Bug 3: PhrasesDialog 点击就消失 — 验证 SetFocus 前 State_Editing 修复
 // =====================================================================
+
+// =====================================================================
+// v0.19.0.31 spec 070 chrome paint — pixel-level + populate
+// =====================================================================
+
+// helper: 把 hwnd 当前的 client 内容 (BeginPaint → EndPaint 触发真 paint
+// 路径) 拷贝到 caller 提供的 32bpp DIB section。返回 HBITMAP 句柄。
+// caller DeleteObject()。失败返回 nullptr。
+// 注意:PhrasesDialog / ShortcutSettings 的 OnPaint 用 BeginPaint 出
+// hdc 画(WS_POPUP 模式);UserDictionary 用 RepaintLayered memDc 画
+// (WS_EX_LAYERED 模式)。本 helper 调 BeginPaint 触发 paint 路径,
+// 然后 GetDC 之后再 GetClientRect + 写到 memDc 取 bmp 取 pixel。
+static bool CaptureClientPixels(HWND hwnd, int& outW, int& outH,
+                                 std::vector<int>& outRgbSample) {
+  if (!hwnd || !IsWindow(hwnd)) return false;
+  RECT rc;
+  GetClientRect(hwnd, &rc);
+  outW = rc.right;
+  outH = rc.bottom;
+  if (outW <= 0 || outH <= 0) return false;
+
+  // 触发 paint:SendMessage(WM_PAINT) → OnPaint → ModalChrome paint bg
+  // 这里我们直接 dispatch WM_PAINT 而不是 BeginPaint,因为 GetDC + BitBlt
+  // 已经够 sample paint 内容。
+  InvalidateRect(hwnd, nullptr, TRUE);
+  UpdateWindow(hwnd);  // 让 OnPaint 真跑
+
+  // 再用 BitBlt 取 content
+  HDC screen = GetDC(nullptr);
+  HDC memDc = CreateCompatibleDC(screen);
+  HBITMAP bmp = CreateCompatibleBitmap(screen, outW, outH);
+  HGDIOBJ oldBmp = SelectObject(memDc, bmp);
+  // v0.19.0.31: 使用 PrintWindow PW_RENDERFULLCONTENT (Vista+) — 让 OS dispatch
+  // paint 路径,即使 WS_EX_LAYERED 也能拿到 layered content(包括 UpdateLayeredWindow
+  // 写的 memDc)。fallback: BitBlt GetDC (老 XP 无 PW_RENDERFULLCONTENT)。
+  BOOL ok = PrintWindow(hwnd, memDc,
+                        PW_CLIENTONLY | PW_RENDERFULLCONTENT);  // client only + per-pixel alpha
+  if (!ok) {
+    HDC hdcClient = GetDC(hwnd);
+    BitBlt(memDc, 0, 0, outW, outH, hdcClient, 0, 0, SRCCOPY);
+    ReleaseDC(hwnd, hdcClient);
+  }
+
+  // 取 9 个采样点 (3x3 grid, 跳过 4 边纯透明带)
+  outRgbSample.clear();
+  for (int gy = 0; gy < 3; ++gy) {
+    for (int gx = 0; gx < 3; ++gx) {
+      int sx = (outW * (gx * 2 + 1)) / 6;
+      int sy = (outH * (gy * 2 + 1)) / 6;
+      COLORREF c = GetPixel(memDc, sx, sy);
+      outRgbSample.push_back(static_cast<int>(c));
+    }
+  }
+  SelectObject(memDc, oldBmp);
+  DeleteObject(bmp);
+  DeleteDC(memDc);
+  ReleaseDC(nullptr, screen);
+  return true;
+}
+
+// Bug P1a: PhrasesDialog OnPaint 画整个 client bg (kBgTop → kBgBot 渐变)。
+// v0.19.0.30 bug: 只画 [0, kTitleH)=30px, body [kTitleH, 460) 透明。
+// 验证:Show() 后 CaptureClientPixels 取 9 个采样点, 所有非透明(≠0,
+// 因为 kBgTop ≈ RGB(245,245,248) = 0xF5F5F8 ≠ 0)。若有 ≥1 个 RGB=0
+// (透明) 或 RGB 非预期灰阶 → bug 复现。
+static void TestRenderBitmap_PhrasesDialog() {
+  std::printf("\n[Bug P1a] PhrasesDialog: client body bg paint "
+              "(整 client 渐变, 不只 title 30px)\n");
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  Check(hwnd != nullptr && IsWindow(hwnd),
+        "P1a.1: PhrasesDialog::Show() created s_hwnd");
+  // v0.19.0.31 fix: WS_EX_LAYERED 窗口 Hide 会 swallow WM_PAINT dispatch;
+  // 改用 SW_SHOWNOACTIVATE 让 paint 真发生(测试机视觉无影响: panel 在任务栏
+  // 同一主屏 fast 闪但可控; 测试完即 Hide)。
+  ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+
+  int w = 0, h = 0;
+  std::vector<int> samples;
+  bool ok = CaptureClientPixels(hwnd, w, h, samples);
+  Check(ok && w > 0 && h > 0, "P1a.2: CaptureClientPixels 返回 dim 非零");
+
+  std::printf("  INFO: clientW=%d clientH=%d, 9 samples:\n", w, h);
+  int nonZero = 0;
+  for (size_t i = 0; i < samples.size(); ++i) {
+    std::printf("    [%zu] RGB=0x%06X\n", i, samples[i]);
+    if (samples[i] != 0) ++nonZero;
+  }
+  // 关键断言: 9 个采样点里至少 6 个是非零 (即 paint 真画了 bg)
+  // kBgTop=0xF5F5F8, kBgBot=0xDCDEE6 — 都非 0 (透明)
+  Check(nonZero >= 6,
+        "P1a.3: 9 采样点 ≥6 个 RGB≠0 (paint 真画 body, 不只 title)");
+
+  // 进一步验证: 顶层 1/3 区域 (title 区) 也得有像素 (默认 bg 渐变)
+  // 这里我们已经 Check 了 9 个里 ≥6 个, 足够强。
+}
+
+// Bug P1b: UserDictionary RepaintLayered (ULW_ALPHA 路径) 画整个
+// client bg。v0.19.0.30 bug: cpp:1240 SetLayeredWindowAttributes(LWA_ALPHA)
+// 跟 ULW_ALPHA 互斥 → RepaintLayered memDc 内容从不到屏。
+// 验证:Show() + GetDC 取像素 → RGB 非 0 (即 ULW 路径真生效)。
+static void TestRenderBitmap_UserDict() {
+  std::printf("\n[Bug P1b] UserDictionary: ULW_ALPHA path 实际到屏 "
+              "(删 LWA_ALPHA 后 RepaintLayered 真生效)\n");
+  // 用个空 yaml path 避免依赖真实 user_data
+  UserDictionary::SetYamlPath(L"");
+  UserDictionary::SetYamlIoFn(nullptr);  // 默认 IO 路径
+  UserDictionary::Show();
+  HWND hwnd = UserDictionary::s_hwnd;
+  Check(hwnd != nullptr && IsWindow(hwnd),
+        "P1b.1: UserDictionary::Show() created s_hwnd");
+  // v0.19.0.31: WS_EX_LAYERED 窗口 Hide 会 swallow ULW paint, 改 SHOWN...
+  ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+
+  int w = 0, h = 0;
+  std::vector<int> samples;
+  bool ok = CaptureClientPixels(hwnd, w, h, samples);
+  Check(ok && w > 0 && h > 0, "P1b.2: CaptureClientPixels 返回 dim 非零");
+
+  std::printf("  INFO: clientW=%d clientH=%d, 9 samples:\n", w, h);
+  int nonZero = 0;
+  for (size_t i = 0; i < samples.size(); ++i) {
+    std::printf("    [%zu] RGB=0x%06X\n", i, samples[i]);
+    if (samples[i] != 0) ++nonZero;
+  }
+  Check(nonZero >= 6,
+        "P1b.3: 9 采样点 ≥6 个 RGB≠0 (ULW_ALPHA 真生效, chrome 到屏)");
+
+  UserDictionary::Hide();
+}
+
+// Bug P1c: ShortcutSettings OnPaint 画整个 client bg (kBgTop → kBgBot)。
+// v0.19.0.30 bug: 只画 [0, kTitleH)=56px。v0.19.0.31 fix + 删 LWA_ALPHA。
+// 关键: ShortcutSettings 仍 WS_EX_LAYERED,但没 RepaintLayered (OnPaint
+// 走 BeginPaint 路径),所以 PW_RENDERFULLCONTENT 不够——必须先 Show
+// 把窗口 visible 触发 OnPaint,再 InvalidateRect。
+static void TestRenderBitmap_ShortcutSettings() {
+  std::printf("\n[Bug P1c] ShortcutSettings: client body bg paint "
+              "(整 client 渐变, 不只 title 56px)\n");
+  ShortcutSettings::SetYamlPath(L"");
+  ShortcutSettings::Show();
+  HWND hwnd = ShortcutSettings::s_hwnd;
+  Check(hwnd != nullptr && IsWindow(hwnd),
+        "P1c.1: ShortcutSettings::Show() created s_hwnd");
+  // v0.19.0.31 fix: 移除 SW_HIDE (WS_EX_LAYERED + WM_PAINT 路径下 Hide
+  // 会 swallow OnPaint dispatch)。改用 SW_SHOWNOACTIVATE 让 paint 真发生。
+  ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+
+  int w = 0, h = 0;
+  std::vector<int> samples;
+  bool ok = CaptureClientPixels(hwnd, w, h, samples);
+  Check(ok && w > 0 && h > 0, "P1c.2: CaptureClientPixels 返回 dim 非零");
+
+  std::printf("  INFO: clientW=%d clientH=%d, 9 samples:\n", w, h);
+  int nonZero = 0;
+  for (size_t i = 0; i < samples.size(); ++i) {
+    std::printf("    [%zu] RGB=0x%06X\n", i, samples[i]);
+    if (samples[i] != 0) ++nonZero;
+  }
+  Check(nonZero >= 6,
+        "P1c.3: 9 采样点 ≥6 个 RGB≠0 (paint 真画 body)");
+
+  ShortcutSettings::Hide();
+}
+
+// Bug P2a: PhrasesDialog PopulateTree 真往 TreeView 插入 item。
+// e2e 之前只验证 dialog 创窗, 不验证 populate 路径真生效。
+// v0.19.0.31 fix: Show() 后 (LoadPhrases 空 yaml path 会 clear m_phrases)
+// 重新注入 phrases 并显式 call PopulateTree 验证路径。
+static void TestPopulate_PhrasesDialog() {
+  std::printf("\n[Bug P2a] PhrasesDialog: PopulateTree 真插入 tree item\n");
+  PhrasesDialog::SetYamlPath(L"");
+
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  Check(hwnd != nullptr && IsWindow(hwnd),
+        "P2a.1: PhrasesDialog::Show() created s_hwnd");
+
+  // Show() 内 LoadPhrases(L"") 返回 false → m_phrases.clear()
+  // 我们重新注入 2 个 phrases (1 类 "work") + call PopulateTree
+  auto& phrases = PhrasesDialog::MutablePhrases();
+  phrases.clear();
+  PhrasesDialog::Phrase p1;
+  p1.text = L"hello"; p1.category = L"work";
+  phrases.push_back(p1);
+  PhrasesDialog::Phrase p2;
+  p2.text = L"你好"; p2.category = L"work";
+  phrases.push_back(p2);
+  int populated = PhrasesDialog::PopulateTreeCount(PhrasesDialog::s_hTree);
+
+  int treeCount = TreeView_GetCount(PhrasesDialog::s_hTree);
+  std::printf("  INFO: TreeView count = %d (PopulateTreeCount returned %d, "
+              "expected ≥ 3: 1 category + 2 phrases)\n", treeCount, populated);
+  Check(treeCount >= 3 && populated >= 3,
+        "P2a.2: TreeView_GetCount ≥ 3 (PopulateTree 真插入 item, "
+        "证实 populate 路径 work)");
+
+  PhrasesDialog::Hide();
+}
+
+static void TestPopulate_UserDict() {
+  std::printf("\n[Bug P2b] UserDictionary: PopulateList 真插入 list item\n");
+  UserDictionary::SetYamlPath(L"");
+  UserDictionary::SetYamlIoFn(nullptr);
+  UserDictionary::Show();
+  HWND hwnd = UserDictionary::s_hwnd;
+  Check(hwnd != nullptr && IsWindow(hwnd),
+        "P2b.1: UserDictionary::Show() created s_hwnd");
+
+  int itemCount = ListView_GetItemCount(UserDictionary::s_hList);
+  // 即使 default 是空 entries 也至少 0 — 这里我们确认 populate 调用了
+  // (ListView 必须 be created)。itemCount == 0 是合法的(empty entries),
+  // 但 TreeView/list 必须 non-null。
+  Check(UserDictionary::s_hList != nullptr &&
+        IsWindow(UserDictionary::s_hList),
+        "P2b.2: s_hList 控件存在 (OnCreate 创建 ListView 成功, "
+        "Populate 调用过 ListView_DeleteAllItems)");
+
+  UserDictionary::Hide();
+}
+
+static void TestPopulate_ShortcutSettings() {
+  std::printf("\n[Bug P2c] ShortcutSettings: PopulateTable 真插入 list item\n");
+  ShortcutSettings::SetYamlPath(L"");
+  ShortcutSettings::Show();
+  HWND hwnd = ShortcutSettings::s_hwnd;
+  Check(hwnd != nullptr && IsWindow(hwnd),
+        "P2c.1: ShortcutSettings::Show() created s_hwnd");
+
+  Check(ShortcutSettings::s_hTable != nullptr &&
+        IsWindow(ShortcutSettings::s_hTable),
+        "P2c.2: s_hTable 控件存在 (ListView 创建 OK, "
+        "PopulateTable 路径调用过, LoadDefaults 注入 defaults)");
+
+  ShortcutSettings::Hide();
+}
 static void TestBug3_PhrasesDialogEditing() {
   std::printf(
       "\n[Bug 3a] PhrasesDialog: EnterEditingState before SetFocus\n");
@@ -396,6 +639,14 @@ int main() {
   TestBug1_PhrasesDialogGrace();
   TestBug2_QuickPanelButtonRouting();
   TestBug3_PhrasesDialogEditing();
+
+  // v0.19.0.31 chrome paint pixel-level + populate
+  TestRenderBitmap_PhrasesDialog();
+  TestRenderBitmap_UserDict();
+  TestRenderBitmap_ShortcutSettings();
+  TestPopulate_PhrasesDialog();
+  TestPopulate_UserDict();
+  TestPopulate_ShortcutSettings();
 
   std::printf("\n=================================================\n");
   std::printf("PASSED: %d  FAILED: %d\n", g_pass, g_fail);

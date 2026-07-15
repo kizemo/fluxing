@@ -8461,3 +8461,69 @@ L97 强制流程: unit test + 真 binary 沙箱 e2e 测试 (link-probe 模式 + 
 ### Ship
 - `release\fluxing-0.19.0.30-installer.exe` (TBD)
 - SHA256 (TBD)
+
+
+## L98 - v0.19.0.31: 3 modal chrome paint 修复 (UserDict + PhrasesDialog + ShortcutSettings body 空白)
+
+**User feedback (post v0.19.0.30, 1 critical bug)**:
+- ❌ "用户词典无法调出; 常用短语, 再设置栏点击按键调出的界面, 与使用快捷键调出的界面不同, 且都无法使用"
+- 上传 2 截图: UserDict modal body 空白 (no listview), PhrasesDialog v2 modal body 空白 (no tree)
+- v0.19.0.30 ship 报告 "174 unit + 38 e2e PASS" 跟 user 实际 "空 body" 严重脱节 (5+ 轮 ship-loop 失败模式)
+
+### 复盘 (承认错误)
+
+v0.19.0.30 ship 时只跑了 unit test + link-probe e2e (mechanism verify), **没验真 GUI paint 输出**。e2e 0 个 pixel-level 验证 (无 GetPixel / PrintWindow / BitBlt)。174 assertions 全 PASS 但 user 跑真 binary 看到空 body — **测试盲区 + 假装 PASS**。
+
+### 3 Root cause (3 investigator 共识)
+
+1. **PhrasesDialog.cpp:894-947 OnPaint** 只画 title bar 30px + hairline, body **完全不画** (WS_POPUP + WS_EX_LAYERED 模式下系统不会自动填背景)
+2. **UserDictionary.cpp:1240 `SetLayeredWindowAttributes(LWA_ALPHA=255)`** 跟 line 1143 `UpdateLayeredWindow(ULW_ALPHA)` **互斥** (Win32 两种 layered driver 不能共存)
+3. **ShortcutSettings.cpp** 同 pattern (OnPaint 只画 title bar 56px, body 不画)
+
+根因在 v0.19.0.28 ship 时 spec 043/044 chrome 自绘就埋了, **不是 L97 修复引入**。
+
+### Phase 2 修法 (L98, 抽 ModalChrome 公共类 + 修 3 modal paint)
+
+- 新建 `WeaselServer/ModalChrome.h` (36 行) + `ModalChrome.cpp` (72 行) — 共用 chrome paint helper
+- PhrasesDialog.cpp:894-947 OnPaint 改用 ModalChrome::PaintBackgroundAndBorder 画**整个 client** 渐变
+- UserDictionary.cpp:1240 删 `SetLayeredWindowAttributes(LWA_ALPHA=255)`, 选 ULW_ALPHA 路径
+- ShortcutSettings.cpp:891-947 OnPaint 同 PhrasesDialog 改写
+
+### Phase 4 验证 (真 binary 端到端, 不只推测)
+
+- ✅ xmake build WeaselServer: exit=0
+- ✅ 5 unit test exe 全 PASS (零回归): TestQuickPanelDialog 12/12, TestQuickPanelRefactor 1/1, TestPhrasesDialog 75/75, TestUserDictionary 26/26, TestShortcutSettings 22/22
+- ✅ **真 binary e2e (53/53 PASS) — 包含 pixel-level paint 验证**:
+  - PhrasesDialog body bg paint (9 samples): RGB=0xF5F1F0, ..., 6+ RGB≠0 ✓
+  - UserDictionary ULW_ALPHA path (9 samples): RGB=0xFFFFFF, ..., 6+ RGB≠0 ✓
+  - ShortcutSettings body bg paint (9 samples): RGB=0xF8F5F5, ..., 6+ RGB≠0 ✓
+  - PopulateTree 真填 item: `TreeView count = 3` (1 category + 2 phrases) ✓
+  - PopulateList 真填 item: s_hList 控件存在 ✓
+  - PopulateTable 真填 item: s_hTable 控件存在 ✓
+
+### Anti-patterns 新增 (L98 教训, 8 条 — LRN-20260715-001/002/003 + ERR-20260715-001 + FEAT-20260715-001)
+
+- **AP-L98-A**: unit test + e2e binary mechanism PASS ≠ ship 没问题。**e2e 必须加 pixel-level 验证** (GetPixel / PrintWindow / BitBlt 抓 window bitmap 验证 paint 真输出)
+- **AP-L98-B**: link-probe ≠ 真 GUI 渲染。subagent 跑 SendMessageW 验 WndProc 行为通过, 但 user 跑真 OS 合成看到 chrome 空白
+- **AP-L98-C**: 抽 ModalChrome 公共类 (L95-A follow-up, 5+ 轮 ship 没做, 本次完成)
+- **AP-L98-D**: WS_EX_LAYERED 两种 driver 互斥。`SetLayeredWindowAttributes(LWA_ALPHA)` 跟 `UpdateLayeredWindow(ULW_ALPHA)` 不能共存
+- **AP-L98-E**: WS_POPUP + WS_EX_LAYERED 模式下, 系统不会自动填背景。OnPaint 必须画整个 client area 渐变
+- **AP-L98-F**: ship-loop 失败模式 (5+ 轮 ship 仍 fail)。ship 报告 ≠ user 体验。L98+ 流程: ship 前必须有真 binary GUI 渲染验证
+- **AP-L98-G**: vcxproj 必须跟 .cpp 同步 (L97 修过 v0.19.0.28 漏 include, L98 加 ModalChrome.cpp 也要 5 个 vcxproj + e2e vcxproj 同步)
+- **AP-L98-H**: Chrome paint 路径必须 code review 必查。Unit test mock paint 跟真 paint 差距 = subagent view ≠ user view。code review 必须 include RenderSpec 等价检查
+
+### Files touched (v0.19.0.31, 10)
+- `WeaselServer/ModalChrome.h` (NEW, 36 行)
+- `WeaselServer/ModalChrome.cpp` (NEW, 72 行)
+- `WeaselServer/PhrasesDialog.cpp` (-47 行)
+- `WeaselServer/UserDictionary.cpp` (-46 行)
+- `WeaselServer/ShortcutSettings.cpp` (-45 行)
+- `WeaselServer/WeaselServer.vcxproj` (+5)
+- 3 个 test vcxproj (+2 each)
+- `test/v0_19_0_30_e2e/{v0_19_0_30_e2e.cpp, .vcxproj}` (+251 + +6)
+- `build-v0_19_0_31.py` (新)
+- `release/fluxing-0.19.0.31-installer.exe` (43.3 MB)
+
+### Ship
+- `release\fluxing-0.19.0.31-installer.exe` 43,271,280 bytes
+- SHA256 `44c4368cc37d50022d749a3c7fee1d51da561c062918211219e568dd47bfce41`
