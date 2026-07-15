@@ -15,6 +15,9 @@
 // - RepaintLayered in all paint paths (L97 fix pattern)
 // - Grace guard (kShowGraceMs=2000)
 //
+#include "stdafx.h"  // v0.19.0.30 fix: 之前漏 include,WeaselServer vcxproj 启用 PCH,
+                     // 缺此行 PCH 扫描会 C1010 失败。v0.19.0.28 ship 漏掉,
+                     // 之前是 build cache 掩盖了。
 #include "UserDictionary.h"
 
 #include <algorithm>

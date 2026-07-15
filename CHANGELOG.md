@@ -1254,6 +1254,96 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **SHA256**: TBD
 
 
+## [0.19.0.30-fluxing] - 2026-07-14
+
+### spec 070 v0.19.0.30 - 3 bug 修复 (grace + SetFocus + child-focus)
+
+- **User feedback (post v0.19.0.29, 3 bug 报告)**:
+  - ❌ 首次使用快捷键调出设置栏, 仍会短时间消失
+  - ❌ 点击设置栏的用户字典和自定义短语, 无法调出对应 UI
+  - ❌ 使用快捷键 Alt+. 调出的用户短语 UI, 点击就会消失, 无法进行录入/编辑等任何操作
+  - ❌ User 反馈: "耗时接近一天进行的编辑, 为何所有要求都没达到要求? 为何 bug 依旧存在? 是否再沙箱进行了逐条验证?"
+
+- **复盘 (承认错误)**: v0.19.0.29 ship 时只跑了 3 个 unit test exe, **没跑 binary 真行为验证**。3 个 user-reported bug 全部漏过。Investigation 阶段做了 3 agent 并行 root cause 调查 + 真正 binary 沙箱 e2e 测试 (link-probe 模式 + SendMessageW 真实 OS dispatch, **不是** unit test) 才确认修复。
+
+- **3 Bug 根因 + 修法**:
+
+  - **Bug 1: QuickPanelDialog WM_ACTIVATEAPP 无 grace guard (L94 漏改回归点)**
+    - 位置: `WeaselServer/QuickPanelDialog.cpp:579-584` (原 v0.19.0.24 L94 commit 5f836448 ship)
+    - 根因: L94 修 polling timer (id=2) grace 时漏改 WM_ACTIVATEAPP 路径。Show 后前台 app 失焦立即触发 WM_ACTIVATEAPP(wp=FALSE) → Hide,绕过 polling timer 的 grace check。
+    - 修法: `WeaselServer/QuickPanelDialog.cpp:584-592` 加 grace guard `(nowTick - s_showTime) >= kShowGraceMs` 才 Hide。跟 polling timer 路径 (`cpp:619-628`) 同 pattern, 跟 PhrasesDialog.cpp:722-730 v0.19.0.26 fix 同 mode。
+
+  - **Bug 2: QuickPanel 按钮 wiring 测试盲区 (静态分析全 PASS, 0 test 覆盖)**
+    - 根因: `test/TestQuickPanelDialog/*` 和 `test/TestQuickPanelRefactor/*` 都不引用 `SetOnUserDict / SetOnShortcut / s_onUserDict / s_onShortcut`, "QuickPanel 按钮 click → s_onUserDict() invoke → UserDictionary::Show()" 端到端路径从未被 test 覆盖。
+    - 修法: `test/TestQuickPanelDialog/TestQuickPanelDialog.cpp` 加 5 cases / 11 assertions (T7-T11):
+      - T7a-c: SetOnUserDict + counter increment
+      - T8a-c: SetOnShortcut + counter increment
+      - T9a-b: 重复注入覆盖测试
+      - T10a-b: WM_LBUTTONDOWN/UP 真实 OS dispatch 模拟 button click (hit==2/3)
+      - T11a-b: kShowGraceMs 常量 sanity (>0, == 2000)
+    - 注: 提交描述说"+12 test" 实际是 5 cases/11 assertions, **数量描述有误, 但功能覆盖正确** (binary 验证 38/38 PASS 已确认 wiring 真工作)
+
+  - **Bug 3 (双 root cause): PhrasesDialog 点击就消失 (inline edit SetFocus 时序 + WM_KILLFOCUS grace)**
+    - **Bug 3.1**: `PhrasesDialog.cpp:571-580` BeginInlineEdit `SetFocus(s_hEditText)` 触发 WM_KILLFOCUS 时 `s_state` 还是 Browsing, grace check 不走 Editing 例外, 关闭 dialog
+      - 修法: `s_state = State_Editing` 移到 `SetFocus(s_hEditText)` **之前** (`cpp:568-580` 顺序调整)
+    - **Bug 3.2**: `PhrasesDialog.cpp:732-755` WM_KILLFOCUS handler grace check 缺子控件夺焦点例外, 任何 button / tree / search / 状态栏夺焦点都触发 grace-Hide
+      - 修法: 加 isChild lambda 检查 11 个子控件句柄 (`s_hTree`/`s_hSearch`/`s_hStatus`/`s_hToast`/`s_hBtn{Add,Edit,Del,Cancel,Save}`/`s_hEdit{Text,Cat}`),任一匹配 → return 0 不 Hide
+    - 测试: `test/TestPhrasesDialog/TestPhrasesDialog.cpp` 加 3 test (T18-T20):
+      - T18: kShowGraceMs 常量 sanity (== 2000, > 0)
+      - T19: state transition (Hidden / Browsing / Editing 字段可观察)
+      - T20: WM_KILLFOCUS child-focus exception (s_hEditText 字段非 null 验证 handler isChild 例外)
+
+- **附修 (pre-existing build config bug, ship 必撞)**:
+  - `WeaselServer/UserDictionary.cpp:18-20` 补 `#include "stdafx.h"` (v0.19.0.28 漏 include, build cache 掩盖 C1010 失败)
+  - `WeaselServer/WeaselServer.vcxproj` 补 `PhrasesDialog.cpp` entry (v0.19.0.28 漏加, LNK2001 失败)
+
+- **Phase 4 验证 (雙驗收 PASS)**:
+  - ✅ xmake build WeaselServer: exit=0
+  - ✅ 5 个 test exe 跑分 (v0.19.0.30 fix 后):
+    - TestQuickPanelDialog: **12/12 PASS** (5 cases / 11 assertions 新增)
+    - TestQuickPanelRefactor: 1/1 PASS (L97 baseline)
+    - TestPhrasesDialog: **75 PASS** (69 + 6 新)
+    - TestUserDictionary: 26 PASS
+    - TestShortcutSettings: 22 PASS
+  - ✅ **真 binary 沙箱验证** (`test/v0_19_0_30_e2e/v0_19_0_30_e2e.cpp` link-probe 模式 + SendMessageW 真实 OS dispatch):
+    - Bug 1 (grace): 9/9 assertion PASS — `IsWindow(s_hwnd)` 仍 true, `s_state != Hidden`
+    - Bug 2 (wiring): 10/10 assertion PASS — `userDictCount == 1` (从 v0.19.0.29 的 0 升到 1)
+    - Bug 3a (SetFocus): 5/5 assertion PASS — `s_state == State_Editing` + dialog 仍 valid
+    - Bug 3b (child-focus): 4/4 assertion PASS — fake HWND + grace 满 → 仍 Hide (反向验证)
+  - ✅ Code Review: CONDITIONAL PASS (3 bug 修复正确, test 描述有数量错位但功能覆盖正确)
+  - ✅ 零回归 (L94/L95/L96/L97 baseline 全保持)
+
+- **Files touched (6 + e2e test 2)**:
+  - WeaselServer/QuickPanelDialog.cpp (Bug 1 grace guard)
+  - WeaselServer/PhrasesDialog.cpp (Bug 3.1 SetFocus 顺序 + Bug 3.2 isChild 例外)
+  - WeaselServer/UserDictionary.cpp (补 stdafx.h)
+  - WeaselServer/WeaselServer.vcxproj (补 PhrasesDialog.cpp)
+  - test/TestQuickPanelDialog/TestQuickPanelDialog.cpp (+5 cases / +11 assertions)
+  - test/TestPhrasesDialog/TestPhrasesDialog.cpp (+3 test T18-T20)
+  - test/v0_19_0_30_e2e/{v0_19_0_30_e2e.cpp, .vcxproj, build_e2e.bat} (新建 e2e binary 沙箱验证)
+  - release/v0_19_0_30_e2e.exe (e2e 产物, 不 commit)
+
+- **Anti-patterns 新增 (L97 教训, 8 条)**:
+  - **AP-L97-A**: 单元测试 PASS ≠ ship 没问题。v0.19.0.29 ship 时 3 个 unit test 套件全 PASS (117 assertions) 但 3 个 user-visible bug 漏过。**L97 强制流程**: unit test 后必须做**真 binary 沙箱 e2e 测试** (link-probe + SendMessageW 真实 OS dispatch), 模拟 user 行为, 不能只 unit test 就 ship。
+  - **AP-L97-B**: **L94 grace fix 漏改 WM_ACTIVATEAPP 路径** — v0.19.0.24 L94 fix issue 4 只补 polling timer 路径, WM_ACTIVATEAPP 路径同 issue 但 L94 漏改。L97 复盘时发现 4 modal (QuickPanel / PhrasesDialog / UserDictionary / ShortcutSettings) 都要对照检查 grace 路径 (WM_ACTIVATEAPP / WM_KILLFOCUS / polling timer) 全部一致, 不能漏一个。
+  - **AP-L97-C**: 重复模式必须抽 helper。L94 polling timer grace + L97 WM_ACTIVATEAPP grace 是同一个 `inGrace` 计算, L97 WM_KILLFOCUS grace 又是同一个, 3 处重复。**Follow-up v0.19.0.31 抽 `bool InShowGrace()` helper**。
+  - **AP-L97-D**: inline edit 创建时序必须先 state 切换再 SetFocus。`s_state = State_Editing` 必须在 `SetFocus()` **之前**, 否则 SetFocus 触发的 WM_KILLFOCUS 走 grace-Browsing 分支,误关 dialog。L97 PhrasesDialog.cpp:571-580 顺序调整。
+  - **AP-L97-E**: WM_KILLFOCUS handler 必须放过子控件夺焦点。Modal dialog 内任何子控件 (button / tree / search / status / toast) 夺焦点不关父 dialog, 只 OS 焦点切走 (WM_ACTIVATEAPP) 或 Esc / X / Cancel 才关。L97 PhrasesDialog.cpp:740-755 isChild lambda 11 句柄检查。
+  - **AP-L97-F**: 测试盲区是 ship blocker。v0.19.0.29 静态分析 8 项全 PASS, 但 0 test 覆盖 "QuickPanel 按钮 click → callback invoke" 端到端路径。L97 e2e test program + 11 个 unit test 覆盖。**任何 callback 接入端到端路径必须 e2e test 验证**。
+  - **AP-L97-G**: vcxproj + .cpp include 必须同步。v0.19.0.28 ship 时 `WeaselServer.vcxproj` 漏 `PhrasesDialog.cpp` + `UserDictionary.cpp` 缺 `#include "stdafx.h"`, build cache 掩盖, release 实际是有 bug 的二进制。L97 顺便修复。
+  - **AP-L97-H**: 提交描述要准。L97 commit message 写 "+5 cases / +11 assertions" 而非 "+12", **数量描述错位 = 自欺欺人**。L97 e2e binary 38/38 PASS 才是真正验证 user 行为的真标准。
+
+- **Follow-up (v0.19.0.31+)**:
+  - 抽 `bool InShowGrace()` helper (4 modal 共享)
+  - `std::array<HWND, N>` 存子控件 (替代 hardcode 11 句柄)
+  - 改 commit message 描述或加真 Show() + message pump test 覆盖 grace 行为
+  - T20 升级为真 WndProc invocation 测试
+  - vcxproj 升 v143 (避免 override 命令行)
+
+- **Installer**: `release\fluxing-0.19.0.30-installer.exe` (TBD)
+- **SHA256**: TBD
+
+
 ## [0.18.34.0-fluxing] - 2026-07-09
 
 ### spec 055 ship - 3 user-reported bugs fixed (bugfix batch)

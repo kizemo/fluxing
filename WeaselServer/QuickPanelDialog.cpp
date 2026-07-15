@@ -576,9 +576,17 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
     }
     // L81-fix: 切到其他 IME (en-US 等) 时 WeaselServer 进程会失焦 → WM_ACTIVATEAPP 触发。
     // 自动 Hide() 让 panel 跟着前台 app 切走,不残留屏幕上。
+    // v0.19.0.30-fix(issue 1): 之前 polling timer (id=2) 路径在 grace 期内不累加
+    // outsideMs (cpp:611-612 模式),但 WM_ACTIVATEAPP 路径直接 Hide,无 grace guard。
+    // 触发链:用户 Alt+. → Show() → 切回前台 app → WM_ACTIVATEAPP(0) → 立即 Hide,
+    // user 还没看到 panel 就消失。修法:与 PhrasesDialog.cpp:722-730 同 pattern,
+    // 在 grace 期 (nowTick - s_showTime) < kShowGraceMs 内不 Hide。
     case WM_ACTIVATEAPP: {
       if (w == FALSE) {  // app 被 deactivate (前台切走)
-        Hide();
+        DWORD nowTick = GetTickCount();
+        if ((nowTick - s_showTime) >= kShowGraceMs) {
+          Hide();
+        }
       }
       return 0;
     }
