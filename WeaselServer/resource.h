@@ -42,6 +42,11 @@
 // spec 045 v0.19.0.28: Ctrl+Shift+K global hotkey → ShortcutSettings::Show()
 #define ID_HOTKEY_SHORTCUT             9004
 
+// v0.19.0.32-fix (Bug 3b): Alt+/ global hotkey → UserDictionary::Show()
+// (跟 QuickPanel Button 2 (UserDict) 共享入口)
+//   / 键的虚拟键码是 VK_OEM_2 (= 0xBF)
+#define ID_HOTKEY_USER_DICT_ALT_SLASH  9005
+
 // spec 052 v0.18.31.0: enable QuickPanel always-show mode (20% alpha)
 #define ID_QUICKPANEL_ALWAYS_SHOW      40019
 #define IDR_FLUXING_LOGO                108

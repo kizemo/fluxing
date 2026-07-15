@@ -62,6 +62,12 @@ LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
       ShortcutSettings::Show();
       return 0;
     }
+    // v0.19.0.32-fix (Bug 3b): Alt+/ → UserDictionary::Show()
+    // (跟 QuickPanel Button 2 (UserDict) 共享入口)
+    if (w == ID_HOTKEY_USER_DICT_ALT_SLASH) {
+      UserDictionary::Show();
+      return 0;
+    }
   }
   // 透传:必须 CallWindowProc 回原 WNDPROC(否则破坏 ServerImpl OnHotkey/WM_COMMAND 等)
   WeaselServerApp* owner = s_phrasesHotkeyOwner;
@@ -110,6 +116,14 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
     std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Ctrl+Shift+K) failed, err="
                << ::GetLastError() << std::endl;
   }
+
+  // 5) v0.19.0.32-fix (Bug 3b): Alt+/ → UserDictionary::Show()
+  //    / 键的虚拟键码是 VK_OEM_2 (= 0xBF,US 键盘的 / 键)
+  if (!::RegisterHotKey(hwndServer, ID_HOTKEY_USER_DICT_ALT_SLASH,
+                        MOD_ALT, VK_OEM_2)) {
+    std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Alt+/) failed, err="
+               << ::GetLastError() << std::endl;
+  }
 }
 
 void WeaselServerApp::UnregisterPhrasesHotkey() {
@@ -118,6 +132,7 @@ void WeaselServerApp::UnregisterPhrasesHotkey() {
     ::UnregisterHotKey(hwndServer, ID_HOTKEY_PHRASES_DOT);
     ::UnregisterHotKey(hwndServer, ID_HOTKEY_USER_DICT);  // spec 044
     ::UnregisterHotKey(hwndServer, ID_HOTKEY_SHORTCUT);   // spec 045
+    ::UnregisterHotKey(hwndServer, ID_HOTKEY_USER_DICT_ALT_SLASH);  // v0.19.0.32
     if (m_ipcServerOrigWndProc) {
       ::SetWindowLongPtr(hwndServer, GWLP_WNDPROC,
                          reinterpret_cast<LONG_PTR>(m_ipcServerOrigWndProc));

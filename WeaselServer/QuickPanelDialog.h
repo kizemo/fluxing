@@ -206,8 +206,8 @@ class QuickPanelDialog {
   // ===== Internal =====
   static LRESULT OnCreate(HWND);
   static LRESULT OnPaint(HWND);
-  static LRESULT OnLButtonUp(HWND, int, int);
-  static LRESULT OnLButtonDown(HWND, int, int);
+  // v0.19.0.32-fix (Bug 2): 删除 OnLButtonUp/OnLButtonDown dead-stub 声明。
+  // WndProc cpp:562-569 已内联 WM_LBUTTONUP 真 fire 路径,stub 永远不被调用。
   static void    OnMouseMove(HWND);
   static void    OnMouseLeave(HWND);
   static LRESULT OnTimer(HWND, WPARAM);

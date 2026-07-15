@@ -26,12 +26,6 @@ v0.19.0.30 ship 时只跑了 unit test + e2e binary sandbox (mechanism verify), 
   3. **PopulateTree / PopulateList** 真的被调吗? (Show() 调还是不调?)
 - 2026-07-15 user 报: UserDict + PhrasesDialog "无法调出" / "界面不同" / "无法使用" (screenshots 证实 — 空 body, no listview / no tree)
 
-**3 个 verdict 维度 FAIL**:
-1. **Code Review** PASS (静态 8 项)
-2. **Unit test** PASS (5 套)
-3. **E2E binary mechanism** PASS (38 assertions, callback 真的 invoke 1x)
-但 **真实 end-to-end UI 渲染 FAIL** (4 个 verifier 都看不到空 body)
-
 ### Suggested Action
 - L98 fix: 加 **真 GUI 渲染测试** (模拟 user 启动 WeaselServer, CreateWindow 触发 OnCreate, 验证 s_hTree / s_hListView 创建 + PopulateTree 调 + TreeView_InsertItem 真的 add 数据)
 - L98 e2e 加 T_Bug: 实际跑 Show() 后查 tree item 数 (TreeView_GetCount) > 0
@@ -42,7 +36,7 @@ v0.19.0.30 ship 时只跑了 unit test + e2e binary sandbox (mechanism verify), 
 - Source: user_feedback
 - Related Files: WeaselServer/UserDictionary.cpp, WeaselServer/PhrasesDialog.cpp, test/v0_19_0_30_e2e/
 - Tags: tests, e2e, gui-rendering, mechanism-vs-end-result
-- See Also: LRN-20260715-097 (L97 第一次 e2e 缺 end-to-end 验证), AP-L97-A
+- See Also: AP-L97-A
 - Pattern-Key: tests.gui-rendering-blind-spot
 - Recurrence-Count: 1
 - First-Seen: 2026-07-15
@@ -130,6 +124,59 @@ v0.19.0.30 ship 时只跑了 unit test + e2e binary sandbox (mechanism verify), 
 - Pattern-Key: ship.gui-rendering-blind-spot
 - Recurrence-Count: 5
 - First-Seen: 2026-07-13
+- Last-Seen: 2026-07-15
+
+---
+
+## [LRN-20260715-004] insight
+
+**Logged**: 2026-07-15T12:30:00Z
+**Priority**: critical
+**Status**: pending
+**Area**: tests
+
+### Summary
+v0.19.0.31 ship (L98) 修了 chrome paint body 空白, 我 ship 报告 "189 assertions + 53 e2e binary (含 pixel-level paint 验证)" — 但 user 报 3 个新 bug 还没修:
+1. PhrasesDialog inline edit (2 个 unclickable input) UX 坏
+2. QuickPanel Phrase 按钮路径 ≠ hotkey 路径 (显示不正常)
+3. UserDict 按钮 仍无反应, 需加 Alt+/ hotkey
+
+**Pixel-level RGB 值 ≠ 0 ≠ 功能正常**。我方 e2e 只验 `GetPixel != 0` 证明 chrome paint 出非空像素, 但**没验**:
+- UX 流程 (type in search → click Add → 验证 list 有 item)
+- 路径一致性 (QuickPanel 按钮路径 vs hotkey 路径 走同一 Show())
+- 按钮 wiring (UserDict 按钮 invoke s_onUserDict 真调 UserDictionary::Show)
+
+v0.19.0.30 L97 + v0.19.0.31 L98 两次 ship, 我方都 "全 PASS" 跟 user 实际 "完全不可用" — **e2e 仍只测机制, 没测 user flow**。
+
+### Details
+v0.19.0.31 实际行为 (user 截图证实):
+- 截图 1: 常用短语 dialog, 顶部 input + 2 个 unclickable EDIT 控件 (这是 BeginInlineEdit v0.19.0.30 创的 inline edit overlay, 没用 user 期望的 "顶部 input → add button → list" UX)
+- 截图 2: QuickPanel Phrase 按钮调出的 dialog 显示不正常 (跟 hotkey 调出不同)
+- 截图 3: UserDict 按钮 完全无反应 (按钮 wiring 链路还是有问题)
+
+我方 e2e 38+15=53 assertions 全 PASS, 我说 "已实现" — 但 user 看到 3 个严重 UX bug。
+
+### Suggested Action
+- L99 流程: e2e 必须 verify **完整 user flow**, 不只 mechanism + pixel-level
+- L99 必加:
+  - T_Add_Phrase: type text in search/input → click Add → 验证 list 增 1 item + item 文本 = typed text
+  - T_Select_Edit: click list item → 验证顶部 input 显示 item.text
+  - T_Save_Phrase: 修改 → Save → 验证 YAML 写盘 + 内存 m_phrases 更新
+  - T_Phrases_Hotkey: Alt+. → 弹 modal
+  - T_Phrases_QuickPanel: hit==1 button → 弹 modal (跟 hotkey 同 instance, 同 state)
+  - T_UserDict_Hotkey: Alt+/ → 弹 modal (新 hotkey)
+  - T_UserDict_QuickPanel: hit==2 button → 弹 modal
+  - T_UserDict_State: modal 跟 PhrasesDialog 共享 s_state enum / 独立 / 一致性
+- v0.19.0.32 fix: 重做 PhrasesDialog UX (顶部 input + Add 按钮 + list), 加 Alt+/ hotkey for UserDict, 修 QuickPanel 按钮 path
+
+### Metadata
+- Source: user_feedback
+- Related Files: WeaselServer/{PhrasesDialog,UserDictionary,QuickPanelDialog}.{h,cpp}, WeaselServerApp.cpp
+- Tags: ux, user-flow, button-wiring, hotkey, alt+/
+- See Also: LRN-20260715-001, LRN-20260715-002, LRN-20260715-003, AP-L98-A, AP-L98-F
+- Pattern-Key: tests.mechanism-not-user-flow
+- Recurrence-Count: 2
+- First-Seen: 2026-07-15
 - Last-Seen: 2026-07-15
 
 ---
