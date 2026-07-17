@@ -39,6 +39,20 @@ weasel.props
 *~
 .*.swp
 *.swp
+# session sandbox scratch (L100): _-prefix helper scripts/build wrappers created
+# during one-off debugging — should never enter version control.
+# Use real paths under scripts/, test/ for permanent tooling.
+/_*.cmd
+/_*.ps1
+/build-v0_19_0_*.py
+/_fix_*.py
+/_check_*.ps1
+/_probe_*.ps1
+/_user_flow*.ps1
+/_runbuild.cmd
+/e2e_build.log
+/build-v*.bat
+/debug-*.bat
 .vs
 Thumbs.db
 /.idea
