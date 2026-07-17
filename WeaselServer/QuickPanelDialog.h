@@ -235,6 +235,9 @@ class QuickPanelDialog {
   static void DrawIconSymbols(HDC hdc, int x, int y, COLORREF penColor);
   static void DrawIconSettings(HDC hdc, int x, int y, COLORREF penColor);
   static void DrawIconAccount(HDC hdc, int x, int y, COLORREF penColor);
+  // v0.19.0.33 (Phase A.3): UserDict button 专属 icon — 开着的书, 区别于 Account 人头像
+  // 替代 v0.19.0.32 cd6f61a9 错用 DrawIconAccount (跟 button 4 撞图) 的临时方案
+  static void DrawIconUserDict(HDC hdc, int x, int y, COLORREF penColor);
 
   // L81: COM 一次性初始化(WIC 创建需要 STA)。返回 S_OK 表示已初始化,
   // S_FALSE 表示已初始化过(无需重复),失败错误码需要退出。我们仅 initialize

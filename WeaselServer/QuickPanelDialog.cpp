@@ -158,6 +158,25 @@ void QuickPanelDialog::DrawIconAccount(HDC hdc, int x, int y, COLORREF penColor)
   DeleteObject(SelectObject(hdc, pen));
 }
 
+void QuickPanelDialog::DrawIconUserDict(HDC hdc, int x, int y, COLORREF penColor) {
+  // v0.19.0.33 (Phase A.3): 打开的书 (UserDict 图标) — 视觉区别于 Account 人头像
+  // design 简化: 一本开着的书 = 两页 + 折线 spine + 下方基准线
+  // 描线 viewBox: 24×24, content bbox ~ (4..20, 5..22)
+  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
+  // 左页外框 (L4..L12, T6..B22) - 留 2px spine gap 给中线
+  MoveToEx(hdc, x + 4,  y + 6,  nullptr);
+  LineTo  (hdc, x + 11, y + 8);   // 顶部斜上 (书脊倾斜感)
+  LineTo  (hdc, x + 11, y + 22);  // 左边竖到底
+  // 右页外框 (R12..R20, T8..B22)
+  LineTo  (hdc, x + 20, y + 22);
+  LineTo  (hdc, x + 20, y + 8);
+  LineTo  (hdc, x + 11, y + 6);   // 回到书脊顶部
+  // 书脊中线 (spine)
+  MoveToEx(hdc, x + 11, y + 6, nullptr);
+  LineTo  (hdc, x + 11, y + 22);
+  DeleteObject(SelectObject(hdc, pen));
+}
+
 
 // ===== 静态成员定义 =====
 HWND     QuickPanelDialog::s_hwnd         = NULL;
@@ -895,12 +914,11 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     switch (i) {
       case 0: DrawIconSchema(hdc, iconX, iconY, penRgb); break;
       case 1: DrawIconPhrase(hdc, iconX, iconY, penRgb); break;
-      // v0.19.0.32-fix (Bug 3a): hit==2 是 UserDict 按钮(WndProc cpp:564 invoke
-      // s_onUserDict),但 v0.19.0.29 留的是 DrawIconSymbols(键盘图标)。视觉跟
-      // 实际功能不符 → user 看不到 user dict 暗示。改成 DrawIconAccount (人头像)
-      // 视觉上暗示 user dictionary。注释同步更新:
-      //   0 Schema / 1 Phrase / 2 UserDict / 3 Shortcut / 4 Account (no-op)
-      case 2: DrawIconAccount(hdc, iconX, iconY, penRgb); break;
+      // v0.19.0.33 (Phase A.3): hit==2 改用 DrawIconUserDict (开着的书)。
+      // 之前 v0.19.0.32 错用 DrawIconAccount 跟 hit==4 (Account) 同图 → user 看到
+      // button 3 跟最右 account icon 一模一样。DrawIconUserDict 视觉上区分 UserDict
+      // (书 / 知识) vs Account (人头像), 满足 spec 040 视觉差异化原则。
+      case 2: DrawIconUserDict(hdc, iconX, iconY, penRgb); break;
       case 3: DrawIconSettings(hdc, iconX, iconY, penRgb); break;
       case 4: DrawIconAccount(hdc, iconX, iconY, penRgb); break;
     }

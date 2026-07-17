@@ -95,34 +95,47 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
 
   // 2) 注册全局热键 ALT+. (VK_OEM_PERIOD 是 US 键盘的 . 键)
   //    AP-036-F: 失败仅 log warning,不 crash。失败可能是被其他 app 占用了。
+  //    Phase A.2: 增强 log — 标 id + label + 解释 ERROR_HOTKEY_ALREADY_REGISTERED=1409
+  //    是最常见原因 (其他 app 占用了 Alt+. 全局热键)。
   if (!::RegisterHotKey(hwndServer, ID_HOTKEY_PHRASES_DOT, MOD_ALT, VK_OEM_PERIOD)) {
-    // 输出到 stderr;ConsoleAllocatorStatus L05 不影响 GUI。
-    std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Alt+.) failed, err="
-               << ::GetLastError() << std::endl;
+    DWORD err = ::GetLastError();
+    LPCWSTR cause = (err == 1409) ? L"ERROR_HOTKEY_ALREADY_REGISTERED (另一个 app 已占用 Alt+.)"
+                                  : L"see Win32 error codes";
+    std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Alt+., id=" << ID_HOTKEY_PHRASES_DOT
+               << L") failed, err=" << err << L" — " << cause << std::endl;
   }
 
   // 3) v0.19.0.28(spec 044 §3.2):注册全局热键 Ctrl+Shift+U → UserDictionary::Show
   //    字母 U 的虚拟键码是 0x55 (ASCII 'U')
   if (!::RegisterHotKey(hwndServer, ID_HOTKEY_USER_DICT,
                         MOD_CONTROL | MOD_SHIFT, 0x55)) {
-    std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Ctrl+Shift+U) failed, err="
-               << ::GetLastError() << std::endl;
+    DWORD err = ::GetLastError();
+    LPCWSTR cause = (err == 1409) ? L"ERROR_HOTKEY_ALREADY_REGISTERED (另一个 app 已占用 Ctrl+Shift+U)"
+                                  : L"see Win32 error codes";
+    std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Ctrl+Shift+U, id=" << ID_HOTKEY_USER_DICT
+               << L") failed, err=" << err << L" — " << cause << std::endl;
   }
 
   // 4) spec 045 v0.19.0.28: Ctrl+Shift+K → ShortcutSettings::Show
   //    字母 K 的虚拟键码是 0x4B (ASCII 'K')
   if (!::RegisterHotKey(hwndServer, ID_HOTKEY_SHORTCUT,
                         MOD_CONTROL | MOD_SHIFT, 0x4B)) {
-    std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Ctrl+Shift+K) failed, err="
-               << ::GetLastError() << std::endl;
+    DWORD err = ::GetLastError();
+    LPCWSTR cause = (err == 1409) ? L"ERROR_HOTKEY_ALREADY_REGISTERED (另一个 app 已占用 Ctrl+Shift+K)"
+                                  : L"see Win32 error codes";
+    std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Ctrl+Shift+K, id=" << ID_HOTKEY_SHORTCUT
+               << L") failed, err=" << err << L" — " << cause << std::endl;
   }
 
   // 5) v0.19.0.32-fix (Bug 3b): Alt+/ → UserDictionary::Show()
   //    / 键的虚拟键码是 VK_OEM_2 (= 0xBF,US 键盘的 / 键)
   if (!::RegisterHotKey(hwndServer, ID_HOTKEY_USER_DICT_ALT_SLASH,
                         MOD_ALT, VK_OEM_2)) {
-    std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Alt+/) failed, err="
-               << ::GetLastError() << std::endl;
+    DWORD err = ::GetLastError();
+    LPCWSTR cause = (err == 1409) ? L"ERROR_HOTKEY_ALREADY_REGISTERED (另一个 app 已占用 Alt+/)"
+                                  : L"see Win32 error codes";
+    std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Alt+/, id=" << ID_HOTKEY_USER_DICT_ALT_SLASH
+               << L") failed, err=" << err << L" — " << cause << std::endl;
   }
 }
 
@@ -279,14 +292,11 @@ void WeaselServerApp::SetupMenuHandlers() {
             ShellExecuteW(NULL, NULL, deployer.c_str(), L"/hotkey", NULL, SW_SHOWNORMAL);
           },
           [this]() { explore(WeaselUserDataPath()); },
-          [this]() { explore(install_dir()); },
+          [this]() { PhrasesDialog::Show(); },
           [this](bool newFull) {
             if (m_handler) m_handler->SetOption(0, "full_shape", newFull);
           },
-          [this]() {
-            fs::path deployer = install_dir() / L"WeaselDeployer.exe";
-            ShellExecuteW(NULL, NULL, deployer.c_str(), L"/deploy", NULL, SW_SHOWNORMAL);
-          },
+          [this]() { UserDictionary::Show(); },
           []() {});
     }
     return true;
