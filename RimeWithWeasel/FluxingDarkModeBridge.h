@@ -44,6 +44,12 @@ struct Palette {
   DWORD hilited_back;    // highlighted (selected) candidate background
   DWORD hilited_text;    // highlighted candidate text
 };
+// Compile-time invariant: Palette 4×DWORD = 16 bytes. Any future field
+// added (e.g. spec 040 10 new color tokens) MUST update this assert so the
+// ABI break is caught at build, not via silent sizeof mismatch.
+static_assert(sizeof(Palette) == 16,
+              "Palette size changed — update ABI & dependencies (L100)");
+
 
 // Subscriber callback signature: receives the new dark state.
 // The bridge guarantees the callback fires exactly once per
