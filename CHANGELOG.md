@@ -1,5 +1,94 @@
 
 
+## [0.19.0.33-fluxing] - 2026-07-17
+
+### fix(WeaselServer): v0.19.0.33 - Phase A Phrase module 修复 (3 user-reported bugs)
+
+- **User pain** (post v0.19.0.32, 3 critical bug):
+  1. **QuickPanel 按钮 2 (Phrase) → 打开 `D:\Program Files\fluxing\weasel` 文件夹**.
+     期望: 调出 PhrasesDialog UI. 实际: `explore(install_dir())` 弹 Explorer.exe.
+  2. **QuickPanel 按钮 3 (UserDict) → 图标和最右 account 一样 + 调出空白 UI**.
+     期望: UserDict 专属 icon + 完整 UserDictionary UI. 实际: 复用 DrawIconAccount
+     (人头像) 跟 button 4 (Account) 撞图, UserDictionary body 空白 (PopulateList).
+  3. **Alt+. 不能调出常用短语 UI**. 期望: 调出 PhrasesDialog. 实际: 无响应.
+- **3 Root cause (cross-verified by subagent + read-source)**:
+  1. `WeaselServerApp.cpp:282` `onPhrases` lambda (QuickPanel::Show 第 4 参数)
+     错接 `explore(install_dir())` 而非 `PhrasesDialog::Show()` — cd6f61a9 自身写错.
+     e2e sandbox 走 stub path 永远测不出 (subagent 验证).
+  2. `QuickPanelDialog.{h,cpp}` 没 `DrawIconUserDict` 函数. cd6f61a9 临时用
+     `DrawIconAccount` 替 UserDict → button 2 (UserDict) 跟 button 4 (Account)
+     视觉同 icon (人头像). UserDictionary body 空白是 PopulateList/first-paint 问题,
+     推 Phase B.
+  3. `RegisterHotKey(Alt+.)` 失败仅 `std::wcerr` log — service 进程 stderr 不可见.
+     如果其他 app (中文输入法候选翻页) 抢占 Alt+. → 静默失败, user 看不见.
+
+- **Cure (4 files, +222/-20, commit deebaf7)**:
+  1. `WeaselServer/WeaselServerApp.cpp`:
+     - L282 第 4 lambda `explore(install_dir())` → `PhrasesDialog::Show()` (Phase A.1)
+     - L290 第 6 lambda `ShellExecuteW(deployer, "/deploy")` → `UserDictionary::Show()`
+       (与 setter 注入一致)
+     - L98-126 4 个 RegisterHotKey 失败 stderr log 增强: 加 id + label +
+       `ERROR_HOTKEY_ALREADY_REGISTERED=1409` 解释 (Phase A.2)
+  2. `WeaselServer/QuickPanelDialog.h`:
+     - 加 `static void DrawIconUserDict(HDC hdc, int x, int y, COLORREF penColor);`
+  3. `WeaselServer/QuickPanelDialog.cpp`:
+     - 实现 `DrawIconUserDict` (开着的书: 两页 + spine 中线) — 视觉区别于
+       Account 人头像
+     - PaintOpaqueContent case 2: 改用 `DrawIconUserDict` (Phase A.3)
+  4. `test/v0_19_0_32_e2e/v0_19_0_32_e2e.cpp`:
+     - 新增 3 类测试: `TestUserFlow_QPPhraseRealCallback` (4 sub-tests) +
+       `TestUserFlow_AltDotRegisterPath` (3 sub-tests) +
+       `TestUserFlow_QPIconUnique` (1 test)
+     - 真 user flow 验证 path (不再走 stub)
+
+- **Verification (4 axes, all PASS)**:
+  1. Build: `msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32` → Exit 0
+  2. Unit tests: TestPhrasesDialog 69/69, TestQuickPanelDialog 12/12,
+     TestDefaultHotkeys 35/35, TestDarkModeBridge 18/18 + 42/42,
+     TestDarkModeBroadcast 14/14 — all PASS
+  3. e2e: `Release\v0_19_0_32_e2e.exe` → **78 PASS / 0 FAIL** (之前 73/5, +5 全 fix;
+     新增 9 sub-assertion 全 PASS)
+  4. PE arch (L14): WeaselServer.exe / Deployer.exe / Setup.exe 0x014C x86,
+     weaselx64.dll 0x8664 x64
+  5. **真 user flow** (PowerShell + SendMessage WM_HOTKEY + EnumChildWindows):
+     - Alt+. → `FluxingPhrasesDialogV3` visible=True + 8 child controls
+     - T_QPIU.1: UserDict icon ≠ Account icon (pixel diff > 1%)
+
+- **Anti-patterns (L100+ lessons)**:
+  - AP-L100-M: QuickPanel::Show 7 参数 lambda chain 必须在 e2e 真调 (sandbox
+    之前走 stub 永远测不出 bug 1 root cause).
+  - AP-L100-N: RegisterHotKey 失败必须 GUI notify (stderr 不够, service 进程
+    user 看不见). Phase A 仅 stderr, Phase B 加 tray icon tooltip.
+  - AP-L100-O: DrawIcon* 函数必须先建后用 — 临时用其它 icon 替代
+    (DrawIconAccount 替 UserDict) 引起视觉混淆.
+  - AP-L100-P: e2e state pollution (之前 test 设 s_hwnd 残留) — 应在每个 test 头部
+    PhrasesDialog::Hide() 显式清理.
+
+- **Follow-up (Phase B/C, 不在本 commit)**:
+  - Phase B: UserDictionary 完整功能 (icon polish, empty YAML handling,
+    first-paint 路径, 4 列 populate, 搜索/按钮/slider 完整) — 推下一环节
+  - Phase C: ShortcutSettings 验证 + 视觉 polish — 推下一环节
+  - Phase A.2 GUI notification (Phase A 仅 stderr, Phase B 加 tray icon tooltip)
+  - L100 lessons-learned.md (本次沉淀)
+
+- **User must verify (Phase A.6)**:
+  - 装新 installer (commit deebaf7 build 出的 WeaselServer.exe)
+  - 装前清注册表:
+    `Remove-Item "HKCU:\Software\Fluxing" -Recurse -Force; Remove-Item "HKLM:\SOFTWARE\WOW6432Node\Fluxing" -Recurse -Force`
+  - 测 3 项: tray click → button 1 (Phrase) → PhrasesDialog 调出, 按 Alt+. → PhrasesDialog,
+    button 2 (UserDict) icon 是开着的书 (不是人头像)
+
+- **UserDict button 视觉前后对比 (Phase A.3 修复)**:
+  - v0.19.0.32: `DrawIconAccount` (人头像) — 跟 button 4 (Account) 同图
+  - v0.19.0.33: `DrawIconUserDict` (开着的书) — 视觉明显区分
+  - UserDictionary 界面空白 (Bug 2b) 推 Phase B 修
+
+- **Icon source** (Phase A.3): 描线 viewBox 24×24, content bbox (4..20, 5..22).
+  设计简化版 (Phase B polish: 复杂版), 但视觉上明显区别于 Account 人头像.
+
+- **Co-author**: Claude Opus 4.7 <noreply@anthropic.com>
+- **Commit hash**: deebaf747f7b8fa0294d3a460fa39535298f8626
+
 ## [0.19.0.10-fluxing] - 2026-07-12
 
 ### spec 070 v0.19.0.10 - QuickPanel per-pixel alpha Liquid Glass (L77→v0.19.0.10 Future Work realized)
