@@ -117,7 +117,12 @@ void PhrasesDialog::Show() {
   InitCommonControlsEx(&icc);
 
   // 3. 创建 modal 窗口
-  DWORD exStyle = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
+  // v0.19.0.33 (Phase B Bug 2b 真修): 删 WS_EX_LAYERED。WS_EX_LAYERED 窗口不通过
+  // WM_PAINT / BeginPaint 路径画 body — DWM 把它当 layered surface, OnPaint 的
+  // FillRect/DrawText/DrawEdge 全部丢失, body 透明成用户看到的"无内容"。
+  // 走 ShortcutSettings 同样路径 (WS_EX_LAYERED 不设), BeginPaint/EndPaint
+  // 正常 paint body。
+  DWORD exStyle = WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
   DWORD style = WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 
   // 注册 window class(幂等)
@@ -760,4 +765,13 @@ void PhrasesDialog::CenterOnPrimaryMonitor(HWND hwnd, int w, int h) {
   int cx = (mi.rcWork.left + mi.rcWork.right - w) / 2;
   int cy = (mi.rcWork.top + mi.rcWork.bottom - h) / 2;
   SetWindowPos(hwnd, nullptr, cx, cy, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// v0.19.0.33 (Phase B Bug 2b 真修): ShortcutSettings 同款路径 — 不调
+// UpdateLayeredWindow, 仅 RedrawWindow 让 BeginPaint/EndPaint 触发 OnPaint。
+void PhrasesDialog::RepaintLayered(HWND hwnd) {
+  if (hwnd && IsWindow(hwnd)) {
+    RedrawWindow(hwnd, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+  }
 }

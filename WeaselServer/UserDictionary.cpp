@@ -193,7 +193,12 @@ void UserDictionary::Show() {
   InitCommonControlsEx(&icc);
 
   // 3. 创建 modal 窗口
-  DWORD exStyle = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
+  // v0.19.0.33 (Phase B Bug 2b 真修): 删 WS_EX_LAYERED。WS_EX_LAYERED 窗口不通过
+  // WM_PAINT / BeginPaint 路径画 body — DWM 把它当 layered surface, OnPaint 的
+  // FillRect/DrawText/DrawEdge 全部丢失, body 透明成用户看到的"无内容"。
+  // 走 ShortcutSettings 同样路径 (WS_EX_LAYERED 不设), BeginPaint/EndPaint
+  // 正常 paint body。
+  DWORD exStyle = WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
   DWORD style = WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 
   static bool s_classRegistered = false;
@@ -995,129 +1000,15 @@ int UserDictionary::PopulateListImpl(HWND hList) {
 }
 
 // ===== RepaintLayered =====
-
+// v0.19.0.33 (Phase B Bug 2b 真修): 删 WS_EX_LAYERED, 改 ShortcutSettings 同款
+// 路径 (RedrawWindow 触发 OnPaint)。原 UpdateLayeredWindow(ULW_ALPHA) 在无
+// WS_EX_LAYERED 时会失败, 而 layered window 下 BeginPaint 又被 DWM ignore,
+// 导致 body 透明 (用户看到"无内容")。
 void UserDictionary::RepaintLayered(HWND hwnd) {
-  if (!hwnd) return;
-  RECT rc;
-  GetClientRect(hwnd, &rc);
-  HDC memDc = CreateCompatibleDC(nullptr);
-  HDC screenDc = GetDC(nullptr);
-  HBITMAP bmp = CreateCompatibleBitmap(screenDc, rc.right, rc.bottom);
-  HGDIOBJ oldBmp = SelectObject(memDc, bmp);
-
-  // v0.19.0.31: 抽出 BG + Border 到 ModalChrome helper (DRY)
-  ModalChrome::PaintBackgroundAndBorder(memDc, rc.right, rc.bottom,
-                                         kBgTop, kBgBot,
-                                         kDlgRadius, kBorderColor);
-
-  // Title bar 自绘: 17px bold + "Personal dictionary · N entries" 11px gray
-  {
-    SetBkMode(memDc, TRANSPARENT);
-    HFONT hfTitle = CreateFontW(17, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                VARIABLE_PITCH | FF_SWISS,
-                                L"Segoe UI Variable");
-    HFONT hfOld = static_cast<HFONT>(SelectObject(memDc, hfTitle));
-    SetTextColor(memDc, kTextColor);
-    RECT titleRc = {16, 0, kDialogW - 60, kTitleH};
-    DrawTextW(memDc, L"\xD83D\xDCD6  \u7528\u6237\u8bcd\u5178", -1,  // 📖 用户词典
-              &titleRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    HFONT hfSub = CreateFontW(11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                              VARIABLE_PITCH | FF_SWISS, L"Segoe UI Variable");
-    SelectObject(memDc, hfSub);
-    SetTextColor(memDc, kTextGray);
-    wchar_t sub[64];
-    swprintf_s(sub, L"Personal dictionary \u00b7 %zu entries",
-               m_entries.size());
-    RECT subRc = {16, 18, kDialogW - 60, kTitleH};
-    DrawTextW(memDc, sub, -1, &subRc,
-              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    // ✕ 按钮 (圆形 22x22,右上角)
-    int cx = kDialogW - 28;
-    int cy = (kTitleH - 22) / 2;
-    HBRUSH hBr = CreateSolidBrush(RGB(220, 220, 230));
-    HPEN hPen = CreatePen(PS_NULL, 0, 0);
-    HPEN oldPen = static_cast<HPEN>(SelectObject(memDc, hPen));
-    HBRUSH oldBr = static_cast<HBRUSH>(SelectObject(memDc, hBr));
-    Ellipse(memDc, cx, cy, cx + 22, cy + 22);
-    SelectObject(memDc, oldBr);
-    SelectObject(memDc, oldPen);
-    DeleteObject(hBr);
-    DeleteObject(hPen);
-    HFONT hfX = CreateFontW(12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                            VARIABLE_PITCH | FF_SWISS,
-                            L"Segoe UI Variable");
-    SelectObject(memDc, hfX);
-    SetTextColor(memDc, kTextColor);
-    RECT xRc = {cx, cy, cx + 22, cy + 22};
-    DrawTextW(memDc, L"\u2715", -1, &xRc,  // ✕
-              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    DeleteObject(hfX);
-
-    SelectObject(memDc, hfOld);
-    DeleteObject(hfTitle);
-    DeleteObject(hfSub);
-  }
-
-  // 部署状态 pill (左下角 kTitleH+8) - 绿点 + "已部署"
-  {
-    HBRUSH hBr = CreateSolidBrush(RGB(230, 250, 235));
-    RECT pillRc = {16, kTitleH + 6, 96, kTitleH + 26};
-    HPEN hPen = CreatePen(PS_NULL, 0, 0);
-    HPEN oldPen = static_cast<HPEN>(SelectObject(memDc, hPen));
-    HBRUSH oldBr = static_cast<HBRUSH>(SelectObject(memDc, hBr));
-    RoundRect(memDc, pillRc.left, pillRc.top, pillRc.right, pillRc.bottom,
-              10, 10);
-    SelectObject(memDc, oldBr);
-    SelectObject(memDc, oldPen);
-    DeleteObject(hBr);
-    DeleteObject(hPen);
-    // 绿点
-    HBRUSH dotBr = CreateSolidBrush(kDeployGreen);
-    HBRUSH oldBr2 = static_cast<HBRUSH>(SelectObject(memDc, dotBr));
-    Ellipse(memDc, pillRc.left + 8, pillRc.top + 5,
-            pillRc.left + 16, pillRc.top + 13);
-    SelectObject(memDc, oldBr2);
-    DeleteObject(dotBr);
-    SetBkMode(memDc, TRANSPARENT);
-    HFONT hfPill = CreateFontW(11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                               VARIABLE_PITCH | FF_SWISS,
-                               L"Segoe UI Variable");
-    HFONT hfOldP = static_cast<HFONT>(SelectObject(memDc, hfPill));
-    SetTextColor(memDc, RGB(30, 100, 50));
-    RECT txtRc = {pillRc.left + 20, pillRc.top, pillRc.right, pillRc.bottom};
-    DrawTextW(memDc, L"\u5df2\u90e8\u7f72", -1, &txtRc,  // 已部署
-              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    SelectObject(memDc, hfOldP);
-    DeleteObject(hfPill);
-  }
-
-  // UpdateLayeredWindow
-  POINT ptSrc = {0, 0};
-  POINT ptDst;
-  SIZE sizeWnd = {rc.right, rc.bottom};
-  ptDst.x = 0;
-  ptDst.y = 0;
-  BLENDFUNCTION blend = {};
-  blend.BlendOp = AC_SRC_OVER;
-  blend.SourceConstantAlpha = 255;
-  blend.AlphaFormat = AC_SRC_ALPHA;
-  UpdateLayeredWindow(hwnd, screenDc, nullptr, &sizeWnd, memDc, &ptSrc, 0,
-                      &blend, ULW_ALPHA);
-
-  SelectObject(memDc, oldBmp);
-  DeleteObject(bmp);
-  DeleteDC(memDc);
-  ReleaseDC(nullptr, screenDc);
+  if (!hwnd || !IsWindow(hwnd)) return;
+  // 触发 WM_PAINT → OnPaint 用 BeginPaint/EndPaint 直绘 body
+  RedrawWindow(hwnd, nullptr, nullptr,
+               RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 }
 
 void UserDictionary::CenterOnPrimaryMonitor(HWND hwnd, int w, int h) {
@@ -1360,9 +1251,105 @@ LRESULT UserDictionary::OnDestroy(HWND hwnd) {
 }
 
 LRESULT UserDictionary::OnPaint(HWND hwnd) {
+  // v0.19.0.33 (Phase B Bug 2b 真修): 删 WS_EX_LAYERED 后 BeginPaint/EndPaint
+  // 路径直接 paint body, 不需要 UpdateLayeredWindow。ShortcutSettings 同款路径。
+  // v0.19.0.33 同时把原 RepaintLayered 中的 title bar + "已部署" pill 自绘搬到此
+  // (删 UpdateLayeredWindow 路径后, 那些 chrome 必须有地方画, 否则 user 只看到
+  // BG + border, 标题/pill 丢失)。
   PAINTSTRUCT ps;
   HDC hdc = BeginPaint(hwnd, &ps);
-  RepaintLayered(hwnd);
+  RECT rc;
+  GetClientRect(hwnd, &rc);
+  ModalChrome::PaintBackgroundAndBorder(hdc, kDialogW, kDialogH,
+                                         kBgTop, kBgBot,
+                                         kDlgRadius, kBorderColor);
+
+  // Title bar 自绘: 17px bold + "Personal dictionary · N entries" 11px gray
+  SetBkMode(hdc, TRANSPARENT);
+  {
+    HFONT hfTitle = CreateFontW(17, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                VARIABLE_PITCH | FF_SWISS,
+                                L"Segoe UI Variable");
+    HFONT hfOld = static_cast<HFONT>(SelectObject(hdc, hfTitle));
+    SetTextColor(hdc, kTextColor);
+    RECT titleRc = {16, 0, kDialogW - 60, kTitleH};
+    DrawTextW(hdc, L"\xD83D\xDCD6  \u7528\u6237\u8bcd\u5178", -1,  // 📖 用户词典
+              &titleRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    HFONT hfSub = CreateFontW(11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                              VARIABLE_PITCH | FF_SWISS, L"Segoe UI Variable");
+    SelectObject(hdc, hfSub);
+    SetTextColor(hdc, kTextGray);
+    wchar_t sub[64];
+    swprintf_s(sub, L"Personal dictionary \u00b7 %zu entries",
+               m_entries.size());
+    RECT subRc = {16, 18, kDialogW - 60, kTitleH};
+    DrawTextW(hdc, sub, -1, &subRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    // ✕ 按钮 (圆形 22x22,右上角)
+    int cx = kDialogW - 28;
+    int cy = (kTitleH - 22) / 2;
+    HBRUSH hBr = CreateSolidBrush(RGB(220, 220, 230));
+    HPEN hPen = CreatePen(PS_NULL, 0, 0);
+    HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, hPen));
+    HBRUSH oldBr = static_cast<HBRUSH>(SelectObject(hdc, hBr));
+    Ellipse(hdc, cx, cy, cx + 22, cy + 22);
+    SelectObject(hdc, oldBr);
+    SelectObject(hdc, oldPen);
+    DeleteObject(hBr);
+    DeleteObject(hPen);
+    HFONT hfX = CreateFontW(12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                            VARIABLE_PITCH | FF_SWISS,
+                            L"Segoe UI Variable");
+    SelectObject(hdc, hfX);
+    SetTextColor(hdc, kTextColor);
+    RECT xRc = {cx, cy, cx + 22, cy + 22};
+    DrawTextW(hdc, L"\u2715", -1, &xRc,  // ✕
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    DeleteObject(hfX);
+    SelectObject(hdc, hfOld);
+    DeleteObject(hfTitle);
+    DeleteObject(hfSub);
+  }
+
+  // 部署状态 pill (左下角 kTitleH+8) - 绿点 + "已部署"
+  {
+    HBRUSH hBr = CreateSolidBrush(RGB(230, 250, 235));
+    RECT pillRc = {16, kTitleH + 6, 96, kTitleH + 26};
+    HPEN hPen = CreatePen(PS_NULL, 0, 0);
+    HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, hPen));
+    HBRUSH oldBr = static_cast<HBRUSH>(SelectObject(hdc, hBr));
+    RoundRect(hdc, pillRc.left, pillRc.top, pillRc.right, pillRc.bottom,
+              10, 10);
+    SelectObject(hdc, oldBr);
+    SelectObject(hdc, oldPen);
+    DeleteObject(hBr);
+    DeleteObject(hPen);
+    HBRUSH dotBr = CreateSolidBrush(kDeployGreen);
+    HBRUSH oldBr2 = static_cast<HBRUSH>(SelectObject(hdc, dotBr));
+    Ellipse(hdc, pillRc.left + 8, pillRc.top + 5,
+            pillRc.left + 16, pillRc.top + 13);
+    SelectObject(hdc, oldBr2);
+    DeleteObject(dotBr);
+    SetBkMode(hdc, TRANSPARENT);
+    HFONT hfPill = CreateFontW(11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                               VARIABLE_PITCH | FF_SWISS,
+                               L"Segoe UI Variable");
+    HFONT hfOldP = static_cast<HFONT>(SelectObject(hdc, hfPill));
+    SetTextColor(hdc, RGB(30, 100, 50));
+    RECT txtRc = {pillRc.left + 20, pillRc.top, pillRc.right, pillRc.bottom};
+    DrawTextW(hdc, L"\u5df2\u90e8\u7f72", -1, &txtRc,  // 已部署
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, hfOldP);
+    DeleteObject(hfPill);
+  }
+
   EndPaint(hwnd, &ps);
   return 0;
 }
