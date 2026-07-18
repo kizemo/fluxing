@@ -890,7 +890,11 @@ void UserDictionary::ExitEditingState(bool save) {
       m_entries[m_editingIndex] = e;
     }
     PopulateListImpl(s_hList);
-    ScheduleSave();
+    // v0.19.0.35 fix (P0 Add/Del 写盘丢失): ScheduleSave → FlushSave 立即写。
+    // 原因: 编辑完用户立刻关 dialog (Esc / ✕), Hide() KillTimer 杀 debounce,
+    // ScheduleSave 永远等不到 500ms tick, 数据丢失。
+    m_dirty = true;
+    FlushSave();
   }
   if (s_hEditDlg && IsWindow(s_hEditDlg)) DestroyWindow(s_hEditDlg);
   s_hEditDlg = s_hEditText = s_hEditCode = s_hSliderWeight = nullptr;
@@ -1462,7 +1466,9 @@ LRESULT UserDictionary::OnKeyDown(HWND hwnd, WPARAM wp) {
           m_selectedIndex < static_cast<int>(m_entries.size())) {
         m_entries.erase(m_entries.begin() + m_selectedIndex);
         PopulateListImpl(s_hList);
-        ScheduleSave();
+        // v0.19.0.35: 跟 ID_BTN_DEL 一致,改 ScheduleSave → FlushSave
+        m_dirty = true;
+        FlushSave();
         m_selectedIndex = -1;
         m_multiSelected.clear();
       } else if (!m_multiSelected.empty()) {
@@ -1474,7 +1480,9 @@ LRESULT UserDictionary::OnKeyDown(HWND hwnd, WPARAM wp) {
             m_entries.erase(m_entries.begin() + i);
         }
         PopulateListImpl(s_hList);
-        ScheduleSave();
+        // v0.19.0.35: 多选批量删同改 FlushSave
+        m_dirty = true;
+        FlushSave();
         m_multiSelected.clear();
         m_selectedIndex = -1;
       }
@@ -1552,7 +1560,12 @@ LRESULT UserDictionary::OnCommand(HWND hwnd, WPARAM wp) {
           m_selectedIndex < static_cast<int>(m_entries.size())) {
         m_entries.erase(m_entries.begin() + m_selectedIndex);
         PopulateListImpl(s_hList);
-        ScheduleSave();
+        // v0.19.0.35 fix (P0 Add/Del 写盘丢失): 改 ScheduleSave (debounce timer)
+        // 为 FlushSave (立即写)。原逻辑 Hide() 时 KillTimer(IDT_SAVE), 数据
+        // 没机会落盘。当前路径跟 Hide 调用通常连发 (用户 del 完就点 ✕ 关闭),
+        // debounce 等不到就丢。
+        m_dirty = true;
+        FlushSave();
         m_selectedIndex = -1;
         if (s_hBtnDel) EnableWindow(s_hBtnDel, FALSE);
       }
