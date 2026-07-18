@@ -79,8 +79,12 @@ int   UserDictionary::kBtnY_phys  = 0;
 // ===== 设计常量 (spec 044 §7; FLUENT-UI-TOKENS.md §3.6.1) =====
 namespace {
 // size.userdict.window.*
+// v0.19.0.35 fix (P0 界面遮挡): kDialogH 480→600。
+// 旧值 480 让 ListView 仅 310px 可见, status bar 跟 button row 像素重叠。
+// 600 与 v0.19.0.28 c6fec000 老 UserDict 一致, 给 list/status/buttons 三段
+// 各自充足空间。
 constexpr int kDialogW      = 760;
-constexpr int kDialogH      = 480;
+constexpr int kDialogH      = 600;
 // size.userdict.search.h
 constexpr int kTitleH       = 38;
 constexpr int kSearchH      = 28;
@@ -1106,11 +1110,19 @@ LRESULT UserDictionary::OnCreate(HWND hwnd) {
   // WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST (cpp:195) 保留,
   // UpdateLayeredWindow 是真正的 present 路径。
 
-  // 物理几何: list = dialog - title - search - status - toolbar - btn - gaps
-  kListH_phys = kDialogH - kTitleH - kSearchH - kStatusBarH - kBtnH -
-                4 * kGap;
+  // 物理几何:
+  //   list region  y: [kTitleH+kSearchH+kGap,  listY+kListH_phys)
+  //   status bar  y: [kTitleH+kSearchH+kGap+kListH_phys,  +kStatusBarH)
+  //   button row  y: [kBtnY_phys, kBtnY_phys+kBtnH)
+  // 公式: kListH_phys 把所有"非 list 区域"减掉, kBtnY 在 list + status + btn gap 之后
+  // v0.19.0.35 fix (P0 界面遮挡): 公式漏算 kStatusBarH, 旧算 (kDialogH=480)
+  // 时 buttons y=408..440 与 status y=400..424 像素重叠。修复后
+  // kDialogH=600 → list=442, status y=512..536, buttons y=544..576 (无重叠)。
+  kListH_phys = kDialogH - kTitleH - kSearchH - kGap - kStatusBarH - kBtnH -
+                3 * kGap;
   if (kListH_phys < 80) kListH_phys = 80;
-  kBtnY_phys = kTitleH + kSearchH + kListH_phys + 2 * kGap;
+  kBtnY_phys = kTitleH + kSearchH + kGap + kListH_phys + kStatusBarH +
+               kGap;
   if (kBtnY_phys + kBtnH > kDialogH)
     kBtnY_phys = kDialogH - kBtnH - 2;
 
