@@ -94,6 +94,32 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
                      reinterpret_cast<LONG_PTR>(
                          &WeaselServerApp::PhrasesHotkeySubclassProc));
 
+  // Phase A.2 (改进): 失败也写 log file (GUI app 无 console, stderr 看不到)
+  // 路径: %APPDATA%\Rime\weasel-install.log (跟 installer 的 install log 共享, 便于排查)
+  // 失败最常见原因: ERROR_HOTKEY_ALREADY_REGISTERED (1409) = 另一个 app 占了这个 hotkey
+  auto LogHotkeyFailure = [](LPCWSTR label, int id, DWORD err) {
+    wchar_t path[MAX_PATH];
+    ExpandEnvironmentStringsW(L"%APPDATA%\\Rime\\weasel-install.log", path, MAX_PATH);
+    HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    char buf[512];
+    SYSTEMTIME st; GetSystemTime(&st);
+    const char* hint = (err == 1409)
+        ? " - ERROR_HOTKEY_ALREADY_REGISTERED (another app occupies this hotkey)"
+        : " - see Win32 error codes";
+    int n = snprintf(buf, sizeof(buf),
+                     "[%04d-%02d-%02d %02d:%02d:%02d] RegisterHotKey(%ls, id=%d) failed, err=%lu%s\n",
+                     st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+                     label, id, err, hint);
+    if (n > 0) {
+      DWORD written;
+      WriteFile(h, buf, (DWORD)n, &written, nullptr);
+    }
+    CloseHandle(h);
+  };
+
   // 2) 注册全局热键 ALT+. (VK_OEM_PERIOD 是 US 键盘的 . 键)
   //    AP-036-F: 失败仅 log warning,不 crash。失败可能是被其他 app 占用了。
   //    Phase A.2: 增强 log — 标 id + label + 解释 ERROR_HOTKEY_ALREADY_REGISTERED=1409
@@ -104,6 +130,7 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
                                   : L"see Win32 error codes";
     std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Alt+., id=" << ID_HOTKEY_PHRASES_DOT
                << L") failed, err=" << err << L" — " << cause << std::endl;
+    LogHotkeyFailure(L"Alt+.", ID_HOTKEY_PHRASES_DOT, err);
   }
 
   // 3) v0.19.0.28(spec 044 §3.2):注册全局热键 Ctrl+Shift+U → UserDictionary::Show
@@ -115,6 +142,7 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
                                   : L"see Win32 error codes";
     std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Ctrl+Shift+U, id=" << ID_HOTKEY_USER_DICT
                << L") failed, err=" << err << L" — " << cause << std::endl;
+    LogHotkeyFailure(L"Ctrl+Shift+U", ID_HOTKEY_USER_DICT, err);
   }
 
   // 4) spec 045 v0.19.0.28: Ctrl+Shift+K → ShortcutSettings::Show
@@ -126,6 +154,7 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
                                   : L"see Win32 error codes";
     std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Ctrl+Shift+K, id=" << ID_HOTKEY_SHORTCUT
                << L") failed, err=" << err << L" — " << cause << std::endl;
+    LogHotkeyFailure(L"Ctrl+Shift+K", ID_HOTKEY_SHORTCUT, err);
   }
 
   // 5) v0.19.0.33 (Phase A.1): Alt+/ → PhrasesDialog::Show()  (跟 Alt+. 配对)
@@ -138,6 +167,7 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
                                   : L"see Win32 error codes";
     std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(Alt+/, id=" << ID_HOTKEY_USER_DICT_ALT_SLASH
                << L") failed, err=" << err << L" — " << cause << std::endl;
+    LogHotkeyFailure(L"Alt+/", ID_HOTKEY_USER_DICT_ALT_SLASH, err);
   }
 }
 
