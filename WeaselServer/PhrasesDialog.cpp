@@ -767,11 +767,8 @@ void PhrasesDialog::CenterOnPrimaryMonitor(HWND hwnd, int w, int h) {
   SetWindowPos(hwnd, nullptr, cx, cy, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-// v0.19.0.33 (Phase B Bug 2b 真修): ShortcutSettings 同款路径 — 不调
-// UpdateLayeredWindow, 仅 RedrawWindow 让 BeginPaint/EndPaint 触发 OnPaint。
-void PhrasesDialog::RepaintLayered(HWND hwnd) {
-  if (hwnd && IsWindow(hwnd)) {
-    RedrawWindow(hwnd, nullptr, nullptr,
-                 RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-  }
-}
+// 注: v0.19.0.33 (Phase B Bug 2b) commit 8fe29885 删除 RepaintLayered 函数。
+//   理由: grep 0 caller (无 caller) — 改走 BeginPaint/EndPaint 路径后, OnPaint
+//   在 InvalidateRect 后自动触发, 不再需要显式 RedrawWindow helper。
+//   同模块的 ShortcutSettings / UserDictionary 仍保留各自 RepaintLayered
+//   (因为它们继续用 WS_EX_LAYERED + UpdateLayeredWindow 模式)。
