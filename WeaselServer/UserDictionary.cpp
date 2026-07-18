@@ -1076,6 +1076,24 @@ LRESULT CALLBACK UserDictionary::WndProc(HWND hwnd, UINT msg, WPARAM wp,
     }
     case WM_KILLFOCUS: {
       if (s_state == State_Editing) return 0;
+      // v0.19.0.35 fix (P0 点击消失): 加子控件白名单。
+      // 原因: WM_KILLFOCUS 在用户点任何子控件时都会触发 (ListView → button
+      // 失焦)。原代码无白名单, 每个 button click 都走 Hide() → dialog 关掉。
+      // 现在: 如果 focus 跳到 OUR dialog 内部子控件, 不 Hide; 跳到外部
+      // (其他 app / ctfmon / explorer) 才 Hide。
+      HWND newFocus = reinterpret_cast<HWND>(wp);
+      if (newFocus) {
+        static const HWND kFocusWhitelist[] = {
+            s_hList, s_hSearch,
+            s_hBtnAdd, s_hBtnDel, s_hBtnImport, s_hBtnExport,
+            s_hBtnCancel, s_hBtnDeploy,
+            s_hEditDlg, s_hEditText, s_hEditCode,
+            s_hSliderWeight, s_hComboSchema,
+            s_hBtnEditOk, s_hBtnEditCancel};
+        for (HWND h : kFocusWhitelist) {
+          if (newFocus == h) return 0;
+        }
+      }
       DWORD nowTick = GetTickCount();
       if ((nowTick - s_showTime) >= kShowGraceMs) {
         Hide();
