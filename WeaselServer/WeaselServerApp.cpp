@@ -62,10 +62,11 @@ LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
       ShortcutSettings::Show();
       return 0;
     }
-    // v0.19.0.32-fix (Bug 3b): Alt+/ → UserDictionary::Show()
-    // (跟 QuickPanel Button 2 (UserDict) 共享入口)
+    // v0.19.0.33 (Phase A.1 真改 alt+/ 路由 - 之前 turn 没真改):
+    //   之前: Alt+/ → UserDictionary::Show() (v0.19.0.32 cd6f61a9 Bug 3b 自己承认错)
+    //   修后: Alt+/ → PhrasesDialog::Show() (跟 Alt+. 同一路径, 跟 user 装机后 Alt+. 应一致)
     if (w == ID_HOTKEY_USER_DICT_ALT_SLASH) {
-      UserDictionary::Show();
+      PhrasesDialog::Show();
       return 0;
     }
   }
@@ -127,7 +128,8 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
                << L") failed, err=" << err << L" — " << cause << std::endl;
   }
 
-  // 5) v0.19.0.32-fix (Bug 3b): Alt+/ → UserDictionary::Show()
+  // 5) v0.19.0.33 (Phase A.1): Alt+/ → PhrasesDialog::Show()  (跟 Alt+. 配对)
+  //    之前 v0.19.0.32 cd6f61a9 错接 UserDictionary (Bug 3b 已撤回)
   //    / 键的虚拟键码是 VK_OEM_2 (= 0xBF,US 键盘的 / 键)
   if (!::RegisterHotKey(hwndServer, ID_HOTKEY_USER_DICT_ALT_SLASH,
                         MOD_ALT, VK_OEM_2)) {
@@ -145,7 +147,7 @@ void WeaselServerApp::UnregisterPhrasesHotkey() {
     ::UnregisterHotKey(hwndServer, ID_HOTKEY_PHRASES_DOT);
     ::UnregisterHotKey(hwndServer, ID_HOTKEY_USER_DICT);  // spec 044
     ::UnregisterHotKey(hwndServer, ID_HOTKEY_SHORTCUT);   // spec 045
-    ::UnregisterHotKey(hwndServer, ID_HOTKEY_USER_DICT_ALT_SLASH);  // v0.19.0.32
+    ::UnregisterHotKey(hwndServer, ID_HOTKEY_USER_DICT_ALT_SLASH);  // v0.19.0.33
     if (m_ipcServerOrigWndProc) {
       ::SetWindowLongPtr(hwndServer, GWLP_WNDPROC,
                          reinterpret_cast<LONG_PTR>(m_ipcServerOrigWndProc));
