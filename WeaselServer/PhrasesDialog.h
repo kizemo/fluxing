@@ -135,10 +135,6 @@ class PhrasesDialog {
   static void InjectText(const std::wstring& text);
   static void CenterOnPrimaryMonitor(HWND hwnd, int w, int h);
 
-  // v0.19.0.33 (Phase B): 显式 RedrawWindow — 对照 ShortcutSettings 模式,
-  // 强制 OnPaint 在 child creation / state change 之后立即触发, child 不丢 paint。
-  static void RepaintLayered(HWND hwnd);
-
   // 应用数据(in-memory)
   static std::vector<Phrase> m_phrases;
 };
