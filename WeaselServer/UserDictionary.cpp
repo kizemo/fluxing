@@ -1557,13 +1557,86 @@ LRESULT UserDictionary::OnCommand(HWND hwnd, WPARAM wp) {
         if (s_hBtnDel) EnableWindow(s_hBtnDel, FALSE);
       }
       return 0;
-    case ID_BTN_IMPORT:
-      // 占位: 真实实现需要打开 file dialog + parse custom_phrase.txt
-      ShowToast(L"\u5bfc\u5165\u529f\u80fd\u8bf7\u7528\u53f3\u952e\u83dc\u5355");  // 导入功能请用右键菜单
+    case ID_BTN_IMPORT: {
+      // v0.19.0.35 fix (P0 Import 占位): 真实现 file picker + 加载 YAML。
+      // 实现: OPENFILENAME + GetOpenFileNameW → 用 LoadYaml 解析 → 替换
+      // m_entries → 重绘 list。导入前 FlushSave 当前数据 (避免丢未持久化编辑)。
+      FlushSave();
+      wchar_t szFile[MAX_PATH] = {};
+      std::wstring initDir;
+      if (!s_yamlPath.empty()) {
+        const wchar_t* lastSlash = wcsrchr(s_yamlPath.c_str(), L'\\');
+        if (lastSlash) initDir.assign(s_yamlPath.c_str(), lastSlash);
+      }
+      OPENFILENAMEW ofn = {};
+      ofn.lStructSize = sizeof(ofn);
+      ofn.hwndOwner = hwnd;
+      ofn.lpstrFilter = L"User Dictionary YAML (*.yaml)\0*.yaml\0All Files\0*.*\0";
+      ofn.lpstrFile = szFile;
+      ofn.nMaxFile = MAX_PATH;
+      ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+      if (!initDir.empty()) {
+        ofn.lpstrInitialDir = initDir.c_str();
+      }
+      if (GetOpenFileNameW(&ofn)) {
+        std::vector<UserDictEntry> imported;
+        bool ok = false;
+        if (s_yamlIoFn) {
+          ok = s_yamlIoFn(szFile, imported, true);
+        } else {
+          ok = LoadYaml(szFile, imported);
+        }
+        if (ok) {
+          m_entries = std::move(imported);
+          m_selectedIndex = -1;
+          m_multiSelected.clear();
+          PopulateListImpl(s_hList);
+          m_dirty = true;
+          FlushSave();
+          ShowToast(L"\u5bfc\u5165\u6210\u529f", 1);  // 导入成功
+        } else {
+          ShowToast(L"\u5bfc\u5165\u5931\u8d25: \u89e3\u6790\u9519\u8bef", 2);  // 导入失败: 解析错误
+        }
+      }
       return 0;
-    case ID_BTN_EXPORT:
-      ShowToast(L"\u5bfc\u51fa\u529f\u80fd\u8bf7\u7528\u53f3\u952e\u83dc\u5355");  // 导出功能请用右键菜单
+    }
+    case ID_BTN_EXPORT: {
+      // v0.19.0.35 fix (P0 Export 占位): 真实现 file picker + 写 YAML。
+      // 实现: OPENFILENAME + GetSaveFileNameW → 用 SaveYaml 写入。
+      // 保存前 FlushSave 当前数据 (确保磁盘上和内存一致)。
+      FlushSave();
+      wchar_t szFile[MAX_PATH] = L"user_dict.yaml";
+      std::wstring initDir;
+      if (!s_yamlPath.empty()) {
+        const wchar_t* lastSlash = wcsrchr(s_yamlPath.c_str(), L'\\');
+        if (lastSlash) initDir.assign(s_yamlPath.c_str(), lastSlash);
+      }
+      OPENFILENAMEW sfn = {};
+      sfn.lStructSize = sizeof(sfn);
+      sfn.hwndOwner = hwnd;
+      sfn.lpstrFilter = L"User Dictionary YAML (*.yaml)\0*.yaml\0All Files\0*.*\0";
+      sfn.lpstrFile = szFile;
+      sfn.nMaxFile = MAX_PATH;
+      sfn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+      sfn.lpstrDefExt = L"yaml";
+      if (!initDir.empty()) {
+        sfn.lpstrInitialDir = initDir.c_str();
+      }
+      if (GetSaveFileNameW(&sfn)) {
+        bool ok = false;
+        if (s_yamlIoFn) {
+          ok = s_yamlIoFn(szFile, m_entries, false);
+        } else {
+          ok = SaveYaml(szFile, m_entries);
+        }
+        if (ok) {
+          ShowToast(L"\u5bfc\u51fa\u6210\u529f", 1);  // 导出成功
+        } else {
+          ShowToast(L"\u5bfc\u51fa\u5931\u8d25: \u5199\u5165\u9519\u8bef", 2);  // 导出失败: 写入错误
+        }
+      }
       return 0;
+    }
     case ID_BTN_CANCEL:
       Hide();
       return 0;
