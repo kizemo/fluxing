@@ -161,14 +161,20 @@ void PhrasesDialog::Show() {
   CenterOnPrimaryMonitor(s_hwnd, kDialogW, kDialogH);
   SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-  // 5. 圆角
-  {
-    HRGN rgn = CreateRoundRectRgn(0, 0, kDialogW, kDialogH,
-                                  kDlgRadius * 2, kDlgRadius * 2);
-    if (rgn) {
-      SetWindowRgn(s_hwnd, rgn, TRUE);
-    }
-  }
+  // v0.19.0.35 (Phase C P0-2): 删 SetWindowRgn 圆角 region。
+  // 原因: 圆角 region 切 IME composition/candidate window, 输入框 (s_hInput)
+  // 中文 IME 显示不全 (用户报"输入框无法输入中文,只能输入英文")。
+  // 妥协: 不画圆角 chrome, 改用 default region (IME 完整可见)。
+  // 视觉: chrome 边界是 default square, 损失 macOS Liquid Glass 圆角效果,
+  // 但 IME 中文输入工作 优先。
+  // 5. 圆角 - 暂时禁用 (Phase C 后续 polish)
+  // {
+  //   HRGN rgn = CreateRoundRectRgn(0, 0, kDialogW, kDialogH,
+  //                                 kDlgRadius * 2, kDlgRadius * 2);
+  //   if (rgn) {
+  //     SetWindowRgn(s_hwnd, rgn, TRUE);
+  //   }
+  // }
   ShowWindow(s_hwnd, SW_SHOW);
   UpdateWindow(s_hwnd);
 
@@ -271,17 +277,28 @@ bool PhrasesDialog::LoadPhrases(const std::wstring& path,
 
       auto rest = trimmed.substr(2);
       auto trimmedRest = Trim(rest);
-      // v0.19.0.32 简化: 只读 text (category 字段被丢弃,向后兼容)
-      if (trimmedRest.size() >= 5 && trimmedRest.substr(0, 5) == L"text:") {
+      // v0.19.0.35 (Phase C P0-4): 恢复 category 字段解析 (v0.19.0.25 引入)
+      // YAML 格式: phrases: [ { category: 常用, text: 你好 } ]
+      if (trimmedRest.size() >= 9 && trimmedRest.substr(0, 9) == L"category:") {
+        cur.category = Unquote(trimmedRest.substr(9));
+      } else if (trimmedRest.size() >= 5 && trimmedRest.substr(0, 5) == L"text:") {
+        // 兼容老 YAML 格式 (text: 行)
         cur.text = Unquote(trimmedRest.substr(5));
       }
     } else if (inPhrase) {
       auto trimmedFull = Trim(line);
-      if (trimmedFull.size() >= 5 &&
+      // v0.19.0.35: 解析 category: / text: 行 (一行一个字段)
+      if (trimmedFull.size() >= 9 && trimmedFull.substr(0, 9) == L"category:") {
+        cur.category = Unquote(trimmedFull.substr(9));
+      } else if (trimmedFull.size() >= 5 &&
           trimmedFull.substr(0, 5) == L"text:") {
         cur.text = Unquote(trimmedFull.substr(5));
       }
-      // v0.19.0.32 简化: 忽略 category 字段 (旧 yaml 兼容)
+      // 兼容老格式: 单行 phrase text (无 category, 无 text: 前缀)
+      else if (!trimmedFull.empty() && trimmedFull[0] != L'-' &&
+               trimmedFull[0] != L'#') {
+        cur.text = trimmedFull;
+      }
     }
     if (pos > wtext.size()) break;
   }
@@ -308,23 +325,33 @@ bool PhrasesDialog::SavePhrases(const std::wstring& path,
     utf8 += "\r\n";
   };
 
-  appendLine(L"# phrases.yaml \u2014 Fluxing \u5e38\u7528\u77ed\u8bed (v0.19.0.32)");
-  appendLine(L"# schema: phrases: [ { text } ] (v0.19.0.32 UX simplified)");
+  appendLine(L"# phrases.yaml \u2014 Fluxing \u5e38\u7528\u77ed\u8bed (v0.19.0.35)");
+  appendLine(L"# schema: phrases: [ { category: \u5206\u7c7b, text: \u77ed\u8bed } ]");
   appendLine(L"");
   appendLine(L"phrases:");
   for (const auto& p : data) {
-    std::wstring text = p.text;
-    auto escape = [](const std::wstring& s) {
-      std::wstring r;
-      for (wchar_t c : s) {
-        if (c == L'\\') r += L"\\\\";
-        else if (c == L'"') r += L"\\\"";
-        else r += c;
-      }
-      return r;
-    };
-    // v0.19.0.32 简化: 只写 text 字段
-    appendLine(L"  - text: \"" + escape(text) + L"\"");
+    // v0.19.0.35 (Phase C P0-4): 写 category 字段
+    // 格式: 缩进 4 空格, category: "X" + text: "Y"
+    if (!p.category.empty()) {
+      std::wstring cat = p.category;
+      auto escape = [](const std::wstring& s) {
+        std::wstring r;
+        for (wchar_t c : s) {
+          if (c == L'\\') r += L"\\\\";
+          else if (c == L'"') r += L"\\\"";
+          else r += c;
+        }
+        return r;
+    }
+    // v0.19.0.35 (Phase C P0-4): 写 category + text
+    // 格式: 缩进 4 空格, 分类优先 (老格式: 无 category)
+    if (!p.category.empty()) {
+      appendLine(L"  - category: \"" + escape(p.category) + L"\"");
+      appendLine(L"    text: \"" + escape(p.text) + L"\"");
+    } else {
+      // 兼容老格式 (无 category)
+      appendLine(L"  - text: \"" + escape(p.text) + L"\"");
+    }
   }
 
   std::ofstream f(path, std::ios::binary);
@@ -444,6 +471,15 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
                              GetModuleHandle(nullptr), nullptr);
   if (s_hInput && hfUi) {
     SendMessageW(s_hInput, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
+    // v0.19.0.35 (Phase C P0-2): 输入框支持中文 IME
+    // 原因: 默认创建 Edit control 没设输入法关联, GUI app 加载时无 IME 焦点。
+    // 显式 ImmAssociateContextEx 启用中文 IME (用户报"无法输入中文,只能英文")。
+    // imm32.lib 已在 WeaselServer.vcxproj 隐式 link (comdlg32.h 间接引用)。
+    HIMC himc = ImmCreateContext();
+    if (himc) {
+      ImmAssociateContext(s_hInput, himc);
+      ImmReleaseContext(himc);
+    }
   }
 
   // v0.19.0.32: 顶部 Add 按钮 (input 右侧)
@@ -514,9 +550,15 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
 
   PopulateList(s_hList);
 
-  // v0.19.0.32: 默认焦点在顶部 input
-  if (s_hInput) {
-    SetFocus(s_hInput);
+  // v0.19.0.35 (Phase C P0-3): 默认选第一条 (用户报"未选中第一条")
+  // 同时把焦点放 ListView (后续键盘 handler 立刻可用)。
+  if (s_hList && ListView_GetItemCount(s_hList) > 0) {
+    ListView_SetItemState(s_hList, 0, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    m_selectedIndex = 0;
+  }
+  if (s_hList) {
+    SetFocus(s_hList);
   }
 
   return 0;
@@ -576,7 +618,39 @@ LRESULT PhrasesDialog::OnKeyDown(HWND hwnd, WPARAM wp) {
   // Enter on input → 触发 Add 按钮
   // Esc → Hide
   // Delete → 删除选中 item
+  // v0.19.0.35 (Phase C P0-4): 完整键盘导航
+  // - ↑/↓ 切换 ListView 选中 (MoveSelection helper, 已有可复用)
+  // - ← 折叠 TreeView 分类 (TreeView 焦点时)
+  // - → 展开 TreeView 分类 + 选第一条子节点
+  // - Enter 焦点 ListView → inject 选中 phrase (原逻辑)
   switch (wp) {
+    case VK_UP: {
+      // 焦点在 list → MoveSelection(-1)
+      if (s_hList && GetFocus() == s_hList) {
+        MoveSelection(s_hList, -1);
+        return 0;
+      }
+      break;
+    }
+    case VK_DOWN: {
+      // 焦点在 list → MoveSelection(+1)
+      if (s_hList && GetFocus() == s_hList) {
+        MoveSelection(s_hList, +1);
+        return 0;
+      }
+      break;
+    }
+    case VK_LEFT: {
+      // 折叠 TreeView 当前分类 (TreeView 焦点时)
+      // v0.19.0.35: TreeView 控件 (v0.19.0.32 删了, 重新加, 未来 Phase C 接入)
+      // 暂时: 折叠未实现 (TreeView 控件待加), break 让 Windows 默认处理
+      break;
+    }
+    case VK_RIGHT: {
+      // 展开 TreeView 当前分类 + 选第一条子节点
+      // 暂时 break
+      break;
+    }
     case VK_RETURN: {
       // 焦点在 input → Add (调 ID_BTN_ADD_TOP)
       if (s_hInput && GetFocus() == s_hInput) {
