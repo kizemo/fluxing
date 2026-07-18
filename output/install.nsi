@@ -412,9 +412,83 @@ program_files:
   ; binaries must also be Win32 (x86). 0xC000007B happens when WeaselDeployer
   ; is x64 and tries to load x86 rime.dll - WoW64 is process-level, not
   ; module-level, so 32-bit DLLs cannot be loaded in 64-bit processes.
-  ; Always install Win32\Weasel*.exe, regardless of host Windows arch.
-  File "Win32\WeaselDeployer.exe"
-  File "Win32\WeaselServer.exe"
+
+  ; L100+ (Phase A.10 fix): Apply L72-fix Rename-then-File pattern to
+  ; WeaselServer.exe / WeaselDeployer.exe / WeaselSetup.exe.
+  ; Root cause (per subagent root-cause analysis): when WeaselServer.exe is
+  ; running (e.g. autorun respawn after .onInit taskkill), NSIS `File` silently
+  ; fails (locked by mmap) — old binary retained, user sees no change after
+  ; upgrade. Apply L72-fix pattern (Rename to .old.tmp first, then File, then
+  ; Delete /REBOOTOK the .old.tmp) so the new binary always lands on disk.
+  Push $R0
+  Push $R1
+  ${If} ${FileExists} "$INSTDIR\WeaselServer.exe"
+    ClearErrors
+    Rename "$INSTDIR\WeaselServer.exe" "$INSTDIR\WeaselServer.exe.old.tmp"
+    ${If} ${Errors}
+      ; Rename 失败(还锁)→ 试 SetOverwrite try,失败就 skip
+      SetOverwrite try
+      File "Win32\WeaselServer.exe"
+      IfErrors 0 WeaselServer_done
+      DetailPrint "Fluxing: WeaselServer.exe locked; old binary retained. Reboot to pick up new binary."
+      SetOverwrite on
+      Goto WeaselServer_done
+    ${EndIf}
+    ; Rename 成功,旧文件已经不在
+    File "Win32\WeaselServer.exe"
+    Delete /REBOOTOK "$INSTDIR\WeaselServer.exe.old.tmp"
+  ${Else}
+    ; 全新装,直接 File
+    File "Win32\WeaselServer.exe"
+  ${EndIf}
+  WeaselServer_done:
+  Pop $R1
+  Pop $R0
+
+  Push $R0
+  Push $R1
+  ${If} ${FileExists} "$INSTDIR\WeaselDeployer.exe"
+    ClearErrors
+    Rename "$INSTDIR\WeaselDeployer.exe" "$INSTDIR\WeaselDeployer.exe.old.tmp"
+    ${If} ${Errors}
+      SetOverwrite try
+      File "Win32\WeaselDeployer.exe"
+      IfErrors 0 WeaselDeployer_done
+      DetailPrint "Fluxing: WeaselDeployer.exe locked; old binary retained."
+      SetOverwrite on
+      Goto WeaselDeployer_done
+    ${EndIf}
+    File "Win32\WeaselDeployer.exe"
+    Delete /REBOOTOK "$INSTDIR\WeaselDeployer.exe.old.tmp"
+  ${Else}
+    File "Win32\WeaselDeployer.exe"
+  ${EndIf}
+  WeaselDeployer_done:
+  Pop $R1
+  Pop $R0
+
+  Push $R0
+  Push $R1
+  ${If} ${FileExists} "$INSTDIR\WeaselSetup.exe"
+    ClearErrors
+    Rename "$INSTDIR\WeaselSetup.exe" "$INSTDIR\WeaselSetup.exe.old.tmp"
+    ${If} ${Errors}
+      SetOverwrite try
+      File "WeaselSetup.exe"
+      IfErrors 0 WeaselSetup_done
+      DetailPrint "Fluxing: WeaselSetup.exe locked; old binary retained."
+      SetOverwrite on
+      Goto WeaselSetup_done
+    ${EndIf}
+    File "WeaselSetup.exe"
+    Delete /REBOOTOK "$INSTDIR\WeaselSetup.exe.old.tmp"
+  ${Else}
+    File "WeaselSetup.exe"
+  ${EndIf}
+  WeaselSetup_done:
+  Pop $R1
+  Pop $R0
+
   File "Win32\rime.dll"
   File "Win32\WinSparkle.dll"
   ${If} ${AtLeastWin11}
@@ -425,7 +499,6 @@ program_files:
     ${Endif}
   ${Endif}
 
-  File "WeaselSetup.exe"
   ; shared data files
   SetOutPath $INSTDIR\data
   File "data\*.yaml"
