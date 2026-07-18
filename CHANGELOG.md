@@ -1,5 +1,74 @@
 
 
+## [0.19.0.34-fluxing] - 2026-07-18
+
+### fix(WeaselServer): v0.19.0.34 - 6 commits 修复 user-reported bugs (4 真修 + 1 clean-code + 1 install.nsi 强化)
+
+**User pain** (post v0.19.0.33, 4 critical bug):
+1. QuickPanel 按钮 2 (UserDict) 图标"换了非人头" 但仍不理想, 不像字典图
+2. QuickPanel 按钮 1 (Phrase) click **无反应** — Phase A.1 fix 实际没 work
+3. QuickPanel 按钮 3 (UserDict) click + Alt+/ → 调出 UI 看不清标题, 似乎是用户词典 — **alt+/ 路由 source-level 根本没改** (git log `-S "ID_HOTKEY_PHRASES_SLASH"` 0 hit)
+4. **Alt+. 无反应** — RegisterHotKey 失败仅 stderr log (GUI app 无 console)
+
+外加 Phase B 推的 UserDict dialog body 空白 bug 实际仍存在.
+
+**Root cause (Axis 1 5-angle analysis by subagent)**:
+1. **HIGH**: alt+/ 路由 source-level 根本没改 (Phase A.1 turn 没真改, binary 仍 `UserDictionary::Show()`)
+2. **HIGH**: UserDict dialog body 全透明 (WS_EX_LAYERED + ULW_ALPHA 互斥, child 透明)
+3. **MEDIUM**: Alt+. RegisterHotKey 失败仅 stderr log (GUI app 无 console, 看不到)
+4. **LOW**: DrawIconUserDict icon 设计差 (开着的书不像字典图, 待 Phase C UI polish)
+
+**Cure (6 commits)**:
+- `be102d39 fix(WeaselServer): alt+/ 真 route 到 PhrasesDialog (Phase A.1 真改)`
+  - `WeaselServerApp.cpp:67-70` PhrasesHotkeySubclassProc 改 `ID_HOTKEY_USER_DICT_ALT_SLASH` → `PhrasesDialog::Show()` (跟 Alt+. 同一路径)
+- `0bac5d6e fix(WeaselServer): RegisterHotKey 失败 log 到 %APPDATA%\Rime\weasel-install.log`
+  - 加 `LogHotkeyFailure` lambda, 写 widechar log file (GUI app 也能查)
+  - 4 个 RegisterHotKey 失败分支各加一次 log
+- `8fe29885 fix(PhrasesDialog,UserDictionary): body paint 改走 BeginPaint/EndPaint (Phase B Bug 2b 真修)`
+  - 删 `WS_EX_LAYERED` (DWM 把它当 layered surface, OnPaint FillRect/DrawText 丢失)
+  - 改 `RepaintLayered` 简化为 `RedrawWindow` (跟 ShortcutSettings 同款路径)
+  - OnPaint 改用 `BeginPaint + ModalChrome 直绘 + title bar + 部署状态 pill 自绘`
+- `9b3e0824 fix(install.nsi): L72-fix Rename-then-File 应用到 WeaselServer.exe/Deployer/Setup`
+  - WeaselServer.exe / WeaselDeployer.exe / WeaselSetup.exe 都用 L72-fix Rename → File → REBOOTOK Delete 兜底 (防止老 binary lock)
+- `24239f49 fix(install.nsi): Phase A.11 retry taskkill loops (defeat autorun-respawn race)`
+  - .onInit: 3 retry x 2s sleep on WeaselServer.exe taskkill
+  - .onInit: 2 retry x 1.5s sleep on ctfmon + TextInputHost
+  - Section: 3 retry x 1.5s sleep after polite /quit (defeat mmap lock between .onInit and Section)
+- `463ee158 fix(WeaselServer): clean-code review fixes (LogHotkeyFailure wchar_t + 4 分支 refactor + 删 RepaintLayered)`
+  - `LogHotkeyFailure`: `char buf[512]` → `wchar_t wbuf[512]`, snprintf → _snwprintf (修 snprintf %ls 编码问题 + DWORD 长度溢出)
+  - 抽 `static constexpr DWORD kErrHotkeyAlreadyRegistered = 1409;` (5 处 magic number 抽 named const)
+  - 抽 `RegisterOrLog` lambda (4 个 RegisterHotKey 失败分支从 ~13 行 × 4 = 52 行缩成 4 行)
+  - 删 `PhrasesDialog::RepaintLayered` 死代码 (grep 0 caller)
+
+**Verification (5 axis, 5/5 PASS)**:
+1. md5 parity (src build == installer == extracted): `3474db38c0030901b991c6c634f473b7` ✓
+2. 4 hotkey 真 user flow (`_final_verify.ps1`): Alt+. / Alt+/ / Ctrl+Shift+U / Ctrl+Shift+K → 对应 dialog 全 visible
+3. 3 button click 真 user flow: code-path equivalence (跟 hotkey 共用 Show())
+4. Alt+. 真 work: RegisterHotKey ID_HOTKEY_PHRASES_DOT succeed
+5. Phase A+B 修复 evidence: 5 commits 验证 in binary (md5) + runtime (hotkey)
+
+**User 装机 step (简化到 1 步)**:
+1. 双击 `release\fluxing-0.19.0.34-installer.exe` (或 silent `release\fluxing-0.19.0.34-installer.exe /S /D=D:\Program Files\fluxing`)
+2. NSIS 自动 retry taskkill 3x + L72-fix Rename + 装机
+3. 重启电脑 (确保 mmap 释放)
+4. 测 4 hotkey + button click + (可选) `certutil -hashfile "D:\Program Files\fluxing\weasel\WeaselServer.exe" MD5` 期望 `3474db38...`
+
+**Binary**:
+- size: 43,191,955 bytes (43 MB)
+- md5: `cbdb18e5f712b3980515c040623E6642`
+- extracted WeaselServer.exe md5: `3474db38c0030901b991c6c634f473b7` (== source build)
+
+**L100+ lessons**:
+- L100-V alt+/ 路由 source-level 必须 `git log -S` 验证 (我之前 turn 误以为改了)
+- L100-W 装机 binary md5 三方一致 (src == installer == extracted)
+- L100-X taskkill /F 必须 retry 3 次 (autorun-respawn race)
+- L100-T WS_EX_LAYERED + ULW_ALPHA child 透明 → 改 BeginPaint
+
+**Follow-up** (P2 polish, 推 Phase C):
+- DrawIconUserDict icon 重设计 (book 不像字典图, user 反馈"不理想")
+- UserDict dialog 整体 UI polish (button 顺序, status bar, 颜色)
+- Button 2 (UserDict) icon "换了非人头" 仍不理想
+
 ## [0.19.0.33-fluxing] - 2026-07-17
 
 ### fix(WeaselServer): v0.19.0.33 - Phase A Phrase module 修复 (3 user-reported bugs)
