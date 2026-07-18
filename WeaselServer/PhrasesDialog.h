@@ -45,10 +45,12 @@ class PhrasesDialog {
   static void SetYamlPath(const std::wstring& path);
 
   // ===== 公开访问 (供 Track 3 / 测试) =====
-  // v0.19.0.32 UX redo: Phrase 简化,只保留 text。YAML load 兼容旧
-  // text/category 字段 (category 丢弃), save 只写 text。
+  // v0.19.0.35 (Phase C 恢复 v0.19.0.25 3f2c1694 + v0.19.0.28 c6fec000):
+  // Phrase struct 加回 category 字段 (v0.19.0.32 cd6f61a9 UX redo 误删)。
+  // TreeView 显示分类 (左侧), ListView 显示该分类下的 phrase (右侧)。
   struct Phrase {
     std::wstring text;
+    std::wstring category;  // 空字符串 = 无分类
   };
   static std::vector<Phrase>& MutablePhrases();
   static const std::vector<Phrase>& Phrases();
