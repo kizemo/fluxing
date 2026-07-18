@@ -128,7 +128,15 @@ Function .onInit
   ;      also benefits: if some prior install left a WeaselServer zombie, it
   ;      gets cleaned before any file copy is attempted.
   ;  (4) /T also kills child processes spawned by WeaselServer (e.g. fluxing panel).
-  ExecWait 'taskkill /F /IM WeaselServer.exe /T'
+  ; Phase A.11 (L100+): retry taskkill up to 3 times with 2s delay. This handles
+  ; the autorun-respawn race: if a WeaselServer.exe restarts itself between
+  ; taskkill and File commands, the next taskkill catches the new instance.
+  ; Without retries, the File command silently fails on a locked mmap and
+  ; the old binary is retained (user sees no change after upgrade).
+  ${For} $R9 1 3
+    ExecWait 'taskkill /F /IM WeaselServer.exe /T'
+    Sleep 2000
+  ${Next}
 
   ; L71-bugfix: ctfmon.exe + TextInputHost.exe 是 TSF 宿主进程,加载 weasel.dll
   ; 作为 32-bit TSF TextInputProcessor(被 notepad/VSCode 等 32-bit 进程加载)。
@@ -136,8 +144,12 @@ Function .onInit
   ; mapped handle 让 NSIS File "weasel.dll" 报"无法打开"错误。
   ; 修:在 .onInit 一并 kill 这两个进程,确保安装时 weasel.dll 没有 mapped handle。
   ; 用户重新登录后 ctfmon.exe + TextInputHost.exe 会被系统自动重启,无副作用。
-  ExecWait 'taskkill /F /IM ctfmon.exe /T'
-  ExecWait 'taskkill /F /IM TextInputHost.exe /T'
+  ; Phase A.11: retry — sometimes TSF host re-spawns after taskkill.
+  ${For} $R9 1 2
+    ExecWait 'taskkill /F /IM ctfmon.exe /T'
+    ExecWait 'taskkill /F /IM TextInputHost.exe /T'
+    Sleep 1500
+  ${Next}
 
   ; L14: NSIS has built-in support for /LOG=<file> CLI flag. Users can pass
   ; /LOG=path\to\file.log to NSIS directly to get a full install log - the
@@ -312,9 +324,13 @@ Section "Fluxing"
   CreateDirectory $INSTDIR\data\opencc
   CreateDirectory $INSTDIR\data\build
   CreateDirectory $INSTDIR\data\preview
+  ; L13 fix: polite quit then force-kill (handles both clean + hung exit).
+  ; Phase A.11: retry taskkill x3 to defeat autorun-respawn race.
   ExecWait '"$INSTDIR\WeaselServer.exe" /quit'
-  ; L13 fix: force-kill any zombie WeaselServer.exe (see call_uninstaller above).
-  ExecWait 'taskkill /F /IM WeaselServer.exe /T'
+  ${For} $R9 1 3
+    ExecWait 'taskkill /F /IM WeaselServer.exe /T'
+    Sleep 1500
+  ${Next}
 
   SetOverwrite on
   ; Set output path to the installation directory.
