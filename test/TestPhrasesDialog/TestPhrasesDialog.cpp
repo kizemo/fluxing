@@ -559,6 +559,73 @@ static void TestStateMachine() {
   PhrasesDialog::s_state = PhrasesDialog::State_Hidden;
 }
 
+// Test 19: MoveSelection 直接调用 — 验证 wrap-around 行为
+// (Phase D v0.19.0.36 P2 follow-up: fa196049 ship 时漏 MoveSelection definition,
+//   5068922 补了 link。但 unit 层没断言 wrap-around 行为 — 现补)
+// 关键差异: ListView 默认 WndProc 在边界不 wrap (停在 0 或 last),
+//   PhrasesDialog::MoveSelection 提供 wrap-around, 这是 Phase D 单独加的价值。
+//   改 .h 让 MoveSelection public (testability 配套) 走 direct call 测。
+static void TestMoveSelection() {
+  std::cout << "\n[Test 19] MoveSelection 行为 — ↑/↓ + wrap-around" << std::endl;
+  // 1. Show() 创 s_hwnd + s_hList (OnCreate 已加 column)
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hList = PhrasesDialog::s_hList;
+  CHECK("19.0: s_hList 已由 Show() 创建",
+        hList != nullptr && IsWindow(hList));
+
+  // 2. 注入 5 phrases (跟 Test 4 同样路径)
+  PhrasesDialog::MutablePhrases().clear();
+  auto& v = PhrasesDialog::MutablePhrases();
+  v.push_back({L"a1"});
+  v.push_back({L"a2"});
+  v.push_back({L"a3"});
+  v.push_back({L"b1"});
+  v.push_back({L"b2"});
+  int inserted = PhrasesDialog::PopulateListCount(hList);
+  CHECK_EQ("19.1: PopulateListCount insert 5", inserted, 5);
+  int count = ListView_GetItemCount(hList);
+  CHECK_EQ("19.2: ListView 实际有 5 项", count, 5);
+
+  // 3. 强制设初始 selected = 0 (避免其他 test 状态污染)
+  ListView_SetItemState(hList, 0,
+                        LVIS_SELECTED | LVIS_FOCUSED,
+                        LVIS_SELECTED | LVIS_FOCUSED);
+  int cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+  CHECK("19.3: 强制 init selected == 0 (ListView state)", cur == 0);
+
+  // 4. ↓ 1 → selected = 1
+  PhrasesDialog::MoveSelection(hList, +1);
+  cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+  CHECK("19.4: MoveSelection(+1): selected 0 → 1", cur == 1);
+
+  // 5. ↑ 1 → selected = 0
+  PhrasesDialog::MoveSelection(hList, -1);
+  cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+  CHECK("19.5: MoveSelection(-1): selected 1 → 0", cur == 0);
+
+  // 6. 在 0 按 ↑ → wrap → count-1 (ListView 默认 WndProc 不 wrap, 这里是 Phase D 单独提供)
+  PhrasesDialog::MoveSelection(hList, -1);
+  cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+  CHECK("19.6: MoveSelection(-1) at 0: wrap → count-1",
+        cur == count - 1);
+
+  // 7. 在 last 按 ↓ → wrap → 0
+  PhrasesDialog::MoveSelection(hList, +1);
+  cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+  CHECK("19.7: MoveSelection(+1) at last: wrap → 0", cur == 0);
+
+  // 8. delta=+3: 0 → 3 (跳多个)
+  ListView_SetItemState(hList, 0,
+                        LVIS_SELECTED | LVIS_FOCUSED,
+                        LVIS_SELECTED | LVIS_FOCUSED);
+  PhrasesDialog::MoveSelection(hList, +3);
+  cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+  CHECK("19.8: MoveSelection(+3): 0 → 3", cur == 3);
+
+  PhrasesDialog::Hide();
+}
+
 }  // namespace test
 
 int main() {
@@ -596,6 +663,9 @@ int main() {
   // Constants
   test::TestGraceConstant();
   test::TestStateMachine();
+
+  // P2 follow-up (v0.19.0.36 Phase D)
+  test::TestMoveSelection();
 
   std::cout << "\n=================================================" << std::endl;
   std::cout << "PASSED: " << test::g_passed << "  FAILED: " << test::g_failed

@@ -115,6 +115,11 @@ class PhrasesDialog {
   static int kListH_phys;        // 物理 list 高度
   static int kBtnY_phys;         // 物理 button 起点 y
 
+  // v0.19.0.36 (Phase D): ListView selected index move helper (delta=-1/+1)
+  // v0.19.0.36 (P2 follow-up): 移到 public — unit test (Test 19) 需直接断言
+  //   wrap-around 行为 (ListView 默认 WndProc 不 wrap, 这是 MoveSelection 单独提供)
+  static void MoveSelection(HWND hList, int delta);
+
  private:
   // 内部 helpers(测试可达)
   static std::wstring Trim(const std::wstring& s);
@@ -128,9 +133,6 @@ class PhrasesDialog {
   static LRESULT OnNotify(HWND, LPARAM);
   static LRESULT OnCommand(HWND, WPARAM);
   static LRESULT OnCtlColor(HWND, WPARAM, LPARAM);
-
-  // v0.19.0.36 (Phase D): ListView selected index move helper (delta=-1/+1)
-  static void MoveSelection(HWND hList, int delta);
 
   // List populate
   static void PopulateList(HWND hList);
