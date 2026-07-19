@@ -133,10 +133,62 @@ Function .onInit
   ; taskkill and File commands, the next taskkill catches the new instance.
   ; Without retries, the File command silently fails on a locked mmap and
   ; the old binary is retained (user sees no change after upgrade).
-  ${For} $R9 1 3
+  ;
+  ; Phase D (v0.19.0.36): extend to 5 retries with escalating backoff (1s/2s/3s/5s).
+  ; v0.19.0.35 user report: "still 没改进" even after 3x retry + L72-fix.
+  ; Root cause (subagent verify): autorun respawn can happen 3+ times in quick
+  ; succession on slow machines when Windows Defender / SearchUI is enumerating
+  ; HKLM Run key. 5x retry covers up to ~13s of respawn churn.
+  ${For} $R9 1 5
     ExecWait 'taskkill /F /IM WeaselServer.exe /T'
-    Sleep 2000
+    ${If} $R9 == 1
+      Sleep 1000
+    ${ElseIf} $R9 == 2
+      Sleep 2000
+    ${ElseIf} $R9 == 3
+      Sleep 3000
+    ${Else}
+      Sleep 5000
+    ${EndIf}
   ${Next}
+
+  ; Phase D (v0.19.0.36) Reinforcement E: 老 binary 路径 force delete.
+  ; Root cause: even after 5x taskkill, autorun respawn can land a fresh
+  ; WeaselServer.exe before our taskkill (race window). When that happens,
+  ; the just-killed process still has the mmap file handle pending delete,
+  ; so NSIS `File` command silently fails on the locked .exe.
+  ; Defense: pre-delete the old .exe at every known Fluxing / RIME legacy
+  ; install path using Delete /REBOOTOK. If the file is locked, Windows
+  ; will delete it on next boot. We also scan the registry HKLM\Software
+  ; \Fluxing\Weasel\InstallDir for the user's actual install location
+  ; (in case it is non-default), and force-delete that too.
+  StrCpy $R8 "$PROGRAMFILES64\Fluxing\weasel\WeaselServer.exe"
+  IfFileExists $R8 0 +2
+    Delete /REBOOTOK $R8
+    DetailPrint "Fluxing: scheduled delete of $R8 on reboot (locked)"
+  StrCpy $R8 "$PROGRAMFILES32\Fluxing\weasel\WeaselServer.exe"
+  IfFileExists $R8 0 +2
+    Delete /REBOOTOK $R8
+    DetailPrint "Fluxing: scheduled delete of $R8 on reboot (locked)"
+  StrCpy $R8 "D:\Program Files\Fluxing\weasel\WeaselServer.exe"
+  IfFileExists $R8 0 +2
+    Delete /REBOOTOK $R8
+    DetailPrint "Fluxing: scheduled delete of $R8 on reboot (locked)"
+  StrCpy $R8 "C:\Program Files\Rime\weasel\WeaselServer.exe"
+  IfFileExists $R8 0 +2
+    Delete /REBOOTOK $R8
+    DetailPrint "Fluxing: scheduled delete of legacy $R8 on reboot (locked)"
+  StrCpy $R8 "C:\Program Files\WeaselServer\weasel\WeaselServer.exe"
+  IfFileExists $R8 0 +2
+    Delete /REBOOTOK $R8
+    DetailPrint "Fluxing: scheduled delete of legacy $R8 on reboot (locked)"
+  ReadRegStr $R8 HKLM "Software\Fluxing\Weasel" "InstallDir"
+  StrCmp $R8 "" skip_oldpath_delete
+  StrCpy $R8 "$R8\WeaselServer.exe"
+  IfFileExists $R8 0 skip_oldpath_delete
+    Delete /REBOOTOK $R8
+    DetailPrint "Fluxing: scheduled delete of registered $R8 on reboot (locked)"
+  skip_oldpath_delete:
 
   ; L71-bugfix: ctfmon.exe + TextInputHost.exe 是 TSF 宿主进程,加载 weasel.dll
   ; 作为 32-bit TSF TextInputProcessor(被 notepad/VSCode 等 32-bit 进程加载)。
@@ -253,7 +305,16 @@ uninst:
   CopyFiles $R1\data\*.* $TEMP\weasel-backup
 
 call_uninstaller:
+  ; Phase D (v0.19.0.36) Reinforcement B: guard against empty $R1.
+  ; v0.19.0.35 user report: legacy install path present but WeaselRoot
+  ; registry value missing/empty → ExecWait '"\WeaselServer.exe" /quit'
+  ; fires with malformed path. NSIS silently exits 0 but no process is
+  ; killed → file lock persists → File commands silently fail.
+  ; Fix: skip the polite /quit + taskkill + /u calls when $R1 is empty;
+  ; fall through to the registry / file cleanup (which is unconditional).
+  StrCmp $R1 "" skip_uninst_runner
   ExecWait '"$R1\WeaselServer.exe" /quit'
+skip_uninst_runner:
   ; L13 fix: force-kill any zombie WeaselServer.exe (taskkill /F).
   ; /quit is a polite request; if the process is hung / crashed / lock-held
   ; the polite exit never completes and the file lock persists. taskkill /F
@@ -326,11 +387,33 @@ Section "Fluxing"
   CreateDirectory $INSTDIR\data\preview
   ; L13 fix: polite quit then force-kill (handles both clean + hung exit).
   ; Phase A.11: retry taskkill x3 to defeat autorun-respawn race.
+  ; Phase D (v0.19.0.36) Reinforcement D: extend to 5 retries; if WeaselServer
+  ; is STILL alive after 5 retries, also force-kill explorer.exe (it can hold
+  ; mmap handles via shell notification registrations) then restart it.
+  ; WeaselServer's mmap can be held by explorer.exe's shell notification hook,
+  ; and on locked machines the only way to free it is explorer restart.
   ExecWait '"$INSTDIR\WeaselServer.exe" /quit'
-  ${For} $R9 1 3
+  ${For} $R9 1 5
     ExecWait 'taskkill /F /IM WeaselServer.exe /T'
-    Sleep 1500
+    ${If} $R9 == 1
+      Sleep 1000
+    ${ElseIf} $R9 == 2
+      Sleep 2000
+    ${ElseIf} $R9 == 3
+      Sleep 3000
+    ${Else}
+      Sleep 5000
+    ${EndIf}
   ${Next}
+  ; Phase D: last-ditch — kill explorer so it releases the mmap handle it
+  ; may be holding via shell notification hooks, then relaunch it. This is
+  ; the only known way to free the mmap on machines where the user's TSF
+  ; hook + explorer shell extension stack keeps the file mapped.
+  ExecWait 'taskkill /F /IM explorer.exe /T'
+  Sleep 2000
+  ; Re-launch explorer.exe (it's the user shell; user will lose taskbar
+  ; for ~2s, then it comes back). This MUST run before File commands.
+  Exec '"$WINDIR\explorer.exe"'
 
   SetOverwrite on
   ; Set output path to the installation directory.
@@ -446,7 +529,12 @@ program_files:
       SetOverwrite try
       File "Win32\WeaselServer.exe"
       IfErrors 0 WeaselServer_done
-      DetailPrint "Fluxing: WeaselServer.exe locked; old binary retained. Reboot to pick up new binary."
+      ; Phase D (v0.19.0.36) Reinforcement C: even on full failure,
+      ; schedule Delete /REBOOTOK of the locked file so the next boot
+      ; completes the swap. Without this, the user is stuck with the
+      ; old binary until they manually delete + reinstall.
+      Delete /REBOOTOK "$INSTDIR\WeaselServer.exe"
+      DetailPrint "Fluxing: WeaselServer.exe locked; scheduled delete on reboot. Reboot to pick up new binary."
       SetOverwrite on
       Goto WeaselServer_done
     ${EndIf}
@@ -470,7 +558,9 @@ program_files:
       SetOverwrite try
       File "Win32\WeaselDeployer.exe"
       IfErrors 0 WeaselDeployer_done
-      DetailPrint "Fluxing: WeaselDeployer.exe locked; old binary retained."
+      ; Phase D (v0.19.0.36) Reinforcement C
+      Delete /REBOOTOK "$INSTDIR\WeaselDeployer.exe"
+      DetailPrint "Fluxing: WeaselDeployer.exe locked; scheduled delete on reboot."
       SetOverwrite on
       Goto WeaselDeployer_done
     ${EndIf}
@@ -492,7 +582,9 @@ program_files:
       SetOverwrite try
       File "WeaselSetup.exe"
       IfErrors 0 WeaselSetup_done
-      DetailPrint "Fluxing: WeaselSetup.exe locked; old binary retained."
+      ; Phase D (v0.19.0.36) Reinforcement C
+      Delete /REBOOTOK "$INSTDIR\WeaselSetup.exe"
+      DetailPrint "Fluxing: WeaselSetup.exe locked; scheduled delete on reboot."
       SetOverwrite on
       Goto WeaselSetup_done
     ${EndIf}
@@ -504,6 +596,20 @@ program_files:
   WeaselSetup_done:
   Pop $R1
   Pop $R0
+
+  ; Phase D (v0.19.0.36) Reinforcement E (final): post-install sweep.
+  ; After all L72-fix File commands, force-delete any leftover .old.tmp
+  ; binaries (weasel.dll, weaselx64.dll, WeaselServer.exe, WeaselDeployer.exe,
+  ; WeaselSetup.exe). On locked files, REBOOTOK schedules cleanup.
+  ; Also, in case the prior install left a different filename (e.g. user
+  ; copied WeaselServer.exe manually), do a final best-effort delete of
+  ; the live binary too — at worst, REBOOTOK leaves the user with a
+  ; clean filesystem after reboot.
+  Delete /REBOOTOK "$INSTDIR\weasel.dll.old.tmp"
+  Delete /REBOOTOK "$INSTDIR\weaselx64.dll.old.tmp"
+  Delete /REBOOTOK "$INSTDIR\WeaselServer.exe.old.tmp"
+  Delete /REBOOTOK "$INSTDIR\WeaselDeployer.exe.old.tmp"
+  Delete /REBOOTOK "$INSTDIR\WeaselSetup.exe.old.tmp"
 
   File "Win32\rime.dll"
   File "Win32\WinSparkle.dll"
