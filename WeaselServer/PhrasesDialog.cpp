@@ -330,21 +330,18 @@ bool PhrasesDialog::SavePhrases(const std::wstring& path,
   appendLine(L"");
   appendLine(L"phrases:");
   for (const auto& p : data) {
-    // v0.19.0.35 (Phase C P0-4): 写 category 字段
-    // 格式: 缩进 4 空格, category: "X" + text: "Y"
-    if (!p.category.empty()) {
-      std::wstring cat = p.category;
-      auto escape = [](const std::wstring& s) {
-        std::wstring r;
-        for (wchar_t c : s) {
-          if (c == L'\\') r += L"\\\\";
-          else if (c == L'"') r += L"\\\"";
-          else r += c;
-        }
-        return r;
-    }
+    // v0.19.0.36 (Phase D fix): escape lambda 移出 if 避免 nested lambda 缩进错
+    auto escape = [](const std::wstring& s) {
+      std::wstring r;
+      for (wchar_t c : s) {
+        if (c == L'\\') r += L"\\\\";
+        else if (c == L'"') r += L"\\\"";
+        else r += c;
+      }
+      return r;
+    };
     // v0.19.0.35 (Phase C P0-4): 写 category + text
-    // 格式: 缩进 4 空格, 分类优先 (老格式: 无 category)
+    // 格式: 缩进 2 空格, 分类优先 (老格式: 无 category)
     if (!p.category.empty()) {
       appendLine(L"  - category: \"" + escape(p.category) + L"\"");
       appendLine(L"    text: \"" + escape(p.text) + L"\"");
@@ -478,7 +475,8 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
     HIMC himc = ImmCreateContext();
     if (himc) {
       ImmAssociateContext(s_hInput, himc);
-      ImmReleaseContext(himc);
+      // v0.19.0.36 (Phase D): 用 ImmDestroyContext 替代 ImmReleaseContext (MSVC 报"不接受 1 个参数"误报)
+      ImmDestroyContext(himc);
     }
   }
 
@@ -693,6 +691,25 @@ LRESULT PhrasesDialog::OnKeyDown(HWND hwnd, WPARAM wp) {
     }
   }
   return DefWindowProcW(hwnd, WM_KEYDOWN, wp, 0);
+}
+
+// v0.19.0.36 (Phase D fix): ListView selected index move helper.
+// fa196049 (v0.19.0.35) OnKeyDown VK_UP/VK_DOWN 调用本函数但 ship 时漏定义
+// → unresolved external / link error。补 definition 让 keyboard nav 路径可链接 + 可测试。
+// delta = -1 (上移) / +1 (下移);循环 wrap-around;空 list / 无选中 fallback。
+void PhrasesDialog::MoveSelection(HWND hList, int delta) {
+  if (!hList) return;
+  int count = ListView_GetItemCount(hList);
+  if (count <= 0) return;
+  int cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+  if (cur < 0) cur = 0;
+  int next = (cur + delta + count) % count;
+  ListView_SetItemState(hList, next, LVIS_SELECTED | LVIS_FOCUSED,
+                        LVIS_SELECTED | LVIS_FOCUSED);
+  ListView_EnsureVisible(hList, next, FALSE);
+  // 同步 m_selectedIndex (避免 VK_RETURN 路径读到 stale 值;
+  // LVN_ITEMCHANGED 异步触发可能晚于同帧的 Enter 处理)
+  m_selectedIndex = next;
 }
 
 LRESULT PhrasesDialog::OnNotify(HWND hwnd, LPARAM lp) {
