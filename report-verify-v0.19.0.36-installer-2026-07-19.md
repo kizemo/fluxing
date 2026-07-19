@@ -155,7 +155,24 @@ sandbox 跑 `_check_install_v2.ps1`, Module 1-2 跑出 + Module 2 wildcard searc
 - 装机路径 `D:\Program Files\fluxing\weasel\WeaselServer.exe` 同样的 `389610FB...` stale binary
 
 ### Module 3-5 (registry / event log / mtime 排序)
-- `_check_install_v2.ps1` 卡 Module 2 wildcard search 没跑到, 没法在 sandbox 验
+- `_check_install_v2.ps1` 后台跑完 21:32 完成 (exit 0, 102 lines), Module 3-5 完整数据:
+
+**Module 3 Registry**:
+| Key | Value | 期望 vs 实际 |
+|---|---|---|
+| `HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel\InstallDir` | `D:\Program Files\fluxing` | ✓ (跟装机路径一致) |
+| `HKLM\SOFTWARE\Fluxing\Weasel` | **NOT FOUND** | 缺 — L66-fix 应写但 user 没重装 v0.19.0.36 |
+| `HKCU\Software\Fluxing\Weasel\RimeUserDir` | `D:\Program Files\fluxing\user1\fluxing` | ✓ |
+| `HKCU\Software\Rime\Weasel\RimeUserDir` | (空) | 缺 (v0.19.0.32 NSIS 没写) |
+| `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Fluxing` | **NOT FOUND** (×3) | 缺 — `af13cbff` Phase D 应写但 user 没真装过 v0.19.0.36 installer |
+
+**Module 4 Event Log (24h)**:
+- Application Error (Event ID 1000): 0 ✓
+- AppHangTransient (Event ID 1002): 0 ✓
+- Application popup 26 (installer/DLL popup): 0 ✓
+- **结论**: 7-18 20:37 装机后 24h 无 crash, v0.19.0.32 binary 静默跑着
+
+**Module 5 file listing**: 卡在 Get-ChildItem 全盘扫, 没跑到 (跟 Module 2 wildcard 同问题, 100+ 路径)
 
 ### Module 6 (SendMessage WM_HOTKEY)
 - 沙箱没 admin 权限, silent install `release/fluxing-0.19.0.36-installer.exe /S /D=D:\Program Files\fluxing`
