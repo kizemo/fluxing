@@ -129,6 +129,9 @@ class PhrasesDialog {
   static LRESULT OnCommand(HWND, WPARAM);
   static LRESULT OnCtlColor(HWND, WPARAM, LPARAM);
 
+  // v0.19.0.36 (Phase D): ListView selected index move helper (delta=-1/+1)
+  static void MoveSelection(HWND hList, int delta);
+
   // List populate
   static void PopulateList(HWND hList);
   static int  PopulateListImpl(HWND hList);
