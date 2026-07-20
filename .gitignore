@@ -78,6 +78,14 @@ arm64x_wrapper/*.exp
 # 临时备份: 旧 weasel.yaml (rime-ice 替换前的版本), 留工作树作回滚参考, 不入库
 /output/data/weasel.yaml.bak
 
+# Phase E cleanup (2026-07-20): 7z extract dirs from each installer build verify
+# (output/_extract_v36/, _extract_v37/, _extract_v38/, _extract_v38_final/ etc).
+# Always sandbox-only — never enter version control. Use scripts/test-infra/ instead.
+/output/_extract_*/
+/output/_check_extract/
+/output/_verify_extract/
+/output/Win32/fluxing-logo*.png
+
 # Build logs (added during spec 003)
 *.log.err
 *.build.log
