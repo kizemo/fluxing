@@ -36,10 +36,10 @@
 
 **verify** (sandbox Win32 Release):
 - makensis build: Exit 0 ✓
-- installer md5: `d53b0c37738057087c5c298afec27189` (≠ 之前 v0.19.0.37 c40a85ee...)
+- installer md5: `53cec551100d29938fdf72c59c384900` (≠ 之前 v0.19.0.37 c40a85ee...; c41feed9 amend 后从 43,189,443 → 43,207,519 bytes 重打包)
 - extract 后 WeaselServer.exe md5: `62bf75b119cc1d0a92dfbf68e5706dc6` = source build (无 L97 stale)
 - installer 含 `$PLUGINSDIR\nsExec.dll` (7,168 bytes, NSIS bundled plugin)
-- install.nsi self-verify: `ExecWait 'taskkill` remaining = 0; `nsExec::ExecToStack` refs = 7; explorer.exe taskkill = 0; `Pop $0; Pop $1` × 14 ✓
+- install.nsi self-verify: `ExecWait 'taskkill` remaining = 0; `nsExec::ExecToStack` refs = 6; explorer.exe taskkill = 0; `Pop $0; Pop $1` × 12 ✓ (grep -nE 实测 6 处, 删 explorer.exe 后从 7 降 6)
 - TestPhrasesDialog: 93/93 PASS (install.nsi 不影响 C++ binary)
 - TestUserDictionary: 26/26 PASS
 
@@ -47,7 +47,7 @@
 - `output/install.nsi` (黑屏 + 静默 taskkill + Pop 14 个, 22+/20-)
 - `release/fluxing-0.19.0.38-installer.exe` (43.2 MB, 含 nsExec.dll)
 
-**Ship**: `release\fluxing-0.19.0.38-installer.exe` 43,189,443 bytes, md5 `d53b0c37738057087c5c298afec27189`
+**Ship**: `release\fluxing-0.19.0.38-installer.exe` 43,207,519 bytes, md5 `53cec551100d29938fdf72c59c384900` (c41feed9 amend 后重打包, 000753df 老 md5 `d53b0c37...` 已废)
 
 **lessons-learned** (L100-PhaseD-EXPLORER):
 - L100-V 编"理论"ship 是装机 bug 的常见陷阱
