@@ -143,6 +143,8 @@ Function .onInit
   ; HKLM Run key. 5x retry covers up to ~13s of respawn churn.
   ${For} $R9 1 5
     nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
+    Pop $0
+    Pop $1
     ${If} $R9 == 1
       Sleep 1000
     ${ElseIf} $R9 == 2
@@ -201,7 +203,11 @@ Function .onInit
   ; Phase A.11: retry — sometimes TSF host re-spawns after taskkill.
   ${For} $R9 1 2
     nsExec::ExecToStack 'taskkill /F /IM ctfmon.exe /T'
+    Pop $0
+    Pop $1
     nsExec::ExecToStack 'taskkill /F /IM TextInputHost.exe /T'
+    Pop $0
+    Pop $1
     Sleep 1500
   ${Next}
 
@@ -322,6 +328,8 @@ skip_uninst_runner:
   ; the polite exit never completes and the file lock persists. taskkill /F
   ; is the unconditional fallback. /T also kills child processes.
   nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
+    Pop $0
+    Pop $1
   ExecWait '"$R1\WeaselSetup.exe" /u'
   ; Remove registry keys
   DeleteRegKey HKLM SOFTWARE\Rime
@@ -398,6 +406,8 @@ Section "Fluxing"
   ExecWait '"$INSTDIR\WeaselServer.exe" /quit'
   ${For} $R9 1 5
     nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
+    Pop $0
+    Pop $1
     ${If} $R9 == 1
       Sleep 1000
     ${ElseIf} $R9 == 2
@@ -784,6 +794,8 @@ Section "Uninstall"
   ExecWait '"$INSTDIR\WeaselServer.exe" /quit'
   ; L13 fix: force-kill any zombie WeaselServer.exe (see call_uninstaller above).
   nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
+    Pop $0
+    Pop $1
 
   ExecWait '"$INSTDIR\WeaselSetup.exe" /u'
 

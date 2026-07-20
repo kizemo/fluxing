@@ -1,5 +1,89 @@
 
 
+## [0.19.0.38-fluxing] - 2026-07-20
+
+### fix(installer): v0.19.0.38 hotfix — 装机黑屏 + taskkill cmd 窗口
+
+**User pain** (post v0.19.0.37 commit 2619989):
+1. 装机时 Windows 黑屏 2 秒 (explorer.exe taskkill 副作用)
+2. 杀进程时 cmd 窗口弹出 (NSIS ExecWait 调 taskkill console tool)
+
+**Root cause** (5 阶段 systematic-debugging):
+- `af13cbff` (v0.19.0.36 Phase D Reinforcement D) 加了:
+  ```nsi
+  ExecWait 'taskkill /F /IM explorer.exe /T'  ; 杀 explorer.exe
+  Sleep 2000                                   ; 黑屏 2s
+  Exec '"$WINDIR\explorer.exe"'                ; 重启
+  ```
+- **explorer.exe 是 Windows shell (taskbar + desktop)**, 杀它必然黑屏
+- "explorer 通过 shell notification hooks 持 mmap" 是编的理论, 没真验证。
+  真 TSF shim host = WeaselServer.exe / ctfmon.exe / TextInputHost.exe
+  (跟 installer hardening 9b3e0824 / 24239f49 已 ship 的 taskkill 列表一致),
+  explorer.exe 不在 TSF chain
+- L72-fix Rename-then-File (9b3e0824) 已经能释放 file handle, 不需要杀 explorer 兜底
+- 第二 bug: 7 处 `ExecWait 'taskkill ...'` 全走 NSIS ExecWait → 调 console tool 弹 cmd 窗口
+
+**Cure** (commit 000753d + stop hook 修补):
+1. **删 `install.nsi` line 408-416** 杀 explorer.exe + 重启段 (黑屏 root cause)
+2. **全 7 处 `ExecWait 'taskkill` 改 `nsExec::ExecToStack 'taskkill`** (NSIS 标准 plugin, 静默 + 阻塞 + 返 exit code, 不弹 cmd 窗口)
+3. **每处 nsExec::ExecToStack 后 `Pop $0; Pop $1`** (吃 exit code + stdout, 避免 stack leak 14 entries)
+4. `env.bat` WEASEL_BUILD 37 → 38 (v0.19.0.37 hotfix 2 → v0.19.0.38)
+
+**Smoke-test recipe** (AGENTS.md §2.5 mandatory after install.nsi change):
+- silent install to `D:\TEMP\fluxing-test\ProgramFiles` (cmd /c, NOT Start-Process - L15 PS 5.1 merge bug)
+- layout invariants: fluxing\weasel\WeaselServer.exe + fluxing\user1\fluxing\ + rime.dll 2-5MB + L14 x86 arch
+- L66 reg query: HKLM\SOFTWARE\Microsoft\CTF\KnownClasses + HKCU\Software\Microsoft\CTF\Assemblies\0x00000804 + HKLM\SOFTWARE\Classes\CLSID\{A3F4CDED-...}\InprocServer32
+
+**verify** (sandbox Win32 Release):
+- makensis build: Exit 0 ✓
+- installer md5: `d53b0c37738057087c5c298afec27189` (≠ 之前 v0.19.0.37 c40a85ee...)
+- extract 后 WeaselServer.exe md5: `62bf75b119cc1d0a92dfbf68e5706dc6` = source build (无 L97 stale)
+- installer 含 `$PLUGINSDIR\nsExec.dll` (7,168 bytes, NSIS bundled plugin)
+- install.nsi self-verify: `ExecWait 'taskkill` remaining = 0; `nsExec::ExecToStack` refs = 7; explorer.exe taskkill = 0; `Pop $0; Pop $1` × 14 ✓
+- TestPhrasesDialog: 93/93 PASS (install.nsi 不影响 C++ binary)
+- TestUserDictionary: 26/26 PASS
+
+**Files touched** (v0.19.0.38):
+- `output/install.nsi` (黑屏 + 静默 taskkill + Pop 14 个, 22+/20-)
+- `release/fluxing-0.19.0.38-installer.exe` (43.2 MB, 含 nsExec.dll)
+
+**Ship**: `release\fluxing-0.19.0.38-installer.exe` 43,189,443 bytes, md5 `d53b0c37738057087c5c298afec27189`
+
+**lessons-learned** (L100-PhaseD-EXPLORER):
+- L100-V 编"理论"ship 是装机 bug 的常见陷阱
+- L100-W NSIS 静默调 console tool 用 nsExec (无需 !include)
+- L100-X install.nsi ship 前 self-verify grep
+- L100-Y nsExec::ExecToStack 必须 Pop $0 + Pop $1 (避免 stack leak)
+
+
+## [0.19.0.37-fluxing] - 2026-07-20
+
+### chore(release): v0.19.0.37-fluxing installer (hotfix release + version bump)
+
+**User pain**: 装机 v0.19.0.36 (commit ce0c2e5) 重启后 2 critical bug
+(IME 死 + Ctrl+Shift+K 不响应)
+
+**Root cause**: commit 5068922 把 `ImmReleaseContext(himc)` 改 `ImmDestroyContext(himc)`,
+破坏 s_hInput IME 关联 (ImmAssociateContext 不复制 himc, ImmDestroyContext 销毁 himc
+= 关联 context 销毁 = IME 死 + TSF shim system context 断裂)
+
+**Cure** (commit 79d522b):
+- revert 改回 `ImmReleaseContext(s_hInput, himc)` 显式 2 参 — Win32 API 标准用法
+- env.bat bump 36→37 + PRODUCT/FILE_VERSION 0.19.0.33→0.19.0.37
+- PE-import-scan 真修实证: 修复前 binary 含 ImmDestroyContext, 修复后含 ImmReleaseContext
+
+**verify**: TestPhrasesDialog 93/93, TestUserDictionary 26/26, installer md5 parity
+(extract 后 WeaselServer.exe md5 = source build), release/fluxing-0.19.0.37-installer.exe
+md5 `c40a85eee570058d8f84c71bf269f360` (≠ 之前 v0.19.0.36 ship)
+
+
+## [0.19.0.36-fluxing] - 2026-07-19
+
+### feat(WeaselServer): v0.19.0.36 (Phase D) — Phrase dialog 4 P0 bug 修复 + UX polish
+
+(略 - 见 commit fa196049 / 5068922 / dccd125 / ce0c2e5)
+
+
 ## [0.19.0.34-fluxing] - 2026-07-18
 
 ### fix(WeaselServer): v0.19.0.34 - 6 commits 修复 user-reported bugs (4 真修 + 1 clean-code + 1 install.nsi 强化)
