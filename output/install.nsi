@@ -5,6 +5,8 @@
 !include MUI2.nsh
 !include x64.nsh
 !include winVer.nsh
+; v0.19.0.37.1 hotfix: nsExec::ExecToStack 是 NSIS 标准 plugin (Plugins/nsExec.dll),
+;   无需 !include, 直接调用。
 
 Unicode true
 
@@ -140,7 +142,7 @@ Function .onInit
   ; succession on slow machines when Windows Defender / SearchUI is enumerating
   ; HKLM Run key. 5x retry covers up to ~13s of respawn churn.
   ${For} $R9 1 5
-    ExecWait 'taskkill /F /IM WeaselServer.exe /T'
+    nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
     ${If} $R9 == 1
       Sleep 1000
     ${ElseIf} $R9 == 2
@@ -198,8 +200,8 @@ Function .onInit
   ; 用户重新登录后 ctfmon.exe + TextInputHost.exe 会被系统自动重启,无副作用。
   ; Phase A.11: retry — sometimes TSF host re-spawns after taskkill.
   ${For} $R9 1 2
-    ExecWait 'taskkill /F /IM ctfmon.exe /T'
-    ExecWait 'taskkill /F /IM TextInputHost.exe /T'
+    nsExec::ExecToStack 'taskkill /F /IM ctfmon.exe /T'
+    nsExec::ExecToStack 'taskkill /F /IM TextInputHost.exe /T'
     Sleep 1500
   ${Next}
 
@@ -319,7 +321,7 @@ skip_uninst_runner:
   ; /quit is a polite request; if the process is hung / crashed / lock-held
   ; the polite exit never completes and the file lock persists. taskkill /F
   ; is the unconditional fallback. /T also kills child processes.
-  ExecWait 'taskkill /F /IM WeaselServer.exe /T'
+  nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
   ExecWait '"$R1\WeaselSetup.exe" /u'
   ; Remove registry keys
   DeleteRegKey HKLM SOFTWARE\Rime
@@ -387,14 +389,15 @@ Section "Fluxing"
   CreateDirectory $INSTDIR\data\preview
   ; L13 fix: polite quit then force-kill (handles both clean + hung exit).
   ; Phase A.11: retry taskkill x3 to defeat autorun-respawn race.
-  ; Phase D (v0.19.0.36) Reinforcement D: extend to 5 retries; if WeaselServer
-  ; is STILL alive after 5 retries, also force-kill explorer.exe (it can hold
-  ; mmap handles via shell notification registrations) then restart it.
-  ; WeaselServer's mmap can be held by explorer.exe's shell notification hook,
-  ; and on locked machines the only way to free it is explorer restart.
+  ; Phase D (v0.19.0.36) Reinforcement D: extend to 5 retries (3x→5x).
+  ; v0.19.0.37.1 hotfix: REMOVED explorer.exe force-kill + restart (af13cbff
+  ;   引入了, 杀 explorer 让 user 桌面 + taskbar 黑屏 2s, 而 explorer.exe
+  ;   实际不是 TSF shim host, 杀它没意义。L72-fix Rename-then-File 已能
+  ;   释放 file handle, 不需要杀 explorer 兜底)。
+  ; taskkill 全部改 nsExec::ExecToStack (静默, 不弹 cmd 窗口)。
   ExecWait '"$INSTDIR\WeaselServer.exe" /quit'
   ${For} $R9 1 5
-    ExecWait 'taskkill /F /IM WeaselServer.exe /T'
+    nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
     ${If} $R9 == 1
       Sleep 1000
     ${ElseIf} $R9 == 2
@@ -405,15 +408,13 @@ Section "Fluxing"
       Sleep 5000
     ${EndIf}
   ${Next}
-  ; Phase D: last-ditch — kill explorer so it releases the mmap handle it
-  ; may be holding via shell notification hooks, then relaunch it. This is
-  ; the only known way to free the mmap on machines where the user's TSF
-  ; hook + explorer shell extension stack keeps the file mapped.
-  ExecWait 'taskkill /F /IM explorer.exe /T'
-  Sleep 2000
-  ; Re-launch explorer.exe (it's the user shell; user will lose taskbar
-  ; for ~2s, then it comes back). This MUST run before File commands.
-  Exec '"$WINDIR\explorer.exe"'
+  ; v0.19.0.37.1 hotfix: REMOVED explorer.exe taskkill (af13cbff Phase D
+  ; Reinforcement D) — 杀 explorer.exe 让 user desktop / taskbar 黑屏
+  ; 2s (commit 79d522b IME hotfix user 报告 "Windows 黑屏")。
+  ; 真实 root cause: explorer.exe 不是 TSF shim host (TSF shim 是
+  ; WeaselServer.exe / ctfmon.exe / TextInputHost.exe), 杀它无意义。
+  ; L72-fix Rename-then-File (9b3e0824) 已经能释放 file handle, 不需要
+  ; 杀 explorer 兜底。撤掉 explorer.exe taskkill + 重启段。
 
   SetOverwrite on
   ; Set output path to the installation directory.
@@ -782,7 +783,7 @@ Section "Uninstall"
 
   ExecWait '"$INSTDIR\WeaselServer.exe" /quit'
   ; L13 fix: force-kill any zombie WeaselServer.exe (see call_uninstaller above).
-  ExecWait 'taskkill /F /IM WeaselServer.exe /T'
+  nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
 
   ExecWait '"$INSTDIR\WeaselSetup.exe" /u'
 
