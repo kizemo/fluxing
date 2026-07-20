@@ -33,6 +33,7 @@
 #include <vector>
 
 #include <windows.h>
+#define _WIN32_IE 0x0600  // LVS_NOTIFY (跟 WeaselServer/stdafx.h 对齐, IE 6+)
 #include <commctrl.h>
 
 #include "PhrasesDialog.h"
@@ -399,7 +400,8 @@ static void TestShowCreatesNewControls() {
   colProbe.pszText = colText;
   colProbe.cchTextMax = 64;
   BOOL colOk = ListView_GetColumn(hList, 0, &colProbe);
-  CHECK("11.9: ListView column 0 exists (短语)", colOk && colText[0] != 0);
+  CHECK("11.9: ListView column 0 exists (P2 polish: header text 空, 避免跟 row '短语' 混淆)",
+        colOk);
 
   PhrasesDialog::Hide();
 }
@@ -626,6 +628,139 @@ static void TestMoveSelection() {
   PhrasesDialog::Hide();
 }
 
+// Test 20: ListView column 0 header text 空 (避免跟下面 row "短语" 视觉混淆)
+//   用户装机反馈: "在界面短语上面,有一个多余的'短语', 容易和下面的短语项混淆"
+//   修法: column header text 从 "短语" 改 "" (空), ListView 仍 1 列 (InsertItem 需 ≥1 列),
+//   但视觉上 header 不显示文字。
+static void TestColumnHeaderEmpty() {
+  std::cout << "\n[Test 20] ListView column 0 header text 空 (P2 polish)" << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hList = PhrasesDialog::s_hList;
+  CHECK("20.0: s_hList 已由 Show() 创建",
+        hList != nullptr && IsWindow(hList));
+
+  LVCOLUMNW col = {};
+  col.mask = LVCF_TEXT | LVCF_WIDTH;
+  wchar_t colText[64] = {};
+  col.pszText = colText;
+  col.cchTextMax = 64;
+  BOOL colOk = ListView_GetColumn(hList, 0, &col);
+  CHECK("20.1: column 0 exists", colOk);
+  CHECK("20.2: column 0 header text EMPTY (避免跟 row '短语' 视觉混淆)",
+        colOk && colText[0] == L'\0');
+
+  PhrasesDialog::Hide();
+}
+
+// Test 21: OnNotify NM_DBLCLK → inject 选中 text (真 user flow 双击上屏)
+//   用户装机反馈: "仍然无法通过双击...上屏"
+//   真 root cause (Phase 1 复盘):
+//     - ListView 默认发 NM_DBLCLK (Windows SDK 不需 LVS_NOTIFY flag)
+//     - OnNotify NM_DBLCLK handler 调 InjectText() + Hide()
+//     - **bug**: InjectText() 在 Hide() 之前 — SendInput 发到 modal dialog 自身,
+//       文本没上屏到原 app (foreground 还在 PhrasesDialog)
+//   修法: OnNotify NM_DBLCLK handler 顺序对调 — 先 Hide() 后 InjectText()
+//   测法: 装 MockInject + 发 WM_NOTIFY(NM_DBLCLK) → mock inject 调 + text 正确
+static void TestNMDblClkInjects() {
+  std::cout << "\n[Test 21] OnNotify NM_DBLCLK → inject 选中 text" << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hList = PhrasesDialog::s_hList;
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("21.0: s_hList + s_hwnd 已由 Show() 创建",
+        hList && IsWindow(hList) && hwnd && IsWindow(hwnd));
+
+  PhrasesDialog::MutablePhrases().clear();
+  auto& v = PhrasesDialog::MutablePhrases();
+  v.push_back({L"first"});
+  v.push_back({L"second"});
+  v.push_back({L"third"});
+  int inserted = PhrasesDialog::PopulateListCount(hList);
+  CHECK_EQ("21.1: PopulateListCount insert 3", inserted, 3);
+
+  // 显式 set selected (不依赖 OnCreate 默认 — sandbox LVN_ITEMCHANGED 异步 race)
+  ListView_SetItemState(hList, 0,
+                        LVIS_SELECTED | LVIS_FOCUSED,
+                        LVIS_SELECTED | LVIS_FOCUSED);
+  int cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+  CHECK("21.2: 强制 init selected == 0", cur == 0);
+
+  g_injected.clear();
+  PhrasesDialog::SetInjectFn(&MockInject);
+
+  // 模拟双击 ListView item 0 → parent 收 NM_DBLCLK
+  NMITEMACTIVATE nia = {};
+  nia.hdr.hwndFrom = hList;
+  nia.hdr.idFrom = (UINT_PTR)1100;  // ID_LIST
+  nia.hdr.code = NM_DBLCLK;
+  nia.iItem = 0;
+  SendMessageW(hwnd, WM_NOTIFY, nia.hdr.idFrom, (LPARAM)&nia);
+
+  CHECK_EQ("21.3: NM_DBLCLK inject 1 record", g_injected.size(), size_t(1));
+  if (g_injected.size() == 1) {
+    CHECK_EQ("21.4: injected text = 'first'",
+             g_injected[0].text, std::wstring(L"first"));
+  }
+  // 真 root cause 验证: Hide() 必须在 InjectText() 之前 (SendInput 发到 foreground = 原 app)
+  // 验法: NM_DBLCLK handler 跑后 s_hwnd 应是 nullptr (Hide 销毁了)
+  CHECK("21.5: NM_DBLCLK handler 销毁 dialog (s_hwnd == nullptr, InjectText 跑时 foreground 是原 app)",
+        PhrasesDialog::s_hwnd == nullptr);
+
+  PhrasesDialog::SetInjectFn(&PhrasesDialog::DefaultInject);
+  // 不调 Hide — 已销毁
+}
+
+// Test 22: OnNotify NM_RETURN → inject 选中 text
+//   用户装机反馈: "仍然无法通过...回车上屏"
+//   真 root cause: 没 NM_RETURN handler — Enter 焦点 ListView + 有 selected item 时
+//   ListView 默认发 NM_RETURN 给 parent, 但 OnNotify 没 case NM_RETURN 处理, 默认 return 0, 不 inject
+//   修法: OnNotify 加 case NM_RETURN — 跟 NM_DBLCLK 同路径 (Hide 优先, 后 InjectText)
+static void TestNMReturnInjects() {
+  std::cout << "\n[Test 22] OnNotify NM_RETURN → inject 选中 text" << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hList = PhrasesDialog::s_hList;
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("22.0: s_hList + s_hwnd 已由 Show() 创建",
+        hList && IsWindow(hList) && hwnd && IsWindow(hwnd));
+
+  PhrasesDialog::MutablePhrases().clear();
+  auto& v = PhrasesDialog::MutablePhrases();
+  v.push_back({L"first"});
+  v.push_back({L"second"});
+  v.push_back({L"third"});
+  int inserted = PhrasesDialog::PopulateListCount(hList);
+  CHECK_EQ("22.1: PopulateListCount insert 3", inserted, 3);
+
+  // 显式 set selected (同 Test 21)
+  ListView_SetItemState(hList, 0,
+                        LVIS_SELECTED | LVIS_FOCUSED,
+                        LVIS_SELECTED | LVIS_FOCUSED);
+  int cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+  CHECK("22.2: 强制 init selected == 0", cur == 0);
+
+  g_injected.clear();
+  PhrasesDialog::SetInjectFn(&MockInject);
+
+  // 模拟 Enter → ListView 默认发 NM_RETURN 给 parent
+  NMHDR nm;
+  nm.hwndFrom = hList;
+  nm.idFrom = (UINT_PTR)1100;  // ID_LIST
+  nm.code = NM_RETURN;
+  SendMessageW(hwnd, WM_NOTIFY, nm.idFrom, (LPARAM)&nm);
+
+  CHECK_EQ("22.3: NM_RETURN inject 1 record", g_injected.size(), size_t(1));
+  if (g_injected.size() == 1) {
+    CHECK_EQ("22.4: injected text = 'first'",
+             g_injected[0].text, std::wstring(L"first"));
+  }
+  CHECK("22.5: NM_RETURN handler 销毁 dialog (s_hwnd == nullptr)",
+        PhrasesDialog::s_hwnd == nullptr);
+
+  PhrasesDialog::SetInjectFn(&PhrasesDialog::DefaultInject);
+}
+
 }  // namespace test
 
 int main() {
@@ -666,6 +801,11 @@ int main() {
 
   // P2 follow-up (v0.19.0.36 Phase D)
   test::TestMoveSelection();
+
+  // P2 polish (装机反馈: 多余 "短语" 标签 + 双击/回车 不上屏)
+  test::TestColumnHeaderEmpty();
+  test::TestNMDblClkInjects();
+  test::TestNMReturnInjects();
 
   std::cout << "\n=================================================" << std::endl;
   std::cout << "PASSED: " << test::g_passed << "  FAILED: " << test::g_failed
