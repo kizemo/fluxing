@@ -8594,3 +8594,54 @@ v0.19.0.31 ship "189 + 53 e2e binary (含 pixel-level) PASS" 但 user 报 3 个�
 ### Ship
 - `release\fluxing-0.19.0.32-installer.exe` 43,254,348 bytes
 - SHA256 `0d0d00994df753aa9e7bca41422365e1fc6c1c80eabfe33a17150196e5f07f7a`
+
+---
+
+## L100-PhaseD-EXPLORER (2026-07-20)
+
+### Bug
+User 装机 v0.19.0.37 (commit 2619989) 后报告 2 critical bug:
+1. **Windows 黑屏** (explorer.exe taskkill 副作用)
+2. **杀进程时 cmd 窗口弹出** (NSIS ExecWait 调 taskkill console tool)
+
+### Root cause (5 阶段 systematic-debugging)
+af13cbff (v0.19.0.36 Phase D Reinforcement D) 加了 1 段:
+```nsi
+ExecWait 'taskkill /F /IM explorer.exe /T'  ; 杀 explorer.exe (taskbar + desktop)
+Sleep 2000
+Exec '"$WINDIR\explorer.exe"'                ; 重启
+```
+
+**explorer.exe 是 Windows shell (taskbar + desktop)**。杀它 = desktop 黑屏 2s。
+
+**"explorer.exe 通过 shell notification hooks 持 mmap" 理论是当时编的, 没真验证**。
+实际 explorer.exe 不是 TSF shim host (TSF shim 是 WeaselServer.exe + ctfmon.exe + TextInputHost.exe)。
+L72-fix Rename-then-File (9b3e0824) 已经能释放 file handle, 杀 explorer 兜底无意义。
+
+第二 bug: 7 处 `ExecWait 'taskkill ...'` 全走 NSIS ExecWait, 直接调 taskkill.exe (console tool)。
+NSIS ExecWait 调 console tool 时会 pop cmd 窗口。
+
+### Fix (commit 000753d)
+1. **删 install.nsi line 408-416** 杀 explorer.exe + 重启段 (黑屏 root cause)
+2. **全 7 处 `ExecWait 'taskkill` 改 `nsExec::ExecToStack 'taskkill`** (NSIS 标准 plugin, 静默 + 阻塞 + 返 exit code, 不弹 cmd 窗口)
+3. env.bat WEASEL_BUILD 37 → 38 (v0.19.0.37 hotfix 2)
+
+### Why: 5 类失败模式教训
+- **L100-V (verify root cause)**: 装机 bug ship 时编"理论"没验证。explorer.exe 持 mmap 通过 shell notification hook 是编的。
+  **真实 TSF shim host = WeaselServer.exe / ctfmon.exe / TextInputHost.exe** (跟 installer hardening 9b3e0824 / 24239f49 已 ship 的 taskkill 列表一致)。explorer.exe 不在 TSF chain。
+- **L100-W (silent process spawn)**: NSIS `ExecWait 'console-tool'` 会 pop cmd 窗口。
+  标准修法: `nsExec::ExecToStack 'console-tool'; Pop $0` (NSIS 内置 plugin, 静默 + 阻塞)。
+  nsExec 是 plugin (`Plugins/nsExec.dll`), **不需要** `!include nsExec.nsh` (那是错的, 报 "File Not Found" error)。
+- **L100-X (install.nsi self-verify)**: ship 前 grep `install.nsi` 验证:
+  - `ExecWait 'taskkill` remaining = 0
+  - `nsExec::ExecToStack` count = N (silent taskkill)
+  - `explorer.exe` taskkill ExecWait = 0 (黑屏 root cause 已删)
+
+### Files touched (v0.19.0.38, 2)
+- `output/install.nsi` (黑屏 + 静默 taskkill, 21+/20-)
+- `release/fluxing-0.19.0.38-installer.exe` (43.2 MB, 含 `$PLUGINSDIR\nsExec.dll` 7,168 bytes)
+
+### Ship
+- `release\fluxing-0.19.0.38-installer.exe` 43,189,443 bytes
+- md5 `d53b0c37738057087c5c298afec27189`
+- extract 后 WeaselServer.exe md5 `62bf75b119cc1d0a92dfbf68e5706dc6` (无 L97 stale, 跟 hotfix 79d522b source build 一致)
