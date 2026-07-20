@@ -52,6 +52,84 @@
 **lessons-learned** (L100-PhaseD-EXPLORER):
 - L100-V 编"理论"ship 是装机 bug 的常见陷阱
 - L100-W NSIS 静默调 console tool 用 nsExec (无需 !include)
+
+---
+
+## [0.19.0.39-fluxing] - 2026-07-20
+
+### fix(WeaselServer): v0.19.0.39 (Phase F) — 按钮路径 Phrase UI 键盘事件路由 + Esc 退出
+
+**User pain** (post v0.19.0.38 c41feed9 ship):
+1. **Bug 1**: 设置栏点击"常用短语"按钮启动 UI → ↑↓ 不能换选中, Enter 不能上屏, **但双击可以上屏**
+2. **Bug 2** (已 work, 修前留作对照): Alt+. 启动 UI → ↑↓/Enter/DoubleClick 全 work
+3. **Bug 3**: 期望 Esc 键退出 Phrase UI (实际不响应)
+
+**Root cause** (5 阶段 systematic-debugging):
+
+对照 Bug 1 (fail) vs Bug 2 (work), 双击两边都 work → NM_DBLCLK handler 正确 → ListView 本身正常。差异在 keyboard event 路由。
+
+`PhrasesDialog::Show()` 创建路径 (line 119-183) 只调 `SetWindowPos(HWND_TOPMOST)` + `ShowWindow(SW_SHOW)`, **没调 `SetForegroundWindow`**。已存在路径 (line 89-95) 调 SetForegroundWindow, 但创建路径不调。
+
+- **按钮路径**: QuickPanelDialog 是 WS_POPUP visible + foreground。Click → `s_onPhrases()` → `PhrasesDialog::Show()` 创建 → QuickPanelDialog 仍是 foreground。PhrasesDialog 是 topmost 但**不是 foreground**。
+  - 键盘事件 (↑↓/Enter/Esc) 发到 foreground (QuickPanel), **不传 PhrasesDialog**
+  - WM_LBUTTONDBLCLK 是 mouse event, mouse 直接命中 ListView 仍触发 NM_DBLCLK → 双击 work
+- **Alt+. 路径**: WM_HOTKEY 触发时 Windows 自动让 hotkey owner (WeaselServer) 进 foreground, PhrasesDialog 创建后 foreground 自然切换 → 键盘事件正常路由
+
+**Cure** (Option C 双保险):
+1. `PhrasesDialog::Show()` 创建路径加 `AllowSetForegroundWindow(ASFW_ANY)` + `SetForegroundWindow(s_hwnd)` — 拿抢 foreground 锁 (Vista+ lock) + 强制 foreground (用 mock 函数指针 + Test 23 verify 调用)
+2. `WeaselServerApp.cpp` line 314 onPhrases lambda 先 `QuickPanelDialog::Hide()` 释放 foreground — 配合 SetForegroundWindow 完成 foreground transition
+3. 加 `static SetForegroundFn / AllowSetForegroundFn` setter (Test 23 mock)
+4. Test 23 (foreground mock): Show() 调 AllowSetForegroundWindow + SetForegroundWindow 1 次, 目标 = s_hwnd
+5. Test 24 (Esc handler): WM_KEYDOWN VK_ESCAPE → Hide (Esc handler 已有, Option C 同时修 foreground 让 Esc 能到 dialog)
+
+**Verify** (sandbox Win32 Release):
+- TestPhrasesDialog: **100 PASS / 0 FAIL** (Test 23 + Test 24 = 7 新增, 93 baseline 不退化)
+- TestUserDictionary: 26/26 (回归保护)
+- TestQuickPanelDialog: 12/12 (回归保护)
+- TestDefaultHotkeys: 35/35 (回归保护)
+- TestYamlRoundTripE2E: pass
+- TestDarkModeBridge: 18/18 (回归保护)
+- TestDarkModeBroadcast: 14/14 (回归保护)
+- v0_19_0_32_e2e: **68 PASS / 10 FAIL** — task.md 记录的 baseline regression (sandbox state shift, e2e binary mtime 7-18 链接旧 PhrasesDialog, 跟 Phase F 无关)
+- `_buildflow.cmd` Exit 0 (WeaselServer.exe + 16 test suites + Deployer + Setup 全 rebuild)
+- PE-import-scan: `AllowSetForegroundWindow` + `SetForegroundWindow` 进 binary ✓
+- install.nsi UTF-8 BOM + CRLF ✓
+- installer extract 后 WeaselServer.exe md5 = source build md5 ✓ (无 L97 stale)
+
+**Smoke-test recipe** (AGENTS.md §2.5):
+- extracted WeaselServer.exe md5 = `20fd924d9b488b329bc9d278d2784550` (source build)
+- installer md5: `c1fd6849d6d55452d239e02eea056ed2` (≠ v0.19.0.38 `53cec551...`)
+- installer 43,184,848 bytes (43.2 MB, 含 nsExec.dll)
+
+**Files touched** (v0.19.0.39):
+- `WeaselServer/PhrasesDialog.h` (15+/3-): 加 SetForegroundFn / AllowSetForegroundFn typedef + setter + static member
+- `WeaselServer/PhrasesDialog.cpp` (15+/1-): 加 setter impl + Show() 创建路径调 AllowSetForegroundWindow + SetForegroundWindow + comment
+- `WeaselServer/WeaselServerApp.cpp` (8+/1-): onPhrases lambda 先 QuickPanelDialog::Hide()
+- `test/TestPhrasesDialog/TestPhrasesDialog.cpp` (75+/1-): 加 Test 23 (foreground mock) + Test 24 (Esc dispatch)
+- `release/fluxing-0.19.0.39-installer.exe` (43.2 MB, 含 Phase F binary)
+
+**Ship**: `release\fluxing-0.19.0.39-installer.exe` 43,184,848 bytes, md5 `c1fd6849d6d55452d239e02eea056ed2`
+
+**装机命令** (L13/L54/L66 强约束):
+```powershell
+taskkill /F /IM WeaselServer.exe /T
+reg delete "HKLM\SOFTWARE\Fluxing\Weasel" /f
+reg delete "HKCU\Software\Fluxing" /f
+& "F:\soft\00selfmade\rime_claude\release\fluxing-0.19.0.39-installer.exe" /S /D=D:\Program Files\fluxing
+& "F:\soft\00selfmade\rime_claude\_check_install_v2.ps1"
+```
+
+**装机后 user 端 verify** (5 项):
+1. Alt+. 启动 Phrase UI → ↑↓/Enter/DoubleClick 全 work (回归保护, Phase D 修过)
+2. **设置栏点击"常用短语"按钮启动 UI → ↑↓ 切换选中 / Enter 上屏 (NEW: Phase F fix Bug 1)**
+3. **设置栏点击启动 UI → Esc 键退出 dialog (NEW: Phase F fix Bug 3)**
+4. Module 1+2 md5 = `20fd924d9b488b329bc9d278d2784550` (MATCH)
+5. Module 3 L66 4 keys 写出 (HKLM\KnownClasses + HKCU\0x00000804 Default/Profile/KeyboardLayout)
+
+**lessons-learned** (L100-PhaseF):
+- L100-X Phrase UI keyboard 路由依赖 foreground。WS_POPUP + WS_EX_TOPMOST 不够, 必须 SetForegroundWindow(s_hwnd) + AllowSetForegroundWindow(ASFW_ANY) 抢锁
+- L100-Y WM_LBUTTONDBLCLK 不依赖 foreground (mouse 直接命中), 但 WM_KEYDOWN / WM_NOTIFY 都依赖 — 装机测试时如果 button click 路径部分功能 (mouse) work 但 keyboard fail, 优先 suspect foreground lock
+- L100-Z Option C 双保险: Hide QuickPanel (释放 foreground) + SetForegroundWindow (抢回), 比单独 Hide 或单独 SetForegroundWindow 都稳
 - L100-X install.nsi ship 前 self-verify grep
 - L100-Y nsExec::ExecToStack 必须 Pop $0 + Pop $1 (避免 stack leak)
 

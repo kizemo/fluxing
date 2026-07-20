@@ -36,6 +36,11 @@ HWND PhrasesDialog::s_hBtnDel = nullptr;
 HWND PhrasesDialog::s_hBtnCancel = nullptr;
 std::wstring PhrasesDialog::s_yamlPath;
 PhrasesDialog::InjectFn PhrasesDialog::s_injectFn = &PhrasesDialog::DefaultInject;
+// v0.19.0.39 (Phase F fix): 默认指 OS API, test 可注入 mock (Test 23).
+PhrasesDialog::SetForegroundFn PhrasesDialog::s_setForegroundFn =
+    &::SetForegroundWindow;
+PhrasesDialog::AllowSetForegroundFn PhrasesDialog::s_allowSetForegroundFn =
+    &::AllowSetForegroundWindow;
 std::vector<PhrasesDialog::Phrase> PhrasesDialog::m_phrases;
 int PhrasesDialog::m_selectedIndex = -1;
 DWORD PhrasesDialog::s_showTime = 0;
@@ -178,6 +183,19 @@ void PhrasesDialog::Show() {
   ShowWindow(s_hwnd, SW_SHOW);
   UpdateWindow(s_hwnd);
 
+  // v0.19.0.39 (Phase F fix Bug 1 + Bug 3): 强制 foreground 让 keyboard events 路由到 dialog
+  // 真 root cause (装机反馈): QuickPanel button 启动 PhrasesDialog 时, QuickPanelDialog 仍是
+  //   foreground, 键盘事件 (↑↓/Enter/Esc) 发到 QuickPanel, 不传 PhrasesDialog (双击能 work 是因为
+  //   WM_LBUTTONDBLCLK 是 mouse event, mouse 直接命中 ListView 触发). Alt+. 路径已 work
+  //   (hotkey 触发自动让 WeaselServer 进 foreground).
+  // 修法 (Option C 双保险):
+  //   1. AllowSetForegroundWindow(ASFW_ANY) 拿抢 foreground 锁 (Vista+ foreground lock)
+  //   2. SetForegroundWindow(s_hwnd) 强制 foreground 让 dialog 收 keyboard events
+  //   (按钮路径配套: WeaselServerApp.cpp onPhrases lambda 先 QuickPanelDialog::Hide() 释放
+  //    foreground, 配合 Show() 的 SetForegroundWindow 完成 foreground transition)
+  s_allowSetForegroundFn(ASFW_ANY);
+  s_setForegroundFn(s_hwnd);
+
   s_state = State_Browsing;
   s_showTime = GetTickCount();
 }
@@ -199,6 +217,14 @@ void PhrasesDialog::Hide() {
 void PhrasesDialog::SetInjectFn(InjectFn fn) { s_injectFn = fn; }
 
 void PhrasesDialog::SetYamlPath(const std::wstring& path) { s_yamlPath = path; }
+
+void PhrasesDialog::SetSetForegroundFn(SetForegroundFn fn) {
+  s_setForegroundFn = fn;
+}
+
+void PhrasesDialog::SetAllowSetForegroundFn(AllowSetForegroundFn fn) {
+  s_allowSetForegroundFn = fn;
+}
 
 std::vector<PhrasesDialog::Phrase>& PhrasesDialog::MutablePhrases() {
   return m_phrases;
