@@ -470,13 +470,22 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
     SendMessageW(s_hInput, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
     // v0.19.0.35 (Phase C P0-2): 输入框支持中文 IME
     // 原因: 默认创建 Edit control 没设输入法关联, GUI app 加载时无 IME 焦点。
-    // 显式 ImmAssociateContextEx 启用中文 IME (用户报"无法输入中文,只能英文")。
+    // 显式 ImmAssociateContext 启用中文 IME (用户报"无法输入中文,只能英文")。
     // imm32.lib 已在 WeaselServer.vcxproj 隐式 link (comdlg32.h 间接引用)。
+    // v0.19.0.36 (P2 hotfix, 用户装机反馈 "无法输入中文" + "无法调出设置栏"):
+    //   5068922 commit 把 ImmReleaseContext(himc) 改 ImmDestroyContext(himc) — 错的!
+    //   ImmAssociateContext 把 himc 关联给 s_hInput (不复制,只关联),
+    //   ImmDestroyContext 销毁 himc = 关联的 IME context 销毁 = s_hInput IME 死,
+    //   同时破坏 TSF shim system context → Ctrl+Shift+K 等 hotkey 不响应。
+    //   revert 回 ImmReleaseContext(s_hInput, himc) — **显式 2 参**, MSVC 接受。
+    //   1 参 ImmReleaseContext(himc) 在 SDK imm.h 不存在 (line 262 明确 2 参 HWND+HIMC),
+    //   之前 v0.19.0.35 (fa196049) 写 1 参 + 5068922 ship binary md5 389610fb 是 stale
+    //   v0.19.0.34 binary (L97 同根因, commit message "Verification 5/5 PASS md5 parity" 撒谎)。
+    //   显式 2 参 Win32 API 标准用法, "释放 hwnd 对 himc 的关联 lock", context 仍归 s_hInput。
     HIMC himc = ImmCreateContext();
     if (himc) {
       ImmAssociateContext(s_hInput, himc);
-      // v0.19.0.36 (Phase D): 用 ImmDestroyContext 替代 ImmReleaseContext (MSVC 报"不接受 1 个参数"误报)
-      ImmDestroyContext(himc);
+      ImmReleaseContext(s_hInput, himc);
     }
   }
 
