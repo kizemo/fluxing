@@ -505,11 +505,11 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
   if (s_hList && hfUi) {
     SendMessageW(s_hList, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
   }
-  // v0.19.0.32: ListView 加单列 "短语"
+  // v0.19.0.32: ListView 加单列 (P2 polish: header text 空, 避免跟下面 row "短语" 视觉混淆)
   {
     LVCOLUMNW col = {};
     col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
-    col.pszText = const_cast<wchar_t*>(L"\x77ed\x8bed");  // 短语
+    col.pszText = const_cast<wchar_t*>(L"");  // 空 — 整个 ListView 内容都是短语, header "短语" 冗余
     col.cx = kDialogW - 2 * kGap - 4;
     col.iSubItem = 0;
     ListView_InsertColumn(s_hList, 0, &col);
@@ -730,13 +730,37 @@ LRESULT PhrasesDialog::OnNotify(HWND hwnd, LPARAM lp) {
         return 0;
       }
       case NM_DBLCLK: {
-        // 双击 → inject (Enter 行为)
+        // 双击 → inject
+        // v0.19.0.36 (P2 polish, 用户装机反馈 "双击不上屏"):
+        //   真 root cause 是 Hide() 重置 m_selectedIndex = -1 (Hide line 196),
+        //   原 handler 顺序 InjectText → Hide 改成 Hide → InjectText 后, InjectText
+        //   读 m_phrases[m_selectedIndex] 越界 (-1) → SendInput 空字符串。
+        //   **正确修法**: 捕获 idx + text 本地变量 (Hide 前), InjectText 用本地
+        //   text — 不依赖 m_selectedIndex (Hide 后会被清)。
+        //   Hide 先 InjectText 后 的顺序是因为: 销毁 modal dialog 后 foreground 自动
+        //   还给原 app, SendInput 才到原 app (否则发到 dialog 自身)。
         LPNMITEMACTIVATE pia = reinterpret_cast<LPNMITEMACTIVATE>(lp);
         if (pia && pia->iItem >= 0 &&
             pia->iItem < static_cast<int>(m_phrases.size())) {
-          m_selectedIndex = pia->iItem;
-          InjectText(m_phrases[m_selectedIndex].text);
+          int idx = pia->iItem;
+          std::wstring text = m_phrases[idx].text;
+          m_selectedIndex = idx;  // 同步, 后续 NM_RETURN 也能用
           Hide();
+          InjectText(text);
+        }
+        return 0;
+      }
+      case NM_RETURN: {
+        // v0.19.0.36 (P2 polish, 用户装机反馈 "回车不上屏"):
+        //   Enter 焦点 ListView + selected item → ListView 默认发 NM_RETURN 给 parent。
+        //   原 OnNotify 没收, return 0 → 不 inject。修法: 跟 NM_DBLCLK 同路径,
+        //   同样捕获本地 idx + text (Hide 重置 m_selectedIndex)。
+        if (m_selectedIndex >= 0 &&
+            m_selectedIndex < static_cast<int>(m_phrases.size())) {
+          int idx = m_selectedIndex;
+          std::wstring text = m_phrases[idx].text;
+          Hide();
+          InjectText(text);
         }
         return 0;
       }
