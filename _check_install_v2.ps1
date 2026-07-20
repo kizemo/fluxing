@@ -52,9 +52,9 @@ Write-Host ""
 # 2. Installed WeaselServer.exe on disk (3 candidate paths)
 # ============================================================
 Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
-$expectedMd5 = '62bf75b119cc1d0a92dfbf68e5706dc6'  # v0.19.0.38 binary (commit 79d522b6 ImmReleaseContext fix + c41feed9 hotfix)
-$expectedInstallerMd5 = '53cec551100d29938fdf72c59c384900'  # v0.19.0.38 installer (c41feed9 amend 重打包, 000753df d53b0c37... 已废)
-$expectedBuildTime = '2026-07-20 15:11:38'  # c41feed9 commit time
+$expectedMd5 = '20fd924d9b488b329bc9d278d2784550'  # v0.19.0.39 binary (Phase F foreground API + Esc handler fix)
+$expectedInstallerMd5 = 'c1fd6849d6d55452d239e02eea056ed2'  # v0.19.0.39 installer
+$expectedBuildTime = '2026-07-20 17:19:00'  # v0.19.0.39 build (estimate)
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',
@@ -186,7 +186,7 @@ Write-Host ""
 # 6. Expected vs actual summary
 # ============================================================
 Write-Host "=== [6] Summary ==="
-Write-Host "  Installer v0.19.0.38 md5 expected: $expectedInstallerMd5"
+Write-Host "  Installer v0.19.0.39 md5 expected: $expectedInstallerMd5"
 Write-Host "  WeaselServer.exe md5 expected:     $expectedMd5 (build $expectedBuildTime)"
 Write-Host "  Module 3 L66 expected keys (admin install OK):"
 Write-Host "    HKLM\SOFTWARE\Microsoft\CTF\KnownClasses = '{A3F4CDED-...}' = 'Fluxing Text Service'"
@@ -200,7 +200,7 @@ Write-Host "    [1] 如果 Running md5 != expected → 跑的仍是老 binary"
 Write-Host "    [2] 如果 Install md5 != expected → 装机没覆盖 (File 失败/lock)"
 Write-Host "    [3] 如果 HKLM InstallDir != [2] path → registry 指向错位置"
 Write-Host "    [4] 如果有 AppHangTransient weasel → 启动挂死"
-Write-Host "    [5] newest file 是 7/20 15:14 → installer 装过; 是更早 → 没覆盖"
+Write-Host "    [5] newest file 是 7/20 17:19 → installer 装过; 是更早 → 没覆盖"
 Write-Host "    [3] Module 3 L66 keys 缺 → installer L66-fix 失效 (C41FEED9 ship 应已无条件写)"
 Write-Host ""
 Write-Host "  Post-mortem copy: 把以上所有输出贴回 Fluxing Claude session"

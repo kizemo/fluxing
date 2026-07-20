@@ -68,6 +68,18 @@ class PhrasesDialog {
   // v0.19.0.32 测试/调试: list populate item 数(测试可达)。
   static int PopulateListCount(HWND hList);
 
+  // v0.19.0.39 (Phase F fix): foreground API mock 支持 (Test 23 RED 测试)
+  // 真 root cause (装机反馈 Bug 1 + Bug 3): QuickPanel button 启动 PhrasesDialog 时,
+  //   QuickPanelDialog 仍是 foreground, 键盘事件不传 PhrasesDialog. 修法: Show() 创建路径
+  //   调 AllowSetForegroundWindow + SetForegroundWindow 强制抢 foreground.
+  //   test 可注入 mock 函数指针, 验证调用次数 + 参数 (不真调 OS API).
+  using SetForegroundFn = BOOL (WINAPI*)(HWND);
+  using AllowSetForegroundFn = BOOL (WINAPI*)(DWORD);
+  static void SetSetForegroundFn(SetForegroundFn fn);
+  static void SetAllowSetForegroundFn(AllowSetForegroundFn fn);
+  static SetForegroundFn      s_setForegroundFn;
+  static AllowSetForegroundFn s_allowSetForegroundFn;
+
   // State enum (v0.19.0.32 简化): Hidden / Browsing
   enum State { State_Hidden, State_Browsing };
   static State GetState() { return s_state; }

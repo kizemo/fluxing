@@ -311,7 +311,19 @@ void WeaselServerApp::SetupMenuHandlers() {
             ShellExecuteW(NULL, NULL, deployer.c_str(), L"/hotkey", NULL, SW_SHOWNORMAL);
           },
           [this]() { explore(WeaselUserDataPath()); },
-          [this]() { PhrasesDialog::Show(); },
+          [this]() {
+            // v0.19.0.39 (Phase F fix Bug 1): 按钮路径下, QuickPanelDialog 仍是
+            //   foreground, 直接 Show() PhrasesDialog 会让 keyboard events (↑↓/Enter)
+            //   仍发到 QuickPanel. 修法 (Option C): 先 Hide() QuickPanelDialog 释放
+            //   foreground, 再 Show() PhrasesDialog. Show() 内部 (PhrasesDialog.cpp
+            //   Phase F fix) 调 AllowSetForegroundWindow + SetForegroundWindow 兜底
+            //   抢 foreground, 让 keyboard 路由到 PhrasesDialog.
+            if (QuickPanelDialog::ActiveHwnd() &&
+                IsWindowVisible(QuickPanelDialog::ActiveHwnd())) {
+              QuickPanelDialog::Hide();
+            }
+            PhrasesDialog::Show();
+          },
           [this](bool newFull) {
             if (m_handler) m_handler->SetOption(0, "full_shape", newFull);
           },

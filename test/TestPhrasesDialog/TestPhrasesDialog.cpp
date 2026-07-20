@@ -761,6 +761,80 @@ static void TestNMReturnInjects() {
   PhrasesDialog::SetInjectFn(&PhrasesDialog::DefaultInject);
 }
 
+// v0.19.0.39 (Phase F fix Bug 1): Show() 创建路径必须调 AllowSetForegroundWindow + SetForegroundWindow.
+//   真 root cause (装机反馈): QuickPanel button 启动 PhrasesDialog 时, QuickPanelDialog 仍是
+//   foreground, 键盘事件 (↑↓/Enter/Esc) 发到 QuickPanel, 不传 PhrasesDialog (双击能 work 是因为
+//   WM_LBUTTONDBLCLK 是 mouse event, mouse 直接命中 ListView 触发). Alt+. 路径 work (hotkey 触发
+//   自动让 WeaselServer 进 foreground).
+//   修法 (Option C): AllowSetForegroundWindow 拿抢 foreground 锁 (Vista+ lock), SetForegroundWindow
+//   强制 foreground 让 dialog 收 keyboard events. 配套: WeaselServerApp.cpp onPhrases lambda 先
+//   Hide QuickPanel 释放 foreground.
+//   Test 23 通过 mock s_setForegroundFn / s_allowSetForegroundFn 计数, 验证 Show() 调用过.
+static int g_setForegroundCount = 0;
+static HWND g_lastSetForegroundHwnd = nullptr;
+static DWORD g_lastAllowSetForegroundPid = 0;
+
+static BOOL WINAPI MockSetForegroundWindow(HWND h) {
+  ++g_setForegroundCount;
+  g_lastSetForegroundHwnd = h;
+  return TRUE;
+}
+
+static BOOL WINAPI MockAllowSetForegroundWindow(DWORD pid) {
+  g_lastAllowSetForegroundPid = pid;
+  return TRUE;
+}
+
+static void TestForegroundApiCalled() {
+  std::cout << "\n[Test 23] Show() 创建路径调 SetForegroundWindow + AllowSetForegroundWindow" << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+
+  // reset mock state
+  g_setForegroundCount = 0;
+  g_lastSetForegroundHwnd = nullptr;
+  g_lastAllowSetForegroundPid = 0;
+
+  // 注入 mock 函数指针 (替换默认 OS API)
+  PhrasesDialog::SetSetForegroundFn(&MockSetForegroundWindow);
+  PhrasesDialog::SetAllowSetForegroundFn(&MockAllowSetForegroundWindow);
+
+  // 调 Show() — 创建路径应该调 AllowSetForegroundWindow + SetForegroundWindow
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("23.0: Show() 后 s_hwnd 创建", hwnd && IsWindow(hwnd));
+
+  CHECK("23.1: AllowSetForegroundWindow 调过 (pid=ASFW_ANY)",
+        g_lastAllowSetForegroundPid == (DWORD)ASFW_ANY);
+  CHECK("23.2: SetForegroundWindow 调过 1 次", g_setForegroundCount == 1);
+  CHECK("23.3: SetForegroundWindow 目标 = s_hwnd", g_lastSetForegroundHwnd == hwnd);
+
+  // 还原默认 OS API
+  PhrasesDialog::SetSetForegroundFn(&::SetForegroundWindow);
+  PhrasesDialog::SetAllowSetForegroundFn(&::AllowSetForegroundWindow);
+
+  // 清理 (Hide 销毁 dialog + 避免污染后续 test)
+  PhrasesDialog::Hide();
+}
+
+// v0.19.0.39 (Phase F fix Bug 3): WM_KEYDOWN VK_ESCAPE → Hide()
+//   真 root cause (装机反馈): Esc handler 已有 (OnKeyDown L675), 但只在 keyboard focus 在
+//   dialog 内 work. Phase F 同时修 foreground lock 让 Esc 能到 dialog.
+//   Test 24 验证 WndProc dispatch WM_KEYDOWN VK_ESCAPE → Hide 销毁 dialog (s_hwnd=nullptr).
+static void TestEscKeyHidesDialog() {
+  std::cout << "\n[Test 24] WM_KEYDOWN VK_ESCAPE → Hide" << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("24.0: Show() 后 s_hwnd 已创建", hwnd && IsWindow(hwnd));
+
+  // 模拟键盘 Esc → OnKeyDown case VK_ESCAPE → Hide
+  LRESULT lr = SendMessageW(hwnd, WM_KEYDOWN, VK_ESCAPE, 0);
+  CHECK("24.1: Esc 返回 0 (handler 处理)", lr == 0);
+
+  CHECK("24.2: Esc handler 销毁 dialog (s_hwnd == nullptr)",
+        PhrasesDialog::s_hwnd == nullptr);
+}
+
 }  // namespace test
 
 int main() {
@@ -806,6 +880,10 @@ int main() {
   test::TestColumnHeaderEmpty();
   test::TestNMDblClkInjects();
   test::TestNMReturnInjects();
+
+  // v0.19.0.39 (Phase F fix Bug 1 + Bug 3: foreground + Esc)
+  test::TestForegroundApiCalled();
+  test::TestEscKeyHidesDialog();
 
   std::cout << "\n=================================================" << std::endl;
   std::cout << "PASSED: " << test::g_passed << "  FAILED: " << test::g_failed
