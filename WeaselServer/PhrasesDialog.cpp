@@ -649,31 +649,14 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
       GetModuleHandle(nullptr), nullptr);
   if (s_hInput && hfUi) {
     SendMessageW(s_hInput, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
-    // v0.19.0.35 (Phase C P0-2): 输入框支持中文 IME
-    // 原因: 默认创建 Edit control 没设输入法关联, GUI app 加载时无 IME 焦点。
-    // 显式 ImmAssociateContext 启用中文 IME (用户报"无法输入中文,只能英文")。
-    // imm32.lib 已在 WeaselServer.vcxproj 隐式 link (comdlg32.h 间接引用)。
-    //
-    // v0.19.0.36 (P2 hotfix): 5068922 commit 把 ImmReleaseContext(himc) 改
-    //   ImmDestroyContext(himc) — 错的! ImmDestroyContext 销毁 himc = 关联的
-    //   IME context 销毁 = s_hInput IME 死。revert 回 2 参 ImmReleaseContext。
-    //
-    // v0.19.0.43 (Bug 1.2 真修): ImmReleaseContext **仍然错** — 它把刚关联的
-    //   context refcount 从 1 减到 0 → 销毁 context → s_hInput 重新无 IME。
-    //   装机 v0.19.0.42 user 报告"输入框仍无法输入中文", 装机端 5 项 verify
-    //   也确认 IME fail。
-    //   **正确 Win32 模式**: ImmCreateContext 创建 (refcount=1) +
-    //   ImmAssociateContext 转移 ownership 给 hwnd (refcount 内部 +1 = 2) →
-    //   **不调** ImmReleaseContext (那是给 ImmGetContext 配对的)。Context 跟
-    //   hwnd 一起销毁 (DestroyWindow 或 ImmAssociateContext(NULL))。 Per MSDN:
-    //   "The ImmAssociateContext function associates the input context with the
-    //   specified window. The application should not call ImmReleaseContext for
-    //   a handle returned by ImmAssociateContext."
-    HIMC himc = ImmCreateContext();
-    if (himc) {
-      ImmAssociateContext(s_hInput, himc);
-      // 不调 ImmReleaseContext — context 归 s_hInput 所有, 跟 hwnd 一起销毁
-    }
+    // v0.19.0.46 (Phase I Bug 4 真修): **删** ImmCreateContext +
+    //   ImmAssociateContext 调用。历史 (v0.19.0.35/36/43/45) 4 个 ship 版本
+    //   装机端都报"输入框不能输中文", 见 lessons-learned.md L##-PhaseH-IME。
+    //   根因: WeaselServer.exe 是 TSF shim 进程 (weaselx64.dll 主导),
+    //   TSF 要求 hwnd 用 system default IME context; 我们自己创建 isolated
+    //   HIMC 给 s_hInput, 跟 TSF IME 互斥 → 中文候选词不出。修法: 让 TSF
+    //   shim 自动给 hwnd 配 system default IME context (跟主编辑框同路径,
+    //   v0.19.0.32 之前裸 CreateWindowExW 路径)。
   }
 
   // v0.19.0.32: 顶部 Add 按钮 (input 右侧) — 唯一 Add (v0.19.0.41)

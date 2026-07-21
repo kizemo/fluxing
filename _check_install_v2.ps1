@@ -52,9 +52,9 @@ Write-Host ""
 # 2. Installed WeaselServer.exe on disk (3 candidate paths)
 # ============================================================
 Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
-$expectedMd5 = 'e0612f56e030ab1299b746e629e090c0'  # v0.19.0.44 binary (UI 迭代 2: resize layout + reorder ListView entry)
-$expectedInstallerMd5 = '0ce7ae135a33cdbb8b4311a964157266'  # v0.19.0.44 installer
-$expectedBuildTime = '2026-07-21 14:22:00'  # v0.19.0.44 build (NSIS timestamp)
+$expectedMd5 = '1caa6e94b209d1d0f3214b4d08c45310'  # v0.19.0.46 binary (Phase I Bug 4: 删 isolated HIMC, TSF shim 自动配 default IME)
+$expectedInstallerMd5 = ''  # v0.19.0.46 installer (待 xbuild.bat weasel installer 后填)
+$expectedBuildTime = '2026-07-22 00:00:00'  # v0.19.0.46 build (NSIS timestamp, 待 build)
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',
@@ -70,7 +70,7 @@ foreach ($p in $paths) {
         $h = (Get-FileHash -Path $p -Algorithm MD5).Hash
         $size = (Get-Item $p).Length
         $mtime = (Get-Item $p).LastWriteTime
-        $match = if ($h -eq $expectedMd5) { '<== MATCHES expected (v0.19.0.44 UI 迭代 2)' } else { '<== MISMATCH (old binary or wrong build!)' }
+        $match = if ($h -eq $expectedMd5) { '<== MATCHES expected (v0.19.0.46 Phase I Bug 4 真修)' } else { '<== MISMATCH (old binary or wrong build!)' }
         Write-Host "  $p"
         Write-Host "    md5=$h  size=$size  mtime=$mtime  $match"
     }
@@ -78,7 +78,7 @@ foreach ($p in $paths) {
 if (-not $foundAny) {
     Write-Host "  No WeaselServer.exe found in any of the standard install paths!"
 }
-Write-Host "  Expected: md5=$expectedMd5 (v0.19.0.44 UI 迭代 2, build 2026-07-21)"
+Write-Host "  Expected: md5=$expectedMd5 (v0.19.0.46 Phase I Bug 4 真修, build 2026-07-22)"
 Write-Host ""
 
 # 额外扫整个 D:/C: 找所有 WeaselServer.exe (探测多安装)
@@ -186,7 +186,7 @@ Write-Host ""
 # 6. Expected vs actual summary
 # ============================================================
 Write-Host "=== [6] Summary ==="
-Write-Host "  Installer v0.19.0.44 md5 expected: $expectedInstallerMd5"
+Write-Host "  Installer v0.19.0.46 md5 expected: $expectedInstallerMd5"
 Write-Host "  WeaselServer.exe md5 expected:     $expectedMd5 (build $expectedBuildTime)"
 Write-Host "  Module 3 L66 expected keys (admin install OK):"
 Write-Host "    HKLM\SOFTWARE\Microsoft\CTF\KnownClasses = '{A3F4CDED-...}' = 'Fluxing Text Service'"

@@ -1,5 +1,63 @@
 
 
+## [0.19.0.46-fluxing] - 2026-07-22
+
+### fix(WeaselServer): v0.19.0.46 (Phase I Bug 4) — 输入框中文 IME 真修 (删 isolated HIMC)
+
+**User pain** (post v0.19.0.45 `2d842fc` + `a7048db` ship):
+- 装机 v0.19.0.45 user 反馈"列表框 / 输入框可以随UI边界调整了" → Bug 1 + Bug 2 真修
+- **剩余 bug**: 在输入框中**仍无法输入中文** (打拼音不出候选词, IME 状态栏不显示)
+
+**Root cause** (5 阶段 systematic-debugging):
+
+`WeaselServer/PhrasesDialog.cpp:671-675` 4 个 ship 版本 (v0.19.0.35 / 0.19.0.36 / 0.19.0.43 / 0.19.0.45) 反复改 `ImmCreateContext` + `ImmAssociateContext` 都没修好, 装机端**4 个 ship 都复现**"输入框不能输中文":
+
+```cpp
+HIMC himc = ImmCreateContext();
+if (himc) {
+  ImmAssociateContext(s_hInput, himc);
+  // 不调 ImmReleaseContext (per MSDN, 假设 himc 跟 hwnd 同生死)
+}
+```
+
+**真因** (v0.19.0.46 真修, 见 `report-4bug-v0.19.0.45-ime-stuck.md` + lessons-learned.md L##-PhaseH-IME):
+- `WeaselServer.exe` 是 **TSF shim 进程** (weaselx64.dll 主导), 不是普通 GUI 进程
+- TSF shim 通过 `ITfThreadMgr` + `ITfInputProcessorProfileMgr` 强制 hwnd 走 system default IME context
+- 我们自己创建 isolated HIMC 给 `s_hInput` → 跟 TSF IME 互斥 → IME 候选词不出
+- **v0.19.0.43** 改成"不调 ImmReleaseContext" 理论上符合 MSDN, 但**忽略 TSF 进程下不认 isolated HIMC** —— 4 个 ship 复发累积
+
+**Cure** (commit v0.19.0.46, 方案 A — 完全删除 IME 关联代码):
+1. `PhrasesDialog.cpp` line 670-675 删 5 行 (`HIMC himc` + `ImmCreateContext` + `ImmAssociateContext` 块)
+2. 替换为注释: "TSF shim 自动给 hwnd 配 system default IME context (跟主编辑框同路径, v0.19.0.32 之前裸 CreateWindowExW 路径)"
+3. 走 v0.19.0.32 之前的"裸 CreateWindowExW"路径 — 当时装机 user 没报过 IME bug
+
+**Verify** (sandbox Win32 Release):
+- TestPhrasesDialog: **168/168 PASS / 0 FAIL** (Test 1-35 全过, IME 不在 sandbox 测, layout / list / 按钮 / reorder / drag 全 OK)
+- msbuild weasel.sln: **Exit 0** (WeaselServer.exe + 16 test suites + Deployer + Setup 全 rebuild)
+- WeaselServer.exe md5: `1caa6e94b209d1d0f3214b4d08c45310` (从 v0.19.0.45 `b19d4338...` 改; 是真 source build, 非 L97 stale)
+- install.nsi: 未改 (无需新装机段; v0.19.0.45 installer 段已 ship)
+
+**Files touched** (v0.19.0.46, 1 + 1):
+- `WeaselServer/PhrasesDialog.cpp` (line 670-675 删 5 行 IME 关联, 改 1 段注释)
+- `CHANGELOG.md` (本 entry)
+- `release/fluxing-0.19.0.46-installer.exe` (新建)
+
+**lessons-learned** (L##-PhaseH-IME-TSF-Mutex, 见 `lessons-learned.md`):
+- L##-A (TSF shim 进程不认 isolated HIMC): TSF 进程下不要 `ImmCreateContext` + `ImmAssociateContext`, 让 TSF shim 主导配 default IME
+- L##-B (4 ship 复发门槛): v0.19.0.35/36/43/45 4 个 ship 都 fail, 累计装机 user 反馈 4 次, 远超 L1 门槛需正式 lessons-learned
+- L##-C (Per-MSDN 不可信): "the application should not call ImmReleaseContext" 是 per-process 默认, TSF 进程下 per-hwnd isolated HIMC 跟 system TSF IME 互斥才是真陷阱
+
+**装机 user flow 5 项验收** (per `verification-before-completion` skill):
+1. 打开常用短语 dialog → 列表显示 ✓
+2. 点 input 框 → focus 切到 input ✓
+3. 切到微软拼音 / 小狼毫拼音 → 打 "ni" → **候选词出 "你/尼/泥"** (核心验收)
+4. 按数字键 1 选第一个候选词 → **"你" 进 input 框**
+5. 点 AddTop 按钮 → "你" 进 ListView (端到端 commit 成功)
+
+**Ship**: `release\fluxing-0.19.0.46-installer.exe` (待 build)
+
+---
+
 ## [0.19.0.38-fluxing] - 2026-07-20
 
 ### fix(installer): v0.19.0.38 hotfix — 装机黑屏 + taskkill cmd 窗口
