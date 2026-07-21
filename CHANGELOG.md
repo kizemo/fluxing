@@ -133,6 +133,67 @@ reg delete "HKCU\Software\Fluxing" /f
 - L100-X install.nsi ship 前 self-verify grep
 - L100-Y nsExec::ExecToStack 必须 Pop $0 + Pop $1 (避免 stack leak)
 
+---
+
+## [0.19.0.40-fluxing] - 2026-07-21
+
+### fix(WeaselServer): v0.19.0.40 (Phase F Bug 3 续修) — ListView 焦点 Esc 转 LVN_KEYDOWN handler
+
+**User pain** (post v0.19.0.39 c6d8b35 ship):
+- 设置栏点击"常用短语"按钮启动 UI → ↑↓/Enter/DoubleClick 全 work (Phase F Bug 1 fix ✓)
+- 但 **Esc 键仍不退出 dialog** (Phase F Bug 3 续修 fail — 装机反馈)
+
+**Root cause** (5 阶段 systematic-debugging):
+v0.19.0.39 Test 24 (`SendMessageW(hwnd, WM_KEYDOWN, VK_ESCAPE, 0)`) sandbox GREEN 是 false-positive。
+Test 24 直接 dispatch WM_KEYDOWN 到 dialog WndProc, **绕过了 ListView 焦点路径**。
+
+真 keyboard event 路由:
+- 焦点在 ListView (s_hList) → 按 Esc → ListView 内部处理 → 转 `LVN_KEYDOWN` 给 parent (PhrasesDialog WndProc 通过 WM_NOTIFY)
+- `PhrasesDialog::OnNotify` (line 750) 现有 case list:
+  ```
+  LVN_ITEMCHANGED / NM_DBLCLK / NM_RETURN / NM_CLICK
+  // ❌ 缺 LVN_KEYDOWN
+  ```
+- OnNotify 收到 LVN_KEYDOWN → switch fallthrough → `return 0` (line 815) → Esc 不响应
+
+v0.19.0.39 ship 的 OnKeyDown case VK_ESCAPE handler 永远不会被触发 — 因为 ListView 焦点时键盘事件不经过 dialog WndProc WM_KEYDOWN。
+
+**Cure**:
+1. `PhrasesDialog::OnNotify` 加 `case LVN_KEYDOWN` — 处理 `wVKey == VK_ESCAPE` → `Hide()` (跟 NM_DBLCLK / NM_RETURN 模式一致, 不 subclass ListView WndProc)
+2. Test 25: 模拟完整路径 (ListView focus + SendMessage WM_NOTIFY + LVN_KEYDOWN + VK_ESCAPE) → 验证 `s_hwnd == nullptr`
+
+**Verify** (sandbox Win32 Release):
+- TestPhrasesDialog: **101 PASS / 0 FAIL** (Test 25 = 1 新增, 100 baseline 不退化)
+- TestUserDictionary / TestQuickPanelDialog / TestDefaultHotkeys / TestDarkMode* / v0_19_0_32_e2e 全回归保护
+- `_buildflow.cmd` Exit 0
+- install.nsi UTF-8 BOM + CRLF ✓
+- installer extract 后 WeaselServer.exe md5 = source build md5 ✓ (无 L97 stale)
+
+**Files touched** (v0.19.0.40):
+- `WeaselServer/PhrasesDialog.cpp` (15+/1-): OnNotify 加 `case LVN_KEYDOWN`
+- `test/TestPhrasesDialog/TestPhrasesDialog.cpp` (25+/1-): 加 Test 25 (LVN_KEYDOWN dispatch) + main() 调用
+- `release/fluxing-0.19.0.40-installer.exe` (43.2 MB, 含 Phase F Bug 3 fix)
+
+**装机命令** (L13/L54/L66 强约束):
+```powershell
+taskkill /F /IM WeaselServer.exe /T
+reg delete "HKLM\SOFTWARE\Fluxing\Weasel" /f
+reg delete "HKCU\Software\Fluxing" /f
+& "F:\soft\00selfmade\rime_claude\release\fluxing-0.19.0.40-installer.exe" /S /D=D:\Program Files\fluxing
+& "F:\soft\00selfmade\rime_claude\_check_install_v2.ps1"
+```
+
+**装机后 user 端 verify** (3 项):
+1. 设置栏点击"常用短语"按钮启动 UI → **Esc 键退出 dialog (NEW: Phase F Bug 3 真 fix)**
+2. Alt+. 启动 UI → Esc 键也退出 (回归保护)
+3. Module 1+2 md5 = 新 v0.19.0.40 binary md5 (MATCH)
+
+**lessons-learned** (L101-PhaseF-LVN-KEYDOWN):
+- L101-A ListView / TreeView / Edit 等 common control 焦点时, 键盘事件走 `WM_NOTIFY` (LVN_KEYDOWN / NM_KEYDOWN 等), **不走** dialog WndProc WM_KEYDOWN。test 必须模拟完整 focus chain, 否则 false-positive (Test 24 就是这样漏的)
+- L101-B `case LVN_KEYDOWN` 是 ListView Esc 退出唯一正确路径, 不应 subclass ListView WndProc (复杂 + 风险大)
+- L101-C sandbox test 用 `SendMessageW` 必须选对 message: dialog 直接 dispatch 走 WM_KEYDOWN, child control dispatch 走 WM_NOTIFY — 选错就 false-positive
+
+---
 
 ## [0.19.0.37-fluxing] - 2026-07-20
 

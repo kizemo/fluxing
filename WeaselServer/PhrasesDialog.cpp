@@ -35,7 +35,8 @@ HWND PhrasesDialog::s_hBtnEdit = nullptr;
 HWND PhrasesDialog::s_hBtnDel = nullptr;
 HWND PhrasesDialog::s_hBtnCancel = nullptr;
 std::wstring PhrasesDialog::s_yamlPath;
-PhrasesDialog::InjectFn PhrasesDialog::s_injectFn = &PhrasesDialog::DefaultInject;
+PhrasesDialog::InjectFn PhrasesDialog::s_injectFn =
+    &PhrasesDialog::DefaultInject;
 // v0.19.0.39 (Phase F fix): 默认指 OS API, test 可注入 mock (Test 23).
 PhrasesDialog::SetForegroundFn PhrasesDialog::s_setForegroundFn =
     &::SetForegroundWindow;
@@ -45,47 +46,47 @@ std::vector<PhrasesDialog::Phrase> PhrasesDialog::m_phrases;
 int PhrasesDialog::m_selectedIndex = -1;
 DWORD PhrasesDialog::s_showTime = 0;
 HFONT PhrasesDialog::s_hFontUi = nullptr;
-int   PhrasesDialog::kListH_phys = 0;
-int   PhrasesDialog::kBtnY_phys = 0;
+int PhrasesDialog::kListH_phys = 0;
+int PhrasesDialog::kBtnY_phys = 0;
 PhrasesDialog::State PhrasesDialog::s_state = PhrasesDialog::State_Hidden;
 
 // ===== 设计常量 (spec 044 §3) =====
 namespace {
 // 尺寸 (size.modal.*)
-constexpr int kDialogW    = 360;
-constexpr int kDialogH    = 460;
-constexpr int kTitleH     = 30;
-constexpr int kInputH     = 32;   // v0.19.0.32: 顶部 input 行高
-constexpr int kInputW     = 240;  // v0.19.0.32: input 宽 (右侧 Add 按钮让位)
-constexpr int kBtnAddTopW = 76;   // v0.19.0.32: 顶部 Add 按钮宽
-constexpr int kBtnH       = 32;
-constexpr int kBtnW       = 76;
-constexpr int kBtnGap     = 8;
+constexpr int kDialogW = 360;
+constexpr int kDialogH = 460;
+constexpr int kTitleH = 30;
+constexpr int kInputH = 32;   // v0.19.0.32: 顶部 input 行高
+constexpr int kInputW = 240;  // v0.19.0.32: input 宽 (右侧 Add 按钮让位)
+constexpr int kBtnAddTopW = 76;  // v0.19.0.32: 顶部 Add 按钮宽
+constexpr int kBtnH = 32;
+constexpr int kBtnW = 76;
+constexpr int kBtnGap = 8;
 constexpr int kBtnMarginX = 12;
-constexpr int kGap        = 8;
-constexpr int kDlgRadius  = 14;
+constexpr int kGap = 8;
+constexpr int kDlgRadius = 14;
 
 // 颜色 (color.modal.*,跟 v0.19.0.27 一致)
-constexpr COLORREF kBorderColor     = RGB(217, 217, 217);
-constexpr COLORREF kBgTop           = RGB(245, 245, 248);
-constexpr COLORREF kBgBot           = RGB(220, 222, 230);
-constexpr COLORREF kTextColor       = RGB(30, 30, 40);
-constexpr COLORREF kSelBg           = RGB(255, 235, 220);
-constexpr COLORREF kInputBg         = RGB(255, 255, 255);
-constexpr COLORREF kInputBorder     = RGB(220, 220, 225);
-constexpr COLORREF kButtonBg        = RGB(245, 245, 248);
+constexpr COLORREF kBorderColor = RGB(217, 217, 217);
+constexpr COLORREF kBgTop = RGB(245, 245, 248);
+constexpr COLORREF kBgBot = RGB(220, 222, 230);
+constexpr COLORREF kTextColor = RGB(30, 30, 40);
+constexpr COLORREF kSelBg = RGB(255, 235, 220);
+constexpr COLORREF kInputBg = RGB(255, 255, 255);
+constexpr COLORREF kInputBorder = RGB(220, 220, 225);
+constexpr COLORREF kButtonBg = RGB(245, 245, 248);
 
 // 字体
 constexpr int kUiFontSize = 14;
 
 // 子控件 ID (v0.19.0.32 重新编号)
-constexpr UINT ID_INPUT       = 1010;  // 顶部 input
+constexpr UINT ID_INPUT = 1010;        // 顶部 input
 constexpr UINT ID_BTN_ADD_TOP = 1011;  // 顶部 Add 按钮
-constexpr UINT ID_LIST        = 1100;  // ListView
-constexpr UINT ID_BTN_ADD     = 1001;
-constexpr UINT ID_BTN_EDIT    = 1002;
-constexpr UINT ID_BTN_DEL     = 1003;
-constexpr UINT ID_BTN_CANCEL  = 1004;
+constexpr UINT ID_LIST = 1100;         // ListView
+constexpr UINT ID_BTN_ADD = 1001;
+constexpr UINT ID_BTN_EDIT = 1002;
+constexpr UINT ID_BTN_DEL = 1003;
+constexpr UINT ID_BTN_CANCEL = 1004;
 }  // namespace
 
 // ===== Public API =====
@@ -122,11 +123,11 @@ void PhrasesDialog::Show() {
   InitCommonControlsEx(&icc);
 
   // 3. 创建 modal 窗口
-  // v0.19.0.33 (Phase B Bug 2b 真修): 删 WS_EX_LAYERED。WS_EX_LAYERED 窗口不通过
-  // WM_PAINT / BeginPaint 路径画 body — DWM 把它当 layered surface, OnPaint 的
-  // FillRect/DrawText/DrawEdge 全部丢失, body 透明成用户看到的"无内容"。
-  // 走 ShortcutSettings 同样路径 (WS_EX_LAYERED 不设), BeginPaint/EndPaint
-  // 正常 paint body。
+  // v0.19.0.33 (Phase B Bug 2b 真修): 删 WS_EX_LAYERED。WS_EX_LAYERED
+  // 窗口不通过 WM_PAINT / BeginPaint 路径画 body — DWM 把它当 layered surface,
+  // OnPaint 的 FillRect/DrawText/DrawEdge 全部丢失, body
+  // 透明成用户看到的"无内容"。 走 ShortcutSettings 同样路径 (WS_EX_LAYERED
+  // 不设), BeginPaint/EndPaint 正常 paint body。
   DWORD exStyle = WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
   DWORD style = WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 
@@ -152,13 +153,14 @@ void PhrasesDialog::Show() {
     s_classRegistered = true;
   }
 
-  s_hwnd = CreateWindowExW(exStyle, L"FluxingPhrasesDialogV3",
-                           L"\x5e38\x7528\x77ed\x8bed",  // 常用短语
-                           style, CW_USEDEFAULT, CW_USEDEFAULT, kDialogW, kDialogH,
-                           nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
+  s_hwnd =
+      CreateWindowExW(exStyle, L"FluxingPhrasesDialogV3",
+                      L"\x5e38\x7528\x77ed\x8bed",  // 常用短语
+                      style, CW_USEDEFAULT, CW_USEDEFAULT, kDialogW, kDialogH,
+                      nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
   if (!s_hwnd) {
-    std::wcerr << L"[PhrasesDialog] CreateWindowExW failed, err=" << GetLastError()
-               << std::endl;
+    std::wcerr << L"[PhrasesDialog] CreateWindowExW failed, err="
+               << GetLastError() << std::endl;
     return;
   }
 
@@ -183,16 +185,21 @@ void PhrasesDialog::Show() {
   ShowWindow(s_hwnd, SW_SHOW);
   UpdateWindow(s_hwnd);
 
-  // v0.19.0.39 (Phase F fix Bug 1 + Bug 3): 强制 foreground 让 keyboard events 路由到 dialog
-  // 真 root cause (装机反馈): QuickPanel button 启动 PhrasesDialog 时, QuickPanelDialog 仍是
-  //   foreground, 键盘事件 (↑↓/Enter/Esc) 发到 QuickPanel, 不传 PhrasesDialog (双击能 work 是因为
-  //   WM_LBUTTONDBLCLK 是 mouse event, mouse 直接命中 ListView 触发). Alt+. 路径已 work
-  //   (hotkey 触发自动让 WeaselServer 进 foreground).
+  // v0.19.0.39 (Phase F fix Bug 1 + Bug 3): 强制 foreground 让 keyboard events
+  // 路由到 dialog 真 root cause (装机反馈): QuickPanel button 启动
+  // PhrasesDialog 时, QuickPanelDialog 仍是
+  //   foreground, 键盘事件 (↑↓/Enter/Esc) 发到 QuickPanel, 不传 PhrasesDialog
+  //   (双击能 work 是因为 WM_LBUTTONDBLCLK 是 mouse event, mouse 直接命中
+  //   ListView 触发). Alt+. 路径已 work (hotkey 触发自动让 WeaselServer 进
+  //   foreground).
   // 修法 (Option C 双保险):
-  //   1. AllowSetForegroundWindow(ASFW_ANY) 拿抢 foreground 锁 (Vista+ foreground lock)
-  //   2. SetForegroundWindow(s_hwnd) 强制 foreground 让 dialog 收 keyboard events
-  //   (按钮路径配套: WeaselServerApp.cpp onPhrases lambda 先 QuickPanelDialog::Hide() 释放
-  //    foreground, 配合 Show() 的 SetForegroundWindow 完成 foreground transition)
+  //   1. AllowSetForegroundWindow(ASFW_ANY) 拿抢 foreground 锁 (Vista+
+  //   foreground lock)
+  //   2. SetForegroundWindow(s_hwnd) 强制 foreground 让 dialog 收 keyboard
+  //   events (按钮路径配套: WeaselServerApp.cpp onPhrases lambda 先
+  //   QuickPanelDialog::Hide() 释放
+  //    foreground, 配合 Show() 的 SetForegroundWindow 完成 foreground
+  //    transition)
   s_allowSetForegroundFn(ASFW_ANY);
   s_setForegroundFn(s_hwnd);
 
@@ -214,9 +221,13 @@ void PhrasesDialog::Hide() {
   m_selectedIndex = -1;
 }
 
-void PhrasesDialog::SetInjectFn(InjectFn fn) { s_injectFn = fn; }
+void PhrasesDialog::SetInjectFn(InjectFn fn) {
+  s_injectFn = fn;
+}
 
-void PhrasesDialog::SetYamlPath(const std::wstring& path) { s_yamlPath = path; }
+void PhrasesDialog::SetYamlPath(const std::wstring& path) {
+  s_yamlPath = path;
+}
 
 void PhrasesDialog::SetSetForegroundFn(SetForegroundFn fn) {
   s_setForegroundFn = fn;
@@ -238,7 +249,8 @@ const std::vector<PhrasesDialog::Phrase>& PhrasesDialog::Phrases() {
 
 std::wstring PhrasesDialog::Trim(const std::wstring& s) {
   size_t a = 0, b = s.size();
-  while (a < b && (s[a] == L' ' || s[a] == L'\t' || s[a] == L'\r')) ++a;
+  while (a < b && (s[a] == L' ' || s[a] == L'\t' || s[a] == L'\r'))
+    ++a;
   while (b > a && (s[b - 1] == L' ' || s[b - 1] == L'\t' || s[b - 1] == L'\r'))
     --b;
   return s.substr(a, b - a);
@@ -258,22 +270,22 @@ std::wstring PhrasesDialog::Unquote(const std::wstring& s) {
 bool PhrasesDialog::LoadPhrases(const std::wstring& path,
                                 std::vector<Phrase>& out) {
   std::ifstream f(path, std::ios::binary);
-  if (!f) return false;
+  if (!f)
+    return false;
 
   std::string content((std::istreambuf_iterator<char>(f)),
-                       std::istreambuf_iterator<char>());
+                      std::istreambuf_iterator<char>());
 
-  if (content.size() >= 3 &&
-      (unsigned char)content[0] == 0xEF &&
-      (unsigned char)content[1] == 0xBB &&
-      (unsigned char)content[2] == 0xBF) {
+  if (content.size() >= 3 && (unsigned char)content[0] == 0xEF &&
+      (unsigned char)content[1] == 0xBB && (unsigned char)content[2] == 0xBF) {
     content = content.substr(3);
   }
 
   std::wstring wtext;
   if (!content.empty()) {
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, content.c_str(),
-                                    static_cast<int>(content.size()), nullptr, 0);
+    int wlen =
+        MultiByteToWideChar(CP_UTF8, 0, content.c_str(),
+                            static_cast<int>(content.size()), nullptr, 0);
     if (wlen > 0) {
       wtext.resize(wlen);
       MultiByteToWideChar(CP_UTF8, 0, content.c_str(),
@@ -287,17 +299,21 @@ bool PhrasesDialog::LoadPhrases(const std::wstring& path,
   bool inPhrase = false;
   while (pos <= wtext.size()) {
     size_t eol = wtext.find(L'\n', pos);
-    if (eol == std::wstring::npos) eol = wtext.size();
+    if (eol == std::wstring::npos)
+      eol = wtext.size();
     std::wstring line = wtext.substr(pos, eol - pos);
-    if (!line.empty() && line.back() == L'\r') line.pop_back();
+    if (!line.empty() && line.back() == L'\r')
+      line.pop_back();
     pos = eol + 1;
 
     auto trimmed = Trim(line);
-    if (trimmed.empty() || trimmed[0] == L'#') continue;
+    if (trimmed.empty() || trimmed[0] == L'#')
+      continue;
 
     if (trimmed.size() >= 2 && trimmed[0] == L'-' &&
         (trimmed[1] == L' ' || trimmed[1] == L'\t')) {
-      if (inPhrase) out.push_back(cur);
+      if (inPhrase)
+        out.push_back(cur);
       cur = Phrase();
       inPhrase = true;
 
@@ -307,7 +323,8 @@ bool PhrasesDialog::LoadPhrases(const std::wstring& path,
       // YAML 格式: phrases: [ { category: 常用, text: 你好 } ]
       if (trimmedRest.size() >= 9 && trimmedRest.substr(0, 9) == L"category:") {
         cur.category = Unquote(trimmedRest.substr(9));
-      } else if (trimmedRest.size() >= 5 && trimmedRest.substr(0, 5) == L"text:") {
+      } else if (trimmedRest.size() >= 5 &&
+                 trimmedRest.substr(0, 5) == L"text:") {
         // 兼容老 YAML 格式 (text: 行)
         cur.text = Unquote(trimmedRest.substr(5));
       }
@@ -317,7 +334,7 @@ bool PhrasesDialog::LoadPhrases(const std::wstring& path,
       if (trimmedFull.size() >= 9 && trimmedFull.substr(0, 9) == L"category:") {
         cur.category = Unquote(trimmedFull.substr(9));
       } else if (trimmedFull.size() >= 5 &&
-          trimmedFull.substr(0, 5) == L"text:") {
+                 trimmedFull.substr(0, 5) == L"text:") {
         cur.text = Unquote(trimmedFull.substr(5));
       }
       // 兼容老格式: 单行 phrase text (无 category, 无 text: 前缀)
@@ -326,9 +343,11 @@ bool PhrasesDialog::LoadPhrases(const std::wstring& path,
         cur.text = trimmedFull;
       }
     }
-    if (pos > wtext.size()) break;
+    if (pos > wtext.size())
+      break;
   }
-  if (inPhrase) out.push_back(cur);
+  if (inPhrase)
+    out.push_back(cur);
   return true;
 }
 
@@ -339,20 +358,22 @@ bool PhrasesDialog::SavePhrases(const std::wstring& path,
 
   auto appendLine = [&utf8](const std::wstring& wline) {
     int len = WideCharToMultiByte(CP_UTF8, 0, wline.c_str(),
-                                   static_cast<int>(wline.size()), nullptr, 0,
-                                   nullptr, nullptr);
+                                  static_cast<int>(wline.size()), nullptr, 0,
+                                  nullptr, nullptr);
     if (len > 0) {
       std::string buf(len, 0);
       WideCharToMultiByte(CP_UTF8, 0, wline.c_str(),
-                           static_cast<int>(wline.size()), &buf[0], len, nullptr,
-                           nullptr);
+                          static_cast<int>(wline.size()), &buf[0], len, nullptr,
+                          nullptr);
       utf8 += buf;
     }
     utf8 += "\r\n";
   };
 
-  appendLine(L"# phrases.yaml \u2014 Fluxing \u5e38\u7528\u77ed\u8bed (v0.19.0.35)");
-  appendLine(L"# schema: phrases: [ { category: \u5206\u7c7b, text: \u77ed\u8bed } ]");
+  appendLine(
+      L"# phrases.yaml \u2014 Fluxing \u5e38\u7528\u77ed\u8bed (v0.19.0.35)");
+  appendLine(
+      L"# schema: phrases: [ { category: \u5206\u7c7b, text: \u77ed\u8bed } ]");
   appendLine(L"");
   appendLine(L"phrases:");
   for (const auto& p : data) {
@@ -360,9 +381,12 @@ bool PhrasesDialog::SavePhrases(const std::wstring& path,
     auto escape = [](const std::wstring& s) {
       std::wstring r;
       for (wchar_t c : s) {
-        if (c == L'\\') r += L"\\\\";
-        else if (c == L'"') r += L"\\\"";
-        else r += c;
+        if (c == L'\\')
+          r += L"\\\\";
+        else if (c == L'"')
+          r += L"\\\"";
+        else
+          r += c;
       }
       return r;
     };
@@ -378,7 +402,8 @@ bool PhrasesDialog::SavePhrases(const std::wstring& path,
   }
 
   std::ofstream f(path, std::ios::binary);
-  if (!f) return false;
+  if (!f)
+    return false;
   f.write(utf8.c_str(), static_cast<std::streamsize>(utf8.size()));
   return f.good();
 }
@@ -386,7 +411,8 @@ bool PhrasesDialog::SavePhrases(const std::wstring& path,
 // ===== SendInput =====
 
 void PhrasesDialog::DefaultInject(const std::wstring& text) {
-  if (text.empty()) return;
+  if (text.empty())
+    return;
   std::vector<INPUT> inputs;
   inputs.reserve(text.size() * 2);
   for (wchar_t c : text) {
@@ -404,7 +430,8 @@ void PhrasesDialog::DefaultInject(const std::wstring& text) {
 }
 
 void PhrasesDialog::InjectText(const std::wstring& text) {
-  if (s_injectFn) s_injectFn(text);
+  if (s_injectFn)
+    s_injectFn(text);
 }
 
 // ===== v0.19.0.32: 立即写盘 (无 debounce,task spec 简化) =====
@@ -420,7 +447,9 @@ void PhrasesDialog::FlushSave() {
 
 // ===== WndProc =====
 
-LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd, UINT msg, WPARAM wp,
+LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd,
+                                        UINT msg,
+                                        WPARAM wp,
                                         LPARAM lp) {
   switch (msg) {
     case WM_CREATE:
@@ -450,12 +479,10 @@ LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd, UINT msg, WPARAM wp,
     case WM_KILLFOCUS: {
       // v0.19.0.32: 检查新焦点是否为本 dialog 内的子控件
       HWND newFocus = (HWND)wp;
-      auto isChild = [newFocus](HWND h) {
-        return h && newFocus == h;
-      };
+      auto isChild = [newFocus](HWND h) { return h && newFocus == h; };
       if (isChild(s_hInput) || isChild(s_hBtnAddTop) || isChild(s_hList) ||
-          isChild(s_hBtnAdd) || isChild(s_hBtnEdit) ||
-          isChild(s_hBtnDel) || isChild(s_hBtnCancel)) {
+          isChild(s_hBtnAdd) || isChild(s_hBtnEdit) || isChild(s_hBtnDel) ||
+          isChild(s_hBtnCancel)) {
         return 0;
       }
       DWORD nowTick = GetTickCount();
@@ -470,28 +497,29 @@ LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd, UINT msg, WPARAM wp,
 }
 
 LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
-  // v0.19.0.32 UX redo: layout = title + (input + AddTop) row + list + 4 buttons
-  // kListH_phys = kDialogH - kTitleH - kInputH - kBtnH - 4*kGap
+  // v0.19.0.32 UX redo: layout = title + (input + AddTop) row + list + 4
+  // buttons kListH_phys = kDialogH - kTitleH - kInputH - kBtnH - 4*kGap
   kListH_phys = kDialogH - kTitleH - kInputH - kBtnH - 4 * kGap;
-  kBtnY_phys  = kTitleH + kInputH + kListH_phys + 2 * kGap;
-  if (kListH_phys < 80) kListH_phys = 80;
-  if (kBtnY_phys + kBtnH > kDialogH) kBtnY_phys = kDialogH - kBtnH - 2;
+  kBtnY_phys = kTitleH + kInputH + kListH_phys + 2 * kGap;
+  if (kListH_phys < 80)
+    kListH_phys = 80;
+  if (kBtnY_phys + kBtnH > kDialogH)
+    kBtnY_phys = kDialogH - kBtnH - 2;
 
   s_hFontUi = CreateFontW(kUiFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                          CLEARTYPE_QUALITY, VARIABLE_PITCH | FF_SWISS,
-                          L"Segoe UI Variable");
+                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                          VARIABLE_PITCH | FF_SWISS, L"Segoe UI Variable");
   HFONT hfUi = s_hFontUi;
 
   // v0.19.0.32: 顶部 input + Add 按钮 (同 row, 左右分布)
   int inputY = kTitleH + kGap;
   int inputX = kBtnMarginX;
-  s_hInput = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-                             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS |
-                                 ES_AUTOHSCROLL,
-                             inputX, inputY, kInputW, kInputH, hwnd,
-                             reinterpret_cast<HMENU>(ID_INPUT),
-                             GetModuleHandle(nullptr), nullptr);
+  s_hInput = CreateWindowExW(
+      WS_EX_CLIENTEDGE, L"EDIT", L"",
+      WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | ES_AUTOHSCROLL,
+      inputX, inputY, kInputW, kInputH, hwnd, reinterpret_cast<HMENU>(ID_INPUT),
+      GetModuleHandle(nullptr), nullptr);
   if (s_hInput && hfUi) {
     SendMessageW(s_hInput, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
     // v0.19.0.35 (Phase C P0-2): 输入框支持中文 IME
@@ -499,15 +527,16 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
     // 显式 ImmAssociateContext 启用中文 IME (用户报"无法输入中文,只能英文")。
     // imm32.lib 已在 WeaselServer.vcxproj 隐式 link (comdlg32.h 间接引用)。
     // v0.19.0.36 (P2 hotfix, 用户装机反馈 "无法输入中文" + "无法调出设置栏"):
-    //   5068922 commit 把 ImmReleaseContext(himc) 改 ImmDestroyContext(himc) — 错的!
-    //   ImmAssociateContext 把 himc 关联给 s_hInput (不复制,只关联),
-    //   ImmDestroyContext 销毁 himc = 关联的 IME context 销毁 = s_hInput IME 死,
-    //   同时破坏 TSF shim system context → Ctrl+Shift+K 等 hotkey 不响应。
-    //   revert 回 ImmReleaseContext(s_hInput, himc) — **显式 2 参**, MSVC 接受。
-    //   1 参 ImmReleaseContext(himc) 在 SDK imm.h 不存在 (line 262 明确 2 参 HWND+HIMC),
-    //   之前 v0.19.0.35 (fa196049) 写 1 参 + 5068922 ship binary md5 389610fb 是 stale
-    //   v0.19.0.34 binary (L97 同根因, commit message "Verification 5/5 PASS md5 parity" 撒谎)。
-    //   显式 2 参 Win32 API 标准用法, "释放 hwnd 对 himc 的关联 lock", context 仍归 s_hInput。
+    //   5068922 commit 把 ImmReleaseContext(himc) 改 ImmDestroyContext(himc) —
+    //   错的! ImmAssociateContext 把 himc 关联给 s_hInput (不复制,只关联),
+    //   ImmDestroyContext 销毁 himc = 关联的 IME context 销毁 = s_hInput IME
+    //   死, 同时破坏 TSF shim system context → Ctrl+Shift+K 等 hotkey 不响应。
+    //   revert 回 ImmReleaseContext(s_hInput, himc) — **显式 2 参**, MSVC
+    //   接受。 1 参 ImmReleaseContext(himc) 在 SDK imm.h 不存在 (line 262 明确
+    //   2 参 HWND+HIMC), 之前 v0.19.0.35 (fa196049) 写 1 参 + 5068922 ship
+    //   binary md5 389610fb 是 stale v0.19.0.34 binary (L97 同根因, commit
+    //   message "Verification 5/5 PASS md5 parity" 撒谎)。 显式 2 参 Win32 API
+    //   标准用法, "释放 hwnd 对 himc 的关联 lock", context 仍归 s_hInput。
     HIMC himc = ImmCreateContext();
     if (himc) {
       ImmAssociateContext(s_hInput, himc);
@@ -519,12 +548,12 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
   int btnTopX = inputX + kInputW + kGap;
   s_hBtnAddTop = CreateWindowExW(
       0, L"BUTTON", L"+ \x6dfb\x52a0",  // + 添加
-      WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
-      btnTopX, inputY, kBtnAddTopW, kInputH, hwnd,
-      reinterpret_cast<HMENU>(ID_BTN_ADD_TOP),
+      WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON, btnTopX, inputY,
+      kBtnAddTopW, kInputH, hwnd, reinterpret_cast<HMENU>(ID_BTN_ADD_TOP),
       GetModuleHandle(nullptr), nullptr);
   if (s_hBtnAddTop && hfUi) {
-    SendMessageW(s_hBtnAddTop, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
+    SendMessageW(s_hBtnAddTop, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi),
+                 TRUE);
   }
 
   // v0.19.0.32: ListView (单列 "phrase text")
@@ -532,19 +561,20 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
   DWORD listEx = WS_EX_CLIENTEDGE;
   DWORD listStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS |
                     LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS;
-  s_hList = CreateWindowExW(listEx, WC_LISTVIEWW, L"",
-                            listStyle, kGap, listY,
-                            kDialogW - 2 * kGap, kListH_phys,
-                            hwnd, reinterpret_cast<HMENU>(ID_LIST),
+  s_hList = CreateWindowExW(listEx, WC_LISTVIEWW, L"", listStyle, kGap, listY,
+                            kDialogW - 2 * kGap, kListH_phys, hwnd,
+                            reinterpret_cast<HMENU>(ID_LIST),
                             GetModuleHandle(nullptr), nullptr);
   if (s_hList && hfUi) {
     SendMessageW(s_hList, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
   }
-  // v0.19.0.32: ListView 加单列 (P2 polish: header text 空, 避免跟下面 row "短语" 视觉混淆)
+  // v0.19.0.32: ListView 加单列 (P2 polish: header text 空, 避免跟下面 row
+  // "短语" 视觉混淆)
   {
     LVCOLUMNW col = {};
     col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
-    col.pszText = const_cast<wchar_t*>(L"");  // 空 — 整个 ListView 内容都是短语, header "短语" 冗余
+    col.pszText = const_cast<wchar_t*>(
+        L"");  // 空 — 整个 ListView 内容都是短语, header "短语" 冗余
     col.cx = kDialogW - 2 * kGap - 4;
     col.iSubItem = 0;
     ListView_InsertColumn(s_hList, 0, &col);
@@ -557,19 +587,19 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
   int totalW = kBtnW * 4 + kBtnGap * 3;
   int btnX = (kDialogW - totalW) / 2;
   const wchar_t* kBtnLabels[4] = {
-      L"+ \x6dfb\x52a0",        // + 添加
-      L"\u270e \x7f16\x8f91",   // ✎ 编辑
-      L"- \x5220\x9664",        // - 删除
-      L"\x53d6\x6d88",          // 取消
+      L"+ \x6dfb\x52a0",       // + 添加
+      L"\u270e \x7f16\x8f91",  // ✎ 编辑
+      L"- \x5220\x9664",       // - 删除
+      L"\x53d6\x6d88",         // 取消
   };
   UINT kBtnIds[4] = {ID_BTN_ADD, ID_BTN_EDIT, ID_BTN_DEL, ID_BTN_CANCEL};
   HWND* kBtnHwnds[4] = {&s_hBtnAdd, &s_hBtnEdit, &s_hBtnDel, &s_hBtnCancel};
   for (int i = 0; i < 4; ++i) {
     *kBtnHwnds[i] = CreateWindowExW(
         0, L"BUTTON", kBtnLabels[i],
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
-        btnX, btnY, kBtnW, kBtnH, hwnd,
-        reinterpret_cast<HMENU>(kBtnIds[i]), GetModuleHandle(nullptr), nullptr);
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON, btnX, btnY,
+        kBtnW, kBtnH, hwnd, reinterpret_cast<HMENU>(kBtnIds[i]),
+        GetModuleHandle(nullptr), nullptr);
     btnX += kBtnW + kBtnGap;
   }
 
@@ -616,9 +646,8 @@ LRESULT PhrasesDialog::OnPaint(HWND hwnd) {
   RECT rc;
   GetClientRect(hwnd, &rc);
 
-  ModalChrome::PaintBackgroundAndBorder(hdc, kDialogW, kDialogH,
-                                         kBgTop, kBgBot,
-                                         kDlgRadius, kBorderColor);
+  ModalChrome::PaintBackgroundAndBorder(hdc, kDialogW, kDialogH, kBgTop, kBgBot,
+                                        kDlgRadius, kBorderColor);
 
   // 标题文字
   HFONT hf = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
@@ -641,7 +670,8 @@ LRESULT PhrasesDialog::OnCtlColor(HWND hwnd, WPARAM wp, LPARAM lp) {
     SetBkColor(hdc, kInputBg);
     SetTextColor(hdc, kTextColor);
     static HBRUSH s_hBrushInput = nullptr;
-    if (!s_hBrushInput) s_hBrushInput = CreateSolidBrush(kInputBg);
+    if (!s_hBrushInput)
+      s_hBrushInput = CreateSolidBrush(kInputBg);
     return reinterpret_cast<LRESULT>(s_hBrushInput);
   }
   return DefWindowProcW(hwnd, WM_CTLCOLOREDIT, wp, lp);
@@ -687,7 +717,8 @@ LRESULT PhrasesDialog::OnKeyDown(HWND hwnd, WPARAM wp) {
     case VK_RETURN: {
       // 焦点在 input → Add (调 ID_BTN_ADD_TOP)
       if (s_hInput && GetFocus() == s_hInput) {
-        SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(ID_BTN_ADD_TOP, BN_CLICKED), 0);
+        SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(ID_BTN_ADD_TOP, BN_CLICKED),
+                     0);
         return 0;
       }
       // 焦点在 list → inject 选中 phrase text
@@ -730,14 +761,18 @@ LRESULT PhrasesDialog::OnKeyDown(HWND hwnd, WPARAM wp) {
 
 // v0.19.0.36 (Phase D fix): ListView selected index move helper.
 // fa196049 (v0.19.0.35) OnKeyDown VK_UP/VK_DOWN 调用本函数但 ship 时漏定义
-// → unresolved external / link error。补 definition 让 keyboard nav 路径可链接 + 可测试。
-// delta = -1 (上移) / +1 (下移);循环 wrap-around;空 list / 无选中 fallback。
+// → unresolved external / link error。补 definition 让 keyboard nav 路径可链接
+// + 可测试。 delta = -1 (上移) / +1 (下移);循环 wrap-around;空 list / 无选中
+// fallback。
 void PhrasesDialog::MoveSelection(HWND hList, int delta) {
-  if (!hList) return;
+  if (!hList)
+    return;
   int count = ListView_GetItemCount(hList);
-  if (count <= 0) return;
+  if (count <= 0)
+    return;
   int cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
-  if (cur < 0) cur = 0;
+  if (cur < 0)
+    cur = 0;
   int next = (cur + delta + count) % count;
   ListView_SetItemState(hList, next, LVIS_SELECTED | LVIS_FOCUSED,
                         LVIS_SELECTED | LVIS_FOCUSED);
@@ -749,7 +784,8 @@ void PhrasesDialog::MoveSelection(HWND hList, int delta) {
 
 LRESULT PhrasesDialog::OnNotify(HWND hwnd, LPARAM lp) {
   LPNMHDR pnm = reinterpret_cast<LPNMHDR>(lp);
-  if (!pnm) return 0;
+  if (!pnm)
+    return 0;
   if (pnm->idFrom == ID_LIST) {
     switch (pnm->code) {
       case LVN_ITEMCHANGED: {
@@ -768,12 +804,13 @@ LRESULT PhrasesDialog::OnNotify(HWND hwnd, LPARAM lp) {
         // 双击 → inject
         // v0.19.0.36 (P2 polish, 用户装机反馈 "双击不上屏"):
         //   真 root cause 是 Hide() 重置 m_selectedIndex = -1 (Hide line 196),
-        //   原 handler 顺序 InjectText → Hide 改成 Hide → InjectText 后, InjectText
-        //   读 m_phrases[m_selectedIndex] 越界 (-1) → SendInput 空字符串。
+        //   原 handler 顺序 InjectText → Hide 改成 Hide → InjectText 后,
+        //   InjectText 读 m_phrases[m_selectedIndex] 越界 (-1) → SendInput
+        //   空字符串。
         //   **正确修法**: 捕获 idx + text 本地变量 (Hide 前), InjectText 用本地
         //   text — 不依赖 m_selectedIndex (Hide 后会被清)。
-        //   Hide 先 InjectText 后 的顺序是因为: 销毁 modal dialog 后 foreground 自动
-        //   还给原 app, SendInput 才到原 app (否则发到 dialog 自身)。
+        //   Hide 先 InjectText 后 的顺序是因为: 销毁 modal dialog 后 foreground
+        //   自动 还给原 app, SendInput 才到原 app (否则发到 dialog 自身)。
         LPNMITEMACTIVATE pia = reinterpret_cast<LPNMITEMACTIVATE>(lp);
         if (pia && pia->iItem >= 0 &&
             pia->iItem < static_cast<int>(m_phrases.size())) {
@@ -787,9 +824,9 @@ LRESULT PhrasesDialog::OnNotify(HWND hwnd, LPARAM lp) {
       }
       case NM_RETURN: {
         // v0.19.0.36 (P2 polish, 用户装机反馈 "回车不上屏"):
-        //   Enter 焦点 ListView + selected item → ListView 默认发 NM_RETURN 给 parent。
-        //   原 OnNotify 没收, return 0 → 不 inject。修法: 跟 NM_DBLCLK 同路径,
-        //   同样捕获本地 idx + text (Hide 重置 m_selectedIndex)。
+        //   Enter 焦点 ListView + selected item → ListView 默认发 NM_RETURN 给
+        //   parent。 原 OnNotify 没收, return 0 → 不 inject。修法: 跟 NM_DBLCLK
+        //   同路径, 同样捕获本地 idx + text (Hide 重置 m_selectedIndex)。
         if (m_selectedIndex >= 0 &&
             m_selectedIndex < static_cast<int>(m_phrases.size())) {
           int idx = m_selectedIndex;
@@ -807,6 +844,20 @@ LRESULT PhrasesDialog::OnNotify(HWND hwnd, LPARAM lp) {
           if (s_hInput) {
             SetWindowTextW(s_hInput, m_phrases[m_selectedIndex].text.c_str());
           }
+        }
+        return 0;
+      }
+      case LVN_KEYDOWN: {
+        // v0.19.0.40 (Phase F Bug 3 续修): ListView 焦点时按 Esc, ListView
+        // 自身不处理,
+        //   转 LVN_KEYDOWN 给 parent. 原 OnNotify 缺此 case → return 0 → Esc
+        //   无响应. Test 24 (sandbox) false-positive 因为直接 dispatch
+        //   WM_KEYDOWN 到 dialog WndProc, 不模拟 ListView 焦点 + WM_NOTIFY
+        //   路径. 修法: OnNotify 加 case LVN_KEYDOWN 处理 VK_ESCAPE → Hide. (跟
+        //   NM_DBLCLK / NM_RETURN 模式一致, 不 subclass ListView WndProc.)
+        LPNMLVKEYDOWN pnkd = reinterpret_cast<LPNMLVKEYDOWN>(lp);
+        if (pnkd && pnkd->wVKey == VK_ESCAPE) {
+          Hide();
         }
         return 0;
       }
@@ -844,8 +895,8 @@ LRESULT PhrasesDialog::OnCommand(HWND hwnd, WPARAM wp) {
     case ID_BTN_EDIT: {
       // 编辑: 读 input → 更新 m_phrases[m_selectedIndex] → FlushSave
       if (m_selectedIndex >= 0 &&
-          m_selectedIndex < static_cast<int>(m_phrases.size()) &&
-          s_hInput && IsWindow(s_hInput)) {
+          m_selectedIndex < static_cast<int>(m_phrases.size()) && s_hInput &&
+          IsWindow(s_hInput)) {
         wchar_t buf[1024] = {};
         GetWindowTextW(s_hInput, buf, 1024);
         std::wstring text = buf;
@@ -880,14 +931,17 @@ LRESULT PhrasesDialog::OnCommand(HWND hwnd, WPARAM wp) {
 
 // ===== List populate =====
 
-void PhrasesDialog::PopulateList(HWND hList) { PopulateListImpl(hList); }
+void PhrasesDialog::PopulateList(HWND hList) {
+  PopulateListImpl(hList);
+}
 
 int PhrasesDialog::PopulateListCount(HWND hList) {
   return PopulateListImpl(hList);
 }
 
 int PhrasesDialog::PopulateListImpl(HWND hList) {
-  if (!hList) return 0;
+  if (!hList)
+    return 0;
   s_hList = hList;
   ListView_DeleteAllItems(hList);
 

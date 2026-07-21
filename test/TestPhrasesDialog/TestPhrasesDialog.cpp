@@ -20,7 +20,8 @@
 //
 // 编译:
 //   cl /EHsc /std:c++17 /I include /I WeaselServer TestPhrasesDialog.cpp
-//       /Fe:TestPhrasesDialog.exe user32.lib gdi32.lib comctl32.lib advapi32.lib
+//       /Fe:TestPhrasesDialog.exe user32.lib gdi32.lib comctl32.lib
+//       advapi32.lib
 
 #include <cassert>
 #include <cstdio>
@@ -54,28 +55,30 @@ static void MockInject(const std::wstring& text) {
 // ===== helpers =====
 
 static std::string ToNarrow(const std::wstring& w) {
-  if (w.empty()) return "";
-  int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(),
-                                 static_cast<int>(w.size()), nullptr, 0,
-                                 nullptr, nullptr);
+  if (w.empty())
+    return "";
+  int len =
+      WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()),
+                          nullptr, 0, nullptr, nullptr);
   std::string r(len, 0);
-  WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()),
-                      &r[0], len, nullptr, nullptr);
+  WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), &r[0],
+                      len, nullptr, nullptr);
   return r;
 }
 
 static bool WriteUtf8(const std::wstring& path, const std::wstring& content) {
   std::ofstream f(path, std::ios::binary);
-  if (!f) return false;
+  if (!f)
+    return false;
   f.write("\xEF\xBB\xBF", 3);
   int len = WideCharToMultiByte(CP_UTF8, 0, content.c_str(),
-                                 static_cast<int>(content.size()), nullptr, 0,
-                                 nullptr, nullptr);
+                                static_cast<int>(content.size()), nullptr, 0,
+                                nullptr, nullptr);
   if (len > 0) {
     std::string buf(len, 0);
     WideCharToMultiByte(CP_UTF8, 0, content.c_str(),
-                         static_cast<int>(content.size()), &buf[0], len, nullptr,
-                         nullptr);
+                        static_cast<int>(content.size()), &buf[0], len, nullptr,
+                        nullptr);
     f.write(buf.c_str(), len);
   }
   return f.good();
@@ -84,16 +87,15 @@ static bool WriteUtf8(const std::wstring& path, const std::wstring& content) {
 static std::wstring ReadFileW(const std::wstring& path) {
   std::ifstream f(path, std::ios::binary);
   std::string content((std::istreambuf_iterator<char>(f)),
-                       std::istreambuf_iterator<char>());
-  if (content.size() >= 3 &&
-      (unsigned char)content[0] == 0xEF &&
-      (unsigned char)content[1] == 0xBB &&
-      (unsigned char)content[2] == 0xBF) {
+                      std::istreambuf_iterator<char>());
+  if (content.size() >= 3 && (unsigned char)content[0] == 0xEF &&
+      (unsigned char)content[1] == 0xBB && (unsigned char)content[2] == 0xBF) {
     content = content.substr(3);
   }
-  if (content.empty()) return L"";
+  if (content.empty())
+    return L"";
   int wlen = MultiByteToWideChar(CP_UTF8, 0, content.c_str(),
-                                  static_cast<int>(content.size()), nullptr, 0);
+                                 static_cast<int>(content.size()), nullptr, 0);
   std::wstring r(wlen, 0);
   MultiByteToWideChar(CP_UTF8, 0, content.c_str(),
                       static_cast<int>(content.size()), &r[0], wlen);
@@ -105,26 +107,26 @@ static std::wstring ReadFileW(const std::wstring& path) {
 static int g_passed = 0;
 static int g_failed = 0;
 
-#define CHECK(desc, cond)                                            \
-  do {                                                               \
-    if (cond) {                                                      \
-      std::cout << "  PASS: " << desc << std::endl;                  \
-      ++g_passed;                                                    \
-    } else {                                                         \
-      std::cout << "  FAIL: " << desc << std::endl;                  \
-      ++g_failed;                                                    \
-    }                                                                \
+#define CHECK(desc, cond)                           \
+  do {                                              \
+    if (cond) {                                     \
+      std::cout << "  PASS: " << desc << std::endl; \
+      ++g_passed;                                   \
+    } else {                                        \
+      std::cout << "  FAIL: " << desc << std::endl; \
+      ++g_failed;                                   \
+    }                                               \
   } while (0)
 
-#define CHECK_EQ(desc, a, b)                                         \
-  do {                                                               \
-    if ((a) == (b)) {                                                \
-      std::cout << "  PASS: " << desc << std::endl;                  \
-      ++g_passed;                                                    \
-    } else {                                                         \
-      std::cout << "  FAIL: " << desc << std::endl;                  \
-      ++g_failed;                                                    \
-    }                                                                \
+#define CHECK_EQ(desc, a, b)                        \
+  do {                                              \
+    if ((a) == (b)) {                               \
+      std::cout << "  PASS: " << desc << std::endl; \
+      ++g_passed;                                   \
+    } else {                                        \
+      std::cout << "  FAIL: " << desc << std::endl; \
+      ++g_failed;                                   \
+    }                                               \
   } while (0)
 
 // Test 1: YAML parser — 5 phrases (单 text 字段,v0.19.0.32 简化)
@@ -135,8 +137,8 @@ static void TestYamlParse5Phrases() {
   std::wstring fixture;
   fixture += L"# test\n";
   fixture += L"phrases:\n";
-  fixture += L"  - text: \"\x4f60\x597d\"\n";            // 你好
-  fixture += L"  - text: \"\x8c22\x8c22\"\n";            // 谢谢
+  fixture += L"  - text: \"\x4f60\x597d\"\n";  // 你好
+  fixture += L"  - text: \"\x8c22\x8c22\"\n";  // 谢谢
   fixture += L"  - text: \"Hello\"\n";
   fixture += L"  - text: \"\x6d4b\x8bd5\x77ed\x8bed\"\n";  // 测试短语
   fixture += L"  - text: \"123\"\n";
@@ -148,8 +150,10 @@ static void TestYamlParse5Phrases() {
   CHECK_EQ("5 phrases loaded", out.size(), size_t(5));
 
   if (out.size() == 5) {
-    CHECK_EQ("phrase 0 text", ToNarrow(out[0].text), std::string("\xe4\xbd\xa0\xe5\xa5\xbd"));
-    CHECK_EQ("phrase 1 text", ToNarrow(out[1].text), std::string("\xe8\xb0\xa2\xe8\xb0\xa2"));
+    CHECK_EQ("phrase 0 text", ToNarrow(out[0].text),
+             std::string("\xe4\xbd\xa0\xe5\xa5\xbd"));
+    CHECK_EQ("phrase 1 text", ToNarrow(out[1].text),
+             std::string("\xe8\xb0\xa2\xe8\xb0\xa2"));
     CHECK_EQ("phrase 2 text", ToNarrow(out[2].text), std::string("Hello"));
   }
 
@@ -158,14 +162,15 @@ static void TestYamlParse5Phrases() {
 
 // Test 2: YAML 兼容旧 text/category (load 忽略 category,只读 text)
 static void TestYamlCompatOldTextCategory() {
-  std::cout << "\n[Test 2] YAML compat — 旧 text/category 兼容 (load 忽略 category)"
-            << std::endl;
+  std::cout
+      << "\n[Test 2] YAML compat — 旧 text/category 兼容 (load 忽略 category)"
+      << std::endl;
 
   const std::wstring tmpPath = L"test_phrases_compat.yaml";
   std::wstring fixture;
   fixture += L"# old format\n";
   fixture += L"phrases:\n";
-  fixture += L"  - text: \"\x4f60\x597d\"\n";  // 你好
+  fixture += L"  - text: \"\x4f60\x597d\"\n";      // 你好
   fixture += L"    category: \"\x5de5\x4f5c\"\n";  // 工作
   fixture += L"  - text: \"Hello\"\n";
   fixture += L"    category: \"\"\n";
@@ -178,7 +183,8 @@ static void TestYamlCompatOldTextCategory() {
 
   if (out.size() == 2) {
     // v0.19.0.32: Phrase struct 已删 category 字段,只读 text
-    CHECK_EQ("phrase 0 text", ToNarrow(out[0].text), std::string("\xe4\xbd\xa0\xe5\xa5\xbd"));
+    CHECK_EQ("phrase 0 text", ToNarrow(out[0].text),
+             std::string("\xe4\xbd\xa0\xe5\xa5\xbd"));
     CHECK_EQ("phrase 1 text", ToNarrow(out[1].text), std::string("Hello"));
   }
 
@@ -193,7 +199,8 @@ static void TestYamlParseFailFallback() {
   bool ok = PhrasesDialog::LoadPhrases(L"nonexistent_file_12345.yaml", out);
   CHECK("LoadPhrases returns false on missing file", !ok);
   CHECK_EQ("out preserved (size)", out.size(), size_t(1));
-  CHECK_EQ("out preserved (text)", ToNarrow(out[0].text), std::string("preserved"));
+  CHECK_EQ("out preserved (text)", ToNarrow(out[0].text),
+           std::string("preserved"));
 }
 
 // Test 4: List populate — 5 phrases → 5 items
@@ -208,12 +215,12 @@ static void TestListPopulate5Phrases() {
   v.push_back({L"b2"});
 
   // v0.19.0.32: ListView 替代 TreeView
-  HWND hList = CreateWindowExW(0, WC_LISTVIEWW, L"",
-                               WS_CHILD, 0, 0, 200, 200,
-                               HWND_MESSAGE, nullptr, GetModuleHandle(nullptr),
-                               nullptr);
+  HWND hList =
+      CreateWindowExW(0, WC_LISTVIEWW, L"", WS_CHILD, 0, 0, 200, 200,
+                      HWND_MESSAGE, nullptr, GetModuleHandle(nullptr), nullptr);
   CHECK("CreateWindowEx listview succeeded", hList != nullptr);
-  if (!hList) return;
+  if (!hList)
+    return;
 
   // ListView 必须加 column 才能 InsertItem
   LVCOLUMNW col = {};
@@ -243,7 +250,8 @@ static void TestSendInputMock() {
   CHECK_EQ("2 records", g_injected.size(), size_t(2));
   if (g_injected.size() == 2) {
     CHECK_EQ("record 0 text", g_injected[0].text, std::wstring(L"hello"));
-    CHECK_EQ("record 1 text", g_injected[1].text, std::wstring(L"\x4f60\x597d"));
+    CHECK_EQ("record 1 text", g_injected[1].text,
+             std::wstring(L"\x4f60\x597d"));
   }
 
   // unicode codepoint
@@ -280,7 +288,8 @@ static void TestAddAndSave() {
   CHECK("Reload ok", ok2);
   CHECK_EQ("reload size", reloaded.size(), size_t(2));
   if (reloaded.size() == 2) {
-    CHECK_EQ("reload [1].text", ToNarrow(reloaded[1].text), std::string("newphrase"));
+    CHECK_EQ("reload [1].text", ToNarrow(reloaded[1].text),
+             std::string("newphrase"));
   }
 
   std::remove(ToNarrow(path).c_str());
@@ -300,7 +309,8 @@ static void TestEdit() {
   const std::wstring path = L"test_phrases_edit.yaml";
   CHECK("SavePhrases ok", PhrasesDialog::SavePhrases(path, v));
   auto content = ReadFileW(path);
-  CHECK("file contains 'edited'", content.find(L"edited") != std::wstring::npos);
+  CHECK("file contains 'edited'",
+        content.find(L"edited") != std::wstring::npos);
 
   std::remove(ToNarrow(path).c_str());
 }
@@ -371,14 +381,16 @@ static void TestFlushSave() {
 
 // Test 11: Show() 创建新控件 (s_hInput + s_hList + 4 buttons,无 inline-edit)
 static void TestShowCreatesNewControls() {
-  std::cout << "\n[Test 11] Show() 创建新控件 (顶部 input + ListView + 4 buttons)"
-            << std::endl;
+  std::cout
+      << "\n[Test 11] Show() 创建新控件 (顶部 input + ListView + 4 buttons)"
+      << std::endl;
   PhrasesDialog::SetYamlPath(L"");
   PhrasesDialog::Show();
   HWND hwnd = PhrasesDialog::s_hwnd;
   CHECK("11.1: Show() 创建 s_hwnd", hwnd != nullptr && IsWindow(hwnd));
-  CHECK("11.2: s_hInput 创建 (顶部 input)",
-        PhrasesDialog::s_hInput != nullptr && IsWindow(PhrasesDialog::s_hInput));
+  CHECK(
+      "11.2: s_hInput 创建 (顶部 input)",
+      PhrasesDialog::s_hInput != nullptr && IsWindow(PhrasesDialog::s_hInput));
   CHECK("11.3: s_hBtnAddTop 创建 (顶部 Add 按钮)",
         PhrasesDialog::s_hBtnAddTop != nullptr);
   CHECK("11.4: s_hList 创建 (ListView)",
@@ -400,8 +412,10 @@ static void TestShowCreatesNewControls() {
   colProbe.pszText = colText;
   colProbe.cchTextMax = 64;
   BOOL colOk = ListView_GetColumn(hList, 0, &colProbe);
-  CHECK("11.9: ListView column 0 exists (P2 polish: header text 空, 避免跟 row '短语' 混淆)",
-        colOk);
+  CHECK(
+      "11.9: ListView column 0 exists (P2 polish: header text 空, 避免跟 row "
+      "'短语' 混淆)",
+      colOk);
 
   PhrasesDialog::Hide();
 }
@@ -410,7 +424,8 @@ static void TestShowCreatesNewControls() {
 // 验证: SetWindowText(s_hInput, "hello") + WM_COMMAND(ID_BTN_ADD_TOP)
 //       → m_phrases.push_back + PopulateList item +1
 static void TestUserFlow_AddPhrase() {
-  std::cout << "\n[Test 12] User flow: 顶部 input 录入 + AddTop 添加" << std::endl;
+  std::cout << "\n[Test 12] User flow: 顶部 input 录入 + AddTop 添加"
+            << std::endl;
   PhrasesDialog::SetYamlPath(L"");
   PhrasesDialog::Show();
   HWND hwnd = PhrasesDialog::s_hwnd;
@@ -418,7 +433,8 @@ static void TestUserFlow_AddPhrase() {
   // 初始: 0 phrases
   PhrasesDialog::MutablePhrases().clear();
   PhrasesDialog::PopulateListCount(PhrasesDialog::s_hList);
-  CHECK_EQ("12.1: initial list empty", ListView_GetItemCount(PhrasesDialog::s_hList), 0);
+  CHECK_EQ("12.1: initial list empty",
+           ListView_GetItemCount(PhrasesDialog::s_hList), 0);
 
   // user 录入 "hello" 到顶部 input
   SetWindowTextW(PhrasesDialog::s_hInput, L"hello");
@@ -426,7 +442,8 @@ static void TestUserFlow_AddPhrase() {
   SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(1011, BN_CLICKED), 0);
   // ID_BTN_ADD_TOP = 1011 (cpp:90)
 
-  CHECK_EQ("12.2: m_phrases size = 1", PhrasesDialog::Phrases().size(), size_t(1));
+  CHECK_EQ("12.2: m_phrases size = 1", PhrasesDialog::Phrases().size(),
+           size_t(1));
   CHECK_EQ("12.3: phrase text = hello",
            ToNarrow(PhrasesDialog::Phrases()[0].text), std::string("hello"));
   CHECK_EQ("12.4: ListView item count = 1",
@@ -435,14 +452,16 @@ static void TestUserFlow_AddPhrase() {
   // 验证 input 已清空 (方便连续添加)
   wchar_t buf[256] = {};
   GetWindowTextW(PhrasesDialog::s_hInput, buf, 256);
-  CHECK_EQ("12.5: input cleared after add", std::wstring(buf), std::wstring(L""));
+  CHECK_EQ("12.5: input cleared after add", std::wstring(buf),
+           std::wstring(L""));
 
   PhrasesDialog::Hide();
 }
 
 // Test 13: user flow — 选中 list item → s_hInput 自动 fill
 static void TestUserFlow_SelectFillsInput() {
-  std::cout << "\n[Test 13] User flow: 选中 list item → s_hInput 自动 fill" << std::endl;
+  std::cout << "\n[Test 13] User flow: 选中 list item → s_hInput 自动 fill"
+            << std::endl;
   PhrasesDialog::SetYamlPath(L"");
   PhrasesDialog::Show();
   HWND hwnd = PhrasesDialog::s_hwnd;
@@ -457,22 +476,24 @@ static void TestUserFlow_SelectFillsInput() {
   // 模拟点 list item[0] → 走 NM_CLICK / LVN_ITEMCHANGED 路径
   // 用 SetItemState 直接设 selected + 触发 LVN_ITEMCHANGED
   // ListView_SetItemState 设 selected state
-  ListView_SetItemState(PhrasesDialog::s_hList, 0, LVIS_SELECTED, LVIS_SELECTED);
+  ListView_SetItemState(PhrasesDialog::s_hList, 0, LVIS_SELECTED,
+                        LVIS_SELECTED);
 
   // 验证 m_selectedIndex 已设 (OnNotify LVN_ITEMCHANGED handler)
   CHECK_EQ("13.1: m_selectedIndex = 0", PhrasesDialog::m_selectedIndex, 0);
   // 验证 s_hInput 自动 fill
   wchar_t buf[256] = {};
   GetWindowTextW(PhrasesDialog::s_hInput, buf, 256);
-  CHECK_EQ("13.2: s_hInput filled with 'alpha'",
-           std::wstring(buf), std::wstring(L"alpha"));
+  CHECK_EQ("13.2: s_hInput filled with 'alpha'", std::wstring(buf),
+           std::wstring(L"alpha"));
 
   PhrasesDialog::Hide();
 }
 
 // Test 14: user flow — 改 input + Edit button → m_phrases update
 static void TestUserFlow_EditPhrase() {
-  std::cout << "\n[Test 14] User flow: 改 input + Edit 按钮 → m_phrases 更新" << std::endl;
+  std::cout << "\n[Test 14] User flow: 改 input + Edit 按钮 → m_phrases 更新"
+            << std::endl;
   PhrasesDialog::SetYamlPath(L"");
   PhrasesDialog::Show();
   HWND hwnd = PhrasesDialog::s_hwnd;
@@ -512,15 +533,16 @@ static void TestUserFlow_DeletePhrase() {
   // dispatch ID_BTN_DEL = 1003
   SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(1003, BN_CLICKED), 0);
 
-  CHECK_EQ("15.1: m_phrases size = 2", PhrasesDialog::Phrases().size(), size_t(2));
+  CHECK_EQ("15.1: m_phrases size = 2", PhrasesDialog::Phrases().size(),
+           size_t(2));
   CHECK_EQ("15.2: m_phrases[0].text = p1",
            ToNarrow(PhrasesDialog::Phrases()[0].text), std::string("p1"));
   CHECK_EQ("15.3: m_phrases[1].text = p3",
            ToNarrow(PhrasesDialog::Phrases()[1].text), std::string("p3"));
   CHECK_EQ("15.4: ListView item count = 2",
            ListView_GetItemCount(PhrasesDialog::s_hList), 2);
-  CHECK_EQ("15.5: m_selectedIndex reset to -1",
-           PhrasesDialog::m_selectedIndex, -1);
+  CHECK_EQ("15.5: m_selectedIndex reset to -1", PhrasesDialog::m_selectedIndex,
+           -1);
 
   PhrasesDialog::Hide();
 }
@@ -535,8 +557,7 @@ static void TestUserFlow_CancelHides() {
 
   // dispatch ID_BTN_CANCEL = 1004
   SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(1004, BN_CLICKED), 0);
-  CHECK("16.2: Hide() 后 s_hwnd == nullptr",
-        PhrasesDialog::s_hwnd == nullptr);
+  CHECK("16.2: Hide() 后 s_hwnd == nullptr", PhrasesDialog::s_hwnd == nullptr);
   CHECK("16.3: state == State_Hidden",
         PhrasesDialog::GetState() == PhrasesDialog::State_Hidden);
 }
@@ -562,19 +583,20 @@ static void TestStateMachine() {
 }
 
 // Test 19: MoveSelection 直接调用 — 验证 wrap-around 行为
-// (Phase D v0.19.0.36 P2 follow-up: fa196049 ship 时漏 MoveSelection definition,
+// (Phase D v0.19.0.36 P2 follow-up: fa196049 ship 时漏 MoveSelection
+// definition,
 //   5068922 补了 link。但 unit 层没断言 wrap-around 行为 — 现补)
 // 关键差异: ListView 默认 WndProc 在边界不 wrap (停在 0 或 last),
 //   PhrasesDialog::MoveSelection 提供 wrap-around, 这是 Phase D 单独加的价值。
 //   改 .h 让 MoveSelection public (testability 配套) 走 direct call 测。
 static void TestMoveSelection() {
-  std::cout << "\n[Test 19] MoveSelection 行为 — ↑/↓ + wrap-around" << std::endl;
+  std::cout << "\n[Test 19] MoveSelection 行为 — ↑/↓ + wrap-around"
+            << std::endl;
   // 1. Show() 创 s_hwnd + s_hList (OnCreate 已加 column)
   PhrasesDialog::SetYamlPath(L"");
   PhrasesDialog::Show();
   HWND hList = PhrasesDialog::s_hList;
-  CHECK("19.0: s_hList 已由 Show() 创建",
-        hList != nullptr && IsWindow(hList));
+  CHECK("19.0: s_hList 已由 Show() 创建", hList != nullptr && IsWindow(hList));
 
   // 2. 注入 5 phrases (跟 Test 4 同样路径)
   PhrasesDialog::MutablePhrases().clear();
@@ -590,8 +612,7 @@ static void TestMoveSelection() {
   CHECK_EQ("19.2: ListView 实际有 5 项", count, 5);
 
   // 3. 强制设初始 selected = 0 (避免其他 test 状态污染)
-  ListView_SetItemState(hList, 0,
-                        LVIS_SELECTED | LVIS_FOCUSED,
+  ListView_SetItemState(hList, 0, LVIS_SELECTED | LVIS_FOCUSED,
                         LVIS_SELECTED | LVIS_FOCUSED);
   int cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
   CHECK("19.3: 强制 init selected == 0 (ListView state)", cur == 0);
@@ -606,11 +627,11 @@ static void TestMoveSelection() {
   cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
   CHECK("19.5: MoveSelection(-1): selected 1 → 0", cur == 0);
 
-  // 6. 在 0 按 ↑ → wrap → count-1 (ListView 默认 WndProc 不 wrap, 这里是 Phase D 单独提供)
+  // 6. 在 0 按 ↑ → wrap → count-1 (ListView 默认 WndProc 不 wrap, 这里是 Phase
+  // D 单独提供)
   PhrasesDialog::MoveSelection(hList, -1);
   cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
-  CHECK("19.6: MoveSelection(-1) at 0: wrap → count-1",
-        cur == count - 1);
+  CHECK("19.6: MoveSelection(-1) at 0: wrap → count-1", cur == count - 1);
 
   // 7. 在 last 按 ↓ → wrap → 0
   PhrasesDialog::MoveSelection(hList, +1);
@@ -618,8 +639,7 @@ static void TestMoveSelection() {
   CHECK("19.7: MoveSelection(+1) at last: wrap → 0", cur == 0);
 
   // 8. delta=+3: 0 → 3 (跳多个)
-  ListView_SetItemState(hList, 0,
-                        LVIS_SELECTED | LVIS_FOCUSED,
+  ListView_SetItemState(hList, 0, LVIS_SELECTED | LVIS_FOCUSED,
                         LVIS_SELECTED | LVIS_FOCUSED);
   PhrasesDialog::MoveSelection(hList, +3);
   cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
@@ -630,15 +650,15 @@ static void TestMoveSelection() {
 
 // Test 20: ListView column 0 header text 空 (避免跟下面 row "短语" 视觉混淆)
 //   用户装机反馈: "在界面短语上面,有一个多余的'短语', 容易和下面的短语项混淆"
-//   修法: column header text 从 "短语" 改 "" (空), ListView 仍 1 列 (InsertItem 需 ≥1 列),
-//   但视觉上 header 不显示文字。
+//   修法: column header text 从 "短语" 改 "" (空), ListView 仍 1 列 (InsertItem
+//   需 ≥1 列), 但视觉上 header 不显示文字。
 static void TestColumnHeaderEmpty() {
-  std::cout << "\n[Test 20] ListView column 0 header text 空 (P2 polish)" << std::endl;
+  std::cout << "\n[Test 20] ListView column 0 header text 空 (P2 polish)"
+            << std::endl;
   PhrasesDialog::SetYamlPath(L"");
   PhrasesDialog::Show();
   HWND hList = PhrasesDialog::s_hList;
-  CHECK("20.0: s_hList 已由 Show() 创建",
-        hList != nullptr && IsWindow(hList));
+  CHECK("20.0: s_hList 已由 Show() 创建", hList != nullptr && IsWindow(hList));
 
   LVCOLUMNW col = {};
   col.mask = LVCF_TEXT | LVCF_WIDTH;
@@ -658,7 +678,8 @@ static void TestColumnHeaderEmpty() {
 //   真 root cause (Phase 1 复盘):
 //     - ListView 默认发 NM_DBLCLK (Windows SDK 不需 LVS_NOTIFY flag)
 //     - OnNotify NM_DBLCLK handler 调 InjectText() + Hide()
-//     - **bug**: InjectText() 在 Hide() 之前 — SendInput 发到 modal dialog 自身,
+//     - **bug**: InjectText() 在 Hide() 之前 — SendInput 发到 modal dialog
+//     自身,
 //       文本没上屏到原 app (foreground 还在 PhrasesDialog)
 //   修法: OnNotify NM_DBLCLK handler 顺序对调 — 先 Hide() 后 InjectText()
 //   测法: 装 MockInject + 发 WM_NOTIFY(NM_DBLCLK) → mock inject 调 + text 正确
@@ -679,9 +700,9 @@ static void TestNMDblClkInjects() {
   int inserted = PhrasesDialog::PopulateListCount(hList);
   CHECK_EQ("21.1: PopulateListCount insert 3", inserted, 3);
 
-  // 显式 set selected (不依赖 OnCreate 默认 — sandbox LVN_ITEMCHANGED 异步 race)
-  ListView_SetItemState(hList, 0,
-                        LVIS_SELECTED | LVIS_FOCUSED,
+  // 显式 set selected (不依赖 OnCreate 默认 — sandbox LVN_ITEMCHANGED 异步
+  // race)
+  ListView_SetItemState(hList, 0, LVIS_SELECTED | LVIS_FOCUSED,
                         LVIS_SELECTED | LVIS_FOCUSED);
   int cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
   CHECK("21.2: 强制 init selected == 0", cur == 0);
@@ -699,13 +720,16 @@ static void TestNMDblClkInjects() {
 
   CHECK_EQ("21.3: NM_DBLCLK inject 1 record", g_injected.size(), size_t(1));
   if (g_injected.size() == 1) {
-    CHECK_EQ("21.4: injected text = 'first'",
-             g_injected[0].text, std::wstring(L"first"));
+    CHECK_EQ("21.4: injected text = 'first'", g_injected[0].text,
+             std::wstring(L"first"));
   }
-  // 真 root cause 验证: Hide() 必须在 InjectText() 之前 (SendInput 发到 foreground = 原 app)
-  // 验法: NM_DBLCLK handler 跑后 s_hwnd 应是 nullptr (Hide 销毁了)
-  CHECK("21.5: NM_DBLCLK handler 销毁 dialog (s_hwnd == nullptr, InjectText 跑时 foreground 是原 app)",
-        PhrasesDialog::s_hwnd == nullptr);
+  // 真 root cause 验证: Hide() 必须在 InjectText() 之前 (SendInput 发到
+  // foreground = 原 app) 验法: NM_DBLCLK handler 跑后 s_hwnd 应是 nullptr (Hide
+  // 销毁了)
+  CHECK(
+      "21.5: NM_DBLCLK handler 销毁 dialog (s_hwnd == nullptr, InjectText 跑时 "
+      "foreground 是原 app)",
+      PhrasesDialog::s_hwnd == nullptr);
 
   PhrasesDialog::SetInjectFn(&PhrasesDialog::DefaultInject);
   // 不调 Hide — 已销毁
@@ -713,9 +737,10 @@ static void TestNMDblClkInjects() {
 
 // Test 22: OnNotify NM_RETURN → inject 选中 text
 //   用户装机反馈: "仍然无法通过...回车上屏"
-//   真 root cause: 没 NM_RETURN handler — Enter 焦点 ListView + 有 selected item 时
-//   ListView 默认发 NM_RETURN 给 parent, 但 OnNotify 没 case NM_RETURN 处理, 默认 return 0, 不 inject
-//   修法: OnNotify 加 case NM_RETURN — 跟 NM_DBLCLK 同路径 (Hide 优先, 后 InjectText)
+//   真 root cause: 没 NM_RETURN handler — Enter 焦点 ListView + 有 selected
+//   item 时 ListView 默认发 NM_RETURN 给 parent, 但 OnNotify 没 case NM_RETURN
+//   处理, 默认 return 0, 不 inject 修法: OnNotify 加 case NM_RETURN — 跟
+//   NM_DBLCLK 同路径 (Hide 优先, 后 InjectText)
 static void TestNMReturnInjects() {
   std::cout << "\n[Test 22] OnNotify NM_RETURN → inject 选中 text" << std::endl;
   PhrasesDialog::SetYamlPath(L"");
@@ -734,8 +759,7 @@ static void TestNMReturnInjects() {
   CHECK_EQ("22.1: PopulateListCount insert 3", inserted, 3);
 
   // 显式 set selected (同 Test 21)
-  ListView_SetItemState(hList, 0,
-                        LVIS_SELECTED | LVIS_FOCUSED,
+  ListView_SetItemState(hList, 0, LVIS_SELECTED | LVIS_FOCUSED,
                         LVIS_SELECTED | LVIS_FOCUSED);
   int cur = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
   CHECK("22.2: 强制 init selected == 0", cur == 0);
@@ -752,8 +776,8 @@ static void TestNMReturnInjects() {
 
   CHECK_EQ("22.3: NM_RETURN inject 1 record", g_injected.size(), size_t(1));
   if (g_injected.size() == 1) {
-    CHECK_EQ("22.4: injected text = 'first'",
-             g_injected[0].text, std::wstring(L"first"));
+    CHECK_EQ("22.4: injected text = 'first'", g_injected[0].text,
+             std::wstring(L"first"));
   }
   CHECK("22.5: NM_RETURN handler 销毁 dialog (s_hwnd == nullptr)",
         PhrasesDialog::s_hwnd == nullptr);
@@ -761,15 +785,17 @@ static void TestNMReturnInjects() {
   PhrasesDialog::SetInjectFn(&PhrasesDialog::DefaultInject);
 }
 
-// v0.19.0.39 (Phase F fix Bug 1): Show() 创建路径必须调 AllowSetForegroundWindow + SetForegroundWindow.
-//   真 root cause (装机反馈): QuickPanel button 启动 PhrasesDialog 时, QuickPanelDialog 仍是
-//   foreground, 键盘事件 (↑↓/Enter/Esc) 发到 QuickPanel, 不传 PhrasesDialog (双击能 work 是因为
-//   WM_LBUTTONDBLCLK 是 mouse event, mouse 直接命中 ListView 触发). Alt+. 路径 work (hotkey 触发
-//   自动让 WeaselServer 进 foreground).
-//   修法 (Option C): AllowSetForegroundWindow 拿抢 foreground 锁 (Vista+ lock), SetForegroundWindow
-//   强制 foreground 让 dialog 收 keyboard events. 配套: WeaselServerApp.cpp onPhrases lambda 先
-//   Hide QuickPanel 释放 foreground.
-//   Test 23 通过 mock s_setForegroundFn / s_allowSetForegroundFn 计数, 验证 Show() 调用过.
+// v0.19.0.39 (Phase F fix Bug 1): Show() 创建路径必须调
+// AllowSetForegroundWindow + SetForegroundWindow.
+//   真 root cause (装机反馈): QuickPanel button 启动 PhrasesDialog 时,
+//   QuickPanelDialog 仍是 foreground, 键盘事件 (↑↓/Enter/Esc) 发到 QuickPanel,
+//   不传 PhrasesDialog (双击能 work 是因为 WM_LBUTTONDBLCLK 是 mouse event,
+//   mouse 直接命中 ListView 触发). Alt+. 路径 work (hotkey 触发 自动让
+//   WeaselServer 进 foreground). 修法 (Option C): AllowSetForegroundWindow 拿抢
+//   foreground 锁 (Vista+ lock), SetForegroundWindow 强制 foreground 让 dialog
+//   收 keyboard events. 配套: WeaselServerApp.cpp onPhrases lambda 先 Hide
+//   QuickPanel 释放 foreground. Test 23 通过 mock s_setForegroundFn /
+//   s_allowSetForegroundFn 计数, 验证 Show() 调用过.
 static int g_setForegroundCount = 0;
 static HWND g_lastSetForegroundHwnd = nullptr;
 static DWORD g_lastAllowSetForegroundPid = 0;
@@ -786,7 +812,9 @@ static BOOL WINAPI MockAllowSetForegroundWindow(DWORD pid) {
 }
 
 static void TestForegroundApiCalled() {
-  std::cout << "\n[Test 23] Show() 创建路径调 SetForegroundWindow + AllowSetForegroundWindow" << std::endl;
+  std::cout << "\n[Test 23] Show() 创建路径调 SetForegroundWindow + "
+               "AllowSetForegroundWindow"
+            << std::endl;
   PhrasesDialog::SetYamlPath(L"");
 
   // reset mock state
@@ -806,7 +834,8 @@ static void TestForegroundApiCalled() {
   CHECK("23.1: AllowSetForegroundWindow 调过 (pid=ASFW_ANY)",
         g_lastAllowSetForegroundPid == (DWORD)ASFW_ANY);
   CHECK("23.2: SetForegroundWindow 调过 1 次", g_setForegroundCount == 1);
-  CHECK("23.3: SetForegroundWindow 目标 = s_hwnd", g_lastSetForegroundHwnd == hwnd);
+  CHECK("23.3: SetForegroundWindow 目标 = s_hwnd",
+        g_lastSetForegroundHwnd == hwnd);
 
   // 还原默认 OS API
   PhrasesDialog::SetSetForegroundFn(&::SetForegroundWindow);
@@ -817,9 +846,10 @@ static void TestForegroundApiCalled() {
 }
 
 // v0.19.0.39 (Phase F fix Bug 3): WM_KEYDOWN VK_ESCAPE → Hide()
-//   真 root cause (装机反馈): Esc handler 已有 (OnKeyDown L675), 但只在 keyboard focus 在
-//   dialog 内 work. Phase F 同时修 foreground lock 让 Esc 能到 dialog.
-//   Test 24 验证 WndProc dispatch WM_KEYDOWN VK_ESCAPE → Hide 销毁 dialog (s_hwnd=nullptr).
+//   真 root cause (装机反馈): Esc handler 已有 (OnKeyDown L675), 但只在
+//   keyboard focus 在 dialog 内 work. Phase F 同时修 foreground lock 让 Esc
+//   能到 dialog. Test 24 验证 WndProc dispatch WM_KEYDOWN VK_ESCAPE → Hide 销毁
+//   dialog (s_hwnd=nullptr).
 static void TestEscKeyHidesDialog() {
   std::cout << "\n[Test 24] WM_KEYDOWN VK_ESCAPE → Hide" << std::endl;
   PhrasesDialog::SetYamlPath(L"");
@@ -835,10 +865,45 @@ static void TestEscKeyHidesDialog() {
         PhrasesDialog::s_hwnd == nullptr);
 }
 
+// v0.19.0.40 (Phase F Bug 3 续修): OnNotify LVN_KEYDOWN VK_ESCAPE → Hide
+//   真 root cause (装机反馈 v0.19.0.39): Test 24 false-positive (直接 dispatch
+//   WM_KEYDOWN 到 dialog WndProc, 不模拟 ListView 焦点 + LVN_KEYDOWN 路径).
+//   ListView 焦点时按 Esc → ListView 自身不处理 → 转 LVN_KEYDOWN 给 parent
+//   (PhrasesDialog WndProc 通过 WM_NOTIFY). Test 25 模拟完整路径:
+//   1) Show() 后 ListView 有焦点 (OnCreate line ~568 SetFocus(s_hList))
+//   2) SendMessage WM_NOTIFY + LVN_KEYDOWN + VK_ESCAPE → 验证 Hide called
+static void TestLVNKeyDownEscapeHides() {
+  std::cout << "\n[Test 25] OnNotify LVN_KEYDOWN VK_ESCAPE → Hide" << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hList = PhrasesDialog::s_hList;
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("25.0: s_hList + s_hwnd 已由 Show() 创建",
+        hList && IsWindow(hList) && hwnd && IsWindow(hwnd));
+
+  // ListView 焦点 (OnCreate 默认设了, 显式 set 一次保险)
+  SetFocus(hList);
+
+  // 构造 NMLVKEYDOWN struct (commctrl.h 提供 NMLVKEYDOWN + LVN_KEYDOWN)
+  NMLVKEYDOWN nmlv = {};
+  nmlv.hdr.hwndFrom = hList;
+  nmlv.hdr.idFrom = (UINT_PTR)1100;  // ID_LIST = 1100 (PhrasesDialog.cpp:84)
+  nmlv.hdr.code = LVN_KEYDOWN;
+  nmlv.wVKey = VK_ESCAPE;
+  nmlv.flags = 0;
+
+  // dispatch WM_NOTIFY → dialog WndProc → OnNotify → case LVN_KEYDOWN → Hide
+  SendMessageW(hwnd, WM_NOTIFY, nmlv.hdr.idFrom, (LPARAM)&nmlv);
+
+  CHECK("25.1: LVN_KEYDOWN VK_ESCAPE → Hide 销毁 dialog (s_hwnd == nullptr)",
+        PhrasesDialog::s_hwnd == nullptr);
+}
+
 }  // namespace test
 
 int main() {
-  std::cout << "spec 044 v0.19.0.32 — PhrasesDialog v3 unit tests (UX redo)" << std::endl;
+  std::cout << "spec 044 v0.19.0.32 — PhrasesDialog v3 unit tests (UX redo)"
+            << std::endl;
   std::cout << "=================================================" << std::endl;
 
   // YAML I/O
@@ -885,7 +950,11 @@ int main() {
   test::TestForegroundApiCalled();
   test::TestEscKeyHidesDialog();
 
-  std::cout << "\n=================================================" << std::endl;
+  // v0.19.0.40 (Phase F Bug 3 续修: LVN_KEYDOWN 路径 — 真 fix)
+  test::TestLVNKeyDownEscapeHides();
+
+  std::cout << "\n================================================="
+            << std::endl;
   std::cout << "PASSED: " << test::g_passed << "  FAILED: " << test::g_failed
             << std::endl;
   std::cout << "=================================================" << std::endl;
