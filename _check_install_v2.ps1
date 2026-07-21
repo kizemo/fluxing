@@ -52,9 +52,9 @@ Write-Host ""
 # 2. Installed WeaselServer.exe on disk (3 candidate paths)
 # ============================================================
 Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
-$expectedMd5 = '463b3c5927504d19e9627e68ca5852c2'  # v0.19.0.40 binary (Phase F Bug 3 fix — LVN_KEYDOWN handler)
-$expectedInstallerMd5 = '5e977318c38af5a91ae01fc510677c84'  # v0.19.0.40 installer
-$expectedBuildTime = '2026-07-21 08:20:00'  # v0.19.0.40 build (NSIS timestamp)
+$expectedMd5 = 'ceb0ecd055d5f4d48d2f006393456650'  # v0.19.0.41 binary (UI 迭代: DPI 缩放 + resize + drag + 删重复 Add)
+$expectedInstallerMd5 = '7c32a8358b1805d53054a097d8ac96ee'  # v0.19.0.41 installer
+$expectedBuildTime = '2026-07-21 11:01:00'  # v0.19.0.41 build (NSIS timestamp)
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',
@@ -70,7 +70,7 @@ foreach ($p in $paths) {
         $h = (Get-FileHash -Path $p -Algorithm MD5).Hash
         $size = (Get-Item $p).Length
         $mtime = (Get-Item $p).LastWriteTime
-        $match = if ($h -eq $expectedMd5) { '<== MATCHES expected (Phase F Bug 3 fixed)' } else { '<== MISMATCH (old binary or wrong build!)' }
+        $match = if ($h -eq $expectedMd5) { '<== MATCHES expected (v0.19.0.41 UI 迭代)' } else { '<== MISMATCH (old binary or wrong build!)' }
         Write-Host "  $p"
         Write-Host "    md5=$h  size=$size  mtime=$mtime  $match"
     }
@@ -78,7 +78,7 @@ foreach ($p in $paths) {
 if (-not $foundAny) {
     Write-Host "  No WeaselServer.exe found in any of the standard install paths!"
 }
-Write-Host "  Expected: md5=$expectedMd5 (Phase F Bug 3 fixed, build 2026-07-21)"
+Write-Host "  Expected: md5=$expectedMd5 (v0.19.0.41 UI 迭代, build 2026-07-21)"
 Write-Host ""
 
 # 额外扫整个 D:/C: 找所有 WeaselServer.exe (探测多安装)
@@ -186,7 +186,7 @@ Write-Host ""
 # 6. Expected vs actual summary
 # ============================================================
 Write-Host "=== [6] Summary ==="
-Write-Host "  Installer v0.19.0.40 md5 expected: $expectedInstallerMd5"
+Write-Host "  Installer v0.19.0.41 md5 expected: $expectedInstallerMd5"
 Write-Host "  WeaselServer.exe md5 expected:     $expectedMd5 (build $expectedBuildTime)"
 Write-Host "  Module 3 L66 expected keys (admin install OK):"
 Write-Host "    HKLM\SOFTWARE\Microsoft\CTF\KnownClasses = '{A3F4CDED-...}' = 'Fluxing Text Service'"
@@ -200,7 +200,7 @@ Write-Host "    [1] 如果 Running md5 != expected → 跑的仍是老 binary"
 Write-Host "    [2] 如果 Install md5 != expected → 装机没覆盖 (File 失败/lock)"
 Write-Host "    [3] 如果 HKLM InstallDir != [2] path → registry 指向错位置"
 Write-Host "    [4] 如果有 AppHangTransient weasel → 启动挂死"
-Write-Host "    [5] newest file 是 7/21 08:20 → installer 装过; 是更早 → 没覆盖"
+Write-Host "    [5] newest file 是 7/21 11:01 → installer 装过; 是更早 → 没覆盖"
 Write-Host "    [3] Module 3 L66 keys 缺 → installer L66-fix 失效 (C41FEED9 ship 应已无条件写)"
 Write-Host ""
 Write-Host "  Post-mortem copy: 把以上所有输出贴回 Fluxing Claude session"

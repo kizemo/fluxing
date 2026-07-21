@@ -57,7 +57,8 @@ class PhrasesDialog {
 
   // YAML I/O 公开(测试用)
   static bool LoadPhrases(const std::wstring& path, std::vector<Phrase>& out);
-  static bool SavePhrases(const std::wstring& path, const std::vector<Phrase>& data);
+  static bool SavePhrases(const std::wstring& path,
+                          const std::vector<Phrase>& data);
 
   // 默认注入
   static void DefaultInject(const std::wstring& text);
@@ -69,15 +70,17 @@ class PhrasesDialog {
   static int PopulateListCount(HWND hList);
 
   // v0.19.0.39 (Phase F fix): foreground API mock 支持 (Test 23 RED 测试)
-  // 真 root cause (装机反馈 Bug 1 + Bug 3): QuickPanel button 启动 PhrasesDialog 时,
-  //   QuickPanelDialog 仍是 foreground, 键盘事件不传 PhrasesDialog. 修法: Show() 创建路径
-  //   调 AllowSetForegroundWindow + SetForegroundWindow 强制抢 foreground.
-  //   test 可注入 mock 函数指针, 验证调用次数 + 参数 (不真调 OS API).
-  using SetForegroundFn = BOOL (WINAPI*)(HWND);
-  using AllowSetForegroundFn = BOOL (WINAPI*)(DWORD);
+  // 真 root cause (装机反馈 Bug 1 + Bug 3): QuickPanel button 启动
+  // PhrasesDialog 时,
+  //   QuickPanelDialog 仍是 foreground, 键盘事件不传 PhrasesDialog. 修法:
+  //   Show() 创建路径 调 AllowSetForegroundWindow + SetForegroundWindow 强制抢
+  //   foreground. test 可注入 mock 函数指针, 验证调用次数 + 参数 (不真调 OS
+  //   API).
+  using SetForegroundFn = BOOL(WINAPI*)(HWND);
+  using AllowSetForegroundFn = BOOL(WINAPI*)(DWORD);
   static void SetSetForegroundFn(SetForegroundFn fn);
   static void SetAllowSetForegroundFn(AllowSetForegroundFn fn);
-  static SetForegroundFn      s_setForegroundFn;
+  static SetForegroundFn s_setForegroundFn;
   static AllowSetForegroundFn s_allowSetForegroundFn;
 
   // State enum (v0.19.0.32 简化): Hidden / Browsing
@@ -88,24 +91,24 @@ class PhrasesDialog {
   static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
   // ===== Static state =====
-  static HWND   s_hwnd;
-  // v0.19.0.32 UX redo:
+  static HWND s_hwnd;
+  // v0.19.0.32 UX redo → v0.19.0.41 修正:
   // - s_hInput: 顶部单 input (替代 inline-edit + 旧 search box)
-  // - s_hBtnAddTop: 顶部 Add 按钮 (跟 s_hInput 同行右侧)
+  // - s_hBtnAddTop: 顶部 Add 按钮 (跟 s_hInput 同行右侧) — 唯一 Add
   // - s_hList: ListView (替代 TreeView)
-  // - s_hBtnAdd / s_hBtnEdit / s_hBtnDel / s_hBtnCancel: 底部 4 按钮
+  // - s_hBtnEdit / s_hBtnDel / s_hBtnCancel: 底部 3 按钮
+  //   (v0.19.0.41 删 s_hBtnAdd 重复 — 跟 s_hBtnAddTop 功能一样)
   // 删:s_hSearch / s_hTree / s_hStatus / s_hToast / s_hBtnSave /
-  //    s_hEditText / s_hEditCat
-  static HWND   s_hInput;
-  static HWND   s_hBtnAddTop;
-  static HWND   s_hList;
-  static HWND   s_hBtnAdd;
-  static HWND   s_hBtnEdit;
-  static HWND   s_hBtnDel;
-  static HWND   s_hBtnCancel;
+  //    s_hEditText / s_hEditCat / s_hBtnAdd (v0.19.0.41)
+  static HWND s_hInput;
+  static HWND s_hBtnAddTop;
+  static HWND s_hList;
+  static HWND s_hBtnEdit;
+  static HWND s_hBtnDel;
+  static HWND s_hBtnCancel;
 
   static std::wstring s_yamlPath;
-  static InjectFn      s_injectFn;
+  static InjectFn s_injectFn;
 
   // 当前选中 list item 的 m_phrases index;-1 = 无选中
   static int m_selectedIndex;
@@ -124,12 +127,39 @@ class PhrasesDialog {
   static HFONT s_hFontUi;
 
   // 物理几何常量 (跟 v0.19.0.27 一致,但 tree 高度改为 list 高度)
-  static int kListH_phys;        // 物理 list 高度
-  static int kBtnY_phys;         // 物理 button 起点 y
+  // v0.19.0.41: 这些 constexpr 不再被直接使用 (DPI 缩放后), OnCreate 计算
+  // 实际尺寸时用 s_dpiScale 乘。保留作为 base / debug 锚点。
+  static int kListH_phys;  // 物理 list 高度 (DPI-scaled 之后)
+  static int kBtnY_phys;   // 物理 button 起点 y (DPI-scaled 之后)
+
+  // v0.19.0.41 (Bug 2: UI 过小): DPI 缩放因子
+  // GetDpiForWindow(hwnd) 返回当前 dialog 所在 monitor 的 DPI; 96 是 base。
+  // 4K 屏 200% 缩放 → s_dpiScale = 2.0 → 所有物理像素 ×2 (kDialogW 360 → 720)
+  // Default = 1.0 (96 DPI), test 走 default。
+  static double s_dpiScale;
+
+  // v0.19.0.41 (Feature: 长按拖动位置): drag state
+  // s_longPressActive = timer 启动了还没 fire
+  // s_isDragging = timer fired + 鼠标移动 → 进入 drag mode
+  // s_dragOrigin = LBUTTONDOWN 时的鼠标位置 (屏幕坐标)
+  // s_dragWndOrigin = LBUTTONDOWN 时的 window 位置 (屏幕坐标)
+  static bool s_longPressActive;
+  static bool s_isDragging;
+  static POINT s_dragOrigin;
+  static POINT s_dragWndOrigin;
+  static constexpr UINT_PTR kLongPressTimerId = 9001;  // WndProc WM_TIMER
+  static constexpr DWORD kLongPressMs = 500;           // 长按阈值
+
+  // v0.19.0.41 (Feature: 鼠标拖动边界 resize): min/max 物理尺寸 (DPI-scaled)
+  static constexpr int kMinW = 320;
+  static constexpr int kMinH = 400;
+  static constexpr int kMaxW = 1200;
+  static constexpr int kMaxH = 900;
 
   // v0.19.0.36 (Phase D): ListView selected index move helper (delta=-1/+1)
   // v0.19.0.36 (P2 follow-up): 移到 public — unit test (Test 19) 需直接断言
-  //   wrap-around 行为 (ListView 默认 WndProc 不 wrap, 这是 MoveSelection 单独提供)
+  //   wrap-around 行为 (ListView 默认 WndProc 不 wrap, 这是 MoveSelection
+  //   单独提供)
   static void MoveSelection(HWND hList, int delta);
 
  private:
@@ -146,9 +176,28 @@ class PhrasesDialog {
   static LRESULT OnCommand(HWND, WPARAM);
   static LRESULT OnCtlColor(HWND, WPARAM, LPARAM);
 
+  // v0.19.0.41 (Feature: resize + long-press drag):
+  // - OnNcHitTest: 让 chrome 区域 (非子控件) 报 HTCAPTION 给 Windows
+  //   (用于 cursor 反馈, 实际 drag 由 long press 触发)
+  // - OnLButtonDown/Up/MouseMove: 长按 drag state machine
+  // - OnTimer: 长按 500ms 后 fire → 进入 drag mode
+  // - OnGetMinMaxInfo: 限制 resize 范围
+  static LRESULT OnNcHitTest(HWND, LPARAM);
+  static LRESULT OnLButtonDown(HWND, WPARAM, LPARAM);
+  static LRESULT OnLButtonUp(HWND, WPARAM, LPARAM);
+  static LRESULT OnMouseMove(HWND, WPARAM, LPARAM);
+  static LRESULT OnTimer(HWND, WPARAM);
+  static LRESULT OnGetMinMaxInfo(HWND, LPARAM);
+
+  // v0.19.0.41: 长按 drag 内部 helper
+  static void StartLongPressTimer(HWND hwnd, int x, int y);
+  static void CancelLongPress(HWND hwnd);
+  static void BeginDrag(HWND hwnd);
+  static void EndDrag(HWND hwnd);
+
   // List populate
   static void PopulateList(HWND hList);
-  static int  PopulateListImpl(HWND hList);
+  static int PopulateListImpl(HWND hList);
 
   // 工具
   static void InjectText(const std::wstring& text);
