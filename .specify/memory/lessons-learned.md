@@ -8713,3 +8713,87 @@ v0.19.0.39 ship 的 OnKeyDown case VK_ESCAPE handler 永远不会被触发 — �
 - `verification-before-completion` skill + `tdd` skill 的「已知陷阱」章节
   加一条: "common control (ListView / TreeView / Edit) keyboard test 必须用
   WM_NOTIFY 路径 (LVN_KEYDOWN / NM_KEYDOWN 等), 不用 WM_KEYDOWN"
+
+
+---
+
+## L103-PhaseH-IME-TSF-Mutex (2026-07-22)
+
+### 现象
+
+v0.19.0.45 装机 user 反馈"列表框 / 输入框可以随 UI 边界调整了 (Phase H 修好), 但输入框中**仍无法输入中文**"。
+
+4 个 ship 版本 (v0.19.0.35 / 0.19.0.36 / 0.19.0.43 / 0.19.0.45) 装机端都复现 "输入框不能输中文", 远超 L1 门槛需正式 lessons-learned。
+
+### 真因 (5 阶段 systematic-debugging)
+
+`WeaselServer/PhrasesDialog.cpp:671-675` 4 个 ship 版本反复改 `ImmCreateContext` + `ImmAssociateContext` 都没修好:
+
+```cpp
+HIMC himc = ImmCreateContext();
+if (himc) {
+  ImmAssociateContext(s_hInput, himc);
+  // 不调 ImmReleaseContext (per MSDN, 假设 himc 跟 hwnd 同生死)
+}
+```
+
+**Layer 4 失败**: WeaselServer.exe 是 **TSF shim 进程** (weaselx64.dll 主导), 跟普通 GUI 进程 (e.g. notepad.exe) 不同:
+
+| 进程类型 | IME 行为 |
+|---|---|
+| 普通 GUI 进程 | hwnd 默认无 IME context, system IMM32 给 hwnd 配 default HIMC |
+| **TSF shim 进程** (weaselx64.dll 主导) | TSF 通过 `ITfThreadMgr` + `ITfInputProcessorProfileMgr` 强制 hwnd 走 system TSF-registered IME (e.g. 微软拼音), IMM32 路径被 TSF bypass |
+
+我们用 `ImmCreateContext` 创建 isolated HIMC → `ImmAssociateContext(s_hInput, himc)` 强行给 s_hInput 关联 → **TSF 路径 bypass, IMM32 路径被 TSF 强制覆盖回 default** → 但 s_hInput 已 lock 在 our isolated himc → TSF 不接管, IMM32 也不接 → **IME 候选词不出**
+
+`feedback_imm_release_context_trap.md` 之前 catch 过:
+- v0.19.0.35: `ImmDestroyContext(himc)` 销毁刚关联的 context → IME 死
+- v0.19.0.36: revert 改 `ImmReleaseContext(s_hInput, himc)` 2 参 → refcount 1→0 销毁 context → IME 死
+- v0.19.0.43: 改成"不调 ImmReleaseContext" → 理论上 per MSDN 正确, **但忽略 TSF 进程下不认 isolated HIMC** → IME 仍死
+
+v0.19.0.32 之前 (commit `fa196049` 引入 IME 关联之前) 装机 user 没报过"输入框不能输中文" — 因为那段时间走"裸 CreateWindowExW"路径, TSF shim 自动配 system default IME context 给所有 child hwnd。
+
+### Fix (commit v0.19.0.46, 方案 A — 完全删除 IME 关联代码)
+
+```cpp
+// WeaselServer/PhrasesDialog.cpp line 670-675 改为:
+if (s_hInput && hfUi) {
+  SendMessageW(s_hInput, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
+  // v0.19.0.46 (Phase I Bug 4 真修): **删** ImmCreateContext +
+  //   ImmAssociateContext 调用。TSF shim 自动给 hwnd 配 system default IME
+  //   context (跟主编辑框同路径, v0.19.0.32 之前裸 CreateWindowExW 路径)。
+}
+```
+
+### 5 类失败模式教训
+
+- **L103-A (TSF shim 进程不认 isolated HIMC)**: TSF 进程下 (任何注册了 `ITfTextInputProcessor` 的 DLL 主导的进程, e.g. WeaselServer.exe) **不要**用 `ImmCreateContext` + `ImmAssociateContext` 创建 isolated HIMC 给 hwnd。让 TSF shim 自动配 system default IME context。Per MSDN 的话只是 per-process 默认行为, TSF 进程下 per-hwnd isolated HIMC 跟 system TSF IME 互斥才是真陷阱。
+- **L103-B (4 ship 复发门槛)**: v0.19.0.35/36/43/45 4 个 ship 都 fail, 累计装机 user 反馈 4 次远超 L1 门槛 (3 次) 需正式 lessons-learned。`feedback_imm_release_context_trap.md` 只 catch 了 `ImmDestroyContext` + 1 参 `ImmReleaseContext` 两个具体坑, **没 catch** TSF 进程下 "per-hwnd isolated HIMC 互斥" 这个更隐蔽的根因。
+- **L103-C (Per-MSDN 不可信)**: "The application should not call ImmReleaseContext for a handle returned by ImmAssociateContext" 理论上正确, 但**忽略** TSF 进程下 per-hwnd isolated HIMC 跟 system TSF IME 互斥。`v0.19.0.43` 按 MSDN 改成"不调 ImmReleaseContext" 装机端仍 fail, 提醒我们: per-MSDN 的指南要看执行环境 (TSF shim / plain GUI / console / service) 才靠谱。
+- **L103-D (sandbox 测不出 IME 行为)**: `TestPhrasesDialog` sandbox 不跑 IME 实际行为, 只验 layout / list / 按钮 / reorder / drag。任何 IME 改动都**必须**装机端 5 项 user flow 验证 (打拼音 → 候选词出 → Enter 上屏 → AddTop → ListView 端到端)。L97 stale-binary ship gate 也帮不上忙 (binary 看起来 PASS 但装机端 IME 不工作)。
+- **L103-E (L97 stale binary + 真 source build md5 比对)**: 每次 IME 改动 ship 后, 装机端 `_check_install_v2.ps1` 必须 verify:
+  ```
+  Module 1+2 md5 = NEW_BINARY_MD5 (从 output/Win32/WeaselServer.exe 算)
+  extract 后 WeaselServer.exe md5 = Module 1+2 md5 ✓
+  ```
+  如果用 L97 ship gate 跟 "上次 ship md5" 比对, L97 复发会再次掩盖 IME bug。
+
+### Files touched (v0.19.0.46, 1 + 1)
+- `WeaselServer/PhrasesDialog.cpp` (line 670-675 删 5 行 IME 关联, 改 1 段注释): `1caa6e94b209d1d0f3214b4d08c45310`
+- `CHANGELOG.md` (+50 行 v0.19.0.46 entry)
+- `release/fluxing-0.19.0.46-installer.exe` (新建)
+
+### Ship (待 build + 装机 user flow 5 项 verify)
+- WeaselServer.exe md5: `1caa6e94b209d1d0f3214b4d08c45310` (从 v0.19.0.45 `b19d4338...` 改)
+- TestPhrasesDialog 168/168 PASS / 0 FAIL (sandbox 不验 IME, 装机端必跑)
+
+### Recurrence / 防重犯
+
+- `verification-before-completion` skill + `tdd` skill 的「已知陷阱」章节加一条:
+  "TSF shim 进程 (WeaselServer.exe) 下**不要**自己创建 isolated HIMC; 让 TSF shim 自动配 system default IME context。sandbox test 不验 IME, 装机端 user flow 必跑 5 项"
+- `feedback_imm_release_context_trap.md` 升级: 加 "TSF 进程下" 维度的 4.1 段
+- `_check_install_v2.ps1` expect md5 升 v0.19.0.46
+
+### Pattern-Key
+- `ime.tsf-process-association` (新增) — TSF shim 进程下 per-hwnd isolated HIMC 跟 system TSF IME 互斥
+- 累计 Recurrence-Count: 4 (v0.19.0.35/36/43/45 4 ship 复发, 远超 L1 门槛)
