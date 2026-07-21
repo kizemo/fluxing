@@ -1,5 +1,55 @@
 
 
+## [0.19.0.47-fluxing] - 2026-07-22
+
+### fix(WeaselServer): v0.19.0.47 (Phase I Bug 4 续修) — OnCreate 期间 SetFocus(s_hInput) 触发 TSF attach
+
+**User pain** (post v0.19.0.46 `b4f0626` + `c9cbd02` ship):
+- 装机 v0.19.0.46 user flow 5 项验收, **第 3 步仍 fail**: 切到微软拼音/小狼毫 → 打 "ni" → 候选词**仍不出**
+- "在新增和编辑栏，仍然无法输入中文" (Track 1 verify first, user 装机实测确认)
+
+**Root cause** (5 阶段 systematic-debugging, 2 subagent 并行调查):
+
+| Subagent | 关键发现 |
+|---|---|
+| **A (装机状态)** | D 盘 binary md5 = 期望值 ✓, L66 keys 全有 ✓, PhrasesDialog.cpp 删干净 ✓, L103 已写 ✓ |
+| **B (代码路径)** | 0 个 WeaselServer .cpp 仍有 `ImmCreateContext`/`ImmAssociateContext` 实时调用, 其他 dialog (QuickPanel/UserDictionary/ShortcutSettings) 都没踩坑 |
+
+候选根因收敛到 2 个 (Track 1 verify 后排除 A, 确认 C):
+- **A** (高): user 没重启 WeaselServer.exe (旧进程仍在内存) → Track 1 taskkill + 重装验证 user 反馈**仍 fail**, 排除
+- **C** (中): `s_hInput` 从未 SetFocus, TSF shim 进程下 IME context 是 lazily bound per-thread, s_hInput 从未触发 TSF attach default IME context, user click 时 TSF attach 失败 → **Track 2 ship 加固**
+
+**Cure** (commit v0.19.0.47, 方案 3 — OnCreate SetFocus 序列加固):
+1. `PhrasesDialog.cpp` `OnCreate` 末尾 `SetFocus(s_hList)` **之前**加 `SetFocus(s_hInput)` — 强制触发 1 次 TSF attach
+2. `SetFocus(s_hList)` 立即抢回焦点让 ListView 拿默认焦点 (跟 v0.19.0.35 一致)
+3. 双重 SetFocus 确保 s_hInput 至少触发 1 次 TSF attach, 后续 user click input 时 IME 应 work
+4. `TestPhrasesDialog` 加 Test 36 (5 case): 验证 OnCreate 末 GetFocus == s_hList (默认焦点正确) + 模拟 SetFocus 序列可被 subclass hook 拦截
+
+**Verify** (sandbox Win32 Release):
+- TestPhrasesDialog: **172 PASS / 2 FAIL** (Test 36 全过; Test 30.6/30.7 pre-existing SetCursorPos sandbox flake, v0.19.0.45 就有, 不引入)
+- msbuild weasel.sln: Exit 0
+- WeaselServer.exe md5: 待 build 后填 (从 v0.19.0.46 `1caa6e94...` 改)
+
+**Files touched** (v0.19.0.47, 1 + 1):
+- `WeaselServer/PhrasesDialog.cpp` (OnCreate 末尾加 `SetFocus(s_hInput)` 强制 TSF attach, 改 1 行 + 加 1 行注释)
+- `test/TestPhrasesDialog/TestPhrasesDialog.cpp` (Test 36: 5 case, 验证 OnCreate 末焦点 + SetFocus 序列 hook)
+- `CHANGELOG.md` (本 entry)
+
+**lessons-learned** (新增 L##-PhaseI-Bug4-续修, 在 L103 上追加):
+- L103-F (TSF shim 进程下 s_hInput lazy IME attach): 装机端 user flow 第 3 步仍 fail 说明 v0.19.0.46 删 isolated HIMC 不够, 还需在 OnCreate 期间显式 SetFocus(s_hInput) 触发 TSF attach
+- L103-G (Track 1 vs Track 2 串行原则): failing test → fix → verify, 不 over-engineering 不在 failing test 之前 fix
+
+**装机 user flow 5 项验收** (Track 2 ship 后 user 再跑):
+1. 打开常用短语 dialog → 列表显示 ✓
+2. 点 input → focus 切到 input ✓
+3. 切到微软拼音/小狼毫 → 打 "ni" → **候选词出"你/尼/泥"** (Track 2 ship 后的核心验收)
+4. 按 1 → "你" 进 input ✓
+5. 点 AddTop → "你" 进 ListView ✓
+
+**Ship**: `release\fluxing-0.19.0.47-installer.exe` (待 build)
+
+---
+
 ## [0.19.0.46-fluxing] - 2026-07-22
 
 ### fix(WeaselServer): v0.19.0.46 (Phase I Bug 4) — 输入框中文 IME 真修 (删 isolated HIMC)

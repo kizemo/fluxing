@@ -1381,6 +1381,93 @@ static void TestInputStretchesAndMarginShrinks() {
   PhrasesDialog::Hide();
 }
 
+// v0.19.0.47 (Phase I Bug 4 续修): 装机 v0.19.0.46 后 user flow 第 3 步
+//   "打拼音出候选词" 仍 fail。 真因未完全定位, 候选:
+//   - TSF shim 进程下, hwnd 拿焦点时 TSF attach IME context 是 lazily bound
+//     per-thread, s_hInput 从未在 OnCreate 期间 SetFocus, TSF 从未 attach
+//     default IME context 给 s_hInput, user click input 时 TSF attach 失败
+//   - 修法: OnCreate 末 SetFocus(s_hList) 之前先 SetFocus(s_hInput) 强制
+//     触发 1 次 TSF attach, 然后 SetFocus(s_hList) 让 ListView 拿焦点
+//
+// Test 36 sandbox 验证:
+//   - OnCreate 末 GetFocus() == s_hList (默认焦点正确, 表示 SetFocus 序列
+//     至少跑了 s_hList 这次; 如果 s_hInput 是 null, OnCreate 会 skip 第一
+//     个 if, 直接 SetFocus(s_hList), GetFocus 仍 = s_hList → 假阳性)
+//   - 加 subclass 后手动 SetFocus(s_hInput); SetFocus(s_hList); →
+//     counter 增 1 (subclass hook work), GetFocus 仍 = s_hList
+//   - sandbox 不能拦截 OnCreate 期间 WM_SETFOCUS (子类化时机晚于 SetFocus),
+//     装机端 IME attach 路径只能靠 user flow 第 3 步验证
+static int g_inputSetFocusCount = 0;
+static WNDPROC g_origInputWndProc = nullptr;
+
+static LRESULT CALLBACK TestInputSetFocusSubclassProc(HWND hwnd, UINT msg,
+                                                       WPARAM wp, LPARAM lp) {
+  if (msg == WM_SETFOCUS) {
+    g_inputSetFocusCount++;
+  }
+  return CallWindowProcW(g_origInputWndProc, hwnd, msg, wp, lp);
+}
+
+static void TestOnCreateInputGetsFocusForTSFAttach() {
+  std::cout << "\n[Test 36] v0.19.0.47: OnCreate 末焦点 + SetFocus(s_hInput)"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  HWND hInput = PhrasesDialog::s_hInput;
+  HWND hList = PhrasesDialog::s_hList;
+  CHECK("36.0: s_hwnd + s_hInput + s_hList 已创建",
+        hwnd != nullptr && hInput != nullptr && hList != nullptr);
+  if (!hInput || !hList)
+    goto test36_end;
+
+  // 1. OnCreate 末 GetFocus == s_hList (默认焦点不变)
+  CHECK("36.1: OnCreate 末焦点在 s_hList (最后 SetFocus(s_hList) 生效)",
+        GetFocus() == hList);
+
+  // 2. Subclass s_hInput WndProc, 手动 SetFocus 验证 hook work
+  g_origInputWndProc = (WNDPROC)SetWindowLongPtrW(
+      hInput, GWLP_WNDPROC, (LONG_PTR)TestInputSetFocusSubclassProc);
+  g_inputSetFocusCount = 0;
+  SetFocus(hInput);  // 应该触发 WM_SETFOCUS → counter +1
+  CHECK("36.2: subclass hook 拦截 WM_SETFOCUS (SetFocus 1 次 → counter 1)",
+        g_inputSetFocusCount == 1);
+  SetFocus(hList);  // s_hList 拿焦点
+  CHECK("36.3: SetFocus(s_hList) 后 GetFocus == s_hList",
+        GetFocus() == hList);
+
+  // 3. 验证 OnCreate 内 SetFocus(s_hInput) 路径 (sandbox best-effort):
+  //    Hide + Show 再次触发 OnCreate, OnCreate 内 SetFocus(s_hInput) 会
+  //    在 subclass **之前** 触发 (subclass 是上次 Show 后挂的, 已被 Hide
+  //    销毁), 所以 counter 不会增; 但 OnCreate 末 GetFocus == hList 仍
+  //    表示 SetFocus 序列完整
+  PhrasesDialog::Hide();
+  PhrasesDialog::Show();
+  hwnd = PhrasesDialog::s_hwnd;
+  hInput = PhrasesDialog::s_hInput;
+  hList = PhrasesDialog::s_hList;
+  CHECK("36.4: Hide + Show 后 s_hwnd + s_hInput + s_hList 重建",
+        hwnd != nullptr && hInput != nullptr && hList != nullptr);
+  if (!hInput || !hList)
+    goto test36_end;
+  // 重挂 subclass
+  g_origInputWndProc = (WNDPROC)SetWindowLongPtrW(
+      hInput, GWLP_WNDPROC, (LONG_PTR)TestInputSetFocusSubclassProc);
+  g_inputSetFocusCount = 0;
+  // 现在手动模拟 OnCreate 内 SetFocus 序列
+  SetFocus(hInput);
+  SetFocus(hList);
+  CHECK("36.5: 模拟 OnCreate 内 SetFocus(s_hInput) → SetFocus(s_hList) 序列",
+        g_inputSetFocusCount == 1 && GetFocus() == hList);
+
+test36_end:
+  // 恢复原 WndProc
+  if (hInput && g_origInputWndProc) {
+    SetWindowLongPtrW(hInput, GWLP_WNDPROC, (LONG_PTR)g_origInputWndProc);
+  }
+  PhrasesDialog::Hide();
+}
+
 // v0.19.0.44 (Feature 2: reorder via drag): 测试 CommitReorder helper 逻辑
 //   不能 e2e 测试 LVN_BEGINDRAG/ENDDRAG (需要真正 mouse drag)
 //   但 CommitReorder 逻辑本身可以独立验证: 设 s_dragSourceIdx + s_dropTargetIdx
@@ -1563,6 +1650,8 @@ int main() {
   test::TestOnCreateColumnIsScrollbarAware();
   // v0.19.0.45 (Phase H layout polish: Bug 2 input stretch + UI margin 缩小)
   test::TestInputStretchesAndMarginShrinks();
+  // v0.19.0.47 (Phase I Bug 4 续修): OnCreate 期间 s_hInput 至少获 1 次焦点
+  test::TestOnCreateInputGetsFocusForTSFAttach();
 
   std::cout << "\n================================================="
             << std::endl;

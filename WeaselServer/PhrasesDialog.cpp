@@ -755,6 +755,17 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
                           LVIS_SELECTED | LVIS_FOCUSED);
     m_selectedIndex = 0;
   }
+  // v0.19.0.47 (Phase I Bug 4 续修): 装机 v0.19.0.46 后 user flow 第 3 步
+  //   "打拼音出候选词" 仍 fail (真因未完全定位, 候选: TSF shim 懒 attach
+  //   只在 SetFocus 该 hwnd 时触发, s_hInput 从未 SetFocus, TSF 从未 attach
+  //   default IME context 给 s_hInput, user click 时 TSF attach 失败)。
+  //   修法: OnCreate 末 SetFocus(s_hList) 之前先 SetFocus(s_hInput) 强制
+  //   触发一次 TSF attach, 然后 SetFocus(s_hList) 让 ListView 拿焦点。
+  //   双重 SetFocus 确保 s_hInput 至少触发 1 次 TSF attach, 后续 user click
+  //   input 时 IME 应 work。
+  if (s_hInput) {
+    SetFocus(s_hInput);
+  }
   if (s_hList) {
     SetFocus(s_hList);
   }
