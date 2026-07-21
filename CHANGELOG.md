@@ -234,6 +234,82 @@ reg delete "HKCU\Software\Fluxing" /f
   user 看到 2 个 "添加" 按钮会困惑该按哪个。统一到 1 个 (顶部 input 旁) 更
   清晰;底部 3 按钮 (Edit / Delete / Cancel) 职责分明。
 
+- L102-E: 重复按钮 UX 陷阱 — 顶部 + 底部 Add 让用户困惑;统一到 1 个
+
+---
+
+## [0.19.0.42-fluxing] - 2026-07-21
+
+### fix(WeaselServer): v0.19.0.42 (Stop hook 修补) — OnGetMinMaxInfo DPI 缩放 + 5 项 polish
+
+**触发**: v0.19.0.41 ship 后 stop hook review 报 1 BLOCKER + 4 SUGGESTIONS。
+
+**BLOCKER** (必修):
+- `OnGetMinMaxInfo` (PhrasesDialog.cpp:907-916) min/max 用了 raw 96-DPI
+  像素 (kMinW=320 / kMaxH=900),没 × s_dpiScale。**高 DPI 屏 (e.g. 200%) 初始
+  尺寸 720×920 > raw max 1200×900**,WM_GETMINMAXINFO 强制 cap 到比初始
+  还小, 跟 Bug 2 DPI 缩放逻辑直接矛盾。
+- **修法**: `ptMinTrackSize/ptMaxTrackSize = kMinX * s_dpiScale` 等
+  4 行,raw 数字全 × s_dpiScale (200% DPI → min 640×800, max 2400×1800,
+  远大于初始 720×920)。
+
+**SUGGESTIONS** (一并修):
+- **S1 (Test 29)**: 加 `OnGetMinMaxInfo` dispatch test — 验证 ptMinTrackSize/
+  ptMaxTrackSize 都 × s_dpiScale,BLOCKER 不会重犯
+- **S2 (Test 30)**: 加长按 drag state machine e2e — 直接调 OnLButtonDown/
+  OnTimer/OnMouseMove/OnLButtonUp (public, 不等 500ms timer), 验证
+  longPressActive → isDragging → window 移动 → 取消 全流程 (12 check)
+- **S3 (kListH_phys floor)**: OnCreate floor `if (kListH_phys < 80)` 改
+  `if (kListH_phys < 80 * s_dpiScale)`, 跟 DPI 缩放一致 (200% DPI floor
+  160 物理 = 80 逻辑, 不是 80 物理 = 40 逻辑)
+- **S4 (OnNcHitTest comment)**: 重写注释 — 之前说"Chrome 区域返回
+  HTCLIENT"误导, 实际 DefWindowProc 内部已处理 client + border 区分;
+  新注释明确 WS_THICKFRAME 给 border (HTLEFT/HTRIGHT/...), 内部 HTCLIENT
+  走 OnLButtonDown 长按 drag
+- **S5 (.h access)**: 6 个新 message handler + 4 个 drag helper 从 private
+  移到 public — test e2e 调 (sandbox 不能等 500ms timer)
+
+**Verify** (sandbox Win32 Release):
+- TestPhrasesDialog: **131 PASS / 0 FAIL** (Test 29 = 7 check, Test 30 = 12
+  check 新增, 112 baseline 不退化)
+- 编译: WeaselServer.vcxproj + TestPhrasesDialog.vcxproj Release Win32 Exit 0
+- installer extract md5 = source md5 ✓ (无 L97 stale)
+
+**Files touched** (v0.19.0.42, 2 + 1):
+- `WeaselServer/PhrasesDialog.h` (10+/0-): 6 handler + 4 helper 移到 public
+- `WeaselServer/PhrasesDialog.cpp` (25+/5-): OnGetMinMaxInfo × s_dpiScale +
+  kListH_phys floor × s_dpiScale + OnNcHitTest 注释重写
+- `test/TestPhrasesDialog/TestPhrasesDialog.cpp` (90+/0-): Test 29 + Test 30
+  + main() 调用
+- `release/fluxing-0.19.0.42-installer.exe` (43,183,124 bytes, commit 2)
+
+**装机命令** (跟 v0.19.0.41 一样 — env.bat bump 42):
+```powershell
+taskkill /F /IM WeaselServer.exe /T
+reg delete "HKLM\SOFTWARE\Fluxing\Weasel" /f
+reg delete "HKCU\Software\Fluxing" /f
+& "F:\soft\00selfmade\rime_claude\release\fluxing-0.19.0.42-installer.exe" /S /D=D:\Program Files\fluxing
+& "F:\soft\00selfmade\rime_claude\_check_install_v2.ps1"
+```
+
+期望 Module 1+2 md5 = `bcdee00435ac3b27e8c81a20494264f7`
+
+**lessons-learned candidate (L103-PhaseG-Stop-Hook)**:
+- **L103-A (DPI scaling must apply to ALL physical constants)**: kMinW/H,
+  kMaxW/H 这类"raw 像素"必须 × s_dpiScale 才不会在 OnGetMinMaxInfo 等
+  callback 跟 DPI 缩放后的实际尺寸矛盾。**审计清单**: 任何在 OnCreate 后
+  用的 constexpr 物理像素 (尤其 resize/positioning 限制) 都得 × s_dpiScale
+- **L103-B (test 必须覆盖 full state machine path)**: Test 27/28 只 verify
+  precondition (WS_THICKFRAME + s_dpiScale),没覆盖 OnLButtonDown→
+  OnTimer→ OnMouseMove→ OnLButtonUp 完整 state machine 流转。SUGGESTION 2
+  加 Test 30 直接调 handler 验证 (sandbox 不能等 500ms timer, 暴露 public
+  即可)。**教训**: 写 test 时想 "test 真的覆盖了 5 阶段 systematic-debugging
+  吗?"
+- **L103-C (Stop hook value)**: Stop hook 抓的 1 BLOCKER + 4 SUGGESTIONS 都
+  是真实 bug — BLOCKER 是 OnGetMinMaxInfo 没 × s_dpiScale, SUGGESTION 3
+  kListH_phys floor 也是 DPI-unaware 边界问题。**ship 前必看 Stop hook
+  feedback**, 不要 ship 了才知道
+
 ---
 
 ## [0.19.0.40-fluxing] - 2026-07-21

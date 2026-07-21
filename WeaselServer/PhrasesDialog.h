@@ -162,6 +162,27 @@ class PhrasesDialog {
   //   单独提供)
   static void MoveSelection(HWND hList, int delta);
 
+  // v0.19.0.41 (Feature: resize + long-press drag) + v0.19.0.42 (Stop hook fix
+  // 暴露给 test):
+  // - OnNcHitTest: 让 chrome 区域 (非子控件) 报 HTCAPTION 给 Windows
+  //   (用于 cursor 反馈, 实际 drag 由 long press 触发)
+  // - OnLButtonDown/Up/MouseMove: 长按 drag state machine
+  // - OnTimer: 长按 500ms 后 fire → 进入 drag mode
+  // - OnGetMinMaxInfo: 限制 resize 范围
+  // (public 让 test/TestPhrasesDialog e2e 调 — sandbox 不能等 500ms timer)
+  static LRESULT OnNcHitTest(HWND, LPARAM);
+  static LRESULT OnLButtonDown(HWND, WPARAM, LPARAM);
+  static LRESULT OnLButtonUp(HWND, WPARAM, LPARAM);
+  static LRESULT OnMouseMove(HWND, WPARAM, LPARAM);
+  static LRESULT OnTimer(HWND, WPARAM);
+  static LRESULT OnGetMinMaxInfo(HWND, LPARAM);
+
+  // v0.19.0.41: 长按 drag 内部 helper (public 给 test)
+  static void StartLongPressTimer(HWND hwnd, int x, int y);
+  static void CancelLongPress(HWND hwnd);
+  static void BeginDrag(HWND hwnd);
+  static void EndDrag(HWND hwnd);
+
  private:
   // 内部 helpers(测试可达)
   static std::wstring Trim(const std::wstring& s);
@@ -176,24 +197,8 @@ class PhrasesDialog {
   static LRESULT OnCommand(HWND, WPARAM);
   static LRESULT OnCtlColor(HWND, WPARAM, LPARAM);
 
-  // v0.19.0.41 (Feature: resize + long-press drag):
-  // - OnNcHitTest: 让 chrome 区域 (非子控件) 报 HTCAPTION 给 Windows
-  //   (用于 cursor 反馈, 实际 drag 由 long press 触发)
-  // - OnLButtonDown/Up/MouseMove: 长按 drag state machine
-  // - OnTimer: 长按 500ms 后 fire → 进入 drag mode
-  // - OnGetMinMaxInfo: 限制 resize 范围
-  static LRESULT OnNcHitTest(HWND, LPARAM);
-  static LRESULT OnLButtonDown(HWND, WPARAM, LPARAM);
-  static LRESULT OnLButtonUp(HWND, WPARAM, LPARAM);
-  static LRESULT OnMouseMove(HWND, WPARAM, LPARAM);
-  static LRESULT OnTimer(HWND, WPARAM);
-  static LRESULT OnGetMinMaxInfo(HWND, LPARAM);
-
-  // v0.19.0.41: 长按 drag 内部 helper
-  static void StartLongPressTimer(HWND hwnd, int x, int y);
-  static void CancelLongPress(HWND hwnd);
-  static void BeginDrag(HWND hwnd);
-  static void EndDrag(HWND hwnd);
+  // v0.19.0.41 (Feature: resize + long-press drag) — handler 声明移到上面
+  // public 段 (Test 30 e2e 调用), 这里是空的占位注释
 
   // List populate
   static void PopulateList(HWND hList);
