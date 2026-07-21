@@ -8645,3 +8645,71 @@ NSIS ExecWait 调 console tool 时会 pop cmd 窗口。
 - `release\fluxing-0.19.0.38-installer.exe` 43,189,443 bytes
 - md5 `d53b0c37738057087c5c298afec27189`
 - extract 后 WeaselServer.exe md5 `62bf75b119cc1d0a92dfbf68e5706dc6` (无 L97 stale, 跟 hotfix 79d522b source build 一致)
+
+---
+
+## L101-PhaseF-LVN-KEYDOWN (2026-07-21)
+
+### Bug
+User 装机 v0.19.0.39 (commit c6d8b35) 后反馈 Phase F Bug 3 续修 fail:
+- 设置栏点击"常用短语"启动 UI → ↑↓/Enter/DoubleClick 全 work (Phase F Bug 1 fix ✓)
+- 但 **Esc 键仍不退出 dialog** (Phase F Bug 3 续修 fail)
+
+### Root cause (5 阶段 systematic-debugging)
+v0.19.0.39 Test 24 (`SendMessageW(hwnd, WM_KEYDOWN, VK_ESCAPE, 0)`) sandbox GREEN 是
+**false-positive** — Test 24 直接 dispatch WM_KEYDOWN 到 dialog WndProc,**绕过了
+ListView 焦点路径**。
+
+**真 keyboard event 路由**:
+- 焦点在 ListView (s_hList) → 按 Esc → ListView 内部处理 → 转 `LVN_KEYDOWN` 给 parent
+  (PhrasesDialog WndProc 通过 WM_NOTIFY)
+- `PhrasesDialog::OnNotify` (line 750) 现有 case list:
+  ```
+  LVN_ITEMCHANGED / NM_DBLCLK / NM_RETURN / NM_CLICK
+  // ❌ 缺 LVN_KEYDOWN
+  ```
+- OnNotify 收到 LVN_KEYDOWN → switch fallthrough → `return 0` (line 815) → Esc 不响应
+
+v0.19.0.39 ship 的 OnKeyDown case VK_ESCAPE handler 永远不会被触发 — 因为 ListView
+焦点时键盘事件不经过 dialog WndProc WM_KEYDOWN。
+
+### Fix (commit 4c8d47d)
+1. `PhrasesDialog::OnNotify` 加 `case LVN_KEYDOWN` — 处理 `wVKey == VK_ESCAPE`
+   → `Hide()` (跟 NM_DBLCLK / NM_RETURN 模式一致, 不 subclass ListView WndProc)
+2. Test 25: 模拟完整路径 (ListView focus + SendMessage WM_NOTIFY + LVN_KEYDOWN +
+   VK_ESCAPE) → 验证 `s_hwnd == nullptr`
+
+### Why: 3 类失败模式教训
+- **L101-A (common control keyboard event routing)**: ListView / TreeView / Edit 等
+  common control 焦点时, 键盘事件走 `WM_NOTIFY` (LVN_KEYDOWN / NM_KEYDOWN 等),
+  **不走** dialog WndProc WM_KEYDOWN。test 必须模拟完整 focus chain, 否则 false-positive
+  (Test 24 就是这样漏的)。
+- **L101-B (Esc handler pattern for ListView)**: `case LVN_KEYDOWN` 是 ListView
+  Esc 退出唯一正确路径, **不应** subclass ListView WndProc (复杂 + 风险大)。
+  跟现有 `case NM_DBLCLK` / `case NM_RETURN` 模式一致, OnNotify 统一处理。
+- **L101-C (sandbox test dispatch message selection)**: sandbox test 用 `SendMessageW`
+  涉及 common control 时, **必须** 选对 message:
+  - dialog 直接 dispatch → WM_KEYDOWN
+  - child control dispatch → WM_NOTIFY
+  - 选错 = false-positive, sandbox pass 但装机 fail
+
+### Files touched (v0.19.0.40, 4 + 1)
+- `WeaselServer/PhrasesDialog.cpp` (15+/1-): OnNotify 加 `case LVN_KEYDOWN` (+ clang-format)
+- `test/TestPhrasesDialog/TestPhrasesDialog.cpp` (25+/1-): 加 Test 25 (LVN_KEYDOWN dispatch)
+  + main() 调用 (+ clang-format)
+- `CHANGELOG.md` (60+/0-): append v0.19.0.40 entry
+- `_check_install_v2.ps1` (5 处 / 14 行): expect md5 + 注释 → v0.19.0.40
+- `release/fluxing-0.19.0.40-installer.exe` (commit 680af24, 43,195,078 bytes)
+
+### Ship
+- `release\fluxing-0.19.0.40-installer.exe` 43,195,078 bytes
+- md5 `5e977318c38af5a91ae01fc510677c84`
+- extract 后 WeaselServer.exe md5 `463b3c5927504d19e9627e68ca5852c2` (无 L97 stale,
+  跟 4c8d47d source build 一致)
+- build time 2026-07-21 08:20 (NSIS timestamp)
+- TestPhrasesDialog **102 PASS / 0 FAIL** (Test 25 = 2 新增 check, 100 baseline 不退化)
+
+### Recurrence / 防重犯
+- `verification-before-completion` skill + `tdd` skill 的「已知陷阱」章节
+  加一条: "common control (ListView / TreeView / Edit) keyboard test 必须用
+  WM_NOTIFY 路径 (LVN_KEYDOWN / NM_KEYDOWN 等), 不用 WM_KEYDOWN"
