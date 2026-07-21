@@ -165,19 +165,46 @@ void PhrasesDialog::Show() {
     s_classRegistered = true;
   }
 
-  s_hwnd =
-      CreateWindowExW(exStyle, L"FluxingPhrasesDialogV3",
-                      L"\x5e38\x7528\x77ed\x8bed",  // 常用短语
-                      style, CW_USEDEFAULT, CW_USEDEFAULT, kDialogW, kDialogH,
-                      nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
+  // v0.19.0.43 (Bug 2.3 layout clipping 真修): outer 尺寸必须按 DPI 缩放 + 加
+  // WS_THICKFRAME border (否则 client area 实际 < kDialogW × kDialogH, 4 个
+  // 出框 child: 顶部 Add 按钮 (右), 列表 (底), 3 个底部按钮 (底))。
+  //
+  // 原 v0.19.0.41/0.19.0.42 bug:
+  //   CreateWindowEx 用 raw kDialogW × kDialogH 作 outer 尺寸
+  //   → client 实际 ~344 × 436 (8px border each side)
+  //   → OnCreate 用 dW × dH (DPI 缩放后) 算 child 位置 (e.g. 200% DPI: 720×920)
+  //   → child 位置基于 client 错误基准 → 全部出框
+  //
+  // 修法: Show() 先用 AdjustWindowRectEx 算 outer 尺寸 (client + border),
+  //       DPI 缩放同步 (跟 OnCreate 一致 → 用 GetDpiForSystem 跟
+  //       GetDpiForWindow 同源 primary monitor)。
+  int sysDpi = GetDpiForSystem();
+  double sysDpiScale = (sysDpi > 0) ? (double)sysDpi / 96.0 : 1.0;
+  if (sysDpiScale < 0.5)
+    sysDpiScale = 0.5;
+  if (sysDpiScale > 4.0)
+    sysDpiScale = 4.0;
+  int clientW = (int)(kDialogW * sysDpiScale);
+  int clientH = (int)(kDialogH * sysDpiScale);
+  RECT rcOuter = {0, 0, clientW, clientH};
+  // AdjustWindowRectEx: 给定 client 尺寸 + style + exStyle, 返回 outer 尺寸
+  // (包含 border + caption)。menu=FALSE (无 menu)。
+  AdjustWindowRectEx(&rcOuter, style, FALSE, exStyle);
+  int outerW = rcOuter.right - rcOuter.left;
+  int outerH = rcOuter.bottom - rcOuter.top;
+
+  s_hwnd = CreateWindowExW(exStyle, L"FluxingPhrasesDialogV3",
+                           L"\x5e38\x7528\x77ed\x8bed",  // 常用短语
+                           style, CW_USEDEFAULT, CW_USEDEFAULT, outerW, outerH,
+                           nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
   if (!s_hwnd) {
     std::wcerr << L"[PhrasesDialog] CreateWindowExW failed, err="
                << GetLastError() << std::endl;
     return;
   }
 
-  // 4. 居中 + 强制置顶
-  CenterOnPrimaryMonitor(s_hwnd, kDialogW, kDialogH);
+  // 4. 居中 + 强制置顶 (用 outer 尺寸, 不是 client — 居中按 outer 算)
+  CenterOnPrimaryMonitor(s_hwnd, outerW, outerH);
   SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
   // v0.19.0.35 (Phase C P0-2): 删 SetWindowRgn 圆角 region。
@@ -506,6 +533,14 @@ LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd,
       return 0;
     }
     case WM_KILLFOCUS: {
+      // v0.19.0.43 (Bug 2.2 drag 修复): drag 中不 Hide
+      // 装机 v0.19.0.42 user 反馈 "拖动时 UI 可能消失" — 拖动期间 SetCapture
+      // 偶尔会触发 WM_KILLFOCUS (e.g. dialog 失去 active 状态), grace 时间已
+      // 过 (kShowGraceMs=2000ms), 老逻辑就 Hide()。drag 中应该跳过 Hide,
+      // 保持 dialog 可见直到 mouse up。
+      if (s_isDragging) {
+        return 0;
+      }
       // v0.19.0.32: 检查新焦点是否为本 dialog 内的子控件
       HWND newFocus = (HWND)wp;
       auto isChild = [newFocus](HWND h) { return h && newFocus == h; };
@@ -585,21 +620,26 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
     // 原因: 默认创建 Edit control 没设输入法关联, GUI app 加载时无 IME 焦点。
     // 显式 ImmAssociateContext 启用中文 IME (用户报"无法输入中文,只能英文")。
     // imm32.lib 已在 WeaselServer.vcxproj 隐式 link (comdlg32.h 间接引用)。
-    // v0.19.0.36 (P2 hotfix, 用户装机反馈 "无法输入中文" + "无法调出设置栏"):
-    //   5068922 commit 把 ImmReleaseContext(himc) 改 ImmDestroyContext(himc) —
-    //   错的! ImmAssociateContext 把 himc 关联给 s_hInput (不复制,只关联),
-    //   ImmDestroyContext 销毁 himc = 关联的 IME context 销毁 = s_hInput IME
-    //   死, 同时破坏 TSF shim system context → Ctrl+Shift+K 等 hotkey 不响应。
-    //   revert 回 ImmReleaseContext(s_hInput, himc) — **显式 2 参**, MSVC
-    //   接受。 1 参 ImmReleaseContext(himc) 在 SDK imm.h 不存在 (line 262 明确
-    //   2 参 HWND+HIMC), 之前 v0.19.0.35 (fa196049) 写 1 参 + 5068922 ship
-    //   binary md5 389610fb 是 stale v0.19.0.34 binary (L97 同根因, commit
-    //   message "Verification 5/5 PASS md5 parity" 撒谎)。 显式 2 参 Win32 API
-    //   标准用法, "释放 hwnd 对 himc 的关联 lock", context 仍归 s_hInput。
+    //
+    // v0.19.0.36 (P2 hotfix): 5068922 commit 把 ImmReleaseContext(himc) 改
+    //   ImmDestroyContext(himc) — 错的! ImmDestroyContext 销毁 himc = 关联的
+    //   IME context 销毁 = s_hInput IME 死。revert 回 2 参 ImmReleaseContext。
+    //
+    // v0.19.0.43 (Bug 1.2 真修): ImmReleaseContext **仍然错** — 它把刚关联的
+    //   context refcount 从 1 减到 0 → 销毁 context → s_hInput 重新无 IME。
+    //   装机 v0.19.0.42 user 报告"输入框仍无法输入中文", 装机端 5 项 verify
+    //   也确认 IME fail。
+    //   **正确 Win32 模式**: ImmCreateContext 创建 (refcount=1) +
+    //   ImmAssociateContext 转移 ownership 给 hwnd (refcount 内部 +1 = 2) →
+    //   **不调** ImmReleaseContext (那是给 ImmGetContext 配对的)。Context 跟
+    //   hwnd 一起销毁 (DestroyWindow 或 ImmAssociateContext(NULL))。 Per MSDN:
+    //   "The ImmAssociateContext function associates the input context with the
+    //   specified window. The application should not call ImmReleaseContext for
+    //   a handle returned by ImmAssociateContext."
     HIMC himc = ImmCreateContext();
     if (himc) {
       ImmAssociateContext(s_hInput, himc);
-      ImmReleaseContext(s_hInput, himc);
+      // 不调 ImmReleaseContext — context 归 s_hInput 所有, 跟 hwnd 一起销毁
     }
   }
 
@@ -1076,12 +1116,18 @@ LRESULT PhrasesDialog::OnLButtonUp(HWND hwnd, WPARAM wp, LPARAM lp) {
 
 LRESULT PhrasesDialog::OnMouseMove(HWND hwnd, WPARAM wp, LPARAM lp) {
   if (s_isDragging) {
-    int x = LOWORD(lp);
-    int y = HIWORD(lp);
-    // 鼠标位置 - drag origin (LBUTTONDOWN 位置) = 鼠标移动量
-    // window 原位置 + 鼠标移动量 = 新位置
-    int newX = s_dragWndOrigin.x + (x - s_dragOrigin.x);
-    int newY = s_dragWndOrigin.y + (y - s_dragOrigin.y);
+    // v0.19.0.43 (Bug 2.2 drag 修复): 用 GetCursorPos (screen coords) 而非
+    // LOWORD(lp)/HIWORD(lp) (client coords)。
+    // 装机 v0.19.0.42 user 反馈 "拖动 UI 剧烈晃动" — 原版用 client coords 计算
+    // delta: dialog 一移动 (SetWindowPos), 鼠标在 client area 的相对位置跳变
+    // → 下一次 WM_MOUSEMOVE 的 client coord 跟 origin 比对 → 数学错位
+    // → SetWindowPos 跳到错位置 → 视觉上"剧烈晃动"。
+    // 修法: 全程用 screen coords (GetCursorPos), dialog 移动不影响 mouse screen
+    // 位置, delta 算式保持稳定。
+    POINT pt;
+    GetCursorPos(&pt);
+    int newX = s_dragWndOrigin.x + (pt.x - s_dragOrigin.x);
+    int newY = s_dragWndOrigin.y + (pt.y - s_dragOrigin.y);
     SetWindowPos(hwnd, nullptr, newX, newY, 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     return 0;
@@ -1117,7 +1163,12 @@ LRESULT PhrasesDialog::OnGetMinMaxInfo(HWND hwnd, LPARAM lp) {
 
 void PhrasesDialog::StartLongPressTimer(HWND hwnd, int x, int y) {
   s_longPressActive = true;
-  s_dragOrigin = {x, y};
+  // v0.19.0.43 (Bug 2.2): 用 GetCursorPos 拿 screen coords (跟 OnMouseMove
+  // 一致) x/y 参数是 client coords (从 WM_LBUTTONDOWN lp 来), 不用, 用
+  // GetCursorPos
+  POINT pt;
+  GetCursorPos(&pt);
+  s_dragOrigin = pt;
   RECT rc;
   GetWindowRect(hwnd, &rc);
   s_dragWndOrigin = {rc.left, rc.top};
