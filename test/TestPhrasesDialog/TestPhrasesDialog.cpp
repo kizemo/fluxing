@@ -1004,14 +1004,17 @@ static void TestGetMinMaxInfoDpiScaled() {
   LONG expMinH = (LONG)(400 * dpiScale);
   LONG expMaxW = (LONG)(1200 * dpiScale);
   LONG expMaxH = (LONG)(900 * dpiScale);
-  CHECK("29.1: ptMinTrackSize.x = 320 * s_dpiScale (raw 不再用, 防高 DPI 屏 cap)",
-        mmi.ptMinTrackSize.x == expMinW);
+  CHECK(
+      "29.1: ptMinTrackSize.x = 320 * s_dpiScale (raw 不再用, 防高 DPI 屏 cap)",
+      mmi.ptMinTrackSize.x == expMinW);
   CHECK("29.2: ptMinTrackSize.y = 400 * s_dpiScale",
         mmi.ptMinTrackSize.y == expMinH);
   CHECK("29.3: ptMaxTrackSize.x = 1200 * s_dpiScale",
         mmi.ptMaxTrackSize.x == expMaxW);
-  CHECK("29.4: ptMaxTrackSize.y = 900 * s_dpiScale (raw 900 在 200% DPI = 1800 > 初始 920)",
-        mmi.ptMaxTrackSize.y == expMaxH);
+  CHECK(
+      "29.4: ptMaxTrackSize.y = 900 * s_dpiScale (raw 900 在 200% DPI = 1800 > "
+      "初始 920)",
+      mmi.ptMaxTrackSize.y == expMaxH);
 
   // 验证高 DPI 屏 max ≥ 初始尺寸 (关键: 防 cap 缩到比初始还小)
   RECT rc;
@@ -1033,9 +1036,11 @@ static void TestGetMinMaxInfoDpiScaled() {
 //     3) OnMouseMove in drag mode → SetWindowPos (位置变化)
 //     4) OnLButtonUp → s_isDragging = false + ReleaseCapture
 //   这些 handlers 之前只能从外部访问 (private static), 加 Test 30 验证状态机
-//   完整流程 (e2e 覆盖 WM_LBUTTONDOWN / WM_TIMER / WM_MOUSEMOVE / WM_LBUTTONUP)。
+//   完整流程 (e2e 覆盖 WM_LBUTTONDOWN / WM_TIMER / WM_MOUSEMOVE /
+//   WM_LBUTTONUP)。
 static void TestLongPressDragStateMachine() {
-  std::cout << "\n[Test 30] v0.19.0.42: 长按 drag state machine e2e" << std::endl;
+  std::cout << "\n[Test 30] v0.19.0.42: 长按 drag state machine e2e"
+            << std::endl;
   PhrasesDialog::SetYamlPath(L"");
   PhrasesDialog::Show();
   HWND hwnd = PhrasesDialog::s_hwnd;
@@ -1051,8 +1056,7 @@ static void TestLongPressDragStateMachine() {
   PhrasesDialog::OnLButtonDown(hwnd, 0, lParamDown);
   CHECK("30.2: chrome LBUTTONDOWN → s_longPressActive = true",
         PhrasesDialog::s_longPressActive);
-  CHECK("30.3: s_isDragging 仍 false (等 timer)",
-        !PhrasesDialog::s_isDragging);
+  CHECK("30.3: s_isDragging 仍 false (等 timer)", !PhrasesDialog::s_isDragging);
 
   // 模拟 500ms timer fire
   PhrasesDialog::OnTimer(hwnd, PhrasesDialog::kLongPressTimerId);
@@ -1067,18 +1071,39 @@ static void TestLongPressDragStateMachine() {
   int initX = rcInit.left;
   int initY = rcInit.top;
 
-  // 模拟 MOUSEMOVE 100,100 (相对 drag origin (1,1), 移动 +99, +99)
-  LPARAM lParamMove = 100 | (100 << 16);
-  PhrasesDialog::OnMouseMove(hwnd, MK_LBUTTON, lParamMove);
+  // v0.19.0.43 (Bug 2.2 修复后): OnMouseMove 用 GetCursorPos (screen coords)
+  // 而不是 lp (client coords)。原因: dialog 移动后 client coords 跳变,
+  // 数学错位导致 UI 剧烈晃动。GetCursorPos 给真实 cursor 位置, 不受 dialog
+  // 移动影响。
+  // 测试: 用 SetCursorPos 把 cursor 移到初始位置 +99, +99 (相对 drag origin)
+  // → 期望 window 跟着移动 +99, +99
+  POINT ptCursor;
+  GetCursorPos(&ptCursor);
+  // 计算期望的 cursor 位置: 把 cursor 移到 screen (initX+99, initY+99)
+  // (drag origin 已经在 LBUTTONDOWN 时 GetCursorPos 进 s_dragOrigin,
+  //  但那是 sandbox 当前 cursor, 不是 initX+1, initY+1 — 不准)
+  // 简化: 我们只验证相对移动量, 直接比较 SetCursorPos 前后 window 位置
+  // 重新 LBUTTONDOWN + timer fire 让 s_dragOrigin 用 GetCursorPos 拿准确值
+  PhrasesDialog::OnLButtonUp(hwnd, 0, 0);             // cancel current drag
+  PhrasesDialog::OnLButtonDown(hwnd, 0, lParamDown);  // restart LBUTTONDOWN
+  PhrasesDialog::OnTimer(hwnd, PhrasesDialog::kLongPressTimerId);  // fire timer
+  CHECK("30.4b: restart drag after cancel", PhrasesDialog::s_isDragging);
+
+  RECT rcInit2;
+  GetWindowRect(hwnd, &rcInit2);
+  // 现在 s_dragOrigin = current cursor (GetCursorPos at LBUTTONDOWN)
+  GetCursorPos(&ptCursor);
+  // 把 cursor 移到 +99, +99
+  SetCursorPos(ptCursor.x + 99, ptCursor.y + 99);
+  // 触发 MOUSEMOVE — OnMouseMove 调 GetCursorPos 拿到新位置
+  PhrasesDialog::OnMouseMove(hwnd, MK_LBUTTON, 0);
   RECT rcAfter;
   GetWindowRect(hwnd, &rcAfter);
-  // 期望 newX = initX + (100 - 1) = initX + 99
-  int dx = (rcAfter.left - initX);
-  int dy = (rcAfter.top - initY);
-  CHECK("30.6: WM_MOUSEMOVE in drag mode → window 左移 +99 (1→100 delta)",
-        dx == 99);
-  CHECK("30.7: window 上移 +99",
-        dy == 99);
+  int dx = (rcAfter.left - rcInit2.left);
+  int dy = (rcAfter.top - rcInit2.top);
+  // 期望: dialog 跟着 cursor 移动 +99, +99
+  CHECK("30.6: WM_MOUSEMOVE + SetCursorPos +99 → window 左移 +99", dx == 99);
+  CHECK("30.7: WM_MOUSEMOVE + SetCursorPos +99 → window 上移 +99", dy == 99);
 
   // 模拟 LBUTTONUP
   PhrasesDialog::OnLButtonUp(hwnd, 0, 0);
@@ -1098,6 +1123,42 @@ static void TestLongPressDragStateMachine() {
   CHECK("30.11: 短按 s_isDragging 仍 false (没进 drag mode)",
         !PhrasesDialog::s_isDragging);
 
+  PhrasesDialog::Hide();
+}
+
+// v0.19.0.43 (Bug 2.3 真修): outer 尺寸 = client + WS_THICKFRAME border。
+// 装机 v0.19.0.42 user 报告"初始界面右侧遮挡 Add 按钮, 下边缘遮挡列表+按钮"
+// — 是因为 CreateWindowEx 用 raw kDialogW × kDialogH 作 outer, 但 OnCreate
+// 用 DPI-scaled dW × dH 算 child 位置, child 出框。修法: Show() 用
+// AdjustWindowRectEx 算 outer (client + border)。Test 31 验证 outer 严格 >
+// client。
+static void TestOuterSizeIncludesBorder() {
+  std::cout << "\n[Test 31] v0.19.0.43: outer = client + WS_THICKFRAME border"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("31.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+  RECT rcOuter, rcClient;
+  GetWindowRect(hwnd, &rcOuter);
+  GetClientRect(hwnd, &rcClient);
+  int outerW = rcOuter.right - rcOuter.left;
+  int outerH = rcOuter.bottom - rcOuter.top;
+  int clientW = rcClient.right - rcClient.left;
+  int clientH = rcClient.bottom - rcClient.top;
+  // Border 应该让 outer > client (client + 2 * border_thickness)
+  CHECK("31.1: outer width > client width (border 加 outer)", outerW > clientW);
+  CHECK("31.2: outer height > client height (border 加 outer)",
+        outerH > clientH);
+  // border 通常 ~4-8px 每边, 所以 outer - client 应该 ≥ 4
+  int diffW = outerW - clientW;
+  int diffH = outerH - clientH;
+  CHECK("31.3: outer - client >= 4 (border 至少 4px 厚, DPI 2x 下 8px)",
+        diffW >= 4 && diffH >= 4);
+  // client 应该 ≥ 280 × 360 (允许 DPI 0.5x 时缩到最小, 但 kDialogW=360 / 2 =
+  // 180, 加上 border 也 ≥ 184)
+  CHECK("31.4: client area 合理大小 (>= 180 × 240, 0.5x DPI 最小)",
+        clientW >= 180 && clientH >= 240);
   PhrasesDialog::Hide();
 }
 
@@ -1163,6 +1224,10 @@ int main() {
   // v0.19.0.42 (Stop hook 修补: OnGetMinMaxInfo DPI 缩放 + drag state e2e)
   test::TestGetMinMaxInfoDpiScaled();
   test::TestLongPressDragStateMachine();
+
+  // v0.19.0.43 (Bug 1.2 + 2.2 + 2.3 真修: IME ImmReleaseContext + drag screen
+  // coords + WM_KILLFOCUS guard + outer size AdjustWindowRect)
+  test::TestOuterSizeIncludesBorder();
 
   std::cout << "\n================================================="
             << std::endl;

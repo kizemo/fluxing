@@ -209,7 +209,7 @@ reg delete "HKCU\Software\Fluxing" /f
 ```
 
 **装机后 user 端 verify** (5 项):
-1. Module 1+2 md5 = `ceb0ecd055d5f4d48d2f006393456650`
+1. Module 1+2 md5 = `e934e92ba20474c39cab4c07f6208d18`
 2. Module 3 L66 4 keys 写出
 3. **视觉**: 4K/高 DPI 屏 UI 元素放大到合理尺寸 (字体清晰)
 4. **交互**: 鼠标拖 dialog 边界可 resize;chrome 区域长按 500ms 后拖动可移动
@@ -235,6 +235,97 @@ reg delete "HKCU\Software\Fluxing" /f
   清晰;底部 3 按钮 (Edit / Delete / Cancel) 职责分明。
 
 - L102-E: 重复按钮 UX 陷阱 — 顶部 + 底部 Add 让用户困惑;统一到 1 个
+
+---
+
+## [0.19.0.43-fluxing] - 2026-07-21
+
+### fix(WeaselServer): v0.19.0.43 (UI 真修) — IME ImmReleaseContext + drag screen coords + outer size AdjustWindowRect
+
+**User pain** (post v0.19.0.42 装机反馈 — 3 issue 仍 fail):
+1. ❌ 常用短语 UI 编辑栏仍无法录入中文 (v0.19.0.36 fix 反向 bug)
+2. ❌ 长按拖动位置时 UI 剧烈晃动, 可能导致界面消失
+3. ❌ 初始界面右侧边遮挡了"添加"按钮, 下边缘遮挡了部分列表框 + 底部 3 个按钮
+
+**Cure** (3 fixes 1 commit):
+
+**Bug 1.2 (IME ImmReleaseContext 反向修复)**: v0.19.0.36 fix:
+```cpp
+HIMC himc = ImmCreateContext();
+ImmAssociateContext(s_hInput, himc);
+ImmReleaseContext(s_hInput, himc);  // ← 销毁刚关联的 context
+```
+ImmReleaseContext 把 refcount 从 1 减到 0 → 销毁 context → s_hInput 重新无 IME。
+**v0.19.0.43 真修**: 删 ImmReleaseContext (那是给 ImmGetContext 配对的)。Per MSDN:
+> "The application should not call ImmReleaseContext for a handle returned by ImmAssociateContext."
+
+**Bug 2.2 (drag 抖动 + UI 消失)**:
+- OnMouseMove 改用 `GetCursorPos()` (screen coords), 不用 `LOWORD(lp)` (client coords)。
+  client coords 随 dialog 移动跳变 → 数学错位 → 抖动。
+- WM_KILLFOCUS 加 `if (s_isDragging) return 0;` guard。drag 中 SetCapture 偶尔
+  触发 WM_KILLFOCUS, grace 时间已过 → 老逻辑 Hide() → UI 消失。
+- StartLongPressTimer 同步用 GetCursorPos (跟 OnMouseMove 一致)。
+
+**Bug 2.3 (layout clipping — WS_THICKFRAME border 缩 client)**: v0.19.0.41/0.19.0.42
+用 raw `kDialogW × kDialogH` 作 outer 尺寸 → WS_THICKFRAME border 让 client 缩
+~8px 每边 → OnCreate 用 DPI-scaled dW × dH 算 child 位置 → child 出框。
+**v0.19.0.43 真修**: Show() 加 `AdjustWindowRectEx` 算 outer (client + border),
+DPI 同步缩放 (跟 OnCreate 一致 → GetDpiForSystem 跟 GetDpiForWindow 同源
+primary monitor)。CenterOnPrimaryMonitor 改用 outer 尺寸。
+
+**Verify** (sandbox Win32 Release):
+- TestPhrasesDialog: **137 PASS / 0 FAIL** (Test 30 refactor SetCursorPos +
+  Test 31 outer > client 验证 = 5 新增 check, 132 baseline 不退化)
+- 编译: WeaselServer.vcxproj + TestPhrasesDialog.vcxproj Release Win32 Exit 0
+- `_check_install_v2.ps1` Module 1+2 md5 = `e934e92ba20474c39cab4c07f6208d18`
+- installer md5: `85b985346399c40b691f4c5e682f17a9` (43,183,198 bytes)
+- installer extract md5 = source md5 ✓ (无 L97 stale)
+- install.nsi UTF-8 BOM (EF BB BF) + CRLF ✓
+
+**Files touched** (v0.19.0.43, 3):
+- `WeaselServer/PhrasesDialog.cpp` (3 处 ~20 行):
+  - OnCreate L599-602: 删 ImmReleaseContext, 注释更新
+  - WndProc WM_KILLFOCUS: 加 s_isDragging guard
+  - OnMouseMove: GetCursorPos (screen coords)
+  - StartLongPressTimer: GetCursorPos
+  - Show() CreateWindowEx 前: AdjustWindowRectEx 算 outer size
+- `test/TestPhrasesDialog/TestPhrasesDialog.cpp`:
+  - Test 30 refactor: 用 SetCursorPos 模拟 cursor 移动 (验证 screen coords fix)
+  - Test 31 新增: outer > client 验证 (verify border + AdjustWindowRect fix)
+- `_check_install_v2.ps1` (5 处 / 14 行): expect md5 → v0.19.0.43
+
+**装机命令** (L13/L54/L66 强约束):
+```powershell
+taskkill /F /IM WeaselServer.exe /T
+reg delete "HKLM\SOFTWARE\Fluxing\Weasel" /f
+reg delete "HKCU\Software\Fluxing" /f
+& "F:\soft\00selfmade\rime_claude\release\fluxing-0.19.0.43-installer.exe" /S /D=D:\Program Files\fluxing
+& "F:\soft\00selfmade\rime_claude\_check_install_v2.ps1"
+```
+
+**装机后 user 端 verify** (3 项):
+1. Module 1+2 md5 = `e934e92ba20474c39cab4c07f6208d18`
+2. **IME**: 焦点在 input, 切到中文 IME, 输入"测试" → 应该正常出字
+   (v0.19.0.42 失败 → v0.19.0.43 应该工作)
+3. **drag 稳定**: 长按 500ms 拖动 → UI 平滑跟手, 不晃动;松手不消失
+4. **layout**: 初始 dialog 顶部 Add 按钮完整可见, 列表完整, 底部 3 按钮完整可见
+   (没有 border 遮挡)
+
+**lessons-learned candidate (L103-PhaseG-UI-rev2)**:
+- L103-A (ImmReleaseContext refcount trap): ImmCreateContext + ImmAssociateContext
+  + ImmReleaseContext **会销毁**刚关联的 context (refcount 0)。正确: ImmAssociateContext
+  后 **不调** ImmReleaseContext。L97 "1 参 trap" 只 catch 了 `ImmDestroyContext`，
+  没 catch 这个 refcount trap。需补 L103-A。
+- L103-B (drag coords stability): drag 期间 dialog 移动 → client coords 跳变。
+  永远用 screen coords (GetCursorPos) 做 drag delta 计算。client coords 是
+  relative-to-dialog, dialog 移动后失效。
+- L103-C (WS_THICKFRAME border 影响 client area): 加 WS_THICKFRAME 后,
+  CreateWindowEx 传入的尺寸是 outer, client 实际 = outer - 2*border。
+  必须用 AdjustWindowRectEx 算 outer (from client) 才不会出框。
+  DPI 缩放也要应用到 outer, 否则高 DPI 屏 client 仍按 base 算 → 出框。
+- L103-D (Test 30 refactor SetCursorPos): Test 30 原本用 SendMessage WM_MOUSEMOVE
+  + client coord lp 验证 drag。OnMouseMove 改 GetCursorPos 后 lp 不再被读,
+  Test 30 必须改用 SetCursorPos + WM_MOUSEMOVE 才能验 screen coords delta。
 
 ---
 
