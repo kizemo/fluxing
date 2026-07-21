@@ -30,7 +30,7 @@ HWND PhrasesDialog::s_hwnd = nullptr;
 HWND PhrasesDialog::s_hInput = nullptr;
 HWND PhrasesDialog::s_hBtnAddTop = nullptr;
 HWND PhrasesDialog::s_hList = nullptr;
-HWND PhrasesDialog::s_hBtnAdd = nullptr;
+// v0.19.0.41 删 s_hBtnAdd — 跟 s_hBtnAddTop 功能重复, 留一个就够
 HWND PhrasesDialog::s_hBtnEdit = nullptr;
 HWND PhrasesDialog::s_hBtnDel = nullptr;
 HWND PhrasesDialog::s_hBtnCancel = nullptr;
@@ -49,6 +49,14 @@ HFONT PhrasesDialog::s_hFontUi = nullptr;
 int PhrasesDialog::kListH_phys = 0;
 int PhrasesDialog::kBtnY_phys = 0;
 PhrasesDialog::State PhrasesDialog::s_state = PhrasesDialog::State_Hidden;
+// v0.19.0.41 (Bug 2: DPI 缩放): default 1.0 = 96 DPI。OnCreate 通过
+// GetDpiForWindow 算实际值。TestPhrasesDialog sandbox 走 96 DPI = 1.0。
+double PhrasesDialog::s_dpiScale = 1.0;
+// v0.19.0.41 (Feature: 长按 drag): state 初始化
+bool PhrasesDialog::s_longPressActive = false;
+bool PhrasesDialog::s_isDragging = false;
+POINT PhrasesDialog::s_dragOrigin = {0, 0};
+POINT PhrasesDialog::s_dragWndOrigin = {0, 0};
 
 // ===== 设计常量 (spec 044 §3) =====
 namespace {
@@ -79,11 +87,11 @@ constexpr COLORREF kButtonBg = RGB(245, 245, 248);
 // 字体
 constexpr int kUiFontSize = 14;
 
-// 子控件 ID (v0.19.0.32 重新编号)
+// 子控件 ID (v0.19.0.32 重新编号, v0.19.0.41 删 ID_BTN_ADD 重复)
 constexpr UINT ID_INPUT = 1010;        // 顶部 input
-constexpr UINT ID_BTN_ADD_TOP = 1011;  // 顶部 Add 按钮
+constexpr UINT ID_BTN_ADD_TOP = 1011;  // 顶部 Add 按钮 (v0.19.0.41 唯一 Add)
 constexpr UINT ID_LIST = 1100;         // ListView
-constexpr UINT ID_BTN_ADD = 1001;
+// v0.19.0.41 删 ID_BTN_ADD (1001) — 底部重复 Add 已删, 只留顶部 ID_BTN_ADD_TOP
 constexpr UINT ID_BTN_EDIT = 1002;
 constexpr UINT ID_BTN_DEL = 1003;
 constexpr UINT ID_BTN_CANCEL = 1004;
@@ -129,7 +137,11 @@ void PhrasesDialog::Show() {
   // 透明成用户看到的"无内容"。 走 ShortcutSettings 同样路径 (WS_EX_LAYERED
   // 不设), BeginPaint/EndPaint 正常 paint body。
   DWORD exStyle = WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
-  DWORD style = WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+  // v0.19.0.41 (Feature): 加 WS_THICKFRAME — 让用户能用鼠标拖边界 resize
+  // (Win32 默认: WS_THICKFRAME = 可调整边框 + 可最大化/最小化按钮, 我们
+  // 不要 min/max 所以不加 WS_MAXIMIZEBOX / WS_MINIMIZEBOX)。
+  DWORD style =
+      WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_THICKFRAME;
 
   // 注册 window class(幂等)
   static bool s_classRegistered = false;
@@ -216,9 +228,13 @@ void PhrasesDialog::Hide() {
   s_hInput = nullptr;
   s_hBtnAddTop = nullptr;
   s_hList = nullptr;
-  s_hBtnAdd = s_hBtnEdit = s_hBtnDel = s_hBtnCancel = nullptr;
+  // v0.19.0.41 删 s_hBtnAdd
+  s_hBtnEdit = s_hBtnDel = s_hBtnCancel = nullptr;
   s_state = State_Hidden;
   m_selectedIndex = -1;
+  // 复位 drag state (避免下次 Show 还在 drag)
+  s_isDragging = false;
+  s_longPressActive = false;
 }
 
 void PhrasesDialog::SetInjectFn(InjectFn fn) {
@@ -467,6 +483,19 @@ LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd,
     case WM_CTLCOLOREDIT:
     case WM_CTLCOLORSTATIC:
       return OnCtlColor(hwnd, wp, lp);
+    // v0.19.0.41 (Feature: resize + long-press drag)
+    case WM_NCHITTEST:
+      return OnNcHitTest(hwnd, lp);
+    case WM_LBUTTONDOWN:
+      return OnLButtonDown(hwnd, wp, lp);
+    case WM_LBUTTONUP:
+      return OnLButtonUp(hwnd, wp, lp);
+    case WM_MOUSEMOVE:
+      return OnMouseMove(hwnd, wp, lp);
+    case WM_TIMER:
+      return OnTimer(hwnd, wp);
+    case WM_GETMINMAXINFO:
+      return OnGetMinMaxInfo(hwnd, lp);
     case WM_ACTIVATEAPP: {
       if (wp == FALSE) {
         DWORD nowTick = GetTickCount();
@@ -480,9 +509,9 @@ LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd,
       // v0.19.0.32: 检查新焦点是否为本 dialog 内的子控件
       HWND newFocus = (HWND)wp;
       auto isChild = [newFocus](HWND h) { return h && newFocus == h; };
+      // v0.19.0.41: 删 s_hBtnAdd (重复 Add 按钮), 现在 4 按钮 (1 top + 3 bot)
       if (isChild(s_hInput) || isChild(s_hBtnAddTop) || isChild(s_hList) ||
-          isChild(s_hBtnAdd) || isChild(s_hBtnEdit) || isChild(s_hBtnDel) ||
-          isChild(s_hBtnCancel)) {
+          isChild(s_hBtnEdit) || isChild(s_hBtnDel) || isChild(s_hBtnCancel)) {
         return 0;
       }
       DWORD nowTick = GetTickCount();
@@ -497,28 +526,55 @@ LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd,
 }
 
 LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
-  // v0.19.0.32 UX redo: layout = title + (input + AddTop) row + list + 4
-  // buttons kListH_phys = kDialogH - kTitleH - kInputH - kBtnH - 4*kGap
-  kListH_phys = kDialogH - kTitleH - kInputH - kBtnH - 4 * kGap;
-  kBtnY_phys = kTitleH + kInputH + kListH_phys + 2 * kGap;
+  // ===== v0.19.0.41 (Bug 2: UI 过小): DPI 缩放 =====
+  // GetDpiForWindow 返回 dialog 所在 monitor 的 effective DPI (PerMonitorV2
+  // 启用时 = 当前 monitor DPI, 否则 = system DPI)。96 是 base (100% 缩放)。
+  // 4K 屏 200% 缩放 → 192 → s_dpiScale = 2.0 → 所有物理像素 ×2。
+  int dpi = GetDpiForWindow(hwnd);
+  double dpiScale = (dpi > 0) ? (double)dpi / 96.0 : 1.0;
+  // Clamp 防止异常 DPI (e.g. 50% 或 500% 缩放) 让 dialog 失真
+  if (dpiScale < 0.5)
+    dpiScale = 0.5;
+  if (dpiScale > 4.0)
+    dpiScale = 4.0;
+  s_dpiScale = dpiScale;
+
+  // 缩放所有尺寸 — 用 const int 避免后续类型混乱
+  const int dW = (int)(kDialogW * dpiScale);
+  const int dH = (int)(kDialogH * dpiScale);
+  const int titleH = (int)(kTitleH * dpiScale);
+  const int inputH = (int)(kInputH * dpiScale);
+  const int inputW = (int)(kInputW * dpiScale);
+  const int btnAddTopW = (int)(kBtnAddTopW * dpiScale);
+  const int btnH = (int)(kBtnH * dpiScale);
+  const int btnW = (int)(kBtnW * dpiScale);
+  const int btnGap = (int)(kBtnGap * dpiScale);
+  const int btnMarginX = (int)(kBtnMarginX * dpiScale);
+  const int gap = (int)(kGap * dpiScale);
+  const int fontSize = (int)(kUiFontSize * dpiScale);
+
+  // v0.19.0.32 UX redo: layout = title + (input + AddTop) row + list + 3
+  // bottom buttons (v0.19.0.41 删 4 → 3, 移除重复 Add)
+  kListH_phys = dH - titleH - inputH - btnH - 3 * gap;
+  kBtnY_phys = titleH + inputH + kListH_phys + 2 * gap;
   if (kListH_phys < 80)
     kListH_phys = 80;
-  if (kBtnY_phys + kBtnH > kDialogH)
-    kBtnY_phys = kDialogH - kBtnH - 2;
+  if (kBtnY_phys + btnH > dH)
+    kBtnY_phys = dH - btnH - 2;
 
-  s_hFontUi = CreateFontW(kUiFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+  s_hFontUi = CreateFontW(fontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                           CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                           VARIABLE_PITCH | FF_SWISS, L"Segoe UI Variable");
   HFONT hfUi = s_hFontUi;
 
   // v0.19.0.32: 顶部 input + Add 按钮 (同 row, 左右分布)
-  int inputY = kTitleH + kGap;
-  int inputX = kBtnMarginX;
+  int inputY = titleH + gap;
+  int inputX = btnMarginX;
   s_hInput = CreateWindowExW(
       WS_EX_CLIENTEDGE, L"EDIT", L"",
       WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | ES_AUTOHSCROLL,
-      inputX, inputY, kInputW, kInputH, hwnd, reinterpret_cast<HMENU>(ID_INPUT),
+      inputX, inputY, inputW, inputH, hwnd, reinterpret_cast<HMENU>(ID_INPUT),
       GetModuleHandle(nullptr), nullptr);
   if (s_hInput && hfUi) {
     SendMessageW(s_hInput, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
@@ -544,12 +600,12 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
     }
   }
 
-  // v0.19.0.32: 顶部 Add 按钮 (input 右侧)
-  int btnTopX = inputX + kInputW + kGap;
+  // v0.19.0.32: 顶部 Add 按钮 (input 右侧) — 唯一 Add (v0.19.0.41)
+  int btnTopX = inputX + inputW + gap;
   s_hBtnAddTop = CreateWindowExW(
       0, L"BUTTON", L"+ \x6dfb\x52a0",  // + 添加
       WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON, btnTopX, inputY,
-      kBtnAddTopW, kInputH, hwnd, reinterpret_cast<HMENU>(ID_BTN_ADD_TOP),
+      btnAddTopW, inputH, hwnd, reinterpret_cast<HMENU>(ID_BTN_ADD_TOP),
       GetModuleHandle(nullptr), nullptr);
   if (s_hBtnAddTop && hfUi) {
     SendMessageW(s_hBtnAddTop, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi),
@@ -557,12 +613,12 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
   }
 
   // v0.19.0.32: ListView (单列 "phrase text")
-  int listY = inputY + kInputH + kGap;
+  int listY = inputY + inputH + gap;
   DWORD listEx = WS_EX_CLIENTEDGE;
   DWORD listStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS |
                     LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS;
-  s_hList = CreateWindowExW(listEx, WC_LISTVIEWW, L"", listStyle, kGap, listY,
-                            kDialogW - 2 * kGap, kListH_phys, hwnd,
+  s_hList = CreateWindowExW(listEx, WC_LISTVIEWW, L"", listStyle, gap, listY,
+                            dW - 2 * gap, kListH_phys, hwnd,
                             reinterpret_cast<HMENU>(ID_LIST),
                             GetModuleHandle(nullptr), nullptr);
   if (s_hList && hfUi) {
@@ -575,37 +631,39 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
     col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
     col.pszText = const_cast<wchar_t*>(
         L"");  // 空 — 整个 ListView 内容都是短语, header "短语" 冗余
-    col.cx = kDialogW - 2 * kGap - 4;
+    col.cx = dW - 2 * gap - 4;
     col.iSubItem = 0;
     ListView_InsertColumn(s_hList, 0, &col);
   }
   // 全行选择
   ListView_SetExtendedListViewStyle(s_hList, LVS_EX_FULLROWSELECT);
 
-  // v0.19.0.32: 底部 4 按钮 (Add / Edit / Delete / Cancel)
+  // v0.19.0.41: 底部 3 按钮 (Edit / Delete / Cancel) — 删重复的 Add
+  // v0.19.0.32 原 4 按钮 (Add / Edit / Delete / Cancel), 但顶部已有
+  // s_hBtnAddTop, 底部 Add 跟它功能一样, 算"重复" (用户报 Bug 4)。删底部 Add,
+  // 留 3 按钮。
   int btnY = kBtnY_phys;
-  int totalW = kBtnW * 4 + kBtnGap * 3;
-  int btnX = (kDialogW - totalW) / 2;
-  const wchar_t* kBtnLabels[4] = {
-      L"+ \x6dfb\x52a0",       // + 添加
+  int totalW = btnW * 3 + btnGap * 2;
+  int btnX = (dW - totalW) / 2;
+  const wchar_t* kBtnLabels[3] = {
       L"\u270e \x7f16\x8f91",  // ✎ 编辑
       L"- \x5220\x9664",       // - 删除
       L"\x53d6\x6d88",         // 取消
   };
-  UINT kBtnIds[4] = {ID_BTN_ADD, ID_BTN_EDIT, ID_BTN_DEL, ID_BTN_CANCEL};
-  HWND* kBtnHwnds[4] = {&s_hBtnAdd, &s_hBtnEdit, &s_hBtnDel, &s_hBtnCancel};
-  for (int i = 0; i < 4; ++i) {
+  UINT kBtnIds[3] = {ID_BTN_EDIT, ID_BTN_DEL, ID_BTN_CANCEL};
+  HWND* kBtnHwnds[3] = {&s_hBtnEdit, &s_hBtnDel, &s_hBtnCancel};
+  for (int i = 0; i < 3; ++i) {
     *kBtnHwnds[i] = CreateWindowExW(
         0, L"BUTTON", kBtnLabels[i],
         WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON, btnX, btnY,
-        kBtnW, kBtnH, hwnd, reinterpret_cast<HMENU>(kBtnIds[i]),
+        btnW, btnH, hwnd, reinterpret_cast<HMENU>(kBtnIds[i]),
         GetModuleHandle(nullptr), nullptr);
-    btnX += kBtnW + kBtnGap;
+    btnX += btnW + btnGap;
   }
 
   // 字体
   if (hfUi) {
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 3; ++i) {
       SendMessageW(*kBtnHwnds[i], WM_SETFONT, reinterpret_cast<WPARAM>(hfUi),
                    TRUE);
     }
@@ -636,7 +694,8 @@ LRESULT PhrasesDialog::OnDestroy(HWND hwnd) {
   s_hInput = nullptr;
   s_hBtnAddTop = nullptr;
   s_hList = nullptr;
-  s_hBtnAdd = s_hBtnEdit = s_hBtnDel = s_hBtnCancel = nullptr;
+  // v0.19.0.41 删 s_hBtnAdd
+  s_hBtnEdit = s_hBtnDel = s_hBtnCancel = nullptr;
   return 0;
 }
 
@@ -646,15 +705,22 @@ LRESULT PhrasesDialog::OnPaint(HWND hwnd) {
   RECT rc;
   GetClientRect(hwnd, &rc);
 
-  ModalChrome::PaintBackgroundAndBorder(hdc, kDialogW, kDialogH, kBgTop, kBgBot,
-                                        kDlgRadius, kBorderColor);
+  // v0.19.0.41 (Bug 2 + Feature): 用实际 client 尺寸 (DPI-scaled + resize 后)
+  // 而非 hardcode kDialogW/kDialogH — 否则 resize 后 chrome 错位, DPI 2x 屏
+  // chrome 仍画 360×460 (只占左上角 1/4)。
+  int paintW = rc.right - rc.left;
+  int paintH = rc.bottom - rc.top;
+  int paintRadius = (int)(kDlgRadius * s_dpiScale);
+
+  ModalChrome::PaintBackgroundAndBorder(hdc, paintW, paintH, kBgTop, kBgBot,
+                                        paintRadius, kBorderColor);
 
   // 标题文字
   HFONT hf = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
   HFONT hfOld = static_cast<HFONT>(SelectObject(hdc, hf));
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, kTextColor);
-  RECT titleRc = {0, 0, kDialogW, kTitleH};
+  RECT titleRc = {0, 0, paintW, (int)(kTitleH * s_dpiScale)};
   DrawTextW(hdc, L"\x5e38\x7528\x77ed\x8bed", -1, &titleRc,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
   SelectObject(hdc, hfOld);
@@ -743,12 +809,15 @@ LRESULT PhrasesDialog::OnKeyDown(HWND hwnd, WPARAM wp) {
       return 0;
     }
     case VK_TAB: {
-      HWND order[5] = {s_hInput, s_hList, s_hBtnAdd, s_hBtnEdit, s_hBtnCancel};
+      // v0.19.0.41 (Bug 4): 6 元素 — s_hBtnAdd 删, 加 s_hBtnAddTop + s_hBtnDel
+      //   (旧 array 漏了 s_hBtnAddTop + s_hBtnDel, 顺手修)
+      HWND order[6] = {s_hInput,   s_hBtnAddTop, s_hList,
+                       s_hBtnEdit, s_hBtnDel,    s_hBtnCancel};
       HWND cur = GetFocus();
       int start = 0;
-      for (int i = 0; i < 5; ++i) {
+      for (int i = 0; i < 6; ++i) {
         if (order[i] == cur) {
-          start = (i + 1) % 5;
+          start = (i + 1) % 6;
           break;
         }
       }
@@ -887,11 +956,7 @@ LRESULT PhrasesDialog::OnCommand(HWND hwnd, WPARAM wp) {
       }
       return 0;
     }
-    case ID_BTN_ADD: {
-      // 底部 Add 按钮: 同 ID_BTN_ADD_TOP (兼容旧 hotkey 调用)
-      SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(ID_BTN_ADD_TOP, BN_CLICKED), 0);
-      return 0;
-    }
+    // v0.19.0.41 删 ID_BTN_ADD case — 底部 Add 按钮已删, 跟 s_hBtnAddTop 重复
     case ID_BTN_EDIT: {
       // 编辑: 读 input → 更新 m_phrases[m_selectedIndex] → FlushSave
       if (m_selectedIndex >= 0 &&
@@ -969,6 +1034,106 @@ void PhrasesDialog::CenterOnPrimaryMonitor(HWND hwnd, int w, int h) {
   int cx = (mi.rcWork.left + mi.rcWork.right - w) / 2;
   int cy = (mi.rcWork.top + mi.rcWork.bottom - h) / 2;
   SetWindowPos(hwnd, nullptr, cx, cy, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// ===== v0.19.0.41 (Feature: resize + long-press drag) =====
+
+LRESULT PhrasesDialog::OnNcHitTest(HWND hwnd, LPARAM lp) {
+  // 默认行为 (DefWindowProc) 自动给 WS_THICKFRAME 边框返回 HTLEFT/HTRIGHT/
+  // HTTOP 等, 让用户能鼠标拖边界 resize。Chrome 区域 (非子控件) 返回
+  // HTCLIENT, 由 OnLButtonDown 长按 500ms 后触发 drag。不要返回 HTCAPTION —
+  // 那会让 Windows 默认 click+drag 跳过我们的 long press 逻辑。
+  return DefWindowProcW(hwnd, WM_NCHITTEST, 0, lp);
+}
+
+LRESULT PhrasesDialog::OnLButtonDown(HWND hwnd, WPARAM wp, LPARAM lp) {
+  int x = LOWORD(lp);
+  int y = HIWORD(lp);
+  POINT ptClient = {x, y};
+  // 1. 检查鼠标是否在子控件上 (input / list / 按钮) — 如果是, 不启动 long
+  //    press, 让 Windows 默认处理 (input 获焦点, button click, list select 等)
+  HWND child = ChildWindowFromPoint(hwnd, ptClient);
+  if (child && child != hwnd) {
+    return DefWindowProcW(hwnd, WM_LBUTTONDOWN, wp, lp);
+  }
+
+  // 2. 在 chrome 区域 (标题栏 / input 上下空隙 / list 周围) — 启动 long press
+  StartLongPressTimer(hwnd, x, y);
+  return 0;
+}
+
+LRESULT PhrasesDialog::OnLButtonUp(HWND hwnd, WPARAM wp, LPARAM lp) {
+  // 释放 drag + 取消 long press (二者互斥, 都在的话 cancel 全部)
+  EndDrag(hwnd);
+  CancelLongPress(hwnd);
+  return 0;
+}
+
+LRESULT PhrasesDialog::OnMouseMove(HWND hwnd, WPARAM wp, LPARAM lp) {
+  if (s_isDragging) {
+    int x = LOWORD(lp);
+    int y = HIWORD(lp);
+    // 鼠标位置 - drag origin (LBUTTONDOWN 位置) = 鼠标移动量
+    // window 原位置 + 鼠标移动量 = 新位置
+    int newX = s_dragWndOrigin.x + (x - s_dragOrigin.x);
+    int newY = s_dragWndOrigin.y + (y - s_dragOrigin.y);
+    SetWindowPos(hwnd, nullptr, newX, newY, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    return 0;
+  }
+  return DefWindowProcW(hwnd, WM_MOUSEMOVE, wp, lp);
+}
+
+LRESULT PhrasesDialog::OnTimer(HWND hwnd, WPARAM wp) {
+  if (wp == kLongPressTimerId) {
+    // 500ms 到 — 进入 drag mode
+    KillTimer(hwnd, kLongPressTimerId);
+    s_longPressActive = false;
+    BeginDrag(hwnd);
+    return 0;
+  }
+  return DefWindowProcW(hwnd, WM_TIMER, wp, 0);
+}
+
+LRESULT PhrasesDialog::OnGetMinMaxInfo(HWND hwnd, LPARAM lp) {
+  MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lp);
+  if (mmi) {
+    mmi->ptMinTrackSize.x = kMinW;
+    mmi->ptMinTrackSize.y = kMinH;
+    mmi->ptMaxTrackSize.x = kMaxW;
+    mmi->ptMaxTrackSize.y = kMaxH;
+  }
+  return 0;
+}
+
+void PhrasesDialog::StartLongPressTimer(HWND hwnd, int x, int y) {
+  s_longPressActive = true;
+  s_dragOrigin = {x, y};
+  RECT rc;
+  GetWindowRect(hwnd, &rc);
+  s_dragWndOrigin = {rc.left, rc.top};
+  // 第二个参数: 500ms 长按阈值 (kLongPressMs)
+  SetTimer(hwnd, kLongPressTimerId, kLongPressMs, nullptr);
+}
+
+void PhrasesDialog::CancelLongPress(HWND hwnd) {
+  if (s_longPressActive) {
+    KillTimer(hwnd, kLongPressTimerId);
+    s_longPressActive = false;
+  }
+}
+
+void PhrasesDialog::BeginDrag(HWND hwnd) {
+  s_isDragging = true;
+  // SetCapture 让 mouse move 即使鼠标移出 dialog client 区也能收到
+  SetCapture(hwnd);
+}
+
+void PhrasesDialog::EndDrag(HWND hwnd) {
+  if (s_isDragging) {
+    s_isDragging = false;
+    ReleaseCapture();
+  }
 }
 
 // 注: v0.19.0.33 (Phase B Bug 2b) commit 8fe29885 删除 RepaintLayered 函数。

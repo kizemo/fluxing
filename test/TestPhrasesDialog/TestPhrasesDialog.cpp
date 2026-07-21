@@ -391,14 +391,15 @@ static void TestShowCreatesNewControls() {
   CHECK(
       "11.2: s_hInput 创建 (顶部 input)",
       PhrasesDialog::s_hInput != nullptr && IsWindow(PhrasesDialog::s_hInput));
-  CHECK("11.3: s_hBtnAddTop 创建 (顶部 Add 按钮)",
+  CHECK("11.3: s_hBtnAddTop 创建 (顶部 Add 按钮, v0.19.0.41 唯一 Add)",
         PhrasesDialog::s_hBtnAddTop != nullptr);
   CHECK("11.4: s_hList 创建 (ListView)",
         PhrasesDialog::s_hList != nullptr && IsWindow(PhrasesDialog::s_hList));
-  CHECK("11.5: s_hBtnAdd 创建", PhrasesDialog::s_hBtnAdd != nullptr);
-  CHECK("11.6: s_hBtnEdit 创建", PhrasesDialog::s_hBtnEdit != nullptr);
-  CHECK("11.7: s_hBtnDel 创建", PhrasesDialog::s_hBtnDel != nullptr);
-  CHECK("11.8: s_hBtnCancel 创建", PhrasesDialog::s_hBtnCancel != nullptr);
+  // v0.19.0.41: 删 s_hBtnAdd (重复, 跟 s_hBtnAddTop 一样), 11.5 移除
+  CHECK("11.5: s_hBtnEdit 创建 (底部 3 按钮之一)",
+        PhrasesDialog::s_hBtnEdit != nullptr);
+  CHECK("11.6: s_hBtnDel 创建", PhrasesDialog::s_hBtnDel != nullptr);
+  CHECK("11.7: s_hBtnCancel 创建", PhrasesDialog::s_hBtnCancel != nullptr);
 
   // 关键验证: 删 v0.19.0.30 旧 inline-edit 控件 (s_hEditText/s_hEditCat 不存在)
   // v0.19.0.32 已删字段,无法访问 — 通过 static_assert 在头文件验证
@@ -899,6 +900,87 @@ static void TestLVNKeyDownEscapeHides() {
         PhrasesDialog::s_hwnd == nullptr);
 }
 
+// v0.19.0.41 (Bug 4: 删重复 Add 按钮): 通过 EnumChildWindows 数 button 子控件
+//   期望: 1 个 Add 按钮 (顶部 s_hBtnAddTop) + 3 个底部按钮 (Edit/Del/Cancel) =
+//   4 个 BUTTON 类子控件。v0.19.0.40 是 5 (4 底部 + 1 顶部 Add)。
+//   同时验证 s_hBtnAddTop label 是 "+ 添加" (避免有第二个 Add 误加回)。
+static void TestNoDuplicateAddButton() {
+  std::cout << "\n[Test 26] v0.19.0.41: 唯一 Add 按钮 (无底部重复)"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("26.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+
+  // EnumChildWindows 数 BUTTON 类 (Windows class name 是 "Button", 不是
+  // "BUTTON")
+  struct Counter {
+    int count;
+  };
+  Counter cnt = {0};
+  auto cb = [](HWND child, LPARAM lp) -> BOOL {
+    Counter* c = reinterpret_cast<Counter*>(lp);
+    wchar_t cls[16] = {};
+    GetClassNameW(child, cls, 16);
+    // case-insensitive 比对 (Windows class 实际名 "Button", 但保险起见)
+    if (_wcsicmp(cls, L"Button") == 0) {
+      c->count++;
+    }
+    return TRUE;
+  };
+  EnumChildWindows(hwnd, cb, reinterpret_cast<LPARAM>(&cnt));
+  CHECK(
+      "26.1: BUTTON 子控件 = 4 (顶部 Add + 3 底部 Edit/Del/Cancel, v0.19.0.40 "
+      "是 5)",
+      cnt.count == 4);
+
+  // 验证 s_hBtnAddTop label 是 "+ 添加"
+  wchar_t topText[64] = {};
+  GetWindowTextW(PhrasesDialog::s_hBtnAddTop, topText, 64);
+  CHECK("26.2: 顶部 Add 按钮 label 含 '添加'",
+        wcsstr(topText, L"\x6dfb\x52a0") != nullptr);
+  PhrasesDialog::Hide();
+}
+
+// v0.19.0.41 (Feature: 鼠标拖边界 resize): WS_THICKFRAME 在 window style 里
+//   没有 WS_THICKFRAME → mouse 在 border 上不能 resize。
+static void TestWindowStyleHasThickFrame() {
+  std::cout << "\n[Test 27] v0.19.0.41: WS_THICKFRAME 启用 resize" << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("27.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+  LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+  CHECK("27.1: window style 含 WS_THICKFRAME (允许拖边界 resize)",
+        (style & WS_THICKFRAME) != 0);
+  // 验证没误加 max/min 按钮 (dialog 是 modal, 不要这些)
+  CHECK("27.2: window style 不含 WS_MAXIMIZEBOX (modal 不要 max 按钮)",
+        (style & WS_MAXIMIZEBOX) == 0);
+  CHECK("27.3: window style 不含 WS_MINIMIZEBOX (modal 不要 min 按钮)",
+        (style & WS_MINIMIZEBOX) == 0);
+  PhrasesDialog::Hide();
+}
+
+// v0.19.0.41 (Bug 2: DPI 缩放): s_dpiScale > 0 (96 DPI = 1.0, 200% DPI = 2.0)
+//   sandbox 走 96 DPI = 1.0, user 端 4K 屏 = 2.0。s_dpiScale 必须 clamped 在
+//   [0.5, 4.0] 范围 (OnCreate 边界检查)。
+static void TestDpiScaleComputed() {
+  std::cout << "\n[Test 28] v0.19.0.41: s_dpiScale 计算 + clamp [0.5, 4.0]"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("28.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+  CHECK("28.1: s_dpiScale > 0 (OnCreate 算出了值)",
+        PhrasesDialog::s_dpiScale > 0.0);
+  CHECK("28.2: s_dpiScale 在 [0.5, 4.0] 范围 (clamp 边界)",
+        PhrasesDialog::s_dpiScale >= 0.5 && PhrasesDialog::s_dpiScale <= 4.0);
+  // 物理 list 高度 (DPI-scaled 后) 应 ≥ 80 (OnCreate 边界)
+  CHECK("28.3: kListH_phys ≥ 80 (OnCreate 边界保护)",
+        PhrasesDialog::kListH_phys >= 80);
+  PhrasesDialog::Hide();
+}
+
 }  // namespace test
 
 int main() {
@@ -952,6 +1034,11 @@ int main() {
 
   // v0.19.0.40 (Phase F Bug 3 续修: LVN_KEYDOWN 路径 — 真 fix)
   test::TestLVNKeyDownEscapeHides();
+
+  // v0.19.0.41 (UI 迭代: DPI 缩放 + resize + drag + 删重复 Add)
+  test::TestNoDuplicateAddButton();
+  test::TestWindowStyleHasThickFrame();
+  test::TestDpiScaleComputed();
 
   std::cout << "\n================================================="
             << std::endl;

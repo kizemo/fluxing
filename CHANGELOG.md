@@ -135,6 +135,107 @@ reg delete "HKCU\Software\Fluxing" /f
 
 ---
 
+## [0.19.0.41-fluxing] - 2026-07-21
+
+### fix(WeaselServer): v0.19.0.41 (UI 迭代) — DPI 缩放 + 鼠标拖动 resize + 长按拖动位置 + 删重复 Add 按钮
+
+**User pain** (post v0.19.0.40 装机反馈):
+1. ❌ 常用短语 UI 编辑栏无法录入中文 (IME)
+2. ❌ UI 元素过小, 按钮字体也小 (4K/高 DPI 屏)
+3. ❌ 窗口无法鼠标拖边界 resize, 无法长按拖动位置
+4. ❌ 底部"新增"按钮跟顶部"+"按钮重复
+
+**Cure**:
+
+#### Bug 1: IME 中文输入
+v0.19.0.36 已加 `ImmCreateContext` + `ImmAssociateContext(s_hInput, himc)` +
+`ImmReleaseContext(s_hInput, himc)` (2 参) — 跟 L97 trap 兼容。v0.19.0.35 已删
+`SetWindowRgn` 圆角 region (切 IME composition window)。v0.19.0.33 已删
+`WS_EX_LAYERED` (layered window 拦截 IME)。
+**v0.19.0.41 源码未改 IME 路径** — 装机 v0.19.0.41 binary 应当已支持中文 IME。
+若仍 fail, verify `_check_install_v2.ps1` Module 1+2 md5 = `ceb0ecd0...` (确认
+跑的是新 binary),再查 sandbox PATH / TSF shim 状态。
+
+#### Bug 2: UI 过小 → DPI 缩放
+- OnCreate 加 `s_dpiScale = GetDpiForWindow(hwnd) / 96.0`,clamp [0.5, 4.0]
+- 所有 constexpr 物理像素常量 × dpiScale (kDialogW/kDialogH/kTitleH/kInputH/
+  kBtnH/kBtnW/kUiFontSize 等)
+- 字体 `kUiFontSize` 同步缩放 (14pt × 2.0 = 28pt on 4K 屏)
+- OnPaint 用 actual client rect (DPI-scaled + resize 后),不 hardcode kDialogW/H
+
+#### Feature: 鼠标拖边界 resize + 长按拖动位置
+- style 加 `WS_THICKFRAME` (Win32 自动支持边框 resize)
+- 显式 no `WS_MAXIMIZEBOX` / `WS_MINIMIZEBOX` (modal 不要)
+- 新 WM_GETMINMAXINFO handler: `kMinW=320` / `kMinH=400` / `kMaxW=1200` /
+  `kMaxH=900` (物理像素, DPI-scaled)
+- 新长按 drag state machine:
+  - `WM_LBUTTONDOWN` 在 chrome 区域 (非子控件) 启动 500ms timer
+  - `WM_TIMER` fire → 进入 drag mode (`SetCapture`)
+  - `WM_MOUSEMOVE` 移动 window
+  - `WM_LBUTTONUP` 结束 (`ReleaseCapture` + cancel timer)
+- `WM_NCHITTEST` 用 DefWindowProc 默认 (让 Windows 处理 resize border)
+
+#### Bug 4: 删重复 Add 按钮
+- 删 `s_hBtnAdd` 字段 + `ID_BTN_ADD` (1001) constexpr
+- 底部 4 按钮 → 3 按钮 (Edit / Delete / Cancel) — 顶部 `s_hBtnAddTop` 唯一 Add
+- 删 OnCommand `case ID_BTN_ADD` (重定向到 ADD_TOP) — 留 case ADD_TOP
+- 顺手修: WM_KILLFOCUS isChild chain + VK_TAB order array (都漏了 s_hBtnAddTop
+  + s_hBtnDel)
+
+**Verify** (sandbox Win32 Release):
+- TestPhrasesDialog: **112 PASS / 0 FAIL** (Test 26/27/28 = 3 新增 7 check,
+  105 baseline 不退化)
+- 编译: WeaselServer.vcxproj + TestPhrasesDialog.vcxproj Release Win32 Exit 0
+- `_check_install_v2.ps1` Module 1+2 md5 = `ceb0ecd055d5f4d48d2f006393456650`
+- installer extract md5 = source md5 ✓ (无 L97 stale)
+- install.nsi UTF-8 BOM (EF BB BF) + CRLF ✓
+
+**Files touched** (v0.19.0.41, 3 + 1):
+- `WeaselServer/PhrasesDialog.h` (40+/1-): 加 s_dpiScale + drag state + 6 个
+  message handlers 声明 + min/max constexpr
+- `WeaselServer/PhrasesDialog.cpp` (90+/50-): OnCreate DPI 缩放 + 删 s_hBtnAdd
+  + 6 个 handler 实现 + WS_THICKFRAME + 3 按钮 + OnPaint 用 client rect
+- `test/TestPhrasesDialog/TestPhrasesDialog.cpp` (50+/1-): Test 11.5 重命名 +
+  Test 26/27/28 新增 + main() 调用
+- `release/fluxing-0.19.0.41-installer.exe` (43,197,119 bytes, commit 2)
+
+**装机命令** (L13/L54/L66 强约束):
+```powershell
+taskkill /F /IM WeaselServer.exe /T
+reg delete "HKLM\SOFTWARE\Fluxing\Weasel" /f
+reg delete "HKCU\Software\Fluxing" /f
+& "F:\soft\00selfmade\rime_claude\release\fluxing-0.19.0.41-installer.exe" /S /D=D:\Program Files\fluxing
+& "F:\soft\00selfmade\rime_claude\_check_install_v2.ps1"
+```
+
+**装机后 user 端 verify** (5 项):
+1. Module 1+2 md5 = `ceb0ecd055d5f4d48d2f006393456650`
+2. Module 3 L66 4 keys 写出
+3. **视觉**: 4K/高 DPI 屏 UI 元素放大到合理尺寸 (字体清晰)
+4. **交互**: 鼠标拖 dialog 边界可 resize;chrome 区域长按 500ms 后拖动可移动
+   dialog
+5. **结构**: 底部只有 3 按钮 (✎ 编辑 / - 删除 / 取消), 顶部 + 添加 唯一 Add
+
+**lessons-learned candidate (L102-PhaseG-UI)**:
+- **L102-A (DPI scaling for modal dialog)**: 高 DPI 屏 (2K/4K) hardcode 物理像素
+  会让 dialog 元素过小;OnCreate 用 `GetDpiForWindow(hwnd) / 96.0` 缩放。
+  OnPaint 也得用 actual client rect, 不能 hardcode 默认尺寸。
+- **L102-B (WS_THICKFRAME for resize)**: Win32 modal dialog 默认不可 resize;
+  加 `WS_THICKFRAME` 让边框自动支持,不需要 custom WM_NCHITTEST
+  (用 DefWindowProc 默认让 Windows 处理 border)。
+- **L102-C (long-press drag pattern)**: 不要 subclass ListView WndProc
+  (跟 L101-B 一致); 改用 WM_LBUTTONDOWN 启动 timer + WM_TIMER fire 进入
+  drag mode + SetCapture + WM_MOUSEMOVE 移动 + WM_LBUTTONUP 结束。drag
+  区域要排除子控件 (`ChildWindowFromPoint` 检查)。
+- **L102-D (Button class name casing)**: Windows 控件 class name 大小写敏感,
+  "Button" 不是 "BUTTON"。EnumChildWindows + `wcscmp(cls, L"Button")` 或
+  `_wcsicmp` 才匹配。
+- **L102-E (重复按钮 UX 教训)**: 顶部 + 底部 Add 是 redundancy 陷阱;
+  user 看到 2 个 "添加" 按钮会困惑该按哪个。统一到 1 个 (顶部 input 旁) 更
+  清晰;底部 3 按钮 (Edit / Delete / Cancel) 职责分明。
+
+---
+
 ## [0.19.0.40-fluxing] - 2026-07-21
 
 ### fix(WeaselServer): v0.19.0.40 (Phase F Bug 3 续修) — ListView 焦点 Esc 转 LVN_KEYDOWN handler
