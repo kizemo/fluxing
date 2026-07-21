@@ -238,6 +238,61 @@ reg delete "HKCU\Software\Fluxing" /f
 
 ---
 
+## [0.19.0.45-fluxing] - 2026-07-21
+
+### fix(WeaselServer): v0.19.0.45 (Phase H layout polish) — input 拉伸 + UI 通用 margin 缩小 + 初始 column scrollbar-aware
+
+**User pain** (post v0.19.0.44 装机反馈):
+1. **初始 UI 常用短语列表框右侧边距过大**, 但调整边框右侧时正常 → Bug 1
+2. **调整边框右侧时短语编辑框宽度应随变化; 添加按钮和 UI 的边距应缩小, 使编辑框尽量宽** → Bug 2
+
+**Root cause** (5 阶段 systematic-debugging):
+
+**Bug 1 — 初始 column 右边距过大**:
+- `OnCreate` ListView_InsertColumn 设 `col.cx = dW - 2*gap - 4` (340 @ DPI=1, kDialogW=360)
+- 但 **LayoutDialog 在 OnCreate 末尾调一次** (line 757), 其 `if (!s_hwnd) return;` early-return
+  原因: `CreateWindowExW` 同步 dispatch `WM_CREATE`, `OnCreate` 在 `CreateWindowExW` 返回前就跑
+  了, 此时 `Show()` 的 `s_hwnd = CreateWindowExW(...)` 还没执行 → `s_hwnd = nullptr` →
+  LayoutDialog 早返回 → 初始 column width = ListView_InsertColumn 的 10px default
+- resize 后 `WM_SIZE` 触发 `LayoutDialog` (此时 `s_hwnd` 已 set) → 正常设 column width
+- v0.19.0.44 ship 漏这个 s_hwnd 时序 bug
+
+**Bug 2 — input 不拉伸 + UI 边距过大**:
+- `LayoutDialog` 用 `fixed inputW = kInputW * dpiScale = 240` → resize 不跟随
+- `LayoutDialog` UI margin 用 `kBtnMarginX = 12` (左右各 12px) → input 实际宽度受限
+- `OnCreate` initial position 同步用 `kBtnMarginX`
+
+**Cure** (1 commit):
+1. **`PhrasesDialog::OnCreate` 入口 `s_hwnd = hwnd`** — 提前 set, 让 OnCreate 末尾 LayoutDialog 不早返回
+2. **OnCreate ListView_InsertColumn 删 cx** — 只 `mask = LVCF_TEXT | LVCF_SUBITEM`,
+   让 LayoutDialog 末尾统一算 column width (header client - 4, 自动减 scrollbar)
+3. **LayoutDialog 改 input stretch**: `inputX = gap` (was kBtnMarginX=12),
+   `inputW = clientW - 2*gap - btnAddTopW - gap` (was fixed 240), `AddTop X = clientW - gap - btnAddTopW` (anchored right)
+4. **LayoutDialog UI margin 统一 kGap (= 8)**, was kBtnMarginX (= 12): inputX/listX/AddTop/底部 3 按钮 X 全用 gap
+5. **`OnCreate` inputX 改 `gap`** 跟 LayoutDialog 一致 (LayoutDialog 末尾再调一次覆盖)
+6. **新增 Test 34** (OnCreate column scrollbar-aware, 4 case) + **Test 35** (input 拉伸 + UI margin, 9 case)
+
+**Files touched** (v0.19.0.45, 2):
+- `WeaselServer/PhrasesDialog.cpp` — OnCreate s_hwnd 提前设 + ListView_InsertColumn 删 cx + LayoutDialog input 拉伸 + LayoutDialog margin 统一 gap + OnCreate inputX 改 gap
+- `test/TestPhrasesDialog/TestPhrasesDialog.cpp` — Test 34/35 新增 + Test 32.6 期望值更新 (marginX=12 → gap=8) + main() 注册
+
+**Verified** (sandbox Win32 Release, 5x runs):
+- TestPhrasesDialog: 167-168 PASS / 0-1 FAIL (1 FAIL 是 Test 30.7 pre-existing sandbox SetCursorPos 偶发, 跟我改动无关, 装机端 Esc 路径仍正常)
+- Test 34: 4 case 全 PASS (column cx ≈ header client - 4, scrollbar-aware)
+- Test 35: 9 case 全 PASS (input 拉伸 + UI margin 缩小 + 二次 resize 持续)
+- Test 32: 9 case 全 PASS (更新期望值 marginX → gap)
+- WeaselServer.exe: md5 `b19d4338d360a3cc1a9b8491d56f4eae` (Phase H source build)
+- 装机命令见 "Smoke-test recipe" 段
+
+**Smoke-test recipe** (装机后 5 项 verify, 跟 v0.19.0.44 同步):
+1. Alt+. / QP button 1 (Phrase) → 弹 PhrasesDialog
+2. **初始 UI: 列表框 column 跟右边距一致 (跟 v0.19.0.44 resize 后一样, "正常")** — Bug 1 verify
+3. **resize dialog → input 编辑框宽度跟随变化, AddTop 按钮 anchored 右边** — Bug 2 verify
+4. resize dialog → 列表高度跟随变化, 底部 3 按钮 anchored 右边距 = 8px (was 12)
+5. drag 列表项 reorder + Esc/Enter/双击 — 回归
+
+---
+
 ## [0.19.0.44-fluxing] - 2026-07-21
 
 ### feat(WeaselServer): v0.19.0.44 (UI 迭代 2) — 内部按钮固定边距 resize layout + 拖动 reorder ListView entry

@@ -582,6 +582,15 @@ LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd,
 }
 
 LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
+  // v0.19.0.45 (Phase H Bug 1 真修): 提前设 s_hwnd = hwnd。CreateWindowExW
+  //   同步 dispatch WM_CREATE → OnCreate 在 CreateWindowExW 返回前就跑了,
+  //   此时 Show() 的 `s_hwnd = CreateWindowExW(...)` 还没执行, s_hwnd = null。
+  //   LayoutDialog 末尾会调一次 (line 757), 但它的 `if (!s_hwnd) return;`
+  //   early-return, 结果 OnCreate 阶段 column width / child 位置都没设 —
+  //   user 装机反馈 "初始 UI 列表框右边距过大" 真因之一。
+  //   修法: OnCreate 入口 set s_hwnd = hwnd, 让 LayoutDialog 能跑。
+  s_hwnd = hwnd;
+
   // ===== v0.19.0.41 (Bug 2: UI 过小): DPI 缩放 =====
   // GetDpiForWindow 返回 dialog 所在 monitor 的 effective DPI (PerMonitorV2
   // 启用时 = 当前 monitor DPI, 否则 = system DPI)。96 是 base (100% 缩放)。
@@ -628,8 +637,11 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
   HFONT hfUi = s_hFontUi;
 
   // v0.19.0.32: 顶部 input + Add 按钮 (同 row, 左右分布)
+  // v0.19.0.45 (Phase H Bug 2): input 左 margin 从 kBtnMarginX (= 12)
+  //   改成 gap (= 8)。跟 LayoutDialog 保持一致 (LayoutDialog 末尾 line 744
+  //   调一次覆盖此初始位置, 视觉一致)。
   int inputY = titleH + gap;
-  int inputX = btnMarginX;
+  int inputX = gap;
   s_hInput = CreateWindowExW(
       WS_EX_CLIENTEDGE, L"EDIT", L"",
       WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | ES_AUTOHSCROLL,
@@ -690,12 +702,22 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
   }
   // v0.19.0.32: ListView 加单列 (P2 polish: header text 空, 避免跟下面 row
   // "短语" 视觉混淆)
+  // v0.19.0.45 (Phase H Bug 1 真修): 删 cx 设置, 只 mask = LVCF_TEXT +
+  //   LVCF_SUBITEM。装机 v0.19.0.44 user 反馈 "初始 UI 列表框右侧边距过大,
+  //   resize 后正常" — 原版 col.cx = dW - 2*gap - 4 (raw clientW - slack),
+  //   没考虑 vertical scrollbar。PopulateList 后 scrollbar 显示, header
+  //   client = ListView client - scrollbar, 实际 visible column 比 cx 小 →
+  //   视觉"边距过大" (column 内容 overflow 17px, 视觉上像 column 右边
+  //   空了一大块)。resize 后 LayoutDialog 重算 cx = header client - 4
+  //   (scrollbar-aware), 跟 ListView visible 匹配 → 视觉"正常"。
+  // 修法: OnCreate 只 create column (text + subitem), 不设宽度。让
+  //   LayoutDialog 末尾 (line ~744 调一次) 统一算 column width, 用
+  //   header client rect - 4, 自动减去 scrollbar。
   {
     LVCOLUMNW col = {};
-    col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+    col.mask = LVCF_TEXT | LVCF_SUBITEM;
     col.pszText = const_cast<wchar_t*>(
         L"");  // 空 — 整个 ListView 内容都是短语, header "短语" 冗余
-    col.cx = dW - 2 * gap - 4;
     col.iSubItem = 0;
     ListView_InsertColumn(s_hList, 0, &col);
   }
@@ -1294,30 +1316,39 @@ void PhrasesDialog::LayoutDialog(int clientW, int clientH) {
   // DPI-scaled dimensions (跟 OnCreate 计算一致)
   const int titleH = (int)(kTitleH * s_dpiScale);
   const int inputH = (int)(kInputH * s_dpiScale);
-  const int inputW = (int)(kInputW * s_dpiScale);
   const int btnAddTopW = (int)(kBtnAddTopW * s_dpiScale);
   const int btnH = (int)(kBtnH * s_dpiScale);
   const int btnW = (int)(kBtnW * s_dpiScale);
   const int btnGap = (int)(kBtnGap * s_dpiScale);
-  const int marginX = (int)(kBtnMarginX * s_dpiScale);
+  // v0.19.0.45 (Phase H Bug 2 真修): UI 通用 margin 从 kBtnMarginX (= 12)
+  //   改成 kGap (= 8)。装机 v0.19.0.44 user 反馈 "添加按钮和UI的边距应该
+  //   缩小, 使编辑框尽量宽" — 原版 12px 单边过宽, input + AddTop 合计 margin
+  //   24px (= 24/360 ≈ 6.7%) 浪费, 改 8px 节省 8px 单边 (16px 总) 让 input
+  //   宽 8px @ DPI=1。
   const int gap = (int)(kGap * s_dpiScale);
 
-  // 1. input row (top-left, fixed)
-  int inputX = marginX;
+  // 1. input row — v0.19.0.45 (Bug 2): inputW stretch 跟随 clientW,
+  //    左 margin = gap (was kBtnMarginX = 12)。inputX 固定 = gap, inputW
+  //    = clientW - 2*gap - btnAddTopW - gap, AddTop anchored 到右边。
+  //    整体: gap + input + gap + btnAddTop + gap (对称边距)。
+  int inputX = gap;
   int inputY = titleH + gap;
+  int inputW = clientW - 2 * gap - btnAddTopW - gap;  // stretch
+  if (inputW < 80)
+    inputW = 80;  // floor — 不能太小
   if (s_hInput) {
     SetWindowPos(s_hInput, nullptr, inputX, inputY, inputW, inputH,
                  SWP_NOZORDER);
   }
 
-  // 2. AddTop 按钮 (input 右侧, fixed)
+  // 2. AddTop 按钮 (anchored right, 右边距 = gap)
   if (s_hBtnAddTop) {
-    int btnTopX = inputX + inputW + gap;
+    int btnTopX = clientW - gap - btnAddTopW;
     SetWindowPos(s_hBtnAddTop, nullptr, btnTopX, inputY, btnAddTopW, inputH,
                  SWP_NOZORDER);
   }
 
-  // 3. list (middle, stretches vertically)
+  // 3. list (middle, stretches vertically + horizontally)
   if (s_hList) {
     int listY = inputY + inputH + gap;       // y 起点 = input 底部 + gap
     int btnAreaH = btnH + 2 * gap;           // 底部 button area 占用高度
@@ -1342,11 +1373,12 @@ void PhrasesDialog::LayoutDialog(int clientW, int clientH) {
     }
   }
 
-  // 4. 3 个底部按钮 — anchored bottom-right, 固定 btnGap 间距
+  // 4. 3 个底部按钮 — anchored bottom-right, 固定 btnGap 间距, 右边距 = gap
+  //    (v0.19.0.45 Phase H: 改用 gap = 8 统一 UI margin)
   if (s_hBtnEdit && s_hBtnDel && s_hBtnCancel) {
     int btnY = clientH - btnH - gap;  // 底边距 = gap (跟 OnPaint chrome 一致)
     int totalBtnW = 3 * btnW + 2 * btnGap;
-    int btnX = clientW - marginX - totalBtnW;  // 右边距 = marginX
+    int btnX = clientW - gap - totalBtnW;  // 右边距 = gap
     SetWindowPos(s_hBtnEdit, nullptr, btnX, btnY, btnW, btnH, SWP_NOZORDER);
     btnX += btnW + btnGap;
     SetWindowPos(s_hBtnDel, nullptr, btnX, btnY, btnW, btnH, SWP_NOZORDER);

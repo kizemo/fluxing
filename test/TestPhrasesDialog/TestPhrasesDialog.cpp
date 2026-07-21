@@ -1199,17 +1199,184 @@ static void TestResizeLayoutRepositionsChildren() {
   CHECK("32.5: btn Edit y 跟初始位置不同 (新尺寸)",
         abs(ptBtn.y - ptBtnInit.y) >= 2);
 
-  // 4. 3 个 buttons 横向: 右边距 = marginX
+  // 4. 3 个 buttons 横向: 右边距 = gap (v0.19.0.45 Phase H 改用 kGap = 8,
+  //    之前是 kBtnMarginX = 12)
   RECT rcBtnCancel;
   GetWindowRect(PhrasesDialog::s_hBtnCancel, &rcBtnCancel);
   POINT ptCancel = {rcBtnCancel.right, rcBtnCancel.top};
   ScreenToClient(hwnd, &ptCancel);
-  // btn Cancel 右边缘应该 = newW - marginX*DPI;
-  // 不能访问 kBtnMarginX (anonymous namespace), 直接 hardcode 12 (DPI=1):
-  // marginX = kBtnMarginX * s_dpiScale. 在 96 DPI sandbox = 12.
-  int expectedCancelRight = newW - (int)(12 * PhrasesDialog::s_dpiScale);
-  CHECK("32.6: btn Cancel 右边缘 = newW - 12*DPI (marginX kBtnMarginX)",
+  // btn Cancel 右边缘应该 = newW - gap*DPI;
+  // 不能访问 kGap (anonymous namespace), 直接 hardcode 8 (DPI=1):
+  // gap = kGap * s_dpiScale. 在 96 DPI sandbox = 8.
+  int expectedCancelRight = newW - (int)(8 * PhrasesDialog::s_dpiScale);
+  CHECK("32.6: btn Cancel 右边缘 = newW - 8*DPI (kGap, Phase H)",
         abs(ptCancel.x - expectedCancelRight) <= 2);
+
+  PhrasesDialog::Hide();
+}
+
+// v0.19.0.45 (Phase H polish Bug 1 真修): OnCreate 初始 column 宽度必须
+// scrollbar-aware, 跟 LayoutDialog 一致 (header client - 4 slack)。否则装机
+// v0.19.0.44 反馈 "初始 UI 边距过大, resize 后正常" — OnCreate 设 cx = raw
+// clientW - 2*gap - 4 (340 @ DPI=1, kDialogW=360), 实际 ListView client = 344
+// - 4(edge) = 340, scrollbar 显示后 header client = 340 - 17 = 323 → column
+// 内容 overflow 17px (cx > header client) → 视觉"右边距过大" (ListView 不会
+// 自动缩 column width, content 被 horizontal 截)。resize 后 LayoutDialog 重算
+// cx = header client - 4 (323 - 4 = 319), 跟 ListView visible content 匹配 →
+// 视觉"正常"。
+//
+// 修法: OnCreate ListView_InsertColumn 删 cx 设置 (只 mask = LVCF_TEXT +
+// LVCF_SUBITEM), 让 LayoutDialog 末尾 (已在 line 738-744 调一次) 统一算
+// column width (scrollbar-aware, header client - 4)。
+static void TestOnCreateColumnIsScrollbarAware() {
+  std::cout << "\n[Test 34] v0.19.0.45: OnCreate 初始 column 宽度 scrollbar-aware"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("34.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+
+  HWND hList = PhrasesDialog::s_hList;
+  HWND hdr = ListView_GetHeader(hList);
+  CHECK("34.1: ListView header 已创建", hdr != nullptr);
+  if (!hdr)
+    goto test34_end;
+
+  {
+    RECT rcHdr;
+    GetClientRect(hdr, &rcHdr);
+    int hdrClientW = rcHdr.right - rcHdr.left;
+
+    LVCOLUMNW col = {};
+    col.mask = LVCF_WIDTH;
+    ListView_GetColumn(hList, 0, &col);
+    int colCx = col.cx;
+
+    // 期望: colCx ≈ hdrClientW - 4 (scrollbar slack, 跟 LayoutDialog 一致)
+    int diff = abs(colCx - (hdrClientW - 4));
+    CHECK("34.2: column cx ≈ header client - 4 (scrollbar-aware)",
+          diff <= 2);
+
+    // column cx < ListView client width (scrollbar 减去了)
+    RECT rcList;
+    GetClientRect(hList, &rcList);
+    int listClientW = rcList.right - rcList.left;
+    CHECK("34.3: column cx < ListView client width (scrollbar 减去了)",
+          colCx < listClientW);
+
+    // column cx ≤ hdrClientW (不允许 cx > header visible, 那会 overflow)
+    CHECK("34.4: column cx ≤ header client width (no horizontal overflow)",
+          colCx <= hdrClientW);
+  }
+
+test34_end:
+  PhrasesDialog::Hide();
+}
+
+// v0.19.0.45 (Phase H polish Bug 2 真修): 装机 v0.19.0.44 user 反馈
+//   "调整边框右侧时, 短语编辑框宽度应随着变化。添加按钮和UI的边距应该缩小,
+//    使编辑框尽量宽"
+//
+// Bug 2 root cause:
+// - LayoutDialog 用 fixed inputW (= kInputW * dpiScale = 240), input 不随
+//   clientW 拉伸 → resize 后 input 仍 240, 不跟 list 同步
+// - UI margin 用 kBtnMarginX = 12, input 左右各 12px → 编辑框 不够宽
+//
+// 修法:
+// - inputX = kGap (= 8, was kBtnMarginX=12)
+// - inputW = clientW - 2*gap - btnAddTopW - gap (stretch, 跟随 clientW)
+// - AddTop X = clientW - gap - btnAddTopW (anchored right)
+// - 底部 btn X = clientW - gap - totalBtnW (was - marginX, 现在 - gap)
+// - listX/listW 保持 (listX = gap, listW = clientW - 2*gap) — 已 OK
+static void TestInputStretchesAndMarginShrinks() {
+  std::cout << "\n[Test 35] v0.19.0.45: input 拉伸 + UI margin 缩小"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("35.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+
+  // 触发 LayoutDialog (跟 Test 32 同样模式): client area 800×600
+  int newW = 800, newH = 600;
+  SetWindowPos(hwnd, nullptr, 0, 0, newW + 16, newH + 16,
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  SendMessageW(hwnd, WM_SIZE, 0, MAKELPARAM(newW, newH));
+
+  double dpi = PhrasesDialog::s_dpiScale;
+  int gap_phys = (int)(8 * dpi);          // kGap * dpiScale = UI 通用 margin
+  int btnAddTopW_phys = (int)(76 * dpi);  // kBtnAddTopW * dpiScale
+  int expectedInputX = gap_phys;          // input 左 margin = gap
+  int expectedInputW =
+      newW - 2 * gap_phys - btnAddTopW_phys - gap_phys;  // stretch
+  int expectedAddTopX = newW - gap_phys - btnAddTopW_phys;
+  int expectedAddTopRight = newW - gap_phys;
+  int expectedListX = gap_phys;
+  int expectedListW = newW - 2 * gap_phys;
+  int expectedCancelRight = newW - gap_phys;
+
+  // 1. input X = kGap (= 8*DPI), 不是 kBtnMarginX (= 12*DPI)
+  RECT rcInput;
+  GetWindowRect(PhrasesDialog::s_hInput, &rcInput);
+  POINT ptInput = {rcInput.left, rcInput.top};
+  ScreenToClient(hwnd, &ptInput);
+  CHECK("35.1: input X = kGap (= 8*DPI), not kBtnMarginX (= 12*DPI)",
+        abs(ptInput.x - expectedInputX) <= 2);
+
+  // 2. input W stretch
+  int inputW = rcInput.right - rcInput.left;
+  CHECK("35.2: input W = clientW - 3*gap - btnAddTopW (stretch)",
+        abs(inputW - expectedInputW) <= 2);
+  CHECK("35.3: input W > fixed 240 (确认拉伸发生)",
+        inputW > (int)(240 * dpi));
+
+  // 3. AddTop X anchored right
+  RECT rcAddTop;
+  GetWindowRect(PhrasesDialog::s_hBtnAddTop, &rcAddTop);
+  POINT ptAddTop = {rcAddTop.left, rcAddTop.top};
+  ScreenToClient(hwnd, &ptAddTop);
+  CHECK("35.4: AddTop X = clientW - gap - btnAddTopW (anchored right)",
+        abs(ptAddTop.x - expectedAddTopX) <= 2);
+
+  // 4. AddTop 右边缘 = clientW - gap
+  POINT ptAddTopRight = {rcAddTop.right, rcAddTop.top};
+  ScreenToClient(hwnd, &ptAddTopRight);
+  CHECK("35.5: AddTop 右边缘 = clientW - gap (= 8*DPI)",
+        abs(ptAddTopRight.x - expectedAddTopRight) <= 2);
+
+  // 5. list 左 margin = gap
+  RECT rcList;
+  GetWindowRect(PhrasesDialog::s_hList, &rcList);
+  POINT ptList = {rcList.left, rcList.top};
+  ScreenToClient(hwnd, &ptList);
+  CHECK("35.6: list X = gap (= 8*DPI)",
+        abs(ptList.x - expectedListX) <= 2);
+
+  // 6. list W = clientW - 2*gap
+  int listW = rcList.right - rcList.left;
+  CHECK("35.7: list W = clientW - 2*gap",
+        abs(listW - expectedListW) <= 2);
+
+  // 7. 底部 btn Cancel 右边缘 = clientW - gap (= 8*DPI, was 12)
+  RECT rcBtnCancel;
+  GetWindowRect(PhrasesDialog::s_hBtnCancel, &rcBtnCancel);
+  POINT ptCancel = {rcBtnCancel.right, rcBtnCancel.top};
+  ScreenToClient(hwnd, &ptCancel);
+  CHECK("35.8: btn Cancel 右边缘 = clientW - gap (= 8*DPI, not 12)",
+        abs(ptCancel.x - expectedCancelRight) <= 2);
+
+  // 8. 二次 resize 到 600×400 验证 stretch 持续
+  int newW2 = 600, newH2 = 400;
+  SetWindowPos(hwnd, nullptr, 0, 0, newW2 + 16, newH2 + 16,
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  SendMessageW(hwnd, WM_SIZE, 0, MAKELPARAM(newW2, newH2));
+
+  int expectedInputW2 =
+      newW2 - 2 * gap_phys - btnAddTopW_phys - gap_phys;
+  RECT rcInput2;
+  GetWindowRect(PhrasesDialog::s_hInput, &rcInput2);
+  int inputW2 = rcInput2.right - rcInput2.left;
+  CHECK("35.9: 再次 resize 后 input W 跟随新 clientW",
+        abs(inputW2 - expectedInputW2) <= 2);
 
   PhrasesDialog::Hide();
 }
@@ -1391,6 +1558,11 @@ int main() {
   // v0.19.0.44 (Feature 2: reorder ListView entry via drag): CommitReorder
   // logic
   test::TestCommitReorderMovesItem();
+
+  // v0.19.0.45 (Phase H layout polish: Bug 1 column scrollbar-aware)
+  test::TestOnCreateColumnIsScrollbarAware();
+  // v0.19.0.45 (Phase H layout polish: Bug 2 input stretch + UI margin 缩小)
+  test::TestInputStretchesAndMarginShrinks();
 
   std::cout << "\n================================================="
             << std::endl;
