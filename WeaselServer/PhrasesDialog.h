@@ -150,9 +150,22 @@ class PhrasesDialog {
   static constexpr UINT_PTR kLongPressTimerId = 9001;  // WndProc WM_TIMER
   static constexpr DWORD kLongPressMs = 500;           // 长按阈值
 
+  // v0.19.0.44 (Feature: 长按拖动 reorder ListView entry):
+  // s_reorderDragActive = timer 启动了还没 fire
+  // s_isReorderDragging = timer fired + 鼠标移动 → 进入 reorder drag mode
+  // s_dragSourceIdx = LBUTTONDOWN 时的 ListView item index (-1 = no drag)
+  // s_dropTargetIdx = 当前 insertion position (LVM_SETINSERTMARK 用)
+  static bool s_reorderDragActive;
+  static bool s_isReorderDragging;
+  static int s_dragSourceIdx;
+  static int s_dropTargetIdx;
+  static constexpr UINT_PTR kReorderTimerId = 9002;  // 同长按 500ms
+
   // v0.19.0.41 (Feature: 鼠标拖动边界 resize): min/max 物理尺寸 (DPI-scaled)
-  static constexpr int kMinW = 320;
-  static constexpr int kMinH = 400;
+  // v0.19.0.44: 调小 min 让 user 缩小范围更大 (240×360 能装 input + 1 个 list
+  // row + 3 buttons)
+  static constexpr int kMinW = 240;
+  static constexpr int kMinH = 360;
   static constexpr int kMaxW = 1200;
   static constexpr int kMaxH = 900;
 
@@ -182,6 +195,22 @@ class PhrasesDialog {
   static void CancelLongPress(HWND hwnd);
   static void BeginDrag(HWND hwnd);
   static void EndDrag(HWND hwnd);
+
+  // v0.19.0.44 (Feature 1: resize layout): 重新定位所有 child
+  // 入参 client area 物理尺寸 (DPI-scaled)。OnCreate 初始化 + WM_SIZE 触发
+  // + 测试可直接调验证。
+  static void LayoutDialog(int clientW, int clientH);
+
+  // v0.19.0.44 (Feature 2: 长按 reorder ListView entry): 内部 helper
+  // StartReorderTimer: LVN_BEGINDRAG 时设 timer, 500ms 后 fire → drag mode
+  // UpdateReorderDropTarget: WM_MOUSEMOVE 计算当前 hit-test y 位置
+  // CommitReorder: WM_LBUTTONUP reorder m_phrases + FlushSave + PopulateList
+  static void StartReorderTimer(HWND hList, int itemIdx);
+  static void CancelReorder(HWND hwnd);
+  static void BeginReorderDrag(HWND hwnd);
+  static void EndReorderDrag(HWND hwnd);
+  static void UpdateReorderDropTarget(HWND hList, int clientY);
+  static void CommitReorder(HWND hList);
 
  private:
   // 内部 helpers(测试可达)

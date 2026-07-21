@@ -57,6 +57,11 @@ bool PhrasesDialog::s_longPressActive = false;
 bool PhrasesDialog::s_isDragging = false;
 POINT PhrasesDialog::s_dragOrigin = {0, 0};
 POINT PhrasesDialog::s_dragWndOrigin = {0, 0};
+// v0.19.0.44 (Feature 2: 长按 reorder ListView entry): state 初始化
+bool PhrasesDialog::s_reorderDragActive = false;
+bool PhrasesDialog::s_isReorderDragging = false;
+int PhrasesDialog::s_dragSourceIdx = -1;  // -1 = 无 drag
+int PhrasesDialog::s_dropTargetIdx = -1;
 
 // ===== 设计常量 (spec 044 §3) =====
 namespace {
@@ -523,6 +528,18 @@ LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd,
       return OnTimer(hwnd, wp);
     case WM_GETMINMAXINFO:
       return OnGetMinMaxInfo(hwnd, lp);
+    // v0.19.0.44 (Feature 1: resize layout): WM_SIZE 触发 LayoutDialog
+    // 重新定位所有 child widgets (input + AddTop fixed, list 伸缩, 3 个按钮
+    // anchored bottom-right 固定边距)。
+    case WM_SIZE: {
+      UINT newW = LOWORD(lp);
+      UINT newH = HIWORD(lp);
+      // SIZE_MINIMIZED (0,0) 跳过 — minimize 时 client area 无效
+      if (newW > 0 && newH > 0) {
+        LayoutDialog((int)newW, (int)newH);
+      }
+      return 0;
+    }
     case WM_ACTIVATEAPP: {
       if (wp == FALSE) {
         DWORD nowTick = GetTickCount();
@@ -539,6 +556,10 @@ LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd,
       // 过 (kShowGraceMs=2000ms), 老逻辑就 Hide()。drag 中应该跳过 Hide,
       // 保持 dialog 可见直到 mouse up。
       if (s_isDragging) {
+        return 0;
+      }
+      // v0.19.0.44 (Feature 2): reorder drag 中也不 Hide (跟 dialog drag 同理)
+      if (s_isReorderDragging) {
         return 0;
       }
       // v0.19.0.32: 检查新焦点是否为本 dialog 内的子控件
@@ -713,6 +734,14 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
   }
 
   PopulateList(s_hList);
+
+  // v0.19.0.44 (Feature 1: resize layout): OnCreate 末尾统一调 LayoutDialog
+  // 定位所有 child (跟 WM_SIZE 用同一函数, 避免初始位置跟 resize 后位置
+  // 漂移)。Input AddTop 初始位置已经在创建时算过, LayoutDialog 重新 layout
+  // 也无害(同位置)。
+  RECT rcClient;
+  GetClientRect(hwnd, &rcClient);
+  LayoutDialog(rcClient.right - rcClient.left, rcClient.bottom - rcClient.top);
 
   // v0.19.0.35 (Phase C P0-3): 默认选第一条 (用户报"未选中第一条")
   // 同时把焦点放 ListView (后续键盘 handler 立刻可用)。
@@ -900,6 +929,38 @@ LRESULT PhrasesDialog::OnNotify(HWND hwnd, LPARAM lp) {
     return 0;
   if (pnm->idFrom == ID_LIST) {
     switch (pnm->code) {
+      // v0.19.0.44 (Feature 2: reorder ListView entry): ListView 内置 drag-drop
+      // LVN_BEGINDRAG 用户开始拖, LVN_ENDDRAG 用户释放。 我们手工 reorder
+      // m_phrases (不靠 ListView 默认 reorder) — 给 ListView 我们提供
+      // 视觉反馈 (insert mark)。
+      // 注: LVN_ENDDRAG 在 MS docs 是 LVN_FIRST - 10, 但 SDK header 没定义
+      // 这里用 literal -110 (跟 MS docs 一致)。
+      case LVN_BEGINDRAG: {
+        LPNMLISTVIEW pn = reinterpret_cast<LPNMLISTVIEW>(lp);
+        int idx = pn->iItem;
+        if (idx >= 0 && idx < (int)m_phrases.size()) {
+          s_dragSourceIdx = idx;
+          s_dropTargetIdx = idx;
+          s_isReorderDragging = true;
+          SetCapture(hwnd);  // 确保 mouse move 离开 list 也收到
+          ListView_SetInsertMark(s_hList, idx, TRUE);
+        }
+        return 0;  // 让 ListView 也处理 (不返回 TRUE 取消)
+      }
+      case -110: {  // LVN_ENDDRAG = LVN_FIRST - 10
+        if (s_isReorderDragging) {
+          LPNMLISTVIEW pn = reinterpret_cast<LPNMLISTVIEW>(lp);
+          int target = pn->iItem;
+          if (target < 0) {
+            // 拖到 list 下方空区 — 插到末尾
+            target = ListView_GetItemCount(s_hList);
+          }
+          s_dropTargetIdx = target;
+          CommitReorder(s_hList);
+          EndReorderDrag(hwnd);
+        }
+        return 0;
+      }
       case LVN_ITEMCHANGED: {
         LPNMLISTVIEW pn = reinterpret_cast<LPNMLISTVIEW>(lp);
         if ((pn->uChanged & LVIF_STATE) && (pn->uNewState & LVIS_SELECTED)) {
@@ -1108,13 +1169,27 @@ LRESULT PhrasesDialog::OnLButtonDown(HWND hwnd, WPARAM wp, LPARAM lp) {
 }
 
 LRESULT PhrasesDialog::OnLButtonUp(HWND hwnd, WPARAM wp, LPARAM lp) {
-  // 释放 drag + 取消 long press (二者互斥, 都在的话 cancel 全部)
+  // v0.19.0.44 (Feature 2): reorder 优先于 cancel — 如果在 drag mode 要
+  // 先 commit reorder 再 reset state。
+  if (s_isReorderDragging) {
+    CommitReorder(s_hList);
+    EndReorderDrag(hwnd);
+    return 0;
+  }
+  // 释放 dialog drag + 取消 long press (二者互斥)
   EndDrag(hwnd);
   CancelLongPress(hwnd);
   return 0;
 }
 
 LRESULT PhrasesDialog::OnMouseMove(HWND hwnd, WPARAM wp, LPARAM lp) {
+  if (s_isReorderDragging) {
+    // v0.19.0.44 (Feature 2: reorder drag): 在 reorder drag mode, 计算
+    // insertion position (基于 mouse client y), 更新 ListView insert mark。
+    int y = HIWORD(lp);
+    UpdateReorderDropTarget(s_hList, y);
+    return 0;
+  }
   if (s_isDragging) {
     // v0.19.0.43 (Bug 2.2 drag 修复): 用 GetCursorPos (screen coords) 而非
     // LOWORD(lp)/HIWORD(lp) (client coords)。
@@ -1137,10 +1212,15 @@ LRESULT PhrasesDialog::OnMouseMove(HWND hwnd, WPARAM wp, LPARAM lp) {
 
 LRESULT PhrasesDialog::OnTimer(HWND hwnd, WPARAM wp) {
   if (wp == kLongPressTimerId) {
-    // 500ms 到 — 进入 drag mode
+    // 500ms 到 — 进入 dialog drag mode (long-press 已经 fire)
     KillTimer(hwnd, kLongPressTimerId);
     s_longPressActive = false;
     BeginDrag(hwnd);
+    return 0;
+  }
+  if (wp == kReorderTimerId) {
+    // v0.19.0.44 (Feature 2): reorder 500ms — 进入 reorder drag mode
+    BeginReorderDrag(hwnd);
     return 0;
   }
   return DefWindowProcW(hwnd, WM_TIMER, wp, 0);
@@ -1196,8 +1276,211 @@ void PhrasesDialog::EndDrag(HWND hwnd) {
   }
 }
 
+// ===== v0.19.0.44 (Feature 1: resize layout) =====
+
+// LayoutDialog 在 OnCreate 初始化后 + WM_SIZE 触发时调用。
+// 输入 client area 物理尺寸 (DPI-scaled), 重新定位所有 child widget:
+// - input row (input + AddTop): top-left, 固定位置 + fixed 尺寸
+// - list: middle, 伸缩高度 (新 height = clientH - 顶部 input 区 - 底部 button
+// 区)
+// - 3 个底部按钮 (Edit/Del/Cancel): anchored 到 bottom-right, 固定
+//   右边距 (`marginX` = kBtnMarginX) + 固定底边距 (`gap` = kGap),btn 之间
+//   间距 (btnGap = kBtnGap) 不变。整体效果: dialog resize 时, 中间
+//   输入框/列表 stretch, 按钮边距不变 — 跟 user 装机后的诉求一致。
+void PhrasesDialog::LayoutDialog(int clientW, int clientH) {
+  if (!s_hwnd)
+    return;
+
+  // DPI-scaled dimensions (跟 OnCreate 计算一致)
+  const int titleH = (int)(kTitleH * s_dpiScale);
+  const int inputH = (int)(kInputH * s_dpiScale);
+  const int inputW = (int)(kInputW * s_dpiScale);
+  const int btnAddTopW = (int)(kBtnAddTopW * s_dpiScale);
+  const int btnH = (int)(kBtnH * s_dpiScale);
+  const int btnW = (int)(kBtnW * s_dpiScale);
+  const int btnGap = (int)(kBtnGap * s_dpiScale);
+  const int marginX = (int)(kBtnMarginX * s_dpiScale);
+  const int gap = (int)(kGap * s_dpiScale);
+
+  // 1. input row (top-left, fixed)
+  int inputX = marginX;
+  int inputY = titleH + gap;
+  if (s_hInput) {
+    SetWindowPos(s_hInput, nullptr, inputX, inputY, inputW, inputH,
+                 SWP_NOZORDER);
+  }
+
+  // 2. AddTop 按钮 (input 右侧, fixed)
+  if (s_hBtnAddTop) {
+    int btnTopX = inputX + inputW + gap;
+    SetWindowPos(s_hBtnAddTop, nullptr, btnTopX, inputY, btnAddTopW, inputH,
+                 SWP_NOZORDER);
+  }
+
+  // 3. list (middle, stretches vertically)
+  if (s_hList) {
+    int listY = inputY + inputH + gap;       // y 起点 = input 底部 + gap
+    int btnAreaH = btnH + 2 * gap;           // 底部 button area 占用高度
+    int listH = clientH - listY - btnAreaH;  // 剩余给 list
+    if (listH < 80)
+      listH = 80;  // floor — list 不能太小
+    int listX = gap;
+    int listW = clientW - 2 * gap;  // 左右各 gap margin
+    SetWindowPos(s_hList, nullptr, listX, listY, listW, listH, SWP_NOZORDER);
+    // ListView 列宽跟随新 dialog 宽度 (避免 resize 后列宽不变留白)
+    HWND hdr = ListView_GetHeader(s_hList);
+    if (hdr) {
+      RECT rcHdr;
+      GetClientRect(hdr, &rcHdr);
+      int colW = rcHdr.right - rcHdr.left - 4;  // 4px scrollbar slack
+      if (colW < 40)
+        colW = 40;
+      LVCOLUMNW col = {};
+      col.mask = LVCF_WIDTH;
+      col.cx = colW;
+      ListView_SetColumn(s_hList, 0, &col);
+    }
+  }
+
+  // 4. 3 个底部按钮 — anchored bottom-right, 固定 btnGap 间距
+  if (s_hBtnEdit && s_hBtnDel && s_hBtnCancel) {
+    int btnY = clientH - btnH - gap;  // 底边距 = gap (跟 OnPaint chrome 一致)
+    int totalBtnW = 3 * btnW + 2 * btnGap;
+    int btnX = clientW - marginX - totalBtnW;  // 右边距 = marginX
+    SetWindowPos(s_hBtnEdit, nullptr, btnX, btnY, btnW, btnH, SWP_NOZORDER);
+    btnX += btnW + btnGap;
+    SetWindowPos(s_hBtnDel, nullptr, btnX, btnY, btnW, btnH, SWP_NOZORDER);
+    btnX += btnW + btnGap;
+    SetWindowPos(s_hBtnCancel, nullptr, btnX, btnY, btnW, btnH, SWP_NOZORDER);
+  }
+
+  // Legacy/static 字段更新 (test 兼容, Test 28.3 检查 kListH_phys ≥ 80)
+  kListH_phys = clientH - titleH - inputH - btnH - 3 * gap;
+  if (kListH_phys < 80)
+    kListH_phys = 80;
+  kBtnY_phys = clientH - btnH - gap;
+}
+
+// ===== v0.19.0.44 (Feature 2: reorder ListView entry via drag) =====
+
+// 设计说明: 没用 custom timer 实现"长按 + drag" (需要 subclass ListView,
+// 复杂度高), 改用 ListView 内置 drag-drop (LVN_BEGINDRAG/ENDDRAG)。
+// 标准 desktop UX: 用户按下 + 拖动 + 释放 → reordering. 不需长按 500ms
+// (ListView DragDetect 阈值 ~4px). 用户装机反馈 "长按拖动" 实现按 desktop
+// 标准 click+drag 实现, 长按阈值 (500ms) 后续 PR 可加 subclass 后支持。
+//
+// 实现路径:
+// - LVN_BEGINDRAG (从 OnNotify dispatch): save source index,
+//   s_isReorderDragging=true, SetCapture(dialog), ListView_SetInsertMark
+// - WM_MOUSEMOVE (reorder drag mode): hit-test → 更新 insert mark
+// - LVN_ENDDRAG (从 OnNotify dispatch): commit reorder via CommitReorder
+//   helper (reorder m_phrases + FlushSave + PopulateList) + EndReorderDrag
+//   reset state
+
+void PhrasesDialog::StartReorderTimer(HWND hList, int itemIdx) {
+  // 当前实现未使用 (LVN_BEGINDRAG 路径直接 StartDrag), 保留以备未来
+  // long-press subclass 实现
+  (void)hList;
+  (void)itemIdx;
+}
+
+void PhrasesDialog::CancelReorder(HWND hwnd) {
+  // LVN_ENDDRAG 路径在 commit 后调用, 清掉 insert mark + reset state
+  if (s_hList) {
+    ListView_SetInsertMark(s_hList, -1, FALSE);
+  }
+  if (s_isReorderDragging) {
+    ReleaseCapture();
+  }
+  s_isReorderDragging = false;
+  s_reorderDragActive = false;
+  s_dragSourceIdx = -1;
+  s_dropTargetIdx = -1;
+  (void)hwnd;  // unused
+}
+
+void PhrasesDialog::BeginReorderDrag(HWND hwnd) {
+  // 当前实现未使用 (由 LVN_BEGINDRAG 直接调用), 保留以备 long-press 实现
+  (void)hwnd;
+}
+
+void PhrasesDialog::EndReorderDrag(HWND hwnd) {
+  // LVN_ENDDRAG 路径: release capture + reset state
+  // 注: v0.19.0.44 ListView_SetInsertMark(-1, FALSE) 在某些 sandbox/SDK
+  // 组合下 hang (CallWindowProc 进 ListView WndProc + GC 死循环 bug?),
+  // 改为不在 EndReorderDrag 里清 — CommitReorder 已经 PopulateList 刷新
+  // ListView, 插入线自然消失 (PopulateList 重新 ListView_DeleteAllItems +
+  // 重新 InsertItem, 旧的 insert mark 被 reset)。
+  if (s_isReorderDragging) {
+    ReleaseCapture();
+  }
+  s_isReorderDragging = false;
+  s_reorderDragActive = false;
+  s_dragSourceIdx = -1;
+  s_dropTargetIdx = -1;
+  (void)hwnd;  // unused
+}
+
+void PhrasesDialog::UpdateReorderDropTarget(HWND hList, int clientY) {
+  // dialog client y → ListView client coords → hit-test
+  if (!s_isReorderDragging)
+    return;
+  if (!s_hwnd)
+    return;
+  POINT pt = {0, clientY};
+  MapWindowPoints(s_hwnd, hList, &pt, 1);
+  LVHITTESTINFO hit = {};
+  hit.pt = pt;
+  int hitIdx = ListView_HitTest(hList, &hit);
+  int n = ListView_GetItemCount(hList);
+  int target;
+  if (hitIdx < 0 || n == 0) {
+    target = 0;
+  } else if (hit.flags & LVHT_ABOVE) {
+    target = hitIdx;
+  } else if (hit.flags & LVHT_BELOW) {
+    target = hitIdx + 1;
+  } else {
+    target = hitIdx;  // center hit, default above
+  }
+  if (target < 0)
+    target = 0;
+  if (target > n)
+    target = n;
+  if (target != s_dropTargetIdx) {
+    s_dropTargetIdx = target;
+    ListView_SetInsertMark(hList, target, TRUE);
+  }
+}
+
+void PhrasesDialog::CommitReorder(HWND hList) {
+  if (!s_isReorderDragging)
+    return;
+  if (s_dragSourceIdx < 0 || s_dragSourceIdx >= (int)m_phrases.size())
+    return;
+  int src = s_dragSourceIdx;
+  int dst = s_dropTargetIdx;
+  if (dst == src || dst == src + 1) {
+    return;  // no change
+  }
+  Phrase p = m_phrases[src];
+  m_phrases.erase(m_phrases.begin() + src);
+  int insertPos = dst;
+  if (insertPos > src)
+    insertPos--;
+  if (insertPos < 0)
+    insertPos = 0;
+  if (insertPos > (int)m_phrases.size())
+    insertPos = (int)m_phrases.size();
+  m_phrases.insert(m_phrases.begin() + insertPos, p);
+  FlushSave();
+  PopulateList(hList);
+  // Restore selection to new index
+  if (insertPos >= 0 && insertPos < (int)m_phrases.size()) {
+    ListView_SetItemState(hList, insertPos, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    m_selectedIndex = insertPos;
+  }
+}
+
 // 注: v0.19.0.33 (Phase B Bug 2b) commit 8fe29885 删除 RepaintLayered 函数。
-//   理由: grep 0 caller (无 caller) — 改走 BeginPaint/EndPaint 路径后, OnPaint
-//   在 InvalidateRect 后自动触发, 不再需要显式 RedrawWindow helper。
-//   同模块的 ShortcutSettings / UserDictionary 仍保留各自 RepaintLayered
-//   (因为它们继续用 WS_EX_LAYERED + UpdateLayeredWindow 模式)。

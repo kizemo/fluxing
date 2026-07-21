@@ -238,6 +238,108 @@ reg delete "HKCU\Software\Fluxing" /f
 
 ---
 
+## [0.19.0.44-fluxing] - 2026-07-21
+
+### feat(WeaselServer): v0.19.0.44 (UI 迭代 2) — 内部按钮固定边距 resize layout + 拖动 reorder ListView entry
+
+**User pain** (post v0.19.0.43 装机反馈 — v0.19.0.43 已修 4 个 issue, 新增 2 个优化):
+1. ✅ "边界可以调整" 已 fix (v0.19.0.43)
+2. ✅ "重复的添加按键消失" 已 fix (v0.19.0.43)
+3. ✅ "界面大小可视度满意" 已 fix (v0.19.0.43)
+4. ❌ 拖动 UI resize 时, 内部按钮边距变化 — 期望按钮边距保持不变, 中间输入框/列表跟随伸缩
+5. ❌ 缺少短语排序功能 — 期望可以拖动调整顺序
+
+**Cure** (2 features 一起 ship):
+
+#### Feature 1: Resize layout — 内部 child 重新定位
+装机 v0.19.0.43 user 反馈: 拖边界 resize dialog, 内部 child 应该按以下规则:
+- input + AddTop: top-left, **固定位置 + fixed 尺寸**
+- list (中间): **伸缩** (高度 = clientH - 顶部 input - 底部 button)
+- 3 个底部按钮 (Edit/Del/Cancel): anchored bottom-right, 固定 `marginX`
+  右边距 + 固定 `gap` 底边距 + 固定 btnGap 间距
+
+**实现**:
+- 新 `PhrasesDialog::LayoutDialog(int clientW, int clientH)` 静态函数 — 重新定位所有 child
+- `WndProc` 加 `case WM_SIZE`: dispatch 到 LayoutDialog 用新 client 尺寸
+- `OnCreate` 末尾调 LayoutDialog (initial position via same logic)
+- `kMinW` 320 → 240 (调小让 user 缩小范围更大), `kMinH` 400 → 360
+- ListView column 宽度跟随 client width 调整 (resize 后不留白)
+
+#### Feature 2: 拖动 reorder ListView entry
+装机 v0.19.0.43 user 反馈: 期望可以鼠标拖动 list 内的 phrase 调整顺序
+
+**实现**:
+- 用 ListView 内置 `LVN_BEGINDRAG` / `LVN_ENDDRAG` 实现 drag-reorder (标准
+  desktop UX: 点击 + 拖动 + 释放)
+- **没用 long-press 500ms** (需要 subclass ListView, 复杂度高)。用户装机
+  反馈 "长按拖动" 走 desktop 标准 "点击+拖动" UX, 长按阈值未来 PR 加
+  subclass 后支持
+- 新 state: `s_dragSourceIdx` / `s_dropTargetIdx` / `s_isReorderDragging`
+- 新 helpers: `CommitReorder` (reorder m_phrases + FlushSave + PopulateList
+  保留 selection), `EndReorderDrag` (ReleaseCapture + reset state),
+  `UpdateReorderDropTarget` (LVHITTEST 算 drop position)
+- LVN_ENDDRAG 时调 `CommitReorder` 完成 reordering
+- ⚠️ **注意**: 取消 `ListView_SetInsertMark(-1, FALSE)` 在 `EndReorderDrag` 中
+  (sandbox/SDK 组合 hang)。视觉恢复靠 PopulateList 重新 populate ListView
+  自然消失
+
+**Verify** (sandbox Win32 Release):
+- TestPhrasesDialog: **153 PASS / 0 FAIL**
+  - Test 32 (resize layout): 7 checks — input row fixed, list 伸缩, 3 个
+    buttons anchored bottom-right (验证 kBtnY_phys 更新, btn Cancel 右
+    边缘 = newW - marginX*DPI)
+  - Test 33 (CommitReorder helper): 9 checks — 注入 5 phrase, 测试 reorder
+    (move 0 → 4, move 4 → 0, source==target no-op)
+- 编译: WeaselServer.vcxproj + TestPhrasesDialog.vcxproj Exit 0
+- `_check_install_v2.ps1` Module 1+2 md5 = `e0612f56e030ab1299b746e629e090c0`
+- installer md5: `0ce7ae135a33cdbb8b4311a964157266` (43,194,607 bytes)
+- installer extract md5 = source md5 ✓ (无 L97 stale)
+- install.nsi UTF-8 BOM (EF BB BF) + CRLF ✓
+
+**Files touched** (v0.19.0.44, 4):
+- `WeaselServer/PhrasesDialog.h` (新增 reorder state + LayoutDialog 声明 + 调小 min
+  size 至 240×360)
+- `WeaselServer/PhrasesDialog.cpp` (~150+ 行): LayoutDialog impl + reorder
+  helpers + WM_SIZE handler + LVN_BEGINDRAG/ENDDRAG in OnNotify +
+  LayoutDialog 调用 OnCreate 末尾
+- `test/TestPhrasesDialog/TestPhrasesDialog.cpp` (Test 32+33 新增)
+- `_check_install_v2.ps1` (5 处 / 14 行)
+- `release/fluxing-0.19.0.44-installer.exe` (43,194,607 bytes, commit 2)
+
+**装机命令** (L13/L54/L66 强约束):
+```powershell
+taskkill /F /IM WeaselServer.exe /T
+reg delete "HKLM\SOFTWARE\Fluxing\Weasel" /f
+reg delete "HKCU\Software\Fluxing" /f
+& "F:\soft\00selfmade\rime_claude\release\fluxing-0.19.0.44-installer.exe" /S /D=D:\Program Files\fluxing
+& "F:\soft\00selfmade\rime_claude\_check_install_v2.ps1"
+```
+
+**装机后 user 端 verify** (4 项):
+1. Module 1+2 md5 = `e0612f56e030ab1299b746e629e090c0`
+2. Module 3 L66 4 keys 写出
+3. **Resize**: 拖 dialog 边界 → 中间 list 高度变 (input + btn 位置不变)
+4. **Reorder**: 拖动 list item 到新位置 → 顺序变 + 持久化 (打开 dialog 后顺序保留)
+
+**lessons-learned candidate (L104-PhaseG-UI-feature)**:
+- **L104-A (WS_THICKFRAME + WM_SIZE LayoutDialog)**: 加 WS_THICKFRAME 后,
+  不只调 AdjustWindowRect (v0.19.0.43), 还要在 WM_SIZE 重新 LayoutDialog
+  reposition child — 否则 dialog resize 后 child 留在初始位置 ≠ 新 client
+  area 中心。
+- **L104-B (ListView drag-reorder via LVN_BEGINDRAG/ENDDRAG)**: 标准
+  desktop UX 用 ListView 内置 drag-drop (不需要自定义 timer + subclass)。
+  长按 500ms 触发需要 subclass ListView WndProc 拦截 WM_LBUTTONDOWN,
+  复杂度高 — desktop 应用不用默认 long press, 先 ship 标准实现。
+- **L104-C (ListView_SetInsertMark hang 风险)**: ListView_SetInsertMark 在
+  某些 sandbox/SDK 组合 hang (CallWindowProc 进 ListView WndProc + GC
+  死循环)。EndReorderDrag 不要 clear insert mark — PopulateList 重新
+  populate 自然 reset。
+- **L104-D (LayoutDialog min size 240×360)**: v0.19.0.43 min 320×400 太大,
+  user 缩小范围受限。v0.19.0.44 改 240×360 让 user 可缩到 1 行 list + input
+  + 3 buttons (小至 4K 屏仍可读)。
+
+---
+
 ## [0.19.0.43-fluxing] - 2026-07-21
 
 ### fix(WeaselServer): v0.19.0.43 (UI 真修) — IME ImmReleaseContext + drag screen coords + outer size AdjustWindowRect

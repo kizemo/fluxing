@@ -1000,14 +1000,17 @@ static void TestGetMinMaxInfoDpiScaled() {
   SendMessageW(hwnd, WM_GETMINMAXINFO, 0, (LPARAM)&mmi);
 
   double dpiScale = PhrasesDialog::s_dpiScale;
-  LONG expMinW = (LONG)(320 * dpiScale);
-  LONG expMinH = (LONG)(400 * dpiScale);
+  // v0.19.0.44: kMinW/kMinH 改 240/360 (v0.19.0.42 时是 320/400)。读 constexpr
+  // 而非硬编码, 跟进 .h 改值自动同步。
+  LONG expMinW = (LONG)(PhrasesDialog::kMinW * dpiScale);
+  LONG expMinH = (LONG)(PhrasesDialog::kMinH * dpiScale);
   LONG expMaxW = (LONG)(1200 * dpiScale);
   LONG expMaxH = (LONG)(900 * dpiScale);
   CHECK(
-      "29.1: ptMinTrackSize.x = 320 * s_dpiScale (raw 不再用, 防高 DPI 屏 cap)",
+      "29.1: ptMinTrackSize.x = kMinW * s_dpiScale (raw 不再用, 防高 DPI 屏 "
+      "cap)",
       mmi.ptMinTrackSize.x == expMinW);
-  CHECK("29.2: ptMinTrackSize.y = 400 * s_dpiScale",
+  CHECK("29.2: ptMinTrackSize.y = kMinH * s_dpiScale",
         mmi.ptMinTrackSize.y == expMinH);
   CHECK("29.3: ptMaxTrackSize.x = 1200 * s_dpiScale",
         mmi.ptMaxTrackSize.x == expMaxW);
@@ -1126,6 +1129,160 @@ static void TestLongPressDragStateMachine() {
   PhrasesDialog::Hide();
 }
 
+// v0.19.0.44 (Feature 1: resize layout): 验证 WM_SIZE 后 child 重新定位
+//   1) input + AddTop 保持 top-left fixed
+//   2) list 高度变 (伸缩)
+//   3) 3 个底部按钮 anchored bottom-right (固定 btnMarginX + gap)
+static void TestResizeLayoutRepositionsChildren() {
+  std::cout << "\n[Test 32] v0.19.0.44: WM_SIZE re-layout (input fixed, list "
+               "伸缩, btn anchored)"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("32.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+
+  // 记初始 client area
+  RECT rcInitClient;
+  GetClientRect(hwnd, &rcInitClient);
+  int initW = rcInitClient.right - rcInitClient.left;
+  int initH = rcInitClient.bottom - rcInitClient.top;
+  CHECK("32.1: 初始 client 尺寸 > 0", initW > 0 && initH > 0);
+
+  // 记初始 child position
+  RECT rcInputInit, rcListInit, rcBtnInit;
+  GetWindowRect(PhrasesDialog::s_hInput, &rcInputInit);
+  GetWindowRect(PhrasesDialog::s_hList, &rcListInit);
+  GetWindowRect(PhrasesDialog::s_hBtnEdit, &rcBtnInit);
+
+  // 触发 WM_SIZE: client area 800×600
+  // 用户实际 resize 是 outer → outer - border = client, 但 OnGetMinMaxInfo 用
+  // s_dpiScale, 一般 sandbox 1.0 = direct 800×600 100% 安全
+  int newW = 800, newH = 600;
+  SetWindowPos(hwnd, nullptr, 0, 0, newW + 16, newH + 16,
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  // Send WM_SIZE so LayoutDialog gets called with new client dims
+  SendMessageW(hwnd, WM_SIZE, 0, MAKELPARAM(newW, newH));
+
+  // 1. input row: 顶部 (y 跟初始类似, 都没动 titleH 上方)
+  RECT rcInput;
+  GetWindowRect(PhrasesDialog::s_hInput, &rcInput);
+  // Check input vertical position unchanged (same y within dialog)
+  // Map to dialog client coords
+  POINT ptInput = {rcInput.left, rcInput.top};
+  ScreenToClient(hwnd, &ptInput);
+  POINT ptInputInit = {rcInputInit.left, rcInputInit.top};
+  ScreenToClient(hwnd, &ptInputInit);
+  CHECK("32.2: input row 仍 top-left (y 不变)",
+        abs(ptInput.y - ptInputInit.y) <= 2);
+
+  // 2. list height 变了 (变大)
+  RECT rcList;
+  GetWindowRect(PhrasesDialog::s_hList, &rcList);
+  int newListH = rcList.bottom - rcList.top;
+  int oldListH = rcListInit.bottom - rcListInit.top;
+  CHECK("32.3: list height 增长 (新 client 600 > 旧)", newListH > oldListH);
+
+  // 3. buttons anchored bottom (y = newH - btnH - gap in dialog client)
+  RECT rcBtn;
+  GetWindowRect(PhrasesDialog::s_hBtnEdit, &rcBtn);
+  POINT ptBtn = {rcBtn.left, rcBtn.top};
+  ScreenToClient(hwnd, &ptBtn);
+  POINT ptBtnInit = {rcBtnInit.left, rcBtnInit.top};
+  ScreenToClient(hwnd, &ptBtnInit);
+  // After resize, buttons 应该 y = newH - btnH*DPI - gap*DPI (anchored bottom)
+  // 不能直接访问 PhrasesDialog::kBtnH (anonymous namespace in .cpp)。
+  // 用 LayoutDialog 写入的 public static kBtnY_phys 校验:
+  CHECK("32.4: kBtnY_phys 更新到新 client 底 (anchored bottom)",
+        abs(PhrasesDialog::kBtnY_phys - (newH - 32 * PhrasesDialog::s_dpiScale -
+                                         8 * PhrasesDialog::s_dpiScale)) <= 2);
+  CHECK("32.5: btn Edit y 跟初始位置不同 (新尺寸)",
+        abs(ptBtn.y - ptBtnInit.y) >= 2);
+
+  // 4. 3 个 buttons 横向: 右边距 = marginX
+  RECT rcBtnCancel;
+  GetWindowRect(PhrasesDialog::s_hBtnCancel, &rcBtnCancel);
+  POINT ptCancel = {rcBtnCancel.right, rcBtnCancel.top};
+  ScreenToClient(hwnd, &ptCancel);
+  // btn Cancel 右边缘应该 = newW - marginX*DPI;
+  // 不能访问 kBtnMarginX (anonymous namespace), 直接 hardcode 12 (DPI=1):
+  // marginX = kBtnMarginX * s_dpiScale. 在 96 DPI sandbox = 12.
+  int expectedCancelRight = newW - (int)(12 * PhrasesDialog::s_dpiScale);
+  CHECK("32.6: btn Cancel 右边缘 = newW - 12*DPI (marginX kBtnMarginX)",
+        abs(ptCancel.x - expectedCancelRight) <= 2);
+
+  PhrasesDialog::Hide();
+}
+
+// v0.19.0.44 (Feature 2: reorder via drag): 测试 CommitReorder helper 逻辑
+//   不能 e2e 测试 LVN_BEGINDRAG/ENDDRAG (需要真正 mouse drag)
+//   但 CommitReorder 逻辑本身可以独立验证: 设 s_dragSourceIdx + s_dropTargetIdx
+//   + s_isReorderDragging=true, 调 CommitReorder, 验证 m_phrases 重新排列
+static void TestCommitReorderMovesItem() {
+  std::cout << "\n[Test 33] v0.19.0.44: CommitReorder helper 单测" << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("33.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+
+  // 注入 5 个 phrase
+  PhrasesDialog::MutablePhrases().clear();
+  PhrasesDialog::MutablePhrases().push_back({L"first", L""});
+  PhrasesDialog::MutablePhrases().push_back({L"second", L""});
+  PhrasesDialog::MutablePhrases().push_back({L"third", L""});
+  PhrasesDialog::MutablePhrases().push_back({L"fourth", L""});
+  PhrasesDialog::MutablePhrases().push_back({L"fifth", L""});
+  // PopulateList 是 private, 直接用 ListView_InsertItem (public API)
+  SendMessageW(PhrasesDialog::s_hList, LVM_DELETEALLITEMS, 0, 0);
+  for (size_t i = 0; i < 5; i++) {
+    LVITEMW it = {};
+    it.mask = LVIF_TEXT | LVIF_PARAM;
+    it.iItem = (int)i;
+    it.iSubItem = 0;
+    it.pszText = const_cast<wchar_t*>(PhrasesDialog::Phrases()[i].text.c_str());
+    it.lParam = (LPARAM)i;
+    ListView_InsertItem(PhrasesDialog::s_hList, &it);
+  }
+  CHECK("33.1: 5 个 phrase 已 populate",
+        PhrasesDialog::PopulateListCount(PhrasesDialog::s_hList) == 5);
+
+  // Move item 0 ("first") to position 4 ("fifth" 之后, 即末尾)
+  PhrasesDialog::s_dragSourceIdx = 0;
+  PhrasesDialog::s_dropTargetIdx = 5;  // drop after index 4 = list end
+  PhrasesDialog::s_isReorderDragging = true;
+  PhrasesDialog::CommitReorder(PhrasesDialog::s_hList);
+  PhrasesDialog::EndReorderDrag(hwnd);
+
+  const auto& phrases = PhrasesDialog::Phrases();
+  CHECK("33.2: phrases 数仍 5", phrases.size() == 5);
+  CHECK("33.3: 'first' 现在在末尾 (index 4)", phrases[4].text == L"first");
+  CHECK("33.4: 原 'second' 现在在 index 0", phrases[0].text == L"second");
+  CHECK("33.5: 原 'fifth' 现在在 index 3 (被 'first' 挤掉)",
+        phrases[3].text == L"fifth");
+
+  // Try moving index 4 ('first') to position 0 (最前)
+  PhrasesDialog::s_dragSourceIdx = 4;
+  PhrasesDialog::s_dropTargetIdx = 0;
+  PhrasesDialog::s_isReorderDragging = true;
+  PhrasesDialog::CommitReorder(PhrasesDialog::s_hList);
+  PhrasesDialog::EndReorderDrag(hwnd);
+  CHECK("33.6: 'first' 移到 index 0",
+        PhrasesDialog::Phrases()[0].text == L"first");
+  CHECK("33.7: 'second' 移到 index 1",
+        PhrasesDialog::Phrases()[1].text == L"second");
+
+  // No-op case: source == target (no change)
+  PhrasesDialog::s_dragSourceIdx = 0;
+  PhrasesDialog::s_dropTargetIdx = 0;
+  PhrasesDialog::s_isReorderDragging = true;
+  PhrasesDialog::CommitReorder(PhrasesDialog::s_hList);
+  PhrasesDialog::EndReorderDrag(hwnd);
+  CHECK("33.8: no-op reorder (source == target) 不变",
+        PhrasesDialog::Phrases()[0].text == L"first");
+
+  PhrasesDialog::Hide();
+}
+
 // v0.19.0.43 (Bug 2.3 真修): outer 尺寸 = client + WS_THICKFRAME border。
 // 装机 v0.19.0.42 user 报告"初始界面右侧遮挡 Add 按钮, 下边缘遮挡列表+按钮"
 // — 是因为 CreateWindowEx 用 raw kDialogW × kDialogH 作 outer, 但 OnCreate
@@ -1228,6 +1385,12 @@ int main() {
   // v0.19.0.43 (Bug 1.2 + 2.2 + 2.3 真修: IME ImmReleaseContext + drag screen
   // coords + WM_KILLFOCUS guard + outer size AdjustWindowRect)
   test::TestOuterSizeIncludesBorder();
+
+  // v0.19.0.44 (Feature 1: resize layout): WM_SIZE re-layout
+  test::TestResizeLayoutRepositionsChildren();
+  // v0.19.0.44 (Feature 2: reorder ListView entry via drag): CommitReorder
+  // logic
+  test::TestCommitReorderMovesItem();
 
   std::cout << "\n================================================="
             << std::endl;
