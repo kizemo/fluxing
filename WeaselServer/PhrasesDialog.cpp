@@ -557,8 +557,11 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
   // bottom buttons (v0.19.0.41 删 4 → 3, 移除重复 Add)
   kListH_phys = dH - titleH - inputH - btnH - 3 * gap;
   kBtnY_phys = titleH + inputH + kListH_phys + 2 * gap;
-  if (kListH_phys < 80)
-    kListH_phys = 80;
+  // v0.19.0.42 fix (Stop hook SUGGESTION 3): floor 也 × s_dpiScale 保持一致
+  // (80 物理 = 40 逻辑 on 200% DPI, 跟 DPI 缩放意图矛盾)
+  const int kMinListHPhys = (int)(80 * dpiScale);
+  if (kListH_phys < kMinListHPhys)
+    kListH_phys = kMinListHPhys;
   if (kBtnY_phys + btnH > dH)
     kBtnY_phys = dH - btnH - 2;
 
@@ -1039,10 +1042,12 @@ void PhrasesDialog::CenterOnPrimaryMonitor(HWND hwnd, int w, int h) {
 // ===== v0.19.0.41 (Feature: resize + long-press drag) =====
 
 LRESULT PhrasesDialog::OnNcHitTest(HWND hwnd, LPARAM lp) {
-  // 默认行为 (DefWindowProc) 自动给 WS_THICKFRAME 边框返回 HTLEFT/HTRIGHT/
-  // HTTOP 等, 让用户能鼠标拖边界 resize。Chrome 区域 (非子控件) 返回
-  // HTCLIENT, 由 OnLButtonDown 长按 500ms 后触发 drag。不要返回 HTCAPTION —
-  // 那会让 Windows 默认 click+drag 跳过我们的 long press 逻辑。
+  // v0.19.0.42 (Stop hook SUGGESTION 4): 改用 DefWindowProc 默认行为。
+  // DefWindowProc 给 WS_THICKFRAME 边框返回 HTLEFT/HTRIGHT/HTTOP/HTBOTTOM
+  // (让 Windows 处理 resize), 内部区域返回 HTCLIENT (让我们的 OnLButtonDown
+  // 长按 500ms 后触发 drag; 不要在这里返回 HTCAPTION — 那会让 Windows 默认
+  // click+drag 跳过 long press 逻辑)。之前注释误导地说"Chrome 区域返回
+  // HTCLIENT",其实 DefWindowProc 内部已经处理 client + border 区分。
   return DefWindowProcW(hwnd, WM_NCHITTEST, 0, lp);
 }
 
@@ -1098,10 +1103,14 @@ LRESULT PhrasesDialog::OnTimer(HWND hwnd, WPARAM wp) {
 LRESULT PhrasesDialog::OnGetMinMaxInfo(HWND hwnd, LPARAM lp) {
   MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lp);
   if (mmi) {
-    mmi->ptMinTrackSize.x = kMinW;
-    mmi->ptMinTrackSize.y = kMinH;
-    mmi->ptMaxTrackSize.x = kMaxW;
-    mmi->ptMaxTrackSize.y = kMaxH;
+    // v0.19.0.42 fix (Stop hook BLOCKER): kMinW/kMaxW 是 raw 96-DPI 像素,
+    // 必须 × s_dpiScale。否则高 DPI 屏 (e.g. 200%) 初始尺寸 720×920 (raw
+    // max 1200×900) — height 920 > raw max 900 → WM_GETMINMAXINFO 强制 cap
+    // 到 1200×900 比初始尺寸还小, 跟 Bug 2 DPI 缩放逻辑矛盾。
+    mmi->ptMinTrackSize.x = (LONG)(kMinW * s_dpiScale);
+    mmi->ptMinTrackSize.y = (LONG)(kMinH * s_dpiScale);
+    mmi->ptMaxTrackSize.x = (LONG)(kMaxW * s_dpiScale);
+    mmi->ptMaxTrackSize.y = (LONG)(kMaxH * s_dpiScale);
   }
   return 0;
 }

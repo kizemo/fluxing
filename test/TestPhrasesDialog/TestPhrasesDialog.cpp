@@ -981,6 +981,126 @@ static void TestDpiScaleComputed() {
   PhrasesDialog::Hide();
 }
 
+// v0.19.0.42 (Stop hook BLOCKER fix): OnGetMinMaxInfo 用 s_dpiScale 缩放
+//   min/max 物理尺寸, 否则高 DPI 屏初始尺寸 (e.g. 720×920 on 200% DPI) 会超
+//   过 raw max (1200×900), WM_GETMINMAXINFO 强制 cap 到比初始尺寸还小。
+//   验证: dispatch WM_GETMINMAXINFO → 检查 ptMinTrackSize/ptMaxTrackSize 都
+//   × s_dpiScale (raw 320/400/1200/900 各自 × s_dpiScale)。
+static void TestGetMinMaxInfoDpiScaled() {
+  std::cout << "\n[Test 29] v0.19.0.42 fix: OnGetMinMaxInfo 用 s_dpiScale 缩放"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("29.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+
+  // 触发 WM_GETMINMAXINFO (Windows 在 begin resize/move + 初始 creation 时发)
+  // 初始 0 = 没限制, 我们的 OnGetMinMaxInfo 会设新值
+  MINMAXINFO mmi = {};
+  SendMessageW(hwnd, WM_GETMINMAXINFO, 0, (LPARAM)&mmi);
+
+  double dpiScale = PhrasesDialog::s_dpiScale;
+  LONG expMinW = (LONG)(320 * dpiScale);
+  LONG expMinH = (LONG)(400 * dpiScale);
+  LONG expMaxW = (LONG)(1200 * dpiScale);
+  LONG expMaxH = (LONG)(900 * dpiScale);
+  CHECK("29.1: ptMinTrackSize.x = 320 * s_dpiScale (raw 不再用, 防高 DPI 屏 cap)",
+        mmi.ptMinTrackSize.x == expMinW);
+  CHECK("29.2: ptMinTrackSize.y = 400 * s_dpiScale",
+        mmi.ptMinTrackSize.y == expMinH);
+  CHECK("29.3: ptMaxTrackSize.x = 1200 * s_dpiScale",
+        mmi.ptMaxTrackSize.x == expMaxW);
+  CHECK("29.4: ptMaxTrackSize.y = 900 * s_dpiScale (raw 900 在 200% DPI = 1800 > 初始 920)",
+        mmi.ptMaxTrackSize.y == expMaxH);
+
+  // 验证高 DPI 屏 max ≥ 初始尺寸 (关键: 防 cap 缩到比初始还小)
+  RECT rc;
+  GetWindowRect(hwnd, &rc);
+  int initW = rc.right - rc.left;
+  int initH = rc.bottom - rc.top;
+  CHECK("29.5: ptMaxTrackSize.x ≥ 初始 dialog 宽 (高 DPI 不被 cap 缩小)",
+        mmi.ptMaxTrackSize.x >= initW);
+  CHECK("29.6: ptMaxTrackSize.y ≥ 初始 dialog 高",
+        mmi.ptMaxTrackSize.y >= initH);
+  PhrasesDialog::Hide();
+}
+
+// v0.19.0.42 (Stop hook SUGGESTION 2): long-press drag state machine e2e
+//   不等 500ms timer, 直接通过公开 API (OnLButtonDown + OnTimer + OnMouseMove
+//   + OnLButtonUp) 模拟完整状态机:
+//     1) OnLButtonDown in chrome → s_longPressActive = true
+//     2) OnTimer kLongPressTimerId → s_isDragging = true + SetCapture
+//     3) OnMouseMove in drag mode → SetWindowPos (位置变化)
+//     4) OnLButtonUp → s_isDragging = false + ReleaseCapture
+//   这些 handlers 之前只能从外部访问 (private static), 加 Test 30 验证状态机
+//   完整流程 (e2e 覆盖 WM_LBUTTONDOWN / WM_TIMER / WM_MOUSEMOVE / WM_LBUTTONUP)。
+static void TestLongPressDragStateMachine() {
+  std::cout << "\n[Test 30] v0.19.0.42: 长按 drag state machine e2e" << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("30.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+  CHECK("30.1: 初始 s_isDragging = false, s_longPressActive = false",
+        !PhrasesDialog::s_isDragging && !PhrasesDialog::s_longPressActive);
+
+  // 模拟在 chrome 区域 (e.g. 标题栏 y=10) LBUTTONDOWN — ChildWindowFromPoint
+  // 排除子控件, 我们用 (5, 5) 屏幕坐标应该不在 input / list / 按钮上
+  // (input 起点 btnMarginX=12, list 起点 gap=8, y>titleH=30 才到 input)
+  // 用 (1, 1) — 远在所有子控件外
+  LPARAM lParamDown = 1 | (1 << 16);
+  PhrasesDialog::OnLButtonDown(hwnd, 0, lParamDown);
+  CHECK("30.2: chrome LBUTTONDOWN → s_longPressActive = true",
+        PhrasesDialog::s_longPressActive);
+  CHECK("30.3: s_isDragging 仍 false (等 timer)",
+        !PhrasesDialog::s_isDragging);
+
+  // 模拟 500ms timer fire
+  PhrasesDialog::OnTimer(hwnd, PhrasesDialog::kLongPressTimerId);
+  CHECK("30.4: WM_TIMER fire → s_isDragging = true",
+        PhrasesDialog::s_isDragging);
+  CHECK("30.5: s_longPressActive = false (timer 消费完)",
+        !PhrasesDialog::s_longPressActive);
+
+  // 记录初始 window 位置
+  RECT rcInit;
+  GetWindowRect(hwnd, &rcInit);
+  int initX = rcInit.left;
+  int initY = rcInit.top;
+
+  // 模拟 MOUSEMOVE 100,100 (相对 drag origin (1,1), 移动 +99, +99)
+  LPARAM lParamMove = 100 | (100 << 16);
+  PhrasesDialog::OnMouseMove(hwnd, MK_LBUTTON, lParamMove);
+  RECT rcAfter;
+  GetWindowRect(hwnd, &rcAfter);
+  // 期望 newX = initX + (100 - 1) = initX + 99
+  int dx = (rcAfter.left - initX);
+  int dy = (rcAfter.top - initY);
+  CHECK("30.6: WM_MOUSEMOVE in drag mode → window 左移 +99 (1→100 delta)",
+        dx == 99);
+  CHECK("30.7: window 上移 +99",
+        dy == 99);
+
+  // 模拟 LBUTTONUP
+  PhrasesDialog::OnLButtonUp(hwnd, 0, 0);
+  CHECK("30.8: WM_LBUTTONUP → s_isDragging = false",
+        !PhrasesDialog::s_isDragging);
+
+  // 短按 (timer 还没 fire) → OnLButtonUp 应该 cancel
+  PhrasesDialog::SetYamlPath(L"");  // re-Show
+  PhrasesDialog::Hide();
+  PhrasesDialog::Show();
+  PhrasesDialog::OnLButtonDown(hwnd, 0, 1 | (1 << 16));
+  CHECK("30.9: 短按 s_longPressActive = true",
+        PhrasesDialog::s_longPressActive);
+  PhrasesDialog::OnLButtonUp(hwnd, 0, 0);
+  CHECK("30.10: 短按 LBUTTONUP → s_longPressActive = false (cancel)",
+        !PhrasesDialog::s_longPressActive);
+  CHECK("30.11: 短按 s_isDragging 仍 false (没进 drag mode)",
+        !PhrasesDialog::s_isDragging);
+
+  PhrasesDialog::Hide();
+}
+
 }  // namespace test
 
 int main() {
@@ -1039,6 +1159,10 @@ int main() {
   test::TestNoDuplicateAddButton();
   test::TestWindowStyleHasThickFrame();
   test::TestDpiScaleComputed();
+
+  // v0.19.0.42 (Stop hook 修补: OnGetMinMaxInfo DPI 缩放 + drag state e2e)
+  test::TestGetMinMaxInfoDpiScaled();
+  test::TestLongPressDragStateMachine();
 
   std::cout << "\n================================================="
             << std::endl;
