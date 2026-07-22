@@ -7,6 +7,8 @@
 #include "stdafx.h"
 #include "PhrasesDialogIPC.h"
 #include "FluxingPipeProtocol.h"
+#include "ForegroundCapture.h"  // v0.19.0.52 (Phase K3 T011 Option B): InjectText 抢 foreground
+#include <WeaselUtility.h>      // WeaselUserDataPath (懒初始化 yaml path 用)
 #include <fstream>
 #include <iostream>
 #include <filesystem>
@@ -26,6 +28,16 @@ std::wstring PhrasesDialogIPC::s_yamlPath;
 
 void PhrasesDialogIPC::Show() {
   if (s_running) return;  // 已经显示
+
+  // v0.19.0.52 (Phase K3 T011 Option B): 惰性初始化 yaml path,兜底消除
+  //   "hotkey fires before SetYamlPath" race。WeaselServerApp 在 Run() 入口
+  //   显式 SetYamlPath 是 override 的语义,here 是 fallback (无 Set 时用 default)。
+  //   同时也意味着 TestPhrasesDialog 之类不依赖外部 init 也能跑。
+  if (s_yamlPath.empty()) {
+    std::filesystem::path yamlDefault =
+        WeaselUserDataPath().wstring() + L"\\phrases.yaml";
+    s_yamlPath = yamlDefault.wstring();
+  }
 
   // 1. 从 YAML 加载短语数据
   if (!s_yamlPath.empty()) {
@@ -224,7 +236,39 @@ void PhrasesDialogIPC::ProcessCommand(HANDLE hPipe,
     }
     case PipeMsgType::MT_INJECT: {
       if (msg.id >= 0 && msg.id < (int)s_phrases.size()) {
-        InjectText(s_phrases[msg.id].text);
+        const std::wstring& text = s_phrases[msg.id].text;
+        // v0.19.0.52 (Phase K3 T011 Option B): 抢回 user foreground 后再
+        //   SendInput。流程:
+        //     1. AttachThreadInput(targetTid, currentTid, TRUE) — 共享 input
+        //        state,绕过 foreground-process 限制
+        //     2. SetForegroundWindow(targetHwnd) — 抢回 user app 的 foreground
+        //     3. InjectText → SendInput (此时 foreground = user app,events 进
+        //        user app 的 input queue,而非 dialog s_hInput)
+        //     4. AttachThreadInput(targetTid, currentTid, FALSE) — detach
+        //   验证条件: targetHwnd IsWindow (user 没关 app),targetTid 非零。
+        //   targetHwnd 由 RimeWithWeaselHandler::FocusIn 在 IPC worker thread
+        //   上 GetForegroundWindow() 抓取 (session-global,不依赖 caller 进程)。
+        HWND target = fluxing::foreground_restore::GetHwnd();
+        DWORD targetTid = fluxing::foreground_restore::GetThreadId();
+        DWORD currentTid = GetCurrentThreadId();
+        bool attached = false;
+        if (target && IsWindow(target) && targetTid &&
+            targetTid != currentTid) {
+          if (AttachThreadInput(targetTid, currentTid, TRUE)) {
+            attached = true;
+          }
+        }
+        if (target && IsWindow(target)) {
+          // 注: SetForegroundWindow 在 foreground-restriction 下可能仍失败,
+          // 但即使失败, AttachThreadInput 联合调用已让 currentTid 进入
+          // targetTid 的 input cluster — SendInput 会按 input-cluster 中的
+          // foreground 派发 (即 target 那个)。
+          SetForegroundWindow(target);
+        }
+        InjectText(text);
+        if (attached) {
+          AttachThreadInput(targetTid, currentTid, FALSE);
+        }
       }
       PipeSend(hPipe, BuildACK());
       break;

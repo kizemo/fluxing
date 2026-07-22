@@ -7,6 +7,11 @@
 #include <WeaselUtility.h>
 #include <QuickPanelDialog.h>   // spec 056: FocusIn/FocusOut call
                                 //   QuickPanelDialog::EnableAlwaysShowMode/Hide
+// v0.19.0.52 (Phase K3 T011 Option B): capture user foreground at FocusIn
+//   IPC for PhrasesDialogIPC::InjectText to restore before SendInput.
+//   GetForegroundWindow() 是 session-global (跟 caller 进程无关),所以
+//   IPC worker thread 调 = 拿 user app 当前 foreground (= 最稳的 capture 点)。
+#include "ForegroundCapture.h"
 
 #include <filesystem>
 #include <map>
@@ -382,6 +387,12 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
   TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return;
+  // v0.19.0.52 (Phase K3 T011 Option B): 抓 user foreground。
+  // 此刻: WeaselTSF.dll 已通过 IPC 通知 server 端 user 在 edit field 输入 →
+  // server FocusIn handler 在 IPC worker thread 跑 → GetForegroundWindow()
+  // 拿 system foreground (= user app 当前 hwnd)。PhrasesDialogIPC::InjectText
+  // 后续会读这个,AttachThreadInput + SetForegroundWindow 把 foreground 抢回去。
+  fluxing::foreground_restore::CaptureFromCurrentThread();
   _UpdateUI(ipc_id);
   m_active_session = ipc_id;
   // L69-fix: QuickPanel DISABLED to avoid heap corruption crash.

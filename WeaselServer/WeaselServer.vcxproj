@@ -513,6 +513,11 @@
     <!-- v0.19.0.52 (Phase K3 T012): WeaselServer/PhrasesDialog.cpp+.h 删.
          out-of-process IPC (FluxingPhrasesDialog.exe + named pipe) 完全替代
          in-process PhrasesDialog. vcxproj 引用清空,源文件已 rm。 -->
+    <!-- v0.19.0.52 (Phase K3 T011 Option B): capture user foreground at
+         FocusIn IPC (in WeaselServer IPC worker thread, GetForegroundWindow()
+         is session-global) for PhrasesDialogIPC::InjectText to restore before
+         SendInput. -->
+    <ClCompile Include="ForegroundCapture.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ModalChrome.h" />
@@ -524,6 +529,7 @@
     <ClInclude Include="WeaselService.h" />
     <ClInclude Include="WeaselTrayIcon.h" />
     <ClInclude Include="PhrasesDialogIPC.h" />
+    <ClInclude Include="ForegroundCapture.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="WeaselServer.rc" />
