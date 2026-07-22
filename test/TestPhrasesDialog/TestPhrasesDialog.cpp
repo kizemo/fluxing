@@ -1051,11 +1051,12 @@ static void TestLongPressDragStateMachine() {
   CHECK("30.1: 初始 s_isDragging = false, s_longPressActive = false",
         !PhrasesDialog::s_isDragging && !PhrasesDialog::s_longPressActive);
 
-  // 模拟在 chrome 区域 (e.g. 标题栏 y=10) LBUTTONDOWN — ChildWindowFromPoint
-  // 排除子控件, 我们用 (5, 5) 屏幕坐标应该不在 input / list / 按钮上
-  // (input 起点 btnMarginX=12, list 起点 gap=8, y>titleH=30 才到 input)
-  // 用 (1, 1) — 远在所有子控件外
-  LPARAM lParamDown = 1 | (1 << 16);
+  // 模拟在 chrome 区域 (e.g. y=50, 明确在 title bar 外, titleH=30*DPI=1=30)
+  // v0.19.0.48 (Phase J Bug 3): 顶部 title bar 立即 drag, 不走 long-press path;
+  //   测试用 (5, 50) 明确在 title bar 外 + 明确在所有子控件外 (input/list/btn)
+  //   (input 起点 x>=8, list 起点 x>=8 y>=70+, 底部按钮 y>=clientH-btnH; (5, 50) 是
+  //   left margin gap chrome 区) → 走 long-press path
+  LPARAM lParamDown = 5 | (50 << 16);
   PhrasesDialog::OnLButtonDown(hwnd, 0, lParamDown);
   CHECK("30.2: chrome LBUTTONDOWN → s_longPressActive = true",
         PhrasesDialog::s_longPressActive);
@@ -1117,7 +1118,8 @@ static void TestLongPressDragStateMachine() {
   PhrasesDialog::SetYamlPath(L"");  // re-Show
   PhrasesDialog::Hide();
   PhrasesDialog::Show();
-  PhrasesDialog::OnLButtonDown(hwnd, 0, 1 | (1 << 16));
+  // v0.19.0.48 (Phase J Bug 3): 用 (5, 50) (明确在 title bar 外 + 子控件外) 测长按 path
+  PhrasesDialog::OnLButtonDown(hwnd, 0, 5 | (50 << 16));
   CHECK("30.9: 短按 s_longPressActive = true",
         PhrasesDialog::s_longPressActive);
   PhrasesDialog::OnLButtonUp(hwnd, 0, 0);
@@ -1468,6 +1470,50 @@ test36_end:
   PhrasesDialog::Hide();
 }
 
+// v0.19.0.48 (Phase J Bug 3 真修): 顶部蓝色 title bar (ModalChrome painted)
+//   区点击立即 drag, 不走 long-press 500ms (跟 Windows 标准 dialog 一致)。
+//   真因: 用户报 "UI 现在无法拖动位置 (顶部有一个小蓝条)" — 原版 OnLButtonDown
+//   用 long-press 500ms 启动 drag, 不直观。修法: y < titleH_phys 直接 BeginDrag。
+//
+// Test 37 验证: 点击 title bar (y=5, 明确在 titleH_phys=30*DPI 内) →
+//   s_isDragging 立即变 true (不等 500ms timer); s_longPressActive 仍 false
+//   (没经过 long-press 路径)。
+static void TestTitleBarImmediateDrag() {
+  std::cout << "\n[Test 37] v0.19.0.48: 顶部 title bar 立即 drag (无 long-press)"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("37.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+  CHECK("37.1: 初始 s_isDragging=false, s_longPressActive=false",
+        !PhrasesDialog::s_isDragging && !PhrasesDialog::s_longPressActive);
+
+  // 点击 title bar 区 (y=5, 在 titleH_phys=30 内)
+  LPARAM lParamTitle = 5 | (5 << 16);
+  PhrasesDialog::OnLButtonDown(hwnd, 0, lParamTitle);
+  CHECK("37.2: title bar LBUTTONDOWN → s_isDragging 立即变 true (无 timer)",
+        PhrasesDialog::s_isDragging);
+  CHECK("37.3: title bar LBUTTONDOWN → s_longPressActive 仍 false (没走 long-press)",
+        !PhrasesDialog::s_longPressActive);
+
+  // 验证: 不需要 WM_TIMER fire, drag mode 已激活
+  // (跟 30.4 对比: 长按路径需 OnTimer fire 才能 s_isDragging=true)
+
+  PhrasesDialog::OnLButtonUp(hwnd, 0, 0);
+  CHECK("37.4: title bar LBUTTONUP → s_isDragging = false",
+        !PhrasesDialog::s_isDragging);
+
+  // 对照: chrome 区 (5, 50) 仍走 long-press path (跟 30.x 同样的 chrome 区坐标)
+  PhrasesDialog::OnLButtonDown(hwnd, 0, 5 | (50 << 16));
+  CHECK("37.5: chrome 区 LBUTTONDOWN → s_longPressActive = true (long-press 路径)",
+        PhrasesDialog::s_longPressActive);
+  CHECK("37.6: chrome 区 LBUTTONDOWN → s_isDragging 仍 false (等 timer)",
+        !PhrasesDialog::s_isDragging);
+
+  PhrasesDialog::OnLButtonUp(hwnd, 0, 0);  // cancel
+  PhrasesDialog::Hide();
+}
+
 // v0.19.0.44 (Feature 2: reorder via drag): 测试 CommitReorder helper 逻辑
 //   不能 e2e 测试 LVN_BEGINDRAG/ENDDRAG (需要真正 mouse drag)
 //   但 CommitReorder 逻辑本身可以独立验证: 设 s_dragSourceIdx + s_dropTargetIdx
@@ -1652,6 +1698,8 @@ int main() {
   test::TestInputStretchesAndMarginShrinks();
   // v0.19.0.47 (Phase I Bug 4 续修): OnCreate 期间 s_hInput 至少获 1 次焦点
   test::TestOnCreateInputGetsFocusForTSFAttach();
+  // v0.19.0.48 (Phase J Bug 3 真修): 顶部 title bar 立即 drag (无 long-press)
+  test::TestTitleBarImmediateDrag();
 
   std::cout << "\n================================================="
             << std::endl;

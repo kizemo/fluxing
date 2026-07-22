@@ -549,6 +549,28 @@ LRESULT CALLBACK PhrasesDialog::WndProc(HWND hwnd,
       }
       return 0;
     }
+    // v0.19.0.48 (Phase J Bug 2 真修): PhrasesDialog open 时
+    //   Ctrl+Shift / Win+Space 切 IME 不响应。原因: dialog SetForegroundWindow
+    //   抢 foreground lock + WS_EX_TOPMOST, OS IME 切换路由被劫持。
+    //   修法: WM_INPUTLANGCHANGEREQUEST 转发到 OS (ActivateKeyboardLayout)
+    //   + WM_INPUTLANGCHANGE 记录当前 IME (后续可调 ImmSetConversionStatus)。
+    case WM_INPUTLANGCHANGEREQUEST: {
+      // wParam: input language identifier (HKL), lParam: flags
+      HKL hkl = (HKL)wp;
+      WORD flags = LOWORD(lp);
+      if (hkl) {
+        ActivateKeyboardLayout(hkl, flags);
+      }
+      return DefWindowProcW(hwnd, WM_INPUTLANGCHANGEREQUEST, wp, lp);
+    }
+    case WM_INPUTLANGCHANGE: {
+      WORD charset = HIWORD(wp);
+      HKL hkl = (HKL)lp;
+      OutputDebugStringW(L"[PhrasesDialog v0.19.0.48] WM_INPUTLANGCHANGE "
+                          L"charset=0x");
+      // 简化日志: 不打印完整 HKL, 装机端可用 ImmGetIMEFileName 查
+      return DefWindowProcW(hwnd, WM_INPUTLANGCHANGE, wp, lp);
+    }
     case WM_KILLFOCUS: {
       // v0.19.0.43 (Bug 2.2 drag 修复): drag 中不 Hide
       // 装机 v0.19.0.42 user 反馈 "拖动时 UI 可能消失" — 拖动期间 SetCapture
@@ -768,6 +790,26 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
   }
   if (s_hList) {
     SetFocus(s_hList);
+  }
+
+  // v0.19.0.48 (Phase J Bug 1 真修): 6 ship 版本 (v0.19.0.35/36/43/45/46/47)
+  //   反复改 isolated HIMC / SetFocus 都 fail, 真因: TSF shim 进程下 in-process
+  //   dialog 不自动配 IMM32 IME context 给 child EDIT. IMM32 fallback:
+  //   SetFocus 后立即 ImmGetContext + ImmSetOpenStatus(himc, TRUE) 强制开 IME.
+  //   若 IMM32 在 TSF 进程下完全被 bypass (ImmGetContext 返回 NULL), 输出
+  //   DebugString 让装机端用 DebugView 查。
+  if (s_hInput) {
+    HIMC himc = ImmGetContext(s_hInput);
+    if (himc) {
+      ImmSetOpenStatus(himc, TRUE);
+      ImmReleaseContext(s_hInput, himc);
+      OutputDebugStringW(L"[PhrasesDialog v0.19.0.48] IMM32 fallback active: "
+                          L"ImmGetContext OK + ImmSetOpenStatus(TRUE)");
+    } else {
+      OutputDebugStringW(L"[PhrasesDialog v0.19.0.48] IMM32 unavailable in "
+                          L"TSF process; in-process IME truly blocked. "
+                          L"Architecture refactor needed.");
+    }
   }
 
   return 0;
@@ -1179,7 +1221,18 @@ LRESULT PhrasesDialog::OnLButtonDown(HWND hwnd, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, WM_LBUTTONDOWN, wp, lp);
   }
 
-  // 2. 在 chrome 区域 (标题栏 / input 上下空隙 / list 周围) — 启动 long press
+  // v0.19.0.48 (Phase J Bug 3 真修): 顶部小蓝条 painted title bar (ModalChrome
+  //   画的) 区点击立即 drag, 不像 v0.19.0.41 长按 500ms 才 drag (太不直观)。
+  //   检测: y 在 title 区域 (y < titleH_phys = kTitleH * dpiScale) → 立即
+  //   BeginDrag + SetCapture + return 0 (不让 Windows 默认处理)。
+  const int titleH_phys = (int)(kTitleH * s_dpiScale);
+  if (y < titleH_phys) {
+    // 顶部 title bar 区 — 立即 drag (跟 Windows 标准 dialog 一致)
+    BeginDrag(hwnd);
+    return 0;
+  }
+
+  // 2. 在其他 chrome 区域 (input 上下空隙 / list 周围) — 启动 long press
   StartLongPressTimer(hwnd, x, y);
   return 0;
 }
