@@ -495,17 +495,24 @@
     <ClCompile Include="WeaselService.cpp" />
     <ClCompile Include="WeaselTrayIcon.cpp" />
     <ClCompile Include="QuickPanelDialog.cpp" />
-    <!-- v0.19.0.30 fix: PhrasesDialog.cpp 之前漏加,WeaselServerApp.cpp 引用
+    <!-- v0.19.0.30 fix (历史): PhrasesDialog.cpp 之前漏加,WeaselServerApp.cpp 引用
          PhrasesDialog::Show() 但 vcxproj 没 include 此 cpp,导致 LNK2001。
          v0.19.0.28 commit c6fec000 加 ShortcutSettings.cpp + UserDictionary.cpp
-         时漏掉 PhrasesDialog.cpp。 -->
-    <ClCompile Include="PhrasesDialog.cpp" />
+         时漏掉 PhrasesDialog.cpp。
+         v0.19.0.52 (Phase K3 T012): 整 PhrasesDialog.cpp+.h 删 — in-process
+         PhrasesDialog 完全被 out-of-process FluxingPhrasesDialog.exe + named pipe
+         IPC (PhrasesDialogIPC.cpp) 替代。WeaselServerApp.cpp 3 处 Show() 改
+         fluxing::PhrasesDialogIPC::Show() (T010)。 -->
     <ClCompile Include="ShortcutSettings.cpp" />
     <ClCompile Include="UserDictionary.cpp" />
     <!-- v0.19.0.31 fix: ModalChrome paint helper (spec 070 L95-A DRY follow-up).
          抽出 3 个 modal 共用的 BG + Border paint, 替代 PhrasesDialog /
          UserDictionary / ShortcutSettings OnPaint 中的 60 行重复代码。 -->
     <ClCompile Include="ModalChrome.cpp" />
+    <ClCompile Include="PhrasesDialogIPC.cpp" />
+    <!-- v0.19.0.52 (Phase K3 T012): WeaselServer/PhrasesDialog.cpp+.h 删.
+         out-of-process IPC (FluxingPhrasesDialog.exe + named pipe) 完全替代
+         in-process PhrasesDialog. vcxproj 引用清空,源文件已 rm。 -->
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ModalChrome.h" />
@@ -516,6 +523,7 @@
     <ClInclude Include="WeaselServerApp.h" />
     <ClInclude Include="WeaselService.h" />
     <ClInclude Include="WeaselTrayIcon.h" />
+    <ClInclude Include="PhrasesDialogIPC.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="WeaselServer.rc" />
