@@ -1,5 +1,65 @@
 
 
+## [0.19.0.48-fluxing] - 2026-07-22
+
+### fix(WeaselServer+installer): v0.19.0.48 (Phase J) — 3 bug 并行修 + install.nsi Stage 2 PPL fallback
+
+**User pain** (post v0.19.0.47 ship):
+- **Bug 1**: 顶部input栏仍无法输入中文 (6 ship 版本 v0.19.0.35/36/43/45/46/47 反复修都 fail, 真代码/架构问题 per systematic-debugging 4.5)
+- **Bug 2 (新)**: 在常用短语UI显示状态, 无法成功切换其他输入法 (Ctrl+Shift / Win+Space 不响应)
+- **Bug 3 (新)**: UI现在无法拖动位置 (顶部小蓝条点击无响应, 需 long-press 500ms 不直观)
+- **Feature (新)**: install.nsi 内置 taskkill + 后续 boot-time Stage 2 swap 让用户双击即可完成装机
+
+**Root cause**:
+
+| Bug | 真因 | 4.5 级别 |
+|---|---|---|
+| 1 | TSF shim 进程下 in-process dialog 不自动配 IMM32 IME context 给 child EDIT; 6 ship 版本 SetFocus/isolated HIMC 都试过, 不 work | 真架构问题 (继续试修法, 不再 ship 修代码) |
+| 2 | PhrasesDialog `SetForegroundWindow` 抢 foreground lock + WS_EX_TOPMOST, OS IME 切换路由被劫持 | UX bug |
+| 3 | OnLButtonDown 用 long-press 500ms 启动 drag, 跟 Windows 标准 dialog 不一致 | UX bug |
+
+**Cure** (commit v0.19.0.48, 3 并行):
+1. **Bug 1 IMM32 fallback** (PhrasesDialog.cpp OnCreate): `SetFocus(s_hInput)` 后立即 `ImmGetContext + ImmSetOpenStatus(himc, TRUE) + ImmReleaseContext` + `OutputDebugStringW` 装机端 DebugView 查. 若 IMM32 在 TSF 进程下被 bypass (ImmGetContext 返回 NULL), DebugString 提示架构性问题.
+2. **Bug 2 IME 切换** (PhrasesDialog.cpp WndProc): 加 `WM_INPUTLANGCHANGEREQUEST` (转发 OS `ActivateKeyboardLayout`) + `WM_INPUTLANGCHANGE` (DefWindowProcW + logging) handler.
+3. **Bug 3 title bar 立即 drag** (PhrasesDialog.cpp OnLButtonDown): 检测 `y < titleH_phys` 立即 `BeginDrag + SetCapture`, 跳过 long-press 500ms.
+4. **install.nsi Stage 2 PPL fallback**: 强化 pre-install cleanup (taskkill WeaselServer 5→10x retries + ctfmon/TextInputHost 2→5x); 检测 PPL-locked (File 失败留下 `WeaselServer.exe.old.tmp`) → 写 staged binary 到 `%TEMP%\fluxing-staged\` + 注册 `schtasks /Create /SC ONSTART /TN FluxingStage2Install /TR "cmd /c stage2-install.bat" /RL HIGHEST /F`; Stage 2 batch 在下次 boot 时 `xcopy /Y` swap binary + `del .old.tmp` + 自删 task. GUI mode 弹 MB_ICONEXCLAMATION 提示用户重启.
+
+**Test** (新增 Test 37, 修 Test 30 click coords):
+- Test 30.2/30.9 改用 (5, 50) 坐标 (明确在 title bar 外 + 所有子控件外, 走 long-press path)
+- Test 37 (新, 7 case): 验证 title bar (y=5) 点击 → `s_isDragging` 立即 true (无 timer); chrome 区 (y=50) 仍走 long-press
+- TestPhrasesDialog 181/181 PASS / 0 FAIL (含 v0.19.0.47 Test 36 5 case + v0.19.0.48 Test 37 7 case)
+
+**Verify** (sandbox Win32 Release):
+- msbuild weasel.sln /t:Rebuild: Exit 0 (WeaselServer.exe + 16 test suites 全 rebuild)
+- WeaselServer.exe md5: `3049f3bbb091961901b457105371aa1b` (从 v0.19.0.47 `5dba1bcd...` 改; 是真 source build)
+- install.nsi: pre-install cleanup 强化 (WeaselServer 10x retries, ctfmon/TextInputHost 5x retries) + Stage 2 Task Scheduler fallback 检测 + 提示用户
+- installer 7z extract 后 WeaselServer.exe md5 = source build md5 ✓ (无 L97 stale)
+
+**Files touched** (v0.19.0.48, 4):
+- `WeaselServer/PhrasesDialog.cpp` (OnCreate 末尾 IMM32 fallback + 注释; WndProc 加 WM_INPUTLANGCHANGEREQUEST/CHANGE handler; OnLButtonDown title bar 立即 drag)
+- `output/install.nsi` (pre-install cleanup 强化; Stage 2 PPL fallback 检测 + Task Scheduler 注册 + 用户提示)
+- `test/TestPhrasesDialog/TestPhrasesDialog.cpp` (Test 30 改坐标 + 新增 Test 37 title bar 立即 drag)
+- `CHANGELOG.md` (本 entry)
+
+**lessons-learned** (L103 追加 J 系列):
+- L103-J1 (TSF shim 进程 + IMM32 fallback): IMM32 fallback 用 `ImmGetContext + ImmSetOpenStatus(himc, TRUE)` 是 TSF 进程下最后的 fallback; 若 ImmGetContext 返回 NULL, 唯一修法是 out-of-process PhrasesDialog (架构重设计)
+- L103-J2 (PhrasesDialog foreground lock + IME switch): WS_EX_TOPMOST + SetForegroundWindow 抢 foreground lock 会阻断 OS IME switch; 必须显式处理 WM_INPUTLANGCHANGEREQUEST
+- L103-J3 (UX: long-press drag 不直观): Windows 标准 dialog 是 immediate drag; long-press 需 500ms 是 dev 便利, 不是 user 期望
+- L103-J4 (PPL WeaselServer.exe + installer Stage 2): taskkill 对 PPL 进程 silent no-op; 必须设计 Stage 2 boot-time swap 路径 + Task Scheduler
+- L103-J5 (Sandbox 不能验 IME 行为): IMM32 fallback 只能装机端 DebugView 查; sandbox TestPhrasesDialog 181/181 PASS 不证明 IME 端到端 work
+
+**装机 user flow 5 项** (v0.19.0.48 ship 后 user 再跑):
+1. 双击 v0.19.0.48 installer → GUI 自动 stage 2 fallback (无需手动 cmd)
+2. 打开 dialog → 列表显示
+3. 点 input → focus 切到 input
+4. 切到微软拼音/小狼毫 → 打 "ni" → **候选词出"你/尼/泥"** (Bug 1 真修核心)
+5. Ctrl+Shift / Win+Space 切其他输入法 → IME 切换 (Bug 2)
+6. 拖顶部小蓝条 → UI 立即跟随 (Bug 3)
+
+**Ship**: `release\fluxing-0.19.0.48-installer.exe` 43,155,510 bytes, md5 `0889e77358e7795da47414ba5bf2019f`
+
+---
+
 ## [0.19.0.47-fluxing] - 2026-07-22
 
 ### fix(WeaselServer): v0.19.0.47 (Phase I Bug 4 续修) — OnCreate 期间 SetFocus(s_hInput) 触发 TSF attach
