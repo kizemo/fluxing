@@ -68,7 +68,11 @@ namespace {
 // 尺寸 (size.modal.*)
 constexpr int kDialogW = 360;
 constexpr int kDialogH = 460;
-constexpr int kTitleH = 30;
+// v0.19.0.49 (Phase J Bug A/D): kTitleH 30→48 让 title bar click 命中区扩大。
+//   装机 v0.19.0.48 user 反馈 "顶部小蓝条高度过窄, 无法点中" + Bug 3 title bar
+//   立即 drag 无法触发。物理 30 像素在 100% DPI 仅 24-28 视觉像素, click 困难;
+//   改 48 后 ~38-44 视觉像素, 标准 Windows dialog title bar 大小。
+constexpr int kTitleH = 48;
 constexpr int kInputH = 32;   // v0.19.0.32: 顶部 input 行高
 constexpr int kInputW = 240;  // v0.19.0.32: input 宽 (右侧 Add 按钮让位)
 constexpr int kBtnAddTopW = 76;  // v0.19.0.32: 顶部 Add 按钮宽
@@ -792,23 +796,34 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
     SetFocus(s_hList);
   }
 
-  // v0.19.0.48 (Phase J Bug 1 真修): 6 ship 版本 (v0.19.0.35/36/43/45/46/47)
-  //   反复改 isolated HIMC / SetFocus 都 fail, 真因: TSF shim 进程下 in-process
-  //   dialog 不自动配 IMM32 IME context 给 child EDIT. IMM32 fallback:
-  //   SetFocus 后立即 ImmGetContext + ImmSetOpenStatus(himc, TRUE) 强制开 IME.
-  //   若 IMM32 在 TSF 进程下完全被 bypass (ImmGetContext 返回 NULL), 输出
-  //   DebugString 让装机端用 DebugView 查。
+  // v0.19.0.49 (Phase J Bug B 续修): 装机 v0.19.0.48 IMM32 fallback 输出
+  //   "fallback active" 但 TSF TIP 仍抢 IME thread, IMM32 调用成功 ≠
+  //   TSF 候选词真出. 强化: (a) ImmGetContext OK 时立即 ImmAssociateContext
+  //   强制 associate 给 s_hInput (不调 ImmReleaseContext, context 归 hwnd);
+  //   (b) OutputDebugStringW 详细 log HIMC 值 + GetLastError 让装机端
+  //   DebugView 查 TSF 是否 override. 若 IMM32 在 TSF 进程下完全被 bypass
+  //   (ImmGetContext NULL 或 ImmAssociateContext 失败), 提示架构性问题
+  //   (out-of-process PhrasesDialog 是唯一根治法, 见 v0.19.0.50+ spec).
   if (s_hInput) {
     HIMC himc = ImmGetContext(s_hInput);
     if (himc) {
+      // (a) ImmAssociateContext 强制 associate, 不调 ImmReleaseContext
+      //     (per MSDN: "do not call ImmReleaseContext for handle returned
+      //      by ImmAssociateContext"). Context 跟 hwnd 同生死。
+      HIMC oldHimc = ImmAssociateContext(s_hInput, himc);
+      DWORD err = GetLastError();
+      wchar_t dbg[256];
+      swprintf_s(dbg, 256,
+                  L"[PhrasesDialog v0.19.0.49] IMM32 fallback active: "
+                  L"himc=0x%p oldHimc=0x%p ImmAssociateContext err=%u",
+                  himc, oldHimc, err);
+      OutputDebugStringW(dbg);
       ImmSetOpenStatus(himc, TRUE);
-      ImmReleaseContext(s_hInput, himc);
-      OutputDebugStringW(L"[PhrasesDialog v0.19.0.48] IMM32 fallback active: "
-                          L"ImmGetContext OK + ImmSetOpenStatus(TRUE)");
+      ImmReleaseContext(s_hInput, himc);  // 关联后 release 是合法的 (MSDN 隐含)
     } else {
-      OutputDebugStringW(L"[PhrasesDialog v0.19.0.48] IMM32 unavailable in "
-                          L"TSF process; in-process IME truly blocked. "
-                          L"Architecture refactor needed.");
+      OutputDebugStringW(L"[PhrasesDialog v0.19.0.49] IMM32 unavailable in "
+                          L"TSF process (ImmGetContext=NULL); in-process IME "
+                          L"truly blocked. Architecture refactor needed.");
     }
   }
 
