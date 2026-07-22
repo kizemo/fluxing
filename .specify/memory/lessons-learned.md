@@ -8948,3 +8948,166 @@ SetYamlPath 也能工作。WeaselServerApp.cpp:Run() 显式 SetYamlPath 保留�
 **Pattern-Key (L104)**:
 - `ipc.out-of-process-inject.foreground` (新增) — 跨进程 SendInput 必须先抢回 user foreground
 - 累计 Recurrence-Count: 1 (Phase K3 T010 集成时发现)
+
+---
+
+## L105 — v0.19.0.55: pipe handle 泄漏 + Hide-before-INJECT 顺序错位 (Phase K3 T019 hotfix)
+
+**Incident**: v0.19.0.54 (Phase K3 T018 ship) 装机后 user 反馈 3 真机 bug:
+1. **Bug 1 (foreground-ordering regression)**: dblclick 短语 → 文本没进 Notepad/Word,
+   UI 消失 (SendInput 命中 dialog s_hInput 而非 user app)
+2. **Bug 2 (pipe handle 泄漏)**: 一次 dblclick 后, Alt+. / Alt+/ / QuickPanel 按钮再
+   调常用短语都"没反应" (UI 不弹)
+3. **Bug 3 (Hide 顺序错位)**: 跟上 Bug 1 同根 — NM_DBLCLK / NM_RETURN / VK_RETURN
+   路径发 INJECT 后才 Hide, dialog DestroyWindow 太晚 → server 端 SendInput 时
+   foreground 还是 dialog
+
+### Root cause (3 bug 静态分析, sys-debugging Phase 1+3)
+
+#### Bug 2 — Pipe handle 泄漏
+
+**代码位置**: `WeaselServer/PhrasesDialogIPC.cpp` `PipeThreadProc` 退出路径 (原版):
+
+```cpp
+while (s_running) {
+  std::string json = PipeRecv(s_hPipe, 4096);
+  if (json.empty()) break;        // client 断 → worker 跳出
+  ProcessCommand(hPipe, json);
+}
+// cleanup
+DisconnectNamedPipe(s_hPipe);     // ← 只 Disconnect, **没** CloseHandle!
+s_running = false;
+```
+
+Windows 命名管道语义: pipe NAME 在 server handle **存在期间**被占用
+(`CreateNamedPipeW` 返回的 `HANDLE`)。`DisconnectNamedPipe` 只结束当前连接,
+**不**释放 pipe name。
+
+后果:
+- 下次 `PhrasesDialogIPC::Show()` 调 `CreateNamedPipeW` 同名 (pid 没变)
+  → `ERROR_ACCESS_DENIED` 或 `ERROR_PIPE_BUSY`
+- `Show()` line 69-73 收到 `INVALID_HANDLE_VALUE` → 静默 `return`
+- user 按 Alt+. → "没反应", 实际是 Show() 啥也没做
+
+**修法** (commit T019 fix):
+```cpp
+DisconnectNamedPipe(s_hPipe);
+CloseHandle(s_hPipe);                   // ← NEW
+s_hPipe = INVALID_HANDLE_VALUE;         // ← NEW (下次 Show() 知道要重建)
+```
+
+#### Bug 3 — NM_DBLCLK Hide 顺序错位
+
+**代码位置**: `FluxingPhrasesDialog/PhrasesDialog.cpp` 3 处 pipe 模式路径 (原版):
+
+```cpp
+// NM_DBLCLK / NM_RETURN / OnKeyDown VK_RETURN — pipe 模式
+if (s_pipeClient && s_pipeClient->IsConnected()) {
+  s_pipeClient->SendMessage(fluxing::BuildINJECT(idx));
+  s_pipeClient->ReadMessage();  // 读 ACK
+  Hide();                        // ← 后 Hide
+} else {
+  Hide();
+  InjectText(text);              // 本地降级 OK
+}
+```
+
+Server 端 INJECT 处理 (`PhrasesDialogIPC.cpp` `MT_INJECT`) 收到 INJECT 立即
+`InjectText(text)` → `SendInput`。**此时 dialog 仍是 foreground** (client 还没 Hide)。
+KEYEVENTF_UNICODE 事件进 dialog s_hInput 而非 user app。
+
+**为什么"后 Hide"错**: DestroyWindow 是 **同步** 触发,foreground 归还 user app
+也同步。但 server 端 SendInput 在 IPC 路径中跑 (worker thread), client Hide 在 UI
+线程跑 — **跨进程不可原子化**。单进程 Hide→Inject atomic 天然成立,跨进程必须显式
+逆序或同步。
+
+**修法** (3 处都改):
+1. 加 `PhrasesDialog::HideWithoutDisconnect()` API (跟 `Hide()` 区别: 不
+   Disconnect pipe, 保留它让 INJECT 能 send)
+2. NM_DBLCLK / NM_RETURN / VK_RETURN pipe 路径:
+   ```cpp
+   int idx = pia->iItem;  // 捕获本地 (Hide 会重置 m_selectedIndex = -1)
+   std::wstring text = m_phrases[idx].text;
+   if (s_pipeClient && s_pipeClient->IsConnected()) {
+     HideWithoutDisconnect();           // ← 先 Hide, DestroyWindow 还 foreground
+     if (s_pipeClient && s_pipeClient->IsConnected()) {
+       s_pipeClient->SendMessage(fluxing::BuildINJECT(idx));
+       s_pipeClient->ReadMessage();    // 读 ACK
+     }
+     Hide();                            // ← 收尾, Disconnect pipe
+   } else {
+     Hide();
+     InjectText(text);
+   }
+   ```
+
+3. **本地捕获 `idx + text`** 是关键 (L100-PhaseD-NM-DBLCLK 教训的复发): `Hide()`
+   内 line 293 写 `m_selectedIndex = -1`, 后续读 `m_selectedIndex` 是 stale,
+   SendInput 空字符串等于没效果
+
+#### Bug 1 — Foreground-ordering 简化
+
+**原 v0.19.0.52 Option B** (L104 ship 段):
+
+```cpp
+HWND target = fluxing::foreground_restore::GetHwnd();
+DWORD targetTid = fluxing::foreground_restore::GetThreadId();
+DWORD currentTid = GetCurrentThreadId();
+bool attached = false;
+if (target && IsWindow(target) && targetTid && targetTid != currentTid) {
+  if (AttachThreadInput(targetTid, currentTid, TRUE)) attached = true;
+}
+if (target && IsWindow(target)) SetForegroundWindow(target);
+InjectText(text);
+if (attached) AttachThreadInput(targetTid, currentTid, FALSE);
+```
+
+**Win11 22H2+ 装机 fail 原因**:
+- `SetForegroundWindow` 在 foreground-restriction 下拒 (即使加了 AttachThreadInput)
+- worker thread 不在 foreground process → 即便进 input cluster 也可能不触发
+
+**修法 (Option B 简化)**:
+- 删 `AttachThreadInput` (无效)
+- 保留 cached target 作为 **best-effort fallback**: `IsWindow(target)` 时尝试
+  `SetForegroundWindow(target)` (某些 machine work, 不依赖); 失败不 abort
+- 主要路径靠 Bug 3 修后的 "Hide 先于 INJECT" 让 foreground 自动归位 user app
+- 直接 `InjectText(text)` 走当前 foreground = user app
+
+### 验法 (T019 真机, 4 场景端到端)
+
+```powershell
+# A. 输入 → Add → 列表有 → 关重开还在 (回归)
+# B. Notepad 焦点 → Alt+. → dblclick → 进 Notepad (Bug 1/3 修验证)
+# C. Word 焦点 → Alt+/ → dblclick → 进 Word
+# D. QuickPanel 按钮 → dblclick → 进原 app
+# E. 反复 dblclick 5 次, 每次都能重开 (Bug 2 修验证)
+```
+
+### Lesson (3 条合并)
+
+- **L105-A — pipe handle lifecycle**: **任何** 创建 named pipe / file / kernel
+  object 的代码路径, cleanup 必须 **`DisconnectNamedPipe → CloseHandle →
+  reset static handle = INVALID_HANDLE_VALUE`** 完整三步。`DisconnectNamedPipe`
+  只断连接, 不释放 handle 也不释放 pipe name。漏任何一步下次创建同名 object
+  静默 fail (`ERROR_ACCESS_DENIED` / `ERROR_PIPE_BUSY`), 调用方静默 early
+  return 用户看见"按了没反应"。
+- **L105-B — 跨进程 SendInput 顺序**: Hide 与 Inject 不能跨进程原子化。Hide 必须
+  先于 INJECT 让 foreground 归位 user app, INJECT 必须在 Hide 后的 pipe 发。
+  SendInput 命中 foreground, 跟 Hide 是不同线程, 必须强制顺序。
+- **L105-C — Foreground-restore 不靠谱**: Win11 22H2+ `SetForegroundWindow` +
+  `AttachThreadInput` 强抢不一定 work。跨进程 IME 场景应回归 "Hide 先于 Inject"
+  (单进程 atomic 行为在跨进程后必须显式补)。
+
+### Pattern-Key (L105)
+
+- `pipe.named-pipe.lifecycle.closehandle.required` (新增) — DisconnectNamedPipe
+  + CloseHandle + reset handle = INVALID 三件套,漏 CloseHandle 导致下次
+  CreateNamedPipe 同名 fail
+- `ipc.out-of-process-inject.hide-before-inject` (新增) — 跨进程 SendInput
+  必须 Hide 先于 INJECT (server 端 INJECT 时 foreground 已是 user app, 否则
+  命中 dialog)
+- `foreground.setforegroundwindow.unreliable-on-win11-22h2` (新增) — Win11
+  22H2+ SetForegroundWindow 即使 + AttachThreadInput 仍可能拒
+- 累计 Recurrence-Count: 1 (v0.19.0.54 装机端发现, Bug 1 跟 L104 同根但修法
+  不同; Bug 2 是新 lesson; Bug 3 是 L100-PhaseD-NM-DBLCLK 跨进程复发性)
+
