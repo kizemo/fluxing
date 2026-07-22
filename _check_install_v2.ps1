@@ -52,9 +52,10 @@ Write-Host ""
 # 2. Installed WeaselServer.exe on disk (3 candidate paths)
 # ============================================================
 Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
-$expectedMd5 = '2468da35b987c31ade8474e57ae9ff55'  # v0.19.0.49 binary (Phase J 续修: kTitleH 30→48 + IMM32 ImmAssociateContext fallback)
-$expectedInstallerMd5 = 'd67cc67e67e668910928193cf3798470'  # v0.19.0.49 installer
-$expectedBuildTime = '2026-07-22 11:06:00'  # v0.19.0.49 build (NSIS timestamp)
+$expectedMd5 = 'f15768e37a3d5047ed9a4e51e09ba4c1'  # v0.19.0.54 WeaselServer.exe (T018 ship 装机验, build 2026-07-22 20:35)
+$expectedFluxingMd5 = '2a86228ef774cf76369c172f066815ed'  # v0.19.0.54 FluxingPhrasesDialog.exe (T009 ship, unchanged in v0.19.0.54)
+$expectedInstallerMd5 = '4d446fffef5f5386811296a7c344ab13'  # v0.19.0.54 NSIS installer
+$expectedBuildTime = '2026-07-22 21:05:00'  # v0.19.0.54 NSIS timestamp
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',
@@ -70,7 +71,7 @@ foreach ($p in $paths) {
         $h = (Get-FileHash -Path $p -Algorithm MD5).Hash
         $size = (Get-Item $p).Length
         $mtime = (Get-Item $p).LastWriteTime
-        $match = if ($h -eq $expectedMd5) { '<== MATCHES expected (v0.19.0.49 Phase J 续修)' } else { '<== MISMATCH (old binary or wrong build!)' }
+        $match = if ($h -eq $expectedMd5) { '<== MATCHES expected (v0.19.0.54 T018 ship)' } else { '<== MISMATCH (old binary or wrong build!)' }
         Write-Host "  $p"
         Write-Host "    md5=$h  size=$size  mtime=$mtime  $match"
     }
@@ -78,7 +79,33 @@ foreach ($p in $paths) {
 if (-not $foundAny) {
     Write-Host "  No WeaselServer.exe found in any of the standard install paths!"
 }
-Write-Host "  Expected: md5=$expectedMd5 (v0.19.0.49 Phase J 续修, build 2026-07-22)"
+Write-Host "  Expected: md5=$expectedMd5 (v0.19.0.54 T018 ship, out-of-process PhrasesDialog + Option B foreground fix)"
+Write-Host ""
+
+# ============================================================
+# 2b. Installed FluxingPhrasesDialog.exe (out-of-process, NEW in v0.19.0.54)
+# ============================================================
+Write-Host "=== [2b] Installed FluxingPhrasesDialog.exe on disk (v0.19.0.54 NEW) ==="
+$fluxingPaths = @(
+    'D:\Program Files\fluxing\weasel\FluxingPhrasesDialog.exe',
+    'C:\Program Files\fluxing\weasel\FluxingPhrasesDialog.exe',
+    'C:\Program Files\Fluxing\weasel\FluxingPhrasesDialog.exe'
+)
+$foundFluxing = $false
+foreach ($p in $fluxingPaths) {
+    if (Test-Path $p) {
+        $foundFluxing = $true
+        $h = (Get-FileHash -Path $p -Algorithm MD5).Hash
+        $size = (Get-Item $p).Length
+        $mtime = (Get-Item $p).LastWriteTime
+        $match = if ($h -eq $expectedFluxingMd5) { '<== MATCHES expected (v0.19.0.54)' } else { '<== MISMATCH!' }
+        Write-Host "  $p"
+        Write-Host "    md5=$h  size=$size  mtime=$mtime  $match"
+    }
+}
+if (-not $foundFluxing) {
+    Write-Host "  No FluxingPhrasesDialog.exe found! install.nsi v0.19.0.52+ miss the File directive."
+}
 Write-Host ""
 
 # 额外扫整个 D:/C: 找所有 WeaselServer.exe (探测多安装)
@@ -186,8 +213,9 @@ Write-Host ""
 # 6. Expected vs actual summary
 # ============================================================
 Write-Host "=== [6] Summary ==="
-Write-Host "  Installer v0.19.0.49 md5 expected: $expectedInstallerMd5"
+Write-Host "  Installer v0.19.0.54 md5 expected: $expectedInstallerMd5"
 Write-Host "  WeaselServer.exe md5 expected:     $expectedMd5 (build $expectedBuildTime)"
+Write-Host "  FluxingPhrasesDialog.exe md5:      $expectedFluxingMd5 (T009 ship, unchanged in v0.19.0.54)"
 Write-Host "  Module 3 L66 expected keys (admin install OK):"
 Write-Host "    HKLM\SOFTWARE\Microsoft\CTF\KnownClasses = '{A3F4CDED-...}' = 'Fluxing Text Service'"
 Write-Host "    HKCU\Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-...}\Default = CLSID"
@@ -198,9 +226,9 @@ Write-Host "  How to interpret:"
 Write-Host "    [1] 如果 Running WeaselServer path != [2] Install path → 多装/老 binary"
 Write-Host "    [1] 如果 Running md5 != expected → 跑的仍是老 binary"
 Write-Host "    [2] 如果 Install md5 != expected → 装机没覆盖 (File 失败/lock)"
+Write-Host "    [2b] 如果 Install 缺 FluxingPhrasesDialog.exe → install.nsi v0.19.0.52+ miss (装 v0.19.0.49 老 installer)"
 Write-Host "    [3] 如果 HKLM InstallDir != [2] path → registry 指向错位置"
 Write-Host "    [4] 如果有 AppHangTransient weasel → 启动挂死"
-Write-Host "    [5] newest file 是 7/21 14:22 → installer 装过; 是更早 → 没覆盖"
-Write-Host "    [3] Module 3 L66 keys 缺 → installer L66-fix 失效 (C41FEED9 ship 应已无条件写)"
+Write-Host "    [5] newest file 是 7/22 20:35 → v0.19.0.54 装过; 是更早 → 没覆盖"
 Write-Host ""
 Write-Host "  Post-mortem copy: 把以上所有输出贴回 Fluxing Claude session"
