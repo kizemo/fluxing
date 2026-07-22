@@ -1,5 +1,50 @@
 
 
+## [0.19.0.52-fluxing] - 2026-07-22
+
+### refactor(WeaselServer): out-of-process PhrasesDialog IPC 集成 + 删 in-process
+
+8 ship 版本 (v0.18.4x.x → v0.19.0.49) 修 IME fail 的根因是 in-process
+PhrasesDialog 跑在 TSF shim 进程 (WeaselServer.exe),TSF TIP 抢 IME thread。
+根治:把 PhrasesDialog 剥出跑独立 FluxingPhrasesDialog.exe,named pipe IPC 通信。
+
+- **新增** `FluxingPhrasesDialog/` 独立 exe (x64) — 客户端 dialog + ModalChrome paint
+  helper (跨 3 modal 共享) + PipeClient 端 (重连 3×1s + 5s WaitNamedPipe + 消息模式)
+- **新增** `include/FluxingPipeProtocol.h` — PipeMsgType 枚举 + Build/Parse
+  PHRASES/ADD/EDIT/DELETE/INJECT/ACK/ERR/SHUTDOWN + PipeSend/Recv + MakePipeName
+- **新增** `WeaselServer/PhrasesDialogIPC.{h,cpp}` — 服务端 CreateNamedPipe +
+  ConnectNamedPipe + worker thread (PipeThreadProc) + CreateProcess 子进程 +
+  YAML 读写 + SendInput
+- **删** `WeaselServer/PhrasesDialog.cpp` (~1580 行) + `.h` (~242 行) — in-process 路径完全删除
+- **改** `WeaselServer/WeaselServerApp.cpp` — 3 处 `PhrasesDialog::Show()` →
+  `fluxing::PhrasesDialogIPC::Show()` (L52 ALT+. / L69 Alt+/ / L325 QuickPanel 回调);
+  Run() 入口 SetYamlPath
+- **改** `output/install.nsi` — 加 `File "FluxingPhrasesDialog.exe"` (L72-fix
+  WeaselServer block 之后,简单 File 无 PPL 兜底)
+
+Sandbox: `test/TestPipeProtocol/` 45/45 PASS (PHRASES / ADD / EDIT / DELETE /
+SHUTDOWN round-trip)。
+
+### fix(WeaselServer): out-of-process PhrasesDialog INJECT 抢回 user foreground
+
+跨进程 IPC 集成后 INJECT 时 server (WeaselServer.exe) 跑 SendInput,而此时
+dialog 仍 foreground → KEYEVENTF_UNICODE 落到 dialog s_hInput 而非 user app
+的 edit control。修法 Option B:AttachThreadInput + SetForegroundWindow (MS
+文档化标准 IME 模式)。
+
+- **新增** `WeaselServer/ForegroundCapture.{h,cpp}` — `fluxing::foreground_restore`
+  namespace,CS 锁 + 静态 cache (HWND + DWORD tid)
+- **改** `RimeWithWeasel/RimeWithWeasel.cpp` `FocusIn` handler 头部调
+  `CaptureFromCurrentThread()` — GetForegroundWindow 是 session-global,
+  IPC worker thread 调 = 拿 user app 当前 foreground (= 最佳 capture 点)
+- **改** `WeaselServer/PhrasesDialogIPC.cpp` `ProcessCommand MT_INJECT`:
+  AttachThreadInput(targetTid, currentTid, TRUE) + SetForegroundWindow(target)
+  + InjectText + AttachThreadInput(..., FALSE) detach
+- **副产物** `PhrasesDialogIPC::Show()` 内部惰性初始化 yaml path — 兜底消除
+  "hotkey fires before SetYamlPath" 理论 race
+
+Lessons-learned L104, memory/2026-07-22-k3-foreground-ordering-regression 详记。
+
 ## [0.19.0.49-fluxing] - 2026-07-22
 
 ### fix(WeaselServer): v0.19.0.49 (Phase J 续修) — kTitleH 30→48 + IMM32 ImmAssociateContext fallback
