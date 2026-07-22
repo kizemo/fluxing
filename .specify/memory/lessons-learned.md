@@ -8797,3 +8797,154 @@ if (s_hInput && hfUi) {
 ### Pattern-Key
 - `ime.tsf-process-association` (新增) — TSF shim 进程下 per-hwnd isolated HIMC 跟 system TSF IME 互斥
 - 累计 Recurrence-Count: 4 (v0.19.0.35/36/43/45 4 ship 复发, 远超 L1 门槛)
+
+---
+
+## L103-H-PhaseI-Installer-Stale (v0.19.0.47 ship, 2026-07-22)
+
+### 现象
+
+v0.19.0.46 source fix ship 后, 装机 user 跑 user flow 5 项第 3 步仍 fail ("打 ni 出候选词 仍不出")。 v0.19.0.47 加固 OnCreate `SetFocus(s_hInput)` 强制 TSF attach 后 ship 装机。
+
+装机后 `_check_install_v2.ps1` 验证:
+```
+D:\Program Files\fluxing\weasel\WeaselServer.exe
+md5=1CAA6E94B209D1D0F3214B4D08C45310  mtime=07/21/2026 21:20:14  <== MISMATCH
+Expected: md5=5dba1bcd00320da7efe988abc8ddec4b (v0.19.0.47)
+```
+**D 盘 binary 仍是 v0.19.0.46, v0.19.0.47 binary 没装上**。D 盘同时存在 `\weaselx64.dll.old.tmp` (= installer Rename 成功但 Delete /REBOOTOK 没生效)。
+
+### 真因 (5 阶段 systematic-debugging, Phase 4 续)
+
+不是代码问题, 是 installer 覆盖失败:
+
+1. `WeaselServer.exe` 是 **PPL (Protected Process Light)** 进程 (per AGENTS.md L17/L18/L21), `taskkill /F /IM WeaselServer.exe /T` **表面成功但 mmap handle 没真释放**
+2. `install.nsi` line 535-561 是 **Rename-then-File 模式**:
+   - `Rename "$INSTDIR\WeaselServer.exe" "$INSTDIR\WeaselServer.exe.old.tmp"` → 失败 (PPL mmap 仍锁)
+   - `SetOverwrite try` + `File "Win32\WeaselServer.exe"` → 失败 (rename 没成功, 旧 file 还在 + 锁住)
+   - `Delete /REBOOTOK "$INSTDIR\WeaselServer.exe"` → scheduled delete on next boot
+3. **installer 静默失败**: 没弹错, 没 exit non-zero, 但 v0.19.0.47 binary **没写到 D 盘**
+4. user 跑 v0.19.0.46 binary (md5 `1caa6e94...` mtime 21:20) → IME 仍 fail (v0.19.0.46 没 SetFocus 加固)
+5. user 反馈"v0.19.0.47 ship 后 IME 仍 fail" → 表面是 Track 2 修复失败, 实际是 installer 没覆盖 binary
+
+`feedback_imm_release_context_trap.md` AP-L97-COVER "md5 parity PASS" 复发: source md5 verify 通过 (output/Win32/WeaselServer.exe = `5dba1bcd...`), 但装机端 binary 仍是老版本 (D 盘 = `1caa6e94...`)。
+
+### Fix (用户操作, 0 改代码)
+
+**Plan A**: 重启 → REBOOTOK delete 生效 → 重装 v0.19.0.47:
+```powershell
+shutdown /r /t 0  # 触发 REBOOTOK delete
+# 重启后:
+& "F:\soft\00selfmade\rime_claude\release\fluxing-0.19.0.47-installer.exe" /S /D=D:\Program Files\fluxing
+& "F:\soft\00selfmade\rime_claude\_check_install_v2.ps1"
+# 期望: D 盘 WeaselServer.exe md5 = 5dba1bcd00320da7efe988abc8ddec4b MATCH
+```
+
+**Plan B**: 卸载 + 重装 (不用重启):
+```powershell
+& "D:\Program Files\fluxing\weasel\uninstall.exe" /S
+# uninstall 删干净
+& "F:\soft\00selfmade\rime_claude\release\fluxing-0.19.0.47-installer.exe" /S /D=D:\Program Files\fluxing
+```
+
+### L103-I (PPL WeaselServer.exe + installer Rename-then-File 失效模式)
+
+- **症状**: v0.19.0.47 source fix 装机后, `_check_install_v2.ps1` 显示 D 盘 binary md5 = 上个 version md5, installer 静默无错
+- **真因**: WeaselServer.exe 是 PPL 进程, taskkill 不释放 mmap; install.nsi Rename-then-File 模式下 Rename 失败 → SetOverwrite try 也失败 → Delete /REBOOTOK scheduled 但不立即生效
+- **修法**: 重启 + 重装 (Plan A) 或 卸载 + 重装 (Plan B)
+- **防重犯**: 任何 install.nsi 修改后, 装机端必须 verify `D:\Program Files\fluxing\weasel\WeaselServer.exe md5` **=** `output/Win32/WeaselServer.exe md5` **=** `release/installer 7z extract md5` (3 个全等才 ship 关闭)
+
+### Pattern-Key (L103-I)
+
+- `installer.ppl-weasel-stale` (新增) — PPL WeaselServer.exe + installer Rename-then-File + 不重启 = silent stale binary ship
+- 累计 Recurrence-Count: 1 (v0.19.0.47 ship 后装机端发现, 但 L97 chain 累计复发 5+ 次)
+
+---
+
+## L104 - v0.19.0.52: out-of-process IPC 后 SendInput 命中 dialog 而非 user app (Phase K3 T011 Option B)
+
+**Incident**: Phase K2 named-pipe IPC 把 PhrasesDialog 拆成 FluxingPhrasesDialog.exe 后,
+Phase K3 T010 集成时发现双击短语注入文本进 dialog 自带输入框 (s_hInput), 没进 Notepad。
+Stop hook 在 T011 集成验证时升级到 BLOCKER。
+
+**Root cause (5 阶段 systematic-debugging)**:
+
+原 in-process `PhrasesDialog::DefaultInject` (`WeaselServer/PhrasesDialog.cpp`) 路径:
+```
+Hide();           // 销毁 dialog → Windows 归还 foreground
+InjectText(text); // SendInput 命中 foreground = 原 user app
+```
+TestPhrasesDialog.cpp:686 (L100 PhaseD) 验证: `s_hwnd == nullptr` 时 SendInput 才发生。
+
+out-of-process IPC 版 (`FluxingPhrasesDialog/PhrasesDialog.cpp:954-958`) 顺序:
+```
+SendMessage(BuildINJECT(idx));   // server 立即收 → SendInput
+ReadMessage();                   // 读 ACK
+Hide();                          // dialog 销毁 (太晚)
+```
+server (`WeaselServer/PhrasesDialogIPC.cpp` `ProcessCommand MT_INJECT`) 在收到 INJECT 后
+立刻调 `InjectText(s_phrases[msg.id].text)` → `SendInput`。**此时 dialog 仍是 foreground** —
+client 还没 Hide。KEYEVENTF_UNICODE 事件进 dialog 的 s_hInput 而非 user app。
+
+**Why**:
+- 单进程 Hide→Inject 天然成立 (DestroyWindow 同步归还 foreground)
+- 跨进程后 Inject 跑在 server worker thread, Hide 跑在 client UI thread, **不可原子化**
+
+**Fix (Option B — v0.19.0.52 落)**:
+
+1. 新模块 `WeaselServer/ForegroundCapture.{h,cpp}` — `fluxing::foreground_restore`
+   静态 cache (CS 锁), 三个 API: `CaptureFromCurrentThread / GetHwnd / GetThreadId`。
+
+2. `RimeWithWeasel/RimeWithWeasel.cpp:382-385` — `FocusIn` IPC handler 头部调
+   `CaptureFromCurrentThread()`。
+   **关键洞察**: `GetForegroundWindow()` 是 session-global API (跟 caller 进程无关)。
+   WeaselServer.exe IPC worker thread 调 = 拿 user app 当前 foreground (= 用户在
+   edit field 输入 → TSF OnSetFocus → WeaselTSF.dll 发 FocusIn IPC → server FocusIn
+   handler 跑 → 此时 system foreground = user app)。
+
+3. `WeaselServer/PhrasesDialogIPC.cpp` `ProcessCommand MT_INJECT`:
+   ```cpp
+   HWND target = GetHwnd();
+   DWORD targetTid = GetThreadId();
+   DWORD currentTid = GetCurrentThreadId();
+   bool attached = false;
+   if (target && IsWindow(target) && targetTid && targetTid != currentTid) {
+     AttachThreadInput(targetTid, currentTid, TRUE) → attached = true;
+   }
+   SetForegroundWindow(target);
+   InjectText(text);
+   if (attached) AttachThreadInput(targetTid, currentTid, FALSE);
+   ```
+   AttachThreadInput 把 worker thread 加入 user app thread 的 input cluster,
+   绕过 Windows foreground-process 限制, SetForegroundWindow 抢回 user app foreground,
+   SendInput 派发到 user app input queue (而非 dialog s_hInput)。
+
+**副产物 — BLOCKER #2 兜底**: `PhrasesDialogIPC::Show()` 内部惰性初始化 yaml path:
+```cpp
+if (s_yamlPath.empty()) {
+  s_yamlPath = WeaselUserDataPath().wstring() + L"\\phrases.yaml";
+}
+```
+消除 "hotkey fires before SetYamlPath" 理论 race;允许 TestPhrasesDialog 不依赖外部
+SetYamlPath 也能工作。WeaselServerApp.cpp:Run() 显式 SetYamlPath 保留作为 override。
+
+**Lesson**:
+- **跨进程 SendInput 必须先抢回 user foreground** — 单进程 atomic 的 Hide→Inject
+  在跨进程后必须显式补 SetForegroundWindow + AttachThreadInput。
+- **捕获 user foreground 的最佳点**: TSF / IMM 的 OnSetFocus 回调, server 端 IPC
+  worker thread 跑 (GetForegroundWindow 是 session-global, 不看 caller 进程)。
+- **AttachThreadInput 是 MS 文档化的标准 IME 模式** — 任何 out-of-process IME,
+  macro recorder, autotype 套这个模式都 work。
+
+**Known limits (v0.19.0.52 → 装机用户反馈再迭代)**:
+1. 若用户 FocusIn → Alt+Tab 到非 edit window → 按 Alt+. → dblclick 短语:
+   注入去 cached target (last edit field), 不是 user 当前窗口。
+   改进: CBT hook / SetWinEventHook (out of scope, 需 DLL 注入或重写)。
+2. SetForegroundWindow 在 Win11 22H2+ 仍可能拒, 改进需 capture targetPid + 
+   AllowSetForegroundWindow(targetPid) 模式。
+3. Same-user app 可 ATTACHTHREADINPUT 到我们 capture 的 thread — pipe 没 DACL 收紧
+   (SUGGESTION: 用 random token --pipe=<name>;token=<rand> 第一帧验证)。
+
+**Pattern-Key (L104)**:
+- `ipc.out-of-process-inject.foreground` (新增) — 跨进程 SendInput 必须先抢回 user foreground
+- 累计 Recurrence-Count: 1 (Phase K3 T010 集成时发现)
