@@ -52,10 +52,10 @@ Write-Host ""
 # 2. Installed WeaselServer.exe on disk (3 candidate paths)
 # ============================================================
 Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
-$expectedMd5 = 'f15768e37a3d5047ed9a4e51e09ba4c1'  # v0.19.0.54 WeaselServer.exe (T018 ship 装机验, build 2026-07-22 20:35)
-$expectedFluxingMd5 = '2a86228ef774cf76369c172f066815ed'  # v0.19.0.54 FluxingPhrasesDialog.exe (T009 ship, unchanged in v0.19.0.54)
-$expectedInstallerMd5 = '4d446fffef5f5386811296a7c344ab13'  # v0.19.0.54 NSIS installer
-$expectedBuildTime = '2026-07-22 21:05:00'  # v0.19.0.54 NSIS timestamp
+$expectedMd5 = 'b2d1236c286a3c0704224fe4105eca49'  # v0.19.0.55 WeaselServer.exe (Phase K3 T019 hotfix: pipe handle 泄漏 + NM_DBLCLK Hide 先于 INJECT, build 2026-07-22 22:27)
+$expectedFluxingMd5 = 'b1a74c6fed9c1efcd6490bb2b33235f2'  # v0.19.0.55 FluxingPhrasesDialog.exe (Phase K3 T019: HideWithoutDisconnect API + NM_DBLCLK order, build 2026-07-22 22:34)
+$expectedInstallerMd5 = '14dfdfb047cc623280b805888e257506'  # v0.19.0.55 NSIS installer (T019 hotfix, build 2026-07-22 22:44)
+$expectedBuildTime = '2026-07-22 22:44:00'  # v0.19.0.55 NSIS timestamp
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',
@@ -71,7 +71,7 @@ foreach ($p in $paths) {
         $h = (Get-FileHash -Path $p -Algorithm MD5).Hash
         $size = (Get-Item $p).Length
         $mtime = (Get-Item $p).LastWriteTime
-        $match = if ($h -eq $expectedMd5) { '<== MATCHES expected (v0.19.0.54 T018 ship)' } else { '<== MISMATCH (old binary or wrong build!)' }
+        $match = if ($h -eq $expectedMd5) { '<== MATCHES expected (v0.19.0.55 T019 hotfix)' } else { '<== MISMATCH (old binary or wrong build!)' }
         Write-Host "  $p"
         Write-Host "    md5=$h  size=$size  mtime=$mtime  $match"
     }
