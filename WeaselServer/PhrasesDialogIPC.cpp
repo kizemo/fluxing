@@ -179,7 +179,15 @@ DWORD WINAPI PhrasesDialogIPC::PipeThreadProc(LPVOID /*param*/) {
   }
 
   // 清理
+  // v0.19.0.55 (Phase K3 T019 Bug 2 真修): worker exit path 必须
+  //   DisconnectNamedPipe + CloseHandle + reset s_hPipe = INVALID。
+  //   原版本只 DisconnectNamedPipe 但不 CloseHandle — Windows 命名管道
+  //   句柄存在期间 pipe NAME 被占用, 下次 PhrasesDialogIPC::Show() 调
+  //   CreateNamedPipeW 同名 → ERROR_ACCESS_DENIED (or ERROR_PIPE_BUSY)
+  //   → Show() 静默 early return → user 反馈 "按 Alt+. 无反应"。
   DisconnectNamedPipe(s_hPipe);
+  CloseHandle(s_hPipe);
+  s_hPipe = INVALID_HANDLE_VALUE;
   s_running = false;
   OutputDebugStringW(L"[PhrasesDialogIPC] Worker thread exiting\n");
   return 0;
@@ -237,38 +245,27 @@ void PhrasesDialogIPC::ProcessCommand(HANDLE hPipe,
     case PipeMsgType::MT_INJECT: {
       if (msg.id >= 0 && msg.id < (int)s_phrases.size()) {
         const std::wstring& text = s_phrases[msg.id].text;
-        // v0.19.0.52 (Phase K3 T011 Option B): 抢回 user foreground 后再
-        //   SendInput。流程:
-        //     1. AttachThreadInput(targetTid, currentTid, TRUE) — 共享 input
-        //        state,绕过 foreground-process 限制
-        //     2. SetForegroundWindow(targetHwnd) — 抢回 user app 的 foreground
-        //     3. InjectText → SendInput (此时 foreground = user app,events 进
-        //        user app 的 input queue,而非 dialog s_hInput)
-        //     4. AttachThreadInput(targetTid, currentTid, FALSE) — detach
-        //   验证条件: targetHwnd IsWindow (user 没关 app),targetTid 非零。
-        //   targetHwnd 由 RimeWithWeaselHandler::FocusIn 在 IPC worker thread
-        //   上 GetForegroundWindow() 抓取 (session-global,不依赖 caller 进程)。
+        // v0.19.0.55 (Phase K3 T019 Bug 1 简化): 删 AttachThreadInput
+        //   强抢 foreground。原 v0.19.0.52 T011-B Option B 假设
+        //   SetForegroundWindow + AttachThreadInput 能从 cluster 抢到
+        //   user app foreground — Win11 22H2+ foreground 限制极严,
+        //   实测仍可能拒, 结果 SendInput 命中 dialog s_hInput 而非
+        //   user app。
+        // 修法: client NM_DBLCLK / NM_RETURN / VK_RETURN 全部 "Hide 先
+        //   于 INJECT" (Bug 3 修) — dialog DestroyWindow 后 foreground
+        //   自动归位 user app, server 端直接 InjectText 即可。
+        //   Option B 仅作 best-effort fallback: 如果 cached target
+        //   HWND 仍 IsWindow, 试图 SetForegroundWindow 抢回 (某些机器
+        //   上 work), 否则直接 InjectText 走当前 foreground (Hide 后
+        //   = user app)。
         HWND target = fluxing::foreground_restore::GetHwnd();
-        DWORD targetTid = fluxing::foreground_restore::GetThreadId();
-        DWORD currentTid = GetCurrentThreadId();
-        bool attached = false;
-        if (target && IsWindow(target) && targetTid &&
-            targetTid != currentTid) {
-          if (AttachThreadInput(targetTid, currentTid, TRUE)) {
-            attached = true;
-          }
-        }
         if (target && IsWindow(target)) {
-          // 注: SetForegroundWindow 在 foreground-restriction 下可能仍失败,
-          // 但即使失败, AttachThreadInput 联合调用已让 currentTid 进入
-          // targetTid 的 input cluster — SendInput 会按 input-cluster 中的
-          // foreground 派发 (即 target 那个)。
+          // best-effort: 不 attach thread input (Win11 限制), 只
+          // 尝试 OS-level foreground restore; 失败也不 abort (Hide
+          // 已让 foreground = user app, 直接 SendInput 即可)。
           SetForegroundWindow(target);
         }
         InjectText(text);
-        if (attached) {
-          AttachThreadInput(targetTid, currentTid, FALSE);
-        }
       }
       PipeSend(hPipe, BuildACK());
       break;
