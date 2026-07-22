@@ -1,5 +1,58 @@
 
 
+## [0.19.0.49-fluxing] - 2026-07-22
+
+### fix(WeaselServer): v0.19.0.49 (Phase J 续修) — kTitleH 30→48 + IMM32 ImmAssociateContext fallback
+
+**User pain** (post v0.19.0.48 `d43bf3e` + `39bf28c` ship):
+1. **顶部小蓝条高度过窄, 无法点中** (新 bug, Bug A)
+2. input 无法输中文, IME 切换不响应 (Bug B + C 续 fail, IMM32 fallback 不 work)
+3. UI 可以通过长按 chrome 拖动 (Bug 3 部分 OK, 但 title bar 立即 drag 无法验证因为蓝色条太窄)
+
+**Root cause** (5 阶段 systematic-debugging + 2 subagent 并行调查):
+- **Bug A**: `kTitleH = 30` 在 100% DPI 仅 30 物理像素, 视觉上 ~24-28 像素, click 命中区过窄
+- **Bug B**: IMM32 fallback 输出 "fallback active" 但 TSF TIP 线程占用 → IMM32 调用成功 ≠ TSF 候选词真出 (per systematic-debugging 4.5: 7 ship 版本 fail, 真架构性问题)
+- **Bug C**: 不能 100% 确认, 需 Spy++ 验证请求是否到达 PhrasesDialog WndProc; WeaselServer 不注册 Ctrl+Shift 切 IME hook
+- **Bug D**: 源码 OK (Test 37 sandbox PASS), 但 Bug A 蓝色条窄 → user 无法 click title bar → drag 看起来"不 work"
+
+**Cure** (commit v0.19.0.49):
+1. **kTitleH 30 → 48**: 让 title bar click 命中区从 30 像素扩到 48 像素, 视觉上 ~38-44 像素, 标准 Windows dialog 大小 (解 Bug A)
+2. **IMM32 fallback 强化**: ImmGetContext OK 时立即 `ImmAssociateContext(s_hInput, himc)` 强制 associate (不调 ImmReleaseContext, context 归 hwnd); `OutputDebugStringW` 详细 log HIMC 值 + oldHimc + ImmAssociateContext 错误码让装机端 DebugView 查
+3. **Test 38 (新, 5 case)**: 验证 y=10/y=40 (新 title bar 内) 触发 immediate drag; y=50 (chrome 区, 在新 title bar 外) 仍走 long-press
+
+**Verify** (sandbox Win32 Release):
+- TestPhrasesDialog: **186/186 PASS / 0 FAIL** (含 Test 36 v0.19.0.47 + Test 37 v0.19.0.48 + Test 38 v0.19.0.49)
+- msbuild weasel.sln /t:Rebuild: Exit 0
+- WeaselServer.exe md5: `2468da35b987c31ade8474e57ae9ff55` (从 v0.19.0.48 `3049f3bb...` 改; 是真 source build)
+- installer 7z extract 后 WeaselServer.exe md5 = source build md5 ✓
+
+**Files touched** (v0.19.0.49, 2 + 2):
+- `WeaselServer/PhrasesDialog.cpp` (`kTitleH 30→48`; OnCreate 末尾 IMM32 fallback 强化: `ImmAssociateContext + ImmReleaseContext + 详细 OutputDebugStringW`)
+- `test/TestPhrasesDialog/TestPhrasesDialog.cpp` (新增 Test 38 title bar click 命中区扩大)
+- `CHANGELOG.md` (本 entry)
+
+**lessons-learned** (L103 追加):
+- L103-K1 (TSF shim 进程 + IMM32 IMM32 真正失效模式): IMM32 调用成功 (ImmGetContext 返回 valid HIMC) ≠ TSF 候选词能出, 因为 TSF TIP 占用 thread 抢 IME 焦点; 装机端 DebugView 是唯一 evidence
+- L103-K2 (kTitleH 30→48 视觉修复): Windows 标准 title bar 高度应 ≥48 物理像素 (4K 屏 DPI=2 下 = 24 逻辑像素), 不要 < 30
+
+**⚠️ Bug B/C 真架构性问题** (per systematic-debugging 4.5):
+- v0.19.0.35/36/43/45/46/47/48/49 = **8 ship 版本 IME 仍 fail**, 远超 3 次门槛
+- 真因 = WeaselServer.exe 是 TSF shim 进程, TSF TIP 占用 thread 抢 IME, IMM32 路径被 bypass
+- 根治 = out-of-process PhrasesDialog (跑在独立 GUI 进程, 不与 WeaselServer.exe 共生), 通过 named pipe IPC 通信
+- 见 spec plan (待启动 v0.19.0.50+): out-of-process 重设计
+
+**装机 user flow** (v0.19.0.49 ship 后):
+1. 双击 `release\fluxing-0.19.0.49-installer.exe` (auto taskkill + Stage 2 fallback)
+2. 装机端 verify D 盘 WeaselServer.exe md5 = `2468da35b987c31ade8474e57ae9ff55`
+3. 打开 dialog → 看蓝色"常用短语"标题条**变高** (Bug A 解) → 点击标题条 → **UI 立即跟随** (Bug D 解, 之前因 Bug A 无法验证)
+4. (Bug B/C 真架构性) 跑 DebugView 看 OutputDebugStringW 输出:
+   - "IMM32 fallback active: himc=0x..." → IMM32 调用成功, 但 TSF TIP 抢 → 中文候选词仍不出 (走架构重设计)
+   - "IMM32 unavailable in TSF process" → IMM32 真被 bypass (走架构重设计)
+
+**Ship**: `release\fluxing-0.19.0.49-installer.exe` 43,159,632 bytes, md5 `d67cc67e67e668910928193cf3798470`
+
+---
+
 ## [0.19.0.48-fluxing] - 2026-07-22
 
 ### fix(WeaselServer+installer): v0.19.0.48 (Phase J) — 3 bug 并行修 + install.nsi Stage 2 PPL fallback

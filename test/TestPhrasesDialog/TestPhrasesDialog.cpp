@@ -1514,6 +1514,42 @@ static void TestTitleBarImmediateDrag() {
   PhrasesDialog::Hide();
 }
 
+// v0.19.0.49 (Phase J Bug A/D 续修): kTitleH 30→48, title bar click 命中区
+//   从 30 像素扩到 48 像素. 验证: y=10 (新 title bar 内), y=40 (新 title bar
+//   边缘, 旧 titleH_phys=30 算 chrome 区) 都触发 immediate drag.
+//   旧 Test 37 只测 y=5, 验证范围扩大.
+static void TestTitleBarClickHitAreaExpanded() {
+  std::cout << "\n[Test 38] v0.19.0.49: title bar click 命中区扩大 (kTitleH 48)"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("38.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+
+  // kTitleH=48 * dpiScale=1.0 = 48 物理像素. 测 y=10 (顶部), y=40 (新 title bar 边缘)
+  LPARAM lParam10 = 10 | (10 << 16);
+  PhrasesDialog::OnLButtonDown(hwnd, 0, lParam10);
+  CHECK("38.1: y=10 (顶部) → s_isDragging 立即 true (title bar 命中)",
+        PhrasesDialog::s_isDragging);
+  PhrasesDialog::OnLButtonUp(hwnd, 0, 0);
+
+  // y=40: 在新 titleH=48 内, 仍触发 immediate drag
+  PhrasesDialog::OnLButtonDown(hwnd, 0, 10 | (40 << 16));
+  CHECK("38.2: y=40 (新 title bar 边缘) → s_isDragging 立即 true",
+        PhrasesDialog::s_isDragging);
+  PhrasesDialog::OnLButtonUp(hwnd, 0, 0);
+
+  // y=50: 在新 title bar 外, 走 long-press path
+  PhrasesDialog::OnLButtonDown(hwnd, 0, 10 | (50 << 16));
+  CHECK("38.3: y=50 (chrome 区, 在新 title bar 外) → s_longPressActive=true",
+        PhrasesDialog::s_longPressActive);
+  CHECK("38.4: y=50 → s_isDragging 仍 false (等 timer)",
+        !PhrasesDialog::s_isDragging);
+  PhrasesDialog::OnLButtonUp(hwnd, 0, 0);
+
+  PhrasesDialog::Hide();
+}
+
 // v0.19.0.44 (Feature 2: reorder via drag): 测试 CommitReorder helper 逻辑
 //   不能 e2e 测试 LVN_BEGINDRAG/ENDDRAG (需要真正 mouse drag)
 //   但 CommitReorder 逻辑本身可以独立验证: 设 s_dragSourceIdx + s_dropTargetIdx
@@ -1700,6 +1736,8 @@ int main() {
   test::TestOnCreateInputGetsFocusForTSFAttach();
   // v0.19.0.48 (Phase J Bug 3 真修): 顶部 title bar 立即 drag (无 long-press)
   test::TestTitleBarImmediateDrag();
+  // v0.19.0.49 (Phase J Bug A/D 续修): title bar click 命中区扩大 (kTitleH 30→48)
+  test::TestTitleBarClickHitAreaExpanded();
 
   std::cout << "\n================================================="
             << std::endl;
