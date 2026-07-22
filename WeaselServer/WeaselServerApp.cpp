@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <iostream>  // v0.19.0.25-fix(spec 042 §12 风险):RegisterHotKey 失败 wcerr log
 #include "QuickPanelDialog.h"
-#include "PhrasesDialog.h"  // v0.19.0.25-fix(spec 042 §3):Track 3 wiring
+#include "PhrasesDialogIPC.h"  // v0.19.0.52 (Phase K3 T010): out-of-process IPC 替代 in-process PhrasesDialog
 #include "UserDictionary.h"  // v0.19.0.28(spec 044 §3.2):Track 3 wiring
 #include "ShortcutSettings.h"  // spec 045 v0.19.0.28: Track 3 wiring
 // spec 070 T007: D2D factory 创建 (在 WeaselServerApp::Run 入口)
@@ -38,9 +38,10 @@ WeaselServerApp::~WeaselServerApp() {}
 WeaselServerApp* WeaselServerApp::s_phrasesHotkeyOwner = nullptr;
 
 // v0.19.0.25-fix(spec 042 §10.4):子类 WNDPROC,拦截 WM_HOTKEY (ID_HOTKEY_PHRASES_DOT)
-// → PhrasesDialog::Show();其它 message 透传给原 WNDPROC(其中含 ServerImpl::OnHotkey
+// → PhrasesDialogIPC::Show();其它 message 透传给原 WNDPROC(其中含 ServerImpl::OnHotkey
 // 处理 ID_HOTKEY_QUICK_PANEL)。不能改 ServerImpl(在 WeaselIPCServer/ 下,scope 之外),
 // 用 SetWindowLongPtr(GWLP_WNDPROC) 在 IPC server window 上子类化。
+// v0.19.0.52 (Phase K3 T010):PhrasesDialog 走 out-of-process IPC,见 PhrasesDialogIPC.cpp。
 LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
                                                            UINT msg,
                                                            WPARAM w,
@@ -49,7 +50,8 @@ LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
     if (w == ID_HOTKEY_PHRASES_DOT) {
       // spec 042 §12 风险:Alt+. 全局热键可能跟其他 app 冲突 → RegisterHotKey 失败时
       // 仅 log warning,不 crash。这里成功路径就直接调。
-      PhrasesDialog::Show();
+      // v0.19.0.52 (Phase K3 T010): out-of-process 走 IPC
+      fluxing::PhrasesDialogIPC::Show();
       return 0;
     }
     if (w == ID_HOTKEY_USER_DICT) {
@@ -64,9 +66,10 @@ LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
     }
     // v0.19.0.33 (Phase A.1 真改 alt+/ 路由 - 之前 turn 没真改):
     //   之前: Alt+/ → UserDictionary::Show() (v0.19.0.32 cd6f61a9 Bug 3b 自己承认错)
-    //   修后: Alt+/ → PhrasesDialog::Show() (跟 Alt+. 同一路径, 跟 user 装机后 Alt+. 应一致)
+    //   修后: Alt+/ → PhrasesDialogIPC::Show() (跟 Alt+. 同一路径, 跟 user 装机后 Alt+. 应一致)
+    //   v0.19.0.52 (Phase K3 T010): IPC 路径
     if (w == ID_HOTKEY_USER_DICT_ALT_SLASH) {
-      PhrasesDialog::Show();
+      fluxing::PhrasesDialogIPC::Show();
       return 0;
     }
   }
@@ -147,10 +150,10 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
     return false;
   };
 
-  // 2) ALT+. (VK_OEM_PERIOD) → PhrasesDialog::Show()
+  // 2) ALT+. (VK_OEM_PERIOD) → PhrasesDialogIPC::Show()  (v0.19.0.52 out-of-process)
   // 3) Ctrl+Shift+U (0x55) → UserDictionary::Show  (spec 044 §3.2)
   // 4) Ctrl+Shift+K (0x4B) → ShortcutSettings::Show  (spec 045 v0.19.0.28)
-  // 5) Alt+/ (VK_OEM_2) → PhrasesDialog::Show  (v0.19.0.33 Phase A.1,
+  // 5) Alt+/ (VK_OEM_2) → PhrasesDialogIPC::Show  (v0.19.0.33 Phase A.1,
   //    之前 v0.19.0.32 cd6f61a9 错接 UserDictionary, Bug 3b 已撤回)
   RegisterOrLog(L"Alt+.",         ID_HOTKEY_PHRASES_DOT,        MOD_ALT, VK_OEM_PERIOD);
   RegisterOrLog(L"Ctrl+Shift+U",  ID_HOTKEY_USER_DICT,          MOD_CONTROL | MOD_SHIFT, 0x55);
@@ -215,6 +218,16 @@ int WeaselServerApp::Run() {
   // No auto-show call here. EnableAlwaysShowMode() remains as a public
   // API for the "remembered" state across IPC reconnects (if needed
   // later), but is no longer called on every Run().
+
+  // v0.19.0.52 (Phase K3 T010):设置 phrases.yaml 路径。
+  // 必须在 RegisterPhrasesHotkey() 之前调 — 热键按下 → PhrasesDialogIPC::Show() →
+  // 内部用 s_yamlPath 加载 YAML。若此时为空会 fallback 到默认 "你好"。
+  // 路径跟原 PhrasesDialog.cpp Show() 一致:%APPDATA%\Rime\phrases.yaml (从
+  // HKCU\Software\Rime\Weasel\RimeUserDir 读,可被 user 配置改写)。
+  {
+    fs::path phrasesYaml = WeaselUserDataPath() / L"phrases.yaml";
+    fluxing::PhrasesDialogIPC::SetYamlPath(phrasesYaml.wstring());
+  }
 
   // v0.19.0.25-fix(spec 042 §3 + §10.4):Alt+. 全局热键注册。
   // 必须在 m_server.Run() 之前调(m_server.Run() 进入消息循环前 IPC server window 已经
@@ -318,11 +331,12 @@ void WeaselServerApp::SetupMenuHandlers() {
             //   foreground, 再 Show() PhrasesDialog. Show() 内部 (PhrasesDialog.cpp
             //   Phase F fix) 调 AllowSetForegroundWindow + SetForegroundWindow 兜底
             //   抢 foreground, 让 keyboard 路由到 PhrasesDialog.
+            // v0.19.0.52 (Phase K3 T010): 走 IPC 路径
             if (QuickPanelDialog::ActiveHwnd() &&
                 IsWindowVisible(QuickPanelDialog::ActiveHwnd())) {
               QuickPanelDialog::Hide();
             }
-            PhrasesDialog::Show();
+            fluxing::PhrasesDialogIPC::Show();
           },
           [this](bool newFull) {
             if (m_handler) m_handler->SetOption(0, "full_shape", newFull);

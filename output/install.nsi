@@ -141,18 +141,22 @@ Function .onInit
   ; Root cause (subagent verify): autorun respawn can happen 3+ times in quick
   ; succession on slow machines when Windows Defender / SearchUI is enumerating
   ; HKLM Run key. 5x retry covers up to ~13s of respawn churn.
-  ${For} $R9 1 5
+  ;
+  ; v0.19.0.48 (Phase J installer 加固): WeaselServer.exe 是 PPL 进程,
+  ;   taskkill 表面成功但 mmap handle 不释放。10x retries (覆盖 ~30s) + final
+  ;   Sleep 3000ms 让 OS 完整释放 mmap 后再进入 File section。
+  ${For} $R9 1 10
     nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
     Pop $0
     Pop $1
     ${If} $R9 == 1
-      Sleep 1000
-    ${ElseIf} $R9 == 2
-      Sleep 2000
-    ${ElseIf} $R9 == 3
+      Sleep 1500
+    ${ElseIf} $R9 < 5
+      Sleep 2500
+    ${ElseIf} $R9 == 5
       Sleep 3000
     ${Else}
-      Sleep 5000
+      Sleep 3000
     ${EndIf}
   ${Next}
 
@@ -201,14 +205,17 @@ Function .onInit
   ; 修:在 .onInit 一并 kill 这两个进程,确保安装时 weasel.dll 没有 mapped handle。
   ; 用户重新登录后 ctfmon.exe + TextInputHost.exe 会被系统自动重启,无副作用。
   ; Phase A.11: retry — sometimes TSF host re-spawns after taskkill.
-  ${For} $R9 1 2
+  ;
+  ; v0.19.0.48 (Phase J installer 加固): 5x retries + Sleep 2500ms 让 TSF host
+  ;   respawn 收敛后再进入 File section。
+  ${For} $R9 1 5
     nsExec::ExecToStack 'taskkill /F /IM ctfmon.exe /T'
     Pop $0
     Pop $1
     nsExec::ExecToStack 'taskkill /F /IM TextInputHost.exe /T'
     Pop $0
     Pop $1
-    Sleep 1500
+    Sleep 2500
   ${Next}
 
   ; L14: NSIS has built-in support for /LOG=<file> CLI flag. Users can pass
@@ -560,6 +567,14 @@ program_files:
   Pop $R1
   Pop $R0
 
+  ; v0.19.0.52 (Phase K3 T014): out-of-process 短语 dialog exe。
+  ; WeaselServer.exe (x86) 启动时通过 PhrasesDialogIPC::LaunchPhrasesDialog
+  ; 在同一目录 ($INSTDIR) 调 CreateProcessW 此 binary。文件不存在 → 短语
+  ; 功能静默 fail,其他功能正常。
+  ; 不是 PPL 进程 → 走简单 File (无 L72-fix Rename-then-File 兜底)。dialog 是
+  ; 短时 modal,install 期间被锁的概率极低。
+  File "FluxingPhrasesDialog.exe"
+
   Push $R0
   Push $R1
   ${If} ${FileExists} "$INSTDIR\WeaselDeployer.exe"
@@ -739,6 +754,32 @@ program_files:
   ${ElseIf} ${IsNativeAMD64}
     SetRegView 64
   ${Endif}
+  ; v0.19.0.48 (Phase J installer Stage 2): 检测 WeaselServer.exe 写入是否成功。
+  ;   如果 PPL 锁住导致 File 命令失败, NSIS Rename-then-File 走 fallback 路径
+  ;   留下 WeaselServer.exe.old.tmp (旧 binary) + 没写新 binary. 此时 schedule
+  ;   Stage 2 启动项: At-startup 时跑 cmd batch copy staged binary → real binary.
+  ;   安装器把新 binary 也写到 %TEMP%\fluxing-staged\ 让 Stage 2 读得到。
+  IfFileExists "$INSTDIR\WeaselServer.exe.old.tmp" 0 weasel_write_ok
+    DetailPrint "Fluxing v0.19.0.48: WeaselServer.exe PPL-locked; staging binary for boot-time swap"
+    CreateDirectory "$TEMP\fluxing-staged"
+    CopyFiles /SILENT /FILESONLY "$PLUGINSDIR\..\Win32\WeaselServer.exe" "$TEMP\fluxing-staged\WeaselServer.exe"
+    ; Stage 2 batch script — runs at next boot via Task Scheduler
+    FileOpen $R9 "$TEMP\fluxing-staged\stage2-install.bat" w
+    FileWrite $R9 "@echo off$\n"
+    FileWrite $R9 'xcopy /Y /Q "%TEMP%\fluxing-staged\WeaselServer.exe" "$INSTDIR\WeaselServer.exe*"$\n'
+    FileWrite $R9 'del /F /Q "$INSTDIR\WeaselServer.exe.old.tmp"$\n'
+    FileWrite $R9 'schtasks /Delete /TN FluxingStage2Install /F$\n'
+    FileWrite $R9 'del "%TEMP%\fluxing-staged\stage2-install.bat"$\n'
+    FileWrite $R9 'del "%TEMP%\fluxing-staged\WeaselServer.exe"$\n'
+    FileClose $R9
+    ; 注册 Task Scheduler: At-startup (boot), 高权限
+    nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2Install /TR "cmd /c $\"$TEMP\fluxing-staged\stage2-install.bat$\"" /RL HIGHEST /F'
+    Pop $0
+    Pop $1
+    IfSilent skip_post_install_message
+    MessageBox MB_OK|MB_ICONEXCLAMATION "WeaselServer.exe 正在被 PPL 进程锁住,无法在线覆盖。$\r$\n已注册 At-startup Stage 2 启动项, 重启电脑后自动完成 binary swap。$\r$\n$\r$\n(快捷设置栏:按 Alt+, 或点击任务栏中英文图标)"
+    Goto skip_post_install_message
+  weasel_write_ok:
   ; Write autorun key
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "WeaselServer" "$INSTDIR\WeaselServer.exe"
   ; Start WeaselServer
