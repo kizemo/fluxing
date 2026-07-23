@@ -723,7 +723,20 @@ program_files:
   ; Settings -> Time & Language; if missing, the IME does not appear in the
   ; language list and QuickPanel never shows. Always write them as a safety
   ; net regardless of whether regsvr32 above succeeded or failed.
+  ; L106 hardening: NSIS is a 32-bit installer. On 64-bit Windows, WriteRegStr
+  ; HKLM defaults to the WOW6432Node redirected hive. TSF 64-bit processes
+  ; (TextInputHost.exe, ctfmon.exe, language switcher) read the NATIVE 64-bit
+  ; HKLM hive; if KnownClasses is only in WOW6432Node, the Fluxing TIP is
+  ; invisible to the language switcher and QuickPanel never shows. Force
+  ; SetRegView 64 for the KnownClasses write, then restore default 32-bit
+  ; view so subsequent HKCU writes (which don't need 64-bit view) keep working.
+  ${If} ${IsNativeARM64}
+    SetRegView 64
+  ${ElseIf} ${IsNativeAMD64}
+    SetRegView 64
+  ${Endif}
   WriteRegStr HKLM "SOFTWARE\Microsoft\CTF\KnownClasses" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}" "Fluxing Text Service"
+  SetRegView default
   WriteRegStr HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "Default" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}"
   WriteRegStr HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "Profile" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}"
   WriteRegDWORD HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "KeyboardLayout" 0x08040804

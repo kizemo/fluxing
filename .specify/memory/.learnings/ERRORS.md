@@ -40,6 +40,27 @@
     Recurrence-Count: 1
     任务引用: `task-phase-f-bug3-v0.19.0.40.md` + `handoff-phase-f-bug3-vk_escape-2026-07-20.md` + lessons-learned.md L101 candidate
 
+- [2026-07-21] Pattern-Key: `fs.no-such-file`
+    现象: 用户提供的 `handoff-phase-h-v0.19.0.44-2026-07-21.md` 路径不存在。
+    原因: 交接文件版本号与仓库当前实际文件名不一致，需先通过 Glob 核对现有文件。
+    操作: 未修改代码；转而查找匹配的 Phase H 交接文件。
+    Recurrence-Count: 1
+    任务引用: 当前 v0.19.0.45 中文输入 bug 调查
+
+- [2026-07-23] Pattern-Key: `diagnostic-script-encoding-corruption`
+    现象: `_check_install_v2.ps1` 完成主要采证后，在 line 232 因中文文本编码损坏导致 PowerShell 将分号后的残片识别为命令并退出 1。
+    原因: 脚本编码与当前 Windows PowerShell 解码不一致，诊断输出中的中文已出现 mojibake。
+    操作: 主要 MD5/注册表/事件日志证据已在失败前取得；后续需修正脚本编码并加 parser smoke test。
+    Recurrence-Count: 1
+    任务引用: Phase K3 T019 v0.19.0.55 catastrophic regression
+
+- [2026-07-23] Pattern-Key: `runtime-executable-start-failure`
+    现象: v0.19.0.55 `WeaselServer.exe` 落盘 MD5 与 installer 完全匹配，但 `Start-Process` 无法创建进程，Windows 报“文件或目录损坏且无法读取”。
+    原因: 调查中；需比较 source build 与 installed copy，并提取 Win32 NativeErrorCode，区分 PE 构建缺陷与 D: 文件系统/元数据问题。
+    操作: 未修改源码，继续 systematic-debugging Phase 1/3 最小对照测试。
+    Recurrence-Count: 1
+    任务引用: Phase K3 T019 v0.19.0.55 catastrophic regression
+
 ---
 
 ## Promoted（已晋升到 lessons-learned.md）

@@ -1,3 +1,37 @@
+# Task plan — Phase K3 T019 v0.19.0.55 catastrophic regression
+
+> 2026-07-23 真机反馈：无法输出中文、无法调出设置栏、无法调出常用短语 UI，疑似算法服务失效。
+> 当前处于 `systematic-debugging` Phase 1；装机端证据返回前禁止修改源码或提交。
+
+## 当前调查闭环
+
+| 步骤 | 状态 | Gate |
+|---|---|---|
+| 收集 `_check_install_v2.ps1` 完整输出 | ▶ 进行中 | 运行进程/落盘 MD5、安装路径、事件日志 |
+| 收集 TSF 注册表三组 `reg query` | ▶ 进行中 | KnownClasses、CTF Assemblies、CLSID |
+| 在 H1-H5 中确认单一根因 | ⬜ 阻塞 | 等装机端数据 |
+| 失败测试 → 单一修复 → 回归测试 | ⬜ 阻塞 | 根因确认后开始 |
+| 写 L106 | ⬜ 阻塞 | 根因与逃逸路径确认 |
+| 构建/真机验证 v0.19.0.56 | ⬜ 阻塞 | 修复与 L106 完成 |
+| 创建 fix + chore(release) 两个提交 | ⬜ 阻塞 | 全部验证通过 |
+
+## 当前假设
+
+1. H1 HIGH：装机端 `WeaselServer.exe` 仍为 v0.19.0.54 stale binary。
+2. H2 HIGH：TSF 关键注册表写入缺失，TIP 未正确注册/启用。
+3. H3 MEDIUM：`PhrasesDialogIPC.cpp` 的 `s_hPipe` 并发访问 race。
+4. H4 MEDIUM：`HideWithoutDisconnect` 导致 dialog 状态机不一致。
+5. H5 LOW：installer 装后启动 `WeaselServer.exe` 失败。
+
+## Loop 闭环
+
+- **6.1.1 自检**：当前仅采证；未改源码、未提交、未构建。
+- **6.1.2 执行日志**：收到装机端数据并形成根因后写入 `memory/2026-07-23.md`。
+- **6.1.3 沉淀触发**：确认事故后写 L106；若发现单次新错误模式，同步 `.learnings/ERRORS.md`。
+- **6.1.4 台账更新**：每个 Gate 完成后立即更新本节状态。
+
+---
+
 # Task plan — Phase K: Out-of-Process PhrasesDialog (v0.19.0.50+)
 
 > 承接 2026-07-22 装机用户反馈：v0.19.0.35/36/43/45/46/47/48/49 = 8 ship 版本都 fail 修 IME
