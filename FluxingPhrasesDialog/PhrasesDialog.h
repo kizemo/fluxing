@@ -216,6 +216,22 @@ class PhrasesDialog {
   //   (cursor screen + window rect), BeginDrag + StartLongPressTimer 共用。
   static void CaptureDragOrigin(HWND hwnd);
 
+  // v0.19.0.58 (Phase K5 Bug 3+4 真修): Subclass s_hInput (Edit control)
+  //   WndProc 转发 WM_KEYDOWN VK_RETURN / VK_ESCAPE 到 PhrasesDialog parent.
+  //   真因(Phase K5 root cause): WS_POPUP + main.cpp 简单 message loop (无
+  //   IsDialogMessage) → 子控件 focus 时 WM_KEYDOWN 不 bubble 到 PhrasesDialog
+  //   WndProc → OnKeyDown handler 失效 → Edit focus + Enter/Esc 无任何效果。
+  //   Test 40/41 模拟 `SetFocus(s_hInput)` 显式 set 时 PASS(走 SendMessageW
+  //   WM_KEYDOWN 直接派发到 dialog WndProc,绕过 input 子控件 focus 路由),
+  //   但装机端 user 不显式 set focus → click input 打字 → Edit focus → Enter
+  //   走 Edit WndProc default no-op → OnKeyDown 不到 → 修法失效。
+  //   修法: SetWindowLongPtr(s_hInput, GWL_WNDPROC, InputSubclassProc) hook
+  //   WM_KEYDOWN VK_RETURN / VK_ESCAPE → SendMessage(parent, WM_KEYDOWN, ...)
+  //   → OnKeyDown 触发。Install / Remove helpers 给 test 验证(Test 43/44)。
+  //   注: WndProc 是 free function (namespace-scope), 不能是 class member。
+  static void InstallInputSubclass(HWND hInput);
+  static void RemoveInputSubclass(HWND hInput);
+
   // v0.19.0.44 (Feature 1: resize layout): 重新定位所有 child
   // 入参 client area 物理尺寸 (DPI-scaled)。OnCreate 初始化 + WM_SIZE 触发
   // + 测试可直接调验证。
