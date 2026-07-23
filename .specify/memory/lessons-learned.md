@@ -9212,3 +9212,130 @@ rime algorithm service 调度者 + PhrasesDialog IPC server, 一个进程挂了 
   本身可能无问题, 但 build pipeline 没把它编出真 EXE
 - 关联 lessons: L100 (NM_DBLCLK Hide 先于 INJECT) · L101 · L104 · L105
 - 关联规则文件: .claude/rules/build-toolchain.md (建议追加 L106 guardrail 段)
+
+## L107 — v0.19.0.58: WS_POPUP window Enter/Esc 不 bubble + x64 FluxingPhrasesDialog.exe 漏 rebuild (Phase K5 hotfix, 2026-07-23)
+
+### Background — 装机 v0.19.0.57 user 反馈 2 bug (Phase K4 ship 失效)
+
+1. **Bug 3 (Phase K4 修法 11eeb7a) 装机端失效**: 编辑栏按 Enter 不能完成添加
+   新词。Test 40/41 (sandbox) PASS, 装机端 FAIL — 同 L100-PhaseF-Bug3 false-positive
+   pattern (TestEscKeyHidesDialog)。
+2. **Bug 4 (新 bug)**: Esc 键不能退出常用短语 UI。
+
+### Root cause (铁证)
+
+两者**同一真因**:
+- WS_POPUP window (`DWORD style = WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN |
+  WS_CLIPSIBLINGS | WS_THICKFRAME` PhrasesDialog.cpp:175-176)
+- `main.cpp:37-40` message loop = `TranslateMessage + DispatchMessageW`, **没有
+  `IsDialogMessage(s_hwnd, &msg)`**。
+- 子控件 (Edit control `s_hInput`) focus 时, `WM_KEYDOWN VK_RETURN / VK_ESCAPE`
+  发到 Edit 子控件 WndProc, **不 bubble** 到 PhrasesDialog parent WndProc。
+- Edit WndProc (单行 + 无 IsDialogMessage) default 处理 Enter = no-op
+  (无 DM_SETDEFID 路由)、Esc = no-op。
+- PhrasesDialog `OnKeyDown` case `VK_RETURN` (L843-857) + `VK_ESCAPE` (L881-883)
+  永远不到 — 装机端 handler 失效。
+
+**为什么 Phase K4 Test 40/41 假阳 PASS**:
+- Test 模拟 `SendMessageW(hwnd, WM_KEYDOWN, ...)` 直接派发到 dialog WndProc。
+- 这条路径**绕过** input 子控件 focus routing (Edit WndProc 接收的路径是
+  `DispatchMessageW(&msg)` 把 msg 派到 `msg.hwnd` = Edit HWND, 不经过 dialog WndProc)。
+- 装机 user click input 打字 → Edit focus → Enter 走 `DispatchMessageW` →
+  Edit WndProc (subclass 之前 default no-op) → 修法不生效。
+
+### 修法 (Phase K5 hotfix 9f8a796)
+
+Subclass `s_hInput` (Edit control) WndProc via
+`SetWindowLongPtr(GWL_WNDPROC, InputSubclassProc)`:
+- Hook `WM_KEYDOWN VK_RETURN` / `VK_ESCAPE` → `SendMessage(parent, WM_KEYDOWN,
+  wp, lp)` 转派发到 PhrasesDialog WndProc → `OnKeyDown` 触发。
+- 其他消息 (char input, mouse, focus) 走原 Edit WndProc (`CallWindowProcW`)
+  保持 default behavior 完整。
+- 实施细节:
+  - `s_inputOrigWndProc` (匿名 namespace static, 缓存原 WndProc)
+  - `InputSubclassProc` (匿名 namespace free function, subclass handler)
+  - `PhrasesDialog::InstallInputSubclass(HWND)` / `RemoveInputSubclass(HWND)`
+    公开 helpers (test 验证 + Install/Remove 防 leak)
+  - `OnCreate` 末 Install (s_hInput 创建后) · `OnDestroy` 卸
+
+### Critical build infra lesson (Phase K5 ship gate)
+
+`_buildflow.cmd` 跑 `msbuild weasel.sln /t:Build /p:Configuration=Release
+/p:Platform=Win32` — **default Win32 Platform scope**, 不 rebuild x64
+FluxingPhrasesDialog.exe (`output\FluxingPhrasesDialog.exe` mtime 不变,
+仍是 v0.19.0.55 旧 binary)。
+
+- **Phase K4 ship 时隐患**: v0.19.0.57 installer `File "FluxingPhrasesDialog.exe"`
+  引用 x64 binary, mtime 13:22 仍是 v0.19.0.55 旧 binary。
+  - Phase K4 source 改动已 ship 进 `.lib` 但实际 EXE 是 v0.19.0.55 (虽然 md5
+    `B92137F5...` 跟 v0.19.0.57 一致 — 因为 Phase K4 实际没改 PhrasesDialog.cpp
+    的 keyboard routing code, 装机端 fail 的真因是 bubble 缺失)。
+- **Phase K5 真修路径**:
+  1. 改 PhrasesDialog.cpp (subclass + Test 43/44)
+  2. `msbuild weasel.sln /p:Platform=Win32` (default rebuild Win32 production)
+  3. **手动** `msbuild FluxingPhrasesDialog\FluxingPhrasesDialog.vcxproj /t:Rebuild
+     /p:Configuration=Release /p:Platform=x64` (x64 production rebuild — `_buildflow.cmd`
+     **不 cover**)
+  4. `_nsis_only.cmd` → makensis → install archive 含 fresh x64 binary
+  5. `7z e installer WeaselServer.exe FluxingPhrasesDialog.exe` →
+     verify md5 = source rebuild (ship gate 5-axis)
+- v0.19.0.58 最终 ship md5:
+  - WeaselServer.exe `D0E568BB...` (= v0.19.0.57, source unchanged)
+  - FluxingPhrasesDialog.exe (x64) `8E569EA7...` (NEW, 含 InputSubclassProc)
+  - NSIS installer `312053473...` (43 MB)
+
+### 防重犯 (Anti-patterns to avoid)
+
+- **AP-L107-A**: WS_POPUP dialog main loop 用 `TranslateMessage + DispatchMessageW`
+  而非 `IsDialogMessage(s_hwnd, &msg)` → 子控件键盘事件不 bubble。修法:
+  加 IsDialogMessage (更标准) 或 subclass 子控件 hook target 键。
+- **AP-L107-B**: sandbox test 用 `SendMessageW(hwnd, WM_KEYDOWN, ...)` 模拟 Enter/
+  Esc 触发 → false-positive (绕过了 input 子控件 focus routing)。修法:
+  test 必须模拟真实装机 user flow, 即 `SetFocus(input)` + `SendMessageW(input,
+  WM_KEYDOWN, ...)` → 走 input WndProc (验证 subclass bubble 路径)。
+- **AP-L107-C**: `_buildflow.cmd` 跑 default Win32 Platform 不 rebuild x64 项目
+  → installer 装 stale x64 binary。修法: ship gate 必须 verify 5-axis (md5 + 真
+  binary + L106 hardening 保留 + L66 4 keys + L107 x64 rebuild verify)。
+- **AP-L107-D**: ListView 焦点时 Esc 走 LVN_KEYDOWN notification 路径 work,
+  但 Edit / Button focus 时 Esc / Enter 走子控件 default 处理 — 不能依赖
+  "跟 ListView 一样只处理 NM_DBLCLK / NM_RETURN"。修法: 子类化每个子控件或
+  dialog main loop 加 IsDialogMessage。
+
+### Recurrence-Count
+
+- 2 (Phase K4 ship 11eeb7a 失效 + Phase K5 ship 9f8a796 真修); 4 ship 版本
+  (v0.19.0.50-56) TestPhrasesDialog.vcxproj 隐含 vcxproj ClCompile path stale,
+  ship gate 单元测试全跳过 — 同 L107-C pattern 但触发形式不同。
+- 触发 L3 守门: 任何改 `main.cpp` message loop / WndProc / 子控件 WndProc /
+  `_buildflow.cmd` / `build.bat` 的提交, PR 必带「(a) WS_POPUP message loop
+  IsDialogMessage verify, (b) x64 binary md5 verify post-build, (c) Edit focus
+  + Enter/Esc 装机端 user flow」。
+
+### 关联 lessons
+
+- **L100-PhaseF-Bug3**: 同 false-positive pattern (sandbox SendMessage 路径
+  绕过 focus routing)。Phase K5 Test 43/44 显式 `SetFocus(input)` + `SendMessage
+  (input, ...)` 模拟装机 user 路径, 修 false-positive 测试 bug。
+- **L106**: build pipeline zero-file trap + L107 x64 stale-binary trap 是
+  build infra 同一类问题 (default Platform scope 不 cover x64 + installer
+  File 引用 stale binary)。建议 `.claude/rules/build-toolchain.md` 追加
+  「MSBuild Win32 default scope 不 rebuild x64, ship gate 必须 verify 5-axis」
+  段。
+- **L101-PhaseF-LVN-KEYDOWN**: ListView 焦点时 Esc 走 LVN_KEYDOWN 给 parent,
+  但 Edit / Button focus 走 default 子控件 WndProc (无 notification), 必须
+  subclass 或 IsDialogMessage。
+
+### 关联文件 / 提交
+
+- commit `9f8a796` fix(FluxingPhrasesDialog) v0.19.0.58 (Phase K5 hotfix)
+- commit `bbbe843` chore(release) v0.19.0.58 installer
+- 源: `FluxingPhrasesDialog/PhrasesDialog.cpp:102-144` (InputSubclassProc 实施)
+- 源: `FluxingPhrasesDialog/PhrasesDialog.cpp:773-778,786-794,801-830` (Install
+  / Remove + OnCreate/OnDestroy 调)
+- 源: `FluxingPhrasesDialog/PhrasesDialog.h:212-237` (公开 helper 声明 + root
+  cause 注释)
+- 源: `FluxingPhrasesDialog/main.cpp:37-40` (message loop 简单形态, root cause
+  之一)
+- 源: `test/TestPhrasesDialog/TestPhrasesDialog.cpp:1480-1548` (Test 43/44 新增)
+- NSIS installer: `output/archives/fluxing-0.19.0.58-installer.exe` md5
+  `312053473F9D41FCA65EF659F2185B9A`
