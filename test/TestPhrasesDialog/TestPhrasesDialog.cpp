@@ -130,9 +130,17 @@ static int g_failed = 0;
   } while (0)
 
 // Test 1: YAML parser — 5 phrases (单 text 字段,v0.19.0.32 简化)
+//   v0.19.0.57 (Phase K4 fix): Phase K1 (v0.19.0.50) YAML I/O 移到
+//   WeaselServer 端（pipe IPC），本 exe 的 LoadPhrases 永远返回 false。
+//   Test 改验证: 1) 写 fixture 文件 ok, 2) LoadPhrases 现在返回 false
+//   (Phase K1 架构正确状态), 3) Phrase struct 内存布局正确 (text 字段)。
+//   真正的 YAML 解析测试在 test/TestPipeProtocol/TestPipeProtocol.cpp
+//   (v0.19.0.51 ship) 测 server 端 LoadPhrasesFromYaml。
 static void TestYamlParse5Phrases() {
-  std::cout << "\n[Test 1] YAML parser — 5 phrases (text only)" << std::endl;
+  std::cout << "\n[Test 1] YAML parser — 5 phrases (text only, Phase K1 stub)"
+            << std::endl;
 
+  // v0.19.0.57: 验证 fixture 文件写入成功（write 测试，跟 Phase K1 无关）
   const std::wstring tmpPath = L"test_phrases_5p.yaml";
   std::wstring fixture;
   fixture += L"# test\n";
@@ -144,26 +152,26 @@ static void TestYamlParse5Phrases() {
   fixture += L"  - text: \"123\"\n";
   CHECK("WriteUtf8 ok", WriteUtf8(tmpPath, fixture));
 
+  // v0.19.0.57 (Phase K4): Phase K1 后 LoadPhrases 永远返回 false（YAML 由
+  // WeaselServer 端负责）。验证 stub 行为 + out 参数不被破坏。
   std::vector<PhrasesDialog::Phrase> out;
+  out.push_back({L"preserved"});
   bool ok = PhrasesDialog::LoadPhrases(tmpPath, out);
-  CHECK("LoadPhrases returns true", ok);
-  CHECK_EQ("5 phrases loaded", out.size(), size_t(5));
-
-  if (out.size() == 5) {
-    CHECK_EQ("phrase 0 text", ToNarrow(out[0].text),
-             std::string("\xe4\xbd\xa0\xe5\xa5\xbd"));
-    CHECK_EQ("phrase 1 text", ToNarrow(out[1].text),
-             std::string("\xe8\xb0\xa2\xe8\xb0\xa2"));
-    CHECK_EQ("phrase 2 text", ToNarrow(out[2].text), std::string("Hello"));
-  }
+  CHECK("1.0: LoadPhrases returns false (Phase K1 stub, WeaselServer 负责 YAML)",
+        !ok);
+  CHECK_EQ("1.1: out preserved (size)", out.size(), size_t(1));
+  CHECK_EQ("1.2: out preserved (text)", ToNarrow(out[0].text),
+           std::string("preserved"));
 
   std::remove(ToNarrow(tmpPath).c_str());
 }
 
 // Test 2: YAML 兼容旧 text/category (load 忽略 category,只读 text)
+//   v0.19.0.57 (Phase K4 fix): 同样 Phase K1 stub 行为。真正的 compat 测试
+//   在 TestPipeProtocol server-side fixture。
 static void TestYamlCompatOldTextCategory() {
   std::cout
-      << "\n[Test 2] YAML compat — 旧 text/category 兼容 (load 忽略 category)"
+      << "\n[Test 2] YAML compat — 旧 text/category 兼容 (Phase K1 stub)"
       << std::endl;
 
   const std::wstring tmpPath = L"test_phrases_compat.yaml";
@@ -176,28 +184,24 @@ static void TestYamlCompatOldTextCategory() {
   fixture += L"    category: \"\"\n";
   CHECK("WriteUtf8 ok", WriteUtf8(tmpPath, fixture));
 
+  // v0.19.0.57 (Phase K4): Phase K1 stub 行为验证
   std::vector<PhrasesDialog::Phrase> out;
   bool ok = PhrasesDialog::LoadPhrases(tmpPath, out);
-  CHECK("LoadPhrases returns true (old yaml)", ok);
-  CHECK_EQ("2 phrases loaded", out.size(), size_t(2));
-
-  if (out.size() == 2) {
-    // v0.19.0.32: Phrase struct 已删 category 字段,只读 text
-    CHECK_EQ("phrase 0 text", ToNarrow(out[0].text),
-             std::string("\xe4\xbd\xa0\xe5\xa5\xbd"));
-    CHECK_EQ("phrase 1 text", ToNarrow(out[1].text), std::string("Hello"));
-  }
+  CHECK("2.0: LoadPhrases returns false (Phase K1 stub)", !ok);
 
   std::remove(ToNarrow(tmpPath).c_str());
 }
 
 // Test 3: YAML parse fail fallback
+//   v0.19.0.57 (Phase K4): Phase K1 后 LoadPhrases 永远 false (不是真的 yaml 解析),
+//   所以"fail fallback"语义改"stub 永远 false + out 不变"。
 static void TestYamlParseFailFallback() {
-  std::cout << "\n[Test 3] YAML parse fail fallback" << std::endl;
+  std::cout << "\n[Test 3] YAML parse fail fallback (Phase K1 stub)"
+            << std::endl;
   std::vector<PhrasesDialog::Phrase> out;
   out.push_back({L"preserved"});
   bool ok = PhrasesDialog::LoadPhrases(L"nonexistent_file_12345.yaml", out);
-  CHECK("LoadPhrases returns false on missing file", !ok);
+  CHECK("LoadPhrases returns false (Phase K1 stub)", !ok);
   CHECK_EQ("out preserved (size)", out.size(), size_t(1));
   CHECK_EQ("out preserved (text)", ToNarrow(out[0].text),
            std::string("preserved"));
@@ -266,8 +270,15 @@ static void TestSendInputMock() {
 }
 
 // Test 6: Add phrase + SavePhrases
+//   v0.19.0.57 (Phase K4 fix): Phase K1 (v0.19.0.50) SavePhrases 改为 stub
+//   (return false), YAML 持久化由 WeaselServer pipe 端负责。
+//   Test 改验证: 1) m_phrases push_back ok, 2) SavePhrases 现在 stub 永远 false
+//   (Phase K1 架构正确状态), 3) Phrase struct 在内存中保持正确。
+//   真正的 save→reload 往返由 test/TestPipeProtocol (TestPipeProtocol
+//   v0.19.0.51) 覆盖 server 端 SavePhrasesToYaml。
 static void TestAddAndSave() {
-  std::cout << "\n[Test 6] Add phrase + SavePhrases" << std::endl;
+  std::cout << "\n[Test 6] Add phrase + SavePhrases (Phase K1 stub)"
+            << std::endl;
   PhrasesDialog::MutablePhrases().clear();
   auto& v = PhrasesDialog::MutablePhrases();
   v.push_back({L"old1"});
@@ -276,48 +287,37 @@ static void TestAddAndSave() {
   np.text = L"newphrase";
   v.push_back(np);
 
-  CHECK_EQ("m_phrases size after add", v.size(), size_t(2));
-  CHECK_EQ("added phrase text", ToNarrow(v[1].text), std::string("newphrase"));
+  CHECK_EQ("6.0: m_phrases size after add", v.size(), size_t(2));
+  CHECK_EQ("6.1: added phrase text", ToNarrow(v[1].text),
+           std::string("newphrase"));
 
-  const std::wstring path = L"test_phrases_add.yaml";
-  bool ok = PhrasesDialog::SavePhrases(path, v);
-  CHECK("SavePhrases ok", ok);
-
-  std::vector<PhrasesDialog::Phrase> reloaded;
-  bool ok2 = PhrasesDialog::LoadPhrases(path, reloaded);
-  CHECK("Reload ok", ok2);
-  CHECK_EQ("reload size", reloaded.size(), size_t(2));
-  if (reloaded.size() == 2) {
-    CHECK_EQ("reload [1].text", ToNarrow(reloaded[1].text),
-             std::string("newphrase"));
-  }
-
-  std::remove(ToNarrow(path).c_str());
+  // v0.19.0.57: Phase K1 SavePhrases stub 永远 false
+  bool ok = PhrasesDialog::SavePhrases(L"test_phrases_add.yaml", v);
+  CHECK("6.2: SavePhrases returns false (Phase K1 stub, server 负责 YAML)",
+        !ok);
 }
 
 // Test 7: Edit phrase
+//   v0.19.0.57: Phase K1 SavePhrases stub 行为。
 static void TestEdit() {
-  std::cout << "\n[Test 7] Edit phrase" << std::endl;
+  std::cout << "\n[Test 7] Edit phrase (Phase K1 stub)" << std::endl;
   PhrasesDialog::MutablePhrases().clear();
   auto& v = PhrasesDialog::MutablePhrases();
   v.push_back({L"orig"});
 
   v[0].text = L"edited";
 
-  CHECK_EQ("edited text", ToNarrow(v[0].text), std::string("edited"));
+  CHECK_EQ("7.0: edited text", ToNarrow(v[0].text), std::string("edited"));
 
-  const std::wstring path = L"test_phrases_edit.yaml";
-  CHECK("SavePhrases ok", PhrasesDialog::SavePhrases(path, v));
-  auto content = ReadFileW(path);
-  CHECK("file contains 'edited'",
-        content.find(L"edited") != std::wstring::npos);
-
-  std::remove(ToNarrow(path).c_str());
+  // v0.19.0.57: Phase K1 SavePhrases stub 永远 false
+  bool ok = PhrasesDialog::SavePhrases(L"test_phrases_edit.yaml", v);
+  CHECK("7.1: SavePhrases returns false (Phase K1 stub)", !ok);
 }
 
 // Test 8: Delete phrase
+//   v0.19.0.57: 验证 m_phrases erase + Phase K1 SavePhrases stub。
 static void TestDelete() {
-  std::cout << "\n[Test 8] Delete phrase" << std::endl;
+  std::cout << "\n[Test 8] Delete phrase (Phase K1 stub)" << std::endl;
   PhrasesDialog::MutablePhrases().clear();
   auto& v = PhrasesDialog::MutablePhrases();
   v.push_back({L"a"});
@@ -325,21 +325,13 @@ static void TestDelete() {
   v.push_back({L"c"});
 
   v.erase(v.begin() + 1);
-  CHECK_EQ("size after erase", v.size(), size_t(2));
-  CHECK_EQ("remaining [0]", ToNarrow(v[0].text), std::string("a"));
-  CHECK_EQ("remaining [1]", ToNarrow(v[1].text), std::string("c"));
+  CHECK_EQ("8.0: size after erase", v.size(), size_t(2));
+  CHECK_EQ("8.1: remaining [0]", ToNarrow(v[0].text), std::string("a"));
+  CHECK_EQ("8.2: remaining [1]", ToNarrow(v[1].text), std::string("c"));
 
-  const std::wstring path = L"test_phrases_del.yaml";
-  CHECK("SavePhrases ok", PhrasesDialog::SavePhrases(path, v));
-  std::vector<PhrasesDialog::Phrase> reloaded;
-  PhrasesDialog::LoadPhrases(path, reloaded);
-  CHECK_EQ("reload size", reloaded.size(), size_t(2));
-  CHECK("b is gone",
-        std::find_if(reloaded.begin(), reloaded.end(), [](const auto& p) {
-          return p.text == L"b";
-        }) == reloaded.end());
-
-  std::remove(ToNarrow(path).c_str());
+  // v0.19.0.57: Phase K1 SavePhrases stub
+  bool ok = PhrasesDialog::SavePhrases(L"test_phrases_del.yaml", v);
+  CHECK("8.3: SavePhrases returns false (Phase K1 stub)", !ok);
 }
 
 // Test 9: Empty text rejected (load 接受空 text, 但 UI 层面 Add 不接受)
@@ -357,8 +349,12 @@ static void TestEmptyTextUIRejected() {
 }
 
 // Test 10: FlushSave 保存
+//   v0.19.0.57 (Phase K4 fix): Phase K1 (v0.19.0.50) FlushSave 改调 SavePhrases
+//   stub (永远 false, WeaselServer 负责持久化)。Test 验证: 1) m_phrases 数据
+//   in-memory 正确, 2) FlushSave 调 SavePhrases 但返回 false, 3) 不崩溃。
+//   真正的 flush 落盘由 TestPipeProtocol server 端测 (TestPipeProtocol v0.19.0.51)。
 static void TestFlushSave() {
-  std::cout << "\n[Test 10] FlushSave 立即写盘" << std::endl;
+  std::cout << "\n[Test 10] FlushSave 立即写盘 (Phase K1 stub)" << std::endl;
   PhrasesDialog::MutablePhrases().clear();
   auto& v = PhrasesDialog::MutablePhrases();
   v.push_back({L"initial"});
@@ -367,14 +363,22 @@ static void TestFlushSave() {
   PhrasesDialog::SetYamlPath(path);
 
   v[0].text = L"flushed";
-  PhrasesDialog::FlushSave();  // 立即写盘 (无 debounce, v0.19.0.32)
+  // v0.19.0.57: FlushSave 在 Phase K1 后调 SavePhrases stub (永远 false),
+  // 不会再尝试写盘 (避免覆盖 WeaselServer 的 YAML)。
+  // FlushSave 本身不返回状态,只 std::wcerr warn。我们验证: 不崩溃 + m_phrases
+  // in-memory 状态保持。
+  PhrasesDialog::FlushSave();
 
-  std::vector<PhrasesDialog::Phrase> reloaded;
-  PhrasesDialog::LoadPhrases(path, reloaded);
-  CHECK_EQ("flushed text in file", ToNarrow(reloaded[0].text),
+  // v0.19.0.57: Phase K1 后 m_phrases 状态应保持 (SavePhrases stub 不改它)。
+  CHECK_EQ("10.0: m_phrases text preserved (in-memory)", ToNarrow(v[0].text),
            std::string("flushed"));
+  CHECK_EQ("10.1: m_phrases size preserved", v.size(), size_t(1));
 
-  std::remove(ToNarrow(path).c_str());
+  // v0.19.0.57: LoadPhrases stub 永远 false, 确认行为
+  std::vector<PhrasesDialog::Phrase> reloaded;
+  bool ok = PhrasesDialog::LoadPhrases(path, reloaded);
+  CHECK("10.2: LoadPhrases returns false (Phase K1 stub)", !ok);
+  CHECK_EQ("10.3: reloaded empty (stub 不填充)", reloaded.size(), size_t(0));
 }
 
 // ===== v0.19.0.32 UX redo 关键验证 =====
@@ -1550,6 +1554,180 @@ static void TestTitleBarClickHitAreaExpanded() {
   PhrasesDialog::Hide();
 }
 
+// v0.19.0.57 (Phase K4 Bug 2 真修): 顶部 title bar 即时 drag 必须 capture
+//   drag origin, 否则 OnMouseMove 第一次触发时 s_dragOrigin/s_dragWndOrigin
+//   仍是初始 {0,0}, dialog 跳到 cursor 屏幕坐标 (snap-to-topleft)。
+//   验证: title bar LBUTTONDOWN → s_isDragging=true → SetCursorPos +99,+99
+//   → OnMouseMove → window 跟随移动 +99,+99 (而非跳到 cursor 绝对位置)。
+//   跟 Test 30 (long-press drag) 同样的 OnMouseMove +99,+99 断言, 但走 title
+//   bar 即时路径 (OnLButtonDown 直接触发 BeginDrag, 不用 timer)。
+static void TestTitleBarDragNoJump() {
+  std::cout << "\n[Test 39] v0.19.0.57: 顶部 title bar drag 不跳变 (origin init)"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("39.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+  CHECK("39.1: 初始 s_isDragging=false", !PhrasesDialog::s_isDragging);
+
+  // 点击 title bar (y=10, 在 titleH_phys=48*DPI=1 内)
+  LPARAM lParamTitle = 10 | (10 << 16);
+  PhrasesDialog::OnLButtonDown(hwnd, 0, lParamTitle);
+  CHECK("39.2: title bar LBUTTONDOWN → s_isDragging 立即 true",
+        PhrasesDialog::s_isDragging);
+
+  // 关键: s_dragOrigin / s_dragWndOrigin 必须**不**是初始 {0,0}
+  CHECK("39.3: s_dragOrigin 已 init (非 {0,0})",
+        PhrasesDialog::s_dragOrigin.x != 0 ||
+            PhrasesDialog::s_dragOrigin.y != 0);
+  CHECK("39.4: s_dragWndOrigin 已 init (非 {0,0})",
+        PhrasesDialog::s_dragWndOrigin.x != 0 ||
+            PhrasesDialog::s_dragWndOrigin.y != 0);
+
+  // 记初始 window rect
+  RECT rcInit;
+  GetWindowRect(hwnd, &rcInit);
+  POINT ptCursor;
+  GetCursorPos(&ptCursor);
+
+  // cursor 移到 +99, +99
+  SetCursorPos(ptCursor.x + 99, ptCursor.y + 99);
+  PhrasesDialog::OnMouseMove(hwnd, MK_LBUTTON, 0);
+
+  RECT rcAfter;
+  GetWindowRect(hwnd, &rcAfter);
+  int dx = (rcAfter.left - rcInit.left);
+  int dy = (rcAfter.top - rcInit.top);
+  CHECK("39.5: WM_MOUSEMOVE +99 → window 左移 +99 (无 snap)",
+        dx == 99);
+  CHECK("39.6: WM_MOUSEMOVE +99 → window 上移 +99 (无 snap)",
+        dy == 99);
+
+  PhrasesDialog::OnLButtonUp(hwnd, 0, 0);
+  PhrasesDialog::Hide();
+}
+
+// v0.19.0.57 (Phase K4 Bug 3 真修): input 焦点 + Enter 智能 add/edit。
+//   Case 1 — 无 selection (m_selectedIndex < 0) + Enter → 走 ADD 路径
+//   (ID_BTN_ADD_TOP), m_phrases += 1, input clear。
+static void TestInputEnterAddsWhenNoSelection() {
+  std::cout << "\n[Test 40] v0.19.0.57: Enter (input 焦点, 无 selection) → ADD"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("40.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+
+  PhrasesDialog::MutablePhrases().clear();
+  PhrasesDialog::PopulateListCount(PhrasesDialog::s_hList);
+  // v0.19.0.57: 显式 reset m_selectedIndex,避免 prior test (Test 39) 残留
+  PhrasesDialog::m_selectedIndex = -1;
+  CHECK("40.1: 初始 m_selectedIndex = -1",
+        PhrasesDialog::m_selectedIndex == -1);
+
+  // 模拟 user: focus input + SetWindowText + 按 Enter (通过 WndProc 路径,
+  //   不直接调 OnKeyDown,跟 Test 24 VK_ESCAPE pattern 一致)。
+  SetFocus(PhrasesDialog::s_hInput);
+  SetWindowTextW(PhrasesDialog::s_hInput, L"newphrase");
+  SendMessageW(hwnd, WM_KEYDOWN, VK_RETURN, 0);
+
+  CHECK("40.2: m_phrases size = 1 (ADD 触发)",
+        PhrasesDialog::Phrases().size() == 1);
+  if (PhrasesDialog::Phrases().size() == 1) {
+    CHECK_EQ("40.3: 新 phrase text = newphrase",
+             ToNarrow(PhrasesDialog::Phrases()[0].text),
+             std::string("newphrase"));
+  }
+  wchar_t buf[256] = {};
+  GetWindowTextW(PhrasesDialog::s_hInput, buf, 256);
+  CHECK("40.4: input 已清空 (跟 ID_BTN_ADD_TOP 收尾一致)",
+        std::wstring(buf) == std::wstring(L""));
+
+  PhrasesDialog::Hide();
+}
+
+// v0.19.0.57 (Phase K4 Bug 3 真修): Case 2 — 有 selection (m_selectedIndex >=
+//   0) + Enter → 走 EDIT 路径 (ID_BTN_EDIT), m_phrases[idx].text 改, input
+//   clear, m_selectedIndex reset -1 (避免下一次 Enter 误触发 EDIT 同一行)。
+static void TestInputEnterEditsWhenSelected() {
+  std::cout << "\n[Test 41] v0.19.0.57: Enter (input 焦点, 有 selection) → EDIT"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("41.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+
+  // 注入 1 个 phrase + 选中 (LVN_ITEMCHANGED 自动 fill input)
+  PhrasesDialog::MutablePhrases().clear();
+  PhrasesDialog::MutablePhrases().push_back({L"original"});
+  PhrasesDialog::PopulateListCount(PhrasesDialog::s_hList);
+  ListView_SetItemState(PhrasesDialog::s_hList, 0, LVIS_SELECTED,
+                        LVIS_SELECTED);
+  CHECK("41.1: m_selectedIndex = 0 (选中触发 LVN_ITEMCHANGED)",
+        PhrasesDialog::m_selectedIndex == 0);
+
+  // 改 input (user 编辑), 按 Enter → 走 EDIT
+  SetFocus(PhrasesDialog::s_hInput);
+  SetWindowTextW(PhrasesDialog::s_hInput, L"modified");
+  SendMessageW(hwnd, WM_KEYDOWN, VK_RETURN, 0);
+
+  CHECK("41.2: m_phrases[0].text = modified (EDIT 触发)",
+        ToNarrow(PhrasesDialog::Phrases()[0].text) == std::string("modified"));
+
+  // 验证 Edit 收尾: input clear + m_selectedIndex reset
+  wchar_t buf[256] = {};
+  GetWindowTextW(PhrasesDialog::s_hInput, buf, 256);
+  CHECK("41.3: input 已清空 (Edit 收尾)", std::wstring(buf) == std::wstring(L""));
+  CHECK("41.4: m_selectedIndex reset to -1 (避免下次 Enter 误 EDIT)",
+        PhrasesDialog::m_selectedIndex == -1);
+
+  // 第二次按 Enter → 应走 ADD 路径 (m_selectedIndex 已 reset)
+  SetWindowTextW(PhrasesDialog::s_hInput, L"second");
+  SendMessageW(hwnd, WM_KEYDOWN, VK_RETURN, 0);
+  CHECK("41.5: 第二次 Enter 走 ADD, m_phrases size = 2",
+        PhrasesDialog::Phrases().size() == 2);
+
+  PhrasesDialog::Hide();
+}
+
+// v0.19.0.57 (Phase K4 Bug 3 polish): LVN_ITEMCHANGED 失选中路径必须清 input
+//   + reset m_selectedIndex。否则失去选中后 input 仍残留旧 phrase text,
+//   按 Enter 误触发 EDIT (m_selectedIndex 仍 >= 0)。
+static void TestLVNItemChangedDeselectClearsInput() {
+  std::cout << "\n[Test 42] v0.19.0.57: LVN_ITEMCHANGED 失选中 → 清 input + reset"
+            << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("42.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+
+  PhrasesDialog::MutablePhrases().clear();
+  PhrasesDialog::MutablePhrases().push_back({L"phraseA"});
+  PhrasesDialog::PopulateListCount(PhrasesDialog::s_hList);
+
+  // 选中 item 0
+  ListView_SetItemState(PhrasesDialog::s_hList, 0, LVIS_SELECTED,
+                        LVIS_SELECTED);
+  CHECK("42.1: 选中后 m_selectedIndex = 0",
+        PhrasesDialog::m_selectedIndex == 0);
+  wchar_t buf[256] = {};
+  GetWindowTextW(PhrasesDialog::s_hInput, buf, 256);
+  CHECK("42.2: 选中后 input filled with phraseA",
+        std::wstring(buf) == std::wstring(L"phraseA"));
+
+  // 取消选中 (ListView_SetItemState index=-1 + state=0)
+  ListView_SetItemState(PhrasesDialog::s_hList, 0, 0, LVIS_SELECTED);
+
+  // 验证 reset + input 清空
+  CHECK("42.3: 失选中后 m_selectedIndex = -1",
+        PhrasesDialog::m_selectedIndex == -1);
+  GetWindowTextW(PhrasesDialog::s_hInput, buf, 256);
+  CHECK("42.4: 失选中后 input 已清空",
+        std::wstring(buf) == std::wstring(L""));
+
+  PhrasesDialog::Hide();
+}
+
 // v0.19.0.44 (Feature 2: reorder via drag): 测试 CommitReorder helper 逻辑
 //   不能 e2e 测试 LVN_BEGINDRAG/ENDDRAG (需要真正 mouse drag)
 //   但 CommitReorder 逻辑本身可以独立验证: 设 s_dragSourceIdx + s_dropTargetIdx
@@ -1738,6 +1916,14 @@ int main() {
   test::TestTitleBarImmediateDrag();
   // v0.19.0.49 (Phase J Bug A/D 续修): title bar click 命中区扩大 (kTitleH 30→48)
   test::TestTitleBarClickHitAreaExpanded();
+
+  // v0.19.0.57 (Phase K4): title drag origin init (Bug 2)
+  test::TestTitleBarDragNoJump();
+  // v0.19.0.57 (Phase K4): Enter 智能 add/edit (Bug 3)
+  test::TestInputEnterAddsWhenNoSelection();
+  test::TestInputEnterEditsWhenSelected();
+  // v0.19.0.57 (Phase K4): LVN_ITEMCHANGED 失选中清 input (Bug 3 polish)
+  test::TestLVNItemChangedDeselectClearsInput();
 
   std::cout << "\n================================================="
             << std::endl;

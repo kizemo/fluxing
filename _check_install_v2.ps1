@@ -52,10 +52,14 @@ Write-Host ""
 # 2. Installed WeaselServer.exe on disk (3 candidate paths)
 # ============================================================
 Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
-$expectedMd5 = 'b2d1236c286a3c0704224fe4105eca49'  # v0.19.0.55 WeaselServer.exe (Phase K3 T019 hotfix: pipe handle 泄漏 + NM_DBLCLK Hide 先于 INJECT, build 2026-07-22 22:27)
-$expectedFluxingMd5 = 'b1a74c6fed9c1efcd6490bb2b33235f2'  # v0.19.0.55 FluxingPhrasesDialog.exe (Phase K3 T019: HideWithoutDisconnect API + NM_DBLCLK order, build 2026-07-22 22:34)
-$expectedInstallerMd5 = '14dfdfb047cc623280b805888e257506'  # v0.19.0.55 NSIS installer (T019 hotfix, build 2026-07-22 22:44)
-$expectedBuildTime = '2026-07-22 22:44:00'  # v0.19.0.55 NSIS timestamp
+# v0.19.0.57 (Phase K4 UX polish): 3 bugs fixed (顶部蓝条去除 + title drag
+#   origin init + Enter 智能 add/edit) + test infra 修复 (vcxproj stale path
+#   to FluxingPhrasesDialog + Phase K1 stub YAML I/O test 适配)。MD5 跟
+#   v0.19.0.56 不同 (Phase K4 source 改动 → 真 binary 重建)。
+$expectedMd5 = 'D0E568BBBA749931C618B57DD14C27C4'  # v0.19.0.57 WeaselServer.exe (Phase K4, MSBuild Win32 Release, build 2026-07-23 13:34)
+$expectedFluxingMd5 = 'B92137F5B005807227CB1F3142AADF1F'  # v0.19.0.57 FluxingPhrasesDialog.exe (Phase K4, x64, build 2026-07-23 13:22)
+$expectedInstallerMd5 = '0CA9E93ADE8CF7EE2145FBDC44DB535B'  # v0.19.0.57 NSIS installer (Phase K4, build 2026-07-23 13:51)
+$expectedBuildTime = '2026-07-23 13:51:00'  # v0.19.0.57 NSIS timestamp
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',

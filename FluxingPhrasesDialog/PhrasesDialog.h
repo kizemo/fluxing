@@ -212,6 +212,9 @@ class PhrasesDialog {
   static void CancelLongPress(HWND hwnd);
   static void BeginDrag(HWND hwnd);
   static void EndDrag(HWND hwnd);
+  // v0.19.0.57 (Phase K4 Bug 2 修): DRY helper — capture drag origin
+  //   (cursor screen + window rect), BeginDrag + StartLongPressTimer 共用。
+  static void CaptureDragOrigin(HWND hwnd);
 
   // v0.19.0.44 (Feature 1: resize layout): 重新定位所有 child
   // 入参 client area 物理尺寸 (DPI-scaled)。OnCreate 初始化 + WM_SIZE 触发

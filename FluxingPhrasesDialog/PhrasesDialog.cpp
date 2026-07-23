@@ -767,8 +767,13 @@ LRESULT PhrasesDialog::OnPaint(HWND hwnd) {
   int paintH = rc.bottom - rc.top;
   int paintRadius = (int)(kDlgRadius * s_dpiScale);
 
-  ModalChrome::PaintBackgroundAndBorder(hdc, paintW, paintH, kBgTop, kBgBot,
-                                        paintRadius, kBorderColor);
+  // v0.19.0.57 (Phase K4 Bug 1 修): 顶部蓝条去除 — 整 client 用单色填充
+  //   (kBgBot, kBgBot) 替代原来的 gradient (kBgTop → kBgBot)。原 gradient
+  //   在顶部 kTitleH 区形成一条浅色带,user 反馈"蓝条多余想删"。单色填充
+  //   让 dialog body 一致, 视觉上不再有 title bar 独立色块。
+  //   保留 PaintBorder 维持圆角 + hairline 边框。
+  ModalChrome::PaintBackground(hdc, paintW, paintH, kBgBot, kBgBot);
+  ModalChrome::PaintBorder(hdc, paintW, paintH, paintRadius, kBorderColor);
 
   // 标题文字
   HFONT hf = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
@@ -836,10 +841,18 @@ LRESULT PhrasesDialog::OnKeyDown(HWND hwnd, WPARAM wp) {
       break;
     }
     case VK_RETURN: {
-      // 焦点在 input → Add (调 ID_BTN_ADD_TOP)
+      // 焦点在 input → 智能 add/edit (v0.19.0.57 Phase K4 Bug 3 修)
+      //   - list 有选中 (m_selectedIndex >= 0) → Edit (user 在编辑选中的
+      //     phrase), 走 ID_BTN_EDIT
+      //   - 否则 → Add (新增模式), 走 ID_BTN_ADD_TOP
+      //   旧版永远发 ID_BTN_ADD_TOP, 编辑模式下按 Enter 会改错位置
+      //   (新增到末尾), 不符合 user 直觉。
       if (s_hInput && GetFocus() == s_hInput) {
-        SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(ID_BTN_ADD_TOP, BN_CLICKED),
-                     0);
+        WORD cmdId = (m_selectedIndex >= 0 &&
+                      m_selectedIndex < static_cast<int>(m_phrases.size()))
+                         ? ID_BTN_EDIT
+                         : ID_BTN_ADD_TOP;
+        SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(cmdId, BN_CLICKED), 0);
         return 0;
       }
       // 焦点在 list → inject 选中 phrase text
@@ -967,6 +980,19 @@ LRESULT PhrasesDialog::OnNotify(HWND hwnd, LPARAM lp) {
           if (s_hInput && m_selectedIndex >= 0 &&
               m_selectedIndex < static_cast<int>(m_phrases.size())) {
             SetWindowTextW(s_hInput, m_phrases[m_selectedIndex].text.c_str());
+          }
+        }
+        // v0.19.0.57 (Phase K4 Bug 3 polish): 选中丢失 → reset state +
+        //   清 input, 避免按 Enter 时误触发 Edit。
+        //   LVN_ITEMCHANGED 在 selected→not-selected 转换时, uChanged 含
+        //   LVIF_STATE + uNewState 不含 LVIS_SELECTED。需检查 iItem ==
+        //   当前 m_selectedIndex 才 reset (避免误清其他 item 的状态)。
+        else if ((pn->uChanged & LVIF_STATE) &&
+                 !(pn->uNewState & LVIS_SELECTED) &&
+                 m_selectedIndex == pn->iItem) {
+          m_selectedIndex = -1;
+          if (s_hInput) {
+            SetWindowTextW(s_hInput, L"");
           }
         }
         return 0;
@@ -1110,6 +1136,14 @@ LRESULT PhrasesDialog::OnCommand(HWND hwnd, WPARAM wp) {
             PopulateList(s_hList);
             FlushSave();
           }
+          // v0.19.0.57 (Phase K4 Bug 3 polish): Edit 完成 → 清 input + reset
+          //   m_selectedIndex + focus 回 input (跟 ID_BTN_ADD_TOP 收尾一致)。
+          //   旧版 Edit 后状态残留: m_selectedIndex 仍 >= 0 + input 仍显示
+          //   旧 phrase text → user 第二次按 Enter 误触发 Edit 同一 idx,
+          //   或 input 显示旧 text 干扰下一次 Add。
+          SetWindowTextW(s_hInput, L"");
+          SetFocus(s_hInput);
+          m_selectedIndex = -1;
         }
       }
       return 0;
@@ -1308,14 +1342,26 @@ void PhrasesDialog::StartLongPressTimer(HWND hwnd, int x, int y) {
   // v0.19.0.43 (Bug 2.2): 用 GetCursorPos 拿 screen coords (跟 OnMouseMove
   // 一致) x/y 参数是 client coords (从 WM_LBUTTONDOWN lp 来), 不用, 用
   // GetCursorPos
+  CaptureDragOrigin(hwnd);
+  // 第二个参数: 500ms 长按阈值 (kLongPressMs)
+  SetTimer(hwnd, kLongPressTimerId, kLongPressMs, nullptr);
+}
+
+// v0.19.0.57 (Phase K4 Bug 2 修): DRY helper — 抽取 drag origin 捕获到
+//   独立函数。BeginDrag (顶部 title bar 即时 drag 路径) + StartLongPressTimer
+//   (chrome 区 500ms 长按 drag 路径) 都调, 确保两条路径都初始化 s_dragOrigin
+//   + s_dragWndOrigin。
+//   Bug 2 真因: BeginDrag 旧版不调 GetCursorPos + GetWindowRect, 直接 SetCapture
+//   → OnMouseMove 第一次触发时 s_dragOrigin/s_dragWndOrigin 仍是静态 {0,0},
+//   newX = 0 + (pt.x - 0) = pt.x → dialog 跳到 cursor 屏幕坐标, cursor
+//   落在新 dialog 左上角 = snap-to-topleft 视觉。
+void PhrasesDialog::CaptureDragOrigin(HWND hwnd) {
   POINT pt;
   GetCursorPos(&pt);
   s_dragOrigin = pt;
   RECT rc;
   GetWindowRect(hwnd, &rc);
   s_dragWndOrigin = {rc.left, rc.top};
-  // 第二个参数: 500ms 长按阈值 (kLongPressMs)
-  SetTimer(hwnd, kLongPressTimerId, kLongPressMs, nullptr);
 }
 
 void PhrasesDialog::CancelLongPress(HWND hwnd) {
@@ -1326,6 +1372,12 @@ void PhrasesDialog::CancelLongPress(HWND hwnd) {
 }
 
 void PhrasesDialog::BeginDrag(HWND hwnd) {
+  // v0.19.0.57 (Phase K4 Bug 2 修): 顶部 title bar 即时 drag 路径必须先
+  //   捕获 origin (cursor screen + window rect), 否则 OnMouseMove 第一次
+  //   触发时用 stale {0,0} 算 delta → dialog 跳到 cursor 屏幕绝对坐标
+  //   → cursor 视觉上落在新 dialog 左上角 (snap-to-topleft)。
+  //   跟 StartLongPressTimer 走同 CaptureDragOrigin helper (DRY)。
+  CaptureDragOrigin(hwnd);
   s_isDragging = true;
   // SetCapture 让 mouse move 即使鼠标移出 dialog client 区也能收到
   SetCapture(hwnd);

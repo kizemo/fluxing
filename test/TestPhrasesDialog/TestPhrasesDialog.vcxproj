@@ -50,7 +50,14 @@
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>$(SolutionDir)\include;$(SolutionDir)\WeaselServer;$(BOOST_ROOT);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- v0.19.0.57 (Phase K4 fix): vcxproj 仍引用 WeaselServer\PhrasesDialog.cpp
+        (v0.19.0.50 Phase K refactor 把 PhrasesDialog 移到 FluxingPhrasesDialog\),
+        7 commits 没 update vcxproj → TestPhrasesDialog 从 v0.19.0.50 起 build fail,
+        ship gate 单元测试 7 ship 版本都跳过了。修法: include path 加 FluxingPhrasesDialog,
+        ClCompile 改 source 路径 (FluxingPhrasesDialog\PhrasesDialog.cpp +
+        FluxingPhrasesDialog\ModalChrome.cpp)。WeaselServer include path 保留以防
+        其他依赖。 -->
+      <AdditionalIncludeDirectories>$(SolutionDir)\include;$(SolutionDir)\WeaselServer;$(SolutionDir)\FluxingPhrasesDialog;$(BOOST_ROOT);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <FunctionLevelLinking>true</FunctionLevelLinking>
@@ -74,7 +81,7 @@
     <Midl />
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>$(SolutionDir)\include;$(SolutionDir)\WeaselServer;$(BOOST_ROOT);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)\include;$(SolutionDir)\WeaselServer;$(SolutionDir)\FluxingPhrasesDialog;$(BOOST_ROOT);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>true</MinimalRebuild>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -95,9 +102,10 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="TestPhrasesDialog.cpp" />
-    <ClCompile Include="..\..\WeaselServer\PhrasesDialog.cpp" />
-    <!-- v0.19.0.31: OnPaint now uses ModalChrome helper -->
-    <ClCompile Include="..\..\WeaselServer\ModalChrome.cpp" />
+    <!-- v0.19.0.57 (Phase K4 fix): PhrasesDialog v0.19.0.50 移到 FluxingPhrasesDialog/ -->
+    <ClCompile Include="..\..\FluxingPhrasesDialog\PhrasesDialog.cpp" />
+    <ClCompile Include="..\..\FluxingPhrasesDialog\ModalChrome.cpp" />
+    <ClCompile Include="..\..\FluxingPhrasesDialog\PipeClient.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
