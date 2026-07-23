@@ -131,3 +131,14 @@ run_librime_*.err
 /TestOrphanRecovery.obj
 # FluxingConfigEditor build artifacts (2026-07-08 spec 050)
 /FluxingConfigEditor/*.obj
+
+# sftp_sync local config + credentials (2026-07-23, A5 + stop-hook review).
+# sftp_config.example.json is the git-tracked template; copy to sftp_config.json
+# locally. sftp.json holds SFTP credentials and must never be committed.
+sftp_config.json
+sftp.json
+
+# Python test/cache artifacts under repo (2026-07-23, A5 test suite ships)
+__pycache__/
+*.pyc
+*.pyo

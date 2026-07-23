@@ -1,0 +1,29 @@
+{
+  "_comment": "Template for sftp_config.json. Copy to sftp_config.json (gitignored) and edit paths. The script refuses to run if any path field contains a placeholder marker like REPLACE_WITH_, <path-to, or ${YOUR_.",
+
+  "_setup": "1. Copy this file to sftp_config.json. 2. Replace the sftpConfigPath with the absolute path to your sftp.json credentials file. 3. Replace localBase with the absolute path to your local staging directory. 4. Set remoteSubdir to the URL subdirectory under your SFTP remotePath. 5. Add or remove entries in files to match what you ship each release.",
+
+  "sftpConfigPath": "REPLACE_WITH_PATH_TO_sftp.json",
+  "localBase": "REPLACE_WITH_PATH_TO_LOCAL_STAGING_DIR",
+  "remoteSubdir": "pinyin",
+  "expectedMd5Source": "./_check_install_v2.ps1",
+
+  "files": [
+    {
+      "name": "fluxing-{version}-installer.exe",
+      "expectedKey": "expectedInstallerMd5"
+    },
+    {
+      "name": "version.json",
+      "expectedKey": null
+    },
+    {
+      "name": "appcast.xml",
+      "expectedKey": null
+    },
+    {
+      "name": "release-notes.html",
+      "expectedKey": null
+    }
+  ]
+}
