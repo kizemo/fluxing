@@ -52,14 +52,22 @@ Write-Host ""
 # 2. Installed WeaselServer.exe on disk (3 candidate paths)
 # ============================================================
 Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
-# v0.19.0.57 (Phase K4 UX polish): 3 bugs fixed (顶部蓝条去除 + title drag
-#   origin init + Enter 智能 add/edit) + test infra 修复 (vcxproj stale path
-#   to FluxingPhrasesDialog + Phase K1 stub YAML I/O test 适配)。MD5 跟
-#   v0.19.0.56 不同 (Phase K4 source 改动 → 真 binary 重建)。
-$expectedMd5 = 'D0E568BBBA749931C618B57DD14C27C4'  # v0.19.0.57 WeaselServer.exe (Phase K4, MSBuild Win32 Release, build 2026-07-23 13:34)
-$expectedFluxingMd5 = 'B92137F5B005807227CB1F3142AADF1F'  # v0.19.0.57 FluxingPhrasesDialog.exe (Phase K4, x64, build 2026-07-23 13:22)
-$expectedInstallerMd5 = '0CA9E93ADE8CF7EE2145FBDC44DB535B'  # v0.19.0.57 NSIS installer (Phase K4, build 2026-07-23 13:51)
-$expectedBuildTime = '2026-07-23 13:51:00'  # v0.19.0.57 NSIS timestamp
+# v0.19.0.58 (Phase K5 Bug 3+4 真修 hotfix): source 上 v0.19.0.57 phase K4
+#   装的 Enter 智能 add/edit 在装机端实际仍 fail (Esc 也无法退出)。真因(Phase
+#   K5 root cause): WS_POPUP + main.cpp 简单 message loop (无 IsDialogMessage)
+#   → 子控件 focus 时 WM_KEYDOWN VK_RETURN/VK_ESCAPE 不 bubble 到 PhrasesDialog
+#   WndProc → OnKeyDown handler 失效。Test 40/41/42 在 sandbox 模拟 SetFocus +
+#   SendMessage(hwnd, WM_KEYDOWN, ...) 直接派发到 dialog WndProc,绕过 input 子控件
+#   focus 路由, 所以 PASS 但装机 user 不显式 set focus → 失败。
+#   修法: subclass s_hInput (Edit control) WndProc hook WM_KEYDOWN VK_RETURN /
+#   VK_ESCAPE → SendMessage(parent, WM_KEYDOWN, ...) → OnKeyDown 触发。
+#   Test 43/44 (新增) 模拟 input focus path,验证子类 bubble 路径。
+#   WeaselServer.exe md5 跟 v0.19.0.57 一样(无 source 改动)。FluxingPhrasesDialog.exe
+#   md5 不同 (Phase K5 source 改动 → 真 binary 重建)。installer md5 不同 (含新 binary)。
+$expectedMd5 = 'D0E568BBBA749931C618B57DD14C27C4'  # v0.19.0.58 WeaselServer.exe (Phase K5, MSBuild Win32 Release, build 2026-07-23 17:10, source unchanged from v0.19.0.57)
+$expectedFluxingMd5 = '8E569EA7FE94CA5C27AE99ECF3B3C8B0'  # v0.19.0.58 FluxingPhrasesDialog.exe (Phase K5, x64, build 2026-07-23 17:22, 含 InputSubclassProc)
+$expectedInstallerMd5 = '312053473F9D41FCA65EF659F2185B9A'  # v0.19.0.58 NSIS installer (Phase K5, build 2026-07-23 17:22)
+$expectedBuildTime = '2026-07-23 17:22:00'  # v0.19.0.58 NSIS timestamp
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',

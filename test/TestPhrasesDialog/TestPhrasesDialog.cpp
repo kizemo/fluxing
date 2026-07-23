@@ -1554,6 +1554,95 @@ static void TestTitleBarClickHitAreaExpanded() {
   PhrasesDialog::Hide();
 }
 
+// v0.19.0.58 (Phase K5 Bug 3 真修 Test): input 子控件 focus 时按 Enter 应该
+//   bubble 到 PhrasesDialog parent WndProc 走 OnKeyDown 智能 add/edit 路径。
+//   真因(Phase K5 root cause): WS_POPUP + 简单 message loop → Edit focus 时
+//   WM_KEYDOWN 不 bubble → OnKeyDown handler 失效。Test 40/41 (Phase K4 ship)
+//   模拟 `SetFocus(s_hInput)` 显式 set + SendMessage WM_KEYDOWN 直接派发到
+//   dialog WndProc, 测试 PASS 但装机 user 不显式 set focus → fail。
+//   修法: InstallInputSubclass(s_hInput) hook WM_KEYDOWN VK_RETURN/VK_ESCAPE
+//   → SendMessage(parent, WM_KEYDOWN, ...) → OnKeyDown 触发。
+//   Test 43 模拟真实 input focus:不 SetFocus 改用 SendMessage(hInput, WM_KEYDOWN,
+//   VK_RETURN) → Edit 子控件 WndProc 是 subclass → 应该 bubble 到 parent。
+static void TestInputFocusEnterBubbles() {
+  std::cout
+      << "\n[Test 43] v0.19.0.58: input 子控件 focus + Enter → bubble 到 dialog"
+      << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("43.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+  HWND hInput = PhrasesDialog::s_hInput;
+  CHECK("43.1: s_hInput 已创建并 subclass 已装",
+        hInput != nullptr && IsWindow(hInput));
+
+  // 模拟真实 user flow: m_phrases 空, 无 selection
+  PhrasesDialog::MutablePhrases().clear();
+  PhrasesDialog::PopulateListCount(PhrasesDialog::s_hList);
+  PhrasesDialog::m_selectedIndex = -1;
+
+  // user 输入到 input + 按 Enter — 显式 set focus 模拟 click input 获焦点
+  SetFocus(hInput);
+  SetWindowTextW(hInput, L"subclass_test_phrase");
+
+  // 关键: 用 SendMessage(hInput, WM_KEYDOWN, VK_RETURN, 0) 而不是
+  //   SendMessage(hwnd, WM_KEYDOWN, ...) — 前者让 Edit 子控件 WndProc 先收到
+  //   (subclass 应该 bubble 到 parent)。Verify m_phrases 加新条目。
+  LRESULT lr = SendMessageW(hInput, WM_KEYDOWN, VK_RETURN, 0);
+  CHECK("43.2: SendMessage(hInput, WM_KEYDOWN, VK_RETURN) 返回 0 (subclass "
+        "处理)",
+        lr == 0);
+
+  // v0.19.0.58: focus 在 input, m_selectedIndex == -1 → Enter 走 ADD 路径
+  CHECK("43.3: m_phrases size = 1 (input focus ADD 触发)",
+        PhrasesDialog::Phrases().size() == 1);
+  if (PhrasesDialog::Phrases().size() == 1) {
+    CHECK_EQ("43.4: 新 phrase text = subclass_test_phrase",
+             ToNarrow(PhrasesDialog::Phrases()[0].text),
+             std::string("subclass_test_phrase"));
+  }
+
+  // input 应该清空 (跟 ADD 收尾一致)
+  wchar_t buf[256] = {};
+  GetWindowTextW(hInput, buf, 256);
+  CHECK("43.5: input 已清空 (ADD 收尾)",
+        std::wstring(buf) == std::wstring(L""));
+
+  PhrasesDialog::Hide();
+}
+
+// v0.19.0.58 (Phase K5 Bug 4 新 真修 Test): input 子控件 focus 时按 Esc 应该
+//   bubble 到 PhrasesDialog parent WndProc 走 OnKeyDown Hide 路径。
+//   修法同 Test 43 (subclass hook VK_ESCAPE 转派发)。
+static void TestInputFocusEscBubbles() {
+  std::cout
+      << "\n[Test 44] v0.19.0.58: input 子控件 focus + Esc → bubble → Hide"
+      << std::endl;
+  PhrasesDialog::SetYamlPath(L"");
+  PhrasesDialog::Show();
+  HWND hwnd = PhrasesDialog::s_hwnd;
+  CHECK("44.0: s_hwnd 已创建", hwnd != nullptr && IsWindow(hwnd));
+  HWND hInput = PhrasesDialog::s_hInput;
+  CHECK("44.1: s_hInput subclass 已装", hInput != nullptr && IsWindow(hInput));
+
+  CHECK("44.2: s_hwnd 还在 (Esc 之前)", hwnd != nullptr && IsWindow(hwnd));
+
+  // 模拟装机 user: input focus + 按 Esc → subclass bubble → OnKeyDown case
+  // VK_ESCAPE → Hide() → DestroyWindow → s_hwnd = null
+  LRESULT lr = SendMessageW(hInput, WM_KEYDOWN, VK_ESCAPE, 0);
+  CHECK("44.3: SendMessage(hInput, WM_KEYDOWN, VK_ESCAPE) 返回 0 (subclass "
+        "处理)",
+        lr == 0);
+
+  // v0.19.0.58: subclass 应已转派发到 parent WndProc → OnKeyDown case VK_ESCAPE
+  //   → Hide() → s_hwnd 应该 null
+  CHECK("44.4: s_hwnd == nullptr (subclass bubble 触发 Hide)",
+        PhrasesDialog::s_hwnd == nullptr);
+
+  // 注: OnDestroy 已经 RemoveInputSubclass, 重新 Show + Hide 测试干净路径
+  // 已经被 Test 24 覆盖, 这里只测 Esc bubble 这条路径。
+}
+
 // v0.19.0.57 (Phase K4 Bug 2 真修): 顶部 title bar 即时 drag 必须 capture
 //   drag origin, 否则 OnMouseMove 第一次触发时 s_dragOrigin/s_dragWndOrigin
 //   仍是初始 {0,0}, dialog 跳到 cursor 屏幕坐标 (snap-to-topleft)。
@@ -1919,11 +2008,16 @@ int main() {
 
   // v0.19.0.57 (Phase K4): title drag origin init (Bug 2)
   test::TestTitleBarDragNoJump();
-  // v0.19.0.57 (Phase K4): Enter 智能 add/edit (Bug 3)
+  // v0.19.0.57 (Phase K4): Enter 智能 add/edit (Bug 3) — 走 SendMessage(hwnd, WM_KEYDOWN)
+  //   直接派发到 dialog WndProc, 模拟 prior session (当时没装 subclass)
   test::TestInputEnterAddsWhenNoSelection();
   test::TestInputEnterEditsWhenSelected();
   // v0.19.0.57 (Phase K4): LVN_ITEMCHANGED 失选中清 input (Bug 3 polish)
   test::TestLVNItemChangedDeselectClearsInput();
+
+  // v0.19.0.58 (Phase K5): input focus + Enter/Esc bubble subclass 真修
+  test::TestInputFocusEnterBubbles();
+  test::TestInputFocusEscBubbles();
 
   std::cout << "\n================================================="
             << std::endl;

@@ -99,6 +99,44 @@ constexpr COLORREF kButtonBg = RGB(245, 245, 248);
 // 字体
 constexpr int kUiFontSize = 14;
 
+// ===== v0.19.0.58 (Phase K5 Bug 3+4 真修): Edit control WndProc subclass =====
+// 真因 (Phase K5 root cause): WS_POPUP window + main.cpp 简单 message loop
+//   (无 IsDialogMessage) → Edit 子控件 focus 时 WM_KEYDOWN VK_RETURN /
+//   VK_ESCAPE 不 bubble 到 PhrasesDialog parent WndProc → OnKeyDown handler
+//   失效 → 子控件 focus 时 Enter / Esc 无效果。修法: 用 SetWindowLongPtr
+//   subclass s_hInput, hook WM_KEYDOWN VK_RETURN / VK_ESCAPE → 转派发到
+//   parent dialog WndProc (SendMessage(s_hwnd, WM_KEYDOWN, VK_x, 0)) →
+//   OnKeyDown 触发逻辑。子控件其他消息 (char input, mouse, focus) 走原
+//   WNDPROC (CallWindowProcW) 保持原 edit control 行为。
+namespace {
+// v0.19.0.58: original WNDPROC 缓存,在 subclass 链回原 impl 时用。
+WNDPROC s_inputOrigWndProc = nullptr;
+
+LRESULT CALLBACK InputSubclassProc(HWND hInput, UINT msg, WPARAM wp,
+                                   LPARAM lp) {
+  // v0.19.0.58: VM_KEYDOWN VK_RETURN / VK_ESCAPE 直接派发到 PhrasesDialog
+  //   parent WndProc,不调原 WNDPROC(Edit WndProc default no-op 会吞掉)。
+  //   获取 parent = s_hwnd (PhrasesDialog). 走 SendMessage 让 OnKeyDown
+  //   case 触发:VK_RETURN → 智能 add/edit;VK_ESCAPE → Hide。
+  if (msg == WM_KEYDOWN && (wp == VK_RETURN || wp == VK_ESCAPE)) {
+    HWND hwndParent = (HWND)GetWindowLongPtrW(hInput, GWLP_HWNDPARENT);
+    if (hwndParent) {
+      SendMessageW(hwndParent, WM_KEYDOWN, wp, lp);
+      return 0;
+    }
+    if (s_inputOrigWndProc) {
+      return CallWindowProcW(s_inputOrigWndProc, hInput, msg, wp, lp);
+    }
+    return 0;
+  }
+  // v0.19.0.58: 其他消息走原 WndProc(Edit control default behavior 完整保留)
+  if (s_inputOrigWndProc) {
+    return CallWindowProcW(s_inputOrigWndProc, hInput, msg, wp, lp);
+  }
+  return DefWindowProcW(hInput, msg, wp, lp);
+}
+}  // namespace
+
 // 子控件 ID (v0.19.0.32 重新编号, v0.19.0.41 删 ID_BTN_ADD 重复)
 constexpr UINT ID_INPUT = 1010;        // 顶部 input
 constexpr UINT ID_BTN_ADD_TOP = 1011;  // 顶部 Add 按钮 (v0.19.0.41 唯一 Add)
@@ -732,6 +770,14 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
     SetFocus(s_hList);
   }
 
+  // v0.19.0.58 (Phase K5 Bug 3+4 真修): 装 input 子控件 WndProc subclass, 让
+  //   input focus 时 Enter/Esc bubble 到 PhrasesDialog parent WndProc 触发
+  //   OnKeyDown handler (智能 add/edit + Hide)。如果 pointer 在 mouse up
+  //   或用户用其他方式 set focus, subclass 仍有效。
+  if (s_hInput) {
+    PhrasesDialog::InstallInputSubclass(s_hInput);
+  }
+
   // Phase K1 (v0.19.0.50): IMM32 fallback 代码移除 — 独立进程不运行在
   // TSF shim 环境中，系统自动提供 IMM32 IME context，无需手动干预。
   // 原 v0.19.0.49 的 ImmGetContext/ImmAssociateContext/ImmSetOpenStatus
@@ -741,6 +787,10 @@ LRESULT PhrasesDialog::OnCreate(HWND hwnd) {
 }
 
 LRESULT PhrasesDialog::OnDestroy(HWND hwnd) {
+  // v0.19.0.58 (Phase K5): 卸 input subclass (避免 leak)
+  if (s_hInput) {
+    PhrasesDialog::RemoveInputSubclass(s_hInput);
+  }
   if (s_hFontUi) {
     DeleteObject(s_hFontUi);
     s_hFontUi = nullptr;
@@ -752,6 +802,38 @@ LRESULT PhrasesDialog::OnDestroy(HWND hwnd) {
   // v0.19.0.41 删 s_hBtnAdd
   s_hBtnEdit = s_hBtnDel = s_hBtnCancel = nullptr;
   return 0;
+}
+
+// v0.19.0.58 (Phase K5 Bug 3+4 真修): Install/Remove input 子控件 WndProc subclass
+//   实施 (s_inputOrigWndProc / InputSubclassProc 在上面匿名 namespace 已定义)。
+//   SetWindowLongPtr(GWL_WNDPROC) 缓存原 WndProc,subclass 用 CallWindowProcW
+//   调回原 impl 处理 non-Enter/Esc 消息 (input char, mouse, focus 等)。多次
+//   Install / Remove idempotent: 第二次 Install 检测已有 s_inputOrigWndProc
+//   直接 return (避免重 subclass chain 嵌套)。
+void PhrasesDialog::InstallInputSubclass(HWND hInput) {
+  if (!hInput)
+    return;
+  WNDPROC cur = (WNDPROC)GetWindowLongPtrW(hInput, GWLP_WNDPROC);
+  if (cur == &InputSubclassProc) {
+    // already subclassed
+    return;
+  }
+  s_inputOrigWndProc = cur;
+  SetWindowLongPtrW(hInput, GWLP_WNDPROC, (LONG_PTR)&InputSubclassProc);
+}
+
+void PhrasesDialog::RemoveInputSubclass(HWND hInput) {
+  if (!hInput)
+    return;
+  WNDPROC cur = (WNDPROC)GetWindowLongPtrW(hInput, GWLP_WNDPROC);
+  if (cur != &InputSubclassProc) {
+    // not subclassed (或被外部覆盖) — 不强清
+    return;
+  }
+  if (s_inputOrigWndProc) {
+    SetWindowLongPtrW(hInput, GWLP_WNDPROC, (LONG_PTR)s_inputOrigWndProc);
+  }
+  s_inputOrigWndProc = nullptr;
 }
 
 LRESULT PhrasesDialog::OnPaint(HWND hwnd) {
