@@ -1,5 +1,50 @@
 
 
+## [0.19.0.59-fluxing] - 2026-07-24
+
+### chore(scripts): sftp_sync 通用化 + A5 落地 (v0.19.0.59)
+
+**User-visible**: 与 v0.19.0.58 装机行为一致;installer 包含 source rebuild 后的最新 WeaselServer.exe (23:54) + FluxingPhrasesDialog.exe x64 (23:26)。A5 的 4 个工具改动 (`sftp_sync.py` / `sftp_config.example.json` / `test/sftp_sync/test_sftp_sync.py` / `.gitignore`) 对 user 透明,只影响发版流程。
+
+**包含 (A5 之前 commits)**:
+- `eccc201a` feat(scripts): sftp_sync generic release tool with atomic upload + 56 tests (4 轮 stop-hook review hardening)
+- v0.19.0.59 binary rebuild via L107 `build_v059.ps1` (`_buildflow.cmd` + `_nsis_only.cmd` 双步)
+
+**Verification (sandbox)**:
+- `python -m unittest test.sftp_sync.test_sftp_sync` → **56/56 PASS** in 2.147s
+- `python sftp_sync.py --version=0.19.0.59 --dry-run` → installer md5 `69FA60CD5A30763C970AD54867ED10D7` 跟 `_check_install_v2.ps1` git-trusted expected 一致 ✓
+- 装机 artifact 在 `output/archives/fluxing-0.19.0.59-installer.exe` (43,379,147 bytes) + `release/fluxing-0.19.0.59-installer.exe`
+- installer 7z extract: WeaselServer.exe mtime `2026-07-23 23:54:36` (新 build), FluxingPhrasesDialog.exe mtime `2026-07-23 23:26:40` (新 build) ✓
+
+**Files touched (v0.19.0.59)**:
+- `sftp_sync.py` (新建, 552 行)
+- `sftp_config.example.json` (新建, 29 行, git-tracked template)
+- `test/sftp_sync/test_sftp_sync.py` (新建, 746 行, 56 tests)
+- `.gitignore` (加 `sftp_config.json` / `sftp.json` / `__pycache__` / `*.pyc` / `*.pyo`)
+- `release/fluxing-0.19.0.59-installer.exe` (43,379,147 bytes, md5 `69FA60CD5A30763C970AD54867ED10D7`)
+- `output/archives/fluxing-0.19.0.59-installer.exe` (build artifact)
+- `_check_install_v2.ps1` (更新 v0.19.0.59 expected md5s)
+- `env.bat` + `weasel.props` (VERSION_PATCH bump, gitignored)
+- `CHANGELOG.md` (本 entry)
+- `build_v059.ps1` (新建, L107 双步路径 wrapper)
+
+**lessons-learned** (L107 二次强化):
+- L107-A (build_v059.ps1 L107 双步成功): `_buildflow.cmd` (msbuild weasel.sln /p:SolutionDir=...) + `_nsis_only.cmd` (makensis Exit 0) 完整 ship 链。`xbuild.bat weasel installer` 因 xmake nil-concat 失败 (vcvars32 后 INCLUDE 存在但 xmake 检测 path 异常), 不能 ship 用。
+- L107-B (installer stale binary 陷阱): 第一次跑 `_nsis_only.cmd` 后 installer archive 内嵌 13:34 老 WeaselServer.exe (因前次 xmake 失败但 NSIS 仍跑)。验证: `7z l installer.exe | grep WeaselServer.exe` 必须 mtime ≥ rebuild 时间, 否则重新 build。
+- L107-C (sftp_sync.py atomic upload 上线): 4 轮 stop-hook review 累计 8 个 blocker 全修 (fail-fast expectedKey / RejectPolicy / atomic swap-restore / shlex.quote / per-ship run-id / template + .gitignore) → 装机端 real-upload 风险大幅降低。
+- L107-D (`_check_install_v2.ps1` expectedMd5 must match installer build md5): 不更新 ps1 → sftp_sync dry-run 会 ABORT (fail-fast 设计)。本次更新 4 行 `$expectedMd5` / `$expectedFluxingMd5` / `$expectedInstallerMd5` / `$expectedBuildTime`。
+
+**装机 user flow 5 项验收** (v0.19.0.59 ship 后 user 再跑):
+1. 双击 `release\fluxing-0.19.0.59-installer.exe` → GUI 自动 taskkill + Stage 2 fallback (跟 v0.19.0.48+ 一致)
+2. 装机端 verify WeaselServer.exe md5 = `448DE04438A6B6BEE6D8155631BAFD58` (vs v0.19.0.58 的 `D0E568BB...`)
+3. 装机端 verify FluxingPhrasesDialog.exe md5 = `C969AEB31E24D9EE1468F8869150970D` (vs v0.19.0.58 的 `8E569EA7...`)
+4. Alt+. → PhrasesDialog (Phase K5 Enter/Esc 真修 hotfix 保留)
+5. SFTP 上传: `python sftp_sync.py --version=0.19.0.59` 原子同步到 `www.aiec.fun/pinyin/`
+
+**Ship**: `release\fluxing-0.19.0.59-installer.exe` 43,379,147 bytes, md5 `69FA60CD5A30763C970AD54867ED10D7`, sha256 `30DC6AA3ABCEA5192A2C6C420F1EB1FE73A5768EC27DFEE12965695CFB658CF8`
+
+---
+
 ## [0.19.0.52-fluxing] - 2026-07-22
 
 ### refactor(WeaselServer): out-of-process PhrasesDialog IPC 集成 + 删 in-process
