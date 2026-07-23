@@ -9111,3 +9111,104 @@ if (attached) AttachThreadInput(targetTid, currentTid, FALSE);
 - 累计 Recurrence-Count: 1 (v0.19.0.54 装机端发现, Bug 1 跟 L104 同根但修法
   不同; Bug 2 是新 lesson; Bug 3 是 L100-PhaseD-NM-DBLCLK 跨进程复发性)
 
+
+---
+
+## L106 — Phase K3 v0.19.0.55 catastrophic regression: 2 MiB zero WeaselServer.exe 装机 (2026-07-23)
+
+### 现象
+
+- v0.19.0.55 (commit 823bc1f) 装机后 user 报 4 件 catastrophic regression:
+  无法输出中文、无法调出设置栏、无法调出常用短语 UI、疑似算法服务失效。
+- _check_install_v2.ps1 显示 WeaselServer.exe 进程**完全未运行**;
+  HKLM\...\Run\WeaselServer autostart 触发但 loader 立即拒绝 (HRESULT 0x80131509,
+  "文件或目录损坏且无法读取")。
+- 三件套 MD5 全 match installer (2d1236c / 1a74c6f / 14dfdfb0) → 看似
+  装机成功, 实则 installer 内嵌的就是损坏 binary。
+
+### 根因 (单一可证伪, 多证据汇聚)
+
+**核心发现**: F:\soft\00selfmade\rime_claude\output\Win32\WeaselServer.exe
+是 **2,097,152 字节全零文件** (nonzero=0, MZ=0x0000, PE offset=0, machine=0x0000),
+**装机副本 D:\Program Files\fluxing\weasel\WeaselServer.exe 也是同一个全零文件**,
+MD5 假阳性即此来源。output\Win32\WeaselServer.pdb 仅 53,248 字节 (真实 Release
+PDB ≈ 24 MB → 同样是 stub)。output\WeaselSetup.exe 同样是 2 MiB 全零。
+
+构建链证据:
+- uild.log 显示 v0.19.0.54 ship 走 **MSBuild 路径** (WeaselServer.vcxproj ->
+  output\Win32\WeaselServer.exe + [DONE] Exit: 0), 产物真实。
+- v0.19.0.55 (commit 8559ed4 + 823bc1f) 改走 **uild_v055.ps1 → xbuild.bat
+  weasel installer → xmake 路径**。WeaselServer/xmake.lua 的 fter_build
+  (L19-27) 无条件 os.cp(targetdir/WeaselServer.exe, output/Win32) + os.cp(.../.pdb, ...)。
+- xmake link 步骤**静默失败**或仅写出 2 MiB 占位文件, build script 仍 exit 0,
+  installer 嵌入了零 EXE + 53KB stub PDB, 装机后 loader 拒绝。
+- WeaselDeployer.exe (831 KB, 真 MZ 4D 5A 90 00) 与 FluxingPhrasesDialog.exe
+  (1.4 MB, 真 MZ) 正常 → MSBuild 路径仍 work, 只 xmake WeaselServer target 出问题。
+
+为何装机端表现是 4 个 regression 而非 1 个: WeaselServer.exe 是 TSF shim 宿主 +
+rime algorithm service 调度者 + PhrasesDialog IPC server, 一个进程挂了 = 整个
+输入法链路全断。
+
+### 修复 (3 步, v0.19.0.56 ship)
+
+1. **F106-A build infra guardrail**: 在 WeaselServer/xmake.lua 的 fter_build
+   末尾加 EXE 完整性检查 (MZ signature / non-zero size / PE 头部 + code section 存在),
+   不通过则 aise 终止 build。**任何 xmake target 复制 EXE/DLL 出 output 都应该
+   强制走同一检查**。建议把检查抽到 	ools/build_verify.lua, 在 WeaselServer、
+   WeaselSetup 两个 xmake 目标里 require。
+2. **F106-B build_v0XX.ps1 wrapper guard**: 在每个 uild_v0XX.ps1 末尾强制 verify:
+   output\Win32\WeaselServer.exe + output\WeaselSetup.exe + output\FluxingPhrasesDialog.exe
+   必须 (a) size > 1 MB, (b) [0..1] == "MZ", (c) PE machine 与架构一致。失败即
+   exit 1, 不进入 installer 阶段。
+3. **F106-C 装机端 rapid recovery 文档化**: 写一个 _recover_zero_weaselserver.ps1
+   脚本, 检测 WeaselServer.exe < 1 MB / 无 MZ / 全零时, 自动 	askkill + 卸装
+   + 静默重装 (走 sandbox-verify ime-verify.ps1 流程), 作为真机 fail-fast 工具。
+
+### 装机端配套 fix (装机症状虽被主因覆盖, 仍需处理)
+
+- HKLM\SOFTWARE\WOW6432Node\Microsoft\CTF\KnownClasses 有 Fluxing Text Service,
+  但 HKLM\SOFTWARE\Microsoft\CTF\KnownClasses (native 64-bit) 没有。NSIS 32-bit
+  WriteRegStr 在 64-bit OS 上落到 WOW6432Node 重定向 hive, TSF 64-bit 进程读
+  native hive 找不到 → 第二次爆雷隐患。install.nsi 改用 SetRegView 64 或
+  ${DisableX64FsRedirection} 包裹 KnownClasses 写入。
+- TSF Category/LanguageProfile 在 native HKLM 写入正确,  x0804 Enable=1 → TSF
+  能定位 TIP, 但 EXE 是零字节所以 TIP 仍 register 失败 → **不是主因**, 仅作 hardening。
+
+### 防重犯
+
+- **任何 build_v0XX.ps1** 必须先 verify 关键 EXE 再宣称 ship-ready; 在 build script
+  最后一段加 Test-Path + size check + MZ signature check 是最小可行。
+- **任何 ship 验证 (5-axis sanity check / E2E)** 都必须包含 MZ signature verification
+  而非只比较 MD5 — MD5 假阳性 = 双方都是零。
+- **Code review** 新增 checklist: 复制 EXE/DLL 到 output/ 的所有路径必须先 verify
+  source non-empty (防止 link 失败但 os.cp 仍 succeed 把空文件 copy 出去)。
+- **CLAUDE.md §2 必查清单**新增 L106 反模式: 「installer 内嵌 zero EXE」/「MD5
+  假阳性」/「xmake after_build 无 guardrail」。
+
+### Pattern-Key (L106)
+
+- uild.xmake.after_build.no-verify (主要) — xmake 的 os.cp(target, output)
+  没有 size/MZ verify, link 失败但 build exit 0, 输出 zero-file 进 installer
+- uild.false-positive-md5-on-zero-file (主要) — 当 source build 和 installed
+  copy 都是 zero 时 MD5 完美 match, 装机验证链失效
+- installer.nsis-32bit-knownclasses-redirected-to-wow6432node (次要) — NSIS 32-bit
+  写 HKLM 落到 WOW6432Node, 64-bit TSF 读不到
+- process.weaselserver.not-running-after-install (表象) — 由 build 链路导致,
+  不是 runtime
+
+### Recurrence-Count
+
+- 1 (首次系统化记录; 之前 L09/L13/L17/L54/L66/L97/L100 都没碰过 build pipeline
+  zero-file 这种 specific failure mode)
+- 触发 L3 守门: 任何改 output/install.nsi / WeaselServer/xmake.lua /
+  uild_v0XX.ps1 / xbuild.bat 的提交, PR 必带「关键 EXE size + MZ signature
+  verify」截图 / 输出
+
+### 关联文件 / 提交
+
+- 源 issue: 	ask.md Phase K3 T019 catastrophic regression
+- commit 823bc1f (chore release v0.19.0.55 T019 hotfix installer) — 装的是损坏 binary
+- commit 8559ed4 (fix WeaselServer + FluxingPhrasesDialog v0.19.0.55 hotfix) — 逻辑
+  本身可能无问题, 但 build pipeline 没把它编出真 EXE
+- 关联 lessons: L100 (NM_DBLCLK Hide 先于 INJECT) · L101 · L104 · L105
+- 关联规则文件: .claude/rules/build-toolchain.md (建议追加 L106 guardrail 段)
