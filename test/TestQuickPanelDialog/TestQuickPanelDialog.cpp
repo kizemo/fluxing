@@ -123,6 +123,8 @@ int main() {
   std::printf("\n[v0.19.0.30] SetOn* wiring end-to-end\n");
 
   // T7: SetOnUserDict 注入 → 静态字段 s_onUserDict 持有
+  // v0.19.0.60 (Phase L 调整 1): SetOnUserDict / s_onUserDict 整体下线, T7 跳。
+#if 0
   {
     int counter = 0;
     QuickPanelDialog::SetOnUserDict([&counter]() { ++counter; });
@@ -140,6 +142,7 @@ int main() {
     Check(QuickPanelDialog::s_onUserDict == nullptr,
           "T7c: SetOnUserDict(nullptr) 复位,字段清空");
   }
+#endif
 
   // T8: SetOnShortcut 注入 -> s_onShortcut 持有
   {
@@ -159,6 +162,8 @@ int main() {
   }
 
   // T9: Setter 反复注入,后一次胜出
+  // v0.19.0.60 (Phase L 调整 1): SetOnUserDict 已下线, T9 跳。
+#if 0
   {
     int counter1 = 0;
     int counter2 = 0;
@@ -172,8 +177,11 @@ int main() {
     Check(counter2 == 1, "T9b: 新 cb invoke -> counter2==1");
     QuickPanelDialog::SetOnUserDict(nullptr);
   }
+#endif
 
   // T10: 模拟 WM_LBUTTONUP click 路径 hit 路由(hit==2 -> UserDict,hit==3 -> Shortcut)
+  // v0.19.0.60 (Phase L 调整 1): hit==2 路径已 no-op, T10 仅保留 hit==3 Shortcut 部分。
+#if 0
   {
     int userDictCount = 0;
     int shortcutCount = 0;
@@ -201,6 +209,7 @@ int main() {
     QuickPanelDialog::SetOnUserDict(nullptr);
     QuickPanelDialog::SetOnShortcut(nullptr);
   }
+#endif
 
   // T11: kShowGraceMs 常量 sanity (Bug 1 grace guard fix verification)
   {

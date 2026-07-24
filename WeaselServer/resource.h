@@ -36,16 +36,17 @@
 // spec 042: Alt+. global hotkey → PhrasesDialog::Show
 #define ID_HOTKEY_PHRASES_DOT          9002
 
-// spec 044: Ctrl+Shift+U global hotkey → UserDictionary::Show
-#define ID_HOTKEY_USER_DICT            9003
-
 // spec 045 v0.19.0.28: Ctrl+Shift+K global hotkey → ShortcutSettings::Show()
 #define ID_HOTKEY_SHORTCUT             9004
 
-// v0.19.0.32-fix (Bug 3b): Alt+/ global hotkey → UserDictionary::Show()
-// (跟 QuickPanel Button 2 (UserDict) 共享入口)
+// v0.19.0.32-fix (Bug 3b): Alt+/ 原计划 → UserDictionary::Show() 但 v0.19.0.33 已 reroute 到 PhrasesDialog
+// (跟 QuickPanel Button 共享入口)
 //   / 键的虚拟键码是 VK_OEM_2 (= 0xBF)
+// v0.19.0.60 (Phase L 调整 1): ID 保留(行为已 reroute 到 PhrasesDialog),但宏名保留作为历史 audit
 #define ID_HOTKEY_USER_DICT_ALT_SLASH  9005
+
+// v0.19.0.60 (Phase L 调整 1): ID_HOTKEY_USER_DICT (9003) 删除 — Ctrl+Shift+U 已停用
+// 历史: spec 044 原本绑 UserDictionary::Show;现 UserDictionary 模块整体下线
 
 // spec 052 v0.18.31.0: enable QuickPanel always-show mode (20% alpha)
 #define ID_QUICKPANEL_ALWAYS_SHOW      40019

@@ -1,3 +1,36 @@
+# Task plan — Commit + Ship v0.19.0.59（A5）
+
+> 2026-07-23：承接 `handoff-after-a5-sftp-sync-2026-07-23.md`，用户已选择 Commit + Ship v0.19.0.59。
+> 当前范围：先安全提交 A5 的 4 个文件，再构建/验证 v0.19.0.59，最后按授权完成 tag、push 与 SFTP 原子同步。
+
+## 当前闭环
+
+| 步骤 | 状态 | Gate |
+|---|---|---|
+| 核对 A5 提交边界 | ✓ 完成 | 只允许 A5 4 文件，保留历史残留与 librime dirty |
+| 验证并提交 A5 | ✓ 完成 | 56/56 tests + 安全检查 + Conventional Commit |
+| 构建 v0.19.0.59 | ✓ 完成 | xmake/msbuild/test gate + RELEASE_BUILD=1 |
+| 验证 v0.19.0.59 | ✓ 完成 | PE/bytes + installer + dry-run/smoke |
+| 发布 v0.19.0.59 | ⏸ 已走 fallback (2c) | release commit/tag + SFTP 原子 upload 完成；GitHub push 失败已记 |
+| **K7 拆分 push** | ⏸ fallback (2c) | 2026-07-24: tag push 两次 HTTP 500（最小 payload 也 fail），Step 2a 拆分 push 跳过 — server-side 限制与 payload 大小无关。详见 `handoff-after-k7-push-result-2026-07-24.md` |
+
+## 执行记录
+
+- 2026-07-23：已读取 A5 handoff §3/§7，确认 A5 变更未 commit；`sftp_config.json` 必须保持 gitignored。
+- 2026-07-23：A5 commit `eccc201a` 落地（feat(scripts) sftp_sync 通用化 + 56 tests）。
+- 2026-07-23：env.bat / weasel.props bump 到 v0.19.0.59；`build_v059.ps1` 用 L107 双步 `_buildflow.cmd` + `_nsis_only.cmd` 路径。
+- 2026-07-24：v0.19.0.59 build 完整成功；WeaselServer.exe (md5 `448DE044...`) + FluxingPhrasesDialog.exe x64 (md5 `C969AEB3...`) + installer 41.37 MB (md5 `69FA60CD5A30763C970AD54867ED10D7`)。
+- 2026-07-24：release commit `1c0d711` (chore(release)) + tag `v0.19.0.59`。
+- 2026-07-24：sftp_sync atomic upload 成功 → `www.aiec.fun/pinyin/`，4 个文件 cross-source verify 全 OK。
+- 2026-07-24：**K7 拆分 push 失败，已走 fallback (2c) 跳过 GitHub**。Step 1 tag push 两次都 HTTP 500（最小 payload 也 fail，说明 server-side 限制与 payload 大小无关）；Step 2a 拆分 push 未尝试直接放弃。本地 commit `eccc201a` + `1c0d711` + tag `v0.19.0.59` + installer `69FA60CD5A30763C970AD54867ED10D7` 全部完好。下个版本 ship 时再合并 push。
+
+## 未完成项（user 决策）
+
+- **K7 push 重试**（推迟）：等下个版本 ship 时合并 push。当前 ship 路径走 SFTP `www.aiec.fun/pinyin/` 已成功，**装机端交付不依赖 GitHub 同步**。
+- 装机 user flow 5 项验收：依赖 user 端跑 `_check_install_v2.ps1` 反馈 md5 跟 ps1 expected 对比。
+
+---
+
 # Task plan — Phase K3 T019 v0.19.0.55 catastrophic regression
 
 > 2026-07-23 真机反馈：无法输出中文、无法调出设置栏、无法调出常用短语 UI，疑似算法服务失效。
@@ -1108,7 +1141,42 @@ reg delete "HKCU\Software\Fluxing" /f
 
 **影响范围**: 不止 LayoutDialog, 任何 OnCreate 末尾的 helper 都要考虑这个时序 (e.g. SetWindowPos on dialog itself, animation setup 等)。
 
-### Phase H.8 — Loop 闭环 (本 Phase 末必跑)
+### Phase L — 下阶段任务计划（2026-07-24，用户 3 项调整）
+
+> **承接**: v0.19.0.59 ship + K7 push 走 fallback (2c) 后,user 重新定义下一阶段方向
+> **完整计划**: `plan-phase-L-2026-07-24.md`（小白语言描述）
+> **3 项调整**:
+> 1. **取消用户词典编辑模块** — 浮动设置栏的按钮 / 设置栏的按钮 / Ctrl+Shift+U 快捷键 / 全部代码 全部移除
+> 2. **所有输入法方案都支持中文标点** — 拼音/双拼/注音,中文模式下,按 `,` 出"，",按 `.` 出"。"
+> 3. **切换到火流猩输入法时,浮动设置栏自动弹出** — Win+Space 切到火流猩才弹;Alt+, 切换显示/隐藏
+>
+> **建议执行顺序**: 调整 1 + 调整 2 → 一起 ship (v0.19.0.60);调整 3 → 单独 ship (v0.19.0.61)
+> **不做的 (out of scope)**: K3 T019 装机事故调查 / librime 子模块 / 60+ untracked / K7 push 重试
+> **下次会话第一句话**: "承接 Phase L 计划,见 `plan-phase-L-2026-07-24.md`,先做调整 1 还是调整 2?"
+
+### Phase L.1 — v0.19.0.60 ship 进度（执行中）
+
+**已完成**:
+- ✅ Ctrl+Shift+U 热键移除 (WeaselServerApp.cpp + resource.h)
+- ✅ QuickPanel UserDict callback 移除 (QuickPanelDialog.cpp/h + WeaselServerApp.cpp/h)
+- ✅ UserDictionary.cpp 转 stub (1723 行 → 200 行 no-op)
+- ✅ ShortcutSettings Action_OpenUserDict 移除 (.h + .cpp)
+- ✅ test/Verifier2_G2_G12 G6-G9 用 `#if 0` 跳过
+- ✅ test/v0_19_0_32_e2e P1b / P2b / T_QP_UD 用 `#if 0` 跳过
+- ✅ test/v0_19_0_30_e2e P1b / P2b 用 `#if 0` 跳过
+- ✅ test/TestUserDictionary TestUserDictionary.cpp main() stub 出 SKIP 提示
+- ✅ test/TestShortcutSettings T06 enum 断言改用 OpenPhrases vs ReselectCandidate
+- ✅ env.bat / weasel.props bump 到 v0.19.0.60
+- ✅ build_v060.ps1 创建
+
+**未完成（build 跑中）**:
+- ⏸ 构建 + 测试 (后台跑 build_v060.ps1)
+- ⏸ _check_install_v2.ps1 expected md5 更新
+- ⏸ release commit + tag v0.19.0.60
+- ⏸ sftp_sync.py 原子上传
+- ⏸ 写 handoff
+
+## Phase H.8 — Loop 闭环 (本 Phase 末必跑)
 
 - **自检 checklist** (per LE-6.1.1):
   - [x] 产出文件存在: `release/fluxing-0.19.0.45-installer.exe` (43,164,269 bytes)

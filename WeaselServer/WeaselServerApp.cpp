@@ -10,14 +10,10 @@
 #include <d2d1.h>
 #pragma comment(lib, "d2d1.lib")
 
-// v0.19.0.29:QuickPanel button 2/3 callback 转发 setter。static 实现,
-// 把 fn 存到 QuickPanelDialog 内部 static 字段(QuickPanelDialog::s_onUserDict /
-// s_onShortcut),WeaselServerApp::Run() 在 m_server.Start 后调一次。
-void WeaselServerApp::SetQuickPanelUserDictCallback(
-    QuickPanelDialog::OnShowUserDict fn) {
-  QuickPanelDialog::SetOnUserDict(fn);
-}
-
+// v0.19.0.29:QuickPanel button 3 callback 转发 setter (Shortcuts)。
+// static 实现, 把 fn 存到 QuickPanelDialog 内部 static 字段
+// (QuickPanelDialog::s_onShortcut),WeaselServerApp::Run() 在 m_server.Start 后调一次。
+// v0.19.0.60 (Phase L 调整 1): SetQuickPanelUserDictCallback 删除 — UserDictionary 模块下线。
 void WeaselServerApp::SetQuickPanelShortcutCallback(
     QuickPanelDialog::OnShowShortcut fn) {
   QuickPanelDialog::SetOnShortcut(fn);
@@ -54,11 +50,9 @@ LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
       fluxing::PhrasesDialogIPC::Show();
       return 0;
     }
-    if (w == ID_HOTKEY_USER_DICT) {
-      // spec 044 §3.2:Ctrl+Shift+U → UserDictionary::Show
-      UserDictionary::Show();
-      return 0;
-    }
+    // v0.19.0.60 (Phase L 调整 1): ID_HOTKEY_USER_DICT 分支删除 — Ctrl+Shift+U 热键
+    // 已下线 (UserDictionary 模块整体移除)。spec 044 §3.2 路由到 UserDictionary::Show
+    // 不再可达。
     if (w == ID_HOTKEY_SHORTCUT) {
       // spec 045 v0.19.0.28:Ctrl+Shift+K → ShortcutSettings::Show
       ShortcutSettings::Show();
@@ -151,12 +145,11 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
   };
 
   // 2) ALT+. (VK_OEM_PERIOD) → PhrasesDialogIPC::Show()  (v0.19.0.52 out-of-process)
-  // 3) Ctrl+Shift+U (0x55) → UserDictionary::Show  (spec 044 §3.2)
-  // 4) Ctrl+Shift+K (0x4B) → ShortcutSettings::Show  (spec 045 v0.19.0.28)
-  // 5) Alt+/ (VK_OEM_2) → PhrasesDialogIPC::Show  (v0.19.0.33 Phase A.1,
+  // 3) Ctrl+Shift+K (0x4B) → ShortcutSettings::Show  (spec 045 v0.19.0.28)
+  // 4) Alt+/ (VK_OEM_2) → PhrasesDialogIPC::Show  (v0.19.0.33 Phase A.1,
   //    之前 v0.19.0.32 cd6f61a9 错接 UserDictionary, Bug 3b 已撤回)
+  // v0.19.0.60 (Phase L 调整 1): Ctrl+Shift+U 移除 (用户决定删除 UserDictionary 模块)
   RegisterOrLog(L"Alt+.",         ID_HOTKEY_PHRASES_DOT,        MOD_ALT, VK_OEM_PERIOD);
-  RegisterOrLog(L"Ctrl+Shift+U",  ID_HOTKEY_USER_DICT,          MOD_CONTROL | MOD_SHIFT, 0x55);
   RegisterOrLog(L"Ctrl+Shift+K",  ID_HOTKEY_SHORTCUT,           MOD_CONTROL | MOD_SHIFT, 0x4B);
   RegisterOrLog(L"Alt+/",         ID_HOTKEY_USER_DICT_ALT_SLASH, MOD_ALT, VK_OEM_2);
 }
@@ -165,7 +158,6 @@ void WeaselServerApp::UnregisterPhrasesHotkey() {
   HWND hwndServer = m_server.GetHWnd();
   if (hwndServer) {
     ::UnregisterHotKey(hwndServer, ID_HOTKEY_PHRASES_DOT);
-    ::UnregisterHotKey(hwndServer, ID_HOTKEY_USER_DICT);  // spec 044
     ::UnregisterHotKey(hwndServer, ID_HOTKEY_SHORTCUT);   // spec 045
     ::UnregisterHotKey(hwndServer, ID_HOTKEY_USER_DICT_ALT_SLASH);  // v0.19.0.33
     if (m_ipcServerOrigWndProc) {
@@ -235,12 +227,12 @@ int WeaselServerApp::Run() {
   // 现在再加 Alt+.)。失败仅 log warning,不 crash(spec 042 §12 风险)。
   RegisterPhrasesHotkey();
 
-  // v0.19.0.29(mockups-v0.19.0.28 设计稿):把 QuickPanel hit==2 (Symbols) → UserDict,
-  // hit==3 (Settings) → Shortcut 接线。QuickPanelDialog::SetOn* setter 内部存 static
-  // std::function,callback 在 QuickPanelDialog::WndProc WM_LBUTTONUP click 路由触发。
+  // v0.19.0.29(mockups-v0.19.0.28 设计稿):把 QuickPanel hit==3 (Settings) → Shortcut 接线。
+  // QuickPanelDialog::SetOn* setter 内部存 static std::function,
+  // callback 在 QuickPanelDialog::WndProc WM_LBUTTONUP click 路由触发。
   // 这里调一次,SetOn* 是 idempotent(fn null 即清空),但 lifecycle 与 WeaselServerApp
   // 同,只在 Run 入口调一次即可。
-  SetQuickPanelUserDictCallback([]() { UserDictionary::Show(); });
+  // v0.19.0.60 (Phase L 调整 1): UserDict callback (hit==2) 删除 — UserDictionary 模块下线。
   SetQuickPanelShortcutCallback([]() { ShortcutSettings::Show(); });
 
   int ret = m_server.Run();

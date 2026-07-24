@@ -59,7 +59,7 @@ class ShortcutSettings {
     Action_SelectN,           // send: N (select candidate N)
     Action_OpenQuickPanel,    // custom: show QuickPanel
     Action_OpenPhrases,       // custom: show PhrasesDialog
-    Action_OpenUserDict,      // custom: show UserDictionary
+    // v0.19.0.60 (Phase L 调整 1): Action_OpenUserDict 删除 — UserDictionary 模块下线。
     Action_ReselectCandidate, // custom: reselect
     Action_SecondCandidate,   // custom: second candidate
     Action_TriggerDeploy,     // custom: trigger /deploy

@@ -138,7 +138,8 @@ static void TestHotkeyStruct() {
 static void TestHotkeyActionEnum() {
   // 各 enum 值不同
   EXPECT(ShortcutSettings::Action_ToggleChinese != ShortcutSettings::Action_ToggleFullHalf);
-  EXPECT(ShortcutSettings::Action_OpenPhrases != ShortcutSettings::Action_OpenUserDict);
+  // v0.19.0.60 (Phase L 调整 1): Action_OpenUserDict 删除 — 改用同 type 不同 value 的代换。
+  EXPECT(ShortcutSettings::Action_OpenPhrases != ShortcutSettings::Action_ReselectCandidate);
   EXPECT(ShortcutSettings::Action_TriggerDeploy != ShortcutSettings::Action_VerifyHotkey);
   // Action_None 是 0
   EXPECT(ShortcutSettings::Action_None == 0);
