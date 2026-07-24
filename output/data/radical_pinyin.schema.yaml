@@ -16,6 +16,7 @@ engine:
   processors:
     - key_binder
     - speller
+    - punctuator
     - selector
     - navigator
     - express_editor
@@ -30,6 +31,10 @@ engine:
 # v0.19.0.63 (Phase L 调整 2): 部件拆字方案补全中文标点配置。
 # 之前 radical_pinyin 完全无 punctuator 段, librime 会 fall back 到 default 但跟
 # double_pinyin / rime_ice 行为不一致。统一从 default.yaml 继承,跟其他 9 个方案对齐。
+# v0.19.0.64 (装机 bugfix): librime 必须在 engine.processors 显式列出 - punctuator
+#   才会调用 punct_segmentor + punct_translator。v0.19.0.63 加了 punctuator 段但漏了
+#   在 processors 注册,导致中文标点没生效 (user 反馈部件拆字按 , 出英文逗号)。
+#   现在跟 rime_ice / double_pinyin 对齐。
 punctuator:
   __include: default:/punctuator
   full_shape:

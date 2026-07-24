@@ -71,10 +71,15 @@ Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
 #   WeaselServerApp.cpp 加 WM_INPUTLANGCHANGE 钩子(切到火流猩时弹浮动栏)。
 #   MSBuild /t:Rebuild 真重建(verify 17:33 mtime 2026-07-24, installer extract 后
 #   WeaselServer.exe md5 == source build md5,无 L97 stale binary)。
-$expectedMd5 = '5CA3CFBEB9B0A34E66B1F94112601401'  # v0.19.0.63 WeaselServer.exe (MSBuild Win32 Release /t:Rebuild, build 2026-07-24 17:33, Phase L 调整 2+3: punctuator + WM_INPUTLANGCHANGE hook)
-$expectedFluxingMd5 = 'C969AEB31E24D9EE1468F8869150970D'  # v0.19.0.63 FluxingPhrasesDialog.exe (x64, source unchanged from v0.19.0.59)
-$expectedInstallerMd5 = '0D05F9F4BB1C75754DD52C0DC3BC1CC1'  # v0.19.0.63 NSIS installer (build 2026-07-24 17:51, MD5 = 0D05F9F4..., sha256 = 82990F0D...)
-$expectedBuildTime = '2026-07-24 17:51:00'  # v0.19.0.63 NSIS timestamp
+# v0.19.0.64 (Phase L 装机 bugfix): radical_pinyin 加 engine.processors: - punctuator
+#   (librime 必须在 processors 列表注册才会调 punct_segmentor, v0.19.0.63 漏注册导致
+#   中文标点没生效);WeaselServerApp.cpp 改 hook ImmGetDefaultIMEWnd(NULL) 拿
+#   WM_INPUTLANGCHANGE(v0.19.0.63 hook 在 IPC server window 上 = hidden + no focus,
+#   收不到切输入法广播,装机浮动栏不弹)。
+$expectedMd5 = 'D314072A5B7B2775D865759912F74EE6'  # v0.19.0.64 WeaselServer.exe (MSBuild Win32 Release /t:Rebuild, build 2026-07-24 20:54, Phase L 装机 bugfix: punctuator processor + ImmGetDefaultIMEWnd hook)
+$expectedFluxingMd5 = 'C969AEB31E24D9EE1468F8869150970D'  # v0.19.0.64 FluxingPhrasesDialog.exe (x64, source unchanged from v0.19.0.59)
+$expectedInstallerMd5 = 'EA510285DED7F791F536DECCF36E357F'  # v0.19.0.64 NSIS installer (build 2026-07-24 21:00, sha256 = 9526A97E...)
+$expectedBuildTime = '2026-07-24 21:00:00'  # v0.19.0.64 NSIS timestamp
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',

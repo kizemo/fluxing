@@ -1,5 +1,49 @@
 
 
+## [0.19.0.64-fluxing] - 2026-07-24
+
+### fix(WeaselServer): v0.19.0.63 ship 装机 bugfix — 中文标点生效 + 切输入法弹浮动栏
+
+**User-visible (4 个症状修复)**:
+1. 部件拆字方案(radical_pinyin)中文模式按 `,` 出 "，",按 `.` 出 "。" (v0.19.0.63 加了 `punctuator:` 段但漏在 `engine.processors` 注册, librime 不会调 punct_segmentor)
+2. Win+Space 切到火流猩输入法时,浮动设置栏自动弹出 (v0.19.0.63 把 WM_INPUTLANGCHANGE 钩子挂在 IPC server window 上,该窗口 hidden + 无 focus, 收不到 IME 切换广播)
+3. 切到其他方案 (拼音/小鹤双拼/...) 按 `,` 出 "，" (回归, 没受影响)
+4. 按 Alt+, 能收起, 再按能重新显示 (回归)
+
+**调整 2 修复**:
+- `output/data/radical_pinyin.schema.yaml` `engine.processors` 加 `- punctuator` (librime 必须显式注册才会调 punct_segmentor + punct_translator)
+- 跟 rime_ice / double_pinyin / 其他 8 个方案对齐 (engine.processors 都已含 `- punctuator`)
+- 装机端验证: installer 内嵌 schema yaml 17.5 行 = `    - punctuator`
+
+**调整 3 修复**:
+- `WeaselServer/WeaselServerApp.cpp` `RegisterPhrasesHotkey()` 加 `m_hwndImeDefault = ::ImmGetDefaultIMEWnd(NULL)` 子类化
+- 新 `ImeLangChangeSubclassProc` (static WNDPROC) 只 hook `WM_INPUTLANGCHANGE` → `QuickPanelDialog::Show()` 触发逻辑
+- `PhrasesHotkeySubclassProc` 还原成 spec 042 原始 hotkey-only 路径 (v0.19.0.63 时把 WM_INPUTLANGCHANGE 误加到这里)
+- `UnregisterPhrasesHotkey()` 同步还原两个子类化
+- 原理: Windows 把 WM_INPUTLANGCHANGE 发给当前 focus 的 top-level 窗口,**不**发给 hidden IPC server window; ImmGetDefaultIMEWnd 返回 Windows 自动管理的 hidden IME 窗口, **专门**接收 IME 切换广播
+
+**WM_HOTKEY 路由回归风险评估**:
+- v0.19.0.63 ship 时 uncommit `PhrasesHotkeySubclassProc` 把 `WM_HOTKEY` 的 `if (w == ID_HOTKEY_PHRASES_DOT) {}` 守卫误删 → 所有 hotkey 都劫持成 phrases
+- v0.19.0.64 已恢复三守卫 (PHRASES_DOT / SHORTCUT / USER_DICT_ALT_SLASH) → Alt+, / Ctrl+Shift+K / Alt+. 行为正常
+- 装机回归: Alt+, toggle (v0.19.0.60+) / Alt+. phrases / Ctrl+Shift+K shortcut 全部仍 work
+
+**Verification (sandbox, 待装机 user)**:
+- installer md5: `EA510285DED7F791F536DECCF36E357F`
+- installer sha256: `9526A97E7420876D29A707176C1B291DF46E4678C9009B2336F6982E09701D7A`
+- size: 43,346,540 bytes
+- 内嵌 WeaselServer.exe md5: `D314072A5B7B2775D865759912F74EE6` (= source build 20:54, 无 L97 stale binary)
+- 内嵌 radical_pinyin.schema.yaml md5: `BEB5B74D0DD7B4D53D8386898DFA93D7` (含 `- punctuator`)
+
+**装机 user flow 4 项验收** (v0.19.0.64 ship 后 user 跑):
+1. 切到 `radical_pinyin` (部件拆字) → 中文模式按 `,` → 应出 "，" (Phase L 调整 2 bugfix ✓)
+2. 切到 `rime_ice` / `double_pinyin_flypy` → 按 `,` → 应出 "，" (回归 ✓)
+3. Win+Space 切到火流猩 → 浮动设置栏自动弹 (Phase L 调整 3 bugfix ✓)
+4. Win+Space 切到英文 → 不弹 ✓
+5. 按 Alt+, 收起浮动栏 → 再按显示 (回归 v0.19.0.62 ✓)
+6. `_check_install_v2.ps1` Module 1+2 md5 = `D314072A...` / installer md5 = `EA510285...`
+
+---
+
 ## [0.19.0.63-fluxing] - 2026-07-24
 
 ### feat(WeaselServer): Phase L 调整 2 + 3 — 中文标点补全 + 切输入法弹浮动栏

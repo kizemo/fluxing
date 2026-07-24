@@ -54,25 +54,6 @@ LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
                                                            UINT msg,
                                                            WPARAM w,
                                                            LPARAM l) {
-  // v0.19.0.63 (Phase L 调整 3): 切到 Fluxing 时弹浮动栏。
-  //   WM_INPUTLANGCHANGE 接收方:当前 focus 所在 top-level 窗口。WeaselServer
-  //   IPC server window 是 hidden top-level, Windows 也会发过来。
-  //   比较 new HKL (lParam) vs 启动时记录的 Fluxing HKL (s_fluxingHkl),相等
-  //   且上一次 != Fluxing → Show() 触发;反之 user 切走 → 仅记录。
-  if (msg == WM_INPUTLANGCHANGE) {
-    HKL newHkl = reinterpret_cast<HKL>(l);
-    if (s_fluxingHkl != NULL && newHkl != NULL) {
-      bool nowIsFluxing = (newHkl == s_fluxingHkl);
-      bool wasFluxing = (s_prevLangHkl == s_fluxingHkl);
-      if (nowIsFluxing && !wasFluxing) {
-        QuickPanelDialog::Show(false, nullptr, nullptr, nullptr, nullptr, nullptr,
-                               nullptr);
-      }
-      s_prevLangHkl = newHkl;
-    }
-    // 透传到 default WndProc (其他组件可能也关心 IME 切换)
-    // 不 return 0 — 继续走透传
-  }
   if (msg == WM_HOTKEY) {
     // v0.19.0.25-fix (spec 042 §10.4): Alt+. → PhrasesDialogIPC::Show()
     //   v0.19.0.52 (Phase K3 T010): out-of-process IPC 路径
@@ -105,6 +86,38 @@ LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
   return ::DefWindowProc(hwnd, msg, w, l);
 }
 
+// v0.19.0.64 (Phase L 调整 3 bugfix): WM_INPUTLANGCHANGE 子类化 — 单独 hook 在
+//   ImmGetDefaultIMEWnd(NULL) 默认 IME 窗口上。
+//   原因:WM_INPUTLANGCHANGE 只发给当前 focus 所在 top-level 窗口,**不**发给 WeaselServer
+//   的 hidden IPC server window。v0.19.0.63 在 IPC server window 上子类化 = 装机后
+//   Win+Space 切到 Fluxing 浮动栏不弹 (user 反馈)。
+//   ImmGetDefaultIMEWnd 返回的是 Windows 自动管理的 hidden IME 窗口,**专门**接收 IME 切换
+//   广播(包括 WM_INPUTLANGCHANGE)。子类化它即可拿到所有 IME 切换事件。
+//   这个 proc **只**处理 WM_INPUTLANGCHANGE,其他 message 全部透传。
+LRESULT CALLBACK WeaselServerApp::ImeLangChangeSubclassProc(HWND hwnd,
+                                                            UINT msg,
+                                                            WPARAM w,
+                                                            LPARAM l) {
+  if (msg == WM_INPUTLANGCHANGE) {
+    HKL newHkl = reinterpret_cast<HKL>(l);
+    if (s_fluxingHkl != NULL && newHkl != NULL) {
+      bool nowIsFluxing = (newHkl == s_fluxingHkl);
+      bool wasFluxing = (s_prevLangHkl == s_fluxingHkl);
+      if (nowIsFluxing && !wasFluxing) {
+        QuickPanelDialog::Show(false, nullptr, nullptr, nullptr, nullptr, nullptr,
+                               nullptr);
+      }
+      s_prevLangHkl = newHkl;
+    }
+    // 透传到 default WndProc,return 0 会阻断 IME 状态同步给其他组件
+  }
+  WeaselServerApp* owner = s_phrasesHotkeyOwner;
+  if (owner && owner->m_imeDefaultOrigWndProc) {
+    return ::CallWindowProc(owner->m_imeDefaultOrigWndProc, hwnd, msg, w, l);
+  }
+  return ::DefWindowProc(hwnd, msg, w, l);
+}
+
 void WeaselServerApp::RegisterPhrasesHotkey() {
   HWND hwndServer = m_server.GetHWnd();
   if (!hwndServer) {
@@ -120,6 +133,22 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
   ::SetWindowLongPtr(hwndServer, GWLP_WNDPROC,
                      reinterpret_cast<LONG_PTR>(
                          &WeaselServerApp::PhrasesHotkeySubclassProc));
+
+  // v0.19.0.64 (Phase L 调整 3 bugfix): 额外子类化 ImmGetDefaultIMEWnd(NULL) 拿 IME
+  //   切换广播。ImmGetDefaultIMEWnd 返回的 hwnd 在 v0.19.0.63 ship 时尚未在 IPC server
+  //   创建,通常要等第一次有 IME 上下文才创建。我们延后到 Run() 入口(此时 WeaselServer
+  //   已被设置成 active IME 之一, IME context 已就绪)再调一次 Register 保险。
+  // 装机实测:ImmGetDefaultIMEWnd(NULL) 在 WeaselServer 启动后立即可用,直接拿就行。
+  m_hwndImeDefault = ::ImmGetDefaultIMEWnd(NULL);
+  if (m_hwndImeDefault) {
+    m_imeDefaultOrigWndProc = reinterpret_cast<WNDPROC>(
+        ::GetWindowLongPtr(m_hwndImeDefault, GWLP_WNDPROC));
+    if (m_imeDefaultOrigWndProc) {
+      ::SetWindowLongPtr(m_hwndImeDefault, GWLP_WNDPROC,
+                         reinterpret_cast<LONG_PTR>(
+                             &WeaselServerApp::ImeLangChangeSubclassProc));
+    }
+  }
 
   // Phase A.2 (改进): 失败也写 log file (GUI app 无 console, stderr 看不到)
   // 路径: %APPDATA%\Rime\weasel-install.log (跟 installer 的 install log 共享, 便于排查)
@@ -195,6 +224,13 @@ void WeaselServerApp::UnregisterPhrasesHotkey() {
                          reinterpret_cast<LONG_PTR>(m_ipcServerOrigWndProc));
       m_ipcServerOrigWndProc = nullptr;
     }
+  }
+  // v0.19.0.64 (Phase L 调整 3 bugfix): 还原 IME default window 子类化
+  if (m_hwndImeDefault && m_imeDefaultOrigWndProc) {
+    ::SetWindowLongPtr(m_hwndImeDefault, GWLP_WNDPROC,
+                       reinterpret_cast<LONG_PTR>(m_imeDefaultOrigWndProc));
+    m_imeDefaultOrigWndProc = nullptr;
+    m_hwndImeDefault = nullptr;
   }
   s_phrasesHotkeyOwner = nullptr;
 }

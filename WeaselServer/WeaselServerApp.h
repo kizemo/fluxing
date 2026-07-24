@@ -104,4 +104,13 @@ class WeaselServerApp {
 
   // IPC server window 原 WNDPROC(子类化时保存,UnregisterPhrasesHotkey 时还原)
   WNDPROC m_ipcServerOrigWndProc = nullptr;
+  // v0.19.0.64 (Phase L 调整 3 bugfix): Win+Space 切输入法时,WM_INPUTLANGCHANGE 只发给
+  //   当前 focus 所在 top-level 窗口(foreground app),**不**发给 WeaselServer 的 hidden
+  //   IPC server window → 装机后浮动栏不弹 (v0.19.0.63 ship 后 user 反馈)。
+  //   修法: 另外子类化 ImmGetDefaultIMEWnd(NULL) 返回的默认 IME 窗口,该窗口是 Windows
+  //   自动管理的 hidden window,**专门**接收 IME 切换广播(包括 WM_INPUTLANGCHANGE)。
+  WNDPROC m_imeDefaultOrigWndProc = nullptr;
+  HWND m_hwndImeDefault = nullptr;
+  // WM_INPUTLANGCHANGE 子类化 WndProc — 仅在 m_imeDefaultOrigWndProc 钩子上跑
+  static LRESULT CALLBACK ImeLangChangeSubclassProc(HWND, UINT, WPARAM, LPARAM);
 };
