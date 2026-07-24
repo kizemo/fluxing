@@ -1,5 +1,50 @@
 
 
+## [0.19.0.60-fluxing] - 2026-07-24
+
+### refactor(WeaselServer): Phase L 调整 1 — 取消用户词典编辑模块
+
+**User-visible**:
+- 浮动设置栏(UserDict)按钮:点击不再触发任何 dialog(槽位仍画,后续会话可整槽删)
+- 设置栏(快捷键设置):移除"打开用户词典" builtin(Control+Shift+D 默认 mapping 移除)
+- 全局热键 Ctrl+Shift+U:已停用(系统级注册已 un-register)
+- Alt+/ 仍走 PhrasesDialog(行为未变,跟 v0.19.0.33 Phase A.1 reroute 一致)
+- librime 后端 `output/data/*.schema.yaml` 的 `user_dict:` 配置**保留**(那是 RIME 自动学习的 dict 文件,与 UserDictionary 编辑 UI 无关)
+
+**包含**:
+- `WeaselServer/UserDictionary.cpp` (1723 行 → 198 行 stub,所有方法 no-op,保留完整 API surface 维持 build 兼容性)
+- `WeaselServer/ShortcutSettings.{h,cpp}` 移除 `Action_OpenUserDict` enum + MakeBuiltin entry
+- `WeaselServer/QuickPanelDialog.{h,cpp}` 移除 `s_onUserDict` / `SetOnUserDict` / `OnShowUserDict` typedef
+- `WeaselServer/WeaselServerApp.{cpp,h}` 移除 `SetQuickPanelUserDictCallback` + Ctrl+Shift+U RegisterHotKey / UnregisterHotKey
+- `WeaselServer/resource.h` 移除 `ID_HOTKEY_USER_DICT 9003` define
+- `test/Verifier2_G2_G12/v0_19_0_32_G2_G12.cpp` G6-G9 段 `#if 0` skip
+- `test/v0_19_0_32_e2e/*` P1b / P2b / T_QP_UD 用 `#if 0` skip
+- `test/v0_19_0_30_e2e/*` P1b / P2b 用 `#if 0` skip
+- `test/TestUserDictionary/TestUserDictionary.cpp` main() stub 出 "Phase L skip" + return 0
+- `test/TestShortcutSettings/TestShortcutSettings.cpp` T06 enum assertion 改用 OpenPhrases vs ReselectCandidate (替 OpenUserDict)
+- `env.bat` + `weasel.props` bump v0.19.0.59 → v0.19.0.60
+- `build_v060.ps1` 新建 (L107 双步 wrapper 复用 v059 模板)
+
+**Verification (sandbox, 待 build 完成)**:
+- `output/archives/fluxing-0.19.0.60-installer.exe` (待 md5)
+- `release/fluxing-0.19.0.60-installer.exe` (待生成 + 上传)
+- 装机端 verify WeaselServer.exe md5 (待 build 出后填)
+
+**装机 user flow 5 项验收** (v0.19.0.60 ship 后 user 跑):
+1. Alt+. → PhrasesDialog (回归 v0.19.0.59)
+2. Ctrl+Shift+U → **无反应** (已移除, 这是预期)
+3. 浮动设置栏 UserDict 按钮 → **点击无反应** (已移除, 这是预期)
+4. 设置栏 → 找不到"打开用户词典"选项 (已移除)
+5. SFTP 上传: `python sftp_sync.py --version=0.19.0.60` 原子同步
+
+**不做的 (out of scope, 推 v0.19.0.61+)**:
+- librime `*.schema.yaml` 的 `user_dict:` 配置(那是后端 dict 文件,不动)
+- 浮动设置栏 UserDict 按钮槽位的整槽删除(后续会议可视 polish 跟进)
+
+**Phase L 调整 2 (中文标点) + 调整 3 (切输入法弹浮动栏) 留 v0.19.0.61+ 单 ship**。
+
+---
+
 ## [0.19.0.59-fluxing] - 2026-07-24
 
 ### chore(scripts): sftp_sync 通用化 + A5 落地 (v0.19.0.59)

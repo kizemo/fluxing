@@ -402,28 +402,14 @@ void TestListViewColumns() {
 }  // namespace test
 
 int main() {
-  // Set console to UTF-8 codepage to print CJK wide chars
-  SetConsoleOutputCP(65001);
-  SetConsoleCP(65001);
-  std::wcout.setf(std::ios::unitbuf);
-  std::wcerr.setf(std::ios::unitbuf);
-  std::wcout << L"=== TestUserDictionary (spec 044 v0.19.0.28) ===" << std::endl;
-  std::wcout.flush();
-
-  test::TestYamlParseOk();
-  test::TestYamlParseMissingFile();
-  test::TestYamlParseSkipsBadEntry();
-  test::TestYamlWriteBomCrlf();
-  test::TestEntriesToTxt();
-  test::TestPopulateListCount();
-  test::TestApplySearchFilter();
-  test::TestMockDeploy();
-  test::TestInjectDeployFn();
-  test::TestBackupFn();
-  test::TestStateEnum();
-  test::TestListViewColumns();
-
-  std::wcout << L"\n=== Result: " << test::g_passed << L" passed, "
-            << test::g_failed << L" failed ===" << std::endl;
-  return test::g_failed == 0 ? 0 : 1;
+  // v0.19.0.60 (Phase L 调整 1): UserDictionary 模块下线, 整 TestUserDictionary 套件 skip。
+  // 保留 binary 让 test vcxproj 仍能 build, 但所有 test call 整体 no-op。
+  std::wcout << L"=== TestUserDictionary (v0.19.0.60 SKIP — Phase L 调整 1: UserDictionary 模块下线) ==="
+             << std::endl;
+  std::wcout << L"=== Result: 0 passed, 0 failed (skipped) ===" << std::endl;
+  return 0;
+  // 原 spec 044 v0.19.0.28 测内容全部 disable (UserDictionary stub 行为 no-op, 跑必 fail):
+  //   test::TestYamlParseOk / TestYamlParseMissingFile / TestYamlParseSkipsBadEntry /
+  //   TestYamlWriteBomCrlf / TestEntriesToTxt / TestPopulateListCount / TestApplySearchFilter /
+  //   TestMockDeploy / TestInjectDeployFn / TestBackupFn / TestStateEnum / TestListViewColumns
 }

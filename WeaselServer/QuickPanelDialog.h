@@ -90,9 +90,10 @@ class QuickPanelDialog {
   static OnToggle s_onFullwidth;
   static OnClick  s_onSymbols;
   static OnClick  s_onLogin;
-  // v0.19.0.29:hit==2 → UserDict,hit==3 → Shortcut。Setter 注入(与 Show() 7 参
-  // 路径并存;Show 路径的 onSymbols/onLogin 仍是 placeholder)。
-  static OnShowUserDict s_onUserDict;
+  // v0.19.0.29:hit==3 → Shortcut。Setter 注入(与 Show() 7 参 路径并存;
+  // Show 路径的 onSymbols/onLogin 仍是 placeholder)。
+  // v0.19.0.60 (Phase L 调整 1): s_onUserDict 删除 — UserDictionary 模块下线。
+  // hit==2 (UserDict button) 仍画但 click no-op (后续会话可整槽删)。
   static OnShowShortcut s_onShortcut;
 
   // T005: hover/active 索引 (-1 = none)

@@ -207,7 +207,9 @@ static void TestBug1_PhrasesDialogGrace() {
 
 // =====================================================================
 // Bug 2: QuickPanel 按钮无效 — 验证 hit==2/3 路由修复
+// v0.19.0.60 (Phase L 调整 1): hit==2 UserDict 路径已 no-op, 整段 UserDict routing skip。
 // =====================================================================
+#if 0
 static void TestBug2_QuickPanelButtonRouting() {
   std::printf("\n[Bug 2] QuickPanel: UserDict / Shortcut button routing\n");
 
@@ -310,6 +312,7 @@ static void TestBug2_QuickPanelButtonRouting() {
   QuickPanelDialog::SetOnShortcut(nullptr);
   QuickPanelDialog::Hide();
 }
+#endif  // v0.19.0.60 skip Bug 2 UserDict end
 
 // =====================================================================
 // Bug 3: PhrasesDialog 点击就消失 — 验证 SetFocus 前 State_Editing 修复
@@ -416,6 +419,9 @@ static void TestRenderBitmap_PhrasesDialog() {
 // client bg。v0.19.0.30 bug: cpp:1240 SetLayeredWindowAttributes(LWA_ALPHA)
 // 跟 ULW_ALPHA 互斥 → RepaintLayered memDc 内容从不到屏。
 // 验证:Show() + GetDC 取像素 → RGB 非 0 (即 ULW 路径真生效)。
+//
+// v0.19.0.60 (Phase L 调整 1): UserDictionary 模块下线, P1b 整段 skip。
+#if 0  // v0.19.0.60 (Phase L 调整 1): UserDictionary 模块下线, P1b skip
 static void TestRenderBitmap_UserDict() {
   std::printf("\n[Bug P1b] UserDictionary: ULW_ALPHA path 实际到屏 "
               "(删 LWA_ALPHA 后 RepaintLayered 真生效)\n");
@@ -445,6 +451,7 @@ static void TestRenderBitmap_UserDict() {
 
   UserDictionary::Hide();
 }
+#endif  // v0.19.0.60 skip P1b end
 
 // Bug P1c: ShortcutSettings OnPaint 画整个 client bg (kBgTop → kBgBot)。
 // v0.19.0.30 bug: 只画 [0, kTitleH)=56px。v0.19.0.31 fix + 删 LWA_ALPHA。
@@ -514,6 +521,8 @@ static void TestPopulate_PhrasesDialog() {
   PhrasesDialog::Hide();
 }
 
+// v0.19.0.60 (Phase L 调整 1): UserDictionary 模块下线, P2b 整段 skip。
+#if 0  // v0.19.0.60 (Phase L 调整 1): UserDictionary 模块下线, P2b skip
 static void TestPopulate_UserDict() {
   std::printf("\n[Bug P2b] UserDictionary: PopulateList 真插入 list item\n");
   UserDictionary::SetYamlPath(L"");
@@ -534,6 +543,8 @@ static void TestPopulate_UserDict() {
 
   UserDictionary::Hide();
 }
+
+#endif  // v0.19.0.60 skip P2b end
 
 static void TestPopulate_ShortcutSettings() {
   std::printf("\n[Bug P2c] ShortcutSettings: PopulateTable 真插入 list item\n");
@@ -718,6 +729,8 @@ static void TestUserFlow_AltSlashHotkey() {
 }
 
 // T_QuickPanel_UserDict_Button: QuickPanel button routing → UserDict::Show
+// v0.19.0.60 (Phase L 调整 1): UserDictionary + SetOnUserDict 都下线, 整段 skip。
+#if 0  // v0.19.0.60 (Phase L 调整 1): UserDictionary 模块下线, T_QP_UD skip
 static void TestUserFlow_QuickPanelUserDict() {
   std::printf("\n[T_QP_UserDict] User flow: QuickPanel UserDict 按钮 → UserDict::Show\n");
   int userDictCount = 0;
@@ -755,6 +768,8 @@ static void TestUserFlow_QuickPanelUserDict() {
   QuickPanelDialog::Hide();
   UserDictionary::Hide();
 }
+
+#endif  // v0.19.0.60 skip T_QP_UD end
 
 // T_QuickPanel_Phrase_Button: QuickPanel button routing → PhrasesDialog::Show
 // v0.19.0.32: QuickPanel onPhrases 走 Show() 第 3 参数 (QuickPanelDialog.h:59),
@@ -979,15 +994,15 @@ int main() {
 
   TestBug1_QuickPanelGrace();
   TestBug1_PhrasesDialogGrace();
-  TestBug2_QuickPanelButtonRouting();
+  // v0.19.0.60 (Phase L 调整 1): TestBug2_QuickPanelButtonRouting 已 skip (依赖 UserDict 路径)。
   TestBug3_PhrasesDialogEditing();
 
   // v0.19.0.31 chrome paint pixel-level + populate
   TestRenderBitmap_PhrasesDialog();
-  TestRenderBitmap_UserDict();
+  // v0.19.0.60 (Phase L 调整 1): TestRenderBitmap_UserDict 已 skip (UserDictionary 模块下线)。
   TestRenderBitmap_ShortcutSettings();
   TestPopulate_PhrasesDialog();
-  TestPopulate_UserDict();
+  // v0.19.0.60 (Phase L 调整 1): TestPopulate_UserDict 已 skip。
   TestPopulate_ShortcutSettings();
 
   // v0.19.0.32 UX redo — 真 user flow 6 个 test
@@ -996,7 +1011,7 @@ int main() {
   TestUserFlow_SelectEditPhrase();
   TestUserFlow_DeletePhrase();
   TestUserFlow_AltSlashHotkey();
-  TestUserFlow_QuickPanelUserDict();
+  // v0.19.0.60 (Phase L 调整 1): TestUserFlow_QuickPanelUserDict 已 skip (依赖 UserDictionary)。
   TestUserFlow_QuickPanelPhrase();
 
   // v0.19.0.33 (Phase A.1-A.3) — 真 user flow 3 test

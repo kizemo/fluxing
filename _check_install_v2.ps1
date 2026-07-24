@@ -67,10 +67,10 @@ Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
 # v0.19.0.59 (A5 ship, sftp_sync 通用化 + 56 tests in git; source unchanged):
 #   WeaselServer.exe + FluxingPhrasesDialog.exe 都是 MSBuild Win32 Release + x64
 #   rebuild from v0.19.0.58 base, 装机器上 0 code change。installer md5 反映新 binary。
-$expectedMd5 = '448DE04438A6B6BEE6D8155631BAFD58'  # v0.19.0.59 WeaselServer.exe (MSBuild Win32 Release, build 2026-07-23 23:54, source unchanged from v0.19.0.58)
-$expectedFluxingMd5 = 'C969AEB31E24D9EE1468F8869150970D'  # v0.19.0.59 FluxingPhrasesDialog.exe (x64, build 2026-07-23 23:26, source unchanged from v0.19.0.58)
-$expectedInstallerMd5 = '69FA60CD5A30763C970AD54867ED10D7'  # v0.19.0.59 NSIS installer (build 2026-07-24 00:04, MSBuild rebuild weasel.sln)
-$expectedBuildTime = '2026-07-24 00:04:00'  # v0.19.0.59 NSIS timestamp
+$expectedMd5 = '7E1E3FC376478F69DA41A547323498EC'  # v0.19.0.60 WeaselServer.exe (MSBuild Win32 Release, build 2026-07-24 11:38, Phase L 调整 1: UserDictionary 模块下线)
+$expectedFluxingMd5 = 'C969AEB31E24D9EE1468F8869150970D'  # v0.19.0.60 FluxingPhrasesDialog.exe (x64, source unchanged from v0.19.0.59, shipped binary unchanged)
+$expectedInstallerMd5 = 'B3CC278B222D1685C3B162EC7D26C4AF'  # v0.19.0.60 NSIS installer (build 2026-07-24 11:40, MSBuild rebuild weasel.sln)
+$expectedBuildTime = '2026-07-24 11:40:30'  # v0.19.0.60 NSIS timestamp
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',

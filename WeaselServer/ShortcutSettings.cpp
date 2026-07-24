@@ -351,10 +351,7 @@ bool ShortcutSettings::LoadDefaults(std::vector<Hotkey>& out) {
                             L"Alt+period",      L"\xe5\xb8\xb8\xe7\x94\xa8\xe7\x9f\xad\xe8\xaf\xad",    // 常用短语
                             L"accept: \"Alt+period\" custom: open_phrases",
                             L"custom: open_phrases"));
-  out.push_back(MakeBuiltin(Action_OpenUserDict,     L"always",
-                            L"Control+Shift+D", L"\xe7\x94\xa8\xe6\x88\xb7\xe8\xaf\x8d\xe5\x85\xb8",    // 用户词典
-                            L"accept: \"Control+Shift+D\" custom: open_user_dict",
-                            L"custom: open_user_dict"));
+  // v0.19.0.60 (Phase L 调整 1): Action_OpenUserDict 删除 — UserDictionary 模块下线。
   out.push_back(MakeBuiltin(Action_SecondCandidate,  L"has_menu",
                             L"grave",           L"\xe7\xac\xac\xe4\xba\x8c\xe5\x80\x99\xe9\x80\x89",    // 第二候选
                             L"when: has_menu accept: grave send: 2",
