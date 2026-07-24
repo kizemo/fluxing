@@ -44,12 +44,11 @@ class QuickPanelDialog {
 
   // v0.19.0.29(spec 070 T007 follow-up + mockups-v0.19.0.28 设计稿):
   // 5 按钮中 0/4 仍 no-op (历史 placeholder,follow-up spec 加 ASCII mode toggle
-  // / 登录);1 Phrase / 2 UserDict (NEW) / 3 Shortcut (NEW)。
-  // UserDict / Shortcut 通过 SetOn* setter 注入,与现有 s_onPhrases (Show 时传)
-  // 路径平行。
-  using OnShowUserDict = std::function<void()>;
+  // / 登录);1 Phrase / 3 Shortcut (NEW)。
+  // Shortcut 通过 SetOn* setter 注入,与现有 s_onPhrases (Show 时传) 路径平行。
+  // v0.19.0.61 (Phase L 调整 1.1): OnShowUserDict / SetOnUserDict 整体删除 —
+  // UserDictionary 模块下线,button 2 完全 invisible + no-op。
   using OnShowShortcut = std::function<void()>;
-  static void SetOnUserDict(OnShowUserDict fn);
   static void SetOnShortcut(OnShowShortcut fn);
 
   // Public API (与 D2D 版本完全兼容)
@@ -236,9 +235,8 @@ class QuickPanelDialog {
   static void DrawIconSymbols(HDC hdc, int x, int y, COLORREF penColor);
   static void DrawIconSettings(HDC hdc, int x, int y, COLORREF penColor);
   static void DrawIconAccount(HDC hdc, int x, int y, COLORREF penColor);
-  // v0.19.0.33 (Phase A.3): UserDict button 专属 icon — 开着的书, 区别于 Account 人头像
-  // 替代 v0.19.0.32 cd6f61a9 错用 DrawIconAccount (跟 button 4 撞图) 的临时方案
-  static void DrawIconUserDict(HDC hdc, int x, int y, COLORREF penColor);
+  // v0.19.0.61 (Phase L 调整 1.1): DrawIconUserDict 已彻底删除 — UserDictionary 模块下线。
+  // button 2 hit + paint 都 no-op (case 2 在 paint loop 跳过)。
 
   // L81: COM 一次性初始化(WIC 创建需要 STA)。返回 S_OK 表示已初始化,
   // S_FALSE 表示已初始化过(无需重复),失败错误码需要退出。我们仅 initialize

@@ -1,5 +1,48 @@
 
 
+## [0.19.0.61-fluxing] - 2026-07-24
+
+### refactor(WeaselServer): Phase L 调整 1.1 — QuickPanel UserDict 按钮整槽 invisible
+
+**User-visible**:
+- 浮动设置栏:UserDict button 2 槽位 — 不再画任何图标(`case 2: /* no-op */`)
+- 浮动设置栏布局不变 (5 按钮循环 + hit test 索引保留,其他按钮索引 0/1/3/4 不动)
+- 其他 5 按钮 (Schema / Phrase / Settings / Account) 视觉与交互全部不变
+
+**User-not-visible (cleanup)**:
+- `QuickPanelDialog::DrawIconUserDict()` 函数彻底删除 (198 行 v0.19.0.60 stub 还引用过)
+- `QuickPanelDialog::OnShowUserDict` typedef 删除 (孤儿, v0.19.0.60 仅 `using` 还在)
+- `case 2` paint no-op + v0.19.0.60 hit no-op = button 2 完全不可见、不可点
+- `HitTest` 不改:hit==2 仍返回 2 (槽位占位),click no-op (跟 v0.19.0.60 一致)
+
+**承接 v0.19.0.60**:
+- 安装包 v0.19.0.60 UserDictionary::Show / Ctrl+Shift+U / QuickPanel hit no-op / ShortcutSettings row 已删除
+- 本次把 button 2 视觉本身也删掉 (v0.19.0.60 留 visible icon no-op, user 反馈"按钮没意义了")
+
+**包含**:
+- `WeaselServer/QuickPanelDialog.cpp` 删 `case 2: DrawIconUserDict(...)` 调用 + `DrawIconUserDict()` 函数体 (~17 行删除)
+- `WeaselServer/QuickPanelDialog.h` 删 `DrawIconUserDict` 声明 + `OnShowUserDict` typedef (`SetOnUserDict` 已在 v0.19.0.60 删)
+- `env.bat` + `weasel.props` bump 0.19.0.60 → 0.19.0.61 (gitignored)
+- `build_v061.ps1` 新建 (L107 双步 wrapper)
+
+**Verification (sandbox, 待 build 完)**:
+- `output/archives/fluxing-0.19.0.61-installer.exe` (待 md5)
+- `release/fluxing-0.19.0.61-installer.exe` (待生成 + 上传)
+- 装机端 verify WeaselServer.exe md5 (待 build 出后填)
+
+**装机 user flow 5 项验收** (v0.19.0.61 ship 后 user 跑):
+1. Alt+. → PhrasesDialog (回归 v0.19.0.59+ ✓)
+2. Ctrl+Shift+U → 无反应 (回归 v0.19.0.60 ✓)
+3. 浮动设置栏:4 个按钮可见 (Schema / Phrase / Settings / Account) — button 2 槽位空, 不可点 ✓
+4. 浮动设置栏点 button 2 位置 → 无反应 (no-op, 不报错)
+5. SFTP 上传: `python sftp_sync.py --version=0.19.0.61` 原子同步
+
+**不做的 (out of scope)**:
+- ❌ layout 整槽删除 (5→4 buttons):hit test 索引变化太大,保持 5 槽但 case 2 no-op 是最低风险方案
+- ❌ Phase L 调整 2/3:留 v0.19.0.62+ 单 ship
+
+---
+
 ## [0.19.0.60-fluxing] - 2026-07-24
 
 ### refactor(WeaselServer): Phase L 调整 1 — 取消用户词典编辑模块
