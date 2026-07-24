@@ -424,22 +424,27 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
   // QuickPanel code remains in QuickPanelDialog.cpp for future rewrite;
   // nothing is deleted. WeaselServer can be built and run without
   // triggering any of the GDI+ crash paths.
-  if (false && ipc_id > 0) {  // L69-fix: disabled
-    QuickPanelDialog::EnableAlwaysShowMode(
-        []() { /* 1. 方案: no-op (no schema picker UI in v0.18.36) */ },
-        []() {
-          // 2. 词典: open user data folder
-          ShellExecuteW(NULL, NULL, WeaselUserDataPath().c_str(),
-                        NULL, NULL, SW_SHOWNORMAL);
-        },
-        []() { /* 3. 短语: no-op (spec 009 not yet) */ },
-        [](bool) { /* 4. 全半角: no-op (no rime_api handle here) */ },
-        []() {
-          // 5. 符号: open deployer
-          ShellExecuteW(NULL, NULL, L"WeaselDeployer.exe", L"/deploy",
-                        NULL, SW_SHOWNORMAL);
-        },
-        []() { /* 6. 登录: no-op (v2.1+ cloud sync) */ });
+  //
+  // ===== v0.19.0.65 (Phase L 装机 bugfix 2 — 真修 Phase L 调整 3) =====
+  // v0.19.0.64 ship 后 user 装机反馈 Win+Space 切到 Fluxing 浮动栏仍不弹。
+  // Root cause：
+  //   1. v0.19.0.64 走的 ImmGetDefaultIMEWnd(NULL) 路径在 TSF-aware Win11 不可靠
+  //      — WeaselServer.exe 是 hidden IPC server, 无 IME context, 拿到的默认
+  //      IME 窗口不会收到 Win+Space 广播的 WM_INPUTLANGCHANGE。
+  //   2. 真正可靠的 TSF 路径(WeaselTSF::OnActivated → m_client.FocusIn() IPC)
+  //      是 v0.19.0.63 的设计意图(spec 061 + spec 070 T201 后续 spec),但
+  //      L69-fix 残留 `if (false)` 一直没改回(只有 L81-fix 改了 FocusOut)。
+  // 修法：用 QuickPanelDialog::Show(false, nullptr × 6) 单次显示替代
+  //   EnableAlwaysShowMode (spec 074 撤回的"always-show"stick mode)。
+  //   FocusOut 路径 (L81-fix) 已经 Hide()，对称完美。
+  // 何时触发：用户切到 Fluxing → WeaselTSF 收到 OnActivated(true) →
+  //   m_client.FocusIn() → IPC 走这里 → Show。
+  // Don't enable EnableAlwaysShowMode: spec 074 撤回 sticky，因为 user 反馈
+  //   "开机就弹太烦"。
+  if (ipc_id > 0) {  // v0.19.0.65: re-enable L69-fix residue; use Show() not EnableAlwaysShowMode
+    DLOG(INFO) << "FocusIn auto-show QuickPanel: ipc_id=" << ipc_id;
+    QuickPanelDialog::Show(false, nullptr, nullptr, nullptr, nullptr, nullptr,
+                           nullptr);
   }
 }
 

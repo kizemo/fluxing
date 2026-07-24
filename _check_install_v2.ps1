@@ -76,10 +76,19 @@ Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
 #   中文标点没生效);WeaselServerApp.cpp 改 hook ImmGetDefaultIMEWnd(NULL) 拿
 #   WM_INPUTLANGCHANGE(v0.19.0.63 hook 在 IPC server window 上 = hidden + no focus,
 #   收不到切输入法广播,装机浮动栏不弹)。
-$expectedMd5 = 'D314072A5B7B2775D865759912F74EE6'  # v0.19.0.64 WeaselServer.exe (MSBuild Win32 Release /t:Rebuild, build 2026-07-24 20:54, Phase L 装机 bugfix: punctuator processor + ImmGetDefaultIMEWnd hook)
-$expectedFluxingMd5 = 'C969AEB31E24D9EE1468F8869150970D'  # v0.19.0.64 FluxingPhrasesDialog.exe (x64, source unchanged from v0.19.0.59)
-$expectedInstallerMd5 = 'EA510285DED7F791F536DECCF36E357F'  # v0.19.0.64 NSIS installer (build 2026-07-24 21:00, sha256 = 9526A97E...)
-$expectedBuildTime = '2026-07-24 21:00:00'  # v0.19.0.64 NSIS timestamp
+# v0.19.0.65 (Phase L 装机 bugfix 2 — 真修 Phase L 调整 3): v0.19.0.64 装机后
+#   user 反馈 Win+Space 切到 Fluxing 浮动栏仍不弹 → 走 ImmGetDefaultIMEWnd 路径
+#   在 TSF-aware Win11 不可靠(hidden IPC server 无 IME context, 拿到的默认窗口
+#   收不到 WM_INPUTLANGCHANGE)。真修: RimeWithWeaselHandler::FocusIn 把 L69-fix
+#   残留 `if (false)` 改回 `if (true)`,用 QuickPanelDialog::Show(false, nullptr x 6)
+#   单次显示(替代 EnableAlwaysShowMode, spec 074 撤回 sticky)。TSF 路径
+#   (WeaselTSF::OnActivated → m_client.FocusIn() IPC) 才是真路径。同保留
+#   ImmGetDefaultIMEWnd 子类化作 fallback,加埋点验证 hypothesis。Bug 2 root cause
+#   不是 WM_INPUTLANGCHANGE 路径,而是 L69-fix residue 死了 FocusIn。
+$expectedMd5 = 'BFC81FA7481AF3C09B581D17F8D003D5'  # v0.19.0.65 WeaselServer.exe (MSBuild Win32 Release /t:Rebuild, build 2026-07-25 00:57, Phase L 装机 bugfix 2: re-enable FocusIn Show + 埋点)
+$expectedFluxingMd5 = '52EA1BA5F2FC08EC0FD3973BD9CCE0A4'  # v0.19.0.65 FluxingPhrasesDialog.exe (x64, RimeWithWeasel.lib 改 → 重链)
+$expectedInstallerMd5 = '1326F50CBCF4BE49EFDFB23CFC5D9667'  # v0.19.0.65 NSIS installer (build 2026-07-25 01:01)
+$expectedBuildTime = '2026-07-25 01:01:00'  # v0.19.0.65 NSIS timestamp
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',
@@ -103,7 +112,7 @@ foreach ($p in $paths) {
 if (-not $foundAny) {
     Write-Host "  No WeaselServer.exe found in any of the standard install paths!"
 }
-Write-Host "  Expected: md5=$expectedMd5 (v0.19.0.54 T018 ship, out-of-process PhrasesDialog + Option B foreground fix)"
+Write-Host "  Expected: md5=$expectedMd5 (v0.19.0.65 Phase L 装机 bugfix 2, re-enable FocusIn Show + 埋点)"
 Write-Host ""
 
 # ============================================================

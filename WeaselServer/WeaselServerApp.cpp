@@ -94,12 +94,41 @@ LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
 //   ImmGetDefaultIMEWnd 返回的是 Windows 自动管理的 hidden IME 窗口,**专门**接收 IME 切换
 //   广播(包括 WM_INPUTLANGCHANGE)。子类化它即可拿到所有 IME 切换事件。
 //   这个 proc **只**处理 WM_INPUTLANGCHANGE,其他 message 全部透传。
+// v0.19.0.65 (Phase L 装机 bugfix 2): 加埋点 — 验证 hypothesis 该路径在 TSF-aware Win11
+//   是否真的收到 WM_INPUTLANGCHANGE。如果装机后 log 显示 IMM32 路径根本没触发,
+//   即可确认 v0.19.0.64 fix 失效,真修在 RimeWithWeasel::FocusIn(同时改了)。
+//   Log 写 %APPDATA%\Rime\weasel-install.log (跟 install log 共享,便于排查)。
 LRESULT CALLBACK WeaselServerApp::ImeLangChangeSubclassProc(HWND hwnd,
                                                             UINT msg,
                                                             WPARAM w,
                                                             LPARAM l) {
   if (msg == WM_INPUTLANGCHANGE) {
     HKL newHkl = reinterpret_cast<HKL>(l);
+    // v0.19.0.65: 埋点 — 记录 WM_INPUTLANGCHANGE 实际接收情况
+    {
+      wchar_t path[MAX_PATH];
+      ExpandEnvironmentStringsW(L"%APPDATA%\\Rime\\weasel-install.log", path, MAX_PATH);
+      HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (h != INVALID_HANDLE_VALUE) {
+        SYSTEMTIME st; GetSystemTime(&st);
+        wchar_t wbuf[512];
+        int n = _snwprintf(wbuf, _countof(wbuf),
+                           L"[%04d-%02d-%02d %02d:%02d:%02d] [ImeLangSubclass] WM_INPUTLANGCHANGE "
+                           L"newHkl=%p s_fluxingHkl=%p s_prevLangHkl=%p\n",
+                           st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+                           newHkl, s_fluxingHkl, s_prevLangHkl);
+        if (n > 0) {
+          DWORD written;
+          size_t bytes = static_cast<size_t>(n) * sizeof(wchar_t);
+          WriteFile(h, wbuf,
+                    bytes > MAXDWORD ? MAXDWORD : static_cast<DWORD>(bytes),
+                    &written, nullptr);
+        }
+        CloseHandle(h);
+      }
+    }
     if (s_fluxingHkl != NULL && newHkl != NULL) {
       bool nowIsFluxing = (newHkl == s_fluxingHkl);
       bool wasFluxing = (s_prevLangHkl == s_fluxingHkl);
@@ -139,7 +168,34 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
   //   创建,通常要等第一次有 IME 上下文才创建。我们延后到 Run() 入口(此时 WeaselServer
   //   已被设置成 active IME 之一, IME context 已就绪)再调一次 Register 保险。
   // 装机实测:ImmGetDefaultIMEWnd(NULL) 在 WeaselServer 启动后立即可用,直接拿就行。
+  // v0.19.0.65 (Phase L 装机 bugfix 2): 埋点 — 验证 ImmGetDefaultIMEWnd 是否真的返回
+  //   non-NULL hwnd (即这条 path 是否能 hook 上)。如果 hwnd=NULL,IMM32 路径直接死亡,
+  //   无需关心 WM_INPUTLANGCHANGE 是否被广播。
   m_hwndImeDefault = ::ImmGetDefaultIMEWnd(NULL);
+  {
+    wchar_t path[MAX_PATH];
+    ExpandEnvironmentStringsW(L"%APPDATA%\\Rime\\weasel-install.log", path, MAX_PATH);
+    HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+      SYSTEMTIME st; GetSystemTime(&st);
+      wchar_t wbuf[512];
+      int n = _snwprintf(wbuf, _countof(wbuf),
+                         L"[%04d-%02d-%02d %02d:%02d:%02d] [RegisterPhrasesHotkey] "
+                         L"ImmGetDefaultIMEWnd(NULL) = 0x%p\n",
+                         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+                         m_hwndImeDefault);
+      if (n > 0) {
+        DWORD written;
+        size_t bytes = static_cast<size_t>(n) * sizeof(wchar_t);
+        WriteFile(h, wbuf,
+                  bytes > MAXDWORD ? MAXDWORD : static_cast<DWORD>(bytes),
+                  &written, nullptr);
+      }
+      CloseHandle(h);
+    }
+  }
   if (m_hwndImeDefault) {
     m_imeDefaultOrigWndProc = reinterpret_cast<WNDPROC>(
         ::GetWindowLongPtr(m_hwndImeDefault, GWLP_WNDPROC));
@@ -242,8 +298,33 @@ int WeaselServerApp::Run() {
   // v0.19.0.63 (Phase L 调整 3): 启动时记录当前 Fluxing HKL (假设装机后 Fluxing 是 active)。
   //   s_prevLangHkl 也初始化为相同值 — 这样启动即 active 时不会触发 "切换到 Fluxing"。
   //   后续 WM_INPUTLANGCHANGE 钩子在 PhrasesHotkeySubclassProc 比对。
+  // v0.19.0.65 (Phase L 装机 bugfix 2): 埋点 — 记录启动时 HKL,装机验证时跟 Win+Space
+  //   切到 Fluxing 后的 HKL 比对,确认 hypothesis。
   s_fluxingHkl = ::GetKeyboardLayout(0);
   s_prevLangHkl = s_fluxingHkl;
+  {
+    wchar_t path[MAX_PATH];
+    ExpandEnvironmentStringsW(L"%APPDATA%\\Rime\\weasel-install.log", path, MAX_PATH);
+    HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+      SYSTEMTIME st; GetSystemTime(&st);
+      wchar_t wbuf[512];
+      int n = _snwprintf(wbuf, _countof(wbuf),
+                         L"[%04d-%02d-%02d %02d:%02d:%02d] [Run] s_fluxingHkl=%p (initial)\n",
+                         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+                         s_fluxingHkl);
+      if (n > 0) {
+        DWORD written;
+        size_t bytes = static_cast<size_t>(n) * sizeof(wchar_t);
+        WriteFile(h, wbuf,
+                  bytes > MAXDWORD ? MAXDWORD : static_cast<DWORD>(bytes),
+                  &written, nullptr);
+      }
+      CloseHandle(h);
+    }
+  }
 
   // spec 074 (L75): QuickPanel 改纯 GDI 后,不再需要 ID2D1Factory 注入
   // QuickPanelDialog::InitializeD2D / ShutdownD2D 已删除

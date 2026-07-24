@@ -9339,3 +9339,115 @@ FluxingPhrasesDialog.exe (`output\FluxingPhrasesDialog.exe` mtime 不变,
 - 源: `test/TestPhrasesDialog/TestPhrasesDialog.cpp:1480-1548` (Test 43/44 新增)
 - NSIS installer: `output/archives/fluxing-0.19.0.58-installer.exe` md5
   `312053473F9D41FCA65EF659F2185B9A`
+
+---
+
+## L##-PhaseL-4-ImmGetDefaultIMEWnd-Dead — hidden IPC server has no IME context
+
+**Incident**: v0.19.0.64 ship (commit 55e7991) reportedly fixed "切输入法弹浮动栏"
+by subclassing `ImmGetDefaultIMEWnd(NULL)` to receive `WM_INPUTLANGCHANGE`. After
+install, user reports Win+Space still does not show the QuickPanel. Re-running
+systematic-debugging Phase 1 install verify confirms:
+- Installed `WeaselServer.exe` md5 = v0.19.0.64 source build md5 → not L97 stale
+- Installed `radical_pinyin.schema.yaml` md5 = v0.19.0.64 source asset md5 →
+  Bug 1 fix really delivered
+- Win+Space behaviour remains broken → v0.19.0.64 fix is itself broken
+
+**Root cause**: `ImmGetDefaultIMEWnd(NULL)` returns the calling thread's default
+IME window. WeaselServer.exe is a **hidden IPC server** with **no IME context**
+(it does not process text input). Modern Windows 11 in TSF-aware mode broadcasts
+IME-switch events through the TSF activation sink (`ITfInputProcessorProfile
+ActivationSink::OnActivated`) per foreground app thread, not through the IMM32
+default-IME window of an unrelated background process. The hidden window
+subclassed by `ImeLangChangeSubclassProc` therefore never receives
+`WM_INPUTLANGCHANGE` for foreground-app IME switches.
+
+**Lesson**: Any "detect system-wide IME switch" requirement **must** be wired
+through the TSF activation sink in foreground-app `WeaselTSF.dll` and forwarded
+via IPC to `WeaselServer.exe`, not through a `ImmGetDefaultIMEWnd` subclass in
+the out-of-process server. The reliable path is:
+`WeaselTSF::OnActivated(isActivated=true)` → `m_client.FocusIn()` IPC →
+`ServerImpl::OnFocusIn` → `RimeWithWeaselHandler::FocusIn` → `QuickPanelDialog::Show`.
+
+**Anti-patterns**:
+- **AP-L##-A**: Hooking `WM_INPUTLANGCHANGE` on `ImmGetDefaultIMEWnd(NULL)` from
+  a hidden IPC server process. The hook will install successfully but never fire
+  for foreground-app IME switches on TSF-aware Windows.
+- **AP-L##-B**: Mirroring the input switch logic in a non-TSF-aware process
+  (e.g., `WeaselServer.exe` without `WeaselTSF.dll` per thread). Always
+  ship-sync via IPC from the TSF shim.
+
+**How to apply**: When designing "detect IME switch" logic, ship the trigger
+through `WeaselTSF::OnActivated` and use the existing IPC `FocusIn` /
+`FocusOut` plumbing. Do **not** introduce a new window-hooks-based path.
+
+**关联文件 / 提交**:
+- commit `505c398` fix(WeaselServer+RimeWithWeasel) v0.19.0.65 (Phase L 装机 bugfix 2)
+- 源: `RimeWithWeasel/RimeWithWeasel.cpp:384-449` (FocusIn 真修)
+- 源: `WeaselServer/WeaselServerApp.cpp:97-160` (埋点 + 保留 IMM32 fallback)
+- 源: `WeaselTSF/WeaselTSF.cpp:221-257` (OnActivated trigger 真相)
+- 源: `WeaselServer/WeaselServerApp.cpp:142-181` (埋点验证 IMM32 path 是否触发)
+- NSIS installer: `output/archives/fluxing-0.19.0.65-installer.exe` md5
+  `1326F50CBCF4BE49EFDFB23CFC5D9667`
+
+---
+
+## L##-PhaseL-5-L69Fix-Residue — `if (false)` dead code lingers across versions
+
+**Incident**: v0.19.0.64 ship (commit 55e7991) attempted to fix "切输入法弹浮动栏"
+through a brand-new `ImmGetDefaultIMEWnd` subclass path. Real root cause was
+uncovered in v0.19.0.65 (commit 505c398): `RimeWithWeaselHandler::FocusIn`
+still had an `if (false && ipc_id > 0) { QuickPanelDialog::EnableAlwaysShowMode
+(...) }` dead-code block from L69-fix (v0.18.41.4, 2026-06-XX). L81-fix
+(commit c15745e, v0.19.0.11) only changed the symmetric `FocusOut` block from
+`if (false) { QuickPanelDialog::Hide(); }` to `Hide();` — **the `FocusIn` block
+was skipped**. The dead-code blocker then persisted through 8 ship versions
+(v0.19.0.12 → v0.19.0.64) without anyone noticing.
+
+**Root cause**: When L69 disabled QuickPanel to avoid GDI+ `Bitmap(IStream*)`
+heap corruption, both `FocusIn` and `FocusOut` paths were gated with
+`if (false)` to prevent the crash. spec 070 (L75) rewrote QuickPanel to pure
+GDI (no GDI+), restoring safe-to-show. L81-fix picked one of the two symmetric
+`if (false)` blocks to re-enable but not the other. No follow-up passed to
+audit the partner branch.
+
+**Lesson**: When leaving `if (false) { ... }` dead-code stubs as a temporary
+mitigation, **always** include a re-enable-trigger in the same commit (e.g., a
+flag-driven `#if 0` on a feature macro, or a tracking issue). Symmetric
+"enable / disable" dead-code paths must be re-enabled in **pairs**. Before
+removing a dead-code workaround, `git log -G "if \(false\)"` to find every
+match and re-enable them in the same change.
+
+**Anti-patterns**:
+- **AP-L##-A**: Setting `if (false)` as a temporary disable without a tracked
+  "re-enable when X" follow-up. The dead code blocks re-enable PRs from
+  finding it.
+- **AP-L##-B**: Re-enabling a symmetric "X / Y" pair in two different commits.
+  Audit all siblings in the same change.
+- **AP-L##-C**: Skipping an `if (false)` block because the matching sibling
+  was already re-enabled. The "refactor" uses new code, the dead code is
+  orphaned.
+
+**How to apply**: Use `grep -RIn "if (false)" WeaselServer RimeWithWeasel
+WeaselTSF` as a pre-commit check. Any hit must be paired with a tracked
+issue / spec / TODO. If a `if (false)` is a workload mitigation, the
+re-enable must be in the same commit that fixes the underlying issue.
+
+**Trigger L3 gate**: Any commit touching `FocusIn` / `FocusOut` / `OnActivated`
+/ `QuickPanel` triggers must include `grep -RIn "if (false)"` diff confirmation
+plus a `/t:Rebuild` smoke test verifying the dead-code path is unreachable
+from current call sites.
+
+**关联文件 / 提交**:
+- commit `a116b02` fix(WeaselServer) L69 QuickPanel DISABLED (initial if (false))
+- commit `c15745e` fix(WeaselServer+RimeWithWeasel) v0.19.0.11 L81 batch (only
+  re-enabled FocusOut)
+- commit `505c398` fix(WeaselServer+RimeWithWeasel) v0.19.0.65 (Phase L 装机
+  bugfix 2 — re-enable FocusIn to Show(false, nullptr x 6))
+- 源: `RimeWithWeasel/RimeWithWeasel.cpp:427-449` (re-enabled block)
+- 源: `RimeWithWeasel/RimeWithWeasel.cpp:444-449` (Show() call, not
+  EnableAlwaysShowMode)
+- 源: `RimeWithWeasel/RimeWithWeasel.cpp:514-522` (FocusOut L81-fix is okay)
+- NSIS installer: `output/archives/fluxing-0.19.0.65-installer.exe` md5
+  `1326F50CBCF4BE49EFDFB23CFC5D9667`
+

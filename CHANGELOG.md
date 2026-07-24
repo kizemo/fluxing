@@ -1,5 +1,71 @@
 
 
+## [0.19.0.65-fluxing] - 2026-07-25
+
+### fix(WeaselServer+RimeWithWeasel): v0.19.0.64 ship 装机 bugfix 2 — 真修 Phase L 调整 3 (切输入法弹浮动栏)
+
+**User-visible (1 个症状真修)**:
+1. Win+Space 切到火流猩输入法时,浮动设置栏自动弹出
+   (v0.19.0.64 改 hook `ImmGetDefaultIMEWnd(NULL)` 路径假设错 — WeaselServer 是 hidden IPC server,
+   无 IME context, 拿到的默认窗口收不到 WM_INPUTLANGCHANGE; 装机实测 Win+Space 仍不弹)
+2. 切到别的 IME (英文 / 搜狗 / 微软拼音等) **不弹** (回归, 没受影响)
+3. Alt+, 仍走 toggle (行为未变)
+
+**Root cause 重审视**:
+- v0.19.0.64 装机 user 反馈 Bug 2 仍不弹 → 重新走 systematic-debugging Phase 1-4
+- 装机端 WeaselServer.exe md5 = `D314072A5B7B2775D865759912F74EE6` = v0.19.0.64 build md5
+  → 不是 L97 stale binary, 修复确实装上
+- 装机端 radical_pinyin.schema.yaml md5 = `BEB5B74D0DD7B4D53D8386898DFA93D7` 含 `- punctuator` → Bug 1 fix 真生效
+- 真正 root cause: `RimeWithWeaselHandler::FocusIn` 里 L69-fix 残留 `if (false)` 死代码
+  - v0.18.41.4 L69 因 GDI+ heap corruption 临时禁掉 QuickPanel
+  - spec 070 重写 QuickPanel 改纯 GDI (L75) 修复 GDI+ bug 后, 应解禁 FocusIn
+  - L81-fix 只改了 FocusOut 路径 (`if (false) QuickPanelDialog::Hide()` → 改回 Hide)
+  - 但 FocusIn 路径的 `if (false) { EnableAlwaysShowMode }` 一直没改回 — 8 个版本的 dead code
+- 真正可靠的 TSF 路径: `WeaselTSF::OnActivated` (TSF-aware Win11) → `m_client.FocusIn()` IPC
+  → `RimeWithWeaselHandler::FocusIn` → 但 `if (false)` 堵死
+- v0.19.0.64 试图走全新 `ImmGetDefaultIMEWnd` 路径绕开 FocusIn, 但 WeaselServer 是 hidden
+  IPC server 无 IME context, `ImmGetDefaultIMEWnd` 返回的窗口收不到 foreground app
+  IME 切换广播
+
+**修复 (1 source change)**:
+- `RimeWithWeasel/RimeWithWeasel.cpp` `FocusIn()` 把 `if (false && ipc_id > 0)` 改回
+  `if (ipc_id > 0)`, `EnableAlwaysShowMode(6 callback)` 改 `QuickPanelDialog::Show(false, nullptr x 6)`
+  - 用 `Show` 单次显示而不是 `EnableAlwaysShowMode` 永远显示 (spec 074 撤回 sticky)
+  - `FocusOut` 路径 (L81-fix) 已经 `Hide()`, 对称完美
+- 加埋点 (`weasel-install.log`), 验证 hypothesis:
+  - `[Run] s_fluxingHkl=0x...` — 启动时记录 Fluxing HKL
+  - `[RegisterPhrasesHotkey] ImmGetDefaultIMEWnd(NULL) = 0x...` — 验证 IMM32 路径 hwnd
+  - `[ImeLangSubclass] WM_INPUTLANGCHANGE newHkl=... s_fluxingHkl=...` — 验证 IMM32 路径是否收到广播
+  - 装机 user 跑 Win+Space 后看 log, 哪种路径触发一目了然
+- 保留 `ImmGetDefaultIMEWnd` 子类化作 fallback (legacy / 装 TSF 不全场景)
+
+**Verification (待装机 user)**:
+- installer md5: `1326f50cbcf4be49efdfb23cfc5d9667`
+- size: 43,340,676 bytes
+- 内嵌 WeaselServer.exe md5: `BFC81FA7481AF3C09B581D17F8D003D5` (= source build 00:57, 无 L97 stale binary)
+- 内嵌 radical_pinyin.schema.yaml md5: `BEB5B74D0DD7B4D53D8386898DFA93D7` (Bug 1 fix preserved)
+
+**装机 user flow 5 项验收** (v0.19.0.65 ship 后 user 跑):
+1. Win+Space 切到火流猩 → 浮动设置栏自动弹 (Phase L 调整 3 Bugfix 2 ✓)
+2. Win+Space 切到英文 → 不弹 ✓
+3. 在不同 app 之间切焦点到带 Fluxing 的 text input → 浮动栏弹 (因为 OnActivated(true) 在每个 TSF thread 触发) — 此项是 spec 061 设计的副作用, 待 user 反馈是否接受
+4. 按 Alt+, 收起浮动栏 → 再按显示 (回归 v0.19.0.62 ✓)
+5. `_check_install_v2.ps1` Module 1+2 md5 = `BFC81FA...` / installer md5 = `1326f50c...`
+6. 期望 log (在 `%APPDATA%\Rime\weasel-install.log`):
+   - `[Run] s_fluxingHkl=0xXXXXXXXX` (启动时)
+   - `[RegisterPhrasesHotkey] ImmGetDefaultIMEWnd(NULL) = 0x...` (hwnd 非 NULL)
+   - 切到 Fluxing 后: `[ImeLangSubclass] WM_INPUTLANGCHANGE ...` (v0.19.0.64 路径, 期望看到 → fallback 路径 alive)
+   - 切到 Fluxing 后: FocusIn IPC 触发 `QuickPanelDialog::Show(false, nullptr x 6)` (真修路径, 期望看到)
+
+**L## 沉淀 (lessons-learned.md)**:
+- L##-PhaseL-4-ImmGetDefaultIMEWnd-Dead — WeaselServer.exe 是 hidden IPC server, 无 IME context,
+  `ImmGetDefaultIMEWnd(NULL)` 拿到的 hidden window 收不到 foreground app IME 切换广播。
+  真路径是 TSF-aware `WeaselTSF::OnActivated` → IPC `FocusIn` → `RimeWithWeaselHandler::FocusIn`。
+- L##-PhaseL-5-L69Fix-Residue — 任何 `if (false) { ... }` 残留都必须在后续解禁 sync 记录。
+  L81-fix commit 只改 FocusOut, 漏 FocusIn → 8 个版本 dead code。下次修这种 fix 必须
+  用 `grep -n "if (false)"` 检查整个 commit range。
+
+---
 ## [0.19.0.64-fluxing] - 2026-07-24
 
 ### fix(WeaselServer): v0.19.0.63 ship 装机 bugfix — 中文标点生效 + 切输入法弹浮动栏
