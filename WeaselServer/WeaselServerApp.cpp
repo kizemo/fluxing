@@ -33,20 +33,50 @@ WeaselServerApp::~WeaselServerApp() {}
 // Run 期间唯一,Stop 后 nullptr;子类 WNDPROC 命中 ALT+. 时通过此指针调 instance。
 WeaselServerApp* WeaselServerApp::s_phrasesHotkeyOwner = nullptr;
 
+// v0.19.0.63 (Phase L 调整 3): 启动时记录的 Fluxing HKL (即 IPC server 进程当前 active
+// TIP 的 HKL); WM_INPUTLANGCHANGE 检测"切换到 Fluxing"用。
+//   假设 WeaselServer 启动时 Fluxing 是 active IME — 这跟安装逻辑一致(用户装机后
+//   通常设火流猩为默认中文 IME)。
+HKL WeaselServerApp::s_fluxingHkl = NULL;
+HKL WeaselServerApp::s_prevLangHkl = NULL;
+
 // v0.19.0.25-fix(spec 042 §10.4):子类 WNDPROC,拦截 WM_HOTKEY (ID_HOTKEY_PHRASES_DOT)
 // → PhrasesDialogIPC::Show();其它 message 透传给原 WNDPROC(其中含 ServerImpl::OnHotkey
 // 处理 ID_HOTKEY_QUICK_PANEL)。不能改 ServerImpl(在 WeaselIPCServer/ 下,scope 之外),
 // 用 SetWindowLongPtr(GWLP_WNDPROC) 在 IPC server window 上子类化。
 // v0.19.0.52 (Phase K3 T010):PhrasesDialog 走 out-of-process IPC,见 PhrasesDialogIPC.cpp。
+// v0.19.0.63 (Phase L 调整 3): WM_INPUTLANGCHANGE 钩子 — 检测 user 切换到火流猩输入法,
+//   触发 QuickPanelDialog::Show() 让浮动设置栏自动弹出。
+//   Alt+, 仍走 toggle (在 spec 036 + v0.19.0.60+ QuickPanelDialog::ToggleMode 已 work)。
+// 设计参考 spec 074 v0.18.31.0 always-show mode 撤回原因 (用户反馈开机就弹太烦);
+// 这次只在 user 主动切到 Fluxing 时弹,Win+Space / 点语言栏 都会触发。
 LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
                                                            UINT msg,
                                                            WPARAM w,
                                                            LPARAM l) {
+  // v0.19.0.63 (Phase L 调整 3): 切到 Fluxing 时弹浮动栏。
+  //   WM_INPUTLANGCHANGE 接收方:当前 focus 所在 top-level 窗口。WeaselServer
+  //   IPC server window 是 hidden top-level, Windows 也会发过来。
+  //   比较 new HKL (lParam) vs 启动时记录的 Fluxing HKL (s_fluxingHkl),相等
+  //   且上一次 != Fluxing → Show() 触发;反之 user 切走 → 仅记录。
+  if (msg == WM_INPUTLANGCHANGE) {
+    HKL newHkl = reinterpret_cast<HKL>(l);
+    if (s_fluxingHkl != NULL && newHkl != NULL) {
+      bool nowIsFluxing = (newHkl == s_fluxingHkl);
+      bool wasFluxing = (s_prevLangHkl == s_fluxingHkl);
+      if (nowIsFluxing && !wasFluxing) {
+        QuickPanelDialog::Show(false, nullptr, nullptr, nullptr, nullptr, nullptr,
+                               nullptr);
+      }
+      s_prevLangHkl = newHkl;
+    }
+    // 透传到 default WndProc (其他组件可能也关心 IME 切换)
+    // 不 return 0 — 继续走透传
+  }
   if (msg == WM_HOTKEY) {
+    // v0.19.0.25-fix (spec 042 §10.4): Alt+. → PhrasesDialogIPC::Show()
+    //   v0.19.0.52 (Phase K3 T010): out-of-process IPC 路径
     if (w == ID_HOTKEY_PHRASES_DOT) {
-      // spec 042 §12 风险:Alt+. 全局热键可能跟其他 app 冲突 → RegisterHotKey 失败时
-      // 仅 log warning,不 crash。这里成功路径就直接调。
-      // v0.19.0.52 (Phase K3 T010): out-of-process 走 IPC
       fluxing::PhrasesDialogIPC::Show();
       return 0;
     }
@@ -172,6 +202,12 @@ void WeaselServerApp::UnregisterPhrasesHotkey() {
 int WeaselServerApp::Run() {
   if (!m_server.Start())
     return -1;
+
+  // v0.19.0.63 (Phase L 调整 3): 启动时记录当前 Fluxing HKL (假设装机后 Fluxing 是 active)。
+  //   s_prevLangHkl 也初始化为相同值 — 这样启动即 active 时不会触发 "切换到 Fluxing"。
+  //   后续 WM_INPUTLANGCHANGE 钩子在 PhrasesHotkeySubclassProc 比对。
+  s_fluxingHkl = ::GetKeyboardLayout(0);
+  s_prevLangHkl = s_fluxingHkl;
 
   // spec 074 (L75): QuickPanel 改纯 GDI 后,不再需要 ID2D1Factory 注入
   // QuickPanelDialog::InitializeD2D / ShutdownD2D 已删除

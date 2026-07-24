@@ -67,10 +67,14 @@ Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
 # v0.19.0.59 (A5 ship, sftp_sync 通用化 + 56 tests in git; source unchanged):
 #   WeaselServer.exe + FluxingPhrasesDialog.exe 都是 MSBuild Win32 Release + x64
 #   rebuild from v0.19.0.58 base, 装机器上 0 code change。installer md5 反映新 binary。
-$expectedMd5 = '02876AA73BE5FCF33527F8E13904C178'  # v0.19.0.62 WeaselServer.exe (MSBuild Win32 Release, build 2026-07-24 14:10, Phase L 调整 1.2: QuickPanel 5→4 buttons + kPanelW 289→245)
-$expectedFluxingMd5 = 'C969AEB31E24D9EE1468F8869150970D'  # v0.19.0.62 FluxingPhrasesDialog.exe (x64, source unchanged from v0.19.0.59, shipped binary unchanged)
-$expectedInstallerMd5 = '64F9A3C8A9D47A03A81236EDD1761EB4'  # v0.19.0.62 NSIS installer (build 2026-07-24 14:10, MSBuild rebuild weasel.sln)
-$expectedBuildTime = '2026-07-24 14:10:00'  # v0.19.0.62 NSIS timestamp
+# v0.19.0.63 (Phase L 调整 2+3): radical_pinyin.schema.yaml 加 punctuator 段 +
+#   WeaselServerApp.cpp 加 WM_INPUTLANGCHANGE 钩子(切到火流猩时弹浮动栏)。
+#   MSBuild /t:Rebuild 真重建(verify 17:33 mtime 2026-07-24, installer extract 后
+#   WeaselServer.exe md5 == source build md5,无 L97 stale binary)。
+$expectedMd5 = '5CA3CFBEB9B0A34E66B1F94112601401'  # v0.19.0.63 WeaselServer.exe (MSBuild Win32 Release /t:Rebuild, build 2026-07-24 17:33, Phase L 调整 2+3: punctuator + WM_INPUTLANGCHANGE hook)
+$expectedFluxingMd5 = 'C969AEB31E24D9EE1468F8869150970D'  # v0.19.0.63 FluxingPhrasesDialog.exe (x64, source unchanged from v0.19.0.59)
+$expectedInstallerMd5 = '0D05F9F4BB1C75754DD52C0DC3BC1CC1'  # v0.19.0.63 NSIS installer (build 2026-07-24 17:51, MD5 = 0D05F9F4..., sha256 = 82990F0D...)
+$expectedBuildTime = '2026-07-24 17:51:00'  # v0.19.0.63 NSIS timestamp
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',

@@ -27,6 +27,18 @@ engine:
   filters:
     - uniquifier
 
+# v0.19.0.63 (Phase L 调整 2): 部件拆字方案补全中文标点配置。
+# 之前 radical_pinyin 完全无 punctuator 段, librime 会 fall back 到 default 但跟
+# double_pinyin / rime_ice 行为不一致。统一从 default.yaml 继承,跟其他 9 个方案对齐。
+punctuator:
+  __include: default:/punctuator
+  full_shape:
+    __include: default:/punctuator/full_shape
+  half_shape:
+    __include: default:/punctuator/half_shape
+  symbols:
+    __include: symbols_caps_v:/symbols
+
 key_binder:
   __include: default:/key_binder?
 

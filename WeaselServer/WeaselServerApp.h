@@ -92,6 +92,10 @@ class WeaselServerApp {
 
   // 当前子类化的实例(Run 期间唯一,Stop 后 nullptr)
   static WeaselServerApp* s_phrasesHotkeyOwner;
+  // v0.19.0.63 (Phase L 调整 3): 启动时记录的 Fluxing HKL + 上一次 WM_INPUTLANGCHANGE 看到的 HKL。
+  // WM_INPUTLANGCHANGE 钩子用这对检测"user 切到 Fluxing"。
+  static HKL s_fluxingHkl;
+  static HKL s_prevLangHkl;
 
   weasel::Server m_server;
   weasel::UI m_ui;

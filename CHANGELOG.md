@@ -1,5 +1,54 @@
 
 
+## [0.19.0.63-fluxing] - 2026-07-24
+
+### feat(WeaselServer): Phase L 调整 2 + 3 — 中文标点补全 + 切输入法弹浮动栏
+
+**User-visible**:
+- 部件拆字方案(radical_pinyin)中文模式按 `,` 出 "，",按 `.` 出 "。" (之前会落回 default 但不统一)
+- Win+Space 切到火流猩输入法时,浮动设置栏自动弹出 (类似"欢迎提示")
+- 点语言栏选火流猩,也会触发浮动栏弹出
+- Alt+, 仍走 toggle (显示 ↔ 隐藏) (行为未变)
+- 切到别的 IME (英文 / 搜狗 / 微软拼音等) **不弹** — 只在切到 Fluxing 时弹一次
+
+**调整 2 — 中文标点补全**:
+- 1 file: `output/data/radical_pinyin.schema.yaml` 加 `punctuator` 段 (含 full_shape / half_shape / symbols,全部 `__include: default:/...`)
+- 跟其他 7 个 double_pinyin + rime_ice (共 9 个方案) 对齐
+- 之前 radical_pinyin 漏 punctuator, librime fall back 不一致
+
+**调整 3 — 切输入法弹浮动栏**:
+- `WeaselServer/WeaselServerApp.cpp` PhrasesHotkeySubclassProc 加 `WM_INPUTLANGCHANGE` 钩子
+- `WeaselServer/WeaselServerApp.h` 加 `static HKL s_fluxingHkl; static HKL s_prevLangHkl;`
+- `Run()` 启动时 `s_fluxingHkl = ::GetKeyboardLayout(0)` (装机后 Fluxing 默认 active)
+- WM_INPUTLANGCHANGE 触发时:比较 lParam (new HKL) 与 s_fluxingHkl,相等且上次 != → `QuickPanelDialog::Show()`
+- 启动即 active 时不触发 (s_prevLangHkl = s_fluxingHkl 初始化对齐)
+- 设计参考 spec 074 v0.18.31.0 always-show 撤回原因 (用户反馈开机就弹太烦);本次只在 user 主动切到 Fluxing 时弹,跟 v0.18.31 行为差异在触发时机
+
+**包含**:
+- `output/data/radical_pinyin.schema.yaml` +12 行 (punctuator 段)
+- `WeaselServer/WeaselServerApp.cpp` +20 行 (WM_INPUTLANGCHANGE 钩子 + HKL 初始化)
+- `WeaselServer/WeaselServerApp.h` +4 行 (新静态字段声明)
+- `env.bat` + `weasel.props` bump 0.62 → 0.63 (gitignored)
+- `build_v063.ps1` 新建 (L107 双步 wrapper)
+
+**Verification (sandbox, 待 build 完)**:
+- `output/archives/fluxing-0.19.0.63-installer.exe` (待 md5)
+- 装机端 verify WeaselServer.exe md5 (待 build 出后填)
+
+**装机 user flow 5 项验收** (v0.19.0.63 ship 后 user 跑):
+1. 切方案到 radical_pinyin (部件拆字) → 中文模式按 `,` 出 "，" (回归, 之前 9 方案都 work, 现在 10 方案都 work)
+2. Win+Space 切到火流猩 → 浮动设置栏自动弹 ✓
+3. Win+Space 切到英文 → 不弹
+4. 浮动设置栏按 Alt+, 隐藏, 再按显示 ✓ (回归 v0.19.0.62)
+5. SFTP 上传: `python sftp_sync.py --version=0.19.0.63` 原子同步
+
+**已知局限**:
+- WM_INPUTLANGCHANGE 仅在 IPC server window 收到时触发 — 装机器 user 必须跟其他 app 互动时才完整触发。Win+Space 在 explorer / 任意 app focus 时都会触发。
+- 启动时如果 Fluxing 不是 active IME, s_fluxingHkl 会记错 → 切换检测可能失效。装机后第一次启动 WeaselServer 通常 active,后续用户手动换到 Fluxing 仍可触发。
+- 失败模式 (已撤回的 spec 074 v0.18.31): 服务启动自动弹 — 这次刻意不触发,只在 user 主动切到 Fluxing 时弹。
+
+---
+
 ## [0.19.0.62-fluxing] - 2026-07-24
 
 ### refactor(WeaselServer): Phase L 调整 1.2 — QuickPanel UserDict 槽位彻底删除 (5→4 buttons)
