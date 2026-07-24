@@ -1,5 +1,52 @@
 
 
+## [0.19.0.62-fluxing] - 2026-07-24
+
+### refactor(WeaselServer): Phase L 调整 1.2 — QuickPanel UserDict 槽位彻底删除 (5→4 buttons)
+
+**User-visible**:
+- 浮动设置栏:5 按钮 → **4 按钮** (Schema / Phrase / Settings / Account)
+- 中间 UserDict 槽位**完全不存在**(不是空着,是整个 layout 收紧了)
+- panel 整体宽度:`kPanelW 289 → 245` (-44 px)
+- 按钮 hit 索引重映射:`hit==3 Settings` (was Settings) → `hit==2`;`hit==4 Account` → `hit==3`
+- 4 个按钮的视觉 / 交互行为不变
+
+**承接 v0.19.0.60/61**:
+- v0.19.0.60 (调整 1): UserDictionary 模块下线 (代码 + 热键 + 设置栏 row)
+- v0.19.0.61 (调整 1.1): QuickPanel button 2 paint no-op (icon 删除,槽位保留)
+- **v0.19.0.62 (调整 1.2)**:QuickPanel button 2 槽位**整槽删除**,layout 收紧
+
+**包含**:
+- `WeaselServer/QuickPanelDialog.h`
+  - `kPanelW 289 → 245`
+  - 新增 `kButtonCount 4` constexpr (paint / HitTest 循环统一用这个,不再硬编码 5)
+  - 注释更新 (5 按钮版 / 4 按钮版 hit 映射)
+- `WeaselServer/QuickPanelDialog.cpp`
+  - HitTest `for (i = 0; i < 5; i++)` → `for (i = 0; i < kButtonCount; i++)`
+  - paint loop 同上
+  - case 重映射:`case 3 → Settings` 改 `case 2`,`case 4 → Account` 改 `case 3`
+  - click routing:`hit == 3 → Shortcut` 改 `hit == 2 → Shortcut`(drag fallthrough 同步)
+- `env.bat` + `weasel.props` bump 0.61 → 0.62 (gitignored)
+- `build_v062.ps1` 新建 (L107 双步 wrapper)
+
+**Verification (sandbox, 待 build 完)**:
+- `output/archives/fluxing-0.19.0.62-installer.exe` (待 md5)
+- 装机端 verify WeaselServer.exe md5 (待 build 出后填)
+
+**装机 user flow 5 项验收** (v0.19.0.62 ship 后 user 跑):
+1. 浮动设置栏:**只 4 个按钮,中间无空隙** (Schema / Phrase / Settings / Account)
+2. panel 比 v0.19.0.61 短约 44 px (-14%)
+3. Alt+. → PhrasesDialog (回归)
+4. 点 Settings 按钮 → ShortcutSettings 窗口(回归)
+5. 槽位 2 区域 → 不可见、不可点、不可 hit(no slot)
+
+**不做的 (out of scope)**:
+- ❌ Phase L 调整 2 (中文标点):留 v0.19.0.63+
+- ❌ Phase L 调整 3 (切输入法弹浮动栏):留 v0.19.0.63+
+- ❌ kPanelW 再压回 240:review 决定
+
+---
+
 ## [0.19.0.61-fluxing] - 2026-07-24
 
 ### refactor(WeaselServer): Phase L 调整 1.1 — QuickPanel UserDict 按钮整槽 invisible

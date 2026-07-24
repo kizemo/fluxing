@@ -152,6 +152,9 @@ class QuickPanelDialog {
   //     pad 5 + brand 35 + brandGap 2 + 5*35 + 4*kBtnGap + 16 = 5+35+2+175+4*kBtnGap+16
   //     = 233 + 4*kBtnGap;kBtnGap=14 → 233+56=289
   //   激进备选(§3.2.3):kPanelW=277,rightPad=4,user 觉得 289 太宽时切回
+  //   v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons (UserDict 整槽删除)。
+  //     公式 = 5 + 35 + 2 + 4*35 + 3*kBtnGap + 16 = 198 + 3*14 = 240;v0.19.0.62 取 245
+  //     (保守 +5 px 微调;下次 review 可压回 240)。
   static constexpr int kPanelPadding = 5;          // X 方向 padding (L93,v0.19.0.24 不变)
   static constexpr int kPanelVPadding = 6;         // v0.19.0.24 新增:Y 方向 padding=(48-35)/2
   static constexpr int kBtnSize      = 35;         // v0.19.0.24 不变
@@ -160,8 +163,13 @@ class QuickPanelDialog {
   static constexpr int kBtnRadius    = 10;         // L93:14→10
   static constexpr int kBrandSize    = 35;         // L93:56→35
   static constexpr int kPanelRadius  = 20;         // L93:28→20
-  static constexpr int kPanelW       = 289;        // v0.19.0.24:277→289 (保守 +12 = 4×3 gap)
+  static constexpr int kPanelW       = 245;        // v0.19.0.62:289→245 (5 buttons→4 buttons, -44 px)
   static constexpr int kPanelH       = 48;         // L93:68→48
+  // v0.19.0.62 (Phase L 调整 1.2): kButtonCount 显式 — paint / HitTest 循环用这个。
+  // 5 按钮版:0 Schema / 1 Phrase / 2 UserDict / 3 Settings / 4 Account
+  // 4 按钮版 (UserDict 整槽删除):0 Schema / 1 Phrase / 2 Settings / 3 Account
+  //   — hit==2 现在走 Settings (之前 hit==3),hit==3 Account 仍是 no-op。
+  static constexpr int kButtonCount  = 4;          // v0.19.0.62: 5→4 (UserDict 槽位删除)
   // v0.19.0.24 新增:Show() 后 auto-hide grace period(毫秒)。
   // 之前 L89-fix 直接累加 outsideMs,Show 启动时 cursor 在 panel 外 → 1.5s 内 Hide。
   // 改:Show 时记 s_showTime,polling timer 在 (now - s_showTime) < kShowGraceMs 时

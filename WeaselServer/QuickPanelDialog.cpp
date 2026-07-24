@@ -396,7 +396,8 @@ int QuickPanelDialog::HitTest(int x, int y) {
   // 走 HTCAPTION 拖动而非 click。Fix。
   int buttonStartX = padding + s_brandSize_phys +
                      max(2, (int)(2 * s_dpr_x + 0.5f));
-  for (int i = 0; i < 5; i++) {
+  // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons (UserDict 槽位删除)
+  for (int i = 0; i < kButtonCount; i++) {
     int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
     // v0.19.0.24-fix(issue 1):Y 范围从 `padding`(kPanelPadding=5 X padding)改 `s_btnYOffset_phys`
     // (=(kPanelH-kBtnSize)/2=6 dpr 缩放),跟 PaintOpaqueContent 的 y0 同步,避免 paint
@@ -539,13 +540,13 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
         // v0.19.0.29:扩展为 5 按钮部分接通 — 0/4 仍 no-op (历史 placeholder,follow-up
         // spec 加 ASCII mode toggle / 登录);1 Phrase / 3 Shortcut 真接通。
         // v0.19.0.60 (Phase L 调整 1): 2 (UserDict) 删除 — UserDictionary 模块下线。
-        // 见 docs/design/mockups-v0.19.0.28/ 设计稿(后续会话可整槽删 2 button)。
-        // hit 与 button 映射:0 Schema, 1 Phrase, 2 (UserDict 槽保留, click no-op),
-        // 3 Settings→Shortcut, 4 Account(no-op)。
+        // 见 docs/design/mockups-v0.19.0.28/ 设计稿。
+        // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons, hit 索引重映射:
+        //   0 Schema (no-op), 1 Phrase, 2 Settings→Shortcut, 3 Account (no-op)。
         if (!actualDrag) {
           if (oldActiveIdx == 1 && s_onPhrases) s_onPhrases();
-          else if (oldActiveIdx == 3 && s_onShortcut) s_onShortcut();
-          // hit 0/2/4: no-op (2 后续会话可整槽删)
+          else if (oldActiveIdx == 2 && s_onShortcut) s_onShortcut();
+          // hit 0/3: no-op (0 Schema 跟 3 Account 都是历史 placeholder)
         }
       } else {
         POINT p = {LOWORD(l), HIWORD(l)};
@@ -557,12 +558,15 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
           // L94-fix A (cpp:504) 在 drag 分支 reset s_activeIdx,所以这里对称:
           // click 分支先检查 hit==s_activeIdx 再 invoke。
           // v0.19.0.29:扩展 hit 分支 — 1 Phrase / 3 Shortcut。0/2/4 仍 no-op。
+          // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons, hit 索引重映射:
+          //   hit==1 Phrase (不变), hit==2 Settings → s_onShortcut (was hit==3 in v0.19.0.61)
+          //   hit==3 Account 仍 no-op (was hit==4)
           if (hit == 1 && s_onPhrases) {
             s_onPhrases();
-          } else if (hit == 3 && s_onShortcut) {
+          } else if (hit == 2 && s_onShortcut) {
             s_onShortcut();
           }
-          // hit 0/2/4: no-op (2 后续会话可整槽删)
+          // hit 0/3: no-op (0 Schema 跟 3 Account 都是历史 placeholder)
         }
         s_activeIdx = -1;
         // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered。
@@ -807,7 +811,8 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // 现在 kBtnGap 改 4,buttons 之间有足够间距,起始 gap 不用再大。减到 2 px 让
   // brand→btns 间距合理,btn4 右边距 +2 px (panelW=252 5*37+4*4=201+44+5=250 < 252)
   int buttonStartX = pad + s_brandSize_phys + max(2, (int)(2 * s_dpr_x + 0.5f));
-  for (int i = 0; i < 5; i++) {
+  // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons (UserDict 槽位删除)
+  for (int i = 0; i < kButtonCount; i++) {
     int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
     // v0.19.0.24-fix(issue 1):Y 起点改用 s_btnYOffset_phys(=(kPanelH-kBtnSize)/2 dpr 缩放)。
     // 之前 y0=pad=5,btn at y=[5..40] 距顶 5 距底 8 偏上 1.5 px。改 y0=6 → btn at
@@ -888,15 +893,14 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     // 在所有 DPI 都一样,designer 刻意 — 高 DPI 不会按比例放大,保持视觉清晰度。
     int iconX = x0 + s_btnSize_phys / 2 - kIconBboxCxOff;
     int iconY = y0 + s_btnSize_phys / 2 - kIconBboxCyOff;
+    // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons,case 重新映射:
+    //   0 Schema / 1 Phrase / 2 Settings (was 3) / 3 Account (was 4)
+    //   — case 2 (UserDict) 整槽已删,无对应 icon 绘制。
     switch (i) {
       case 0: DrawIconSchema(hdc, iconX, iconY, penRgb); break;
       case 1: DrawIconPhrase(hdc, iconX, iconY, penRgb); break;
-      // v0.19.0.61 (Phase L 调整 1.1): case 2 (UserDict) 删除 — UserDictionary 模块下线。
-      // 槽位 layout 保留 (5 按钮循环不变),hit==2 click 已 no-op (v0.19.0.60),
-      // paint 也跳过 → button 2 完全 invisible。
-      // case 2: no-op
-      case 3: DrawIconSettings(hdc, iconX, iconY, penRgb); break;
-      case 4: DrawIconAccount(hdc, iconX, iconY, penRgb); break;
+      case 2: DrawIconSettings(hdc, iconX, iconY, penRgb); break;  // was hit==3 in v0.19.0.61
+      case 3: DrawIconAccount(hdc, iconX, iconY, penRgb); break;   // was hit==4 in v0.19.0.61
     }
     SelectObject(hdc, oldPen);
   }
