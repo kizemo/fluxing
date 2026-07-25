@@ -1154,27 +1154,175 @@ reg delete "HKCU\Software\Fluxing" /f
 > **不做的 (out of scope)**: K3 T019 装机事故调查 / librime 子模块 / 60+ untracked / K7 push 重试
 > **下次会话第一句话**: "承接 Phase L 计划,见 `plan-phase-L-2026-07-24.md`,先做调整 1 还是调整 2?"
 
-### Phase L.1 — v0.19.0.60 ship 进度（执行中）
+### Phase L.1 — v0.19.0.60 ship 进度（✅ 完成）
 
 **已完成**:
 - ✅ Ctrl+Shift+U 热键移除 (WeaselServerApp.cpp + resource.h)
 - ✅ QuickPanel UserDict callback 移除 (QuickPanelDialog.cpp/h + WeaselServerApp.cpp/h)
-- ✅ UserDictionary.cpp 转 stub (1723 行 → 200 行 no-op)
+- ✅ UserDictionary.cpp 转 stub (1723 行 → 198 行 no-op)
 - ✅ ShortcutSettings Action_OpenUserDict 移除 (.h + .cpp)
 - ✅ test/Verifier2_G2_G12 G6-G9 用 `#if 0` 跳过
-- ✅ test/v0_19_0_32_e2e P1b / P2b / T_QP_UD 用 `#if 0` 跳过
-- ✅ test/v0_19_0_30_e2e P1b / P2b 用 `#if 0` 跳过
+- ✅ test/v0_19_0_32_e2e P1b / P2b / T_QP_UD + Bug 2 routing 用 `#if 0` 跳过
+- ✅ test/v0_19_0_30_e2e P1b / P2b + Bug 2 routing 用 `#if 0` 跳过
 - ✅ test/TestUserDictionary TestUserDictionary.cpp main() stub 出 SKIP 提示
+- ✅ test/TestQuickPanelDialog T7/T9/T10 用 `#if 0` 跳过
 - ✅ test/TestShortcutSettings T06 enum 断言改用 OpenPhrases vs ReselectCandidate
-- ✅ env.bat / weasel.props bump 到 v0.19.0.60
-- ✅ build_v060.ps1 创建
+- ✅ env.bat / weasel.props bump 到 v0.19.0.60 (gitignored)
+- ✅ build_v060.ps1 创建 (L107 双步 wrapper)
+- ✅ msbuild weasel.sln Win32 Release Exit 0
+- ✅ NSIS installer Exit 0 (43,336,947 bytes)
+- ✅ WeaselServer.exe md5 = `7E1E3FC376478F69DA41A547323498EC` (新 build 11:38)
+- ✅ Installer md5 = `B3CC278B222D1685C3B162EC7D26C4AF` + sha256 = `3a9e761e4158f9f5a71327b63f2eabf62fe5d17c58933547980e26183f7e928b`
+- ✅ `_check_install_v2.ps1` expected md5 同步更新
+- ✅ Release commit `ae34869` + tag `v0.19.0.60`
+- ✅ sftp_sync atomic upload → `www.aiec.fun/pinyin/` (4 文件 cross-source verify 全 PASS)
 
-**未完成（build 跑中）**:
-- ⏸ 构建 + 测试 (后台跑 build_v060.ps1)
-- ⏸ _check_install_v2.ps1 expected md5 更新
-- ⏸ release commit + tag v0.19.0.60
-- ⏸ sftp_sync.py 原子上传
-- ⏸ 写 handoff
+**踩过的坑**:
+1. **Build 第 1 轮失败**: TestQuickPanelDialog.cpp T7/T9/T10 + WeaselServerApp.cpp PhrasesHotkeySubclassProc ID_HOTKEY_USER_DICT 分支漏改 → 补 `#if 0` + 删分支后跑通
+2. **Build 第 2 轮 WeaselServer.exe 未真重建**: MSBuild incremental build 跳过,源文件改动未被检测。验证方法:看 mtime + md5,只过 NSIS exit 0 不够。修法:再触发一次 build,weasel.sln 重 link。
+
+**未做**:
+- ⏸ git push kizemo v0.19.0.60 (HTTP 500,跟 K7 同样症状;ship 路径 SFTP 已成功,不阻塞)
+
+**详细 handoff**: `handoff-after-phase-L-1-ship-2026-07-24.md`
+
+**下次会话第一句话**: "承接 v0.19.0.60 ship (Phase L 调整 1),见 `handoff-after-phase-L-1-ship-2026-07-24.md`。下一步做 Phase L 调整 2 还是调整 3?"
+
+### Phase L.1.2 — v0.19.0.62 ship 进度（✅ 完成）
+
+**触发**: user 反馈 v0.19.0.61 button 2 槽位仍占空间,要求整槽删除
+
+**已完成**:
+- ✅ kPanelW 289 → 245 (-44 px)
+- ✅ 新增 kButtonCount 4 constexpr (paint / HitTest 循环统一用)
+- ✅ HitTest + paint 循环 `for (i<5)` → `for (i<kButtonCount)`
+- ✅ paint case 重映射 (Settings/Account 索引 3/4 → 2/3)
+- ✅ click routing `hit == 3 → Shortcut` 改 `hit == 2 → Shortcut` (drag fallthrough 同步)
+- ✅ env.bat / weasel.props bump 0.61 → 0.62 (gitignored)
+- ✅ build_v062.ps1 新建
+- ✅ Release commit `fd5a644` + tag `v0.19.0.62`
+- ✅ sftp_sync atomic upload (cross-source verify OK)
+
+**详细 handoff**: `handoff-after-phase-L-1-2-ship-2026-07-24.md`
+
+### Phase L.2+3 — v0.19.0.63 调整 2+3 ship 进度（⚠️ build 卡死）
+
+**触发**: user 让 一起做调整 2+3 节省会话次数
+
+**已完成 (源码改动落地)**:
+- ✅ 调整 2: `output/data/radical_pinyin.schema.yaml` 加 punctuator 段 (__include default)
+- ✅ 调整 3: `WeaselServer/WeaselServerApp.cpp` 加 WM_INPUTLANGCHANGE 钩子 + s_fluxingHkl/s_prevLangHkl 静态字段
+- ✅ `WeaselServer/WeaselServerApp.h` 加 HKL 字段声明
+- ✅ env.bat / weasel.props bump 0.62 → 0.63 (gitignored)
+- ✅ build_v063.ps1 新建
+- ✅ CHANGELOG.md v0.19.0.63 段已加
+
+**卡住 (build 阶段)**:
+- ❌ msbuild incremental build 不重建 WeaselServer.exe (跟 v0.19.0.60 同样 L107 问题)
+- ❌ 多次尝试 /t:Rebuild 都因 powershell escape + vcvars32 路径括号问题无法直接调
+- ❌ NSIS 因为 WeaselServer.exe 缺失 exit 1
+
+**详细 handoff**: `handoff-after-phase-L-2-3-attempt-2026-07-24.md`
+
+---
+
+### Phase L Bugfix 1 — v0.19.0.64 ship ✅ (2026-07-24)
+
+**已完成**:
+- ✅ `radical_pinyin.schema.yaml` `engine.processors` 加 `- punctuator` (Bug 1 = 中文标点生效)
+- ✅ `WeaselServerApp.cpp` 改 hook `ImmGetDefaultIMEWnd(NULL)` 拿 WM_INPUTLANGCHANGE
+- ⚠️ **Bug 2 (Win+Space 弹浮动栏) 失败**: WeaselServer 是 hidden IPC server,无 IME context,`ImmGetDefaultIMEWnd` 永远 NULL
+- commit `55e7991`
+
+### Phase L Bugfix 2 — v0.19.0.65 ship ❌ (2026-07-24 ~25)
+
+**已完成**:
+- ✅ `RimeWithWeasel/RimeWithWeasel.cpp` `FocusIn` 改 `if (false)` → `if (true)`, `EnableAlwaysShowMode` → `Show(false, nullptr x 6)`, 加 DLOG
+- ✅ `WeaselServer/WeaselServerApp.cpp` 加 3 处埋点 (Run / RegisterPhrasesHotkey / ImeLangChangeSubclassProc)
+- ❌ **Bug 2 仍失败**: DLOG 没出来,无法确认 FocusIn 是否触发
+- ❌ **Alt+, 回归** — 我没改这条路径却 work 不动
+- commit `84f01c5`
+- 装机 binary md5 `BFC81FA7481AF3C09B581D17F8D003D5`
+- 装机证据: `ImmGetDefaultIMEWnd(NULL) = 0x00000000` (IMM32 dead 装机证实)
+
+**详细 handoff**: `handoff-after-phase-L-bugfix-2-failed-v0.19.0.65-2026-07-25.md`
+
+---
+
+### Phase L Bugfix 3 — v0.19.0.66 (本会话 active, 2026-07-25, session 2)
+
+**承接**: systematic-debugging Phase 4.5 已触发 (3+ ship 失败) — 严禁盲目试错
+
+**当前状态** (session 2 主进程接力完成):
+- [x] 读 handoff + memory + prompt 文件
+- [x] 并行 dispatch 3 Explore subagent → 全部完成
+- [x] 综合分析 → **root cause 100% 确认** = `ITfActiveLanguageProfileNotifySink` 从未注册到 TSF
+- [x] grep 全工程 `IID_ITfActiveLanguageProfileNotifySink` = **0 命中** (5 处其它 sink 都正常注册)
+- [x] QueryInterface / ActivateEx / Deactivate 三处都缺 ActiveLanguageProfile 链
+- [x] OnActivated 实现 (cpp:221-257) 已完美写好,只缺 AdviseSink 调用
+- [ ] **Phase 4.5 架构讨论 → 等 user 决策** (方案 A/B/C/D)
+- [ ] 改源码 (按 user 选择)
+- [ ] Trigger L3 gate: `grep -RIn "if (false)"` + `/t:Rebuild` smoke test
+- [ ] 装机端 sandbox-verify 验证
+- [ ] ship v0.19.0.66
+- [ ] 装机端 4 user flow 全通过
+- [ ] 沉淀 L##-PhaseL-6 (spec design vs impl 假完成陷阱) + L##-PhaseL-7
+
+### Root cause narrative (3 subagent 综合)
+
+**核心 root cause**: `ITfActiveLanguageProfileNotifySink` 接口已声明 (h:18)、已实现 (cpp:221-257),但**从未通过 AdviseSink 注册到 TSF**。Win+Space 切 Fluxing → TSF manager 切换 language profile → 应该回调 OnActivated → 调 `m_client.FocusIn()` → IPC FocusIn → server `RimeWithWeasel::FocusIn` → `QuickPanelDialog::Show(false, nullptr×6)` → 浮动栏弹。**但 sink 未注册,整条链断裂**。
+
+**直接证据**:
+| 项 | 文件 | 状态 |
+|---|---|---|
+| 类继承 | `WeaselTSF.h:18` | ✓ |
+| OnActivated 声明 | `WeaselTSF.h:90-93` | ✓ |
+| OnActivated 实现 | `WeaselTSF.cpp:221-257` | ✓ (注释明确说 "spec 061 CORRECT trigger") |
+| QueryInterface 暴露 IID | `WeaselTSF.cpp:44-77` | ❌ 缺 9 个 IID 中第 10 个 |
+| AdviseSink 注册 | 全工程 0 处 | ❌ 缺调用 |
+| ActivateEx init | `WeaselTSF.cpp:123-170` | ❌ 缺 `_InitActiveLanguageProfileSink` |
+| Deactivate uninit | `WeaselTSF.cpp:98-121` | ❌ 缺 `_UninitActiveLanguageProfileSink` |
+| Alt+, RegisterHotKey | `WeaselIPCServer/WeaselServerImpl.cpp:76` | ✓ |
+| Alt+, OnHotkey dispatch | `WeaselIPCServer/WeaselServerImpl.cpp:152-166` | ✓ |
+| Alt+, handler | `WeaselServer/WeaselServerApp.cpp:458-493` | ✓ (v0.19.0.65 未改) |
+
+**为什么这是 3+ ship 失败根因**:
+- v0.18.41.0 (spec 066) 设计 OnActivated 触发 FocusIn + EnableAlwaysShowMode
+- v0.18.41.4 (L69) 因 GDI+ crash 临时禁 FocusIn panel trigger
+- v0.19.0.63 (spec 074) 撤回 always-show sticky,期望 OnActivated → FocusIn → Show
+- v0.19.0.64 (Phase L bugfix 1) 改 IMM32 hook → 装机证实 hidden IPC server 无 IME context
+- v0.19.0.65 (Phase L bugfix 2) 改回 FocusIn + Show(null x 6)
+- **所有路径都期望 OnActivated sink 已注册 — 但实际从未注册!** 18 ship 版本累积 bug
+
+**L66 类比 (设计 vs 落地假完成)**: spec 061 设计意图写在代码注释里,实现函数写了,但 AdviseSink 调用从未补上 → spec 设计假完成。
+
+**Alt+, "回归" 真相** (subagent 1 H1 race):
+- v0.19.0.65 之前: KeyEventSink 在用户已经在文本框输入时,误触发 FocusIn → panel 短暂弹 → Alt+, 立即 Hide → user 感受 "Alt+, 触发了 panel 显示" (实际是 FocusIn 显示的)
+- v0.19.0.65: FocusIn 调用 Show(null x 6),但 sink 未注册还是不发 IPC
+- user 报告 "Alt+, 回归" 可能是 timing 变化让 panel 完全不弹,user 立即注意到
+
+### Phase 4.5 决策请求 (4 选项)
+
+按 systematic-debugging Phase 4.5 强制要求,3+ ship 失败 + 涉及新 TSF sink 注册,必须 user 决策:
+
+| 方案 | 范围 | 风险 | 推荐度 |
+|---|---|---|---|
+| **A: 最小 sink 注册** | 4 文件 ~30 行 diff (h 字段 + cpp QueryInterface/ActivateEx/Deactivate + init/uninit 函数) | L66 类型风险 — QueryInterface 链漏 IID 类型 | ★★★ |
+| **B: spec-init 完整流程** | A + spec.md/plan.md/tasks.md + unit test (cookie 注册/清理) + sandbox-verify 4 flow | 重量, ~2h | ★★ |
+| **C: 先装机 1 分钟诊断** | 不改源码,跑 `_check_install_v2.ps1` 验证 binary md5 + 跑 sandbox-verify 看 FocusIn IPC 是否真触发 | 仅验证 L108 stale binary,不改 root cause | 诊断用 |
+| **D: 回滚 + Alt+, 单修** | v0.19.0.65 改动回滚 + 单独修 Alt+, 路径 | 不修 root cause,4 flow 仍 fail | ❌ 不推荐 |
+
+**禁止** (本会话):
+- ❌ 改 install.nsi (L09/L17/L54/L66 雷区)
+- ❌ 改 QuickPanelDialog.cpp 内部 (spec 070 T005 已改纯 GDI,任何改动需 spec-init)
+- ❌ 改 Bug 1 部件拆字 (user 搁置)
+- ❌ 删现有埋点
+- ❌ 单步试错改代码 — 必须 user 同意后改
+
+**下次会话第一句话** (按 user 选择):
+- 选 A: "承接 Phase L bugfix 3,走方案 A (最小 sink 注册),见 `handoff-after-phase-L-bugfix-3-v0.19.0.66-2026-07-25.md`。"
+- 选 B: "承接 Phase L bugfix 3,走方案 B (spec-init 完整流程),见 `handoff-after-phase-L-bugfix-3-v0.19.0.66-2026-07-25.md`。"
+- 选 C: "承接 Phase L bugfix 3,先跑装机端 1 分钟诊断,见 `handoff-after-phase-L-bugfix-3-v0.19.0.66-2026-07-25.md`。"
 
 ## Phase H.8 — Loop 闭环 (本 Phase 末必跑)
 

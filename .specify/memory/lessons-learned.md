@@ -9451,3 +9451,86 @@ from current call sites.
 - NSIS installer: `output/archives/fluxing-0.19.0.65-installer.exe` md5
   `1326F50CBCF4BE49EFDFB23CFC5D9667`
 
+---
+
+## L##-PhaseL-6-SinkPseudoComplete — TSF sink interface declared + implemented but AdviseSink never registered
+
+**Incident**: v0.19.0.63 / .64 / .65 累计 3 次 ship 修复"切输入法浮动栏不弹"全部失败。
+装机端 4 个 user flow 全失败:
+1. Win+Space 切 Fluxing → 浮动栏不弹
+2. Win+Space 切英文 → 浮动栏不弹 (回归 OK)
+3. 切焦点到 text input → 浮动栏不弹
+4. Alt+, 收起浮动栏 → 再按 → 不弹 (回归)
+
+每次 ship 都设计"应该 work":
+- v0.19.0.63 (spec 074): 期望 OnActivated → FocusIn → Show
+- v0.19.0.64 (Phase L bugfix 1): 改 IMM32 hook (装机证实 hidden IPC server 无 IME context,dead end)
+- v0.19.0.65 (Phase L bugfix 2): 改回 FocusIn + Show(null × 6),期望 OnActivated 触发
+
+实际 root cause (`grep -RIn "IID_ITfActiveLanguageProfileNotifySink"` 全工程 0 命中):
+- `WeaselTSF.h:18` 已声明 `class WeaselTSF : public ITfActiveLanguageProfileNotifySink` ✓
+- `WeaselTSF.h:90-93` 已声明 `OnActivated` 方法 ✓
+- `WeaselTSF.cpp:221-257` 已实现 `OnActivated` (注释明确"spec 061 CORRECT trigger") ✓
+- `WeaselTSF.cpp:44-77` QueryInterface 链 **缺 `IID_ITfActiveLanguageProfileNotifySink` 分支** ❌
+- `ActivateEx` (cpp:123-170) **缺 `_InitActiveLanguageProfileSink()` 调用** ❌
+- `Deactivate` (cpp:98-121) **缺 `_UninitActiveLanguageProfileSink()` 调用** ❌
+- 全工程 **缺 `pSource->AdviseSink(IID_ITfActiveLanguageProfileNotifySink, ...)` 调用** ❌
+
+**Root cause**: 接口 + 方法 + 函数实现 + 设计意图 (注释) 全部到位,但 **TSF sink 注册链路** (QueryInterface 暴露 + AdviseSink 调用 + init/uninit 配对) 从未补上 → spec 假完成。这是 L66 (NSIS safety-net) 同模式: 设计意图 vs 落地之间的"假完成"陷阱。
+
+调用链断裂:
+```
+[Win+Space 切 Fluxing]
+    ↓
+[TSF manager 切 language profile]
+    ↓ 应触发 ──❌── sink 未注册 ──→ OnActivated 永不触发
+    ↓
+[m_client.FocusIn()]  ← 这步根本不进
+    ↓
+[IPC FocusIn → RimeWithWeasel::FocusIn]
+    ↓
+[QuickPanelDialog::Show(false, nullptr × 6)]
+    ↓
+[浮动栏弹]  ← 不发生
+```
+
+**Lesson**: 任何依赖 TSF callback (`ITfXxxSink` / `IActiveLanguageProfileNotifySink` /
+`ITfThreadMgrEventSink` / `ITfKeyEventSink` 等) 的设计,实现必须同时完成:
+1. 类继承接口声明 (`.h`)
+2. QueryInterface 暴露 IID (`.cpp` QueryInterface 实现)
+3. AdviseSink 注册调用 (`ActivateEx` 内 `_Init*Sink()`)
+4. UnadviseSink 反注册 (`Deactivate` 内 `_Uninit*Sink()`)
+5. **配对的 cookie 字段** (`_dw*SinkCookie = TF_INVALID_COOKIE` 初始化)
+
+**四件套缺一不可**: 仅"接口已声明" + "函数已实现"不构成完整功能。设计意图写在
+注释里(spec 061 是 CORRECT trigger) ≠ 实际 work。code review / ship gate 必须把
+`grep AdviseSink` + `grep QueryInterface IID` 作为强制性检查项。
+
+**Anti-patterns**:
+- **AP-L##-A**: 接口已实现但 `QueryInterface` 链漏 IID — 即使有 AdviseSink 调用也会 `E_NOINTERFACE`。
+- **AP-L##-B**: 接口已实现 + QueryInterface 暴露 + AdviseSink 已写函数,但 `ActivateEx` 忘了调 `_Init*Sink` — 接口永远不活跃。
+- **AP-L##-C**: 接口 + 注册 + init 都到位,但 `Deactivate` 漏 `_Uninit*Sink` — cookie 累积 leak,二进 ship 后 TSF manager 持有 dangling pointer。
+- **AP-L##-D**: cookie 字段未在构造函数初始化为 `TF_INVALID_COOKIE` — 第一次 UnadviseSink 调 undefined cookie value,可能 crash。
+- **AP-L##-E**: "已实现 = 已完成" 心态,代码 review 不检查 AdviseSink 注册链路 — 设计 vs 落地假完成 (与 L66 同模式)。
+
+**How to apply**:
+- 任何新增 TSF sink,code review checklist 强制 4 件套:
+  ```
+  [ ] 类继承 XxxSink (h)
+  [ ] OnXxx 方法声明 + 实现 (h/cpp)
+  [ ] QueryInterface 暴露 IID (cpp QI 链)
+  [ ] _InitXxxSink + AdviseSink 调用 (cpp)
+  [ ] _UninitXxxSink + UnadviseSink 调用 (cpp)
+  [ ] _dwXxxSinkCookie 字段 + 构造函数初始化 TF_INVALID_COOKIE
+  [ ] ActivateEx + Deactivate 对称调用
+  ```
+- ship gate:`grep -RIn "AdviseSink"` + `grep -RIn "UnadviseSink"` 配对检查
+- 装机端验证: 切 IME 后用 DebugView / Spy++ 看 sink 是否触发 callback
+
+**关联文件 / 提交**:
+- 源 (已声明+实现,缺注册): `WeaselTSF/WeaselTSF.h:18,90-93`
+- 源 (已实现,缺注册): `WeaselTSF/WeaselTSF.cpp:221-257`
+- 源 (sink 注册修复): `WeaselTSF/WeaselTSF.cpp:67-70` (QI) + `WeaselTSF/WeaselTSF.cpp:107-108` (Deactivate uninit) + `WeaselTSF/WeaselTSF.cpp:166-169` (ActivateEx init) + `WeaselTSF/WeaselTSF.cpp:230-251` (init/uninit 实现)
+- 源 (cookie 字段): `WeaselTSF/WeaselTSF.h:170-172` + `WeaselTSF/WeaselTSF.cpp:30`
+- 失败 ship 版本: v0.19.0.63 / .64 / .65 (commit `055cc6c` / `55e7991` / `84f01c5`)
+

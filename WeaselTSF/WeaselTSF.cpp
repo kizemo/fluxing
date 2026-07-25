@@ -27,6 +27,7 @@ WeaselTSF::WeaselTSF() {
   _dwTextEditSinkCookie = TF_INVALID_COOKIE;
   _dwTextLayoutSinkCookie = TF_INVALID_COOKIE;
   _dwThreadFocusSinkCookie = TF_INVALID_COOKIE;
+  _dwActiveLanguageProfileSinkCookie = TF_INVALID_COOKIE;
   _fTestKeyDownPending = FALSE;
   _fTestKeyUpPending = FALSE;
 
@@ -66,6 +67,8 @@ STDAPI WeaselTSF::QueryInterface(REFIID riid, void** ppvObject) {
     *ppvObject = (ITfEditSession*)this;
   else if (IsEqualIID(riid, IID_ITfThreadFocusSink))
     *ppvObject = (ITfThreadFocusSink*)this;
+  else if (IsEqualIID(riid, IID_ITfActiveLanguageProfileNotifySink))
+    *ppvObject = (ITfActiveLanguageProfileNotifySink*)this;
   else if (IsEqualIID(riid, IID_ITfDisplayAttributeProvider))
     *ppvObject = (ITfDisplayAttributeProvider*)this;
 
@@ -99,6 +102,8 @@ STDAPI WeaselTSF::Deactivate() {
   m_client.EndSession();
 
   _InitTextEditSink(com_ptr<ITfDocumentMgr>());
+
+  _UninitActiveLanguageProfileSink();
 
   _UninitThreadMgrEventSink();
 
@@ -159,6 +164,10 @@ STDAPI WeaselTSF::ActivateEx(ITfThreadMgr* pThreadMgr,
     goto ExitError;
   if (!_InitThreadFocusSink())
     goto ExitError;
+  // v0.19.0.66 Phase L Bugfix 3: AdviseSink 注册 ITfActiveLanguageProfileNotifySink,
+  // 让 Win+Space 切 Fluxing 时 OnActivated 真正触发 -> m_client.FocusIn() -> IPC -> Show.
+  if (!_InitActiveLanguageProfileSink())
+    goto ExitError;
 
   _EnsureServerConnected();
 
@@ -216,6 +225,28 @@ void WeaselTSF::_UninitThreadFocusSink() {
     return;
   if (FAILED(pSource->UnadviseSink(_dwThreadFocusSinkCookie)))
     return;
+}
+
+// v0.19.0.66 Phase L Bugfix 3: ActiveLanguageProfileNotifySink 注册/反注册.
+// 仿 _InitThreadFocusSink 模板,但 IID 是 ITfActiveLanguageProfileNotifySink
+// (Win+Space 切 IME 的核心回调).
+BOOL WeaselTSF::_InitActiveLanguageProfileSink() {
+  com_ptr<ITfSource> pSource;
+  if (FAILED(_pThreadMgr->QueryInterface(&pSource)))
+    return FALSE;
+  if (FAILED(pSource->AdviseSink(IID_ITfActiveLanguageProfileNotifySink,
+                                 (ITfActiveLanguageProfileNotifySink*)this,
+                                 &_dwActiveLanguageProfileSinkCookie)))
+    return FALSE;
+  return TRUE;
+}
+void WeaselTSF::_UninitActiveLanguageProfileSink() {
+  com_ptr<ITfSource> pSource;
+  if (FAILED(_pThreadMgr->QueryInterface(&pSource)))
+    return;
+  if (FAILED(pSource->UnadviseSink(_dwActiveLanguageProfileSinkCookie)))
+    return;
+  _dwActiveLanguageProfileSinkCookie = TF_INVALID_COOKIE;
 }
 
 STDMETHODIMP WeaselTSF::OnActivated(REFCLSID clsid,

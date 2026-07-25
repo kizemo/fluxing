@@ -167,6 +167,11 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   void _UninitThreadFocusSink();
   DWORD _dwThreadFocusSinkCookie;
 
+  // ITfActiveLanguageProfileNotifySink (v0.19.0.66 Phase L Bugfix 3)
+  BOOL _InitActiveLanguageProfileSink();
+  void _UninitActiveLanguageProfileSink();
+  DWORD _dwActiveLanguageProfileSinkCookie;
+
   BOOL _InitTextEditSink(com_ptr<ITfDocumentMgr> pDocMgr);
 
   BOOL _InitKeyEventSink();

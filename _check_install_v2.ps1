@@ -85,10 +85,10 @@ Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
 #   (WeaselTSF::OnActivated → m_client.FocusIn() IPC) 才是真路径。同保留
 #   ImmGetDefaultIMEWnd 子类化作 fallback,加埋点验证 hypothesis。Bug 2 root cause
 #   不是 WM_INPUTLANGCHANGE 路径,而是 L69-fix residue 死了 FocusIn。
-$expectedMd5 = 'BFC81FA7481AF3C09B581D17F8D003D5'  # v0.19.0.65 WeaselServer.exe (MSBuild Win32 Release /t:Rebuild, build 2026-07-25 00:57, Phase L 装机 bugfix 2: re-enable FocusIn Show + 埋点)
-$expectedFluxingMd5 = '52EA1BA5F2FC08EC0FD3973BD9CCE0A4'  # v0.19.0.65 FluxingPhrasesDialog.exe (x64, RimeWithWeasel.lib 改 → 重链)
-$expectedInstallerMd5 = '1326F50CBCF4BE49EFDFB23CFC5D9667'  # v0.19.0.65 NSIS installer (build 2026-07-25 01:01)
-$expectedBuildTime = '2026-07-25 01:01:00'  # v0.19.0.65 NSIS timestamp
+$expectedMd5 = 'B3BCB65967D6AD0B00A5D0460405EC73'  # v0.19.0.66 WeaselServer.exe (MSBuild Win32 Release /t:Rebuild, build 2026-07-25 22:46, Phase L 装机 bugfix 3: WeaselTSF::OnActivated sink AdviseSink 注册真修 → FocusIn IPC 真发)
+$expectedFluxingMd5 = 'C969AEB31E24D9EE1468F8869150970D'  # v0.19.0.66 FluxingPhrasesDialog.exe (x64, RimeWithWeasel.lib 改 → 重链; src 没动但 lib relink → md5 微变)
+$expectedInstallerMd5 = 'B4733435610FE4F22C5F837A23036A7E'  # v0.19.0.66 NSIS installer (build 2026-07-25 23:05)
+$expectedBuildTime = '2026-07-25 23:05:57'  # v0.19.0.66 NSIS timestamp
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',
