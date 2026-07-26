@@ -145,18 +145,18 @@ Function .onInit
   ; v0.19.0.48 (Phase J installer 加固): WeaselServer.exe 是 PPL 进程,
   ;   taskkill 表面成功但 mmap handle 不释放。10x retries (覆盖 ~30s) + final
   ;   Sleep 3000ms 让 OS 完整释放 mmap 后再进入 File section。
-  ${For} $R9 1 10
+  ; v0.19.0.67 Phase L bugfix 4: PPL taskkill 30s 总耗时让 user 感受"卡死必须重启"。
+  ; Phase 4.5 root cause: 不是 v0.66 sink 代码直接造成,是 install.nsi PPL taskkill
+  ;   30s + WriteRegStr HKLM CTF\KnownClasses 卡 CTF lock 叠加。缩短为 5x retries +
+  ;   简化 sleep 总耗时 ~10s,覆盖必要 respawn churn 但不卡 user。
+  ${For} $R9 1 5
     nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
     Pop $0
     Pop $1
     ${If} $R9 == 1
-      Sleep 1500
-    ${ElseIf} $R9 < 5
-      Sleep 2500
-    ${ElseIf} $R9 == 5
-      Sleep 3000
+      Sleep 800
     ${Else}
-      Sleep 3000
+      Sleep 1800
     ${EndIf}
   ${Next}
 
@@ -735,6 +735,9 @@ program_files:
   ${ElseIf} ${IsNativeAMD64}
     SetRegView 64
   ${Endif}
+  ; v0.19.0.67 Phase L bugfix 4: Phase 4.5 root cause #2 = WriteRegStr KnownClasses 卡 CTF lock
+  ;   if ctfmon.exe hang。前置 Sleep 3000ms 等 ctfmon 稳定再写,避免死锁。
+  Sleep 3000
   WriteRegStr HKLM "SOFTWARE\Microsoft\CTF\KnownClasses" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}" "Fluxing Text Service"
   SetRegView default
   WriteRegStr HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "Default" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}"

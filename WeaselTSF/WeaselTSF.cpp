@@ -236,11 +236,20 @@ BOOL WeaselTSF::_InitActiveLanguageProfileSink() {
     return FALSE;
   if (FAILED(pSource->AdviseSink(IID_ITfActiveLanguageProfileNotifySink,
                                  (ITfActiveLanguageProfileNotifySink*)this,
-                                 &_dwActiveLanguageProfileSinkCookie)))
+                                 &_dwActiveLanguageProfileSinkCookie))) {
+    // v0.19.0.67 Phase L bugfix 4: AdviseSink 失败必须 reset cookie 到 TF_INVALID_COOKIE,
+    // 否则下次 ActivateEx 会看到 stale cookie 状态。Patch B — 跟 _InitThreadMgrEventSink (cpp:45) gold standard 一致。
+    _dwActiveLanguageProfileSinkCookie = TF_INVALID_COOKIE;
     return FALSE;
+  }
   return TRUE;
 }
 void WeaselTSF::_UninitActiveLanguageProfileSink() {
+  // v0.19.0.67 Phase L bugfix 4: 缺 TF_INVALID_COOKIE guard 会导致
+  // ActivateEx 失败后 → Deactivate → UnadviseSink(0xFFFFFFFF) 触发 TSF 内部 corruption。
+  // Patch A — 跟 _UninitThreadMgrEventSink (cpp:55) gold standard 一致。
+  if (_dwActiveLanguageProfileSinkCookie == TF_INVALID_COOKIE)
+    return;
   com_ptr<ITfSource> pSource;
   if (FAILED(_pThreadMgr->QueryInterface(&pSource)))
     return;
