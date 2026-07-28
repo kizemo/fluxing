@@ -188,6 +188,35 @@ void TestAbandonedMutexR6() {
   }
 }
 
+// v0.68 fix (L##-PhaseL-7): timeout in MaintenanceGuard ctor. If
+// StartMaintenance blocks (e.g. PPL-WeaselServer hangs on ReadFile),
+// the guard must return within timeout_ms so WeaselDeployer.exe /install
+// does not hang NSIS ExecWait (install.nsi:760). We simulate by
+// sleeping inside StartMaintenance.
+void TestStartMaintenanceTimeout() {
+  std::printf("[T8] v0.68 fix: StartMaintenance hang -> ctor returns within timeout_ms...\n");
+  struct HangingClient {
+    bool Connect() { return true; }
+    void StartMaintenance() {
+      // Simulate WeaselServer (PPL) holding pipe unresponsive.
+      // 5s — far longer than the 1s timeout we pass below.
+      ::Sleep(5000);
+    }
+    void EndMaintenance() {}
+  } hc;
+
+  DWORD t0 = ::GetTickCount();
+  bool entered_in_scope = true;
+  {
+    weasel::deployer::MaintenanceGuard<HangingClient> g(hc, 1000);  // 1s timeout
+    entered_in_scope = g.entered();
+  }
+  DWORD elapsed = ::GetTickCount() - t0;
+  EXPECT(entered_in_scope == false);  // timeout path -> entered_=false
+  EXPECT(elapsed < 3000);  // ctor + dtor should return within 3s (allow some overhead)
+  std::printf("[T8] elapsed: %lu ms (must be < 3000)\n", elapsed);
+}
+
 void TestNonCopyable() {
   std::printf("[T6] Non-copyable / non-movable: static_assert...\n");
   // Compile-time test: if these weren't deleted, the line below would
@@ -209,6 +238,7 @@ int main() {
   TestConnectFailedNoEnter();
   TestConnectFailedInDtor();
   TestEndThrows();
+  TestStartMaintenanceTimeout();
   TestAbandonedMutexR6();
   TestNonCopyable();
 

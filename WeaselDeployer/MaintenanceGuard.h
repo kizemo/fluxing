@@ -27,17 +27,61 @@
 
 #pragma once
 
+#include <future>
+#include <thread>
+#include <chrono>
+
 namespace weasel {
 namespace deployer {
 
+// v0.68 fix (L##-PhaseL-7): wrapped StartMaintenance in std::thread +
+// std::future wait_for(5s default). If WeaselServer.exe (PPL, cannot
+// be taskkill'd) holds the pipe but does not respond to
+// START_MAINTENANCE, the old code blocked in PipeChannel::_Receive's
+// ReadFile(pipe, ..., NULL) forever, hanging WeaselDeployer.exe /install
+// inside NSIS ExecWait (line 760 of install.nsi). Now: timeout -> detach
+// thread -> entered_ stays false -> skip StartMaintenance, proceed with
+// rime->deploy() anyway. Worst case: user sees a stale-schema prompt,
+// recoverable by `WeaselDeployer.exe /deploy` from a clean shell.
 template <typename ClientT>
 class MaintenanceGuard {
  public:
-  explicit MaintenanceGuard(ClientT& client)
+  explicit MaintenanceGuard(ClientT& client, DWORD timeout_ms = 5000)
       : client_(client), entered_(false) {
     if (client_.Connect()) {
-      client_.StartMaintenance();
-      entered_ = true;
+      // std::async's future destructor blocks on the still-running task
+      // after timeout (C++14 spec); std::thread + std::promise gives
+      // clean detach semantics on timeout.
+      std::promise<bool> p;
+      std::future<bool> fut = p.get_future();
+      std::thread th([this, &p] {
+        bool ok = false;
+        try {
+          client_.StartMaintenance();
+          ok = true;
+        } catch (...) {
+          // swallow — guard semantics: never throw from a callback.
+        }
+        try {
+          p.set_value(ok);
+        } catch (...) {
+          // promise may already be satisfied on timeout-detach path.
+        }
+      });
+      if (fut.wait_for(std::chrono::milliseconds(timeout_ms)) ==
+          std::future_status::ready) {
+        entered_ = fut.get();
+        if (th.joinable()) {
+          th.join();
+        }
+      } else {
+        // Timeout: WeaselServer (PPL) holds pipe unresponsive. Detach
+        // the thread so it can leak in ReadFile without blocking the
+        // guard destructor. entered_ stays false -> no EndMaintenance.
+        if (th.joinable()) {
+          th.detach();
+        }
+      }
     }
   }
 

@@ -1,5 +1,53 @@
 
 
+## [0.19.0.68-fluxing] - 2026-07-28
+
+### fix(WeaselDeployer): MaintenanceGuard Connect timeout 5s — 真修 v0.66/v0.67 17min install.hang
+
+**User-visible (装机期待)**:
+- 装机过程不再永久 hang (v0.66 / v0.67 在 GUI install 路径均 17min 卡死)
+- 装机过程不再依赖 PPL-WeaselServer taskkill 成功 (实际 PPL 杀不死, 旧路径是 theatre)
+- 5s 内如果 WeaselServer 不响应 START_MAINTENANCE, 跳过 maintenance mode 继续 deploy, 不再永久等
+- 已有 v0.66 / v0.67 装机的 user 不需重装 (调用 `_hotfix_patch_AB_v068.ps1` 修 Patch A/B 进 shim)
+
+**Root cause (L##-PhaseL-7, Phase 1 真因)**:
+- `WeaselDeployer.exe /install` (GUI install 路径) → `Configurator::UpdateWorkspace` → `MaintenanceGuard<Client> guard(client)` (RAII from spec 042)
+- `MaintenanceGuard.h:36-42` ctor 同步调 `client.StartMaintenance()` → 内部 `_SendMessage(WEASEL_IPC_START_MAINTENANCE)` → `channel.Transact(req)` → `_Receive` 在 `WeaselIPC/PipeChannel.cpp:88-102` 调 `ReadFile(pipe, msg, rec_len, &lread, NULL)` (no OVERLAPPED, no timeout)
+- WeaselServer.exe 是 PPL (Protected Process Light, CLAUDE.md P7 + L17/L18), `install.nsi .onInit` 5× taskkill 全部 return success 但杀不死 PPL → WeaselServer.exe 仍活 → named pipe 仍开 → `Connect()` 成功 → `StartMaintenance()` write 成功后永久阻塞等 server 响应
+- `install.nsi:760` `ExecWait "$INSTDIR\WeaselDeployer.exe /install"` 没有 timeout → installer 永久 hang (NSIS WER "Application Hang" 5s 检测不到 hang 是 blocked in child IPC, 不是 gui)
+- 🎯 v0.66 装机已卡死 Windows 必须重启 (per `handoff-after-phase-L-postship-freeze-v0.19.0.67-2026-07-26.md` §1.1), v0.67 同样 hang. **3 fix 轮都误诊为 "ctfmon mmap → SCM RPC timeout" 链, subagent 报告均错**
+
+**修复 (1 source change + 8 verifier adds)**:
+1. **MaintenanceGuard 5s timeout** (`WeaselDeployer/MaintenanceGuard.h:36-86`): ctor 加 `timeout_ms = 5000` 默认参数 + 用 `std::thread + std::promise + future::wait_for(timeout)` 包 `StartMaintenance()`. timeout 后 detach thread (leak in ReadFile, but better than hung installer) → `entered_=false` → dtor 跳过 EndMaintenance. **不**改 dtor (already correct per spec 042).
+2. **TestOrphanRecovery T8** (`test/TestOrphanRecovery/TestOrphanRecovery.cpp`): 新增 timeout 路径单测,模拟 hanging StartMaintenance (5s Sleep). 验证 enter < 3000ms, `entered_=false`. 旧 T1-T7 全部仍 PASS (行为兼容).
+3. **sandbox-verify §9** (`F:\soft\00selfmade\sandbox-verify\rime-claude\in-sandbox-verify.ps1:146-257`): 新增 GUI install 5min hard timeout test. silent install (existing §6) 走 `/deploy` 不触发 `/install` deadlock chain, 3 fix 轮都漏测, 现在补. SendKeys 自动 advance NSIS welcome/finish page.
+4. **hotfix v0.68 script** (`_hotfix_patch_AB_v068.ps1`): 扩展 v0.67 hotfix 加 weaselx64.dll (x64 shim). 64-bit 进程 (Explorer, Chrome, Edge, modern Office) 也能拿到 Patch A/B. x64 md5 待 x64 build 拿到后填入 §1 shim 列表.
+
+**Surviving risks (mitigated by sandbox-verify §9)**:
+- v0.68 installer 不再 17min hang (Fix-B 真修)
+- Patch A/B 真实 ship 进 weasel.dll + weaselx64.dll (md5 ship gate)
+- 但 x64 build 仍待本会话/x64 任务补上, 若 x64 build 仍 block, ship gate §9 FAIL (binary 缺失)
+
+**Verification (ship gate 待 user 跑)**:
+- installer: `output\archives\fluxing-0.19.0.68-installer.exe` (待 build)
+- baseline md5: `output\weasel.dll` = `2edbacc8b5cf18c111fb49f543363474`; `output\weaselx64.dll` 待 x64 build 后更新
+- unit test: `Release\TestOrphanRecovery.exe` 7/7 PASS (含 T8 timeout)
+- sandbox-verify §9: 5min hard timeout, sendkeys advance, binary md5 verify
+- baseline reg query (装机前)
+
+**L## 沉淀**:
+- L##-PhaseL-7 已在 lessons-learned.md (commit c9bb103). 完整真因链 + ship gate 必查项
+- L##-PhaseL-8 已在 lessons-learned.md. hotfix partial 教训 + x64 shim 必同步
+
+**Commit**:
+- `c9bb103` docs(memory): v0.66/v0.67 ship notes + L##-PhaseL-7+8 lessons-learned
+- (待) `fix(WeaselDeployer): MaintenanceGuard Connect timeout 5s (v0.68)`
+- (待) `test(sandbox-verify): §9 GUI install timeout test (v0.68)`
+- (待) `hotfix(FluxingTSF): v0.68 Patch A/B ship-only script (x86 + x64)`
+- (待) `chore(release): v0.68 installer`
+
+---
+
 ## [0.19.0.67-fluxing] - 2026-07-27
 
 ### fix(WeaselTSF+installer): v0.19.0.67 — Phase L 装机 bugfix 4 真修 (TF_INVALID_COOKIE guard + PPL taskkill 缩短 + WriteRegStr Sleep)
