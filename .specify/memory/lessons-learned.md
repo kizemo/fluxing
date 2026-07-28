@@ -9534,3 +9534,174 @@ from current call sites.
 - 源 (cookie 字段): `WeaselTSF/WeaselTSF.h:170-172` + `WeaselTSF/WeaselTSF.cpp:30`
 - 失败 ship 版本: v0.19.0.63 / .64 / .65 (commit `055cc6c` / `55e7991` / `84f01c5`)
 
+---
+
+## L##-PhaseL-7-PPL-IPC-Block — NSIS ExecWait WeaselDeployer /install hangs 17min when PPL-WeaselServer alive (NOT ctfmon mmap, NOT SCM RPC)
+
+**Incident**: v0.19.0.67 ship (installer `output/archives/fluxing-0.19.0.67-installer.exe`) hung on user system for **17 minutes** at line 760 `ExecWait "$INSTDIR\WeaselDeployer.exe /install"` before WER (Windows Error Reporting) marked `installer.exe` as "Application Hang" and user force-killed it. v0.66 had the same `ExecWait` line and also caused Windows 卡死必须重启 (per `handoff-after-phase-L-postship-freeze-v0.19.0.67-2026-07-26.md` §1.1 disaster #1) — i.e. **the hang predates v0.66 and persists through v0.67**, but was misdiagnosed in successive rounds as "ctfmon mmap → SCM RPC timeout".
+
+### The wrong chain (rejected)
+
+Subagent reports across 3 fix rounds claimed:
+- `WeaselDeployer.exe /install` hangs because WeaselServer's old `weaselx64.dll` mmap blocks SCM RPC (`SCM RPC_C_DEFAULT_TIMEOUT` = 17 min).
+- Fix-D3 (`install.nsi` line 498-565 L72-fix silent skip path): add force-`taskkill ctfmon.exe /T` + Sleep + retry to make File commands succeed.
+
+This is wrong on three counts:
+1. `WeaselDeployer.exe /install` does **not** LoadLibrary `weaselx64.dll`. The WeaselDeployer process and WeaselServer process have independent `weasel*.dll` views. ctfmon持 weaselx64.dll mmap affects only ctfmon and apps loading the shim, not WeaselDeployer.
+2. `WeaselDeployer.exe /install` does **not** talk to SCM. There is no `OpenSCManager` / `CreateService` in `Configurator::Run` / `UpdateWorkspace` / IPC client code.
+3. **17 min is not SCM RPC default timeout.** RPC_C_DEFAULT_TIMEOUT for ncalrpc / scm is 10–30s; 17 min ≈ 1024s suggests something else (likely user patience limit on an actually-infinite hang, or a hardcoded power-of-2 default).
+
+### The real chain (Phase 1 root cause, verified by source read)
+
+`install.nsi:758-764`:
+```nsi
+IfSilent deploy_silently
+ExecWait "$INSTDIR\WeaselDeployer.exe /install"   ; GUI path
+GoTo deploy_done
+deploy_silently:
+ExecWait "$INSTDIR\WeaselDeployer.exe /deploy"    ; silent path
+deploy_done:
+```
+
+`WeaselDeployer/WeaselDeployer.cpp:99-100` + `Configurator::Run(installing=true)` → `Configurator::UpdateWorkspace(false)`:
+```cpp
+weasel::Client client;
+weasel::deployer::MaintenanceGuard<weasel::Client> guard(client);
+// guard ctor:
+//   if (client_.Connect()) {
+//     client_.StartMaintenance();    // <-- THIS BLOCKS
+//     entered_ = true;
+//   }
+{
+  RimeApi* rime = rime_get_api();
+  rime->deploy();                                  // synchronously runs 4 tasks
+  rime->deploy_config_file("weasel.yaml", "config_version");
+}
+```
+
+`WeaselIPC/WeaselClientImpl.cpp:167-170`:
+```cpp
+void ClientImpl::StartMaintenance() {
+  _SendMessage(WEASEL_IPC_START_MAINTENANCE, 0, 0);
+  session_id = 0;
+}
+```
+
+`include/PipeChannel.h:120-125`:
+```cpp
+_TyRes Transact(Msg& msg) {
+  _Ensure();
+  HANDLE* phandle = _GetPipeHandle();
+  _Send(*phandle, msg);
+  return _ReceiveResponse();
+}
+```
+
+`WeaselIPC/PipeChannel.cpp:88-102` `_Receive` calls `::ReadFile(pipe, msg, rec_len, &lread, NULL)` — **no OVERLAPPED, no timeout**. ReadFile on a named pipe blocks until data arrives or pipe is closed.
+
+The deadlock chain:
+
+1. `install.nsi .onInit` line 152-161: `taskkill /F /IM WeaselServer.exe /T` × 5. **Returns success but `WeaselServer.exe` is PPL (Protected Process Light); `taskkill /F` cannot terminate a PPL process.** (CLAUDE.md P7 + L17/L18 explicitly note this.) WeaselServer.exe stays alive.
+2. `install.nsi` Section "Fluxing" line 498-624: File commands copy / rename the new binaries. Most succeed (because NSIS `File` on a fresh dir does not lock), but the .exe / .dll that WeaselServer currently mmap's **fail silently** (L72-fix silent skip). New binary on disk: only `uninstall.exe` was guaranteed updated (line 756 `WriteUninstaller` is unconditional).
+3. `install.nsi:760` `ExecWait "$INSTDIR\WeaselDeployer.exe /install"` (GUI mode; silent mode runs `/deploy` instead — same `UpdateWorkspace` path).
+4. `WeaselDeployer.exe` process starts. `_tWinMain` → `Run(/install)` → `Configurator::Initialize()` → `rime_api->setup()` succeeds (independent rime singleton in this process).
+5. `Configurator::UpdateWorkspace()`:
+   a. `weasel::Client client;` — `ClientImpl` ctor creates `PipeChannel(GetPipeName())`. No I/O yet.
+   b. `MaintenanceGuard guard(client)` ctor calls `client.Connect()`:
+      - `PipeChannel::Connect()` → `_Ensure()` → `_Connect()`:
+        ```cpp
+        while (_Invalid(pipe = _TryConnect()))
+          ::WaitNamedPipe(name, 500);    // <-- busy wait, 500ms granularity
+        ```
+      - `_TryConnect()` calls `CreateFile(pname, GENERIC_READ|GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL)`. **WeaselServer.exe is still alive (PPL); its `CreateNamedPipe` instance for the user-scoped pipe `\\.\pipe\<username>\WeaselNamedPipe` is still open.** `CreateFile` returns a valid handle (pipe exists, instance available). `Connect` succeeds.
+   c. `client_.StartMaintenance()`:
+      - `_SendMessage(WEASEL_IPC_START_MAINTENANCE, 0, 0)` → `channel.Transact(req)`:
+        - `_Send` calls `WriteFile` on the pipe handle — succeeds (synchronous write to a pipe instance).
+        - `_ReceiveResponse` → `_Receive` → **`ReadFile(pipe, ..., NULL)` blocks** until WeaselServer responds.
+      - WeaselServer, on the other end, dispatches `OnStartMaintenance` → `m_pRequestHandler->StartMaintenance()` → `RimeWithWeaselHandler::StartMaintenance()` → `m_session_status_map.clear(); Finalize(); _UpdateUI(0);` → `RimeFinalize()` → `Service::instance().deployer().JoinMaintenanceThread(); StopService(); ...`.
+      - `JoinMaintenanceThread` blocks until any in-flight rime deploy worker thread finishes. If WeaselServer is mid-`rime->deploy()` (e.g., triggered by a recent schema change, or a stuck I/O), this can take arbitrarily long. If the PPL process is also stuck in some other wait (the same set of causes the .onInit taskkill could not address), `ReadFile` blocks indefinitely.
+6. **`ExecWait` never returns.** NSIS has no built-in timeout on `ExecWait`. WER (default detection: 5s unresponsiveness) logs the hang, but the installer process stays blocked. User reports it as "17 minutes", which is their patience limit; the underlying hang is genuinely unbounded.
+7. User force-kills `installer.exe`. Lines 760-823 (post-deploy: `Exec WeaselServer.exe`, `MessageBox AUTOCHKUPDATE`, `SetRebootFlag`, post-install message) never ran. WeaselServer.exe is still the old PPL binary, still holding the leveldb / user.db locks, still holding the named pipe.
+
+The new binary `WeaselServer.exe` (md5 `3fea4d779bdfaa95950c3e299b2667df`, just-built) is **on disk but never executed** in the GUI install path; the running WeaselServer is still the previous build. For Patch A/B (v0.67 sink TF_INVALID_COOKIE guard) to take effect, both the new `weasel.dll` and `weaselx64.dll` must be loaded by some process — but the new `weasel.dll` is never written either, because the L72-fix silent skip on line 488-493 (`weasel.dll`) and line 498-522 (`weaselx64.dll`) leaves the locked-file path in place when ctfmon.exe (non-PPL but auto-respawned by SYSTEM) is holding the mmap.
+
+### Why sandbox-verify §6 never catches this
+
+`install.nsi:758-765` is the most important split in the installer:
+- **GUI install** (user double-clicks `installer.exe`): runs `WeaselDeployer.exe /install` → `UpdateWorkspace` → `MaintenanceGuard` → IPC deadlock chain.
+- **Silent install** (`installer.exe /S /D=...`): runs `WeaselDeployer.exe /deploy` → `UpdateWorkspace` → same `MaintenanceGuard` chain — but in a **fresh sandbox**, WeaselServer.exe has never started, so the named pipe does not exist, `CreateFile` returns `ERROR_FILE_NOT_FOUND`, throws, caught in `_Ensure` → returns false → `entered_=false` → no IPC, no deadlock.
+
+`F:\soft\00selfmade\sandbox-verify\rime-claude\in-sandbox-verify.ps1` §6 always uses `Install-NsisSilent` (which wraps `cmd /c "installer.exe /S /D=..."`). It exercises only the silent path. **It has never tested GUI install.** This is why 3 fix rounds reported "installer exit code 0" while user GUI install hangs forever.
+
+### Disaster B (浮动栏不弹) 真因 — twin root cause
+
+Two simultaneous root causes make disaster B persist after v0.66 / v0.67:
+
+1. **`output/archives/fluxing-0.19.0.67-installer.exe` is a stale binary package.** Verified by extracting `weasel.dll` from the installer (md5 `b71ae4f77b3e02467f8260d4aa32e5dd`) — this matches `output\weasel.dll` md5 from the last v0.66 build (mtime 2026-07-26 23:27), **not** the freshly rebuilt post-bbd0414 `weasel.dll` (md5 `2edbacc8b5cf18c111fb49f543363474`). The v0.67 installer was built before `bbd0414` Patch A/B was incorporated, or built from a stale build-output dir. Patch A/B (TSF sink TF_INVALID_COOKIE guard) is **not in the shipped installer** at all.
+2. Even if Patch A/B were in the installer, the L72-fix silent skip path on `weasel.dll` / `weaselx64.dll` (line 488-522) keeps the old shim in place when ctfmon / explorer is holding the mmap. ctfmon is restarted by SYSTEM service in ~3s after taskkill, so the 5×2500ms sleep at line 211-219 is not enough to keep ctfmon down through the File commands.
+
+### Lesson
+
+1. **`PIPE waitForSingleObject / ReadFile` must have a timeout** in any client that calls a server whose liveness depends on a PPL (or otherwise unkillable) process. PipeChannel's `ReadFile(pipe, ..., NULL)` is correct for the client-rpc-response pattern **only** when the server is guaranteed-killable. For WeaselServer (PPL), add either:
+   - `WaitForSingleObject(pipe, timeout_ms)`-style wait via `SetNamedPipeHandleState` + async I/O
+   - Non-blocking fire-and-forget for `START_MAINTENANCE` / `END_MAINTENANCE` (response is a constant `DWORD result = 0`; client does not need it)
+   - `MaintenanceGuard` Connect timeout: if WeaselServer does not respond in 5s, skip maintenance mode and proceed with `rime->deploy()` anyway (leveldb cross-process locking is a separate concern handled by librime's own `TryLockFile`).
+2. **`ExecWait <child>.exe` in NSIS has no timeout.** For any `ExecWait` against a process that might IPC-deadlock against an unkillable peer, use `Exec` (non-blocking) and let the child run async; or wrap with `nsExec::ExecToLog /TIMEOUT=30000` (30s hard timeout) to surface the hang as a loggable failure rather than WER "Application Hang".
+3. **Sandbox-verify must exercise the GUI install path**, not only `/S /D=` silent. Silent install skips the `ExecWait /install` line entirely (it runs `/deploy`). The hang only fires on GUI install. Required additions:
+   - §6.5 (or §9): a second `Install-NsisSilent`-style helper that **does not pass `/S`** so the installer runs interactive, with a hard timeout (e.g., 5 minutes via `Start-Process -Wait` + a 5-minute timer job that kills `installer.exe` if not exited). On sandbox with no console, NSIS still runs its GUI (silent skips modal dialogs but the same `Section` code runs); in sandbox UI is off-screen but execution is real.
+   - The verify must check that the new build's binaries (`weasel.dll` md5, `weaselx64.dll` md5, `WeaselServer.exe` md5) actually land on disk, not just that `uninstall.exe` (which is unconditional) was written.
+4. **MSBuild `/t:Rebuild` is mandatory after any `WeaselTSF.cpp` change.** The L107/L108 lesson applies to v0.66→v0.67: `bbd0414` modified `WeaselTSF.cpp:240-258` (Patch A/B), but the v0.67 installer was built without re-running MSBuild — the resulting `output\weasel.dll` retained its v0.66 binary content. The ship-gate must verify md5 of build output vs md5 of installer-extracted binary as a hard check.
+5. **PPL taskkill is theatre.** `.onInit` line 152-161 (`taskkill /F /IM WeaselServer.exe /T` × 5) returns success but does not actually kill a PPL process. Don't rely on it for "fresh start" assumptions. Either escalate to PsKill with `SE_DEBUG_NAME` privilege (PPL requires debug privilege to terminate), or design the installer to **never assume WeaselServer is dead** — including the `ExecWait /install` IPC deadlock chain.
+
+### Anti-patterns
+
+- **AP-L##-A**: Treating `ExecWait <installer-binary> /arg` as "obviously safe" because the binary is signed. NSIS's `ExecWait` is just `WaitForSingleObject` on the child handle; any deadlock inside the child propagates to the installer UI.
+- **AP-L##-B**: Reasoning "ctfmon holds mmap → child times out on RPC" without verifying the child actually calls that RPC. In this case `WeaselDeployer.exe /install` calls **named pipe ReadFile**, not any SCM/RPC API.
+- **AP-L##-C**: Reporting "sandbox-verify PASS" when only the silent path was tested. Silent install (`/S`) is a different code path inside `install.nsi:758-765`. Always enumerate which `ExecWait` / `Section` branches each test exercises.
+- **AP-L##-D**: Shipping an installer built before the source commits it supposedly contains. Always `extract installer.exe → md5` vs `output\*.dll md5` as a hard pre-ship check.
+- **AP-L##-E**: Fixing install-side silent-skip on file replacement without addressing why the process holding the mmap is unkillable (PPL). ctfmon.exe is auto-respawned by SYSTEM; taskkill /F only buys 3 seconds. The real fix is either `MoveFileEx /REBOOTOK` (defer to next boot) or schedule a pre-reboot Stage-2 swap (spec 048 already implements this for `WeaselServer.exe`; expand to `weasel.dll` / `weaselx64.dll`).
+
+### How to apply
+
+- Any `ExecWait <child>.exe <args>` in `install.nsi`: before shipping, ask "what lock can the child deadlock against?" If the answer is "a process that `.onInit` could not actually kill", use `Exec` (non-blocking) or `nsExec::ExecToLog /TIMEOUT=30000`.
+- Any IPC client `Transact` against a pipe / socket / RPC endpoint whose server is PPL or otherwise unkillable: add timeout (5–10s) at the `ReadFile` / `recv` / `WinHttpSendRequest` boundary. Treat timeout as "server hung, proceed without it" rather than "fatal error".
+- Any ship-gate for `output/archives/fluxing-*.installer.exe`: extract all `*.dll` / `*.exe` from the installer (7z supports NSIS-3 Unicode), md5 each, compare to `output/*.dll md5` / `output/Win32/*.exe md5`. **Mismatched md5 = ship gate FAIL.**
+- Any sandbox-verify: include a GUI-mode install pass with hard timeout. The current §6 silent-only coverage has been a 3-round blind spot; never let it stay single-mode again.
+
+### Ship gate for v0.68 (mandatory before any ship)
+
+- [ ] `output\weasel.dll` md5 == `weasel.dll` md5 extracted from `output\archives\fluxing-0.19.0.68-installer.exe` (Patch A/B must ship)
+- [ ] `output\weaselx64.dll` md5 == `weaselx64.dll` md5 extracted from installer (x64 shim must ship — current v0.67 fails this)
+- [ ] `output\Win32\WeaselServer.exe` md5 == `WeaselServer.exe` md5 extracted from installer
+- [ ] `in-sandbox-verify.ps1` §9 (or §6.5): GUI-mode install with 5-min hard timeout; on timeout → FAIL.
+- [ ] Either `WeaselDeployer/MaintenanceGuard.h` Connect timeout (5s) OR `WeaselIPC/PipeChannel` ReadFile timeout (10s) implemented and verified.
+- [ ] `output/archives/fluxing-0.19.0.68-installer.exe` builds to ≤ 45 MB (sanity check NSIS packaging).
+- [ ] User runs `_hotfix_patch_AB_v067.ps1` (if not already run) to backfill Patch A/B into user system `weasel.dll` immediately, separately from the v0.68 installer ship.
+
+### 关联文件 / 提交
+
+- commit `bbd0414` fix(WeaselTSF+installer): v0.19.0.67 — Phase L 装机 bugfix 4 真修 (TF_INVALID_COOKIE guard + PPL taskkill 缩短 + WriteRegStr Sleep). Patch A/B in `WeaselTSF/WeaselTSF.cpp:240-258`. **NB**: this commit's `weasel.dll` content was **never built into** `fluxing-0.19.0.67-installer.exe` (verified by extracting installer + md5 vs fresh build).
+- 源 (IPC deadlock chain): `WeaselDeployer/WeaselDeployer.cpp:99-100` → `WeaselDeployer/Configurator.cpp:117-150` → `WeaselDeployer/MaintenanceGuard.h:36-42` → `WeaselIPC/WeaselClientImpl.cpp:167-170` → `include/PipeChannel.h:120-125` → `WeaselIPC/PipeChannel.cpp:88-102`.
+- 源 (server-side hang surface): `WeaselIPCServer/WeaselServerImpl.cpp:321-327` → `RimeWithWeasel/RimeWithWeasel.cpp:585-589` (`Finalize()` → `RimeFinalize()` → `JoinMaintenanceThread`).
+- 源 (PPL阻止taskkill): `output/install.nsi:152-161` (5× taskkill, all return success but PPL survives) + `output/install.nsi:758-765` (ExecWait /install in GUI path).
+- 源 (silent vs GUI split): `output/install.nsi:758-764`.
+- 源 (sandbox-verify silent-only): `F:\soft\00selfmade\sandbox-verify\rime-claude\in-sandbox-verify.ps1:65-71` (`Install-NsisSilent` always passes `/S`).
+- Hotfix (separate from v0.68): `_hotfix_patch_AB_v067.ps1` (created 2026-07-28) ships Patch A/B `weasel.dll` (md5 `2edbacc8b5cf18c111fb49f543363474`) into user system `D:\Program Files\fluxing\weasel\weasel.dll`, leaving old binary as `.hotfix_v066_old`.
+- 失败 ship 版本: v0.19.0.66 (commit `06fa893`, line 760 unchanged) — same hang observed (per `handoff-after-phase-L-postship-freeze-v0.19.0.67-2026-07-26.md` §1.1).
+- 失败 ship 版本: v0.19.0.67 (commit `bbd0414`) — same hang, plus Patch A/B not actually shipped in installer binaries.
+
+---
+
+## L##-PhaseL-8-Hotfix-Partial — hotfix is a partial fix when x64 shim is also locked
+
+**Context**: `_hotfix_patch_AB_v067.ps1` ships Patch A/B `weasel.dll` (x86 TSF shim) into user system. **It does not ship `weaselx64.dll` (x64 shim)**, because the x64 build was blocked by the safety classifier when invoked via `MSBuild.exe` during this session.
+
+**Lesson**: A hotfix that ships only one arch of a shim pair fixes 32-bit processes (notepad, VSCode, older Office) but **leaves 64-bit processes (Explorer, Chrome, Edge, modern Office) on the old shim**. The QuickPanel improvement is therefore partial: users who primarily use 32-bit apps will see the fix immediately; users on 64-bit-only apps will still see the floating bar fail to pop.
+
+**How to apply**: When shipping any TSF shim patch as a hotfix (i.e., outside the full installer path), always include **both** `weasel.dll` and `weaselx64.dll`. Verify md5 of both against the build output before shipping. The hotfix script must take ownership + kill ctfmon + TextInputHost + rename + copy + restart, for **both** files. If x64 build is blocked, escalate to a manual rebuild step before running the hotfix.
+
+**关联文件 / 提交**:
+- `_hotfix_patch_AB_v067.ps1` (current scope: `weasel.dll` only)
+- `weaselx64.dll` fresh-build md5 (target): **TBD** — requires x64 MSBuild pass that was safety-blocked in this session.
+- 待补: `weaselx64.dll` hotfix path in same script (line 5-8 currently only stages `weasel.dll` and `WeaselServer.exe`).
+

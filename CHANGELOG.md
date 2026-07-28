@@ -1,5 +1,84 @@
 
 
+## [0.19.0.67-fluxing] - 2026-07-27
+
+### fix(WeaselTSF+installer): v0.19.0.67 — Phase L 装机 bugfix 4 真修 (TF_INVALID_COOKIE guard + PPL taskkill 缩短 + WriteRegStr Sleep)
+
+**User-visible (装机期待)**:
+- 装机过程不卡死 Windows (Patch C1: PPL taskkill 30s → ~10s)
+- 装机最后阶段 WriteRegStr HKLM CTF\KnownClasses 不卡 CTF lock (Patch C2: 前置 Sleep 3000ms 等 ctfmon 稳定)
+- Win+Space 切到 Fluxing 浮动栏正常弹 (Patch A+B: sink lifecycle 健壮)
+- 默认 IME 是上一个,不是 fluxing (TIP 注册正确)
+- Alt+, toggle 仍 work (回归)
+
+**Root cause (v0.66 装机灾难真因)**:
+- 灾难 #1 (安装卡死) = install.nsi PPL WeaselServer.exe taskkill 30s sleep + install.nsi:738 WriteRegStr 卡 CTF lock 叠加 → Patch C1+C2 修
+- 灾难 #2 (默认进 Fluxing 无浮动栏) = v0.66 `_InitActiveLanguageProfileSink` AdviseSink 失败时未 reset cookie → 下次 ActivateEx 仍 fail → OnActivated 永不触发 → `m_client.FocusIn()` 不发 → `QuickPanelDialog::Show()` 不调 → 浮动栏不弹。Patch A+B 修。
+- 灾难 #3 (Alt+, 死) = sink corruption 副作用 → Patch A 间接修
+
+**修复 (2 source change)**:
+1. **Patch A** (`WeaselTSF/WeaselTSF.cpp:248-252`): `_UninitActiveLanguageProfileSink` 开头加 `if (_dwActiveLanguageProfileSinkCookie == TF_INVALID_COOKIE) return;`
+   - 防 ActivateEx 失败 → Deactivate → `UnadviseSink(0xFFFFFFFF)` 触发 TSF 内部 corruption
+2. **Patch B** (`WeaselTSF/WeaselTSF.cpp:240-242`): `_InitActiveLanguageProfileSink` AdviseSink 失败路径加 `_dwActiveLanguageProfileSinkCookie = TF_INVALID_COOKIE;`
+   - 防 stale cookie 状态泄漏,下次 ActivateEx 可干净重试
+   - Patch A+B gold standard 参考: `_InitThreadMgrEventSink` (`WeaselTSF.cpp:45`) + `_UninitThreadMgrEventSink` (`ThreadMgrEventSink.cpp:55`)
+3. **Patch C1** (`output/install.nsi:148-161`): PPL WeaselServer.exe taskkill 10×30s → 5×~10s 简化
+4. **Patch C2** (`output/install.nsi:738-740`): WriteRegStr HKLM CTF\KnownClasses 前置 Sleep 3000ms
+
+**Subagent 报告 verify**:
+- 候选 B (QuickPanelDialog::Show() GDI+ Bitmap(IStream*) 路径清理) **NOT APPLICABLE** — 已 verify QuickPanelDialog.cpp v3-rev3 spec 074 是 PURE GDI + WIC + per-pixel alpha,无可清理项
+- 灾难 #2 真因并非 QuickPanelDialog 内部,而是 v0.66 sink init 失败时 cookie 未 reset
+
+**Verification (ship gate 待 user 跑)**:
+- installer: `F:\soft\00selfmade\rime_claude\output\archives\fluxing-0.19.0.67-installer.exe` (43.3 MB)
+- baseline `reg query` PASS(装机前): HKLM\CTF\KnownClasses + HKCU\CTF\Assemblies\0x00000804 + HKLM\CLSID InprocServer32 全部存在
+- 装机后必须跑 §5.1 MANDATORY `reg query` 验证(任一 key 缺失 → DO NOT SFTP → fix install.nsi nesting per L66 safety-net pattern)
+- 装机 user flow 5 项 verify (见 handoff §5): 装新 installer / WriteRegStr KnownClasses 不卡 / 重启无 ctfmon crash / 默认 IME 不 fluxing / Win+Space 弹浮动栏 / Alt+, toggle
+- **commit `bbd0414` ≠ ship** — SFTP gate 在 sandbox-verify PASS 后
+
+**L## 沉淀候选 (待 verify PASS 后写)**:
+- **L##-PhaseL-9-SinkRegister-GoldStandard**: TSF sink 注册/反注册必须严格抄 `_InitThreadMgrEventSink` + `_UninitThreadMgrEventSink` 的 TF_INVALID_COOKIE guard 模式。Copy-paste `_InitThreadFocusSink` 模板但漏这一行 = 1 装机灾难
+- **L##-PhaseL-10-SubagentReportVerify**: 多 subagent root cause 调查必须亲自 verify 关键 source claim(subagent 可能读到 stale source state 或 memory 过时引用)。本次"QuickPanelDialog GDI+ 路径"claim 与当前 QuickPanelDialog.cpp v3-rev3 spec 074 实际不符
+
+**Commit**: `bbd0414 fix(WeaselTSF+installer): v0.19.0.67 — Phase L 装机 bugfix 4 真修 (TF_INVALID_COOKIE guard + PPL taskkill 缩短 + WriteRegStr Sleep)`
+
+---
+
+## [0.19.0.66-fluxing] - 2026-07-25
+
+### fix(WeaselTSF): v0.19.0.66 — Phase L 装机 bugfix 3 真修 (ITfActiveLanguageProfileNotifySink 注册)
+
+**User-visible (装机反馈)**:
+- ⚠️ v0.19.0.66 ship 后装机端 3 大灾难 (系统级):
+  1. 安装过程出现报错,导致 Windows 卡死,必须重启
+  2. 重启后,自动进入 Fluxing 输入法,无设置栏出现 (IME 默认激活,但浮动栏不弹)
+  3. 快捷键 Alt+, 无法调出快捷设置栏 (hotkey 全死)
+- ship gate **未通过**: 5 项装机 user flow verify 全 FAIL → 真修见 v0.19.0.67
+
+**修复 (1 source change, intent 正确但漏 TF_INVALID_COOKIE guard)**:
+- `WeaselTSF/WeaselTSF.h` +5 行: `_InitActiveLanguageProfileSink` / `_UninitActiveLanguageProfileSink` 方法声明 + `_dwActiveLanguageProfileSinkCookie` 字段
+- `WeaselTSF/WeaselTSF.cpp` 构造函数 +1 行: cookie 初始化 `TF_INVALID_COOKIE`
+- `WeaselTSF/WeaselTSF.cpp` QueryInterface +3 行: `IID_ITfActiveLanguageProfileNotifySink` 分支
+- `WeaselTSF/WeaselTSF.cpp` Deactivate +2 行: `_UninitActiveLanguageProfileSink()` 调用
+- `WeaselTSF/WeaselTSF.cpp` ActivateEx +4 行: `_InitActiveLanguageProfileSink()` 调用 + goto ExitError
+- `WeaselTSF/WeaselTSF.cpp` init/uninit 实现 +22 行: 仿 `_InitThreadFocusSink` 模板
+
+**修复意图**: Win+Space 切 Fluxing → TSF manager 切 language profile → OnActivated 触发 → `m_client.FocusIn()` → IPC → `QuickPanelDialog::Show()` → 浮动栏弹
+- v0.63/.64/.65 累积失败根因: OnActivated 已声明 + 已实现,但从未通过 AdviseSink 注册到 TSF
+
+**装机后真因重审 (systematic-debugging Phase 4)**:
+- 灾难 #1 (安装卡死) = `install.nsi:148-161` PPL WeaselServer.exe taskkill 30s + `install.nsi:738` WriteRegStr HKLM CTF\KnownClasses 卡 CTF lock 叠加 (非 sink 直接造成)
+- 灾难 #2 (默认进 Fluxing 无浮动栏) = v0.66 sink init 失败时无 TF_INVALID_COOKIE guard → cookie stale → 下次 ActivateEx 仍 fail → OnActivated 永不触发 → 浮动栏不弹。**注**: subagent 报告称 QuickPanelDialog GDI+ Bitmap(IStream*) claim 是 v0.18.41.0 旧 bug,经子会话 verify **错误** — 当前 QuickPanelDialog.cpp v3-rev3 spec 074 已是 PURE GDI + WIC + per-pixel alpha,无可清理项
+- 灾难 #3 (Alt+, 死) = pre-existing QuickPanelDialog 单例 state 被 v0.65 `Show(null × 6)` 污染 + sink corruption 副作用
+
+**Verification (ship gate FAIL)**:
+- installer md5: `8c1d29c0...`(待装机 verify,本会话未跑)
+- 装机 user flow 全 FAIL → 真修见 v0.19.0.67 (Patch A+B+C1+C2)
+
+**Commit**: `06fa893 fix(WeaselTSF): v0.19.0.66 — Phase L 装机 bugfix 3 真修 (ITfActiveLanguageProfileNotifySink 注册)`
+
+---
+
 ## [0.19.0.65-fluxing] - 2026-07-25
 
 ### fix(WeaselServer+RimeWithWeasel): v0.19.0.64 ship 装机 bugfix 2 — 真修 Phase L 调整 3 (切输入法弹浮动栏)
