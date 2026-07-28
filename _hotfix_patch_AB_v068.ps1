@@ -8,9 +8,9 @@ _hotfix_patch_AB_v068.ps1 — v0.68 完整 hotfix (Patch A/B 进 x86 + x64 两�
      (x64) 两个 shim 的 Patch A/B. v0.67 hotfix 只覆盖 x86, 64-bit 进程 (Explorer,
      Chrome, Edge, modern Office) 仍 v0.66 shim. 本脚本 v0.68 完整版覆盖双 shim.
 
-预期 md5 (本 fresh build):
-  - weasel.dll:     2edbacc8b5cf18c111fb49f543363474
-  - weaselx64.dll:  TBD (x64 rebuild 后填)
+预期 md5 (本 fresh build, v0.68 installer 含这些):
+  - weasel.dll:     25ef9413b28bb2368d04bf407a0a46d1
+  - weaselx64.dll:  6afea7dcf3478b298aa03dd19e2a1666
 
 用法 (user system, admin):
    powershell -ExecutionPolicy Bypass -File _hotfix_patch_AB_v068.ps1
@@ -50,14 +50,14 @@ $shims = @(
         Target     = Join-Path $weaselDir "weasel.dll"
         BackupExt  = ".hotfix_v066_old"
         HotfixSrc  = Join-Path $PSScriptRoot "hotfix_v0.67_patch_AB\weasel.dll"
-        ExpectedMd5 = "2edbacc8b5cf18c111fb49f543363474"
+        ExpectedMd5 = "25ef9413b28bb2368d04bf407a0a46d1"
     }
     @{
         Name       = "weaselx64.dll"
         Target     = Join-Path $weaselDir "weaselx64.dll"
         BackupExt  = ".hotfix_v066_old"
         HotfixSrc  = Join-Path $PSScriptRoot "hotfix_v0.68_patch_AB\weaselx64.dll"
-        ExpectedMd5 = $null  # TODO: x64 build 后填入
+        ExpectedMd5 = "6afea7dcf3478b298aa03dd19e2a1666"
     }
 )
 
