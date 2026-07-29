@@ -9,6 +9,7 @@
 #include "LanguageBar.h"
 #include "Compartment.h"
 #include "ResponseParser.h"
+#include <logging.h>  // v0.19.0.69 (Phase L Bugfix 7.5): DLOG for OnActivated instrumentation
 
 static void error_message(const WCHAR* msg) {
   static DWORD next_tick = 0;
@@ -285,6 +286,19 @@ STDMETHODIMP WeaselTSF::OnActivated(REFCLSID clsid,
   // here is intentional: reconnect on session loss will re-arm
   // QuickPanel if the user is still on Fluxing.)
   if (isActivated) {
+    // v0.19.0.68 bugfix-phase2 instrumentation: 探测 m_client.Echo() 是否阻塞 TSF 路径.
+    // 与 RimeWithWeasel::FocusIn 入口的 m_disabled log 配对, 区分 root cause A vs B.
+    DLOG(INFO) << "OnActivated ACTIVATE m_client.Echo()="
+               << (m_client.Echo() ? "true" : "FALSE");
+    // v0.19.0.69 (Phase L Bugfix 7.5 — Echo false fallback): Echo() false 时
+    // (常见原因: session_id=0 因 ActivateEx 重启 / pipe session 丢失) 静默不调
+    // FocusIn,user 切 IME 看不到 QuickPanel + 后续 IPC 都 silently dead。
+    // 修复: Echo() false 直接 fallback StartSession,有概率恢复 (spec 053 R6 fix 也
+    // 用类似 pattern 在 FocusIn handler 端 lazy recover)。
+    if (!m_client.Echo()) {
+      DLOG(WARNING) << "OnActivated Echo() false, fallback StartSession";
+      m_client.StartSession();
+    }
     if (m_client.Echo()) {
       m_client.FocusIn();
     }

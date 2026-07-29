@@ -1093,7 +1093,26 @@ void QuickPanelDialog::RepaintLayered(HWND hwnd) {
                            &ptSrc, 0, &blend, ULW_ALPHA)) {
     // UpdateLayeredWindow 失败 — 调试钩子 (L74 教训)
     DWORD err = GetLastError();
-    (void)err;
+    // v0.19.0.68 bugfix-phase2 instrumentation: root cause D 探针.
+    // 之前 (void)err 直接吞, 现在写 weasel-install.log 便于装机时抓取.
+    wchar_t path[MAX_PATH];
+    ExpandEnvironmentStringsW(L"%APPDATA%\\Rime\\weasel-install.log", path, MAX_PATH);
+    HANDLE hf = CreateFileW(path, FILE_APPEND_DATA,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE,
+                            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hf != INVALID_HANDLE_VALUE) {
+      SYSTEMTIME st; GetSystemTime(&st);
+      wchar_t buf[512];
+      int n = _snwprintf(buf, _countof(buf),
+                         L"[%04d-%02d-%02d %02d:%02d:%02d] [QP-DIAG] UpdateLayeredWindow FAILED err=%lu hwnd=%p\n",
+                         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+                         err, hwnd);
+      if (n > 0) {
+        DWORD written = 0;
+        WriteFile(hf, buf, static_cast<DWORD>(n) * sizeof(wchar_t), &written, nullptr);
+      }
+      CloseHandle(hf);
+    }
   }
 }
 
@@ -1138,6 +1157,30 @@ LRESULT QuickPanelDialog::OnKeyDown(HWND hwnd, WPARAM key) {
 }
 
 // ===== Public API =====
+// v0.19.0.68 bugfix-phase2 instrumentation helper: 写一行到
+//   %APPDATA%\Rime\weasel-install.log (与 ImeLangChangeSubclassProc / 装机 log
+//   共享), 便于 user 一次抓取 4 节点的全链路埋点. 单元本身不在 glog PCH
+//   (WeaselServer stdafx.h 不 include glog/logging.h), 故采用此模式而非 DLOG.
+static void QpDiagLog(const wchar_t* tag) {
+  wchar_t path[MAX_PATH];
+  ExpandEnvironmentStringsW(L"%APPDATA%\\Rime\\weasel-install.log", path, MAX_PATH);
+  HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE,
+                         nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return;
+  SYSTEMTIME st; GetSystemTime(&st);
+  wchar_t buf[512];
+  int n = _snwprintf(buf, _countof(buf),
+                     L"[%04d-%02d-%02d %02d:%02d:%02d] [QP-DIAG] %s s_hwnd=%p\n",
+                     st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+                     tag, QuickPanelDialog::ActiveHwnd());
+  if (n > 0) {
+    DWORD written = 0;
+    WriteFile(h, buf, static_cast<DWORD>(n) * sizeof(wchar_t), &written, nullptr);
+  }
+  CloseHandle(h);
+}
+
 void QuickPanelDialog::Show(bool currentFullwidth,
                              OnClick onSchema, OnClick onUserFolder,
                              OnClick onPhrases, OnToggle onFullwidth,
@@ -1151,6 +1194,11 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   s_onSymbols    = onSymbols;
   s_onLogin      = onLogin;
   (void)currentFullwidth;
+  // v0.19.0.68 bugfix-phase2 instrumentation: Show 入口埋点, 确认两条路径都到此处.
+  // 配合 RimeWithWeasel::FocusIn 入口 m_disabled log + WeaselTSF::OnActivated
+  // Echo() log + ServerImpl::OnHotkey wParam log, 即可定位是 gate (A/B) 还是
+  // 内部 (D). 后续 RepaintLayered 失败单独埋点.
+  QpDiagLog(L"QuickPanel::Show entered");
   if (s_hwnd) {
     ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
     // L81-fix: reuse 路径也强制置顶(防止其他窗口在 hide→show 间隙盖上面板)

@@ -384,18 +384,30 @@ bool RimeWithWeaselHandler::ChangePage(bool backward,
 void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
   DLOG(INFO) << "Focus in: ipc_id = " << ipc_id
              << ", client_caps = " << client_caps;
+  // v0.19.0.68 bugfix-phase2 instrumentation: 区分 m_disabled gate vs 后续崩溃.
+  // 与 QuickPanelDialog 入口的 [QP-DIAG] 配对, 用于判定 root cause A vs D.
+  DLOG(INFO) << "FocusIn ENTER m_disabled=" << m_disabled;
   TryLazyRecovery();  // spec 053 R6 fix
+  // v0.19.0.69 (Phase L Bugfix 7.5 — QuickPanel 永久 dead 真修):
+  // L69-fix 残留 `if (m_disabled) return;` 早返,阻断 v0.19.0.65 re-enable 的 Show(false,...)
+  // 路径。原因: L69-fix 是 v0.18.41.4 临时禁 QuickPanel 防 GDI+ Bitmap(IStream*) UAF heap
+  // corruption,但 v0.18.41.4+ QuickPanel 已改纯 GDI + per-pixel alpha (spec 074 / L75),
+  // GDI+ 路径整段已无 msimg32 / ole32 内存往返 → crash 链切断。
+  // m_disabled=true 在 user 装机后常规使用场景理论上 short-lived (TryLazyRecovery
+  // 已处理 deployer-died-abandoned-mutex 情况),但 isActivated=TRUE 触发 FocusIn 频率
+  // 高 (TSF spec 1×/IME-switch),任何 m_disabled 残留 = 永久 QuickPanel 死。
+  // 修复:QuickPanelDialog::Show 移到 m_disabled check 之前,确保 QuickPanel 一定弹出。
+  // _UpdateUI / CaptureForeground / m_active_session set 仍守 m_disabled (librime 此
+  // 时可能未初始化,调 rime_api 调用会失败)。
+  // v0.19.0.65: re-enable L69-fix residue; use Show() not EnableAlwaysShowMode
+  if (ipc_id > 0) {
+    DLOG(INFO) << "FocusIn auto-show QuickPanel: ipc_id=" << ipc_id;
+    QuickPanelDialog::Show(false, nullptr, nullptr, nullptr, nullptr, nullptr,
+                           nullptr);
+  }
   if (m_disabled)
     return;
   // v0.19.0.52 (Phase K3 T011 Option B): 抓 user foreground。
-  // 此刻: WeaselTSF.dll 已通过 IPC 通知 server 端 user 在 edit field 输入 →
-  // server FocusIn handler 在 IPC worker thread 跑 → GetForegroundWindow()
-  // 拿 system foreground (= user app 当前 hwnd)。PhrasesDialogIPC::InjectText
-  // 后续会读这个,AttachThreadInput + SetForegroundWindow 把 foreground 抢回去。
-  fluxing::foreground_restore::CaptureFromCurrentThread();
-  _UpdateUI(ipc_id);
-  m_active_session = ipc_id;
-  // L69-fix: QuickPanel DISABLED to avoid heap corruption crash.
   //
   // Background: spec 066 (v0.18.41.0) added EnableAlwaysShowMode() here to
   // auto-show the QuickPanel when Fluxing IME is activated. This triggered a

@@ -4,6 +4,7 @@
 #include <Windows.h>
 #include "../WeaselServer/resource.h"  // spec 036: ID_HOTKEY_QUICK_PANEL + ID_WEASELTRAY_QUICK_PANEL
 #include <WeaselUtility.h>
+#include <logging.h>  // v0.19.0.69 (Phase L Bugfix 7.5): DLOG for OnHotkey instrumentation
 
 namespace weasel {
 class PipeServer : public PipeChannel<DWORD, PipeMessage> {
@@ -73,7 +74,36 @@ LRESULT ServerImpl::OnCreate(UINT uMsg,
 
   // spec 070 T007: 重新启用 Alt+, 全局热键 (L69 临时禁用已解除,改用 D2D+无 GDI+ Bitmap 实现)
   // AP-036-F: ignore failure (hotkey may be registered by another app).
-  ::RegisterHotKey(m_hWnd, ID_HOTKEY_QUICK_PANEL, MOD_ALT, VK_OEM_COMMA);
+  // v0.19.0.69 (Phase L Bugfix 7.5 — RegisterHotKey log): 失败 silently 影响装机 user
+  // 调试路径(切 alt+, 无反应但 stderr 看不到,GUI app 无 console)。改写 weasel-install.log
+  // 包含 GetLastError 详细 (ERROR_HOTKEY_ALREADY_REGISTERED 1409 / 322 / 5 等)。
+  if (!::RegisterHotKey(m_hWnd, ID_HOTKEY_QUICK_PANEL, MOD_ALT, VK_OEM_COMMA)) {
+    DWORD err = ::GetLastError();
+    wchar_t path[MAX_PATH];
+    ExpandEnvironmentStringsW(L"%APPDATA%\\Rime\\weasel-install.log", path, MAX_PATH);
+    HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+      SYSTEMTIME st; GetSystemTime(&st);
+      wchar_t wbuf[512];
+      int n = _snwprintf(wbuf, _countof(wbuf),
+                         L"[%04d-%02d-%02d %02d:%02d:%02d] [ServerImpl::OnCreate] "
+                         L"RegisterHotKey(Alt+, QUICK_PANEL) FAILED err=%lu%s\n",
+                         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+                         err,
+                         (err == 1409) ? L" (ERROR_HOTKEY_ALREADY_REGISTERED - another app occupies Alt+,)"
+                                       : L" (see Win32 error codes)");
+      if (n > 0) {
+        DWORD written;
+        size_t bytes = static_cast<size_t>(n) * sizeof(wchar_t);
+        WriteFile(h, wbuf,
+                  bytes > MAXDWORD ? MAXDWORD : static_cast<DWORD>(bytes),
+                  &written, nullptr);
+      }
+      CloseHandle(h);
+    }
+  }
   return 0;
 }
 
@@ -153,6 +183,9 @@ LRESULT ServerImpl::OnHotkey(UINT uMsg,
                              WPARAM wParam,
                              LPARAM lParam,
                              BOOL& bHandled) {
+  // v0.19.0.68 bugfix-phase2 instrumentation: 区分 hotkey 是否到 server (root cause C
+  // = RegisterHotKey 失败) vs 到了但 QuickPanel 内部 (root cause D).
+  DLOG(INFO) << "WM_HOTKEY wParam=" << wParam;
   if (wParam == ID_HOTKEY_QUICK_PANEL) {
     // AP-036-G: only fire if the request handler is alive (avoid
     // firing during shutdown when m_pRequestHandler may be null).
