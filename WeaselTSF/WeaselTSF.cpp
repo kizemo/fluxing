@@ -286,19 +286,18 @@ STDMETHODIMP WeaselTSF::OnActivated(REFCLSID clsid,
   // here is intentional: reconnect on session loss will re-arm
   // QuickPanel if the user is still on Fluxing.)
   if (isActivated) {
-    // v0.19.0.68 bugfix-phase2 instrumentation: 探测 m_client.Echo() 是否阻塞 TSF 路径.
+    // v0.19.0.69 (Phase L Bugfix 7.5) instrumentation: 探测 m_client.Echo() 阻塞路径.
     // 与 RimeWithWeasel::FocusIn 入口的 m_disabled log 配对, 区分 root cause A vs B.
     DLOG(INFO) << "OnActivated ACTIVATE m_client.Echo()="
                << (m_client.Echo() ? "true" : "FALSE");
-    // v0.19.0.69 (Phase L Bugfix 7.5 — Echo false fallback): Echo() false 时
-    // (常见原因: session_id=0 因 ActivateEx 重启 / pipe session 丢失) 静默不调
-    // FocusIn,user 切 IME 看不到 QuickPanel + 后续 IPC 都 silently dead。
-    // 修复: Echo() false 直接 fallback StartSession,有概率恢复 (spec 053 R6 fix 也
-    // 用类似 pattern 在 FocusIn handler 端 lazy recover)。
-    if (!m_client.Echo()) {
-      DLOG(WARNING) << "OnActivated Echo() false, fallback StartSession";
-      m_client.StartSession();
-    }
+    // v0.19.0.70 (Phase L Bugfix 7.6 — revert Fix B): 原 v0.19.0.69 Fix B 在 OnActivated
+    // TSF 线程上同步 fallback StartSession,违反 CLAUDE.md §2 P2 ("TSF 回调禁止 blocking I/O"
+    // CreateFile / BeginWaitForSingleObject / 同步注册表 / named-pipe ReadFile)。
+    // 原始代码只 1 次 Echo() 同步呼叫已接近 P2 边界;Fix B 加 2-3 次 (Echo + StartSession +
+    // Echo) 同步 IPC,TSF 线程最坏情况 hang 数秒 → TS manager 与所有 IME 调用全死。
+    // 回滚到 v0.19.0.68 状态:仅 Echo() check,不尝试在 OnActivated 线程恢复 session。
+    // Session 恢复走 RimeWithWeasel::FocusIn handler 端 spec 053 R6 已有 TryLazyRecovery
+    // (同 DPR thread, server 进程内, 不在 TSF 线程)。
     if (m_client.Echo()) {
       m_client.FocusIn();
     }

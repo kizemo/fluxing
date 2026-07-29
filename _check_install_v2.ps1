@@ -85,10 +85,12 @@ Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
 #   (WeaselTSF::OnActivated → m_client.FocusIn() IPC) 才是真路径。同保留
 #   ImmGetDefaultIMEWnd 子类化作 fallback,加埋点验证 hypothesis。Bug 2 root cause
 #   不是 WM_INPUTLANGCHANGE 路径,而是 L69-fix residue 死了 FocusIn。
-$expectedMd5 = 'BAD4E61A3624B4DFD516BA561B23BED6'  # v0.19.0.69 WeaselServer.exe (MSBuild Win32 Release /t:Rebuild, build 2026-07-29 10:00, Phase L Bugfix 7.5 QuickPanel 真修: m_disabled early return 移除 + Echo fallback + RegisterHotKey log)
-$expectedFluxingMd5 = 'C969AEB31E24D9EE1468F8869150970D'  # v0.19.0.66 FluxingPhrasesDialog.exe (no source change in v0.69 — src/build unchanged)
-$expectedInstallerMd5 = '422E9B50C7D52BFDF900772A6A8E69F7'  # v0.19.0.69 NSIS installer (build 2026-07-29 10:03, 43,345,900 bytes)
-$expectedBuildTime = '2026-07-29 10:03:00'  # v0.19.0.69 NSIS timestamp
+$expectedMd5 = 'BAD4E61A3624B4DFD516BA561B23BED6'  # v0.19.0.70 WeaselServer.exe (unchanged from v0.69; Phase L Bugfix 7.6 = Fix B revert, only weasel.dll/weaselx64.dll changed)
+$expectedFluxingMd5 = 'C969AEB31E24D9EE1468F8869150970D'  # v0.19.0.66 FluxingPhrasesDialog.exe (no source change in v0.70)
+$expectedInstallerMd5 = '6D266FD28715F12210CB3BC4B1E7A2F0'  # v0.19.0.70 NSIS installer (build 2026-07-29 10:21, 43,350,347 bytes; Fix B reverted to address CLAUDE.md P2 violation)
+$expectedBuildTime = '2026-07-29 10:21:00'  # v0.19.0.70 NSIS timestamp
+# v0.19.0.70 weasel.dll md5: 82e9e924b25634ca7ffe869856dc8bb7 (was c24159049897eb47f6cd234ac0be4ca4 in v0.69)
+# v0.19.0.70 weaselx64.dll md5: 80615749557d4e04c6e7451ad00e37c5 (was 485781459b721c0b6745c59f39fcb69c in v0.69)
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',
