@@ -9339,3 +9339,372 @@ FluxingPhrasesDialog.exe (`output\FluxingPhrasesDialog.exe` mtime 不变,
 - 源: `test/TestPhrasesDialog/TestPhrasesDialog.cpp:1480-1548` (Test 43/44 新增)
 - NSIS installer: `output/archives/fluxing-0.19.0.58-installer.exe` md5
   `312053473F9D41FCA65EF659F2185B9A`
+
+---
+
+## L##-PhaseL-9.11-Retro-v0.74.x — 7 天 6 次失败 ship 完整复盘 + 严重 bug 立刻回退规则 (Phase L Bugfix 9.11 retro / 2026-07-31)
+
+**Incident**: v0.74.x 系列 (v0.74.1 / v0.74.2 / v0.74.3) ship 后 7 天内,**3 个独立 ship 版本没修复 v0.74 报告的 input crash**
++ 把 user 之前能用的版本 (QuickPanel manual open via Alt+,) 退化成 "切输入法浮动栏不弹"
++ 退化成 spec 074 "always-show" sticky mode,再退化成 "不弹",再退化成 input crash 多进程
++ 每一次 ship 都诊断 ~1 周,浪费大量 Token + 用户极度失望 ("一周的工作, 你还是没修复")
+
+**完整时间线 (2026-07-25 → 2026-07-31, 7 天)**:
+1. **v0.19.0.66** (commit `06fa893`): L66 safety-net 写 KnownClasses + HKCU\0x00000804
+   - user 测试: "没出现输入无响应 (但 L66 safety-net 修复后)"
+   - 真实状态: ✓ (装到 user 机器上 IME 输入 OK,但 user 后面用了更新版本)
+2. **v0.19.0.67** (commit `bbd0414`): Phase L Bugfix 4 真修 (TF_INVALID_COOKIE guard)
+   - user 测试: **17 分钟 hang on install** (L##-PhaseL-7)
+3. **v0.19.0.68** (commit `67520c3`): MaintenanceGuard + hotfix
+   - user 测试: "install OK, 输入中文有响应, 但 floating bar 不弹"
+4. **v0.19.0.69** (commit `476e77e`): "QuickPanel 永久 dead 真修" — **DISABLES all 4 entry points**
+5. **v0.19.0.70** (commit `c14d6ee`): Fix B revert (P2 violation)
+   - 状态: 不详
+6. **v0.19.0.71** (commit `45264e5`): "fire-and-forget Exec + immediate MessageBox" anti-pattern → user 看到 installer 卡住
+7. **v0.19.0.72** (commit `fbd09ca`): Ready-flag handshake 修 installer 立即退出
+8. **v0.19.0.74.1 / .74.2 / .74.3**: System32 cleanup 引入 → v0.66 era shim DLL 残留 → 0xc0000374 跨进程 crash
+   - v0.74.2 ship 后: 输入中文 → 4+ 进程同时崩 (Claude / dopus / HipsMain / aboboo + explorer)
+
+**症状严重程度递增**:
+- 17min hang on install (v0.66/67 era) → 装机用户不可用
+- fire-and-forget + immediate MessageBox (v0.71) → "installer 卡住"
+- QuickPanel 永久 disabled (v0.69-70) → 浮动栏功能消失
+- 0xc0000374 多进程 crash (v0.74.x) → 输入即崩,work loss
+
+**Root cause 综合 (按严重度递增)**:
+
+1. **每 ship 都在打补丁,而非回退** — 失败 fix → patch → 更失败 → 修真因 → 失败 → 无限循环
+2. **错误的真因假设迭代** — L66 → L67 → L68 → L69 4 个 commit 都在试不同 path,每个都"看起来 fix",但实际 fix 路径都没验证
+3. **spec-init 仪式 vs 真因排查** — L##-PhaseL-9 series 写大量 spec 075/076,但 1 周没真找到 input crash root cause
+4. **3 个不同 sub-agent 并行报告** = group-think (per `feedback_subagent_report_verify.md`) — 不同 commit 报告 同一 type 真因但实际都错
+5. **PPL + install + ctfmon 锁** — 装机流程 L##-PhaseL-7 17min hang 真因**根本未找到**,5 个 ship 版本 commit 都 patch 错 (commit `c9bb103` 反思承认)
+
+**Lesson (最关键的 5 条)**:
+
+1. **严重 bug 立刻回退一个版本**,**绝不修补当前版本**。
+   - "input crash 跨 4+ 进程" = 严重 bug → 立刻回退到 **已知最后 good 版本** (user 历史已 verified)
+   - **不要**: 修补当前 + ship v0.74.2 → 失败 → 修补 → ship v0.74.3 → 失败 → ...
+   - **要做**: ship v0.74.2 失败 → 立刻 `release/fluxing-0.19.0.63-installer.exe` (user 已知 work) → 等真因明确后再决定下一步
+
+2. **每次 ship 前 必跑 spec 075 SC-001 / SC-002 ship-gate 实证** (v0.74.x 全部都 skip):
+   - 真机 input 中文 ≥ 10 次不崩任何宿主
+   - Application Error event count 24h ≤ 5
+   - 不能 ship "理论上 work" 但没真机验证
+
+3. **真因排查 < 1 周应有 escape valve** — 不应该花 1 周纠缠一个 bug 真因
+   - 真因不明 → **回退 + 重新评估**,不是 **加力 + patch + 加更多 spec**
+   - 每次 patch 都引入新 risk surface (per L##-PhaseL-9.5 series:每 ship 引入新 install path / 新注册表 / 新 cleanup)
+
+4. **user 真机反馈 = ground truth,所有理论都得测试**
+   - "v0.74.x ship 后还有 12+ Application Error" → 不能用 "理论上 v0.66 shim 残留不导 crash 的话 fix" 自我安慰
+   - "切输入法浮动栏不弹" → 不能用 "spec 074 撤回 sticky" 为 v0.69 disable 找借口
+   - "1 周没进展" → 必须 **承认 ground truth 没有进展**,立刻回退
+
+5. **真因用最简单 method (worktree / archive / extract) 而非复杂 git worktree dance** —
+   - 多次 commit `git reset --hard <commit>` + `git stash` 翻车
+   - 多次 worktree + 跨 view bash/cmd 路径问题
+   - 浪费 ≥ 1 小时在 rebuild path,而非写修复
+
+**Anti-pattern (新加 5 条 + 已加汇总)**:
+
+- **AP-L##-9.11-Retro-A**: 严重 bug 出,先 patch 当前 → 浪费 1 周 → patch + ship 失败 → patch → ship 失败 → ...
+  **新规则**: 第 1 次 ship 失败 → 立刻回退到 user 已知最后 good 版本
+- **AP-L##-9.11-Retro-B**: Spec-init 仪式遮蔽 ground truth — 写大量 spec/plan/tasks.md 但 **没有真机 evidence**
+- **AP-L##-9.11-Retro-C**: 跨多个 commit 反复重写同一行代码 (FocusIn Show) → L69-disable → L65-re-enable → L69-residue-gate → L65-duplicate → L74-retract → 每个版本都重做,**没有 fix 真因**
+- **AP-L##-9.11-Retro-D**: Sub-agent "fix verified" 报告 + commit message "真修" = 不能 ship 真修 (per `feedback_subagent_report_verify.md` group-think 警告 + `L##-PhaseL-7` PPL hang 误诊 pattern)
+- **AP-L##-9.11-Retro-E**: 当 fix 失败 ≥ 1 次,**不要** "再写一个新 spec 看是否真修" — 立刻回退
+
+**未来策略 (per user 2026-07-31 instruction)**:
+
+1. **严重 bug 立刻回退** (装机即崩 / input 即崩 / 多进程 crash) → 1 小时内回退到 user 已知 work 的版本
+2. **回退 vs patch 的决策标准**:
+   - 当前版本 ship 失败,前 N 个版本(无 crash 历史) = 候选回退
+   - 不带 fixed-feature 标签的版本 = 优先回退候选 (避免带 broke-feature)
+   - 装机即崩 = 永远先回退
+3. **ship-gate 实证** (不可跳过):
+   - 真机 input 中文 ≥ 10 次 不崩任何宿主
+   - 真机 en-US ↔ Fluxing 切输入法 ≥ 5 次 不崩
+   - 真机 reboot 后 24h 无 0xc0000374 / 0xc0000005 / 0x80000003 任何 event
+4. **每次 ship 后 24h 真机 verify**,verify fail 立刻回退 + 写 incident report
+5. **不要把 commit message "真修" 当 ground truth** — commit message = intent, ship + 真机 verify = ground truth
+
+**关联文件 / 决策 / 复盘时间线**:
+- `handoff-after-c2-rejection-2026-07-31.md` (v0.74.2 rejection)
+- `handoff-input-crash-root-cause-2026-07-31.md` (本会话写的 v0.74.3 fix attempt, **无效**)
+- `release/fluxing-0.19.0.63-installer.exe` md5 `0d05f9f4bb1c75754dd52c0dc3bc1cc1` size 43,344,633 bytes ← **推荐 user 装机测试目标**
+- `release/fluxing-0.19.0.62-installer.exe` (前一个版本, QuickPanel UserDict 5→4 期间)
+- spec 075 (`075-focusin-quickpanel-rollback`) **作废** — 改为 v0.75 spec 076 (WeaselPanel GDI+ rewrite + 真因调研)
+- stash@{0} 保留完整 v0.74.3 WIP (FocusIn Show 撤回 + hot-path cache + admin check + spec 075 + L##-PhaseL-9.11 entry), 等 user 决定是否 merge 到 v0.75 分支
+
+---
+
+## L##-PhaseL-9.12-GeneralizeStateRisk — 装机 cycle inbound state pollution must be first-class pre-check (Phase L Bugfix 9.12 / 2026-07-31)
+
+**Incident**: v0.62 binary 100% 正确 (5/5 md5 验证装机),但用户机器 24h 内 39 次 0xc0000374 ntdll.dll event,offset `0x0000000000112165` 跟 v0.74.2/v0.74.1/v0.66 era **完全相同**。**真因 = System32 12 个 shim DLL 残留** (v0.66 era 1.2MB weaselx64.dll + v0.74.x 新加 204KB weasel.dll + 9 个 .bak/.v###/.old 备份变种),被 ctfmon/TextInputHost 加载 → IPC 协议 mismatch → 跨进程 0xc0000374。
+**安装 v0.62 完全无效**,因为 v0.62 install.nsi **完全没有 System32 cleanup logic** (只有 L13 fix 杀 ctfmon + L14-fix clean $INSTDIR\weasel)。
+
+**Meta-pattern (2 次重复, 必须 generalize)**:
+- **v0.36 (062734e, 2026-07-11)** — 5 ship attempts "compiled clean but does not work end-to-end on user machine"
+  - L73 entry: "stop piling fixes, L## entries were written as 'fix narratives' not failure post-mortems"
+  - **但 L73 没 generalize 到 "all install cycles"** — 7 天后 v0.74.x 系列 (9 ship attempts) 重演
+- **v0.74.x 系列 (2026-07-25 → 2026-07-31)** — 9 ship attempts, 同一pattern
+  - L##-PhaseL-9.10 entry: "NSIS Delete 必跟 IfErrors 立刻检测"
+  - **但 L##-PhaseL-9.10 没 generalize 到 "all inbound state pollution"** — 7 天后 v0.62 也重演
+- **v0.62 (2026-07-31, 本会话)** — 第 3 次 Meta-pattern:
+  - 装机 v0.62 二进制正确, 24h 内 39 次 0xc0000374
+  - System32 12 个 shim DLL 残留 (v0.66 era + v0.74.x 加的)
+  - 真因 = 任何 WeaselServer.exe 启动 + 老 shim DLL 在 System32 被 ctfmon load = IPC mismatch → crash
+
+**Root cause (this iteration)**:
+- v0.66 era install (2026-06-22) copy `weaselx64.dll` 1.2MB 到 System32 → 永远不清 (v0.62 install.nsi 不碰 System32)
+- v0.74.x ship (2026-07-30) 加 9.6 cleanup logic,**但 silent fail** (per L##-PhaseL-9.10)+ 反而 copy 新 `weasel.dll` 204KB 到 System32
+- v0.62 install (2026-07-31 装机测试) 替换 5 binary,**但 System32 12 个 shim DLL 残留**
+- ctfmon 加载老 shim → IPC 协议 mismatch → 跨进程 0xc0000374
+
+**Lesson (8 条, 每条都是前 3 次教训的 generalize)**:
+
+1. **真因必须超过 "immediate symptom" 1 层**。
+   - v0.36: "5 次 ship 失败" → "我 piling fixes" → v0.74.x 还是 piling
+   - v0.74.x: "installer 修 cleanup" → "silent fail" → v0.62 还是 silent fail
+   - v0.62: "binary 100% 正确但 crash" → "system state pollution from v0.66 era"
+
+2. **每次 patch L## 必写 "generalize scope" 一段**。
+   - L73 写 v0.36 时**只** 说 "5 versions compile clean but don' t work end-to-end" — **没** generalize 到 "all install cycles"
+   - L##-PhaseL-9.10 写 v0.74.2 时**只** 说 "NSIS Delete + IfErrors" — **没** generalize 到 "all System32 cleanup"
+   - L##-PhaseL-9.12 写 v0.62 时**必须** generalize 到 "all inbound state pollution across install cycles"
+
+3. **所有 ship 必跑 "inbound state audit" BEFORE 装机**:
+   - 不只是 verify 5 binary md5
+   - 必 verify **前序 ship 残留** (registry / System32 / temp dir / schtasks / PPL process / mapping handles)
+   - 必 verify **current 装机路径** (`$INSTDIR\weasel\`) 是不是 user 期望的
+   - 必 verify **System32 shim DLL** 是不是当前 client 的版本
+
+4. **任何 installer 改 System32 必考虑"前序 cleanup"**:
+   - v0.74.x 写 `weaselx64.dll` 1.2MB 到 System32,**没** 写"如果 version 不匹配 → 删"
+   - v0.62 install 移除 5 binary,**没** 移除 System32 shim DLL
+   - v0.62 install.nsi **完全无** System32 cleanup (因为我写 v0.74.3 fixes 时假设 v0.62 已有 cleanup,**实际没有**)
+
+5. **lesson 写时必带 "apply" 段 (per L##-PhaseL-9.11-Retro 通用)**:
+   - **必须** 在 "How to apply" 段说**所有** 未来 install cycle 必做 inbound state audit
+   - 不只是 "v0.62 install" → "all v0.x.y install"
+   - 不只是 "v0.74.x cleanup" → "all cleanup"
+
+6. **rollback 不等于 fix**:
+   - rollback 是把 binary 改回 last-work,但**机器状态污染**仍在前序 install 留下
+   - rollback 之后**必须** 跑 inbound state audit
+   - rollback 之后**必须** 跑 real-machine 真机 verify 24h
+
+7. **system32 shim DLL 是 shim-type 应用的常驻 pollution 源**:
+   - Rime / 文 凡 / 任何 TSF shim 都 copy 自己 DLL 到 System32 装入 x64 process
+   - 一旦 copy,**永远** 清不干净 (除非 admin 手动 `del /F` 或 reboot)
+   - **install.nsi 必带 "如果新版 shim 装在 $INSTDIR,则删 System32 同名 shim DLL"** — 一般性 rule
+
+8. **process pollution surface = 5 类**:
+   - Files ($INSTDIR, System32, %TEMP%)
+   - Registry (HKLM HKCU 多 namespaces)
+   - Processes (WeaselServer PPL, ctfmon, TextInputHost, FluxingPhrasesDialog)
+   - Scheduled tasks (Stage 2, L##-PhaseL-9.5)
+   - Shared memory / IPC handles (leveldb LOCK, named pipe)
+   - **每个 install 必 5-class 全部 audit**
+
+**Anti-patterns (新加 5 条)**:
+
+- **AP-L##-9.12-A**: 装机 cycle 把 "System32 shim DLL cleanup" 留作 "next install 的责任" — **永远** 没有 next install 会主动清, 越积越多
+- **AP-L##-9.12-B**: L## 写 "fix narrative" 而非 "failure post-mortem" — reviewer 看不到哪一版本带 risk
+- **AP-L##-9.12-C**: ship 失败用 "回退前一版本" 而不是 "audit inbound state" — rollback 不等于 fix
+- **AP-L##-9.12-D**: 失败 ship 1 次 = 1 次 patch,失败 ship 2 次 = 2 次 patch,**没** 触发 "real-machine 真机 verify" gate
+- **AP-L##-9.12-E**: only fix "current commit" symptom,**不** 调查 "前序 commit 残留" — 7 天 ship 灾难的根本原因
+
+**How to apply (per L##-PhaseL-9.11-Retro hard rule)**:
+
+- **任何 install cycle** (release / hotfix / rollback) **必跑**:
+  1. `_diag_v0.62_state_pollution_audit.ps1` (machine state 全部 5 class 残量)
+  2. `_diag_v0741_evidence.ps1` (5 binary md5 + Application Error 24h)
+  3. `_diag_v0741_dumps.ps1` (crash dump 数量)
+  4. **如果有** 任何 5-class 残留 → 自动 trigger manual cleanup (admin)
+  5. **只有在** state 0 + binary 0 mismatch → 才 ship / 装机
+
+- **rollback 必须**:
+  - 确定 binary md5 匹配(已 5/5 v0.62 验证)
+  - 必 audit machine state (v0.62 没做,导致 v0.62 装机仍 crash)
+  - 必真机 24h verify (per L##-PhaseL-9.11-Retro ship-gate)
+
+**关联文件 / 决策**:
+- `CODE_MAP.md` (本会话写, 完整 code map)
+- `DIAGNOSTIC_REPORT_v0.62_state_pollution_2026-07-31.md` (诊断报告)
+- `_diag_v0.62_state_pollution_audit.ps1` (state 5-class audit)
+- `_diag_v0.62_clean_state_admin.bat` (admin 清理 script)
+- L73 (v0.36 same pattern 不 generalize) — AP-L##-9.12-B
+- L##-PhaseL-9.10 (v0.74.2 silent fail 不 generalize) — AP-L##-9.12-A
+- L##-PhaseL-9.11-Retro (v0.74.x series 7 days fail) — process failure
+
+**Ship gate hard rule (本 L## 加固)**:
+- [ ] **任何 ship 前必跑** 5-class inbound state audit (新加, per L##-PhaseL-9.12)
+- [ ] **任何 rollback 前必跑** 5-class inbound state audit (新加)
+- [ ] **任何 rollback 后必** 真机 24h verify (per L##-PhaseL-9.11-Retro 已加, 本 L## 强化)
+- [ ] **5-binary md5 + 24h event count ≤ 5 + 0 new dump** (3 必齐, 不齐不 ship)
+- [ ] **不写 "fix narrative" L##**, 必写 "failure post-mortem + generalize scope" (新加)
+
+---
+
+## L##-PhaseL-9.13-CleanupPreserveCriticalKeys — Inbound state cleanup must preserve critical registry keys (InstallDir / RimeUserDir / Run / CTF Assemblies)
+
+**Incident**: v0.62 装机 + System32 cleanup 后, user 切到 Fluxing 但"无法输入中文",WeaselServer.exe "算法服务没拉起来"。
+**Root cause**: 我 cleanup script `_diag_v0.62_clean_state_admin.bat` 用了 **`reg delete "HKLM\Software\Fluxing" /f`** + **`reg delete "HKCU\Software\Fluxing" /f`** (blanket delete),把以下 5 个 critical keys 全部删了:
+- `HKLM\Software\Fluxing\Weasel\InstallDir` (WeaselServer.exe 启动时读 path)
+- `HKCU\Software\Fluxing\Weasel\RimeUserDir` (librime init 读 user data path)
+- `HKLM\Software\Microsoft\Windows\CurrentVersion\Run\WeaselServer` (auto-start)
+- `HKCU\Software\Microsoft\CTF\Assemblies\0x00000804\{...}` (L66-fix safety-net)
+- `HKLM\SOFTWARE\Microsoft\CTF\KnownClasses\{...}` (L66-fix safety-net)
+
+**后果**:
+- WeaselServer.exe 启动时找不到 InstallDir → librime init fail → log 不写 → user input 永远 silent
+- Run key 空 → 系统登录不启动 WeaselServer.exe → user 永远看不到 service
+- 这些 keys 是 v0.62 install 必写的 — **删了** 我们没自动恢复
+
+**Lesson (3 条)**:
+
+1. **Cleanup script 必** selective delete, NOT blanket delete
+   - **只删** : System32 shim DLLs (weasel*.dll)
+   - **只删** : Stage 2 dirs (TEMP\fluxing-stage2-shim)
+   - **只删** : 已 confirm 没用的 registry keys (Stage2Done, AdminRequired)
+   - **永远不删** : HKLM\Software\Fluxing\Weasel\InstallDir (used by WeaselServer.cpp/WeaselServerApp.cpp)
+   - **永远不删** : HKCU\Software\Fluxing\Weasel\RimeUserDir (used by RimeWithWeasel.cpp/Initialize)
+   - **永远不删** : HKLM\...\Run\WeaselServer (used by Windows auto-start)
+   - **永远不删** : HKCU\Software\Microsoft\CTF\Assemblies\0x00000804\* (L66-fix, TSF profile)
+   - **永远不删** : HKLM\SOFTWARE\Microsoft\CTF\KnownClasses\{...} (L66-fix, TSF class)
+
+2. **每 install cycle 必重写 registry keys** — L66-fix
+   - `install.nsi line 739-743` 写 4 个 TSF / fluxing registry keys (KnownClasses + 0x00000804 Default / Profile / KeyboardLayout)
+   - **每 install** 必重写 (L66-fix 设计)
+   - **cleanup** 不能删这些 keys
+
+3. **新增 L##-PhaseL-9.12 的 anti-pattern**:
+   - **AP-L##-9.13-A**: blanket delete HKLM\Software\Fluxing\* — 误删 InstallDir 导致 WeaselServer.exe 启动 fail
+   - **AP-L##-9.13-B**: blanket delete HKCU\Software\Fluxing\* — 误删 RimeUserDir 导致 librime init fail + log 不写
+   - **AP-L##-9.13-C**: 删除 `HKLM\...\Run\WeaselServer` — 系统登录不 auto-start
+   - **AP-L##-9.13-D**: 用 `DeleteRegKey` blanket — 必** selective** `DeleteRegValue` 或 `DeleteRegKey` 加具体 sub-path
+
+**How to apply**:
+
+- 任何** cleanup script** (L##-PhaseL-9.6 / 9.7 / 9.10 / 9.12 / 9.13) 必:
+  - **selective** `Delete /REBOOTOK` System32 shim DLLs (weasel*.dll / weasel*.ime)
+  - **selective** `DeleteRegValue` only the keys I know are dead (Stage2Done / AdminRequired)
+  - **NEVER** `DeleteRegKey "HKLM\Software\Fluxing"` / `DeleteRegKey "HKCU\Software\Fluxing"` (这 2 个是 service critical)
+  - **NEVER** delete `HKCU\...\CTF\Assemblies\0x00000804\*` (L66-fix safety-net)
+  - **NEVER** delete `HKLM\...\Run\WeaselServer` (auto-start)
+
+**关联文件 / 决策**:
+- `_diag_v0.62_clean_state_admin.bat` (本会话写, blanket delete bug — 需重写)
+- `DIAGNOSTIC_REPORT_v0.62_state_pollution_2026-07-31.md` (恢复步骤)
+- `_diag_v0.62_state_pollution_audit.ps1` (5-class audit)
+- `_diag_v0.62_fix_run_key.ps1` (Run key 恢复)
+- L##-PhaseL-9.6 (silent fail cleanup, generalize 到 install cycle)
+- L##-PhaseL-9.10 (silent fail IfErrors, generalize 到 install cycle)
+- L##-PhaseL-9.11-Retro (v0.74.x series 7 days fail)
+- L##-PhaseL-9.12 (generalize state pollution, 不 generalize 到 cleanup script 的 destroy side)
+
+**Ship gate (v0.74.4 retro apply)**:
+- [ ] Any cleanup script 必带 `selective` delete (shim DLLs + 已知没用的 keys)
+- [ ] Cleanup script 必带 `ReWrite-Critical-Registry` step (re-set InstallDir / RimeUserDir / Run key / CTF Assemblies)
+- [ ] After cleanup, `_diag_v0.62_state_pollution_audit.ps1` 必 run + verify 5 critical keys 都 present
+- [ ] If 5 critical keys missing → STOP, don't ship, re-write install.nsi to reset + manually inject keys
+
+
+---
+
+## L##-Librime-PatchPriority-PunctuatorHalfShape — patch 在 __include 源上静默失败 (Rime 用户配置 / 2026-08-01)
+
+**Incident**: user 在 `D:\Program Files\fluxing\user1\fluxing\rime_ice.custom.yaml` 写 `patch.punctuator/half_shape` 想覆盖 default 的标点映射(`/` 应该出 `、`)。但:
+- v0.19.0.59 (commit 1c0d711) 第一次迁移 custom 到 active dir 后,redeploy,中文模式按 `/` 仍出 `/`
+- `build/rime_ice.schema.yaml` 的 `half_shape` 段 `"/": ["／", "÷"]` 仍是 default 原值,**user 8 个标点 patch 一条都没进**
+- 同时同文件的 `key_binder/bindings/+` 8 个 Shift+ 配对**全部正确进了** built schema
+- `__build_info.rime_ice.custom: 1785555665` 显示**已加载** → 看起来 "OK" 实际 silent fail
+
+**根因 (librime 源码级确认)**:
+
+rime_ice.schema.yaml 的 punctuator 段用 `__include:` 引入 default.yaml:
+
+```yaml
+punctuator:
+  __include: default:/punctuator
+  half_shape:
+    __include: default:/punctuator/half_shape   # ← __include,不是 inline dict
+```
+
+而 key_binder 用 `import_preset: default`(**不同机制**,patch 可穿透)。
+
+librime `librime/src/rime/config/config_compiler_impl.h:15-19`:
+```cpp
+enum DependencyPriority {
+  kPendingChild = 0,
+  kInclude = 1,
+  kPatch = 2,        // ← kPatch > kInclude
+};
+```
+
+`kPatch > kInclude` → patch **先于** include 执行。patch 时 `half_shape` 还是 `__include:` 字符串,dict-merge **静默失败**(MergeTree 在 dict×string 时 no-op,无日志)。后续 `__include` 解析时,user patch 已被丢弃。
+
+key_binder 的 `import_preset` 是 config_component 在 schema load 时处理的另一套机制,不进 DependencyPriority,所以 `bindings/+` 正常工作。
+
+**Lesson (3 条)**:
+
+1. **`__include` 源的 patch 必须重述 `__include` 指令 + overrides**:
+   ```yaml
+   patch:
+     punctuator/half_shape:
+       __include: default:/punctuator/half_shape   # 必须重述
+       '/': '、'
+       ',': '，'
+       # ... overrides
+   ```
+   patch 写入时 `half_shape` 是 dict,后续 `__include` 解析自动合并 overrides。
+
+2. **验证手段**: patch 后**必查** `build/<schema>.schema.yaml` 的实际内容,而不是只看 `__build_info.timestamps` 显示 "已加载"。本 bug 中 `rime_ice.custom: 1785555665` 显示已加载,但**没说明 patch 是否真生效**。
+
+3. **不重 build 时也能验证**: Python `yaml.safe_load` + grep 读 built schema 关键段(如 half_shape)比对 default.yaml + user overrides。
+
+**Anti-pattern**:
+
+- **AP-L##-Include-A**: 只看 build_info timestamps 就以为 patch 生效 → silent fail
+- **AP-L##-Include-B**: 假设 `patch.X/Y` 在所有源上都能穿透(包括 `__include`/`import_preset`)→ silent fail
+- **AP-L##-Include-C**: 不检查 built schema 实际内容就 ship → user 看不到效果
+
+**验证 (本次 fix 后)**:
+
+```yaml
+# build/rime_ice.schema.yaml @ 2026-08-01 13:38 (redeployed)
+punctuator:
+  half_shape:
+    ",": "，"   # ← user override applied
+    ".": "。"
+    "/": "、"   # ← user override applied (主诉求)
+    ";": "；"
+    "'": "'"
+    "[": "【"
+    "\\": "、"
+    "]": "】"
+```
+
+user 实测:中文模式按 `/` 出 `、`,其他 7 个标点 + Shift+ 配对全测过 OK。
+
+**应用范围**:
+- `rime_ice.schema.yaml` 用 `__include` 引入 default → fix 已 ship
+- `double_pinyin_sogou.schema.yaml` 同 pattern → 同样 fix 同步到 `double_pinyin_sogou.custom.yaml` (2026-08-01)
+- `radical_pinyin.schema.yaml` 无 punctuator 段(只是部件拆字 lookup,不是完整输入法) → 跳过
+- 其他 rime 方案(luna_pinyin / terra / 各种自定义)若有 `__include` 引入 default:/punctuator/half_shape 都需用本语法 patch
+
+**关联文件 / 决策**:
+- `D:\Program Files\fluxing\user1\fluxing\rime_ice.custom.yaml` (本 L## 修复,3174 bytes, 2026-08-01 13:32)
+- `D:\Program Files\fluxing\user1\fluxing\double_pinyin_sogou.custom.yaml` (本 L## 同步修复,2026-08-01 13:39)
+- `D:\Program Files\fluxing\weasel\data\rime_ice.schema.yaml` (源 schema,line 240-247 `__include:`)
+- `librime/src/rime/config/config_compiler_impl.h:15-19` (DependencyPriority 定义)
+- `librime/src/rime/config/config_compiler.cc:67-76` (__include 解析 + overrides merge)
+- `librime/src/rime/config/auto_patch_config_plugin.cc:22-35` (auto-patch 机制)
+- `handoff-rime-customization-2026-08-01.md` (本次会话完整 handoff)
+
+**未来 verify 规则 (per CLAUDE.md verification-before-completion)**:
+
+- [ ] 任何 `*.custom.yaml` 改动后,必查 `build/<schema>.schema.yaml` 实际内容(不是 build_info timestamps)
+- [ ] 任何 patch 含 `__include` 源路径时,必用 "重述 __include + overrides" 语法
+- [ ] 自定义 custom.yaml 改动后,第一次 redeploy + 真机按 8 个标点 + 8 个 Shift 配对实测

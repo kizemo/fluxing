@@ -1,0 +1,21 @@
+# 部件拆字 (radical_pinyin) 用户方案覆盖
+# encoding: utf-8
+#
+# 注: radical_pinyin.schema.yaml 没有 punctuator 段 (它是部件拆字 schema,
+#     不是完整输入法)。用户在此方案下不直接打字,只用于 `uUxxx` 反查。
+#     标点修复在 rime_ice / double_pinyin_sogou 已覆盖。
+#
+# 这里只补 Shift+ 配对的 key_binder,跟其他方案保持一致的快捷键体验。
+# key_binder 源是 `__include: default:/key_binder?` (? = merge 修饰符),
+# patch.binds/+ 可正常 append。
+
+patch:
+  key_binder/bindings/+:
+    - { when: always, accept: "Shift+comma", send: "《" }
+    - { when: always, accept: "Shift+period", send: "》" }
+    - { when: always, accept: "Shift+slash", send: "？" }
+    - { when: always, accept: "Shift+semicolon", send: "：" }
+    - { when: always, accept: "Shift+apostrophe", send: '"' }
+    - { when: always, accept: "Shift+backslash", send: "|" }
+    - { when: always, accept: "Shift+bracketleft", send: "{" }
+    - { when: always, accept: "Shift+bracketright", send: "}" }

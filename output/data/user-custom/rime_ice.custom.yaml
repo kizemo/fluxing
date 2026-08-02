@@ -1,0 +1,59 @@
+# 小鹤 rime_ice 用户方案覆盖
+# encoding: utf-8
+#
+# 标准中文键盘布局修复（2026-06-23）：
+#   , → ，          Shift+, → 《
+#   . → 。          Shift+. → 》
+#   / → 、          Shift+/ → ？
+#   ; → ；          Shift+; → ：
+#   ' → '           Shift+' → "
+#   \ → 、          Shift+\ → |
+#   [ → 【          Shift+[ → {
+#   ] → 】          Shift+] → }
+#
+# 实现策略：
+#   1. punctuator/half_shape patch —— 覆盖默认映射（rime_ice 默认 .→… 不符合中文标准键盘布局）
+#   2. key_binder/bindings + Shift+key accept —— Shift+标点被 rime key_binder 拦截后，
+#      直接 commit 期望字符（绕过 Punctuator，因为 Punctuator 用 unshifted key）
+#
+# 注意：librime Punctuator (librime/src/rime/gear/punctuator.cc) 用 unshifted
+# ASCII 作为 mapping key，对 Shift mask 不感知。因此直接按的标点用
+# punctuator/half_shape patch，Shift+标点用 key_binder send 拦截。
+#
+# 【L-## librime patch 优先级陷阱】rime_ice 源 schema 的 punctuator.half_shape
+# 用 __include 指令从 default.yaml 引入。librime 的 DependencyPriority 是
+# kPatch=2 > kInclude=1，所以 patch 比 include 先执行。patch 时 half_shape
+# 还是 __include 字符串，dict-merge 静默失败 → patch 完全无效。
+# 修复：patch 里重述 __include + overrides，__include 解析阶段会自动把
+#       overrides 与 default:/punctuator/half_shape 内容合并。
+# 验证证据：v0.19.0.59 (commit 1c0d711) 第一次迁移 rime_ice.custom.yaml 到
+#          active dir 后，按 / 仍然输出 / (bug 表现)；本文件改用本语法后
+#          build/rime_ice.schema.yaml 的 punctuator/half_shape 才出现覆盖。
+
+patch:
+  # 直接按的标点：覆盖 default.yaml 的 half_shape
+  # 必须重述 __include: default:/punctuator/half_shape，否则 patch 被丢弃
+  punctuator/half_shape:
+    __include: default:/punctuator/half_shape
+    ',': '，'        # 直接 , → ，
+    '.': '。'        # 直接 . → 。
+    '/': '、'        # 直接 / → 、（user 主要诉求）
+    ';': '；'        # 直接 ; → ；
+    "'": "'"        # 直接 ' → '
+    "\\": '、'       # 直接 \ → 、（rime 字符串需要转义反斜杠）
+    '[': '【'        # 直接 [ → 【
+    ']': '】'        # 直接 ] → 】
+
+  # Shift+标点：key_binder 拦截后 send 期望字符
+  # 顺序：使用 bindings/+ 追加，不影响现有 has_menu bindings
+  # when: always —— 中文模式下 Shift+标点应该总是 commit
+  # accept: Shift+key 语法：rime 中 Shift+comma 等价于物理键 Shift+, 触发的 keyevent
+  key_binder/bindings/+:
+    - { when: always, accept: "Shift+comma", send: "《" }
+    - { when: always, accept: "Shift+period", send: "》" }
+    - { when: always, accept: "Shift+slash", send: "？" }
+    - { when: always, accept: "Shift+semicolon", send: "：" }
+    - { when: always, accept: "Shift+apostrophe", send: '"' }
+    - { when: always, accept: "Shift+backslash", send: "|" }
+    - { when: always, accept: "Shift+bracketleft", send: "{" }
+    - { when: always, accept: "Shift+bracketright", send: "}" }
