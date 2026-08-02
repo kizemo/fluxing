@@ -438,10 +438,12 @@ Section "Fluxing"
   SetOutPath $INSTDIR
 
   ; L79-fix: 装 fluxing-logo.png 到 weasel subdir(QuickPanel 找它)
-  ; L82: 加 fluxing-logo_small.png (20x20 PNG icon,实际 QuickPanel 用的 logo)
+  ; v0.62 ROLLBACK: fluxing-logo_small.png (L82) not yet in v0.62 source.
+  ; SKIP that line to avoid NSIS abort. QuickPanel silently falls back to
+  ; fluxing-logo.png (handled in QuickPanelDialog.cpp LoadLogoWIC).
+
   SetOutPath $INSTDIR\weasel
   File "fluxing-logo.png"
-  File "fluxing-logo_small.png"
   SetOutPath $INSTDIR
 
   IfFileExists $TEMP\weasel-backup\*.* 0 program_files
@@ -695,6 +697,24 @@ program_files:
   CreateDirectory "$R3\user1\fluxing"
   WriteRegStr HKCU "Software\Fluxing\Weasel" "RimeUserDir" "$R3\user1\fluxing"
   ; (No exec wait needed; WriteRegStr is synchronous. Kept block for future logging.)
+
+  ; === v0.20.0.0: Deploy Rime user-config custom YAMLs to user RimeUserDir ===
+  ; Source: output\data\user-custom\*.custom.yaml (bundled below).
+  ; Default: 8 标点 + Shift+ 配对 (per handoff-rime-customization-2026-08-01 + L##-Librime-PatchPriority-PunctuatorHalfShape).
+  ; rime_ice + double_pinyin_sogou use __include: default:/punctuator/half_shape in their
+  ; source schemas, so the custom MUST restate __include + overrides (librime
+  ; DependencyPriority kPatch=2 > kInclude=1 means patch runs before include and
+  ; silently drops dict-merge into __include string).
+  ; radical_pinyin has no punctuator section (radical lookup scheme, not full IME);
+  ; only key_binder Shift+ bindings are patched.
+  ; Rime auto-detects custom mtime > schema mtime on first input event after
+  ; install and triggers auto-redeploy (no manual 「重新部署」 needed).
+  ; Uninstall: these files are user data and persist after Fluxing uninstall
+  ; (per L##-PhaseL-9.13 user-data preservation principle).
+  SetOutPath "$R3\user1\fluxing"
+  File "data\user-custom\rime_ice.custom.yaml"
+  File "data\user-custom\double_pinyin_sogou.custom.yaml"
+  File "data\user-custom\radical_pinyin.custom.yaml"
 
   ; === v2.0: Register WeaselTSF as TSF text input processor (fix TSF TIP not registered) ===
   ; regsvr32 calls DllRegisterServer in WeaselTSF.dll which writes HKLM\SOFTWARE\...\CTF\TIP\{GUID}

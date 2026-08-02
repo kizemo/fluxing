@@ -1,0 +1,32 @@
+# 搜狗双拼 用户方案覆盖
+# encoding: utf-8
+#
+# 同步 rime_ice.custom.yaml 的标点修复（8 标点 + Shift 配对）
+# 同源 schema 都用 __include 引入 default:/punctuator/half_shape,
+# librime patch 优先级 kPatch=2 > kInclude=1 → patch 时 half_shape 还是
+# __include 字符串, dict-merge 静默失败。必须重述 __include + overrides。
+# 详见 rime_ice.custom.yaml 注释段 + .specify/memory/lessons-learned.md L-##
+
+patch:
+  # 直接按的标点：覆盖 default.yaml 的 half_shape
+  punctuator/half_shape:
+    __include: default:/punctuator/half_shape
+    ',': '，'        # 直接 , → ，
+    '.': '。'        # 直接 . → 。
+    '/': '、'        # 直接 / → 、
+    ';': '；'        # 直接 ; → ；
+    "'": "'"        # 直接 ' → '
+    "\\": '、'       # 直接 \ → 、
+    '[': '【'        # 直接 [ → 【
+    ']': '】'        # 直接 ] → 】
+
+  # Shift+ 标点：key_binder 拦截后 send 期望字符
+  key_binder/bindings/+:
+    - { when: always, accept: "Shift+comma", send: "《" }
+    - { when: always, accept: "Shift+period", send: "》" }
+    - { when: always, accept: "Shift+slash", send: "？" }
+    - { when: always, accept: "Shift+semicolon", send: "：" }
+    - { when: always, accept: "Shift+apostrophe", send: '"' }
+    - { when: always, accept: "Shift+backslash", send: "|" }
+    - { when: always, accept: "Shift+bracketleft", send: "{" }
+    - { when: always, accept: "Shift+bracketright", send: "}" }
