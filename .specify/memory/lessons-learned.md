@@ -9709,6 +9709,66 @@ user 实测:中文模式按 `/` 出 `、`,其他 7 个标点 + Shift+ 配对全�
 - [ ] 任何 patch 含 `__include` 源路径时,必用 "重述 __include + overrides" 语法
 - [ ] 自定义 custom.yaml 改动后,第一次 redeploy + 真机按 8 个标点 + 8 个 Shift 配对实测
 
+**V0.20.0.0 ship 后 3-schema 全量验证 (2026-08-03)**:
+
+| Schema | 8 标点 patch | 8 Shift+ bindings | 状态 |
+|---|---|---|---|
+| `rime_ice.schema.yaml` (build/) | `,` `→ '，'`, `.` `→ '。'`, `/` `→ '、'`, `;` `→ '；'`, `[` `→ '【'`, `]` `→ '】'`, `\\` `→ '、'`, `'` `→ "'"` | 8 Shift+ bindings | ✅ |
+| `double_pinyin_sogou.schema.yaml` (build/) | 同上(同 pattern) | 8 Shift+ bindings | ✅ |
+| `radical_pinyin.schema.yaml` (build/) | N/A (无 punctuator section, 仅部件拆字 schema) | 8 Shift+ bindings | ✅ |
+
+**Verifying method**: `grep -c "Shift+comma\|Shift+period\|..." build/<schema>.schema.yaml` → 8/8
+**Source ↔ installer md5 dual-verify**: `output/data/user-custom/*.custom.yaml` md5 = `_extract_v0.20.0.1/$R3/user1/fluxing/*.custom.yaml` md5 (Rime 通过 `__include` 重述自动展开,无 mismatch)
+
+**Real-install verify (5-binary mtime sync, post v0.20.0.0 install)**:
+```
+✅ WeaselServer.exe         Aug 2 15:58  (NEW, md5 263cb59e...)
+✅ WeaselDeployer.exe       Aug 2 16:01  (NEW, md5 4a16c5bb...)
+✅ WeaselSetup.exe          Aug 2 16:01  (NEW, md5 7ce3f48d...)
+❌ FluxingPhrasesDialog.exe Jul 29 19:00  (OLD, md5 a0599bbf... — 装机 mismatch!)
+✅ weasel.dll               Aug 2 15:57  (NEW, md5 0d9cdaef...)
+⚠️ weaselx64.dll           Jul 29 19:39  (OLD, pre-existing x64 build issue, 不在 v0.20.0.1 scope)
+```
+**结论**: 装机后 FluxingPhrasesDialog.exe 仍是 Jul 29 旧版(v0.20.0.0 install.nsi 路径 bug 后果)。
+**Resolution**: v0.20.0.1 (commit e3fa89f) 修复 install.nsi line 578 路径。用户装 v0.20.0.1 后,FluxingPhrasesDialog.exe 同步 Aug 2 新版 → 5 binary 一致 → heap corruption 不再发生。
+
+---
+
+## L##-ClaudeCode-Kill-12-30-Unresolved — 8/2 12:30 Claude Code 退出事件未根因 (2026-08-02)
+
+**Incident**: user 报告 8/2 12:30 (Session 1, 早期 session 期间) "Claude code haha被kill的情况"。Event Log 在 12:00-13:00 区间无 Claude 相关 crash event,只有干净的 process exit。WeaselServer 在 8/1 9:35 启动后持续运行,未出现 explicit crash。
+
+**与 8/3 8:11 事件的区别**:
+- **8/2 12:30**: 12:00-13:00 无 event log, 干净退出。WeaselServer 已运行 ~3h。Active version: v0.19.0.59 (recover version)。**No event log evidence**。
+- **8/3 8:11**: 大量 ntdll heap corruption 0xc0000374 连锁 crash。WeaselServer kill by user。Active version: v0.20.0.0 (刚装)。**Event log evidence + dump files**。
+
+**根因分析 (8/2 12:30)**:
+- ✅ 已确认 v0.19.0.59 install.nsi line 578 同 v0.20.0.0 有 path bug → 装机时 PhrasesDialog.exe mtime 与 source mismatch
+- ❌ 但 v0.19.0.59 装机时 PhrasesDialog + WeaselServer 都来自 v0.19.0.59 era(都是 Jul 29 19:00 era),**matched versions** → 不会触发 heap corruption cascade
+- ❌ 因此 8/2 12:30 事件**不是** v0.20.0.0 path bug 后果
+- ⏸ 12:30 事件 real root cause:**未根因**(无 event log dump, 干净退出)
+
+**最可能猜测 (low confidence, unverified)**:
+- TSF unregister/re-register during IME switching 触发 Claude Code 自身 IME handler bug
+- 火绒 (HipsMain.exe) 干扰 (per L##-PhaseL-9.11 早期观察)
+- Claude Code 0.5.1.0 自身 bug (无独立 cross-check)
+- 网络/系统升级触发 Windows session reset (无独立 cross-check)
+
+**Action taken**: 仅 monitoring, 无 fix. user 接受"无立即 fix" 方案。
+
+**Stability implication (2026-08-03)**: 
+- v0.20.0.1 fix 解决了**已知** path bug 引起的 crash (5-binary mtime 一致 → no mismatch crash)
+- v0.20.0.1 **未** 解决 8/2 12:30 类型的 clean-exit 事件
+- 如果 12:30 事件是 TSF 切换 bug,装 v0.20.0.1 后仍可能复现(但与 heap corruption cascade 不同,只影响 Claude Code 自身,不影响 Explorer)
+- 如果 12:30 事件是火绒干扰,装 v0.20.0.1 也无法解决(需 disable 火绒)
+
+**How to apply (future)**:
+- 任何 Claude Code "再次被 kill" 报告:先看 event log 12:00-12:30 是否有 crash dump
+  - 有 crash dump → 是 5-binary mismatch 类 (查 install.nsi path / version sync)
+  - 无 crash dump → 是 clean exit 类 (TSF 切换 / 火绒 / 第三方)
+- 不要假设 Claude Code kill 都是同一个 root cause
+- v0.20.0.1 装机后**仍要** monitor 12:30 类事件是否复现
+
 ---
 
 ## L##-Release-Output-CleanupRule — installer ship-path + Test 文件清理 (2026-08-02)
