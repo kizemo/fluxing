@@ -9708,3 +9708,146 @@ user 实测:中文模式按 `/` 出 `、`,其他 7 个标点 + Shift+ 配对全�
 - [ ] 任何 `*.custom.yaml` 改动后,必查 `build/<schema>.schema.yaml` 实际内容(不是 build_info timestamps)
 - [ ] 任何 patch 含 `__include` 源路径时,必用 "重述 __include + overrides" 语法
 - [ ] 自定义 custom.yaml 改动后,第一次 redeploy + 真机按 8 个标点 + 8 个 Shift 配对实测
+
+---
+
+## L##-Release-Output-CleanupRule — installer ship-path + Test 文件清理 (2026-08-02)
+
+**Incident**: user 反复指出 "打包的exe文件,要输出到release目录中,在输出的同时,记得删除这个目录中多余的test文件"。已要求多次,需永久记录防再问。
+
+**Rule**:
+
+1. **Installer ship-path**: 打包出的 `fluxing-X.Y.Z.W-installer.exe` 必须 output 到 **`release/`** 目录 (而不是 `output/archives/`)。
+   - `output/archives/`: build 临时区 (NSIS makensis 默认输出)
+   - `release/`: **ship 区** (用户/团队/分发目标)
+   - 操作: `cp output/archives/fluxing-X.Y.Z.W-installer.exe release/`
+
+2. **Test 文件清理**: 每次 output 到 `release/` 时, **同时删除** release/ 中所有 `Test*.exe` + `Test*.pdb` + `Test*.exp` + `Test*.lib` (MSBuild /t:Rebuild 的副产物, **不属于 ship**)。
+   - 操作: `rm release/Test*.exe release/Test*.pdb release/Test*.exp release/Test*.lib`
+
+**Why**:
+- user 多次明确要求 (跨 v0.19.0.x / v0.20.0.0 ship),要求 "不要让我反复要求"
+- `output/archives/` 是 build 临时区,下一 build 会被覆盖/丢失
+- `release/` 才是 ship 区,需要稳定可分发的产物
+- Test* 文件是 build 副产物,在 release/ 会被误认为 ship 资产
+
+**How to apply (per ship workflow)**:
+
+```bash
+# Phase 2 NSIS 成功后:
+cp output/archives/fluxing-X.Y.Z.W-installer.exe release/
+
+# 同步清理:
+cd release/ && rm -f Test*.exe Test*.pdb Test*.exp Test*.lib
+
+# verify:
+ls release/  # 应该只有 fluxing-*-installer.exe
+```
+
+**Anti-pattern**:
+
+- **AP-Release-A**: 让 Test*.exe 留在 release/ (ship 区污染,被误认为产品)
+- **AP-Release-B**: 只 output 不清理 (下次 ship 还会堆遗留)
+- **AP-Release-C**: 把 installer 留在 output/archives/ 当 ship 产物 (archives 不是 ship 区,会被覆盖)
+- **AP-Release-D**: 删除 release/ 中的历史 installer (无 user 明确指示时 **不删** — 历史记录保留)
+
+**现状验证 (v0.20.0.0 ship, 2026-08-02)**:
+
+```
+F:\soft\00selfmade\rime_claude\release\
+├── fluxing-0.19.0.59-installer.exe  (历史,保留)
+└── fluxing-0.20.0.0-installer.exe  (新,MD5 4ff643d1b8eaaab892dd3496fdef2d23)
+```
+
+47 个 Test* 文件已清理 (Test*.exe + Test*.pdb + Test*.exp + Test*.lib)。
+
+**关联**:
+- `feedback_release_output_rule.md` (auto-memory,本 L## 对应)
+- `feedback_l106_msbuild_incremental_skip.md` (Test* 是 /t:Rebuild 副产物)
+- `feedback_l108_msbuild_incremental_skip.md` (增量 build 同样)
+
+---
+
+## L##-FluxingPhrasesDialog-PathFix — install.nsi line 578 路径错配 (v0.20.0.1, 2026-08-03)
+
+**Incident**: v0.20.0.0 ship (本会话 8/2 commit `e2b0f00`) 后 user 装机 + 重启 + 在 Claude 输入中文 → Claude Code Haha.exe + Explorer.EXE 连锁 crash (ntdll heap corruption 0xc0000374 + offset 0x112165, 35 次/分钟),taskkill WeaselServer 才能恢复。恢复后也无法输入中文。
+
+**Root cause (Phase 1 systematic-debugging)**:
+
+通过对比 installer archive 的 5 binary mtime + source tree:
+
+```
+output/FluxingPhrasesDialog.exe         Jul 29 19:00  ← OLD, never rebuilt
+output/Win32/FluxingPhrasesDialog.exe   Aug  2 16:01  ← NEW, MSBuild output
+output/WeaselServer.exe                 Aug  2 15:58  ← NEW
+output/Win32/WeaselServer.exe           Aug  2 15:58  ← NEW
+output/WeaselDeployer.exe               Aug  2 16:01  ← NEW
+output/WeaselSetup.exe                  Aug  2 16:01  ← NEW (output/ 根, 不是 Win32)
+
+install.nsi line 578: File "FluxingPhrasesDialog.exe"  ← NO Win32\ prefix!
+install.nsi line 587: File "Win32\WeaselDeployer.exe"  ← correct
+install.nsi line 550: File "Win32\WeaselServer.exe"     ← correct
+install.nsi line 611: File "WeaselSetup.exe"           ← correct (output/ 根)
+```
+
+**唯一** FluxingPhrasesDialog.exe 路径错配。NSIS 从 `output/` 根读 → 旧 (Jul 29) binary → installer bundle 旧版。
+
+装机后:
+- WeaselServer.exe (Aug 2 NEW) MD5 `263cb59e2a574de2189600c04858b36`
+- FluxingPhrasesDialog.exe (Jul 29 OLD) MD5 `ea4dece5b4c76a01704204472c2aa5f4`
+- **版本错配** → IPC protocol mismatch → heap corruption → 多进程 crash
+
+**Lesson (3 条)**:
+
+1. **install.nsi File path 与 MSBuild 输出路径必须一一对应**:
+   - MSBuild outputs binary → 输出位置 = `output/<Path>/<Name>.exe`
+   - install.nsi `File <path>` → 必须**指向** MSBuild 实际输出位置
+   - 必须**逐个 grep** `\bFile "` + `ls -la` 输出路径,不能默认
+
+2. **任何 /t:Rebuild ship-gate 必加 5-binary mtime 同步检查**:
+   - 装配完 archive 后,extract → `ls -la` 5 个 binary (`FluxingPhrasesDialog.exe` / `WeaselServer.exe` / `WeaselDeployer.exe` / `WeaselSetup.exe` / `weasel.dll`) mtime
+   - 5 个 mtime 必须在同一 build session 内 (差 < 5 min)
+   - 任何 mtime 是**前一次 build** 的 → 立即 abort,修真路径
+
+3. **版本错配 crash 的 signature**: ntdll heap corruption 0xc0000374 + offset 0x112165 + 跨多进程 (Claude Code + Explorer + 后续) → **优先怀疑** WeaselServer/FluxingPhrasesDialog/weasel.dll 之间 IPC 协议 mismatch,不是单进程 bug。
+
+**Anti-pattern**:
+
+- **AP-L##-PhrasesDialog-A**: 单行路径 bug (`Win32\` 前缀缺失) → installer 装 1+ 月旧 binary → ship 时无法察觉
+- **AP-L##-PhrasesDialog-B**: 5-binary mtime 同步检查跳过 → 错配 ship
+- **AP-L##-PhrasesDialog-C**: "build 成功 = installer 正确" 假设 → build output vs installer bundle 是 2 个独立 verification
+
+**Fix (v0.20.0.1)**:
+
+```nsi
+; install.nsi line 578
+- File "FluxingPhrasesDialog.exe"
++ File "Win32\FluxingPhrasesDialog.exe"
+```
+
+**Fix verification (抽出 v0.20.0.1 installer)**:
+
+```
+FluxingPhrasesDialog.exe  Aug  2 16:01  md5 67dc7ed20cd54b01ba8e3961f049a0cb (NEW ✅)
+WeaselServer.exe          Aug  2 15:58  md5 263cb59ea2a574de2189600c04858b36 (NEW ✅)
+WeaselDeployer.exe        Aug  2 16:01  md5 (extract verified)
+WeaselSetup.exe           Aug  2 16:01  md5 (extract verified)
+3 custom YAMLs            src ↔ installer md5 完全匹配
+```
+
+commit `e3fa89f` + tag `v0.20.0.1`。
+
+**How to apply (per future ship)**:
+
+- [ ] 任何 /t:Rebuild ship 前,**必跑** `_diag_5binary_mtime_check.ps1` (待写) — 5 binary mtime 同步
+- [ ] installer 装完,**必跑** 5-binary md5 dual-verify (extract archive + user dir)
+- [ ] install.nsi 任何 `File "..."` 改动,必查 `output/` 与 `output/Win32/` 实际 binary 位置
+- [ ] 任何 8 ship 内的 5-class shift (per L##-PhaseL-9.12) → 必先 round-trip `output/` vs `output/Win32/` consistency
+
+**关联**:
+- `L##-PhaseL-9.11-Retro` (v0.74.x 7 天 6 失败 ship) — **本 L## 是其后续**: v0.20.0.0 ship 后立刻 crash,但**根因**比 v0.74.x 简单 (单行),所以 hotfix 可行
+- `feedback_l106_msbuild_incremental_skip.md` — Test* 副产物(本 L## 不同问题,但同 build 失误)
+- `feedback_l108_msbuild_incremental_skip.md` — MSBuild 增量 skip pattern
+- `L##-Release-Output-CleanupRule` — 配合的 release/ 输出 + 清理规则
+- `L##-PhaseL-9.6` / `L##-PhaseL-9.10` — 早期同类 ship 时未跑 5-binary 检查的延续
+- `commit e3fa89f` (本 fix) + `tag v0.20.0.1` (local only,push 仍 timeout 待接力 session)
