@@ -575,7 +575,13 @@ program_files:
   ; 功能静默 fail,其他功能正常。
   ; 不是 PPL 进程 → 走简单 File (无 L72-fix Rename-then-File 兜底)。dialog 是
   ; 短时 modal,install 期间被锁的概率极低。
-  File "FluxingPhrasesDialog.exe"
+  ; L##-FluxingPhrasesDialog-PathFix (v0.20.0.1): MSBuild /t:Rebuild 产物在
+  ; output/Win32/FluxingPhrasesDialog.exe,但 install.nsi 之前从 output/ 根
+  ; 读,导致 installer bundle 旧 (Jul 29) 二进制。装机后 WeaselServer (Aug 2 新)
+  ; + FluxingPhrasesDialog (Jul 29 旧) 版本错配 → IPC protocol mismatch →
+  ; heap corruption → Claude Code / Explorer 多进程连锁 crash (PCH_6E_FROM_ntdll+0x160BB4)。
+  ; 修复: 与 WeaselServer.exe / WeaselDeployer.exe 路径一致,使用 Win32\ 前缀。
+  File "Win32\FluxingPhrasesDialog.exe"
 
   Push $R0
   Push $R1
