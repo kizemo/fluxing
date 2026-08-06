@@ -1,10 +1,9 @@
 #pragma once
 #include <string>
 #include <memory>
+#include <thread>
 #include <windows.h>
 #include <boost/interprocess/streams/bufferstream.hpp>
-#include <boost/thread.hpp>
-#include <boost/thread/tss.hpp>
 
 namespace weasel {
 
@@ -40,27 +39,27 @@ class PipeChannelBase {
   HANDLE _ConnectServerPipe(std::wstring& pn);
   inline bool _Invalid(HANDLE p) const { return p == INVALID_HANDLE_VALUE; }
 
+  // Spec 076 — thread_local replaces boost::thread_specific_ptr.
+  // The previous TOCTOU pattern (if (!ptr) reset(new)) raced when multiple
+  // threads first touched the channel concurrently: both saw null, both
+  // allocated, one reset() overwrote the other, leaving the first thread
+  // holding a use-after-free pointer. C++11 thread_local with static-init
+  // guarantees thread-safe lazy construction; the compiler inserts a guard
+  // variable so only one thread initializes per process.
   HANDLE* _GetPipeHandle() const {
-    if (!hpipe_ptr.get()) {
-      hpipe_ptr.reset(new HANDLE(INVALID_HANDLE_VALUE));
-    }
-    return hpipe_ptr.get();
+    static thread_local HANDLE h = INVALID_HANDLE_VALUE;
+    return &h;
   }
 
   ChannelContext* _GetContext() const {
-    if (!context.get()) {
-      context.reset(new ChannelContext(buff_size));
-    }
-    return context.get();
+    static thread_local std::unique_ptr<ChannelContext> ctx(
+        new ChannelContext(buff_size));
+    return ctx.get();
   }
 
  protected:
   std::wstring pname;
-  // Thread-local pipe handle for isolation
-  mutable boost::thread_specific_ptr<HANDLE> hpipe_ptr;
   const size_t buff_size;
-  // Thread-local context for buffer and state
-  mutable boost::thread_specific_ptr<ChannelContext> context;
 
  private:
   /* Security attributes */

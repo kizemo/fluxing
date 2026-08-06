@@ -9911,3 +9911,87 @@ commit `e3fa89f` + tag `v0.20.0.1`。
 - `L##-Release-Output-CleanupRule` — 配合的 release/ 输出 + 清理规则
 - `L##-PhaseL-9.6` / `L##-PhaseL-9.10` — 早期同类 ship 时未跑 5-binary 检查的延续
 - `commit e3fa89f` (本 fix) + `tag v0.20.0.1` (local only,push 仍 timeout 待接力 session)
+
+
+## L##-ThreadSpecificPtr-Race (v0.20.0.2 真因)
+
+**Date**: 2026-08-07
+**Symptom**: 装机 v0.20.0.0/0.20.0.1 后,切到火流猩输入法,微信/Claude Code/dopus/ToDesk/explorer 全部 0xc0000374 HEAP_CORRUPTION 崩溃。dump 在 `C:luxing-dumps\`。
+
+**Timeline (3 次误诊)**: 
+
+1. v0.20.0.0 ship → 假设 NSIS install.nsi line 578 路径错配 → commit e3fa89f,tag v0.20.0.1 → **仍 crash**
+2. v0.20.0.1 ship → 假设 `key_binder/bindings/+` 用 `send: "《"` 触发 X11 keysym parse error → 改 YAML → **仍 crash**
+3. v0.20.0.1 ship → 假设 emoji.json 引用 emoji.txt/others.txt 缺失 → 补文件 → **仍 crash**
+4. v0.20.0.2 (本 fix) → WinDbg `\!analyze -v` 双 dump 实证 → 真因找到
+
+**True root cause (WinDbg 实证)**:
+
+`include/PipeChannel.h:57-62` 用 `boost::thread_specific_ptr<ChannelContext>` 但 `if (\!context.get()) context.reset(new ...)` 是 TOCTOU race:
+
+```
+Thread A: _GetContext() -> context.get() == nullptr
+Thread B: _GetContext() -> context.get() == nullptr
+Thread A: new ChannelContext -> ptrA
+Thread B: new ChannelContext -> ptrB
+Thread A: context.reset(ptrA)        <- OK
+Thread B: context.reset(ptrB)        <- ptrA leaked + Thread A 指针失效
+Thread A: 继续使用 ptrA (use-after-free)
+Thread A: lambda 结束,析构 ptrA (double-free)
+ntdll: 0xc0000374 HEAP_CORRUPTION
+```
+
+**cdb `\!analyze -v` 关键栈**:
+```
+ntdll\!RtlFreeHeap+0x6da
+weaselx64\!_free_base+0x1c
+weaselx64\!<lambda_306bd6bd9716a5176553a603b909d585>::<lambda_invoker_cdecl>+0x91
+kernel32\!BaseThreadInitThunk+0x17
+ntdll\!RtlUserThreadStart+0x2c
+```
+
+lambda hash `306bd6bd9716a5176553a603b909d585` 是 std::thread invoker 的 unique hash,被 thread_specific_ptr 初始化 race 触发。dopus dump 完全相同栈 + offset — dopus 没有 librime/OpenCC,**确认写入越界者 100
+## L##-ThreadSpecificPtr-Race (v0.20.0.2 真因)
+
+**Date**: 2026-08-07
+**Symptom**: 装机 v0.20.0.0/0.20.0.1 后,切到火流猩输入法,微信/Claude Code/dopus/ToDesk/explorer 全部 0xc0000374 HEAP_CORRUPTION 崩溃。
+
+**Timeline (3 次误诊)**:
+1. v0.20.0.0 假设 NSIS install.nsi line 578 路径错配 → commit e3fa89f,tag v0.20.0.1 → 仍 crash
+2. v0.20.0.1 假设 key_binder/bindings/+ 用 send: 《 触发 X11 keysym parse error → 改 YAML → 仍 crash
+3. v0.20.0.1 假设 emoji.json 引用 emoji.txt/others.txt 缺失 → 补文件 → 仍 crash
+4. v0.20.0.2 (本 fix) → WinDbg !analyze -v 双 dump 实证 → 真因找到
+
+**True root cause (WinDbg 实证)**:
+include/PipeChannel.h:57-62 用 boost::thread_specific_ptr<ChannelContext> 但 if (!context.get()) context.reset(new ...) 是 TOCTOU race。两个 thread 同时首次访问 → 都看到 nullptr → 都 new → 第二个 reset() 覆盖第一个的指针 → 第一个 thread 持有 dangling pointer → 析构时 double-free → ntdll 检测 0xc0000374。
+
+cdb !analyze -v 关键栈:
+ntdll!RtlFreeHeap+0x6da
+weaselx64!_free_base+0x1c
+weaselx64!<lambda_306bd6bd9716a5176553a603b909d585>::<lambda_invoker_cdecl>+0x91
+kernel32!BaseThreadInitThunk+0x17
+ntdll!RtlUserThreadStart+0x2c
+
+dopus dump 完全相同栈 + offset — dopus 没有 librime/OpenCC,确认写入越界者 100% 在 weaselx64.dll 自己代码。
+
+**Fix**:
+include/PipeChannel.h 改用 C++11 static thread_local std::unique_ptr<ChannelContext>,编译器保证 per-thread lazy init thread-safe,消除 TOCTOU race。
+
+**关键教训**:
+1. 不要凭相关性推断因果:glog 显示的 key_binder.cc:191 invalid send pattern 是症状,不是原因。删了 key_binder 仍 crash。
+2. 不要凭启发式省 WinDbg:微信 crash 的栈必须在 dump 里看 ntdll!RtlFreeHeap 才知道是 heap corruption。
+3. boost::thread_specific_ptr + TOCTOU 是常见反模式:if (!ptr) reset(new) 在多线程首次访问时必 race。
+4. 错诊代价巨大:3 次 ship,用户打断其他工作 10+ 天。
+5. WinDbg PageHeap 是 heap corruption 终极定位工具:gflags /i +hpa 让任何越界在写入瞬间 break。
+
+**How to apply (per future heap corruption debug)**:
+- 任何 0xc0000374 heap corruption → 先 cdb -z dump.dmp -cf cdb.cmd
+- 看栈的第一帧 weaselx64/WeaselServer 行 — 是 free 的话,看 lambda/hash 反查源码
+- 双 dump 验证:同 lambda + 同 offset 在 dopus 也 crash → 真因在 weaselx64.dll
+- 不要根据 glog/heuristic 推断 heap corruption 真因 — 必须 cdb 栈
+- boost::thread_specific_ptr + TOCTOU 是已知反模式 — 优先 static thread_local
+
+**关联**:
+- L##-FluxingPhrasesDialog-PathFix (v0.20.0.1 hotfix) — 误诊 1,正确修了 path 但不是 crash 真因
+- L##-PhaseL-9.11-Retro (v0.74.x 7 days 6 failed ships) — 同类反复 ship 不修
+- commit (本 fix) + tag v0.20.0.2 (local only,kizemo 远程 divergence,push 仍待接力 session)
