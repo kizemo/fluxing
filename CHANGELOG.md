@@ -1,5 +1,65 @@
 
 
+## [0.20.0.2-fluxing] - 2026-08-07
+
+### fix(WeaselIPC): v0.20.0.2 — PipeChannel thread_specific_ptr race (HEAP_CORRUPTION 0xc0000374 真因)
+
+**User-visible**:
+- 装机后切到火流猩输入法,**不再**触发微信 / Claude Code / dopus / ToDesk / explorer 多进程 crash
+- v0.20.0.0/0.20.0.1 的 crash 现场消失
+
+**Root cause (WinDbg `!analyze -v` 双 dump 实证)**:
+- v0.20.0.0 假设是 NSIS install.nsi line 578 路径错配 → **不是** (binary mtime 修后仍 crash)
+- v0.20.0.0 假设是 `key_binder/bindings/+` 用 `send: "《"` 触发 X11 keysym parse error → **不是** (删后仍 crash)
+- v0.20.0.1 假设是 emoji.json 引用 emoji.txt/others.txt 缺失 → **不是** (补后仍 crash)
+- **真因**: `include/PipeChannel.h:57-62` `boost::thread_specific_ptr<ChannelContext>` 的 TOCTOU 竞态
+  - 两个 thread 同时首次访问 → 都看到 nullptr → 都 new → 第二个 `reset()` 覆盖第一个的指针
+  - 第一个 thread 继续持有 dangling pointer → 析构时 double-free
+  - ntdll 检测 heap corruption → 0xc0000374
+  - 微信/Claude/dopus/ToDesk/Explorer **全部**加载 weaselx64.dll → 全部受同一进程 crash 传染
+  - 验证:dopus dump **完全没有 librime/OpenCC**,但 crash 在完全相同 lambda + offset 0x91
+
+**Fix**:
+- `include/PipeChannel.h`:
+  - 替换 `mutable boost::thread_specific_ptr<ChannelContext>` 为 C++11 `static thread_local std::unique_ptr<ChannelContext>`
+  - 替换 `mutable boost::thread_specific_ptr<HANDLE>` 为 `static thread_local HANDLE`
+  - 编译器保证 per-thread lazy init thread-safe (消除 TOCTOU race)
+  - 移除 `<boost/thread.hpp>` + `<boost/thread/tss.hpp>` 依赖
+- 新增 `test/TestPipeChannelRace/TestPipeChannelRace.cpp` 回归测试
+  - 100 thread × 1000 round trip 并发触发 `_GetContext()` + `_GetPipeHandle()`
+  - 验证每个 thread 的指针稳定 + thread 间指针不混淆
+
+**Includes**:
+- `include/PipeChannel.h` (race fix)
+- `test/TestPipeChannelRace/TestPipeChannelRace.cpp` (new regression)
+- `test/TestPipeChannelRace/TestPipeChannelRace.vcxproj` (new)
+- `env.bat` bump 0.20.0.1 → 0.20.0.2 (gitignored)
+- `weasel.sln` (无变化 - 测试独立编译)
+- `output/install.nsi` (无变化 - installer 内容不变)
+- `output/data/user-custom/*.custom.yaml` (回滚到 v0.20.0.1 原始 key_binder 状态)
+
+**不做的 (out of scope)**:
+- ❌ PageHeap 验证 (gflags /i +hpa 启用 page heap,精确捕捉写入越界点) — 留 v0.20.0.3 或后续
+- ❌ librime CoW bug 修复 (config_data.cc:175 incompatible node type) — librime 1.13.1 upstream
+- ❌ YAML 错配 (`key_binder send` vs `punctuator/full_shape commit:`) — 等 user 单独决议
+- ❌ emoji.txt/others.txt 缺失 — installer bundling issue (per NSIS L09)
+
+**关联**:
+- `L##-ThreadSpecificPtr-Race` (本 fix) — 新 lessons-learned
+- `docs/adr/NNNN-thread-local-replaces-boost-tss.md` — ADR
+- `.specify/specs/076-thread-specific-ptr-race/{spec,plan,tasks}.md` — 完整 spec
+
+**装机 user flow** (装机后必测):
+1. 切到火流猩输入法 (Win+Space)
+2. 打开 Claude Code,输入中文 ≥10 字符
+3. 打开微信,输入中文 ≥10 字符
+4. 跑 `Get-ChildItem C:\fluxing-dumps -Filter "*.dmp" -ErrorAction SilentlyContinue` → **0 新 dump** 即修复成功
+5. cdb 验证: `cdb -z C:\fluxing-dumps\*.dmp -cf cdb.cmd` → `weaselx64!<lambda_306bd6bd9716a5176553a603b909d585>` 不再出现
+
+**回滚**:
+- `_rollback_v0.20.0.2.ps1` (新建) → 一键卸载 v0.20.0.2 + 恢复 v0.20.0.1
+- `git revert <commit>` 单 commit revert → 重建 v0.20.0.1 installer
+
 ## [0.19.0.62-fluxing] - 2026-07-24
 
 ### refactor(WeaselServer): Phase L 调整 1.2 — QuickPanel UserDict 槽位彻底删除 (5→4 buttons)
