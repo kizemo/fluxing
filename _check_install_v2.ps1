@@ -67,10 +67,27 @@ Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
 # v0.19.0.59 (A5 ship, sftp_sync 通用化 + 56 tests in git; source unchanged):
 #   WeaselServer.exe + FluxingPhrasesDialog.exe 都是 MSBuild Win32 Release + x64
 #   rebuild from v0.19.0.58 base, 装机器上 0 code change。installer md5 反映新 binary。
-$expectedMd5 = '02876AA73BE5FCF33527F8E13904C178'  # v0.19.0.62 WeaselServer.exe (MSBuild Win32 Release, build 2026-07-24 14:10, Phase L 调整 1.2: QuickPanel 5→4 buttons + kPanelW 289→245)
-$expectedFluxingMd5 = 'C969AEB31E24D9EE1468F8869150970D'  # v0.19.0.62 FluxingPhrasesDialog.exe (x64, source unchanged from v0.19.0.59, shipped binary unchanged)
-$expectedInstallerMd5 = '64F9A3C8A9D47A03A81236EDD1761EB4'  # v0.19.0.62 NSIS installer (build 2026-07-24 14:10, MSBuild rebuild weasel.sln)
-$expectedBuildTime = '2026-07-24 14:10:00'  # v0.19.0.62 NSIS timestamp
+# v0.21.0.0 (Phase M milestone, 2026-08-10, 5 incident 收敛):
+#   spec 076 PipeChannel TOCTOU race fix source 已 commit (v0.20.0.2 thread_local in
+#   include/PipeChannel.h), 但 v0.20.0.3 install 装机 silent miss — install.nsi
+#   weaselx64.dll Rename-then-File fallback 静默吞 TSF lock, v0.20.0.2 旧 binary 保留
+#   (md5 fba4b16c), race fix md5 a289525b 未部署 → 微信/Claude/dopus/explorer 仍 crash。
+#   Fix (v0.20.0.4 F3+F4 + v0.21.0.0 milestone):
+#   - F3 install.nsi line 500-535: Rename AND File 都失败 → 写 $INSTDIR\weaselx64.dll.stage2
+#     marker → Stage 2 At-startup swap (FluxingStage2InstallX64 task, copyFiles
+#     $PLUGINSDIR\..\weaselx64.dll → %TEMP%\fluxing-staged\, schtasks /SC ONSTART)
+#   - F4 install.nsi line 777-794: HKCU\..\CTF\Assemblies\0x00000804\{3D02CAB6-...}
+#     WriteRegStr wrap in ${For} retry x2 + ReadRegStr verify + loud log on failure
+#   - test/TestPipeChannelRace/*: cpp namespace + vcxproj boost serialization lib +
+#     MultiThreaded static → 12/12 PASS at 2/8/32/100 threads (spec 076 race regression)
+#   - include/StringAlgorithm.hpp setlocale(LC_ALL,'') → std::locale('') (P2 thread-safe)
+#   5 binary md5 装机 verified (2026-08-10): input works, no crash, no new dumps since
+#   install. Same 5 binaries as v0.20.0.4 (md5 identical); only NSIS version metadata
+#   bumped (FLUXING_VERSION 0.21.0 + WEASEL_BUILD 0).
+$expectedMd5 = 'A622CBD076405C23371AA3BCDBF70F49'  # v0.21.0.0 WeaselServer.exe (MSBuild Win32 Release, build 2026-08-10 09:05, Phase M milestone)
+$expectedFluxingMd5 = 'A3A07984AF4D60807F2B7F604F9228F3'  # v0.21.0.0 FluxingPhrasesDialog.exe (x64, MSBuild Win32 Release)
+$expectedInstallerMd5 = 'A43C72E7A8BF66B270AD34BEF8846030'  # v0.21.0.0 NSIS installer (build 2026-08-10 09:05, F3+F4 reliability + Phase M milestone)
+$expectedBuildTime = '2026-08-10 09:05:00'  # v0.21.0.0 NSIS timestamp
 
 $paths = @(
     'D:\Program Files\fluxing\weasel\WeaselServer.exe',
