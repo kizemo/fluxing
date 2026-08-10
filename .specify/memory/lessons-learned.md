@@ -9995,3 +9995,91 @@ include/PipeChannel.h 改用 C++11 static thread_local std::unique_ptr<ChannelCo
 - L##-FluxingPhrasesDialog-PathFix (v0.20.0.1 hotfix) — 误诊 1,正确修了 path 但不是 crash 真因
 - L##-PhaseL-9.11-Retro (v0.74.x 7 days 6 failed ships) — 同类反复 ship 不修
 - commit (本 fix) + tag v0.20.0.2 (local only,kizemo 远程 divergence,push 仍待接力 session)
+
+## L##-PhaseM-v0.21.0.0 — spec 076 milestone (race fix deploy + installer reliability)
+
+**Date**: 2026-08-10
+**Context**: 7 天 5 次 ship (v0.20.0.0/0.1/0.2/0.3/0.4/0.21.0.0) 收敛到 race fix 真因 + 装机可靠性。
+
+**5 incident L## 集合 (per Phase M)**:
+
+### 1. L##-ThreadSpecificPtr-Race (v0.20.0.2 真因)
+boost::thread_specific_ptr + TOCTOU race → 0xc0000374 heap corruption in weaselx64.dll → 微信/Claude/dopus/explorer 全部 crash。
+Fix: include/PipeChannel.h 改 static thread_local std::unique_ptr。
+但**装机路径有 bug**:v0.20.0.3 install.nsi Rename-then-File fallback 静默吞 TSF lock 失败,weaselx64.dll 仍是 v0.20.0.2 旧 binary (md5 fba4b16c)。
+
+### 2. L##-Weaselx64Dll-SilentMiss (v0.20.0.3 install bug)
+装机时 ctfmon/TextInputHost 已加载 weaselx64.dll (mmap 锁住)。install.nsi line 500-524 走 SetOverwrite try → File "weaselx64.dll" → IfErrors 0 weaselx64_done (失败无 .stage2 marker) → 静默保留旧 binary。user report: 装 v0.20.0.3 → 切火流猩 → weaselx64.dll md5 fba4b16c (v0.20.0.2) 不是 a289525b (race fix)。PipeChannel race 仍在。
+Fix (v0.20.0.4 F3): Rename AND File 都失败 → 写 $INSTDIR\weaselx64.dll.stage2 marker → Stage 2 段 (line 800+) 检 marker → CopyFiles $PLUGINSDIR\..\weaselx64.dll → %TEMP%\fluxing-staged\ → schtasks /SC ONSTART /TN FluxingStage2InstallX64 → 启动 swap。
+
+### 3. L##-HKCU-CtfBinding-SilentMiss (v0.20.0.3 install bug)
+install.nsi line 766-768 WriteRegStr HKCU ...\{3D02CAB6-...} 失败时静默继续,无 retry/verify。user report: DisplayVersion=0.20.0.3 但 HKCU\..\CTF\Assemblies\0x00000804 下只有 MS Pinyin {34745C63-...} 而非 Fluxing {A3F4CDED-...}。切火流猩无 side-channel 时找不到。
+Fix (v0.20.0.4 F4): 包 ${For} $R9 1 2 ... ${Next} + ReadRegStr 验证 + DetailPrint 失败 loud log。
+
+### 4. L##-TestPipeChannelRace-BuildBroken (v0.20.0.3 test bug)
+test/TestPipeChannelRace/ 在 v0.20.0.3 ship 时 build 卡住:cpp 未加 `using namespace weasel;` → C2504 "PipeChannelBase 未定义" (实际在 weasel:: namespace); 中文字符串被 cp936 误解释搅乱 line tracking → error 行号错位; vcxproj 缺 ..\..\WeaselIPC\PipeChannel.cpp ClCompile → LNK2019 unresolved external ~PipeChannelBase; vcxproj 未指定 boost serialization lib 路径 → LNK1104 找不到 libboost_wserialization-vc143-mt-x32-1_83.lib。
+Fix: cpp 加 using + 删中文注释 + vcxproj 加 PipeChannel.cpp ClCompile + boost serialization lib path + RuntimeLibrary MultiThreaded (static)。
+验证: 12 PASS / 0 FAIL at 2/8/32/100 threads × 3 assertion (per-thread stable + distinct ctx + distinct pipe handle)。
+
+### 5. L##-StartServiceBat-Mislabel (v0.20.0.0 source bug)
+output/start_service.bat 内容 = `weaselserver.exe /q` (= STOP per WeaselServer.cpp:144),output/stop_service.bat 内容 = `start "" WeaselServer.exe` (= START)。文件名 vs 内容反了。"右键重启算法服务无效" 实际是用户跑了 start_service.bat → /q → 没在跑的 server 时 no-op。
+Fix (defer to v0.21.0.1): 改 source。
+
+**Phase M 装机路径 F3+F4 验证 (user machine 2026-08-10)**:
+
+| Check | Evidence |
+|---|---|
+| weaselx64.dll md5 | `a289525bb18511568785e9ab2e7ffec0` (spec 076 fix deployed) |
+| weasel.dll md5 | `863bfdbc3c88e6a9046c72d3026f5ff5` |
+| WeaselServer.exe md5 | `a622cbd076405c23371aa3bcdbf70f49` |
+| Uninstall DisplayVersion | `0.20.0.4` (user 装的是 F3+F4 ship) |
+| HKCU\..\CTF\Assemblies\0x00000804\{3D02CAB6-...} | EXISTS with `{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}` (F4 真生效) |
+| HKLM\..\Run WeaselServer | ✓ `D:\Program Files\fluxing\weasel\WeaselServer.exe` |
+| C:\fluxing-dumps since install | 0 new (last Aug 7 12:13) |
+| %LOCALAPPDATA%\fluxing\crash | empty (no SEH) |
+| EventLog Errors since install | 0 new (last Aug 7) |
+| WeaselServer PID 7160 | Responding, 7.7 min uptime |
+| librime init | 24382 bytes / 265 lines, complete through rime_ice + melt_eng + radical_pinyin schemas |
+| User report | "可以输入中文,未出现 crash" ✓ |
+
+**v0.21.0.0 milestone ship**:
+
+- env.bat: FLUXING_VERSION 0.21.0 + WEASEL_BUILD 0 (v0.20.0.4 → v0.21.0.0)
+- 5 binary md5 与 v0.20.0.4 一致 (only NSIS version metadata 变)
+- installer md5: `a43c72e7a8bf66b270ad34bef8846030`
+- git commits:
+  - `29f0c61 fix(WeaselIPC+installer): v0.21.0.0 spec 076 reliability milestone` (source + test + 7 deletion)
+  - `54909ae chore(release): v0.21.0.0 installer ship + drop 49 stale v0.19.0.x` (installer + 50 cleanup)
+- git tag: `v0.21.0.0` (annotated, on 54909ae)
+
+**关键教训 (5 incident 总结)**:
+
+1. **silent failure is the worst failure**。installer 的 Rename-then-File fallback、WriteRegStr 都是"装完了用户看不到"。3 个 L## 都是 silent miss。Fix pattern: 不允许 silent — 加 IfErrors 检测 + retry + loud log + 备用路径 (Stage 2)。
+2. **race condition fix 装机可靠性是 separate concern**。v0.20.0.2 source fix 正确但 v0.20.0.3 装机没换 binary → 仍 crash。两者**必须**同时 ship (source + installer reliability)。
+3. **regression test 在 ship 前必跑**。v0.20.0.0 加 custom YAML 时没回归 test 关键 parse 路径 → 用户实际装上发现 4 个 parse error。test code 自身的 build 也要 ship (否则 test 永远是死代码)。
+4. **md5 dual-verify 是 ship-gate**。装机前后 md5 对比 = 装机真换 binary 的唯一证据。v0.20.0.3 silent miss 就是因为没做 dual-verify。
+5. **branch divergence 是历史包袱**。local 944 ahead / 831 behind kizemo/Fluxing → 不能直接 push,需要 handoff session 处理。
+
+**How to apply (per future milestone)**:
+
+- [ ] 任何 silent-failure-prone code (file replace / registry write / mutex acquire) → 加 IfErrors 检测 + retry + 备用路径
+- [ ] 任何 race condition fix → 装机前**必做** md5 dual-verify (extract archive + user dir,比对 source build md5)
+- [ ] 任何 regression test → test 自身 build 必须 ship (vcxproj cpp build pass, 0/0 FAIL)
+- [ ] 任何 installer 改 File 路径 → 必查 `output/` vs `output/Win32/` 实际 binary 位置 (L##-FluxingPhrasesDialog-PathFix 类)
+- [ ] 任何 release/ 输出 → 同步清理 Test*.exe/pdb/exp/lib + 旧 v0.1X.0.x 0-byte placeholders (per `feedback_release_output_rule.md`)
+- [ ] branch divergence > 100 commits → 不 push,只本地 commit + tag + handoff session 处理 push
+
+**关联**:
+
+- L##-ThreadSpecificPtr-Race (v0.20.0.2) — race fix source 真因
+- L##-FluxingPhrasesDialog-PathFix (v0.20.0.1) — installer File 路径错配类问题
+- L##-Release-Output-CleanupRule (2026-08-02) — release/ 输出 + Test 清理规则
+- feedback_l106_msbuild_incremental_skip.md — Test* 副产物
+- feedback_l108_msbuild_incremental_skip.md — MSBuild 增量 skip
+- feedback_release_output_rule.md — installer ship-path + Test 清理
+- commit `29f0c61` + `54909ae` + tag `v0.21.0.0` (local only,kizemo 远程 divergence,push 仍待接力 session)
+
+**Defer to v0.21.0.1**:
+
+- L##-StartServiceBat-Mislabel:output/start_service.bat + stop_service.bat 文件名 vs 内容反了。fix: 改 source 让 /q 真走 STOP,start 真走 START。
+- output/data/user-custom/*.custom.yaml key_binder send Chinese chars (《》？！：) parse error (librime Send field expects key sequences not literal text)。fix: 改用 send_text 或 compose,或 重写成 punctuator half_shape patch (但 Shift+ 时 Punctuator 不响应,需其他机制)。
