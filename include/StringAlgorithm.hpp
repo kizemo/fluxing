@@ -1,6 +1,6 @@
 #pragma once
 #include <algorithm>
-#include <clocale>
+#include <locale>
 #include <cwctype>
 #include <numeric>
 #include <set>
@@ -62,6 +62,10 @@ inline bool starts_with(const std::wstring& wstr, const std::wstring& wsub)
 
 inline void to_lower(std::wstring& wstr)
 {
-	std::setlocale(LC_ALL, "");
-	std::transform(wstr.begin(), wstr.end(), wstr.begin(), std::towlower);
+	// L##: setlocale(LC_ALL, "") 改为 std::locale("") —— 进程级 locale mutation违反 P2。
+	// std::locale("") 等价于 setlocale(LC_ALL, "") 但**不**修改全局 locale (thread-safe)。
+	// 用 std::ctype<wchar_t>::tolower 避免 MSVC std::towlower 不支持 2 参数。
+	const std::locale loc("");
+	const auto& facet = std::use_facet<std::ctype<wchar_t>>(loc);
+	facet.tolower(&*wstr.begin(), &*wstr.end());
 }
