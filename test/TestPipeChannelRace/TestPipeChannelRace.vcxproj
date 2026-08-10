@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup>
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="PropertySheets" />
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\..\include;..\..\WeaselIPC;$(BOOST_ROOT)</AdditionalIncludeDirectories>
+      <!-- v0.20.0.4 fix: switch RuntimeLibrary to static MultiThreaded so the boost
+           static libs at F:\b183\bin.v2\libs\*\build\msvc-14.3\release\address-model-32\
+           link-static\runtime-link-static\threading-multi\ link cleanly. The dynamic
+           variants (libboost_*-vc143-mt-x32-1_83.lib without -s- suffix) are not built
+           in this F:\b183 installation, so MultiThreadedDLL triggers LNK1104. -->
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <!-- v0.20.0.4 fix: explicit library search path + lib names. Auto-link from
+           boost headers expects dynamic variants; we have only static, so list
+           them explicitly. Boost 1.83 / msvc-14.3 / x32 / static-static. -->
+      <AdditionalLibraryDirectories>F:\b183\bin.v2\libs\serialization\build\msvc-14.3\release\address-model-32\link-static\runtime-link-static\threading-multi;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>libboost_wserialization-vc143-mt-s-x32-1_83.lib;libboost_serialization-vc143-mt-s-x32-1_83.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="TestPipeChannelRace.cpp" />
+    <!-- v0.20.0.4 fix: PipeChannelBase constructor/destructor are defined in
+         WeaselIPC/PipeChannel.cpp. Without this ClCompile entry, the linker
+         can't resolve LNK2019 for the symbols (we tested with just the .h
+         and got "undefined external" for ~PipeChannelBase() and the ctor). -->
+    <ClCompile Include="..\..\WeaselIPC\PipeChannel.cpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

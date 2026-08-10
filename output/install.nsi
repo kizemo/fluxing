@@ -500,6 +500,12 @@ program_files:
   ${If} ${RunningX64}
     ; L14-fix (spec 012 cleanup): weaselx64.dll is the 64-bit TSF TextInputProcessor.
     ; 同样 L72-bugfix Rename-then-File 模式
+    ; v0.20.0.4 F3 (spec 076 reliability): 如果 Rename AND File 都失败 (TSF host 锁住),
+    ; 写 $INSTDIR\weaselx64.dll.stage2 marker。Stage 2 段 (line 800+) 会检此 marker 并
+    ; 注册 At-startup 启动项, 重启后复制新 binary 完成 swap。
+    ; v0.20.0.3 user report: weaselx64.dll 装机时 TSF-locked → 静默保留 v0.20.0.2 旧 binary
+    ;   → PipeChannel race 修复 (a289525b) 未部署 → 微信/Claude/dopus 多 app 并发切火流猩
+    ;   race 重新触发 → 0xc0000374 HEAP_CORRUPTION crash (L##-PhaseM)。
     Push $R0
     Push $R1
     ${If} ${FileExists} "$INSTDIR\weaselx64.dll"
@@ -509,7 +515,12 @@ program_files:
         SetOverwrite try
         File "weaselx64.dll"
         IfErrors 0 weaselx64_done
-        DetailPrint "Fluxing: weaselx64.dll locked by TSF host; old shim retained. Log out -> log in to pick up the new shim."
+        ; BOTH Rename AND File failed (TSF host still holds mmap) —
+        ; write Stage 2 marker for boot-time swap (v0.20.0.4 F3)
+        DetailPrint "Fluxing v0.20.0.4 F3: weaselx64.dll TSF-locked at install time; staging new binary for At-startup swap (spec 076 race fix deployment)"
+        FileOpen $R9 "$INSTDIR\weaselx64.dll.stage2" w
+        FileWrite $R9 "STAGE2_WEASELX64_NEEDED"
+        FileClose $R9
         SetOverwrite on
         Goto weaselx64_done
       ${EndIf}
@@ -763,9 +774,24 @@ program_files:
   ${Endif}
   WriteRegStr HKLM "SOFTWARE\Microsoft\CTF\KnownClasses" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}" "Fluxing Text Service"
   SetRegView default
-  WriteRegStr HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "Default" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}"
-  WriteRegStr HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "Profile" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}"
-  WriteRegDWORD HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "KeyboardLayout" 0x08040804
+  ; v0.20.0.4 F4: HKCU CTF binding 必须真正写到磁盘。WriteRegStr silent miss
+  ;   (e.g. NSIS 路径解析失败 / HKCU hive 在非交互安装下指错 user) 会让用户切不到
+  ;   火流猩除非手动改注册表。ReadRegStr verify + 2 次 retry + 失败 loud log。
+  ; v0.20.0.3 user report: DisplayVersion=0.20.0.3 但 HKCU\..\CTF\Assemblies\0x00000804\
+  ;   {3D02CAB6-...} 缺失 → HKCU 下仍只有 MS Pinyin ({34745C63-...})。用户只能通过
+  ;   side-channel 切火流猩 (e.g. regsvr32 副作用), 一旦 Windows 更新或 profile reset 就丢失。
+  ${For} $R9 1 2
+    WriteRegStr HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "Default" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}"
+    WriteRegStr HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "Profile" "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}"
+    WriteRegDWORD HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "KeyboardLayout" 0x08040804
+    ReadRegStr $R8 HKCU "Software\Microsoft\CTF\Assemblies\0x00000804\{3D02CAB6-2B8E-4781-BA20-1C9267529467}" "Default"
+    ${If} $R8 == "{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}"
+      Goto ctf_binding_done
+    ${EndIf}
+    Sleep 500
+  ${Next}
+  DetailPrint "Fluxing v0.20.0.4 F4: HKCU CTF binding write FAILED after 2 retries. User must enable 火流猩 manually via Settings -> Time & Language -> Chinese (Simplified) -> Options (loud warn)"
+  ctf_binding_done:
   ; Write the uninstall keys for Windows
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayName" "$(DISPLAYNAME)"
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayIcon" '"$INSTDIR\WeaselServer.exe"'
@@ -818,6 +844,31 @@ program_files:
     IfSilent skip_post_install_message
     MessageBox MB_OK|MB_ICONEXCLAMATION "WeaselServer.exe 正在被 PPL 进程锁住,无法在线覆盖。$\r$\n已注册 At-startup Stage 2 启动项, 重启电脑后自动完成 binary swap。$\r$\n$\r$\n(快捷设置栏:按 Alt+, 或点击任务栏中英文图标)"
     Goto skip_post_install_message
+  ; v0.20.0.4 F3: weaselx64.dll Stage 2 trigger (separate task FluxingStage2InstallX64).
+  ;   Marker $INSTDIR\weaselx64.dll.stage2 由 line 500-524 在 Rename AND File 都失败时写。
+  ;   Stage 2 batch 在下次重启时 copy $PLUGINSDIR\..\weaselx64.dll (源 output/) 到 $INSTDIR
+  ;   并清 marker + 自删 task。
+  ${If} ${RunningX64}
+    ${If} ${FileExists} "$INSTDIR\weaselx64.dll.stage2"
+      DetailPrint "Fluxing v0.20.0.4 F3: weaselx64.dll TSF-locked at install; staging new binary for boot-time swap (spec 076 race fix deployment)"
+      CreateDirectory "$TEMP\fluxing-staged"
+      CopyFiles /SILENT /FILESONLY "$PLUGINSDIR\..\weaselx64.dll" "$TEMP\fluxing-staged\weaselx64.dll"
+      FileOpen $R9 "$TEMP\fluxing-staged\stage2-install-x64.bat" w
+      FileWrite $R9 "@echo off$\n"
+      FileWrite $R9 'xcopy /Y /Q "%TEMP%\fluxing-staged\weaselx64.dll" "$INSTDIR\weaselx64.dll*"$\n'
+      FileWrite $R9 'del /F /Q "$INSTDIR\weaselx64.dll.stage2"$\n'
+      FileWrite $R9 'schtasks /Delete /TN FluxingStage2InstallX64 /F$\n'
+      FileWrite $R9 'del "%TEMP%\fluxing-staged\stage2-install-x64.bat"$\n'
+      FileWrite $R9 'del "%TEMP%\fluxing-staged\weaselx64.dll"$\n'
+      FileClose $R9
+      nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2InstallX64 /TR "cmd /c $\"$TEMP\fluxing-staged\stage2-install-x64.bat$\"" /RL HIGHEST /F'
+      Pop $0
+      Pop $1
+      IfSilent skip_post_install_message
+      MessageBox MB_OK|MB_ICONEXCLAMATION "weaselx64.dll 正在被 TSF 宿主锁住,无法在线覆盖。$\r$\n已注册 At-startup Stage 2 启动项 (v0.20.0.4 F3), 重启电脑后自动完成 binary swap。$\r$\n$\r$\n(快捷设置栏:按 Alt+, 或点击任务栏中英文图标)"
+      Goto skip_post_install_message
+    ${EndIf}
+  ${EndIf}
   weasel_write_ok:
   ; Write autorun key
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "WeaselServer" "$INSTDIR\WeaselServer.exe"
