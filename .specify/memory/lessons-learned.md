@@ -10083,3 +10083,52 @@ Fix (defer to v0.21.0.1): 改 source。
 
 - L##-StartServiceBat-Mislabel:output/start_service.bat + stop_service.bat 文件名 vs 内容反了。fix: 改 source 让 /q 真走 STOP,start 真走 START。
 - output/data/user-custom/*.custom.yaml key_binder send Chinese chars (《》？！：) parse error (librime Send field expects key sequences not literal text)。fix: 改用 send_text 或 compose,或 重写成 punctuator half_shape patch (但 Shift+ 时 Punctuator 不响应,需其他机制)。
+
+---
+
+## L108 - GitHub push 2.00 GiB pack limit + Windows SSH > HTTPS chunked-push strategy (v0.21.0.0 ship, 2026-08-10)
+
+**Incident** (2026-08-10): push 948 commits (含 50+ release/fluxing-*-installer.exe × 40MB 二进制) from local Fluxing branch to kizemo/Fluxing remote (was 948 ahead / 831 behind since 2018-02-05 fork point)。Sequence of attempts:
+
+| # | Command | Result | Why |
+|---|---|---|---|
+| 1 | `git push --force-with-lease=kizemo/Fluxing:7d9f24b... kizemo Fluxing:Fluxing` (HTTPS) | ❌ rejected non-fast-forward | lease 检查通过但仍 throw "non-fast-forward"; 不同 git version 行为差 |
+| 2 | `git push --force-with-lease kizemo Fluxing:Fluxing` (HTTPS) | ❌ hang (~17 min wait, 4GB memory) | Windows + git 2.54 + 无 credential helper → 触发额外 prompt path |
+| 3 | `git push --force kizemo Fluxing:Fluxing` (HTTPS, full 948 commits) | ❌ HTTP 500 after 3m48s | **GitHub 2.00 GiB pack hard limit 触发** |
+| 4 | `git push --force kizemo 792cb47...:Fluxing` (HTTPS, single SHA) | ❌ HTTP 500 after 3m48s | even 148 commits 仍超 limit |
+| 5 | (SSH 已认证) `git remote add kizemo-ssh git@github.com:...` + `git push --force kizemo-ssh 792cb47...:Fluxing` | ❌ HTTP 500 after 17 min | SSH transport **同 limit**,只是不报 500 给具体 error message |
+| 6 | **Chunked push** 5 batches × 200 commits each via SSH | ✅ 17-21s / 批 完成 | each pack <2GB, server 接收 |
+
+**最终 chunks**: 200 + 200 + 200 + 200 + 148 = 948 commits,SSH kizemo-ssh remote alias,tip 由 HEAD~848 渐进到 HEAD。tag v0.21.0.0 + backup tag 在 chunk 之后 push 上 remote,全部 "Everything up-to-date" 确认。
+
+**Root cause**:
+1. **GitHub push 有 2.00 GiB pack hard limit**(server-side receive-pack),任何含大量 binary 的单 push 触发。Fluxing 50+ installer × 40MB = ~2GB 二进制 pack,加上源代码 + Git tree/blobs 必超。
+2. **Windows + git 2.54 + 无 credential helper → `--force-with-lease` hang**。本地无 `credential.helper` 配置时,lease 检查触发额外 transport-level prompt,卡死。
+3. **HTTPS vs SSH transport**: HTTPS 报 HTTP 500 generic error;SSH 报 `fatal: pack exceeds maximum allowed size (2.00 GiB)` 具体 message。**SSH 调试信息更有用**,但 transport-level limit 一致。
+
+**Lesson**:
+
+1. **任何含 ≥30 个 release/fluxing-*-installer.exe (40MB+) 的 push,必先 chunked**。GitHub 2GB limit 不是 soft,是 hard。
+2. **Chunk size 取保守 200 commits / 批**。200 commits 实际 pack ~500MB-1GB,留 50% buffer 给 tree/blobs。低于 100 也行但 batches 太多 overhead。
+3. **Chunked push 走 direct SHA push**: `git push --force <remote> <sha>:Fluxing` 顺序推递增 SHA。**不要**用 branch ref(branch 在 chunk 间可能被 fetch 干扰)。
+4. **Windows + 无 credential helper → 不要用 `--force-with-lease`**。要么配 `git config credential.helper manager`(Windows Credential Manager),要么纯 `--force`(backup tag 充当 safety net)。
+5. **SSH > HTTPS for big pushes on Windows**。HTTPS transport 在 HTTP/1.1 chunked transfer 时 silent drop(返 500 无具体原因);SSH 出错有具体 message。
+6. **Pre-push backup tag 必做**: `git tag backup/<remote>-<branch>-pre-push-<date> <remote>/<branch>` 然后 push 这个 backup tag **也上 remote** (`git push <remote> backup/...:backup/...`)。这样即使 force-push 出错,旧 SHA 在 remote 永久可达。
+7. **`git ls-remote <remote> refs/tags/<name>` 返回 annotated tag object SHA**(不是 dereferenced commit)。**dereference 用 `<name>^{}` suffix**:`git ls-remote <remote> 'v0.21.0.0^{}'`。
+
+**How to apply** (per future push of similar size):
+
+- [ ] Pre-push: `git count-objects -vH` → `size-pack` > 1.5 GiB → chunked
+- [ ] Pre-push: backup tag 创建 + push 到 remote (Step 6)
+- [ ] Pre-push: 计算 chunk boundary SHA: `git rev-parse HEAD~<offset>` for offsets = total-100, total-200, ...
+- [ ] Chunked push: `git push --force <remote> <sha>:Fluxing` 从最早 chunk 顺序推到 HEAD
+- [ ] Verify: `git ls-remote <remote> refs/heads/Fluxing` == local HEAD after each chunk
+- [ ] Final: push annotated tag + backup tag,验证 dereference match
+- [ ] Output capture caveat: bash 工具 background 命令对长 push output capture **不可靠**,以 `git ls-remote` 为 ground truth
+
+**关联**:
+
+- L107 (v0.19.0.58 WS_POPUP + x64 FluxingPhrasesDialog.exe 漏 rebuild) — installer ship 教训,但只覆盖 source+installer,未覆盖 git push 路径
+- `feedback_release_output_rule.md` — release/ 输出清理
+- `feedback_l9_install_freeze_ux_timing.md` — UX timing 不要误判为 install freeze,类比: push hang 不要误判为 process 完成
+- commit `54909ae` (v0.21.0.0 installer ship) + 后续 push 完成,git log 现在显示 Fluxing..kizemo/Fluxing divergence 0/0
