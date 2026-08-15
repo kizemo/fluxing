@@ -24,12 +24,33 @@ class ShiftStateMachine {
     std::size_t index = 0;  // 0-based; valid only if fire_select==true
   };
 
-  void Reset(SessionId sid) {}
-  void OnShiftDown(SessionId sid, bool is_left) {}
-  EventResult OnShiftUp(SessionId sid, bool is_left) { return {}; }
-  void OnInterveningKey(SessionId sid) {}
-  void OnSessionDestroyed(SessionId sid) {}
-  std::size_t DebugSessionCount() const { return 0; }
+  void Reset(SessionId sid) { states_.erase(sid); }
+
+  void OnShiftDown(SessionId sid, bool is_left) {
+    auto& s = states_[sid];
+    s.downRecorded = true;
+    s.interveningKey = false;
+    s.lastIsLeft = is_left;
+  }
+
+  EventResult OnShiftUp(SessionId sid, bool is_left) {
+    (void)is_left;
+    auto it = states_.find(sid);
+    if (it == states_.end()) return {};
+    EventResult r;
+    r.fire_select = it->second.downRecorded && !it->second.interveningKey;
+    r.index = it->second.lastIsLeft ? 1u : 2u;
+    states_[sid] = State{};  // C6: unconditionally reset on Up
+    return r;
+  }
+
+  void OnInterveningKey(SessionId sid) {
+    // Implemented in T03.
+  }
+
+  void OnSessionDestroyed(SessionId sid) { states_.erase(sid); }
+
+  std::size_t DebugSessionCount() const { return states_.size(); }
 
  private:
   struct State {
