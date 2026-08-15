@@ -33,6 +33,9 @@ enum WEASEL_IPC_COMMAND {
   WEASEL_IPC_HIGHLIGHT_CANDIDATE_ON_CURRENT_PAGE,
   WEASEL_IPC_DELETE_CANDIDATE_ON_CURRENT_PAGE,
   WEASEL_IPC_CHANGE_PAGE,
+  WEASEL_IPC_SHIFT_DOWN,
+  WEASEL_IPC_SHIFT_UP,
+  WEASEL_IPC_SELECT_CANDIDATE,
   WEASEL_IPC_LAST_COMMAND
 };
 
@@ -73,6 +76,12 @@ struct RequestHandler {
                                                EatLine eat) {
     return false;
   }
+  // spec 077: Shift release-only candidate select via IPC state machine.
+  // Virtuals are no-op defaults so ServerImpl (T08) builds before
+  // RimeWithWeaselHandler overrides them (T09/T10).
+  virtual void ShiftDown(bool is_left, DWORD session_id) {}
+  virtual void ShiftUp(bool is_left, DWORD session_id) {}
+  virtual void SelectCandidate(size_t index, DWORD session_id) {}
   virtual bool ChangePage(bool backward, DWORD session_id, EatLine eat) {
     return false;
   }
@@ -130,6 +139,14 @@ class Client {
   bool ClearComposition();
   // 选择当前页面编号为index的候选
   bool SelectCandidateOnCurrentPage(size_t index);
+  // spec 077: notify Server of raw Shift_L/R down/up so Server-side state
+  // machine can drive release-only select_candidate. Fire-and-forget
+  // (no server response). is_left: true=Shift_L, false=Shift_R.
+  bool ShiftDown(bool is_left);
+  bool ShiftUp(bool is_left);
+  // spec 077: bypass Server-side state machine and select candidate at
+  // absolute 0-based index. Reserved for future scripted/test paths.
+  bool SelectCandidate(size_t index);
   // 高亮当前页面编号为index的候选
   bool HighlightCandidateOnCurrentPage(size_t index);
   // 删除当前页面编号为index的候选（右键删除）
