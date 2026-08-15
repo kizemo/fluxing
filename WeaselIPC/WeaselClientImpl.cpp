@@ -88,6 +88,30 @@ bool ClientImpl::SelectCandidateOnCurrentPage(size_t index) {
   return ret != 0;
 }
 
+// spec 077 §2.3: fire-and-forget. Do not block on pipe read (C2).
+// Server state machine runs synchronously on receipt and does not respond.
+bool ClientImpl::ShiftDown(bool is_left) {
+  if (!_Active())
+    return false;
+  _SendMessage(WEASEL_IPC_SHIFT_DOWN, is_left ? 0u : 1u, session_id);
+  return true;
+}
+
+bool ClientImpl::ShiftUp(bool is_left) {
+  if (!_Active())
+    return false;
+  _SendMessage(WEASEL_IPC_SHIFT_UP, is_left ? 0u : 1u, session_id);
+  return true;
+}
+
+bool ClientImpl::SelectCandidate(size_t index) {
+  if (!_Active())
+    return false;
+  LRESULT ret = _SendMessage(WEASEL_IPC_SELECT_CANDIDATE,
+                             static_cast<DWORD>(index), session_id);
+  return ret != 0;
+}
+
 bool ClientImpl::DeleteCandidateOnCurrentPage(size_t index) {
   if (!_Active())
     return false;
@@ -242,6 +266,18 @@ bool Client::ClearComposition() {
 
 bool Client::SelectCandidateOnCurrentPage(size_t index) {
   return m_pImpl->SelectCandidateOnCurrentPage(index);
+}
+
+bool Client::ShiftDown(bool is_left) {
+  return m_pImpl->ShiftDown(is_left);
+}
+
+bool Client::ShiftUp(bool is_left) {
+  return m_pImpl->ShiftUp(is_left);
+}
+
+bool Client::SelectCandidate(size_t index) {
+  return m_pImpl->SelectCandidate(index);
 }
 
 bool Client::DeleteCandidateOnCurrentPage(size_t index) {
