@@ -392,6 +392,32 @@ DWORD ServerImpl::OnChangePage(WEASEL_IPC_COMMAND uMsg,
   return 0;
 }
 
+// spec 077: Shift raw down/up from TSF. wParam bit0 = is_left; lParam = session_id.
+// Server-side state machine (T09/T10) decides whether to fire select_candidate.
+DWORD ServerImpl::OnShiftDown(WEASEL_IPC_COMMAND uMsg,
+                              DWORD wParam,
+                              DWORD lParam) {
+  if (m_pRequestHandler)
+    m_pRequestHandler->ShiftDown((wParam & 1u) != 0, lParam);
+  return 0;
+}
+
+DWORD ServerImpl::OnShiftUp(WEASEL_IPC_COMMAND uMsg,
+                            DWORD wParam,
+                            DWORD lParam) {
+  if (m_pRequestHandler)
+    m_pRequestHandler->ShiftUp((wParam & 1u) != 0, lParam);
+  return 0;
+}
+
+DWORD ServerImpl::OnSelectCandidate(WEASEL_IPC_COMMAND uMsg,
+                                    DWORD wParam,
+                                    DWORD lParam) {
+  if (m_pRequestHandler)
+    m_pRequestHandler->SelectCandidate(static_cast<size_t>(wParam), lParam);
+  return 0;
+}
+
 #define MAP_PIPE_MSG_HANDLE(__msg, __wParam, __lParam) \
   {                                                    \
     auto lParam = __lParam;                            \
@@ -432,6 +458,9 @@ void ServerImpl::HandlePipeMessage(PipeMessage pipe_msg, _Resp resp) {
   PIPE_MSG_HANDLE(WEASEL_IPC_DELETE_CANDIDATE_ON_CURRENT_PAGE,
                   OnDeleteCandidateOnCurrentPage);
   PIPE_MSG_HANDLE(WEASEL_IPC_CHANGE_PAGE, OnChangePage);
+  PIPE_MSG_HANDLE(WEASEL_IPC_SHIFT_DOWN, OnShiftDown);
+  PIPE_MSG_HANDLE(WEASEL_IPC_SHIFT_UP, OnShiftUp);
+  PIPE_MSG_HANDLE(WEASEL_IPC_SELECT_CANDIDATE, OnSelectCandidate);
   PIPE_MSG_HANDLE(WEASEL_IPC_TRAY_COMMAND, OnCommand);
   END_MAP_PIPE_MSG_HANDLE(result);
 
