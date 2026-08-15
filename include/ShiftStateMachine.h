@@ -45,7 +45,10 @@ class ShiftStateMachine {
   }
 
   void OnInterveningKey(SessionId sid) {
-    // Implemented in T03.
+    auto it = states_.find(sid);
+    if (it != states_.end() && it->second.downRecorded) {
+      it->second.interveningKey = true;
+    }
   }
 
   void OnSessionDestroyed(SessionId sid) { states_.erase(sid); }
