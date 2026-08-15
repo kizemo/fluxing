@@ -21,6 +21,12 @@ class ClientImpl {
   bool CommitComposition();
   bool ClearComposition();
   bool SelectCandidateOnCurrentPage(size_t index);
+  // spec 077: raw Shift_L/R notification to Server-side state machine.
+  // Fire-and-forget (C2): do not block on pipe response.
+  bool ShiftDown(bool is_left);
+  bool ShiftUp(bool is_left);
+  // spec 077: bypass state machine and select absolute candidate index.
+  bool SelectCandidate(size_t index);
   bool HighlightCandidateOnCurrentPage(size_t index);
   bool DeleteCandidateOnCurrentPage(size_t index);
   bool ChangePage(bool backward);
