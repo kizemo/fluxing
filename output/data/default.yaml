@@ -237,8 +237,6 @@ key_binder:
     # Shift+Shift_L/R 形式（modifier=Shift）确保 keycode=Shift_L, modifier=0 的 TSF release event 不会误匹配
     # (librime 1.13 key_event.h:64 KeyEvent::operator== 严格比较 keycode + modifier)
     # 候选第 1 个用数字键 1 / 空格 / Enter 上屏（librime 默认），第 2/3 用 Shift_L/R 或 Control+1/2
-    - { when: has_menu, accept: Shift+Shift_L, send: 2 }
-    - { when: has_menu, accept: Shift+Shift_R, send: 3 }
     - { when: has_menu, accept: Control+1, send: 2 }
     - { when: has_menu, accept: Control+2, send: 3 }
 
