@@ -359,45 +359,37 @@ int main(int argc, char* argv[]) {
         std::cout << "    (debug: " << t1_fail << " bindings failed to parse)" << std::endl;
     }
 
-    // ---- Test 2: L18 invariant (release event does NOT match Shift+Shift_L) ----
-    // Find the binding with accept: Shift+Shift_L, construct a TSF
-    // release event (keycode=Shift_L, modifier=Release), and assert
-    // mock::Match(binding, release_event) == false.
-    bool test2_pass = false;
+    // ---- Test 2: spec 077 inverted (Shift+Shift_L binding removed in T15) ----
+    // Originally this tested L18 invariant: TSF release event does NOT match
+    // Shift+Shift_L binding. After spec 077 T15 the binding is gone, so the
+    // contract is now "no Shift+Shift_L binding exists". We assert the new
+    // contract and keep the original L18 invariant via Test 4c (no bare
+    // Shift_L binding exists).
+    bool has_shift_shift_l = false;
     for (const auto& b : bindings) {
-        if (b.accept == "Shift+Shift_L" && b.parse_ok) {
-            mock::KeyEvent release_event;
-            release_event.keycode = 0xffe1;  // Shift_L
-            release_event.modifier = mock::kRelease;
-            if (!mock::Match(b.parsed, release_event)) {
-                test2_pass = true;
-            }
-            break;
-        }
+        if (b.accept == "Shift+Shift_L" && b.parse_ok) has_shift_shift_l = true;
     }
-    check("Test 2: TSF release event (Shift_L, Release) does NOT match Shift+Shift_L binding (L18 invariant)",
-          test2_pass);
+    check("Test 2: spec 077 — no Shift+Shift_L binding exists (was L18 invariant)",
+          !has_shift_shift_l);
 
-    // ---- Test 3: spec 014 ordering (Shift+Shift_L before Control+1) ----
-    // Walk the binding list and find indices of Shift+Shift_L and
-    // Control+1. Assert the former appears before the latter.
+    // ---- Test 3: spec 077 ordering — Shift+Shift_L removed, so idx_shift == -1 ----
+    // Originally tested spec 014 ordering. After spec 077 the binding is gone;
+    // we assert the binding does not appear in the list (idx == -1).
     int idx_shift = -1, idx_ctrl = -1;
     for (size_t i = 0; i < bindings.size(); ++i) {
         if (idx_shift < 0 && bindings[i].accept == "Shift+Shift_L") idx_shift = (int)i;
         if (idx_ctrl  < 0 && bindings[i].accept == "Control+1")     idx_ctrl  = (int)i;
     }
-    bool test3_pass = (idx_shift >= 0 && idx_ctrl >= 0 && idx_shift < idx_ctrl);
     {
         std::stringstream ss;
-        ss << "Test 3: Shift+Shift_L (idx=" << idx_shift
-           << ") appears before Control+1 (idx=" << idx_ctrl
-           << ") in key_binder.bindings (spec 014 ordering)";
-        check(ss.str().c_str(), test3_pass);
+        ss << "Test 3: spec 077 — Shift+Shift_L not in bindings list (idx="
+           << idx_shift << "), Control+1 still at idx=" << idx_ctrl;
+        check(ss.str().c_str(), idx_shift < 0 && idx_ctrl >= 0);
     }
 
-    // ---- Test 4: existence + L19 guard ----
-    // (a) at least one has_menu + Shift+Shift_L binding exists
-    // (b) at least one has_menu + Control+1 binding exists
+    // ---- Test 4: spec 077 inverted + L19 guard ----
+    // (a) has_menu + Shift+Shift_L binding must NOT exist (spec 077 inverted)
+    // (b) has_menu + Control+1 binding must still exist (spec 005 contract)
     // (c) NO bare `accept: Shift_L` (L19 form) in key_binder
     bool has_menu_shift = false, has_menu_ctrl = false, bare_shift = false;
     for (const auto& b : bindings) {
@@ -410,8 +402,8 @@ int main(int argc, char* argv[]) {
             bare_shift = true;
         }
     }
-    check("Test 4a: has_menu + accept: Shift+Shift_L exists (spec 014 contract)",
-          has_menu_shift);
+    check("Test 4a: spec 077 — has_menu + accept: Shift+Shift_L must NOT exist",
+          !has_menu_shift);
     check("Test 4b: has_menu + accept: Control+1 exists (spec 005 contract)",
           has_menu_ctrl);
     check("Test 4c: NO bare accept: Shift_L or Shift_R (L19 guard)",

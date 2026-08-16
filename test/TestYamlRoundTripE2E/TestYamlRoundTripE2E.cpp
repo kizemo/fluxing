@@ -133,7 +133,7 @@ void test_4(const std::string& default_yaml) {
   BOOST_TEST(new_doc["config_version"].as<std::string>() == "2099-12-31");
   BOOST_TEST(new_doc["key_binder"].IsMap());
   BOOST_TEST(new_doc["key_binder"]["bindings"].IsSequence());
-  BOOST_TEST(new_doc["key_binder"]["bindings"].size() == 31u);
+  BOOST_TEST(new_doc["key_binder"]["bindings"].size() == 29u);
   std::vector<std::string> original = ParseAccepts(default_yaml);
   std::vector<std::string> after_write = ParseAccepts(out);
   BOOST_TEST_EQ(original.size(), after_write.size());
