@@ -62,11 +62,14 @@ int main(int argc, char** argv) {
   check("Control+1 上屏第 2 候选 (has_menu) — L19",
         Contains(content, "accept: Control+1, send: 2"));
   check("Control+2 上屏第 3 候选 (has_menu) — L19",
-        Contains(content, "accept: Control+2, send: 3"));  // F1 选第 2/3 候选：Shift_L/R 单键 (spec 014 / L21 恢复)
-  check("Shift_L 单键选 2 候选 (has_menu) - spec 014 恢复",
-        Contains(content, "accept: Shift+Shift_L, send: 2"));
-  check("Shift_R 单键选 3 候选 (has_menu) - spec 014 恢复",
-        Contains(content, "accept: Shift+Shift_R, send: 3"));
+        Contains(content, "accept: Control+2, send: 3"));
+  // spec 077 inverted (T15 deleted lines 240-241): these bindings MUST NOT
+  // exist. The state-machine release-only select via IPC (T01-T12) replaces
+  // them. Control+1/2 above remains as fallback.
+  check("spec 077: has_menu accept: Shift+Shift_L, send: 2 must NOT exist",
+        !Contains(content, "accept: Shift+Shift_L, send: 2"));
+  check("spec 077: has_menu accept: Shift+Shift_R, send: 3 must NOT exist",
+        !Contains(content, "accept: Shift+Shift_R, send: 3"));
   // F1 ascii_composer switch_key 保持 noop (防止与 has_menu binding 双触发)
   check("ascii_composer.Shift_L: noop 保持 (spec 014)", Contains(content, "Shift_L: noop"));
   check("ascii_composer.Shift_R: noop 保持 (spec 014)", Contains(content, "Shift_R: noop"));
@@ -86,8 +89,11 @@ int main(int argc, char** argv) {
   check("Shift+r 组合键 (always toggle) 已移除 (L16)", !Contains(content, "toggle: ascii_mode, accept: Shift+r"));
 
   // L19 负断言: keycode=Shift_L/R 的所有 binding 必须全部不存在 (防御 shift+<key> release event)
-  check("L14: has_menu: accept: Shift+Shift_L, send: 2 已恢复 (spec 014 / L21)", Contains(content, "accept: Shift+Shift_L, send: 2"));
-  check("L14: has_menu: accept: Shift+Shift_R, send: 3 已恢复 (spec 014 / L21)", Contains(content, "accept: Shift+Shift_R, send: 3"));
+  // spec 077 inverted (replaces old L14 positive assertions, deleted in T15).
+  check("spec 077: has_menu: accept: Shift+Shift_L, send: 2 已不存在",
+        !Contains(content, "accept: Shift+Shift_L, send: 2"));
+  check("spec 077: has_menu: accept: Shift+Shift_R, send: 3 已不存在",
+        !Contains(content, "accept: Shift+Shift_R, send: 3"));
   check("L19: send: <N> with Shift_L modifier 已不存在", !Contains(content, "send: 2, when: has_menu, accept: Shift_L"));
   check("L19: ascii_composer.Shift_L: commit_code 已不存在", !Contains(content, "Shift_L: commit_code"));
   check("L19: ascii_composer.Shift_R: commit_code 已不存在", !Contains(content, "Shift_R: commit_code"));
@@ -104,10 +110,11 @@ int main(int argc, char** argv) {
         content.find("toggle: ascii_mode, accept: Shift_L") == std::string::npos);
   check("L19 负断言: keycode=Shift_R ascii_mode toggle 已不存在",
         content.find("toggle: ascii_mode, accept: Shift_R") == std::string::npos);
-  check("L14: has_menu Shift+Shift_L binding 已恢复 (spec 014 / L21)",
-        content.find("accept: Shift+Shift_L") != std::string::npos);
-  check("L14: has_menu Shift+Shift_R binding 已恢复 (spec 014 / L21)",
-        content.find("accept: Shift+Shift_R") != std::string::npos);
+  // spec 077 inverted (replaces old L14 positive, deleted in T15).
+  check("spec 077: has_menu Shift+Shift_L binding 已不存在",
+        content.find("accept: Shift+Shift_L") == std::string::npos);
+  check("spec 077: has_menu Shift+Shift_R binding 已不存在",
+        content.find("accept: Shift+Shift_R") == std::string::npos);
   check("L19 负断言: Shift+l 组合键 ascii_mode 已移除 (L16)",
         content.find("toggle: ascii_mode, accept: Shift+l") == std::string::npos);
   check("L19 负断言: Shift+r 组合键 ascii_mode 已移除 (L16)",
@@ -132,6 +139,27 @@ int main(int argc, char** argv) {
   // 简化 L19 断言 (lambda 不支持 std::string 拼接 → const char* 转换复杂; 直接检查 count==1)
   check("L19: 切中英 active toggle 路径仅 1 个 (Shift+space)",
         (totalToggleCount - commentToggleCount) == 1);
+
+  // spec 077 T17: binding count must drop by exactly 2 after T15 deleted
+  // the two has_menu Shift+Shift_L/R send 2/3 lines. Count active binding
+  // entries (lines starting with "- { when:" outside of comment lines).
+  size_t activeBindingCount = 0;
+  size_t searchB = 0;
+  while ((searchB = content.find("- { when:", searchB)) != std::string::npos) {
+    // Reject comment-line bindings ("# - { when: ..." in commented blocks).
+    size_t prevChar = (searchB > 0) ? searchB - 1 : std::string::npos;
+    if (prevChar != std::string::npos && content[prevChar] != '#') {
+      activeBindingCount++;
+    }
+    searchB += 10;
+  }
+  // spec 014 + L21 baseline had two extra has_menu Shift+Shift_L/R send
+  // 2/3 bindings (activeBindingCount == 46); after T15 they are removed
+  // (activeBindingCount == 44). Pin the post-T15 count so future yaml
+  // edits cannot silently re-introduce or remove bindings.
+  const size_t EXPECTED_BINDINGS_AFTER_T15 = 44;
+  check("spec 077 T17: binding count == 44 (spec 014 baseline 46 - 2 deleted)",
+        activeBindingCount == EXPECTED_BINDINGS_AFTER_T15);
 
   std::cout << std::endl;
   std::cout << "Passed: " << passed << " / " << (passed + failed) << std::endl;
