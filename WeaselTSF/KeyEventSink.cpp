@@ -34,6 +34,28 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
       else if (ke.keycode == ibus::Down)
         ke.keycode = ibus::Up;
     }
+    // spec 077: Shift_L/R detection — eat the event entirely so it never
+    // reaches m_client.ProcessKeyEvent (which would feed it to librime
+    // and let librime's key_event.h:64 operator== mis-match the release
+    // half of any Shift+letter combo). We forward both halves to the
+    // Server-side state machine which knows when to actually select.
+    // R10: we must return early — letter events that follow in the same
+    // packet are unaffected because we don't touch _lpbKeyState.
+    if (ke.keycode == ibus::Shift_L || ke.keycode == ibus::Shift_R) {
+      BOOL isLeft = (ke.keycode == ibus::Shift_L);
+      BOOL isDown = !(ke.mask & ibus::RELEASE_MASK);
+      if (isDown) {
+        m_client.ShiftDown(isLeft ? TRUE : FALSE);
+        _shiftDown = TRUE;
+        _shiftDownIsLeft = isLeft ? TRUE : FALSE;
+      } else {
+        m_client.ShiftUp(isLeft ? TRUE : FALSE);
+        _shiftDown = FALSE;
+        _shiftDownIsLeft = FALSE;
+      }
+      *pfEaten = TRUE;
+      return;  // C6: never feed Shift to ProcessKeyEvent
+    }
     if (!keyCountToSimulate)
       *pfEaten = (BOOL)m_client.ProcessKeyEvent(ke);
 
