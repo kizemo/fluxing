@@ -4,6 +4,7 @@
 #include <map>
 #include <string>
 #include <mutex>
+#include <unordered_map>
 
 #include <rime_api.h>
 
@@ -33,6 +34,17 @@ struct SessionStatus {
 };
 typedef std::map<DWORD, SessionStatus> SessionStatusMap;
 typedef DWORD WeaselSessionId;
+
+// spec 077: per-session Shift state for release-only candidate select via IPC.
+// Lives on the Server side (RimeWithWeaselHandler) so the state machine is
+// driven by Server-serialized events, not TSF thread-local. Mirrors the
+// pure fluxing::ShiftStateMachine but is keyed by WeaselSessionId and is
+// responsible for actually calling rime_api->select_candidate when fire.
+struct ShiftState {
+  bool downRecorded = false;
+  bool interveningKey = false;
+  bool lastIsLeft = false;
+};
 class RimeWithWeaselHandler : public weasel::RequestHandler {
  public:
   RimeWithWeaselHandler(weasel::UI* ui);
@@ -64,6 +76,12 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
                          const std::string& opt,
                          bool val);
   virtual void UpdateColorTheme(BOOL darkMode);
+
+  // spec 077: Shift release-only candidate select via IPC state machine.
+  // Override RequestHandler virtuals; state is kept in m_shiftState.
+  virtual void ShiftDown(bool is_left, WeaselSessionId ipc_id);
+  virtual void ShiftUp(bool is_left, WeaselSessionId ipc_id);
+  virtual void SelectCandidate(size_t index, WeaselSessionId ipc_id);
 
   // spec 036: return current global ASCII mode (for QuickPanel initial state).
   // Reads the cached m_global_ascii_mode which is updated by SetOption.
@@ -148,6 +166,8 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   static std::string m_option_name;
   static std::mutex m_notifier_mutex;
   SessionStatusMap m_session_status_map;
+  // spec 077: per-session Shift state machine for release-only select.
+  std::unordered_map<WeaselSessionId, ShiftState> m_shiftState;
   bool m_current_dark_mode;
   bool m_global_ascii_mode;
   int m_show_notifications_time;

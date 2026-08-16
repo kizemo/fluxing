@@ -200,6 +200,8 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
   SessionStatus& session_status = new_session_status(ipc_id);
   session_status.style = m_base_style;
   session_status.session_id = session_id;
+  // spec 077: ensure ShiftState is fresh per session (R2 cross-session safety).
+  m_shiftState[ipc_id] = ShiftState{};
   _ReadClientInfo(ipc_id, buffer);
 
   RIME_STRUCT(RimeStatus, status);
@@ -240,6 +242,9 @@ DWORD RimeWithWeaselHandler::RemoveSession(WeaselSessionId ipc_id) {
   // TODO: force committing? otherwise current composition would be lost
   rime_api->destroy_session(to_session_id(ipc_id));
   m_session_status_map.erase(ipc_id);
+  // spec 077: drop ShiftState so no stale state remains if TSF holds a
+  // WeaselSessionId that maps to a recycled ipc_id later.
+  m_shiftState.erase(ipc_id);
   m_active_session = 0;
   return 0;
 }
@@ -306,6 +311,19 @@ BOOL RimeWithWeaselHandler::ProcessKeyEvent(KeyEvent keyEvent,
   _Respond(ipc_id, eat);
   _UpdateUI(ipc_id);
   m_active_session = ipc_id;
+  // spec 077: intervening (non-release, non-Shift) key between ShiftDown
+  // and ShiftUp suppresses the release-only select. Per R4: only the
+  // **down** event counts as intervening; letter releases don't.
+  if (!(keyEvent.mask & ibus::Modifier::RELEASE_MASK) &&
+      keyEvent.keycode != ibus::Keycode::Shift_L &&
+      keyEvent.keycode != ibus::Keycode::Shift_R) {
+    auto it = m_shiftState.find(ipc_id);
+    if (it != m_shiftState.end() && it->second.downRecorded) {
+      it->second.interveningKey = true;
+      DLOG(INFO) << "interveningKey=true ipc_id=" << ipc_id
+                 << " keycode=" << keyEvent.keycode;
+    }
+  }
   return (BOOL)handled;
 }
 
@@ -1742,4 +1760,48 @@ bool RimeWithWeaselHandler::IsFullShape() const {
   }
   m_cached_options = true;
   return m_full_shape;
+}
+
+// spec 077: Shift release-only candidate select via IPC state machine.
+// State lives per-WeaselSessionId in m_shiftState; rime_api->select_candidate
+// is called only on a clean ShiftUp (no intervening non-Shift key between
+// matching Down and Up). On any Up the state is unconditionally reset (C6)
+// to prevent subsequent Shift events from misfiring.
+void RimeWithWeaselHandler::ShiftDown(bool is_left, WeaselSessionId ipc_id) {
+  TryLazyRecovery();
+  if (m_disabled) return;
+  DLOG(INFO) << "ShiftDown: is_left=" << is_left
+             << ", ipc_id=" << ipc_id;
+  auto& s = m_shiftState[ipc_id];
+  s.downRecorded = true;
+  s.interveningKey = false;
+  s.lastIsLeft = is_left;
+}
+
+void RimeWithWeaselHandler::ShiftUp(bool is_left, WeaselSessionId ipc_id) {
+  TryLazyRecovery();
+  if (m_disabled) return;
+  DLOG(INFO) << "ShiftUp: is_left=" << is_left
+             << ", ipc_id=" << ipc_id;
+  (void)is_left;
+  auto it = m_shiftState.find(ipc_id);
+  if (it == m_shiftState.end()) return;
+  auto& s = it->second;
+  if (s.downRecorded && !s.interveningKey) {
+    size_t idx = s.lastIsLeft ? 1 : 2;
+    DLOG(INFO) << "select_candidate(idx=" << idx << ") ipc_id=" << ipc_id;
+    rime_api->select_candidate(to_session_id(ipc_id), idx);
+    _UpdateUI(ipc_id);
+  }
+  s = ShiftState{};  // C6: unconditionally reset on Up
+}
+
+void RimeWithWeaselHandler::SelectCandidate(size_t index,
+                                            WeaselSessionId ipc_id) {
+  TryLazyRecovery();
+  if (m_disabled) return;
+  DLOG(INFO) << "SelectCandidate: idx=" << index
+             << ", ipc_id=" << ipc_id;
+  rime_api->select_candidate(to_session_id(ipc_id), index);
+  _UpdateUI(ipc_id);
 }
