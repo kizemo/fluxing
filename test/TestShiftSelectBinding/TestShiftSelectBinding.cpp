@@ -1,23 +1,27 @@
 // TestShiftSelectBinding.cpp
 // spec 014 runtime test: validate the binding form chosen for the restored
 // has_menu Shift_L/R select 2nd/3rd candidate binding.
+//
+// spec 077 update: the has_menu Shift+Shift_L/R send 2/3 bindings were
+// removed from default.yaml:240-241 (T15) because the State-machine
+// release-only select via IPC (T01-T12) replaces them. The yaml-side
+// contract is now inverted — those bindings MUST NOT exist. The defensive
+// guards (no bare Shift_L/R, ascii_composer noop, Shift+space toggle)
+// remain because they protect against the L19 release-event collision.
 
 // The binding form ccept: Shift+Shift_L (NOT bare Shift_L) is the spec
 // 012 design that avoids the L19 release-event collision. This test pins
 // the yaml-side contract that makes that form work:
 
-//   1. The yaml key_binder/bindings has_menu section contains exactly:
-//        - { when: has_menu, accept: Shift+Shift_L, send: 2 }
-//        - { when: has_menu, accept: Shift+Shift_R, send: 3 }
+//   1. [spec 077 inverted] has_menu Shift+Shift_L/R send 2/3 bindings
+//      MUST NOT exist (replaced by IPC state machine).
 //   2. No bare accept: Shift_L or accept: Shift_R binding exists in
 //      key_binder (that form is the L19 cause of release-event collision).
 //   3. ascii_composer.switch_key.Shift_L/R remain noop (so the
 //      ascii_composer's hardcoded 500ms short-press toggle does not fire).
 //   4. Shift+space toggles ascii_mode (L18 contract preserved).
-//   5. The Shift+Shift_L/R bindings appear in the key_binder/bindings list
-//      BEFORE any Shift+space binding (spec 005 plan.md sec 2.2 ordering).
-//   6. The new bindings come BEFORE the existing Control+1/2 bindings
-//      (consistency with the spec 014 plan.md sec 2.5 R5 ordering rule).
+//   7. NO Shift+l / Shift+r combination-key ascii_mode toggle (spec 012).
+//   8. NO keycode=Shift_L/R with no modifier in key_binder (L19 guard).
 
 // These checks are yaml-string-level, but unlike L18/L19 string tests,
 // this test:
@@ -56,13 +60,16 @@ int main(int argc, char** argv) {
 
   std::cout << "spec 014: Shift_L/R select 2nd/3rd candidate binding contract" << std::endl;
 
-  // F1 (US1-A) has_menu: Shift+Shift_L select 2nd candidate (spec 014 restore)
-  check("F1: has_menu accept: Shift+Shift_L, send: 2 exists (US1-A / spec 014)",
-        Contains(content, "accept: Shift+Shift_L, send: 2"));
+  // F1 (spec 077 inverted) has_menu: Shift+Shift_L select 2nd candidate
+  // bindings were REMOVED in T15. The State-machine release-only select via
+  // IPC (T01-T12) replaces them. These NEGATIVE assertions guard against
+  // accidental re-introduction of the binding that librime's key_event.h:64
+  // could not match the release half of.
+  check("F1-NEG: has_menu accept: Shift+Shift_L, send: 2 must NOT exist (spec 077 IPC take-over)",
+        !Contains(content, "accept: Shift+Shift_L, send: 2"));
 
-  // F1 (US1-B) has_menu: Shift+Shift_R select 3rd candidate (spec 014 restore)
-  check("F1: has_menu accept: Shift+Shift_R, send: 3 exists (US1-B / spec 014)",
-        Contains(content, "accept: Shift+Shift_R, send: 3"));
+  check("F1-NEG: has_menu accept: Shift+Shift_R, send: 3 must NOT exist (spec 077 IPC take-over)",
+        !Contains(content, "accept: Shift+Shift_R, send: 3"));
 
   // F2 (US1-C) no bare Shift_L/R binding in key_binder (L19 collision cause)
   // The pattern "accept: Shift_L" without a +Shift prefix would match the
@@ -88,30 +95,9 @@ int main(int argc, char** argv) {
   check("F4: Shift+space toggles ascii_mode (L18 contract preserved) (US1-D)",
         Contains(content, "toggle: ascii_mode, accept: Shift+space"));
 
-  // F5 (spec 005 plan.md sec 2.2 ordering) has_menu Shift+Shift_L/R
-  // bindings appear before the Shift+space toggle binding.
-  size_t pos_shift_l = content.find("accept: Shift+Shift_L, send: 2");
-  size_t pos_shift_r = content.find("accept: Shift+Shift_R, send: 3");
-  size_t pos_space_toggle = content.find("toggle: ascii_mode, accept: Shift+space");
-  check("F5: has_menu Shift+Shift_L/R bindings appear before Shift+space (ordering)",
-        pos_shift_l != std::string::npos &&
-        pos_shift_r != std::string::npos &&
-        pos_space_toggle != std::string::npos &&
-        pos_shift_l < pos_space_toggle &&
-        pos_shift_r < pos_space_toggle);
-
-  // F6 (spec 014 plan.md sec 2.5 R5) Shift+Shift_L/R bindings appear
-  // before Control+1/2 bindings in the has_menu block.
-  size_t pos_ctrl_1 = content.find("accept: Control+1, send: 2");
-  size_t pos_ctrl_2 = content.find("accept: Control+2, send: 3");
-  check("F6: Shift+Shift_L appears before Control+1 (consistency)",
-        pos_shift_l != std::string::npos &&
-        pos_ctrl_1 != std::string::npos &&
-        pos_shift_l < pos_ctrl_1);
-  check("F6: Shift+Shift_R appears before Control+2 (consistency)",
-        pos_shift_r != std::string::npos &&
-        pos_ctrl_2 != std::string::npos &&
-        pos_shift_r < pos_ctrl_2);
+  // F5/F6 removed (spec 077): the Shift+Shift_L/R bindings no longer exist
+  // in default.yaml (T15 removed them), so the ordering checks relative to
+  // them are moot. Control+1/2 fallback bindings are still in place.
 
   // F7 (defensive) NO Shift+l / Shift+r combination-key ascii_mode
   // toggle (spec 012 sec 3 Out of scope, L16). These would re-introduce
