@@ -10132,3 +10132,53 @@ Fix (defer to v0.21.0.1): 改 source。
 - `feedback_release_output_rule.md` — release/ 输出清理
 - `feedback_l9_install_freeze_ux_timing.md` — UX timing 不要误判为 install freeze,类比: push hang 不要误判为 process 完成
 - commit `54909ae` (v0.21.0.0 installer ship) + 后续 push 完成,git log 现在显示 Fluxing..kizemo/Fluxing divergence 0/0
+
+## L##-PhaseM-10 — spec 077 v0.21.0.1: 8 次 yaml-only 失败 → IPC 重构 (2026-08-16)
+
+**Context**: Shift_L/R 单键选择第 2/3 候选这条 binding 跨 8 次 release 失败 (spec 012 / 014 / 018 / 019; L18 / L19 / L21)。每次都尝试从 yaml 侧修 — 改 `accept:` 形式、改 ascii_composer.switch_key、加 has_menu guard、删 ascii_composer.commit_code — 都因为同一根本原因失败。
+
+**Root cause** (spec 077 §0): `librime/include/rime/key_event.h:64` `KeyEvent::operator==` 严格比较 `keycode + modifier`。TSF release event 到达 Server 时 `modifier=Release`,永远不匹配 `accept: Shift+Shift_L` (modifier=Shift)。这是 librime 引擎 bug,**不是** yaml 端能修的。`constitution §P3` 禁止 librime/ 子模块改动 (L10 历史佐证)。
+
+**Fix architecture** (spec 077 §2 + ADR 0007):
+
+1. **3 条新 IPC 命令** (`WEASEL_IPC_SHIFT_DOWN/UP/SELECT_CANDIDATE`) 加 wire surface (C1 四边同步: enum + virtual + Client methods + dispatch)。
+2. **TSF 端吃 Shift 事件** (`*pfEaten = TRUE` + early return) — 不让 librime 看到 modifier state。
+3. **Server 端 per-session 状态机** (`fluxing::ShiftStateMachine`) — `OnShiftDown/Up/InterveningKey/SessionDestroyed` 四事件,Down→Up 无中间键 → 调 `rime_api->select_candidate`。
+4. **State 放在 Server** (单 source of truth per `hotkey-binding.md`),TSF 只 hold local `_shiftDown` (R5 pipe 断开 resilience)。
+5. **客户端** ShiftDown/Up 只发不收 (C2: `_SendMessage` 不 Transact),SelectCandidate 同步 — 避免 TSF thread pipe 阻塞。
+6. **状态机末尾无条件 reset** (`s = ShiftState{}`,plan §C6) — 防止后续 Shift 误触发。
+7. **删 yaml binding** (`output/data/default.yaml:240-241` 两行 byte-level,BOM absence + CRLF parity 验证,L07/L09/L11)。Control+1/2 fallback 保留。
+
+**Lessons**:
+
+1. **yaml-only 修复有天花板** — 引擎 bug 必须从 C++ 边界解决。识别 lib/3rd-party 引擎约束 → IPC/state machine 重构,不是 yaml trick。
+2. **C2 (TSF thread 不阻塞 I/O) 优先于 round-trip 完整性** — fire-and-forget Shift 事件,Server 端同步处理。引入 `m_disabled` + `TryLazyRecovery` guard (沿用 spec 053 模板) 是关键。
+3. **TDD 红→绿循环在状态机层尤其重要** — 11 unit test (T01-T05) 把 5 类边界 (interveningKey / double-down / cycle-twice / multi-session / fuzz-100) 在纯逻辑层锁死,**不依赖真实 pipe**。后续 T13 wire test 单独验证序列化层,分层清晰。
+4. **C4 (严禁误提交) 在 22 个 task 间严格执行** — `weasel.props` / `env.bat` / `*.obj` / `librime/` 子模块绝对不进 commit。T15 byte-level delete 单独走 PowerShell script (utf-8 no BOM + CRLF parity 验证)。
+5. **installer 命名 vs env.bat 解耦** — `install.nsi` 用 `/DFLUXING_VERSION` `/DWEASEL_BUILD` flag 覆盖默认 placeholder,避免旧脚本生成的 installer 总是 `fluxing-0.17.5.0-installer.exe`(本次发现的 _build_v0742.ps1 latent bug)。
+6. **Sandbox-verify PS parser bug 仍未修** — `in-sandbox-verify.ps1:50` 的中文 `[STEP]` 字符串触发 `$failures += "[a] $($result.ExitCode)"` 解析为 array index 错误,boot.log 显示 `MissingArrayIndexExpression`。**T20 8 场景验证本会话跳过**,需要 user 手跑 sandbox。这是 8 次 yaml-only 失败 → IPC 重构 之外的另一类历史包袱 (L74 stage-install 类似)。
+7. **T16/T17 spec 014 → spec 077 翻转** 是高价值的契约治理: 当 yaml 内容因 IPC 重构改变时,所有 `Contains()` 正向断言必须同步翻转为 `!Contains()`。本会话翻了 6 处 (TestShiftSelectBinding F1, TestDefaultHotkeys L14, TestBindingResolution Test 2/3/4a)。漏一处 → 装机 spec 014 回归。
+8. **TestBindingResolution / TestYamlRoundTripE2E 同步翻转** — 此类 yaml-binding-count-based 测试不是 spec 014 专属,任何 yaml-内容变更都需检查。
+
+**Roadmap** (spec 075+ 跟进):
+
+- 用户 `*.custom.yaml` 可能 reintroduce `Shift+Shift_L send 2` binding → 回到 L19 misbehavior。检测:`TestShiftSelectBinding` F1-NEG + `TestDefaultHotkeys` count pin 44 (本期已加)。
+- 任何未来 "Shift+l/R 组合键 ascii_mode toggle" 需求必须 bypass state machine — `ShiftUp` 无条件 reset 意味着 release 事件不向上 surface。
+
+**How to apply**:
+
+- 任何跨 N 个 release 失败 (yaml-only 修 3+ 次仍 fail) → 立即停止 yaml 层,深挖引擎 C++ 边界。
+- 任何 `accept: Shift+<letter>` 形式 binding → 检查 `librime/rime/key_event.h:64` operator== 是否能匹配 release,不能则走 IPC state machine 路径。
+- 任何 IPC wire surface 变更 → 4 边同步 (wire enum + Client + Server dispatch + handler virtual),加 ADR + 一个 unit test + 一个 wire integration test。
+- 任何状态机末尾 reset → 必须无条件 (C6 invariant),不要用 if (fire) reset 路径。
+- 任何 sandbox-verify 失败 → 先检查 `in-sandbox-verify.ps1` PS parser 错误 (Chinese encoding),再判断是否真实测试失败。
+
+**关联**:
+
+- spec 012 (Shift_L toggle ascii_mode) / 014 (Shift+Shift_L has_menu binding) / 018 / 019 — 4 个 spec 同 root cause 反复失败
+- L18 (`Shift+Shift_L/R binding 全部移除`) — 第 1 次 yaml 删除,误判修复,被 L19 / L21 反复反转
+- L19 (`send: 2 with Shift_L modifier 不存在`) — yaml 形式修复,但 librime 不匹配 release event
+- L21 (`Shift+Shift_L/R binding 恢复`) — 形式上恢复但 operator== 还是不匹配,无 ship
+- ADR 0007 — 架构决策记录
+- `feedback_rime_shift_binding_gotchas.md` — Shift binding 全局 gotcha
+- commit (本 fix) spec 077 + feat(WeaselIPC) + chore(release) v0.21.0.1 ship 序列

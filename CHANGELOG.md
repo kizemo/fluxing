@@ -1,5 +1,100 @@
 
 
+## [0.21.0.1-fluxing] - 2026-08-16
+
+### feat(WeaselIPC): v0.21.0.1 shift release-only candidate select via IPC state machine
+
+**User-visible**:
+- Shift_L 单键释放选择第 2 候选,Shift_R 单键释放选择第 3 候选 (8 次 yaml-only 修复失败后,根因重写到 IPC 层)
+- Control+1/2 备用选择器保留,行为不变
+- Shift+letter (Shift+a → 'A') 仍上屏字母,不触发候选选择 (intervening key 抑制)
+- Shift+space ascii_mode 切换行为不变
+- alt-tab 跨 session 无 stale state 污染 (per-session 状态机)
+
+**Root cause (spec 077 §0)**:
+- `librime/include/rime/key_event.h:64` `KeyEvent::operator==` 严格比较 `keycode + modifier`
+- TSF release event `modifier=Release`,永远不匹配 yaml `accept: Shift+Shift_L` (modifier=Shift)
+- 这是 librime 引擎 bug,**不是** yaml 端能修的
+- `constitution §P3` 禁止 librime/ 子模块改动 → 必须从 TSF boundary 修
+
+**Fix architecture** (ADR 0007):
+1. **3 条新 IPC 命令** (`WEASEL_IPC_SHIFT_DOWN/UP/SELECT_CANDIDATE`)
+2. **TSF 端吃 Shift 事件** (`*pfEaten = TRUE` + early return)
+3. **Server 端 per-session 状态机** (`fluxing::ShiftStateMachine`):
+   - `OnShiftDown/Up/InterveningKey/SessionDestroyed` 四事件
+   - Down→Up 无中间键 → 调 `rime_api->select_candidate(idx=L?1:R?2)`
+   - ShiftUp 末尾无条件 reset (C6 invariant)
+4. **Client::ShiftDown/Up** 只发不收 (C2: `_SendMessage` 不 Transact) — TSF thread 不阻塞 pipe
+5. **状态机位置 = Server** (per `hotkey-binding.md` 单一真相);TSF hold local `_shiftDown` 仅用于 R5 pipe 断开 resilience
+6. **删 yaml binding** (`output/data/default.yaml:240-241` 两行 byte-level,BOM absence + CRLF parity 验证 per L07/L09/L11)
+
+**Tests** (11 unit + 5 wire + 5 existing extended):
+- `test/TestShiftIPCStateMachine/` — 11 unit test (RED→GREEN via T01-T05)
+  - #1-#2 Down→Up L/R fires select index 1/2
+  - #3 / #6 intervening key suppresses fire
+  - #4 orphan Up no-op
+  - #5 double Down — second Down wins
+  - #7 cycle twice — second cycle fires
+  - #8 Reset clears state
+  - #9 intervening-before-Down does not pollute
+  - #10 fuzz 100 cycles stable
+  - #11 multi-session independent
+- `test/TestShiftIPCWire/` — 5 wire format integration tests (T13-T14)
+- `test/TestShiftSelectBinding/` — F1 inverted to NEG (binding must NOT exist)
+- `test/TestDefaultHotkeys/` — 6 spec 014 positive → spec 077 NEG; binding count pin = 44
+- `test/TestBindingResolution/` — Test 2/3/4a inverted (binding must NOT exist)
+- `test/TestYamlRoundTripE2E/` — bindings.size() == 29 (post-T15)
+
+Aggregate: 12+ tests, 0 fail. msbuild weasel.sln /t:Rebuild: 0 errors.
+
+**Files changed**:
+- `include/WeaselIPC.h` — 3 enum + 3 RequestHandler virtual + 3 Client methods
+- `include/ShiftStateMachine.h` (new) — pure 状态机,11 unit test 直接 include
+- `include/RimeWithWeasel.h` — ShiftState struct + m_shiftState map + 3 virtual override
+- `WeaselIPC/WeaselClientImpl.{h,cpp}` — 3 Client methods (ShiftDown/Up fire-and-forget, SelectCandidate sync)
+- `WeaselIPCServer/WeaselServerImpl.{h,cpp}` — 3 OnXxx dispatch handlers + HandlePipeMessage switch cases
+- `WeaselTSF/WeaselTSF.h` — `_shiftDown` + `_shiftDownIsLeft` per-instance local (R5)
+- `WeaselTSF/KeyEventSink.cpp` — Shift_L/R detection + eat + IPC forward,early return prevents librime from seeing modifier state
+- `RimeWithWeasel/RimeWithWeasel.cpp` — 3 virtual impls + AddSession/RemoveSession 维护 map + ProcessKeyEvent 加 interveningKey=true marker (R4: 仅 down 事件算中间键)
+- `output/data/default.yaml` — 删 line 240-241 byte-level
+- `test/TestShiftIPCStateMachine/` (new) — 11 unit test + vcxproj
+- `test/TestShiftIPCWire/` (new) — 5 wire test + vcxproj
+- `test/TestShiftSelectBinding/TestShiftSelectBinding.cpp` — F1-NEG + 移除 F5/F6 ordering
+- `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp` — 6 inverted + count pin = 44
+- `test/TestBindingResolution/TestBindingResolution.cpp` — Test 2/3/4a inverted
+- `test/TestYamlRoundTripE2E/TestYamlRoundTripE2E.cpp` — bindings.size() 31→29
+- `docs/adr/0007-shift-release-ipc.md` (new) — MADR-formatted architecture decision
+- `.specify/memory/lessons-learned.md` L##-PhaseM-10 — 8 次 yaml-only 失败 → IPC 重构 反思
+- `release/fluxing-0.21.0.0-installer.exe` — 中间 build,T22 重建为 0.21.0.1
+
+**装机 user flow** (装机后必测):
+1. 切到火流猩输入法 (Win+Space)
+2. 输入中文,候选菜单弹出,按 **Shift_L 松开** → 第 2 候选上屏
+3. 按 **Shift_R 松开** → 第 3 候选上屏
+4. 按 **Shift+a** → 'A' 上屏 (无候选选择,intervening key 抑制)
+5. 按 **Control+1** → 第 2 候选上屏 (fallback 路径)
+6. alt-tab 切换窗口,Shift_L 松开 → 当前窗口选第 2 候选 (无 stale state)
+7. log 验证: `%TEMP%\rime.weasel.*.INFO.*.log` 含 `ShiftDown` / `ShiftUp` / `select_candidate(idx=1)` 行,无 `unrecognized modifier 'shift'`
+
+**回滚**:
+- `release/fluxing-0.20.0.4-installer.exe` 装机可回滚 (spec 077 之前的 stable)
+- 但 v0.20.0.4 不含 spec 077 fix,Shift_L/R 单键选候选仍 broken (回归到 L21 状态)
+
+**关联**:
+- spec 077 (.specify/specs/077-shift-release-ipc/{spec,plan,tasks}.md)
+- ADR 0007 (docs/adr/0007-shift-release-ipc.md)
+- lessons L##-PhaseM-10 (.specify/memory/lessons-learned.md)
+- 失败前史: spec 012 / 014 / 018 / 019; L18 / L19 / L21 (8 次 yaml-only 失败)
+- `feedback_rime_shift_binding_gotchas.md` (existing memory)
+
+**不做的 (out of scope)**:
+- ❌ 用户 `*.custom.yaml` 覆盖检测 (spec 075+ 跟进)
+- ❌ installer NSIS 改动 (本期 IPC 不动装机)
+- ❌ weasel.props / env.bat 跟踪 (gitignored, T22 commit 单独 bump)
+- ❌ upstream PR (P8 waiver)
+- ❌ 新 CI workflow
+- ❌ sandbox-verify 8 场景自动化 (T20 blocked — in-sandbox-verify.ps1 PS parser bug with Chinese encoding; user 手跑验证)
+
 ## [0.20.0.2-fluxing] - 2026-08-07
 
 ### fix(WeaselIPC): v0.20.0.2 — PipeChannel thread_specific_ptr race (HEAP_CORRUPTION 0xc0000374 真因)
