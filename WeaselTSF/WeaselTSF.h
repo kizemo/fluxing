@@ -235,4 +235,9 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   BOOL _async_edit = false;
   BOOL _committed = false;
   BOOL _isToOpenClose = false;
+  /* spec 077: TSF-local Shift tracking for pipe-disconnect resilience (R5).
+     Local mirror of Server-side m_shiftState; lets a ShiftUp reach the
+     Server even if a transient pipe failure drops the matching Down. */
+  BOOL _shiftDown = FALSE;
+  BOOL _shiftDownIsLeft = FALSE;
 };
