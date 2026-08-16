@@ -1,17 +1,23 @@
-# spec 077 T19 — installer build provenance
+# spec 077 T19/T22 — installer build provenance
 
-Build host: F:\soft\00selfmade\rime_claude (Fluxing branch @ 3d4c2af + T18 commits)
+Build host: F:\soft\00selfmade\rime_claude (Fluxing branch)
 NSIS: makensis 3.x at C:\Program Files (x86)\NSIS\makensis.exe
 Build script: _build_v02101.ps1 + _build_v02101.cmd (vcvars32 + env.bat)
 
-## output/archives/fluxing-0.21.0.0-installer.exe
+## FINAL: output/archives/fluxing-0.21.0.1-installer.exe  (T22 ship)
+MD5:        7F5A2D4462960690FF232139E6832A19
+Size:       42792149 bytes
+Build time: 2026-08-16 09:35:03
+
+## dual-verify: release/fluxing-0.21.0.1-installer.exe
+MD5:        7F5A2D4462960690FF232139E6832A19   ✓ match
+
+## Intermediate (T19 pre-bump): fluxing-0.21.0.0-installer.exe
 MD5:        7246988418BBE06CDE33CCA3DCA759FC
 Size:       42792149 bytes
 Build time: 2026-08-16 09:17:44
 
-## dual-verify: release/fluxing-0.21.0.0-installer.exe
-MD5:        7246988418BBE06CDE33CCA3DCA759FC   ✓ match
-
 ## Note
-This is the T19 build using current env.bat (FLUXING_VERSION=0.21.0, WEASEL_BUILD=0).
-Final ship installer at v0.21.0.1 will be built in T22 after env.bat is bumped.
+T22 bump: env.bat WEASEL_BUILD 0→1, PRODUCT_VERSION 0.21.0.0→0.21.0.1, FILE_VERSION same;
+weasel.props VERSION_MINOR 19→21, PRODUCT_VERSION 0.19.0.74.1→0.21.0.1, FILE_VERSION same.
+(both env.bat + weasel.props gitignored per .gitignore — local-only, no commit)
