@@ -279,16 +279,16 @@ use_default:
   StrCpy $R0 ""
   Goto skip
 use_reg:
-  ; spec 053 fix v3: ALWAYS use the registry value (upgrade in place).
-  ; The previous logic used StrCmp $INSTDIR " 0 set_default which
-  ; would either fall through to set_default (overwriting $INSTDIR with
-  ; $PROGRAMFILES64\fluxing = C:\Program Files\fluxing) or preserve a
-  ; stale /D= user value. The registry is the source of truth for
-  ; upgrade-in-place; use $R0 to set $INSTDIR explicitly here.
-  ; L17c: the use_default branch already handles the 'registry path
-  ; is a smoke-test root' case (resets $INSTDIR to default), so this
-  ; use_reg branch only runs when $R0 is a known-valid path.
-  StrCpy $INSTDIR $R0
+  ; spec 053 v3 → spec 077 follow-up: $INSTDIR was pre-loaded by
+  ; InstallDirRegKey (HKLM\Software\Fluxing\Weasel\InstallDir line 374,
+  ; upgrade-in-place) OR by /D= command line. spec 053 v3 unconditionally
+  ; StrCpy'd $R0 → $INSTDIR here, which clobbered explicit /D= paths in
+  ; silent-install scenarios (sandbox-verify T20 8 scenarios blocked
+  ; because /D=C:\FluxingTest\fluxing was overwritten by stale
+  ; HKLM\Software\Fluxing\Weasel\InstallDir value D:\Program Files\fluxing).
+  ; Fix: skip the copy. $INSTDIR already holds the correct value:
+  ; - registry value when no /D= (upgrade-in-place, preserved by InstallDirRegKey)
+  ; - /D= value when explicit (already set BEFORE .onInit by NSIS command-line parser)
   Goto skip
 set_default:
   ; L14: Default installation directory (only if /D= did not provide one).
