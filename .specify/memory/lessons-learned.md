@@ -1050,7 +1050,10 @@ BOM + OutFile + line endings), L15 (PowerShell `Start-Process` arg
 merging), AGENTS.md �2.5 (silent-install smoke test recipe).
 
 
-# � L19 ��� (2026-07-01): L18 �p� `always: Shift+Shift_L/R` ascii_mode toggleF�Y� `has_menu: Shift+Shift_L/R send 2/3` binding0.18.5.0 (7�K: `shift+Enter` / `shift+<letter>` release event ���� ascii_mode bL18 �*��Ō�/�:W&2� TestDefaultHotkeys 25/25 PASS	���L� binding hL:L19 2�'�`default.yaml` - `keycode=Shift_L/R` �@	 binding h�X(		�9( RIME >:ؤ `Control+1/2/3..9`
+# � L19 ��� (2026-07-01): L18 �p� `always: Shift+Shift_L/R` ascii_mode toggleF�Y� `has_menu: Shift+Shift_L/R send 2/3` binding0.18.5.0 (7�K: `shift+Enter` / `shift+<letter>` release event ���� ascii_mode bL18 �
+*��Ō�/�:W&2� TestDefaultHotkeys 25/25 PASS	
+���L� binding hL:L19 2�'�`default.yaml` - `keycode=Shift_L/R` �@	 binding h�
+X(		�9( RIME >:ؤ `Control+1/2/3..9`
 ## L18 - `key_binder` single-key Shift bindings (Shift_L/R) collide with `shift+<other>` release events; use `Shift+space` for ascii_mode toggle
 
 **Symptom** (discovered 2026-07-01, after shipping 0.18.5.0 with single-key Shift ascii_mode binding):
@@ -1119,7 +1122,8 @@ after typing shift+= followed by a letter".
 
 **��**: 2026-07-01
 **q�H,**: 0.18.5.0 (librime 1.13)
-**�H,**: 0.18.6.0 (��)
+**�
+H,**: 0.18.6.0 (��)
 
 ### Ƕ
 
@@ -1129,23 +1133,32 @@ after typing shift+= followed by a letter".
 MW�&��eb�-�-��
 2. `shift`  `shift+space` �b-�
 
-L18 �commit `e4095f2`	( 0.18.5.0 release -��d� `always: Shift+Shift_L/R toggle ascii_mode`  a bindingF `has_menu: Shift+Shift_L/R send 2/3 	, 2/3 	` � binding �X(
+L18 �
+commit `e4095f2`	( 0.18.5.0 release -��d� `always: Shift+Shift_L/R toggle ascii_mode`  a bindingF `has_menu: Shift+Shift_L/R send 2/3 	, 2/3 	` � binding �X(
 
 ### 9�
 
-1. librime 1.13 `key_binder` � `keycode=Shift_L` � release event 9ML:*E���U� `Shift_L/R` : keycode � binding ��� `shift+<other>` .� release event �9M
-2. L18 ��Z�W&2� `TestDefaultHotkeys 25/25 PASS`	F 0.18.6 ��* buildlibrime submodule a�	@� L18 �***��Ō�**
-3. W&2� ��� yaml �,��a binding X(/X(���L� binding h�L:
+1. librime 1.13 `key_binder` � `keycode=Shift_L` � release event 9ML:*E���U� `Shift_L/R` : keycode � binding ��� `shift+<other>` 
+.� release event �9M
+2. L18 �
+�Z�W&2� `TestDefaultHotkeys 25/25 PASS`	F 0.18.6 ��* buildlibrime submodule a�	@� L18 �
+***��Ō�**
+3. W&2� ��� yaml �,��a binding X(/
+X(
+���L� binding h�L:
 
 ### 2�'�
 
-- `default.yaml` - `keycode=Shift_L/R` �@	 binding **h�X(**� `always`  `has_menu` $a�	
-- 		�9( **RIME >:ؤ.M** `Control+1/2/3..9`  keycode=`1`/`2`/`3`..`9`  `Shift_L/R` release event �h��
+- `default.yaml` - `keycode=Shift_L/R` �@	 binding **h�
+X(**� `always`  `has_menu` $a�	
+- 		�9( **RIME >:ؤ.M** `Control+1/2/3..9`  keycode=`1`/`2`/`3`..`9`  `Shift_L/R` release event �h
+��
 - -��Y `Shift+space`keycode=`space`	 librime 1.13 `key_binder` � `Shift+space` � release event 9ML:�	H�0.18.5.0 (7*��	
 - ascii_composer � `switch_key.Shift_L/R: noop` �Y� key_binder ��	
 - �d2b(7�I�!e	`keycode=Shift_L/R` � bindingL19 ( yaml -���n��
 
-### ��� (commit pending)
+### �
+�� (commit pending)
 
 1. `output/data/default.yaml`: �d `has_menu: Shift+Shift_L, send: 2`  `has_menu: Shift+Shift_R, send: 3`�� `has_menu: Control+1, send: 2`  `has_menu: Control+2, send: 3`
 2. `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp`: � 25/25 G�0 **31/31 PASS**�� 6 * L19 �  + 1 * L19 c� 
@@ -1153,11 +1166,13 @@ L18 �commit `e4095f2`	( 0.18.5.0 release -��d� `always: Shift+Shift_L/
 
 ### ��
 
-- W&2� TestDefaultHotkeys 31/31 PASS��	
+- W&2� TestDefaultHotkeys 31/31 PASS��
+	
 - W�e�`output/data/default.yaml` UTF-8 � BOM + CRLF=418KՐ UTF-8 � BOM + LF=130
 - ***��**���L:librime submodule a�0.18.6 � build	(7�ŞK
 
-### 2 L19 �
+### 2 L19 
+�
 
 - L19 ( `default.yaml` -����U `keycode=Shift_L/R` � binding ��� release event ���b�!��
 - L19 ( `TestDefaultHotkeys` � 6 *� ��@	 `Shift_L/R` b� binding
@@ -1173,35 +1188,45 @@ L18 �commit `e4095f2`	( 0.18.5.0 release -��d� `always: Shift+Shift_L/
 
 **��**: 2026-07-01
 **q�H,**: 0.18.5.0 / 0.18.6.0 release build
-**�H,**: 0.18.6.0 build script �9( cmd /c wrapper
+**�
+H,**: 0.18.6.0 build script �9( cmd /c wrapper
 
 ### Ƕ
 
-� AGENTS.md �2.5 silent-install smoke test �`Start-Process -FilePath installer.exe -ArgumentList '/S /D=...' -Wait -PassThru` ( PowerShell 5.1  5 ����9( `Start-Process cmd.exe -ArgumentList '/c', 'start /B ...' -PassThru` 7 60s �aO�� `cmd /c` egL 40.3s �exit 0
+� AGENTS.md �2.5 silent-install smoke test �`Start-Process -FilePath installer.exe -ArgumentList '/S /D=...' -Wait -PassThru` ( PowerShell 5.1  5 ��
+��9( `Start-Process cmd.exe -ArgumentList '/c', 'start /B ...' -PassThru` 7 60s �aO�� `cmd /c` egL 40.3s �exit 0
 
 ### 9�
 
-L15 ��� PS 5.1 + NSIS �L/D=  /LOG= ( = v	�/hb�L20 Ѱ���Start-Process -Wait ( PS 5.1 � NSIS �1� NSIS silent mode  PS 5.1 process job object ���-Wait 8��
+L15 ��� PS 5.1 + NSIS �L/D=  /LOG= ( = v	�/hb�L20 Ѱ���Start-Process -Wait ( PS 5.1 � NSIS �1� NSIS silent mode  PS 5.1 process job object ���-Wait 8
+��
 
 **workaround**�ǳ	@	 NSIS installer (�{( cmd /c �cmd /c "installer.exe /S /D=C:\TEMP\..."
 
 ### D&� 0.18.6.0 build )Q� v�U	
 
-1. **librime build.bat CMAKE_GENERATOR z<� bug**env.bat - `set "CMAKE_GENERATOR=Visual Studio 17 2022"`F librime/build.bat , 78 L `set common_cmake_flags=%common_cmake_flags% -G%CMAKE_GENERATOR%` ���cmd � "Visual Studio 17 2022" � 4 * token �e common_cmake_flagscmake 60 -GVisual + Studio + 17 + 2022 �**workaround**�� cmake � build.bat( -G "Visual Studio 17 2022" >�
+1. **librime build.bat CMAKE_GENERATOR z<� bug**env.bat - `set "CMAKE_GENERATOR=Visual Studio 17 2022"`F librime/build.bat , 78 L `set common_cmake_flags=%common_cmake_flags% -G%CMAKE_GENERATOR%` ���cmd � "Visual Studio 17 2022" � 4 * token �e common_cmake_flagscmake 60 -GVisual + Studio + 17 + 2022 �**workaround**�� cmake 
+� build.bat( -G "Visual Studio 17 2022" >�
 
-2. **WinSparkle.lib stub**lib64/WinSparkle.lib (10460 bytes) /*+��&� import h� stubWeaselServer ��� __imp__win_sparkle_* 6 **�&�**workaround**� output\Win32\WinSparkle.dll ( dumpbin /EXPORTS �� 23 * win_sparkle_* &�� WinSparkle.def`lib /DEF:WinSparkle.def /MACHINE:X86 /OUT:lib\WinSparkle.lib`  import libx64 
+2. **WinSparkle.lib stub**lib64/WinSparkle.lib (10460 bytes) /*
++��&� import h� stubWeaselServer ��� __imp__win_sparkle_* 6 **�&�**workaround**� output\Win32\WinSparkle.dll ( dumpbin /EXPORTS �� 23 * win_sparkle_* &�� WinSparkle.def`lib /DEF:WinSparkle.def /MACHINE:X86 /OUT:lib\WinSparkle.lib`  import libx64 
 
-3. **xmake x86 build � cp weasel.dll / WeaselSetup.exe 0 output\Win32**WeaselServer/Deployer after_build hook > cp 0 output\Win32F WeaselSetup after_build cp 0 output\ vBweasel.dll from WeaselTSF after_build cp 0 output\ vB**workaround**K�� build\windows\x86\release\WeaselTSF\weasel.dll � build\windows\x86\release\WeaselSetup\WeaselSetup.exe cp 0 output\ vB
+3. **xmake x86 build 
+� cp weasel.dll / WeaselSetup.exe 0 output\Win32**WeaselServer/Deployer after_build hook > cp 0 output\Win32F WeaselSetup after_build cp 0 output\ vBweasel.dll from WeaselTSF after_build cp 0 output\ vB**workaround**K�� build\windows\x86\release\WeaselTSF\weasel.dll � build\windows\x86\release\WeaselSetup\WeaselSetup.exe cp 0 output\ vB
 
-4. **xmake x86 build ؤ build_dir = build\windows\x86\release**/ xbuild.bat ��̙� output\Win32@	 weasel.dll / WeaselSetup.exe ��E�i( build\windows\x86\release\WeaselTSF\ / build\windows\x86\release\WeaselSetup\xmake.lua � after_build hook �Z�* cp �\FSM hook � cp weasel*.dll M&0 output\W� WeaselSetup vB�
+4. **xmake x86 build ؤ build_dir = build\windows\x86\release**
+/ xbuild.bat ��̙� output\Win32@	 weasel.dll / WeaselSetup.exe ��E�i( build\windows\x86\release\WeaselTSF\ / build\windows\x86\release\WeaselSetup\xmake.lua � after_build hook �Z�* cp �\FSM hook � cp weasel*.dll M&0 output\W� WeaselSetup vB�
 
 ### ��
 
 - 0.18.6.0 silent install: cmd /c wrapper 40.3s �exit 08 y invariants h��
-- L19 ������ default.yaml + Control+1, send: 2 + Control+2, send: 3+ Shift+Shift_L, send: 2+ Shift+space toggle ascii_mode
+- L19 �
+����� default.yaml + Control+1, send: 2 + Control+2, send: 3
++ Shift+Shift_L, send: 2+ Shift+space toggle ascii_mode
 - W�e�installer 42612608 bytes40.6 MB	CR/LF/overlong h�
 
-### 2 L20 �
+### 2 L20 
+�
 
 - AGENTS.md �2.5 smoke test recipe 9( cmd /c wrapper!� AGENTS.md �e	
 - � librime/build.bat , 78 L� bug �\: spec Ф� librime 
@@ -1212,15 +1237,18 @@ L15 ��� PS 5.1 + NSIS �L/D=  /LOG= ( = v	�/hb�L20 Ѱ���S
 
 - L15: PowerShell 5.1 + NSIS /D=//LOG= �L bug� L20 iU:tS Start-Process hang	
 - L13-fix-2: install-side guard against smoke-test path� L20 ����\	
-- L19: 0.18.6.0 ���'�� L20 ����cn default.yaml	
+- L19: 0.18.6.0 ���'�
+� L20 ����cn default.yaml	
 
 
 
-## L21 - L19 / over-correction: key_binder �d keycode=Shift_L/R � modifier=Shift (binding b)  modifier=0 (release-event �9M) - cn�b/ ccept: Shift+Shift_L/R
+## L21 - L19 / over-correction: key_binder �d keycode=Shift_L/R �
+ modifier=Shift (binding b)  modifier=0 (release-event �9M) - cn�b/ ccept: Shift+Shift_L/R
 
 **��**: 2026-07-02
 **q�H,**: 0.18.6.0 / 0.18.7.0
-**�H,**: 0.18.8.0 (spec 014)
+**�
+H,**: 0.18.8.0 (spec 014)
 
 ### Ƕ
 
@@ -1232,11 +1260,15 @@ L19 fix (commit e2c36b1, 0.18.6.0) 2�'0�d� key_binder/bindings -**@	** key
 
 L19 � over-correction (�	:$� binding b:
 1. ccept: Shift_L (modifier=0) - �: {keycode=Shift_L, modifier=0} - **** TSF release event �9M (release event _/ {keycode=Shift_L, modifier=Release} F� keycode �Л librime ��)
-2. ccept: Shift+Shift_L (modifier=Shift) - �: {keycode=Shift_L, modifier=Shift} - **** TSF release event �9M (release event / modifier=Release,  modifier=Shift %<I)
+2. ccept: Shift+Shift_L (modifier=Shift) - �: {keycode=Shift_L, modifier=Shift} - **
+** TSF release event �9M (release event / modifier=Release,  modifier=Shift %<
+I)
 
-librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) %<ԃ keycode_  modifier_, $�b(�L�L:*6L19   h��d, I�� spec 005 v1.1 �� Shift 		����
+librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) %<ԃ keycode_  modifier_, $�b(�L�L:*6
+L19   h��d, I�� spec 005 v1.1 �� Shift 		����
 
-### � (commit pending)
+### �
+ (commit pending)
 
 1. output/data/default.yaml: ( key_binder/bindings has_menu �, ( Control+1/2 KM�� 2 L binding:
    `yaml
@@ -1248,7 +1280,8 @@ librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) %<ԃ keyco
    - { when: has_menu, accept: Shift+Shift_L, send: 2 }
    - { when: has_menu, accept: Shift+Shift_R, send: 3 }
    `
-2. 	est/TestDefaultHotkeys/TestDefaultHotkeys.cpp: L19 � 4 *� �l:c�  (� "�X(" � "�X("); �� 4 *c� �� spec 014 �� binding  ascii_composer.switch_key � noop
+2. 	est/TestDefaultHotkeys/TestDefaultHotkeys.cpp: L19 � 4 *� �l:c�  (� "�
+X(" � "�X("); �� 4 *c� �� spec 014 �� binding  ascii_composer.switch_key � noop
 3. 	est/TestShiftSelectBinding/ (�): ,�* runtime yaml Q�K�, 13 *�c� , ��:
    - ccept: Shift+Shift_L, send: 2 / ccept: Shift+Shift_R, send: 3 X(
    - �	 bare ccept: Shift_L/R, (modifier=0) - L19 2��Y
@@ -1256,8 +1289,10 @@ librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) %<ԃ keyco
    - Shift+space toggle ascii_mode � (L18 contract)
    - 4 * ordering �  (Shift+Shift_L/R ( Shift+space KM, ( Control+1/2 KM)
 4. weasel.sln: � Project � + 16 L ProjectConfigurationPlatforms
-5. env.bat + weasel.props: 0.18.7 -> 0.18.8 (gitignored, e commit)
-6. elease/fluxing-0.18.8.0-installer.exe: 42631276 W� (NSIS �S, internal binary 100%  0.18.7.0)
+5. env.bat + weasel.props: 0.18.7 -> 0.18.8 (gitignored, 
+e commit)
+6. 
+elease/fluxing-0.18.8.0-installer.exe: 42631276 W� (NSIS �S, internal binary 100%  0.18.7.0)
 7. CHANGELOG.md: � [0.18.8.0-fluxing] �
 
 ### ��
@@ -1270,20 +1305,34 @@ librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) %<ԃ keyco
 
 ### L19 ͋Y�
 
-- L19 ���: "W&2� ��� yaml �,��a binding X(/X(, ���L� binding h�L:"
-- L19 ͽ: c/ L19 ( TestDefaultHotkeys 31/31 PASS e"��"�, F�**,�**1/ over-correction, � spec 005 v1.1 �� Shift 		����**W&2K������	H, _�����e� bug**
-- spec 014 ��VU  yaml W&2K�, � TestShiftSelectBinding \:,�*�� runtime Q�K�, b"$*K�q�� *�"��Ɍ�!
-- s.��'Ӻ: �U yaml-only ����	**� 2 *��K�** �� (M L18/L19 �"passing test, regressed behavior" w1):
+- L19 ���: "W&2� ��� yaml �,��a binding X(/
+X(, 
+���L� binding h�L:"
+- L19 ͽ: c/ L19 ( TestDefaultHotkeys 31/31 PASS e"��"�
+, F�
+**,�**1/ over-correction, � spec 005 v1.1 �� Shift 		����**W&2K��
+����
+	H, _
+����
+�e� bug**
+- spec 014 
+��VU  yaml W&2K�, � TestShiftSelectBinding \:,�*�� runtime Q�K�, b"$*K�q�� *�
+"��Ɍ�!
+- s.��'Ӻ: �U yaml-only �
+���	**� 2 *��K�** �� (M L18/L19 �"passing test, regressed behavior" w1):
   1. TestDefaultHotkeys.exe (string-level yaml Q�)
   2. TestShiftSelectBinding.exe (yaml Q� + �t key L: mock, 赌�)
 
-### 2 L19 �
+### 2 L19 
+�
 
-- AGENTS.md �( �3.2 � luxing scope, spec 014 ( tasks.md T001 n��: "ccept: Shift+Shift_L/R b (modifier=Shift) n� keycode=Shift_L, modifier=0 � TSF release event �9M"
+- AGENTS.md �( �3.2 � luxing scope, spec 014 ( tasks.md T001 n��: "ccept: Shift+Shift_L/R b (modifier=Shift) n� keycode=Shift_L, modifier=0 � TSF release event 
+�9M"
 - spec 014 plan.md �2.5 R1: "Shift+Shift_L mask equals Shift; TSF mask also Shift; matches. Verified by reading both sources and adding the runtime test"
 - spec 014 tasks.md T007: >� AGENTS.md �2.5 silent-install smoke test PASSED
 - spec 014 spec.md �2.5 R5: intra-has_menu order between Shift+Shift_L and Control+1 is irrelevant (different KeyEvent)
-- � spec �� key_binder ���, �{ review d L21 �, : modifier=0 ( release-match)  modifier=Shift ( release-match)
+- � spec �� key_binder ���, �{ review d L21 �, : modifier=0 ( release-match)  modifier=Shift (
+ release-match)
 
 ### �s
 
@@ -1292,18 +1341,21 @@ librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) %<ԃ keyco
 - L20: NSIS silent install via PowerShell 5.1 Start-Process hangs (spec 014 �( L20 � cmd /c wrapper)
 - spec 005 v1.1 design.md �2.2 (Shift+Shift_L/R binding b����c)
 - spec 012 (L16): Shift+Shift_L/R binding b����, F*� ship
-- spec 014 (L21 �): ( spec 012 �@
+- spec 014 (L21 �
+): ( spec 012 �@
  + KՆ� + � ship
 
 ## L22 - system("pause") in test code + if errorlevel 1 in batch scripts = two related CI-killer anti-patterns surfaced by spec 015
 
 **��**: 2026-07-02
 **q�H,**: 0.18.6.0 / 0.18.7.0 / 0.18.8.0 (all test projects affected; pre-existing bug)
-**�H,**: 0.18.9.0 (spec 015)
+**�
+H,**: 0.18.9.0 (spec 015)
 
 ### Ƕ 1: system("pause")
 
-spec 015 ( build + ��L TestResponseParser / TestWeaselIPC �Ѱ$* .cpp +>�	 system("pause"); ('�( return KM�/ Windows �6� UX !�� .exe �;^I�	.	F(^����CI,stdin ͚	s� stdin � system("pause") �� 0xC0000005 ACCESS_VIOLATIONK��� crashCI h���
+spec 015 ( build + ��L TestResponseParser / TestWeaselIPC �Ѱ$* .cpp +>�	 system("pause"); ('�( return KM�/ Windows �6� UX !�� .exe �;^I�	.	F(^����CI,stdin ͚	s� stdin � system("pause") �� 0xC0000005 ACCESS_VIOLATIONK��� crashCI h��
+�
 
 TestDefaultHotkeys + TestShiftSelectBinding (spec 014 ��) ���* anti-pattern@��(^����c8�\TestResponseParser + TestWeaselIPC �S 2024-02 clang-format Фcommit 21d2bf9	�e1 �	�* patternF CI test job  ��� TestDefaultHotkeyscommit 10b72e2 scope P6	@� bug �* surface
 
@@ -1326,13 +1378,18 @@ y,� if errorlevel 1 ��I/ if errorlevel >= 1F -1073741819 \: signed 32-
 - TestDefaultHotkeys: 35/35 PASS
 - TestShiftSelectBinding: 13/13 PASS
 - TestWeaselIPC: PASS
-- TestResponseParser: test_4 1%spec 015 sec 5 �U: out-of-scope WeaselIPC bug � spec 016+ �	
+- TestResponseParser: test_4 1%spec 015 sec 5 �U: out-of-scope WeaselIPC bug � spec 016+ �
+	
 
-### 2 L22 �
+### 2 L22 
+�
 
-- AGENTS.md / spec 015 / L22 ��(test code � system("pause") I�igetchar_getch I	
-- �U�� test project �{( scripts\run-tests.bat �{�A�"test by hand"
-- �U( exit code Z gate � .bat ,�{( if !errorlevel! NEQ 0 !( if errorlevel 1
+- AGENTS.md / spec 015 / L22 ��(test code 
+� system("pause") I�igetchar_getch I	
+- �U�� test project �{( scripts\run-tests.bat �{�
+A�"test by hand"
+- �U( exit code Z gate � .bat ,�{( if !errorlevel! NEQ 0 !
+( if errorlevel 1
 - L22  L11 / L17 / L20 / L21  	�"Windows-isms in code that should be cross-platform"�U Windows-only �!� test  build �wM�{ grep L## h
 
 ### �s
@@ -4924,7 +4981,8 @@ syntax visually validated) but need a real xmake run locally.
 ### Build instructions for local machine
 1. Open "x64 Native Tools Command Prompt for VS 2022" or run
    vcvars32.bat from regular cmd.
-2. cd to F:\soft0selfmadeime_claude
+2. cd to F:\soft0selfmade
+ime_claude
 3. Run xbuild.bat (the standard release build). Should now use cached
    .xmake config (Windows, x86, release) and rebuild only WeaselServer
    (and any deps touched).
@@ -9153,7 +9211,8 @@ rime algorithm service 调度者 + PhrasesDialog IPC server, 一个进程挂了 
 
 1. **F106-A build infra guardrail**: 在 WeaselServer/xmake.lua 的 fter_build
    末尾加 EXE 完整性检查 (MZ signature / non-zero size / PE 头部 + code section 存在),
-   不通过则 aise 终止 build。**任何 xmake target 复制 EXE/DLL 出 output 都应该
+   不通过则 
+aise 终止 build。**任何 xmake target 复制 EXE/DLL 出 output 都应该
    强制走同一检查**。建议把检查抽到 	ools/build_verify.lua, 在 WeaselServer、
    WeaselSetup 两个 xmake 目标里 require。
 2. **F106-B build_v0XX.ps1 wrapper guard**: 在每个 uild_v0XX.ps1 末尾强制 verify:
@@ -9162,7 +9221,8 @@ rime algorithm service 调度者 + PhrasesDialog IPC server, 一个进程挂了 
    exit 1, 不进入 installer 阶段。
 3. **F106-C 装机端 rapid recovery 文档化**: 写一个 _recover_zero_weaselserver.ps1
    脚本, 检测 WeaselServer.exe < 1 MB / 无 MZ / 全零时, 自动 	askkill + 卸装
-   + 静默重装 (走 sandbox-verify ime-verify.ps1 流程), 作为真机 fail-fast 工具。
+   + 静默重装 (走 sandbox-verify 
+ime-verify.ps1 流程), 作为真机 fail-fast 工具。
 
 ### 装机端配套 fix (装机症状虽被主因覆盖, 仍需处理)
 
@@ -9434,7 +9494,7 @@ FluxingPhrasesDialog.exe (`output\FluxingPhrasesDialog.exe` mtime 不变,
 - `release/fluxing-0.19.0.63-installer.exe` md5 `0d05f9f4bb1c75754dd52c0dc3bc1cc1` size 43,344,633 bytes ← **推荐 user 装机测试目标**
 - `release/fluxing-0.19.0.62-installer.exe` (前一个版本, QuickPanel UserDict 5→4 期间)
 - spec 075 (`075-focusin-quickpanel-rollback`) **作废** — 改为 v0.75 spec 076 (WeaselPanel GDI+ rewrite + 真因调研)
-- stash@{0} 保留完整 v0.74.3 WIP (FocusIn Show 撤回 + hot-path cache + admin check + spec 075 + L##-PhaseL-9.11 entry), 等 user 决定是否 merge 到 v0.75 分支
+- stash@{0} 的 v0.74.3 WIP (FocusIn Show 撤回 + hot-path cache + admin check + spec 075 + L##-PhaseL-9.11 entry) 已导出为可追溯归档 `docs/archive/v0.74.3-stage2-shim-wip.patch` (2026-10-22 filter-repo 历史瘦身前置), stash 引用本身已随历史改写移除 —— 该 stash 压着约 2GB 的 `release/*.exe` 历史安装包, 不清理则 .git 无法瘦身。等 user 决定是否 merge 到 v0.75 分支
 
 ---
 

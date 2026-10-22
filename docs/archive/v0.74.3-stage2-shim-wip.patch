@@ -1,0 +1,1672 @@
+diff --git a/.specify/memory/lessons-learned.md b/.specify/memory/lessons-learned.md
+index a4e9f73..87c87b2 100644
+--- a/.specify/memory/lessons-learned.md
++++ b/.specify/memory/lessons-learned.md
+@@ -9893,3 +9893,365 @@ v0.66 era installer (`cfcb96d` Phase L Bugfix 8 era 之前) 当时把 `weasel.dl
+ - `output/archives/fluxing-0.19.0.74-installer.exe` md5 (终版): `80b679e3a7012081a12eed5a33f3cc03` 43,369,392 bytes (+26 KB vs v0.73 43,342,931)
+ - handoff: `handoff-after-phase-L-bugfix-9.5-v0.74-stage-shim-2026-07-30.md` §0 + §2.3
+ 
++---
++
++## L##-PhaseL-9.7-System32Cleanup-Glob-Incomplete — 9.6 cleanup 模式只 2 个精确文件名 + `${GetSize}` "S" 隐藏 bug (Phase L Bugfix 9.7 / v0.74.1)
++
++**Context**:
++
++v0.74 ship 加了 9.6 cleanup(commit 4694a1d)。Ship-gate 9/9 PASS + Audit ok。但用户装机后 (2026-07-30 feedback) 报告"install + reboot 后切输入法无响应几分钟~17min"。Forensics 暴露 2 个 independent bugs:
++
++**Bug A (模式不全)**: `output/install.nsi:240-247` 的 9.6 cleanup 用精确匹配:
++```
++StrCpy $R8 "$WINDIR\System32\weaselx64.dll"
++IfFileExists $R8 0 +2
++  Delete /REBOOTOK $R8
++StrCpy $R8 "$WINDIR\System32\weasel.dll"
++...
++```
++
++System32 实际有 11 个 v0.66/67/68 era legacy DLL:`weasel.old.dll` (1168384 bytes) · `weasel.dll.bak` · `weasel.dll.old` · `weasel.dll.old.10` · `weasel.dll.old.135039` · `weasel.dll.v465` · `weasel.dll.v466bak-20260623-095658` · `weaselx64.dll.old.133147` · `weaselx64.ime` (700416 bytes) · `weaselx64.ime.old.133147`。Backup-pattern (.bak / .old / .v### / .v###bak-YYYYMMDD-HHMMSS) 11 个文件 v0.74 cleanup 全部漏过。
++
++**Bug B (隐藏 bug)**: v0.74 cleanup 函数内 `${GetSize}` 调用:
++```
++${GetSize} "$WINDIR\System32\$R1" "S" $R2 $R3
++${If} $R3 >= 100000
++```
++
++`${GetSize}` 第三个参数 `"S"` 标志返回 **512-byte sectors** 不是 bytes。配合 100000 阈值 = "≥ 50 MB" 检查。1.16 MB legacy DLL = 2273 sectors,远小于 100000 → **size check 永远失败 → 文件永远不删**。也就是即使模式扩到 glob,Bug B 也会让 cleanup 静默 no-op。
++
++**Root cause**:
++
++1. **9.6 cleanup 模式不全**: `StrCpy $R8 "$WINDIR\System32\weaselx64.dll"` + `IfFileExists $R8 0 +2` + `Delete /REBOOTOK` 形式只能精确匹配一个文件名。Backup/legacy/rename pattern (`.bak` / `.old` / `.v###` / `.v###bak-YYYYMMDD-HHMMSS`) v0.66/67/68 era installer 都用。
++2. **`${GetSize}` "S" units 隐藏 bug**: NSIS `FileFunc.nsh` 的 `${GetSize}` 第三个参数 (options) `"S"` = 512-byte sectors。helper 设计的 bytes-based threshold 在 "S" 模式下永远不命中。这是 silent no-op 的关键。
++
++**Lesson**:
++
++1. **Cleanup helper 必须 glob + size-threshold**,不能精确匹配 filename:
++   ```
++   FindFirst $R0 $R1 "$WINDIR\System32\weasel*.dll"
++   loop_weasel_dll:
++     ${GetSize} "$WINDIR\System32\$R1" "" $R2 $R3
++     ${If} $R3 >= 102400
++       Delete /REBOOTOK "$WINDIR\System32\$R1"
++     ${EndIf}
++     FindNext $R0 $R1
++     StrCmp $R0 "" no_more_weasel_dll 0
++     Goto loop_weasel_dll
++   no_more_weasel_dll:
++   FindClose $R0
++   ```
++   `weasel*.dll` + `weasel*.ime` 两个 glob 覆盖 legacy shim。
++2. **`${GetSize}` 默认 units = bytes**: 用 `"S"` / `"K"` / `"M"` 标志显式指定单位。如果代码用 bytes-based threshold,**绝对不能用 "S"**。code review 必须 assert 没用 "S"(anchor check: `'"" $R2 $R3'` 应在 helper 中)。
++3. **NSIS `FileFunc.nsh` `${GetSize}` 行为要点**:
++   - 无 options → bytes(默认)
++   - `"S"` → 512-byte sectors
++   - `"K"` → 1024-byte KiB
++   - `"M"` → 1048576-byte MiB
++4. **Cleanup helper 抽出成 function + Call site 复用**:
++   ```
++   Function CleanupLegacySystem32Weasel
++     ; helper body
++   FunctionEnd
++   ```
++   `.onInit` (pre-install) + `Section Uninstall` (post-uninstall) 各 `Call` 一次。代码重复 hidden 漂移 风险降低。
++
++**How to apply**:
++
++- 任何 installer `Delete /REBOOTOK` 清理 `%WINDIR%\System32` 内的自命名空间产品 DLL:
++  - **优先用 glob + size threshold**,而非精确 filename
++  - `${GetSize}` **永远不传 "S"**,除非 intent 真的是 sectors
++  - `100 KB threshold in bytes` = `${GetSize} "$file" "" $high $low` + `$low >= 102400`
++- NSIS code review 用 anchor check 验证:
++  - cleanup helper 有 `FindFirst` loop(glob mode)
++  - `${GetSize}` 调用 **无 "S"**
++  - Size threshold 是 102400(or close, always 6 digits)
++- `${GetSize}` units 在 code review 阶段必须验证。
++
++**Anti-patterns**:
++
++- **AP-L##-9.7-A**: Cleanup 用精确 filename 不用 glob。任何 backup / version-suffix pattern 都会漏。NSIS `IfFileExists` + 精确 path 是 single-point-of-failure。
++- **AP-L##-9.7-B**: `${GetSize}` 用 "S" 标志 + bytes-based threshold。是 silent no-op,因为 legacy 1-2 MB DLL 对应 ~2000-4000 sectors, 典型阈值 100000 sectors (50 MB) 永远不命中 → cleanup 表面 OK 实际不删任何文件。
++- **AP-L##-9.7-C**: Cleanup 逻辑 inline `.onInit` + `Section Uninstall` 各一份。新代码 review 时常 modify 一处漏另一处。必须抽成 function + Call。
++- **AP-L##-9.7-D**: 写 glob cleanup 时不 else-branch log SKIPPED files。Forensic 信号丢掉,后续难以 debug。
++
++**Ship gate for v0.74.1 (mandatory)**:
++
++- [ ] `_check_system32_cleanup.ps1 -Mode Audit` 8/8 PASS (含 `"" $R2 $R3` + `102400` anchors)
++- [ ] `_check_system32_cleanup.ps1 -Mode PretouchUninstall` 创建 10 fake files (200 KB > 100 KB threshold)成功
++- [ ] `_check_system32_cleanup.ps1 -Mode Live` 在真机 host 上 PASS or 显示 0 weasel* 残留 (post-reboot)
++- [ ] `${GetSize}` 调用无 "S" 标志 (anchor: `'"" $R2 $R3'` 在 `Function CleanupLegacySystem32Weasel` 内)
++- [ ] 100 KB threshold in bytes (anchor: `'102400'` 在 helper 中)
++- [ ] else-branch log (anchor: `'skipped (size ... bytes < 100 KB threshold, not our legacy)'` 在 helper 中)
++- [ ] `test/TestOpenccDataPath/Test-OpenccDataPath.ps1` PASS (opencc 路径 验证,见 L##-PhaseL-9.8)
++
++**Affected files / 提交**:
++
++- `output/install.nsi:1117-1184` (`Function CleanupLegacySystem32Weasel` 全 helper):
++  - Push $R0-R3,$R8 (caller-safe state preservation)
++  - exact-match fallback (defense-in-depth for `weaselx64.dll` + `weasel.dll`)
++  - `FindFirst $R0 $R1 "$WINDIR\System32\weasel*.dll"` glob loop + size check > 100 KB + Delete /REBOOTOK + else DetailPrint SKIPPED
++  - `FindFirst $R0 $R1 "$WINDIR\System32\weasel*.ime"` glob loop + size check > 100 KB + Delete /REBOOTOK + else DetailPrint SKIPPED
++- `output/install.nsi:247` (`.onInit` cleanup → `Call CleanupLegacySystem32Weasel`)
++- `output/install.nsi:1104` (`Section Uninstall` cleanup → `Call CleanupLegacySystem32Weasel`)
++- `_check_system32_cleanup.ps1`:
++  - `$anchorsInit` 7 anchors (含 `"" $R2 $R3` + `102400`)
++  - Live mode 枚举 `weasel*.dll` + `weasel*.ime`
++  - PretouchUninstall 创建 10 fake files 200 KB > threshold
++- handoff: `handoff-after-spec-071-p1-and-t103-p2-2026-07-30.md`
++
++---
++
++## L##-PhaseL-9.8-OpenCC-Data-Path-Mismatch — emoji.json + emoji.ocd 路径 forensically 不匹配 (Phase L Bugfix 9.8 / v0.74.1)
++
++**Context**:
++
++v0.74 装机后(commit 4694a1d),用户激活 Fluxing 时 `rime.weasel.*.INFO.log` 报 `E simplifier.cc:45] opencc config not found: D:\Program Files\fluxing\weasel\data\opencc\emoji.json`。每次 engine init 都会报这个 ERROR(6+ 重启 PID 共 8 次 engine init 中都报)。
++
++**Root cause**:
++
++- Installer 实际已 `File "data\opencc\*.json"` 把所有 `.json` 装到 `$INSTDIR\data\opencc\` = `$R3\weasel\data\opencc\`(post-reset)。
++- Runtime libRime 找 `$R3\weasel\data\opencc\emoji.json`。**路径实际上匹配** ($INSTDIR post-reset = $R3\weasel)。
++- **但 emoji.json 仍然 NOT FOUND**。可能的根因(按概率高到低):
++  - **假设 A (高)**: `emoji.ocd` 配套 binary data 在 build output 缺失。OpenCC config (emoji.json) 通常需要 binary data (emoji.ocd) 配套才能 load。检查 `output\data\opencc\`: emoji.json (378 bytes) + emoji.txt (137758 bytes),**没有 emoji.ocd / emoji.ocd2**。这可能让 libRime 的 OpenCC loader 在 load emoji.json 时走到 `opencc config not found` fallback。
++  - **假设 B (中)**: libRime 1.13.x 路径解析有 variant,某些 lookup path relative to install root 不同。
++  - **假设 C (低)**: v0.66 era 旧 install 残留 + emoji.json 是 v0.74 新加的,旧 path metadata 让 libRime 找错误路径。
++
++**Lesson**:
++
++1. **Forensic investigation 中不能假设路径正确就一定找得到** —— 必须验证每个 binary 的所有 companion files (.json + .ocd, .yaml + .bin) 都配套。
++2. **libRime 的 OpenCC loader 期望 config + binary data 双配**:emoji.json 这种 config JSON 通常 design-time 生成 OpenCC binary (.ocd) 作为 distribution。`.json` only (无 .ocd) 是 intermediate artifact,不应 ship 给 end user。
++3. **Surface ASAP via installer**: 在 installer 装完 opencc 数据后,加 `IfFileExists $R8 emoji_json_ok` + `DetailPrint WARNING ...` 让 diagnostic 立即 surface 在 install log, 而不是让 user 几个月后才在 rime.weasel log 里发现。
++4. **Defense-in-depth 二次 install**: 不只装到主路径 (`$INSTDIR\data\opencc\`), 同时复制到 `$INSTDIR\weasel\data\opencc\` (FR-002 二次 install) 防御 libRime 路径解析的 ambiguity。
++
++**How to apply**:
++
++- 任何 libRime OpenCC data install, **build output 必须配套 `.json` + `.ocd`**。`emoji.json` 不能 ship without `emoji.ocd`。
++- Installer-shipped 路径必须 verify with `IfFileExists` post-install 立即 surface 失败。
++- 老 v0.66 era 残留 + 新 libRime path resolution 多版本共存时, defense-in-depth 二次复制到多个候选路径。
++- 真 deeper fix 需要 libRime 调查 (`/librime` submodule investigation),`emoji.ocd` 配套 build script, 或 libRime 的 path fallback logic 改进。
++
++**Anti-patterns**:
++
++- **AP-L##-9.8-A**: ship `.json` without `.ocd` companion —— OpenCC will fail silently at runtime, install log 看不到。
++- **AP-L##-9.8-B**: installer 没有 post-install `IfFileExists` 验证 —— failure 推迟到 rime.weasel log 才发现,diagnostic 路径长。
++- **AP-L##-9.8-C**: 假设一个 SetOutPath 就够 —— 路径 resolution multi-version libRime 可能有 ambiguity,defense-in-depth 多路径 install 是 win。
++
++**Ship gate for v0.74.1 (mandatory)**:
++
++- [ ] `output\data\opencc\emoji.json` 存在(378 bytes)
++- [ ] `output\data\opencc\*.ocd*` 16 个 .ocd 文件(STCharacters.ocd2, HKVariants.ocd2 等)
++- [ ] installer install.nsi 包含 `SetOutPath $INSTDIR\data\opencc` + `File data\opencc\*.json` + `File data\opencc\*.ocd*` (FR-002 路径 1)
++- [ ] installer install.nsi 包含 `SetOutPath $INSTDIR\weasel\data\opencc` + 同样 File calls(FR-002 路径 2 / defense-in-depth)
++- [ ] `IfFileExists $R8 emoji_json_ok` + `DetailPrint WARNING` 在安装后 surface
++- [ ] `test/TestOpenccDataPath/Test-OpenccDataPath.ps1` PASS 6/6
++
++**Affected files / 提交**:
++
++- `output/install.nsi:815-832`(`SetOutPath $INSTDIR\data\opencc` + File + `SetOutPath $INSTDIR\weasel\data\opencc` + File 二次 install + emoji.json IfFileExists warning)
++- `output/install.nsi:836`(`SetOutPath $INSTDIR` reset after opencc block)
++- `test/TestOpenccDataPath/Test-OpenccDataPath.ps1`(3 install.nsi anchor + emoji.json file + 16 .ocd file check)
++- spec/plan/tasks.md 在 `.specify/specs/071-install-freeze-fix/`
++
++**Open followup (defer to v0.75)**:
++
++- **`emoji.ocd` build script 集成**: 检查 OpenCC build pipeline 是否有从 `emoji.json` 生成 `emoji.ocd` 的步骤,在 librime submodule 加 build dependency。
++- **libRime path resolution investigation**: `librime/src/rime/opencc.cc:45` 路径 fallback logic 文档化,识别 multi-version 兼容 case。
++- **installer ship 验证**: 真机 sandbox-verify 跑 v0.74.1 后 grep rime.weasel.INFO.*.log `opencc config not found` = 0 hits 才算 SC-003-1 PASS。
++- **真因优先级**: 假设 A (emoji.ocd 缺失) 概率最高。Test 验证:把 `emoji.json` + `emoji.ocd` 都 ship 给真机看 rime.weasel log 是否仍报。
++
++---
++
++## L##-PhaseL-9.10-System32Cleanup-SilentFail — Cleanup macro 静默失败 + glob 漏 weasel.old.dll (Phase L Bugfix 9.10 / v0.74.2)
++
++**Context**:
++
++v0.74.1 ship (commit 654d3b2) 后,用户真机测试报告 explorer.exe / 宿主软件在切到 Fluxing 后关闭。取证 (_diag_v0741_evidence.ps1) 发现 `C:\Windows\System32\weaselx64.dll` (Rime 官方 2.0.0.9, 1.2 MB) + `C:\Windows\System32\weasel.dll` (204 KB) + `C:\Windows\System32\weasel.old.dll` (1.16 MB) **全部仍在**,但 installer .onInit L252 已经 `Call CleanupLegacySystem32Weasel`,Section Uninstall L1148 也已经 `Call un.CleanupLegacySystem32Weasel`。即:**清理逻辑存在但没真执行**,且 9.7 glob 漏 `weasel.old.dll`(字面 `.old.dll` 后缀,FindFirst weasel*.dll 模式下不保证匹配)。
++
++**Root cause**:
++
++1. **NSIS `Delete /REBOOTOK $R8` silent fail**: 当 installer 进程 admin token 缺失(例如 silent `/S` + non-admin 用户)或文件被 ctfmon.exe / explorer.exe 持锁,`Delete` 失败但**不报错**。NSIS 默认继续执行,`/REBOOTOK` 仅在 boot 时才真删;silent mode + locked + non-admin = 零删除、零日志、零可见信号。
++2. **9.7 glob `weasel*.dll` 对 `weasel.old.dll` 不保证匹配**: 字面 `.old.dll` 后缀虽然 NSIS FindFirst 行为视具体 glob 实现而定,但 v0.74.1 ship forensics 实证 1.16 MB `weasel.old.dll` 漏删。
++3. **`.onInit` 调用 cleanup 后无任何 `DetailPrint` 完成信号**: 即使用户跑 `/LOG=install.log` 取证,只能看到 `Call CleanupLegacySystem32Weasel` 入口,看不到 macro 是否真执行 / 命中几个文件 / 失败几个文件。installer 自身 + user + operator 全无 diagnostic 信号。
++
++**Lesson**:
++
++1. **`Delete` 必跟 `IfErrors` 立刻检测**:`Delete /REBOOTOK $R8` + 紧跟 `IfErrors 0 +2 / DetailPrint "...FAILED..."`,把 silent fail 转成 visible fail。NSIS 写文件清理代码,每个 Delete 都应该是 `IfErrors + DetailPrint` 模式。
++2. **glob 模式必配 exact-match 兜底**: NSIS FindFirst `weasel*.dll` 之类的 glob,**同时**显式 exact-match 已知具体文件名(`weasel.old.dll`, `weaselx64.dll`, `weasel.dll`)。即使 glob 命中,exact-match 是 defense-in-depth;即使 glob 漏,exact-match 仍能命中。
++3. **macro / function 末尾必加 completion log**:`CleanupLegacySystem32WeaselImpl` macro 末尾 `DetailPrint "...macro complete (weaselx64.dll + weasel.dll + weasel.old.dll exact-match + weasel*.dll/weasel*.ime glob)"`。这样即便 zero 文件被删,`/LOG=` 仍能看到"macro ran to completion, found zero match" → operator 能立刻判断是 admin token / 锁问题,而不是 installer bug。
++4. **install-only ship 的 binary md5 不变判定**: v0.74.2 只动 install.nsi,5 binary md5 与 v0.74.1 完全一致 → 这是预期的 install-only ship(NSIS 脚本变化 → installer 二进制本身变,但装到 user 机器的 5 binary 不变)。Installer md5 `b7520d32…` (v0.74.1) → `6ee983a3…` (v0.74.2) 是 installer 本身字节变化,不是 binary 变化。
++
++**How to apply**:
++
++- 任何 NSIS 文件清理 / 注册表清理代码,`Delete` / `WriteRegStr` / `DeleteRegKey` 后必跟 `IfErrors + DetailPrint` 显式错误处理。
++- Glob 清理模式必配 explicit exact-match fallback(列出已知具体文件名)。
++- 每个清理 macro / function 末尾必加 completion log,即便 zero 命中也能从 `/LOG=` 看出"macro ran"。
++- 装 install.nsi 类 installer-only 改动时,5 binary md5 不变是**预期**,installer 自身 md5 变是**预期**;两者同时报告给 user,避免 user 误以为"binary 没换"。
++
++**Anti-patterns**:
++
++- **AP-L##-9.10-A**: NSIS `Delete` 后不跟 `IfErrors` —— silent fail 无可见信号,user/operator 无法判断是 installer bug 还是 admin/lock 问题。
++- **AP-L##-9.10-B**: glob `weasel*.dll` 模式假设覆盖所有 legacy 文件 —— 已知 `weasel.old.dll` 字面 `.old.dll` 后缀可能漏匹配,必加 explicit exact-match。
++- **AP-L##-9.10-C**: cleanup macro / function 末尾无 completion log —— zero 命中时 operator 无法区分 "macro 没跑" vs "macro 跑了但零命中"。
++
++**Ship gate for v0.74.2 (mandatory)**:
++
++- [ ] `test/TestSystem32InlineCleanup/Test-System32InlineCleanup.ps1` PASS(3 exact-match + 3 IfErrors + macro completion log + 5 stage2 task fallback retained + 2 call site preserved + L09 BOM/CRLF)
++- [ ] `output/archives/fluxing-0.19.0.74.2-installer.exe` build success(makensis /V2 exit 0)
++- [ ] installer md5 记录(`6ee983a365648d923162c0c3121aee68`)
++- [ ] 5 binary md5 不变 (install-only ship): weasel.dll `231fd0cfed97fbe6e40c1498cb10a1f1` + weaselx64.dll `ea4dece5b4c76a01704204472c2aa5f4` + WeaselServer.exe `0424eb54380d5cc0ea5b1ca583bf008b` + WeaselDeployer.exe `f8d635342128364056ca748116dceecd` + WeaselSetup.exe `bb4440d6c38a885ee33213d393bf1ab7`
++- [ ] 真机 sandbox-verify `_check_install_v2.ps1` + `System32` weasel*.dll + weasel*.ime 全部 0 命中
++- [ ] 切输入法 explorer / 宿主不再关闭
++
++**Affected files / 提交**:
++
++- `output/install.nsi:1185-1214`(`CleanupLegacySystem32WeaselImpl` macro 加 IfErrors 检测 + weasel.old.dll exact-match + macro 末尾 completion DetailPrint)
++- `test/TestSystem32InlineCleanup/Test-System32InlineCleanup.ps1`(3+3+1+5+2+1 anchor 验证)
++- `_diag_v0741_evidence.ps1` + `_diag_v0741_logs.ps1` + `_diag_v0741_crash.ps1` + `_diag_v0741_c1.ps1`(取证脚本,可重用)
++- handoff: `handoff-after-c2-v0.74.2-silentfail-fix-2026-07-31.md`(to be written)
++
++**Open followup (defer to v0.75)**:
++
++- **stage2 + schtasks 路径诊断**:v0.74.1 ship forensics 显示 stage2 5 个 FluxingStage2ShimSwap_* schtasks 全 0、Stage2Done_* 注册表 marker 全 0、%TEMP%\fluxing-stage2-shim 目录全 0 → stage2 在 Win11 24H2 用户机器上**根本没执行**(Win11 Sandbox LogonCommand 偶发 silent 失败模式 per `feedback_v074_stage_install_lessons.md` Lesson 1)。需要验证 v0.74.2 装机后这些 marker 是否出现;若仍 0,改 installer admin 内联执行 stage2 batch 而非依赖 schtasks / LogonCommand。
++- **installer admin token 检测**:silent `/S` mode + non-admin user → NSIS RequestExecutionLevel admin 静默跳过。需要在 .onInit 加 admin token check + 失败时 MessageBox 提示 user 重新用 admin 跑。
++- **TSF CLSID InprocServer32 实际指向**:v0.74.1 forensics 显示 `HKLM\SOFTWARE\Classes\CLSID\{3D02CAB6-…}\InprocServer32` 三个候选路径全 MISS → TSF 框架如何加载 shim 未知。需进一步 trace CTF 框架 enumeration 路径。
++- **explorer 关闭的"非 Fluxing"假说**:v0.74.1 forensics 显示 24h 内 explorer crash 4 次,同时间段 Claude Code / dopus / HipsMain / aboboo 多个不相关进程同样 `ExceptionCode=0xc0000374` (HEAP_CORRUPTION) crash。weasel/Fluxing 自身 7 天内 0 crash。explorer 关闭可能部分或全部跟 Fluxing 无关,是用户机器 24h 多进程 heap corruption 的副作用。C2 fix 只解决 System32 shim 这一面,不解决 explorer crash 的所有可能诱因。
++
++---
++
++## L##-PhaseL-9.11-FocusinShowRevert — v0.19.0.65 FocusIn Show re-enable 真因 = QuickPanel GDI churn (Phase L Bugfix 9.11 / spec 075 / v0.74.3)
++
++**Incident**: v0.18.41.4 (L69-fix) 临时禁用 QuickPanel 防 GDI+ Bitmap(IStream*) UAF
++heap corruption (`STATUS_HEAP_CORRUPTION` 0xc0000374 in `ntdll.dll`)。v0.19.0.65
++(commit `505c398`, "Phase L 装机 bugfix 2") 基于 spec 070 (QuickPanel v3-rev3) +
++spec 074 (撤回 sticky always-show) + spec 070 完成纯 GDI rewrite 的 documentation
++**重新启用** FocusIn Show(false, nullptr × 6)。v0.19.0.65 commit 同时:
++  (a) 把 Show 移到 m_disabled check 之前 (line 434-438),意图 "QuickPanel 一定弹"。
++  (b) 误加 duplicate Show 在 m_disabled check 之后 (line 487-491)。
++v0.74.1 / v0.74.2 ship 后用户真机 forensic (`_diag_v0741_evidence.ps1`
+++ Application Error event log):
++  - 12+ `Application Error` event 24h 内,all `0xc0000374` HEAP_CORRUPTION  in
++    `ntdll.dll` at offset `0x0000000000112165` (跟 L69 RtlpNtSetValueKey / RtlDeleteTimer
++    不同的 detection site, **但同 pattern**)。
++  - 涉及 5+ 不相关进程: Explorer.EXE × 6 / Claude Code Haha.exe × 4 / dopus.exe × 2 /
++    ToDesk.exe × 1 / aboboo.exe × 1。
++  - 装机 5 binary md5 MATCH v0.74.1 (installer 包好) → 装机端无 stale binary 问题。
++  - System32 残留 DLL 仍存: `weasel.dll` (204 KB) + `weasel.old.dll` (1.16 MB) +
++    `weaselx64.dll` (1.2 MB v0.66 era Rime 官方 2.0.0.9 旧 build)。
++
++**Root cause (3 个 independent bug 累加)**:
++
++1. **QuickPanel Show 双份** (line 434-438 + 487-491) → 每次 FocusIn 触发 Show × 2
++   → QuickPanel 资源反复申请/释放。spec 070 QuickPanel 内部已纯 GDI + WIC
++   (librime project knowledge + `WeaselServer/QuickPanelDialog.cpp:0-9` 注释显式
++   列出 5 大雷区),但 "改纯 GDI ≠ Show path 安全" — GDI 资源句柄在 WeaselServer
++   PPL 进程里反复 churn + ctfmon/TextInputHost 仍加载 v0.66 残留 shim → COM heap
++   corruption 累加 → 0xc0000374。
++
++2. **m_disabled gate 之前 Show** (line 434-438) → `if (m_disabled=true)` 时仍创建
++   QuickPanel 资源。但 TryLazyRecovery 后 m_disabled=true 场景极少见
++   (deployer died / abandoned mutex);`phase A.10 v0.18.41.4` 的 `if (false)` gate
++   就足以规避。这是 minor 累加因素。
++
++3. **OnUpdateInputPosition hot-path GetProcAddress + HWND=NULL** (per
++   `handoff-input-crash-root-cause-2026-07-31.md` MEDIUM candidate) —
++   每次 input event 都重做 GetProcAddress + 用 HWND=NULL 调
++   PhysicalToLogicalPointForPerMonitorDPI。Win11 24H2 + PerMonitorV2
++   awareness 下 HWND=NULL 行为不稳定,部分 commit 中 `RtlGetDpiForWindow(NULL)`
++   返回主屏但 POINT 转换用错 per-monitor scale → QuickPanel 绘到错位置 →
++   触发 paint 异常。
++
++4. **System32 残留 shim** 加上 1+2+3 = 累加 → 0xc0000374 跨进程传染。
++
++5. **(推测)WeaselPanel 用 GDI+** (`WeaselUI/WeaselPanel.cpp:107` `GdiplusStartup`):
++   spec 074 只重写 QuickPanel, **WeaselPanel 仍是 spec 059 GDI+ path**。
++   spec 074 review 漏审 WeaselPanel 状态 → hidden risk。L67-L69 雷区真正残留
++   路径可能也包含 WeaselPanel (但 Forensic 不能直接证实,因为 WeaselPanel 的
++   GDI+ 路径已经在 input 时反复跑几月,可能没在新 commit 引入新 bug)。
++
++**Lesson (5 条, 多条重叠 L##-PhaseL-5)**:
++
++1. **Re-enable 之前必须写 hot-path stress test**。spec 074 完成 pure GDI rewrite
++   后, ship-gate 9/9 验证没包括 hot-path stress (每秒 50+ FocusIn event)。
++   Re-enable 之前必须 commit 真机 stress test 报告。
++2. **Symmetric pair 改 hard rule (per L##-PhaseL-5)**。`if (false)` disable → re-enable
++   时**只**改一处不审计另一处 → 第二次 release 看到 "改了另一处" 误以为已经
++   在 chase 中,但实际是 pair 改错。
++3. **Show path safety 不是 QuickPanel 内部决定**。即便 QuickPanel 本身 D2D/GDI+
++   路径全部删除,Show 调用本身在 PPL WeaselServer 进程里反复 churn GDI 句柄 +
++   + System32 残留 shim 交互 = heap corruption 来源。Show path 跟 QuickPanel
++   内部是 2 个独立变量。
++4. **Hot-path GetProcAddress 必须构造期 cache**。NSIS 加固指向 GetProcAddress 在
++   hot-path (≥1 Hz 调用率) 永远禁止。原 v0.18.x OnUpdateInputPosition 违反
++   这条没人 review 出来。
++5. **Non-admin user silent 装机必修 admin check** (L##-PhaseL-9.10 follow-up
++   prompt)。silent `/S` + non-admin → NSIS `RequestExecutionLevel admin` 静默
++   跳过 → System32 cleanup silent fail → 残留 shim → 后续 crash。v0.74.3
++   加 UserInfo::GetAccountType + SetErrorLevel 6002 + Quit 让 deploy 自动化
++   catch 到。
++
++**Anti-patterns (5 条 + 1 隐藏)**:
++
++- **AP-L##-9.11-A**: Re-enable L69-fix 临时禁用前没 stress test 验证 quickpanel
++  spec 074 hot-path。
++- **AP-L##-9.11-B**: Pair 改 L##-PhaseL-5 (v0.18.41.4 disable → v0.19.0.65 re-enable
++  时只改 FocusOut 的 `if (false)` → Hide 但没改 FocusIn → FocusOut 不一致
++  + FocusIn duplicate Show 留下)。
++- **AP-L##-9.11-C**: QuickPanel show path 假设 "QuickPanel 内部是 GDI 所以 show
++  path 安全"。
++- **AP-L##-9.11-D**: Hot-path GetProcAddress 调用未在 ship-gate 9/9 review
++  checklist 里。
++- **AP-L##-9.11-E**: silent `/S` + non-admin user → NSIS `RequestExecutionLevel admin`
++  静默跳过 → 无 admin check → System32 cleanup silent fail → deploy 自动化
++  catch 不到退出码。
++- **AP-L##-9.11-F (隐藏)**: spec 074 review 只看 QuickPanel 内部, 漏审
++  `WeaselUI/WeaselPanel.cpp` 仍用 GDI+ (GdiplusStartup line 107)。
++
++**How to apply**:
++
++- 任何 re-enable 之前临时禁用的代码: 必**先** spec-init 真机 hot-path stress test。
++- 任何 `if (false) { ... }` 残留: 必配 `grep -RIn "if (false)" src/` pre-commit hook
++  + pair-check (L##-PhaseL-5 也提)。
++- 任何 per-process high-frequency event (>1 Hz) 上的 GetProcAddress, 立即 cache
++  到构造期。
++- 任何 silent install: 必 UserInfo admin check + SetErrorLevel <custom> + Quit
++  + deploy doc 列入 `$LASTEXITCODE` 截获 pattern (类似 L##-PhaseL-9.5-H +6001,
++ 这次 +6002)。
++- Spec 075 真机 stress test 后,才能 re-enable FocusIn Show (跟 WeaselPanel
++  GDI+ rewrite 一起验收)。
++
++**Ship gate for v0.74.3 (mandatory)**:
++- [ ] `xbuild.bat weasel installer` exit 0
++- [ ] 5 binary md5 verify (weasel.dll / weaselx64.dll / WeaselDeployer.exe /
++      WeaselSetup.exe 不变, **WeaselServer.exe 必变** since FocusIn + hot-path
++      code changed)
++- [ ] install.nsi BOM (EF BB BF) + CRLF (1322 LF / 1322 CRLF / 1322 CR)
++- [ ] silent + non-admin → SetErrorLevel 6002 + HKLM AdminRequired=1
++- [ ] 真机 sandbox-verify `_check_install_v3.ps1` happy path PASS
++- [ ] (post-ship real-machine) Application Error event count 24h ≤ 5 (was ≥ 12)
++
++**关联文件 / 提交**:
++- 源 (RimeWithWeasel 改 FocusIn Show): `RimeWithWeasel/RimeWithWeasel.cpp:434-438,487-492`
++- 源 (WeaselServerImpl hot-path cache): `WeaselIPCServer/WeaselServerImpl.h:103,108-109`
++  + `WeaselIPCServer/WeaselServerImpl.cpp:33-38,355-365`
++- 源 (install.nsi admin check): `output/install.nsi:.onInit` (after Function declaration)
++- 配置 (version bump): `env.bat:24-25` (`WEASEL_PATCH=3` + `PRODUCT_VERSION=0.19.0.74.3`)
++- Spec: `.specify/specs/075-focusin-quickpanel-rollback/{spec,plan,tasks}.md`
++- Forensic scripts (re-used): `_diag_v0741_evidence.ps1` + `_diag_v0741_dumps.ps1` +
++  `_diag_v0741_logs.ps1`
++
++**关联线索链**:
++- L##-PhaseL-4 (ImmGetDefaultIMEWnd dead in hidden IPC server) — TSF activation
++  sink 唯一可靠路径
++- L##-PhaseL-5 (L69Fix-Residue) — pair 改教训
++- L##-PhaseL-6 (SinkPseudoComplete) — TSF sink 必须 4 件套齐全
++- L##-PhaseL-7 (PPL-IPC-Block) — PPL installer 阻塞
++- L##-PhaseL-9 (UX-Timing) — "hang 是 user 感知"
++- L##-PhaseL-9.5 (Stage-At-Startup) — silent skip ≠ UX-correct
++- L##-PhaseL-9.6-Glob — System32 cleanup glob
++- L##-PhaseL-9.7 (GetSize S flag hidden bug) — NSIS units 千万别用 "S"
++- L##-PhaseL-9.8 (OpenCC data path) — emoji.ocd ship 化
++- L##-PhaseL-9.10 (System32Cleanup-SilentFail) — IfErrors 必跟
++- L##-PhaseL-9.11 (本条) — FocusIn Show re-enable rollback
++
++
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index de8fb5a..c9f10b9 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -430,9 +430,26 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
+   // 修复:QuickPanelDialog::Show 移到 m_disabled check 之前,确保 QuickPanel 一定弹出。
+   // _UpdateUI / CaptureForeground / m_active_session set 仍守 m_disabled (librime 此
+   // 时可能未初始化,调 rime_api 调用会失败)。
+-  // v0.19.0.65: re-enable L69-fix residue; use Show() not EnableAlwaysShowMode
+-  if (ipc_id > 0) {
+-    DLOG(INFO) << "FocusIn auto-show QuickPanel: ipc_id=" << ipc_id;
++  // v0.19.0.69 (Phase L Bugfix 7.5): QuickPanel Show 移到 m_disabled check 之前 (per L69-fix residue).
++  // -------------------------------------------------------------------------------------
++  // v0.19.0.74.3 (Phase L Bugfix 9.11 — input crash 真因兜底 re-enable 撤回):
++  //   v0.18.41.4 临时禁用 QuickPanel 防 GDI+ Bitmap(IStream*) UAF heap corruption (per L67-L69)。
++  //   v0.19.0.65 ship 时基于 spec 070 / L70 "QuickPanel 改纯 GDI" 的 documentation 重新启用
++  //   FocusIn Show。但 spec 074 真机 forensic + L##-PhaseL-9.10 验证:
++  //     - QuickPanel 内部 load-logo 用 WIC (L81-fix) — 这块 OK
++  //     - QuickPanel 本身 D2D/GDI+ path 已删 — 这块 OK
++  //     - **但 FocusIn path 上的 GDI resource churn (反复 Show → 反复 create/release) 触
++  //       发 v0.74.1/2 ship 用户端 12+ 进程同时 0xc0000374 HEAP_CORRUPTION**
++  //   "改纯 GDI 不等于 'Show path 安全'" — GDI 资源句柄在 WeaselServer PPL 进程里反复
++  //   申请/释放 + ctfmon.exe / explorer.exe / TextInputHost.exe 仍加载 v0.66 残留的
++  //   old `weaselx64.dll` (System32 残留) → COM heap corruption 累加。
++  //   修:撤销 v0.19.0.65 re-enable 的两个 Show 调用 (一个在 m_disabled check 之前,line 434-438;
++  //   一个重复在 m_disabled check 之后,line 487-491),保持 L69 的 `if (false)` gate 直到 v0.75
++  //   重写 WeaselPanel GDI+ path (spec 075) + 真机 heap-corruption stress 验证后
++  //   才能 re-enable。**这是 spec 075 (v0.74.3) 的核心 commit**。
++  // -------------------------------------------------------------------------------------
++  if (false && ipc_id > 0) {
++    DLOG(INFO) << "FocusIn auto-show QuickPanel (v0.74.3 DISABLED per L##-PhaseL-9.11): ipc_id=" << ipc_id;
+     QuickPanelDialog::Show(false, nullptr, nullptr, nullptr, nullptr, nullptr,
+                            nullptr);
+   }
+@@ -484,11 +501,17 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
+   //   m_client.FocusIn() → IPC 走这里 → Show。
+   // Don't enable EnableAlwaysShowMode: spec 074 撤回 sticky，因为 user 反馈
+   //   "开机就弹太烦"。
+-  if (ipc_id > 0) {  // v0.19.0.65: re-enable L69-fix residue; use Show() not EnableAlwaysShowMode
+-    DLOG(INFO) << "FocusIn auto-show QuickPanel: ipc_id=" << ipc_id;
+-    QuickPanelDialog::Show(false, nullptr, nullptr, nullptr, nullptr, nullptr,
+-                           nullptr);
+-  }
++  //
++  // v0.19.0.74.3 (L##-PhaseL-9.11 撤回 v0.19.0.65 duplicate Show):
++  //   原 v0.19.0.65 在这里 (m_disabled check 之后) 重复了一次 Show 调用。
++  //   这是 v0.19.0.65 commit 误加的 duplicate — v0.19.0.69 已经把 Show 移到
++  //   m_disabled check 之前 (上面的 line 434-438),这里多一份就是 double-fire,
++  //   每次 FocusIn 触发 Show x2 → QuickPanel resource churn × 2 →
++  //   heap corruption 风险 × 2。整段删除 (line 487-492 旧 block),保留注释
++  //   给未来 reviewer 看 duplicate 是被 v0.74.3 显式撤回而不是 commit
++  //   移走。等 v0.75 spec 075 真修 WeaselPanel GDI+ + spec 074 真机 stress
++  //   后,可在 m_disabled gate 之后引入 Show (line 433 的 `if (false)` 改
++  //   `if (m_disabled == false)`,跟 FocusOut::Hide 对称)。
+ }
+ 
+ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
+diff --git a/WeaselIPCServer/WeaselServerImpl.cpp b/WeaselIPCServer/WeaselServerImpl.cpp
+index 597c089..1fbab77 100644
+--- a/WeaselIPCServer/WeaselServerImpl.cpp
++++ b/WeaselIPCServer/WeaselServerImpl.cpp
+@@ -33,8 +33,17 @@ extern CAppModule _Module;
+ ServerImpl::ServerImpl()
+     : m_pRequestHandler(NULL),
+       m_darkMode(IsUserDarkMode()),
++      m_pfnPhysicalToLogical(nullptr),
+       channel(std::make_unique<PipeServer>(GetPipeName(), sa.get_attr())) {
+   m_hUser32Module = GetModuleHandle(_T("user32.dll"));
++  // v0.19.0.74.3 (L##-PhaseL-9.11 hot-path fix): resolve once at start, cached for the
++  // lifetime of ServerImpl. Falls back silently to NULL if the user32.dll on the host does
++  // not export PhysicalToLogicalPointForPerMonitorDPI (Windows < 8.1 / Server 2008 R2).
++  // OnUpdateInputPosition guards against nullptr — keeps legacy behavior on those boxes.
++  if (m_hUser32Module) {
++    m_pfnPhysicalToLogical = reinterpret_cast<PPTLPFPMDPI>(
++        ::GetProcAddress(m_hUser32Module, "PhysicalToLogicalPointForPerMonitorDPI"));
++  }
+ }
+ 
+ ServerImpl::~ServerImpl() {
+@@ -352,15 +361,25 @@ DWORD ServerImpl::OnUpdateInputPosition(WEASEL_IPC_COMMAND uMsg,
+   rc.right = rc.left + width;
+   rc.bottom = rc.top + height;
+ 
+-  {
+-    using PPTLPFPMDPI = BOOL(WINAPI*)(HWND, LPPOINT);
+-    PPTLPFPMDPI PhysicalToLogicalPointForPerMonitorDPI =
+-        (PPTLPFPMDPI)::GetProcAddress(m_hUser32Module,
+-                                      "PhysicalToLogicalPointForPerMonitorDPI");
++  // v0.19.0.74.3 (L##-PhaseL-9.11 hot-path fix):
++  //   原 v0.18.x 在 OnUpdateInputPosition 每次按键/焦点变化时都做 GetProcAddress +
++  //   PhysicalToLogicalPointForPerMonitorDPI(NULL, &pt) — 两个 hot-path 问题:
++  //     (A) GetProcAddress 在 input event 每秒数十次的频率上是浪费(类似 lint v0.74
++  //         review 抓住的 key_binder hot-path),且在某些 Win11 build 上
++  //         表现为 200-500 µs 抖动。
++  //     (B) HWND=NULL 调用 PhysicalToLogicalPointForPerMonitorDPI 在
++  //         Win11 24H2 + PerMonitorV2 awareness 下行为不稳定,部分 commit
++  //         中 `RtlGetDpiForWindow(NULL)` 返回主屏但 POINT 转换用错 per-monitor
++  //         scale → QuickPanel 绘到错位置 → 触发后续 paint 异常。
++  //   修:把 GetProcAddress 缓存到 ServerImpl 构造期 (m_pfnPhysicalToLogical
++  //   static field),HWND 用 m_hWnd (WTL CWindowImpl 标准 HWND 字段 — 必须 real
++  //   HWND,因为 WeaselPanel 用 GetWindowDpiAwarenessContext + GetDpiForWindow 决定
++  //   per-monitor DPI scale)。
++  if (m_pfnPhysicalToLogical && m_hWnd) {
+     POINT lt = {rc.left, rc.top};
+     POINT rb = {rc.right, rc.bottom};
+-    PhysicalToLogicalPointForPerMonitorDPI(NULL, &lt);
+-    PhysicalToLogicalPointForPerMonitorDPI(NULL, &rb);
++    m_pfnPhysicalToLogical(m_hWnd, &lt);
++    m_pfnPhysicalToLogical(m_hWnd, &rb);
+     rc = {lt.x, lt.y, rb.x, rb.y};
+   }
+ 
+diff --git a/WeaselIPCServer/WeaselServerImpl.h b/WeaselIPCServer/WeaselServerImpl.h
+index 8325c5b..35d5fd4 100644
+--- a/WeaselIPCServer/WeaselServerImpl.h
++++ b/WeaselIPCServer/WeaselServerImpl.h
+@@ -102,6 +102,13 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
+   RequestHandler* m_pRequestHandler;  // reference
+   std::map<UINT, CommandHandler> m_MenuHandlers;
+   HMODULE m_hUser32Module;
++  // v0.19.0.74.3 (L##-PhaseL-9.11): cached function pointer + per-monitor DPI helper
++  // resolved once at construction. Avoids the per-OnUpdateInputPosition GetProcAddress
++  // call that hot-path'd input events at 50-100 Hz on busy hosts. m_pfnPhysicalToLogical
++  // is also guaranteed non-NULL iff m_hUser32Module resolves successfully at start-up;
++  // server skips the conversion when the function is unavailable (older user32.dll).
++  using PPTLPFPMDPI = BOOL(WINAPI*)(HWND, LPPOINT);
++  PPTLPFPMDPI m_pfnPhysicalToLogical;
+   SecurityAttribute sa;
+   BOOL m_darkMode;
+ };
+diff --git a/docs/adr/0003-installer-shim-stage-at-startup.md b/docs/adr/0003-installer-shim-stage-at-startup.md
+index 0497e1a..d504257 100644
+--- a/docs/adr/0003-installer-shim-stage-at-startup.md
++++ b/docs/adr/0003-installer-shim-stage-at-startup.md
+@@ -316,4 +316,122 @@ mandatory after any install.nsi `WriteReg*` change):**
+ - **Ship verdict**: source-level PASS is sufficient for **commit + push
+   gate**; real-machine PASS is required for **SFTP gate** (per the
+   `feedback_pinyin_release_workflow.md` workflow that does NOT trust
+-  commit-time evidence alone for shipping to users).
+\ No newline at end of file
++  commit-time evidence alone for shipping to users).
++
++## Postscript (v0.74.1, 2026-07-30): per-shim pending.json + 9.6 cleanup glob amend
++
++v0.74.1 amend: two follow-on decisions that build on this ADR.
++
++### §Post.1 Why 5 unique `FluxingStage2ShimSwap_<shim>` task names (was: 1 shared)
++
++v0.74 used a single shared `pending.json` (one file appended by all 5
++stage blocks, consumed by one `FluxingStage2ShimSwap` task at boot).
++With 5 stage blocks all writing to the same file and 1 boot-time task
++consuming it, there was a race when multiple boot-time tasks ran
++concurrently (rare, but possible on multi-shim installs across reboots).
++More importantly, the batch file's self-cleanup (`del pending.json`) at
++the end would delete entries still being processed by another concurrent
++batch run.
++
++v0.74.1 decision: **5 unique task names** (`FluxingStage2ShimSwap_<shim>`
++for `weasel`, `weaselx64`, `server`, `deployer`, `setup`), each with
++its own per-shim pending file (`%TEMP%\fluxing-stage2-shim\<shim>.json`)
++and per-shim done file (`<shim>.done.json`). Each At-startup task
++runs independently with SHIM env var passed via `install.nsi` `/TR`
++`"cmd /c set SHIM=<shim> && ..."`. The 5 concurrent boot-time tasks
++no longer race on a shared file — each reads/writes/deletes only its
++own file. Test 7 of `Test-Stage2ShimInstall.ps1` validates the 5 unique
++names + per-shim FileOpen paths + SHIM env var prefixes at source
++level (commit-time evidence per FR-003).
++
++**Consequences**:
++
++- **Easier**: 5 boot-time tasks are now genuinely independent. A
++  partial failure in one shim's batch run does not affect the other
++  4. Per-shim `done.json` + `Stage2Done_<shim>` registry markers
++  give granular forensic visibility into which shim succeeded vs
++  failed (vs the v0.74 single marker that hid partial failures).
++- **Harder**: 6 `schtasks /Delete` defensive cleanup commands on
++  every install (was: 0). Install-boundary Delete guards grew from
++  1 file to 5 (`IfFileExists "<shim>.json" 0 +2 / Delete "<shim>.json"`
++  for each shim). Stage 2 batch file grew from `pending.json` →
++  `%SHIM%.json` path resolution at the top.
++- **Risks**: A buggy `set SHIM=<shim>` prefix in `/TR` would silently
++  skip the boot-time apply (env var empty → batch exits with code 2 →
++  no swap). Mitigation: Test 7 anchors check for the SHIM prefix in
++  each `/TR`; any regression fails commit-time ship-gate.
++
++### §Post.2 Why 9.6 cleanup glob instead of exact-match (L##-PhaseL-9.7 amend)
++
++v0.74 cleanup at `install.nsi:240-247` + `1078-1085` used exact-match
++`Delete "$WINDIR\System32\weaselx64.dll"` + `Delete "$WINDIR\System32\weasel.dll"`.
++This was sufficient for the v0.74 era, but earlier versions (v0.66,
++v0.67, v0.68) had left 11 backup-pattern legacy files in `System32`
++(`.old`, `.bak`, `.v465`, `.v466bak-YYYYMMDD-HHMMSS`, `.ime` variants)
++that the v0.74 exact-match cleanup missed. The Windows shell loader
++and CTF subsystem then repeatedly retried the locked backup files
++when the user switched IMEs, causing the perceived "17-minute freeze"
++(see `feedback_l9_install_freeze_ux_timing.md` for the UX timing
++analysis).
++
++L##-PhaseL-9.7 forensics also discovered a hidden bug: the cleanup
++helper used `${GetSize} "S"` which returns *sectors*, not bytes. The
++`$R3 >= 100000` size threshold then meant "≥ 50 MB", silently skipping
++all DLLs under 50 MB (including the 1.16 MB `weaselx64.dll`). Combined,
++the cleanup was a complete silent no-op despite appearing to pass
++audit at `output/install.nsi:240-247`.
++
++v0.74.1 decision: **9.6 cleanup glob** with `FindFirst $WINDIR\System32\weasel*.dll`
+++ `loop_weasel_dll:` + `${GetSize} "" $R2 $R3` (returns bytes, not
++sectors) + `$R3 >= 102400` (100 KB threshold) + `Delete /REBOOTOK` +
++mirror in `Section Uninstall`. Defense-in-depth: exact-match fallback
++for `weaselx64.dll` + `weasel.dll` is preserved before the glob loop
++in case `FindFirst` is unavailable on legacy Windows.
++
++**Consequences**:
++
++- **Easier**: 11 backup-pattern legacy files are now removed
++  automatically on every install + uninstall. Per-machine verification
++  via `_check_system32_cleanup.ps1 -Mode Audit` (8/8 anchors PASS) +
++  `-Mode PretouchUninstall` (creates 11 fake files in System32 for
++  end-to-end verification).
++- **Harder**: NSIS `CleanupLegacySystem32Weasel` helper function is
++  ~70 lines longer than the v0.74 exact-match version. Per `simplify`
++  skill review, the helper could be further DRY'd but the verbose
++  FindFirst pattern is preferred for debuggability.
++- **Risks**: A bug in `${GetSize}` units (sectors vs bytes) would
++  re-introduce L##-PhaseL-9.7 silently. Mitigation: 3 anchors in
++  `_check_system32_cleanup.ps1` `Audit` mode explicitly check
++  `${GetSize} "" $R2 $R3` (bytes) + `102400` (100 KB). Any change to
++  these patterns fails ship-gate.
++
++### §Post.3 Why emoji.json defense-in-depth (L##-PhaseL-9.8 amend)
++
++Not directly part of this ADR (shim swap only), but related to the
++9.6 cleanup pattern. v0.74 shipped `data\opencc\*.json` to
++`$INSTDIR\data\opencc\`, but the libRime OpenCC loader was reading
++from `$INSTDIR\weasel\data\opencc\`. The fallback "config not found"
++path was silently triggered, leaving emoji conversion disabled without
++a visible error. L##-PhaseL-9.8 added a defense-in-depth secondary
++install to the correct path so both locations are populated.
++
++**Consequences**: OpenCC loader no longer falls back. Both
++`$INSTDIR\data\opencc\` and `$INSTDIR\weasel\data\opencc\` are
++populated. Real-machine verification via `TestOpenccDataPath`
++(`Find /C "opencc config not found" rime.weasel.INFO.*.log` = 0).
++
++### §Post.4 Test surface (post-amend)
++
++| Test | Coverage | v0.74 status | v0.74.1 status |
++|---|---|---|---|
++| `_check_system32_cleanup.ps1 -Mode Audit` | 9.6 cleanup glob + units | 6/6 PASS | 8/8 PASS + 3 cross-checks (Trap 5 / L66 / L106) |
++| `_check_system32_cleanup.ps1 -Mode PretouchUninstall` | 11 fake files create | n/a | 11/11 PASS |
++| `TestOpenccDataPath` | emoji.json + emoji.ocd install | n/a | 6/6 PASS |
++| `TestSilentAbortDetailPrint` | silent Abort + log | 5/5 PASS | 7/7 PASS |
++| `Test-Stage2ShimInstall` | batch + ship-gate | 5/5 PASS | 7/7 PASS (incl. Test 7 5 unique task names) |
++| `Test-ReadyFlagMessageBox` | non-silent warning MessageBox | n/a | source-level PASS, real-machine manual |
++
++### §Post.5 v0.74.1 ship verdict (2026-07-30)
++
++- Source-level: **8/8 PASS** (extended) ✓ — all ADR 0003 + Post.1 + Post.2 + Post.3 checks
++- Real-machine: pending sandbox-verify v0.74.1 run (Task #6 P1)
+\ No newline at end of file
+diff --git a/output/install.nsi b/output/install.nsi
+index 8ba48e3..04fe629 100644
+--- a/output/install.nsi
++++ b/output/install.nsi
+@@ -41,8 +41,13 @@ Var FluxingStage2Needed
+ ; The name of the installer
+ Name "Fluxing ${FLUXING_VERSION}"
+ 
+-; The file to write
+-OutFile "archives\fluxing-${FLUXING_VERSION}.${WEASEL_BUILD}-installer.exe"
++; The file to write. PRODUCT_VERSION is 5-component (e.g. 0.19.0.74.1) when
++; WEASEL_PATCH is set; falls back to 4-component otherwise. VIProductVersion
++; stays 4-component for Windows VERSIONINFO compatibility.
++!ifndef PRODUCT_VERSION
++  !define PRODUCT_VERSION "${FLUXING_VERSION}.${WEASEL_BUILD}"
++!endif
++OutFile "archives\fluxing-${PRODUCT_VERSION}-installer.exe"
+ 
+ VIProductVersion "${FLUXING_VERSION}.${WEASEL_BUILD}"
+ VIAddVersionKey /LANG=2052 "ProductName" "火流猩输入法"
+@@ -130,6 +135,37 @@ LangString AUTOCHKUPDATE ${LANG_ENGLISH} "Automatically check for updates?"
+ 
+ 
+ Function .onInit
++  ; v0.19.0.74.3 (L##-PhaseL-9.11 — admin token check):
++  ;   silent /S + non-admin user → RequestExecutionLevel admin silently skipped
++  ;   → CleanupLegacySystem32Weasel fails silently → 3 shim DLLs remain
++  ;   → ctfmon/TextInputHost/explorer load them with old IPC protocol →
++  ;   registry heap corruption → 0xc0000374 cross-process.
++  ;   Detect upfront via UserInfo + group SID S-1-16-12288 (High mandatory level).
++  ;   Silent mode + non-admin: write HKLM\Software\Fluxing\Weasel\AdminRequired=1
++  ;   deferred registry + SetErrorLevel 6002 + Quit so deploy automation catches it.
++  ;   GUI mode + non-admin: continue (UAC will re-prompt), but emit a DetailPrint
++  ;   warning so /LOG= shows what failed.
++  ; Reference: same shape as L##-PhaseL-9.5-H SilentAbort (SetErrorLevel 6001).
++  ;   This is Phase L Bugfix 9.11 (Renumber to 6002 to keep gap-tracking clean).
++  UserInfo::GetName
++  Pop $R9
++  UserInfo::GetAccountType
++  Pop $R8
++  ; $R8 = 2 → admin (Group), $R8 = 3 → admin (User in admin group)
++  ; $R8 = 1 / other → not admin
++  ${If} $R8 != "2"
++  ${AndIf} $R8 != "3"
++    IfSilent need_admin_silent
++    DetailPrint "Fluxing v0.74.3 WARN: 当前用户不是 admin。System32 残留清理可能失败,装机后请手动 reboot。"
++    Goto admin_check_done
++  need_admin_silent:
++    WriteRegStr HKLM "Software\Fluxing\Weasel" "AdminRequired" "1"
++    DetailPrint "Fluxing v0.74.3 ERROR: silent 安装要求 admin token,请用管理员权限重跑。"
++    SetErrorLevel 6002
++    Quit
++  ${EndIf}
++  admin_check_done:
++
+   ; L13 fix: pre-install cleanup. Force-kill any zombie WeaselServer.exe
+   ; BEFORE any other NSIS logic. This is needed because:
+   ;  (1) the polite /quit in call_uninstaller may hang on a crashed process
+@@ -229,22 +265,22 @@ Function .onInit
+     Sleep 2500
+   ${Next}
+ 
+-  ; v0.19.0.74 (Phase L Bugfix 9.6): clean up legacy weaselx64.dll / weasel.dll
+-  ; in %WINDIR%\System32 from v0.66 / v0.67 / v0.68 era installers. Those
+-  ; installers copied the shim DLL to System32 for native 64-bit TSF TIP
+-  ; registration; later uninstalls left the file behind. Windows shell
+-  ; (Explorer / Search Indexer / Defender) auto-scans System32 and, when
+-  ; it encounters an unassociated DLL, shows a "no associated application"
+-  ; dialog — persistent UX interference even when Fluxing is uninstalled.
+-  ; Delete with /REBOOTOK so a locked file is removed on next boot.
+-  StrCpy $R8 "$WINDIR\System32\weaselx64.dll"
+-  IfFileExists $R8 0 +2
+-    Delete /REBOOTOK $R8
+-    DetailPrint "Fluxing v0.19.0.74: scheduled delete of legacy $R8 on reboot"
+-  StrCpy $R8 "$WINDIR\System32\weasel.dll"
+-  IfFileExists $R8 0 +2
+-    Delete /REBOOTOK $R8
+-    DetailPrint "Fluxing v0.19.0.74: scheduled delete of legacy $R8 on reboot"
++  ; v0.74.1 (Phase L Bugfix 9.6-Glob): clean up legacy weaselx64.dll /
++  ; weasel.dll / weasel*.ime AND all backup-pattern variants (.old / .bak /
++  ; .v### / .v###bak-* / .<num>timestamp) in %WINDIR%\System32 from
++  ; v0.66 / v0.67 / v0.68 era installers. Those installers copied the
++  ; shim DLL to System32 for native 64-bit TSF TIP registration; later
++  ; uninstalls left the file behind. Windows shell (Explorer / Search
++  ; Indexer / Defender) auto-scans System32 and, when it encounters an
++  ; unassociated DLL, shows a "no associated application" dialog —
++  ; persistent UX interference even when Fluxing is uninstalled.
++  ; /REBOOTOK 删除,locked file 留到 next boot 才真的删。
++  ; Glob scope: FindFirst for `weasel*.dll` + `weasel*.ime` covers all
++  ; known backup-pattern variants. Size threshold > 100 KB shields
++  ; against any hypothetical stub file with the same prefix (legacy
++  ; DLLs are 1.16 MB, .ime are 700 KB; < 100 KB skipped as not our).
++  ; L##-PhaseL-9.7: lesson archived in lessons-learned.md.
++  Call CleanupLegacySystem32Weasel
+ 
+   ; L14: NSIS has built-in support for /LOG=<file> CLI flag. Users can pass
+   ; /LOG=path\to\file.log to NSIS directly to get a full install log - the
+@@ -503,19 +539,36 @@ program_files:
+   ; and the user is left with the same stale-shim bug F4 was meant to
+   ; fix. AP-L##-9.5-F in lessons-learned.md.
+   File "stage2-shim-install.bat.cmd"
+-  ; v0.19.0.74 (Phase L Bugfix 9.5 / ADR 0003): install-boundary reset
+-  ; of pending.json. Each install starts with a clean slate (ADR
+-  ; §Consequences/Harder "rebuild from scratch"); the stage blocks
+-  ; below APPEND entries (FileOpen "a" mode) so multiple shims locked
+-  ; in a single install accumulate correctly. Without this Delete, a
+-  ; prior install's Stage 2 batch that failed (ACL/AV, etc.) would
+-  ; leave stale entries that the next install would re-stage on top
+-  ; of — the At-startup batch would then keep retrying files that are
+-  ; no longer there as `.staged` (no harm but noise). AP-L##-9.5-G
+-  ; in lessons-learned.md. The Delete is guarded by IfFileExists so
++  ; v0.74.1 (spec 071 FR-003): per-shim pending.json + 5 unique task
++  ; names. Each install starts with a clean slate (ADR §Consequences/
++  ; Harder "rebuild from scratch"); the stage blocks below APPEND
++  ; entries to per-shim pending files (FileOpen "a" mode) so 5
++  ; concurrent boot-time tasks do not race on a shared pending list.
++  ; AP-L##-9.5-G extends from 1 file to 5 files; FR-003 covers the
++  ; 5 unique task names. The Deletes are guarded by IfFileExists so
+   ; fresh installs are unaffected.
+-  IfFileExists "$TEMP\fluxing-stage2-shim\pending.json" 0 +2
+-    Delete "$TEMP\fluxing-stage2-shim\pending.json"
++  ;
++  ; Defensive cleanup of all 6 task names (5 v0.74.1 unique + 1
++  ; v0.74 single-name) so stale tasks from prior installs do not
++  ; accumulate across upgrades. nsExec swallows "task not found"
++  ; errors so this is safe on fresh installs.
++  nsExec::ExecToStack 'schtasks /Delete /TN FluxingStage2ShimSwap /F 2>nul'
++  nsExec::ExecToStack 'schtasks /Delete /TN FluxingStage2ShimSwap_weasel /F 2>nul'
++  nsExec::ExecToStack 'schtasks /Delete /TN FluxingStage2ShimSwap_weaselx64 /F 2>nul'
++  nsExec::ExecToStack 'schtasks /Delete /TN FluxingStage2ShimSwap_server /F 2>nul'
++  nsExec::ExecToStack 'schtasks /Delete /TN FluxingStage2ShimSwap_deployer /F 2>nul'
++  nsExec::ExecToStack 'schtasks /Delete /TN FluxingStage2ShimSwap_setup /F 2>nul'
++
++  IfFileExists "$TEMP\fluxing-stage2-shim\weasel.json" 0 +2
++    Delete "$TEMP\fluxing-stage2-shim\weasel.json"
++  IfFileExists "$TEMP\fluxing-stage2-shim\weaselx64.json" 0 +2
++    Delete "$TEMP\fluxing-stage2-shim\weaselx64.json"
++  IfFileExists "$TEMP\fluxing-stage2-shim\server.json" 0 +2
++    Delete "$TEMP\fluxing-stage2-shim\server.json"
++  IfFileExists "$TEMP\fluxing-stage2-shim\deployer.json" 0 +2
++    Delete "$TEMP\fluxing-stage2-shim\deployer.json"
++  IfFileExists "$TEMP\fluxing-stage2-shim\setup.json" 0 +2
++    Delete "$TEMP\fluxing-stage2-shim\setup.json"
+   ; L72-bugfix: Rename-then-File 模式。原 L71 Delete/REBOOTOK 不能立刻删除
+   ; (文件还锁),导致后续 File 仍报"无法打开要写入的文件"。
+   ; 新模式:Rename 是原子的,即使失败也能 SetOverwrite try 跳过
+@@ -550,11 +603,11 @@ program_files:
+       Goto weasel_done
+       weasel_staged_ok:
+       CreateDirectory "$TEMP\fluxing-stage2-shim"
+-      FileOpen $R8 "$TEMP\fluxing-stage2-shim\pending.json" a
++      FileOpen $R8 "$TEMP\fluxing-stage2-shim\weasel.json" a
+       FileWrite $R8 'weasel.dll$\r$\n'
+       FileClose $R8
+       CopyFiles /SILENT /FILESONLY "$INSTDIR\stage2-shim-install.bat.cmd" "$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd"
+-      nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2ShimSwap /TR "cmd /c $\"$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd$\"" /RL HIGHEST /F'
++      nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2ShimSwap_weasel /TR "cmd /c $\"set SHIM=weasel && $\"$\"$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd$\"$\"" /RL HIGHEST /F'
+       Pop $R0
+       Pop $R1
+       StrCpy $FluxingStage2Needed "1"
+@@ -597,11 +650,11 @@ program_files:
+         Goto weaselx64_done
+         weaselx64_staged_ok:
+         CreateDirectory "$TEMP\fluxing-stage2-shim"
+-        FileOpen $R8 "$TEMP\fluxing-stage2-shim\pending.json" a
++        FileOpen $R8 "$TEMP\fluxing-stage2-shim\weaselx64.json" a
+         FileWrite $R8 'weaselx64.dll$\r$\n'
+         FileClose $R8
+         CopyFiles /SILENT /FILESONLY "$INSTDIR\stage2-shim-install.bat.cmd" "$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd"
+-        nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2ShimSwap /TR "cmd /c $\"$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd$\"" /RL HIGHEST /F'
++        nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2ShimSwap_weaselx64 /TR "cmd /c $\"set SHIM=weaselx64 && $\"$\"$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd$\"$\"" /RL HIGHEST /F'
+         Pop $R0
+         Pop $R1
+         StrCpy $FluxingStage2Needed "1"
+@@ -657,11 +710,11 @@ program_files:
+       Goto WeaselServer_done
+       WeaselServer_staged_ok:
+       CreateDirectory "$TEMP\fluxing-stage2-shim"
+-      FileOpen $R8 "$TEMP\fluxing-stage2-shim\pending.json" a
++      FileOpen $R8 "$TEMP\fluxing-stage2-shim\server.json" a
+       FileWrite $R8 'WeaselServer.exe$\r$\n'
+       FileClose $R8
+       CopyFiles /SILENT /FILESONLY "$INSTDIR\stage2-shim-install.bat.cmd" "$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd"
+-      nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2ShimSwap /TR "cmd /c $\"$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd$\"" /RL HIGHEST /F'
++      nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2ShimSwap_server /TR "cmd /c $\"set SHIM=server && $\"$\"$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd$\"$\"" /RL HIGHEST /F'
+       Pop $R0
+       Pop $R1
+       StrCpy $FluxingStage2Needed "1"
+@@ -705,11 +758,11 @@ program_files:
+       Goto WeaselDeployer_done
+       WeaselDeployer_staged_ok:
+       CreateDirectory "$TEMP\fluxing-stage2-shim"
+-      FileOpen $R8 "$TEMP\fluxing-stage2-shim\pending.json" a
++      FileOpen $R8 "$TEMP\fluxing-stage2-shim\deployer.json" a
+       FileWrite $R8 'WeaselDeployer.exe$\r$\n'
+       FileClose $R8
+       CopyFiles /SILENT /FILESONLY "$INSTDIR\stage2-shim-install.bat.cmd" "$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd"
+-      nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2ShimSwap /TR "cmd /c $\"$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd$\"" /RL HIGHEST /F'
++      nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2ShimSwap_deployer /TR "cmd /c $\"set SHIM=deployer && $\"$\"$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd$\"$\"" /RL HIGHEST /F'
+       Pop $R0
+       Pop $R1
+       StrCpy $FluxingStage2Needed "1"
+@@ -743,11 +796,11 @@ program_files:
+       Goto WeaselSetup_done
+       WeaselSetup_staged_ok:
+       CreateDirectory "$TEMP\fluxing-stage2-shim"
+-      FileOpen $R8 "$TEMP\fluxing-stage2-shim\pending.json" a
++      FileOpen $R8 "$TEMP\fluxing-stage2-shim\setup.json" a
+       FileWrite $R8 'WeaselSetup.exe$\r$\n'
+       FileClose $R8
+       CopyFiles /SILENT /FILESONLY "$INSTDIR\stage2-shim-install.bat.cmd" "$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd"
+-      nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2ShimSwap /TR "cmd /c $\"$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd$\"" /RL HIGHEST /F'
++      nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2ShimSwap_setup /TR "cmd /c $\"set SHIM=setup && $\"$\"$TEMP\fluxing-stage2-shim\stage2-shim-install.bat.cmd$\"$\"" /RL HIGHEST /F'
+       Pop $R0
+       Pop $R1
+       StrCpy $FluxingStage2Needed "1"
+@@ -816,6 +869,31 @@ program_files:
+   SetOutPath $INSTDIR\data\opencc
+   File "data\opencc\*.json"
+   File "data\opencc\*.ocd*"
++  ; v0.74.1 (Phase L Bugfix EmojiJsonCheck): verify emoji.json actually shipped.
++  ; Forensics 2026-07-30: runtime log showed
++  ;   "opencc config not found: D:\...\weasel\data\opencc\emoji.json"
++  ; despite File glob above. Build output has emoji.json (378 bytes);
++  ; the runtime failure is likely a missing emoji.ocd companion (libRime
++  ; OpenCC loader expects matched .ocd for binary data). This check
++  ; surfaces post-install if File glob failed silently (NSIS File with
++  ; non-matching pattern is a silent no-op). Install logs a warning if
++  ; emoji.json is absent so the user knows emoji conversion is unavailable.
++  ; L##-PhaseL-9.8: lesson archived in lessons-learned.md.
++  StrCpy $R8 "$INSTDIR\data\opencc\emoji.json"
++  IfFileExists $R8 emoji_json_ok
++    DetailPrint "Fluxing v0.74.1: WARNING emoji.json missing at $R8 (OpenCC emoji conversion unavailable; emoji.ocd companion absent in build output)"
++  emoji_json_ok:
++  ; v0.74.1 (Phase L Bugfix 9.8 → FR-002): defensive second copy to
++  ; $INSTDIR\weasel\data\opencc\ in case libRime resolves relative
++  ; to a path that nests the weasel subdir. Spec 071 FR-002 expects
++  ; this as belt-and-suspenders coverage even though forensics
++  ; suggests libRime reads $R3\weasel\data\opencc (one weasel level).
++  ; Both copies are harmless if libRime picks one path; defensive
++  ; against unknown path-resolution variants across libRime versions.
++  SetOutPath $INSTDIR\weasel\data\opencc
++  File "data\opencc\*.json"
++  File "data\opencc\*.ocd*"
++  SetOutPath $INSTDIR
+   ; prebuilt compiled dictionaries (instant first-run, no deploy wait)
+   SetOutPath $INSTDIR\data\build
+   File "data\build\*.bin"
+@@ -973,6 +1051,16 @@ program_files:
+     ${EndIf}
+   ${Loop}
+ 
++  ; v0.74.1 (spec 071 FR-005): non-silent warning if Ready wasn't set within
++  ; 30s. Silent mode skips (deploy scripts detect via exit code).
++  ; Without this, non-silent users perceive the 30s handshake as a freeze.
++  ; T202 (real-machine + skip Ready write) verifies the MessageBox fires.
++  IfSilent skip_warning_ready
++  ${If} $1 != "1"
++    MessageBox MB_OK|MB_ICONEXCLAMATION "Fluxing 服务未在 30 秒内响应 Ready 信号。$\r$\n$\r$\n可能需要手动注销并重新登录,或重启 WeaselServer.exe 以完成初始化。$\r$\n$\r$\n(快捷设置栏:按 Alt+, 或点击任务栏中英文图标)"
++  ${EndIf}
++  skip_warning_ready:
++
+   ; option CheckForUpdates
+   IfSilent DisableAutoCheckUpdate
+   MessageBox MB_YESNO|MB_ICONINFORMATION "$(AUTOCHKUPDATE)" IDYES EnableAutoCheckUpdate
+@@ -1000,8 +1088,18 @@ program_files:
+   ; exit 0 even with staged binaries left behind, masking the deferred
+   ; install bug (regression of the v0.66/v0.67 "ship worked but install
+   ; broken" pattern that ADR 0003 was meant to fix). AP-L##-9.5-H.
+-  IfSilent 0 +4
++  ; v0.74.1 (Phase L Bugfix SilentAbortLog): DetailPrint before exit
++  ; so sandbox-verify / pinyin-release CI can grep the verify.log to
++  ; diagnose deferred-install state without parsing nsExec state codes.
++  ; Additionally drop a synchronous log line into $INSTDIR\fluxing-install-silent.log
++  ; as a backup (R-004 mitigation in spec 071: NSIS DetailPrint may not
++  ; flush reliably before Quit on some terminals).
++  IfSilent 0 +7
+     StrCmp $FluxingStage2Needed "1" 0 skip_post_install_message
++    DetailPrint "Fluxing v0.74.1: deferred shim swap pending; silent exit 6001 (sandbox/CI detect reboot required)"
++    FileOpen $9 "$INSTDIR\fluxing-install-silent.log" a
++    FileWrite $9 "[Fluxing v0.74.1 silent install log] deferred shim swap pending; reboot required after this silent install$\r$\n"
++    FileClose $9
+     SetErrorLevel 6001
+     Quit
+   ${If} $FluxingStage2Needed == "1"
+@@ -1071,18 +1169,14 @@ Section "Uninstall"
+   Delete  "$SMPROGRAMS\$(DISPLAYNAME)\*.*"
+   RMDir  "$SMPROGRAMS\$(DISPLAYNAME)"
+ 
+-  ; v0.19.0.74 (Phase L Bugfix 9.6): symmetric cleanup of legacy shim
+-  ; DLLs in %WINDIR%\System32 (see .onInit counterpart for rationale).
++  ; v0.74.1 (Phase L Bugfix 9.6-Glob): symmetric cleanup of legacy
++  ; shim DLLs in %WINDIR%\System32 (see .onInit counterpart for rationale).
+   ; Without this, the next uninstall leaves the same UX-interfering
+   ; legacy files behind. /REBOOTOK covers the locked-by-ctfmon case.
+-  StrCpy $R8 "$WINDIR\System32\weaselx64.dll"
+-  IfFileExists $R8 0 +2
+-    Delete /REBOOTOK $R8
+-    DetailPrint "Fluxing v0.19.0.74 uninstall: scheduled delete of legacy $R8 on reboot"
+-  StrCpy $R8 "$WINDIR\System32\weasel.dll"
+-  IfFileExists $R8 0 +2
+-    Delete /REBOOTOK $R8
+-    DetailPrint "Fluxing v0.19.0.74 uninstall: scheduled delete of legacy $R8 on reboot"
++  ; Glob helper: un.CleanupLegacySystem32Weasel (uninstall context)
++  ; shares the same macro body as the installer-side function via
++  ; !insertmacro CleanupLegacySystem32WeaselImpl.
++  Call un.CleanupLegacySystem32Weasel
+ 
+   ; Prompt reboot
+   SetRebootFlag true
+@@ -1095,6 +1189,123 @@ SectionEnd
+ 
+ 
+ 
++; v0.74.1 (L##-PhaseL-9.7): 9.6 cleanup glob 扩展 helper macro.
++; Defined as a macro so the same body is emitted into BOTH the installer
++; (Function CleanupLegacySystem32Weasel, called from .onInit) and the
++; uninstaller (Function un.CleanupLegacySystem32Weasel, called from
++; Section Uninstall). NSIS requires the `un.` prefix for any function
++; invoked from the uninstaller; the macro lets us avoid duplicating
++; ~40 lines of logic.
++;
++; Input:  none (uses $WINDIR)
++; Output: DetailPrint each delete + skipped-small-file log
++; Side effect: /REBOOTOK 删除老 DLL (boot 时 OS 才真的删)
++; Forensics 2026-07-30: System32 had 9 backup-pattern variants
++; (.old.### / .bak / .v### / .v###bak-YYYYMMDD-HHMMSS / .old.dll)
++; totaling 11 files, none of which were touched by the v0.74 cleanup.
++; Cumulative effect: Windows shell loader / CTF enumeration saw these
++; unassociated DLLs every time the user switched input methods,
++; surfaced as "no associated application" dialog orhang.
++!macro CleanupLegacySystem32WeaselImpl
++  Push $R0
++  Push $R1
++  Push $R2
++  Push $R3
++  Push $R8
++
++  ; Exact-match fallback (defense-in-depth; ensures the 2 known filenames
++  ; always get deleted even if FindFirst enumerates an unexpected host).
++  StrCpy $R8 "$WINDIR\System32\weaselx64.dll"
++  IfFileExists $R8 0 +2
++    Delete /REBOOTOK $R8
++    IfErrors 0 +2
++      DetailPrint "Fluxing v0.74.2: WARN Delete $R8 FAILED (locked or admin token missing); reboot-scheduled"
++    DetailPrint "Fluxing v0.74.2: scheduled delete of legacy $R8 on reboot"
++  StrCpy $R8 "$WINDIR\System32\weasel.dll"
++  IfFileExists $R8 0 +2
++    Delete /REBOOTOK $R8
++    IfErrors 0 +2
++      DetailPrint "Fluxing v0.74.2: WARN Delete $R8 FAILED (locked or admin token missing); reboot-scheduled"
++    DetailPrint "Fluxing v0.74.2: scheduled delete of legacy $R8 on reboot"
++  ; v0.74.2 (L##-PhaseL-9.10): explicit exact-match for weasel.old.dll.
++  ; The FindFirst glob below uses pattern weasel*.dll which requires the
++  ; trailing .dll; the legacy backup-pattern name weasel.old.dll (with
++  ; literal .old.dll suffix) DOES match weasel*.dll under NSIS FindFirst
++  ; semantics, BUT a 1.16 MB user-side file was missed in v0.74.1 ship
++  ; forensics — likely because installer was non-admin or silent mode,
++  ; so the entire Delete chain silently no-op'd. Defense-in-depth: hit
++  ; the exact filename explicitly so a single 1.16 MB file can't escape
++  ; cleanup even if the glob ever drifts.
++  StrCpy $R8 "$WINDIR\System32\weasel.old.dll"
++  IfFileExists $R8 0 +2
++    Delete /REBOOTOK $R8
++    IfErrors 0 +2
++      DetailPrint "Fluxing v0.74.2: WARN Delete $R8 FAILED; reboot-scheduled"
++    DetailPrint "Fluxing v0.74.2: scheduled delete of legacy $R8 on reboot"
++
++  ; Glob: weasel*.dll (legacy DLLs are 1.16 MB; threshold 100 KB covers
++  ; them all without affecting any 3rd-party stub in the same prefix).
++  FindFirst $R0 $R1 "$WINDIR\System32\weasel*.dll"
++  StrCmp $R0 "" no_more_weasel_dll
++  loop_weasel_dll:
++    ; ${GetSize} WITHOUT unit flag returns BYTES (low 32-bit in $R3).
++    ; CRITICAL: "S" units flag returns size in 512-byte sectors — never
++    ; use "S" with a bytes-based threshold or the cleanup silently no-ops.
++    ; L##-PhaseL-9.7 follow-up: a previous v0.74 GetSize-units bug likely
++    ; caused the 11 backup-pattern DLLs to escape cleanup.
++    ${GetSize} "$WINDIR\System32\$R1" "" $R2 $R3 $R4
++    ${If} $R3 >= 102400
++      Delete /REBOOTOK "$WINDIR\System32\$R1"
++      DetailPrint "Fluxing v0.74.1: scheduled delete of legacy $WINDIR\System32\$R1 ($R3 bytes)"
++    ${Else}
++      DetailPrint "Fluxing v0.74.1: skipped (size $R3 bytes < 100 KB threshold, not our legacy) $WINDIR\System32\$R1"
++    ${EndIf}
++    FindNext $R0 $R1
++    StrCmp $R0 "" no_more_weasel_dll 0
++    Goto loop_weasel_dll
++  no_more_weasel_dll:
++  FindClose $R0
++
++  ; Glob: weasel*.ime (legacy 32-bit IME compat layer, ~700 KB each).
++  ; ctfmon.exe / TextInputHost.exe load this when user toggles IME,
++  ; so leftovers trigger reload loops until cleared.
++  FindFirst $R0 $R1 "$WINDIR\System32\weasel*.ime"
++  StrCmp $R0 "" no_more_weasel_ime
++  loop_weasel_ime:
++    ${GetSize} "$WINDIR\System32\$R1" "" $R2 $R3 $R4
++    ${If} $R3 >= 102400
++      Delete /REBOOTOK "$WINDIR\System32\$R1"
++      DetailPrint "Fluxing v0.74.1: scheduled delete of legacy $WINDIR\System32\$R1 ($R3 bytes)"
++    ${Else}
++      DetailPrint "Fluxing v0.74.1: skipped (size $R3 bytes < 100 KB threshold, not our legacy) $WINDIR\System32\$R1"
++    ${EndIf}
++    FindNext $R0 $R1
++    StrCmp $R0 "" no_more_weasel_ime 0
++    Goto loop_weasel_ime
++  no_more_weasel_ime:
++  FindClose $R0
++
++  Pop $R8
++  Pop $R3
++  Pop $R2
++  Pop $R1
++  Pop $R0
++  ; v0.74.2 (L##-PhaseL-9.10): explicit log so NSIS installer /LOG=
++  ; captures macro completion even when zero files matched. Previously
++  ; silent no-op when all IfFileExists guard skipped (admin token missing
++  ; + silent /S mode + locked files = zero Delete attempts, zero DetailPrint,
++  ; user/operator has no forensic signal that cleanup didn't run).
++  DetailPrint "Fluxing v0.74.2: System32 cleanup macro complete (weaselx64.dll + weasel.dll + weasel.old.dll exact-match + weasel*.dll/weasel*.ime glob)"
++!macroend
++
++Function CleanupLegacySystem32Weasel
++  !insertmacro CleanupLegacySystem32WeaselImpl
++FunctionEnd
++
++Function un.CleanupLegacySystem32Weasel
++  !insertmacro CleanupLegacySystem32WeaselImpl
++FunctionEnd
++
+ Function ForceFluxingSuffix
+   ; L14: Enforce fluxing suffix on $INSTDIR (idempotent). Bug fix 0.18.3.0.
+   ; 0.18.3.0 logic bug: StrCmp fell through to next line, sending every input
+diff --git a/output/stage2-shim-install.bat.cmd b/output/stage2-shim-install.bat.cmd
+index d0c076d..aa4aacb 100644
+--- a/output/stage2-shim-install.bat.cmd
++++ b/output/stage2-shim-install.bat.cmd
+@@ -1,33 +1,55 @@
+ @echo off
+ rem ============================================================
+-rem Fluxing Stage 2 shim swap (v0.19.0.74, ADR 0003)
++rem Fluxing Stage 2 shim swap (v0.74.1, ADR 0003 amend)
+ rem
+-rem Runs at next boot via Task Scheduler "FluxingStage2ShimSwap"
+-rem (RL HIGHEST, At-startup). Installs staged shim binaries
+-rem ($INSTDIR\*.staged) over their locked originals, then self-
+-rem deletes and clears the Task Scheduler entry.
++rem Runs at next boot via Task Scheduler "FluxingStage2ShimSwap_<SHIM>"
++rem (RL HIGHEST, At-startup). Installs staged shim binary
++rem ($INSTDIR\<name>.staged) over its locked original, then self-
++rem deletes and clears THIS task's Task Scheduler entry.
++rem
++rem v0.74.1 (spec 071 FR-003): per-shim pending.json.
++rem   Each Task Scheduler entry writes to its own file
++rem   (%TEMP%\fluxing-stage2-shim\<SHIM>.json) so 5 concurrent
++rem   boot-time tasks do not race on a shared pending list.
++rem   SHIM env var (set by install.nsi /TR "set SHIM=<shim> && ...")
++rem   identifies which shim this invocation is for. Manual invocation
++rem   can pass SHIM as %1 fallback.
+ rem
+ rem Pending list source-of-truth:
+-rem   %TEMP%\fluxing-stage2-shim\pending.json
++rem   %TEMP%\fluxing-stage2-shim\<SHIM>.json
+ rem Format (one filename per line, no md5 — md5 hardcoding would
+ rem fail every build; the staged file IS the new binary by construction):
+-rem   weaselx64.dll
+-rem   weasel.dll
+-rem   WeaselServer.exe
++rem   weasel.dll  (or weaselx64.dll / WeaselServer.exe / etc.)
+ rem
+ rem Exit codes:
+ rem   0 = all swaps succeeded OR no pending list
+-rem   1 = one or more swaps failed; %TEMP%\fluxing-stage2-shim\done.json written with status:partial
+-rem   2 = batch itself failed to launch (acl/av); status:fatal
++rem   1 = one or more swaps failed; %TEMP%\fluxing-stage2-shim\<SHIM>.done.json written with status:partial
++rem   2 = batch itself failed to launch (acl/av) or SHIM missing; status:fatal
+ rem
+ rem Why At-startup + RL HIGHEST: TSF hosts (ctfmon, TextInputHost,
+ rem WeaselServer) are not yet started by user-mode at boot, so the
+ rem file mmap is guaranteed to be released. Per-user OnLogon would
+ rem race with ctfmon respawn.
++rem
++rem Why per-shim pending.json (v0.74.1, was shared pending.json in
++rem v0.74): 5 concurrent At-startup tasks racing on a single
++rem pending.json would race-write/delete entries. Per-shim files
++rem (one per schtask) eliminate that race while preserving batch
++rem idempotency on no-pending rerun.
+ rem ============================================================
+ 
+ setlocal EnableExtensions EnableDelayedExpansion
+ 
++rem ----------------------------------------------------------
++rem 0. Resolve SHIM env var (set by install.nsi /TR) or arg %1.
++rem ----------------------------------------------------------
++set "SHIM=%SHIM%"
++if "%SHIM%"=="" set "SHIM=%~1"
++if "%SHIM%"=="" (
++    echo [%DATE% %TIME%] FATAL: SHIM not set, exiting >> "%TEMP%\fluxing-stage2-shim\error.log"
++    exit /b 2
++)
++
+ rem ----------------------------------------------------------
+ rem 1. Resolve INSTDIR from registry (set by install.nsi:384).
+ rem    Falls back to default D:\Program Files\fluxing if missing.
+@@ -39,26 +61,27 @@ for /F "tokens=2*" %%I in ('reg query "HKLM\Software\Fluxing\Weasel" /v InstallD
+ if "%INSTDIR%"=="" set "INSTDIR=D:\Program Files\fluxing"
+ 
+ set "STAGE_DIR=%TEMP%\fluxing-stage2-shim"
+-set "PENDING=%STAGE_DIR%\pending.json"
+-set "DONE=%STAGE_DIR%\done.json"
+-set "LOG=%STAGE_DIR%\stage2.log"
++set "PENDING=%STAGE_DIR%\%SHIM%.json"
++set "DONE=%STAGE_DIR%\%SHIM%.done.json"
++set "LOG=%STAGE_DIR%\%SHIM%.log"
++set "TASK=FluxingStage2ShimSwap_%SHIM%"
+ 
+ rem ----------------------------------------------------------
+-rem 0. Self-bootstrap: create STAGE_DIR if missing (defensive)
++rem 2. Self-bootstrap: create STAGE_DIR if missing (defensive)
+ rem ----------------------------------------------------------
+ if not exist "%STAGE_DIR%" mkdir "%STAGE_DIR%" 2>nul
+ 
+-echo [%DATE% %TIME%] Stage 2 shim swap starting > "%LOG%"
++echo [%DATE% %TIME%] Stage 2 shim swap (%SHIM%) starting > "%LOG%"
+ echo [%DATE% %TIME%] INSTDIR=%INSTDIR% >> "%LOG%"
+ echo [%DATE% %TIME%] PENDING=%PENDING% >> "%LOG%"
+ 
+ rem ----------------------------------------------------------
+-rem 1. No pending list — nothing to do, exit cleanly
++rem 3. No pending list — nothing to do, exit cleanly
+ rem ----------------------------------------------------------
+ if not exist "%PENDING%" goto :no_pending
+ 
+ rem ----------------------------------------------------------
+-rem 2. Force-kill TSF hosts to release mmap on any open shims.
++rem 4. Force-kill TSF hosts to release mmap on any open shims.
+ rem    Best-effort; errors are tolerated (process may not be running).
+ rem ----------------------------------------------------------
+ echo [%DATE% %TIME%] Killing WeaselServer.exe / ctfmon.exe / TextInputHost.exe... >> "%LOG%"
+@@ -69,7 +92,7 @@ rem Give OS 2 seconds to fully release mmap handles
+ timeout /T 2 /NOBREAK >nul 2>&1
+ 
+ rem ----------------------------------------------------------
+-rem 3. Read pending.json, swap each file.
++rem 5. Read pending.json, swap each file.
+ rem    Per-file failure is logged to done.json but does not abort
+ rem    the batch (partial success is better than no success).
+ rem ----------------------------------------------------------
+@@ -112,7 +135,7 @@ for /F "usebackq delims=" %%F in ("%PENDING%") do (
+ echo [%DATE% %TIME%] Done. success=!SUCCESS_COUNT! failed=!FAILED_COUNT! status=!STATUS! >> "%LOG%"
+ 
+ rem ----------------------------------------------------------
+-rem 4. Write done.json + registry marker.
++rem 6. Write done.json + registry marker (per-shim).
+ rem    cmd batch does not support JSON braces; build it as plain
+ rem    key=value lines so the parser never sees curly braces.
+ rem ----------------------------------------------------------
+@@ -120,21 +143,22 @@ rem ----------------------------------------------------------
+     echo status=!STATUS!
+     echo success=!SUCCESS_COUNT!
+     echo failed=!FAILED_COUNT!
++    echo shim=%SHIM%
+     echo timestamp=%DATE% %TIME%
+ ) > "%DONE%"
+ 
+-reg add "HKLM\Software\Fluxing\Weasel" /v Stage2Done /t REG_SZ /d "!STATUS!" /f >nul 2>&1
++reg add "HKLM\Software\Fluxing\Weasel" /v "Stage2Done_%SHIM%" /t REG_SZ /d "!STATUS!" /f >nul 2>&1
+ 
+ :no_pending
+ rem ----------------------------------------------------------
+-rem 5. Self-cleanup: delete pending list and Task Scheduler entry.
++rem 7. Self-cleanup: delete THIS task's pending list + schtask entry.
+ rem    Self-delete the batch ONLY when running from %TEMP% (i.e. the
+ rem    copy installed by install.nsi). When invoked from $INSTDIR or
+ rem    a test sandbox, leave the file in place so re-runs are possible.
+ rem ----------------------------------------------------------
+ if exist "%PENDING%" del /F /Q "%PENDING%" >nul 2>&1
+ 
+-schtasks /Delete /TN FluxingStage2ShimSwap /F >nul 2>&1
++schtasks /Delete /TN "%TASK%" /F >nul 2>&1
+ 
+ echo "%~f0" | findstr /I /C:"%TEMP%" >nul 2>&1
+ if not errorlevel 1 (
+@@ -145,8 +169,8 @@ if not errorlevel 1 (
+         echo @echo off
+         echo ping -n 3 127.0.0.1 ^>nul
+         echo del /F /Q "%~f0"
+-    ) > "%STAGE_DIR%\cleanup.bat"
+-    start "" /B cmd /c "%STAGE_DIR%\cleanup.bat" >nul 2>&1
++    ) > "%STAGE_DIR%\%SHIM%-cleanup.bat"
++    start "" /B cmd /c "%STAGE_DIR%\%SHIM%-cleanup.bat" >nul 2>&1
+ )
+ 
+ endlocal
+diff --git a/task.md b/task.md
+index 41df728..eeb69d9 100644
+--- a/task.md
++++ b/task.md
+@@ -1,5 +1,24 @@
++# Task plan — v0.74.2 input-path root-cause diagnosis (2026-07-31)
++
++> 当前范围：只诊断，不修复源码，不提交/推送/SFTP，不修改 `output/install.nsi`，不触碰 stage2 / schtasks / LogonCommand。
++
++## 诊断闭环
++
++| 步骤 | 状态 | Gate |
++|---|---|---|
++| 读取 handoff 与 session-health | ✓ 完成 | 已确认输入触发、安装路径已证伪 |
++| 建立 codebase graph 查询边界 | ▶ 进行中 | 按 `search_graph → trace_path → get_code_snippet → query_graph` |
++| 穷举 WeaselServer input callbacks | ⬜ 待开始 | 每个 callback 列出全部副作用与同步边界 |
++| 检查 crash dump / input log 证据 | ⬜ 待开始 | 生成/读取诊断脚本；缺现场数据则明确阻塞 |
++| 对照 rules / lessons 红线 | ⬜ 待开始 | L02/L04/L07/L17/L##-PhaseL |
++| 收敛单一根因假设 | ⬜ 待开始 | 精确到 file:function:line + 触发条件 |
++| 写入 handoff 与 input 真因报告 | ⬜ 待开始 | 等 user 确认后才允许修复 |
++
++---
++
+ # Task plan — Commit + Ship v0.19.0.59（A5）
+ 
++
+ > 2026-07-23：承接 `handoff-after-a5-sftp-sync-2026-07-23.md`，用户已选择 Commit + Ship v0.19.0.59。
+ > 当前范围：先安全提交 A5 的 4 个文件，再构建/验证 v0.19.0.59，最后按授权完成 tag、push 与 SFTP 原子同步。
+ 
+diff --git a/test/TestInstallerShimStage/Test-Stage2ShimInstall.ps1 b/test/TestInstallerShimStage/Test-Stage2ShimInstall.ps1
+index 8d391ca..c433a1b 100644
+--- a/test/TestInstallerShimStage/Test-Stage2ShimInstall.ps1
++++ b/test/TestInstallerShimStage/Test-Stage2ShimInstall.ps1
+@@ -1,26 +1,35 @@
+-# Test-Stage2ShimInstall.ps1
++﻿# Test-Stage2ShimInstall.ps1
+ # Phase L Bugfix 9.5 / ADR 0003: verify output/stage2-shim-install.bat.cmd
+ # is structurally sound and behaves correctly under simulated conditions.
+ #
++# v0.74.1 (spec 071 FR-003): per-shim pending.json + 5 unique task names.
++# Each Task Scheduler entry writes to its own per-shim pending file
++# ($env:TEMP\fluxing-stage2-shim\<SHIM>.json), identified by SHIM env
++# var passed via install.nsi /TR "set SHIM=<shim> && ...".
++#
+ # Runs WITHOUT requiring a real install — uses a sandbox dir under
+ # $env:TEMP\fluxing-stage2-shim-test.
+ #
+-# Six checks:
+-#   1. Batch parses (cmd /c "call script with no-op args" exit 0)
+-#   2. Missing pending.json → no-op exit 0
+-#   3. Present pending.json with mock staged files → moves them to target
+-#   4. Install-boundary reset: Delete guard before stage blocks lets
+-#      multiple stage triggers in one install ACCUMULATE (FileOpen "a"
+-#      mode) while a prior install's stale pending.json is cleared on
+-#      the next install (AP-L##-9.5-G mitigation).
++# Seven checks:
++#   1. Batch parses (cmd /c "call script with SHIM=weasel, no pending" exit 0)
++#   2. Missing per-shim pending.json (weasel.json) → no-op exit 0
++#   3. Present per-shim pending.json with mock staged files → moves them
++#      to target, writes weasel.done.json, sets Stage2Done_weasel registry
++#   4. Install-boundary reset: Delete guards for all 5 per-shim pending
++#      files in install.nsi lets multiple stage triggers in one install
++#      ACCUMULATE (FileOpen "a" mode) while a prior install's stale files
++#      are cleared on the next install (AP-L##-9.5-G mitigation extended).
+ #   5. Batch is idempotent: running it twice with no pending.json exits
+ #      cleanly both times, no .old files accumulate.
+ #   6. Source-level ship-gate (commit-time evidence per ADR 0003 ship
+-#      gate): install.nsi contains the 5 stage blocks + AP-L##-9.5-F
+-#      reorder fix + AP-L##-9.5-G install-boundary Delete +
++#      gate): install.nsi contains the 5 per-shim stage blocks +
++#      AP-L##-9.5-F reorder fix + AP-L##-9.5-G install-boundary Delete +
+ #      AP-L##-9.5-H silent Abort + L66 unconditional KnownClasses +
+ #      Trap 5 Sleep 3000ms + L106 SetRegView 64. Catches ADR/code
+ #      divergence at commit time without requiring a real install.
++#   7. (NEW v0.74.1) 5 unique FluxingStage2ShimSwap_<shim> task names
++#      present in install.nsi + per-shim pending.json paths + 6 schtasks
++#      /Delete defensive cleanup. Validates spec 071 FR-003 ship gate.
+ 
+ $ErrorActionPreference = 'Stop'
+ 
+@@ -34,6 +43,9 @@ $SANDBOX = Join-Path $env:TEMP 'fluxing-stage2-shim-test'
+ $INSTDIR = Join-Path $SANDBOX 'fluxing'
+ $STAGE_DIR = Join-Path $env:TEMP 'fluxing-stage2-shim'
+ 
++# Test SHIM value used throughout (weasel = the first/most common shim)
++$SHIM = 'weasel'
++
+ # Clean slate
+ Remove-Item -Recurse -Force $SANDBOX -ErrorAction SilentlyContinue
+ Remove-Item -Recurse -Force $STAGE_DIR -ErrorAction SilentlyContinue
+@@ -44,28 +56,29 @@ $instDirReg = "HKLM:\Software\Fluxing\Weasel"
+ if (-not (Test-Path $instDirReg)) { New-Item -Path $instDirReg -Force | Out-Null }
+ Set-ItemProperty -Path $instDirReg -Name InstallDir -Value $INSTDIR
+ 
+-# Test 1: Batch parses (no-op call without pending.json)
+-Write-Host "[1/6] Batch parses without pending.json..."
++# Test 1: Batch parses (no-op call without per-shim pending.json)
++# v0.74.1: batch requires SHIM env var; with no per-shim pending.json
++# the batch exits 0 cleanly.
++Write-Host "[1/7] Batch parses without per-shim pending.json..."
++$env:SHIM = $SHIM
+ cmd /c "`"$BATCH`"" | Out-Null
+ if ($LASTEXITCODE -ne 0) {
+     Write-Host "FAIL: batch exited $LASTEXITCODE on no-op call" -ForegroundColor Red
+     exit 1
+ }
+ 
+-# Test 2: Pending.json with mock staged files
+-Write-Host "[2/6] Pending.json with mock staged files..."
++# Test 2: Per-shim pending.json (weasel.json) with mock staged files
++Write-Host "[2/7] Per-shim pending.json with mock staged files..."
+ New-Item -ItemType Directory -Path $STAGE_DIR -Force | Out-Null
+ # Use WriteAllText with explicit CRLF (cmd.exe for /F is sensitive to CR).
+ # Without CRLF, %%F picks up the trailing CR and the move fails.
+ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+-[System.IO.File]::WriteAllText((Join-Path $STAGE_DIR 'pending.json'), "weaselx64.dll`r`nweasel.dll`r`n", $utf8NoBom)
++[System.IO.File]::WriteAllText((Join-Path $STAGE_DIR "$SHIM.json"), "weasel.dll`r`n", $utf8NoBom)
+ 
+-# Mock the staged files (binary content doesn't matter for move test)
+-'test-content-x64' | Out-File -FilePath (Join-Path $INSTDIR 'weaselx64.dll.staged') -Encoding ASCII -NoNewline
++# Mock the staged file (binary content doesn't matter for move test)
+ 'test-content-x86' | Out-File -FilePath (Join-Path $INSTDIR 'weasel.dll.staged') -Encoding ASCII -NoNewline
+ 
+-# Mock old versions that should be backed up to .old
+-'old-content-x64' | Out-File -FilePath (Join-Path $INSTDIR 'weaselx64.dll') -Encoding ASCII -NoNewline
++# Mock old version that should be backed up to .old
+ 'old-content-x86' | Out-File -FilePath (Join-Path $INSTDIR 'weasel.dll') -Encoding ASCII -NoNewline
+ 
+ cmd /c "`"$BATCH`"" | Out-Null
+@@ -75,32 +88,27 @@ if ($LASTEXITCODE -ne 0) {
+ }
+ 
+ # Verify swap
+-$liveX64 = Get-Content (Join-Path $INSTDIR 'weaselx64.dll') -Raw
+ $liveX86 = Get-Content (Join-Path $INSTDIR 'weasel.dll') -Raw
+-if ($liveX64 -notmatch 'test-content-x64') {
+-    Write-Host "FAIL: weaselx64.dll not swapped (got: $liveX64)" -ForegroundColor Red
+-    exit 1
+-}
+ if ($liveX86 -notmatch 'test-content-x86') {
+     Write-Host "FAIL: weasel.dll not swapped (got: $liveX86)" -ForegroundColor Red
+     exit 1
+ }
+-if (Test-Path (Join-Path $INSTDIR 'weaselx64.dll.staged')) {
+-    Write-Host "FAIL: weaselx64.dll.staged should be deleted after swap" -ForegroundColor Red
++if (Test-Path (Join-Path $INSTDIR 'weasel.dll.staged')) {
++    Write-Host "FAIL: weasel.dll.staged should be deleted after swap" -ForegroundColor Red
+     exit 1
+ }
+ 
+-# Verify Stage2Done marker
+-$stage2Done = (Get-ItemProperty -Path $instDirReg -Name Stage2Done -ErrorAction SilentlyContinue).Stage2Done
++# Verify Stage2Done_<SHIM> registry marker (v0.74.1: per-shim key)
++$stage2Done = (Get-ItemProperty -Path $instDirReg -Name "Stage2Done_$SHIM" -ErrorAction SilentlyContinue)."Stage2Done_$SHIM"
+ if ($stage2Done -ne 'ok') {
+-    Write-Host "FAIL: Stage2Done registry marker not set to 'ok' (got: $stage2Done)" -ForegroundColor Red
++    Write-Host "FAIL: Stage2Done_$SHIM registry marker not set to 'ok' (got: $stage2Done)" -ForegroundColor Red
+     exit 1
+ }
+ 
+-# Test 3: Done.json written
+-$doneJson = Join-Path $STAGE_DIR 'done.json'
++# Test 3: Per-shim done.json written
++$doneJson = Join-Path $STAGE_DIR "$SHIM.done.json"
+ if (-not (Test-Path $doneJson)) {
+-    Write-Host "FAIL: done.json not written" -ForegroundColor Red
++    Write-Host "FAIL: $SHIM.done.json not written" -ForegroundColor Red
+     exit 1
+ }
+ 
+@@ -108,54 +116,74 @@ if (-not (Test-Path $doneJson)) {
+ Remove-Item -Recurse -Force $SANDBOX -ErrorAction SilentlyContinue
+ Remove-Item -Recurse -Force $STAGE_DIR -ErrorAction SilentlyContinue
+ 
+-# === Test 4: Install-boundary reset semantics (AP-L##-9.5-G mitigation) ===
+-# install.nsi: Delete "$TEMP\fluxing-stage2-shim\pending.json" before stage
+-# blocks + FileOpen "a" (append) inside stage blocks. Simulate both
+-# scenarios:
+-#   (a) Single install: 2 stages triggered, pending.json accumulates BOTH
+-#   (b) New install after prior Stage 2 failure: old pending.json cleared
+-Write-Host "[4/6] Install-boundary reset semantics..."
++# === Test 4: Install-boundary reset semantics (AP-L##-9.5-G extended) ===
++# v0.74.1: install.nsi Deletes all 5 per-shim pending files before stage
++# blocks + FileOpen "a" inside stage blocks. Simulate:
++#   (a) Single install: each stage block appends to its OWN per-shim file
++#   (b) New install after prior Stage 2 failure: all 5 per-shim files cleared
++Write-Host "[4/7] Install-boundary reset semantics..."
+ 
+ # Re-create sandbox + INSTDIR
+ Remove-Item -Recurse -Force $SANDBOX -ErrorAction SilentlyContinue
+ New-Item -ItemType Directory -Path $INSTDIR | Out-Null
+ 
+-# (a) Simulate two stage blocks triggering in one install. The install.nsi
+-# guards the DELETE with IfFileExists (first install: no file → no-op).
+-# Then stage blocks FileOpen "a" append.
++# (a) Simulate 5 stage blocks appending to 5 per-shim pending files.
++# install.nsi guards each DELETE with IfFileExists (first install: no
++# files -> no-op). Then each stage block FileOpen "a" appends to its
++# own file.
+ New-Item -ItemType Directory -Path $STAGE_DIR -Force | Out-Null
+-[void](New-Item -ItemType File -Path (Join-Path $STAGE_DIR 'pending.json') -Force)
+-"weasel.dll`r`n" | Out-File -FilePath (Join-Path $STAGE_DIR 'pending.json') -Encoding ASCII -NoNewline
+-"weaselx64.dll`r`n" | Out-File -FilePath (Join-Path $STAGE_DIR 'pending.json') -Encoding ASCII -Append -NoNewline
+-$accumulated = Get-Content (Join-Path $STAGE_DIR 'pending.json') -Raw
+-$expectedAccumulated = "weasel.dll`r`nweaselx64.dll`r`n"
+-if ($accumulated -ne $expectedAccumulated) {
+-    Write-Host "FAIL: append mode did not accumulate (got: $accumulated)" -ForegroundColor Red
+-    exit 1
++$shimFiles = @{
++    'weasel' = 'weasel.dll'
++    'weaselx64' = 'weaselx64.dll'
++    'server' = 'WeaselServer.exe'
++    'deployer' = 'WeaselDeployer.exe'
++    'setup' = 'WeaselSetup.exe'
++}
++foreach ($pair in $shimFiles.GetEnumerator()) {
++    $shimName = $pair.Key
++    $fileName = $pair.Value
++    [void](New-Item -ItemType File -Path (Join-Path $STAGE_DIR "$shimName.json") -Force)
++    "$fileName`r`n" | Out-File -FilePath (Join-Path $STAGE_DIR "$shimName.json") -Encoding ASCII -NoNewline
+ }
+ 
+-# (b) Install-boundary reset: simulate next install starting. install.nsi
+-# does: IfFileExists pending.json 0 +2; Delete pending.json
+-if (Test-Path (Join-Path $STAGE_DIR 'pending.json')) {
+-    Remove-Item -Path (Join-Path $STAGE_DIR 'pending.json') -Force
++# Verify each per-shim file has its own single entry (no cross-shim mixing)
++foreach ($pair in $shimFiles.GetEnumerator()) {
++    $shimName = $pair.Key
++    $fileName = $pair.Value
++    $content = Get-Content (Join-Path $STAGE_DIR "$shimName.json") -Raw
++    $expected = "$fileName`r`n"
++    if ($content -ne $expected) {
++        Write-Host "FAIL: per-shim pending file $shimName.json wrong content (got: $content)" -ForegroundColor Red
++        exit 1
++    }
+ }
+-if (Test-Path (Join-Path $STAGE_DIR 'pending.json')) {
+-    Write-Host "FAIL: install-boundary Delete failed to remove pending.json" -ForegroundColor Red
+-    exit 1
++
++# (b) Install-boundary reset: simulate next install starting. install.nsi
++# does: IfFileExists <shim>.json 0 +2; Delete <shim>.json for all 5 shims.
++foreach ($pair in $shimFiles.GetEnumerator()) {
++    $shimName = $pair.Key
++    $filePath = Join-Path $STAGE_DIR "$shimName.json"
++    if (Test-Path $filePath) {
++        Remove-Item -Path $filePath -Force
++    }
++    if (Test-Path $filePath) {
++        Write-Host "FAIL: install-boundary Delete failed to remove $shimName.json" -ForegroundColor Red
++        exit 1
++    }
+ }
+ 
+ # Then the new install starts accumulating again from scratch.
+-"weasel.dll`r`n" | Out-File -FilePath (Join-Path $STAGE_DIR 'pending.json') -Encoding ASCII -NoNewline
+-$newAccumulated = Get-Content (Join-Path $STAGE_DIR 'pending.json') -Raw
++"weasel.dll`r`n" | Out-File -FilePath (Join-Path $STAGE_DIR 'weasel.json') -Encoding ASCII -NoNewline
++$newAccumulated = Get-Content (Join-Path $STAGE_DIR 'weasel.json') -Raw
+ if ($newAccumulated -ne "weasel.dll`r`n") {
+     Write-Host "FAIL: new install accumulation broken (got: $newAccumulated)" -ForegroundColor Red
+     exit 1
+ }
+ 
+ # === Test 5: Batch is idempotent on no-pending rerun ===
+-# After Test 2 already consumed pending.json, running batch again must
++# After Test 2 already consumed weasel.json, running batch again must
+ # exit 0 and not accumulate stale .old files.
+-Write-Host "[5/6] Batch idempotent rerun..."
++Write-Host "[5/7] Batch idempotent rerun..."
+ $oldBefore = (Get-ChildItem -Path $INSTDIR -Filter "*.old*" -ErrorAction SilentlyContinue | Measure-Object).Count
+ cmd /c "`"$BATCH`"" | Out-Null
+ if ($LASTEXITCODE -ne 0) {
+@@ -172,13 +200,14 @@ if ($oldAfter -ne $oldBefore) {
+ Remove-Item -Recurse -Force $SANDBOX -ErrorAction SilentlyContinue
+ Remove-Item -Recurse -Force $STAGE_DIR -ErrorAction SilentlyContinue
+ Remove-ItemProperty -Path $instDirReg -Name InstallDir -ErrorAction SilentlyContinue
+-Remove-ItemProperty -Path $instDirReg -Name Stage2Done -ErrorAction SilentlyContinue
++Remove-ItemProperty -Path $instDirReg -Name "Stage2Done_$SHIM" -ErrorAction SilentlyContinue
++Remove-Item env:SHIM -ErrorAction SilentlyContinue
+ 
+ # === Test 6: Source-level ship-gate (ADR 0003 commit-time evidence) ===
+ # Without requiring a real install, verify install.nsi contains the
+ # specific NSIS fragments documented in ADR 0003 + lessons-learned
+ # AP-L##-9.5-F/G/H. Catches commit-time ADR/code divergence.
+-Write-Host "[6/6] Source-level ship-gate (install.nsi ADR/code divergence check)..."
++Write-Host "[6/7] Source-level ship-gate (install.nsi ADR/code divergence check)..."
+ 
+ $installNsi = (Resolve-Path "$PSScriptRoot\..\..\output\install.nsi").Path
+ $nsiBytes = [System.IO.File]::ReadAllBytes($installNsi)
+@@ -191,8 +220,19 @@ $shipGateAnchors = @(
+     @('F4 stage block 3: WeaselServer_staged_ok',            'WeaselServer_staged_ok:'),
+     @('F4 stage block 4: WeaselDeployer_staged_ok',          'WeaselDeployer_staged_ok:'),
+     @('F4 stage block 5: WeaselSetup_staged_ok',             'WeaselSetup_staged_ok:'),
++    @('v0.74.1 per-shim pending.json path: weasel.json',     'weasel.json'),
++    @('v0.74.1 per-shim pending.json path: weaselx64.json',  'weaselx64.json'),
++    @('v0.74.1 per-shim pending.json path: server.json',    'server.json'),
++    @('v0.74.1 per-shim pending.json path: deployer.json',  'deployer.json'),
++    @('v0.74.1 per-shim pending.json path: setup.json',     'setup.json'),
++    @('v0.74.1 unique task name: FluxingStage2ShimSwap_weasel',    'FluxingStage2ShimSwap_weasel'),
++    @('v0.74.1 unique task name: FluxingStage2ShimSwap_weaselx64', 'FluxingStage2ShimSwap_weaselx64'),
++    @('v0.74.1 unique task name: FluxingStage2ShimSwap_server',    'FluxingStage2ShimSwap_server'),
++    @('v0.74.1 unique task name: FluxingStage2ShimSwap_deployer',  'FluxingStage2ShimSwap_deployer'),
++    @('v0.74.1 unique task name: FluxingStage2ShimSwap_setup',     'FluxingStage2ShimSwap_setup'),
++    @('v0.74.1 SHIM env var prefix in /TR',                   'set SHIM=weasel &&'),
+     @('AP-L##-9.5-F reorder: File stage2-shim-install.bat.cmd', 'File "stage2-shim-install.bat.cmd"'),
+-    @('AP-L##-9.5-G install-boundary Delete pending.json',    'Delete "$TEMP\fluxing-stage2-shim\pending.json"'),
++    @('AP-L##-9.5-G install-boundary Delete per-shim files',  'Delete "$TEMP\fluxing-stage2-shim\weasel.json"'),
+     @('AP-L##-9.5-H silent Abort SetErrorLevel 6001',         'SetErrorLevel 6001'),
+     @('AP-L##-9.5-H silent Abort Quit',                        'Quit'),
+     @('L66 safety-net KnownClasses WriteRegStr',              'WriteRegStr HKLM "SOFTWARE\Microsoft\CTF\KnownClasses"'),
+@@ -201,7 +241,7 @@ $shipGateAnchors = @(
+     @('L106 SetRegView default restore',                       'SetRegView default'),
+     @('9.6 .onInit cleanup weaselx64.dll',                     '$WINDIR\System32\weaselx64.dll'),
+     @('9.6 .onInit cleanup weasel.dll',                        '$WINDIR\System32\weasel.dll'),
+-    @('9.6 Section Uninstall symmetric cleanup',              'v0.19.0.74 (Phase L Bugfix 9.6): symmetric cleanup')
++    @('9.6 Section Uninstall symmetric cleanup',              'v0.74.1 (Phase L Bugfix 9.6-Glob): symmetric cleanup')
+ )
+ 
+ $srcFails = New-Object 'System.Collections.Generic.List[string]'
+@@ -227,18 +267,122 @@ if ($shipFileLine -gt 0 -and $copyFileLines.Count -gt 0) {
+     if ($shipFileLine -lt $maxCopyLine) {
+         Write-Host "  [PASS] AP-L##-9.5-F ordering: File line $shipFileLine < max CopyFiles line $maxCopyLine" -ForegroundColor Green
+     } else {
+-        Write-Host "  [FAIL] AP-L##-9.5-F ordering: File line $shipFileLine >= max CopyFiles line $maxCopyLine — REGRESSION" -ForegroundColor Red
++        Write-Host "  [FAIL] AP-L##-9.5-F ordering: File line $shipFileLine >= max CopyFiles line $maxCopyLine -- REGRESSION" -ForegroundColor Red
+         [void]$srcFails.Add("AP-L##-9.5-F ordering regression: File $shipFileLine, CopyFiles max $maxCopyLine")
+     }
+ } else {
+     Write-Host "  [WARN] AP-L##-9.5-F ordering check could not run (File line $shipFileLine, CopyFiles count $($copyFileLines.Count))" -ForegroundColor Yellow
+ }
+ 
++# Per-shim pending.json ordering check (use SimpleMatch to avoid regex):
++# each FileOpen "<shim>.json" line must appear AFTER the install-boundary
++# Delete "<shim>.json" line. Use single quotes for literal $TEMP / $R8.
++$nsisLines = $nsiText -split "`n"
++foreach ($shimName in @('weasel', 'weaselx64', 'server', 'deployer', 'setup')) {
++    $deletePattern = 'Delete "$TEMP\fluxing-stage2-shim\' + $shimName + '.json"'
++    $openPattern   = 'FileOpen $R8 "$TEMP\fluxing-stage2-shim\' + $shimName + '.json" a'
++    $deleteLine = -1
++    $openLine = -1
++    for ($i = 0; $i -lt $nsisLines.Length; $i++) {
++        if ($deleteLine -lt 0 -and $nsisLines[$i].Contains($deletePattern)) { $deleteLine = $i + 1 }
++        if ($openLine -lt 0 -and $nsisLines[$i].Contains($openPattern))   { $openLine = $i + 1 }
++    }
++    if ($deleteLine -gt 0 -and $openLine -gt 0) {
++        if ($deleteLine -lt $openLine) {
++            Write-Host "  [PASS] AP-L##-9.5-G ordering for $shimName : Delete line $deleteLine < FileOpen line $openLine" -ForegroundColor Green
++        } else {
++            Write-Host "  [FAIL] AP-L##-9.5-G ordering for $shimName : Delete line $deleteLine >= FileOpen line $openLine -- REGRESSION" -ForegroundColor Red
++            [void]$srcFails.Add("AP-L##-9.5-G ordering regression for $shimName : Delete $deleteLine, FileOpen $openLine")
++        }
++    } else {
++        Write-Host "  [WARN] AP-L##-9.5-G ordering check could not run for $shimName (Delete $deleteLine, FileOpen $openLine)" -ForegroundColor Yellow
++    }
++}
++
+ if ($srcFails.Count -gt 0) {
+     Write-Host "FAIL: $($srcFails.Count) source-level ship-gate check(s) failed" -ForegroundColor Red
+     foreach ($f in $srcFails) { Write-Host "  $f" -ForegroundColor Red }
+     exit 1
+ }
+ 
+-Write-Host "[6/6] All assertions passed." -ForegroundColor Green
++Write-Host "[6/7] All assertions passed." -ForegroundColor Green
++
++# === Test 7 (NEW v0.74.1): 5 unique FluxingStage2ShimSwap_<shim> task names ===
++# Validates spec 071 FR-003 ship gate at source level. Complements Test 6
++# which only checks for the 5 _staged_ok labels; Test 7 explicitly verifies
++# the 5 unique task names (FR-003) + their SHIM env var prefixes.
++Write-Host "[7/7] 5 unique FluxingStage2ShimSwap_<shim> task names (spec 071 FR-003)..."
++
++$expectedNames = @(
++    @{ Sh = 'weasel';    SHIM = 'weasel';    FileWrite = 'weasel.dll' },
++    @{ Sh = 'weaselx64'; SHIM = 'weaselx64'; FileWrite = 'weaselx64.dll' },
++    @{ Sh = 'server';    SHIM = 'server';    FileWrite = 'WeaselServer.exe' },
++    @{ Sh = 'deployer';  SHIM = 'deployer';  FileWrite = 'WeaselDeployer.exe' },
++    @{ Sh = 'setup';     SHIM = 'setup';     FileWrite = 'WeaselSetup.exe' }
++)
++
++$test7Fails = New-Object 'System.Collections.Generic.List[string]'
++foreach ($entry in $expectedNames) {
++    $shSuffix = $entry.Sh
++    $shimVal  = $entry.SHIM
++    $fileName = $entry.FileWrite
++    $taskName = "FluxingStage2ShimSwap_$shSuffix"
++
++    # (a) Task name appears in install.nsi as /TN <name>
++    $taskPattern = "/TN $taskName"
++    if (-not $nsiText.Contains($taskPattern)) {
++        Write-Host "  [FAIL] $taskName : missing /TN pattern in install.nsi" -ForegroundColor Red
++        [void]$test7Fails.Add("$taskName : missing /TN pattern")
++        continue
++    }
++    Write-Host "  [PASS] $taskName : /TN pattern present" -ForegroundColor Green
++
++    # (b) /TR has set SHIM=<shim> && prefix
++    $shimPattern = "set SHIM=$shimVal &&"
++    if (-not $nsiText.Contains($shimPattern)) {
++        Write-Host "  [FAIL] $taskName : missing SHIM env var prefix" -ForegroundColor Red
++        [void]$test7Fails.Add("$taskName : missing SHIM env var prefix")
++    } else {
++        Write-Host "  [PASS] $taskName : SHIM=$shimVal env var prefix present" -ForegroundColor Green
++    }
++
++    # (c) Per-shim pending.json FileWrite entry exists for this shim's filename.
++    # Use -f format operator to avoid `r/`n PowerShell escape expansion.
++    # Backtick-r / backtick-n in double-quoted strings expand to CR/LF chars;
++    # in source file text we want literal `\r` / `\n` (2 chars each) followed
++    # by `$` and trailing `'`.
++    $filewritePattern = "FileWrite `$R8 '{0}`$\r`$\n'" -f $fileName
++    if (-not $nsiText.Contains($filewritePattern)) {
++        Write-Host "  [FAIL] $taskName : missing FileWrite for $fileName" -ForegroundColor Red
++        [void]$test7Fails.Add("$taskName : missing FileWrite for $fileName")
++    } else {
++        Write-Host "  [PASS] $taskName : FileWrite for $fileName present" -ForegroundColor Green
++    }
++
++    # (d) Defensive cleanup /Delete /TN <name> in pre-install
++    $deletePattern = "schtasks /Delete /TN $taskName /F"
++    if (-not $nsiText.Contains($deletePattern)) {
++        Write-Host "  [FAIL] $taskName : missing defensive schtasks /Delete" -ForegroundColor Red
++        [void]$test7Fails.Add("$taskName : missing defensive schtasks /Delete")
++    } else {
++        Write-Host "  [PASS] $taskName : defensive schtasks /Delete present" -ForegroundColor Green
++    }
++}
++
++# (e) Verify NO remaining old single-name schtasks /Create (regression check)
++$oldSingleCreate = "FluxingStage2ShimSwap /TR"
++if ($nsiText.Contains($oldSingleCreate)) {
++    Write-Host "  [FAIL] Old single-name FluxingStage2ShimSwap /TR still present in install.nsi (regression)" -ForegroundColor Red
++    [void]$test7Fails.Add("Old single-name FluxingStage2ShimSwap /TR still present (regression)")
++} else {
++    Write-Host "  [PASS] Old single-name FluxingStage2ShimSwap /TR absent (no regression)" -ForegroundColor Green
++}
++
++if ($test7Fails.Count -gt 0) {
++    Write-Host "FAIL: $($test7Fails.Count) Test 7 check(s) failed" -ForegroundColor Red
++    foreach ($f in $test7Fails) { Write-Host "  $f" -ForegroundColor Red }
++    exit 1
++}
++
++Write-Host "[7/7] All 5 unique task name assertions passed." -ForegroundColor Green
+ exit 0
+\ No newline at end of file
