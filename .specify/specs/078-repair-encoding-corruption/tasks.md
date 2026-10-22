@@ -62,10 +62,11 @@
       漏判 C0 控制符（CHANGELOG 仍有 5 行受损时旧门禁误报"干净"）
 - [x] **T000j** 补 8 行**不可见损坏**（低字节落在可打印 ASCII，如
       `防`→`'2'` 使标题变成 `### 2 L19 `），旧扫描器完全看不见
-- [x] **T000k** 建立三重校验器并全部通过：
-      `audit-coverage.py`（覆盖率 + 重复碎片，0 uncovered / 0 duplicate）、
-      `verify-restoration.py`（基线逐字 / 反转义自证 / 重复片段三源溯源）、
-      `check-duplicates.py`（重复碎片检测）
+- [x] **T000k** 建立校验器并全部通过（均已入库于 `scripts/test-infra/`）：
+      `verify-rewrite-provenance.py`（覆盖率 + 重复碎片 + 基线逐字 /
+      反转义自证三源溯源，实测 172 受损行、0 uncovered、0 duplicate、
+      71 逐字 / 4 子串 / 36 自证 / 50 置空 / 19 人工）、
+      `verify-encoding-repair.py`（与修复前修订逐项比对的验收门禁）
 - [x] **T000l** 中文一律用脚本从父基线搬运（`set-from-parent.py`），杜绝手打
 - [x] **T000m** 验收门禁升级为「与修复前修订逐项比对」
       （`verify-encoding-repair.py`：行数 / CR / BOM / 改动行集合全部核对）

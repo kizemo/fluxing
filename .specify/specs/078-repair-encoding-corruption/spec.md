@@ -142,6 +142,14 @@ U+FFFD / NUL / C0 归零、扫描器 exit=0、**改动行集合与工作清单�
 该规则刻意**不看工作清单**——若按「改动集合 == 清单」来挑基线，清单就会
 自己确认自己。
 
+溯源侧另有一道可复跑的核对（它重算了 committed 证据里的每一个数字）：
+
+```powershell
+python scripts\test-infra\verify-rewrite-provenance.py
+# 实测：172 受损行 / 0 uncovered / 0 duplicate
+#       71 逐字 + 4 子串 + 36 自证 + 50 置空 + 19 人工 = 180
+```
+
 > ⚠️ 门禁必须同时认「C0 控制符」这一类。只查 FFFD / NUL 的旧版扫描器
 > 会在 CHANGELOG 仍有 5 行受损时误报「干净」。
 
@@ -166,6 +174,7 @@ U+FFFD / NUL / C0 归零、扫描器 exit=0、**改动行集合与工作清单�
 - `scripts/test-infra/apply-line-rewrites.py`（写回，行数/CR/BOM 不变量守卫）
 - `scripts/test-infra/make-damage-inventory.py`（受损清单生成）
 - `scripts/test-infra/verify-encoding-repair.py`（验收门禁）
+- `scripts/test-infra/verify-rewrite-provenance.py`（溯源 + 覆盖率 + 重复碎片）
 - 干净父基线 `0c0716c36a`（lessons-learned）/ `06eadeccf5`（CHANGELOG）
 - `CONTEXT.md` §3 词汇表（术语一致性）
 - L01 / L02 / L09 / L40 / L44（字节级读写纪律）
