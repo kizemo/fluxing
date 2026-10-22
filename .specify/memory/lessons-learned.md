@@ -1303,13 +1303,13 @@ librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) %<ԃ keyco
 
 ### Ƕ 1: system("pause")
 
-spec 015 ( build + ��L TestResponseParser / TestWeaselIPC �Ѱ$* .cpp +>�	 system("pause"); ('�( return KM�/ Windows �6� UX !�� .exe �;^I�	.	F(^����CI,stdin ͚	s� stdin � system("pause") ��  xC0000005 ACCESS_VIOLATIONK��� crashCI h���
+spec 015 ( build + ��L TestResponseParser / TestWeaselIPC �Ѱ$* .cpp +>�	 system("pause"); ('�( return KM�/ Windows �6� UX !�� .exe �;^I�	.	F(^����CI,stdin ͚	s� stdin � system("pause") �� 0xC0000005 ACCESS_VIOLATIONK��� crashCI h���
 
 TestDefaultHotkeys + TestShiftSelectBinding (spec 014 ��) ���* anti-pattern@��(^����c8�\TestResponseParser + TestWeaselIPC �S 2024-02 clang-format Фcommit 21d2bf9	�e1 �	�* patternF CI test job  ��� TestDefaultHotkeyscommit 10b72e2 scope P6	@� bug �* surface
 
 ### Ƕ 2: if errorlevel 1 in batch
 
-spec 015 � scripts\run-tests.bat �Ѱ d system(pause) TestResponseParser �: test_4 � BOOST_ASSERT(2 == c.candies.size()) 1%( bort()abort ( Windows Release ���l  xC0000005 STATUS_FATAL_APP_EXITs -1073741819
+spec 015 � scripts\run-tests.bat �Ѱ d system(pause) TestResponseParser �: test_4 � BOOST_ASSERT(2 == c.candies.size()) 1%( bort()abort ( Windows Release ���l 0xC0000005 STATUS_FATAL_APP_EXITs -1073741819
 
 y,� if errorlevel 1 ��I/ if errorlevel >= 1F -1073741819 \: signed 32-bit /p< 1Ӝ batch �$: "no error",���J === ALL TESTS PASSED === + exit 0
 
@@ -3652,7 +3652,7 @@ For any "is symbol X in binary Y" check on Windows MSVC:
 
 3. **For ASCII UI strings** (Quick Panel, Deploy, X, etc.) — these ARE stored as ASCII in the binary's .rdata section (they're UI text). ASCII search works. But C++ class/function names are UTF-16.
 
-4. **Byte-verify with unique constants** (L42 AP-L42-A) is still the most reliable: pick a unique byte pattern from the new code (e.g.,  x001E1E1E palette, or a specific string literal) and count occurrences. Constants don't have encoding ambiguity.
+4. **Byte-verify with unique constants** (L42 AP-L42-A) is still the most reliable: pick a unique byte pattern from the new code (e.g., 0x001E1E1E palette, or a specific string literal) and count occurrences. Constants don't have encoding ambiguity.
 
 ### Anti-patterns (AP-L53-A/B)
 
@@ -4469,7 +4469,7 @@ xmake build in this environment only built 32-bit (the project's primary target 
   regsvr32 weasel.dll /s
   regsvr32 weaselx64.dll /s
   :: Verify:
-  reg query "HKCU\Software\Microsoft\CTF\Assemblies x00000804"
+  reg query "HKCU\Software\Microsoft\CTF\Assemblies0x00000804"
   reg query "HKLM\SOFTWARE\Microsoft\CTF\KnownClasses"
   ```
 - [ ] spec 050 (Hotkey Editor): not done in this round; user-visible features still in MVP state.
@@ -4533,7 +4533,7 @@ This guarantees the path exists: `$R3\weasel\weaselx64.dll` is always `D:\Progra
 4. regsvr32 returns 0 (success)
 5. `HKLM\SOFTWARE\Classes\CLSID\{A3F4CDED-...}\InprocServer32` written (was missing before)
 6. `HKLM\SOFTWARE\Microsoft\CTF\KnownClasses` may be created (RegisterCategories may fail on Win 10 if CLSID_TF_CategoryMgr is missing, but RegisterServer's CLSID write succeeds)
-7. `HKCU\Software\Microsoft\CTF\Assemblies x00000804` may have a profile entry (RegisterProfiles may fail on Win 10 if CLSID_TF_InputProcessorProfiles is missing)
+7. `HKCU\Software\Microsoft\CTF\Assemblies0x00000804` may have a profile entry (RegisterProfiles may fail on Win 10 if CLSID_TF_InputProcessorProfiles is missing)
 
 ### L63 anti-patterns (additional to L62)
 
@@ -4545,7 +4545,7 @@ This guarantees the path exists: `$R3\weasel\weaselx64.dll` is always `D:\Progra
 
 - [x] v0.18.40.0 shipped with install.nsi path fix
 - [ ] User end-to-end test: uninstall, install v0.18.40.0, regsvr32, check KnownClasses + 0x00000804
-- [ ] If 0x00000804 still empty after install: user must manually run `regsvr32` elevated. Then check `HKCU\Software\Microsoft\CTF\Assemblies x00000804\<Fluxing-profile-GUID>` exists.
+- [ ] If 0x00000804 still empty after install: user must manually run `regsvr32` elevated. Then check `HKCU\Software\Microsoft\CTF\Assemblies0x00000804\<Fluxing-profile-GUID>` exists.
 - [ ] spec 050 (Hotkey Editor): not done.
 - [ ] spec 008 (Candidate right-click edit): not done.
 - [ ] spec 049 v4 design (real SVG icons): not done.
@@ -4712,7 +4712,7 @@ invariant. L65 should be retro-fitted as: "v0.18.41.0 ship contained 3 fixes
 (spec 062 Microsft typo + spec 064 DllRegisterServer S_OK gate + spec 066
 KnownClasses/HKCU writes + spec 066 SetWindowPos in QuickPanel) - but the
 spec 066 writes were nested inside an `If $1 != 0` block, which means the
-HKCU x00000804 user-input-method binding never ran on a successful
+HKCU0x00000804 user-input-method binding never ran on a successful
 regsvr32 path. The user reported QuickPanel still does not show. L66 fixes
 the nesting."
 
@@ -4726,7 +4726,7 @@ is in L66 below.
 ### What happened
 
 v0.18.41.0 (commit ef6eb024) shipped spec 066 with 4 registry writes
-(KnownClasses + HKCU x00000804 Default/Profile/KeyboardLayout) nested
+(KnownClasses + HKCU0x00000804 Default/Profile/KeyboardLayout) nested
 inside the `${If} $1 != 0` block - the regsvr32 weasel.dll FAILURE
 branch. The intent was "fallback if regsvr32 fails". The bug is that
 spec 066 writes **also need to happen on the success path**, because
@@ -4735,7 +4735,7 @@ language-profile bindings - those are user-input-method toggle keys,
 written only when the user enables the IME in Settings -> Time & Language.
 
 Result: on a v0.18.41.0 install where regsvr32 weasel.dll succeeded,
-**none of the 4 writes ran**. KnownClasses stayed empty. HKCU x00000804
+**none of the 4 writes ran**. KnownClasses stayed empty. HKCU0x00000804
 stayed empty. Fluxing did not appear in the language switcher.
 QuickPanel never showed. The user reported "still not fixed after 6
 rounds" - and they were right.
@@ -4743,7 +4743,7 @@ rounds" - and they were right.
 ### Why this slipped through review
 
 - I wrote spec 066 thinking "fallback if regsvr32 fails" - wrong frame.
-  The correct frame is "always write KnownClasses and HKCU x00000804
+  The correct frame is "always write KnownClasses and HKCU0x00000804
   unconditionally; regsvr32 may or may not write them depending on COM
   token state".
 - I did not run a post-install `reg query` to verify the keys were
@@ -4789,7 +4789,7 @@ Verified NSIS compiles (CRLF + EF BB BF preserved, 596 CRLF pairs).
   run UNCONDITIONALLY. Never nest them inside an `If error-occurred`
   block. If you think "fallback if regsvr32 fails", ask yourself:
   "does the success path also need this write?". For KnownClasses
-  and HKCU x00000804, the answer is YES - regsvr32 success does
+  and HKCU0x00000804, the answer is YES - regsvr32 success does
   NOT imply those keys are written.
 - **AP-L66-B**: Don't use a single error-handling block for both
   "diagnostic error print" AND "corrective action". Split them.
@@ -4822,7 +4822,7 @@ Verified NSIS compiles (CRLF + EF BB BF preserved, 596 CRLF pairs).
 - [x] Verify NSIS BOM + CRLF preserved
 - [ ] Rebuild installer as v0.18.41.1 (env.bat `WEASEL_BUILD=1`)
 - [ ] Verify post-install: `reg query HKLM\SOFTWARE\Microsoft\CTF\KnownClasses`
-  and `reg query HKCU\Software\Microsoft\CTF\Assemblies x00000804`
+  and `reg query HKCU\Software\Microsoft\CTF\Assemblies0x00000804`
   both show the Fluxing GUIDs
 - [ ] Fix the `SetRebootFlag true` `StrCmp $0 "Upgrade"` bug (separate fix)
 - [ ] Write a `.claude/rules/` rule documenting AP-L66-A (unconditional safety-net pattern)
@@ -4924,7 +4924,7 @@ syntax visually validated) but need a real xmake run locally.
 ### Build instructions for local machine
 1. Open "x64 Native Tools Command Prompt for VS 2022" or run
    vcvars32.bat from regular cmd.
-2. cd to F:\soft selfmadeime_claude
+2. cd to F:\soft0selfmadeime_claude
 3. Run xbuild.bat (the standard release build). Should now use cached
    .xmake config (Windows, x86, release) and rebuild only WeaselServer
    (and any deps touched).
@@ -7083,7 +7083,7 @@ L83 失败原因 — 沙箱验证不足:
   - `LoadLogoWIC`: 加 fallback small → big
   - `WndProc`: 加 `case WM_TIMER` for id 2 hover polling
   - `Show`: `SetTimer(2, 100, NULL)` 启动 hover polling
-  - `Hide`: `KillTimer(2)` 停止 hover polling
+  - `Hide`: `KillTimer(2)` ֹͣ hover polling
 - `env.bat` / `weasel.props`: `WEASEL_BUILD=13→14`, `PRODUCT_VERSION=0.19.0.13→0.19.0.14`
 
 ### Ship
@@ -7196,7 +7196,7 @@ User 报告 4 项:
   kBgBot RGB(218,226,240) → RGB(180,200,230) (浅蓝)。75 step 差异,3D 玻璃感强烈。
 - **#5 不能拖动**: 处理 WM_NCHITTEST 在非按钮区返回 HTCAPTION,Windows 启动 system drag
 
-### Phase 2 (fix 实施)
+### Phase 2 (fix ʵʩ)
 
 - **L86 panel size**: 所有 layout constants × 0.6:
   - kPanelW 360→216, kPanelH 68→41
@@ -8277,7 +8277,7 @@ L95 在 L94 (3 agent 调研 + 雙驗收) pattern 基础上升级:
 
 ### Phase 5 修复迭代
 
-**ProductionDeploy 实装** (`UserDictionary.cpp:483-540`):
+**ProductionDeploy ʵװ** (`UserDictionary.cpp:483-540`):
 - 写 TXT 到 `<APPDATA>\Rime\fluxing_user_dict.txt` (custom_phrase.txt 格式)
 - 备份原 TXT via `MakeBackup` (LRU 5 个保留)
 - `SHGetFolderPathW` + `CreateDirectoryW` (不用 deprecated `RimeGetUserDataDir`)
@@ -8607,7 +8607,7 @@ User 装机 v0.19.0.37 (commit 2619989) 后报告 2 critical bug:
 ### Root cause (5 阶段 systematic-debugging)
 af13cbff (v0.19.0.36 Phase D Reinforcement D) 加了 1 段:
 ```nsi
-ExecWait 'taskkill /F /IM explorer.exe /T'  ; 杀 explorer.exe (taskbar + desktop)
+ExecWait 'taskkill /F /IM explorer.exe /T'  ; ɱ explorer.exe (taskbar + desktop)
 Sleep 2000
 Exec '"$WINDIR\explorer.exe"'                ; 重启
 ```
@@ -8847,7 +8847,7 @@ shutdown /r /t 0  # 触发 REBOOTOK delete
 & "F:\soft\00selfmade\rime_claude\release\fluxing-0.19.0.47-installer.exe" /S /D=D:\Program Files\fluxing
 ```
 
-### L103-I (PPL WeaselServer.exe + installer Rename-then-File 失效模式)
+### L103-I (PPL WeaselServer.exe + installer Rename-then-File ʧЧģʽ)
 
 - **症状**: v0.19.0.47 source fix 装机后, `_check_install_v2.ps1` 显示 D 盘 binary md5 = 上个 version md5, installer 静默无错
 - **真因**: WeaselServer.exe 是 PPL 进程, taskkill 不释放 mmap; install.nsi Rename-then-File 模式下 Rename 失败 → SetOverwrite try 也失败 → Delete /REBOOTOK scheduled 但不立即生效
@@ -9171,7 +9171,7 @@ rime algorithm service 调度者 + PhrasesDialog IPC server, 一个进程挂了 
   WriteRegStr 在 64-bit OS 上落到 WOW6432Node 重定向 hive, TSF 64-bit 进程读
   native hive 找不到 → 第二次爆雷隐患。install.nsi 改用 SetRegView 64 或
   ${DisableX64FsRedirection} 包裹 KnownClasses 写入。
-- TSF Category/LanguageProfile 在 native HKLM 写入正确,  x0804 Enable=1 → TSF
+- TSF Category/LanguageProfile 在 native HKLM 写入正确, 0x0804 Enable=1 → TSF
   能定位 TIP, 但 EXE 是零字节所以 TIP 仍 register 失败 → **不是主因**, 仅作 hardening。
 
 ### 防重犯
@@ -9206,7 +9206,7 @@ rime algorithm service 调度者 + PhrasesDialog IPC server, 一个进程挂了 
 
 ### 关联文件 / 提交
 
-- 源 issue: 	ask.md Phase K3 T019 catastrophic regression
+- Դ issue: 	ask.md Phase K3 T019 catastrophic regression
 - commit 823bc1f (chore release v0.19.0.55 T019 hotfix installer) — 装的是损坏 binary
 - commit 8559ed4 (fix WeaselServer + FluxingPhrasesDialog v0.19.0.55 hotfix) — 逻辑
   本身可能无问题, 但 build pipeline 没把它编出真 EXE
@@ -9329,13 +9329,13 @@ FluxingPhrasesDialog.exe (`output\FluxingPhrasesDialog.exe` mtime 不变,
 
 - commit `9f8a796` fix(FluxingPhrasesDialog) v0.19.0.58 (Phase K5 hotfix)
 - commit `bbbe843` chore(release) v0.19.0.58 installer
-- 源: `FluxingPhrasesDialog/PhrasesDialog.cpp:102-144` (InputSubclassProc 实施)
-- 源: `FluxingPhrasesDialog/PhrasesDialog.cpp:773-778,786-794,801-830` (Install
+- Դ: `FluxingPhrasesDialog/PhrasesDialog.cpp:102-144` (InputSubclassProc ʵʩ)
+- Դ: `FluxingPhrasesDialog/PhrasesDialog.cpp:773-778,786-794,801-830` (Install
   / Remove + OnCreate/OnDestroy 调)
 - 源: `FluxingPhrasesDialog/PhrasesDialog.h:212-237` (公开 helper 声明 + root
   cause 注释)
 - 源: `FluxingPhrasesDialog/main.cpp:37-40` (message loop 简单形态, root cause
-  之一)
+  ֮һ)
 - 源: `test/TestPhrasesDialog/TestPhrasesDialog.cpp:1480-1548` (Test 43/44 新增)
 - NSIS installer: `output/archives/fluxing-0.19.0.58-installer.exe` md5
   `312053473F9D41FCA65EF659F2185B9A`
@@ -9350,7 +9350,7 @@ FluxingPhrasesDialog.exe (`output\FluxingPhrasesDialog.exe` mtime 不变,
 + 每一次 ship 都诊断 ~1 周,浪费大量 Token + 用户极度失望 ("一周的工作, 你还是没修复")
 
 **完整时间线 (2026-07-25 → 2026-07-31, 7 天)**:
-1. **v0.19.0.66** (commit `06fa893`): L66 safety-net 写 KnownClasses + HKCU\0x00000804
+1. **v0.19.0.66** (commit `06fa893`): L66 safety-net д KnownClasses + HKCU\0x00000804
    - user 测试: "没出现输入无响应 (但 L66 safety-net 修复后)"
    - 真实状态: ✓ (装到 user 机器上 IME 输入 OK,但 user 后面用了更新版本)
 2. **v0.19.0.67** (commit `bbd0414`): Phase L Bugfix 4 真修 (TF_INVALID_COOKIE guard)
@@ -9565,8 +9565,8 @@ FluxingPhrasesDialog.exe (`output\FluxingPhrasesDialog.exe` mtime 不变,
 **Lesson (3 条)**:
 
 1. **Cleanup script 必** selective delete, NOT blanket delete
-   - **只删** : System32 shim DLLs (weasel*.dll)
-   - **只删** : Stage 2 dirs (TEMP\fluxing-stage2-shim)
+   - **ֻɾ** : System32 shim DLLs (weasel*.dll)
+   - **ֻɾ** : Stage 2 dirs (TEMP\fluxing-stage2-shim)
    - **只删** : 已 confirm 没用的 registry keys (Stage2Done, AdminRequired)
    - **永远不删** : HKLM\Software\Fluxing\Weasel\InstallDir (used by WeaselServer.cpp/WeaselServerApp.cpp)
    - **永远不删** : HKCU\Software\Fluxing\Weasel\RimeUserDir (used by RimeWithWeasel.cpp/Initialize)
@@ -9697,7 +9697,7 @@ user 实测:中文模式按 `/` 出 `、`,其他 7 个标点 + Shift+ 配对全�
 **关联文件 / 决策**:
 - `D:\Program Files\fluxing\user1\fluxing\rime_ice.custom.yaml` (本 L## 修复,3174 bytes, 2026-08-01 13:32)
 - `D:\Program Files\fluxing\user1\fluxing\double_pinyin_sogou.custom.yaml` (本 L## 同步修复,2026-08-01 13:39)
-- `D:\Program Files\fluxing\weasel\data\rime_ice.schema.yaml` (源 schema,line 240-247 `__include:`)
+- `D:\Program Files\fluxing\weasel\data\rime_ice.schema.yaml` (Դ schema,line 240-247 `__include:`)
 - `librime/src/rime/config/config_compiler_impl.h:15-19` (DependencyPriority 定义)
 - `librime/src/rime/config/config_compiler.cc:67-76` (__include 解析 + overrides merge)
 - `librime/src/rime/config/auto_patch_config_plugin.cc:22-35` (auto-patch 机制)
@@ -9925,7 +9925,7 @@ commit `e3fa89f` + tag `v0.20.0.1`。
 3. v0.20.0.1 ship → 假设 emoji.json 引用 emoji.txt/others.txt 缺失 → 补文件 → **仍 crash**
 4. v0.20.0.2 (本 fix) → WinDbg `\!analyze -v` 双 dump 实证 → 真因找到
 
-**True root cause (WinDbg 实证)**:
+**True root cause (WinDbg ʵ֤)**:
 
 `include/PipeChannel.h:57-62` 用 `boost::thread_specific_ptr<ChannelContext>` 但 `if (\!context.get()) context.reset(new ...)` 是 TOCTOU race:
 
@@ -9962,7 +9962,7 @@ lambda hash `306bd6bd9716a5176553a603b909d585` 是 std::thread invoker 的 uniqu
 3. v0.20.0.1 假设 emoji.json 引用 emoji.txt/others.txt 缺失 → 补文件 → 仍 crash
 4. v0.20.0.2 (本 fix) → WinDbg !analyze -v 双 dump 实证 → 真因找到
 
-**True root cause (WinDbg 实证)**:
+**True root cause (WinDbg ʵ֤)**:
 include/PipeChannel.h:57-62 用 boost::thread_specific_ptr<ChannelContext> 但 if (!context.get()) context.reset(new ...) 是 TOCTOU race。两个 thread 同时首次访问 → 都看到 nullptr → 都 new → 第二个 reset() 覆盖第一个的指针 → 第一个 thread 持有 dangling pointer → 析构时 double-free → ntdll 检测 0xc0000374。
 
 cdb !analyze -v 关键栈:
