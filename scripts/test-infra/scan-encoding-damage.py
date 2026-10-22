@@ -51,8 +51,24 @@ def git(repo: str, *args: str) -> bytes:
     return out.stdout
 
 
+def c0_controls(line: str) -> int:
+    """Count C0 control characters other than TAB.
+
+    A Markdown document has no legitimate C0 controls: every one of them is
+    damage.  They appear when a C-style escape sequence (``\\a``, ``\\b``,
+    ``\\v``, ``\\f``) was un-escaped into a real control byte, which also
+    swallowed the letter that had formed the escape (``\\accept:`` became
+    BEL + "ccept:").  A byte scan that only looks for U+FFFD and NUL misses
+    this damage class completely -- measured 2026-10-22, 54 lines of
+    lessons-learned.md carried control characters and nothing else.
+    """
+    return sum(1 for ch in line if ord(ch) < 0x20 and ch != "\t")
+
+
 def is_damaged(line: str) -> bool:
     """Primary damage: a character was replaced by U+FFFD or NUL.
+
+    Tertiary damage: a C0 control character that survived an un-escaping pass.
 
     Secondary damage: the line is UTF-8 that was read as GBK and written back
     as UTF-8 (``§`` -> ``搂``, ``U+FFFD`` -> ``锟?``).  This form carries no
@@ -62,6 +78,8 @@ def is_damaged(line: str) -> bool:
     fails; a GBK-misread line round-trips back to its original UTF-8.
     """
     if REPLACEMENT in line or NUL in line:
+        return True
+    if c0_controls(line):
         return True
     return gbk_misread(line) is not None
 
@@ -395,9 +413,10 @@ def main() -> int:
 
     fffd = sum(line.count(REPLACEMENT) for line in stripped)
     nul = sum(line.count(NUL) for line in stripped)
+    c0 = sum(c0_controls(line) for line in stripped)
     print(
-        "damage-scan: {} damaged_lines={} fffd={} nul={} exit={}".format(
-            args.path, len(damaged_idx), fffd, nul, 1 if damaged_idx else 0
+        "damage-scan: {} damaged_lines={} fffd={} nul={} c0={} exit={}".format(
+            args.path, len(damaged_idx), fffd, nul, c0, 1 if damaged_idx else 0
         )
     )
 
