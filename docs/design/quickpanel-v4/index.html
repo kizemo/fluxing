@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>QuickPanel v4 — Pure Icon Row (Win32 GDI 最简)</title>
+<style>
+  :root {
+    --bg: rgb(248, 248, 250);
+    --bg-hover: rgb(232, 232, 235);
+    --bg-pressed: rgb(255, 95, 49);
+    --fg: rgb(58, 58, 58);
+    --accent: rgb(255, 95, 49);
+    --accent-2: rgb(155, 81, 224);
+    --radius-btn: 4px;
+    --gap: 1px;
+  }
+  body {
+    margin: 0;
+    background: linear-gradient(180deg, #fafafa 0%, #ececec 100%);
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Segoe UI", -apple-system, sans-serif;
+    color: var(--fg);
+  }
+  /* v4 panel: 纯扁平 toolbar,无圆角无阴影,只用 GDI(Win32 native) */
+  .qp {
+    background: var(--bg);
+    border: 1px solid rgb(218, 218, 220);
+    border-radius: 6px;
+    padding: 0;
+    display: flex; align-items: stretch; gap: var(--gap);
+    overflow: hidden;
+  }
+  /* logo 跟按钮同高,只是颜色块 */
+  .qp .brand {
+    width: 28px; height: 28px;
+    border: 0;
+    border-radius: 0;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    padding: 0;
+    cursor: pointer;
+  }
+  .qp .brand svg { width: 16px; height: 16px; }
+
+  .qp button {
+    width: 28px; height: 28px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--fg);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    padding: 0;
+    transition: background-color 80ms;
+  }
+  .qp button:hover { background: var(--bg-hover); }
+  .qp button[aria-pressed="true"] {
+    background: var(--bg-pressed);
+    color: white;
+  }
+  .qp button svg { width: 14px; height: 14px; }
+
+  .annotate {
+    position: fixed; bottom: 16px; left: 16px;
+    background: rgba(0,0,0,0.55); color: white;
+    padding: 8px 12px; border-radius: 8px;
+    font-size: 12px; max-width: 480px;
+    line-height: 1.5;
+  }
+  code { font-family: ui-monospace, Menlo, monospace; background: rgba(255,255,255,0.10); padding: 1px 4px; border-radius: 3px; }
+</style>
+</head>
+<body>
+  <div class="qp" role="toolbar" aria-label="Fluxing 快速面板 v4">
+    <button class="brand" aria-label="Fluxing 火流猩">
+      <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 4 L11 16 L5 16 L9 4 Z M13 4 L19 16 L13 16 L17 4 Z"/>
+        <circle cx="20" cy="18" r="2" fill="white" stroke="none"/>
+      </svg>
+    </button>
+
+    <button aria-label="方案" title="方案 — 切换 RIME 输入方案(占位)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="4" width="16" height="16" rx="2"/>
+        <path d="M8 8 H16 M8 12 H16 M8 16 H13"/>
+      </svg>
+    </button>
+
+    <button aria-label="自定义短语" title="自定义短语(占位)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 5 H15 L18 8 V19 H5 Z"/>
+        <path d="M8 11 H15 M8 14 H13"/>
+      </svg>
+    </button>
+
+    <button aria-label="符号" title="符号(占位)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 6 L6 12 L8 18 M16 6 L18 12 L16 18"/>
+        <circle cx="12" cy="12" r="1.2" fill="currentColor"/>
+      </svg>
+    </button>
+
+    <button aria-label="设置" title="设置(占位)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M12 3 L12 5 M12 19 L12 21 M3 12 L5 12 M19 12 L21 12 M5.5 5.5 L7 7 M17 17 L18.5 18.5 M5.5 18.5 L7 17 M17 7 L18.5 5.5"/>
+      </svg>
+    </button>
+
+    <button aria-label="账号" title="账号(占位)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="8" r="3.2"/>
+        <path d="M5 20 C5 16 8 14 12 14 C16 14 19 16 19 20"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="annotate">
+    <strong>v4 · Pure Icon Row (Win32 GDI 最简)</strong><br>
+    技术栈:<strong>Win32 GDI only</strong> — <code>FillRect</code> + <code>DrawIcon</code> + <code>DrawText</code> + <code>SetTextColor</code><br>
+    避雷:<strong>零 D2D,零 GDI+</strong>。每帧 WM_PAINT 用 GDI 直接画,DestroyWindow 时自动清理。<br>
+    尺寸:~196 × 30 px;最窄最轻,贴右下角也不挡视线<br>
+    适合:稳定性第一(L67/L68 雷区零概率)、低端 GPU / 远程桌面 / Windows Server Core
+  </div>
+</body>
+</html>
