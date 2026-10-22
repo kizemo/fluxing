@@ -47,14 +47,14 @@
 
 ### 3.1 P1 实施（5 项 + 1 横切）
 
-| 编号 | 需求 | 优先级 | 子 spec | 状态（2026-07-05, 0.18.26.0） |
+| 编号 | 需求 | 优先级 | 子 spec | 状态（2026-10-22, 0.21.0.1） |
 |---|---|---|---|---|
-| F1 | 默认快捷键（`,`/`.` 翻页 / `Shift_L/R` 选候选 / `Shift+space` 切中英 / `Ctrl+Shift+9/0` 标点/简繁） | P1 | 005 | **已 ship 0.18.0-0.18.5** |
-| F2 | 托盘快速设置面板（Alt+, / 左键单击托盘 → 8-12 个常用入口） | P1 | 006/036/038/045 | **ship 0.18.29.0** (spec 045: 5 行 8 入口 mac 风完整化 - 3 toggles + 当前方案 + 用户/程序文件夹 + 部署/退出) |
-| F3 | yaml 可视化设置 UI（4 类配置可视化编辑） | P1 | 007 | design 完成，代码未开始 |
-| F4 | 候选字右键一键删除/屏蔽 | P1 | 008 | design 完成，代码未开始 |
-| F5 | 常用短语独立于用户词典（`Alt+K` 列表） | P1 | 009 | design 完成，代码未开始 |
-| F6 | 暗色主题跟随系统（横切 006/007/008/009） | P1 | 004/033/037 | **ship 0.18.22.0 + 0.18.26.0** (spec 037 FluxingComponents 控件库 v0) |
+| F1 | 默认快捷键（`,`/`.` 翻页 / `Shift_L/R` 选候选 / `Shift+space` 切中英 / `Ctrl+Shift+9/0` 标点/简繁） | P1 | 005 | **已 ship 0.18.0-0.18.5**；0.21.0.1（spec 077）把「Shift_L/R 单键释放选第 2/3 候选」从 yaml binding 改到 IPC 状态机（yaml binding 已删，Control+1/2 备用选择器保留） |
+| F2 | 托盘快速设置面板（Alt+, / 左键单击托盘 → 8-12 个常用入口） | P1 | 006/036/038/045 | **ship 0.18.29.0** (spec 045: 5 行 8 入口 mac 风完整化)；spec 070 v0.19.0.10–0.19.0.32 持续迭代（Liquid Glass / 5 按钮接通 / DPI / drag） |
+| F3 | yaml 可视化设置 UI（4 类配置可视化编辑） | P1 | 007 | **partial**：spec 050 MVP ship 0.18.30（仅第 1 页「快捷键」）；样式 / 方案 / 用户词典 3 页仍未实施（spec 051–053 未立项） |
+| F4 | 候选字右键一键删除/屏蔽 | P1 | 008 | **ship 0.18.21.0**（spec 027–032 五阶段实现后收尾：核心 API / 右键派发 / 屏蔽过滤 / 暗色订阅 / 托盘恢复） |
+| F5 | 常用短语独立于用户词典（`Alt+K` 列表） | P1 | 009 | **ship 0.19.0.52**（spec 051：常用短语对话框剥离为独立进程 `FluxingPhrasesDialog.exe`；实际触发热键为 Alt+. / Alt+/） |
+| F6 | 暗色主题跟随系统（横切 006/007/008/009） | P1 | 004/033/037 | **ship 0.18.22.0 + 0.18.26.0** (spec 037 FluxingComponents 控件库 v0；spec 041 DPI 验证 ship 0.18.28.0) |
 
 ### 3.2 P2 仅设计（2 项）
 
@@ -317,7 +317,7 @@ L46 #2 fix: WeaselServer/xmake.lua /OPT:REF /OPT:ICF → /OPT:NOREF /OPT:NOICF (
 - Path 1: xbuild.bat weasel installer → exit 0, installer 42,850,220 bytes, PE arch 0x14C x86.
 - Path 2: msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m:1 → 0 errors / 2 pre-existing warnings (C4267 + C4101, 无关), 8/8 production targets success.
 - Path 3: scripts\test-infra\run-test-suite.bat → 13/13 test exe PASS, 115 assertions / 0 FAIL, "=== ALL TESTS PASSED ===".
-- L42 byte-verify: weasel.dll 包含  x001E1E1E (spec 033 dark-mode palette bytes in production binary).
+- L42 byte-verify: weasel.dll 包含 0x001E1E1E (spec 033 dark-mode palette bytes in production binary).
 - L14 arch-verify: WeaselServer.exe / WeaselDeployer.exe / WeaselSetup.exe / rime.dll = 0x14C x86; weaselx64.dll = 0x8664 x64; weaselARM64.dll = 0xAA64 ARM64.
 
 ### 9.3 0.18.25.0 Test suite
@@ -330,7 +330,8 @@ L46 #2 fix: WeaselServer/xmake.lua /OPT:REF /OPT:ICF → /OPT:NOREF /OPT:NOICF (
 
 ### 9.4 L31 follow-up fix (L31 vcxproj OutDir path-glue 闭合)
 
-3 个 test vcxproj (TestBindingResolution, TestResponseParser, TestYamlRoundTripE2E) 的 <IntDir>msbuild\... 缺 \ 反斜杠, 触发 MSB3491 imemsbuild 路径 (L31 root cause B). 0.18.25.0 ship 时已修.
+3 个 test vcxproj (TestBindingResolution, TestResponseParser, TestYamlRoundTripE2E) 的 <IntDir>msbuild\... 缺 \ 反斜杠, 触发 MSB3491 
+imemsbuild 路径 (L31 root cause B). 0.18.25.0 ship 时已修.
 
 ## 
 
@@ -378,7 +379,9 @@ L48 正式追加 (7 root-causes from spec 038 verification: FluxingD2DRenderer a
 - L01-L48 (L01 - L48): 48 lessons by 2026-07-05 (L47 + L48 added).
 - L47: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), VsDevCmd.bat 触发 .NET Hashtable 异常. workaround: vcvars32.bat (纯 cmd). vcxproj <IntDir> 缺 \ 反斜杠触发 MSB3491. 0.18.25.0/0.18.26.0 ship 时已修.
 - L48 (新): spec 038 期间发现 7 个 root-causes (FluxingD2DRenderer atexit crash → ExitProcess + GetClassNameW NULL buffer → 0 + sln ProjectConfiguration 必须 line-separated + msbuild vcxproj-direct SolutionDir 是 project-local + QuickPanelDialog s_hwnd 仅 Show() 设置 + unique_ptr 静态成员需要 public accessors + WM_LBUTTONUP callback contract). 0.18.27.0 ship 时已应用全部 fix.
- 验证: msbuild_path2.log 中无 imemsbuild 字符串, un-test-suite.bat exit=0.
+ 验证: msbuild_path2.log 中无 
+imemsbuild 字符串, 
+un-test-suite.bat exit=0.
 
 L47 lessons-learned 同步追加 (PowerShell 5.1 + VsDevCmd 触发 MSB6001 PATH/Path 冲突 + vcxproj $(SolutionDir)msbuild 缺 \ 引发 MSB3491; workaround: 用 cvars32.bat 不用 VsDevCmd.bat).
 
@@ -412,9 +415,9 @@ spec 006 完整 mac 风面板设计的**第二阶段 ship 切片**. 仅 ship 4 �
 
 ### 10.5 spec 037 spec / plan / tasks 状态
 
--  37-fluxing-components-v0/spec.md (10623 B, BOM, CR=LF=120, 0 mojibake).
--  37-fluxing-components-v0/plan.md (7762 B, BOM, CR=LF=202, 0 mojibake).
--  37-fluxing-components-v0/tasks.md (4625 B, BOM, CR=LF=62, 0 mojibake).
+- 037-fluxing-components-v0/spec.md (10623 B, BOM, CR=LF=120, 0 mojibake).
+- 037-fluxing-components-v0/plan.md (7762 B, BOM, CR=LF=202, 0 mojibake).
+- 037-fluxing-components-v0/tasks.md (4625 B, BOM, CR=LF=62, 0 mojibake).
 - 28 tasks 全 [ ] (待实施).
 - Constitution Check 通过 (I-V + R1-R9 + P1-P8 OK).
 
@@ -436,7 +439,8 @@ L47 正式追加 (6 byte/syntax bugs from spec 037 reactive fix cascade). spec 0
 
 - L01-L47 (L01 - L47): 47 lessons by 2026-07-05.
 - **L47 (待追加)**: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 是 PowerShell module 触发 .NET Hashtable "已添加项: 字典中的关键字 PATH 所添加的关键字 Path" 异常 (MSB6001). workaround: 用 cvars32.bat (纯 cmd 脚本) 不用 VsDevCmd.bat. 0.18.25.0 ship 时已用此 workaround.
-- L47 also: vcxproj <IntDir>msbuild\... 缺 \ 反斜杠触发 MSB3491 imemsbuild 路径错误. spec 037 之前 3 个 test vcxproj 命中此 bug; 0.18.25.0 ship 时已修.
+- L47 also: vcxproj <IntDir>msbuild\... 缺 \ 反斜杠触发 MSB3491 
+imemsbuild 路径错误. spec 037 之前 3 个 test vcxproj 命中此 bug; 0.18.25.0 ship 时已修.
 
 ---
 
@@ -459,7 +463,7 @@ L46 #2 fix: WeaselServer/xmake.lua /OPT:REF /OPT:ICF → /OPT:NOREF /OPT:NOICF (
 - Path 1: xbuild.bat weasel installer → exit 0, installer 42,850,220 bytes, PE arch 0x14C x86.
 - Path 2: msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m:1 → 0 errors / 2 pre-existing warnings (C4267 + C4101, 无关), 8/8 production targets success.
 - Path 3: scripts\test-infra\run-test-suite.bat → 13/13 test exe PASS, 115 assertions / 0 FAIL, "=== ALL TESTS PASSED ===".
-- L42 byte-verify: weasel.dll 包含  x001E1E1E (spec 033 dark-mode palette bytes in production binary).
+- L42 byte-verify: weasel.dll 包含 0x001E1E1E (spec 033 dark-mode palette bytes in production binary).
 - L14 arch-verify: WeaselServer.exe / WeaselDeployer.exe / WeaselSetup.exe / rime.dll = 0x14C x86; weaselx64.dll = 0x8664 x64; weaselARM64.dll = 0xAA64 ARM64.
 
 ### 9.3 0.18.25.0 Test suite
@@ -509,9 +513,9 @@ spec 006 完整 mac 风面板设计的**第二阶段 ship 切片**. 仅 ship 4 �
 
 ### 10.5 spec 037 spec / plan / tasks 状态
 
--  37-fluxing-components-v0/spec.md (10623 B, BOM, CR=LF=120, 0 mojibake).
--  37-fluxing-components-v0/plan.md (7762 B, BOM, CR=LF=202, 0 mojibake).
--  37-fluxing-components-v0/tasks.md (4625 B, BOM, CR=LF=62, 0 mojibake).
+- 037-fluxing-components-v0/spec.md (10623 B, BOM, CR=LF=120, 0 mojibake).
+- 037-fluxing-components-v0/plan.md (7762 B, BOM, CR=LF=202, 0 mojibake).
+- 037-fluxing-components-v0/tasks.md (4625 B, BOM, CR=LF=62, 0 mojibake).
 - 28 tasks 全 [ ] (待实施).
 - Constitution Check 通过 (I-V + R1-R9 + P1-P8 OK).
 
@@ -621,3 +625,51 @@ installer rebuild (含全部 source data)：
 - **spec 047** - WeaselPanel / FluxingPanel 集成 DPI 处理 (V1 child physical vs top-level 方向不一致, spec 037 控件在 WeaselPanel 主面板验证)
 
 spec 042 优先级最高 (P1 路线图需求 F2 完整化), 其它按需选取。
+
+---
+
+## 15. 状态快照（2026-10-22）— 续 §10
+
+- **最新 release = v0.21.0.1**（2026-08-16，spec 077）：Shift_L 单键释放选第 2 候选 / Shift_R 选第 3 候选。
+  根因在 librime `KeyEvent::operator==` 严格比较 modifier —— TSF 的 release 事件永远匹配不上 yaml 的
+  `accept: Shift+Shift_L`，是引擎行为不是 yaml 能修的。修法走 IPC 边界：3 条新 IPC 命令
+  （SHIFT_DOWN / SHIFT_UP / SELECT_CANDIDATE）+ TSF 端吃 Shift 事件 + server 端 per-session 状态机
+  （ADR 0007）。yaml 的两行 binding 已删，Control+1/2 备用选择器保留。
+- **上一版本 v0.20.0.2**（2026-08-07，spec 076）：`boost::thread_specific_ptr` 的 TOCTOU 竞态导致
+  HEAP_CORRUPTION 0xc0000374（微信 / Claude Code / explorer 多进程 crash）。改用
+  `static thread_local std::unique_ptr`，并新增 `test/TestPipeChannelRace` 回归测试
+  （100 thread × 1000 round trip）。
+- **F1–F6 当前状态**见 §3.1 表头（基准 2026-10-22, 0.21.0.1）。F3 仍为 partial（只 ship 了快捷键页）。
+- **仓库规模**：`CHANGELOG.md` 累计 87 个 release 条目；`.specify/specs/` 60 个目录（spec 000–077，
+  编号有跳号与重号）；`test/` 27 个 test project，其中 spec 077 相关 3 个
+  （TestShiftIPCStateMachine / TestShiftIPCWire / TestShiftSelectBinding）。
+- **本轮（2026-10-22）修掉的 5 个待修问题**：
+  1. `specs/037-fluxing-components-v0/spec.md` 的 2 个 NUL 字节 → ASCII `0`（字节级复验 NUL=0）。
+  2. appcast 品牌化：`update/appcast.xml` / `update/testing-appcast.xml` 从上游【小狼毫】内容换成
+     Fluxing 品牌 + 真实发布渠道 `https://www.aiec.fun/pinyin/appcast.xml`；
+     `update/bump-version.ps1` 修了两个真 bug —— ANSI 读写会烧掉中文（全部历史 item 的版本号会被
+     一个正则改写成同一个 tag）；`.github/workflows/update-appcast.yml` 从「触发上游 rime/home」
+     改成「只校验、不外发」的守门任务。
+  3. 小 logo 回归：`File "fluxing-logo_small.png"` 在 v0.20.0.0 被 ROLLBACK（当时源文件缺失，
+     留着会 NSIS abort），到 0.21.0.1 仍未恢复 → QuickPanel 一直回退到 700×700 大 logo（L82 修过
+     的老问题）。本轮从 `docs/design/fluxing-logo_small.png` 还原 `output/fluxing-logo_small.png`
+     （83 字节 git 错误文本 → 1015 字节真 PNG，SHA256 43B994AD…25AC）并恢复 NSIS 安装行。
+  4. 本 PRD / TDD / CONTEXT 状态快照刷新到 0.21.0.1（§3.1 表头 + §10 续篇 + CONTEXT 三处）。
+  5. 仓库卫生：清理 0-tracked 的验证残留（`output/verify-*`、`output/_extract_*`、`$extractDir/`、
+     `$out/`、`output/archives/`、`deps/boost_1_83_0/` 解压树、msbuild/build 中间产物等），
+     并补 `.gitignore`。
+- **本地产出**：0.21.0.2 候选安装包（`output/archives/fluxing-0.21.0.2-installer.exe`），
+  仅本地 makensis 产物 —— **未 stage / 未 commit / 未 push**，等用户装机实测后再决定。
+- **已知未修（需用户决策）**：
+  - **boost 静态库全缺**：`env.bat` 的 `BOOST_ROOT=F:\b183` 已不存在，`deps/` 下 0 个 `.lib`。
+    `deps/boost_1_83_0.7z` 归档完好（`7z t` → Everything is Ok，76,253 files），可重建源码树，
+    但 `stage/lib` 的静态库仍要 b2 编译产出。→ **当前无法全量重编 C++**。
+  - **`output/weaselx64.dll` 是 2026-08-08 的旧产物**：缺 spec 077 的 `ShiftDown` / `ShiftUp` /
+    `_shiftDownIsLeft` 符号（x86 的 `output/Win32/WeaselServer.exe` 已含）。重编它同样卡在 boost 上；
+    本轮打包原样沿用该旧 x64 shim。
+  - **运行时 feed URL 仍指上游**：`WeaselServer.rc` 的 APPCAST 字符串表（FEEDURL / TESTINGFEEDURL）
+    仍是 `rime.github.io`，改它要重编 WeaselServer.exe。上游 feed 的版本号（0.17.4）低于当前版本，
+    Sparkle 不会提示更新，暂无实际危害。
+  - **`release/` 里的 0.21.0.1 从未发布到 www.aiec.fun/pinyin**：`download.php` 找不到指定文件时会
+    回退到「最新安装包」，所以 `?file=fluxing-0.21.0.1-installer.exe` 会静默返回 0.21.0.0 的字节
+    （Content-Length 42788787 = 0.21.0.0 的尺寸，不是 0.21.0.1 的 42792149）。
