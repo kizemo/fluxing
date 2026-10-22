@@ -142,3 +142,39 @@ sftp.json
 __pycache__/
 *.pyc
 *.pyo
+
+# graphify knowledge-graph build output (2026-10-22). Local analysis artifact:
+# graph.json / graph.html / GRAPH_REPORT.md plus the extraction cache. Regenerate
+# with the graphify pipeline; never commit.
+graphify-out/
+
+# 2026-10-22 cleanup: installer-verification scratch. These are throwaway
+# 7z-extract trees and per-build "verify" copies of an unpacked installer;
+# the real payloads live in release/ (tracked) and output/archives/ (ignored).
+/output/verify-*/
+/output/_extract_*/
+/output/_check_extract/
+/output/_verify_extract/
+
+# 2026-10-22 cleanup: two literally-named artifacts left behind by a script
+# that interpolated "$extractDir" / "$out" without expanding them. Pure
+# sandboxes — an unpacked installer tree and one stray exe.
+/$extractDir/
+/$out/
+
+# 2026-10-22 cleanup: superseded A/B hotfix binaries (v0.19.0.67 era) and the
+# one-off smoke-test scripts, which now live in scripts/test-infra/ as
+# permanent tooling (repo convention: scripts/test-infra/, not output/).
+/hotfix_*/
+/output/_smoke_test_*.ps1
+
+# 2026-10-22 cleanup: MSVC incremental-link artifacts leaking into release/
+release/*.ilk
+
+# 2026-10-22 cleanup: MSVC link artifacts that land next to the test sources
+# instead of inside Release/Debug/ (xmake put the .vcxproj OutDir there).
+/output/Win32/*.ilk
+/test/**/*.exe
+/test/**/*.pdb
+/test/**/*.ilk
+/env.bat.bak.*
