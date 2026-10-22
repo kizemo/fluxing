@@ -438,12 +438,15 @@ Section "Fluxing"
   SetOutPath $INSTDIR
 
   ; L79-fix: 装 fluxing-logo.png 到 weasel subdir(QuickPanel 找它)
-  ; v0.62 ROLLBACK: fluxing-logo_small.png (L82) not yet in v0.62 source.
-  ; SKIP that line to avoid NSIS abort. QuickPanel silently falls back to
-  ; fluxing-logo.png (handled in QuickPanelDialog.cpp LoadLogoWIC).
+  ; L82: 装 fluxing-logo_small.png (20x20 PNG icon, QuickPanel 实际使用的 logo)
+  ; v0.20.0.0 曾 ROLLBACK 此行 (源文件缺失 -> NSIS abort), 2026-10-22 恢复:
+  ; 源文件已从 docs/design/fluxing-logo_small.png 还原到 output/
+  ; (SHA256 43B994AD1482D7D0EA5A2F51154080CF63D1AC41CFAB34D2274165865F1825AC)
+  ; 注意: copy 必须在 makensis 之前, 否则 File 指令 abort (L82 原始教训).
 
   SetOutPath $INSTDIR\weasel
   File "fluxing-logo.png"
+  File "fluxing-logo_small.png"
   SetOutPath $INSTDIR
 
   IfFileExists $TEMP\weasel-backup\*.* 0 program_files
