@@ -3851,22 +3851,22 @@ t->Clear(). 0.18.28.0 ship 时已应用.
 ### spec 014: restore Shift_L/R select 2nd/3rd candidate (L21)
 
 - **Problem**: (7� 0.18.7.0 �K͈ "(	W͗�, ��	�,�/
-  ,		W�"spec 005 v1.1 US1-B �� "	 Shift_L/R 	, 2/3 	" (
+  第三候选字词"。spec 005 v1.1 US1-B 承诺的 "按 Shift_L/R 选第 2/3 候选" 在
   0.18.6.0 K� L19 � , 0.18.7.0 �
  CI �@��F*b
 ���
 
 - **Fix (spec 014)**: ( key_binder/bindings has_menu �, ( Control+1/2
-  KM�� 2 L binding, ( spec 012 plan.md �2.2 ��� ccept: Shift+Shift_L/R
+  之前加回 2 行 binding, 使用 spec 012 plan.md §2.2 设计的 ccept: Shift+Shift_L/R
   b (modifier=Shift, 
-� TSF release event �9M):
+  形式 (modifier=Shift, 不会被 TSF release event 误匹配):
   `yaml
   - { when: has_menu, accept: Shift+Shift_L, send: 2 }
   - { when: has_menu, accept: Shift+Shift_R, send: 3 }
   `
 
-- **L21 Y�**: L19 / over-correction - �d�@	 keycode=Shift_L/R binding,
-  � spec 005 v1.1 �� has_menu bindingL19 ��� "W&2� ���
+- **L21 教训**: L19 是 over-correction - 移除了所有 keycode=Shift_L/R binding,
+  包括 spec 005 v1.1 承诺的 has_menu binding。L19 自我审查写 "字符串断言只能证
    yaml �,��a binding X(/
 X(", F L19 ��t�V TestDefaultHotkeys
   31/31 PASS e"��"�
@@ -3875,7 +3875,7 @@ X(", F L19 ��t�V TestDefaultHotkeys
 - **KՆ�**:
   - TestDefaultHotkeys.exe output\data\default.yaml -> Passed: 35 / 35
     (4 * L19 �c + 4 *�c)
-  - TestShiftSelectBinding.exe output\data\default.yaml -> Passed: 13 / 13 (�)
+  - TestShiftSelectBinding.exe output\data\default.yaml -> Passed: 13 / 13 (新)
   - $W�� runtime KդɌ� spec 014 �
 , M L18/L19 � "passing
     test, regressed behavior" w1
@@ -3883,57 +3883,57 @@ X(", F L19 ��t�V TestDefaultHotkeys
 - **Build**:
   - xbuild.bat installer -> output/archives/fluxing-0.18.8.0-installer.exe
     (42631276 W�, ~40.7 MB)
-  - 7z ��� 0.18.7.0 vs 0.18.8.0: / � data\default.yaml 16607
-    -> 17200 W� (+593 W�), 23 * binary 100% � (rime.dll / WeaselServer.exe
+  - 7z 解包对比 0.18.7.0 vs 0.18.8.0: 唯一差异 data\default.yaml 16607
+    -> 17200 字节 (+593 字节), 23 个 binary 100% 相同 (rime.dll / WeaselServer.exe
     I SHA256 hI)
 
 - **Verified by**: silent install 0.18.8.0 -> exit 0, HKLM InstallDir =
   C:\Program Files\fluxing, HKCU RimeUserDir = C:\Program Files\fluxing
   \user1\fluxing, default.yaml + spec 014 �
 
-- **Refs**: L19 (� L21 ��), L20 (silent-install cmd /c wrapper �(), spec 012
+- **Refs**: L19 (被 L21 替代), L20 (silent-install cmd /c wrapper 沿用), spec 012
   (L16 �F* ship), spec 014 (L21 �
 ), spec 005 v1.1 US1-B (b
 �)
 
-�## [0.18.6.0-fluxing] - 2026-07-01
+## [0.18.6.0-fluxing] - 2026-07-01
 
 ### L19: defensive remove of all keycode=Shift_L/R bindings (spec 005 v1.1)
 
-- **Problem**: 0.18.5.0 (7�K͈ `shift+Enter` / `shift+<letter>` release
+- **Problem**: 0.18.5.0 用户实测反馈 `shift+Enter` / `shift+<letter>` release
   event ��� ascii_mode bL18 �
-commit `e4095f2`	��d�
-  `always: Shift+Shift_L/R toggle ascii_mode`F�Y�
-  `has_menu: Shift+Shift_L/R send 2/3` � bindingL18 W&2� 
+  event 仍触发 ascii_mode 切换。L18 修复（commit `e4095f2`）只移除了
+  `always: Shift+Shift_L/R toggle ascii_mode`，但保留了
+  `has_menu: Shift+Shift_L/R send 2/3` 的 binding。L18 字符串断言
   25/25 PASS 
 ���L� binding hL:0.18.6 ��* buildL18
   �
 *��Ō�	
 
 - **Fix (L19)**: 2�'�`output/data/default.yaml` -
-  `keycode=Shift_L/R` �@	 binding **h�
+  `keycode=Shift_L/R` 的所有 binding **全部不存在**（含 `always` 与
 X(**+ `always` 
   `has_menu` $a�	
 
   - 		�9( RIME >:ؤ.M `Control+1/2/3..9`
     keycode=`1`/`2`/`3`..`9`  `Shift_L/R` release event 
 ��	
-  - -��Y `Shift+space`keycode=`space`	
-  - ascii_composer `switch_key.Shift_L/R: noop` �Y� key_binder ��	
+  - 切中英保留 `Shift+space`（keycode=`space`）
+  - ascii_composer `switch_key.Shift_L/R: noop` 保留（让 key_binder 接管）
 
-- **Test coverage**: `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp` �
+- **Test coverage**: `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp` 从
   25/25 G�0 **31/31 PASS**�� 6 * L19 � ��@	
-  `Shift_L/R` b� binding	+ 1 * L19 c� active ascii_mode
-  toggle �p == 1� `Shift+space`	
+  `Shift_L/R` 形态的 binding）+ 1 个 L19 正断言（active ascii_mode
+  toggle 路径数 == 1，仅 `Shift+space`）。
 
-- **Unverified**: ���L:librime submodule a�0.18.6 build
-  �� release �6	(7�� 0.18.6 �{K���
+- **Unverified**: 真实安装包行为（librime submodule 污染，0.18.6 build
+  状态待 release 验收）。用户重装 0.18.6 后必须手动验证：
   - `shift+Enter` / `shift+<letter>` 
 �-�
-  - `Shift+space` ��-�
-  - 	�S � `Control+1` / `Control+2` 	, 2/3 	
+  - `Shift+space` 仍能切中英
+  - 候选窗打开时 `Control+1` / `Control+2` 选第 2/3 候选
 
-- **Refs**: L18� L19 ��	L16spec 005 v1.1 plan.md �2.2
+- **Refs**: L18（被 L19 替代）、L16、spec 005 v1.1 plan.md §2.2。
 
 ## [0.18.7.0-fluxing] - 2026-07-01
 
@@ -3995,7 +3995,7 @@ X(**+ `always` 
 ### Installer hardening: smoke-test path guard + TSF shim lock-skip
 
 - **L13-fix-2**: install-side guard against smoke-test paths left behind in
-  the registry. When a previous silent-install smoke test (AGENTS.md �2.5)
+  the registry. When a previous silent-install smoke test (AGENTS.md §2.5)
   leaves `HKLM\Software\Fluxing\Weasel\InstallDir` pointing under
   `C:\TEMP\` or `C:\Users\test\`, the new install would inherit that path.
   The guard detects the smoke-test prefix (most-specific first:
@@ -5419,7 +5419,7 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
   fails" line is removed. The full TDD.md sec 8 known gaps list is
   now: L16/L18 test gap (closed by spec 018), user_dict_update
   integration (spec 020 placeholder), WM_SETTINGCHANGE broadcast
-  (spec 022 placeholder), rime_deployer --debug (spec 004 �7 SC-005
+  (spec 022 placeholder), rime_deployer --debug (spec 004 §7 SC-005
   no test project). Three of the four are now blocked-on-parent-spec
   placeholders.
 
@@ -5428,7 +5428,7 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
   TestDarkModeBroadcast, TestYamlRoundTripE2E). Each is now a
   spec-stage placeholder at `.specify\specs\020-023-*/` with
   spec/plan/tasks 3-piece sets pointing to the parent spec (008 /
-  009 / 004 �9 / 007). The production code for those tests does
+  009 / 004 §9 / 007). The production code for those tests does
   not exist yet (CandidateEdit, PhrasesStore, DarkModeBridge,
   YamlRoundTrip), so the test code is blocked on the parent spec
   shipping. This is a tracking release, not an implementation

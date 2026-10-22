@@ -157,8 +157,8 @@ actually compiled into the librime 1.13 we ship.
 - For Fluxing 0.18.x we use:
   - `accept: Shift_L, send: 2, when: has_menu` → pick 2nd candidate on left Shift
   - `accept: Shift_R, send: 3, when: has_menu` → pick 3rd candidate on right Shift
-  - `accept: Shift_L, toggle: ascii_mode, when: always` � only the exact-case form works (see L16 for why lowercase forms are silently dropped)
-  - `accept: Shift_R, toggle: ascii_mode, when: always` � only the exact-case form works (see L16 for why lowercase forms are silently dropped)
+  - `accept: Shift_L, toggle: ascii_mode, when: always` → only the exact-case form works (see L16 for why lowercase forms are silently dropped)
+  - `accept: Shift_R, toggle: ascii_mode, when: always` → only the exact-case form works (see L16 for why lowercase forms are silently dropped)
 
 **Lesson**: when you need a key to do **two different things** based on
 context (e.g. Shift = "select 2nd candidate" *if menu is up*, else "toggle
@@ -924,7 +924,7 @@ the spec 012 patch, the same log no longer shows the warning.
 **Context**: while implementing the "spec 012 cleanup" follow-up to L13
 (install-side guard against smoke-test paths left behind in the registry),
 two NSIS-specific gotchas were discovered and fixed. Both were caught by
-end-to-end smoke testing the install (AGENTS.md �2.5 recipe), not by code
+end-to-end smoke testing the install (AGENTS.md §2.5 recipe), not by code
 review - the L13-fix-2 code looked correct in isolation.
 
 ### Gotcha 1: `StrCpy $R1 $R0 N` copies the first N characters
@@ -1031,7 +1031,7 @@ value and observing the install does NOT use it.
    reliable verification - the L13-fix-2 work extended the same recipe.
 2. **When you add an NSIS smoke-test guard, write a **direct**
    verification** (seed a smoke-test path, run the install, observe
-   rejection) - not just the standard AGENTS.md �2.5 recipe. The
+   rejection) - not just the standard AGENTS.md §2.5 recipe. The
    standard recipe assumes /D= works, which it does not in this
    installer (Gotcha 3). The direct verification isolates the
    L13-fix-2 behavior from the /D= issue.
@@ -1047,7 +1047,7 @@ value and observing the install does NOT use it.
 
 **Related**: L13 (NSIS path-force suffix in silent mode), L09 (NSIS
 BOM + OutFile + line endings), L15 (PowerShell `Start-Process` arg
-merging), AGENTS.md �2.5 (silent-install smoke test recipe).
+merging), AGENTS.md §2.5 (silent-install smoke test recipe).
 
 
 # � L19 ��� (2026-07-01): L18 �p� `always: Shift+Shift_L/R` ascii_mode toggleF�Y� `has_menu: Shift+Shift_L/R send 2/3` binding0.18.5.0 (7�K: `shift+Enter` / `shift+<letter>` release event ���� ascii_mode bL18 �
@@ -1117,31 +1117,31 @@ after typing shift+= followed by a letter".
   and other `shift+<key>` chords after `Shift_L` and confirm ascii_mode does not  toggle unexpectedly.
 
 **Related**: L16 (modifier case-sensitivity), L04 (key_binder action types), spec 005
-  design.md �2.2 (now updated to reflect `Shift+space` not `Shift_L/R` for ascii_mode  toggle), AGENTS.md �2.5 (smoke test recipe).
-## L19 - `key_binder` �U `keycode=Shift_L/R` binding ��� `shift+<other>` release event ��		�9( `Control+1/2/3..9`
+  design.md §2.2 (now updated to reflect `Shift+space` not `Shift_L/R` for ascii_mode  toggle), AGENTS.md §2.5 (smoke test recipe).
+## L19 - `key_binder` 任何 `keycode=Shift_L/R` binding 都可能与 `shift+<other>` release event 冲突；候选选择改用 `Control+1/2/3..9`
 
-**��**: 2026-07-01
+**时间**: 2026-07-01
 **q�H,**: 0.18.5.0 (librime 1.13)
 **�
 H,**: 0.18.6.0 (��)
 
 ### Ƕ
 
-(7� 0.18.5.0 �K͈
+用户装 0.18.5.0 后实测反馈：
 
-1. `shift+Enter` / `shift+<letter>`  ascii_mode �b(bL�e
+1. `shift+Enter` / `shift+<letter>` —— ascii_mode 仍会切换，在换行或输入上位字母符号时同步切换了中英文和中英文标点。
 MW�&��eb�-�-��
-2. `shift`  `shift+space` �b-�
+2. `shift` 与 `shift+space` 都会切换中英文。
 
 L18 �
-commit `e4095f2`	( 0.18.5.0 release -��d� `always: Shift+Shift_L/R toggle ascii_mode`  a bindingF `has_menu: Shift+Shift_L/R send 2/3 	, 2/3 	` � binding �X(
+L18 修复（commit `e4095f2`）在 0.18.5.0 release 中只移除了 `always: Shift+Shift_L/R toggle ascii_mode` 一条 binding，但 `has_menu: Shift+Shift_L/R send 2/3 选第 2/3 候选` 的 binding 仍存在。
 
 ### 9�
 
-1. librime 1.13 `key_binder` � `keycode=Shift_L` � release event 9ML:*E���U� `Shift_L/R` : keycode � binding ��� `shift+<other>` 
+1. librime 1.13 `key_binder` 对 `keycode=Shift_L` 的 release event 匹配行为未充分验证；任何以 `Shift_L/R` 为 keycode 的 binding 都可能与 `shift+<other>` 复合键的 release event 误匹配。
 .� release event �9M
 2. L18 �
-�Z�W&2� `TestDefaultHotkeys 25/25 PASS`	F 0.18.6 ��* buildlibrime submodule a�	@� L18 �
+2. L18 修复仅做了字符串断言（`TestDefaultHotkeys 25/25 PASS`），但 0.18.6 安装包未 build（librime submodule 污染），所以 L18 修复**未真实安装验证**。
 ***��Ō�**
 3. W&2� ��� yaml �,��a binding X(/
 X(
@@ -1151,57 +1151,57 @@ X(
 
 - `default.yaml` - `keycode=Shift_L/R` �@	 binding **h�
 X(**� `always`  `has_menu` $a�	
-- 		�9( **RIME >:ؤ.M** `Control+1/2/3..9`  keycode=`1`/`2`/`3`..`9`  `Shift_L/R` release event �h
+- 候选选择改用 **RIME 社区默认键位** `Control+1/2/3..9` —— keycode=`1`/`2`/`3`..`9` 与 `Shift_L/R` release event 完全不重叠。
 ��
-- -��Y `Shift+space`keycode=`space`	 librime 1.13 `key_binder` � `Shift+space` � release event 9ML:�	H�0.18.5.0 (7*��	
-- ascii_composer � `switch_key.Shift_L/R: noop` �Y� key_binder ��	
-- �d2b(7�I�!e	`keycode=Shift_L/R` � bindingL19 ( yaml -���n��
+- 切中英保留 `Shift+space`（keycode=`space`）—— librime 1.13 `key_binder` 对 `Shift+space` 的 release event 匹配行为已有先例（0.18.5.0 用户未报问题）。
+- ascii_composer 段 `switch_key.Shift_L/R: noop` 保留（让 key_binder 接管）。
+- 移除（防止用户自定义再次引入）`keycode=Shift_L/R` 的 binding：L19 在 yaml 中加注释明确说明该原则。
 
 ### �
-�� (commit pending)
+### 修复内容 (commit pending)
 
 1. `output/data/default.yaml`: �d `has_menu: Shift+Shift_L, send: 2`  `has_menu: Shift+Shift_R, send: 3`�� `has_menu: Control+1, send: 2`  `has_menu: Control+2, send: 3`
-2. `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp`: � 25/25 G�0 **31/31 PASS**�� 6 * L19 �  + 1 * L19 c� 
+2. `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp`: 从 25/25 升级到 **31/31 PASS**，新增 6 个 L19 负断言 + 1 个 L19 正断言。
 3. z���9( `Control+1` ( `Shift+space` KM
 
 ### ��
 
-- W&2� TestDefaultHotkeys 31/31 PASS��
+- 字符串断言：TestDefaultHotkeys 31/31 PASS（可重复）。
 	
-- W�e�`output/data/default.yaml` UTF-8 � BOM + CRLF=418KՐ UTF-8 � BOM + LF=130
+- 字节健康：`output/data/default.yaml` UTF-8 无 BOM + CRLF=418；测试源 UTF-8 无 BOM + LF=130。
 - ***��**���L:librime submodule a�0.18.6 � build	(7�ŞK
 
 ### 2 L19 
 �
 
-- L19 ( `default.yaml` -����U `keycode=Shift_L/R` � binding ��� release event ���b�!��
+3. 字符串断言只能证明 yaml 文本里某条 binding 存在/不存在，不能证明运行时 binding 表的行为。
 - L19 ( `TestDefaultHotkeys` � 6 *� ��@	 `Shift_L/R` b� binding
 - � 0.18.6 release �{( AGENTS.md �2.5 silent-install smoke test K**�**� `shift+Enter` / `shift+<letter>` / `Control+1` / `Control+2` K��6
 
 ### �s
 
-- L18� L19 ��	�p� `always: Shift+Shift_L/R`* `has_menu: Shift+Shift_L/R`
+- L18（被 L19 替代）：只切走了 `always: Shift+Shift_L/R`，未切 `has_menu: Shift+Shift_L/R`。
 - L16spec 012 
  `Shift+l/r` �. ascii_mode toggle ��d
-- spec 005 v1.1plan.md �2.2	`Shift+space` -� + `Control+1/2/3..9` 		� �b
+- spec 005 v1.1（plan.md §2.2）：`Shift+space` 切中英 + `Control+1/2/3..9` 选候选的最终形态。
 ## L20 - NSIS silent install via PowerShell 5.1 Start-Process hangs; use cmd /c wrapper (extends L15)
 
-**��**: 2026-07-01
+**时间**: 2026-07-01
 **q�H,**: 0.18.5.0 / 0.18.6.0 release build
 **�
 H,**: 0.18.6.0 build script �9( cmd /c wrapper
 
 ### Ƕ
 
-� AGENTS.md �2.5 silent-install smoke test �`Start-Process -FilePath installer.exe -ArgumentList '/S /D=...' -Wait -PassThru` ( PowerShell 5.1  5 ��
+`Start-Process -FilePath installer.exe -ArgumentList '/S /D=...' -Wait -PassThru` ( PowerShell 5.1 
 ��9( `Start-Process cmd.exe -ArgumentList '/c', 'start /B ...' -PassThru` 7 60s �aO�� `cmd /c` egL 40.3s �exit 0
 
 ### 9�
 
-L15 ��� PS 5.1 + NSIS �L/D=  /LOG= ( = v	�/hb�L20 Ѱ���Start-Process -Wait ( PS 5.1 � NSIS �1� NSIS silent mode  PS 5.1 process job object ���-Wait 8
+L15 描述的 PS 5.1 + NSIS 边界（/D= 与 /LOG= 在 = 处合并）只是表面问题。L20 发现更深的问题：Start-Process -Wait 在 PS 5.1 下创建 NSIS 进程后，由于 NSIS silent mode 与 PS 5.1 process job object 交互差异，-Wait 永不返回。
 ��
 
-**workaround**�ǳ	@	 NSIS installer (�{( cmd /c �cmd /c "installer.exe /S /D=C:\TEMP\..."
+**workaround**（已采纳）：所有 NSIS installer 调用必须用 cmd /c 包裹：cmd /c "installer.exe /S /D=C:\TEMP\..."
 
 ### D&� 0.18.6.0 build )Q� v�U	
 
@@ -1209,35 +1209,35 @@ L15 ��� PS 5.1 + NSIS �L/D=  /LOG= ( = v	�/hb�L20 Ѱ���S
 � build.bat( -G "Visual Studio 17 2022" >�
 
 2. **WinSparkle.lib stub**lib64/WinSparkle.lib (10460 bytes) /*
-+��&� import h� stubWeaselServer ��� __imp__win_sparkle_* 6 **�&�**workaround**� output\Win32\WinSparkle.dll ( dumpbin /EXPORTS �� 23 * win_sparkle_* &�� WinSparkle.def`lib /DEF:WinSparkle.def /MACHINE:X86 /OUT:lib\WinSparkle.lib`  import libx64 
+2. **WinSparkle.lib stub**：lib64/WinSparkle.lib (10460 bytes) 是个不含导出符号 import 表的 stub，WeaselServer 链接报 __imp__win_sparkle_* 6 个未解析符号。**workaround**：从 output\Win32\WinSparkle.dll 用 dumpbin /EXPORTS 提取 23 个 win_sparkle_* 符号，写 WinSparkle.def，`lib /DEF:WinSparkle.def /MACHINE:X86 /OUT:lib\WinSparkle.lib` 生成真 import lib。x64 同理。
 
 3. **xmake x86 build 
-� cp weasel.dll / WeaselSetup.exe 0 output\Win32**WeaselServer/Deployer after_build hook > cp 0 output\Win32F WeaselSetup after_build cp 0 output\ vBweasel.dll from WeaselTSF after_build cp 0 output\ vB**workaround**K�� build\windows\x86\release\WeaselTSF\weasel.dll � build\windows\x86\release\WeaselSetup\WeaselSetup.exe cp 0 output\ vB
+F WeaselSetup after_build cp 0 output\ vB
 
 4. **xmake x86 build ؤ build_dir = build\windows\x86\release**
 / xbuild.bat ��̙� output\Win32@	 weasel.dll / WeaselSetup.exe ��E�i( build\windows\x86\release\WeaselTSF\ / build\windows\x86\release\WeaselSetup\xmake.lua � after_build hook �Z�* cp �\FSM hook � cp weasel*.dll M&0 output\W� WeaselSetup vB�
 
 ### ��
 
-- 0.18.6.0 silent install: cmd /c wrapper 40.3s �exit 08 y invariants h��
+- 0.18.6.0 silent install: cmd /c wrapper 40.3s 完成；exit 0；8 项 invariants 全部通过。
 - L19 �
 ����� default.yaml + Control+1, send: 2 + Control+2, send: 3
 + Shift+Shift_L, send: 2+ Shift+space toggle ascii_mode
-- W�e�installer 42612608 bytes40.6 MB	CR/LF/overlong h�
+- 字节健康：installer 42612608 bytes（40.6 MB）；CR/LF/overlong 全合规。
 
 ### 2 L20 
 �
 
-- AGENTS.md �2.5 smoke test recipe 9( cmd /c wrapper!� AGENTS.md �e	
+- AGENTS.md 已在 §3.2 标记 
 - � librime/build.bat , 78 L� bug �\: spec Ф� librime 
 8
 - � xmake.lua � after_build hook � weasel.dll / WeaselSetup.exe cn cp 0 output\Win32\ / weasel �� PR
 
 ### �s
 
-- L15: PowerShell 5.1 + NSIS /D=//LOG= �L bug� L20 iU:tS Start-Process hang	
-- L13-fix-2: install-side guard against smoke-test path� L20 ����\	
-- L19: 0.18.6.0 ���'�
+- L15: PowerShell 5.1 + NSIS /D=//LOG= 边界 bug（被 L20 扩展为整体 Start-Process hang）。
+- L13-fix-2: install-side guard against smoke-test path（被 L20 验证仍工作）。
+- L19: 0.18.6.0 的功能性修复（被 L20 验证装出正确 default.yaml）。
 � L20 ����cn default.yaml	
 
 
@@ -1245,20 +1245,20 @@ L15 ��� PS 5.1 + NSIS �L/D=  /LOG= ( = v	�/hb�L20 Ѱ���S
 ## L21 - L19 / over-correction: key_binder �d keycode=Shift_L/R �
  modifier=Shift (binding b)  modifier=0 (release-event �9M) - cn�b/ ccept: Shift+Shift_L/R
 
-**��**: 2026-07-02
+**时间**: 2026-07-02
 **q�H,**: 0.18.6.0 / 0.18.7.0
 **�
 H,**: 0.18.8.0 (spec 014)
 
 ### Ƕ
 
-(7� 0.18.7.0 �K͈"(	W͗���	�,�/,		W�"	� Shift 	, 2 		� Shift 	, 3 	 (spec 005 v1.1 US1-B �)
+用户装 0.18.7.0 后实测反馈："在候选字词窗口，无法选择第二/第三候选字词"。期望按左 Shift 选第 2 候选，按右 Shift 选第 3 候选 (spec 005 v1.1 US1-B 承诺)。
 
 ### 9�
 
-L19 fix (commit e2c36b1, 0.18.6.0) 2�'0�d� key_binder/bindings -**@	** keycode=Shift_L/R � binding, �M shift+<other> release event �9MF L19 �_ d� spec 005 v1.1 US1-B �� has_menu: Shift+Shift_L/R send 2/3 binding (�:�(� keycode=Shift_L/R b)
+L19 fix (commit e2c36b1, 0.18.6.0) 防御性地移除了 key_binder/bindings 中**所有** keycode=Shift_L/R 的 binding, 以避免 shift+<other> release event 误匹配。但 L19 同时也删除了 spec 005 v1.1 US1-B 承诺的 has_menu: Shift+Shift_L/R send 2/3 binding (因为它用了 keycode=Shift_L/R 形态)。
 
-L19 � over-correction (�	:$� binding b:
+L19 的 over-correction 错在没有区分两种 binding 形式:
 1. ccept: Shift_L (modifier=0) - �: {keycode=Shift_L, modifier=0} - **** TSF release event �9M (release event _/ {keycode=Shift_L, modifier=Release} F� keycode �Л librime ��)
 2. ccept: Shift+Shift_L (modifier=Shift) - �: {keycode=Shift_L, modifier=Shift} - **
 ** TSF release event �9M (release event / modifier=Release,  modifier=Shift %<
@@ -1280,30 +1280,30 @@ librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) %<ԃ keyco
    - { when: has_menu, accept: Shift+Shift_L, send: 2 }
    - { when: has_menu, accept: Shift+Shift_R, send: 3 }
    `
-2. 	est/TestDefaultHotkeys/TestDefaultHotkeys.cpp: L19 � 4 *� �l:c�  (� "�
-X(" � "�X("); �� 4 *c� �� spec 014 �� binding  ascii_composer.switch_key � noop
-3. 	est/TestShiftSelectBinding/ (�): ,�* runtime yaml Q�K�, 13 *�c� , ��:
+2. 	est/TestDefaultHotkeys/TestDefaultHotkeys.cpp: L19 的 4 个负断言翻转为正断言 (从 "应不存在" 变 "应存在"); 新增 4 个正断言覆盖 spec 014 新增 binding 与 ascii_composer.switch_key 保持 noop。
+3. 字符串断言只能证明 yaml 文本里某条 binding 存在/不存在，不能证明运行时 binding 表的行为。
+3. 	est/TestShiftSelectBinding/ (新): 第二个 runtime yaml 契约测试, 13 个新正断言, 验证:
    - ccept: Shift+Shift_L, send: 2 / ccept: Shift+Shift_R, send: 3 X(
    - �	 bare ccept: Shift_L/R, (modifier=0) - L19 2��Y
-   - scii_composer.switch_key.Shift_L/R: noop �
-   - Shift+space toggle ascii_mode � (L18 contract)
+   - scii_composer.switch_key.Shift_L/R: noop 保持
+   - Shift+space toggle ascii_mode 保持 (L18 contract)
    - 4 * ordering �  (Shift+Shift_L/R ( Shift+space KM, ( Control+1/2 KM)
 4. weasel.sln: � Project � + 16 L ProjectConfigurationPlatforms
 5. env.bat + weasel.props: 0.18.7 -> 0.18.8 (gitignored, 
 e commit)
 6. 
-elease/fluxing-0.18.8.0-installer.exe: 42631276 W� (NSIS �S, internal binary 100%  0.18.7.0)
-7. CHANGELOG.md: � [0.18.8.0-fluxing] �
+ 0.18.7.0)
+7. CHANGELOG.md: 新 [0.18.8.0-fluxing] 段
 
 ### ��
 
 - TestDefaultHotkeys.exe output\data\default.yaml -> Passed: 35 / 35 (4 * L19 �c + 4 *�c)
-- TestShiftSelectBinding.exe output\data\default.yaml -> Passed: 13 / 13 (�)
-- xbuild.bat installer -> output/archives/fluxing-0.18.8.0-installer.exe (42631276 bytes, ~40.7 MB,  0.18.7.0 � 2941 W�)
+- TestShiftSelectBinding.exe output\data\default.yaml -> Passed: 13 / 13 (新)
+- xbuild.bat installer -> output/archives/fluxing-0.18.8.0-installer.exe (42631276 bytes, ~40.7 MB, 与 0.18.7.0 差 2941 字节)
 - 7z �$* installer ��: / �/ data\default.yaml (16607 -> 17200 bytes, +593 bytes /��e� 4 L�� + 2 L binding)@	 binary 100% � (rime.dll, WeaselServer.exe I 23 *�� SHA256 hI)
 - silent install 0.18.8.0 -> exit 0, HKLM InstallDir = C:\Program Files\fluxing, HKCU RimeUserDir = C:\Program Files\fluxing\user1\fluxing, default.yaml + spec 014 �
 
-### L19 ͋Y�
+### L19 反例教训
 
 - L19 ���: "W&2� ��� yaml �,��a binding X(/
 X(, 
@@ -1326,28 +1326,28 @@ X(,
 ### 2 L19 
 �
 
-- AGENTS.md �( �3.2 � luxing scope, spec 014 ( tasks.md T001 n��: "ccept: Shift+Shift_L/R b (modifier=Shift) n� keycode=Shift_L, modifier=0 � TSF release event 
+luxing scope, spec 014 在 tasks.md T001 明确加注: "ccept: Shift+Shift_L/R 形式 (modifier=Shift) 确保 keycode=Shift_L, modifier=0 的 TSF release event 不会误匹配"
 �9M"
-- spec 014 plan.md �2.5 R1: "Shift+Shift_L mask equals Shift; TSF mask also Shift; matches. Verified by reading both sources and adding the runtime test"
-- spec 014 tasks.md T007: >� AGENTS.md �2.5 silent-install smoke test PASSED
-- spec 014 spec.md �2.5 R5: intra-has_menu order between Shift+Shift_L and Control+1 is irrelevant (different KeyEvent)
-- � spec �� key_binder ���, �{ review d L21 �, : modifier=0 ( release-match)  modifier=Shift (
+- spec 014 plan.md §2.5 R1: "Shift+Shift_L mask equals Shift; TSF mask also Shift; matches. Verified by reading both sources and adding the runtime test"
+- spec 014 tasks.md T007: 显式加 AGENTS.md §2.5 silent-install smoke test PASSED
+- spec 014 spec.md §2.5 R5: intra-has_menu order between Shift+Shift_L and Control+1 is irrelevant (different KeyEvent)
+- 后续 spec 涉及 key_binder 变更时, 必须 review 此 L21 段, 区分 modifier=0 (会 release-match) 与 modifier=Shift (不会 release-match)
  release-match)
 
 ### �s
 
-- L18 (� L19 ��): �p� lways: Shift+Shift_L/R, * has_menu: Shift+Shift_L/R
-- L19 (� L21 ��): 2�'�d**@	** keycode=Shift_L/R binding
-- L20: NSIS silent install via PowerShell 5.1 Start-Process hangs (spec 014 �( L20 � cmd /c wrapper)
+- L18 (被 L19 替代): 只切走了 lways: Shift+Shift_L/R, 未切 has_menu: Shift+Shift_L/R
+- L19 (被 L21 替代): 防御性移除**所有** keycode=Shift_L/R binding
+- L20: NSIS silent install via PowerShell 5.1 Start-Process hangs (spec 014 沿用 L20 的 cmd /c wrapper)
 - spec 005 v1.1 design.md �2.2 (Shift+Shift_L/R binding b����c)
 - spec 012 (L16): Shift+Shift_L/R binding b����, F*� ship
-- spec 014 (L21 �
+- spec 014 (L21 修复): 在 spec 012 基础上 + 测试覆盖 + 真实 ship
 ): ( spec 012 �@
  + KՆ� + � ship
 
 ## L22 - system("pause") in test code + if errorlevel 1 in batch scripts = two related CI-killer anti-patterns surfaced by spec 015
 
-**��**: 2026-07-02
+**时间**: 2026-07-02
 **q�H,**: 0.18.6.0 / 0.18.7.0 / 0.18.8.0 (all test projects affected; pre-existing bug)
 **�
 H,**: 0.18.9.0 (spec 015)
@@ -1357,24 +1357,24 @@ H,**: 0.18.9.0 (spec 015)
 spec 015 ( build + ��L TestResponseParser / TestWeaselIPC �Ѱ$* .cpp +>�	 system("pause"); ('�( return KM�/ Windows �6� UX !�� .exe �;^I�	.	F(^����CI,stdin ͚	s� stdin � system("pause") �� 0xC0000005 ACCESS_VIOLATIONK��� crashCI h��
 �
 
-TestDefaultHotkeys + TestShiftSelectBinding (spec 014 ��) ���* anti-pattern@��(^����c8�\TestResponseParser + TestWeaselIPC �S 2024-02 clang-format Фcommit 21d2bf9	�e1 �	�* patternF CI test job  ��� TestDefaultHotkeyscommit 10b72e2 scope P6	@� bug �* surface
+TestDefaultHotkeys + TestShiftSelectBinding (spec 014 新增) 都没这个 anti-pattern，所以能在非交互环境正常工作。TestResponseParser + TestWeaselIPC 自打 2024-02 clang-format 提交（commit 21d2bf9）以来就一直有这个 pattern，但 CI test job 一直只跑 TestDefaultHotkeys（commit 10b72e2 scope 限制），所以 bug 从未 surface。
 
 ### Ƕ 2: if errorlevel 1 in batch
 
 spec 015 � scripts\run-tests.bat �Ѱ d system(pause) TestResponseParser �: test_4 � BOOST_ASSERT(2 == c.candies.size()) 1%( bort()abort ( Windows Release ���l 0xC0000005 STATUS_FATAL_APP_EXITs -1073741819
 
-y,� if errorlevel 1 ��I/ if errorlevel >= 1F -1073741819 \: signed 32-bit /p< 1Ӝ batch �$: "no error",���J === ALL TESTS PASSED === + exit 0
+F -1073741819 \: signed 32-bit /p
 
 ### �
 
 1. **TestResponseParser.cpp + TestWeaselIPC.cpp**:  d   system("pause"); Lbyte-level �UTF-8 � BOMCRLF	
 2. **scripts\run-tests.bat**: 9( setlocal enableextensions enabledelayedexpansion + if !errorlevel! NEQ 0 set "FAIL=1" + set "FINAL_RC=!FAIL!" + endlocal & set "OUTER_RC=%FINAL_RC%" !cn  -1073741819 I<�B
 3. **scripts\run-tests.bat**: ( set "SOL_DIR=%CD%"����>͜`	 � msbuild � standalone-build SolutionDir ��
-4. **scripts\run-tests.bat**: ( 8.3 ��C:\PROGRA~2\...	  set "VCVARS=C:\Program Files (x86)\..." ̄͜`-��-CMD-㐲�
+4. **scripts\run-tests.bat**: 用 8.3 短路径（C:\PROGRA~2\...）避开 set "VCVARS=C:\Program Files (x86)\..." 里的反斜杠-括号-CMD-解析冲突。
 
 ### ��
 
-- scripts\run-tests.bat (SM HEADTestResponseParser test_4 fail	exit 1�� === TESTS FAILED ===
+- scripts\run-tests.bat (SM HEADTestResponseParser test_4 fail	
 - TestDefaultHotkeys: 35/35 PASS
 - TestShiftSelectBinding: 13/13 PASS
 - TestWeaselIPC: PASS
@@ -1384,19 +1384,19 @@ y,� if errorlevel 1 ��I/ if errorlevel >= 1F -1073741819 \: signed 32-
 ### 2 L22 
 �
 
-- AGENTS.md / spec 015 / L22 ��(test code 
+- AGENTS.md / spec 015 / L22 互相引用：test code 不写 system("pause") 或等价物（getchar、_getch 等）。
 � system("pause") I�igetchar_getch I	
 - �U�� test project �{( scripts\run-tests.bat �{�
 A�"test by hand"
 - �U( exit code Z gate � .bat ,�{( if !errorlevel! NEQ 0 !
 ( if errorlevel 1
-- L22  L11 / L17 / L20 / L21  	�"Windows-isms in code that should be cross-platform"�U Windows-only �!� test  build �wM�{ grep L## h
+- L22 与 L11 / L17 / L20 / L21 一脉相承："Windows-isms in code that should be cross-platform"。任何 Windows-only 代码模式进 test 或 build 工具前必须 grep L## 列表。
 
 ### �s
 
-- L20: NSIS silent install via PowerShell 5.1 Start-Process hangs (cmd /c wrapper �)
+- L20: NSIS silent install via PowerShell 5.1 Start-Process hangs (cmd /c wrapper 解)。
 - L11: BOM double rule
-- L21: spec 014 L19 over-correction�� test patternspec 015 �(viU	
+- L21: spec 014 L19 over-correction（独立 test pattern，spec 015 沿用并扩展）。
 - spec 014 / 015: "$*�� test +  a lesson" pattern
 
 ## L23 - Adding a new test project requires BOTH vcxproj GUID AND sln ProjectConfigurationPlatforms; PowerShell script variable interpolation can silently write empty `{}` into sln
@@ -1912,7 +1912,7 @@ wrong. Do not add a parallel deserializer for the test's format.
   it was fabricated.
 
 **Related**: spec 019 closes TDD.md sec 8 known gap "key_binder
-binding /&� librime ��" by replacing test_4 with a direct
+binding 是否真被 librime 接受" by replacing test_4 with a direct
 `boost::archive::text_woarchive` round-trip on a hand-built
 CandidateInfo.
 
@@ -3049,7 +3049,7 @@ Remove-Item "HKCU:\Software\Fluxing\Weasel" -Recurse -Force -ErrorAction Silentl
 
 - **AP-L41-A**: Running the AGENTS.md smoke test recipe verbatim after L13-fix-2 landed. The recipe's `C:\TEMP\fluxing-test` path is now caught by the install.nsi redirect.
 - **AP-L41-B**: Using quoted `/D=path` in cmd /c. Trailing backslashes get stripped.
-- **AP-L41-C**: Treating "all 8 invariants pass" as the success criterion without updating the recipe when the installer design changes. L36 audit pattern: when a script changes, also update the recipe that drives it.﻿
+- **AP-L41-C**: Treating "all 8 invariants pass" as the success criterion without updating the recipe when the installer design changes. L36 audit pattern: when a script changes, also update the recipe that drives it.
 
 ## L42 - False-positive test pass when new code is dead-stripped from the production binary (verify linked .dll/.exe contents, not just .pdb)
 
