@@ -15,7 +15,9 @@
 4. [`.specify/memory/project-knowledge.md`](.specify/memory/project-knowledge.md) §A 与 §11 — 部署 + NSIS 配方
 5. [`docs/agents/domain.md`](docs/agents/domain.md) — 工程技能消费契约
 
-按需再读: `docs/agents/issue-tracker.md` · `docs/adr/` · `.specify/specs/NNN-*/spec.md`。
+按需再读:
+- `docs/agents/issue-tracker.md` · `docs/adr/` · `.specify/specs/NNN-*/spec.md`
+- [`Rime-设置说明书-重点快捷键.md`](Rime-设置说明书-重点快捷键.md) — 改 `output/data/**/*.yaml` (schema/custom/key_binder/editor/ascii_composer/switcher/punctuator/recognizer/translator/app_options) 时必读;重点章节 §5–§7、§9(本机现状)、§10(常见坑)
 
 ---
 
@@ -33,6 +35,7 @@
 - **必须 `/D=<path>` 显式** silent-install (L13 / L17), 且先清 `HKLM\Software\Fluxing\Weasel` 与 `HKCU\Software\Fluxing` (L54)。
 - **必须 Conventional Commits + 模块前缀** (`WeaselTSF | WeaselServer | WeaselDeployer | WeaselSetup | WeaselUI | WeaselIPC | RimeWithWeasel | installer | docs | fluxing | ci`), 否则 commit 不合 P4。
 - **必须 `git status -sb` + `git diff --stat`** 在 commit 前 — 阻止 `weasel.props` / `env.bat` / `*.obj` 误提交。
+- **必须先读 [`Rime-设置说明书-重点快捷键.md`](Rime-设置说明书-重点快捷键.md)** 当修改 `output/data/**/*.yaml` / `output/data/**/*.custom.yaml` 的 `key_binder/bindings` / `editor/bindings` / `ascii_composer/switch_key` / `switches` / `recognizer/patterns` / `punctuator/*` / `translator/*` / `app_options` / `switcher/hotkeys`;遵循 §3 补靪语法、§6/§7 action 完整列表、§9.3 WeaselTSF `RELEASE_MASK` 坑。
 
 完整的 "为什么" 与事故溯源在 `lessons-learned.md`;Const. 链接 + Verification 见各专项 `.claude/rules/`。
 
@@ -58,6 +61,7 @@
 | [`.claude/rules/build-toolchain.md`](.claude/rules/build-toolchain.md) | `*.bat` / `*.sln` / `*.xmake.lua` / `*.props` / `env.bat` |
 | [`.claude/rules/commit-checklist.md`](.claude/rules/commit-checklist.md) | `test/` / `.specify/specs/` / `CHANGELOG.md` |
 | [`.claude/rules/hotkey-binding.md`](.claude/rules/hotkey-binding.md) | `Hotkey*` / `Shift*` / `Test*Hotkey*` / `Test*Binding*` |
+| [`.claude/rules/rime-settings.md`](.claude/rules/rime-settings.md) | `output/data/**/*.yaml` / `output/data/**/*.custom.yaml` / `weasel.yaml` |
 
 ---
 
