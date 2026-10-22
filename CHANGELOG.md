@@ -103,7 +103,7 @@ Aggregate: 12+ tests, 0 fail. msbuild weasel.sln /t:Rebuild: 0 errors.
 - 装机后切到火流猩输入法,**不再**触发微信 / Claude Code / dopus / ToDesk / explorer 多进程 crash
 - v0.20.0.0/0.20.0.1 的 crash 现场消失
 
-**Root cause (WinDbg `!analyze -v` 双 dump 实证)**:
+**Root cause (WinDbg `!analyze -v` ˫ dump ʵ֤)**:
 - v0.20.0.0 假设是 NSIS install.nsi line 578 路径错配 → **不是** (binary mtime 修后仍 crash)
 - v0.20.0.0 假设是 `key_binder/bindings/+` 用 `send: "《"` 触发 X11 keysym parse error → **不是** (删后仍 crash)
 - v0.20.0.1 假设是 emoji.json 引用 emoji.txt/others.txt 缺失 → **不是** (补后仍 crash)
@@ -463,7 +463,7 @@ Lessons-learned L104, memory/2026-07-22-k3-foreground-ordering-regression 详记
 - TestPhrasesDialog 181/181 PASS / 0 FAIL (含 v0.19.0.47 Test 36 5 case + v0.19.0.48 Test 37 7 case)
 
 **Verify** (sandbox Win32 Release):
-- msbuild weasel.sln /t:Rebuild: Exit 0 (WeaselServer.exe + 16 test suites 全 rebuild)
+- msbuild weasel.sln /t:Rebuild: Exit 0 (WeaselServer.exe + 16 test suites ȫ rebuild)
 - WeaselServer.exe md5: `3049f3bbb091961901b457105371aa1b` (从 v0.19.0.47 `5dba1bcd...` 改; 是真 source build)
 - install.nsi: pre-install cleanup 强化 (WeaselServer 10x retries, ctfmon/TextInputHost 5x retries) + Stage 2 Task Scheduler fallback 检测 + 提示用户
 - installer 7z extract 后 WeaselServer.exe md5 = source build md5 ✓ (无 L97 stale)
@@ -576,7 +576,7 @@ if (himc) {
 
 **Verify** (sandbox Win32 Release):
 - TestPhrasesDialog: **168/168 PASS / 0 FAIL** (Test 1-35 全过, IME 不在 sandbox 测, layout / list / 按钮 / reorder / drag 全 OK)
-- msbuild weasel.sln: **Exit 0** (WeaselServer.exe + 16 test suites + Deployer + Setup 全 rebuild)
+- msbuild weasel.sln: **Exit 0** (WeaselServer.exe + 16 test suites + Deployer + Setup ȫ rebuild)
 - WeaselServer.exe md5: `1caa6e94b209d1d0f3214b4d08c45310` (从 v0.19.0.45 `b19d4338...` 改; 是真 source build, 非 L97 stale)
 - install.nsi: 未改 (无需新装机段; v0.19.0.45 installer 段已 ship)
 
@@ -612,7 +612,7 @@ if (himc) {
 **Root cause** (5 阶段 systematic-debugging):
 - `af13cbff` (v0.19.0.36 Phase D Reinforcement D) 加了:
   ```nsi
-  ExecWait 'taskkill /F /IM explorer.exe /T'  ; 杀 explorer.exe
+  ExecWait 'taskkill /F /IM explorer.exe /T'  ; ɱ explorer.exe
   Sleep 2000                                   ; 黑屏 2s
   Exec '"$WINDIR\explorer.exe"'                ; 重启
   ```
@@ -692,7 +692,7 @@ if (himc) {
 - TestDarkModeBridge: 18/18 (回归保护)
 - TestDarkModeBroadcast: 14/14 (回归保护)
 - v0_19_0_32_e2e: **68 PASS / 10 FAIL** — task.md 记录的 baseline regression (sandbox state shift, e2e binary mtime 7-18 链接旧 PhrasesDialog, 跟 Phase F 无关)
-- `_buildflow.cmd` Exit 0 (WeaselServer.exe + 16 test suites + Deployer + Setup 全 rebuild)
+- `_buildflow.cmd` Exit 0 (WeaselServer.exe + 16 test suites + Deployer + Setup ȫ rebuild)
 - PE-import-scan: `AllowSetForegroundWindow` + `SetForegroundWindow` 进 binary ✓
 - install.nsi UTF-8 BOM + CRLF ✓
 - installer extract 后 WeaselServer.exe md5 = source build md5 ✓ (无 L97 stale)
@@ -731,7 +731,7 @@ reg delete "HKCU\Software\Fluxing" /f
 - L100-X Phrase UI keyboard 路由依赖 foreground。WS_POPUP + WS_EX_TOPMOST 不够, 必须 SetForegroundWindow(s_hwnd) + AllowSetForegroundWindow(ASFW_ANY) 抢锁
 - L100-Y WM_LBUTTONDBLCLK 不依赖 foreground (mouse 直接命中), 但 WM_KEYDOWN / WM_NOTIFY 都依赖 — 装机测试时如果 button click 路径部分功能 (mouse) work 但 keyboard fail, 优先 suspect foreground lock
 - L100-Z Option C 双保险: Hide QuickPanel (释放 foreground) + SetForegroundWindow (抢回), 比单独 Hide 或单独 SetForegroundWindow 都稳
-- L100-X install.nsi ship 前 self-verify grep
+- L100-X install.nsi ship ǰ self-verify grep
 - L100-Y nsExec::ExecToStack 必须 Pop $0 + Pop $1 (避免 stack leak)
 
 ---
@@ -1560,7 +1560,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
        `322,322,kBrandSize,kBrandSize` — 取 PNG (700x700) 的中心 56x56 而非
        top-left。原来的 top-left 在 Fluxing logo (transparent BG, content centered)
        是空白,采不到 logo。
-     - **L81-fix-6 (topmost)**: `Show()` 末尾 `SetWindowPos(HWND_TOPMOST, ...)`
+     - **L81-fix-6 (topmost)**: `Show()` ĩβ `SetWindowPos(HWND_TOPMOST, ...)`
        显式强制置顶。`WS_EX_LAYERED + WS_EX_TOPMOST` 路径 z-order 不稳,
        显式 SetWindowPos 比 WS_EX_TOPMOST style 更可靠。
      - **L81-fix-7 (IME switch)**: WM_ACTIVATEAPP handler 自动 Hide(),app
@@ -1658,7 +1658,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **Root cause (Phase 1-2 systematic-debugging)**:
 
   1. **Logo**: v0.19.0.11 用了 `fluxing-logo.png` (大 logo)。用户指定 `docs\design\fluxing-logo_small.png` (20x20 PNG)。
-  2. **Panel invisible (浅色 desktop)**:
+  2. **Panel invisible (ǳɫ desktop)**:
      - `PaintOpaqueContent` 用 `(HBRUSH)GetStockObject(WHITE_BRUSH)` 画 panel bg 和 border → 任何浅色 wallpaper 上看不到 panel 形状
      - `ApplyAlphaGradient` 的 "panel bg" 判定阈值是 `r >= 250 && g >= 250 && b >= 250` (纯白);即使改用 light gray bg 也需要相应放宽
   3. **Border transparent (L82-fix2 新发现)**:
@@ -1703,7 +1703,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
   - Icon line (149-152, 30): `RGB=(50,50,60) A=255` ✓ (之前 A=0)
   - Panel bg gradient: A=136 (top) → A=89 (bottom) ✓
   - Brand area (small logo): `RGB=(200,113,103) A=255` ✓ (Fluxing red small icon visible)
-  - Alpha histogram: alpha=0: 796 px (3.3%); alpha=100-140: 14482 px (gradient); alpha=255: 3601 px (opaque content, 之前 1607)
+  - Alpha histogram: alpha=0: 796 px (3.3%); alpha=100-140: 14482 px (gradient); alpha=255: 3601 px (opaque content, ֮ǰ 1607)
   - `qp-dump-l82.png`: 渲染出 panel 形状 (深色 border + 浅玻璃 bg + red Fluxing logo + 5 个黑色 icons)
 
 - **What changed on user's actual screen**:
@@ -2069,7 +2069,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
   - **不需要先卸载旧版本**,直接装新版即可
   - v0.19.0.14 L72-fix NSIS installer 用 **Rename-then-File** 模式自动处理 locked file
   - 旧 locked WeaselServer.exe → rename 成 .old → 释放 lock → 新 file 装入
-  - v0.19.0.11 L66-fix HKCU\Software\Fluxing 写 unconditional
+  - v0.19.0.11 L66-fix HKCU\Software\Fluxing д unconditional
   - 装后 Alt+, 无反应时,右键托盘选"重新启动 IME 服务"或重新登录
 
 - **Files touched**: QuickPanelDialog.h (kIcoDimC 颜色降深度 + kBtnGap 2→3 + kBtnSize 39→37)
@@ -2415,7 +2415,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 
 - **Bug 1 修法**:
   - 加 `kShowGraceMs=2000` + `s_showTime` 静态字段 (header)
-  - Show() 末尾 `s_showTime = GetTickCount(); s_outsideMs = 0;`
+  - Show() ĩβ `s_showTime = GetTickCount(); s_outsideMs = 0;`
   - WM_ACTIVATEAPP / WM_KILLFOCUS 加 `(now - s_showTime) >= kShowGraceMs` 才 Hide
   - 后续 (L96 cleanup) 删除 no-op timer (modal 不需 polling, grace 守卫已足够)
 
@@ -2629,7 +2629,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **Follow-up (v0.19.0.29+)**:
   - 抽 `ModalChrome` 公共 helper (3 UI 共享 chrome pattern ~200 行 dedup)
   - UserDictionary `ProductionDeploy` 实装 rime_api->import_user_dict + deploy_schema (拿 WeaselServerApp instance)
-  - ShortcutSettings `SpawnDeploy` 实装 `ShellExecuteW(L"WeaselDeployer.exe", L"/deploy")`
+  - ShortcutSettings `SpawnDeploy` ʵװ `ShellExecuteW(L"WeaselDeployer.exe", L"/deploy")`
   - 3 UI Edit 子 modal chrome 统一为 `WS_POPUP` (UserDictionary + ShortcutSettings 当前用 WS_CAPTION)
 
 - **Installer**: `release\fluxing-0.19.0.28-installer.exe` (TBD)
@@ -2824,7 +2824,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **Follow-up (v0.19.0.32+)**:
   - v0.19.0.30 提到 v0.19.0.31 spec 050 (ShortcutSettings visual + IPC + data) 合并实施, 本次完成
   - v0.19.0.32: UserDictionary `ProductionDeploy` 实装 rime_api->import_user_dict + deploy_schema (拿 WeaselServerApp instance)
-  - v0.19.0.33: ShortcutSettings `SpawnDeploy` 实装 `ShellExecuteW(L"WeaselDeployer.exe", L"/deploy")`
+  - v0.19.0.33: ShortcutSettings `SpawnDeploy` ʵװ `ShellExecuteW(L"WeaselDeployer.exe", L"/deploy")`
   - 全套 vcxproj `PlatformToolset` 升 v143 (避免 override 命令行)
 
 - **Installer**: `release\fluxing-0.19.0.31-installer.exe` 43,271,280 bytes
@@ -3008,7 +3008,7 @@ spec 055/TaskTracker [P0]
 - **用法**: `WeaselDeployer.exe /hotkey` 打开 GUI 编辑器;编辑后保存触发 `/deploy`,新 key_binder 立即生效。
 - **验证**:
   - `xmake -y` build ok 10.4s,0 errors
-  - `WeaselDeployer.exe` 1.46MB (vs 0.7MB 之前,grow 760KB)
+  - `WeaselDeployer.exe` 1.46MB (vs 0.7MB ֮ǰ,grow 760KB)
   - 二进制包含 "快捷键编辑器" / "/hotkey" 字符串
   - `test\TestOrphanRecovery\Release\TestOrphanRecovery.exe` 6/6 PASS
   - `scripts\test-infra\run-test-suite.bat` 35+13 PASS,2 SKIP,0 FAIL
@@ -3217,7 +3217,7 @@ t->Clear(). 0.18.28.0 ship 时已应用.
   - Path 1 xbuild.bat weasel installer -> exit 0, installer 42,848,893 bytes, PE arch 0x14C x86.
   - Path 2 msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m:1 -> 0 errors / 0 warnings, 8/8 production targets success.
   - Path 3 scripts\\test-infra\\run-test-suite.bat -> 13/13 test exe PASS, 115 assertions / 0 FAIL (build phase has known MSB3491 / MSB6001 issues documented in L47; test phase verified independently).
-  - L42 byte-verify: weasel.dll contains  x001E1E1E (spec 033 dark-mode palette bytes present in production binary).
+  - L42 byte-verify: weasel.dll contains 0x001E1E1E (spec 033 dark-mode palette bytes present in production binary).
   - L14 arch-verify: WeaselServer.exe / WeaselDeployer.exe / WeaselSetup.exe / rime.dll = 0x14C x86; weaselx64.dll = 0x8664 x64; weaselARM64.dll = 0xAA64 ARM64.
 - **R-008 follow-up (v0.18.7.0 closure)**: All 13 test projects visible in build output; TestDefaultHotkeys 35/35 PASS (spec 014/021 Shift_L/R recovery + L16/L19 regressions).
 - **Test suite total**: 115+ assertions across 13 test projects.
@@ -5595,7 +5595,7 @@ elease/fluxing-0.18.21.0-installer.exe (rebuilt from current source; 0.18.20.1 s
   - cmd /c scripts\test-infra\run-test-suite.bat -> RC 0, === ALL TESTS PASSED ===, 11/11 test projects
   - cmd /c scripts\test-infra\verify-test-binaries-fresh.bat -> RC 0, 11 FRESH
   - AGENTS.md sec 2.5 silent-install smoke test -> all 8 invariants pass (L41 recipe)
-  -  x001E1E1E count in weasel.dll = 1 (L42 byte-search verification, pre-033 inline palette)
+  - 0x001E1E1E count in weasel.dll = 1 (L42 byte-search verification, pre-033 inline palette)
 
 - **Tag is 0.18.21.0** (lightweight per AGENTS.md sec 3.5). Pushed to kizemo/Fluxing.
 
@@ -5666,7 +5666,7 @@ elease/fluxing-0.18.21.0-installer.exe (rebuilt from current source; 0.18.20.1 s
   - FluxingD2DRenderer - 单例包装 ID2D1Factory + IDWriteFactory + HWND render target 缓存.
   - FluxingTheme - 单例订阅 FluxingDarkModeBridge, 通知订阅者重绘.
 - **Dependencies**:
-  - spec 033 FluxingDarkModeBridge (0.18.22.0+ ship, byte-verify  x001E1E1E in weasel.dll).
+  - spec 033 FluxingDarkModeBridge (0.18.22.0+ ship, byte-verify 0x001E1E1E in weasel.dll).
   - 现有 WeaselUI D2D/DirectWrite 基础设施 (复用 d2d1.lib / dwrite.lib 现有 link 配置).
 - **Not committed to v0 (deferred)**:
   - QuickPanelDialog 重构 (留 spec 038, v0.18.27+).
@@ -5677,7 +5677,7 @@ elease/fluxing-0.18.21.0-installer.exe (rebuilt from current source; 0.18.20.1 s
   - Path 1 xbuild.bat weasel installer -> exit 0, installer ~42.85 MB, PE arch 0x14C x86.
   - Path 2 msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m:1 -> 0 errors / pre-existing warnings only.
   - Path 3 scripts\test-infra\run-test-suite.bat -> 14/14 test exe PASS (13 existing + 1 new TestFluxingComponents), 115+18=133+ assertions / 0 FAIL, "=== ALL TESTS PASSED ===".
-  - L42 byte-verify:  x001E1E1E 仍在 weasel.dll (新 7 个 .cpp 不能 dead-strip 暗色 palette bytes).
+  - L42 byte-verify: 0x001E1E1E 仍在 weasel.dll (新 7 个 .cpp 不能 dead-strip 暗色 palette bytes).
   - L14 arch-verify: 6 binary 全部 arch 一致 (x86=0x14C, x64=0x8664, ARM64=0xAA64).
 - **Files added** (8 production + 5 test + 3 build config):
   - WeaselUI/FluxingComponents/stdafx.h
