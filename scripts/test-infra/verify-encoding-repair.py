@@ -30,14 +30,42 @@ def git_blob(rev: str, rel: str) -> bytes | None:
     return r.stdout if r.returncode == 0 else None
 
 
+def git_log_commits(rel: str, limit: int) -> list[str]:
+    r = subprocess.run(["git", "-C", str(REPO), "log", "--format=%H", "-n", str(limit), "--", rel],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if r.returncode != 0:
+        return []
+    return [x.strip() for x in r.stdout.decode("utf-8", "replace").split("\n") if x.strip()]
+
+
+def resolve_baseline(target: str, before_rev: str) -> tuple[bytes | None, str]:
+    """Return the pre-repair blob and the revision label it came from.
+
+    With ``--before-rev auto`` the baseline is the state of the file right
+    before the newest commit that touched it -- that commit's parent.  The
+    rule is deliberately independent of the rewrite map: picking a baseline
+    by "the changed set equals the map" would let the map confirm itself.
+    """
+    if before_rev and before_rev != "auto":
+        return git_blob(before_rev, target), before_rev
+    for sha in git_log_commits(target, 30):
+        parent = sha + "^"
+        blob = git_blob(parent, target)
+        if blob is not None:
+            return blob, parent
+    return git_blob("HEAD", target), "HEAD"
+
+
 def main() -> int:
     global REPO
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", default=".specify/memory/lessons-learned.md")
     ap.add_argument("--map",
                     default=SPEC_DIR + "/rewrite-map-lessons-learned.json")
-    ap.add_argument("--before-rev", default="HEAD",
-                    help="revision holding the pre-repair state (default: HEAD)")
+    ap.add_argument("--before-rev", default="auto",
+                    help="revision holding the pre-repair state; 'auto' picks the "
+                         "parent of the newest commit that touched the target "
+                         "(default: auto)")
     ap.add_argument("--repo", default=str(REPO),
                     help="repository root (default: inferred from this script)")
     args = ap.parse_args()
@@ -45,7 +73,7 @@ def main() -> int:
 
     sys.stdout.reconfigure(encoding="ascii", errors="backslashreplace")
     raw = (REPO / args.target).read_bytes()
-    before = git_blob(args.before_rev, args.target)
+    before, before_rev = resolve_baseline(args.target, args.before_rev)
     problems = []
 
     # 1. encoding + shape
@@ -67,7 +95,7 @@ def main() -> int:
         b_lines = before.count(b"\n")
         b_cr = before.count(b"\r")
         print("before rev : {} (lines {}, CR {}, BOM {})".format(
-            args.before_rev, b_lines, b_cr, b_bom))
+            before_rev, b_lines, b_cr, b_bom))
         if raw.startswith(b"\xef\xbb\xbf") != b_bom:
             problems.append("BOM state changed (before {}, now {})".format(
                 b_bom, raw.startswith(b"\xef\xbb\xbf")))
@@ -76,7 +104,7 @@ def main() -> int:
         if raw.count(b"\r") != b_cr:
             problems.append("CR count changed ({} -> {})".format(b_cr, raw.count(b"\r")))
     else:
-        problems.append("cannot read the pre-repair revision {}".format(args.before_rev))
+        problems.append("cannot read the pre-repair revision {}".format(before_rev))
 
     # 2. damage markers
     fffd = text.count("\ufffd")
