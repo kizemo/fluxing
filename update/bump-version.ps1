@@ -6,6 +6,10 @@ param( [string]$tag, [string]$basetag, [switch]$updatelog, [switch]$h)
 #     default to be the latest number format tag name
 # -updatelog, update CHANGELOG.md if this switch used
 # -h, show help info
+# Fluxing 分支常量 (取代上游 rime.github.io 链接)
+$FLUXING_RELEASE_NOTES = "https://www.aiec.fun/pinyin/release-notes.html"
+$FLUXING_DOWNLOAD_URL = "https://www.aiec.fun/pinyin/download.php?file=fluxing-"
+$repoRoot = (Get-Location).Path
 function faild_exit {
   Write-Host 
   Write-Host "Orz :( bump version failed!"
@@ -50,7 +54,7 @@ function parse_new_version {
 # update change log, work like clog-cli
 function update_changelog {
   param( [string]$new_tag, [string]$old_tag)
-  $commits = git log "$old_tag..HEAD" --pretty=format:"%s ([%an](https://github.com/rime/weasel/commit/%H))";
+  $commits = git log "$old_tag..HEAD" --pretty=format:"%s ([%an](https://github.com/kizemo/fluxing/commit/%H))";
   # group commit logs
   $groupedCommits = @{
     build = @(); ci = @(); fix = @(); feat = @(); docs = @(); style = @();
@@ -87,9 +91,9 @@ function update_changelog {
     }
   }
   $currentDateTime = Get-Date -Format "yyyy-MM-dd";
-  $fileContent = Get-Content -Path "CHANGELOG.md" -Raw -Encoding UTF8;
+  $fileContent = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes("CHANGELOG.md"));
   $contentAdd = "<a name=`"$new_tag`"></a>`n" ;
-  $contentAdd += "## [$new_tag](https://github.com/rime/weasel/compare/$old_tag...$new_tag)($currentDateTime)`n" ;
+  $contentAdd += "## [$new_tag](https://github.com/kizemo/fluxing/compare/$old_tag...$new_tag)($currentDateTime)`n" ;
   # if $new_tag.txt exists, add the content to changelog
   $new_tag_file = "$new_tag.txt";
   if (Test-Path -Path $new_tag_file) {
@@ -100,14 +104,18 @@ function update_changelog {
   $contentAdd += $changelog;
   Write-Host "`n" + $contentAdd + "`n"
   $fileContent = $contentAdd + "`n" + $fileContent;
-  $fileContent | Out-File -FilePath "CHANGELOG.md" -NoNewline -Encoding UTF8;
+  [System.IO.File]::WriteAllBytes("CHANGELOG.md", [System.Text.Encoding]::UTF8.GetBytes($fileContent));
 }
 # replace string with regex pat
 function replace_str {
   param( [string]$filePath, [string]$pat_orig, [string]$pat_replace)
-  $fileContent = Get-Content -Path $filePath -Raw;
+  # L01: 字节级 UTF-8 读写。上游用 Get-Content -Raw / Out-File (都不带 -Encoding),
+  # 在 PS 5.1 下按 ANSI(GBK) 处理, 会把 appcast 里的中文烧成乱码。
+  # 字节级读写同时原样保留 BOM 与 CRLF (L09)。
+  $bytes = [System.IO.File]::ReadAllBytes($filePath)
+  $fileContent = [System.Text.Encoding]::UTF8.GetString($bytes)
   $fileContent = [regex]::Replace($fileContent, $pat_orig, $pat_replace)
-  $fileContent | Out-File -FilePath $filePath -NoNewline;
+  [System.IO.File]::WriteAllBytes($filePath, [System.Text.Encoding]::UTF8.GetBytes($fileContent))
 }
 # update xml file
 function update_xml {
@@ -115,12 +123,41 @@ function update_xml {
   $CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
   $localTime = Get-Date
   $currentDateTime = $localTime.ToString("ddd, dd MMM yyyy HH:mm:ss zz00")
-  replace_str -filePath "$filePath" -pat_orig "\d+\.\d+\.\d+" -pat_replace $tag
+  # Fluxing: 只改"最新那个 item"(第一个 <item>), 历史 item 一律不动。
+  # 上游的正则 "\d+\.\d+\.\d+" 会替换整个文件里的所有版本号, 在多 item 的
+  # Fluxing appcast 上会把历史版本全部改成同一个 tag。
+  # 锚点统一写成 (?s)(<item>.*?...) —— 惰性匹配只命中第一个 <item>。
   replace_str -filePath "$filePath" `
-    -pat_orig "(?<=<sparkle:releaseNotesLink>)[^>]*(?=</sparkle:releaseNotesLink>)" `
-    -pat_replace "http://rime.github.io/release/weasel/"
+    -pat_orig "(?s)(<item>.*?<title>.*?)(\d+\.\d+\.\d+)(.*?</title>)" `
+    -pat_replace ('$1' + $tag + '$3')
   replace_str -filePath "$filePath" `
-    -pat_orig "(?<=<pubDate>).*?(?=</pubDate>)" -pat_replace "$currentDateTime"
+    -pat_orig "(?s)(<item>.*?<sparkle:releaseNotesLink>)[^<]*(</sparkle:releaseNotesLink>)" `
+    -pat_replace ('$1' + $FLUXING_RELEASE_NOTES + '$2')
+  replace_str -filePath "$filePath" `
+    -pat_orig "(?s)(<item>.*?<pubDate>).*?(</pubDate>)" `
+    -pat_replace ('$1' + $currentDateTime + '$2')
+  replace_str -filePath "$filePath" `
+    -pat_orig '(?s)(<item>.*?<enclosure url=")[^"]*(")' `
+    -pat_replace ('$1' + $FLUXING_DOWNLOAD_URL + $tag + '-installer.exe$2')
+  replace_str -filePath "$filePath" `
+    -pat_orig '(?s)(<item>.*?sparkle:version=")[^"]*(")' `
+    -pat_replace ('$1' + $tag + '$2')
+  replace_str -filePath "$filePath" `
+    -pat_orig '(?s)(<item>.*?sparkle:shortVersionString=")[^"]*(")' `
+    -pat_replace ('$1' + $tag + '$2')
+  # length 只有在本仓库真有该安装包时才是真的; 否则删掉这个属性 ——
+  # 留着旧 length 会让 Sparkle 按旧尺寸判定下载失败。
+  $installer = Join-Path $repoRoot ("release/fluxing-{0}-installer.exe" -f $tag)
+  if (Test-Path -Path $installer) {
+    $installerLength = (Get-Item -Path $installer).Length
+    replace_str -filePath "$filePath" `
+      -pat_orig '(?s)(<item>.*?length=")[^"]*(")' `
+      -pat_replace ('$1' + $installerLength + '$2')
+  } else {
+    replace_str -filePath "$filePath" `
+      -pat_orig '(?s)(<item>.*?)\s+length="[^"]*"' `
+      -pat_replace '$1'
+  }
   Write-Host "$filePath updated"
 }
 # update bat file
