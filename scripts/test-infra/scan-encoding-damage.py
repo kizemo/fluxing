@@ -37,6 +37,8 @@ REPLACEMENT = "\ufffd"
 NUL = "\x00"
 PRINTABLE = re.compile(r"[\x20-\x7e]{8,}")
 MIN_ANCHOR = 8
+# ASCII runs of any length - used for structural alignment checks.
+ASCII_RUN = re.compile(r"[\x20-\x7e]+")
 
 
 def git(repo: str, *args: str) -> bytes:
@@ -173,6 +175,91 @@ def partial_match(
     return best
 
 
+def _write_checked(path: Path, payload: bytes, original: bytes) -> None:
+    """Write only if the line/terminator structure is unchanged.
+
+    A rewrite tool must never alter the line count or the CRLF discipline of
+    a tracked document: those are the facts the byte-level verification in
+    spec 078 section 5.1 checks. Abort loudly instead of writing a file that
+    silently violates them.
+    """
+    def stats(buf: bytes) -> tuple[int, int]:
+        return buf.count(b"\n"), buf.count(b"\r")
+
+    new_nl, new_cr = stats(payload)
+    old_nl, old_cr = stats(original)
+    if (new_nl, new_cr) != (old_nl, old_cr):
+        raise SystemExit(
+            "refusing to write: line/terminator structure changed "
+            f"(newline {old_nl}->{new_nl}, CR {old_cr}->{new_cr})"
+        )
+    path.write_bytes(payload)
+
+
+def ascii_runs(text: str) -> list[str]:
+    """All contiguous printable-ASCII runs, regardless of length."""
+    return [m.group(0) for m in ASCII_RUN.finditer(text)]
+
+
+def structurally_compatible(damaged: str, restored: str) -> bool:
+    """True when the restored line lines up run-for-run with the damaged one.
+
+    The first-generation damage only destroyed non-ASCII characters, so all
+    ASCII of the original survives inside the damaged line. A candidate
+    recovered from history must therefore have the same number of ASCII runs,
+    and each restored run must appear inside the corresponding damaged run
+    (the damaged run may carry extra ASCII adjacent to a destroyed char).
+    """
+    d = ascii_runs(damaged)
+    r = ascii_runs(restored)
+    if len(d) != len(r):
+        return False
+    return all(b in a for a, b in zip(d, r))
+
+
+def strip_bom_artifacts(text: str) -> str:
+    """Drop U+FEFF that was meaningful only as a file-leading BOM.
+
+    A candidate from history may carry the BOM of the revision where that
+    line sat at the top of the file. Restored mid-file, that U+FEFF is an
+    artefact, not content.
+    """
+    return text.replace("\ufeff", "")
+
+
+def restore_candidate(candidate: str) -> str:
+    """Undo the GBK-misread layer on a historical candidate (idempotent)."""
+    cur = candidate
+    for _ in range(4):
+        nxt = gbk_misread(cur)
+        if nxt is None:
+            break
+        cur = nxt
+    return cur
+
+
+def candidate_is_supported(
+    damaged: str, restored: str, min_overlap: float = 0.6
+) -> bool:
+    """Is this candidate demonstrably the same line as the damaged one?
+
+    The anchors are the surviving ASCII facts (version numbers, commit ids,
+    file names, test counts). A candidate whose anchors are largely absent
+    from the damaged line is a different line and must not be applied.
+    """
+    if structurally_compatible(damaged, restored):
+        return True
+    r_runs = [r for r in ascii_runs(restored) if len(r) >= 8]
+    if not r_runs:
+        return False
+    total = sum(len(r) for r in r_runs)
+    hit = sum(len(r) for r in r_runs if r in damaged)
+    if total == 0 or hit / total < min_overlap:
+        return False
+    longest = max(r_runs, key=len)
+    return len(longest) < 12 or longest in damaged
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--path", required=True, help="repo-relative path")
@@ -184,8 +271,26 @@ def main() -> int:
         help="repair GBK-misread lines (mechanically reversible damage)",
     )
     ap.add_argument("--report", help="write a markdown report here")
+    ap.add_argument(
+        "--apply-partial",
+        action="store_true",
+        help=(
+            "recover unmatched damaged lines from the closest historical "
+            "candidate, after undoing its GBK-misread layer"
+        ),
+    )
     ap.add_argument("--min-score", type=float, default=0.99)
     args = ap.parse_args()
+
+    # The console codepage on this machine is GBK (cp936). Without this,
+    # printing a report that contains U+FFFD raises UnicodeEncodeError and
+    # the tool dies before it can report its verdict -- which would silently
+    # disable the CI gate that depends on its exit code. Encoding errors
+    # become "?" instead of an exception; the exit code stays authoritative.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     repo = str(Path(args.repo).resolve())
     target_path = Path(repo) / args.path
@@ -241,7 +346,7 @@ def main() -> int:
         out_lines += [
             f"## line {idx + 1}  (score {score:.2f}, from {rev[:10]})",
             "",
-            "- damaged: `" + cur.replace(REPLACEMENT, "�").replace(NUL, "␀") + "`",
+            "- damaged: `" + cur.replace(REPLACEMENT, "<U+FFFD>").replace(NUL, "<NUL>") + "`",
             "- clean:   `" + new + "`",
             "",
         ]
@@ -249,7 +354,7 @@ def main() -> int:
         out_lines += [
             f"## line {idx + 1}  (NO CLEAN MATCH - human rewrite required)",
             "",
-            "- damaged: `" + cur.replace(REPLACEMENT, "�").replace(NUL, "␀") + "`",
+            "- damaged: `" + cur.replace(REPLACEMENT, "<U+FFFD>").replace(NUL, "<NUL>") + "`",
         ]
         if cand:
             out_lines.append(
@@ -288,23 +393,60 @@ def main() -> int:
     else:
         print(report)
 
+    fffd = sum(line.count(REPLACEMENT) for line in stripped)
+    nul = sum(line.count(NUL) for line in stripped)
+    print(
+        "damage-scan: {} damaged_lines={} fffd={} nul={} exit={}".format(
+            args.path, len(damaged_idx), fffd, nul, 1 if damaged_idx else 0
+        )
+    )
+
     if args.apply_roundtrip and roundtrip_lines:
         for idx, _before, after in roundtrip_lines:
             eol = "\r" if lines[idx].endswith("\r") else ""
             lines[idx] = after + eol
         out = "\n".join(lines)
-        target_path.write_bytes(out.encode("utf-8"))
+        _write_checked(target_path, out.encode("utf-8"), raw)
         print(
             f"round-trip repaired {len(roundtrip_lines)} line(s)", file=sys.stderr
         )
 
     if args.apply and fixes:
         for idx, _cur, new, _score, _rev in fixes:
-            eol = "\r\n" if lines[idx].endswith("\r") else ""
+            new = strip_bom_artifacts(new)
+            # lines came from text.split("\n"), so each element already owns
+            # its trailing "\r" when the file is CRLF. Carry that "\r" only -
+            # the join below supplies the "\n". Appending "\r\n" here would
+            # emit a spurious blank line and a bare LF per replacement.
+            eol = "\r" if lines[idx].endswith("\r") else ""
             lines[idx] = new + eol
         out = "\n".join(lines)
-        target_path.write_bytes(out.encode("utf-8"))
+        _write_checked(target_path, out.encode("utf-8"), raw)
         print(f"applied {len(fixes)} recovered line(s)", file=sys.stderr)
+
+    if args.apply_partial:
+        recovered = []
+        for idx, cur, cand, score in unmatched:
+            if not cand:
+                continue
+            restored = strip_bom_artifacts(restore_candidate(cand))
+            if restored == cur:
+                continue
+            if REPLACEMENT in restored or NUL in restored:
+                continue
+            if not candidate_is_supported(cur, restored):
+                continue
+            recovered.append((idx, cur, restored, score))
+        for idx, _cur, restored, _score in recovered:
+            restored = strip_bom_artifacts(restored)
+            eol = "\r" if lines[idx].endswith("\r") else ""
+            lines[idx] = restored + eol
+        if recovered:
+            out = "\n".join(lines)
+            _write_checked(target_path, out.encode("utf-8"), raw)
+        print(
+            f"partial-roundtrip repaired {len(recovered)} line(s)", file=sys.stderr
+        )
 
     return 1 if damaged_idx else 0
 
