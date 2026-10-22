@@ -3201,7 +3201,7 @@ t->Clear(). 0.18.28.0 ship 时已应用.
 ### L46 fix - xmake + msbuild dual-path parity + v0.18.25.0 release
 
 - **Problem (R1 intent)**: spec 033 (0.18.22.0) shipped with msbuild path broken in 4 places; xmake-only verification missed all of them. L46 documents the 4 bugs:
-  1. weasel.props ResourceCompile PreprocessorDefinitions was empty literal (msbuild did not expand names; literal ;VERSION_MAJOR=; was passed to RC, failing with RC2127 ersion WORDs separated by commas expected).
+  1. weasel.props ResourceCompile PreprocessorDefinitions was empty literal (msbuild did not expand names; literal ;VERSION_MAJOR=; was passed to RC, failing with RC2127 version WORDs separated by commas expected).
   2. WeaselUI.vcxproj ClCompile missing FluxingDarkModeBridge.cpp + WeaselUtility.cpp (LNK2001 + LNK1120 on weasel.dll).
   3. RimeWithWeasel.vcxproj ClCompile missing FluxingDarkModeBridge.cpp.
   4. FluxingDarkModeBridge.cpp missing #include "stdafx.h" as first line (C1010 unexpected end-of-file while looking for precompiled header).
@@ -3211,7 +3211,7 @@ t->Clear(). 0.18.28.0 ship 时已应用.
   2. WeaselUI/WeaselUI.vcxproj adds ..\\RimeWithWeasel\\FluxingDarkModeBridge.cpp + ..\\RimeWithWeasel\\WeaselUtility.cpp to ClCompile.
   3. RimeWithWeasel/RimeWithWeasel.vcxproj adds FluxingDarkModeBridge.cpp to ClCompile.
   4. RimeWithWeasel/FluxingDarkModeBridge.cpp adds #include "stdafx.h" as first include.
-- **L43 fix - per-target /LTCG:OFF**: WeaselTSF target has its own dd_shflags that re-enables LTCG; per-target /LTCG:OFF is the cure, not global /LTCG removal. Applied to WeaselTSF/xmake.lua.
+- **L43 fix - per-target /LTCG:OFF**: WeaselTSF target has its own add_shflags that re-enables LTCG; per-target /LTCG:OFF is the cure, not global /LTCG removal. Applied to WeaselTSF/xmake.lua.
 - **L46 #2 /OPT:REF fix**: WeaselServer/xmake.lua replaces /OPT:REF /OPT:ICF with /OPT:NOREF /OPT:NOICF to keep static-lib symbols that ARE referenced (L42 sibling bug for build path, not test verification).
 - **Verification (L46 recipe, 3 paths all PASS)**:
   - Path 1 xbuild.bat weasel installer -> exit 0, installer 42,848,893 bytes, PE arch 0x14C x86.
@@ -3691,7 +3691,7 @@ t->Clear(). 0.18.28.0 ship 时已应用.
 - **Test results (scripts\run-tests.bat)**:
   - TestDefaultHotkeys: 35/35 PASS
   - TestShiftSelectBinding: 13/13 PASS
-  - TestBindingResolution: LINKED rime.lib (exit 0)  was SCAFFOLD
+  - TestBindingResolution: LINKED rime.lib (exit 0) — was SCAFFOLD
     in spec 016, now LINKED
   - TestResponseParser: 3/4 PASS (test_4 pre-existing WeaselIPC bug)
   - TestWeaselIPC: PASS (WeaselServer roundtrip)
@@ -3916,7 +3916,7 @@ t->Clear(). 0.18.28.0 ship 时已应用.
   `has_menu` 两条路径）。
 
   - 候选选择改用 RIME 社区默认键位 `Control+1/2/3..9`
-    keycode=`1`/`2`/`3`..`9`  `Shift_L/R` release event 
+    （keycode=`1`/`2`/`3`..`9` 与 `Shift_L/R` release event 不重叠）
 不重叠）
   - 切中英保留 `Shift+space`（keycode=`space`）
   - ascii_composer `switch_key.Shift_L/R: noop` 保留（让 key_binder 接管）
@@ -5597,7 +5597,7 @@ elease/fluxing-0.18.21.0-installer.exe (rebuilt from current source; 0.18.20.1 s
   - AGENTS.md sec 2.5 silent-install smoke test -> all 8 invariants pass (L41 recipe)
   - 0x001E1E1E count in weasel.dll = 1 (L42 byte-search verification, pre-033 inline palette)
 
-- **Tag is 0.18.21.0** (lightweight per AGENTS.md sec 3.5). Pushed to kizemo/Fluxing.
+- **Tag is v0.18.21.0** (lightweight per AGENTS.md sec 3.5). Pushed to kizemo/Fluxing.
 
 - **Coverage map**: see .specify/specs/008-candidate-edit/tasks.md for the T-implementation-test mapping.
 ## [0.18.20.1-fluxing] - 2026-07-04

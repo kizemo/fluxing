@@ -859,7 +859,7 @@ The recipe now uses `cmd /c` form. Verified 2026-06-30 with 0.18.4.0 installer: 
 
 ## L16 - librime 1.13 KeyEvent::Parse modifier names are case-sensitive (Shift, not shift)
 
-**Context**: spec 005 design.md wrote ccept: shift+l (lowercase
+**Context**: spec 005 design.md wrote accept: shift+l (lowercase
 modifier) in the key_binder/bindings example. The setting shipped
 in output/data/default.yaml for 0.18.0 - 0.18.4, and WeaselServer
 logs from real users show:
@@ -881,12 +881,12 @@ KeyBindings::LoadBindings skips the entry with a warning
 
 **Lesson**:
 
-- In any key_binder / key_sequence / ccept: field of
+- In any key_binder / key_sequence / accept: field of
   rime YAML, the **modifier part** must be exactly
   Shift / Control / Alt / Super / Hyper / Meta / Lock
   / Mod2..Mod5 / Release. Lowercase or ALL-CAPS variants fail.
 - The **key part** (after the last +) IS case-sensitive in a
-  different way:  means "the key that produces lowercase a"
+  different way: a means "the key that produces lowercase a"
   (no shift held), A means "the key that produces uppercase A"
   (shift held). Both are valid keysym names.
 - When binding single-key Shift_L / Shift_R, write Shift+Shift_L
@@ -895,14 +895,14 @@ KeyBindings::LoadBindings skips the entry with a warning
   (WeaselTSF/KeyEventSink.cpp:31).
 - The current TestDefaultHotkeys.exe does not catch this
   parse-error class because it checks for the YAML substring
-  ccept: Shift+l, not whether librime actually accepted it.
+  accept: Shift+l, not whether librime actually accepted it.
   **Action item (out of scope)**: add a regression test that
   pipes the YAML through librime's RimeStartMaintenance and
   asserts the binding was loaded (not just present in the text).
 - Spec 005 design.md has been superseded by spec 012; the
   surviving bindings in 0.18.5+ are the four
   Shift+Shift_L / Shift+Shift_R lines (two in has_menu,
-  two in lways), replacing the four ccept: Shift_L
+  two in always), replacing the four accept: Shift_L
   / shift+l lines that were silently broken.
 - Fluxing 0.18.5 intentionally does NOT include the
   Shift+l / Shift+r combination-key path; the user
@@ -1050,10 +1050,10 @@ BOM + OutFile + line endings), L15 (PowerShell `Start-Process` arg
 merging), AGENTS.md §2.5 (silent-install smoke test recipe).
 
 
-# � L19 ��� (2026-07-01): L18 �p� `always: Shift+Shift_L/R` ascii_mode toggleF�Y� `has_menu: Shift+Shift_L/R send 2/3` binding0.18.5.0 (7�K: `shift+Enter` / `shift+<letter>` release event ���� ascii_mode bL18 �
-*��Ō�/�:W&2� TestDefaultHotkeys 25/25 PASS	
-���L� binding hL:L19 2�'�`default.yaml` - `keycode=Shift_L/R` �@	 binding h�
-X(		�9( RIME >:ؤ `Control+1/2/3..9`
+# 被 L19 替代说明 (2026-07-01): L18 仅切走了 `always: Shift+Shift_L/R` ascii_mode toggle，但保留了 `has_menu: Shift+Shift_L/R send 2/3` binding。0.18.5.0 用户实测: `shift+Enter` / `shift+<letter>` release event 仍可触发 ascii_mode 切换。L18 修复未真实安装验证，是因为字符串断言（TestDefaultHotkeys 25/25 PASS）不能证明运行时 binding 表行为。L19 防御性原则：`default.yaml` 中 `keycode=Shift_L/R` 的所有 binding 全部不存在；候选选择改用 RIME 社区默认 `Control+1/2/3..9`。
+
+
+
 ## L18 - `key_binder` single-key Shift bindings (Shift_L/R) collide with `shift+<other>` release events; use `Shift+space` for ascii_mode toggle
 
 **Symptom** (discovered 2026-07-01, after shipping 0.18.5.0 with single-key Shift ascii_mode binding):
@@ -1061,13 +1061,13 @@ X(		�9( RIME >:ؤ `Control+1/2/3..9`
 User reported that pressing `shift+=` or `shift+Enter` (e.g. typing `+` or inserting a
 newline in some apps) causes the IME to **silently toggle ascii_mode**, instead of
 inserting `+` or starting a new line. Same pattern affected `shift+<letter>` and any
-other key that has a `Shift+symbol` layout  the `+` keystroke never reaches the
+other key that has a `Shift+symbol` layout — the `+` keystroke never reaches the
 focused app.
 
 **Root cause**: librime 1.13 `key_binder` matches `accept: Shift+Shift_L` against any
 TSF event whose `keycode == Shift_L`, regardless of the modifier mask. The intent
 was "single key Shift_L press (which TSF reports as keycode=Shift_L, modifier=Shift)"
- but the actual match also fires on the **release** portion of compound keystrokes
+— but the actual match also fires on the **release** portion of compound keystrokes
 like `shift+=`, where TSF sends a separate `keycode=Shift_L, modifier=0` event when
 Shift is released. The result: every `shift+<key>` press triggers the single-key Shift
 binding after the main key is dispatched, silently toggling ascii_mode.
@@ -1084,7 +1084,7 @@ after typing shift+= followed by a letter".
   This is the librime community default; it does not collide with compound
   keystrokes because `space` is its own keycode and the `Shift+space` chord is
   distinct from a single-Shift release event.
-- Kept the 2 `has_menu: send N, accept: Shift+Shift_L/R` bindings (select 2nd/3rd  candidate)  these are useful and the user confirmed they want them to stay.
+- Kept the 2 `has_menu: send N, accept: Shift+Shift_L/R` bindings (select 2nd/3rd  candidate) — these are useful and the user confirmed they want them to stay.
 - Updated `test/TestDefaultHotkeys.cpp` to assert the new `Shift+space` binding
   and to add 4 negative assertions confirming the old single-key Shift toggle
   bindings are gone.
@@ -1092,10 +1092,10 @@ after typing shift+= followed by a letter".
 **Lesson**:
 
 - `key_binder` `accept: Shift+Shift_L` matches **only** when both `keycode==Shift_L`
-  AND `modifier==Shift`  but the **release event** of any `shift+<other>` keystroke
+  AND `modifier==Shift` — but the **release event** of any `shift+<other>` keystroke
   also has `keycode==Shift_L`, so the modifier mask must be checked at the binding
   level too. The fix here is to choose a `keycode` that **never appears in a release
-  event**  i.e. a key that is only ever pressed together with a real character. `space`  is ideal because `Shift+space` is a deliberate user action, not a release artifact.
+  event** — i.e. a key that is only ever pressed together with a real character. `space`  is ideal because `Shift+space` is a deliberate user action, not a release artifact.
 - For "select 2nd/3rd candidate on single Shift press" use cases (has_menu bindings),  the same collision exists but is less visible because it only fires when a candidate
   menu is open. If users report issues with `shift+=` selecting the wrong candidate,
   consider replacing `has_menu: Shift+Shift_L/R` with a different modifier chord
@@ -1112,7 +1112,7 @@ after typing shift+= followed by a letter".
 **Verification**:
 
 - `test\TestDefaultHotkeys\Release\TestDefaultHotkeys.exe output\data\default.yaml` -> `Passed: 25 / 25`
-  (was 24/24 before L18; +1 for `Shift+space` assertion, +4 negative assertions for  the removed `Shift+Shift_L/R` ascii_mode bindings, -3 for the removed  `Shift_L/R U. always -�` duplicates; net +1).
+  (was 24/24 before L18; +1 for `Shift+space` assertion, +4 negative assertions for  the removed `Shift+Shift_L/R` ascii_mode bindings, -3 for the removed  `Shift_L/R 单键 always 切中英` duplicates; net +1).
 - `xbuild.bat weasel` -> 0 errors, 1 pre-existing warning (xmake buildir deprecation).- Manual verification deferred to next user-side install: type `+`, `<Enter>`,
   and other `shift+<key>` chords after `Shift_L` and confirm ascii_mode does not  toggle unexpectedly.
 
@@ -1121,161 +1121,161 @@ after typing shift+= followed by a letter".
 ## L19 - `key_binder` 任何 `keycode=Shift_L/R` binding 都可能与 `shift+<other>` release event 冲突；候选选择改用 `Control+1/2/3..9`
 
 **时间**: 2026-07-01
-**q�H,**: 0.18.5.0 (librime 1.13)
-**�
-H,**: 0.18.6.0 (��)
+**影响版本**: 0.18.5.0 (librime 1.13)
+
+**修复版本**: 0.18.6.0 (待发)
 
 ### Ƕ
 
 用户装 0.18.5.0 后实测反馈：
 
 1. `shift+Enter` / `shift+<letter>` —— ascii_mode 仍会切换，在换行或输入上位字母符号时同步切换了中英文和中英文标点。
-MW�&��eb�-�-��
+
 2. `shift` 与 `shift+space` 都会切换中英文。
 
-L18 �
+
 L18 修复（commit `e4095f2`）在 0.18.5.0 release 中只移除了 `always: Shift+Shift_L/R toggle ascii_mode` 一条 binding，但 `has_menu: Shift+Shift_L/R send 2/3 选第 2/3 候选` 的 binding 仍存在。
 
-### 9�
+### 根因
 
 1. librime 1.13 `key_binder` 对 `keycode=Shift_L` 的 release event 匹配行为未充分验证；任何以 `Shift_L/R` 为 keycode 的 binding 都可能与 `shift+<other>` 复合键的 release event 误匹配。
-.� release event �9M
-2. L18 �
+
+
 2. L18 修复仅做了字符串断言（`TestDefaultHotkeys 25/25 PASS`），但 0.18.6 安装包未 build（librime submodule 污染），所以 L18 修复**未真实安装验证**。
-***��Ō�**
-3. W&2� ��� yaml �,��a binding X(/
-X(
-���L� binding h�L:
 
-### 2�'�
+3. 字符串断言只能证明 yaml 文本里某条 binding 存在/不存在，不能证明运行时 binding 表的行为。
 
-- `default.yaml` - `keycode=Shift_L/R` �@	 binding **h�
-X(**� `always`  `has_menu` $a�	
+
+
+### 防御性原则
+
+- `default.yaml` 中 `keycode=Shift_L/R` 的所有 binding **全部不存在**（包括 `always` 与 `has_menu` 两条路径）。
+
 - 候选选择改用 **RIME 社区默认键位** `Control+1/2/3..9` —— keycode=`1`/`2`/`3`..`9` 与 `Shift_L/R` release event 完全不重叠。
-��
+
 - 切中英保留 `Shift+space`（keycode=`space`）—— librime 1.13 `key_binder` 对 `Shift+space` 的 release event 匹配行为已有先例（0.18.5.0 用户未报问题）。
 - ascii_composer 段 `switch_key.Shift_L/R: noop` 保留（让 key_binder 接管）。
 - 移除（防止用户自定义再次引入）`keycode=Shift_L/R` 的 binding：L19 在 yaml 中加注释明确说明该原则。
 
-### �
+### 修复
 ### 修复内容 (commit pending)
 
-1. `output/data/default.yaml`: �d `has_menu: Shift+Shift_L, send: 2`  `has_menu: Shift+Shift_R, send: 3`�� `has_menu: Control+1, send: 2`  `has_menu: Control+2, send: 3`
+1. `output/data/default.yaml`: 移除 `has_menu: Shift+Shift_L, send: 2` 与 `has_menu: Shift+Shift_R, send: 3`，新增 `has_menu: Control+1, send: 2` 与 `has_menu: Control+2, send: 3`。
 2. `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp`: 从 25/25 升级到 **31/31 PASS**，新增 6 个 L19 负断言 + 1 个 L19 正断言。
-3. z���9( `Control+1` ( `Shift+space` KM
+3. 顺序检查改用 `Control+1` 在 `Shift+space` 之前。
 
-### ��
+### 验证
 
 - 字符串断言：TestDefaultHotkeys 31/31 PASS（可重复）。
-	
-- 字节健康：`output/data/default.yaml` UTF-8 无 BOM + CRLF=418；测试源 UTF-8 无 BOM + LF=130。
-- ***��**���L:librime submodule a�0.18.6 � build	(7�ŞK
 
-### 2 L19 
-�
+- 字节健康：`output/data/default.yaml` UTF-8 无 BOM + CRLF=418；测试源 UTF-8 无 BOM + LF=130。
+- **未验证**：真实安装包行为（librime submodule 污染，0.18.6 待 build）；用户重装实测。
+
+### 防 L19 复发
+
 
 3. 字符串断言只能证明 yaml 文本里某条 binding 存在/不存在，不能证明运行时 binding 表的行为。
-- L19 ( `TestDefaultHotkeys` � 6 *� ��@	 `Shift_L/R` b� binding
-- � 0.18.6 release �{( AGENTS.md �2.5 silent-install smoke test K**�**� `shift+Enter` / `shift+<letter>` / `Control+1` / `Control+2` K��6
+- L19 在 `TestDefaultHotkeys` 加 6 个负断言，覆盖所有 `Shift_L/R` 形态的 binding。
+- 后续 0.18.6 release 必须在 AGENTS.md §2.5 silent-install smoke test 之外，**额外**跑 `shift+Enter` / `shift+<letter>` / `Control+1` / `Control+2` 手动验收。
 
-### �s
+### 相关
 
 - L18（被 L19 替代）：只切走了 `always: Shift+Shift_L/R`，未切 `has_menu: Shift+Shift_L/R`。
-- L16spec 012 
- `Shift+l/r` �. ascii_mode toggle ��d
+- L16：spec 012 上 `Shift+l/r` 组合键 ascii_mode toggle 已移除。
+
 - spec 005 v1.1（plan.md §2.2）：`Shift+space` 切中英 + `Control+1/2/3..9` 选候选的最终形态。
 ## L20 - NSIS silent install via PowerShell 5.1 Start-Process hangs; use cmd /c wrapper (extends L15)
 
 **时间**: 2026-07-01
-**q�H,**: 0.18.5.0 / 0.18.6.0 release build
-**�
-H,**: 0.18.6.0 build script �9( cmd /c wrapper
+**影响版本**: 0.18.5.0 / 0.18.6.0 release build
+
+**修复版本**: 0.18.6.0 build script 已改用 cmd /c wrapper
 
 ### Ƕ
 
-`Start-Process -FilePath installer.exe -ArgumentList '/S /D=...' -Wait -PassThru` ( PowerShell 5.1 
-��9( `Start-Process cmd.exe -ArgumentList '/c', 'start /B ...' -PassThru` 7 60s �aO�� `cmd /c` egL 40.3s �exit 0
+跑 AGENTS.md §2.5 silent-install smoke test 时，`Start-Process -FilePath installer.exe -ArgumentList '/S /D=...' -Wait -PassThru` 在 PowerShell 5.1 下 5 分钟仍不返回。改用 `Start-Process cmd.exe -ArgumentList '/c', 'start /B ...' -PassThru` 同样 60s 仍卡住。直接 `cmd /c` 同步执行 40.3s 完成，exit 0。
 
-### 9�
+
+### 根因
 
 L15 描述的 PS 5.1 + NSIS 边界（/D= 与 /LOG= 在 = 处合并）只是表面问题。L20 发现更深的问题：Start-Process -Wait 在 PS 5.1 下创建 NSIS 进程后，由于 NSIS silent mode 与 PS 5.1 process job object 交互差异，-Wait 永不返回。
-��
+
 
 **workaround**（已采纳）：所有 NSIS installer 调用必须用 cmd /c 包裹：cmd /c "installer.exe /S /D=C:\TEMP\..."
 
-### D&� 0.18.6.0 build )Q� v�U	
+### 附带的 0.18.6.0 build 踩坑（应一并记录）
 
-1. **librime build.bat CMAKE_GENERATOR z<� bug**env.bat - `set "CMAKE_GENERATOR=Visual Studio 17 2022"`F librime/build.bat , 78 L `set common_cmake_flags=%common_cmake_flags% -G%CMAKE_GENERATOR%` ���cmd � "Visual Studio 17 2022" � 4 * token �e common_cmake_flagscmake 60 -GVisual + Studio + 17 + 2022 �**workaround**�� cmake 
-� build.bat( -G "Visual Studio 17 2022" >�
+1. **librime build.bat CMAKE_GENERATOR 空格分词 bug**：env.bat 中 `set "CMAKE_GENERATOR=Visual Studio 17 2022"`，但 librime/build.bat 第 78 行 `set common_cmake_flags=%common_cmake_flags% -G%CMAKE_GENERATOR%` 没加引号，cmd 把 "Visual Studio 17 2022" 拆成 4 个 token 写入 common_cmake_flags，cmake 收到 -GVisual + Studio + 17 + 2022 报错。**workaround**：直接调 cmake 而不通过 build.bat；用 -G "Visual Studio 17 2022" 显式引号。
 
-2. **WinSparkle.lib stub**lib64/WinSparkle.lib (10460 bytes) /*
+
+
 2. **WinSparkle.lib stub**：lib64/WinSparkle.lib (10460 bytes) 是个不含导出符号 import 表的 stub，WeaselServer 链接报 __imp__win_sparkle_* 6 个未解析符号。**workaround**：从 output\Win32\WinSparkle.dll 用 dumpbin /EXPORTS 提取 23 个 win_sparkle_* 符号，写 WinSparkle.def，`lib /DEF:WinSparkle.def /MACHINE:X86 /OUT:lib\WinSparkle.lib` 生成真 import lib。x64 同理。
 
 3. **xmake x86 build 
 F WeaselSetup after_build cp 0 output\ vB
 
-4. **xmake x86 build ؤ build_dir = build\windows\x86\release**
-/ xbuild.bat ��̙� output\Win32@	 weasel.dll / WeaselSetup.exe ��E�i( build\windows\x86\release\WeaselTSF\ / build\windows\x86\release\WeaselSetup\xmake.lua � after_build hook �Z�* cp �\FSM hook � cp weasel*.dll M&0 output\W� WeaselSetup vB�
 
-### ��
+4. **xmake x86 build 默认 build_dir = build\windows\x86\release**，不是 xbuild.bat 注释里写的 output\Win32。所有 weasel.dll / WeaselSetup.exe 的实际产物在 build\windows\x86\release\WeaselTSF\ / build\windows\x86\release\WeaselSetup\，xmake.lua 的 after_build hook 应做这个 cp 动作，但当前 hook 只 cp weasel*.dll 通配符到 output\，遗漏了 WeaselSetup 顶层目标。
+
+### 验证
 
 - 0.18.6.0 silent install: cmd /c wrapper 40.3s 完成；exit 0；8 项 invariants 全部通过。
-- L19 �
-����� default.yaml + Control+1, send: 2 + Control+2, send: 3
-+ Shift+Shift_L, send: 2+ Shift+space toggle ascii_mode
+- L19 修复验证：装出的
+default.yaml 含 Control+1, send: 2 + Control+2, send: 3，不含
+Shift+Shift_L, send: 2，含 Shift+space toggle ascii_mode。
 - 字节健康：installer 42612608 bytes（40.6 MB）；CR/LF/overlong 全合规。
 
-### 2 L20 
-�
+### 防 L20 复发
+
 
 - AGENTS.md 已在 §3.2 标记 
-- � librime/build.bat , 78 L� bug �\: spec Ф� librime 
-8
-- � xmake.lua � after_build hook � weasel.dll / WeaselSetup.exe cn cp 0 output\Win32\ / weasel �� PR
+- 修 librime/build.bat 第 78 行引号 bug 应作为 spec 提交给 librime 上游。
 
-### �s
+- 修 xmake.lua 的 after_build hook 让 weasel.dll / WeaselSetup.exe 正确 cp 到 output\Win32\ 是 weasel 自己的 PR。
+
+### 相关
 
 - L15: PowerShell 5.1 + NSIS /D=//LOG= 边界 bug（被 L20 扩展为整体 Start-Process hang）。
 - L13-fix-2: install-side guard against smoke-test path（被 L20 验证仍工作）。
 - L19: 0.18.6.0 的功能性修复（被 L20 验证装出正确 default.yaml）。
-� L20 ����cn default.yaml	
 
 
 
-## L21 - L19 / over-correction: key_binder �d keycode=Shift_L/R �
- modifier=Shift (binding b)  modifier=0 (release-event �9M) - cn�b/ ccept: Shift+Shift_L/R
+
+
+## L21 - L19 是 over-correction: key_binder 移除 keycode=Shift_L/R 时不分 modifier=Shift (binding 形式) 与 modifier=0 (release-event 误匹配) - 正确的形式是 accept: Shift+Shift_L/R
 
 **时间**: 2026-07-02
-**q�H,**: 0.18.6.0 / 0.18.7.0
-**�
-H,**: 0.18.8.0 (spec 014)
+**影响版本**: 0.18.6.0 / 0.18.7.0
+**修复版本**: 0.18.8.0 (spec 014)
+
 
 ### Ƕ
 
 用户装 0.18.7.0 后实测反馈："在候选字词窗口，无法选择第二/第三候选字词"。期望按左 Shift 选第 2 候选，按右 Shift 选第 3 候选 (spec 005 v1.1 US1-B 承诺)。
 
-### 9�
+### 根因
 
 L19 fix (commit e2c36b1, 0.18.6.0) 防御性地移除了 key_binder/bindings 中**所有** keycode=Shift_L/R 的 binding, 以避免 shift+<other> release event 误匹配。但 L19 同时也删除了 spec 005 v1.1 US1-B 承诺的 has_menu: Shift+Shift_L/R send 2/3 binding (因为它用了 keycode=Shift_L/R 形态)。
 
 L19 的 over-correction 错在没有区分两种 binding 形式:
-1. ccept: Shift_L (modifier=0) - �: {keycode=Shift_L, modifier=0} - **** TSF release event �9M (release event _/ {keycode=Shift_L, modifier=Release} F� keycode �Л librime ��)
-2. ccept: Shift+Shift_L (modifier=Shift) - �: {keycode=Shift_L, modifier=Shift} - **
-** TSF release event �9M (release event / modifier=Release,  modifier=Shift %<
-I)
+1. accept: Shift_L (modifier=0) - 解析为 {keycode=Shift_L, modifier=0} - **会**与 TSF release event 误匹配 (release event 也是 {keycode=Shift_L, modifier=Release} 但因 keycode 同而被某些 librime 路径误处理)
 
-librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) %<ԃ keycode_  modifier_, $�b(�L�L:*6
-L19   h��d, I�� spec 005 v1.1 �� Shift 		����
+2. accept: Shift+Shift_L (modifier=Shift) - 解析为 {keycode=Shift_L, modifier=Shift} - **不会**与 TSF release event 误匹配 (release event 是 modifier=Release, 与 modifier=Shift 严格不等)
 
-### �
+
+librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) 严格比较 keycode_ 与 modifier_, 两种形式在运行时行为截然不同。L19 一刀切全部移除, 等于把 spec 005 v1.1 承诺的 Shift 选候选能力废掉。
+
+
+### 修复
  (commit pending)
 
-1. output/data/default.yaml: ( key_binder/bindings has_menu �, ( Control+1/2 KM�� 2 L binding:
+1. output/data/default.yaml: 在 key_binder/bindings has_menu 段, 在 Control+1/2 之前加回 2 行 binding:
    `yaml
    - { when: has_menu, accept: Shift+Shift_L, send: 2 }
    - { when: has_menu, accept: Shift+Shift_R, send: 3 }  # (R, no placeholder)
    `
-   �E/:
+   实际是:
    `yaml
    - { when: has_menu, accept: Shift+Shift_L, send: 2 }
    - { when: has_menu, accept: Shift+Shift_R, send: 3 }
@@ -1283,121 +1283,121 @@ librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) %<ԃ keyco
 2. 	est/TestDefaultHotkeys/TestDefaultHotkeys.cpp: L19 的 4 个负断言翻转为正断言 (从 "应不存在" 变 "应存在"); 新增 4 个正断言覆盖 spec 014 新增 binding 与 ascii_composer.switch_key 保持 noop。
 3. 字符串断言只能证明 yaml 文本里某条 binding 存在/不存在，不能证明运行时 binding 表的行为。
 3. 	est/TestShiftSelectBinding/ (新): 第二个 runtime yaml 契约测试, 13 个新正断言, 验证:
-   - ccept: Shift+Shift_L, send: 2 / ccept: Shift+Shift_R, send: 3 X(
-   - �	 bare ccept: Shift_L/R, (modifier=0) - L19 2��Y
-   - scii_composer.switch_key.Shift_L/R: noop 保持
+   - accept: Shift+Shift_L, send: 2 / accept: Shift+Shift_R, send: 3 X(
+   - 没有 bare accept: Shift_L/R, (modifier=0) - L19 防御保留
+   - ascii_composer.switch_key.Shift_L/R: noop 保持
    - Shift+space toggle ascii_mode 保持 (L18 contract)
-   - 4 * ordering �  (Shift+Shift_L/R ( Shift+space KM, ( Control+1/2 KM)
-4. weasel.sln: � Project � + 16 L ProjectConfigurationPlatforms
+   - 4 个 ordering 断言 (Shift+Shift_L/R 在 Shift+space 之前, 在 Control+1/2 之前)
+4. weasel.sln: 新 Project 注册 + 16 行 ProjectConfigurationPlatforms
 5. env.bat + weasel.props: 0.18.7 -> 0.18.8 (gitignored, 
 e commit)
 6. 
  0.18.7.0)
 7. CHANGELOG.md: 新 [0.18.8.0-fluxing] 段
 
-### ��
+### 验证
 
-- TestDefaultHotkeys.exe output\data\default.yaml -> Passed: 35 / 35 (4 * L19 �c + 4 *�c)
+- TestDefaultHotkeys.exe output\data\default.yaml -> Passed: 35 / 35 (4 个 L19 负翻正 + 4 个新正)
 - TestShiftSelectBinding.exe output\data\default.yaml -> Passed: 13 / 13 (新)
 - xbuild.bat installer -> output/archives/fluxing-0.18.8.0-installer.exe (42631276 bytes, ~40.7 MB, 与 0.18.7.0 差 2941 字节)
-- 7z �$* installer ��: / �/ data\default.yaml (16607 -> 17200 bytes, +593 bytes /��e� 4 L�� + 2 L binding)@	 binary 100% � (rime.dll, WeaselServer.exe I 23 *�� SHA256 hI)
-- silent install 0.18.8.0 -> exit 0, HKLM InstallDir = C:\Program Files\fluxing, HKCU RimeUserDir = C:\Program Files\fluxing\user1\fluxing, default.yaml + spec 014 �
+- 7z 解包两个 installer 对比: 唯一差异是 data\default.yaml (16607 -> 17200 bytes, +593 bytes 是新插入的 4 行注释 + 2 行 binding)。所有 binary 100% 相同 (rime.dll, WeaselServer.exe 等 23 个文件 SHA256 全等)
+- silent install 0.18.8.0 -> exit 0, HKLM InstallDir = C:\Program Files\fluxing, HKCU RimeUserDir = C:\Program Files\fluxing\user1\fluxing, default.yaml 含 spec 014 修复
 
 ### L19 反例教训
 
-- L19 ���: "W&2� ��� yaml �,��a binding X(/
+- L19 自我审查: "字符串断言只能证明 yaml 文本里某条 binding 存在/不存在, 不能证明运行时 binding 表的行为"
 X(, 
-���L� binding h�L:"
-- L19 ͽ: c/ L19 ( TestDefaultHotkeys 31/31 PASS e"��"�
-, F�
-**,�**1/ over-correction, � spec 005 v1.1 �� Shift 		����**W&2K��
-����
-	H, _
-����
-�e� bug**
-- spec 014 
-��VU  yaml W&2K�, � TestShiftSelectBinding \:,�*�� runtime Q�K�, b"$*K�q�� *�
-"��Ɍ�!
-- s.��'Ӻ: �U yaml-only �
-���	**� 2 *��K�** �� (M L18/L19 �"passing test, regressed behavior" w1):
-  1. TestDefaultHotkeys.exe (string-level yaml Q�)
-  2. TestShiftSelectBinding.exe (yaml Q� + �t key L: mock, 赌�)
 
-### 2 L19 
-�
+- L19 反讽: 正是 L19 用 TestDefaultHotkeys 31/31 PASS 来"验证"修复, 但修复**本身**就是 over-correction, 把 spec 005 v1.1 承诺的 Shift 选候选能力废掉。**字符串测试既不能验证修复有效, 也不能验证修复没引入新 bug**。
 
-luxing scope, spec 014 在 tasks.md T001 明确加注: "ccept: Shift+Shift_L/R 形式 (modifier=Shift) 确保 keycode=Shift_L, modifier=0 的 TSF release event 不会误匹配"
-�9M"
+
+
+
+
+
+
+- spec 014 不再依赖单一 yaml 字符串测试, 加 TestShiftSelectBinding 作为第二个独立 runtime 契约测试, 形成"两个测试共同验证一个修复"的交叉验证模式。
+
+
+- 关键架构性结论: 任何 yaml-only 修复都应该有**至少 2 个独立测试** 覆盖 (避免 L18/L19 的"passing test, regressed behavior" 陷阱):
+  1. TestDefaultHotkeys.exe (string-level yaml 契约)
+  2. TestShiftSelectBinding.exe (yaml 契约 + 完整 key 行为 mock, 跨段验证)
+
+### 防 L19 复发
+
+
+
+- AGENTS.md 已在 §3.2 标记 Fluxing scope, spec 014 在 tasks.md T001 明确加注: "accept: Shift+Shift_L/R 形式 (modifier=Shift) 确保 keycode=Shift_L, modifier=0 的 TSF release event 不会误匹配"
 - spec 014 plan.md §2.5 R1: "Shift+Shift_L mask equals Shift; TSF mask also Shift; matches. Verified by reading both sources and adding the runtime test"
 - spec 014 tasks.md T007: 显式加 AGENTS.md §2.5 silent-install smoke test PASSED
 - spec 014 spec.md §2.5 R5: intra-has_menu order between Shift+Shift_L and Control+1 is irrelevant (different KeyEvent)
 - 后续 spec 涉及 key_binder 变更时, 必须 review 此 L21 段, 区分 modifier=0 (会 release-match) 与 modifier=Shift (不会 release-match)
- release-match)
 
-### �s
 
-- L18 (被 L19 替代): 只切走了 lways: Shift+Shift_L/R, 未切 has_menu: Shift+Shift_L/R
+### 相关
+
+- L18 (被 L19 替代): 只切走了 always: Shift+Shift_L/R, 未切 has_menu: Shift+Shift_L/R
 - L19 (被 L21 替代): 防御性移除**所有** keycode=Shift_L/R binding
 - L20: NSIS silent install via PowerShell 5.1 Start-Process hangs (spec 014 沿用 L20 的 cmd /c wrapper)
-- spec 005 v1.1 design.md �2.2 (Shift+Shift_L/R binding b����c)
-- spec 012 (L16): Shift+Shift_L/R binding b����, F*� ship
+- spec 005 v1.1 design.md §2.2 (Shift+Shift_L/R binding 形式的设计文档)
+- spec 012 (L16): Shift+Shift_L/R binding 形式的实现路径, 但未真实 ship
 - spec 014 (L21 修复): 在 spec 012 基础上 + 测试覆盖 + 真实 ship
-): ( spec 012 �@
- + KՆ� + � ship
+
+
 
 ## L22 - system("pause") in test code + if errorlevel 1 in batch scripts = two related CI-killer anti-patterns surfaced by spec 015
 
 **时间**: 2026-07-02
-**q�H,**: 0.18.6.0 / 0.18.7.0 / 0.18.8.0 (all test projects affected; pre-existing bug)
-**�
+**影响版本**: 0.18.6.0 / 0.18.7.0 / 0.18.8.0 (all test projects affected; pre-existing bug)
+**修复版本**: 0.18.9.0 (spec 015)
 H,**: 0.18.9.0 (spec 015)
 
 ### Ƕ 1: system("pause")
 
-spec 015 ( build + ��L TestResponseParser / TestWeaselIPC �Ѱ$* .cpp +>�	 system("pause"); ('�( return KM�/ Windows �6� UX !�� .exe �;^I�	.	F(^����CI,stdin ͚	s� stdin � system("pause") �� 0xC0000005 ACCESS_VIOLATIONK��� crashCI h��
-�
+spec 015 在 build + 试运行 TestResponseParser / TestWeaselIPC 时发现：两个 .cpp 末尾都有 system("pause"); 调用，紧跟在 return 之前。这是 Windows 控制台交互式 UX 模式（双击 .exe 时阻塞等待按键），但在非交互环境（CI、脚本、stdin 重定向）下，关闭 stdin 会让 system("pause") 触发 0xC0000005 ACCESS_VIOLATION，测试直接 crash，CI 全绿过不了。
+
 
 TestDefaultHotkeys + TestShiftSelectBinding (spec 014 新增) 都没这个 anti-pattern，所以能在非交互环境正常工作。TestResponseParser + TestWeaselIPC 自打 2024-02 clang-format 提交（commit 21d2bf9）以来就一直有这个 pattern，但 CI test job 一直只跑 TestDefaultHotkeys（commit 10b72e2 scope 限制），所以 bug 从未 surface。
 
 ### Ƕ 2: if errorlevel 1 in batch
 
-spec 015 � scripts\run-tests.bat �Ѱ d system(pause) TestResponseParser �: test_4 � BOOST_ASSERT(2 == c.candies.size()) 1%( bort()abort ( Windows Release ���l 0xC0000005 STATUS_FATAL_APP_EXITs -1073741819
+spec 015 编写 scripts\run-tests.bat 时发现：删除 system(pause) 后，TestResponseParser 因为 test_4 的 BOOST_ASSERT(2 == c.candies.size()) 失败，调用 abort()，abort 在 Windows Release 构建里转成 0xC0000005 STATUS_FATAL_APP_EXIT，即 -1073741819。
 
-F -1073741819 \: signed 32-bit /p
+但 -1073741819 作为 signed 32-bit 是负数，< 1，结果 batch 误判为 "no error"，脚本继续报告 === ALL TESTS PASSED === + exit 0。
 
-### �
+### 修复
 
-1. **TestResponseParser.cpp + TestWeaselIPC.cpp**:  d   system("pause"); Lbyte-level �UTF-8 � BOMCRLF	
-2. **scripts\run-tests.bat**: 9( setlocal enableextensions enabledelayedexpansion + if !errorlevel! NEQ 0 set "FAIL=1" + set "FINAL_RC=!FAIL!" + endlocal & set "OUTER_RC=%FINAL_RC%" !cn  -1073741819 I<�B
-3. **scripts\run-tests.bat**: ( set "SOL_DIR=%CD%"����>͜`	 � msbuild � standalone-build SolutionDir ��
+1. **TestResponseParser.cpp + TestWeaselIPC.cpp**: 删除 system("pause"); 行（byte-level 编辑，UTF-8 无 BOM，CRLF）。
+2. **scripts\run-tests.bat**: 改用 setlocal enableextensions enabledelayedexpansion + if !errorlevel! NEQ 0 set "FAIL=1" + set "FINAL_RC=!FAIL!" + endlocal & set "OUTER_RC=%FINAL_RC%" 模式正确传递 -1073741819 等负值给外层。
+3. **scripts\run-tests.bat**: 用 set "SOL_DIR=%CD%"（绝对路径无尾反斜杠）传给 msbuild 解决 standalone-build SolutionDir 解析问题。
 4. **scripts\run-tests.bat**: 用 8.3 短路径（C:\PROGRA~2\...）避开 set "VCVARS=C:\Program Files (x86)\..." 里的反斜杠-括号-CMD-解析冲突。
 
-### ��
+### 验证
 
-- scripts\run-tests.bat (SM HEADTestResponseParser test_4 fail	
+- scripts\run-tests.bat 在当前 HEAD（TestResponseParser test_4 fail）下：exit 1，输出 === TESTS FAILED ===。
 - TestDefaultHotkeys: 35/35 PASS
 - TestShiftSelectBinding: 13/13 PASS
 - TestWeaselIPC: PASS
-- TestResponseParser: test_4 1%spec 015 sec 5 �U: out-of-scope WeaselIPC bug � spec 016+ �
+- TestResponseParser: test_4 失败（spec 015 sec 5 记录为 out-of-scope WeaselIPC bug，需要 spec 016+ 修复）
 	
 
 ### 2 L22 
-�
+
 
 - AGENTS.md / spec 015 / L22 互相引用：test code 不写 system("pause") 或等价物（getchar、_getch 等）。
-� system("pause") I�igetchar_getch I	
-- �U�� test project �{( scripts\run-tests.bat �{�
-A�"test by hand"
-- �U( exit code Z gate � .bat ,�{( if !errorlevel! NEQ 0 !
-( if errorlevel 1
+
+- 任何新增 test project 必须在 scripts\run-tests.bat 里登记；不允许"test by hand"。
+
+- 任何使用 exit code 做 gate 的 .bat 脚本，必须用 if !errorlevel! NEQ 0 模式，不用 if errorlevel 1。
+
 - L22 与 L11 / L17 / L20 / L21 一脉相承："Windows-isms in code that should be cross-platform"。任何 Windows-only 代码模式进 test 或 build 工具前必须 grep L## 列表。
 
-### �s
+### 相关
 
 - L20: NSIS silent install via PowerShell 5.1 Start-Process hangs (cmd /c wrapper 解)。
-- L11: BOM double rule
+- L11: BOM double rule。
 - L21: spec 014 L19 over-correction（独立 test pattern，spec 015 沿用并扩展）。
-- spec 014 / 015: "$*�� test +  a lesson" pattern
+- spec 014 / 015: "两个独立 test + 一条 lesson" pattern。
 
 ## L23 - Adding a new test project requires BOTH vcxproj GUID AND sln ProjectConfigurationPlatforms; PowerShell script variable interpolation can silently write empty `{}` into sln
 
@@ -3616,15 +3616,15 @@ si
 
 **What went wrong, by attempt**:
 
-- **Attempt 1 (L50, v0.18.27.2)**: `D2D1::RenderTargetProperties()` default dpi=96, backing store = child logical size (no DPI scaling), `D2D1::RectF` = logical. On 144 DPI child logical 170x17 �� backing store 170x17, D2D treats DIP as physical (dpi=96 �� no scale) �� text and rounded rects drawn at 170x17 logical into a 170x17 backing store. **Result**: text overflows the smaller child HWND (logical 26 = physical 17 �� 17pt text = 22.7 physical pixels rendered into 17-pixel child). No D2D `Clear()` call, so D2D backing store is opaque black by default and shows through anywhere a pixel is not overdrawn.
+- **Attempt 1 (L50, v0.18.27.2)**: `D2D1::RenderTargetProperties()` default dpi=96, backing store = child logical size (no DPI scaling), `D2D1::RectF` = logical. On 144 DPI child logical 170x17 → backing store 170x17, D2D treats DIP as physical (dpi=96 → no scale) → text and rounded rects drawn at 170x17 logical into a 170x17 backing store. **Result**: text overflows the smaller child HWND (logical 26 = physical 17 → 17pt text = 22.7 physical pixels rendered into 17-pixel child). No D2D `Clear()` call, so D2D backing store is opaque black by default and shows through anywhere a pixel is not overdrawn.
 
-- **Attempt 2 (spec 041 v0.18.28.0 first pass)**: `D2DRenderer::GetPhysicalClientRect` converts logical �� physical via `MulDiv(rc, 96, dpi)`. Backing store pixelSize = logical �� 96 / dpi (i.e. `physical_w = logical * 96 / dpi` shrink). `D2D1::RectF` = physical. On 144 DPI child logical 170x17 �� physical 113x11 �� backing store 113x11, `D2D1::RectF(0, 0, 113, 11)`. D2D rt dpi still default 96 �� D2D treats DIP=physical, so 113x11 written 1:1. **Result**: backing store now smaller than HWND physical surface (170x17), and text rendered at physical pixel size is too small to read.
+- **Attempt 2 (spec 041 v0.18.28.0 first pass)**: `D2DRenderer::GetPhysicalClientRect` converts logical → physical via `MulDiv(rc, 96, dpi)`. Backing store pixelSize = logical × 96 / dpi (i.e. `physical_w = logical * 96 / dpi` shrink). `D2D1::RectF` = physical. On 144 DPI child logical 170x17 → physical 113x11 → backing store 113x11, `D2D1::RectF(0, 0, 113, 11)`. D2D rt dpi still default 96 → D2D treats DIP=physical, so 113x11 written 1:1. **Result**: backing store now smaller than HWND physical surface (170x17), and text rendered at physical pixel size is too small to read.
 
-- **Attempt 3 (the one that works)**: `D2DRenderer::GetPhysicalClientRect` returns the raw `GetClientRect` value (== HWND physical size on V1 PerMonitor DPI aware process; child logical = child physical on V1 �� verified empirically with `GetWindowDpiAwarenessContext` returning V1, `GetDpiForWindow` returning 144, and the child physical size exactly matching `logical �� 96/144`). Backing store = HWND physical size. D2D rt dpi = 96 (default). `D2D1::RectF` = physical (1:1 to backing store). All 4 controls add `rt->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f))` after `BeginDraw` so non-text pixels do not show the opaque-black D2D backing store.
+- **Attempt 3 (the one that works)**: `D2DRenderer::GetPhysicalClientRect` returns the raw `GetClientRect` value (== HWND physical size on V1 PerMonitor DPI aware process; child logical = child physical on V1 — verified empirically with `GetWindowDpiAwarenessContext` returning V1, `GetDpiForWindow` returning 144, and the child physical size exactly matching `logical × 96/144`). Backing store = HWND physical size. D2D rt dpi = 96 (default). `D2D1::RectF` = physical (1:1 to backing store). All 4 controls add `rt->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f))` after `BeginDraw` so non-text pixels do not show the opaque-black D2D backing store.
 
 **Key technical facts about D2D HwndRenderTarget on V1 PerMonitor DPI aware processes**:
 
-1. **`D2D1_HwndRenderTargetProperties.pixelSize` is in PHYSICAL pixels**, not logical. It must match the HWND physical client area. Passing logical coords here shrinks the backing store below the HWND; passing logical �� dpi/96 makes it larger than the HWND and Windows clips on EndDraw.
+1. **`D2D1_HwndRenderTargetProperties.pixelSize` is in PHYSICAL pixels**, not logical. It must match the HWND physical client area. Passing logical coords here shrinks the backing store below the HWND; passing logical × dpi/96 makes it larger than the HWND and Windows clips on EndDraw.
 
 2. **`D2D1::RenderTargetProperties` dpiX/dpiY default to 0 (= D2D1_DEVICE_CONTEXT_DEFAULT_DPI = 96)**, NOT to the HWND's DPI. If you do not explicitly set dpiX/dpiY to the per-window DPI, D2D treats `D2D1::RectF` DIP coords as if they were 1:1 physical pixels at 96 DPI. To get correct DPI scaling you MUST pass `static_cast<float>(dpi)` to both dpiX and dpiY.
 
@@ -3632,24 +3632,24 @@ si
 
 4. **D2D HwndRenderTarget backing store is opaque black by default.** Unlike GDI, there is no implicit "transparent" or "window color" Clear. You MUST call `rt->Clear()` after `BeginDraw` if you want the HWND to be visually transparent or show a non-black background. This is the **single most common source of "black bar / black background" bugs** in D2D HwndRenderTarget code.
 
-5. **On V1 PerMonitor DPI aware process, child HWND physical size = logical size passed to `CreateWindowExW` �� 96/dpi** (i.e. **inverted** from the top-level behavior where physical = logical �� dpi/96). Verified on a 144 DPI monitor: title_rc logical (10, 4, 268, 30) width 258 �� child physical 171 (= 258 �� 96/144), height 26 �� child physical 17. Top-level dialog logical 300��150 �� physical 200��100 (= 300 �� 144/96) follows the top-level pattern. This asymmetry is **the single most confusing thing** about V1 DPI and is undocumented in the Microsoft Per-Monitor DPI whitepaper; you have to discover it empirically with `GetWindowDpiAwarenessContext` + `GetClientRect` + `GetDpiForWindow` on each HWND.
+5. **On V1 PerMonitor DPI aware process, child HWND physical size = logical size passed to `CreateWindowExW` × 96/dpi** (i.e. **inverted** from the top-level behavior where physical = logical × dpi/96). Verified on a 144 DPI monitor: title_rc logical (10, 4, 268, 30) width 258 → child physical 171 (= 258 × 96/144), height 26 → child physical 17. Top-level dialog logical 300×150 → physical 200×100 (= 300 × 144/96) follows the top-level pattern. This asymmetry is **the single most confusing thing** about V1 DPI and is undocumented in the Microsoft Per-Monitor DPI whitepaper; you have to discover it empirically with `GetWindowDpiAwarenessContext` + `GetClientRect` + `GetDpiForWindow` on each HWND.
 
 6. **`GetDpiForWindow` returns the DPI of the monitor the HWND currently lives on**, not the system DPI. For child HWNDs, the value matches the parent top-level's monitor. This is what we feed into D2D's dpiX/dpiY.
 
 **Why 3 attempts were needed** (meta-lesson):
 
 - The first attempt assumed "D2D is DPI-aware out of the box". It is not. D2D HwndRenderTarget is only DPI-aware if you tell it what DPI to use.
-- The second attempt assumed `GetClientRect` in a V1 process returns logical coords and you must scale to physical. For **top-level** windows on V1 that is true, but for **child** windows on V1 it is false (the child physical size is `logical �� 96/dpi`, not `logical �� dpi/96`). The spec 041 plan was written for top-level and applied to child, which is why it "made the backing store 1.5x too large" �� the comment in the code was technically right for top-level and wrong for child.
+- The second attempt assumed `GetClientRect` in a V1 process returns logical coords and you must scale to physical. For **top-level** windows on V1 that is true, but for **child** windows on V1 it is false (the child physical size is `logical × 96/dpi`, not `logical × dpi/96`). The spec 041 plan was written for top-level and applied to child, which is why it "made the backing store 1.5x too large" — the comment in the code was technically right for top-level and wrong for child.
 - The third attempt was a deliberate reset: pass `GetClientRect` through unchanged, set backing store to that, do not pass dpiX/dpiY, and Clear() the backing store. This is the GDI model and is correct because D2D HwndRenderTarget in the default config is essentially a GDI-with-antialiasing.
 
 **How we caught it** (verification):
 
-- `D:\TEMP\qp-trace9.ps1` posts Alt+, (WM_HOTKEY id 9001) to the WeaselIPC HWND, then `EnumChildWindows` on the `FluxingQuickPanel_v0` class to print each child's logical + physical rect, then `PrintWindow` with `PW_RENDERFULLCONTENT` to a PNG. Running this after every code change gave a 5-second visual diff loop. Without this, we would have shipped black bars to production (this is what v0.18.27.2 did �� the L50 fallback existed in source but was never tested with a real 144 DPI monitor).
+- `D:\TEMP\qp-trace9.ps1` posts Alt+, (WM_HOTKEY id 9001) to the WeaselIPC HWND, then `EnumChildWindows` on the `FluxingQuickPanel_v0` class to print each child's logical + physical rect, then `PrintWindow` with `PW_RENDERFULLCONTENT` to a PNG. Running this after every code change gave a 5-second visual diff loop. Without this, we would have shipped black bars to production (this is what v0.18.27.2 did — the L50 fallback existed in source but was never tested with a real 144 DPI monitor).
 - `GetWindowDpiAwarenessContext(hwnd)` returning 2 (V1) + `GetDpiForWindow(hwnd)` returning 144 was the empirical proof that the V1 DPI virtualization model was in effect.
 
 **Pattern (D2D + V1 PerMonitor DPI + GDI compat model)**:
 
-- Use `D2D1::RenderTargetProperties()` with default dpiX/dpiY (= 0 �� D2D1_DEVICE_CONTEXT_DEFAULT_DPI = 96). Do NOT pass `static_cast<float>(dpi)`.
+- Use `D2D1::RenderTargetProperties()` with default dpiX/dpiY (= 0 → D2D1_DEVICE_CONTEXT_DEFAULT_DPI = 96). Do NOT pass `static_cast<float>(dpi)`.
 - Use `D2D1_HwndRenderTargetProperties(hwnd, physical_size)` where `physical_size = GetClientRect` (no scaling). This works for both top-level and child HWNDs in V1.
 - Use `D2D1::RectF(0, 0, w, h)` in physical pixels. The D2D1_RENDER_TARGET_PROPERTIES dpi=96 default treats DIP = physical 1:1.
 - Always call `rt->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f))` after `BeginDraw` for child controls that should show the dialog background through.
@@ -3657,13 +3657,13 @@ si
 
 **Anti-pattern (do NOT do)**:
 
-- Do not assume `GetClientRect` returns the same coordinate system on top-level vs child HWNDs in V1 PerMonitor DPI. Top-level: `physical = logical �� dpi/96`. Child: `physical = logical �� 96/dpi`. The two are opposite. Verify with `GetDpiForWindow(hwnd)` on the specific HWND before writing the size calc.
+- Do not assume `GetClientRect` returns the same coordinate system on top-level vs child HWNDs in V1 PerMonitor DPI. Top-level: `physical = logical × dpi/96`. Child: `physical = logical × 96/dpi`. The two are opposite. Verify with `GetDpiForWindow(hwnd)` on the specific HWND before writing the size calc.
 - Do not pass `static_cast<float>(dpi)` to `D2D1::RenderTargetProperties` dpiX/dpiY unless you also feed `D2D1::RectF` in logical (DIP) coords. Mixing the two scales causes the 1.5x overflow / 0.67x shrinkage that produced the v0.18.27.x and the v0.18.28.0-first-pass bugs respectively.
 - Do not skip `rt->Clear()` for D2D child controls. The opaque-black backing store is the #1 visual artifact on high-DPI displays.
 - Do not assume child HWND DPI is the same as the system DPI. Use `GetDpiForWindow(hwnd)` to get the per-window DPI. For multi-monitor setups (spec 040+ scope), each monitor's child will report a different DPI.
-- Do not modify `WeaselServer/QuickPanelDialog.cpp` (QP geometry) to "fix" a DPI rendering bug �� the QP physical 200��100 in 144 DPI is intentionally small (spec 038 anti-pattern AP-041-B). The fix belongs in the 4 control WM_PAINT handlers, not the dialog.
+- Do not modify `WeaselServer/QuickPanelDialog.cpp` (QP geometry) to "fix" a DPI rendering bug — the QP physical 200×100 in 144 DPI is intentionally small (spec 038 anti-pattern AP-041-B). The fix belongs in the 4 control WM_PAINT handlers, not the dialog.
 
-**Related L##**: L48 (FluxingD2DRenderer atexit crash �� also rt lifecycle), L51 (D2D fallback for unavailable D2D �� orthogonal to this; L52's fix does not regress L51), L47 (BOM/line ending damage chain �� same PCH include order constraint, but D2D-specific). L52 is the **first instance** of a v0 DPI handling post-mortem; future PerMonitor V2 / multi-monitor work in spec 044+ should reference L52's empirical proof + pattern.
+**Related L##**: L48 (FluxingD2DRenderer atexit crash — also rt lifecycle), L51 (D2D fallback for unavailable D2D — orthogonal to this; L52's fix does not regress L51), L47 (BOM/line ending damage chain — same PCH include order constraint, but D2D-specific). L52 is the **first instance** of a v0 DPI handling post-mortem; future PerMonitor V2 / multi-monitor work in spec 044+ should reference L52's empirical proof + pattern.
 
 ## L53 - ASCII strings search misses C++ mangled symbols in linked Windows binaries (always use UTF-16 + dumpbin /DISASM for verification)
 
@@ -3687,7 +3687,7 @@ After shipping spec 041 v0.18.28.0 with FluxingComponents DPI fix, a systematic-
 
 ### Why the L43 / L42 verification discipline did not catch this
 
-The L43 cure (/LTCG:OFF per-target) was already applied to WeaselTSF/xmake.lua in spec 031 (0.18.22.0). The global xmake.lua line 64 also has dd_ldflags("/LTCG:OFF /INCREMENTAL:NO", {force = true}). So **WeaselServer.exe does NOT have the L43 dead-strip problem** — all referenced symbols ARE linked. The verification error was in the *search tool*, not the binary.
+The L43 cure (/LTCG:OFF per-target) was already applied to WeaselTSF/xmake.lua in spec 031 (0.18.22.0). The global xmake.lua line 64 also has add_ldflags("/LTCG:OFF /INCREMENTAL:NO", {force = true}). So **WeaselServer.exe does NOT have the L43 dead-strip problem** — all referenced symbols ARE linked. The verification error was in the *search tool*, not the binary.
 
 ### Verification discipline (the cure)
 
@@ -3732,7 +3732,7 @@ All confirmed via dumpbin /DISASM. Visual verify at 96 DPI Todesk session: QP 30
 
 ### Action item
 
-Add L53 to the systematic-debugging checklist in AGENTS.md §6 and erification-before-completion skill: "When verifying Windows PE binary contents, use UTF-16 string decode + dumpbin /DISASM + byte-pattern count. Never rely on ASCII strings alone."
+Add L53 to the systematic-debugging checklist in AGENTS.md §6 and verification-before-completion skill: "When verifying Windows PE binary contents, use UTF-16 string decode + dumpbin /DISASM + byte-pattern count. Never rely on ASCII strings alone."
 ## L54 - silent install /D= ignored when InstallDirRegKey registry key is stale
 
 ### Incident (2026-07-06 v0.18.29.0 ship)
@@ -4522,7 +4522,7 @@ xmake build in this environment only built 32-bit (the project's primary target 
 - [ ] If QuickPanel still does not work, user must manually elevated regsvr32:
   ```cmd
   :: Run as administrator
-  cd C:\Program Filesluxing\weasel
+  cd C:\Program Files\fluxing\weasel
   regsvr32 weasel.dll /s
   regsvr32 weaselx64.dll /s
   :: Verify:
@@ -4560,16 +4560,16 @@ xmake build in this environment only built 32-bit (the project's primary target 
 !ifndef WEASEL_ROOT
 !define WEASEL_ROOT $INSTDIR\weasel
 !endif
-!define FLUXING_ROOT $INSTDIRluxing
+!define FLUXING_ROOT $INSTDIR\fluxing
 ```
 
-`ForceFluxingSuffix` (line 568-580) appends `luxing` to `$INSTDIR` if the last 7 chars are not 'fluxing'. So on a default install:
-- `/D=D:\Program Filesluxing` -> $INSTDIR = `D:\Program Filesluxing`
-- ForceFluxingSuffix sees no 'fluxing' suffix -> appends -> $INSTDIR = `D:\Program Filesluxingluxing`
-- WEASEL_ROOT = `$INSTDIR\weasel` = `D:\Program Filesluxingluxing\weasel` (DOES NOT EXIST)
+`ForceFluxingSuffix` (line 568-580) appends `\fluxing` to `$INSTDIR` if the last 7 chars are not 'fluxing'. So on a default install:
+- `/D=D:\Program Files\fluxing` -> $INSTDIR = `D:\Program Files\fluxing`
+- ForceFluxingSuffix sees no 'fluxing' suffix -> appends -> $INSTDIR = `D:\Program Files\fluxing\fluxing`
+- WEASEL_ROOT = `$INSTDIR\weasel` = `D:\Program Files\fluxing\fluxing\weasel` (DOES NOT EXIST)
 - regsvr32 line 439: `ExecWait 'regsvr32 /s "$INSTDIR\weaselx64.dll"' $0`
-  -> expanded to: `regsvr32 /s "D:\Program Filesluxingluxing\weaselx64.dll"` (DOES NOT EXIST)
-- The actual files are at: `D:\Program Filesluxing\weasel\weaselx64.dll`
+  -> expanded to: `regsvr32 /s "D:\Program Files\fluxing\fluxing\weaselx64.dll"` (DOES NOT EXIST)
+- The actual files are at: `D:\Program Files\fluxing\weasel\weaselx64.dll`
 
 So regsvr32 actually does its parsing on a non-existent path. The 'S:/' the user saw in the screenshot is the way Windows reports the path-parse error: it converts forward slashes in regsvr32's path-parse to 'S:' drive + '/' separator, then says 'S:/weaselx64.dll' which doesn't exist either. This is regsvr32's internal path-parsing behavior on a non-existent path under elevated-context (the actual root cause is that $INSTDIR/\weaselx64.dll was a non-existent path).
 
@@ -4580,13 +4580,13 @@ Use `$R3` (the user-facing install path saved BEFORE $INSTDIR was reset to WEASE
 ExecWait 'regsvr32 /s "$R3\weasel\weaselx64.dll"' $0
 ExecWait 'regsvr32 /s "$R3\weasel\weasel.dll"' $1
 ```
-This guarantees the path exists: `$R3\weasel\weaselx64.dll` is always `D:\Program Filesluxing\weasel\weaselx64.dll` regardless of whether ForceFluxingSuffix ran.
+This guarantees the path exists: `$R3\weasel\weaselx64.dll` is always `D:\Program Files\fluxing\weasel\weaselx64.dll` regardless of whether ForceFluxingSuffix ran.
 
 ### Verification on user's machine (L63 end-to-end)
 
 1. User uninstalls old version
 2. User installs v0.18.40.0 (or v0.18.39.0 then patches install.nsi manually)
-3. silent install runs `regsvr32 /s "D:\Program Filesluxing\weasel\weaselx64.dll"` (now correct path)
+3. silent install runs `regsvr32 /s "D:\Program Files\fluxing\weasel\weaselx64.dll"` (now correct path)
 4. regsvr32 returns 0 (success)
 5. `HKLM\SOFTWARE\Classes\CLSID\{A3F4CDED-...}\InprocServer32` written (was missing before)
 6. `HKLM\SOFTWARE\Microsoft\CTF\KnownClasses` may be created (RegisterCategories may fail on Win 10 if CLSID_TF_CategoryMgr is missing, but RegisterServer's CLSID write succeeds)
@@ -4594,7 +4594,7 @@ This guarantees the path exists: `$R3\weasel\weaselx64.dll` is always `D:\Progra
 
 ### L63 anti-patterns (additional to L62)
 
-- **AP-L63-A**: NSIS variable scoping. `$INSTDIR` is the install path with L14-suffix `luxing` appended, but the actual file layout is `<install>\weasel\`. **The relationship is `<install>\weasel\<file>`, not `<install with fluxing suffix>\<file>`.** I should have looked at the actual file layout to determine the right path variable.
+- **AP-L63-A**: NSIS variable scoping. `$INSTDIR` is the install path with L14-suffix `\fluxing` appended, but the actual file layout is `<install>\weasel\`. **The relationship is `<install>\weasel\<file>`, not `<install with fluxing suffix>\<file>`.** I should have looked at the actual file layout to determine the right path variable.
 - **AP-L63-B**: When a user reports a specific error like 'S:/', trace it back to the actual command line, not just the error message. The 'S:/' was regsvr32's internal re-encoding of a non-existent path on a non-existent drive letter - a red herring. The actual cause was path-construction logic, not drive letters.
 - **AP-L63-C**: The $R3 vs $INSTDIR split in install.nsi is non-obvious. Use named macros like `REAL_INSTALL_DIR` instead of reusing $R3 (which is a counter variable). A code comment explaining 'user-facing path' vs 'weasel path' would have caught this 6 rounds ago.
 
@@ -4951,21 +4951,21 @@ NVIDIA driver unload event).
 
 Safety net (B): Add SetUnhandledExceptionFilter + MinidumpWriteDump so
 that the NEXT crash produces a self-contained .dmp under
-%LOCALAPPDATA%luxing\crash\YYYYMMDD-HHMMSS-<code>.dmp. This is the
+%LOCALAPPDATA%\fluxing\crash\YYYYMMDD-HHMMSS-<code>.dmp. This is the
 "instrumented repro" path from systematic-debugging Phase 4.
 
 WeaselServer.cpp:
 - #include <DbgHelp.h> + #pragma comment(lib, "dbghelp.lib")
 - namespace { LONG WINAPI WriteMinidumpOnCrash(EXCEPTION_POINTERS*) }
   writes MiniDumpWithDataSegs dump to
-  %LOCALAPPDATA%luxing\crash\<timestamp>-<code>.dmp
+  %LOCALAPPDATA%\fluxing\crash\<timestamp>-<code>.dmp
 - Install via SetUnhandledExceptionFilter at top of _tWinMain
   (before CoInitialize, so even early init crash can be captured)
 
 ### Phase 4 (verify) - pending
 User must install v0.18.41.2 (after building locally with xbuild.bat),
 reproduce the Alt+, then-quit scenario, then send us the .dmp
-from %LOCALAPPDATA%luxing\crash\ for analysis.
+from %LOCALAPPDATA%\fluxing\crash\ for analysis.
 
 ### Files touched
 - WeaselServer/QuickPanelDialog.cpp  (LoadLogo L67-fix)
@@ -5099,7 +5099,7 @@ User must install, retest the Alt+, scenario, and confirm:
   - Panel stays visible after fade
   - WeaselServer.exe stays alive in tasklist
   - Switch IME away and back, can still type Chinese
-  - %LOCALAPPDATA%luxing\crash\ does NOT accumulate new dumps
+  - %LOCALAPPDATA%\fluxing\crash\ does NOT accumulate new dumps
 
 ### Lessons (numbered)
 1. **GDI+ Bitmap(IStream*) caches the IStream internally for lazy
@@ -5441,7 +5441,7 @@ All 3 fixed in v0.19.0.1:
 - WeaselServerApp handler now toggles: if `ActiveHwnd()` is visible,
   call `Hide()`; else call `Show()`. Same lambda body reused.
 - WIC `CreateDecoderFromFilename` now uses absolute path built from
-  `GetModuleFileNameW(NULL, ...)` (executable directory) + `"luxing-logo.png"`.
+  `GetModuleFileNameW(NULL, ...)` (executable directory) + `"\fluxing-logo.png"`.
   `cwd` no longer matters.
 
 Also fixed in this rebuild:
@@ -9181,7 +9181,7 @@ if (attached) AttachThreadInput(targetTid, currentTid, FALSE);
 - _check_install_v2.ps1 显示 WeaselServer.exe 进程**完全未运行**;
   HKLM\...\Run\WeaselServer autostart 触发但 loader 立即拒绝 (HRESULT 0x80131509,
   "文件或目录损坏且无法读取")。
-- 三件套 MD5 全 match installer (2d1236c / 1a74c6f / 14dfdfb0) → 看似
+- 三件套 MD5 全 match installer (b2d1236c / b1a74c6f / 14dfdfb0) → 看似
   装机成功, 实则 installer 内嵌的就是损坏 binary。
 
 ### 根因 (单一可证伪, 多证据汇聚)
@@ -9193,10 +9193,10 @@ MD5 假阳性即此来源。output\Win32\WeaselServer.pdb 仅 53,248 字节 (真
 PDB ≈ 24 MB → 同样是 stub)。output\WeaselSetup.exe 同样是 2 MiB 全零。
 
 构建链证据:
-- uild.log 显示 v0.19.0.54 ship 走 **MSBuild 路径** (WeaselServer.vcxproj ->
+- build.log 显示 v0.19.0.54 ship 走 **MSBuild 路径** (WeaselServer.vcxproj ->
   output\Win32\WeaselServer.exe + [DONE] Exit: 0), 产物真实。
-- v0.19.0.55 (commit 8559ed4 + 823bc1f) 改走 **uild_v055.ps1 → xbuild.bat
-  weasel installer → xmake 路径**。WeaselServer/xmake.lua 的 fter_build
+- v0.19.0.55 (commit 8559ed4 + 823bc1f) 改走 **build_v055.ps1 → xbuild.bat
+  weasel installer → xmake 路径**。WeaselServer/xmake.lua 的 after_build
   (L19-27) 无条件 os.cp(targetdir/WeaselServer.exe, output/Win32) + os.cp(.../.pdb, ...)。
 - xmake link 步骤**静默失败**或仅写出 2 MiB 占位文件, build script 仍 exit 0,
   installer 嵌入了零 EXE + 53KB stub PDB, 装机后 loader 拒绝。
@@ -9209,13 +9209,13 @@ rime algorithm service 调度者 + PhrasesDialog IPC server, 一个进程挂了 
 
 ### 修复 (3 步, v0.19.0.56 ship)
 
-1. **F106-A build infra guardrail**: 在 WeaselServer/xmake.lua 的 fter_build
+1. **F106-A build infra guardrail**: 在 WeaselServer/xmake.lua 的 after_build
    末尾加 EXE 完整性检查 (MZ signature / non-zero size / PE 头部 + code section 存在),
    不通过则 
 aise 终止 build。**任何 xmake target 复制 EXE/DLL 出 output 都应该
    强制走同一检查**。建议把检查抽到 	ools/build_verify.lua, 在 WeaselServer、
    WeaselSetup 两个 xmake 目标里 require。
-2. **F106-B build_v0XX.ps1 wrapper guard**: 在每个 uild_v0XX.ps1 末尾强制 verify:
+2. **F106-B build_v0XX.ps1 wrapper guard**: 在每个 build_v0XX.ps1 末尾强制 verify:
    output\Win32\WeaselServer.exe + output\WeaselSetup.exe + output\FluxingPhrasesDialog.exe
    必须 (a) size > 1 MB, (b) [0..1] == "MZ", (c) PE machine 与架构一致。失败即
    exit 1, 不进入 installer 阶段。
@@ -9247,9 +9247,9 @@ ime-verify.ps1 流程), 作为真机 fail-fast 工具。
 
 ### Pattern-Key (L106)
 
-- uild.xmake.after_build.no-verify (主要) — xmake 的 os.cp(target, output)
+- build.xmake.after_build.no-verify (主要) — xmake 的 os.cp(target, output)
   没有 size/MZ verify, link 失败但 build exit 0, 输出 zero-file 进 installer
-- uild.false-positive-md5-on-zero-file (主要) — 当 source build 和 installed
+- build.false-positive-md5-on-zero-file (主要) — 当 source build 和 installed
   copy 都是 zero 时 MD5 完美 match, 装机验证链失效
 - installer.nsis-32bit-knownclasses-redirected-to-wow6432node (次要) — NSIS 32-bit
   写 HKLM 落到 WOW6432Node, 64-bit TSF 读不到
@@ -9261,7 +9261,7 @@ ime-verify.ps1 流程), 作为真机 fail-fast 工具。
 - 1 (首次系统化记录; 之前 L09/L13/L17/L54/L66/L97/L100 都没碰过 build pipeline
   zero-file 这种 specific failure mode)
 - 触发 L3 守门: 任何改 output/install.nsi / WeaselServer/xmake.lua /
-  uild_v0XX.ps1 / xbuild.bat 的提交, PR 必带「关键 EXE size + MZ signature
+  build_v0XX.ps1 / xbuild.bat 的提交, PR 必带「关键 EXE size + MZ signature
   verify」截图 / 输出
 
 ### 关联文件 / 提交
@@ -9976,7 +9976,7 @@ commit `e3fa89f` + tag `v0.20.0.1`。
 ## L##-ThreadSpecificPtr-Race (v0.20.0.2 真因)
 
 **Date**: 2026-08-07
-**Symptom**: 装机 v0.20.0.0/0.20.0.1 后,切到火流猩输入法,微信/Claude Code/dopus/ToDesk/explorer 全部 0xc0000374 HEAP_CORRUPTION 崩溃。dump 在 `C:luxing-dumps\`。
+**Symptom**: 装机 v0.20.0.0/0.20.0.1 后,切到火流猩输入法,微信/Claude Code/dopus/ToDesk/explorer 全部 0xc0000374 HEAP_CORRUPTION 崩溃。dump 在 `C:\fluxing-dumps\`。
 
 **Timeline (3 次误诊)**: 
 

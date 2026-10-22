@@ -1,0 +1,9 @@
+{
+ "lines": {
+  "3694": "  - TestBindingResolution: LINKED rime.lib (exit 0) — was SCAFFOLD",
+  "3919": "    （keycode=`1`/`2`/`3`..`9` 与 `Shift_L/R` release event 不重叠）",
+  "3204": "  1. weasel.props ResourceCompile PreprocessorDefinitions was empty literal (msbuild did not expand names; literal ;VERSION_MAJOR=; was passed to RC, failing with RC2127 version WORDs separated by commas expected).",
+  "3214": "- **L43 fix - per-target /LTCG:OFF**: WeaselTSF target has its own add_shflags that re-enables LTCG; per-target /LTCG:OFF is the cure, not global /LTCG removal. Applied to WeaselTSF/xmake.lua.",
+  "5600": "- **Tag is v0.18.21.0** (lightweight per AGENTS.md sec 3.5). Pushed to kizemo/Fluxing."
+ }
+}
