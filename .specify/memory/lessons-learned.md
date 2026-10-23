@@ -1,4 +1,4 @@
-﻿# Lessons Learned — Fluxing (rime/weasel fork)
+﻿﻿# Lessons Learned — Fluxing (rime/weasel fork)
 
 > **Scope**: `Fluxing` project (`rime/weasel` fork), reusable lessons distilled from dev incidents. Each entry: **Incident → Root cause → Lesson** format, source-recorded.
 > **Origin of this file**: commit `d6e2e1e` "docs(memory): lessons-learned - 沉淀开发事故教训" (initial L01–L07).
@@ -10284,3 +10284,169 @@ Fix (defer to v0.21.0.1): 改 source。
 - L51 (装机后提示重启 WeaselServer 或注销重登)
 - ADR 0007 (PPL 与装机约束)
 - commit 8cbe9ee
+
+## L110 - v0.21.0.5: sink 实现了但从未注册, OnActivated 是死代码 (2026-10-23)
+
+**Incident**:
+
+- 用户要求恢复「切换到输入法时自动显示快捷设置栏」
+- spec 080 取证发现: 功能不是没设计过, 而是被 `if (false && ipc_id > 0)` 禁用
+- 写完实现 + 服务端链路验证全绿后, 准备做 TSF 侧真机验证, grep 发现
+  `IID_ITfActiveLanguageProfileNotifySink` 在**全工程 0 命中**
+
+**Root cause**:
+
+- `WeaselTSF` 继承了 `ITfActiveLanguageProfileNotifySink`、实现了 `OnActivated`,
+  但 `QueryInterface` 没有这个 IID 分支, 也没有任何 `AdviseSink` 调用
+- ⇒ TSF 从来不知道存在这个 sink, `OnActivated` 永远不会被调用
+- 历史上 v0.19.0.66 (commit `02b90a6`) 修过一次, 但 Phase L 那条线因装机
+  17 分钟挂死被整体回滚, 修复从未进入 `Fluxing` 分支
+- `git branch -a --contains 02b90a6` 返回空 —— 那个修复是**悬空提交**
+- 更隐蔽的一层: spec 061 / 066 / 070 / 075 的注释都写着「OnActivated 是正确
+  触发点」, 读代码像是「早就接好了」, 实际是「接口在、回调没接线」
+
+**Fix** (v0.21.0.5):
+
+- 补 `QueryInterface` 的 IID 分支 + `ActivateEx` 里 `AdviseSink` +
+  `Deactivate` 里 `UnadviseSink` (带 `TF_INVALID_COOKIE` 守卫)
+- 注册失败不致命: 丢面板触发器可以, 丢中文输入不行 (v0.19.0.66 用的是
+  `goto ExitError`, 会把整个文本服务拆掉)
+- `OnActivated` 保持零 I/O, IPC 交给专用通知线程; `Deactivate` 只发信号不 join,
+  避免在 TSF 线程上阻塞 (constitution P2)
+- 注册放在 `_EnsureServerConnected()` **之后**: 通知里带 session id, session
+  必须先存在
+
+**Verification** (2026-10-23 真实装机 0.21.0.5):
+
+- 新增 `TestWeaselIPC.exe /verify-tsf-profile`: `ITfInputProcessorProfileMgr`
+  真激活 / 停用 profile, 让 Windows 自己派发通知, 再断言面板可见
+- **对照实验**: 装机前同一驱动 `visible=0 notifications=4` (驱动收到了通知但
+  面板不弹, 因为旧 TIP 没注册 sink); 装机后 `visible=1 notifications=4` ⇒ PASS
+- SDK 实证: `msctf.h` 里**没有** `RegisterActiveLanguageProfileNotifySink`,
+  唯一注册路径是 `ITfSource::AdviseSink(IID_ITfActiveLanguageProfileNotifySink, ...)`
+- 通知时序实测: `OnActivated` 在 `ActivateProfile` 返回**之后**才送达, 所以
+  通知线程不能假设 session 已就绪
+
+**Pattern-Key**:
+
+- `tsf.sink-declared-not-advised` (新增) — COM 接口「继承了 + 实现了」不等于
+  「注册了」。TSF 的 sink 必须 `AdviseSink` 才生效
+- 累计 Recurrence-Count: 2 (v0.19.0.66 修过一次, 回滚后复发)
+
+**推广**:
+
+- 「回调实现了」和「回调被接线」是两件事。验证要验证**接线**, 不是验证**实现**
+- 修复被回滚时, 要确认回滚把**修复**一起带走了, 而不是只回滚了症状
+- 用「同一个测试 + 换一版二进制」做对照实验, 比再写一份新 spec 有力得多
+  —— 这是 `L##-PhaseL-9.11-Retro-B` (spec 仪式遮蔽 ground truth) 的正面解法
+- 断言型测试要能**失败**: 一个只会 PASS 的测试在功能没接线时照样会 PASS,
+  因为「找不到窗口」和「窗口不可见」在布尔断言下常常等价
+
+**关联**:
+
+- `L##-PhaseL-9.11-Retro` (v0.74.x 系列 7 天 6 次失败 ship → 整体回滚 → 修复丢失)
+- L109 (装机时杀 TSF 宿主导致 dwm / 开始菜单连环崩溃)
+- ADR 0008 (IME profile 激活通知方案)
+- spec 080 (`080-quickpanel-on-ime-activate`)
+
+## L111 - v0.21.0.5: 程序化切换输入法 profile 会打崩输入栈, 远程会话期间尤其 (2026-10-23)
+
+**Incident**:
+
+- 2026-10-23 出现两轮连锁崩溃: 21:56-21:58 与 23:24
+- 21:56:06 `ToDesk.exe` 崩 (0xc0000409), 21:56:13 `dwm.exe` 崩
+  (`dwmcore.dll`, 0xc00001ad), 21:57:06 `ImeService.exe` 崩, 21:57:10 `dwm.exe`
+  再崩 (`udwm.dll`, 0xc00001ad), 21:57:29 `ToDesk.exe` 崩 (`ntdll.dll`,
+  0xc00000fd 栈溢出), 21:58:09 `dwm.exe` + `YXCalendar.exe` 崩, 21:58:52
+  `ImeService.exe` 崩
+- 23:24:40 / 23:24:54 `coodesker-x64.exe` 崩 (`Native-x64.dll`, 0xc0000094 /
+  0xc000041d)
+- 用户侧症状: ToDesk 连不上、系统反复黑屏重启、开始菜单弹窗
+
+**Root cause**:
+
+- **ToDesk 连不上** = 服务连续崩 3 次后 SCM 放弃拉起: 原 `sc qfailure` 只有
+  2 次 `RESTART -- Delay = 0 ms` + `RESET_PERIOD 300`, 服务停在 Stopped
+- ToDesk 崩溃的现场日志 (`servicegmzrylxl_2026_10_23.log`): `begin launch video
+  session!` → `create snapshot fail!` → `startProcessWithToken CreateProcessAsUser
+  failed err = 1450` → `can not find explorer.exe` → 服务进程崩 ⇒ 崩在**远程
+  会话拉起**的过程中
+- **dwm / ImeService / YXCalendar 的崩溃**与 21:56-21:58 那次 profile 切换自测
+  **时间重合**; 而 21:19 / 21:33 / 21:49 三次同样的切换**都没有** dwm 崩溃,
+  差别在于那几次 ToDesk 没有正在拉远程会话
+- ⇒ 触发条件是「**程序化切换输入法 profile**」叠加「**远程会话正在建立**」:
+  切 profile 会拆掉并重建 IME 栈 (dwm / ImeService / 桌面), 此时远程客户端
+  正在抓桌面快照, 两条路撞在一起 ⇒ 输入栈崩塌, 连锁拖垮 dwm / ImeService /
+  YXCalendar / ToDesk
+- **产品侧不触发这条风险**: 真实用户切输入法是 shell 统一切换; 本产品只
+  「响应切换」(`OnActivated` 是被动收到的通知), 不会自己去切别人的 profile
+  ⇒ 风险在**测试手段**, 不在产品行为
+- `coodesker-x64.exe` 是第三方 (www.coodesker.com) 自身不稳定 (除零 /
+  fail-fast), 与本项目无关, 也不是自测诱发 (当时只跑了只读命令)
+
+**Fix** (v0.21.0.5):
+
+- `ToDesk_Service` 失败恢复加固:
+  `sc failure ToDesk_Service reset= 86400 actions= restart/5000/restart/10000/
+  restart/15000/restart/30000/restart/60000` (5 次递增延迟重启)
+  ⇒ 服务再崩也会被拉起, 不会停在 Stopped 让人连不上
+- `TestWeaselIPC.exe /verify-tsf-profile` 加三层崩溃护栏:
+  1. **默认拒绝执行**, 必须显式 `--allow-profile-switch`
+     (或环境变量 `FLUXING_VERIFY_ALLOW_PROFILE_SWITCH=1`)
+  2. 交互会话 (session id != 0) 里有远程控制客户端时**额外拒绝**, 除非
+     `--allow-remote-session` —— 服务端 (session 0) 不算, 它一直在跑
+  3. 跑前记 Application 事件日志的记录号, 跑后比对, 期间新增的
+     Application Error (1000) 逐条打印并判为失败
+- 面板自动隐藏从该模式的硬断言降级为「仅报告」: 它依赖鼠标位置, 改由
+  `/verify-quickpanel` (纯 IPC, 不碰输入法 profile) 覆盖, 并新增复用路径的
+  自动隐藏回归
+
+**Verification** (2026-10-23):
+
+- 护栏拒绝路径实测: 无开关 → exit -10 打印 REFUSED; 带 `--allow-profile-switch`
+  且 ToDesk 在交互会话 → exit -11 打印 REFUSED。两条都在**触碰输入栈之前**返回
+- 安全测试 `/verify-quickpanel` (真实装机 0.21.0.5): `first auto-hide hidden=1
+  survived_grace=1` / `second auto-hide shown=1 hidden=1 survived_grace=1` ⇒ PASS
+- 稳定性复核: 重新打包 + 静默升级 + 跑安全测试后, 当日 Application Error (1000)
+  计数仍是 26 (与基线相同), Weasel/Fluxing 自身崩溃 0 条
+
+**附: 经典事件日志 API 在本 SDK 上的四个坑** (写崩溃护栏时实测出来的):
+
+- 读标志是 winnt.h 那套: `EVENTLOG_SEEK_READ 0x0002` +
+  `EVENTLOG_BACKWARDS_READ 0x0008`; MSDN 上写的那组旧名字 (如
+  `EVENTLOG_SEEK_BACKWARD 0x0800`) 在本 SDK 里**根本不存在**, 照抄会编译失败
+- 记录号**按值**传 (`DWORD dwRecordOffset`), 不是 MSDN 写的 `LPDWORD`; 传指针
+  会得到 `ERROR_INVALID_PARAMETER (87)`
+- `EVENTLOGRECORD` 的成员名是 `Length` / `RecordNumber` / `EventID` /
+  `NumStrings` / `StringOffset`, **没有** `dw*` 前缀那版
+- 插入字符串是**连续存放**的多个以 `\0` 结尾的宽字符串, 起点在 `StringOffset`;
+  不是「偏移数组」。缓冲区用 64KB: 512KB 会让 `ReadEventLog` 直接失败 (错误 1783)
+- `OpenEventLogW` 在本 SDK 是**两个**参数 (无访问掩码), 实测访问掩码被忽略
+
+**Pattern-Key**:
+
+- `test.profile-switch-collapses-ime-stack` (新增) — 程序化切输入法 profile 是
+  能打崩桌面输入栈的操作, 远程会话进行中尤其
+- `evtlog.classic-api-sdk-quirks` (新增) — 经典事件日志 API 的声明与 MSDN 不一致,
+  必须实测而不是照抄文档
+- 累计 Recurrence-Count: 1
+
+**推广**:
+
+- **危险的测试手段要默认拒绝 + 显式开关**, 不要指望「大家记得别跑」
+- 「服务崩了就连不上」这类次生故障, 根因常常是 SCM 的失败恢复策略太弱
+  (只重试 2 次且 0 延迟), 加固失败恢复比修服务本身更能防复发
+- 用「跑前记录号 → 跑后比对」把「测试顺带打崩了系统」变成**可检测的事件**,
+  而不是靠人肉看事件查看器
+- 断言要放对地方: 依赖鼠标位置的断言放进会改输入栈的测试里, 本身就是不稳定源
+- 平台 API 的行为以**实测**为准: 本轮事件日志 API 的 5 个坑, 全部是「文档说 A、
+  SDK 是 B、实际是 C」
+
+**关联**:
+
+- L109 (装机杀 TSF 宿主导致 dwm / 开始菜单连环崩溃)
+- L110 (sink 实现了但从未注册)
+- ADR 0008 (IME profile 激活通知方案)
+- spec 080 (`080-quickpanel-on-ime-activate`)
+
+

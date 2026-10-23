@@ -1,4 +1,100 @@
+## [0.21.0.5-fluxing] - 2026-10-23
 
+### feat(fluxing): 切换到 Fluxing 时自动弹出快捷设置栏
+
+**User-visible**:
+
+- 从别的输入法切到 Fluxing 时, 快捷设置栏 (QuickPanel) 会自动弹一次
+  (2 秒宽限 + 鼠标移开 1.5 秒后自动隐藏), 与手动按 `Alt+,` 打开的效果一致
+- 从 Fluxing 切走时, 面板收起
+- 后台进程不会抢弹: 只有当前活动会话 (前台应用) 能触发面板
+
+**Root cause** (两层, 第二层是致命的那层):
+
+1. **历史回滚**: 这个功能设计过又被关掉 —— spec 052 (US052-A) 引入 "always show
+   mode", spec 056/060/061 接到 `ITfActiveLanguageProfileNotifySink::OnActivated`,
+   v0.18.41.0 真的跑通过; 之后因为 GDI+ `Bitmap(IStream*)` 生命周期 bug
+   (L67-L69) 打崩 WeaselServer, v0.18.41.4 用 `if (false && ipc_id > 0)`
+   把所有触发点禁掉。QuickPanel 后来改成 WIC 解码 + 纯 GDI (spec 074 / L75),
+   崩溃链已断, 但开关一直没恢复。
+2. **接口实现了但从未注册** (本次新发现): `WeaselTSF` 继承了
+   `ITfActiveLanguageProfileNotifySink` 并实现了 `OnActivated`, 但
+   `QueryInterface` 里没有这个 IID 分支, 全工程也没有任何
+   `AdviseSink(IID_ITfActiveLanguageProfileNotifySink, ...)` 调用
+   ⇒ **Windows 永远不会调用 `OnActivated`**。
+   这个修复曾在 v0.19.0.66 (commit `02b90a6`) 做过, 但那条 Phase L 线因为
+   装机 17 分钟挂死被整体回滚, 从未进入 `Fluxing` 分支 ——
+   `git branch -a --contains 02b90a6` 返回空, 该提交至今是悬空对象。
+
+**Fix**:
+
+- `WeaselTSF`: 补回 sink 注册 —— `QueryInterface` 加 IID 分支, `ActivateEx`
+  里 `AdviseSink`, `Deactivate` 里 `UnadviseSink` (带 `TF_INVALID_COOKIE` 守卫)
+- 注册失败**不致命**: 丢面板触发器可以, 丢中文输入不行 (v0.19.0.66 当时用的是
+  `goto ExitError`, 失败会把整个文本服务拆掉)
+- `OnActivated` 保持零 I/O (constitution P2): 只记录意图, IPC 交给专用通知线程
+- 通知线程不再在 `Deactivate` 里 join (那会阻塞 TSF 线程), 改为「只发信号」,
+  真正 join 挪到析构
+- 新增 `WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED` 标志位, 复用 FOCUS_IN 的
+  wParam, 不新增消息类型, 不改 wire struct, 混装降级不炸
+- server 侧用 `m_active_session` 去重, 只有前台应用弹面板, 且不抢 active session
+
+**Verification** (2026-10-23 真实装机 0.21.0.5 + TSF 级端到端):
+
+- 新增 `TestWeaselIPC.exe /verify-tsf-profile`: 用 `ITfInputProcessorProfileMgr`
+  真激活 / 停用 Fluxing profile, 让 Windows 自己派发 `OnActivated`,
+  再断言 QuickPanel 窗口可见
+- **对照实验** (同一驱动, 装机前): `panel visible=0 notifications=4` ——
+  驱动自己收到了 4 条通知, 但旧 TIP 因为没注册 sink, 面板不弹
+- 装机后: `panel hwnd=000C0824 visible=1 notifications=4` ⇒ **PASS**
+- 服务端链路另有 `TestWeaselIPC.exe /verify-quickpanel` 覆盖
+- SDK 实证: `msctf.h` 里**没有** `RegisterActiveLanguageProfileNotifySink`,
+  唯一注册路径是 `ITfSource::AdviseSink(IID_ITfActiveLanguageProfileNotifySink, ...)`
+- 装机核对: `weasel.dll` / `WeaselServer.exe` md5 与构建产物全等; 64 位 TIP 走
+  版本化 shim (`weaselx64.0.21.0.5.dll`) md5 全等; Fluxing 相关
+  `PendingFileRenameOperations` = 0 (不需要重启)
+
+
+
+
+### fix(fluxing): 快捷设置栏第二次显示后不再自动隐藏
+
+**User-visible**:
+
+- 快捷设置栏打开过一次并收起后, 再次打开时会**一直挂在屏幕上不消失**, 挡住输入区
+  (承诺的「鼠标移开 1.5 秒后自动隐藏」在第二次及以后失效)
+
+**Root cause**:
+
+- `QuickPanelDialog::Hide()` 会 `KillTimer(s_hwnd, 2)` —— 那是兼管自动隐藏的
+  hover polling timer; 而 `Show()` 的**复用路径** (面板窗口已存在时) 只重置了
+  `s_showTime` / `s_outsideMs` 就 return 了, **没有重新 `SetTimer`**
+- ⇒ 第一次 show/hide 之后定时器永久消失, 此后每次显示的面板都不会自动隐藏
+  (首次显示那条路径本来就 `SetTimer`, 所以只有第二次及以后中招)
+
+**Fix**:
+
+- `WeaselServer/QuickPanelDialog.cpp`: 复用路径补 `SetTimer(s_hwnd, 2, 100, NULL)`
+
+**Verification** (2026-10-23 真实装机 0.21.0.5):
+
+- `TestWeaselIPC.exe /verify-quickpanel` 新增自动隐藏回归: 显示 → 宽限期后自动隐藏
+  → 再显示 (复用路径) → 再自动隐藏, 两轮都要过
+- 实测 `first auto-hide hidden=1 survived_grace=1` /
+  `second auto-hide shown=1 hidden=1 survived_grace=1` ⇒ **PASS**
+
+### test(fluxing): 程序化切换输入法的自测加了崩溃护栏
+
+- `TestWeaselIPC.exe /verify-tsf-profile` 会真的切换系统输入法 profile。
+  2026-10-23 实测: 远程会话正在建立时做这种切换, 会连带打崩 dwm.exe /
+  ImeService.exe / 远程控制客户端 (输入栈崩塌, 系统连续崩溃)
+- 该模式现在**默认拒绝执行**, 必须显式 `--allow-profile-switch`
+  (或环境变量 `FLUXING_VERIFY_ALLOW_PROFILE_SWITCH=1`)
+- 交互会话里存在远程控制客户端时额外拒绝, 除非 `--allow-remote-session`
+- 跑前记 Application 事件日志的记录号, 跑后比对, 期间新增的 Application Error
+  (1000) 会被逐条打印并判为失败
+- 面板自动隐藏从该模式的硬断言降级为「仅报告」: 它依赖鼠标位置, 改由上面那个
+  不碰输入法 profile 的安全测试覆盖
 
 ## [0.21.0.3-fluxing] - 2026-10-23
 
