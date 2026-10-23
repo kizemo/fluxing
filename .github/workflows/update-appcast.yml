@@ -1,16 +1,71 @@
-name: Update Appcast
+name: Verify Appcast (Fluxing)
+
+# Fluxing 分支说明:
+#   上游 rime/weasel 的这个 workflow 会在 release 发布时触发 **上游** rime/home
+#   的 gh-pages workflow, 把 appcast 推到 GitHub Pages。本 fork 不能这么做:
+#     - 本仓库没有 gh-pages.yml;
+#     - Fluxing 的 appcast 并不发布到 GitHub Pages, 而是本地 staging 目录
+#       E:\办公文件\L1网站\pinyin\appcast.xml 经 sftp_sync.py 原子同步到
+#       https://www.aiec.fun/pinyin/appcast.xml (per CHANGELOG 0.19.0.59)。
+#   所以这里把 workflow 换成 **只校验、不外发** 的守门任务:
+#   release 一旦发布, 如果 update/appcast.xml 还没准备好(仍是上游小狼毫品牌、
+#   指向 rime.github.io、或最新 item 的版本号对不上 release tag), CI 直接红。
+#   真正的发布动作仍由 sftp_sync.py 完成。
+
 on:
   release:
     types: [published, prereleased]
+  workflow_dispatch:
+
 jobs:
-
-  update_appcast:
-
+  verify_appcast:
     runs-on: windows-2019
+    if: ${{ github.repository == 'kizemo/fluxing' }}
 
     steps:
-      - name: Update Appcast
-        if: ${{ github.repository == 'rime/weasel' }}
-        run: gh workflow run gh-pages.yml -R rime/home --ref master
-        env:
-          GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify appcast templates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '${{ github.event.release.tag_name }}' -replace '^v', ''
+          if (-not $tag) { $tag = '0.0.0' }
+          Write-Host "release tag = $tag"
+
+          $files = @('update/appcast.xml', 'update/testing-appcast.xml')
+          $errors = New-Object System.Collections.Generic.List[string]
+
+          foreach ($f in $files) {
+            if (-not (Test-Path $f)) { $errors.Add("$f : missing"); continue }
+            $text = [System.IO.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($f))
+
+            # 1) 不得残留上游 rime.github.io / GitHub Releases 链接
+            foreach ($bad in @('rime.github.io', 'github.com/rime/weasel', 'weasel-0.17.4')) {
+              if ($text.Contains($bad)) { $errors.Add("$f : still references upstream '$bad'") }
+            }
+
+            # 2) 必须指向 Fluxing 真实发布渠道
+            if (-not $text.Contains('www.aiec.fun/pinyin')) {
+              $errors.Add("$f : missing Fluxing channel URL (www.aiec.fun/pinyin)")
+            }
+
+            # 3) 最新 item 的 sparkle:version 必须等于 release tag
+            $m = [regex]::Match($text, '(?s)<item>.*?sparkle:version="([^"]*)"')
+            if (-not $m.Success) {
+              $errors.Add("$f : no <item> with sparkle:version")
+            } else {
+              $version = $m.Groups[1].Value
+              Write-Host "$f : newest item version = $version"
+              if ($version -ne $tag) {
+                $errors.Add("$f : newest item version '$version' != release tag '$tag'")
+              }
+            }
+          }
+
+          if ($errors.Count -gt 0) {
+            foreach ($e in $errors) { Write-Host "ERROR: $e" -ForegroundColor Red }
+            throw "appcast verification failed ($($errors.Count) problem(s))"
+          }
+          Write-Host "appcast OK" -ForegroundColor Green

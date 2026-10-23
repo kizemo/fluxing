@@ -1,5 +1,56 @@
 
 
+## [0.21.0.2-fluxing] - 2026-10-23
+
+### fix(fluxing): 全量重编, x64 TSF 首次包含 Shift 释放选候选状态机
+
+**User-visible**:
+- 64 位程序 (VSCode / Chrome / 微信等) 里 Shift_L 单键释放选第 2 个候选的行为,
+  其代码此前根本不在 x64 二进制里, 现在随重编一并带上
+- 32 位程序行为不变
+
+**Root cause**:
+- spec 077 的状态机提交 cd747df (2026-08-16 09:30) 晚于两个 TSF 的编译时间:
+  output\weasel.dll (x86) = 2026-08-16 09:04, output\weaselx64.dll = 2026-08-08 00:03
+- 两个 TSF 都是旧的, Shift 释放选候选在 32 位与 64 位两端都未生效
+- 修复方式: 全量重编 (Win32 全解 + x64 TSF), 新二进制内已含
+  ShiftDown / ShiftUp / ShiftStateMachine (weaselx64.pdb 符号核验)
+- 装机验收 (64 位应用内实按 Shift_L) 待补
+
+### fix(WeaselServer): 把 Sparkle 更新源改指 aiec.fun 自有渠道
+
+**User-visible**:
+- 更新检查现在真的会提示新版本
+
+**Root cause**:
+- WeaselServer.rc 的 4 张 APPCAST 字节表全部指向 rime.github.io
+- 上游 feed 的版本号 (0.17.4) 远低于 Fluxing 当前版本, Sparkle 永远不会提示更新
+
+**Fix**:
+- FEEDURL / MANUALUPDATEFEEDURL -> https://www.aiec.fun/pinyin/appcast.xml
+- TESTINGFEEDURL / TESTINGMANUALUPDATEFEEDURL -> https://www.aiec.fun/pinyin/testing-appcast.xml
+- 已在新 output\Win32\WeaselServer.exe 内核验: 两个 aiec.fun URL 存在,
+  rime.github.io 归零
+
+### fix(fluxing): download.php 找不到指定版本时返回 404 而不是错版本二进制
+
+**User-visible**:
+- https://www.aiec.fun/pinyin/download.php?file=<未发布的版本> 现在返回 404
+- 此前会静默回退到最新安装包, 用户会下载到与所请求版本号不符的二进制
+
+### fix(fluxing): 补齐 TestResponseParser 的 Release OutDir, 让测试门禁能真正跑到该用例
+
+**Root cause**:
+- test\TestResponseParser\TestResponseParser.vcxproj 的 Release|Win32 配置组
+  缺少 IntDir / OutDir 覆盖, 退回 MSBuild 默认模板 (假定 SolutionDir 自带尾反斜杠)
+- 套件脚本传入的 SolutionDir 不带尾反斜杠, 产物被粘连到仓库外目录
+  F:\soft\00selfmade\rime_claudeRelease\, 套件找不到 exe, 门禁恒为失败 (exit 1)
+- 该失败是静默的: 没有 error 输出, 只有 rc=9009
+
+**Fix**:
+- 为 Release|Win32 与 Release|x64 配置组补齐 IntDir / OutDir, 与 Debug 组一致
+- 补齐后 scripts\test-infra\run-test-suite.bat 全绿 (16 个测试工程, exit 0)
+
 ## [0.21.0.1-fluxing] - 2026-08-16
 
 ### feat(WeaselIPC): v0.21.0.1 shift release-only candidate select via IPC state machine
@@ -103,7 +154,7 @@ Aggregate: 12+ tests, 0 fail. msbuild weasel.sln /t:Rebuild: 0 errors.
 - 装机后切到火流猩输入法,**不再**触发微信 / Claude Code / dopus / ToDesk / explorer 多进程 crash
 - v0.20.0.0/0.20.0.1 的 crash 现场消失
 
-**Root cause (WinDbg `!analyze -v` 双 dump 实证)**:
+**Root cause (WinDbg `!analyze -v` ˫ dump ʵ֤)**:
 - v0.20.0.0 假设是 NSIS install.nsi line 578 路径错配 → **不是** (binary mtime 修后仍 crash)
 - v0.20.0.0 假设是 `key_binder/bindings/+` 用 `send: "《"` 触发 X11 keysym parse error → **不是** (删后仍 crash)
 - v0.20.0.1 假设是 emoji.json 引用 emoji.txt/others.txt 缺失 → **不是** (补后仍 crash)
@@ -463,7 +514,7 @@ Lessons-learned L104, memory/2026-07-22-k3-foreground-ordering-regression 详记
 - TestPhrasesDialog 181/181 PASS / 0 FAIL (含 v0.19.0.47 Test 36 5 case + v0.19.0.48 Test 37 7 case)
 
 **Verify** (sandbox Win32 Release):
-- msbuild weasel.sln /t:Rebuild: Exit 0 (WeaselServer.exe + 16 test suites 全 rebuild)
+- msbuild weasel.sln /t:Rebuild: Exit 0 (WeaselServer.exe + 16 test suites ȫ rebuild)
 - WeaselServer.exe md5: `3049f3bbb091961901b457105371aa1b` (从 v0.19.0.47 `5dba1bcd...` 改; 是真 source build)
 - install.nsi: pre-install cleanup 强化 (WeaselServer 10x retries, ctfmon/TextInputHost 5x retries) + Stage 2 Task Scheduler fallback 检测 + 提示用户
 - installer 7z extract 后 WeaselServer.exe md5 = source build md5 ✓ (无 L97 stale)
@@ -576,7 +627,7 @@ if (himc) {
 
 **Verify** (sandbox Win32 Release):
 - TestPhrasesDialog: **168/168 PASS / 0 FAIL** (Test 1-35 全过, IME 不在 sandbox 测, layout / list / 按钮 / reorder / drag 全 OK)
-- msbuild weasel.sln: **Exit 0** (WeaselServer.exe + 16 test suites + Deployer + Setup 全 rebuild)
+- msbuild weasel.sln: **Exit 0** (WeaselServer.exe + 16 test suites + Deployer + Setup ȫ rebuild)
 - WeaselServer.exe md5: `1caa6e94b209d1d0f3214b4d08c45310` (从 v0.19.0.45 `b19d4338...` 改; 是真 source build, 非 L97 stale)
 - install.nsi: 未改 (无需新装机段; v0.19.0.45 installer 段已 ship)
 
@@ -612,7 +663,7 @@ if (himc) {
 **Root cause** (5 阶段 systematic-debugging):
 - `af13cbff` (v0.19.0.36 Phase D Reinforcement D) 加了:
   ```nsi
-  ExecWait 'taskkill /F /IM explorer.exe /T'  ; 杀 explorer.exe
+  ExecWait 'taskkill /F /IM explorer.exe /T'  ; ɱ explorer.exe
   Sleep 2000                                   ; 黑屏 2s
   Exec '"$WINDIR\explorer.exe"'                ; 重启
   ```
@@ -692,7 +743,7 @@ if (himc) {
 - TestDarkModeBridge: 18/18 (回归保护)
 - TestDarkModeBroadcast: 14/14 (回归保护)
 - v0_19_0_32_e2e: **68 PASS / 10 FAIL** — task.md 记录的 baseline regression (sandbox state shift, e2e binary mtime 7-18 链接旧 PhrasesDialog, 跟 Phase F 无关)
-- `_buildflow.cmd` Exit 0 (WeaselServer.exe + 16 test suites + Deployer + Setup 全 rebuild)
+- `_buildflow.cmd` Exit 0 (WeaselServer.exe + 16 test suites + Deployer + Setup ȫ rebuild)
 - PE-import-scan: `AllowSetForegroundWindow` + `SetForegroundWindow` 进 binary ✓
 - install.nsi UTF-8 BOM + CRLF ✓
 - installer extract 后 WeaselServer.exe md5 = source build md5 ✓ (无 L97 stale)
@@ -731,7 +782,7 @@ reg delete "HKCU\Software\Fluxing" /f
 - L100-X Phrase UI keyboard 路由依赖 foreground。WS_POPUP + WS_EX_TOPMOST 不够, 必须 SetForegroundWindow(s_hwnd) + AllowSetForegroundWindow(ASFW_ANY) 抢锁
 - L100-Y WM_LBUTTONDBLCLK 不依赖 foreground (mouse 直接命中), 但 WM_KEYDOWN / WM_NOTIFY 都依赖 — 装机测试时如果 button click 路径部分功能 (mouse) work 但 keyboard fail, 优先 suspect foreground lock
 - L100-Z Option C 双保险: Hide QuickPanel (释放 foreground) + SetForegroundWindow (抢回), 比单独 Hide 或单独 SetForegroundWindow 都稳
-- L100-X install.nsi ship 前 self-verify grep
+- L100-X install.nsi ship ǰ self-verify grep
 - L100-Y nsExec::ExecToStack 必须 Pop $0 + Pop $1 (避免 stack leak)
 
 ---
@@ -1560,7 +1611,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
        `322,322,kBrandSize,kBrandSize` — 取 PNG (700x700) 的中心 56x56 而非
        top-left。原来的 top-left 在 Fluxing logo (transparent BG, content centered)
        是空白,采不到 logo。
-     - **L81-fix-6 (topmost)**: `Show()` 末尾 `SetWindowPos(HWND_TOPMOST, ...)`
+     - **L81-fix-6 (topmost)**: `Show()` ĩβ `SetWindowPos(HWND_TOPMOST, ...)`
        显式强制置顶。`WS_EX_LAYERED + WS_EX_TOPMOST` 路径 z-order 不稳,
        显式 SetWindowPos 比 WS_EX_TOPMOST style 更可靠。
      - **L81-fix-7 (IME switch)**: WM_ACTIVATEAPP handler 自动 Hide(),app
@@ -1658,7 +1709,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **Root cause (Phase 1-2 systematic-debugging)**:
 
   1. **Logo**: v0.19.0.11 用了 `fluxing-logo.png` (大 logo)。用户指定 `docs\design\fluxing-logo_small.png` (20x20 PNG)。
-  2. **Panel invisible (浅色 desktop)**:
+  2. **Panel invisible (ǳɫ desktop)**:
      - `PaintOpaqueContent` 用 `(HBRUSH)GetStockObject(WHITE_BRUSH)` 画 panel bg 和 border → 任何浅色 wallpaper 上看不到 panel 形状
      - `ApplyAlphaGradient` 的 "panel bg" 判定阈值是 `r >= 250 && g >= 250 && b >= 250` (纯白);即使改用 light gray bg 也需要相应放宽
   3. **Border transparent (L82-fix2 新发现)**:
@@ -1703,7 +1754,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
   - Icon line (149-152, 30): `RGB=(50,50,60) A=255` ✓ (之前 A=0)
   - Panel bg gradient: A=136 (top) → A=89 (bottom) ✓
   - Brand area (small logo): `RGB=(200,113,103) A=255` ✓ (Fluxing red small icon visible)
-  - Alpha histogram: alpha=0: 796 px (3.3%); alpha=100-140: 14482 px (gradient); alpha=255: 3601 px (opaque content, 之前 1607)
+  - Alpha histogram: alpha=0: 796 px (3.3%); alpha=100-140: 14482 px (gradient); alpha=255: 3601 px (opaque content, ֮ǰ 1607)
   - `qp-dump-l82.png`: 渲染出 panel 形状 (深色 border + 浅玻璃 bg + red Fluxing logo + 5 个黑色 icons)
 
 - **What changed on user's actual screen**:
@@ -2069,7 +2120,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
   - **不需要先卸载旧版本**,直接装新版即可
   - v0.19.0.14 L72-fix NSIS installer 用 **Rename-then-File** 模式自动处理 locked file
   - 旧 locked WeaselServer.exe → rename 成 .old → 释放 lock → 新 file 装入
-  - v0.19.0.11 L66-fix HKCU\Software\Fluxing 写 unconditional
+  - v0.19.0.11 L66-fix HKCU\Software\Fluxing д unconditional
   - 装后 Alt+, 无反应时,右键托盘选"重新启动 IME 服务"或重新登录
 
 - **Files touched**: QuickPanelDialog.h (kIcoDimC 颜色降深度 + kBtnGap 2→3 + kBtnSize 39→37)
@@ -2415,7 +2466,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 
 - **Bug 1 修法**:
   - 加 `kShowGraceMs=2000` + `s_showTime` 静态字段 (header)
-  - Show() 末尾 `s_showTime = GetTickCount(); s_outsideMs = 0;`
+  - Show() ĩβ `s_showTime = GetTickCount(); s_outsideMs = 0;`
   - WM_ACTIVATEAPP / WM_KILLFOCUS 加 `(now - s_showTime) >= kShowGraceMs` 才 Hide
   - 后续 (L96 cleanup) 删除 no-op timer (modal 不需 polling, grace 守卫已足够)
 
@@ -2629,7 +2680,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **Follow-up (v0.19.0.29+)**:
   - 抽 `ModalChrome` 公共 helper (3 UI 共享 chrome pattern ~200 行 dedup)
   - UserDictionary `ProductionDeploy` 实装 rime_api->import_user_dict + deploy_schema (拿 WeaselServerApp instance)
-  - ShortcutSettings `SpawnDeploy` 实装 `ShellExecuteW(L"WeaselDeployer.exe", L"/deploy")`
+  - ShortcutSettings `SpawnDeploy` ʵװ `ShellExecuteW(L"WeaselDeployer.exe", L"/deploy")`
   - 3 UI Edit 子 modal chrome 统一为 `WS_POPUP` (UserDictionary + ShortcutSettings 当前用 WS_CAPTION)
 
 - **Installer**: `release\fluxing-0.19.0.28-installer.exe` (TBD)
@@ -2824,7 +2875,7 @@ spec 070 v0.19.0.10 ship + L80 lessons-learned entry to follow
 - **Follow-up (v0.19.0.32+)**:
   - v0.19.0.30 提到 v0.19.0.31 spec 050 (ShortcutSettings visual + IPC + data) 合并实施, 本次完成
   - v0.19.0.32: UserDictionary `ProductionDeploy` 实装 rime_api->import_user_dict + deploy_schema (拿 WeaselServerApp instance)
-  - v0.19.0.33: ShortcutSettings `SpawnDeploy` 实装 `ShellExecuteW(L"WeaselDeployer.exe", L"/deploy")`
+  - v0.19.0.33: ShortcutSettings `SpawnDeploy` ʵװ `ShellExecuteW(L"WeaselDeployer.exe", L"/deploy")`
   - 全套 vcxproj `PlatformToolset` 升 v143 (避免 override 命令行)
 
 - **Installer**: `release\fluxing-0.19.0.31-installer.exe` 43,271,280 bytes
@@ -3008,7 +3059,7 @@ spec 055/TaskTracker [P0]
 - **用法**: `WeaselDeployer.exe /hotkey` 打开 GUI 编辑器;编辑后保存触发 `/deploy`,新 key_binder 立即生效。
 - **验证**:
   - `xmake -y` build ok 10.4s,0 errors
-  - `WeaselDeployer.exe` 1.46MB (vs 0.7MB 之前,grow 760KB)
+  - `WeaselDeployer.exe` 1.46MB (vs 0.7MB ֮ǰ,grow 760KB)
   - 二进制包含 "快捷键编辑器" / "/hotkey" 字符串
   - `test\TestOrphanRecovery\Release\TestOrphanRecovery.exe` 6/6 PASS
   - `scripts\test-infra\run-test-suite.bat` 35+13 PASS,2 SKIP,0 FAIL
@@ -3201,7 +3252,7 @@ t->Clear(). 0.18.28.0 ship 时已应用.
 ### L46 fix - xmake + msbuild dual-path parity + v0.18.25.0 release
 
 - **Problem (R1 intent)**: spec 033 (0.18.22.0) shipped with msbuild path broken in 4 places; xmake-only verification missed all of them. L46 documents the 4 bugs:
-  1. weasel.props ResourceCompile PreprocessorDefinitions was empty literal (msbuild did not expand names; literal ;VERSION_MAJOR=; was passed to RC, failing with RC2127 ersion WORDs separated by commas expected).
+  1. weasel.props ResourceCompile PreprocessorDefinitions was empty literal (msbuild did not expand names; literal ;VERSION_MAJOR=; was passed to RC, failing with RC2127 version WORDs separated by commas expected).
   2. WeaselUI.vcxproj ClCompile missing FluxingDarkModeBridge.cpp + WeaselUtility.cpp (LNK2001 + LNK1120 on weasel.dll).
   3. RimeWithWeasel.vcxproj ClCompile missing FluxingDarkModeBridge.cpp.
   4. FluxingDarkModeBridge.cpp missing #include "stdafx.h" as first line (C1010 unexpected end-of-file while looking for precompiled header).
@@ -3211,13 +3262,13 @@ t->Clear(). 0.18.28.0 ship 时已应用.
   2. WeaselUI/WeaselUI.vcxproj adds ..\\RimeWithWeasel\\FluxingDarkModeBridge.cpp + ..\\RimeWithWeasel\\WeaselUtility.cpp to ClCompile.
   3. RimeWithWeasel/RimeWithWeasel.vcxproj adds FluxingDarkModeBridge.cpp to ClCompile.
   4. RimeWithWeasel/FluxingDarkModeBridge.cpp adds #include "stdafx.h" as first include.
-- **L43 fix - per-target /LTCG:OFF**: WeaselTSF target has its own dd_shflags that re-enables LTCG; per-target /LTCG:OFF is the cure, not global /LTCG removal. Applied to WeaselTSF/xmake.lua.
+- **L43 fix - per-target /LTCG:OFF**: WeaselTSF target has its own add_shflags that re-enables LTCG; per-target /LTCG:OFF is the cure, not global /LTCG removal. Applied to WeaselTSF/xmake.lua.
 - **L46 #2 /OPT:REF fix**: WeaselServer/xmake.lua replaces /OPT:REF /OPT:ICF with /OPT:NOREF /OPT:NOICF to keep static-lib symbols that ARE referenced (L42 sibling bug for build path, not test verification).
 - **Verification (L46 recipe, 3 paths all PASS)**:
   - Path 1 xbuild.bat weasel installer -> exit 0, installer 42,848,893 bytes, PE arch 0x14C x86.
   - Path 2 msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m:1 -> 0 errors / 0 warnings, 8/8 production targets success.
   - Path 3 scripts\\test-infra\\run-test-suite.bat -> 13/13 test exe PASS, 115 assertions / 0 FAIL (build phase has known MSB3491 / MSB6001 issues documented in L47; test phase verified independently).
-  - L42 byte-verify: weasel.dll contains  x001E1E1E (spec 033 dark-mode palette bytes present in production binary).
+  - L42 byte-verify: weasel.dll contains 0x001E1E1E (spec 033 dark-mode palette bytes present in production binary).
   - L14 arch-verify: WeaselServer.exe / WeaselDeployer.exe / WeaselSetup.exe / rime.dll = 0x14C x86; weaselx64.dll = 0x8664 x64; weaselARM64.dll = 0xAA64 ARM64.
 - **R-008 follow-up (v0.18.7.0 closure)**: All 13 test projects visible in build output; TestDefaultHotkeys 35/35 PASS (spec 014/021 Shift_L/R recovery + L16/L19 regressions).
 - **Test suite total**: 115+ assertions across 13 test projects.
@@ -3556,7 +3607,7 @@ t->Clear(). 0.18.28.0 ship 时已应用.
     TestShiftSelectBinding 13/13, TestBindingResolution 6/6,
     TestResponseParser 4/4, TestWeaselIPC smoke).
 
-�
+
 ## [0.18.12.0-fluxing] - 2026-07-02
 
 ### spec 018: fill TestBindingResolution with 4 real assertions (close L18 / L19 testing gap)
@@ -3691,7 +3742,7 @@ t->Clear(). 0.18.28.0 ship 时已应用.
 - **Test results (scripts\run-tests.bat)**:
   - TestDefaultHotkeys: 35/35 PASS
   - TestShiftSelectBinding: 13/13 PASS
-  - TestBindingResolution: LINKED rime.lib (exit 0)  was SCAFFOLD
+  - TestBindingResolution: LINKED rime.lib (exit 0) — was SCAFFOLD
     in spec 016, now LINKED
   - TestResponseParser: 3/4 PASS (test_4 pre-existing WeaselIPC bug)
   - TestWeaselIPC: PASS (WeaselServer roundtrip)
@@ -3850,90 +3901,90 @@ t->Clear(). 0.18.28.0 ship 时已应用.
 
 ### spec 014: restore Shift_L/R select 2nd/3rd candidate (L21)
 
-- **Problem**: (7� 0.18.7.0 �K͈ "(	W͗�, ��	�,�/
-  ,		W�"spec 005 v1.1 US1-B �� "	 Shift_L/R 	, 2/3 	" (
-  0.18.6.0 K� L19 � , 0.18.7.0 �
- CI �@��F*b
-���
+- **Problem**: 用户装 0.18.7.0 后实测反馈 "在候选字词窗口, 无法选择第二/
+  第三候选字词"。spec 005 v1.1 US1-B 承诺的 "按 Shift_L/R 选第 2/3 候选" 在
+  0.18.6.0 之后被 L19 误删, 0.18.7.0 修复
+ CI 基础设施但未恢复
+该能力。
 
-- **Fix (spec 014)**: ( key_binder/bindings has_menu �, ( Control+1/2
-  KM�� 2 L binding, ( spec 012 plan.md �2.2 ��� ccept: Shift+Shift_L/R
-  b (modifier=Shift, 
-� TSF release event �9M):
+- **Fix (spec 014)**: 在 key_binder/bindings has_menu 段, 在 Control+1/2
+  之前加回 2 行 binding, 使用 spec 012 plan.md §2.2 设计的 accept: Shift+Shift_L/R
+  形式 (modifier=Shift, 
+不会被 TSF release event 误匹配):
   `yaml
   - { when: has_menu, accept: Shift+Shift_L, send: 2 }
   - { when: has_menu, accept: Shift+Shift_R, send: 3 }
   `
 
-- **L21 Y�**: L19 / over-correction - �d�@	 keycode=Shift_L/R binding,
-  � spec 005 v1.1 �� has_menu bindingL19 ��� "W&2� ���
-   yaml �,��a binding X(/
-X(", F L19 ��t�V TestDefaultHotkeys
-  31/31 PASS e"��"�
-, ͽ0��W&2KՄ@P
+- **L21 教训**: L19 是 over-correction - 移除了所有 keycode=Shift_L/R binding,
+  包括 spec 005 v1.1 承诺的 has_menu binding。L19 自我审查写 "字符串断言只能证
+  明 yaml 文本里某条 binding 存在/
+不存在", 但 L19 自己却依赖 TestDefaultHotkeys
+  31/31 PASS 来"验证"修复
+, 反讽地证明了字符串测试的局限。
 
-- **KՆ�**:
+- **测试覆盖**:
   - TestDefaultHotkeys.exe output\data\default.yaml -> Passed: 35 / 35
-    (4 * L19 �c + 4 *�c)
-  - TestShiftSelectBinding.exe output\data\default.yaml -> Passed: 13 / 13 (�)
-  - $W�� runtime KդɌ� spec 014 �
-, M L18/L19 � "passing
-    test, regressed behavior" w1
+    (4 个 L19 负翻正 + 4 个新正)
+  - TestShiftSelectBinding.exe output\data\default.yaml -> Passed: 13 / 13 (新)
+  - 两套独立 runtime 测试交叉验证 spec 014 修复
+, 避免 L18/L19 的 "passing
+    test, regressed behavior" 陷阱。
 
 - **Build**:
   - xbuild.bat installer -> output/archives/fluxing-0.18.8.0-installer.exe
-    (42631276 W�, ~40.7 MB)
-  - 7z ��� 0.18.7.0 vs 0.18.8.0: / � data\default.yaml 16607
-    -> 17200 W� (+593 W�), 23 * binary 100% � (rime.dll / WeaselServer.exe
-    I SHA256 hI)
+    (42631276 字节, ~40.7 MB)
+  - 7z 解包对比 0.18.7.0 vs 0.18.8.0: 唯一差异 data\default.yaml 16607
+    -> 17200 字节 (+593 字节), 23 个 binary 100% 相同 (rime.dll / WeaselServer.exe
+    等 SHA256 全等)
 
 - **Verified by**: silent install 0.18.8.0 -> exit 0, HKLM InstallDir =
   C:\Program Files\fluxing, HKCU RimeUserDir = C:\Program Files\fluxing
-  \user1\fluxing, default.yaml + spec 014 �
+  \user1\fluxing, default.yaml + spec 014 修复
 
-- **Refs**: L19 (� L21 ��), L20 (silent-install cmd /c wrapper �(), spec 012
-  (L16 �F* ship), spec 014 (L21 �
-), spec 005 v1.1 US1-B (b
-�)
+- **Refs**: L19 (被 L21 替代), L20 (silent-install cmd /c wrapper 沿用), spec 012
+  (L16 计划但未 ship), spec 014 (L21 修复
+), spec 005 v1.1 US1-B (恢复
+承诺)
 
-�## [0.18.6.0-fluxing] - 2026-07-01
+## [0.18.6.0-fluxing] - 2026-07-01
 
 ### L19: defensive remove of all keycode=Shift_L/R bindings (spec 005 v1.1)
 
-- **Problem**: 0.18.5.0 (7�K͈ `shift+Enter` / `shift+<letter>` release
-  event ��� ascii_mode bL18 �
-commit `e4095f2`	��d�
-  `always: Shift+Shift_L/R toggle ascii_mode`F�Y�
-  `has_menu: Shift+Shift_L/R send 2/3` � bindingL18 W&2� 
+- **Problem**: 0.18.5.0 用户实测反馈 `shift+Enter` / `shift+<letter>` release
+  event 仍触发 ascii_mode 切换。L18 修复
+  event 仍触发 ascii_mode 切换。L18 修复（commit `e4095f2`）只移除了
+  `always: Shift+Shift_L/R toggle ascii_mode`，但保留了
+  `has_menu: Shift+Shift_L/R send 2/3` 的 binding。L18 字符串断言
   25/25 PASS 
-���L� binding hL:0.18.6 ��* buildL18
-  �
-*��Ō�	
+不能证明运行时 binding 表行为；0.18.6 安装包未 build（L18
+  修复
+未真实安装验证）。
 
-- **Fix (L19)**: 2�'�`output/data/default.yaml` -
-  `keycode=Shift_L/R` �@	 binding **h�
-X(**+ `always` 
-  `has_menu` $a�	
+- **Fix (L19)**: 防御性原则——`output/data/default.yaml` 中
+  `keycode=Shift_L/R` 的所有 binding **全部不存在
+**（含 `always` 与
+  `has_menu` 两条路径）。
 
-  - 		�9( RIME >:ؤ.M `Control+1/2/3..9`
-    keycode=`1`/`2`/`3`..`9`  `Shift_L/R` release event 
-��	
-  - -��Y `Shift+space`keycode=`space`	
-  - ascii_composer `switch_key.Shift_L/R: noop` �Y� key_binder ��	
+  - 候选选择改用 RIME 社区默认键位 `Control+1/2/3..9`
+    （keycode=`1`/`2`/`3`..`9` 与 `Shift_L/R` release event 不重叠）
+不重叠）
+  - 切中英保留 `Shift+space`（keycode=`space`）
+  - ascii_composer `switch_key.Shift_L/R: noop` 保留（让 key_binder 接管）
 
-- **Test coverage**: `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp` �
-  25/25 G�0 **31/31 PASS**�� 6 * L19 � ��@	
-  `Shift_L/R` b� binding	+ 1 * L19 c� active ascii_mode
-  toggle �p == 1� `Shift+space`	
+- **Test coverage**: `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp` 从
+  25/25 升级到 **31/31 PASS**，新增 6 个 L19 负断言（覆盖所有
+  `Shift_L/R` 形态的 binding）+ 1 个 L19 正断言（active ascii_mode
+  toggle 路径数 == 1，仅 `Shift+space`）。
 
-- **Unverified**: ���L:librime submodule a�0.18.6 build
-  �� release �6	(7�� 0.18.6 �{K���
+- **Unverified**: 真实安装包行为（librime submodule 污染，0.18.6 build
+  状态待 release 验收）。用户重装 0.18.6 后必须手动验证：
   - `shift+Enter` / `shift+<letter>` 
-�-�
-  - `Shift+space` ��-�
-  - 	�S � `Control+1` / `Control+2` 	, 2/3 	
+不再切中英
+  - `Shift+space` 仍能切中英
+  - 候选窗打开时 `Control+1` / `Control+2` 选第 2/3 候选
 
-- **Refs**: L18� L19 ��	L16spec 005 v1.1 plan.md �2.2
+- **Refs**: L18（被 L19 替代）、L16、spec 005 v1.1 plan.md §2.2。
 
 ## [0.18.7.0-fluxing] - 2026-07-01
 
@@ -3995,7 +4046,7 @@ X(**+ `always` 
 ### Installer hardening: smoke-test path guard + TSF shim lock-skip
 
 - **L13-fix-2**: install-side guard against smoke-test paths left behind in
-  the registry. When a previous silent-install smoke test (AGENTS.md �2.5)
+  the registry. When a previous silent-install smoke test (AGENTS.md §2.5)
   leaves `HKLM\Software\Fluxing\Weasel\InstallDir` pointing under
   `C:\TEMP\` or `C:\Users\test\`, the new install would inherit that path.
   The guard detects the smoke-test prefix (most-specific first:
@@ -5419,7 +5470,7 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
   fails" line is removed. The full TDD.md sec 8 known gaps list is
   now: L16/L18 test gap (closed by spec 018), user_dict_update
   integration (spec 020 placeholder), WM_SETTINGCHANGE broadcast
-  (spec 022 placeholder), rime_deployer --debug (spec 004 �7 SC-005
+  (spec 022 placeholder), rime_deployer --debug (spec 004 §7 SC-005
   no test project). Three of the four are now blocked-on-parent-spec
   placeholders.
 
@@ -5428,7 +5479,7 @@ refactorï(RimeWithWeasel) simplify color parsing function ([fxliang](https://gi
   TestDarkModeBroadcast, TestYamlRoundTripE2E). Each is now a
   spec-stage placeholder at `.specify\specs\020-023-*/` with
   spec/plan/tasks 3-piece sets pointing to the parent spec (008 /
-  009 / 004 �9 / 007). The production code for those tests does
+  009 / 004 §9 / 007). The production code for those tests does
   not exist yet (CandidateEdit, PhrasesStore, DarkModeBridge,
   YamlRoundTrip), so the test code is blocked on the parent spec
   shipping. This is a tracking release, not an implementation
@@ -5595,9 +5646,9 @@ elease/fluxing-0.18.21.0-installer.exe (rebuilt from current source; 0.18.20.1 s
   - cmd /c scripts\test-infra\run-test-suite.bat -> RC 0, === ALL TESTS PASSED ===, 11/11 test projects
   - cmd /c scripts\test-infra\verify-test-binaries-fresh.bat -> RC 0, 11 FRESH
   - AGENTS.md sec 2.5 silent-install smoke test -> all 8 invariants pass (L41 recipe)
-  -  x001E1E1E count in weasel.dll = 1 (L42 byte-search verification, pre-033 inline palette)
+  - 0x001E1E1E count in weasel.dll = 1 (L42 byte-search verification, pre-033 inline palette)
 
-- **Tag is 0.18.21.0** (lightweight per AGENTS.md sec 3.5). Pushed to kizemo/Fluxing.
+- **Tag is v0.18.21.0** (lightweight per AGENTS.md sec 3.5). Pushed to kizemo/Fluxing.
 
 - **Coverage map**: see .specify/specs/008-candidate-edit/tasks.md for the T-implementation-test mapping.
 ## [0.18.20.1-fluxing] - 2026-07-04
@@ -5666,7 +5717,7 @@ elease/fluxing-0.18.21.0-installer.exe (rebuilt from current source; 0.18.20.1 s
   - FluxingD2DRenderer - 单例包装 ID2D1Factory + IDWriteFactory + HWND render target 缓存.
   - FluxingTheme - 单例订阅 FluxingDarkModeBridge, 通知订阅者重绘.
 - **Dependencies**:
-  - spec 033 FluxingDarkModeBridge (0.18.22.0+ ship, byte-verify  x001E1E1E in weasel.dll).
+  - spec 033 FluxingDarkModeBridge (0.18.22.0+ ship, byte-verify 0x001E1E1E in weasel.dll).
   - 现有 WeaselUI D2D/DirectWrite 基础设施 (复用 d2d1.lib / dwrite.lib 现有 link 配置).
 - **Not committed to v0 (deferred)**:
   - QuickPanelDialog 重构 (留 spec 038, v0.18.27+).
@@ -5677,7 +5728,7 @@ elease/fluxing-0.18.21.0-installer.exe (rebuilt from current source; 0.18.20.1 s
   - Path 1 xbuild.bat weasel installer -> exit 0, installer ~42.85 MB, PE arch 0x14C x86.
   - Path 2 msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32 /m:1 -> 0 errors / pre-existing warnings only.
   - Path 3 scripts\test-infra\run-test-suite.bat -> 14/14 test exe PASS (13 existing + 1 new TestFluxingComponents), 115+18=133+ assertions / 0 FAIL, "=== ALL TESTS PASSED ===".
-  - L42 byte-verify:  x001E1E1E 仍在 weasel.dll (新 7 个 .cpp 不能 dead-strip 暗色 palette bytes).
+  - L42 byte-verify: 0x001E1E1E 仍在 weasel.dll (新 7 个 .cpp 不能 dead-strip 暗色 palette bytes).
   - L14 arch-verify: 6 binary 全部 arch 一致 (x86=0x14C, x64=0x8664, ARM64=0xAA64).
 - **Files added** (8 production + 5 test + 3 build config):
   - WeaselUI/FluxingComponents/stdafx.h
