@@ -1,5 +1,56 @@
 
 
+## [0.21.0.2-fluxing] - 2026-10-23
+
+### fix(fluxing): 全量重编, x64 TSF 首次包含 Shift 释放选候选状态机
+
+**User-visible**:
+- 64 位程序 (VSCode / Chrome / 微信等) 里 Shift_L 单键释放选第 2 个候选的行为,
+  其代码此前根本不在 x64 二进制里, 现在随重编一并带上
+- 32 位程序行为不变
+
+**Root cause**:
+- spec 077 的状态机提交 cd747df (2026-08-16 09:30) 晚于两个 TSF 的编译时间:
+  output\weasel.dll (x86) = 2026-08-16 09:04, output\weaselx64.dll = 2026-08-08 00:03
+- 两个 TSF 都是旧的, Shift 释放选候选在 32 位与 64 位两端都未生效
+- 修复方式: 全量重编 (Win32 全解 + x64 TSF), 新二进制内已含
+  ShiftDown / ShiftUp / ShiftStateMachine (weaselx64.pdb 符号核验)
+- 装机验收 (64 位应用内实按 Shift_L) 待补
+
+### fix(WeaselServer): 把 Sparkle 更新源改指 aiec.fun 自有渠道
+
+**User-visible**:
+- 更新检查现在真的会提示新版本
+
+**Root cause**:
+- WeaselServer.rc 的 4 张 APPCAST 字节表全部指向 rime.github.io
+- 上游 feed 的版本号 (0.17.4) 远低于 Fluxing 当前版本, Sparkle 永远不会提示更新
+
+**Fix**:
+- FEEDURL / MANUALUPDATEFEEDURL -> https://www.aiec.fun/pinyin/appcast.xml
+- TESTINGFEEDURL / TESTINGMANUALUPDATEFEEDURL -> https://www.aiec.fun/pinyin/testing-appcast.xml
+- 已在新 output\Win32\WeaselServer.exe 内核验: 两个 aiec.fun URL 存在,
+  rime.github.io 归零
+
+### fix(fluxing): download.php 找不到指定版本时返回 404 而不是错版本二进制
+
+**User-visible**:
+- https://www.aiec.fun/pinyin/download.php?file=<未发布的版本> 现在返回 404
+- 此前会静默回退到最新安装包, 用户会下载到与所请求版本号不符的二进制
+
+### fix(fluxing): 补齐 TestResponseParser 的 Release OutDir, 让测试门禁能真正跑到该用例
+
+**Root cause**:
+- test\TestResponseParser\TestResponseParser.vcxproj 的 Release|Win32 配置组
+  缺少 IntDir / OutDir 覆盖, 退回 MSBuild 默认模板 (假定 SolutionDir 自带尾反斜杠)
+- 套件脚本传入的 SolutionDir 不带尾反斜杠, 产物被粘连到仓库外目录
+  F:\soft\00selfmade\rime_claudeRelease\, 套件找不到 exe, 门禁恒为失败 (exit 1)
+- 该失败是静默的: 没有 error 输出, 只有 rc=9009
+
+**Fix**:
+- 为 Release|Win32 与 Release|x64 配置组补齐 IntDir / OutDir, 与 Debug 组一致
+- 补齐后 scripts\test-infra\run-test-suite.bat 全绿 (16 个测试工程, exit 0)
+
 ## [0.21.0.1-fluxing] - 2026-08-16
 
 ### feat(WeaselIPC): v0.21.0.1 shift release-only candidate select via IPC state machine
