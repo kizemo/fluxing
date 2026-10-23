@@ -66,6 +66,13 @@ class WeaselServerApp {
  protected:
   void SetupMenuHandlers();
 
+  // spec 080: show / toggle the QuickPanel on the server UI thread.
+  // QuickPanelDialog creates a window, owns GDI resources and runs a
+  // polling timer, so it must only ever be touched from the thread that
+  // owns the server message loop.
+  void ShowQuickPanel();
+  void ToggleQuickPanel();
+
   // v0.19.0.25-fix(spec 042 §3 + §10.4):Alt+. 全局热键 hook。
   // - RegisterHotKey / UnregisterHotKey 绑 m_server.GetHWnd()(IPC server window)
   // - 不改 WeaselIPCServer/ServerImpl 的 OnHotkey,而是用 SetWindowLongPtr 子类化 IPC
@@ -100,4 +107,8 @@ class WeaselServerApp {
 
   // IPC server window 原 WNDPROC(子类化时保存,UnregisterPhrasesHotkey 时还原)
   WNDPROC m_ipcServerOrigWndProc = nullptr;
+
+  // spec 080: id of the thread that owns the server message loop. Used to
+  // marshal QuickPanel requests from the IPC pipe thread to the UI thread.
+  DWORD m_uiThreadId = 0;
 };

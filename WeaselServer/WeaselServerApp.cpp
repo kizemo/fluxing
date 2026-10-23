@@ -25,6 +25,13 @@ WeaselServerApp::WeaselServerApp()
   // m_handler.reset(new RimeWithWeaselHandler(&m_ui));
   m_server.SetRequestHandler(m_handler.get());
   SetupMenuHandlers();
+  // spec 080: the request handler runs on the IPC pipe thread, so the
+  // QuickPanel request is forwarded to the server UI thread (which owns
+  // the window, the GDI resources and the polling timer).
+  m_handler->SetOnShowQuickPanel([this] {
+    ::PostMessage(m_server.GetHWnd(), WM_COMMAND,
+                  MAKEWPARAM(ID_WEASELTRAY_QUICK_PANEL_SHOW, 0), 0);
+  });
 }
 
 WeaselServerApp::~WeaselServerApp() {}
@@ -170,6 +177,10 @@ void WeaselServerApp::UnregisterPhrasesHotkey() {
 }
 
 int WeaselServerApp::Run() {
+  // spec 080: remember the UI thread id, so requests arriving on the IPC
+  // pipe thread can be marshalled to the message loop thread.
+  m_uiThreadId = GetCurrentThreadId();
+
   if (!m_server.Start())
     return -1;
 
@@ -303,39 +314,65 @@ void WeaselServerApp::SetupMenuHandlers() {
   //   - 左键单击托盘图标 (via WM_COMMAND post from SystemTraySDK)
   //   - 右键托盘菜单 "QuickPanel" 项 (rc file)
   m_server.AddMenuHandler(ID_WEASELTRAY_QUICK_PANEL, [this] {
-    // L70-bugfix: 用 ToggleMode 替代 Show,让 Alt+, 第二次按能隐藏
-    bool currentFull = m_handler ? m_handler->IsFullShape() : false;
-    if (QuickPanelDialog::ActiveHwnd() &&
-        IsWindowVisible(QuickPanelDialog::ActiveHwnd())) {
-      QuickPanelDialog::Hide();
-    } else {
-      QuickPanelDialog::Show(
-          currentFull,
-          [this]() {
-            fs::path deployer = install_dir() / L"WeaselDeployer.exe";
-            ShellExecuteW(NULL, NULL, deployer.c_str(), L"/hotkey", NULL, SW_SHOWNORMAL);
-          },
-          [this]() { explore(WeaselUserDataPath()); },
-          [this]() {
-            // v0.19.0.39 (Phase F fix Bug 1): 按钮路径下, QuickPanelDialog 仍是
-            //   foreground, 直接 Show() PhrasesDialog 会让 keyboard events (↑↓/Enter)
-            //   仍发到 QuickPanel. 修法 (Option C): 先 Hide() QuickPanelDialog 释放
-            //   foreground, 再 Show() PhrasesDialog. Show() 内部 (PhrasesDialog.cpp
-            //   Phase F fix) 调 AllowSetForegroundWindow + SetForegroundWindow 兜底
-            //   抢 foreground, 让 keyboard 路由到 PhrasesDialog.
-            // v0.19.0.52 (Phase K3 T010): 走 IPC 路径
-            if (QuickPanelDialog::ActiveHwnd() &&
-                IsWindowVisible(QuickPanelDialog::ActiveHwnd())) {
-              QuickPanelDialog::Hide();
-            }
-            fluxing::PhrasesDialogIPC::Show();
-          },
-          [this](bool newFull) {
-            if (m_handler) m_handler->SetOption(0, "full_shape", newFull);
-          },
-          [this]() { UserDictionary::Show(); },
-          []() {});
+    if (GetCurrentThreadId() != m_uiThreadId) {
+      // spec 080: the request arrived on the IPC pipe thread (language bar
+      // left click). QuickPanelDialog must be driven from the thread that
+      // owns the server message loop, so bounce the request there.
+      ::PostMessage(m_server.GetHWnd(), WM_COMMAND,
+                    MAKEWPARAM(ID_WEASELTRAY_QUICK_PANEL, 0), 0);
+      return true;
     }
+    ToggleQuickPanel();
     return true;
   });
+
+  // spec 080: force-show the QuickPanel. Unlike the menu command above it
+  // never hides an already visible panel: it is the "the user just
+  // switched to Fluxing" entry point.
+  m_server.AddMenuHandler(ID_WEASELTRAY_QUICK_PANEL_SHOW, [this] {
+    if (GetCurrentThreadId() != m_uiThreadId) {
+      ::PostMessage(m_server.GetHWnd(), WM_COMMAND,
+                    MAKEWPARAM(ID_WEASELTRAY_QUICK_PANEL_SHOW, 0), 0);
+      return true;
+    }
+    ShowQuickPanel();
+    return true;
+  });
+}
+
+void WeaselServerApp::ToggleQuickPanel() {
+  // L70-bugfix: ToggleMode semantics, so a second Alt+, hides the panel.
+  if (QuickPanelDialog::ActiveHwnd() &&
+      IsWindowVisible(QuickPanelDialog::ActiveHwnd())) {
+    QuickPanelDialog::Hide();
+  } else {
+    ShowQuickPanel();
+  }
+}
+
+void WeaselServerApp::ShowQuickPanel() {
+  bool currentFull = m_handler ? m_handler->IsFullShape() : false;
+  QuickPanelDialog::Show(
+      currentFull,
+      [this]() {
+        fs::path deployer = install_dir() / L"WeaselDeployer.exe";
+        ShellExecuteW(NULL, NULL, deployer.c_str(), L"/hotkey", NULL,
+                      SW_SHOWNORMAL);
+      },
+      [this]() { explore(WeaselUserDataPath()); },
+      [this]() {
+        // v0.19.0.39 (Phase F fix Bug 1): the button path hides the
+        // QuickPanel first, so the keyboard events reach PhrasesDialog.
+        // v0.19.0.52 (Phase K3 T010): out-of-process IPC.
+        if (QuickPanelDialog::ActiveHwnd() &&
+            IsWindowVisible(QuickPanelDialog::ActiveHwnd())) {
+          QuickPanelDialog::Hide();
+        }
+        fluxing::PhrasesDialogIPC::Show();
+      },
+      [this](bool newFull) {
+        if (m_handler)
+          m_handler->SetOption(0, "full_shape", newFull);
+      },
+      [this]() { UserDictionary::Show(); }, []() {});
 }

@@ -5,8 +5,10 @@
 #include <StringAlgorithm.hpp>
 #include <WeaselConstants.h>
 #include <WeaselUtility.h>
-#include <QuickPanelDialog.h>   // spec 056: FocusIn/FocusOut call
-                                //   QuickPanelDialog::EnableAlwaysShowMode/Hide
+#include <QuickPanelDialog.h>  // spec 056: FocusOut calls
+                               //   QuickPanelDialog::Hide
+                               // spec 080: the profile-activated branch
+                               //   asks WeaselServerApp to show it
 // v0.19.0.52 (Phase K3 T011 Option B): capture user foreground at FocusIn
 //   IPC for PhrasesDialogIPC::InjectText to restore before SendInput.
 //   GetForegroundWindow() 是 session-global (跟 caller 进程无关),所以
@@ -405,6 +407,27 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
   TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return;
+  // spec 080 (ADR 0008): "the user just switched to Fluxing" notification.
+  //
+  // ITfActiveLanguageProfileNotifySink::OnActivated is a per-process
+  // subscription: switching the input method once makes every process
+  // that loaded the Fluxing TIP send this message. The active session is
+  // the gate: only the front most application shows the QuickPanel, the
+  // background ones are ignored. Without the gate the panel pops up once
+  // per process and the active session gets stolen by a background
+  // process (spec 055 bug 2 root cause).
+  //
+  // This branch deliberately does NOT touch m_active_session.
+  if (client_caps & WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED) {
+    if (m_active_session != 0 && ipc_id != m_active_session) {
+      DLOG(INFO) << "profile activated ignored, not the active session";
+      return;
+    }
+    DLOG(INFO) << "profile activated, request QuickPanel";
+    if (m_onShowQuickPanel)
+      m_onShowQuickPanel();
+    return;
+  }
   // v0.19.0.52 (Phase K3 T011 Option B): 抓 user foreground。
   // 此刻: WeaselTSF.dll 已通过 IPC 通知 server 端 user 在 edit field 输入 →
   // server FocusIn handler 在 IPC worker thread 跑 → GetForegroundWindow()
@@ -413,52 +436,13 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
   fluxing::foreground_restore::CaptureFromCurrentThread();
   _UpdateUI(ipc_id);
   m_active_session = ipc_id;
-  // L69-fix: QuickPanel DISABLED to avoid heap corruption crash.
-  //
-  // Background: spec 066 (v0.18.41.0) added EnableAlwaysShowMode() here to
-  // auto-show the QuickPanel when Fluxing IME is activated. This triggered a
-  // GDI+ Bitmap(IStream*) lifetime bug:
-  //   - LoadLogo() in QuickPanelDialog.cpp creates Bitmap from an IStream
-  //   - Bitmap internally caches the IStream pointer for lazy pixel decode
-  //   - stream->Release() in our code frees the IStream COM vtable
-  //   - First WM_PAINT -> DoPaint -> DrawImage -> Bitmap lazy pixel read
-  //     through freed vtable -> UAF -> STATUS_HEAP_CORRUPTION
-  //     (detected in NtSetValueKey, RtlDeleteTimer, etc - any heap op)
-  //
-  // The user's symptom: WeaselServer.exe dies shortly after any QuickPanel
-  // show (auto on FocusIn, or manual via Alt+,). After death, TSF cannot
-  // reach the pipe (Echo() fails), so user can't input Chinese.
-  //
-  // L67/L68 attempted to fix the IStream lifetime but did NOT solve the
-  // underlying bug - the heap is still corrupted, and 2 different dumps
-  // from v0.18.41.3 show crashes at NtSetValueKey and RtlDeleteTimer.
-  // Per debugging-and-error-recovery Step 8: STOP, don't pile fixes.
-  //
-  // v0.18.41.4 disables ALL QuickPanel triggers until QuickPanel is
-  // rewritten (the GDI+ Bitmap/IStream lifetime requires a deeper
-  // redesign - see L69). The 6 button callbacks are also not wired
-  // here because EnableAlwaysShowMode would invoke them on first show.
-  //
-  // QuickPanel code remains in QuickPanelDialog.cpp for future rewrite;
-  // nothing is deleted. WeaselServer can be built and run without
-  // triggering any of the GDI+ crash paths.
-  if (false && ipc_id > 0) {  // L69-fix: disabled
-    QuickPanelDialog::EnableAlwaysShowMode(
-        []() { /* 1. 方案: no-op (no schema picker UI in v0.18.36) */ },
-        []() {
-          // 2. 词典: open user data folder
-          ShellExecuteW(NULL, NULL, WeaselUserDataPath().c_str(),
-                        NULL, NULL, SW_SHOWNORMAL);
-        },
-        []() { /* 3. 短语: no-op (spec 009 not yet) */ },
-        [](bool) { /* 4. 全半角: no-op (no rime_api handle here) */ },
-        []() {
-          // 5. 符号: open deployer
-          ShellExecuteW(NULL, NULL, L"WeaselDeployer.exe", L"/deploy",
-                        NULL, SW_SHOWNORMAL);
-        },
-        []() { /* 6. 登录: no-op (v2.1+ cloud sync) */ });
-  }
+  // spec 080 (ADR 0008): the old "show the QuickPanel on every
+  // FocusIn" call site was disabled with `if (false && ipc_id > 0)`
+  // because the GDI+ Bitmap(IStream*) lifetime bug (L67-L69) crashed
+  // WeaselServer. QuickPanelDialog now decodes the logo with WIC and
+  // paints with plain GDI, so that crash chain is gone (spec 074 / L75).
+  // The panel is now shown from the profile-activated branch above,
+  // through the server UI thread, which owns the real button callbacks.
 }
 
 void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {

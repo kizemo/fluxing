@@ -8,6 +8,7 @@
 #include <boost/interprocess/streams/bufferstream.hpp>
 using namespace boost::interprocess;
 
+#include <functional>
 #include <iostream>
 #include <memory>
 
@@ -16,6 +17,25 @@ CAppModule _Module;
 int console_main();
 int client_main();
 int server_main();
+int verify_quickpanel_main();
+int verify_tsf_profile_main(bool allow_profile_switch,
+                            bool allow_remote_session);
+
+// Reads an opt in flag from the environment. The value has to look like a
+// yes ("1", "y", "yes", "true"), anything else is a no.
+bool env_opt_in(const wchar_t* name) {
+  wchar_t buf[16] = {0};
+  DWORD n = GetEnvironmentVariableW(name, buf, 16);
+  if (n == 0 || n >= 16)
+    return false;
+  if (!wcscmp(buf, L"1") || !wcscmp(buf, L"y") || !wcscmp(buf, L"Y"))
+    return true;
+  if (!wcscmp(buf, L"yes") || !wcscmp(buf, L"YES"))
+    return true;
+  if (!wcscmp(buf, L"true") || !wcscmp(buf, L"TRUE"))
+    return true;
+  return false;
+}
 
 // usage: TestWeaselIPC.exe [/start | /stop | /console]
 
@@ -36,6 +56,24 @@ int _tmain(int argc, _TCHAR* argv[]) {
   } else if (argc > 1 && !wcscmp(L"/console", argv[1])) {
     return console_main();
     return 0;
+  } else if (argc > 1 && !wcscmp(L"/verify-quickpanel", argv[1])) {
+    return verify_quickpanel_main();
+  } else if (argc > 1 && !wcscmp(L"/verify-tsf-profile", argv[1])) {
+    // spec 080 (crash guard): this mode really switches the active input
+    // profile, which is not what a user does and which was observed to
+    // collapse the desktop input stack. It refuses to run unless the
+    // caller opts in explicitly.
+    bool allow_profile_switch =
+        env_opt_in(L"FLUXING_VERIFY_ALLOW_PROFILE_SWITCH");
+    bool allow_remote_session =
+        env_opt_in(L"FLUXING_VERIFY_ALLOW_REMOTE_SESSION");
+    for (int i = 2; i < argc; ++i) {
+      if (!wcscmp(argv[i], L"--allow-profile-switch"))
+        allow_profile_switch = true;
+      else if (!wcscmp(argv[i], L"--allow-remote-session"))
+        allow_remote_session = true;
+    }
+    return verify_tsf_profile_main(allow_profile_switch, allow_remote_session);
   }
 
   return -1;
@@ -125,6 +163,139 @@ int client_main() {
   client.EndSession();
 
   return 0;
+}
+
+// spec 080: end-to-end check for "the QuickPanel shows when the user
+// switches the active input profile to Fluxing".
+//
+// The client impersonates exactly what the TSF notification thread does:
+//   1. a plain FocusIn              -> the server makes this session active
+//   2. FocusIn(PROFILE_ACTIVATED)   -> the server shows the QuickPanel
+// and then checks that the panel window really exists and is visible.
+//
+// The panel is a singleton top level window titled "Fluxing QuickPanel",
+// so the client can observe it with FindWindowW.
+struct auto_hide_result {
+  bool hidden = false;          // the panel went away
+  bool survived_grace = false;  // it was still up after the grace period
+};
+
+// Waits for the QuickPanel to hide itself while the mouse stays outside
+// of it. The panel hides after 2s of grace period plus 1.5s of accumulated
+// outside time (QuickPanelDialog.cpp: kShowGraceMs and the WM_TIMER id 2
+// branch), so it has to be visible right after the grace period and gone
+// a moment later. The mouse is moved out of the way and put back after.
+auto_hide_result wait_auto_hide(std::function<bool()> panel_visible) {
+  auto_hide_result result;
+  POINT old_cursor = {0, 0};
+  GetCursorPos(&old_cursor);
+  SetCursorPos(10, 10);
+  for (int i = 0; i < 12; ++i) {  // 1200ms, still inside the grace period
+    Sleep(100);
+    if (!panel_visible()) {
+      result.hidden = true;
+      break;
+    }
+  }
+  if (!result.hidden) {
+    result.survived_grace = true;
+    for (int i = 0; i < 60; ++i) {  // up to 6s more
+      Sleep(100);
+      if (!panel_visible()) {
+        result.hidden = true;
+        break;
+      }
+    }
+  }
+  SetCursorPos(old_cursor.x, old_cursor.y);
+  return result;
+}
+
+int verify_quickpanel_main() {
+  auto panel_hwnd = []() -> HWND {
+    // class "FluxingQuickPanel_v3", title "Fluxing QuickPanel"
+    return FindWindowW(L"FluxingQuickPanel_v3", L"Fluxing QuickPanel");
+  };
+  auto panel_visible = [&panel_hwnd]() -> bool {
+    HWND h = panel_hwnd();
+    return h != NULL && IsWindowVisible(h);
+  };
+
+  weasel::Client client;
+  if (!client.Connect()) {
+    std::cerr << "[QP] connect failed" << std::endl;
+    return -2;
+  }
+  client.StartSession();
+  if (!client.Echo()) {
+    std::cerr << "[QP] session failed" << std::endl;
+    return -3;
+  }
+
+  // precondition: the panel must be hidden before the notification
+  client.FocusOut();
+  Sleep(500);
+  if (panel_visible()) {
+    std::cerr << "[QP] FAIL panel already visible before the notification"
+              << std::endl;
+    client.EndSession();
+    return -4;
+  }
+
+  // step 1: this session becomes the server's active session
+  client.FocusIn();
+  Sleep(300);
+
+  // step 2: the profile-activated notification (what the TSF sends when
+  // the user switches the active input profile to Fluxing)
+  client.FocusIn(WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED);
+  Sleep(800);
+
+  HWND panel = panel_hwnd();
+  bool shown = (panel != NULL && IsWindowVisible(panel));
+  std::cout << "[QP] panel hwnd=" << (panel ? (void*)panel : (void*)0)
+            << " visible=" << (shown ? 1 : 0) << std::endl;
+
+  // step 3: the panel must hide itself again when the mouse stays out of
+  // it. This is the regression check for the v0.21.0.5 fix: Show() kills
+  // the hover polling timer (id 2) in Hide(), and the reuse path used to
+  // return without restarting it, so every panel shown after the first
+  // show/hide cycle stayed on the screen for good.
+  auto_hide_result first = wait_auto_hide(panel_visible);
+  std::cout << "[QP] first auto-hide hidden=" << (first.hidden ? 1 : 0)
+            << " survived_grace=" << (first.survived_grace ? 1 : 0)
+            << std::endl;
+
+  // step 4: show it again. The window still exists, so this is the reuse
+  // path, and it has to auto hide as well.
+  client.FocusIn(WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED);
+  Sleep(800);
+  bool shown_again = panel_visible();
+  auto_hide_result second = wait_auto_hide(panel_visible);
+  std::cout << "[QP] second auto-hide shown=" << (shown_again ? 1 : 0)
+            << " hidden=" << (second.hidden ? 1 : 0)
+            << " survived_grace=" << (second.survived_grace ? 1 : 0)
+            << std::endl;
+
+  // step 5: switching away hides the panel again
+  client.FocusOut();
+  Sleep(600);
+  bool hidden = !panel_visible();
+
+  client.EndSession();
+
+  bool auto_hide_ok = first.hidden && first.survived_grace && shown_again &&
+                      second.hidden && second.survived_grace;
+  if (shown && hidden && auto_hide_ok) {
+    std::cout << "[QP] PASS: profile-activated notification shows the "
+                 "QuickPanel, it auto hides, and focus-out hides it"
+              << std::endl;
+    return 0;
+  }
+  std::cerr << "[QP] FAIL shown=" << shown << " hidden=" << hidden
+            << " shown_again=" << shown_again
+            << " auto_hide=" << (auto_hide_ok ? 1 : 0) << std::endl;
+  return -5;
 }
 
 class TestRequestHandler : public weasel::RequestHandler {

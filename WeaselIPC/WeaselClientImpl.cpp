@@ -60,7 +60,7 @@ bool ClientImpl::ProcessKeyEvent(KeyEvent const& keyEvent) {
     return false;
 
   LRESULT ret =
-      _SendMessage(WEASEL_IPC_PROCESS_KEY_EVENT, keyEvent, session_id);
+      _SendMessage(WEASEL_IPC_PROCESS_KEY_EVENT, keyEvent, session_id.load());
   return ret != 0;
 }
 
@@ -68,7 +68,8 @@ bool ClientImpl::CommitComposition() {
   if (!_Active())
     return false;
 
-  LRESULT ret = _SendMessage(WEASEL_IPC_COMMIT_COMPOSITION, 0, session_id);
+  LRESULT ret =
+      _SendMessage(WEASEL_IPC_COMMIT_COMPOSITION, 0, session_id.load());
   return ret != 0;
 }
 
@@ -76,7 +77,8 @@ bool ClientImpl::ClearComposition() {
   if (!_Active())
     return false;
 
-  LRESULT ret = _SendMessage(WEASEL_IPC_CLEAR_COMPOSITION, 0, session_id);
+  LRESULT ret =
+      _SendMessage(WEASEL_IPC_CLEAR_COMPOSITION, 0, session_id.load());
   return ret != 0;
 }
 
@@ -84,7 +86,7 @@ bool ClientImpl::SelectCandidateOnCurrentPage(size_t index) {
   if (!_Active())
     return false;
   LRESULT ret = _SendMessage(WEASEL_IPC_SELECT_CANDIDATE_ON_CURRENT_PAGE, index,
-                             session_id);
+                             session_id.load());
   return ret != 0;
 }
 
@@ -93,14 +95,14 @@ bool ClientImpl::SelectCandidateOnCurrentPage(size_t index) {
 bool ClientImpl::ShiftDown(bool is_left) {
   if (!_Active())
     return false;
-  _SendMessage(WEASEL_IPC_SHIFT_DOWN, is_left ? 0u : 1u, session_id);
+  _SendMessage(WEASEL_IPC_SHIFT_DOWN, is_left ? 0u : 1u, session_id.load());
   return true;
 }
 
 bool ClientImpl::ShiftUp(bool is_left) {
   if (!_Active())
     return false;
-  _SendMessage(WEASEL_IPC_SHIFT_UP, is_left ? 0u : 1u, session_id);
+  _SendMessage(WEASEL_IPC_SHIFT_UP, is_left ? 0u : 1u, session_id.load());
   return true;
 }
 
@@ -108,7 +110,7 @@ bool ClientImpl::SelectCandidate(size_t index) {
   if (!_Active())
     return false;
   LRESULT ret = _SendMessage(WEASEL_IPC_SELECT_CANDIDATE,
-                             static_cast<DWORD>(index), session_id);
+                             static_cast<DWORD>(index), session_id.load());
   return ret != 0;
 }
 
@@ -116,7 +118,7 @@ bool ClientImpl::DeleteCandidateOnCurrentPage(size_t index) {
   if (!_Active())
     return false;
   LRESULT ret = _SendMessage(WEASEL_IPC_DELETE_CANDIDATE_ON_CURRENT_PAGE, index,
-                             session_id);
+                             session_id.load());
   return ret != 0;
 }
 
@@ -124,14 +126,15 @@ bool ClientImpl::HighlightCandidateOnCurrentPage(size_t index) {
   if (!_Active())
     return false;
   LRESULT ret = _SendMessage(WEASEL_IPC_HIGHLIGHT_CANDIDATE_ON_CURRENT_PAGE,
-                             index, session_id);
+                             index, session_id.load());
   return ret != 0;
 }
 
 bool ClientImpl::ChangePage(bool backward) {
   if (!_Active())
     return false;
-  LRESULT ret = _SendMessage(WEASEL_IPC_CHANGE_PAGE, backward, session_id);
+  LRESULT ret =
+      _SendMessage(WEASEL_IPC_CHANGE_PAGE, backward, session_id.load());
   return ret != 0;
 }
 
@@ -158,20 +161,23 @@ void ClientImpl::UpdateInputPosition(RECT const& rc) {
   int height = max(0, min(127, (rc.bottom - rc.top) >> hi_res));
   DWORD compressed_rect = ((hi_res & 0x01) << 31) | ((height & 0x7f) << 24) |
                           ((top & 0xfff) << 12) | (left & 0xfff);
-  _SendMessage(WEASEL_IPC_UPDATE_INPUT_POS, compressed_rect, session_id);
+  _SendMessage(WEASEL_IPC_UPDATE_INPUT_POS, compressed_rect, session_id.load());
 }
 
-void ClientImpl::FocusIn() {
-  DWORD client_caps = 0; /* TODO */
-  _SendMessage(WEASEL_IPC_FOCUS_IN, client_caps, session_id);
+void ClientImpl::FocusIn(DWORD client_caps) {
+  _SendMessage(WEASEL_IPC_FOCUS_IN, client_caps, session_id.load());
+}
+
+void ClientImpl::CloseThreadChannel() {
+  channel.Disconnect();
 }
 
 void ClientImpl::FocusOut() {
-  _SendMessage(WEASEL_IPC_FOCUS_OUT, 0, session_id);
+  _SendMessage(WEASEL_IPC_FOCUS_OUT, 0, session_id.load());
 }
 
 void ClientImpl::TrayCommand(UINT menuId) {
-  _SendMessage(WEASEL_IPC_TRAY_COMMAND, menuId, session_id);
+  _SendMessage(WEASEL_IPC_TRAY_COMMAND, menuId, session_id.load());
 }
 
 void ClientImpl::StartSession() {
@@ -184,7 +190,7 @@ void ClientImpl::StartSession() {
 }
 
 void ClientImpl::EndSession() {
-  _SendMessage(WEASEL_IPC_END_SESSION, 0, session_id);
+  _SendMessage(WEASEL_IPC_END_SESSION, 0, session_id.load());
   session_id = 0;
 }
 
@@ -202,8 +208,8 @@ bool ClientImpl::Echo() {
   if (!_Active())
     return false;
 
-  UINT serverEcho = _SendMessage(WEASEL_IPC_ECHO, 0, session_id);
-  return (serverEcho == session_id);
+  UINT serverEcho = _SendMessage(WEASEL_IPC_ECHO, 0, session_id.load());
+  return (serverEcho == session_id.load());
 }
 
 bool ClientImpl::GetResponseData(ResponseHandler const& handler) {
@@ -296,12 +302,20 @@ void Client::UpdateInputPosition(RECT const& rc) {
   m_pImpl->UpdateInputPosition(rc);
 }
 
-void Client::FocusIn() {
-  m_pImpl->FocusIn();
+void Client::FocusIn(DWORD client_caps) {
+  m_pImpl->FocusIn(client_caps);
 }
 
 void Client::FocusOut() {
   m_pImpl->FocusOut();
+}
+
+void Client::CloseThreadChannel() {
+  m_pImpl->CloseThreadChannel();
+}
+
+bool Client::HasSession() const {
+  return m_pImpl->HasSession();
 }
 
 void Client::StartSession() {

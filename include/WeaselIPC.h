@@ -39,6 +39,20 @@ enum WEASEL_IPC_COMMAND {
   WEASEL_IPC_LAST_COMMAND
 };
 
+// WEASEL_IPC_FOCUS_IN 的 wParam 位标志(spec 080 / ADR 0008)。
+// 低 8 位是 flags,高 24 位预留给 client capabilities(历史 TODO,至今未启用)。
+//
+// bit0 = 用户刚把活动输入配置切换到 Fluxing。
+//
+// 为什么需要这个标志:ITfActiveLanguageProfileNotifySink::OnActivated 是
+// **per-process** 订阅 —— 切换一次输入法,所有已加载 Fluxing TIP 的进程
+// 各收到一次。所以「切换到 Fluxing」与「窗口获得焦点」(ITfKeyEventSink
+// ::OnSetFocus → 同一个 FocusIn 消息)必须能被 server 端区分,否则
+// QuickPanel 会在每次切窗口时弹出(spec 055 bug 2 的根因)。
+enum {
+  WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED = 1u << 0,
+};
+
 namespace weasel {
 struct PipeMessage {
   WEASEL_IPC_COMMAND Msg;
@@ -156,9 +170,14 @@ class Client {
   // 更新输入位置
   void UpdateInputPosition(RECT const& rc);
   // 输入窗口获得焦点
-  void FocusIn();
+  // client_caps: WEASEL_IPC_FOCUS_IN_FLAG_* 位标志(见文件上方定义)
+  void FocusIn(DWORD client_caps = 0);
   // 输入窗口失去焦点
   void FocusOut();
+  // spec 080: close the pipe connection owned by the calling thread only.
+  void CloseThreadChannel();
+  // spec 080: true when this client owns a live session.
+  bool HasSession() const;
   // 托盤菜單
   void TrayCommand(UINT menuId);
   // 读取server返回的数据

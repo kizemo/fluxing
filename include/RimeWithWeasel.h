@@ -102,6 +102,15 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
 
   void OnUpdateUI(std::function<void()> const& cb);
 
+  // spec 080: called when the user switches the active input profile to
+  // Fluxing and this session is the server's active session. The owner
+  // (WeaselServerApp) marshals the request to the server UI thread,
+  // because QuickPanelDialog owns a window, GDI resources and a polling
+  // timer and must be driven from that thread.
+  void SetOnShowQuickPanel(std::function<void()> const& cb) {
+    m_onShowQuickPanel = cb;
+  }
+
  private:
   void _Setup();
   bool _IsDeployerRunning();
@@ -155,6 +164,7 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   std::map<std::string, bool> m_show_notifications;
   std::map<std::string, bool> m_show_notifications_base;
   std::function<void()> _UpdateUICallback;
+  std::function<void()> m_onShowQuickPanel;
 
   static void OnNotify(void* context_object,
                        uintptr_t session_id,

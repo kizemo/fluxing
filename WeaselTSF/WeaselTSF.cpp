@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 
 #include <WeaselIPCData.h>
+#include <chrono>
 #include <thread>
 #include <shellapi.h>
 #include <tlhelp32.h>
@@ -27,6 +28,7 @@ WeaselTSF::WeaselTSF() {
   _dwTextEditSinkCookie = TF_INVALID_COOKIE;
   _dwTextLayoutSinkCookie = TF_INVALID_COOKIE;
   _dwThreadFocusSinkCookie = TF_INVALID_COOKIE;
+  _dwActiveLanguageProfileSinkCookie = TF_INVALID_COOKIE;
   _fTestKeyDownPending = FALSE;
   _fTestKeyUpPending = FALSE;
 
@@ -38,6 +40,10 @@ WeaselTSF::WeaselTSF() {
 }
 
 WeaselTSF::~WeaselTSF() {
+  // spec 080: the notification thread lives as long as this object, so it is
+  // stopped here. Deactivate() only signals it, because Deactivate runs on
+  // the TSF thread and must not block (constitution P2).
+  _JoinProfileNotifyThread();
   DllRelease();
 }
 
@@ -66,6 +72,8 @@ STDAPI WeaselTSF::QueryInterface(REFIID riid, void** ppvObject) {
     *ppvObject = (ITfEditSession*)this;
   else if (IsEqualIID(riid, IID_ITfThreadFocusSink))
     *ppvObject = (ITfThreadFocusSink*)this;
+  else if (IsEqualIID(riid, IID_ITfActiveLanguageProfileNotifySink))
+    *ppvObject = (ITfActiveLanguageProfileNotifySink*)this;
   else if (IsEqualIID(riid, IID_ITfDisplayAttributeProvider))
     *ppvObject = (ITfDisplayAttributeProvider*)this;
 
@@ -96,9 +104,18 @@ STDAPI WeaselTSF::Activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
 }
 
 STDAPI WeaselTSF::Deactivate() {
+  // spec 080: the notification thread is NOT stopped here. Deactivate runs
+  // on the TSF thread, and joining a thread there would block the TSF
+  // thread (constitution P2). The thread is idle most of the time and it
+  // re-checks m_client.HasSession() before every send, so a notification
+  // that arrives after the session ended is simply dropped.
   m_client.EndSession();
 
   _InitTextEditSink(com_ptr<ITfDocumentMgr>());
+
+  // spec 080: stop advising the language profile sink while _pThreadMgr is
+  // still valid (it is cleared further down).
+  _UninitActiveLanguageProfileSink();
 
   _UninitThreadMgrEventSink();
 
@@ -162,6 +179,24 @@ STDAPI WeaselTSF::ActivateEx(ITfThreadMgr* pThreadMgr,
 
   _EnsureServerConnected();
 
+  // spec 080 (ADR 0008): the profile switch notification thread. Started
+  // here so it exists exactly while the text service is active for this
+  // thread.
+  _StartProfileNotifyThread();
+
+  // spec 080 (ADR 0008): advise the language profile notification sink.
+  // This is what makes ITfActiveLanguageProfileNotifySink::OnActivated
+  // fire when the user switches to or away from Fluxing. The interface was
+  // implemented but never registered, so the callback was dead code.
+  //
+  // Advising happens AFTER _EnsureServerConnected() on purpose: the
+  // notification handler sends IPC carrying the session id, so the session
+  // has to exist before any notification can arrive.
+  //
+  // A failure here is NOT fatal. Losing the QuickPanel trigger is
+  // acceptable, losing Chinese input is not.
+  _InitActiveLanguageProfileSink();
+
   return S_OK;
 
 ExitError:
@@ -218,6 +253,163 @@ void WeaselTSF::_UninitThreadFocusSink() {
     return;
 }
 
+// spec 080 (ADR 0008): advise / unadvise ITfActiveLanguageProfileNotifySink.
+//
+// ITfSource::AdviseSink supports IID_ITfActiveLanguageProfileNotifySink
+// (Windows SDK msctf.h). The sink fires OnActivated when the active
+// language profile of this thread changes, which is exactly the "the user
+// switched to or away from Fluxing" event.
+//
+// Lifetime notes:
+//   - The cookie starts at TF_INVALID_COOKIE. UnadviseSink must never be
+//     called with an invalid cookie, TSF treats that as internal
+//     corruption. Same guard as _InitThreadMgrEventSink.
+//   - AdviseSink is called once per ActivateEx. A failure is reported but
+//     never aborts activation, so the IME keeps working even when the
+//     QuickPanel trigger cannot be installed.
+BOOL WeaselTSF::_InitActiveLanguageProfileSink() {
+  if (_dwActiveLanguageProfileSinkCookie != TF_INVALID_COOKIE)
+    return TRUE;
+  com_ptr<ITfSource> pSource;
+  if (FAILED(_pThreadMgr->QueryInterface(&pSource)))
+    return FALSE;
+  if (FAILED(pSource->AdviseSink(IID_ITfActiveLanguageProfileNotifySink,
+                                 (ITfActiveLanguageProfileNotifySink*)this,
+                                 &_dwActiveLanguageProfileSinkCookie))) {
+    _dwActiveLanguageProfileSinkCookie = TF_INVALID_COOKIE;
+    return FALSE;
+  }
+  return TRUE;
+}
+
+void WeaselTSF::_UninitActiveLanguageProfileSink() {
+  if (_dwActiveLanguageProfileSinkCookie == TF_INVALID_COOKIE)
+    return;
+  com_ptr<ITfSource> pSource;
+  if (FAILED(_pThreadMgr->QueryInterface(&pSource)))
+    return;
+  pSource->UnadviseSink(_dwActiveLanguageProfileSinkCookie);
+  _dwActiveLanguageProfileSinkCookie = TF_INVALID_COOKIE;
+}
+
+// ===== spec 080: IME profile switch notification (ADR 0008) =====
+//
+// Why a dedicated thread:
+//   constitution P2 forbids blocking the TSF thread for I/O. OnActivated is
+//   a TSF callback, so it must not touch the pipe. It used to call
+//   m_client.Echo() + m_client.FocusIn() directly (two synchronous pipe
+//   round trips); commit 78e1109 already had to revert a similar change
+//   for exactly this reason.
+//
+// Why the thread owns its own pipe connection:
+//   PipeChannel keeps the pipe handle in a thread_local slot, so a thread
+//   that talks to WeaselServer owns a separate connection. The
+//   notification is a one-shot, so the thread drops the connection right
+//   after sending it (ClientImpl::CloseThreadChannel) instead of keeping
+//   an idle pipe instance alive for every front-end process.
+
+void WeaselTSF::_StartProfileNotifyThread() {
+  if (m_profileNotifyThread != nullptr)
+    return;
+  {
+    std::lock_guard<std::mutex> lock(m_profileNotifyMutex);
+    m_profileNotifyStop = false;
+    m_profileNotifyPending = kProfileNotifyNone;
+  }
+  m_profileNotifyThread =
+      CreateThread(NULL, 0, _ProfileNotifyProc, this, 0, NULL);
+  if (m_profileNotifyThread == nullptr) {
+    // Thread creation failed: the feature degrades to "manual Alt+," only,
+    // which is better than breaking input altogether.
+  }
+}
+
+void WeaselTSF::_StopProfileNotifyThread() {
+  // Signal only. This must never wait: it can be reached from the TSF
+  // thread, and constitution P2 forbids blocking the TSF thread.
+  {
+    std::lock_guard<std::mutex> lock(m_profileNotifyMutex);
+    m_profileNotifyStop = true;
+  }
+  m_profileNotifyCv.notify_all();
+}
+
+void WeaselTSF::_JoinProfileNotifyThread() {
+  if (m_profileNotifyThread == nullptr)
+    return;
+  _StopProfileNotifyThread();
+  if (WaitForSingleObject(m_profileNotifyThread, 3000) == WAIT_TIMEOUT) {
+    // Last resort: the thread is stuck in a pipe read while WeaselServer
+    // stopped answering. Waiting forever would hang the host application
+    // while the text service is being torn down, so cut it loose. The pipe
+    // handle owned by that thread leaks (one handle, only on this path).
+    TerminateThread(m_profileNotifyThread, 0);
+  }
+  CloseHandle(m_profileNotifyThread);
+  m_profileNotifyThread = nullptr;
+}
+
+void WeaselTSF::_WaitForSession(DWORD timeout_ms) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (!m_client.HasSession() && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+}
+
+void WeaselTSF::_PostProfileNotify(ProfileNotifyKind kind) {
+  {
+    std::lock_guard<std::mutex> lock(m_profileNotifyMutex);
+    if (m_profileNotifyStop)
+      return;
+    // Latest intent wins: a rapid activate/deactivate pair must not show a
+    // stale QuickPanel.
+    m_profileNotifyPending = kind;
+  }
+  m_profileNotifyCv.notify_one();
+}
+
+DWORD WINAPI WeaselTSF::_ProfileNotifyProc(LPVOID param) {
+  static_cast<WeaselTSF*>(param)->_ProfileNotifyLoop();
+  return 0;
+}
+
+void WeaselTSF::_ProfileNotifyLoop() {
+  for (;;) {
+    ProfileNotifyKind kind = kProfileNotifyNone;
+    {
+      std::unique_lock<std::mutex> lock(m_profileNotifyMutex);
+      m_profileNotifyCv.wait(lock, [this] {
+        return m_profileNotifyStop ||
+               m_profileNotifyPending != kProfileNotifyNone;
+      });
+      if (m_profileNotifyStop)
+        return;
+      kind = m_profileNotifyPending;
+      m_profileNotifyPending = kProfileNotifyNone;
+    }
+    if (kind == kProfileNotifyActivated) {
+      // The flag tells the server "the user just switched to Fluxing",
+      // which is a different event from "this window got focus".
+      //
+      // The notification carries the session id, so the session has to
+      // exist. It normally does (the sink is advised after the session is
+      // established), but a profile switch that reactivates the text
+      // service can deliver the notification while the session is being
+      // re-established. Wait a bounded amount of time for it instead of
+      // dropping the event.
+      _WaitForSession(2000);
+      if (m_client.HasSession())
+        m_client.FocusIn(WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED);
+    } else if (kind == kProfileNotifyDeactivated) {
+      if (m_client.HasSession())
+        m_client.FocusOut();
+    }
+    // One-shot notification: drop this thread's pipe connection so
+    // WeaselServer does not keep an idle instance around.
+    m_client.CloseThreadChannel();
+  }
+}
+
 STDMETHODIMP WeaselTSF::OnActivated(REFCLSID clsid,
                                     REFGUID guidProfile,
                                     BOOL isActivated) {
@@ -233,26 +425,22 @@ STDMETHODIMP WeaselTSF::OnActivated(REFCLSID clsid,
   //
   // But: isActivated is "is Fluxing now the active text service",
   // NOT "is the user typing". So:
-  //   isActivated = true  -> user just switched TO Fluxing ->
-  //                       m_client.FocusIn() tells server to show
-  //                       QuickPanel + open a TSF session
-  //   isActivated = false -> user just switched AWAY from Fluxing ->
-  //                       m_client.FocusOut() tells server to hide
-  //                       QuickPanel + close the TSF session
+  //   isActivated = true  -> user just switched TO Fluxing
+  //   isActivated = false -> user just switched AWAY from Fluxing
   //
-  // (FocusIn is also fired from _Reconnect() success path, which
-  // is the right place during the initial connection. The duplicate
-  // here is intentional: reconnect on session loss will re-arm
-  // QuickPanel if the user is still on Fluxing.)
-  if (isActivated) {
-    if (m_client.Echo()) {
-      m_client.FocusIn();
-    }
-  } else {
-    if (m_client.Echo()) {
-      m_client.FocusOut();
-    }
-  }
+  // spec 080 (ADR 0008): this callback must not block the TSF thread on
+  // I/O (constitution P2), so it performs no pipe traffic at all. It only
+  // records the intent; the notification thread performs the IPC.
+  //
+  //   isActivated = true  -> user just switched TO Fluxing
+  //   isActivated = false -> user just switched AWAY from Fluxing
+  //
+  // OnActivated is a per-process subscription: every process that loaded
+  // the Fluxing TIP receives it. The server side de-duplicates by
+  // comparing the session id with its active session, so only the front
+  // most application ends up showing the QuickPanel.
+  _PostProfileNotify(isActivated ? kProfileNotifyActivated
+                                 : kProfileNotifyDeactivated);
   return S_OK;
 }
 

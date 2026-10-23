@@ -50,6 +50,11 @@
 
 // spec 052 v0.18.31.0: enable QuickPanel always-show mode (20% alpha)
 #define ID_QUICKPANEL_ALWAYS_SHOW      40019
+
+// spec 080: force-show the QuickPanel (never toggles it off). Used when the
+// user switches the active input profile to Fluxing.
+#define ID_WEASELTRAY_QUICK_PANEL_SHOW 40020
+
 #define IDR_FLUXING_LOGO                108
 #define ID_QUICKPANEL_BTN_ASCII        41001
 #define ID_QUICKPANEL_BTN_DEPLOY       41002

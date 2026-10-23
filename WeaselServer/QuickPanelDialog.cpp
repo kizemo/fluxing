@@ -1162,6 +1162,14 @@ void QuickPanelDialog::Show(bool currentFullwidth,
     // 重新计时。
     s_showTime = GetTickCount();
     s_outsideMs = 0;
+    // v0.21.0.5 (spec 080): the hover polling timer has to be restarted on
+    // the reuse path as well. Hide() kills it (KillTimer id=2) and the reuse
+    // path returned before SetTimer, so after the very first show/hide cycle
+    // the timer was gone for good: every later Show() put the panel on screen
+    // with no auto-hide at all, and it stayed there until something else hid
+    // it. The first-show path below already starts the timer, so the reuse
+    // path has to do the same.
+    SetTimer(s_hwnd, 2, 100, NULL);
     // v0.19.0.10: layered path — InvalidateRect 无意义,直接重画提交
     RepaintLayered(s_hwnd);
     return;

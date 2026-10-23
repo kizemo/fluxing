@@ -4,6 +4,9 @@
 #include <WeaselIPC.h>
 #include <WeaselIPCData.h>
 
+#include <condition_variable>
+#include <mutex>
+
 class CCandidateList;
 class CLangBarItemButton;
 class CCompartmentEventSink;
@@ -167,6 +170,14 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   void _UninitThreadFocusSink();
   DWORD _dwThreadFocusSinkCookie;
 
+  // spec 080 (ADR 0008): ITfActiveLanguageProfileNotifySink registration.
+  // The interface was implemented but never advised to TSF, so OnActivated
+  // was dead code and the "switch to Fluxing -> show the QuickPanel"
+  // trigger could never fire.
+  BOOL _InitActiveLanguageProfileSink();
+  void _UninitActiveLanguageProfileSink();
+  DWORD _dwActiveLanguageProfileSinkCookie;
+
   BOOL _InitTextEditSink(com_ptr<ITfDocumentMgr> pDocMgr);
 
   BOOL _InitKeyEventSink();
@@ -240,4 +251,27 @@ class WeaselTSF : public ITfTextInputProcessorEx,
      Server even if a transient pipe failure drops the matching Down. */
   BOOL _shiftDown = FALSE;
   BOOL _shiftDownIsLeft = FALSE;
+
+  /* spec 080 (ADR 0008): IME profile switch notification.
+     constitution P2 forbids blocking the TSF thread for I/O, so the
+     OnActivated callback only records the intent and wakes this thread;
+     the thread performs the pipe round trip. */
+  enum ProfileNotifyKind {
+    kProfileNotifyNone = 0,
+    kProfileNotifyActivated = 1,
+    kProfileNotifyDeactivated = 2
+  };
+  void _StartProfileNotifyThread();
+  void _StopProfileNotifyThread();
+  void _JoinProfileNotifyThread();
+  void _WaitForSession(DWORD timeout_ms);
+  void _PostProfileNotify(ProfileNotifyKind kind);
+  static DWORD WINAPI _ProfileNotifyProc(LPVOID param);
+  void _ProfileNotifyLoop();
+
+  HANDLE m_profileNotifyThread = nullptr;
+  std::mutex m_profileNotifyMutex;
+  std::condition_variable m_profileNotifyCv;
+  ProfileNotifyKind m_profileNotifyPending = kProfileNotifyNone;
+  bool m_profileNotifyStop = false;
 };
