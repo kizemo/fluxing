@@ -383,7 +383,7 @@ L48 正式追加 (7 root-causes from spec 038 verification: FluxingD2DRenderer a
 imemsbuild 字符串, 
 un-test-suite.bat exit=0.
 
-L47 lessons-learned 同步追加 (PowerShell 5.1 + VsDevCmd 触发 MSB6001 PATH/Path 冲突 + vcxproj $(SolutionDir)msbuild 缺 \ 引发 MSB3491; workaround: 用 cvars32.bat 不用 VsDevCmd.bat).
+L47 lessons-learned 同步追加 (PowerShell 5.1 + VsDevCmd 触发 MSB6001 PATH/Path 冲突 + vcxproj $(SolutionDir)msbuild 缺 \ 引发 MSB3491; workaround: 用 vcvars32.bat 不用 VsDevCmd.bat).
 
 ---
 
@@ -438,7 +438,7 @@ L47 正式追加 (6 byte/syntax bugs from spec 037 reactive fix cascade). spec 0
 ## 11. lessons-learned 累计
 
 - L01-L47 (L01 - L47): 47 lessons by 2026-07-05.
-- **L47 (待追加)**: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 是 PowerShell module 触发 .NET Hashtable "已添加项: 字典中的关键字 PATH 所添加的关键字 Path" 异常 (MSB6001). workaround: 用 cvars32.bat (纯 cmd 脚本) 不用 VsDevCmd.bat. 0.18.25.0 ship 时已用此 workaround.
+- **L47 (待追加)**: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 是 PowerShell module 触发 .NET Hashtable "已添加项: 字典中的关键字 PATH 所添加的关键字 Path" 异常 (MSB6001). workaround: 用 vcvars32.bat (纯 cmd 脚本) 不用 VsDevCmd.bat. 0.18.25.0 ship 时已用此 workaround.
 - L47 also: vcxproj <IntDir>msbuild\... 缺 \ 反斜杠触发 MSB3491 
 imemsbuild 路径错误. spec 037 之前 3 个 test vcxproj 命中此 bug; 0.18.25.0 ship 时已修.
 
@@ -481,7 +481,7 @@ imemsbuild 路径 (L31 root cause B). 0.18.25.0 ship 时已修. 验证: msbuild_
 imemsbuild 字符串, 
 un-test-suite.bat exit=0.
 
-L47 lessons-learned 同步追加 (PowerShell 5.1 + VsDevCmd 触发 MSB6001 PATH/Path 冲突 + vcxproj SolutionDir-msbuild 缺 \ 引发 MSB3491; workaround: 用 cvars32.bat 不用 VsDevCmd.bat).
+L47 lessons-learned 同步追加 (PowerShell 5.1 + VsDevCmd 触发 MSB6001 PATH/Path 冲突 + vcxproj SolutionDir-msbuild 缺 \ 引发 MSB3491; workaround: 用 vcvars32.bat 不用 VsDevCmd.bat).
 
 ---
 
@@ -524,7 +524,7 @@ spec 006 完整 mac 风面板设计的**第二阶段 ship 切片**. 仅 ship 4 �
 ## 11. lessons-learned 累计
 
 - L01-L46 (L01 - L46): 46 lessons by 2026-07-04.
-- **L47 (待追加)**: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 是 PowerShell module 触发 .NET Hashtable "已添加项: 字典中的关键字 PATH 所添加的关键字 Path" 异常 (MSB6001). workaround: 用 cvars32.bat (纯 cmd 脚本) 不用 VsDevCmd.bat. 0.18.25.0 ship 时已用此 workaround.
+- **L47 (待追加)**: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 是 PowerShell module 触发 .NET Hashtable "已添加项: 字典中的关键字 PATH 所添加的关键字 Path" 异常 (MSB6001). workaround: 用 vcvars32.bat (纯 cmd 脚本) 不用 VsDevCmd.bat. 0.18.25.0 ship 时已用此 workaround.
 - L47 also: vcxproj <IntDir>SolutionDir-msbuild-... 缺 \ 反斜杠触发 MSB3491 
 imemsbuild 路径错误. spec 037 之前 3 个 test vcxproj 命中此 bug; 0.18.25.0 ship 时已修.
 
@@ -602,7 +602,7 @@ v0.18.27.2 ship 后用户在 144 DPI 显示器上反馈 QuickPanelDialog 视觉�
 Phase 2 systematic-debugging 复盘 (调用 systematic-debugging 技能)：
 
 - **false-positive BUG #3 排除**: 之前用 ASCII strings search 报告 WeaselServer.exe 不含 GetPhysicalClientRect / HandleDpiChanged / WM_DPICHANGED symbols 是 false-positive — C++ mangled symbols 在 Windows PE .debug section 用 **UTF-16LE** 编码，ASCII search 找不到。dumpbin /DISASM 验证 WeaselServer.exe **实际**含所有 spec 041 DPI fix 函数 + Fluxing 控件代码 + QuickPanelDialog。
-- **L43 /LTCG:OFF 已被 L43 cure 解决**: WeaselTSF/xmake.lua 已加 dd_shflags('/DEBUG /LTCG:OFF /OPT:NOREF /OPT:NOICF', {force = true})，global xmake.lua line 64 也加 dd_ldflags('/LTCG:OFF /INCREMENTAL:NO', {force = true})。WeaselServer.exe 不存在 dead-strip 问题。
+- **L43 /LTCG:OFF 已被 L43 cure 解决**: WeaselTSF/xmake.lua 已加 add_shflags('/DEBUG /LTCG:OFF /OPT:NOREF /OPT:NOICF', {force = true})，global xmake.lua line 64 也加 add_ldflags('/LTCG:OFF /INCREMENTAL:NO', {force = true})。WeaselServer.exe 不存在 dead-strip 问题。
 - **L53 正式追加**: 「Windows PE binary verification 必须用 UTF-16 + dumpbin /DISASM + byte-pattern count，never trust ASCII strings alone」。
 
 Visual verify (96 DPI Todesk session) 重新跑通：QP 300×150, 5 children 全部可见 (FluxingLabel 256×26 title + FluxingPanel 291×111 card + FluxingToggle 50×20 ascii + FluxingButton 100×24 deploy + native close 20×20)。Test suite 16/16 PASS, 200+ assertions。

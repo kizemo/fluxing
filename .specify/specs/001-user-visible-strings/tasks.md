@@ -294,7 +294,7 @@ defined in `plan.md` §Substitution Map.
 > None of these block the slice-2 commit; all are pre-existing spec
 > defects or honest reflections of repo state.
 
-### A1. 	asks.md internal duplication
+### A1. tasks.md internal duplication
 
 - **T006** appears twice with identical text: L118 (under US1)
   and L228 (under US4 "verify attribution"). The L228 copy
@@ -307,14 +307,14 @@ defined in `plan.md` §Substitution Map.
 
 - spec T010 step 1 says: "git rev-parse --short HEAD~ to get
   the Slice 1 commit's short hash".
-- Current HEAD~ = 543d5e (chore: rename WEASEL_VERSION identifier).
+- Current HEAD~ = b543d5e (chore: rename WEASEL_VERSION identifier).
 - spec T010 step 2 then says the hash corresponds to
-  "eat(fluxing): rename distribution code to Fluxing; swap
+  "feat(fluxing): rename distribution code to Fluxing; swap
   brand icon to hlx.ico" — that commit is 9f2b217, **not**
-  543d5e.
+  b543d5e.
 - Resolution: the existing CHANGELOG placeholder 9f2b217 is
   the spec-**intent**-correct value (Slice 1 first commit) and
-  matches T010's step-2 anchor text. 543d5e was not yet
+  matches T010's step-2 anchor text. b543d5e was not yet
   imagined when T010 was written. We keep 9f2b217.
 
 ### A3. Substitution Map ↔ spec body contradictions
@@ -330,7 +330,7 @@ defined in `plan.md` §Substitution Map.
   clean up an existing upstream install. This is a feature,
   not a brand leak." Row 6 contradicts the body.
 - **Row 10** says "Powered by RIME" is preserved as an exact
-  phrase — but 543d5e rewrote the line to
+  phrase — but b543d5e rewrote the line to
   Powered by Fluxing & RIME; the literal substring
   Powered by RIME no longer exists. spec intent (preserve
   RIME attribution) is satisfied; spec literal is not.
@@ -357,7 +357,7 @@ defined in `plan.md` §Substitution Map.
 ### A6. Slice-1 already covered most of slice-2
 
 - Commits 6cb79d0 (Fluxing brand string rewrite) and
-  543d5e (FLUXING_VERSION identifier rename + NSIS
+  b543d5e (FLUXING_VERSION identifier rename + NSIS
   Comments rebrand) already accomplished the user-visible-
   string rewrite for all 4 .rc files, WeaselUtility.h,
   output/install.nsi (LangStrings / VI keys / Section name),
@@ -366,7 +366,7 @@ defined in `plan.md` §Substitution Map.
   (verified-complete, not edited-again). The actual changes
   in this slice-2 commit are limited to **T009's fix** (3
   edits in output/install.nsi): added L2 attribution
-  comment with 中州韻, replaced 式恕堂 → iec.fun at
+  comment with 中州韻, replaced 式恕堂 → aiec.fun at
   L33 and L315.
 - Consequence for T015: the commit message must reflect
   the **actual** scope (1 file changed, 3 lines), not the
@@ -379,6 +379,6 @@ defined in `plan.md` §Substitution Map.
   (HelpLink, L317) currently point to the upstream RIME
   website. After this fork is packaged and uploaded to
   GitHub as aiec.fun/Fluxing, these two URLs should be
-  changed to the project's own iec.fun equivalents.
+  changed to the project's own aiec.fun equivalents.
 - This is **not** in this slice; recorded here per the
   user's standing instruction.

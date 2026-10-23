@@ -1280,9 +1280,9 @@ librime 1.13.1 KeyEvent::operator== (librime/src/rime/key_event.h:64) 严格比�
    - { when: has_menu, accept: Shift+Shift_L, send: 2 }
    - { when: has_menu, accept: Shift+Shift_R, send: 3 }
    `
-2. 	est/TestDefaultHotkeys/TestDefaultHotkeys.cpp: L19 的 4 个负断言翻转为正断言 (从 "应不存在" 变 "应存在"); 新增 4 个正断言覆盖 spec 014 新增 binding 与 ascii_composer.switch_key 保持 noop。
+2. test/TestDefaultHotkeys/TestDefaultHotkeys.cpp: L19 的 4 个负断言翻转为正断言 (从 "应不存在" 变 "应存在"); 新增 4 个正断言覆盖 spec 014 新增 binding 与 ascii_composer.switch_key 保持 noop。
 3. 字符串断言只能证明 yaml 文本里某条 binding 存在/不存在，不能证明运行时 binding 表的行为。
-3. 	est/TestShiftSelectBinding/ (新): 第二个 runtime yaml 契约测试, 13 个新正断言, 验证:
+3. test/TestShiftSelectBinding/ (新): 第二个 runtime yaml 契约测试, 13 个新正断言, 验证:
    - accept: Shift+Shift_L, send: 2 / accept: Shift+Shift_R, send: 3 X(
    - 没有 bare accept: Shift_L/R, (modifier=0) - L19 防御保留
    - ascii_composer.switch_key.Shift_L/R: noop 保持
@@ -9213,14 +9213,14 @@ rime algorithm service 调度者 + PhrasesDialog IPC server, 一个进程挂了 
    末尾加 EXE 完整性检查 (MZ signature / non-zero size / PE 头部 + code section 存在),
    不通过则 
 aise 终止 build。**任何 xmake target 复制 EXE/DLL 出 output 都应该
-   强制走同一检查**。建议把检查抽到 	ools/build_verify.lua, 在 WeaselServer、
+   强制走同一检查**。建议把检查抽到 tools/build_verify.lua, 在 WeaselServer、
    WeaselSetup 两个 xmake 目标里 require。
 2. **F106-B build_v0XX.ps1 wrapper guard**: 在每个 build_v0XX.ps1 末尾强制 verify:
    output\Win32\WeaselServer.exe + output\WeaselSetup.exe + output\FluxingPhrasesDialog.exe
    必须 (a) size > 1 MB, (b) [0..1] == "MZ", (c) PE machine 与架构一致。失败即
    exit 1, 不进入 installer 阶段。
 3. **F106-C 装机端 rapid recovery 文档化**: 写一个 _recover_zero_weaselserver.ps1
-   脚本, 检测 WeaselServer.exe < 1 MB / 无 MZ / 全零时, 自动 	askkill + 卸装
+   脚本, 检测 WeaselServer.exe < 1 MB / 无 MZ / 全零时, 自动 taskkill + 卸装
    + 静默重装 (走 sandbox-verify 
 ime-verify.ps1 流程), 作为真机 fail-fast 工具。
 
@@ -9266,7 +9266,7 @@ ime-verify.ps1 流程), 作为真机 fail-fast 工具。
 
 ### 关联文件 / 提交
 
-- Դ issue: 	ask.md Phase K3 T019 catastrophic regression
+- Դ issue: task.md Phase K3 T019 catastrophic regression
 - commit 823bc1f (chore release v0.19.0.55 T019 hotfix installer) — 装的是损坏 binary
 - commit 8559ed4 (fix WeaselServer + FluxingPhrasesDialog v0.19.0.55 hotfix) — 逻辑
   本身可能无问题, 但 build pipeline 没把它编出真 EXE

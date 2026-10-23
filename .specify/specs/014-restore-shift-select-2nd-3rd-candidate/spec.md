@@ -15,10 +15,10 @@
 - spec 005 v1.1 US1-B (rev 2 hotkey spec) promised:
   - Shift_L selects 2nd candidate (has_menu)
   - Shift_R selects 3rd candidate (has_menu)
-- spec 012 plan.md sec 2.2 already designed the fix: use ccept: Shift+Shift_L
-  and ccept: Shift+Shift_R form (not bare Shift_L) so that TSF release events
+- spec 012 plan.md sec 2.2 already designed the fix: use accept: Shift+Shift_L
+  and accept: Shift+Shift_R form (not bare Shift_L) so that TSF release events
   with keycode=Shift_L, modifier=0 do NOT match.
-- L18 fix: removed the lways: Shift+Shift_L/R toggle ascii_mode binding (was
+- L18 fix: removed the always: Shift+Shift_L/R toggle ascii_mode binding (was
   causing shift+Enter to toggle ascii_mode after the main key was dispatched).
   L18 left the has_menu: Shift+Shift_L/R send 2/3 bindings in place.
 - L19 fix: **defensively removed ALL** keycode=Shift_L/R bindings (including the
@@ -76,7 +76,7 @@ Restore Fluxing v2 spec 005 US1-B: in the candidate menu, left Shift selects the
 - Then the key_binder/bindings list contains exactly 2 new entries:
   - { when: has_menu, accept: Shift+Shift_L, send: 2 }
   - { when: has_menu, accept: Shift+Shift_R, send: 3 }
-- And the scii_composer.switch_key.Shift_L/R remain 
+- And the ascii_composer.switch_key.Shift_L/R remain 
 oop
 - And no keycode=Shift_L/R binding with modifier=0 exists (would be the
   L19 cause of release-event collision)
@@ -88,11 +88,11 @@ oop
 | File | Change |
 |---|---|
 | output/data/default.yaml | Insert 2 lines in key_binder/bindings has_menu section, BEFORE the Control+1/2 lines (spec 005 plan.md sec 2.2 ordering rule) |
-| 	est/TestDefaultHotkeys/TestDefaultHotkeys.cpp | Update L19 negative assertions to expect Shift+Shift_L/R bindings to EXIST (positive assertions). Add new runtime behavior test for Shift+Shift_L -> keycode=Shift_L, modifier=Shift event matches has_menu binding |
+| test/TestDefaultHotkeys/TestDefaultHotkeys.cpp | Update L19 negative assertions to expect Shift+Shift_L/R bindings to EXIST (positive assertions). Add new runtime behavior test for Shift+Shift_L -> keycode=Shift_L, modifier=Shift event matches has_menu binding |
 | .specify/memory/lessons-learned.md | New L21 entry: L19 was an over-correction; the spec 012 form Shift+Shift_L/R is the correct, runtime-safe form for single-key Shift bindings |
 | env.bat + weasel.props | Bump FLUXING_VERSION 0.18.7 -> 0.18.8, WEASEL_BUILD stays 0, PRODUCT_VERSION/FILE_VERSION/VERSION_PATCH -> 8 (per AGENTS.md sec 3.3 release procedure) |
 | CHANGELOG.md | Add [0.18.8.0-fluxing] section under existing 0.18.7.0 |
-| elease/fluxing-0.18.8.0-installer.exe | New artifact (output of xbuild.bat installer) |
+| release/fluxing-0.18.8.0-installer.exe | New artifact (output of xbuild.bat installer) |
 
 ### 2.2 default.yaml change (detailed)
 
@@ -134,10 +134,10 @@ This is the spec 012 plan.md sec 2.3 finding, repeated here for trace:
   So when the user PRESSES Shift_L alone, TSF delivers the down event as
   {keycode=Shift_L, modifier=SHIFT_MASK} (and the up event as
   {keycode=Shift_L, modifier=RELEASE_MASK} - no Shift held at release time).
-- ccept: Shift_L (no modifier in the binding) parses to
+- accept: Shift_L (no modifier in the binding) parses to
   {keycode=Shift_L, modifier=0}. The TSF down event is
   {keycode=Shift_L, modifier=Shift}. **MISMATCH**.
-- ccept: Shift+Shift_L parses to {keycode=Shift_L, modifier=Shift}. Matches
+- accept: Shift+Shift_L parses to {keycode=Shift_L, modifier=Shift}. Matches
   the TSF down event perfectly. The TSF up event is
   {keycode=Shift_L, modifier=Release} (RELEASE_MASK, no Shift). **MISMATCH** by
   modifier - which is what we want (the release event is the one we explicitly
@@ -145,7 +145,7 @@ This is the spec 012 plan.md sec 2.3 finding, repeated here for trace:
 - For shift+Enter: TSF delivers
   Enter down {keycode=Return, modifier=Shift} (because Shift is held) and
   Shift_L up {keycode=Shift_L, modifier=Release} (because Shift is no longer
-  held). Our new binding ccept: Shift+Shift_L requires modifier=Shift, so
+  held). Our new binding accept: Shift+Shift_L requires modifier=Shift, so
   modifier=Release does not match. **No false positive**. L18's
   shift+Enter releases ascii_mode toggle issue is preserved.
 
@@ -233,14 +233,14 @@ event". This test pins down the parse + match invariants.
 - **R1**: Shift+Shift_L mask in librime is Shift (single bit). TSF mask is
   also Shift. Match. Verified by reading both sources and adding the runtime
   test (T004).
-- **R2**: scii_composer.cc:75-98 still has a hardcoded "short-press Shift
+- **R2**: ascii_composer.cc:75-98 still has a hardcoded "short-press Shift
   toggle" code path. After L19's switch_key.Shift_L/R: noop (which causes
   load_bindings to skip these entries), the toggle path is gated by
-  indings_.find(key_code) == end() returning false. So single-press Shift_L
+  bindings_.find(key_code) == end() returning false. So single-press Shift_L
   does NOT toggle ascii_mode. Verified at runtime by the test program + the
   deployed 0.18.7.0 behavior (no ascii_mode toggling on Shift alone).
 - **R3**: The new Shift+Shift_L/R bindings do NOT collide with the existing
-  Shift+space toggle binding. Different ccept field means different
+  Shift+space toggle binding. Different accept field means different
   KeyEvent, different map bucket. No collision.
 - **R4**: User's default.custom.yaml in RimeUserDir (verified empty) does not
   override key_binder. No interaction.
@@ -251,7 +251,7 @@ event". This test pins down the parse + match invariants.
   bindings on the same key event are tried in whence order (kWhenHasMenu=3
   before kAlways=4); user-visible behavior is the first matching binding
   wins. So Shift+Shift_L (has_menu) fires before Control+1 (has_menu) only
-  if they are on different ccept events. They ARE different events here
+  if they are on different accept events. They ARE different events here
   (Shift+Shift_L vs Control+1), so order between them is irrelevant. The
   ordering rule is preserved for documentation.
 - **R6**: The 2 added bindings increase the per-keystroke key_binder
@@ -267,7 +267,7 @@ event". This test pins down the parse + match invariants.
    `
    Expected: Passed: 35 / 35 (existing 31 + 4 new positive assertions for
    the restored Shift+Shift_L/R bindings; 2 of the existing L19 negative
-   assertions for ccept: Shift+Shift_L/R are flipped to positive).
+   assertions for accept: Shift+Shift_L/R are flipped to positive).
 
 2. **Build installer**:
    `
@@ -301,20 +301,20 @@ ihao again - press Shift+Enter - expect newline, NO ascii_mode
 ## 3. Out of scope
 
 - No Shift+l / Shift+r combination-key paths (per spec 012 sec 3 + L16)
-- No Shift+Shift_L/R for scii_mode toggle (already handled by
-  Shift+space + scii_composer.switch_key.Shift_L/R: noop)
+- No Shift+Shift_L/R for ascii_mode toggle (already handled by
+  Shift+space + ascii_composer.switch_key.Shift_L/R: noop)
 - No librime submodule changes (librime 1.13.1 is sufficient)
 - No weasel.props / env.bat tracked changes (per AGENTS.md sec 3.3 -
   these are in .gitignore)
 - No upstream PR (per P8 waiver, brand-fork only)
-- No new CI workflow changes (the existing 	est: job in ci.yml will pick up
+- No new CI workflow changes (the existing test: job in ci.yml will pick up
   the new test file automatically when added to the .vcxproj)
 
 ## 4. Done criteria
 
 - T001..T008 all completed
 - TestDefaultHotkeys.exe returns 35/35 PASS
-- elease/fluxing-0.18.8.0-installer.exe is a valid NSIS installer with
+- release/fluxing-0.18.8.0-installer.exe is a valid NSIS installer with
   PE arch x86 for all Weasel*.exe and rime.dll, x64 for weaselx64.dll
 - AGENTS.md sec 2.5 smoke test PASSED
 - Manual functional test PASSED (per T004 sec 2.6 step 4)

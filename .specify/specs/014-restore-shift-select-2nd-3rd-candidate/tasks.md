@@ -50,7 +50,7 @@
 
 ## T002 - P1 - US1-A/B - flip L19 negative assertions to positive + add new positives
 
-- **File**: 	est/TestDefaultHotkeys/TestDefaultHotkeys.cpp
+- **File**: test/TestDefaultHotkeys/TestDefaultHotkeys.cpp
 - **Action**:
   - Change L19 negative assertion line 81:
     - FROM: check("L19: accept: Shift+Shift_L 任意 binding 已不存在", !Contains(content, "accept: Shift+Shift_L"));
@@ -79,7 +79,7 @@
     `
   - Keep the L19 negative assertions for the **bare** Shift_L/R form (which
     would be the L19 worry): lines 95-106 are still valid because we are not
-    adding ccept: Shift_L (no modifier). The negative assertion
+    adding accept: Shift_L (no modifier). The negative assertion
     content.find("toggle: ascii_mode, accept: Shift_L") == std::string::npos
     remains true.
 
@@ -117,24 +117,24 @@
 ## T004 - P1 - US1-A/B - create TestShiftSelectBinding (NEW project, runtime test)
 
 - **Files** (3 new files + 1 weasel.sln edit):
-  - 	est/TestShiftSelectBinding/TestShiftSelectBinding.cpp (new) - the
+  - test/TestShiftSelectBinding/TestShiftSelectBinding.cpp (new) - the
     runtime test code from spec 014 plan.md sec 2.4
-  - 	est/TestShiftSelectBinding/TestShiftSelectBinding.vcxproj (new) -
-    based on 	est/TestDefaultHotkeys/TestDefaultHotkeys.vcxproj, with
+  - test/TestShiftSelectBinding/TestShiftSelectBinding.vcxproj (new) -
+    based on test/TestDefaultHotkeys/TestDefaultHotkeys.vcxproj, with
     AdditionalIncludeDirectories += librime/include
-  - 	est/TestShiftSelectBinding/TestShiftSelectBinding.vcxproj.filters (new)
+  - test/TestShiftSelectBinding/TestShiftSelectBinding.vcxproj.filters (new)
   - weasel.sln - add 1 Project() block + 12
     ProjectConfigurationPlatforms entries (model on TestDefaultHotkeys)
-  - .gitignore - no change (existing patterns cover 	est/**/Release/)
+  - .gitignore - no change (existing patterns cover test/**/Release/)
 
 - **Action**:
   - The cpp file content is in spec.md sec 2.4. Key points:
     - #include <rime/key_event.h> (librime public header)
-    - Construct ime::KeyEvent from {keycode, modifier, release_mask}
-    - Use ime::KeyEvent::Parse("Shift+Shift_L") and check
+    - Construct rime::KeyEvent from {keycode, modifier, release_mask}
+    - Use rime::KeyEvent::Parse("Shift+Shift_L") and check
       keycode() == XK_Shift_L && modifier() == kShiftMask
     - Construct TSF-style press and release events
-    - Assert 	sf_press == binding_event and !(tsf_release == binding_event)
+    - Assert tsf_press == binding_event and !(tsf_release == binding_event)
     - Exit 0 on success, 1 on any FAIL
 
 - **Acceptance**:
@@ -172,11 +172,11 @@
 - **Acceptance**:
   - In final assistant message, paste the last 30 lines of xbuild.bat
     output (R6: evidence)
-  - elease/fluxing-0.18.8.0-installer.exe is the new file
+  - release/fluxing-0.18.8.0-installer.exe is the new file
 
 ## T007 - P1 - US1-D - silent install smoke test (AGENTS.md sec 2.5)
 
-- **Action**: copy elease/fluxing-0.18.8.0-installer.exe to a temp
+- **Action**: copy release/fluxing-0.18.8.0-installer.exe to a temp
   location, run the 8 invariants from AGENTS.md sec 2.5:
   1. exit code == 0
   2. fluxing suffix was forced (engine binaries under fluxing\weasel)
@@ -218,7 +218,7 @@ ihao again - press Shift+Enter - expect newline, NO ascii_mode
 - **Action**: append new L21 entry documenting:
   - L19 was an over-correction (removed useful has_menu Shift+Shift_L/R
     bindings to defend against a different bug)
-  - The spec 012 form ccept: Shift+Shift_L (not bare Shift_L) is the
+  - The spec 012 form accept: Shift+Shift_L (not bare Shift_L) is the
     runtime-safe way to bind single-key Shift
   - String-matching tests alone cannot verify key_binder behavior;
     runtime test on KeyEvent::Parse + operator== is necessary
@@ -247,12 +247,12 @@ ihao again - press Shift+Enter - expect newline, NO ascii_mode
 - **Acceptance**:
   - git log --oneline -1 shows the new commit
   - git status is clean after commit
-  - git tag shows 0.18.8.0
+  - git tag shows v0.18.8.0
   - In final assistant message, paste commit hash
 
 ## 9. Cross-spec consistency audit (R7)
 
-- spec 005 v1.1 design.md sec 2.2 example still uses ccept: shift+l
+- spec 005 v1.1 design.md sec 2.2 example still uses accept: shift+l
   (lowercase). This is a pre-existing inconsistency from spec 012 sec 9
   audit. Not blocking for this commit.
 - L19 entry in lessons-learned.md will be updated to note it was an

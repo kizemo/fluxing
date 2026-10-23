@@ -1,0 +1,7 @@
+{
+ "lines": {
+  "17": "- **测试**：test/TestFluxingComponents/{TestFluxingButton.cpp, TestFluxingToggle.cpp, TestFluxingPanel.cpp, TestFluxingTheme.cpp, stdafx.h, stdafx.cpp, targetver.h, TestFluxingComponents.vcxproj}。",
+  "43": "namespace fluxing::ui，class 前缀 Fluxing。",
+  "88": "- 颜色从 FluxingTheme::Instance().CurrentPalette() 拿（primary 用 hilited_back，secondary 用 back，destructive 用 0xD04545）。"
+ }
+}

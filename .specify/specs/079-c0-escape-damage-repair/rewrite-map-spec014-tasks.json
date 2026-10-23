@@ -1,0 +1,19 @@
+{
+ "lines": {
+  "53": "- **File**: test/TestDefaultHotkeys/TestDefaultHotkeys.cpp",
+  "82": "    adding accept: Shift_L (no modifier). The negative assertion",
+  "120": "  - test/TestShiftSelectBinding/TestShiftSelectBinding.cpp (new) - the",
+  "122": "  - test/TestShiftSelectBinding/TestShiftSelectBinding.vcxproj (new) -",
+  "123": "    based on test/TestDefaultHotkeys/TestDefaultHotkeys.vcxproj, with",
+  "125": "  - test/TestShiftSelectBinding/TestShiftSelectBinding.vcxproj.filters (new)",
+  "128": "  - .gitignore - no change (existing patterns cover test/**/Release/)",
+  "133": "    - Construct rime::KeyEvent from {keycode, modifier, release_mask}",
+  "134": "    - Use rime::KeyEvent::Parse(\"Shift+Shift_L\") and check",
+  "137": "    - Assert tsf_press == binding_event and !(tsf_release == binding_event)",
+  "175": "  - release/fluxing-0.18.8.0-installer.exe is the new file",
+  "179": "- **Action**: copy release/fluxing-0.18.8.0-installer.exe to a temp",
+  "221": "  - The spec 012 form accept: Shift+Shift_L (not bare Shift_L) is the",
+  "250": "  - git tag shows v0.18.8.0",
+  "255": "- spec 005 v1.1 design.md sec 2.2 example still uses accept: shift+l"
+ }
+}

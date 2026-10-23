@@ -9,7 +9,7 @@
 // guards (no bare Shift_L/R, ascii_composer noop, Shift+space toggle)
 // remain because they protect against the L19 release-event collision.
 
-// The binding form ccept: Shift+Shift_L (NOT bare Shift_L) is the spec
+// The binding form accept: Shift+Shift_L (NOT bare Shift_L) is the spec
 // 012 design that avoids the L19 release-event collision. This test pins
 // the yaml-side contract that makes that form work:
 

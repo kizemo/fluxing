@@ -1,0 +1,9 @@
+{
+ "lines": {
+  "56": "  - accept: Shift+Shift_L (spec 014) matches a real KeyEvent with",
+  "58": "  - accept: Control+1 matches a real KeyEvent with",
+  "60": "  - accept: Shift+space matches a real KeyEvent with",
+  "63": "    does NOT match the accept: Shift+Shift_L binding (the L18",
+  "95": "2. For each binding, parse accept: and send: strings using"
+ }
+}

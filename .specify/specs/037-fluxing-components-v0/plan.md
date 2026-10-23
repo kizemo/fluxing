@@ -14,7 +14,7 @@
   - WeaselUI/FluxingComponents/Label.h + .cpp
   - WeaselUI/FluxingComponents/D2DRenderer.h + .cpp
   - WeaselUI/FluxingComponents/stdafx.h（PCH for the FluxingComponents subdir; mirror WeaselUI stdafx.h）
-- **测试**：	est/TestFluxingComponents/{TestFluxingButton.cpp, TestFluxingToggle.cpp, TestFluxingPanel.cpp, TestFluxingTheme.cpp, stdafx.h, stdafx.cpp, targetver.h, TestFluxingComponents.vcxproj}。
+- **测试**：test/TestFluxingComponents/{TestFluxingButton.cpp, TestFluxingToggle.cpp, TestFluxingPanel.cpp, TestFluxingTheme.cpp, stdafx.h, stdafx.cpp, targetver.h, TestFluxingComponents.vcxproj}。
 - 不引入新依赖（d2d1 / dwrite / windowscodecs 已在 WeaselUI 现有 link 配置中）。
 - 不修改 install.nsi。
 
@@ -40,7 +40,7 @@ WeaselUI/
     D2DRenderer.cpp
 `
 
-namespace luxing::ui，class 前缀 Fluxing。
+namespace fluxing::ui，class 前缀 Fluxing。
 
 ### 2.2 FluxingTheme 单例
 
@@ -85,7 +85,7 @@ namespace fluxing::ui {
 
 - 内部创建 child HWND（WS_CHILD | WS_VISIBLE），class name FluxingButtonClass。
 - WM_PAINT handler 调 D2D 渲染：圆角矩形 6px（用 ID2D1RoundedRectangleGeometry 或 path）+ 文本（IDWriteTextFormat）。
-- 颜色从 FluxingTheme::Instance().CurrentPalette() 拿（primary 用 hilited_back，secondary 用 ack，destructive 用 0xD04545）。
+- 颜色从 FluxingTheme::Instance().CurrentPalette() 拿（primary 用 hilited_back，secondary 用 back，destructive 用 0xD04545）。
 - WM_LBUTTONUP 触发 SetOnClick 注册的 callback。
 - 订阅 FluxingTheme 主题变化 → InvalidateRect 重绘。
 

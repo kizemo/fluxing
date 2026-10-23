@@ -1,0 +1,8 @@
+{
+ "lines": {
+  "34": "- [ ] T016 [P1] 新建 test/TestFluxingComponents/{TestFluxingButton.cpp, TestFluxingToggle.cpp, TestFluxingPanel.cpp, TestFluxingTheme.cpp, stdafx.h, stdafx.cpp, targetver.h}。",
+  "35": "- [ ] T017 [P1] 新建 test/TestFluxingComponents/TestFluxingComponents.vcxproj（mirror TestDarkModeBroadcast vcxproj 结构，4 个 ClCompile + 1 link + OutDir 用 L31 修复后的 SolutionDir 反斜杠模式）。",
+  "42": "- [ ] T021 [P1] test\\TestDefaultHotkeys\\Release\\TestDefaultHotkeys.exe → 35/35 PASS (回归)。",
+  "43": "- [ ] T022 [P1] test\\TestDarkModeBroadcast\\Release\\TestDarkModeBroadcast.exe → 14/14 PASS (回归)。"
+ }
+}

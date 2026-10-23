@@ -1,0 +1,9 @@
+{
+ "lines": {
+  "1283": "2. test/TestDefaultHotkeys/TestDefaultHotkeys.cpp: L19 的 4 个负断言翻转为正断言 (从 \"应不存在\" 变 \"应存在\"); 新增 4 个正断言覆盖 spec 014 新增 binding 与 ascii_composer.switch_key 保持 noop。",
+  "1285": "3. test/TestShiftSelectBinding/ (新): 第二个 runtime yaml 契约测试, 13 个新正断言, 验证:",
+  "9216": "   强制走同一检查**。建议把检查抽到 tools/build_verify.lua, 在 WeaselServer、",
+  "9223": "   脚本, 检测 WeaselServer.exe < 1 MB / 无 MZ / 全零时, 自动 taskkill + 卸装",
+  "9269": "- Դ issue: task.md Phase K3 T019 catastrophic regression"
+ }
+}

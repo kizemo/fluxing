@@ -1,0 +1,15 @@
+{
+ "lines": {
+  "109": "- Commit message uses fix(fluxing): scope per P4",
+  "111": "- Optional lightweight tag v0.18.8.0 (Fluxing-side, not pushed to kizemo",
+  "15": "test/TestShiftSelectBinding/ that pins down the parse + match invariants.",
+  "31": "  - test/TestDefaultHotkeys/TestDefaultHotkeys.cpp - flip 2 L19 negatives",
+  "33": "  - test/TestShiftSelectBinding/TestShiftSelectBinding.cpp (new) - runtime",
+  "35": "  - test/TestShiftSelectBinding/TestShiftSelectBinding.vcxproj (new) -",
+  "37": "  - test/TestShiftSelectBinding/TestShiftSelectBinding.vcxproj.filters (new)",
+  "43": "  - release/fluxing-0.18.8.0-installer.exe (new) - copy from",
+  "52": "  - Conventional Commits with fluxing scope (per P4 amendment 1)",
+  "8": "spec 012 form (accept: Shift+Shift_L, not bare Shift_L) so that the binding",
+  "98": "| R3 | new Shift+Shift_L/R binding collides with Shift+space toggle | different accept -> different KeyEvent -> different map bucket; no collision |"
+ }
+}

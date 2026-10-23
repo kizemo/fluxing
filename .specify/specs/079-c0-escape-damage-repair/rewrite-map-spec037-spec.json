@@ -1,0 +1,7 @@
+{
+ "lines": {
+  "57": "- [ ] 4.2 新建 WeaselUI/FluxingComponents/FluxingTheme.h（namespace fluxing::ui，class FluxingTheme 单例 + Subscribe(Callback) / CurrentPalette()）。",
+  "59": "- [ ] 4.4 新建 WeaselUI/FluxingComponents/Button.h（class FluxingButton 静态工厂 Create(hwnd, rect, label, style) + void Destroy()）。",
+  "68": "- [ ] 4.13 新建 test/TestFluxingComponents/ 测试项目（4 个独立 .cpp + vcxproj + stdafx）。"
+ }
+}

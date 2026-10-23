@@ -4,7 +4,7 @@
 
 - **File**: test/TestResponseParser/TestResponseParser.cpp
 - **Action**: remove the line   system("pause"); (8 spaces + system call)
-  located between 	est_4(); and return boost::report_errors(); in
+  located between test_4(); and return boost::report_errors(); in
   _tmain. Keep the blank line and the return line.
 - **Byte-level**: UTF-8 (no BOM, matches existing file), CRLF. Use
   [IO.File]::ReadAllBytes and write back the modified bytes; do NOT

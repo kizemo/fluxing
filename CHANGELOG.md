@@ -3138,7 +3138,7 @@ t->Clear(D2D1::ColorF(GetSysColor(COLOR_WINDOW), 1.0f)) 防止 D2D backing store
   5. WeaselUI/FluxingComponents/Toggle.cpp - 同上 Clear() + WM_DPICHANGED handler.
   6. WeaselUI/FluxingComponents/targetver.h + WeaselUI/targetver.h - 升 _WIN32_WINNT_WIN10 (GetDpiForWindow 可用).
   7. WeaselServer/stdafx.h - _WIN32_WINNT 0x0603 → 0x0A00 (C4005 macro redefine 修复).
-  8. 	est/{TestFluxingComponents,TestQuickPanelDialog,TestQuickPanelRefactor}/targetver.h - 同步升 WIN10.
+  8. test/{TestFluxingComponents,TestQuickPanelDialog,TestQuickPanelRefactor}/targetver.h - 同步升 WIN10.
 
 - **Verification (L46 recipe, 3 paths all PASS)**:
   - xbuild.bat weasel installer → exit 0, installer 42,859,365 bytes (vs 0.18.27.2 42,873,293 bytes; -13,928 bytes 因 D2D/DPI 路径优化).
@@ -4231,7 +4231,7 @@ t->Clear(). 0.18.28.0 ship 时已应用.
   - 在 x64 与 x86 (Win32) 两种架构上完成 librime 1.13.1 的构建（glog/gtest/leveldb/marisa/opencc/yaml-cpp 六个第三方依赖 + rime 引擎本身）。
   - 通过 msbuild 在 Release|x64 与 Release|Win32 下构建 weasel.sln（WeaselTSF/WeaselUI/WeaselIPC/WeaselServer/WeaselDeployer/WeaselSetup/RimeWithWeasel），产物落到 output\ 与 output\Win32\。
   - 通过 NSIS 3.x 生成 output\archives\fluxing-0.17.4.0-installer.exe（约 10.5 MB）并复制到 elease\。
-  - 新增 	ools\win-shims\include\ 仓库级 shim 头文件（X11/keysym.h、utf8.h、darts.h），通过 	ools\win-shims\setup-shims.ps1 复制到 librime/include/。
+  - 新增 tools\win-shims\include\ 仓库级 shim 头文件（X11/keysym.h、utf8.h、darts.h），通过 tools\win-shims\setup-shims.ps1 复制到 librime/include/。
   - 修正 output/install.nsi：
     - 5 处默认安装路径 $PROGRAMFILES*\Rime 改为 $PROGRAMFILES*\Fluxing（L135/137/139/144/146），使默认建议路径即以 \Fluxing 结尾。
     - 移除多余的 UTF-8 BOM（4× → 1×），NSIS 3.x 不再解析失败。
@@ -5738,8 +5738,8 @@ elease/fluxing-0.18.21.0-installer.exe (rebuilt from current source; 0.18.20.1 s
   - WeaselUI/FluxingComponents/Toggle.h + .cpp
   - WeaselUI/FluxingComponents/Panel.h + .cpp
   - WeaselUI/FluxingComponents/Label.h + .cpp
-  - 	est/TestFluxingComponents/{TestFluxingButton,TestFluxingToggle,TestFluxingPanel,TestFluxingTheme}.cpp + stdafx.h + stdafx.cpp + targetver.h
-  - 	est/TestFluxingComponents/TestFluxingComponents.vcxproj
+  - test/TestFluxingComponents/{TestFluxingButton,TestFluxingToggle,TestFluxingPanel,TestFluxingTheme}.cpp + stdafx.h + stdafx.cpp + targetver.h
+  - test/TestFluxingComponents/TestFluxingComponents.vcxproj
   - weasel.sln 增量加 TestFluxingComponents 4x3 platform entries
 - **Files modified**:
   - WeaselUI/WeaselUI.vcxproj ClCompile 加 7 个 .cpp

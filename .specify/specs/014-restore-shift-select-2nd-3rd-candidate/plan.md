@@ -5,14 +5,14 @@
 This plan delivers a single-file fix to output/data/default.yaml that
 **reverses the L19 over-correction** and restores the has_menu:
 Shift+Shift_L/R send 2/3 bindings promised by spec 005 v1.1. The fix uses the
-spec 012 form (ccept: Shift+Shift_L, not bare Shift_L) so that the binding
+spec 012 form (accept: Shift+Shift_L, not bare Shift_L) so that the binding
 matches the TSF Shift_L down event ({keycode=Shift_L, modifier=Shift}) but
 **does not match** the TSF release event ({keycode=Shift_L, modifier=Release}).
 
 The change is **2 line inserts** (no deletions) in the existing
 key_binder/bindings list, plus a rewrite of TestDefaultHotkeys.cpp to flip
 L19 negative assertions to positive, and a **new** tiny C++ runtime test
-	est/TestShiftSelectBinding/ that pins down the parse + match invariants.
+test/TestShiftSelectBinding/ that pins down the parse + match invariants.
 
 The test gap that caused L18 and L19 to ship 100% string-passing, 100%
 runtime-regressing fixes is **structurally closed** by this spec.
@@ -28,19 +28,19 @@ runtime-regressing fixes is **structurally closed** by this spec.
   comparison (librime/src/rime/key_event.h:64)
 - **Storage / files touched**:
   - output/data/default.yaml - 2 line inserts + comment update
-  - 	est/TestDefaultHotkeys/TestDefaultHotkeys.cpp - flip 2 L19 negatives
+  - test/TestDefaultHotkeys/TestDefaultHotkeys.cpp - flip 2 L19 negatives
     to positives, add 4 new positive assertions
-  - 	est/TestShiftSelectBinding/TestShiftSelectBinding.cpp (new) - runtime
+  - test/TestShiftSelectBinding/TestShiftSelectBinding.cpp (new) - runtime
     test for parse + match invariants
-  - 	est/TestShiftSelectBinding/TestShiftSelectBinding.vcxproj (new) -
+  - test/TestShiftSelectBinding/TestShiftSelectBinding.vcxproj (new) -
     MSBuild project (modeled on TestDefaultHotkeys.vcxproj)
-  - 	est/TestShiftSelectBinding/TestShiftSelectBinding.vcxproj.filters (new)
+  - test/TestShiftSelectBinding/TestShiftSelectBinding.vcxproj.filters (new)
   - weasel.sln - add 1 Project() block + 12 ProjectConfigurationPlatforms
     entries for the new test
   - .specify/memory/lessons-learned.md - new L21 entry
   - env.bat + weasel.props - bump FLUXING_VERSION 0.18.7 -> 0.18.8, etc.
   - CHANGELOG.md - new [0.18.8.0-fluxing] section
-  - elease/fluxing-0.18.8.0-installer.exe (new) - copy from
+  - release/fluxing-0.18.8.0-installer.exe (new) - copy from
     output/archives/ after successful xbuild.bat installer
 - **Platform**: Windows 8.1 ~ Windows 11; x86 (per L10/L14, librime Win32-only)
 - **Project type**: Windows TSF IME front-end
@@ -49,7 +49,7 @@ runtime-regressing fixes is **structurally closed** by this spec.
 - **Constraints**:
   - YAML must stay UTF-8 (no BOM) + CRLF (per L11)
   - C++ test files follow .clang-format and /std:c++17
-  - Conventional Commits with luxing scope (per P4 amendment 1)
+  - Conventional Commits with fluxing scope (per P4 amendment 1)
   - All 3 test projects must pass msbuild weasel.sln /t:TestDefaultHotkeys;TestShiftSelectBinding;TestResponseParser;TestWeaselIPC /p:Configuration=Release /p:Platform=Win32
   - No new third-party dependency (P3)
 - **Scale**: 1 commit, ~6 file paths touched
@@ -95,7 +95,7 @@ runtime-regressing fixes is **structurally closed** by this spec.
 |---|---|---|
 | R1 | Shift+Shift_L mask equals Shift; TSF mask also Shift; matches | runtime test (T004) pins the parse+match invariant |
 | R2 | ascii_composer.cc:75-98 still has short-press Shift toggle; after L19's switch_key.Shift_L/R: noop, load_bindings skips; ToggleAsciiModeWithKey returns false; no toggle | pre-existing behavior, verified by 0.18.7.0 user test (no Shift-alone ascii toggle) |
-| R3 | new Shift+Shift_L/R binding collides with Shift+space toggle | different ccept -> different KeyEvent -> different map bucket; no collision |
+| R3 | new Shift+Shift_L/R binding collides with Shift+space toggle | different accept -> different KeyEvent -> different map bucket; no collision |
 | R4 | user-side default.custom.yaml overrides key_binder | verified empty in D:\\Program Files\\fluxing\\user1\\fluxing\\default.custom.yaml (0 bytes) |
 | R5 | binding list ordering changed | spec 005 plan.md sec 2.2 rule (has_menu before always) preserved; intra-has_menu order between Shift+Shift_L and Control+1 is irrelevant (different KeyEvent) |
 | R6 | 2 new map entries -> O(log N) lookup, negligible | measure if needed; 100% ignored unless we exceed 100 bindings |
@@ -106,7 +106,7 @@ runtime-regressing fixes is **structurally closed** by this spec.
 
 - 1 commit on the Fluxing branch (with a 2nd commit for the version bump
   if needed; see tasks.md T006)
-- Commit message uses ix(fluxing): scope per P4
+- Commit message uses fix(fluxing): scope per P4
 - No upstream PR (per P8 waiver, brand-fork only)
-- Optional lightweight tag 0.18.8.0 (Fluxing-side, not pushed to kizemo
+- Optional lightweight tag v0.18.8.0 (Fluxing-side, not pushed to kizemo
   unless user requests)

@@ -1,0 +1,13 @@
+{
+ "lines": {
+  "297": "### A1. tasks.md internal duplication",
+  "310": "- Current HEAD~ = b543d5e (chore: rename WEASEL_VERSION identifier).",
+  "312": "  \"feat(fluxing): rename distribution code to Fluxing; swap",
+  "314": "  b543d5e.",
+  "317": "  matches T010's step-2 anchor text. b543d5e was not yet",
+  "333": "  phrase — but b543d5e rewrote the line to",
+  "360": "  b543d5e (FLUXING_VERSION identifier rename + NSIS",
+  "369": "  comment with 中州韻, replaced 式恕堂 → aiec.fun at",
+  "382": "  changed to the project's own aiec.fun equivalents."
+ }
+}

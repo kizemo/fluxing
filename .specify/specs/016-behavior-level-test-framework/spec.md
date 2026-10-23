@@ -53,14 +53,14 @@ must fail CI before merge, not after release.
 - Given librime 1.13+ is built (output\rime.dll + librime\build\lib\Release\rime.lib)
 - When the developer runs scripts\run-tests.bat
 - Then TestBindingResolution builds + runs and verifies:
-  - ccept: Shift+Shift_L (spec 014) matches a real KeyEvent with
+  - accept: Shift+Shift_L (spec 014) matches a real KeyEvent with
     keycode=Shift_L, modifier=kShiftMask (NOT kReleaseMask)
-  - ccept: Control+1 matches a real KeyEvent with
+  - accept: Control+1 matches a real KeyEvent with
     keycode=1 (key_table.h), modifier=kControlMask
-  - ccept: Shift+space matches a real KeyEvent with
+  - accept: Shift+space matches a real KeyEvent with
     keycode=space, modifier=kShiftMask
   - The TSF release event (keycode=Shift_L, modifier=kReleaseMask)
-    does NOT match the ccept: Shift+Shift_L binding (the L18
+    does NOT match the accept: Shift+Shift_L binding (the L18
     invariant)
 - And the test exits 0
 - And the test is part of scripts\run-tests.bat (TDD.md sec 3.3)
@@ -92,7 +92,7 @@ The vcxproj is modeled on TestWeaselIPC.vcxproj with these changes:
 The test file will:
 1. Load output\data\default.yaml and parse the key_binder.bindings
    list using yaml-cpp (vendored in librime\include\yaml-cpp)
-2. For each binding, parse ccept: and send: strings using
+2. For each binding, parse accept: and send: strings using
    rime::KeyEvent::Parse and rime::KeySequence::Parse
 3. Initialize rime::KeyEvent objects with various modifier combinations
    (release, Shift, Control, no-modifier) and verify the key_binder

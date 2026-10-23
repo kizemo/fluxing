@@ -1,0 +1,22 @@
+{
+ "lines": {
+  "18": "- spec 012 plan.md sec 2.2 already designed the fix: use accept: Shift+Shift_L",
+  "19": "  and accept: Shift+Shift_R form (not bare Shift_L) so that TSF release events",
+  "21": "- L18 fix: removed the always: Shift+Shift_L/R toggle ascii_mode binding (was",
+  "79": "- And the ascii_composer.switch_key.Shift_L/R remain ",
+  "91": "| test/TestDefaultHotkeys/TestDefaultHotkeys.cpp | Update L19 negative assertions to expect Shift+Shift_L/R bindings to EXIST (positive assertions). Add new runtime behavior test for Shift+Shift_L -> keycode=Shift_L, modifier=Shift event matches has_menu binding |",
+  "95": "| release/fluxing-0.18.8.0-installer.exe | New artifact (output of xbuild.bat installer) |",
+  "137": "- accept: Shift_L (no modifier in the binding) parses to",
+  "140": "- accept: Shift+Shift_L parses to {keycode=Shift_L, modifier=Shift}. Matches",
+  "148": "  held). Our new binding accept: Shift+Shift_L requires modifier=Shift, so",
+  "236": "- **R2**: ascii_composer.cc:75-98 still has a hardcoded \"short-press Shift",
+  "239": "  bindings_.find(key_code) == end() returning false. So single-press Shift_L",
+  "243": "  Shift+space toggle binding. Different accept field means different",
+  "254": "  if they are on different accept events. They ARE different events here",
+  "270": "   assertions for accept: Shift+Shift_L/R are flipped to positive).",
+  "304": "- No Shift+Shift_L/R for ascii_mode toggle (already handled by",
+  "305": "  Shift+space + ascii_composer.switch_key.Shift_L/R: noop)",
+  "310": "- No new CI workflow changes (the existing test: job in ci.yml will pick up",
+  "317": "- release/fluxing-0.18.8.0-installer.exe is a valid NSIS installer with"
+ }
+}

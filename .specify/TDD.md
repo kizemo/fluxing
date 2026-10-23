@@ -339,9 +339,9 @@ un-test-suite.bat exit=0 (之前是 exit=1 因为 build 步骤 fail).
 
 ### 8.3 MSB6001 workaround (L47 precursor)
 
-PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 触发 .NET Hashtable "已添加项: 字典中的关键字 PATH 所添加的关键字 Path" 异常 (MSB6001). workaround: 用 cvars32.bat 不用 VsDevCmd.bat (cvars32.bat 是纯 cmd 脚本, 不触发此 .NET 冲突).
+PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 触发 .NET Hashtable "已添加项: 字典中的关键字 PATH 所添加的关键字 Path" 异常 (MSB6001). workaround: 用 vcvars32.bat 不用 VsDevCmd.bat (vcvars32.bat 是纯 cmd 脚本, 不触发此 .NET 冲突).
 
-0.18.25.0 ship 时已统一用 cvars32.bat 路径. 0.18.25.0 之前几个 release 误以为 "xbuild 路径全过就 ship" 但 msbuild 路径被 VsDevCmd 阻塞, 是 L46 发现的盲点.
+0.18.25.0 ship 时已统一用 vcvars32.bat 路径. 0.18.25.0 之前几个 release 误以为 "xbuild 路径全过就 ship" 但 msbuild 路径被 VsDevCmd 阻塞, 是 L46 发现的盲点.
 
 ### 8.4 Test suite total (post-0.18.25.0)
 
@@ -549,7 +549,7 @@ never rely on ASCII strings alone — C++ class/function names are stored as UTF
 
 ### 12.2 L43 verification done — WeaselServer.exe 不存在 dead-strip
 
-复盘确认 L43 cure (WeaselTSF/xmake.lua dd_shflags("/LTCG:OFF ...")) 已应用 + global xmake.lua line 64 dd_ldflags("/LTCG:OFF /INCREMENTAL:NO", {force=true}) 也加。spec 041 ship 的 WeaselServer.exe 1981952 bytes 实际含所有 spec 041 DPI fix 函数 (?GetPhysicalClientRect@FluxingD2DRenderer@ui@fluxing@@..., ?HandleDpiChanged@FluxingPanel@ui@fluxing@@..., ?HandleDpiChanged@FluxingToggle@ui@fluxing@@...) + 4 Fluxing 控件 + QuickPanelDialog (dumpbin /DISASM 验证)。
+复盘确认 L43 cure (WeaselTSF/xmake.lua add_shflags("/LTCG:OFF ...")) 已应用 + global xmake.lua line 64 add_ldflags("/LTCG:OFF /INCREMENTAL:NO", {force=true}) 也加。spec 041 ship 的 WeaselServer.exe 1981952 bytes 实际含所有 spec 041 DPI fix 函数 (?GetPhysicalClientRect@FluxingD2DRenderer@ui@fluxing@@..., ?HandleDpiChanged@FluxingPanel@ui@fluxing@@..., ?HandleDpiChanged@FluxingToggle@ui@fluxing@@...) + 4 Fluxing 控件 + QuickPanelDialog (dumpbin /DISASM 验证)。
 
 ### 12.3 spec 042+ test strategy
 

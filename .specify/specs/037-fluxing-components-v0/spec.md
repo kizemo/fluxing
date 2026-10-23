@@ -54,9 +54,9 @@
 ## 4. 完成定义（v0.18.26.0 ship）
 
 - [ ] 4.1 新建目录 WeaselUI/FluxingComponents/（与 WeaselPanel.cpp 同级）。
-- [ ] 4.2 新建 WeaselUI/FluxingComponents/FluxingTheme.h（namespace luxing::ui，class FluxingTheme 单例 + Subscribe(Callback) / CurrentPalette()）。
+- [ ] 4.2 新建 WeaselUI/FluxingComponents/FluxingTheme.h（namespace fluxing::ui，class FluxingTheme 单例 + Subscribe(Callback) / CurrentPalette()）。
 - [ ] 4.3 新建 WeaselUI/FluxingComponents/FluxingTheme.cpp（实现订阅 FluxingDarkModeBridge + 内部缓存 Palette + 触发重绘回调）。
-- [ ] 4.4 新建 WeaselUI/FluxingComponents/Button.h（class FluxingButton 静态工厂 Create(hwnd, rect, label, style) + oid Destroy()）。
+- [ ] 4.4 新建 WeaselUI/FluxingComponents/Button.h（class FluxingButton 静态工厂 Create(hwnd, rect, label, style) + void Destroy()）。
 - [ ] 4.5 新建 WeaselUI/FluxingComponents/Button.cpp（D2D 圆角矩形 6px + 文本 + 3 style: Primary/Secondary/Destructive，订阅 FluxingTheme）。
 - [ ] 4.6 新建 WeaselUI/FluxingComponents/Toggle.h + .cpp（class FluxingToggle，状态 bool + 滑动动画 200ms）。
 - [ ] 4.7 新建 WeaselUI/FluxingComponents/Panel.h + .cpp（class FluxingPanel，圆角矩形 8px 容器 + 内边距 12px）。
@@ -65,7 +65,7 @@
 - [ ] 4.10 新建 WeaselUI/FluxingComponents/D2DRenderer.cpp（包装 ID2D1Factory + IDWriteFactory + ID2D1HwndRenderTarget 创建/复用）。
 - [ ] 4.11 修改 WeaselUI/WeaselUI.vcxproj 加 7 个新 .cpp 到 ClCompile 项（FluxingTheme / Button / Toggle / Panel / Label / D2DRenderer + stdafx）。
 - [ ] 4.12 修改 WeaselUI/xmake.lua 加 7 个新 .cpp 到 add_files 项（spec 036 已 ship xmake path，spec 037 同步）。
-- [ ] 4.13 新建 	est/TestFluxingComponents/ 测试项目（4 个独立 .cpp + vcxproj + stdafx）。
+- [ ] 4.13 新建 test/TestFluxingComponents/ 测试项目（4 个独立 .cpp + vcxproj + stdafx）。
 - [ ] 4.14 weasel.sln 加 TestFluxingComponents 项目 + 4×3 platform configuration entries。
 - [ ] 4.15 xbuild.bat weasel installer → 0 errors, 14+1 test projects visible in build output。
 - [ ] 4.16 scripts\test-infra\run-test-suite.bat → 14+1=15/15 PASS, 115+18=133+ assertions, "=== ALL TESTS PASSED ==="。

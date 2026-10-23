@@ -1,0 +1,8 @@
+{
+ "lines": {
+  "3141": "  8. test/{TestFluxingComponents,TestQuickPanelDialog,TestQuickPanelRefactor}/targetver.h - 同步升 WIN10.",
+  "4234": "  - 新增 tools\\win-shims\\include\\ 仓库级 shim 头文件（X11/keysym.h、utf8.h、darts.h），通过 tools\\win-shims\\setup-shims.ps1 复制到 librime/include/。",
+  "5741": "  - test/TestFluxingComponents/{TestFluxingButton,TestFluxingToggle,TestFluxingPanel,TestFluxingTheme}.cpp + stdafx.h + stdafx.cpp + targetver.h",
+  "5742": "  - test/TestFluxingComponents/TestFluxingComponents.vcxproj"
+ }
+}

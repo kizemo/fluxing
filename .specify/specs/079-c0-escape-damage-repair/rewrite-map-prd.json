@@ -1,0 +1,9 @@
+{
+ "lines": {
+  "386": "L47 lessons-learned 同步追加 (PowerShell 5.1 + VsDevCmd 触发 MSB6001 PATH/Path 冲突 + vcxproj $(SolutionDir)msbuild 缺 \\ 引发 MSB3491; workaround: 用 vcvars32.bat 不用 VsDevCmd.bat).",
+  "441": "- **L47 (待追加)**: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 是 PowerShell module 触发 .NET Hashtable \"已添加项: 字典中的关键字 PATH 所添加的关键字 Path\" 异常 (MSB6001). workaround: 用 vcvars32.bat (纯 cmd 脚本) 不用 VsDevCmd.bat. 0.18.25.0 ship 时已用此 workaround.",
+  "484": "L47 lessons-learned 同步追加 (PowerShell 5.1 + VsDevCmd 触发 MSB6001 PATH/Path 冲突 + vcxproj SolutionDir-msbuild 缺 \\ 引发 MSB3491; workaround: 用 vcvars32.bat 不用 VsDevCmd.bat).",
+  "527": "- **L47 (待追加)**: PowerShell 5.1 启动 cmd 时把 PATH 转为 Path (小写), 而 VsDevCmd.bat 是 PowerShell module 触发 .NET Hashtable \"已添加项: 字典中的关键字 PATH 所添加的关键字 Path\" 异常 (MSB6001). workaround: 用 vcvars32.bat (纯 cmd 脚本) 不用 VsDevCmd.bat. 0.18.25.0 ship 时已用此 workaround.",
+  "605": "- **L43 /LTCG:OFF 已被 L43 cure 解决**: WeaselTSF/xmake.lua 已加 add_shflags('/DEBUG /LTCG:OFF /OPT:NOREF /OPT:NOICF', {force = true})，global xmake.lua line 64 也加 add_ldflags('/LTCG:OFF /INCREMENTAL:NO', {force = true})。WeaselServer.exe 不存在 dead-strip 问题。"
+ }
+}

@@ -31,16 +31,16 @@
 
 ## Phase 5 · 测试
 
-- [ ] T016 [P1] 新建 	est/TestFluxingComponents/{TestFluxingButton.cpp, TestFluxingToggle.cpp, TestFluxingPanel.cpp, TestFluxingTheme.cpp, stdafx.h, stdafx.cpp, targetver.h}。
-- [ ] T017 [P1] 新建 	est/TestFluxingComponents/TestFluxingComponents.vcxproj（mirror TestDarkModeBroadcast vcxproj 结构，4 个 ClCompile + 1 link + OutDir 用 L31 修复后的 SolutionDir 反斜杠模式）。
+- [ ] T016 [P1] 新建 test/TestFluxingComponents/{TestFluxingButton.cpp, TestFluxingToggle.cpp, TestFluxingPanel.cpp, TestFluxingTheme.cpp, stdafx.h, stdafx.cpp, targetver.h}。
+- [ ] T017 [P1] 新建 test/TestFluxingComponents/TestFluxingComponents.vcxproj（mirror TestDarkModeBroadcast vcxproj 结构，4 个 ClCompile + 1 link + OutDir 用 L31 修复后的 SolutionDir 反斜杠模式）。
 - [ ] T018 [P1] weasel.sln 加 TestFluxingComponents 项目 + 4×3 platform configuration entries。
 - [ ] T019 [P1] xbuild.bat weasel installer → 0 errors, 15 test projects visible in build output。
 - [ ] T020 [P1] scripts\test-infra\run-test-suite.bat → 15/15 PASS, 115+18=133+ assertions, "=== ALL TESTS PASSED ==="。
 
 ## Phase 6 · 回归 + 字节验证
 
-- [ ] T021 [P1] 	est\TestDefaultHotkeys\Release\TestDefaultHotkeys.exe → 35/35 PASS (回归)。
-- [ ] T022 [P1] 	est\TestDarkModeBroadcast\Release\TestDarkModeBroadcast.exe → 14/14 PASS (回归)。
+- [ ] T021 [P1] test\TestDefaultHotkeys\Release\TestDefaultHotkeys.exe → 35/35 PASS (回归)。
+- [ ] T022 [P1] test\TestDarkModeBroadcast\Release\TestDarkModeBroadcast.exe → 14/14 PASS (回归)。
 - [ ] T023 [P1] L42 byte-verify: 0x001E1E1E 仍在 weasel.dll（spec 033 dark-mode palette bytes 未被新代码 dead-strip）。
 - [ ] T024 [P1] L14 arch-verify: 6 个 binary（WeaselServer / WeaselDeployer / WeaselSetup / weasel.dll / rime.dll = 0x14C, weaselx64.dll = 0x8664, weaselARM64.dll = 0xAA64）。
 
