@@ -156,3 +156,21 @@ repaired.
 - The 64 bit Shift release-to-select-candidate behaviour still has no
   hands-on check in a 64 bit application. The evidence so far is the PDB
   symbols plus the static test suite.
+
+### Post-079 appends to the repaired files
+
+The L109 incident record was appended to `lessons-learned.md` on
+2026-10-23.  Two consequences for this gate:
+
+1. `verify-encoding-repair.py --before-rev` has to be pinned to
+   `b715b29^` (the commit before the repair) once the repair itself is
+   committed.  With the default `auto` baseline the tool compares
+   against `HEAD` whenever the working tree differs from it, and against
+   `HEAD^` otherwise; after the repair is committed neither side
+   reproduces the five declared rewrites, so the gate reports
+   "declared line(s) did not change" no matter what the file contains.
+2. Every appended block has to be listed in the map under `inserts`,
+   as `[start_line, line_count]`, with the start line counted in the
+   *current* file.  The L109 block is `[10245, 42]`.
+
+The gate is not part of `run-test-suite.bat`; it is run by hand.

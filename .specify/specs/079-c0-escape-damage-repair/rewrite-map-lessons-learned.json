@@ -5,5 +5,11 @@
   "9216": "   强制走同一检查**。建议把检查抽到 tools/build_verify.lua, 在 WeaselServer、",
   "9223": "   脚本, 检测 WeaselServer.exe < 1 MB / 无 MZ / 全零时, 自动 taskkill + 卸装",
   "9269": "- Դ issue: task.md Phase K3 T019 catastrophic regression"
- }
+ },
+ "inserts": [
+  [
+   10245,
+   42
+  ]
+ ]
 }

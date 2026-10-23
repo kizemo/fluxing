@@ -10242,3 +10242,45 @@ Fix (defer to v0.21.0.1): 改 source。
 - ADR 0007 — 架构决策记录
 - `feedback_rime_shift_binding_gotchas.md` — Shift binding 全局 gotcha
 - commit (本 fix) spec 077 + feat(WeaselIPC) + chore(release) v0.21.0.1 ship 序列
+
+## L109 - v0.21.0.3: 装机时杀 TSF 宿主导致 dwm / 开始菜单连环崩溃 (2026-10-23)
+
+**Incident**:
+
+- 2026-10-23 15:25, 为验证「杀 ctfmon / TextInputHost 后系统会自动拉起, 所以不需要注销重登」, 执行了 `Stop-Process -Name ctfmon,TextInputHost -Force`
+- 15:52:58 dwm.exe 崩溃 -> 15:53:02 StartMenuExperienceHost.exe 崩溃 -> 15:53:05 TextInputHost.exe 崩溃 -> 15:53:36 / 15:54:18 / 15:54:55 dwm.exe 再崩 3 次 -> 15:56:18 sdxhelper.exe 崩溃
+- 用户侧观感: 一串报错弹窗 + 桌面卡死; 16:05 手动重启, 16:07:31 系统重新启动
+- 无 MEMORY.DMP / Minidump, 说明不是蓝屏, 而是用户态进程崩溃 + UI 栈崩塌
+
+**Root cause**:
+
+- TextInputHost.exe 是 Windows 的 TSF 宿主, 与 dwm / StartMenuExperienceHost 共享输入与 UI 栈。强杀它, dwm 与开始菜单跟着崩, 桌面看起来就像「Windows 死机」
+- 更糟的是这个手段本来就无效: Windows 约 2 秒后自动拉起新实例, 新实例立刻重新映射旧 TSF shim, 装机流程后面的 `File "weasel.dll"` 仍然失败
+- install.nsi 的 `.onInit` 里本来就有这个循环 (ctfmon x5 + TextInputHost x5), 所以每一次历史装机都在制造同样的崩溃
+
+**Fix** (v0.21.0.3, commit 8cbe9ee):
+
+- install.nsi 删除 `.onInit` 的 ctfmon / TextInputHost taskkill 循环
+- 改用「版本化 shim」: 旧 shim 被锁时把新 shim 装成 `weasel.<ver>.<build>.dll` 并把 TSF 注册指过去。新开的应用用新版, 已开的应用继续用旧版, 互不影响, 不杀任何进程, 不需要重启
+- 64 位 / 32 位注册分别用 `C:\Windows\Sysnative\regsvr32.exe` 与 `C:\Windows\SysWOW64\regsvr32.exe`。32 位安装器里裸名 `regsvr32` 只能解析到 32 位版, 加载不了 64 位 DLL, 此前 64 位 TIP 的注册从未由安装器成功完成
+- 16 处 `Delete /REBOOTOK` 改为普通 `Delete` + `ClearErrors`。待重启删除项会被 NSIS 变成一次重启请求, 即使文件全部替换成功也照样要求重启
+
+**Verification** (2026-10-23 真实装机):
+
+- 静默升级 exit 0 / 30s, md5 三方全等 (output == D:\Program Files\fluxing\weasel)
+- 64 位 TIP -> weaselx64.dll (PE 0x8664), 32 位 TIP -> weasel.dll (PE 0x14C)
+- Fluxing 相关 PendingFileRenameOperations 零新增 (108 -> 108)
+- ctfmon PID 16704 / TextInputHost PID 19244 启动时间未变, 装机全程没杀它们
+- 安装期间 Application Error = 0, 对照 15:52 那次是 dwm / TextInputHost / StartMenu 连环崩溃
+
+**Pattern-Key**:
+
+- `installer.tsf-host-kill` (新增) — 装机时杀 TSF 宿主等于打崩 dwm 与开始菜单, 而且对文件替换无效; 正确解法是版本化 shim 加重定向 TSF 注册
+- 累计 Recurrence-Count: 1
+
+**关联**:
+
+- L103-I (PPL WeaselServer.exe + installer Rename-then-File 失败模式)
+- L51 (装机后提示重启 WeaselServer 或注销重登)
+- ADR 0007 (PPL 与装机约束)
+- commit 8cbe9ee
