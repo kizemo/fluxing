@@ -27,6 +27,23 @@ Unicode true
 !define FLUXING_ROOT $INSTDIR\fluxing
 !define REG_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Fluxing"
 
+; L120: 1 = something could not be replaced online, so the
+; boot-time fallback took over and the machine has to restart.
+; 0 = everything was replaced online.
+Var FluxingDegraded
+; L120: 1 = the running WeaselServer.exe is gone.
+Var FluxingQuitDone
+; L120: the TSF shim paths that are really registered.  Normally
+; the canonical names; when a shim was locked and a versioned
+; shim had to be used, the versioned names.
+Var FluxingWeaselDll
+Var FluxingWeaselX64Dll
+; L120: the Windows directory and the regsvr32 that matches the
+; bitness of the DLL it has to register.
+Var FluxingSysRoot
+Var FluxingRegSvr32
+Var FluxingRegSvr32x64
+
 ; The name of the installer
 Name "Fluxing ${FLUXING_VERSION}"
 
@@ -145,19 +162,18 @@ Function .onInit
   ; v0.19.0.48 (Phase J installer 加固): WeaselServer.exe 是 PPL 进程,
   ;   taskkill 表面成功但 mmap handle 不释放。10x retries (覆盖 ~30s) + final
   ;   Sleep 3000ms 让 OS 完整释放 mmap 后再进入 File section。
-  ${For} $R9 1 10
+  ; L120: the old sweep ran taskkill ten times with a 1.5-3s sleep
+  ; after each attempt, so the installer sat there for half a
+  ; minute before it even started copying.  taskkill cannot stop a
+  ; protected process anyway (L103-I); the reliable way to stop
+  ; WeaselServer.exe is its own /quit IPC, which the install
+  ; section drives with a poll loop.  Keep a short sweep for the
+  ; ordinary case only.
+  ${For} $R9 1 3
     nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
     Pop $0
     Pop $1
-    ${If} $R9 == 1
-      Sleep 1500
-    ${ElseIf} $R9 < 5
-      Sleep 2500
-    ${ElseIf} $R9 == 5
-      Sleep 3000
-    ${Else}
-      Sleep 3000
-    ${EndIf}
+    Sleep 1000
   ${Next}
 
   ; Phase D (v0.19.0.36) Reinforcement E: 老 binary 路径 force delete.
@@ -171,52 +187,83 @@ Function .onInit
   ; \Fluxing\Weasel\InstallDir for the user's actual install location
   ; (in case it is non-default), and force-delete that too.
   StrCpy $R8 "$PROGRAMFILES64\Fluxing\weasel\WeaselServer.exe"
-  IfFileExists $R8 0 +2
-    Delete /REBOOTOK $R8
-    DetailPrint "Fluxing: scheduled delete of $R8 on reboot (locked)"
+    ${If} ${FileExists} $R8
+      Delete $R8
+      ${If} ${Errors}
+        DetailPrint "Fluxing: the leftover $R8 is still locked; it stays until the process holding it exits"
+      ${Else}
+        DetailPrint "Fluxing: removed the leftover $R8"
+      ${EndIf}
+      ClearErrors
+    ${EndIf}
   StrCpy $R8 "$PROGRAMFILES32\Fluxing\weasel\WeaselServer.exe"
-  IfFileExists $R8 0 +2
-    Delete /REBOOTOK $R8
-    DetailPrint "Fluxing: scheduled delete of $R8 on reboot (locked)"
+    ${If} ${FileExists} $R8
+      Delete $R8
+      ${If} ${Errors}
+        DetailPrint "Fluxing: the leftover $R8 is still locked; it stays until the process holding it exits"
+      ${Else}
+        DetailPrint "Fluxing: removed the leftover $R8"
+      ${EndIf}
+      ClearErrors
+    ${EndIf}
   StrCpy $R8 "D:\Program Files\Fluxing\weasel\WeaselServer.exe"
-  IfFileExists $R8 0 +2
-    Delete /REBOOTOK $R8
-    DetailPrint "Fluxing: scheduled delete of $R8 on reboot (locked)"
+    ${If} ${FileExists} $R8
+      Delete $R8
+      ${If} ${Errors}
+        DetailPrint "Fluxing: the leftover $R8 is still locked; it stays until the process holding it exits"
+      ${Else}
+        DetailPrint "Fluxing: removed the leftover $R8"
+      ${EndIf}
+      ClearErrors
+    ${EndIf}
   StrCpy $R8 "C:\Program Files\Rime\weasel\WeaselServer.exe"
-  IfFileExists $R8 0 +2
-    Delete /REBOOTOK $R8
-    DetailPrint "Fluxing: scheduled delete of legacy $R8 on reboot (locked)"
+    ${If} ${FileExists} $R8
+      Delete $R8
+      ${If} ${Errors}
+        DetailPrint "Fluxing: the leftover $R8 is still locked; it stays until the process holding it exits"
+      ${Else}
+        DetailPrint "Fluxing: removed the leftover $R8"
+      ${EndIf}
+      ClearErrors
+    ${EndIf}
   StrCpy $R8 "C:\Program Files\WeaselServer\weasel\WeaselServer.exe"
-  IfFileExists $R8 0 +2
-    Delete /REBOOTOK $R8
-    DetailPrint "Fluxing: scheduled delete of legacy $R8 on reboot (locked)"
+    ${If} ${FileExists} $R8
+      Delete $R8
+      ${If} ${Errors}
+        DetailPrint "Fluxing: the leftover $R8 is still locked; it stays until the process holding it exits"
+      ${Else}
+        DetailPrint "Fluxing: removed the leftover $R8"
+      ${EndIf}
+      ClearErrors
+    ${EndIf}
   ReadRegStr $R8 HKLM "Software\Fluxing\Weasel" "InstallDir"
   StrCmp $R8 "" skip_oldpath_delete
   StrCpy $R8 "$R8\WeaselServer.exe"
   IfFileExists $R8 0 skip_oldpath_delete
-    Delete /REBOOTOK $R8
-    DetailPrint "Fluxing: scheduled delete of registered $R8 on reboot (locked)"
+    ${If} ${FileExists} $R8
+      Delete $R8
+      ${If} ${Errors}
+        DetailPrint "Fluxing: the leftover $R8 is still locked; it stays until the process holding it exits"
+      ${Else}
+        DetailPrint "Fluxing: removed the leftover $R8"
+      ${EndIf}
+      ClearErrors
+    ${EndIf}
   skip_oldpath_delete:
 
-  ; L71-bugfix: ctfmon.exe + TextInputHost.exe 是 TSF 宿主进程,加载 weasel.dll
-  ; 作为 32-bit TSF TextInputProcessor(被 notepad/VSCode 等 32-bit 进程加载)。
-  ; L13 fix 只 kill WeaselServer.exe, 但 ctfmon/TextInputHost 持有的 weasel.dll
-  ; mapped handle 让 NSIS File "weasel.dll" 报"无法打开"错误。
-  ; 修:在 .onInit 一并 kill 这两个进程,确保安装时 weasel.dll 没有 mapped handle。
-  ; 用户重新登录后 ctfmon.exe + TextInputHost.exe 会被系统自动重启,无副作用。
-  ; Phase A.11: retry — sometimes TSF host re-spawns after taskkill.
-  ;
-  ; v0.19.0.48 (Phase J installer 加固): 5x retries + Sleep 2500ms 让 TSF host
-  ;   respawn 收敛后再进入 File section。
-  ${For} $R9 1 5
-    nsExec::ExecToStack 'taskkill /F /IM ctfmon.exe /T'
-    Pop $0
-    Pop $1
-    nsExec::ExecToStack 'taskkill /F /IM TextInputHost.exe /T'
-    Pop $0
-    Pop $1
-    Sleep 2500
-  ${Next}
+  ; L120: the ctfmon.exe / TextInputHost.exe taskkill loop that used
+  ; to live here is GONE on purpose.  Killing TextInputHost.exe
+  ; does not merely stop one input method, it takes the Windows
+  ; text-services stack down with it: on 2026-10-23 15:52-15:55
+  ; TextInputHost.exe crashed, dwm.exe then crashed three times in
+  ; a row and StartMenuExperienceHost.exe crashed as well, which is
+  ; what the user saw as a frozen desktop plus a row of error
+  ; dialogs.  It was useless too: Windows restarts those hosts
+  ; within about two seconds and the restarted host re-maps the
+  ; old TSF shim, so the File command further down still failed.
+  ; A locked shim is now handled without touching any process: the
+  ; new shim is installed under a versioned name and the TSF
+  ; registration is pointed at it.
 
   ; L14: NSIS has built-in support for /LOG=<file> CLI flag. Users can pass
   ; /LOG=path\to\file.log to NSIS directly to get a full install log - the
@@ -388,6 +435,32 @@ Section "Fluxing"
   StrCpy $R3 "$INSTDIR"
   StrCpy $INSTDIR "${WEASEL_ROOT}"
 
+  ; L120: the canonical TSF shim names are the ones that get
+  ; registered, unless a shim turns out to be locked and a
+  ; versioned shim had to be used instead.
+  StrCpy $FluxingWeaselDll "$INSTDIR\weasel.dll"
+  StrCpy $FluxingWeaselX64Dll "$INSTDIR\weaselx64.dll"
+  ; L120: the bare name "regsvr32" resolves to the 32 bit
+  ; regsvr32 from this 32 bit installer, and the 32 bit regsvr32
+  ; cannot load a 64 bit DLL at all, so the 64 bit TIP
+  ; registration never happened from here.  Pick the regsvr32
+  ; that matches the DLL instead.
+  ReadRegStr $FluxingSysRoot HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" "SystemRoot"
+  StrCpy $FluxingRegSvr32 "$FluxingSysRoot\SysWOW64\regsvr32.exe"
+  IfFileExists $FluxingRegSvr32 0 fluxing_regsvr32_fallback
+    Goto fluxing_regsvr32_ready
+  fluxing_regsvr32_fallback:
+  ; 32 bit Windows (or ARM64 without SysWOW64): the plain system
+  ; directory holds the 32 bit regsvr32 there.
+  StrCpy $FluxingRegSvr32 "$SYSDIR\regsvr32.exe"
+  fluxing_regsvr32_ready:
+  StrCpy $FluxingRegSvr32x64 "$FluxingSysRoot\Sysnative\regsvr32.exe"
+  IfFileExists $FluxingRegSvr32x64 0 fluxing_regsvr32x64_fallback
+    Goto fluxing_regsvr32x64_ready
+  fluxing_regsvr32x64_fallback:
+  StrCpy $FluxingRegSvr32x64 "$SYSDIR\regsvr32.exe"
+  fluxing_regsvr32x64_ready:
+
   ; spec 053 fix v4: CreateDirectory $INSTDIR + subdirs. SetOutPath does NOT
   ; auto-create missing parent dirs, and File commands silently fail if
   ; the parent dir does not exist. Without this, a fresh install to a
@@ -410,7 +483,25 @@ Section "Fluxing"
   ;   实际不是 TSF shim host, 杀它没意义。L72-fix Rename-then-File 已能
   ;   释放 file handle, 不需要杀 explorer 兜底)。
   ; taskkill 全部改 nsExec::ExecToStack (静默, 不弹 cmd 窗口)。
-  ExecWait '"$INSTDIR\WeaselServer.exe" /quit'
+  ; L120: ask the running server to exit through its own IPC and
+  ; wait for it.  ExecWait would hang the installer for good when
+  ; that server is stuck (L13), and taskkill cannot stop a
+  ; protected process (L103-I), so the request is fired and the
+  ; process is polled instead.  taskkill exits with 128 when no
+  ; such process exists, which is the signal to stop waiting.
+  Exec '"$INSTDIR\WeaselServer.exe" /quit'
+  StrCpy $FluxingQuitDone 0
+  ${For} $R9 1 20
+    ${If} $FluxingQuitDone == 0
+      nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe'
+      Pop $0
+      Pop $1
+      ${If} $0 == 128
+        StrCpy $FluxingQuitDone 1
+      ${EndIf}
+      Sleep 500
+    ${EndIf}
+  ${Next}
   ${For} $R9 1 5
     nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
     Pop $0
@@ -444,7 +535,7 @@ Section "Fluxing"
   ; (SHA256 43B994AD1482D7D0EA5A2F51154080CF63D1AC41CFAB34D2274165865F1825AC)
   ; 注意: copy 必须在 makensis 之前, 否则 File 指令 abort (L82 原始教训).
 
-  SetOutPath $INSTDIR\weasel
+  ; L120: $INSTDIR already points at the engine directory here, so "$INSTDIR\weasel" nested one level too deep and the QuickPanel logo never landed next to WeaselServer.exe.  SetOutPath $INSTDIR
   File "fluxing-logo.png"
   File "fluxing-logo_small.png"
   SetOutPath $INSTDIR
@@ -468,6 +559,34 @@ program_files:
   File "rime-install-config.bat"
   File "start_service.bat"
   File "stop_service.bat"
+  ; L120: unpack the new binaries under a staging name.
+  ; NSIS extracts File to the current SetOutPath, which here is
+  ; $INSTDIR -- exactly where the locked old binaries sit.  The
+  ; old stage 2 script copied from "$PLUGINSDIR\..\Win32\...",
+  ; a path that never existed, so the boot-time swap had nothing
+  ; to copy and the old binary survived even the reboot.  Staging
+  ; the new binaries here gives every fallback a real source.
+  CreateDirectory "$TEMP\fluxing-staged"
+  SetOutPath "$TEMP\fluxing-staged"
+!if /FileExists "Win32\WeaselServer.exe"
+  File "Win32\WeaselServer.exe"
+!endif
+!if /FileExists "weasel.dll"
+  File "weasel.dll"
+!endif
+!if /FileExists "weaselx64.dll"
+  File "weaselx64.dll"
+!endif
+  SetOutPath $INSTDIR
+  ; L120: start from a clean slate for the fallback bookkeeping.
+  ; A leftover marker from an earlier install would otherwise
+  ; trigger the boot-time swap and the restart prompt again.
+  Delete "$INSTDIR\WeaselServer.exe.stage2"
+  Delete "$INSTDIR\weaselx64.dll.stage2"
+  Delete "$INSTDIR\WeaselServer.exe.old.tmp"
+  Delete "$INSTDIR\weasel.dll.old.tmp"
+  Delete "$INSTDIR\weaselx64.dll.old.tmp"
+  ClearErrors
   ; L72-bugfix: Rename-then-File 模式。原 L71 Delete/REBOOTOK 不能立刻删除
   ; (文件还锁),导致后续 File 仍报"无法打开要写入的文件"。
   ; 新模式:Rename 是原子的,即使失败也能 SetOverwrite try 跳过
@@ -480,18 +599,41 @@ program_files:
     ClearErrors
     Rename "$INSTDIR\weasel.dll" "$INSTDIR\weasel.dll.old.tmp"
     ${If} ${Errors}
-      ; Rename 失败(还锁)→ 试 SetOverwrite try,失败就 skip
+      ; Rename failed (still locked) -> try SetOverwrite try, skip on error
       SetOverwrite try
+      ClearErrors
       File "weasel.dll"
       IfErrors 0 weasel_done
-      DetailPrint "Fluxing: weasel.dll locked by TSF host; old shim retained. Log out -> log in to pick up the new shim."
+      ; L120: the 32 bit shim is locked by a running TSF host.  Do
+      ; NOT kill the host: that takes the whole text-services
+      ; stack down (see .onInit).  Do NOT ask for a reboot either.
+      ; Install the new shim under a versioned name and point the
+      ; TSF registration at it: every application started from
+      ; now on loads the new shim, the ones already running keep
+      ; the shim they mapped.  Reopening an application is all
+      ; the user has to do.
+      DetailPrint "Fluxing: weasel.dll is locked by a running app; installing a versioned shim instead (no reboot needed)"
+      ClearErrors
+      CopyFiles /SILENT "$TEMP\fluxing-staged\weasel.dll" "$INSTDIR\weasel.${FLUXING_VERSION}.${WEASEL_BUILD}.dll"
+      ${If} ${Errors}
+        DetailPrint "Fluxing: the versioned shim could not be copied; the old shim is retained"
+        StrCpy $FluxingDegraded 1
+      ${Else}
+        StrCpy $FluxingWeaselDll "$INSTDIR\weasel.${FLUXING_VERSION}.${WEASEL_BUILD}.dll"
+        ExecWait '"$FluxingRegSvr32" /s "$FluxingWeaselDll"' $0
+        ${If} $0 != 0
+          DetailPrint "Fluxing: regsvr32 on the versioned shim failed (exit $0); the old shim is retained"
+          StrCpy $FluxingDegraded 1
+        ${EndIf}
+      ${EndIf}
       SetOverwrite on
       Goto weasel_done
     ${EndIf}
     ; Rename 成功,旧文件已经不在 $INSTDIR\weasel.dll
     File "weasel.dll"
     ; 清理 .old.tmp(用 REBOOTOK 防止正在运行时还占用)
-    Delete /REBOOTOK "$INSTDIR\weasel.dll.old.tmp"
+    Delete "$INSTDIR\weasel.dll.old.tmp"
+    ClearErrors
   ${Else}
     ; 全新装,直接 File
     File "weasel.dll"
@@ -518,17 +660,40 @@ program_files:
         SetOverwrite try
         File "weaselx64.dll"
         IfErrors 0 weaselx64_done
-        ; BOTH Rename AND File failed (TSF host still holds mmap) —
-        ; write Stage 2 marker for boot-time swap (v0.20.0.4 F3)
-        DetailPrint "Fluxing v0.20.0.4 F3: weaselx64.dll TSF-locked at install time; staging new binary for At-startup swap (spec 076 race fix deployment)"
-        FileOpen $R9 "$INSTDIR\weaselx64.dll.stage2" w
-        FileWrite $R9 "STAGE2_WEASELX64_NEEDED"
-        FileClose $R9
+        ; BOTH Rename AND File failed (the TSF host still holds the
+        ; mapping).  L120: do not wait for a reboot and do not kill
+        ; the host.  Install the new shim under a versioned name
+        ; and point the TSF registration at it: every application
+        ; started from now on loads the new shim, the ones already
+        ; running keep the shim they mapped.  The boot-time swap
+        ; stays as the last resort, for the case where even the
+        ; versioned copy fails.
+        DetailPrint "Fluxing: weaselx64.dll is locked by a running app; installing a versioned shim instead (no reboot needed)"
+        ClearErrors
+        CopyFiles /SILENT "$TEMP\fluxing-staged\weaselx64.dll" "$INSTDIR\weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.dll"
+        ${If} ${Errors}
+          DetailPrint "Fluxing: the versioned shim could not be copied; falling back to the boot-time swap"
+          FileOpen $R9 "$INSTDIR\weaselx64.dll.stage2" w
+          FileWrite $R9 "STAGE2_WEASELX64_NEEDED"
+          FileClose $R9
+          StrCpy $FluxingDegraded 1
+        ${Else}
+          StrCpy $FluxingWeaselX64Dll "$INSTDIR\weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.dll"
+          ExecWait '"$FluxingRegSvr32x64" /s "$FluxingWeaselX64Dll"' $0
+          ${If} $0 != 0
+            DetailPrint "Fluxing: regsvr32 on the versioned shim failed (exit $0); falling back to the boot-time swap"
+            FileOpen $R9 "$INSTDIR\weaselx64.dll.stage2" w
+            FileWrite $R9 "STAGE2_WEASELX64_NEEDED"
+            FileClose $R9
+            StrCpy $FluxingDegraded 1
+          ${EndIf}
+        ${EndIf}
         SetOverwrite on
         Goto weaselx64_done
       ${EndIf}
       File "weaselx64.dll"
-      Delete /REBOOTOK "$INSTDIR\weaselx64.dll.old.tmp"
+      Delete "$INSTDIR\weaselx64.dll.old.tmp"
+      ClearErrors
     ${Else}
       File "weaselx64.dll"
     ${EndIf}
@@ -568,13 +733,20 @@ program_files:
       ; completes the swap. Without this, the user is stuck with the
       ; old binary until they manually delete + reinstall.
       Delete /REBOOTOK "$INSTDIR\WeaselServer.exe"
+      ; L120: remember that the online replacement failed, so the
+      ; boot-time fallback and the restart request really apply.
+      FileOpen $R9 "$INSTDIR\WeaselServer.exe.stage2" w
+      FileWrite $R9 "STAGE2_WEASELSERVER_NEEDED"
+      FileClose $R9
+      StrCpy $FluxingDegraded 1
       DetailPrint "Fluxing: WeaselServer.exe locked; scheduled delete on reboot. Reboot to pick up new binary."
       SetOverwrite on
       Goto WeaselServer_done
     ${EndIf}
     ; Rename 成功,旧文件已经不在
     File "Win32\WeaselServer.exe"
-    Delete /REBOOTOK "$INSTDIR\WeaselServer.exe.old.tmp"
+    Delete "$INSTDIR\WeaselServer.exe.old.tmp"
+    ClearErrors
   ${Else}
     ; 全新装,直接 File
     File "Win32\WeaselServer.exe"
@@ -608,12 +780,16 @@ program_files:
       IfErrors 0 WeaselDeployer_done
       ; Phase D (v0.19.0.36) Reinforcement C
       Delete /REBOOTOK "$INSTDIR\WeaselDeployer.exe"
+      ; L120: the online replacement failed, so the boot-time
+      ; fallback and the restart request really apply.
+      StrCpy $FluxingDegraded 1
       DetailPrint "Fluxing: WeaselDeployer.exe locked; scheduled delete on reboot."
       SetOverwrite on
       Goto WeaselDeployer_done
     ${EndIf}
     File "Win32\WeaselDeployer.exe"
-    Delete /REBOOTOK "$INSTDIR\WeaselDeployer.exe.old.tmp"
+    Delete "$INSTDIR\WeaselDeployer.exe.old.tmp"
+    ClearErrors
   ${Else}
     File "Win32\WeaselDeployer.exe"
   ${EndIf}
@@ -632,12 +808,16 @@ program_files:
       IfErrors 0 WeaselSetup_done
       ; Phase D (v0.19.0.36) Reinforcement C
       Delete /REBOOTOK "$INSTDIR\WeaselSetup.exe"
+      ; L120: the online replacement failed, so the boot-time
+      ; fallback and the restart request really apply.
+      StrCpy $FluxingDegraded 1
       DetailPrint "Fluxing: WeaselSetup.exe locked; scheduled delete on reboot."
       SetOverwrite on
       Goto WeaselSetup_done
     ${EndIf}
     File "WeaselSetup.exe"
-    Delete /REBOOTOK "$INSTDIR\WeaselSetup.exe.old.tmp"
+    Delete "$INSTDIR\WeaselSetup.exe.old.tmp"
+    ClearErrors
   ${Else}
     File "WeaselSetup.exe"
   ${EndIf}
@@ -653,11 +833,16 @@ program_files:
   ; copied WeaselServer.exe manually), do a final best-effort delete of
   ; the live binary too — at worst, REBOOTOK leaves the user with a
   ; clean filesystem after reboot.
-  Delete /REBOOTOK "$INSTDIR\weasel.dll.old.tmp"
-  Delete /REBOOTOK "$INSTDIR\weaselx64.dll.old.tmp"
-  Delete /REBOOTOK "$INSTDIR\WeaselServer.exe.old.tmp"
-  Delete /REBOOTOK "$INSTDIR\WeaselDeployer.exe.old.tmp"
-  Delete /REBOOTOK "$INSTDIR\WeaselSetup.exe.old.tmp"
+  Delete "$INSTDIR\weasel.dll.old.tmp"
+  ClearErrors
+  Delete "$INSTDIR\weaselx64.dll.old.tmp"
+  ClearErrors
+  Delete "$INSTDIR\WeaselServer.exe.old.tmp"
+  ClearErrors
+  Delete "$INSTDIR\WeaselDeployer.exe.old.tmp"
+  ClearErrors
+  Delete "$INSTDIR\WeaselSetup.exe.old.tmp"
+  ClearErrors
 
   File "Win32\rime.dll"
   File "Win32\WinSparkle.dll"
@@ -744,13 +929,17 @@ program_files:
   ; must be registered. weasel.dll is the shim that x86 processes (notepad, VSCode etc)
   ; load via WoW64. Without it, HKCU\Software\Microsoft\CTF\Assemblies\0x00000804
   ; has no entry → user cannot activate Fluxing IME → candidate window never appears.
-  ExecWait 'regsvr32 /s "$R3\weasel\weaselx64.dll"' $0
+  ; L120: register the 64 bit shim that is really on disk, with a
+  ; 64 bit regsvr32.  See the note next to $FluxingRegSvr32x64.
+  ExecWait '"$FluxingRegSvr32x64" /s "$FluxingWeaselX64Dll"' $0
   ${If} $0 != 0
-    DetailPrint "Fluxing: regsvr32 weaselx64.dll failed (exit $0); TSF TIP may not be registered. Run 'regsvr32 $R3\weasel\weaselx64.dll' as admin manually."
+    DetailPrint "Fluxing: regsvr32 on $FluxingWeaselX64Dll failed (exit $0); TSF TIP may not be registered. Run 'regsvr32 $FluxingWeaselX64Dll' as admin manually."
   ${EndIf}
-  ExecWait 'regsvr32 /s "$R3\weasel\weasel.dll"' $1
+  ; L120: register the 32 bit shim that is really on disk, with a
+  ; 32 bit regsvr32.
+  ExecWait '"$FluxingRegSvr32" /s "$FluxingWeaselDll"' $1
   ${If} $1 != 0
-    DetailPrint "Fluxing: regsvr32 weasel.dll failed (exit $1); x86 TSF TIP may not be registered. Run 'regsvr32 $R3\weasel\weasel.dll' as admin manually."
+    DetailPrint "Fluxing: regsvr32 on $FluxingWeaselDll failed (exit $1); x86 TSF TIP may not be registered. Run 'regsvr32 $FluxingWeaselDll' as admin manually."
   ${EndIf}
 
   ; spec 066: workaround for CoCreateInstance(CLSID_TF_CategoryMgr)
@@ -827,10 +1016,16 @@ program_files:
   ;   留下 WeaselServer.exe.old.tmp (旧 binary) + 没写新 binary. 此时 schedule
   ;   Stage 2 启动项: At-startup 时跑 cmd batch copy staged binary → real binary.
   ;   安装器把新 binary 也写到 %TEMP%\fluxing-staged\ 让 Stage 2 读得到。
-  IfFileExists "$INSTDIR\WeaselServer.exe.old.tmp" 0 weasel_write_ok
+  ; L120: the boot-time fallback is driven by the marker that the
+  ; failed replacement writes, not by the presence of a leftover
+  ; .old.tmp -- otherwise every install would schedule the swap
+  ; and ask for a restart even when nothing was left to do.
+  IfFileExists "$INSTDIR\WeaselServer.exe.stage2" 0 weasel_write_ok
     DetailPrint "Fluxing v0.19.0.48: WeaselServer.exe PPL-locked; staging binary for boot-time swap"
     CreateDirectory "$TEMP\fluxing-staged"
-    CopyFiles /SILENT /FILESONLY "$PLUGINSDIR\..\Win32\WeaselServer.exe" "$TEMP\fluxing-staged\WeaselServer.exe"
+    ; L120: the new binary is already staged above, so the old copy
+    ; from "$PLUGINSDIR\..\Win32\WeaselServer.exe" (a path that
+    ; never existed) is gone.
     ; Stage 2 batch script — runs at next boot via Task Scheduler
     FileOpen $R9 "$TEMP\fluxing-staged\stage2-install.bat" w
     FileWrite $R9 "@echo off$\n"
@@ -849,13 +1044,15 @@ program_files:
     Goto skip_post_install_message
   ; v0.20.0.4 F3: weaselx64.dll Stage 2 trigger (separate task FluxingStage2InstallX64).
   ;   Marker $INSTDIR\weaselx64.dll.stage2 由 line 500-524 在 Rename AND File 都失败时写。
-  ;   Stage 2 batch 在下次重启时 copy $PLUGINSDIR\..\weaselx64.dll (源 output/) 到 $INSTDIR
+  ;   Stage 2 batch 在下次重启时 copy $TEMP\fluxing-staged\weaselx64.dll 到 $INSTDIR
   ;   并清 marker + 自删 task。
   ${If} ${RunningX64}
     ${If} ${FileExists} "$INSTDIR\weaselx64.dll.stage2"
       DetailPrint "Fluxing v0.20.0.4 F3: weaselx64.dll TSF-locked at install; staging new binary for boot-time swap (spec 076 race fix deployment)"
       CreateDirectory "$TEMP\fluxing-staged"
-      CopyFiles /SILENT /FILESONLY "$PLUGINSDIR\..\weaselx64.dll" "$TEMP\fluxing-staged\weaselx64.dll"
+      ; L120: the new binary is already staged above, so the old copy
+      ; from "$PLUGINSDIR\..\weaselx64.dll" (a path that never
+      ; existed) is gone.
       FileOpen $R9 "$TEMP\fluxing-staged\stage2-install-x64.bat" w
       FileWrite $R9 "@echo off$\n"
       FileWrite $R9 'xcopy /Y /Q "%TEMP%\fluxing-staged\weaselx64.dll" "$INSTDIR\weaselx64.dll*"$\n'
@@ -888,15 +1085,26 @@ program_files:
   WriteRegStr HKCU "Software\Rime\Weasel\Updates" "CheckForUpdates" "1"
   end:
 
-  ; Prompt reboot
-  StrCmp $0 "Upgrade" 0 +2
-  SetRebootFlag true
+  ; L120: only ask for a reboot when something really could not be
+  ; replaced online.  SetRebootFlag used to be set unconditionally
+  ; in Upgrade mode, and on top of that every Delete /REBOOTOK in
+  ; this script left a file behind for the next boot, which NSIS
+  ; turns into a reboot request.  So even a fully successful
+  ; upgrade used to end with "please restart".  The TSF shim now
+  ; takes effect through a versioned shim and WeaselServer.exe
+  ; exits through its own IPC, so only the boot-time fallback
+  ; needs a reboot.
+  ${If} $FluxingDegraded == 1
+    SetRebootFlag true
+  ${EndIf}
 
-  ; L51: notify the user to restart WeaselServer / sign out and back in
-  ; after the install completes. Silent installs (/S) skip this prompt
-  ; because the messagebox blocks unattended mass-deployment.
+  ; L120: the update is live now.  The TSF shim was either replaced in
+  ; place or re-registered under a versioned name, and WeaselServer.exe
+  ; was restarted from the new binary, so the user only has to reopen
+  ; the applications that were running.  Silent installs (/S) skip this
+  ; prompt because the messagebox blocks unattended mass-deployment.
   IfSilent skip_post_install_message
-  MessageBox MB_OK|MB_ICONINFORMATION "火流猩输入法已安装。$\r$\n$\r$\n请重启 WeaselServer.exe 或注销后重新登录以应用新版本。$\r$\n$\r$\n(快捷设置栏:按 Alt+, 或点击任务栏中英文图标)"
+  MessageBox MB_OK|MB_ICONINFORMATION "火流猩输入法已安装。$\r$\n$\r$\n请关闭并重新打开正在使用输入法的应用，新打开的应用即刻使用新版本（不需要重启电脑）。$\r$\n$\r$\n(press Alt+, or click the language icon in the task bar)"
   skip_post_install_message:
 
 SectionEnd
@@ -925,7 +1133,25 @@ SectionEnd
 
 Section "Uninstall"
 
-  ExecWait '"$INSTDIR\WeaselServer.exe" /quit'
+  ; L120: ask the running server to exit through its own IPC and
+  ; wait for it.  ExecWait would hang the installer for good when
+  ; that server is stuck (L13), and taskkill cannot stop a
+  ; protected process (L103-I), so the request is fired and the
+  ; process is polled instead.  taskkill exits with 128 when no
+  ; such process exists, which is the signal to stop waiting.
+  Exec '"$INSTDIR\WeaselServer.exe" /quit'
+  StrCpy $FluxingQuitDone 0
+  ${For} $R9 1 20
+    ${If} $FluxingQuitDone == 0
+      nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe'
+      Pop $0
+      Pop $1
+      ${If} $0 == 128
+        StrCpy $FluxingQuitDone 1
+      ${EndIf}
+      Sleep 500
+    ${EndIf}
+  ${Next}
   ; L13 fix: force-kill any zombie WeaselServer.exe (see call_uninstaller above).
   nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
     Pop $0
@@ -949,6 +1175,9 @@ Section "Uninstall"
   Delete  "$INSTDIR\data\opencc\*.*"
   Delete  "$INSTDIR\data\preview\*.*"
   Delete  "$INSTDIR\data\*.*"
+  ; L120: remove the versioned shims the fallback path may have left.
+  Delete  "$INSTDIR\weasel.*.dll"
+  Delete  "$INSTDIR\weaselx64.*.dll"
   Delete  "$INSTDIR\*.*"
   RMDir  "$INSTDIR\data\opencc"
   RMDir  "$INSTDIR\data\preview"

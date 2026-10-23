@@ -1,5 +1,59 @@
 
 
+## [0.21.0.3-fluxing] - 2026-10-23
+
+### fix(installer): 装机更新不再需要重启
+
+**User-visible**:
+
+- 升级装机后**不再需要重启电脑**: 装完直接用, 提示语从
+  「请重启 WeaselServer.exe 或注销后重新登录」改成「请关闭并重新打开
+  正在使用输入法的应用」
+- 装机过程**不再杀掉 ctfmon.exe / TextInputHost.exe**, 因此不会再出现 dwm /
+  开始菜单的崩溃弹窗
+- 64 位 TSF (weaselx64.dll) 的注册表项现在由 64 位 regsvr32 写入; 之前从 32 位
+  安装器里调裸名 regsvr32 根本加载不了 64 位 DLL
+
+**Root cause** (四个独立成因叠加, 每一个都足以让「必须重启」成立):
+
+1. `Delete /REBOOTOK` 共 16 处: 命中被锁文件时会留下「重启后删除」记录,
+   而 NSIS 会把任何待删除文件变成一次重启请求 —— 即使文件
+   全部替换成功也照样要求重启
+2. `.onInit` 里的 `taskkill /F /IM ctfmon.exe /T` + `TextInputHost.exe` 循环: Windows 会在约 2 秒内自动
+   拉起这两个宿主, 被拉起的新宿主立刻重新映射旧 TSF shim, 后续 File
+   必然失败; 而杀 TextInputHost 会连带打崩 dwm 与开始菜单
+   (2026-10-23 15:52-15:55 实测: TextInputHost 崩溃 -> dwm 连崩 3 次 -> StartMenu 崩溃)
+3. `SetRebootFlag true` 挂在 `StrCmp $0 "Upgrade"` 上, 而 `$0` 早在 regsvr32 / nsExec 处被覆盖 —— 该
+   判断实际从不成立
+4. 开机兜底 (Stage 2) 的源路径 `"$PLUGINSDIR\..\Win32\WeaselServer.exe"` 与
+   `"$PLUGINSDIR\..\weaselx64.dll"` **从不存在**, 开机 xcopy 无源可拷, 旧二进制连
+   重启也换不掉
+
+**Fix**:
+
+- 全部 `Delete /REBOOTOK` 改为普通 `Delete` + `ClearErrors`; 仅保留 3 处真正的降级分支
+  (WeaselServer / WeaselDeployer / WeaselSetup), 那里的确实需要重启
+- 删除 `.onInit` 的 ctfmon / TextInputHost taskkill 循环, 改用「版本化 shim」: 旧 shim 被锁时
+  把新 shim 装成 `weasel.<ver>.<build>.dll` 并把 TSF 注册指过去 —— 新开的应用
+  用新版, 已开的应用继续用旧版, 互不影响
+- `SetRebootFlag` 改由 `$FluxingDegraded` 驱动, 只在真的退到开机兜底时才置位
+- Stage 2 的源改为装机时真正 stage 到 `%TEMP%\fluxing-staged\` 的新二进制
+- 开机兜底的触发条件从「存在 .old.tmp 残留」改成「本次替换确实失败时
+  写的 marker」
+- 64 位 / 32 位注册分别用 `C:\Windows\Sysnative\regsvr32.exe` 与 `C:\Windows\SysWOW64\regsvr32.exe`
+- `/quit` 从阻塞的 `ExecWait` 改为「发请求 + 轮询进程是否消失」 (最多 10s),
+  避免卡死安装器 (L13)
+- 顺带修: `SetOutPath $INSTDIR\weasel` 在 `$INSTDIR` 已是引擎目录后多加了一层, 导致
+  QuickPanel 找不到 logo
+
+**Verification** (2026-10-23 真实装机, 静默升级 exit 0 / 35s):
+
+- md5 三方全等: `WeaselServer.exe` / `weasel.dll` / `weaselx64.dll` 的 output == D:\Program Files\fluxing\weasel
+- 64 位 TIP -> `weaselx64.dll` (PE 0x8664), 32 位 TIP -> `weasel.dll` (PE 0x14C)
+- Fluxing 相关 PendingFileRenameOperations 零新增 (108 -> 108) => 不需要重启
+- ctfmon / TextInputHost 启动时间未变 (装机全程没杀它们), 安装期间 Application Error = 0
+- 无 `.stage2` marker、无版本化 shim、无 `.old.tmp` 残留
+
 ## [0.21.0.2-fluxing] - 2026-10-23
 
 ### fix(fluxing): 全量重编, x64 TSF 首次包含 Shift 释放选候选状态机
