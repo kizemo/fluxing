@@ -39,6 +39,42 @@ PRINTABLE = re.compile(r"[\x20-\x7e]{8,}")
 MIN_ANCHOR = 8
 # ASCII runs of any length - used for structural alignment checks.
 ASCII_RUN = re.compile(r"[\x20-\x7e]+")
+# a path segment that still carries its separator, e.g. "test/TestX.cpp" or
+# "tools\\build_verify.lua" - the shape a token is left in when the letter
+# that started it was swallowed by an un-escaped "\t".
+PATH_SEGMENT = re.compile(r"[A-Za-z0-9_.-]+[\\/]")
+
+# The set of characters the file under inspection actually uses.  A GBK
+# round trip is only accepted when the recovered text could plausibly be the
+# original *for this document*; see _plausible().
+_REPERTOIRE: set[str] | None = None
+
+
+def set_repertoire(chars) -> None:
+    """Publish the character repertoire of the file under inspection."""
+    global _REPERTOIRE
+    _REPERTOIRE = set(chars)
+
+
+def _plausible(recovered: str) -> bool:
+    """Could ``recovered`` be the original text of this document?
+
+    A GBK misread turns clean UTF-8 into mojibake and the round trip brings
+    the original back.  But a perfectly clean Chinese line can round trip as
+    well, purely by coincidence: the GBK bytes of some characters are also
+    valid UTF-8.  Measured 2026-10-23, the heading
+    ``### 10.5 spec 037 spec / plan / tasks 状态`` round trips to
+    ``### 10.5 spec 037 spec / plan / tasks ״̬`` and was reported
+    as damaged although the file holds the correct UTF-8 (verified byte by
+    byte: ``e7 8a b6 e6 80 81``).
+
+    The tell is that the recovered text uses characters the document never
+    contains anywhere else, so it cannot be what the author wrote.  Without
+    a known repertoire the round trip is accepted, exactly as before.
+    """
+    if _REPERTOIRE is None:
+        return True
+    return all(ch in _REPERTOIRE or ch.isascii() for ch in recovered)
 
 
 def git(repo: str, *args: str) -> bytes:
@@ -63,6 +99,117 @@ def c0_controls(line: str) -> int:
     lessons-learned.md carried control characters and nothing else.
     """
     return sum(1 for ch in line if ord(ch) < 0x20 and ch != "\t")
+
+
+def inline_code_spans(line: str) -> list[tuple[int, int]]:
+    """Index ranges covered by `...` inline code spans.
+
+    CommonMark: a code span opened by an unmatched backtick runs to the end
+    of the line, so an odd number of backticks leaves the tail covered.
+    """
+    ticks = [i for i, ch in enumerate(line) if ch == "`"]
+    spans: list[tuple[int, int]] = []
+    k = 0
+    while k + 1 < len(ticks):
+        spans.append((ticks[k], ticks[k + 1]))
+        k += 2
+    if k < len(ticks):
+        spans.append((ticks[k], len(line) - 1))
+    return spans
+
+
+def fenced_code_lines(lines: list[str]) -> list[bool]:
+    """True for every line that sits inside a ``` fenced code block."""
+    inside = False
+    flags: list[bool] = []
+    for line in lines:
+        if line.strip().startswith("```"):
+            inside = not inside
+            flags.append(True)
+            continue
+        flags.append(inside)
+    return flags
+
+
+def tsv_block_lines(lines: list[str]) -> list[bool]:
+    """True for lines belonging to a TAB separated data block.
+
+    A contiguous run of TAB bearing lines anchored by a ``#@/`` line is the
+    rime userdb header quoted in project-knowledge.md; its TABs are field
+    separators, not damage.
+    """
+    flags = [False] * len(lines)
+    i = 0
+    while i < len(lines):
+        if "\t" not in lines[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(lines) and "\t" in lines[j]:
+            j += 1
+        if any(line.startswith("#@/") for line in lines[i:j]):
+            for k in range(i, j):
+                flags[k] = True
+        i = j
+    return flags
+
+
+def inline_tab_damage(lines: list[str]) -> list[int]:
+    """Line numbers (0-based) that carry an un-escaped ``\\t`` TAB.
+
+    TAB is the one C0 control that can be legitimate: it is the
+    indentation character of every C/C++ source file and the field
+    separator of the rime userdb header.  It therefore cannot be judged
+    one line at a time - the judgement needs the surrounding document.
+
+    The damage fingerprint is precise.  An un-escaped ``\\t`` swallowed the
+    letter that had formed it, so the byte that replaced the escape is a
+    TAB and what follows it is the *rest* of the original word.  In the
+    middle of a line that rest is unmistakable -- a path, an identifier, a
+    command.  At the start of a line it is ambiguous with indentation, so
+    the line is only reported when the remainder still looks like the
+    first segment of a path (``est/TestX.cpp`` -> ``test/TestX.cpp``),
+    which is what a swallowed ``t`` leaves behind.
+
+    Exemptions, each one a documented convention of this repository:
+      * a TAB inside an inline-code span - the spec 078 provenance
+        transcripts quote the damaged bytes verbatim on purpose;
+      * a TAB inside a fenced code block - same reason;
+      * a contiguous TSV block anchored by a ``#@/`` line - the rime
+        userdb header quoted in project-knowledge.md;
+      * a ``- OLD:`` line - spec 078's before/after transcript marker.
+    """
+    fences = fenced_code_lines(lines)
+    tsv = tsv_block_lines(lines)
+    hits: list[int] = []
+    for i, line in enumerate(lines):
+        if fences[i] or tsv[i]:
+            continue
+        if line.startswith("- OLD: "):
+            continue
+        if "\t" not in line:
+            continue
+        spans = inline_code_spans(line)
+        lead = len(line) - len(line.lstrip(" \t"))
+        for pos, ch in enumerate(line):
+            if ch != "\t":
+                continue
+            if any(a <= pos <= b for a, b in spans):
+                continue
+            if pos < lead:
+                # A leading TAB is normally indentation.  It is damage only
+                # when the swallowed letter left a path shaped token behind
+                # it: the first segment of a path such as "test/TestX.cpp"
+                # lost its "t", so the segment still ends in a separator.
+                # A TAB that indents a plain word ("\tindented item") is not
+                # damage and must not be reported.
+                tail = line[pos + 1:]
+                token = re.split(r"[ \t]", tail)[0] if tail else ""
+                if not PATH_SEGMENT.match(token):
+                    continue
+            hits.append(i)
+            break
+    return hits
 
 
 def is_damaged(line: str) -> bool:
@@ -97,6 +244,8 @@ def gbk_misread(line: str) -> str | None:
     except UnicodeDecodeError:
         return None
     if out == line:
+        return None
+    if not _plausible(out):
         return None
     return out
 
@@ -324,8 +473,6 @@ def main() -> int:
     lines = text.split("\n")
     stripped = [line[:-1] if line.endswith("\r") else line for line in lines]
 
-    damaged_idx = [i for i, line in enumerate(stripped) if is_damaged(line)]
-
     revs = revisions(repo, args.path)
     corpus: list[tuple[str, list[str]]] = []
     for rev in revs:
@@ -333,11 +480,34 @@ def main() -> int:
         if hist:
             corpus.append((rev, hist))
     corpus.reverse()  # oldest first - prefer the earliest clean wording
+
+    # The character repertoire of this document: the current file plus every
+    # line in its history.  A GBK round trip is only accepted when the text
+    # it recovers could have been written in this document at all; see
+    # _plausible().  Publishing the repertoire before the damage scan is what
+    # keeps a clean Chinese line from being reported as damaged.
+    repertoire = set("".join(stripped))
+    for _rev, hist in corpus:
+        repertoire.update("".join(hist))
+    set_repertoire(repertoire)
+
+    tab_idx = inline_tab_damage(stripped)
+    tab_set = set(tab_idx)
+    damaged_idx = sorted(
+        {i for i, line in enumerate(stripped) if is_damaged(line)} | tab_set
+    )
+
     index = build_index(corpus)
 
     fixes: list[tuple[int, str, str, float, str]] = []
     unmatched: list[tuple[int, str, str | None, float]] = []
     for idx in damaged_idx:
+        if idx in tab_set:
+            # A TAB class line has no clean ancestor to copy from; the
+            # restoration is mechanical (TAB -> the letter it swallowed),
+            # so it is reported on its own instead of being matched
+            # against the history.
+            continue
         match = best_match(stripped[idx], index)
         if match is None:
             partial = partial_match(stripped[idx], index)
@@ -405,6 +575,25 @@ def main() -> int:
                 "",
             ]
 
+    if tab_idx:
+        out_lines += [
+            "## TAB class damage (an un-escaped `\\t` swallowed a letter)",
+            "",
+            f"count = {len(tab_idx)}",
+            "",
+            "The restoration is mechanical: the TAB byte goes back to the",
+            "letter it swallowed.  Review each line before applying it.",
+            "",
+        ]
+        for idx in tab_idx:
+            out_lines += [
+                f"### line {idx + 1}",
+                "",
+                "- damaged:  `" + stripped[idx].replace("\t", "<TAB>") + "`",
+                "- restored: `" + stripped[idx].replace("\t", "t") + "`",
+                "",
+            ]
+
     report = "\n".join(out_lines)
     if args.report:
         Path(args.report).write_text(report, encoding="utf-8")
@@ -415,8 +604,9 @@ def main() -> int:
     nul = sum(line.count(NUL) for line in stripped)
     c0 = sum(c0_controls(line) for line in stripped)
     print(
-        "damage-scan: {} damaged_lines={} fffd={} nul={} c0={} exit={}".format(
-            args.path, len(damaged_idx), fffd, nul, c0, 1 if damaged_idx else 0
+        "damage-scan: {} damaged_lines={} fffd={} nul={} c0={} tab={} exit={}".format(
+            args.path, len(damaged_idx), fffd, nul, c0, len(tab_idx),
+            1 if damaged_idx else 0
         )
     )
 

@@ -77,6 +77,7 @@ def main() -> int:
 
     applied = 0
     problems = []
+    cr_delta = 0
     for key, new_text in sorted(rewrites.items(), key=lambda kv: int(kv[0])):
         try:
             idx = int(key) - 1
@@ -106,6 +107,11 @@ def main() -> int:
             problems.append("line {}: replacement is identical to the original".format(
                 idx + 1))
             continue
+        # A CR byte can itself be the damage (the ``\r`` escape was un-escaped
+        # into a raw CR and swallowed the letter that formed it), so the CR
+        # count is allowed to move by exactly the CR bytes the rewrite
+        # removes.  It must not move for any other reason.
+        cr_delta += new_text.count("\r") + len(eol) - original.count("\r")
         lines[idx] = new_text + eol
         applied += 1
 
@@ -121,9 +127,9 @@ def main() -> int:
     if out_bytes.count(b"\n") != orig_nl:
         return fail("newline count changed ({} -> {}); nothing written".format(
             orig_nl, out_bytes.count(b"\n")))
-    if out_bytes.count(b"\r") != orig_cr:
-        return fail("CR count changed ({} -> {}); nothing written".format(
-            orig_cr, out_bytes.count(b"\r")))
+    if out_bytes.count(b"\r") != orig_cr + cr_delta:
+        return fail("CR count changed by {} (expected {}); nothing written".format(
+            out_bytes.count(b"\r") - orig_cr, cr_delta))
     if out_bytes.startswith(b"\xef\xbb\xbf") != had_bom:
         return fail("BOM state changed; nothing written")
     if len(out.split("\n")) != orig_line_count:

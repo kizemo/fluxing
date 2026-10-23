@@ -15,6 +15,7 @@ Exit code 0 means every check passed.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import subprocess
 import sys
@@ -22,6 +23,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SPEC_DIR = ".specify/specs/078-repair-encoding-corruption"
+# The scanner lives in the repository that owns this script, not in the
+# repository that is being checked - otherwise a run against another tree
+# cannot even find the tool (measured 2026-10-23: the scanner was reported
+# as "exit 2", which is Python's "cannot open file", not a verdict).
+TOOL_REPO = Path(__file__).resolve().parents[2]
 
 
 def git_blob(rev: str, rel: str) -> bytes | None:
@@ -41,19 +47,31 @@ def git_log_commits(rel: str, limit: int) -> list[str]:
 def resolve_baseline(target: str, before_rev: str) -> tuple[bytes | None, str]:
     """Return the pre-repair blob and the revision label it came from.
 
-    With ``--before-rev auto`` the baseline is the state of the file right
-    before the newest commit that touched it -- that commit's parent.  The
-    rule is deliberately independent of the rewrite map: picking a baseline
-    by "the changed set equals the map" would let the map confirm itself.
+    The baseline is the state the repair started from.  With
+    ``--before-rev auto`` that is HEAD whenever the working tree still
+    differs from it: the change under review is then the uncommitted
+    repair, and every line it touched is a line the map has to declare.
+    When the working tree matches HEAD the repair is already committed and
+    the newest commit itself is what gets verified, so its parent is the
+    baseline.
+
+    The rule is deliberately independent of the rewrite map: picking a
+    baseline by "the changed set equals the map" would let the map confirm
+    itself.
     """
     if before_rev and before_rev != "auto":
         return git_blob(before_rev, target), before_rev
+    head = git_blob("HEAD", target)
+    work_path = REPO / target
+    if head is not None and work_path.is_file():
+        if work_path.read_bytes() != head:
+            return head, "HEAD"
     for sha in git_log_commits(target, 30):
         parent = sha + "^"
         blob = git_blob(parent, target)
         if blob is not None:
             return blob, parent
-    return git_blob("HEAD", target), "HEAD"
+    return head, "HEAD"
 
 
 def main() -> int:
@@ -75,6 +93,10 @@ def main() -> int:
     raw = (REPO / args.target).read_bytes()
     before, before_rev = resolve_baseline(args.target, args.before_rev)
     problems = []
+    changed: set[int] = set()
+    insert_blocks: list[tuple[int, int]] = []
+    delete_blocks: list[tuple[int, int]] = []
+    cr_delta = 0
 
     # 1. encoding + shape
     try:
@@ -99,10 +121,82 @@ def main() -> int:
         if raw.startswith(b"\xef\xbb\xbf") != b_bom:
             problems.append("BOM state changed (before {}, now {})".format(
                 b_bom, raw.startswith(b"\xef\xbb\xbf")))
+        # The baseline and the current file are aligned with difflib, not by
+        # line position.  A commit that appends a release section shifts every
+        # following line number, and a positional comparison then reports the
+        # whole tail as rewritten -- measured 2026-10-23, the CHANGELOG gate
+        # failed with 5497 undeclared lines right after the 0.21.0.2 section
+        # had been added.
+        #
+        # The line numbers of a rewrite map refer to the file *before* the
+        # rewrite (that is the contract of apply-line-rewrites.py), so the
+        # comparison is made on the baseline side of the alignment.
+        # A line that was rewritten from scratch does not always pair up in
+        # the opcode stream, so the opcodes are grouped: a delete next to an
+        # insert is one rewrite, not a deletion plus an addition.
+        b_lines_list = before.decode("utf-8", "replace").split("\n")
+        matcher = difflib.SequenceMatcher(
+            a=b_lines_list, b=lines, autojunk=False)
+        # Consecutive non-equal opcodes form one rewrite region.  A line that
+        # was rewritten from scratch does not always pair up, so a region can
+        # hold a delete next to an insert; what matters is that the region
+        # replaces as many baseline lines as it adds.
+        segments = []
+        current: list[tuple[str, int, int, int, int]] = []
+        for op in matcher.get_opcodes():
+            if op[0] == "equal":
+                if current:
+                    segments.append(current)
+                    current = []
+            else:
+                current.append(op)
+        if current:
+            segments.append(current)
+
+        total_del = 0
+        total_ins = 0
+        all_insert_ranges: list[tuple[int, int]] = []
+
+        for segment in segments:
+            base_side: list[int] = []
+            del_count = 0
+            ins_count = 0
+            ins_ranges: list[tuple[int, int]] = []
+            cur_cr = 0
+            base_cr = 0
+            for tag, i1, i2, j1, j2 in segment:
+                if tag in ("replace", "delete"):
+                    base_side.extend(range(i1 + 1, i2 + 1))
+                    base_cr += sum(b_lines_list[i].count("\r")
+                                   for i in range(i1, i2))
+                if tag == "delete":
+                    del_count += i2 - i1
+                if tag == "insert":
+                    ins_count += j2 - j1
+                    ins_ranges.append((j1 + 1, j2 - j1))
+                cur_cr += sum(lines[j].count("\r") for j in range(j1, j2))
+            changed.update(base_side)
+            cr_delta += cur_cr - base_cr
+            all_insert_ranges.extend(ins_ranges)
+            total_del += del_count
+            total_ins += ins_count
+
         if raw.count(b"\n") != b_lines:
-            problems.append("line count changed ({} -> {})".format(b_lines, raw.count(b"\n")))
-        if raw.count(b"\r") != b_cr:
-            problems.append("CR count changed ({} -> {})".format(b_cr, raw.count(b"\r")))
+            # the repair changed the number of lines: the added and the
+            # removed ones have to be declared, a rewrite that keeps the
+            # line count does not.  (The totals of the diff opcodes cannot
+            # be used for this: a replace block may map several baseline
+            # lines onto a different number of lines.)
+            insert_blocks.extend(all_insert_ranges)
+            if total_del > total_ins:
+                delete_blocks.append((1, total_del - total_ins))
+        # A CR byte can itself be the damage: the ``\r`` escape was un-escaped
+        # into a raw CR, which swallowed the letter that formed it.  So the CR
+        # count is allowed to move by exactly the CR bytes the changed lines
+        # remove, and by nothing else.
+        if raw.count(b"\r") != b_cr + cr_delta:
+            problems.append("CR count changed ({} -> {}, expected {})".format(
+                b_cr, raw.count(b"\r"), b_cr + cr_delta))
     else:
         problems.append("cannot read the pre-repair revision {}".format(before_rev))
 
@@ -126,8 +220,8 @@ def main() -> int:
 
     # 3. the project scanner
     r = subprocess.run(
-        ["python", str(REPO / "scripts" / "test-infra" / "scan-encoding-damage.py"),
-         "--path", args.target],
+        ["python", str(TOOL_REPO / "scripts" / "test-infra" / "scan-encoding-damage.py"),
+         "--repo", str(REPO), "--path", args.target],
         cwd=str(REPO), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out = r.stdout.decode("utf-8", "replace")
     for line in out.splitlines():
@@ -141,18 +235,16 @@ def main() -> int:
     # 4. only declared lines changed
     map_path = REPO / args.map
     if map_path.exists():
-        declared = set(json.loads(map_path.read_bytes().decode("utf-8"))["lines"].keys())
+        payload = json.loads(map_path.read_bytes().decode("utf-8"))
+        declared = set(payload["lines"].keys())
         declared_int = {int(k) for k in declared}
         print("map lines  : {}".format(len(declared_int)))
         if declared_int:
             print("map range  : {}..{}".format(min(declared_int), max(declared_int)))
         if before is not None:
-            b_lines_list = before.decode("utf-8", "replace").split("\n")
-            changed = set()
-            for i, (a, b) in enumerate(zip(b_lines_list, lines), start=1):
-                if a.rstrip("\r") != b.rstrip("\r"):
-                    changed.add(i)
-            print("changed    : {} line(s)".format(len(changed)))
+            print("rewritten  : {} baseline line(s)".format(len(changed)))
+            print("inserted   : {} block(s)".format(len(insert_blocks)))
+            print("deleted    : {} block(s)".format(len(delete_blocks)))
             undeclared = sorted(changed - declared_int)
             if undeclared:
                 problems.append("{} line(s) changed but were not declared: {}".format(
@@ -161,6 +253,20 @@ def main() -> int:
             if missing:
                 problems.append("{} declared line(s) did not change: {}".format(
                     len(missing), missing[:20]))
+            declared_inserts = {tuple(x) for x in payload.get("inserts", [])}
+            got_inserts = set(insert_blocks)
+            if declared_inserts != got_inserts:
+                problems.append(
+                    "inserted block(s) {} do not match the declared {} "
+                    "(every inserted block has to be listed in the map)".format(
+                        sorted(got_inserts), sorted(declared_inserts)))
+            declared_deletes = {tuple(x) for x in payload.get("deletes", [])}
+            got_deletes = set(delete_blocks)
+            if declared_deletes != got_deletes:
+                problems.append(
+                    "deleted block(s) {} do not match the declared {} "
+                    "(every deleted block has to be listed in the map)".format(
+                        sorted(got_deletes), sorted(declared_deletes)))
     else:
         problems.append("map file not found: {}".format(args.map))
 
