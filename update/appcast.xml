@@ -4,25 +4,25 @@
   Fluxing / 火流猩输入法 - Appcast 更新频道模板
   =================================================
   本文件与线上生产频道保持一致:
-    https://www.aiec.fun/pinyin/appcast.xml   (200 OK, 2026-10-22 核验)
+    https://www.aiec.fun/pinyin/appcast.xml   (200 OK, 2026-10-23 核验)
 
   发布方式: 不是 GitHub Pages。Fluxing 的 appcast 由本地 staging 目录
     E:\办公文件\L1网站\pinyin\appcast.xml
   经 sftp_sync.py 原子同步到 www.aiec.fun/pinyin/ (per CHANGELOG 0.19.0.59)。
 
-  已发布版本对照 (2026-10-22):
+  已发布版本对照 (2026-10-23):
     - 最新已发布 = 0.21.0.0 (pubDate 2026-08-10), 安装包在 staging 目录内。
     - release/ 里的 0.21.0.1 从未发布到 www.aiec.fun/pinyin/。
-      download.php 找不到指定文件时会回退到"最新安装包", 所以
-      ?file=fluxing-0.21.0.1-installer.exe 会静默返回 0.21.0.0 的字节
-      (Content-Length 42788787 = 0.21.0.0 的尺寸, 不是 0.21.0.1 的 42792149)。
+      download.php 自 2026-10-23 起在指定文件不存在时直接返回 404
+      (不再静默回退到最新安装包), 所以 ?file=fluxing-0.21.0.1-installer.exe
+      返回 404, 而不是 0.21.0.0 的字节 (Content-Length 42788787)。
       => 在把 0.21.0.1 的 exe 真正上传到 staging 目录之前, 不要把 0.21.0.1
          写进本文件, 否则用户会下载到与版本号不符的二进制。
 
-  运行时 feed URL 仍编译在 WeaselServer.exe 内 (WeaselServer.rc APPCAST 字符串表):
-    FEEDURL = https://rime.github.io/release/weasel/appcast.xml
-  改它需要重编 WeaselServer.exe, 当前仓库无法全量重编 (boost 静态库缺失)。
-  上游 feed 的版本号 (0.17.4) 低于 Fluxing 当前版本, Sparkle 不会提示更新。
+  运行时 feed URL 编译在 WeaselServer.exe 内 (WeaselServer.rc APPCAST 字符串表),
+  自 2026-10-23 起已改指本机自有渠道 (此前指向 rime.github.io):
+    FEEDURL / MANUALUPDATEFEEDURL = https://www.aiec.fun/pinyin/appcast.xml
+    TESTINGFEEDURL / TESTINGMANUALUPDATEFEEDURL = https://www.aiec.fun/pinyin/testing-appcast.xml
 -->
 
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">

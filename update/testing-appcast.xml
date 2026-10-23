@@ -3,16 +3,16 @@
 <!--
   Fluxing / 火流猩输入法 - 测试版 Appcast 频道模板
   =================================================
-  ⚠ 该频道的线上端点 https://www.aiec.fun/pinyin/testing-appcast.xml 尚未部署
-    (2026-10-22 实测 HTTP 404), staging 目录里也没有对应文件。
-    在把本文件同步到 www.aiec.fun/pinyin/testing-appcast.xml 之前,
-    它的 <link> 指向的是一个尚不存在的地址。
+  该频道的线上端点已于 2026-10-23 部署并核验:
+    https://www.aiec.fun/pinyin/testing-appcast.xml   (200 OK, 27118 字节)
+  线上文件与本仓库 update/testing-appcast.xml 保持逐字节一致。
 
-  ⚠ 运行时 TESTINGFEEDURL 仍编译在 WeaselServer.exe 内 (WeaselServer.rc):
-    https://rime.github.io/testing/weasel/appcast.xml
-  改它需要重编 WeaselServer.exe, 当前仓库无法全量重编 (boost 静态库缺失)。
+  运行时 TESTINGFEEDURL 编译在 WeaselServer.exe 内 (WeaselServer.rc),
+  自 2026-10-23 起已改指本端点 (此前指向 rime.github.io/testing/weasel/appcast.xml):
+    TESTINGFEEDURL / TESTINGMANUALUPDATEFEEDURL
+                           = https://www.aiec.fun/pinyin/testing-appcast.xml
 
-  item 列表与稳定频道一致, 便于部署后直接切换 TESTINGFEEDURL。
+  item 列表与稳定频道一致 (54 个版本条目)。
 -->
 
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
