@@ -99,7 +99,7 @@ spec 078 修好了 `lessons-learned.md`（172 行）与 `CHANGELOG.md`（5 行�
 
 1. 14 个目标文件全部满足：`U+FFFD = 0`、`NUL = 0`、C0 控制字符 = 0、Tab 类损坏 = 0。
 2. 14 个目标文件全部满足：`scan-encoding-damage.py` 报 `damaged_lines=0`、`tab=0` 且 exit 0。
-3. 全仓库 261 个 tracked Markdown 的 TAB 类误报 = 0。
+3. 全仓库 tracked Markdown 的 TAB 类误报 = 0（普查时 261 个，spec 079 落地后 266 个）。
 4. 每个被改的行都在对应的 `rewrite-map-*.json` 里声明，且行内除被吞的字母外**逐字节不变**。
 5. `scripts/test-infra/test_encoding_toolchain.py` 全绿。
 6. 14 个目标文件的 `verify-encoding-repair.py` 全部 `ALL CHECKS PASSED`。

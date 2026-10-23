@@ -41,7 +41,7 @@ must report exactly the lines that were repaired -- no more, no less.
 
 ```
 1. forward: no TAB class damage in the current tree
-  PASS: 261 tracked markdown files report nothing
+  PASS: 266 tracked markdown files report nothing
 2. reverse: the damaged revisions report exactly their damage
   PASS: .specify/memory/lessons-learned.md reports tab=5 damaged=5
   PASS: .specify/specs/014-.../plan.md reports tab=5 damaged=11

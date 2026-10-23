@@ -101,7 +101,7 @@ rime userdb 头也用它分隔字段。所以 `c0_controls()` 把它排除在外
 
 1. 14 个目标文件 `U+FFFD=0 / NUL=0 / C0=0 / tab=0`；
 2. 14 个目标文件 scanner 报 `damaged_lines=0`、`tab=0` 且 `exit=0`；
-3. 全仓 261 个 tracked Markdown 的 TAB 类误报 = 0；
+3. 全仓 tracked Markdown 的 TAB 类误报 = 0（普查时 261 个，spec 079 落地后 266 个）；
 4. 13 个目标文件的 `verify-encoding-repair.py` 全部 `ALL CHECKS PASSED`。
 5. `scripts/test-infra/verify-tab-detector.py` 全部 `ALL CHECKS PASSED`。
 
