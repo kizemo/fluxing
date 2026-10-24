@@ -147,6 +147,15 @@ if %build_rime% == 1 (
   )
   call scripts\prepare-librime-lua.bat
   if errorlevel 1 exit /b 1
+  rem L121: deps/opencc needs a Windows build patch. find_library() cannot
+  rem see the bundled marisa-trie (it is a CMake target, not a marisa.lib on
+  rem disk), so LIBMARISA ends up empty and the link step fails. This patch
+  rem used to exist ONLY as an unrecorded hand-edit inside the librime
+  rem submodule, so a fresh clone could not build librime at all, and any
+  rem "git checkout ." inside librime silently broke the build. It is now
+  rem applied from the main repo, so the submodule itself stays clean.
+  powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1
+  if errorlevel 1 exit /b 1
   rem clean cache before building
   for %%a in ( build dist lib ^
     deps\glog\build ^
@@ -164,9 +173,11 @@ if %build_rime% == 1 (
   rem build Win32 librime
   set ARCH=Win32
   call :build_librime_platform Win32 %WEASEL_ROOT%\lib %WEASEL_ROOT%\output\Win32
-  rem clean the modified file
-  rem git checkout .
-  rem git submodule foreach git checkout .
+  rem L121: revert the opencc patch so the librime submodule is left in its
+  rem upstream state. The patch is re-applied automatically on the next build
+  rem (the script is idempotent), so reverting here is safe and keeps the
+  rem submodule pointer clean. See lessons-learned.md L121.
+  powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1 -Revert
 )
 
 rem -------------------------------------------------------------------------
