@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rime 输入法设置说明书(重点:快捷键)</title>
+<style>
+/* ============================================================
+   Rime 设置说明书 · 内联 CSS(单文件,无外部依赖)
+   分级标题 h1-h6 · 双强调色(品牌橙 #E8590C + 蓝 #1A56DB)
+   ============================================================ */
+:root {
+  --brand-orange: #e8590c;
+  --brand-blue: #1a56db;
+  --brand-blue-dark: #0f3f9c;
+  --ink: #1f2937;
+  --ink-soft: #4b5563;
+  --paper: #f4f6fa;
+  --card: #ffffff;
+  --line: #e2e8f0;
+  --code-bg: #17233b;
+  --code-ink: #dbe7ff;
+  --warn-bg: #fff7e6;
+  --warn-border: #ffc53d;
+  --star-bg: #fff4ec;
+  --star-border: #ff9d6b;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  line-height: 1.75;
+  font-size: 15px;
+}
+
+/* ============ 分级标题系统 ============ */
+h1, h2, h3, h4, h5, h6 { line-height: 1.35; margin: 1.6em 0 .6em; font-weight: 700; }
+h1 {
+  font-size: 34px;
+  letter-spacing: .5px;
+  background: linear-gradient(120deg, var(--brand-blue) 0%, #4f7df0 60%, var(--brand-orange) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin: 0 0 .3em;
+}
+h2 {
+  font-size: 26px;
+  color: var(--brand-blue-dark);
+  padding-left: 14px;
+  border-left: 6px solid var(--brand-orange);
+  margin-top: 2.2em;
+}
+h2.star {
+  border-left: 6px solid var(--brand-orange);
+  background: linear-gradient(90deg, rgba(232,89,12,.09) 0%, rgba(232,89,12,0) 60%);
+  padding: 8px 0 8px 14px;
+  border-radius: 4px;
+}
+h3 {
+  font-size: 20px;
+  color: #14532d;
+  padding-left: 10px;
+  border-left: 4px solid #22c55e;
+}
+h4 { font-size: 17px; color: var(--brand-blue-dark); }
+h5 { font-size: 15px; color: var(--ink-soft); }
+h6 { font-size: 13px; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; }
+
+/* ============ 布局 ============ */
+.layout { display: grid; grid-template-columns: 280px 1fr; gap: 0; max-width: 1400px; margin: 0 auto; }
+main { padding: 32px 48px 80px; background: var(--card); min-width: 0; }
+main > section { max-width: 980px; }
+
+/* ============ 页头 ============ */
+header.hero {
+  background: linear-gradient(135deg, #0f2a63 0%, #1a56db 55%, #2f6bff 100%);
+  color: #fff; padding: 44px 48px 36px;
+}
+header.hero h1 {
+  background: none; -webkit-text-fill-color: #fff; color: #fff;
+  font-size: 36px; margin: 0;
+}
+header.hero .subtitle { font-size: 15px; opacity: .92; margin-top: 10px; max-width: 900px; }
+header.hero .meta { margin-top: 16px; font-size: 13px; opacity: .8; }
+header.hero .meta b { opacity: 1; }
+header.hero .chips { margin-top: 14px; }
+header.hero .chip {
+  display: inline-block; background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.35);
+  padding: 3px 12px; border-radius: 999px; font-size: 12.5px; margin-right: 8px;
+}
+.tag { display: inline-block; background: var(--brand-orange); color: #fff; border-radius: 6px; padding: 2px 10px; font-size: 13px; font-weight: 600; vertical-align: 4px; margin-left: 10px; }
+
+/* ============ 侧边目录 ============ */
+nav.toc {
+  position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+  background: #fbfcfe; border-right: 1px solid var(--line); padding: 24px 18px;
+}
+nav.toc .toc-title { font-size: 13px; font-weight: 700; color: var(--brand-blue-dark); letter-spacing: 1.5px; margin-bottom: 12px; text-transform: uppercase; }
+nav.toc a { display: block; color: var(--ink-soft); text-decoration: none; font-size: 13.5px; padding: 4px 8px; border-radius: 6px; }
+nav.toc a:hover { background: #eef4ff; color: var(--brand-blue); }
+nav.toc a.lv2 { font-weight: 600; color: var(--ink); margin-top: 8px; }
+nav.toc a.lv2.star { color: var(--brand-orange); }
+nav.toc a.lv3 { padding-left: 22px; font-size: 12.8px; }
+
+/* ============ 段落 / 行内 ============ */
+p { margin: .75em 0; }
+strong { color: var(--ink); font-weight: 700; }
+em { color: var(--ink-soft); }
+a { color: var(--brand-blue); text-decoration: none; border-bottom: 1px solid rgba(26,86,219,.3); }
+a:hover { color: var(--brand-orange); border-bottom-color: var(--brand-orange); }
+
+/* ============ 代码 ============ */
+code {
+  font-family: Consolas, "JetBrains Mono", "Cascadia Code", monospace;
+  background: #eef2fb; color: #0b3f9c; padding: 2px 6px; border-radius: 4px; font-size: 13px;
+}
+pre {
+  background: var(--code-bg); color: var(--code-ink); border-radius: 10px;
+  padding: 18px 20px; margin: 14px 0; overflow-x: auto; line-height: 1.6;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 2px 8px rgba(15,42,99,.12);
+}
+pre code { background: none; color: inherit; padding: 0; font-size: 13px; }
+pre .c { color: #7d95c9; }          /* 注释 */
+pre .k { color: #ffb454; }          /* key/路径 */
+pre .s { color: #8ce99a; }          /* 字符串 */
+pre .o { color: #ff8787; }          /* 标点/符号 */
+
+/* ============ 表格 ============ */
+table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 13.8px; }
+th { background: var(--brand-blue); color: #fff; padding: 9px 12px; text-align: left; font-weight: 600; white-space: nowrap; }
+td { padding: 8px 12px; border: 1px solid var(--line); vertical-align: top; }
+tr:nth-child(even) td { background: #f8fafc; }
+tbody tr:hover td { background: #eef4ff; }
+td code, th code { background: #e6edfb; color: #0b3f9c; }
+
+/* ============ 引用 / 警告 ============ */
+blockquote {
+  border-left: 4px solid #94a3b8; background: #f8fafc; padding: 12px 18px;
+  margin: 14px 0; border-radius: 0 8px 8px 0; color: var(--ink-soft);
+}
+.warn {
+  background: var(--warn-bg); border: 1px solid var(--warn-border); border-left: 5px solid var(--warn-border);
+  padding: 12px 16px; border-radius: 8px; margin: 14px 0; font-size: 14px;
+}
+.warn::before { content: "⚠️ "; font-weight: 700; }
+.note {
+  background: #eef4ff; border: 1px solid #b6cdf5; border-left: 5px solid var(--brand-blue);
+  padding: 12px 16px; border-radius: 8px; margin: 14px 0; font-size: 14px;
+}
+.note::before { content: "📌 "; font-weight: 700; }
+
+/* ============ 列表 ============ */
+ul, ol { margin: .6em 0 .6em 1.5em; }
+li { margin: .3em 0; }
+li > ul, li > ol { margin-bottom: 0; }
+
+/* ============ 代码块语言标注 ============ */
+.lang-tag {
+  position: relative;
+}
+.lang-tag::before {
+  content: attr(data-lang); position: absolute; top: 0; right: 0;
+  background: rgba(255,255,255,.08); color: #9db4e0; font-size: 11px;
+  padding: 3px 10px; border-radius: 0 10px 0 8px; letter-spacing: 1px;
+}
+
+/* ============ 返回顶部 ============ */
+.back-top {
+  position: fixed; right: 28px; bottom: 28px; background: var(--brand-blue); color: #fff;
+  width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  text-decoration: none; box-shadow: 0 4px 14px rgba(26,86,219,.4); font-size: 18px; border: none;
+}
+.back-top:hover { background: var(--brand-orange); }
+
+/* ============ footer ============ */
+footer { background: #0f2a63; color: #b8c7e8; text-align: center; padding: 22px 16px; font-size: 13px; }
+footer a { color: #fff; }
+
+/* ============ 响应式 ============ */
+@media (max-width: 960px) {
+  .layout { grid-template-columns: 1fr; }
+  nav.toc { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--line); max-height: 300px; }
+  main { padding: 20px 18px 60px; }
+  header.hero { padding: 28px 20px; }
+  header.hero h1 { font-size: 26px; }
+  h1 { font-size: 26px; }
+  h2 { font-size: 21px; }
+  table { display: block; overflow-x: auto; }
+}
+@media print {
+  nav.toc, .back-top { display: none; }
+  body { background: #fff; }
+  main { padding: 0; }
+  h2 { page-break-before: auto; }
+}
+</style>
+</head>
+<body>
+
+<!-- ==================== 页头 ==================== -->
+<header class="hero">
+  <h1>Rime 输入法设置说明书</h1>
+  <div class="subtitle">重点:<strong>快捷键设置</strong> · 基于 Rime 官方 wiki + librime 源码 + 本机 rime_ice v0.21.0.1 现状</div>
+  <div class="chips">
+    <span class="chip">来源:rime/home.wiki master</span>
+    <span class="chip">源码:librime key_binder.cc / editor.cc</span>
+    <span class="chip">对照:output/data/rime_ice.*</span>
+    <span class="chip">研究日期:2026-08-12</span>
+  </div>
+  <div class="meta">适用于:<b>小狼毫 (Windows)</b> · <b>鼠鬚管 (macOS)</b> · <b>ibus/fcitx-rime (Linux)</b> 全平台</div>
+</header>
+
+<div class="layout">
+
+<!-- ==================== 侧边目录 ==================== -->
+<nav class="toc">
+  <div class="toc-title">📑 目录</div>
+  <a class="lv2" href="#s0">§0 阅读地图</a>
+  <a class="lv2" href="#s1">§1 体系总览</a>
+  <a class="lv2" href="#s2">§2 文件位置与组织</a>
+  <a class="lv3" href="#s2-1">2.1 用户文件夹</a>
+  <a class="lv3" href="#s2-2">2.2 用户文件夹产物</a>
+  <a class="lv3" href="#s2-3">2.3 共享文件夹</a>
+  <a class="lv2" href="#s3">§3 配置语法基石</a>
+  <a class="lv3" href="#s3-1">3.1 __include</a>
+  <a class="lv3" href="#s3-2">3.2 patch / __patch</a>
+  <a class="lv3" href="#s3-3">3.3 列表语法</a>
+  <a class="lv3" href="#s3-4">3.4 __append / __merge</a>
+  <a class="lv3" href="#s3-5">3.5 可选 ? 后缀</a>
+  <a class="lv3" href="#s3-6">3.6 执行顺序</a>
+  <a class="lv2" href="#s4">§4 部署 Deploy</a>
+  <a class="lv2" href="#s5">§5 设置项速查</a>
+  <a class="lv3" href="#s5-1">5.1 switches 开关</a>
+  <a class="lv3" href="#s5-2">5.2 menu 排版</a>
+  <a class="lv3" href="#s5-3">5.3 recognizer</a>
+  <a class="lv3" href="#s5-4">5.4 punctuator 标点</a>
+  <a class="lv3" href="#s5-5">5.5 ascii_composer</a>
+  <a class="lv3" href="#s5-6">5.6 speller/algebra</a>
+  <a class="lv3" href="#s5-7">5.7 translator</a>
+  <a class="lv3" href="#s5-8">5.8 app_options</a>
+  <a class="lv3" href="#s5-9">5.9 switcher/hotkeys</a>
+  <a class="lv2 star" href="#s6">§6 快捷键绑定 ⭐主菜</a>
+  <a class="lv3" href="#s6-1">6.1 整体规则</a>
+  <a class="lv3" href="#s6-2">6.2 修饰键 + 按键名</a>
+  <a class="lv3" href="#s6-3">6.3 六种 when 条件</a>
+  <a class="lv3" href="#s6-4">6.4 六种 action</a>
+  <a class="lv3" href="#s6-5">6.5 accept 接收规则</a>
+  <a class="lv3" href="#s6-6">6.6 send vs send_sequence</a>
+  <a class="lv3" href="#s6-7">6.7 完整例子</a>
+  <a class="lv3" href="#s6-8">6.8 ascii_composer 切换</a>
+  <a class="lv3" href="#s6-9">6.9 与前端的关系</a>
+  <a class="lv2 star" href="#s7">§7 editor 绑定 ⭐</a>
+  <a class="lv3" href="#s7-1">7.1 十二种 action</a>
+  <a class="lv3" href="#s7-2">7.2 默认绑定</a>
+  <a class="lv3" href="#s7-3">7.3 改写例子</a>
+  <a class="lv3" href="#s7-4">7.4 char_handler</a>
+  <a class="lv2" href="#s8">§8 默认键位参考</a>
+  <a class="lv2" href="#s9">§9 本机现状对照</a>
+  <a class="lv3" href="#s9-1">9.1 key_binder 现状</a>
+  <a class="lv3" href="#s9-2">9.2 editor 现状</a>
+  <a class="lv3" href="#s9-3">9.3 ascii_composer 修复</a>
+  <a class="lv3" href="#s9-4">9.4 custom patch 结构</a>
+  <a class="lv2" href="#s10">§10 排错与常见坑</a>
+  <a class="lv2" href="#s11">§11 同步</a>
+  <a class="lv2" href="#appA">附录 A 按键名对照</a>
+  <a class="lv2" href="#appB">附录 B 十个定制场景</a>
+  <a class="lv2" href="#appC">附录 C 来源参考</a>
+  <a class="lv2" href="#appD">附录 D 使用建议</a>
+</nav>
+
+<!-- ==================== 正文 ==================== -->
+<main>
+
+<!-- §0 阅读地图 -->
+<section id="s0">
+<h2>§0 · 阅读地图</h2>
+<table>
+<thead><tr><th>章节</th><th>主题</th><th>适合谁</th></tr></thead>
+<tbody>
+<tr><td>§1</td><td>体系总览</td><td>第一次接触 Rime 配置的人</td></tr>
+<tr><td>§2</td><td>文件位置与组织</td><td>想知道配置存在哪</td></tr>
+<tr><td>§3</td><td>YAML + 编译指令语法</td><td>要写 &lt;方案&gt;.custom.yaml 的人</td></tr>
+<tr><td>§4</td><td>部署(Deploy)</td><td>改完配置不生效的人</td></tr>
+<tr><td>§5</td><td>设置项速查(非快捷键)</td><td>想改标点、繁简、模糊音的人</td></tr>
+<tr><td><b>§6</b> ⭐</td><td><b>快捷键绑定(主菜)</b></td><td><b>几乎所有人都要看</b></td></tr>
+<tr><td><b>§7</b> ⭐</td><td><b>editor 绑定</b></td><td><b>要改空格/回车/退格行为的人</b></td></tr>
+<tr><td>§8</td><td>默认值参考</td><td>想知道什么键在干什么</td></tr>
+<tr><td>§9</td><td>本机现状对照</td><td>在改 rime_ice 的人</td></tr>
+<tr><td>§10</td><td>排错</td><td>出问题找不到原因的人</td></tr>
+<tr><td>§11</td><td>同步</td><td>多端保持一致</td></tr>
+<tr><td>附录 A</td><td>完整按键名</td><td>写 binding 不知道键名怎么拼的人</td></tr>
+<tr><td>附录 B</td><td>10 个最常见定制场景</td><td>抄例子最快</td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- §1 体系总览 -->
+<section id="s1">
+<h2>§1 · 体系总览:从配置到运行时</h2>
+<p>Rime 的设置是<strong>两层架构</strong>:</p>
+<pre class="lang-tag" data-lang="ARCHITECTURE"><code>┌─────────────────────────────────────────────────────────────┐
+│                       共享文件夹 (只读)                       │
+│  (小狼毫:安装目录\data   鼠鬚管:/Library/Input Methods/...   │
+│   ibus-rime:/usr/share/rime-data)                          │
+│  → default.yaml / luna_pinyin.schema.yaml / 预置方案源      │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            │  部署 (deploy) 时合并
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                       用户文件夹 (可写)                       │
+│  (小狼毫:%APPDATA%\Rime   鼠鬚管:~/Library/Rime             │
+│   ibus-rime:~/.config/ibus/rime   fcitx5:~/.local/share/...)│
+│                                                             │
+│  → &lt;方案&gt;.custom.yaml  ← 用户的「补靪」,不覆盖源文件         │
+│  → installation.yaml  ← 部署时间戳                            │
+│  → user.yaml          ← 上次退出时的方案/开关状态             │
+│  → build/*.schema.yaml / *.prism.bin / *.table.bin ← 编译产物│
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            │  运行时
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│              引擎 (key_event → processor → segmentor →        │
+│              translator → filter → commit/sink)              │
+└─────────────────────────────────────────────────────────────┘</code></pre>
+<p><strong>核心约定</strong>:</p>
+<ul>
+<li><strong>不要直接改共享文件夹</strong> — Rime 升级会覆盖你的修改。</li>
+<li><strong>用户改配置 = 在用户文件夹写 <code>&lt;name&gt;.custom.yaml</code></strong> — 不会被升级覆盖。</li>
+<li><strong>修改后必须重新部署</strong>(<code>小狼毫</code> = 开始菜单 → 重新部署;<code>鼠鬚管</code> = 系统输入法菜单 → 重新部署;<code>ibus-rime</code> = 状态栏 ⟲ 按钮)。</li>
+</ul>
+</section>
+
+<!-- §2 文件位置与组织 -->
+<section id="s2">
+<h2>§2 · 文件位置与组织</h2>
+
+<h3 id="s2-1">2.1 用户文件夹的位置</h3>
+<table>
+<thead><tr><th>发行版</th><th>路径</th><th>打开方式</th></tr></thead>
+<tbody>
+<tr><td>小狼毫 (Windows)</td><td><code>%APPDATA%\Rime</code></td><td>开始菜单 → 小狼毫输入法 → 用户文件夹</td></tr>
+<tr><td>鼠鬚管 (macOS)</td><td><code>~/Library/Rime</code></td><td>系统输入法菜单 → 鼠鬚管 → 用户设定…</td></tr>
+<tr><td>ibus-rime (Linux)</td><td><code>~/.config/ibus/rime</code></td><td>(≤ 0.9.1: <code>~/.ibus/rime</code>)</td></tr>
+<tr><td>fcitx-rime</td><td><code>~/.config/fcitx/rime</code></td><td>—</td></tr>
+<tr><td>fcitx5-rime</td><td><code>~/.local/share/fcitx5/rime/</code></td><td>—</td></tr>
+</tbody>
+</table>
+<div class="warn">librime 允许指定用户文件夹的<strong>绝对路径</strong>,<strong>请勿使用相对路径</strong>(参见 <a href="https://github.com/rime/weasel/issues/563">weasel#563</a>)。</div>
+
+<h3 id="s2-2">2.2 用户文件夹的产物</h3>
+<table>
+<thead><tr><th>文件/目录</th><th>性质</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td><code>&lt;方案&gt;.schema.yaml</code></td><td>用户装</td><td>输入方案定义</td></tr>
+<tr><td><code>&lt;词库&gt;.dict.yaml</code></td><td>用户装</td><td>词库源</td></tr>
+<tr><td><code>&lt;词库&gt;.txt</code></td><td>用户装</td><td>文本词表(如 custom_phrase.txt)</td></tr>
+<tr><td><code>&lt;name&gt;.custom.yaml</code></td><td><b>用户写</b></td><td><b>补靪,所有用户自定义走这里</b></td></tr>
+<tr><td><code>default.custom.yaml</code></td><td>用户写</td><td>全局补靪</td></tr>
+<tr><td><code>weasel.custom.yaml</code></td><td>用户写</td><td>小狼毫前端补靪(外观、配色)</td></tr>
+<tr><td><code>installation.yaml</code></td><td>输入法写</td><td>安装信息</td></tr>
+<tr><td><code>user.yaml</code></td><td>输入法写</td><td>上次的方案选择/开关状态</td></tr>
+<tr><td><code>&lt;方案&gt;.userdb/</code></td><td>输入法写</td><td>用户词库(leveldb 格式)</td></tr>
+<tr><td><code>build/*</code></td><td>部署生成</td><td>编译后的机读配置</td></tr>
+<tr><td><code>trash/*</code></td><td>升级生成</td><td>旧版本失效文件,可手动删</td></tr>
+</tbody>
+</table>
+
+<h3 id="s2-3">2.3 共享文件夹 (只读)</h3>
+<table>
+<thead><tr><th>发行版</th><th>路径</th></tr></thead>
+<tbody>
+<tr><td>小狼毫</td><td><code>&lt;安装目录&gt;\data</code></td></tr>
+<tr><td>鼠鬚管</td><td><code>/Library/Input Methods/Squirrel.app/Contents/SharedSupport</code></td></tr>
+<tr><td>ibus/fcitx-rime</td><td><code>/usr/share/rime-data</code></td></tr>
+</tbody>
+</table>
+<blockquote>找资源时,<strong>优先用户文件夹</strong>,没有再找共享文件夹。</blockquote>
+</section>
+
+<!-- §3 配置语法基石 -->
+<section id="s3">
+<h2>§3 · 配置语法基石:YAML + 编译指令</h2>
+<p>Rime 的 <code>.yaml</code> 是 <strong>YAML 1.1 + 4 个 Rime 专用编译指令</strong>的子集。</p>
+
+<h3 id="s3-1">3.1 <code>__include</code> — 包含</h3>
+<p>把另一个 YAML 节点<strong>整块插入</strong>当前位置。</p>
+<pre class="lang-tag" data-lang="yaml"><code><span class="c"># 包含本文件其他节点</span>
+local:
+  node: contents
+include_example:
+  __include: local/node   <span class="c"># 引用 local/node 的内容</span>
+
+<span class="c"># 包含另一个文件</span>
+include_example_2:
+  __include: config:/external/node    <span class="c"># 引用 config.yaml 的 /external/node</span></code></pre>
+<blockquote>路径 <code>&lt;filename&gt;:/</code> 的 <code>:/</code> 不可省略。扩展名 <code>.yaml</code> 可省略。</blockquote>
+<p><strong>包含 + 合并</strong>:<code>__include</code> 所在 map 除指令外的 key-value 与被包含的 map 合并:</p>
+<pre class="lang-tag" data-lang="yaml"><code>include_example_5:
+  __include: some_map
+  occupation: journalist   <span class="c"># 新增</span>
+  simplicity: very         <span class="c"># 覆盖被包含 map 的 simplicity: somewhat</span></code></pre>
+<p><strong>包含 list</strong>:所在 map 整个<strong>替换</strong>为引用的 list(不能用 <code>__include</code> 后追加,要用 <code>__append</code> 或 <code>__patch</code>)。</p>
+
+<h3 id="s3-2">3.2 <code>patch</code> 与 <code>__patch</code> — 补靪(最重要)</h3>
+<p><strong>补靪</strong> = 在不重写源文件的前提下,<strong>用路径指向</strong>精确修改某个节点。</p>
+
+<h4>3.2.1 用户级补靪(<code>&lt;name&gt;.custom.yaml</code>)</h4>
+<p>最常用的形式,放在用户文件夹:</p>
+<pre class="lang-tag" data-lang="yaml"><code><span class="c"># default.custom.yaml  —— 全局</span>
+patch:
+  <span class="k">"menu/page_size"</span>: 9
+  <span class="k">"switches/@0/reset"</span>: 1
+  <span class="k">"punctuator/half_shape/,"</span>: "，"</code></pre>
+<blockquote>配置源文件<strong>会自动应用</strong> <code>&lt;name&gt;.custom:/patch?</code>(由 configuration.md 的「配置编译器插件」定义),所以用户的 <code>patch:</code> 会被合并进 <code>&lt;name&gt;.yaml</code> 或 <code>&lt;name&gt;.schema.yaml</code>。</blockquote>
+
+<h4>3.2.2 内嵌补靪(<code>__patch</code> 指令)</h4>
+<p>在源文件内部用的指令,功能相同但用 <code>/</code> 分隔路径:</p>
+<pre class="lang-tag" data-lang="yaml"><code>patch_example_1:
+  sibling: old value
+  replace_list:
+    - item 1
+  __patch:
+    sibling: new value
+    replace_list/=:
+      - only item</code></pre>
+
+<h4>3.2.3 路径分隔符与特殊字符</h4>
+<ul>
+<li>节点路径用 <code>/</code> 分隔</li>
+<li>如果 key 本身含 <code>/</code>,<strong>不能</strong>做路径的一部分 — 改 key 名或换文件结构</li>
+<li>字符串值<strong>优先用单引号</strong> <code>''</code>,避免双引号的转义</li>
+</ul>
+
+<h4>3.2.4 操作符 <code>/+</code> 与 <code>/=</code></h4>
+<pre class="lang-tag" data-lang="yaml"><code>__patch:
+  <span class="c"># /+ : 与 list/map 合并 (append for list, merge for map)</span>
+  append_to_list/+:
+    - appended item
+  merge_with_map/+:
+    key: new value
+
+  <span class="c"># /= : 整体替换 (不写 /= 默认就是替换,但显式写更清晰)</span>
+  replace_list/=:
+    - only item
+  replace_map/=:
+    only_key: value</code></pre>
+<table>
+<thead><tr><th>操作符</th><th>行为</th><th>list</th><th>map</th></tr></thead>
+<tbody>
+<tr><td>不写</td><td><b>整体替换</b></td><td>替换整个 list</td><td>替换整个 map</td></tr>
+<tr><td><code>/+</code></td><td>追加 / 合并</td><td>list 追加元素</td><td>map 合并键值对</td></tr>
+<tr><td><code>/=</code></td><td>整体替换(显式)</td><td>同上</td><td>同上</td></tr>
+</tbody>
+</table>
+
+<h3 id="s3-3">3.3 列表的特殊语法</h3>
+<pre class="lang-tag" data-lang="yaml"><code><span class="c"># 下标从 0 开始</span>
+<span class="k">"some_list/@0"</span>: new value          <span class="c"># 修改第 1 个元素</span>
+<span class="k">"some_list/@last"</span>: new value       <span class="c"># 修改最后 1 个</span>
+
+<span class="c"># 插入</span>
+<span class="k">"some_list/@before 0"</span>: new value   <span class="c"># 插到第 1 个之前</span>
+<span class="k">"some_list/@after last"</span>: new value  <span class="c"># 插到最后 1 个之后</span>
+<span class="k">"some_list/@next"</span>: new value        <span class="c"># = @after last 简写</span></code></pre>
+<div class="warn"><code>@before / @after</code> 在补靪中<strong>不推荐用</strong>,因为它依赖原 list 的具体下标,升级后可能错位。</div>
+
+<h3 id="s3-4">3.4 <code>__append</code> 与 <code>__merge</code>(可选)</h3>
+<p>只用在 <code>__include</code> 所在节点及其子节点:</p>
+<pre class="lang-tag" data-lang="yaml"><code>append_merge_example:
+  __include: starcraft
+  __merge:
+    made_by: blizzard entertainment
+  races:
+    __append:                <span class="c"># 追加 list 项</span>
+      - protoss
+      - zerg
+starcraft:
+  first_release: 1998
+  races:
+    - terrans</code></pre>
+
+<h3 id="s3-5">3.5 可选的 <code>?</code> 后缀</h3>
+<p>当包含/补靪目标<strong>可能不存在</strong>时,加 <code>?</code> 不报错:</p>
+<pre class="lang-tag" data-lang="yaml"><code>__patch: default.custom:/patch?       <span class="c"># default.custom.yaml 不存在也不报错</span>
+nice_to_have:
+  __include: optional_config?         <span class="c"># 同上</span></code></pre>
+
+<h3 id="s3-6">3.6 编译指令执行顺序</h3>
+<p>同一节点下:</p>
+<pre class="lang-tag" data-lang="text"><code>__include → 合并 key-value → __patch</code></pre>
+<p>map 的 key 是无序的,但<strong>单次执行过程中是确定的</strong>。不要靠书写顺序影响行为。</p>
+</section>
+
+<!-- §4 部署 -->
+<section id="s4">
+<h2>§4 · 部署 (Deploy) — 一切的开关</h2>
+<div class="warn"><strong>改完配置不部署 = 没改</strong>。</div>
+<table>
+<thead><tr><th>发行版</th><th>触发方式</th></tr></thead>
+<tbody>
+<tr><td>小狼毫</td><td>开始菜单 → 重新部署;或托盘图标右键 → 重新部署</td></tr>
+<tr><td>鼠鬚管</td><td>系统输入法菜单 → 重新部署</td></tr>
+<tr><td>ibus-rime</td><td>状态栏 ⟲ (Deploy) 按钮;或 <code>touch ~/.config/ibus/rime/; ibus restart</code></td></tr>
+<tr><td>老 ibus-rime (≤ 0.9.1)</td><td>删 <code>default.yaml</code> + <code>ibus-daemon -drx</code></td></tr>
+</tbody>
+</table>
+<p>部署做什么:</p>
+<ol>
+<li>把 <code>&lt;name&gt;.custom.yaml</code> 的 <code>patch:</code> 合并进 <code>&lt;name&gt;.yaml</code> / <code>&lt;name&gt;.schema.yaml</code></li>
+<li>编译词库 → <code>&lt;name&gt;.prism.bin</code> / <code>&lt;name&gt;.table.bin</code> / <code>&lt;name&gt;.reverse.bin</code></li>
+<li>输出到 <code>build/</code></li>
+</ol>
+</section>
+
+<!-- §5 设置项速查 -->
+<section id="s5">
+<h2>§5 · 设置项速查(非快捷键)</h2>
+
+<h3 id="s5-1">5.1 <code>switches</code> — 状态开关(影响方案选单与快捷键)</h3>
+<pre class="lang-tag" data-lang="yaml"><code>switches:
+  - name: ascii_mode              <span class="c"># 状态名,key_binder/toggle 引用</span>
+    reset: 0                      <span class="c"># 切到本方案时是否重置 (0/1 或省略)</span>
+    states: [ 中, Ａ ]            <span class="c"># 两个状态,方案选单显示为"中 → Ａ"</span>
+    abbrev: A                     <span class="c"># 可选,单字符缩写,选单里短一点</span>
+  - name: ascii_punct
+    states: [ ¥, $ ]
+  - name: traditionalization
+    states: [ 简, 繁 ]
+  - name: full_shape
+    states: [ 半角, 全角 ]</code></pre>
+<table>
+<thead><tr><th>字段</th><th>必选</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>name</code></td><td>✅</td><td>状态名,内部用,key_binder 的 <code>toggle:</code> / <code>set_option:</code> 引用它</td></tr>
+<tr><td><code>states</code></td><td>✅</td><td>2 个字符串,<code>[state0, state1]</code></td></tr>
+<tr><td><code>reset</code></td><td>❌</td><td>0 或 1,切到本方案时是否重置;不写 = 保留上一个方案的状态</td></tr>
+<tr><td><code>abbrev</code></td><td>❌</td><td>选单里显示的短字符(默认 = states[0] 的首字)</td></tr>
+</tbody>
+</table>
+
+<h3 id="s5-2">5.2 <code>menu</code> — 候选项排版</h3>
+<pre class="lang-tag" data-lang="yaml"><code>menu:
+  page_size: 9                    <span class="c"># 每页 1~9 (部分发行版支持 10)</span>
+  alternative_select_keys: "asdf"  <span class="c"># 备选选字键(数字键被占用时)</span></code></pre>
+
+<h3 id="s5-3">5.3 <code>recognizer/patterns</code> — 识别规则</h3>
+<p>正则匹配输入码,命中后<strong>整段</strong>打标签,由对应的 <code>segmentor/translator</code> 处理。</p>
+<pre class="lang-tag" data-lang="yaml"><code>recognizer:
+  import_preset: default          <span class="c"># 继承 default.yaml 的通用规则</span>
+  patterns:
+    email: "[a-z]+@[a-z]+"        <span class="c"># 自定义规则,标签名=pattern key</span>
+    reverse_lookup: "`[a-z]+$"   <span class="c"># ` 开头识别为反查</span></code></pre>
+<p>预置标签:<code>email</code> — 邮箱 · <code>url</code> — 网址 · <code>number</code> — 数字 · <code>punct</code> — 标点</p>
+
+<h3 id="s5-4">5.4 <code>punctuator</code> — 标点映射</h3>
+<pre class="lang-tag" data-lang="yaml"><code>punctuator:
+  __include: default:/punctuator          <span class="c"># 继承 default</span>
+  full_shape:                              <span class="c"># 全角 (按 Shift)</span>
+    "/": [ ／, "/", ÷ ]                   <span class="c"># 一次按键循环出 3 个候选</span>
+  half_shape:                              <span class="c"># 半角 (默认)</span>
+    "/": [ "/", ／, ÷ ]
+  symbols:                                 <span class="c"># `/` 键前导的特殊符号集</span>
+    "/divide": [ ÷, "÷" ]</code></pre>
+<table>
+<thead><tr><th>字段</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>full_shape</code></td><td>全角 (按 Shift) 时的映射</td></tr>
+<tr><td><code>half_shape</code></td><td>半角 (默认) 时的映射</td></tr>
+<tr><td><code>symbols</code></td><td>输 <code>/{key}</code> 触发的符号表 (Rime 默认 = <code>/</code> 前缀)</td></tr>
+<tr><td>映射值</td><td>单字符 = 直接上屏;list = 循环出候选</td></tr>
+</tbody>
+</table>
+<p><strong>改 <code>/</code> 键为「、」</strong>:</p>
+<pre class="lang-tag" data-lang="yaml"><code>patch:
+  <span class="k">"punctuator/full_shape/"</span>: "、"
+  <span class="k">"punctuator/half_shape/"</span>: "、"</code></pre>
+
+<h3 id="s5-5">5.5 <code>ascii_composer</code> — 中西文切换 ⭐</h3>
+<p>详见 <a href="#s6-8">§6.8</a>(与快捷键强相关)。</p>
+
+<h3 id="s5-6">5.6 <code>speller/algebra</code> — 拼写运算</h3>
+<p>四类指令,作用于 speller 收到的拼写串:</p>
+<table>
+<thead><tr><th>指令</th><th>作用</th><th>例</th></tr></thead>
+<tbody>
+<tr><td><code>xform/&lt;regex&gt;/&lt;repl&gt;/</code></td><td>sed 式替换</td><td><code>xform/^([jqxy])u/$1v/</code> (ju→jv)</td></tr>
+<tr><td><code>xlit/&lt;src&gt;/&lt;dst&gt;/</code></td><td>字符级映射</td><td><code>xlit/QWERTY/qwerty/</code></td></tr>
+<tr><td><code>derive/&lt;regex&gt;/&lt;repl&gt;/</code></td><td>派生新拼写(原拼写保留)</td><td><code>derive/^([zcs])h/$1/</code> (zh→z)</td></tr>
+<tr><td><code>abbrev/&lt;regex&gt;/&lt;repl&gt;/</code></td><td>简拼(原拼写也保留)</td><td><code>abbrev/^([a-z]).+$/$1/</code></td></tr>
+<tr><td><code>erase/&lt;regex&gt;/</code></td><td>删除匹配的拼写</td><td><code>erase/^hm$/</code></td></tr>
+</tbody>
+</table>
+
+<h3 id="s5-7">5.7 <code>translator</code> — 主翻译器参数</h3>
+<pre class="lang-tag" data-lang="yaml"><code>translator:
+  dictionary: rime_ice           <span class="c"># 词库名</span>
+  enable_completion: true        <span class="c"># 补全</span>
+  enable_sentence: true          <span class="c"># 智能组句</span>
+  enable_user_dict: true         <span class="c"># 写入用户词库</span>
+  initial_quality: 1.0           <span class="c"># 初始权重</span>
+  preedit_format:                <span class="c"># 输入框显示前的变换</span>
+    - xform/([jqxy])v/$1u/      <span class="c"># ju→显示为 ju(实际拼音)</span>
+  comment_format:                <span class="c"># 候选右侧的注释</span>
+    - xform/^/［/
+  spelling_hints: 5              <span class="c"># 错音纠错提示的候选数</span>
+  always_show_comments: true     <span class="c"># preedit==comment 时也显示</span>
+  max_sentences: 1               <span class="c"># 造句数量 (≥ librime 1.17.0)</span></code></pre>
+
+<h3 id="s5-8">5.8 <code>app_options</code> — 按应用定制 (小狼毫/鼠鬚管)</h3>
+<pre class="lang-tag" data-lang="yaml"><code><span class="c"># weasel.custom.yaml 或 squirrel.custom.yaml</span>
+patch:
+  <span class="k">app_options/gvim.exe</span>:          <span class="c"># 小狼毫用程序小写名</span>
+    ascii_mode: true             <span class="c"># 在 gVim 里默认英文</span>
+  <span class="k">app_options/com.apple.Terminal</span>:
+    ascii_mode: true
+  <span class="k">app_options/com.alfredapp.Alfred</span>: {}  <span class="c"># 不改,跟随默认</span></code></pre>
+<blockquote>小狼毫 ≥ 0.9.16 / 鼠鬚管 ≥ 0.9.9 支持。</blockquote>
+
+<h3 id="s5-9">5.9 <code>switcher/hotkeys</code> — 方案选单的快捷键</h3>
+<pre class="lang-tag" data-lang="yaml"><code>patch:
+  <span class="k">"switcher/hotkeys"</span>:
+    - "Control+grave"   <span class="c"># Ctrl+`  (注意:不是 Ctrl+`, 而是 IBus 规范)</span>
+    - "Control+s"
+    - F4</code></pre>
+<blockquote>写法见 <a href="#s6-2">§6.2 修饰键</a>。</blockquote>
+</section>
+
+<!-- §6 快捷键绑定 主菜 -->
+<section id="s6">
+<h2 class="star">§6 · 快捷键绑定 ⭐(主菜)</h2>
+
+<h3 id="s6-1">6.1 整体规则</h3>
+<p><strong><code>key_binder</code></strong> 是 Rime 的"按键重定向"组件,在 processor 链中<strong>早于</strong> speller/punctuator 执行。它可以:</p>
+<ul>
+<li>拦截某按键,<strong>改派为另一个按键</strong></li>
+<li>拦截某按键,<strong>触发一个动作</strong>(切换选项、调用方案…)</li>
+</ul>
+<p><strong>位置</strong>:通常挂在 <code>engine/processors</code> 链头部:</p>
+<pre class="lang-tag" data-lang="yaml"><code>engine:
+  processors:
+    - ascii_composer
+    - recognizer
+    - key_binder      <span class="c"># ← 这里</span>
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor</code></pre>
+<p><strong>配置结构</strong>:</p>
+<pre class="lang-tag" data-lang="yaml"><code>key_binder:
+  import_preset: default              <span class="c"># 继承 default.yaml 的 binding (可选)</span>
+  search: "`"                         <span class="c"># 候选项过滤的前导键 (极少用)</span>
+  bindings:                           <span class="c"># 自定义 binding 列表</span>
+    - {when: &lt;条件&gt;, accept: &lt;键串&gt;, &lt;动作&gt;: &lt;值&gt;}
+    - ...</code></pre>
+<p><strong>列表语义</strong>:<code>bindings</code> 是 list,patch 时:</p>
+<ul>
+<li><strong>不写 <code>bindings/+</code></strong> → 整段替换</li>
+<li><strong>写 <code>bindings/+</code></strong> → 追加 (合并到 default 已有 binding 后)</li>
+</ul>
+
+<h3 id="s6-2">6.2 修饰键 + 按键名</h3>
+<p><strong><code>accept:</code> 和 <code>send:</code> 都是「IBus 规范键串」</strong>,格式:</p>
+<pre class="lang-tag" data-lang="text"><code>[修饰符+]+[按键名]</code></pre>
+<p><strong>修饰符</strong> (Rime 通用):</p>
+<table>
+<thead><tr><th>修饰符</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>Release</code></td><td>弹起时触发 (而非按下)</td></tr>
+<tr><td><code>Shift</code></td><td>Shift</td></tr>
+<tr><td><code>Control</code></td><td>Ctrl</td></tr>
+<tr><td><code>Alt</code></td><td>Alt (macOS 叫 Option,Windows 上 Alt+字母会被系统优先识别为菜单快捷键)</td></tr>
+<tr><td><code>Super</code> / <code>Meta</code></td><td>Linux 专用,跨平台一致性差,慎用</td></tr>
+<tr><td><code>Caps_Lock</code></td><td>Caps Lock (一般用在 <code>ascii_composer/switch_key</code>,不在 key_binder)</td></tr>
+</tbody>
+</table>
+<p><strong>多个修饰符</strong>:用 <code>+</code> 连接,<strong>顺序无关</strong>。</p>
+<ul>
+<li><code>Control+Shift+9</code> ✅</li>
+<li><code>Shift+Control+9</code> ✅ (但建议固定顺序)</li>
+</ul>
+<p><strong>按键名</strong>:来自 X11 keysym,<strong>去掉前缀 <code>XK_</code></strong>(完整列表见 <code>librime/include/X11/keysymdef.h</code>)。</p>
+<p>常用按键名速查:</p>
+<table>
+<thead><tr><th>类别</th><th>按键名</th></tr></thead>
+<tbody>
+<tr><td>字母</td><td><code>a</code> ~ <code>z</code> (大写 <code>A</code> ~ <code>Z</code> 也行,但<strong>一般不区分大小写</strong>)</td></tr>
+<tr><td>数字</td><td><code>0</code> ~ <code>9</code></td></tr>
+<tr><td>功能键</td><td><code>F1</code> ~ <code>F12</code></td></tr>
+<tr><td>方向键</td><td><code>Left</code> <code>Right</code> <code>Up</code> <code>Down</code> <code>Home</code> <code>End</code> <code>Prior</code> <code>Page_Up</code> <code>Next</code> <code>Page_Down</code> <code>Begin</code></td></tr>
+<tr><td>编辑键</td><td><code>BackSpace</code> <code>Return</code> <code>Escape</code> <code>Tab</code> <code>Delete</code> <code>Insert</code> <code>space</code></td></tr>
+<tr><td>修饰键</td><td><code>Shift_L</code> <code>Shift_R</code> <code>Control_L</code> <code>Control_R</code> <code>Alt_L</code> <code>Alt_R</code> <code>Meta_L</code> <code>Meta_R</code> <code>Super_L</code> <code>Super_R</code> <code>Hyper_L</code> <code>Hyper_R</code> <code>Caps_Lock</code></td></tr>
+<tr><td>标点</td><td><code>comma</code> <code>period</code> <code>semicolon</code> <code>apostrophe</code> <code>grave</code> <code>bracketleft</code> <code>bracketright</code> <code>backslash</code> <code>slash</code> <code>minus</code> <code>equal</code></td></tr>
+<tr><td>小键盘</td><td><code>KP_0</code> ~ <code>KP_9</code> <code>KP_Decimal</code> <code>KP_Enter</code> <code>KP_Add</code> <code>KP_Subtract</code> <code>KP_Multiply</code> <code>KP_Divide</code> <code>KP_Space</code> <code>KP_Tab</code></td></tr>
+<tr><td>其它</td><td><code>numbersign</code> (#) <code>dollar</code> ($) <code>underscore</code> (_) <code>exclam</code> (!) <code>question</code> (?) <code>bar</code> (|) <code>braceleft</code> ({) <code>braceright</code> (}) <code>colon</code> (:) <code>quotedbl</code> (") <code>at</code> (@)</td></tr>
+</tbody>
+</table>
+<div class="warn"><strong>特殊键名不是按字面字符</strong>,而是用名字:<code>comma</code> 才是 <code>,</code>,<code>period</code> 才是 <code>.</code>,<code>semicolon</code> 才是 <code>;</code>。</div>
+<p>完整列表见 <a href="#appA">附录 A</a>。</p>
+
+<h3 id="s6-3">6.3 六种 <code>when</code> 条件(条件 / 上下文)</h3>
+<p>来源:<code>librime/src/rime/gear/key_binder.cc:21-28</code> 枚举 <code>KeyBindingCondition</code>:</p>
+<table>
+<thead><tr><th>条件</th><th>含义</th><th>触发场景</th></tr></thead>
+<tbody>
+<tr><td><code>always</code></td><td>无条件</td><td>任何时候都生效</td></tr>
+<tr><td><code>composing</code></td><td>正在输入</td><td>输入码非空 (有 preedit)</td></tr>
+<tr><td><code>has_menu</code></td><td>候选菜单可见</td><td>至少有 1 个候选</td></tr>
+<tr><td><code>paging</code></td><td>已向后翻页</td><td>用户已按过 <code>Page_Down</code> 之类的翻页键</td></tr>
+<tr><td><code>predicting</code></td><td>预测模式</td><td>librime 预测候选 (Rime 1.x 较少见)</td></tr>
+<tr><td>(其他)</td><td>→ 不匹配</td><td>拼错或者写错就直接忽略,日志会有 WARNING</td></tr>
+</tbody>
+</table>
+<p><strong>优先级</strong>:Rime 内部把 binding 按条件排序,匹配时<strong>只触发第一个命中</strong>的;高优先级条件(具体场景)排在前面,<code>always</code> 排在最后。</p>
+
+<h3 id="s6-4">6.4 六种 action(动作)</h3>
+<p>来源:<code>librime/src/rime/gear/key_binder.cc:161-226</code> <code>LoadBindings</code> 解析:</p>
+<table>
+<thead><tr><th>action</th><th>字段</th><th>行为</th></tr></thead>
+<tbody>
+<tr><td><b>重派单个按键</b></td><td><code>send: &lt;键串&gt;</code></td><td>把当前按键<strong>改派</strong>成另一个按键,后续组件按新按键处理</td></tr>
+<tr><td><b>重派按键序列</b></td><td><code>send_sequence: &lt;键串1&gt; &lt;键串2&gt;...</code></td><td>依次发送一串按键(空格分隔)</td></tr>
+<tr><td><b>切换选项</b></td><td><code>toggle: &lt;选项名&gt;</code></td><td>切换 <code>switches</code> 中的某个选项 (radio 组则循环)</td></tr>
+<tr><td><b>设置选项</b></td><td><code>set_option: &lt;选项名&gt;</code></td><td>强制设为 1 / radio 组中选中</td></tr>
+<tr><td><b>取消选项</b></td><td><code>unset_option: &lt;选项名&gt;</code></td><td>强制设为 0 / radio 组中恢复默认</td></tr>
+<tr><td><b>切换方案</b></td><td><code>select: &lt;方案ID 或 ".next"&gt;</code></td><td>切到指定方案;<code>.next</code> = 下一个</td></tr>
+</tbody>
+</table>
+<p><strong>重要约束</strong>(<code>key_binder.cc:218-223</code>):</p>
+<ul>
+<li>6 种 action <strong>互斥</strong> — 同一 binding 只能有 1 种</li>
+<li><code>when</code> 和 <code>accept</code> <strong>必填</strong>,否则忽略</li>
+</ul>
+<blockquote>注:用 <code>select: ".next"</code> 配合 toggle 或 hotkey,可以做出「下一方案」快捷键。</blockquote>
+
+<h3 id="s6-5">6.5 <code>accept</code> 接收规则</h3>
+<ul>
+<li><code>accept</code> 是<strong>要拦截的按键</strong>(用户实际按的)</li>
+<li><code>send</code> / <code>send_sequence</code> 是<strong>要改派成什么</strong></li>
+<li>修饰符<strong>严格匹配</strong> — <code>accept: Control+9</code> 不会匹配用户只按 <code>9</code></li>
+</ul>
+
+<h3 id="s6-6">6.6 <code>send</code> vs <code>send_sequence</code></h3>
+<pre class="lang-tag" data-lang="yaml"><code><span class="c"># send: 单按键改派</span>
+- {accept: Tab, send: Shift+Right, when: composing}
+<span class="c"># 用户按 Tab → 实际向 speller 发 Shift+Right(光标右移 1 段)</span>
+
+<span class="c"># send_sequence: 按键序列</span>
+- {accept: "Control+p", send_sequence: "Up Up Return", when: has_menu}
+<span class="c"># 用户按 Ctrl+p → 依次发 Up(选下个候选) Up(再下个) Return(确认)</span></code></pre>
+<blockquote><code>send_sequence</code> 中的键串用<strong>空格分隔</strong>,可以发任意多个键。</blockquote>
+
+<h3 id="s6-7">6.7 完整例子:翻页/选字/切换</h3>
+<pre class="lang-tag" data-lang="yaml"><code>key_binder:
+  bindings:
+    <span class="c"># === 翻页 (有候选时) ===</span>
+    - {when: paging,    accept: bracketleft,  send: Page_Up}      <span class="c"># [ = 向前翻</span>
+    - {when: has_menu,  accept: bracketright, send: Page_Down}    <span class="c"># ] = 向后翻</span>
+
+    <span class="c"># === 光标移动 (正在输入时) ===</span>
+    - {when: composing, accept: Tab,          send: Shift+Right}  <span class="c"># Tab = 右移 1 段</span>
+    - {when: composing, accept: "Shift+Tab",  send: Shift+Left}   <span class="c"># Shift+Tab = 左移</span>
+    - {when: composing, accept: "Alt+Left",   send: Shift+Left}
+    - {when: composing, accept: "Alt+Right",  send: Shift+Right}
+
+    <span class="c"># === 切换中英标点 (始终生效) ===</span>
+    - {when: always, accept: "Control+Shift+9", toggle: ascii_punct}
+    - {when: always, accept: "Control+Shift+0", toggle: traditionalization}
+
+    <span class="c"># === 切换 ASCII 模式 (始终生效) ===</span>
+    - {when: always, accept: "Control+grave", toggle: ascii_mode}
+    <span class="c"># 注意:Control+` 在 IBus 规范里是 Control+grave,不是字面字符</span>
+
+    <span class="c"># === 用回车清除输入 ===</span>
+    - {when: composing, accept: Return, send: Escape}
+
+    <span class="c"># === 自定义符号键 ===</span>
+    - {when: always, accept: "Shift+comma",     send: "《"}
+    - {when: always, accept: "Shift+period",    send: "》"}
+    - {when: always, accept: "Shift+semicolon", send: "："}
+
+    <span class="c"># === 切方案 ===</span>
+    - {when: always, accept: "Control+Shift+F1", select: luna_pinyin}
+    - {when: always, accept: "Control+Shift+F2", select: rime_ice}</code></pre>
+
+<h3 id="s6-8">6.8 <code>ascii_composer</code> 的中西文切换键(另一个层面)</h3>
+<p><strong><code>ascii_composer</code></strong> <strong>不是</strong> <code>key_binder</code>,是另一个组件,专门管中西文切换。详见 librime <code>src/rime/gear/ascii_composer.cc</code> 与 <code>default.yaml</code> 的 <code>ascii_composer:</code> 段。</p>
+<pre class="lang-tag" data-lang="yaml"><code>ascii_composer:
+  good_old_caps_lock: true              <span class="c"># Caps Lock 切到 ASCII 时默认大写</span>
+  switch_key:                            <span class="c"># 切换键 + 切换策略</span>
+    Caps_Lock: commit_code               <span class="c"># 按下时把已输入编码当英文上屏</span>
+    Shift_L:   commit_text               <span class="c"># 按下时把已上屏文字当英文上屏</span>
+    Shift_R:   commit_text
+    Control_L: noop                      <span class="c"># 屏蔽</span>
+    Control_R: noop</code></pre>
+<table>
+<thead><tr><th>切换策略</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>inline_ascii</code></td><td>临时英文模式:输入字母数字后回车/空格<strong>自动</strong>回中文</td></tr>
+<tr><td><code>commit_text</code></td><td>临时英文模式:输入字母数字上屏(不回中文)</td></tr>
+<tr><td><code>commit_code</code></td><td>把当前<strong>输入码</strong>当英文上屏,然后切到英文</td></tr>
+<tr><td><code>noop</code></td><td>屏蔽该键</td></tr>
+</tbody>
+</table>
+<p><strong>关键点</strong>:</p>
+<ul>
+<li>与 <code>key_binder</code> 不同,<code>ascii_composer</code> 的 <code>switch_key</code> 是<strong>按</strong>事件触发,不是按<strong>键串</strong>触发</li>
+<li>默认配置下,<code>Shift_L</code> 单独按下(&lt; 500ms 抬起)就能切 ASCII</li>
+</ul>
+<div class="warn"><strong>小狼毫(WeaselTSF)的坑</strong>:<code>WeaselTSF/KeyEvent.cpp:27-28</code> 在 release 事件强制设置 <code>RELEASE_MASK</code>,而 librime 的 <code>operator==</code> 比较 modifier 含 <code>RELEASE_MASK</code>,导致 <code>key_binder</code> 的 <code>accept: Shift_L</code> (modifier=0) <strong>永远不匹配</strong> release 事件。<code>ascii_composer/switch_key</code> 内部做 toggle,<strong>绕开了</strong>这个比较,这就是为什么「单独 Shift 切英文」在小狼毫上能用而 <code>key_binder</code> 写 <code>accept: Shift_L</code> 没用。详见本机 rime_ice 的修复,见 <a href="#s9-3">§9.3</a>。</div>
+
+<h3 id="s6-9">6.9 与前端的关系(小狼毫/鼠鬚管)</h3>
+<p><code>key_binder</code> 是 librime 内部的事件,<strong>与前端 (Weasel/Squirrel) 的系统级快捷键</strong>是两回事:</p>
+<ul>
+<li>librime <code>key_binder</code> 只能在 <strong>IME 已激活</strong>(英文/中文状态)、<strong>输入码区</strong> 内拦截</li>
+<li>「<code>Ctrl+Shift</code> 切中英」是 <strong>Windows 系统级</strong>,由 WeaselTSF 处理,<strong>不</strong>走 librime</li>
+</ul>
+<p>所以<strong>改不了系统级快捷键</strong> (Ctrl+Shift 切中英、Ctrl+Space 开关输入法) — 那些是 Windows 注册表 / 系统输入法管理的事。</p>
+</section>
+
+<!-- §7 editor 绑定 -->
+<section id="s7">
+<h2 class="star">§7 · <code>editor</code> 绑定 ⭐(空格/回车/退格的底层)</h2>
+
+<h3 id="s7-1">7.1 十二种 action</h3>
+<p>来源:<code>librime/src/rime/gear/editor.cc:19-32</code> <code>editor_action_definitions[]</code>:</p>
+<table>
+<thead><tr><th>action 名称</th><th>行为</th><th>默认按键 (<code>express_editor</code>)</th></tr></thead>
+<tbody>
+<tr><td><code>confirm</code></td><td>确认当前候选(若有)或 commit 全部</td><td><code>space</code></td></tr>
+<tr><td><code>toggle_selection</code></td><td>在「打开上一段」和「确认当前」之间切换(用于以词定字)</td><td>—</td></tr>
+<tr><td><code>commit_comment</code></td><td>把当前候选的 comment (拼音提示) 上屏</td><td><code>Control+Shift+Return</code></td></tr>
+<tr><td><code>commit_raw_input</code></td><td>把原始输入码上屏(不经过 preedit_format)</td><td><code>Return</code></td></tr>
+<tr><td><code>commit_script_text</code></td><td>把脚本化后的输入码(经过 preedit_format)上屏</td><td><code>Control+Return</code></td></tr>
+<tr><td><code>commit_composition</code></td><td>确认当前段(若有候选)再 commit 全部</td><td><code>Return</code> (FluidEditor)</td></tr>
+<tr><td><code>revert</code></td><td>撤销上一步:回退上屏/删除最后输入字符</td><td><code>BackSpace</code></td></tr>
+<tr><td><code>back</code></td><td>回到上一段输入(回退)</td><td>—</td></tr>
+<tr><td><code>back_syllable</code></td><td>删 1 个音节(组词)</td><td><code>Control+BackSpace</code></td></tr>
+<tr><td><code>delete_candidate</code></td><td>删除或降权当前候选</td><td><code>Control+Delete</code></td></tr>
+<tr><td><code>delete</code></td><td>向后删除 1 个字符</td><td><code>Delete</code></td></tr>
+<tr><td><code>cancel</code></td><td>取消整个输入</td><td><code>Escape</code></td></tr>
+</tbody>
+</table>
+
+<h3 id="s7-2">7.2 默认绑定(全方案继承)</h3>
+<p><code>express_editor</code> 默认:</p>
+<pre class="lang-tag" data-lang="yaml"><code>editor:
+  bindings:
+    space: confirm
+    Return: commit_raw_input
+    Control+Return: commit_script_text
+    Control+Shift+Return: commit_comment
+    BackSpace: revert
+    Delete: delete
+    Control+BackSpace: back_syllable
+    Control+Delete: delete_candidate
+    Escape: cancel</code></pre>
+<p><code>fluid_editor</code> (注音、語句流用) 类似,但 <code>Return = commit_composition</code>。</p>
+
+<h3 id="s7-3">7.3 改写例子</h3>
+<pre class="lang-tag" data-lang="yaml"><code>editor:
+  bindings:
+    space: confirm                    <span class="c"># 空格:上屏候选</span>
+    Return: commit_raw_input          <span class="c"># 回车:上屏原始输入</span>
+    "Control+Return": commit_script_text
+    "Control+Shift+Return": commit_comment
+    BackSpace: revert                 <span class="c"># 退格:撤销</span>
+    Delete: delete
+    "Control+BackSpace": back_syllable
+    "Control+Delete": delete_candidate
+    Escape: cancel                    <span class="c"># Esc:取消输入</span>
+    <span class="c"># --- 自定义 ---</span>
+    "semicolon": confirm              <span class="c"># ; 也上屏</span>
+    "apostrophe": confirm             <span class="c"># ' 也上屏(适合形码快手)</span>
+    <span class="c"># 按 ; = 上屏候选(同 space)</span></code></pre>
+<blockquote><code>editor/bindings</code> 是 map,patch 时是覆盖单键,不必整段替换。</blockquote>
+
+<h3 id="s7-4">7.4 <code>char_handler</code>(非 binding 但相邻)</h3>
+<p><code>editor/char_handler</code> 控制「未匹配 binding 的可打印字符」如何处理:</p>
+<table>
+<thead><tr><th>值</th><th>行为</th></tr></thead>
+<tbody>
+<tr><td><code>direct_commit</code></td><td>直接上屏(默认,<strong><code>express_editor</code></strong>)</td></tr>
+<tr><td><code>add_to_input</code></td><td>加入输入码(默认,<code>fluid_editor</code> 用于注音)</td></tr>
+<tr><td><code>noop</code></td><td>不处理</td></tr>
+</tbody>
+</table>
+<blockquote>这就是 <code>express_editor</code> 与 <code>fluid_editor</code> 的核心区别。</blockquote>
+</section>
+
+<!-- §8 默认键位参考 -->
+<section id="s8">
+<h2>§8 · 默认值参考:常见键位清单</h2>
+<p>Rime <code>default.yaml</code> 中<strong>默认的 key_binder/bindings</strong>(小狼毫/鼠鬚管通用):</p>
+<table>
+<thead><tr><th>类别</th><th>accept</th><th>send</th><th>when</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td>光标</td><td><code>Tab</code></td><td><code>Shift+Right</code></td><td>composing</td><td>右移 1 段</td></tr>
+<tr><td>光标</td><td><code>Shift+Tab</code></td><td><code>Shift+Left</code></td><td>composing</td><td>左移 1 段</td></tr>
+<tr><td>光标</td><td><code>Alt+Left</code></td><td><code>Shift+Left</code></td><td>composing</td><td>左移 1 段</td></tr>
+<tr><td>光标</td><td><code>Alt+Right</code></td><td><code>Shift+Right</code></td><td>composing</td><td>右移 1 段</td></tr>
+<tr><td>翻页</td><td><code>minus</code></td><td><code>Page_Up</code></td><td>paging</td><td><code>-</code> 向前翻</td></tr>
+<tr><td>翻页</td><td><code>equal</code></td><td><code>Page_Down</code></td><td>paging</td><td><code>=</code> 向后翻</td></tr>
+<tr><td>翻页</td><td><code>comma</code></td><td><code>Page_Up</code></td><td>paging</td><td><code>,</code> 向前翻</td></tr>
+<tr><td>翻页</td><td><code>period</code></td><td><code>Page_Down</code></td><td>has_menu</td><td><code>.</code> 向后翻</td></tr>
+<tr><td>开关</td><td><code>Control+Shift+9</code> / <code>Control+Shift+numbersign</code></td><td>toggle ascii_punct</td><td>always</td><td>切中英标点</td></tr>
+<tr><td>开关</td><td><code>Control+Shift+0</code> / <code>Control+Shift+dollar</code></td><td>toggle traditionalization</td><td>always</td><td>切繁简</td></tr>
+<tr><td>开关</td><td><code>Shift+space</code></td><td>toggle full_shape</td><td>always</td><td>切全半角</td></tr>
+<tr><td>开关</td><td><code>Control+Shift+e</code></td><td>toggle emoji</td><td>always</td><td>切 emoji</td></tr>
+<tr><td>选字</td><td>(由 selector 默认)</td><td><code>1</code>~<code>9</code> 选候选</td><td>has_menu</td><td>数字键选字</td></tr>
+<tr><td>选字</td><td><code>space</code></td><td>confirm</td><td>has_menu</td><td>空格确认</td></tr>
+<tr><td>小键盘</td><td><code>KP_0</code>~<code>KP_9</code></td><td><code>0</code>~<code>9</code></td><td>composing</td><td>小键盘数字直接上屏</td></tr>
+<tr><td>小键盘</td><td><code>KP_Enter</code></td><td><code>Return</code></td><td>composing</td><td>小键盘回车</td></tr>
+<tr><td>小键盘</td><td><code>KP_Add</code></td><td><code>plus</code></td><td>composing</td><td>小键盘 +</td></tr>
+<tr><td>小键盘</td><td><code>KP_Subtract</code></td><td><code>minus</code></td><td>composing</td><td>小键盘 -</td></tr>
+<tr><td>小键盘</td><td><code>KP_Multiply</code></td><td><code>asterisk</code></td><td>composing</td><td>小键盘 *</td></tr>
+<tr><td>小键盘</td><td><code>KP_Divide</code></td><td><code>slash</code></td><td>composing</td><td>小键盘 /</td></tr>
+<tr><td>小键盘</td><td><code>KP_Decimal</code></td><td><code>period</code></td><td>composing</td><td>小键盘 .</td></tr>
+</tbody>
+</table>
+<blockquote>来源:<code>rime/librime</code> 源码 + <code>default.yaml</code>;具体到本机 rime_ice 还有 <code>Shift+标点 → 中文标点</code> 8 条,见 <a href="#s9">§9</a>。</blockquote>
+</section>
+
+<!-- §9 本机现状对照 -->
+<section id="s9">
+<h2>§9 · 本机现状对照(<code>output/data/</code>)</h2>
+
+<h3 id="s9-1">9.1 当前 <code>key_binder/bindings</code> (<code>rime_ice.schema.yaml:295-339</code>)</h3>
+<p>共 22 条 = 4 光标 + 2 翻页 + 4 开关 + 16 小键盘 + 8 Shift+标点。来源:rime_ice default + 用户 custom 8 条。</p>
+<pre class="lang-tag" data-lang="yaml"><code>key_binder:
+  search: "`"
+  bindings:
+    <span class="c"># --- 光标移动 (保留 default) ---</span>
+    - {accept: "Shift+Tab", send: "Shift+Left",  when: composing}
+    - {accept: Tab,         send: "Shift+Right", when: composing}
+    - {accept: "Alt+Left",  send: "Shift+Left",  when: composing}
+    - {accept: "Alt+Right", send: "Shift+Right", when: composing}
+
+    <span class="c"># --- 翻页 (保留 default) ---</span>
+    - {accept: comma,  send: Page_Up,   when: has_menu}  <span class="c"># , = 上一页</span>
+    - {accept: period, send: Page_Down, when: has_menu}  <span class="c"># . = 下一页</span>
+
+    <span class="c"># --- 开关 (保留 default) ---</span>
+    - {accept: "Control+Shift+9",          toggle: ascii_punct, when: always}
+    - {accept: "Control+Shift+numbersign", toggle: ascii_punct, when: always}  <span class="c"># 同一 binding 两条等价键</span>
+    - {accept: "Control+Shift+0",          toggle: traditionalization, when: always}
+    - {accept: "Control+Shift+dollar",     toggle: traditionalization, when: always}
+
+    <span class="c"># --- 小键盘 (保留 default, 16 条) ---</span>
+    - {accept: KP_0,         send: 0,        when: composing}
+    - {accept: KP_1,         send: 1,        when: composing}
+    - {accept: KP_2,         send: 2,        when: composing}
+    <span class="c"># ... KP_3 ~ KP_9</span>
+    - {accept: KP_Decimal,   send: period,   when: composing}
+    - {accept: KP_Multiply,  send: asterisk, when: composing}
+    - {accept: KP_Add,       send: plus,     when: composing}
+    - {accept: KP_Subtract,  send: minus,    when: composing}
+    - {accept: KP_Divide,    send: slash,    when: composing}
+    - {accept: KP_Enter,     send: Return,   when: composing}
+
+    <span class="c"># --- Shift+标点 → 中文标点 (用户自定义 8 条) ---</span>
+    - {when: always, accept: "Shift+comma",       send: "《"}
+    - {when: always, accept: "Shift+period",      send: "》"}
+    - {when: always, accept: "Shift+slash",       send: "？"}
+    - {when: always, accept: "Shift+semicolon",   send: "："}
+    - {when: always, accept: "Shift+apostrophe",  send: '"'}
+    - {when: always, accept: "Shift+backslash",   send: "|"}
+    - {when: always, accept: "Shift+bracketleft", send: "{"}
+    - {when: always, accept: "Shift+bracketright", send: "}"}</code></pre>
+
+<h3 id="s9-2">9.2 当前 <code>editor/bindings</code> (<code>rime_ice.schema.yaml:341-352</code>)</h3>
+<p>保持 librime <code>express_editor</code> 默认,<strong>未做改写</strong>:</p>
+<pre class="lang-tag" data-lang="yaml"><code>editor:
+  bindings:
+    space: confirm
+    Return: commit_raw_input
+    Control+Return: commit_script_text
+    Control+Shift+Return: commit_comment
+    BackSpace: revert
+    Delete: delete
+    Control+BackSpace: back_syllable
+    Control+Delete: delete_candidate
+    Escape: cancel</code></pre>
+
+<h3 id="s9-3">9.3 当前 <code>ascii_composer/switch_key</code> (<code>rime_ice.custom.yaml:27-31</code> + <code>schema.yaml:287-294</code>)</h3>
+<p><strong>这是 v0.21.0.1 修小狼毫 Shift_L 失效的 root cause fix</strong>:</p>
+<pre class="lang-tag" data-lang="yaml"><code>ascii_composer:
+  switch_key:
+    Caps_Lock: clear         <span class="c"># 保留 rime_ice default</span>
+    Control_L: noop
+    Control_R: noop
+    Shift_L: commit_text     <span class="c"># ← 改成 commit_text,让 ascii_composer 接管 toggle</span>
+    Shift_R: commit_text     <span class="c"># ← 改成 commit_text</span></code></pre>
+<p><strong>坑</strong>:</p>
+<ul>
+<li>librime <code>key_event.h:43</code> 的 <code>operator==</code> 比较 modifier 含 <code>RELEASE_MASK</code></li>
+<li>WeaselTSF <code>KeyEvent.cpp:27-28</code> 在 release 事件<strong>强制</strong>加 <code>RELEASE_MASK</code></li>
+<li><code>key_binder</code> 的 <code>accept: Shift_L</code> (modifier=0) <strong>永远不匹配</strong> release (modifier=RELEASE_MASK)</li>
+<li><code>ascii_composer/switch_key</code> 走另一条路径(不参与 release 比较),所以<strong>单独 Shift 能 toggle</strong></li>
+<li>rime_ice default 的 8 条 <code>Shift_L/R</code>/<code>Shift+l/r</code> binding 整段删了 — 因为它们 <code>accept</code> 是 Shift 单独 / Shift+l,都受这个 bug 影响</li>
+</ul>
+
+<h3 id="s9-4">9.4 本机 <code>user-custom/rime_ice.custom.yaml</code> 的 patch 结构</h3>
+<p>不是「覆盖」,而是 <code>patch:</code> 补靪:</p>
+<pre class="lang-tag" data-lang="yaml"><code>patch:
+  <span class="k">ascii_composer/switch_key</span>:           <span class="c"># 覆盖</span>
+    Shift_L: commit_text
+    Shift_R: commit_text
+  <span class="k">key_binder/bindings</span>:                <span class="c"># 整段替换(没用 /+,所以替换)</span>
+    - {accept: ..., send: ..., when: ...}
+    ...
+  <span class="k">punctuator/half_shape</span>:              <span class="c"># 覆盖 + 继承</span>
+    __include: default:/punctuator/half_shape
+    ',': '，'                         <span class="c"># 覆盖 default 的映射</span>
+    ...</code></pre>
+<div class="warn"><code>key_binder/bindings</code> <strong>不能用 <code>bindings/+</code> 追加</strong>到这个 patch,因为 rime_ice 自己定义 <code>key_binder/bindings</code> 时也没用 <code>import_preset</code> 拉 default — 它<strong>整段列出</strong>了需要的 binding。</div>
+</section>
+
+<!-- §10 排错 -->
+<section id="s10">
+<h2>§10 · 排错:日志与常见坑</h2>
+
+<h3>10.1 日志位置</h3>
+<table>
+<thead><tr><th>发行版</th><th>路径</th></tr></thead>
+<tbody>
+<tr><td>小狼毫</td><td><code>%TEMP%\rime.weasel.*</code></td></tr>
+<tr><td>鼠鬚管</td><td><code>$TMPDIR/rime.squirrel.*</code></td></tr>
+<tr><td>ibus-rime</td><td><code>/tmp/rime.ibus.*</code></td></tr>
+<tr><td>老版本</td><td><code>&lt;用户文件夹&gt;/rime.log</code></td></tr>
+</tbody>
+</table>
+<p>级别:INFO / WARNING / ERROR。<strong>WARNING 与 ERROR 重点关注</strong>。</p>
+
+<h3>10.2 常见坑</h3>
+<table>
+<thead><tr><th>症状</th><th>原因</th><th>解决</th></tr></thead>
+<tbody>
+<tr><td>改完配置不生效</td><td>没重新部署</td><td>开始菜单 → 重新部署</td></tr>
+<tr><td>部署报错 <code>invalid key binding #N, with invalid accept pattern: ...</code></td><td>键名拼错(如 <code>comma</code> 写成 <code>Comma</code>)</td><td>检查大小写、查 X11 keysym</td></tr>
+<tr><td><code>when</code> 写了 <code>paging</code> 但没生效</td><td><code>paging</code> 条件要先有 <code>Page_Down</code> 触发过</td><td>改 <code>has_menu</code></td></tr>
+<tr><td>中文标点怎么输都不对</td><td><code>recognizer/patterns/punct</code> 覆盖了 <code>punctuator</code></td><td>把 <code>key_binder</code> 放 <code>engine/processors</code> 头部</td></tr>
+<tr><td><code>Shift+Tab</code> 没用</td><td>modifier 顺序错(应该是 <code>Shift+Tab</code> 不是 <code>Tab+Shift</code>)</td><td>固定修饰符顺序:Shift → Control → Alt</td></tr>
+<tr><td>单独 Shift 切不了中英(小狼毫)</td><td>key_binder 的 release 事件 modifier 比较 bug</td><td>走 <code>ascii_composer/switch_key</code></td></tr>
+<tr><td><code>Ctrl+Shift+9</code> 切不动标点</td><td>被系统级 hotkey 抢了</td><td>改用 <code>Control+Shift+numbersign</code> 备用</td></tr>
+<tr><td><code>Control+grave</code> 没用</td><td>大小写或修饰符拼错</td><td>用字面字符时<strong>加引号</strong></td></tr>
+<tr><td><code>bindings: [a, b, c]</code> 整段失效</td><td>写成 list,不是 list of map</td><td>写成 <code>- {when:..., accept:...}</code></td></tr>
+</tbody>
+</table>
+
+<h3>10.3 调试技巧</h3>
+<ol>
+<li><strong>删了重建</strong>:把用户文件夹的 <code>&lt;name&gt;.custom.yaml</code> 改名或移走,部署一次看 baseline 行为</li>
+<li><strong>二分 patch</strong>:patch 太大就拆成两半,看哪一半出锅</li>
+<li><strong>看 build/</strong>:部署后看 <code>&lt;用户文件夹&gt;/build/&lt;name&gt;.schema.yaml</code>,这是合并后的最终配置,直接看 binding 是否如预期</li>
+<li><strong>INFO 日志有 <code>invalid key binding</code></strong>:直接定位到 <code>key_binder/bindings</code> 的第 N 条</li>
+</ol>
+</section>
+
+<!-- §11 同步 -->
+<section id="s11">
+<h2>§11 · 同步与多端一致性</h2>
+<p><strong>【同步】指用户数据同步</strong>,<strong>不</strong>指配置同步(配置要在每端分别维护,但 git 管理)。</p>
+<p>同步文件夹路径:在 <code>installation.yaml</code> 中:</p>
+<pre class="lang-tag" data-lang="yaml"><code>sync_dir: /path/to/your/sync/folder</code></pre>
+<p>被同步的目录:</p>
+<ul>
+<li><code>&lt;方案&gt;.userdb/</code> (用户词库)</li>
+<li><code>&lt;方案&gt;.userdb.txt</code> (用户词库快照,文本格式)</li>
+<li><code>user.yaml</code> (开关/方案记忆)</li>
+</ul>
+<p><strong>多端保持配置一致</strong>:用 git 仓库管理 <code>*.custom.yaml</code> / <code>*.schema.yaml</code>,<code>/D=&lt;path&gt;</code> 显式指定用户文件夹重装。</p>
+</section>
+
+<!-- 附录 A 按键名对照 -->
+<section id="appA">
+<h2>附录 A · 完整按键名对照表</h2>
+<p>来源:librime <code>include/X11/keysymdef.h</code>,去掉 <code>XK_</code> 前缀。</p>
+
+<h3>字母 / 数字</h3>
+<p><code>a</code> <code>b</code> <code>c</code> <code>d</code> <code>e</code> <code>f</code> <code>g</code> <code>h</code> <code>i</code> <code>j</code> <code>k</code> <code>l</code> <code>m</code> <code>n</code> <code>o</code> <code>p</code> <code>q</code> <code>r</code> <code>s</code> <code>t</code> <code>u</code> <code>v</code> <code>w</code> <code>x</code> <code>y</code> <code>z</code><br>
+<code>A</code> <code>B</code> … <code>Z</code>(一般不区分大小写)<br>
+<code>0</code> <code>1</code> <code>2</code> <code>3</code> <code>4</code> <code>5</code> <code>6</code> <code>7</code> <code>8</code> <code>9</code></p>
+
+<h3>功能键</h3>
+<p><code>F1</code> <code>F2</code> <code>F3</code> <code>F4</code> <code>F5</code> <code>F6</code> <code>F7</code> <code>F8</code> <code>F9</code> <code>F10</code> <code>F11</code> <code>F12</code></p>
+
+<h3>方向 / 翻页</h3>
+<p><code>Left</code> <code>Right</code> <code>Up</code> <code>Down</code><br>
+<code>Home</code> <code>End</code> <code>Prior</code> <code>Page_Up</code> <code>Next</code> <code>Page_Down</code> <code>Begin</code></p>
+
+<h3>编辑键</h3>
+<p><code>BackSpace</code> <code>Return</code> <code>Escape</code> <code>Tab</code> <code>Delete</code> <code>Insert</code> <code>space</code> <code>Linefeed</code> <code>Clear</code></p>
+
+<h3>修饰键</h3>
+<p><code>Shift_L</code> <code>Shift_R</code> <code>Control_L</code> <code>Control_R</code> <code>Alt_L</code> <code>Alt_R</code> <code>Meta_L</code> <code>Meta_R</code> <code>Super_L</code> <code>Super_R</code> <code>Hyper_L</code> <code>Hyper_R</code> <code>Caps_Lock</code> <code>Shift_Lock</code> <code>Num_Lock</code> <code>Scroll_Lock</code></p>
+
+<h3>标点 / 特殊字符(键名 → 字面)</h3>
+<table>
+<thead><tr><th>字面</th><th>键名</th></tr></thead>
+<tbody>
+<tr><td><code>,</code></td><td><code>comma</code></td></tr>
+<tr><td><code>.</code></td><td><code>period</code></td></tr>
+<tr><td><code>;</code></td><td><code>semicolon</code></td></tr>
+<tr><td><code>:</code></td><td><code>colon</code></td></tr>
+<tr><td><code>'</code></td><td><code>apostrophe</code></td></tr>
+<tr><td><code>"</code></td><td><code>quotedbl</code></td></tr>
+<tr><td><code>`</code></td><td><code>grave</code></td></tr>
+<tr><td><code>~</code></td><td><code>asciitilde</code></td></tr>
+<tr><td><code>!</code></td><td><code>exclam</code></td></tr>
+<tr><td><code>@</code></td><td><code>at</code></td></tr>
+<tr><td><code>#</code></td><td><code>numbersign</code></td></tr>
+<tr><td><code>$</code></td><td><code>dollar</code></td></tr>
+<tr><td><code>%</code></td><td><code>percent</code></td></tr>
+<tr><td><code>^</code></td><td><code>caret</code> / <code>asciicircum</code></td></tr>
+<tr><td><code>&amp;</code></td><td><code>ampersand</code></td></tr>
+<tr><td><code>*</code></td><td><code>asterisk</code></td></tr>
+<tr><td><code>(</code></td><td><code>parenleft</code></td></tr>
+<tr><td><code>)</code></td><td><code>parenright</code></td></tr>
+<tr><td><code>-</code></td><td><code>minus</code></td></tr>
+<tr><td><code>_</code></td><td><code>underscore</code></td></tr>
+<tr><td><code>=</code></td><td><code>equal</code></td></tr>
+<tr><td><code>+</code></td><td><code>plus</code></td></tr>
+<tr><td><code>[</code></td><td><code>bracketleft</code></td></tr>
+<tr><td><code>]</code></td><td><code>bracketright</code></td></tr>
+<tr><td><code>{</code></td><td><code>braceleft</code></td></tr>
+<tr><td><code>}</code></td><td><code>braceright</code></td></tr>
+<tr><td><code>\</code></td><td><code>backslash</code></td></tr>
+<tr><td><code>|</code></td><td><code>bar</code></td></tr>
+<tr><td><code>/</code></td><td><code>slash</code></td></tr>
+<tr><td><code>?</code></td><td><code>question</code></td></tr>
+<tr><td><code>&lt;</code></td><td><code>less</code></td></tr>
+<tr><td><code>&gt;</code></td><td><code>greater</code></td></tr>
+</tbody>
+</table>
+
+<h3>小键盘</h3>
+<p><code>KP_0</code> <code>KP_1</code> … <code>KP_9</code><br>
+<code>KP_Decimal</code> <code>KP_Enter</code> <code>KP_Space</code> <code>KP_Tab</code><br>
+<code>KP_Add</code> <code>KP_Subtract</code> <code>KP_Multiply</code> <code>KP_Divide</code><br>
+<code>KP_Separator</code> <code>KP_Equal</code> <code>KP_Home</code> <code>KP_End</code> <code>KP_Page_Up</code> <code>KP_Page_Down</code> <code>KP_Left</code> <code>KP_Right</code> <code>KP_Up</code> <code>KP_Down</code> <code>KP_Insert</code> <code>KP_Delete</code> <code>KP_Begin</code></p>
+<blockquote>完整列表(几百个)见 <code>librime/include/X11/keysymdef.h</code>。</blockquote>
+</section>
+
+<!-- 附录 B 十个定制场景 -->
+<section id="appB">
+<h2>附录 B · 10 个最常见定制场景(抄例子)</h2>
+
+<h3>B.1 每页 9 个候选</h3>
+<pre class="lang-tag" data-lang="yaml"><code><span class="c"># default.custom.yaml</span>
+patch:
+  <span class="k">"menu/page_size"</span>: 9</code></pre>
+
+<h3>B.2 <code>/</code> 键直接出「、」</h3>
+<pre class="lang-tag" data-lang="yaml"><code><span class="c"># &lt;方案&gt;.custom.yaml</span>
+patch:
+  <span class="k">"punctuator/full_shape/"</span>: "、"
+  <span class="k">"punctuator/half_shape/"</span>: "、"</code></pre>
+
+<h3>B.3 <code>,</code> <code>.</code> 翻页(Mac 风格)</h3>
+<pre class="lang-tag" data-lang="yaml"><code>patch:
+  <span class="k">"key_binder/bindings"</span>:
+    - {when: paging,   accept: comma,  send: Page_Up}
+    - {when: has_menu, accept: period, send: Page_Down}</code></pre>
+
+<h3>B.4 <code>[</code> <code>]</code> 翻页(已在 §6.7)</h3>
+
+<h3>B.5 用 <code>;</code> <code>'</code> 选第 2/3 候选(形码快手)</h3>
+<pre class="lang-tag" data-lang="yaml"><code>patch:
+  <span class="k">"key_binder/bindings"</span>:
+    - {when: has_menu, accept: semicolon,   send: 2}
+    - {when: has_menu, accept: apostrophe,  send: 3}</code></pre>
+
+<h3>B.6 <code>Control+</code> 唤出方案选单(替代 <code>Ctrl+`</code>)</h3>
+<pre class="lang-tag" data-lang="yaml"><code>patch:
+  <span class="k">"switcher/hotkeys"</span>:
+    - "Control+s"
+    - F4</code></pre>
+
+<h3>B.7 Caps Lock 切到 ASCII + 默认大写</h3>
+<pre class="lang-tag" data-lang="yaml"><code>patch:
+  <span class="k">"ascii_composer/good_old_caps_lock"</span>: true
+  <span class="k">"ascii_composer/switch_key"</span>:
+    Caps_Lock: commit_code
+    Shift_L: noop
+    Shift_R: noop
+    Control_L: noop
+    Control_R: noop</code></pre>
+
+<h3>B.8 在 gVim / 终端里默认英文</h3>
+<pre class="lang-tag" data-lang="yaml"><code><span class="c"># weasel.custom.yaml</span>
+patch:
+  <span class="k">"app_options/gvim.exe"</span>:        {ascii_mode: true}
+  <span class="k">"app_options/windowsterminal.exe"</span>: {ascii_mode: true}
+  <span class="k">"app_options/alacritty.exe"</span>:   {ascii_mode: true}</code></pre>
+
+<h3>B.9 关闭逐键提示(表形输入)</h3>
+<pre class="lang-tag" data-lang="yaml"><code><span class="c"># &lt;码表方案&gt;.custom.yaml</span>
+patch:
+  <span class="k">"translator/enable_completion"</span>: false</code></pre>
+
+<h3>B.10 关闭用户词库与字频(隐私 / 重置)</h3>
+<pre class="lang-tag" data-lang="yaml"><code>patch:
+  <span class="k">"translator/enable_user_dict"</span>: false</code></pre>
+</section>
+
+<!-- 附录 C 来源参考 -->
+<section id="appC">
+<h2>附录 C · 来源与参考</h2>
+<table>
+<thead><tr><th>引用</th><th>URL</th></tr></thead>
+<tbody>
+<tr><td>Rime 官方 wiki 首页</td><td><a href="https://github.com/rime/home/wiki">github.com/rime/home/wiki</a></td></tr>
+<tr><td>定製指南(最权威)</td><td><a href="https://github.com/rime/home/wiki/CustomizationGuide">CustomizationGuide</a></td></tr>
+<tr><td>配置文件语法</td><td><a href="https://github.com/rime/home/wiki/Configuration">Configuration</a></td></tr>
+<tr><td>用户文件夹</td><td><a href="https://github.com/rime/home/wiki/UserData">UserData</a></td></tr>
+<tr><td>共享文件夹</td><td><a href="https://github.com/rime/home/wiki/SharedData">SharedData</a></td></tr>
+<tr><td>方案概念(八股文 / 拼寫運算 / 引擎組件)</td><td><a href="https://github.com/rime/home/wiki/RimeWithSchemata">RimeWithSchemata</a></td></tr>
+<tr><td>拼写运算</td><td><a href="https://github.com/rime/home/wiki/SpellingAlgebra">SpellingAlgebra</a></td></tr>
+<tr><td>配方(進階自訂)</td><td><a href="https://github.com/rime/home/wiki/Recipes">Recipes</a></td></tr>
+<tr><td>小狼毫发布手册</td><td><a href="https://github.com/rime/home/wiki/WeaselReleaseManual">WeaselReleaseManual</a></td></tr>
+<tr><td>雪斋的设定项速查</td><td><a href="https://github.com/LEOYoon-Tsaw/Rime_collections/blob/master/Rime_description.md">Rime_description.md</a></td></tr>
+<tr><td>librime <code>key_binder</code> 源码</td><td><a href="https://github.com/rime/librime/blob/master/src/rime/gear/key_binder.cc">key_binder.cc</a></td></tr>
+<tr><td>librime <code>editor</code> 源码</td><td><a href="https://github.com/rime/librime/blob/master/src/rime/gear/editor.cc">editor.cc</a></td></tr>
+<tr><td>X11 keysym 完整列表</td><td><a href="https://github.com/rime/librime/blob/master/include/X11/keysymdef.h">keysymdef.h</a></td></tr>
+<tr><td>東風破 (Rime 配置管理)</td><td><a href="https://github.com/rime/plum">plum</a></td></tr>
+<tr><td>雾凇拼音 (本机用方案)</td><td><a href="https://github.com/iDvel/rime-ice">rime-ice</a></td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- 附录 D 使用建议 -->
+<section id="appD">
+<h2>附录 D · 本说明书使用建议</h2>
+<ol>
+<li><strong>第一次看</strong>:从 §1 读到 §5,理解体系</li>
+<li><strong>改快捷键</strong>:直接跳 <a href="#s6">§6</a>,找到要改的动作 + 例子</li>
+<li><strong>写 patch</strong>:参考 <a href="#s3">§3</a> 的补靪语法 + <a href="#s9">§9</a> 的本机现状</li>
+<li><strong>出问题了</strong>:看 <a href="#s10">§10</a> 的常见坑</li>
+<li><strong>不知道按键怎么拼</strong>:查<a href="#appA">附录 A</a></li>
+</ol>
+<p>如果要把 Rime 装到新机器上,<strong>只拷这 3 个文件</strong>就够了:</p>
+<ul>
+<li><code>&lt;方案&gt;.schema.yaml</code>(本机是 rime_ice)</li>
+<li><code>&lt;方案&gt;.custom.yaml</code>(你的 patch)</li>
+<li><code>default.custom.yaml</code>(你的全局 patch)</li>
+</ul>
+<blockquote>其余的(default.yaml、词库、安装文件)都走 NSIS 装机,自动给。</blockquote>
+</section>
+
+</main>
+</div>
+
+<!-- 返回顶部 -->
+<a href="#" class="back-top" title="返回顶部">↑</a>
+
+<footer>
+  Rime 输入法设置说明书 · 重点:快捷键 · 内联 CSS 单文件版 · 基于 <a href="https://github.com/rime/home/wiki">rime/home.wiki</a> + librime 源码 · 2026-08-12
+</footer>
+
+</body>
+</html>
