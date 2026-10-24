@@ -1,4 +1,4 @@
-﻿﻿# Lessons Learned — Fluxing (rime/weasel fork)
+﻿﻿s Learned — Fluxing (rime/weasel fork)
 
 > **Scope**: `Fluxing` project (`rime/weasel` fork), reusable lessons distilled from dev incidents. Each entry: **Incident → Root cause → Lesson** format, source-recorded.
 > **Origin of this file**: commit `d6e2e1e` "docs(memory): lessons-learned - 沉淀开发事故教训" (initial L01–L07).
@@ -21,6 +21,24 @@
 >    no technical specificity.
 >
 > See **L12** at the bottom for the meta-lesson on how this file got damaged.
+
+> **2026-10-24 编号审计与补条 notice (this version)**
+>
+> - **撞号消解**: 原文件有 6 组编号撞号 —— `L57` / `L57bis`、`L62`×2、
+>   `L95`×2、`L96`×2、`L97`×2、`L103-PhaseH-IME-TSF-Mutex` /
+>   `L103-H-PhaseI-Installer-Stale`。撞号条目按**文档出现顺序**重编为
+>   **L121–L126**，每条用「编号变更」注明原编号；`L57bis` 与
+>   `L103-H-PhaseI-Installer-Stale` 两个旧标签保留为别名，仍指向本文件。
+> - **补写空号**: `L50`（v0.18.27.2 hotfix 根因）、`L78`（v0.19.0.8）、
+>   `L79`（v0.19.0.9）—— 这三个号此前只被正文引用，从未成条。
+> - **新增**: `L112`（NSIS `/D=` 不能带引号）、`L113`（librime 1.13 拒绝
+>   `key_binder` 的 `send:` 中文全角标点）。
+> - **仍为空号（已备案，引用视为有效）**: `L102`、`L114`、`L115`、`L116`、`L117`、`L118`、`L119`、`L120`
+>   —— `L102` 在 CHANGELOG 里只记为 candidate，从未成条；`L114`-`L119` 是 2026-10-24
+>   编号审计时预留的连续号（撞号条目从更高号段续编）；`L120` 是 `output/install.nsi`
+>   注释里的安装脚本改版标签，不是本文件的条目号。
+> - **命名空间提醒**: `output/install.nsi` 的注释里同时存在两种编号 ——
+>   `L72` / `L79` / `L82` 指向本文件，`L120:` 指向安装脚本自身。
 
 ---
 
@@ -717,7 +735,7 @@ So even if `IsFluxingPath` had been correct, **silent installs silently produced
 
 2. **Added explicit `Call ForceFluxingSuffix` in `.onInit`** after the `skip:` label, so it runs for **all** install paths (default, registry-detected upgrade, and silent `/D=`).
 
-3. **Fixed user-data path** in the Section block (L534-535): `$R3\fluxing\user1\fluxing` → `$R3\user1\fluxing` (avoids the `fluxing\fluxing` double-segment after the suffix is appended).
+3. **Fixed user-data path** in the Section block (第 534-535 行): `$R3\fluxing\user1\fluxing` → `$R3\user1\fluxing` (avoids the `fluxing\fluxing` double-segment after the suffix is appended).
 
 4. **Removed dead `IsFluxingPath` function** (it was only called by the original broken `ForceFluxingSuffix`; not referenced after the rewrite).
 
@@ -766,7 +784,7 @@ The installer claimed success. The 0.18.3.0 release notes stated "fresh install 
 
 **WoW64 rule (the gotcha):** WoW64 is process-level, not module-level. A 64-bit Windows process can load 64-bit DLLs; a 32-bit Windows process can load 32-bit DLLs. There is no in-process bridge. A 64-bit EXE cannot load a 32-bit DLL, and vice versa. When Windows detects this mismatch, it returns `0xC000007B STATUS_INVALID_IMAGE_FORMAT` and the process fails to start.
 
-**Install.nsi File block (L455-486 in 0.18.3.0):**
+**Install.nsi File block (0.18.3.0 的第 455-486 行):**
 
 ```nsi
 File "weasel.dll"
@@ -3531,6 +3549,72 @@ spec 036 (0.18.24.0) introduced the Alt+, global hotkey via `RegisterHotKey(m_hW
 - "OnHotkey function exists, so the hotkey works" — function existence ≠ message routing.
 - "It worked locally with the GUI, ship it" without an automated smoke test that exercises the actual hotkey path.
 
+## L50 - v0.18.27.2: QuickPanelDialog 144 DPI 布局错乱 + D2D 不可用时没有 GDI fallback (2026-07-06)
+
+> **补写说明**（2026-10-24）：本条此前只被 L51 条目正文与 `.specify/PRD.md`
+> 引用，从未成条。内容按 L51 条目里保留的 `L50 root cause #1 / #2` 原文、
+> PRD §10.8 的 Bug A 记录、以及 v0.18.27.2 hotfix 的 cure 清单重建,
+> **属按上下文重建**，非原始事故文档。
+
+**Incident**:
+
+- 0.18.27.1 装机后用户报: 顶部一条黑横条且标题文字看不见、卡片区一片白且没有圆角、
+  Deploy 按钮文字被截成 `Deplo`
+- 三个现象同属 QuickPanelDialog 自绘, 但根因有**两个**, 不是一个
+
+**Root cause**:
+
+- **root cause #1（布局）**:
+  - `title_rc = {10, 5, client.right-10, 25}` 高度只有 20px, 装不下 17pt Large
+    标题（需要 ~28px）⇒ 文字被裁, 只剩 D2D rt 的默认黑底
+  - `card_rc = {5, 30, client.right-5, client.bottom-5}` 的 right 越过 `WS_BORDER`
+    的 1-2px inset ⇒ 卡片跑出 client 区被裁掉
+  - X 按钮 `CreateWindowExW(..., QP_WIDTH-30, 5, 22, 22, ...)` 用的是窗口宽 300
+    而不是 `client.right`（`WS_BORDER` 之后约 298）⇒ 按钮骑在边框上并压住 TitleLabel
+  - `deploy_rc` 宽度 95 不够放 Deploy 文字 + 6px 圆角 + padding ⇒ 文字被截成 `Deplo`
+- **root cause #2（D2D fallback 缺失）**:
+  `FluxingD2DRenderer::Instance().CreateHwndRenderTarget(hwnd)` 返回 null 时
+  （D2D 不可用 / 注册表 ACL / GPU driver hang）, `HandlePaint()` 直接
+  `EndPaint + return 0`, **什么都不画**; 而该 HWND 的 `hbrBackground` 是 nullptr,
+  Windows 于是用 dialog 的 `COLOR_WINDOW+1` 背景 ⇒ 标题 / 卡片 / 按钮位置全是白的。
+  spec 037 ship 时假定 D2D 一定拿得到, 所以没有第二条路
+
+**Fix**（v0.18.27.2, 与 L51 同一个 hotfix）:
+
+- `WeaselServer/QuickPanelDialog.cpp`:
+  `title_rc = {10, 4, client.right-32, 30}`（高 26, 右侧让出 X 按钮）;
+  `card_rc = {5, 32, client.right-2, client.bottom-5}`;
+  X 按钮 `client.right-25, 4, 20, 20`; toggle / deploy 改用 card-local 坐标 +
+  `GetClientRect(card, ...)` + 宽 50 / 100
+- `WeaselUI/FluxingComponents/{Panel,Label,Button,Toggle}.cpp`: 每个控件在
+  `if (!rt)` 分支里先走 GDI 再 `EndPaint`
+  - Panel: `CreateSolidBrush(pal.back)` + `FillRect` + `DeleteObject`
+  - Label: `CreateFontIndirectW(Segoe UI, 17pt)` + `SetTextColor(pal.text)` +
+    `DrawTextW(DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX)` + `DeleteObject`
+  - Button: 同款 GDI `FillRect` + `DrawText`（按 style 取色, 14pt 标签）
+  - Toggle: `CreateSolidBrush(track_color)` + `FillRect` + `Ellipse` 画 knob
+    （progress 插值保留: progress=1 混 `palette.hilited_back`, progress=0 混中灰）
+
+**Verification**（与 L51 同一次 ship 的 L46 三路径 hard gate, 0 error）:
+
+- installer 42,873,293 bytes; `scripts/test-infra/run-test-suite.bat` →
+  ALL TESTS PASSED（16 个测试工程）; AGENTS.md §2.5 静默装机 smoke test 8 项
+  invariant PASS + L14 架构校验（x86 = 0x14C, weaselx64.dll = 0x8664）
+- L42 byte-verify: `0x1E1E1E` 在 weasel.dll 里 15 处（调色板未被破坏）
+- 注: 这条 smoke test 的**路径覆盖**部分当时是假绿, 见 L112
+
+**Pattern-Key**:
+
+- `d2d.no-gdi-fallback`（新增）— 自绘控件库必须为「渲染目标不可用」准备第二条路,
+  不能假定 D2D 一定拿得到; spec 037 的这个 fallback 是**事后补**的
+- 累计 Recurrence-Count: 1
+
+**关联**:
+
+- L51 (v0.18.27.2 hotfix: lang bar 集成 + 装完提示重启 + BOM/换行清理)
+- L48 (FluxingD2DRenderer atexit crash —— rt 生命周期, 与本条正交)
+- L52 (spec 041 v0.18.28.0 DPI handling, 3 次失败后成功)
+
 ## L51 - v0.18.27.2 hotfix (spec 036 US036-B + L50 D2D fallback + L51 lang bar + L51 post-install prompt + L47 BOM/line ending cleanup)
 
 **Triggered by**: 0.18.27.2 hotfix to fix 3 user-reported issues after installing 0.18.27.1:
@@ -3877,7 +3961,7 @@ User reported "frequently interrupted tasks / session interruption". Investigati
 
 ### Symptom
 
-User reported after installing v0.18.30.0: "输入法切换后，仍然无法输入中文" (after switching to the Fluxing input method, Chinese input still does not work). User had to reboot to recover. Also: "快捷设置栏在火流猩输入法切换后不显示" (QuickPanel does not show after switching to Fluxing IME) - separate root cause, see L57bis.
+User reported after installing v0.18.30.0: "输入法切换后，仍然无法输入中文" (after switching to the Fluxing input method, Chinese input still does not work). User had to reboot to recover. Also: "快捷设置栏在火流猩输入法切换后不显示" (QuickPanel does not show after switching to Fluxing IME) - separate root cause, see L121.
 
 ### Investigation timeline (Phase 1: Root Cause Investigation, systematic-debugging)
 
@@ -3956,12 +4040,14 @@ User reported after installing v0.18.30.0: "输入法切换后，仍然无法输
 - [ ] Smoke test (AGENTS.md §2.5) on a clean install.
 - [ ] Commit + push to kizemo/Fluxing, tag v0.18.31.0.
 
-### Related incident note (L57bis - separate user symptom, same time)
+### Related incident note (L121 - separate user symptom, same time)
 
 User simultaneously reported "快捷设置栏在火流猩输入法切换后不显示，多次按快捷键才显示，样式与设计稿差距太大，过于粗糙，美观度不足" (QuickPanel does not show after switching to Fluxing IME, must press hotkey multiple times, visual style is rough). Separate root cause: the user-installed WeaselServer.exe is 13:49 compiled, **earlier than** the spec 049+052 v4 commit 17:42 - so the v4 QuickPanelDialog is not in the user binary. v0.18.30.0 installer (18:12) used weasel.dll 17:16 - **also earlier than v4** (17:16 < 17:42), so even the installer binary does not contain v4. **L42 false-positive** pattern: "git has the code" != "binary has the code". Cure: rebuild weasel.dll from HEAD before tagging v0.18.31.0; L42 byte-verify with a unique pattern from v4 code (e.g. `FluxingQuickPanel_v4` UTF-16LE byte pattern - the spec-049-added kClassName literal). If pattern count == 0, the v4 code is not linked; rebuild.
 
 
-## L57bis - "image-deleted kernel zombie" cannot be killed by taskkill (must reboot Windows)
+## L121 - "image-deleted kernel zombie" cannot be killed by taskkill (must reboot Windows)
+> **编号变更**（2026-10-24）：本条原编号 `L57bis`（`L57` 的子条目），与 `L57`
+> 数字前缀撞号，审计后重编为 **L121**。旧标签 `L57bis` 保留为别名，仍指向本条。
 
 **Date:** 2026-07-08
 **Status:** OPEN
@@ -4014,7 +4100,7 @@ CPU=0s WS=0MB Handles=0 Threads=0 Responding=True Path=(empty)
 - [x] v0.18.31.1 installer built (commit pending) with L13 fix in 4 places.
 - [x] 7th active WeaselServer (PID 12372) install in `C:\Program Files\fluxing\weasel\` confirmed via WMI. This is v0.18.30 binary (per size + mtime 22:05). New install will overwrite with v0.18.31.1 binary.
 - [x] 6 image-deleted kernel zombies cannot be killed by NSIS taskkill; they require Windows reboot.
-- [x] L57bis written; action item for future: investigate `waitForInputIdle` or process-tree enumeration in NSIS to detect lone zombies BEFORE attempting file ops, so the install can prompt "Lone zombie detected: please reboot before reinstalling" instead of silently leaving them.
+- [x] L121 written; action item for future: investigate `waitForInputIdle` or process-tree enumeration in NSIS to detect lone zombies BEFORE attempting file ops, so the install can prompt "Lone zombie detected: please reboot before reinstalling" instead of silently leaving them.
 
 
 
@@ -4040,7 +4126,7 @@ CPU=0s WS=0MB Handles=0 Threads=0 Responding=True Path=(empty)
 
 2. **The user's previous installation was at D:\Program Files\fluxing**. Any debug install that goes elsewhere creates ambiguity about which install is "the real" one. When the user reports symptoms like "algorithm service has fault" or "I see a C: path in the install dialog", the first hypothesis must be "the user is running the right binary from the right path" - this is only possible if the debug install matches the production install path.
 
-3. **Two parallel install locations are the root cause of the L17/L55/L57bis zombie loops**: every failed install leaves a zombie at C:\Program Files\fluxing\weasel\WeaselServer.exe, which then blocks subsequent installs, which leaves more zombies. Once you let C:\ in, you cannot reliably get back to a clean state without a Windows reboot.
+3. **Two parallel install locations are the root cause of the L17/L55/L121 zombie loops**: every failed install leaves a zombie at C:\Program Files\fluxing\weasel\WeaselServer.exe, which then blocks subsequent installs, which leaves more zombies. Once you let C:\ in, you cannot reliably get back to a clean state without a Windows reboot.
 
 4. **The iron rule makes root-cause analysis tractable**: when v0.18.32.0 install 21:30 wrote to C:\ instead of D:\, the user reported "I see a C: path", and the analysis that followed (v0.18.33.0 default path discussion) was polluted by having two parallel install locations. If only D:\ existed, every variable in the analysis (registry, file system, process list) would have a single value.
 
@@ -4058,7 +4144,7 @@ The v0.18.32.0 silent install (release/fluxing-0.18.32.0-installer.exe) ran with
 The PID 40324 WeaselServer.exe at C:\Program Files\fluxing\weasel\WeaselServer.exe had mtime 22:41:50 (the R6-fix-rebuilt binary from this session), so the binary itself was correct - the install path was the only problem. The user later uninstalled and clean-registry'd, but the C:\Program Files\fluxing\ folder was still there because:
 - C:\Program Files requires elevated PowerShell to delete
 - WeaselServer.exe at C:\ was still running (lock on the .exe file)
-- The user could not delete C:\Program Files\fluxing from non-elevated PowerShell (L17/L57bis)
+- The user could not delete C:\Program Files\fluxing from non-elevated PowerShell (L17/L121)
 
 The fix sequence was: `taskkill /F /PID 40324` (admin) -> `Remove-Item -Recurse -Force C:\Program Files\fluxing` (admin) -> verify gone. This is exactly the kind of debug-session mess the iron rule prevents.
 
@@ -4461,37 +4547,39 @@ release/fluxing-0.18.38.0-installer.exe (43,129,151 bytes, SHA256 24eb716bee9f49
 - L61 (4-bug deep-dive post-mortem from v0.18.36.0, including Bug A-D from spec 061)
 - L62 (THIS: 4-round half-fixes meta-analysis. The Microsft typo root cause + 7 anti-patterns. The lesson is: end-to-end verification is non-negotiable, L46 is insufficient.)
 
-## L62 - 5-round fix: Microsft typo + GetDpiForMonitor Win10 compat (v0.18.39.0)
+## L122 - 5-round fix: Microsft typo + GetDpiForMonitor Win10 compat (v0.18.39.0)
+> **编号变更**（2026-10-24）：本条原编号 `L62`，与 `L62`（v0.18.38 4 轮半修复）
+> 撞号，审计后重编为 **L122**。旧编号 `L62` 仍属 v0.18.38 那条。
 
 **Date:** 2026-07-10
 **Status:** OPEN (committed in v0.18.39.0)
 **Triggered by:** User re-test of v0.18.37.0 - 5 runtime bugs persist. Full end-to-end analysis revealed 4 distinct root causes, NOT a single bug.
 
-### Complete failure analysis (L62 supersedes L59 + L60 + L61)
+### Complete failure analysis (L122 supersedes L59 + L60 + L61)
 
 Across 5 fix rounds (spec 053, 055, 056, 060, 061), QuickPanel did not work. The actual failure has 4 layers:
 
-#### Layer 1: Microsft typo (L62-R1) - found via 30-second grep in spec 062
+#### Layer 1: Microsft typo (L122-R1) - found via 30-second grep in spec 062
 `WeaselTSF/Register.cpp:9` had "Software\Microsft\CTF\TIP\\" (typo, 30+ years). Windows looks in `Microsoft\CTF\TIP\` and never finds Fluxing. Fix: change Microsft -> Microsoft. This alone unblocks 3 of 5 bugs.
 
-#### Layer 2: TSF CLSIDs missing on Win 10 (L62-R2) - found via CoCreateInstance test
+#### Layer 2: TSF CLSIDs missing on Win 10 (L122-R2) - found via CoCreateInstance test
 `CLSID_TF_InputProcessorProfiles` and `CLSID_TF_CategoryMgr` are NOT registered on Win 10 24H2. `DllRegisterServer` calls `CoCreateInstance` -> returns `REGDB_E_CLASSNOTREG` (0x80040154) -> `RegisterProfiles` / `RegisterCategories` return FALSE -> old code returned `E_FAIL` -> `regsvr32` exit 3. Fix: `Server.cpp:DllRegisterServer` no longer requires success of these steps; only `RegisterServer()` (CLSID + InprocServer32) must succeed.
 
-#### Layer 3: api-ms-win-shcore-scaling-l1-1-1.dll missing (L62-R3) - found via dumpbin
+#### Layer 3: api-ms-win-shcore-scaling-l1-1-1.dll missing (L122-R3) - found via dumpbin
 `WeaselUI/WeaselPanel.cpp:87,187` calls `GetDpiForMonitor()` which the Win 11 SDK links from `api-ms-win-shcore-scaling-l1-1-1.dll`. This DLL is NOT in Win 10 24H2 System32. `regsvr32 exit 3 (ERROR_MOD_NOT_FOUND)` because DllMain of weasel.dll fails to resolve the dep at load time. Fix: replace static `GetDpiForMonitor` call with `SafeGetDpiForMonitor` that resolves the function via `GetModuleHandleW("user32.dll") + GetProcAddress("GetDpiForMonitor")` at runtime, falling back to 96 DPI if missing.
 
-#### Layer 4: myopic verification (L62-R4) - structural problem
+#### Layer 4: myopic verification (L122-R4) - structural problem
 Across all 4 prior rounds, I verified build success (L46 3-path gate) but never ran end-to-end: install + regsvr32 elevated + check `HKCU\Software\Microsoft\CTF\Assemblies\0x00000804` has the profile. L46 only verifies build, not behavior. New rule: every fix round MUST include an end-to-end test on a Win 10 24H2 or earlier system, and the install + regsvr32 + check sequence is mandatory.
 
 ### What I now understand that I didn't in earlier rounds
 
 The L60 anti-pattern AP-L60-A ("fixing only one end of a multi-component chain without verifying the other end") was correct. The issue was that I was building in Win 11 SDK 10.0.26100.0 environment but the user runs Win 10 24H2 10.0.26200.0. **Build environment != deploy environment** is a new antipattern AP-L62-X (build environment mismatch).
 
-AP-L62-A (from L60): trace full chain end-to-end before claiming fix.
-AP-L62-B: end-to-end means: install + regsvr32 elevated + check HKCU\0x00000804 + check KnownClasses. Not "tests pass".
-AP-L62-C: build with the same SDK as the deployment target OS.
-AP-L62-D: never trust single fix to fully fix a bug. The first attempt should be considered a hypothesis, validated by the deployment-equivalent test, not a fix.
-AP-L62-E: when adding 3 different fixes (L60 + L62-R1 + L62-R3), build ALL of them in one round and verify they compose. Do not fix one at a time across 5 rounds. The user's time budget is not unlimited.
+AP-L122-A (from L60): trace full chain end-to-end before claiming fix.
+AP-L122-B: end-to-end means: install + regsvr32 elevated + check HKCU\0x00000804 + check KnownClasses. Not "tests pass".
+AP-L122-C: build with the same SDK as the deployment target OS.
+AP-L122-D: never trust single fix to fully fix a bug. The first attempt should be considered a hypothesis, validated by the deployment-equivalent test, not a fix.
+AP-L122-E: when adding 3 different fixes (L60 + L122-R1 + L122-R3), build ALL of them in one round and verify they compose. Do not fix one at a time across 5 rounds. The user's time budget is not unlimited.
 
 ### Verification (L46 3-path hard gate, ALL PASS after spec 064)
 
@@ -4543,15 +4631,15 @@ xmake build in this environment only built 32-bit (the project's primary target 
 - L55 (MaintenanceGuard RAII for IPC)
 - L58 (Iron rule: D:\Program Files\fluxing)
 - L59 (4-bug post-mortem from v0.18.34.0, including Bug A-D from spec 056)
-- L60 (4-bug post-mortem from v0.18.35.0, including Bug A-D from spec 060; superseded by L62)
-- L61 (4-bug deep-dive post-mortem from v0.18.36.0, including Bug A-D from spec 061; superseded by L62)
-- L62 (THIS: 5-round meta-analysis + build environment mismatch + missing Win 10 TSF CLSIDs + api-ms dep removal)
+- L60 (4-bug post-mortem from v0.18.35.0, including Bug A-D from spec 060; superseded by L122)
+- L61 (4-bug deep-dive post-mortem from v0.18.36.0, including Bug A-D from spec 061; superseded by L122)
+- L122 (THIS: 5-round meta-analysis + build environment mismatch + missing Win 10 TSF CLSIDs + api-ms dep removal)
 
 ## L63 - install.nsi regsvr32 path bug + S:/ error (v0.18.40.0)
 
 **Date:** 2026-07-10
 **Status:** OPEN (committed in v0.18.40.0)
-**Triggered by:** User reported the regsvr32 'S:/' module-not-found error after spec 064 v0.18.39.0 was installed. Five diagnostic rounds (L62-AP-A through AP-D) traced this to a different root cause from what I had been chasing.
+**Triggered by:** User reported the regsvr32 'S:/' module-not-found error after spec 064 v0.18.39.0 was installed. Five diagnostic rounds (L122-AP-A through AP-D) traced this to a different root cause from what I had been chasing.
 
 ### Root cause of 'S:/' regsvr32 error (L63-R1)
 
@@ -4592,7 +4680,7 @@ This guarantees the path exists: `$R3\weasel\weaselx64.dll` is always `D:\Progra
 6. `HKLM\SOFTWARE\Microsoft\CTF\KnownClasses` may be created (RegisterCategories may fail on Win 10 if CLSID_TF_CategoryMgr is missing, but RegisterServer's CLSID write succeeds)
 7. `HKCU\Software\Microsoft\CTF\Assemblies0x00000804` may have a profile entry (RegisterProfiles may fail on Win 10 if CLSID_TF_InputProcessorProfiles is missing)
 
-### L63 anti-patterns (additional to L62)
+### L63 anti-patterns (additional to L122)
 
 - **AP-L63-A**: NSIS variable scoping. `$INSTDIR` is the install path with L14-suffix `\fluxing` appended, but the actual file layout is `<install>\weasel\`. **The relationship is `<install>\weasel\<file>`, not `<install with fluxing suffix>\<file>`.** I should have looked at the actual file layout to determine the right path variable.
 - **AP-L63-B**: When a user reports a specific error like 'S:/', trace it back to the actual command line, not just the error message. The 'S:/' was regsvr32's internal re-encoding of a non-existent path on a non-existent drive letter - a red herring. The actual cause was path-construction logic, not drive letters.
@@ -4692,7 +4780,7 @@ I don't have proof. This requires more diagnostics on the user's actual session.
 
 **I have to be honest with the user that I cannot fully verify the fix end-to-end without their cooperation.**
 
-1. The L62 lessons + L63 lessons + L64 lessons document 6 rounds of attempts.
+1. The L122 lessons + L63 lessons + L64 lessons document 6 rounds of attempts.
 2. The current state on the user's machine is partially fixed: CLSID written, TIP key written with 5 langs, but KnownClasses and HKCU\\0x00000804 not populated.
 3. The user has reported they CAN input Chinese in Notepad - this means ProcessKeyEvent is working. The issue is JUST the QuickPanel display.
 4. QuickPanel is shown by `EnableAlwaysShowMode()` -> calls `CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE)`. The `WS_EX_NOACTIVATE` may cause Windows to auto-hide the window when the user clicks elsewhere. 
@@ -4726,9 +4814,9 @@ I have spent 6 rounds. Each round I found a real root cause. But the user is not
   b) Show the user what state the registry is in NOW.
   c) Tell the user what command they should run to verify.
   d) Ask the user to share the result.
-  This is the end-to-end-test rule from L62 applied recursively.
+  This is the end-to-end-test rule from L122 applied recursively.
 - **AP-L64-B**: I have been treating each user report as a "bug to fix with a new code change". This is the wrong framing. Each new report is a new data point, not a new bug. The fix sequence should be: hypothesis - test - fix - test - ship. Not: hypothesis - fix - test - fail - report - new fix.
-- **AP-L64-C**: 4 L## entries (L59, L60, L61, L62) have been written about the same family of issues without convergence. This is documentation churn, not problem-solving. L64 must end with a clear ask to the user.
+- **AP-L64-C**: 4 L## entries (L59, L60, L61, L122) have been written about the same family of issues without convergence. This is documentation churn, not problem-solving. L64 must end with a clear ask to the user.
 
 ### Ask to user (the only path forward)
 
@@ -4756,7 +4844,7 @@ I have spent 6 rounds. Each round I found a real root cause. But the user is not
   - If KnownClasses missing: add manual KnownClasses write in DllRegisterServer
   - If HKCU\\0x00000804 missing: add explicit EnableLanguageProfileByDefault call in DllRegisterServer (which writes to HKCU)
   - If QuickPanel disappears: replace WS_EX_NOACTIVATE + add HWND_TOPMOST | SWP_NOACTIVATE SetWindowPos
-- [ ] If round-7 is needed, write v0.18.41 with all-round-7 fixes in one commit (AP-L62-E: never split fixes across rounds again)
+- [ ] If round-7 is needed, write v0.18.41 with all-round-7 fixes in one commit (AP-L122-E: never split fixes across rounds again)
 
 
 ---
@@ -6424,6 +6512,116 @@ DIB and an alpha channel that's properly composed. v0.19.0.10+.
   shared via single s_hoveredIdx; need per-icon s_hoveredIdx for
   v3-rev3 design's per-icon hover highlight)
 
+
+## L78 - v0.19.0.8: GradientFill 在 SDK 26100 32 位 DIB 上不可靠 + 24 位 DDB 没有 alpha 通道 (2026-07-11)
+
+> **补写说明**（2026-10-24）：本条此前只被 L76 条目正文引用（L78-debug / L78 修复）,
+> 从未成条。内容按 commit `95fea62`（v0.19.0.8）的 commit message + L76 条目的
+> Phase 1 / Phase 2 / Phase 3 原文重建, **属按上下文重建**, 非原始事故文档。
+
+**Incident**:
+
+- 用户装 v0.19.0.7 后报 3 件事: panel 全黑（不是 mac 风毛玻璃）、hover 把按钮底色
+  填成橙色（应该只改图标颜色）、鼠标移开后 hover 状态没被清掉
+- e2e 脚本 `test-quickpanel-e2e.py` 在 v0.19.0.7 上量到: 非黑像素 4%（只剩图标描边）,
+  95% 是纯黑
+
+**Root cause**:
+
+- **#1 GRADIENT_RECT 只初始化了 UpperLeft**:
+  `GRADIENT_RECT gRect = {0, 1};` 只给第一个成员赋值, `LowerRight` 默认 `(0, 0)`
+  ⇒ 渐变矩形高度为 0, `GradientFill` 什么都不画
+- **#2 离屏位图是 24 位 DDB, 没有 alpha 通道**:
+  `CreateCompatibleBitmap(hdcScreen, w, h)` 跟随屏幕位深（多数机器 24 位）,
+  24 位 DDB 无 alpha。即便 #1 修好、渐变画对了, alpha 也会在 `BitBlt` 到
+  `WS_EX_LAYERED` 窗口时丢失（取到的是 DDB 的 alpha = 0）⇒ 全黑
+- **#3 hover 语义搞反**: v3-rev3 设计是 hover = 浅色底 + 图标描边变强调色、
+  active 才是橙→紫底 + 白图标; v0.19.0.7 用了橙色 brush 填底
+
+**Fix**（v0.19.0.8）:
+
+- `QuickPanelDialog.cpp CreateOffscreenDC`: 改用 32 位 DIB section
+  （`BITMAPV5HEADER` + `BI_BITFIELDS`）替代 DDB, alpha 才能穿过 `BitBlt`
+  活到 `WS_EX_LAYERED`
+- `QuickPanelDialog.cpp OnPaint`: `GradientFill` 不可靠, 改 `FillRect(WHITE_BRUSH)`
+  + 1px 顶部高光（`LWA_ALPHA(220)` 负责窗口级半透明）
+  —— 这条就是正文里那句「L78-debug 确认 `GradientFill` 在 SDK 26100 32 位 DIB 上不可靠」
+- hover / active / default 三态画笔分工: `bgBrush = s_hBrushHighlight`（白）
+  + `s_hPenIconAccent`（橙描边）/ `s_hBrushActive`（橙）+ `GetStockObject(WHITE_PEN)` /
+  `NULL` + `s_hPenIconDim`（灰）
+
+**Verification**:
+
+- `test-quickpanel-e2e.py`: v0.19.0.7 非黑 4% → v0.19.0.8 **96% white**
+- installer SHA256 `5c31dec831fb2049be2b02ca04d926065fee1fd070982950f093e1f60af84f1d`
+
+**Pattern-Key**:
+
+- `d2d.alpha-needs-32bit-dib`（新增）— `WS_EX_LAYERED` + per-pixel alpha 的离屏缓冲
+  必须是 32 位 DIB section, 24 位 DDB 会把 alpha 静默吃掉
+- `gdi.gradientfill-unreliable-sdk26100`（新增）— `GradientFill` 在 SDK 26100 的
+  32 位 DIB 上不可靠, 且失败方式是「静默什么都不画」
+- 累计 Recurrence-Count: 1
+
+**关联**:
+
+- L74 (D2D HwndRenderTarget 在本环境不合成到屏幕)
+- L76 (v0.19.0.8 GRADIENT_RECT + DIBSection fix —— 本条从 L76 正文拆出)
+- L77 (v0.19.0.9 圆角 + logo 路径)
+- L79 (v0.19.0.9 hover ≠ active)
+
+## L79 - v0.19.0.9: hover ≠ active（hover 只改图标描边）+ 圆角要用 FillRgn + logo 必须装到 weasel 子目录 (2026-07-11)
+
+> **补写说明**（2026-10-24）：本条此前只被 L76 / L77 / L80 条目正文与
+> `output/install.nsi` 的 `; L79-fix:` 注释引用, 从未成条。内容按 commit
+> `1e7ac2a`（v0.19.0.9）的 commit message + L77 条目原文 + install.nsi
+> 现有注释重建, **属按上下文重建**, 非原始事故文档。
+
+**Incident**:
+
+- 用户装 v0.19.0.8 后报 3 件事: panel 是直角（应该圆角）、logo 加载不出来
+  （显示成黑块）、hover 应该只改图标描边颜色
+- v0.19.0.8 的 e2e 是 96% white, 但 100% 是方角
+
+**Root cause**:
+
+- **#1 hover 被当成 click**: v0.19.0.8 的 hover 走 `bgBrush = s_hBrushHighlight`
+  （白底）—— 那是 click / active 的语义, 不是 hover preview。
+  用户要的是「hover 只让图标描边变橙」
+- **#2 圆角不能靠 RoundRect 就完事**: `FillRect` 不吃 region。要让圆角**外面**的
+  像素 alpha = 0（真透明而不是白色方角）, 必须 `CreateRoundRectRgn` + `FillRgn`
+  （背景）/ `FrameRgn`（1px 白边）
+- **#3 logo 装错目录**: `install.nsi` 只把 `fluxing-logo.png` 装在 `$INSTDIR`,
+  而 `WeaselServer.exe` 在 `$INSTDIR\weasel`, `LoadImageW` 按可执行文件所在目录
+  找 ⇒ 找不到 logo, panel 上那块就是黑的
+
+**Fix**（v0.19.0.9）:
+
+- `QuickPanelDialog.cpp OnPaint`: `FillRgn` + `CreateRoundRectRgn` 画背景,
+  `FrameRgn` + `CreateRoundRectRgn` 画 1px 白边 ⇒ 圆角外 alpha = 0
+- hover 不再填底色, **只有 active 才填**
+- `output/install.nsi`: `SetOutPath $INSTDIR\weasel` 之后 `File "fluxing-logo.png"`,
+  再 `SetOutPath $INSTDIR` 复位（`SetOutPath` 只影响其后的 `File` 指令 —— 见 L77）
+
+**Verification**:
+
+- e2e v0.19.0.9: `RGB(255,255,255)` 23009 px（93% 白）、`RGB(60,60,67)` 842 px
+  （图标描边）、`RGB(0,0,0)` 629 px（透明圆角）
+- installer SHA256 `0f7666b76f9915128026ec3475316efcc82cb479d2852a6fdd4f3995b18b40b7`
+
+**Pattern-Key**:
+
+- `ui.hover-is-not-active`（新增）— hover 只改图标描边, 底色留给 active;
+  两者共用一套 brush 会让 hover 看起来像「按下去」
+- `nsis.setoutpath-affects-only-subsequent-file`（新增）— `SetOutPath` 是**后续**
+  `File` 指令的输出目录, 装资源文件要成对写 `SetOutPath` / 复位
+- 累计 Recurrence-Count: 1
+
+**关联**:
+
+- L77 (v0.19.0.9 圆角 + logo 路径 —— 本条从 L77 正文拆出)
+- L78 (v0.19.0.8: hover 语义在这一版做错, 本条纠正)
+- L82 (v0.19.0.12: 装 `fluxing-logo_small.png`)
 
 ## L80 - v0.19.0.10: per-pixel alpha Liquid Glass via UpdateLayeredWindow + 32-bit DIB
 
@@ -8291,7 +8489,9 @@ L96 不仅是 "fix bug",而是建立完整的 ship 前流程:
 - SHA256 `1d3c02ca11e0631bbac9c59ef68e59da267919e295e5b2e1ec7b64a0d7f13a0a`
 
 
-## L95 - v0.19.0.28: 3 UI 一次 ship (短语 v2 + 用户词典 + 快捷键设置)
+## L123 - v0.19.0.28: 3 UI 一次 ship (短语 v2 + 用户词典 + 快捷键设置)
+> **编号变更**（2026-10-24）：本条原编号 `L95`（v0.19.0.25 常用短语 UI），撞号，
+> 审计后重编为 **L123**。旧编号 `L95` 仍属 v0.19.0.25 那条。
 
 **User feedback (post v0.19.0.27, 3 个剩余功能)**:
 1. ❌ 短语 UI 简陋 (v0.19.0.25 spec 042 ship 但外观/UX 简陋)
@@ -8300,9 +8500,9 @@ L96 不仅是 "fix bug",而是建立完整的 ship 前流程:
 
 ### 调研方法 (per user 协议: brainstorm + 3 调研 agents + 视觉稿 + 雙驗收)
 
-L95 在 L94 (3 agent 调研 + 雙驗收) pattern 基础上升级:
+L123 在 L94 (3 agent 调研 + 雙驗收) pattern 基础上升级:
 - 5 phase 流程: spec 写完 (3 spec) → 视觉稿 v3 (canvas-design 3 PNG) → 实施 (3 implementation agents 并行) → 双验收 (Reality + Test) → Code Review
-- Code Review **新加**的第三轴 — 之前 L94 流程只有 Reality + Test, L95 显式把 Code Review 加入 ship 前必走
+- Code Review **新加**的第三轴 — 之前 L94 流程只有 Reality + Test, L123 显式把 Code Review 加入 ship 前必走
 - 第 5 phase 修复迭代 (Code Review 找 1 blocker, ProductionDeploy, 修后再 ship)
 
 ### Phase 1-3 实施 (3 track 并行)
@@ -8347,16 +8547,16 @@ L95 在 L94 (3 agent 调研 + 雙驗收) pattern 基础上升级:
 - TestPhrasesDialog 69/69 + TestUserDictionary 26/26 + TestShortcutSettings 22/22 = 117 PASS
 - L94/L95/L96/L97 baseline 全部保持 (TestDefaultHotkeys 5/5, TestQuickPanelRefactor 1/1)
 
-### Anti-patterns 新增 (L95 教训)
+### Anti-patterns 新增 (L123 教训)
 
-- **AP-L95-A**: 3 UI shipping 时, 共享 chrome pattern 应**抽公共 helper** (title bar 自绘 + hairline + 圆角 rgn 在 3 个 cpp 重复 ~200 行)。Follow-up v0.19.0.30 spec 抽 `ModalChrome` 公共类。
-- **AP-L95-B**: Code Review 不可省 — 5 轴审查 (correctness / readability / architecture / security / performance / compatibility) **必须** ship 前运行。双验收 (Reality + Test) 看功能正确, Code Review 看资源泄漏 / dead code / 注释 / 集成路径。L94 baseline 全 PASS 但 MockDeploy 是 Sleep+return 的假实现, **用户不可见但 CLAUDE.md §2 强约束违反**, TestUserDictionary 26 PASS 抓不到 (因为 MockDeploy 的 contract 是 "returns true", 没要求真部署)。
-- **AP-L95-C**: rime_api direct call 必须通过 instance 拿。`RimeWithWeaselHandler::StartMaintenance/EndMaintenance` 是 instance methods, 不能从 static 调。v0.19.0.28 fix 简化 (TXT 写盘 + 备份), 完整 librime hot-deploy 留 follow-up (v0.19.0.29 spec 拿 WeaselServerApp instance + rime_api->import_user_dict + deploy_schema)。
-- **AP-L95-D**: user-visible "Mock" 函数 (MockDeploy / MockInject / MockSendInput) 默认 prod 路径时是 anti-pattern。TestPhrasesDialog Test 5 v0.19.0.25 漏掉了 MockInject leak (L95), TestUserDictionary 26 PASS 没抓 MockDeploy bug (L95)— 任何 mock 函数必须**默认不指向 prod 路径** (default s_deployFn = &ProductionDeploy 才是正确的, MockDeploy 仅作 SetDeployFn 替换入口)。
-- **AP-L95-E**: deprecated RIME API 不用 (`RimeGetUserDataDir` 返回 const char*, 已 deprecated)。WeaselServer 实际用 `SHGetFolderPathW` (跟 PhrasesDialog.cpp:126 一致)。v0.19.0.28-fix 改用 SHGetFolderPathW + CreateDirectoryW, 不用 deprecated API。
-- **AP-L95-F**: global hotkey 编号要递增 (PhrasesDialog Alt+. = 9001→9002, UserDict Ctrl+Shift+U = 9003, Shortcut Ctrl+Shift+K = 9004)。避免冲突, ship 前 grep ID_HOTKEY_* 确认。
-- **AP-L95-G**: 视觉稿用 canvas-design skill 创建, 3 个 PNG + 3 个 gen_*.py 是 design-as-code — 实施 agent 可直接读 PNG 跟代码对齐, 不用每次从 spec 重画。
-- **AP-L95-H**: "TXT 已写盘" 算不算 "deploy" 是设计判断 — v0.19.0.28 算 partial deploy (RIME 在下次 process start 时读 TXT), 完整 hot-reload 算 v0.19.0.29 follow-up。**user 报告"⟳ 部署"按钮 "成功" + 文件落地 + 下次 RIME init 加载** = 这就是 user 期望的 deploy, 满足 spec §3.3 步骤 5-9 的 "可观察的"部分。
+- **AP-L123-A**: 3 UI shipping 时, 共享 chrome pattern 应**抽公共 helper** (title bar 自绘 + hairline + 圆角 rgn 在 3 个 cpp 重复 ~200 行)。Follow-up v0.19.0.30 spec 抽 `ModalChrome` 公共类。
+- **AP-L123-B**: Code Review 不可省 — 5 轴审查 (correctness / readability / architecture / security / performance / compatibility) **必须** ship 前运行。双验收 (Reality + Test) 看功能正确, Code Review 看资源泄漏 / dead code / 注释 / 集成路径。L94 baseline 全 PASS 但 MockDeploy 是 Sleep+return 的假实现, **用户不可见但 CLAUDE.md §2 强约束违反**, TestUserDictionary 26 PASS 抓不到 (因为 MockDeploy 的 contract 是 "returns true", 没要求真部署)。
+- **AP-L123-C**: rime_api direct call 必须通过 instance 拿。`RimeWithWeaselHandler::StartMaintenance/EndMaintenance` 是 instance methods, 不能从 static 调。v0.19.0.28 fix 简化 (TXT 写盘 + 备份), 完整 librime hot-deploy 留 follow-up (v0.19.0.29 spec 拿 WeaselServerApp instance + rime_api->import_user_dict + deploy_schema)。
+- **AP-L123-D**: user-visible "Mock" 函数 (MockDeploy / MockInject / MockSendInput) 默认 prod 路径时是 anti-pattern。TestPhrasesDialog Test 5 v0.19.0.25 漏掉了 MockInject leak (L95), TestUserDictionary 26 PASS 没抓 MockDeploy bug (L95)— 任何 mock 函数必须**默认不指向 prod 路径** (default s_deployFn = &ProductionDeploy 才是正确的, MockDeploy 仅作 SetDeployFn 替换入口)。
+- **AP-L123-E**: deprecated RIME API 不用 (`RimeGetUserDataDir` 返回 const char*, 已 deprecated)。WeaselServer 实际用 `SHGetFolderPathW` (跟 PhrasesDialog.cpp:126 一致)。v0.19.0.28-fix 改用 SHGetFolderPathW + CreateDirectoryW, 不用 deprecated API。
+- **AP-L123-F**: global hotkey 编号要递增 (PhrasesDialog Alt+. = 9001→9002, UserDict Ctrl+Shift+U = 9003, Shortcut Ctrl+Shift+K = 9004)。避免冲突, ship 前 grep ID_HOTKEY_* 确认。
+- **AP-L123-G**: 视觉稿用 canvas-design skill 创建, 3 个 PNG + 3 个 gen_*.py 是 design-as-code — 实施 agent 可直接读 PNG 跟代码对齐, 不用每次从 spec 重画。
+- **AP-L123-H**: "TXT 已写盘" 算不算 "deploy" 是设计判断 — v0.19.0.28 算 partial deploy (RIME 在下次 process start 时读 TXT), 完整 hot-reload 算 v0.19.0.29 follow-up。**user 报告"⟳ 部署"按钮 "成功" + 文件落地 + 下次 RIME init 加载** = 这就是 user 期望的 deploy, 满足 spec §3.3 步骤 5-9 的 "可观察的"部分。
 
 ### Files touched (v0.19.0.28, 18)
 - `WeaselServer/PhrasesDialog.{h,cpp}` (重写 v2)
@@ -8380,7 +8580,9 @@ L95 在 L94 (3 agent 调研 + 雙驗收) pattern 基础上升级:
 - SHA256 (TBD)
 
 
-## L96 - v0.19.0.29: QuickPanel 5 按钮 partial 接通 (Phrase + UserDict + Shortcut)
+## L124 - v0.19.0.29: QuickPanel 5 按钮 partial 接通 (Phrase + UserDict + Shortcut)
+> **编号变更**（2026-10-24）：本条原编号 `L96`（v0.19.0.26 PhrasesDialog bug fix），
+> 撞号，审计后重编为 **L124**。旧编号 `L96` 仍属 v0.19.0.26 那条。
 
 **User feedback (post v0.19.0.28, 1 bug)**:
 - ❌ QuickPanel 5 按钮 (hit 0-4) 实际只有 1 个接通 (Phrase → s_onPhrases), 其他 4 个是 no-op placeholder
@@ -8397,7 +8599,7 @@ v0.19.0.28 ship 的 UserDict + Shortcut 只接 `RegisterHotKey` 路径, 没接 Q
 
 L95 spec 042 没考虑 QuickPanel 集成, 留下这个 follow-up。**L95 流程教训**: spec 写完 + 视觉稿批准 后, 实施前必须问 "这个 dialog 怎么从 user 现有 flow 进入"。
 
-### Phase 2 修法 (L96)
+### Phase 2 修法 (L124)
 
 - `QuickPanelDialog.h` 加 2 个 typedef (`OnShowUserDict`/`OnShowShortcut`) + 2 个 Setter 声明 + 2 个 static 字段 (`s_onUserDict`/`s_onShortcut`)
 - `QuickPanelDialog.cpp` WM_LBUTTONUP drag 分支 + else 分支 各加 2 个 hit routing (hit==2 → s_onUserDict, hit==3 → s_onShortcut)
@@ -8412,14 +8614,14 @@ L95 spec 042 没考虑 QuickPanel 集成, 留下这个 follow-up。**L95 流程�
 - ✅ 5 按钮 click 路径全过 (drag + else 分支互斥, 无双 invoke)
 - ✅ L94/L95/L96/L97 baseline 不回归
 
-### Anti-patterns 新增 (L96)
+### Anti-patterns 新增 (L124)
 
-- **AP-L96-A**: QuickPanel 5 按钮设计 (Schema/Phrase/Symbols/Settings/Account) 是从上游 weasel 0.17.4 沿用的, 已经固化了 8 年。UserDict + Shortcut 是 v0.19.0.28 新增, **不适合硬塞进 5 按钮** (会破坏 L86 hover/active design)。正确做法: **保留 5 按钮原设计, 用 OnShowUserDict/OnShowShortcut setter 模式 + alt+hotkey 双入口**。L95 spec 042 没考虑 QuickPanel 集成, 留下这个 follow-up。
-- **AP-L96-B**: 5 按钮 Show() 7 参 (5 OnClick + 1 OnToggle) 是 history-locked。后续加新 dialog 用 SetOn* setter 模式, 不破坏 inline API。
-- **AP-L96-C**: 闭包 wiring 时机必须在 `m_server.Run()` 之前 (QuickPanel hotkey + click 路径依赖 static field 就绪)。L96 wiring 位置正确 (WeaselServerApp.cpp:183-184 在 L186 m_server.Run 之前)。
-- **AP-L96-D**: hit 0/4 仍是 no-op placeholder, 缺视觉反馈 (无 hover 选中、active bg 残留)。L96 follow-up 加 ASCII mode toggle / 登录, hit 0/4 也能进 callback。
-- **AP-L96-E**: design 稿 (.claude/design-md/) 不入 git 默认。L96 移到 docs/design/mockups-v0.19.0.28/ 跟踪 (commit a62856f6), 防止 design-as-code 漂移。
-- **AP-L96-F**: vcxproj 默认 PlatformToolset=v142 (VS2019), 系统只有 v143 (VS2022)。Override `/p:PlatformToolset=v143` 才能 build。L96 文档化此环境要求。
+- **AP-L124-A**: QuickPanel 5 按钮设计 (Schema/Phrase/Symbols/Settings/Account) 是从上游 weasel 0.17.4 沿用的, 已经固化了 8 年。UserDict + Shortcut 是 v0.19.0.28 新增, **不适合硬塞进 5 按钮** (会破坏 L86 hover/active design)。正确做法: **保留 5 按钮原设计, 用 OnShowUserDict/OnShowShortcut setter 模式 + alt+hotkey 双入口**。L95 spec 042 没考虑 QuickPanel 集成, 留下这个 follow-up。
+- **AP-L124-B**: 5 按钮 Show() 7 参 (5 OnClick + 1 OnToggle) 是 history-locked。后续加新 dialog 用 SetOn* setter 模式, 不破坏 inline API。
+- **AP-L124-C**: 闭包 wiring 时机必须在 `m_server.Run()` 之前 (QuickPanel hotkey + click 路径依赖 static field 就绪)。L124 wiring 位置正确 (WeaselServerApp.cpp:183-184 在第 186 行 m_server.Run 之前)。
+- **AP-L124-D**: hit 0/4 仍是 no-op placeholder, 缺视觉反馈 (无 hover 选中、active bg 残留)。L124 follow-up 加 ASCII mode toggle / 登录, hit 0/4 也能进 callback。
+- **AP-L124-E**: design 稿 (.claude/design-md/) 不入 git 默认。L124 移到 docs/design/mockups-v0.19.0.28/ 跟踪 (commit a62856f6), 防止 design-as-code 漂移。
+- **AP-L124-F**: vcxproj 默认 PlatformToolset=v142 (VS2019), 系统只有 v143 (VS2022)。Override `/p:PlatformToolset=v143` 才能 build。L124 文档化此环境要求。
 
 ### Files touched (v0.19.0.29, 5)
 - `WeaselServer/QuickPanelDialog.h` (+14)
@@ -8438,7 +8640,9 @@ L95 spec 042 没考虑 QuickPanel 集成, 留下这个 follow-up。**L95 流程�
 - SHA256 (TBD)
 
 
-## L97 - v0.19.0.30: 3 bug 修复 (grace + SetFocus + child-focus) + 真正 binary 沙箱验证
+## L125 - v0.19.0.30: 3 bug 修复 (grace + SetFocus + child-focus) + 真正 binary 沙箱验证
+> **编号变更**（2026-10-24）：本条原编号 `L97`（v0.19.0.27 WS_EX_LAYERED paint 修复），
+> 撞号，审计后重编为 **L125**。旧编号 `L97` 仍属 v0.19.0.27 那条。
 
 **User feedback (post v0.19.0.29, 3 bug 报告)**:
 1. ❌ 首次使用快捷键调出设置栏, 仍会短时间消失
@@ -8451,7 +8655,7 @@ User 复盘原话: "耗时接近一天进行的编辑, 为何所有要求都没�
 
 v0.19.0.29 ship 时只跑了 3 个 unit test exe (TestQuickPanelRefactor 1/1, TestPhrasesDialog 69, TestUserDictionary 26, TestShortcutSettings 22 = 117 assertions 全 PASS)。**没有跑 binary 真行为验证** — 3 个 user-visible bug 全部漏过。
 
-L97 强制流程: unit test + 真 binary 沙箱 e2e 测试 (link-probe 模式 + SendMessageW 真实 OS dispatch), 模拟 user 行为, 不能只 unit test 就 ship。
+L125 强制流程: unit test + 真 binary 沙箱 e2e 测试 (link-probe 模式 + SendMessageW 真实 OS dispatch), 模拟 user 行为, 不能只 unit test 就 ship。
 
 ### 3 Bug 根因 + 修法
 
@@ -8477,7 +8681,7 @@ L97 强制流程: unit test + 真 binary 沙箱 e2e 测试 (link-probe 模式 + 
 
 - ✅ 5 test exe 跑分 (v0.19.0.30 fix 后):
   - TestQuickPanelDialog: 12/12 PASS (5 cases / 11 assertions 新增)
-  - TestQuickPanelRefactor: 1/1 PASS (L97 baseline)
+  - TestQuickPanelRefactor: 1/1 PASS (L125 baseline)
   - TestPhrasesDialog: 75 PASS (69 + 6 新)
   - TestUserDictionary: 26 PASS
   - TestShortcutSettings: 22 PASS
@@ -8489,16 +8693,16 @@ L97 强制流程: unit test + 真 binary 沙箱 e2e 测试 (link-probe 模式 + 
 - ✅ Code Review: CONDITIONAL PASS (3 bug 修复正确, test 数量描述有误但功能覆盖正确)
 - ✅ 零回归 (L94/L95/L96/L97 baseline 全保持)
 
-### Anti-patterns 新增 (L97 教训, 8 条)
+### Anti-patterns 新增 (L125 教训, 8 条)
 
-- **AP-L97-A**: 单元测试 PASS ≠ ship 没问题。L97 强制: unit test 后必须做**真 binary 沙箱 e2e 测试**, 不能只 unit test 就 ship
-- **AP-L97-B**: L94 grace fix 漏改 WM_ACTIVATEAPP 路径。L97 复盘时 4 modal (QuickPanel/PhrasesDialog/UserDictionary/ShortcutSettings) 都要对照检查 grace 路径 (WM_ACTIVATEAPP / WM_KILLFOCUS / polling timer) 全部一致
-- **AP-L97-C**: 重复模式必须抽 helper。L94 polling timer grace + L97 WM_ACTIVATEAPP grace 是同一 `inGrace` 计算, L97 WM_KILLFOCUS grace 又是同一, 3 处重复。**Follow-up v0.19.0.31 抽 `bool InShowGrace()` helper**
-- **AP-L97-D**: inline edit 创建时序必须先 state 切换再 SetFocus
-- **AP-L97-E**: WM_KILLFOCUS handler 必须放过子控件夺焦点
-- **AP-L97-F**: 测试盲区是 ship blocker。任何 callback 接入端到端路径必须 e2e test 验证
-- **AP-L97-G**: vcxproj + .cpp include 必须同步。v0.19.0.28 ship 时漏, build cache 掩盖
-- **AP-L97-H**: 提交描述要准。L97 commit message 写 "+5 cases / +11 assertions" 而非 "+12"。**数量描述错位 = 自欺欺人**
+- **AP-L125-A**: 单元测试 PASS ≠ ship 没问题。L125 强制: unit test 后必须做**真 binary 沙箱 e2e 测试**, 不能只 unit test 就 ship
+- **AP-L125-B**: L94 grace fix 漏改 WM_ACTIVATEAPP 路径。L125 复盘时 4 modal (QuickPanel/PhrasesDialog/UserDictionary/ShortcutSettings) 都要对照检查 grace 路径 (WM_ACTIVATEAPP / WM_KILLFOCUS / polling timer) 全部一致
+- **AP-L125-C**: 重复模式必须抽 helper。L94 polling timer grace + L125 WM_ACTIVATEAPP grace 是同一 `inGrace` 计算, L125 WM_KILLFOCUS grace 又是同一, 3 处重复。**Follow-up v0.19.0.31 抽 `bool InShowGrace()` helper**
+- **AP-L125-D**: inline edit 创建时序必须先 state 切换再 SetFocus
+- **AP-L125-E**: WM_KILLFOCUS handler 必须放过子控件夺焦点
+- **AP-L125-F**: 测试盲区是 ship blocker。任何 callback 接入端到端路径必须 e2e test 验证
+- **AP-L125-G**: vcxproj + .cpp include 必须同步。v0.19.0.28 ship 时漏, build cache 掩盖
+- **AP-L125-H**: 提交描述要准。L125 commit message 写 "+5 cases / +11 assertions" 而非 "+12"。**数量描述错位 = 自欺欺人**
 
 ### Files touched (v0.19.0.30, 8)
 - `WeaselServer/QuickPanelDialog.cpp` (Bug 1 grace guard)
@@ -8538,7 +8742,7 @@ v0.19.0.30 ship 时只跑了 unit test + link-probe e2e (mechanism verify), **�
 2. **UserDictionary.cpp:1240 `SetLayeredWindowAttributes(LWA_ALPHA=255)`** 跟 line 1143 `UpdateLayeredWindow(ULW_ALPHA)` **互斥** (Win32 两种 layered driver 不能共存)
 3. **ShortcutSettings.cpp** 同 pattern (OnPaint 只画 title bar 56px, body 不画)
 
-根因在 v0.19.0.28 ship 时 spec 043/044 chrome 自绘就埋了, **不是 L97 修复引入**。
+根因在 v0.19.0.28 ship 时 spec 043/044 chrome 自绘就埋了, **不是 L125 修复引入**。
 
 ### Phase 2 修法 (L98, 抽 ModalChrome 公共类 + 修 3 modal paint)
 
@@ -8563,11 +8767,11 @@ v0.19.0.30 ship 时只跑了 unit test + link-probe e2e (mechanism verify), **�
 
 - **AP-L98-A**: unit test + e2e binary mechanism PASS ≠ ship 没问题。**e2e 必须加 pixel-level 验证** (GetPixel / PrintWindow / BitBlt 抓 window bitmap 验证 paint 真输出)
 - **AP-L98-B**: link-probe ≠ 真 GUI 渲染。subagent 跑 SendMessageW 验 WndProc 行为通过, 但 user 跑真 OS 合成看到 chrome 空白
-- **AP-L98-C**: 抽 ModalChrome 公共类 (L95-A follow-up, 5+ 轮 ship 没做, 本次完成)
+- **AP-L98-C**: 抽 ModalChrome 公共类 (L123-A follow-up, 5+ 轮 ship 没做, 本次完成)
 - **AP-L98-D**: WS_EX_LAYERED 两种 driver 互斥。`SetLayeredWindowAttributes(LWA_ALPHA)` 跟 `UpdateLayeredWindow(ULW_ALPHA)` 不能共存
 - **AP-L98-E**: WS_POPUP + WS_EX_LAYERED 模式下, 系统不会自动填背景。OnPaint 必须画整个 client area 渐变
 - **AP-L98-F**: ship-loop 失败模式 (5+ 轮 ship 仍 fail)。ship 报告 ≠ user 体验。L98+ 流程: ship 前必须有真 binary GUI 渲染验证
-- **AP-L98-G**: vcxproj 必须跟 .cpp 同步 (L97 修过 v0.19.0.28 漏 include, L98 加 ModalChrome.cpp 也要 5 个 vcxproj + e2e vcxproj 同步)
+- **AP-L98-G**: vcxproj 必须跟 .cpp 同步 (L125 修过 v0.19.0.28 漏 include, L98 加 ModalChrome.cpp 也要 5 个 vcxproj + e2e vcxproj 同步)
 - **AP-L98-H**: Chrome paint 路径必须 code review 必查。Unit test mock paint 跟真 paint 差距 = subagent view ≠ user view。code review 必须 include RenderSpec 等价检查
 
 ### Files touched (v0.19.0.31, 10)
@@ -8598,7 +8802,7 @@ v0.19.0.30 ship 时只跑了 unit test + link-probe e2e (mechanism verify), **�
 
 ### 复盘 (承认错误)
 
-v0.19.0.31 ship "189 + 53 e2e binary (含 pixel-level) PASS" 但 user 报 3 个新 UX bug。**像素值非 0 ≠ 功能正常**。6 轮 ship-loop (L94/L95/L96/L95/L97/L98) 失败模式根因 = e2e 只验 mechanism + pixel, **没验 user flow UX**。
+v0.19.0.31 ship "189 + 53 e2e binary (含 pixel-level) PASS" 但 user 报 3 个新 UX bug。**像素值非 0 ≠ 功能正常**。6 轮 ship-loop (L94/L95/L96/L123/L125/L98) 失败模式根因 = e2e 只验 mechanism + pixel, **没验 user flow UX**。
 
 ### 3 Root cause (3 investigator 共识)
 
@@ -8702,7 +8906,7 @@ NSIS ExecWait 调 console tool 时会 pop cmd 窗口。
 ### Ship
 - `release\fluxing-0.19.0.38-installer.exe` 43,189,443 bytes
 - md5 `d53b0c37738057087c5c298afec27189`
-- extract 后 WeaselServer.exe md5 `62bf75b119cc1d0a92dfbf68e5706dc6` (无 L97 stale, 跟 hotfix 79d522b source build 一致)
+- extract 后 WeaselServer.exe md5 `62bf75b119cc1d0a92dfbf68e5706dc6` (无 L125 stale, 跟 hotfix 79d522b source build 一致)
 
 ---
 
@@ -8762,7 +8966,7 @@ v0.19.0.39 ship 的 OnKeyDown case VK_ESCAPE handler 永远不会被触发 — �
 ### Ship
 - `release\fluxing-0.19.0.40-installer.exe` 43,195,078 bytes
 - md5 `5e977318c38af5a91ae01fc510677c84`
-- extract 后 WeaselServer.exe md5 `463b3c5927504d19e9627e68ca5852c2` (无 L97 stale,
+- extract 后 WeaselServer.exe md5 `463b3c5927504d19e9627e68ca5852c2` (无 L125 stale,
   跟 4c8d47d source build 一致)
 - build time 2026-07-21 08:20 (NSIS timestamp)
 - TestPhrasesDialog **102 PASS / 0 FAIL** (Test 25 = 2 新增 check, 100 baseline 不退化)
@@ -8828,13 +9032,13 @@ if (s_hInput && hfUi) {
 - **L103-A (TSF shim 进程不认 isolated HIMC)**: TSF 进程下 (任何注册了 `ITfTextInputProcessor` 的 DLL 主导的进程, e.g. WeaselServer.exe) **不要**用 `ImmCreateContext` + `ImmAssociateContext` 创建 isolated HIMC 给 hwnd。让 TSF shim 自动配 system default IME context。Per MSDN 的话只是 per-process 默认行为, TSF 进程下 per-hwnd isolated HIMC 跟 system TSF IME 互斥才是真陷阱。
 - **L103-B (4 ship 复发门槛)**: v0.19.0.35/36/43/45 4 个 ship 都 fail, 累计装机 user 反馈 4 次远超 L1 门槛 (3 次) 需正式 lessons-learned。`feedback_imm_release_context_trap.md` 只 catch 了 `ImmDestroyContext` + 1 参 `ImmReleaseContext` 两个具体坑, **没 catch** TSF 进程下 "per-hwnd isolated HIMC 互斥" 这个更隐蔽的根因。
 - **L103-C (Per-MSDN 不可信)**: "The application should not call ImmReleaseContext for a handle returned by ImmAssociateContext" 理论上正确, 但**忽略** TSF 进程下 per-hwnd isolated HIMC 跟 system TSF IME 互斥。`v0.19.0.43` 按 MSDN 改成"不调 ImmReleaseContext" 装机端仍 fail, 提醒我们: per-MSDN 的指南要看执行环境 (TSF shim / plain GUI / console / service) 才靠谱。
-- **L103-D (sandbox 测不出 IME 行为)**: `TestPhrasesDialog` sandbox 不跑 IME 实际行为, 只验 layout / list / 按钮 / reorder / drag。任何 IME 改动都**必须**装机端 5 项 user flow 验证 (打拼音 → 候选词出 → Enter 上屏 → AddTop → ListView 端到端)。L97 stale-binary ship gate 也帮不上忙 (binary 看起来 PASS 但装机端 IME 不工作)。
-- **L103-E (L97 stale binary + 真 source build md5 比对)**: 每次 IME 改动 ship 后, 装机端 `_check_install_v2.ps1` 必须 verify:
+- **L103-D (sandbox 测不出 IME 行为)**: `TestPhrasesDialog` sandbox 不跑 IME 实际行为, 只验 layout / list / 按钮 / reorder / drag。任何 IME 改动都**必须**装机端 5 项 user flow 验证 (打拼音 → 候选词出 → Enter 上屏 → AddTop → ListView 端到端)。L125 stale-binary ship gate 也帮不上忙 (binary 看起来 PASS 但装机端 IME 不工作)。
+- **L103-E (L125 stale binary + 真 source build md5 比对)**: 每次 IME 改动 ship 后, 装机端 `_check_install_v2.ps1` 必须 verify:
   ```
   Module 1+2 md5 = NEW_BINARY_MD5 (从 output/Win32/WeaselServer.exe 算)
   extract 后 WeaselServer.exe md5 = Module 1+2 md5 ✓
   ```
-  如果用 L97 ship gate 跟 "上次 ship md5" 比对, L97 复发会再次掩盖 IME bug。
+  如果用 L125 ship gate 跟 "上次 ship md5" 比对, L125 复发会再次掩盖 IME bug。
 
 ### Files touched (v0.19.0.46, 1 + 1)
 - `WeaselServer/PhrasesDialog.cpp` (line 670-675 删 5 行 IME 关联, 改 1 段注释): `1caa6e94b209d1d0f3214b4d08c45310`
@@ -8858,7 +9062,10 @@ if (s_hInput && hfUi) {
 
 ---
 
-## L103-H-PhaseI-Installer-Stale (v0.19.0.47 ship, 2026-07-22)
+## L126 - v0.19.0.47 ship, PhaseI-Installer-Stale (2026-07-22)
+> **编号变更**（2026-10-24）：本条原编号 `L103-H-PhaseI-Installer-Stale`，与
+> `L103-PhaseH-IME-TSF-Mutex` 数字前缀撞号，审计后重编为 **L126**。
+> 旧标签 `L103-H-PhaseI-Installer-Stale` 保留为别名，仍指向本条。
 
 ### 现象
 
@@ -8905,17 +9112,17 @@ shutdown /r /t 0  # 触发 REBOOTOK delete
 & "F:\soft\00selfmade\rime_claude\release\fluxing-0.19.0.47-installer.exe" /S /D=D:\Program Files\fluxing
 ```
 
-### L103-I (PPL WeaselServer.exe + installer Rename-then-File ʧЧģʽ)
+### L126-I (PPL WeaselServer.exe + installer Rename-then-File ʧЧģʽ)
 
 - **症状**: v0.19.0.47 source fix 装机后, `_check_install_v2.ps1` 显示 D 盘 binary md5 = 上个 version md5, installer 静默无错
 - **真因**: WeaselServer.exe 是 PPL 进程, taskkill 不释放 mmap; install.nsi Rename-then-File 模式下 Rename 失败 → SetOverwrite try 也失败 → Delete /REBOOTOK scheduled 但不立即生效
 - **修法**: 重启 + 重装 (Plan A) 或 卸载 + 重装 (Plan B)
 - **防重犯**: 任何 install.nsi 修改后, 装机端必须 verify `D:\Program Files\fluxing\weasel\WeaselServer.exe md5` **=** `output/Win32/WeaselServer.exe md5` **=** `release/installer 7z extract md5` (3 个全等才 ship 关闭)
 
-### Pattern-Key (L103-I)
+### Pattern-Key (L126-I)
 
 - `installer.ppl-weasel-stale` (新增) — PPL WeaselServer.exe + installer Rename-then-File + 不重启 = silent stale binary ship
-- 累计 Recurrence-Count: 1 (v0.19.0.47 ship 后装机端发现, 但 L97 chain 累计复发 5+ 次)
+- 累计 Recurrence-Count: 1 (v0.19.0.47 ship 后装机端发现, 但 L125 chain 累计复发 5+ 次)
 
 ---
 
@@ -9258,7 +9465,7 @@ ime-verify.ps1 流程), 作为真机 fail-fast 工具。
 
 ### Recurrence-Count
 
-- 1 (首次系统化记录; 之前 L09/L13/L17/L54/L66/L97/L100 都没碰过 build pipeline
+- 1 (首次系统化记录; 之前 L09/L13/L17/L54/L66/L125/L100 都没碰过 build pipeline
   zero-file 这种 specific failure mode)
 - 触发 L3 守门: 任何改 output/install.nsi / WeaselServer/xmake.lua /
   build_v0XX.ps1 / xbuild.bat 的提交, PR 必带「关键 EXE size + MZ signature
@@ -9293,7 +9500,7 @@ ime-verify.ps1 流程), 作为真机 fail-fast 工具。
   发到 Edit 子控件 WndProc, **不 bubble** 到 PhrasesDialog parent WndProc。
 - Edit WndProc (单行 + 无 IsDialogMessage) default 处理 Enter = no-op
   (无 DM_SETDEFID 路由)、Esc = no-op。
-- PhrasesDialog `OnKeyDown` case `VK_RETURN` (L843-857) + `VK_ESCAPE` (L881-883)
+- PhrasesDialog `OnKeyDown` case `VK_RETURN` (第 843-857 行) + `VK_ESCAPE` (第 881-883 行)
   永远不到 — 装机端 handler 失效。
 
 **为什么 Phase K4 Test 40/41 假阳 PASS**:
@@ -10280,7 +10487,7 @@ Fix (defer to v0.21.0.1): 改 source。
 
 **关联**:
 
-- L103-I (PPL WeaselServer.exe + installer Rename-then-File 失败模式)
+- L126-I (PPL WeaselServer.exe + installer Rename-then-File 失败模式)
 - L51 (装机后提示重启 WeaselServer 或注销重登)
 - ADR 0007 (PPL 与装机约束)
 - commit 8cbe9ee
@@ -10448,5 +10655,131 @@ Fix (defer to v0.21.0.1): 改 source。
 - L110 (sink 实现了但从未注册)
 - ADR 0008 (IME profile 激活通知方案)
 - spec 080 (`080-quickpanel-on-ime-activate`)
+
+## L112 - NSIS 静默安装的 `/D=` 值不能带引号，否则整个参数被忽略 (2026-10-24)
+
+**Incident**:
+
+- 沙箱复验时发现: `installer.exe /S /D="C:\path\to\dir"` 这种写法, NSIS
+  **直接忽略 `/D=` 的值**, 落回 `output/install.nsi` 里写死的默认路径
+  `D:\Program Files\fluxing`
+- 表现是「静默装机的路径覆盖参数不生效」: 命令行参数看着传了, 机器上装的还是 D 盘默认
+
+**Root cause**:
+
+- NSIS 命令行解析按空白切分参数。`/D=` 的值必须是**最后一个参数**且
+  **不含任何引号**（NSIS 手册 3.2.1 原文: `/D` "must not contain any quotes"）。
+  值带引号时, NSIS 看到的 `/D="C:\path\to\dir"` 里值以 `"` 开头、以 `"` 结尾,
+  不是合法的 `/D=` 形式, 于是**整个参数被丢弃**, `$INSTDIR` 保持
+  `InstallDirRegKey` 预载的值（或空）
+- 本仓库 `output/install.nsi` 的两个分支正好把这件事变成「静默装到默认路径」:
+  - `use_default`（`.onInit` 的 `check_reg1/2/3` 命中 smoke-test 路径时）:
+    `StrCpy $INSTDIR "D:\Program Files\fluxing"` + `StrCpy $R0 ""` + `Goto skip`
+  - `set_default`（`$INSTDIR` 为空时）:
+    `StrCmp $INSTDIR "" 0 skip_default` / `StrCpy $INSTDIR "D:\Program Files\fluxing"`
+  ⇒ `/D=` 被丢掉后, `$INSTDIR` 最终就是 `D:\Program Files\fluxing`
+- `D:\Program Files\fluxing` 是**产品要求**（维护者明确指定默认装到 D 盘）,
+  不是待修的 bug; 错的只是调用方式
+
+**危害**:
+
+- `AGENTS.md §2.5` 规定的「改 `install.nsi` 后必须跑静默装机 smoke test」门禁
+  **因此从未真正生效过** —— 历史验证里所有带引号的 `/D=` 都在装默认路径,
+  而 smoke test 校验的又恰恰是默认路径那套 invariant, 所以**门禁是假绿**
+- 同类陷阱还有: `Start-Process -ArgumentList` 传 `/D=` 与 `/LOG=` 时会在 `=` 边界
+  被拼成一坨（L15）; NSIS 静默安装从 PowerShell 5.1 `Start-Process` 调会挂死（L20）;
+  `/D=` 必须显式给（L13 / L17 / L54）
+
+**Fix**:
+
+- `AGENTS.md §2.5` 的静默装机配方去掉引号:
+  `installer.exe /S /D=C:\path\to\dir`
+  （**值不能带引号, 且必须是最后一个参数**）
+- `output/install.nsi` 的 `use_default` / `set_default` 分支注释里补上本条编号与
+  「值不能带引号」的说明, 避免后人再写成 `/D="..."`
+
+**Pattern-Key**:
+
+- `nsis.slash-d-value-must-not-be-quoted`（新增）— NSIS `/D=` 的值带引号 = 参数
+  被静默丢弃, 不是「路径被当成带引号的字符串」
+- 累计 Recurrence-Count: 1
+
+**关联**:
+
+- L13 (NSIS 自定义函数 + 路径强制逻辑挂 `.onInit`)
+- L15 (PowerShell `Start-Process -ArgumentList` 会把 `/D=` 与 `/LOG=` 粘在一起)
+- L17 (`InstallDirRegKey` 在 `.onInit` 之前就预载 `$INSTDIR`)
+- L20 (NSIS 静默安装从 PS 5.1 `Start-Process` 调会挂死)
+- L28 (静默装机 smoke test 要写 .bat wrapper)
+- L41 (AGENTS.md §2.5 smoke test 配方改成 D 盘 + 不加引号的 `/D=`)
+- L54 (silent install `/D=` 被过期注册表键吃掉)
+
+## L113 - librime 1.13 的 `key_binder` 拒绝 `send:` 中文全角标点，绑定从未生效 (2026-10-24)
+
+**Incident**:
+
+- `output/data/user-custom/rime_ice.custom.yaml` 的 `key_binder` 里有 4 条
+  `send` 写中文全角字符的绑定（`《` `》` `？` `：`）, 引擎启动时**整条被丢弃**,
+  每次启动刷 4 行错误日志
+- 这 4 条绑定**从来没有生效过**: 写 yaml 的时候没验证过, 运行期行为一直是
+  「Shift+, 打出半角逗号」
+
+**Root cause**（源码依据）:
+
+- `librime/src/rime/gear/punctuator.cc:94-100` —— `Punctuator::ProcessKeyEvent`
+  只取 `key_event.keycode()`, **完全不看 Shift 修饰键** ⇒ punctuator 无法区分
+  `,` 与 `Shift+,`
+- `librime/src/rime/gear/ascii_composer.cc:175-193` —— `AsciiComposer::LoadConfig`
+  只认两种规则: `ascii_composer/good_old_caps_lock`（布尔）与
+  `ascii_composer/switch_key`（键名 → 切换样式）。**没有 key→文本的映射规则**
+- ⇒ librime 1.13 **没有**「Shift+标点 → 中文符号」的原生路径。改 punctuator 的
+  Shift 变体、或改 ascii_composer, 都做不到
+- 丢弃发生在解析层: `librime/src/rime/key_event.cc:77` 打印
+  `parse error: unrecognized key '<多字节字符>'`,
+  `librime/src/rime/gear/key_binder.cc:191` 打印
+  `invalid key binding #N, with invalid send pattern` —— `send:` 的值要能被
+  `KeyEvent::Parse` 解析成**按键名**, 单字节 ASCII 能过, 多字节 UTF-8 过不了
+- **历史线索**: `env.bat` 里从 v0.21.0.1 起就记着
+  `rem Known issue for v0.21.0.1: key_binder send Chinese chars (《》？！：) parse error`
+  （该行注释在 `env.bat` 里本身是 GBK 误解码后的乱码）
+  ⇒ 这是**已知未修**, 不是新发现; 本次只是把它定性并收尾
+
+**Fix**（v0.21.0.6）:
+
+- 移除这 4 条从未生效的绑定（`Shift+,` / `Shift+.` / `Shift+/` / `Shift+;`）
+  ⇒ **行为不变**, 绑定本来就被 librime 丢弃; `Shift+,` 仍由
+  punctuator / half_shape 处理成「，」
+- 保留 4 条 `send` 是单个 ASCII 字符的绑定（`"` `|` `{` `}`）—— 这 4 条 librime
+  能解析, 实际生效
+- 收益仅是消除每次启动 4 行错误日志
+
+**约束提示**:
+
+- 真正实现「Shift+标点 → 中文符号」要改 `librime/`, 而 `librime/` 是子模块,
+  **项目宪法 P3 禁止修改**（`Submodule changes (librime/) require explicit user
+  approval and a separate PR/commit referencing upstream librime commit`）;
+  Lua 插件路径是 `thirdparty/librime-lua/`。要实现就得**另开一条链路立项**,
+  不能夹带在配置清理里
+
+**Pattern-Key**:
+
+- `librime.1.13-no-shift-punct-to-cjk`（新增）— librime 1.13 没有「Shift+标点 →
+  中文符号」这条原生路径; `key_binder` 的 `send:` 要能过 `KeyEvent::Parse`,
+  多字节 UTF-8 过不了
+- 累计 Recurrence-Count: 1（已知未修 issue 的收尾）
+
+**推广**:
+
+- yaml 里的 `key_binder` 改动**必须看引擎启动日志**。「写进 yaml 了」≠「生效了」
+- 已知 issue 写在 `env.bat` 注释里没人看见 ⇒ 已知未修的东西要进正式事故库,
+  并给出「是否还能实现」的源码级结论
+
+**关联**:
+
+- L03 (librime 1.13 `key_binder` 配置: 支持什么 / 什么只是想象)
+- L04 (librime 1.13 `key_binder` 支持的 action 类型)
+- L16 (librime 1.13 `KeyEvent::Parse` 修饰符名大小写敏感)
+- L18 / L19 / L21 (`key_binder` 与 Shift 修饰键的三轮纠偏)
+
 
 

@@ -47,7 +47,7 @@
 
 ### 3.1 P1 实施（5 项 + 1 横切）
 
-| 编号 | 需求 | 优先级 | 子 spec | 状态（2026-10-22, 0.21.0.1） |
+| 编号 | 需求 | 优先级 | 子 spec | 状态（2026-10-24, 0.21.0.5） |
 |---|---|---|---|---|
 | F1 | 默认快捷键（`,`/`.` 翻页 / `Shift_L/R` 选候选 / `Shift+space` 切中英 / `Ctrl+Shift+9/0` 标点/简繁） | P1 | 005 | **已 ship 0.18.0-0.18.5**；0.21.0.1（spec 077）把「Shift_L/R 单键释放选第 2/3 候选」从 yaml binding 改到 IPC 状态机（yaml binding 已删，Control+1/2 备用选择器保留） |
 | F2 | 托盘快速设置面板（Alt+, / 左键单击托盘 → 8-12 个常用入口） | P1 | 006/036/038/045 | **ship 0.18.29.0** (spec 045: 5 行 8 入口 mac 风完整化)；spec 070 v0.19.0.10–0.19.0.32 持续迭代（Liquid Glass / 5 按钮接通 / DPI / drag） |
@@ -595,6 +595,10 @@ v0.18.27.2 ship 后用户在 144 DPI 显示器上反馈 QuickPanelDialog 视觉�
 - L50 (L51 hotfix 时追溯追加): D2D 渲染不可用时 (driver hangs, registry ACLs, GPU virtualization) FluxingComponents 必须有 GDI fallback. spec 037 ship 时未加, 0.18.27.2 L51 追加. 4 控件均加 `if (!rt) { GDI fallback }` 分支.
 - L51 (新): spec 036+037+038 ship 0.18.24.0-0.18.27.1 多 release 缺 LanguageBar.cpp OnClick TF_LBI_CLK_LEFT 路径 (Windows TSF 默认 ascii toggle 而非 spec 036 US036-B QuickPanel) + WeaselTSF.rc 3 popup menu 缺 ID_WEASELTRAY_QUICK_PANEL entry + QuickPanelDialog CreateFluxingControls X button 在 D2D 失败 + WS_BORDER 下重叠. 0.18.27.2 hotfix 6 文件 9 处修复 + NSIS post-install restart prompt.
 - L52 (新): spec 041 v0.18.28.0 DPI handling 3 failed attempts 后第 4 次成功. 6 个关键 D2D+V1 PerMonitor DPI 技术要点 + V1 child vs top-level 物理缩放方向相反 (本 spec 041 plan 未察觉) + D2D rt backing store 默认 opaque black 必须 `rt->Clear()`. 0.18.28.0 ship 时已应用.
+- **2026-10-24 编号审计 + 补条**: 原文件有 6 组编号撞号（`L57` / `L57bis`、`L62`×2、`L95`×2、`L96`×2、`L97`×2、`L103-PhaseH` / `L103-H-PhaseI`），
+  撞号条目按文档出现顺序重编为 **L121-L126**；补写 **L50**（v0.18.27.2 hotfix 根因）、
+  **L78**（v0.19.0.8）、**L79**（v0.19.0.9）；新增 **L112**（NSIS `/D=` 不能带引号）、
+  **L113**（librime 1.13 拒绝 `key_binder` 的 `send:` 中文全角标点）。`L102` / `L120` 为备案空号。
 
 
 ## 13. spec 041 v0.18.28.0 systematic-debugging re-verification (2026-07-06, L53)
@@ -628,18 +632,21 @@ spec 042 优先级最高 (P1 路线图需求 F2 完整化), 其它按需选取�
 
 ---
 
-## 15. 状态快照（2026-10-22）— 续 §10
+## 15. 状态快照（2026-10-24）— 续 §10
 
-- **最新 release = v0.21.0.1**（2026-08-16，spec 077）：Shift_L 单键释放选第 2 候选 / Shift_R 选第 3 候选。
+- **最新 release = v0.21.0.5**（2026-10-23，spec 080）：切换到 Fluxing 时自动弹出快捷设置栏
+  （ADR 0008）。`ITfActiveLanguageProfileNotifySink` 只声明未注册 ⇒ `OnActivated` 是死代码
+  （L110）；程序化切 profile 会打崩输入栈，远程会话期间尤其（L111）。
+- **v0.21.0.1**（2026-08-16，spec 077）：Shift_L 单键释放选第 2 候选 / Shift_R 选第 3 候选。
   根因在 librime `KeyEvent::operator==` 严格比较 modifier —— TSF 的 release 事件永远匹配不上 yaml 的
   `accept: Shift+Shift_L`，是引擎行为不是 yaml 能修的。修法走 IPC 边界：3 条新 IPC 命令
   （SHIFT_DOWN / SHIFT_UP / SELECT_CANDIDATE）+ TSF 端吃 Shift 事件 + server 端 per-session 状态机
   （ADR 0007）。yaml 的两行 binding 已删，Control+1/2 备用选择器保留。
-- **上一版本 v0.20.0.2**（2026-08-07，spec 076）：`boost::thread_specific_ptr` 的 TOCTOU 竞态导致
+- **更早版本 v0.20.0.2**（2026-08-07，spec 076）：`boost::thread_specific_ptr` 的 TOCTOU 竞态导致
   HEAP_CORRUPTION 0xc0000374（微信 / Claude Code / explorer 多进程 crash）。改用
   `static thread_local std::unique_ptr`，并新增 `test/TestPipeChannelRace` 回归测试
   （100 thread × 1000 round trip）。
-- **F1–F6 当前状态**见 §3.1 表头（基准 2026-10-22, 0.21.0.1）。F3 仍为 partial（只 ship 了快捷键页）。
+- **F1–F6 当前状态**见 §3.1 表头（基准 2026-10-24, 0.21.0.5）。F3 仍为 partial（只 ship 了快捷键页）。
 - **仓库规模**：`CHANGELOG.md` 累计 87 个 release 条目；`.specify/specs/` 60 个目录（spec 000–077，
   编号有跳号与重号）；`test/` 27 个 test project，其中 spec 077 相关 3 个
   （TestShiftIPCStateMachine / TestShiftIPCWire / TestShiftSelectBinding）。

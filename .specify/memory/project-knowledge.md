@@ -7,16 +7,16 @@
 >
 > **维护周期**：每次架构性变更后更新；每个 spec ship 后追加相关章节。
 >
-> **最后更新**：2026-07-07（spec 045 v0.18.29.0 ship + Q1-Q4 整理）
+> **最后更新**：2026-10-24（0.21.0.5 release 后的版本快照刷新 + lessons-learned 编号审计）
 
 ---
 
 ## 0. 项目基本事实
 
-- **项目路径**：`F:\soft\00selfmade\rime`
+- **项目路径**：`F:\soft\00selfmade\rime_claude`
 - **当前分支**：`Fluxing`（推到 `kizemo/Fluxing`）
-- **当前版本**：v0.18.29.0（spec 045 - QuickPanelDialog 8 入口）
-- **最近 commit**：`9bc6905 docs(PRD+TDD): spec 041 verification §13/§14 + L53 spec 042+ 路线图`
+- **当前版本**：v0.21.0.5（最新 release，spec 080 - 切换到 Fluxing 时自动弹出快捷设置栏）；`env.bat` 当前 build = 0.21.0.6（L113 payload bump，未 release）
+- **最近 commit**：`15d4504 chore: update librime`（HEAD，2026-10-24）
 - **用户安装路径**：`D:\Program Files\fluxing\`（用户原始部署，绝对不能改！）
 - **用户数据路径**：`D:\Program Files\fluxing\user1\fluxing\`（用户词典 + 用户配置）
 - **代码量**（fork 新增）：~1600 行 C++（7 个 FluxingComponents + QuickPanelDialog）
@@ -25,7 +25,7 @@
   - `.specify/PRD.md` - 产品需求（5 P1 + 3 P2 + 4 P3）
   - `.specify/TDD.md` - 测试策略
   - `.specify/memory/constitution.md` - 5 原则 + 9 硬规则
-  - `.specify/memory/lessons-learned.md` - L01-L54 复盘记录
+  - `.specify/memory/lessons-learned.md` - L01-L126 复盘记录（L102 / L120 为备案空号）
   - `.specify/specs/NNN-*/spec.md|plan.md|tasks.md` - 每个 spec 的三级文档
 
 ---
