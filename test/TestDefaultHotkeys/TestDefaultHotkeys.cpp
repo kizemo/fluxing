@@ -8,6 +8,12 @@
 #include <string>
 #include <cassert>
 #include <cstdlib>
+#include <algorithm>
+#include <filesystem>
+#include <vector>
+#include <system_error>
+
+namespace fs = std::filesystem;
 
 static std::string ReadFile(const char* path) {
   std::ifstream f(path);
@@ -20,6 +26,118 @@ static std::string ReadFile(const char* path) {
 
 static bool Contains(const std::string& haystack, const std::string& needle) {
   return haystack.find(needle) != std::string::npos;
+}
+
+// ---------------------------------------------------------------------------
+// L113 helpers. Everything below matches on ASCII tokens only, so the
+// assertions never depend on how this source file's own encoding is
+// interpreted by the compiler.
+// ---------------------------------------------------------------------------
+
+static bool TryReadFile(const std::string& path, std::string& out) {
+  std::ifstream f(path);
+  if (!f.is_open()) return false;
+  std::stringstream ss; ss << f.rdbuf(); out = ss.str(); return true;
+}
+
+static bool EndsWith(const std::string& s, const std::string& suffix) {
+  return s.size() >= suffix.size() &&
+         s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+// A YAML comment line starts with '#' after optional leading whitespace.
+// Blank lines are not active either.
+static bool IsActiveLine(const std::string& line) {
+  size_t first = line.find_first_not_of(" \t");
+  if (first == std::string::npos) return false;  // blank
+  return line[first] != '#';
+}
+
+static bool HasNonAsciiByte(const std::string& s) {
+  for (unsigned char c : s) {
+    if (c >= 0x80) return true;
+  }
+  return false;
+}
+
+// Value of `send:` on a line (everything after "send:", trimmed).
+// Empty string when the line carries no `send:` at all.
+static std::string SendValueOf(const std::string& line) {
+  size_t p = line.find("send:");
+  if (p == std::string::npos) return std::string();
+  std::string v = line.substr(p + 5);
+  size_t b = v.find_first_not_of(" \t");
+  if (b == std::string::npos) return std::string();
+  size_t e = v.find_last_not_of(" \t\r");
+  return v.substr(b, e - b + 1);
+}
+
+// Number of ACTIVE (non-comment) lines containing `token`.
+static size_t CountActiveLinesWith(const std::string& text,
+                                    const std::string& token) {
+  size_t count = 0, pos = 0;
+  while (pos <= text.size()) {
+    size_t lineEnd = text.find('\n', pos);
+    std::string line = text.substr(
+        pos, (lineEnd == std::string::npos) ? std::string::npos : lineEnd - pos);
+    if (IsActiveLine(line) && line.find(token) != std::string::npos) count++;
+    if (lineEnd == std::string::npos) break;
+    pos = lineEnd + 1;
+  }
+  return count;
+}
+
+// Number of ACTIVE lines whose `send:` value carries a non-ASCII byte.
+// This is the static precondition for librime's "invalid key binding".
+static size_t CountActiveNonAsciiSendValues(const std::string& text) {
+  size_t count = 0, pos = 0;
+  while (pos <= text.size()) {
+    size_t lineEnd = text.find('\n', pos);
+    std::string line = text.substr(
+        pos, (lineEnd == std::string::npos) ? std::string::npos : lineEnd - pos);
+    if (IsActiveLine(line)) {
+      std::string sv = SendValueOf(line);
+      if (!sv.empty() && HasNonAsciiByte(sv)) count++;
+    }
+    if (lineEnd == std::string::npos) break;
+    pos = lineEnd + 1;
+  }
+  return count;
+}
+
+// Directory part of `p`, with a trailing separator kept.
+static std::string DirNameOf(const std::string& p) {
+  size_t slash = p.find_last_of("/\\");
+  if (slash == std::string::npos) return std::string();
+  return p.substr(0, slash + 1);
+}
+
+// Directory part of `p`, without a trailing separator.
+static std::string ParentDirOf(const std::string& p) {
+  std::string s = p;
+  while (!s.empty() && (s.back() == '/' || s.back() == '\\')) s.pop_back();
+  size_t slash = s.find_last_of("/\\");
+  if (slash == std::string::npos) return std::string();
+  return s.substr(0, slash);
+}
+
+// All *.custom.yaml file names directly inside `dir`, sorted.
+static std::vector<std::string> ListCustomYaml(const std::string& dir,
+                                                bool& ok) {
+  std::vector<std::string> out;
+  ok = false;
+  std::error_code ec;
+  if (!fs::exists(dir, ec) || ec) return out;
+  for (fs::directory_iterator it(
+           dir, fs::directory_options::skip_permission_denied, ec), end;
+       it != end; it.increment(ec)) {
+    if (ec) break;
+    std::string name = it->path().filename().string();
+    if (EndsWith(name, ".custom.yaml")) out.push_back(name);
+  }
+  ok = true;
+  std::sort(out.begin(), out.end());
+  return out;
 }
 
 int main(int argc, char** argv) {
@@ -160,6 +278,115 @@ int main(int argc, char** argv) {
   const size_t EXPECTED_BINDINGS_AFTER_T15 = 44;
   check("spec 077 T17: binding count == 44 (spec 014 baseline 46 - 2 deleted)",
         activeBindingCount == EXPECTED_BINDINGS_AFTER_T15);
+
+  // ==========================================================================
+  // L113: guard the user override files that actually ship to the user.
+  //
+  // rime_ice.custom.yaml and its siblings are the files that override the
+  // schema for the end user, yet until now NO assertion looked at them.
+  // They used to carry four bindings whose `send:` value was a Chinese
+  // full-width character, e.g.
+  //
+  //   - { when: always, accept: "Shift+comma", send: "<fullwidth char>" }
+  //
+  // librime's key_binder `send:` must be a KEY NAME, not a character. A
+  // multi-byte UTF-8 character fails to parse in
+  // librime/src/rime/key_event.cc ("parse error: unrecognized key"), so
+  // librime/src/rime/gear/key_binder.cc drops the whole binding with
+  // "invalid key binding #N, with invalid send pattern".
+  //
+  // Two consequences; the second is what users actually notice:
+  //   1. the shortcut never worked at all;
+  //   2. every single engine start-up printed 4 error lines.
+  //
+  // Why a STATIC assertion is the right guard: the symptom lives in the
+  // engine log, which a unit test cannot read. So instead we assert the
+  // static precondition that guarantees librime will NOT reject the
+  // binding -- every ACTIVE `send:` value must be pure ASCII. A non-ASCII
+  // `send:` value is precisely what makes librime emit "invalid key
+  // binding".
+  //
+  // There is no way to KEEP such a binding working: librime 1.13 has no
+  // native path for "Shift+punctuation -> Chinese symbol"
+  // (gear/punctuator.cc ignores the Shift modifier entirely;
+  // gear/ascii_composer.cc has no key->text mapping). Implementing it would
+  // require patching librime/, which this project forbids (P3).
+  // See .specify/memory/lessons-learned.md L113.
+  // ==========================================================================
+  {
+    // data dir = <repo>/output/data/ ; custom dir = <repo>/output/data/user-custom/
+    std::string dataDir = DirNameOf(path);
+    std::string customDir = dataDir + "user-custom";
+    std::string repoRoot = ParentDirOf(ParentDirOf(dataDir));
+
+    bool dirOk = false;
+    std::vector<std::string> customFiles = ListCustomYaml(customDir, dirOk);
+    check("L113: user-custom 目录存在且可枚举 (output/data/user-custom)",
+          dirOk && !customFiles.empty());
+    // install.nsi ships every *.custom.yaml in user-custom/ (3 files today).
+    // Pin the count so a new override file cannot silently ship unchecked.
+    check("L113: user-custom 覆盖文件数量 == 3 (rime_ice / double_pinyin_sogou / radical_pinyin)",
+          customFiles.size() == 3);
+
+    // Cross-check the shipped file list against install.nsi: a custom yaml
+    // that is not referenced by install.nsi never reaches the user, and a
+    // File line pointing at a missing file breaks the installer build.
+    std::string nsiPath = repoRoot + "output/install.nsi";
+    std::string nsi;
+    bool nsiOk = TryReadFile(nsiPath, nsi);
+    check("L113: install.nsi 可读 (用于核对打包清单)", nsiOk);
+
+    for (size_t i = 0; i < customFiles.size(); ++i) {
+      const std::string& name = customFiles[i];
+      std::string fpath = customDir + "/" + name;
+      std::string text;
+      bool ok = TryReadFile(fpath, text);
+      std::string tag = "L113 " + name;
+
+      check((tag + ": 可读").c_str(), ok);
+      if (!ok) continue;
+
+      // The core guard: no ACTIVE send: value may carry a non-ASCII byte,
+      // otherwise librime drops that binding and logs "invalid key binding".
+      size_t bad = CountActiveNonAsciiSendValues(text);
+      check((tag + ": 无非 ASCII 的 send: 值 (librime 不得报 invalid key binding)").c_str(),
+            bad == 0);
+
+      // The four removed bindings must stay removed. Their accept tokens are
+      // pure ASCII, so these checks are encoding-independent.
+      check((tag + ": 已移除 Shift+comma 的中文全角绑定").c_str(),
+            CountActiveLinesWith(text, "Shift+comma") == 0);
+      check((tag + ": 已移除 Shift+period 的中文全角绑定").c_str(),
+            CountActiveLinesWith(text, "Shift+period") == 0);
+      check((tag + ": 已移除 Shift+slash 的中文全角绑定").c_str(),
+            CountActiveLinesWith(text, "Shift+slash") == 0);
+      check((tag + ": 已移除 Shift+semicolon 的中文全角绑定").c_str(),
+            CountActiveLinesWith(text, "Shift+semicolon") == 0);
+
+      // The four ASCII bindings DO work and must be kept.
+      check((tag + ": 保留 Shift+apostrophe 绑定").c_str(),
+            CountActiveLinesWith(text, "accept: \"Shift+apostrophe\"") == 1);
+      check((tag + ": 保留 Shift+backslash 绑定").c_str(),
+            CountActiveLinesWith(text, "accept: \"Shift+backslash\"") == 1);
+      check((tag + ": 保留 Shift+bracketleft 绑定").c_str(),
+            CountActiveLinesWith(text, "accept: \"Shift+bracketleft\"") == 1);
+      check((tag + ": 保留 Shift+bracketright 绑定").c_str(),
+            CountActiveLinesWith(text, "accept: \"Shift+bracketright\"") == 1);
+
+      // Exact binding inventory: 8 before L113, 4 after. Pins the file so a
+      // future edit cannot silently add or drop a binding.
+      check((tag + ": active 绑定数 == 4 (L113 前为 8)").c_str(),
+            CountActiveLinesWith(text, "accept:") == 4);
+
+      // Every override file in user-custom/ must be referenced by
+      // install.nsi, otherwise it never reaches the user.
+      if (nsiOk) {
+        bool inNsi = Contains(nsi, "user-custom\\" + name) ||
+                     Contains(nsi, "user-custom/" + name);
+        check((tag + ": install.nsi 已打包该覆盖文件").c_str(), inNsi);
+      }
+    }
+  }
 
   std::cout << std::endl;
   std::cout << "Passed: " << passed << " / " << (passed + failed) << std::endl;
