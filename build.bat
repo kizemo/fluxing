@@ -219,7 +219,17 @@ if %build_arm64% == 1 (
   if errorlevel 1 goto error
 )
 
-msbuild.exe weasel.sln %build_option% /p:Configuration=%build_config% /p:Platform="x64" /fl2 %build_sdk_option%
+rem L128: the x64 platform must NOT build the whole solution. librime in this
+rem fork is Win32-only (lib64/rime.lib is machine 14C), so the x64
+rem WeaselServer/WeaselDeployer can never link -- and neither of them is
+rem shipped: the installer only carries weaselx64.dll as an x64 file.
+rem Building them anyway makes `build.bat weasel installer` fail on a step
+rem that does not produce anything we distribute.
+rem WeaselTSF does not link rime at all, so it builds for x64 on its own.
+rem NOTE: building a .vcxproj outside the solution leaves $(SolutionDir)
+rem undefined, and every include/library path in this tree is
+rem $(SolutionDir)-relative -> pass it explicitly.
+msbuild.exe WeaselTSF\WeaselTSF.vcxproj %build_option% /p:Configuration=%build_config% /p:Platform="x64" /p:SolutionDir=%WEASEL_ROOT%\ /fl2 %build_sdk_option%
 if errorlevel 1 goto error
 msbuild.exe weasel.sln %build_option% /p:Configuration=%build_config% /p:Platform="Win32" /fl1 %build_sdk_option%
 if errorlevel 1 goto error

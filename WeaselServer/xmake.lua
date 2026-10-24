@@ -7,6 +7,11 @@ target("WeaselServer")
   add_deps("WeaselUI", "WeaselIPC", "RimeWithWeasel", "WeaselIPCServer")
 
   add_files("$(projectdir)/PerMonitorHighDPIAware.manifest")
+  -- L127: no /openmp here either -- see WeaselUI/xmake.lua. With the
+  -- dynamic OpenMP runtime the binary imports VCOMP140.dll, which the
+  -- installer does not ship -> on a clean machine the process cannot even
+  -- start. "/openmp:static" does not help: xmake calls link.exe directly,
+  -- so the CL driver never swaps vcomp140.lib for libomp.lib.
   add_ldflags("/DEBUG /LARGEADDRESSAWARE /ERRORREPORT:QUEUE /OPT:NOREF /OPT:NOICF")
   add_ldflags("/LTCG:OFF", {force = true})
   set_policy("windows.manifest.uac", "invoker")
