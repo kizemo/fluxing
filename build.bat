@@ -196,6 +196,17 @@ if %build_weasel% == 0 goto end
 
 cd /d %WEASEL_ROOT%
 
+rem L128: the Weasel* projects link yaml-cpp.lib out of the librime deps
+rem build tree.  A fresh clone does not have it, and the failure otherwise
+rem shows up as a cryptic "LNK1181: cannot open input file yaml-cpp.lib"
+rem deep inside the msbuild output.  Say what to run instead.
+if not exist librime\deps\yaml-cpp\build_Win32\Release\yaml-cpp.lib (
+  echo Error: the librime dependency libraries are not built yet.
+  echo        Run "build.bat rime" first. It builds librime and its deps
+  echo        for Win32 and x64 - yaml-cpp, opencc, marisa-trie, leveldb, glog.
+  exit /b 1
+)
+
 set WEASEL_PROJECT_PROPERTIES=BOOST_ROOT^
   PLATFORM_TOOLSET^
   VERSION_MAJOR^
