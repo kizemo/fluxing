@@ -10781,5 +10781,134 @@ Fix (defer to v0.21.0.1): 改 source。
 - L16 (librime 1.13 `KeyEvent::Parse` 修饰符名大小写敏感)
 - L18 / L19 / L21 (`key_binder` 与 Shift 修饰键的三轮纠偏)
 
+## L127 - xmake 构建路径把 OpenMP 运行时变成动态依赖 (VCOMP140.dll)，安装器不分发它 ⇒ 没装 VC++ 运行库的机器上整个输入法加载不起来 (2026-10-24)
+
+**Incident**:
+
+- v0.21.0.6 用 **xmake** 路径重建（`xmake f -a x86 -m release --toolchain=msvc` + `xmake`），
+  沙箱门禁 44 项里 **8 项 FAIL**：
+  - `P2.2` / `P3`：两个 TIP 的 `InprocServer32` 都读不到（干净装机之后）
+  - `P6`：`ActivateProfile(Fluxing) hr=0x80004005`，面板 hwnd=00000000
+  - `P7`：`[QP] connect failed`
+  - `P9.3` / `P9.4`：锁场景退化成 stage2（等重启再换），而不是版本化 shim
+- 现场最迷惑的一点：**同一次运行里**，PHASE 5 覆盖升级后的 `P2.1` 却 PASS
+  （`registered=...\weaselx64.dll sha=... == build sha`），而 PHASE 1 干净装机后的
+  `P2.2` 说「没找到 weaselx64 的 InprocServer32」
+- 而 WeaselServer **照常启动**，引擎初始化正常、词典 11 success ⇒ 看起来「装好了」
+
+**Root cause**:
+
+- `WeaselUI/xmake.lua:5` 有 `add_cxflags("/openmp")`；`WeaselUI/GdiplusBlur.cpp:40,161`
+  用 `#pragma omp parallel for` 做模糊滤镜
+- MSVC 默认链接**动态** OpenMP 运行时 ⇒ 最终二进制导入 `VCOMP140.DLL`
+  （新增导入符号 `_vcomp_for_static_end` / `_vcomp_for_static_simple_init` / `_vcomp_fork`）
+- `output/install.nsi` **不分发** `VCOMP140.dll` ⇒ 任何没装 VC++ 可再发行组件的机器上，
+  `regsvr32` 加载 `weasel.dll` / `weaselx64.dll` 直接 `ERROR_MOD_NOT_FOUND (126)`
+  ⇒ `DllRegisterServer` 根本不执行 ⇒ **TIP 从不注册**
+  ⇒ 输入法不出现、候选窗不出现、`ActivateProfile` 返回 `0x80004005` (E_FAIL)
+- **为什么只有 TIP 受影响**：只有 TIP 引用了 `WeaselUI` 的模糊滤镜代码，链接器才会把
+  OMP 符号拉进来。`WeaselServer.exe` 虽然也 `add_deps("WeaselUI")`，但没引用
+  `GdiplusBlur.obj` ⇒ 不导入 VCOMP140 ⇒ 服务端照常启动
+  ⇒ **「服务能起、词典能加载」完全不能证明「输入法能加载」**
+- **为什么 0.21.0.5 没有这个问题**：那条产物是 **MSBuild** 路径出来的
+  （PE debug dir 里的 PDB 路径是 `output\weaselx64.pdb` = MSBuild 的 OutDir；
+  xmake 产出的是 `build\windows\x64\release\WeaselTSF\weaselx64.pdb`），
+  而 `WeaselUI/WeaselUI.vcxproj` 把 OpenMP 属性写成 **`<OpenMP>`** ——
+  MSBuild 认识的属性名是 **`<OpenMPSupport>`** ⇒ 属性被**静默忽略** ⇒
+  MSBuild 从来没传过 `/openmp` ⇒ 也就没有 VCOMP140 依赖
+  ⇒ **一个拼错的属性名等于关掉了一个性能优化，但也顺手挡住了这个依赖坑**
+- 附带证据（dumpbin /headers /exports，同一份源码树的两个产物）：
+  `.text +64KB` / `.rdata +20KB` / `.pdata +4KB`，导出表 54 → 68 个符号，
+  依赖表多出 `VCOMP140.DLL`
+  ⇒ 「源码一行没改、体积却涨 85KB」不是噪声，是**链接配置变了**的信号
+
+**Fix**（v0.21.0.6）:
+
+- **两条构建路径都把 OpenMP 关掉**，与实际发布的产物保持一致：
+  - xmake 路径：`WeaselUI/xmake.lua` 去掉 `add_cxflags("/openmp")`
+  - MSBuild 路径：保持现状（`<OpenMP>` 拼错 ⇒ MSBuild 静默忽略 ⇒ 从来没传过 `/openmp`）
+  ⇒ 两条路径**行为一致**（双路径对等），且产物不再有 `VCOMP140.dll` 外部依赖
+- ⚠️ **`/openmp:static` 不是解法**（实测走了一遍才发现）：它是 **CL 驱动层**的选项，
+  而 xmake 是**直接调 `link.exe`** 的 ⇒ 驱动不会把 `vcomp140.lib` 换成 `libomp.lib`
+  ⇒ 链接行里虽然出现了 `/openmp:static`，`dumpbin /dependents` 里 **VCOMP140.DLL 依旧在**
+  ⇒ 真要在两条路径里启用 OpenMP，必须让链接侧真正静态链上 `libomp.lib`
+  （CL 驱动会自动做这件事，直接调 `link.exe` 不会）
+- **不要单独把 `WeaselUI.vcxproj` 的 `<OpenMP>` 改成 `<OpenMPSupport>`**：
+  那样 MSBuild 路径也会导入 VCOMP140.dll，把两条路都变成「装机即坏」
+- 发布一律走 `build.bat`（MSBuild），并且 `build.bat` 的 x64 步骤改成只构建 WeaselTSF（见 L128）
+
+**验收**:
+
+- `dumpbin /dependents output\weasel.dll` 与 `output\weaselx64.dll` 的输出里
+  **不得出现 VCOMP140.DLL**
+
+**Pattern-Key**:
+
+- `build.xmake-openmp-dynamic-vcomp140`（新增）— xmake 路径开 `/openmp` 会引入
+  未随安装器分发的 VCOMP140.dll 外部依赖，装机即失效
+- 累计 Recurrence-Count: 1
+
+**推广**:
+
+- **「同一份源码、产物大了 85KB」要当信号查，不要当噪声**。源码没改而二进制变大，
+  一定是编译/链接配置变了。
+- **发布产物的依赖表（PE imports）必须逐个核对安装器是否分发**。不分的依赖 = 装机即坏。
+  本项目同类坑有前科：spec 063 的 delay-load API set
+  `api-ms-win-shcore-scaling-l1-1-1.dll`（见 L63）。
+- **「服务端正常启动」不能代替「TIP 能被加载」**，两者是不同的失败面。
+- **构建系统对未知属性/未知 flag 静默忽略**，比直接崩溃更贵：拼错一个属性名，
+  编译选项会凭空消失几个月没人发现。
+
+**关联**:
+
+- L63 (spec 063 delay-load API set, 同一类「运行库依赖」问题)
+- L121 (opencc 必需构建补丁脚本化)
+- L112 / L113 (同一批 0.21.0.6 的其它收尾)
 
 
+## L128 - `build.bat` 的 x64 平台整体链接在本 fork 必然失败 (librime 是 Win32-only) (2026-10-24)
+
+**Incident**:
+
+- `build.bat weasel installer` 跑 `msbuild weasel.sln /p:Platform="x64"` 时**必然失败**：
+  - `WeaselServer.vcxproj`: `RimeWithWeasel.lib(RimeWithWeasel.obj) : error LNK2001:
+    无法解析的外部符号 rime_get_api`
+  - `WeaselDeployer.vcxproj`: `LINK : fatal error LNK1181: 无法打开输入文件"yaml-cpp.lib"`
+- 根因：`lib64/rime.lib` 的 PE machine 类型是 **14C (x86)** ——
+  这个 fork 的 librime 只有 Win32 产物，`lib64/` 里那份是从 Win32 构建拷过去的
+
+**Root cause**:
+
+- 安装器实际只分发：`Win32\WeaselServer.exe`、`Win32\WeaselDeployer.exe`、
+  `Win32\FluxingPhrasesDialog.exe`、`Win32\rime.dll`、`weasel.dll`、
+  `weaselx64.dll`、`WeaselSetup.exe`
+  ⇒ **除了 `weaselx64.dll` 之外全是 x86**
+- 而 x64 的 `WeaselServer` / `WeaselDeployer` 根本不发布 ⇒ 这两个链接失败是
+  **纯浪费**，不是缺件
+- `build.bat` 的 `if errorlevel 1 goto error` 让 x64 步骤的失败直接终止整个发布流程
+
+**Fix**（本次未改 `build.bat`，按实际需要拆构建）:
+
+- 本次实际使用的组合：
+  1. `msbuild weasel.sln /p:Configuration=Release /p:Platform=Win32` → 全部 x86 产物
+  2. `msbuild WeaselTSF\WeaselTSF.vcxproj /p:Configuration=Release /p:Platform=x64`
+     → `weaselx64.dll`（TIP 不链接 rime，x64 能独立链接）
+  3. `makensis output\install.nsi`
+- **待办**：`build.bat` 应当把 x64 步骤从「整解」改成「只构建 WeaselTSF」，
+  否则任何人按 `build.bat weasel installer` 都会撞上这个必然失败
+
+**Pattern-Key**:
+
+- `build.x64-solution-unlinkable-librime-win32-only`（新增）
+- 累计 Recurrence-Count: 1
+
+**推广**:
+
+- **「整解构建」不等于「发布需要的构建」**。本项目发布只发一个 x64 产物，
+  整解构建却要求两个 x64 产物能链接，于是发布被一个不发布的二进制卡死。
+- 遇到构建失败先问一句：**这个产物会被发布吗？** 不会就别让它挡路。
+
+**关联**:
+
+- L121 (opencc 补丁脚本化, 同一套构建脚本化工作)
+- L127 (同一次 0.21.0.6 的构建事故)
