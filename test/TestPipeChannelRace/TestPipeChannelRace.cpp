@@ -74,14 +74,38 @@ static void RunRaceTest(int n_threads) {
 
   std::vector<std::thread> threads;
   std::vector<std::vector<uintptr_t>> all_seen(n_threads);
+  // First-touch addresses, captured INSIDE each worker while every other
+  // worker is still alive (phase-1 barrier below).
+  std::vector<uintptr_t> first_ctx(n_threads, 0);
+  std::vector<uintptr_t> first_handle(n_threads, 0);
   std::atomic<int> ready{0};
   std::atomic<bool> go{false};
+  std::atomic<int> touched{0};
 
   // Barrier so all threads call TouchContext() simultaneously
   for (int i = 0; i < n_threads; ++i) {
     threads.emplace_back([&, i]() {
       ready.fetch_add(1);
       while (!go.load(std::memory_order_acquire)) { _mm_pause(); }
+
+      // Phase 1 — capture the FIRST context pointer and the FIRST pipe
+      // handle TLS slot address here, while every worker is guaranteed to
+      // still be running. Comparing them after join() was bogus: a worker's
+      // thread_local context is destroyed when the worker exits, and the
+      // freed heap block may legally be handed out again to a later worker,
+      // so two workers could hold the SAME address with no aliasing bug at
+      // all (that was the flaky "no thread-pool aliasing" failure).
+      first_ctx[i] = reinterpret_cast<uintptr_t>(ch.GetContextForTest());
+      first_handle[i] = reinterpret_cast<uintptr_t>(ch.GetPipeHandleForTest());
+
+      // Phase-1 barrier: nobody may leave (and thereby destroy its
+      // thread_local context) before every worker has captured its
+      // first-touch addresses.
+      touched.fetch_add(1, std::memory_order_release);
+      while (touched.load(std::memory_order_acquire) < n_threads) { _mm_pause(); }
+
+      // Phase 2 — hammer the hot path; per-thread pointer stability is
+      // checked from the recorded values after join().
       TouchContext(ch, all_seen[i]);
     });
   }
@@ -96,11 +120,12 @@ static void RunRaceTest(int n_threads) {
   // because the second reset() would overwrite the first — but we cannot
   // easily distinguish that from a working tls. Instead we check: every
   // thread's seen[*] for the context (even indices) is all equal to the
-  // first value it saw.)
+  // first value it saw, and equal to the phase-1 first-touch address.)
   bool all_stable = true;
   for (int i = 0; i < n_threads; ++i) {
     if (all_seen[i].empty()) continue;
     uintptr_t first = all_seen[i][0];
+    if (first != first_ctx[i]) { all_stable = false; break; }
     for (size_t j = 2; j < all_seen[i].size(); j += 2) {
       if (all_seen[i][j] != first) { all_stable = false; break; }
     }
@@ -110,18 +135,22 @@ static void RunRaceTest(int n_threads) {
   // Distinct-per-thread: each thread must see a DIFFERENT context pointer
   // from the other threads. With thread_local this is guaranteed; with the
   // broken boost::thread_specific_ptr pattern, two threads could share the
-  // same context (when one reset() overwrote the other's ptr).
+  // same context (when one reset() overwrote the other's ptr). The addresses
+  // compared here were captured while all workers were alive, so a collision
+  // really would mean aliasing (a freed-then-reused heap block cannot collide
+  // while both owners are still running).
   std::set<uintptr_t> unique_ctx;
   for (int i = 0; i < n_threads; ++i) {
-    if (!all_seen[i].empty()) unique_ctx.insert(all_seen[i][0]);
+    unique_ctx.insert(first_ctx[i]);
   }
   ASSERT(unique_ctx.size() == (size_t)n_threads,
          "Each thread sees its own context (no thread-pool aliasing)");
 
-  // Pipe handle likewise per-thread distinct.
+  // Pipe handle likewise per-thread distinct (TLS slot address; captured
+  // while all workers were alive for the same reason as above).
   std::set<uintptr_t> unique_h;
   for (int i = 0; i < n_threads; ++i) {
-    if (all_seen[i].size() > 1) unique_h.insert(all_seen[i][1]);
+    unique_h.insert(first_handle[i]);
   }
   ASSERT(unique_h.size() == (size_t)n_threads,
          "Each thread sees its own pipe handle (no aliasing)");

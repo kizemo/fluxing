@@ -20,6 +20,23 @@
   <ImportGroup Label="ExtensionSettings" />
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" />
+  <!-- L31 fix: MSBuild's default OutDir is $(SolutionDir)$(Configuration)\,
+       so with a trailing-backslash-less SolutionDir the artifacts land in
+       "<repo>Release\" NEXT TO the repo instead of inside it. Pin OutDir and
+       IntDir explicitly (same shape as test\TestResponseParser) and default
+       SolutionDir to the repo root so a standalone build (no /p:SolutionDir=)
+       still resolves inside the repository. -->
+  <PropertyGroup Condition="'$(SolutionDir)'==''">
+    <SolutionDir>$(MSBuildProjectDirectory)\..\..</SolutionDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <OutDir>$(SolutionDir)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)\msbuild\$(Configuration)\$(Platform)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(SolutionDir)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)\msbuild\$(Configuration)\$(Platform)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
       <LanguageStandard>stdcpp17</LanguageStandard>
