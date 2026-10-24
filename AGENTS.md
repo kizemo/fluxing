@@ -126,7 +126,20 @@ New-Item -ItemType Directory -Path $dst | Out-Null
 
 # 2. Silent install with /D=<no-fluxing-suffix> to exercise the force-suffix path
 # Use cmd /c (NOT Start-Process -ArgumentList - L15: PS 5.1 merges /D= and /LOG= at the = boundary)
-cmd /c "`"$installer`" /S /D=`"$dst\ProgramFiles`""
+#
+# L112 (CRITICAL): /D= 的值 **绝对不能带引号**。
+# NSIS 官方手册 3.2.1 原文:
+#   "/D sets the default installation directory ($INSTDIR), overriding
+#    InstallDir and InstallDirRegKey. It must be the last parameter used in
+#    the command line and must not contain any quotes, even if the path
+#    contains spaces. Only absolute paths are supported."
+#
+# 带引号 => NSIS 直接忽略整个 /D= => $INSTDIR 落回 install.nsi 里的默认路径
+# ("D:\Program Files\fluxing" —— 那是**产品要求**，安装者可在界面改) =>
+# 下面所有 "InstallDir == 期望路径" 的断言全部变成假阴性, 而门禁显示是绿的。
+# 这套配方曾经就因为多写了一对引号而**从来没有在指定路径上真的跑过**。
+# 正确写法: /D= 必须是最后一个参数, 值直接跟在 = 后面, 不加引号。
+cmd /c "`"$installer`" /S /D=$dst\ProgramFiles"
 if ($LASTEXITCODE -ne 0) { $failures += "cmd /c installer exit code was $LASTEXITCODE" }
 Write-Host "exit code: $LASTEXITCODE"
 
@@ -214,7 +227,37 @@ if ($failures.Count -eq 0) {
 }
 ```
 
-#### What the test catches (real bugs that this caught in 0.18.3.0)
+#### The authoritative gate: the Windows Sandbox verification harness
+
+The recipe above is the **minimum** check. The real one lives outside this
+repo (deliberately — a harness must not live inside the thing it verifies):
+
+```
+F:\soft\00selfmade\sandbox-verify\rime-claude\
+```
+
+It installs the real installer into a throw-away **Windows Sandbox** VM
+(Hyper-V one-shot VM, no ISO, no snapshot management), then asserts ~42
+invariants: layout, registry, 32/64-bit TIP registration and payload hash,
+PE architecture, prebuilt dictionaries, the unit-test exes, the TSF profile
+switch, the QuickPanel auto-hide, the uninstall, and the whole
+`0.21.0.2 -> 0.21.0.5` upgrade path. Results land in
+`%USERPROFILE%\sandbox-artifacts\rime\`.
+
+Two properties matter more than the assertion count:
+
+- **The installer path is exercised for real** — the `/D=` override is
+  verified against the registry, so a broken `/D=` (see L112) cannot pass
+  silently. The recipe in this file, until 2026-10-24, could not detect it.
+- **It runs outside the developer's machine** — profile switching (which
+  per L111 can collapse the input stack) happens only inside the VM.
+
+**Rule: any commit that modifies `output/install.nsi` or
+`output/data/user-custom/**` MUST run this harness**, not just the recipe
+above. The harness output (`claims.json` + `claims.log`) goes into the
+commit message.
+
+
 
 - **Path-force not firing in silent mode** (L13) - 4 release
   versions shipped with this bug.
@@ -541,6 +584,8 @@ When you start a session and the user gives a non-trivial task:
 | A9 | Modifying the CI matrix to add an "x64 librime build" without first verifying the entire rime API surface compiles in 64-bit | L10 §3 deferral — this is a separate, multi-week task. |
 | A11 | Installing x64 Weasel*.exe on x64 Windows because `${If} ${RunningX64}` "looks right" | L14. librime is Win32-only; `output\rime.dll` is x86; an x64 EXE process cannot load x86 DLL. The resulting install crashes with `0xC000007B` on first run. Always install from `output\Win32\*` (x86); `weaselx64.dll` is the only x64 file shipped (TSF shim). |
 | A12 | Using Start-Process -ArgumentList with mixed /D= and /LOG= to launch an NSIS installer in PowerShell | L15. PowerShell 5.1 merges array elements at = boundary; the install path becomes ProgramFiles LOG=... and the entire install is dumped into a deeply nested garbage directory. Use cmd /c with the installer instead. |
+| A13 | Changing install.nsi's default install path from `D:\Program Files\fluxing` to `$PROGRAMFILES64\fluxing` because a comment says so | The D-drive default is a **product requirement** (maintainer-specified; the installer UI lets the user change it). The old comment claiming `$PROGRAMFILES64` was stale and had already caused one wrong-direction "fix". Only the comment was wrong. |
+| A14 | Writing `/D="$path"` (quoting the value) in a silent-install invocation | L112. NSIS manual 3.2.1: `/D` "must not contain any quotes". A quoted value makes NSIS ignore the parameter entirely, so the installer lands on the default path and every "InstallDir == expected" assertion is a false negative. `/D=` must also be the last parameter. |
 | A10 | Calling `git add .` from the project root | Will sweep up `weasel.props`, `env.bat`, `*.log`, and the next session's `github_token.txt`. Stage files explicitly by path. |
 
 ---
