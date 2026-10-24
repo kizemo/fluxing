@@ -21,11 +21,28 @@ patch:
     ']': '】'        # 直接 ] → 】
 
   # Shift+ 标点：key_binder 拦截后 send 期望字符
+  # 顺序：使用 bindings/+ 追加，不影响现有 has_menu bindings
+  # when: always —— 中文模式下 Shift+标点应该总是 commit
+  #
+  # L113: 原来这里还有 4 条 send 写中文全角字符（《》？！：）的绑定
+  #   （Shift+, / Shift+. / Shift+/ / Shift+;）。**librime 的 key_binder 的 send:
+  #   必须是按键名，不接受字符** —— 多字节 UTF-8 解析失败后整条绑定被丢弃：
+  #     key_event.cc:77  parse error: unrecognized key
+  #     key_binder.cc:191 invalid key binding #N, with invalid send pattern
+  #   ⇒ 这 4 个快捷键**从来没有生效过**，而且每次引擎启动都会刷 4 行错误日志。
+  #   （env.bat 里从 v0.21.0.1 起就记着这条 known issue，一直没修。）
+  #   现已移除。移除后行为不变：绑定本来就被 librime 丢弃，Shift+, 仍由
+  #   punctuator/half_shape 处理成「，」。
+  #
+  # 为什么不用别的办法实现「Shift+标点 → 中文符号」：librime 1.13 没有这条原生路径
+  #   - gear/punctuator.cc 的 ProcessKeyEvent 只取 key_event.keycode()，
+  #     **完全不看 Shift 修饰键** ⇒ punctuator 无法区分 , 与 Shift+,；
+  #   - gear/ascii_composer.cc 只有 good_old_caps_lock 与 switch_key，
+  #     **没有 key→文本映射规则**。
+  #   要实现只能改 librime（本项目禁止，P3）或另开一条链路，属后续立项。
+  #
+  # 保留的 4 条：send 是单个 ASCII 字符，librime 能解析，实际生效。
   key_binder/bindings/+:
-    - { when: always, accept: "Shift+comma", send: "《" }
-    - { when: always, accept: "Shift+period", send: "》" }
-    - { when: always, accept: "Shift+slash", send: "？" }
-    - { when: always, accept: "Shift+semicolon", send: "：" }
     - { when: always, accept: "Shift+apostrophe", send: '"' }
     - { when: always, accept: "Shift+backslash", send: "|" }
     - { when: always, accept: "Shift+bracketleft", send: "{" }
