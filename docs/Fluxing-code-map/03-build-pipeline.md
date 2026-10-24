@@ -9,6 +9,15 @@
 
 两者都会先把 `env.bat.template` 复制为 `env.bat`（如果不存在），然后 `call env.bat` 读 `BOOST_ROOT` 等。
 
+> ⚠️ **发布一律走 `build.bat`（MSBuild），不要走 `xbuild.bat`（xmake）**（`AGENTS.md` A15 / L127）。
+> 两条路径**不等价**：xmake 路径曾在 `WeaselUI` 上传 `/openmp`，把**动态** OpenMP 运行时
+> （`VCOMP140.DLL`）引进 TSF shim，而安装器**不分发**该 DLL ⇒ 在没装 VC++ 运行库的机器上
+> `regsvr32` 直接 `ERROR_MOD_NOT_FOUND`，`DllRegisterServer` 不执行，TIP 注册不上，
+> 输入法整个加载不起来。现在两条路径**都不开** OpenMP。
+> **别单独"修" `WeaselUI.vcxproj` 里 `<OpenMP>` 的拼写**（A16）：`/openmp:static` 是 CL
+> 驱动层选项，xmake 直接调 `link.exe`，驱动不换库 ⇒ `dumpbin /dependents` 里
+> `VCOMP140.DLL` 依旧在。要真正启用 OpenMP，须在**两条**构建系统里静态链上 `libomp.lib`。
+
 ## 3.2 顶层 xmake 目标集合
 
 来自 `xmake.lua`：
@@ -26,14 +35,14 @@ if is_mode("debug") then
   includes("test/TestResponseParser")
 else
   add_cxflags("/GL")
-  add_ldflags("/LTCG /INCREMENTAL:NO", {force = true})
+  add_ldflags("/LTCG:OFF /INCREMENTAL:NO", {force = true})
 end
 ```
 
 | target | kind | deps | 输出 |
 |---|---|---|---|
 | WeaselIPC | static | — | (静态库) |
-| WeaselUI | static (+ /openmp) | — | (静态库) |
+| WeaselUI | static（**不开** `/openmp`，见 §3.1 警示 / L127） | — | (静态库) |
 | WeaselTSF | shared + def | WeaselIPC, WeaselUI | `weasel*.dll`（按 arch 重命名） |
 | RimeWithWeasel | static (+ use_weaselconstants) | — | (静态库) |
 | WeaselIPCServer | static | — | (静态库) |

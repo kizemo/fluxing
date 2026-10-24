@@ -123,7 +123,7 @@ ID_WEASELTRAY_QUIT            → Stop()
 | `FullScreenLayout.cpp/.h` | 全屏模式 |
 | `DirectWriteResources.cpp` | D2D/DirectWrite 资源（TextFormat、RenderTarget、Brush） |
 | `GdiplusBlur.h/.cpp` | Gdiplus 模糊效果（用于阴影） |
-| `xmake.lua` | `add_cxflags("/openmp")` 用于并行渲染 |
+| `xmake.lua` | 刻意**不开** `/openmp`（L127：会引进安装器不分发的 `VCOMP140.DLL`）⇒ `GdiplusBlur.cpp` 的 `#pragma omp parallel for` 走单线程；要并行须在**两条**构建系统里静态链 `libomp.lib`（A16） |
 
 ### 渲染管线（DoPaint）
 
