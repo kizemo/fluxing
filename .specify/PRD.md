@@ -47,7 +47,7 @@
 
 ### 3.1 P1 实施（5 项 + 1 横切）
 
-| 编号 | 需求 | 优先级 | 子 spec | 状态（2026-10-24, 0.21.0.5） |
+| 编号 | 需求 | 优先级 | 子 spec | 状态（2026-10-24, 0.21.0.6） |
 |---|---|---|---|---|
 | F1 | 默认快捷键（`,`/`.` 翻页 / `Shift_L/R` 选候选 / `Shift+space` 切中英 / `Ctrl+Shift+9/0` 标点/简繁） | P1 | 005 | **已 ship 0.18.0-0.18.5**；0.21.0.1（spec 077）把「Shift_L/R 单键释放选第 2/3 候选」从 yaml binding 改到 IPC 状态机（yaml binding 已删，Control+1/2 备用选择器保留） |
 | F2 | 托盘快速设置面板（Alt+, / 左键单击托盘 → 8-12 个常用入口） | P1 | 006/036/038/045 | **ship 0.18.29.0** (spec 045: 5 行 8 入口 mac 风完整化)；spec 070 v0.19.0.10–0.19.0.32 持续迭代（Liquid Glass / 5 按钮接通 / DPI / drag） |
@@ -634,7 +634,10 @@ spec 042 优先级最高 (P1 路线图需求 F2 完整化), 其它按需选取�
 
 ## 15. 状态快照（2026-10-24）— 续 §10
 
-- **最新 release = v0.21.0.5**（2026-10-23，spec 080）：切换到 Fluxing 时自动弹出快捷设置栏
+- **最新 release = v0.21.0.6**（2026-10-24）：移除 3 份 `custom.yaml` 里 4 条从未生效的
+  `Shift+标点` 绑定（L113）+ 发布构建统一走 `build.bat`（MSBuild），消除 xmake 路径
+  产出的「装上就注册不上」的安装包（L127 / L128）。已构建并通过沙箱门禁，待推送 / 发布。
+- **v0.21.0.5**（2026-10-23，spec 080）：切换到 Fluxing 时自动弹出快捷设置栏
   （ADR 0008）。`ITfActiveLanguageProfileNotifySink` 只声明未注册 ⇒ `OnActivated` 是死代码
   （L110）；程序化切 profile 会打崩输入栈，远程会话期间尤其（L111）。
 - **v0.21.0.1**（2026-08-16，spec 077）：Shift_L 单键释放选第 2 候选 / Shift_R 选第 3 候选。
@@ -646,7 +649,7 @@ spec 042 优先级最高 (P1 路线图需求 F2 完整化), 其它按需选取�
   HEAP_CORRUPTION 0xc0000374（微信 / Claude Code / explorer 多进程 crash）。改用
   `static thread_local std::unique_ptr`，并新增 `test/TestPipeChannelRace` 回归测试
   （100 thread × 1000 round trip）。
-- **F1–F6 当前状态**见 §3.1 表头（基准 2026-10-24, 0.21.0.5）。F3 仍为 partial（只 ship 了快捷键页）。
+- **F1–F6 当前状态**见 §3.1 表头（基准 2026-10-24, 0.21.0.6）。F3 仍为 partial（只 ship 了快捷键页）。
 - **仓库规模**：`CHANGELOG.md` 累计 87 个 release 条目；`.specify/specs/` 60 个目录（spec 000–077，
   编号有跳号与重号）；`test/` 27 个 test project，其中 spec 077 相关 3 个
   （TestShiftIPCStateMachine / TestShiftIPCWire / TestShiftSelectBinding）。

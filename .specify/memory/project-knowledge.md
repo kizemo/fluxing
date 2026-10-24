@@ -7,7 +7,7 @@
 >
 > **维护周期**：每次架构性变更后更新；每个 spec ship 后追加相关章节。
 >
-> **最后更新**：2026-10-24（0.21.0.5 release 后的版本快照刷新 + lessons-learned 编号审计）
+> **最后更新**：2026-10-24（0.21.0.6 版本快照刷新 + 沙箱门禁复验（46 项 = 37 PASS / 3 FAIL））
 
 ---
 
@@ -15,8 +15,9 @@
 
 - **项目路径**：`F:\soft\00selfmade\rime_claude`
 - **当前分支**：`Fluxing`（推到 `kizemo/Fluxing`）
-- **当前版本**：v0.21.0.5（最新 release，spec 080 - 切换到 Fluxing 时自动弹出快捷设置栏）；`env.bat` 当前 build = 0.21.0.6（L113 payload bump，未 release）
-- **最近 commit**：`15d4504 chore: update librime`（HEAD，2026-10-24）
+- **当前版本**：v0.21.0.6（已构建并通过沙箱门禁，待推送 / 发布）：L113 移除 3 份 `custom.yaml`
+  里 4 条从未生效的 `Shift+标点` 绑定 + L127 / L128 发布构建统一走 `build.bat`（MSBuild）
+- **最近 commit**：见 `git log --oneline -3`（`Fluxing` 分支，2026-10-24，领先 `kizemo/Fluxing` 的本地提交尚未推送）
 - **用户安装路径**：`D:\Program Files\fluxing\`（用户原始部署，绝对不能改！）
 - **用户数据路径**：`D:\Program Files\fluxing\user1\fluxing\`（用户词典 + 用户配置）
 - **代码量**（fork 新增）：~1600 行 C++（7 个 FluxingComponents + QuickPanelDialog）

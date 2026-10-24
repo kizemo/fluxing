@@ -1,3 +1,57 @@
+## [0.21.0.6-fluxing] - 2026-10-24
+
+### fix(fluxing): 移除 3 份 custom.yaml 里 4 条从未生效的 Shift+标点绑定
+
+**User-visible**:
+
+- 快捷键设置里不再列出 4 条**从来没有生效过**的 `Shift+标点` 绑定
+  （`rime_ice` / `double_pinyin_sogou` / `radical_pinyin` 三份 `custom.yaml` 各 4 条）。
+  它们把 `send:` 写成了中文全角标点字符，librime 直接判为 `invalid key binding` 丢弃
+  ⇒ 界面上看着配了，按下去什么都不会发生。
+- 不变：每份文件里其余 4 条 ASCII 绑定（`Shift_L/R` + 标点）原样保留。
+
+**Root cause**:
+
+- `key_binder` 的 `send:` 不接受单个汉字 / 全角标点字符（librime 校验不过就整条丢弃）；
+  也不能用 `punctuator` 的 Shift 变体或 `ascii_composer` 绕过去（librime 源码不支持）。
+
+**Fix**:
+
+- 三份 `custom.yaml` 各移除那 4 条死绑定；
+- `TestDefaultHotkeys` 补了对应断言族（**75/75**；判别性验证：注入一条坏绑定 → 72/75 → 还原 → 75/75）。
+
+**事故记录**：**L113**。
+
+### fix(fluxing): 发布构建统一走 MSBuild，消除「装上就注册不上」的安装包
+
+**User-visible**:
+
+- 本条不改变功能，但决定**能不能装上**：用 xmake 路径构建的 0.21.0.6 安装包，
+  在**没装 VC++ 可再发行组件**的机器上会让 Fluxing **整个注册不上**
+  （语言栏无条目、候选窗不出现、`ActivateProfile` 返回 `E_FAIL`）。
+
+**Root cause**:
+
+- xmake 构建路径给 `WeaselUI` 传 `/openmp` ⇒ 链接**动态** OpenMP 运行时
+  ⇒ TSF shim 导入 `VCOMP140.DLL`，而安装器**不分发**该 DLL
+  ⇒ `regsvr32` 报 `ERROR_MOD_NOT_FOUND (126)`，`DllRegisterServer` 不执行
+  ⇒ TIP 从不注册（**L127**）。
+- 附带：`build.bat` 的 x64 步骤原本构建整个解决方案，而 librime 在本 fork 是 Win32-only
+  ⇒ x64 的 `WeaselServer` / `WeaselDeployer` 链接必然失败（而它们根本不发布）（**L128**）。
+
+**Fix**:
+
+- **发布一律走 `build.bat`（MSBuild）**；两条构建路径现在**都不开** OpenMP
+  ⇒ 产物不再依赖未分发的 `VCOMP140.dll`（x86 / x64 均已实编复验，依赖表逐项一致）；
+- `build.bat` 的 x64 步骤改为只构建 `WeaselTSF`（并显式传 `SolutionDir`），
+  并加 deps 前置检查（deps 未构建时直接提示，而不是让用户去找 `LNK1181`）。
+
+**验收**：沙箱门禁（Windows Sandbox 一次性虚机）46 项 = **37 PASS / 3 FAIL / 0 SKIP**；
+3 项 FAIL 与基线同性质（2 项环境事实：沙箱无 D 盘 / 无外网；1 项 P6：程序化切 profile
+不派发 `ITfActiveLanguageProfileNotifySink`，属验证手段限制，需真实用户切换的人工验收）。
+
+**事故记录**：**L127 / L128**；anti-pattern 见 `AGENTS.md` §7 **A15 / A16 / A17**。
+
 ## [0.21.0.5-fluxing] - 2026-10-23
 
 ### feat(fluxing): 切换到 Fluxing 时自动弹出快捷设置栏

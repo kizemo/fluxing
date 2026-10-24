@@ -23,7 +23,7 @@
 | Upstream | `rime/weasel` (`origin` remote, **read-only**) |
 | Engine | `librime` (C library, vendored as a git submodule) |
 | License | GPLv3 — all changes must remain GPL-compatible (constitution §P-license) |
-| Latest released | see `CHANGELOG.md` top entry (currently 0.21.0.5) |
+| Latest released | see `CHANGELOG.md` top entry (currently 0.21.0.6 — 已构建并通过沙箱门禁，待推送 / 发布) |
 | Active specs | 60 entries under `.specify/specs/` (spec 000–077, 编号有跳号与重号) — see `ls .specify/specs/` |
 
 > The `Fluxing` brand fork is permitted by constitution P8 (Amendment 1).
