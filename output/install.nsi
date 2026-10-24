@@ -320,8 +320,16 @@ check_reg3:
   Goto use_default
 use_default:
   ; Smoke-test path detected - reset $INSTDIR to default and skip the
-  ; stale value. We use $PROGRAMFILES64\fluxing to match the default
-  ; set_default logic below.
+  ; stale value.
+  ;
+  ; 默认安装路径 "D:\Program Files\fluxing" 是**产品要求**（维护者明确指定：
+  ; 默认装到这个盘，安装者可以在安装界面改），不是待修的 bug。
+  ; 静默安装要改路径只能靠 /D=，而 /D= 的值**绝对不能带引号**
+  ; （NSIS 手册 3.2.1；带引号会让 NSIS 直接忽略该参数 —— 见 L112）。
+  ;
+  ; 不要把这里改成 $PROGRAMFILES64\fluxing：历史注释里写过那句，
+  ; 但它与产品要求不符，已经被后人当成「待修的 bug」改过一次（改错方向）。
+  ; 保留 D 盘默认，并在 §7 anti-pattern 表里留了记录。
   StrCpy $INSTDIR "D:\Program Files\fluxing"
   StrCpy $R0 ""
   Goto skip
@@ -339,10 +347,18 @@ use_reg:
   Goto skip
 set_default:
   ; L14: Default installation directory (only if /D= did not provide one).
-  ; The installer is x86 (Win32), so $PROGRAMFILES on x64 Windows resolves to
-  ; "C:\Program Files (x86)" via WOW64 redirection. We always want the real
-  ; 64-bit Program Files, so use $PROGRAMFILES64 explicitly. This keeps the
-  ; default stable across 32/64-bit installer versions.
+  ;
+  ; 这里写死 "D:\Program Files\fluxing" 是**产品要求**（维护者明确指定默认装到
+  ; D 盘，安装者可在安装界面改），不是 bug，也不是"应该用 $PROGRAMFILES64"的历史遗留。
+  ; 历史注释曾解释"安装器是 x86、要用 $PROGRAMFILES64 拿真正的 64 位 Program Files"
+  ; 并声称下面就是那么写的 —— 实际不是，后来被当成待修项改错过一次（改错方向）。
+  ;
+  ; 覆盖路径的方式：
+  ;   - 交互安装：安装界面里改（.onInit 之前 $INSTDIR 已被用户选择覆盖）
+  ;   - 静默安装：命令行 /D=<绝对路径>，**值不能带引号**（NSIS 手册 3.2.1 / L112）
+  ;     且必须是最后一个参数。带引号 ⇒ NSIS 忽略 ⇒ 落回这里的 D 盘默认。
+  ; L14 的架构约束仍然成立：随包分发的 Weasel*.exe 必须是 x86（rime.dll 是 32 位），
+  ; 这一点与默认装到哪个盘无关。
   StrCmp $INSTDIR "" 0 skip_default
   StrCpy $INSTDIR "D:\Program Files\fluxing"
 skip_default:
