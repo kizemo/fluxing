@@ -68,11 +68,35 @@
   → `ci.yml`：三处 `submodules: true` → `submodules: recursive`；
   → `ci.yml`：`test` job 也要 `build.bat rime`（测试工程链接的 `rime.lib` / `yaml-cpp.lib`
     **都不在版本库里**，而 `get-rime.ps1` 把 rime.lib 放在测试工程不搜索的目录）。
+- [x] T2.12 **【2026-10-25 本轮新增·已完成】让 xmake 矩阵腿不再连坐门禁**（事故 **L134**）——
+  拆掉 lint 墙（L132）之后 `build` job 第一次真跑，又撞上第三道墙：
+  `build (xmake)` = failure（`unknown target(RimeWithWeasel) for WeaselTSF.deps!`
+  + `LNK1181` on `yaml-cpp.lib` / `rime.lib` + `install.nsi` line 621），
+  而矩阵默认 `fail-fast: true` ⇒ 它把 `build (msbuild)` **取消**了；
+  `test` 的 `needs: build` 没满足 ⇒ `test` 与 `sandbox-gate` **全部 skipped**
+  ⇒ 唯一能用的构建腿被取消，所有门禁腿被跳过。
+  → `strategy.fail-fast: false`；
+  → `Build Weasel` 拆成按变体分别触发的两个步骤，xmake 那条挂**步骤级** `continue-on-error: true`
+    （**job 级不够**：job 级只让 workflow 不变红，job 结论仍是 `failure`，`needs` 照样跳过下游）；
+  → job 级再补 `continue-on-error: ${{ matrix.variant == 'xmake' }}` 作策略声明；
+  → xmake 腿**保留在矩阵里**，坏要继续可见，只是不再挡住门禁。
+- [ ] T2.13 **【可选·下阶段】真修 xmake 的 arm64 配置**——本轮只把它降为非阻断，腿本身还是红的。
+  根因（已逐行核对根 `xmake.lua` / `xbuild.bat` / `WeaselTSF/xmake.lua`）：
+  根 `xmake.lua` 第 52–54 行把 `includes("RimeWithWeasel", ...)` 关在
+  `is_arch("x64") or is_arch("x86")` 里，而 CI 的 xmake 腿构建 **arm64**
+  （`xbuild.bat arm64 installer` → `xmake f -a arm64`）⇒ arm64 下 `RimeWithWeasel`
+  这个 target 压根没定义 ⇒ `WeaselTSF` 的 `add_deps` 报 `unknown target`；
+  另外第 36–46 行的 arch → link 目录映射**没有 arm64 分支** ⇒ `LNK1181` on
+  `yaml-cpp.lib` / `rime.lib`。
+  → 修法：把 arm64 纳入 include 条件与 link 目录映射（或让 arm64 也指向 `lib`），
+    再复验 `xbuild.bat arm64 installer`。
+  ⚠️ **不是发布路径**（`AGENTS.md A15`）：发布一律走 `build.bat`（MSBuild）。
 - [ ] T2.7 **仍阻塞**：`sandbox-gate` job 需要带 `sandbox` 标签的自托管 runner
   （Windows Sandbox 是嵌套虚机，官方 windows runner 不支持）——要么自建，
   要么把 P10 的静态部分拆到官方 runner 上跑。
   ⚠️ 注意：**这已经不是「门禁跑不起来」的原因了**（lint 墙已拆，见 T2.8；
-  CI 构建缺步骤也已补，见 T2.10），现在只差一台带嵌套虚拟化的机器。
+  CI 构建缺步骤也已补，见 T2.10；xmake 腿的连坐也已拆，见 T2.12），
+  现在只差一台带嵌套虚拟化的机器。
 
 ## M3 · 真机行为验收
 

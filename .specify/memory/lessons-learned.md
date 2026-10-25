@@ -11276,8 +11276,16 @@ scripts/patch-librime-opencc-marisa.ps1 : opencc CMakeLists.txt not found:
 - 失败点全在 `Build Weasel` 这一步里：`unknown target(RimeWithWeasel) for WeaselTSF.deps!`、
   `LNK1181: cannot open input file 'yaml-cpp.lib'`、`LNK1181: cannot open input file 'rime.lib'`、
   `Error in script "install.nsi" on line 621`。
-  ⇒ 根子是**分叉特有的两处缺口**：fork 新增了 `RimeWithWeasel` 却没进 `xmake.lua`；
-  xmake 路径也没有像 MSBuild 那样去链 `librime/deps/` 里构建出来的 `yaml-cpp.lib` / `rime.lib`。
+  ⇒ 根子是**分叉特有的两处缺口**（逐行核对过根 `xmake.lua` / `xbuild.bat` / `WeaselTSF/xmake.lua`）：
+  - **`RimeWithWeasel` 在 arm64 下根本没被定义**：根 `xmake.lua` 第 52–54 行是
+    `if is_arch("x64") or is_arch("x86") then includes("RimeWithWeasel", ...) end`，
+    而 `xbuild.bat arm64 installer` 跑的是 `xmake f -a arm64`
+    ⇒ arm64 下这个 target 不存在 ⇒ `add_deps(..., "RimeWithWeasel")` 报 `unknown target`。
+    **本 fork 新增了上游没有的 `RimeWithWeasel`**，却只在 x64/x86 下 include，
+    于是上游原本自洽的 arm64 配置被这个 fork 弄不自洽了。
+  - **arm64 下没有 Weasel 库的 link 目录**：根 `xmake.lua` 第 36–46 行只给
+    x64 → `lib64`、x86 → `lib`，**没有 arm64 分支** ⇒ `LNK1181` on `yaml-cpp.lib` / `rime.lib`。
+  `install.nsi` line 621 的报错是上面两条的下游后果（arm64 产物没产出）。
 
 **Fix**:
 
@@ -11300,6 +11308,10 @@ scripts/patch-librime-opencc-marisa.ps1 : opencc CMakeLists.txt not found:
 
 **推广**:
 
+- **别用「文件不在」解释「target 不存在」**：本例第一反应是「fork 忘了把 `RimeWithWeasel`
+  加进 `xmake.lua`」—— 实际它**在** `xmake.lua` 里，只是被
+  `is_arch("x64") or is_arch("x86")` 这个平台条件挡住了 ⇒ 在 arm64 配置里等于不存在。
+  **先读条件，再下结论。** 这条错误结论差点写进本条目和复验报告。
 - **矩阵里每条腿都要问一句「它是必需的吗」**。不是必需的那条，要么拆成独立的 job，
   要么在**步骤级**降级；只加 `fail-fast: false` 是不够的（那只是让兄弟腿别被取消）。
 - **「已知坏」不等于「可以挡住别人」**：保留可见性 + 显式降级，两件事要分开做。
