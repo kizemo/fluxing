@@ -10979,3 +10979,87 @@ Fix (defer to v0.21.0.1): 改 source。
 - L127 (同一个 VCOMP140 依赖坑；本条更正它的「解法」部分)
 - L63 (spec 063 delay-load API set, 同一类「运行库依赖」问题)
 - L128 (同一次 0.21.0.6 的构建事故)
+
+
+## L130 - TSF 端到端验证必须「真的前台」+「真的 profile 变化」，否则永远是 notifications=0 (2026-10-25)
+
+**Incident**:
+
+- spec 080 的 P6「切到 Fluxing 自动弹出快捷设置栏」在沙箱门禁里连挂**四轮**（`exit=-7`），
+  每一轮的日志都是同一组数字：`GetFocus hr=0x1` / `weasel.dll=0` / `notifications=0`。
+  前一轮的报告因此写下结论：「程序化激活不会派发 `ITfActiveLanguageProfileNotifySink` 事件」，
+  并据此把 P6 定性成「验证手段不可自动化、需人工验收」。
+- 第五轮把**驱动**改对之后，**同一套断言原样通过**（`exit=0`，面板 `visible=1`）。
+  ⇒ 前四轮 FAIL 的根因在验证手段，不在产品。
+
+**Root cause**（两个**互相独立**的原因，缺一不可）:
+
+1. **这个线程没有聚焦的文本存储。**
+   驱动创建了窗口和 EDIT 控件，却**从不显示**它们 ⇒ 线程从来不是前台线程
+   ⇒ `SetFocus(edit)` 被拒 ⇒ 线程管理器一直报 `GetFocus hr=0x1`（`S_FALSE`，无焦点）
+   ⇒ TSF 不会把文本服务挂到这个线程上 ⇒ Fluxing 的 TIP **从未被实例化**
+   （`weasel.dll=0`）⇒ **没有任何线程能收到那个通知**。
+   - 附带事实：本机 Windows SDK 10.0.26100.0 的 `msctf.h` 里**没有** `ITfTextStoreACP`
+     / `ITfTextStore`（全 SDK 搜索 0 命中）⇒ 「在测试里自己实现一个文本存储」这条路走不通，
+     只能让一个**真实的窗口**真正拿到前台。
+2. **活动 profile 根本没变。**
+   沙箱里只装了一个输入法，Fluxing **本来就是**活动 profile；再激活一次是**空操作**。
+   而 `OnActivated` 是**活动 profile 发生变化**时才派发的。
+   ⇒ 驱动自己独立注册的 sink（与 TIP 无关）收到 0 条，
+   **不是因为 TIP 没回调，是事件压根没发生过**。
+   - 实测佐证：`DeactivateProfile` 之后 `GetActiveLanguageProfile` 返回 `hr=0x1`
+     且 GUID 全零 = **没有活动 profile** ⇒ 这才是「变了」的样子；随后再激活 Fluxing，
+     两条 `OnActivated` 立刻到达（键盘档 `activated=0`、Fluxing `activated=1`）。
+
+**Fix**（只改驱动 `test/TestWeaselIPC/TsfProfileVerify.cpp`，**不动产品**）:
+
+- 窗口**显示** + `SetForegroundWindow` + `SetFocus(edit)`；
+  `SetForegroundWindow` 对非前台进程会被拒，所以先用 `AttachThreadInput`
+  把两个线程的输入队列接上。
+- 若本进程仍拿不到文本服务，**启动一个真实 Windows 应用并置前**
+  （`notepad.exe` → `regedit.exe` → `write.exe`；沙箱里 `notepad.exe` 不存在，
+  `regedit.exe` 成功）。
+- **先切走再切回**：`DeactivateProfile` → `ActivateLanguageProfile`；
+  每个候选激活 API 之前都先切走，于是**每个候选都是一次真变化**。
+- 每一步打印 `GetActiveLanguageProfile`，让证据能显示 profile 到底动没动。
+- 判据允许面板出现在**别的进程**里（收到通知的文本服务住在拥有聚焦文本存储的进程），
+  驱动线程的通知计数只是**旁证**。
+
+**验收**（2026-10-25 第五轮沙箱，`toolingVersion=2026-10-24.v7`，待验包 `fluxing-0.21.0.6-installer.exe`）:
+
+```
+[tsf] document managers=3 | GetFocus hr=0x0 dm=1
+[tsf] switch away: DeactivateProfile hr=0x0
+[tsf] active profile (after switch away) hr=0x1 langid=0x0 profile=00000000-...
+[tsf 1] OnActivated clsid=81D4E9C9-... activated=0
+[tsf 2] OnActivated clsid=A3F4CDED-... profile=3D02CAB6-... activated=1
+[tsf] tip loaded into this process: weasel.dll=1
+[tsf] panel hwnd=0002030E visible=1 notifications=2
+[tsf] PASS: the profile activation notification reaches the QuickPanel
+```
+
+门禁总计：**46 项 = 38 PASS / 2 FAIL**（只剩 `E.2` / `E.4` 两个环境事实）。
+
+**Pattern-Key**:
+
+- `verify.tsf-needs-real-foreground-and-real-profile-change`（新增）
+- 累计 Recurrence-Count: 1
+
+**推广**:
+
+- **「事件没派发」和「没人能收到事件」在计数器上长得一模一样**。
+  只看 `notifications=0` 就断言「Windows 不派发这个事件」是**越界**的结论；
+  必须同时测「文本服务到底有没有被实例化」。
+- **「已经是活动状态」时再激活是空操作**。要验证「切换」类事件，
+  必须先制造一次**真实变化**（切走 → 切回），而不是换一个更"高级"的 API。
+- **前一轮的报告结论要能被后来的实测推翻**。本条的教训是：
+  「程序化激活不会派发事件」这个结论**下得太早**——缺的不是 API，是**前置条件**。
+- 测试驱动里的窗口必须**真的显示并拿到前台**；否则它只是一个摆设，
+  而失败会以「产品缺陷」的形态出现在报告里。
+- **写「验证手段不可自动化」之前，先确认自己没漏掉前置条件**。
+
+**关联**:
+
+- L111 (程序化切 profile 会打崩输入栈 —— 一次性虚机里可做，主机上不可做)
+- L127 / L129 (同一批 0.21.0.6 的其它收尾)
+- spec 080 / ADR 0008 (P6 的功能链路)
