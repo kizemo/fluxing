@@ -52,6 +52,15 @@ jobs:
         run: bash ./scripts/lint-changed-cpp.sh --all --report-only
 
   build:
+    # The xmake path is NOT the release path in this fork: AGENTS.md A15 and
+    # L127/L128 record that it links the dynamic OpenMP runtime and cannot
+    # build x64, so the release goes through build.bat (MSBuild) only. The
+    # variant is kept so its breakage stays visible, but it must not block
+    # the pipeline: with it blocking, `test` and `sandbox-gate` were skipped
+    # and the gates never ran. fail-fast: false keeps the msbuild variant
+    # running to completion.
+    continue-on-error: ${{ matrix.variant == 'xmake' }}
+
     needs: lint
     runs-on: windows-2022
     env:
@@ -59,6 +68,7 @@ jobs:
       BOOST_ROOT: ${{ github.workspace }}\deps\boost_1_84_0
       SDKVER: 10.0.19041.0
     strategy:
+      fail-fast: false
       matrix:
         variant: [msbuild, xmake]
     steps:
@@ -163,18 +173,35 @@ jobs:
           $ErrorActionPreference = 'Stop'
           .\build.bat rime
 
-      - name: Build Weasel
+      # The Weasel build is split per variant so the xmake leg can be marked
+      # best-effort at STEP level. Step-level continue-on-error keeps the
+      # job's own conclusion green, and that green is what the `needs: build`
+      # in the test job actually consumes: a job that merely fails with
+      # continue-on-error is still "failure" to its dependents, so the test
+      # job would still be skipped and the gates would still never run.
+      - name: Build Weasel (msbuild -- the release path)
         shell: pwsh
-        id: build_weasel
+        if: matrix.variant == 'msbuild'
         env:
           RELEASE_BUILD: ${{ (github.repository == 'rime/weasel' && startsWith(github.ref, 'refs/tags/')) && '1' || '' }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if ('${{ matrix.variant }}' -eq 'msbuild') {
-            .\build.bat arm64 installer
-          } else {
-            .\xbuild.bat arm64 installer
-          }
+          .\build.bat arm64 installer
+
+      # Best effort: the xmake path is a known-broken legacy path in this fork
+      # (AGENTS.md A15, L127, L128 -- the release goes through build.bat /
+      # MSBuild only). It is kept so its breakage stays visible, but it must
+      # not stop the pipeline. While it was blocking, `test` and
+      # `sandbox-gate` were skipped and the gates never ran.
+      - name: Build Weasel (xmake -- best effort, non-blocking)
+        shell: pwsh
+        if: matrix.variant == 'xmake'
+        continue-on-error: true
+        env:
+          RELEASE_BUILD: ${{ (github.repository == 'rime/weasel' && startsWith(github.ref, 'refs/tags/')) && '1' || '' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\xbuild.bat arm64 installer
 
       - name: Compress Debug Symbols
         if: matrix.variant == 'msbuild'
