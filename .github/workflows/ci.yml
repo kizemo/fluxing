@@ -264,6 +264,13 @@ jobs:
           output\7z.exe a -t7z "./output/archives/debug_symbols.7z" "output/*.pdb" -r
           if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
 
+      # L143: this fork's installer is named fluxing-<version>-installer.exe
+      # (install.nsi:51 writes OutFile "archives\fluxing-...-installer.exe").
+      # The path still asked for the UPSTREAM weasel*.exe, so this artifact
+      # silently contained only the debug symbols - the installer was
+      # missing. The step did not go red, because if-no-files-found applies
+      # to the whole path set and debug_symbols.7z did match: a silent
+      # partial upload, the same class of defect as L132.
       - name: Upload artifacts
         if: matrix.variant == 'msbuild'
         uses: actions/upload-artifact@v4
@@ -271,7 +278,7 @@ jobs:
           name: weasel-artifact-${{ env.git_ref_name }}
           if-no-files-found: error
           path: |
-            .\output\archives\weasel*.exe
+            .\output\archives\fluxing-*-installer.exe
             .\output\archives\debug_symbols.7z
 
       # The sandbox gate needs the installer itself and the build output,
