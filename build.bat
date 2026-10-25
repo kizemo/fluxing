@@ -69,6 +69,17 @@ if not defined PLATFORM_TOOLSET (
   set PLATFORM_TOOLSET=v142
 )
 
+rem L139: every *.vcxproj in this tree - the Weasel* projects AND all the
+rem test projects - imports ..\..\weasel.props, which is a GENERATED file
+rem (.gitignore lists weasel.props) that only the Weasel branch used to
+rem render. So `build.bat rime` - exactly what the CI test job runs - left
+rem it missing, and every test project then failed to load with "the
+rem imported project ... was not found". Render it here instead: it is cheap,
+rem and it makes the props file a property of the build rather than a side
+rem effect of one branch.
+call :render_props
+if errorlevel 1 goto error
+
 if defined DEVTOOLS_PATH set PATH=%DEVTOOLS_PATH%%PATH%
 
 set build_config=Release
@@ -253,15 +264,8 @@ if not exist librime\deps\yaml-cpp\build_Win32\Release\yaml-cpp.lib (
   exit /b 1
 )
 
-set WEASEL_PROJECT_PROPERTIES=BOOST_ROOT^
-  PLATFORM_TOOLSET^
-  VERSION_MAJOR^
-  VERSION_MINOR^
-  VERSION_PATCH^
-  PRODUCT_VERSION^
-  FILE_VERSION
-
-cscript.exe render.js weasel.props %WEASEL_PROJECT_PROPERTIES%
+call :render_props
+if errorlevel 1 goto error
 
 del msbuild*.log
 
@@ -364,8 +368,26 @@ rem build boost
   exit /b
 
 rem ---------------------------------------------------------------------------
+rem ---------------------------------------------------------------------------
+:render_props
+  rem weasel.props is imported by every *.vcxproj through a path relative to
+  rem the project file, so it has to be rendered into the repository root no
+  rem matter what the current directory is.
+  pushd "%WEASEL_ROOT%"
+  set WEASEL_PROJECT_PROPERTIES=BOOST_ROOT^
+    PLATFORM_TOOLSET^
+    VERSION_MAJOR^
+    VERSION_MINOR^
+    VERSION_PATCH^
+    PRODUCT_VERSION^
+    FILE_VERSION
+  cscript.exe render.js weasel.props %WEASEL_PROJECT_PROPERTIES%
+  set "PROPS_RC=%ERRORLEVEL%"
+  popd
+  if not "%PROPS_RC%"=="0" goto error
+  exit /b
+
 :build_data
-  copy %WEASEL_ROOT%\LICENSE.txt output\
   copy %WEASEL_ROOT%\README.md output\README.txt
   copy %WEASEL_ROOT%\plum\rime-install.bat output\
   rem L138: this fork TRACKS output\data itself - 139 files, including the
