@@ -50,14 +50,32 @@
     <ClCompile>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <WarningLevel>Level3</WarningLevel>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- L142: WEASEL_IPC_NO_BOOST_ARCHIVE keeps the boost::archive headers
+           out of this translation unit. The boost::archive headers declare an
+           explicit specialization of codecvt_null<wchar_t> whose members live
+           in the COMPILED boost serialization library, so a translation unit
+           that parses them references that library - and its name carries the
+           boost version. These tests use no boost::archive at all, and the
+           hardcoded F:\b183 path plus the version-stamped 1_83 library names
+           they used to carry made the build depend on ONE developer's boost
+           install (LNK1104 on the CI runner's boost 1.84.0). -->
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;WEASEL_IPC_NO_BOOST_ARCHIVE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>..\..\include;..\..\WeaselIPC;$(BOOST_ROOT);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalLibraryDirectories>F:\b183\bin.v2\libs\serialization\build\msvc-14.3\release\address-model-32\link-static\runtime-link-static\threading-multi;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>libboost_wserialization-vc143-mt-s-x32-1_83.lib;libboost_serialization-vc143-mt-s-x32-1_83.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- L142: no boost library is linked here, and none has to exist on the
+           machine. PipeChannel only uses the header-only boost::interprocess
+           streams; the boost::archive dependency is kept out of the
+           translation unit by WEASEL_IPC_NO_BOOST_ARCHIVE (see the
+           PreprocessorDefinitions above). The library directory and the
+           version-stamped library names this project used to hardcode
+           (F:\b183\... and libboost_*_vc143-mt-s-x32-1_83.lib) made the build
+           depend on ONE developer's boost install and fail on the CI runner's
+           boost 1.84.0 with LNK1104. If a future change really needs
+           boost::archive, link the library explicitly then - and derive its
+           name from the boost tree instead of hardcoding a version. -->
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
