@@ -178,6 +178,39 @@ jobs:
           # step green while producing nothing.
           if ($LASTEXITCODE -ne 0) { throw "build.bat rime failed with exit code $LASTEXITCODE" }
 
+      # The installer bundles the prebuilt dictionaries
+      # (output\install.nsi: "data\build\*.bin") and the sandbox gate
+      # asserts data\build\rime_ice.table.bin exists (P1.g). Those .bin
+      # files are NOT in git -- .gitignore:4 ("build") excludes
+      # output\data\build -- they are local artifacts of a deploy that
+      # the maintainer ran by hand. A CI checkout therefore has none of
+      # them, and makensis aborts with:
+      #   Error in script "output\install.nsi" on line 897 -- aborting
+      #   creation process
+      # (line 897 is `File "data\build\*.bin"`, the one glob in that
+      # block that is not /nonfatal). So compile them here, with the
+      # rime_deployer that the step above just built from source.
+      - name: Compile the dictionaries (prebuilt .bin for the installer)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cands = Get-ChildItem -Path 'librime' -Recurse -Filter 'rime_deployer.exe' -ErrorAction SilentlyContinue
+          if (-not $cands) { throw "rime_deployer.exe not found under librime\ -- the librime build did not produce the tools" }
+          # prefer the Win32 tool: librime in this fork is Win32-only
+          $deployer = ($cands | Where-Object { $_.FullName -like '*build_Win32*' } | Select-Object -First 1)
+          if (-not $deployer) { $deployer = ($cands | Select-Object -First 1) }
+          Write-Host "using $($deployer.FullName)"
+          # the deployer imports rime.dll; make sure it sits next to the exe
+          $dll = Get-ChildItem -Path 'librime' -Recurse -Filter 'rime.dll' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -like '*dist_Win32*' } | Select-Object -First 1
+          if (-not $dll) { throw "rime.dll not found under librime\dist_Win32\lib" }
+          Copy-Item $dll.FullName $deployer.Directory.FullName -Force
+          & $deployer.FullName --build output\data
+          if ($LASTEXITCODE -ne 0) { throw "rime_deployer --build failed with exit code $LASTEXITCODE" }
+          $bin = 'output\data\build\rime_ice.table.bin'
+          if (-not (Test-Path $bin)) { throw "rime_ice.table.bin was not produced at $bin" }
+          Write-Host "OK: $bin"
+
       # The Weasel build is split per variant so the xmake leg can be marked
       # best-effort at STEP level. Step-level continue-on-error keeps the
       # job's own conclusion green, and that green is what the `needs: build`
