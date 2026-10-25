@@ -539,6 +539,106 @@ Add-Result -Id "E.9" -Claim "TSF 阶段后 WeaselServer.exe 进程状态" -Statu
     -Detail "count=$($probeAfter.Count) pids=$($probeAfter.Pids) serverLogFiles=$($probeAfter.LogCount)"
 
 # =====================================================================
+# PHASE 3.5 · 快捷键验收 (hotkey acceptance)
+# =====================================================================
+# 目的: 逐条判定「每一条 key_binder 绑定, TSF 前端到底能不能发出它要的
+#       (keycode, modifier)」。判定用的是产品自己的 ConvertKeyEvent()
+#       (WeaselTSF/KeyEvent.cpp 被直接编进 TestHotkeyBindings.exe),
+#       不是另写一份映射, 所以不会出现「门禁和产品各说各话」。
+#
+# 读的是**部署之后**的配置 (user1\fluxing\build\*.schema.yaml), 不是仓库里的
+# 源 yaml —— 源 yaml 里写了不等于部署后真的生效 (上一轮 P6 就是这么栽的:
+# 读源文件得出「已完成」的结论, 实机却是另一回事)。
+#
+# 三条断言:
+#   P9.1  工具有判别力  —— 坏数据对照: 7 条故意写坏的绑定各自被抓出,
+#                          1 条好绑定不被误报。这一条不过, 后面两条都没有意义。
+#   P9.2  部署后的配置  —— 每一条绑定要么可达, 要么在 known-dead-bindings.txt
+#                          里登记为已知缺陷; 出现新的死绑定 = FAIL。
+#   P9.3  服务器日志    —— librime 不许再刷 "invalid key binding"。
+Write-VerifyLog -Path $verifyLog "[PHASE 3.5] 快捷键验收"
+
+$hotkeyExe = Get-ChildItem $testsDir -Filter 'TestHotkeyBindings.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $hotkeyExe) {
+    Add-Result -Id "P10.0" -Claim "快捷键验收工具可用" -Status "SKIP" -Detail "TestHotkeyBindings.exe 不在 tests 挂载目录"
+} else {
+    $fixture  = Join-Path $testsDir 'negative-controls.yaml'
+    $expect   = Join-Path $testsDir 'negative-controls.expect.txt'
+    $baseline = Join-Path $testsDir 'known-dead-bindings.txt'
+    # Invoke-Captured 把 stdout 拼成一行, 逐行解析必须读原始文件
+    $hotkeyOut = Join-Path $logsDir '_io_TestHotkeyBindings.out.txt'
+
+    # ---- P9.1 坏数据对照: 证明工具有判别力 -------------------------------
+    $res = Invoke-Captured -FilePath $hotkeyExe.FullName `
+        -Arguments @('--expectations', $expect, $fixture) `
+        -WorkingDirectory $testsDir -TimeoutSeconds 120
+    $negLines = @(Get-Content $hotkeyOut -ErrorAction SilentlyContinue)
+    $mismatch = @($negLines | Where-Object { $_ -like 'EXPECT-MISMATCH*' })
+    $unused   = @($negLines | Where-Object { $_ -like 'EXPECT-UNUSED*' })
+    $sumNeg   = (@($negLines | Where-Object { $_ -like 'SUMMARY*' }) -join ' ')
+    Add-Result -Id "P10.1" -Claim "验收工具有判别力 (坏数据对照: 每条坏绑定各自被抓出, 好绑定不误报)" `
+        -Status $(if($res.ExitCode -eq 0 -and $mismatch.Count -eq 0 -and $unused.Count -eq 0){'PASS'}else{'FAIL'}) `
+        -Detail "exit=$($res.ExitCode) $sumNeg mismatch=$($mismatch.Count) unused=$($unused.Count)"
+
+    # ---- P9.2 部署后的实际配置 -------------------------------------------
+    $deployedBuild = Join-Path $actualUserDir 'build'
+    $deployedYamls = @(Get-ChildItem $deployedBuild -Filter '*.schema.yaml' -ErrorAction SilentlyContinue |
+                        Sort-Object Name)
+    if ($deployedYamls.Count -eq 0) {
+        Add-Result -Id "P10.2" -Claim "部署后的 key_binder 绑定全部可达 (无新增死绑定)" `
+            -Status "FAIL" -Detail "部署目录里没有 *.schema.yaml: $deployedBuild"
+    } else {
+        $res2 = Invoke-Captured -FilePath $hotkeyExe.FullName `
+            -Arguments (@('--baseline', $baseline) + @($deployedYamls | ForEach-Object { $_.FullName })) `
+            -WorkingDirectory $testsDir -TimeoutSeconds 120
+        $depLines = @(Get-Content $hotkeyOut -ErrorAction SilentlyContinue)
+        $sum2   = (@($depLines | Where-Object { $_ -like 'SUMMARY*' }) -join ' ')
+        $layout = (@($depLines | Where-Object { $_ -like 'LAYOUT|*' }) -join ' ')
+        $probe  = (@($depLines | Where-Object { $_ -like 'LAYOUT-PROBE*' }) -join ' ')
+        $dead   = @($depLines | Where-Object { $_ -like 'BINDING|*' } | Where-Object { $_ -match '\|DEAD\|' })
+        $known  = @($depLines | Where-Object { $_ -like 'BINDING|*' } | Where-Object { $_ -match '\|DEAD_KNOWN\|' })
+        $baseN  = 0
+        $keyN   = 0
+        foreach ($l in $depLines) {
+            if ($l -like 'BASELINE|*') {
+                if ($l -match 'BASELINE\|(\d+)') { $baseN = [int]$matches[1] }
+            }
+            if ($l -like 'SUMMARY|*') {
+                if ($l -match 'known_dead_keys=(\d+)') { $keyN = [int]$matches[1] }
+            }
+        }
+        # 逐条写进日志: 哪些是新增死绑定, 哪些是已知缺陷
+        foreach ($d in $dead)  { Write-VerifyLog -Path $verifyLog -Level WARN ("  [DEAD-NEW] " + $d) }
+        foreach ($k in $known) { Write-VerifyLog -Path $verifyLog -Level WARN ("  [DEAD-KNOWN] " + $k) }
+        Add-Result -Id "P10.2" -Claim "部署后的 key_binder 绑定全部可达 (无新增死绑定)" `
+            -Status $(if($res2.ExitCode -eq 0){'PASS'}else{'FAIL'}) `
+            -Detail "exit=$($res2.ExitCode) $sum2 files=$($deployedYamls.Count) $layout $probe"
+        Add-Result -Id "P10.2b" -Claim "已知死绑定清单与基线一致 (基线条数 == 命中的基线条数)" `
+            -Status $(if($baseN -eq $keyN){'PASS'}else{'FAIL'}) `
+            -Detail "baseline_entries=$baseN matched_baseline_keys=$keyN instances=$($known.Count) new_dead=$($dead.Count)"
+        # 把完整逐条结果落盘, 主机侧可直接取
+        try {
+            Set-Content -Path (Join-Path $logsDir 'hotkey-acceptance.txt') -Value ($depLines -join "`n") -Encoding UTF8
+        } catch {}
+    }
+
+    # ---- P9.3 服务器日志里不许有 invalid key binding --------------------
+    $serverLogDir = Join-Path $env:TEMP 'rime.weasel'
+    $badLines = @()
+    if (Test-Path $serverLogDir) {
+        foreach ($lg in @(Get-ChildItem $serverLogDir -File -ErrorAction SilentlyContinue)) {
+            try {
+                $hits = @(Select-String -Path $lg.FullName -Pattern 'invalid key binding' -SimpleMatch -ErrorAction SilentlyContinue)
+                foreach ($h in $hits) { $badLines += ("{0}: {1}" -f $lg.Name, $h.Line.Trim()) }
+            } catch {}
+        }
+    }
+    Add-Result -Id "P10.3" -Claim "librime 未报 invalid key binding (所有绑定的 accept/send 都能解析)" `
+        -Status $(if($badLines.Count -eq 0){'PASS'}else{'FAIL'}) `
+        -Detail $(if($badLines.Count -eq 0){"logdir=$serverLogDir 未发现"}else{($badLines | Select-Object -First 8) -join ' ; '})
+}
+
+# =====================================================================
 # PHASE 4 · 卸载
 # =====================================================================
 Write-VerifyLog -Path $verifyLog "[PHASE 4] 卸载"

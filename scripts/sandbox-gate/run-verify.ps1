@@ -128,6 +128,26 @@ foreach ($d in $srcDirs) {
     }
 }
 Write-Host "[OK] staged $copied 个测试 exe -> $tests" -ForegroundColor DarkGray
+# ---------- 3b. staging 快捷键验收的辅助文件 ----------
+# TestHotkeyBindings.exe 除了 exe 还需要三个文件: 坏数据对照 (fixture)、
+# 对照的期望判定 (expect) 、已知死绑定基线 (baseline)。它们不在 Release\
+# 里, 必须显式复制进挂载目录, 否则沙箱里的 P10 阶段只能 SKIP。
+$hotkeySupport = @(
+    @{ src = 'test\TestHotkeyBindings\fixtures\negative-controls.yaml';       dst = 'negative-controls.yaml' },
+    @{ src = 'test\TestHotkeyBindings\fixtures\negative-controls.expect.txt'; dst = 'negative-controls.expect.txt' },
+    @{ src = 'test\TestHotkeyBindings\known-dead-bindings.txt';               dst = 'known-dead-bindings.txt' }
+)
+$stagedSupport = 0
+foreach ($hs in $hotkeySupport) {
+    $srcPath = Join-Path $RepoRoot $hs.src
+    if (Test-Path $srcPath) {
+        Copy-Item -Path $srcPath -Destination (Join-Path $tests $hs.dst) -Force
+        $stagedSupport++
+    } else {
+        Write-Host "[WARN] hotkey support file missing: $srcPath" -ForegroundColor Yellow
+    }
+}
+Write-Host "[OK] staged $stagedSupport hotkey support files -> $tests" -ForegroundColor DarkGray
 
 # ---------- 4. 生成沙箱配置 + 启动 ----------
 $wsb = Join-Path $StagingRoot "fluxing-sandbox.wsb"
