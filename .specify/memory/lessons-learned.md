@@ -12003,3 +12003,153 @@ powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1
 - L135（`goto error` 只退出子程序 / 失败被吞 —— 同一类）
 - L121（opencc 补丁要可逆；子模块被打着补丁时 `git checkout` 会搞坏构建）
 - L139（`weasel.props`）
+
+## L141 - NSIS 的相对路径按**脚本目录**解析，而 `output\LICENSE.txt` 从来没人生成——干净检出编不出安装包 (2026-10-25)
+
+**Incident**:
+
+- CI 的 `build (msbuild)` 腿在 `Build Weasel (msbuild -- the release path)` 步红掉：
+
+  ```
+  LicenseData: open failed "LICENSE.txt"
+  Error in script "output\install.nsi" on line 72 -- aborting creation process
+  ```
+
+- 本机却**编得出来**：`output\LICENSE.txt` 躺在那里（35821 字节），
+  所以本机 `build.bat installer` 一直是绿的
+  ⇒ **两边的差异不在代码，在工作区残留**。
+
+**Root cause**:
+
+- `output\install.nsi` 里的相对路径是**相对脚本目录**解析的，不是相对当前目录。
+  用一个临时脚本做了三格对照（`makensis` 的 `/NOCD` 开关 = 不切到脚本目录）：
+
+  | 用例 | 文件位置 | 开关 | 结果 |
+  |---|---|---|---|
+  | A1 | 脚本目录 | 默认 | **EXIT=0 通过** |
+  | A2 | 脚本目录 | `/NOCD` | **EXIT=1**，`LicenseData: open failed "LICENSE.txt"` |
+  | B1 | 仅当前目录 | `/NOCD` | EXIT=0 通过 |
+
+  ⇒ `makensis` 默认会 **chdir 进脚本目录**，所以 `LICENSE.txt` 指的是
+  `output\LICENSE.txt`。
+
+- 而 `output\LICENSE.txt` **从来不是仓库的一部分**：
+  `.gitignore:25` 的 `/output/*.txt` 把它排除了；提交 `41e47e3`
+  把它从跟踪里删掉（674 行）之后，`build.bat` 的 `:build_data` 只补回了
+  `README.md → output\README.txt` 和 `plum\rime-install.bat → output\`，
+  **唯独没补 LICENSE.txt**。
+
+  ⇒ 本机那份是 `41e47e3` 之前的**未跟踪残留**，CI 的干净检出没有它
+  ⇒ 于是 CI 的安装包步骤第一次真正跑到 NSIS，就炸在 line 72。
+
+**Fix**:
+
+- `build.bat` 新增 `:stage_text_assets`：把 `LICENSE.txt` / `README.md` /
+  `rime-install.bat` 这三个**安装器要用的文本产物**一次性备到 `output\`；
+  `:build_data` 和安装器分支都调它
+  ⇒ 安装包目标不再依赖 CI 步骤的先后顺序。
+- 拷贝一律带 `/Y`（否则第二次运行会停在覆盖询问上），
+  退出码逐条判（否则拷失败会被吞 —— L135 同一类）。
+
+**Evidence**（本机，双向）:
+
+- **阴性**（把 `output\LICENSE.txt` 挪走）⇒ `makensis` EXIT=1，
+  `LicenseData: open failed "LICENSE.txt"` + `on line 72 -- aborting`
+  —— 与 CI 报错逐字一致；
+- **阳性**（`build.bat data` EXIT=0，日志里从 2 条变成 **3 条**
+  `1 file(s) copied.`，备出来的文件 sha256 与根 `LICENSE.txt` 相同）
+  ⇒ 再跑 `makensis` **EXIT=0**，真的产出
+  `output\archives\fluxing-0.21.0.6-installer.exe`。
+
+**推广**:
+
+- **「本地能编、CI 编不出」的第一嫌疑是工作区残留**，不是代码差异。
+  本机那份 `output\LICENSE.txt` 就是 `41e47e3` 之前的化石。
+- **编译器的相对路径基准要用实验量，不要用记忆**：`makensis` 的
+  `/NOCD` 开关正好能把「脚本目录」和「当前目录」两种解析分开，
+  三格对照（A1/A2/B1）一次就定性了。
+- **产物清单要逐个对账**：安装器引用 `LICENSE.txt` / `README.txt` /
+  `rime-install.bat` / `data\build\*.bin`，其中三个是 gitignore 的生成物
+  ⇒ 少一个就是一个「干净检出编不出来」的坑。
+
+**关联**:
+
+- L138（plum 会覆盖 `output\data` —— 同一个目录的另一类污染）
+- L139 / L140（`build.bat` 的同一批修复）
+
+## L142 - 两个 IPC 测试工程把**某一台机器**的 boost 路径和版本写死在链接设置里——CI 的 boost 是另一个版本 (2026-10-25)
+
+**Incident**:
+
+- CI 的 `test` 腿红了，两个工程链接失败：
+
+  ```
+  LINK : fatal error LNK1104: cannot open file 'libboost_wserialization-vc143-mt-s-x32-1_83.lib'
+  ```
+
+- 而 `test\TestShiftIPCWire` / `test\TestPipeChannelRace` 的 vcxproj 里写的是：
+
+  ```xml
+  <AdditionalLibraryDirectories>F:\b183\bin.v2\libs\serialization\build\msvc-14.3\release\address-model-32\link-static\runtime-link-static\threading-multi;...</AdditionalLibraryDirectories>
+  <AdditionalDependencies>libboost_wserialization-vc143-mt-s-x32-1_83.lib;libboost_serialization-vc143-mt-s-x32-1_83.lib;...</AdditionalDependencies>
+  ```
+
+  `F:\b183` 是某一台开发机的 boost 1.83 树；**库名里带着版本号**，
+  所以同一份源码在 CI 的 boost 1.84.0 上必然找不到。
+
+**Root cause**:
+
+- 这个依赖**根本不需要存在**。`boost/archive/codecvt_null.hpp` 里
+  `codecvt_null<wchar_t>` 是**显式特化**，它的构造/析构/虚函数都定义在
+  **编译好的 boost 序列化库**里，不在头文件里
+  ⇒ **自己解析这些头的 TU** 才会引用那个库。
+- 产品侧 `WeaselIPC` 是用 `stdafx.h` 作**预编译头**编的，
+  而 PCH **不会**把这份引用带进各个 TU。`dumpbin /SYMBOLS` 量出来：
+
+  | obj | codecvt 符号 |
+  |---|---|
+  | `msbuild\Release\Win32\WeaselIPC\PipeChannel.obj` | **0 个** |
+  | `msbuild\Release\Win32\TestPipeChannelRace\PipeChannel.obj` | **4 个**（3 个本地定义 + 1 个未定义构造）|
+
+  ⇒ 同一份 `PipeChannel.cpp`，差别只在于**有没有 PCH**。
+- 而这两个测试**根本不用 boost::archive**：`include\PipeChannel.h` 只用
+  header-only 的 `boost::interprocess::wbufferstream`；
+  归档头是**经由 `WeaselIPC\stdafx.h`** 才进到 TU 里的。
+
+**Fix**:
+
+- `WeaselIPC\stdafx.h` 给归档头加守卫 `#ifndef WEASEL_IPC_NO_BOOST_ARCHIVE`；
+  产品侧永远不定义这个宏 ⇒ 产品构建**一字不变**
+  （归档头照样经 PCH 到每个 TU）；
+- 两个测试工程定义它 ⇒ 编译同一份 `PipeChannel.cpp` 时链接行上
+  **一个 boost 库都不需要**，路径、版本号、依赖哪个 boost 全部消失。
+
+**Evidence**（本机）:
+
+- 两个工程在 `F:\b183` 目录与 `1_83` 库名全部删掉后**链接通过**
+  （`BUILD_EXIT=0`），运行 `TestPipeChannelRace` 12 passed / 0 failed、
+  `TestShiftIPCWire` 10 PASS / 0 FAIL；
+- 完整套件 `scripts\test-infra\run-test-suite.bat` **EXIT=0**，
+  末尾 `=== ALL TESTS PASSED ===`，快捷键门禁两轮 `RESULT|PASS`；
+- `WeaselIPC.vcxproj` 随 `stdafx.h` 变更一起重编，`No errors detected.`
+  ⇒ 产品构建未受影响。
+
+**推广**:
+
+- **库名里带版本号的链接项 = 一台机器的化石**。boost 的库名把版本/工具集/
+  架构/CRT 全编进去了，`libboost_serialization-vc143-mt-s-x32-1_83.lib`
+  在 boost 1.84 的树上永远不存在。**不要把这种名字写进工程文件**。
+- 遇到「链接报找不到某个库」时，先问一句**这个符号是不是真的需要**：
+  这次真正的依赖来自**头文件里的显式特化**，
+  而产品侧靠 **PCH** 天然躲开了它
+  ⇒ 修法不是「把库找对」，是**把依赖去掉**。
+- **判别性实验要能证伪**：先写下的假设是「只是 auto-link pragma 的锅，
+  加 `BOOST_ALL_NO_LIB` 就行」—— 实测直接被
+  `LNK2019 boost::archive::codecvt_null<wchar_t>` 证伪，
+  逼出了「PCH vs 重新解析」这一层机制。
+- **同一条源码在两种编译配置下可以有不同的链接依赖** ——
+  比较 `.obj` 的符号表比读代码快得多。
+
+**关联**:
+
+- L137（工具链探测）、L139（`weasel.props`）

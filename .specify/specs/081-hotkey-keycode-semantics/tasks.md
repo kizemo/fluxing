@@ -182,6 +182,54 @@
   → 修法：抽 `:render_props` 子程序（`pushd "%WEASEL_ROOT%"` → `cscript render.js` →
     判 `errorlevel` → `popd`），并在 `build.bat` 的**早期**（版本号算完之后）就调用一次
     ⇒ `rime` / `data` / `boost` 都产出它。日志实证：`Generated weasel.props`。
+- [x] T2.20 **【2026-10-25 本轮新增·已完成】安装器要用的文本产物补齐：NSIS 的相对路径按**脚本目录**解析**（事故 **L141**）——
+  CI 的 `build (msbuild)` 红在 NSIS：
+  `LicenseData: open failed "LICENSE.txt"`（`output\install.nsi` line 72）。
+  - 关键机制：`makensis` 默认 **chdir 进脚本目录**，所以 `install.nsi` 里的相对路径
+    按**脚本目录**解析，不是按当前工作目录。用 `/NOCD`（= 不切到脚本目录）
+    做三格对照：A1（文件在脚本目录，默认）**EXIT=0**；
+    A2（同样文件，`/NOCD`）**EXIT=1** 且报同一句 `LicenseData: open failed`；
+    B1（文件只在当前目录，`/NOCD`）EXIT=0。
+  - 根因：`output\LICENSE.txt` 是 **`.gitignore:25`（`/output/*.txt`）排除的生成物**，
+    提交 `41e47e3` 把它从跟踪里删掉（674 行）之后，`build.bat` 的 `:build_data`
+    只补回了 `README.md` 与 `rime-install.bat`，**唯独没补它**
+    ⇒ 本机那份是删除前的**未跟踪残留**，CI 的干净检出没有
+    ⇒ **安装包从来没在干净检出上编出来过**。
+  → 修法：`build.bat` 新增 `:stage_text_assets`，把 `LICENSE.txt` / `README.md` /
+    `rime-install.bat` 一次备齐；`:build_data` 与**安装器分支**都调它
+    ⇒ 安装包目标不再依赖 CI 步骤的先后顺序。拷贝带 `/Y`（防覆盖询问停死）、
+    退出码逐条判（防吞失败，L135 同一类）。
+  - 运行时实证（双向）：拿走 `output\LICENSE.txt` ⇒ `makensis` **EXIT=1** 且报错
+    **逐字**等于 CI 报错；`build.bat data`（日志里 2 条 → **3 条**
+    `1 file(s) copied.`，产物 sha256 与根 `LICENSE.txt` 相同）⇒ 再编 **EXIT=0**，
+    真的产出 `output\archives\fluxing-0.21.0.6-installer.exe`。
+  ⚠️ `output\install.nsi` **未改动** ⇒ 不触发 AGENTS.md §2.5 的静默装机 smoke test。
+- [x] T2.21 **【2026-10-25 本轮新增·已完成】两个 IPC 测试工程不再依赖某一台机器的 boost**（事故 **L142**）——
+  CI 的 `test` job 红在链接：
+  `LINK : fatal error LNK1104: cannot open file 'libboost_wserialization-vc143-mt-s-x32-1_83.lib'`。
+  - 根因（一半）：`test\TestPipeChannelRace` / `test\TestShiftIPCWire` 的 vcxproj 里
+    写死了 `F:\b183\bin.v2\libs\serialization\build\msvc-14.3\release\...` 与
+    `libboost_*_vc143-mt-s-x32-1_83.lib`。**boost 的库名带版本号** ⇒ CI 的
+    boost 1.84.0 树里永远没有 `1_83`。
+  - 根因（另一半，更要紧）：这个依赖**根本不需要**。
+    `boost/archive/codecvt_null.hpp` 的 `codecvt_null<wchar_t>` 是**显式特化**，
+    成员定义在**编译好的序列化库**里 ⇒ 只有**自己解析那些头**的 TU 才会引用它；
+    而产品侧 `WeaselIPC` 用 `stdafx.h` 作**预编译头**编，**PCH 不把引用带进 TU**。
+    `dumpbin /SYMBOLS` 实测：产品 `PipeChannel.obj` **0 个** codecvt 符号，
+    测试工程同一个源文件 **4 个**（3 本地定义 + 1 未定义构造）。
+  - 两个测试**不用 boost::archive**：`include\PipeChannel.h` 只用 header-only 的
+    `boost::interprocess::wbufferstream`；归档头是经 `WeaselIPC\stdafx.h` 才进 TU 的。
+  → 修法：`WeaselIPC\stdafx.h` 给归档头加守卫 `#ifndef WEASEL_IPC_NO_BOOST_ARCHIVE`
+    （**产品侧永不定义** ⇒ 产品构建一字不变）；两个测试工程定义它
+    ⇒ 链接行上**一个 boost 库都不需要**：路径、版本号、依赖哪个 boost 全部消失。
+  - 运行时实证：两个工程链接通过（`F:\b183` 目录与 `1_83` 库名已删）；
+    `TestPipeChannelRace` **12 passed / 0 failed**、`TestShiftIPCWire` **10 PASS / 0 FAIL**；
+    完整套件 **EXIT=0 / `=== ALL TESTS PASSED ===`**；`WeaselIPC.vcxproj`
+    随 `stdafx.h` 变更重编 `No errors detected.` ⇒ 产品构建未受影响。
+  - ⚠️ 过程中被**证伪**的假设：先以为是 boost 的 auto-link pragma 作祟，
+    加 `BOOST_ALL_NO_LIB` 即可 —— 实测直接被
+    `LNK2019 boost::archive::codecvt_null<wchar_t>` 证伪，
+    逼出了「PCH vs 重新解析」这一层机制。
 - [ ] T2.7 **仍阻塞**：`sandbox-gate` job 需要带 `sandbox` 标签的自托管 runner
   （Windows Sandbox 是嵌套虚机，官方 windows runner 不支持）——要么自建，
   要么把 P10 的静态部分拆到官方 runner 上跑。
@@ -189,7 +237,8 @@
   CI 构建缺步骤也已补，见 T2.10；xmake 腿的连坐也已拆，见 T2.12；
   `build.bat rime` 的两个缺陷也已修，见 T2.14；
   词典与依赖链也已处理，见 T2.15 / T2.16；
-  测试套件自身的三道墙也已处理，见 T2.17 / T2.18 / T2.19），
+  测试套件自身的三道墙也已处理，见 T2.17 / T2.18 / T2.19；
+  安装器文本产物与 boost 硬编码也已处理，见 T2.20 / T2.21），
   现在只差一台带嵌套虚拟化的机器。
 
 ## M3 · 真机行为验收
