@@ -172,6 +172,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           .\build.bat rime
+          # L135: a batch file's non-zero exit code must fail the step.
+          # $ErrorActionPreference does not cover native commands, and a
+          # failure swallowed inside build.bat would otherwise turn this
+          # step green while producing nothing.
+          if ($LASTEXITCODE -ne 0) { throw "build.bat rime failed with exit code $LASTEXITCODE" }
 
       # The Weasel build is split per variant so the xmake leg can be marked
       # best-effort at STEP level. Step-level continue-on-error keeps the
@@ -187,6 +192,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           .\build.bat arm64 installer
+          # L135: a batch file's non-zero exit code must fail the step.
+          # $ErrorActionPreference does not cover native commands.
+          if ($LASTEXITCODE -ne 0) { throw "build.bat arm64 installer failed with exit code $LASTEXITCODE" }
 
       # Best effort: the xmake path is a known-broken legacy path in this fork
       # (AGENTS.md A15, L127, L128 -- the release goes through build.bat /
@@ -328,6 +336,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           .\build.bat rime
+          # L135: a batch file's non-zero exit code must fail the step.
+          # $ErrorActionPreference does not cover native commands, and a
+          # failure swallowed inside build.bat would otherwise turn this
+          # step green while producing nothing.
+          if ($LASTEXITCODE -ne 0) { throw "build.bat rime failed with exit code $LASTEXITCODE" }
 
       - name: Build + run all test projects
         shell: cmd
