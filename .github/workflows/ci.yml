@@ -162,6 +162,28 @@ jobs:
             .\output\archives\weasel*.exe
             .\output\archives\debug_symbols.7z
 
+      # The sandbox gate needs the installer itself and the build output,
+      # because one of its assertions is "the TIP the installer registered is
+      # byte-identical to this build" (P2.2) and the unit tests read
+      # output\data\*.yaml through the buildout mount.
+      - name: Upload the installer for the sandbox gate
+        if: matrix.variant == 'msbuild'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluxing-installer
+          if-no-files-found: error
+          path: .\output\archives\fluxing-*-installer.exe
+
+      - name: Upload the build output for the sandbox gate
+        if: matrix.variant == 'msbuild'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluxing-buildout
+          if-no-files-found: error
+          path: |
+            .\output\weasel*.dll
+            .\output\data
+
       # Release-only steps (run on tags or master)
       - name: Extract changelog
         if: ${{ github.repository == 'rime/weasel' && startsWith(github.ref, 'refs/tags/') && matrix.variant == 'msbuild' }}
@@ -238,3 +260,77 @@ jobs:
       - name: Build + run all test projects
         shell: cmd
         run: scripts\run-tests.bat
+
+      # The sandbox gate runs the same test executables inside the sandbox.
+      - name: Upload the test executables for the sandbox gate
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluxing-tests
+          if-no-files-found: error
+          path: .\Release\Test*.exe
+
+
+  # ===================================================================
+  # The authoritative gate (AGENTS.md "The authoritative gate").
+  #
+  # Windows Sandbox is itself a nested virtual machine, so it needs a
+  # runner with nested virtualization. GitHub-hosted windows runners do not
+  # provide that, so this job targets a SELF-HOSTED runner carrying the
+  # `sandbox` label:
+  #
+  #   .\actions-runner\_work\_register.cmd --labels sandbox
+  #
+  # The probe below turns "this runner cannot run the gate" into a loud
+  # failure instead of a silent green -- a green that never ran anything is
+  # worse than a red one.
+  # ===================================================================
+  sandbox-gate:
+    needs: [build, test]
+    runs-on: [self-hosted, windows, x64, sandbox]
+    # Bounded on purpose: if no runner carries the `sandbox` label, the job
+    # waits for a runner instead of running -- which is the honest outcome
+    # (a gate that silently did not run is worse than a red one), but it
+    # must not wait forever once a runner does pick it up.
+    timeout-minutes: 90
+    steps:
+      - name: Checkout last commit
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Download the installer
+        uses: actions/download-artifact@v4
+        with:
+          name: fluxing-installer
+          path: output/archives
+
+      - name: Download the build output
+        uses: actions/download-artifact@v4
+        with:
+          name: fluxing-buildout
+          path: output
+
+      - name: Download the test executables
+        uses: actions/download-artifact@v4
+        with:
+          name: fluxing-tests
+          path: Release
+
+      - name: Probe the Windows Sandbox capability
+        shell: pwsh
+        run: ./scripts/sandbox-gate/probe-sandbox.ps1
+
+      - name: Run the sandbox gate
+        shell: cmd
+        run: scripts\sandbox-gate\run-verify.cmd -RepoRoot %GITHUB_WORKSPACE%
+
+      - name: Upload the gate results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-claims
+          if-no-files-found: warn
+          path: |
+            ~/sandbox-artifacts/rime/logs
+            ~/sandbox-artifacts/rime/claims.json
