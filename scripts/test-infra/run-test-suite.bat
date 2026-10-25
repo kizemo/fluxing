@@ -66,7 +66,7 @@ rem Note: SolutionDir must be the absolute path WITHOUT a trailing
 rem backslash (otherwise MSBuild parses the escaped quote wrong and
 rem the OutDir ends up nested under test\<name>\Release\ instead of
 rem the top-level Release\). See L31.
-for %%P in (test\TestDefaultHotkeys test\TestShiftSelectBinding test\TestBindingResolution test\TestResponseParser test\TestWeaselIPC test\TestYamlRoundTripE2E test\TestUserDictUpdate test\TestCandidateRButtonDown test\TestCandidateIgnoreFilter test\TestPanelDarkModeSubscribe test\TestTrayRestoreIgnored test\TestDarkModeBridge test\TestDarkModeBroadcast test\TestQuickPanelDialog test\TestFluxingComponents test\TestQuickPanelRefactor test\TestOrphanRecovery test\TestShiftIPCStateMachine test\TestShiftIPCWire test\TestPipeChannelRace) do (
+for %%P in (test\TestDefaultHotkeys test\TestShiftSelectBinding test\TestBindingResolution test\TestResponseParser test\TestWeaselIPC test\TestYamlRoundTripE2E test\TestUserDictUpdate test\TestCandidateRButtonDown test\TestCandidateIgnoreFilter test\TestPanelDarkModeSubscribe test\TestTrayRestoreIgnored test\TestDarkModeBridge test\TestDarkModeBroadcast test\TestQuickPanelDialog test\TestFluxingComponents test\TestQuickPanelRefactor test\TestOrphanRecovery test\TestShiftIPCStateMachine test\TestShiftIPCWire test\TestPipeChannelRace test\TestHotkeyBindings) do (
     echo === Building %%P ===
     "%MSBUILD%" "%%P\%%~nP.vcxproj" /t:Build /p:Configuration=Release /p:Platform=Win32 /p:SolutionDir="%SOL_DIR%" /m:1 /nologo /v:minimal
     if !errorlevel! NEQ 0 set "FAIL=1"
@@ -88,6 +88,24 @@ for %%E in (TestDefaultHotkeys TestShiftSelectBinding TestBindingResolution Test
     if !errorlevel! NEQ 0 set "FAIL=1"
 )
 
+rem === TestHotkeyBindings hotkey acceptance gate ===
+rem Two invocations, both of which must stay green:
+rem   1) the negative control -- proves the gate can tell a healthy binding
+rem      from a broken one. A gate that flagged everything would fail here,
+rem      because the fixture also contains a binding that really works.
+rem   2) the shipped configuration -- every binding that can never fire has
+rem      to be listed in known-dead-bindings.txt, otherwise the gate is red.
+rem The generated keysym table is checked against librime's own key_table.cc
+rem so it cannot silently drift away from the library it mirrors.
+echo === Running TestHotkeyBindings.exe (negative control) ===
+"Release\TestHotkeyBindings.exe" --expectations "test\TestHotkeyBindings\fixtures\negative-controls.expect.txt" "test\TestHotkeyBindings\fixtures\negative-controls.yaml" < nul
+if !errorlevel! NEQ 0 set "FAIL=1"
+echo === Running TestHotkeyBindings.exe (shipped configuration) ===
+"Release\TestHotkeyBindings.exe" --baseline "test\TestHotkeyBindings\known-dead-bindings.txt" "output\data\default.yaml" "output\data\user-custom\rime_ice.custom.yaml" < nul
+if !errorlevel! NEQ 0 set "FAIL=1"
+echo === Checking keysyms_generated.inc against librime key_table.cc ===
+powershell -NoProfile -ExecutionPolicy Bypass -File "test\TestHotkeyBindings\gen-keysyms.ps1" -Check
+if !errorlevel! NEQ 0 set "FAIL=1"
 rem === TestWeaselIPC integration test (spec 026) ===
 rem The test exe has 3 modes: /start (spawn server in background), no-arg (client),
 rem /stop (shutdown server). We must spawn /start first, give the named pipe time

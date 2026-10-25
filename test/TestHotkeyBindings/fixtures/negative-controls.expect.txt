@@ -1,0 +1,26 @@
+# Expected verdicts for fixtures/negative-controls.yaml
+#
+# Format:  <file-name>|<accept>|<expected-verdict>
+#
+# The gate is run against the fixture with --expectations and must
+# produce exactly these verdicts. A mismatch, or an expectation that
+# never matched a binding, fails the run. That is what proves the gate
+# can tell a healthy binding from a broken one -- a checker that flags
+# everything would pass this file only by flagging everything.
+#
+# Verdict vocabulary (see TestHotkeyBindings.cpp):
+#   REACHABLE     the front end can produce exactly this (keycode, modifier)
+#   DEAD_KEYCODE  the front end never sends that keycode with that modifier
+#   DEAD_ACCEPT   librime cannot parse the accept pattern
+#   DEAD_SEND     librime cannot parse the send pattern
+#   DEAD_WHEN     librime does not know the when condition
+#   DEAD_NO_ACTION the binding has no action librime can execute
+#
+negative-controls.yaml|Shift+space|REACHABLE
+negative-controls.yaml|Shift+apostrophe|DEAD_KEYCODE
+negative-controls.yaml|Shift+notakey|DEAD_ACCEPT
+negative-controls.yaml|Shift+Ctrl+space|DEAD_ACCEPT
+negative-controls.yaml|Control+1|DEAD_SEND
+negative-controls.yaml|Control+2|DEAD_WHEN
+negative-controls.yaml|Control+3|DEAD_NO_ACTION
+negative-controls.yaml|Control+4|REACHABLE

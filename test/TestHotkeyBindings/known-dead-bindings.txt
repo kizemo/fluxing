@@ -1,0 +1,41 @@
+# Known-dead key_binder bindings in the Fluxing configuration.
+#
+# THESE ARE DEFECTS, NOT INTENT.
+#
+# The TSF front end sends the *character* a key produced, not the key
+# itself (WeaselTSF/KeyEvent.cpp:51 ToUnicodeEx). librime matches a
+# binding on the exact (keycode, modifier) pair
+# (librime/src/rime/key_event.h:43). So a binding that names the
+# unmodified key can never fire once a modifier is involved.
+#
+# Every entry below is a binding that the acceptance gate
+# (test/TestHotkeyBindings) proved can never fire. They are listed here
+# so the gate stays green for everything else and turns red the moment a
+# *new* dead binding appears. Fixing them is tracked in the next phase
+# development plan (see docs/agents/ and the verification report).
+#
+# Format:  <when> :: <accept>   [:: <send>, optional, for readability]
+#
+# --- default.yaml ---------------------------------------------------
+# Control+Shift+9 asks for '9' (0x39); the front end sends '(' (0x28).
+# The same function (toggle ascii_punct) is also bound to
+# Control+Shift+numbersign, which does fire -- so only the redundant
+# key chord is dead.
+always :: Control+Shift+9
+# Control+Shift+0 asks for '0' (0x30); the front end sends ')' (0x29).
+# toggle traditionalization is also bound to Control+Shift+dollar, which
+# does fire -- so only the redundant key chord is dead.
+always :: Control+Shift+0
+#
+# --- user-custom/rime_ice.custom.yaml --------------------------------
+# The four Shift+punctuation bindings have no working twin. The front
+# end sends the shifted character, so the accept pattern has to name
+# that character, not the base key:
+#   Shift+apostrophe   -> the front end sends 0x22 -> use Shift+quotedbl
+#   Shift+backslash    -> the front end sends 0x7C -> use Shift+bar
+#   Shift+bracketleft  -> the front end sends 0x7B -> use Shift+braceleft
+#   Shift+bracketright -> the front end sends 0x7D -> use Shift+braceright
+always :: Shift+apostrophe :: '"'
+always :: Shift+backslash :: '|'
+always :: Shift+bracketleft :: '{'
+always :: Shift+bracketright :: '}'

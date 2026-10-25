@@ -1,0 +1,51 @@
+# Negative controls for TestHotkeyBindings.
+#
+# Every binding below is deliberately broken in a different way, so the
+# acceptance gate can be proven to *discriminate* instead of just saying
+# "something is wrong". The companion file negative-controls.expect.txt
+# pins the verdict each one has to produce.
+#
+# The gate must fail loudly when any of these verdicts changes, and it
+# must still report a healthy binding as REACHABLE -- a checker that
+# flags everything is not a checker.
+#
+# This file lives outside output/data/ on purpose: it must never be
+# deployed to a real user profile.
+
+key_binder:
+  bindings:
+    # --- control: this one is healthy and must stay REACHABLE -----------
+    - { when: always, accept: Shift+space, send: "x" }
+
+    # --- the TSF front end sends the character, not the key ------------
+    # Shift+apostrophe asks for 0x27, the front end sends 0x22.
+    - { when: always, accept: Shift+apostrophe, send: '"' }
+
+    # --- librime cannot resolve the key name --------------------------
+    # key_binder.cc:180 logs "invalid key binding" and drops it.
+    - { when: always, accept: Shift+notakey, send: "x" }
+
+    # --- librime cannot resolve the modifier name ----------------------
+    # The librime modifier table has "Control", not "Ctrl".
+    - { when: always, accept: Shift+Ctrl+space, send: "x" }
+
+    # --- the send pattern is not a key name (the L113 class) -----------
+    # A multi byte character is not a keysym; librime drops the binding.
+    - { when: always, accept: Control+1, send: "《" }
+
+    # --- unknown condition ---------------------------------------------
+    # librime maps an unknown 'when' to kNever and drops the binding
+    # silently (key_binder.cc:176).
+    - { when: sometimes, accept: Control+2, send: "x" }
+
+    # --- no action at all ----------------------------------------------
+    # No send / send_sequence / toggle / set_option / unset_option /
+    # select -> librime logs "invalid key binding" and drops it.
+    - { when: always, accept: Control+3 }
+
+    # --- the send value carries an escaped quote ------------------------
+    # This is the shape librime's YAML writer produces for `send: '"'`
+    # (the compiled schema contains send: "\""). A parser that mishandles
+    # the escape splits the mapping in the wrong place and mis-reads the
+    # binding -- a false positive that looks exactly like a product bug.
+    - { when: always, accept: Control+4, send: "\"" }
