@@ -91,11 +91,36 @@
   → 修法：把 arm64 纳入 include 条件与 link 目录映射（或让 arm64 也指向 `lib`），
     再复验 `xbuild.bat arm64 installer`。
   ⚠️ **不是发布路径**（`AGENTS.md A15`）：发布一律走 `build.bat`（MSBuild）。
+- [x] T2.14 **【2026-10-25 本轮新增·已完成】修 `build.bat rime` 的两个致命缺陷**（事故 **L135**）——
+  拆掉第三道墙（T2.12）之后，`build (msbuild)` 腿**不再被取消**了，但它自己红了：
+  `LNK1181: cannot open input file 'rime.lib'`（`WeaselServer` / `WeaselDeployer`）。
+  而**制造这个缺口的步骤自己是绿的**（`Build librime and its dependencies` = success）——
+  拉 job 日志才看到：`4 file(s) copied.` → `The system cannot find the path specified.`
+  → `0 file(s) copied.` → `error building weasel...`。
+  - **根因一：清理循环删错了目录**。`build.bat` 的「clean cache before building」
+    用的是 **librime 相对**路径（`build dist lib deps\*\build`），
+    所以必须在 `librime\` 里执行。上游 `rime/weasel` 在这段前面有
+    `cd %WEASEL_ROOT%\librime`（上游提交 `135b50a`），
+    **本 fork 的 `face243`（v0.18.2.0 集成 librime-lua）把它删了且没人补回**
+    ⇒ 清理循环在**仓库根**跑，`rd /s /q lib` 删掉了 `%WEASEL_ROOT%\lib\`
+    （`get-rime.ps1` 装 `rime.lib` 的目录，也是 Weasel 工程的 `/LIBPATH`）
+    ⇒ 随后的 `copy ...\dist_Win32\lib\rime.lib %WEASEL_ROOT%\lib\` 目标目录已不存在。
+    **症状离原因隔了两步**。
+  - **根因二：失败被吞**。`goto error` 在 `call :build_librime_platform` 子程序内部
+    ⇒ `exit /b 1` 只结束子程序；**调用方那两行没检查 `errorlevel`**
+    ⇒ 主流程继续、脚本退出码 0 ⇒ CI 那一步显示 success。
+  → 修法：① 清理循环前后加 `cd /d "%WEASEL_ROOT%\librime"` / `cd /d "%WEASEL_ROOT%"`，
+    `cd` 失败就明确报错退出；② 两处 `call :build_librime_platform` 之后加
+    `if errorlevel 1 goto error`，`call :build_data` / `call :build_opencc_data` 同样补；
+    ③ `ci.yml` 里 `.\build.bat rime` / `.\build.bat arm64 installer` 之后显式判
+    `$LASTEXITCODE`（`$ErrorActionPreference` 管不到原生命令退出码）。
+  → 机制级本地实证（cmd 自己的批处理语义，三个场景）：见 L135 的 Evidence 段。
 - [ ] T2.7 **仍阻塞**：`sandbox-gate` job 需要带 `sandbox` 标签的自托管 runner
   （Windows Sandbox 是嵌套虚机，官方 windows runner 不支持）——要么自建，
   要么把 P10 的静态部分拆到官方 runner 上跑。
   ⚠️ 注意：**这已经不是「门禁跑不起来」的原因了**（lint 墙已拆，见 T2.8；
-  CI 构建缺步骤也已补，见 T2.10；xmake 腿的连坐也已拆，见 T2.12），
+  CI 构建缺步骤也已补，见 T2.10；xmake 腿的连坐也已拆，见 T2.12；
+  `build.bat rime` 的两个缺陷也已修，见 T2.14），
   现在只差一台带嵌套虚拟化的机器。
 
 ## M3 · 真机行为验收

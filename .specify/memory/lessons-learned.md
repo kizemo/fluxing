@@ -11333,3 +11333,102 @@ scripts/patch-librime-opencc-marisa.ps1 : opencc CMakeLists.txt not found:
 - L133（CI 构建缺口：librime 依赖 + 嵌套子模块；本条是它后面露出来的第三道墙）
 - L127 / L128（xmake 这条坏路径的由来；`AGENTS.md A15`）
 - spec 081 T2.7（`sandbox-gate` job 仍需带 `sandbox` 标签的自托管 runner）
+
+## L135 - 批处理里 `goto error` 只退出子程序——失败被吞成绿色，产物却没生成 (2026-10-25)
+
+**Incident**:
+
+- 拆掉第三道墙（xmake 连坐，L134）之后，CI 的 `build (msbuild)` 腿**不再被取消**了，
+  但它自己红了：`LINK : fatal error LNK1181: cannot open input file 'rime.lib'`
+  （`WeaselServer.vcxproj` / `WeaselDeployer.vcxproj`）。
+- 讽刺的是，**制造这个缺口的步骤自己是绿的**：`Build librime and its dependencies` = success。
+- 拉 job 日志才看到真相（run `40169731300`，job `121098056875`）：
+
+```
+        4 file(s) copied.
+The system cannot find the path specified.
+        0 file(s) copied.
+error building weasel...
+```
+
+**Root cause**（两条，互相独立，缺一不可）:
+
+1. **清理循环删错了目录**。`build.bat` 的 rime 段有一段「clean cache before building」：
+
+   ```
+   for %%a in ( build dist lib ^ deps\glog\build ^ ... ) do (
+     if exist %%a rd /s /q %%a
+   )
+   ```
+
+   这些路径全是 **librime 相对**的，所以这段**必须在 `librime\` 里执行**。
+   上游 `rime/weasel` 在这段前面有一行 `cd %WEASEL_ROOT%\librime`（见上游提交 `135b50a`），
+   **本 fork 的 `face243`（v0.18.2.0 集成 librime-lua）把它删掉了，而且没人补回来**。
+   ⇒ 清理循环在**仓库根目录**执行，`rd /s /q lib` 删掉了 `%WEASEL_ROOT%\lib\`
+   —— 那正是 `get-rime.ps1` 装 `rime.lib` 的目录，也是 Weasel 工程的 `/LIBPATH`。
+   ⇒ 紧接着的 `copy ...\dist_Win32\lib\rime.lib %WEASEL_ROOT%\lib\`
+   目标目录已不存在 ⇒ 「The system cannot find the path specified. / 0 file(s) copied.」
+   ⇒ 两步之后才在链接阶段炸成 `LNK1181`：**症状离原因隔了两步**。
+
+2. **失败被吞掉**。`build.bat` 的 `:error` 标签是 `exit /b 1`，看着是对的；
+   但出错的位置在 `call :build_librime_platform` 这个**子程序内部**
+   （`goto error` 在子程序里 ⇒ `exit /b 1` 只**结束子程序**），
+   而**调用方那两行没有检查 `errorlevel`** ⇒ 主流程继续往下走，
+   脚本最后正常退出、退出码 0 ⇒ CI 那一步显示 **success**。
+   ⇒ 日志里明明打了一句「error building weasel...」，但没人看。
+
+**Fix**:
+
+- `build.bat`：清理循环前后加 `cd /d "%WEASEL_ROOT%\librime"` / `cd /d "%WEASEL_ROOT%"`，
+  并且 `cd` 失败时明确报错退出（不要在没进对目录的情况下继续删）；
+- `build.bat`：两处 `call :build_librime_platform` 之后加 `if errorlevel 1 goto error`；
+  `call :build_data` / `call :build_opencc_data` 同样补上（同一类漏洞）；
+- `ci.yml`：`.\build.bat rime` / `.\build.bat arm64 installer` 之后显式判 `$LASTEXITCODE`
+  （`$ErrorActionPreference` 管不到原生命令的退出码）。
+
+**Evidence**（机制级本地实证，用 cmd 自己的批处理语义复现）:
+
+```
+SCENARIO A（没有 cd，也就是 face243 之后的状态）:
+  repo-root lib\rime.lib survives?              NO   <- 被误删
+  librime\lib\opencc.lib survives?            YES  <- 该删的没删
+  copy exit code = 1
+  The system cannot find the path specified.
+          0 file(s) copied.                      <- 与 CI 日志逐字一致
+
+SCENARIO B（加了 cd，也就是修好之后）:
+  repo-root lib\rime.lib survives?              YES
+  librime\lib\opencc.lib deleted - intended?   NO   <- 删对了
+  copy exit code = 0
+          1 file(s) copied.
+
+SCENARIO C（错误码）:
+  不检查 errorlevel:  "main body continued after the failed subroutine"  inner exit code = 0
+  检查 errorlevel:    错误打印两次（检查生效）                              inner exit code = 1
+```
+
+**推广**:
+
+- **`goto` 在 `call :label` 里只作用于子程序**，`exit /b` 同理。
+  ⇒ **每一个 `call :xxx` 后面都要问一句「它失败了怎么办」**；
+  批处理里没有异常传播，漏一次检查 = 一次「绿但什么都没做」。
+- **同一份脚本在不同工作目录下，路径含义完全不同**。
+  清理/复制这类操作要**显式 cd**，不能依赖「当前恰好在哪」。
+  顺带一条查法：**把出错点往前推两步找** ——
+  这里 `LNK1181 rime.lib` 的真正原因是两步之前的 `rd /s /q lib`。
+- **`$ErrorActionPreference = 'Stop'` 管不到原生命令的退出码**。
+  CI 里调 `.bat` / `.exe` 必须显式判 `$LASTEXITCODE`。
+- **「日志里出现 error 字样」不等于「步骤会红」**：
+  这次是**日志里报了 error、步骤却是绿的** —— 比「红得没道理」更难查。
+- 顺带一条查法：**被删掉的那行 `cd` 用 git 挑拣就能找到**。
+  `git log --oneline -S 'cd %WEASEL_ROOT%\librime' -- build.bat`
+  直接点名 `face243`；拿上游 `135b50a` 的同一段对照，差异一眼可见。
+
+**关联**:
+
+- L132（lint 墙：门禁从没跑过；同样是「以为在跑、其实没跑」这一类）
+- L133（嵌套子模块 / CI 构建缺口）
+- L134（xmake 矩阵腿连坐门禁）
+- L128（`yaml-cpp.lib` 从 librime deps 构建树链接；同一批 CI 链接缺口的另一面）
+- spec 081 T2.14
+
