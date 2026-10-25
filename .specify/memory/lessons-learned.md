@@ -11192,3 +11192,70 @@ SUMMARY|bindings=33|reachable=27|dead=6|known_dead=0
 - 上一轮的 `d966fc9`（把沙箱门禁接进 CI）与「已真正接进 CI」这句结论（**当时是错的**）
 - spec 081 T2.7（`sandbox-gate` job 仍需自托管 runner）
 - L113 / L131（同一个仓库里「宣称完成」与「实际跑过」的落差）
+
+## L133 - `actions/checkout` 的 `submodules: true` **不是递归的**——librime 自己的 deps 子模块从未被拉下来 (2026-10-25)
+
+**Incident**:
+
+- 拆掉 lint 墙之后，CI 的 `build` job 第一次真跑，连着暴露两层问题。
+- 第一层：`Build Weasel: Error: the librime dependency libraries are not built yet.`
+  （`Weasel*` 要链接 `librime/deps/yaml-cpp/build_Win32/Release/yaml-cpp.lib`，
+  而 CI 的 workflow 从上游继承，上游不链接 yaml-cpp ⇒ **分叉特有的 CI 缺口**）。
+- 补了 `build.bat rime` 之后，第二层浮现：
+  `scripts/patch-librime-opencc-marisa.ps1 : opencc CMakeLists.txt not found`。
+- 根因：**`librime/deps/{opencc,yaml-cpp,marisa-trie,leveldb,glog,googletest}` 是
+  librime 自己的子模块**（写在 `librime/.gitmodules` 里），不是主仓库的。
+  而 `actions/checkout@v4` 的 `submodules: true` 跑的是
+  `git submodule update --init --force`——**没有 `--recursive`**
+  ⇒ CI 里 librime 拉下来了，但 `librime/deps/` 是空的。
+- 雪上加霜：`build.bat` 里那句 `git submodule update --init --recursive`
+  **只在 `librime\build.bat` 不存在时才跑**；CI 里那个文件总是存在 ⇒ 永远不会跑。
+
+**Fix**:
+
+- `build.bat`：守卫改成「`librime\build.bat` 缺失 **或** `librime\deps\opencc\CMakeLists.txt` 缺失」
+  就跑 `git submodule update --init --recursive`。
+  （顺带修好了「本地 clone 时忘了 `--recursive`」这种情况。）
+- `ci.yml`：三处 `submodules: true` → `submodules: recursive`。
+- `ci.yml`：`test` job 也要 `build.bat rime`——测试工程链接的是
+  `librime\dist_Win32\lib\rime.lib` 和 `librime\deps\yaml-cpp\build_Win32\Release\yaml-cpp.lib`，
+  **两者都不在版本库里**（都在 .gitignore 里），而 `get-rime.ps1` 把 rime.lib 放在
+  `lib\` 和 `output\Win32\`——**不是测试工程搜索的目录**。
+
+**Evidence**:
+
+CI checkout 步骤的真实命令（来自 job 日志）：
+
+```
+[command] git submodule update --init --force      <- 没有 --recursive
+Submodule path 'librime': checked out '1c23358157934bd6e6d6981f0c0164f05393b497'
+```
+
+紧接着 `Build librime and its dependencies` 就报：
+
+```
+scripts/patch-librime-opencc-marisa.ps1 : opencc CMakeLists.txt not found:
+  D:\a\fluxing\fluxing\librime\deps\opencc\CMakeLists.txt
+```
+
+**推广**:
+
+- **「子模块」是分层的**。主仓库的 `.gitmodules` 只描述**第一层**；
+  依赖仓库自己的 `.gitmodules` 描述第二层、第三层。
+  `actions/checkout` 的 `submodules: true` **不等于** `--recursive`。
+- **CI 里凡是跑「会编译子模块」的脚本，都要先确认子模块真的到位了**，
+  别假设 checkout 帮你做了。
+- **守卫条件要盯真正缺的东西**。`if not exist librime\build.bat` 看着像「子模块没拉下来」，
+  其实它只是「仓库根目录是空的」；CI 里 checkout 已经把 `librime\build.bat` 放好了，
+  于是这个守卫**永远不会触发**。⇒ 守卫应该检查**下游真正需要的那个文件**
+  （这里就是 `librime\deps\opencc\CMakeLists.txt`）。
+- **错误信息要能自解释**。`opencc CMakeLists.txt not found` 紧跟着一句
+  `Run "git submodule update --init --recursive" first.` 就是好设计——
+  本次就是靠它直接定位到根因（这次它给的建议也是对的）。
+
+**关联**:
+
+- L132（lint 墙挡住了整条流水线，让这两层问题一直看不见）
+- L121（opencc/marisa 补丁的由来）
+- L128（`yaml-cpp.lib` 从 librime deps 构建树里链接）
+- spec 081 T2.10

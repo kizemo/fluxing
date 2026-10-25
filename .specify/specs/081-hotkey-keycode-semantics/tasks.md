@@ -56,6 +56,18 @@
   而 CI 的 workflow **从上游继承**，上游不链接 yaml-cpp ⇒ **分叉特有的 CI 缺口**。
   → 在 Weasel 构建之前加一步 `.\build.bat rime`（它会拉子模块、打/撤 opencc-marisa 补丁、
     为 Win32 与 x64 各构建依赖 + librime ⇒ 产物不再混用预编译 librime）。
+- [x] T2.11 **【2026-10-25 本轮新增·已完成】修 CI 拉不到 librime 的嵌套子模块**（事故 **L133**）——
+  补完 T2.10 后又暴露第二层：
+  `patch-librime-opencc-marisa.ps1 : opencc CMakeLists.txt not found`。
+  根因：**`librime/deps/*` 是 librime 自己的子模块**，而 `actions/checkout@v4` 的
+  `submodules: true` 跑的是 `git submodule update --init --force`（**没有 `--recursive`**）
+  ⇒ CI 里 `librime/deps/` 是空的；而 `build.bat` 的守卫只在 `librime\build.bat` 缺失时才跑
+  ⇒ CI 里永远不会跑。
+  → `build.bat`：守卫改成「`librime\build.bat` 缺失 **或** `librime\deps\opencc\CMakeLists.txt` 缺失」
+    就 `git submodule update --init --recursive`（顺带修好本地 clone 忘 `--recursive` 的情况）；
+  → `ci.yml`：三处 `submodules: true` → `submodules: recursive`；
+  → `ci.yml`：`test` job 也要 `build.bat rime`（测试工程链接的 `rime.lib` / `yaml-cpp.lib`
+    **都不在版本库里**，而 `get-rime.ps1` 把 rime.lib 放在测试工程不搜索的目录）。
 - [ ] T2.7 **仍阻塞**：`sandbox-gate` job 需要带 `sandbox` 标签的自托管 runner
   （Windows Sandbox 是嵌套虚机，官方 windows runner 不支持）——要么自建，
   要么把 P10 的静态部分拆到官方 runner 上跑。
