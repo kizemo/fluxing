@@ -15,6 +15,10 @@ jobs:
     steps:
       - name: Checkout last commit
         uses: actions/checkout@v4
+        with:
+          # depth 2 so that the lint script can diff against HEAD~1 (the
+          # previous commit of a push, or the base tip of a pull_request).
+          fetch-depth: 2
 
       - name: Install clang-format 18
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
@@ -27,10 +31,25 @@ jobs:
           sudo ln -sf /usr/bin/clang-format-18 /usr/local/bin/clang-format
           clang-format --version
 
-      - name: Code style lint
+      # The lint gate checks ONLY the C/C++ files this push touched.
+      #
+      # A whole-tree lint had been red since the brand fork: the fork added
+      # files written with a 4-space indent that were never run through
+      # clang-format. Because `build` needs `lint`, that red lint skipped
+      # build -> test -> sandbox-gate, i.e. the gates were wired up but never
+      # actually ran. Touching a file now obliges you to keep it clean; the
+      # pre-existing debt is reported separately and does not block.
+      - name: Code style lint (changed C/C++ files only)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         shell: bash
-        run: ./clang-format.sh -i
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash ./scripts/lint-changed-cpp.sh
+
+      - name: Code style debt report (non-blocking)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: bash ./scripts/lint-changed-cpp.sh --all --report-only
 
   build:
     needs: lint
@@ -278,8 +297,12 @@ jobs:
   # provide that, so this job targets a SELF-HOSTED runner carrying the
   # `sandbox` label:
   #
-  #   .\actions-runner\_work\_register.cmd --labels sandbox
-  #
+      - name: Checkout last commit
+        uses: actions/checkout@v4
+        with:
+          # depth 2 so that the lint script can diff against HEAD~1 (the
+          # previous commit of a push, or the base tip of a pull_request).
+          fetch-depth: 2
   # The probe below turns "this runner cannot run the gate" into a loud
   # failure instead of a silent green -- a green that never ran anything is
   # worse than a red one.
