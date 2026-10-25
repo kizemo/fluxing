@@ -368,11 +368,57 @@ rem ---------------------------------------------------------------------------
   copy %WEASEL_ROOT%\LICENSE.txt output\
   copy %WEASEL_ROOT%\README.md output\README.txt
   copy %WEASEL_ROOT%\plum\rime-install.bat output\
+  rem L138: this fork TRACKS output\data itself - 139 files, including the
+  rem fork's own default.yaml with its key_binder bindings (Control+Shift+9,
+  rem Control+Shift+numbersign, Shift+space, ...). plum resolves the
+  rem "prelude" package to "default.yaml symbols.yaml"
+  rem (plum\scripts\split-packages.sh:21), so a bare
+  rem `bash plum/rime-install` OVERWRITES the fork's tracked default.yaml
+  rem with the upstream rime one. That silently did two kinds of damage:
+  rem   1. the deployer aborted with "missing input schema: quick5", because
+  rem      the upstream schema_list lists schemes this fork does not ship;
+  rem   2. the packaged product lost the fork's key_binder bindings.
+  rem WEASEL_BUNDLED_RECIPES was echoed by build.bat but never DEFINED
+  rem anywhere in the repository, so every build silently took that path.
+  rem
+  rem The rule from now on: plum only ever runs with an EXPLICIT list.
+  rem   - the variable unset or empty: skip plum, output\data is used
+  rem     exactly as tracked (this is what this fork wants);
+  rem   - the variable set to a list: run plum with exactly that list.
+  rem Note that cmd cannot express "defined and empty" - `set "X="` DELETES
+  rem the variable - which is why the rule has only these two states.
+  if not defined WEASEL_BUNDLED_RECIPES goto skip_plum
+  if "%WEASEL_BUNDLED_RECIPES%"=="" goto skip_plum
+  rem L138 safety net: plum writes straight into output\data. Snapshot the
+  rem git status of that directory before the fetch, compare after: if the
+  rem fetch touched ANY file there - modified, added or deleted - then the
+  rem data we are about to package is not the data in git. Abort instead of
+  rem shipping the difference. The comparison is against the snapshot, not
+  rem against "clean", so a pre-existing dirty tree does not false-alarm.
+  set "DATA_STATUS_BEFORE=%TEMP%\fluxing-data-status-before.txt"
+  set "DATA_STATUS_AFTER=%TEMP%\fluxing-data-status-after.txt"
+  if exist "%WEASEL_ROOT%\.git" git -C "%WEASEL_ROOT%" status --porcelain -- output/data > "%DATA_STATUS_BEFORE%"
   set plum_dir=plum
   set rime_dir=output/data
   set WSLENV=plum_dir:rime_dir
   bash plum/rime-install %WEASEL_BUNDLED_RECIPES%
   if errorlevel 1 goto error
+  if not exist "%WEASEL_ROOT%\.git" goto data_fetch_checked
+  git -C "%WEASEL_ROOT%" status --porcelain -- output/data > "%DATA_STATUS_AFTER%"
+  fc /b "%DATA_STATUS_BEFORE%" "%DATA_STATUS_AFTER%" >nul
+  if errorlevel 1 goto data_fetch_dirty
+:data_fetch_checked
+  exit /b
+
+:data_fetch_dirty
+  echo [ERROR] the plum fetch modified files under output\data.
+  echo         The packaged data would differ from the repository.
+  echo         See lessons-learned.md L138.
+  goto error
+
+:skip_plum
+  echo [INFO] WEASEL_BUNDLED_RECIPES is not set - skipping the plum package fetch.
+  echo        output\data is tracked in git and is used as-is.
   exit /b
 
 rem ---------------------------------------------------------------------------

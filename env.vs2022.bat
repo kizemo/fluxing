@@ -13,3 +13,13 @@ set PLATFORM_TOOLSET=v143
 
 rem OPTIONAL: path to additional build tools
 rem set DEVTOOLS_PATH=%ProgramFiles%\Git\cmd;%ProgramFiles%\Git\usr\bin;%ProgramFiles%\CMake\bin;
+
+rem OPTIONAL: the Rime packages bundled with the installer, fetched by plum.
+rem This fork tracks output\data itself - including the fork's own
+rem default.yaml with its key_binder bindings - so it bundles NO upstream
+rem recipes, and build.bat therefore skips plum entirely.
+rem
+rem To bundle upstream packages, name them explicitly, for example:
+rem   set "WEASEL_BUNDLED_RECIPES=essay"
+rem Note that cmd has no way to say "defined and empty": `set "X="` DELETES
+rem the variable. Leaving it unset is how "no recipes" is expressed.
