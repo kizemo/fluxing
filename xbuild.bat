@@ -15,13 +15,37 @@ for %%a in ("%include:;=" "%") do (
   )
 )
 rem ---------------------------------------------------------------------------
+rem L145: the version of this build comes from env.bat if the developer put
+rem one there, and from the fork's own defaults below otherwise. Clear what
+rem the environment inherited first: a machine-level environment can carry
+rem leftovers from another build (this machine still has 0.19.0 leftovers
+rem from the 0.19.x era), and an inherited value must not beat the defaults.
+rem That is exactly how CI ended up building a 0.17.4 product. env.bat is
+rem called after this block and can still override every one of them.
+set "FLUXING_VERSION="
+set "VERSION_MAJOR="
+set "VERSION_MINOR="
+set "VERSION_PATCH="
+set "WEASEL_BUILD="
+set "PRODUCT_VERSION="
+set "FILE_VERSION="
+set "RELEASE_BUILD="
+
 if not exist env.bat copy env.bat.template env.bat
 if exist env.bat call env.bat
 set PRODUCT_VERSION=
 if not defined WEASEL_ROOT set WEASEL_ROOT=%CD%
+rem L145: this fork's own version line. Upstream keeps its release line in
+rem these three numbers and bumps them at every release; the fork inherited
+rem the mechanism but never the numbers, so a build with no version in
+rem env.bat (CI) fell back to upstream's 0.17.4 - and the non-release tag
+rem lookup below then matched UPSTREAM's 0.17.4 tag and counted the commits
+rem since it. The fork's own release tags are v<major>.<minor>.<patch>.<build>
+rem (currently v0.21.0.6), so the lookup now resolves to the fork's line.
+rem Bump these three numbers next to the CHANGELOG entry and the git tag.
 if not defined VERSION_MAJOR set VERSION_MAJOR=0
-if not defined VERSION_MINOR set VERSION_MINOR=17
-if not defined VERSION_PATCH set VERSION_PATCH=4
+if not defined VERSION_MINOR set VERSION_MINOR=21
+if not defined VERSION_PATCH set VERSION_PATCH=0
 
 if not defined FLUXING_VERSION set FLUXING_VERSION=%VERSION_MAJOR%.%VERSION_MINOR%.%VERSION_PATCH%
 if not defined WEASEL_BUILD set WEASEL_BUILD=0
