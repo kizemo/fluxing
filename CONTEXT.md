@@ -182,6 +182,13 @@ to the user before proceeding.
     `WeaselTSF / WeaselServer / WeaselDeployer / WeaselSetup / WeaselUI /
     WeaselIPC / RimeWithWeasel / librime / installer / docs / ci /
     fluxing`. CHANGELOG entry under `### 主要更新` for user-visible changes.
+16. **The TSF front end sends the *character* a key produced, not the
+    physical key.** `WeaselTSF/KeyEvent.cpp` uses `ToUnicodeEx()` for
+    printable keys, and librime matches a `key_binder` binding on the exact
+    `(keycode, modifier)` pair. So `accept:` must name the **character the
+    chord produces** — `Shift+less` (the `<` character) for `Shift+,`,
+    never `Shift+comma`. A binding that names the base key can never fire.
+    (`docs/adr/0009-*.md`, lessons L131, guard: `test/TestHotkeyBindings`)
 
 ---
 
@@ -260,9 +267,14 @@ flags, and the DictManagementDialog workflow) see
 
 ## 7. ADRs (Architecture Decision Records)
 
-`docs/adr/` is currently empty. When a skill or a manual decision
-produces a record-worthy architectural choice, follow the convention in
-`docs/adr/README.md`:
+`docs/adr/` holds the architectural decision records. They are
+**post-hoc records** of a choice, not implementation plans (the plan lives
+in `.specify/specs/NNN-*/`). Current records: `0001` (PPL WeaselServer),
+`0007` (Shift release IPC), `0008` (IME profile activation notification),
+`0009` (the TSF front end sends the character, not the key).
+
+When a skill or a manual decision produces a record-worthy architectural
+choice, follow the convention in `docs/adr/README.md`:
 
 - File: `NNNN-kebab-case-summary.md` (4-digit zero-padded; starts at `0001`)
 - Sections: `## Status` (Proposed / Accepted / Superseded),

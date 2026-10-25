@@ -1,4 +1,4 @@
-﻿﻿s Learned — Fluxing (rime/weasel fork)
+﻿﻿﻿s Learned — Fluxing (rime/weasel fork)
 
 > **Scope**: `Fluxing` project (`rime/weasel` fork), reusable lessons distilled from dev incidents. Each entry: **Incident → Root cause → Lesson** format, source-recorded.
 > **Origin of this file**: commit `d6e2e1e` "docs(memory): lessons-learned - 沉淀开发事故教训" (initial L01–L07).
@@ -11063,3 +11063,132 @@ Fix (defer to v0.21.0.1): 改 source。
 - L111 (程序化切 profile 会打崩输入栈 —— 一次性虚机里可做，主机上不可做)
 - L127 / L129 (同一批 0.21.0.6 的其它收尾)
 - spec 080 / ADR 0008 (P6 的功能链路)
+## L131 - TSF 前端的 keycode 是「键产生的字符」而不是「物理键」——`accept:` 必须写字符的键名 (2026-10-25)
+
+**Incident**:
+
+- 用户实机反馈「快捷键有问题」。第 6 轮沙箱复验把它定位到 6 条**永远不可能触发**的
+  `key_binder` 绑定：`Control+Shift+9` / `Control+Shift+0` / `Shift+apostrophe` /
+  `Shift+backslash` / `Shift+bracketleft` / `Shift+bracketright`。
+- 其中后 4 条来自 `output/data/user-custom/rime_ice.custom.yaml` —— 它们**从写下那天起
+  就没生效过**，而仓库里一直有一份注释声称「保留的 4 条：send 是单个 ASCII 字符，
+  librime 能解析，实际生效」。那份注释是**错的**。
+- 现有测试**全都测不出来**：`TestDefaultHotkeys` 只断言 yaml 里**存在**某条绑定，
+  不断言它**能不能被触发**；`TestBindingResolution` 只断言 `accept:` 能被**解析**。
+  「能解析」≠「能触发」。
+
+**Root cause**（两条互相独立的规则，缺一不可）:
+
+1. TSF 前端把 Windows 的 `vkey` 转成 `(keycode, modifier)` 时，对**可打印键**走
+   `ToUnicodeEx()`（`WeaselTSF/KeyEvent.cpp:51`）⇒ 拿到的是**这个键在当前布局下产生的
+   字符**，不是物理键的键码。
+2. librime 用**精确比较**匹配绑定（`librime/src/rime/key_event.h:43` 的 `operator==`
+   同时比较 keycode **和** modifier；`key_binder.cc:276` 是 `std::map` 查表）。
+
+   于是 `accept: "Shift+comma"` 想要 keycode `0x2C`（`,`），而前端发的是 `0x3C`（`<`）
+   ⇒ **永不匹配**。`Control+Shift+9` 同理：想要 `0x39`（`9`），前端发 `0x28`（`(`）。
+3. 另有一条独立规则：spec 077 之后，**Shift 键本身被前端整段吞掉**
+   （`WeaselTSF/KeyEventSink.cpp:44`）⇒ 任何 `accept: Shift_L` / `Shift_R` /
+   `Shift+Shift_L` 的绑定同样**永不匹配**。
+
+只有**不带修饰键**的绑定（`comma` / `period` / `space` / `KP_*` / `Tab` / 方向键）和
+**带修饰键但键名就是那个字符**的绑定（`Control+1`、`Control+Shift+numbersign`）才是可达的
+—— 这解释了用户看到的「有的快捷键好使、有的不好使」。
+
+**Fix**:
+
+- 配置层：4 条 Shift+标点绑定改成**字符的键名**
+  （`Shift+apostrophe` → `Shift+quotedbl`，`Shift+backslash` → `Shift+bar`，
+  `Shift+bracketleft` → `Shift+braceleft`，`Shift+bracketright` → `Shift+braceright`）；
+  2 条**功能重复**的死绑定直接删（`Control+Shift+9` / `Control+Shift+0`，
+  同一功能另有可达的 `Control+Shift+numbersign` / `Control+Shift+dollar`）。
+- 工程层：新增 `test/TestHotkeyBindings` 门禁 —— 它**把产品自己的
+  `WeaselTSF/KeyEvent.cpp` 编进测试二进制**，枚举所有 `vkey × 修饰键` 组合，得出
+  「前端能产生的 (keycode, modifier) 全集」，再逐条判定每条绑定是 REACHABLE 还是 DEAD。
+  绑定表由 `gen-keysyms.ps1` 从 librime 的 `key_table.cc` **机械生成**，并带 `-Check`
+  防漂移。
+- 门禁自带**坏数据对照**（`fixtures/negative-controls.yaml` + `.expect.txt`）：
+  7 条故意写坏的绑定分别对应 5 种死法，另有 1 条好绑定不被误报
+  —— 没有对照的检查器等于没有检查器。
+
+**验收**（2026-10-25，仓库内跑，US 布局）:
+
+```
+SUMMARY|bindings=33|reachable=27|dead=6|known_dead=0
+```
+
+加基线后 `dead=0|known_dead=6`，门禁绿；临时注入一条新的死绑定立刻变红。
+
+**Pattern-Key**:
+
+- `tsf-frontend-sends-character-not-key`（新增）
+- 累计 Recurrence-Count: 1
+
+**推广**:
+
+- **「配置里写了」和「运行时能触发」是两件事**，而且以前者冒充后者。
+  任何断言「快捷键配好了」的测试，都必须问一句：**这个组合真的能被触发吗？**
+- **测「存在」不等于测「生效」**。`accept:` 能被解析 ≠ 这条绑定会被命中。
+- **凡是「键 → 什么东西」的映射有转换层，就要把转换层编进测试**，
+  不要在测试里重写一份映射（重写的那份迟早和产品的对不上）。
+- **产品自己的函数进测试二进制**，是消除「门禁和产品各说各话」最省事的办法。
+- 顺带一条工装教训：**改 `.ps1` 补丁脚本要纯 ASCII**。中文写进无 BOM 的脚本里，
+  PS 5.1 会按 GBK 读，把注释读成乱码**并且吞掉部分 CRLF**，脚本当场语法错误。
+  中文内容要单独存成 UTF-8 片段再按字节拼接。
+
+**关联**:
+
+- L113 (同一批 `user-custom/rime_ice.custom.yaml` 绑定的前一次翻车 —— 这次是 keycode 不是 send 字符)
+- L16 / L18 / L19 / L21 (Shift 绑定一连串的语义翻车史)
+- spec 077 (Shift 键被前端吞掉的那次改造)
+- ADR 0009 (为什么不去改前端，改配置)
+
+
+## L132 - 「门禁接进 CI 了」不等于「门禁在 CI 里跑过」——一道早就红的 lint 把整条链跳过了 (2026-10-25)
+
+**Incident**:
+
+- 上一轮把沙箱复验工装接进了 CI（commit `d966fc9`），报告里写的是「✅ 已真正接进 CI」。
+- 本轮收尾时查远端运行记录，发现**从 2026-08-10 起，每一次 push 的 CI 都是红的**，
+  而且每次都在 30–40 秒内就结束 —— 这不是构建失败，是**第一个 job 就挂了**。
+- 逐 job 查：`lint` = failure，`build` / `test` / `sandbox-gate` 全部 **skipped**。
+  也就是说：**门禁从接进去那天起，一次都没有真正跑过**。
+- 根因：`lint` job 对**整棵树**跑 `clang-format --dry-run --Werror`，
+  而品牌分叉时新增的一批文件（`RimeWithWeasel/Fluxing*`、`include/*`、大半个 `test/*`）
+  是按 **4 空格缩进**写的，从来没被 clang-format 过 ⇒ 175 个文件里有 **78 个**不合规。
+- 依赖链是 `lint → build → test → sandbox-gate`，所以 lint 一红，
+  **后面所有 job 都被跳过**。
+
+**Fix**:
+
+- 新增 `scripts/lint-changed-cpp.sh`：只检查**本次改动触及**的 `.cpp` / `.h`。
+  改一个文件就欠它一次格式合规；历史欠账不再挡路。
+- 欠账本身**单独报告、不阻断**（`--all --report-only`），保证它可见且只能往下走。
+- `lint` job 的 checkout 改成 `fetch-depth: 2`（脚本要 diff `HEAD~1`）。
+
+**Evidence**:
+
+- 本机全量扫描：**78 / 175**，与 CI 日志里被点名的 78 个文件**完全一致**。
+- 判别力：塞一个故意写坏的文件 ⇒ **79 / 176**（被抓出）。
+- changed 模式：hotkey 测试工程 ⇒ `PASS`；空 diff ⇒ `nothing to check -- OK`。
+- 独立仓库里验证退出码：故意写坏的文件 ⇒ **exit 1**；`clang-format -i` 之后 ⇒ **exit 0**。
+
+**推广**:
+
+- **「接进 CI」和「在 CI 里跑过」是两件事**，而且前者太容易冒充后者。
+  判断依据只有一个：**去远端看那次运行的 job 结论**，别看配置文件里有没有那个 job。
+- **CI 一红，先看是不是第一个 job 就红了**。本例里 `build` / `test` / `sandbox-gate`
+  标的是 `skipped` 而不是 `failed` —— 这个差别就是线索。
+- **门禁链是串联的**：前一道红，后面一道都不会跑，于是「我们 CI 里有门禁」这句话
+  在很长一段时间里都是**空的**。
+- **整树 lint 和增量 lint 要分开**：整树 lint 适合「清理欠账」那一次，
+  增量 lint 适合「当门禁」。拿整树 lint 当门禁，代价是欠账期间所有门禁全废。
+- 顺带：`.clang-format` 规定的风格是 **Chromium（2 空格缩进）**，
+  而分叉新增的文件是 4 空格 —— 这类「风格债」最好在**分叉那一刻**就格式化一次，
+  否则它会一直躺在那儿把 CI 堵死。
+
+**关联**:
+
+- 上一轮的 `d966fc9`（把沙箱门禁接进 CI）与「已真正接进 CI」这句结论（**当时是错的**）
+- spec 081 T2.7（`sandbox-gate` job 仍需自托管 runner）
+- L113 / L131（同一个仓库里「宣称完成」与「实际跑过」的落差）
