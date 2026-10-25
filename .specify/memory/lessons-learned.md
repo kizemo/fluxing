@@ -12254,7 +12254,7 @@ powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1
 
 - L141（同一段 NSIS 链上的前一道墙）、L143（产物名的上游残留）
 
-## L145 - CI 编出来的安装包挂着**上游的版本号** `0.17.4`（观测项，待决策） (2026-10-25)
+## L145 - CI 编出来的安装包挂着**上游的版本号** `0.17.4`（已修） (2026-10-25)
 
 **Observation**:
 
@@ -12268,36 +12268,124 @@ powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1
 
   而这个 fork 的版本线是 **0.21.0.x**（`CHANGELOG.md` 的最新条目是 0.21.0.6）。
 
-**Root cause**:
+**Root cause**（两层）:
 
-- 版本号的来源是 `env.bat`（**未被跟踪**）：维护者本地的 `env.bat` 写着
-  `FLUXING_VERSION=0.21.0` / `WEASEL_BUILD=6`；
-- CI 用的是 `cp env.vs2022.bat env.bat`，而 **`env.vs2022.bat` 里没有版本号**
-  ⇒ `build.bat` 落回自己的**上游默认值**（`VERSION_MAJOR=0 / MINOR=17 / PATCH=4`）
-  ⇒ CI 产物自称 `0.17.4`。
-- ⇒ 也就是说：**这个 fork 的版本号在 git 里没有构建期的源头**
-  （`CHANGELOG.md` 记的是「发布过什么」，不是「现在该编成什么」）。
+1. **版本号在 git 里没有构建期的源头**：
+   - 上游 rime/weasel 把版本线放在 `build.bat` 的
+     `VERSION_MAJOR / VERSION_MINOR / VERSION_PATCH` 默认值里，每次发版 bump 这三个数；
+   - fork 继承了这套机制，却**从没改过这三个数** ⇒ 它们至今仍是上游的 `0 / 17 / 4`；
+   - CI 走 `cp env.vs2022.bat env.bat`，而 `env.vs2022.bat` **没有版本号**
+     ⇒ `build.bat` 落回自己的默认值 `0.17.4`；
+   - 非 release 构建的 build 号是反推出来的：
+     `git tag --sort=-creatordate | findstr /r "%FLUXING_VERSION%"`
+     ⇒ 它匹配到了**上游的 `0.17.4` 标签**，数出「自那个上游标签以来的提交数」= 383
+     ⇒ `PRODUCT_VERSION=0.17.4.383.<hash>`。
+2. **继承来的环境变量会压过 `build.bat` 的默认值**：
+   - `if not defined VERSION_MINOR set VERSION_MINOR=21` 的语义是
+     「**环境里已经有就别改**」⇒ **机器级 / 用户级环境变量**也算「已经有」；
+   - 本机的注册表 Machine 作用域里至今留着 **0.19.0 时代**的残值：
+     `FLUXING_VERSION=0.19.0` / `WEASEL_BUILD=46` / `RELEASE_BUILD=1` /
+     `VERSION_MAJOR=0` / `VERSION_MINOR=19` / `VERSION_PATCH=0`
+     （`BOOST_ROOT=F:183` 是有效的，保留）；
+   - ⇒ 即使把默认值改对，**本机**做「像 CI 一样」的构建仍会得到 `0.19.0`。
 
-**影响**:
+**Fix**:
 
-- CI 产物目前**没有消费者**（release 步的条件是 `github.repository == 'rime/weasel'`），
-  所以现在不致命；
-- 但**沙箱门禁**会下载并安装 CI 产物 ⇒ 装一个自称 `0.17.4` 的包，
-  而沙箱的「覆盖升级」基线是 `0.21.0.x` ⇒ 升级路径断言会失真。
+- `build.bat` 与 `xbuild.bat`：
+  1. `setlocal` 之后、`call env.bat` 之前，**清空继承来的**
+     `FLUXING_VERSION / VERSION_MAJOR / VERSION_MINOR / VERSION_PATCH /
+     WEASEL_BUILD / PRODUCT_VERSION / FILE_VERSION / RELEASE_BUILD`
+     ⇒ 版本来源的优先级被钉死成
+     **env.bat（开发者显式写）> build.bat 的 fork 默认值 > 什么都没有**；
+  2. 默认值改成这个 fork 自己的版本线：`VERSION_MAJOR=0 / MINOR=21 / PATCH=0`
+     ⇒ `FLUXING_VERSION=0.21.0`；非 release 构建的 build 号改由 fork 自己的标签
+     `v0.21.0.6` 反推（= 自该标签以来的提交数）。
+- 代价：发版时要**连同 `CHANGELOG.md` 与 git 标签一起 bump 这三个数**
+  （已写进 `AGENTS.md §3.3`）。
 
-**Status / 决策**:
+**Evidence**（前后对照矩阵，同一套 env.bat，旧脚本取自 `HEAD:build.bat`）:
 
-- **未修**：版本号落点是**发布策略**（版本该以哪个跟踪文件为准、
-  每次发版要改几处），不该由一次 CI 修复替用户定。
-- 候选方案（供拍板）：把 `FLUXING_VERSION` + `VERSION_MAJOR/MINOR/PATCH`
-  写进**被跟踪的** `env.vs2022.bat`，让 CI 与本机用同一条版本线；
-  代价是每次发版要同步改这个文件。
+| build | env.bat | 环境 | FLUXING_VERSION | PRODUCT_VERSION |
+|---|---|---|---|---|
+| 旧 | CI 式（干净） | — | 0.17.4 | 0.17.4.387.e105c64 ← **CI 的那个 bug** |
+| 旧 | CI 式（污染） | 继承 0.19.0 | 0.19.0 | 0.19.0.49 ← 机器环境压过默认值 |
+| 旧 | 开发者 env.bat | — | 0.21.0 | 0.21.0.6 ← 本机 release 构建 |
+| 新 | CI 式（干净） | — | **0.21.0** | **0.21.0.28.e105c64** |
+| 新 | CI 式（污染） | 继承 0.19.0 | **0.21.0** | **0.21.0.28.e105c64** ← 免疫 |
+| 新 | 开发者 env.bat | — | 0.21.0 | 0.21.0.6 ← **与改前逐字相同** |
+
+- 负对照有牙：把上游旧默认值（`VERSION_MINOR=17 / VERSION_PATCH=4`）钉进 env.bat，
+  同一份**新**脚本仍然复现 `0.17.4.387` ⇒ 探针确实在跑真实路径，
+  且「默认值」确实是那个变量；
+- 独立复现 CI 的 383：CI 在 sha `b901bc7` 上报 383，本地在 sha `e105c64`
+  （4 笔提交之后）报 387 = 383 + 4 ✓；
+- 探针零副作用：build.bat 在回显版本后（41–45 行）于 boost 检查（53–57 行）退出，
+  探针把 `BOOST_ROOT` 指到不存在的路径 ⇒ 不构建、不渲染 props、不写仓库。
 
 **推广**:
 
 - **品牌分叉不只改「名字」**：版本号、产物名、路径都是分叉面的一部分。
   改了产物名（`fluxing-*`）却没改版本源头 ⇒ 两边对不上。
+- **`if not defined` 不是「默认值兜底」，是「环境里有什么算什么」**：
+  机器级环境变量（注册表 Machine 作用域）会**压过**脚本里的默认值，
+  而且是**静默**的 —— 本机那条 0.19.0 残值从 0.19.x 时代一直留到今天。
+  凡是要「默认值兜底」的地方，先想清楚要不要先清空继承值。
+- **验证「我在修的那个 bug」要有负对照**：把旧行为显式钉回去，
+  确认新脚本仍然复现旧结果，才说明探针确实在跑真实路径。
 
 **关联**:
 
-- L143（产物名的上游残留）、L144（产物目录的上游假设）
+- L143（产物名的上游残留）、L144（产物目录的上游假设）、L146（本机残留的环境变量）
+
+## L146 - 本机的机器级环境变量里还留着 0.19.0 时代的版本残值 (2026-10-25)
+
+**Observation**:
+
+- 查 L145 时发现，本机**注册表 Machine 作用域**里有一整套 Rime 构建变量，
+  值还停在 **0.19.0** 时代：
+
+  | 变量 | Machine | User | 这个 fork 现在应该是 |
+  |---|---|---|---|
+  | `FLUXING_VERSION` | 0.19.0 | — | 0.21.0 |
+  | `WEASEL_BUILD` | 46 | 49 | 0（release 时由 env.bat 给 6） |
+  | `RELEASE_BUILD` | 1 | — | 由 env.bat 给 |
+  | `VERSION_MAJOR` | 0 | — | 0 |
+  | `VERSION_MINOR` | 19 | — | 21 |
+  | `VERSION_PATCH` | 0 | — | 0 |
+  | `BOOST_ROOT` | F:\b183 | F:\b183 | F:\b183（有效，保留） |
+
+- 它们对**每一个新进程**可见 ⇒ 任何走 `build.bat` 的构建都会继承它们。
+
+**影响**:
+
+- L145 修复之前：这些残值让本机构建即使没有 env.bat 也得到 `0.19.0`；
+- L145 修复之后：`build.bat` / `xbuild.bat` 先清空继承值 ⇒ **构建不再受它们影响**；
+  但**不经过 build.bat 的其它脚本 / 其它项目**仍然会继承它们。
+
+**Status**:
+
+- **未清**：清理注册表 Machine 作用域需要管理员权限，且这几个变量名
+  （`RELEASE_BUILD` / `VERSION_*`）是通用名，可能被本机其它项目使用 ⇒
+  属于「机器级配置」，不擅自改。清理命令（需要管理员）：
+
+  ```powershell
+  foreach ($v in 'FLUXING_VERSION','WEASEL_BUILD','RELEASE_BUILD',
+                 'VERSION_MAJOR','VERSION_MINOR','VERSION_PATCH') {
+    [System.Environment]::SetEnvironmentVariable($v, $null, 'Machine')
+  }
+  ```
+
+- 清掉之后**新开的**进程不再带这些变量；已开的进程不受影响。
+
+**推广**:
+
+- **机器级环境变量是「沉默的全局配置」**：它不在任何仓库里、
+  不会出现在 `git status` 里、也不会随文档更新，
+  却能改掉所有构建的版本与模式。
+  排查「本地结果和 CI 不一样」时，先 `Get-ChildItem Env:` 对一遍。
+- 变量名通用（`VERSION_*` / `RELEASE_BUILD`）的全局残值尤其危险：
+  它们看起来像「这个项目的东西」，实际会作用到别的项目。
+
+**关联**:
+
+- L145（版本号源头）、L146 的清理命令见上

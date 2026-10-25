@@ -330,12 +330,19 @@ A release is the only time the following files are touched **together**:
    Without `RELEASE_BUILD=1`, `build.bat` falls into the git-hash-suffix
    branch and produces a wrong-named installer. (L10 §6)
 3. `CHANGELOG.md` — entry under the new version heading.
-4. `release/fluxing-<FLUXING_VERSION>.<WEASEL_BUILD>-installer.exe` —
+4. `build.bat` + `xbuild.bat` — `VERSION_MAJOR` / `VERSION_MINOR` /
+   `VERSION_PATCH`. **These three numbers are the tracked version line**,
+   and they are what CI builds from: with no version in `env.bat` (that is
+   CI) the build falls back to them, and the build number is derived from the
+   fork's own `v<version>` tag. Bump them together with the CHANGELOG entry
+   and the git tag, or CI keeps shipping the previous line. (L145)
+5. `release/fluxing-<FLUXING_VERSION>.<WEASEL_BUILD>-installer.exe` —
    copy from `output/archives/` after a successful `xbuild.bat installer`.
 
-`weasel.props` and `env.bat` are in `.gitignore` — **the version bump
-files do NOT get committed**. The release commit records the version
-only in `CHANGELOG.md` and the new installer binary in `release/`.
+`weasel.props` and `env.bat` are in `.gitignore` — **those version bump
+files do NOT get committed**. The release commit records the version in
+`CHANGELOG.md`, the new `VERSION_*` numbers in `build.bat` / `xbuild.bat`,
+and the new installer binary in `release/`.
 
 ### 3.4 Tagging & release (CI-driven)
 
@@ -432,6 +439,12 @@ Contains: `BOOST_ROOT`, `DEVTOOLS_PATH`, `ARCH`, and (for releases)
 `build.bat installer` once to confirm `OutFile` produces the right name.
 A wrong `RELEASE_BUILD` value causes the installer to overwrite the
 previous release with a different version string. (L10 §6)
+
+`build.bat` / `xbuild.bat` clear the inherited `FLUXING_VERSION` /
+`VERSION_*` / `WEASEL_BUILD` / `PRODUCT_VERSION` / `FILE_VERSION` /
+`RELEASE_BUILD` before calling `env.bat`, so a machine-level environment
+variable can neither beat this file nor the script defaults. A stale
+machine-level value is otherwise silent and permanent — see L145 / L146.
 
 ### 4.3 `weasel.props` (local-only, gitignored)
 

@@ -203,19 +203,33 @@
   - 机制级实证（最小 NSIS 脚本 + scratch 目录）：
     阴性（无该目录）⇒ **EXIT=1** + `Can't open output file` + `Error - aborting creation process`；
     阳性（先 `mkdir`）⇒ **EXIT=0**，文件写出。
-- [ ] T2.24 **【2026-10-25 本轮新增·待决策】CI 产物挂的是上游版本号 `0.17.4`**（观测 **L145**）——
+- [x] T2.24 **【2026-10-25 本轮新增·已完成】CI 产物挂的是上游版本号 `0.17.4`**（事故 **L145**）——
   CI 日志里 makensis 收到 `FLUXING_VERSION=0.17.4` / `PRODUCT_VERSION=0.17.4.383.b901bc7`，
   而本 fork 的版本线是 **0.21.0.x**。
-  - 根因：版本号只存在于**未被跟踪**的 `env.bat`（本机写着 0.21.0 / WEASEL_BUILD=6），
-    CI 用的 `env.vs2022.bat` 里没有 ⇒ `build.bat` 落回自己的**上游默认值**
-    （`VERSION_MAJOR=0 / MINOR=17 / PATCH=4`）
-    ⇒ **这个 fork 的版本号在 git 里没有构建期的源头**；
-  - 影响：CI 产物目前没有消费者（release 步只在上游仓库跑），
-    但**沙箱门禁**会安装 CI 产物 ⇒ 装一个自称 `0.17.4` 的包，
-    而「覆盖升级」基线是 `0.21.0.x` ⇒ 升级路径断言会失真；
-  - **未修**：版本落点是**发布策略**（版本该以哪个跟踪文件为准、每次发版改几处），
-    需要拍板。候选方案：把 `FLUXING_VERSION` + `VERSION_MAJOR/MINOR/PATCH`
-    写进**被跟踪的** `env.vs2022.bat`，让 CI 与本机用同一条版本线。
+  - 根因是**两层**：
+    ① **版本号在 git 里没有构建期的源头** —— 上游把版本线放在
+      `build.bat` 的 `VERSION_MAJOR/MINOR/PATCH` 默认值里并每次发版 bump，
+      fork 继承了这套机制却**从没改过这三个数**（至今是上游的 `0/17/4`）；
+      而非 release 构建的 build 号是 `git tag | findstr %FLUXING_VERSION%` 反推的
+      ⇒ 它匹配到**上游的 `0.17.4` 标签**，数出 383 笔提交；
+    ② **继承来的环境变量会压过 `build.bat` 的默认值**（`if not defined` 的语义）
+      —— 本机注册表 Machine 作用域里留着 **0.19.0 时代**的残值
+      （`FLUXING_VERSION=0.19.0` / `RELEASE_BUILD=1` / `VERSION_MINOR=19` …）；
+  → 修法：`build.bat` 与 `xbuild.bat` 在 `setlocal` 之后、`call env.bat` 之前
+    **清空继承来的 8 个版本 / 构建变量**，并把默认值改成 fork 自己的
+    `0 / 21 / 0` ⇒ 版本来源优先级钉死为
+    **env.bat > fork 默认值 > 空**；
+  - 前后对照矩阵（同一套 env.bat，旧脚本取自 `HEAD:build.bat`）：
+    旧 + CI 式 env.bat ⇒ `0.17.4.387`（复现 CI 的那个 bug）；
+    旧 + CI 式 env.bat + 污染环境 ⇒ `0.19.0.49`；
+    新 + CI 式 env.bat（干净 / 污染两种）⇒ `0.21.0.28.e105c64`；
+    新旧 + 开发者 env.bat ⇒ `0.21.0.6`（**本机 release 构建逐字未变**）；
+  - 负对照有牙：把旧默认值钉回 env.bat，新脚本仍复现 `0.17.4.387`；
+  - 独立复现 CI 的 383：CI 在 `b901bc7` 上是 383，本地在 4 笔提交后的 `e105c64` 是 387；
+  - 代价：发版时要连同 `CHANGELOG.md` 与 git 标签一起 bump 那三个数
+    （已写进 `AGENTS.md §3.3`）；
+  - 残留：本机注册表 Machine 作用域的 0.19.0 残值未清（需管理员，
+    且变量名通用可能影响别的项目）⇒ 记为 **L146**。
 - [x] T2.20 **【2026-10-25 本轮新增·已完成】安装器要用的文本产物补齐：NSIS 的相对路径按**脚本目录**解析**（事故 **L141**）——
   CI 的 `build (msbuild)` 红在 NSIS：
   `LicenseData: open failed "LICENSE.txt"`（`output\install.nsi` line 72）。
