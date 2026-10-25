@@ -313,7 +313,12 @@ jobs:
 
 
   test:
-    needs: build
+    # L136: the unit tests do NOT depend on the packaged installer. This job
+    # builds its own librime (build.bat rime) and its own test projects, so
+    # coupling it to `build` meant that a PACKAGING failure skipped the whole
+    # test suite -- and with it the hotkey acceptance gate. The sandbox gate
+    # still needs both, and it keeps `needs: [build, test]`.
+    needs: lint
     runs-on: windows-2022
     env:
       boost_version: 1.84.0
