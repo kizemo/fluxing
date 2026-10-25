@@ -31,20 +31,58 @@ popd
 
 rem Toolchain locations (matches AGENTS.md sec 2.1 prerequisite environment)
 if "%BOOST_ROOT%"=="" set "BOOST_ROOT=F:\b183"
-set "VCVARS=C:\PROGRA~2\MICROS~2\2022\BUILDT~1\VC\AUXILI~1\Build\vcvars32.bat"
-set "MSBUILD=C:\PROGRA~2\MICROS~2\2022\BUILDT~1\MSBuild\Current\Bin\MSBuild.exe"
 
-if not exist "%VCVARS%" (
-    echo [ERROR] vcvars32.bat not found at: %VCVARS%
-    echo         Adjust VCVARS in this script or install VS 2022 BuildTools.
-    exit /b 1
-)
+rem ---------------------------------------------------------------------------
+rem Visual Studio discovery (L137).
+rem
+rem This used to hardcode one developer machine's BuildTools install:
+rem   C:\PROGRA~2\MICROS~2\2022\BUILDT~1\VC\AUXILI~1\Build\vcvars32.bat
+rem The GitHub-hosted windows runners install the same Visual Studio 2022
+rem under the "Enterprise" edition folder instead:
+rem   C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat
+rem The hardcoded path aborted the suite on its very first step, so the test
+rem suite had never executed in CI at all -- see lessons-learned.md L137.
+rem
+rem Discovery order, first hit wins:
+rem   1. an explicit VCVARS / MSBUILD override in env.bat - never clobbered
+rem   2. the legacy Visual Studio 2022 BuildTools folder - the known-good
+rem      toolchain for this repo (PLATFORM_TOOLSET=v143)
+rem   3. vswhere, preferring an installation under a \2022\ directory
+rem   4. vswhere, any installation at all
+rem
+rem "Latest" is deliberately NOT the rule: a machine that also carries a
+rem newer Visual Studio would silently switch toolchains. Nor can a
+rem vswhere version RANGE be used -- the ")" of "[17.0,18.0)" truncates a
+rem for /f backquoted command.
+rem ---------------------------------------------------------------------------
+if not defined VCVARS call :discover_vcvars
+if not defined MSBUILD call :discover_msbuild
 
+if not defined MSBUILD goto no_msbuild
+if defined VCVARS goto have_vcvars
+goto no_vcvars
+
+:have_vcvars
 call "%VCVARS%" >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] vcvars32.bat failed to initialize environment.
+    echo [ERROR] vcvars32.bat failed to initialize the environment.
     exit /b 1
 )
+echo [INFO] Visual Studio environment: %VCVARS%
+goto toolchain_ready
+
+:no_vcvars
+echo [WARN] vcvars32.bat not found - continuing with the environment as-is.
+echo        Set VCVARS in env.bat if the MSVC tools are not already set up.
+goto toolchain_ready
+
+:no_msbuild
+echo [ERROR] MSBuild.exe not found.
+echo         Install Visual Studio 2022 - any edition works - or set MSBUILD
+echo         and VCVARS in env.bat to point at your own installation.
+exit /b 1
+
+:toolchain_ready
 
 rem L49 regression guard: WeaselServerImpl.h MUST have MESSAGE_HANDLER(WM_HOTKEY, OnHotkey)
 rem in its msg map. spec 036 (0.18.24.0) shipped without it (function declared but
@@ -139,3 +177,50 @@ rem L30 cure - see lessons-learned.md L30 for the full post-mortem.
 set "FINAL_RC=!FAIL!"
 endlocal & set "OUTER_RC=%FINAL_RC%"
 exit /b %OUTER_RC%
+
+rem ---------------------------------------------------------------------------
+rem :discover_vcvars / :discover_msbuild - Visual Studio discovery for L137.
+rem These are subroutines on purpose: the main flow stays free of nested
+rem parentheses, because a path under "Program Files (x86)" would otherwise
+rem close an if-block early and break the parser.
+rem ---------------------------------------------------------------------------
+:discover_vcvars
+if defined VCVARS exit /b 0
+call :discover_vsroot
+if not defined VSROOT exit /b 0
+if not exist "!VSROOT!\VC\Auxiliary\Build\vcvars32.bat" exit /b 0
+set "VCVARS=!VSROOT!\VC\Auxiliary\Build\vcvars32.bat"
+exit /b 0
+
+:discover_msbuild
+if defined MSBUILD exit /b 0
+if not defined VSROOT call :discover_vsroot
+if defined VSROOT if exist "!VSROOT!\MSBuild\Current\Bin\MSBuild.exe" set "MSBUILD=!VSROOT!\MSBuild\Current\Bin\MSBuild.exe"
+if defined MSBUILD exit /b 0
+for /f "usebackq tokens=*" %%i in (`where MSBuild.exe`) do if not defined MSBUILD set "MSBUILD=%%i"
+exit /b 0
+
+:discover_vsroot
+if defined VSROOT exit /b 0
+set "VSROOT="
+set "VSROOT_ANY="
+if not defined LEGACY_VS set "LEGACY_VS=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools"
+if exist "%LEGACY_VS%\VC\Auxiliary\Build\vcvars32.bat" set "VSROOT=%LEGACY_VS%"
+if defined VSROOT exit /b 0
+rem vswhere.exe ships in either Program Files tree depending on the
+rem install; the arm64x_wrapper\build.bat in this repo looks in both.
+set "VSWHERE=%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "%VSWHERE%" set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "%VSWHERE%" exit /b 0
+for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -all -products * -property installationPath`) do call :consider_vsroot "%%i"
+if defined VSROOT exit /b 0
+set "VSROOT=%VSROOT_ANY%"
+exit /b 0
+
+:consider_vsroot
+set "CAND=%~1"
+if not defined VSROOT_ANY if exist "%~1\VC\Auxiliary\Build\vcvars32.bat" set "VSROOT_ANY=%~1"
+if defined VSROOT exit /b 0
+set "STRIPPED=%~1"
+if not "!STRIPPED:\2022\=!"=="!STRIPPED!" if exist "%~1\VC\Auxiliary\Build\vcvars32.bat" set "VSROOT=%~1"
+exit /b 0
