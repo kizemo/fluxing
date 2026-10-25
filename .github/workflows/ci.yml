@@ -151,6 +151,18 @@ jobs:
         if: matrix.variant == 'xmake'
         uses: xmake-io/github-action-setup-xmake@v1
 
+      # The Weasel* projects link yaml-cpp.lib out of the librime deps build
+      # tree, and build.bat refuses to continue until that file exists. The
+      # CI inherited from upstream never built the librime deps (upstream does
+      # not link yaml-cpp), so the build stopped with "the librime dependency
+      # libraries are not built yet". The lint wall had been hiding this since
+      # the brand fork -- see lessons-learned.md L132.
+      - name: Build librime and its dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\build.bat rime
+
       - name: Build Weasel
         shell: pwsh
         id: build_weasel
