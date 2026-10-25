@@ -10912,3 +10912,70 @@ Fix (defer to v0.21.0.1): 改 source。
 
 - L121 (opencc 补丁脚本化, 同一套构建脚本化工作)
 - L127 (同一次 0.21.0.6 的构建事故)
+
+
+## L129 - 这个 MSVC 工具链没有「静态版 OpenMP 运行时」：`libomp.lib` / `vcomp.lib` 都是导入库 (2026-10-25)
+
+**Incident**:
+
+- 用户授权「启用 OpenMP」。实测后发现这条路在当前工具链上走不通，
+  而且 **L127 / A16 里写的「静态链 `libomp.lib` 就能启用」是错的** ——
+  照着做会做出一个比现状更糟的包。
+
+**Root cause**（全部为实测，不是推断）:
+
+- `cl /help` 里与 OpenMP 有关的选项只有三个：
+  `/openmp`、`/openmp:experimental`、`/openmp:llvm`
+  ⇒ **这个工具链根本没有 `/openmp:static`**。
+  传 `/openmp:static` 会被 cl 报 `D9035: "o" 选项已否决`，
+  然后**按普通 `/openmp` 处理** ⇒ 实测产物的依赖表里 **VCOMP140.DLL 依旧在**。
+- `VC\Tools\MSVC\14.44.35207\lib\<arch>\vcomp.lib` 只有 **28 KB**
+  ⇒ 它是 **VCOMP140.dll 的导入库**，不是静态运行时。
+- `libomp.lib`（186 KB）导出的是 `__kmpc_*` / `_kmpc_*`（**LLVM ABI**），
+  链接后产物的依赖表里出现 **`libomp140.i386.dll`**
+  ⇒ 它是 **libomp140.dll 的导入库**，也不是静态运行时。
+- 结论：**MSVC 这边不存在可静态链的 OpenMP 运行时**。
+  想让产物带 OpenMP，就必须随安装器分发一个 DLL：
+  - `VCOMP140.dll` ⇒ 它自己又依赖 `msvcp140.dll` + `vcruntime140.dll`
+    （本项目是 `/MT` 静态 CRT，机器上根本没有这两个）
+    ⇒ 要分发一整套 VC 可再发行组件（约 25 MB）
+  - 或 `libomp140.dll`（LLVM 版）⇒ 同样要带上它的 CRT 依赖
+- 而 OpenMP 在本项目里只服务于 `WeaselUI/GdiplusBlur.cpp` 的两处
+  `#pragma omp parallel for`：候选窗阴影的**盒式模糊**。
+  被处理的是一块约 320×80 的阴影位图 ⇒ 单线程耗时在**亚毫秒量级**。
+
+**Fix**:
+
+- **两条构建路径继续保持 OpenMP 关闭**（与已发布的 0.21.0.6 一致）。
+- **更正 L127 / A16 的说法**：不要再写「静态链 `libomp.lib` 就能启用 OpenMP」。
+  `libomp.lib` 是导入库，真链上去会引入 `libomp140.dll` 这个**新的未分发依赖**，
+  比现状更糟。
+- AGENTS.md §7 A16 同步改写：在本工具链上，「启用 OpenMP」等价于
+  「给输入法分发的 DLL 增加一套 VC 可再发行组件」，
+  代价远大于那亚毫秒的收益 ⇒ **不做**。
+- 如果将来面板阴影真的慢到肉眼可见（需要重新测量），
+  正确的方向是**缓存模糊结果**（阴影只在尺寸/样式变化时变一次，
+  现在是每次重绘都重算），而不是往 IME 进程里塞一个线程运行时。
+
+**Pattern-Key**:
+
+- `build.no-static-openmp-runtime-in-msvc-toolchain`（新增）
+- 累计 Recurrence-Count: 1
+
+**推广**:
+
+- **「某个 `.lib` 是不是静态库」要看两件事**：文件体积（导入库通常几十 KB）
+  和链接产物的 `dumpbin /dependents` 里有没有多出对应的 DLL。
+  `libomp.lib` 名字里有 "lib"、体积 186 KB，看着像静态库，实际是导入库。
+- **给一个会被每个前台进程加载的 DLL 增加运行库依赖，代价远高于普通应用**：
+  输入法 ship 装在所有有焦点的进程里，一个缺 DLL 的失败面是「整个输入法消失」。
+- **优化前先量收益**：这条路径的收益是亚毫秒，成本是一套可再发行组件
+  + 一个新的装机即坏风险源 ⇒ 不做。
+- **一个拼错的属性名会「保护」你几年**（`<OpenMP>` vs `<OpenMPSupport>`），
+  但保护的原因往往和当初想的一样吗？未必 —— 要重新量。
+
+**关联**:
+
+- L127 (同一个 VCOMP140 依赖坑；本条更正它的「解法」部分)
+- L63 (spec 063 delay-load API set, 同一类「运行库依赖」问题)
+- L128 (同一次 0.21.0.6 的构建事故)

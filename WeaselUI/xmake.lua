@@ -13,10 +13,14 @@
   -- DllRegisterServer never runs, and the TIP is never registered (no
   -- Fluxing in the input switcher, no candidate window).
   --
-  -- "/openmp:static" is NOT a fix here: it is a CL-driver option, and xmake
-  -- calls link.exe directly, so the driver never swaps vcomp140.lib for
-  -- libomp.lib and the import survives (verified: dumpbin /dependents still
-  -- lists VCOMP140.DLL).
+  -- "/openmp:static" is NOT a fix here. This toolchain has no such option
+  -- at all: cl /help only knows /openmp, /openmp:experimental and
+  -- /openmp:llvm, and passing /openmp:static is treated as plain /openmp
+  -- (cl warns D9035). On top of that there is no static OpenMP runtime to
+  -- link: vcomp.lib (28 KB) is the IMPORT library of VCOMP140.dll, and
+  -- libomp.lib (186 KB) is the import library of libomp140.dll (LLVM ABI)
+  -- -- linking it adds a NEW unshipped DLL dependency (verified with
+  -- dumpbin /dependents). See lessons-learned L129.
   --
   -- The MSBuild path has OpenMP off as well: WeaselUI.vcxproj spells the
   -- property "<OpenMP>" instead of "<OpenMPSupport>", so MSBuild silently
@@ -24,5 +28,6 @@
   -- keeps the two build paths at parity and keeps the shipped artifact
   -- free of an unshipped runtime dependency.
   --
-  -- Turning OpenMP on properly (static libomp in BOTH build systems) is a
-  -- separate task; see lessons-learned L127 and AGENTS.md A16.
+  -- Enabling OpenMP here would mean shipping the whole VC redistributable
+  -- (~25 MB) to speed up a sub-millisecond shadow blur. Not worth it: if
+  -- the blur ever gets visibly slow, cache the blurred shadow instead.

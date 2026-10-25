@@ -14,9 +14,11 @@
 > （`VCOMP140.DLL`）引进 TSF shim，而安装器**不分发**该 DLL ⇒ 在没装 VC++ 运行库的机器上
 > `regsvr32` 直接 `ERROR_MOD_NOT_FOUND`，`DllRegisterServer` 不执行，TIP 注册不上，
 > 输入法整个加载不起来。现在两条路径**都不开** OpenMP。
-> **别单独"修" `WeaselUI.vcxproj` 里 `<OpenMP>` 的拼写**（A16）：`/openmp:static` 是 CL
-> 驱动层选项，xmake 直接调 `link.exe`，驱动不换库 ⇒ `dumpbin /dependents` 里
-> `VCOMP140.DLL` 依旧在。要真正启用 OpenMP，须在**两条**构建系统里静态链上 `libomp.lib`。
+> **别单独"修" `WeaselUI.vcxproj` 里 `<OpenMP>` 的拼写**（A16 / L129）：这个工具链的
+> `cl` 根本没有 `/openmp:static`（只有 `/openmp` / `/openmp:experimental` / `/openmp:llvm`），
+> 传了会被按普通 `/openmp` 处理；而且 `libomp.lib` 是 `libomp140.dll` 的**导入库**，
+> 链上去只会引入一个新的未分发依赖 ⇒ `dumpbin /dependents` 里 `VCOMP140.DLL` 依旧在。
+> **本工具链不存在可静态链的 OpenMP 运行时** ⇒ 两条构建路径都保持关闭。
 
 ## 3.2 顶层 xmake 目标集合
 

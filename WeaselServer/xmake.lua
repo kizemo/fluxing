@@ -10,8 +10,10 @@ target("WeaselServer")
   -- L127: no /openmp here either -- see WeaselUI/xmake.lua. With the
   -- dynamic OpenMP runtime the binary imports VCOMP140.dll, which the
   -- installer does not ship -> on a clean machine the process cannot even
-  -- start. "/openmp:static" does not help: xmake calls link.exe directly,
-  -- so the CL driver never swaps vcomp140.lib for libomp.lib.
+  -- start. "/openmp:static" does not help: this toolchain has no such
+  -- option (cl /help knows only /openmp, /openmp:experimental and
+  -- /openmp:llvm), and libomp.lib is the import library of libomp140.dll,
+  -- so there is no static OpenMP runtime to link at all. See L129.
   add_ldflags("/DEBUG /LARGEADDRESSAWARE /ERRORREPORT:QUEUE /OPT:NOREF /OPT:NOICF")
   add_ldflags("/LTCG:OFF", {force = true})
   set_policy("windows.manifest.uac", "invoker")
