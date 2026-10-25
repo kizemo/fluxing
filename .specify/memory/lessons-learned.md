@@ -12296,7 +12296,7 @@ powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1
    - 本机的注册表 Machine 作用域里至今留着 **0.19.0 时代**的残值：
      `FLUXING_VERSION=0.19.0` / `WEASEL_BUILD=46` / `RELEASE_BUILD=1` /
      `VERSION_MAJOR=0` / `VERSION_MINOR=19` / `VERSION_PATCH=0`
-     （`BOOST_ROOT=F:183` 是有效的，保留）；
+     （`BOOST_ROOT=F:\b183` 是有效的，保留）；
    - ⇒ 即使把默认值改对，**本机**做「像 CI 一样」的构建仍会得到 `0.19.0`。
 
 **Fix**:
@@ -12496,6 +12496,8 @@ Output: "D:\a\fluxing\fluxing\output\archives\fluxing-0.21.0.30-installer.exe"
   界面也仍然显示一个按不动的键；
 - `test/TestDefaultHotkeys`：断言改成孪生键 + 加**否定断言**钉住那 2 条不许复活；
   active 绑定数 44 → 42；
+- `test/TestYamlRoundTripE2E`：绑定数 pin 29 → 27
+  （**第 5 个面**：第一次跑完整套件时它红了，才把它挖出来）；
 - `test/TestHotkeyBindings/known-dead-bindings.txt`：基线 6 条 → 4 条。
 
 **验收**：门禁两轮 `RESULT|PASS`；出货配置
@@ -12518,10 +12520,13 @@ Output: "D:\a\fluxing\fluxing\output\archives\fluxing-0.21.0.30-installer.exe"
 - **「删掉一条死绑定」不是只删 yaml 那一行。** 配置、界面内置表、
   测试断言、已知死绑定基线、文档键位表是**同一件事的五个面**，
   少改一个面就留下一个新的「界面在骗人」。
-- **同一条配置事实散落在 4 个地方时，改一处必须把其余几处一起改**：
+- **同一条配置事实散落在 5 个地方时，改一处必须把其余几处一起改**：
   `output/data/default.yaml` / `WeaselServer/ShortcutSettings.cpp` /
-  `test/TestDefaultHotkeys` / `test/TestHotkeyBindings/known-dead-bindings.txt`。
-  本轮一开始只想到前两处，是靠「门禁会不会红」倒逼出后两处的。
+  `test/TestDefaultHotkeys` / `test/TestYamlRoundTripE2E` /
+  `test/TestHotkeyBindings/known-dead-bindings.txt`。
+  本轮一开始只想到前两处，后三处是**跑完整套件时一个个被顶出来的**
+  （先红 `TestYamlRoundTripE2E` 的 `29u`，再发现 known-dead 基线也得跟着缩）。
+  ⇒ **改完配置必须跑完整套件，不能只跑自己新加的那个门禁。**
 - **踩到的一脚**：CI 的 lint 只查「本次改动触及的 C/C++ 文件」，
   而这两个文件本来就有 clang-format 欠账 ⇒ 一改就红。
   正确做法是把它们**先格式化再改**（仓库规则：动了就得干净）。

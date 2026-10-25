@@ -90,6 +90,7 @@ released the half that needs no further product decision:
 | Delete the two redundant dead chords `Control+Shift+9` / `Control+Shift+0` | **done** | `output/data/default.yaml` |
 | Point `test/TestDefaultHotkeys` at the reachable twins, and pin the dead ones with negative assertions | **done** | `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp` |
 | Shrink `known-dead-bindings.txt` from 6 entries to 4 | **done** | `test/TestHotkeyBindings/known-dead-bindings.txt` |
+| Re-pin the binding count that `TestYamlRoundTripE2E` asserts (29 -> 27) | **done** | `test/TestYamlRoundTripE2E/TestYamlRoundTripE2E.cpp` |
 | Keep the settings UI's builtin / default shortcut table in sync | **done** | `WeaselServer/ShortcutSettings.cpp` |
 | Rename the four `Shift+punctuation` bindings to the character key names | **not started** | still in `known-dead-bindings.txt`; spec 081 T1.1-T1.4 |
 
@@ -114,6 +115,9 @@ Gate output after the change: `bindings=31|reachable=27|dead=0|known_dead=4`.
    and to what chord -- is an open product decision.
 
 ## Consequences
+
+> The consequences below describe the decision **as a whole**. What has
+> actually shipped so far is in the implementation status table above.
 
 - ✅ The four `Shift+punctuation` shortcuts start working, and the
   configuration no longer lies about it.

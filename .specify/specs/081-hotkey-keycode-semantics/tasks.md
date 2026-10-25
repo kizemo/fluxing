@@ -27,9 +27,9 @@
 - [ ] T1.11 `output/data/user-custom/radical_pinyin.custom.yaml`：同样的 4 条一并修
 - [ ] T1.12 `user-custom/*.custom.yaml` 里「保留的 4 条……实际生效」的注释改成说明**为什么写字符键名**
 - [ ] T1.13 改完跑 `Release\TestHotkeyBindings.exe`（**不带** `--baseline`）→ 必须 `dead=0`（还差 4 条 `Shift+标点`，本轮带 `--baseline` 跑：`dead=0|known_dead=4`）
-- [x] T1.15 `WeaselServer/ShortcutSettings.cpp`：内置 / 默认快捷键表里的 `Control+Shift+9` / `Control+Shift+0` 改成可达的 `Control+Shift+numbersign` / `Control+Shift+dollar`（否则「快捷键设置」界面仍显示一个按不动的键，保存时还会把死绑定写回用户的 `custom.yaml`）
 - [ ] T1.14 重新打包安装包（`build.bat weasel installer`）
 - [ ] T1.15 静默装机 smoke test（AGENTS.md §2.5），结果写进 commit message
+- [x] T1.16 `WeaselServer/ShortcutSettings.cpp`：内置 / 默认快捷键表里的 `Control+Shift+9` / `Control+Shift+0` 改成可达的 `Control+Shift+numbersign` / `Control+Shift+dollar`（否则「快捷键设置」界面仍显示一个按不动的键，保存时还会把死绑定写回用户的 `custom.yaml`）
 
 ## M2 · 门禁进 CI
 

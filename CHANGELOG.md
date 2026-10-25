@@ -29,6 +29,7 @@
   否则「快捷键设置」界面仍会显示一个按不动的键，
   保存时还会把死绑定写回用户的 `custom.yaml`；
 - `test/TestDefaultHotkeys`：断言改成孪生键，并加**否定断言**钉住那 2 条不许复活；
+- `test/TestYamlRoundTripE2E`：绑定数 pin 29 → 27；
 - `test/TestHotkeyBindings/known-dead-bindings.txt`：基线 6 条 → 4 条
   （剩下 4 条 `Shift+标点` 是「改名修好」那一半，本轮未授权改）。
 
