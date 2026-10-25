@@ -133,8 +133,11 @@ jobs:
           copy ..\bundled_winsparkle.patch .
           git apply bundled_winsparkle.patch
           nuget restore
+          if ($LASTEXITCODE -ne 0) { throw "nuget restore failed with exit code $LASTEXITCODE" }
           msbuild -m -t:Build -p:Configuration=Release -p:Platform=x64 WinSparkle.sln
+          if ($LASTEXITCODE -ne 0) { throw "winsparkle x64 build failed with exit code $LASTEXITCODE" }
           msbuild -m -t:Build -p:Configuration=Release -p:Platform=Win32 WinSparkle.sln
+          if ($LASTEXITCODE -ne 0) { throw "winsparkle Win32 build failed with exit code $LASTEXITCODE" }
 
       - name: Install WinSparkle files
         shell: pwsh
@@ -156,6 +159,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           .\build.bat data
+          # L135: a batch file's non-zero exit code must fail the step.
+          # $ErrorActionPreference does not cover native commands. This one
+          # matters in particular since the L138 change makes build.bat data
+          # refuse to run plum unless an explicit recipe list is given.
+          if ($LASTEXITCODE -ne 0) { throw "build.bat data failed with exit code $LASTEXITCODE" }
 
       - name: Setup xmake
         if: matrix.variant == 'xmake'
@@ -243,6 +251,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           .\xbuild.bat arm64 installer
+          # The step is best effort (continue-on-error below), but the exit
+          # code still has to be surfaced -- a silently green step that built
+          # nothing is the L135 pattern.
+          if ($LASTEXITCODE -ne 0) { throw "xbuild.bat arm64 installer failed with exit code $LASTEXITCODE" }
 
       - name: Compress Debug Symbols
         if: matrix.variant == 'msbuild'
@@ -250,6 +262,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           output\7z.exe a -t7z "./output/archives/debug_symbols.7z" "output/*.pdb" -r
+          if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
 
       - name: Upload artifacts
         if: matrix.variant == 'msbuild'
