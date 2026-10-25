@@ -316,6 +316,10 @@ if %build_arm64% == 1 (
 )
 
 if %build_installer% == 1 (
+  rem L141: stage the text assets the installer embeds before makensis
+  rem runs, so this target does not depend on a previous "build.bat data".
+  call :stage_text_assets
+  if errorlevel 1 goto error
   "%ProgramFiles(x86)%"\NSIS\Bin\makensis.exe ^
   /DFLUXING_VERSION=%FLUXING_VERSION% ^
   /DWEASEL_BUILD=%WEASEL_BUILD% ^
@@ -397,9 +401,49 @@ rem ---------------------------------------------------------------------------
   if not "%PROPS_RC%"=="0" goto error
   exit /b
 
+rem ---------------------------------------------------------------------------
+:stage_text_assets
+  rem L141: output\install.nsi resolves its relative paths against the SCRIPT
+  rem directory - makensis chdirs into the script's directory unless /NOCD is
+  rem given. Measured with a three-case probe: with LICENSE.txt next to the
+  rem script it compiles, with /NOCD it fails with the very same
+  rem "LicenseData: open failed" message the CI runner produced, and with the
+  rem file only in the CWD plus /NOCD it compiles again. So the installer needs
+  rem these three text assets INSIDE output\:
+  rem   LICENSE.txt       install.nsi:72 (MUI_PAGE_LICENSE) and :565 (File)
+  rem   README.txt        install.nsi:566 (File)
+  rem   rime-install.bat  install.nsi:574 (File)
+  rem All three are gitignored build products (.gitignore:25 "/output/*.txt").
+  rem Commit 41e47e3 deleted output\LICENSE.txt from tracking and added that
+  rem ignore rule; :build_data recreated the other two but never this one, so a
+  rem clean checkout had no output\LICENSE.txt and makensis aborted with
+  rem   LicenseData: open failed "LICENSE.txt"
+  rem Stage all three here. /Y so a second run cannot stop at the overwrite
+  rem prompt, and the exit code is checked so a failed copy cannot be
+  rem swallowed (the L135 pattern).
+  if not exist "%WEASEL_ROOT%\LICENSE.txt" (
+    echo Error: %WEASEL_ROOT%\LICENSE.txt is missing.
+    exit /b 1
+  )
+  if not exist "%WEASEL_ROOT%\README.md" (
+    echo Error: %WEASEL_ROOT%\README.md is missing.
+    exit /b 1
+  )
+  if not exist "%WEASEL_ROOT%\plum\rime-install.bat" (
+    echo Error: %WEASEL_ROOT%\plum\rime-install.bat is missing.
+    exit /b 1
+  )
+  copy /Y "%WEASEL_ROOT%\LICENSE.txt" "%WEASEL_ROOT%\output\LICENSE.txt"
+  if errorlevel 1 exit /b 1
+  copy /Y "%WEASEL_ROOT%\README.md" "%WEASEL_ROOT%\output\README.txt"
+  if errorlevel 1 exit /b 1
+  copy /Y "%WEASEL_ROOT%\plum\rime-install.bat" "%WEASEL_ROOT%\output\rime-install.bat"
+  if errorlevel 1 exit /b 1
+  exit /b
+
 :build_data
-  copy %WEASEL_ROOT%\README.md output\README.txt
-  copy %WEASEL_ROOT%\plum\rime-install.bat output\
+  call :stage_text_assets
+  if errorlevel 1 goto error
   rem L138: this fork TRACKS output\data itself - 139 files, including the
   rem fork's own default.yaml with its key_binder bindings (Control+Shift+9,
   rem Control+Shift+numbersign, Shift+space, ...). plum resolves the
