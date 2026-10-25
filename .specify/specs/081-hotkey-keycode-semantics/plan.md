@@ -78,6 +78,7 @@
 | T2.6 | `[已做]` `gen-keysyms.ps1 -Check` 接进 CI（在 `run-test-suite.bat` 里） | CI 里出现 `OK: ... up to date` |
 | T2.8 | `[已做·2026-10-25]` **拆掉把整条流水线挡死的 lint 墙**（事故 L132）：`lint` job 自品牌分叉起就红（整树 lint，175 个文件里 78 个不合规），`build` needs `lint` ⇒ `build`/`test`/`sandbox-gate` **全被跳过**，门禁一次都没真正跑过。改用增量 lint（只查本次改动）+ 欠账单独报告 | 远端 CI 的 `lint` 变绿，且 `test` job 不再是 `skipped` |
 | T2.9 | `[可选]` 清掉 78 个文件的样式债（跑一遍 `clang-format -i`），清完可删掉 `--all --report-only` 那一步 | 欠账数 = 0 |
+| T2.10 | `[已做·2026-10-25]` **CI 补上 librime 依赖库的构建**：拆掉 lint 墙后 `build` job 第一次真跑就撞上 `Error: the librime dependency libraries are not built yet.`——`Weasel*` 要链接 `librime/deps/yaml-cpp/.../yaml-cpp.lib`，而 CI 的 workflow 从上游继承、上游不链接 yaml-cpp ⇒ **分叉特有的 CI 缺口**。在 Weasel 构建前加 `.\build.bat rime` | `build` job 不再在这一步失败 |
 | T2.7 | **仍阻塞**：`sandbox-gate` job 需要带 `sandbox` 标签的**自托管 Windows runner**（Windows Sandbox 是嵌套虚机，GitHub 官方 windows runner 没有嵌套虚拟化） | 要么自建 runner，要么把 P10 阶段拆成「可在官方 runner 上跑的纯静态部分」 |
 
 **依赖**：M1（基线清空后门禁才可能在 CI 里裸跑）。

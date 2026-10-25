@@ -48,11 +48,19 @@
     塞一个故意写坏的文件 ⇒ **79 / 176**；独立仓库里坏文件 ⇒ **exit 1**、修好 ⇒ **exit 0**。
 - [ ] T2.9 **【可选】清掉 78 个文件的样式债**：跑一遍 `clang-format -i` 即可，
   欠账数只减不增；清完之后可以把 `--all --report-only` 那一步也删掉
+- [x] T2.10 **【2026-10-25 本轮新增·已完成】CI 补上 librime 依赖库的构建**——
+  拆掉 lint 墙之后 `build` job 第一次真跑，立刻撞上：
+  `Build Weasel: Error: the librime dependency libraries are not built yet.`
+  根因：`Weasel*` 要链接 `librime/deps/yaml-cpp/build_Win32/Release/yaml-cpp.lib`，
+  `build.bat` 在它不存在时主动拒绝继续（L128 加的清晰报错）；
+  而 CI 的 workflow **从上游继承**，上游不链接 yaml-cpp ⇒ **分叉特有的 CI 缺口**。
+  → 在 Weasel 构建之前加一步 `.\build.bat rime`（它会拉子模块、打/撤 opencc-marisa 补丁、
+    为 Win32 与 x64 各构建依赖 + librime ⇒ 产物不再混用预编译 librime）。
 - [ ] T2.7 **仍阻塞**：`sandbox-gate` job 需要带 `sandbox` 标签的自托管 runner
   （Windows Sandbox 是嵌套虚机，官方 windows runner 不支持）——要么自建，
   要么把 P10 的静态部分拆到官方 runner 上跑。
-  ⚠️ 注意：**这已经不是「门禁跑不起来」的原因了**（lint 墙已拆，见 T2.8），
-  现在只差一台带嵌套虚拟化的机器。
+  ⚠️ 注意：**这已经不是「门禁跑不起来」的原因了**（lint 墙已拆，见 T2.8；
+  CI 构建缺步骤也已补，见 T2.10），现在只差一台带嵌套虚拟化的机器。
 
 ## M3 · 真机行为验收
 
