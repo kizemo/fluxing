@@ -65,7 +65,7 @@ jobs:
       - name: Checkout last commit
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
           fetch-depth: 0
 
       - name: Fetch all tags
@@ -255,7 +255,7 @@ jobs:
       - name: Checkout last commit
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
           fetch-depth: 0
 
       - name: Configure build environment
@@ -288,6 +288,20 @@ jobs:
       # if !errorlevel! NEQ 0 (delayed expansion) to correctly detect
       # negative Windows STATUS codes (e.g. 0xC0000005 from BOOST_ASSERT
       # abort). See L22.
+      #
+      # The test projects link rime.lib out of librime\dist_Win32\lib and
+      # yaml-cpp.lib out of librime\deps\yaml-cpp\build_Win32\Release. Neither
+      # is tracked in git (both are gitignored), and get-rime.ps1 puts
+      # rime.lib in lib\ and output\Win32\ -- not in the directory the test
+      # projects search. So the test job needs the same librime build the
+      # build job needs. This was invisible while the lint wall kept the whole
+      # workflow red -- see lessons-learned.md L132.
+      - name: Build librime and its dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\build.bat rime
+
       - name: Build + run all test projects
         shell: cmd
         run: scripts\run-tests.bat
@@ -309,12 +323,8 @@ jobs:
   # provide that, so this job targets a SELF-HOSTED runner carrying the
   # `sandbox` label:
   #
-      - name: Checkout last commit
-        uses: actions/checkout@v4
-        with:
-          # depth 2 so that the lint script can diff against HEAD~1 (the
-          # previous commit of a push, or the base tip of a pull_request).
-          fetch-depth: 2
+  #   .\actions-runner\_work\_register.cmd --labels sandbox
+  #
   # The probe below turns "this runner cannot run the gate" into a loud
   # failure instead of a silent green -- a green that never ran anything is
   # worse than a red one.
@@ -331,7 +341,7 @@ jobs:
       - name: Checkout last commit
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
           fetch-depth: 0
 
       - name: Download the installer

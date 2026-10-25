@@ -145,6 +145,17 @@ if %build_rime% == 1 (
   if not exist librime\build.bat (
     git submodule update --init --recursive
   )
+  rem L133: the deps of the librime submodule (deps/opencc, deps/yaml-cpp,
+  rem deps/marisa-trie, deps/leveldb, deps/glog) are submodules of librime
+  rem ITSELF. actions/checkout with "submodules: true" runs "git submodule
+  rem update --init --force" WITHOUT --recursive, so on CI the librime checkout
+  rem arrives with an empty deps\ directory and the opencc patch below dies
+  rem with "opencc CMakeLists.txt not found". The guard above only runs the
+  rem submodule update when librime\build.bat is missing, which is never the
+  rem case on CI. So check for the nested deps as well.
+  if not exist librime\deps\opencc\CMakeLists.txt (
+    git submodule update --init --recursive
+  )
   call scripts\prepare-librime-lua.bat
   if errorlevel 1 exit /b 1
   rem L121: deps/opencc needs a Windows build patch. find_library() cannot
