@@ -275,7 +275,12 @@ jobs:
         if: matrix.variant == 'msbuild'
         uses: actions/upload-artifact@v4
         with:
-          name: weasel-artifact-${{ env.git_ref_name }}
+          # L147: this fork names its artifact after itself. The old name
+          # was the upstream one (docs/Fluxing-code-map/06-customization-points.md:102
+          # lists this as a brand-fork item that was never done).
+          # Nothing downloads this artifact - the sandbox gate fetches
+          # fluxing-installer / fluxing-buildout / fluxing-tests.
+          name: fluxing-artifact-${{ env.git_ref_name }}
           if-no-files-found: error
           path: |
             .\output\archives\fluxing-*-installer.exe
