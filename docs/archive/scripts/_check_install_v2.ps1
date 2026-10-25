@@ -86,7 +86,7 @@ Write-Host "=== [2] Installed WeaselServer.exe on disk ==="
 #   bumped (FLUXING_VERSION 0.21.0 + WEASEL_BUILD 0).
 $expectedMd5 = 'A622CBD076405C23371AA3BCDBF70F49'  # v0.21.0.0 WeaselServer.exe (MSBuild Win32 Release, build 2026-08-10 09:05, Phase M milestone)
 $expectedFluxingMd5 = 'A3A07984AF4D60807F2B7F604F9228F3'  # v0.21.0.0 FluxingPhrasesDialog.exe (x64, MSBuild Win32 Release)
-$expectedInstallerMd5 = 'A43C72E7A8BF66B270AD34BEF8846030'  # v0.21.0.0 NSIS installer (build 2026-08-10 09:05, F3+F4 reliability + Phase M milestone)
+$expectedInstallerMd5 = '2BB3A8494739E3A42048B1ECE2620579'  # v0.21.0.6 NSIS installer (spec 080 QuickPanel end-to-end PASS + L113 binding fix; sandbox gate 46 = 38 PASS / 2 FAIL)
 $expectedBuildTime = '2026-08-10 09:05:00'  # v0.21.0.0 NSIS timestamp
 
 $paths = @(

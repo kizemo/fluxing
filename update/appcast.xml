@@ -37,7 +37,17 @@
 
     <language>zh-CN</language>
 
-    <item>
+        <item>
+      <title>火流猩 0.21.0.6</title>
+      <sparkle:releaseNotesLink>https://www.aiec.fun/pinyin/release-notes.html</sparkle:releaseNotesLink>
+      <pubDate>Sat, 25 Oct 2026 10:40:00 +0800</pubDate>
+      <enclosure url="https://www.aiec.fun/pinyin/download.php?file=fluxing-0.21.0.6-installer.exe"
+                 sparkle:version="0.21.0.6"
+                 sparkle:shortVersionString="0.21.0.6"
+                 length="42767557"
+                 type="application/octet-stream"/>
+    </item>
+<item>
       <title>火流猩 0.21.0.0</title>
       <sparkle:releaseNotesLink>https://www.aiec.fun/pinyin/release-notes.html</sparkle:releaseNotesLink>
       <pubDate>Mon, 10 Aug 2026 10:15:19 +0800</pubDate>
