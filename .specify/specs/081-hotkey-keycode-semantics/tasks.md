@@ -182,6 +182,40 @@
   → 修法：抽 `:render_props` 子程序（`pushd "%WEASEL_ROOT%"` → `cscript render.js` →
     判 `errorlevel` → `popd`），并在 `build.bat` 的**早期**（版本号算完之后）就调用一次
     ⇒ `rime` / `data` / `boost` 都产出它。日志实证：`Generated weasel.props`。
+- [x] T2.22 **【2026-10-25 本轮新增·已完成】CI 上传的产物路径改成这个 fork 真正的产物名**（事故 **L143**）——
+  `ci.yml` 的 `Upload artifacts` 步还找上游的 `weasel*.exe`，而本 fork 的安装包叫
+  `fluxing-*-installer.exe`（`install.nsi:51` 的 OutFile）。
+  - ⚠️ **这一步不会变红**：`actions/upload-artifact` 的 `if-no-files-found` 作用于
+    **整个 path 集合**，而 `debug_symbols.7z` 存在 ⇒ 步骤绿，
+    但名为 `weasel-artifact-<ref>` 的产物里**只有调试符号、没有安装包**
+    ⇒ 又一个「静默」的缺口（与 L132 同类）；
+  → 修法：上传路径改成 `fluxing-*-installer.exe`；
+    两个 release 步里的 `weasel*.exe` **故意不动** ——
+    它们的条件是 `github.repository == 'rime/weasel'`，只在上游仓库里跑，那里名字是对的。
+- [x] T2.23 **【2026-10-25 本轮新增·已完成】打包前先建 `output\archives`**（事故 **L144**）——
+  L141 修完后 NSIS 的报错往前推了一格（CI run `40198583873`）：
+  `Output: "...\output\archives\fluxing-...-installer.exe"` + `Can't open output file`。
+  - 根因：`output\archives` 被 **`.gitignore:27`（`/output/archives`）** 排除，
+    **全仓没有任何地方创建它** —— 维护者的机器上有，是因为历来的安装包就躺在里面；
+    而 **NSIS 不会为相对 OutFile 自动建这个子目录**；
+  → 修法：`build.bat` 在调 `makensis` 之前
+    `mkdir "%WEASEL_ROOT%\output\archives"`（不存在才建）并判退出码；
+  - 机制级实证（最小 NSIS 脚本 + scratch 目录）：
+    阴性（无该目录）⇒ **EXIT=1** + `Can't open output file` + `Error - aborting creation process`；
+    阳性（先 `mkdir`）⇒ **EXIT=0**，文件写出。
+- [ ] T2.24 **【2026-10-25 本轮新增·待决策】CI 产物挂的是上游版本号 `0.17.4`**（观测 **L145**）——
+  CI 日志里 makensis 收到 `FLUXING_VERSION=0.17.4` / `PRODUCT_VERSION=0.17.4.383.b901bc7`，
+  而本 fork 的版本线是 **0.21.0.x**。
+  - 根因：版本号只存在于**未被跟踪**的 `env.bat`（本机写着 0.21.0 / WEASEL_BUILD=6），
+    CI 用的 `env.vs2022.bat` 里没有 ⇒ `build.bat` 落回自己的**上游默认值**
+    （`VERSION_MAJOR=0 / MINOR=17 / PATCH=4`）
+    ⇒ **这个 fork 的版本号在 git 里没有构建期的源头**；
+  - 影响：CI 产物目前没有消费者（release 步只在上游仓库跑），
+    但**沙箱门禁**会安装 CI 产物 ⇒ 装一个自称 `0.17.4` 的包，
+    而「覆盖升级」基线是 `0.21.0.x` ⇒ 升级路径断言会失真；
+  - **未修**：版本落点是**发布策略**（版本该以哪个跟踪文件为准、每次发版改几处），
+    需要拍板。候选方案：把 `FLUXING_VERSION` + `VERSION_MAJOR/MINOR/PATCH`
+    写进**被跟踪的** `env.vs2022.bat`，让 CI 与本机用同一条版本线。
 - [x] T2.20 **【2026-10-25 本轮新增·已完成】安装器要用的文本产物补齐：NSIS 的相对路径按**脚本目录**解析**（事故 **L141**）——
   CI 的 `build (msbuild)` 红在 NSIS：
   `LicenseData: open failed "LICENSE.txt"`（`output\install.nsi` line 72）。

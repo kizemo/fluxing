@@ -12153,3 +12153,151 @@ powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1
 **关联**:
 
 - L137（工具链探测）、L139（`weasel.props`）
+
+## L143 - CI 上传产物的路径还写着上游的安装包名，于是安装包**静默**没被上传 (2026-10-25)
+
+**Incident**:
+
+- `install.nsi:51` 写的是：
+
+  ```
+  OutFile "archives\fluxing-${FLUXING_VERSION}.${WEASEL_BUILD}-installer.exe"
+  ```
+
+  ⇒ 这个 fork 产出的安装包叫 `fluxing-*-installer.exe`，**从来不叫 `weasel*.exe`**。
+
+- 而 `ci.yml` 的 `Upload artifacts` 步仍然写着：
+
+  ```yaml
+          path: |
+            .\output\archives\weasel*.exe
+            .\output\archives\debug_symbols.7z
+  ```
+
+**Root cause**:
+
+- 上游 rime/weasel 的安装包叫 `weasel*.exe`；品牌分叉改了产物名，
+  但 **CI 的路径没跟着改**（与 L134/L143 同一类「上游默认值残留」）。
+- **这一步不会变红**：`actions/upload-artifact` 的 `if-no-files-found` 作用于
+  **整个 path 集合**，而 `debug_symbols.7z` 是存在的 ⇒ 步骤绿，
+  只是名为 `weasel-artifact-<ref>` 的产物里**只有调试符号、没有安装包**。
+  ⇒ **一个静默的部分上传**——和 L132（lint 墙）同类：**看不出来**。
+
+**Fix**:
+
+- `ci.yml` 的 `Upload artifacts` 步改成 `fluxing-*-installer.exe`。
+- **故意不动**后面两个 release 步里的 `weasel*.exe`：它们的条件是
+  `github.repository == 'rime/weasel'`，**只在上游仓库里跑**，那里这个名字是对的。
+
+**Evidence**:
+
+- 产物名直接来自 `install.nsi:51`（不是猜的）；
+- `output\archives` 在 `.gitignore:27`，全仓只有 `ci.yml` 与沙箱工装引用它，
+  而沙箱工装用的就是 `fluxing-*-installer.exe`（`scripts/sandbox-gate/run-verify.ps1:39`）。
+
+**推广**:
+
+- **上游改名/改产物名时，要 grep 一遍所有「按名字找产物」的地方**：
+  CI 上传路径、沙箱工装的挑包规则、release 步的 files 列表。
+- **`if-no-files-found: error` 不是「每个 pattern 都要有」**——
+  它只看**整体有没有文件** ⇒ 多 pattern 时可能上传出一个「少了一半」的产物。
+  要逐个校验，就该在上传前自己 assert 每个文件存在。
+
+**关联**:
+
+- L132（lint 墙）、L134（xmake 腿连坐）、L141/L144（安装包这条链上的另外两道墙）
+
+## L144 - NSIS 不会为相对 OutFile 建子目录，而 `output\archives` 是 gitignore 的 (2026-10-25)
+
+**Incident**:
+
+- L141 修完后，CI 的 NSIS 报错往前推了一格（CI run `40198583873`）：
+
+  ```
+  Output: "D:\a\fluxing\fluxing\output\archives\fluxing-0.17.4.383-installer.exe"
+  Can't open output file
+  Error - aborting creation process
+  ```
+
+**Root cause**:
+
+- `install.nsi:51` 的 OutFile 是**相对脚本目录**的（`archives\...`），
+  而 `makensis` 默认 chdir 进脚本目录 ⇒ 实际路径是 `output\archives\...`。
+- `output\archives` 被 **`.gitignore:27`（`/output/archives`）** 排除，
+  **全仓没有任何地方创建它**：
+  - 维护者的机器上有这个目录，是因为**历来的安装包就躺在里面**；
+  - 干净检出里没有 ⇒ **NSIS 不会为相对 OutFile 自动建这个子目录**
+    ⇒ `Can't open output file`。
+- ⇒ 这也是一道**「本地能编、CI 编不出」**的墙（与 L141 同一类：
+  工作区残留掩盖了缺失的生成步骤）。
+
+**Fix**:
+
+- `build.bat` 在调 `makensis` 之前 `mkdir "%WEASEL_ROOT%\output\archives"`
+  （不存在才建），并判退出码。
+
+**Evidence**（机制级，最小 NSIS 脚本，scratch 目录）:
+
+| 用例 | `archives` 子目录 | 结果 |
+|---|---|---|
+| 阴性 | 不存在 | **EXIT=1**，`Output: ...\archives\probe-installer.exe`，`Can't open output file`，`Error - aborting creation process` |
+| 阳性 | 先 `mkdir` | **EXIT=0**，文件写出 |
+
+**推广**:
+
+- **「产物目录」也是构建产物**：gitignore 掉的目录不会被 checkout 出来，
+  也不会被任何脚本建出来 ⇒ 谁往里写，谁负责建。
+- 凡是 `OutFile` / 输出路径带**子目录**的打包步骤，都要先确认那个子目录
+  由谁创建 —— NSIS 这里**不会**帮你建。
+
+**关联**:
+
+- L141（同一段 NSIS 链上的前一道墙）、L143（产物名的上游残留）
+
+## L145 - CI 编出来的安装包挂着**上游的版本号** `0.17.4`（观测项，待决策） (2026-10-25)
+
+**Observation**:
+
+- CI run `40198583873` 里 makensis 收到的版本参数是：
+
+  ```
+  Command line defined: "FLUXING_VERSION=0.17.4"
+  Command line defined: "WEASEL_BUILD=383"
+  Command line defined: "PRODUCT_VERSION=0.17.4.383.b901bc7"
+  ```
+
+  而这个 fork 的版本线是 **0.21.0.x**（`CHANGELOG.md` 的最新条目是 0.21.0.6）。
+
+**Root cause**:
+
+- 版本号的来源是 `env.bat`（**未被跟踪**）：维护者本地的 `env.bat` 写着
+  `FLUXING_VERSION=0.21.0` / `WEASEL_BUILD=6`；
+- CI 用的是 `cp env.vs2022.bat env.bat`，而 **`env.vs2022.bat` 里没有版本号**
+  ⇒ `build.bat` 落回自己的**上游默认值**（`VERSION_MAJOR=0 / MINOR=17 / PATCH=4`）
+  ⇒ CI 产物自称 `0.17.4`。
+- ⇒ 也就是说：**这个 fork 的版本号在 git 里没有构建期的源头**
+  （`CHANGELOG.md` 记的是「发布过什么」，不是「现在该编成什么」）。
+
+**影响**:
+
+- CI 产物目前**没有消费者**（release 步的条件是 `github.repository == 'rime/weasel'`），
+  所以现在不致命；
+- 但**沙箱门禁**会下载并安装 CI 产物 ⇒ 装一个自称 `0.17.4` 的包，
+  而沙箱的「覆盖升级」基线是 `0.21.0.x` ⇒ 升级路径断言会失真。
+
+**Status / 决策**:
+
+- **未修**：版本号落点是**发布策略**（版本该以哪个跟踪文件为准、
+  每次发版要改几处），不该由一次 CI 修复替用户定。
+- 候选方案（供拍板）：把 `FLUXING_VERSION` + `VERSION_MAJOR/MINOR/PATCH`
+  写进**被跟踪的** `env.vs2022.bat`，让 CI 与本机用同一条版本线；
+  代价是每次发版要同步改这个文件。
+
+**推广**:
+
+- **品牌分叉不只改「名字」**：版本号、产物名、路径都是分叉面的一部分。
+  改了产物名（`fluxing-*`）却没改版本源头 ⇒ 两边对不上。
+
+**关联**:
+
+- L143（产物名的上游残留）、L144（产物目录的上游假设）
