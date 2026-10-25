@@ -1,4 +1,4 @@
-﻿﻿﻿s Learned — Fluxing (rime/weasel fork)
+﻿# Lessons Learned — Fluxing (rime/weasel fork)
 
 > **Scope**: `Fluxing` project (`rime/weasel` fork), reusable lessons distilled from dev incidents. Each entry: **Incident → Root cause → Lesson** format, source-recorded.
 > **Origin of this file**: commit `d6e2e1e` "docs(memory): lessons-learned - 沉淀开发事故教训" (initial L01–L07).
@@ -11259,3 +11259,65 @@ scripts/patch-librime-opencc-marisa.ps1 : opencc CMakeLists.txt not found:
 - L121（opencc/marisa 补丁的由来）
 - L128（`yaml-cpp.lib` 从 librime deps 构建树里链接）
 - spec 081 T2.10
+
+## L134 - 矩阵里一条「已知坏」的变体会连坐整条流水线——门禁在它后面全部 skipped (2026-10-25)
+
+**Incident**:
+
+- 拆掉 lint 墙（L132）之后，CI 的 `build` job 第一次真跑起来：
+  `Build librime and its dependencies` 两个变体都 **success**（L133 的修复生效了）。
+- 但整个 run 仍然是红的：`build (msbuild)` = **cancelled**，`build (xmake)` = failure，
+  `test` / `sandbox-gate` = **skipped**。
+- `build (msbuild)` 的 cancelled **不是它自己失败**，是被矩阵兄弟连累：
+  矩阵默认 `strategy.fail-fast: true`，xmake 变体一红，GitHub 立刻取消 msbuild 变体。
+- xmake 变体的失败是**本 fork 早就登记过的坏路径**：`AGENTS.md A15` / L127 / L128 写明
+  「发布一律走 `build.bat`（MSBuild）」。CI 的 matrix 是从上游 `rime/weasel` 继承的，
+  上游不需要这条腿，本 fork 也没把它当成发布路径。
+- 失败点全在 `Build Weasel` 这一步里：`unknown target(RimeWithWeasel) for WeaselTSF.deps!`、
+  `LNK1181: cannot open input file 'yaml-cpp.lib'`、`LNK1181: cannot open input file 'rime.lib'`、
+  `Error in script "install.nsi" on line 621`。
+  ⇒ 根子是**分叉特有的两处缺口**：fork 新增了 `RimeWithWeasel` 却没进 `xmake.lua`；
+  xmake 路径也没有像 MSBuild 那样去链 `librime/deps/` 里构建出来的 `yaml-cpp.lib` / `rime.lib`。
+
+**Fix**:
+
+- `strategy.fail-fast: false` ⇒ 一条腿红了不再取消兄弟腿。
+- 把 `Build Weasel` 拆成两个**按变体分别触发**的步骤：
+  - `Build Weasel (msbuild -- the release path)`：`if: matrix.variant == 'msbuild'`，**必需**。
+  - `Build Weasel (xmake -- best effort, non-blocking)`：`if: matrix.variant == 'xmake'`
+    + **步骤级** `continue-on-error: true`。
+- job 级再补一条 `continue-on-error: ${{ matrix.variant == 'xmake' }}`，
+  表达「xmake 腿是尽力而为」这条策略，同时兜住将来别的 xmake 步骤出错。
+
+**为什么必须在「步骤级」降级**:
+
+- 下游 `test` job 靠 `needs: build` 消费 build job 的结论。
+- **job 级 `continue-on-error` 只是不让整个 workflow 变红**；那个 job 自己的结论仍然是
+  `failure`，对 `needs` 来说仍然等于「失败了」⇒ `test` 照样 **skipped** ⇒ 门禁照样跑不到。
+- **步骤级 `continue-on-error` 会让 job 自己的结论变成 success** ⇒ 这才是
+  `needs` 看得到的确定性信号。
+- 换句话说：**要救下游 job，必须让上游 job 自己「绿」，而不是「红但被原谅」。**
+
+**推广**:
+
+- **矩阵里每条腿都要问一句「它是必需的吗」**。不是必需的那条，要么拆成独立的 job，
+  要么在**步骤级**降级；只加 `fail-fast: false` 是不够的（那只是让兄弟腿别被取消）。
+- **「已知坏」不等于「可以挡住别人」**：保留可见性 + 显式降级，两件事要分开做。
+- **判断依据仍然是远端 job 结论**：`skipped`（上游挂了，它根本没启动）与
+  `failed`（它自己跑了并失败）要分开看（L132）。
+- 顺带一条工装教训：**改完 `ci.yml` 必须重新解析 YAML 并打印 job 图**。
+  上一轮就因为补丁的索引顺序搞反，把一个 `Checkout` 步骤插进注释块，
+  被 YAML 解析成了 `test` job 的第 9 步。本轮用 `yaml.safe_load` 打印
+  `jobs = [lint, build, test, sandbox-gate]` 与每条腿的 `if` / `continue-on-error`，
+  才确认补丁只新增了预期的步骤、没改坏 `needs`。
+- 还有一条：**字节索引不是字符索引**。本轮修本文件时发现，按字节偏移去切 UTF-8 文本
+  会吃掉标题开头的 `# Lesson`，还会每追加一次就多出一个 BOM（BOM 1 → 2 → 3）。
+  ⇒ 追加文档要用**字符级**操作或**纯字节拼接**，并在追加后校验
+  「BOM 数量 / 首行内容 / CRLF 纯度 / FFFD 计数」。
+
+**关联**:
+
+- L132（lint 墙挡住了整条流水线；本条是同一类「链式跳过」的第二道墙）
+- L133（CI 构建缺口：librime 依赖 + 嵌套子模块；本条是它后面露出来的第三道墙）
+- L127 / L128（xmake 这条坏路径的由来；`AGENTS.md A15`）
+- spec 081 T2.7（`sandbox-gate` job 仍需带 `sandbox` 标签的自托管 runner）
