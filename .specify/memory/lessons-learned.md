@@ -12462,3 +12462,68 @@ Output: "D:\a\fluxing\fluxing\output\archives\fluxing-0.21.0.30-installer.exe"
 **关联**:
 
 - L143（上传路径）、L145（版本号源头）、L147（artifact 名）
+
+---
+
+## L148 - ADR 0009 落地：删掉 2 条**永远不可能触发**的重复死绑定（2026-10-25）
+
+**Date**: 2026-10-25
+**Context**: spec 081 M1。ADR 0009 拍板「不改前端按键语义，改配置」之后，
+本轮只做**用户明确授权的那一半**：删掉 2 条功能重复的死绑定。
+
+**Incident**:
+
+- 用户实机反馈「快捷键有问题」→ 第 6 轮沙箱复验定位到 6 条死绑定。
+  其中 `Control+Shift+9` / `Control+Shift+0` 是**功能重复**的：
+  同一功能另有可达的孪生键 `Control+Shift+numbersign` / `Control+Shift+dollar`。
+  这 2 条留着不只是「无效」，还会**骗人** —— 它们出现在配置里，
+  也出现在「快捷键设置」界面的内置快捷键表里，用户按下去毫无反应。
+
+**Root cause**:
+
+- TSF 前端发的是「按键产生的**字符**」（`WeaselTSF/KeyEvent.cpp:51` 的
+  `ToUnicodeEx`），librime 按 `(keycode, modifier)` 精确匹配
+  （`librime/src/rime/key_event.h:43`）。
+- 于是 `accept: Control+Shift+9` 想要 keycode `0x39`（`9`），
+  前端发的是 `0x28`（`(`）⇒ **永不匹配**。`Control+Shift+0` 同理
+  （想要 `0x30`，收到 `0x29` 的 `)`）。
+
+**Fix**:
+
+- `output/data/default.yaml`：删掉那 2 条，保留可达的孪生键；
+- `WeaselServer/ShortcutSettings.cpp`：内置 / 默认快捷键表同步改成孪生键 ——
+  **否则「快捷键设置」保存时会把死绑定写回用户的 `custom.yaml`**，
+  界面也仍然显示一个按不动的键；
+- `test/TestDefaultHotkeys`：断言改成孪生键 + 加**否定断言**钉住那 2 条不许复活；
+  active 绑定数 44 → 42；
+- `test/TestHotkeyBindings/known-dead-bindings.txt`：基线 6 条 → 4 条。
+
+**验收**：门禁两轮 `RESULT|PASS`；出货配置
+`SUMMARY|bindings=31|reachable=27|dead=0|known_dead=4|known_dead_keys=4`。
+
+**顺带发现（本轮只记录，未修）**:
+
+- `ShortcutSettings::NormalizeCombo()` 用**虚拟键码**拼 `accept:` 字符串，
+  所以用户在设置界面按 `Ctrl+Shift+9` 抓到的还是 `Control+Shift+9`（死绑定）；
+  按 `Ctrl+Shift+A` 抓到的是 `Control+Shift+a`，而 librime 的 key table
+  **只有大写 `A` 没有小写 `a`** ⇒ 那条绑定会被 librime 当 invalid 丢掉。
+  ⇒ **设置界面本身就能造出死绑定**。要修必须让抓键路径变成 layout-aware
+  （跟 `WeaselTSF/KeyEvent.cpp` 一样走 `ToUnicodeEx`），属独立的产品改动。
+- 出货 `default.yaml` 里 `full_shape` 与 `emoji` 两个开关**没有任何绑定**
+  （两条都被注释掉了），但设置界面照样列了 `Control+Shift+F` /
+  `Control+Shift+e`。
+
+**推广**:
+
+- **「删掉一条死绑定」不是只删 yaml 那一行。** 配置、界面内置表、
+  测试断言、已知死绑定基线、文档键位表是**同一件事的五个面**，
+  少改一个面就留下一个新的「界面在骗人」。
+- **同一条配置事实散落在 4 个地方时，改一处必须把其余几处一起改**：
+  `output/data/default.yaml` / `WeaselServer/ShortcutSettings.cpp` /
+  `test/TestDefaultHotkeys` / `test/TestHotkeyBindings/known-dead-bindings.txt`。
+  本轮一开始只想到前两处，是靠「门禁会不会红」倒逼出后两处的。
+- **踩到的一脚**：CI 的 lint 只查「本次改动触及的 C/C++ 文件」，
+  而这两个文件本来就有 clang-format 欠账 ⇒ 一改就红。
+  正确做法是把它们**先格式化再改**（仓库规则：动了就得干净）。
+
+**关联**: ADR 0009、spec 081 T1.5-T1.8 / T1.15、L131、L113

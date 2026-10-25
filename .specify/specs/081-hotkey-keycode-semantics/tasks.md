@@ -5,9 +5,9 @@
 
 ## M0 · 拍板与文档债
 
-- [ ] T0.1 用户确认 ADR 0009 的方向（改配置，不改前端按键语义），状态 `Proposed` → `Accepted`
-- [ ] T0.2 《Rime-设置说明书-重点快捷键.md》§9.1：条数与算式对齐实测（当前 33 条，不是「22 条」也不是「8 条 Shift+全角」）
-- [ ] T0.3 同文 §10.2：删掉「被系统级 hotkey 抢了」的错误归因，改指 ADR 0009
+- [x] T0.1 用户确认 ADR 0009 的方向（改配置，不改前端按键语义），状态 `Proposed` → `Accepted`（2026-10-25 拍板「删 2 条重复死绑定」，其余 4 条 `Shift+标点` 改名待办）
+- [x] T0.2 《Rime-设置说明书-重点快捷键.md》§9.1：条数与算式对齐实测（删 2 条后 = 出货 `default.yaml` 27 + `rime_ice.custom.yaml` 4 = **31 条**；原文「共 22 条 = 4+2+4+16+8」本身算式就不成立（=34），已改成实测值；L113 删掉的 4 条中文全角 `Shift+标点` 也一并从摘录里去掉）
+- [x] T0.3 同文 §10.2：删掉「被系统级 hotkey 抢了」的错误归因，改指 ADR 0009（md + html 两份都改）
 - [x] T0.4 `CONTEXT.md` §4 加 invariant 16「TSF 前端发的是字符不是物理键」
 - [x] T0.5 `CONTEXT.md` §7 去掉「`docs/adr/` is currently empty」的过时描述
 - [ ] T0.6 `CONTEXT.md` §7 的 ADR 章节格式与 `docs/adr/README.md`（MADR）统一
@@ -18,15 +18,16 @@
 - [ ] T1.2 同上：`Shift+backslash` → `Shift+bar`
 - [ ] T1.3 同上：`Shift+bracketleft` → `Shift+braceleft`
 - [ ] T1.4 同上：`Shift+bracketright` → `Shift+braceright`
-- [ ] T1.5 `output/data/default.yaml`：删 `Control+Shift+9`（孪生键 `Control+Shift+numbersign`）
-- [ ] T1.6 同上：删 `Control+Shift+0`（孪生键 `Control+Shift+dollar`）
-- [ ] T1.7 `test/TestHotkeyBindings/known-dead-bindings.txt` 清空
-- [ ] T1.8 `test/TestDefaultHotkeys`：把「切换中英标点 = `Control+Shift+9`」的断言改成 `Control+Shift+numbersign`；「切换简繁 = `Control+Shift+0`」改成 `Control+Shift+dollar`
+- [x] T1.5 `output/data/default.yaml`：删 `Control+Shift+9`（孪生键 `Control+Shift+numbersign`）（2026-10-25 落地；行首原位置留了 ADR 0009 说明注释）
+- [x] T1.6 同上：删 `Control+Shift+0`（孪生键 `Control+Shift+dollar`）
+- [ ] T1.7 `test/TestHotkeyBindings/known-dead-bindings.txt` 清空 —— **本轮只完成一半**：6 条 → 4 条（本轮删掉的是 `default.yaml` 那 2 条重复死绑定）；剩下 4 条 `Shift+标点` 等 T1.1-T1.4 改名修好后才清零
+- [x] T1.8 `test/TestDefaultHotkeys`：把「切换中英标点 = `Control+Shift+9`」的断言改成 `Control+Shift+numbersign`；「切换简繁 = `Control+Shift+0`」改成 `Control+Shift+dollar`（并补 2 条**否定断言**钉住死绑定不许复活；active 绑定数 44 → 42）
 - [ ] T1.9 同上：4 条 Shift+标点的断言同步改成字符键名
 - [ ] T1.10 `output/data/user-custom/double_pinyin_sogou.custom.yaml`：同样的 4 条一并修
 - [ ] T1.11 `output/data/user-custom/radical_pinyin.custom.yaml`：同样的 4 条一并修
 - [ ] T1.12 `user-custom/*.custom.yaml` 里「保留的 4 条……实际生效」的注释改成说明**为什么写字符键名**
-- [ ] T1.13 改完跑 `Release\TestHotkeyBindings.exe`（**不带** `--baseline`）→ 必须 `dead=0`
+- [ ] T1.13 改完跑 `Release\TestHotkeyBindings.exe`（**不带** `--baseline`）→ 必须 `dead=0`（还差 4 条 `Shift+标点`，本轮带 `--baseline` 跑：`dead=0|known_dead=4`）
+- [x] T1.15 `WeaselServer/ShortcutSettings.cpp`：内置 / 默认快捷键表里的 `Control+Shift+9` / `Control+Shift+0` 改成可达的 `Control+Shift+numbersign` / `Control+Shift+dollar`（否则「快捷键设置」界面仍显示一个按不动的键，保存时还会把死绑定写回用户的 `custom.yaml`）
 - [ ] T1.14 重新打包安装包（`build.bat weasel installer`）
 - [ ] T1.15 静默装机 smoke test（AGENTS.md §2.5），结果写进 commit message
 

@@ -1,6 +1,6 @@
 # 0009. The TSF front end sends the produced character, not the physical key
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-10-25
 - **Deciders**: Fluxing maintainers
 - **Related**: spec 081, lessons L131, `WeaselTSF/KeyEvent.cpp`, `librime/src/rime/key_event.h`, verification report §3.14
@@ -78,6 +78,40 @@ We keep the "send the produced character" semantics and fix the
   with the wrong key name. Fixing the name keeps the feature.
 - **Keep the six dead bindings and document them.** Rejected: two of them
   are redundant and mislead users; four of them are a broken promise.
+
+## Implementation status (2026-10-25)
+
+**Accepted and partly implemented.** The maintainers approved the direction
+(keep the "send the produced character" semantics, fix the configuration) and
+released the half that needs no further product decision:
+
+| Part | State | Where |
+|---|---|---|
+| Delete the two redundant dead chords `Control+Shift+9` / `Control+Shift+0` | **done** | `output/data/default.yaml` |
+| Point `test/TestDefaultHotkeys` at the reachable twins, and pin the dead ones with negative assertions | **done** | `test/TestDefaultHotkeys/TestDefaultHotkeys.cpp` |
+| Shrink `known-dead-bindings.txt` from 6 entries to 4 | **done** | `test/TestHotkeyBindings/known-dead-bindings.txt` |
+| Keep the settings UI's builtin / default shortcut table in sync | **done** | `WeaselServer/ShortcutSettings.cpp` |
+| Rename the four `Shift+punctuation` bindings to the character key names | **not started** | still in `known-dead-bindings.txt`; spec 081 T1.1-T1.4 |
+
+Gate output after the change: `bindings=31|reachable=27|dead=0|known_dead=4`.
+
+### Two follow-ups this decision exposed
+
+1. **The settings UI can still manufacture a dead binding.**
+   `ShortcutSettings::NormalizeCombo()` builds the `accept:` string from the
+   *virtual key* (`VKeyToName`), so a captured `Ctrl+Shift+9` becomes
+   `Control+Shift+9` -- the chord this ADR proves can never fire. A captured
+   `Ctrl+Shift+A` becomes `Control+Shift+a`, and librime's key table has no
+   lowercase `a` at all, so that binding is dropped as invalid. Fixing it
+   means making the capture path layout-aware (`ToUnicodeEx`, exactly what
+   `WeaselTSF/KeyEvent.cpp` does), which is a product change of its own and
+   is **not** part of this change. Tracked as spec 081 T1.9 / T1.12.
+
+2. **`full_shape` and `emoji` have no binding at all.**
+   The shipped `default.yaml` has both toggles commented out, yet the
+   settings UI still offers `Control+Shift+F` (full/half width) and
+   `Control+Shift+e` (emoji) as if they were bound. Whether to bind them --
+   and to what chord -- is an open product decision.
 
 ## Consequences
 

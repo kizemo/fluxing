@@ -1,3 +1,42 @@
+## [0.21.0.7-fluxing] - 2026-10-25
+
+### fix(fluxing): 删掉 2 条**永远不可能触发**的重复快捷键（ADR 0009）
+
+**User-visible**:
+
+- 「切换中英标点」用 `Ctrl+Shift+#`（`Control+Shift+numbersign`），
+  「切换简繁」用 `Ctrl+Shift+$`（`Control+Shift+dollar`）。
+- 出货配置里那两条 `Ctrl+Shift+9` / `Ctrl+Shift+0` **已删除**。
+  它们此前一直躺在配置里、也在「快捷键设置」界面的内置快捷键表里，
+  但**按下去从来没有反应**。
+- 行为不变：这两个功能本来就有可达的孪生键，
+  用户按 `Ctrl+Shift+#` / `Ctrl+Shift+$` 的效果和以前完全一样。
+
+**Root cause**:
+
+- 本 fork 的 TSF 前端发的是「按键产生的**字符**」，不是物理键
+  （`WeaselTSF/KeyEvent.cpp:51` 的 `ToUnicodeEx`）；
+  librime 按 `(keycode, modifier)` 精确匹配（`librime/src/rime/key_event.h:43`）。
+- 于是 `accept: Control+Shift+9` 想要 keycode `0x39`（`9`），
+  前端发来的却是 `0x28`（`(`）⇒ **永不匹配**；`Control+Shift+0` 同理
+  （想要 `0x30`，收到 `0x29` 的 `)`）。
+- 详见 **ADR 0009**（`docs/adr/0009-tsf-frontend-sends-character-not-key.md`）。
+
+**Fix**:
+
+- `output/data/default.yaml`：删掉那 2 条死绑定，保留可达的孪生键；
+- `WeaselServer/ShortcutSettings.cpp`：内置 / 默认快捷键表同步改成孪生键 ——
+  否则「快捷键设置」界面仍会显示一个按不动的键，
+  保存时还会把死绑定写回用户的 `custom.yaml`；
+- `test/TestDefaultHotkeys`：断言改成孪生键，并加**否定断言**钉住那 2 条不许复活；
+- `test/TestHotkeyBindings/known-dead-bindings.txt`：基线 6 条 → 4 条
+  （剩下 4 条 `Shift+标点` 是「改名修好」那一半，本轮未授权改）。
+
+**验收**：门禁两轮 `RESULT|PASS`；出货配置
+`bindings=31|reachable=27|dead=0|known_dead=4`。
+
+**事故记录**：**ADR 0009 / L148**。
+
 ## [0.21.0.6-fluxing] - 2026-10-24
 
 ### fix(fluxing): 移除 3 份 custom.yaml 里 4 条从未生效的 Shift+标点绑定

@@ -7,7 +7,7 @@
 >
 > **维护周期**：每次架构性变更后更新；每个 spec ship 后追加相关章节。
 >
-> **最后更新**：2026-10-24（0.21.0.6 版本快照刷新 + 沙箱门禁复验（46 项 = 37 PASS / 3 FAIL））
+> **最后更新**：2026-10-25（0.21.0.7：ADR 0009 删掉 2 条永不触发的重复快捷键）
 
 ---
 
@@ -15,7 +15,7 @@
 
 - **项目路径**：`F:\soft\00selfmade\rime_claude`
 - **当前分支**：`Fluxing`（推到 `kizemo/Fluxing`）
-- **当前版本**：v0.21.0.6（已构建并通过沙箱门禁，待推送 / 发布）：L113 移除 3 份 `custom.yaml`
+- **当前版本**：v0.21.0.7（开发中）：ADR 0009 删掉 `output/data/default.yaml` 里 2 条永不触发的重复快捷键（`Control+Shift+9` / `Control+Shift+0`）；上一个已 ship 版本 v0.21.0.6：L113 移除 3 份 `custom.yaml`
   里 4 条从未生效的 `Shift+标点` 绑定 + L127 / L128 发布构建统一走 `build.bat`（MSBuild）
 - **最近 commit**：见 `git log --oneline -3`（`Fluxing` 分支，2026-10-24，领先 `kizemo/Fluxing` 的本地提交尚未推送）
 - **用户安装路径**：`D:\Program Files\fluxing\`（用户原始部署，绝对不能改！）
@@ -300,11 +300,10 @@ key_binder:
     - { when: has_menu, accept: Shift+Shift_R, send: 3 }
     - { when: has_menu, accept: Control+1, send: 2 }
     - { when: has_menu, accept: Control+2, send: 3 }
-    - { when: always, toggle: ascii_punct, accept: Control+Shift+9 }
     - { when: always, toggle: ascii_mode, accept: Shift+space }   # 当前切中英
     - { when: always, toggle: ascii_punct, accept: Control+Shift+numbersign }
-    - { when: always, toggle: traditionalization, accept: Control+Shift+0 }
     - { when: always, toggle: traditionalization, accept: Control+Shift+dollar }
+    # ADR 0009 (L148): 原来的 Control+Shift+9 / Control+Shift+0 永远不触发，已删除
 ```
 
 ### 5.2 librime KeyEvent 实现（`librime\src\rime\key_event.h:52`）

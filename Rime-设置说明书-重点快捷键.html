@@ -681,8 +681,8 @@ patch:
 </table>
 <p><strong>多个修饰符</strong>:用 <code>+</code> 连接,<strong>顺序无关</strong>。</p>
 <ul>
-<li><code>Control+Shift+9</code> ✅</li>
-<li><code>Shift+Control+9</code> ✅ (但建议固定顺序)</li>
+<li><code>Control+Shift+numbersign</code> ✅</li>
+<li><code>Shift+Control+numbersign</code> ✅ (但建议固定顺序)</li>
 </ul>
 <p><strong>按键名</strong>:来自 X11 keysym,<strong>去掉前缀 <code>XK_</code></strong>(完整列表见 <code>librime/include/X11/keysymdef.h</code>)。</p>
 <p>常用按键名速查:</p>
@@ -769,8 +769,8 @@ patch:
     - {when: composing, accept: "Alt+Right",  send: Shift+Right}
 
     <span class="c"># === 切换中英标点 (始终生效) ===</span>
-    - {when: always, accept: "Control+Shift+9", toggle: ascii_punct}
-    - {when: always, accept: "Control+Shift+0", toggle: traditionalization}
+    - {when: always, accept: "Control+Shift+numbersign", toggle: ascii_punct}
+    - {when: always, accept: "Control+Shift+dollar", toggle: traditionalization}
 
     <span class="c"># === 切换 ASCII 模式 (始终生效) ===</span>
     - {when: always, accept: "Control+grave", toggle: ascii_mode}
@@ -908,8 +908,8 @@ patch:
 <tr><td>翻页</td><td><code>equal</code></td><td><code>Page_Down</code></td><td>paging</td><td><code>=</code> 向后翻</td></tr>
 <tr><td>翻页</td><td><code>comma</code></td><td><code>Page_Up</code></td><td>paging</td><td><code>,</code> 向前翻</td></tr>
 <tr><td>翻页</td><td><code>period</code></td><td><code>Page_Down</code></td><td>has_menu</td><td><code>.</code> 向后翻</td></tr>
-<tr><td>开关</td><td><code>Control+Shift+9</code> / <code>Control+Shift+numbersign</code></td><td>toggle ascii_punct</td><td>always</td><td>切中英标点</td></tr>
-<tr><td>开关</td><td><code>Control+Shift+0</code> / <code>Control+Shift+dollar</code></td><td>toggle traditionalization</td><td>always</td><td>切繁简</td></tr>
+<tr><td>开关</td><td><code>Control+Shift+numbersign</code></td><td>toggle ascii_punct</td><td>always</td><td>切中英标点</td></tr>
+<tr><td>开关</td><td><code>Control+Shift+dollar</code></td><td>toggle traditionalization</td><td>always</td><td>切繁简</td></tr>
 <tr><td>开关</td><td><code>Shift+space</code></td><td>toggle full_shape</td><td>always</td><td>切全半角</td></tr>
 <tr><td>开关</td><td><code>Control+Shift+e</code></td><td>toggle emoji</td><td>always</td><td>切 emoji</td></tr>
 <tr><td>选字</td><td>(由 selector 默认)</td><td><code>1</code>~<code>9</code> 选候选</td><td>has_menu</td><td>数字键选字</td></tr>
@@ -923,7 +923,8 @@ patch:
 <tr><td>小键盘</td><td><code>KP_Decimal</code></td><td><code>period</code></td><td>composing</td><td>小键盘 .</td></tr>
 </tbody>
 </table>
-<blockquote>来源:<code>rime/librime</code> 源码 + <code>default.yaml</code>;具体到本机 rime_ice 还有 <code>Shift+标点 → 中文标点</code> 8 条,见 <a href="#s9">§9</a>。</blockquote>
+<blockquote>来源:<code>rime/librime</code> 源码 + <code>default.yaml</code>;具体到本机 rime_ice 还有 <code>Shift+标点 → 符号</code> 4 条,见 <a href="#s9">§9</a>。<br>
+⚠️ <strong>ADR 0009(2026-10-25)</strong>:本 fork 的 TSF 前端发的是「按键产生的字符」,所以 <code>Control+Shift+9</code> / <code>Control+Shift+0</code> 这类<strong>写数字键名</strong>的组合<strong>永远不触发</strong> ⇒ 已从出货 <code>default.yaml</code> 删除。切中英标点用 <code>Control+Shift+numbersign</code>,切简繁用 <code>Control+Shift+dollar</code>。</blockquote>
 </section>
 
 <!-- §9 本机现状对照 -->
@@ -931,7 +932,7 @@ patch:
 <h2>§9 · 本机现状对照(<code>output/data/</code>)</h2>
 
 <h3 id="s9-1">9.1 当前 <code>key_binder/bindings</code> (<code>rime_ice.schema.yaml:295-339</code>)</h3>
-<p>共 22 条 = 4 光标 + 2 翻页 + 4 开关 + 16 小键盘 + 8 Shift+标点。来源:rime_ice default + 用户 custom 8 条。</p>
+<p>共 31 条 = 出货 <code>default.yaml</code> 27 条 + <code>user-custom/rime_ice.custom.yaml</code> 4 条(门禁实测:<code>TestHotkeyBindings</code> → <code>bindings=31|reachable=27|dead=0|known_dead=4</code>)。下面只摘录与本机 rime_ice 相关的部分。</p>
 <pre class="lang-tag" data-lang="yaml"><code>key_binder:
   search: "`"
   bindings:
@@ -946,9 +947,9 @@ patch:
     - {accept: period, send: Page_Down, when: has_menu}  <span class="c"># . = 下一页</span>
 
     <span class="c"># --- 开关 (保留 default) ---</span>
-    - {accept: "Control+Shift+9",          toggle: ascii_punct, when: always}
-    - {accept: "Control+Shift+numbersign", toggle: ascii_punct, when: always}  <span class="c"># 同一 binding 两条等价键</span>
-    - {accept: "Control+Shift+0",          toggle: traditionalization, when: always}
+    <span class="c"># ADR 0009:带修饰键的 accept 必须写「该组合产生的字符」的键名,</span>
+    <span class="c"># 所以切中英标点是 Control+Shift+numbersign(#),切简繁是 Control+Shift+dollar($)。</span>
+    - {accept: "Control+Shift+numbersign", toggle: ascii_punct, when: always}
     - {accept: "Control+Shift+dollar",     toggle: traditionalization, when: always}
 
     <span class="c"># --- 小键盘 (保留 default, 16 条) ---</span>
@@ -963,11 +964,9 @@ patch:
     - {accept: KP_Divide,    send: slash,    when: composing}
     - {accept: KP_Enter,     send: Return,   when: composing}
 
-    <span class="c"># --- Shift+标点 → 中文标点 (用户自定义 8 条) ---</span>
-    - {when: always, accept: "Shift+comma",       send: "《"}
-    - {when: always, accept: "Shift+period",      send: "》"}
-    - {when: always, accept: "Shift+slash",       send: "？"}
-    - {when: always, accept: "Shift+semicolon",   send: "："}
+    <span class="c"># --- Shift+标点 → 符号 (用户自定义 4 条) ---</span>
+    <span class="c"># ⚠️ ADR 0009:这 4 条也**永远不触发** —— 前端发的是 Shift 后的字符</span>
+    <span class="c"># (0x22 / 0x7C / 0x7B / 0x7D),不是基础键。改键名才能修,见 spec 081 T1.1-T1.4。</span>
     - {when: always, accept: "Shift+apostrophe",  send: '"'}
     - {when: always, accept: "Shift+backslash",   send: "|"}
     - {when: always, accept: "Shift+bracketleft", send: "{"}
@@ -1047,7 +1046,7 @@ patch:
 <tr><td>中文标点怎么输都不对</td><td><code>recognizer/patterns/punct</code> 覆盖了 <code>punctuator</code></td><td>把 <code>key_binder</code> 放 <code>engine/processors</code> 头部</td></tr>
 <tr><td><code>Shift+Tab</code> 没用</td><td>modifier 顺序错(应该是 <code>Shift+Tab</code> 不是 <code>Tab+Shift</code>)</td><td>固定修饰符顺序:Shift → Control → Alt</td></tr>
 <tr><td>单独 Shift 切不了中英(小狼毫)</td><td>key_binder 的 release 事件 modifier 比较 bug</td><td>走 <code>ascii_composer/switch_key</code></td></tr>
-<tr><td><code>Ctrl+Shift+9</code> 切不动标点</td><td>被系统级 hotkey 抢了</td><td>改用 <code>Control+Shift+numbersign</code> 备用</td></tr>
+<tr><td><code>Ctrl+Shift+9</code> 切不动标点</td><td>前端发的是 <code>(</code> 不是 <code>9</code>,这个组合<strong>永远不触发</strong></td><td>用 <code>Control+Shift+numbersign</code>(ADR 0009)</td></tr>
 <tr><td><code>Control+grave</code> 没用</td><td>大小写或修饰符拼错</td><td>用字面字符时<strong>加引号</strong></td></tr>
 <tr><td><code>bindings: [a, b, c]</code> 整段失效</td><td>写成 list,不是 list of map</td><td>写成 <code>- {when:..., accept:...}</code></td></tr>
 </tbody>

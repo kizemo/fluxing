@@ -478,8 +478,8 @@ key_binder:
 | `Caps_Lock` | Caps Lock (一般用在 `ascii_composer/switch_key`,不在 key_binder) |
 
 **多个修饰符**:用 `+` 连接,**顺序无关**。
-- `Control+Shift+9` ✅
-- `Shift+Control+9` ✅ (但建议固定顺序)
+- `Control+Shift+numbersign` ✅
+- `Shift+Control+numbersign` ✅ (但建议固定顺序)
 
 **按键名**:来自 X11 keysym,**去掉前缀 `XK_`**(完整列表见 `librime/include/X11/keysymdef.h`)。
 
@@ -572,8 +572,8 @@ key_binder:
     - {when: composing, accept: "Alt+Right",  send: Shift+Right}
 
     # === 切换中英标点 (始终生效) ===
-    - {when: always, accept: "Control+Shift+9", toggle: ascii_punct}
-    - {when: always, accept: "Control+Shift+0", toggle: traditionalization}
+    - {when: always, accept: "Control+Shift+numbersign", toggle: ascii_punct}
+    - {when: always, accept: "Control+Shift+dollar", toggle: traditionalization}
 
     # === 切换 ASCII 模式 (始终生效) ===
     - {when: always, accept: "Control+grave", toggle: ascii_mode}
@@ -721,8 +721,8 @@ Rime `default.yaml` 中**默认的 key_binder/bindings**(小狼毫/鼠鬚管通�
 | 翻页 | `equal` | `Page_Down` | paging | `=` 向后翻 |
 | 翻页 | `comma` | `Page_Up` | paging | `,` 向前翻 |
 | 翻页 | `period` | `Page_Down` | has_menu | `.` 向后翻 |
-| 开关 | `Control+Shift+9` / `Control+Shift+numbersign` | toggle ascii_punct | always | 切中英标点 |
-| 开关 | `Control+Shift+0` / `Control+Shift+dollar` | toggle traditionalization | always | 切繁简 |
+| 开关 | `Control+Shift+numbersign` | toggle ascii_punct | always | 切中英标点 |
+| 开关 | `Control+Shift+dollar` | toggle traditionalization | always | 切繁简 |
 | 开关 | `Shift+space` | toggle full_shape | always | 切全半角 |
 | 开关 | `Control+Shift+e` | toggle emoji | always | 切 emoji |
 | 选字 | (由 selector 默认) | `1`~`9` 选候选 | has_menu | 数字键选字 |
@@ -735,7 +735,12 @@ Rime `default.yaml` 中**默认的 key_binder/bindings**(小狼毫/鼠鬚管通�
 | 小键盘 | `KP_Divide` | `slash` | composing | 小键盘 / |
 | 小键盘 | `KP_Decimal` | `period` | composing | 小键盘 . |
 
-> 来源:`rime/librime` 源码 + `default.yaml`;具体到本机 rime_ice 还有 `Shift+标点 → 中文标点` 8 条,见 §9。
+> 来源:`rime/librime` 源码 + `default.yaml`;具体到本机 rime_ice 还有 `Shift+标点 → 符号` 4 条,见 §9。
+>
+> ⚠️ **ADR 0009(2026-10-25)**:本 fork 的 TSF 前端发的是「按键产生的字符」,
+> 所以 `Control+Shift+9` / `Control+Shift+0` 这类**写数字键名**的组合**永远不触发**
+> ⇒ 已从出货 `default.yaml` 删除。切中英标点用 `Control+Shift+numbersign`,
+> 切简繁用 `Control+Shift+dollar`。
 
 ---
 
@@ -743,7 +748,9 @@ Rime `default.yaml` 中**默认的 key_binder/bindings**(小狼毫/鼠鬚管通�
 
 ### 9.1 当前 `key_binder/bindings` (`rime_ice.schema.yaml:295-339`)
 
-共 22 条 = 4 光标 + 2 翻页 + 4 开关 + 16 小键盘 + 8 Shift+标点。来源:rime_ice default + 用户 custom 8 条。
+共 31 条 = 出货 `default.yaml` 27 条 + `user-custom/rime_ice.custom.yaml` 4 条
+(门禁实测:`TestHotkeyBindings` → `bindings=31|reachable=27|dead=0|known_dead=4`)。
+下面只摘录与本机 rime_ice 相关的部分。
 
 ```yaml
 key_binder:
@@ -760,10 +767,10 @@ key_binder:
     - {accept: period, send: Page_Down, when: has_menu}  # . = 下一页
 
     # --- 开关 (保留 default) ---
-    - {accept: "Control+Shift+9",        toggle: ascii_punct, when: always}
-    - {accept: "Control+Shift+numbersign", toggle: ascii_punct, when: always}  # 同一 binding 两条等价键
-    - {accept: "Control+Shift+0",        toggle: traditionalization, when: always}
-    - {accept: "Control+Shift+dollar",   toggle: traditionalization, when: always}
+    # ADR 0009:带修饰键的 accept 必须写「该组合产生的字符」的键名,
+    # 所以切中英标点是 Control+Shift+numbersign(#),切简繁是 Control+Shift+dollar($)。
+    - {accept: "Control+Shift+numbersign", toggle: ascii_punct, when: always}
+    - {accept: "Control+Shift+dollar",     toggle: traditionalization, when: always}
 
     # --- 小键盘 (保留 default, 16 条) ---
     - {accept: KP_0,         send: 0,        when: composing}
@@ -777,11 +784,9 @@ key_binder:
     - {accept: KP_Divide,    send: slash,    when: composing}
     - {accept: KP_Enter,     send: Return,   when: composing}
 
-    # --- Shift+标点 → 中文标点 (用户自定义 8 条) ---
-    - {when: always, accept: "Shift+comma",       send: "《"}
-    - {when: always, accept: "Shift+period",      send: "》"}
-    - {when: always, accept: "Shift+slash",       send: "？"}
-    - {when: always, accept: "Shift+semicolon",   send: "："}
+    # --- Shift+标点 → 符号 (用户自定义 4 条) ---
+    # ⚠️ ADR 0009:这 4 条也**永远不触发** —— 前端发的是 Shift 后的字符
+    # (0x22 / 0x7C / 0x7B / 0x7D),不是基础键。改键名才能修,见 spec 081 T1.1-T1.4。
     - {when: always, accept: "Shift+apostrophe",  send: '"'}
     - {when: always, accept: "Shift+backslash",   send: "|"}
     - {when: always, accept: "Shift+bracketleft", send: "{"}
@@ -872,7 +877,7 @@ patch:
 | 中文标点怎么输都不对 | `recognizer/patterns/punct` 覆盖了 `punctuator` | 把 `key_binder` 放 `engine/processors` 头部 |
 | `Shift+Tab` 没用 | modifier 顺序错(应该是 `Shift+Tab` 不是 `Tab+Shift`) | 固定修饰符顺序:Shift → Control → Alt |
 | 单独 Shift 切不了中英(小狼毫) | key_binder 的 release 事件 modifier 比较 bug | 走 `ascii_composer/switch_key` |
-| `Ctrl+Shift+9` 切不动标点 | 被系统级 hotkey 抢了 | 改用 `Control+Shift+numbersign` 备用 |
+| `Ctrl+Shift+9` 切不动标点 | 前端发的是 `(` 不是 `9`,这个组合**永远不触发** | 用 `Control+Shift+numbersign`(ADR 0009) |
 | `Control+grave` 没用 | 大小写或修饰符拼错 | 用字面字符时**加引号** |
 | `bindings: [a, b, c]` 整段失效 | 写成 list,不是 list of map | 写成 `- {when:..., accept:...}` |
 
