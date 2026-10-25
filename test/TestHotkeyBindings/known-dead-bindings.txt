@@ -14,18 +14,18 @@
 # *new* dead binding appears. Fixing them is tracked in the next phase
 # development plan (see docs/agents/ and the verification report).
 #
-# Format:  <when> :: <accept>   [:: <send>, optional, for readability]
+# ADR 0009 / L148: the two chords that used to be listed here
 #
-# --- default.yaml ---------------------------------------------------
-# Control+Shift+9 asks for '9' (0x39); the front end sends '(' (0x28).
-# The same function (toggle ascii_punct) is also bound to
-# Control+Shift+numbersign, which does fire -- so only the redundant
-# key chord is dead.
-always :: Control+Shift+9
-# Control+Shift+0 asks for '0' (0x30); the front end sends ')' (0x29).
-# toggle traditionalization is also bound to Control+Shift+dollar, which
-# does fire -- so only the redundant key chord is dead.
-always :: Control+Shift+0
+#   always :: Control+Shift+9      -> deleted from output/data/default.yaml
+#   always :: Control+Shift+0      -> deleted from output/data/default.yaml
+#
+# were redundant duplicates (the reachable twins Control+Shift+numbersign
+# and Control+Shift+dollar carried the same function), so they are gone
+# from the shipped configuration instead of being merely registered as
+# known-dead. Only the four bindings that still need the character-key
+# rename are left below.
+#
+# Format:  <when> :: <accept>   [:: <send>, optional, for readability]
 #
 # --- user-custom/rime_ice.custom.yaml --------------------------------
 # The four Shift+punctuation bindings have no working twin. The front

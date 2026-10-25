@@ -195,12 +195,22 @@ int main(int argc, char** argv) {
   check("旧 = 翻页 (equal Page_Down) 已替换",
         !Contains(content, "accept: equal, send: Page_Down"));
 
-  // F1 切换中英标点 / 简繁: Control+Shift+9 / 0
-  check("切换中英标点 = Control+Shift+9",
-        Contains(content, "toggle: ascii_punct, accept: Control+Shift+9"));
-  check(
-      "切换简繁 = Control+Shift+0",
-      Contains(content, "toggle: traditionalization, accept: Control+Shift+0"));
+  // F1 切换中英标点 / 简繁: Control+Shift+numbersign / dollar
+  // ADR 0009 (L148): an accept: pattern with a modifier has to name the
+  // CHARACTER the chord produces, not the base key. The number chords
+  // asked for '9' / '0' while the TSF front end sends '(' / ')' => they
+  // could never fire and were deleted from default.yaml; the reachable
+  // twins below carry the function.
+  check("切换中英标点 = Control+Shift+numbersign",
+        Contains(content,
+                 "toggle: ascii_punct, accept: Control+Shift+numbersign"));
+  check("切换简繁 = Control+Shift+dollar",
+        Contains(content,
+                 "toggle: traditionalization, accept: Control+Shift+dollar"));
+  check("死绑定 Control+Shift+9 已删除 (ADR 0009)",
+        !Contains(content, "accept: Control+Shift+9"));
+  check("死绑定 Control+Shift+0 已删除 (ADR 0009)",
+        !Contains(content, "accept: Control+Shift+0"));
 
   // 旧 3/4 已替换
   check("旧 Control+Shift+3 已替换",
@@ -335,11 +345,15 @@ int main(int argc, char** argv) {
   }
   // spec 014 + L21 baseline had two extra has_menu Shift+Shift_L/R send
   // 2/3 bindings (activeBindingCount == 46); after T15 they are removed
-  // (activeBindingCount == 44). Pin the post-T15 count so future yaml
-  // edits cannot silently re-introduce or remove bindings.
-  const size_t EXPECTED_BINDINGS_AFTER_T15 = 44;
-  check("spec 077 T17: binding count == 44 (spec 014 baseline 46 - 2 deleted)",
-        activeBindingCount == EXPECTED_BINDINGS_AFTER_T15);
+  // (activeBindingCount == 44). ADR 0009 / L148 then removed the two
+  // never-firing Control+Shift+9 / Control+Shift+0 duplicates
+  // (activeBindingCount == 42). Pin the count so future yaml edits cannot
+  // silently re-introduce or remove bindings.
+  const size_t EXPECTED_BINDINGS_AFTER_ADR0009 = 42;
+  check(
+      "spec 077 T17 + ADR 0009: binding count == 42 (spec 014 baseline 46 - 2 "
+      "- 2)",
+      activeBindingCount == EXPECTED_BINDINGS_AFTER_ADR0009);
 
   // ==========================================================================
   // L113: guard the user override files that actually ship to the user.

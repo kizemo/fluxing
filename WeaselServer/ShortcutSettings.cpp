@@ -327,10 +327,10 @@ ShortcutSettings::GetBuiltinBindings() {
       // toggle (ascii_mode 当 accept 是 Shift+space 等)
       {L"Shift+space", L"always", L"toggle ascii_mode",
        L"\xe5\x88\x87\xe6\x8d\xa2\xe4\xb8\xad\xe8\x8b\xb1"},  // 切换中英
-      {L"Control+Shift+9", L"always", L"toggle ascii_punct",
+      {L"Control+Shift+numbersign", L"always", L"toggle ascii_punct",
        L"\xe4\xb8\xad\xe8\x8b\xb1\xe6\xa0\x87\xe7\x82\xb9\xe5\x88\x87\xe6\x8d"
        L"\xa2"},  // 中英标点切换
-      {L"Control+Shift+0", L"always", L"toggle traditionalization",
+      {L"Control+Shift+dollar", L"always", L"toggle traditionalization",
        L"\xe7\xae\x80\xe7\xb9\x81\xe5\x88\x87\xe6\x8d\xa2"},  // 简繁切换
   };
   return kBuiltins;
@@ -350,17 +350,17 @@ bool ShortcutSettings::LoadDefaults(std::vector<Hotkey>& out) {
                             L"\xa2",  // 全/半角切换
                             L"accept: \"Control+Shift+F\" toggle: full_shape",
                             L"toggle: full_shape"));
-  out.push_back(MakeBuiltin(Action_ToggleAsciiPunct, L"always",
-                            L"Control+Shift+9",
-                            L"\xe4\xb8\xad\xe8\x8b\xb1\xe6\xa0\x87\xe7\x82\xb9"
-                            L"\xe5\x88\x87\xe6\x8d\xa2",
-                            L"accept: \"Control+Shift+9\" toggle: ascii_punct",
-                            L"toggle: ascii_punct"));
-  out.push_back(
-      MakeBuiltin(Action_ToggleTrad, L"always", L"Control+Shift+0",
-                  L"\xe7\xae\x80\xe7\xb9\x81\xe5\x88\x87\xe6\x8d\xa2",
-                  L"accept: \"Control+Shift+0\" toggle: traditionalization",
-                  L"toggle: traditionalization"));
+  out.push_back(MakeBuiltin(
+      Action_ToggleAsciiPunct, L"always", L"Control+Shift+numbersign",
+      L"\xe4\xb8\xad\xe8\x8b\xb1\xe6\xa0\x87\xe7\x82\xb9\xe5\x88\x87\xe6\x8d"
+      L"\xa2",
+      L"accept: \"Control+Shift+numbersign\" toggle: ascii_punct",
+      L"toggle: ascii_punct"));
+  out.push_back(MakeBuiltin(
+      Action_ToggleTrad, L"always", L"Control+Shift+dollar",
+      L"\xe7\xae\x80\xe7\xb9\x81\xe5\x88\x87\xe6\x8d\xa2",
+      L"accept: \"Control+Shift+dollar\" toggle: traditionalization",
+      L"toggle: traditionalization"));
   out.push_back(MakeBuiltin(
       Action_PageUp, L"paging", L"comma",
       L"\xe7\xbf\xbb\xe9\xa1\xb5 - \xe4\xb8\x8a\xe9\xa1\xb5",  // 翻页 - 上页

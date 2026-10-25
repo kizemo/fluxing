@@ -480,8 +480,9 @@ rem ---------------------------------------------------------------------------
   call :stage_text_assets
   if errorlevel 1 goto error
   rem L138: this fork TRACKS output\data itself - 139 files, including the
-  rem fork's own default.yaml with its key_binder bindings (Control+Shift+9,
-  rem Control+Shift+numbersign, Shift+space, ...). plum resolves the
+  rem fork's own default.yaml with its key_binder bindings
+  rem (Control+Shift+numbersign, Control+Shift+dollar, Shift+space, ...).
+  rem plum resolves the
   rem "prelude" package to "default.yaml symbols.yaml"
   rem (plum\scripts\split-packages.sh:21), so a bare
   rem `bash plum/rime-install` OVERWRITES the fork's tracked default.yaml

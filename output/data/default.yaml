@@ -254,12 +254,15 @@ key_binder:
     # - { when: always, select: .next, accept: Control+Shift+exclam }             # 在最近的两个方案之间切换
     # - { when: always, toggle: ascii_mode, accept: Control+Shift+2 }             # 切换中英
     # - { when: always, toggle: ascii_mode, accept: Control+Shift+at }            # 切换中英
-    - { when: always, toggle: ascii_punct, accept: Control+Shift+9 }              # 切换中英标点
     # 火流猩 v2: Shift+space 切中英（spec 018 / L18 修复 — 单键 Shift 切中英的副作用：shift+= shift+enter 等 release Shift_L 事件会被 key_binder 误匹配切中英或上屏候选。改为 Shift+space 解决）
     # 沿用 RIME 社区默认键位；与 librime default.yaml 内置键位一致。
     - { when: always, toggle: ascii_mode, accept: Shift+space }
+    # ADR 0009 (L148): the TSF front end sends the CHARACTER a key produced,
+    # not the physical key -- so an accept: pattern with a modifier has to
+    # name that character. The number chords asked for '9' / '0' while the
+    # front end sends '(' / ')' => they could never fire, so they are gone;
+    # the reachable twins below carry the function.
     - { when: always, toggle: ascii_punct, accept: Control+Shift+numbersign }     # 切换中英标点
-    - { when: always, toggle: traditionalization, accept: Control+Shift+0 }       # 切换简繁
     - { when: always, toggle: traditionalization, accept: Control+Shift+dollar }  # 切换简繁
     # - { when: always, toggle: full_shape, accept: Control+Shift+5 }             # 切换全半角
     # - { when: always, toggle: full_shape, accept: Control+Shift+percent }       # 切换全半角

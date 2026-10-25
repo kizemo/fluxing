@@ -139,7 +139,11 @@ void test_4(const std::string& default_yaml) {
   BOOST_TEST(new_doc["config_version"].as<std::string>() == "2099-12-31");
   BOOST_TEST(new_doc["key_binder"].IsMap());
   BOOST_TEST(new_doc["key_binder"]["bindings"].IsSequence());
-  BOOST_TEST(new_doc["key_binder"]["bindings"].size() == 29u);
+  // ADR 0009 (L148): the two never-firing duplicate chords
+  // (Control+Shift+9 / Control+Shift+0) were deleted from default.yaml
+  // -> 29 bindings became 27. Pin the new count so a future yaml edit
+  // cannot silently add or drop a binding.
+  BOOST_TEST(new_doc["key_binder"]["bindings"].size() == 27u);
   std::vector<std::string> original = ParseAccepts(default_yaml);
   std::vector<std::string> after_write = ParseAccepts(out);
   BOOST_TEST_EQ(original.size(), after_write.size());
