@@ -12203,6 +12203,11 @@ powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1
   它只看**整体有没有文件** ⇒ 多 pattern 时可能上传出一个「少了一半」的产物。
   要逐个校验，就该在上传前自己 assert 每个文件存在。
 
+
+**CI 实证**（run `40204461845`）:
+
+- 产物清单里已经有 `fluxing-installer`（43,517,787 字节）⇒ 安装包**真的**被上传了
+  （改之前这里只会有一份 `debug_symbols.7z`，见上面的「静默的部分上传」）。
 **关联**:
 
 - L132（lint 墙）、L134（xmake 腿连坐）、L141/L144（安装包这条链上的另外两道墙）
@@ -12250,6 +12255,11 @@ powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1
 - 凡是 `OutFile` / 输出路径带**子目录**的打包步骤，都要先确认那个子目录
   由谁创建 —— NSIS 这里**不会**帮你建。
 
+
+**CI 实证**（run `40204461845`）:
+
+- `build (msbuild)` job = **success** ⇒ NSIS 在干净检出上把安装包编出来了
+  （`Can't open output file` 不再出现）。
 **关联**:
 
 - L141（同一段 NSIS 链上的前一道墙）、L143（产物名的上游残留）
@@ -12333,6 +12343,26 @@ powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1
 - **验证「我在修的那个 bug」要有负对照**：把旧行为显式钉回去，
   确认新脚本仍然复现旧结果，才说明探针确实在跑真实路径。
 
+
+**CI 实证**（run `40206281288`，sha `a027b1c`）:
+
+```
+Command line defined: "FLUXING_VERSION=0.21.0"
+Command line defined: "WEASEL_BUILD=30"
+Command line defined: "PRODUCT_VERSION=0.21.0.30.a027b1c"
+Output: "D:\a\fluxing\fluxing\output\archives\fluxing-0.21.0.30-installer.exe"
+```
+
+- 修复前同一处日志是 `FLUXING_VERSION=0.17.4` / `WEASEL_BUILD=383` /
+  `PRODUCT_VERSION=0.17.4.383.b901bc7` /
+  `Output: ...\fluxing-0.17.4.383-installer.exe`；
+- CI 产物名也跟着变：`weasel-artifact-0.17.4.386.b5df0eb` → `weasel-artifact-0.21.0.30.a027b1c`
+  ⇒ **上游版本号不再出现在 CI 产物名上**；
+- build 号 30 与本地探针的 28（sha `e105c64`）相差正好 2 笔提交
+  ⇒ 两边数的是同一件事：**自 fork 自己的标签 `v0.21.0.6` 以来的提交数**；
+- 本机 `build.bat data` 复跑：**EXIT=0**，`PRODUCT_VERSION=0.21.0.6`
+  （本机 release 路径逐字未变）；完整测试套件复跑
+  **EXIT=0 / `=== ALL TESTS PASSED ===`**（26 个工程）。
 **关联**:
 
 - L143（产物名的上游残留）、L144（产物目录的上游假设）、L146（本机残留的环境变量）
@@ -12389,3 +12419,46 @@ powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1
 **关联**:
 
 - L145（版本号源头）、L146 的清理命令见上
+
+## L147 - CI 的 artifact 还叫 `weasel-artifact-*`，而 fork 自己的代码地图早就写明要改 (2026-10-25)
+
+**Observation**:
+
+- CI run `40204461845` 的产物清单里有一条：
+
+  ```
+  weasel-artifact-0.17.4.386.b5df0eb
+  ```
+
+  名字里嵌的是 `git_ref_name`（= `PRODUCT_VERSION`），
+  所以**上游的版本号 `0.17.4` 直接写在了 CI 产物名上**。
+
+**Root cause**:
+
+- `docs/Fluxing-code-map/06-customization-points.md:102` 早就把这条列成了
+  品牌分叉待办：「artifacts 名称 `weasel-artifact-*` 改 `fluxing-artifact-*`」——
+  和它同一张表里的 `VERSION_*` 数字一样（那条最后变成了 **L145**）
+  ⇒ **都是「记了但从没做」**。
+- 这个 artifact **没有任何消费者**：沙箱门禁下载的是
+  `fluxing-installer` / `fluxing-buildout` / `fluxing-tests`，
+  两个 release 步用的是文件路径而不是 artifact 名
+  ⇒ 改名只影响 Actions 界面上的显示。
+
+**Fix**:
+
+- `ci.yml` 的上传步改名 `fluxing-artifact-${{ env.git_ref_name }}`。
+
+**CI 实证**（run `40206623716`）:
+
+- 产物名变成 `fluxing-artifact-0.21.0.31.099b2ac` ⇒ **fork 的名字 + fork 的版本号**，
+  上游的 `weasel` 前缀与 `0.17.4` 版本号一起从 CI 产物名上消失了。
+
+**推广**:
+
+- **代码地图里的「改法」列是一份待办清单**，不是描述。
+  这一轮里它至少命中了两条（L145 的 `VERSION_*`、L147 的 artifact 名），
+  两条都从来没被做过 ⇒ 下次改品牌面时，先把这张表过一遍。
+
+**关联**:
+
+- L143（上传路径）、L145（版本号源头）、L147（artifact 名）

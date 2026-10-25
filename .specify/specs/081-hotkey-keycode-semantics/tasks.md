@@ -326,3 +326,25 @@
 - [x] 新文件全部按仓库约定归一：`.cpp`/`.h`/`.vcxproj`/`.inc` CRLF、
   `gen-keysyms.ps1` UTF-8 BOM + CRLF、`.clang-format` 18 自检通过
 - [x] 拆掉把整条流水线挡死的 lint 墙（L132 + T2.8）：`scripts/lint-changed-cpp.sh` + ci.yml
+
+- [x] T2.25 **【2026-10-25 本轮新增·已完成】快捷键验收门禁在 CI 的绿链上跑通并 PASS**——
+  CI run `40204461845`（sha `b5df0eb`，含 L143/L144）**四个 job 全绿**：
+  `lint` / `build (msbuild)` / `test` / `build (xmake)` 全部 success
+  （`sandbox-gate` 仍在等带 `sandbox` 标签的自托管 runner ⇒ queued）。
+  - `test` job 日志里门禁两轮都在：
+    负对照 `SUMMARY|bindings=8|reachable=2|dead=6|known_dead=0|known_dead_keys=0|expectations=8|mismatches=0|unused=0` → `RESULT|PASS`；
+    出货配置 `SUMMARY|bindings=33|reachable=27|dead=0|known_dead=6|known_dead_keys=6|expectations=0|mismatches=0|unused=0` → `RESULT|PASS`；
+    收尾 `=== ALL TESTS PASSED ===`。
+  ⇒ 这条链路第一次同时满足「门禁真跑」+「整条流水线是绿的」。
+- [x] T2.26 **【2026-10-25 本轮新增·已完成】CI 的 artifact 改用 fork 自己的名字**（事故 **L147**）——
+  `ci.yml` 的上传步还叫 `weasel-artifact-<ref>`，
+  而 `docs/Fluxing-code-map/06-customization-points.md:102` 早就把这条列成了品牌分叉待办
+  （和 L145 的 `VERSION_*` 同一张表，同样「记了但从没做」）。
+  - 改法：改名 `fluxing-artifact-${{ env.git_ref_name }}`；
+  - 这个 artifact **没有消费者**（沙箱门禁下载 `fluxing-installer` /
+    `fluxing-buildout` / `fluxing-tests`；两个 release 步用文件路径）
+    ⇒ 只影响 Actions 界面上的显示；
+  - CI 实证（run `40206623716`）：产物名 = `fluxing-artifact-0.21.0.31.099b2ac`
+    ⇒ fork 的名字 + fork 的版本号；
+  - 顺带效果：artifact 名里嵌的是 `PRODUCT_VERSION`，
+    修完 L145 之后名字里不再出现上游版本号。
