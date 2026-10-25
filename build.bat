@@ -226,7 +226,17 @@ if %build_rime% == 1 (
   rem upstream state. The patch is re-applied automatically on the next build
   rem (the script is idempotent), so reverting here is safe and keeps the
   rem submodule pointer clean. See lessons-learned.md L121.
-  powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1 -Revert
+  rem L140: this runs with the current directory still set to librime\ (the
+  rem :build_librime_platform calls leave it there), so the relative path did
+  rem not resolve and the revert silently did nothing:
+  rem   The argument 'scripts\patch-librime-opencc-marisa.ps1' to the -File
+  rem   parameter does not exist.
+  rem The error was printed and then swallowed, so the librime submodule stayed
+  rem patched - and L121 warns that a later `git checkout` inside librime
+  rem would then break the build. Use an absolute path, and do not swallow
+  rem the failure.
+  powershell -ExecutionPolicy Bypass -File "%WEASEL_ROOT%\scripts\patch-librime-opencc-marisa.ps1" -Revert
+  if errorlevel 1 goto error
 )
 
 rem -------------------------------------------------------------------------
