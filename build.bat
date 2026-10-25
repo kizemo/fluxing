@@ -320,6 +320,17 @@ if %build_installer% == 1 (
   rem runs, so this target does not depend on a previous "build.bat data".
   call :stage_text_assets
   if errorlevel 1 goto error
+  rem L144: the installer is written to output\archives\ (install.nsi:51
+  rem writes OutFile "archives\fluxing-...-installer.exe", relative to the
+  rem script directory), and .gitignore:27 excludes that directory - so a
+  rem clean checkout has no output\archives at all, and NSIS does not
+  rem create the subdirectory for a relative OutFile. It aborted with
+  rem   Output: "...\output\archives\fluxing-...-installer.exe"
+  rem   Can't open output file
+  rem The maintainer's machine has the directory because previous installers
+  rem sit in it; a clean checkout does not. Create it before packaging.
+  if not exist "%WEASEL_ROOT%\output\archives" mkdir "%WEASEL_ROOT%\output\archives"
+  if errorlevel 1 goto error
   "%ProgramFiles(x86)%"\NSIS\Bin\makensis.exe ^
   /DFLUXING_VERSION=%FLUXING_VERSION% ^
   /DWEASEL_BUILD=%WEASEL_BUILD% ^
