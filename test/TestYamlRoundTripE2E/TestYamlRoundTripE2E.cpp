@@ -32,9 +32,12 @@ namespace {
 
 // Convert a wide-string (TCHAR* under _UNICODE) to UTF-8 std::string.
 std::string WideToUtf8(const _TCHAR* w) {
-  if (!w) return std::string();
-  int len = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
-  if (len <= 0) return std::string();
+  if (!w)
+    return std::string();
+  int len =
+      WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+  if (len <= 0)
+    return std::string();
   std::string out(static_cast<size_t>(len - 1), '\0');
   WideCharToMultiByte(CP_UTF8, 0, w, -1, &out[0], len, nullptr, nullptr);
   return out;
@@ -44,7 +47,8 @@ std::string WideToUtf8(const _TCHAR* w) {
 // failure.
 std::string ReadFile(const std::string& path) {
   std::ifstream f(path, std::ios::binary);
-  if (!f.good()) return std::string();
+  if (!f.good())
+    return std::string();
   std::ostringstream ss;
   ss << f.rdbuf();
   return ss.str();
@@ -57,10 +61,12 @@ std::string ReadFile(const std::string& path) {
 std::vector<std::string> ParseAccepts(const std::string& yaml_text) {
   std::vector<std::string> out;
   YAML::Node root = YAML::Load(yaml_text);
-  if (!root["key_binder"] || !root["key_binder"]["bindings"]) return out;
+  if (!root["key_binder"] || !root["key_binder"]["bindings"])
+    return out;
   const YAML::Node& bindings = root["key_binder"]["bindings"];
   for (const auto& b : bindings) {
-    if (b["accept"]) out.push_back(b["accept"].as<std::string>());
+    if (b["accept"])
+      out.push_back(b["accept"].as<std::string>());
   }
   return out;
 }
