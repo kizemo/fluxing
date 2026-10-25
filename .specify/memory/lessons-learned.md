@@ -11432,3 +11432,574 @@ SCENARIO C（错误码）:
 - L128（`yaml-cpp.lib` 从 librime deps 构建树链接；同一批 CI 链接缺口的另一面）
 - spec 081 T2.14
 
+
+## L136 - 一条线性 `needs` 链里，任何一环红了后面全部被跳过——门禁必须按「自己的前提」接线 (2026-10-25)
+
+**Incident**:
+
+- L135 修完之后，CI 的 `build (msbuild)` 腿终于能跑完整条流程了：
+  Win32 方案 **Build succeeded（0 Error）**，`LNK1181 rime.lib` 消失，
+  arm64 / x64 的 TSF 产物也齐了。**但 NSIS 打包那一步红了**：
+
+  ```
+  warning 7010: File: "data\*.gram" -> no files found. (output\install.nsi:877)
+  File: "data\build\*.bin" -> no files found.
+  Error in script "output\install.nsi" on line 897 -- aborting creation process
+  ```
+
+- ⇒ `build` job 红 ⇒ `test` job **skipped** ⇒ **快捷键验收门禁在 CI 里还是没跑过**。
+
+**Root cause**（两条）:
+
+1. **安装包要带「预编译词典」，而那些文件从来不在版本库里**。
+   `output\install.nsi` 第 895–898 行是 fork 提交 `17b36cb`（"bundle prebuilt dicts"）加的：
+
+   ```nsis
+   ; prebuilt compiled dictionaries (instant first-run, no deploy wait)
+   SetOutPath $INSTDIR\data\build
+   File "data\build\*.bin"      <- 第 897 行，这个块里唯一没有 /nonfatal 的一行
+   File "data\build\*.yaml"
+   ```
+
+   而 `output\data\build` 被 **`.gitignore:4`（`build`）** 排除 ⇒
+   那是维护者手工跑过一次 deploy 留下的**本地产物**，CI 的 checkout 里一个都没有。
+   ⇒ NSIS 的 `File` 匹配不到文件就**中止整个打包**（旁边那几行都写了 `/nonfatal`，
+   所以只有 897 行致命）。
+   ⚠️ **不能简单把 897 行改成 `/nonfatal`**：沙箱门禁的 **P1.g** 断言
+   「预编译字典 `rime_ice.table.bin` 存在」⇒ 打包进去是**要求**，不是可选项。
+
+2. **门禁被「别人的失败」连坐**。依赖链是线性的：
+
+   ```
+   lint -> build -> test -> sandbox-gate
+   ```
+
+   `test` job 自己会 `build.bat rime`、自己会编测试工程，**它不需要 `build` 的任何产物**
+   （不需要安装包、不需要 weasel.dll）。但它写了 `needs: build`
+   ⇒ 打包失败 ⇒ 单元测试**根本没启动** ⇒ 门禁又一次「接进 CI 但从没跑过」。
+
+**Fix**:
+
+- CI 的 `build` job 增加一步「编译词典」：用上一步刚从源码编出来的 `rime_deployer.exe`
+  执行 `--build output\data`，产出 `output\data\build\*.bin`，并断言
+  `rime_ice.table.bin` 真的产生了。找不到 deployer / 退出码非零 / 产物缺失，三种情况都**明确红**。
+- `ci.yml` 重新接线，让每个门禁只依赖**自己的前提**：
+
+  ```
+  lint           (无)
+  build          needs lint
+  test           needs lint
+  sandbox-gate   needs [build, test]
+  ```
+
+  沙箱门禁验的是**装完之后的产品**，所以它仍然两个都要 —— 它保留 `needs: [build, test]`。
+
+**Evidence**:
+
+- CI run `40173270218`（sha `3eb197b`）：`Build librime and its dependencies` = **success**
+  （L135 生效）；`Build Weasel (msbuild)` 走到 **Win32 方案 Build succeeded / 0 Error**，
+  只在 NSIS 打包那一步红（`install.nsi` line 897）⇒ 前面三道墙确实都拆掉了。
+- 新步骤的机制在 scratch 树上验过：Win32 工具被优先选中、`rime.dll` 被放到 exe 旁边、
+  `$LASTEXITCODE` 被捕获、**deployer 退出 3 时步骤会明确 throw 而不是静绿**。
+- CI run `40189347710`（sha `243484d`）：**`test` job 第一次真的跑了**（不再 skipped）——
+  job 结论 `lint`=success / `test`=failure / `build (msbuild)`=failure /
+  `build (xmake)`=failure / `sandbox-gate`=skipped。
+  - `test` job 的 `Build librime and its dependencies` = **success**（L135 在 CI 里也生效），
+    紧接着 `Build + run all test projects` = **failure**，
+    报错停在 `scripts\test-infra\run-test-suite.bat` 的**第一步**：
+
+    ```
+    [ERROR] vcvars32.bat not found at: C:\PROGRA~2\MICROS~2\2022\BUILDT~1\VC\AUXILI~1\Build\vcvars32.bat
+            Adjust VCVARS in this script or install VS 2022 BuildTools.
+    ##[error]Process completed with exit code 1.
+    ```
+
+    ⇒ **下一道墙 L137**：测试套件把一台开发机的 BuildTools 路径写死了。
+  - `build` 两条矩阵腿都红在**同一个新步骤**上，deployer 自己也定位对了：
+
+    ```
+    using D:\a\fluxing\fluxing\librime\build_Win32\bin\Release\rime_deployer.exe
+    E20261025 11:52:58.175916  4720 deployment_tasks.cc:208] missing input schema: quick5
+    ##[error]Process completed with exit code 1.
+    ```
+
+    ⇒ **再下一道墙 L138**：CI 的 `output\data` 被 plum 覆盖成了上游 rime 的版本。
+
+**推广**:
+
+- **门禁的依赖要按「它自己的前提」接，不要按「流水线顺序」接**。
+  单元测试依赖「打包成功」是没有道理的：打包失败是**发布**的问题，不是**代码**的问题。
+  串成一条链的代价是：**任何一环红了，所有门禁一起消失**。
+  ⇒ 判据：**把某个 job 的产物全删掉，它还成立吗？** 成立就别依赖它。
+- **「产物不在版本库里」=「CI 产不出来」**。检查「某个目录/文件是不是本地产物」的快捷方式：
+  `git check-ignore -v <path>`。本例 `output/data/build/rime_ice.table.bin` 直接命中
+  `.gitignore:4`。
+- **别用「改成非致命」来绕过「CI 产不出来」**。先问：这个文件是**要求**还是**优化**？
+  本例沙箱门禁的 P1.g 把它定成了要求 ⇒ 只能让 CI **真的产出**它。
+- **NSIS 的 `File` 匹配不到就中止**；同一块里凡是「可能不存在」的都得写 `/nonfatal`，
+  否则一次可选产物缺失就能让整个安装包打不出来。
+- **每次把一道墙拆掉，下一道墙才会露出来** —— 而且往往就在**上一步刚变绿的地方**。
+  L136 修完 → `test` job 第一次真跑 → 立刻撞上 L137（工具链路径写死）。
+  这就是为什么「门禁在 CI 里跑过」这件事本身还要再验一次。
+
+**关联**:
+
+- L132（lint 墙：门禁从没跑过 —— 同一类「以为在跑、其实没跑」）
+- L133（嵌套子模块）、L134（xmake 矩阵腿连坐）、L135（`build.bat` 删错目录 + 失败被吞）
+- L137（测试套件写死了开发机的 VS 路径）、L138（plum 覆盖 fork 跟踪的 `output/data`）
+- spec 081 T2.15 / T2.16 / T2.17
+- 沙箱门禁断言 **P1.g**（预编译字典必须存在）
+
+
+## L137 - 测试套件把一台开发机的 Visual Studio 路径写死了——CI 上整个套件第一步就退出 (2026-10-25)
+
+**Incident**:
+
+- L136 把 `test` job 从 skipped 救活之后，它**第一次真的执行**，然后停在
+  `scripts\test-infra\run-test-suite.bat` 的**第一步**：
+
+  ```
+  [ERROR] vcvars32.bat not found at: C:\PROGRA~2\MICROS~2\2022\BUILDT~1\VC\AUXILI~1\Build\vcvars32.bat
+          Adjust VCVARS in this script or install VS 2022 BuildTools.
+  ##[error]Process completed with exit code 1.
+  ```
+
+- 也就是说：**这套单元测试在 CI 里从来没有跑过一次**。以前每次 CI 都是绿的，
+  只是因为 `test` job 一直被跳过（L132 lint 墙 → L136 依赖链），没人看见第一步就红。
+- 同一批 CI 日志里，`ilammy/msvc-dev-cmd@v1` 自己打印的是：
+
+  ```
+  Found with vswhere: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat
+  ```
+
+  ⇒ runner 上是 **VS 2022 Enterprise**，而脚本写死的是**某台开发机的 VS 2022 BuildTools**
+  （8.3 短路径 `C:\PROGRA~2\MICROS~2\2022\BUILDT~1\...`）。
+
+**Root cause**:
+
+`run-test-suite.bat` 里写死了两行路径：
+
+```bat
+set "VCVARS=C:\PROGRA~2\MICROS~2\2022\BUILDT~1\VC\AUXILI~1\Build\vcvars32.bat"
+set "MSBUILD=C:\PROGRA~2\MICROS~2\2022\BUILDT~1\MSBuild\Current\Bin\MSBuild.exe"
+```
+
+`C:\PROGRA~2\MICROS~2\2022\BUILDT~1` 既是**某台机器**的路径，又是**某个版本**的路径
+（BuildTools 而不是 Enterprise）。测试脚本属于**要被 CI 跑的东西**，
+它却按「我开发机上装了什么」来写路径。
+
+**Fix**:
+
+改成**按规则探测**，顺序固定、每一步都验证存在性：
+
+1. `env.bat` 里显式给的 `VCVARS` / `MSBUILD`（**永远不被覆盖**）；
+2. 本仓库已知的 **Visual Studio 2022 BuildTools** 目录（`PLATFORM_TOOLSET=v143` 对应的那套）；
+3. `vswhere.exe` 枚举全部安装，**优先取路径里带 `\2022\` 的那个**；
+4. `vswhere.exe` 的任意一个安装（兜底）。
+
+⚠️ 两个实测出来的坑：
+
+- **不能用 vswhere 的版本区间**。`-version "[17.0,18.0)"` 里的 `)` 会**截断
+  `for /f` 的反引号命令**，实测直接报 `'C:\Program' is not recognized`。
+  ⇒ 改用「枚举全部 + 按路径里的 `\2022\` 筛」。
+- **不能用 "latest"**。本机同时装了 **VS 18 BuildTools** 和 **VS 2022 BuildTools**，
+  `vswhere -latest` 返回的是 **VS 18** ⇒ 工具链会从 v143 悄悄换成 v144。
+  ⇒ 规则必须是「**优先 2022**」，不是「最新」。
+
+**Evidence**:
+
+- CI run `40189347710`：`test` job 的 `Build + run all test projects` = failure，
+  日志原文如上（`vcvars32.bat not found at: C:\PROGRA~2\...BUILDT~1\...`）。
+- 本机探针（`tmp-dllcmp\probe-vsdisc*.cmd`）实测：
+  - `-version "[17.0,18.0)"` → 命令被 `)` 截断，`VSROOT=[]`；
+  - `-version 17` / `-version 17.0` → **仍然返回 VS 18**（不可用）；
+  - 枚举全部 + `\2022\` 筛选 → 正确返回
+    `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`；
+  - 模拟 CI（legacy 目录不存在）→ 同样落到 VS 2022；若无 2022 则兜底到 VS 18。
+- 修完后本地跑整套：
+
+  ```
+  [INFO] Visual Studio environment: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars32.bat
+  === Building test\TestHotkeyBindings ===
+    TestHotkeyBindings.vcxproj -> F:\soft\00selfmade\rime_claude\Release\TestHotkeyBindings.exe
+  ...
+  SUMMARY|bindings=33|reachable=27|dead=0|known_dead=6|known_dead_keys=6|expectations=0|mismatches=0|unused=0
+  RESULT|PASS
+  OK: keysyms_generated.inc is up to date (1097 key names, 17 modifiers)
+  ```
+
+  ⇒ 21 个测试工程里 20 个编过（唯一没编过的是 `TestYamlRoundTripE2E`，
+  它要 `yaml-cpp.lib`，而本机 librime 的构建树本来就没建 —— 见 L139 的「本机环境」一节），
+  **快捷键验收门禁在测试套件里真的跑到了并通过**。
+
+**推广**:
+
+- **凡是要被 CI 跑的东西，就不许写死任何一台机器的路径**。
+  判据：**这个路径在 runner 上成立吗？** 不成立就改成「按规则探测」。
+- **「最新版本」不等于「对的版本」**。本仓库钉的是 `PLATFORM_TOOLSET=v143`（VS 2022），
+  探测规则就要跟着这个钉子走，而不是跟着 vswhere 的 `-latest` 走。
+- **工具链探测要有兜底链，而且每一级都要验证存在性**；
+  一个「看起来在探测、其实取到别的版本」的探测比写死路径更危险 ——
+  写死至少会**响亮地失败**，探测错了会**安静地换一套工具链**。
+- ⚠️ **cmd 的括号陷阱**：`for /f` 反引号命令里出现 `)`（版本区间、含括号的路径）
+  会被截断；块内未转义的 `|` / `>` 也会把块切开。
+  ⇒ 这类地方要**写探针实测**，不能靠读代码判断。
+
+**关联**:
+
+- L136（依赖链：把 `test` job 救活，才看见了这道墙）
+- L132（lint 墙）、L139（`weasel.props`：同一批测试工程的第二个隐藏依赖）
+- spec 081 T2.17
+
+## L138 - plum 的 preset 包把 fork 跟踪的 `output\data\default.yaml` 覆盖成上游版本 (2026-10-25)
+
+**Incident**:
+
+- L136 加的「编译预编译词典」这一步在 CI 里红了，而且**两条矩阵腿红在同一行**：
+
+  ```
+  using D:\a\fluxing\fluxing\librime\build_Win32\bin\Release\rime_deployer.exe
+  E20261025 11:52:58.175916  4720 deployment_tasks.cc:208] missing input schema: quick5
+  ##[error]Process completed with exit code 1.
+  ```
+
+  deployer 自己是对的（路径找到、工具启动），**是输入数据不对**：
+  `quick5` 这个方案在 CI 的 `output\data` 里被声明了，却**没有对应的 schema 文件**。
+
+**Root cause**（两条）:
+
+1. **CI 的 `output\data` 里有一份**上游 rime 的 `default.yaml`**，不是 fork 的那份。**
+   上游 rime 的 `default.yaml` 的 `schema_list` 列的是 `luna_pinyin` / `luna_pinyin_simp` /
+   `quick5` / … —— 这些方案**本 fork 一个都不带** ⇒ deployer 报 `missing input schema: quick5`。
+2. **那份上游 `default.yaml` 是 plum 覆盖出来的**，而且覆盖是**静默**的。
+
+链路是这样的：
+
+- `build.bat` 的 `:build_data` 有一行：
+
+  ```bat
+  bash plum/rime-install %WEASEL_BUNDLED_RECIPES%
+  ```
+
+- **`WEASEL_BUNDLED_RECIPES` 在整个仓库里从来没有被定义过**
+  —— `grep` 全仓只有两处「读它/打印它」，没有一处「设置它」：
+
+  ```
+  build.bat:45:echo WEASEL_BUNDLED_RECIPES=%WEASEL_BUNDLED_RECIPES%
+  xbuild.bat:55:echo WEASEL_BUNDLED_RECIPES=%WEASEL_BUNDLED_RECIPES%
+  ```
+
+  ⇒ 变量为空 ⇒ `bash plum/rime-install` **不带参数** ⇒ `plum/rime-install:41-42`：
+
+  ```bash
+  if [[ $# -eq 0 ]]; then
+    targets=(':preset')
+  ```
+
+  ⇒ 走 **`plum/preset-packages.conf`**：
+
+  ```bash
+  package_list+=( bopomofo cangjie essay luna-pinyin prelude stroke terra-pinyin )
+  ```
+
+  ⇒ 而 `plum/scripts/split-packages.sh:21` 写着：
+
+  ```bash
+  prelude=default.yaml symbols.yaml
+  ```
+
+  ⇒ **`prelude` 包会把 `default.yaml` 写进 `rime_dir`（= `output/data`），
+  覆盖掉 fork 跟踪的那一份。**
+
+⚠️ **第二个后果比「deployer 报错」严重得多**：那份上游 `default.yaml` 里
+**没有 fork 的快捷键绑定**（`Control+Shift+9`、`Control+Shift+numbersign`、
+`Shift+space` 等 29 条 `key_binder` 都在 fork 的 `output/data/default.yaml` 里）。
+⇒ **CI 打出来的产品，键盘快捷键是上游的，不是 fork 的**，
+而这一条**不会让任何一步变红** —— 它只会安静地发一个功能残缺的产品出去。
+
+**为什么这个 fork 根本不需要 plum**：
+
+- `output/data` 在本 fork 里是**跟踪的产品数据**（139 个文件：
+  `default.yaml` / 9 套 schema / `cn_dicts` / `en_dicts` / `lua` / `opencc` / `preview` / `user-custom`），
+  本机 `output\data\build\` 里编出来的也只有这些方案的 `.bin`，
+  **没有 bopomofo / luna_pinyin / cangjie / stroke / terra-pinyin**；
+- 全仓 `output/data/**/*.yaml` 里**没有任何一处**引用 `luna_pinyin` / `bopomofo` /
+  `cangjie` / `terra_pinyin` / `stroke`；
+- schema 用的是 fork 自己的 `symbols_v.yaml` / `symbols_caps_v.yaml`，
+  **不依赖** plum 的 `symbols.yaml`。
+
+⇒ plum 在这个 fork 里**唯一的作用就是覆盖 `default.yaml`**。
+
+**Fix**:
+
+把「要 bundle 哪些上游包」这件事**变成一个必须显式声明的东西**：
+
+- `env.bat.template` / `env.vs2022.bat` 里**不设**这个变量，并把原因写进注释；
+- `build.bat` 的 `:build_data` 改成两条互斥的分支：
+  - **未定义 / 为空** ⇒ **跳过 plum**（这个 fork 跟踪自己的 `output/data`）；
+  - **有值** ⇒ 按这个清单跑 plum；
+  ⇒ **不变式：plum 只可能在「拿到显式清单」的时候才跑** ——
+  「悄悄退回 plum 的 preset」这条路被**从构造上**堵死；
+- 再加一道**兜底闸**：跑 plum 之前先 `git status --porcelain -- output/data` 存一份快照，
+  跑完再取一份，`fc /b` 比对。**只要 plum 动过 `output/data` 里的任何文件就中止构建。**
+  ⇒ 这样「以后谁又把 `prelude` 加回清单」会**响亮地失败**，而不是安静地发错产品。
+
+**Evidence**:
+
+- CI run `40189347710`：`build (msbuild)` 与 `build (xmake)` 都红在
+  `Compile the dictionaries` 这一步，日志原文
+  `deployment_tasks.cc:208] missing input schema: quick5`。
+- 仓库取证：
+  - `grep -rn WEASEL_BUNDLED_RECIPES` → 只有 `build.bat:45` 与 `xbuild.bat:55` 两处「打印」，无定义；
+  - `plum/rime-install:41-42` → 无参即 `targets=(':preset')`；
+  - `plum/preset-packages.conf` → 含 `prelude`；
+  - `plum/scripts/split-packages.sh:21` → `prelude=default.yaml symbols.yaml`；
+  - `git ls-files output/data` → **139 个跟踪文件**；
+  - `grep -E "bopomofo|luna_pinyin|cangjie|terra_pinyin"` 在 `output/data` 下 → **零命中**；
+  - 本机 `output\data\build\` → 只有 `rime_ice` / `t9` / `double_pinyin*` / `melt_eng` /
+    `radical_pinyin` 的 `.bin`，**没有 plum 那批**。
+
+**探针把设计错误抓出来**（本地实测，`tmp-dllcmp\probe-build-data-guard2.py`）:
+
+- **阳性对照**：`WEASEL_BUNDLED_RECIPES` 未设置 ⇒
+  `[INFO] WEASEL_BUNDLED_RECIPES is not set - skipping the plum package fetch.`，
+  退出码 **0**，`output/data` 的逐文件 sha256 **一个字节没变**。
+- **阴性对照**：`WEASEL_BUNDLED_RECIPES=prelude` ⇒ plum **真的跑了**
+  （`Cloning into 'plum/package/rime/prelude'...` / `Updating: default.yaml`），
+  快照闸随即拦下：
+
+  ```
+  [ERROR] the plum fetch modified files under output\data.
+  error building weasel...
+  ```
+
+  退出码 **1** ⇒ 探针结束后 `output/data` 已从 git 还原。
+  ⇒ **闸门有牙**：它拦的正是 L138 描述的那种破坏。
+
+⚠️ **这个探针还抓出了第一版设计本身的错误**：第一版按
+「未定义 ⇒ 报错」「空 ⇒ 跳过 plum」三态设计，而 env 文件里写
+`set "WEASEL_BUNDLED_RECIPES="` —— 在 cmd 里这**是删除变量**，
+于是永远走进「未定义」分支、构建永远拒绝跑。
+**「已定义且为空」这个状态在 cmd 里根本表达不出来** ⇒ 改成两态
+（见上面的 Fix 段）。
+
+**词典编译那一步的正反对照**（`tmp-dllcmp\probe-deployer.py`）:
+
+- **阳性对照**：把**跟踪的** 139 个 `output/data` 文件原样交给
+  `rime_deployer.exe --build` ⇒ 退出码 **0**，
+  `rime_ice.table.bin` **真的产出** ⇒ CI 的「编译词典」这一步有救；
+- **阴性对照**：同一棵树，但把 `default.yaml` 换成上游 rime 那份
+  （`schema_list` 里多一条 `quick5`）⇒ 退出码 **1**，日志：
+
+  ```
+  E20261025 20:40:19.600973 399648 deployment_tasks.cc:208] missing input schema: quick5
+  ```
+
+  ⇒ **与 CI 日志逐字一致**，坐实「CI 的 quick5 报错 = plum 覆盖了 default.yaml」。
+
+**推广**:
+
+- **「变量没定义」和「变量定义成空」在 cmd 里根本不是两回事**：
+  `set "X="` 是**删除**变量，不是定义一个空值 ⇒
+  **「已定义且为空」这个状态在 cmd 里无法表达**。
+  ⇒ 设计这类分支之前，先确认目标状态**在 cmd 里可表达**；
+  表达不了就别设计三态，改成两态（未设置 / 有值），
+  并让**危险的那条路在构造上不可达**。
+  ⚠️ 本条是**实测**出来的：第一版按「未定义 ⇒ 报错」「空 ⇒ 跳过 plum」设计，
+  而 env 文件里写 `set "WEASEL_BUNDLED_RECIPES="` 实际把它**删掉了**
+  ⇒ 构建永远走进「未定义」分支 ⇒ 判别性探针直接把它抓了出来
+  （见本条 Evidence 段的「探针把设计错误抓出来」）。
+- **fork 跟踪的产品数据 vs 上游包管理器**：当一个 fork 自己跟踪了上游也会提供的配置文件时，
+  **上游的安装器就成了威胁**。判据：`git ls-files` 里有这个文件吗？
+  有 ⇒ 任何「从网上拉同名文件覆盖本地」的步骤都得被显式关掉或加闸。
+- **打包类失败只是症状**。`missing input schema: quick5` 看着像「少了个方案」，
+  实际是「**产品的配置文件被换成了别人的**」。
+  ⇒ 查「数据从哪来」比查「数据对不对」更省时间。
+- ⚠️ **最危险的不是红，是绿**：如果 CI 没有「编译词典」这一步，
+  plum 的覆盖会**一路绿灯**地带进安装包 —— 发出去的是一个**少 29 条快捷键绑定**的产品。
+  ⇒ 这就是为什么「产物必须由 CI 自己产出」，而不是「产物由 CI 捡现成的」。
+
+**关联**:
+
+- L136（CI 必须自己产出预编译词典 —— 本条就是那一步踩到的）
+- L135（`build.bat` 里的失败被吞）、L139（`weasel.props`：另一个隐藏依赖）
+- spec 081 T2.18
+- 沙箱门禁 **P1.g**（预编译词典必须存在）
+
+## L139 - `weasel.props` 只有 Weasel 分支才生成——测试工程全靠它 (2026-10-25)
+
+**Incident**:
+
+- L137 修完、测试套件真的开始编工程之后，遇到的**下一个**隐藏依赖：
+  **所有测试工程都在 import 一个只有 `build.bat` 的 Weasel 分支才会生成的属性表**。
+- 这道墙在 CI 里还没被走到（L137 先红），但它**一定会红**：
+  CI 的 `test` job 跑的是 `build.bat rime`，**不是** `build.bat weasel`。
+
+**Root cause**:
+
+- 仓库里每个 C++ 工程的第一行 import 都是同一个文件：
+
+  ```xml
+  <Import Project="..\..\weasel.props" />
+  ```
+
+  （`test\TestHotkeyBindings\TestHotkeyBindings.vcxproj:12`，
+  以及 `test\TestDefaultHotkeys` / `TestResponseParser` / `TestWeaselIPC` /
+  `TestQuickPanelDialog` / `TestFluxingComponents` / … 全部）
+
+- 而 `weasel.props` 是**生成物**：`.gitignore` 里有 `weasel.props`，
+  它由根目录的 `render.js` + `weasel.props.template` 生成
+  （`cscript.exe render.js weasel.props BOOST_ROOT PLATFORM_TOOLSET ...`）。
+- 改之前，这个生成动作**只写在 `build.bat` 的 Weasel 分支里**：
+
+  ```bat
+  set WEASEL_PROJECT_PROPERTIES=BOOST_ROOT^ ... ^
+  cscript.exe render.js weasel.props %WEASEL_PROJECT_PROPERTIES%
+  ```
+
+  ⇒ **`build.bat rime`（= CI test job 跑的东西）根本不生成 `weasel.props`**，
+  而所有测试工程都要 import 它 ⇒ MSBuild 直接报
+  `error MSB4019: 找不到导入的项目 ... weasel.props`。
+
+- 更一般的形态：**`build.bat` 的分支之间有隐藏依赖** ——
+  「跑测试」这件事，隐含地要求「先跑过一次 Weasel 构建」。
+
+**Fix**:
+
+把 `weasel.props` 的渲染**从「Weasel 分支的副作用」改成「每个 target 的前置条件」**：
+
+- 抽出一个 `:render_props` 子程序（`pushd "%WEASEL_ROOT%"` → `cscript render.js` →
+  判 `errorlevel` → `popd`），Weasel 分支改成 `call :render_props`；
+- 同时在 `build.bat` 的**早期**（版本号算完之后、`PLATFORM_TOOLSET` 兜底之后）
+  就调用一次 ⇒ **`build.bat rime` / `data` / `boost` 都会产出 `weasel.props`**；
+- 子程序里用 `pushd` 保证它一定落在**仓库根**（`render.js` 用相对路径写文件）。
+
+**Evidence**:
+
+- 运行时实证（`tmp-dllcmp\probe-props-import.ps1`）：把 `weasel.props` 挪走，
+  编一个测试工程：
+
+  ```
+  test\TestHotkeyBindings\TestHotkeyBindings.vcxproj(12,3): error MSB4019:
+  找不到导入的项目"F:\soft\00selfmade\rime_claude\weasel.props"。
+  请确认 Import 声明"..\..\weasel.props"中计算结果为"..\..\weasel.props"的表达式正确无误且该文件位于磁盘上。
+  exit code WITHOUT props = 1
+  ```
+
+  ⇒ 这个 import **是致命的**（阳性对照：文件在时同一个工程编得过，
+  `TestHotkeyBindings.vcxproj -> ...\Release\TestHotkeyBindings.exe`）。
+- 修完后 `build.bat rime` 的日志里出现：
+
+  ```
+  BOOST_ROOT=F:\b183
+  PLATFORM_TOOLSET=v143
+  VERSION_MAJOR=0
+  ...
+  Generated weasel.props
+  ```
+
+  ⇒ 渲染发生在**任何编译之前**，与跑的是哪个 target 无关。
+
+**本机环境（同一批挖出来的，与 CI 无关）**:
+
+本机 `build.bat rime` 连续失败了几次，都是**本机环境**问题，CI 上不存在
+（CI 是全新 checkout）：
+
+1. **`librime\env.bat` 是一份陈旧的本机残留**（`.gitignore` 忽略、未跟踪）。
+   根 `build.bat` 只在 `librime\env.bat` **不存在**时才把根 `env.bat` 拷过去，
+   所以这份残留**遮蔽**了真正的配置。它还带着**两个 UTF-8 BOM**
+   （`call .\env.bat` 报 `'﻿﻿rem' is not recognized`）。
+2. **CMAKE_GENERATOR 的空格被 cmd 拆开**（**L20 那个老坑，至今没修**）：
+   `librime\build.bat:93` 是 `-G%CMAKE_GENERATOR%`，所以值里**必须自带引号**
+   （`set CMAKE_GENERATOR="Visual Studio 17 2022"`，见 `env.vs2022.bat`）。
+   没有引号 ⇒ cmake 收到 `-GVisual` ⇒
+   `CMake Error: Could not create named generator Visual`。
+3. **ARCH 从 `env.bat` 漏进 deps 构建**：根 `build.bat` 自己在每个 librime 平台前
+   设 `ARCH=x64` / `ARCH=Win32`，但 `call build.bat deps` 会**再进一次**
+   `librime\build.bat` → 再 `call .\env.bat` ⇒ `env.bat` 里的 `ARCH` 会覆盖它。
+   CI 的 `env.vs2022.bat` 故意**不设** ARCH ⇒ 本机 `env.bat` 也要对齐。
+4. **仓库搬过家**：旧的 `deps\glog\build_*` 里留着指向 `F:/soft/00selfmade/rime/`
+   的 `CMakeCache.txt` ⇒
+   `CMake Error: The current CMakeCache.txt directory ... is different than ...`。
+
+**推广**:
+
+- **「生成物」要挂在「谁需要它」上，而不是挂在「顺手的那一步」上**。
+  `weasel.props` 是**每个** C++ 工程的前置条件，不是 Weasel 构建的副产品。
+  ⇒ 凡是「A 步骤生成了 B 步骤要用的东西」，把这个生成动作**提到所有 target 的公共路径**，
+  或者让 B 自己保证它存在。
+- **查「某个 import / 依赖」的快捷方式**：`grep -rn "Import Project=" --include=*.vcxproj`
+  —— 一行就把「所有工程都依赖哪个生成物」问出来了。
+- **同一个仓库里，CI 与本机可能各自有一份「环境真相」**。
+  CI 是全新 checkout，所以它用的是 `env.vs2022.bat`；
+  本机用的是 `env.bat`（未跟踪、可能陈旧、可能有 BOM）。
+  ⇒ 两边不一致时，**先比对「同一个脚本在两边的输入」**，别急着改代码。
+- ⚠️ **BOM 会让批处理「少执行第一行」**：`﻿﻿rem` 会被当成命令报
+  `'﻿﻿rem' is not recognized`。文件里出现**多于一个** BOM 时尤其隐蔽 ——
+  第一行废了，剩下的照跑。
+
+**关联**:
+
+- L137（工具链探测：把这道墙之后的下一道墙露出来）、L138（plum 覆盖产品数据）
+- L135（`build.bat` 的失败被吞）、L20（CMAKE_GENERATOR 空格分词，至今未修的老坑）
+- spec 081 T2.19
+
+## L140 - `build.bat` 的 opencc 还原步骤用了相对路径，失败还被吞——子模块一直处于被打补丁的状态 (2026-10-25)
+
+**Incident**:
+
+- 本机跑通 `build.bat rime`（L139 之后的第一次完整重建）时，日志末尾出现一条**没人解释的错误**：
+
+  ```
+  The argument 'scripts\patch-librime-opencc-marisa.ps1' to the -File parameter does not exist.
+  Provide the path to an existing '.ps1' file as an argument to the -File parameter.
+  ```
+
+- 而脚本**照样退出 0** ⇒ CI 的 `Build librime` 步骤一直是**绿的**，
+  但那一步**根本没做它该做的事**。
+
+**Root cause**:
+
+还原步骤写在 `if %build_rime% == 1 (...)` 块里：
+
+```bat
+powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1 -Revert
+```
+
+而**同一个块里**的 `call :build_librime_platform ...` 两个子程序结束时
+都把当前目录留在了 `librime\` ⇒ 相对路径 `scripts\...` 在那里根本不存在。
+⇒ 还原**从未发生**，librime 子模块一直处于「被打过 opencc 补丁」的状态。
+⇒ 而 L121 明确警告过：子模块被打着补丁的时候，**在里面跑一次
+`git checkout` 就会把构建搞坏**。
+
+⇒ 两层错误叠在一起：
+① **路径没解析到**（当前目录不是仓库根）；
+② **失败被吞**（没有判 `errorlevel`，`powershell` 的退出码没人看）。
+
+**Fix**:
+
+- 路径改成绝对路径：`"%WEASEL_ROOT%\scripts\patch-librime-opencc-marisa.ps1"`；
+- 补上 `if errorlevel 1 goto error` —— 还原失败必须让构建失败，
+  因为「还原没发生」的后果是子模块保持脏状态。
+
+**Evidence**:
+
+- 修复前（本机 `build.bat rime` 完整重建，EXIT=0）的日志末尾就是上面那条
+  `The argument 'scripts\patch-librime-opencc-marisa.ps1' ... does not exist.`；
+- 修复后同一命令退出码 0，日志里**不再出现**该错误。
+
+**推广**:
+
+- **批处理里凡是跨目录调用脚本，路径要么绝对、要么先 `cd` 到确定的地方** ——
+  这与 L135 的「清理/复制要显式 cd」是同一条纪律的两个面。
+- **「某个步骤没做它该做的事」和「那个步骤报错」要分开看**：
+  这里脚本**报错过**，但因为没人判退出码，整个构建仍然绿。
+  ⇒ 打印出来的 error 不是判据，**退出码**才是。
+- 顺带一条查法：**把「第一次出现的陌生错误」当成线索**。
+  这次它出现在一次**成功**构建的末尾，差点被当成无害噪音。
+
+**关联**:
+
+- L135（`goto error` 只退出子程序 / 失败被吞 —— 同一类）
+- L121（opencc 补丁要可逆；子模块被打着补丁时 `git checkout` 会搞坏构建）
+- L139（`weasel.props`）

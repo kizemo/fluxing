@@ -1,4 +1,4 @@
-# 081 任务清单
+81 任务清单
 
 > 勾选框与 [plan.md](plan.md) 的任务编号一一对应。
 > `[x]` = 本轮（2026-10-25）已完成；`[ ]` = 下一阶段待办。
@@ -115,12 +115,81 @@
     ③ `ci.yml` 里 `.\build.bat rime` / `.\build.bat arm64 installer` 之后显式判
     `$LASTEXITCODE`（`$ErrorActionPreference` 管不到原生命令退出码）。
   → 机制级本地实证（cmd 自己的批处理语义，三个场景）：见 L135 的 Evidence 段。
+- [x] T2.15 **【2026-10-25 本轮新增·已完成】让 CI 自己编译预编译词典**（事故 **L136**）——
+  L135 修完后 `build (msbuild)` 能跑完整条流程了（Win32 方案 **Build succeeded / 0 Error**，
+  `LNK1181 rime.lib` 消失），但 **NSIS 打包红**：
+  `Error in script "output\install.nsi" on line 897 -- aborting creation process`。
+  - 根因：`output\install.nsi` 第 895–898 行是 fork 提交 `17b36cb`（"bundle prebuilt dicts"）
+    加的 `File "data\build\*.bin"`（**该块里唯一没写 `/nonfatal` 的一行**），
+    而 `output\data\build` 被 **`.gitignore:4`（`build`）** 排除
+    ⇒ 那是维护者手工跑过一次 deploy 的**本地产物**，CI 的 checkout 里一个都没有
+    ⇒ NSIS 的 `File` 匹配不到就中止整个打包。
+  - ⚠️ **不能简单把 897 行改成 `/nonfatal`**：沙箱门禁的 **P1.g** 断言
+    「预编译字典 `rime_ice.table.bin` 存在」⇒ 它是**要求**，不是可选项。
+  → 修法：`build` job 增加一步「编译词典」——用上一步刚从源码编出来的
+    `rime_deployer.exe` 执行 `--build output\data`，产出 `output\data\build\*.bin`；
+    找不到 deployer / 退出码非零 / `rime_ice.table.bin` 没产出，三种情况都**明确红**。
+  → 机制在 scratch 树上验过：Win32 工具优先选中、`rime.dll` 放到 exe 旁边、
+    退出码 3 时步骤明确 throw 而不是静绿。
+- [x] T2.16 **【2026-10-25 本轮新增·已完成】按「自己的前提」重新接线门禁**（事故 **L136**）——
+  依赖链原本是线性的 `lint → build → test → sandbox-gate`
+  ⇒ **任何一环红了，后面所有门禁一起消失**。
+  `test` job 自己会 `build.bat rime`、自己会编测试工程，**不需要 `build` 的任何产物**
+  （不要安装包、不要 weasel.dll）⇒ 打包失败时单元测试根本没启动。
+  → 改成：`lint`（无）· `build` needs lint · `test` needs lint ·
+    `sandbox-gate` needs **[build, test]**（它验的是装完之后的产品，两个都要）。
+  → 判据：**把某个 job 的产物全删掉，它还成立吗？** 成立就别依赖它。
+- [x] T2.17 **【2026-10-25 本轮新增·已完成】让测试套件自己找 Visual Studio**（事故 **L137**）——
+  T2.16 接线之后，`test` job **第一次真的执行**，然后停在
+  `scripts\test-infra\run-test-suite.bat` 的**第一步**：
+  `[ERROR] vcvars32.bat not found at: C:\PROGRA~2\MICROS~2\2022\BUILDT~1\VC\AUXILI~1\Build\vcvars32.bat`
+  ⇒ **这套单元测试在 CI 里从来没跑过一次**（以前绿是因为 `test` 一直被跳过）。
+  - 根因：脚本写死了**一台开发机**的 **VS 2022 BuildTools** 8.3 短路径；
+    而 runner 上是 **VS 2022 Enterprise**（`ilammy/msvc-dev-cmd` 自己的日志可见）。
+  → 修法：按规则探测 —— ① `env.bat` 显式给的 `VCVARS`/`MSBUILD`（永不被覆盖）；
+    ② 本仓库已知的 VS 2022 BuildTools 目录（`PLATFORM_TOOLSET=v143` 那套）；
+    ③ `vswhere` 枚举全部安装、**优先取路径里带 `\2022\` 的**；④ 任意安装兜底。
+  ⚠️ 两个实测坑：**版本区间 `[17.0,18.0)` 里的 `)` 会截断 `for /f` 反引号命令**
+    （实测报 `'C:\Program' is not recognized`）；**`vswhere -latest` 在装了 VS 18 的机器上
+    返回 VS 18** ⇒ 工具链会从 v143 悄悄换成 v144 ⇒ 规则必须是「优先 2022」而不是「最新」。
+- [x] T2.18 **【2026-10-25 本轮新增·已完成】plum 不许再覆盖 fork 跟踪的 `output\data`**（事故 **L138**）——
+  T2.15 加的「编译词典」那一步红在 `deployment_tasks.cc:208] missing input schema: quick5`。
+  - 根因链：`WEASEL_BUNDLED_RECIPES` **全仓从未被定义**（只有 `build.bat:45` / `xbuild.bat:55`
+    两处打印）⇒ `bash plum/rime-install` 不带参数 ⇒ `plum/rime-install:41-42` 走 `':preset'` ⇒
+    `plum/preset-packages.conf` 含 `prelude` ⇒ `plum/scripts/split-packages.sh:21` 写着
+    **`prelude=default.yaml symbols.yaml`** ⇒ **上游 rime 的 `default.yaml` 覆盖掉 fork 那一份**。
+  - ⚠️ **第二个后果更严重**：上游那份 `default.yaml` 里**没有 fork 的 29 条 `key_binder` 绑定**
+    （`Control+Shift+9` / `Control+Shift+numbersign` / `Shift+space` …）
+    ⇒ CI 会打出一个「快捷键是上游的」产品，**而这一步不会让任何 job 变红**。
+  - 这个 fork 根本不需要 plum：`output/data` 是跟踪的产品数据（139 个文件），
+    全仓 `output/data` 下**零处**引用 `luna_pinyin` / `bopomofo` / `cangjie` / `terra_pinyin`。
+  → 修法：`build.bat` 的 `:build_data` 改成两条互斥的分支 ——
+    「**未定义 / 为空 ⇒ 跳过 plum**」「**有值 ⇒ 按清单跑**」
+    ⇒ **不变式：plum 只可能在拿到显式清单时才跑**，
+    「悄悄退回 plum 的 preset」这条路被**从构造上**堵死；
+    `env.bat.template` 与 `env.vs2022.bat` 里**不设**这个变量并写清原因
+    （⚠️ cmd 里 `set "X="` 是**删除**变量 ⇒「已定义且为空」这个状态**无法表达**
+    ⇒ 所以设计成两态而不是三态）；
+    再加兜底闸：plum 前后各取一次 `git status --porcelain -- output/data` 快照，
+    `fc /b` 比对 —— **动过任何一个文件就中止构建**。
+- [x] T2.19 **【2026-10-25 本轮新增·已完成】`weasel.props` 改成每个 target 的前置条件**（事故 **L139**）——
+  仓库里每个 C++ 工程第一行都是 `<Import Project="..\..\weasel.props" />`，
+  而 `weasel.props` 是 `.gitignore` 里的**生成物**，改之前**只在 `build.bat` 的 Weasel 分支**生成
+  ⇒ **`build.bat rime`（= CI `test` job 跑的东西）根本不生成它** ⇒ 每个测试工程都会
+  `error MSB4019: 找不到导入的项目 ... weasel.props`。
+  - 运行时实证：把 `weasel.props` 挪走再编一个测试工程 ⇒ MSB4019，exit 1；
+    放回去 ⇒ 同一个工程编得过（阳性对照）。
+  → 修法：抽 `:render_props` 子程序（`pushd "%WEASEL_ROOT%"` → `cscript render.js` →
+    判 `errorlevel` → `popd`），并在 `build.bat` 的**早期**（版本号算完之后）就调用一次
+    ⇒ `rime` / `data` / `boost` 都产出它。日志实证：`Generated weasel.props`。
 - [ ] T2.7 **仍阻塞**：`sandbox-gate` job 需要带 `sandbox` 标签的自托管 runner
   （Windows Sandbox 是嵌套虚机，官方 windows runner 不支持）——要么自建，
   要么把 P10 的静态部分拆到官方 runner 上跑。
   ⚠️ 注意：**这已经不是「门禁跑不起来」的原因了**（lint 墙已拆，见 T2.8；
   CI 构建缺步骤也已补，见 T2.10；xmake 腿的连坐也已拆，见 T2.12；
-  `build.bat rime` 的两个缺陷也已修，见 T2.14），
+  `build.bat rime` 的两个缺陷也已修，见 T2.14；
+  词典与依赖链也已处理，见 T2.15 / T2.16；
+  测试套件自身的三道墙也已处理，见 T2.17 / T2.18 / T2.19），
   现在只差一台带嵌套虚拟化的机器。
 
 ## M3 · 真机行为验收
