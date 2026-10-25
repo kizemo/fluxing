@@ -167,6 +167,26 @@ if %build_rime% == 1 (
   rem applied from the main repo, so the submodule itself stays clean.
   powershell -ExecutionPolicy Bypass -File scripts\patch-librime-opencc-marisa.ps1
   if errorlevel 1 exit /b 1
+  rem L135: the clean-cache loop below uses LIBRIME-relative paths
+  rem (build, dist, lib, deps\*\build), so it has to run inside librime\.
+  rem Upstream rime/weasel does `cd %WEASEL_ROOT%\librime` right here (see
+  rem upstream commit 135b50a). This fork's commit face243 dropped that cd
+  rem while integrating librime-lua, and nothing ever restored it. The
+  rem consequence was silent and severe:
+  rem   - the loop resolved against the REPO root and deleted
+  rem     %WEASEL_ROOT%\lib\ -- the directory get-rime.ps1 installs rime.lib
+  rem     into, and one of the Weasel* projects' link search paths;
+  rem   - the later `copy ...\dist_Win32\lib\rime.lib %WEASEL_ROOT%\lib\`
+  rem     then failed with "The system cannot find the path specified";
+  rem   - and the failure was swallowed (see L135 note on `call :label`
+  rem     below), so `build.bat rime` still exited 0 and CI reported a
+  rem     GREEN step that had produced nothing. The real symptom showed up
+  rem     two steps later as "LNK1181: cannot open input file 'rime.lib'".
+  cd /d "%WEASEL_ROOT%\librime"
+  if errorlevel 1 (
+    echo Error: cannot enter %WEASEL_ROOT%\librime -- is the submodule checked out?
+    exit /b 1
+  )
   rem clean cache before building
   for %%a in ( build dist lib ^
     deps\glog\build ^
@@ -177,13 +197,20 @@ if %build_rime% == 1 (
     deps\yaml-cpp\build ) do (
       if exist %%a rd /s /q %%a
   )
+  cd /d "%WEASEL_ROOT%"
 
   rem build x64 librime
   set ARCH=x64
   call :build_librime_platform x64 %WEASEL_ROOT%\lib64 %WEASEL_ROOT%\output
+  rem L135: a failing `call :label` subroutine must not be swallowed. A
+  rem `goto error` inside a subroutine only exits THAT subroutine, so the
+  rem caller kept going and the script exited 0 -- a green step that had
+  rem in fact produced nothing. Same for the Win32 pass below.
+  if errorlevel 1 goto error
   rem build Win32 librime
   set ARCH=Win32
   call :build_librime_platform Win32 %WEASEL_ROOT%\lib %WEASEL_ROOT%\output\Win32
+  if errorlevel 1 goto error
   rem L121: revert the opencc patch so the librime submodule is left in its
   rem upstream state. The patch is re-applied automatically on the next build
   rem (the script is idempotent), so reverting here is safe and keeps the
@@ -200,8 +227,16 @@ if %build_weasel% == 1 (
     set build_opencc=1
   )
 )
-if %build_data% == 1 call :build_data
-if %build_opencc% == 1 call :build_opencc_data
+rem L135: same swallowed-errorlevel trap as the librime passes above --
+rem a failing subroutine must not let the script continue and exit 0.
+if %build_data% == 1 (
+  call :build_data
+  if errorlevel 1 goto error
+)
+if %build_opencc% == 1 (
+  call :build_opencc_data
+  if errorlevel 1 goto error
+)
 
 if %build_weasel% == 0 goto end
 
