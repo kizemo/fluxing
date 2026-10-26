@@ -35,10 +35,25 @@ patch:
 - 直接按的标点 → `punctuator/half_shape`（覆写 T1 的 include 陷阱）；
 - `Shift+标点` → `key_binder` 拦截后 `send` 目标字符。
 
+⚠️ 但 `key_binder` 这层有**两个前置条件**，缺一个就是**静默失效**：
+
+1. **`accept:` 的键名取决于前端**。Squirrel / IBus 发「基础键码 + Shift 掩码」
+   ⇒ 写 `Shift+comma`；**WeaselTSF（Windows）发「按键产生的字符」**
+   ⇒ 要写 `Shift+less`。写错的那一边永远不触发，**也不报错**。
+2. **`send:` 必须是单个 ASCII 字符**。`《` 是多字节 UTF-8，
+   librime 的 `KeyEvent::Parse` 解析失败 ⇒ **整条绑定被丢弃**
+   （日志刷 `invalid key binding #N, with invalid send pattern`）。
+
 ```yaml
+# Squirrel / IBus（Linux）—— 物理键名
 patch:
   key_binder/bindings/+:
-    - { when: always, accept: "Shift+comma", send: "《" }
+    - { when: always, accept: "Shift+comma", send: "?" }
+
+# WeaselTSF（Windows）—— 字符键名
+patch:
+  key_binder/bindings/+:
+    - { when: always, accept: "Shift+question", send: "?" }
 ```
 
 ## T3 · 开关跨方案继承，除非显式 `reset`

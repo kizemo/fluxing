@@ -56,7 +56,7 @@
 | 症状 | 原因 | 处理 |
 |---|---|---|
 | 中文标点怎么设都不对 | `recognizer/patterns/punct` 接管了 | `key_binder` 放到 `engine/processors` 头部 |
-| `Shift+,` 仍输出 `,` | Punctuator 不感知 Shift | 用 `key_binder` 拦截 `Shift+comma` |
+| `Shift+,` 仍输出 `,` | Punctuator 不感知 Shift | 用 `key_binder` 拦截；**键名按前端写**：Squirrel/IBus 写 `Shift+comma`，**WeaselTSF（Windows）写 `Shift+less`**（小狼毫/火流猩发的是字符不是键码） |
 | 直接按 `/` 改不动 | 撞 include 优先级 | 在 patch 里重述 `__include:`（T1） |
 | 数字后 `.` 不变西文句点 | `digit_separator_action` 是 `no_confirm` | 设 `commit`（代价：失去双击上中文句号） |
 | 双击 `.` 上不了中文句号 | 同上，`commit` 的代价 | 在 `digit_separators` 里去掉 `.` |
@@ -71,8 +71,8 @@
 | `Shift+Tab` 无效 | 修饰符顺序 | `Shift+Tab`，不是 `Tab+Shift` |
 | `Control+grave` 无效 | 大小写/引号 | 字面字符加引号 |
 | `Control+9` 绑了但裸按 9 也触发 | 修饰符严格匹配 | 写两条 |
-| 单独 Shift 切不了中英（小狼毫） | key_binder release 事件 modifier 比较缺陷 | 走 `ascii_composer/switch_key` |
-| `Ctrl+Shift+9` 切不动标点 | 被系统 hotkey 抢 | 改 `Control+Shift+numbersign` |
+| 单独 Shift 切不了中英（小狼毫） | **前端把 Shift 整段吃掉**，librime 根本看不到这个键 | yaml 层做不到（`ascii_composer/switch_key` 也一样收不到）；小狼毫/火流猩只能走服务端状态机 |
+| `Ctrl+Shift+9` 切不动标点 | **前端发的是 `(` 不是 `9`**（小狼毫/火流猩发字符不发键码），不是被系统 hotkey 抢 | 改 `Control+Shift+numbersign` |
 | 新绑定不生效但旧的生效 | 追加位置不对/被前面的条目命中 | 用 `/+` 追加；具体条件排前，`always` 排后 |
 | `send` 出去的键没反应 | 键名不存在于上下文 | 换成 `send_sequence` 组合，或用 X11 键名 |
 

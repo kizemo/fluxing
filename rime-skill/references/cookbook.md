@@ -138,22 +138,51 @@ patch:
 
 ### Shift+标点（`Shift+,` → 「《」）
 
+> ⚠️ **`accept:` 的键名写法取决于前端** —— 这是本节最容易踩空的地方。
+>
+> | 前端 | 前端发给 librime 的东西 | `accept:` 该写什么 |
+> |---|---|---|
+> | **Squirrel / IBus**（Linux） | **基础键码 + Shift 掩码** | `Shift+comma`（**物理键**名） |
+> | **WeaselTSF**（Windows，小狼毫 / 火流猩） | **按键产生的字符** | `Shift+less`（**字符**名） |
+>
+> 写错的那一边**永远不触发**，而且**不报错** —— librime 只在**键名查不到**时
+> 才报错。一个「查得到但永远匹配不上」的绑定是最难查的一类静默失效。
+> 判据：**前端发来的字符码 == 你写的键名的码**，两边必须字面对上。
+
+#### Squirrel / IBus（Linux）
+
 ```yaml
-# weasel.custom.yaml / squirrel.custom.yaml / <schema>.custom.yaml 均可
+# squirrel.custom.yaml / <schema>.custom.yaml
 patch:
   key_binder/bindings/+:
-    - { when: always, accept: "Shift+comma", send: "《" }
-    - { when: always, accept: "Shift+period", send: "》" }
-    - { when: always, accept: "Shift+slash", send: "？" }
-    - { when: always, accept: "Shift+semicolon", send: "：" }
-    - { when: always, accept: "Shift+apostrophe", send: '"' }
-    - { when: always, accept: "Shift+backslash", send: "|" }
-    - { when: always, accept: "Shift+bracketleft", send: "{" }
-    - { when: always, accept: "Shift+bracketright", send: "}" }
+    - { when: always, accept: "Shift+comma", send: "?" }
+```
+
+#### WeaselTSF（Windows，小狼毫 / 火流猩）
+
+```yaml
+# weasel.custom.yaml / <schema>.custom.yaml
+patch:
+  key_binder/bindings/+:
+    - { when: always, accept: "Shift+less",        send: "<" }
+    - { when: always, accept: "Shift+greater",     send: ">" }
+    - { when: always, accept: "Shift+question",    send: "?" }
+    - { when: always, accept: "Shift+quotedbl",    send: '"' }
+    - { when: always, accept: "Shift+bar",         send: "|" }
+    - { when: always, accept: "Shift+braceleft",   send: "{" }
+    - { when: always, accept: "Shift+braceright",  send: "}" }
 ```
 
 > 用 `/+` 追加，不覆盖已有 `key_binder` 绑定。
-> 键名用 X11 名称（`comma` `period` `slash` `semicolon` `apostrophe` `backslash` `bracketleft` `bracketright`），**不要写成 `,` `.`**。
+> 键名用 X11 名称（`comma` `less` `bar` …），**不要写成 `,` `.`**。
+
+> ⚠️ **`send:` 只能是单个 ASCII 字符**。librime 的 `KeyEvent::Parse`
+> 对长度为 1 的串直接取字符码（`key_event.cc:56-57`），所以 `"` `|` `{` `}`
+> 都合法；**多字节 UTF-8**（`《` `》` `？` `：`）会走键名分支查不到 ⇒
+> **整条绑定被丢弃**，日志里刷
+> `invalid key binding #N, with invalid send pattern`。
+> ⇒ 想让 `Shift+,` 输出中文全角「《」，**`send:` 做不到**；
+> 只能靠 `punctuator`（但它不感知 Shift）或另开一条链路。
 
 ### 数字后的符号智能转换
 

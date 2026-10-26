@@ -30,6 +30,15 @@
 - `test/TestHotkeyBindings/fixtures/negative-controls.*`：补 `Shift+quotedbl → REACHABLE`
   阳性对照（`Shift+apostrophe → DEAD_KEYCODE` 的孪生）；
 - `test/TestDefaultHotkeys`：4 条断言改名 + 4 条**否定断言**钉住旧写法不许复活。
+- `rime-skill`（本仓库存的技能副本）：修掉它**教人写死绑定**的地方 ——
+  `references/cookbook.md` 的「Shift+标点」配方原来只给一种写法，
+  而 `accept:` 的键名**取决于前端**（Squirrel/IBus 发基础键码 + Shift 掩码，
+  WeaselTSF 发**按键产生的字符**）⇒ 在 Windows 上按那份配方写的每一条都永远不触发，
+  而且**不报错**。同时补上 `send:` 只能是**单个 ASCII 字符**这条硬约束
+  （多字节 UTF-8 会被 librime 丢弃）。
+  另修 `references/librime-traps.md`（T2 示例）、`references/troubleshooting.md`
+  与 `chapters/ch07-排错手册.md` 里 3 处**已被 ADR 0009 / ADR 0010 推翻的归因**
+  （「Ctrl+Shift+9 是被系统 hotkey 抢了」「单独 Shift 走 ascii_composer/switch_key 就行」）。
 
 **验收**:
 
