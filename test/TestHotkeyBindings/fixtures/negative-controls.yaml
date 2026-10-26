@@ -20,6 +20,12 @@ key_binder:
     # --- the TSF front end sends the character, not the key ------------
     # Shift+apostrophe asks for 0x27, the front end sends 0x22.
     - { when: always, accept: Shift+apostrophe, send: '"' }
+    # --- the character key name IS reachable (ADR 0009) -----------------
+    # The positive twin of the case above: Shift+' produces 0x22 in the
+    # front end, so Shift+quotedbl is the spelling that actually fires.
+    # If the front end ever changes to send base keysyms, this expectation
+    # breaks and the gate says so.
+    - { when: always, accept: Shift+quotedbl, send: '"' }
 
     # --- librime cannot resolve the key name --------------------------
     # key_binder.cc:180 logs "invalid key binding" and drops it.

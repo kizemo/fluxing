@@ -18,6 +18,7 @@
 #
 negative-controls.yaml|Shift+space|REACHABLE
 negative-controls.yaml|Shift+apostrophe|DEAD_KEYCODE
+negative-controls.yaml|Shift+quotedbl|REACHABLE
 negative-controls.yaml|Shift+notakey|DEAD_ACCEPT
 negative-controls.yaml|Shift+Ctrl+space|DEAD_ACCEPT
 negative-controls.yaml|Control+1|DEAD_SEND

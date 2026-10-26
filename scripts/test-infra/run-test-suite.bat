@@ -133,13 +133,18 @@ rem      from a broken one. A gate that flagged everything would fail here,
 rem      because the fixture also contains a binding that really works.
 rem   2) the shipped configuration -- every binding that can never fire has
 rem      to be listed in known-dead-bindings.txt, otherwise the gate is red.
+rem      The scan covers default.yaml plus all three user-custom overrides:
+rem      each override ships its own copy of the Shift+punctuation bindings,
+rem      so scanning only one of them would leave the other two unchecked.
+rem      The baseline is empty on purpose (ADR 0009 / L149), so the gate must
+rem      report dead=0 and known_dead=0.
 rem The generated keysym table is checked against librime's own key_table.cc
 rem so it cannot silently drift away from the library it mirrors.
 echo === Running TestHotkeyBindings.exe (negative control) ===
 "Release\TestHotkeyBindings.exe" --expectations "test\TestHotkeyBindings\fixtures\negative-controls.expect.txt" "test\TestHotkeyBindings\fixtures\negative-controls.yaml" < nul
 if !errorlevel! NEQ 0 set "FAIL=1"
 echo === Running TestHotkeyBindings.exe (shipped configuration) ===
-"Release\TestHotkeyBindings.exe" --baseline "test\TestHotkeyBindings\known-dead-bindings.txt" "output\data\default.yaml" "output\data\user-custom\rime_ice.custom.yaml" < nul
+"Release\TestHotkeyBindings.exe" --baseline "test\TestHotkeyBindings\known-dead-bindings.txt" "output\data\default.yaml" "output\data\user-custom\rime_ice.custom.yaml" "output\data\user-custom\double_pinyin_sogou.custom.yaml" "output\data\user-custom\radical_pinyin.custom.yaml" < nul
 if !errorlevel! NEQ 0 set "FAIL=1"
 echo === Checking keysyms_generated.inc against librime key_table.cc ===
 powershell -NoProfile -ExecutionPolicy Bypass -File "test\TestHotkeyBindings\gen-keysyms.ps1" -Check

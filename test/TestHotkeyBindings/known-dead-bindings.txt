@@ -1,6 +1,6 @@
 # Known-dead key_binder bindings in the Fluxing configuration.
 #
-# THESE ARE DEFECTS, NOT INTENT.
+# THIS FILE IS NOW EMPTY ON PURPOSE.
 #
 # The TSF front end sends the *character* a key produced, not the key
 # itself (WeaselTSF/KeyEvent.cpp:51 ToUnicodeEx). librime matches a
@@ -14,28 +14,26 @@
 # *new* dead binding appears. Fixing them is tracked in the next phase
 # development plan (see docs/agents/ and the verification report).
 #
-# ADR 0009 / L148: the two chords that used to be listed here
+# History:
 #
-#   always :: Control+Shift+9      -> deleted from output/data/default.yaml
-#   always :: Control+Shift+0      -> deleted from output/data/default.yaml
+#   6 entries -> ADR 0009: the two redundant duplicate chords
+#                (Control+Shift+9 / Control+Shift+0) were deleted from
+#                output/data/default.yaml; the reachable twins
+#                Control+Shift+numbersign / Control+Shift+dollar carry
+#                the same function, so the duplicates are gone from the
+#                shipped configuration instead of being registered here.
 #
-# were redundant duplicates (the reachable twins Control+Shift+numbersign
-# and Control+Shift+dollar carried the same function), so they are gone
-# from the shipped configuration instead of being merely registered as
-# known-dead. Only the four bindings that still need the character-key
-# rename are left below.
+#   4 entries -> ADR 0009 / L149: the four Shift+punctuation bindings
+#                were renamed to the character key names the front end
+#                actually sends:
+#                  Shift+apostrophe   -> Shift+quotedbl   (0x22)
+#                  Shift+backslash    -> Shift+bar        (0x7C)
+#                  Shift+bracketleft  -> Shift+braceleft  (0x7B)
+#                  Shift+bracketright -> Shift+braceright (0x7D)
+#                They fire now, so they are no longer defects.
+#
+# The baseline is intentionally empty. The gate must report
+# known_dead=0 and dead=0, so ANY dead binding in the shipped
+# configuration turns the build red instead of being absorbed here.
 #
 # Format:  <when> :: <accept>   [:: <send>, optional, for readability]
-#
-# --- user-custom/rime_ice.custom.yaml --------------------------------
-# The four Shift+punctuation bindings have no working twin. The front
-# end sends the shifted character, so the accept pattern has to name
-# that character, not the base key:
-#   Shift+apostrophe   -> the front end sends 0x22 -> use Shift+quotedbl
-#   Shift+backslash    -> the front end sends 0x7C -> use Shift+bar
-#   Shift+bracketleft  -> the front end sends 0x7B -> use Shift+braceleft
-#   Shift+bracketright -> the front end sends 0x7D -> use Shift+braceright
-always :: Shift+apostrophe :: '"'
-always :: Shift+backslash :: '|'
-always :: Shift+bracketleft :: '{'
-always :: Shift+bracketright :: '}'

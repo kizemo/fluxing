@@ -445,15 +445,29 @@ int main(int argc, char** argv) {
       check((tag + ": 已移除 Shift+semicolon 的中文全角绑定").c_str(),
             CountActiveLinesWith(text, "Shift+semicolon") == 0);
 
-      // The four ASCII bindings DO work and must be kept.
-      check((tag + ": 保留 Shift+apostrophe 绑定").c_str(),
-            CountActiveLinesWith(text, "accept: \"Shift+apostrophe\"") == 1);
-      check((tag + ": 保留 Shift+backslash 绑定").c_str(),
-            CountActiveLinesWith(text, "accept: \"Shift+backslash\"") == 1);
-      check((tag + ": 保留 Shift+bracketleft 绑定").c_str(),
-            CountActiveLinesWith(text, "accept: \"Shift+bracketleft\"") == 1);
-      check((tag + ": 保留 Shift+bracketright 绑定").c_str(),
-            CountActiveLinesWith(text, "accept: \"Shift+bracketright\"") == 1);
+      // ADR 0009 / L149: the four ASCII bindings work only when `accept:`
+      // names the CHARACTER the chord produces, not the physical key. The
+      // front end sends the shifted character (0x22 / 0x7C / 0x7B / 0x7D),
+      // so the physical-key spelling could never fire.
+      check((tag + ": 保留 Shift+quotedbl 绑定").c_str(),
+            CountActiveLinesWith(text, "accept: \"Shift+quotedbl\"") == 1);
+      check((tag + ": 保留 Shift+bar 绑定").c_str(),
+            CountActiveLinesWith(text, "accept: \"Shift+bar\"") == 1);
+      check((tag + ": 保留 Shift+braceleft 绑定").c_str(),
+            CountActiveLinesWith(text, "accept: \"Shift+braceleft\"") == 1);
+      check((tag + ": 保留 Shift+braceright 绑定").c_str(),
+            CountActiveLinesWith(text, "accept: \"Shift+braceright\"") == 1);
+
+      // The physical-key spelling must stay gone: that was the binding
+      // that never fired. Pin it so a silent revert cannot come back.
+      check((tag + ": 已移除 Shift+apostrophe 物理键写法").c_str(),
+            CountActiveLinesWith(text, "accept: \"Shift+apostrophe\"") == 0);
+      check((tag + ": 已移除 Shift+backslash 物理键写法").c_str(),
+            CountActiveLinesWith(text, "accept: \"Shift+backslash\"") == 0);
+      check((tag + ": 已移除 Shift+bracketleft 物理键写法").c_str(),
+            CountActiveLinesWith(text, "accept: \"Shift+bracketleft\"") == 0);
+      check((tag + ": 已移除 Shift+bracketright 物理键写法").c_str(),
+            CountActiveLinesWith(text, "accept: \"Shift+bracketright\"") == 0);
 
       // Exact binding inventory: 8 before L113, 4 after. Pins the file so a
       // future edit cannot silently add or drop a binding.

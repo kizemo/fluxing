@@ -2,19 +2,20 @@
 # encoding: utf-8
 #
 # 标准中文键盘布局修复（2026-06-23）：
-#   , → ，          Shift+, → 《
-#   . → 。          Shift+. → 》
-#   / → 、          Shift+/ → ？
-#   ; → ；          Shift+; → ：
-#   ' → '           Shift+' → "
-#   \ → 、          Shift+\ → |
-#   [ → 【          Shift+[ → {
-#   ] → 】          Shift+] → }
+#   , → ，          . → 。          / → 、          ; → ；
+#   ' → '           \ → 、          [ → 【          ] → 】
+#
+#   Shift+标点走 key_binder（直接 commit 期望字符，绕过 Punctuator）：
+#   Shift+' → "     Shift+\ → |     Shift+[ → {     Shift+] → }
 #
 # 实现策略：
 #   1. punctuator/half_shape patch —— 覆盖默认映射（rime_ice 默认 .→… 不符合中文标准键盘布局）
-#   2. key_binder/bindings + Shift+key accept —— Shift+标点被 rime key_binder 拦截后，
+#   2. key_binder/bindings + Shift+字符键名 accept —— Shift+标点被 rime key_binder 拦截后，
 #      直接 commit 期望字符（绕过 Punctuator，因为 Punctuator 用 unshifted key）
+#
+# ⚠️ L113：Shift+, / Shift+. / Shift+/ / Shift+; 这 4 条「commit 中文全角符号」的绑定
+#   **已移除** —— send 写的是多字节 UTF-8 字符，librime 的 KeyEvent::Parse 解析失败，
+#   整条绑定被丢弃（详见本文件下方的 L113 注释块）。
 #
 # 注意：librime Punctuator (librime/src/rime/gear/punctuator.cc) 用 unshifted
 # ASCII 作为 mapping key，对 Shift mask 不感知。因此直接按的标点用
@@ -47,11 +48,25 @@ patch:
   # Shift+标点：key_binder 拦截后 send 期望字符
   # 顺序：使用 bindings/+ 追加，不影响现有 has_menu bindings
   # when: always —— 中文模式下 Shift+标点应该总是 commit
-  # accept: Shift+key 语法：rime 中 Shift+comma 等价于物理键 Shift+, 触发的 keyevent
+  #
+  # ADR 0009：accept 里带修饰符时，写的是**这个组合键产生的字符的键名**，
+  #   不是物理键的键名。TSF 前端对可打印键走 ToUnicodeEx，发给 librime 的是
+  #   **产生的字符**（WeaselTSF/KeyEvent.cpp:51），librime 又按 (keycode, modifier)
+  #   精确匹配（key_event.h:43），两边字面对上才可能触发：
+  #     Shift+'   → 前端发 0x22 → accept 写 Shift+quotedbl  （不是 Shift+apostrophe）
+  #     Shift+\   → 前端发 0x7C → accept 写 Shift+bar       （不是 Shift+backslash）
+  #     Shift+[   → 前端发 0x7B → accept 写 Shift+braceleft  （不是 Shift+bracketleft）
+  #     Shift+]   → 前端发 0x7D → accept 写 Shift+braceright （不是 Shift+bracketright）
+  #   旧写法要的是 0x27/0x5C/0x5B/0x5D，跟前端实际发送的对不上 ⇒ 这 4 条绑定
+  #   **从来没有触发过**（ADR 0009 / L149）。
+  #
+  # send: 必须是**单个 ASCII 字符**。librime 的 KeyEvent::Parse 对长度为 1 的串
+  #   直接取字符码（key_event.cc:56-57），所以 '"' / '|' / '{' / '}' 都合法；
+  #   多字节 UTF-8 会走键名分支查不到 ⇒ 整条绑定被丢弃并刷错误日志。
   #
   # L113: 原来这里还有 4 条 send 写中文全角字符（《》？！：）的绑定
-  #   （Shift+, / Shift+. / Shift+/ / Shift+;）。**librime 的 key_binder 的 send:
-  #   必须是按键名，不接受字符** —— 多字节 UTF-8 解析失败后整条绑定被丢弃：
+  #   （Shift+, / Shift+. / Shift+/ / Shift+;），正是上面「send 必须是单个 ASCII
+  #   字符」这条原因，librime 解析失败后整条绑定被丢弃：
   #     key_event.cc:77  parse error: unrecognized key
   #     key_binder.cc:191 invalid key binding #N, with invalid send pattern
   #   ⇒ 这 4 个快捷键**从来没有生效过**，而且每次引擎启动都会刷 4 行错误日志。
@@ -66,9 +81,9 @@ patch:
   #     **没有 key→文本映射规则**。
   #   要实现只能改 librime（本项目禁止，P3）或另开一条链路，属后续立项。
   #
-  # 保留的 4 条：send 是单个 ASCII 字符，librime 能解析，实际生效。
+  # 4 条都要留着：accept 写字符键名、send 是单个 ASCII 字符，两头都能被 librime 解析。
   key_binder/bindings/+:
-    - { when: always, accept: "Shift+apostrophe", send: '"' }
-    - { when: always, accept: "Shift+backslash", send: "|" }
-    - { when: always, accept: "Shift+bracketleft", send: "{" }
-    - { when: always, accept: "Shift+bracketright", send: "}" }
+    - { when: always, accept: "Shift+quotedbl", send: '"' }
+    - { when: always, accept: "Shift+bar", send: "|" }
+    - { when: always, accept: "Shift+braceleft", send: "{" }
+    - { when: always, accept: "Shift+braceright", send: "}" }
