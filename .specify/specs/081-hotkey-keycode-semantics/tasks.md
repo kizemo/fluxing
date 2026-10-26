@@ -1,7 +1,10 @@
 81 任务清单
 
 > 勾选框与 [plan.md](plan.md) 的任务编号一一对应。
-> `[x]` = 本轮（2026-10-25）已完成；`[ ]` = 下一阶段待办。
+> `[x]` = 已完成；`[ ]` = 下一阶段待办。
+>
+> M1 的 4 条 `Shift+标点` 改名于 **2026-10-26** 落地（ADR 0009 收尾），
+> 门禁基线随之清零 ⇒ 出货配置现在是 `bindings=39|reachable=39|dead=0|known_dead=0`。
 
 ## M0 · 拍板与文档债
 
@@ -14,22 +17,50 @@
 
 ## M1 · 修死绑定
 
-- [ ] T1.1 `output/data/user-custom/rime_ice.custom.yaml`：`Shift+apostrophe` → `Shift+quotedbl`
-- [ ] T1.2 同上：`Shift+backslash` → `Shift+bar`
-- [ ] T1.3 同上：`Shift+bracketleft` → `Shift+braceleft`
-- [ ] T1.4 同上：`Shift+bracketright` → `Shift+braceright`
+- [x] T1.1 `output/data/user-custom/rime_ice.custom.yaml`：`Shift+apostrophe` → `Shift+quotedbl`（2026-10-26 落地）
+- [x] T1.2 同上：`Shift+backslash` → `Shift+bar`
+- [x] T1.3 同上：`Shift+bracketleft` → `Shift+braceleft`
+- [x] T1.4 同上：`Shift+bracketright` → `Shift+braceright`
 - [x] T1.5 `output/data/default.yaml`：删 `Control+Shift+9`（孪生键 `Control+Shift+numbersign`）（2026-10-25 落地；行首原位置留了 ADR 0009 说明注释）
 - [x] T1.6 同上：删 `Control+Shift+0`（孪生键 `Control+Shift+dollar`）
-- [ ] T1.7 `test/TestHotkeyBindings/known-dead-bindings.txt` 清空 —— **本轮只完成一半**：6 条 → 4 条（本轮删掉的是 `default.yaml` 那 2 条重复死绑定）；剩下 4 条 `Shift+标点` 等 T1.1-T1.4 改名修好后才清零
+- [x] T1.7 `test/TestHotkeyBindings/known-dead-bindings.txt` 清空 —— **已完成**：6 条 → 4 条（2026-10-25 删掉 `default.yaml` 那 2 条重复死绑定）→ **0 条**（2026-10-26 四条 `Shift+标点` 改名修好）。文件保留但只剩注释：记录 6 → 4 → 0 的历史，并写明「基线故意为空，任何死绑定直接让构建变红」
 - [x] T1.8 `test/TestDefaultHotkeys`：把「切换中英标点 = `Control+Shift+9`」的断言改成 `Control+Shift+numbersign`；「切换简繁 = `Control+Shift+0`」改成 `Control+Shift+dollar`（并补 2 条**否定断言**钉住死绑定不许复活；active 绑定数 44 → 42）
-- [ ] T1.9 同上：4 条 Shift+标点的断言同步改成字符键名
-- [ ] T1.10 `output/data/user-custom/double_pinyin_sogou.custom.yaml`：同样的 4 条一并修
-- [ ] T1.11 `output/data/user-custom/radical_pinyin.custom.yaml`：同样的 4 条一并修
-- [ ] T1.12 `user-custom/*.custom.yaml` 里「保留的 4 条……实际生效」的注释改成说明**为什么写字符键名**
-- [ ] T1.13 改完跑 `Release\TestHotkeyBindings.exe`（**不带** `--baseline`）→ 必须 `dead=0`（还差 4 条 `Shift+标点`，本轮带 `--baseline` 跑：`dead=0|known_dead=4`）
+- [x] T1.9 同上：4 条 Shift+标点的断言同步改成字符键名（并补 4 条**否定断言**钉住旧写法不许复活）
+- [x] T1.10 `output/data/user-custom/double_pinyin_sogou.custom.yaml`：同样的 4 条一并修
+- [x] T1.11 `output/data/user-custom/radical_pinyin.custom.yaml`：同样的 4 条一并修
+- [x] T1.12 `user-custom/*.custom.yaml` 里「保留的 4 条……实际生效」的注释改成说明**为什么写字符键名**
+- [x] T1.13 改完跑 `Release\TestHotkeyBindings.exe`（**不带** `--baseline`）→ 必须 `dead=0` ⇒ **实测 `SUMMARY|bindings=39|reachable=39|dead=0|known_dead=0`**
 - [ ] T1.14 重新打包安装包（`build.bat weasel installer`）
 - [ ] T1.15 静默装机 smoke test（AGENTS.md §2.5），结果写进 commit message
 - [x] T1.16 `WeaselServer/ShortcutSettings.cpp`：内置 / 默认快捷键表里的 `Control+Shift+9` / `Control+Shift+0` 改成可达的 `Control+Shift+numbersign` / `Control+Shift+dollar`（否则「快捷键设置」界面仍显示一个按不动的键，保存时还会把死绑定写回用户的 `custom.yaml`）
+- [x] T1.17 **【2026-10-26 本轮新增·已完成】门禁扫描范围扩到 3 份 `custom.yaml`** ——
+  以前只扫 `default.yaml` + `rime_ice.custom.yaml`，另外 2 份覆盖文件**根本没进门禁**
+  ⇒ 同样的 4 条死绑定在 `double_pinyin_sogou` / `radical_pinyin` 里可以随便坏而没人发现。
+  → `run-test-suite.bat` 的门禁调用补上这两个文件（`bindings` 31 → 39）；
+  → 负对照实证：改坏以前漏扫的任一文件 ⇒ 门禁立刻变红（`dead=1`）。
+
+## M3 · 「Shift 切中英文」可行性研究（2026-10-26）
+
+- [x] T3.1 **研究结论**：yaml 路径**不可能** —— `WeaselTSF/KeyEventSink.cpp:44-58`
+  把 `Shift_L` / `Shift_R` 整段吃掉（只走 `m_client.ShiftDown/ShiftUp` 的 IPC），
+  librime 永远看不到 Shift ⇒ 任何 `accept: Shift_L` / `ascii_composer/switch_key`
+  的 Shift 条目都是死的（ADR 0009 已写明）。
+- [x] T3.2 **L18 的历史阻塞已失效**：L18 记的「单键 Shift 会误匹配 release 事件」
+  根因是前端**曾把 Shift 转给 librime**；spec 077 起前端不再转 ⇒ 该阻塞消失。
+- [x] T3.3 **新冲突**：裸按 Shift **已被占用** —— `RimeWithWeasel.cpp:1765-1781`
+  的 `ShiftUp` 在 `downRecorded && !interveningKey` 时
+  `select_candidate(idx = 左1 / 右2)` = 选第 2/3 候选（spec 077，0.21.0.1 已发布）。
+- [x] T3.4 **冲突可解**：`Context::Select()` 在 composition 为空时直接
+  `return false`（`librime/src/rime/context.cc:113-115`）
+  ⇒ 「无候选菜单时选第 2 候选」本来就是**空操作**
+  ⇒ 属于**填补空档**而不是抢功能。
+- [x] T3.5 **推荐方案 = 上下文消歧**：无候选菜单时裸按 Shift → 切换中英；
+  有候选菜单时 → 保持现状（选第 2/3 候选）。实现点在服务端 `ShiftUp`，
+  约 20 行 + 配置开关 + `TestShiftIPCStateMachine` 扩展 + ADR。
+- [x] T3.6 **研究已成文**：**ADR 0010**（`docs/adr/0010-bare-shift-toggles-ascii-mode.md`，
+  Status = Proposed，附 3 个待拍板问题）。
+- [ ] T3.7 **实现**（待授权）：新 spec + C++ 改动 + 测试 + 配置开关。
+  本轮**未实施**，按 ADR 0010 的「Open questions」拍板后再立项。
 
 ## M2 · 门禁进 CI
 

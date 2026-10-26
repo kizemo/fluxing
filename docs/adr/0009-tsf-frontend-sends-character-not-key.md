@@ -79,11 +79,13 @@ We keep the "send the produced character" semantics and fix the
 - **Keep the six dead bindings and document them.** Rejected: two of them
   are redundant and mislead users; four of them are a broken promise.
 
-## Implementation status (2026-10-25)
+## Implementation status (2026-10-26)
 
-**Accepted and partly implemented.** The maintainers approved the direction
-(keep the "send the produced character" semantics, fix the configuration) and
-released the half that needs no further product decision:
+**Accepted and fully implemented.** The maintainers approved the direction
+(keep the "send the produced character" semantics, fix the configuration).
+The first half (2026-10-25) released the part that needed no further product
+decision; the second half (2026-10-26) renamed the four `Shift+punctuation`
+bindings, which is what actually makes them fire.
 
 | Part | State | Where |
 |---|---|---|
@@ -92,9 +94,16 @@ released the half that needs no further product decision:
 | Shrink `known-dead-bindings.txt` from 6 entries to 4 | **done** | `test/TestHotkeyBindings/known-dead-bindings.txt` |
 | Re-pin the binding count that `TestYamlRoundTripE2E` asserts (29 -> 27) | **done** | `test/TestYamlRoundTripE2E/TestYamlRoundTripE2E.cpp` |
 | Keep the settings UI's builtin / default shortcut table in sync | **done** | `WeaselServer/ShortcutSettings.cpp` |
-| Rename the four `Shift+punctuation` bindings to the character key names | **not started** | still in `known-dead-bindings.txt`; spec 081 T1.1-T1.4 |
+| Rename the four `Shift+punctuation` bindings to the character key names | **done** | the three `output/data/user-custom/*.custom.yaml` overrides |
+| Empty the known-dead baseline so any dead binding turns the build red | **done** | `test/TestHotkeyBindings/known-dead-bindings.txt` (0 entries) |
+| Scan all three overrides in the gate, not just `rime_ice` | **done** | `scripts/test-infra/run-test-suite.bat` |
 
-Gate output after the change: `bindings=31|reachable=27|dead=0|known_dead=4`.
+Gate output after the first half: `bindings=31|reachable=27|dead=0|known_dead=4`.
+
+Gate output after the rename (2026-10-26): the baseline is empty and the gate
+scans all three overrides, so it now reads
+`bindings=39|reachable=39|dead=0|known_dead=0` -- **every** binding in the
+shipped configuration is reachable.
 
 ### Two follow-ups this decision exposed
 

@@ -634,7 +634,8 @@ spec 042 优先级最高 (P1 路线图需求 F2 完整化), 其它按需选取�
 
 ## 15. 状态快照（2026-10-24）— 续 §10
 
-- **最新 release = v0.21.0.7**（2026-10-25，开发中）：ADR 0009 落地一半 —— 删掉 `output/data/default.yaml` 里 2 条**永远不可能触发**的重复快捷键（`Control+Shift+9` / `Control+Shift+0`），功能由可达的孪生键 `Control+Shift+numbersign` / `Control+Shift+dollar` 承担；「快捷键设置」界面的内置快捷键表同步更正。
+- **最新 release = v0.21.0.8**（2026-10-26，开发中）：ADR 0009 收尾 —— 3 份 `user-custom/*.custom.yaml` 里 4 条**永远不可能触发**的 `Shift+标点` 绑定改名成字符键名（`Shift+quotedbl` / `Shift+bar` / `Shift+braceleft` / `Shift+braceright`），这 4 条快捷键**第一次真的会生效**；门禁的 known-dead 基线随之清零（空基线 ⇒ 任何死绑定直接让构建变红），扫描范围扩到全部 3 份覆盖文件。
+- **v0.21.0.7**（2026-10-25）：ADR 0009 落地一半 —— 删掉 `output/data/default.yaml` 里 2 条**永远不可能触发**的重复快捷键（`Control+Shift+9` / `Control+Shift+0`），功能由可达的孪生键 `Control+Shift+numbersign` / `Control+Shift+dollar` 承担；「快捷键设置」界面的内置快捷键表同步更正。
 - **v0.21.0.6**（2026-10-24）：移除 3 份 `custom.yaml` 里 4 条从未生效的
   `Shift+标点` 绑定（L113）+ 发布构建统一走 `build.bat`（MSBuild），消除 xmake 路径
   产出的「装上就注册不上」的安装包（L127 / L128）。已构建并通过沙箱门禁，待推送 / 发布。

@@ -723,8 +723,7 @@ Rime `default.yaml` 中**默认的 key_binder/bindings**(小狼毫/鼠鬚管通�
 | 翻页 | `period` | `Page_Down` | has_menu | `.` 向后翻 |
 | 开关 | `Control+Shift+numbersign` | toggle ascii_punct | always | 切中英标点 |
 | 开关 | `Control+Shift+dollar` | toggle traditionalization | always | 切繁简 |
-| 开关 | `Shift+space` | toggle full_shape | always | 切全半角 |
-| 开关 | `Control+Shift+e` | toggle emoji | always | 切 emoji |
+| 开关 | `Shift+space` | toggle ascii_mode | always | 切中英 |
 | 选字 | (由 selector 默认) | `1`~`9` 选候选 | has_menu | 数字键选字 |
 | 选字 | `space` | confirm | has_menu | 空格确认 |
 | 小键盘 | `KP_0`~`KP_9` | `0`~`9` | composing | 小键盘数字直接上屏 |
@@ -741,6 +740,15 @@ Rime `default.yaml` 中**默认的 key_binder/bindings**(小狼毫/鼠鬚管通�
 > 所以 `Control+Shift+9` / `Control+Shift+0` 这类**写数字键名**的组合**永远不触发**
 > ⇒ 已从出货 `default.yaml` 删除。切中英标点用 `Control+Shift+numbersign`,
 > 切简繁用 `Control+Shift+dollar`。
+>
+> ⚠️ **ADR 0009(2026-10-26)**:同一条规则也适用于 `Shift+标点` —— `accept` 必须写
+> **这个组合键产生的字符**的键名（`Shift+quotedbl` / `Shift+bar` /
+> `Shift+braceleft` / `Shift+braceright`），写物理键名永远不触发。
+>
+> ℹ️ `full_shape` 与 `emoji` 两个开关**目前没有任何绑定**
+> （出货 `default.yaml` 里两条都是注释掉的），所以「快捷键设置」界面列出的
+> `Control+Shift+F` / `Control+Shift+e` 按下去没有反应 —— 这是界面在骗人，
+> 记在 ADR 0009「两个后续遗留」第 2 条。
 
 ---
 
@@ -748,8 +756,9 @@ Rime `default.yaml` 中**默认的 key_binder/bindings**(小狼毫/鼠鬚管通�
 
 ### 9.1 当前 `key_binder/bindings` (`rime_ice.schema.yaml:295-339`)
 
-共 31 条 = 出货 `default.yaml` 27 条 + `user-custom/rime_ice.custom.yaml` 4 条
-(门禁实测:`TestHotkeyBindings` → `bindings=31|reachable=27|dead=0|known_dead=4`)。
+共 39 条 = 出货 `default.yaml` 27 条 + 3 份 `user-custom/*.custom.yaml` 各 4 条
+(门禁实测:`TestHotkeyBindings` → `bindings=39|reachable=39|dead=0|known_dead=0`;
+known-dead 基线已于 2026-10-26 清零 ⇒ 任何一条死绑定直接让构建变红)。
 下面只摘录与本机 rime_ice 相关的部分。
 
 ```yaml
@@ -785,12 +794,13 @@ key_binder:
     - {accept: KP_Enter,     send: Return,   when: composing}
 
     # --- Shift+标点 → 符号 (用户自定义 4 条) ---
-    # ⚠️ ADR 0009:这 4 条也**永远不触发** —— 前端发的是 Shift 后的字符
-    # (0x22 / 0x7C / 0x7B / 0x7D),不是基础键。改键名才能修,见 spec 081 T1.1-T1.4。
-    - {when: always, accept: "Shift+apostrophe",  send: '"'}
-    - {when: always, accept: "Shift+backslash",   send: "|"}
-    - {when: always, accept: "Shift+bracketleft", send: "{"}
-    - {when: always, accept: "Shift+bracketright", send: "}"}
+    # ✅ ADR 0009:这 4 条现在**真的能触发** —— accept 必须写「组合键产生的字符」
+    # 的键名(前端发 0x22 / 0x7C / 0x7B / 0x7D);写物理键名(0x27 / 0x5C / 0x5B / 0x5D)
+    # 永远不匹配。见 spec 081 T1.1-T1.4。
+    - {when: always, accept: "Shift+quotedbl",  send: '"'}
+    - {when: always, accept: "Shift+bar",       send: "|"}
+    - {when: always, accept: "Shift+braceleft",  send: "{"}
+    - {when: always, accept: "Shift+braceright", send: "}"}
 ```
 
 ### 9.2 当前 `editor/bindings` (`rime_ice.schema.yaml:341-352`)
@@ -811,25 +821,29 @@ editor:
     Escape: cancel
 ```
 
-### 9.3 当前 `ascii_composer/switch_key` (`rime_ice.custom.yaml:27-31` + `schema.yaml:287-294`)
+### 9.3 当前 `ascii_composer/switch_key` (`output/data/default.yaml`)
 
-**这是 v0.21.0.1 修小狼毫 Shift_L 失效的 root cause fix**:
+**这段在 `default.yaml` 里,不在 `user-custom/*.custom.yaml` 里** —— 覆盖文件没有
+patch `switch_key`。实际内容:
 
 ```yaml
 ascii_composer:
   switch_key:
-    Caps_Lock: clear         # 保留 rime_ice default
-    Control_L: noop
-    Control_R: noop
-    Shift_L: commit_text     # ← 改成 commit_text,让 ascii_composer 接管 toggle
-    Shift_R: commit_text     # ← 改成 commit_text
+    Caps_Lock: clear      # commit_code | commit_text | clear
+    Shift_L: noop         # 火流猩 v2: noop 让 ascii_composer 不接管 Shift_L(避免与 key_binder 冲突)
+    Shift_R: noop         # commit_code | commit_text | inline_ascii | clear | noop | set_ascii_mode | unset_ascii_mode
+    Control_L: noop       # commit_code | commit_text | inline_ascii | clear | noop | set_ascii_mode | unset_ascii_mode
+    Control_R: noop       # commit_code | commit_text | inline_ascii | clear | noop | set_ascii_mode | unset_ascii_mode
 ```
 
 **坑**:
 - librime `key_event.h:43` 的 `operator==` 比较 modifier 含 `RELEASE_MASK`
 - WeaselTSF `KeyEvent.cpp:27-28` 在 release 事件**强制**加 `RELEASE_MASK`
 - `key_binder` 的 `accept: Shift_L` (modifier=0) **永远不匹配** release (modifier=RELEASE_MASK)
-- `ascii_composer/switch_key` 走另一条路径(不参与 release 比较),所以**单独 Shift 能 toggle**
+- ⚠️ **本 fork 把 `Shift_L` / `Shift_R` 设成 `noop`(不是 `commit_text`)** ⇒
+  `ascii_composer` **不再接管** Shift,所以「单独 Shift 切中英」在 yaml 层走不通。
+  spec 077 起 Shift 改由**前端 IPC** 接管(`WEASEL_IPC_SHIFT_DOWN/UP`),
+  裸按 Shift = 选第 2/3 候选 —— 完整分析见 **ADR 0010**。
 - rime_ice default 的 8 条 `Shift_L/R`/`Shift+l/r` binding 整段删了 — 因为它们 `accept` 是 Shift 单独 / Shift+l,都受这个 bug 影响
 
 ### 9.4 本机 `user-custom/rime_ice.custom.yaml` 的 patch 结构
@@ -838,19 +852,22 @@ ascii_composer:
 
 ```yaml
 patch:
-  ascii_composer/switch_key:           # 覆盖
-    Shift_L: commit_text
-    Shift_R: commit_text
-  key_binder/bindings:                # 整段替换(没用 /+,所以替换)
-    - {accept: ..., send: ..., when: ...}
-    ...
-  punctuator/half_shape:              # 覆盖 + 继承
+  punctuator/half_shape:              # 覆盖 + 继承(必须重述 __include,见文件头注释)
     __include: default:/punctuator/half_shape
     ',': '，'                         # 覆盖 default 的映射
     ...
+  key_binder/bindings/+:               # 追加(用 /+,不替换)
+    - {when: always, accept: "Shift+quotedbl", send: '"'}
+    - {when: always, accept: "Shift+bar", send: "|"}
+    - {when: always, accept: "Shift+braceleft", send: "{"}
+    - {when: always, accept: "Shift+braceright", send: "}"}
 ```
 
-> ⚠️ `key_binder/bindings` **不能用 `bindings/+` 追加**到这个 patch,因为 rime_ice 自己定义 `key_binder/bindings` 时也没用 `import_preset` 拉 default — 它**整段列出**了需要的 binding。
+> ⚠️ `rime_ice.custom.yaml` **没有** patch `ascii_composer/switch_key`
+> —— 那一段在 `output/data/default.yaml` 里,且 `Shift_L` / `Shift_R` 是 `noop`(见 §9.3)。
+>
+> ⚠️ `punctuator/half_shape` 必须**重述** `__include: default:/punctuator/half_shape`,
+> 否则 patch 会因为「half_shape 还是 __include 字符串」而静默失效(见文件头注释)。
 
 ---
 
@@ -876,7 +893,7 @@ patch:
 | `when` 写了 `paging` 但没生效 | `paging` 条件要先有 `Page_Down` 触发过 | 改 `has_menu` |
 | 中文标点怎么输都不对 | `recognizer/patterns/punct` 覆盖了 `punctuator` | 把 `key_binder` 放 `engine/processors` 头部 |
 | `Shift+Tab` 没用 | modifier 顺序错(应该是 `Shift+Tab` 不是 `Tab+Shift`) | 固定修饰符顺序:Shift → Control → Alt |
-| 单独 Shift 切不了中英(小狼毫) | key_binder 的 release 事件 modifier 比较 bug | 走 `ascii_composer/switch_key` |
+| 单独 Shift 切不了中英 | 前端把 Shift 整段吃掉,librime 根本看不到它;本 fork 的 `ascii_composer/switch_key` 又是 `noop` | 目前**做不到** —— 要改服务端状态机,见 ADR 0010 |
 | `Ctrl+Shift+9` 切不动标点 | 前端发的是 `(` 不是 `9`,这个组合**永远不触发** | 用 `Control+Shift+numbersign`(ADR 0009) |
 | `Control+grave` 没用 | 大小写或修饰符拼错 | 用字面字符时**加引号** |
 | `bindings: [a, b, c]` 整段失效 | 写成 list,不是 list of map | 写成 `- {when:..., accept:...}` |

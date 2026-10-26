@@ -12532,3 +12532,85 @@ Output: "D:\a\fluxing\fluxing\output\archives\fluxing-0.21.0.30-installer.exe"
   正确做法是把它们**先格式化再改**（仓库规则：动了就得干净）。
 
 **关联**: ADR 0009、spec 081 T1.5-T1.8 / T1.15、L131、L113
+
+---
+
+## L149 - ADR 0009 收尾：4 条 `Shift+标点` 死绑定改名修好，门禁基线清零（2026-10-26）
+
+**Date**: 2026-10-26
+**Context**: spec 081 M1 收尾。ADR 0009 把 6 条死绑定分成两类处置：
+2 条功能重复的**删掉**（L148），另 4 条是用户可见功能**唯一实现**的**改名修好**。
+本轮做的是后半。
+
+**Incident**:
+
+- 用户授权「另 4 条由你决策」→ 决策：按 ADR 0009 已定的方向**改名**，
+  保留功能而不是删功能（删掉等于砍掉一条用户可见快捷键）。
+- 这 4 条（`Shift+apostrophe` / `Shift+backslash` / `Shift+bracketleft` /
+  `Shift+bracketright`）写在 **3 份** `user-custom/*.custom.yaml` 里，
+  而文件里的注释写着「保留的 4 条……实际生效」——
+  **实际上从来没有生效过**。
+- 门禁的 known-dead 基线把它们登记为「已知缺陷」（4 条），
+  于是门禁**一直是绿的** ⇒ 「已知缺陷」被当成了「已接受」。
+
+**Root cause**:
+
+- `accept:` 侧：同 ADR 0009 —— 前端发的是**字符**不发明钥，
+  `accept` 必须写**这个组合键产生的字符**的键名
+  （`Shift+quotedbl` / `Shift+bar` / `Shift+braceleft` / `Shift+braceright`）。
+- `send:` 侧是**另一个独立的坑**：`librime/src/rime/key_event.cc:56-57`
+  对**长度为 1** 的串直接取字符码，所以单个 ASCII 字符（`"` `|` `{` `}`）
+  合法；多字节 UTF-8 会走键名分支查不到 ⇒ 整条绑定被丢弃（L113）。
+  ⇒ **两头都得对**：`accept` 的键名要在 librime 键表里，`send` 必须是单字符。
+- 门禁漏扫：只扫 `default.yaml` + `rime_ice.custom.yaml`，
+  另外 2 份覆盖文件**根本没进门禁** ⇒ 同样的死绑定在那两份里可以随便坏。
+- 注释也会骗人：注释断言「实际生效」，而门禁的数字（`known_dead=4`）其实
+  已经把它标成死的了 —— 两条信息互相矛盾，没人交叉核对。
+
+**Fix**:
+
+- 3 份 `user-custom/*.custom.yaml`：4 条 `accept:` 改名；注释块整体重写成
+  「为什么必须写字符键名」（原注释「rime 中 Shift+comma 等价于物理键 Shift+,」
+  是**错的**）；
+- `test/TestHotkeyBindings/known-dead-bindings.txt`：基线 **4 条 → 0 条**
+  （文件保留，只剩注释：记录 6 → 4 → 0 的历史 + 「基线故意为空」的理由）；
+- 门禁扫描范围：`default.yaml` **+ 3 份 `custom.yaml`**（`bindings` 31 → 39）；
+- `negative-controls` fixture 补 **`Shift+quotedbl → REACHABLE`** 阳性对照
+  （与既有的 `Shift+apostrophe → DEAD_KEYCODE` 构成孪生）；
+- `TestDefaultHotkeys`：4 条断言改名 + 4 条**否定断言**钉住旧写法不许复活。
+
+**验收**:
+
+- 门禁两轮 `RESULT|PASS`；出货配置
+  `SUMMARY|bindings=39|reachable=39|dead=0|known_dead=0`；
+- 全套件 `=== ALL TESTS PASSED ===`（`TestDefaultHotkeys` 89 / 89）；
+- **空基线的判别力负对照**（M0–M5）：
+  - M0 原样拷贝 → 绿；
+  - M1 改回 `Shift+apostrophe` → 红（`dead=1`）；
+  - M2 改坏 `double_pinyin_sogou`（**以前漏扫的那份**）→ 红；
+  - M3 改坏 `radical_pinyin`（**以前漏扫的那份**）→ 红；
+  - M4 删掉一条 `send:` → 红（`DEAD_NO_ACTION`）。
+  ⇒ 「空基线」不是把阈值调松，而是**把阈值调到最严**。
+
+**推广**:
+
+- **「已知缺陷基线」是最容易变成垃圾桶的地方。** 4 条死绑定在里面躺着，
+  门禁一直绿 ⇒ 绿灯**不代表没有死绑定**，只代表「死绑定都登记过了」。
+  ⇒ 基线必须在缺陷修好时**同步清空**，否则它会慢慢变成「什么都往里扔」的赦免清单。
+  判据：**基线里每一条都应该在 issue 里有一个「什么时候修」的承诺**。
+- **扫描范围 = 你以为的范围。** 门禁只扫了 3 份里的 1 份，
+  而同样的配置存在于 3 份文件里 ⇒「有门禁」≠「都覆盖了」。
+  判据：**配置有几份副本，扫描就有几份**；新增副本时把「扫描列表」一起改。
+- **`accept:` 和 `send:` 是两个独立的坑。** 只修 `accept:` 而 `send:` 写了
+  多字节字符，整条绑定照样被丢弃。
+  判据：`accept` 的键名要在 librime 键表里；`send` 必须是**单个 ASCII 字符**。
+- **注释也会骗人。** 注释写「实际生效」而代码从来没生效过 ——
+  与 ADR 0009 的「界面在骗人」同源。
+  ⇒ 注释里凡是断言「生效 / 不生效 / 数量」的，都必须由门禁或测试的**实测数字**背书，
+  并在数字变化时同步改注释。
+- **配置类改动的验收要两层**：① 门禁说「可达」；② 负对照说「门禁不是摆设」。
+  本轮 M2 / M3 之所以能抓到，**正是因为**扫描范围扩了 3 份 ——
+  扩范围之前，同样两个变异是抓不到的。
+
+**关联**: ADR 0009 / ADR 0010、spec 081 T1.1-T1.4 / T1.7 / T1.9-T1.13 / T1.17、
+L148、L131、L113

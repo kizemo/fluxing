@@ -1,3 +1,47 @@
+## [0.21.0.8-fluxing] - 2026-10-26
+
+### fix(fluxing): 4 条 `Shift+标点` 快捷键**第一次真的能用**了（ADR 0009 收尾）
+
+**User-visible**:
+
+- `Shift+'` → `"`、`Shift+\` → `|`、`Shift+[` → `{`、`Shift+]` → `}`。
+  这 4 条此前**按下去从来没有反应**。
+- 直接按 `'` / `\` / `[` / `]` 的输出没变
+  （`'` → `'`、`\` → `、`、`[` → `【`、`]` → `】`）。
+
+**Root cause**:
+
+- 本 fork 的 TSF 前端发的是「按键产生的**字符**」，不是物理键
+  （`WeaselTSF/KeyEvent.cpp:51` 的 `ToUnicodeEx`）；
+  librime 按 `(keycode, modifier)` 精确匹配（`librime/src/rime/key_event.h:43`）。
+- 于是 `accept: "Shift+apostrophe"` 想要 keycode `0x27`，
+  前端发来的却是 `0x22`（`"`）⇒ **永不匹配**；其余 3 条同理。
+- 详见 **ADR 0009**（`docs/adr/0009-tsf-frontend-sends-character-not-key.md`）。
+
+**Fix**:
+
+- 3 份 `output/data/user-custom/*.custom.yaml`：4 条 `accept:` 改名成**字符键名**
+  （`Shift+quotedbl` / `Shift+bar` / `Shift+braceleft` / `Shift+braceright`），
+  `send:` 不变；注释块改写成「为什么必须写字符键名」；
+- `test/TestHotkeyBindings/known-dead-bindings.txt`：基线 **4 条 → 0 条**
+  （空基线 ⇒ 任何一条死绑定直接让构建变红）；
+- 门禁扫描范围：`default.yaml` **+ 3 份 `custom.yaml`**
+  （以前只扫 `rime_ice`，另外 2 份**根本没进门禁**）；
+- `test/TestHotkeyBindings/fixtures/negative-controls.*`：补 `Shift+quotedbl → REACHABLE`
+  阳性对照（`Shift+apostrophe → DEAD_KEYCODE` 的孪生）；
+- `test/TestDefaultHotkeys`：4 条断言改名 + 4 条**否定断言**钉住旧写法不许复活。
+
+**验收**:
+
+- 门禁两轮 `RESULT|PASS`；出货配置
+  `SUMMARY|bindings=39|reachable=39|dead=0|known_dead=0`；
+- 全套件 `=== ALL TESTS PASSED ===`（`TestDefaultHotkeys` 89 / 89）；
+- 空基线的判别力负对照（4 个变异，各让门禁变红）：改回旧写法 /
+  改坏以前漏扫的 `double_pinyin_sogou` / 改坏以前漏扫的 `radical_pinyin` /
+  删掉一条 `send:`。
+
+**事故记录**：**ADR 0009 / L149**。
+
 ## [0.21.0.7-fluxing] - 2026-10-25
 
 ### fix(fluxing): 删掉 2 条**永远不可能触发**的重复快捷键（ADR 0009）

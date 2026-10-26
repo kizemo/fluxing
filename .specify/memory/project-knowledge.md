@@ -7,7 +7,7 @@
 >
 > **维护周期**：每次架构性变更后更新；每个 spec ship 后追加相关章节。
 >
-> **最后更新**：2026-10-25（0.21.0.7：ADR 0009 删掉 2 条永不触发的重复快捷键）
+> **最后更新**：2026-10-26（0.21.0.8：ADR 0009 收尾，4 条 `Shift+标点` 死绑定改名修好，门禁基线清零）
 
 ---
 
@@ -15,7 +15,8 @@
 
 - **项目路径**：`F:\soft\00selfmade\rime_claude`
 - **当前分支**：`Fluxing`（推到 `kizemo/Fluxing`）
-- **当前版本**：v0.21.0.7（开发中）：ADR 0009 删掉 `output/data/default.yaml` 里 2 条永不触发的重复快捷键（`Control+Shift+9` / `Control+Shift+0`）；上一个已 ship 版本 v0.21.0.6：L113 移除 3 份 `custom.yaml`
+- **当前版本**：v0.21.0.8（开发中）：ADR 0009 收尾 —— 3 份 `user-custom/*.custom.yaml` 里 4 条永不触发的 `Shift+标点` 绑定改名成字符键名（`Shift+quotedbl` / `Shift+bar` / `Shift+braceleft` / `Shift+braceright`），这 4 条快捷键**第一次真的会生效**；门禁的 known-dead 基线随之清零（空基线），扫描范围扩到全部 3 份覆盖文件。
+  上一个已 ship 版本 v0.21.0.7：ADR 0009 删掉 `output/data/default.yaml` 里 2 条永不触发的重复快捷键（`Control+Shift+9` / `Control+Shift+0`）；v0.21.0.6：L113 移除 3 份 `custom.yaml`
   里 4 条从未生效的 `Shift+标点` 绑定 + L127 / L128 发布构建统一走 `build.bat`（MSBuild）
 - **最近 commit**：见 `git log --oneline -3`（`Fluxing` 分支，2026-10-24，领先 `kizemo/Fluxing` 的本地提交尚未推送）
 - **用户安装路径**：`D:\Program Files\fluxing\`（用户原始部署，绝对不能改！）
