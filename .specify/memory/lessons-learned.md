@@ -12614,3 +12614,45 @@ Output: "D:\a\fluxing\fluxing\output\archives\fluxing-0.21.0.30-installer.exe"
 
 **关联**: ADR 0009 / ADR 0010、spec 081 T1.1-T1.4 / T1.7 / T1.9-T1.13 / T1.17、
 L148、L131、L113
+
+---
+
+## L150 - 门禁失败时要**先分层定位**，不要用高风险动作凑证据（2026-10-28）
+
+**现象**:
+
+- 0.21.0.9 的沙箱权威门禁（`F:\soft\00selfmade\sandbox-verify\rime-claude\run-verify.cmd`）
+  连续两轮都失败，报错只有一句「3 次启动都没拿到 claims.json」，
+  orchestrator exit code 4。
+- 真正的失败层次**不在报错里**：到 `C:\Users\Duanyi\sandbox-artifacts\rime\logs\` 里一看，
+  **连 `boot.log` 都没有** ⇒ Windows Sandbox 虚机**根本没起来**，
+  与静默安装、claims 断言、Weasel 本身**都无关**。
+- 同一台机器 2026-10-25 成功跑出过 `PASS=38 FAIL=2`（E.2 无 D: 盘、E.4 无外网是常驻环境事实）
+  ⇒ 不是「这台机器不支持」。
+
+**根因 / 判定法**:
+
+- orchestrator 的**唯一**输出是「没拿到 claims.json」，它把
+  **启动层 / 安装层 / 断言层**三种失败**压成同一句话** ⇒ 报错文本不可用于定位。
+- 可用于分层的信号是 **artifacts 目录里「哪个文件没出现」**：
+  - 连 `boot.log` 都没有 ⇒ **启动层**（Hyper-V / vSwitch / 虚机），再重跑同一条命令无意义；
+  - 有 `boot.log`、无 `claims.json` ⇒ **安装层**（静默安装 / `/D=` 参数）；
+  - 有 `claims.json`、断言不全 ⇒ **断言层**（这才是门禁该管的事）。
+- 本次环境线索：`vmcompute` / `vmms` / `hvhost` 进程在跑、主机 `HypervisorPresent=True`，
+  但 Hyper-V `VmSwitch` 事件日志有「延迟删除操作请求一文件对象的非关闭操作」错误
+  ⇒ 怀疑 vSwitch 状态卡死，**根因未坐实**。
+
+**教训**:
+
+- **门禁红了不等于代码有问题。** 先判定是「哪一层红了」，再决定要不要改代码。
+  判据：**失败时先看 artifacts 目录的缺失文件清单，而不是只看最后一行报错**。
+- **不要用高风险动作给不可用的门禁凑证据。** 本机的替代路径是**静默安装 0.21.0.9**，
+  但 `install.nsi` 会 `regsvr32` 注册 TSF TIP 并改写
+  `HKLM\...\CTF\KnownClasses`、`HKCU\...\CTF\Assemblies\0x00000804\{3D02CAB6-…}`、
+  `HKLM\SOFTWARE\Microsoft\CTF\TIP\{A3F4CDED-…}` ⇒ 会把用户正在用的
+  `D:\Program Files\fluxing` 的输入法注册指向临时目录。
+  ⇒ 宁可**如实报告「这条门禁没跑通」**，也不要动用户机器上的输入法注册。
+- **同类失败要留证据再重试。** 本次两轮都把「`boot.log` 是否存在」这一条记了下来，
+  第二轮才确定「不是偶发」；第一轮若只看报错文本，会误判成「重跑一下就好」。
+
+**关联**: 清单 T19、spec 082 §3.4、AGENTS.md §2.5、L17 / L54

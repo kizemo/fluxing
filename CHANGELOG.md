@@ -56,6 +56,17 @@
 - `Release\TestPipeChannelRace.exe` ⇒ `Result: 12 passed, 0 failed`
 - clang-format-18（CI 同版本）对全部触及的 `.cpp` / `.h` ⇒ clean
   （前置提交 `a023ee1` `style(fluxing):`，CI lint 门禁要求整文件格式干净）
+- CI `ci.yml` run `40538755392`（head `e0d6908`）⇒ `lint` = **success**；
+  `test` / `build (msbuild)` / `build (xmake)` 三个 job 在本文档落笔时**仍为 `in_progress`**，
+  未取得终态 ⇒ **此处不预先断言其结论**（终态以 GitHub Actions run `40538755392` 页面为准）
+- **沙箱权威门禁 ⇒ 失败（环境问题，非代码问题）**：两轮 `run-verify.cmd` 均报
+  「3 次启动都没拿到 claims.json」（orchestrator exit code 4），
+  `C:\Users\Duanyi\sandbox-artifacts\rime\logs\` 下**连 `boot.log` 都没有**
+  ⇒ Windows Sandbox 虚机**根本没启动**（与安装、断言、Weasel 本身无关）。
+  同机 2026-10-25 曾成功跑出 `PASS=38 FAIL=2`（E.2 无 D: 盘、E.4 无外网是常驻环境事实）。
+  本轮**未改** `output/install.nsi` 与 `output/data/user-custom/**`，按 AGENTS.md §2.5 不强制沙箱门禁；
+  且**不用本机静默装机替代**（会 `regsvr32` 重写 TSF TIP / `CTF\KnownClasses`，
+  把用户正在用的 `D:\Program Files\fluxing` 注册指向临时目录）。详见 L150
 
 **Ship**:
 

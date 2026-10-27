@@ -8,9 +8,12 @@
 > - 在 [§7 待补充开发内容](#7-待补充开发内容) 里加你要开发的新条目；
 > - 每加一条，**同时**补一行「验收方式」——没有验收方式的功能不进这份清单。
 >
-> **本轮状态**：2026-10-27 快照。当前版本 **0.21.0.9**（CHANGELOG 已记录，安装包已构建于
-> `output/archives/`，**尚未进 `release/` 发布链**）。本轮完成 **T1 裸 Shift 切中英文**（ADR 0010 / spec 082）。
-> 依据：相对上游 `master` 的 `git diff --numstat master...Fluxing`、CHANGELOG 版本节、65 份 spec 的 tasks 统计。
+> **本轮状态**：2026-10-28 快照。当前版本 **0.21.0.9**（CHANGELOG 已记录，安装包已构建于
+> `output/archives/`，**尚未进 `release/` 发布链**）。最近完成 **T1 裸 Shift 切中英文**（ADR 0010 / spec 082），
+> 提交 `258e708`，已推送至 `kizemo/Fluxing`（HEAD `e0d6908`）。
+> **权威沙箱门禁在本机跑不起来**（Windows Sandbox 虚机不启动，见 §4.3 T19）
+> ⇒ 0.21.0.9 的真机验收**只能由人手敲**（spec 082 §3.4 六条）。
+> 依据：相对上游 `master` 的 `git diff --numstat master...Fluxing`、CHANGELOG 版本节、66 份 spec 的 tasks 统计。
 
 ---
 
@@ -189,7 +192,7 @@
 | 编号 | 内容 | 优先级 | 阻塞/依赖 | 验收方式 |
 |---|---|---|---|---|
 | T1 | **裸 Shift 切换中英文**（ADR 0010） | P0 | 无 | `TestShiftIPCStateMachine` 扩展 + 真机按键 | ✅ **已完成**（2026-10-27，见 §2 C8） |
-| T2 | 设置界面抓键路径 **layout-aware 改造**（现在用虚拟键码拼 `accept:`，能造出 `Control+Shift+9` 这类死绑定） | P0 | 无 | 门禁 + 界面生成绑定全部可触发 |
+| T2 | 设置界面抓键路径 **layout-aware 改造**（现在用虚拟键码拼 `accept:`，能造出 `Control+Shift+9` 这类死绑定） | P0 | 无 | 门禁 + 界面生成绑定全部可触发。🟡 **已定稿**（ADR 0011 `Proposed` + spec 083，2026-10-28）：死绑定已用门禁对照实验坐实（`Control+Shift+9` ⇒ `DEAD_KEYCODE`，前端实际发 `0x0028`）；**实现待做**（spec 083 §4 的 M1–M6） |
 | T3 | yaml 设置 UI：样式页 / 方案页 / 用户词典页 | P1 | T2 | 界面改动后 `bindings` 数与门禁一致 |
 | T4 | QuickPanel v4 / v3-rev3 / 长显模式收口 | P2 | 无 | 截图 + 沙箱断言 |
 | T5 | FluxingComponents 动画 + Fluent Token 收敛 | P2 | 无 | 视觉回归 |
@@ -216,6 +219,8 @@
 | T16 | CI installer artifact 下载校验 | ⚠️ 受限 | 网速约 50 KB/s，43 MB 产物下载超时；已用本机包 + CI 日志门禁数字替代 |
 | T17 | 共享 `data/` 目录其余文件升级 | ⚠️ 待用户操作 | 除 `default.yaml` 外仍是 2026-08 旧版；需安装 0.21.0.9 安装包 |
 | T18 | 0.21.0.9 **进 `release/` 发布链** | ⚠️ 未做 | 安装包在 `output/archives/fluxing-0.21.0.9-installer.exe`（42,761,559 B，SHA256 `D1FCF78304FB89955F61F8925C894AB1F2CA5941FF9E9283D859D93A3E820E1C`），但 `release/` 里没有它 |
+| T19 | **沙箱权威门禁在本机跑不起来** | ⚠️ 环境故障 | `run-verify.cmd` 两轮均报「3 次启动都没拿到 claims.json」（orchestrator exit 4）；`sandbox-artifacts\rime\logs\` 下**连 `boot.log` 都没有** ⇒ Windows Sandbox 虚机根本没启动（Hyper-V vSwitch 异常，同机 2026-10-25 曾成功跑出 `PASS=38 FAIL=2`）。根因未定位；**不阻塞提交**（本轮未改 `output/install.nsi` 与 `output/data/user-custom/**`），但 0.21.0.9 的沙箱断言仍为空 ⇒ 见 L150 |
+| T20 | **CapsLock 打开时快捷键疑似全部失配** | ⚠️ 疑点，未实测 | 前端 `WeaselTSF/KeyEvent.cpp:18-19` 在 CapsLock 打开时多置 `LOCK_MASK`(0x2)，`expand_ibus_modifier`（`RimeWithWeasel.cpp:44-46`）保留该位，而 librime **精确比较 modifier**（`librime/src/rime/key_event.h:43-44`）⇒ 所有未写 `Lock+` 的绑定都失配；全仓无任何地方清除该位。**必须先实测再决定怎么修**（ADR 0011 Q2） |
 
 ---
 
@@ -241,6 +246,8 @@
 | `build (xmake)` arm64 目标缺失 | ARM 设备无 CI 覆盖 | 见 T14 |
 | 真实按键行为无法由门禁证明 | 门禁只证「能触发」，证不了「产生预期效果」 | 需人手敲一次 `Shift+'` |
 | MiniMax Code 运行时反复重启（1 h 内 6 次） | 持续杀掉在飞后台任务 | 已提报（仓外），产品侧排查中 |
+| 沙箱权威门禁在本机跑不起来（T19） | 0.21.0.9 的 46 项沙箱断言一条没跑 | 需修 Hyper-V vSwitch；或换一台机器跑（见 L150） |
+| CapsLock 打开时快捷键疑似全部失配（T20） | 常开 CapsLock 的用户会以为快捷键坏了 | 先实测；候选修法见 ADR 0011 Q2（前端清位 / 产出 `Lock+` / 门禁纳入 caps 维度） |
 
 ---
 
@@ -267,8 +274,8 @@
 | 默认快捷键断言 | `test\TestDefaultHotkeys\Release\TestDefaultHotkeys.exe` | `Passed: 89 / 89` |
 | Shift 状态机断言 | `test\TestShiftIPCStateMachine\Release\TestShiftIPCStateMachine.exe` | `Result: 28 PASS / 0 FAIL`（17 个测试函数 / 28 条断言：11 个函数属 spec 077，6 个属 ADR 0010） |
 | 布局探测 | 门禁自带 `LAYOUT-PROBE\|Shift+quote=0x22 OK` | 键名解析与当前键盘布局一致 |
-| CI | `gh run list --repo kizemo/Fluxing --workflow ci.yml` | `lint`/`test`/`build (msbuild)`/`build (xmake)` 全 `success` |
-| 沙箱 | `F:\soft\00selfmade\sandbox-verify\rime-claude\` | ~46 项断言 |
+| CI | `gh run list --repo kizemo/Fluxing --workflow ci.yml` | run `40538755392`（head `e0d6908`）：`lint` = `success`；`test` / `build (msbuild)` / `build (xmake)` 落笔时仍 `in_progress`（未取终态，不预判） |
+| 沙箱 | `F:\soft\00selfmade\sandbox-verify\rime-claude\` | ~46 项断言 ⚠️ **0.21.0.9 本机未跑通**（T19：虚机不启动，无 `boot.log`） |
 
 > **门禁要指向部署产物跑一遍。** 只扫仓库树会漏：源绿了也可能产物是坏的
 > （本轮实测：扫仓库 `bindings=39`，扫真机产物 `bindings=120`，中间隔着一次部署）。
@@ -293,11 +300,11 @@
 | 0.21.0.6 | 2026-10-24 | L113 死绑定移除；发布构建统一走 MSBuild（L127/L128） |
 | 0.21.0.7 | 2026-10-25 | ADR 0009：删 2 条永不触发的重复快捷键 |
 | 0.21.0.8 | 2026-10-26 | ADR 0009 收尾：4 条 `Shift+标点` 改名修好；门禁基线清零；ADR 0010 成文 |
-| 0.21.0.9 | 2026-10-27 | ADR 0010：裸 Shift 切中英文（上下文消歧，默认开，配置开关可关）；`TestShiftIPCStateMachine` 扩到 28 PASS |
+| 0.21.0.9 | 2026-10-27 | ADR 0010：裸 Shift 切中英文（上下文消歧，默认开，配置开关可关）；`TestShiftIPCStateMachine` 扩到 28 PASS；**已推送 `e0d6908`**；沙箱门禁因本机环境未跑通（T19），真机按键验收待做 |
 
 ---
 
-## 10. 附录 B：spec 索引（65 份 / 292 done / 661 open）
+## 10. 附录 B：spec 索引（66 份）
 
 > **注意**：tasks.md 的勾选框**不可信**。多份已 ship 的 spec（002 / 006 / 037 / 050 / 070 等）
 > 仍显示 `0/N`。**权威记录是 CHANGELOG**，本清单 §2–§4 以 CHANGELOG + 门禁数字为准。
@@ -306,10 +313,11 @@
 |---|---|---|
 | 全部完成（DONE） | 5 | 008（候选字编辑）、077（Shift IPC 状态机）、079（编码修复）、080（自动弹面板）、082（裸 Shift 切中英） |
 | 部分完成（PART） | 12 | 001、003（构建）、004、005、010、011、036、049、051、075、078、081 |
-| 显示为未开工（OPEN） | 48 | 多数已 ship 但 tasks 未维护；真正未开工的是 010/011/050/052/070 等 |
+| 显示为未开工（OPEN） | 49 | 多数已 ship 但 tasks 未维护；真正未开工的是 010/011/050/052/070 等 |
 
 **真正的「设计已完成、代码未开始」**：spec 010（云同步）、spec 011（首启引导）、
-spec 050（yaml 编辑器剩余页）、spec 052（长显）、spec 070（v3-rev3）。
+spec 050（yaml 编辑器剩余页）、spec 052（长显）、spec 070（v3-rev3）、
+spec 083（抓键 layout-aware 改造，ADR 0011 已定稿、代码未开始）。
 
 ---
 
@@ -319,14 +327,14 @@ spec 050（yaml 编辑器剩余页）、spec 052（长显）、spec 070（v3-rev
 |---|---|
 | [`.specify/PRD.md`](.specify/PRD.md) | v2 产品需求（13 项 F1–F13 + SC-001~SC-006） |
 | [`CHANGELOG.md`](CHANGELOG.md) | 83 个版本节的权威发布记录 |
-| [`CONTEXT.md`](CONTEXT.md) | 领域词汇 + 16 条不变量 |
+| [`CONTEXT.md`](CONTEXT.md) | 领域词汇 + 17 条不变量 |
 | [`AGENTS.md`](AGENTS.md) | 操作手册（构建/测试/危险区/反模式） |
-| [`.specify/memory/lessons-learned.md`](.specify/memory/lessons-learned.md) | L01–L149 事故库 |
+| [`.specify/memory/lessons-learned.md`](.specify/memory/lessons-learned.md) | L01–L150 事故库 |
 | [`.specify/memory/project-knowledge.md`](.specify/memory/project-knowledge.md) | 部署路径/注册表/三层覆盖架构 |
-| [`docs/adr/`](docs/adr/) | 6 份架构决策记录 |
+| [`docs/adr/`](docs/adr/) | 7 份架构决策记录（0011 为 `Proposed`） |
 | [`Rime-设置说明书-重点快捷键.md`](Rime-设置说明书-重点快捷键.md) | 用户可见快捷键手册（md + html） |
 
 ---
 
-*最后更新：2026-10-27。数据来源：`git diff --numstat master...Fluxing`（HEAD `d77db65`）、
-`CHANGELOG.md` 版本节统计、`.specify/specs/` 64 份 tasks 勾选统计、CI run `40304837126` / `40307644184`。*
+*最后更新：2026-10-28。数据来源：`git diff --numstat master...Fluxing`（HEAD `e0d6908`）、
+`CHANGELOG.md` 版本节统计、`.specify/specs/` 66 个 spec 目录（58 份带 tasks.md）的勾选统计、CI run `40538755392`。*
