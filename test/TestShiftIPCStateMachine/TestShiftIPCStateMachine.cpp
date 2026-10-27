@@ -15,13 +15,16 @@ using namespace fluxing;
 static int s_passed = 0;
 static int s_failed = 0;
 
-#define EXPECT(cond, msg) do {                              \
-  if (cond) { ++s_passed;                                   \
-    std::printf("  PASS: %s\n", msg); }                     \
-  else { ++s_failed;                                        \
-    std::printf("  FAIL: %s (at %s:%d)\n",                  \
-                msg, __FILE__, __LINE__); }                  \
-} while (0)
+#define EXPECT(cond, msg)                                              \
+  do {                                                                 \
+    if (cond) {                                                        \
+      ++s_passed;                                                      \
+      std::printf("  PASS: %s\n", msg);                                \
+    } else {                                                           \
+      ++s_failed;                                                      \
+      std::printf("  FAIL: %s (at %s:%d)\n", msg, __FILE__, __LINE__); \
+    }                                                                  \
+  } while (0)
 
 // Test #1 — Shift_L Down→Up fires select index 1 (0-based).
 void Test_ShiftDownUp_L_FireSelect1() {
@@ -104,7 +107,8 @@ void Test_InterveningBeforeDown_NotPolluting() {
   sm.OnShiftDown(1, true);
   auto r = sm.OnShiftUp(1, true);
   EXPECT(r.fire_select, "Test #9: intervening before Down does not pollute");
-  EXPECT(r.index == 1u, "Test #9: intervening before Down Down->Up fires index=1");
+  EXPECT(r.index == 1u,
+         "Test #9: intervening before Down Down->Up fires index=1");
 }
 
 // Test #10 — fuzz 100 mixed cycles, no crash, single session map entry.

@@ -209,11 +209,12 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
   RIME_STRUCT(RimeStatus, status);
   if (rime_api->get_status(session_id, &status)) {
     std::string schema_id = status.schema_id;
-    
-  // spec 045 v0.18.29.0: cache current schema id for QuickPanel Row 3 label.
-  m_current_schema_id = status.schema_id ? status.schema_id : std::string();
-  if (m_available_schemas.empty()) _RefreshSchemaList();
-m_last_schema_id = schema_id;
+
+    // spec 045 v0.18.29.0: cache current schema id for QuickPanel Row 3 label.
+    m_current_schema_id = status.schema_id ? status.schema_id : std::string();
+    if (m_available_schemas.empty())
+      _RefreshSchemaList();
+    m_last_schema_id = schema_id;
     _LoadSchemaSpecificSettings(ipc_id, schema_id);
     _LoadAppInlinePreeditSet(ipc_id, true);
     _UpdateInlinePreeditStatus(ipc_id);
@@ -369,10 +370,11 @@ void RimeWithWeaselHandler::DeleteCandidateOnCurrentPage(
   if (m_disabled)
     return;
   // spec 028: librime 1.13 delete_candidate C API.
-  // Engine-side: Context::DeleteCandidate(index) at librime/src/rime/context.cc:146.
-  // The engine does the is_user_dict check internally; the C API does NOT
-  // expose is_user_dict in rime_candidate_t (see L35). When the engine
-  // decides the candidate is a user-dict entry, it removes it from user.db.
+  // Engine-side: Context::DeleteCandidate(index) at
+  // librime/src/rime/context.cc:146. The engine does the is_user_dict check
+  // internally; the C API does NOT expose is_user_dict in rime_candidate_t (see
+  // L35). When the engine decides the candidate is a user-dict entry, it
+  // removes it from user.db.
   rime_api->delete_candidate_on_current_page(to_session_id(ipc_id), index);
   _UpdateUI(ipc_id);
 }
@@ -452,8 +454,9 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
   m_active_session = 0;
   // L81-fix: 把 L69-fix 残留的 `if (false)` 重新启用。
   // L69 因 GDI+ heap-corruption (L67-L69 崩溃链) 临时禁掉 QuickPanel。
-  // L70+ spec 070 重新启用并改纯 GDI (L75)。但 L69 的 `if (false) QuickPanelDialog::Hide()`
-  // 一直没改回 `if (true)` — 导致用户切走 (Win+Space → en-US) 时 panel 残留在屏幕上。
+  // L70+ spec 070 重新启用并改纯 GDI (L75)。但 L69 的 `if (false)
+  // QuickPanelDialog::Hide()` 一直没改回 `if (true)` — 导致用户切走 (Win+Space
+  // → en-US) 时 panel 残留在屏幕上。
   //
   // L81 实现: FocusOut 是从 WeaselTSF 来的 IPC,**当用户切换到 en-US IME 时**,
   // WeaselTSF 收到 ITfTextInputProcessorEventSink::OnDeactivate → 通过
@@ -608,28 +611,36 @@ void RimeWithWeaselHandler::SetOption(WeaselSessionId ipc_id,
     rime_api->set_option(to_session_id(ipc_id), opt.c_str(), val);
   }
   // spec 045: cache 简/繁 / 全/半角 / ascii mode for QuickPanel initial state.
-  if (opt == "simplification") m_simplification = val;
-  else if (opt == "full_shape") m_full_shape = val;
-  else if (opt == "ascii_mode") m_global_ascii_mode = val;
+  if (opt == "simplification")
+    m_simplification = val;
+  else if (opt == "full_shape")
+    m_full_shape = val;
+  else if (opt == "ascii_mode")
+    m_global_ascii_mode = val;
 }
 
 void RimeWithWeaselHandler::SelectSchema(const std::string& schema_id) {
   // spec 045 v0.18.29.0: QuickPanel 切换 button handler.
   // If schema_id is empty, cycle to next available (legacy behavior
   // when the user pressed the button without specifying a target).
-  if (!rime_api) return;
+  if (!rime_api)
+    return;
   if (!schema_id.empty()) {
-    if (rime_api->select_schema(rime_api->create_session(), schema_id.c_str())) {
+    if (rime_api->select_schema(rime_api->create_session(),
+                                schema_id.c_str())) {
       m_current_schema_id = schema_id;
-      if (_UpdateUICallback) _UpdateUICallback();
+      if (_UpdateUICallback)
+        _UpdateUICallback();
     }
     return;
   }
   // Cycle: find current schema index, advance.
-  if (m_available_schemas.empty()) _RefreshSchemaList();
-  if (m_available_schemas.empty()) return;
-  auto it = std::find(m_available_schemas.begin(),
-                      m_available_schemas.end(), m_current_schema_id);
+  if (m_available_schemas.empty())
+    _RefreshSchemaList();
+  if (m_available_schemas.empty())
+    return;
+  auto it = std::find(m_available_schemas.begin(), m_available_schemas.end(),
+                      m_current_schema_id);
   size_t next = (it == m_available_schemas.end())
                     ? 0
                     : ((it - m_available_schemas.begin() + 1) %
@@ -637,21 +648,23 @@ void RimeWithWeaselHandler::SelectSchema(const std::string& schema_id) {
   std::string next_id = m_available_schemas[next];
   if (rime_api->select_schema(rime_api->create_session(), next_id.c_str())) {
     m_current_schema_id = next_id;
-    if (_UpdateUICallback) _UpdateUICallback();
+    if (_UpdateUICallback)
+      _UpdateUICallback();
   }
 }
 
 void RimeWithWeaselHandler::_RefreshSchemaList() {
   m_available_schemas.clear();
-  if (!rime_api) return;
+  if (!rime_api)
+    return;
   RimeSchemaList sl = {0};
   if (rime_api->get_schema_list(&sl)) {
     for (size_t i = 0; i < sl.size; ++i) {
       if (sl.list[i].schema_id)
         m_available_schemas.emplace_back(sl.list[i].schema_id);
+    }
+    rime_api->free_schema_list(&sl);
   }
-  rime_api->free_schema_list(&sl);
-}
 }
 
 void RimeWithWeaselHandler::OnUpdateUI(std::function<void()> const& cb) {
@@ -709,7 +722,8 @@ bool RimeWithWeaselHandler::_IsDeployerRunning() {
 // m_disabled. Called at the top of every public m_disabled early-return
 // path so the user does not have to reboot WeaselServer to recover.
 void RimeWithWeaselHandler::TryLazyRecovery() {
-  if (!m_disabled) return;
+  if (!m_disabled)
+    return;
   if (_IsDeployerRunning()) {
     // deployer is actually running, m_disabled is legitimate
     return;
@@ -723,7 +737,6 @@ void RimeWithWeaselHandler::TryLazyRecovery() {
   _UpdateUI(0);
   DLOG(INFO) << "TryLazyRecovery: success, m_disabled = false";
 }
-
 
 void RimeWithWeaselHandler::_UpdateUI(WeaselSessionId ipc_id) {
   // if m_ui nullptr, _UpdateUI meaningless
@@ -1721,7 +1734,8 @@ void RimeWithWeaselHandler::_UpdateInlinePreeditStatus(WeaselSessionId ipc_id) {
 }
 
 bool RimeWithWeaselHandler::IsSimplification() const {
-  if (m_cached_options) return m_simplification;
+  if (m_cached_options)
+    return m_simplification;
   RimeConfig config = {0};
   Bool v = False;
   if (rime_api && rime_api->user_config_open("default", &config)) {
@@ -1734,7 +1748,8 @@ bool RimeWithWeaselHandler::IsSimplification() const {
 }
 
 bool RimeWithWeaselHandler::IsFullShape() const {
-  if (m_cached_options) return m_full_shape;
+  if (m_cached_options)
+    return m_full_shape;
   RimeConfig config = {0};
   Bool v = False;
   if (rime_api && rime_api->user_config_open("default", &config)) {
@@ -1753,9 +1768,9 @@ bool RimeWithWeaselHandler::IsFullShape() const {
 // to prevent subsequent Shift events from misfiring.
 void RimeWithWeaselHandler::ShiftDown(bool is_left, WeaselSessionId ipc_id) {
   TryLazyRecovery();
-  if (m_disabled) return;
-  DLOG(INFO) << "ShiftDown: is_left=" << is_left
-             << ", ipc_id=" << ipc_id;
+  if (m_disabled)
+    return;
+  DLOG(INFO) << "ShiftDown: is_left=" << is_left << ", ipc_id=" << ipc_id;
   auto& s = m_shiftState[ipc_id];
   s.downRecorded = true;
   s.interveningKey = false;
@@ -1764,12 +1779,13 @@ void RimeWithWeaselHandler::ShiftDown(bool is_left, WeaselSessionId ipc_id) {
 
 void RimeWithWeaselHandler::ShiftUp(bool is_left, WeaselSessionId ipc_id) {
   TryLazyRecovery();
-  if (m_disabled) return;
-  DLOG(INFO) << "ShiftUp: is_left=" << is_left
-             << ", ipc_id=" << ipc_id;
+  if (m_disabled)
+    return;
+  DLOG(INFO) << "ShiftUp: is_left=" << is_left << ", ipc_id=" << ipc_id;
   (void)is_left;
   auto it = m_shiftState.find(ipc_id);
-  if (it == m_shiftState.end()) return;
+  if (it == m_shiftState.end())
+    return;
   auto& s = it->second;
   if (s.downRecorded && !s.interveningKey) {
     size_t idx = s.lastIsLeft ? 1 : 2;
@@ -1783,9 +1799,9 @@ void RimeWithWeaselHandler::ShiftUp(bool is_left, WeaselSessionId ipc_id) {
 void RimeWithWeaselHandler::SelectCandidate(size_t index,
                                             WeaselSessionId ipc_id) {
   TryLazyRecovery();
-  if (m_disabled) return;
-  DLOG(INFO) << "SelectCandidate: idx=" << index
-             << ", ipc_id=" << ipc_id;
+  if (m_disabled)
+    return;
+  DLOG(INFO) << "SelectCandidate: idx=" << index << ", ipc_id=" << ipc_id;
   rime_api->select_candidate(to_session_id(ipc_id), index);
   _UpdateUI(ipc_id);
 }

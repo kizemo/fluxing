@@ -15,7 +15,8 @@ using SessionId = std::uint32_t;
 // - Intervening non-Shift key between Down and Up => no fire.
 // - Up without prior Down => no fire.
 // - Repeated Down overrides lastIsLeft; final Up is what is observed.
-// - Reset(sid) wipes per-session state; OnSessionDestroyed erases the map entry.
+// - Reset(sid) wipes per-session state; OnSessionDestroyed erases the map
+// entry.
 // - Session state is keyed by SessionId (per-WeaselSessionId).
 class ShiftStateMachine {
  public:
@@ -36,7 +37,8 @@ class ShiftStateMachine {
   EventResult OnShiftUp(SessionId sid, bool is_left) {
     (void)is_left;
     auto it = states_.find(sid);
-    if (it == states_.end()) return {};
+    if (it == states_.end())
+      return {};
     EventResult r;
     r.fire_select = it->second.downRecorded && !it->second.interveningKey;
     r.index = it->second.lastIsLeft ? 1u : 2u;
