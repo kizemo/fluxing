@@ -65,4 +65,36 @@ class ShiftStateMachine {
   };
   std::unordered_map<SessionId, State> states_;
 };
+
+// ===== ADR 0010: bare Shift disambiguation policy =====
+//
+// A clean Shift release (Down -> Up with no intervening key) carries two
+// possible intents:
+//   - spec 077: select the 2nd / 3rd candidate (left / right Shift)
+//   - ADR 0010: toggle the Chinese / English input mode
+//
+// They are separated by a single observable predicate -- whether the session
+// currently shows a candidate menu. There is no timing heuristic and no
+// double-press escape hatch (ADR 0010 P3).
+//
+// Kept dependency-free so that the decision table can be unit-tested without
+// rime_api / IPC / GUI surfaces.
+enum class ShiftUpAction {
+  kNone,             // not a bare Shift (no Down, or an intervening key)
+  kSelectCandidate,  // a candidate menu is open -> spec 077 behaviour
+  kToggleAsciiMode,  // no menu -> ADR 0010 behaviour
+};
+
+inline ShiftUpAction DecideShiftUpAction(bool down_recorded,
+                                         bool intervening_key,
+                                         bool menu_open,
+                                         bool feature_enabled) {
+  if (!down_recorded || intervening_key)
+    return ShiftUpAction::kNone;
+  if (!feature_enabled)
+    return ShiftUpAction::kSelectCandidate;
+  if (menu_open)
+    return ShiftUpAction::kSelectCandidate;
+  return ShiftUpAction::kToggleAsciiMode;
+}
 }  // namespace fluxing

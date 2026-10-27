@@ -1,3 +1,59 @@
+## [0.21.0.9-fluxing] - 2026-10-27
+
+### feat(fluxing): 裸按 Shift 切中英文 —— 上下文消歧，不再是「做不到」（ADR 0010）
+
+**User-visible**:
+
+- 候选窗**没开**时，单独按一下 `Shift`（左/右都行）= **切中英**，
+  再按一下 = 切回中文。英文模式下同样能切回中文。
+- 候选窗**开着**时，裸 Shift 的行为**完全不变**：仍是选第 2（左 Shift）/
+  第 3（右 Shift）候选（spec 077 / ADR 0007，0.21.0.1 起）。
+- 想关掉这个行为：在 `weasel.yaml` 的 `[global settings]` 写
+  `bare_shift_toggles_ascii: false`。**不写就是开启**（新装即生效，老用户升级即生效）。
+
+**Root cause**:
+
+- 说明书一直写着「单独 Shift 切中英在小狼毫上能用」，但**本 fork 用不了**——
+  `WeaselTSF/KeyEventSink.cpp:44-58` 把 `Shift_L` / `Shift_R` **整段吃掉**，
+  只走 `m_client.ShiftDown/ShiftUp` 的 IPC，librime 永远看不到 Shift
+  ⇒ `ascii_composer/switch_key` 与 `key_binder` 里的 Shift 条目**永远不可能触发**。
+- 说明书归因于「release 事件 modifier 比较 bug」（L18）——那个根因**自 spec 077 起已不存在**
+  （前端不再把 Shift 转给 librime，release 误匹配这一类 bug 不可能再发生）。
+- 真正的障碍是：**裸 Shift 已经被占用**——`RimeWithWeasel.cpp` 的 `ShiftUp`
+  在 `downRecorded && !interveningKey` 时选第 2/3 候选（spec 077）。
+- 但这个占用**只在候选窗开着时才有意义**：`Context::Select()` 在 composition 为空时
+  直接 `return false`（`librime/src/rime/context.cc:113-115`）⇒
+  **无候选菜单时选第 2 候选本来就是空操作**。
+- 详见 **ADR 0010**（`docs/adr/0010-bare-shift-toggles-ascii-mode.md`，Accepted）。
+
+**Fix**:
+
+- `include/ShiftStateMachine.h`：新增纯函数
+  `DecideShiftUpAction(down_recorded, intervening_key, menu_open, feature_enabled)`
+  ⇒ 返回 `kNone` / `kSelectCandidate` / `kToggleAsciiMode`（无依赖，可单测）。
+- `RimeWithWeasel/RimeWithWeasel.cpp`：`ShiftUp()` 改为按上面三个判定分支：
+  - `menu_open` 谓词 = `ctx.menu.num_candidates > 0 && !status.is_ascii_mode`
+    （**不能只看 `is_composing`**：英文模式下 librime 仍保留 1 个候选的 raw 段，
+    只看 `is_composing` 会导致**英文模式下切不回中文**）；
+  - 切换走 `set_option(session, "ascii_mode", !cur)` + `_UpdateUI(ipc_id)`，
+    **只切当前会话**，不写全局镜像（与 yaml 的 `Shift+space` 逐字对齐；ADR 0010 P2）；
+  - **绝不走 `SetOption()`**——那个函数会写 `m_global_ascii_mode` 全局镜像。
+- `include/RimeWithWeasel.h`：新增成员 `m_bare_shift_toggles_ascii`。
+- `output/data/weasel.yaml`：`[global settings]` 新增 `bare_shift_toggles_ascii: true`
+  （**缺失即默认开启**，与 `global_ascii` 同一 `config_get_bool` 机制）。
+- `test/TestShiftIPCStateMachine`：新增 6 个测试函数 / 11 条断言
+  （无菜单时切 ascii_mode / 有菜单时选候选 / 功能关闭回退 /
+  无 ShiftDown 不动 / 中间按键阻断 / 16 组合穷举）。
+  ⇒ **28 PASS / 0 FAIL**（17 个测试函数 / 28 条断言）。
+
+**验收**:
+
+- `scripts\test-infra\run-test-suite.bat` ⇒ `=== ALL TESTS PASSED ===`
+- `Release\TestShiftIPCStateMachine.exe` ⇒ `Result: 28 PASS / 0 FAIL`
+- `Release\TestDefaultHotkeys.exe` ⇒ `Passed: 89 / 89`
+- 快捷键门禁（出货配置）⇒ `SUMMARY|bindings=39|reachable=39|dead=0|known_dead=0` + `RESULT|PASS`
+- **真机按键验收待做**（裸 Shift 切中英 / 切回中文 / 候选窗开着时仍选第 2/3 候选）
+
 ## [0.21.0.8-fluxing] - 2026-10-26
 
 ### fix(fluxing): 4 条 `Shift+标点` 快捷键**第一次真的能用**了（ADR 0009 收尾）

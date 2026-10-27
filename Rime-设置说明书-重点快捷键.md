@@ -617,9 +617,13 @@ ascii_composer:
 
 **关键点**:
 - 与 `key_binder` 不同,`ascii_composer` 的 `switch_key` 是**按**事件触发,不是按**键串**触发
-- 默认配置下,`Shift_L` 单独按下(< 500ms 抬起)就能切 ASCII
+- 上游 rime 的默认配置是这样;**但本 fork 不是** —— 见下方警告与 §9.3
 
-> ⚠️ **小狼毫(WeaselTSF)的坑**:`WeaselTSF/KeyEvent.cpp:27-28` 在 release 事件强制设置 `RELEASE_MASK`,而 librime 的 `operator==` 比较 modifier 含 `RELEASE_MASK`,导致 `key_binder` 的 `accept: Shift_L` (modifier=0) **永远不匹配** release 事件。`ascii_composer/switch_key` 内部做 toggle,**绕开了**这个比较,这就是为什么「单独 Shift 切英文」在小狼毫上能用而 `key_binder` 写 `accept: Shift_L` 没用。详见本机 rime_ice 的修复,见 §9.3。
+> ⚠️ **本 fork 的现状(2026-10-27 起变了)**：小狼毫(WeaselTSF)的 TSF 前端把 `Shift_L`/`Shift_R` **整段吃掉**
+> (只走 `WEASEL_IPC_SHIFT_DOWN/UP` 的 IPC),librime **根本看不到** Shift ⇒ `ascii_composer/switch_key`
+> 与 `key_binder` 里的 Shift 条目 **永远不可能触发**（ADR 0009 / ADR 0010）。
+> **裸按 Shift 切中英现在由服务端状态机接管**（ADR 0010，0.21.0.9 起）：
+> 候选窗**没开** ⇒ 切中英;候选窗**开着** ⇒ 仍选第 2/3 候选。详见 §9.3。
 
 ### 6.9 与前端的关系(小狼毫/鼠鬚管)
 
@@ -840,10 +844,15 @@ ascii_composer:
 - librime `key_event.h:43` 的 `operator==` 比较 modifier 含 `RELEASE_MASK`
 - WeaselTSF `KeyEvent.cpp:27-28` 在 release 事件**强制**加 `RELEASE_MASK`
 - `key_binder` 的 `accept: Shift_L` (modifier=0) **永远不匹配** release (modifier=RELEASE_MASK)
+  —— 这条对**本 fork 已无意义**：前端从 spec 077 起**不再把 Shift 转给 librime**,
+  「release 误匹配」这一类 bug 不可能再发生（L18 的根因已消失）。
 - ⚠️ **本 fork 把 `Shift_L` / `Shift_R` 设成 `noop`(不是 `commit_text`)** ⇒
   `ascii_composer` **不再接管** Shift,所以「单独 Shift 切中英」在 yaml 层走不通。
-  spec 077 起 Shift 改由**前端 IPC** 接管(`WEASEL_IPC_SHIFT_DOWN/UP`),
-  裸按 Shift = 选第 2/3 候选 —— 完整分析见 **ADR 0010**。
+  spec 077 起 Shift 改由**前端 IPC** 接管(`WEASEL_IPC_SHIFT_DOWN/UP`) —— 完整分析见 **ADR 0010**。
+- ✅ **0.21.0.9 起（ADR 0010 已实施）**：裸按 Shift 由**服务端状态机**做上下文消歧 ——
+  候选窗**没开** ⇒ 切中英（只切当前会话，与 `Shift+space` 同作用域）;
+  候选窗**开着** ⇒ 仍选第 2/3 候选（spec 077 行为不变）。
+  开关在 `weasel.yaml` 的 `[global settings]`：`bare_shift_toggles_ascii`（默认 `true`）。
 - rime_ice default 的 8 条 `Shift_L/R`/`Shift+l/r` binding 整段删了 — 因为它们 `accept` 是 Shift 单独 / Shift+l,都受这个 bug 影响
 
 ### 9.4 本机 `user-custom/rime_ice.custom.yaml` 的 patch 结构
@@ -893,7 +902,7 @@ patch:
 | `when` 写了 `paging` 但没生效 | `paging` 条件要先有 `Page_Down` 触发过 | 改 `has_menu` |
 | 中文标点怎么输都不对 | `recognizer/patterns/punct` 覆盖了 `punctuator` | 把 `key_binder` 放 `engine/processors` 头部 |
 | `Shift+Tab` 没用 | modifier 顺序错(应该是 `Shift+Tab` 不是 `Tab+Shift`) | 固定修饰符顺序:Shift → Control → Alt |
-| 单独 Shift 切不了中英 | 前端把 Shift 整段吃掉,librime 根本看不到它;本 fork 的 `ascii_composer/switch_key` 又是 `noop` | 目前**做不到** —— 要改服务端状态机,见 ADR 0010 |
+| 单独 Shift 切不了中英 | 前端把 Shift 整段吃掉,librime 根本看不到它;本 fork 的 `ascii_composer/switch_key` 又是 `noop` | **0.21.0.9 起已修好**（ADR 0010）：候选窗没开时裸 Shift 切中英;开着时仍选第 2/3 候选。改 `weasel.yaml` 的 `bare_shift_toggles_ascii: false` 可关闭 |
 | `Ctrl+Shift+9` 切不动标点 | 前端发的是 `(` 不是 `9`,这个组合**永远不触发** | 用 `Control+Shift+numbersign`(ADR 0009) |
 | `Control+grave` 没用 | 大小写或修饰符拼错 | 用字面字符时**加引号** |
 | `bindings: [a, b, c]` 整段失效 | 写成 list,不是 list of map | 写成 `- {when:..., accept:...}` |

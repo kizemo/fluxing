@@ -182,6 +182,10 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   std::unordered_map<WeaselSessionId, ShiftState> m_shiftState;
   bool m_current_dark_mode;
   bool m_global_ascii_mode;
+  // ADR 0010: bare Shift toggles the Chinese / English input mode when no
+  // candidate menu is open. On by default (P1); the switch lives in
+  // weasel.yaml under [global settings].
+  bool m_bare_shift_toggles_ascii;
   int m_show_notifications_time;
   DWORD m_pid;
 };

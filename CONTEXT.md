@@ -189,6 +189,14 @@ to the user before proceeding.
     chord produces** — `Shift+less` (the `<` character) for `Shift+,`,
     never `Shift+comma`. A binding that names the base key can never fire.
     (`docs/adr/0009-*.md`, lessons L131, guard: `test/TestHotkeyBindings`)
+17. **Bare Shift is disambiguated by the candidate menu, never by timing.**
+    ADR 0010. A clean Shift release (Down -> Up, no intervening key) selects
+    the 2nd / 3rd candidate when a candidate menu is open (spec 077), and
+    toggles `ascii_mode` for the current session when no menu is open. The
+    predicate is `ctx.menu.num_candidates > 0 && !status.is_ascii_mode` -- a
+    one-candidate "raw" segment survives in English mode, so `is_composing`
+    alone is not sufficient. The switch is `bare_shift_toggles_ascii` in
+    `weasel.yaml` (`[global settings]`), on by default.
 
 ---
 

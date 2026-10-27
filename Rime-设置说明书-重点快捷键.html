@@ -810,9 +810,9 @@ patch:
 <p><strong>关键点</strong>:</p>
 <ul>
 <li>与 <code>key_binder</code> 不同,<code>ascii_composer</code> 的 <code>switch_key</code> 是<strong>按</strong>事件触发,不是按<strong>键串</strong>触发</li>
-<li>默认配置下,<code>Shift_L</code> 单独按下(&lt; 500ms 抬起)就能切 ASCII</li>
+<li>上游 rime 的默认配置是这样;**本 fork 不是** —— 见下方警告与 §9.3</li>
 </ul>
-<div class="warn"><strong>小狼毫(WeaselTSF)的坑</strong>:<code>WeaselTSF/KeyEvent.cpp:27-28</code> 在 release 事件强制设置 <code>RELEASE_MASK</code>,而 librime 的 <code>operator==</code> 比较 modifier 含 <code>RELEASE_MASK</code>,导致 <code>key_binder</code> 的 <code>accept: Shift_L</code> (modifier=0) <strong>永远不匹配</strong> release 事件。<code>ascii_composer/switch_key</code> 内部做 toggle,<strong>绕开了</strong>这个比较,这就是为什么「单独 Shift 切英文」在小狼毫上能用而 <code>key_binder</code> 写 <code>accept: Shift_L</code> 没用。详见本机 rime_ice 的修复,见 <a href="#s9-3">§9.3</a>。</div>
+<div class="warn"><strong>本 fork 的现状(2026-10-27 起变了)</strong>:小狼毫(WeaselTSF)的 TSF 前端把 <code>Shift_L</code>/<code>Shift_R</code> <strong>整段吃掉</strong>(只走 <code>WEASEL_IPC_SHIFT_DOWN/UP</code> 的 IPC),librime <strong>根本看不到</strong> Shift ⇒ <code>ascii_composer/switch_key</code> 与 <code>key_binder</code> 里的 Shift 条目 <strong>永远不可能触发</strong>（ADR 0009 / ADR 0010）。<br><strong>裸按 Shift 切中英现在由服务端状态机接管</strong>（ADR 0010，0.21.0.9 起）：候选窗<strong>没开</strong> ⇒ 切中英;候选窗<strong>开着</strong> ⇒ 仍选第 2/3 候选。详见 <a href="#s9-3">§9.3</a>。</div>
 
 <h3 id="s6-9">6.9 与前端的关系(小狼毫/鼠鬚管)</h3>
 <p><code>key_binder</code> 是 librime 内部的事件,<strong>与前端 (Weasel/Squirrel) 的系统级快捷键</strong>是两回事:</p>
@@ -1001,8 +1001,9 @@ patch:
 <ul>
 <li>librime <code>key_event.h:43</code> 的 <code>operator==</code> 比较 modifier 含 <code>RELEASE_MASK</code></li>
 <li>WeaselTSF <code>KeyEvent.cpp:27-28</code> 在 release 事件<strong>强制</strong>加 <code>RELEASE_MASK</code></li>
-<li><code>key_binder</code> 的 <code>accept: Shift_L</code> (modifier=0) <strong>永远不匹配</strong> release (modifier=RELEASE_MASK)</li>
-<li>⚠️ <strong>本 fork 把 <code>Shift_L</code> / <code>Shift_R</code> 设成 <code>noop</code>(不是 <code>commit_text</code>)</strong> ⇒ <code>ascii_composer</code> <strong>不再接管</strong> Shift,所以「单独 Shift 切中英」在 yaml 层走不通。spec 077 起 Shift 改由<strong>前端 IPC</strong> 接管(<code>WEASEL_IPC_SHIFT_DOWN/UP</code>),裸按 Shift = 选第 2/3 候选 —— 完整分析见 <strong>ADR 0010</strong>。</li>
+<li><code>key_binder</code> 的 <code>accept: Shift_L</code> (modifier=0) <strong>永远不匹配</strong> release (modifier=RELEASE_MASK) —— 这条对<strong>本 fork 已无意义</strong>:前端从 spec 077 起<strong>不再把 Shift 转给 librime</strong>,「release 误匹配」这一类 bug 不可能再发生（L18 的根因已消失）。</li>
+<li>⚠️ <strong>本 fork 把 <code>Shift_L</code> / <code>Shift_R</code> 设成 <code>noop</code>(不是 <code>commit_text</code>)</strong> ⇒ <code>ascii_composer</code> <strong>不再接管</strong> Shift,所以「单独 Shift 切中英」在 yaml 层走不通。spec 077 起 Shift 改由<strong>前端 IPC</strong> 接管(<code>WEASEL_IPC_SHIFT_DOWN/UP</code>) —— 完整分析见 <strong>ADR 0010</strong>。</li>
+<li>✅ <strong>0.21.0.9 起（ADR 0010 已实施）</strong>:裸按 Shift 由<strong>服务端状态机</strong>做上下文消歧 —— 候选窗<strong>没开</strong> ⇒ 切中英（只切当前会话，与 <code>Shift+space</code> 同作用域）;候选窗<strong>开着</strong> ⇒ 仍选第 2/3 候选（spec 077 行为不变）。开关在 <code>weasel.yaml</code> 的 <code>[global settings]</code>:<code>bare_shift_toggles_ascii</code>（默认 <code>true</code>）。</li>
 <li>rime_ice default 的 8 条 <code>Shift_L/R</code>/<code>Shift+l/r</code> binding 整段删了 — 因为它们 <code>accept</code> 是 Shift 单独 / Shift+l,都受这个 bug 影响</li>
 </ul>
 
@@ -1046,7 +1047,7 @@ patch:
 <tr><td><code>when</code> 写了 <code>paging</code> 但没生效</td><td><code>paging</code> 条件要先有 <code>Page_Down</code> 触发过</td><td>改 <code>has_menu</code></td></tr>
 <tr><td>中文标点怎么输都不对</td><td><code>recognizer/patterns/punct</code> 覆盖了 <code>punctuator</code></td><td>把 <code>key_binder</code> 放 <code>engine/processors</code> 头部</td></tr>
 <tr><td><code>Shift+Tab</code> 没用</td><td>modifier 顺序错(应该是 <code>Shift+Tab</code> 不是 <code>Tab+Shift</code>)</td><td>固定修饰符顺序:Shift → Control → Alt</td></tr>
-<tr><td>单独 Shift 切不了中英</td><td>前端把 Shift 整段吃掉,librime 根本看不到它;本 fork 的 <code>ascii_composer/switch_key</code> 又是 <code>noop</code></td><td>目前<strong>做不到</strong> —— 要改服务端状态机,见 ADR 0010</td></tr>
+<tr><td>单独 Shift 切不了中英</td><td>前端把 Shift 整段吃掉,librime 根本看不到它;本 fork 的 <code>ascii_composer/switch_key</code> 又是 <code>noop</code></td><td><strong>0.21.0.9 起已修好</strong>（ADR 0010）：候选窗没开时裸 Shift 切中英;开着时仍选第 2/3 候选。改 <code>weasel.yaml</code> 的 <code>bare_shift_toggles_ascii: false</code> 可关闭</td></tr>
 <tr><td><code>Ctrl+Shift+9</code> 切不动标点</td><td>前端发的是 <code>(</code> 不是 <code>9</code>,这个组合<strong>永远不触发</strong></td><td>用 <code>Control+Shift+numbersign</code>(ADR 0009)</td></tr>
 <tr><td><code>Control+grave</code> 没用</td><td>大小写或修饰符拼错</td><td>用字面字符时<strong>加引号</strong></td></tr>
 <tr><td><code>bindings: [a, b, c]</code> 整段失效</td><td>写成 list,不是 list of map</td><td>写成 <code>- {when:..., accept:...}</code></td></tr>

@@ -1,7 +1,7 @@
 # 0010. Bare Shift toggles Chinese/English when no candidate menu is open
 
-- **Status**: Proposed
-- **Date**: 2026-10-26
+- **Status**: Accepted
+- **Date**: 2026-10-26 (decision taken 2026-10-27)
 - **Deciders**: Fluxing maintainers
 - **Related**: ADR 0007, ADR 0009, spec 077, spec 081, lessons L18, L19, L21, L148
 
@@ -78,7 +78,7 @@ Two more facts make the split safe:
 
 ## Decision
 
-We propose **context disambiguation** in the Server-side state machine
+We adopt **context disambiguation** in the Server-side state machine
 that ADR 0007 introduced:
 
 - **No candidate menu open** -> bare Shift toggles `ascii_mode`
@@ -88,6 +88,21 @@ that ADR 0007 introduced:
 
 Nothing is taken away from any shipped feature. The new behaviour only
 fills a state that is currently a no-op.
+
+### Resolved parameters (2026-10-27)
+
+The maintainers answered the three open questions below; these answers are
+binding for the implementation.
+
+| # | Question | Decision |
+|---|---|---|
+| P1 | Default state of the feature? | **On by default.** The configuration switch exists and turns it off, but a fresh install has bare Shift toggling Chinese/English. |
+| P2 | `global_ascii` off -- which scope does the toggle affect? | **The current session only.** It mirrors `Shift+space`, which is a per-session `ascii_mode` toggle. It never flips the global mirror, and never touches other sessions. |
+| P3 | With a candidate menu open, is a **double** Shift allowed to switch the mode? | **No.** The candidate menu consumes the Shift press. There is no double-press escape hatch: the first cycle selects a candidate, and the user must close the menu (Esc) or use `Shift+space` to switch modes. |
+
+P3 removes the only ambiguity in the disambiguation: the two states are
+separated by a single, observable predicate (menu open or not), never by a
+timing heuristic.
 
 ### Alternatives considered
 
@@ -162,20 +177,24 @@ Estimated size: roughly 20 lines plus a configuration switch, a
   (2nd) from right (3rd); mode switching cannot, and must not try to --
   a user pressing either Shift expects the same result.
 - ⚠️ `ascii_mode` is a **session** option in librime but the product also
-  maintains a global mirror. Which one bare Shift flips depends on
-  `global_ascii`; the implementation must pick one and state it.
+  maintains a global mirror. **Resolved (P2): bare Shift flips the
+  current session only** -- it never writes the global mirror, and never
+  touches other sessions, exactly like `Shift+space`.
 - The decision is **reversible**: it is a branch in one function, guarded
   by a configuration switch. Removing the switch restores today's
   behaviour exactly.
 
-## Open questions for the maintainers
+## Open questions for the maintainers -- all resolved 2026-10-27
 
-1. Should the toggle be **on by default**? (Recommended: on, with the
-   config switch to turn it off -- that is what the user asked for.)
+1. Should the toggle be **on by default**? -> **Yes, on** (P1 above).
 2. When `global_ascii` is off, should bare Shift flip the **current
-   session only** or every session? (Recommended: current session only,
-   mirroring `Shift+space`.)
+   session only** or every session? -> **Current session only** (P2).
 3. Should the candidate menu really consume the Shift press, or should a
    **double** Shift (two clean press/release cycles) switch the mode even
-   with a menu open? (Recommended: no -- keep the first cycle simple and
-   reversible.)
+   with a menu open? -> **No double-press escape hatch**; the menu keeps
+   consuming the press (P3).
+
+The answers and their rationale are recorded in *Decision -> Resolved
+parameters*. This ADR is now **Accepted**; the implementation plan lives
+in a follow-up spec under `.specify/specs/`, and any change to the
+behaviour above requires a new ADR that supersedes this one.

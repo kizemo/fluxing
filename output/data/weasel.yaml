@@ -43,6 +43,7 @@ app_options:
 show_notifications: true                   # 是否显示状态变化的通知：true；false；option_list（方案内的开头 option）
 show_notifications_time: 1200              # 通知显示的时间，单位 ms
 global_ascii: false                        # 切换为 ascii 模式时，是否影响所有窗口：true；false
+bare_shift_toggles_ascii: true               # 裸 Shift 切换中英文（无候选窗时）：true；false（ADR 0010）
 # [End of <global settings>]
 
 # [style]

@@ -21,6 +21,7 @@
 #include <vector>
 #include <regex>
 #include <rime_api.h>
+#include <ShiftStateMachine.h>  // ADR 0010: bare Shift disambiguation policy
 
 #define TRANSPARENT_COLOR 0x00000000
 #define ARGB2ABGR(value)                                 \
@@ -50,6 +51,8 @@ RimeWithWeaselHandler::RimeWithWeaselHandler(UI* ui)
       m_disabled(true),
       m_current_dark_mode(false),
       m_global_ascii_mode(false),
+      // ADR 0010 P1: bare Shift toggles Chinese / English by default.
+      m_bare_shift_toggles_ascii(true),
       m_show_notifications_time(1200),
       _UpdateUICallback(NULL) {
   m_ui->InServer() = true;
@@ -147,6 +150,13 @@ void RimeWithWeaselHandler::Initialize() {
     Bool global_ascii = false;
     if (rime_api->config_get_bool(&config, "global_ascii", &global_ascii))
       m_global_ascii_mode = !!global_ascii;
+    // ADR 0010: bare Shift -> Chinese / English toggle. An absent key keeps
+    // the constructor default (on), so an upgraded install gets the feature
+    // without having to edit weasel.yaml.
+    Bool bare_shift_toggles_ascii = 0;
+    if (rime_api->config_get_bool(&config, "bare_shift_toggles_ascii",
+                                  &bare_shift_toggles_ascii))
+      m_bare_shift_toggles_ascii = !!bare_shift_toggles_ascii;
     if (!rime_api->config_get_int(&config, "show_notifications_time",
                                   &m_show_notifications_time))
       m_show_notifications_time = 1200;
@@ -1787,10 +1797,45 @@ void RimeWithWeaselHandler::ShiftUp(bool is_left, WeaselSessionId ipc_id) {
   if (it == m_shiftState.end())
     return;
   auto& s = it->second;
-  if (s.downRecorded && !s.interveningKey) {
+  // ADR 0010: bare Shift disambiguation.
+  //
+  // A clean Shift release (Down -> Up with no intervening key) carries two
+  // possible intents:
+  //   - spec 077: select the 2nd / 3rd candidate (left / right Shift)
+  //   - ADR 0010: toggle the Chinese / English input mode
+  // They are separated by a single observable predicate -- whether this
+  // session currently shows a candidate menu. No timing heuristic and no
+  // double-press escape hatch (ADR 0010 P3).
+  bool menu_open = false;
+  bool is_ascii_mode = false;
+  RIME_STRUCT(RimeStatus, shift_status);
+  if (rime_api->get_status(to_session_id(ipc_id), &shift_status)) {
+    is_ascii_mode = !!shift_status.is_ascii_mode;
+    rime_api->free_status(&shift_status);
+  }
+  RIME_STRUCT(RimeContext, shift_ctx);
+  if (rime_api->get_context(to_session_id(ipc_id), &shift_ctx)) {
+    // librime keeps a one-candidate "raw" segment while ascii_mode is on
+    // (librime/src/rime/gear/ascii_segmentor.cc) and masks has_menu out in
+    // ascii mode (librime/src/rime/gear/key_binder.cc:255). The menu alone is
+    // therefore not a sufficient predicate: in English mode the user sees no
+    // candidate list at all.
+    menu_open = shift_ctx.menu.num_candidates > 0 && !is_ascii_mode;
+    rime_api->free_context(&shift_ctx);
+  }
+  fluxing::ShiftUpAction action = fluxing::DecideShiftUpAction(
+      s.downRecorded, s.interveningKey, menu_open, m_bare_shift_toggles_ascii);
+  if (action == fluxing::ShiftUpAction::kSelectCandidate) {
     size_t idx = s.lastIsLeft ? 1 : 2;
     DLOG(INFO) << "select_candidate(idx=" << idx << ") ipc_id=" << ipc_id;
     rime_api->select_candidate(to_session_id(ipc_id), idx);
+    _UpdateUI(ipc_id);
+  } else if (action == fluxing::ShiftUpAction::kToggleAsciiMode) {
+    // ADR 0010 P2: the current session only. Never the global mirror, never
+    // another session -- exactly the scope of the yaml `Shift+space` toggle.
+    bool ascii = rime_api->get_option(to_session_id(ipc_id), "ascii_mode");
+    rime_api->set_option(to_session_id(ipc_id), "ascii_mode", !ascii);
+    DLOG(INFO) << "toggle ascii_mode -> " << !ascii << " ipc_id=" << ipc_id;
     _UpdateUI(ipc_id);
   }
   s = ShiftState{};  // C6: unconditionally reset on Up
