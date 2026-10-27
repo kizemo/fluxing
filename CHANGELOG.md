@@ -52,6 +52,16 @@
 - `Release\TestShiftIPCStateMachine.exe` ⇒ `Result: 28 PASS / 0 FAIL`
 - `Release\TestDefaultHotkeys.exe` ⇒ `Passed: 89 / 89`
 - 快捷键门禁（出货配置）⇒ `SUMMARY|bindings=39|reachable=39|dead=0|known_dead=0` + `RESULT|PASS`
+- `Release\TestShiftIPCWire.exe` ⇒ `Result: 10 PASS / 0 FAIL`
+- `Release\TestPipeChannelRace.exe` ⇒ `Result: 12 passed, 0 failed`
+- clang-format-18（CI 同版本）对全部触及的 `.cpp` / `.h` ⇒ clean
+  （前置提交 `a023ee1` `style(fluxing):`，CI lint 门禁要求整文件格式干净）
+
+**Ship**:
+
+- `output\archives\fluxing-0.21.0.9-installer.exe` 42,761,559 B
+- SHA256 `D1FCF78304FB89955F61F8925C894AB1F2CA5941FF9E9283D859D93A3E820E1C`
+- 未进 `release/` 发布链（清单 T18）
 - **真机按键验收待做**（裸 Shift 切中英 / 切回中文 / 候选窗开着时仍选第 2/3 候选）
 
 ## [0.21.0.8-fluxing] - 2026-10-26

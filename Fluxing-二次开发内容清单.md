@@ -215,7 +215,7 @@
 | T15 | `sandbox-gate` CI job | ⚠️ 排队 | 缺带 `sandbox` 标签、支持嵌套虚拟化的 Win11 自托管 runner |
 | T16 | CI installer artifact 下载校验 | ⚠️ 受限 | 网速约 50 KB/s，43 MB 产物下载超时；已用本机包 + CI 日志门禁数字替代 |
 | T17 | 共享 `data/` 目录其余文件升级 | ⚠️ 待用户操作 | 除 `default.yaml` 外仍是 2026-08 旧版；需安装 0.21.0.9 安装包 |
-| T18 | 0.21.0.9 **进 `release/` 发布链** | ⚠️ 未做 | 安装包在 `output/archives/fluxing-0.21.0.9-installer.exe`（大小 / SHA256 见 `CHANGELOG.md` 的 0.21.0.9 节），但 `release/` 里没有它 |
+| T18 | 0.21.0.9 **进 `release/` 发布链** | ⚠️ 未做 | 安装包在 `output/archives/fluxing-0.21.0.9-installer.exe`（42,761,559 B，SHA256 `D1FCF78304FB89955F61F8925C894AB1F2CA5941FF9E9283D859D93A3E820E1C`），但 `release/` 里没有它 |
 
 ---
 
