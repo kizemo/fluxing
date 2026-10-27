@@ -66,7 +66,7 @@
 - [x] T4.3 `CONTEXT.md` §4 加 invariant 17「Bare Shift is disambiguated by the candidate menu, never by timing」
 - [x] T4.4 `Rime-设置说明书-重点快捷键.{md,html}` 同步（见 T0.5）
 - [x] T4.5 新建本 spec 目录 `.specify/specs/082-bare-shift-ascii-toggle/`
-- [ ] T4.6 commit + push（Conventional Commits，单一 scope）
+- [x] T4.6 commit + push（Conventional Commits，单一 scope）—— `a023ee1`（`style(fluxing):` clang-format 前置，CI lint 门禁要求）+ `258e708`（`feat(fluxing):` 功能本体），推送到 `kizemo/Fluxing`
 
 ## 附：本轮未做、明确留到后面的
 
