@@ -71,8 +71,9 @@ LRESULT ServerImpl::OnCreate(UINT uMsg,
   // not neccessary...
   ::SetWindowText(m_hWnd, WEASEL_IPC_WINDOW);
 
-  // spec 070 T007: 重新启用 Alt+, 全局热键 (L69 临时禁用已解除,改用 D2D+无 GDI+ Bitmap 实现)
-  // AP-036-F: ignore failure (hotkey may be registered by another app).
+  // spec 070 T007: 重新启用 Alt+, 全局热键 (L69 临时禁用已解除,改用 D2D+无 GDI+
+  // Bitmap 实现) AP-036-F: ignore failure (hotkey may be registered by another
+  // app).
   ::RegisterHotKey(m_hWnd, ID_HOTKEY_QUICK_PANEL, MOD_ALT, VK_OEM_COMMA);
   return 0;
 }
@@ -392,8 +393,9 @@ DWORD ServerImpl::OnChangePage(WEASEL_IPC_COMMAND uMsg,
   return 0;
 }
 
-// spec 077: Shift raw down/up from TSF. wParam bit0 = is_left; lParam = session_id.
-// Server-side state machine (T09/T10) decides whether to fire select_candidate.
+// spec 077: Shift raw down/up from TSF. wParam bit0 = is_left; lParam =
+// session_id. Server-side state machine (T09/T10) decides whether to fire
+// select_candidate.
 DWORD ServerImpl::OnShiftDown(WEASEL_IPC_COMMAND uMsg,
                               DWORD wParam,
                               DWORD lParam) {

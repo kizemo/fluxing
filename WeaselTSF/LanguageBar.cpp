@@ -320,8 +320,9 @@ void WeaselTSF::_HandleLangBarMenuSelect(UINT wID) {
       }
       break;
     case ID_WEASELTRAY_USERCONFIG:
-      if (FAILED(RegGetStringValue(HKEY_CURRENT_USER, L"Software\\Fluxing\\Weasel",
-                                   L"RimeUserDir", dir)) ||
+      if (FAILED(RegGetStringValue(HKEY_CURRENT_USER,
+                                   L"Software\\Fluxing\\Weasel", L"RimeUserDir",
+                                   dir)) ||
           dir.empty()) {
         WCHAR _path[MAX_PATH] = {0};
         ExpandEnvironmentStringsW(L"%AppData%\\Rime", _path, _countof(_path));
