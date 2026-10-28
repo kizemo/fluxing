@@ -302,8 +302,8 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
 |---|---|---|---|
 | T15 | `sandbox-gate` CI job | ⚠️ 排队 | 缺带 `sandbox` 标签、支持嵌套虚拟化的 Win11 自托管 runner |
 | T16 | CI installer artifact 下载校验 | ⚠️ 受限 | 网速约 50 KB/s，43 MB 产物下载超时；已用本机包 + CI 日志门禁数字替代 |
-| T17 | 共享 `data/` 目录其余文件升级 | ⚠️ 待用户操作 | 除 `default.yaml` 外仍是 2026-08 旧版；需安装 0.21.0.9 安装包 |
-| T18 | 0.21.0.9 **进 `release/` 发布链** | ⚠️ 未做 | 安装包在 `output/archives/fluxing-0.21.0.9-installer.exe`（42,761,559 B，SHA256 `D1FCF78304FB89955F61F8925C894AB1F2CA5941FF9E9283D859D93A3E820E1C`），但 `release/` 里没有它 |
+| T17 | 共享 `data/` 目录其余文件升级 | 🟡 待用户操作 | 除 `default.yaml` 外仍是 2026-08 旧版；**装 1.0.0 包即可刷新**（`fluxing-1.0.0-installer.exe` 的 `data/` 载荷已含重编后的 `build/`） |
+| T18 | **进 `release/` 发布链** | ✅ 已完成 | `release/` 已收录 `fluxing-1.0.0-installer.exe`（42,756,263 B，SHA256 `F040D989872FB8D135917B9416E40DE4D3010002EB669EF43AA98544A8344A8A`）与 `fluxing-0.21.0.9-installer.exe`（42,761,559 B，SHA256 `D1FCF78304FB89955F61F8925C894AB1F2CA5941FF9E9283D859D93A3E820E1C`）。注：本 fork 的 CI 发布步骤被 `github.repository == 'rime/weasel'` 门控 ⇒ `release/` 只是 git 跟踪的载荷仓，**不会**自动建 GitHub Release |
 | T19 | **沙箱权威门禁在本机跑不起来** | ⚠️ 环境故障 | `run-verify.cmd` 两轮均报「3 次启动都没拿到 claims.json」（orchestrator exit 4）；`sandbox-artifacts\rime\logs\` 下**连 `boot.log` 都没有** ⇒ Windows Sandbox 虚机根本没启动（Hyper-V vSwitch 异常，同机 2026-10-25 曾成功跑出 `PASS=38 FAIL=2`）。根因未定位；**不阻塞提交**（本轮未改 `output/install.nsi` 与 `output/data/user-custom/**`），但 0.21.0.9 的沙箱断言仍为空 ⇒ 见 L150 |
 | T20 | **CapsLock 打开时快捷键疑似全部失配** | ⚠️ 疑点，未实测 | 前端 `WeaselTSF/KeyEvent.cpp:18-19` 在 CapsLock 打开时多置 `LOCK_MASK`(0x2)，`expand_ibus_modifier`（`RimeWithWeasel.cpp:44-46`）保留该位，而 librime **精确比较 modifier**（`librime/src/rime/key_event.h:43-44`）⇒ 所有未写 `Lock+` 的绑定都失配；全仓无任何地方清除该位。**必须先实测再决定怎么修**（ADR 0011 Q2） |
 

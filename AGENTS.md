@@ -495,13 +495,17 @@ and hook the call into `build.bat` in the rime section. Never edit
 
 ### 4.7 `release/` directory
 
-- Committed: `release/fluxing-<X.Y.Z.W>-installer.exe` binaries.
+- Committed: `release/fluxing-<X.Y.Z>-installer.exe` binaries — 装包文件名是
+  **3 段**（ADR 0012 对外 3 段化；`WEASEL_BUILD` 只进 Windows 资源版本号，
+  不进文件名）。历史 0.20 / 0.21 线的 `fluxing-0.21.0.6-installer.exe` 那种
+  4 段名是旧命名，不要再照抄。
 - Never committed: `release/*token*`, `release/*secret*`,
   `release-notes.html`, `RELEASE_CHANGELOG.md` (all in `.gitignore`).
-- The 4 historical installers (0.17.5, 0.18.0, 0.18.1, 0.18.2) total
-  ~177 MB. Before adding another, confirm the previous one is actually
-  promoted to a GitHub Release (the CI workflow does this on tag
-  push); if not, remove it to keep `git clone` cheap.
+- 当前 `release/` 共 10 个安装包，合计 409.0 MB。**本 fork 的 CI 不会创建
+  GitHub Release** —— 发布步骤（`softprops/action-gh-release` /
+  `action-automatic-releases`）全部被 `github.repository == 'rime/weasel'`
+  门控 ⇒ 上游那条「没提升为 Release 就删旧包」的前提对 `kizemo/Fluxing`
+  永远不成立，**不要据此删除历史安装包**；只管把新包收进来。
 
 ---
 

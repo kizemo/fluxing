@@ -91,6 +91,18 @@
 
 - 详见 **ADR 0011** 与 spec 083（里程碑 M4，提交 `9e07743`）。
 
+### chore(fluxing): `release/` 载荷仓补齐（1.0.0 + 0.21.0.9）
+
+- `release/fluxing-1.0.0-installer.exe`（42,756,263 B，SHA256
+  `F040D989872FB8D135917B9416E40DE4D3010002EB669EF43AA98544A8344A8A`）
+  首次入库 —— 之前 `release/` 只到 `0.21.0.6`。
+- 补上从未入库的 `fluxing-0.21.0.9-installer.exe`（42,761,559 B，SHA256
+  `D1FCF78304FB89955F61F8925C894AB1F2CA5941FF9E9283D859D93A3E820E1C`），
+  关掉任务总账 **T18** 那条「未做」。
+- 顺带订正 `AGENTS.md §4.7`：装包文件名是 **3 段**（`WEASEL_BUILD` 只进
+  Windows 资源版本号）；且本 fork 的 CI 发布步骤被
+  `github.repository == 'rime/weasel'` 门控 ⇒ `release/` 不会自动对外发版。
+
 ## [1.0.0] - 2026-10-28
 
 ### 主要更新
