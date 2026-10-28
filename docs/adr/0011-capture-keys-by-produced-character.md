@@ -3,7 +3,7 @@
 - **Status**: Proposed
 - **Date**: 2026-10-28
 - **Deciders**: Fluxing maintainers
-- **Related**: spec 083, ADR 0009, ADR 0010, lessons L148 / L149, checklist T2 / T20
+- **Related**: spec 083, ADR 0009, ADR 0010, ADR 0014, lessons L148 / L149, checklist T2 / T20
 
 ## Context
 
@@ -97,7 +97,10 @@ and nothing in the UI tells the user.
   (`librime/src/rime/key_event.h:43-44`), every binding that does not
   name `Lock` should stop matching while CapsLock is on. ⇒ Every
   shortcut may be dead for the whole time CapsLock is on. This is
-  **F3 (suspected, not yet measured)** — see Open questions.
+  **F3 — measured and fixed since**: the mismatch is real, but the dominant
+  effect is stronger than a mismatch: the engine refuses to process any key
+  while the latch bit is set, because the project configuration sets
+  `good_old_caps_lock: true`. See ADR 0014 and spec 085.
 
 ## Decision
 
@@ -182,5 +185,12 @@ criterion for that change.
   every shipped binding means), or extend the gate to enumerate
   CapsLock states (changes the gate's baseline). **Must be measured
   before it is chosen.**
+  - **Answered (2026-10-28) — see ADR 0014 / spec 085.** Measured first:
+    the defect is not a mismatch but the engine refusing to process keys
+    at all, because the project configuration sets
+    `good_old_caps_lock: true`. The decision takes **candidate 1**
+    (the front end stops reporting the latch state) **and candidate 3**
+    (the gate enumerates the CapsLock state, with a built-in negative
+    control). Candidate 2 is rejected.
 - **Q3 — Should the capture teach the `Ctrl`+letter rule (F1) in the
   UI**, or only refuse the chord?

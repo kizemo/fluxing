@@ -767,3 +767,57 @@ gh run view <run-id> --json status,jobs
 ### 15.5 下一步
 
 - 仍只剩真机验收：**T6.3 / T6.4 / T20 / T013**（见 §13.4 与 §15.4）。
+
+## 16. T20 · CapsLock 打开时快捷键与候选操作恢复可用（spec 085 / ADR 0014）
+
+### 16.1 根因（源码级取证，非猜测）
+
+1. `WeaselTSF/KeyEvent.cpp` 在 CapsLock 打开时给按键事件多置 `LOCK_MASK`(0x2)。
+2. `RimeWithWeasel.cpp:43-46` 的 `expand_ibus_modifier` 把低 8 位原样搬运 ⇒ 锁存位进引擎。
+3. `librime/src/rime/key_event.h:43-45` 精确比较键码与 modifier ⇒ 多一位即失配。
+4. `librime/src/rime/gear/ascii_composer.cc:151-165` 读锁存位，本项目配置
+   `good_old_caps_lock: true`（`output/data/default.yaml:72-73`）命中 ⇒ 返回 `kRejected`。
+5. `librime/src/rime/engine.cc:105-107`：`kRejected` **打断整条 processor 链**。
+6. ⇒ 候选选择 / 翻页 / 切中英 / 切标点 / 切简繁**全部**失效（不是个别绑定失配）。
+7. 门禁放行的原因：`BuildReachable()` 从不设置 `VK_CAPITAL` 的 TOGGLED 位
+   ⇒ 这个缺陷维度在门禁里**根本不存在**。
+
+### 16.2 修法（ADR 0014 D1–D6）
+
+- **D1**：前端不再上报锁存状态 —— 置位与 `^=` 撤销**两处同删**（只删一处会因
+  `0 ^ LOCK == LOCK` 静默把「切英文」翻成「切中文」）。
+- **D2**：CapsLock 键自身行为不变；**D3**：字母仍产出大写；**D6**：引擎不碰。
+- **D4**：门禁新增 CapsLock 维度（开 / 关两态分别枚举）+ **内建负控**
+  （模拟修复前，必须严格更差，否则门禁判失败）。
+- **D5**：字母类绑定在 latch 打开时不可达属**已记录限制**（绕行：显式写大写变体）。
+
+### 16.3 验证证据
+
+- 整解构建 `msbuild weasel.sln /p:Configuration=Release /p:Platform=Win32` ⇒ exit 0。
+- 全套件 `scripts/test-infra/run-test-suite.bat` ⇒ `=== ALL TESTS PASSED ===`（exit 0）。
+- 门禁三模式 + 部署产物复跑：
+  - 源门禁 · shipped configuration: 基线 `bindings=39 / reachable=39 / dead=0 / mismatches=0 / unused=0` ｜ CapsLock 打开 `caps_bindings=39 / caps_reachable=39 / caps_dead=0 / caps_limited=0 / caps_baseline_dead=0` ｜ 负控 `caps_legacy_reachable=0 / caps_legacy_dead=39`
+  - 负控 fixture · negative-controls: 基线 `bindings=9 / reachable=3 / dead=6 / mismatches=0 / unused=0` ｜ CapsLock 打开 `caps_bindings=6 / caps_reachable=5 / caps_dead=0 / caps_limited=0 / caps_baseline_dead=1` ｜ 负控 `caps_legacy_reachable=0 / caps_legacy_dead=6`
+  - 抓键 fixture · recorder-output: 基线 `bindings=21 / reachable=20 / dead=1 / mismatches=0 / unused=0` ｜ CapsLock 打开 `caps_bindings=21 / caps_reachable=20 / caps_dead=0 / caps_limited=0 / caps_baseline_dead=1` ｜ 负控 `caps_legacy_reachable=0 / caps_legacy_dead=21`
+  - 部署产物 · 装器载荷 `output/data/build/*.yaml`: 基线 `bindings=337 / reachable=337 / dead=0 / mismatches=0 / unused=0` ｜ CapsLock 打开 `caps_bindings=337 / caps_reachable=337 / caps_dead=0 / caps_limited=0 / caps_baseline_dead=0` ｜ 负控 `caps_legacy_reachable=0 / caps_legacy_dead=337`
+- `clang-format 18`（与 CI 同版本）整文件判定：本次触碰的 C/C++ 文件全部 clean。
+- 安装包与产物复验：见 §16.4。
+
+### 16.4 装包与部署产物
+
+- 安装包 `output/archives/fluxing-1.1.0-installer.exe`（42733169 B，SHA256 `9458779C7AA4B61E974680B9BFD31763AF7D32FB469ED97B8568C983BBB81CBB`）
+- 解包复验：`PKG-VERIFY=PASS` —— 二进制 **7/7** 与本轮新构建产物逐字节一致（`weasel.dll` / `weaselx64.dll` / `WeaselServer.exe` / `WeaselDeployer.exe` / `WeaselSetup.exe` / `rime.dll` / `FluxingPhrasesDialog.exe`）；yaml 载荷 **42/42** 多重集一致、无外来文件；编译 schema 载荷 **12** 个齐备
+- 部署产物复跑（对**解包后**的真实载荷：共享编译 schema `data/build/*.yaml` 12 个 + 用户自定义覆盖 3 个）：`SUMMARY|bindings=337|reachable=337|dead=0|known_dead=0|known_dead_keys=0|expectations=0|mismatches=0|unused=0|caps_bindings=337|caps_reachable=337|caps_dead=0|caps_limited=0|caps_baseline_dead=0|caps_legacy_reachable=0|caps_legacy_dead=337|caps_legacy_rejected=289`
+
+### 16.5 待用户真机验收
+
+1. 装本轮装包后，**开着 CapsLock**，依次试：选候选 / 翻页 / 切中英 / 切标点 /
+   切简繁 ⇒ 全部应当可用（修复前一律无响应）。
+2. CapsLock 键自身：中文模式下按它 ⇒ 切英文；英文模式下按它 ⇒ 交还系统（行为不变）。
+3. 开着 CapsLock 打字母 ⇒ 仍输出**大写**。
+4. 验收通过 ⇒ ADR 0014 `Proposed` → `Accepted`，勾掉 tasks.md 的 T017。
+
+### 16.6 下一步
+
+- 仍只剩真机验收：**T6.3 / T6.4 / T20 / T013**（见 §13.4 与 §15.4）。
+

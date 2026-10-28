@@ -26,6 +26,48 @@
 - 快捷设置栏新增**常驻模式**：托盘右键菜单里多一条「快速面板常驻」。勾上之后
   面板不再自动隐藏，常态以 **20%** 不透明度淡显，鼠标移上去会渐渐变清晰；
   再点一次即恢复原来的自动隐藏行为。**不勾选时像素与行为完全不变。**
+- **开着 CapsLock 时快捷键不再全灭**：候选选择 / 翻页 / 切中英 / 切标点 /
+  切简繁**全部恢复可用**。根因不是「个别快捷键失配」，而是前端把 CapsLock 的
+  「锁存状态」当成按键修饰键上报，触发输入引擎的「拒绝处理」分支，
+  **整条按键处理链被中断**。CapsLock 键自身的切中英 / 交还系统行为不变，
+  开着 CapsLock 时字母仍输出大写。
+
+### fix(fluxing): CapsLock 打开时快捷键与候选操作恢复可用（spec 085 / ADR 0014）
+
+**Root cause**:
+
+- 前端 `WeaselTSF/KeyEvent.cpp` 在 **CapsLock 打开**时，给每一个按键事件的
+  状态字段多置一个「锁存」标记（`LOCK_MASK`）。该标记原样进入输入引擎，
+  而引擎比较按键事件时要求键码与状态**全等** ⇒ 多一位就失配。
+- 更关键的是本项目配置里的 `good_old_caps_lock: true`：英文输入组件读到
+  锁存标记就返回「**拒绝处理**」，而「拒绝处理」会**中断整条处理器链** ⇒
+  候选选择 / 翻页 / 切中英 / 切标点 / 切简繁**全部**失效。
+  所以症状不是「个别快捷键失配」，而是「**CapsLock 开着时引擎谁都不理**」。
+- 门禁放行的原因不是算错，而是**门禁枚举前端状态时从不设置 CapsLock 锁存位**
+  ⇒ 这个缺陷维度在门禁里**根本不存在**。
+
+**User-visible**:
+
+- **开着 CapsLock 时，候选选择 / 翻页 / 切中英 / 切标点 / 切简繁全部恢复可用。**
+- CapsLock 键**自身**的行为不变：中文模式下切英文、英文模式下交还系统，都照旧。
+- 开着 CapsLock 时**字母仍输出大写**（大写由字符本身承载，不依赖状态字段）。
+- **已知限制**：写成小写字母的快捷键（如 `Control+a`）在 CapsLock 打开时仍不会
+  触发 —— 这是 CapsLock 的固有语义。绕行办法是把配置写成大写变体（`Control+A`）。
+
+**验收**:
+
+- 门禁新增 CapsLock 维度：不开 / 开启两态**分别枚举**，并内建「模拟修复前」的
+  负控（把锁存标记塞回状态字段），负控必须**严格更差**，否则门禁判失败。
+- 源门禁：`bindings=39 / reachable=39 / dead=0 / mismatches=0 / unused=0 / caps_bindings=39 / caps_reachable=39 / caps_dead=0 / caps_limited=0 / caps_baseline_dead=0 / caps_legacy_reachable=0 / caps_legacy_dead=39`
+- 负控 fixture：`bindings=9 / reachable=3 / dead=6 / mismatches=0 / unused=0 / caps_bindings=6 / caps_reachable=5 / caps_dead=0 / caps_limited=0 / caps_baseline_dead=1 / caps_legacy_reachable=0 / caps_legacy_dead=6`
+- 抓键 fixture：`bindings=21 / reachable=20 / dead=1 / mismatches=0 / unused=0 / caps_bindings=21 / caps_reachable=20 / caps_dead=0 / caps_limited=0 / caps_baseline_dead=1 / caps_legacy_reachable=0 / caps_legacy_dead=21`
+- 部署产物复跑（装器载荷）：`bindings=337 / reachable=337 / dead=0 / mismatches=0 / unused=0 / caps_bindings=337 / caps_reachable=337 / caps_dead=0 / caps_limited=0 / caps_baseline_dead=0 / caps_legacy_reachable=0 / caps_legacy_dead=337`
+- 全套件 `scripts/test-infra/run-test-suite.bat`：`=== ALL TESTS PASSED ===`（exit 0）
+- 整解构建 `msbuild weasel.sln /p:Configuration=Release /p:Platform=Win32`：exit 0
+- `clang-format 18`（与 CI 同版本）整文件判定：本次触碰的 C/C++ 文件全部 clean。
+
+- 详见 **ADR 0014**（`docs/adr/0014-front-end-stops-reporting-capslock-state.md`，
+  `Proposed`）与 spec 085（任务总账 **T20**）。
 
 ### feat(fluxing): 快捷设置栏长显模式（spec 084 / ADR 0013）
 

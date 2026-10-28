@@ -230,6 +230,7 @@ spec 083 的 **M2（抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`）** 已�
 
 **未决依赖**：修饰键只输出 **Shift / Control / Alt**、**不输出 Lock** —— CapsLock 维度
 属清单 **T20**（ADR 0011 Q2），必须先实测再定，本里程碑不预判。
+（**已结案**：T20 实测结论是「引擎整链中断」，修法为前端不再上报锁存状态 + 门禁纳入 caps 维度，见 4.1.6 与 ADR 0014。）
 
 ### 4.1.3 T2 · M3 里程碑（2026-10-28 已完成，ADR 0011 D1/D3）
 
@@ -248,7 +249,7 @@ spec 083 的 **M3（第二条路径 `WeaselServer/ShortcutSettings.cpp`）** 已
 
 **门禁复跑（M5）**：源门禁 `bindings=39|reachable=39|dead=0`；部署产物重编 12 个 schema 后 `bindings=337|reachable=337|dead=0`；`MAPPER-SUMMARY|failures=0`；全套件 `ALL TESTS PASSED`；整解 Release/Win32 编译 exit 0。
 
-**未决依赖**：修饰键仍**不输出 Lock** —— CapsLock 维度属清单 **T20**（ADR 0011 Q2），必须先实测再定。
+**未决依赖**：修饰键仍**不输出 Lock** —— CapsLock 维度属清单 **T20**（ADR 0011 Q2），必须先实测再定。（**已结案**：见 4.1.6 与 ADR 0014。）
 
 ### 4.1.4 T2 · M4 里程碑（2026-10-28 已完成，ADR 0011 D3）
 
@@ -264,7 +265,7 @@ spec 083 的 **M4（抓键产物专项）** 已完成：
 
 **门禁数字**：`RECORDER|products=850|rows=21|produced=20|not_produced=0|negative_ok=1`；`RECORDER-SUMMARY|failures=0`；fixture 判定 `bindings=21|reachable=20|dead=1|mismatches=0|unused=0`；源门禁 `bindings=39|reachable=39|dead=0`。
 
-**未决依赖**：修饰键仍**不输出 Lock** —— CapsLock 维度属清单 **T20**（ADR 0011 Q2），必须先实测再定。
+**未决依赖**：修饰键仍**不输出 Lock** —— CapsLock 维度属清单 **T20**（ADR 0011 Q2），必须先实测再定。（**已结案**：见 4.1.6 与 ADR 0014。）
 
 ### 4.1.5 T2 · M6 里程碑（2026-10-28 已完成，ADR 0011 D3）
 
@@ -281,6 +282,23 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
 | ADR 转正 | T6.4 实测通过后 ADR 0011 `Proposed` → `Accepted` | ⏳ 等 T6.3 |
 
 **为什么必须重编而不是删掉**：装器 `output\install.nsi` 用 `File "data\build\*.bin"` / `File "data\build\*.yaml"` 收录预编译产物，**两条都不是 `/nonfatal`** ⇒ 目录空了 NSIS 直接 abort，不能靠删除规避。
+
+### 4.1.6 T20 · CapsLock 维度结案（2026-10-28 已修复，ADR 0014 D1）
+
+- **根因**：不是「按键匹配失配」，而是**输入引擎在 CapsLock 打开后不再处理任何按键**。
+  前端 `WeaselTSF/KeyEvent.cpp` 在 CapsLock 打开时给按键事件多置 `LOCK_MASK`(0x2) ⇒
+  `expand_ibus_modifier`（`RimeWithWeasel.cpp:44-46`）原样保留该位 ⇒ librime 精确比较
+  modifier（`librime/src/rime/key_event.h:43-44`）失配；**更关键**的是本项目配置
+  `good_old_caps_lock: true`（`output/data/default.yaml:72-73`）让英文输入组件对
+  「带着锁存标记」的键返回 `kRejected` ⇒ **整条处理器链中断**
+  （`librime/src/rime/engine.cc:105-107`）⇒ 候选选择 / 翻页 / 切中英 / 切标点 /
+  切简繁**全部**失效。
+- **修法**：取唯一源头 —— 前端不再上报锁存状态（ADR 0014 D1）。CapsLock 键自身的
+  切中英 / 交还系统行为不变（D2），字母仍产出大写（D3），引擎不碰（D6）。
+- **门禁**：新增 CapsLock 维度（开 / 关两态分别枚举）+ 内建负控（模拟修复前，必须
+  严格更差）。数字对照见 spec 085 §5.3.1。
+- **残留限制**：写成小写字母的快捷键在 CapsLock 打开时仍不触发（ADR 0014 D5），
+  绕行写法是把配置写成大写变体（如 `Control+A`）。
 
 ### 4.2 规划中，未开工
 
@@ -305,7 +323,7 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
 | T17 | 共享 `data/` 目录其余文件升级 | 🟡 待用户操作 | 除 `default.yaml` 外仍是 2026-08 旧版；**装 1.0.0 包即可刷新**（`fluxing-1.0.0-installer.exe` 的 `data/` 载荷已含重编后的 `build/`） |
 | T18 | **进 `release/` 发布链** | ✅ 已完成 | `release/` 已收录 `fluxing-1.0.0-installer.exe`（42,756,263 B，SHA256 `F040D989872FB8D135917B9416E40DE4D3010002EB669EF43AA98544A8344A8A`）与 `fluxing-0.21.0.9-installer.exe`（42,761,559 B，SHA256 `D1FCF78304FB89955F61F8925C894AB1F2CA5941FF9E9283D859D93A3E820E1C`）。注：本 fork 的 CI 发布步骤被 `github.repository == 'rime/weasel'` 门控 ⇒ `release/` 只是 git 跟踪的载荷仓，**不会**自动建 GitHub Release |
 | T19 | **沙箱权威门禁在本机跑不起来** | ⚠️ 环境故障 | `run-verify.cmd` 两轮均报「3 次启动都没拿到 claims.json」（orchestrator exit 4）；`sandbox-artifacts\rime\logs\` 下**连 `boot.log` 都没有** ⇒ Windows Sandbox 虚机根本没启动（Hyper-V vSwitch 异常，同机 2026-10-25 曾成功跑出 `PASS=38 FAIL=2`）。根因未定位；**不阻塞提交**（本轮未改 `output/install.nsi` 与 `output/data/user-custom/**`），但 0.21.0.9 的沙箱断言仍为空 ⇒ 见 L150 |
-| T20 | **CapsLock 打开时快捷键疑似全部失配** | ⚠️ 疑点，未实测 | 前端 `WeaselTSF/KeyEvent.cpp:18-19` 在 CapsLock 打开时多置 `LOCK_MASK`(0x2)，`expand_ibus_modifier`（`RimeWithWeasel.cpp:44-46`）保留该位，而 librime **精确比较 modifier**（`librime/src/rime/key_event.h:43-44`）⇒ 所有未写 `Lock+` 的绑定都失配；全仓无任何地方清除该位。**必须先实测再决定怎么修**（ADR 0011 Q2） |
+| T20 | **CapsLock 打开时快捷键全部失效** | ✅ 已修复，待真机复验 | 根因**不是**「按键匹配失配」，而是**输入引擎在 CapsLock 打开后不再处理任何按键**：前端 `WeaselTSF/KeyEvent.cpp` 在 CapsLock 打开时给按键事件多置 `LOCK_MASK`(0x2) ⇒ `expand_ibus_modifier`（`RimeWithWeasel.cpp:44-46`）保留该位 ⇒ librime 精确比较 modifier（`librime/src/rime/key_event.h:43-44`）失配；**更关键**的是本项目配置 `good_old_caps_lock: true`（`output/data/default.yaml:72-73`）让英文输入组件对「带着锁存标记」的键返回「拒绝处理」⇒ **整条处理器链中断**（`librime/src/rime/engine.cc:105-107`）⇒ 候选选择 / 翻页 / 切中英 / 切标点 / 切简繁**全部**失效。修法取唯一源头：**前端不再上报锁存状态**（ADR 0014 D1）；门禁新增 caps 维度 + 内建负控（ADR 0014 D4）。详见 spec 085 §5.3.1 与 4.1.6。门禁证据：源门禁 `caps_reachable=39 / caps_dead=0 / caps_limited=0`，负控 `caps_legacy_reachable=0 / caps_legacy_dead=39`（模拟修复前 39/39 全死）⇒ 门禁对缺陷敏感 |
 
 ---
 
@@ -332,7 +350,7 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
 | 真实按键行为无法由门禁证明 | 门禁只证「能触发」，证不了「产生预期效果」 | 需人手敲一次 `Shift+'` |
 | MiniMax Code 运行时反复重启（1 h 内 6 次） | 持续杀掉在飞后台任务 | 已提报（仓外），产品侧排查中 |
 | 沙箱权威门禁在本机跑不起来（T19） | 0.21.0.9 的 46 项沙箱断言一条没跑 | 需修 Hyper-V vSwitch；或换一台机器跑（见 L150） |
-| CapsLock 打开时快捷键疑似全部失配（T20） | 常开 CapsLock 的用户会以为快捷键坏了 | 先实测；候选修法见 ADR 0011 Q2（前端清位 / 产出 `Lock+` / 门禁纳入 caps 维度） |
+| ~~CapsLock 打开时快捷键全部失效（T20）~~ | 常开 CapsLock 的用户会以为快捷键坏了 | ✅ 已修（spec 085 / ADR 0014）：前端不再上报锁存状态 + 门禁纳入 caps 维度。**残留限制**：字母类快捷键在 CapsLock 打开时仍要写成大写变体（ADR 0014 D5） |
 
 ---
 
