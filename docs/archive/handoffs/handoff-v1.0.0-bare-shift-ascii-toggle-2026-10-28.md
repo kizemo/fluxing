@@ -715,3 +715,55 @@ gh run view <run-id> --json status,jobs
 ### 14.4 下一步
 
 - 仍只剩真机验收：**T6.3 / T6.4 / T20**（见 §13.4）。
+
+## 15. T2 · P-E3 · 快捷设置栏长显模式（spec 084 / ADR 0013）
+
+> 立项于 2026-10-28。ADR 0013 状态 `Proposed`，等真机验收通过后转 `Accepted`。
+
+### 15.1 做了什么
+
+- 新增 `include/QuickPanelAlpha.h`：纯函数 `ScaleAlpha` / `StepAlpha` / `LerpAlpha`
+  + 系数常量（满值 255 / 常态 51 / 步长 24），**不依赖 `windows.h`**。
+- `ApplyAlphaGradient()` 把「整体不透明度系数」乘进逐像素 alpha
+  （`final = round(base × factor / 255)`）⇒ 系数满值时渲染与从前**逐像素一致**。
+  **没有碰 `LWA_ALPHA` uniform**（`QuickPanelDialog.h` 头注释里点名的雷区）。
+- 100ms 轮询定时器算目标系数（鼠标在面板矩形内 ⇒ 满值）并按步长渐变，
+  **变了才 `RepaintLayered`**；瞬时态目标恒为满值 ⇒ 系数永不动 ⇒ 零重绘。
+- 常显态屏蔽三条自动隐藏路径（鼠标在外 1500ms / `WM_ACTIVATEAPP` / `WM_KILLFOCUS`）。
+- 入口：托盘右键菜单新增「快速面板常驻」（简 / 繁 / 英三个语言变体），
+  **默认关、不持久化**。
+- 菜单勾号用 `WeaselTrayIcon::CustomizeMenu()`（`CSystemTray` **既有**虚函数）
+  + `std::function<bool(UINT)>` 钩子 ⇒ **第三方 `SystemTraySDK.*` 零改动**。
+- 顺带修掉 `ToggleMode()` 把 6 个按钮回调传成空指针的问题。
+
+### 15.2 与计划的偏差（1 条）
+
+- 计划 T006 写的是给 `SystemTraySDK.{h,cpp}` 加钩子；实现改挂在 `WeaselTrayIcon`
+  ⇒ **第三方 SDK 一点没动**。ADR 0013 的 D10 段已同步改写，tasks T006 描述已改。
+
+### 15.3 验证证据
+
+- `clang-format 18`（与 CI 同版本）整文件判定：本次触碰的 8 个 C/C++ 文件全部 clean。
+- 整解构建 `msbuild weasel.sln /p:Configuration=Release /p:Platform=Win32` ⇒ exit 0。
+  **坑：整解必须用 `Win32`** —— x64 只单独编 `WeaselTSF`；用 x64 编整解会在
+  `WeaselDeployer` 上撞 yaml-cpp 的 `build_Win32` 链接库 ⇒ 一片 LNK2001 假失败。
+- 全套件 `scripts/test-infra/run-test-suite.bat` ⇒ `=== ALL TESTS PASSED ===`（exit 0）；
+  源门禁 `SUMMARY|bindings=39|reachable=39|dead=0|mismatches=0` + `RESULT|PASS`；
+  `MAPPER-SUMMARY|failures=0`；`RECORDER-SUMMARY|failures=0`；
+  `TestQuickPanelDialog` 新增 T12a–T12n 系数演算断言全通过。
+- 安装包 `output/archives/fluxing-1.1.0-installer.exe`（42765092 B，SHA256 `68116cf555e012b4f0a30cb442d374f6ece72caff87115778a2e134116f2c05f`）；
+  解包复验 `PKG-VERIFY=PASS`（二进制 4 一致 / yaml 载荷 42 一致）。
+
+### 15.4 待用户真机验收（T013）
+
+1. 装 `output\archives\fluxing-1.1.0-installer.exe` 后，托盘右键 ⇒ 出现「快速面板常驻」。
+2. 勾上 ⇒ 面板不再自动隐藏，且常态明显比原来淡（20% 不透明度）。
+3. 鼠标移到面板上 ⇒ 渐渐变清晰（约 0.9 秒）；移开 ⇒ 又淡回去。
+4. 菜单项的勾号跟随开关状态（关 = 无勾）。
+5. 常显态下面板上的按钮仍然可用（点「用户词典管理」「快捷键设置」等）。
+6. 再点一次菜单项 ⇒ 恢复原来的自动隐藏行为。
+7. 验收通过 ⇒ ADR 0013 `Proposed` → `Accepted`，勾掉 T013。
+
+### 15.5 下一步
+
+- 仍只剩真机验收：**T6.3 / T6.4 / T20 / T013**（见 §13.4 与 §15.4）。

@@ -180,7 +180,7 @@
 | P-D2 | Fluent UI Token 收敛 | 🟡 | 3/41 tasks | 主体未做 | spec 040 |
 | P-E1 | QuickPanel v4 macOS 风格 | 🟡 | 7/10 tasks | 收尾未做 | spec 049 |
 | P-E2 | QuickPanel v3-rev3 重新启用 | 🟡 | 设计+部分 | 未收口 | spec 070（0/25） |
-| P-E3 | QuickPanel 长显模式 | 🟡 | spec 052 设计完成 | 未启用 | spec 052 |
+| P-E3 | QuickPanel 长显模式 | 🟡 | spec 084 + ADR 0013 已实现（菜单常驻 + 20% 淡显 / 悬停变清晰） | 待真机验收（T013） | spec 084 / ADR 0013 |
 | P-G1 | 常用短语 UI 打磨 | 🟡 | 独立进程 + 过滤可用 | UI 细节未收口 | spec 042-phrases-ui / 043 |
 | P-H1 | yaml 设置 UI **剩余 3 页** | 🟡 | 第 1 页（快捷键）ship | 样式 / 方案 / 用户词典 3 页未做 | spec 007；PRD F3 |
 

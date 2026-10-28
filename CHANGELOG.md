@@ -23,6 +23,32 @@
   里面还留着 ADR 0009 早就删掉的两条**永远触发不了**的死绑定
   （`Control+Shift+9` / `Control+Shift+0`）。现已按当前配置全量重编，
   装上后不再带着误导性的死绑定。
+- 快捷设置栏新增**常驻模式**：托盘右键菜单里多一条「快速面板常驻」。勾上之后
+  面板不再自动隐藏，常态以 **20%** 不透明度淡显，鼠标移上去会渐渐变清晰；
+  再点一次即恢复原来的自动隐藏行为。**不勾选时像素与行为完全不变。**
+
+### feat(fluxing): 快捷设置栏长显模式（spec 084 / ADR 0013）
+
+**User-visible**:
+
+- 托盘右键菜单新增「快速面板常驻」（简 / 繁 / 英三个语言变体各一条），勾选即开，
+  **默认关**，**不持久化**（重启动后回到关闭状态）。
+- 开启后：面板**不再自动隐藏**（鼠标在外 1500ms / 前台切走 / 失焦三条路径全部屏蔽），
+  常态以 **20%** 不透明度淡显；鼠标移到面板上会**渐渐变清晰**（约 0.9 秒），
+  移开又淡回去。
+- 关闭（或从未开启）⇒ 渲染与行为**逐像素不变**（零回归保证）。
+- 顺带修掉 `ToggleMode()` 把 6 个按钮回调清成空指针的问题（按钮会变哑）。
+
+**验收**:
+
+- `clang-format 18`（与 CI 同版本）整文件判定：本次触碰的 8 个 C/C++ 文件全部 clean。
+- 整解构建 `msbuild weasel.sln /p:Configuration=Release /p:Platform=Win32`：exit 0。
+- 全套件 `scripts/test-infra/run-test-suite.bat`：`=== ALL TESTS PASSED ===`（exit 0）；
+  源门禁 `SUMMARY|bindings=39|reachable=39|dead=0|mismatches=0`、`RESULT|PASS`；
+  `MAPPER-SUMMARY|failures=0`、`RECORDER-SUMMARY|failures=0`；
+  `TestQuickPanelDialog` 新增 T12a–T12n 系数演算断言全通过。
+- 安装包 `output/archives/fluxing-1.1.0-installer.exe`（42765092 B，SHA256 `68116cf555e012b4f0a30cb442d374f6ece72caff87115778a2e134116f2c05f`）；
+  解包复验：二进制 SHA256 4 一致、yaml 载荷 0 一致（`PKG-VERIFY=PASS`）。
 
 ### refactor(fluxing): 抓键路径改吃共享单元 `include/KeyNameMapper.h`（ADR 0011 D1/D3/D6）
 
