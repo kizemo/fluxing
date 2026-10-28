@@ -149,6 +149,11 @@ if !errorlevel! NEQ 0 set "FAIL=1"
 echo === Checking keysyms_generated.inc against librime key_table.cc ===
 powershell -NoProfile -ExecutionPolicy Bypass -File "test\TestHotkeyBindings\gen-keysyms.ps1" -Check
 if !errorlevel! NEQ 0 set "FAIL=1"
+rem === The shared key name mapper has to agree with librime's parse rules,
+rem     with librime's key table and with the front end (ADR 0011 D1/D4) ===
+echo === Running TestHotkeyBindings.exe (mapper self-check) ===
+"Release\TestHotkeyBindings.exe" --selfcheck-mapper < nul
+if !errorlevel! NEQ 0 set "FAIL=1"
 rem === TestWeaselIPC integration test (spec 026) ===
 rem The test exe has 3 modes: /start (spawn server in background), no-arg (client),
 rem /stop (shutdown server). We must spawn /start first, give the named pipe time

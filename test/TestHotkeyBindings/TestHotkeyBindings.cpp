@@ -52,7 +52,7 @@
 #include <string>
 #include <vector>
 
-#include "keysyms_generated.inc"
+#include <KeyNameMapper.h>
 
 namespace {
 
@@ -62,30 +62,11 @@ const char* const kToolVersion = "1.0";
 // librime key tables (generated from librime/src/rime/key_table.cc)
 // ---------------------------------------------------------------------------
 
-const NamedKey* FindKey(const std::string& name) {
-  for (const NamedKey& k : kKeyNames) {
-    if (name == k.name)
-      return &k;
-  }
-  return nullptr;
-}
-
-const NamedModifier* FindModifier(const std::string& name) {
-  for (const NamedModifier& m : kModifierNames) {
-    if (name == m.name)
-      return &m;
-  }
-  return nullptr;
-}
-
-// Canonical name for a keysym, for diagnostics. Mirrors
-// RimeGetKeyName(): the first table entry whose keyval matches.
+// Canonical name for a keysym, for diagnostics. The librime key tables and
+// their parse rules live in the shared unit now (ADR 0011 D1), so the gate
+// reads them through it instead of keeping a second copy that could drift.
 std::string KeyName(int keycode) {
-  for (const NamedKey& k : kKeyNames) {
-    if (k.keycode == keycode)
-      return k.name;
-  }
-  return std::string();
+  return fluxing::KeyName(keycode);
 }
 
 std::string Hex(int v) {
@@ -106,42 +87,13 @@ struct ParsedKey {
 };
 
 ParsedKey ParseRimeKey(const std::string& repr) {
+  // librime's own parse rules live in the shared unit (ADR 0011 D1).
+  const fluxing::AcceptKey parsed = fluxing::ParseAccept(repr);
   ParsedKey out;
-  if (repr.empty()) {
-    out.error = "empty pattern";
-    return out;
-  }
-  if (repr.size() == 1) {
-    // librime: keycode_ = static_cast<int>(repr[0]);
-    out.ok = true;
-    out.keycode = static_cast<int>(static_cast<unsigned char>(repr[0]));
-    out.modifier = 0;
-    return out;
-  }
-  int mask = 0;
-  size_t start = 0;
-  for (;;) {
-    size_t found = repr.find('+', start);
-    if (found == std::string::npos)
-      break;
-    std::string token = repr.substr(start, found - start);
-    const NamedModifier* m = FindModifier(token);
-    if (!m) {
-      out.error = "unrecognized modifier '" + token + "'";
-      return out;
-    }
-    mask |= m->mask;
-    start = found + 1;
-  }
-  std::string token = repr.substr(start);
-  const NamedKey* k = FindKey(token);
-  if (!k) {
-    out.error = "unrecognized key '" + token + "'";
-    return out;
-  }
-  out.ok = true;
-  out.keycode = k->keycode;
-  out.modifier = mask;
+  out.ok = parsed.ok;
+  out.keycode = parsed.keycode;
+  out.modifier = parsed.modifier;
+  out.error = parsed.error;
   return out;
 }
 
@@ -706,6 +658,267 @@ std::string BaselinePath;
 std::string ExpectationsPath;
 std::string LayoutSpec = "00000409";
 bool UseLayout = true;
+bool SelfCheckMapper = false;
+
+// ---------------------------------------------------------------------------
+// Mapper self-check -- ADR 0011 D1/D4
+//
+// The shared unit has to agree with three parties at the same time:
+//   * librime's parse rules -- what an accept pattern means;
+//   * librime's key table   -- which names exist at all;
+//   * the front end         -- which (key code, modifier) pairs it sends.
+// Any disagreement between them is how a binding gets minted that can never
+// fire, so the gate checks all three here.
+// ---------------------------------------------------------------------------
+
+int RunMapperSelfCheck() {
+  int failures = 0;
+  int reported = 0;
+  const int report_limit = 20;
+
+  // 1. Every name in librime's own table parses back to its own key code.
+  size_t name_count = 0;
+  const fluxing::keysyms::NamedKey* names =
+      fluxing::keysyms::KeyNames(&name_count);
+  for (size_t i = 0; i < name_count; ++i) {
+    const fluxing::AcceptKey parsed = fluxing::ParseAccept(names[i].name);
+    if (!parsed.ok || parsed.keycode != names[i].keycode ||
+        parsed.modifier != 0) {
+      ++failures;
+      if (reported++ < report_limit) {
+        std::printf("MAPPER-FAIL|name|%s|expected 0x%04X\n", names[i].name,
+                    names[i].keycode);
+      }
+    }
+  }
+  std::printf("MAPPER|table names=%zu\n", name_count);
+
+  // 2. The accept pattern built for a key code parses back to that key code.
+  for (size_t i = 0; i < name_count; ++i) {
+    const int keycode = names[i].keycode;
+    std::string accept;
+    fluxing::AcceptError error = fluxing::kAcceptOk;
+    if (!fluxing::BuildAccept(keycode, 0, &accept, &error)) {
+      // Refusing a modifier key is the contract, not a defect: such a chord
+      // can never fire, so it must not be named as a binding (ADR 0011 D6).
+      if (error != fluxing::kAcceptModifierKey ||
+          !fluxing::IsModifierKeyCode(keycode)) {
+        ++failures;
+        if (reported++ < report_limit) {
+          std::printf("MAPPER-FAIL|build|%s|%s\n", names[i].name,
+                      fluxing::AcceptErrorText(error));
+        }
+      }
+      continue;
+    }
+    const fluxing::AcceptKey parsed = fluxing::ParseAccept(accept);
+    if (!parsed.ok || parsed.keycode != keycode || parsed.modifier != 0) {
+      ++failures;
+      if (reported++ < report_limit) {
+        std::printf("MAPPER-FAIL|roundtrip|%s|%s\n", accept.c_str(),
+                    names[i].name);
+      }
+    }
+  }
+
+  // 3. The chords that do not depend on the keyboard layout.
+  struct PinnedChord {
+    UINT vkey;
+    int keycode;
+    const char* name;
+  };
+  const PinnedChord pinned[] = {
+      {VK_BACK, ibus::BackSpace, "BackSpace"},
+      {VK_TAB, ibus::Tab, "Tab"},
+      {VK_RETURN, ibus::Return, "Return"},
+      {VK_ESCAPE, ibus::Escape, "Escape"},
+      {VK_SPACE, ibus::space, "space"},
+      {VK_LEFT, ibus::Left, "Left"},
+      {VK_UP, ibus::Up, "Up"},
+      {VK_RIGHT, ibus::Right, "Right"},
+      {VK_DOWN, ibus::Down, "Down"},
+      {VK_HOME, ibus::Home, "Home"},
+      {VK_END, ibus::End, "End"},
+      {VK_PRIOR, ibus::Prior, "Prior"},
+      {VK_NEXT, ibus::Next, "Next"},
+      {VK_INSERT, ibus::Insert, "Insert"},
+      {VK_DELETE, ibus::Delete, "Delete"},
+      {VK_F1, ibus::F1, "F1"},
+      {VK_F12, ibus::F12, "F12"},
+      {VK_NUMPAD0, ibus::KP_0, "KP_0"},
+  };
+  for (size_t i = 0; i < sizeof(pinned) / sizeof(pinned[0]); ++i) {
+    BYTE state[256];
+    std::memset(state, 0, sizeof(state));
+    state[pinned[i].vkey] = 0x80;
+    KeyInfo kinfo(static_cast<LPARAM>(1));
+    const int keycode =
+        fluxing::ResolveCharacter(pinned[i].vkey, kinfo, state, NULL);
+    if (keycode != pinned[i].keycode) {
+      ++failures;
+      if (reported++ < report_limit) {
+        std::printf("MAPPER-FAIL|chord|%s|expected 0x%04X|got 0x%04X\n",
+                    pinned[i].name, pinned[i].keycode, keycode);
+      }
+      continue;
+    }
+    std::string accept;
+    fluxing::AcceptError error = fluxing::kAcceptOk;
+    if (!fluxing::BuildAccept(keycode, 0, &accept, &error)) {
+      ++failures;
+      if (reported++ < report_limit) {
+        std::printf("MAPPER-FAIL|chord-accept|%s|%s\n", pinned[i].name,
+                    fluxing::AcceptErrorText(error));
+      }
+      continue;
+    }
+    const fluxing::AcceptKey parsed = fluxing::ParseAccept(accept);
+    if (!parsed.ok || parsed.keycode != keycode) {
+      ++failures;
+      if (reported++ < report_limit) {
+        std::printf("MAPPER-FAIL|chord-accept|%s|%s\n", pinned[i].name,
+                    accept.c_str());
+      }
+    }
+  }
+
+  // 4. librime's parse rules on the tricky patterns. A lower case letter
+  //    only has a name in the one character form, so Control+a does not
+  //    parse at all (ADR 0011 F1).
+  struct ParseCase {
+    const char* repr;
+    bool ok;
+    int keycode;
+    int modifier;
+  };
+  const ParseCase parse_cases[] = {
+      {"a", true, 0x61, 0},
+      {"A", true, 0x41, 0},
+      {"0", true, 0x30, 0},
+      {"+", true, 0x2B, 0},
+      {"Control+a", false, 0, 0},
+      {"Control+A", true, 0x41, 0x4},
+      {"Shift+comma", true, 0x2C, 0x1},
+      {"Control+Shift+numbersign", true, 0x23, 0x5},
+      {"Control+Alt+Shift+F", true, 0x46, 0xD},
+      {"Release+BackSpace", true, ibus::BackSpace, 0x40000000},
+      {"Control+", false, 0, 0},
+      {"", false, 0, 0},
+      {"Control+nosuchkey", false, 0, 0},
+      {"nosuchmodifier+a", false, 0, 0},
+  };
+  for (size_t i = 0; i < sizeof(parse_cases) / sizeof(parse_cases[0]); ++i) {
+    const ParseCase& c = parse_cases[i];
+    const fluxing::AcceptKey parsed = fluxing::ParseAccept(c.repr);
+    const bool bad =
+        parsed.ok != c.ok || (c.ok && (parsed.keycode != c.keycode ||
+                                       parsed.modifier != c.modifier));
+    if (bad) {
+      ++failures;
+      if (reported++ < report_limit) {
+        std::printf("MAPPER-FAIL|parse|%s|expected %s\n", c.repr,
+                    c.ok ? "ok" : "fail");
+      }
+    }
+  }
+
+  // 5. Every chord the front end can produce must round trip: the accept
+  //    pattern the mapper builds has to mean exactly the (key code,
+  //    modifier) pair the front end sends, and that pair has to be
+  //    reachable. A refusal is only allowed where librime really has no
+  //    name for the character (ADR 0011 D3).
+  const FrontEndMap frontend = BuildReachable();
+  BYTE state[256];
+  int chords = 0;
+  int refused = 0;
+  for (int vkey = 0x08; vkey <= 0xFE; ++vkey) {
+    for (int extended = 0; extended <= 1; ++extended) {
+      for (int shift = 0; shift <= 1; ++shift) {
+        for (int ctrl = 0; ctrl <= 1; ++ctrl) {
+          for (int alt = 0; alt <= 1; ++alt) {
+            for (int keyup = 0; keyup <= 1; ++keyup) {
+              std::memset(state, 0, sizeof(state));
+              state[vkey] = 0x80;
+              if (shift) {
+                state[VK_SHIFT] = 0x80;
+                state[VK_LSHIFT] = 0x80;
+                state[VK_RSHIFT] = 0x80;
+              }
+              if (ctrl) {
+                state[VK_CONTROL] = 0x80;
+                state[VK_LCONTROL] = 0x80;
+                state[VK_RCONTROL] = 0x80;
+              }
+              if (alt) {
+                state[VK_MENU] = 0x80;
+                state[VK_LMENU] = 0x80;
+                state[VK_RMENU] = 0x80;
+              }
+              LPARAM lp = static_cast<LPARAM>(1) |
+                          (static_cast<LPARAM>(extended) << 24) |
+                          (static_cast<LPARAM>(keyup) << 31);
+              KeyInfo kinfo(lp);
+              weasel::KeyEvent ev;
+              if (!ConvertKeyEvent(static_cast<UINT>(vkey), kinfo, state, ev)) {
+                continue;
+              }
+              const int keycode = static_cast<int>(ev.keycode);
+              const int modifier =
+                  ExpandIbusModifier(static_cast<int>(ev.mask));
+              // The front end eats the shift keys (spec 077).
+              if (keycode == ibus::Shift_L || keycode == ibus::Shift_R) {
+                continue;
+              }
+              ++chords;
+              std::string accept;
+              fluxing::AcceptError error = fluxing::kAcceptOk;
+              if (!fluxing::BuildAccept(keycode, modifier, &accept, &error)) {
+                ++refused;
+                bool allowed = false;
+                if (error == fluxing::kAcceptModifierKey) {
+                  allowed = fluxing::IsModifierKeyCode(keycode);
+                } else if (error == fluxing::kAcceptNoName) {
+                  allowed = fluxing::KeyName(keycode).empty() && modifier != 0;
+                } else if (error == fluxing::kAcceptUnprintable) {
+                  allowed = fluxing::KeyName(keycode).empty() &&
+                            modifier == 0 && (keycode < 0x20 || keycode > 0x7e);
+                }
+                if (!allowed) {
+                  ++failures;
+                  if (reported++ < report_limit) {
+                    std::printf("MAPPER-FAIL|refusal|0x%04X|%s\n", keycode,
+                                fluxing::AcceptErrorText(error));
+                  }
+                }
+                continue;
+              }
+              const fluxing::AcceptKey parsed = fluxing::ParseAccept(accept);
+              if (!parsed.ok || parsed.keycode != keycode ||
+                  parsed.modifier != modifier) {
+                ++failures;
+                if (reported++ < report_limit) {
+                  std::printf("MAPPER-FAIL|chord-accept|%s|0x%04X|0x%04X\n",
+                              accept.c_str(), keycode, modifier);
+                }
+                continue;
+              }
+              if (frontend.reachable.find(KeyPair(keycode, modifier)) ==
+                  frontend.reachable.end()) {
+                ++failures;
+                if (reported++ < report_limit) {
+                  std::printf("MAPPER-FAIL|unreachable|%s|0x%04X\n",
+                              accept.c_str(), keycode);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  std::printf("MAPPER|chords=%d|refused=%d\n", chords, refused);
+  return failures;
+}
 
 }  // namespace
 
@@ -733,6 +946,8 @@ int main(int argc, char* argv[]) {
       LayoutSpec = argv[++i];
     } else if (arg == "--no-layout") {
       UseLayout = false;
+    } else if (arg == "--selfcheck-mapper") {
+      SelfCheckMapper = true;
     } else if (!arg.empty() && arg[0] == '-') {
       std::fprintf(stderr, "unknown option: %s\n", arg.c_str());
       return 2;
@@ -740,6 +955,16 @@ int main(int argc, char* argv[]) {
       files.push_back(arg);
     }
   }
+  if (SelfCheckMapper) {
+    // The mapper self-check stands on its own: it needs neither a
+    // configuration file nor a keyboard layout.
+    std::printf("HOTKEY-BINDINGS %s (mapper self-check)\n", kToolVersion);
+    const int failures = RunMapperSelfCheck();
+    std::printf("MAPPER-SUMMARY|failures=%d\n", failures);
+    std::printf("RESULT|%s\n", failures == 0 ? "PASS" : "FAIL");
+    return failures == 0 ? 0 : 1;
+  }
+
   if (files.empty()) {
     files.push_back("output\\data\\default.yaml");
     files.push_back("output\\data\\user-custom\\rime_ice.custom.yaml");
@@ -785,16 +1010,13 @@ int main(int argc, char* argv[]) {
   }
   // The generated tables must agree with librime's own constants.
   {
-    const NamedModifier* shift = FindModifier("Shift");
-    const NamedModifier* release = FindModifier("Release");
-    if (!shift || shift->mask != 0x1 || !release ||
-        release->mask != 0x40000000) {
+    if (fluxing::ModifierByName("Shift") != 0x1 ||
+        fluxing::ModifierByName("Release") != 0x40000000) {
       std::printf(
           "FATAL|generated modifier table does not match librime constants\n");
       return 2;
     }
-    const NamedKey* comma = FindKey("comma");
-    if (!comma || comma->keycode != 0x2C) {
+    if (fluxing::KeycodeByName("comma") != 0x2C) {
       std::printf(
           "FATAL|generated key table does not match librime constants\n");
       return 2;

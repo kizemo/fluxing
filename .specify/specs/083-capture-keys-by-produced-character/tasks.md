@@ -3,7 +3,8 @@
 > 勾选框与 [plan.md](plan.md) 的任务编号一一对应。
 > `[x]` = 已完成；`[ ]` = 下一阶段待办。
 >
-> 本轮（2026-10-28）**只完成 M0（调查与决策）**；**M1–M6 全部待做**。
+> 进度（2026-10-28）：**M0（调查与决策）+ M1（共享单元）+ M5（门禁复跑）已完成**；
+> **M2–M4、M6 全部待做**。
 > 决策见 [ADR 0011](../../../docs/adr/0011-capture-keys-by-produced-character.md)（`Proposed`）。
 
 ## M0 · 调查与决策
@@ -17,11 +18,23 @@
 
 ## M1 · 共享单元 `include/KeyNameMapper.h`
 
-- [ ] T1.1 新增 header-only `include/KeyNameMapper.h`（**不新建 .vcxproj**）
-- [ ] T1.2 键名表与 `test/TestHotkeyBindings/keysyms_generated.inc` **同源同生成器**
-- [ ] T1.3 提供「字符 → 键名」「组合键 → 字符」两个方向的纯函数（无 GUI / 无 rime_api 依赖）
-- [ ] T1.4 复刻 F2（清 Ctrl/Alt、Shift 定大小写），与 `WeaselTSF/KeyEvent.cpp` 逐条对齐
-- [ ] T1.5 librime 无名的字符返回「不可表达」，**绝不产出死绑定**
+- [x] T1.1 新增 header-only `include/KeyNameMapper.h`（**不新建 .vcxproj**）
+- [x] T1.2 键名表与 `test/TestHotkeyBindings/keysyms_generated.inc` **同源同生成器**
+- [x] T1.3 提供「字符 → 键名」「组合键 → 字符」两个方向的纯函数（无 GUI / 无 rime_api 依赖）
+- [x] T1.4 复刻 F2（清 Ctrl/Alt、Shift 定大小写），与 `WeaselTSF/KeyEvent.cpp` 逐条对齐
+- [x] T1.5 librime 无名的字符返回「不可表达」，**绝不产出死绑定**
+
+> M1 落点（2026-10-28）：共享单元落在 `include/KeyNameMapper.h`（`namespace fluxing`），
+> 键名表迁到 `include/keysyms_generated.inc`（include guard + `fluxing::keysyms` 命名空间 +
+> 函数内 `static` 表，C++11 安全，不依赖生产工程的 C++ 标准），生成器仍是
+> `test/TestHotkeyBindings/gen-keysyms.ps1`（输出路径改到 `include\`，并**保留 librime 原表序**，
+> 使「首个同键值条目」== `RimeGetKeyName`）。
+> `WeaselTSF/KeyEvent.cpp` 改为调用 `fluxing::ResolveCharacter`，掩码逻辑逐字保留。
+> 门禁 `TestHotkeyBindings` 删掉本地副本改吃共享单元，并新增 `--selfcheck-mapper`
+> （5 类交叉验证：表名回环 / accept 串回环 / 18 个固定和弦 / 14 个 librime 解析边界 /
+> 前端 (vkey, ext, shift, ctrl, alt, keyup) 全组合枚举）。
+> 两条坐实的事实：**librime 键表只有大写 A–Z** ⇒ `Control+a` 解析不了（F1 坐实）；
+> **修饰键本身不能构成 `accept:`**，必须拒绝而不是改写（D6）。
 
 ## M2 · 抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`
 
@@ -44,10 +57,31 @@
 
 ## M5 · 门禁复跑（仓库源 + 部署产物）
 
-- [ ] T5.1 仓库源：`SUMMARY|bindings=39|reachable=39|dead=0` + `RESULT|PASS`（**数字不得变差**）
-- [ ] T5.2 部署产物：`bindings=120|reachable=120|dead=0` + `RESULT|PASS`
-- [ ] T5.3 全套件 `=== ALL TESTS PASSED ===`；`TestDefaultHotkeys` `Passed: 89 / 89`
-- [ ] T5.4 clang-format 整文件 clean
+- [x] T5.1 仓库源：`SUMMARY|bindings=39|reachable=39|dead=0` + `RESULT|PASS`（**数字不得变差**）
+- [x] T5.2 部署产物：`bindings=337|reachable=337|dead=0` + `RESULT|PASS`
+- [x] T5.3 全套件 `=== ALL TESTS PASSED ===`；`TestDefaultHotkeys` `Passed: 89 / 89`
+- [x] T5.4 clang-format 整文件 clean
+
+> M5 实跑数字（2026-10-28，全部本机可复现）：
+>
+> - 仓库源（`output\data\default.yaml` + 3 个 `user-custom\*.custom.yaml`）：
+>   `SUMMARY|bindings=39|reachable=39|dead=0|known_dead=0|known_dead_keys=0|expectations=0|mismatches=0|unused=0`
+>   + `RESULT|PASS` —— 与 M1 改动前的基线**逐字相同**。
+> - 部署产物源 YAML（装器载荷 `pkg_100`）：同上 `39/39/0` + `RESULT|PASS`。
+> - 部署产物**重新编译后**（`rime_deployer --build`，先去掉载荷里陈旧的 `data\build\` 再全量重编，
+>   12 个 schema 全覆盖）：`SUMMARY|bindings=337|reachable=337|dead=0` + `RESULT|PASS`。
+>   原定 `120` 那组是用户实机 `user1\fluxing\build\` 的口径，该目录本机已不存在；
+>   本次覆盖面更大（12 个 schema 全部编译后产物）。
+> - 负控（`fixtures/negative-controls.yaml`）：`bindings=9|reachable=3|dead=6` + `RESULT|PASS`
+>   （门禁没被改瞎）。
+> - mapper 自检：`MAPPER-SUMMARY|failures=0` + `RESULT|PASS`。
+> - 全套件：`=== ALL TESTS PASSED ===`。
+> - clang-format：3 个 C++ 文件整文件 `--dry-run --Werror` 干净。
+> - 完整解决方案 Release/Win32 编译 exit 0（含 `output\weasel.dll`、`output\WeaselSetup.exe`）。
+>
+> **顺带查出一条既有遗留**：装器载荷里带着**陈旧的** `data\build\*.schema.yaml`
+> （还是 ADR 0009 之前的 8 条死绑定）。它不参与本轮判定（用户目录由 librime 重新部署时重编），
+> 但属于「装器多带了一份可能误导的编译产物」，留给后续打包里程碑处理。
 
 ## M6 · 打包与实机验收
 
