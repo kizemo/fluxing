@@ -193,7 +193,7 @@
 | 编号 | 内容 | 优先级 | 阻塞/依赖 | 验收方式 |
 |---|---|---|---|---|
 | T1 | **裸 Shift 切换中英文**（ADR 0010） | P0 | 无 | `TestShiftIPCStateMachine` 扩展 + 真机按键 | ✅ **已完成**（2026-10-27，见 §2 C8） |
-| T2 | 设置界面抓键路径 **layout-aware 改造**（现在用虚拟键码拼 `accept:`，能造出 `Control+Shift+9` 这类死绑定） | P0 | 无 | 门禁 + 界面生成绑定全部可触发。🟡 **已定稿**（ADR 0011 `Proposed` + spec 083，2026-10-28）：死绑定已用门禁对照实验坐实（`Control+Shift+9` ⇒ `DEAD_KEYCODE`，前端实际发 `0x0028`）；**M1 共享键名单元已落地**（2026-10-28，`include/KeyNameMapper.h` + 门禁 `--selfcheck-mapper`，见 §4.1.1）；**M2–M6 实现待做** |
+| T2 | 设置界面抓键路径 **layout-aware 改造**（现在用虚拟键码拼 `accept:`，能造出 `Control+Shift+9` 这类死绑定） | P0 | 无 | 门禁 + 界面生成绑定全部可触发。🟡 **已定稿**（ADR 0011 `Proposed` + spec 083，2026-10-28）：死绑定已用门禁对照实验坐实（`Control+Shift+9` ⇒ `DEAD_KEYCODE`，前端实际发 `0x0028`）；**M1 共享键名单元已落地**（2026-10-28，`include/KeyNameMapper.h` + 门禁 `--selfcheck-mapper`，见 §4.1.1）；**M2 抓键改造已落地**（2026-10-28，`fluxing::CaptureAccept` + 对话框改吃共享单元，见 §4.1.2）；**M3–M6 实现待做** |
 | T3 | yaml 设置 UI：样式页 / 方案页 / 用户词典页 | P1 | T2 | 界面改动后 `bindings` 数与门禁一致 |
 | T4 | QuickPanel v4 / v3-rev3 / 长显模式收口 | P2 | 无 | 截图 + 沙箱断言 |
 | T5 | FluxingComponents 动画 + Fluent Token 收敛 | P2 | 无 | 视觉回归 |
@@ -212,7 +212,24 @@ spec 083 的 **M1（共享单元 `include/KeyNameMapper.h`）** 与 **M5（门�
 
 两条坐实的事实：**librime 键表只有大写 A–Z** ⇒ `Control+a` 解析不了（F1 坐实）；
 **修饰键本身不能构成 `accept:`**，必须拒绝而不是改写（D6）。
-**M2–M6 待做**（M2 抓键改造、M3 第二条路径、M4 专项 fixture、M6 打包与实机验收）。
+**M2 已完成**（见 §4.1.2）；**M3–M6 待做**（M3 第二条路径、M4 专项 fixture、M6 打包与实机验收）。
+
+### 4.1.2 T2 · M2 里程碑（2026-10-28 已完成，ADR 0011 D1/D3/D6）
+
+spec 083 的 **M2（抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`）** 已完成：
+
+| 项 | 落点 | 状态 |
+|---|---|---|
+| 决策收口 | `include/KeyNameMapper.h` 新增 `fluxing::CaptureAccept()` / `CapturedAccept`，另加 `kAcceptWinKey`、`kAcceptNoCharacter`、`ParseAcceptWide()`、UTF-8↔UTF-16 辅助（顺带修掉 `BuildAccept` 宽字符重载的逐字节加宽） | ✅ |
+| 对话框 | `FluxingConfigEditor/KeyRecorder.cpp` 整文件重写：删除本地 `MapKeyCodeToLibrimeName`，改调 `CaptureAccept`；字符与修饰键取自**同一次** `GetKeyboardState()` 快照 | ✅ |
+| 拒绝路径 | Win 键 ⇒ `kAcceptWinKey`（前端从不上报 Win）；修饰键自身 ⇒ `kAcceptModifierKey`；librime 无名 + 带修饰键 ⇒ `kAcceptNoName`（提示「请按住 Shift 再试」） | ✅ |
+| 中文提示 | 对话框内 `RefusalText()`（宪法 P2）；共享单元错误码保持 ASCII | ✅ |
+| 门禁 | `--selfcheck-mapper` 新增第 6 类「捕获一致性」（vkey 0x08–0xFE × ext/shift/ctrl/alt 全枚举，逐条比对 `CaptureAccept` 与前端 `ConvertKeyEvent`）+ 第 7 类 8 个固定断言 | ✅ |
+| 死键兜底 | 同一和弦连解两次，结果不一致即判为「布局含死键」并跳过（`dead_key_skipped` 计数），避免把布局噪声误判成抓键缺陷 | ✅ |
+| 附带修掉 | 对话框占位提示原本是乱码（「亟慑组合键...」），已改回「请按组合键...」 | ✅ |
+
+**未决依赖**：修饰键只输出 **Shift / Control / Alt**、**不输出 Lock** —— CapsLock 维度
+属清单 **T20**（ADR 0011 Q2），必须先实测再定，本里程碑不预判。
 
 ### 4.2 规划中，未开工
 

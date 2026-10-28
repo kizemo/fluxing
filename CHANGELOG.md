@@ -1,3 +1,37 @@
+## [Unreleased]
+
+### 主要更新
+
+- 设置界面的**抓键**改为记录「这个组合键实际打出来的字符」，不再用虚拟键码
+  自造键名 ⇒ 抓出来的绑定不会再出现 `Control+Shift+9` 这类**永远触发不了**的
+  死绑定。
+- 抓键遇到 **Win 键**时不再错拼成 `Control+`，改为**直接拒绝**并提示
+  「不支持 Win 键，请改用 Ctrl / Shift / Alt 组合」。
+- 抓键遇到 `Ctrl` + **小写字母**时提示「该组合键无法表达，请按住 Shift 再试」
+  （librime 的键表只有大写 `A–Z`，小写字母带修饰键无法表达）。
+- 抓键对话框的占位提示由乱码「亟慑组合键...」修正为「请按组合键...」。
+
+### refactor(fluxing): 抓键路径改吃共享单元 `include/KeyNameMapper.h`（ADR 0011 D1/D3/D6）
+
+**User-visible**:
+
+- 抓键结果与前端**同一套规则**产出：字符由 `ToUnicodeEx` 解析（与前端同源），
+  修饰键只取 Shift / Control / Alt（与前端掩码同源），二者取自**同一次**
+  `GetKeyboardState()` 快照。
+- **拒绝而不是改写**（ADR 0011 D6）：修饰键自身、librime 无名的字符、Win 键
+  一律拒绝并给出中文原因，绝不产出死绑定。
+
+**验收**:
+
+- 门禁自检 `Release\TestHotkeyBindings.exe --selfcheck-mapper`：`MAPPER|table names=1097`、`MAPPER|chords=4032|refused=652`、`MAPPER|captured=1716|refused=348|dead_key_skipped=0`、`MAPPER-SUMMARY|failures=0`、`RESULT|PASS`
+- 全套件 `scripts/test-infra/run-test-suite.bat`：`=== ALL TESTS PASSED ===`（exit 0）；源门禁 `SUMMARY|bindings=39|reachable=39|dead=0|known_dead=0|expectations=0|mismatches=0|unused=0`、`RESULT|PASS`；`keysyms_generated.inc` 与 librime `key_table.cc` 一致（1097 键名 / 17 修饰键）
+- 部署产物复跑（装器载荷重编 12 个 schema）：`LAYOUT|00000409|00000409`、`LAYOUT-PROBE|Shift+quote=0x22 OK`、`SUMMARY|bindings=337|reachable=337|dead=0|known_dead=0|expectations=0|mismatches=0|unused=0`、`RESULT|PASS`
+- `WeaselDeployer`（含 `FluxingConfigEditor/KeyRecorder.cpp`）Release/Win32 编译 exit 0
+- clang-format 19.1.5 整文件 `--dry-run --Werror`：`include/KeyNameMapper.h`、`test/TestHotkeyBindings/TestHotkeyBindings.cpp`、`FluxingConfigEditor/KeyRecorder.cpp` 全部干净
+
+- 详见 **ADR 0011**（`docs/adr/0011-capture-keys-by-produced-character.md`，`Proposed`；
+  实机验收通过后才转 `Accepted`）与 spec 083。
+
 ## [1.0.0] - 2026-10-28
 
 ### 主要更新

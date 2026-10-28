@@ -1,9 +1,9 @@
-# 接力交接：Fluxing 1.0.0 — 裸 Shift 的 3 个缺陷已修并推送；T2 · M1 共享键名单元已落地，M2–M6 待做
+# 接力交接：Fluxing 1.0.0 — 裸 Shift 的 3 个缺陷已修并推送；T2 · M1 共享单元 + M2 抓键改造已落地，M3–M6 待做
 
 > 本文件是**给下一个会话读的完整上下文**。下一个会话的 prompt 只负责指路，不重复本文件内容。
 > 生成时间：2026-10-28（会话 `mvs_54823d93f0e0466f87ec8986862896dd`）
 > 仓库：`F:\soft\00selfmade\rime_claude`（远端 `kizemo/Fluxing`，**不是 origin**）
-> **最新功能提交 = `3dd2b06`**（T2 · M1 共享键名单元；本卡自身的 docs 提交紧跟其后），本地与远端已同步（工作区只剩 ` m librime`，是子模块构建产物，**不可 git add**）
+> **最新功能提交 = `7e2f4be`**（T2 · M2 抓键改造；本卡自身的 docs 提交紧跟其后），本地与远端已同步（工作区只剩 ` m librime`，是子模块构建产物，**不可 git add**）
 
 ---
 
@@ -11,7 +11,7 @@
 
 1.0.0（用户实测反馈的 3 个缺陷修复 + 版本号 3 段化）**代码已全绿、安装包已出、已推送 `kizemo/Fluxing`**；
 **沙箱权威门禁在本机跑不起来**（环境故障），**真机按键验收只有人能做**；
-**T2（设置界面抓键 layout-aware 改造，ADR 0011 `Proposed` + spec 083）的 M1（共享键名单元 `include/KeyNameMapper.h`）已落地并推送**，M2–M6 待做；
+**T2（设置界面抓键 layout-aware 改造，ADR 0011 `Proposed` + spec 083）的 M1（共享键名单元 `include/KeyNameMapper.h`）与 M2（抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`）已落地并推送**，M3–M6 待做；
 下一阶段仍是 T2，其中夹着
 **必须先实测再修**的疑点 **T20（CapsLock 打开时快捷键疑似全部失配）**。
 
@@ -105,7 +105,7 @@
 | 项 | 状态 | 说明 |
 |---|---|---|
 | **真机按键验收** | ⏳ 等用户 | 8 条清单见 §3.1。**只有人能做**，代码侧已全绿 |
-| **清单 T2**（设置界面抓键路径 layout-aware 改造） | 🟡 **M1 已完成，M2–M6 待做** | ADR 0011（`Proposed`）+ spec 083（R1–R7 / plan M1–M6 / tasks）。M1 = 共享键名单元 `include/KeyNameMapper.h`（D1/D6），已提交 `3dd2b06`；方案要点见 §3.2，M1 记录见 §9 |
+| **清单 T2**（设置界面抓键路径 layout-aware 改造） | 🟡 **M1 + M2 已完成，M3–M6 待做** | ADR 0011（`Proposed`）+ spec 083（R1–R7 / plan M1–M6 / tasks）。M1 = 共享键名单元 `include/KeyNameMapper.h`（D1/D6），已提交 `3dd2b06`；M2 = 抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`（D1/D3/D6），已提交 `7e2f4be`；方案要点见 §3.2，M1 记录见 §9，M2 记录见 §10 |
 | **清单 T20**（CapsLock 打开时快捷键疑似全部失配） | ⚠️ **疑点，未实测** | **必须先测量再决定怎么修**（ADR 0011 Q2），见 §3.3 |
 | **清单 T19**（沙箱权威门禁本机跑不起来） | ⚠️ 环境故障 | 见 §4.1；**不阻塞提交** |
 | **清单 T3/T4/T5** | ⏸ 未开工 | 见清单 §4.1 表格 |
@@ -352,7 +352,7 @@ gh run view <run-id> --json status,jobs
 - 按 §3.1 八条做真机按键验收
 - 装完顺手把共享 `data/` 目录升级到 1.0.0（清单 T17）
 - **顺带可帮下个会话的忙**：开着 CapsLock 按一下已配置的快捷键，看是否真的不触发（清单 T20 / ADR 0011 Q2 的实测输入）
-- **T2 下一步 = M2**：两条抓键路径改用 `include/KeyNameMapper.h`（见 §9.6）
+- **T2 下一步 = M3**：第二条抓键路径 `WeaselServer/ShortcutSettings.cpp` 改用 `include/KeyNameMapper.h`（见 §9.6）
 
 ---
 
@@ -431,10 +431,73 @@ gh run view <run-id> --json status,jobs
 
 ### 9.6 M1 之后的下一步
 
-- **M2**：两条抓键路径改用共享单元 ——
-  ① `FluxingConfigEditor/KeyRecorder.cpp:22-88`（`MapKeyCodeToLibrimeName`）；
-  ② `WeaselServer/ShortcutSettings.cpp:622-699`（`VKeyToName`）与 `:701-718`（`NormalizeCombo`）
-- **M3**：拒绝路径的中文提示（UI 层，宪法 P2；共享单元里的错误码保持 ASCII）
-- **M4/M5**：门禁纳入更多维度（`known-dead` 基线保持空 = 最严）
+> **状态更新（2026-10-28）：M2 也已完成，见 §10。**
+> 下文是 M1 完成当时写下的计划；里程碑编号以 spec 083 `tasks.md` 为准（单一真相源）。
+
+- **M2** ✅ 两条抓键路径改用共享单元 ——
+  ① `FluxingConfigEditor/KeyRecorder.cpp:22-88`（`MapKeyCodeToLibrimeName`）→ **已改**（§10）；
+  ② `WeaselServer/ShortcutSettings.cpp:622-699`（`VKeyToName`）与 `:701-718`（`NormalizeCombo`）→ 属 spec 083 的 **M3**，待做
+- **M3**（spec 083）：第二条路径 `WeaselServer/ShortcutSettings.cpp` 切到共享单元，
+  消除 `equal` vs `plus` 矛盾
+- **M4**（spec 083）：抓键产物专项 fixture + 负控
+- **M5**：门禁复跑 —— M1 时已做完，M2 后又复跑一遍（§10.5）
 - **M6**：打包里程碑（含 §9.5 的 `data\build\` 清理）
 - **T20 实测**仍未做，是 ADR 0011 Q2 的必需输入。
+
+---
+
+## 10. T2 · M2 里程碑（2026-10-28 已完成并推送 · ADR 0011 D1/D3/D6）
+
+### 10.1 做了什么
+
+把「组合键 → `accept:` 串」这个决策从 UI 层搬进共享单元：
+
+- `include/KeyNameMapper.h` 新增 `fluxing::CaptureAccept(vkey, kinfo, key_state, hkl)`
+  与 `fluxing::CapturedAccept`（`ok` / `pattern` / `keycode` / `modifier` / `error`），
+  另加 `kAcceptWinKey`、`kAcceptNoCharacter` 两个错误码、`ParseAcceptWide()`
+  （宽字符解析）与 UTF-8↔UTF-16 辅助（`NarrowToWide` / `WideToNarrow`，
+  顺带修掉 `BuildAccept` 宽字符重载的逐字节加宽）。
+- `FluxingConfigEditor/KeyRecorder.cpp` **整文件重写**：本地
+  `MapKeyCodeToLibrimeName`（虚拟键 → 键名自造表）整段删除，改调 `CaptureAccept`；
+  字符与修饰键取自**同一次** `GetKeyboardState()` 快照。
+- `win → Control+` 的误拼删除：Win 键（按下或按住）一律**拒绝**并中文提示。
+- 拒绝原因在 UI 层翻译成简体中文（宪法 P2）；共享单元错误码保持 ASCII。
+
+### 10.2 门禁新增两类检查
+
+`Release\TestHotkeyBindings.exe --selfcheck-mapper` 增加：
+
+- **第 6 类「捕获一致性」**：vkey 0x08–0xFE × extended/shift/ctrl/alt 全枚举，
+  逐条比对 `CaptureAccept` 的 `(keycode, modifier)` 与前端 `ConvertKeyEvent`
+  的 `(keycode, modifier)`，并要求 `pattern` 经 `ParseAcceptWide` 解析回来与
+  前两者**完全一致**；「拒绝」也必须有理由（前端那一对同样不可表达）。
+- **第 7 类 8 个固定断言**：`Control+Shift+F` ⇒ `Shift+Control+F`；
+  `Control+f` ⇒ `kAcceptNoName`；`Win+F` ⇒ `kAcceptWinKey`；
+  裸 `a` ⇒ `a`；`Shift+A` ⇒ `Shift+A`；`space` / `Return` / `F1` 原样。
+- **死键兜底**：枚举时同一和弦连解两次，结果不一致即判为「该布局含死键」
+  并跳过该和弦（计数 `dead_key_skipped`），避免把布局噪声误判成抓键缺陷。
+
+### 10.3 附带修掉的一个既有缺陷
+
+对话框的占位提示原本是**乱码**：源码里的 `L"\xe7\xa2\x9c\xe6\x8c\x91..."`
+解出来是「亟慑组合键...」而不是「请按组合键...」（两个字符的 UTF-8 转义写错了）。
+本次重写时改为正确的「请按组合键...」。
+
+### 10.4 未决依赖
+
+修饰键只输出 **Shift / Control / Alt**、**不输出 Lock** —— CapsLock 维度属清单
+**T20**（ADR 0011 Q2），必须先实测再定，本次不预判。若实测确认失配，
+修复点仍在前端掩码（`WeaselTSF/KeyEvent.cpp`），不是对话框。
+
+### 10.5 提交与本机实跑
+
+| 提交 | 内容 |
+|---|---|
+| `351b97d` | `style(fluxing): 格式化 FluxingConfigEditor/KeyRecorder.cpp 以通过 clang-format 门禁` |
+| `7e2f4be` | `refactor(fluxing): 抓键路径改吃共享单元 include/KeyNameMapper.h（ADR 0011 D1/D3/D6）` |
+
+- 门禁自检 `Release\TestHotkeyBindings.exe --selfcheck-mapper`：`MAPPER|table names=1097`、`MAPPER|chords=4032|refused=652`、`MAPPER|captured=1716|refused=348|dead_key_skipped=0`、`MAPPER-SUMMARY|failures=0`、`RESULT|PASS`
+- 全套件 `scripts/test-infra/run-test-suite.bat`：`=== ALL TESTS PASSED ===`（exit 0）；源门禁 `SUMMARY|bindings=39|reachable=39|dead=0|known_dead=0|expectations=0|mismatches=0|unused=0`、`RESULT|PASS`；`keysyms_generated.inc` 与 librime `key_table.cc` 一致（1097 键名 / 17 修饰键）
+- 部署产物复跑（装器载荷重编 12 个 schema）：`LAYOUT|00000409|00000409`、`LAYOUT-PROBE|Shift+quote=0x22 OK`、`SUMMARY|bindings=337|reachable=337|dead=0|known_dead=0|expectations=0|mismatches=0|unused=0`、`RESULT|PASS`
+- `WeaselDeployer`（含 `FluxingConfigEditor/KeyRecorder.cpp`）Release/Win32 编译 exit 0
+- clang-format 19.1.5 整文件 `--dry-run --Werror`：`include/KeyNameMapper.h`、`test/TestHotkeyBindings/TestHotkeyBindings.cpp`、`FluxingConfigEditor/KeyRecorder.cpp` 全部干净

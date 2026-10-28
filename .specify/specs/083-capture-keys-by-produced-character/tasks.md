@@ -3,8 +3,8 @@
 > 勾选框与 [plan.md](plan.md) 的任务编号一一对应。
 > `[x]` = 已完成；`[ ]` = 下一阶段待办。
 >
-> 进度（2026-10-28）：**M0（调查与决策）+ M1（共享单元）+ M5（门禁复跑）已完成**；
-> **M2–M4、M6 全部待做**。
+> 进度（2026-10-28）：**M0（调查与决策）+ M1（共享单元）+ M2（抓键改造）+ M5（门禁复跑）已完成**；
+> **M3、M4、M6 全部待做**。
 > 决策见 [ADR 0011](../../../docs/adr/0011-capture-keys-by-produced-character.md)（`Proposed`）。
 
 ## M0 · 调查与决策
@@ -38,10 +38,29 @@
 
 ## M2 · 抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`
 
-- [ ] T2.1 `MapKeyCodeToLibrimeName`（:22-88）换成共享单元
-- [ ] T2.2 删掉 `:118` 的 `win → Control+` 误拼，改为**拒绝 + 提示**
-- [ ] T2.3 修饰键按前端掩码精确输出（Shift / Control / Alt）
-- [ ] T2.4 `Ctrl`+小写字母 ⇒ 拒绝并提示「请按住 Shift」
+- [x] T2.1 `MapKeyCodeToLibrimeName`（:22-88）换成共享单元
+- [x] T2.2 删掉 `:118` 的 `win → Control+` 误拼，改为**拒绝 + 提示**
+- [x] T2.3 修饰键按前端掩码精确输出（Shift / Control / Alt）
+- [x] T2.4 `Ctrl`+小写字母 ⇒ 拒绝并提示「请按住 Shift」
+
+> M2 落点（2026-10-28）：决策全部收进共享单元 `fluxing::CaptureAccept()`
+> （`include/KeyNameMapper.h`），`KeyRecorder.cpp` 只负责取快照 + 显示结果。
+>
+> - **T2.1**：`MapKeyCodeToLibrimeName` 整段删除；键名改由 librime 键表
+>   （`fluxing::KeyName` / `fluxing::KeycodeByName`）给出，虚拟键不再自造名字。
+> - **T2.2**：`win` 不再错拼成 `Control+`：`CaptureAccept` 见到 Win 键
+>   （按下或按住）一律返回 `kAcceptWinKey`，对话框显示
+>   「不支持 Win 键，请改用 Ctrl / Shift / Alt 组合」；实时预览里显示 `Win+`。
+> - **T2.3**：修饰键只取 **Shift / Control / Alt**（与前端掩码同源：
+>   `keyState[VK_SHIFT|VK_CONTROL|VK_MENU] & 0x80`）；**不输出 Lock**
+>   （CapsLock 维度属 T20 / ADR 0011 Q2，未决，不在本次预判）。
+> - **T2.4**：`Ctrl`+小写字母 ⇒ librime 键表只有大写 `A–Z`（F1/F4）⇒
+>   `kAcceptNoName` ⇒ 拒绝并提示「该组合键无法表达，请按住 Shift 再试」。
+>
+> 字符与修饰键取自**同一次** `GetKeyboardState()` 快照，否则可能出现
+> 「掩码带 Shift、字符却是小写」的死绑定。
+> 附带修正：对话框占位提示原本是乱码（「亟慑组合键...」），已改回「请按组合键...」。
+
 
 ## M3 · 第二条路径 `WeaselServer/ShortcutSettings.cpp`
 
