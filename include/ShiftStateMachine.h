@@ -6,6 +6,28 @@
 namespace fluxing {
 using SessionId = std::uint32_t;
 
+// ===== spec 086 / ADR 0015: Shift IPC is_left encode/decode share one source
+// =====
+//
+// Wire contract (spec 077 section 2.3, pinned by test/TestShiftIPCWire):
+//   wParam bit0 = 0 -> Shift_L (left); bit0 = 1 -> Shift_R (right).
+//
+// Incident (2026-10-28, reported by the user): the client encoded the
+// contract correctly (is_left ? 0 : 1) but the server decoded bit0 the
+// other way round ((wParam & 1u) != 0), so the two ends disagreed and a
+// bare Shift selected the mirrored candidate (left Shift took the 3rd
+// candidate, right Shift took the 2nd).
+//
+// Fix: both ends call the same pair of pure functions, so a one-sided
+// change of the convention can no longer happen silently.
+inline std::uint32_t EncodeShiftIsLeft(bool is_left) {
+  return is_left ? 0u : 1u;
+}
+
+inline bool DecodeShiftIsLeft(std::uint32_t wparam) {
+  return (wparam & 1u) == 0u;
+}
+
 // Pure, dependency-free Shift state machine.
 // Extracted from WeaselServer / RimeWithWeaselHandler so that 11 unit tests
 // can drive it without IPC / Rime / GUI surfaces.

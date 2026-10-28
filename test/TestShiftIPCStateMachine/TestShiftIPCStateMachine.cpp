@@ -245,10 +245,34 @@ void Test_AsciiScope_DecisionTable() {
   EXPECT(current == 3, "Test #20: exactly 3 of 4 combinations stay local");
 }
 
+// Test #12 - client encoder and server decoder must share one source
+// (ADR 0015 regression). On 2026-10-28 the server inverted bit0 while
+// decoding, so a bare Shift selected the mirrored candidate.
+void Test_EncodeDecode_RoundTrip() {
+  EXPECT(fluxing::EncodeShiftIsLeft(true) == 0u,
+         "Test #12: Left encodes to wParam bit0=0 (wire contract 0=L)");
+  EXPECT(fluxing::EncodeShiftIsLeft(false) == 1u,
+         "Test #12: Right encodes to wParam bit0=1 (wire contract 1=R)");
+  // Pin the decoder against the raw bit values as well. A round-trip-only
+  // assertion cannot catch the case where BOTH ends are inverted, because the
+  // round trip still closes. These two lines are what make the assertion
+  // falsifiable in the sense ADR 0015 D3 requires.
+  EXPECT(fluxing::DecodeShiftIsLeft(0u),
+         "Test #12: wParam bit0=0 decodes to is_left=true (wire contract 0=L)");
+  EXPECT(
+      !fluxing::DecodeShiftIsLeft(1u),
+      "Test #12: wParam bit0=1 decodes to is_left=false (wire contract 1=R)");
+  EXPECT(fluxing::DecodeShiftIsLeft(fluxing::EncodeShiftIsLeft(true)),
+         "Test #12: Left round-trip decodes back to is_left=true");
+  EXPECT(!fluxing::DecodeShiftIsLeft(fluxing::EncodeShiftIsLeft(false)),
+         "Test #12: Right round-trip decodes back to is_left=false");
+}
+
 int main() {
   std::printf(
       "TestShiftIPCStateMachine (spec 077 §2.7.1 + ADR 0010 + ADR 0012)\n");
   Test_ShiftDownUp_L_FireSelect1();
+  Test_EncodeDecode_RoundTrip();
   Test_ShiftDownUp_R_FireSelect2();
   Test_InterveningBlocks_NoFire();
   Test_UpWithoutDown_Ignored();

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "WeaselClientImpl.h"
+#include <ShiftStateMachine.h>
 #include <StringAlgorithm.hpp>
 
 using namespace weasel;
@@ -95,14 +96,16 @@ bool ClientImpl::SelectCandidateOnCurrentPage(size_t index) {
 bool ClientImpl::ShiftDown(bool is_left) {
   if (!_Active())
     return false;
-  _SendMessage(WEASEL_IPC_SHIFT_DOWN, is_left ? 0u : 1u, session_id.load());
+  _SendMessage(WEASEL_IPC_SHIFT_DOWN, fluxing::EncodeShiftIsLeft(is_left),
+               session_id.load());
   return true;
 }
 
 bool ClientImpl::ShiftUp(bool is_left) {
   if (!_Active())
     return false;
-  _SendMessage(WEASEL_IPC_SHIFT_UP, is_left ? 0u : 1u, session_id.load());
+  _SendMessage(WEASEL_IPC_SHIFT_UP, fluxing::EncodeShiftIsLeft(is_left),
+               session_id.load());
   return true;
 }
 

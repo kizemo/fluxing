@@ -3,6 +3,7 @@
 #include <mutex>
 #include <Windows.h>
 #include "../WeaselServer/resource.h"  // spec 036: ID_HOTKEY_QUICK_PANEL + ID_WEASELTRAY_QUICK_PANEL
+#include <ShiftStateMachine.h>
 #include <WeaselUtility.h>
 
 namespace weasel {
@@ -393,9 +394,15 @@ DWORD ServerImpl::OnChangePage(WEASEL_IPC_COMMAND uMsg,
   return 0;
 }
 
-// spec 077: Shift raw down/up from TSF. wParam bit0 = is_left; lParam =
-// session_id. Server-side state machine (T09/T10) decides whether to fire
-// select_candidate.
+// spec 077: Shift raw down/up from TSF. wParam bit0 = 0 => Shift_L (left),
+// bit0 = 1 => Shift_R (right) (wire contract, spec 077 section 2.3);
+// lParam = session_id. Server-side state machine (T09/T10) decides whether
+// to fire select_candidate.
+//
+// spec 086 / ADR 0015: is_left must be decoded through
+// fluxing::DecodeShiftIsLeft. This used to read (wParam & 1u) != 0, i.e.
+// it inverted bit0 against the client encoder, so the two ends disagreed
+// and a bare Shift selected the mirrored candidate.
 DWORD ServerImpl::OnShiftDown(WEASEL_IPC_COMMAND uMsg,
                               DWORD wParam,
                               DWORD lParam) {
@@ -407,7 +414,8 @@ DWORD ServerImpl::OnShiftDown(WEASEL_IPC_COMMAND uMsg,
       *channel << msg;
       return true;
     };
-    m_pRequestHandler->ShiftDown((wParam & 1u) != 0, lParam, eat);
+    m_pRequestHandler->ShiftDown(fluxing::DecodeShiftIsLeft(wParam), lParam,
+                                 eat);
   }
   return 0;
 }
@@ -423,7 +431,7 @@ DWORD ServerImpl::OnShiftUp(WEASEL_IPC_COMMAND uMsg,
       *channel << msg;
       return true;
     };
-    m_pRequestHandler->ShiftUp((wParam & 1u) != 0, lParam, eat);
+    m_pRequestHandler->ShiftUp(fluxing::DecodeShiftIsLeft(wParam), lParam, eat);
   }
   return 0;
 }

@@ -32,6 +32,12 @@
 #define ID_HOTKEY_QUICK_PANEL          9001
 #define ID_WEASELTRAY_QUICK_PANEL      40018
 
+// spec 084 / ADR 0013 D4 + spec 086: quick panel always-show switch.
+// The same id also lives in WeaselServer/resource.h - both values
+// must stay equal, because WeaselTSF.rc and WeaselServer.rc each
+// carry their own popup menu and both need this entry.
+#define ID_QUICKPANEL_ALWAYS_SHOW      40019
+
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
