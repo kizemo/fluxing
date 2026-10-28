@@ -1088,6 +1088,107 @@ int RunMapperSelfCheck() {
       }
     }
   }
+  // 8. The second capture path (WeaselServer/ShortcutSettings.cpp) writes the
+  //    pattern librime has to match. Its conflict detection compares the
+  //    built-in table, whose spelling is "Control+Shift+F", with the pattern
+  //    the capture builds, "Shift+Control+F". The two have to mean the same
+  //    chord, otherwise a conflict is missed and a dead binding is minted
+  //    (ADR 0011 D1).
+  {
+    struct BuiltinCase {
+      UINT vkey;
+      bool ctrl;
+      bool shift;
+      bool alt;
+      const wchar_t* builtin;
+    };
+    const BuiltinCase builtin_cases[] = {
+        {'F', true, true, false, L"Control+Shift+F"},
+        {'3', true, true, false, L"Control+Shift+numbersign"},
+        {'1', true, false, false, L"Control+1"},
+        {VK_OEM_COMMA, false, false, true, L"Alt+comma"},
+        {VK_OEM_PERIOD, false, false, true, L"Alt+period"},
+        {VK_OEM_3, false, false, false, L"grave"},
+        {VK_SPACE, false, true, false, L"Shift+space"},
+        {VK_SPACE, false, false, false, L"space"},
+        {VK_TAB, false, false, false, L"Tab"},
+        {VK_TAB, false, true, false, L"Shift+Tab"},
+        {VK_OEM_COMMA, false, false, false, L"comma"},
+        {VK_OEM_PERIOD, false, false, false, L"period"},
+        {VK_F5, true, false, false, L"Control+F5"},
+        {VK_RETURN, false, false, false, L"Return"},
+    };
+    int builtin_checked = 0;
+    for (size_t i = 0; i < sizeof(builtin_cases) / sizeof(builtin_cases[0]);
+         ++i) {
+      const BuiltinCase& c = builtin_cases[i];
+      BYTE cstate[256];
+      std::memset(cstate, 0, sizeof(cstate));
+      cstate[c.vkey] = 0x80;
+      if (c.shift) {
+        cstate[VK_SHIFT] = 0x80;
+        cstate[VK_LSHIFT] = 0x80;
+        cstate[VK_RSHIFT] = 0x80;
+      }
+      if (c.ctrl) {
+        cstate[VK_CONTROL] = 0x80;
+        cstate[VK_LCONTROL] = 0x80;
+        cstate[VK_RCONTROL] = 0x80;
+      }
+      if (c.alt) {
+        cstate[VK_MENU] = 0x80;
+        cstate[VK_LMENU] = 0x80;
+        cstate[VK_RMENU] = 0x80;
+      }
+      KeyInfo ckinfo(static_cast<LPARAM>(1));
+      const fluxing::CapturedAccept cap =
+          fluxing::CaptureAccept(c.vkey, ckinfo, cstate, NULL);
+      if (!cap.ok) {
+        ++failures;
+        if (reported++ < report_limit) {
+          std::printf("MAPPER-FAIL|builtin|%ls|refused (%s)\n", c.builtin,
+                      fluxing::AcceptErrorText(cap.error));
+        }
+        continue;
+      }
+      if (!fluxing::AcceptEquals(cap.pattern, c.builtin)) {
+        ++failures;
+        if (reported++ < report_limit) {
+          std::printf("MAPPER-FAIL|builtin|%ls|captured %ls\n", c.builtin,
+                      cap.pattern.c_str());
+        }
+      }
+      ++builtin_checked;
+    }
+    // The equal / plus contradiction: VK_OEM_PLUS is "=" without Shift and
+    // "+" with it. The self made table always said "equal", which never
+    // fires (spec 083 T3.2).
+    {
+      BYTE plus_state[256];
+      std::memset(plus_state, 0, sizeof(plus_state));
+      plus_state[VK_OEM_PLUS] = 0x80;
+      KeyInfo plus_info(static_cast<LPARAM>(1));
+      const fluxing::CapturedAccept plain =
+          fluxing::CaptureAccept(VK_OEM_PLUS, plus_info, plus_state, NULL);
+      plus_state[VK_SHIFT] = 0x80;
+      plus_state[VK_LSHIFT] = 0x80;
+      plus_state[VK_RSHIFT] = 0x80;
+      const fluxing::CapturedAccept shifted =
+          fluxing::CaptureAccept(VK_OEM_PLUS, plus_info, plus_state, NULL);
+      if (!plain.ok || !shifted.ok || plain.pattern != L"equal" ||
+          shifted.pattern != L"Shift+plus" ||
+          fluxing::AcceptEquals(shifted.pattern, L"Shift+equal")) {
+        ++failures;
+        if (reported++ < report_limit) {
+          std::printf("MAPPER-FAIL|plus|plain %ls|shifted %ls\n",
+                      plain.pattern.c_str(), shifted.pattern.c_str());
+        }
+      }
+      ++builtin_checked;
+    }
+    std::printf("MAPPER|builtin_equivalents=%d\n", builtin_checked);
+  }
+
   std::printf("MAPPER|captured=%d|refused=%d|dead_key_skipped=%d\n", captured,
               capture_refused, dead_key_skipped);
   return failures;

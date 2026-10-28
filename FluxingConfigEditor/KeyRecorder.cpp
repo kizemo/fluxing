@@ -30,32 +30,6 @@
 
 namespace {
 
-// The Simplified Chinese message for every refusal. The shared unit keeps
-// its error codes in ASCII on purpose (constitution P2); the wording is the
-// dialog's own.
-const wchar_t* RefusalText(fluxing::AcceptError error) {
-  switch (error) {
-    case fluxing::kAcceptNoName:
-      return L"\x8be5\x7ec4\x5408\x952e\x65e0\x6cd5\x8868\x8fbe\xff0c\x8bf7"
-             L"\x6309\x4f4f\x0020\x0053\x0068\x0069\x0066\x0074\x0020\x518d"
-             L"\x8bd5";
-    case fluxing::kAcceptModifierKey:
-      return L"\x4fee\x9970\x952e\x4e0d\x80fd\x5355\x72ec\x4f5c\x4e3a\x5feb"
-             L"\x6377\x952e\xff0c\x8bf7\x518d\x6309\x4e00\x4e2a\x666e\x901a"
-             L"\x952e";
-    case fluxing::kAcceptUnprintable:
-      return L"\x8be5\x6309\x952e\x65e0\x6cd5\x4f5c\x4e3a\x5feb\x6377\x952e";
-    case fluxing::kAcceptWinKey:
-      return L"\x4e0d\x652f\x6301\x0020\x0057\x0069\x006e\x0020\x952e\xff0c"
-             L"\x8bf7\x6539\x7528\x0020\x0043\x0074\x0072\x006c\x0020\x002f"
-             L"\x0020\x0053\x0068\x0069\x0066\x0074\x0020\x002f\x0020\x0041"
-             L"\x006c\x0074\x0020\x7ec4\x5408";
-    case fluxing::kAcceptNoCharacter:
-    default:
-      return L"\x672a\x77e5\x6309\x952e\xff0c\x8bf7\x91cd\x8bd5";
-  }
-}
-
 // The modifier part of the live display, e.g. "Control+Shift+".
 std::wstring ModifierPrefix(const BYTE* state) {
   std::wstring prefix;
@@ -98,14 +72,15 @@ LRESULT KeyRecorderDialog::OnKeyDown(UINT,
   captured_ = false;
   BYTE state[256];
   if (!GetKeyboardState(state)) {
-    display_label_.SetWindowTextW(RefusalText(fluxing::kAcceptNoCharacter));
+    display_label_.SetWindowTextW(
+        fluxing::AcceptErrorMessage(fluxing::kAcceptNoCharacter));
     return 0;
   }
   const fluxing::CapturedAccept captured =
       fluxing::CaptureAccept(vkey, KeyInfo(lParam), state, NULL);
   if (!captured.ok) {
     // The chord cannot be written down as a binding: say why, in Chinese.
-    display_label_.SetWindowTextW(RefusalText(captured.error));
+    display_label_.SetWindowTextW(fluxing::AcceptErrorMessage(captured.error));
     return 0;
   }
   accept_ = captured.pattern;

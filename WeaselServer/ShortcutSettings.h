@@ -169,6 +169,9 @@ class ShortcutSettings {
   static void ExitCapturing(bool save);
   static void ResetCapturingRow();  // Esc 还原
 
+  // 捕获提示: popover + 状态行 (抓到的组合 / 拒绝原因)
+  static void SetCaptureHint(const wchar_t* text);
+
   // Conflict detection (spec §4.5)
   struct ConflictReport {
     int score =
@@ -181,14 +184,6 @@ class ShortcutSettings {
   static ConflictReport CheckConflict(const std::wstring& combo,
                                       const std::wstring& when,
                                       int exclude_row);
-
-  // Key combo normalization (modifier 字典序 Alt<Control<Shift<Super, + 分隔)
-  static std::wstring NormalizeCombo(DWORD vk,
-                                     bool ctrl,
-                                     bool shift,
-                                     bool alt,
-                                     bool super_key);
-  static std::wstring VKeyToName(DWORD vk);  // "Space" / "F5" / "A"
 
   // 静态内置 binding db (spec §6.1 ~30 条)
   struct BuiltinBinding {

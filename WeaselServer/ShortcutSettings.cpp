@@ -8,6 +8,8 @@
 #include "ShortcutSettings.h"
 #include "ModalChrome.h"  // v0.19.0.31: BG+Border paint helper
 
+#include <KeyNameMapper.h>  // ADR 0011 D1: shared key name unit
+
 #include <algorithm>
 #include <cassert>
 #include <commctrl.h>
@@ -617,105 +619,63 @@ bool ShortcutSettings::SaveHotkeys(const std::wstring& path,
   return f.good();
 }
 
-// ===== Key name + combo normalization =====
+// ===== Chord capture (shared unit, ADR 0011 D1) =====
 
-std::wstring ShortcutSettings::VKeyToName(DWORD vk) {
-  switch (vk) {
-    case VK_SPACE:
-      return L"space";
-    case VK_RETURN:
-      return L"Return";
-    case VK_ESCAPE:
-      return L"Escape";
-    case VK_TAB:
-      return L"Tab";
-    case VK_BACK:
-      return L"BackSpace";
-    case VK_DELETE:
-      return L"Delete";
-    case VK_HOME:
-      return L"Home";
-    case VK_END:
-      return L"End";
-    case VK_LEFT:
-      return L"Left";
-    case VK_RIGHT:
-      return L"Right";
-    case VK_UP:
-      return L"Up";
-    case VK_DOWN:
-      return L"Down";
-    case VK_INSERT:
-      return L"Insert";
-    case VK_PRIOR:
-      return L"Page_Up";
-    case VK_NEXT:
-      return L"Page_Down";
-    case VK_OEM_COMMA:
-      return L"comma";
-    case VK_OEM_PERIOD:
-      return L"period";
-    case VK_OEM_1:
-      return L"semicolon";
-    case VK_OEM_2:
-      return L"slash";
-    case VK_OEM_5:
-      return L"backslash";
-    case VK_OEM_7:
-      return L"apostrophe";
-    case VK_OEM_4:
-      return L"bracketleft";
-    case VK_OEM_6:
-      return L"bracketright";
-    case VK_OEM_MINUS:
-      return L"minus";
-    case VK_OEM_PLUS:
-      return L"equal";
-    case VK_OEM_3:
-      return L"grave";
-    case VK_CAPITAL:
-      return L"Caps_Lock";
-    default:
-      // F1-F24
-      if (vk >= VK_F1 && vk <= VK_F24) {
-        return L"F" + std::to_wstring(vk - VK_F1 + 1);
-      }
-      // letters / digits / printable
-      if (vk >= 'A' && vk <= 'Z') {
-        wchar_t c[2] = {static_cast<wchar_t>(vk - 'A' + 'a'), 0};
-        return std::wstring(c);
-      }
-      if (vk >= '0' && vk <= '9') {
-        wchar_t c[2] = {static_cast<wchar_t>(vk), 0};
-        return std::wstring(c);
-      }
-      // Shift_L/R - L18/L19 防御 map
-      if (vk == VK_LSHIFT)
-        return L"Shift_L";
-      if (vk == VK_RSHIFT)
-        return L"Shift_R";
-      return L"VK_" + std::to_wstring(vk);
+namespace {
+
+// The keyboard snapshot the shared unit expects. The low level hook only
+// knows which modifiers are held down, but the unit wants the same shape of
+// snapshot the front end builds with GetKeyboardState(): the key that was
+// pressed plus the modifiers that were down with it.
+void BuildHookKeyState(const KBDLLHOOKSTRUCT* ks,
+                       bool ctrl,
+                       bool shift,
+                       bool alt,
+                       bool sup,
+                       BYTE* state) {
+  state[ks->vkCode] = 0x80;
+  if (shift) {
+    state[VK_SHIFT] = 0x80;
+    state[VK_LSHIFT] = 0x80;
+    state[VK_RSHIFT] = 0x80;
+  }
+  if (ctrl) {
+    state[VK_CONTROL] = 0x80;
+    state[VK_LCONTROL] = 0x80;
+    state[VK_RCONTROL] = 0x80;
+  }
+  if (alt) {
+    state[VK_MENU] = 0x80;
+    state[VK_LMENU] = 0x80;
+    state[VK_RMENU] = 0x80;
+  }
+  if (sup) {
+    state[VK_LWIN] = 0x80;
+    state[VK_RWIN] = 0x80;
   }
 }
 
-std::wstring ShortcutSettings::NormalizeCombo(DWORD vk,
-                                              bool ctrl,
-                                              bool shift,
-                                              bool alt,
-                                              bool super_key) {
-  std::wstring name = VKeyToName(vk);
-  // 字典序 Alt<Control<Shift<Super
-  std::wstring mods;
-  if (alt)
-    mods += L"Alt+";
-  if (ctrl)
-    mods += L"Control+";
-  if (shift)
-    mods += L"Shift+";
-  if (super_key)
-    mods += L"Super+";
-  return mods + name;
+// Resolve the chord the hook saw the way the front end resolves it, so that
+// the pattern written into the yaml is one librime can really match
+// (ADR 0011 D1/D3). A chord that cannot be written down is refused, never
+// rewritten.
+bool CaptureHookChord(const KBDLLHOOKSTRUCT* ks,
+                      bool ctrl,
+                      bool shift,
+                      bool alt,
+                      bool sup,
+                      fluxing::CapturedAccept* out) {
+  BYTE state[256] = {};
+  BuildHookKeyState(ks, ctrl, shift, alt, sup, state);
+  const DWORD extended = (ks->flags & LLKHF_EXTENDED) ? 1u : 0u;
+  const LPARAM lparam =
+      static_cast<LPARAM>((static_cast<DWORD>(ks->scanCode) << 16) | extended);
+  *out = fluxing::CaptureAccept(ks->vkCode, KeyInfo(lparam), state,
+                                GetKeyboardLayout(0));
+  return out->ok;
 }
+
+}  // namespace
 
 // ===== Conflict detection =====
 
@@ -746,7 +706,7 @@ ShortcutSettings::ConflictReport ShortcutSettings::CheckConflict(
       continue;
     const auto& h = m_hotkeys[i];
     std::wstring eff = h.accept_new.empty() ? h.accept : h.accept_new;
-    if (eff == combo && h.when == when) {
+    if (fluxing::AcceptEquals(eff, combo) && h.when == when) {
       r.score = 2;
       r.duplicate_error = true;
       r.warning_action = L"\xe4\xb8\x8e \x22" + h.action_desc +
@@ -757,7 +717,7 @@ ShortcutSettings::ConflictReport ShortcutSettings::CheckConflict(
 
   // 3) 内置 binding override 警告 (允许 override,只是警告)
   for (const auto& b : GetBuiltinBindings()) {
-    if (b.combo == combo &&
+    if (fluxing::AcceptEquals(b.combo, combo) &&
         (b.when == when || when == L"always" || b.when == when)) {
       if (r.score < 1) {
         r.score = 1;
@@ -908,6 +868,16 @@ void ShortcutSettings::ResetCapturingRow() {
 
 // ===== Low-level keyboard hook =====
 
+// 捕获提示: popover + 状态行 (抓到的组合 / 拒绝原因)
+void ShortcutSettings::SetCaptureHint(const wchar_t* text) {
+  if (!text)
+    return;
+  if (s_hPopover && IsWindow(s_hPopover))
+    SetWindowTextW(s_hPopover, text);
+  if (s_hStatus && IsWindow(s_hStatus))
+    SetWindowTextW(s_hStatus, text);
+}
+
 LRESULT CALLBACK ShortcutSettings::LowLevelKeyboardProc(int nCode,
                                                         WPARAM wp,
                                                         LPARAM lp) {
@@ -950,31 +920,24 @@ LRESULT CALLBACK ShortcutSettings::LowLevelKeyboardProc(int nCode,
       vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT || vk == VK_MENU ||
       vk == VK_LMENU || vk == VK_RMENU || vk == VK_LWIN || vk == VK_RWIN;
 
-  // Real chord
-  std::wstring chord = NormalizeCombo(vk, ctrl, shift, alt, sup);
-  if (chord == L"VK_NONE" || isModifierOnly) {
+  if (isModifierOnly) {
     // 仅修饰键: 等用户继续按,啥都不做
     return CallNextHookEx(nullptr, nCode, wp, lp);
   }
-  // 大写化字母键 (Shift+a → A)
-  if (shift) {
-    if (vk >= 'A' && vk <= 'Z') {
-      std::wstring name = VKeyToName(vk);
-      std::wstring prefix;
-      if (alt)
-        prefix += L"Alt+";
-      if (ctrl)
-        prefix += L"Control+";
-      if (shift)
-        prefix += L"Shift+";
-      if (sup)
-        prefix += L"Super+";
-      chord = prefix + name;
-    }
+
+  // Real chord: 与前端同一套字符解析, 产出的 accept 串 librime 才真的匹配得到
+  // (ADR 0011 D1/D3)
+  fluxing::CapturedAccept captured;
+  if (!CaptureHookChord(ks, ctrl, shift, alt, sup, &captured)) {
+    // 该组合键写不成绑定: 清掉 pending, 并用中文说明原因 (constitution P2)
+    ShortcutSettings::s_pendingChord.clear();
+    SetCaptureHint(fluxing::AcceptErrorMessage(captured.error));
+    return CallNextHookEx(nullptr, nCode, wp, lp);
   }
 
-  ShortcutSettings::s_pendingChord = chord;
+  ShortcutSettings::s_pendingChord = captured.pattern;
   // 实时冲突检测 → 更新 popover text (此处简化:re-paint)
+  SetCaptureHint(captured.pattern.c_str());
   ShortcutSettings::RepaintLayered(ShortcutSettings::s_hwnd);
 
   // 不吞掉修饰键以外的键 → 让用户按键透传到 WeaselServer,但我们已经记录

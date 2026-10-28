@@ -159,6 +159,33 @@ inline const char* AcceptErrorText(AcceptError error) {
   }
 }
 
+// The Simplified Chinese message for every refusal. The error codes stay
+// ASCII on purpose (the acceptance gate prints them verbatim); the wording is
+// what the user reads (constitution P2). Both capture paths share this
+// wording, so the two dialogs cannot drift apart (ADR 0011 D1).
+inline const wchar_t* AcceptErrorMessage(AcceptError error) {
+  switch (error) {
+    case kAcceptNoName:
+      return L"\x8be5\x7ec4\x5408\x952e\x65e0\x6cd5\x8868\x8fbe\xff0c\x8bf7"
+             L"\x6309\x4f4f\x0020\x0053\x0068\x0069\x0066\x0074\x0020\x518d"
+             L"\x8bd5";
+    case kAcceptModifierKey:
+      return L"\x4fee\x9970\x952e\x4e0d\x80fd\x5355\x72ec\x4f5c\x4e3a\x5feb"
+             L"\x6377\x952e\xff0c\x8bf7\x518d\x6309\x4e00\x4e2a\x666e\x901a"
+             L"\x952e";
+    case kAcceptUnprintable:
+      return L"\x8be5\x6309\x952e\x65e0\x6cd5\x4f5c\x4e3a\x5feb\x6377\x952e";
+    case kAcceptWinKey:
+      return L"\x4e0d\x652f\x6301\x0020\x0057\x0069\x006e\x0020\x952e\xff0c"
+             L"\x8bf7\x6539\x7528\x0020\x0043\x0074\x0072\x006c\x0020\x002f"
+             L"\x0020\x0053\x0068\x0069\x0066\x0074\x0020\x002f\x0020\x0041"
+             L"\x006c\x0074\x0020\x7ec4\x5408";
+    case kAcceptNoCharacter:
+    default:
+      return L"\x672a\x77e5\x6309\x952e\xff0c\x8bf7\x91cd\x8bd5";
+  }
+}
+
 // A parsed accept pattern, the result of librime's own parse rules
 // (librime/src/rime/key_event.cc:51-82).
 struct AcceptKey {
@@ -222,6 +249,20 @@ inline AcceptKey ParseAcceptWide(const std::wstring& repr) {
     return out;
   }
   return ParseAccept(narrow);
+}
+
+// Whether two accept patterns mean the same chord. librime compares the key
+// code and the modifier mask, not the spelling of the pattern, so the
+// comparison has to be semantic as well: "Shift+Control+F" and
+// "Control+Shift+F" are the same binding (ADR 0011 D1).
+inline bool AcceptEquals(const std::wstring& a, const std::wstring& b) {
+  if (a == b)
+    return true;
+  const AcceptKey ka = ParseAcceptWide(a);
+  const AcceptKey kb = ParseAcceptWide(b);
+  if (!ka.ok || !kb.ok)
+    return false;
+  return ka.keycode == kb.keycode && ka.modifier == kb.modifier;
 }
 
 // Key codes that stand for a modifier key. librime knows their names, but a
