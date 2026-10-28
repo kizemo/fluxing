@@ -1,9 +1,9 @@
-# 接力交接：Fluxing 1.0.0 — 裸 Shift 的 3 个缺陷已修并推送；T2（抓键 layout-aware）实现待做
+# 接力交接：Fluxing 1.0.0 — 裸 Shift 的 3 个缺陷已修并推送；T2 · M1 共享键名单元已落地，M2–M6 待做
 
 > 本文件是**给下一个会话读的完整上下文**。下一个会话的 prompt 只负责指路，不重复本文件内容。
 > 生成时间：2026-10-28（会话 `mvs_54823d93f0e0466f87ec8986862896dd`）
 > 仓库：`F:\soft\00selfmade\rime_claude`（远端 `kizemo/Fluxing`，**不是 origin**）
-> **当前 HEAD = `ceff6b6`**，本地与远端已同步（工作区只剩 ` m librime`，是子模块构建产物，**不可 git add**）
+> **最新功能提交 = `3dd2b06`**（T2 · M1 共享键名单元；本卡自身的 docs 提交紧跟其后），本地与远端已同步（工作区只剩 ` m librime`，是子模块构建产物，**不可 git add**）
 
 ---
 
@@ -11,7 +11,8 @@
 
 1.0.0（用户实测反馈的 3 个缺陷修复 + 版本号 3 段化）**代码已全绿、安装包已出、已推送 `kizemo/Fluxing`**；
 **沙箱权威门禁在本机跑不起来**（环境故障），**真机按键验收只有人能做**；
-下一阶段仍是 **T2（设置界面抓键 layout-aware 改造，ADR 0011 `Proposed` + spec 083）**，其中夹着
+**T2（设置界面抓键 layout-aware 改造，ADR 0011 `Proposed` + spec 083）的 M1（共享键名单元 `include/KeyNameMapper.h`）已落地并推送**，M2–M6 待做；
+下一阶段仍是 T2，其中夹着
 **必须先实测再修**的疑点 **T20（CapsLock 打开时快捷键疑似全部失配）**。
 
 ---
@@ -45,6 +46,8 @@
 |---|---|---|
 | `3147919` | `style(fluxing): 整文件 clang-format 本次触及的 C++ 文件` | 8 个触及文件整文件格式化，含 2 处历史遗留违规（`WeaselServerImpl.cpp:74`、`LanguageBar.cpp:328`）。**只改格式，不改行为** |
 | `ceff6b6` | `fix(fluxing): 裸 Shift 上屏候选、会话隔离与语言栏图标（ADR 0012）` | 功能 + 版本号 + 测试 + CHANGELOG + lessons L151 + ADR 0012（15 files, +538/−42） |
+| `ed7f5ba` | `docs(fluxing): 更新任务总账与交接卡到 1.0.0 状态` | 1.0.0 阶段的 docs 提交（交接卡 + 任务总账） |
+| `3dd2b06` | `refactor(fluxing): 抽出共享键名映射单元 include/KeyNameMapper.h（ADR 0011 D1）` | T2 · M1：共享键名单元 + 键名表迁移 + 门禁 `--selfcheck-mapper`（8 files, +1913/−1312）；**内部重构，非用户可见 ⇒ 不记 CHANGELOG（P4）** |
 
 拆分提交的理由见 §6.1（CI lint 查整文件）；先例提交 `a023ee1`。
 
@@ -102,7 +105,7 @@
 | 项 | 状态 | 说明 |
 |---|---|---|
 | **真机按键验收** | ⏳ 等用户 | 8 条清单见 §3.1。**只有人能做**，代码侧已全绿 |
-| **清单 T2**（设置界面抓键路径 layout-aware 改造） | 🟡 **已定稿，实现待做** | ADR 0011（`Proposed`）+ spec 083（R1–R7 / plan M1–M6 / tasks）。方案要点见 §3.2 |
+| **清单 T2**（设置界面抓键路径 layout-aware 改造） | 🟡 **M1 已完成，M2–M6 待做** | ADR 0011（`Proposed`）+ spec 083（R1–R7 / plan M1–M6 / tasks）。M1 = 共享键名单元 `include/KeyNameMapper.h`（D1/D6），已提交 `3dd2b06`；方案要点见 §3.2，M1 记录见 §9 |
 | **清单 T20**（CapsLock 打开时快捷键疑似全部失配） | ⚠️ **疑点，未实测** | **必须先测量再决定怎么修**（ADR 0011 Q2），见 §3.3 |
 | **清单 T19**（沙箱权威门禁本机跑不起来） | ⚠️ 环境故障 | 见 §4.1；**不阻塞提交** |
 | **清单 T3/T4/T5** | ⏸ 未开工 | 见清单 §4.1 表格 |
@@ -168,6 +171,8 @@ librime 按 `(keycode, modifier)` **精确匹配**（`librime/src/rime/key_event
 - `FluxingConfigEditor/HotkeyBinding.cpp:96-137` 的 `NormalizeAccept`（`comma`→`Comma`、`space`→`Space`）
   **与它自己的文档 `HotkeyBinding.h:80-83` 相反**（librime 只认小写名），且**全仓无调用点** ⇒ 保持不接线
 
+**M1 已落地（`3dd2b06`）**：D1（单一来源）与 D6（共享单元放 `include/KeyNameMapper.h`，header-only）已完成；**D2/D3/D4/D5 尚未开始**（抓键两条路径仍是原实现）。详见 §9。
+
 ### 3.3 T20（CapsLock 疑点）—— 先实测，别先改代码
 
 - 现象（源码层）：`WeaselTSF/KeyEvent.cpp:18-19` 在 CapsLock 打开时 `|= ibus::LOCK_MASK`（`0x2`，`include/KeyEvent.h:225`）；
@@ -197,6 +202,26 @@ TSF 注册会指向临时目录 ⇒ 本机**不做**静默安装；本机真机�
 只看 4 个门禁 job：`lint` / `test` / `build (msbuild)` / `build (xmake)`。
 `gh run list` 里会看到大量 `queued` 的旧 run —— 那是 `sandbox-gate` job 永久排队拖住整条 workflow，**不是代码问题**。
 **不要 `gh run watch`**（会被 sandbox-gate 卡死）。
+
+**run `40632079796`**（1.0.0 阶段 `ceff6b6`；其后的 docs 提交 `ed7f5ba` 对应 run `40632830628`）：
+
+| job | 结论 |
+|---|---|
+| `lint` | ✅ success |
+| `test` | ✅ success |
+| `build (msbuild)` | ✅ success |
+| `build (xmake)` | ✅ success |
+
+**run `40648960781`**（T2 · M1，`3dd2b06`）：
+
+| job | 结论 |
+|---|---|
+| `lint` | ⏳ in_progress |
+| `test` | —（job 未出现） |
+| `build (msbuild)` | —（job 未出现） |
+| `build (xmake)` | —（job 未出现） |
+
+> `sandbox-gate` job 永久排队，不计入上表。
 
 ### 4.4 MiniMax Code 运行时反复重启
 
@@ -229,6 +254,10 @@ Stop-Process -Id $p.Id -Force
   'F:\soft\00selfmade\rime_claude\output\data\double_pinyin_sogou.custom.yaml' `
   'F:\soft\00selfmade\rime_claude\output\data\radical_pinyin.custom.yaml'
 # 期望：SUMMARY|bindings=39|reachable=39|dead=0|known_dead=0 + RESULT|PASS
+
+# 共享键名单元自检（M1 新增；CI test job 也会跑）
+& 'F:\soft\00selfmade\rime_claude\Release\TestHotkeyBindings.exe' --selfcheck-mapper
+# 期望：MAPPER|table names=1097 / MAPPER|chords=4032|refused=652 / MAPPER-SUMMARY|failures=0 / RESULT|PASS
 
 # 推送（远端名是 kizemo，不是 origin）
 git -C F:\soft\00selfmade\rime_claude -c http.proxy= push kizemo Fluxing
@@ -323,3 +352,89 @@ gh run view <run-id> --json status,jobs
 - 按 §3.1 八条做真机按键验收
 - 装完顺手把共享 `data/` 目录升级到 1.0.0（清单 T17）
 - **顺带可帮下个会话的忙**：开着 CapsLock 按一下已配置的快捷键，看是否真的不触发（清单 T20 / ADR 0011 Q2 的实测输入）
+- **T2 下一步 = M2**：两条抓键路径改用 `include/KeyNameMapper.h`（见 §9.6）
+
+---
+
+## 9. T2 · M1 里程碑（2026-10-28 已完成并推送 · ADR 0011 D1/D6）
+
+### 9.1 做了什么
+
+把「键名 ↔ 键码」「accept 串构造/解析」「VK → 字符」
+三件事从**两份重复实现**（前端 `WeaselTSF/KeyEvent.cpp` +
+门禁 `test/TestHotkeyBindings/TestHotkeyBindings.cpp`）抽成一个 **header-only 共享单元**
+`include/KeyNameMapper.h`（`namespace fluxing`，无 GUI 依赖，符合 D1/D6）。
+
+| 文件 | 动作 |
+|---|---|
+| `include/KeyNameMapper.h` | **新增**（490 行）：`KeycodeByName` / `ModifierByName` / `KeyName` / `ModifierName`、`AcceptError` + `AcceptErrorText`、`AcceptKey`、`ParseAccept`、`IsModifierKeyCode`、`AppendModifiers`、`BuildAccept`（std::string / std::wstring 两重载）、`TranslateKeycode`、`ResolveCharacter` |
+| `include/keysyms_generated.inc` | **从** `test/TestHotkeyBindings/keysyms_generated.inc` **迁入**（`git mv`，93% 相似）：加 include guard + `namespace fluxing { namespace keysyms {`，函数内 `static` 表（C++11 安全），**保留 librime 原表序** |
+| `test/TestHotkeyBindings/gen-keysyms.ps1` | 输出路径改 `include\keysyms_generated.inc`；新增 `$ordered`（librime 原表序）；`-Check` 仍可用 |
+| `WeaselTSF/KeyEvent.cpp` | 整文件重写为「只算掩码 + 调 `fluxing::ResolveCharacter(vkey, kinfo, keyState, NULL)`」；**掩码逻辑逐字保留** |
+| `test/TestHotkeyBindings/TestHotkeyBindings.cpp` | include 改 `<KeyNameMapper.h>`；删本地 `FindKey` / `FindModifier`；`KeyName` / `ParseRimeKey` 转调共享单元；表自检改用 `fluxing::ModifierByName` / `fluxing::KeycodeByName` |
+| `test/TestHotkeyBindings/TestHotkeyBindings.vcxproj` | `<ClInclude Include="..\..\include\keysyms_generated.inc" />` |
+| `scripts/test-infra/run-test-suite.bat` | 在 `gen-keysyms.ps1 -Check` 之后新增 `"Release\TestHotkeyBindings.exe" --selfcheck-mapper < nul`，失败计入 `FAIL` ⇒ CI `test` job 自动覆盖 |
+| `.specify/specs/083-capture-keys-by-produced-character/tasks.md` | T1.1–T1.5 / T5.1–T5.4 勾选 + 实跑数字 |
+
+### 9.2 新增的门禁模式 `--selfcheck-mapper`
+
+五类交叉验证（失败即打 `MAPPER-FAIL|..`，最后打 `MAPPER-SUMMARY|failures=N`）：
+
+1. **表名回环**：每个键名 → 键码 → 回键名，须回到原名
+2. **accept 串回环**：构造的 `accept:` → 解析 → 回构造，须逐字相同
+3. 18 个固定和弦的构造/解析比对
+4. 14 个 librime 解析边界（空串 / 无名键 / 未知修饰键 / 修饰键自身…）
+5. **前端枚举**：vkey `0x08`–`0xFE` × (extended / shift / ctrl / alt / keyup) 共 **7904 次**尝试，
+   与 `ResolveCharacter` 逐项对账（实测 `chords=4032`、`refused=652`）
+
+**一条重要的实现教训（初版返工过一次）**：
+「修饰键本身不能构成 `accept:`」**必须拒绝**（`AcceptError::kAcceptModifierKey`），
+但**拒绝必须与 `IsModifierKeyCode(keycode)` 一致才算通过**——
+初版把「被 BuildAccept 拒绝」当成失败，误报了 11 条
+`MAPPER-FAIL|build|Shift_L|modifier-key`。对应 ADR 0011 D6。
+
+### 9.3 本机实跑数字（全绿）
+
+| 门禁 | 结果 |
+|---|---|
+| `Release\TestHotkeyBindings.exe --selfcheck-mapper` | `MAPPER\|table names=1097`、`MAPPER\|chords=4032\|refused=652`、`MAPPER-SUMMARY\|failures=0`、`RESULT\|PASS`、exit 0 |
+| 仓库源门禁（`output/data/**`） | `SUMMARY\|bindings=39\|reachable=39\|dead=0\|known_dead=0\|known_dead_keys=0\|expectations=0\|mismatches=0\|unused=0` + `RESULT\|PASS`（**与改动前基线逐字相同**） |
+| 负控（故意塞死绑定） | `SUMMARY\|bindings=9\|reachable=3\|dead=6\|...\|expectations=9\|mismatches=0` + `RESULT\|PASS` |
+| 全量套件 `scripts\test-infra\run-test-suite.bat` | `=== ALL TESTS PASSED ===`（含 mapper 自检、门禁两次、`gen-keysyms.ps1 -Check`、`TestWeaselIPC [SHIFT] PASS`）；日志 `F:\soft\00selfmade\tmp-dllcmp\test_suite_m1.log` |
+| 完整解决方案 `weasel.sln` Release/Win32 | exit 0；产出 `output\weasel.dll` / `WeaselServer.exe` / `Win32\WeaselDeployer.exe` / `WeaselSetup.exe` / `Win32\FluxingPhrasesDialog.exe` + 21 个测试 exe；日志 `m1_sln_build2.log` |
+| 部署产物门禁（源 YAML） | 装器载荷 `pkg_100` → `bindings=39\|reachable=39\|dead=0` + `RESULT\|PASS` |
+| 部署产物门禁（**重新编译后**） | `rime_deployer.exe --build <user> <shared>` 全量重编 12 个 schema → `SUMMARY\|bindings=337\|reachable=337\|dead=0\|known_dead=0` + `RESULT\|PASS`、exit 0（脚本 `F:\soft\00selfmade\tmp-dllcmp\m1_deploy_check.py`） |
+| clang-format 18.1.8（CI 同版本） | 3 个 C++ 文件整文件 `--dry-run --Werror` exit 0 |
+
+### 9.4 M1 期间新坐实的源码事实（M2/M3 必须照抄）
+
+- **F4 — librime 键表只有大写 `A–Z`** ⇒ `Control+a` **连解析都失败**
+  （`RimeGetKeycodeByName` 对 `keys_by_keyval` 做纯 strcmp）。
+  ⇒ 抓键遇到小写字母 + 修饰键，必须产出 `Control+Shift+F` 这种形态，或拒绝并提示。
+- **F5 — 修饰键本身不能构成 `accept:`** ⇒ 必须**拒绝**（`kAcceptModifierKey`），
+  **绝不静默改写**（D6）。
+- **F6 — `ToUnicodeEx` 的第二个实参是 `UINT(kinfo)`**（= lParam 低 32 位，
+  **不是**纯扫描码）⇒ 共享单元必须原样保留。
+- **F7 — 前端掩码的取法**：`SHIFT ← keyState[VK_SHIFT]&0x80`；
+  `LOCK ← keyState[VK_CAPITAL]&0x01`；`CONTROL ← keyState[VK_CONTROL]&0x80`；
+  `ALT ← keyState[VK_MENU]&0x80`；`RELEASE ← kinfo.isKeyUp`；
+  且 `vkey==VK_CAPITAL && !kinfo.isKeyUp ⇒ mask ^= LOCK_MASK`（**异或**，不是清位）。
+
+### 9.5 附带发现（既有遗留，不属于 M1）
+
+装器载荷里带着**陈旧的** `data\build\*.schema.yaml`（ADR 0009 之前的旧编译产物），
+直接对 `data\build\` 跑门禁仍会报 **8 条死绑定**
+（`Shift_L` / `Shift_R` / `Shift+l` / `Shift+r` / `Control+Shift+9` / `Control+Shift+0` 等）。
+根因机制：`rime_deployer` 的 `prebuilt_data_dir = shared_data_dir / "build"` ⇒ 会**复用**陈旧编译产物。
+⇒ 打包里程碑（M6）必须先把载荷里的 `data\build\` 剔除再全量重编，
+否则用户装完仍然是死绑定。
+
+### 9.6 M1 之后的下一步
+
+- **M2**：两条抓键路径改用共享单元 ——
+  ① `FluxingConfigEditor/KeyRecorder.cpp:22-88`（`MapKeyCodeToLibrimeName`）；
+  ② `WeaselServer/ShortcutSettings.cpp:622-699`（`VKeyToName`）与 `:701-718`（`NormalizeCombo`）
+- **M3**：拒绝路径的中文提示（UI 层，宪法 P2；共享单元里的错误码保持 ASCII）
+- **M4/M5**：门禁纳入更多维度（`known-dead` 基线保持空 = 最严）
+- **M6**：打包里程碑（含 §9.5 的 `data\build\` 清理）
+- **T20 实测**仍未做，是 ADR 0011 Q2 的必需输入。

@@ -193,10 +193,26 @@
 | 编号 | 内容 | 优先级 | 阻塞/依赖 | 验收方式 |
 |---|---|---|---|---|
 | T1 | **裸 Shift 切换中英文**（ADR 0010） | P0 | 无 | `TestShiftIPCStateMachine` 扩展 + 真机按键 | ✅ **已完成**（2026-10-27，见 §2 C8） |
-| T2 | 设置界面抓键路径 **layout-aware 改造**（现在用虚拟键码拼 `accept:`，能造出 `Control+Shift+9` 这类死绑定） | P0 | 无 | 门禁 + 界面生成绑定全部可触发。🟡 **已定稿**（ADR 0011 `Proposed` + spec 083，2026-10-28）：死绑定已用门禁对照实验坐实（`Control+Shift+9` ⇒ `DEAD_KEYCODE`，前端实际发 `0x0028`）；**实现待做**（spec 083 §4 的 M1–M6） |
+| T2 | 设置界面抓键路径 **layout-aware 改造**（现在用虚拟键码拼 `accept:`，能造出 `Control+Shift+9` 这类死绑定） | P0 | 无 | 门禁 + 界面生成绑定全部可触发。🟡 **已定稿**（ADR 0011 `Proposed` + spec 083，2026-10-28）：死绑定已用门禁对照实验坐实（`Control+Shift+9` ⇒ `DEAD_KEYCODE`，前端实际发 `0x0028`）；**M1 共享键名单元已落地**（2026-10-28，`include/KeyNameMapper.h` + 门禁 `--selfcheck-mapper`，见 §4.1.1）；**M2–M6 实现待做** |
 | T3 | yaml 设置 UI：样式页 / 方案页 / 用户词典页 | P1 | T2 | 界面改动后 `bindings` 数与门禁一致 |
 | T4 | QuickPanel v4 / v3-rev3 / 长显模式收口 | P2 | 无 | 截图 + 沙箱断言 |
 | T5 | FluxingComponents 动画 + Fluent Token 收敛 | P2 | 无 | 视觉回归 |
+
+### 4.1.1 T2 · M1 里程碑（2026-10-28 已完成，ADR 0011 D1）
+
+spec 083 的 **M1（共享单元 `include/KeyNameMapper.h`）** 与 **M5（门禁复跑）** 已完成：
+
+| 项 | 落点 | 状态 |
+|---|---|---|
+| 共享单元 | `include/KeyNameMapper.h`（`namespace fluxing`，header-only，无 GUI / 无 rime_api 依赖） | ✅ |
+| 键名表 | `include/keysyms_generated.inc`（include guard + `fluxing::keysyms` 命名空间 + 函数内 `static` 表）；生成器仍是 `test/TestHotkeyBindings/gen-keysyms.ps1` | ✅ |
+| 前端复用 | `WeaselTSF/KeyEvent.cpp` 改为调用 `fluxing::ResolveCharacter`（掩码逻辑逐字保留，行为不变） | ✅ |
+| 门禁复用 | `test/TestHotkeyBindings` 删本地副本改吃共享单元；新增 `--selfcheck-mapper`（表名回环 / accept 回环 / 18 固定和弦 / 14 解析边界 / 前端全组合枚举） | ✅ |
+| 门禁数字 | 仓库源 `bindings=39\|reachable=39\|dead=0`；部署产物源 YAML 同；部署产物**重编后** `bindings=337\|reachable=337\|dead=0`；负控 `bindings=9\|reachable=3\|dead=6`；`MAPPER-SUMMARY\|failures=0`；全套件 `ALL TESTS PASSED` | ✅ |
+
+两条坐实的事实：**librime 键表只有大写 A–Z** ⇒ `Control+a` 解析不了（F1 坐实）；
+**修饰键本身不能构成 `accept:`**，必须拒绝而不是改写（D6）。
+**M2–M6 待做**（M2 抓键改造、M3 第二条路径、M4 专项 fixture、M6 打包与实机验收）。
 
 ### 4.2 规划中，未开工
 
