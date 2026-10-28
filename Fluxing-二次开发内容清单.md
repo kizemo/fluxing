@@ -10,7 +10,7 @@
 >
 > **本轮状态**：2026-10-28 快照。当前版本 **0.21.0.9**（CHANGELOG 已记录，安装包已构建于
 > `output/archives/`，**尚未进 `release/` 发布链**）。最近完成 **T1 裸 Shift 切中英文**（ADR 0010 / spec 082），
-> 提交 `258e708`，已推送至 `kizemo/Fluxing`（HEAD `e0d6908`）。
+> 提交 `ceff6b6`，已推送至 `kizemo/Fluxing`（HEAD `ceff6b6`）。
 > **权威沙箱门禁在本机跑不起来**（Windows Sandbox 虚机不启动，见 §4.3 T19）
 > ⇒ 0.21.0.9 的真机验收**只能由人手敲**（spec 082 §3.4 六条）。
 > 依据：相对上游 `master` 的 `git diff --numstat master...Fluxing`、CHANGELOG 版本节、66 份 spec 的 tasks 统计。
@@ -96,6 +96,7 @@
 | C6 | 4 条 `send:` 多字节 UTF-8 死绑定移除 | ✅ | 0.21.0.6；L113 |
 | C7 | 死绑定基线**清零**（4 → 0）——空基线 = 最严阈值，任何死绑定直接让构建变红 | ✅ | `known-dead-bindings.txt`；5 场景负对照 M0–M4 |
 | C8 | 裸 Shift 切中英文（**上下文消歧**：候选窗没开 ⇒ 切中英；候选窗开着 ⇒ 仍选第 2/3 候选） | ✅ | ADR 0010 / spec 082；0.21.0.9；`TestShiftIPCStateMachine` 28 PASS / 0 FAIL |
+| C9 | 裸 Shift 的 3 个缺陷修复：**候选窗开着时真正上屏第 2/3 候选**、**跨会话隔离**（A 切 A、B 不动）、**语言栏中/英图标随模式切换**；另版本号 4 段改 3 段 | ✅ | ADR 0012；1.0.0；`TestShiftIPCStateMachine` 34 PASS / 0 FAIL；`TestWeaselIPC /verify-shift-body` PASS；部署产物门禁 `bindings=39\|reachable=39\|dead=0` |
 
 ### D. 候选窗 UI 与组件库
 
@@ -241,7 +242,7 @@
 
 | 内容 | 影响 | 处置 |
 |---|---|---|
-| 共享 `data/` 目录除 `default.yaml` 外仍是 8 月旧版 | 源与产物漂移；装包后才一致 | 装 0.21.0.9 安装包 |
+| 共享 `data/` 目录除 `default.yaml` 外仍是 8 月旧版 | 源与产物漂移；装包后才一致 | 装 1.0.0 安装包 |
 | `test/v0_19_0_30_e2e/build_e2e.bat` 写死 4 处机器路径 | 换机即废 | 已知不改 |
 | `build (xmake)` arm64 目标缺失 | ARM 设备无 CI 覆盖 | 见 T14 |
 | 真实按键行为无法由门禁证明 | 门禁只证「能触发」，证不了「产生预期效果」 | 需人手敲一次 `Shift+'` |
@@ -274,7 +275,7 @@
 | 默认快捷键断言 | `test\TestDefaultHotkeys\Release\TestDefaultHotkeys.exe` | `Passed: 89 / 89` |
 | Shift 状态机断言 | `test\TestShiftIPCStateMachine\Release\TestShiftIPCStateMachine.exe` | `Result: 28 PASS / 0 FAIL`（17 个测试函数 / 28 条断言：11 个函数属 spec 077，6 个属 ADR 0010） |
 | 布局探测 | 门禁自带 `LAYOUT-PROBE\|Shift+quote=0x22 OK` | 键名解析与当前键盘布局一致 |
-| CI | `gh run list --repo kizemo/Fluxing --workflow ci.yml` | run `40538755392`（head `e0d6908`）：`lint` = `success`；`test` / `build (msbuild)` / `build (xmake)` 落笔时仍 `in_progress`（未取终态，不预判） |
+| CI | `gh run list --repo kizemo/Fluxing --workflow ci.yml` | run `40632079796`（head `ceff6b6`）：`lint` = `success`；`test` / `build (msbuild)` / `build (xmake)` 落笔时仍 `in_progress`（未取终态，不预判） |
 | 沙箱 | `F:\soft\00selfmade\sandbox-verify\rime-claude\` | ~46 项断言 ⚠️ **0.21.0.9 本机未跑通**（T19：虚机不启动，无 `boot.log`） |
 
 > **门禁要指向部署产物跑一遍。** 只扫仓库树会漏：源绿了也可能产物是坏的
@@ -301,6 +302,7 @@
 | 0.21.0.7 | 2026-10-25 | ADR 0009：删 2 条永不触发的重复快捷键 |
 | 0.21.0.8 | 2026-10-26 | ADR 0009 收尾：4 条 `Shift+标点` 改名修好；门禁基线清零；ADR 0010 成文 |
 | 0.21.0.9 | 2026-10-27 | ADR 0010：裸 Shift 切中英文（上下文消歧，默认开，配置开关可关）；`TestShiftIPCStateMachine` 扩到 28 PASS；**已推送 `e0d6908`**；沙箱门禁因本机环境未跑通（T19），真机按键验收待做 |
+| 1.0.0 | 2026-10-28 | ADR 0012：裸 Shift 上屏候选 / 跨会话隔离 / 语言栏中英图标；Shift IPC 回响应体（协议事实：服务端不回 body ⇒ 客户端解析陈旧响应）；版本号 4 段改 3 段；`TestShiftIPCStateMachine` 34 PASS；**已推送 `ceff6b6`**；沙箱门禁仍因本机环境未跑通（T19），真机按键验收待做 |
 
 ---
 
@@ -329,12 +331,12 @@ spec 083（抓键 layout-aware 改造，ADR 0011 已定稿、代码未开始）�
 | [`CHANGELOG.md`](CHANGELOG.md) | 83 个版本节的权威发布记录 |
 | [`CONTEXT.md`](CONTEXT.md) | 领域词汇 + 17 条不变量 |
 | [`AGENTS.md`](AGENTS.md) | 操作手册（构建/测试/危险区/反模式） |
-| [`.specify/memory/lessons-learned.md`](.specify/memory/lessons-learned.md) | L01–L150 事故库 |
+| [`.specify/memory/lessons-learned.md`](.specify/memory/lessons-learned.md) | L01–L151 事故库 |
 | [`.specify/memory/project-knowledge.md`](.specify/memory/project-knowledge.md) | 部署路径/注册表/三层覆盖架构 |
-| [`docs/adr/`](docs/adr/) | 7 份架构决策记录（0011 为 `Proposed`） |
+| [`docs/adr/`](docs/adr/) | 8 份架构决策记录（0011 为 `Proposed`、0012 为 `Accepted`） |
 | [`Rime-设置说明书-重点快捷键.md`](Rime-设置说明书-重点快捷键.md) | 用户可见快捷键手册（md + html） |
 
 ---
 
-*最后更新：2026-10-28。数据来源：`git diff --numstat master...Fluxing`（HEAD `e0d6908`）、
-`CHANGELOG.md` 版本节统计、`.specify/specs/` 66 个 spec 目录（58 份带 tasks.md）的勾选统计、CI run `40538755392`。*
+*最后更新：2026-10-28。数据来源：`git diff --numstat master...Fluxing`（HEAD `ceff6b6`）、
+`CHANGELOG.md` 版本节统计、`.specify/specs/` 66 个 spec 目录（58 份带 tasks.md）的勾选统计、CI run `40632079796`。*
