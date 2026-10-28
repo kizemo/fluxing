@@ -120,13 +120,30 @@ typedef std::pair<int, int> KeyPair;
 
 // Everything the enumeration learned about the front end.
 struct FrontEndMap {
-  std::set<KeyPair> reachable;                   // (keycode, librime modifier)
+  std::set<KeyPair> reachable;  // (keycode, librime modifier)
+  // The CapsLock latch is a dimension of its own (spec 085). This is the
+  // latch on and the front end NOT reporting it -- the state after ADR 0014.
+  std::set<KeyPair> reachable_caps;
+  // Same, but the front end still reports the latch bit -- the behaviour
+  // before ADR 0014. Kept as the negative control.
+  std::set<KeyPair> reachable_caps_legacy;
   std::map<int, int> base_to_vkey;               // unshifted keycode -> vkey
   std::map<std::pair<int, int>, int> vkey_mask;  // (vkey, ibus mask) -> keycode
 };
 
-FrontEndMap BuildReachable() {
-  FrontEndMap map;
+// One enumeration pass over the front end's state space.
+//
+//   latch_on     -- the CapsLock latch is on
+//   legacy_latch -- the front end puts the latch bit into the modifier
+//                   field, the behaviour before ADR 0014
+//
+// The two flags are independent on purpose: the negative control needs the
+// "latch on and reported" combination.
+void EnumerateFrontEndStates(std::set<KeyPair>* reachable,
+                             std::map<int, int>* base_to_vkey,
+                             std::map<std::pair<int, int>, int>* vkey_mask,
+                             bool latch_on,
+                             bool legacy_latch) {
   BYTE state[256];
   for (int vkey = 0x08; vkey <= 0xFE; ++vkey) {
     for (int extended = 0; extended <= 1; ++extended) {
@@ -160,18 +177,25 @@ FrontEndMap BuildReachable() {
                 continue;  // unknown key for the front end
               }
               const int keycode = static_cast<int>(ev.keycode);
-              const int ibus_mask = static_cast<int>(ev.mask);
-              if (!shift && !ctrl && !alt && !keyup) {
-                if (!map.base_to_vkey.count(keycode))
-                  map.base_to_vkey[keycode] = vkey;
+              int ibus_mask = static_cast<int>(ev.mask);
+              // The pre-ADR-0014 front end reported the latch bit on every
+              // key except the latch key's own key-down, which it toggled
+              // back.
+              if (legacy_latch && latch_on && !(vkey == VK_CAPITAL && !keyup))
+                ibus_mask |= ibus::LOCK_MASK;
+              if (base_to_vkey && vkey_mask) {
+                if (!shift && !ctrl && !alt && !keyup) {
+                  if (!base_to_vkey->count(keycode))
+                    (*base_to_vkey)[keycode] = vkey;
+                }
+                (*vkey_mask)[KeyPair(vkey, ibus_mask)] = keycode;
               }
-              map.vkey_mask[KeyPair(vkey, ibus_mask)] = keycode;
               // WeaselTSF/KeyEventSink.cpp:44 -- spec 077 eats Shift_L /
               // Shift_R so they never reach librime.
               if (keycode == ibus::Shift_L || keycode == ibus::Shift_R) {
                 continue;
               }
-              map.reachable.insert(
+              reachable->insert(
                   KeyPair(keycode, ExpandIbusModifier(ibus_mask)));
             }
           }
@@ -179,7 +203,59 @@ FrontEndMap BuildReachable() {
       }
     }
   }
+}
+
+FrontEndMap BuildReachable() {
+  FrontEndMap map;
+  // The baseline: the latch is off. This is the historical gate scope.
+  EnumerateFrontEndStates(&map.reachable, &map.base_to_vkey, &map.vkey_mask,
+                          false, false);
+  // The latch is on and the front end does not report it (ADR 0014).
+  EnumerateFrontEndStates(&map.reachable_caps, NULL, NULL, true, false);
+  // The latch is on and the front end still reports it -- negative control.
+  EnumerateFrontEndStates(&map.reachable_caps_legacy, NULL, NULL, true, true);
   return map;
+}
+
+// ---------------------------------------------------------------------------
+// The latch rejection model (spec 085 / ADR 0014 D4)
+//
+// librime's ASCII composer reads the latch bit. With this project's
+// configuration (good_old_caps_lock: true) it answers kRejected, and
+// kRejected breaks the whole processor chain in the engine's key dispatch
+// (librime/src/rime/engine.cc) -- so the key is not merely unmatched, it is
+// never looked at.
+//
+// The one way out is the composer's own early exit: a key with
+// Shift+Control, Alt or Super never reaches the latch handling
+// (librime/src/rime/gear/ascii_composer.cc).
+//
+// The modifier bits here are librime's (librime/src/rime/key_table.h).
+// ---------------------------------------------------------------------------
+
+bool EscapesLatchRejection(int rime_modifier) {
+  const bool shift = (rime_modifier & 0x1) != 0;
+  const bool ctrl = (rime_modifier & 0x4) != 0;
+  const bool alt = (rime_modifier & 0x8) != 0;
+  const bool super = (rime_modifier & 0x4000000) != 0;
+  return (shift && ctrl) || alt || super;
+}
+
+// A binding written with a letter can only fire on the letter the key
+// produces. With the latch on that is the upper-case letter, so a binding
+// written with the lower-case one is out of reach in that state -- the
+// semantics of the latch, not a defect of the front end (ADR 0014 D5).
+bool IsLetterKeycode(int keycode) {
+  return (keycode >= 'a' && keycode <= 'z') ||
+         (keycode >= 'A' && keycode <= 'Z');
+}
+
+// The upper-case twin of a letter keycode; the keycode itself for anything
+// that is not a letter.
+int UpperCaseVariant(int keycode) {
+  if (keycode >= 'a' && keycode <= 'z')
+    return keycode - ('a' - 'A');
+  return keycode;
 }
 
 // ---------------------------------------------------------------------------
@@ -658,6 +734,15 @@ struct Counts {
   int dead = 0;
   int known = 0;
   int mismatches = 0;
+  // The CapsLock latch dimension (spec 085).
+  int caps_total = 0;
+  int caps_reachable = 0;
+  int caps_dead = 0;
+  int caps_limited = 0;
+  int caps_baseline_dead = 0;
+  int caps_legacy_reachable = 0;
+  int caps_legacy_dead = 0;
+  int caps_legacy_rejected = 0;
 };
 
 std::string BaselinePath;
@@ -1695,6 +1780,60 @@ int main(int argc, char* argv[]) {
                 detail += "; keys that do fire with the same modifier: " + alt;
             }
           }
+
+          // --- the CapsLock latch dimension (spec 085) ---------------------
+          // The verdict above only asks whether the binding is reachable in
+          // SOME front end state. The latch is a state of its own: with the
+          // latch on the front end produces a different character, and it
+          // used to carry an extra modifier bit, so a binding could be
+          // reachable with the latch off and dead with it on. Both states
+          // are checked here.
+          ++counts.caps_total;
+          const KeyPair caps_pair(accept.keycode, accept.modifier);
+          if (frontend.reachable.count(caps_pair) == 0) {
+            // The binding is dead with the latch off as well, so the latch is
+            // not what kills it. The baseline verdict already reports it and
+            // the latch dimension has nothing to add.
+            ++counts.caps_baseline_dead;
+          } else if (frontend.reachable_caps.count(caps_pair) > 0) {
+            ++counts.caps_reachable;
+          } else {
+            // With the latch on a letter key produces the upper-case
+            // character, so a binding written with the lower-case one cannot
+            // fire in that state. That is the semantics of the latch, not a
+            // defect of the front end (ADR 0014 D5); the way around it is to
+            // spell the upper-case variant in the configuration.
+            const int upper = IsLetterKeycode(accept.keycode)
+                                  ? UpperCaseVariant(accept.keycode)
+                                  : accept.keycode;
+            if (upper != accept.keycode &&
+                frontend.reachable_caps.count(KeyPair(upper, accept.modifier)) >
+                    0) {
+              ++counts.caps_limited;
+              std::printf(
+                  "CAPS-LIMITED|%s|%d|%s|letter binding -- spell the "
+                  "upper-case "
+                  "variant to fire with the latch on\n",
+                  row.file.c_str(), row.line, row.accept.c_str());
+            } else {
+              ++counts.caps_dead;
+              std::printf(
+                  "CAPS-DEAD|%s|%d|%s|unreachable with the CapsLock latch on\n",
+                  row.file.c_str(), row.line, row.accept.c_str());
+            }
+          }
+          // The negative control: the front end as it behaved before
+          // ADR 0014. It has to score strictly worse, otherwise the gate is
+          // blind to this class of defect.
+          const bool legacy_escapes = EscapesLatchRejection(accept.modifier);
+          if (!legacy_escapes)
+            ++counts.caps_legacy_rejected;
+          if (frontend.reachable_caps_legacy.count(caps_pair) > 0 &&
+              legacy_escapes) {
+            ++counts.caps_legacy_reachable;
+          } else {
+            ++counts.caps_legacy_dead;
+          }
         }
       }
 
@@ -1751,16 +1890,36 @@ int main(int argc, char* argv[]) {
 
   std::printf(
       "SUMMARY|bindings=%d|reachable=%d|dead=%d|known_dead=%d|known_dead_keys=%"
-      "d|expectations=%d|mismatches=%d|unused=%d\n",
+      "d|expectations=%d|mismatches=%d|unused=%d"
+      "|caps_bindings=%d|caps_reachable=%d|caps_dead=%d|caps_limited=%d"
+      "|caps_baseline_dead=%d"
+      "|caps_legacy_reachable=%d|caps_legacy_dead=%d"
+      "|caps_legacy_rejected=%d\n",
       counts.total, counts.reachable, counts.dead, counts.known,
       (int)known_keys.size(), (int)expectations.size(), counts.mismatches,
-      unused);
+      unused, counts.caps_total, counts.caps_reachable, counts.caps_dead,
+      counts.caps_limited, counts.caps_baseline_dead,
+      counts.caps_legacy_reachable, counts.caps_legacy_dead,
+      counts.caps_legacy_rejected);
   // With --expectations the expectation file *is* the verdict spec for
   // that run, so only a mismatch (or an expectation that never matched)
   // fails it. Without it, any dead binding fails the gate.
-  const bool fail = expectations.empty()
-                        ? (counts.dead > 0)
-                        : (counts.mismatches > 0 || unused > 0);
+  // The CapsLock latch dimension (spec 085): every binding that works with
+  // the latch off has to keep working with the latch on, and the negative
+  // control -- the front end as it behaved before ADR 0014 -- has to score
+  // strictly worse, otherwise the dimension is blind.
+  const bool caps_ok = counts.caps_dead == 0 &&
+                       (counts.caps_total == 0 ||
+                        (counts.caps_legacy_dead > counts.caps_dead &&
+                         counts.caps_legacy_reachable < counts.caps_reachable));
+  if (!caps_ok) {
+    std::printf("CAPS-FAIL|caps_dead=%d|caps_legacy_dead=%d\n",
+                counts.caps_dead, counts.caps_legacy_dead);
+  }
+  const bool fail =
+      (expectations.empty() ? (counts.dead > 0)
+                            : (counts.mismatches > 0 || unused > 0)) ||
+      !caps_ok;
   std::printf("RESULT|%s\n", fail ? "FAIL" : "PASS");
   return fail ? 1 : 0;
 }

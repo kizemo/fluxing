@@ -619,9 +619,9 @@ struct CapturedAccept {
 // from one snapshot with a modifier from another.
 //
 // The modifiers are the ones the front end reports: Shift, Control and Alt
-// (ADR 0011 D3). The lock modifier is deliberately left out -- whether the
-// front end should report CapsLock at all is still open (ADR 0011 Q2, task
-// T20) and must not be decided here.
+// (ADR 0011 D3). The lock modifier is deliberately left out -- the front end
+// does not report the CapsLock latch at all any more (ADR 0014 D1), so a
+// chord captured here could never carry it.
 //
 // The Windows key is refused outright: the front end never reports it, so a
 // binding made with it could never fire (ADR 0011 D6).

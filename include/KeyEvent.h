@@ -222,6 +222,9 @@ enum Modifier {
   NULL_MASK = 0,
 
   SHIFT_MASK = 1 << 0,
+  // The CapsLock latch. The front end does not report it any more
+  // (ADR 0014 D1); the constant stays because the gate's mask self-check
+  // still verifies how it travels.
   LOCK_MASK = 1 << 1,
   CONTROL_MASK = 1 << 2,
   ALT_MASK = 1 << 3,

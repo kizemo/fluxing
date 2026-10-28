@@ -7,7 +7,6 @@ bool ConvertKeyEvent(UINT vkey,
                      const LPBYTE keyState,
                      weasel::KeyEvent& result) {
   const BYTE KEY_DOWN = 0x80;
-  const BYTE TOGGLED = 0x01;
 
   // set mask
   result.mask = ibus::NULL_MASK;
@@ -15,9 +14,29 @@ bool ConvertKeyEvent(UINT vkey,
   if ((keyState[VK_SHIFT] & KEY_DOWN) != 0)
     result.mask |= ibus::SHIFT_MASK;
 
-  if ((keyState[VK_CAPITAL] & TOGGLED) != 0)
-    result.mask |= ibus::LOCK_MASK;
-
+  // The CapsLock latch is deliberately NOT reported as a modifier bit.
+  //
+  // The latch is a persistent hardware state, not a modifier of the key
+  // being pressed, and the case it produces is already carried by the
+  // character itself. Reporting it had two consequences, and both of them
+  // were fatal (ADR 0014):
+  //
+  //   * librime compares key events exactly (key code and modifier), so
+  //     every binding lost its match while the latch was on;
+  //   * librime's ASCII composer answers kRejected for a key that carries
+  //     the latch bit, and kRejected breaks the whole processor chain
+  //     (librime/src/rime/engine.cc), so the candidate selector, the pager
+  //     and the hotkey binder never saw the key at all.
+  //
+  // The latch key itself is still reported as its own key, with its own
+  // behaviour (switch the input mode, or hand the key back to the system
+  // while already in English) unchanged.
+  //
+  // NOTE: the old code also toggled the bit back on the latch key with
+  // `^=`. Both sites have to go together -- `^=` is an exclusive or, so
+  // leaving it behind would put a bit into the mask that was never set
+  // (0 ^ LOCK == LOCK) and flip "switch to English" into "switch to
+  // Chinese".
   if ((keyState[VK_CONTROL] & KEY_DOWN) != 0)
     result.mask |= ibus::CONTROL_MASK;
 
@@ -26,13 +45,6 @@ bool ConvertKeyEvent(UINT vkey,
 
   if (kinfo.isKeyUp)
     result.mask |= ibus::RELEASE_MASK;
-
-  if (vkey == VK_CAPITAL && !kinfo.isKeyUp) {
-    // NOTE: rime assumes XK_Caps_Lock to be sent before modifier changes,
-    // while VK_CAPITAL has the modifier changed already.
-    // so it is necessary to revert LOCK_MASK.
-    result.mask ^= ibus::LOCK_MASK;
-  }
 
   // set keycode
   // The character a chord produces is resolved by the shared unit, with the
