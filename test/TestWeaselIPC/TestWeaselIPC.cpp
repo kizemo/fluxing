@@ -18,6 +18,7 @@ int console_main();
 int client_main();
 int server_main();
 int verify_quickpanel_main();
+int verify_shift_body_main();
 int verify_tsf_profile_main(bool allow_profile_switch,
                             bool allow_remote_session);
 
@@ -56,6 +57,8 @@ int _tmain(int argc, _TCHAR* argv[]) {
   } else if (argc > 1 && !wcscmp(L"/console", argv[1])) {
     return console_main();
     return 0;
+  } else if (argc > 1 && !wcscmp(L"/verify-shift-body", argv[1])) {
+    return verify_shift_body_main();
   } else if (argc > 1 && !wcscmp(L"/verify-quickpanel", argv[1])) {
     return verify_quickpanel_main();
   } else if (argc > 1 && !wcscmp(L"/verify-tsf-profile", argv[1])) {
@@ -211,6 +214,84 @@ auto_hide_result wait_auto_hide(std::function<bool()> panel_visible) {
   return result;
 }
 
+// ADR 0012: the Shift IPC has to answer with a response body.
+//
+// The TSF reads the pipe buffer right after every key event (OnTestKeyDown
+// and OnTestKeyUp call _UpdateComposition, which calls DoEditSession). If
+// the server does not write a body, the client keeps the previous response
+// and parses it again, so a bare Shift would never reach the screen and the
+// language bar would never learn the new input mode. This mode proves that a
+// Shift request really does carry a body back to the client.
+int verify_shift_body_main() {
+  weasel::Client client;
+  if (!client.Connect()) {
+    std::cerr << "[SHIFT] connect failed" << std::endl;
+    return -2;
+  }
+  client.StartSession();
+  if (!client.Echo()) {
+    std::cerr << "[SHIFT] session failed" << std::endl;
+    return -3;
+  }
+
+  // Identity check: the mock server answers a key event with the
+  // "Greeting=" marker, while a real WeaselServer.exe answers with a full
+  // "action=status,ctx,config" block. Without this check the test would
+  // silently measure whatever process happens to own the named pipe - the
+  // L30 class of bug, where a degraded integration test still looks green.
+  std::wstring probe_body;
+  client.ProcessKeyEvent(weasel::KeyEvent(L'a', 0));
+  client.GetResponseData([&probe_body](LPWSTR buffer, DWORD length) -> bool {
+    probe_body.assign(buffer, length);
+    return true;
+  });
+  bool talking_to_mock = probe_body.find(L"Greeting=") != std::wstring::npos;
+  if (!talking_to_mock) {
+    std::cerr << "[SHIFT] FAIL: the named pipe is served by another "
+                 "process, not the TestWeaselIPC mock server. A real "
+                 "WeaselServer.exe is probably running; stop it and re-run."
+              << std::endl;
+    client.EndSession();
+    return -6;
+  }
+
+  std::wstring down_body;
+  client.ShiftDown(true);
+  bool got_down =
+      client.GetResponseData([&down_body](LPWSTR buffer, DWORD length) -> bool {
+        down_body.assign(buffer, length);
+        return true;
+      });
+  bool down_has_status =
+      down_body.find(L"status.ascii_mode=0") != std::wstring::npos;
+
+  std::wstring up_body;
+  client.ShiftUp(true);
+  bool got_up =
+      client.GetResponseData([&up_body](LPWSTR buffer, DWORD length) -> bool {
+        up_body.assign(buffer, length);
+        return true;
+      });
+  bool up_has_commit = up_body.find(L"commit=Fluxing") != std::wstring::npos;
+  bool up_has_status =
+      up_body.find(L"status.ascii_mode=1") != std::wstring::npos;
+
+  client.EndSession();
+
+  std::cout << "[SHIFT] down=" << (got_down ? 1 : 0)
+            << " down_status=" << (down_has_status ? 1 : 0)
+            << " up=" << (got_up ? 1 : 0)
+            << " up_commit=" << (up_has_commit ? 1 : 0)
+            << " up_status=" << (up_has_status ? 1 : 0) << std::endl;
+  if (got_down && down_has_status && got_up && up_has_commit && up_has_status) {
+    std::cout << "[SHIFT] PASS: the Shift IPC carries a response body"
+              << std::endl;
+    return 0;
+  }
+  std::cerr << "[SHIFT] FAIL" << std::endl;
+  return -4;
+}
+
 int verify_quickpanel_main() {
   auto panel_hwnd = []() -> HWND {
     // class "FluxingQuickPanel_v3", title "Fluxing QuickPanel"
@@ -318,14 +399,36 @@ class TestRequestHandler : public weasel::RequestHandler {
     std::cerr << "RemoveClient: " << session_id << std::endl;
     return 0;
   }
+  // ADR 0012: DWORD + override. The base virtual takes a DWORD
+  // session_id; UINT is a different type on Windows (LLP64), so the
+  // mock used to hide the base virtual instead of overriding it and
+  // the server called the base's empty implementation - the key
+  // event path was never exercised by the suite.
   virtual BOOL ProcessKeyEvent(weasel::KeyEvent keyEvent,
-                               UINT session_id,
-                               EatLine eat) {
+                               DWORD session_id,
+                               EatLine eat) override {
     std::cerr << "ProcessKeyEvent: " << session_id
               << " keycode: " << keyEvent.keycode << " mask: " << keyEvent.mask
               << std::endl;
     eat(std::wstring(L"Greeting=Hello, 小狼毫.\n"));
     return TRUE;
+  }
+
+  // ADR 0012: the Shift handlers answer with a body, so the client can read
+  // the fresh status (and the commit text of a selected candidate).
+  virtual void ShiftDown(bool is_left, DWORD session_id, EatLine eat) override {
+    std::cerr << "ShiftDown: " << session_id << std::endl;
+    if (eat) {
+      std::wstring msg = L"status.ascii_mode=0\n";
+      eat(msg);
+    }
+  }
+  virtual void ShiftUp(bool is_left, DWORD session_id, EatLine eat) override {
+    std::cerr << "ShiftUp: " << session_id << std::endl;
+    if (eat) {
+      std::wstring msg = L"commit=Fluxing\nstatus.ascii_mode=1\n";
+      eat(msg);
+    }
   }
 
  private:

@@ -399,16 +399,32 @@ DWORD ServerImpl::OnChangePage(WEASEL_IPC_COMMAND uMsg,
 DWORD ServerImpl::OnShiftDown(WEASEL_IPC_COMMAND uMsg,
                               DWORD wParam,
                               DWORD lParam) {
-  if (m_pRequestHandler)
-    m_pRequestHandler->ShiftDown((wParam & 1u) != 0, lParam);
+  if (m_pRequestHandler) {
+    // ADR 0012: hand the response body to the client, exactly like
+    // OnChangePage does. The client reads the pipe buffer right after the
+    // Shift key event, so the Shift IPC has to refresh it.
+    auto eat = [this](std::wstring& msg) -> bool {
+      *channel << msg;
+      return true;
+    };
+    m_pRequestHandler->ShiftDown((wParam & 1u) != 0, lParam, eat);
+  }
   return 0;
 }
 
 DWORD ServerImpl::OnShiftUp(WEASEL_IPC_COMMAND uMsg,
                             DWORD wParam,
                             DWORD lParam) {
-  if (m_pRequestHandler)
-    m_pRequestHandler->ShiftUp((wParam & 1u) != 0, lParam);
+  if (m_pRequestHandler) {
+    // ADR 0012: the Shift response now carries a body, so that the client
+    // sees the commit text of the selected candidate and the new
+    // status.ascii_mode instead of re-parsing the previous response.
+    auto eat = [this](std::wstring& msg) -> bool {
+      *channel << msg;
+      return true;
+    };
+    m_pRequestHandler->ShiftUp((wParam & 1u) != 0, lParam, eat);
+  }
   return 0;
 }
 

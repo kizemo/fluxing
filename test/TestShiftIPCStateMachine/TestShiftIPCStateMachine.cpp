@@ -1,12 +1,14 @@
 // TestShiftIPCStateMachine.cpp
 //
-// 17 unit tests for fluxing::ShiftStateMachine (11 x spec 077 §2.7.1
-// + 6 x ADR 0010 bare-Shift disambiguation).
+// 20 unit tests for fluxing::ShiftStateMachine (11 x spec 077 §2.7.1
+// + 6 x ADR 0010 bare-Shift disambiguation
+// + 3 x ADR 0012 ascii_mode propagation scope).
 // Pure logic test, no IPC / rime_api / GUI dependencies.
 //
 // The ShiftStateMachine implementation in include/ShiftStateMachine.h is real
-// (spec 077 + ADR 0010), so this exe must report 0 FAIL. The PASS count
-// grows with every assertion: 17 after spec 077, 28 after ADR 0010.
+// (spec 077 + ADR 0010 + ADR 0012), so this exe must report 0 FAIL. The PASS
+// count grows with every assertion: 17 after spec 077, 28 after ADR 0010,
+// 34 after ADR 0012.
 
 #include <cstdio>
 #include <ShiftStateMachine.h>
@@ -205,8 +207,47 @@ void Test_DecisionTable_Exhaustive() {
   EXPECT(none == 12, "Test #17: exactly 12 of 16 combinations do nothing");
 }
 
+// ===== ADR 0012 (T1): ascii_mode propagation scope =====
+//
+// A bare Shift must never reach another window; an explicit control may reach
+// every window, but only when weasel.yaml asks for it.
+
+// Test #18 - a bare Shift never broadcasts, whatever global_ascii says.
+void Test_AsciiScope_BareShiftNeverBroadcasts() {
+  EXPECT(DecideAsciiModeScope(false, false) == AsciiModeScope::kCurrentSession,
+         "Test #18: a bare Shift stays in its own session");
+  EXPECT(DecideAsciiModeScope(false, true) == AsciiModeScope::kCurrentSession,
+         "Test #18: a bare Shift stays in its own session (global_ascii on)");
+}
+
+// Test #19 - an explicit control follows the yaml flag.
+void Test_AsciiScope_ExplicitControlFollowsYaml() {
+  EXPECT(DecideAsciiModeScope(true, false) == AsciiModeScope::kCurrentSession,
+         "Test #19: an explicit control stays local without global_ascii");
+  EXPECT(DecideAsciiModeScope(true, true) == AsciiModeScope::kAllSessions,
+         "Test #19: an explicit control reaches every session with "
+         "global_ascii");
+}
+
+// Test #20 - exhaustive decision table over all 4 input combinations.
+void Test_AsciiScope_DecisionTable() {
+  int all = 0;
+  int current = 0;
+  for (int e = 0; e < 2; ++e)
+    for (int g = 0; g < 2; ++g) {
+      auto s = DecideAsciiModeScope(e != 0, g != 0);
+      if (s == AsciiModeScope::kAllSessions)
+        ++all;
+      else
+        ++current;
+    }
+  EXPECT(all == 1, "Test #20: exactly 1 of 4 combinations broadcasts");
+  EXPECT(current == 3, "Test #20: exactly 3 of 4 combinations stay local");
+}
+
 int main() {
-  std::printf("TestShiftIPCStateMachine (spec 077 §2.7.1 + ADR 0010)\n");
+  std::printf(
+      "TestShiftIPCStateMachine (spec 077 §2.7.1 + ADR 0010 + ADR 0012)\n");
   Test_ShiftDownUp_L_FireSelect1();
   Test_ShiftDownUp_R_FireSelect2();
   Test_InterveningBlocks_NoFire();
@@ -224,6 +265,9 @@ int main() {
   Test_NoDown_NoAction();
   Test_Intervening_NoAction();
   Test_DecisionTable_Exhaustive();
+  Test_AsciiScope_BareShiftNeverBroadcasts();
+  Test_AsciiScope_ExplicitControlFollowsYaml();
+  Test_AsciiScope_DecisionTable();
   std::printf("\nResult: %d PASS / %d FAIL\n", s_passed, s_failed);
   return s_failed == 0 ? 0 : 1;
 }

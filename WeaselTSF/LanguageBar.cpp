@@ -231,7 +231,10 @@ STDAPI CLangBarItemButton::GetIcon(HICON* phIcon) {
 }
 
 STDAPI CLangBarItemButton::GetText(BSTR* pbstrText) {
-  *pbstrText = SysAllocString(L"WeaselTSF Button");
+  // ADR 0012: the label follows the input mode, so the language bar shows
+  // which mode is active instead of a fixed product name.
+  // U+82F1 = 英, U+4E2D = 中 (escaped: this file is UTF-8 without BOM).
+  *pbstrText = SysAllocString(ascii_mode ? L"\u82f1" : L"\u4e2d");
   return (*pbstrText == NULL) ? E_OUTOFMEMORY : S_OK;
 }
 
@@ -270,7 +273,9 @@ void CLangBarItemButton::UpdateWeaselStatus(weasel::Status stat) {
     _current_schema_ascii_icon = _style.current_ascii_icon;
   }
   if (_pLangBarItemSink) {
-    _pLangBarItemSink->OnUpdate(TF_LBI_STATUS | TF_LBI_ICON);
+    // ADR 0012: TF_LBI_TEXT as well, otherwise the language bar keeps the
+    // old label after the input mode changed.
+    _pLangBarItemSink->OnUpdate(TF_LBI_STATUS | TF_LBI_ICON | TF_LBI_TEXT);
   }
 }
 

@@ -93,8 +93,15 @@ struct RequestHandler {
   // spec 077: Shift release-only candidate select via IPC state machine.
   // Virtuals are no-op defaults so ServerImpl (T08) builds before
   // RimeWithWeaselHandler overrides them (T09/T10).
-  virtual void ShiftDown(bool is_left, DWORD session_id) {}
-  virtual void ShiftUp(bool is_left, DWORD session_id) {}
+  // ADR 0012: the Shift IPC carries a response body now. The server hands the
+  // body to the client through the same EatLine channel that ChangePage and
+  // HighlightCandidateOnCurrentPage use, so the client can read the fresh
+  // status (and the commit text of the selected candidate) without a second
+  // round trip. Without a body the client keeps the previous response in its
+  // pipe buffer, because PipeChannel only refreshes that buffer when the
+  // server actually writes one.
+  virtual void ShiftDown(bool is_left, DWORD session_id, EatLine eat) {}
+  virtual void ShiftUp(bool is_left, DWORD session_id, EatLine eat) {}
   virtual void SelectCandidate(size_t index, DWORD session_id) {}
   virtual bool ChangePage(bool backward, DWORD session_id, EatLine eat) {
     return false;
@@ -154,8 +161,10 @@ class Client {
   // 选择当前页面编号为index的候选
   bool SelectCandidateOnCurrentPage(size_t index);
   // spec 077: notify Server of raw Shift_L/R down/up so Server-side state
-  // machine can drive release-only select_candidate. Fire-and-forget
-  // (no server response). is_left: true=Shift_L, false=Shift_R.
+  // machine can drive release-only select_candidate. is_left: true=Shift_L,
+  // false=Shift_R. ADR 0012: the server answers with a response body now
+  // (the fresh status and, for a selected candidate, the commit text); the
+  // return value only reports whether the request was sent.
   bool ShiftDown(bool is_left);
   bool ShiftUp(bool is_left);
   // spec 077: bypass Server-side state machine and select candidate at

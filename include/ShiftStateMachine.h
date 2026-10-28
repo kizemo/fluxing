@@ -97,4 +97,29 @@ inline ShiftUpAction DecideShiftUpAction(bool down_recorded,
     return ShiftUpAction::kSelectCandidate;
   return ShiftUpAction::kToggleAsciiMode;
 }
+
+// ===== ADR 0012: ascii_mode propagation scope =====
+//
+// Which sessions an ascii_mode change may reach.
+//
+// - A bare Shift (ADR 0010) is a per-window gesture: it must never switch a
+//   second window.
+// - An explicit control (the tray or the language bar menu) may reach every
+//   session, but only when weasel.yaml asks for it with "global_ascii: true".
+//
+// Kept dependency-free so that the decision table can be unit-tested without
+// rime_api / IPC / GUI surfaces.
+enum class AsciiModeScope {
+  kCurrentSession,
+  kAllSessions,
+};
+
+inline AsciiModeScope DecideAsciiModeScope(bool explicit_control,
+                                           bool global_ascii_configured) {
+  if (!explicit_control)
+    return AsciiModeScope::kCurrentSession;
+  if (!global_ascii_configured)
+    return AsciiModeScope::kCurrentSession;
+  return AsciiModeScope::kAllSessions;
+}
 }  // namespace fluxing

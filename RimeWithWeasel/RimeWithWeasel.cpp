@@ -51,6 +51,7 @@ RimeWithWeaselHandler::RimeWithWeaselHandler(UI* ui)
       m_disabled(true),
       m_current_dark_mode(false),
       m_global_ascii_mode(false),
+      m_global_ascii_configured(false),
       // ADR 0010 P1: bare Shift toggles Chinese / English by default.
       m_bare_shift_toggles_ascii(true),
       m_show_notifications_time(1200),
@@ -147,9 +148,17 @@ void RimeWithWeaselHandler::Initialize() {
       }
       m_base_style = m_ui->style();
     }
+    // ADR 0012: the yaml flag and the runtime state are two different things.
+    // m_global_ascii_configured is the immutable configuration flag
+    // ("global_ascii" in weasel.yaml); m_global_ascii_mode is the runtime
+    // mirror the QuickPanel reads. Mixing them made a bare Shift in one
+    // window switch every other window.
     Bool global_ascii = false;
-    if (rime_api->config_get_bool(&config, "global_ascii", &global_ascii))
+    m_global_ascii_configured = false;
+    if (rime_api->config_get_bool(&config, "global_ascii", &global_ascii)) {
+      m_global_ascii_configured = !!global_ascii;
       m_global_ascii_mode = !!global_ascii;
+    }
     // ADR 0010: bare Shift -> Chinese / English toggle. An absent key keeps
     // the constructor default (on), so an upgraded install gets the feature
     // without having to edit weasel.yaml.
@@ -195,7 +204,9 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
     return 0;
   }
   RimeSessionId session_id = (RimeSessionId)rime_api->create_session();
-  if (m_global_ascii_mode) {
+  // ADR 0012: a new session only inherits the ASCII mode of an existing
+  // session when weasel.yaml asks for the global behaviour.
+  if (m_global_ascii_configured) {
     for (const auto& pair : m_session_status_map) {
       if (pair.first) {
         rime_api->set_option(session_id, "ascii_mode",
@@ -609,9 +620,18 @@ void RimeWithWeaselHandler::EndMaintenance() {
 void RimeWithWeaselHandler::SetOption(WeaselSessionId ipc_id,
                                       const std::string& opt,
                                       bool val) {
+  // ADR 0012: this is the only place where an ascii_mode change may reach
+  // another session. A bare Shift (ADR 0010) never comes here -- it calls
+  // rime_api->set_option on its own session -- so it can never switch a
+  // second window.
+  const bool broadcast_ascii =
+      opt == "ascii_mode" &&
+      fluxing::DecideAsciiModeScope(/*explicit_control=*/true,
+                                    m_global_ascii_configured) ==
+          fluxing::AsciiModeScope::kAllSessions;
   // from no-session client, not actual typing session
   if (!ipc_id) {
-    if (m_global_ascii_mode && opt == "ascii_mode") {
+    if (broadcast_ascii) {
       for (auto& pair : m_session_status_map)
         rime_api->set_option(to_session_id(pair.first), "ascii_mode", val);
     } else {
@@ -619,6 +639,12 @@ void RimeWithWeaselHandler::SetOption(WeaselSessionId ipc_id,
     }
   } else {
     rime_api->set_option(to_session_id(ipc_id), opt.c_str(), val);
+    if (broadcast_ascii) {
+      for (auto& pair : m_session_status_map) {
+        if (pair.first != ipc_id)
+          rime_api->set_option(to_session_id(pair.first), "ascii_mode", val);
+      }
+    }
   }
   // spec 045: cache 简/繁 / 全/半角 / ascii mode for QuickPanel initial state.
   if (opt == "simplification")
@@ -1005,14 +1031,11 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
         .append(L"status.schema_id=")
         .append(status.schema_id ? u8tow(status.schema_id) : std::wstring())
         .append(L"\n");
-    if (m_global_ascii_mode &&
-        (session_status.status.is_ascii_mode != status.is_ascii_mode)) {
-      for (auto& pair : m_session_status_map) {
-        if (pair.first != ipc_id)
-          rime_api->set_option(to_session_id(pair.first), "ascii_mode",
-                               !!status.is_ascii_mode);
-      }
-    }
+    // ADR 0012: the cross-session propagation used to live here. It made a
+    // bare Shift in one window switch every other window, because the
+    // comparison against the cached status fired on the next response of the
+    // toggled session. The propagation now lives in SetOption() and only
+    // happens for an explicit control with "global_ascii: true".
     session_status.status = status;
     rime_api->free_status(&status);
   }
@@ -1776,7 +1799,9 @@ bool RimeWithWeaselHandler::IsFullShape() const {
 // is called only on a clean ShiftUp (no intervening non-Shift key between
 // matching Down and Up). On any Up the state is unconditionally reset (C6)
 // to prevent subsequent Shift events from misfiring.
-void RimeWithWeaselHandler::ShiftDown(bool is_left, WeaselSessionId ipc_id) {
+void RimeWithWeaselHandler::ShiftDown(bool is_left,
+                                      WeaselSessionId ipc_id,
+                                      EatLine eat) {
   TryLazyRecovery();
   if (m_disabled)
     return;
@@ -1785,9 +1810,15 @@ void RimeWithWeaselHandler::ShiftDown(bool is_left, WeaselSessionId ipc_id) {
   s.downRecorded = true;
   s.interveningKey = false;
   s.lastIsLeft = is_left;
+  // ADR 0012: answer with a body. The TSF reads the pipe buffer right after
+  // the Shift key event (OnTestKeyDown -> _UpdateComposition -> DoEditSession);
+  // without a fresh body it would parse the previous response again.
+  _Respond(ipc_id, eat);
 }
 
-void RimeWithWeaselHandler::ShiftUp(bool is_left, WeaselSessionId ipc_id) {
+void RimeWithWeaselHandler::ShiftUp(bool is_left,
+                                    WeaselSessionId ipc_id,
+                                    EatLine eat) {
   TryLazyRecovery();
   if (m_disabled)
     return;
@@ -1829,6 +1860,19 @@ void RimeWithWeaselHandler::ShiftUp(bool is_left, WeaselSessionId ipc_id) {
     size_t idx = s.lastIsLeft ? 1 : 2;
     DLOG(INFO) << "select_candidate(idx=" << idx << ") ipc_id=" << ipc_id;
     rime_api->select_candidate(to_session_id(ipc_id), idx);
+    // ADR 0012: the selected candidate has to reach the screen. With
+    // _auto_commit off, librime's Context::Select only forwards the segment
+    // (librime/src/rime/engine.cc:168-191), so the composition stays open and
+    // nothing is committed. commit_composition is idempotent: with
+    // _auto_commit on, Select already committed and cleared the composition,
+    // so this call returns false and changes nothing.
+    rime_api->commit_composition(to_session_id(ipc_id));
+    // ADR 0012: answer with a body. It carries the commit text (the selected
+    // candidate) and the fresh status, so the client inserts the text and
+    // updates the language bar. _Respond has to run before _UpdateUI, exactly
+    // like in ProcessKeyEvent, so that the cached status is fresh when the
+    // tray icon is refreshed.
+    _Respond(ipc_id, eat);
     _UpdateUI(ipc_id);
   } else if (action == fluxing::ShiftUpAction::kToggleAsciiMode) {
     // ADR 0010 P2: the current session only. Never the global mirror, never
@@ -1836,6 +1880,9 @@ void RimeWithWeaselHandler::ShiftUp(bool is_left, WeaselSessionId ipc_id) {
     bool ascii = rime_api->get_option(to_session_id(ipc_id), "ascii_mode");
     rime_api->set_option(to_session_id(ipc_id), "ascii_mode", !ascii);
     DLOG(INFO) << "toggle ascii_mode -> " << !ascii << " ipc_id=" << ipc_id;
+    // ADR 0012: answer with a body so that the client learns the new
+    // status.ascii_mode and the language bar icon follows the input mode.
+    _Respond(ipc_id, eat);
     _UpdateUI(ipc_id);
   }
   s = ShiftState{};  // C6: unconditionally reset on Up

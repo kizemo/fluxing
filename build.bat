@@ -30,10 +30,13 @@ rem the mechanism but never the numbers, so a build with no version in
 rem env.bat (CI) fell back to upstream's 0.17.4 - and the non-release tag
 rem lookup below then matched UPSTREAM's 0.17.4 tag and counted the commits
 rem since it. The fork's own release tags are v<major>.<minor>.<patch>.<build>
-rem (currently v0.21.0.6), so the lookup now resolves to the fork's line.
+rem (currently v1.0.0), so the lookup now resolves to the fork's line.
 rem Bump these three numbers next to the CHANGELOG entry and the git tag.
-if not defined VERSION_MAJOR set VERSION_MAJOR=0
-if not defined VERSION_MINOR set VERSION_MINOR=21
+rem ADR 0012: the public version is three numbers (major.minor.patch); the
+rem fourth number (WEASEL_BUILD) only ever reaches the Windows resource and
+rem the internal versioned shim names.
+if not defined VERSION_MAJOR set VERSION_MAJOR=1
+if not defined VERSION_MINOR set VERSION_MINOR=0
 if not defined VERSION_PATCH set VERSION_PATCH=0
 
 if not defined FLUXING_VERSION set FLUXING_VERSION=%VERSION_MAJOR%.%VERSION_MINOR%.%VERSION_PATCH%

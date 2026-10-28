@@ -14,7 +14,7 @@ Unicode true
 ; General
 
 !ifndef FLUXING_VERSION
-!define FLUXING_VERSION 0.17.5
+!define FLUXING_VERSION 1.0.0
 !endif
 
 !ifndef WEASEL_BUILD
@@ -48,7 +48,7 @@ Var FluxingRegSvr32x64
 Name "Fluxing ${FLUXING_VERSION}"
 
 ; The file to write
-OutFile "archives\fluxing-${FLUXING_VERSION}.${WEASEL_BUILD}-installer.exe"
+OutFile "archives\fluxing-${FLUXING_VERSION}-installer.exe"
 
 VIProductVersion "${FLUXING_VERSION}.${WEASEL_BUILD}"
 VIAddVersionKey /LANG=2052 "ProductName" "火流猩输入法"
@@ -998,12 +998,12 @@ program_files:
     ${EndIf}
     Sleep 500
   ${Next}
-  DetailPrint "Fluxing v0.20.0.4 F4: HKCU CTF binding write FAILED after 2 retries. User must enable 火流猩 manually via Settings -> Time & Language -> Chinese (Simplified) -> Options (loud warn)"
+  DetailPrint "Fluxing v1.0.0 F4: HKCU CTF binding write FAILED after 2 retries. User must enable 火流猩 manually via Settings -> Time & Language -> Chinese (Simplified) -> Options (loud warn)"
   ctf_binding_done:
   ; Write the uninstall keys for Windows
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayName" "$(DISPLAYNAME)"
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayIcon" '"$INSTDIR\WeaselServer.exe"'
-  WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayVersion" "${FLUXING_VERSION}.${WEASEL_BUILD}"
+  WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayVersion" "${FLUXING_VERSION}"
   WriteRegStr HKLM "${REG_UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegStr HKLM "${REG_UNINST_KEY}" "Publisher" "aiec.fun"
   WriteRegStr HKLM "${REG_UNINST_KEY}" "URLInfoAbout" "https://rime.im/"

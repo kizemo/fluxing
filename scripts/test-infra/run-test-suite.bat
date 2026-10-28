@@ -156,6 +156,25 @@ rem to come up, then run the client, then /stop. Without this orchestration, the
 rem client mode returns -2 (STATUS_INVALID_HANDLE) because the named pipe has no
 rem listener. See L30 for the full post-mortem of the silent -2 failure that
 rem was mis-classified as "smoke test" for 4 sessions.
+rem ADR 0012 guard: the mock server has to own the named pipe. If a
+rem real WeaselServer.exe is already running, the mock server fails to
+rem bind, dies silently, and the integration test then measures the real
+rem server instead of the mock - the L30 class of bug, where a degraded
+rem test still looks green. Detect the squatting process up front and
+rem fail loudly instead of producing a bogus PASS or FAIL.
+set "SQUAT=0"
+tasklist /FI "IMAGENAME eq WeaselServer.exe" 2>NUL | findstr /I /C:"WeaselServer.exe" >NUL
+if not errorlevel 1 set "SQUAT=1"
+tasklist /FI "IMAGENAME eq TestWeaselIPC.exe" 2>NUL | findstr /I /C:"TestWeaselIPC.exe" >NUL
+if not errorlevel 1 set "SQUAT=1"
+if "!SQUAT!"=="1" (
+    echo [ERROR] A WeaselServer.exe or TestWeaselIPC.exe process is already running.
+    echo         It owns the named pipe, so the TestWeaselIPC mock server cannot
+    echo         bind and the integration test would measure the wrong server.
+    echo         Stop it and re-run. See ADR 0012.
+    set "FAIL=1"
+    goto ipc_done
+)
 echo === Setting up TestWeaselIPC server (background, /start) ===
 start "" /B "Release\TestWeaselIPC.exe" /start
 rem ping -n 3 127.0.0.1 >nul gives ~2s wait. Using ping (not timeout / sleep)
@@ -164,9 +183,16 @@ ping -n 3 127.0.0.1 >nul
 echo === Running TestWeaselIPC.exe (client mode) ===
 "Release\TestWeaselIPC.exe" < nul
 set "IPC_RC=!errorlevel!"
+rem ADR 0012: the Shift IPC must carry a response body (the fresh status
+rem and the commit text of a selected candidate). Run it while the
+rem server is up, right after the client mode.
+echo === Running TestWeaselIPC.exe (/verify-shift-body) ===
+"Release\TestWeaselIPC.exe" /verify-shift-body < nul
+if !errorlevel! NEQ 0 set "FAIL=1"
 echo === Shutting down TestWeaselIPC server (/stop) ===
 "Release\TestWeaselIPC.exe" /stop < nul
 if !IPC_RC! NEQ 0 set "FAIL=1"
+:ipc_done
 
 if "!FAIL!"=="0" (
     echo.

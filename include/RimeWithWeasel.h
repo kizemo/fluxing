@@ -81,12 +81,14 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
 
   // spec 077: Shift release-only candidate select via IPC state machine.
   // Override RequestHandler virtuals; state is kept in m_shiftState.
-  virtual void ShiftDown(bool is_left, WeaselSessionId ipc_id);
-  virtual void ShiftUp(bool is_left, WeaselSessionId ipc_id);
+  virtual void ShiftDown(bool is_left, WeaselSessionId ipc_id, EatLine eat);
+  virtual void ShiftUp(bool is_left, WeaselSessionId ipc_id, EatLine eat);
   virtual void SelectCandidate(size_t index, WeaselSessionId ipc_id);
 
   // spec 036: return current global ASCII mode (for QuickPanel initial state).
   // Reads the cached m_global_ascii_mode which is updated by SetOption.
+  // ADR 0012: this is the runtime mirror only; the propagation decision uses
+  // the separate m_global_ascii_configured flag.
   bool IsAsciiMode() const { return m_global_ascii_mode; }
   // spec 045 v0.18.29.0: read current scheme id + list available
   // schemes + select scheme (for QuickPanel Row 3 schema label +
@@ -182,6 +184,11 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   std::unordered_map<WeaselSessionId, ShiftState> m_shiftState;
   bool m_current_dark_mode;
   bool m_global_ascii_mode;
+  // ADR 0012: the immutable configuration flag (weasel.yaml "global_ascii").
+  // m_global_ascii_mode is only the runtime mirror that the QuickPanel reads;
+  // the two must not be the same variable, otherwise a bare Shift in one
+  // window silently switches every other window.
+  bool m_global_ascii_configured;
   // ADR 0010: bare Shift toggles the Chinese / English input mode when no
   // candidate menu is open. On by default (P1); the switch lives in
   // weasel.yaml under [global settings].

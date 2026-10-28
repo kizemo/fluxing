@@ -1,3 +1,56 @@
+## [1.0.0] - 2026-10-28
+
+### 主要更新
+
+- 候选窗**开着**时，裸 `Shift` 现在能真正上屏第 2 / 第 3 候选，
+  不再出现「候选窗消失、但仍处于未确认状态」。
+- 裸 `Shift` 的中英文切换**只作用于当前窗口的会话**，
+  另一个窗口不再被同步切换。
+- 任务栏输入法的中英文状态图标与文字现在会随中英文模式一起切换，
+  不再始终显示「中」。
+- 版本号由 4 位数字改为 3 位数字，本版为 `1.0.0`。
+
+### fix(fluxing): 裸 Shift 的响应体、会话隔离与语言栏图标（ADR 0012）
+
+**Root cause**:
+
+- **Shift 的 IPC 没有响应体**：`PipeChannel` 只在服务端真的写出 body 时才刷新
+  客户端的管道缓冲；服务端不回 body，客户端就继续解析**上一次**的响应 ⇒
+  裸 Shift 既拿不到 `commit=`（候选上不了屏），也拿不到新的 `status.ascii_mode`
+  （语言栏图标不刷新）。这两个现象是**同一个根因**。
+- **选完候选没有 commit**：`librime` 的 `Context::Select` 在 `_auto_commit` 关闭时
+  只前移候选段，composition 仍在 ⇒ 候选窗消失但状态未确认。
+- **yaml 配置与运行时状态混为一谈**：`_Respond` 用 `m_global_ascii_mode`
+  （既当 yaml 的 `global_ascii`、又当运行时镜像）做跨会话传播，而且比较的是
+  **缓存**的会话状态 ⇒ 裸 Shift 之后的**下一个**响应事件才触发传播，
+  把切换过的会话复制给其它所有会话。
+
+**Fix**:
+
+- `include/WeaselIPC.h`、`WeaselIPCServer/WeaselServerImpl.cpp`、
+  `include/RimeWithWeasel.h`、`RimeWithWeasel/RimeWithWeasel.cpp`：
+  `ShiftDown` / `ShiftUp` 增加 `EatLine eat`，服务端按 `OnChangePage` 的写法
+  回响应体（**线上协议不变**，命令号与参数布局不动）。
+- `RimeWithWeasel/RimeWithWeasel.cpp`：`ShiftUp` 的 `kSelectCandidate` 分支在
+  `select_candidate` 之后补 `commit_composition`（幂等），再 `_Respond` → `_UpdateUI`。
+- 拆分 `m_global_ascii_configured`（yaml `global_ascii`，不可变）与
+  `m_global_ascii_mode`（运行时镜像）；跨会话传播从 `_Respond` 移到 `SetOption`，
+  且只在 `global_ascii: true` 时生效 —— 裸 Shift 走 `set_option` 直线，
+  **永不广播**。
+- `include/ShiftStateMachine.h`：新增无依赖纯函数 `DecideAsciiModeScope`。
+- `WeaselTSF/LanguageBar.cpp`：`GetText()` 随模式返回「中」/「英」，
+  `UpdateWeaselStatus()` 补发 `TF_LBI_TEXT`。
+
+**验收**:
+
+- `scripts\test-infra\run-test-suite.bat` ⇒ `=== ALL TESTS PASSED ===`
+- `Release\TestShiftIPCStateMachine.exe` ⇒ `Result: 34 PASS / 0 FAIL`
+- `Release\TestWeaselIPC.exe /verify-shift-body` ⇒ `[SHIFT] PASS`，并新增「身份探针」：先确认管道另一端是 mock（响应含 `Greeting=`），再校验 Shift 的响应体，避免测错对象（L151）
+- `Release\TestWeaselIPC.exe /verify-shift-body` ⇒
+  `[SHIFT] PASS: the Shift IPC carries a response body`
+- 详见 **ADR 0012**
+  （`docs/adr/0012-shift-ipc-response-body-and-session-local-ascii.md`，Accepted）。
+
 ## [0.21.0.9-fluxing] - 2026-10-27
 
 ### feat(fluxing): 裸按 Shift 切中英文 —— 上下文消歧，不再是「做不到」（ADR 0010）

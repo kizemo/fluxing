@@ -12656,3 +12656,57 @@ L148、L131、L113
   第二轮才确定「不是偶发」；第一轮若只看报错文本，会误判成「重跑一下就好」。
 
 **关联**: 清单 T19、spec 082 §3.4、AGENTS.md §2.5、L17 / L54
+---
+
+## L151 - 集成测试必须先证明「管道另一端是我以为的那个进程」（2026-10-28）
+
+**现象**：
+
+- ADR 0012 新增的 `/verify-shift-body` 用例在套件里 FAIL：
+  `[SHIFT] down=1 down_status=1 up=1 up_commit=0 up_status=0`。
+- 手工用**同一份** `Release\TestWeaselIPC.exe` 起服务端再跑，**完全通过**
+  （`up_commit=1 up_status=1`，服务端 trace 有 `ShiftDown: 1` / `ShiftUp: 1`）。
+- 套件日志里服务端只有两行：`handler ctor.` 和 `handler dtor: 0`
+  （`m_counter=0` ⇒ 它**一次会话都没服务过**），而客户端收到的响应体是
+  `action=status,ctx,config` / `status.schema_id=double_pinyin_sogou` /
+  `ctx.cand=22 ...` —— 这是**真实 WeaselServer.exe** 的响应，
+  mock 只会回 `Greeting=Hello`。
+
+**根因**：
+
+- `run-test-suite.bat` 用 `start "" /B "Release\TestWeaselIPC.exe" /start` 起 mock，
+  **从不检查它是否真的绑上了命名管道**。
+- 机器上残留着一个真实 `WeaselServer.exe`，管道被它占着 ⇒ mock 绑定失败、
+  **静默退出** ⇒ 集成测试的客户端连到了**真实服务器**。
+- 于是被测对象从「mock」悄悄换成了「老二进制的真实服务器」：
+  老二进制 Shift 不回 body ⇒ 客户端读到**陈旧 body** ⇒
+  而陈旧 body 恰好含 `status.ascii_mode=0` ⇒ `down_status=1` **假阳性**，
+  `up` 缺 `commit=` / `ascii_mode=1` ⇒ FAIL。
+  ⇒ **失败信号本身也是被污染的**，方向还反了一半。
+
+**教训**：
+
+- **集成测试要断言「对象身份」，而不只是断言「返回值」。** 判据：
+  测的是 mock，就必须先证明管道另一端是 mock（用 mock 的特征响应），
+  否则「测错对象」会伪装成「功能坏了」，白烧一轮排查。
+- **后台启动的服务必须验证启动成功。** `start /B` 之后没有健康检查，
+  等于把「进程起没起来」交给运气。
+- **失败信号要交叉验证**：同一份二进制手工复跑通过 ⇒ 先怀疑环境，再怀疑代码；
+  反之先怀疑代码。本条与 L30（静默 -2 被当成 smoke test 通过）**同源**。
+- **门禁自身也要有「防退化」断言**。本次补了两条：
+  1. 客户端先发一个 `ProcessKeyEvent`，断言响应含 `Greeting=`（mock 特征），
+     不含则报「管道被别的进程占用」并以独立错误码 `-6` 退出；
+  2. 套件在起 mock 之前用 `tasklist` 查 `WeaselServer.exe` / `TestWeaselIPC.exe`，
+     发现残留进程就**大声失败**（`goto ipc_done`）而不是继续测错对象。
+- **护栏第一次上线就抓出第二个「没在测你以为的东西」**：mock 的
+  `ProcessKeyEvent` 写的是 `UINT session_id`，基类虚函数是
+  `DWORD session_id`。Windows LLP64 下 `unsigned int` 与
+  `unsigned long` 是**不同类型** ⇒ mock 那条**根本没有 override**
+  （只是新声明了一个同名虚函数把基类藏起来）⇒ 服务端一直调的是基类
+  空实现（`return FALSE`）⇒ 套件里每次都是 `server replies: 0`，
+  **键事件路径从 spec 026 至今从未被真正测过**。
+  判据：**mock 的每个 override 都要写 `override` 关键字**，让编译器
+  直接指出签名不匹配；光靠肉眼比对 `UINT` / `DWORD` 会漏。
+
+**关联**: ADR 0012、L30、清单 T19
+
