@@ -32,6 +32,12 @@
 //   --baseline <file>   known-dead bindings that must not fail the gate
 //   --layout <hex-lcid> activate this keyboard layout (default: 0409 US)
 //   --no-layout         keep the current keyboard layout
+//   --expectations <file>
+//                         pinned verdicts for the scanned yaml files
+//   --selfcheck-mapper  check the shared key name mapper on its own
+//   --selfcheck-recorder <yaml>
+//                         check the capture products; needs --expectations
+//   --dump-recorder     print every accept pattern the capture can build
 //
 // EXIT CODE
 //   0  every binding is reachable (or is an accepted known-dead entry)
@@ -659,6 +665,9 @@ std::string ExpectationsPath;
 std::string LayoutSpec = "00000409";
 bool UseLayout = true;
 bool SelfCheckMapper = false;
+bool SelfCheckRecorder = false;
+bool DumpRecorder = false;
+std::string RecorderFixturePath;
 
 // ---------------------------------------------------------------------------
 // Mapper self-check -- ADR 0011 D1/D4
@@ -1194,6 +1203,205 @@ int RunMapperSelfCheck() {
   return failures;
 }
 
+// ---------------------------------------------------------------------------
+// Recorder fidelity self-check -- ADR 0011 D3, spec 083 T4
+//
+// The capture dialog (FluxingConfigEditor/KeyRecorder.cpp) and the shortcut
+// panel (WeaselServer/ShortcutSettings.cpp) both write an accept pattern
+// into the user's configuration. Two properties have to hold for every
+// pattern they write:
+//   1. it names a chord the front end really sends -- a capture that mints
+//      a dead binding is worse than a capture that refuses;
+//   2. the sample kept in the fixture file is a genuine capture product and
+//      the negative control is not -- a fixture that drifts away from the
+//      implementation is worse than no fixture at all.
+// ---------------------------------------------------------------------------
+
+// Every accept pattern the capture path can build, and the (key code,
+// modifier) pairs it stands for.
+std::map<std::wstring, std::vector<KeyPair> > CollectRecorderProducts() {
+  std::map<std::wstring, std::vector<KeyPair> > products;
+  BYTE state[256];
+  for (int vkey = 0x08; vkey <= 0xFE; ++vkey) {
+    for (int extended = 0; extended <= 1; ++extended) {
+      for (int shift = 0; shift <= 1; ++shift) {
+        for (int ctrl = 0; ctrl <= 1; ++ctrl) {
+          for (int alt = 0; alt <= 1; ++alt) {
+            std::memset(state, 0, sizeof(state));
+            state[vkey] = 0x80;
+            if (shift) {
+              state[VK_SHIFT] = 0x80;
+              state[VK_LSHIFT] = 0x80;
+              state[VK_RSHIFT] = 0x80;
+            }
+            if (ctrl) {
+              state[VK_CONTROL] = 0x80;
+              state[VK_LCONTROL] = 0x80;
+              state[VK_RCONTROL] = 0x80;
+            }
+            if (alt) {
+              state[VK_MENU] = 0x80;
+              state[VK_LMENU] = 0x80;
+              state[VK_RMENU] = 0x80;
+            }
+            LPARAM lp =
+                static_cast<LPARAM>(1) | (static_cast<LPARAM>(extended) << 24);
+            KeyInfo kinfo(lp);
+            // A dead key resolves differently on two consecutive calls, so
+            // the chord it belongs to cannot be pinned down. Skip it, the
+            // same way the mapper self-check does.
+            weasel::KeyEvent first;
+            weasel::KeyEvent second;
+            const bool produced_first =
+                ConvertKeyEvent(static_cast<UINT>(vkey), kinfo, state, first);
+            const bool produced_second =
+                ConvertKeyEvent(static_cast<UINT>(vkey), kinfo, state, second);
+            if (produced_first != produced_second ||
+                (produced_first && (first.keycode != second.keycode ||
+                                    first.mask != second.mask))) {
+              continue;
+            }
+            if (!produced_first)
+              continue;  // the front end sends nothing for this key
+            const fluxing::CapturedAccept cap = fluxing::CaptureAccept(
+                static_cast<UINT>(vkey), kinfo, state, NULL);
+            if (!cap.ok)
+              continue;  // refused on purpose
+            std::vector<KeyPair>& pairs = products[cap.pattern];
+            const KeyPair pair(cap.keycode, cap.modifier);
+            if (std::find(pairs.begin(), pairs.end(), pair) == pairs.end())
+              pairs.push_back(pair);
+          }
+        }
+      }
+    }
+  }
+  return products;
+}
+
+// The narrow spelling of a capture product -- the fixture file uses it.
+bool NarrowProduct(const std::wstring& pattern, std::string* out) {
+  return fluxing::WideToNarrow(pattern, out);
+}
+
+int RunRecorderSelfCheck(const std::string& fixture_path,
+                         const std::string& expectations_path) {
+  int failures = 0;
+  int reported = 0;
+  const int report_limit = 20;
+
+  const std::map<std::wstring, std::vector<KeyPair> > products =
+      CollectRecorderProducts();
+
+  std::set<std::string> product_names;
+  for (std::map<std::wstring, std::vector<KeyPair> >::const_iterator it =
+           products.begin();
+       it != products.end(); ++it) {
+    std::string narrow;
+    if (!NarrowProduct(it->first, &narrow)) {
+      ++failures;
+      if (reported++ < report_limit) {
+        std::printf("RECORDER-FAIL|narrow|%ls\n", it->first.c_str());
+      }
+      continue;
+    }
+    product_names.insert(narrow);
+  }
+
+  // 1. Every chord the capture can record has to be reachable: the front
+  //    end must really send that (key code, modifier) pair. A capture that
+  //    mints a dead binding is the very defect spec 083 was written for.
+  const FrontEndMap frontend = BuildReachable();
+  for (std::map<std::wstring, std::vector<KeyPair> >::const_iterator it =
+           products.begin();
+       it != products.end(); ++it) {
+    for (size_t i = 0; i < it->second.size(); ++i) {
+      const KeyPair& pair = it->second[i];
+      if (frontend.reachable.find(pair) == frontend.reachable.end()) {
+        ++failures;
+        if (reported++ < report_limit) {
+          std::printf("RECORDER-FAIL|unreachable|%ls|0x%04X|0x%04X\n",
+                      it->first.c_str(), pair.first, pair.second);
+        }
+      }
+    }
+  }
+
+  // 2. The fixture has to be a genuine capture product, and the negative
+  //    control has to be one the capture never produces.
+  std::ifstream fixture(fixture_path.c_str(), std::ios::binary);
+  if (!fixture.is_open()) {
+    std::printf("RECORDER-FAIL|fixture|%s|cannot read\n", fixture_path.c_str());
+    return failures + 1;
+  }
+  std::stringstream content;
+  content << fixture.rdbuf();
+  const std::vector<BindingRow> rows =
+      ScanBindings(fixture_path, content.str());
+
+  const ExpectationMap expectations = LoadExpectations(expectations_path);
+  if (expectations.empty()) {
+    std::printf("RECORDER-FAIL|expectations|%s|none read\n",
+                expectations_path.c_str());
+    return failures + 1;
+  }
+
+  int produced = 0;
+  int not_produced = 0;
+  int negative_ok = 0;
+  std::set<std::string> used;
+  for (size_t i = 0; i < rows.size(); ++i) {
+    const BindingRow& row = rows[i];
+    const std::string key = BaseName(row.file) + "|" + row.accept;
+    ExpectationMap::const_iterator e = expectations.find(key);
+    if (e == expectations.end()) {
+      ++failures;
+      if (reported++ < report_limit) {
+        std::printf("RECORDER-FAIL|missing-expectation|%s\n", key.c_str());
+      }
+      continue;
+    }
+    used.insert(key);
+    const bool recorded = product_names.count(row.accept) > 0;
+    if (e->second == "REACHABLE") {
+      if (!recorded) {
+        ++not_produced;
+        ++failures;
+        if (reported++ < report_limit) {
+          std::printf("RECORDER-FAIL|not-produced|%s\n", row.accept.c_str());
+        }
+        continue;
+      }
+      ++produced;
+      continue;
+    }
+    if (recorded) {
+      ++failures;
+      if (reported++ < report_limit) {
+        std::printf("RECORDER-FAIL|negative-produced|%s\n", row.accept.c_str());
+      }
+      continue;
+    }
+    ++negative_ok;
+  }
+  for (ExpectationMap::const_iterator e = expectations.begin();
+       e != expectations.end(); ++e) {
+    if (used.count(e->first))
+      continue;
+    ++failures;
+    if (reported++ < report_limit) {
+      std::printf("RECORDER-FAIL|unused-expectation|%s\n", e->first.c_str());
+    }
+  }
+
+  std::printf(
+      "RECORDER|products=%zu|rows=%d|produced=%d|not_produced=%d|"
+      "negative_ok=%d\n",
+      product_names.size(), static_cast<int>(rows.size()), produced,
+      not_produced, negative_ok);
+  return failures;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -1222,6 +1430,15 @@ int main(int argc, char* argv[]) {
       UseLayout = false;
     } else if (arg == "--selfcheck-mapper") {
       SelfCheckMapper = true;
+    } else if (arg == "--selfcheck-recorder") {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "--selfcheck-recorder needs a file argument\n");
+        return 2;
+      }
+      SelfCheckRecorder = true;
+      RecorderFixturePath = argv[++i];
+    } else if (arg == "--dump-recorder") {
+      DumpRecorder = true;
     } else if (!arg.empty() && arg[0] == '-') {
       std::fprintf(stderr, "unknown option: %s\n", arg.c_str());
       return 2;
@@ -1235,6 +1452,38 @@ int main(int argc, char* argv[]) {
     std::printf("HOTKEY-BINDINGS %s (mapper self-check)\n", kToolVersion);
     const int failures = RunMapperSelfCheck();
     std::printf("MAPPER-SUMMARY|failures=%d\n", failures);
+    std::printf("RESULT|%s\n", failures == 0 ? "PASS" : "FAIL");
+    return failures == 0 ? 0 : 1;
+  }
+
+  if (DumpRecorder) {
+    const std::map<std::wstring, std::vector<KeyPair> > products =
+        CollectRecorderProducts();
+    for (std::map<std::wstring, std::vector<KeyPair> >::const_iterator it =
+             products.begin();
+         it != products.end(); ++it) {
+      if (it->second.empty())
+        continue;
+      std::string narrow;
+      if (!NarrowProduct(it->first, &narrow))
+        continue;
+      std::printf("RECORDER|%s|0x%04X|0x%04X\n", narrow.c_str(),
+                  it->second[0].first, it->second[0].second);
+    }
+    return 0;
+  }
+
+  if (SelfCheckRecorder) {
+    // The recorder self-check stands on its own as well: the fixture file
+    // and the expectation file are its only inputs.
+    if (ExpectationsPath.empty()) {
+      std::fprintf(stderr, "--selfcheck-recorder needs --expectations\n");
+      return 2;
+    }
+    std::printf("HOTKEY-BINDINGS %s (recorder self-check)\n", kToolVersion);
+    const int failures =
+        RunRecorderSelfCheck(RecorderFixturePath, ExpectationsPath);
+    std::printf("RECORDER-SUMMARY|failures=%d\n", failures);
     std::printf("RESULT|%s\n", failures == 0 ? "PASS" : "FAIL");
     return failures == 0 ? 0 : 1;
   }

@@ -154,6 +154,15 @@ rem     with librime's key table and with the front end (ADR 0011 D1/D4) ===
 echo === Running TestHotkeyBindings.exe (mapper self-check) ===
 "Release\TestHotkeyBindings.exe" --selfcheck-mapper < nul
 if !errorlevel! NEQ 0 set "FAIL=1"
+rem === The capture path has to produce the accept patterns the fixture
+rem     pins down, and the sample has to be a genuine capture product
+rem     (spec 083 T4, ADR 0011 D3) ===
+echo === Running TestHotkeyBindings.exe (recorder fixture verdicts) ===
+"Release\TestHotkeyBindings.exe" --expectations "test\TestHotkeyBindings\fixtures\recorder-output.expect.txt" "test\TestHotkeyBindings\fixtures\recorder-output.yaml" < nul
+if !errorlevel! NEQ 0 set "FAIL=1"
+echo === Running TestHotkeyBindings.exe (recorder self-check) ===
+"Release\TestHotkeyBindings.exe" --selfcheck-recorder "test\TestHotkeyBindings\fixtures\recorder-output.yaml" --expectations "test\TestHotkeyBindings\fixtures\recorder-output.expect.txt" < nul
+if !errorlevel! NEQ 0 set "FAIL=1"
 rem === TestWeaselIPC integration test (spec 026) ===
 rem The test exe has 3 modes: /start (spawn server in background), no-arg (client),
 rem /stop (shutdown server). We must spawn /start first, give the named pipe time

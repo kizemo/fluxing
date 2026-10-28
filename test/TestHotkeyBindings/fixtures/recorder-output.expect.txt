@@ -1,0 +1,35 @@
+# Expected verdicts for fixtures/recorder-output.yaml
+#
+# Format:  <file-name>|<accept>|<expected-verdict>
+#
+# Every pattern listed here is a real product of the capture path, so each
+# one has to be REACHABLE: the front end sends exactly that (keycode,
+# modifier) pair. The one exception is the negative control, which the
+# capture can never build and the front end can never send.
+#
+# The recorder self-check (--selfcheck-recorder) reads this file as well:
+# a REACHABLE entry has to be producible by the capture, and a non
+# REACHABLE entry must not be. That is what keeps the sample from drifting
+# into a decorative list of strings.
+
+recorder-output.yaml|a|REACHABLE
+recorder-output.yaml|Shift+A|REACHABLE
+recorder-output.yaml|Control+1|REACHABLE
+recorder-output.yaml|Alt+comma|REACHABLE
+recorder-output.yaml|Alt+period|REACHABLE
+recorder-output.yaml|Shift+Control+F|REACHABLE
+recorder-output.yaml|Shift+Alt+F|REACHABLE
+recorder-output.yaml|Shift+plus|REACHABLE
+recorder-output.yaml|space|REACHABLE
+recorder-output.yaml|Shift+space|REACHABLE
+recorder-output.yaml|Control+space|REACHABLE
+recorder-output.yaml|Return|REACHABLE
+recorder-output.yaml|Control+Return|REACHABLE
+recorder-output.yaml|F1|REACHABLE
+recorder-output.yaml|Control+F5|REACHABLE
+recorder-output.yaml|Shift+Control+numbersign|REACHABLE
+recorder-output.yaml|comma|REACHABLE
+recorder-output.yaml|Tab|REACHABLE
+recorder-output.yaml|Shift+Tab|REACHABLE
+recorder-output.yaml|grave|REACHABLE
+recorder-output.yaml|Control+Shift+9|DEAD_KEYCODE

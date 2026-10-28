@@ -1,0 +1,48 @@
+# Recorder output samples for TestHotkeyBindings.
+#
+# Every accept pattern below is a genuine product of the capture path:
+# FluxingConfigEditor/KeyRecorder.cpp and WeaselServer/ShortcutSettings.cpp
+# both write what fluxing::CaptureAccept returns. The companion file
+# recorder-output.expect.txt pins the verdict each one has to produce.
+#
+# The gate checks this fixture twice:
+#   1. with --expectations it proves the front end really sends every
+#      pattern below, and that the negative control really is dead;
+#   2. with --selfcheck-recorder it proves the sample is still a genuine
+#      capture product -- a pattern the capture cannot build, or a capture
+#      product the front end can never send, fails the run.
+#
+# The spelling is the capture's own. librime's modifier order is
+# Shift -> Control -> Alt, so a two modifier chord reads "Shift+Control+F"
+# and the shifted plus key reads "Shift+plus", never "Shift+equal".
+#
+# This file lives outside output/data/ on purpose: it must never be
+# deployed to a real user profile.
+
+key_binder:
+  bindings:
+    - { when: always, accept: a, send: "x" }
+    - { when: always, accept: Shift+A, send: "x" }
+    - { when: always, accept: Control+1, send: "x" }
+    - { when: always, accept: Alt+comma, send: "x" }
+    - { when: always, accept: Alt+period, send: "x" }
+    - { when: always, accept: Shift+Control+F, send: "x" }
+    - { when: always, accept: Shift+Alt+F, send: "x" }
+    - { when: always, accept: Shift+plus, send: "x" }
+    - { when: always, accept: space, send: "x" }
+    - { when: always, accept: Shift+space, send: "x" }
+    - { when: always, accept: Control+space, send: "x" }
+    - { when: always, accept: Return, send: "x" }
+    - { when: always, accept: Control+Return, send: "x" }
+    - { when: always, accept: F1, send: "x" }
+    - { when: always, accept: Control+F5, send: "x" }
+    - { when: always, accept: Shift+Control+numbersign, send: "x" }
+    - { when: always, accept: comma, send: "x" }
+    - { when: always, accept: Tab, send: "x" }
+    - { when: always, accept: Shift+Tab, send: "x" }
+    - { when: always, accept: grave, send: "x" }
+
+    # --- negative control: the front end sends the character,
+    #     not the key, so this chord can never fire. The
+    #     capture never produces it either.
+    - { when: always, accept: Control+Shift+9, send: "x" }
