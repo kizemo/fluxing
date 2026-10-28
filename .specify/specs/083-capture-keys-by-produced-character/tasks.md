@@ -4,7 +4,8 @@
 > `[x]` = 已完成；`[ ]` = 下一阶段待办。
 >
 > 进度（2026-10-28）：**M0（调查与决策）+ M1（共享单元）+ M2（抓键改造）
-> + M3（第二条路径）+ M4（抓键产物专项）+ M5（门禁复跑）已完成**；**M6 全部待做**。
+> + M3（第二条路径）+ M4（抓键产物专项）+ M5（门禁复跑）+ M6（打包）已完成**；
+> M6 只剩**实机验收（T6.3）**与**ADR 0011 转正（T6.4）**，二者都要用户真机按键。
 > 决策见 [ADR 0011](../../../docs/adr/0011-capture-keys-by-produced-character.md)（`Proposed`）。
 
 ## M0 · 调查与决策
@@ -151,13 +152,25 @@
 > **顺带查出一条既有遗留**：装器载荷里带着**陈旧的** `data\build\*.schema.yaml`
 > （还是 ADR 0009 之前的 8 条死绑定）。它不参与本轮判定（用户目录由 librime 重新部署时重编），
 > 但属于「装器多带了一份可能误导的编译产物」，留给后续打包里程碑处理。
+> → **已在 M6 处理**：装器载荷的 `data\build\` 全部重编，死绑定 2 → 0，见 M6 段。
 
 ## M6 · 打包与实机验收
 
-- [ ] T6.1 版本号升 `0.21.0.10`（`env.bat`，gitignored）
-- [ ] T6.2 `build.bat weasel installer` ⇒ `output\archives\fluxing-0.21.0.10-installer.exe`
-- [ ] T6.3 交用户实机验收（抓键可用性 + 原有快捷键不回归）
-- [ ] T6.4 实测通过后 ADR 0011 `Proposed` → `Accepted`
+- [x] T6.1 版本号 = `1.0.0`（`env.bat`，gitignored，`RELEASE_BUILD=1`）
+  —— 原计划的 `0.21.0.10` 已被 1.0.0 阶段取代（ADR 0012 对外 3 段化）
+- [x] T6.2 `build.bat weasel installer` ⇒ `output\archives\fluxing-1.0.0-installer.exe`
+  （42,756,263 B, SHA256 F040D989872FB8D135917B9416E40DE4D3010002EB669EF43AA98544A8344A8A）
+- [x] T6.2b **装器载荷的 `data\build\` 全量重编**（本里程碑新开的遗留项）
+  ⇒ 载荷里不再有 ADR 0009 之前的陈旧 `default.yaml`（死绑定 2 → 0）
+- [ ] T6.3 交用户实机验收（抓键可用性 + 原有快捷键不回归）—— ⏳ 等用户
+- [ ] T6.4 实测通过后 ADR 0011 `Proposed` → `Accepted`—— ⏳ 等 T6.3
+
+> **M6 本机实跑数字**：装器载荷 `data\build\` 29 个文件与工作区**逐一 SHA256 全 MATCH**；
+> 载荷 `data\build\*.yaml` 门禁 `bindings=325|reachable=325|dead=0` + `RESULT|PASS`；
+> 载荷 `data\*.yaml` + `user-custom` 门禁 `bindings=40|reachable=40|dead=0` + `RESULT|PASS`；
+> 7 个二进制（`weasel.dll` / `weaselx64.dll` / `WeaselServer.exe` / `WeaselDeployer.exe` /
+> `WeaselSetup.exe` / `rime.dll` / `FluxingPhrasesDialog.exe`）与工作区产物**全 MATCH**。
+> 旧包留档：`fluxing-1.0.0-installer.pre-m4.exe`（42,748,195 B, SHA256 B1C17AB840948374F95571E79A5ECF8CB5BBC556CFF07BE3440EED572EA0808F），可回滚。
 
 ## T20 联动（CapsLock 疑点）
 

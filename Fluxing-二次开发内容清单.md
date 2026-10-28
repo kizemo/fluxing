@@ -193,7 +193,7 @@
 | 编号 | 内容 | 优先级 | 阻塞/依赖 | 验收方式 |
 |---|---|---|---|---|
 | T1 | **裸 Shift 切换中英文**（ADR 0010） | P0 | 无 | `TestShiftIPCStateMachine` 扩展 + 真机按键 | ✅ **已完成**（2026-10-27，见 §2 C8） |
-| T2 | 设置界面抓键路径 **layout-aware 改造**（现在用虚拟键码拼 `accept:`，能造出 `Control+Shift+9` 这类死绑定） | P0 | 无 | 门禁 + 界面生成绑定全部可触发。🟡 **已定稿**（ADR 0011 `Proposed` + spec 083，2026-10-28）：死绑定已用门禁对照实验坐实（`Control+Shift+9` ⇒ `DEAD_KEYCODE`，前端实际发 `0x0028`）；**M1 共享键名单元已落地**（2026-10-28，`include/KeyNameMapper.h` + 门禁 `--selfcheck-mapper`，见 §4.1.1）；**M2 抓键改造已落地**（2026-10-28，`fluxing::CaptureAccept` + 对话框改吃共享单元，见 §4.1.2）；**M3 第二条路径已落地**（2026-10-28，`WeaselServer/ShortcutSettings.cpp` 切共享单元 + 冲突检测改语义比较，见 §4.1.3）；**M4 已落地**（2026-10-28，抓键产物专项 fixture + 门禁保真模式 `--selfcheck-recorder`，见 §4.1.4）；**M5–M6 待做** |
+| T2 | 设置界面抓键路径 **layout-aware 改造**（现在用虚拟键码拼 `accept:`，能造出 `Control+Shift+9` 这类死绑定） | P0 | 无 | 门禁 + 界面生成绑定全部可触发。🟡 **已定稿**（ADR 0011 `Proposed` + spec 083，2026-10-28）：死绑定已用门禁对照实验坐实（`Control+Shift+9` ⇒ `DEAD_KEYCODE`，前端实际发 `0x0028`）；**M1 共享键名单元已落地**（2026-10-28，`include/KeyNameMapper.h` + 门禁 `--selfcheck-mapper`，见 §4.1.1）；**M2 抓键改造已落地**（2026-10-28，`fluxing::CaptureAccept` + 对话框改吃共享单元，见 §4.1.2）；**M3 第二条路径已落地**（2026-10-28，`WeaselServer/ShortcutSettings.cpp` 切共享单元 + 冲突检测改语义比较，见 §4.1.3）；**M4 已落地**（2026-10-28，抓键产物专项 fixture + 门禁保真模式 `--selfcheck-recorder`，见 §4.1.4）；**M5 已完成**；**M6 已落地**（2026-10-28，装器载荷 `data\build\` 全量重编 + 新装包，见 §4.1.5）|
 | T3 | yaml 设置 UI：样式页 / 方案页 / 用户词典页 | P1 | T2 | 界面改动后 `bindings` 数与门禁一致 |
 | T4 | QuickPanel v4 / v3-rev3 / 长显模式收口 | P2 | 无 | 截图 + 沙箱断言 |
 | T5 | FluxingComponents 动画 + Fluent Token 收敛 | P2 | 无 | 视觉回归 |
@@ -212,7 +212,7 @@ spec 083 的 **M1（共享单元 `include/KeyNameMapper.h`）** 与 **M5（门�
 
 两条坐实的事实：**librime 键表只有大写 A–Z** ⇒ `Control+a` 解析不了（F1 坐实）；
 **修饰键本身不能构成 `accept:`**，必须拒绝而不是改写（D6）。
-**M2 已完成**（见 §4.1.2）；**M3 已完成**（见 §4.1.3）；**M4 已完成**（见 §4.1.4）；**M5–M6 待做**（M6 打包与实机验收；M5 门禁复跑随每个里程碑重跑一遍）。
+**M2 已完成**（见 §4.1.2）；**M3 已完成**（见 §4.1.3）；**M4 已完成**（见 §4.1.4）；**M5 已完成**（门禁复跑随每个里程碑重跑一遍）；**M6 已完成**（见 §4.1.5；只剩实机验收 T6.3 与 ADR 0011 转正 T6.4，二者都要用户真机按键）。
 
 ### 4.1.2 T2 · M2 里程碑（2026-10-28 已完成，ADR 0011 D1/D3/D6）
 
@@ -265,6 +265,22 @@ spec 083 的 **M4（抓键产物专项）** 已完成：
 **门禁数字**：`RECORDER|products=850|rows=21|produced=20|not_produced=0|negative_ok=1`；`RECORDER-SUMMARY|failures=0`；fixture 判定 `bindings=21|reachable=20|dead=1|mismatches=0|unused=0`；源门禁 `bindings=39|reachable=39|dead=0`。
 
 **未决依赖**：修饰键仍**不输出 Lock** —— CapsLock 维度属清单 **T20**（ADR 0011 Q2），必须先实测再定。
+
+### 4.1.5 T2 · M6 里程碑（2026-10-28 已完成，ADR 0011 D3）
+
+spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，并把「装器多带了一份陈旧编译产物」这条遗留一起清掉：
+
+| 项 | 落点 | 状态 |
+|---|---|---|
+| 版本号 | `env.bat`：`FLUXING_VERSION=1.0.0` / `RELEASE_BUILD=1`（gitignored；原计划的 `0.21.0.10` 已被 ADR 0012 的 3 段化取代） | ✅ |
+| 装包 | `build.bat weasel installer` ⇒ `output\archives\fluxing-1.0.0-installer.exe`（42,756,263 B, SHA256 F040D989872FB8D135917B9416E40DE4D3010002EB669EF43AA98544A8344A8A） | ✅ |
+| 载荷重编 | 装器载荷 `data\build\` **29 个文件全量重编**（`rime_deployer --build` 从当前 `output\data` 源重编）：陈旧 `default.yaml` 的 2 条死绑定 ⇒ **0** | ✅ |
+| 产物复跑 | 载荷 `data\build\*.yaml` 门禁 `325/325/0` PASS；载荷 `data\*.yaml` + `user-custom` 门禁 `40/40/0` PASS；29 个载荷文件与工作区 SHA256 **全 MATCH**；7 个二进制 **全 MATCH** | ✅ |
+| 可回滚 | 旧包装档为 `fluxing-1.0.0-installer.pre-m4.exe`（SHA256 `B1C17AB8…0808F`） | ✅ |
+| 实机验收 | T6.3 交用户按键验收 | ⏳ 等用户 |
+| ADR 转正 | T6.4 实测通过后 ADR 0011 `Proposed` → `Accepted` | ⏳ 等 T6.3 |
+
+**为什么必须重编而不是删掉**：装器 `output\install.nsi` 用 `File "data\build\*.bin"` / `File "data\build\*.yaml"` 收录预编译产物，**两条都不是 `/nonfatal`** ⇒ 目录空了 NSIS 直接 abort，不能靠删除规避。
 
 ### 4.2 规划中，未开工
 

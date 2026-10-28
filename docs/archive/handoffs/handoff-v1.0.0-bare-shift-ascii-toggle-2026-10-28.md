@@ -1,9 +1,9 @@
-# 接力交接：Fluxing 1.0.0 — 裸 Shift 的 3 个缺陷已修并推送；T2 · M1 共享单元 + M2 抓键改造 + M3 第二条路径 + M4 抓键产物专项已落地，M5–M6 待做
+# 接力交接：Fluxing 1.0.0 — 裸 Shift 的 3 个缺陷已修并推送；T2 · M1 共享单元 + M2 抓键改造 + M3 第二条路径 + M4 抓键产物专项 + M6 打包已落地；只剩实机验收 / ADR 转正 / T20 实测
 
 > 本文件是**给下一个会话读的完整上下文**。下一个会话的 prompt 只负责指路，不重复本文件内容。
 > 生成时间：2026-10-28（会话 `mvs_54823d93f0e0466f87ec8986862896dd`）
 > 仓库：`F:\soft\00selfmade\rime_claude`（远端 `kizemo/Fluxing`，**不是 origin**）
-> **最新功能提交 = `9e07743`**（T2 · M4 抓键产物专项 fixture + 门禁保真模式；本卡自身的 docs 提交紧跟其后），本地与远端已同步（工作区只剩 ` m librime`，是子模块构建产物，**不可 git add**）
+> **最新功能提交 = `9e07743`**（T2 · M4 抓键产物专项 fixture + 门禁保真模式；M6 无产品代码改动，改的是**装器载荷与交付物**），本卡自身的 docs 提交紧跟其后。本地与远端已同步（工作区只剩 ` m librime`，是子模块构建产物，**不可 git add**）
 
 ---
 
@@ -12,7 +12,7 @@
 1.0.0（用户实测反馈的 3 个缺陷修复 + 版本号 3 段化）**代码已全绿、安装包已出、已推送 `kizemo/Fluxing`**；
 **沙箱权威门禁在本机跑不起来**（环境故障），**真机按键验收只有人能做**；
 **T2（设置界面抓键 layout-aware 改造，ADR 0011 `Proposed` + spec 083）的 M1（共享键名单元 `include/KeyNameMapper.h`）、M2（抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`）、
-**M3（第二条路径 `WeaselServer/ShortcutSettings.cpp`）、M4（抓键产物专项 fixture + 门禁保真模式）已落地并推送**，M5–M6 待做；
+**M3（第二条路径 `WeaselServer/ShortcutSettings.cpp`）、M4（抓键产物专项 fixture + 门禁保真模式）、M6（打包：装器载荷 `data\build\` 全量重编 + 新装包）已落地并推送**，只剩实机验收与 ADR 转正；
 下一阶段仍是 T2，其中夹着
 **必须先实测再修**的疑点 **T20（CapsLock 打开时快捷键疑似全部失配）**。
 
@@ -106,7 +106,7 @@
 | 项 | 状态 | 说明 |
 |---|---|---|
 | **真机按键验收** | ⏳ 等用户 | 8 条清单见 §3.1。**只有人能做**，代码侧已全绿 |
-| **清单 T2**（设置界面抓键路径 layout-aware 改造） | 🟡 **M1 + M2 + M3 + M4 已完成，M5–M6 待做** | ADR 0011（`Proposed`）+ spec 083（R1–R7 / plan M1–M6 / tasks）。M1 = 共享键名单元 `include/KeyNameMapper.h`（D1/D6），已提交 `3dd2b06`；M2 = 抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`（D1/D3/D6），已提交 `7e2f4be`；M3 = 第二条路径 `WeaselServer/ShortcutSettings.cpp`（D1/D3），已提交 `2784ace`；M4 = 抓键产物专项 fixture + 门禁保真模式 `--selfcheck-recorder`（D3），已提交 `9e07743`；方案要点见 §3.2，M1 记录见 §9，M2 记录见 §10，M3 记录见 §11，M4 记录见 §12 |
+| **清单 T2**（设置界面抓键路径 layout-aware 改造） | 🟡 **M1 + M2 + M3 + M4 + M6 已完成，只剩实机验收** | ADR 0011（`Proposed`）+ spec 083（R1–R7 / plan M1–M6 / tasks）。M1 = 共享键名单元 `include/KeyNameMapper.h`（D1/D6），已提交 `3dd2b06`；M2 = 抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`（D1/D3/D6），已提交 `7e2f4be`；M3 = 第二条路径 `WeaselServer/ShortcutSettings.cpp`（D1/D3），已提交 `2784ace`；M4 = 抓键产物专项 fixture + 门禁保真模式 `--selfcheck-recorder`（D3），已提交 `9e07743`；M6 = 打包（装器载荷 `data\build\` 全量重编 + 新装包 `fluxing-1.0.0-installer.exe`）；方案要点见 §3.2，M1 记录见 §9，M2 记录见 §10，M3 记录见 §11，M4 记录见 §12，M6 记录见 §13 |
 | **清单 T20**（CapsLock 打开时快捷键疑似全部失配） | ⚠️ **疑点，未实测** | **必须先测量再决定怎么修**（ADR 0011 Q2），见 §3.3 |
 | **清单 T19**（沙箱权威门禁本机跑不起来） | ⚠️ 环境故障 | 见 §4.1；**不阻塞提交** |
 | **清单 T3/T4/T5** | ⏸ 未开工 | 见清单 §4.1 表格 |
@@ -365,11 +365,12 @@ gh run view <run-id> --json status,jobs
 ## 8. 用户当前待办
 
 - 装 `F:\soft\00selfmade\rime_claude\output\archives\fluxing-1.0.0-installer.exe`
-  （42,748,195 B，SHA256 `B1C17AB840948374F95571E79A5ECF8CB5BBC556CFF07BE3440EED572EA0808F`）
+  （**M6 新包**：42,756,263 B, SHA256 F040D989872FB8D135917B9416E40DE4D3010002EB669EF43AA98544A8344A8A；
+  上一版留档 `fluxing-1.0.0-installer.pre-m4.exe`，42,748,195 B, SHA256 B1C17AB840948374F95571E79A5ECF8CB5BBC556CFF07BE3440EED572EA0808F）
 - 按 §3.1 八条做真机按键验收
 - 装完顺手把共享 `data/` 目录升级到 1.0.0（清单 T17）
 - **顺带可帮下个会话的忙**：开着 CapsLock 按一下已配置的快捷键，看是否真的不触发（清单 T20 / ADR 0011 Q2 的实测输入）
-- **T2 下一步 = M4**：抓键产物专项 fixture + 负控（spec 083 M4，见 §11.6）；M6 打包前还要清装器载荷里陈旧的 `data\build\`（见 §9.5）
+- **T2 只剩验收**：M6 已打包（见 §13），等真机按键结果再把 ADR 0011 `Proposed` → `Accepted`（T6.4）
 
 ---
 
@@ -633,6 +634,50 @@ gh run view <run-id> --json status,jobs
 
 ### 12.5 下一步
 
-- **M6**：打包（含 §9.5 的 `data\build\` 清理）+ 实机验收
-  ⇒ ADR 0011 `Proposed` → `Accepted`。
+- **M6**：已完成打包（见 §13）；剩下实机验收 ⇒ ADR 0011 `Proposed` → `Accepted`。
+- **T20** 仍未实测，是 ADR 0011 Q2 的必需输入。
+
+---
+
+## 13. T2 · M6 里程碑（2026-10-28 已完成 · ADR 0011 D3）
+
+> 最新功能提交仍是 `9e07743` —— M6 没有产品代码改动，改的是**装器载荷**与**交付物**。
+
+### 13.1 做了什么
+
+| 项 | 落点 | 状态 |
+|---|---|---|
+| 版本号 | `env.bat`：`FLUXING_VERSION=1.0.0` / `WEASEL_BUILD=0` / `RELEASE_BUILD=1`（gitignored） | ✅ |
+| 装包 | `build.bat weasel installer` ⇒ `output\archives\fluxing-1.0.0-installer.exe` | ✅ |
+| 载荷重编 | 装器载荷 `data\build\` **29 个文件全量重编**（§9.5 那条遗留） | ✅ |
+| 产物复跑 | 门禁指向**解包后的载荷**再跑一遍 | ✅ |
+
+### 13.2 §9.5 那条遗留是怎么处理的（记住这条）
+
+`output\install.nsi` 用 `File "data\build\*.bin"` + `File "data\build\*.yaml"` 收录预编译产物，
+**两条都不是 `/nonfatal`** ⇒ `data\build\` 空了 NSIS 直接 abort。
+所以**不能靠删目录规避**，只能**重编**：用 `rime_deployer --build <共享目录> <用户目录>`
+（注意**第一个参数才是共享目录**；传反会编译空目录、26 秒就"成功"）从当前 `output\data` 重编，
+再把新的 `build\` 拷回工作区。
+
+重编前后对照：载荷 `data\build\default.yaml` 里的死绑定
+`Control+Shift+9` / `Control+Shift+0` 从 **各 1 处 ⇒ 各 0 处**（这两条 ADR 0009 就删了，
+但 2026-06-30 编译的旧产物一直没重编，装器一直在带）。
+
+### 13.3 门禁与验收数字（本机实跑，可复现）
+
+- 新装包：42,756,263 B, SHA256 F040D989872FB8D135917B9416E40DE4D3010002EB669EF43AA98544A8344A8A。
+- 旧包装档：`fluxing-1.0.0-installer.pre-m4.exe`，42,748,195 B, SHA256 B1C17AB840948374F95571E79A5ECF8CB5BBC556CFF07BE3440EED572EA0808F。
+- 载荷 `data\build\`：29 个文件，与工作区**逐一 SHA256 全 MATCH**，无残留陈旧文件。
+- 载荷门禁：`data\build\*.yaml` ⇒ `bindings=325|reachable=325|dead=0` + `RESULT|PASS`；
+  `data\*.yaml` + `user-custom\*.custom.yaml` ⇒ `bindings=40|reachable=40|dead=0` + `RESULT|PASS`。
+- 7 个二进制与工作区产物**全 MATCH**：`weasel.dll` / `weaselx64.dll` / `WeaselServer.exe` /
+  `WeaselDeployer.exe` / `WeaselSetup.exe` / `rime.dll` / `FluxingPhrasesDialog.exe`。
+- NSIS 8 条 7010 警告（ARM/ARM64 文件缺失 + `data\*.gram` / `data\lua\*.txt` 缺失）
+  —— **与上一版同源**，非本次引入。
+
+### 13.4 下一步
+
+- **T6.3 真机按键验收**（§3.1 八条）：抓键可用性 + 原有快捷键不回归。
+- **T6.4** 实测通过后 ADR 0011 `Proposed` → `Accepted`。
 - **T20** 仍未实测，是 ADR 0011 Q2 的必需输入。

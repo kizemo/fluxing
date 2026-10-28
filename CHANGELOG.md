@@ -19,6 +19,10 @@
   并给出中文原因。
 - 冲突检测改成**语义比较**：内置表写的 `Control+Shift+F` 与新抓到的
   `Shift+Control+F` 现在能正确判成同一个键。
+- **安装包载荷重编**：装器预置的 `data\build\` 是 2026-06-30 的旧编译产物，
+  里面还留着 ADR 0009 早就删掉的两条**永远触发不了**的死绑定
+  （`Control+Shift+9` / `Control+Shift+0`）。现已按当前配置全量重编，
+  装上后不再带着误导性的死绑定。
 
 ### refactor(fluxing): 抓键路径改吃共享单元 `include/KeyNameMapper.h`（ADR 0011 D1/D3/D6）
 
