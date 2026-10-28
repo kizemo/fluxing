@@ -193,7 +193,7 @@
 | 编号 | 内容 | 优先级 | 阻塞/依赖 | 验收方式 |
 |---|---|---|---|---|
 | T1 | **裸 Shift 切换中英文**（ADR 0010） | P0 | 无 | `TestShiftIPCStateMachine` 扩展 + 真机按键 | ✅ **已完成**（2026-10-27，见 §2 C8） |
-| T2 | 设置界面抓键路径 **layout-aware 改造**（现在用虚拟键码拼 `accept:`，能造出 `Control+Shift+9` 这类死绑定） | P0 | 无 | 门禁 + 界面生成绑定全部可触发。🟡 **已定稿**（ADR 0011 `Proposed` + spec 083，2026-10-28）：死绑定已用门禁对照实验坐实（`Control+Shift+9` ⇒ `DEAD_KEYCODE`，前端实际发 `0x0028`）；**M1 共享键名单元已落地**（2026-10-28，`include/KeyNameMapper.h` + 门禁 `--selfcheck-mapper`，见 §4.1.1）；**M2 抓键改造已落地**（2026-10-28，`fluxing::CaptureAccept` + 对话框改吃共享单元，见 §4.1.2）；**M3–M6 实现待做** |
+| T2 | 设置界面抓键路径 **layout-aware 改造**（现在用虚拟键码拼 `accept:`，能造出 `Control+Shift+9` 这类死绑定） | P0 | 无 | 门禁 + 界面生成绑定全部可触发。🟡 **已定稿**（ADR 0011 `Proposed` + spec 083，2026-10-28）：死绑定已用门禁对照实验坐实（`Control+Shift+9` ⇒ `DEAD_KEYCODE`，前端实际发 `0x0028`）；**M1 共享键名单元已落地**（2026-10-28，`include/KeyNameMapper.h` + 门禁 `--selfcheck-mapper`，见 §4.1.1）；**M2 抓键改造已落地**（2026-10-28，`fluxing::CaptureAccept` + 对话框改吃共享单元，见 §4.1.2）；**M3 第二条路径已落地**（2026-10-28，`WeaselServer/ShortcutSettings.cpp` 切共享单元 + 冲突检测改语义比较，见 §4.1.3）；**M4–M6 实现待做** |
 | T3 | yaml 设置 UI：样式页 / 方案页 / 用户词典页 | P1 | T2 | 界面改动后 `bindings` 数与门禁一致 |
 | T4 | QuickPanel v4 / v3-rev3 / 长显模式收口 | P2 | 无 | 截图 + 沙箱断言 |
 | T5 | FluxingComponents 动画 + Fluent Token 收敛 | P2 | 无 | 视觉回归 |
@@ -212,7 +212,7 @@ spec 083 的 **M1（共享单元 `include/KeyNameMapper.h`）** 与 **M5（门�
 
 两条坐实的事实：**librime 键表只有大写 A–Z** ⇒ `Control+a` 解析不了（F1 坐实）；
 **修饰键本身不能构成 `accept:`**，必须拒绝而不是改写（D6）。
-**M2 已完成**（见 §4.1.2）；**M3–M6 待做**（M3 第二条路径、M4 专项 fixture、M6 打包与实机验收）。
+**M2 已完成**（见 §4.1.2）；**M3 已完成**（见 §4.1.3）；**M4–M6 待做**（M4 专项 fixture、M6 打包与实机验收；M5 门禁复跑随每个里程碑重跑一遍）。
 
 ### 4.1.2 T2 · M2 里程碑（2026-10-28 已完成，ADR 0011 D1/D3/D6）
 
@@ -230,6 +230,25 @@ spec 083 的 **M2（抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`）** 已�
 
 **未决依赖**：修饰键只输出 **Shift / Control / Alt**、**不输出 Lock** —— CapsLock 维度
 属清单 **T20**（ADR 0011 Q2），必须先实测再定，本里程碑不预判。
+
+### 4.1.3 T2 · M3 里程碑（2026-10-28 已完成，ADR 0011 D1/D3）
+
+spec 083 的 **M3（第二条路径 `WeaselServer/ShortcutSettings.cpp`）** 已完成：
+
+| 项 | 落点 | 状态 |
+|---|---|---|
+| 第二条路径 | `WeaselServer/ShortcutSettings.cpp`：删掉自造的 `VKeyToName` / `NormalizeCombo`，改调 `fluxing::CaptureAccept()`；低阶钩子用 `KBDLLHOOKSTRUCT` 造 `BYTE[256]` 快照，`KeyInfo` 由 `scanCode<<16 \| LLKHF_EXTENDED` 构造 | ✅ |
+| 内置表 | **一个字没动**（T3.3）：`Control+Shift+F` 保持原样 | ✅ |
+| 冲突检测 | `CheckConflict()` 两处字符串精确比较 → **语义比较** `fluxing::AcceptEquals()`（keycode + modifier 掩码） | ✅ |
+| 拒绝文案 | 共享单元新增 `fluxing::AcceptErrorMessage()`，两条路径共用同一套中文文案（宪法 P2） | ✅ |
+| 用户可见 | 抓到的组合键实时显示在 popover + 面板状态行；**拒绝时清空 pending chord** 并说明原因 | ✅ |
+| 门禁 | `--selfcheck-mapper` 新增第 8 类「第二路径语义一致性」（14 条内置表用例 + `equal` / `Shift+plus` 矛盾用例），输出 `MAPPER\|builtin_equivalents=15` | ✅ |
+
+**顺带消掉的三处漂移**：`Shift`+`=` 从「永远写 `equal`（永不触发）」改成 `Shift+plus`；`Ctrl`+小写字母从「写出 librime 解析不了的名字（死绑定）」改成**拒绝**；`Super+`（Win）从「写出伪绑定」改成**拒绝**。
+
+**门禁复跑（M5）**：源门禁 `bindings=39|reachable=39|dead=0`；部署产物重编 12 个 schema 后 `bindings=337|reachable=337|dead=0`；`MAPPER-SUMMARY|failures=0`；全套件 `ALL TESTS PASSED`；整解 Release/Win32 编译 exit 0。
+
+**未决依赖**：修饰键仍**不输出 Lock** —— CapsLock 维度属清单 **T20**（ADR 0011 Q2），必须先实测再定。
 
 ### 4.2 规划中，未开工
 
@@ -352,7 +371,7 @@ spec 083 的 **M2（抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`）** 已�
 
 **真正的「设计已完成、代码未开始」**：spec 010（云同步）、spec 011（首启引导）、
 spec 050（yaml 编辑器剩余页）、spec 052（长显）、spec 070（v3-rev3）、
-spec 083（抓键 layout-aware 改造，ADR 0011 已定稿、代码未开始）。
+spec 083（抓键 layout-aware 改造，ADR 0011 已定稿；M1 / M2 / M3 已落地，M4 / M6 待做）。
 
 ---
 

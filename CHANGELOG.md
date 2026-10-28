@@ -10,6 +10,15 @@
 - 抓键遇到 `Ctrl` + **小写字母**时提示「该组合键无法表达，请按住 Shift 再试」
   （librime 的键表只有大写 `A–Z`，小写字母带修饰键无法表达）。
 - 抓键对话框的占位提示由乱码「亟慑组合键...」修正为「请按组合键...」。
+- 设置界面**快捷键面板**的抓键（第二条路径）与对话框抓键现在走**同一套规则**：
+  抓到的组合键按「实际打出来的字符」记录，产出 librime 真能匹配的 `accept:` 串。
+- 修掉三处「抓到了但永远不触发」的漂移：`Shift`+`=` 从 `equal`（**永不触发**）
+  改成 `Shift+plus`；`Ctrl`+**小写字母**从死绑定改成**拒绝**并提示；
+  `Win` 键从伪绑定 `Super+` 改成**拒绝**并提示。
+- 抓到的组合键实时显示在面板 popover 与状态行；**拒绝时清空**已抓到的组合键
+  并给出中文原因。
+- 冲突检测改成**语义比较**：内置表写的 `Control+Shift+F` 与新抓到的
+  `Shift+Control+F` 现在能正确判成同一个键。
 
 ### refactor(fluxing): 抓键路径改吃共享单元 `include/KeyNameMapper.h`（ADR 0011 D1/D3/D6）
 
@@ -31,6 +40,27 @@
 
 - 详见 **ADR 0011**（`docs/adr/0011-capture-keys-by-produced-character.md`，`Proposed`；
   实机验收通过后才转 `Accepted`）与 spec 083。
+
+### refactor(fluxing): 第二条抓键路径切共享单元 `include/KeyNameMapper.h`（ADR 0011 D1/D3）
+
+**User-visible**:
+
+- 设置界面**快捷键面板**的抓键（第二条路径）与对话框抓键现在走**同一套规则**，
+  产出 librime 真能匹配的 `accept:` 串。
+- 修掉三处「抓到了但永远不触发」的漂移（`Shift`+`=` / `Ctrl`+小写字母 / `Win` 键）。
+- 抓到的组合键实时显示在 popover + 面板状态行；拒绝时清空并给出中文原因。
+- 冲突检测改成**语义比较**（`Control+Shift+F` ≡ `Shift+Control+F`）。
+
+**验收**:
+
+- 门禁自检 `Release\TestHotkeyBindings.exe --selfcheck-mapper`：`MAPPER|builtin_equivalents=15`、`MAPPER-SUMMARY|failures=0`、`RESULT|PASS`
+- 源门禁：`SUMMARY|bindings=39|reachable=39|dead=0|known_dead=0|known_dead_keys=0|expectations=0|mismatches=0|unused=0`、`RESULT|PASS`
+- 部署产物复跑（装器载荷重编 12 个 schema）：`SUMMARY|bindings=337|reachable=337|dead=0|...`、`RESULT|PASS`
+- 全套件 `scripts/test-infra/run-test-suite.bat`：`=== ALL TESTS PASSED ===`（exit 0）
+- 完整解决方案 Release/Win32 编译 exit 0
+- clang-format 19.1.5 整文件 `--dry-run --Werror`：5 个改动文件全部干净
+
+- 详见 **ADR 0011** 与 spec 083（里程碑 M3）。
 
 ## [1.0.0] - 2026-10-28
 

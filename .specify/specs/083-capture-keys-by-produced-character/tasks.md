@@ -3,8 +3,8 @@
 > 勾选框与 [plan.md](plan.md) 的任务编号一一对应。
 > `[x]` = 已完成；`[ ]` = 下一阶段待办。
 >
-> 进度（2026-10-28）：**M0（调查与决策）+ M1（共享单元）+ M2（抓键改造）+ M5（门禁复跑）已完成**；
-> **M3、M4、M6 全部待做**。
+> 进度（2026-10-28）：**M0（调查与决策）+ M1（共享单元）+ M2（抓键改造）
+> + M3（第二条路径）+ M5（门禁复跑）已完成**；**M4、M6 全部待做**。
 > 决策见 [ADR 0011](../../../docs/adr/0011-capture-keys-by-produced-character.md)（`Proposed`）。
 
 ## M0 · 调查与决策
@@ -64,9 +64,36 @@
 
 ## M3 · 第二条路径 `WeaselServer/ShortcutSettings.cpp`
 
-- [ ] T3.1 `VKeyToName`（:622-699）切到共享单元
-- [ ] T3.2 `NormalizeCombo`（:701-718）切到共享单元，消除 `equal` vs `plus` 矛盾
-- [ ] T3.3 **不动**内置表（:339-402，硬编码 accept 串，`Control+Shift+F` 保持原样）
+- [x] T3.1 `VKeyToName`（:622-699）切到共享单元
+- [x] T3.2 `NormalizeCombo`（:701-718）切到共享单元，消除 `equal` vs `plus` 矛盾
+- [x] T3.3 **不动**内置表（:339-402，硬编码 accept 串，`Control+Shift+F` 保持原样）
+
+> M3 落点（2026-10-28）：第二条路径**删掉**自造的 `VKeyToName` / `NormalizeCombo`
+> （不再有第二套键名 / 组合键拼法），改走共享单元 `fluxing::CaptureAccept()`
+> ⇒ 两条路径产出的 accept 串同源。
+>
+> - **T3.1 / T3.2**：低阶键盘钩子（`LowLevelKeyboardProc`）用 `KBDLLHOOKSTRUCT`
+>   造 `BYTE[256]` 快照（`state[vk]=0x80` + Shift / Ctrl / Alt / Win 位），
+>   `KeyInfo` 由 `scanCode<<16 | LLKHF_EXTENDED` 构造，HKL 取 `GetKeyboardLayout(0)`，
+>   再调 `fluxing::CaptureAccept()`。顺带消掉三处漂移：`Shift`+`=` 过去永远写
+>   `equal`（永不触发），现在写 `Shift+plus`；`Ctrl`+小写字母过去写出 librime
+>   解析不了的名字（死绑定），现在**拒绝**；`Super+`（Win）过去写出伪绑定，
+>   现在**拒绝**并提示。
+> - **T3.3**：内置表**一个字没动**。但共享单元按 librime 位序产出
+>   `Shift+Control+F`，内置表写的是 `Control+Shift+F` —— 拼写不同、语义相同。
+>   ⇒ 冲突检测的两处字符串精确比较改成**语义比较** `fluxing::AcceptEquals()`
+>   （解析成 keycode + modifier 掩码再比），顺带让旧 yaml 里的 `Control+Shift+F`
+>   与新抓的 `Shift+Control+F` 也能判成重复。
+> - 拒绝原因文案收进共享单元 `fluxing::AcceptErrorMessage()`（两条路径共用，
+>   宪法 P2 简体中文），落在 popover + 面板状态行；**拒绝时清空 pending chord**
+>   （所见即所存）。
+> - 门禁新增第 8 类自检「第二路径语义一致性」：14 条内置表用例 + `equal` /
+>   `Shift+plus` 矛盾用例，输出 `MAPPER|builtin_equivalents=15`。
+>
+> M3 验收数字（本机实跑）：源门禁 `bindings=39|reachable=39|dead=0` +
+> `RESULT|PASS`；部署产物重编 12 个 schema 后 `bindings=337|reachable=337|dead=0` +
+> `RESULT|PASS`；`MAPPER-SUMMARY|failures=0`；全套件 `=== ALL TESTS PASSED ===`；
+> 完整解决方案 Release/Win32 编译 exit 0；5 个改动文件 clang-format 整文件干净。
 
 ## M4 · 测试（抓键产物专项）
 
