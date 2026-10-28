@@ -4,7 +4,7 @@
 > `[x]` = 已完成；`[ ]` = 下一阶段待办。
 >
 > 进度（2026-10-28）：**M0（调查与决策）+ M1（共享单元）+ M2（抓键改造）
-> + M3（第二条路径）+ M5（门禁复跑）已完成**；**M4、M6 全部待做**。
+> + M3（第二条路径）+ M4（抓键产物专项）+ M5（门禁复跑）已完成**；**M6 全部待做**。
 > 决策见 [ADR 0011](../../../docs/adr/0011-capture-keys-by-produced-character.md)（`Proposed`）。
 
 ## M0 · 调查与决策
@@ -97,9 +97,32 @@
 
 ## M4 · 测试（抓键产物专项）
 
-- [ ] T4.1 `test/TestHotkeyBindings/fixtures/recorder-output.yaml`
-- [ ] T4.2 同目录 `.expect.txt`（逐条 `REACHABLE`）
-- [ ] T4.3 负控：`Control+Shift+9` 必须仍判 `DEAD_KEYCODE`（防止门禁被改瞎）
+- [x] T4.1 `test/TestHotkeyBindings/fixtures/recorder-output.yaml`
+- [x] T4.2 同目录 `.expect.txt`（逐条 `REACHABLE`）
+- [x] T4.3 负控：`Control+Shift+9` 必须仍判 `DEAD_KEYCODE`（防止门禁被改瞎）
+
+> M4 落点（2026-10-28）：两个 fixture 文件 + 门禁新增 `--selfcheck-recorder`
+> 模式，并接进 `scripts/test-infra/run-test-suite.bat`（CI `test` job 跑的就是它）。
+>
+> - **accept 串必须用 librime 位序拼写**（`Shift` → `Control` → `Alt`），
+>   例如 `Shift+Control+F`、`Shift+Control+numbersign`、`Shift+plus`。
+>   这是抓键自己的产出形态，也是保真检查要做的**字符串**比对。
+> - **保真检查（`--selfcheck-recorder`）做三件事**：
+>   ① 抓键能产出的每一个 accept 都必须**可达**（前端真发这个 keycode + modifier）
+>   ⇒ 抓键**永不产出死绑定**；② fixture 里每条判 `REACHABLE` 的 accept 必须
+>   **真能被抓出来** ⇒ fixture 不会退化成装饰性静态清单；③ 负控
+>   `Control+Shift+9` 必须**抓不出来** ⇒ 门禁不会被改瞎。
+> - 负控**不放进抓键产物集合**（抓键永远产不出它），只作为 yaml 里的一条绑定
+>   + expect 里 `DEAD_KEYCODE` 钉住。
+> - 门禁另有 `--dump-recorder`：导出抓键真实产出的 accept（850 条），
+>   fixture 就是从它生成的 ⇒ fixture 不可能与实现漂移。
+>
+> M4 验收数字（本机实跑）：`RECORDER|products=850|rows=21|produced=20|not_produced=0|negative_ok=1` + `RECORDER-SUMMARY|failures=0` + `RESULT|PASS`；
+> fixture 判定 `SUMMARY|bindings=21|reachable=20|dead=1|mismatches=0|unused=0`
+> + `RESULT|PASS`（负控详情：前端发的是 `0x0028 (parenleft)`，不是 `0x0039 (9)`）；
+> 源门禁 `bindings=39|reachable=39|dead=0`；`MAPPER-SUMMARY|failures=0`；
+> 全套件 `=== ALL TESTS PASSED ===`；完整解决方案 Release/Win32 编译 exit 0；
+> 1 个改动文件 clang-format 整文件干净。
 
 ## M5 · 门禁复跑（仓库源 + 部署产物）
 

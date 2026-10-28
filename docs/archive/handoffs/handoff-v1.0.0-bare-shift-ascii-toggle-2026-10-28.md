@@ -1,9 +1,9 @@
-# 接力交接：Fluxing 1.0.0 — 裸 Shift 的 3 个缺陷已修并推送；T2 · M1 共享单元 + M2 抓键改造 + M3 第二条路径已落地，M4–M6 待做
+# 接力交接：Fluxing 1.0.0 — 裸 Shift 的 3 个缺陷已修并推送；T2 · M1 共享单元 + M2 抓键改造 + M3 第二条路径 + M4 抓键产物专项已落地，M5–M6 待做
 
 > 本文件是**给下一个会话读的完整上下文**。下一个会话的 prompt 只负责指路，不重复本文件内容。
 > 生成时间：2026-10-28（会话 `mvs_54823d93f0e0466f87ec8986862896dd`）
 > 仓库：`F:\soft\00selfmade\rime_claude`（远端 `kizemo/Fluxing`，**不是 origin**）
-> **最新功能提交 = `2784ace`**（T2 · M3 第二条路径切共享单元；本卡自身的 docs 提交紧跟其后），本地与远端已同步（工作区只剩 ` m librime`，是子模块构建产物，**不可 git add**）
+> **最新功能提交 = `9e07743`**（T2 · M4 抓键产物专项 fixture + 门禁保真模式；本卡自身的 docs 提交紧跟其后），本地与远端已同步（工作区只剩 ` m librime`，是子模块构建产物，**不可 git add**）
 
 ---
 
@@ -12,7 +12,7 @@
 1.0.0（用户实测反馈的 3 个缺陷修复 + 版本号 3 段化）**代码已全绿、安装包已出、已推送 `kizemo/Fluxing`**；
 **沙箱权威门禁在本机跑不起来**（环境故障），**真机按键验收只有人能做**；
 **T2（设置界面抓键 layout-aware 改造，ADR 0011 `Proposed` + spec 083）的 M1（共享键名单元 `include/KeyNameMapper.h`）、M2（抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`）、
-**M3（第二条路径 `WeaselServer/ShortcutSettings.cpp`）已落地并推送**，M4–M6 待做；
+**M3（第二条路径 `WeaselServer/ShortcutSettings.cpp`）、M4（抓键产物专项 fixture + 门禁保真模式）已落地并推送**，M5–M6 待做；
 下一阶段仍是 T2，其中夹着
 **必须先实测再修**的疑点 **T20（CapsLock 打开时快捷键疑似全部失配）**。
 
@@ -106,7 +106,7 @@
 | 项 | 状态 | 说明 |
 |---|---|---|
 | **真机按键验收** | ⏳ 等用户 | 8 条清单见 §3.1。**只有人能做**，代码侧已全绿 |
-| **清单 T2**（设置界面抓键路径 layout-aware 改造） | 🟡 **M1 + M2 + M3 已完成，M4–M6 待做** | ADR 0011（`Proposed`）+ spec 083（R1–R7 / plan M1–M6 / tasks）。M1 = 共享键名单元 `include/KeyNameMapper.h`（D1/D6），已提交 `3dd2b06`；M2 = 抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`（D1/D3/D6），已提交 `7e2f4be`；M3 = 第二条路径 `WeaselServer/ShortcutSettings.cpp`（D1/D3），已提交 `2784ace`；方案要点见 §3.2，M1 记录见 §9，M2 记录见 §10，M3 记录见 §11 |
+| **清单 T2**（设置界面抓键路径 layout-aware 改造） | 🟡 **M1 + M2 + M3 + M4 已完成，M5–M6 待做** | ADR 0011（`Proposed`）+ spec 083（R1–R7 / plan M1–M6 / tasks）。M1 = 共享键名单元 `include/KeyNameMapper.h`（D1/D6），已提交 `3dd2b06`；M2 = 抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`（D1/D3/D6），已提交 `7e2f4be`；M3 = 第二条路径 `WeaselServer/ShortcutSettings.cpp`（D1/D3），已提交 `2784ace`；M4 = 抓键产物专项 fixture + 门禁保真模式 `--selfcheck-recorder`（D3），已提交 `9e07743`；方案要点见 §3.2，M1 记录见 §9，M2 记录见 §10，M3 记录见 §11，M4 记录见 §12 |
 | **清单 T20**（CapsLock 打开时快捷键疑似全部失配） | ⚠️ **疑点，未实测** | **必须先测量再决定怎么修**（ADR 0011 Q2），见 §3.3 |
 | **清单 T19**（沙箱权威门禁本机跑不起来） | ⚠️ 环境故障 | 见 §4.1；**不阻塞提交** |
 | **清单 T3/T4/T5** | ⏸ 未开工 | 见清单 §4.1 表格 |
@@ -448,7 +448,7 @@ gh run view <run-id> --json status,jobs
 
 ### 9.6 M1 之后的下一步
 
-> **状态更新（2026-10-28）：M2 也已完成，见 §10。**
+> **状态更新（2026-10-28）：M2 / M3 / M4 也已完成，见 §10 / §11 / §12。**
 > 下文是 M1 完成当时写下的计划；里程碑编号以 spec 083 `tasks.md` 为准（单一真相源）。
 
 - **M2** ✅ 两条抓键路径改用共享单元 ——
@@ -579,9 +579,60 @@ gh run view <run-id> --json status,jobs
 
 ### 11.6 下一步
 
-- **M4**：抓键产物专项 fixture
-  （`test/TestHotkeyBindings/fixtures/recorder-output.yaml` + `.expect.txt`）
-  + 负控 `Control+Shift+9` 必须仍判 `DEAD_KEYCODE`（防止门禁被改瞎）。
+- **M4**：已完成，见 §12（抓键产物专项 fixture + 门禁保真模式）。
+- **M6**：打包（含 §9.5 的 `data\build\` 清理）+ 实机验收
+  ⇒ ADR 0011 `Proposed` → `Accepted`。
+- **T20** 仍未实测，是 ADR 0011 Q2 的必需输入。
+
+---
+
+## 12. T2 · M4 里程碑（2026-10-28 已完成 · ADR 0011 D3）
+
+> 最新功能提交 = `9e07743`。M4 只动**测试与门禁**，没有改任何产品代码，
+> 也没有改 `output/data/**` 里的 yaml ⇒ 用户侧行为零变化。
+
+### 12.1 做了什么
+
+- **两个 fixture 文件**（`test/TestHotkeyBindings/fixtures/`）：
+  - `recorder-output.yaml`：20 条**真实抓键产物** + 负控 `Control+Shift+9`；
+  - `recorder-output.expect.txt`：逐条 `REACHABLE` + 负控 `DEAD_KEYCODE`。
+- **门禁新增两个模式**（`test/TestHotkeyBindings/TestHotkeyBindings.cpp`）：
+  - `--dump-recorder`：导出抓键真实产出的 accept（850 条）——
+    **fixture 就是从它生成的**，所以 fixture 不可能与实现漂移；
+  - `--selfcheck-recorder`：保真自检（见 §12.2）。
+- **CI 接线**：`scripts/test-infra/run-test-suite.bat` 增加 2 次门禁调用
+  （逐条判定 + 保真自检）⇒ 自动进 CI `test` job，**不必改 `.github/workflows`**。
+
+### 12.2 保真自检做三件事
+
+1. 抓键能产出的每一个 accept 都必须**可达**（前端真发这个 keycode + modifier）
+   ⇒ 抓键**永不产出死绑定**（ADR 0011 D3 的核心不变量）。
+2. fixture 里每条判 `REACHABLE` 的 accept 必须**真能被抓出来**
+   ⇒ fixture 不会退化成装饰性静态清单。
+3. 负控 `Control+Shift+9` 必须**抓不出来** ⇒ 门禁不会被改瞎。
+
+### 12.3 两个必须记住的细节
+
+- **accept 串用 librime 位序拼写**（`Shift` → `Control` → `Alt`）：
+  `Shift+Control+F`、`Shift+Control+numbersign`、`Shift+plus`（**不是** `Shift+equal`）。
+  保真检查是**字符串**比对，写成 `Control+Shift+F` 会判「抓不出来」。
+- **负控不放进抓键产物集合**：抓键永远产不出 `Control+Shift+9`
+  （它产的是 `Shift+Control+parenleft` —— 前端发的是字符 `(`，不是键 `9`）。
+
+### 12.4 门禁与验收数字（本机实跑，可复现）
+
+- 保真自检：`RECORDER|products=850|rows=21|produced=20|not_produced=0|negative_ok=1`
+  + `RECORDER-SUMMARY|failures=0` + `RESULT|PASS`。
+- fixture 判定：`SUMMARY|bindings=21|reachable=20|dead=1|known_dead=0|mismatches=0|unused=0`
+  + `RESULT|PASS`；负控详情：前端发的是 `0x0028 (parenleft)`，不是 `0x0039 (9)`。
+- 源门禁（4 个 yaml）：`bindings=39|reachable=39|dead=0` + `RESULT|PASS`。
+- 映射表自检：`MAPPER-SUMMARY|failures=0`（`builtin_equivalents=15`、`captured=1716`）。
+- 全套件 `scripts/test-infra/run-test-suite.bat`：`=== ALL TESTS PASSED ===`。
+- 完整解决方案 Release/Win32 编译 exit 0。
+- 1 个改动文件 clang-format 19.1.5 整文件 `--dry-run --Werror` 干净。
+
+### 12.5 下一步
+
 - **M6**：打包（含 §9.5 的 `data\build\` 清理）+ 实机验收
   ⇒ ADR 0011 `Proposed` → `Accepted`。
 - **T20** 仍未实测，是 ADR 0011 Q2 的必需输入。

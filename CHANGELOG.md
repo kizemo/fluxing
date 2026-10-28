@@ -62,6 +62,31 @@
 
 - 详见 **ADR 0011** 与 spec 083（里程碑 M3）。
 
+### test(fluxing): 抓键产物专项 fixture 与门禁保真模式（ADR 0011 D3）
+
+**User-visible**: 无 —— 本里程碑只动**测试与门禁**，用户侧行为零变化。
+
+**新增**:
+
+- `test/TestHotkeyBindings/fixtures/recorder-output.yaml` + `.expect.txt`：
+  20 条**真实抓键产物** + 负控 `Control+Shift+9`（必须仍判 `DEAD_KEYCODE`）。
+- 门禁新增 `--selfcheck-recorder`（保真自检）：抓键产出的每个 accept 必须**可达**；
+  fixture 里每条 `REACHABLE` 必须**真能被抓出来**；负控必须**抓不出来**。
+- 门禁新增 `--dump-recorder`：导出抓键真实产出的 accept（850 条），fixture 由它生成。
+- `scripts/test-infra/run-test-suite.bat` 增加 2 次门禁调用 ⇒ 自动进 CI `test` job。
+
+**验收**:
+
+- `Release\TestHotkeyBindings.exe --selfcheck-recorder ...`：`RECORDER|products=850|rows=21|produced=20|not_produced=0|negative_ok=1`、`RECORDER-SUMMARY|failures=0`、`RESULT|PASS`
+- fixture 判定：`SUMMARY|bindings=21|reachable=20|dead=1|known_dead=0|expectations=21|mismatches=0|unused=0`、`RESULT|PASS`
+- 源门禁：`SUMMARY|bindings=39|reachable=39|dead=0|known_dead=0|known_dead_keys=0|expectations=0|mismatches=0|unused=0`、`RESULT|PASS`
+- 部署产物复跑（装器载荷重编 12 个 schema）：`SUMMARY|bindings=337|reachable=337|dead=0|known_dead=0|known_dead_keys=0|expectations=0|mismatches=0|unused=0`、`RESULT|PASS`
+- 全套件 `scripts/test-infra/run-test-suite.bat`：`=== ALL TESTS PASSED ===`（exit 0）
+- 完整解决方案 Release/Win32 编译 exit 0
+- clang-format 19.1.5 整文件 `--dry-run --Werror`：1 个改动文件干净
+
+- 详见 **ADR 0011** 与 spec 083（里程碑 M4，提交 `9e07743`）。
+
 ## [1.0.0] - 2026-10-28
 
 ### 主要更新
