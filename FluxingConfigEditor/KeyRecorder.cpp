@@ -2,131 +2,72 @@
 // spec 050 T002 - KeyRecorder.cpp
 //
 // Implementation of the key capture dialog. See KeyRecorder.h for
-// the contract. Notes:
-//   - Resource IDs (IDD_KEY_RECORDER, IDC_KEY_DISPLAY) come from
-//     WeaselDeployer/resource.h (the only place where dialog IDs
-//     are defined; FluxingConfigEditor is a library consumed by
-//     both the deployer and future exe targets).
-//   - MapKeyCodeToLibrimeName is in an anonymous namespace and is
-//     also referenced by OnKeyDown (member function); for the
-//     function-local use, the namespace makes it internal-linkage
-//     but accessible from the same translation unit.
+// the contract.
+//
+// The chord -> accept string decision does not live in this file: it
+// lives in the shared unit include/KeyNameMapper.h, which the settings
+// dialog, the shortcut panel and the acceptance gate all read
+// (ADR 0011 D1). This file only takes the keyboard snapshot and shows
+// the result, so the dialog can never mint a binding that the front end
+// would not send.
+//
+// The character and the modifier state come from one and the same
+// GetKeyboardState() snapshot: reading them one after the other could
+// produce a pattern whose character and modifier do not belong together,
+// which is exactly how a dead binding is born.
+//
+// Resource IDs (IDD_KEY_RECORDER, IDC_KEY_DISPLAY) come from
+// WeaselDeployer/resource.h (the only place where dialog IDs are
+// defined; FluxingConfigEditor is a library consumed by both the
+// deployer and future exe targets).
 
 #include "KeyRecorder.h"
 #include "../WeaselDeployer/resource.h"  // for IDD_KEY_RECORDER + IDC_KEY_DISPLAY
 
 #include <windowsx.h>  // GET_X_LPARAM, GET_Y_LPARAM for WM_LBUTTONDOWN
 
+#include <KeyNameMapper.h>
+
 namespace {
 
-std::wstring MapKeyCodeToLibrimeName(UINT vk) {
-  switch (vk) {
-    case VK_BACK:
-      return L"BackSpace";
-    case VK_TAB:
-      return L"Tab";
-    case VK_RETURN:
-      return L"Return";
-    case VK_ESCAPE:
-      return L"Escape";
-    case VK_PRIOR:
-      return L"Page_Up";
-    case VK_NEXT:
-      return L"Page_Down";
-    case VK_END:
-      return L"End";
-    case VK_HOME:
-      return L"Home";
-    case VK_LEFT:
-      return L"Left";
-    case VK_UP:
-      return L"Up";
-    case VK_RIGHT:
-      return L"Right";
-    case VK_DOWN:
-      return L"Down";
-    case VK_INSERT:
-      return L"Insert";
-    case VK_DELETE:
-      return L"Delete";
-    case VK_SPACE:
-      return L"space";
-    case VK_OEM_COMMA:
-      return L"comma";
-    case VK_OEM_PERIOD:
-      return L"period";
-    case VK_OEM_MINUS:
-      return L"minus";
-    case VK_OEM_PLUS:
-      return L"plus";
-    case VK_OEM_2:
-      return L"slash";
-    case VK_OEM_3:
-      return L"grave";
-    case VK_OEM_4:
-      return L"bracketleft";
-    case VK_OEM_5:
-      return L"backslash";
-    case VK_OEM_6:
-      return L"bracketright";
-    case VK_OEM_7:
-      return L"apostrophe";
-    case VK_OEM_1:
-      return L"semicolon";
-    case VK_OEM_102:
-      return L"backslash";
-    case VK_NUMPAD0:
-    case VK_NUMPAD1:
-    case VK_NUMPAD2:
-    case VK_NUMPAD3:
-    case VK_NUMPAD4:
-    case VK_NUMPAD5:
-    case VK_NUMPAD6:
-    case VK_NUMPAD7:
-    case VK_NUMPAD8:
-    case VK_NUMPAD9: {
-      wchar_t buf[8];
-      swprintf_s(buf, L"KP_%d", vk - VK_NUMPAD0);
-      return buf;
-    }
-    case VK_MULTIPLY:
-      return L"KP_Multiply";
-    case VK_ADD:
-      return L"KP_Add";
-    case VK_SUBTRACT:
-      return L"KP_Subtract";
-    case VK_DECIMAL:
-      return L"KP_Decimal";
-    case VK_DIVIDE:
-      return L"KP_Divide";
+// The Simplified Chinese message for every refusal. The shared unit keeps
+// its error codes in ASCII on purpose (constitution P2); the wording is the
+// dialog's own.
+const wchar_t* RefusalText(fluxing::AcceptError error) {
+  switch (error) {
+    case fluxing::kAcceptNoName:
+      return L"\x8be5\x7ec4\x5408\x952e\x65e0\x6cd5\x8868\x8fbe\xff0c\x8bf7"
+             L"\x6309\x4f4f\x0020\x0053\x0068\x0069\x0066\x0074\x0020\x518d"
+             L"\x8bd5";
+    case fluxing::kAcceptModifierKey:
+      return L"\x4fee\x9970\x952e\x4e0d\x80fd\x5355\x72ec\x4f5c\x4e3a\x5feb"
+             L"\x6377\x952e\xff0c\x8bf7\x518d\x6309\x4e00\x4e2a\x666e\x901a"
+             L"\x952e";
+    case fluxing::kAcceptUnprintable:
+      return L"\x8be5\x6309\x952e\x65e0\x6cd5\x4f5c\x4e3a\x5feb\x6377\x952e";
+    case fluxing::kAcceptWinKey:
+      return L"\x4e0d\x652f\x6301\x0020\x0057\x0069\x006e\x0020\x952e\xff0c"
+             L"\x8bf7\x6539\x7528\x0020\x0043\x0074\x0072\x006c\x0020\x002f"
+             L"\x0020\x0053\x0068\x0069\x0066\x0074\x0020\x002f\x0020\x0041"
+             L"\x006c\x0074\x0020\x7ec4\x5408";
+    case fluxing::kAcceptNoCharacter:
     default:
-      break;
+      return L"\x672a\x77e5\x6309\x952e\xff0c\x8bf7\x91cd\x8bd5";
   }
-  if (vk >= 'A' && vk <= 'Z') {
-    wchar_t buf[2] = {(wchar_t)(vk - 'A' + 'a'), 0};
-    return buf;
-  }
-  if (vk >= '0' && vk <= '9') {
-    wchar_t buf[2] = {(wchar_t)vk, 0};
-    return buf;
-  }
-  if (vk >= VK_F1 && vk <= VK_F24) {
-    wchar_t buf[8];
-    swprintf_s(buf, L"F%d", vk - VK_F1 + 1);
-    return buf;
-  }
-  UINT sc = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
-  if (sc == 0)
-    return L"";
-  wchar_t name[64] = {0};
-  int len = GetKeyNameTextW((LONG)((sc << 16) | 0x1), name, 64);
-  if (len <= 0)
-    return L"";
-  for (int i = 0; i < len; ++i) {
-    if (name[i] == L' ')
-      name[i] = L'_';
-  }
-  return std::wstring(name);
+}
+
+// The modifier part of the live display, e.g. "Control+Shift+".
+std::wstring ModifierPrefix(const BYTE* state) {
+  std::wstring prefix;
+  if ((state[VK_CONTROL] & 0x80) != 0)
+    prefix += L"Control+";
+  if ((state[VK_SHIFT] & 0x80) != 0)
+    prefix += L"Shift+";
+  if ((state[VK_MENU] & 0x80) != 0)
+    prefix += L"Alt+";
+  if ((state[VK_LWIN] & 0x80) != 0 || (state[VK_RWIN] & 0x80) != 0)
+    prefix += L"Win+";
+  return prefix;
 }
 
 }  // namespace
@@ -135,7 +76,7 @@ LRESULT KeyRecorderDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   CenterWindow(GetParent());
   display_label_ = GetDlgItem(IDC_KEY_DISPLAY);
   display_label_.SetWindowTextW(
-      L"\xe7\xa2\x9c\xe6\x8c\x91\xe7\xbb\x84\xe5\x90\x88\xe9\x94\xae...");  // "请按组合键..."
+      L"\x8bf7\x6309\x7ec4\x5408\x952e\x002e\x002e\x002e");
   accept_.clear();
   captured_ = false;
   // Start auto-cancel timer (using CWindow::SetTimer which takes id + ms).
@@ -143,35 +84,31 @@ LRESULT KeyRecorderDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   return TRUE;
 }
 
-LRESULT KeyRecorderDialog::OnKeyDown(UINT, WPARAM wParam, LPARAM, BOOL&) {
-  if (wParam == VK_SHIFT || wParam == VK_CONTROL || wParam == VK_MENU ||
-      wParam == VK_LWIN || wParam == VK_RWIN || wParam == VK_CAPITAL) {
+LRESULT KeyRecorderDialog::OnKeyDown(UINT,
+                                     WPARAM wParam,
+                                     LPARAM lParam,
+                                     BOOL&) {
+  const UINT vkey = static_cast<UINT>(wParam);
+  if (vkey == VK_SHIFT || vkey == VK_CONTROL || vkey == VK_MENU ||
+      vkey == VK_LWIN || vkey == VK_RWIN || vkey == VK_CAPITAL) {
     ComposeAndDisplay();
     return 0;
   }
   accept_.clear();
-  bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-  bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-  bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
-  bool win = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
-             (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
-  if (ctrl)
-    accept_ += L"Control+";
-  if (shift)
-    accept_ += L"Shift+";
-  if (alt)
-    accept_ += L"Alt+";
-  if (win)
-    accept_ += L"Control+";
-  std::wstring key_name = MapKeyCodeToLibrimeName((UINT)wParam);
-  if (key_name.empty()) {
-    display_label_.SetWindowTextW(
-        L"\xe6\x9c\xaa\xe7\x9f\xa5\xe9\x94\xae\xef\xbc\x8c\xe8\xaf\xb7\xe9\x87"
-        L"\x8d\xe8\xaf\x95");
-    captured_ = false;
+  captured_ = false;
+  BYTE state[256];
+  if (!GetKeyboardState(state)) {
+    display_label_.SetWindowTextW(RefusalText(fluxing::kAcceptNoCharacter));
     return 0;
   }
-  accept_ += key_name;
+  const fluxing::CapturedAccept captured =
+      fluxing::CaptureAccept(vkey, KeyInfo(lParam), state, NULL);
+  if (!captured.ok) {
+    // The chord cannot be written down as a binding: say why, in Chinese.
+    display_label_.SetWindowTextW(RefusalText(captured.error));
+    return 0;
+  }
+  accept_ = captured.pattern;
   display_ = accept_;
   display_label_.SetWindowTextW(display_.c_str());
   captured_ = true;
@@ -220,22 +157,12 @@ LRESULT KeyRecorderDialog::OnCancel(WORD, WORD, HWND, BOOL&) {
 }
 
 void KeyRecorderDialog::ComposeAndDisplay() {
-  bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-  bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-  bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
-  bool win = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
-             (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
-  std::wstring s;
-  if (ctrl)
-    s += L"Control+";
-  if (shift)
-    s += L"Shift+";
-  if (alt)
-    s += L"Alt+";
-  if (win)
-    s += L"Control+";
-  s += L"_";
-  display_label_.SetWindowTextW(s.c_str());
+  BYTE state[256];
+  std::wstring prefix;
+  if (GetKeyboardState(state))
+    prefix = ModifierPrefix(state);
+  const std::wstring text = prefix + L"_";
+  display_label_.SetWindowTextW(text.c_str());
 }
 
 void KeyRecorderDialog::Reset() {
@@ -243,5 +170,5 @@ void KeyRecorderDialog::Reset() {
   display_.clear();
   captured_ = false;
   display_label_.SetWindowTextW(
-      L"\xe7\xa2\x9c\xe6\x8c\x91\xe7\xbb\x84\xe5\x90\x88\xe9\x94\xae...");
+      L"\x8bf7\x6309\x7ec4\x5408\x952e\x002e\x002e\x002e");
 }

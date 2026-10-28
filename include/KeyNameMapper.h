@@ -74,6 +74,59 @@ inline std::string ModifierName(int mask) {
 }
 
 // ---------------------------------------------------------------------------
+// wide characters
+// ---------------------------------------------------------------------------
+
+// UTF-8 to UTF-16. The accept patterns themselves are ASCII, but the one
+// character form carries a character code and the dialog works in wide
+// characters: widening the bytes one by one would corrupt anything above
+// 0x7F.
+inline bool NarrowToWide(const std::string& narrow, std::wstring* out) {
+  if (!out)
+    return false;
+  out->clear();
+  if (narrow.empty())
+    return true;
+  const int need =
+      MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, narrow.data(),
+                          static_cast<int>(narrow.size()), NULL, 0);
+  if (need <= 0)
+    return false;
+  out->resize(static_cast<size_t>(need));
+  const int got =
+      MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, narrow.data(),
+                          static_cast<int>(narrow.size()), &(*out)[0], need);
+  if (got != need) {
+    out->clear();
+    return false;
+  }
+  return true;
+}
+
+// UTF-16 to UTF-8.
+inline bool WideToNarrow(const std::wstring& wide, std::string* out) {
+  if (!out)
+    return false;
+  out->clear();
+  if (wide.empty())
+    return true;
+  const int need =
+      WideCharToMultiByte(CP_UTF8, 0, wide.data(),
+                          static_cast<int>(wide.size()), NULL, 0, NULL, NULL);
+  if (need <= 0)
+    return false;
+  out->resize(static_cast<size_t>(need));
+  const int got = WideCharToMultiByte(CP_UTF8, 0, wide.data(),
+                                      static_cast<int>(wide.size()), &(*out)[0],
+                                      need, NULL, NULL);
+  if (got != need) {
+    out->clear();
+    return false;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // accept patterns
 // ---------------------------------------------------------------------------
 
@@ -84,7 +137,9 @@ enum AcceptError {
   kAcceptOk = 0,
   kAcceptNoName,       // librime has no name for the character
   kAcceptModifierKey,  // the chord is a modifier key itself
-  kAcceptUnprintable   // the character cannot be written as a pattern
+  kAcceptUnprintable,  // the character cannot be written as a pattern
+  kAcceptWinKey,       // the Windows key is never reported by the front end
+  kAcceptNoCharacter   // the chord produces no character at all
 };
 
 inline const char* AcceptErrorText(AcceptError error) {
@@ -95,6 +150,10 @@ inline const char* AcceptErrorText(AcceptError error) {
       return "modifier-key";
     case kAcceptUnprintable:
       return "unprintable";
+    case kAcceptWinKey:
+      return "win-key";
+    case kAcceptNoCharacter:
+      return "no-character";
     default:
       return "ok";
   }
@@ -152,6 +211,17 @@ inline AcceptKey ParseAccept(const std::string& repr) {
   out.keycode = keycode;
   out.modifier = mask;
   return out;
+}
+
+// The same parse for a pattern that is already in wide characters.
+inline AcceptKey ParseAcceptWide(const std::wstring& repr) {
+  AcceptKey out;
+  std::string narrow;
+  if (!WideToNarrow(repr, &narrow)) {
+    out.error = "invalid pattern";
+    return out;
+  }
+  return ParseAccept(narrow);
 }
 
 // Key codes that stand for a modifier key. librime knows their names, but a
@@ -248,11 +318,12 @@ inline bool BuildAccept(int keycode,
                         int modifier,
                         std::wstring* out,
                         AcceptError* error) {
+  if (!out)
+    return false;
   std::string narrow;
   if (!BuildAccept(keycode, modifier, &narrow, error))
     return false;
-  out->assign(narrow.begin(), narrow.end());
-  return true;
+  return NarrowToWide(narrow, out);
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +554,79 @@ inline int ResolveCharacter(UINT vkey,
   if (ret == 1)
     return static_cast<int>(buf[0]);
   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// chord -> accept pattern
+// ---------------------------------------------------------------------------
+
+// The outcome of capturing a chord: the accept pattern the settings dialog
+// has to write down, and the (key code, modifier) pair that pattern means.
+struct CapturedAccept {
+  bool ok;
+  std::wstring pattern;
+  int keycode;
+  int modifier;
+  AcceptError error;
+  CapturedAccept() : ok(false), keycode(0), modifier(0), error(kAcceptOk) {}
+};
+
+// Capture a chord the way the settings dialog has to.
+//
+// One keyboard snapshot gives both the character the key produces and the
+// modifiers that were held down, so the pattern can never mix a character
+// from one snapshot with a modifier from another.
+//
+// The modifiers are the ones the front end reports: Shift, Control and Alt
+// (ADR 0011 D3). The lock modifier is deliberately left out -- whether the
+// front end should report CapsLock at all is still open (ADR 0011 Q2, task
+// T20) and must not be decided here.
+//
+// The Windows key is refused outright: the front end never reports it, so a
+// binding made with it could never fire (ADR 0011 D6).
+inline CapturedAccept CaptureAccept(UINT vkey,
+                                    KeyInfo kinfo,
+                                    const BYTE* key_state,
+                                    HKL hkl) {
+  CapturedAccept out;
+  if (!key_state) {
+    out.error = kAcceptNoCharacter;
+    return out;
+  }
+  if (vkey == VK_LWIN || vkey == VK_RWIN || (key_state[VK_LWIN] & 0x80) != 0 ||
+      (key_state[VK_RWIN] & 0x80) != 0) {
+    out.error = kAcceptWinKey;
+    return out;
+  }
+
+  int modifier = 0;
+  if ((key_state[VK_SHIFT] & 0x80) != 0)
+    modifier |= ModifierByName("Shift");
+  if ((key_state[VK_CONTROL] & 0x80) != 0)
+    modifier |= ModifierByName("Control");
+  if ((key_state[VK_MENU] & 0x80) != 0)
+    modifier |= ModifierByName("Alt");
+  out.modifier = modifier;
+
+  const int keycode = ResolveCharacter(vkey, kinfo, key_state, hkl);
+  out.keycode = keycode;
+  if (!keycode) {
+    out.error = kAcceptNoCharacter;
+    return out;
+  }
+
+  std::string narrow;
+  AcceptError error = kAcceptOk;
+  if (!BuildAccept(keycode, modifier, &narrow, &error)) {
+    out.error = error;
+    return out;
+  }
+  if (!NarrowToWide(narrow, &out.pattern)) {
+    out.error = kAcceptNoCharacter;
+    return out;
+  }
+  out.ok = true;
+  return out;
 }
 
 }  // namespace fluxing

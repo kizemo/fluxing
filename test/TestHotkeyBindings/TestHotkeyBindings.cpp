@@ -917,6 +917,179 @@ int RunMapperSelfCheck() {
     }
   }
   std::printf("MAPPER|chords=%d|refused=%d\n", chords, refused);
+  // 6. The capture path has to agree with the front end. Whatever the
+  //    capture dialog writes down must mean exactly the (key code,
+  //    modifier) pair the front end sends for the same chord, otherwise the
+  //    dialog mints a binding that can never fire (ADR 0011 D3).
+  const int capture_modifier_mask = fluxing::ModifierByName("Shift") |
+                                    fluxing::ModifierByName("Control") |
+                                    fluxing::ModifierByName("Alt");
+  int captured = 0;
+  int capture_refused = 0;
+  int dead_key_skipped = 0;
+  for (int vkey = 0x08; vkey <= 0xFE; ++vkey) {
+    for (int extended = 0; extended <= 1; ++extended) {
+      for (int shift = 0; shift <= 1; ++shift) {
+        for (int ctrl = 0; ctrl <= 1; ++ctrl) {
+          for (int alt = 0; alt <= 1; ++alt) {
+            std::memset(state, 0, sizeof(state));
+            state[vkey] = 0x80;
+            if (shift) {
+              state[VK_SHIFT] = 0x80;
+              state[VK_LSHIFT] = 0x80;
+              state[VK_RSHIFT] = 0x80;
+            }
+            if (ctrl) {
+              state[VK_CONTROL] = 0x80;
+              state[VK_LCONTROL] = 0x80;
+              state[VK_RCONTROL] = 0x80;
+            }
+            if (alt) {
+              state[VK_MENU] = 0x80;
+              state[VK_LMENU] = 0x80;
+              state[VK_RMENU] = 0x80;
+            }
+            LPARAM lp =
+                static_cast<LPARAM>(1) | (static_cast<LPARAM>(extended) << 24);
+            KeyInfo kinfo(lp);
+            // Resolve the same chord twice: on a layout with a dead key the
+            // answer changes between two consecutive calls, and the
+            // comparison below would be meaningless there.
+            weasel::KeyEvent first;
+            weasel::KeyEvent second;
+            const bool produced_first =
+                ConvertKeyEvent(static_cast<UINT>(vkey), kinfo, state, first);
+            const bool produced_second =
+                ConvertKeyEvent(static_cast<UINT>(vkey), kinfo, state, second);
+            if (produced_first != produced_second ||
+                (produced_first && (first.keycode != second.keycode ||
+                                    first.mask != second.mask))) {
+              ++dead_key_skipped;
+              continue;
+            }
+            const fluxing::CapturedAccept cap = fluxing::CaptureAccept(
+                static_cast<UINT>(vkey), kinfo, state, NULL);
+            if (!produced_first) {
+              // The front end sends nothing for this key, so a binding on it
+              // could never fire: the capture has to refuse it as well.
+              if (cap.ok) {
+                ++failures;
+                if (reported++ < report_limit) {
+                  std::printf("MAPPER-FAIL|capture-orphan|0x%04X|%ls\n",
+                              cap.keycode, cap.pattern.c_str());
+                }
+              }
+              continue;
+            }
+            const int front_keycode = static_cast<int>(first.keycode);
+            const int front_modifier =
+                ExpandIbusModifier(static_cast<int>(first.mask));
+            if (!cap.ok) {
+              ++capture_refused;
+              // The Windows key is refused on purpose: the front end never
+              // reports it (ADR 0011 D6).
+              if (cap.error == fluxing::kAcceptWinKey)
+                continue;
+              // Every other refusal has to be justified: the front end's own
+              // pair must be inexpressible as well.
+              std::string front_accept;
+              fluxing::AcceptError front_error = fluxing::kAcceptOk;
+              if (fluxing::BuildAccept(front_keycode, front_modifier,
+                                       &front_accept, &front_error)) {
+                ++failures;
+                if (reported++ < report_limit) {
+                  std::printf("MAPPER-FAIL|capture-refusal|0x%04X|%s\n",
+                              front_keycode,
+                              fluxing::AcceptErrorText(cap.error));
+                }
+              }
+              continue;
+            }
+            ++captured;
+            if (cap.keycode != front_keycode) {
+              ++failures;
+              if (reported++ < report_limit) {
+                std::printf("MAPPER-FAIL|capture-keycode|0x%04X|0x%04X\n",
+                            cap.keycode, front_keycode);
+              }
+            }
+            if (cap.modifier != (front_modifier & capture_modifier_mask)) {
+              ++failures;
+              if (reported++ < report_limit) {
+                std::printf("MAPPER-FAIL|capture-modifier|0x%04X|0x%04X\n",
+                            cap.modifier, front_modifier);
+              }
+            }
+            const fluxing::AcceptKey parsed =
+                fluxing::ParseAcceptWide(cap.pattern);
+            if (!parsed.ok || parsed.keycode != cap.keycode ||
+                parsed.modifier != cap.modifier) {
+              ++failures;
+              if (reported++ < report_limit) {
+                std::printf("MAPPER-FAIL|capture-roundtrip|%ls|0x%04X\n",
+                            cap.pattern.c_str(), cap.keycode);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 7. The chords the product promises, pinned down.
+  struct CaptureCase {
+    UINT vkey;
+    int shift;
+    int ctrl;
+    int win;
+    bool ok;
+    const wchar_t* pattern;
+    fluxing::AcceptError error;
+  };
+  const CaptureCase capture_cases[] = {
+      {'F', 1, 1, 0, true, L"Shift+Control+F", fluxing::kAcceptOk},
+      {'F', 0, 1, 0, false, L"", fluxing::kAcceptNoName},
+      {'F', 0, 0, 1, false, L"", fluxing::kAcceptWinKey},
+      {'A', 0, 0, 0, true, L"a", fluxing::kAcceptOk},
+      {'A', 1, 0, 0, true, L"Shift+A", fluxing::kAcceptOk},
+      {VK_SPACE, 0, 0, 0, true, L"space", fluxing::kAcceptOk},
+      {VK_RETURN, 0, 0, 0, true, L"Return", fluxing::kAcceptOk},
+      {VK_F1, 0, 0, 0, true, L"F1", fluxing::kAcceptOk},
+  };
+  for (size_t i = 0; i < sizeof(capture_cases) / sizeof(capture_cases[0]);
+       ++i) {
+    const CaptureCase& c = capture_cases[i];
+    std::memset(state, 0, sizeof(state));
+    state[c.vkey] = 0x80;
+    if (c.shift) {
+      state[VK_SHIFT] = 0x80;
+      state[VK_LSHIFT] = 0x80;
+      state[VK_RSHIFT] = 0x80;
+    }
+    if (c.ctrl) {
+      state[VK_CONTROL] = 0x80;
+      state[VK_LCONTROL] = 0x80;
+      state[VK_RCONTROL] = 0x80;
+    }
+    if (c.win) {
+      state[VK_LWIN] = 0x80;
+      state[VK_RWIN] = 0x80;
+    }
+    KeyInfo kinfo(static_cast<LPARAM>(1));
+    const fluxing::CapturedAccept cap =
+        fluxing::CaptureAccept(c.vkey, kinfo, state, NULL);
+    if (cap.ok != c.ok || cap.error != c.error ||
+        (c.ok && cap.pattern != c.pattern)) {
+      ++failures;
+      if (reported++ < report_limit) {
+        std::printf("MAPPER-FAIL|capture-case|0x%02X|expected %ls|got %ls|%s\n",
+                    c.vkey, c.ok ? c.pattern : L"(refused)",
+                    cap.pattern.c_str(), fluxing::AcceptErrorText(cap.error));
+      }
+    }
+  }
+  std::printf("MAPPER|captured=%d|refused=%d|dead_key_skipped=%d\n", captured,
+              capture_refused, dead_key_skipped);
   return failures;
 }
 
