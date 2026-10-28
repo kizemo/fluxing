@@ -4,7 +4,7 @@
 #include <iostream>  // v0.19.0.25-fix(spec 042 §12 风险):RegisterHotKey 失败 wcerr log
 #include "QuickPanelDialog.h"
 #include "PhrasesDialogIPC.h"  // v0.19.0.52 (Phase K3 T010): out-of-process IPC 替代 in-process PhrasesDialog
-#include "UserDictionary.h"  // v0.19.0.28(spec 044 §3.2):Track 3 wiring
+#include "UserDictionary.h"    // v0.19.0.28(spec 044 §3.2):Track 3 wiring
 #include "ShortcutSettings.h"  // spec 045 v0.19.0.28: Track 3 wiring
 // spec 070 T007: D2D factory 创建 (在 WeaselServerApp::Run 入口)
 #include <d2d1.h>
@@ -12,8 +12,9 @@
 
 // v0.19.0.29:QuickPanel button 3 callback 转发 setter (Shortcuts)。
 // static 实现, 把 fn 存到 QuickPanelDialog 内部 static 字段
-// (QuickPanelDialog::s_onShortcut),WeaselServerApp::Run() 在 m_server.Start 后调一次。
-// v0.19.0.60 (Phase L 调整 1): SetQuickPanelUserDictCallback 删除 — UserDictionary 模块下线。
+// (QuickPanelDialog::s_onShortcut),WeaselServerApp::Run() 在 m_server.Start
+// 后调一次。 v0.19.0.60 (Phase L 调整 1): SetQuickPanelUserDictCallback 删除 —
+// UserDictionary 模块下线。
 void WeaselServerApp::SetQuickPanelShortcutCallback(
     QuickPanelDialog::OnShowShortcut fn) {
   QuickPanelDialog::SetOnShortcut(fn);
@@ -22,6 +23,11 @@ void WeaselServerApp::SetQuickPanelShortcutCallback(
 WeaselServerApp::WeaselServerApp()
     : m_handler(std::make_unique<RimeWithWeaselHandler>(&m_ui)),
       tray_icon(m_ui) {
+  // spec 084 / ADR 0013 D4/D10: 托盘菜单弹出前询问「长显」这一项是否打勾。
+  tray_icon.SetMenuItemCheckedCallback([](UINT id) {
+    return id == ID_QUICKPANEL_ALWAYS_SHOW &&
+           QuickPanelDialog::AlwaysShowMode();
+  });
   // m_handler.reset(new RimeWithWeaselHandler(&m_ui));
   m_server.SetRequestHandler(m_handler.get());
   SetupMenuHandlers();
@@ -37,44 +43,47 @@ WeaselServerApp::WeaselServerApp()
 WeaselServerApp::~WeaselServerApp() {}
 
 // v0.19.0.25-fix(spec 042 §3 + §10.4):单实例,子类 WNDPROC 静态用。
-// Run 期间唯一,Stop 后 nullptr;子类 WNDPROC 命中 ALT+. 时通过此指针调 instance。
+// Run 期间唯一,Stop 后 nullptr;子类 WNDPROC 命中 ALT+. 时通过此指针调
+// instance。
 WeaselServerApp* WeaselServerApp::s_phrasesHotkeyOwner = nullptr;
 
-// v0.19.0.25-fix(spec 042 §10.4):子类 WNDPROC,拦截 WM_HOTKEY (ID_HOTKEY_PHRASES_DOT)
-// → PhrasesDialogIPC::Show();其它 message 透传给原 WNDPROC(其中含 ServerImpl::OnHotkey
-// 处理 ID_HOTKEY_QUICK_PANEL)。不能改 ServerImpl(在 WeaselIPCServer/ 下,scope 之外),
-// 用 SetWindowLongPtr(GWLP_WNDPROC) 在 IPC server window 上子类化。
-// v0.19.0.52 (Phase K3 T010):PhrasesDialog 走 out-of-process IPC,见 PhrasesDialogIPC.cpp。
+// v0.19.0.25-fix(spec 042 §10.4):子类 WNDPROC,拦截 WM_HOTKEY
+// (ID_HOTKEY_PHRASES_DOT) → PhrasesDialogIPC::Show();其它 message 透传给原
+// WNDPROC(其中含 ServerImpl::OnHotkey 处理 ID_HOTKEY_QUICK_PANEL)。不能改
+// ServerImpl(在 WeaselIPCServer/ 下,scope 之外), 用
+// SetWindowLongPtr(GWLP_WNDPROC) 在 IPC server window 上子类化。 v0.19.0.52
+// (Phase K3 T010):PhrasesDialog 走 out-of-process IPC,见 PhrasesDialogIPC.cpp。
 LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
-                                                           UINT msg,
-                                                           WPARAM w,
-                                                           LPARAM l) {
+                                                            UINT msg,
+                                                            WPARAM w,
+                                                            LPARAM l) {
   if (msg == WM_HOTKEY) {
     if (w == ID_HOTKEY_PHRASES_DOT) {
-      // spec 042 §12 风险:Alt+. 全局热键可能跟其他 app 冲突 → RegisterHotKey 失败时
-      // 仅 log warning,不 crash。这里成功路径就直接调。
-      // v0.19.0.52 (Phase K3 T010): out-of-process 走 IPC
+      // spec 042 §12 风险:Alt+. 全局热键可能跟其他 app 冲突 → RegisterHotKey
+      // 失败时 仅 log warning,不 crash。这里成功路径就直接调。 v0.19.0.52
+      // (Phase K3 T010): out-of-process 走 IPC
       fluxing::PhrasesDialogIPC::Show();
       return 0;
     }
-    // v0.19.0.60 (Phase L 调整 1): ID_HOTKEY_USER_DICT 分支删除 — Ctrl+Shift+U 热键
-    // 已下线 (UserDictionary 模块整体移除)。spec 044 §3.2 路由到 UserDictionary::Show
-    // 不再可达。
+    // v0.19.0.60 (Phase L 调整 1): ID_HOTKEY_USER_DICT 分支删除 — Ctrl+Shift+U
+    // 热键 已下线 (UserDictionary 模块整体移除)。spec 044 §3.2 路由到
+    // UserDictionary::Show 不再可达。
     if (w == ID_HOTKEY_SHORTCUT) {
       // spec 045 v0.19.0.28:Ctrl+Shift+K → ShortcutSettings::Show
       ShortcutSettings::Show();
       return 0;
     }
     // v0.19.0.33 (Phase A.1 真改 alt+/ 路由 - 之前 turn 没真改):
-    //   之前: Alt+/ → UserDictionary::Show() (v0.19.0.32 cd6f61a9 Bug 3b 自己承认错)
-    //   修后: Alt+/ → PhrasesDialogIPC::Show() (跟 Alt+. 同一路径, 跟 user 装机后 Alt+. 应一致)
-    //   v0.19.0.52 (Phase K3 T010): IPC 路径
+    //   之前: Alt+/ → UserDictionary::Show() (v0.19.0.32 cd6f61a9 Bug 3b
+    //   自己承认错) 修后: Alt+/ → PhrasesDialogIPC::Show() (跟 Alt+. 同一路径,
+    //   跟 user 装机后 Alt+. 应一致) v0.19.0.52 (Phase K3 T010): IPC 路径
     if (w == ID_HOTKEY_USER_DICT_ALT_SLASH) {
       fluxing::PhrasesDialogIPC::Show();
       return 0;
     }
   }
-  // 透传:必须 CallWindowProc 回原 WNDPROC(否则破坏 ServerImpl OnHotkey/WM_COMMAND 等)
+  // 透传:必须 CallWindowProc 回原 WNDPROC(否则破坏 ServerImpl
+  // OnHotkey/WM_COMMAND 等)
   WeaselServerApp* owner = s_phrasesHotkeyOwner;
   if (owner && owner->m_ipcServerOrigWndProc) {
     return ::CallWindowProc(owner->m_ipcServerOrigWndProc, hwnd, msg, w, l);
@@ -85,45 +94,53 @@ LRESULT CALLBACK WeaselServerApp::PhrasesHotkeySubclassProc(HWND hwnd,
 void WeaselServerApp::RegisterPhrasesHotkey() {
   HWND hwndServer = m_server.GetHWnd();
   if (!hwndServer) {
-    // IPC server 还没启起来(spec 036 会在 ServerImpl::OnCreate 注册 Alt+,),spec 042
-    // 也得在 IPC server window 上注册,延迟到 Run 之后调用即可。
+    // IPC server 还没启起来(spec 036 会在 ServerImpl::OnCreate 注册 Alt+,),spec
+    // 042 也得在 IPC server window 上注册,延迟到 Run 之后调用即可。
     return;
   }
   // 1) 子类化前先保存原 WNDPROC
-  m_ipcServerOrigWndProc = reinterpret_cast<WNDPROC>(
-      ::GetWindowLongPtr(hwndServer, GWLP_WNDPROC));
-  if (!m_ipcServerOrigWndProc) return;
+  m_ipcServerOrigWndProc =
+      reinterpret_cast<WNDPROC>(::GetWindowLongPtr(hwndServer, GWLP_WNDPROC));
+  if (!m_ipcServerOrigWndProc)
+    return;
   s_phrasesHotkeyOwner = this;
-  ::SetWindowLongPtr(hwndServer, GWLP_WNDPROC,
-                     reinterpret_cast<LONG_PTR>(
-                         &WeaselServerApp::PhrasesHotkeySubclassProc));
+  ::SetWindowLongPtr(
+      hwndServer, GWLP_WNDPROC,
+      reinterpret_cast<LONG_PTR>(&WeaselServerApp::PhrasesHotkeySubclassProc));
 
   // Phase A.2 (改进): 失败也写 log file (GUI app 无 console, stderr 看不到)
-  // 路径: %APPDATA%\Rime\weasel-install.log (跟 installer 的 install log 共享, 便于排查)
-  // 失败最常见原因: ERROR_HOTKEY_ALREADY_REGISTERED (kErrHotkeyAlreadyRegistered)
+  // 路径: %APPDATA%\Rime\weasel-install.log (跟 installer 的 install log 共享,
+  // 便于排查) 失败最常见原因: ERROR_HOTKEY_ALREADY_REGISTERED
+  // (kErrHotkeyAlreadyRegistered)
   //                = 另一个 app 占了这个 hotkey
   // v0.19.0.33 (review 修 B-blocker-A): 整个 buffer 全 wchar_t — 之前 _snprintf
   //   走窄 char buf, %ls 转换在没 _wsetlocale 的 GUI process 上输出 ? 字节,
   //   现在统一 UTF-16, WriteFile 也按 byte-count of wide chars 写。GUI app
   //   看不到 stderr → this file 是 ground truth, 必须 wide-char-clean。
-  static constexpr DWORD kErrHotkeyAlreadyRegistered = 1409;  // I-A 抽 named constant
+  static constexpr DWORD kErrHotkeyAlreadyRegistered =
+      1409;  // I-A 抽 named constant
 
   auto LogHotkeyFailure = [](LPCWSTR label, int id, DWORD err) {
     wchar_t path[MAX_PATH];
-    ExpandEnvironmentStringsW(L"%APPDATA%\\Rime\\weasel-install.log", path, MAX_PATH);
-    HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return;
-    SYSTEMTIME st; GetSystemTime(&st);
+    ExpandEnvironmentStringsW(L"%APPDATA%\\Rime\\weasel-install.log", path,
+                              MAX_PATH);
+    HANDLE h =
+        CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+      return;
+    SYSTEMTIME st;
+    GetSystemTime(&st);
     const wchar_t* hint = (err == kErrHotkeyAlreadyRegistered)
-        ? L" - ERROR_HOTKEY_ALREADY_REGISTERED (another app occupies this hotkey)"
-        : L" - see Win32 error codes";
+                              ? L" - ERROR_HOTKEY_ALREADY_REGISTERED (another "
+                                L"app occupies this hotkey)"
+                              : L" - see Win32 error codes";
     wchar_t wbuf[512];
     int n = _snwprintf(wbuf, _countof(wbuf),
-                       L"[%04d-%02d-%02d %02d:%02d:%02d] RegisterHotKey(%ls, id=%d) failed, err=%lu%ls\n",
-                       st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
-                       label, id, err, hint);
+                       L"[%04d-%02d-%02d %02d:%02d:%02d] RegisterHotKey(%ls, "
+                       L"id=%d) failed, err=%lu%ls\n",
+                       st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute,
+                       st.wSecond, label, id, err, hint);
     if (n > 0) {
       DWORD written;
       // wide char byte count = n * sizeof(wchar_t), 截断到 DWORD 安全范围
@@ -136,37 +153,42 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
   };
 
   // W-B (review 修): 抽 RegisterOrLog helper, 4 个失败分支共用同一段 log + 文件
-  // 输出。 之前 4 段 ~13 行 × 4 = 52 行重复 (label/cause/LogHotkeyFailure 全相同)。
-  // 行为不变 (label + 中文 cause 文案一字不差), 只是去重。
+  // 输出。 之前 4 段 ~13 行 × 4 = 52 行重复 (label/cause/LogHotkeyFailure
+  // 全相同)。 行为不变 (label + 中文 cause 文案一字不差), 只是去重。
   auto RegisterOrLog = [&](LPCWSTR label, int id, UINT mods, UINT vk) -> bool {
-    if (::RegisterHotKey(hwndServer, id, mods, vk)) return true;
+    if (::RegisterHotKey(hwndServer, id, mods, vk))
+      return true;
     DWORD err = ::GetLastError();
     LPCWSTR cause = (err == kErrHotkeyAlreadyRegistered)
-        ? L"ERROR_HOTKEY_ALREADY_REGISTERED (另一个 app 已占用)"
-        : L"see Win32 error codes";
+                        ? L"ERROR_HOTKEY_ALREADY_REGISTERED (另一个 app 已占用)"
+                        : L"see Win32 error codes";
     std::wcerr << L"[WeaselServerApp] WARN: RegisterHotKey(" << label
-               << L", id=" << id << L") failed, err=" << err
-               << L" — " << cause << std::endl;
+               << L", id=" << id << L") failed, err=" << err << L" — " << cause
+               << std::endl;
     LogHotkeyFailure(label, id, err);
     return false;
   };
 
-  // 2) ALT+. (VK_OEM_PERIOD) → PhrasesDialogIPC::Show()  (v0.19.0.52 out-of-process)
-  // 3) Ctrl+Shift+K (0x4B) → ShortcutSettings::Show  (spec 045 v0.19.0.28)
-  // 4) Alt+/ (VK_OEM_2) → PhrasesDialogIPC::Show  (v0.19.0.33 Phase A.1,
+  // 2) ALT+. (VK_OEM_PERIOD) → PhrasesDialogIPC::Show()  (v0.19.0.52
+  // out-of-process) 3) Ctrl+Shift+K (0x4B) → ShortcutSettings::Show  (spec 045
+  // v0.19.0.28) 4) Alt+/ (VK_OEM_2) → PhrasesDialogIPC::Show  (v0.19.0.33 Phase
+  // A.1,
   //    之前 v0.19.0.32 cd6f61a9 错接 UserDictionary, Bug 3b 已撤回)
-  // v0.19.0.60 (Phase L 调整 1): Ctrl+Shift+U 移除 (用户决定删除 UserDictionary 模块)
-  RegisterOrLog(L"Alt+.",         ID_HOTKEY_PHRASES_DOT,        MOD_ALT, VK_OEM_PERIOD);
-  RegisterOrLog(L"Ctrl+Shift+K",  ID_HOTKEY_SHORTCUT,           MOD_CONTROL | MOD_SHIFT, 0x4B);
-  RegisterOrLog(L"Alt+/",         ID_HOTKEY_USER_DICT_ALT_SLASH, MOD_ALT, VK_OEM_2);
+  // v0.19.0.60 (Phase L 调整 1): Ctrl+Shift+U 移除 (用户决定删除 UserDictionary
+  // 模块)
+  RegisterOrLog(L"Alt+.", ID_HOTKEY_PHRASES_DOT, MOD_ALT, VK_OEM_PERIOD);
+  RegisterOrLog(L"Ctrl+Shift+K", ID_HOTKEY_SHORTCUT, MOD_CONTROL | MOD_SHIFT,
+                0x4B);
+  RegisterOrLog(L"Alt+/", ID_HOTKEY_USER_DICT_ALT_SLASH, MOD_ALT, VK_OEM_2);
 }
 
 void WeaselServerApp::UnregisterPhrasesHotkey() {
   HWND hwndServer = m_server.GetHWnd();
   if (hwndServer) {
     ::UnregisterHotKey(hwndServer, ID_HOTKEY_PHRASES_DOT);
-    ::UnregisterHotKey(hwndServer, ID_HOTKEY_SHORTCUT);   // spec 045
-    ::UnregisterHotKey(hwndServer, ID_HOTKEY_USER_DICT_ALT_SLASH);  // v0.19.0.33
+    ::UnregisterHotKey(hwndServer, ID_HOTKEY_SHORTCUT);  // spec 045
+    ::UnregisterHotKey(hwndServer,
+                       ID_HOTKEY_USER_DICT_ALT_SLASH);  // v0.19.0.33
     if (m_ipcServerOrigWndProc) {
       ::SetWindowLongPtr(hwndServer, GWLP_WNDPROC,
                          reinterpret_cast<LONG_PTR>(m_ipcServerOrigWndProc));
@@ -215,16 +237,18 @@ int WeaselServerApp::Run() {
   // Correct behavior (per spec 052 US052-A, US052-D, US052-E):
   // - Show on Alt+, hotkey (spec 036)         - handled by tray menu
   // - Show on left-click tray icon            - handled by SystemTraySDK
-  // - Hide on Alt+, when visible              - handled by QuickPanelDialog::ToggleMode
-  // - Show on tray "QuickPanel" menu item    - handled by ID_WEASELTRAY_QUICK_PANEL handler
+  // - Hide on Alt+, when visible              - handled by
+  // QuickPanelDialog::ToggleMode
+  // - Show on tray "QuickPanel" menu item    - handled by
+  // ID_WEASELTRAY_QUICK_PANEL handler
   //
   // No auto-show call here. EnableAlwaysShowMode() remains as a public
   // API for the "remembered" state across IPC reconnects (if needed
   // later), but is no longer called on every Run().
 
   // v0.19.0.52 (Phase K3 T010):设置 phrases.yaml 路径。
-  // 必须在 RegisterPhrasesHotkey() 之前调 — 热键按下 → PhrasesDialogIPC::Show() →
-  // 内部用 s_yamlPath 加载 YAML。若此时为空会 fallback 到默认 "你好"。
+  // 必须在 RegisterPhrasesHotkey() 之前调 — 热键按下 → PhrasesDialogIPC::Show()
+  // → 内部用 s_yamlPath 加载 YAML。若此时为空会 fallback 到默认 "你好"。
   // 路径跟原 PhrasesDialog.cpp Show() 一致:%APPDATA%\Rime\phrases.yaml (从
   // HKCU\Software\Rime\Weasel\RimeUserDir 读,可被 user 配置改写)。
   {
@@ -233,22 +257,24 @@ int WeaselServerApp::Run() {
   }
 
   // v0.19.0.25-fix(spec 042 §3 + §10.4):Alt+. 全局热键注册。
-  // 必须在 m_server.Run() 之前调(m_server.Run() 进入消息循环前 IPC server window 已经
-  // 在 m_server.Start() 时创建,WM_CREATE 已经发出 → ServerImpl::OnCreate 注册了 Alt+,;
-  // 现在再加 Alt+.)。失败仅 log warning,不 crash(spec 042 §12 风险)。
+  // 必须在 m_server.Run() 之前调(m_server.Run() 进入消息循环前 IPC server
+  // window 已经 在 m_server.Start() 时创建,WM_CREATE 已经发出 →
+  // ServerImpl::OnCreate 注册了 Alt+,; 现在再加 Alt+.)。失败仅 log warning,不
+  // crash(spec 042 §12 风险)。
   RegisterPhrasesHotkey();
 
-  // v0.19.0.29(mockups-v0.19.0.28 设计稿):把 QuickPanel hit==3 (Settings) → Shortcut 接线。
-  // QuickPanelDialog::SetOn* setter 内部存 static std::function,
-  // callback 在 QuickPanelDialog::WndProc WM_LBUTTONUP click 路由触发。
-  // 这里调一次,SetOn* 是 idempotent(fn null 即清空),但 lifecycle 与 WeaselServerApp
-  // 同,只在 Run 入口调一次即可。
-  // v0.19.0.60 (Phase L 调整 1): UserDict callback (hit==2) 删除 — UserDictionary 模块下线。
+  // v0.19.0.29(mockups-v0.19.0.28 设计稿):把 QuickPanel hit==3 (Settings) →
+  // Shortcut 接线。 QuickPanelDialog::SetOn* setter 内部存 static
+  // std::function, callback 在 QuickPanelDialog::WndProc WM_LBUTTONUP click
+  // 路由触发。 这里调一次,SetOn* 是 idempotent(fn null 即清空),但 lifecycle 与
+  // WeaselServerApp 同,只在 Run 入口调一次即可。 v0.19.0.60 (Phase L 调整 1):
+  // UserDict callback (hit==2) 删除 — UserDictionary 模块下线。
   SetQuickPanelShortcutCallback([]() { ShortcutSettings::Show(); });
 
   int ret = m_server.Run();
 
-  // m_server.Run() 返回后消息循环已退出,unregister 子类化(避免下次 start 残留状态)
+  // m_server.Run() 返回后消息循环已退出,unregister 子类化(避免下次 start
+  // 残留状态)
   UnregisterPhrasesHotkey();
 
   m_handler->Finalize();
@@ -256,7 +282,8 @@ int WeaselServerApp::Run() {
   tray_icon.RemoveIcon();
   win_sparkle_cleanup();
 
-  // spec 074 (L75): QuickPanel 改纯 GDI 后,不需要 ShutdownD2D 也没有 factory 释放
+  // spec 074 (L75): QuickPanel 改纯 GDI 后,不需要 ShutdownD2D 也没有 factory
+  // 释放
 
   return ret;
 }
@@ -290,14 +317,15 @@ void WeaselServerApp::SetupMenuHandlers() {
   m_server.AddMenuHandler(ID_WEASELTRAY_LOGDIR,
                           std::bind(explore, WeaselLogPath()));
 
-  m_server.AddMenuHandler(
-      ID_WEASELTRAY_RESTORE_IGNORED, [this] {
+  m_server.AddMenuHandler(ID_WEASELTRAY_RESTORE_IGNORED, [this] {
     std::wstring userDir = WeaselUserDataPath().wstring();
-    if (userDir.empty()) return true;  // no user-data dir -> no-op
+    if (userDir.empty())
+      return true;  // no user-data dir -> no-op
     WIN32_FIND_DATAW fd;
     std::wstring pattern = userDir + L"\\*.user_ignore.txt";
     HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return true;  // no ignore files -> success
+    if (h == INVALID_HANDLE_VALUE)
+      return true;  // no ignore files -> success
     do {
       std::wstring path = userDir + L"\\" + fd.cFileName;
       DeleteFileW(path.c_str());
@@ -338,6 +366,18 @@ void WeaselServerApp::SetupMenuHandlers() {
     ShowQuickPanel();
     return true;
   });
+
+  // spec 084 / ADR 0013 D4: 托盘菜单勾选项 -> 快捷设置栏长显模式。
+  m_server.AddMenuHandler(ID_QUICKPANEL_ALWAYS_SHOW, [this] {
+    if (GetCurrentThreadId() != m_uiThreadId) {
+      // 菜单命令可能从 IPC 管道线程到达,弹回界面线程处理。
+      ::PostMessage(m_server.GetHWnd(), WM_COMMAND,
+                    MAKEWPARAM(ID_QUICKPANEL_ALWAYS_SHOW, 0), 0);
+      return true;
+    }
+    ToggleAlwaysShowMode();
+    return true;
+  });
 }
 
 void WeaselServerApp::ToggleQuickPanel() {
@@ -347,6 +387,18 @@ void WeaselServerApp::ToggleQuickPanel() {
     QuickPanelDialog::Hide();
   } else {
     ShowQuickPanel();
+  }
+}
+
+// spec 084 / ADR 0013 D4: 打开长显 => 立刻显示面板(复用 ShowQuickPanel
+// 的真实回调注入);关闭长显 => 面板回到瞬时模式并立刻收起。
+void WeaselServerApp::ToggleAlwaysShowMode() {
+  const bool enable = !QuickPanelDialog::AlwaysShowMode();
+  QuickPanelDialog::SetAlwaysShowMode(enable);
+  if (enable) {
+    ShowQuickPanel();
+  } else {
+    QuickPanelDialog::Hide();
   }
 }
 

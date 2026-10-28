@@ -21,10 +21,12 @@
 #include "stdafx.h"
 #include <functional>
 #include "QuickPanelDialog.h"
+// spec 084 / ADR 0013 D9: 纯函数的共享单元(header-only,不依赖 windows.h)。
+#include <QuickPanelAlpha.h>
 
-// L81-fix: PNG logo 加载改用 WIC 不用 GDI+ Bitmap(IStream*) (L67-L69 雷区) 也不用
-// LoadImageW(IMAGE_BITMAP) (L81 — IMAGE_BITMAP 不含 PNG,静默失败)。
-// 需要 <wincodec.h> + windowscodecs.lib (在 xmake.lua 已加)。
+// L81-fix: PNG logo 加载改用 WIC 不用 GDI+ Bitmap(IStream*) (L67-L69 雷区)
+// 也不用 LoadImageW(IMAGE_BITMAP) (L81 — IMAGE_BITMAP 不含 PNG,静默失败)。 需要
+// <wincodec.h> + windowscodecs.lib (在 xmake.lua 已加)。
 #include <wincodec.h>
 #include <wrl/client.h>
 #pragma comment(lib, "windowscodecs.lib")
@@ -32,10 +34,12 @@
 static const wchar_t kWindowClassName[] = L"FluxingQuickPanel_v3";
 
 namespace {
-// 圆角掩码测试:4 corner cells 用 circle equation,其余 (W-r)..(H-r) 范围内的 inside=true。
-// per-pixel 内调用 ~54K 次 (360x68,1x DPI),避免 CreateRoundRectRgn / PtInRegion 开销。
+// 圆角掩码测试:4 corner cells 用 circle equation,其余 (W-r)..(H-r) 范围内的
+// inside=true。 per-pixel 内调用 ~54K 次 (360x68,1x DPI),避免
+// CreateRoundRectRgn / PtInRegion 开销。
 inline bool IsInsideRoundedRect(int x, int y, int W, int H, int r) {
-  if (x < 0 || x >= W || y < 0 || y >= H) return false;
+  if (x < 0 || x >= W || y < 0 || y >= H)
+    return false;
   if (x < r && y < r) {
     int dx = r - x, dy = r - y;
     return (dx * dx + dy * dy) <= (r * r);
@@ -59,16 +63,19 @@ inline bool IsInsideRoundedRect(int x, int y, int W, int H, int r) {
 // 颜色常量(在文件作用域,本地作用域,kIcoDimC 等)
 // L82-fix: panel bg 从纯白 RGB(255,255,255) 改成 RGB(245,245,250) 浅玻璃冷色。
 // 原因(L82 user feedback):在浅色桌面 wallpaper 上,纯白 BG + 白边框 = 完全隐形。
-// 浅玻璃色 仍保留 macOS Liquid Glass 视觉感,但**任何背景下**都能看出 panel 形状。
-// L91-fix: kIcoDimC RGB(50,50,60) → RGB(130,130,140) 浅灰 — user 反馈"边框颜色深度太深"
-// 任何背景下不刺眼,仍能看出 panel 形状。DrawIcon* 全部用 kIcoDimC 创建 pen,
-// 必须修这里(不在 header 那个 alias)。
-constexpr COLORREF kIcoDimC   = RGB(130, 130, 140); // L91-fix: 边框颜色降低深度
-constexpr COLORREF kAccentC  = RGB(255, 95, 49);    // 品牌橙
+// 浅玻璃色 仍保留 macOS Liquid Glass 视觉感,但**任何背景下**都能看出 panel
+// 形状。 L91-fix: kIcoDimC RGB(50,50,60) → RGB(130,130,140) 浅灰 — user
+// 反馈"边框颜色深度太深" 任何背景下不刺眼,仍能看出 panel 形状。DrawIcon* 全部用
+// kIcoDimC 创建 pen, 必须修这里(不在 header 那个 alias)。
+constexpr COLORREF kIcoDimC = RGB(130, 130, 140);  // L91-fix: 边框颜色降低深度
+constexpr COLORREF kAccentC = RGB(255, 95, 49);    // 品牌橙
 constexpr COLORREF kAccent2C = RGB(155, 81, 224);  // 品牌紫
-constexpr COLORREF kWhiteC   = RGB(255, 255, 255); // 白色(active icon)
+constexpr COLORREF kWhiteC = RGB(255, 255, 255);   // 白色(active icon)
 
-void QuickPanelDialog::DrawIconSchema(HDC hdc, int x, int y, COLORREF penColor) {
+void QuickPanelDialog::DrawIconSchema(HDC hdc,
+                                      int x,
+                                      int y,
+                                      COLORREF penColor) {
   // 双向切换箭头(viewBox 24x24,scale 到 30x30)
   // 上箭头 →: (4,9)→(17,9) + 箭头头
   // L86-fix: pen color 从 caller 传入(default 灰 / hover 橙 / active 白)
@@ -87,7 +94,10 @@ void QuickPanelDialog::DrawIconSchema(HDC hdc, int x, int y, COLORREF penColor) 
   DeleteObject(SelectObject(hdc, pen));
 }
 
-void QuickPanelDialog::DrawIconPhrase(HDC hdc, int x, int y, COLORREF penColor) {
+void QuickPanelDialog::DrawIconPhrase(HDC hdc,
+                                      int x,
+                                      int y,
+                                      COLORREF penColor) {
   // 对话气泡:圆角矩形 + 尾巴
   // L86-fix: pen color 从 caller 传入
   HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
@@ -107,31 +117,46 @@ void QuickPanelDialog::DrawIconPhrase(HDC hdc, int x, int y, COLORREF penColor) 
   DeleteObject(SelectObject(hdc, brush));
 }
 
-void QuickPanelDialog::DrawIconSymbols(HDC hdc, int x, int y, COLORREF penColor) {
+void QuickPanelDialog::DrawIconSymbols(HDC hdc,
+                                       int x,
+                                       int y,
+                                       COLORREF penColor) {
   // 键盘(viewBox 24x24)
   // L86-fix: pen color 从 caller 传入
   HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
   // 外壳
   RoundRect(hdc, x + 3, y + 6, x + 27, y + 24, 2, 2);
   // 顶行按键分隔(4个)
-  MoveToEx(hdc, x + 8, y + 6, nullptr); LineTo(hdc, x + 8, y + 12);
-  MoveToEx(hdc, x + 13, y + 6, nullptr); LineTo(hdc, x + 13, y + 12);
-  MoveToEx(hdc, x + 18, y + 6, nullptr); LineTo(hdc, x + 18, y + 12);
-  MoveToEx(hdc, x + 22, y + 6, nullptr); LineTo(hdc, x + 22, y + 12);
+  MoveToEx(hdc, x + 8, y + 6, nullptr);
+  LineTo(hdc, x + 8, y + 12);
+  MoveToEx(hdc, x + 13, y + 6, nullptr);
+  LineTo(hdc, x + 13, y + 12);
+  MoveToEx(hdc, x + 18, y + 6, nullptr);
+  LineTo(hdc, x + 18, y + 12);
+  MoveToEx(hdc, x + 22, y + 6, nullptr);
+  LineTo(hdc, x + 22, y + 12);
   // 中行分隔
-  MoveToEx(hdc, x + 3, y + 12, nullptr); LineTo(hdc, x + 27, y + 12);
-  MoveToEx(hdc, x + 3, y + 16, nullptr); LineTo(hdc, x + 27, y + 16);
+  MoveToEx(hdc, x + 3, y + 12, nullptr);
+  LineTo(hdc, x + 27, y + 12);
+  MoveToEx(hdc, x + 3, y + 16, nullptr);
+  LineTo(hdc, x + 27, y + 16);
   // 中行内部
-  MoveToEx(hdc, x + 11, y + 16, nullptr); LineTo(hdc, x + 11, y + 20);
-  MoveToEx(hdc, x + 18, y + 16, nullptr); LineTo(hdc, x + 18, y + 20);
+  MoveToEx(hdc, x + 11, y + 16, nullptr);
+  LineTo(hdc, x + 11, y + 20);
+  MoveToEx(hdc, x + 18, y + 16, nullptr);
+  LineTo(hdc, x + 18, y + 20);
   // 空格(底部加粗)
   HPEN penBold = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 3, kIcoDimC));
-  MoveToEx(hdc, x + 8, y + 22, nullptr); LineTo(hdc, x + 22, y + 22);
+  MoveToEx(hdc, x + 8, y + 22, nullptr);
+  LineTo(hdc, x + 22, y + 22);
   DeleteObject(SelectObject(hdc, penBold));
   DeleteObject(SelectObject(hdc, pen));
 }
 
-void QuickPanelDialog::DrawIconSettings(HDC hdc, int x, int y, COLORREF penColor) {
+void QuickPanelDialog::DrawIconSettings(HDC hdc,
+                                        int x,
+                                        int y,
+                                        COLORREF penColor) {
   // 齿轮(中心圆 + 8 辐射线)
   // L86-fix: pen color 从 caller 传入
   HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
@@ -147,7 +172,10 @@ void QuickPanelDialog::DrawIconSettings(HDC hdc, int x, int y, COLORREF penColor
   DeleteObject(SelectObject(hdc, pen));
 }
 
-void QuickPanelDialog::DrawIconAccount(HDC hdc, int x, int y, COLORREF penColor) {
+void QuickPanelDialog::DrawIconAccount(HDC hdc,
+                                       int x,
+                                       int y,
+                                       COLORREF penColor) {
   // 头像(头 + 肩)
   // L86-fix: pen color 从 caller 传入
   HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
@@ -159,17 +187,22 @@ void QuickPanelDialog::DrawIconAccount(HDC hdc, int x, int y, COLORREF penColor)
 }
 
 // ===== 静态成员定义 =====
-HWND     QuickPanelDialog::s_hwnd         = NULL;
-QuickPanelDialog::Mode QuickPanelDialog::s_mode = QuickPanelDialog::Mode::kHidden;
-bool     QuickPanelDialog::s_fullwidth    = false;
-bool     QuickPanelDialog::s_mouseTracked = false;
-bool     QuickPanelDialog::s_dragging     = false;   // L87-fix 手动 drag 状态
-POINT    QuickPanelDialog::s_dragStartCursor = {0, 0}; // L87-fix drag 开始时 cursor
-RECT     QuickPanelDialog::s_dragStartWindow = {0, 0, 0, 0}; // L87-fix drag 开始时 window pos
-int      QuickPanelDialog::s_outsideMs     = 0;      // L89-fix: 鼠标在 panel 外累计 ms
-DWORD    QuickPanelDialog::s_showTime      = 0;      // v0.19.0.24:Show() 时刻 grace 计时
-int      QuickPanelDialog::s_alpha        = 255;
-int      QuickPanelDialog::s_targetAlpha  = 255;
+HWND QuickPanelDialog::s_hwnd = NULL;
+QuickPanelDialog::Mode QuickPanelDialog::s_mode =
+    QuickPanelDialog::Mode::kHidden;
+bool QuickPanelDialog::s_fullwidth = false;
+bool QuickPanelDialog::s_mouseTracked = false;
+bool QuickPanelDialog::s_dragging = false;  // L87-fix 手动 drag 状态
+POINT QuickPanelDialog::s_dragStartCursor = {0,
+                                             0};  // L87-fix drag 开始时 cursor
+RECT QuickPanelDialog::s_dragStartWindow = {
+    0, 0, 0, 0};                        // L87-fix drag 开始时 window pos
+int QuickPanelDialog::s_outsideMs = 0;  // L89-fix: 鼠标在 panel 外累计 ms
+DWORD QuickPanelDialog::s_showTime = 0;  // v0.19.0.24:Show() 时刻 grace 计时
+// spec 084 / ADR 0013: 整体不透明度系数,不是 alpha 通道值本身。
+// 255 = 满值(逐像素与 spec 084 之前一致),51 = 20%(长显常态)。
+int QuickPanelDialog::s_alphaFactor = fluxing::kAlphaFactorFull;
+int QuickPanelDialog::s_targetAlphaFactor = fluxing::kAlphaFactorFull;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onSchema;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onUserFolder;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onPhrases;
@@ -177,44 +210,48 @@ QuickPanelDialog::OnToggle QuickPanelDialog::s_onFullwidth;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onSymbols;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onLogin;
 // v0.19.0.29:hit==3 走 SetOn* setter 注入 callback。
-// v0.19.0.60 (Phase L 调整 1): s_onUserDict / SetOnUserDict 整体删除 — UserDictionary 模块下线。
+// v0.19.0.60 (Phase L 调整 1): s_onUserDict / SetOnUserDict 整体删除 —
+// UserDictionary 模块下线。
 QuickPanelDialog::OnShowShortcut QuickPanelDialog::s_onShortcut;
 
 // v0.19.0.29 setter 实现。SetOn* 在 WeaselServerApp::Run() 末尾(after m_server
 // Start + RegisterPhrasesHotkey,before m_server.Run 进入消息循环)调一次,
 // 跟 m_server 同 lifecycle。
-void QuickPanelDialog::SetOnShortcut(OnShowShortcut fn) { s_onShortcut = fn; }
+void QuickPanelDialog::SetOnShortcut(OnShowShortcut fn) {
+  s_onShortcut = fn;
+}
 
 int QuickPanelDialog::s_hoveredIdx = -1;
-int QuickPanelDialog::s_activeIdx  = -1;
+int QuickPanelDialog::s_activeIdx = -1;
 
-HBITMAP  QuickPanelDialog::s_hBmpLogo     = NULL;
-HBRUSH   QuickPanelDialog::s_hBrushPanelBg   = NULL;
-HBRUSH   QuickPanelDialog::s_hBrushIconDim   = NULL;
-HBRUSH   QuickPanelDialog::s_hBrushIconAccent= NULL;
-HBRUSH   QuickPanelDialog::s_hBrushActive    = NULL;
-HBRUSH   QuickPanelDialog::s_hBrushHighlight = NULL;
-HBRUSH   QuickPanelDialog::s_hBrushShadow    = NULL;
-HPEN     QuickPanelDialog::s_hPenIconDim     = NULL;
-HPEN     QuickPanelDialog::s_hPenIconAccent  = NULL;
-HPEN     QuickPanelDialog::s_hPenHighlight   = NULL;
-HDC      QuickPanelDialog::s_hdcMem       = NULL;
-HBITMAP  QuickPanelDialog::s_hBmpMem      = NULL;
-int      QuickPanelDialog::s_panelW_phys  = 0;
-int      QuickPanelDialog::s_panelH_phys  = 0;
-float    QuickPanelDialog::s_dpr_x        = 1.0f;
-float    QuickPanelDialog::s_dpr_y        = 1.0f;
-int      QuickPanelDialog::s_panelPadding_phys = 0;
-int      QuickPanelDialog::s_btnYOffset_phys = 0;  // v0.19.0.24 新增
-int      QuickPanelDialog::s_btnSize_phys  = 0;
-int      QuickPanelDialog::s_icoSize_phys  = 0;
-int      QuickPanelDialog::s_btnRadius_phys = 0;
-int      QuickPanelDialog::s_brandSize_phys = 0;
-int      QuickPanelDialog::s_panelRadius_phys = 0;
-int      QuickPanelDialog::s_btnGap_phys   = 0;
+HBITMAP QuickPanelDialog::s_hBmpLogo = NULL;
+HBRUSH QuickPanelDialog::s_hBrushPanelBg = NULL;
+HBRUSH QuickPanelDialog::s_hBrushIconDim = NULL;
+HBRUSH QuickPanelDialog::s_hBrushIconAccent = NULL;
+HBRUSH QuickPanelDialog::s_hBrushActive = NULL;
+HBRUSH QuickPanelDialog::s_hBrushHighlight = NULL;
+HBRUSH QuickPanelDialog::s_hBrushShadow = NULL;
+HPEN QuickPanelDialog::s_hPenIconDim = NULL;
+HPEN QuickPanelDialog::s_hPenIconAccent = NULL;
+HPEN QuickPanelDialog::s_hPenHighlight = NULL;
+HDC QuickPanelDialog::s_hdcMem = NULL;
+HBITMAP QuickPanelDialog::s_hBmpMem = NULL;
+int QuickPanelDialog::s_panelW_phys = 0;
+int QuickPanelDialog::s_panelH_phys = 0;
+float QuickPanelDialog::s_dpr_x = 1.0f;
+float QuickPanelDialog::s_dpr_y = 1.0f;
+int QuickPanelDialog::s_panelPadding_phys = 0;
+int QuickPanelDialog::s_btnYOffset_phys = 0;  // v0.19.0.24 新增
+int QuickPanelDialog::s_btnSize_phys = 0;
+int QuickPanelDialog::s_icoSize_phys = 0;
+int QuickPanelDialog::s_btnRadius_phys = 0;
+int QuickPanelDialog::s_brandSize_phys = 0;
+int QuickPanelDialog::s_panelRadius_phys = 0;
+int QuickPanelDialog::s_btnGap_phys = 0;
 
 // ===== 内部 =====
-// L81 + L82: LoadLogoWIC 用 WIC 解码 PNG(不用 LoadImageW/IMAGE_BITMAP,后者不支持 PNG)。
+// L81 + L82: LoadLogoWIC 用 WIC 解码 PNG(不用
+// LoadImageW/IMAGE_BITMAP,后者不支持 PNG)。
 // 流程:CoCreateInstance(IWICImagingFactory) → CreateDecoderFromFilename →
 // GetFrame(0) → FormatConverter(32bppBGRA) → CopyPixels 到 32-bit DIBSection。
 //
@@ -222,19 +259,20 @@ int      QuickPanelDialog::s_btnGap_phys   = 0;
 // 之前 v0.19.0.10/0.11 用 `fluxing-logo.png` (700x700 大 logo,中心裁切后
 // 渲染出来是橘红色块,不是 design 上的小 icon)。
 //
-// L83-fix: 加 IWICBitmapScaler 在 WIC 阶段把 PNG 预缩放到 s_brandSize_phys (DPI-aware
-// 物理像素)。原因:GDI AlphaBlend **不支持拉伸**(MS docs 显式说 "AlphaBlend does not
-// support stretching or compressing"),L82 误以为会拉伸。预缩放到 dest 大小后
-// AlphaBlend 1:1 OK。
+// L83-fix: 加 IWICBitmapScaler 在 WIC 阶段把 PNG 预缩放到 s_brandSize_phys
+// (DPI-aware 物理像素)。原因:GDI AlphaBlend **不支持拉伸**(MS docs 显式说
+// "AlphaBlend does not support stretching or compressing"),L82
+// 误以为会拉伸。预缩放到 dest 大小后 AlphaBlend 1:1 OK。
 HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
   hBmpOut = NULL;
   wchar_t exeDir[MAX_PATH] = {0};
   GetModuleFileNameW(NULL, exeDir, MAX_PATH);
   wchar_t* lastSlash = wcsrchr(exeDir, L'\\');
-  if (lastSlash) *lastSlash = L'\0';
+  if (lastSlash)
+    *lastSlash = L'\0';
   wchar_t logoPath[MAX_PATH];
-  // L84-fix: try fluxing-logo_small.png first (20x20 PNG icon, actual user logo),
-  // fall back to fluxing-logo.png (700x700 big logo) if small not found.
+  // L84-fix: try fluxing-logo_small.png first (20x20 PNG icon, actual user
+  // logo), fall back to fluxing-logo.png (700x700 big logo) if small not found.
   // Some user installs may be missing the small file (older v0.19.0.x installs
   // didn't have it), and the small was added in v0.19.0.13 — fallback ensures
   // logo is always shown after upgrade.
@@ -245,50 +283,60 @@ HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
 
   // 确保 thread 上 COM 已初始化(WIC STA)。失败也不致命 → 仅显示空 logo
   HRESULT hrInit = EnsureComInit();
-  if (FAILED(hrInit)) return hrInit;
+  if (FAILED(hrInit))
+    return hrInit;
 
   Microsoft::WRL::ComPtr<IWICImagingFactory> wic;
   HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_ALL,
                                 IID_PPV_ARGS(&wic));
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr))
+    return hr;
 
   Microsoft::WRL::ComPtr<IWICBitmapDecoder> dec;
   hr = wic->CreateDecoderFromFilename(logoPath, nullptr, GENERIC_READ,
                                       WICDecodeMetadataCacheOnLoad, &dec);
-  if (FAILED(hr)) return hr;  // 文件可能不存在 — 用户没装 logo,或路径错
+  if (FAILED(hr))
+    return hr;  // 文件可能不存在 — 用户没装 logo,或路径错
 
   Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
   hr = dec->GetFrame(0, &frame);
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr))
+    return hr;
 
-  // L83: IWICBitmapScaler 预缩放到 brand area 物理大小。保证 GDI AlphaBlend 1:1,
-  // 不需要 AlphaBlend 拉伸(它不支持)。
-  // 用 s_brandSize_phys(DPI 缩放后的物理像素),不是 logical kBrandSize。
+  // L83: IWICBitmapScaler 预缩放到 brand area 物理大小。保证 GDI AlphaBlend
+  // 1:1, 不需要 AlphaBlend 拉伸(它不支持)。 用 s_brandSize_phys(DPI
+  // 缩放后的物理像素),不是 logical kBrandSize。
   Microsoft::WRL::ComPtr<IWICBitmapScaler> scaler;
   hr = wic->CreateBitmapScaler(&scaler);
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr))
+    return hr;
   UINT targetSize = (UINT)s_brandSize_phys;
-  if (targetSize < 1) targetSize = 1;  // 保护 0
+  if (targetSize < 1)
+    targetSize = 1;  // 保护 0
   hr = scaler->Initialize(frame.Get(), targetSize, targetSize,
                           WICBitmapInterpolationModeHighQualityCubic);
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr))
+    return hr;
 
   Microsoft::WRL::ComPtr<IWICFormatConverter> fmtConv;
   hr = wic->CreateFormatConverter(&fmtConv);
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr))
+    return hr;
 
   hr = fmtConv->Initialize(scaler.Get(), GUID_WICPixelFormat32bppBGRA,
-                            WICBitmapDitherTypeNone, nullptr, 0.0,
-                            WICBitmapPaletteTypeCustom);
-  if (FAILED(hr)) return hr;
+                           WICBitmapDitherTypeNone, nullptr, 0.0,
+                           WICBitmapPaletteTypeCustom);
+  if (FAILED(hr))
+    return hr;
 
   UINT w = 0, h = 0;
   hr = fmtConv->GetSize(&w, &h);
-  if (FAILED(hr) || w == 0 || h == 0) return hr;
+  if (FAILED(hr) || w == 0 || h == 0)
+    return hr;
 
   // 创建 32-bit BGRA DIB Section (top-down,负 height) 接收 CopyPixels 输出。
-  // 与 CreateOffscreenDC 的 s_hBmpMem 用同样的 masks,保证 BitBlt/AlphaBlend 时 alpha
-  // 通道结构一致。
+  // 与 CreateOffscreenDC 的 s_hBmpMem 用同样的 masks,保证 BitBlt/AlphaBlend 时
+  // alpha 通道结构一致。
   BITMAPV5HEADER bi = {};
   bi.bV5Size = sizeof(bi);
   bi.bV5Width = w;
@@ -296,16 +344,17 @@ HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
   bi.bV5Planes = 1;
   bi.bV5BitCount = 32;
   bi.bV5Compression = BI_BITFIELDS;
-  bi.bV5RedMask   = 0x00FF0000;
+  bi.bV5RedMask = 0x00FF0000;
   bi.bV5GreenMask = 0x0000FF00;
-  bi.bV5BlueMask  = 0x000000FF;
+  bi.bV5BlueMask = 0x000000FF;
   bi.bV5AlphaMask = 0xFF000000;
 
   void* bits = nullptr;
   HBITMAP hbmp = CreateDIBSection(nullptr, (BITMAPINFO*)&bi, DIB_RGB_COLORS,
-                                   &bits, nullptr, 0);
+                                  &bits, nullptr, 0);
   if (!hbmp || !bits) {
-    if (hbmp) DeleteObject(hbmp);
+    if (hbmp)
+      DeleteObject(hbmp);
     return E_OUTOFMEMORY;
   }
 
@@ -325,7 +374,8 @@ HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
 // S_FALSE 表示**已**初始化过(无需重复)。我们 idempotent 调用一次。
 HRESULT QuickPanelDialog::EnsureComInit() {
   static bool s_initialized = false;
-  if (s_initialized) return S_OK;
+  if (s_initialized)
+    return S_OK;
   HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   if (SUCCEEDED(hr)) {
     s_initialized = true;
@@ -346,12 +396,15 @@ HRESULT QuickPanelDialog::CreateOffscreenDC(int w, int h) {
   s_panelH_phys = h;
   HDC hdcScreen = GetDC(NULL);
   s_hdcMem = CreateCompatibleDC(hdcScreen);
-  if (!s_hdcMem) { ReleaseDC(NULL, hdcScreen); return E_FAIL; }
+  if (!s_hdcMem) {
+    ReleaseDC(NULL, hdcScreen);
+    return E_FAIL;
+  }
 
   // L78-fix: 改用 32-bit DIB section(带 alpha channel)
-  // 之前 CreateCompatibleBitmap 是 24-bit DDB,GradientFill 的 alpha 被丢掉 → 全黑
-  // L81-fix: 用 top-down DIB (负 height) 让 y=0 ↔ top, y=H-1 ↔ bottom 直观一致,
-  // 否则 ApplyAlphaGradient 的 gradient 计算和实际像素位置是反的。
+  // 之前 CreateCompatibleBitmap 是 24-bit DDB,GradientFill 的 alpha 被丢掉 →
+  // 全黑 L81-fix: 用 top-down DIB (负 height) 让 y=0 ↔ top, y=H-1 ↔ bottom
+  // 直观一致, 否则 ApplyAlphaGradient 的 gradient 计算和实际像素位置是反的。
   BITMAPV5HEADER bi = {};
   bi.bV5Size = sizeof(bi);
   bi.bV5Width = w;
@@ -359,81 +412,112 @@ HRESULT QuickPanelDialog::CreateOffscreenDC(int w, int h) {
   bi.bV5Planes = 1;
   bi.bV5BitCount = 32;
   bi.bV5Compression = BI_BITFIELDS;
-  bi.bV5RedMask   = 0x00FF0000;
+  bi.bV5RedMask = 0x00FF0000;
   bi.bV5GreenMask = 0x0000FF00;
-  bi.bV5BlueMask  = 0x000000FF;
+  bi.bV5BlueMask = 0x000000FF;
   bi.bV5AlphaMask = 0xFF000000;
   void* pBits = nullptr;
-  s_hBmpMem = CreateDIBSection(hdcScreen, (BITMAPINFO*)&bi, DIB_RGB_COLORS, &pBits, NULL, 0);
-  if (!s_hBmpMem) { DeleteDC(s_hdcMem); s_hdcMem = NULL; ReleaseDC(NULL, hdcScreen); return E_FAIL; }
+  s_hBmpMem = CreateDIBSection(hdcScreen, (BITMAPINFO*)&bi, DIB_RGB_COLORS,
+                               &pBits, NULL, 0);
+  if (!s_hBmpMem) {
+    DeleteDC(s_hdcMem);
+    s_hdcMem = NULL;
+    ReleaseDC(NULL, hdcScreen);
+    return E_FAIL;
+  }
   SelectObject(s_hdcMem, s_hBmpMem);
   ReleaseDC(NULL, hdcScreen);
   return S_OK;
 }
 
 void QuickPanelDialog::DestroyOffscreenDC() {
-  if (s_hdcMem) { DeleteDC(s_hdcMem); s_hdcMem = NULL; }
-  if (s_hBmpMem) { DeleteObject(s_hBmpMem); s_hBmpMem = NULL; }
+  if (s_hdcMem) {
+    DeleteDC(s_hdcMem);
+    s_hdcMem = NULL;
+  }
+  if (s_hBmpMem) {
+    DeleteObject(s_hBmpMem);
+    s_hBmpMem = NULL;
+  }
 }
 
 int QuickPanelDialog::HitTest(int x, int y) {
-  if (s_panelW_phys == 0) return -1;
-  if (x < 0 || y < 0 || x >= s_panelW_phys || y >= s_panelH_phys) return -1;
-  // L83-fix: WM_MOUSEMOVE lParam 在 PerMonitor DPI Aware 进程下是 **physical pixels**
-  // (Windows 自动缩放从 logical → physical 投递)。HitTest 必须用 physical 像素常量
-  // (s_*_phys 按 dpr 缩放后的)。之前用 logical kPanelPadding 等,在 sub-100% DPI 显示器
-  // 上 mouse 物理 222 → logical 148 → 按 360x68 layout 算 hit = btn2,但 user 实际在物理
-  // btn1 (x=148/240=61% 横向位置)。Hover 完全错位。改用 physical 常量后,physical 222
-  // → btn1 (btn1 在 physical x=83..120)。
+  if (s_panelW_phys == 0)
+    return -1;
+  if (x < 0 || y < 0 || x >= s_panelW_phys || y >= s_panelH_phys)
+    return -1;
+  // L83-fix: WM_MOUSEMOVE lParam 在 PerMonitor DPI Aware 进程下是 **physical
+  // pixels** (Windows 自动缩放从 logical → physical 投递)。HitTest 必须用
+  // physical 像素常量 (s_*_phys 按 dpr 缩放后的)。之前用 logical kPanelPadding
+  // 等,在 sub-100% DPI 显示器 上 mouse 物理 222 → logical 148 → 按 360x68
+  // layout 算 hit = btn2,但 user 实际在物理 btn1 (x=148/240=61%
+  // 横向位置)。Hover 完全错位。改用 physical 常量后,physical 222 → btn1 (btn1
+  // 在 physical x=83..120)。
   int padding = s_panelPadding_phys;
   int brandX = padding;
   int brandY = padding;
-  if (x >= brandX && x < brandX + s_brandSize_phys && y >= brandY && y < brandY + s_brandSize_phys) return -2;  // brand
-  // L93-fix:brand→btn gap 从 max(1,4*dpr) 修正为 max(2,2*dpr) — 跟 PaintOpaqueContent
-  // 的 `buttonStartX = pad + s_brandSize_phys + max(2,2*dpr)` 保持一致。L91 改
-  // PaintOpaqueContent 时漏 HitTest,导致 HitTest 算的 button0 起点 (44 when dpr=1)
-  // 跟 visual button0 起点 (42 when dpr=1) 偏右 2 px,点击 button0 最左 2 px 区域
-  // 走 HTCAPTION 拖动而非 click。Fix。
-  int buttonStartX = padding + s_brandSize_phys +
-                     max(2, (int)(2 * s_dpr_x + 0.5f));
+  if (x >= brandX && x < brandX + s_brandSize_phys && y >= brandY &&
+      y < brandY + s_brandSize_phys)
+    return -2;  // brand
+  // L93-fix:brand→btn gap 从 max(1,4*dpr) 修正为 max(2,2*dpr) — 跟
+  // PaintOpaqueContent 的 `buttonStartX = pad + s_brandSize_phys +
+  // max(2,2*dpr)` 保持一致。L91 改 PaintOpaqueContent 时漏 HitTest,导致 HitTest
+  // 算的 button0 起点 (44 when dpr=1) 跟 visual button0 起点 (42 when dpr=1)
+  // 偏右 2 px,点击 button0 最左 2 px 区域 走 HTCAPTION 拖动而非 click。Fix。
+  int buttonStartX =
+      padding + s_brandSize_phys + max(2, (int)(2 * s_dpr_x + 0.5f));
   // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons (UserDict 槽位删除)
   for (int i = 0; i < kButtonCount; i++) {
     int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
-    // v0.19.0.24-fix(issue 1):Y 范围从 `padding`(kPanelPadding=5 X padding)改 `s_btnYOffset_phys`
-    // (=(kPanelH-kBtnSize)/2=6 dpr 缩放),跟 PaintOpaqueContent 的 y0 同步,避免 paint
-    // 跟 hit 区域错位。L93 时 y0=pad=5 跟 HitTest 的 `y >= padding` 一致,所以未暴露 bug;
-    // v0.19.0.24 改 y0=6 后必须同步 HitTest,否则按钮视觉下移 1 px 但 click hit 上 1 px。
-    if (x >= x0 && x < x0 + s_btnSize_phys && y >= s_btnYOffset_phys && y < s_btnYOffset_phys + s_btnSize_phys) return i;
+    // v0.19.0.24-fix(issue 1):Y 范围从 `padding`(kPanelPadding=5 X padding)改
+    // `s_btnYOffset_phys`
+    // (=(kPanelH-kBtnSize)/2=6 dpr 缩放),跟 PaintOpaqueContent 的 y0 同步,避免
+    // paint 跟 hit 区域错位。L93 时 y0=pad=5 跟 HitTest 的 `y >= padding`
+    // 一致,所以未暴露 bug; v0.19.0.24 改 y0=6 后必须同步
+    // HitTest,否则按钮视觉下移 1 px 但 click hit 上 1 px。
+    if (x >= x0 && x < x0 + s_btnSize_phys && y >= s_btnYOffset_phys &&
+        y < s_btnYOffset_phys + s_btnSize_phys)
+      return i;
   }
   return -1;
 }
 
 // ===== Window procedure =====
-LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
+                                           UINT msg,
+                                           WPARAM w,
+                                           LPARAM l) {
   switch (msg) {
-    case WM_CREATE:    return OnCreate(hwnd);
-    case WM_DESTROY:   return OnDestroy(hwnd);
-    case WM_PAINT:     return OnPaint(hwnd);
-    case WM_ERASEBKGND: return 1;          // GDI 双缓冲,不让 Windows 清背景
-    // L87-fix: panel 拖动支持 — 改用 **手动 drag** 替代 v0.19.0.16 L86 的 WM_NCHITTEST
+    case WM_CREATE:
+      return OnCreate(hwnd);
+    case WM_DESTROY:
+      return OnDestroy(hwnd);
+    case WM_PAINT:
+      return OnPaint(hwnd);
+    case WM_ERASEBKGND:
+      return 1;  // GDI 双缓冲,不让 Windows 清背景
+    // L87-fix: panel 拖动支持 — 改用 **手动 drag** 替代 v0.19.0.16 L86 的
+    // WM_NCHITTEST
     // + HTCAPTION。L86 的 HTCAPTION 在 WS_POPUP + WS_EX_LAYERED 窗口下 Windows
     // DefWindowProc 没有处理 system drag(L86 报告"无法拖动"是 user 反馈)。
     // 手动 drag 方法:
-    //   WM_LBUTTONDOWN:HitTest 不在 button 内,SetCapture + 记录原 cursor pos + 原 window pos
-    //   WM_MOUSEMOVE:如果 captured,计算 delta + SetWindowPos 移动 window
-    //   WM_LBUTTONUP:ReleaseCapture 结束 drag
+    //   WM_LBUTTONDOWN:HitTest 不在 button 内,SetCapture + 记录原 cursor pos +
+    //   原 window pos WM_MOUSEMOVE:如果 captured,计算 delta + SetWindowPos 移动
+    //   window WM_LBUTTONUP:ReleaseCapture 结束 drag
     // 这样 button 区域正常 click,空白区域可以拖动。
     case WM_NCHITTEST: {
       POINT p = {LOWORD(l), HIWORD(l)};
       ScreenToClient(hwnd, &p);
       int hit = HitTest(p.x, p.y);
-      if (hit == -1) return HTCAPTION;  // 空白/品牌区 — 拖动
-      return HTCLIENT;  // 按钮区 — 正常 click/hover
+      if (hit == -1)
+        return HTCAPTION;  // 空白/品牌区 — 拖动
+      return HTCLIENT;     // 按钮区 — 正常 click/hover
     }
     // L92-fix: WM_DPICHANGED 重新计算 panel 位置
-    // Phase 1 root cause:Show() 在启动时计算位置 (workArea.right - kPanelW - 12, ...) 单次。
-    // DPI 切换后 panel 不动,可能出屏。修复:监 WM_DPICHANGED 重新计算并 SetWindowPos。
-    // 保持视觉大小不变(panel logical 尺寸 kPanelW/kPanelH 不变,Windows 自动 scale)。
+    // Phase 1 root cause:Show() 在启动时计算位置 (workArea.right - kPanelW -
+    // 12, ...) 单次。 DPI 切换后 panel 不动,可能出屏。修复:监 WM_DPICHANGED
+    // 重新计算并 SetWindowPos。 保持视觉大小不变(panel logical 尺寸
+    // kPanelW/kPanelH 不变,Windows 自动 scale)。
     case WM_DPICHANGED: {
       // 重新计算右下角位置(workArea 是新 DPI 物理像素)
       RECT newRc;
@@ -441,10 +525,14 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
       int newX = newRc.right - kPanelW - 12;
       int newY = newRc.bottom - kPanelH - 12;
       // L92-fix: clamp 到 workArea,避免低分辨率下 panel 出屏
-      if (newX < 0) newX = 0;
-      if (newY < 0) newY = 0;
-      if (newX + kPanelW > newRc.right) newX = newRc.right - kPanelW;
-      if (newY + kPanelH > newRc.bottom) newY = newRc.bottom - kPanelH;
+      if (newX < 0)
+        newX = 0;
+      if (newY < 0)
+        newY = 0;
+      if (newX + kPanelW > newRc.right)
+        newX = newRc.right - kPanelW;
+      if (newY + kPanelH > newRc.bottom)
+        newY = newRc.bottom - kPanelH;
       SetWindowPos(s_hwnd, HWND_TOPMOST, newX, newY, kPanelW, kPanelH,
                    SWP_NOZORDER | SWP_NOACTIVATE);
       // 重新画 panel
@@ -455,10 +543,11 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
     case WM_LBUTTONDOWN: {
       POINT p = {LOWORD(l), HIWORD(l)};
       int hit = HitTest(p.x, p.y);
-      // L88-fix: drag **任何位置**都启动(button + brand + 空白)。之前 v0.19.0.17
-      // L87 只在 hit==-1 时启动,user 长按 brand area 不响应。修复:无论 hit 是什么,
-      // SetCapture + record,这样整个 panel 任何地方长按都拖动。button click 仍然
-      // 通过 s_activeIdx 处理(LButtonUp 时检查 s_activeIdx 是否释放前还在同一按钮)。
+      // L88-fix: drag **任何位置**都启动(button + brand + 空白)。之前
+      // v0.19.0.17 L87 只在 hit==-1 时启动,user 长按 brand area
+      // 不响应。修复:无论 hit 是什么, SetCapture + record,这样整个 panel
+      // 任何地方长按都拖动。button click 仍然 通过 s_activeIdx 处理(LButtonUp
+      // 时检查 s_activeIdx 是否释放前还在同一按钮)。
       SetCapture(hwnd);
       s_dragging = TRUE;
       GetCursorPos(&s_dragStartCursor);
@@ -481,10 +570,8 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
         GetCursorPos(&cur);
         int dx = cur.x - s_dragStartCursor.x;
         int dy = cur.y - s_dragStartCursor.y;
-        SetWindowPos(hwnd, NULL,
-                     s_dragStartWindow.left + dx,
-                     s_dragStartWindow.top + dy,
-                     0, 0,
+        SetWindowPos(hwnd, NULL, s_dragStartWindow.left + dx,
+                     s_dragStartWindow.top + dy, 0, 0,
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
       } else {
         // L87-fix 替代 v0.19.0.14 L84 polling timer 的 WM_MOUSEMOVE 路径
@@ -493,7 +580,8 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
         int hit = HitTest(p.x, p.y);
         if (hit != s_hoveredIdx) {
           s_hoveredIdx = hit;
-          // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered,InvalidateRect 死代码。
+          // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered,InvalidateRect
+          // 死代码。
           RepaintLayered(hwnd);
         }
         if (!s_mouseTracked) {
@@ -506,46 +594,51 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
     }
     case WM_LBUTTONUP: {
       if (s_dragging) {
-        // v0.19.0.25-fix(ship blocker,Test Results Analyzer v0.19.0.25 验收发现):
-        // L88 drag-any-area (cpp:449) + L94 Fix A (cpp:504) 让 LButtonUp 几乎总走
-        // if-d 分支,且 if-d 分支只 reset state 不 invoke click,导致 else 分支的
-        // s_onPhrases() 调用永远走不到 — Phrase 按钮 click 死代码。
-        // 修法:在 if-d 分支内检测鼠标实际位移 (cur - s_dragStartCursor),未超过
-        // dragThreshold (4 物理像素) 视为 click → fall through invoke 回调。
-        // 注意:必须 reset s_activeIdx 之后再判断 (L94 Fix A 是 reset,不能漏),
-        // 但要在 reset 之前用 oldActiveIdx 记住 index 用于路由。
+        // v0.19.0.25-fix(ship blocker,Test Results Analyzer v0.19.0.25
+        // 验收发现): L88 drag-any-area (cpp:449) + L94 Fix A (cpp:504) 让
+        // LButtonUp 几乎总走 if-d 分支,且 if-d 分支只 reset state 不 invoke
+        // click,导致 else 分支的 s_onPhrases() 调用永远走不到 — Phrase 按钮
+        // click 死代码。 修法:在 if-d 分支内检测鼠标实际位移 (cur -
+        // s_dragStartCursor),未超过 dragThreshold (4 物理像素) 视为 click →
+        // fall through invoke 回调。 注意:必须 reset s_activeIdx 之后再判断
+        // (L94 Fix A 是 reset,不能漏), 但要在 reset 之前用 oldActiveIdx 记住
+        // index 用于路由。
         POINT cur;
         GetCursorPos(&cur);
         int dx = cur.x - s_dragStartCursor.x;
         int dy = cur.y - s_dragStartCursor.y;
-        int dragDist2 = dx*dx + dy*dy;
+        int dragDist2 = dx * dx + dy * dy;
         constexpr int kDragThresholdPx = 4;  // 4 物理像素,经验值(防手指抖动)
         bool actualDrag = (dragDist2 >= kDragThresholdPx * kDragThresholdPx);
-        int oldActiveIdx = s_activeIdx;     // 记住 index 用于 click 路由
+        int oldActiveIdx = s_activeIdx;  // 记住 index 用于 click 路由
 
         s_dragging = FALSE;
         ReleaseCapture();
         // drag 结束后清 hover
         s_hoveredIdx = -1;
-        // v0.19.0.24-fix(issue 3):补 s_activeIdx = -1。L88-fix (cpp:449) 让 LButtonDown
-        // 无条件 s_dragging=TRUE,所以 LButtonUp 几乎总走 if-d 分支;之前 if-d 分支只
-        // reset s_dragging + s_hoveredIdx,没 reset s_activeIdx,导致 PaintOpaqueContent
-        // 看到 isActive=true 画橙 bg,永久残留。Fix A:补这一行(对称 else 分支已有)。
+        // v0.19.0.24-fix(issue 3):补 s_activeIdx = -1。L88-fix (cpp:449) 让
+        // LButtonDown 无条件 s_dragging=TRUE,所以 LButtonUp 几乎总走 if-d
+        // 分支;之前 if-d 分支只 reset s_dragging + s_hoveredIdx,没 reset
+        // s_activeIdx,导致 PaintOpaqueContent 看到 isActive=true 画橙
+        // bg,永久残留。Fix A:补这一行(对称 else 分支已有)。
         s_activeIdx = -1;
         // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered。
         RepaintLayered(hwnd);
 
-        // v0.19.0.25-fix: drag 分支 fall-through click 路由。如果鼠标未实际位移,
-        // 等同"按下并释放同一按钮" → invoke 回调。
-        // v0.19.0.29:扩展为 5 按钮部分接通 — 0/4 仍 no-op (历史 placeholder,follow-up
-        // spec 加 ASCII mode toggle / 登录);1 Phrase / 3 Shortcut 真接通。
-        // v0.19.0.60 (Phase L 调整 1): 2 (UserDict) 删除 — UserDictionary 模块下线。
-        // 见 docs/design/mockups-v0.19.0.28/ 设计稿。
+        // v0.19.0.25-fix: drag 分支 fall-through click
+        // 路由。如果鼠标未实际位移, 等同"按下并释放同一按钮" → invoke 回调。
+        // v0.19.0.29:扩展为 5 按钮部分接通 — 0/4 仍 no-op (历史
+        // placeholder,follow-up spec 加 ASCII mode toggle / 登录);1 Phrase / 3
+        // Shortcut 真接通。 v0.19.0.60 (Phase L 调整 1): 2 (UserDict) 删除 —
+        // UserDictionary 模块下线。 见 docs/design/mockups-v0.19.0.28/ 设计稿。
         // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons, hit 索引重映射:
-        //   0 Schema (no-op), 1 Phrase, 2 Settings→Shortcut, 3 Account (no-op)。
+        //   0 Schema (no-op), 1 Phrase, 2 Settings→Shortcut, 3 Account
+        //   (no-op)。
         if (!actualDrag) {
-          if (oldActiveIdx == 1 && s_onPhrases) s_onPhrases();
-          else if (oldActiveIdx == 2 && s_onShortcut) s_onShortcut();
+          if (oldActiveIdx == 1 && s_onPhrases)
+            s_onPhrases();
+          else if (oldActiveIdx == 2 && s_onShortcut)
+            s_onShortcut();
           // hit 0/3: no-op (0 Schema 跟 3 Account 都是历史 placeholder)
         }
       } else {
@@ -553,14 +646,14 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
         int hit = HitTest(p.x, p.y);
         if (hit >= 0 && hit == s_activeIdx) {
           // v0.19.0.25-fix(spec 042 §3 调用链):接通 s_onPhrases callback。
-          // L88-fix (cpp:449) 让 LButtonDown 无条件 s_dragging=TRUE,所以 click 分支
-          // 只在 hit==s_activeIdx 时才表示"按下与释放同一按钮"(否则算 drag start)。
-          // L94-fix A (cpp:504) 在 drag 分支 reset s_activeIdx,所以这里对称:
-          // click 分支先检查 hit==s_activeIdx 再 invoke。
-          // v0.19.0.29:扩展 hit 分支 — 1 Phrase / 3 Shortcut。0/2/4 仍 no-op。
-          // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons, hit 索引重映射:
-          //   hit==1 Phrase (不变), hit==2 Settings → s_onShortcut (was hit==3 in v0.19.0.61)
-          //   hit==3 Account 仍 no-op (was hit==4)
+          // L88-fix (cpp:449) 让 LButtonDown 无条件 s_dragging=TRUE,所以 click
+          // 分支 只在 hit==s_activeIdx 时才表示"按下与释放同一按钮"(否则算 drag
+          // start)。 L94-fix A (cpp:504) 在 drag 分支 reset
+          // s_activeIdx,所以这里对称: click 分支先检查 hit==s_activeIdx 再
+          // invoke。 v0.19.0.29:扩展 hit 分支 — 1 Phrase / 3 Shortcut。0/2/4 仍
+          // no-op。 v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons, hit 索引重映射:
+          //   hit==1 Phrase (不变), hit==2 Settings → s_onShortcut (was hit==3
+          //   in v0.19.0.61) hit==3 Account 仍 no-op (was hit==4)
           if (hit == 1 && s_onPhrases) {
             s_onPhrases();
           } else if (hit == 2 && s_onShortcut) {
@@ -574,30 +667,33 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
       }
       return 0;
     }
-    // L81-fix: 切到其他 IME (en-US 等) 时 WeaselServer 进程会失焦 → WM_ACTIVATEAPP 触发。
-    // 自动 Hide() 让 panel 跟着前台 app 切走,不残留屏幕上。
-    // v0.19.0.30-fix(issue 1): 之前 polling timer (id=2) 路径在 grace 期内不累加
-    // outsideMs (cpp:611-612 模式),但 WM_ACTIVATEAPP 路径直接 Hide,无 grace guard。
-    // 触发链:用户 Alt+. → Show() → 切回前台 app → WM_ACTIVATEAPP(0) → 立即 Hide,
-    // user 还没看到 panel 就消失。修法:与 PhrasesDialog.cpp:722-730 同 pattern,
-    // 在 grace 期 (nowTick - s_showTime) < kShowGraceMs 内不 Hide。
+    // L81-fix: 切到其他 IME (en-US 等) 时 WeaselServer 进程会失焦 →
+    // WM_ACTIVATEAPP 触发。 自动 Hide() 让 panel 跟着前台 app
+    // 切走,不残留屏幕上。 v0.19.0.30-fix(issue 1): 之前 polling timer (id=2)
+    // 路径在 grace 期内不累加 outsideMs (cpp:611-612 模式),但 WM_ACTIVATEAPP
+    // 路径直接 Hide,无 grace guard。 触发链:用户 Alt+. → Show() → 切回前台 app
+    // → WM_ACTIVATEAPP(0) → 立即 Hide, user 还没看到 panel 就消失。修法:与
+    // PhrasesDialog.cpp:722-730 同 pattern, 在 grace 期 (nowTick - s_showTime)
+    // < kShowGraceMs 内不 Hide。
     case WM_ACTIVATEAPP: {
       if (w == FALSE) {  // app 被 deactivate (前台切走)
         DWORD nowTick = GetTickCount();
-        if ((nowTick - s_showTime) >= kShowGraceMs) {
+        // spec 084 / ADR 0013 D5: 长显态屏蔽「前台切走就隐藏」。
+        if (!AlwaysShowMode() && (nowTick - s_showTime) >= kShowGraceMs) {
           Hide();
         }
       }
       return 0;
     }
-    // L84-fix: 用 polling timer (100ms) 替代仅靠 WM_MOUSEMOVE 更新 s_hoveredIdx。
-    // 原因:WS_EX_LAYERED + WS_EX_NOACTIVATE panel 下 WM_MOUSEMOVE 投递不可靠
-    // (L83 sandbox 验证 hovered 实际仍 -1 即使我们 SendMessage WM_MOUSEMOVE)。
-    // Polling GetCursorPos + ScreenToClient 自己查鼠标位置,绕过 WM 投递。
-    // L84-fix: 用 polling timer (id 2, 100ms) 替代仅靠 WM_MOUSEMOVE 更新 s_hoveredIdx。
-    // 原因:WS_EX_LAYERED + WS_EX_NOACTIVATE panel 下 WM_MOUSEMOVE 投递不可靠
-    // (L83 sandbox 验证 hovered 实际仍 -1 即使我们 SendMessage WM_MOUSEMOVE)。
-    // Polling GetCursorPos + ScreenToClient 自己查鼠标位置,绕过 WM 投递。
+    // L84-fix: 用 polling timer (100ms) 替代仅靠 WM_MOUSEMOVE 更新
+    // s_hoveredIdx。 原因:WS_EX_LAYERED + WS_EX_NOACTIVATE panel 下
+    // WM_MOUSEMOVE 投递不可靠 (L83 sandbox 验证 hovered 实际仍 -1 即使我们
+    // SendMessage WM_MOUSEMOVE)。 Polling GetCursorPos + ScreenToClient
+    // 自己查鼠标位置,绕过 WM 投递。 L84-fix: 用 polling timer (id 2, 100ms)
+    // 替代仅靠 WM_MOUSEMOVE 更新 s_hoveredIdx。 原因:WS_EX_LAYERED +
+    // WS_EX_NOACTIVATE panel 下 WM_MOUSEMOVE 投递不可靠 (L83 sandbox 验证
+    // hovered 实际仍 -1 即使我们 SendMessage WM_MOUSEMOVE)。 Polling
+    // GetCursorPos + ScreenToClient 自己查鼠标位置,绕过 WM 投递。
     case WM_TIMER: {
       if (w == 2) {  // hover polling timer (id 2, 100ms) — 同时负责 auto-hide
         POINT p;
@@ -608,17 +704,40 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
             // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered。
             RepaintLayered(hwnd);
           }
-          // L89-fix: auto-hide 当鼠标在 panel 外超过 1.5 秒。之前 v0.19.0.18 panel
-          // 显示后没有 auto-hide 时机(WS_EX_NOACTIVATE 收不到 OnKillFocus),挡 user
-          // 输入区 → "无法输入中文"。修复:polling timer 检查 hit==-1 (panel 外)
-          // 时累加 s_outsideMs,达到 1500ms 自动 Hide。
-          // v0.19.0.24-fix(issue 4):Show() 后 grace period (kShowGraceMs=2000ms)。
-          // 之前 L89-fix 无 grace,首次 Show 时 cursor 还在 panel 外,直接 1.5s 内 Hide。
-          // 修法:在 grace 期间 (now - s_showTime) < kShowGraceMs 不累加 outsideMs,
-          // 但 polling 仍更新 s_hoveredIdx(让 user 移 cursor 进 panel 时立即 hover)。
+          // L89-fix: auto-hide 当鼠标在 panel 外超过 1.5 秒。之前 v0.19.0.18
+          // panel 显示后没有 auto-hide 时机(WS_EX_NOACTIVATE 收不到
+          // OnKillFocus),挡 user 输入区 → "无法输入中文"。修复:polling timer
+          // 检查 hit==-1 (panel 外) 时累加 s_outsideMs,达到 1500ms 自动 Hide。
+          // v0.19.0.24-fix(issue 4):Show() 后 grace period
+          // (kShowGraceMs=2000ms)。 之前 L89-fix 无 grace,首次 Show 时 cursor
+          // 还在 panel 外,直接 1.5s 内 Hide。 修法:在 grace 期间 (now -
+          // s_showTime) < kShowGraceMs 不累加 outsideMs, 但 polling 仍更新
+          // s_hoveredIdx(让 user 移 cursor 进 panel 时立即 hover)。
           DWORD nowTick = GetTickCount();
           bool inGrace = (nowTick - s_showTime) < kShowGraceMs;
-          if (hit == -1 && !s_dragging && !inGrace) {
+          // spec 084 / ADR 0013 D3: 整体不透明度系数。
+          // 目标:鼠标在面板矩形内 => 满值;否则长显态 20%,瞬时态仍是满值。
+          // 瞬时态 target 恒为满值 => 系数永不动 => 零重绘、零像素变化。
+          // 用 GetClientRect 而不是 HitTest:按钮之间的空隙 HitTest 返回 -1,
+          // 但鼠标确实还在面板上。
+          RECT clientRect;
+          GetClientRect(hwnd, &clientRect);
+          const bool cursorInside =
+              p.x >= clientRect.left && p.x < clientRect.right &&
+              p.y >= clientRect.top && p.y < clientRect.bottom;
+          s_targetAlphaFactor =
+              cursorInside ? fluxing::kAlphaFactorFull
+                           : (AlwaysShowMode() ? fluxing::kAlphaFactorIdle
+                                               : fluxing::kAlphaFactorFull);
+          const int nextFactor = fluxing::StepAlpha(
+              s_alphaFactor, s_targetAlphaFactor, fluxing::kAlphaFadeStep);
+          if (nextFactor != s_alphaFactor) {
+            s_alphaFactor = nextFactor;
+            // WS_EX_LAYERED 路径必须 RepaintLayered,InvalidateRect 是死代码。
+            RepaintLayered(hwnd);
+          }
+          // spec 084 / ADR 0013 D5: 长显态屏蔽「鼠标在外 1500ms 自动隐藏」。
+          if (!AlwaysShowMode() && hit == -1 && !s_dragging && !inGrace) {
             s_outsideMs += 100;
             if (s_outsideMs >= 1500) {
               s_outsideMs = 0;
@@ -644,9 +763,12 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM
       }
       return 0;
     }
-    case WM_KILLFOCUS: return OnKillFocus(hwnd);
-    case WM_KEYDOWN:   return OnKeyDown(hwnd, w);
-    default: break;
+    case WM_KILLFOCUS:
+      return OnKillFocus(hwnd);
+    case WM_KEYDOWN:
+      return OnKeyDown(hwnd, w);
+    default:
+      break;
   }
   return DefWindowProc(hwnd, msg, w, l);
 }
@@ -657,16 +779,19 @@ LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
   GetClientRect(hwnd, &rc);
   int w = rc.right - rc.left;
   int h = rc.bottom - rc.top;
-  if (w <= 0 || h <= 0) return 0;
+  if (w <= 0 || h <= 0)
+    return 0;
 
   // L83-fix: DPI 缩放。计算 dpr 并把所有设计常量 (logical 360x68) 缩放到
-  // 物理 surface 大小。sandbox 显示器 sub-100% DPI (Windows auto-scale 窗口到 240x45
-  // physical),不缩放的话 drawing 用 logical 360 出界 → icons 2-4 看不见 / HitTest 错位。
+  // 物理 surface 大小。sandbox 显示器 sub-100% DPI (Windows auto-scale 窗口到
+  // 240x45 physical),不缩放的话 drawing 用 logical 360 出界 → icons 2-4 看不见
+  // / HitTest 错位。
   s_panelW_phys = w;
   s_panelH_phys = h;
   s_dpr_x = (float)w / (float)kPanelW;
   s_dpr_y = (float)h / (float)kPanelH;
-  // DPI 缩放 round-down (>=1) 避免 0 出现 — 保护 drawing 不会 sub-pixel 全部丢失
+  // DPI 缩放 round-down (>=1) 避免 0 出现 — 保护 drawing 不会 sub-pixel
+  // 全部丢失
   auto scale_x = [&](int logical) {
     int v = (int)(logical * s_dpr_x + 0.5f);
     return v < 1 ? 1 : v;
@@ -675,27 +800,28 @@ LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
     int v = (int)(logical * s_dpr_y + 0.5f);
     return v < 1 ? 1 : v;
   };
-  s_panelPadding_phys  = scale_x(kPanelPadding);
+  s_panelPadding_phys = scale_x(kPanelPadding);
   // v0.19.0.24-fix(issue 1):Y 方向 padding 独立算,scale_y 让跨 DPI 跟随
-  s_btnYOffset_phys    = scale_y(kPanelVPadding);
-  s_btnSize_phys       = scale_x(kBtnSize);
-  s_icoSize_phys       = scale_y(kIcoSize);
-  s_btnRadius_phys     = scale_x(kBtnRadius);
-  s_brandSize_phys     = scale_x(kBrandSize);
-  s_panelRadius_phys   = scale_x(kPanelRadius);
-  s_btnGap_phys        = scale_x(kBtnGap);
+  s_btnYOffset_phys = scale_y(kPanelVPadding);
+  s_btnSize_phys = scale_x(kBtnSize);
+  s_icoSize_phys = scale_y(kIcoSize);
+  s_btnRadius_phys = scale_x(kBtnRadius);
+  s_brandSize_phys = scale_x(kBrandSize);
+  s_panelRadius_phys = scale_x(kPanelRadius);
+  s_btnGap_phys = scale_x(kBtnGap);
 
   // 创建资源
   LoadLogoWIC(hwnd, s_hBmpLogo);
-  s_hBrushPanelBg    = CreateSolidBrush(kBgTop);
-  s_hBrushIconDim    = CreateSolidBrush(kIcoDimC);
+  s_hBrushPanelBg = CreateSolidBrush(kBgTop);
+  s_hBrushIconDim = CreateSolidBrush(kIcoDimC);
   s_hBrushIconAccent = CreateSolidBrush(kAccentC);
-  s_hBrushActive     = CreateSolidBrush(kAccentC);
-  s_hBrushHighlight  = CreateSolidBrush(kHighlight);
-  s_hBrushShadow     = CreateSolidBrush(RGB(200, 215, 235));  // 底部阴影 (L85:浅蓝,避免黑线)
-  s_hPenIconDim      = CreatePen(PS_SOLID, 2, kIcoDimC);
-  s_hPenIconAccent   = CreatePen(PS_SOLID, 2, kAccentC);
-  s_hPenHighlight    = CreatePen(PS_SOLID, 1, kHighlight);
+  s_hBrushActive = CreateSolidBrush(kAccentC);
+  s_hBrushHighlight = CreateSolidBrush(kHighlight);
+  s_hBrushShadow =
+      CreateSolidBrush(RGB(200, 215, 235));  // 底部阴影 (L85:浅蓝,避免黑线)
+  s_hPenIconDim = CreatePen(PS_SOLID, 2, kIcoDimC);
+  s_hPenIconAccent = CreatePen(PS_SOLID, 2, kAccentC);
+  s_hPenHighlight = CreatePen(PS_SOLID, 1, kHighlight);
 
   // off-screen DC
   CreateOffscreenDC(w, h);
@@ -707,26 +833,58 @@ LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
   s_hoveredIdx = -1;
   s_activeIdx = -1;
   DestroyOffscreenDC();
-  if (s_hBmpLogo) { DeleteObject(s_hBmpLogo); s_hBmpLogo = NULL; }
-  if (s_hBrushPanelBg)   { DeleteObject(s_hBrushPanelBg);   s_hBrushPanelBg   = NULL; }
-  if (s_hBrushIconDim)   { DeleteObject(s_hBrushIconDim);   s_hBrushIconDim   = NULL; }
-  if (s_hBrushIconAccent){ DeleteObject(s_hBrushIconAccent);s_hBrushIconAccent= NULL; }
-  if (s_hBrushActive)    { DeleteObject(s_hBrushActive);    s_hBrushActive    = NULL; }
-  if (s_hBrushHighlight) { DeleteObject(s_hBrushHighlight); s_hBrushHighlight = NULL; }
-  if (s_hBrushShadow)    { DeleteObject(s_hBrushShadow);    s_hBrushShadow    = NULL; }
-  if (s_hPenIconDim)     { DeleteObject(s_hPenIconDim);     s_hPenIconDim     = NULL; }
-  if (s_hPenIconAccent)  { DeleteObject(s_hPenIconAccent);  s_hPenIconAccent  = NULL; }
-  if (s_hPenHighlight)   { DeleteObject(s_hPenHighlight);   s_hPenHighlight   = NULL; }
-  if (s_hwnd == hwnd) s_hwnd = NULL;
+  if (s_hBmpLogo) {
+    DeleteObject(s_hBmpLogo);
+    s_hBmpLogo = NULL;
+  }
+  if (s_hBrushPanelBg) {
+    DeleteObject(s_hBrushPanelBg);
+    s_hBrushPanelBg = NULL;
+  }
+  if (s_hBrushIconDim) {
+    DeleteObject(s_hBrushIconDim);
+    s_hBrushIconDim = NULL;
+  }
+  if (s_hBrushIconAccent) {
+    DeleteObject(s_hBrushIconAccent);
+    s_hBrushIconAccent = NULL;
+  }
+  if (s_hBrushActive) {
+    DeleteObject(s_hBrushActive);
+    s_hBrushActive = NULL;
+  }
+  if (s_hBrushHighlight) {
+    DeleteObject(s_hBrushHighlight);
+    s_hBrushHighlight = NULL;
+  }
+  if (s_hBrushShadow) {
+    DeleteObject(s_hBrushShadow);
+    s_hBrushShadow = NULL;
+  }
+  if (s_hPenIconDim) {
+    DeleteObject(s_hPenIconDim);
+    s_hPenIconDim = NULL;
+  }
+  if (s_hPenIconAccent) {
+    DeleteObject(s_hPenIconAccent);
+    s_hPenIconAccent = NULL;
+  }
+  if (s_hPenHighlight) {
+    DeleteObject(s_hPenHighlight);
+    s_hPenHighlight = NULL;
+  }
+  if (s_hwnd == hwnd)
+    s_hwnd = NULL;
   return 0;
 }
 
-// PaintOpaqueContent: v0.19.0.10 新抽出。把原 OnPaint 的"画 opaque 内容到 s_hdcMem"
-// 部分抽出来 — roundRgn WHITE bg + 1px border + top highlight + logo + 5 icons。
-// 不再 BitBlt 到 window DC (WS_EX_LAYERED 后双路径会闪烁,见 file header 雷区)。
+// PaintOpaqueContent: v0.19.0.10 新抽出。把原 OnPaint 的"画 opaque 内容到
+// s_hdcMem" 部分抽出来 — roundRgn WHITE bg + 1px border + top highlight + logo
+// + 5 icons。 不再 BitBlt 到 window DC (WS_EX_LAYERED 后双路径会闪烁,见 file
+// header 雷区)。
 void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
-  // L83-fix: 全部用 physical 像素。surface 物理大小 = s_panelW_phys × s_panelH_phys,
-  // layout 物理常量已按 dpr 缩放。
+  // L83-fix: 全部用 physical 像素。surface 物理大小 = s_panelW_phys ×
+  // s_panelH_phys, layout 物理常量已按 dpr 缩放。
   const int W = s_panelW_phys;
   const int H = s_panelH_phys;
   const int pad = s_panelPadding_phys;
@@ -738,12 +896,13 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   DeleteObject(panelRgn);
 
   // 1b. 1px 深灰 border — L82-fix:border RGB(50,50,60) opaque 永远可见
-  // L83-fix: FrameRgn 在 sub-100% DPI scale (e.g. dpr=0.667) 下 1px brush = 0.667 physical
-  // = sub-pixel → GDI 不绘制。改用 **RoundRect() with pen + NULL_BRUSH** 画 outline。
-  // RoundRect() 在所有 DPI 下都会画出 outline(因为它是 line primitive,不是 brush
-  // fill)。注意 RoundRect 边界是 (x1, y1) 到 (x2, y2) inclusive,不填内部。
-  // border 宽度至少 1 physical pixel:对于 dpr=0.667,取 2 logical (1.33 physical);
-  // 对于 dpr=1.0,取 1 logical (=1 physical);对于 dpr>=1.5,取 max(1, 1)=1 logical。
+  // L83-fix: FrameRgn 在 sub-100% DPI scale (e.g. dpr=0.667) 下 1px brush =
+  // 0.667 physical = sub-pixel → GDI 不绘制。改用 **RoundRect() with pen +
+  // NULL_BRUSH** 画 outline。 RoundRect() 在所有 DPI 下都会画出
+  // outline(因为它是 line primitive,不是 brush fill)。注意 RoundRect 边界是
+  // (x1, y1) 到 (x2, y2) inclusive,不填内部。 border 宽度至少 1 physical
+  // pixel:对于 dpr=0.667,取 2 logical (1.33 physical); 对于 dpr=1.0,取 1
+  // logical (=1 physical);对于 dpr>=1.5,取 max(1, 1)=1 logical。
   int borderW = max(1, (int)(1.0f * s_dpr_x + 0.5f));
   HPEN borderPen = CreatePen(PS_SOLID, borderW, kIcoDimC);
   if (borderPen) {
@@ -759,7 +918,8 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // 物理缩放:min 1px(低 DPI 不能画 0px)。
   // 历史:v0.19.0.18 之前只占 1 物理像素(y=1 那行),v0.19.0.20 误改 2 px 让 icons
   // 视觉偏下。L93 (v0.19.0.23 撤销的 wrong 方案) 也回 1 px — **v0.19.0.23 保留
-  // 这次 1 px 修改**(同时改了真正的 icon 居中算法,1px highlight 不再需要 ±1 fudge)。
+  // 这次 1 px 修改**(同时改了真正的 icon 居中算法,1px highlight 不再需要 ±1
+  // fudge)。
   int hlHeight = max(1, (int)(1 * s_dpr_y + 0.5f));
   RECT topHL = {radius, 1, W - radius, 1 + hlHeight};
   FillRect(hdc, &topHL, s_hBrushHighlight);
@@ -771,8 +931,8 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
 
   // 2. 画 logo (Fluxing 红色猿猴)
   // L81-fix: 用 AlphaBlend + AC_SRC_ALPHA 替代 BitBlt(SRCCOPY)。
-  // 原因:v0.19.0.10 用 BitBlt(SRCCOPY) 把 WIC 加载的 32-bit BGRA logo 画到 32-bit BGRA panel,
-  // GDI 在两个 32-bit DIB 之间 BitBlt(SRCCOPY) 行为:
+  // 原因:v0.19.0.10 用 BitBlt(SRCCOPY) 把 WIC 加载的 32-bit BGRA logo 画到
+  // 32-bit BGRA panel, GDI 在两个 32-bit DIB 之间 BitBlt(SRCCOPY) 行为:
   //   - dest 是 BI_BITFIELDS DIB
   //   - src 是 BI_BITFIELDS DIB
   //   - SRCCOPY 在这种情况下**会剥离 alpha** — dest alpha 全部被写成 255
@@ -793,11 +953,8 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
       HGDIOBJ prev = SelectObject(hdcMemLogo, s_hBmpLogo);
       BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
       // AlphaBlend src/dst 都是 s_brandSize_phys → 1:1 复制
-      AlphaBlend(hdc,
-                 pad, pad, s_brandSize_phys, s_brandSize_phys,
-                 hdcMemLogo,
-                 0, 0, s_brandSize_phys, s_brandSize_phys,
-                 bf);
+      AlphaBlend(hdc, pad, pad, s_brandSize_phys, s_brandSize_phys, hdcMemLogo,
+                 0, 0, s_brandSize_phys, s_brandSize_phys, bf);
       SelectObject(hdcMemLogo, prev);
       DeleteDC(hdcMemLogo);
     }
@@ -807,42 +964,48 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // L79-fix: hover 只改 icon stroke 颜色(不画 bg 填充,符合 v3-rev3 设计)
   // L87-fix: brand→btns 间距 4 logical (dpr=1 → 4 物理,dpr=0.7 → 2.8→2 物理)。
   // 给个 max(2, ...) 保证 ≥ 2 物理像素(在 dpr=0.7 时也能看到间距)。
-  // L91-fix: buttonStartX 起始 gap 4→2 (v0.19.0.20 是 4 dpr=1 → 4 logical = 4 物理 px)。
-  // 现在 kBtnGap 改 4,buttons 之间有足够间距,起始 gap 不用再大。减到 2 px 让
-  // brand→btns 间距合理,btn4 右边距 +2 px (panelW=252 5*37+4*4=201+44+5=250 < 252)
+  // L91-fix: buttonStartX 起始 gap 4→2 (v0.19.0.20 是 4 dpr=1 → 4 logical = 4
+  // 物理 px)。 现在 kBtnGap 改 4,buttons 之间有足够间距,起始 gap 不用再大。减到
+  // 2 px 让 brand→btns 间距合理,btn4 右边距 +2 px (panelW=252
+  // 5*37+4*4=201+44+5=250 < 252)
   int buttonStartX = pad + s_brandSize_phys + max(2, (int)(2 * s_dpr_x + 0.5f));
   // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons (UserDict 槽位删除)
   for (int i = 0; i < kButtonCount; i++) {
     int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
-    // v0.19.0.24-fix(issue 1):Y 起点改用 s_btnYOffset_phys(=(kPanelH-kBtnSize)/2 dpr 缩放)。
-    // 之前 y0=pad=5,btn at y=[5..40] 距顶 5 距底 8 偏上 1.5 px。改 y0=6 → btn at
-    // y=[6..41] 距顶 6 距底 7(整数下最接近对称);btn 中心 23.5 vs panel 中心 24,差 0.5 px
+    // v0.19.0.24-fix(issue 1):Y 起点改用
+    // s_btnYOffset_phys(=(kPanelH-kBtnSize)/2 dpr 缩放)。 之前 y0=pad=5,btn at
+    // y=[5..40] 距顶 5 距底 8 偏上 1.5 px。改 y0=6 → btn at y=[6..41] 距顶 6
+    // 距底 7(整数下最接近对称);btn 中心 23.5 vs panel 中心 24,差 0.5 px
     // 不可避免(48-35=13 奇数,1 px 离散)。同步 HitTest Y 范围。
     int y0 = s_btnYOffset_phys;
 
     bool isActive = (i == s_activeIdx);
-    bool isHover  = (i == s_hoveredIdx);
+    bool isHover = (i == s_hoveredIdx);
 
-    // L86-fix: hover **只改 icon stroke 颜色** — user 明确要求"hover 时 bg 不变,
-    // 只 icon 线条变橙"。v0.19.0.15 我加的"三重视觉反馈"(bg 填橙 + 描边)是过度,
-    // user 不要 bg 变化。移除 hover 时的 bg fill + 描边,只保留 icon stroke 改色。
+    // L86-fix: hover **只改 icon stroke 颜色** — user 明确要求"hover 时 bg
+    // 不变, 只 icon 线条变橙"。v0.19.0.15 我加的"三重视觉反馈"(bg 填橙 +
+    // 描边)是过度, user 不要 bg 变化。移除 hover 时的 bg fill + 描边,只保留
+    // icon stroke 改色。
     HBRUSH bgBrush = NULL;
     if (isActive) {
-      bgBrush = s_hBrushActive;  // active: 实橙 (RGB 255,95,49) — spec 070 T007 设计
+      bgBrush =
+          s_hBrushActive;  // active: 实橙 (RGB 255,95,49) — spec 070 T007 设计
     }
     // hover: NO bg change. Only icon stroke color changes below.
 
     if (bgBrush) {
-      HRGN rgn = CreateRoundRectRgn(x0, y0, x0 + s_btnSize_phys, y0 + s_btnSize_phys,
-                                     s_btnRadius_phys, s_btnRadius_phys);
+      HRGN rgn =
+          CreateRoundRectRgn(x0, y0, x0 + s_btnSize_phys, y0 + s_btnSize_phys,
+                             s_btnRadius_phys, s_btnRadius_phys);
       FillRgn(hdc, rgn, bgBrush);
       DeleteObject(rgn);
     }
 
     // 1px 描边(只 active,hover 不描边)
     if (isActive) {
-      HPEN outlinePen = CreatePen(PS_SOLID, max(1, (int)(1.0f * s_dpr_x + 0.5f)),
-                                RGB(220, 60, 30));  // active: 暗橙
+      HPEN outlinePen =
+          CreatePen(PS_SOLID, max(1, (int)(1.0f * s_dpr_x + 0.5f)),
+                    RGB(220, 60, 30));  // active: 暗橙
       HPEN oldOutline = (HPEN)SelectObject(hdc, outlinePen);
       HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
       RoundRect(hdc, x0, y0, x0 + s_btnSize_phys, y0 + s_btnSize_phys,
@@ -853,74 +1016,92 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     }
 
     HPEN iconPen;
-    if (isActive) iconPen = (HPEN)GetStockObject(WHITE_PEN);
-    else if (isHover) iconPen = s_hPenIconAccent;
-    else iconPen = s_hPenIconDim;
+    if (isActive)
+      iconPen = (HPEN)GetStockObject(WHITE_PEN);
+    else if (isHover)
+      iconPen = s_hPenIconAccent;
+    else
+      iconPen = s_hPenIconDim;
     HPEN oldPen = (HPEN)SelectObject(hdc, iconPen);
 
     // L86-fix: 把 pen 颜色 RGB 直接传给 DrawIcon*,而不是 hardcoded kIcoDimC。
     // hover=橙 kAccentC,active=白 (WHITE_PEN),default=灰 kIcoDimC。
     // 之前 v0.19.0.15 DrawIcon* hardcoded kIcoDimC,hover 状态机的 pen 选择完全
     // 被忽略。
-    DWORD penRgb = isActive ? RGB(255, 255, 255) :
-                    isHover  ? kAccentC :
-                               kIcoDimC;
+    DWORD penRgb = isActive  ? RGB(255, 255, 255)
+                   : isHover ? kAccentC
+                             : kIcoDimC;
 
     // L93-fix(v0.19.0.23,7 轮 ±1 fudge 失败的根本修法):
     // 真正视觉居中 = 把每个 icon 的 viewBox bbox 中心对准按钮中心。
-    // 之前 7 轮 fix 一直在 fudge `iconX = x0 + (s_btnSize_phys - s_icoSize_phys)/2 ± 1`,
-    // 假设 icon visual bbox = 19×19 (kIcoSize box)。错!DrawIcon* 描线实际 bbox:
+    // 之前 7 轮 fix 一直在 fudge `iconX = x0 + (s_btnSize_phys -
+    // s_icoSize_phys)/2 ± 1`, 假设 icon visual bbox = 19×19 (kIcoSize
+    // box)。错!DrawIcon* 描线实际 bbox:
     //   Schema X[5..25] Y[8..22]    → mid (15, 15)
     //   Phrase X[5..25] Y[5..25]    → mid (15, 15)
     //   Symbols X[3..27] Y[6..24]   → mid (15, 15)
     //   Settings X[4..26] Y[4..26]  → mid (15, 15)
     //   Account X[5..25] Y[5..28]   → mid (15, 16.5)
     // 实际 bbox 21..25 × 15..24,中心 (15, 15),远大于 icoSize box(19)。btn=35 时
-    // 旧算法 iconX = x0+8,bbox X 落 [x0+13..x0+33],mid 23 vs btn mid 17.5 → 偏右 5.5
-    // px(等同 user "水平未居中,图标居于右下角")。Y 同样 ±1 fudge 后 = x0+9,bbox Y
-    // [y0+17..y0+31],mid y0+24 vs btn mid y0+17.5 → 偏下 6.5 px。
+    // 旧算法 iconX = x0+8,bbox X 落 [x0+13..x0+33],mid 23 vs btn mid 17.5 →
+    // 偏右 5.5 px(等同 user "水平未居中,图标居于右下角")。Y 同样 ±1 fudge 后 =
+    // x0+9,bbox Y [y0+17..y0+31],mid y0+24 vs btn mid y0+17.5 → 偏下 6.5 px。
     // 任何 ±1 fudge 都不可能让 35-btn 中心对齐 21-wide bbox 中心。
     //
     // 真修法:iconX = x0 + s_btnSize_phys/2 − kIconBboxCxOff(不 × dpr)
     //        iconY = y0 + s_btnSize_phys/2 − kIconBboxCyOff(不 × dpr)
-    // kIconBboxCxOff=15 是**屏幕像素**不是 viewBox logical 比例 — 因为 DrawIcon*
-    // 内部坐标(5, 25 等)是 raw pixel 偏移,不乘 dpr。所以居中常量也用 raw pixel。
-    // btn=35 dpr=1:iconX = x0 + 17.5 − 15 = x0 + 2.5(int truncation: 17 - 15 = 2),
-    // bbox X [x0+7..x0+27] mid x0+17(int 中点),btn pixel mid x0+17 ✓。
-    // dpr=1.5:s_btnSize=53,iconX = x0 + 26 − 15 = x0 + 11,bbox [x0+16..x0+36] mid x0+26
-    // (int 中点),btn pixel mid x0+26 ✓(53/2 = 26.5,int mid = 26)。
-    // 跨 DPI 都对齐。注意:icon 描线 raw pixel 不缩放,设计固定 5..25 宽度 (20 px)
-    // 在所有 DPI 都一样,designer 刻意 — 高 DPI 不会按比例放大,保持视觉清晰度。
+    // kIconBboxCxOff=15 是**屏幕像素**不是 viewBox logical 比例 — 因为
+    // DrawIcon* 内部坐标(5, 25 等)是 raw pixel 偏移,不乘 dpr。所以居中常量也用
+    // raw pixel。 btn=35 dpr=1:iconX = x0 + 17.5 − 15 = x0 + 2.5(int
+    // truncation: 17 - 15 = 2), bbox X [x0+7..x0+27] mid x0+17(int 中点),btn
+    // pixel mid x0+17 ✓。 dpr=1.5:s_btnSize=53,iconX = x0 + 26 − 15 = x0 +
+    // 11,bbox [x0+16..x0+36] mid x0+26 (int 中点),btn pixel mid x0+26 ✓(53/2
+    // = 26.5,int mid = 26)。 跨 DPI 都对齐。注意:icon 描线 raw pixel
+    // 不缩放,设计固定 5..25 宽度 (20 px) 在所有 DPI 都一样,designer 刻意 — 高
+    // DPI 不会按比例放大,保持视觉清晰度。
     int iconX = x0 + s_btnSize_phys / 2 - kIconBboxCxOff;
     int iconY = y0 + s_btnSize_phys / 2 - kIconBboxCyOff;
     // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons,case 重新映射:
     //   0 Schema / 1 Phrase / 2 Settings (was 3) / 3 Account (was 4)
     //   — case 2 (UserDict) 整槽已删,无对应 icon 绘制。
     switch (i) {
-      case 0: DrawIconSchema(hdc, iconX, iconY, penRgb); break;
-      case 1: DrawIconPhrase(hdc, iconX, iconY, penRgb); break;
-      case 2: DrawIconSettings(hdc, iconX, iconY, penRgb); break;  // was hit==3 in v0.19.0.61
-      case 3: DrawIconAccount(hdc, iconX, iconY, penRgb); break;   // was hit==4 in v0.19.0.61
+      case 0:
+        DrawIconSchema(hdc, iconX, iconY, penRgb);
+        break;
+      case 1:
+        DrawIconPhrase(hdc, iconX, iconY, penRgb);
+        break;
+      case 2:
+        DrawIconSettings(hdc, iconX, iconY, penRgb);
+        break;  // was hit==3 in v0.19.0.61
+      case 3:
+        DrawIconAccount(hdc, iconX, iconY, penRgb);
+        break;  // was hit==4 in v0.19.0.61
     }
     SelectObject(hdc, oldPen);
   }
 }
 
 // ApplyAlphaGradient: v0.19.0.10 新增 per-pixel alpha pipeline。
-// 把 32-bit DIB 的 alpha 通道从默认 alpha=255 (GDI 写入默认) 改成 liquid glass 形状:
+// 把 32-bit DIB 的 alpha 通道从默认 alpha=255 (GDI 写入默认) 改成 liquid glass
+// 形状:
 // - 圆角外 (corner & outside) alpha = 0 → 桌面可见
 // - 圆角内,RGB == 纯白 (panel bg / border / top highlight): 按 y 渐变
-// - 圆角内,RGB 含色 (icons / logo / active orange bg): 保留 alpha=255 (opaque 图形)
+// - 圆角内,RGB 含色 (icons / logo / active orange bg): 保留 alpha=255 (opaque
+// 图形)
 //
-// L83-fix: 使用 GDI 的 `PtInRegion(rgn)` 判定 inside/outside,不是手算 IsInsideRoundedRect。
-// 原因:sub-100% DPI scale (e.g. dpr=0.667) 下,`CreateRoundRectRgn(0,0,W,H,r,r)` 实际 rgn
-// 跟数学 r² 圆不完全一致(尤其在 corners 圆弧),导致 IsInsideRoundedRect 数学判断
-// 比 GDI 的 rgn 更严格(认为 outside 的 pixel,GDI 反而认为 inside — 已被 FillRgn
-// 填 panel bg)。直接用 PtInRegion(rgn, x, y) 完全匹配 GDI 实际填充区域。
+// L83-fix: 使用 GDI 的 `PtInRegion(rgn)` 判定 inside/outside,不是手算
+// IsInsideRoundedRect。 原因:sub-100% DPI scale (e.g. dpr=0.667)
+// 下,`CreateRoundRectRgn(0,0,W,H,r,r)` 实际 rgn 跟数学 r² 圆不完全一致(尤其在
+// corners 圆弧),导致 IsInsideRoundedRect 数学判断 比 GDI 的 rgn 更严格(认为
+// outside 的 pixel,GDI 反而认为 inside — 已被 FillRgn 填 panel bg)。直接用
+// PtInRegion(rgn, x, y) 完全匹配 GDI 实际填充区域。
 void QuickPanelDialog::ApplyAlphaGradient() {
-  if (!s_hBmpMem || s_panelW_phys <= 0 || s_panelH_phys <= 0) return;
+  if (!s_hBmpMem || s_panelW_phys <= 0 || s_panelH_phys <= 0)
+    return;
   BITMAP bm = {};
-  if (!GetObject(s_hBmpMem, sizeof(bm), &bm) || !bm.bmBits) return;
+  if (!GetObject(s_hBmpMem, sizeof(bm), &bm) || !bm.bmBits)
+    return;
 
   DWORD* p = static_cast<DWORD*>(bm.bmBits);
   const int W = s_panelW_phys;
@@ -931,9 +1112,13 @@ void QuickPanelDialog::ApplyAlphaGradient() {
   // 复用 CreateRoundRectRgn 创建的 region,让 GDI 自己判断 inside/outside
   HRGN panelRgn = CreateRoundRectRgn(0, 0, W, H, r, r);
 
+  // spec 084 / ADR 0013 D1/D2: 系数乘进逐像素 alpha。
+  // factor == 255 => final_alpha == base_alpha => 与 spec 084 之前逐像素
+  // 一致(零回归保证)。LWA_ALPHA uniform 仍然是雷区,不碰。
+  const int factor = s_alphaFactor;
   for (int y = 0; y < H; y++) {
-    int aPanel = kAlphaPanelTop +
-                 ((int)(kAlphaPanelBot - kAlphaPanelTop) * y / Hminus1);
+    int aPanel =
+        kAlphaPanelTop + ((int)(kAlphaPanelBot - kAlphaPanelTop) * y / Hminus1);
 
     for (int x = 0; x < W; x++) {
       DWORD* px = &p[(size_t)y * W + x];
@@ -942,17 +1127,19 @@ void QuickPanelDialog::ApplyAlphaGradient() {
         continue;
       }
       BYTE r8 = (*px >> 16) & 0xFF;
-      BYTE g8 = (*px >> 8)  & 0xFF;
-      BYTE b8 =  *px        & 0xFF;
+      BYTE g8 = (*px >> 8) & 0xFF;
+      BYTE b8 = *px & 0xFF;
       // L87-fix: 阈值从 r >= 240 改成 r >= 130 + g >= 150 + b >= 180。
-      // 之前 kBgTop = (255, 255, 255) 接近白,255 阈值 work。L87 改 kBgTop = (200, 225, 250)
-      // (浅冷蓝),200 < 240,else 分支 (alpha=255) 生效,**gradient 完全没作用**。
-      // 新阈值匹配 kBgBot = (155, 195, 240) — b8 >= 180 确保 panel bg 像素 (含冷蓝) 命中
-      // gradient alpha 分支。
+      // 之前 kBgTop = (255, 255, 255) 接近白,255 阈值 work。L87 改 kBgTop =
+      // (200, 225, 250) (浅冷蓝),200 < 240,else 分支 (alpha=255)
+      // 生效,**gradient 完全没作用**。 新阈值匹配 kBgBot = (155, 195, 240) — b8
+      // >= 180 确保 panel bg 像素 (含冷蓝) 命中 gradient alpha 分支。
       if (r8 >= 130 && g8 >= 150 && b8 >= 180) {
-        *px = ((DWORD)aPanel << 24) | (r8 << 16) | (g8 << 8) | b8;
+        *px = ((DWORD)fluxing::ScaleAlpha(aPanel, factor) << 24) | (r8 << 16) |
+              (g8 << 8) | b8;
       } else {
-        *px = 0xFF000000u | (r8 << 16) | (g8 << 8) | b8;
+        *px = ((DWORD)fluxing::ScaleAlpha(255, factor) << 24) | (r8 << 16) |
+              (g8 << 8) | b8;
       }
     }
   }
@@ -964,12 +1151,13 @@ void QuickPanelDialog::ApplyAlphaGradient() {
 // - UpdateLayeredWindow 从 s_hdcMem 读 32-bit BGRA → 提交整个 panel 到 screen,
 //   屏幕合成器按 per-pixel alpha 决定哪些像素透桌面。
 //
-// WS_EX_LAYERED 后 WM_PAINT 路径不再有效 (BeginPaint/EndPaint 拿到 DC 但 layered
-// window 不在那画) — 改成走 UpdateLayeredWindow 一次性提交。Screen 上看是
-// 透明 + 半透明白底图标,符合 Liquid Glass 设计意图。
+// WS_EX_LAYERED 后 WM_PAINT 路径不再有效 (BeginPaint/EndPaint 拿到 DC 但
+// layered window 不在那画) — 改成走 UpdateLayeredWindow 一次性提交。Screen
+// 上看是 透明 + 半透明白底图标,符合 Liquid Glass 设计意图。
 void QuickPanelDialog::RepaintLayered(HWND hwnd) {
-  if (!hwnd || !s_hdcMem || !s_hBmpMem ||
-      s_panelW_phys <= 0 || s_panelH_phys <= 0) return;
+  if (!hwnd || !s_hdcMem || !s_hBmpMem || s_panelW_phys <= 0 ||
+      s_panelH_phys <= 0)
+    return;
 
   // L81-fix: 必须在 PaintOpaqueContent 之前 memset s_hBmpMem pBits = 0!
   // 原因:s_hBmpMem 是 32-bit BGRA DIB Section,pBits 是 raw buffer。GDI 写入时
@@ -999,17 +1187,21 @@ void QuickPanelDialog::RepaintLayered(HWND hwnd) {
     // v0.19.0.11 L81 diag: dump TWO files for full verification
     // (a) qp-dump.bmp = s_hBmpMem (panel after RepaintLayered)
     // (b) qp-logo.bmp = s_hBmpLogo (raw logo bitmap from LoadLogoWIC)
-    // (c) qp-state.txt = s_hoveredIdx / s_activeIdx / s_panelW_phys at paint time
+    // (c) qp-state.txt = s_hoveredIdx / s_activeIdx / s_panelW_phys at paint
+    // time
     {
-      HANDLE hf = CreateFileW(L"F:\\soft\\00selfmade\\rime_claude\\qp-state.txt",
-                              GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                              nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+      HANDLE hf =
+          CreateFileW(L"F:\\soft\\00selfmade\\rime_claude\\qp-state.txt",
+                      GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                      nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
       if (hf != INVALID_HANDLE_VALUE) {
         DWORD written;
         char mb[256];
         int len = _snprintf_s(mb, _TRUNCATE,
-          "state: hovered=%d active=%d panelW=%d panelH=%d dpr=%.3f radius_phys=%d\n",
-          s_hoveredIdx, s_activeIdx, s_panelW_phys, s_panelH_phys, s_dpr_x, s_panelRadius_phys);
+                              "state: hovered=%d active=%d panelW=%d panelH=%d "
+                              "dpr=%.3f radius_phys=%d\n",
+                              s_hoveredIdx, s_activeIdx, s_panelW_phys,
+                              s_panelH_phys, s_dpr_x, s_panelRadius_phys);
         WriteFile(hf, mb, len, &written, nullptr);
         CloseHandle(hf);
       }
@@ -1047,9 +1239,9 @@ void QuickPanelDialog::RepaintLayered(HWND hwnd) {
     if (s_hBmpLogo) {
       BITMAP bmL = {};
       if (GetObject(s_hBmpLogo, sizeof(bmL), &bmL) && bmL.bmBits) {
-        HANDLE fL = CreateFileW(L"F:\\soft\\00selfmade\\rime_claude\\qp-logo.bmp",
-                                GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                                FILE_ATTRIBUTE_NORMAL, nullptr);
+        HANDLE fL = CreateFileW(
+            L"F:\\soft\\00selfmade\\rime_claude\\qp-logo.bmp", GENERIC_WRITE, 0,
+            nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (fL != INVALID_HANDLE_VALUE) {
           DWORD written = 0;
           BITMAPFILEHEADER bfhL = {};
@@ -1076,7 +1268,8 @@ void QuickPanelDialog::RepaintLayered(HWND hwnd) {
     }
   }
 
-  // window position: client → screen, 给 UpdateLayeredWindow 的 destination origin
+  // window position: client → screen, 给 UpdateLayeredWindow 的 destination
+  // origin
   POINT ptPos = {0, 0};
   RECT rcClient;
   GetClientRect(hwnd, &rcClient);
@@ -1089,8 +1282,8 @@ void QuickPanelDialog::RepaintLayered(HWND hwnd) {
   // AC_SRC_OVER + AC_SRC_ALPHA: source per-pixel alpha 通道生效
   BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
 
-  if (!UpdateLayeredWindow(hwnd, NULL, &ptPos, &sizeWnd, s_hdcMem,
-                           &ptSrc, 0, &blend, ULW_ALPHA)) {
+  if (!UpdateLayeredWindow(hwnd, NULL, &ptPos, &sizeWnd, s_hdcMem, &ptSrc, 0,
+                           &blend, ULW_ALPHA)) {
     // UpdateLayeredWindow 失败 — 调试钩子 (L74 教训)
     DWORD err = GetLastError();
     (void)err;
@@ -1108,23 +1301,30 @@ LRESULT QuickPanelDialog::OnPaint(HWND hwnd) {
   return 0;
 }
 
-// v0.19.0.32-fix (Bug 2): 删除 OnLButtonUp / OnLButtonDown stub 函数(原 cpp:1108-1109)。
-// 这两个 stub 在 v0.19.0.10 layered 重构时留作 placeholder,但 WndProc cpp:562-569
-// 已经把 WM_LBUTTONUP 真 fire 路径(s_onPhrases / s_onUserDict / s_onShortcut)内联
-// 实现了,所以 stub 永远不会被调用 — 是 dead code。删除以免误导后续 reader 以为
-// 按钮路由通过 stub 走(实际是 WndProc 内联 case)。
-void    QuickPanelDialog::OnMouseMove(HWND) {}
-void    QuickPanelDialog::OnMouseLeave(HWND) {}
+// v0.19.0.32-fix (Bug 2): 删除 OnLButtonUp / OnLButtonDown stub 函数(原
+// cpp:1108-1109)。 这两个 stub 在 v0.19.0.10 layered 重构时留作 placeholder,但
+// WndProc cpp:562-569 已经把 WM_LBUTTONUP 真 fire 路径(s_onPhrases /
+// s_onUserDict / s_onShortcut)内联 实现了,所以 stub 永远不会被调用 — 是 dead
+// code。删除以免误导后续 reader 以为 按钮路由通过 stub 走(实际是 WndProc 内联
+// case)。
+void QuickPanelDialog::OnMouseMove(HWND) {}
+void QuickPanelDialog::OnMouseLeave(HWND) {}
 
 LRESULT QuickPanelDialog::OnTimer(HWND hwnd, WPARAM w) {
   if (w == 1) {
     KillTimer(hwnd, 1);
-    Hide();
+    // spec 084 / ADR 0013 D5: 长显态不自动隐藏。
+    if (!AlwaysShowMode()) {
+      Hide();
+    }
   }
   return 0;
 }
 
 LRESULT QuickPanelDialog::OnKillFocus(HWND hwnd) {
+  // spec 084 / ADR 0013 D5: 长显态不自动隐藏 => 不 arm timer 1。
+  if (AlwaysShowMode())
+    return 0;
   SetTimer(hwnd, 1, 1000, NULL);
   return 0;
 }
@@ -1139,18 +1339,26 @@ LRESULT QuickPanelDialog::OnKeyDown(HWND hwnd, WPARAM key) {
 
 // ===== Public API =====
 void QuickPanelDialog::Show(bool currentFullwidth,
-                             OnClick onSchema, OnClick onUserFolder,
-                             OnClick onPhrases, OnToggle onFullwidth,
-                             OnClick onSymbols, OnClick onLogin) {
+                            OnClick onSchema,
+                            OnClick onUserFolder,
+                            OnClick onPhrases,
+                            OnToggle onFullwidth,
+                            OnClick onSymbols,
+                            OnClick onLogin) {
   // v0.19.0.32-fix: Show() 必须保存 callback, 否则 onPhrases 永远 null,
   // click button 1 死代码 (同 L96 路径)。原 (void)X 注释掉了。
-  s_onSchema     = onSchema;
+  s_onSchema = onSchema;
   s_onUserFolder = onUserFolder;
-  s_onPhrases    = onPhrases;
-  s_onFullwidth  = onFullwidth;
-  s_onSymbols    = onSymbols;
-  s_onLogin      = onLogin;
+  s_onPhrases = onPhrases;
+  s_onFullwidth = onFullwidth;
+  s_onSymbols = onSymbols;
+  s_onLogin = onLogin;
   (void)currentFullwidth;
+  // spec 084 / ADR 0013 D3: 长显态以 20% 系数起步,再由 100ms 轮询器按
+  // 鼠标位置渐变到满值;瞬时态保持满值 => 渲染与今天逐像素一致。
+  s_alphaFactor =
+      AlwaysShowMode() ? fluxing::kAlphaFactorIdle : fluxing::kAlphaFactorFull;
+  s_targetAlphaFactor = s_alphaFactor;
   if (s_hwnd) {
     ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
     // L81-fix: reuse 路径也强制置顶(防止其他窗口在 hide→show 间隙盖上面板)
@@ -1189,35 +1397,39 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   int x = workArea.right - kPanelW - 12;
   int y = workArea.bottom - kPanelH - 12;
   // L92-fix: clamp 到 workArea,避免低分辨率下 panel 出屏(Phase 1 root cause)
-  if (x < 0) x = 0;
-  if (y < 0) y = 0;
-  if (x + kPanelW > workArea.right) x = workArea.right - kPanelW;
-  if (y + kPanelH > workArea.bottom) y = workArea.bottom - kPanelH;
+  if (x < 0)
+    x = 0;
+  if (y < 0)
+    y = 0;
+  if (x + kPanelW > workArea.right)
+    x = workArea.right - kPanelW;
+  if (y + kPanelH > workArea.bottom)
+    y = workArea.bottom - kPanelH;
 
   s_hwnd = CreateWindowExW(
       WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TOPMOST,
-      kWindowClassName, L"Fluxing QuickPanel",
-      WS_POPUP,
-      x, y, kPanelW, kPanelH,
+      kWindowClassName, L"Fluxing QuickPanel", WS_POPUP, x, y, kPanelW, kPanelH,
       NULL, NULL, GetModuleHandle(NULL), NULL);
-  if (!s_hwnd) return;
-  // v0.19.0.10: 不再 SetLayeredWindowAttributes(LWA_ALPHA) — 那种 uniform 半透明
-  // 不是 liquid glass (面板整体 86% 不透明)。 per-pixel alpha 走 RepaintLayered →
-  // ApplyAlphaGradient → UpdateLayeredWindow(ULW_ALPHA)。
+  if (!s_hwnd)
+    return;
+  // v0.19.0.10: 不再 SetLayeredWindowAttributes(LWA_ALPHA) — 那种 uniform
+  // 半透明 不是 liquid glass (面板整体 86% 不透明)。 per-pixel alpha 走
+  // RepaintLayered → ApplyAlphaGradient → UpdateLayeredWindow(ULW_ALPHA)。
   ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
-  // L81-fix: WS_EX_TOPMOST + WS_EX_LAYERED 路径 z-order 不稳,经常被其他窗口盖住。
-  // 显式 SetWindowPos(HWND_TOPMOST) 强制置顶,与 WS_EX_TOPMOST 等价但更可靠。
-  // SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE:不改变 geometry 也不抢焦。
+  // L81-fix: WS_EX_TOPMOST + WS_EX_LAYERED 路径 z-order
+  // 不稳,经常被其他窗口盖住。 显式 SetWindowPos(HWND_TOPMOST) 强制置顶,与
+  // WS_EX_TOPMOST 等价但更可靠。 SWP_NOMOVE | SWP_NOSIZE |
+  // SWP_NOACTIVATE:不改变 geometry 也不抢焦。
   SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-  // L84-fix: 启动 hover polling timer (id=2, 100ms)。绕过 WS_EX_LAYERED 下 WM_MOUSEMOVE
-  // 投递不可靠问题(L83 sandbox 验证)。Hide() 时 KillTimer。
+  // L84-fix: 启动 hover polling timer (id=2, 100ms)。绕过 WS_EX_LAYERED 下
+  // WM_MOUSEMOVE 投递不可靠问题(L83 sandbox 验证)。Hide() 时 KillTimer。
   SetTimer(s_hwnd, 2, 100, NULL);
   // v0.19.0.24-fix(issue 4):首次 Show 也设 s_showTime,reset s_outsideMs。
-  // L89-fix auto-hide 用 s_outsideMs 累加,首次 Show 时 cursor 还在 panel 外,直接
-  // 累加到 1500ms → Hide。Fix:Show 启动 grace period (kShowGraceMs=2000ms),polling
-  // timer 在 (now - s_showTime) < grace 时不累加 outsideMs。s_outsideMs reset 保证
-  // 不带旧值。
+  // L89-fix auto-hide 用 s_outsideMs 累加,首次 Show 时 cursor 还在 panel
+  // 外,直接 累加到 1500ms → Hide。Fix:Show 启动 grace period
+  // (kShowGraceMs=2000ms),polling timer 在 (now - s_showTime) < grace 时不累加
+  // outsideMs。s_outsideMs reset 保证 不带旧值。
   s_showTime = GetTickCount();
   s_outsideMs = 0;
   RepaintLayered(s_hwnd);  // 第一次提交 layered surface (带渐变 alpha)
@@ -1229,6 +1441,9 @@ void QuickPanelDialog::Hide() {
     KillTimer(s_hwnd, 2);  // L84-fix: kill hover polling timer
     ShowWindow(s_hwnd, SW_HIDE);
   }
+  // spec 084 / ADR 0013 D5: 收起后系数复位为满值,下次显示不带着旧系数。
+  s_alphaFactor = fluxing::kAlphaFactorFull;
+  s_targetAlphaFactor = fluxing::kAlphaFactorFull;
   s_hoveredIdx = -1;
   s_activeIdx = -1;
 }
@@ -1237,18 +1452,43 @@ void QuickPanelDialog::ToggleMode() {
   if (s_hwnd && IsWindow(s_hwnd) && IsWindowVisible(s_hwnd)) {
     Hide();
   } else {
-    Show(false, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+    // ADR 0013 D8: 把当前静态回调原样回传。Show() 会无条件把这 6 个参数
+    // 写进静态字段 => 传 nullptr 会把按钮回调清空(按钮变哑)。
+    Show(s_fullwidth, s_onSchema, s_onUserFolder, s_onPhrases, s_onFullwidth,
+         s_onSymbols, s_onLogin);
   }
 }
 
-void QuickPanelDialog::EnableAlwaysShowMode(
-    OnClick onSchema, OnClick onUserFolder, OnClick onPhrases,
-    OnToggle onFullwidth, OnClick onSymbols, OnClick onLogin) {
-  s_onSchema     = onSchema;
+// spec 084 / ADR 0013 D4/D5: 长显模式开关。
+// - 打开:进入长显态,屏蔽三条自动隐藏路径,系数由轮询器接管。
+// - 关闭:回到瞬时态,系数复位为满值。
+void QuickPanelDialog::SetAlwaysShowMode(bool enabled) {
+  if (AlwaysShowMode() == enabled)
+    return;
+  s_mode = enabled ? Mode::kAlwaysShow : Mode::kHidden;
+  if (!enabled) {
+    s_alphaFactor = fluxing::kAlphaFactorFull;
+    s_targetAlphaFactor = fluxing::kAlphaFactorFull;
+  }
+  if (s_hwnd && IsWindowVisible(s_hwnd)) {
+    RepaintLayered(s_hwnd);
+  }
+}
+
+void QuickPanelDialog::EnableAlwaysShowMode(OnClick onSchema,
+                                            OnClick onUserFolder,
+                                            OnClick onPhrases,
+                                            OnToggle onFullwidth,
+                                            OnClick onSymbols,
+                                            OnClick onLogin) {
+  // spec 084 / ADR 0013: 打开长显模式并注入回调,再显示面板。
+  SetAlwaysShowMode(true);
+  s_onSchema = onSchema;
   s_onUserFolder = onUserFolder;
-  s_onPhrases    = onPhrases;
-  s_onFullwidth  = onFullwidth;
-  s_onSymbols    = onSymbols;
-  s_onLogin      = onLogin;
-  Show(false, onSchema, onUserFolder, onPhrases, onFullwidth, onSymbols, onLogin);
+  s_onPhrases = onPhrases;
+  s_onFullwidth = onFullwidth;
+  s_onSymbols = onSymbols;
+  s_onLogin = onLogin;
+  Show(false, onSchema, onUserFolder, onPhrases, onFullwidth, onSymbols,
+       onLogin);
 }

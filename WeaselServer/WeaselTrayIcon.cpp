@@ -17,7 +17,26 @@ WeaselTrayIcon::WeaselTrayIcon(weasel::UI& ui)
       m_schema_ascii_icon(),
       m_disabled(false) {}
 
-void WeaselTrayIcon::CustomizeMenu(HMENU hMenu) {}
+// spec 084 / ADR 0013 D4/D10: 菜单弹出前给「长显」这一项打勾。
+// 菜单是资源菜单(3 个语言变体),每次弹出都重新 LoadMenu => 勾选状态
+// 不会残留,这里只需要在为真时打勾。
+void WeaselTrayIcon::CustomizeMenu(HMENU hMenu) {
+  if (!hMenu || !m_menuItemChecked)
+    return;
+  const int count = GetMenuItemCount(hMenu);
+  for (int i = 0; i < count; i++) {
+    const UINT id = GetMenuItemID(hMenu, i);
+    if (id == static_cast<UINT>(-1))
+      continue;  // popup / separator
+    if (m_menuItemChecked(id)) {
+      CheckMenuItem(hMenu, id, MF_BYCOMMAND | MF_CHECKED);
+    }
+  }
+}
+
+void WeaselTrayIcon::SetMenuItemCheckedCallback(std::function<bool(UINT)> fn) {
+  m_menuItemChecked = fn;
+}
 
 BOOL WeaselTrayIcon::Create(HWND hTargetWnd) {
   HMODULE hModule = GetModuleHandle(NULL);

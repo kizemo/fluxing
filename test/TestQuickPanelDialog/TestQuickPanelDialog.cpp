@@ -32,6 +32,7 @@
 #include "stdafx.h"
 #include "../../WeaselServer/QuickPanelDialog.h"
 #include "../../WeaselServer/resource.h"
+#include "../../include/QuickPanelAlpha.h"
 
 #include <cstdio>
 
@@ -57,8 +58,7 @@ static HWND CreateTestHost(const wchar_t* className) {
   if (!GetClassInfoExW(wc.hInstance, wc.lpszClassName, &wc)) {
     RegisterClassExW(&wc);
   }
-  return CreateWindowExW(0, className, L"host",
-                         WS_OVERLAPPED, 0, 0, 320, 200,
+  return CreateWindowExW(0, className, L"host", WS_OVERLAPPED, 0, 0, 320, 200,
                          NULL, NULL, GetModuleHandle(NULL), NULL);
 }
 
@@ -112,8 +112,9 @@ int main() {
   // For now, skip the WM_CREATE-based assertions to keep
   // run-test-suite.bat green. The Fluxing control unit tests
   // (TestFluxingComponents) still cover the control layer directly.
-  std::printf("  SKIP: TestQuickPanelDialog (broken in v0.18.29.0; "
-              "controls moved to Show(); see TODO spec 046/047)\n");
+  std::printf(
+      "  SKIP: TestQuickPanelDialog (broken in v0.18.29.0; "
+      "controls moved to Show(); see TODO spec 046/047)\n");
 
   // ----------------------------------------------------------------
   // v0.19.0.30: SetOn* wiring end-to-end tests (spec 070 follow-up).
@@ -179,8 +180,9 @@ int main() {
   }
 #endif
 
-  // T10: 模拟 WM_LBUTTONUP click 路径 hit 路由(hit==2 -> UserDict,hit==3 -> Shortcut)
-  // v0.19.0.60 (Phase L 调整 1): hit==2 路径已 no-op, T10 仅保留 hit==3 Shortcut 部分。
+  // T10: 模拟 WM_LBUTTONUP click 路径 hit 路由(hit==2 -> UserDict,hit==3 ->
+  // Shortcut) v0.19.0.60 (Phase L 调整 1): hit==2 路径已 no-op, T10 仅保留
+  // hit==3 Shortcut 部分。
 #if 0
   {
     int userDictCount = 0;
@@ -217,6 +219,53 @@ int main() {
           "T11a: QuickPanelDialog::kShowGraceMs == 2000 (v0.19.0.24 spec)");
     Check(QuickPanelDialog::kShowGraceMs > 0,
           "T11b: kShowGraceMs > 0 (grace 期内必不 Hide)");
+  }
+
+  // ----------------------------------------------------------------
+  // spec 084 / ADR 0013: 长显模式的不透明度系数演算(不开窗口也能断言)
+  // ----------------------------------------------------------------
+  std::printf("\n[spec 084] QuickPanel alpha factor\n");
+  {
+    // T12a: 满值系数 => 逐像素 alpha 不变(零回归保证,ADR 0013 D2)
+    Check(fluxing::ScaleAlpha(220, fluxing::kAlphaFactorFull) == 220,
+          "T12a: ScaleAlpha(220, 255) == 220 (满值系数逐像素不变)");
+    Check(fluxing::ScaleAlpha(80, fluxing::kAlphaFactorFull) == 80,
+          "T12b: ScaleAlpha(80, 255) == 80 (满值系数逐像素不变)");
+    Check(fluxing::ScaleAlpha(255, fluxing::kAlphaFactorFull) == 255,
+          "T12c: ScaleAlpha(255, 255) == 255 (彩色像素不透明度不变)");
+    // T12d: 20% 系数(长显常态)
+    Check(fluxing::ScaleAlpha(255, fluxing::kAlphaFactorIdle) == 51,
+          "T12d: ScaleAlpha(255, 51) == 51 (20% 系数)");
+    Check(fluxing::ScaleAlpha(220, fluxing::kAlphaFactorIdle) == 44,
+          "T12e: ScaleAlpha(220, 51) == 44 (渐变顶行按 20% 缩放)");
+    // T12f: 渐变步进不越过目标(ADR 0013 D3)
+    Check(fluxing::StepAlpha(255, 51, fluxing::kAlphaFadeStep) == 231,
+          "T12f: StepAlpha(255 -> 51, 24) == 231 (一次退 24)");
+    Check(fluxing::StepAlpha(51, 255, fluxing::kAlphaFadeStep) == 75,
+          "T12g: StepAlpha(51 -> 255, 24) == 75 (一次进 24)");
+    Check(fluxing::StepAlpha(60, 51, fluxing::kAlphaFadeStep) == 51,
+          "T12h: StepAlpha(60 -> 51, 24) == 51 (不越过目标)");
+    Check(fluxing::StepAlpha(51, 51, fluxing::kAlphaFadeStep) == 51,
+          "T12i: StepAlpha(51 -> 51, 24) == 51 (已到位不动)");
+  }
+
+  // ----------------------------------------------------------------
+  // spec 084 / ADR 0013 D4: 长显开关往返
+  // ----------------------------------------------------------------
+  {
+    Check(!QuickPanelDialog::AlwaysShowMode(),
+          "T12j: 默认不是长显模式(长显默认关)");
+    QuickPanelDialog::SetAlwaysShowMode(true);
+    Check(QuickPanelDialog::AlwaysShowMode(),
+          "T12k: SetAlwaysShowMode(true) 后 AlwaysShowMode() == true");
+    Check(
+        QuickPanelDialog::CurrentMode() == QuickPanelDialog::Mode::kAlwaysShow,
+        "T12l: CurrentMode() == kAlwaysShow");
+    QuickPanelDialog::SetAlwaysShowMode(false);
+    Check(!QuickPanelDialog::AlwaysShowMode(),
+          "T12m: SetAlwaysShowMode(false) 后 AlwaysShowMode() == false");
+    Check(QuickPanelDialog::CurrentMode() == QuickPanelDialog::Mode::kHidden,
+          "T12n: CurrentMode() == kHidden");
   }
 
   std::printf("\n=== %d / %d assertions passed ===\n", g_pass, g_pass + g_fail);
@@ -271,8 +320,8 @@ int main() {
   {
     HWND host = CreateTestHost(L"TestQuickPanelHost2");
     QuickPanelDialog::WndProc(host, WM_CREATE, 0, 0);
-    LRESULT r = QuickPanelDialog::WndProc(host, WM_COMMAND,
-        MAKEWPARAM(ID_QUICKPANEL_BTN_ASCII, BN_CLICKED), 0);
+    LRESULT r = QuickPanelDialog::WndProc(
+        host, WM_COMMAND, MAKEWPARAM(ID_QUICKPANEL_BTN_ASCII, BN_CLICKED), 0);
     Check(r == 0,
           "T2: WM_COMMAND stale ID_QUICKPANEL_BTN_ASCII returns 0 "
           "(no-op; spec 038 routes via FluxingToggle callback)");
@@ -286,8 +335,8 @@ int main() {
   {
     HWND host = CreateTestHost(L"TestQuickPanelHost3");
     QuickPanelDialog::WndProc(host, WM_CREATE, 0, 0);
-    LRESULT r = QuickPanelDialog::WndProc(host, WM_COMMAND,
-        MAKEWPARAM(ID_QUICKPANEL_BTN_DEPLOY, BN_CLICKED), 0);
+    LRESULT r = QuickPanelDialog::WndProc(
+        host, WM_COMMAND, MAKEWPARAM(ID_QUICKPANEL_BTN_DEPLOY, BN_CLICKED), 0);
     Check(r == 0,
           "T3: WM_COMMAND stale ID_QUICKPANEL_BTN_DEPLOY returns 0 "
           "(no-op; spec 038 routes via FluxingButton callback)");
@@ -326,7 +375,7 @@ int main() {
     HWND host = CreateTestHost(L"TestQuickPanelHost6");
     QuickPanelDialog::WndProc(host, WM_CREATE, 0, 0);
     LRESULT r = QuickPanelDialog::WndProc(host, WM_COMMAND,
-        MAKEWPARAM(IDCANCEL, BN_CLICKED), 0);
+                                          MAKEWPARAM(IDCANCEL, BN_CLICKED), 0);
     Check(r == 0, "T6: WM_COMMAND IDCANCEL returns 0 (X button path)");
     DestroyWindow(host);
   }

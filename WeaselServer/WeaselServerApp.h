@@ -72,15 +72,22 @@ class WeaselServerApp {
   // owns the server message loop.
   void ShowQuickPanel();
   void ToggleQuickPanel();
+  // spec 084 / ADR 0013 D4: 托盘菜单勾选项 -> 快捷设置栏长显模式开关。
+  void ToggleAlwaysShowMode();
 
   // v0.19.0.25-fix(spec 042 §3 + §10.4):Alt+. 全局热键 hook。
-  // - RegisterHotKey / UnregisterHotKey 绑 m_server.GetHWnd()(IPC server window)
-  // - 不改 WeaselIPCServer/ServerImpl 的 OnHotkey,而是用 SetWindowLongPtr 子类化 IPC
-  //   server window,在子类 WndProc 拦截 WM_HOTKEY (wParam == ID_HOTKEY_PHRASES_DOT)
-  //   → PhrasesDialog::Show();其他 WM_HOTKEY / 其他 message 透传给原 WndProc。
-  // - 子类 WNDPROC 是 static 的(无法捕获 this),所以通过一个 thread-local g_phrasesSubclass
-  //   指针存 WeaselServerApp 实例,避免依赖 thunk。Run 期间 lifecycle 与 m_server 同,
-  //   Stop 路径在 m_server.Run() 返回后,UnregisterHotKey + 还原 WNDPROC。
+  // - RegisterHotKey / UnregisterHotKey 绑 m_server.GetHWnd()(IPC server
+  // window)
+  // - 不改 WeaselIPCServer/ServerImpl 的 OnHotkey,而是用 SetWindowLongPtr
+  // 子类化 IPC
+  //   server window,在子类 WndProc 拦截 WM_HOTKEY (wParam ==
+  //   ID_HOTKEY_PHRASES_DOT) → PhrasesDialog::Show();其他 WM_HOTKEY / 其他
+  //   message 透传给原 WndProc。
+  // - 子类 WNDPROC 是 static 的(无法捕获 this),所以通过一个 thread-local
+  // g_phrasesSubclass
+  //   指针存 WeaselServerApp 实例,避免依赖 thunk。Run 期间 lifecycle 与
+  //   m_server 同, Stop 路径在 m_server.Run() 返回后,UnregisterHotKey + 还原
+  //   WNDPROC。
   void RegisterPhrasesHotkey();
   void UnregisterPhrasesHotkey();
 
@@ -91,8 +98,10 @@ class WeaselServerApp {
   // v0.19.0.29(mockups-v0.19.0.28 设计稿):把 Shortcut 入口从 QuickPanel
   // 接到 ShortcutSettings::Show。Setter 转发给 QuickPanel 内部静态字段,
   // 与 s_onPhrases 注入路径平行。
-  // v0.19.0.60 (Phase L 调整 1): SetQuickPanelUserDictCallback 删除 — UserDictionary 模块下线。
-  static void SetQuickPanelShortcutCallback(QuickPanelDialog::OnShowShortcut fn);
+  // v0.19.0.60 (Phase L 调整 1): SetQuickPanelUserDictCallback 删除 —
+  // UserDictionary 模块下线。
+  static void SetQuickPanelShortcutCallback(
+      QuickPanelDialog::OnShowShortcut fn);
 
   // IPC server window 原 WNDPROC(子类化前保存,UnregisterPhrasesHotkey 时还原)
   static LRESULT CALLBACK PhrasesHotkeySubclassProc(HWND, UINT, WPARAM, LPARAM);
