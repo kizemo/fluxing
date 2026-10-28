@@ -47,7 +47,7 @@ WeaselServer/WeaselServerApp.cpp:371  AddMenuHandler(ID_QUICKPANEL_ALWAYS_SHOW, 
 
 编号来源：`WeaselServer/resource.h:52` 有 `#define ID_QUICKPANEL_ALWAYS_SHOW 40019`；但前端用的共享头 `include/resource.h` **没有**（它只有 `ID_WEASELTRAY_QUICK_PANEL 40018`）⇒ 前端资源里写不出这一项。
 
-资源级取证（PE 资源树探针，本轮新写 `.m90_res_probe.py`）：
+资源级取证（PE 资源树探针，本轮临时编写、未入库；方法见本节描述）：
 
 | 二进制 | MENU 105 / 108 / 109 是否含「快速面板常驻」 |
 |---|---|
