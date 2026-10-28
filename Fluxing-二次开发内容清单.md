@@ -300,6 +300,40 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
 - **残留限制**：写成小写字母的快捷键在 CapsLock 打开时仍不触发（ADR 0014 D5），
   绕行写法是把配置写成大写变体（如 `Control+A`）。
 
+### 4.1.7 T21 / T22 · 1.1.0 真机反馈的另两条缺陷（2026-10-28 已修复，ADR 0015）
+
+- **T21 · 裸 Shift 上屏候选左右颠倒**（用户反馈 5）
+  - **根因**：线缆约定（`wParam bit0 = is_left，0=L / 1=R`）在客户端与服务端
+    **各写了一份字面量**（`is_left ? 0u : 1u` / `(wParam & 1u) != 0`），
+    客户端写对、**服务端读反** ⇒ 送进状态机的「是否左 Shift」与真实按键相反 ⇒
+    左 Shift 走右 Shift 分支（选第 3 个）。前端判左右、键名映射、状态机映射
+    **全部正确**，错点唯一。
+  - **修法**：编解码收进共享单元 `include/ShiftStateMachine.h` 的一对纯函数
+    `EncodeShiftIsLeft` / `DecodeShiftIsLeft`，两端各调一个（ADR 0015 D2）⇒
+    单端漂移在结构上不再可能。
+  - **回归**：`test/TestShiftIPCStateMachine` 新增 `Test_EncodeDecode_RoundTrip`，
+    **直接钉位值**（左编码=0、右编码=1、`Decode(0)==true`、`Decode(1)==false`）⇒
+    连「两端一起错」也能证伪（ADR 0015 D3）。
+- **T22 · 输入法弹出菜单缺「快速面板常驻」**（用户反馈 4）
+  - **根因**：**菜单有两份资源** —— 服务端托盘图标菜单（`WeaselServer/WeaselServer.rc`，
+    上一条已加该项）与输入法前端弹出菜单（`WeaselTSF/WeaselTSF.rc`，分简 / 繁 / 英
+    三块，**从头到尾没有该项**）；且该命令编号只在服务端自己的头文件里，
+    共享头 `include/resource.h` 没有 ⇒ 前端连写都写不出来。路由不缺，服务端处理器
+    已在（`WeaselServerApp.cpp:371`）。
+  - **修法**：共享头补 `ID_QUICKPANEL_ALWAYS_SHOW 40019`（与服务端取值一致），
+    前端三个弹出菜单各补一项（繁体用「快速面板常駐」）。**不扩协议**（复用既有
+    托盘命令通路，ADR 0015 D4–D6）。
+  - **验证**：**对构建产物做 PE 资源级检查**（`weasel.dll` / `weaselx64.dll` 的
+    MENU 105 / 108 / 109 是否含该项），不只看源码。
+- **T23 · 装机时 64 位前端 DLL 被占用未替换**（用户反馈 1 / 2 的真因）
+  - 装机目录里 `weaselx64.dll` 仍是**前一天**的旧件，而
+    `weaselx64.1.1.0.0.dll`（新件）与 `weaselx64.dll.stage2` 标记都在 ⇒
+    安装器的「TSF 被占用 ⇒ 装 versioned shim + 开机补换」机制**正常工作**，
+    只是**机器尚未重启** ⇒ 64 位进程仍在加载旧件 ⇒ 旧件里还带着
+    CapsLock 锁存标记上报 ⇒ 引擎整链中断 ⇒ 候选窗消失 / 快捷键全失效。
+  - **结论**：反馈 1 / 2 是**部署侧问题，不是代码缺陷**（spec 085 / ADR 0014 的修复
+    已在包内的新件里）。⇒ **重启 Windows** 即完成换装；重启后复测，若仍失败再另立条目。
+
 ### 4.2 规划中，未开工
 
 | 编号 | 内容 | 优先级 | 出处 | 备注 |
@@ -324,6 +358,10 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
 | T18 | **进 `release/` 发布链** | ✅ 已完成 | `release/` 已收录 `fluxing-1.0.0-installer.exe`（42,756,263 B，SHA256 `F040D989872FB8D135917B9416E40DE4D3010002EB669EF43AA98544A8344A8A`）与 `fluxing-0.21.0.9-installer.exe`（42,761,559 B，SHA256 `D1FCF78304FB89955F61F8925C894AB1F2CA5941FF9E9283D859D93A3E820E1C`）。注：本 fork 的 CI 发布步骤被 `github.repository == 'rime/weasel'` 门控 ⇒ `release/` 只是 git 跟踪的载荷仓，**不会**自动建 GitHub Release |
 | T19 | **沙箱权威门禁在本机跑不起来** | ⚠️ 环境故障 | `run-verify.cmd` 两轮均报「3 次启动都没拿到 claims.json」（orchestrator exit 4）；`sandbox-artifacts\rime\logs\` 下**连 `boot.log` 都没有** ⇒ Windows Sandbox 虚机根本没启动（Hyper-V vSwitch 异常，同机 2026-10-25 曾成功跑出 `PASS=38 FAIL=2`）。根因未定位；**不阻塞提交**（本轮未改 `output/install.nsi` 与 `output/data/user-custom/**`），但 0.21.0.9 的沙箱断言仍为空 ⇒ 见 L150 |
 | T20 | **CapsLock 打开时快捷键全部失效** | ✅ 已修复，待真机复验 | 根因**不是**「按键匹配失配」，而是**输入引擎在 CapsLock 打开后不再处理任何按键**：前端 `WeaselTSF/KeyEvent.cpp` 在 CapsLock 打开时给按键事件多置 `LOCK_MASK`(0x2) ⇒ `expand_ibus_modifier`（`RimeWithWeasel.cpp:44-46`）保留该位 ⇒ librime 精确比较 modifier（`librime/src/rime/key_event.h:43-44`）失配；**更关键**的是本项目配置 `good_old_caps_lock: true`（`output/data/default.yaml:72-73`）让英文输入组件对「带着锁存标记」的键返回「拒绝处理」⇒ **整条处理器链中断**（`librime/src/rime/engine.cc:105-107`）⇒ 候选选择 / 翻页 / 切中英 / 切标点 / 切简繁**全部**失效。修法取唯一源头：**前端不再上报锁存状态**（ADR 0014 D1）；门禁新增 caps 维度 + 内建负控（ADR 0014 D4）。详见 spec 085 §5.3.1 与 4.1.6。门禁证据：源门禁 `caps_reachable=39 / caps_dead=0 / caps_limited=0`，负控 `caps_legacy_reachable=0 / caps_legacy_dead=39`（模拟修复前 39/39 全死）⇒ 门禁对缺陷敏感 |
+| T21 | **裸 Shift 上屏候选左右颠倒** | ✅ 已修复，待真机复验 | 线缆约定（`wParam bit0 = is_left`，0=L/1=R）在客户端与服务端**各写一份字面量**，客户端写对、**服务端读反** ⇒ 左 Shift 走右 Shift 分支（选第 3 个）。修法：编解码收进共享单元 `include/ShiftStateMachine.h` 的 `EncodeShiftIsLeft` / `DecodeShiftIsLeft`，两端各调一个（ADR 0015 D2）；回归测试**直接钉位值**（左=0、右=1、`Decode(0)==true`、`Decode(1)==false`）⇒ 连「两端一起错」也能证伪（D3）。详见 spec 086 §5.3 与 4.1.7 |
+| T22 | **输入法弹出菜单缺「快速面板常驻」** | ✅ 已修复，待真机复验 | **菜单有两份资源**：服务端托盘图标菜单（`WeaselServer/WeaselServer.rc`，spec 084 已加该项）与输入法前端弹出菜单（`WeaselTSF/WeaselTSF.rc`，简 / 繁 / 英三块，**没有该项**）；命令编号也只在服务端头文件里，共享头 `include/resource.h` 没有 ⇒ 前端连写都写不出来。修法：共享头补 `ID_QUICKPANEL_ALWAYS_SHOW 40019` + 前端三个弹出菜单各补一项，**不扩协议**（复用既有托盘命令通路，ADR 0015 D4–D6）。验证用**构建产物的 PE 资源级检查**，不只读源码。详见 spec 086 §5.3 与 4.1.7 |
+| T23 | **装机时 64 位前端 DLL 被占用未替换** | ⚠️ 待用户重启 | 用户反馈 1 / 2（CapsLock 打开后候选窗消失、快捷键全失效）的真因**不是代码缺陷**：装机时 `weaselx64.dll` 被 TSF 占用，装的是 versioned shim + `weaselx64.1.1.0.0.dll` + `weaselx64.dll.stage2` 标记 ⇒ **开机补换**机制正常，机器尚未重启 ⇒ 64 位进程仍加载前一天旧件（旧件里还带着锁存标记上报 ⇒ 引擎整链中断）。⇒ **重启 Windows 即完成换装**，重启后复测反馈 1 / 2；若仍失败再另立条目 |
+
 
 ---
 
@@ -351,6 +389,8 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
 | MiniMax Code 运行时反复重启（1 h 内 6 次） | 持续杀掉在飞后台任务 | 已提报（仓外），产品侧排查中 |
 | 沙箱权威门禁在本机跑不起来（T19） | 0.21.0.9 的 46 项沙箱断言一条没跑 | 需修 Hyper-V vSwitch；或换一台机器跑（见 L150） |
 | ~~CapsLock 打开时快捷键全部失效（T20）~~ | 常开 CapsLock 的用户会以为快捷键坏了 | ✅ 已修（spec 085 / ADR 0014）：前端不再上报锁存状态 + 门禁纳入 caps 维度。**残留限制**：字母类快捷键在 CapsLock 打开时仍要写成大写变体（ADR 0014 D5） |
+| ~~输入法弹出菜单没有「快速面板常驻」的勾选标记（T22）~~ | 常显开关的当前状态只在托盘图标菜单里可见 | ⚠️ 已知限制：补勾选需新增「查询开关状态」的往返消息 ⇒ **协议扩张**，本条不做（ADR 0015 D7）。留后续条目 |
+| ~~装机后 64 位前端仍是旧件（T23）~~ | 重启前反馈 1 / 2 会**继续复现**（候选窗消失 / 快捷键全失效） | ⚠️ 部署侧：**重启 Windows** 即完成换装；包内新件已含 ADR 0014 修复 |
 
 ---
 

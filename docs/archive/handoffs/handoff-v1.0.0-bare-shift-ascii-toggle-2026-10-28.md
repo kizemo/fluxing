@@ -821,3 +821,109 @@ gh run view <run-id> --json status,jobs
 
 - 仍只剩真机验收：**T6.3 / T6.4 / T20 / T013**（见 §13.4 与 §15.4）。
 
+
+---
+
+## 17. 本轮（spec 086）· 左右 Shift 方向修正 + 输入法弹出菜单补齐「快速面板常驻」
+
+> 关联：spec 086（`.specify/specs/086-shift-direction-and-tsf-quickpanel-menu/`）、
+> ADR 0015（`docs/adr/0015-shift-direction-single-source-and-tsf-popup-menu.md`）、
+> 清单 T21 / T22 / T23。
+
+### 17.1 用户反馈定性（8 条反馈的最终归属）
+
+| 反馈 | 内容 | 定性 |
+|---|---|---|
+| 1 | CapsLock 打开后候选窗消失 | **部署侧**（T23）——包内新件已含 ADR 0014 修复，机器未重启 ⇒ 64 位仍加载旧件。**重启即换装** |
+| 2 | CapsLock 打开后快捷键全失效 | 同上（部署侧）。「CapsLock 键自身行为反常」的语义歧义**待换装后复测再定性** |
+| 3 | CapsLock 打开时字母仍大写 | ✅ 预期（ADR 0014 D3） |
+| 4 | 托盘右键找不到「快速面板常驻」 | **代码缺陷**（T22）——菜单有**两份资源**，只改了服务端那份 ⇒ 修 |
+| 5 | 裸 Shift 上屏候选左右颠倒 | **代码缺陷**（T21）——服务端把 `wParam bit0` **反解** ⇒ 修 |
+| 6 | 两窗口会话隔离 | ✅ 通过 |
+| 7 | 任务栏图标跟随中英 | ✅ 通过 |
+| 8 | `codebase-memory-mcp` 是否需要重装 / 启用 | 已答复：当前 MCP 列表里只剩 `graphify`（`enabled:false`），`codebase-memory-mcp` 已不在列表 ⇒ 本轮全程 Grep / Read 降级取证 |
+
+### 17.2 两条代码缺陷的根因与修法
+
+**T21 · 左右颠倒（ADR 0015 D1–D3）**
+
+- 线缆约定：`wParam bit0 = is_left`，**0 = 左、1 = 右**（spec 077 §2.3，
+  `test/TestShiftIPCWire` 已钉住**契约**）。
+- 客户端 `WeaselIPC/WeaselClientImpl.cpp` 编码 `is_left ? 0u : 1u` ✅ 符合契约；
+  服务端 `WeaselIPCServer/WeaselServerImpl.cpp` 反读 `(wParam & 1u) != 0` ❌。
+- 前端判左右、键名映射（扫描码 0x36 ⇒ 右）、状态机映射（左→第2 / 右→第3）
+  **全部正确** ⇒ 错点唯一。
+- 修法：编解码收进 `include/ShiftStateMachine.h` 的
+  `EncodeShiftIsLeft` / `DecodeShiftIsLeft`，两端各调一个 ⇒ 单端漂移结构上不可能。
+- 回归：`test/TestShiftIPCStateMachine` 新增 `Test_EncodeDecode_RoundTrip`，
+  **直接钉位值**（左=0 / 右=1 / `Decode(0)==true` / `Decode(1)==false`）——
+  只钉往返会被「两端一起错」掩盖。
+
+**T22 · 弹出菜单缺项（ADR 0015 D4–D7）**
+
+- **两份菜单资源**：服务端托盘图标菜单 `WeaselServer/WeaselServer.rc`（已有该项）
+  vs 输入法前端弹出菜单 `WeaselTSF/WeaselTSF.rc`（`IDR_MENU_POPUP` /
+  `_HANT` / `_HANS`，**没有该项**）。
+- 编号只在 `WeaselServer/resource.h:52`；共享头 `include/resource.h` 没有
+  ⇒ 前端资源里写不出来 ⇒ 补进共享头（`ID_QUICKPANEL_ALWAYS_SHOW 40019`）。
+- 路由不缺：`LanguageBar.cpp:171-190` → `_HandleLangBarMenuSelect` → `default:`
+  → `m_client.TrayCommand(wID)` → `WeaselServerApp.cpp:371` 已有处理器。
+- **不扩协议**（复用既有托盘命令通路）⇒ 不触碰 `WeaselIPCData.h` ⇒ 三端无需同步。
+- 遗留：弹出菜单**没有勾选标记**（常显状态只在托盘菜单可见）—— 要补需新增
+  「查询状态」往返消息 ⇒ 协议扩张，**留后续条目**。
+
+### 17.3 验证证据
+
+- 整解构建 `msbuild weasel.sln /p:Configuration=Release /p:Platform=Win32` ⇒ exit 0；
+  64 位前端补编 `WeaselTSF.vcxproj /p:Platform=x64` ⇒ exit 0。
+- 全套件 `scripts/test-infra/run-test-suite.bat` ⇒ `=== ALL TESTS PASSED ===`（exit 0）。
+  ⚠️ **第一次跑失败是环境问题，不是代码问题**：用户机器上**装着并运行中的**
+  `WeaselServer.exe` 占着命名管道 ⇒ 集成测试的 mock 绑不上
+  （`[ERROR] A WeaselServer.exe or TestWeaselIPC.exe process is already running.`）
+  ⇒ 停掉该进程后复跑通过。这正是 L151 说的「集成测试必须先证明管道另一端是我以为的进程」。
+- 格式检查：基线干净的文件保持干净；`include/resource.h` **基线本就有历史违规**
+  （整份文件的 `#define` 对齐约定与 clang-format 冲突）⇒ 只保证新增行与文件既有
+  风格一致，**不做全量重排**（否则产生大段无关 diff）。
+- 资源级复核：对构建产物做 PE 资源树检查，确认 `weasel.dll` / `weaselx64.dll` 的
+  MENU 105 / 108 / 109 **已含**「快速面板常驻」（修复前 utf16_off = −1）。
+- 部署产物复跑 + 装包 `PKG-VERIFY=PASS`：见 §17.5。
+
+### 17.4 本轮改动文件（7 个）
+
+| 文件 | 改动 |
+|---|---|
+| `include/ShiftStateMachine.h` | 新增 `EncodeShiftIsLeft` / `DecodeShiftIsLeft` |
+| `include/resource.h` | 新增 `ID_QUICKPANEL_ALWAYS_SHOW 40019` |
+| `WeaselIPC/WeaselClientImpl.cpp` | 两处改调 `EncodeShiftIsLeft` |
+| `WeaselIPCServer/WeaselServerImpl.cpp` | 两处改调 `DecodeShiftIsLeft`（**修反解**）+ 订正写反的注释 |
+| `WeaselTSF/WeaselTSF.rc` | 三个弹出菜单各补一项（繁体用「快速面板常駐」） |
+| `test/TestShiftIPCStateMachine/TestShiftIPCStateMachine.cpp` | 新增 `Test_EncodeDecode_RoundTrip` |
+| `docs/adr/0015-shift-direction-single-source-and-tsf-popup-menu.md` | 新增 ADR 0015 |
+
+### 17.5 装包与部署产物
+
+- 安装包 `output/archives/fluxing-1.1.0-installer.exe` —— **42,766,080 B**，
+  SHA256 `7EF344DEE75416D031A9F124414B986D8B255CD88FB85FE5AEBB8A8E2F302777`；
+  `release/fluxing-1.1.0-installer.exe` 同步收录（SHA256 相同）。
+- 解包复验：195 个文件；二进制 **7/7** 与本轮新构建产物**逐字节一致**
+  （`weasel.dll` / `weaselx64.dll` / `WeaselServer.exe` / `WeaselDeployer.exe` /
+  `WeaselSetup.exe` / `rime.dll` / `FluxingPhrasesDialog.exe`）；yaml 载荷 **42** 个，
+  `data/build` **12** 个多重集一致 ⇒ **`PKG-VERIFY=PASS`**。
+- 部署产物复跑（对**解包后**的真实载荷：共享编译 schema `data/build/*.yaml` 12 个
+  + 用户自定义覆盖 3 个）：
+  `SUMMARY|bindings=337|reachable=337|dead=0|known_dead=0|known_dead_keys=0|expectations=0|mismatches=0|unused=0|caps_bindings=337|caps_reachable=337|caps_dead=0|caps_limited=0|caps_baseline_dead=0|caps_legacy_reachable=0|caps_legacy_dead=337|caps_legacy_rejected=289`。
+
+### 17.6 待用户真机验收
+
+1. **重启 Windows**（完成 64 位前端换装，T23）⇒ 复测反馈 1 / 2：
+   开着 CapsLock 时选候选 / 翻页 / 切中英 / 切标点 / 切简繁**全部可用**；
+   CapsLock 键自身行为不变；字母仍大写。
+2. 裸 Shift：**左 Shift 上屏第 2 个候选、右 Shift 上屏第 3 个候选**（T21）。
+3. 输入法弹出菜单（语言栏右键，简 / 繁 / 英）⇒ 出现「快速面板常驻」，勾上后快捷设置栏
+   不再自动隐藏、再点恢复（T22）。
+4. 验收通过 ⇒ ADR 0015 `Proposed` → `Accepted`，勾掉 spec 086 的 T017 / T018。
+
+### 17.7 下一步
+
+- 仍只剩真机验收：**T6.3 / T6.4 / T013（spec 084）/ T017（spec 085）/ T017·T018（spec 086）**。
+- 本轮**未扩协议**；「弹出菜单加勾选标记」留作后续条目（需新增查询往返消息）。
