@@ -246,6 +246,10 @@ int WeaselServerApp::Run() {
   // API for the "remembered" state across IPC reconnects (if needed
   // later), but is no longer called on every Run().
 
+  // v1.1.2 (ADR 0019): 从磁盘恢复用户勾过的「常驻」——只回填 s_mode,
+  // 不 auto-show 面板,spec 055 不变量原样保留。
+  QuickPanelDialog::RestoreAlwaysShowMode();
+
   // v0.19.0.52 (Phase K3 T010):设置 phrases.yaml 路径。
   // 必须在 RegisterPhrasesHotkey() 之前调 — 热键按下 → PhrasesDialogIPC::Show()
   // → 内部用 s_yamlPath 加载 YAML。若此时为空会 fallback 到默认 "你好"。

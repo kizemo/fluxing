@@ -82,6 +82,13 @@ class QuickPanelDialog {
   // 默认关;打开后面板常驻屏幕右下角,常态 20% 不透明度,悬停渐变到 100%。
   static void SetAlwaysShowMode(bool enabled);
   static bool AlwaysShowMode() { return s_mode == Mode::kAlwaysShow; }
+  // v1.1.2 (用户 1.1.1 验收反馈, ADR 0019):「常驻」勾选态跨 WeaselServer
+  // 重启持久化 —— 推翻 spec 084 FR-007「重启回到默认(关)」。
+  // 介质: %APPDATA%\Rime\quickpanel.state (单行 ASCII "always_show=0|1\n")。
+  // Restore 只恢复模式、绝不 auto-show (spec 055 不变量保留)。
+  static void SetStatePath(const std::wstring& path);  // 测试注入;空串=回默认
+  static void RestoreAlwaysShowMode();  // 服务器启动时读盘恢复 s_mode
+  static bool LoadPersistedAlwaysShowMode();  // 文件缺失/损坏 ⇒ false
 
   static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 

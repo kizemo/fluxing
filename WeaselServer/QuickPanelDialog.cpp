@@ -29,6 +29,8 @@
 // <wincodec.h> + windowscodecs.lib (在 xmake.lua 已加)。
 #include <wincodec.h>
 #include <wrl/client.h>
+#include <shlobj.h>
+#include <fstream>
 #pragma comment(lib, "windowscodecs.lib")
 
 static const wchar_t kWindowClassName[] = L"FluxingQuickPanel_v3";
@@ -1330,10 +1332,10 @@ LRESULT QuickPanelDialog::OnKillFocus(HWND hwnd) {
 }
 
 LRESULT QuickPanelDialog::OnKeyDown(HWND hwnd, WPARAM key) {
-  if (key == VK_ESCAPE) {
-    Hide();
+  // v1.1.2 (ADR 0019, 用户 1.1.1 验收口径): ESC 不再收起快捷设置栏。
+  // 显隐统一交给 Alt+, 快捷键;ESC 被面板吞掉、不产生任何动作。
+  if (key == VK_ESCAPE)
     return 0;
-  }
   return DefWindowProc(hwnd, key, 0, 0);
 }
 
@@ -1459,13 +1461,72 @@ void QuickPanelDialog::ToggleMode() {
   }
 }
 
+// ===== v1.1.2 (ADR 0019):「常驻」勾选态跨 WeaselServer 重启持久化 =====
+// 根因: s_mode 原是纯内存态 ⇒ 装机换 DLL 所需的重启把勾选清零,面板退回
+// 瞬时模式(grace 2s + 鼠标在面板外累计 1.5s ⇒ 用户看到的「调出几秒后消失」)。
+// 介质: %APPDATA%\Rime\quickpanel.state, 单行 ASCII "always_show=0|1\n"。
+static std::wstring s_statePathOverride;
+#pragma comment(lib, "shell32.lib")
+
+static std::wstring QuickPanelStatePath() {
+  if (!s_statePathOverride.empty())
+    return s_statePathOverride;
+  wchar_t appdata[MAX_PATH] = {};
+  if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, appdata)))
+    return std::wstring(appdata) + L"\\Rime\\quickpanel.state";
+  return L"quickpanel.state";
+}
+
+static void WriteQuickPanelState(bool alwaysShow) {
+  const std::wstring path = QuickPanelStatePath();
+  const std::wstring dir = path.substr(0, path.find_last_of(L"\\/"));
+  if (!dir.empty())
+    CreateDirectoryW(dir.c_str(), nullptr);
+  std::ofstream f(path, std::ios::binary | std::ios::trunc);
+  if (!f)
+    return;  // 写失败降级为「重启后回到瞬时」,不阻塞切换本身
+  f << (alwaysShow ? "always_show=1\n" : "always_show=0\n");
+  f.flush();
+  if (!f)
+    return;
+  // 本仓铁律: 写完必须回读自证,0 字节坏文件比没文件更危险
+  std::ifstream r(path, std::ios::binary);
+  std::string back((std::istreambuf_iterator<char>(r)),
+                   std::istreambuf_iterator<char>());
+  if (back.empty())
+    DeleteFileW(path.c_str());
+}
+
+bool QuickPanelDialog::LoadPersistedAlwaysShowMode() {
+  std::ifstream f(QuickPanelStatePath(), std::ios::binary);
+  if (!f)
+    return false;
+  std::string line;
+  if (!std::getline(f, line))
+    return false;
+  if (!line.empty() && line.back() == '\r')
+    line.pop_back();  // 容忍手工/CRLF 写盘
+  return line == "always_show=1";
+}
+
+void QuickPanelDialog::SetStatePath(const std::wstring& path) {
+  s_statePathOverride = path;
+}
+
+void QuickPanelDialog::RestoreAlwaysShowMode() {
+  // 只做模式回填: 不 Show、不回写盘 —— spec 055「启动不自动显示面板」不变。
+  s_mode = LoadPersistedAlwaysShowMode() ? Mode::kAlwaysShow : Mode::kHidden;
+}
+
 // spec 084 / ADR 0013 D4/D5: 长显模式开关。
 // - 打开:进入长显态,屏蔽三条自动隐藏路径,系数由轮询器接管。
 // - 关闭:回到瞬时态,系数复位为满值。
+// v1.1.2 (ADR 0019): 勾选态变化时同步落盘,重启后由 Restore 恢复。
 void QuickPanelDialog::SetAlwaysShowMode(bool enabled) {
   if (AlwaysShowMode() == enabled)
     return;
   s_mode = enabled ? Mode::kAlwaysShow : Mode::kHidden;
+  WriteQuickPanelState(enabled);
   if (!enabled) {
     s_alphaFactor = fluxing::kAlphaFactorFull;
     s_targetAlphaFactor = fluxing::kAlphaFactorFull;

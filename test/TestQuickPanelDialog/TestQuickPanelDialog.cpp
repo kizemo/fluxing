@@ -35,6 +35,7 @@
 #include "../../include/QuickPanelAlpha.h"
 
 #include <cstdio>
+#include <fstream>
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -252,6 +253,19 @@ int main() {
   // ----------------------------------------------------------------
   // spec 084 / ADR 0013 D4: 长显开关往返
   // ----------------------------------------------------------------
+  // ADR 0019: 本批测试的持久化落点改道临时文件 —— 勾选开关现在会落盘，
+  // 单元测试绝不能污染真实 %APPDATA%\Rime\quickpanel.state。T14 末尾恢复默认路径。
+  static std::wstring g_qpStateTestPath;
+  {
+    wchar_t tmpDir[MAX_PATH] = {0};
+    DWORD nDir = ::GetTempPathW(MAX_PATH, tmpDir);
+    if (nDir > 0 && nDir < MAX_PATH) {
+      g_qpStateTestPath = std::wstring(tmpDir) + L"fluxing_qp_state_test.state";
+      ::DeleteFileW(g_qpStateTestPath.c_str());
+      QuickPanelDialog::SetStatePath(g_qpStateTestPath);
+    }
+    Check(!g_qpStateTestPath.empty(), "T13a0: 测试状态路径可用(落点已重定向)");
+  }
   {
     Check(!QuickPanelDialog::AlwaysShowMode(),
           "T12j: 默认不是长显模式(长显默认关)");
@@ -266,6 +280,68 @@ int main() {
           "T12m: SetAlwaysShowMode(false) 后 AlwaysShowMode() == false");
     Check(QuickPanelDialog::CurrentMode() == QuickPanelDialog::Mode::kHidden,
           "T12n: CurrentMode() == kHidden");
+  }
+
+  // ----------------------------------------------------------------
+  // T13: ADR 0019 — 常驻勾选态跨进程持久化。根因回归: v1.1.1 装包重启后
+  //      勾选丢失退回瞬时模式, 用户观察到"调出后几秒自动消失"。
+  // ----------------------------------------------------------------
+  {
+    Check(!QuickPanelDialog::AlwaysShowMode(),
+          "T13a: 默认启动不长显(勾选清零是旧缺陷本体)");
+    DeleteFileW(g_qpStateTestPath.c_str());
+    Check(!QuickPanelDialog::LoadPersistedAlwaysShowMode(),
+          "T13b: 状态文件缺失 => 默认关, 不报错不崩溃");
+    // 1) 模拟"上一会话勾选过"留下的旧文件 => Restore 复活勾选
+    { std::ofstream f(g_qpStateTestPath.c_str(), std::ios::binary);
+      f << "always_show=1\r\n"; }
+    Check(QuickPanelDialog::LoadPersistedAlwaysShowMode(),
+          "T13c: CRLF 旧文件也能读回(容忍尾部 \\r)");
+    QuickPanelDialog::RestoreAlwaysShowMode();
+    Check(QuickPanelDialog::AlwaysShowMode(),
+          "T13d: 重启后勾选自动恢复 —— 面板不再几秒后消失(装机验收本体)");
+    // 2) Restore 只恢复模式, 绝不 auto-show 面板(spec 055 不变量保留)
+    HWND afterRestore = QuickPanelDialog::ActiveHwnd();
+    Check(afterRestore == NULL || !IsWindowVisible(afterRestore),
+          "T13e: Restore 不 auto-show 面板");
+    // 3) 勾选/取消即时落盘(往返), 内容逐字节可断言
+    QuickPanelDialog::SetAlwaysShowMode(false);
+    { std::ifstream f(g_qpStateTestPath.c_str(), std::ios::binary);
+      std::string body((std::istreambuf_iterator<char>(f)),
+                       std::istreambuf_iterator<char>());
+      Check(body == "always_show=0\n", "T13f: 取消勾选即时落盘 always_show=0"); }
+    QuickPanelDialog::SetAlwaysShowMode(true);
+    { std::ifstream f(g_qpStateTestPath.c_str(), std::ios::binary);
+      std::string body((std::istreambuf_iterator<char>(f)),
+                       std::istreambuf_iterator<char>());
+      Check(body == "always_show=1\n", "T13g: 勾选即时落盘 always_show=1"); }
+    // 4) 坏文件容错 => 默认关
+    { std::ofstream f(g_qpStateTestPath.c_str(), std::ios::binary);
+      f << "garbage!"; }
+    Check(!QuickPanelDialog::LoadPersistedAlwaysShowMode(),
+          "T13h: 损坏状态文件 => 默认关");
+    QuickPanelDialog::SetAlwaysShowMode(false);  // 收尾复位默认态
+    DeleteFileW(g_qpStateTestPath.c_str());
+  }
+
+  // ----------------------------------------------------------------
+  // T14: ADR 0019 — ESC 不再隐藏快捷设置栏(显隐只靠 Alt+, 快捷键)。
+  //      场景刻意选 常驻=false —— 与修复前"ESC 收起"的分支一致。
+  // ----------------------------------------------------------------
+  {
+    Check(!QuickPanelDialog::AlwaysShowMode(), "T14a: 前置: 当前非长显模式");
+    QuickPanelDialog::Show(false, [](){}, [](){}, [](){},
+                           [](bool){}, [](){}, [](){});
+    HWND panel = QuickPanelDialog::ActiveHwnd();
+    Check(panel != NULL, "T14b: 面板已 Show()");
+    Check(panel != NULL && IsWindowVisible(panel), "T14c: Show 后面板可见");
+    LRESULT escRet = QuickPanelDialog::WndProc(panel, WM_KEYDOWN, VK_ESCAPE, 0);
+    Check(escRet == 0, "T14d: ESC 被消费(返回 0, 不落到系统提示音路径)");
+    Check(IsWindowVisible(panel),
+          "T14e: ESC 不再隐藏面板 —— 用户口径『显隐只靠 Alt+,』");
+    QuickPanelDialog::Hide();
+    Check(!IsWindowVisible(panel), "T14f: Alt+, 等价路径 Hide() 收起仍有效");
+    QuickPanelDialog::SetStatePath(L"");  // 恢复默认落点(测试不再写任何文件)
   }
 
   std::printf("\n=== %d / %d assertions passed ===\n", g_pass, g_pass + g_fail);
