@@ -486,7 +486,17 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
   // 不依赖前景 app 变化,直接走 RIME event chain。
   //
   // 这是 no-op 保护 (Hide 在 panel 未显示时是 safe no-op):
-  QuickPanelDialog::Hide();
+  //
+  // spec 087 / ADR 0016: FocusOut 是面板的第四条自动隐藏路径。前三条
+  // (轮询器 / WM_ACTIVATEAPP / WM_KILLFOCUS) 都在 QuickPanelDialog 内部
+  // 带 AlwaysShowMode() 守卫,唯独这条从 WeaselTSF 过来的 IPC 直接调
+  // Hide(),于是"勾了常驻"的面板在用户一切换输入焦点时仍然消失。
+  //
+  // 守卫加在调用点,不动 Hide() 本体: Hide() 还服务于需要用户明确手势
+  // 的路径 (Alt+, 收起 / ESC / 点词库按钮),把守卫放进 Hide() 内部会让
+  // 那些路径在长显态下失效 (ADR 0013 D7)。
+  if (!QuickPanelDialog::AlwaysShowMode())
+    QuickPanelDialog::Hide();
 }
 
 void RimeWithWeaselHandler::UpdateInputPosition(RECT const& rc,

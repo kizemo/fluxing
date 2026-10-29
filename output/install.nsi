@@ -615,11 +615,12 @@ program_files:
     ClearErrors
     Rename "$INSTDIR\weasel.dll" "$INSTDIR\weasel.dll.old.tmp"
     ${If} ${Errors}
-      ; Rename failed (still locked) -> try SetOverwrite try, skip on error
-      SetOverwrite try
+      ; spec 087 / ADR 0016 (fix 2): SetOverwrite try SKIPS a locked target
+      ; WITHOUT setting the error flag, so the old "SetOverwrite try + File +
+      ; IfErrors 0 <done>" jumped straight to <done>: the stale binary stayed
+      ; on disk and the versioned shim was never written at all.  Go straight
+      ; to the versioned shim instead of probing the locked path.
       ClearErrors
-      File "weasel.dll"
-      IfErrors 0 weasel_done
       ; L120: the 32 bit shim is locked by a running TSF host.  Do
       ; NOT kill the host: that takes the whole text-services
       ; stack down (see .onInit).  Do NOT ask for a reboot either.
@@ -630,7 +631,19 @@ program_files:
       ; the user has to do.
       DetailPrint "Fluxing: weasel.dll is locked by a running app; installing a versioned shim instead (no reboot needed)"
       ClearErrors
-      CopyFiles /SILENT "$TEMP\fluxing-staged\weasel.dll" "$INSTDIR\weasel.${FLUXING_VERSION}.${WEASEL_BUILD}.dll"
+      ; spec 087 / ADR 0016 (fix 3): CopyFiles does NOT overwrite an existing
+      ; target, so the versioned shim kept the bytes of the previous install
+      ; (the user's weaselx64.1.1.0.0.dll was exactly that: the 10-28 20:50
+      ; build, never refreshed).  Delete the stale versioned shim first, then
+      ; write it through File /oname (the only rename syntax NSIS has) with
+      ; SetOverwrite on.  /nonfatal turns a write failure into an error flag
+      ; instead of aborting the whole installer.
+      ClearErrors
+      Delete "$INSTDIR\weasel.${FLUXING_VERSION}.${WEASEL_BUILD}.dll"
+      ClearErrors
+      SetOverwrite on
+      File /nonfatal /oname=weasel.${FLUXING_VERSION}.${WEASEL_BUILD}.dll "weasel.dll"
+      SetOverwrite try
       ${If} ${Errors}
         DetailPrint "Fluxing: the versioned shim could not be copied; the old shim is retained"
         StrCpy $FluxingDegraded 1
@@ -673,9 +686,12 @@ program_files:
       ClearErrors
       Rename "$INSTDIR\weaselx64.dll" "$INSTDIR\weaselx64.dll.old.tmp"
       ${If} ${Errors}
-        SetOverwrite try
-        File "weaselx64.dll"
-        IfErrors 0 weaselx64_done
+        ; spec 087 / ADR 0016 (fix 2): same trap as the 32 bit branch --
+        ; SetOverwrite try silently skipped the locked target without setting
+        ; the error flag, so the branch jumped to <done> and the stale binary
+        ; survived the install (this is why the user's weaselx64.dll was
+        ; still the 10-27 build after the 10-28 22:32 install).
+        ClearErrors
         ; BOTH Rename AND File failed (the TSF host still holds the
         ; mapping).  L120: do not wait for a reboot and do not kill
         ; the host.  Install the new shim under a versioned name
@@ -686,7 +702,15 @@ program_files:
         ; versioned copy fails.
         DetailPrint "Fluxing: weaselx64.dll is locked by a running app; installing a versioned shim instead (no reboot needed)"
         ClearErrors
-        CopyFiles /SILENT "$TEMP\fluxing-staged\weaselx64.dll" "$INSTDIR\weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.dll"
+        ; spec 087 / ADR 0016 (fix 3): same as the 32 bit branch -- delete the
+        ; stale versioned shim, then write the new bytes through File /oname
+        ; with SetOverwrite on.
+        ClearErrors
+        Delete "$INSTDIR\weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.dll"
+        ClearErrors
+        SetOverwrite on
+        File /nonfatal /oname=weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.dll "weaselx64.dll"
+        SetOverwrite try
         ${If} ${Errors}
           DetailPrint "Fluxing: the versioned shim could not be copied; falling back to the boot-time swap"
           FileOpen $R9 "$INSTDIR\weaselx64.dll.stage2" w
@@ -1043,16 +1067,22 @@ program_files:
     ; from "$PLUGINSDIR\..\Win32\WeaselServer.exe" (a path that
     ; never existed) is gone.
     ; Stage 2 batch script — runs at next boot via Task Scheduler
-    FileOpen $R9 "$TEMP\fluxing-staged\stage2-install.bat" w
+    ; spec 087 / ADR 0016: stage2 批处理三处修法 ——
+    ;  (1) xcopy 的目标带 * 对文件目标非法,改用 copy /Y;
+    ;  (2) NSIS 的 $" 展开成裸引号 (丢反斜杠),原来那条 /TR 实际变成
+    ;      /TR "cmd /c "C:\...\x.bat"" => schtasks 解析失败,任务根本没被
+    ;      创建 (用户机上 FluxingStage2Install 就不存在);
+    ;  (3) 批处理改放 $WINDIR\Temp —— 路径无空格,于是 /TR 里可以完全
+    ;      不带内层引号,不需要在 NSIS 里拼转义反斜杠。
+    FileOpen $R9 "$WINDIR\Temp\fluxing-stage2-install.bat" w
     FileWrite $R9 "@echo off$\n"
-    FileWrite $R9 'xcopy /Y /Q "%TEMP%\fluxing-staged\WeaselServer.exe" "$INSTDIR\WeaselServer.exe*"$\n'
+    FileWrite $R9 'copy /Y "%TEMP%\fluxing-staged\WeaselServer.exe" "$INSTDIR\WeaselServer.exe" >NUL$\n'
     FileWrite $R9 'del /F /Q "$INSTDIR\WeaselServer.exe.old.tmp"$\n'
     FileWrite $R9 'schtasks /Delete /TN FluxingStage2Install /F$\n'
-    FileWrite $R9 'del "%TEMP%\fluxing-staged\stage2-install.bat"$\n'
     FileWrite $R9 'del "%TEMP%\fluxing-staged\WeaselServer.exe"$\n'
     FileClose $R9
     ; 注册 Task Scheduler: At-startup (boot), 高权限
-    nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2Install /TR "cmd /c $\"$TEMP\fluxing-staged\stage2-install.bat$\"" /RL HIGHEST /F'
+    nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2Install /TR "cmd /c $WINDIR\Temp\fluxing-stage2-install.bat" /RL HIGHEST /F'
     Pop $0
     Pop $1
     IfSilent skip_post_install_message
@@ -1069,15 +1099,15 @@ program_files:
       ; L120: the new binary is already staged above, so the old copy
       ; from "$PLUGINSDIR\..\weaselx64.dll" (a path that never
       ; existed) is gone.
-      FileOpen $R9 "$TEMP\fluxing-staged\stage2-install-x64.bat" w
+      ; spec 087 / ADR 0016: 同上三处修法 (copy /Y / 路径无空格 / 不带内层引号)。
+      FileOpen $R9 "$WINDIR\Temp\fluxing-stage2-install-x64.bat" w
       FileWrite $R9 "@echo off$\n"
-      FileWrite $R9 'xcopy /Y /Q "%TEMP%\fluxing-staged\weaselx64.dll" "$INSTDIR\weaselx64.dll*"$\n'
+      FileWrite $R9 'copy /Y "%TEMP%\fluxing-staged\weaselx64.dll" "$INSTDIR\weaselx64.dll" >NUL$\n'
       FileWrite $R9 'del /F /Q "$INSTDIR\weaselx64.dll.stage2"$\n'
       FileWrite $R9 'schtasks /Delete /TN FluxingStage2InstallX64 /F$\n'
-      FileWrite $R9 'del "%TEMP%\fluxing-staged\stage2-install-x64.bat"$\n'
       FileWrite $R9 'del "%TEMP%\fluxing-staged\weaselx64.dll"$\n'
       FileClose $R9
-      nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2InstallX64 /TR "cmd /c $\"$TEMP\fluxing-staged\stage2-install-x64.bat$\"" /RL HIGHEST /F'
+      nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2InstallX64 /TR "cmd /c $WINDIR\Temp\fluxing-stage2-install-x64.bat" /RL HIGHEST /F'
       Pop $0
       Pop $1
       IfSilent skip_post_install_message
