@@ -1168,3 +1168,21 @@ spec 087 tasks T015 / T016 未勾）。
 
 - 提交本轮改动（Conventional Commits + 模块 scope）→ 推 `kizemo/Fluxing` → 判读 CI（用 `gh api …/runs/<id>/jobs`）。
 - 用户侧三件事见 §18.10 末尾（跑 `shiftside.exe` / 装新 1.1.0 复测 / CapsLock 关闭态测）。
+
+### 19.8 本轮收口：提交序列与 CI（2026-10-29）
+
+- **分支**：`Fluxing`，已推 `kizemo/Fluxing`（`9c7ff0c..e8c5789`），本地与远端齐平。
+- **两笔提交**（fix → docs 序列，与 §18.10 同形）：
+
+| 提交 | scope | 范围 | 要点 |
+|---|---|---|---|
+| `4b46315` | `fix(fluxing)` | 7 个代码文件 | `include/KeyNameMapper.h` 扫描码优先 + `include/ShiftStateMachine.h` 的 `fluxing::ApplyShiftSideSwap` + `include/RimeWithWeasel.h` / `RimeWithWeasel/RimeWithWeasel.cpp` 接线 + `output/data/weasel.yaml` 的 `shift_left_right_swap` + `test/TestShiftIPCStateMachine` / `test/TestHotkeyBindings` 回归断言 |
+| `e8c5789` | `docs(fluxing)` | 7 个文档文件 | ADR 0017（新建）+ ADR 0016 D7 指向 + spec 087 `findings.md` A.7 / `tasks.md` Phase 6 + `CHANGELOG.md` + 二次开发清单 T26/T28 + 交接卡 §19 |
+
+- **CI run**：`40811914713`（HEAD `e8c5789`）⇒ `lint` / `test` / `build (msbuild)` / `build (xmake)`
+  **四个受管 job 全部 success**；`sandbox-gate` 仍**永久 queued**（本机无该标签 runner，
+  是设计上的诚实失败，忽略）。run 级 `status` 因 sandbox-gate 排队而显示 `queued`，
+  **不代表受管 job 有问题** —— 终态判定一律用 `gh api …/runs/<id>/jobs`。
+  （回填此行的提交本身是**纯文档**改动，不触碰 C++ / yaml / 载荷
+  ⇒ 它的 run 结果应与 `40811914713` 一致。）
+- **工作树**：只剩 `librime` 子模块脏（**刻意不动**）与未跟踪 `tmp/`（诊断工作区，不入库、不随产品发布）。
