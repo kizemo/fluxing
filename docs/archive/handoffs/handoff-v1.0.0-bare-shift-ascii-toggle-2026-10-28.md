@@ -9,6 +9,11 @@
 
 ## 0. 一句话现状
 
+> 🔴 **当前现状（2026-10-29 深夜，v1.1.2）以 §21 为准**：1.1.1 已装机验收（Shift 问题闭合）；
+> 新缺陷「快捷面板调出后几秒自动消失」已根因闭环并以 **1.1.2** 修复发布（常驻态持久化 + ESC 不收起，ADR 0019），
+> 装包 `F:\soft\00selfmade\rime_claude\output\archives\fluxing-1.1.2-installer.exe` 待用户真机验收。
+> 下方段落为 1.0.0/1.1.0 时代历史，保留存档，勿当作现状。
+
 1.0.0（用户实测反馈的 3 个缺陷修复 + 版本号 3 段化）**代码已全绿、安装包已出、已推送 `kizemo/Fluxing`**；
 **沙箱权威门禁在本机跑不起来**（环境故障），**真机按键验收只有人能做**；
 **T2（设置界面抓键 layout-aware 改造，ADR 0011 `Proposed` + spec 083）的 M1（共享键名单元 `include/KeyNameMapper.h`）、M2（抓键改造 `FluxingConfigEditor/KeyRecorder.cpp`）、
@@ -1234,3 +1239,69 @@ MAPPER-SUMMARY|failures=0  RESULT|PASS
 - 若装机后 1b 仍被判「消失」，下一步取证应在 `Hide()`/`Show()` 加临时日志抓调用栈，
   而不是继续调 alpha 常数。
 
+
+---
+
+## 21. v1.1.1 验收轮 → 「自动消失」缺陷根因闭环、修复发布 v1.1.2
+
+> 本节为**当前现状**（§0 指针指向此处）。用户 2026-10-29 报「1.1.1 已装机」并布置两项核查 + 一个新缺陷。
+
+### 21.1 验收结果与 DLL 核验
+
+- **Shift 双击切英文：用户验收通过，问题闭合**（§20 的头号未闭合项就此关闭）。
+- 装机 DLL 核验（`D:\Program Files\fluxing\weasel\`）：运行中的 `WeaselServer.exe` 与 TSF 实际加载的
+  `weasel.dll` / `weaselx64.1.1.1.0.dll` 均为 **1.1.1.0 ✅**；但**入口文件名 `weaselx64.dll` 仍是 1.1.0.0**
+  ——装机瞬间它正被 TSF 映射占用，NSIS `SetOverwrite off` 按设计静默跳过（版本化文件名 + 开机计划任务
+  `FluxingEnsureDeployed` 补拷是兜底设计）。**处置：重启一次机器后自检**
+  `Get-FileHash weaselx64.dll, weaselx64.1.1.1.0.dll` SHA256 应相同；装 1.1.2 后此步并入新包验收。
+
+### 21.2 新缺陷：快捷面板「调出后几秒自动消失」——根因（证据全）
+
+用户口径同时**修订了交互契约**：显隐只靠 `Alt+,`，**ESC 不得隐藏面板**。
+取证脚本 `tmp/fix087b/grab_hidepath.ps1` + 逐行读 `QuickPanelDialog.cpp`，结论：
+
+1. **所有生产 Hide 路径都带 `!AlwaysShowMode()` 守卫且未失效**：auto-hide 轮询（宽限 2000ms +
+   outsideMs≥1500ms，id=1）、`OnTimer` 两处、`OnKillFocus`、`WM_ACTIVATEAPP`、FocusOut IPC（带 250ms 复查）——
+   不存在守卫失效。
+2. **「调出几秒后消失」的时序 = 瞬时模式（未勾选常驻）的设计行为**⇒ 用户机的常驻态实际为 false，虽然勾选过。
+3. **根因坐实：`s_mode` 是纯内存态，全仓无任何持久化链路**（spec 084 FR-007 原为刻意设计「不写盘」）。
+   1.1.1 装包要求重启生效 ⇒ **每次重启勾选清零**，面板回到瞬时模式。这就是「自动消失」的完整机制。
+4. ESC 是**唯一无 `AlwaysShowMode` 守卫的手势 Hide 路径**（`OnKeyDown VK_ESCAPE → Hide()`）。
+
+### 21.3 修复（commit `b905419`，ADR `docs/adr/0019-quickpanel-always-show-persist-and-esc-no-hide.md`）
+
+- **常驻态持久化**：`quickpanel.state`（`%APPDATA%\Rime\`，单行 ASCII `always_show=0|1`）；
+  只在用户 toggle 时写盘 + **写完回读自证**（不一致 `LOG(WARNING)`，不弹窗不阻断）；
+  启动 `RestoreAlwaysShowMode()` **只恢复模式、绝不自动弹窗、不回写盘**（启动顺序在 `EnsureStartUpTask`
+  之后、`CreateMsgDispatcher` 之前，保证升级首启先补拷 DLL 再 ShowWindows）。
+- **ESC 吞键**：`OnKeyDown` 的 `VK_ESCAPE` 分支不再 `Hide()`，`return 0` 吞键（防冒泡到
+  `MainFrame::OnKeyMessage` 触发 Rime 候选 Escape 清码/关面板链路）；`Alt+,` toggle 保留为唯一显隐快捷键，
+  其余 Hide 路径一律不动。
+- **回归测试**：`TestQuickPanelDialog` T13a–h（持久化往返/恢复/防污染/自证，测试落点经 `SetStatePath`
+  重定向 `%TEMP%`，不碰真实用户勾选）+ T14a–f（ESC 吞键判别性：对照组普通键仍走默认处理），
+  **34/34 PASS**；`TestShiftIPCStateMachine` 49 PASS/0 FAIL、`TestHotkeyBindings --selfcheck-mapper` PASS。
+
+### 21.4 v1.1.2 发布
+
+- 升版：`env.bat`（FLUXING_VERSION=1.1.2 / 1.1.2.0，不入仓）+ `weasel.props` 同步；全量重编 exit 0。
+- 提交：`b905419` fix(WeaselServer) 代码+测试（+151/-3）、`b539b93` docs(fluxing) ADR 0019 + CHANGELOG
+  `[1.1.2]` + spec 087 `findings.md` **§A.9**（§A.8 两遗留项注记闭合）；已推 `kizemo/Fluxing`。
+- CI run `40837430267`：lint / test / build(xmake) / build(msbuild) **4/4 success**，sandbox-gate 排队（设计如此）。
+- **装包**：`F:\soft\00selfmade\rime_claude\output\archives\fluxing-1.1.2-installer.exe`
+  （42,763,583 B，SHA256 `4238124C8EEFC5B86785D37640F1CF99C61004124302406AFC5A750CEBAAEC36`）。
+  静默安装必须显式 `& '<装包>' /S /D=D:\Program Files\fluxing\weasel`（引号包路径）。
+- spec 087 目录名 `087-shift-side-and-quickpanel-persist` 与本轮落地的持久化语义一致（规划期预留，无需改名）。
+
+### 21.5 下阶段：1.1.2 真机验收清单
+
+1. 装 1.1.2（`/S /D=` 显式；若装包提示占用，按装器指引结束进程或重启）→ 重启一次。
+2. 打开面板勾选「始终显示」→ **再重启一次机器** → `Alt+,` 调出：勾选应仍亮、**不再几秒自动消失**（核心项）。
+3. 面板可见时按 **ESC：不收起、不影响打字**；`Alt+,` 显隐仍正常。
+4. DLL 收口自检：`weaselx64.dll` 与 `weaselx64.1.1.1.0.dll`（或 1.1.2.0）SHA256 相同。
+5. Shift 双击切英文回归确认（1.1.1 已验收过，防回归）。
+6. 若勾选丢失，查 `%APPDATA%\Rime\quickpanel.state` 是否存在及内容、`WeaselServer` 日志中
+   `quickpanel always-show state persisted/read back mismatch` WARNING。
+
+**坑位备忘**：面板「几秒自动消失」≠ 守卫失效（先查常驻态是否真的开着）；「勾选没记住」的更早根因是
+`OnTimer` 先 `Hide()` 后查 `IsWindowVisible` 的死代码陷阱（§17.7），与本轮「无持久化」是两回事；
+`include/WeaselVersion.h` 不存在，版本号定义在 `env.bat` + `weasel.props`。
