@@ -1464,17 +1464,34 @@ void QuickPanelDialog::ToggleMode() {
 // ===== v1.1.2 (ADR 0019):「常驻」勾选态跨 WeaselServer 重启持久化 =====
 // 根因: s_mode 原是纯内存态 ⇒ 装机换 DLL 所需的重启把勾选清零,面板退回
 // 瞬时模式(grace 2s + 鼠标在面板外累计 1.5s ⇒ 用户看到的「调出几秒后消失」)。
-// 介质: %APPDATA%\Rime\quickpanel.state, 单行 ASCII "always_show=0|1\n"。
+// v1.1.3 (ADR 0020): 介质改跟随用户数据目录 —— 原来硬编码 %APPDATA%\Rime\,
+// 与 WeaselUserDataPath() 分叉(用户数据目录被指到 D 盘时,状态会单独住一份,
+// 而且会在本 fork 已迁走的旧路径上重新造目录)。
+// 现在落点 = <用户数据目录>\quickpanel.state,单行 ASCII "always_show=0|1\n";
+// 旧落点 %APPDATA%\Rime\quickpanel.state 仅作只读兜底(存量勾选不丢)。
 static std::wstring s_statePathOverride;
 #pragma comment(lib, "shell32.lib")
+
+// 旧落点(1.1.2 及更早):%APPDATA%\Rime\quickpanel.state —— 只读兜底,不再写。
+std::wstring QuickPanelDialog::LegacyStatePath() {
+  wchar_t appdata[MAX_PATH] = {};
+  if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, appdata)))
+    return std::wstring(appdata) + L"\\Rime\\quickpanel.state";
+  return L"";
+}
+
+// 默认落点:用户数据目录下的 quickpanel.state(与 WeaselUserDataPath() 同源)。
+std::wstring QuickPanelDialog::DefaultStatePath() {
+  std::filesystem::path dir = ResolveFluxingUserDataPath();
+  if (dir.empty())
+    return L"quickpanel.state";
+  return (dir / std::filesystem::path(L"quickpanel.state")).wstring();
+}
 
 static std::wstring QuickPanelStatePath() {
   if (!s_statePathOverride.empty())
     return s_statePathOverride;
-  wchar_t appdata[MAX_PATH] = {};
-  if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, appdata)))
-    return std::wstring(appdata) + L"\\Rime\\quickpanel.state";
-  return L"quickpanel.state";
+  return QuickPanelDialog::DefaultStatePath();
 }
 
 static void WriteQuickPanelState(bool alwaysShow) {
@@ -1497,16 +1514,39 @@ static void WriteQuickPanelState(bool alwaysShow) {
     DeleteFileW(path.c_str());
 }
 
-bool QuickPanelDialog::LoadPersistedAlwaysShowMode() {
-  std::ifstream f(QuickPanelStatePath(), std::ios::binary);
+// 读一个状态文件的第一行。文件缺失/读不出 ⇒ false(由调用方决定是否兜底)。
+static bool ReadAlwaysShowStateLine(const std::wstring& path,
+                                    std::string& line) {
+  if (path.empty())
+    return false;
+  std::ifstream f(path, std::ios::binary);
   if (!f)
     return false;
-  std::string line;
   if (!std::getline(f, line))
     return false;
   if (!line.empty() && line.back() == '\r')
     line.pop_back();  // 容忍手工/CRLF 写盘
-  return line == "always_show=1";
+  return true;
+}
+
+// ADR 0020: primary 优先;primary 读不到才读 legacy(1.1.2 旧落点只读兜底)。
+bool QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(
+    const std::wstring& primary,
+    const std::wstring& legacy) {
+  std::string line;
+  if (ReadAlwaysShowStateLine(primary, line))
+    return line == "always_show=1";
+  if (!legacy.empty() && legacy != primary &&
+      ReadAlwaysShowStateLine(legacy, line))
+    return line == "always_show=1";
+  return false;
+}
+
+bool QuickPanelDialog::LoadPersistedAlwaysShowMode() {
+  // 测试注入路径时不做旧落点兜底,免得读到真实用户目录里的文件(测试必须确定)。
+  const std::wstring legacy =
+      s_statePathOverride.empty() ? LegacyStatePath() : std::wstring();
+  return LoadPersistedAlwaysShowModeFrom(QuickPanelStatePath(), legacy);
 }
 
 void QuickPanelDialog::SetStatePath(const std::wstring& path) {

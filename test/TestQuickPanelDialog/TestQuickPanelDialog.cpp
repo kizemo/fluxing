@@ -344,6 +344,99 @@ int main() {
     QuickPanelDialog::SetStatePath(L"");  // 恢复默认落点(测试不再写任何文件)
   }
 
+  // ----------------------------------------------------------------
+  // T15 / T16 (ADR 0020): 勾选态介质必须落在用户数据目录里。
+  //   1.1.2 把落点硬编码成 %APPDATA%\Rime\quickpanel.state,与
+  //   WeaselUserDataPath() 分叉(用户数据目录被指到 D 盘时状态会单独住一份)。
+  //   T15 对旧实现必红;T16 覆盖旧落点只读兜底(存量勾选不丢)。
+  // ----------------------------------------------------------------
+  std::printf("\n[ADR 0020] quickpanel.state 落点跟随用户数据目录\n");
+  {
+    auto trim_sep = [](std::wstring s) {
+      while (!s.empty() && (s.back() == L'\\' || s.back() == L'/'))
+        s.pop_back();
+      return s;
+    };
+    auto ieq = [](const std::wstring& a, const std::wstring& b) {
+      if (a.size() != b.size())
+        return false;
+      for (size_t i = 0; i < a.size(); ++i) {
+        wchar_t ca = a[i];
+        wchar_t cb = b[i];
+        if (ca >= L'A' && ca <= L'Z')
+          ca = (wchar_t)(ca - L'A' + L'a');
+        if (cb >= L'A' && cb <= L'Z')
+          cb = (wchar_t)(cb - L'A' + L'a');
+        if (ca != cb)
+          return false;
+      }
+      return true;
+    };
+    auto same_path = [&](const std::wstring& a, const std::wstring& b) {
+      return ieq(trim_sep(a), trim_sep(b));
+    };
+    auto parent_of = [](const std::wstring& p) {
+      const size_t sep = p.find_last_of(L"\\/");
+      return (sep == std::wstring::npos) ? std::wstring() : p.substr(0, sep);
+    };
+
+    const std::wstring def = QuickPanelDialog::DefaultStatePath();
+    const std::wstring legacy = QuickPanelDialog::LegacyStatePath();
+    const std::wstring expected_dir = ResolveFluxingUserDataPath().wstring();
+    wchar_t appdata[MAX_PATH] = {0};
+    ExpandEnvironmentStringsW(L"%AppData%", appdata, _countof(appdata));
+    const std::wstring old_dir = std::wstring(appdata) + L"\\Rime";
+
+    const size_t sep = def.find_last_of(L"\\/");
+    const std::wstring fname =
+        (sep == std::wstring::npos) ? def : def.substr(sep + 1);
+    Check(fname == L"quickpanel.state",
+          "T15a: 默认落点文件名 == quickpanel.state");
+    Check(same_path(parent_of(def), expected_dir),
+          "T15b: 默认落点父目录 == WeaselUserDataPath() 解析出的用户数据目录");
+    Check(!same_path(parent_of(def), old_dir),
+          "T15c: 默认落点不再落在 %APPDATA%\\Rime(旧实现的精确特征)");
+    Check(!same_path(def, legacy),
+          "T15d: 默认落点 != 旧落点(旧路径只作只读兜底)");
+  }
+  {
+    wchar_t tmpDir[MAX_PATH] = {0};
+    ::GetTempPathW(MAX_PATH, tmpDir);
+    const std::wstring primary =
+        std::wstring(tmpDir) + L"fluxing_qp_primary_test.state";
+    const std::wstring legacy =
+        std::wstring(tmpDir) + L"fluxing_qp_legacy_test.state";
+    ::DeleteFileW(primary.c_str());
+    ::DeleteFileW(legacy.c_str());
+
+    Check(!QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(primary, legacy),
+          "T16a: 两个落点都没有 => 默认关");
+    {
+      std::ofstream f(legacy.c_str(), std::ios::binary);
+      f << "always_show=1\n";
+    }
+    Check(QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(primary, legacy),
+          "T16b: 新落点缺失 => 读旧落点兜底(存量勾选不丢)");
+    {
+      std::ofstream f(primary.c_str(), std::ios::binary);
+      f << "always_show=0\n";
+    }
+    Check(!QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(primary, legacy),
+          "T16c: 新落点优先(新=0 旧=1 => 结果为关)");
+    {
+      std::ofstream f(primary.c_str(), std::ios::binary);
+      f << "always_show=1\n";
+    }
+    Check(QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(primary, legacy),
+          "T16d: 新落点 always_show=1 => 开");
+    // T16e: 只剩旧落点、且明确不兜底 => 必须读不到(否则会偷偷回退旧路径)
+    ::DeleteFileW(primary.c_str());
+    Check(!QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(primary, L""),
+          "T16e: legacy 传空串 => 不做旧落点兜底");
+    ::DeleteFileW(primary.c_str());
+    ::DeleteFileW(legacy.c_str());
+  }
+
   std::printf("\n=== %d / %d assertions passed ===\n", g_pass, g_pass + g_fail);
   std::fflush(stdout);
   ExitProcess(g_fail == 0 ? 0 : 1);

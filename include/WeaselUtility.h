@@ -1,4 +1,8 @@
 #pragma once
+// ADR 0020: 用户数据目录解析下沉到 include/FluxingUserPaths.h(单一事实源):
+// WeaselUserDataPath() 与 QuickPanelDialog 的勾选态落点必须解析出同一个目录。
+#include "FluxingUserPaths.h"
+
 #include <filesystem>
 #include <string>
 #include <sstream>
@@ -35,39 +39,8 @@ inline std::wstring getUsername() {
 std::filesystem::path WeaselSharedDataPath();
 std::filesystem::path WeaselUserDataPath();
 
-// Enforce the `fluxing` suffix on a user-data path (spec 002 FR-002).
-// Idempotent. Treats the path case-insensitively for the last segment; appends
-// `\fluxing` if and only if the last path component is not already `fluxing`.
-// Preserves any trailing backslash the caller originally supplied.
-inline std::wstring EnsureFluxingUserDataSuffix(const std::wstring& path) {
-  if (path.empty())
-    return path;
-  std::wstring p = path;
-  while (!p.empty() && (p.back() == L'\\' || p.back() == L'/'))
-    p.pop_back();
-  if (p.empty())
-    return path;
-  size_t sep = p.find_last_of(L"\\/");
-  std::wstring last = (sep == std::wstring::npos) ? p : p.substr(sep + 1);
-  auto ieq = [](const std::wstring& a, const std::wstring& b) {
-    if (a.size() != b.size())
-      return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-      wchar_t ca = a[i];
-      if (ca >= L'A' && ca <= L'Z') ca = (wchar_t)(ca - L'A' + L'a');
-      wchar_t cb = b[i];
-      if (cb >= L'A' && cb <= L'Z') cb = (wchar_t)(cb - L'A' + L'a');
-      if (ca != cb) return false;
-    }
-    return true;
-  };
-  if (ieq(last, L"fluxing"))
-    return path;
-  std::wstring out = p + L"\\fluxing";
-  if (path.back() == L'\\' || path.back() == L'/')
-    out += path.back();
-  return out;
-}
+// EnsureFluxingUserDataSuffix 已迁到 include/FluxingUserPaths.h(ADR 0020:
+// 用户数据目录解析必须是单一事实源),本头文件经 #include 转出,调用方无需改动。
 inline fs::path WeaselLogPath() {
   WCHAR _path[MAX_PATH] = {0};
   // default location

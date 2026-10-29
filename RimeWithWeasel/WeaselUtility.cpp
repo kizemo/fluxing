@@ -3,28 +3,10 @@
 #include <string>
 #include <WeaselUtility.h>
 
+// ADR 0020: 实现下沉到 include/FluxingUserPaths.h(用户数据目录解析的单一事实
+// 源),与 QuickPanelDialog 的勾选态落点共用同一份解析。行为不变。
 fs::path WeaselUserDataPath() {
-  WCHAR _path[MAX_PATH] = {0};
-  const WCHAR KEY[] = L"Software\\Fluxing\\Weasel";
-  HKEY hKey;
-  LSTATUS ret = RegOpenKey(HKEY_CURRENT_USER, KEY, &hKey);
-  if (ret == ERROR_SUCCESS) {
-    DWORD len = sizeof(_path);
-    DWORD type = 0;
-    DWORD data = 0;
-    ret =
-        RegQueryValueEx(hKey, L"RimeUserDir", NULL, &type, (LPBYTE)_path, &len);
-    RegCloseKey(hKey);
-    if (ret == ERROR_SUCCESS && type == REG_SZ && _path[0]) {
-      // spec 002 FR-002: enforce fluxing suffix (safety net for tools that
-      // may have written a non-fluxing path to the registry)
-      std::wstring enforced = EnsureFluxingUserDataSuffix(std::wstring(_path));
-      return fs::path(enforced);
-    }
-   }
-  // default location
-  ExpandEnvironmentStringsW(L"%AppData%\\fluxing", _path, _countof(_path));
-  return fs::path(_path);
+  return ResolveFluxingUserDataPath();
 }
 
 fs::path WeaselSharedDataPath() {

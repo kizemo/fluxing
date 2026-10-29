@@ -34,6 +34,9 @@
 #include <functional>
 #include <string>
 #include <windows.h>
+// ADR 0020: 用户数据目录解析(单一事实源):面板勾选态落点必须与
+// WeaselUserDataPath() 落在同一个用户数据目录里。
+#include <FluxingUserPaths.h>
 
 class QuickPanelDialog {
  public:
@@ -84,11 +87,21 @@ class QuickPanelDialog {
   static bool AlwaysShowMode() { return s_mode == Mode::kAlwaysShow; }
   // v1.1.2 (用户 1.1.1 验收反馈, ADR 0019):「常驻」勾选态跨 WeaselServer
   // 重启持久化 —— 推翻 spec 084 FR-007「重启回到默认(关)」。
-  // 介质: %APPDATA%\Rime\quickpanel.state (单行 ASCII "always_show=0|1\n")。
+  // v1.1.3 (ADR 0020): 介质改跟随用户数据目录
+  //   = <WeaselUserDataPath()>\quickpanel.state (单行 ASCII
+  //   "always_show=0|1\n")。 旧落点 %APPDATA%\Rime\quickpanel.state
+  //   仅作只读兜底(存量勾选不丢)。
   // Restore 只恢复模式、绝不 auto-show (spec 055 不变量保留)。
   static void SetStatePath(const std::wstring& path);  // 测试注入;空串=回默认
   static void RestoreAlwaysShowMode();  // 服务器启动时读盘恢复 s_mode
   static bool LoadPersistedAlwaysShowMode();  // 文件缺失/损坏 ⇒ false
+  // ADR 0020: 默认落点(不含测试注入覆盖)与旧落点。
+  static std::wstring DefaultStatePath();
+  static std::wstring LegacyStatePath();
+  // ADR 0020: 读盘入口(测试注入):primary 优先,primary 读不到才读 legacy;
+  // legacy 传空串表示不兜底。
+  static bool LoadPersistedAlwaysShowModeFrom(const std::wstring& primary,
+                                              const std::wstring& legacy);
 
   static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
