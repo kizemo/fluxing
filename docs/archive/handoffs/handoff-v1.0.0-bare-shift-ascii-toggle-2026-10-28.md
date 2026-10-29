@@ -938,11 +938,12 @@ gh run view <run-id> --json status,jobs
 | 文件 | 改动 | 位置 |
 |---|---|---|
 | `RimeWithWeasel/RimeWithWeasel.cpp` | `FocusOut()` 里给 `QuickPanelDialog::Hide()` 加 `AlwaysShowMode()` 守卫（**守卫加在调用点**，`Hide()` 本体未动） | `:498-499` |
-| `output/install.nsi` | 32 位支版本化安装件拷贝改 `SetOverwrite on` + `File` 改名语法 | `:633-638` |
-| `output/install.nsi` | 64 位支同上 | `:694-698` |
-| `output/install.nsi` | 32 位开机补换脚本落 `$WINDIR\Temp`（**无空格**）⇒ `schtasks /TR` **不带内层引号** | `:1062` / `:1070` |
-| `output/install.nsi` | 64 位同上 | `:1088` / `:1095` |
-| `output/install.nsi` | 两处补换脚本内的拷贝 `xcopy … "dst*"` → `copy /Y … >NUL` | `:1064` / `:1090` |
+| `output/install.nsi` | 32 位支版本化安装件拷贝改 `SetOverwrite on` + `File /nonfatal /oname=<版本化名> <源>`（**NSIS 唯一改名语法**；`File "src" "dst"` 不是 —— 实测会被 `makensis` 当成两个源文件并报 `no files found` 中止） | `:644-646` |
+| `output/install.nsi` | 64 位支同上 | `:711-713` |
+| `output/install.nsi` | 32 位开机补换脚本落 `$WINDIR\Temp`（**无空格**）⇒ `schtasks /TR` **不带内层引号** | `:1077-1085` |
+| `output/install.nsi` | 64 位同上 | `:1103-1110` |
+| `output/install.nsi` | 两处补换脚本内的拷贝 `xcopy … "dst*"` → `copy /Y … >NUL` | `:1079` / `:1105` |
+| `output/install.nsi` | 两处补换脚本的**拷贝源**改用 NSIS 的 `$TEMP`（安装期展开成绝对路径）⇒ 闭合 T008 / Q-087-1 | `:1079` / `:1105` |
 | `tmp/shiftprobe/shiftside.cpp`（+ `shiftside.exe`） | **诊断工具**：一次按键取「物理左右 / 操作系统认知 / 前端复算」三列 | `tmp/shiftprobe/` |
 
 > `tmp/shiftprobe/` 是**诊断工作区**，不随产品发布，也不入库为产品代码。
@@ -1030,7 +1031,7 @@ spec 087 tasks T015 / T016 未勾）。
 
 | 项 | 状态 | 影响 |
 |---|---|---|
-| 开机补换的**拷贝源**路径 | ❌ **未闭合** | 64 位换装**仍可能不生效**；脚本会因找不到源文件而什么都不做。下阶段修法二选一：① 安装期把暂存目录**展开成绝对路径**写进脚本；② 统一暂存到 `$WINDIR\Temp\fluxing-staged`（与脚本同处） |
+| 开机补换的**拷贝源**路径 | ✅ **本轮已闭合** | 批处理里的拷贝源改用 NSIS 的 `$TEMP`，在 `FileWrite` 时于**安装期**展开成安装用户的绝对路径（`FileWrite` 里的 `$TEMP` 是 NSIS 变量，不是 cmd 的 `%TEMP%`）⇒ 不再受开机时（SYSTEM）环境里 `%TEMP%` 的影响（ADR 0016 D6 / Q-087-1；spec 087 tasks T008 已 `[x]`）。**真机换装验收仍待做** |
 | 裸 Shift 物理左右 | ❌ **事实未取** | 方向修复形态未定；本轮**未改码** |
 | 弹出菜单**无勾选标记** | ⚠️ 已知缺口 | 需新增「查询状态」往返消息 ⇒ 协议扩张，留后续条目（沿用 ADR 0015 D7） |
 | 64 位注册项指向**未版本化**文件名 | ⚠️ 已知 | 版本化件装成后仍需「注册」那一步成功改写它才生效（`install.nsi:698` 附近），失败会退回开机补齐路径 |
@@ -1038,13 +1039,41 @@ spec 087 tasks T015 / T016 未勾）。
 
 ### 18.8 下阶段计划（按优先级）
 
-1. **装新 1.1.0**（含本轮 `install.nsi` 三处修法）⇒ **复测 32 位与 64 位应用**：
+1. **装新 1.1.0**（含本轮 `install.nsi` 四环修法）⇒ **复测 32 位与 64 位应用**：
    32 位看「勾了常驻后切窗口再回来面板还在」；64 位看**实际加载的新版本**与开机补换的痕迹。
 2. **跑 `tmp/shiftprobe/shiftside.exe`** ⇒ 收 A.6 的现场按键数据（用户按一下左 / 右 Shift，
    30 秒窗口）⇒ 按 §18.4 的判据**定形态**。
 3. **按 A.6 结论实施 Shift 方向修复** + 回归断言（下一条目，本轮**不含**）。
-4. **闭合 T008**（开机补换的拷贝源路径）⇒ 补一轮 64 位换装真机复验。
+4. **64 位换装真机复验**（T008 已在本轮闭合，剩下的是装完 + 重启后比对
+   `weaselx64.dll` 与 `weaselx64.1.1.0.0.dll` 的 SHA256、确认 64 位 CLSID 指向版本化件）。
 5. **真机验收回填** 清单 T24 / T25 / T27 的状态 ⇒ ADR 0016 `Proposed` → `Accepted`。
+
+### 18.10 本轮收口：提交、CI 与载荷（2026-10-29 收工状态）
+
+- **分支**：`Fluxing`，已推 `kizemo/Fluxing`，**本地与远端齐平**。
+- **四笔提交**（fix → docs → chore 序列）：
+
+  | 提交 | 范围 | 要点 |
+  |---|---|---|
+  | `c55abfa` | `fix(fluxing)` | `RimeWithWeasel/RimeWithWeasel.cpp` 的 `FocusOut()` 守卫 + `output/install.nsi` 前三环（版本化拷贝 / 占用探测 / 任务登记） |
+  | `60ed0a4` | `fix(fluxing)` | 补换脚本拷贝源改用 NSIS 的 `$TEMP`（安装期展开成绝对路径）⇒ 闭合 T008 / Q-087-1 |
+  | `99aeac0` | `docs(fluxing)` | spec 087 四件套 + ADR 0016 + `CHANGELOG.md` + `lessons-learned.md`（L154–L157）+ 二次开发清单 + 本交接卡 §18 |
+  | `6c25163` | `chore(fluxing)` | `release/fluxing-1.1.0-installer.exe` 载荷仓 |
+
+- **安装包载荷**：`release/fluxing-1.1.0-installer.exe` = **42,768,906 B**，
+  SHA256 `F9DC4E3D54CA90D334A4E57A37BB89ED9C7C2CF1813E08655B7E79EBFC045D4E`
+  （`makensis /DFLUXING_VERSION=1.1.0 /DWEASEL_BUILD=0 output\install.nsi` exit 0）。
+  ARM DLL 与可选 data 的 `no files found` 是**既有非致命告警**。
+- **CI**：每次推送触发一个 run（HEAD `6c25163` 对应 run `40802759918`）。
+  只看 `lint` / `test` / `build (msbuild)` / `build (xmake)` 四个 job；
+  `sandbox-gate` **永久 queued**（本机没有该标签的 runner，是设计上的诚实失败，忽略）。
+  终态判定用 `gh api repos/kizemo/Fluxing/actions/runs/<run_id>/jobs`
+  —— `gh run view --json jobs` 给的是**滞后快照**，不能拿来断言「CI 卡住」。
+- **本地门禁**：`weasel.sln` Release/Win32 整解 exit 0；`WeaselTSF.vcxproj` x64 补编 exit 0；
+  仓库全套件通过（`TestPhrasesDialog.exe` 是 10-24 陈旧产物、不在 `weasel.sln` 内、
+  CI 不构建，重跑 212/212 全绿）；**沙箱权威门禁仍跑不起来**（T19）。
+- **工作树**：只剩 `librime` 子模块脏（**刻意不动**）与未跟踪的 `tmp/`（诊断工作区，
+  `shiftside.exe` 供用户取现场数据）。本轮的临时补丁脚本已清理。
 
 ### 18.9 待用户真机验收清单
 
