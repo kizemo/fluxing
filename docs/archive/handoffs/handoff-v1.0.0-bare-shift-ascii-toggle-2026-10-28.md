@@ -1064,11 +1064,14 @@ spec 087 tasks T015 / T016 未勾）。
   SHA256 `F9DC4E3D54CA90D334A4E57A37BB89ED9C7C2CF1813E08655B7E79EBFC045D4E`
   （`makensis /DFLUXING_VERSION=1.1.0 /DWEASEL_BUILD=0 output\install.nsi` exit 0）。
   ARM DLL 与可选 data 的 `no files found` 是**既有非致命告警**。
-- **CI**：每次推送触发一个 run（HEAD `6c25163` 对应 run `40802759918`）。
-  只看 `lint` / `test` / `build (msbuild)` / `build (xmake)` 四个 job；
+- **CI 终态**：run `40803094978`（HEAD `228d7a1`）的四个受管 job
+  —— `lint` / `test` / `build (msbuild)` / `build (xmake)` —— **全部 success**；
+  同批的 `40800932427`（`c55abfa`）与 `40802759918`（`6c25163`）亦四 job 全 success。
   `sandbox-gate` **永久 queued**（本机没有该标签的 runner，是设计上的诚实失败，忽略）。
   终态判定用 `gh api repos/kizemo/Fluxing/actions/runs/<run_id>/jobs`
   —— `gh run view --json jobs` 给的是**滞后快照**，不能拿来断言「CI 卡住」。
+  （回填此行的提交本身是**纯文档**改动，不触碰 C++ / NSIS / 载荷
+  ⇒ 它的 run 结果应与 `40803094978` 一致。）
 - **本地门禁**：`weasel.sln` Release/Win32 整解 exit 0；`WeaselTSF.vcxproj` x64 补编 exit 0；
   仓库全套件通过（`TestPhrasesDialog.exe` 是 10-24 陈旧产物、不在 `weasel.sln` 内、
   CI 不构建，重跑 212/212 全绿）；**沙箱权威门禁仍跑不起来**（T19）。
