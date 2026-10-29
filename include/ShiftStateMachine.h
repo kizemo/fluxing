@@ -28,6 +28,20 @@ inline bool DecodeShiftIsLeft(std::uint32_t wparam) {
   return (wparam & 1u) == 0u;
 }
 
+// ADR 0017 D2: the user can tell the IME that the host reports the two
+// shift keys the other way round.
+//
+// On 2026-10-29 the physical left Shift selected the 3rd candidate and the
+// right one the 2nd (spec 087 A.1). Every link of the chain was proven
+// correct (spec 087 A.7), so the inversion has to come from the (vkey,
+// scan code) pair the host hands to the IME, or from the driver below it.
+// A driver level swap is invisible to software, so the switch is the only
+// remedy in that case; it is a plain configuration flag, which keeps the
+// decision a pure function.
+inline bool ApplyShiftSideSwap(bool is_left, bool swap) {
+  return swap ? !is_left : is_left;
+}
+
 // Pure, dependency-free Shift state machine.
 // Extracted from WeaselServer / RimeWithWeaselHandler so that 11 unit tests
 // can drive it without IPC / Rime / GUI surfaces.

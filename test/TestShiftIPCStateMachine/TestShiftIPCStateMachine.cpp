@@ -268,6 +268,20 @@ void Test_EncodeDecode_RoundTrip() {
          "Test #12: Right round-trip decodes back to is_left=false");
 }
 
+// Test #21 - ADR 0017: the user can flip the two shift sides when the host
+// reports them the other way round (spec 087 A.7). The switch is a plain
+// configuration flag, so the decision stays a pure function.
+void Test_ShiftSideSwap() {
+  EXPECT(ApplyShiftSideSwap(true, false),
+         "Test #21: without the swap the left shift stays on the left");
+  EXPECT(!ApplyShiftSideSwap(false, false),
+         "Test #21: without the swap the right shift stays on the right");
+  EXPECT(!ApplyShiftSideSwap(true, true),
+         "Test #21: with the swap the left shift becomes the right one");
+  EXPECT(ApplyShiftSideSwap(false, true),
+         "Test #21: with the swap the right shift becomes the left one");
+}
+
 int main() {
   std::printf(
       "TestShiftIPCStateMachine (spec 077 §2.7.1 + ADR 0010 + ADR 0012)\n");
@@ -292,6 +306,7 @@ int main() {
   Test_AsciiScope_BareShiftNeverBroadcasts();
   Test_AsciiScope_ExplicitControlFollowsYaml();
   Test_AsciiScope_DecisionTable();
+  Test_ShiftSideSwap();
   std::printf("\nResult: %d PASS / %d FAIL\n", s_passed, s_failed);
   return s_failed == 0 ? 0 : 1;
 }

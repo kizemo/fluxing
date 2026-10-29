@@ -388,11 +388,23 @@ inline int TranslateKeycode(UINT vkey, KeyInfo kinfo) {
       else
         return ibus::Return;
     }
-    case VK_SHIFT: {
+    case VK_SHIFT:
+    case VK_LSHIFT:
+    case VK_RSHIFT: {
+      // The physical side of a Shift is taken from the scan code first
+      // (0x2A = left, 0x36 = right). The virtual key a host hands to the
+      // IME can be the wrong one, and a wrong side flips the selection
+      // direction (spec 087 A.7 / ADR 0017 D1). The virtual key is only
+      // the fallback for the hosts that deliver no usable scan code.
+      if (kinfo.scanCode == 0x2A)
+        return ibus::Shift_L;
       if (kinfo.scanCode == 0x36)
         return ibus::Shift_R;
-      else
+      if (vkey == VK_RSHIFT)
+        return ibus::Shift_R;
+      if (vkey == VK_LSHIFT)
         return ibus::Shift_L;
+      return ibus::Shift_L;
     }
     case VK_CONTROL: {
       if (kinfo.isExtended == 1)
@@ -548,10 +560,6 @@ inline int TranslateKeycode(UINT vkey, KeyInfo kinfo) {
     case VK_SCROLL:
       return ibus::Scroll_Lock;
 
-    case VK_LSHIFT:
-      return ibus::Shift_L;
-    case VK_RSHIFT:
-      return ibus::Shift_R;
     case VK_LCONTROL:
       return ibus::Control_L;
     case VK_RCONTROL:

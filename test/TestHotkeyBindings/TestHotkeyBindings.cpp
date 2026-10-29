@@ -876,6 +876,41 @@ int RunMapperSelfCheck() {
     }
   }
 
+  // 3b. ADR 0017: the physical side of a Shift comes from the scan code
+  //     first, so a host that hands the IME the wrong virtual key cannot
+  //     flip the selection direction (spec 087 A.7).
+  {
+    struct ShiftSideCase {
+      UINT vkey;
+      UINT scan;
+      int keycode;
+      const char* name;
+    };
+    const ShiftSideCase shift_cases[] = {
+        {VK_SHIFT, 0x2A, ibus::Shift_L, "VK_SHIFT/0x2A"},
+        {VK_SHIFT, 0x36, ibus::Shift_R, "VK_SHIFT/0x36"},
+        {VK_RSHIFT, 0x2A, ibus::Shift_L, "VK_RSHIFT/0x2A"},
+        {VK_LSHIFT, 0x36, ibus::Shift_R, "VK_LSHIFT/0x36"},
+        {VK_LSHIFT, 0x00, ibus::Shift_L, "VK_LSHIFT/no-scan"},
+        {VK_RSHIFT, 0x00, ibus::Shift_R, "VK_RSHIFT/no-scan"},
+    };
+    for (size_t i = 0; i < sizeof(shift_cases) / sizeof(shift_cases[0]); ++i) {
+      BYTE state[256];
+      std::memset(state, 0, sizeof(state));
+      state[shift_cases[i].vkey] = 0x80;
+      KeyInfo kinfo(static_cast<LPARAM>(shift_cases[i].scan << 16));
+      const int keycode =
+          fluxing::ResolveCharacter(shift_cases[i].vkey, kinfo, state, NULL);
+      if (keycode != shift_cases[i].keycode) {
+        ++failures;
+        if (reported++ < report_limit) {
+          std::printf("MAPPER-FAIL|shift-side|%s|expected 0x%04X|got 0x%04X\n",
+                      shift_cases[i].name, shift_cases[i].keycode, keycode);
+        }
+      }
+    }
+  }
+
   // 4. librime's parse rules on the tricky patterns. A lower case letter
   //    only has a name in the one character form, so Control+a does not
   //    parse at all (ADR 0011 F1).

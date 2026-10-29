@@ -193,6 +193,10 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   // candidate menu is open. On by default (P1); the switch lives in
   // weasel.yaml under [global settings].
   bool m_bare_shift_toggles_ascii;
+  // ADR 0017: the host may report the two shift keys the other way round
+  // (spec 087 A.7). The switch lives in weasel.yaml under [global settings]
+  // and flips the side the state machine works with.
+  bool m_shift_left_right_swap;
   int m_show_notifications_time;
   DWORD m_pid;
 };

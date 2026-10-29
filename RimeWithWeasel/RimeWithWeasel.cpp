@@ -54,6 +54,7 @@ RimeWithWeaselHandler::RimeWithWeaselHandler(UI* ui)
       m_global_ascii_configured(false),
       // ADR 0010 P1: bare Shift toggles Chinese / English by default.
       m_bare_shift_toggles_ascii(true),
+       m_shift_left_right_swap(false),
       m_show_notifications_time(1200),
       _UpdateUICallback(NULL) {
   m_ui->InServer() = true;
@@ -166,6 +167,13 @@ void RimeWithWeaselHandler::Initialize() {
     if (rime_api->config_get_bool(&config, "bare_shift_toggles_ascii",
                                   &bare_shift_toggles_ascii))
       m_bare_shift_toggles_ascii = !!bare_shift_toggles_ascii;
+    // ADR 0017: the host may hand the IME the two shift keys the other way
+    // round. An absent key keeps the default (no swap), so an upgraded
+    // install behaves exactly like the previous one.
+    Bool shift_left_right_swap = 0;
+    if (rime_api->config_get_bool(&config, "shift_left_right_swap",
+                                  &shift_left_right_swap))
+      m_shift_left_right_swap = !!shift_left_right_swap;
     if (!rime_api->config_get_int(&config, "show_notifications_time",
                                   &m_show_notifications_time))
       m_show_notifications_time = 1200;
@@ -1819,7 +1827,9 @@ void RimeWithWeaselHandler::ShiftDown(bool is_left,
   auto& s = m_shiftState[ipc_id];
   s.downRecorded = true;
   s.interveningKey = false;
-  s.lastIsLeft = is_left;
+  // ADR 0017 D2: the swap switch flips the side when the host reports the
+  // two shift keys the other way round.
+  s.lastIsLeft = fluxing::ApplyShiftSideSwap(is_left, m_shift_left_right_swap);
   // ADR 0012: answer with a body. The TSF reads the pipe buffer right after
   // the Shift key event (OnTestKeyDown -> _UpdateComposition -> DoEditSession);
   // without a fresh body it would parse the previous response again.
