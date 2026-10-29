@@ -29,7 +29,7 @@ v1.1.1 装机验收（2026-10-29）回报：
 
 ## 决策（Decision）
 
-### D1 常驻勾选态持久化到 `%APPDATA%\Rime\quickpanel.state`
+### D1 常驻勾选态持久化到 `%APPDATA%\Rime\quickpanel.state`（**落点已被 ADR 0020 D2 修订**）
 
 - 介质：**独立单行 ASCII 小文件**，内容 `always_show=1\n` / `always_show=0\n`。
   - 不用 `default.custom.yaml` / `weasel.custom.yaml`：那是 rime 部署链路，UI 开关
@@ -43,6 +43,14 @@ v1.1.1 装机验收（2026-10-29）回报：
 - 读取容错：文件缺失 / 打不开 / 坏内容 / 非 `always_show=1` ⇒ 一律 false（默认关）；
   行尾 `\r` 容忍。
 - 测试注入口 `SetStatePath()`：单元测试把落点改道临时文件，**绝不污染真实用户状态**。
+- **修订（ADR 0020 D2，2026-10-29）**：本条选定的落点 `%APPDATA%\Rime` **不在本 fork 的用户数据
+  路径上** —— `HKCU\Software\Fluxing\Weasel :: RimeUserDir` 指向
+  `D:\Program Files\fluxing\user1\fluxing`，fork 默认用户数据目录是 `%AppData%\fluxing`，
+  `%APPDATA%\Rime` 是**已迁走的旧路径**（P5/P6/P8 的「一次性迁移」语义）。
+  ⇒ 「与 ShortcutSettings 同目录」「随用户数据目录一起备份」两条理由**均未兑现**。
+  落点改为 `<用户数据目录>\quickpanel.state`，旧落点降级为**只读兜底**。
+  D1 的其余决策（单行 ASCII 键值、写点在模式变化时同步落盘并回读自证、启动只回填不 auto-show、
+  读取容错、测试注入口）**不变**。
 
 ### D2 ESC 不再隐藏快捷设置栏
 

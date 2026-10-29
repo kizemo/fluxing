@@ -8,12 +8,12 @@
 > - 在 [§7 待补充开发内容](#7-待补充开发内容) 里加你要开发的新条目；
 > - 每加一条，**同时**补一行「验收方式」——没有验收方式的功能不进这份清单。
 >
-> **本轮状态**：2026-10-28 快照。当前版本 **0.21.0.9**（CHANGELOG 已记录，安装包已构建于
-> `output/archives/`，**尚未进 `release/` 发布链**）。最近完成 **T1 裸 Shift 切中英文**（ADR 0010 / spec 082），
-> 提交 `ceff6b6`，已推送至 `kizemo/Fluxing`（HEAD `ceff6b6`）。
+> **本轮状态**：2026-10-29 快照。当前版本 **1.1.3**（CHANGELOG 已记录，安装包已构建于
+> `output/archives/`，**尚未进 `release/` 发布链**）。最近完成 **T034 快捷面板「常驻」勾选态落点跟随
+> 用户数据目录**（ADR 0020，修订 ADR 0019 D1）。
 > **权威沙箱门禁在本机跑不起来**（Windows Sandbox 虚机不启动，见 §4.3 T19）
-> ⇒ 0.21.0.9 的真机验收**只能由人手敲**（spec 082 §3.4 六条）。
-> 依据：相对上游 `master` 的 `git diff --numstat master...Fluxing`、CHANGELOG 版本节、66 份 spec 的 tasks 统计。
+> ⇒ 1.1.3 的真机验收**只能由人手敲**（§4.1.9 T034 四条）。
+> 依据：相对上游 `master` 的 `git diff --numstat master...Fluxing`、CHANGELOG 版本节、70 份 spec 的 tasks 统计。
 
 ---
 
@@ -99,6 +99,7 @@
 | C9 | 裸 Shift 的 3 个缺陷修复：**候选窗开着时真正上屏第 2/3 候选**、**跨会话隔离**（A 切 A、B 不动）、**语言栏中/英图标随模式切换**；另版本号 4 段改 3 段 | ✅ | ADR 0012；1.0.0；`TestShiftIPCStateMachine` 34 PASS / 0 FAIL；`TestWeaselIPC /verify-shift-body` PASS；部署产物门禁 `bindings=39\|reachable=39\|dead=0` |
 | C10 | 快捷面板「常驻」两处真机缺陷修复：`onPhrases` 鼠标抬起的 `Hide→Show→BringToTop` workaround 加常驻守卫；常驻态 idle 淡显 20%→60%（`kAlphaFactorIdle` 51→153，修「淡到看不见被当成消失」） | ✅ | ADR 0018 D1/D2；spec 087 findings §A.8；待装机复验 T032 |
 | C11 | 裸 Shift 选词 flush 判据改为按结果分流（`ShouldCommitAfterSelect`）：部分选词（词中取字）**不再** `commit_composition`，镜像数字键语义——只上屏所选单字、剩余音节继续出候选，修 ADR 0012 无条件 flush 的连带上屏缺陷 | ✅ | ADR 0018 D3；`TestShiftIPCStateMachine` Test #22 五条；49 PASS / 0 FAIL；待装机复验 T033 |
+| C12 | 快捷面板「常驻」勾选态文件落点跟随 fork 用户数据目录（旧落点 `%APPDATA%\Rime` 降级为**只读兜底**，写入只落新路径）；用户数据目录解析收敛为单一事实源 `include/FluxingUserPaths.h` | ✅ | ADR 0020 D1/D2；1.1.3；`TestQuickPanelDialog` 43/43（红阶段 39/43，T15b/c/d 必 FAIL）；全套件 ALL TESTS PASSED；待装机复验 T034 |
 
 ### D. 候选窗 UI 与组件库
 
@@ -166,7 +167,7 @@
 | K1 | 快捷键可触发性门禁 + **空基线**（最严阈值） | ✅ | `test/TestHotkeyBindings/`；spec 081 |
 | K2 | `TestDefaultHotkeys` 89 条断言，含**否定断言**（钉住旧写法不许复活） | ✅ | 0.21.0.8 |
 | K3 | 判别力负对照方法论（造坏数据证明门禁真会红） | ✅ | 5 场景 M0–M4 全过 |
-| K4 | 事故库 `lessons-learned.md` L01–L149，每条带根因 | ✅ | `.specify/memory/lessons-learned.md` |
+| K4 | 事故库 `lessons-learned.md` L01–L158，每条带根因 | ✅ | `.specify/memory/lessons-learned.md` |
 | K5 | ADR 机制（0001/0007/0008/0009/0010） | ✅ | `docs/adr/` |
 | K6 | 入库的 rime-skill 校准（不再教人写死绑定） | ✅ | `rime-skill/` 24 文件；安装副本逐字节一致 |
 
@@ -398,6 +399,34 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
   - **处置**：**不改码**；语义写进用户可见文档 + 复测单口径改为 **CapsLock 关闭态**
     执行（ADR 0016 D8）。
 
+### 4.1.9 T034 · 快捷面板「常驻」勾选态落点跟随用户数据目录（2026-10-29 已修复，ADR 0020）
+
+- **定性**：**代码缺陷**，不是配置或用法问题。
+- **根因**：ADR 0019 D1 把常驻勾选态持久化到硬编码的 `%APPDATA%\Rime\quickpanel.state`，
+  而**本 fork 的用户数据目录从来不是 `%APPDATA%\Rime`**（`HKCU\Software\Fluxing\Weasel :: RimeUserDir`
+  → `D:\Program Files\fluxing\user1\fluxing`，fork 默认 `%AppData%\fluxing`）⇒ 勾选态落在**孤儿路径**，
+  「随用户数据目录一起备份」从未兑现。`QuickPanelStatePath()` 是 `WeaselServer` 里**唯一不跟随
+  `WeaselUserDataPath()` 的用户文件**。实测装机后 `%APPDATA%\Rime` / `%APPDATA%\Fluxing` /
+  用户数据目录**三处都没有** `quickpanel.state` ⇒ 用户从未勾选过「始终显示」
+  ⇒ 1.1.2 的持久化修复**未被真机触发**，缺陷一直潜伏。
+- **修复**（ADR 0020）：新增 header-only `include/FluxingUserPaths.h` 作单一事实源
+  （`ResolveFluxingUserDataPath()` 读注册表 `RimeUserDir`，读不到回退 `%AppData%\fluxing`）；
+  `WeaselUserDataPath()` 改为委托它（**行为不变**）；勾选态落点改为 `<用户数据目录>\quickpanel.state`，
+  旧落点降级为**只读兜底**（读先新后旧，写只落新路径）。
+- **门禁**：`TestQuickPanelDialog` 新增 T15a–T15d（落点文件名 / 父目录 == 解析出的用户数据目录 /
+  不再是 `%APPDATA%\Rime`）+ T16a–T16e（旧落点只读兜底矩阵），**43/43 PASS**
+  （先红后绿：还原 v1.1.2 实现后实测 39/43，T15b/T15c/T15d 如期 FAIL）；
+  全套件 `scripts/test-infra/run-test-suite.bat` **ALL TESTS PASSED**
+  （**须先停掉占用命名管道的已安装 `WeaselServer.exe`**，否则 `TestWeaselIPC` 环境性失败）。
+- **待用户真机验收（T034，四条）**：
+  1. 装 `fluxing-1.1.3-installer.exe` → 重启一次。
+  2. 面板勾选「始终显示」→ **再重启一次机器** → `Alt+,` 调出应仍亮、**不再几秒自动消失**。
+  3. 勾选后确认状态文件落在 `HKCU\Software\Fluxing\Weasel :: RimeUserDir` 指向的目录
+     （本机 `D:\Program Files\fluxing\user1\fluxing\quickpanel.state`），
+     且 `%APPDATA%\Rime` **不应被创建**。
+  4. 面板可见时按 ESC 不收起、`Alt+,` 显隐正常；Shift 双击切英文、CapsLock **关闭态**下
+     选候选 / 翻页 / 切中英回归确认。
+
 ### 4.2 规划中，未开工
 
 | 编号 | 内容 | 优先级 | 出处 | 备注 |
@@ -514,6 +543,10 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
 | 0.21.0.8 | 2026-10-26 | ADR 0009 收尾：4 条 `Shift+标点` 改名修好；门禁基线清零；ADR 0010 成文 |
 | 0.21.0.9 | 2026-10-27 | ADR 0010：裸 Shift 切中英文（上下文消歧，默认开，配置开关可关）；`TestShiftIPCStateMachine` 扩到 28 PASS；**已推送 `e0d6908`**；沙箱门禁因本机环境未跑通（T19），真机按键验收待做 |
 | 1.0.0 | 2026-10-28 | ADR 0012：裸 Shift 上屏候选 / 跨会话隔离 / 语言栏中英图标；Shift IPC 回响应体（协议事实：服务端不回 body ⇒ 客户端解析陈旧响应）；版本号 4 段改 3 段；`TestShiftIPCStateMachine` 34 PASS；**已推送 `ceff6b6`**；沙箱门禁仍因本机环境未跑通（T19），真机按键验收待做 |
+| 1.1.0 | 2026-10-29 | ADR 0017：裸 Shift 左右方向改按**物理扫描码**判定（0x2A 左 / 0x36 右），并加 `shift_left_right_swap` 开关（默认关、默认行为不变）；装包 `fluxing-1.1.0-installer.exe` 已进 `release/` |
+| 1.1.1 | 2026-10-29 | ADR 0018：快捷面板常驻两处真机缺陷（`onPhrases` 鼠标抬起即收 / idle 淡到 6-11% 被读作消失）+ 裸 Shift 部分选词连带上屏；`TestShiftIPCStateMachine` 49 PASS / 0 FAIL |
+| 1.1.2 | 2026-10-29 | ADR 0019：常驻勾选态跨重启持久化 + ESC 不再收起面板（**落点已由 ADR 0020 修订**）；装包 SHA256 `4238124C8EEFC5B86785D37640F1CF99C61004124302406AFC5A750CEBAAEC36`；真机验收待做 |
+| 1.1.3 | 2026-10-29 | ADR 0020：勾选态落点跟随 fork 用户数据目录（`%APPDATA%\Rime` 降级为只读兜底，写入只落新路径）；`TestQuickPanelDialog` 43/43（红阶段 39/43）；全套件 ALL TESTS PASSED；真机验收待做（T034） |
 
 ---
 
@@ -539,12 +572,12 @@ spec 083（抓键 layout-aware 改造，ADR 0011 已定稿；M1 / M2 / M3 已落
 | 文档 | 作用 |
 |---|---|
 | [`.specify/PRD.md`](.specify/PRD.md) | v2 产品需求（13 项 F1–F13 + SC-001~SC-006） |
-| [`CHANGELOG.md`](CHANGELOG.md) | 83 个版本节的权威发布记录 |
+| [`CHANGELOG.md`](CHANGELOG.md) | 99 个版本节的权威发布记录 |
 | [`CONTEXT.md`](CONTEXT.md) | 领域词汇 + 17 条不变量 |
 | [`AGENTS.md`](AGENTS.md) | 操作手册（构建/测试/危险区/反模式） |
-| [`.specify/memory/lessons-learned.md`](.specify/memory/lessons-learned.md) | L01–L157 事故库 |
+| [`.specify/memory/lessons-learned.md`](.specify/memory/lessons-learned.md) | L01–L158 事故库 |
 | [`.specify/memory/project-knowledge.md`](.specify/memory/project-knowledge.md) | 部署路径/注册表/三层覆盖架构 |
-| [`docs/adr/`](docs/adr/) | 11 份架构决策记录（0011 / 0016 为 `Proposed`） |
+| [`docs/adr/`](docs/adr/) | 15 份架构决策记录（0011 / 0016 为 `Proposed`） |
 | [`Rime-设置说明书-重点快捷键.md`](Rime-设置说明书-重点快捷键.md) | 用户可见快捷键手册（md + html） |
 
 ---

@@ -1294,14 +1294,134 @@ MAPPER-SUMMARY|failures=0  RESULT|PASS
 
 ### 21.5 下阶段：1.1.2 真机验收清单
 
+> ⚠️ **本节的第 4 条与第 6 条自检口径已被 v1.1.3 轮订正（见 §22）**，照旧单子查会得到**假阴性**：
+> 第 4 条比的是**入口 `weaselx64.dll`**（被占用时设计上保持旧版 ⇒ 必然不等），
+> 第 6 条查的是 `%APPDATA%\Rime`（**本 fork 从来不用这个目录**）。以下保留作历史存档。
+
 1. 装 1.1.2（`/S /D=` 显式；若装包提示占用，按装器指引结束进程或重启）→ 重启一次。
 2. 打开面板勾选「始终显示」→ **再重启一次机器** → `Alt+,` 调出：勾选应仍亮、**不再几秒自动消失**（核心项）。
 3. 面板可见时按 **ESC：不收起、不影响打字**；`Alt+,` 显隐仍正常。
 4. DLL 收口自检：`weaselx64.dll` 与 `weaselx64.1.1.1.0.dll`（或 1.1.2.0）SHA256 相同。
+   ❌ **口径错误（已在 §22.3 订正）**：入口 `weaselx64.dll` 被 TSF 进程占用时**设计上**保持旧版
+   （ADR 0016 的换装链如此），拿它与版本化 shim 比 SHA256 **必然不等** ⇒ 不等于缺陷。
+   正确口径 = **查 CLSID 的 InprocServer32 指向哪个文件**，再比那个文件的 SHA256。
 5. Shift 双击切英文回归确认（1.1.1 已验收过，防回归）。
 6. 若勾选丢失，查 `%APPDATA%\Rime\quickpanel.state` 是否存在及内容、`WeaselServer` 日志中
    `quickpanel always-show state persisted/read back mismatch` WARNING。
+   ❌ **路径错误（已在 §22.3 订正）**：本 fork 的用户数据目录由
+   `HKCU\Software\Fluxing\Weasel :: RimeUserDir` 决定，**从来不是 `%APPDATA%\Rime`**。
 
 **坑位备忘**：面板「几秒自动消失」≠ 守卫失效（先查常驻态是否真的开着）；「勾选没记住」的更早根因是
 `OnTimer` 先 `Hide()` 后查 `IsWindowVisible` 的死代码陷阱（§17.7），与本轮「无持久化」是两回事；
 `include/WeaselVersion.h` 不存在，版本号定义在 `env.bat` + `weasel.props`。
+
+---
+
+## 22. v1.1.3 轮：勾选态落点跟随用户数据目录（ADR 0020，修订 ADR 0019 D1）
+
+### 22.1 一句话
+
+v1.1.2 的「常驻勾选态持久化」**把状态写到了本 fork 根本不用的 `%APPDATA%\Rime`** ——
+本 fork 的用户数据目录由注册表 `HKCU\Software\Fluxing\Weasel :: RimeUserDir` 决定
+（本机 `D:\Program Files\fluxing\user1\fluxing`，fork 默认 `%AppData%\fluxing`），
+`%APPDATA%\Rime` 是**已迁走的旧路径**（P5/P6/P8 的「一次性迁移」语义）。
+⇒ 勾选态落在**孤儿路径**上，「随用户数据目录一起备份」从未兑现；
+且实测 `%APPDATA%\Rime` / `%APPDATA%\Fluxing` / 用户数据目录**三处都没有** `quickpanel.state`
+⇒ 用户从未勾选过「始终显示」⇒ **1.1.2 的修复从未被真机触发**，缺陷一直潜伏到本轮。
+
+### 22.2 修法
+
+- **落点**：`<用户数据目录>\quickpanel.state`；旧落点 `%APPDATA%\Rime\quickpanel.state`
+  降级为**只读兜底**（读先新后旧；**写只落新路径**，不再在已迁走的旧目录造文件）。
+- **单一事实源**：新增 header-only `include/FluxingUserPaths.h`
+  （`ResolveFluxingUserDataPath()` 读注册表 `RimeUserDir`，读不到回退 `%AppData%\fluxing`）；
+  `WeaselUserDataPath()` 改为委托它，**行为逐字节不变**。
+  独立成 header 的原因：`include/WeaselUtility.h` 依赖 stdafx 预置的 `<chrono>` 等且拖入 COM/wrl，
+  `test/TestQuickPanelDialog` 不链接 `RimeWithWeasel`，直接包含会编译失败。
+- **ADR**：新增 `docs/adr/0020-quickpanel-state-path-follows-user-data-dir.md`；
+  ADR 0019 D1 标注「落点已被 ADR 0020 D2 修订」，其余决策不变。
+- **IPC 未动**：本轮**不碰** IPC 协议（`include/WeaselIPCData.h` 无变更）⇒ 不触发四边同步要求。
+
+### 22.3 **订正 §21.5 的两条自检口径**（重要，别再照旧单子查）
+
+1. **64 位前端自检**：**不要**比「入口 `weaselx64.dll`」与版本化 shim 的 SHA256 ——
+   入口文件被 TSF 进程占用时**设计上保持旧版**（ADR 0016 的换装链如此），必然不等 ⇒ 不是缺陷。
+   正确口径 = **查 CLSID 的 InprocServer32 指向哪个文件**，再比那个文件的 SHA256：
+   - 64 位 CLSID 的 InprocServer32 应指向 `weaselx64.1.1.3.0.dll`，
+     且该文件 SHA256 **等于**仓内 `output/weaselx64.dll`；
+   - 32 位 CLSID 的 InprocServer32 指向 `weasel.dll`。
+   （1.1.2 实测已闭合该链：64 位 → `weaselx64.1.1.2.0.dll`，SHA == 仓内 `output/weaselx64.dll`。）
+2. **状态文件路径**：**不要**查 `%APPDATA%\Rime\quickpanel.state`。本 fork 的用户数据目录由
+   `HKCU\Software\Fluxing\Weasel :: RimeUserDir` 决定 ⇒ 应查**该值指向的目录**下的
+   `quickpanel.state`（1.1.3 起）。查 `%APPDATA%\Rime` 在 1.1.3 之后**永远查不到**，
+   且该目录**不应被创建**（若出现 ⇒ 还在写旧路径 ⇒ 回归）。
+
+### 22.4 门禁数字
+
+- `TestQuickPanelDialog` 新增 T15a–T15d + T16a–T16e ⇒ **43/43 PASS**
+  （**先红后绿已验证**：把实现还原成 v1.1.2 行为后实测 39/43，T15b/T15c/T15d 如期 FAIL ⇒ 断言有牙）。
+- 全套件 `scripts/test-infra/run-test-suite.bat` ⇒ **ALL TESTS PASSED**（exit 0）。
+- 发布构建 `build.bat weasel installer` ⇒ **exit 0**；
+  `msbuild\Release\Win32\WeaselServer\QuickPanelDialog.obj` 当日重编 ⇒ 修复确实进了 `WeaselServer.exe`。
+
+### 22.5 v1.1.3 真机验收清单（订正版）
+
+1. 装包：`output\archives\fluxing-1.1.3-installer.exe`
+   （42,759,936 B，SHA256 `AF4B28087A939D211850EC6F8B36FA61F889A7655A096736033C5106F66FA368`）。
+   静默安装必须**显式** `/D=`：
+   `& '<装包>' /S /D=D:\Program Files\fluxing\weasel`
+   （`/D=` 的值**不可加引号**，且须为最后一个参数）。
+   安装前先清 `HKLM\Software\Fluxing\Weasel` 与 `HKCU\Software\Fluxing`（L54）。
+   装完**重启一次机器**。
+2. **核心项**：面板勾选「始终显示」→ **再重启一次机器** → `Alt+,` 调出：
+   勾选应**仍亮**、**不再几秒自动消失**。
+3. **落点核对**：勾选后确认 `quickpanel.state` 出现在 `RimeUserDir` 指向的目录
+   （本机 `D:\Program Files\fluxing\user1\fluxing\quickpanel.state`，内容 `always_show=1`），
+   且 `%APPDATA%\Rime` **没有被创建**。
+4. **ESC 口径**：面板可见时按 **ESC：不收起、不影响打字**；`Alt+,` 显隐仍正常。
+5. **回归**：Shift 双击切英文（1.1.1 已验收过，防回归）；CapsLock **关闭态**下测
+   选候选 / 翻页 / 切中英（**关闭态**才是有效口径，见 L157）。
+6. **64 位自检**：按 §22.3 第 1 条的「CLSID → 版本化 shim → SHA256」口径查。
+
+### 22.6 载荷指纹
+
+- 装包：`output\archives\fluxing-1.1.3-installer.exe`
+  （42,759,936 B，SHA256 `AF4B28087A939D211850EC6F8B36FA61F889A7655A096736033C5106F66FA368`）；
+  已收录进 `release/fluxing-1.1.3-installer.exe`（同一 SHA）。
+- 版本资源：`weasel.dll` / `weaselx64.dll` / `WeaselSetup.exe` / `WeaselServer.exe` /
+  `WeaselDeployer.exe` 全部 **1.1.3.0**；`weasel.props` = 1/1/3 + 1.1.3.0。
+- 版本化 shim 由安装器在**装机时**生成（`install.nsi` 的
+  `File /oname=weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.dll`）⇒ 1.1.3 装机后为
+  `weasel.1.1.3.0.dll` / `weaselx64.1.1.3.0.dll`。
+- 入口 `weaselx64.dll` / `weasel.dll` 被占用时保持旧版是**设计内**（ADR 0016）。
+
+### 22.7 本轮踩坑（务必记住，别重演）
+
+- **全套件门禁会因「本机装着的服务占着命名管道」变红**：集成测试 `TestWeaselIPC` 要求独占管道，
+  已安装的 `WeaselServer.exe` 正占着它 ⇒ 门禁报
+  `A WeaselServer.exe or TestWeaselIPC.exe process is already running`。
+  **先停服务再跑门禁**；这是**环境性失败，不是回归**。本轮 `Stop-Process -Id <pid> -Force` 可直接停掉
+  （此前记录的「PPL 杀不掉」在本次实测**不成立**）。
+- **`edit` 工具会把整篇文件规范成一种行尾**：`xbuild.bat` 里原本 7 行 LF 被连带改成 CRLF，
+  造成无关 diff ⇒ 改完必须 `git diff --numstat` 复核，必要时按字节还原（本轮已还原）。
+- **`build.bat` / `xbuild.bat` 的 tracked 兜底 `VERSION_*` 自 1.1.0 起一直停在 1.0.0**
+  （1.1.0 / 1.1.1 / 1.1.2 三次发布都没同步）⇒ 没有 `env.bat` 的构建会产出 **1.0.0 载荷**
+  （与 L145 同类隐患）⇒ 本轮一并同步到 1.1.3（L158）。
+- **二进制字面量探针对本例无效**：`RimeUserDir` / `AppData` / `fluxing` 在 1.1.2 的
+  `WeaselServer.exe` 里**本来就存在**（rime API 初始化也要读 `RimeUserDir`）⇒
+  不能用「字符串在不在」证明修复是否进了二进制。改用**编译单元证据**
+  （构建日志里 `QuickPanelDialog.cpp` 的 `/Fo` 指向 `msbuild\Release\Win32\WeaselServer\`）
+  + 单元测试。
+
+### 22.8 未闭合项
+
+- **真机按键验收只能由用户完成**（§22.5 六条）。
+- **Windows Sandbox 权威门禁在本机跑不起来**（`scripts/sandbox-gate/run-verify.cmd` 连 `boot.log`
+  都没有）⇒ 本轮**刻意**只改 `WeaselServer/` + `include/` + `RimeWithWeasel/` + `test/`，
+  **不碰** `output/install.nsi` 与 `output/data/user-custom/**`，避免触发跑不完的门禁。
+- `codebase-memory-mcp` 图谱在本机**不可用**（`mavis mcp list` 只有 `graphify` 且 `enabled:false`）
+  ⇒ 本轮按 `.claude/rules/codebase-graph.md` 降级为 Grep/Read。
+- **CHANGELOG 历史缺口**：`[1.1.0]` / `[1.1.1]` **没有独立版本节**，其内容混在 `[Unreleased]` 里
+  （连同更早的抓键条目）⇒ 本轮**不臆造**版本边界去补，留作一次专门的文档整理。
+- `release/` 本轮只补了 **1.1.3**；**1.1.1 / 1.1.2 的装包从未入过 `release/`**
+  （本地仍在 `output/archives/`）⇒ 是否回填待定（会一次性给 git 增加约 85 MB）。

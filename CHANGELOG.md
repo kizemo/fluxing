@@ -222,6 +222,31 @@
   Windows 资源版本号）；且本 fork 的 CI 发布步骤被
   `github.repository == 'rime/weasel'` 门控 ⇒ `release/` 不会自动对外发版。
 
+## [1.1.3] - 2026-10-29
+
+### 主要更新
+
+- **快捷面板「始终显示」的勾选态现在写在正确的用户数据目录里**
+  （`include/FluxingUserPaths.h`、`WeaselServer/QuickPanelDialog.{h,cpp}`，ADR 0020）：
+  v1.1.2 把勾选态持久化到硬编码的 `%APPDATA%\Rime\quickpanel.state`，而**本 fork 的用户数据目录
+  从来不是 `%APPDATA%\Rime`**（`HKCU\Software\Fluxing\Weasel :: RimeUserDir` →
+  `D:\Program Files\fluxing\user1\fluxing`，fork 默认 `%AppData%\fluxing`）⇒ 勾选态落在一条与用户
+  数据目录无关的孤儿路径上，「随用户数据目录一起备份」从未兑现；实测装机后 `%APPDATA%\Rime`、
+  `%APPDATA%\Fluxing`、用户数据目录**三处都没有**该文件 ⇒ 用户从未勾选过「始终显示」，
+  v1.1.2 的持久化修复**未被真机触发**，缺陷一直潜伏。
+  现落点改为 `<用户数据目录>\quickpanel.state`；旧落点保留为**只读兜底**（新落点缺失或损坏时回退读），
+  写入只落新路径，**不再在已迁走的旧目录造文件**。
+- **用户数据目录解析收敛为单一事实源**（`include/FluxingUserPaths.h`）：新增 header-only 的
+  `ResolveFluxingUserDataPath()`，从 `HKCU\Software\Fluxing\Weasel :: RimeUserDir` 解析用户数据目录
+  （读不到回退 `%AppData%\fluxing`）；`WeaselUserDataPath()` 改为委托它，**行为逐字节不变**。
+- 回归测试：`TestQuickPanelDialog` 新增 T15a–T15d（落点文件名 / 父目录 == 解析出的用户数据目录 /
+  不再是 `%APPDATA%\Rime`）与 T16a–T16e（旧落点只读兜底矩阵：都不在 / 仅旧在 / 新优先 / 新=1 /
+  legacy 传空串不兜底），**43/43 全过**（先红后绿已验证：把实现还原成 v1.1.2 行为后
+  T15b/T15c/T15d 如期 FAIL，实测 39/43）。全套件 `scripts/test-infra/run-test-suite.bat`
+  **ALL TESTS PASSED**。
+- 顺带修正两处 tracked 版本线漂移：`build.bat` / `xbuild.bat` 的兜底 `VERSION_*` 自 1.1.0 以来一直
+  停在 **1.0.0**（没有 `env.bat` 的构建会产出 1.0.0 载荷，与 L145 同类隐患），现同步到 **1.1.3**。
+
 ## [1.1.2] - 2026-10-29
 
 ### fix(WeaselServer): 快捷面板「常驻」态跨重启保持；ESC 不再收起面板（ADR 0019，1.1.1 真机反馈）
