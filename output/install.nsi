@@ -1076,10 +1076,10 @@ program_files:
     ;      不带内层引号,不需要在 NSIS 里拼转义反斜杠。
     FileOpen $R9 "$WINDIR\Temp\fluxing-stage2-install.bat" w
     FileWrite $R9 "@echo off$\n"
-    FileWrite $R9 'copy /Y "%TEMP%\fluxing-staged\WeaselServer.exe" "$INSTDIR\WeaselServer.exe" >NUL$\n'
+    FileWrite $R9 'copy /Y "$TEMP\fluxing-staged\WeaselServer.exe" "$INSTDIR\WeaselServer.exe" >NUL$\n'
     FileWrite $R9 'del /F /Q "$INSTDIR\WeaselServer.exe.old.tmp"$\n'
     FileWrite $R9 'schtasks /Delete /TN FluxingStage2Install /F$\n'
-    FileWrite $R9 'del "%TEMP%\fluxing-staged\WeaselServer.exe"$\n'
+    FileWrite $R9 'del "$TEMP\fluxing-staged\WeaselServer.exe"$\n'
     FileClose $R9
     ; 注册 Task Scheduler: At-startup (boot), 高权限
     nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2Install /TR "cmd /c $WINDIR\Temp\fluxing-stage2-install.bat" /RL HIGHEST /F'
@@ -1102,10 +1102,10 @@ program_files:
       ; spec 087 / ADR 0016: 同上三处修法 (copy /Y / 路径无空格 / 不带内层引号)。
       FileOpen $R9 "$WINDIR\Temp\fluxing-stage2-install-x64.bat" w
       FileWrite $R9 "@echo off$\n"
-      FileWrite $R9 'copy /Y "%TEMP%\fluxing-staged\weaselx64.dll" "$INSTDIR\weaselx64.dll" >NUL$\n'
+      FileWrite $R9 'copy /Y "$TEMP\fluxing-staged\weaselx64.dll" "$INSTDIR\weaselx64.dll" >NUL$\n'
       FileWrite $R9 'del /F /Q "$INSTDIR\weaselx64.dll.stage2"$\n'
       FileWrite $R9 'schtasks /Delete /TN FluxingStage2InstallX64 /F$\n'
-      FileWrite $R9 'del "%TEMP%\fluxing-staged\weaselx64.dll"$\n'
+      FileWrite $R9 'del "$TEMP\fluxing-staged\weaselx64.dll"$\n'
       FileClose $R9
       nsExec::ExecToStack 'schtasks /Create /SC ONSTART /TN FluxingStage2InstallX64 /TR "cmd /c $WINDIR\Temp\fluxing-stage2-install-x64.bat" /RL HIGHEST /F'
       Pop $0
