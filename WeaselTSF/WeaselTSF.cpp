@@ -8,6 +8,7 @@
 #include "WeaselTSF.h"
 #include "CandidateList.h"
 #include "LanguageBar.h"
+#include <FluxingInstallPaths.h>
 #include "Compartment.h"
 #include "ResponseParser.h"
 
@@ -490,15 +491,21 @@ bool WeaselTSF::_EnsureServerConnected() {
       };
       if (!m_client.Echo() && GetLastError() != ERROR_ALREADY_EXISTS &&
           !count_server_process()) {
-        std::wstring dir = _GetRootDir();
-        std::thread th([dir, this]() {
-          ShellExecuteW(NULL, L"open", (dir + L"\\start_service.bat").c_str(),
-                        NULL, dir.c_str(), SW_HIDE);
-          // wait 500ms, then reconnect
-          std::this_thread::sleep_for(std::chrono::milliseconds(500));
-          _Reconnect();
-        });
-        th.detach();
+        // spec 088: 以前这里无条件拼 "<dir>\start_service.bat",而 dir 来自
+        // 只读 "WeaselRoot" 的注册表查询 ⇒ 本 fork 下恒为空路径,拉起静默失败。
+        // 现在走统一的"启动目标"选择器(优先 bat,退回 WeaselServer.exe)。
+        const std::wstring dir = _GetRootDir();
+        const std::wstring target = fluxing::WeaselServiceLaunchTarget(dir);
+        if (!target.empty()) {
+          std::thread th([dir, target, this]() {
+            ShellExecuteW(NULL, L"open", target.c_str(), NULL, dir.c_str(),
+                          SW_HIDE);
+            // wait 500ms, then reconnect
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            _Reconnect();
+          });
+          th.detach();
+        }
       }
       if (hMutex) {
         CloseHandle(hMutex);

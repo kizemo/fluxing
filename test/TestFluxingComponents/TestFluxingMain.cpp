@@ -15,6 +15,7 @@ int RunButtonTest();
 int RunToggleTest();
 int RunPanelTest();
 int RunThemeTest();
+int RunInstallPathsTest();
 }
 
 int main() {
@@ -26,6 +27,7 @@ int main() {
     {"TestFluxingToggle", fluxing_test::RunToggleTest},
     {"TestFluxingPanel",  fluxing_test::RunPanelTest},
     {"TestFluxingTheme",  fluxing_test::RunThemeTest},
+    {"TestFluxingInstallPaths", fluxing_test::RunInstallPathsTest},
   };
   for (const auto& t : tests) {
     int rc = t.fn();

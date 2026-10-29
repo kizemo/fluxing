@@ -96,6 +96,7 @@
     <ClCompile Include="TestFluxingMain.cpp" />
     <ClCompile Include="TestFluxingToggle.cpp" />
     <ClCompile Include="TestFluxingPanel.cpp" />
+    <ClCompile Include="TestFluxingInstallPaths.cpp" />
     <ClCompile Include="TestFluxingTheme.cpp" />
     <ClCompile Include="..\..\WeaselUI\FluxingComponents\Button.cpp" />
     <ClCompile Include="..\..\WeaselUI\FluxingComponents\Toggle.cpp" />

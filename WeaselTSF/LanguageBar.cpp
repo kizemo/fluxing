@@ -6,8 +6,14 @@
 #include "LanguageBar.h"
 #include "CandidateList.h"
 #include <WeaselUtility.h>
+#include <FluxingInstallPaths.h>
 
 static const DWORD LANGBARITEMSINK_COOKIE = 0x42424242;
+
+// 本 DLL 内的静态锚点 ——
+// GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS)
+// 需要一个落在本模块内的地址;成员函数指针不能直接转成 LPCWSTR,故用数据锚点。
+static int g_module_address_anchor = 0;
 
 static void HMENU2ITfMenu(HMENU hMenu, ITfMenu* pTfMenu) {
   /* NOTE: Only limited functions are supported */
@@ -34,15 +40,11 @@ static void HMENU2ITfMenu(HMENU hMenu, ITfMenu* pTfMenu) {
   }
 }
 
-static LPCWSTR GetWeaselRegName() {
-  LPCWSTR WEASEL_REG_NAME_;
-  if (is_wow64())
-    WEASEL_REG_NAME_ = L"Software\\WOW6432Node\\Rime\\Weasel";
-  else
-    WEASEL_REG_NAME_ = L"Software\\Fluxing\\Weasel";
-
-  return WEASEL_REG_NAME_;
-}
+// spec 088:原来这里有一个 GetWeaselRegName(),32 位分支读的是上游键
+// Software\WOW6432Node\Rime\Weasel、64 位分支读 Software\Fluxing\Weasel,而
+// 读的值 "WeaselRoot" 本 fork 的安装器从不写入 ⇒ 拿到空串后「重启算法服务」
+// 与「程序文件夹」静默无反应。现已下沉到 include/FluxingInstallPaths.h
+// (显式遍历 32/64 两个注册表视图 + 按安装根推导程序目录)。
 
 static bool open(const std::wstring& path) {
   std::wstring quoted_path = L"\"" + path + L"\"";
@@ -302,8 +304,27 @@ void CLangBarItemButton::SetLangbarStatus(DWORD dwStatus, BOOL fSet) {
 }
 
 std::wstring WeaselTSF::_GetRootDir() {
-  std::wstring dir{};
-  RegGetStringValue(HKEY_LOCAL_MACHINE, GetWeaselRegName(), L"WeaselRoot", dir);
+  std::wstring dir = fluxing::ResolveFluxingWeaselRoot();
+  if (!dir.empty() && fluxing::LooksLikeWeaselRoot(dir))
+    return dir;
+  // 兜底:本 DLL 自身所在目录就是程序目录
+  //   (weasel.dll / weaselx64.dll 与 WeaselServer.exe 同在 <安装根>\weasel)
+  HMODULE hmod = nullptr;
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCWSTR>(&g_module_address_anchor),
+                         &hmod)) {
+    WCHAR path[MAX_PATH] = {0};
+    if (GetModuleFileNameW(hmod, path, _countof(path)) > 0) {
+      const std::wstring dll_path(path);
+      const size_t sep = dll_path.find_last_of(L"\\/");
+      if (sep != std::wstring::npos) {
+        const std::wstring dll_dir = dll_path.substr(0, sep);
+        if (fluxing::LooksLikeWeaselRoot(dll_dir))
+          return dll_dir;
+      }
+    }
+  }
   return dir;
 }
 
@@ -311,19 +332,31 @@ void WeaselTSF::_HandleLangBarMenuSelect(UINT wID) {
   std::wstring dir{};
   switch (wID) {
     case ID_WEASELTRAY_RERUN_SERVICE:
-    case ID_WEASELTRAY_INSTALLDIR:
-      if (RegGetStringValue(HKEY_LOCAL_MACHINE, GetWeaselRegName(),
-                            L"WeaselRoot", dir) == ERROR_SUCCESS) {
-        if (wID == ID_WEASELTRAY_RERUN_SERVICE) {
-          std::thread th([dir]() {
-            ShellExecuteW(NULL, L"open", (dir + L"\\start_service.bat").c_str(),
-                          NULL, dir.c_str(), SW_HIDE);
-          });
-          th.detach();
-        } else
-          open(dir);
+    case ID_WEASELTRAY_INSTALLDIR: {
+      const std::wstring root = _GetRootDir();
+      if (!fluxing::LooksLikeWeaselRoot(root)) {
+        // spec 088:以前这里是「读不到就整段跳过」—— 用户点了完全没反应。
+        MessageBoxW(NULL, L"未找到火流猩程序目录，请重新安装后再试。",
+                    L"火流猩输入法", MB_ICONERROR | MB_OK);
+        break;
+      }
+      if (wID == ID_WEASELTRAY_RERUN_SERVICE) {
+        const std::wstring target = fluxing::WeaselServiceLaunchTarget(root);
+        if (target.empty()) {
+          MessageBoxW(NULL, L"未找到算法服务启动脚本，请重新安装后再试。",
+                      L"火流猩输入法", MB_ICONERROR | MB_OK);
+          break;
+        }
+        std::thread th([root, target]() {
+          ShellExecuteW(NULL, L"open", target.c_str(), NULL, root.c_str(),
+                        SW_HIDE);
+        });
+        th.detach();
+      } else {
+        open(root);
       }
       break;
+    }
     case ID_WEASELTRAY_USERCONFIG:
       if (FAILED(RegGetStringValue(HKEY_CURRENT_USER,
                                    L"Software\\Fluxing\\Weasel", L"RimeUserDir",
