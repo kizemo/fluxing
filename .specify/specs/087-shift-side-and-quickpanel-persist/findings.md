@@ -163,3 +163,74 @@
 
 用户机现状：`weaselx64.dll` = 10-27 23:50 **旧件**；`weaselx64.1.1.0.0.dll` = 10-28 20:50 旧新件（shim 从未注册成功）；
 `weaselx64.dll.stage2` marker 残留 ⇒ 64 位 CLSID 仍指向旧件。
+
+---
+
+## A.8 常驻面板「有输入动作或点击后消失」+ 裸 Shift 部分选词连带上屏（2026-10-29 v1.1.0 真机反馈，ADR 0018）
+
+### 缺陷 1 · 「点击」支（有代码证据 · 已修）
+
+- **根因**：`WeaselServer/WeaselServerApp.cpp` 的 `onPhrases` 里 `WM_LBUTTONUP` 处理
+  （v0.19.0.39 为让子 `PhrasesDialog` 拿到键盘事件做的 `Hide() → Show() → BringToTop()` workaround）
+  是**全仓唯一未守卫的生产 `Hide()` 调用点**；点「词库」按钮正是那次「点击」。
+- **取证方式**：全仓搜 `Hide();` 调用点 —— 其余四处（FocusOut / 100ms 轮询器 / `OnKillFocus` /
+  `WM_ACTIVATEAPP`）已由 ADR 0016 加 `AlwaysShowMode()` 守卫；`QuickPanelDialog::Hide()` 本体
+  （`WeaselServer/QuickPanelDialog.cpp:1438`）仍无条件 `SW_HIDE` 是**刻意的**（ADR 0013 D7：
+  `Alt+,` / ESC 必须仍能收起）。
+- **修法**：守卫加在**调用点**，非常驻态行为逐字节不变。
+
+### 缺陷 1 · 「输入动作」支（代码取证 · 待装机复验）
+
+- **根因**：不是 `Hide()`。面板用 `WS_EX_LAYERED` + `UpdateLayeredWindow` **逐像素 alpha**
+  （`QuickPanelDialog.cpp:1415` 注明 v0.19.0.10 起弃用 `SetLayeredWindowAttributes(LWA_ALPHA)`），
+  `ApplyAlphaGradient()` 先把逐像素 alpha 压到 140→82，再乘 `s_alphaFactor`；100ms 轮询器在
+  **光标不在面板矩形内**时把常驻态 park 到 `fluxing::kAlphaFactorIdle = 51`（ADR 0013 D3 的 20%）
+  ⇒ 有效 alpha ≈ 28→16（桌面约 6-11%）。打字时光标按定义在目标应用编辑框 ⇒ 面板淡到看不见，
+  且 `Hide()` 复位 `s_alphaFactor = 255`（`:1445`）只在真走 Hide 时发生，常驻态不经 Hide 的复用
+  带着旧值起步 ⇒ 用户读作「消失」。
+- **修法**：`kAlphaFactorIdle` 51 → **153**（60%），`include/QuickPanelAlpha.h:41`；
+  fade tick 注释同步（255→153 约 5 tick @ step 24）。修订 ADR 0013 D3 的设计值，由 ADR 0018 D2 背书。
+- **诚实边界**：本支**没有 Hide() 调用点证据**，只有代码自洽性（alpha 机制是唯一能解释「有输入动作后
+  看起来消失」的路径，全仓再无第 5 处生产 `Hide()`）⇒ **装机复验是完成条件**（R6）。
+
+### 缺陷 2 · 裸 Shift 部分选词连带上屏（有机制链 + 判别性测试 · 已修）
+
+- **症状**：两字以上双拼、第 1 候选是词、第 2/3 候选是单字时，Shift 上屏单字的**同时把第 1
+  候选词的第二个字也带上屏**；数字键 2/3 无此现象（上屏单字后继续为剩余音节出候选）。
+- **机制链**（librime 只读参照，P3）：
+  - `RimeWithWeasel.cpp::ShiftUp()` 的 `kSelectCandidate` 分支：`select_candidate(idx)` 之后
+    **无条件** `commit_composition()`（ADR 0012 遗留）。
+  - `ConcreteEngine::OnSelect`（`librime/src/rime/engine.cc:259-282`）：整词（`seg.end ==
+    input.length()`）→ `composition().Forward()`（`segmentation.cc:114-120`）追加**零长度无 menu
+    尾段** ⇒ 不落屏 ⇒ 这正是 ADR 0012 需要 commit 的场景。
+  - 部分选词（`cand.end < input.length()`）→ `Segment::Close`（`segmentation.cc:17-24`）截短 +
+    `partial` tag → `Compose(ctx)`（`engine.cc:279`）为剩余音节重建 `kGuess` 段 ⇒ menu **非空**，
+    全程不 commit。
+  - `Context::Commit()`（`context.cc:18-26`）= `commit_notifier`(**整个** composition 含剩余段首选)
+    + `Clear` ⇒ 部分选词时 commit 会把第 1 候选词的次字一并带出 ⇒ 与用户描述完全吻合。
+- **修法**：`include/ShiftStateMachine.h:66` 新增纯函数
+  `ShouldCommitAfterSelect(bool context_available, int remaining_candidates)`；
+  `ShiftUp()` 在 `select_candidate` 后 `get_context` 读 `menu.num_candidates`，**仅当无剩余候选
+  （整词）才 commit**；`get_context` 失败保守 flush（防 ADR 0012 整词场景回归）。镜像数字键路径
+  `RimeWithWeasel.cpp:1911-1919 SelectCandidate()`（`select_candidate + _UpdateUI`，无 commit）。
+- **排除的判据**：`get_input`/caret 对比（`OnSelect` 两条分支都不改 `input_`/`caret_pos`，量不出差别）；
+  `get_commit` peek（会**消费**文本，等于吞字）。
+- **回归断言**：`Test_ShouldCommitAfterSelect()`（`Test #22`，5 条）—— false-context→flush ×2、
+  `(true,0)`→flush、`(true,1)`/`(true,5)`→不 flush。
+
+### 门禁（2026-10-29，Win32 / Release，本机复跑）
+
+```
+SOLUTION_EXIT=0        # msbuild weasel.sln /p:Configuration=Release /p:Platform=Win32 /m
+TESTPROJ_EXIT=0        # TestShiftIPCStateMachine.vcxproj
+Result: 49 PASS / 0 FAIL   # 原 44 + 新增 Test #22 的 5 条
+MAPPER-SUMMARY|failures=0  RESULT|PASS   # TestHotkeyBindings --selfcheck-mapper
+```
+
+### 未闭合
+
+- 「输入动作」支需装机复验：勾「常驻」后**打字时**与**点「词库」后**面板均应仍在，
+  idle 应是可辨的浅态（约 60%）而非近似消失；`Alt+,` / ESC 仍能收起。
+- 缺陷 2 需真机复测：两字以上双拼 Shift 选第 2/3 单字应只上屏该单字，剩余音节继续出候选。
+- 64 位换装仍未闭环（64 位 CLSID `{A3F4CDED-...}` 指向未版本化旧件，用户未回报核验结果）。
+

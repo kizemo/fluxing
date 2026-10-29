@@ -1186,3 +1186,51 @@ spec 087 tasks T015 / T016 未勾）。
   （回填此行的提交本身是**纯文档**改动，不触碰 C++ / yaml / 载荷
   ⇒ 它的 run 结果应与 `40811914713` 一致。）
 - **工作树**：只剩 `librime` 子模块脏（**刻意不动**）与未跟踪 `tmp/`（诊断工作区，不入库、不随产品发布）。
+
+---
+
+## 20. v1.1.0 真机两缺陷修复轮（2026-10-29 下午 · ADR 0018）
+
+### 20.1 用户回报
+
+1. 快捷设置栏在**有输入动作或点击后仍然消失**（spec 087「常驻」/ ADR 0016 未完全生效）。
+2. 裸 Shift **方向已正确**，但两字以上双拼中第 1 候选为词、第 2/3 候选为单字时，
+   Shift 上屏所选单字的**同时把第 1 候选词的第二个字也带上屏**；数字键 2/3 无此现象。
+
+### 20.2 根因与修法（详见 `docs/adr/0018-*.md` 与 `output/findings.md` §A.8）
+
+| # | 根因 | 修法 | 文件 |
+|---|---|---|---|
+| 1a | `onPhrases` 的 `WM_LBUTTONUP` workaround 无条件 `Hide()`，是全仓唯一未守卫的生产 `Hide()` | 加 `!AlwaysShowMode()` 守卫（守卫放调用点，`Hide()` 本体保持无条件 —— ADR 0013 D7） | `WeaselServer/WeaselServerApp.cpp` |
+| 1b | 常驻态 idle `kAlphaFactorIdle=51`(20%) × `ApplyAlphaGradient()` 的 140→82 ⇒ 有效 6-11%，打字时淡到看不见（全程无 Hide） | 抬到 153(60%)，fade tick 注释同步 | `include/QuickPanelAlpha.h:41` |
+| 2 | `ShiftUp()` 无条件 `commit_composition()`（ADR 0012）；`Context::Commit()` 提交**整个** composition ⇒ 部分选词连带第 1 候选词次字 | 纯函数 `ShouldCommitAfterSelect(ctx_ok, menu.num_candidates)`：整词才 flush，镜像数字键 `SelectCandidate()` | `include/ShiftStateMachine.h:66` + `RimeWithWeasel/RimeWithWeasel.cpp:1896-1906` |
+
+### 20.3 门禁（本机 Win32/Release 复跑）
+
+```
+SOLUTION_EXIT=0 / TESTPROJ_EXIT=0
+Result: 49 PASS / 0 FAIL      # 原 44 + Test #22 五条
+MAPPER-SUMMARY|failures=0  RESULT|PASS
+```
+
+### 20.4 本轮踩坑（务必记住，别重演）
+
+- **路径与断言文本不能照抄上一轮 checkpoint**：`WeaselUI/QuickPanelDialog.cpp` **不存在**，
+  真实路径 `WeaselServer/QuickPanelDialog.cpp`；测试断言用**无限定名** `ApplyShiftSideSwap(...)`。
+  照抄导致 4 处 edit 报「Could not find the exact text」——实际是**那些修复在压缩前已落地**，
+  旧锚点早被替换掉了。唯一成功的那次往 `ShiftStateMachine.h` **追加了重复定义**，
+  事后按行号删掉才恢复。**判据：edit 失败先 `git diff --numstat` 看该文件是否已含改动，
+  再决定是补写还是撤销。**
+- `SetLayeredWindowAttributes(LWA_ALPHA)` / `ApplyWindowAlpha` / `IsAlphaCapable` 这套旧 checkpoint
+  描述**全部不成立**（v0.19.0.10 起弃用），真实机制是 `WS_EX_LAYERED + UpdateLayeredWindow(ULW_ALPHA)`
+  + `ApplyAlphaGradient()` 逐像素，缩放靠 `s_alphaFactor` / `fluxing::StepAlpha`。
+
+### 20.5 未闭合（下一阶段）
+
+- **T033 装机复验**：面板常驻（打字时 / 点「词库」后均在，idle 为可辨浅态）、
+  Shift 部分选词只上屏所选单字；`Alt+,` / ESC 仍能收起。
+- 64 位换装未闭环：`weaselx64.dll` 与 `weaselx64.1.1.0.0.dll` SHA256 一致 + 64 位 CLSID 指向版本化件，
+  用户仍未回报核验结果。
+- 若装机后 1b 仍被判「消失」，下一步取证应在 `Hide()`/`Show()` 加临时日志抓调用栈，
+  而不是继续调 alpha 常数。
+

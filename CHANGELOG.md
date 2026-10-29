@@ -1,6 +1,20 @@
 ## [Unreleased]
 
 ### 主要更新
+- **快捷面板「常驻」态不再被点没**（`WeaselServer/WeaselServerApp.cpp`，spec 087 / ADR 0018 D1）：
+  「词库」按钮的 `WM_LBUTTONUP` workaround（v0.19.0.39 为路由键盘事件的 `Hide()`）是全仓唯一未守卫的
+  生产 `Hide()` 调用点，勾了常驻仍会一点击就收起；现补 `!AlwaysShowMode()` 前置条件，
+  `Alt+,` / ESC 的明确收起手势与非常驻态行为**逐字节不变**。
+- **常驻态 idle 透明度地板 20% → 60%**（`include/QuickPanelAlpha.h`，spec 087 / ADR 0018 D2）：
+  面板是 `UpdateLayeredWindow` 逐像素 alpha，100ms 轮询器在光标离开面板时 park 到 `kAlphaFactorIdle=51`，
+  与 `ApplyAlphaGradient()` 已压到的 140→82 相乘后有效 alpha 只剩约 6-11% ⇒ 打字时淡到看不见、
+  被读作「消失」（全程无 `Hide()`）。现抬到 153（60%），仍可辨地退在 hover 态之后。
+- **裸 Shift 选词不再连带上屏**（`RimeWithWeasel/RimeWithWeasel.cpp` + `include/ShiftStateMachine.h`，
+  spec 087 / ADR 0018 D3）：两字以上双拼中第 1 候选为词、第 2/3 候选为单字时，Shift 会在上屏所选单字的
+  **同时把第 1 候选词的次字一并带出**——根因是 `ShiftUp()` 沿用 ADR 0012 无条件 `commit_composition()`，
+  而 `Context::Commit()` 提交整个 open composition。现按「选词后是否还剩候选」判定：
+  整词才 flush，部分选词与数字键 2/3 一致（只上屏所选字、剩余音节继续出候选）；
+  读不到 context 时保守 flush，防 ADR 0012 整词场景回归。回归断言 `Test #22`（5 条）。
 
 - **裸 Shift 的左右方向改按物理扫描码判定**：物理**左** Shift 上屏**第 2** 个候选、物理**右** Shift
   上屏**第 3** 个（原来左右相反）。根因**不在代码链路** —— 位域布局、键名映射、前端判定、

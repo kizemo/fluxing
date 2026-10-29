@@ -97,6 +97,8 @@
 | C7 | 死绑定基线**清零**（4 → 0）——空基线 = 最严阈值，任何死绑定直接让构建变红 | ✅ | `known-dead-bindings.txt`；5 场景负对照 M0–M4 |
 | C8 | 裸 Shift 切中英文（**上下文消歧**：候选窗没开 ⇒ 切中英；候选窗开着 ⇒ 仍选第 2/3 候选） | ✅ | ADR 0010 / spec 082；0.21.0.9；`TestShiftIPCStateMachine` 28 PASS / 0 FAIL |
 | C9 | 裸 Shift 的 3 个缺陷修复：**候选窗开着时真正上屏第 2/3 候选**、**跨会话隔离**（A 切 A、B 不动）、**语言栏中/英图标随模式切换**；另版本号 4 段改 3 段 | ✅ | ADR 0012；1.0.0；`TestShiftIPCStateMachine` 34 PASS / 0 FAIL；`TestWeaselIPC /verify-shift-body` PASS；部署产物门禁 `bindings=39\|reachable=39\|dead=0` |
+| C10 | 快捷面板「常驻」两处真机缺陷修复：`onPhrases` 鼠标抬起的 `Hide→Show→BringToTop` workaround 加常驻守卫；常驻态 idle 淡显 20%→60%（`kAlphaFactorIdle` 51→153，修「淡到看不见被当成消失」） | ✅ | ADR 0018 D1/D2；spec 087 findings §A.8；待装机复验 T032 |
+| C11 | 裸 Shift 选词 flush 判据改为按结果分流（`ShouldCommitAfterSelect`）：部分选词（词中取字）**不再** `commit_composition`，镜像数字键语义——只上屏所选单字、剩余音节继续出候选，修 ADR 0012 无条件 flush 的连带上屏缺陷 | ✅ | ADR 0018 D3；`TestShiftIPCStateMachine` Test #22 五条；49 PASS / 0 FAIL；待装机复验 T033 |
 
 ### D. 候选窗 UI 与组件库
 
@@ -180,7 +182,7 @@
 | P-D2 | Fluent UI Token 收敛 | 🟡 | 3/41 tasks | 主体未做 | spec 040 |
 | P-E1 | QuickPanel v4 macOS 风格 | 🟡 | 7/10 tasks | 收尾未做 | spec 049 |
 | P-E2 | QuickPanel v3-rev3 重新启用 | 🟡 | 设计+部分 | 未收口 | spec 070（0/25） |
-| P-E3 | QuickPanel 长显模式 | 🟡 | spec 084 + ADR 0013 已实现（菜单常驻 + 20% 淡显 / 悬停变清晰） | 待真机验收（T013） | spec 084 / ADR 0013 |
+| P-E3 | QuickPanel 长显模式 | 🟡 | spec 084 + ADR 0013 已实现（菜单常驻 + 淡显 / 悬停变清晰）；真机反馈两处缺陷已由 ADR 0018 修复（onPhrases 收起守卫 + 常驻态 idle 20%→60%） | 待装机复验（T032） | spec 084 / ADR 0013 / ADR 0018 |
 | P-G1 | 常用短语 UI 打磨 | 🟡 | 独立进程 + 过滤可用 | UI 细节未收口 | spec 042-phrases-ui / 043 |
 | P-H1 | yaml 设置 UI **剩余 3 页** | 🟡 | 第 1 页（快捷键）ship | 样式 / 方案 / 用户词典 3 页未做 | spec 007；PRD F3 |
 

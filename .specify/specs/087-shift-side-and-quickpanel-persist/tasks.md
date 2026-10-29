@@ -68,3 +68,20 @@
   —— `TestWeaselIPC` 因**用户已安装的** `WeaselServer.exe`（PID 32304）占用命名管道而
   自带保护拒绝运行（ADR 0012），与本次改动无关（ADR 0017 D4 线缆不变）。
   ⚠️ **沙箱权威门禁仍跑不起来**（T019 同款）⇒ 本轮**没有产物级门禁数字**，不编造。
+
+## 门禁结果 · spec 087 A.8 两个真机缺陷修复（2026-10-29，ADR 0018）
+
+> 本机 Win32 / Release。判 CI 终态一律 `gh api .../actions/runs/<id>/jobs`（`run view --json jobs` 是滞后快照）。
+
+| 步骤 | 命令 | 结果 |
+|---|---|---|
+| 整解 | `msbuild weasel.sln /p:Configuration=Release /p:Platform=Win32 /m` | `SOLUTION_EXIT=0` |
+| 测试工程 | `msbuild test/TestShiftIPCStateMachine/...vcxproj` | `TESTPROJ_EXIT=0` |
+| 判定 | `Release/TestShiftIPCStateMachine.exe` | `Result: 49 PASS / 0 FAIL`（原 44 + Test #22 五条） |
+| 判定 | `Release/TestHotkeyBindings.exe --selfcheck-mapper` | `failures=0` / `RESULT\|PASS` |
+
+- [x] T030 常驻态「点击」收起漏网点（`onPhrases` `WM_LBUTTONUP`）加 `AlwaysShowMode()` 守卫 —— ADR 0018 D1
+- [x] T031 常驻态 idle alpha 地板 51(20%) → 153(60%) —— ADR 0018 D2（修「有输入动作后消失」观感）
+- [x] T032 裸 Shift 部分选词不再 flush 整个 composition —— ADR 0018 D3 + `Test #22`（R2）
+- [ ] T033 装机复验 T030/T031/T032（面板常驻 + 60% 浅态 + Shift 只上屏所选单字）—— **须打包 exe 交用户**
+
