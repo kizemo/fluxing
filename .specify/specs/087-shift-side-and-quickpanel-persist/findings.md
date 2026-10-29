@@ -88,6 +88,44 @@
 
 两种情况的修复形态不同，因此必须在改码前把这条事实取到手（constitution R1）。
 
+### A.7 闭合：链路上每一环都对 ⇒ 反转来自宿主交给 TSF 的 (vkey, 扫描码) 这一对输入本身
+
+**2026-10-29 本轮把 A.6 的那两个输入本身也查完了。** 结论：**链路上每一环都是对的。**
+
+| 环节 | 位置 | 结论 |
+|---|---|---|
+| 位域布局 | `include/KeyEvent.h:3-15` | 全部位域基类型都是 `UINT` ⇒ 布局 = Windows lParam（bit16-23 = 扫描码、bit31 = key up）；旧件与新件**逐字相同** |
+| 键名映射 | `include/KeyNameMapper.h:391-396`、`:551-554` | `VK_SHIFT` → 扫描码 0x36 为右、其余为左；`VK_LSHIFT` → 左；`VK_RSHIFT` → 右。**2012 年至今每个历史版本都没有写反** |
+| 前端判定 | `WeaselTSF/KeyEventSink.cpp:44-58` | `isLeft = (ke.keycode == ibus::Shift_L)`；旧 64 位件的源码 `d77db65` 与 HEAD **逐字相同** ⇒ 旧件被排除 |
+| 客户端编码 | `WeaselIPC/WeaselClientImpl.cpp:96-110` | `EncodeShiftIsLeft(is_left) = is_left ? 0 : 1`，自 08-15 起未变 |
+| 服务端解码 | `WeaselIPCServer/WeaselServerImpl.cpp:406-437` | `DecodeShiftIsLeft(wParam) = (wParam & 1) == 0`；部署件与 `output\Win32\WeaselServer.exe` **逐字节相同** |
+| 状态机 → 选词 | `RimeWithWeasel/RimeWithWeasel.cpp:1812-1822`、`:1869-1872` | `s.lastIsLeft = is_left`；`idx = s.lastIsLeft ? 1 : 2` → `select_candidate(idx)`（0-based ⇒ 左 = 第 2、右 = 第 3） |
+
+**运行时探针**（`tmp/shiftprobe/shiftprobe.cpp`，直连运行中的服务器管道）证明接收侧**完全正确**：
+`ShiftDown(bit0=0)` → 第 2 个候选、`ShiftDown(bit0=1)` → 第 3 个候选 ⇒ **发送侧送反**。
+
+**已排除的假设**（逐条有据）：
+
+- 旧 64 位前端被占用 —— `git diff d77db65 HEAD -- WeaselTSF/KeyEventSink.cpp` 的 Shift 相关 hunk **为空**；
+- 旧头文件 —— `git diff d77db65 HEAD -- include/KeyEvent.h` 的差异**仅是注释**；
+- 位域布局错位 —— 见上表；
+- 映射表写反 —— 见上表（逐个历史 revision 核对过，从 2012 年 `cae1471` 起）；
+- 服务端解码未部署 —— 部署件与 `output\Win32\WeaselServer.exe` 逐字节相同；
+- 旧进程抢占 / 管道参数错位 —— 运行时探针直连管道复现，接收侧正确；
+- OS Scancode Map —— `HKLM\SYSTEM\CurrentControlSet\Control\Keyboard Layout` **无** `Scancode Map`；
+- 注入实验 —— 注入扫描码 `0x2A` 时低层钩子看到 `vk = VK_LSHIFT`（**未反**）；扫描码 `0x36` + `KEYEVENTF_EXTENDEDKEY` **未翻译出虚拟键**（`vk=0x00`）⇒ 右 Shift 的注入路径**未补齐**（不影响结论，只影响探针完整性）。
+
+**运行日志取不到值**：`DLOG(INFO)` 在 Release 构建里被编译掉，
+`%TEMP%\rime.weasel\*.INFO.*.log`（43,154 B，PID 32304 = 用户 10-29 复测会话）里**没有任何 Shift 行**
+（全文 2,417 行）⇒ 无法从日志回放运行期的左右值。
+
+⇒ **结论**：反转只能来自**宿主交给 TSF 的 (vkey, 扫描码) 这一对输入本身**
+（应用层交换，或更下面的驱动层交换）。软件**无法分辨驱动层的交换** ⇒ 必须同时留两条杠杆：
+**扫描码优先**（修应用层交换）+ **用户可配置的左右互换开关**（修驱动层交换）。
+
+**A.6 的事实仍未取得**（用户尚未跑 `shiftside.exe`），但它**不再阻塞落地**：
+两种形态**合并**实施（ADR 0017 D1 + D2），缺省行为不变。
+
 ---
 
 ## B. 快速面板「常驻」勾选后仍消失

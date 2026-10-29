@@ -1089,3 +1089,82 @@ spec 087 tasks T015 / T016 未勾）。
 - [ ] **CapsLock**：所有选候选 / 翻页 / 切中英 / 切标点 / 切简繁的操作，
       **在 CapsLock 关闭态**执行（§3.1 相关条目口径已作废）。
 
+
+## 19. 裸 Shift 左右方向：根因闭合 + 修复落地（2026-10-29 第二轮）
+
+### 19.1 一句话
+
+裸 Shift 左右颠倒的根因**不在代码链路** —— 链路上每一环都逐环证明是对的；
+反转来自**宿主交给 TSF 的 (虚拟键, 扫描码)** 这一对输入本身。
+修法落地：**前端扫描码优先 + 服务端可配置「左右互换」开关**，**默认行为完全不变**。
+
+### 19.2 根因闭合（spec 087 A.7）
+
+| 环节 | 位置 | 结论 |
+|---|---|---|
+| 位域布局 | `include/KeyEvent.h:3-15` | 全部位域基类型都是 `UINT` ⇒ 布局 = Windows lParam（bit16-23 = 扫描码、bit31 = key up）；旧件与新件逐字相同 |
+| 键名映射 | `include/KeyNameMapper.h:391-396`、`:551-554` | 2012 年至今每个历史版本都**没有写反** |
+| 前端判定 | `WeaselTSF/KeyEventSink.cpp:44-58` | 旧 64 位件（源码 `d77db65`）与 HEAD **逐字相同** ⇒ 旧件被排除 |
+| 客户端编码 | `WeaselIPC/WeaselClientImpl.cpp:96-110` | `EncodeShiftIsLeft(is_left) = is_left ? 0 : 1` |
+| 服务端解码 | `WeaselIPCServer/WeaselServerImpl.cpp:406-437` | `DecodeShiftIsLeft(wParam) = (wParam & 1) == 0`；部署件与 `output\Win32\WeaselServer.exe` **逐字节相同** |
+| 状态机 → 选词 | `RimeWithWeasel/RimeWithWeasel.cpp:1812-1822`、`:1869-1872` | `s.lastIsLeft = is_left`；`idx = s.lastIsLeft ? 1 : 2` → `select_candidate(idx)`（0-based ⇒ 左 = 第 2、右 = 第 3） |
+
+**运行时探针**（直连运行中的服务端管道）证明**接收侧完全正确** ⇒ **发送侧送反**。
+
+**已排除**：旧 64 位前端被占用、旧头文件、位域布局错位、映射表写反、服务端解码未部署、
+旧进程抢占 / 管道参数错位、OS Scancode Map、注入实验（scan 0x2A 未反）。
+**取不到值**：`DLOG(INFO)` 在 Release 构建被编译掉，`%TEMP%\rime.weasel\*.INFO.*.log`（43,154 B）里 2,417 行**无任何 Shift 行**。
+
+### 19.3 修复形态（ADR 0017）
+
+- **D1 前端扫描码优先**：`TranslateKeycode` 把 `VK_SHIFT` / `VK_LSHIFT` / `VK_RSHIFT` 合并成单一分支，
+  扫描码 0x2A→左、0x36→右；虚拟键只作兜底（`VK_RSHIFT`→右、`VK_LSHIFT`→左、泛键 `VK_SHIFT`→左）。
+- **D2 服务端可配置互换开关**：`weasel.yaml` 的 `[global settings]` 新增 `shift_left_right_swap`（默认 `false`），
+  判定走**纯函数** `fluxing::ApplyShiftSideSwap(is_left, swap)`，在 `ShiftDown` 落进 `s.lastIsLeft` 之前施加。
+- **D3 开关放服务端**：前端无状态 ⇒ 换开关**不必重装前端**。
+- **D4 线缆不变**：不新增 IPC 命令、不改 `include/WeaselIPCData.h` ⇒ **不触发四边同步**。
+- **D5 默认不改变任何行为**：D1 只在「虚拟键与扫描码互相矛盾」时才与旧行为不同。
+
+### 19.4 实际改动（文件清单）
+
+| 文件 | 改动 |
+|---|---|
+| `include/KeyNameMapper.h` | `TranslateKeycode` 合并三个 Shift 虚拟键 → 扫描码优先（D1） |
+| `include/ShiftStateMachine.h` | 新增纯函数 `fluxing::ApplyShiftSideSwap`（D2） |
+| `include/RimeWithWeasel.h` | 新增成员 `m_shift_left_right_swap` |
+| `RimeWithWeasel/RimeWithWeasel.cpp` | 构造缺默 `false`；yaml 读取块新增 `shift_left_right_swap`；`ShiftDown` 施加互换（D2/D3） |
+| `output/data/weasel.yaml` | `[global settings]` 新增 `shift_left_right_swap: false`（带中文注释） |
+| `test/TestShiftIPCStateMachine/TestShiftIPCStateMachine.cpp` | 新增 `Test_ShiftSideSwap`（4 条真值断言） |
+| `test/TestHotkeyBindings/TestHotkeyBindings.cpp` | `RunMapperSelfCheck()` 新增 3b 段 6 条 Shift 侧映射断言 |
+| `docs/adr/0017-shift-side-scan-code-first-and-swap-switch.md` | 新建（Proposed） |
+| `docs/adr/0016-quickpanel-focusout-guard-and-x64-swap.md` | D7 补「已被 ADR 0017 接替」指向（原文保留作决策历史） |
+| `.specify/specs/087-shift-side-and-quickpanel-persist/findings.md` | 新增 A.7（根因闭合） |
+| `.specify/specs/087-shift-side-and-quickpanel-persist/tasks.md` | T012 落地；新增 T023–T029；状态更新 |
+| `CHANGELOG.md` / `Fluxing-二次开发内容清单.md` | 用户可见条目 + 清单条目 |
+
+### 19.5 门禁数字
+
+- Win32 整解：`msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32` **exit 0**
+- TSF x64：`msbuild WeaselTSF\WeaselTSF.vcxproj /p:Platform=x64` **exit 0**
+- `TestShiftIPCStateMachine`：**44 PASS / 0 FAIL**（新增 4 条 `Test #21` 全绿）
+- `TestHotkeyBindings --selfcheck-mapper`：`MAPPER-SUMMARY|failures=0` / `RESULT|PASS`（新增 6 条 Shift 侧断言全绿）
+- 仓库全套件 `scripts\run-tests.bat`：**除 `TestWeaselIPC` 外全部通过**。
+  `TestWeaselIPC` **未跑起来** —— 本机**已安装的** `D:\Program Files\fluxing\weasel\WeaselServer.exe`
+  （PID 32304）正占着命名管道，测试自带保护直接拒绝运行（ADR 0012）。
+  与本次改动**无关**（ADR 0017 D4 线缆不变）；要补这一项需先退出 Fluxing 托盘程序。
+- ⚠️ **沙箱权威门禁仍跑不起来**（T019 同款）⇒ 本轮**没有产物级门禁数字**，不编造。
+
+### 19.6 未闭合项
+
+1. **物理层事实**（T011）：`tmp\shiftprobe\shiftside.exe` 仍待跑（30 秒，左右 Shift 各按一次）⇒
+   只影响「要不要建议用户打开 `shift_left_right_swap`」，**不再阻塞代码落地**。
+2. **真机验收**（T029）：CapsLock 关闭态下左 Shift 应上屏**第 2** 个候选、右 Shift **第 3** 个；
+   若仍相反，在 `%APPDATA%\Rime\weasel.yaml` 加 `shift_left_right_swap: true` 后重测。
+3. **64 位换装**（T016）：仍未闭环 —— 64 位 CLSID 仍指向未版本化旧件。
+4. **面板常驻**（T015）：真机验收待做。
+5. **弹出菜单勾选标记**（ADR 0015 D7 / ADR 0016 D9）：需扩协议，留后续条目。
+
+### 19.7 下一步
+
+- 提交本轮改动（Conventional Commits + 模块 scope）→ 推 `kizemo/Fluxing` → 判读 CI（用 `gh api …/runs/<id>/jobs`）。
+- 用户侧三件事见 §18.10 末尾（跑 `shiftside.exe` / 装新 1.1.0 复测 / CapsLock 关闭态测）。
