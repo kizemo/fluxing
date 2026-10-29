@@ -233,11 +233,11 @@ int main() {
           "T12b: ScaleAlpha(80, 255) == 80 (满值系数逐像素不变)");
     Check(fluxing::ScaleAlpha(255, fluxing::kAlphaFactorFull) == 255,
           "T12c: ScaleAlpha(255, 255) == 255 (彩色像素不透明度不变)");
-    // T12d: 20% 系数(长显常态)
-    Check(fluxing::ScaleAlpha(255, fluxing::kAlphaFactorIdle) == 51,
-          "T12d: ScaleAlpha(255, 51) == 51 (20% 系数)");
-    Check(fluxing::ScaleAlpha(220, fluxing::kAlphaFactorIdle) == 44,
-          "T12e: ScaleAlpha(220, 51) == 44 (渐变顶行按 20% 缩放)");
+    // T12d: 60% 系数(长显常态, ADR 0018 D2 把 idle 由 51 提到 153)
+    Check(fluxing::ScaleAlpha(255, fluxing::kAlphaFactorIdle) == 153,
+          "T12d: ScaleAlpha(255, 153) == 153 (60% 系数)");
+    Check(fluxing::ScaleAlpha(220, fluxing::kAlphaFactorIdle) == 132,
+          "T12e: ScaleAlpha(220, 153) == 132 (渐变顶行按 60% 缩放)");
     // T12f: 渐变步进不越过目标(ADR 0013 D3)
     Check(fluxing::StepAlpha(255, 51, fluxing::kAlphaFadeStep) == 231,
           "T12f: StepAlpha(255 -> 51, 24) == 231 (一次退 24)");
