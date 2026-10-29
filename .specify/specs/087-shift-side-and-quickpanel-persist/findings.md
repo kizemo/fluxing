@@ -233,4 +233,27 @@ MAPPER-SUMMARY|failures=0  RESULT|PASS   # TestHotkeyBindings --selfcheck-mapper
   idle 应是可辨的浅态（约 60%）而非近似消失；`Alt+,` / ESC 仍能收起。
 - 缺陷 2 需真机复测：两字以上双拼 Shift 选第 2/3 单字应只上屏该单字，剩余音节继续出候选。
 - 64 位换装仍未闭环（64 位 CLSID `{A3F4CDED-...}` 指向未版本化旧件，用户未回报核验结果）。
+## A.9 v1.1.1 真机反馈：常驻态重启后丢失 + ESC 不应收起面板（2026-10-29，ADR 0019，v1.1.2 已修）
 
+### 取证
+
+- 生产 Hide() 路径（auto-hide 轮询 grace 2000ms + outsideMs>=1500ms、OnTimer id=1、OnKillFocus、WM_ACTIVATEAPP、FocusOut IPC）全部带 `!AlwaysShowMode()` 守卫，无一失效；「几秒后消失」时序 = **瞬时模式设计行为** => 用户机常驻态实际为 false。
+- 根因：`s_mode` 纯内存态、全仓无持久化链路（spec 084 FR-007 原为刻意设计）；1.1.1 装包必须重启 WeaselServer => 勾选清零。
+- 唯一无守卫的手势路径：`OnKeyDown VK_ESCAPE -> Hide()`。
+
+### 修复（v1.1.2，ADR 0019）
+
+- 常驻勾选持久化 `%APPDATA%\Rime\quickpanel.state`（单行 ASCII）；`SetAlwaysShowMode` 仅模式变化时落盘，写完回读自证（空则删文件）。`WeaselServerApp::Run()` 启动时 `RestoreAlwaysShowMode()`：只恢复 `s_mode`，**不 Show、不回写盘**。
+- ESC 吞键（`return 0`）不再收起面板；显隐只由 `Alt+,` 控制。
+- 推翻 spec 084 FR-007 与 spec 087 FR-087-B、修订 ADR 0013 D7 的 Esc 分支；历史 spec 正文不改写，以本 findings 收口。
+
+### 门禁（2026-10-29，Win32/Release，1.1.2 升版后复跑）
+
+- MSBuild 全量 exit 0；`WeaselServer.exe` ProductVersion=1.1.2.0。
+- TestQuickPanelDialog **34/34 PASS**（新增 T13a-h / T14a-f；测试落点重定向 `%TEMP%\fluxing_qp_state_test.state`）。
+- TestShiftIPCStateMachine 49 PASS / 0 FAIL；TestHotkeyBindings --selfcheck-mapper RESULT|PASS。
+
+### 未闭合
+
+- 装机复验（1.1.2）：勾选常驻后**重启机器/服务勾选仍在**；面板调出后不再几秒自动消失；**ESC 不收起**，`Alt+,` 仍可显隐。
+- A.8 两项已由用户 2026-10-29 验收闭合：「Shift 问题已经解决」；「输入动作」支实际根因为本条 A.9（常驻态被重启清零），非守卫失效。

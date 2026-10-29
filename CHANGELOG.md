@@ -222,6 +222,22 @@
   Windows 资源版本号）；且本 fork 的 CI 发布步骤被
   `github.repository == 'rime/weasel'` 门控 ⇒ `release/` 不会自动对外发版。
 
+## [1.1.2] - 2026-10-29
+
+### fix(WeaselServer): 快捷面板「常驻」态跨重启保持；ESC 不再收起面板（ADR 0019，1.1.1 真机反馈）
+
+- **常驻勾选不再被装包重启清零**：此前「快速面板常驻」勾选只存在于 WeaselServer 进程内存，
+  装包必须重启服务 ⇒ 勾选归零，面板退回「瞬时模式」（鼠标离开约 1.5-2 秒自动收起），
+  被读作「调出后经过几秒钟自动消失」。现勾选态持久化到 `%APPDATA%\Rime\quickpanel.state`
+  （单行 ASCII 键值），服务启动时恢复，且**不会自动弹出面板**（保留 spec 055 不变量）。
+- **ESC 不再隐藏快捷设置栏**：`OnKeyDown VK_ESCAPE` 现只吞键、不再 `Hide()`；
+  面板显隐只由 `Alt+,` 快捷键控制（用户 1.1.1 验收口径）。本条**推翻** spec 084 FR-007、
+  spec 087 FR-087-B 与 ADR 0013 D7 的 Esc 分支，见
+  `docs/adr/0019-quickpanel-always-show-persist-and-esc-no-hide.md`。
+- 回归测试：`TestQuickPanelDialog` 新增 T13a-T13h（持久化往返 / CRLF 容忍 / 坏文件兜底 /
+  恢复不自动 Show / 落盘内容逐字节断言）与 T14a-T14f（ESC 后面板仍可见、`Hide()` 仍可收起），
+  **34/34 全过**；测试落点经 `SetStatePath` 重定向到 `%TEMP%`，不污染真实勾选态。
+
 ## [1.0.0] - 2026-10-28
 
 ### 主要更新
