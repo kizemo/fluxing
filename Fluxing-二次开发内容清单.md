@@ -334,6 +334,62 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
   - **结论**：反馈 1 / 2 是**部署侧问题，不是代码缺陷**（spec 085 / ADR 0014 的修复
     已在包内的新件里）。⇒ **重启 Windows** 即完成换装；重启后复测，若仍失败再另立条目。
 
+### 4.1.8 T24 / T25 / T26 / T27 · 1.1.0 第二轮真机复测的收口条目（2026-10-29 部分修复，ADR 0016）
+
+- **T24 · 勾了「快速面板常驻」仍会随输入焦点切换消失**（用户反馈 A）
+  - **根因**：面板共有 **9 个收起发起点** —— 4 条**自动**路径**都在面板内部**
+    （`WeaselServer/QuickPanelDialog.cpp:682` / `:740` / `:1317` / `:1326`），逐条带
+    `AlwaysShowMode()` 守卫；5 条是**需要用户明确手势**的路径（ESC `:1334`、
+    `ToggleMode` 内 `:1453`、`WeaselServer/WeaselServerApp.cpp:387` / `:401` / `:421`）。
+    漏掉的是**第 4 条自动路径**：由输入法前端上报「输入焦点离开」
+    （`WeaselIPC/WeaselClientImpl.cpp:178` → `WeaselIPCServer/WeaselServerImpl.cpp:272` / `:277` / `:474`
+    → `RimeWithWeasel/RimeWithWeasel.cpp`），在那里**裸调** `QuickPanelDialog::Hide()`
+    ⇒ **绕开了面板内部的全部守卫**。
+  - **修法**：守卫加在**调用点**（`RimeWithWeasel/RimeWithWeasel.cpp:498-499`），
+    **不动** `Hide()` 本体（否则 5 条手势路径在长显态下全部失效，ADR 0016 D1 / D2）。
+  - **验证**：静态复核守卫位置与 8 条未改路径；**真机验收待做**。
+- **T25 · 64 位前端换装链路四环缺陷**（用户反馈 B）
+  - **根因**：换装是**四环相扣**的链 —— ① 版本化安装件的拷贝 → ② 开机补换任务的登记
+    → ③ 开机时的拷贝执行 → ④ 补换脚本的**拷贝源**解析。四环各有一个缺陷：拷贝**不覆盖**已存在的同名目标；
+    `schtasks /TR` **引号断裂** ⇒ 任务**根本没被创建**（用户机上两个任务均不存在）；
+    `xcopy … "dst*"` 对**单个文件**非法。
+  - **修法（四环已全部改到位）**：
+    ① 版本化件落盘 —— `output/install.nsi:644-646`（32 位）/ `:711-713`（64 位）改
+    `SetOverwrite on` + `File /nonfatal /oname=weasel.<ver>.<build>.dll "weasel.dll"`；
+    **NSIS 唯一改名语法是 `File /oname=<新名> <源>`**（`File "src" "dst"` 会被 `makensis`
+    当成两个源文件并报 `no files found` 中止 —— 本轮打包实测钉死）；写前 `Delete`
+    陈旧版本化件；`/nonfatal` 把写失败转成错误位。
+    ② 探测语义 —— **不再用错误位判断「文件是否被占用」**：`SetOverwrite try` 命中被占用目标时
+    **静默跳过且不置错误位**（本轮实测）⇒ 原代码直接跳走、版本化分支根本没执行到；
+    改用 `Rename` 成败判断。
+    ③ 补换任务 —— `:1077-1085` / `:1103-1110` 脚本落 `$WINDIR\Temp`（**无空格**）
+    ⇒ `schtasks /TR` **不带内层引号**；拷贝改 `copy /Y … >NUL`（`xcopy … "dst*"` 对单文件非法）。
+    ④ 拷贝源 —— 批处理里的 `"$TEMP\fluxing-staged\…"` 里的 `$TEMP` 是 **NSIS 变量**，
+    在 `FileWrite` 时**于安装期展开成安装用户的绝对路径**（不是 cmd 的 `%TEMP%`）
+    ⇒ 不再受开机时（SYSTEM）环境里的 `%TEMP%` 影响（ADR 0016 D6 / Q-087-1；
+    spec 087 tasks T008 已 `[x]`）。
+  - **验证**：整解 `weasel.sln` Release/Win32 与 `WeaselTSF.vcxproj` x64 均 exit 0；
+    `makensis /DFLUXING_VERSION=1.1.0 /DWEASEL_BUILD=0 output\install.nsi` exit 0；
+    **真机换装验收待做**（需重新装机 + 重启，比对 `weaselx64.dll` 与
+    `weaselx64.<ver>.<build>.dll` 的 SHA256 一致、且 64 位 CLSID 指向版本化件）。
+- **T26 · 裸 Shift 左右颠倒：事实还差一条**（用户反馈 C）
+  - **已排除**：通道极性、接收侧解码（**运行时探针证明正确**）、发送端判定逻辑、
+    消息路由、旧进程抢占、操作系统级扫描码重映射。
+  - **未闭合**：**操作系统把物理左 / 右 Shift 报成什么** —— 只能靠一次真实按键取到。
+  - **形态二选一**：OS 报对 ⇒ 改按**物理扫描码**（0x2A=左 / 0x36=右）判定；
+    OS 报反 ⇒ 软件无法分辨物理左右 ⇒ 只能提供「左右互换」用户开关
+    （ADR 0016 D7 / Q-087-2）。
+  - **工具已就位**：`tmp/shiftprobe/shiftside.cpp` + `shiftside.exe`
+    （`WH_KEYBOARD_LL` 钩子，一次按键出三列：物理位置 / 操作系统认知 / 前端复算）。
+- **T27 · 上一轮复测单口径错误（CapsLock）**（用户反馈 D）
+  - **定性**：英文模式下按 CapsLock 进入**大写英文输入**、不切回中文，是输入引擎的
+    **既定正确行为**（`librime/src/rime/ascii_composer.cc:126-166` + `engine.cc:99-122`，
+    `good_old_caps_lock: true` ⇒ `kRejected` 中断处理器链）⇒ **不是缺陷**。
+  - **真正的缺陷在复测单**：它让用户在 CapsLock **打开态**测选候选 / 翻页 / 切中英 /
+    切标点 / 切简繁，而那些状态下引擎**整条链不响应** ⇒ 测出来的「失效」是**测法**问题。
+  - **处置**：**不改码**；语义写进用户可见文档 + 复测单口径改为 **CapsLock 关闭态**
+    执行（ADR 0016 D8）。
+
 ### 4.2 规划中，未开工
 
 | 编号 | 内容 | 优先级 | 出处 | 备注 |
@@ -361,6 +417,10 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
 | T21 | **裸 Shift 上屏候选左右颠倒** | ✅ 已修复，待真机复验 | 线缆约定（`wParam bit0 = is_left`，0=L/1=R）在客户端与服务端**各写一份字面量**，客户端写对、**服务端读反** ⇒ 左 Shift 走右 Shift 分支（选第 3 个）。修法：编解码收进共享单元 `include/ShiftStateMachine.h` 的 `EncodeShiftIsLeft` / `DecodeShiftIsLeft`，两端各调一个（ADR 0015 D2）；回归测试**直接钉位值**（左=0、右=1、`Decode(0)==true`、`Decode(1)==false`）⇒ 连「两端一起错」也能证伪（D3）。详见 spec 086 §5.3 与 4.1.7 |
 | T22 | **输入法弹出菜单缺「快速面板常驻」** | ✅ 已修复，待真机复验 | **菜单有两份资源**：服务端托盘图标菜单（`WeaselServer/WeaselServer.rc`，spec 084 已加该项）与输入法前端弹出菜单（`WeaselTSF/WeaselTSF.rc`，简 / 繁 / 英三块，**没有该项**）；命令编号也只在服务端头文件里，共享头 `include/resource.h` 没有 ⇒ 前端连写都写不出来。修法：共享头补 `ID_QUICKPANEL_ALWAYS_SHOW 40019` + 前端三个弹出菜单各补一项，**不扩协议**（复用既有托盘命令通路，ADR 0015 D4–D6）。验证用**构建产物的 PE 资源级检查**，不只读源码。详见 spec 086 §5.3 与 4.1.7 |
 | T23 | **装机时 64 位前端 DLL 被占用未替换** | ⚠️ 待用户重启 | 用户反馈 1 / 2（CapsLock 打开后候选窗消失、快捷键全失效）的真因**不是代码缺陷**：装机时 `weaselx64.dll` 被 TSF 占用，装的是 versioned shim + `weaselx64.1.1.0.0.dll` + `weaselx64.dll.stage2` 标记 ⇒ **开机补换**机制正常，机器尚未重启 ⇒ 64 位进程仍加载前一天旧件（旧件里还带着锁存标记上报 ⇒ 引擎整链中断）。⇒ **重启 Windows 即完成换装**，重启后复测反馈 1 / 2；若仍失败再另立条目 |
+| T24 | **勾了「快速面板常驻」仍会随输入焦点切换消失** | ✅ 已修复，待真机复验 | 面板共有 **9 个收起发起点**：4 条自动路径**都在面板内部**且逐条带 `AlwaysShowMode()` 守卫（`WeaselServer/QuickPanelDialog.cpp:682` / `:740` / `:1317` / `:1326`），5 条是**需用户手势**的路径（ESC `:1334`、`ToggleMode` 内 `:1453`、`WeaselServer/WeaselServerApp.cpp:387` / `:401` / `:421`）。漏掉的是**第 4 条自动路径** —— 由输入法前端上报「输入焦点离开」，一路送到 `RimeWithWeasel/RimeWithWeasel.cpp` 后**裸调** `Hide()` ⇒ 绕开面板内部全部守卫。修法：守卫加在**调用点**（`RimeWithWeasel/RimeWithWeasel.cpp:498-499`），**不动** `Hide()` 本体（否则 5 条手势路径在长显态下全失效，ADR 0016 D1 / D2）。详见 spec 087 §5.3 与 4.1.8 |
+| T25 | **64 位前端换装链路四环缺陷** | ✅ 四环已全部改到位，真机换装验收待做 | 换装是**四环链**：① 版本化件拷贝（**不覆盖**已存在目标 ⇒ 永远停在上一版）② 开机补换任务登记（`schtasks /TR` **引号断裂** ⇒ 任务**根本没被创建**，用户机上两个任务都不存在）③ 补换动作内的拷贝（`xcopy … "dst*"` 对**单文件**非法）④ 补换脚本的**拷贝源**解析。修法：`output/install.nsi:644-646` / `:711-713` 改 `SetOverwrite on` + `File /nonfatal /oname=…`（NSIS **唯一**改名语法，`File "src" "dst"` 实测会被 `makensis` 当成两个源文件并中止）；写前 `Delete` 陈旧版本化件；**不再用错误位探测占用**（`SetOverwrite try` 静默跳过且不置错误位 —— 实测），改用 `Rename` 成败判断；`:1077-1085` / `:1103-1110` 脚本落 `$WINDIR\Temp`（**无空格**）⇒ `schtasks /TR` **不带内层引号**；拷贝改 `copy /Y … >NUL`；**拷贝源用 NSIS 的 `$TEMP` 在安装期展开成绝对路径** ⇒ 不再受开机时（SYSTEM）`%TEMP%` 影响。**四环均已改到位**（ADR 0016 D3–D6 / Q-087-1；spec 087 tasks T008 已 `[x]`），**真机换装验收待做** |
+| T26 | **裸 Shift 左右颠倒：事实还差一条** | 🔍 取证中，待现场按键 | 接收侧经**运行时探针**证明**完全正确**（bit0=0 → 第 2 个、bit0=1 → 第 3 个）；发送侧左右判定**只有两个输入**（虚拟键 + 物理扫描码，`include/KeyNameMapper.h:391-396`、`:551-554`）⇒ 唯一可能是**运行期拿到的左右与物理键不符**，而这条**只能靠一次真实按键**取到。形态二选一：OS 报对 ⇒ 改按**物理扫描码**（0x2A=左 / 0x36=右）判定；OS 报反 ⇒ 只能提供「左右互换」开关（ADR 0016 D7 / Q-087-2）。工具已就位：`tmp/shiftprobe/shiftside.exe`（`WH_KEYBOARD_LL` 钩子，一次按键出三列）。详见 spec 087 §5.3 与 4.1.8 |
+| T27 | **上一轮复测单口径错误（CapsLock）** | ✅ 已修正（文档口径） | 英文模式按 CapsLock 进入**大写英文输入**、不切回中文，是输入引擎的**既定正确行为**（`librime/src/rime/ascii_composer.cc:126-166` + `engine.cc:99-122`，`good_old_caps_lock: true` ⇒ `kRejected`）⇒ **不是缺陷**。真正的缺陷在**复测单**：让用户在 CapsLock **打开态**测选候选 / 翻页 / 切中英 / 切标点 / 切简繁，而那些状态下引擎**整条链不响应** ⇒ 测出来的「失效」是**测法**问题。处置：**不改码**，语义写进用户可见文档 + 口径改为 **CapsLock 关闭态**执行（ADR 0016 D8） |
 
 
 ---
@@ -448,7 +508,7 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
 
 ---
 
-## 10. 附录 B：spec 索引（66 份）
+## 10. 附录 B：spec 索引（70 份）
 
 > **注意**：tasks.md 的勾选框**不可信**。多份已 ship 的 spec（002 / 006 / 037 / 050 / 070 等）
 > 仍显示 `0/N`。**权威记录是 CHANGELOG**，本清单 §2–§4 以 CHANGELOG + 门禁数字为准。
@@ -456,7 +516,7 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
 | 状态 | 份数 | 代表 spec |
 |---|---|---|
 | 全部完成（DONE） | 5 | 008（候选字编辑）、077（Shift IPC 状态机）、079（编码修复）、080（自动弹面板）、082（裸 Shift 切中英） |
-| 部分完成（PART） | 12 | 001、003（构建）、004、005、010、011、036、049、051、075、078、081 |
+| 部分完成（PART） | 13 | 001、003（构建）、004、005、010、011、036、049、051、075、078、081、087（面板「常驻」守卫 / 64 位换装 / Shift 取证） |
 | 显示为未开工（OPEN） | 49 | 多数已 ship 但 tasks 未维护；真正未开工的是 010/011/050/052/070 等 |
 
 **真正的「设计已完成、代码未开始」**：spec 010（云同步）、spec 011（首启引导）、
@@ -473,12 +533,13 @@ spec 083（抓键 layout-aware 改造，ADR 0011 已定稿；M1 / M2 / M3 已落
 | [`CHANGELOG.md`](CHANGELOG.md) | 83 个版本节的权威发布记录 |
 | [`CONTEXT.md`](CONTEXT.md) | 领域词汇 + 17 条不变量 |
 | [`AGENTS.md`](AGENTS.md) | 操作手册（构建/测试/危险区/反模式） |
-| [`.specify/memory/lessons-learned.md`](.specify/memory/lessons-learned.md) | L01–L151 事故库 |
+| [`.specify/memory/lessons-learned.md`](.specify/memory/lessons-learned.md) | L01–L157 事故库 |
 | [`.specify/memory/project-knowledge.md`](.specify/memory/project-knowledge.md) | 部署路径/注册表/三层覆盖架构 |
-| [`docs/adr/`](docs/adr/) | 8 份架构决策记录（0011 为 `Proposed`、0012 为 `Accepted`） |
+| [`docs/adr/`](docs/adr/) | 11 份架构决策记录（0011 / 0016 为 `Proposed`） |
 | [`Rime-设置说明书-重点快捷键.md`](Rime-设置说明书-重点快捷键.md) | 用户可见快捷键手册（md + html） |
 
 ---
 
-*最后更新：2026-10-28。数据来源：`git diff --numstat master...Fluxing`（HEAD `ceff6b6`）、
-`CHANGELOG.md` 版本节统计、`.specify/specs/` 66 个 spec 目录（58 份带 tasks.md）的勾选统计、CI run `40632079796`。*
+*最后更新：2026-10-29。数据来源：`git diff --numstat master...Fluxing`（HEAD `c55abfa` + 本轮 docs 提交）、
+`CHANGELOG.md` 版本节统计、`.specify/specs/` 70 个 spec 目录（62 份带 tasks.md）的勾选统计、
+本轮 spec 087 / ADR 0016 的落地与未闭合项记录。*
