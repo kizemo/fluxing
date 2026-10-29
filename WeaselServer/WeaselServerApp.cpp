@@ -416,7 +416,14 @@ void WeaselServerApp::ShowQuickPanel() {
         // v0.19.0.39 (Phase F fix Bug 1): the button path hides the
         // QuickPanel first, so the keyboard events reach PhrasesDialog.
         // v0.19.0.52 (Phase K3 T010): out-of-process IPC.
-        if (QuickPanelDialog::ActiveHwnd() &&
+        // spec 087 / ADR 0018: the 2026-10-29 field report said the panel
+        // still vanishes on a click. This was the last un-guarded production
+        // Hide() in the tree (ADR 0016 had already guarded the FocusOut and
+        // poller paths), and clicking 词库 is exactly that click. The hide is
+        // a workaround for focus routing, so it only applies in transient
+        // mode; in always-show mode the panel must survive the click.
+        if (!QuickPanelDialog::AlwaysShowMode() &&
+            QuickPanelDialog::ActiveHwnd() &&
             IsWindowVisible(QuickPanelDialog::ActiveHwnd())) {
           QuickPanelDialog::Hide();
         }

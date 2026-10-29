@@ -282,6 +282,26 @@ void Test_ShiftSideSwap() {
          "Test #21: with the swap the right shift becomes the left one");
 }
 
+// Test #22 - ADR 0018 / spec 087 A.8: a bare-Shift selection of a *partial*
+// candidate (one character out of a multi-syllable shuangpin input) must not
+// flush the whole composition, otherwise the head candidate of the remaining
+// segment is committed next to the picked character. The signal that
+// separates the two cases is the post-selection candidate menu: empty means
+// the composition was consumed whole (ADR 0012 wants a flush), non-empty
+// means syllables are left over (numeric-key behaviour: keep composing).
+void Test_ShouldCommitAfterSelect() {
+  EXPECT(fluxing::ShouldCommitAfterSelect(false, 0),
+         "Test #22: unreadable context keeps the ADR 0012 flush");
+  EXPECT(fluxing::ShouldCommitAfterSelect(false, 3),
+         "Test #22: unreadable context flushes whatever the count claims");
+  EXPECT(fluxing::ShouldCommitAfterSelect(true, 0),
+         "Test #22: empty menu after select = whole word, flush");
+  EXPECT(!fluxing::ShouldCommitAfterSelect(true, 1),
+         "Test #22: one candidate left = partial pick, no flush");
+  EXPECT(!fluxing::ShouldCommitAfterSelect(true, 5),
+         "Test #22: an open menu = partial pick, no flush");
+}
+
 int main() {
   std::printf(
       "TestShiftIPCStateMachine (spec 077 §2.7.1 + ADR 0010 + ADR 0012)\n");
@@ -307,6 +327,7 @@ int main() {
   Test_AsciiScope_ExplicitControlFollowsYaml();
   Test_AsciiScope_DecisionTable();
   Test_ShiftSideSwap();
+  Test_ShouldCommitAfterSelect();
   std::printf("\nResult: %d PASS / %d FAIL\n", s_passed, s_failed);
   return s_failed == 0 ? 0 : 1;
 }

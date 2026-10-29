@@ -42,6 +42,34 @@ inline bool ApplyShiftSideSwap(bool is_left, bool swap) {
   return swap ? !is_left : is_left;
 }
 
+// spec 087 / ADR 0018: a bare-Shift selection may only flush the composition
+// when it consumed the whole of it.
+//
+// librime separates the two cases by the trailing segment (read-only
+// reference, P3 — Context::Select -> ConcreteEngine::OnSelect,
+// librime/src/rime/engine.cc:259-282). A *full-word* pick closes the
+// composition with a zero-length segment, which carries no menu
+// (Segmentation::Forward, librime/src/rime/segmentation.cc:114-120), so
+// nothing reaches the screen and commit_composition is needed — that is
+// ADR 0012. A *partial* pick (e.g. one character out of a two-syllable
+// shuangpin input) truncates the segment, tags it "partial"
+// (Segment::Close, segmentation.cc:17-24) and re-Composes the remaining
+// syllables into a fresh translated segment, so the menu is non-empty again.
+// Flushing there runs Context::Commit (context.cc:18-26), which commits the
+// whole open composition — the picked character *plus* the head candidate of
+// the remaining segment — which is the 2026-10-29 report "上屏单字的同時把
+// 第 1 候选词的第二个字也带上屏". Numeric-key selection never called
+// commit_composition and does not show the defect, so mirror it.
+//
+// When the post-selection context could not be read, keep the ADR 0012
+// behaviour (flush) so full-word commits do not regress.
+inline bool ShouldCommitAfterSelect(bool context_available,
+                                    int remaining_candidates) {
+  if (!context_available)
+    return true;
+  return remaining_candidates <= 0;
+}
+
 // Pure, dependency-free Shift state machine.
 // Extracted from WeaselServer / RimeWithWeaselHandler so that 11 unit tests
 // can drive it without IPC / Rime / GUI surfaces.

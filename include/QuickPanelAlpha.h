@@ -25,9 +25,20 @@
 
 namespace fluxing {
 
-// Opacity factors. 255 == 100% (no scaling), 51 == 20%.
+// Opacity factors. 255 == 100% (no scaling).
 constexpr int kAlphaFactorFull = 255;
-constexpr int kAlphaFactorIdle = 51;
+// ADR 0013 D3 set the idle factor to 51 (20%). That factor multiplies the
+// per-pixel alpha that ApplyAlphaGradient() already recessed (140 -> 82 down
+// the panel), so the idle surface landed at roughly 28 -> 16 of 255 -- about
+// 6-11% over the desktop. The 2026-10-29 field report "面板在有输入动作后
+// 仍然消失" (spec 087) is that value, not a Hide(): the 100ms poller parks
+// s_targetAlphaFactor at the idle factor whenever the cursor is outside the
+// panel, and while typing the cursor is by definition outside (it is over the
+// target application's edit field). Nothing hides the panel; it just becomes
+// too faint to see, and every Show() reuse starts from that stale value.
+// ADR 0018 raises the idle floor to 153 (60%): still visibly recessed against
+// the hover state, no longer mistaken for hidden.
+constexpr int kAlphaFactorIdle = 153;
 
 // Denominator of the opacity factor scale.
 constexpr int kAlphaScaleNum = 255;
@@ -77,10 +88,9 @@ inline int LerpAlpha(int from, int to, int t, int steps) {
   return from + (to - from) * t / steps;
 }
 
-// Fade step per 100ms timer tick. Walking 255 -> 51 takes 9 ticks (~0.9s),
-// walking 51 -> 255 takes 9 ticks as well (204 / 24 = 8.5 -> 9).
-// Fade step per 100ms timer tick. Walking 255 -> 51 takes 9 ticks (~0.9s),
-// walking 51 -> 255 takes 9 ticks as well (204 / 24 = 8.5 -> 9).
+// Fade step per 100ms timer tick. Walking 255 -> 153 takes 5 ticks (~0.5s)
+// after ADR 0018 raised the idle floor from 51 to 153 (102 / 24 = 4.25 -> 5);
+// the reverse walk is 5 ticks as well.
 constexpr int kAlphaFadeStep = 24;
 
 }  // namespace fluxing

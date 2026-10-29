@@ -1882,11 +1882,28 @@ void RimeWithWeaselHandler::ShiftUp(bool is_left,
     rime_api->select_candidate(to_session_id(ipc_id), idx);
     // ADR 0012: the selected candidate has to reach the screen. With
     // _auto_commit off, librime's Context::Select only forwards the segment
-    // (librime/src/rime/engine.cc:168-191), so the composition stays open and
-    // nothing is committed. commit_composition is idempotent: with
-    // _auto_commit on, Select already committed and cleared the composition,
-    // so this call returns false and changes nothing.
-    rime_api->commit_composition(to_session_id(ipc_id));
+    // (librime/src/rime/engine.cc:259-270), so a *full-word* pick leaves the
+    // composition finished-but-uncommitted and nothing is committed.
+    // commit_composition is idempotent: with _auto_commit on, Select already
+    // committed and cleared the composition, so this call returns false.
+    // spec 087 / ADR 0018: for a *partial* pick — a single character out of a
+    // multi-syllable shuangpin input — commit_composition instead flushes the
+    // whole context (librime context.cc:18-26: Context::Commit =
+    // commit_notifier + Clear), dragging the head candidate of the remaining
+    // segment onto the screen next to the picked character. Numeric-key
+    // selection (SelectCandidate(), which does not commit) has no such
+    // defect, so mirror it: flush only when no candidate menu remains.
+    bool flush = true;
+    RIME_STRUCT(RimeContext, post_ctx);
+    if (rime_api->get_context(to_session_id(ipc_id), &post_ctx)) {
+      flush = fluxing::ShouldCommitAfterSelect(true, post_ctx.menu.num_candidates);
+      rime_api->free_context(&post_ctx);
+    }
+    DLOG(INFO) << "ShiftUp select commit_flush=" << flush
+               << " ipc_id = " << ipc_id;
+    if (flush) {
+      rime_api->commit_composition(to_session_id(ipc_id));
+    }
     // ADR 0012: answer with a body. It carries the commit text (the selected
     // candidate) and the fresh status, so the client inserts the text and
     // updates the language bar. _Respond has to run before _UpdateUI, exactly
