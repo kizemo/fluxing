@@ -41,7 +41,7 @@ rem a fresh clone) still produced a 1.0.0 payload - the same hazard class as
 rem L145. Keep them in sync with the release line on every version bump.
 if not defined VERSION_MAJOR set VERSION_MAJOR=1
 if not defined VERSION_MINOR set VERSION_MINOR=1
-if not defined VERSION_PATCH set VERSION_PATCH=3
+if not defined VERSION_PATCH set VERSION_PATCH=4
 
 if not defined FLUXING_VERSION set FLUXING_VERSION=%VERSION_MAJOR%.%VERSION_MINOR%.%VERSION_PATCH%
 if not defined WEASEL_BUILD set WEASEL_BUILD=0
