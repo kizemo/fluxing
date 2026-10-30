@@ -427,6 +427,40 @@ spec 083 的 **M6（打包）** 已完成 —— 装包产出 + 载荷复验，�
   4. 面板可见时按 ESC 不收起、`Alt+,` 显隐正常；Shift 双击切英文、CapsLock **关闭态**下
      选候选 / 翻页 / 切中英回归确认。
 
+### 4.1.10 T035 · 输入法图标托盘「重启算法服务 / 程序文件夹」在 fork 下静默空操作（2026-10-29 已修复，ADR 0021）
+
+- **定性**：**代码缺陷**（fork 级），不是配置或用法问题。
+- **根因**（两层叠加）：
+  1. 前端读的是**上游的键 + 上游的值名** —— 32 位分支 `Software\WOW6432Node\Rime\Weasel`、
+     64 位分支 `Software\Fluxing\Weasel`，值名 `WeaselRoot`（`WeaselTSF/LanguageBar.cpp`
+     的 `GetWeaselRegName()` + `_GetRootDir()`）；而本 fork 的安装器**只写**
+     `Software\Fluxing\Weasel :: InstallDir`（`output/install.nsi:447`）⇒ **读到空串**；
+  2. `InstallDir` 实际只写在 **32 位注册表视图**（本机实测 `HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel`，
+     64 位视图下 `HKLM\SOFTWARE\Fluxing\Weasel` **不存在**）⇒ 任何「按进程字长猜视图」的固定写法都读不到。
+- **放大器**：旧代码「读不到就整段 `skip`」⇒ 用户点了**完全没反应**（不是报错，是静默）。
+  同一个空路径还喂给了 `WeaselTSF/WeaselTSF.cpp` 的「服务未运行自动拉起」
+  ⇒ 算法服务异常退出后前端**拉不起来**。
+- **修复**（ADR 0021）：新增 header-only 单一事实源 `include/FluxingInstallPaths.h`
+  —— **显式遍历 `KEY_WOW64_64KEY` / `KEY_WOW64_32KEY` 两个视图** → 取安装根 → 补 `\weasel`
+  （`install.nsi:25` 的 `WEASEL_ROOT`）→ 按文件系统校验（内含 `WeaselServer.exe` / `start_service.bat`）
+  → 旧上游键 `Software\Rime\Weasel` 保留为**只读兜底**（spec 002 FR-008）。
+  `LanguageBar.cpp` 的两个托盘动作改走它，解析失败弹**简体中文**提示（不再静默）；
+  `WeaselTSF.cpp` 的自动拉起改走统一目标选择器（优先 `start_service.bat`，缺失时退回 `WeaselServer.exe`）。
+- **门禁**：`TestFluxingComponents` 新增 `TestFluxingInstallPaths`（T1–T13，19 条断言），
+  含**负对照** —— 复刻上游「只读 `WeaselRoot`」的旧写法并断言它**解析不到程序目录**
+  ⇒ 断言不是恒真；**19/19 PASS**。全套件 `scripts/test-infra/run-test-suite.bat`
+  **ALL TESTS PASSED**（**须先停掉占用命名管道的已安装 `WeaselServer.exe`**，否则 `TestWeaselIPC` 环境性失败）。
+- **待用户真机验收（T035，三条）**：
+  1. 装 `fluxing-1.1.4-installer.exe`（**原地升级**：不清理注册表，`InstallDirRegKey` 会命中
+     `D:\Program Files\fluxing`）→ 重启一次。
+  2. 任务栏输入法图标 → 托盘 →「**重启算法服务**」⇒ **服务 PID 应发生变化**
+     （原先点了完全没反应；这也是「算法服务崩了拉不起来」的正解）。
+  3. 同菜单 →「**程序文件夹**」⇒ 应打开 `D:\Program Files\fluxing\weasel`。
+- **顺带订正（2026-10-29）**：静默安装的 `/D=` 必须给**安装根**（`D:\Program Files\fluxing`），
+  **不带 `\weasel`**（安装器内部会 `StrCpy $INSTDIR "$INSTDIR\weasel"` 自己补）；
+  且 `InstallDirRegKey`（`install.nsi:437`）**优先于** `/D=` ⇒ 换目录前必须先清
+  `HKLM\Software\Fluxing\Weasel`（**两个视图都清**）。
+
 ### 4.2 规划中，未开工
 
 | 编号 | 内容 | 优先级 | 出处 | 备注 |

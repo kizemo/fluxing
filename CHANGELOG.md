@@ -222,6 +222,33 @@
   Windows 资源版本号）；且本 fork 的 CI 发布步骤被
   `github.repository == 'rime/weasel'` 门控 ⇒ `release/` 不会自动对外发版。
 
+## [1.1.4] - 2026-10-29
+
+### 主要更新
+
+- **输入法图标托盘的「重启算法服务」「程序文件夹」在 fork 下原本是静默空操作**
+  （`include/FluxingInstallPaths.h`、`WeaselTSF/LanguageBar.cpp`、`WeaselTSF/WeaselTSF.cpp`，
+  spec 088 / ADR 0021）：
+  前端读的是**上游的键 + 上游的值名**（32 位分支 `Software\WOW6432Node\Rime\Weasel`、
+  64 位分支 `Software\Fluxing\Weasel`，值名 `WeaselRoot`），而本 fork 的安装器**只写**
+  `Software\Fluxing\Weasel :: InstallDir` ⇒ 拿到空串 ⇒ 旧代码「读不到就整段跳过」
+  ⇒ **点了完全没反应**。
+  更深的坑：`InstallDir` 实际只写在 **32 位注册表视图**
+  （`HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel`），64 位视图下 `HKLM\SOFTWARE\Fluxing\Weasel`
+  **根本不存在** ⇒ 任何「按进程字长猜视图」的固定写法都读不到。
+  现新增单一事实源 `include/FluxingInstallPaths.h`：**显式遍历 32/64 两个视图** → 取安装根
+  → 补 `\weasel`（安装器 `output/install.nsi:25` 的 `WEASEL_ROOT`）→ 按文件系统校验
+  （内含 `WeaselServer.exe` / `start_service.bat`）→ 旧上游键保留为**只读兜底**（spec 002 FR-008）。
+- **解析失败不再「点了没反应」**：一律弹简体中文提示 ——「未找到火流猩程序目录，请重新安装后再试。」/
+  「未找到算法服务启动脚本，请重新安装后再试。」
+- **算法服务异常退出后前端现在能自动拉起**：此前「服务未运行自动拉起」用的是同一个空路径，
+  `ShellExecute` 拿到空串静默失败；现走统一目标选择器（优先 `start_service.bat`，缺失时直接启动
+  `WeaselServer.exe`），两者都没有才报错。
+- 回归测试：`TestFluxingComponents` 新增 `TestFluxingInstallPaths`（T1–T13，19 条断言），含**负对照**
+  —— 复刻上游「只读 `WeaselRoot`」的旧写法，断言它**解析不到程序目录** ⇒ 断言不是恒真；19/19 全过。
+- 本轮**未改安装器**：`output/install.nsi` 与 `output/data/user-custom/**` 一字未动
+  ⇒ 无需 Windows Sandbox 复验。
+
 ## [1.1.3] - 2026-10-29
 
 ### 主要更新

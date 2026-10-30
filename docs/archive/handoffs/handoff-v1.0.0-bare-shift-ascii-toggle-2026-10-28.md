@@ -1289,7 +1289,11 @@ MAPPER-SUMMARY|failures=0  RESULT|PASS
 - CI run `40837430267`：lint / test / build(xmake) / build(msbuild) **4/4 success**，sandbox-gate 排队（设计如此）。
 - **装包**：`F:\soft\00selfmade\rime_claude\output\archives\fluxing-1.1.2-installer.exe`
   （42,763,583 B，SHA256 `4238124C8EEFC5B86785D37640F1CF99C61004124302406AFC5A750CEBAAEC36`）。
-  静默安装必须显式 `& '<装包>' /S /D=D:\Program Files\fluxing\weasel`（引号包路径）。
+  静默安装必须显式 `& '<装包>' /S /D=<安装根>`（引号包路径）。
+  **（2026-10-29 订正：本处原写 `/D=D:\Program Files\fluxing\weasel` 是错的 —— 安装器内部
+  `StrCpy $INSTDIR "$INSTDIR\weasel"` 会自己补 `\\weasel` 放二进制，`/D=` 必须给**安装根**
+  （不带 `\\weasel`）；且 `InstallDirRegKey`（`install.nsi:437`）**优先于** `/D=`，
+  换目录前必须先清 `HKLM\Software\Fluxing\Weasel`。详见 §23.5。）**
 - spec 087 目录名 `087-shift-side-and-quickpanel-persist` 与本轮落地的持久化语义一致（规划期预留，无需改名）。
 
 ### 21.5 下阶段：1.1.2 真机验收清单
@@ -1366,13 +1370,17 @@ v1.1.2 的「常驻勾选态持久化」**把状态写到了本 fork 根本不�
 
 ### 22.5 v1.1.3 真机验收清单（订正版）
 
-1. 装包：`output\archives\fluxing-1.1.3-installer.exe`
-   （42,759,936 B，SHA256 `AF4B28087A939D211850EC6F8B36FA61F889A7655A096736033C5106F66FA368`）。
-   静默安装必须**显式** `/D=`：
-   `& '<装包>' /S /D=D:\Program Files\fluxing\weasel`
-   （`/D=` 的值**不可加引号**，且须为最后一个参数）。
-   安装前先清 `HKLM\Software\Fluxing\Weasel` 与 `HKCU\Software\Fluxing`（L54）。
-   装完**重启一次机器**。
+1. 装包：`output\archives\fluxing-1.1.4-installer.exe`
+   （42,771,668 B，SHA256 `7909A751137EEB194EB1E194583A1D6D57EB10636DDA23C2ED334CEE6F3DC62E`）。
+   **升级路径（推荐）**：直接运行装包即可 —— `InstallDirRegKey`（`install.nsi:437`）会命中已注册的
+   `HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel :: InstallDir = D:\Program Files\fluxing`
+   ⇒ **原地升级**：二进制覆盖 `D:\Program Files\fluxing\weasel\`，用户数据
+   `D:\Program Files\fluxing\user1\fluxing` 原样保留。装完**重启一次机器**。
+   **全新安装到别处**：必须先清 `HKLM\Software\Fluxing\Weasel`（**两个视图都清**，本机的值在
+   32 位视图）与 `HKCU\Software\Fluxing`，再
+   `& '<装包>' /S /D=<安装根>`（**不带 `\weasel`**：安装器内部会 `StrCpy $INSTDIR "$INSTDIR\weasel"`
+   把二进制放进 `<安装根>\weasel`、把用户数据放进 `<安装根>\user1\fluxing`；
+   `/D=` 的值**不可加引号**，且须为最后一个参数）。
 2. **核心项**：面板勾选「始终显示」→ **再重启一次机器** → `Alt+,` 调出：
    勾选应**仍亮**、**不再几秒自动消失**。
 3. **落点核对**：勾选后确认 `quickpanel.state` 出现在 `RimeUserDir` 指向的目录
@@ -1425,3 +1433,129 @@ v1.1.2 的「常驻勾选态持久化」**把状态写到了本 fork 根本不�
   （连同更早的抓键条目）⇒ 本轮**不臆造**版本边界去补，留作一次专门的文档整理。
 - `release/` 本轮只补了 **1.1.3**；**1.1.1 / 1.1.2 的装包从未入过 `release/`**
   （本地仍在 `output/archives/`）⇒ 是否回填待定（会一次性给 git 增加约 85 MB）。
+
+---
+
+## 23. v1.1.4 收口：前端程序目录解析修复（spec 088 / ADR 0021）
+
+### 23.1 一句话
+
+输入法图标托盘里的「**重启算法服务**」「**程序文件夹**」在 fork 下**点了完全没反应** ——
+前端读的是**上游的注册表键 + 上游的值名**（`WeaselRoot`），而本 fork 的安装器**只写**
+`InstallDir` ⇒ 拿到空串 ⇒ 旧代码「读不到就整段 `skip`」；顺带查出「算法服务异常退出后前端拉不起来」
+也是**同一个空路径**造成的。v1.1.4 用 header-only 单一事实源 `include/FluxingInstallPaths.h`
+统一解析程序目录，解析失败**弹中文提示**，不再静默。
+
+### 23.2 用户三个问题的答案（1.1.3 真机反馈）
+
+**① 最新 dll 是否启用？—— 已启用，不是 dll 的问题。**
+
+- 运行中 `WeaselServer.exe` = `D:\Program Files\fluxing\weasel\WeaselServer.exe`，PID 463472，
+  `ProductVersion = 1.1.3.0`，SHA256 `1C388FB5E3FA5A8EC358E0B59334B1A1C64F5325F0C8CA53876132601F0B938C`
+  —— **与仓内 `output/Win32/WeaselServer.exe` 逐字节一致**；
+- CLSID `{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}\InprocServer32` → `weaselx64.1.1.3.0.dll`；
+- 未版本化的 `weaselx64.dll` 仍是 1.1.0.0 —— 属 **ADR 0016 的版本化 shim 设计内**，不是漏换。
+
+**② 快捷设置栏为什么还是会消失？—— 这是设计行为，入口找错了。**
+
+- 「快速面板常驻」勾选项在 **WeaselServer 托盘图标右键菜单**（`WeaselServer.rc:164`
+  `ID_QUICKPANEL_ALWAYS_SHOW`），**不在**任务栏输入法图标菜单、**也不在**面板内；
+- 没勾选 ⇒ 瞬时模式（grace 2000 ms + 鼠标在外 1500 ms 自动隐藏）⇒ 几秒后消失是**预期行为**；
+- 铁证：`quickpanel.state` 在新落点、旧 `%APPDATA%\Rime`、`%APPDATA%\fluxing`、`%APPDATA%\Fluxing`
+  **四处全部不存在** ⇒ **从未勾选过**；
+- **正确操作**：任务栏托盘里的**火流猩图标**（不是输入法图标）→ 右键 → 勾「快速面板常驻 (&A)」→ `Alt+,`。
+
+**③ 「重启算法服务」「重新部署」分别是什么？能不能代替重启电脑？**
+
+| 动作 | 实际执行 | 动什么 | 不动什么 |
+|---|---|---|---|
+| 重启算法服务 | `start_service.bat` → `WeaselServer.exe` | 服务进程 | **前端 DLL** |
+| 重新部署 | `WeaselDeployer.exe /deploy` | 重编 `build/` | 服务进程、前端 DLL |
+
+- **不能完全代替重启电脑**：本次修复在**服务端 EXE** ⇒ 「重启算法服务」即生效；
+- 但**改前端 DLL**（`weasel.dll` / `weaselx64.dll`）**必须重启 / 注销** ——
+  已加载的进程仍持有旧映像，换文件不生效；
+- 「重新部署」是**重编用户配置**（改 `default.custom.yaml` 之类后用），跟重启不是一回事。
+
+### 23.3 修法（ADR 0021）
+
+| 层 | 改前 | 改后 |
+|---|---|---|
+| 键 | 32 位 `Software\WOW6432Node\Rime\Weasel` / 64 位 `Software\Fluxing\Weasel` | `Software\Fluxing\Weasel`（**两视图都显式遍历**）+ 旧上游键只读兜底 |
+| 值 | `WeaselRoot`（**安装器从不写**） | `InstallDir` → 补 `\weasel` → 文件系统校验 |
+| 视图 | 靠 `is_wow64()` 猜 | `RegOpenKeyExW` 带 `KEY_WOW64_64KEY` / `KEY_WOW64_32KEY` **逐个试** |
+| 失败 | 静默 `skip`（点了没反应） | 弹**简体中文** `MessageBoxW` |
+| 服务自动拉起 | 同一空路径 | `WeaselServiceLaunchTarget()`（优先 `start_service.bat`，退回 `WeaselServer.exe`） |
+
+新文件 `include/FluxingInstallPaths.h`（header-only 单一事实源，ADR 0020 同款范式）。
+
+### 23.4 门禁数字
+
+- `TestFluxingComponents` 新增 `TestFluxingInstallPaths`：T1–T13，**19/19 PASS**；
+  含**负对照**（复刻上游「只读 `WeaselRoot`」的旧写法，断言它**解析不到程序目录**）⇒ 断言不是恒真；
+- 先红后绿已验证：还原旧实现后负对照如期 FAIL；
+- 全套件 `scripts/test-infra/run-test-suite.bat`：**ALL TESTS PASSED**
+  （**须先停掉占用命名管道的已安装 `WeaselServer.exe`**，否则 `TestWeaselIPC` 环境性失败）。
+
+### 23.5 v1.1.4 真机验收清单（订正版）
+
+1. **装包**：`output\archives\fluxing-1.1.4-installer.exe`
+   （42,771,668 B，SHA256 `7909A751137EEB194EB1E194583A1D6D57EB10636DDA23C2ED334CEE6F3DC62E`）。
+   **升级路径（推荐）**：直接运行装包，**不必清注册表** ——
+   `InstallDirRegKey`（`install.nsi:437`）会命中已注册的
+   `HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel :: InstallDir = D:\Program Files\fluxing`
+   ⇒ **原地升级**：二进制覆盖 `D:\Program Files\fluxing\weasel\`，用户数据
+   `D:\Program Files\fluxing\user1\fluxing` 原样保留。装完**重启一次机器**。
+   **若要装到别处**：必须先清 `HKLM\Software\Fluxing\Weasel`（**两个视图都清**）与
+   `HKCU\Software\Fluxing`，再 `& '<装包>' /S /D=<安装根>`；
+   **`<安装根>` 不带 `\weasel`**（安装器内部 `StrCpy $INSTDIR "$INSTDIR\weasel"` 自己补，
+   用户数据落 `<安装根>\user1\fluxing`）；`/D=` **不可加引号**且须为最后一个参数。
+2. **本轮新增（T035）**：任务栏输入法图标 → 托盘 →「**重启算法服务**」⇒ **服务 PID 应变化**
+   （原先点了完全没反应）；同菜单 →「**程序文件夹**」⇒ 应打开 `D:\Program Files\fluxing\weasel`。
+3. **1.1.3 遗留项（常驻）**：托盘**火流猩图标**右键 → 勾「快速面板常驻 (&A)」→ **再重启一次机器**
+   → `Alt+,` 调出：勾选应**仍亮**、**不再几秒自动消失**。
+4. **落点核对**：勾选后确认 `quickpanel.state` 出现在 `RimeUserDir` 指向的目录
+   （本机 `D:\Program Files\fluxing\user1\fluxing\quickpanel.state`，内容 `always_show=1`），
+   且 `%APPDATA%\Rime` **没有被创建**。
+5. **ESC 口径**：面板可见时按 **ESC：不收起、不影响打字**；`Alt+,` 显隐仍正常。
+6. **回归**：Shift 双击切英文；CapsLock **关闭态**下测选候选 / 翻页 / 切中英（**关闭态**才是有效口径，见 L157）。
+7. **64 位自检**：按 §22.3 第 1 条的「CLSID → 版本化 shim → SHA256」口径查
+   （1.1.4 装机后应为 `weaselx64.1.1.4.0.dll`）。
+
+### 23.6 载荷指纹
+
+- 装包：`output\archives\fluxing-1.1.4-installer.exe`
+  （42,771,668 B，SHA256 `7909A751137EEB194EB1E194583A1D6D57EB10636DDA23C2ED334CEE6F3DC62E`）；
+  已收录进 `release/fluxing-1.1.4-installer.exe`（同一 SHA）。
+- 版本资源：`weasel.dll` / `weaselx64.dll` / `WeaselSetup.exe` / `WeaselServer.exe` /
+  `WeaselDeployer.exe` 全部 **1.1.4.0**；`weasel.props` = 1/1/4 + 1.1.4.0。
+- 版本化 shim 仍由安装器在**装机时**生成 ⇒ 1.1.4 装机后为 `weasel.1.1.4.0.dll` / `weaselx64.1.1.4.0.dll`。
+
+### 23.7 本轮踩坑（务必记住，别重演）
+
+- **注册表要按「谁写的、写在哪个视图」逐条验**，不能按进程字长猜：本次 `InstallDir` 只在
+  **32 位视图**（`HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel`），64 位视图下该键**不存在**
+  ⇒ 任何「按进程字长选键」的写法都读不到。
+- **同一次排查里被证伪的假设（已写进 ADR 0021）**：曾怀疑 32 位 `WeaselServer.exe` 读不到
+  HKCU 64 位视图的 `RimeUserDir` ⇒ 用户数据被拆成两份。**实测证伪**：运行中服务在
+  `D:\Program Files\fluxing\user1\fluxing\rime_ice.userdb` 的写入时间戳（23:25:56）在服务启动
+  （23:08:52）之后 ⇒ 32 位进程**读到了**那个值；`%AppData%\fluxing` 最新文件停在 2026-07-31
+  ⇒ 不是在用目录。**视图差异只出现在 HKLM 侧。**
+- **`/D=` 不是想写哪就写哪**：`InstallDirRegKey`（`install.nsi:437`）**优先于** `/D=`
+  （仓内旧记录已实证），且 `/D=` 要给**安装根**（不带 `\weasel`）。
+- **`edit` 工具会重排整段**：`TestFluxingMain.cpp` 被 clang-format 顺手把 struct 声明拆行
+  （仓内基线并非 clang-format 18 产物）⇒ 已回退成**最小 diff**（+2 行）。
+- **成员函数指针不能转 `LPCWSTR`**：取 DLL 自身目录要用文件内**静态数据锚点** +
+  `GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS)`。
+
+### 23.8 未闭合项
+
+- **真机按键验收只能由用户完成**（§23.5 七条）。
+- **Windows Sandbox 权威门禁在本机跑不起来**（Hyper-V vSwitch 异常）⇒ 本轮**刻意**不碰
+  `output/install.nsi` 与 `output/data/user-custom/**` ⇒ 装包器一字未改（不需要 Sandbox 复验）。
+- **`codebase-memory-mcp` 图谱在本机不可用** ⇒ 降级为 Grep/Read。
+- **诊断探针文件待清理**：`D:\Program Files\fluxing\user1\fluxing\__mavis_probe.tmp`、
+  `C:\Users\Duanyi\AppData\Roaming\__mavis_probe2.tmp` —— 删除被本机安全策略挡住
+  （`Remove-Item` 硬拦截 + `D:\Program Files\` 保护路径）⇒ 需用户手动删或走可恢复删除通道。
+- `release/` 仍只补了 1.1.3 / 1.1.4；1.1.1 / 1.1.2 是否回填待定（约 85 MB）。
+- `CHANGELOG [1.1.0]/[1.1.1]` 仍无独立版本节（同 §22.8，待用户决定）。
