@@ -186,4 +186,24 @@ inline AsciiModeScope DecideAsciiModeScope(bool explicit_control,
     return AsciiModeScope::kCurrentSession;
   return AsciiModeScope::kAllSessions;
 }
+// ===== spec 090 US1: Shift 选词改用页内次序 =====
+//
+// 页内索引合法性谓词。librime 的 select_candidate_on_current_page 走
+// do_with_candidate_on_current_page(librime/src/rime_api_impl.h:982-1000):
+//   page_start = seg.selected_index / page_size * page_size;
+//   return verb(page_start + index);
+// 且 `index >= page_size` 直接返回 false —— 索引确实是「页内」的。而
+// RimeContext::menu.candidates 也正是当前页的切片(rime_api_impl.h:243-256
+// 用 CreatePage(page_size, page_no) 填,menu.cc:37-56 只 copy
+// candidates_[start_pos, end_pos)),所以 num_candidates 就是本页候选数。
+//
+// 越界时的契约(spec 090 US1):什么都不做 —— 不选词、不上屏、不报错、不关窗。
+// 明确不采纳「退回全局 select_candidate」的兜底:全局索引 1/2 会选中另一页的词,
+// 比不选更错。
+// count = 当前页可见候选数(RimeContext::menu.num_candidates,menu.candidates
+// 就是当前页切片,证据见上)。local_index 是 0-based 页内次序:左 Shift = 1
+// (第 2 个),右 Shift = 2 (第 3 个);负数一律非法。
+constexpr bool IsPageLocalIndexValid(int local_index, int count) {
+  return local_index >= 0 && local_index < count;
+}
 }  // namespace fluxing

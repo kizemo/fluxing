@@ -1431,6 +1431,15 @@ void WeaselPanel::LoadIgnoreList(const std::wstring& schema_id) {
   }
 }
 
+// ⚠️ 死代码，禁止接回 UI 侧（spec 090 / ADR 0023 D4、D9）。
+// 候选屏蔽过滤已经下沉到服务端 RimeWithWeasel::_GetCandidateInfo：
+// 引擎候选在那里先被 <schema_id>.user_ignore.txt 过滤，再随 IPC 下发，
+// 同时产出"可见位置 → 引擎候选序号"映射表（m_visibleToEngineIdx）。
+// UI 若在此处二次过滤，可见序号会与服务端映射表错位：
+// 选词/删词/Shift 上屏都会把命令发给错误的引擎候选。
+// 上方 LoadIgnoreList 之所以保留，是因为它是名单文件格式的唯一现存依据
+// （UTF-8/UTF-16LE BOM、CRLF 或 LF、行级候选原文），服务端
+// fluxing::LoadIgnoreListFrom 的实现与之对齐。
 void WeaselPanel::_FilterIgnoredCandidates() {
   if (m_ignoreList.empty()) return;
   auto& candies = m_ctx.cinfo.candies;
@@ -1441,6 +1450,15 @@ void WeaselPanel::_FilterIgnoredCandidates() {
   }
 }
 
+// ⚠️ 死代码，禁止接回 UI 侧（spec 090 / ADR 0023 D5、D9）。
+// 右键屏蔽候选的正式路径是：UI 发 COMMAND_DELETE_CANDIDATE →
+// 服务端 RimeWithWeasel::DeleteCandidateOnCurrentPage 先经映射表还原引擎序号，
+// 无条件把该候选原文追加进 <schema_id>.user_ignore.txt，再调用引擎
+// delete_candidate_on_current_page。UI 侧不得自行写名单：
+// 那样会与引擎删除结果不一致（引擎删除失败也必须记名单，这是已定方案），
+// 且 m_hoverIndex 是过滤后的可见位置，直接索引引擎候选会选错目标。
+// 托盘"恢复已忽略的候选项"（WeaselServerApp.cpp）是唯一清名单入口，
+// 删除整份文件；服务端每次响应前用文件指纹判断是否需要重读，故无需切方案或重启。
 void WeaselPanel::_IgnoreCurrentCandidate() {
   if (m_hoverIndex < 0) return;
   auto& candies = m_ctx.cinfo.candies;

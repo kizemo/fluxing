@@ -5,8 +5,15 @@
 #include <string>
 #include <mutex>
 #include <unordered_map>
+// spec 090: 候选词屏蔽名单(std::unordered_set)与页内索引映射(std::vector)。
+#include <unordered_set>
+#include <vector>
 
 #include <rime_api.h>
+
+// spec 090 / ADR 0023: 屏蔽名单读写、可见->引擎索引映射与名单文件指纹
+// (fluxing::IgnoreListStamp)。header-only 纯函数,服务端与单元测试工程共用。
+#include <FluxingCandidateIgnore.h>
 
 struct CaseInsensitiveCompare {
   bool operator()(const std::string& str1, const std::string& str2) const {
@@ -132,7 +139,11 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   bool _ShowMessage(weasel::Context& ctx, weasel::Status& status);
   bool _Respond(WeaselSessionId ipc_id, EatLine eat);
   void _ReadClientInfo(WeaselSessionId ipc_id, LPWSTR buffer);
-  void _GetCandidateInfo(weasel::CandidateInfo& cinfo, RimeContext& ctx);
+  // spec 090: 入参多带一个会话标识,用于按当前方案加载对应的屏蔽名单,并在
+  // 同一次遍历里产出「可见页内索引 -> 引擎页内索引」映射(FR-005 / FR-006)。
+  void _GetCandidateInfo(weasel::CandidateInfo& cinfo,
+                         RimeContext& ctx,
+                         RimeSessionId session_id);
   void _RefreshSchemaList();
   void _GetStatus(weasel::Status& stat,
                   WeaselSessionId ipc_id,
@@ -141,6 +152,18 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   void _UpdateShowNotifications(RimeConfig* config, bool initialize = false);
 
   void _UpdateInlinePreeditStatus(WeaselSessionId ipc_id);
+
+  // ===== spec 090: 候选词屏蔽名单 =====
+  // 每次要出候选列表时刷新名单。判据用「方案 id 变了 或 名单文件变了(mtime /
+  // 大小 / 消失)」,这样托盘「恢复已忽略的候选项」把 *.user_ignore.txt 删掉之后
+  // 不需要重启服务端、也不需要切方案就能立刻生效(T7)。
+  void _RefreshIgnoreList(RimeSessionId session_id);
+  // 把客户端 / UI 传来的「可见页内索引」翻译成「引擎页内索引」。
+  // 返回 false 表示越界 —— 调用方必须什么都不做(不选词、不上屏、不关窗)。
+  // 名单为空(即没有过滤发生)时返回 true 并原样透传,保证未启用屏蔽的场景
+  // 行为与改动前逐字节一致。
+  bool _MapVisibleIndexToEngine(size_t visible_index, size_t* engine_index);
+  std::wstring _CurrentSchemaIdW(RimeSessionId session_id);
 
   RimeSessionId to_session_id(WeaselSessionId ipc_id) {
     return m_session_status_map[ipc_id].session_id;
@@ -197,6 +220,20 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   // (spec 087 A.7). The switch lives in weasel.yaml under [global settings]
   // and flips the side the state machine works with.
   bool m_shift_left_right_swap;
+  // ===== spec 090 / ADR 0023: 候选词屏蔽名单运行时状态 =====
+  // 「可见页内索引 -> 引擎页内索引」映射,由 _GetCandidateInfo 在过滤候选的
+  // 同一次遍历里产出(FR-006:两者必须同源,否则页内索引与引擎错位)。
+  // 名单为空时 _MapVisibleIndexToEngine 不查它、直接透传,未启用屏蔽的场景
+  // 行为与改动前一致。
+  std::vector<size_t> m_visibleToEngineIdx;
+  // 已加载的屏蔽名单(候选原文集合,spec 090 FR-005)。
+  std::unordered_set<std::wstring> m_ignoreList;
+  // 已加载名单对应的方案 id;切方案时强制重读。
+  std::wstring m_ignoreSchemaId;
+  // 已加载名单文件的指纹(exists/mtime/size)。文件被外部修改或删除(托盘
+  // 「恢复已忽略的候选项」直接 DeleteFileW)后,下一次出候选列表即重读,
+  // 不需要重启服务端、也不需要切方案。
+  fluxing::IgnoreListStamp m_ignoreStamp;
   int m_show_notifications_time;
   DWORD m_pid;
 };

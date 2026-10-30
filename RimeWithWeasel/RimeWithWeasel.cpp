@@ -22,6 +22,8 @@
 #include <regex>
 #include <rime_api.h>
 #include <ShiftStateMachine.h>  // ADR 0010: bare Shift disambiguation policy
+// spec 090 / ADR 0023: 候选词屏蔽名单(读写 + 可见->引擎索引映射)。
+#include <FluxingCandidateIgnore.h>
 
 #define TRANSPARENT_COLOR 0x00000000
 #define ARGB2ABGR(value)                                 \
@@ -387,7 +389,16 @@ void RimeWithWeaselHandler::SelectCandidateOnCurrentPage(
   TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return;
-  rime_api->select_candidate_on_current_page(to_session_id(ipc_id), index);
+  // spec 090: 客户端传来的 index 是「可见页内次序」(用户在候选窗里看到的
+  // 位置)。屏蔽名单非空时,可见列表是引擎当前页的过滤子集,必须先经
+  // m_visibleToEngineIdx 换算成引擎页内次序再调引擎;越界则什么都不做
+  // (宁可不响应,也不能选中屏幕上没看见的词)。名单为空时原样透传,
+  // 行为与改动前一致。
+  size_t engine_index = 0;
+  if (!_MapVisibleIndexToEngine(index, &engine_index))
+    return;
+  rime_api->select_candidate_on_current_page(to_session_id(ipc_id),
+                                             engine_index);
 }
 
 void RimeWithWeaselHandler::DeleteCandidateOnCurrentPage(
@@ -398,13 +409,45 @@ void RimeWithWeaselHandler::DeleteCandidateOnCurrentPage(
   TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return;
-  // spec 028: librime 1.13 delete_candidate C API.
-  // Engine-side: Context::DeleteCandidate(index) at
-  // librime/src/rime/context.cc:146. The engine does the is_user_dict check
-  // internally; the C API does NOT expose is_user_dict in rime_candidate_t (see
-  // L35). When the engine decides the candidate is a user-dict entry, it
-  // removes it from user.db.
-  rime_api->delete_candidate_on_current_page(to_session_id(ipc_id), index);
+  // spec 090: 可见页内次序 -> 引擎页内次序(同 SelectCandidateOnCurrentPage)。
+  size_t engine_index = 0;
+  if (!_MapVisibleIndexToEngine(index, &engine_index))
+    return;
+  RimeSessionId session_id = to_session_id(ipc_id);
+
+  // spec 090: 先取该候选的原文,用于写屏蔽名单。
+  std::wstring candidate_text;
+  RIME_STRUCT(RimeContext, del_ctx);
+  if (rime_api->get_context(session_id, &del_ctx)) {
+    if (del_ctx.menu.candidates &&
+        static_cast<size_t>(del_ctx.menu.num_candidates) > engine_index &&
+        del_ctx.menu.candidates[engine_index].text)
+      candidate_text = u8tow(del_ctx.menu.candidates[engine_index].text);
+    rime_api->free_context(&del_ctx);
+  }
+
+  // spec 090 / ADR 0023 D5(已定方案): 右键 = 「无条件写屏蔽名单 + 照常调
+  // 引擎删除」,不按引擎返回值分流。取证依据:
+  //   - librime Context::DeleteCandidate 无条件 `return true`
+  //     (librime/src/rime/context.cc:146-154,上游注释原文
+  //     "CAVEAT: this doesn't mean anything is deleted for sure");
+  //   - rime_api_impl.h:982-1000 的 do_with_candidate_on_current_page 只在
+  //     调用姿势错误(无 session / 无 menu / index >= page_size)时返回 false;
+  //   - is_user_dict 在 librime C API 中不存在,无法区分自造词与系统词典词。
+  // 效果: 自造词 -> 引擎删除生效(spec 028 语义保留,从 user.db 移除),名单
+  // 里多留一条无害; 系统词典词 -> 删不掉,但名单让它下次不再出现。
+  // 撤销入口: 托盘「恢复已忽略的候选项」清空 *.user_ignore.txt
+  // (WeaselServer/WeaselServerApp.cpp:324-342)。
+  if (!candidate_text.empty()) {
+    fluxing::AppendToIgnoreList(WeaselUserDataPath().wstring(),
+                                _CurrentSchemaIdW(session_id), candidate_text);
+    // 强制下一次 _GetCandidateInfo 重读名单,让屏蔽在本次会话立即生效。
+    m_ignoreSchemaId.clear();
+    m_ignoreStamp = fluxing::IgnoreListStamp();
+  }
+  const Bool deleted =
+      rime_api->delete_candidate_on_current_page(session_id, engine_index);
+  (void)deleted;  // 恒为 true(见上),不用它做任何分流。
   _UpdateUI(ipc_id);
 }
 
@@ -414,8 +457,17 @@ bool RimeWithWeaselHandler::HighlightCandidateOnCurrentPage(
     EatLine eat) {
   DLOG(INFO) << "highlight candidate on current page, ipc_id = " << ipc_id
              << ", index = " << index;
+  // spec 090: 可见页内次序 -> 引擎页内次序。越界时跳过引擎调用,但仍要
+  // _Respond/_UpdateUI 按当前(未变)状态回包 —— IPC 是请求/应答制,
+  // 不回包会把客户端挂住;返回 false 表示高亮没有发生。
+  size_t engine_index = 0;
+  if (!_MapVisibleIndexToEngine(index, &engine_index)) {
+    _Respond(ipc_id, eat);
+    _UpdateUI(ipc_id);
+    return false;
+  }
   bool res = rime_api->highlight_candidate_on_current_page(
-      to_session_id(ipc_id), index);
+      to_session_id(ipc_id), engine_index);
   _Respond(ipc_id, eat);
   _UpdateUI(ipc_id);
   return res;
@@ -597,28 +649,121 @@ void RimeWithWeaselHandler::_ReadClientInfo(WeaselSessionId ipc_id,
 }
 
 void RimeWithWeaselHandler::_GetCandidateInfo(CandidateInfo& cinfo,
-                                              RimeContext& ctx) {
-  cinfo.candies.resize(ctx.menu.num_candidates);
-  cinfo.comments.resize(ctx.menu.num_candidates);
-  cinfo.labels.resize(ctx.menu.num_candidates);
-  for (int i = 0; i < ctx.menu.num_candidates; ++i) {
-    cinfo.candies[i].str = escape_string(u8tow(ctx.menu.candidates[i].text));
-    if (ctx.menu.candidates[i].comment) {
-      cinfo.comments[i].str =
-          escape_string(u8tow(ctx.menu.candidates[i].comment));
-    }
-    if (RIME_STRUCT_HAS_MEMBER(ctx, ctx.select_labels) && ctx.select_labels) {
-      cinfo.labels[i].str = escape_string(u8tow(ctx.select_labels[i]));
-    } else if (ctx.menu.select_keys) {
-      cinfo.labels[i].str =
-          escape_string(std::wstring(1, ctx.menu.select_keys[i]));
-    } else {
-      cinfo.labels[i].str = std::to_wstring((i + 1) % 10);
+                                              RimeContext& ctx,
+                                              RimeSessionId session_id) {
+  // spec 090 / ADR 0023 D4: 屏蔽过滤只允许发生在这里(服务端、唯一过滤点)。
+  // RimeContext::menu.candidates 本身就是「当前页切片」(rime_api_impl.h
+  // do_with_candidate_on_current_page 用 page_start + index 定位;menu 按
+  // CreatePage(page_size, page_no) 填充),UI 侧 Layout 不再做二次分页,
+  // 用户看到的列表 == 这里的输出。若 UI 再过滤一次,「可见次序 -> 引擎页内
+  // 次序」映射就会错位,Shift / 数字键将选中屏幕上没看见的词(E5)。
+  // 名单为空时本函数的输出与改动前逐字节一致。
+  _RefreshIgnoreList(session_id);
+
+  const int num = ctx.menu.num_candidates;
+  const bool has_labels =
+      RIME_STRUCT_HAS_MEMBER(ctx, ctx.select_labels) && ctx.select_labels;
+
+  // 过滤与映射必须在同一次遍历里产出(FR-006),否则两套索引各说各话。
+  m_visibleToEngineIdx.clear();
+  std::vector<int> visible_engine_idx;
+  if (num > 0) {
+    m_visibleToEngineIdx.reserve(num);
+    visible_engine_idx.reserve(num);
+    for (int i = 0; i < num; ++i) {
+      if (!m_ignoreList.empty() &&
+          m_ignoreList.count(u8tow(ctx.menu.candidates[i].text)) > 0)
+        continue;  // 命中屏蔽名单:对用户不可见
+      visible_engine_idx.push_back(i);
+      m_visibleToEngineIdx.push_back(static_cast<size_t>(i));
     }
   }
-  cinfo.highlighted = ctx.menu.highlighted_candidate_index;
+
+  const int visible_count = static_cast<int>(visible_engine_idx.size());
+  cinfo.candies.resize(visible_count);
+  cinfo.comments.resize(visible_count);
+  cinfo.labels.resize(visible_count);
+  for (int v = 0; v < visible_count; ++v) {
+    const int i = visible_engine_idx[v];
+    cinfo.candies[v].str = escape_string(u8tow(ctx.menu.candidates[i].text));
+    if (ctx.menu.candidates[i].comment) {
+      cinfo.comments[v].str =
+          escape_string(u8tow(ctx.menu.candidates[i].comment));
+    }
+    // 标签一律按「可见位置 v」取:数字键/选词键由客户端按可见位置发送,
+    // 名单为空时 v == i,输出与改动前逐字节一致。
+    if (has_labels) {
+      cinfo.labels[v].str = escape_string(u8tow(ctx.select_labels[v]));
+    } else if (ctx.menu.select_keys) {
+      cinfo.labels[v].str =
+          escape_string(std::wstring(1, ctx.menu.select_keys[v]));
+    } else {
+      cinfo.labels[v].str = std::to_wstring((v + 1) % 10);
+    }
+  }
+  // highlighted 原值是引擎页内索引,必须重映射成可见索引:被高亮的候选若
+  // 正好被屏蔽,退到 0;绝不越界。名单为空时映射结果与原值相同。
+  int highlighted = 0;
+  for (int v = 0; v < visible_count; ++v) {
+    if (visible_engine_idx[v] == ctx.menu.highlighted_candidate_index) {
+      highlighted = v;
+      break;
+    }
+  }
+  cinfo.highlighted = highlighted;
+  // currentPage / is_last_page 维持引擎语义;totalPages 全仓无写入点,不设。
   cinfo.currentPage = ctx.menu.page_no;
   cinfo.is_last_page = ctx.menu.is_last_page;
+}
+
+// ===== spec 090 / ADR 0023: 候选词屏蔽名单支撑方法 =====
+
+std::wstring RimeWithWeaselHandler::_CurrentSchemaIdW(
+    RimeSessionId session_id) {
+  // 现取 get_status,不读 m_session_status_map 里的缓存:_Respond 先
+  // `session_status.status = status` 浅拷贝、随即 free_status(&status),
+  // 缓存里的 schema_id 指针已悬空,不可用。
+  RIME_STRUCT(RimeStatus, status);
+  std::wstring schema_id;
+  if (rime_api->get_status(session_id, &status)) {
+    if (status.schema_id)
+      schema_id = u8tow(status.schema_id);
+    rime_api->free_status(&status);
+  }
+  return schema_id;
+}
+
+void RimeWithWeaselHandler::_RefreshIgnoreList(RimeSessionId session_id) {
+  const std::wstring schema_id = _CurrentSchemaIdW(session_id);
+  const std::wstring user_dir = WeaselUserDataPath().wstring();
+  const fluxing::IgnoreListStamp stamp =
+      fluxing::StampIgnoreListFile(user_dir, schema_id);
+  // 方案未变且名单文件指纹未变 -> 复用内存名单,不每次出候选都读盘。
+  // 指纹变化(托盘「恢复已忽略的候选项」删文件 / 右键追加改写)或切方案
+  // -> 重读。读盘失败按空名单静默降级,不弹框、不阻塞。
+  if (schema_id == m_ignoreSchemaId && stamp == m_ignoreStamp)
+    return;
+  m_ignoreSchemaId = schema_id;
+  m_ignoreStamp = stamp;
+  m_ignoreList.clear();
+  fluxing::LoadIgnoreListFrom(user_dir, schema_id, &m_ignoreList);
+}
+
+bool RimeWithWeaselHandler::_MapVisibleIndexToEngine(size_t visible_index,
+                                                     size_t* engine_index) {
+  if (!engine_index)
+    return false;
+  // 名单为空 => 没有过滤发生 => 可见次序就是引擎次序,原样透传。即使
+  // m_visibleToEngineIdx 为空或过期也不受影响,保证未启用屏蔽的场景行为
+  // 与改动前逐字节一致。
+  if (m_ignoreList.empty()) {
+    *engine_index = visible_index;
+    return true;
+  }
+  // 名单非空时严格按映射换算;越界返回 false,调用方必须什么都不做
+  // (不选词、不上屏、不关窗,也不退回全局索引 —— ADR 0023 D2)。
+  return fluxing::MapVisibleIndexToEngine(m_visibleToEngineIdx, visible_index,
+                                          engine_index);
 }
 
 void RimeWithWeaselHandler::StartMaintenance() {
@@ -1063,7 +1208,7 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     bool has_candidates = ctx.menu.num_candidates > 0;
     CandidateInfo cinfo;
     if (has_candidates) {
-      _GetCandidateInfo(cinfo, ctx);
+      _GetCandidateInfo(cinfo, ctx, session_id);
     }
     if (is_composing) {
       const auto& preedit = ctx.composition.preedit;
@@ -1766,7 +1911,7 @@ void RimeWithWeaselHandler::_GetContext(Context& weasel_context,
     }
     if (ctx.menu.num_candidates) {
       CandidateInfo& cinfo(weasel_context.cinfo);
-      _GetCandidateInfo(cinfo, ctx);
+      _GetCandidateInfo(cinfo, ctx, session_id);
     }
     rime_api->free_context(&ctx);
   }
@@ -1859,6 +2004,8 @@ void RimeWithWeaselHandler::ShiftUp(bool is_left,
   // double-press escape hatch (ADR 0010 P3).
   bool menu_open = false;
   bool is_ascii_mode = false;
+  // spec 090: 当前页引擎候选数,在 free_context 之前拷出,供页内索引校验。
+  int shift_page_candidate_count = 0;
   RIME_STRUCT(RimeStatus, shift_status);
   if (rime_api->get_status(to_session_id(ipc_id), &shift_status)) {
     is_ascii_mode = !!shift_status.is_ascii_mode;
@@ -1872,14 +2019,44 @@ void RimeWithWeaselHandler::ShiftUp(bool is_left,
     // therefore not a sufficient predicate: in English mode the user sees no
     // candidate list at all.
     menu_open = shift_ctx.menu.num_candidates > 0 && !is_ascii_mode;
+    // spec 090: free_context 会释放 menu.candidates,页内候选数必须先拷出。
+    // free_context 本身的位置与调用次数保持原样(挪动会泄漏或 double free)。
+    shift_page_candidate_count = shift_ctx.menu.num_candidates;
     rime_api->free_context(&shift_ctx);
   }
   fluxing::ShiftUpAction action = fluxing::DecideShiftUpAction(
       s.downRecorded, s.interveningKey, menu_open, m_bare_shift_toggles_ascii);
+  // spec 090 / ADR 0023 D1-D3(缺陷 A 修复): 左/右 Shift 选「当前页」第 2/3
+  // 个候选。原来走全局次序 select_candidate(idx):全局索引 1/2 永远指向第 1
+  // 页的第 2/3 个,翻页之后 Shift 上屏的仍是第一页的词。两个 API 都是
+  // 0-based;select_candidate_on_current_page(sid, i) 选当前页第 i+1 个可见
+  // 候选(rime_api_impl.h do_with_candidate_on_current_page = page_start +
+  // index;上游 rime_api.h:467-473 对两个 API 的注释文字相同、与实现不符,
+  // 采信实现)。屏蔽名单非空时 idx 是「可见次序」,还须经 m_visibleToEngineIdx
+  // 换算成引擎页内次序(与数字键同一条路,见 _MapVisibleIndexToEngine)。
+  size_t shift_engine_idx = 0;
+  bool shift_can_select = false;
   if (action == fluxing::ShiftUpAction::kSelectCandidate) {
-    size_t idx = s.lastIsLeft ? 1 : 2;
-    DLOG(INFO) << "select_candidate(idx=" << idx << ") ipc_id=" << ipc_id;
-    rime_api->select_candidate(to_session_id(ipc_id), idx);
+    const size_t idx = s.lastIsLeft ? 1 : 2;
+    const int shift_visible_count =
+        m_ignoreList.empty() ? shift_page_candidate_count
+                             : static_cast<int>(m_visibleToEngineIdx.size());
+    // 越界(这一页没有第 N 个候选)就整段跳过:不选词、不上屏、不 flush、
+    // 不回包,函数尾照常重置 ShiftState。明确禁止「退回全局
+    // select_candidate」的 fallback —— 那会选中屏幕上没看见的词,比不选
+    // 更错(ADR 0023 D2 已记录该否决)。
+    shift_can_select = fluxing::IsPageLocalIndexValid(static_cast<int>(idx),
+                                                      shift_visible_count) &&
+                       _MapVisibleIndexToEngine(idx, &shift_engine_idx);
+    if (!shift_can_select)
+      DLOG(INFO) << "ShiftUp select skipped: visible=" << shift_visible_count
+                 << ", idx=" << idx << ", ipc_id=" << ipc_id;
+  }
+  if (action == fluxing::ShiftUpAction::kSelectCandidate && shift_can_select) {
+    DLOG(INFO) << "select_candidate_on_current_page(idx=" << shift_engine_idx
+               << ") ipc_id=" << ipc_id;
+    rime_api->select_candidate_on_current_page(to_session_id(ipc_id),
+                                               shift_engine_idx);
     // ADR 0012: the selected candidate has to reach the screen. With
     // _auto_commit off, librime's Context::Select only forwards the segment
     // (librime/src/rime/engine.cc:259-270), so a *full-word* pick leaves the

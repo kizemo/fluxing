@@ -48,7 +48,8 @@
 // v0.19.0.60 (Phase L 调整 1): ID_HOTKEY_USER_DICT (9003) 删除 — Ctrl+Shift+U 已停用
 // 历史: spec 044 原本绑 UserDictionary::Show;现 UserDictionary 模块整体下线
 
-// spec 052 v0.18.31.0: enable QuickPanel always-show mode (20% alpha)
+// spec 052 v0.18.31.0 / spec 089: enable QuickPanel always-show mode (idle 85%
+// opacity)
 #define ID_QUICKPANEL_ALWAYS_SHOW      40019
 
 // spec 080: force-show the QuickPanel (never toggles it off). Used when the

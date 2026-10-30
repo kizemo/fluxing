@@ -2,6 +2,9 @@
 #include <WeaselIPCData.h>
 #include <unordered_set>
 #include <string>
+// 1.1.5 (spec 090): 候选屏蔽名单的加载 / 过滤 / 可见索引→引擎索引映射。
+// header-only，只依赖 windows.h + STL。
+#include <FluxingCandidateIgnore.h>
 #include <WeaselUI.h>
 #include "StandardLayout.h"
 #include "Layout.h"

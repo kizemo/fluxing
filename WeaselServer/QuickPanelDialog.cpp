@@ -15,7 +15,8 @@
 //   - 5 个图标用 MoveTo/LineTo/Ellipse/Rectangle 画
 //   - 32-bit DIBSection (BGRA) 存放 layered surface
 //   - PaintOpaqueContent() 画 opaque 内容到 s_hdcMem (logo + icons + 圆角边)
-//   - ApplyAlphaGradient() 改 pBits alpha 通道:圆角内按 y 渐变 140→82,圆角外 0
+//   - ApplyAlphaGradient() 改 pBits alpha 通道:圆角内 alpha 恒定(spec 089:
+//   梯度已拉平为 255/255),圆角外 0
 //   - WS_EX_LAYERED + UpdateLayeredWindow(ULW_ALPHA) 提交到 screen
 //
 #include "stdafx.h"
@@ -202,7 +203,8 @@ RECT QuickPanelDialog::s_dragStartWindow = {
 int QuickPanelDialog::s_outsideMs = 0;  // L89-fix: 鼠标在 panel 外累计 ms
 DWORD QuickPanelDialog::s_showTime = 0;  // v0.19.0.24:Show() 时刻 grace 计时
 // spec 084 / ADR 0013: 整体不透明度系数,不是 alpha 通道值本身。
-// 255 = 满值(逐像素与 spec 084 之前一致),51 = 20%(长显常态)。
+// 255 = 满值(逐像素与 spec 084 之前一致),217 = 85%(长显常态, spec 089 / ADR
+// 0022)。
 int QuickPanelDialog::s_alphaFactor = fluxing::kAlphaFactorFull;
 int QuickPanelDialog::s_targetAlphaFactor = fluxing::kAlphaFactorFull;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onSchema;
@@ -718,7 +720,7 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
           DWORD nowTick = GetTickCount();
           bool inGrace = (nowTick - s_showTime) < kShowGraceMs;
           // spec 084 / ADR 0013 D3: 整体不透明度系数。
-          // 目标:鼠标在面板矩形内 => 满值;否则长显态 20%,瞬时态仍是满值。
+          // 目标:鼠标在面板矩形内 => 满值;否则长显态 85%,瞬时态仍是满值。
           // 瞬时态 target 恒为满值 => 系数永不动 => 零重绘、零像素变化。
           // 用 GetClientRect 而不是 HitTest:按钮之间的空隙 HitTest 返回 -1,
           // 但鼠标确实还在面板上。
@@ -1356,7 +1358,7 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   s_onSymbols = onSymbols;
   s_onLogin = onLogin;
   (void)currentFullwidth;
-  // spec 084 / ADR 0013 D3: 长显态以 20% 系数起步,再由 100ms 轮询器按
+  // spec 084 / ADR 0013 D3: 长显态以 85% 系数起步,再由 100ms 轮询器按
   // 鼠标位置渐变到满值;瞬时态保持满值 => 渲染与今天逐像素一致。
   s_alphaFactor =
       AlwaysShowMode() ? fluxing::kAlphaFactorIdle : fluxing::kAlphaFactorFull;
@@ -1539,7 +1541,8 @@ bool QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(
   if (!legacy.empty() && legacy != primary &&
       ReadAlwaysShowStateLine(legacy, line))
     return line == "always_show=1";
-  return false;
+  return true;  // spec 089 / ADR 0022: 状态文件缺失或损坏 ⇒
+                // 默认常驻(不再要求用户先勾选)
 }
 
 bool QuickPanelDialog::LoadPersistedAlwaysShowMode() {

@@ -45,7 +45,7 @@ class QuickPanelDialog {
 
   // spec 084 / ADR 0013: 面板的两种模式。
   // kHidden      = 瞬时模式(默认):显示后鼠标移开 1.5s 自动收起。
-  // kAlwaysShow  = 长显模式:面板常驻右下角,常态 20% 不透明度,
+  // kAlwaysShow  = 长显模式:面板常驻右下角,常态 85% 不透明度,
   //                鼠标移上去渐变到 100%,且屏蔽全部自动隐藏路径。
   enum class Mode { kHidden, kAlwaysShow };
 
@@ -82,7 +82,7 @@ class QuickPanelDialog {
   static bool IsFullwidth() { return s_fullwidth; }
 
   // spec 084 / ADR 0013 D4: 长显模式(快捷设置栏常驻)开关。
-  // 默认关;打开后面板常驻屏幕右下角,常态 20% 不透明度,悬停渐变到 100%。
+  // 默认关;打开后面板常驻屏幕右下角,常态 85% 不透明度,悬停渐变到 100%。
   static void SetAlwaysShowMode(bool enabled);
   static bool AlwaysShowMode() { return s_mode == Mode::kAlwaysShow; }
   // v1.1.2 (用户 1.1.1 验收反馈, ADR 0019):「常驻」勾选态跨 WeaselServer
@@ -94,7 +94,8 @@ class QuickPanelDialog {
   // Restore 只恢复模式、绝不 auto-show (spec 055 不变量保留)。
   static void SetStatePath(const std::wstring& path);  // 测试注入;空串=回默认
   static void RestoreAlwaysShowMode();  // 服务器启动时读盘恢复 s_mode
-  static bool LoadPersistedAlwaysShowMode();  // 文件缺失/损坏 ⇒ false
+  static bool LoadPersistedAlwaysShowMode();  // 文件缺失/损坏 ⇒ true(spec 089 /
+                                              // ADR 0022: 默认常驻)
   // ADR 0020: 默认落点(不含测试注入覆盖)与旧落点。
   static std::wstring DefaultStatePath();
   static std::wstring LegacyStatePath();
@@ -112,8 +113,9 @@ class QuickPanelDialog {
   static bool s_mouseTracked;
   // spec 084 / ADR 0013 D1/D2: 整体不透明度系数(0..255)。
   // 255 = 满值 => ApplyAlphaGradient 写出的逐像素 alpha 与 spec 084 之前
-  // 逐字节一致(零回归保证);51 = 20% => 长显模式的常态淡显。
-  // 旧的 s_alpha / s_targetAlpha 从未被任何代码读写(纯死状态),由这两个取代。
+  // 逐字节一致(零回归保证);217 = 85% => 长显模式的常态淡显(spec 089 / ADR
+  // 0022)。 旧的 s_alpha / s_targetAlpha
+  // 从未被任何代码读写(纯死状态),由这两个取代。
   static int s_alphaFactor;
   static int s_targetAlphaFactor;
   static OnClick s_onSchema;
@@ -252,11 +254,11 @@ class QuickPanelDialog {
   static constexpr COLORREF kHighlight = RGB(255, 255, 255);  // 顶部高光
 
   // v0.19.0.10: per-pixel alpha gradient (替换 L77 uniform kAlphaPanel=220)
-  // L87-fix: 顶部 220 (0xDC = 86%) → 底部 80 (0x50 = 31%) — 范围扩大 140 step,
-  // 让渐变视觉更明显。之前 140-82 范围 58 step,在白背景下肉眼分辨不出。
-  // 圆角外 alpha = 0 (桌面可见)
-  static constexpr BYTE kAlphaPanelTop = 220;
-  static constexpr BYTE kAlphaPanelBot = 80;
+  // spec 089 / ADR 0022: alpha 梯度已拉平为 255/255 — 这两个常量不再参与渐变,
+  // 观感梯度改由颜色梯度 kBgTop→kBgBot 与圆角掩码承担。历史: L87-fix 曾为
+  // 220→80。 圆角外 alpha = 0 (桌面可见)
+  static constexpr BYTE kAlphaPanelTop = 255;
+  static constexpr BYTE kAlphaPanelBot = 255;
 
   // ===== Internal =====
   static LRESULT OnCreate(HWND);

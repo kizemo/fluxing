@@ -6,8 +6,8 @@
 // per-pixel alpha (QuickPanelDialog::ApplyAlphaGradient writes the alpha
 // channel of a 32-bit BGRA DIB, then UpdateLayeredWindow(ULW_ALPHA) submits
 // it). spec 052 wanted a second, much fainter state - "always show" idle at
-// 20% opacity, 100% on hover - but the only knob spec 052 knew about was
-// SetLayeredWindowAttributes(LWA_ALPHA), a *uniform* alpha that the current
+// 85% opacity at idle, 100% on hover - but the only knob spec 052 knew about
+// was SetLayeredWindowAttributes(LWA_ALPHA), a *uniform* alpha that the current
 // renderer explicitly forbids (QuickPanelDialog.h: "绝对不用 LWA_ALPHA
 // uniform" - it is not liquid glass, just a flat 86% white sheet).
 //
@@ -38,7 +38,7 @@ constexpr int kAlphaFactorFull = 255;
 // too faint to see, and every Show() reuse starts from that stale value.
 // ADR 0018 raises the idle floor to 153 (60%): still visibly recessed against
 // the hover state, no longer mistaken for hidden.
-constexpr int kAlphaFactorIdle = 153;
+constexpr int kAlphaFactorIdle = 217;
 
 // Denominator of the opacity factor scale.
 constexpr int kAlphaScaleNum = 255;
@@ -88,9 +88,9 @@ inline int LerpAlpha(int from, int to, int t, int steps) {
   return from + (to - from) * t / steps;
 }
 
-// Fade step per 100ms timer tick. Walking 255 -> 153 takes 5 ticks (~0.5s)
-// after ADR 0018 raised the idle floor from 51 to 153 (102 / 24 = 4.25 -> 5);
-// the reverse walk is 5 ticks as well.
+// Fade step per 100ms timer tick. Walking 255 -> 217 takes 2 ticks (~0.2s)
+// after spec 089 / ADR 0022 raised the idle floor from 153 to 217 (38 / 24
+// = 1.58 -> 2); the reverse walk is 2 ticks as well.
 constexpr int kAlphaFadeStep = 24;
 
 }  // namespace fluxing
