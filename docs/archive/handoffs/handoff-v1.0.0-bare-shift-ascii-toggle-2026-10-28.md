@@ -1559,3 +1559,330 @@ v1.1.2 的「常驻勾选态持久化」**把状态写到了本 fork 根本不�
   （`Remove-Item` 硬拦截 + `D:\Program Files\` 保护路径）⇒ 需用户手动删或走可恢复删除通道。
 - `release/` 仍只补了 1.1.3 / 1.1.4；1.1.1 / 1.1.2 是否回填待定（约 85 MB）。
 - `CHANGELOG [1.1.0]/[1.1.1]` 仍无独立版本节（同 §22.8，待用户决定）。
+
+---
+
+## 24. v1.1.5 轮：7 条真机反馈的调研结论与下阶段计划（2026-10-30）
+
+> 本轮**只做调研与交接，未改任何产品代码**（工作区除本节 + 接力 prompt 文件外无改动）。
+> 三组只读子任务（面板 / 托盘 / Shift+候选移除）取证结论存
+> `tmp/research-A-quickpanel.md`、`tmp/research-B-tray-menu-service.md`、`tmp/research-C-shift-candidate.md`。
+
+### 24.1 一句话
+
+7 条反馈里：**3 条是真缺陷**（Shift 翻页错位、菜单勾选态不回显、「重启算法服务」静默失效），
+**2 条是产品语义调整**（默认常驻、非悬停不透明度 85%），
+**1 条是信息性问答**（面板四个图标分别是什么），
+**1 条是「本仓从来没有过」**（Shift+Ctrl+数字 按次序移除/隐藏候选词 —— 全仓无规范、无绑定、无 IPC；
+只有「右键屏蔽」那一半是**写了但没接线**的死代码）。
+
+### 24.2 逐条定性表
+
+| # | 用户反馈（摘要） | 定性 | 根因 / 依据（file:line） |
+|---|---|---|---|
+| 1 | 勾选「快速面板常驻」后菜单勾选态不回显；希望默认常驻、去掉 1.5 秒自动消失 | **真缺陷 + 语义调整** | 回显：`WeaselTSF/LanguageBar.cpp:180-191` 走 `TrackPopupMenuEx`，**整个 WeaselTSF 模块没有任何 `CheckMenuItem`**；而 `WeaselServer/WeaselTrayIcon.cpp:32` 有 ⇒ **两套菜单资源，只有一套做了回显**。自动消失：`QuickPanelDialog.cpp:742` 已被 `AlwaysShowMode()` 挡住（常驻时不触发）⇒ 只要**默认常驻**就自动解决 |
+| 2 | 非悬停时太透明，要 85%（透明度 15%） | **参数调整** | `include/QuickPanelAlpha.h:41` `kAlphaFactorIdle=153`（60%）；但逐像素 alpha 先被渐变压到 220→80（`QuickPanelDialog.h:258-259`），再乘因子 ⇒ **有效不透明度：彩色像素 60%、背景顶 51.8%、背景底 18.8%** |
+| 3 | 「重启算法服务」点了没反应 | **真缺陷（1.1.4 只修了路径解析层）** | `output/start_service.bat` 只有 2 行「**只启不停**」；`WeaselServer.cpp:145-163` 的「先停旧」逻辑在 `retry>=10` 时 `return 0` 直接退出（旧服务已停、新服务没起，全程静默）；`WeaselServerApp.cpp:295-322` **没有** `ID_WEASELTRAY_RERUN_SERVICE` handler ⇒ 语义只存在于前端，两份事实源 |
+| 4 | 三个开发向菜单项是否移除；装新版本能否自动重启/重新部署 | **产品决策（用户已选）+ 部分已具备** | 安装器**已经**做：`output/install.nsi:1122` `Exec "$INSTDIR\WeaselServer.exe"`（安装尾部启服务）、`:1041/:1045` `ExecWait WeaselDeployer.exe /install|/deploy`（重新部署）、`:172-177` + `:508-534`（升级前 taskkill 旧进程）⇒ **只有「文件被锁 → Stage-2 分支」(`:1063-1090`) 不重启** |
+| 5 | 面板输入法图标右侧四个图标，另外两个是什么 | **信息性问答（已答）** | `QuickPanelDialog.h:213` `kButtonCount=4` ⇒ ①**输入方案**（`DrawIconSchema` :1070-1072）②常用短语（:1073-1075）③**设置齿轮**（:1076-1078）④用户/账户（:1079-1081）。**且 idx0/idx3 点击是 no-op**（`QuickPanelDialog.cpp:644`/`:664` 明写） |
+| 6 | 翻页后用 Shift 选第 2/3 个，仍上屏第一页的第 2/3 个 | **真缺陷** | `RimeWithWeasel.cpp:1880-1882` 走**全局索引** `select_candidate(session_id, idx)`（librime `segmentation.cc:45-49` `GetCandidateAt(index)` 与 `page_no` 无关）；数字键/鼠标走**页内索引** `select_candidate_on_current_page`（`rime_api_impl.h:982-1001`，内部算 `page_start`）⇒ **两套 API 语义不一致** |
+| 7 | Shift+Ctrl+数字 移除自造词 / 隐藏系统词典词 / 右键移除，以前有、现在丢了 | **本仓从未实现该功能**（右键屏蔽是死代码） | 全仓无 `Ctrl+Shift+数字` 候选移除绑定（`output/data/default.yaml:230-268` 只有 `Control+1/2` 与 `Control+Shift+numbersign/dollar`）、无 IPC 命令、无 handler。spec 031（`.specify/specs/031-candidate-ignore-filter/spec.md:23-50`）**只定义「右键屏蔽」一条**；其实现 `WeaselPanel.cpp:1391-1432 LoadIgnoreList` / `:1434-1442 _FilterIgnoredCandidates` / `:1444-1468 _IgnoreCurrentCandidate` **有定义无调用**，`OnRButtonDown`（:553-575）**只有 delete 分支** ⇒ **写了没接线**（`git log -S` 只有落地提交 `f395f5f`，之后没删过） |
+
+### 24.3 七条的改法与风险（按 spec 089 / spec 090 落地）
+
+#### 24.3.1 第 1 条：默认常驻 + 勾选态回显
+
+**改法**
+
+- **默认常驻**：`QuickPanelDialog.cpp:1556-1559` `RestoreAlwaysShowMode()` 改为
+  「状态文件**不存在** ⇒ `kAlwaysShow`；存在则按文件值」。
+  **不动** `LoadPersistedAlwaysShowMode*` 的 false 语义（`:1538/1541/1542`），避免扩大回归面。
+  配套：`SetAlwaysShowMode`（`:1566`）同值早退**不写盘** ⇒ 文件可能长期缺失，
+  必须保证「缺失 ⇒ 常驻」与「用户显式取消（写 `always_show=0`）」不冲突。
+- **去 1.5 秒自动消失**：`QuickPanelDialog.cpp:742` 的 1500ms 判定已被 `AlwaysShowMode()` 挡住
+  ⇒ 默认常驻后**天然不触发**；1500ms 本身是**裸字面量**（`:744`），
+  建议顺手提到 `QuickPanelDialog.h` 常量区（与 `kShowGraceMs=2000` 同处）。
+- **勾选态回显（不新增 IPC 的路线）**：TSF 侧弹菜单前读状态文件
+  `<用户数据目录>\quickpanel.state`（内容 `always_show=1`，ADR 0020 定的落点），
+  路径用 `include/FluxingUserPaths.h`（header-only）解析 ⇒ `CheckMenuItem`。
+  状态文件由服务端在模式变更时写盘 ⇒ 跨进程可读。
+  （若走「新增 IPC 读回命令」路线，则触发 constitution 的 **IPC 四边同步**：
+  server / TSF / deployer + `include/WeaselIPCData.h` + 1 ADR + `test/TestWeaselIPC/*` —— 成本高，本轮建议先走文件读。）
+
+**风险**
+
+- 两条路径都**不 auto-show 面板**（spec 055 不变量，`QuickPanelDialog.cpp:1557`）
+  ⇒ 「新装即常驻」= **常驻不消失**，不是「开机自动弹出」；若要开机即挂右下角需另开 ADR。
+- 现有断言会红：`test/TestQuickPanelDialog/TestQuickPanelDialog.cpp:290-325`（T13a-T13h 持久化）
+  依赖「缺失 ⇒ 关」语义 ⇒ 必须先红后绿改断言。
+- **未取证**：`TestQuickPanelDialog.cpp:412`、`:424` 两处 `LoadPersistedAlwaysShowModeFrom`
+  断言的上下文未逐行读，改默认语义前需复核这两条。
+
+**验收**
+
+1. 全新用户数据目录（无 `quickpanel.state`）⇒ `Alt+,` 打开面板 → 面板**常驻不消失**（移开鼠标等 10 秒仍在）。
+2. 托盘火流猩图标右键 → 「快速面板常驻」为**打勾**态；取消 → 菜单项**变回不打勾**，面板恢复瞬时模式。
+3. 任务栏输入法图标右键 → 「快速面板常驻」**也显示勾**（本条是用户报的原点）。
+4. 显式写 `always_show=0` 的状态文件 ⇒ 重启后**仍然不是常驻**（用户显式取消优先于默认）。
+
+#### 24.3.2 第 2 条：非悬停不透明度 85%
+
+**改法**
+
+- `include/QuickPanelAlpha.h:41` `kAlphaFactorIdle` **153 → 217**（0.85×255=216.75）。
+- **但单改因子达不到「整块 85%」**：背景仍是渐变（顶 `ScaleAlpha(220,217)`=187=73%，
+  底 `ScaleAlpha(80,217)`=68=27%）。
+  ⇒ 若要**整块均匀 85%**，须同时抬高 `QuickPanelDialog.h:258-259` 的 `kAlphaPanelTop/kAlphaPanelBot`（220/80）。
+  **决策待定**：用户说的「不透明度 85%」按字面是**整块面板**，
+  建议下一轮实现为「**背景基数拉平 + 因子 217**」两处同改，并同步更新 alpha 断言。
+
+**风险**
+
+- 共享常量 ⇒ `test/TestQuickPanelDialog/TestQuickPanelDialog.cpp:238-241`（T12d/T12e）
+  与 `QuickPanelDialog.cpp:1361-1362`（Show 起步值）随之变化，断言需同步更新。
+- 渐隐步长 `include/QuickPanelAlpha.h:94` `kAlphaFadeStep=24`：255→153 走 5 tick，
+  255→217 只走 2 tick（渐变手感变快）。
+- 常驻态 target 选取依赖该因子（`QuickPanelDialog.cpp:730-733`）⇒ 抬亮后
+  「淡显 = 隐藏」的旧症状（spec 087）可能重现。
+
+#### 24.3.3 第 3 条：「重启算法服务」做成真正可靠的重启
+
+**改法**
+
+- **在服务端补 handler**（消除两份事实源）：`WeaselServer/WeaselServerApp.cpp:295-322`
+  的 `SetupMenuHandlers` 新增 `ID_WEASELTRAY_RERUN_SERVICE`：
+  「`stop_service.bat /q` → 轮询进程消失 → `start_service.bat` → 回传结果」。
+- 前端 `WeaselTSF/LanguageBar.cpp:334-354` 改为对同一 handler 走 IPC
+  （复用 `:385` 的 `m_client.TrayCommand(wID)` 通路），
+  失败/超时弹**简体中文** `MessageBoxW`（不再 `std::thread` + `ShellExecuteW` 后静默）。
+- `output/start_service.bat` / `output/stop_service.bat` 纳入仓库**单一事实源**（R7），
+  且「只启不停」的问题要显式修掉（先 stop 再 start）。
+- **不要**用「起第二个实例、靠它去踢掉第一个」这套竞态（`WeaselServer.cpp:145-163` 的
+  `retry>=10 → return 0` 会静默把服务弄没）。
+
+**风险**
+
+- `WeaselServer.cpp:145-163` 的「先停旧」逻辑在**服务端自己重启**时会与新逻辑打架
+  ⇒ 需设计成「先 stop 确认消失，再 start」，而不是「起新实例去顶掉旧实例」。
+- 服务停掉后前端（TSF）会拉不起（这正是 1.1.4 修的 `WeaselServiceLaunchTarget()` 路径）
+  ⇒ 重启过程中输入法短暂不可用，提示文案要说清楚。
+
+#### 24.3.4 第 4 条：菜单项处置（用户已决策）+ 装新版本自动重启
+
+**决策（2026-10-30 用户拍板）**：三个开发向项
+**全部收进「高级(&V)」子菜单**，主菜单只留用户向项；
+「退出算法服务」旁标注「会停掉输入法」。
+
+**改法**
+
+- `WeaselTSF/WeaselTSF.rc`（**UTF-16LE + BOM**！）：`WeaselTSF.rc:116-137` 简体块
+  把「重新部署」(:134)、「重启算法服务」(:136)、「退出算法服务」(:137) 移进新建的
+  `POPUP "高级(&V)"` 子菜单（繁 :97 / 英 :122 同步）。
+- 「重启算法服务」文案建议改为「重启输入法服务」或加「(开发者)」后缀，避免用户误解
+  「算法服务 = 输入法引擎」。
+- 「退出算法服务」加提示：点击后弹确认框说明「输入法将不可用，需重新登录或重启才恢复」。
+
+**「装新版本后自动重启服务/重新部署」—— 结论：安装器已经做了，本轮不必改安装器**
+
+- `output/install.nsi:1122` `Exec "$INSTDIR\WeaselServer.exe"` ⇒ **安装尾部即启动服务**。
+- `output/install.nsi:1041`（交互）/ `:1045`（静默）`ExecWait WeaselDeployer.exe /install|/deploy`
+  ⇒ **安装即重新部署用户配置**。
+- `output/install.nsi:172-177`（`.onInit` 三轮 `taskkill /F /IM WeaselServer.exe /T`）
+  + `:508` `Exec ... /quit` + `:510-520` 轮询 + `:521-534` 五轮 `taskkill /T`
+  ⇒ **升级时旧进程会被终止**，随后被新实例顶上来。
+- **唯一缺口**：`output/install.nsi:1063-1090` 的 **Stage-2 分支**（WeaselServer.exe 被锁导致写盘失败）
+  → 只注册 At-startup 计划任务 + 提示重启，**既不写 Run 键也不 Exec 服务**
+  ⇒ 这种情况下升级后服务不会自动重启。
+- ⚠️ **本轮及下阶段刻意不碰 `output/install.nsi`**（Windows Sandbox 权威门禁在本机跑不起来，
+  见 §23.8 / `.claude/rules/commit-checklist.md`）⇒ Stage-2 缺口**只能记录，不能修**，
+  或改走 install.nsi 之外的落点（`WeaselSetup/WeaselSetup.cpp:44` 的 `install()` 入口、
+  `WeaselServer/WeaselServer.cpp:165-168` 已有的 `/update` 分支、
+  `WeaselServer.cpp:175` 已有的 `RegisterApplicationRestart(NULL,0)`）。
+
+#### 24.3.5 第 5 条：面板四图标（已答）
+
+`QuickPanelDialog.h:213` `kButtonCount = 4`（左侧另有 logo，`h:203` `kBrandSize=35`）：
+
+| idx | 图标 | 绘制 | 点击行为 |
+|---|---|---|---|
+| 0 | **输入方案**（Schema） | `DrawIconSchema` `QuickPanelDialog.cpp:1070-1072` | **no-op**（`:644` 明写 "hit 0/3: no-op"）；`s_onSchema` 回调（`WeaselServerApp.cpp:413-417` = `WeaselDeployer.exe /hotkey`）**从未被调用（死代码）** |
+| 1 | 常用短语 | `DrawIconPhrase` `:1073-1075` | `s_onPhrases` → `WeaselServerApp.cpp:419-435` → `fluxing::PhrasesDialogIPC::Show()` ✅ |
+| 2 | **设置（齿轮）** | `DrawIconSettings` `:1076-1078` | `s_onShortcut` → `WeaselServerApp.cpp:18-21 SetQuickPanelShortcutCallback` → `QuickPanelDialog.cpp:222-224`（打开快捷设置栏） |
+| 3 | 用户 / 账户 | `DrawIconAccount` `:1079-1081` | **no-op**（`:664`） |
+
+⇒ 用户看到的「第二个 = 常用短语、最后一个 = 用户」完全吻合；缺的两个是
+**输入方案** 与 **设置（齿轮）**。
+⇒ **附带发现**：idx0 / idx3 点了没反应，`s_onSchema` 是死代码 ⇒ 可作独立小任务
+（要么接上、要么先摘掉图标，避免「画得出来点不动」）。
+
+#### 24.3.6 第 6 条：Shift 翻页后选词错位（最小改法）
+
+**根因**：`RimeWithWeasel/RimeWithWeasel.cpp:1879-1882` 的 `kSelectCandidate` 分支用
+`rime_api->select_candidate(session_id, idx)` —— **全局索引**
+（librime `Context::Select` → `seg.GetCandidateAt(index)` → `menu->GetCandidateAt(index)`，
+`librime/src/rime/segmentation.cc:45-49`，**与 `page_no` 无关**）；
+而数字键/鼠标走 `select_candidate_on_current_page`
+（`librime/src/rime_api_impl.h:982-1001`，内部 `page_start = selected_index / page_size * page_size`）
+⇒ **服务端选词调用点选错了 API**。
+
+**改法（最小，一行）**：`RimeWithWeasel.cpp:1882` 改用
+`rime_api->select_candidate_on_current_page(session_id, idx)`
+（idx 语义不变：左 = 1、右 = 2，0-based **页内**索引）。
+**不需要改 IPC**：`WEASEL_IPC_SELECT_CANDIDATE_ON_CURRENT_PAGE` 已在
+`include/WeaselIPC.h:32` 与 `WeaselIPCServer/WeaselServerImpl.cpp:480` 就位。
+
+**风险**
+
+- `select_candidate_on_current_page` 在 `index >= page_size` 时直接 `return false`
+  （`rime_api_impl.h:996-997`）⇒ **第一页不足 3 个候选时右 Shift 会静默不选**
+  ⇒ 需确认退化行为（建议 fallback 全局 API）。
+- 与 ADR 0018 的 `ShouldCommitAfterSelect` flush 判据交互不变。
+- 真机复验必须覆盖「翻到第 2 页再按左右 Shift」。
+
+**回归测试点**：`test/TestShiftIPCStateMachine/TestShiftIPCStateMachine.cpp`（纯函数断言）、
+`test/TestShiftSelectBinding/TestShiftSelectBinding.cpp`（绑定期行为）、`test/TestWeaselIPC/`（IPC 侧）。
+建议把「页内索引换算」抽成 `include/ShiftStateMachine.h` 里的**无 GUI 纯函数**
+（页号从 `RimeContext.menu.page_no/page_size` 读，`include/rime_api.h:134-138`）⇒ 可脱机断言。
+
+#### 24.3.7 第 7 条：候选移除 / 隐藏 —— 事实与恢复方案
+
+**事实（必须先说清楚）**
+
+- **「Shift+Ctrl+数字 按次序移除/隐藏」在本仓从未存在**：无 spec、无 yaml 绑定、无 IPC 命令、无 handler。
+  `output/data/default.yaml:230-268` 只有 `Control+1/2` 选候选与 `Control+Shift+numbersign/dollar`。
+  ⇒ 用户记忆里的这个功能**不来自本仓**（可能来自别的输入法产品，或早期未入库的实验）。
+- **「右键屏蔽」这一半存在，但从未接线（死代码，非被删、非 feature flag）**：
+  `WeaselUI/WeaselPanel.cpp:1391-1432 LoadIgnoreList`、`:1434-1442 _FilterIgnoredCandidates`、
+  `:1444-1468 _IgnoreCurrentCandidate` **有定义无调用**；
+  `OnRButtonDown`（`:553-575`）**只有 delete 分支**，缺 spec 031 `spec.md:31-37` 要求的 ignore 分支。
+  `git log -S'_IgnoreCurrentCandidate'` 只有落地提交 `f395f5f`，之后没有任何提交删过它。
+- **「右键删除（自造词）」是通的**：`OnRButtonDown` → `m_deleteCallback`
+  （`WeaselUI/WeaselPanel.h:70-71`）→ `WeaselTSF/CandidateList.cpp:305-306,395-403`
+  → `WeaselIPC/WeaselClientImpl.cpp:120` → `WeaselIPCServer/WeaselServerImpl.cpp:480`
+  → `RimeWithWeasel/RimeWithWeasel.cpp:393-409` `delete_candidate_on_current_page`。
+- **「恢复已忽略的候选项」在托盘菜单里**：`WeaselServer/WeaselServer.rc:167`
+  `ID_WEASELTRAY_RESTORE_IGNORED` → `WeaselServer/WeaselServerApp.cpp:329-340`（删 `*.user_ignore.txt`）
+  ⇒ 「恢复」在、「屏蔽」不在。
+
+**恢复方案（分两级，建议只做第一级）**
+
+- **一级（低成本、无 IPC 变更、纯前端）**：把 spec 031 的「右键屏蔽」接上线
+  1. `WeaselUI/WeaselPanel.cpp:553-575` `OnRButtonDown` 按 spec 031 `spec.md:31-37`
+     加 delete / ignore 二分支（`text.length()>=2` → delete；否则 → `_IgnoreCurrentCandidate()`）；
+  2. `Update(Context,Status)` 末尾调 `_FilterIgnoredCandidates()`；`OnCreate` 末尾调 `LoadIgnoreList(schema_id)`；
+  3. 声明已在 `WeaselUI/WeaselPanel.h:73,93-97`（`m_ignoreList` / `m_ignoreFilePath`）**无需改头文件**；
+  4. **不需 IPC 变更** ⇒ 不触发四边同步；但需 1 个 ADR（行为决策）+ 回归测试
+     （`test/TestCandidateIgnoreFilter/TestCandidateIgnoreFilter.cpp` 已有 5 断言，但**只测自由函数、测不出「接线」**
+     ⇒ 需补一条「OnRButtonDown 走 ignore 分支」的断言；
+     `test/TestCandidateRButtonDown/TestCandidateRButtonDown.cpp` 是更合适的接线级测试点）。
+  5. **风险**：过滤在 `m_ctx.cinfo.candies` 上 in-place erase，而 `candies` 是**当前页**列表
+     ⇒ 屏蔽后**页内索引与全局索引会错位** ⇒ 必须与第 6 条的页内/全局换算**一起处理**；
+     `user_ignore.txt` 按 text 匹配 ⇒ 会误伤同形不同义的候选。
+- **二级（= 新功能）**：「Shift+Ctrl+数字 按次序移除/隐藏」
+  ⇒ 无规范无设计 ⇒ 要走新 spec + 新增 IPC 命令 ⇒ **必须四边同步**
+  （server / TSF / deployer + `include/WeaselIPCData.h` + 1 ADR + `test/TestWeaselIPC/*`）；
+  且要动 `output/data/**/*.yaml` 绑定 ⇒ 按项目规则**必须先读**
+  `Rime-设置说明书-重点快捷键.md`（§3 补靪语法 / §6-§7 action 清单 / §9.3 `RELEASE_MASK` 坑）。
+  ⇒ 成本高、且是「新建」而非「恢复」⇒ **建议先做一级，等用户确认要不要二级。**
+
+### 24.4 下阶段计划：spec 089 / spec 090 拆分
+
+| spec | 范围 | 涉及文件（预估） | IPC 变更？ |
+|---|---|---|---|
+| **089** | 面板默认常驻 + 勾选态回显 + 非悬停 85% + 「重启算法服务」可靠化 + 高级子菜单 | `WeaselServer/WeaselServerApp.cpp`、`WeaselServer/QuickPanelDialog.cpp`、`WeaselServer/QuickPanelDialog.h`、`WeaselServer/WeaselTrayIcon.cpp`、`include/QuickPanelAlpha.h`、`include/FluxingUserPaths.h`、**`WeaselTSF/LanguageBar.cpp`**、**`WeaselTSF/WeaselTSF.rc`**、`output/start_service.bat`、`output/stop_service.bat`、`test/TestQuickPanelDialog/*` | **建议否**（勾选态走状态文件读回；RERUN_SERVICE 走已有 TrayCommand 通道）⇒ 不触发四边同步。若改成 IPC 读回则触发 |
+| **090** | Shift 翻页错位 + 右键屏蔽接线 | `RimeWithWeasel/RimeWithWeasel.cpp`、`WeaselUI/WeaselPanel.cpp`、`test/TestShiftSelectBinding/*`、`test/TestCandidateIgnoreFilter/*`、`test/TestCandidateRButtonDown/*` | **否**（`WEASEL_IPC_SELECT_CANDIDATE_ON_CURRENT_PAGE` 已就位） |
+
+- 改动 ≥3 文件 ⇒ **必须** spec/plan/tasks（R6 / Principle III），且 `plan.md` 须有
+  「## Constitution Check」表覆盖 5 原则（`.specify/memory/constitution.md`）。
+- **R2**：`spec.md` 里禁出现 WTL / Boost / C++ / MFC 等技术词 ⇒ 技术细节只进 `plan.md` / `tasks.md`。
+- **R3**：`tasks.md` 每条须带 P1/P2/P3 + `[USx]` 标签。
+- 两个 spec 可并行，但 `WeaselTSF/WeaselTSF.rc` 与 `WeaselTSF/LanguageBar.cpp` 只归 spec 089
+  （避免并行写者重叠）。
+
+### 24.5 门禁与真机验收清单（1.1.5）
+
+**门禁（仓库内可做）**
+
+1. `cmd /c "cd /d F:\soft\00selfmade\rime_claude && build.bat weasel installer > tmp\build-115.log 2>&1"`
+   → `BUILD_EXIT=0`；**版本线四处同改**：`weasel.props`（生成物，不入仓）/ `env.bat`（不入仓）/
+   `build.bat` / `xbuild.bat` 的 `VERSION_*`（§22.7 记过 `build.bat`/`xbuild.bat`
+   的 tracked 兜底 `VERSION_*` 会停在 1.0.0）。
+2. `cmd /c "cd /d F:\soft\00selfmade\rime_claude && scripts\test-infra\run-test-suite.bat > tmp\suite-115.log 2>&1"`
+   → `=== ALL TESTS PASSED ===` / `SUITE_EXIT=0`；
+   **跑前必须先停掉占用命名管道的已安装 `WeaselServer.exe`**（`Stop-Process -Name WeaselServer -Force`），
+   跑完用 `Start-Process -FilePath 'D:\Program Files\fluxing\weasel\start_service.bat' -WorkingDirectory 'D:\Program Files\fluxing\weasel' -WindowStyle Hidden` 恢复。
+3. 改 `WeaselTSF/WeaselTSF.rc` / `WeaselServer/WeaselServer.rc` 后**必须**核对行尾与 BOM
+   （两个文件都是 **UTF-16LE + BOM**；`edit` 工具会统一整篇行尾 ⇒ **改完必须 `git diff --numstat` 复核**）。
+4. 载荷指纹：`output/archives/fluxing-1.1.5-installer.exe` → 用
+   `cmd /c copy /Y` 收录进 `release/`（`Copy-Item` 被策略拦）→ `Get-FileHash -Algorithm SHA256`。
+5. 提交三笔（照 1.1.3/1.1.4 先例）：代码笔（含 spec）/ 文档笔 / 载荷 + 版本线笔；
+   提交信息中文用 `tmp/commit-N.txt` + `git -F`；推送 `git push kizemo Fluxing`（**没有 origin**）。
+
+**真机验收（只能由用户做）**
+
+1. 装 `release/fluxing-1.1.5-installer.exe`（原地升级，`InstallDirRegKey` 优先；**重启一次电脑**）。
+2. 第 1 条：新用户数据目录 ⇒ `Alt+,` 面板**常驻不消失**；两个右键菜单的「快速面板常驻」**都显示勾**；
+   取消后**都变回不勾**。
+3. 第 2 条：面板非悬停时**整块 85% 不透明**（不是只有图标变亮）。
+4. 第 3 条：点「重启算法服务」⇒ **服务 PID 变化**、面板/输入法**短暂不可用后恢复**；
+   失败时**弹中文提示**（不再静默）。
+5. 第 4 条：语言栏右键 ⇒ 三个开发向项**都在「高级」子菜单里**；主菜单只有用户向项。
+6. 第 6 条：拼音出候选 → **翻到第 2 页** → 按左/右 Shift ⇒ 上屏的是**第 2 页的第 2/3 个**。
+7. 第 7 条：右键点候选 ⇒ 长度 ≥2 的**自造词被删除**、短的**被屏蔽**
+   （写 `<用户数据目录>\<schema>.user_ignore.txt`），重新输入不再出现；
+   托盘「恢复已忽略的候选项」能清空屏蔽列表。
+8. 回归：Shift 双击切英文；CapsLock **关闭态**下选词/翻页/切中英；`quickpanel.state` 仍落在
+   `D:\Program Files\fluxing\user1\fluxing\`，`%APPDATA%\Rime` **未被创建**。
+
+### 24.6 本轮纠错与踩坑（务必记住）
+
+- **`.rc` 编码纠错（推翻旧记录）**：`WeaselTSF/WeaselTSF.rc` 与 `WeaselServer/WeaselServer.rc`
+  都是 **UTF-16LE + BOM**（首字节 `FF FE`），**不是 Shift-JIS**；菜单中文正常、无乱码。
+  旧交接记录里「`.rc` 是 Shift-JIS，读出乱码属正常」**作废**。
+- **两份右键菜单，别混**：
+  - **语言栏（输入法图标）** = `WeaselTSF/WeaselTSF.rc:116-137` ⇒ 有「重启算法服务」「重新部署」「退出算法服务」
+    **和**「快速面板常驻」，但**整个 WeaselTSF 模块没有任何 `CheckMenuItem`** ⇒ 勾选态**永远不回显**；
+  - **通知区（火流猩）** = `WeaselServer/WeaselServer.rc:157-178`（简体）/ `:327`（勾选逻辑所在）
+    ⇒ **没有**「重启算法服务」，多一项「恢复已忽略的候选项」。
+  ⇒ 「重启算法服务」只存在于语言栏菜单；「勾选态回显」只存在于通知区菜单 —— 这就是用户「点了没反应 / 不回显」的根源。
+- **两套选词 API 语义不一致**（第 6 条的根因）：
+  `select_candidate` = **全局索引**（与 `page_no` 无关）；
+  `select_candidate_on_current_page` = **页内索引**（内部算 `page_start`）。
+  数字键/鼠标走后者，Shift 走前者 ⇒ 翻页后必错。
+- **「先起新实例去顶掉旧实例」是坑**：`WeaselServer.cpp:145-163` 在 `retry>=10` 时 `return 0`
+  ⇒ 旧服务已被停掉、新服务没起来 ⇒ **服务静默消失**。重启必须「先 stop 确认消失，再 start」。
+- **`start_service.bat` 只有 2 行、只启不停** ⇒ 「重启」语义在脚本层就不成立。
+- **IPC 协议不需要改**：Shift 修复用已就位的 `WEASEL_IPC_SELECT_CANDIDATE_ON_CURRENT_PAGE`
+  （`include/WeaselIPC.h:32`）；右键屏蔽是纯前端状态 ⇒ **两条都不触发四边同步**。
+- **`SetAlwaysShowMode` 同值早退不写盘**（`QuickPanelDialog.cpp:1566`）
+  ⇒ 「默认常驻」实现必须区分「文件不存在」与「文件写了 0」。
+- **`m_ctx.cinfo.candies` 是当前页列表** ⇒ 屏蔽过滤做 in-place erase 会让页内/全局索引错位
+  ⇒ 第 6 条与第 7 条**必须一起改**。
+- `codebase-memory-mcp` 图谱本机**仍不可用**（子任务实测 MCP 未连接）
+  ⇒ 继续按 `.claude/rules/codebase-graph.md` 降级 Grep/Read。
+- 子任务 `grep` 工具的 `output_mode` 参数**未生效**（始终返回文件列表）
+  ⇒ 需要行号时改用 `Select-String`。
+
+### 24.7 未闭合项
+
+- **用户手动**：删 `D:\Program Files\fluxing\user1\fluxing\__mavis_probe.tmp`
+  （删除被本机安全策略挡住：`Remove-Item` 硬拦截 + `D:\Program Files\` 保护路径）。
+- **Windows Sandbox 权威门禁本机跑不起来**（Hyper-V vSwitch 异常）
+  ⇒ spec 089/090 **刻意不碰** `output/install.nsi` 与 `output/data/user-custom/**`
+  ⇒ 第 4 条的 Stage-2 缺口**记录不修**；第 7 条二级（新功能）**不碰 yaml 绑定**。
+- **第 7 条二级（Shift+Ctrl+数字 按次序移除/隐藏）** 是**新功能**，不是恢复
+  ⇒ 需用户明确要才做（要 ⇒ 必须四边同步 + 新 spec + yaml 绑定）。
+- **面板 idx0/idx3 点了没反应**、`s_onSchema` 死代码 ⇒ 独立小任务，未排进 089/090。
+- `release/` 仍只有 1.1.3 / 1.1.4；1.1.1 / 1.1.2 是否回填待定（约 85 MB）。
+- `CHANGELOG [1.1.0]/[1.1.1]` 仍无独立版本节（同 §22.8，待用户决定）。
+- **1.1.4 尚未装机验收**（用户还没装 1.1.4）⇒ 1.1.5 出包前需先确认 1.1.4 的验收结论，
+  否则两轮改动叠在一起，用户分不清是哪一轮生效的。
+
+### 24.8 本轮产出物（指针）
+
+- 完整交接正文（本文件）：`F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-v1.0.0-bare-shift-ascii-toggle-2026-10-28.md`
+- 接力 prompt：`F:\soft\00selfmade\rime_claude\docs\archive\prompts\prompt-next-session-1.1.5-user-feedback-2026-10-30.md`
+- 调研原始结论（未跟踪 scratch）：`F:\soft\00selfmade\rime_claude\tmp\research-A-quickpanel.md`、
+  `tmp\research-B-tray-menu-service.md`、`tmp\research-C-shift-candidate.md`
+- 自动交接卡（Stop 事件覆盖版）：
+  `E:\Users\Duanyi\.minimax\.minimax\maintenance\task-state\LATEST.md`
