@@ -31,10 +31,12 @@ std::unordered_set<std::wstring> ReadIgnoreListFromFile(
     const std::string& path) {
   std::unordered_set<std::wstring> result;
   std::ifstream in(path, std::ios::binary);
-  if (!in) return result;
+  if (!in)
+    return result;
   std::vector<unsigned char> raw((std::istreambuf_iterator<char>(in)),
-                                  std::istreambuf_iterator<char>());
-  if (raw.empty()) return result;
+                                 std::istreambuf_iterator<char>());
+  if (raw.empty())
+    return result;
   std::wstring content;
   if (raw.size() >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) {
     // UTF-8 BOM: 简化为 ASCII 测试用例（test 不调 u8tow，模拟 wide 内容）
@@ -43,7 +45,7 @@ std::unordered_set<std::wstring> ReadIgnoreListFromFile(
   } else if (raw.size() >= 2 && raw[0] == 0xFF && raw[1] == 0xFE) {
     // UTF-16 LE BOM
     content = std::wstring((wchar_t*)(raw.data() + 2),
-                            (raw.size() - 2) / sizeof(wchar_t));
+                           (raw.size() - 2) / sizeof(wchar_t));
   } else {
     // 无 BOM
     std::string utf8((char*)raw.data(), raw.size());
@@ -53,22 +55,27 @@ std::unordered_set<std::wstring> ReadIgnoreListFromFile(
   size_t pos = 0;
   while (pos < content.size()) {
     size_t eol = content.find_first_of(L"\r\n", pos);
-    if (eol == std::wstring::npos) eol = content.size();
+    if (eol == std::wstring::npos)
+      eol = content.size();
     std::wstring line = content.substr(pos, eol - pos);
     while (!line.empty() && (line.back() == L' ' || line.back() == L'\t'))
       line.pop_back();
-    if (!line.empty()) result.insert(line);
+    if (!line.empty())
+      result.insert(line);
     pos = eol;
-    if (pos < content.size() && content[pos] == L'\r') pos++;
-    if (pos < content.size() && content[pos] == L'\n') pos++;
+    if (pos < content.size() && content[pos] == L'\r')
+      pos++;
+    if (pos < content.size() && content[pos] == L'\n')
+      pos++;
   }
   return result;
 }
 
 // Mirror WeaselPanel::_FilterIgnoredCandidates.
 void FilterIgnoredCandidates(std::vector<std::wstring>& candidates,
-                              const std::unordered_set<std::wstring>& ignore) {
-  if (ignore.empty()) return;
+                             const std::unordered_set<std::wstring>& ignore) {
+  if (ignore.empty())
+    return;
   for (size_t i = candidates.size(); i > 0; --i) {
     if (ignore.count(candidates[i - 1]) > 0) {
       candidates.erase(candidates.begin() + (i - 1));
@@ -77,6 +84,9 @@ void FilterIgnoredCandidates(std::vector<std::wstring>& candidates,
 }
 
 }  // namespace
+
+// spec 090: 服务端「可见页内索引 -> 引擎索引」映射的行为级断言。
+int RunServerSideIgnoreMappingTests();
 
 int main() {
   // T1: LoadIgnoreList reads UTF-8 BOM CRLF file.
@@ -138,7 +148,8 @@ int main() {
     BOOST_TEST_EQ(cands.size(), 2u);
     BOOST_TEST(cands[0] == L"alpha");
     BOOST_TEST(cands[1] == L"gamma");
-    std::cout << "  PASS: T4 FilterIgnoredCandidates removes all ignored" << std::endl;
+    std::cout << "  PASS: T4 FilterIgnoredCandidates removes all ignored"
+              << std::endl;
   }
 
   // T5: _FilterIgnoredCandidates leaves non-ignored candidates alone.
@@ -155,5 +166,7 @@ int main() {
   }
 
   std::cout << "5 / 5 assertions passed" << std::endl;
+
+  RunServerSideIgnoreMappingTests();
   return boost::report_errors();
 }

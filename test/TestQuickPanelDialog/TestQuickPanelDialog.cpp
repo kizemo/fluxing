@@ -234,11 +234,11 @@ int main() {
           "T12b: ScaleAlpha(80, 255) == 80 (满值系数逐像素不变)");
     Check(fluxing::ScaleAlpha(255, fluxing::kAlphaFactorFull) == 255,
           "T12c: ScaleAlpha(255, 255) == 255 (彩色像素不透明度不变)");
-    // T12d: 60% 系数(长显常态, ADR 0018 D2 把 idle 由 51 提到 153)
-    Check(fluxing::ScaleAlpha(255, fluxing::kAlphaFactorIdle) == 153,
-          "T12d: ScaleAlpha(255, 153) == 153 (60% 系数)");
-    Check(fluxing::ScaleAlpha(220, fluxing::kAlphaFactorIdle) == 132,
-          "T12e: ScaleAlpha(220, 153) == 132 (渐变顶行按 60% 缩放)");
+    // T12d/T12e: ScaleAlpha 数学钉死(spec 089 把 idle 由 153 提到 217 = 85%)
+    Check(fluxing::ScaleAlpha(255, fluxing::kAlphaFactorIdle) == 217,
+          "T12d: ScaleAlpha(255, 217) == 217 (spec 089: 85% 系数)");
+    Check(fluxing::ScaleAlpha(220, fluxing::kAlphaFactorIdle) == 187,
+          "T12e: ScaleAlpha(220, 217) == 187 (ScaleAlpha 数学与面板常量解耦)");
     // T12f: 渐变步进不越过目标(ADR 0013 D3)
     Check(fluxing::StepAlpha(255, 51, fluxing::kAlphaFadeStep) == 231,
           "T12f: StepAlpha(255 -> 51, 24) == 231 (一次退 24)");
@@ -290,8 +290,8 @@ int main() {
     Check(!QuickPanelDialog::AlwaysShowMode(),
           "T13a: 默认启动不长显(勾选清零是旧缺陷本体)");
     DeleteFileW(g_qpStateTestPath.c_str());
-    Check(!QuickPanelDialog::LoadPersistedAlwaysShowMode(),
-          "T13b: 状态文件缺失 => 默认关, 不报错不崩溃");
+    Check(QuickPanelDialog::LoadPersistedAlwaysShowMode(),
+          "T13b: 状态文件缺失 => 默认常驻(spec 089 / ADR 0022), 不报错不崩溃");
     // 1) 模拟"上一会话勾选过"留下的旧文件 => Restore 复活勾选
     { std::ofstream f(g_qpStateTestPath.c_str(), std::ios::binary);
       f << "always_show=1\r\n"; }
@@ -318,8 +318,9 @@ int main() {
     // 4) 坏文件容错 => 默认关
     { std::ofstream f(g_qpStateTestPath.c_str(), std::ios::binary);
       f << "garbage!"; }
-    Check(!QuickPanelDialog::LoadPersistedAlwaysShowMode(),
-          "T13h: 损坏状态文件 => 默认关");
+    Check(
+        !QuickPanelDialog::LoadPersistedAlwaysShowMode(),
+        "T13h: 文件存在但内容非 always_show=1 => 关(与「缺失=>常驻」语义不同)");
     QuickPanelDialog::SetAlwaysShowMode(false);  // 收尾复位默认态
     DeleteFileW(g_qpStateTestPath.c_str());
   }
@@ -409,8 +410,8 @@ int main() {
     ::DeleteFileW(primary.c_str());
     ::DeleteFileW(legacy.c_str());
 
-    Check(!QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(primary, legacy),
-          "T16a: 两个落点都没有 => 默认关");
+    Check(QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(primary, legacy),
+          "T16a: 两个落点都没有 => 默认常驻(spec 089)");
     {
       std::ofstream f(legacy.c_str(), std::ios::binary);
       f << "always_show=1\n";
@@ -429,10 +430,10 @@ int main() {
     }
     Check(QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(primary, legacy),
           "T16d: 新落点 always_show=1 => 开");
-    // T16e: 只剩旧落点、且明确不兜底 => 必须读不到(否则会偷偷回退旧路径)
+    // T16e: 只剩旧落点、且明确不兜底 => 不读 legacy; 结果仍是默认常驻(spec 089)
     ::DeleteFileW(primary.c_str());
-    Check(!QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(primary, L""),
-          "T16e: legacy 传空串 => 不做旧落点兜底");
+    Check(QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(primary, L""),
+          "T16e: legacy 传空串 + 新落点缺失 => 默认常驻(不兜底旧落点)");
     ::DeleteFileW(primary.c_str());
     ::DeleteFileW(legacy.c_str());
   }
