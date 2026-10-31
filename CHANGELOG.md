@@ -1,5 +1,28 @@
 ## [Unreleased]
 
+### fix(fluxing): `/quit` 等 7 个命令行选项此前**全部静默失效**（spec 093）
+
+- **根因**：`_tWinMain` 收到的是 WinMain 的**原始** `lpCmdLine`，参数前带一个空格
+  （`WeaselServer.exe /quit` ⇒ `lpCmdLine == " /quit"`）；旧代码用 7 处**整串比较**
+  `!wcscmp(L"/quit", lpstrCmdLine)` 判定 ⇒ **恒为假** ⇒ `/q` `/quit` `/ascii` `/nascii`
+  `/userdir` `/weaseldir` `/update` 七个选项全是**死选项**。
+- **最严重的后果**：`/quit` 落进「已在运行则重启服务」分支 ⇒ **语义与用户意图相反**
+  （要退出，结果是重启），比「没反应」更难察觉。
+- **修法**：按宪法 **R7**（生产代码与测试同源）把解析收敛成共享头纯函数
+  `WeaselServer/ServerCmdLine.h`：先归一化（去首尾空白 + 剥成对双引号）再取首个记号比对，
+  产出 `enum class Option { None, UserDir, WeaselDir, Ascii, Nascii, Quit, Update }`；
+  `WeaselServer/WeaselServer.cpp` 的 7 处判定改为读 `servercmd::Parse(lpCmdLine)` 的结果。
+  **控制流与语义不变**（判定顺序不变，`/update` 仍在重启分支之后）。
+- **解析语义保持精确匹配（区分大小写）**，不扩大为不区分大小写；不新增选项。
+- **回归测试**：新建 `test/TestServerCmdLine/`（T1–T6 共 6 用例），其中
+  - **T5 缺陷见证**：复刻修复前的整串比较，断言它对 `" /quit"` 恒不匹配；
+  - **T6 调用点守卫**：运行时读 `WeaselServer/WeaselServer.cpp`，断言调用点已改用
+    `servercmd::Parse` 且不含任何 `wcscmp(L"/` —— 否则把调用点改回旧写法时 T1–T5 仍会全绿。
+- **TDD 证据**：RED-2 先落**朴素基线**（复刻修复前行为）跑出 **16 条行为性断言失败**
+  （T3 的 None 场景保持绿），证明测试有判别性、不是恒绿探针；GREEN 后 **6/6 全过**。
+- **零 IPC 协议变更** ⇒ 不触发 server / TSF / deployer 三端一次性提交。
+- **产品构建**：`build.bat weasel` 经 `weasel.sln` **0 错误**（仅 1 个既有 C4099 警告）。
+
 ### chore(fluxing): spec 092 系统性清理（测试工程编码 + 探针判别性 + 双 QuickPanel 测试去 SKIP + 载荷仓回填 + ADR 索引）
 
 - **测试工程统一加 `/utf-8`**：`test/` 下 **28** 个 `.vcxproj` 现已全部含 `/utf-8`
