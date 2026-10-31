@@ -222,6 +222,32 @@
   Windows 资源版本号）；且本 fork 的 CI 发布步骤被
   `github.repository == 'rime/weasel'` 门控 ⇒ `release/` 不会自动对外发版。
 
+## [1.1.6] - 2026-10-31
+
+### 主要更新
+
+本轮落地 1.1.5 装机实测反馈 + 一个新缺陷（spec 091，ADR 0024）。
+
+- **快捷设置栏的显隐改为跟随输入法激活状态**（`include/WeaselIPC.h`、
+  `WeaselIPC/WeaselClientImpl.cpp`、`WeaselTSF/WeaselTSF.cpp`、
+  `RimeWithWeasel/RimeWithWeasel.cpp`，spec 091 / ADR 0024）：
+  此前从火流猩切到别的输入法后，快捷设置栏仍然留在屏幕上。根因**不是**面板忘了隐藏，
+  而是「该隐藏」这个信号从未送到：`FocusOut` 有两条来源——切窗口
+  （`ITfKeyEventSink::OnSetFocus`）与切到别的输入法
+  （`ITfActiveLanguageProfileNotifySink::OnActivated(false)`）——过去都发 `wParam=0`，
+  服务端无法区分，于是一刀切的常驻守卫把「切输入法必须收起」一并挡掉。
+  现复用既有 `wParam` 槽位新增位标志 `WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED`
+  （与既有的 `WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED` 完全对称），
+  **不新增 IPC 消息类型、线格式零变化、旧客户端安全降级**；
+  判定逻辑收敛到共享头纯函数 `ShouldHideQuickPanelOnFocusOut()`，
+  生产代码与测试同源（宪法 R7）。
+- **「常驻」的口径明确化**：「常驻」= 不因鼠标移开 / 切窗口 / 点击而消失；
+  **切到别的输入法时输入法已经不在场，快捷设置栏必须收起**。两条语义不再互相牵连。
+- **语言栏弹出菜单去掉「快速面板常驻」项**（`WeaselTSF/WeaselTSF.rc`，spec 091 / ADR 0024）：
+  该项的勾选态在语言栏里本就无法回显（跨进程状态 + 宪法 P2 禁止在 TSF 回调里读盘），
+  1.1.5 已改为「装完即常驻」，菜单项因此只剩误导作用 ⇒ 从语言栏的三份弹出菜单移除。
+  **托盘右键菜单的「快速面板常驻」保留**，仍可随时开关常驻。
+
 ## [1.1.5] - 2026-10-30
 
 ### 主要更新
