@@ -14,6 +14,12 @@
 //
 // 最后一组是「坏数据负对照」:如果名单被误当成空名单使用,映射就不会变短、
 // 映射后取到的原文就会等于原索引取到的原文 —— 那两条断言会立刻失败。
+//
+// spec 092 (缺陷 A · 无判别力的 PASS 标签):
+// 14 处 "PASS: Tn ..." 原先全是**无条件打印**。断言失败时日志里照样出现
+// PASS,标签没有判别力。现在标签挂在本组断言的真实结果上 ——
+// boost::detail::test_errors() 是 boost lightweight_test 的全局失败计数器
+// (BOOST_TEST* 失败时 +1),打印前后的快照相等才打 PASS。
 
 #include "stdafx.h"
 #include <boost/detail/lightweight_test.hpp>
@@ -31,6 +37,28 @@ std::vector<std::wstring> EnginePage() {
   return {L"甲", L"乙", L"丙", L"丁", L"戊"};
 }
 
+// ===== spec 092: 让 PASS 标签有判别力 ==============================
+class AssertionScope {
+ public:
+  AssertionScope() : errors_before_(boost::detail::test_errors()) {}
+  bool Passed() const {
+    return boost::detail::test_errors() == errors_before_;
+  }
+
+ private:
+  int errors_before_;
+};
+
+int g_cases_total = 0;
+int g_cases_failed = 0;
+
+void ReportCase(const char* label, bool passed) {
+  ++g_cases_total;
+  if (!passed)
+    ++g_cases_failed;
+  std::cout << (passed ? "  PASS: " : "  FAIL: ") << label << std::endl;
+}
+
 }  // namespace
 
 // spec 090: 与 TestCandidateIgnoreFilter.cpp 共用一个 main() 入口,
@@ -39,6 +67,7 @@ int RunServerSideIgnoreMappingTests() {
   // T1: 空名单退化成恒等映射 —— 可见候选与引擎候选逐项相同,映射为 0..N-1。
   //     这是「未启用屏蔽功能时行为逐字节不变」的保证(FR-005)。
   {
+    AssertionScope scope;
     std::unordered_set<std::wstring> ignore;  // 空
     std::vector<std::wstring> visible;
     std::vector<size_t> map;
@@ -53,11 +82,12 @@ int RunServerSideIgnoreMappingTests() {
     size_t engine = 999;
     BOOST_TEST(fluxing::MapVisibleIndexToEngine(map, 3, &engine));
     BOOST_TEST_EQ(engine, 3u);
-    std::cout << "  PASS: T1 空名单 -> 恒等映射" << std::endl;
+    ReportCase("T1 空名单 -> 恒等映射", scope.Passed());
   }
 
   // T2: 屏蔽首项 —— 可见列表少一项,映射整体后移。
   {
+    AssertionScope scope;
     std::unordered_set<std::wstring> ignore{L"甲"};
     std::vector<std::wstring> visible;
     std::vector<size_t> map;
@@ -74,11 +104,12 @@ int RunServerSideIgnoreMappingTests() {
     engine = 999;
     BOOST_TEST(!fluxing::MapVisibleIndexToEngine(map, 4, &engine));
     BOOST_TEST_EQ(engine, 999u);
-    std::cout << "  PASS: T2 屏蔽首项 -> 映射后移一位" << std::endl;
+    ReportCase("T2 屏蔽首项 -> 映射后移一位", scope.Passed());
   }
 
   // T3: 屏蔽中间项 —— 映射在屏蔽点处出现空洞。
   {
+    AssertionScope scope;
     std::unordered_set<std::wstring> ignore{L"丙"};
     std::vector<std::wstring> visible;
     std::vector<size_t> map;
@@ -89,11 +120,12 @@ int RunServerSideIgnoreMappingTests() {
     BOOST_TEST_EQ(map[2], 3u);  // 跳过引擎索引 2
     BOOST_TEST_EQ(map[3], 4u);
     BOOST_TEST(visible[2] == L"丁");
-    std::cout << "  PASS: T3 屏蔽中间项 -> 映射出现空洞" << std::endl;
+    ReportCase("T3 屏蔽中间项 -> 映射出现空洞", scope.Passed());
   }
 
   // T4: 屏蔽末项。
   {
+    AssertionScope scope;
     std::unordered_set<std::wstring> ignore{L"戊"};
     std::vector<std::wstring> visible;
     std::vector<size_t> map;
@@ -101,12 +133,13 @@ int RunServerSideIgnoreMappingTests() {
     BOOST_TEST_EQ(visible.size(), 4u);
     BOOST_TEST_EQ(map[3], 3u);
     BOOST_TEST(visible[3] == L"丁");
-    std::cout << "  PASS: T4 屏蔽末项" << std::endl;
+    ReportCase("T4 屏蔽末项", scope.Passed());
   }
 
   // T5: 全部屏蔽 —— 可见列表与映射都空;任何可见索引都越界返回 false。
   //     调用方拿到 false 必须「什么都不做」:不选词、不上屏、不关窗。
   {
+    AssertionScope scope;
     std::unordered_set<std::wstring> ignore{L"甲", L"乙", L"丙", L"丁", L"戊"};
     std::vector<std::wstring> visible;
     std::vector<size_t> map;
@@ -118,11 +151,12 @@ int RunServerSideIgnoreMappingTests() {
     BOOST_TEST_EQ(engine, 999u);
     // 空出参指针也必须安全返回 false,不许崩。
     BOOST_TEST(!fluxing::MapVisibleIndexToEngine(map, 0, nullptr));
-    std::cout << "  PASS: T5 全部屏蔽 -> 空映射 + 越界 false" << std::endl;
+    ReportCase("T5 全部屏蔽 -> 空映射 + 越界 false", scope.Passed());
   }
 
   // T6: 名单里有当前页不存在的词 —— 不影响本页映射(名单是全局的,按词匹配)。
   {
+    AssertionScope scope;
     std::unordered_set<std::wstring> ignore{L"不在本页的词", L"乙"};
     std::vector<std::wstring> visible;
     std::vector<size_t> map;
@@ -130,32 +164,34 @@ int RunServerSideIgnoreMappingTests() {
     BOOST_TEST_EQ(visible.size(), 4u);
     BOOST_TEST_EQ(map[0], 0u);
     BOOST_TEST_EQ(map[1], 2u);
-    std::cout << "  PASS: T6 名单含不存在的词 -> 只按命中项过滤" << std::endl;
+    ReportCase("T6 名单含不存在的词 -> 只按命中项过滤", scope.Passed());
   }
 
   // T7: IsPageLocalIndexValid —— 页内校验(count = 5)。
   //     缺陷 A 的根因就是翻页后拿第一页的候选数当页内上界。
   {
+    AssertionScope scope;
     BOOST_TEST(fluxing::IsPageLocalIndexValid(0, 5));
     BOOST_TEST(fluxing::IsPageLocalIndexValid(1, 5));
     BOOST_TEST(fluxing::IsPageLocalIndexValid(4, 5));
     BOOST_TEST(!fluxing::IsPageLocalIndexValid(5, 5));  // 上界闭不了
     BOOST_TEST(!fluxing::IsPageLocalIndexValid(9, 5));
     BOOST_TEST(!fluxing::IsPageLocalIndexValid(-1, 5));  // 负数
-    std::cout << "  PASS: T7 IsPageLocalIndexValid count=5 边界" << std::endl;
+    ReportCase("T7 IsPageLocalIndexValid count=5 边界", scope.Passed());
   }
 
   // T8: IsPageLocalIndexValid —— count = 0(当前页没有任何候选)一律 false。
   {
+    AssertionScope scope;
     BOOST_TEST(!fluxing::IsPageLocalIndexValid(0, 0));
     BOOST_TEST(!fluxing::IsPageLocalIndexValid(1, 0));
     BOOST_TEST(!fluxing::IsPageLocalIndexValid(-1, 0));
-    std::cout << "  PASS: T8 IsPageLocalIndexValid count=0 全 false"
-              << std::endl;
+    ReportCase("T8 IsPageLocalIndexValid count=0 全 false", scope.Passed());
   }
 
   // T9: IgnoreListFilePath 正常拼接。
   {
+    AssertionScope scope;
     std::wstring path = fluxing::IgnoreListFilePath(
         L"C:\\Users\\me\\AppData\\Roaming\\Fluxing", L"luna_pinyin");
     BOOST_TEST(path ==
@@ -164,22 +200,24 @@ int RunServerSideIgnoreMappingTests() {
     // 与 IgnoreListFileName 自洽。
     BOOST_TEST(fluxing::IgnoreListFileName(L"luna_pinyin") ==
                L"luna_pinyin.user_ignore.txt");
-    std::cout << "  PASS: T9 IgnoreListFilePath 正常拼接" << std::endl;
+    ReportCase("T9 IgnoreListFilePath 正常拼接", scope.Passed());
   }
 
   // T10: IgnoreListFilePath 任一入参为空 -> 返回空串(绝不拼出残缺路径)。
   //      调用方据此短路,不会去用户数据目录里乱写文件。
   {
+    AssertionScope scope;
     BOOST_TEST(fluxing::IgnoreListFilePath(L"", L"luna_pinyin").empty());
     BOOST_TEST(fluxing::IgnoreListFilePath(L"C:\\dir", L"").empty());
     BOOST_TEST(fluxing::IgnoreListFilePath(L"", L"").empty());
     BOOST_TEST(fluxing::IgnoreListFileName(L"").empty());
-    std::cout << "  PASS: T10 IgnoreListFilePath 空入参 -> 空串" << std::endl;
+    ReportCase("T10 IgnoreListFilePath 空入参 -> 空串", scope.Passed());
   }
 
   // T11: ParseIgnoreListText —— CRLF / LF / CR 混排 + 空行 + 首尾空白 +
   // U+FEFF。
   {
+    AssertionScope scope;
     std::wstring text =
         L"\uFEFF"      // UTF-8 BOM / UTF-16LE BOM 解码后都表现为它
         L"甲\r\n"      // CRLF
@@ -201,12 +239,12 @@ int RunServerSideIgnoreMappingTests() {
     BOOST_TEST(out.count(L"己") == 1);
     // 带空白的原样串不应进集合(否则永远匹配不上引擎候选)。
     BOOST_TEST(out.count(L"  乙 ") == 0);
-    std::cout << "  PASS: T11 ParseIgnoreListText 混排换行/空白/BOM"
-              << std::endl;
+    ReportCase("T11 ParseIgnoreListText 混排换行/空白/BOM", scope.Passed());
   }
 
   // T12: ParseIgnoreListText 空串 / 只有换行 -> 空集合。
   {
+    AssertionScope scope;
     std::unordered_set<std::wstring> out;
     fluxing::ParseIgnoreListText(L"", &out);
     BOOST_TEST(out.empty());
@@ -214,13 +252,13 @@ int RunServerSideIgnoreMappingTests() {
     fluxing::ParseIgnoreListText(L"\r\n\n  \r", &out);
     BOOST_TEST(out.empty());  // 解析前必须清空出参,不许叠加旧内容
     fluxing::ParseIgnoreListText(L"甲", nullptr);  // 空出参不许崩
-    std::cout << "  PASS: T12 ParseIgnoreListText 空输入 -> 空集合"
-              << std::endl;
+    ReportCase("T12 ParseIgnoreListText 空输入 -> 空集合", scope.Passed());
   }
 
   // T13: 坏数据负对照(1) —— 名单非空时映射必须变短。
   //      若名单被误当空名单(例如读取静默失败没被发现),这条会失败。
   {
+    AssertionScope scope;
     std::unordered_set<std::wstring> ignore{L"乙", L"丁"};
     std::vector<std::wstring> visible;
     std::vector<size_t> map;
@@ -228,12 +266,13 @@ int RunServerSideIgnoreMappingTests() {
     BOOST_TEST(map.size() < EnginePage().size());
     BOOST_TEST_EQ(map.size(), 3u);
     BOOST_TEST_EQ(visible.size(), map.size());
-    std::cout << "  PASS: T13 负对照: 名单非空 -> 映射变短" << std::endl;
+    ReportCase("T13 负对照: 名单非空 -> 映射变短", scope.Passed());
   }
 
   // T14: 坏数据负对照(2) —— 映射后索引指向的原文必须 != 原索引指向的原文。
   //      这一条正是「直接用可见索引打引擎」会犯的错(spec 090 缺陷 A/B 同源)。
   {
+    AssertionScope scope;
     std::unordered_set<std::wstring> ignore{L"甲"};
     auto page = EnginePage();
     std::vector<std::wstring> visible;
@@ -246,9 +285,16 @@ int RunServerSideIgnoreMappingTests() {
     BOOST_TEST(page[engine] != page[0]);
     BOOST_TEST(page[engine] == L"乙");
     BOOST_TEST(visible[0] == page[engine]);
-    std::cout << "  PASS: T14 负对照: 映射后原文 != 原索引原文" << std::endl;
+    ReportCase("T14 负对照: 映射后原文 != 原索引原文", scope.Passed());
   }
 
-  std::cout << "14 / 14 assertions passed" << std::endl;
+  // spec 092: 汇总行只在真的全过时才打 "14 / 14 assertions passed"。
+  if (g_cases_failed == 0) {
+    std::cout << "14 / 14 assertions passed" << std::endl;
+  } else {
+    std::cout << (g_cases_total - g_cases_failed) << " / " << g_cases_total
+              << " cases passed, " << boost::detail::test_errors()
+              << " failed assertions" << std::endl;
+  }
   return 0;  // 错误计数由唯一 main() 的 boost::report_errors() 统一汇总
 }

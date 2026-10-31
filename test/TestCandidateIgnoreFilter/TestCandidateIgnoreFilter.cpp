@@ -13,6 +13,17 @@
 //   3. LoadIgnoreList reads UTF-16 LE BOM file (rlegacy rime data).
 //   4. _FilterIgnoredCandidates removes all candidates in the ignore set.
 //   5. _FilterIgnoredCandidates leaves non-ignored candidates alone.
+//
+// spec 092 (缺陷 A · 无判别力的 PASS 标签):
+// 原实现在每组断言后**无条件**打印 "PASS: Tn ..."。同一组 BOOST_TEST
+// 断言即使失败,日志里照样出现 PASS —— 标签不携带任何判别信息,读日志的
+// 人会被误导(拦住回归的只有 boost::report_errors() 的退出码)。
+// 现在 PASS 标签挂到本组断言的**真实结果**上:
+//   boost::detail::test_errors() 是 boost lightweight_test 的全局失败
+//   计数器(BOOST_TEST* 失败时 +1;boost/detail/lightweight_test.hpp 是
+//   boost/core/lightweight_test.hpp 的转发头,后者才有这个符号)。
+//   进入一组断言前取一次快照,打印标签时再取一次,两者相等 => 本组全过。
+// 退出码仍由 boost::report_errors() 统一决定(有失败 => 非 0)。
 
 #include "stdafx.h"
 #include <boost/detail/lightweight_test.hpp>
@@ -83,6 +94,31 @@ void FilterIgnoredCandidates(std::vector<std::wstring>& candidates,
   }
 }
 
+// ===== spec 092: 让 PASS 标签有判别力 ==============================
+// boost::detail::test_errors() —— boost lightweight_test 的全局失败计数器。
+// BOOST_TEST* 失败时 +1、成功时不变。于是「本组断言前后的快照相等」等价
+// 于「本组断言全过」,标签就不再是空口承诺。
+class AssertionScope {
+ public:
+  AssertionScope() : errors_before_(boost::detail::test_errors()) {}
+  bool Passed() const {
+    return boost::detail::test_errors() == errors_before_;
+  }
+
+ private:
+  int errors_before_;
+};
+
+int g_cases_total = 0;
+int g_cases_failed = 0;
+
+void ReportCase(const char* label, bool passed) {
+  ++g_cases_total;
+  if (!passed)
+    ++g_cases_failed;
+  std::cout << (passed ? "  PASS: " : "  FAIL: ") << label << std::endl;
+}
+
 }  // namespace
 
 // spec 090: 服务端「可见页内索引 -> 引擎索引」映射的行为级断言。
@@ -91,6 +127,7 @@ int RunServerSideIgnoreMappingTests();
 int main() {
   // T1: LoadIgnoreList reads UTF-8 BOM CRLF file.
   {
+    AssertionScope scope;
     const char* path = "test_ignore_utf8.txt";
     {
       std::ofstream out(path, std::ios::binary);
@@ -102,12 +139,13 @@ int main() {
     BOOST_TEST(set.count(L"alpha") == 1);
     BOOST_TEST(set.count(L"beta") == 1);
     BOOST_TEST(set.count(L"gamma") == 1);
-    std::cout << "  PASS: T1 LoadIgnoreList reads UTF-8 BOM CRLF" << std::endl;
+    ReportCase("T1 LoadIgnoreList reads UTF-8 BOM CRLF", scope.Passed());
     std::remove(path);
   }
 
   // T2: LoadIgnoreList skips blank / whitespace-only lines.
   {
+    AssertionScope scope;
     const char* path = "test_ignore_blank.txt";
     {
       std::ofstream out(path, std::ios::binary);
@@ -118,12 +156,13 @@ int main() {
     BOOST_TEST_EQ(set.size(), 2u);
     BOOST_TEST(set.count(L"alpha") == 1);
     BOOST_TEST(set.count(L"beta") == 1);
-    std::cout << "  PASS: T2 LoadIgnoreList skips blank lines" << std::endl;
+    ReportCase("T2 LoadIgnoreList skips blank lines", scope.Passed());
     std::remove(path);
   }
 
   // T3: LoadIgnoreList reads UTF-16 LE BOM file.
   {
+    AssertionScope scope;
     const char* path = "test_ignore_utf16.txt";
     {
       std::ofstream out(path, std::ios::binary);
@@ -136,24 +175,26 @@ int main() {
     BOOST_TEST_EQ(set.size(), 2u);
     BOOST_TEST(set.count(L"alpha") == 1);
     BOOST_TEST(set.count(L"beta") == 1);
-    std::cout << "  PASS: T3 LoadIgnoreList reads UTF-16 LE BOM" << std::endl;
+    ReportCase("T3 LoadIgnoreList reads UTF-16 LE BOM", scope.Passed());
     std::remove(path);
   }
 
   // T4: _FilterIgnoredCandidates removes all candidates in the ignore set.
   {
+    AssertionScope scope;
     std::vector<std::wstring> cands = {L"alpha", L"beta", L"gamma", L"delta"};
     std::unordered_set<std::wstring> ignore = {L"beta", L"delta"};
     FilterIgnoredCandidates(cands, ignore);
     BOOST_TEST_EQ(cands.size(), 2u);
     BOOST_TEST(cands[0] == L"alpha");
     BOOST_TEST(cands[1] == L"gamma");
-    std::cout << "  PASS: T4 FilterIgnoredCandidates removes all ignored"
-              << std::endl;
+    ReportCase("T4 FilterIgnoredCandidates removes all ignored",
+               scope.Passed());
   }
 
   // T5: _FilterIgnoredCandidates leaves non-ignored candidates alone.
   {
+    AssertionScope scope;
     std::vector<std::wstring> cands = {L"alpha", L"beta", L"gamma"};
     std::unordered_set<std::wstring> ignore = {L"xxx", L"yyy"};
     FilterIgnoredCandidates(cands, ignore);
@@ -161,11 +202,19 @@ int main() {
     BOOST_TEST(cands[0] == L"alpha");
     BOOST_TEST(cands[1] == L"beta");
     BOOST_TEST(cands[2] == L"gamma");
-    std::cout << "  PASS: T5 FilterIgnoredCandidates leaves non-ignored alone"
-              << std::endl;
+    ReportCase("T5 FilterIgnoredCandidates leaves non-ignored alone",
+               scope.Passed());
   }
 
-  std::cout << "5 / 5 assertions passed" << std::endl;
+  // spec 092: 汇总行只在**真的**全过时才打 "5 / 5 assertions passed"。
+  // 失败时打真实计数,不再无条件报喜。
+  if (g_cases_failed == 0) {
+    std::cout << "5 / 5 assertions passed" << std::endl;
+  } else {
+    std::cout << (g_cases_total - g_cases_failed) << " / " << g_cases_total
+              << " cases passed, " << boost::detail::test_errors()
+              << " failed assertions" << std::endl;
+  }
 
   RunServerSideIgnoreMappingTests();
   return boost::report_errors();

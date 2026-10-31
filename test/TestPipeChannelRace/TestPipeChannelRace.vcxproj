@@ -40,6 +40,7 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <WarningLevel>Level3</WarningLevel>
       <!-- L142: WEASEL_IPC_NO_BOOST_ARCHIVE keeps the boost::archive headers
            out of this translation unit. The boost::archive headers declare an

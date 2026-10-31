@@ -1,37 +1,34 @@
-﻿// spec 036 + spec 038: TestQuickPanelDialog verifies the dialog
-// behavior after the spec 038 refactor to spec 037 FluxingComponents.
+﻿// spec 036 + spec 038 → spec 092: TestQuickPanelDialog
 //
-// spec 036 baseline (6 assertions): the dialog instantiated 2 native
-// Win32 BUTTON controls (ID_QUICKPANEL_BTN_ASCII +
-// ID_QUICKPANEL_BTN_DEPLOY) and 1 native close X (IDCANCEL).
+// 历史沿革:
+//   spec 036 基线(6 断言):面板创建 2 个原生 Win32 BUTTON
+//   (ID_QUICKPANEL_BTN_ASCII / ID_QUICKPANEL_BTN_DEPLOY)+ 1 个原生关闭 X(IDCANCEL)。
+//   spec 038 改造(15 断言 / 6 用例):原生按钮换成 4 个 Fluxing 控件
+//   (Label + Panel + Toggle + Button)+ 1 个原生 X。
+//   v0.18.29.0 (spec 045):控件创建从 OnCreate 移到 Show();面板本体随后又做过
+//   GDI v3-rev3 整体重写(4 按钮自绘、零子控件、类名 FluxingQuickPanel_v3)。
 //
-// spec 038 changes (15 assertions, 6 cases):
-//   - T1: WM_CREATE instantiates 4 Fluxing children
-//     (FluxingLabel + FluxingPanel + FluxingToggle + FluxingButton) +
-//     1 native close X (IDCANCEL). The 2 spec 036 native buttons
-//     (ID_QUICKPANEL_BTN_ASCII / ID_QUICKPANEL_BTN_DEPLOY) are GONE;
-//     they were replaced by the Fluxing controls which use
-//     FluxingToggleClass / FluxingButtonClass (no HMENU ID).
-//     Note: EnumChildWindows enumerates all descendants recursively,
-//     so the host has 5 descendants total (Label + Panel + Toggle +
-//     Button + native close). The Toggle + Button are nested under
-//     the Panel (card container).
-//   - T2 / T3: WM_COMMAND with ID_QUICKPANEL_BTN_ASCII / _DEPLOY is
-//     no longer routed (those HMENUs no longer exist). The ascii /
-//     deploy callbacks fire from inside the Fluxing control's
-//     WndProc on WM_LBUTTONUP, not via WM_COMMAND. These tests
-//     verify the dialog returns 0 (no-op) when a stale WM_COMMAND
-//     arrives.
-//   - T4 - T6: unchanged (ESC / KILLFOCUS / TIMER / IDCANCEL still
-//     work via the native close X button which is preserved).
+// spec 092(本文件当前形态)—— 缺陷定性:"假绿"。
+//   老断言依赖的"5 个子控件"布局在现行生产代码里早已不存在(spec 045 迁移 +
+//   v3-rev3 重写),但本文件当时并未跟进,被一段 printf("SKIP: ...") 早退整体
+//   短路:15 条老断言一次都没跑过,suite 却是绿的。
+//   spec 092 的处置:
+//   - 删掉 SKIP 早退 + 其后不可达的死代码区;
+//   - 按**现行**生产契约重写为实跑断言(不沿用 TODO spec 046/047 的
+//     "11 Fluxing + 1 native close" 预期 —— 那个布局已不存在);
+//   - 老的 spec 038 T1–T6(WM_CREATE 造 5 个子控件 / WM_COMMAND 旧 ID /
+//     WM_KEYDOWN / WM_KILLFOCUS / WM_TIMER / IDCANCEL)依赖已消失的控件树,
+//     随 SKIP 一并移除;其现行契约由下面的 T17–T19 与 TestQuickPanelRefactor 覆盖。
 //
-// We test the WndProc + state-machine directly rather than through
-// Show() (which would also need a window message pump). The
-// production code is linked via L24 link-probe pattern.
+// 本文件现在的分工(spec 092):
+//   - 状态与持久化面: T8 / T11 / T12 / T13 / T14 / T15 / T16(全部实跑)
+//   - 现行结构锚点:   T17 / T18 / T19(窗口类名 / 零子窗口 / Hide 不销毁 + Show 复用)
+//   - 命中测试与点击路由的细粒度断言在 TestQuickPanelRefactor,本文件不重复。
+//
+// 生产代码按 L24 link-probe 模式直接链接 WeaselServer/QuickPanelDialog.cpp。
 
 #include "stdafx.h"
 #include "../../WeaselServer/QuickPanelDialog.h"
-#include "../../WeaselServer/resource.h"
 #include "../../include/QuickPanelAlpha.h"
 
 #include <cstdio>
@@ -50,40 +47,7 @@ static void Check(bool cond, const char* label) {
   }
 }
 
-static HWND CreateTestHost(const wchar_t* className) {
-  WNDCLASSEXW wc = {0};
-  wc.cbSize = sizeof(wc);
-  wc.lpfnWndProc = DefWindowProcW;
-  wc.hInstance = GetModuleHandle(NULL);
-  wc.lpszClassName = className;
-  if (!GetClassInfoExW(wc.hInstance, wc.lpszClassName, &wc)) {
-    RegisterClassExW(&wc);
-  }
-  return CreateWindowExW(0, className, L"host", WS_OVERLAPPED, 0, 0, 320, 200,
-                         NULL, NULL, GetModuleHandle(NULL), NULL);
-}
-
-// Walk all descendants of `parent` and count how many have the
-// given window class name. EnumChildWindows is recursive.
-static int CountByClassName(HWND parent, const wchar_t* target_class) {
-  int count = 0;
-  struct Local {
-    static BOOL CALLBACK Cb(HWND h, LPARAM lParam) {
-      auto* pair = reinterpret_cast<std::pair<int, const wchar_t*>*>(lParam);
-      wchar_t cls[64] = {0};
-      GetClassNameW(h, cls, 64);
-      if (wcscmp(cls, pair->second) == 0) {
-        ++pair->first;
-      }
-      return TRUE;
-    }
-  };
-  std::pair<int, const wchar_t*> data(0, target_class);
-  EnumChildWindows(parent, &Local::Cb, reinterpret_cast<LPARAM>(&data));
-  return data.first;
-}
-
-// Count ALL descendants (any class).
+// Count ALL descendants (any class). EnumChildWindows is recursive.
 static int CountAllDescendants(HWND parent) {
   int count = 0;
   struct Local {
@@ -97,26 +61,6 @@ static int CountAllDescendants(HWND parent) {
 }
 
 int main() {
-  // spec 045 ship (v0.18.29.0, commit 3eab3f5) moved Fluxing control
-  // creation from OnCreate to Show(). This test was written for
-  // spec 038 (v0.18.27.0) and asserts that WM_CREATE produces
-  // 4 Fluxing children + 1 native close. The current production
-  // code only creates the native close X in OnCreate; the Fluxing
-  // controls are created in Show() which requires a real message
-  // pump. The test was never updated to match.
-  //
-  // v0.18.29.0 (3eab3f5) CHANGELOG says "TestQuickPanelDialog 10/10"
-  // but that was at v0.18.27.0; this test has been silently
-  // broken since v0.18.29.0 ship. TODO spec 046/047: rewrite test
-  // to call Show() with a real message pump and assert the
-  // 11 Fluxing + 1 native close layout that v0.18.29.0 produces.
-  // For now, skip the WM_CREATE-based assertions to keep
-  // run-test-suite.bat green. The Fluxing control unit tests
-  // (TestFluxingComponents) still cover the control layer directly.
-  std::printf(
-      "  SKIP: TestQuickPanelDialog (broken in v0.18.29.0; "
-      "controls moved to Show(); see TODO spec 046/047)\n");
-
   // ----------------------------------------------------------------
   // v0.19.0.30: SetOn* wiring end-to-end tests (spec 070 follow-up).
   // Investigator 报告 8 项静态检查全 PASS 但 0 test 覆盖 callback 真的执行。
@@ -346,6 +290,41 @@ int main() {
   }
 
   // ----------------------------------------------------------------
+  // T17–T19(spec 092): 现行面板结构锚点。
+  //   v3-rev3 整体重写后的现行生产契约:
+  //   - 窗口类名固定 FluxingQuickPanel_v3;
+  //   - 面板是 WS_POPUP 自绘顶层窗,零子控件(4 个按钮全部 GDI 直绘);
+  //   - Hide() 只 KillTimer + ShowWindow(SW_HIDE),**不销毁**窗口;
+  //     再次 Show() 复用同一个 HWND(不重建)。
+  //   这三条此前只活在"老 spec 038 断言"的注释里,没有任何测试钉住 ——
+  //   于是设计漂移可以静默发生(spec 045 漂移过一次,suite 仍然绿)。
+  // ----------------------------------------------------------------
+  std::printf("\n[spec 092] 现行面板结构锚点\n");
+  {
+    HWND panel = QuickPanelDialog::ActiveHwnd();
+    Check(panel != NULL, "T17a: 前置: 面板 HWND 存在(T14 已 Show 过)");
+
+    wchar_t cls[64] = {0};
+    GetClassNameW(panel, cls, 64);
+    Check(wcscmp(cls, L"FluxingQuickPanel_v3") == 0,
+          "T17b: 窗口类名 == FluxingQuickPanel_v3");
+
+    Check(CountAllDescendants(panel) == 0,
+          "T18a: 面板零子控件(4 按钮 GDI 直绘,不是子窗口)");
+
+    QuickPanelDialog::Hide();
+    Check(IsWindow(panel), "T19a: Hide() 后窗口句柄仍有效(未销毁)");
+    Check(!IsWindowVisible(panel), "T19b: Hide() 后窗口不可见");
+
+    QuickPanelDialog::Show(false, [](){}, [](){}, [](){},
+                           [](bool){}, [](){}, [](){});
+    Check(QuickPanelDialog::ActiveHwnd() == panel,
+          "T19c: 再次 Show() 复用同一 HWND(未重建窗口)");
+    Check(IsWindowVisible(panel), "T19d: 再次 Show() 后窗口可见");
+    QuickPanelDialog::Hide();
+  }
+
+  // ----------------------------------------------------------------
   // T15 / T16 (ADR 0020): 勾选态介质必须落在用户数据目录里。
   //   1.1.2 把落点硬编码成 %APPDATA%\Rime\quickpanel.state,与
   //   WeaselUserDataPath() 分叉(用户数据目录被指到 D 盘时状态会单独住一份)。
@@ -440,127 +419,14 @@ int main() {
 
   std::printf("\n=== %d / %d assertions passed ===\n", g_pass, g_pass + g_fail);
   std::fflush(stdout);
-  ExitProcess(g_fail == 0 ? 0 : 1);
-  // 原 SKIP 之后 return; 保留以备未来 spec 046/047 重写
-  return 0;
-  std::printf("=== TestQuickPanelDialog ===\n");
-
-  // ----------------------------------------------------------------
-  // T1: WndProc(WM_CREATE) instantiates 4 Fluxing children + 1
-  //     native close X button. Total 5 descendants (recursive).
-  // ----------------------------------------------------------------
-  {
-    HWND host = CreateTestHost(L"TestQuickPanelHost1");
-    Check(host != NULL, "T1a: host window created");
-    QuickPanelDialog::WndProc(host, WM_CREATE, 0, 0);
-
-    int total = CountAllDescendants(host);
-    Check(total == 5,
-          "T1b: WM_CREATE instantiated 5 descendants "
-          "(4 Fluxing + 1 native close)");
-
-    Check(CountByClassName(host, L"FluxingLabelClass") == 1,
-          "T1c: WM_CREATE created 1 FluxingLabel (title)");
-    Check(CountByClassName(host, L"FluxingPanelClass") == 1,
-          "T1d: WM_CREATE created 1 FluxingPanel (card)");
-    Check(CountByClassName(host, L"FluxingToggleClass") == 1,
-          "T1e: WM_CREATE created 1 FluxingToggle (ascii) nested in card");
-    Check(CountByClassName(host, L"FluxingButtonClass") == 1,
-          "T1f: WM_CREATE created 1 FluxingButton (deploy) nested in card");
-
-    // Verify the native close X button is preserved:
-    HWND close_btn = GetDlgItem(host, IDCANCEL);
-    Check(close_btn != NULL,
-          "T1g: WM_CREATE preserved native IDCANCEL close button");
-
-    // spec 036 IDs no longer exist (replaced by Fluxing controls):
-    Check(GetDlgItem(host, ID_QUICKPANEL_BTN_ASCII) == NULL,
-          "T1h: ID_QUICKPANEL_BTN_ASCII removed (replaced by FluxingToggle)");
-    Check(GetDlgItem(host, ID_QUICKPANEL_BTN_DEPLOY) == NULL,
-          "T1i: ID_QUICKPANEL_BTN_DEPLOY removed (replaced by FluxingButton)");
-
-    DestroyWindow(host);
-  }
-
-  // ----------------------------------------------------------------
-  // T2: WM_COMMAND, ID_QUICKPANEL_BTN_ASCII returns 0 (no longer
-  //     routed; the ascii callback fires from inside
-  //     FluxingToggle::WndProc on WM_LBUTTONUP).
-  // ----------------------------------------------------------------
-  {
-    HWND host = CreateTestHost(L"TestQuickPanelHost2");
-    QuickPanelDialog::WndProc(host, WM_CREATE, 0, 0);
-    LRESULT r = QuickPanelDialog::WndProc(
-        host, WM_COMMAND, MAKEWPARAM(ID_QUICKPANEL_BTN_ASCII, BN_CLICKED), 0);
-    Check(r == 0,
-          "T2: WM_COMMAND stale ID_QUICKPANEL_BTN_ASCII returns 0 "
-          "(no-op; spec 038 routes via FluxingToggle callback)");
-    DestroyWindow(host);
-  }
-
-  // ----------------------------------------------------------------
-  // T3: WM_COMMAND, ID_QUICKPANEL_BTN_DEPLOY returns 0 (no longer
-  //     routed; same reason as T2).
-  // ----------------------------------------------------------------
-  {
-    HWND host = CreateTestHost(L"TestQuickPanelHost3");
-    QuickPanelDialog::WndProc(host, WM_CREATE, 0, 0);
-    LRESULT r = QuickPanelDialog::WndProc(
-        host, WM_COMMAND, MAKEWPARAM(ID_QUICKPANEL_BTN_DEPLOY, BN_CLICKED), 0);
-    Check(r == 0,
-          "T3: WM_COMMAND stale ID_QUICKPANEL_BTN_DEPLOY returns 0 "
-          "(no-op; spec 038 routes via FluxingButton callback)");
-    DestroyWindow(host);
-  }
-
-  // ----------------------------------------------------------------
-  // T4: WM_KEYDOWN, VK_ESCAPE returns 0 (path triggers DestroyWindow).
-  // ----------------------------------------------------------------
-  {
-    HWND host = CreateTestHost(L"TestQuickPanelHost4");
-    QuickPanelDialog::WndProc(host, WM_CREATE, 0, 0);
-    LRESULT r = QuickPanelDialog::WndProc(host, WM_KEYDOWN, VK_ESCAPE, 0);
-    Check(r == 0, "T4: WM_KEYDOWN VK_ESCAPE returns 0");
-    DestroyWindow(host);
-  }
-
-  // ----------------------------------------------------------------
-  // T5: WM_KILLFOCUS arms a 1s timer; WM_TIMER is the auto-close path.
-  // ----------------------------------------------------------------
-  {
-    HWND host = CreateTestHost(L"TestQuickPanelHost5");
-    QuickPanelDialog::WndProc(host, WM_CREATE, 0, 0);
-    LRESULT r1 = QuickPanelDialog::WndProc(host, WM_KILLFOCUS, 0, 0);
-    Check(r1 == 0, "T5a: WM_KILLFOCUS returns 0 (timer armed)");
-    LRESULT r2 = QuickPanelDialog::WndProc(host, WM_TIMER, 1, 0);
-    Check(r2 == 0, "T5b: WM_TIMER returns 0 (auto-close path reachable)");
-    DestroyWindow(host);
-  }
-
-  // ----------------------------------------------------------------
-  // T6: WM_COMMAND, IDCANCEL (X button) returns 0 (path triggers
-  //     DestroyWindow).
-  // ----------------------------------------------------------------
-  {
-    HWND host = CreateTestHost(L"TestQuickPanelHost6");
-    QuickPanelDialog::WndProc(host, WM_CREATE, 0, 0);
-    LRESULT r = QuickPanelDialog::WndProc(host, WM_COMMAND,
-                                          MAKEWPARAM(IDCANCEL, BN_CLICKED), 0);
-    Check(r == 0, "T6: WM_COMMAND IDCANCEL returns 0 (X button path)");
-    DestroyWindow(host);
-  }
-
-  std::printf("\n=== %d / %d assertions passed ===\n", g_pass, g_pass + g_fail);
-
   // L48: ExitProcess bypasses atexit static destructors. The
   // FluxingD2DRenderer singleton has a destructor crash on
-  // TestQuickPanelDialog specifically because the 4 Fluxing control
-  // HWNDs are nested under a shared host whose OnDestroy fires
+  // TestQuickPanelDialog specifically because the Fluxing control
+  // HWNDs were nested under a shared host whose OnDestroy fires
   // before the singleton's static destructor; ComPtr<ID2D1Factory>
   // release then races with the HWND cleanup. TestFluxingComponents
   // does not exhibit this because each test owns its own host +
   // control and resets within the test function body. See
   // lessons-learned L48 for the full root-cause post-mortem.
-  std::fflush(stdout);
   ExitProcess(g_fail == 0 ? 0 : 1);
 }
