@@ -1,6 +1,223 @@
 ## [Unreleased]
 
+### chore(fluxing): spec 092 系统性清理（测试工程编码 + 探针判别性 + 双 QuickPanel 测试去 SKIP + 载荷仓回填 + ADR 索引）
+
+- **测试工程统一加 `/utf-8`**：`test/` 下 **28** 个 `.vcxproj` 现已全部含 `/utf-8`
+  （本轮改动 27 个：24 个在既有 `<AdditionalOptions>` 节点前置插入，3 个无该节点的单文件工程
+  独立成行新建；`TestPipeProtocol` 原本已有）。
+  依据：1.1.5 轮「GBK/DBCS 吞行」事故的根因是**源文件编码不确定**，补 `/utf-8` 是把
+  源编码从"依赖 BOM/系统 ACP"钉死成 UTF-8 的保险。
+- **测试断言标签改为有判别性**：`TestCandidateIgnoreFilter` / `TestServerSideIgnoreMapping`
+  原先在断言之后**无条件**打印 `PASS:`，断言失败时仍会打印 PASS（探针无判别性）。
+  现在 PASS/FAIL 由**该断言块的实测结果**决定。
+- **`TestQuickPanelRefactor` 从 SKIP 改为实跑**：spec 045（`3eab3f5`）把 Fluxing 控件创建
+  从 `OnCreate` 移到 `Show()`，其后 `WeaselServer/QuickPanelDialog.cpp` 又整体重写为
+  GDI v3-rev3（面板**不再有子窗口**），老测试期待的「11 Fluxing + 1 native close」布局
+  已是两代之前的设计 ⇒ 原测试被整段 `return 0` 跳过。现按**现行契约**重写为实跑断言。
+
+- **`TestQuickPanelDialog` 同病同治**（同一根因的第八项）：该文件同样自 `v0.18.29.0` 起被整段
+  `return 0` 短路成 SKIP，且其后还留着 `ExitProcess` 之后的**不可达死代码**（T1–T6 老断言）。
+  现删除 SKIP 段与死代码，补 T17–T19（窗口类名 == `FluxingQuickPanel_v3` / 子窗口数 == 0 /
+  `Hide()` 不销毁且二次 `Show()` 复用同一 HWND），全文件 **50/50 全过**。
+- **`release/` 载荷仓回填 1.1.1 / 1.1.2**（从 `output/archives/` 逐字节复制，SHA256 已比对一致）：
+  - `release/fluxing-1.1.1-installer.exe` — 42,753,471 字节 — `211BBA1B91A1F4646BB2D72758B4F1D278917B9921FBBD096D02F678C51F94B9`
+  - `release/fluxing-1.1.2-installer.exe` — 42,763,583 字节 — `4238124C8EEFC5B86785D37640F1CF99C61004124302406AFC5A750CEBAAEC36`
+  这两个安装包此前**从未进入 git 历史**（`git log --diff-filter=D -- release/` 无输出），全盘也搜不到，
+  故只能从 `output/archives/` 的原件回填，**不是重新构建**。
+- **`docs/adr/README.md` 补 ADR 编号索引**（19 个 ADR：0001、0007–0024）。
+
+## [1.1.6] - 2026-10-31
+
 ### 主要更新
+
+本轮落地 1.1.5 装机实测反馈 + 一个新缺陷（spec 091，ADR 0024）。
+
+- **快捷设置栏的显隐改为跟随输入法激活状态**（`include/WeaselIPC.h`、
+  `WeaselIPC/WeaselClientImpl.cpp`、`WeaselTSF/WeaselTSF.cpp`、
+  `RimeWithWeasel/RimeWithWeasel.cpp`，spec 091 / ADR 0024）：
+  此前从火流猩切到别的输入法后，快捷设置栏仍然留在屏幕上。根因**不是**面板忘了隐藏，
+  而是「该隐藏」这个信号从未送到：`FocusOut` 有两条来源——切窗口
+  （`ITfKeyEventSink::OnSetFocus`）与切到别的输入法
+  （`ITfActiveLanguageProfileNotifySink::OnActivated(false)`）——过去都发 `wParam=0`，
+  服务端无法区分，于是一刀切的常驻守卫把「切输入法必须收起」一并挡掉。
+  现复用既有 `wParam` 槽位新增位标志 `WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED`
+  （与既有的 `WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED` 完全对称），
+  **不新增 IPC 消息类型、线格式零变化、旧客户端安全降级**；
+  判定逻辑收敛到共享头纯函数 `ShouldHideQuickPanelOnFocusOut()`，
+  生产代码与测试同源（宪法 R7）。
+- **「常驻」的口径明确化**：「常驻」= 不因鼠标移开 / 切窗口 / 点击而消失；
+  **切到别的输入法时输入法已经不在场，快捷设置栏必须收起**。两条语义不再互相牵连。
+- **语言栏弹出菜单去掉「快速面板常驻」项**（`WeaselTSF/WeaselTSF.rc`，spec 091 / ADR 0024）：
+  该项的勾选态在语言栏里本就无法回显（跨进程状态 + 宪法 P2 禁止在 TSF 回调里读盘），
+  1.1.5 已改为「装完即常驻」，菜单项因此只剩误导作用 ⇒ 从语言栏的三份弹出菜单移除。
+  **托盘右键菜单的「快速面板常驻」保留**，仍可随时开关常驻。
+
+## [1.1.5] - 2026-10-30
+
+### 主要更新
+
+本轮落地 1.1.4 装机实测反馈的 4 条（spec 089 / spec 090，ADR 0022 / ADR 0023）。
+
+- **快速面板改为「装完即常驻」，不再需要用户先去勾那个勾不上的选项**（反馈 ①）
+  （`WeaselServer/QuickPanelDialog.cpp`、`WeaselServer/QuickPanelDialog.h`，spec 089 / ADR 0022）：
+  此前「常驻」默认关闭；用户勾上之后功能生效，但**输入法弹出菜单里的勾选态不回显**。
+  根因不在面板，而在语言栏菜单的转换函数 `HMENU2ITfMenu`（`WeaselTSF/LanguageBar.cpp:18-41`）——
+  它只读 `MIIM_FTYPE|MIIM_ID|MIIM_STRING`，**不读 `MIIM_STATE`**，恒以 `flags=0` 调 `AddMenuItem`，
+  从不传 `TF_LBMENUF_CHECKED`；而勾选态活在 `WeaselServer.exe` 进程内，要跨进程回显就得在 TSF 回调里
+  做 IPC 或读盘，撞宪法 **P2**（`ITfTextInputProcessor::*` 回调内禁止阻塞 I/O）。
+  ⇒ **不去修回显，直接把默认值改成常驻**：状态文件缺失或损坏时 `LoadPersistedAlwaysShowModeFrom()`
+  返回 `true`（原为 `false`）。装完即是常驻态，用户无需再碰这个开关。
+  取消入口两条都已存在、本轮不动：`Alt+,`（`ID_HOTKEY_QUICK_PANEL`）与托盘右键「快速面板常驻 (&A)」。
+  「常驻时 1.5 秒自动消失」此前已由 ADR 0019 设防（`QuickPanelDialog.cpp:741-744` 屏蔽
+  `s_outsideMs >= 1500` 的 Hide；`:684` grace 路径带 `!AlwaysShowMode()` 守卫）⇒ **本轮无需新增改动**。
+  登录后仍不会自动弹窗：`RestoreAlwaysShowMode()` 只回填模式、**绝不 auto-show**（spec 055 不变量保留），
+  面板在首次输入动作或 `Alt+,` 触发时才出现并常驻。
+  边界语义（有意保留，ADR 0022 已记录）：**只有「文件缺失/读不出来」才回落到默认常驻**；
+  文件存在但内容不是 `always_show=1` ⇒ 视为用户明确关过，仍返回关。
+- **常驻态 idle 不透明度 60% → 85%**（反馈 ②）（`include/QuickPanelAlpha.h`、`WeaselServer/QuickPanelDialog.h`）：
+  面板是 `UpdateLayeredWindow` 逐像素 alpha，最终可见 alpha = `ApplyAlphaGradient()` 写入的
+  **面板梯度** × 轮询器 park 的 **idle 系数**（`ScaleAlpha`）。要精确落在 85%，两处都得动：
+  `kAlphaPanelTop`/`kAlphaPanelBot` 由 `220`/`80` **拉平为 `255`/`255`**，`kAlphaFactorIdle` 由
+  `153`（60%）抬到 **`217`**（217/255 = 85.1%）。鼠标移上去 `factor = kAlphaFactorFull = 255`
+  触发 `ScaleAlpha` 的 `factor >= kAlphaScaleNum ⇒ return base` 短路 ⇒ **hover 仍是 100% 不透明**，
+  淡入淡出动画与 100ms 轮询节奏逐字节不变。
+  **代价（如实披露）**：牺牲的是 alpha 沿 y 轴 220→80 的递减；**颜色梯度**
+  （`kBgTop=(200,225,250)` → `kBgBot=(155,195,240)`）与**圆角掩码**（`PtInRegion` 外 alpha=0）
+  **都完整保留** ⇒ liquid glass 观感的主要来源没丢。
+- **左右 Shift 选第 2 / 第 3 个候选改为「页内索引」**（反馈 ③）
+  （`RimeWithWeasel/RimeWithWeasel.cpp`、`include/RimeWithWeasel.h`、`include/ShiftStateMachine.h`，
+  spec 090 / ADR 0023 D2）：此前 Shift 走的是 librime 的**全局** `select_candidate`，索引从第 1 页起算；
+  一旦候选翻页，屏幕上显示的是第 2 页，上屏的却仍是**第 1 页**的第 2 / 第 3 个 ⇒ 用户看到的和
+  打出来的不是同一个词。现全部改走 `select_candidate_on_current_page`（0-based 页内索引，
+  取证 `librime/src/rime/api/rime_api_impl.h:982-1000`），涉及 `SelectCandidateOnCurrentPage`、
+  `DeleteCandidateOnCurrentPage`、`HighlightCandidateOnCurrentPage`、`_GetCandidateInfo`、
+  `_Respond`、`_GetContext`、`ShiftUp` 七处。
+  **越界一律不选词、不上屏、不 flush、不回包**（新增 `fluxing::IsPageLocalIndexValid`），
+  函数尾照常重置 ShiftState；明确**禁止**「退回全局 `select_candidate`」的 fallback ——
+  那会选中屏幕上根本没看见的词，比不选更错。
+- **右键点击候选 = 屏蔽这个词**（反馈 ④）（`include/FluxingCandidateIgnore.h`（新）、
+  `RimeWithWeasel/RimeWithWeasel.cpp`，spec 090 / ADR 0023 D5）：
+  链路核实为**通**：候选窗非高亮态右键 → `WeaselPanel::OnRButtonDown`（`:558-561`）→
+  `m_pb->DeleteCandidate(index)` → IPC `COMMAND_DELETE_CANDIDATE` → 服务端
+  `DeleteCandidateOnCurrentPage(index)`。其中 `index` 来自 `m_layout.candies.indexFromPoint(pt)`，
+  是**服务端过滤后的可见位置**，服务端再用 `_MapVisibleIndexToEngine` 翻译成引擎索引 ⇒ 语义一致。
+  过滤做在**服务端**（`_GetCandidateInfo` 内按 `m_ignoreList` 跳过命中项，并重建
+  `m_visibleToEngineIdx` 映射），不在 UI 侧：UI 侧那个 `_FilterIgnoredCandidates` 从 `candies` 里
+  移除却不重建索引映射，会导致选中错位的引擎候选 ⇒ 已标注为死代码，不再接线。
+  名单为空时 label 逻辑与原实现**逐字节一致**；非空时按可见位置重新顺序编号。
+  名单文件只 `OPEN_EXISTING` 读、`FILE_APPEND_DATA` + `OPEN_ALWAYS` 追加，撤销走既有托盘
+  「恢复已忽略的候选项」（`ID_WEASELTRAY_RESTORE_IGNORED`）。
+- **关于反馈 ④ 提到的 `Shift+Ctrl+数字`（重要澄清）**：该组合键**本仓从未实现过** ——
+  无 spec、无 yaml 绑定、无 IPC 消息、无按键 handler（已全仓取证）。因此它**不是「丢失」，
+  也无法「恢复」**。落地它需要新增 IPC 消息类型（触发四边同步 + ADR + `test/TestWeaselIPC/*`）、
+  TSF 侧按键拦截与 P2 论证、以及独立的真机验收 ⇒ **本轮不做**，已写入交接卡延后项。
+  用户想要的「按次序移词」能力由上面那条**右键屏蔽**覆盖。
+
+### 回归测试
+
+- `Release\TestQuickPanelDialog.exe`：**43 / 43** 断言通过（exit 0）。
+  其中 T13b / T16a / T16e 三条按新语义**翻转为正**（缺失 ⇒ 常驻）；**T13h 保持取反**
+  （文件存在但内容非 `always_show=1` ⇒ 关，与「缺失 ⇒ 常驻」是两种不同语义）；
+  T16c 不动（新落点优先）。T12d / T12e 的 `ScaleAlpha` 期望值随 `kAlphaFactorIdle` 更新为
+  `217` / `187`。
+- `Release\TestCandidateIgnoreFilter.exe`：**5 / 5 + 14 / 14** 断言通过，`No errors detected.`
+  新增 `TestServerSideIgnoreMapping.cpp`（14 组，含两条**负对照**）。
+  顺带修掉一个真 bug：`ParseIgnoreListText` 未清空出参，二次调用会累积上一轮结果。
+- `Release\TestCandidateRButtonDown.exe`：**6 / 6** 断言通过（行为级，用 test-local
+  `FakePanel`/`FakeClient`，不链接 `WeaselPanel.cpp`）；含 T5「右键一次 → 移除 1 次 +
+  名单追加**引擎原文**（映射生效）」与 T6「E6 哨兵：引擎返回 true/false 名单都写入（无条件）」。
+- `Release\TestQuickPanelRefactor.exe`：**5 / 5、1 / 1 PASS**（exit 0）。**订正（spec 092）**：该测试当时实为 **SKIP**（控制流直接 `return 0`，断言是死代码），直到 spec 092 才改为实跑。
+- 本轮**不新增 IPC 消息类型** ⇒ 不触发 IPC 四边同步；**未改** `output/install.nsi` 与
+  `output/data/user-custom/**`；**未改** `librime/`（P3 / L10 只读）。
+
+### 产物（v1.1.5）
+
+| 位置 | 文件 | 大小 | SHA256 |
+| --- | --- | --- | --- |
+| `release/` | `fluxing-1.1.5-installer.exe` | 42,786,442 字节（约 40.8 MiB） | `4B7287ADD9755AC41BF493EDACEA811897E29C8602EE5C9AB71A08AE3682EBE7` |
+| `output/archives/` | `fluxing-1.1.5-installer.exe` | 42,786,442 字节（`cmd /c copy /Y` 逐字节复制） | 同上 |
+
+- NSIS 汇总：`Total size: 42786442 / 155195752 bytes (27.5%)`、`Compressed data: 42666630 / 155156836`、`CRC (0x894A264C)`。
+- 版本宏（取自 `tmp/build-115-installer2.log`）：`FLUXING_VERSION=1.1.5`、`PRODUCT_VERSION=1.1.5.0`、`FILE_VERSION=1.1.5.0`、`VERSION_PATCH=5`；rc.exe 与 makensis 两端均已带上。
+- 构建日志 `tmp/build-115-installer2.log`：exit 0、0 错误、58,371 字节。8 条 NSIS 警告全是既有的 `7010: File: ... -> no files found.`（`weaselARM.dll` / `weaselARM64.dll` / `weaselARM64X.dll` @ `install.nsi:745-747` 与 `:891-893`、`data\*.gram` @ `:901`、`data\lua\*.txt` @ `:912`），非本轮引入。
+- **版本号真源是 `env.bat` + `weasel.props`（本机文件、均被 `.gitignore:31/:32` 排除），不是 `build.bat` / `xbuild.bat`。** `build.bat:12-15` 先清空四个版本变量、随后 `env.bat` 硬编码填回，所以 `build.bat:42-44` 的 `if not defined VERSION_PATCH set VERSION_PATCH=5` 只是 fallback —— 只改 `build.bat:44` 完全无效。本轮 `build.bat:44` 与 `xbuild.bat:55` 的 fallback 也一并改成 5（这两个是入库改动），`env.bat` / `weasel.props` 的本机改动不入库（符合 AGENTS.md §5）；入库的 `env.bat.template` 与 `weasel.props.template` 不含版本号，无需改。
+- **副作用披露**：第一次打包时 `env.bat` 尚未改版本号，误产出名为 `fluxing-1.1.4-installer.exe` 的载荷并覆盖了 `output/archives/fluxing-1.1.4-installer.exe`（42,792,647 字节，mtime 10-30 21:34:32）。该目录被 `.gitignore:27 /output/archives` 排除、可由 `build.bat weasel installer` 重新生成；`release/` 下的真 1.1.4 载荷（42,771,668 字节）未被动过，与 archives 里那份不是同一个文件。
+- `release/` 仍缺 `fluxing-1.1.1-installer.exe` 与 `fluxing-1.1.2-installer.exe`（`output/archives/` 里有，分别 42,753,471 / 42,763,583 字节），属既有遗留，本轮未回填。**订正（spec 092）**：本轮已从 `output/archives/` 逐字节回填进 `release/`（SHA256 见 `[Unreleased]` 段）。
+
+## [1.1.4] - 2026-10-29
+
+### 主要更新
+
+- **输入法图标托盘的「重启算法服务」「程序文件夹」在 fork 下原本是静默空操作**
+  （`include/FluxingInstallPaths.h`、`WeaselTSF/LanguageBar.cpp`、`WeaselTSF/WeaselTSF.cpp`，
+  spec 088 / ADR 0021）：
+  前端读的是**上游的键 + 上游的值名**（32 位分支 `Software\WOW6432Node\Rime\Weasel`、
+  64 位分支 `Software\Fluxing\Weasel`，值名 `WeaselRoot`），而本 fork 的安装器**只写**
+  `Software\Fluxing\Weasel :: InstallDir` ⇒ 拿到空串 ⇒ 旧代码「读不到就整段跳过」
+  ⇒ **点了完全没反应**。
+  更深的坑：`InstallDir` 实际只写在 **32 位注册表视图**
+  （`HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel`），64 位视图下 `HKLM\SOFTWARE\Fluxing\Weasel`
+  **根本不存在** ⇒ 任何「按进程字长猜视图」的固定写法都读不到。
+  现新增单一事实源 `include/FluxingInstallPaths.h`：**显式遍历 32/64 两个视图** → 取安装根
+  → 补 `\weasel`（安装器 `output/install.nsi:25` 的 `WEASEL_ROOT`）→ 按文件系统校验
+  （内含 `WeaselServer.exe` / `start_service.bat`）→ 旧上游键保留为**只读兜底**（spec 002 FR-008）。
+- **解析失败不再「点了没反应」**：一律弹简体中文提示 ——「未找到火流猩程序目录，请重新安装后再试。」/
+  「未找到算法服务启动脚本，请重新安装后再试。」
+- **算法服务异常退出后前端现在能自动拉起**：此前「服务未运行自动拉起」用的是同一个空路径，
+  `ShellExecute` 拿到空串静默失败；现走统一目标选择器（优先 `start_service.bat`，缺失时直接启动
+  `WeaselServer.exe`），两者都没有才报错。
+- 回归测试：`TestFluxingComponents` 新增 `TestFluxingInstallPaths`（T1–T13，19 条断言），含**负对照**
+  —— 复刻上游「只读 `WeaselRoot`」的旧写法，断言它**解析不到程序目录** ⇒ 断言不是恒真；19/19 全过。
+- 本轮**未改安装器**：`output/install.nsi` 与 `output/data/user-custom/**` 一字未动
+  ⇒ 无需 Windows Sandbox 复验。
+
+## [1.1.3] - 2026-10-29
+
+### 主要更新
+
+- **快捷面板「始终显示」的勾选态现在写在正确的用户数据目录里**
+  （`include/FluxingUserPaths.h`、`WeaselServer/QuickPanelDialog.{h,cpp}`，ADR 0020）：
+  v1.1.2 把勾选态持久化到硬编码的 `%APPDATA%\Rime\quickpanel.state`，而**本 fork 的用户数据目录
+  从来不是 `%APPDATA%\Rime`**（`HKCU\Software\Fluxing\Weasel :: RimeUserDir` →
+  `D:\Program Files\fluxing\user1\fluxing`，fork 默认 `%AppData%\fluxing`）⇒ 勾选态落在一条与用户
+  数据目录无关的孤儿路径上，「随用户数据目录一起备份」从未兑现；实测装机后 `%APPDATA%\Rime`、
+  `%APPDATA%\Fluxing`、用户数据目录**三处都没有**该文件 ⇒ 用户从未勾选过「始终显示」，
+  v1.1.2 的持久化修复**未被真机触发**，缺陷一直潜伏。
+  现落点改为 `<用户数据目录>\quickpanel.state`；旧落点保留为**只读兜底**（新落点缺失或损坏时回退读），
+  写入只落新路径，**不再在已迁走的旧目录造文件**。
+- **用户数据目录解析收敛为单一事实源**（`include/FluxingUserPaths.h`）：新增 header-only 的
+  `ResolveFluxingUserDataPath()`，从 `HKCU\Software\Fluxing\Weasel :: RimeUserDir` 解析用户数据目录
+  （读不到回退 `%AppData%\fluxing`）；`WeaselUserDataPath()` 改为委托它，**行为逐字节不变**。
+- 回归测试：`TestQuickPanelDialog` 新增 T15a–T15d（落点文件名 / 父目录 == 解析出的用户数据目录 /
+  不再是 `%APPDATA%\Rime`）与 T16a–T16e（旧落点只读兜底矩阵：都不在 / 仅旧在 / 新优先 / 新=1 /
+  legacy 传空串不兜底），**43/43 全过**（先红后绿已验证：把实现还原成 v1.1.2 行为后
+  T15b/T15c/T15d 如期 FAIL，实测 39/43）。全套件 `scripts/test-infra/run-test-suite.bat`
+  **ALL TESTS PASSED**。
+- 顺带修正两处 tracked 版本线漂移：`build.bat` / `xbuild.bat` 的兜底 `VERSION_*` 自 1.1.0 以来一直
+  停在 **1.0.0**（没有 `env.bat` 的构建会产出 1.0.0 载荷，与 L145 同类隐患），现同步到 **1.1.3**。
+
+## [1.1.2] - 2026-10-29
+
+### fix(WeaselServer): 快捷面板「常驻」态跨重启保持；ESC 不再收起面板（ADR 0019，1.1.1 真机反馈）
+
+- **常驻勾选不再被装包重启清零**：此前「快速面板常驻」勾选只存在于 WeaselServer 进程内存，
+  装包必须重启服务 ⇒ 勾选归零，面板退回「瞬时模式」（鼠标离开约 1.5-2 秒自动收起），
+  被读作「调出后经过几秒钟自动消失」。现勾选态持久化到 `%APPDATA%\Rime\quickpanel.state`
+  （单行 ASCII 键值），服务启动时恢复，且**不会自动弹出面板**（保留 spec 055 不变量）。
+- **ESC 不再隐藏快捷设置栏**：`OnKeyDown VK_ESCAPE` 现只吞键、不再 `Hide()`；
+  面板显隐只由 `Alt+,` 快捷键控制（用户 1.1.1 验收口径）。本条**推翻** spec 084 FR-007、
+  spec 087 FR-087-B 与 ADR 0013 D7 的 Esc 分支，见
+  `docs/adr/0019-quickpanel-always-show-persist-and-esc-no-hide.md`。
+- 回归测试：`TestQuickPanelDialog` 新增 T13a-T13h（持久化往返 / CRLF 容忍 / 坏文件兜底 /
+  恢复不自动 Show / 落盘内容逐字节断言）与 T14a-T14f（ESC 后面板仍可见、`Hide()` 仍可收起），
+  **34/34 全过**；测试落点经 `SetStatePath` 重定向到 `%TEMP%`，不污染真实勾选态。
+
+## [1.1.1] - 2026-10-29
+
+> ℹ️ 归属说明：ADR 0016 的实现（提交 `c55abfa`，10-29 09:31）随当日 09:47 重打的 1.1.0 载荷先行出货；本段按 ADR 记录日期（10-29）归入 1.1.1。
+
+### 主要更新
+
 - **快捷面板「常驻」态不再被点没**（`WeaselServer/WeaselServerApp.cpp`，spec 087 / ADR 0018 D1）：
   「词库」按钮的 `WM_LBUTTONUP` workaround（v0.19.0.39 为路由键盘事件的 `Hide()`）是全仓唯一未守卫的
   生产 `Hide()` 调用点，勾了常驻仍会一点击就收起；现补 `!AlwaysShowMode()` 前置条件，
@@ -23,6 +240,33 @@
   （0x2A=左 / 0x36=右），虚拟键只作兜底；另在 `weasel.yaml` 增加**「左右互换」开关**
   `shift_left_right_swap`（默认关闭），用于宿主连扫描码也交换、软件无从分辨的情况。
   **默认行为完全不变**，升级后不打开任何开关即可。
+
+- **勾了「快速面板常驻」也不会再自己消失**——此前从输入法切换到别的窗口时
+  （输入焦点离开），快捷设置栏**无论有没有勾「常驻」都会被收起**。这是面板的
+  **第四条自动隐藏路径**（前三条：轮询器 / 应用整体切换 / 失去焦点，都已按
+  「常驻」设防），而这一条**是从输入法那侧发过来的**，绕开了面板内部的全部判据。
+  现在这一条也按「常驻」设防；而 **Esc、收起快捷键、点菜单项、关掉「常驻」本身**
+  这些**你自己做的动作**照旧能收起。
+
+- **64 位程序里的输入法换装真正闭环**——此前装包时「版本化安装件」的拷贝
+  **不覆盖已存在的同名文件**、开机补换的**任务登记命令引号断裂**（任务根本没被
+  创建）、补换动作里的拷贝命令**对单文件非法**，三条缺陷叠在同一条链上 ⇒
+  64 位程序里始终跑的是旧版本。现在三处都改了：新版本会真正落到最终位置；
+  当场装不上时留标记 + 开机自动补齐；补换脚本里待替换文件的路径也改成
+  **安装期就展开的绝对路径**（先前按开机时的 `%TEMP%` 解析 ⇒ 指向另一个目录）。
+  四环都已改到位，**真机是否真的换掉仍待装包复测**（ADR 0016 保持 `Proposed`）。
+
+- **裸 Shift 左右方向：先取事实，不猜修法**——上一条把「左右」的实现收敛到唯一一处，
+  且经运行时探针证明**接收侧完全正确**，但用户实测**左右仍然颠倒** ⇒ 剩下的差异不在
+  「哪一处写反」，而在「程序听到的左右和手上的左右不是一回事」。本条备好了一次按键
+  即可出结论的观测工具，**待现场数据到手再定修法**。
+
+## [1.1.0] - 2026-10-28
+
+> ⚠️ **归属待考**：本段的「抓键路径改吃共享单元」系列（ADR 0011 M1–M6）、「安装包载荷重编」与「`release/` 载荷仓补齐（1.0.0 + 0.21.0.9）」三组条目，其实现 / 提交落在 **1.0.0** 的发布窗口（仓库交接卡 §9–§14，提交 `9e07743` / `eedad70`，首随 1.0.0 安装包出货）；因 `[1.0.0]` 段已发布且未收录这些条目，暂置本段待考。
+
+### 主要更新
+
 - 设置界面的**抓键**改为记录「这个组合键实际打出来的字符」，不再用虚拟键码
   自造键名 ⇒ 抓出来的绑定不会再出现 `Control+Shift+9` 这类**永远触发不了**的
   死绑定。
@@ -40,44 +284,33 @@
   并给出中文原因。
 - 冲突检测改成**语义比较**：内置表写的 `Control+Shift+F` 与新抓到的
   `Shift+Control+F` 现在能正确判成同一个键。
+
 - **安装包载荷重编**：装器预置的 `data\build\` 是 2026-06-30 的旧编译产物，
   里面还留着 ADR 0009 早就删掉的两条**永远触发不了**的死绑定
   （`Control+Shift+9` / `Control+Shift+0`）。现已按当前配置全量重编，
   装上后不再带着误导性的死绑定。
+
 - 快捷设置栏新增**常驻模式**：托盘右键菜单里多一条「快速面板常驻」。勾上之后
   面板不再自动隐藏，常态以 **20%** 不透明度淡显，鼠标移上去会渐渐变清晰；
   再点一次即恢复原来的自动隐藏行为。**不勾选时像素与行为完全不变。**
+
 - **开着 CapsLock 时快捷键不再全灭**：候选选择 / 翻页 / 切中英 / 切标点 /
   切简繁**全部恢复可用**。根因不是「个别快捷键失配」，而是前端把 CapsLock 的
   「锁存状态」当成按键修饰键上报，触发输入引擎的「拒绝处理」分支，
   **整条按键处理链被中断**。CapsLock 键自身的切中英 / 交还系统行为不变，
   开着 CapsLock 时字母仍输出大写。
+
 - **左 Shift 上屏第 2 个候选、右 Shift 上屏第 3 个候选**——此前左右**颠倒**
   （按左 Shift 上了第 3 个）。根因不是状态机算错，而是进程间状态通道上承载
   「本次是左还是右」的那一位，**发送端与接收端的约定相反**（约定是 0=左、1=右，
   发送端写对、接收端读反）。现已把编码与解码收敛到**同一对函数**，两端不再各写
   一份 ⇒ 单端改反在结构上不再可能发生。
+
 - **输入法弹出菜单里补上「快速面板常驻」**：此前该开关**只加在托盘图标菜单**，
   而输入法自己的弹出菜单（语言栏右键，简 / 繁 / 英三个版本）里**根本没有这一项**
   ⇒ 从弹出菜单进入的用户永远看不到它。现在三个语言版本的弹出菜单都有该项，
   勾选效果与托盘图标菜单**完全一致**。
-- **勾了「快速面板常驻」也不会再自己消失**——此前从输入法切换到别的窗口时
-  （输入焦点离开），快捷设置栏**无论有没有勾「常驻」都会被收起**。这是面板的
-  **第四条自动隐藏路径**（前三条：轮询器 / 应用整体切换 / 失去焦点，都已按
-  「常驻」设防），而这一条**是从输入法那侧发过来的**，绕开了面板内部的全部判据。
-  现在这一条也按「常驻」设防；而 **Esc、收起快捷键、点菜单项、关掉「常驻」本身**
-  这些**你自己做的动作**照旧能收起。
-- **64 位程序里的输入法换装真正闭环**——此前装包时「版本化安装件」的拷贝
-  **不覆盖已存在的同名文件**、开机补换的**任务登记命令引号断裂**（任务根本没被
-  创建）、补换动作里的拷贝命令**对单文件非法**，三条缺陷叠在同一条链上 ⇒
-  64 位程序里始终跑的是旧版本。现在三处都改了：新版本会真正落到最终位置；
-  当场装不上时留标记 + 开机自动补齐；补换脚本里待替换文件的路径也改成
-  **安装期就展开的绝对路径**（先前按开机时的 `%TEMP%` 解析 ⇒ 指向另一个目录）。
-  四环都已改到位，**真机是否真的换掉仍待装包复测**（ADR 0016 保持 `Proposed`）。
-- **裸 Shift 左右方向：先取事实，不猜修法**——上一条把「左右」的实现收敛到唯一一处，
-  且经运行时探针证明**接收侧完全正确**，但用户实测**左右仍然颠倒** ⇒ 剩下的差异不在
-  「哪一处写反」，而在「程序听到的左右和手上的左右不是一回事」。本条备好了一次按键
-  即可出结论的观测工具，**待现场数据到手再定修法**。
+
 - **CapsLock 的语义与复测口径**——英文模式下按 CapsLock 进入**大写英文输入**、
   不切回中文，是输入引擎的**既定正确行为**，不是缺陷。上一轮复测单在这一处的口径
   有误：选候选 / 翻页 / 切中英 / 切标点 / 切简繁 **必须在 CapsLock 关闭时**执行，
@@ -221,192 +454,6 @@
 - 顺带订正 `AGENTS.md §4.7`：装包文件名是 **3 段**（`WEASEL_BUILD` 只进
   Windows 资源版本号）；且本 fork 的 CI 发布步骤被
   `github.repository == 'rime/weasel'` 门控 ⇒ `release/` 不会自动对外发版。
-
-## [1.1.6] - 2026-10-31
-
-### 主要更新
-
-本轮落地 1.1.5 装机实测反馈 + 一个新缺陷（spec 091，ADR 0024）。
-
-- **快捷设置栏的显隐改为跟随输入法激活状态**（`include/WeaselIPC.h`、
-  `WeaselIPC/WeaselClientImpl.cpp`、`WeaselTSF/WeaselTSF.cpp`、
-  `RimeWithWeasel/RimeWithWeasel.cpp`，spec 091 / ADR 0024）：
-  此前从火流猩切到别的输入法后，快捷设置栏仍然留在屏幕上。根因**不是**面板忘了隐藏，
-  而是「该隐藏」这个信号从未送到：`FocusOut` 有两条来源——切窗口
-  （`ITfKeyEventSink::OnSetFocus`）与切到别的输入法
-  （`ITfActiveLanguageProfileNotifySink::OnActivated(false)`）——过去都发 `wParam=0`，
-  服务端无法区分，于是一刀切的常驻守卫把「切输入法必须收起」一并挡掉。
-  现复用既有 `wParam` 槽位新增位标志 `WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED`
-  （与既有的 `WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED` 完全对称），
-  **不新增 IPC 消息类型、线格式零变化、旧客户端安全降级**；
-  判定逻辑收敛到共享头纯函数 `ShouldHideQuickPanelOnFocusOut()`，
-  生产代码与测试同源（宪法 R7）。
-- **「常驻」的口径明确化**：「常驻」= 不因鼠标移开 / 切窗口 / 点击而消失；
-  **切到别的输入法时输入法已经不在场，快捷设置栏必须收起**。两条语义不再互相牵连。
-- **语言栏弹出菜单去掉「快速面板常驻」项**（`WeaselTSF/WeaselTSF.rc`，spec 091 / ADR 0024）：
-  该项的勾选态在语言栏里本就无法回显（跨进程状态 + 宪法 P2 禁止在 TSF 回调里读盘），
-  1.1.5 已改为「装完即常驻」，菜单项因此只剩误导作用 ⇒ 从语言栏的三份弹出菜单移除。
-  **托盘右键菜单的「快速面板常驻」保留**，仍可随时开关常驻。
-
-## [1.1.5] - 2026-10-30
-
-### 主要更新
-
-本轮落地 1.1.4 装机实测反馈的 4 条（spec 089 / spec 090，ADR 0022 / ADR 0023）。
-
-- **快速面板改为「装完即常驻」，不再需要用户先去勾那个勾不上的选项**（反馈 ①）
-  （`WeaselServer/QuickPanelDialog.cpp`、`WeaselServer/QuickPanelDialog.h`，spec 089 / ADR 0022）：
-  此前「常驻」默认关闭；用户勾上之后功能生效，但**输入法弹出菜单里的勾选态不回显**。
-  根因不在面板，而在语言栏菜单的转换函数 `HMENU2ITfMenu`（`WeaselTSF/LanguageBar.cpp:18-41`）——
-  它只读 `MIIM_FTYPE|MIIM_ID|MIIM_STRING`，**不读 `MIIM_STATE`**，恒以 `flags=0` 调 `AddMenuItem`，
-  从不传 `TF_LBMENUF_CHECKED`；而勾选态活在 `WeaselServer.exe` 进程内，要跨进程回显就得在 TSF 回调里
-  做 IPC 或读盘，撞宪法 **P2**（`ITfTextInputProcessor::*` 回调内禁止阻塞 I/O）。
-  ⇒ **不去修回显，直接把默认值改成常驻**：状态文件缺失或损坏时 `LoadPersistedAlwaysShowModeFrom()`
-  返回 `true`（原为 `false`）。装完即是常驻态，用户无需再碰这个开关。
-  取消入口两条都已存在、本轮不动：`Alt+,`（`ID_HOTKEY_QUICK_PANEL`）与托盘右键「快速面板常驻 (&A)」。
-  「常驻时 1.5 秒自动消失」此前已由 ADR 0019 设防（`QuickPanelDialog.cpp:741-744` 屏蔽
-  `s_outsideMs >= 1500` 的 Hide；`:684` grace 路径带 `!AlwaysShowMode()` 守卫）⇒ **本轮无需新增改动**。
-  登录后仍不会自动弹窗：`RestoreAlwaysShowMode()` 只回填模式、**绝不 auto-show**（spec 055 不变量保留），
-  面板在首次输入动作或 `Alt+,` 触发时才出现并常驻。
-  边界语义（有意保留，ADR 0022 已记录）：**只有「文件缺失/读不出来」才回落到默认常驻**；
-  文件存在但内容不是 `always_show=1` ⇒ 视为用户明确关过，仍返回关。
-- **常驻态 idle 不透明度 60% → 85%**（反馈 ②）（`include/QuickPanelAlpha.h`、`WeaselServer/QuickPanelDialog.h`）：
-  面板是 `UpdateLayeredWindow` 逐像素 alpha，最终可见 alpha = `ApplyAlphaGradient()` 写入的
-  **面板梯度** × 轮询器 park 的 **idle 系数**（`ScaleAlpha`）。要精确落在 85%，两处都得动：
-  `kAlphaPanelTop`/`kAlphaPanelBot` 由 `220`/`80` **拉平为 `255`/`255`**，`kAlphaFactorIdle` 由
-  `153`（60%）抬到 **`217`**（217/255 = 85.1%）。鼠标移上去 `factor = kAlphaFactorFull = 255`
-  触发 `ScaleAlpha` 的 `factor >= kAlphaScaleNum ⇒ return base` 短路 ⇒ **hover 仍是 100% 不透明**，
-  淡入淡出动画与 100ms 轮询节奏逐字节不变。
-  **代价（如实披露）**：牺牲的是 alpha 沿 y 轴 220→80 的递减；**颜色梯度**
-  （`kBgTop=(200,225,250)` → `kBgBot=(155,195,240)`）与**圆角掩码**（`PtInRegion` 外 alpha=0）
-  **都完整保留** ⇒ liquid glass 观感的主要来源没丢。
-- **左右 Shift 选第 2 / 第 3 个候选改为「页内索引」**（反馈 ③）
-  （`RimeWithWeasel/RimeWithWeasel.cpp`、`include/RimeWithWeasel.h`、`include/ShiftStateMachine.h`，
-  spec 090 / ADR 0023 D2）：此前 Shift 走的是 librime 的**全局** `select_candidate`，索引从第 1 页起算；
-  一旦候选翻页，屏幕上显示的是第 2 页，上屏的却仍是**第 1 页**的第 2 / 第 3 个 ⇒ 用户看到的和
-  打出来的不是同一个词。现全部改走 `select_candidate_on_current_page`（0-based 页内索引，
-  取证 `librime/src/rime/api/rime_api_impl.h:982-1000`），涉及 `SelectCandidateOnCurrentPage`、
-  `DeleteCandidateOnCurrentPage`、`HighlightCandidateOnCurrentPage`、`_GetCandidateInfo`、
-  `_Respond`、`_GetContext`、`ShiftUp` 七处。
-  **越界一律不选词、不上屏、不 flush、不回包**（新增 `fluxing::IsPageLocalIndexValid`），
-  函数尾照常重置 ShiftState；明确**禁止**「退回全局 `select_candidate`」的 fallback ——
-  那会选中屏幕上根本没看见的词，比不选更错。
-- **右键点击候选 = 屏蔽这个词**（反馈 ④）（`include/FluxingCandidateIgnore.h`（新）、
-  `RimeWithWeasel/RimeWithWeasel.cpp`，spec 090 / ADR 0023 D5）：
-  链路核实为**通**：候选窗非高亮态右键 → `WeaselPanel::OnRButtonDown`（`:558-561`）→
-  `m_pb->DeleteCandidate(index)` → IPC `COMMAND_DELETE_CANDIDATE` → 服务端
-  `DeleteCandidateOnCurrentPage(index)`。其中 `index` 来自 `m_layout.candies.indexFromPoint(pt)`，
-  是**服务端过滤后的可见位置**，服务端再用 `_MapVisibleIndexToEngine` 翻译成引擎索引 ⇒ 语义一致。
-  过滤做在**服务端**（`_GetCandidateInfo` 内按 `m_ignoreList` 跳过命中项，并重建
-  `m_visibleToEngineIdx` 映射），不在 UI 侧：UI 侧那个 `_FilterIgnoredCandidates` 从 `candies` 里
-  移除却不重建索引映射，会导致选中错位的引擎候选 ⇒ 已标注为死代码，不再接线。
-  名单为空时 label 逻辑与原实现**逐字节一致**；非空时按可见位置重新顺序编号。
-  名单文件只 `OPEN_EXISTING` 读、`FILE_APPEND_DATA` + `OPEN_ALWAYS` 追加，撤销走既有托盘
-  「恢复已忽略的候选项」（`ID_WEASELTRAY_RESTORE_IGNORED`）。
-- **关于反馈 ④ 提到的 `Shift+Ctrl+数字`（重要澄清）**：该组合键**本仓从未实现过** ——
-  无 spec、无 yaml 绑定、无 IPC 消息、无按键 handler（已全仓取证）。因此它**不是「丢失」，
-  也无法「恢复」**。落地它需要新增 IPC 消息类型（触发四边同步 + ADR + `test/TestWeaselIPC/*`）、
-  TSF 侧按键拦截与 P2 论证、以及独立的真机验收 ⇒ **本轮不做**，已写入交接卡延后项。
-  用户想要的「按次序移词」能力由上面那条**右键屏蔽**覆盖。
-
-### 回归测试
-
-- `Release\TestQuickPanelDialog.exe`：**43 / 43** 断言通过（exit 0）。
-  其中 T13b / T16a / T16e 三条按新语义**翻转为正**（缺失 ⇒ 常驻）；**T13h 保持取反**
-  （文件存在但内容非 `always_show=1` ⇒ 关，与「缺失 ⇒ 常驻」是两种不同语义）；
-  T16c 不动（新落点优先）。T12d / T12e 的 `ScaleAlpha` 期望值随 `kAlphaFactorIdle` 更新为
-  `217` / `187`。
-- `Release\TestCandidateIgnoreFilter.exe`：**5 / 5 + 14 / 14** 断言通过，`No errors detected.`
-  新增 `TestServerSideIgnoreMapping.cpp`（14 组，含两条**负对照**）。
-  顺带修掉一个真 bug：`ParseIgnoreListText` 未清空出参，二次调用会累积上一轮结果。
-- `Release\TestCandidateRButtonDown.exe`：**6 / 6** 断言通过（行为级，用 test-local
-  `FakePanel`/`FakeClient`，不链接 `WeaselPanel.cpp`）；含 T5「右键一次 → 移除 1 次 +
-  名单追加**引擎原文**（映射生效）」与 T6「E6 哨兵：引擎返回 true/false 名单都写入（无条件）」。
-- `Release\TestQuickPanelRefactor.exe`：**5 / 5、1 / 1 PASS**（exit 0）。
-- 本轮**不新增 IPC 消息类型** ⇒ 不触发 IPC 四边同步；**未改** `output/install.nsi` 与
-  `output/data/user-custom/**`；**未改** `librime/`（P3 / L10 只读）。
-
-### 产物（v1.1.5）
-
-| 位置 | 文件 | 大小 | SHA256 |
-| --- | --- | --- | --- |
-| `release/` | `fluxing-1.1.5-installer.exe` | 42,786,442 字节（约 40.8 MiB） | `4B7287ADD9755AC41BF493EDACEA811897E29C8602EE5C9AB71A08AE3682EBE7` |
-| `output/archives/` | `fluxing-1.1.5-installer.exe` | 42,786,442 字节（`cmd /c copy /Y` 逐字节复制） | 同上 |
-
-- NSIS 汇总：`Total size: 42786442 / 155195752 bytes (27.5%)`、`Compressed data: 42666630 / 155156836`、`CRC (0x894A264C)`。
-- 版本宏（取自 `tmp/build-115-installer2.log`）：`FLUXING_VERSION=1.1.5`、`PRODUCT_VERSION=1.1.5.0`、`FILE_VERSION=1.1.5.0`、`VERSION_PATCH=5`；rc.exe 与 makensis 两端均已带上。
-- 构建日志 `tmp/build-115-installer2.log`：exit 0、0 错误、58,371 字节。8 条 NSIS 警告全是既有的 `7010: File: ... -> no files found.`（`weaselARM.dll` / `weaselARM64.dll` / `weaselARM64X.dll` @ `install.nsi:745-747` 与 `:891-893`、`data\*.gram` @ `:901`、`data\lua\*.txt` @ `:912`），非本轮引入。
-- **版本号真源是 `env.bat` + `weasel.props`（本机文件、均被 `.gitignore:31/:32` 排除），不是 `build.bat` / `xbuild.bat`。** `build.bat:12-15` 先清空四个版本变量、随后 `env.bat` 硬编码填回，所以 `build.bat:42-44` 的 `if not defined VERSION_PATCH set VERSION_PATCH=5` 只是 fallback —— 只改 `build.bat:44` 完全无效。本轮 `build.bat:44` 与 `xbuild.bat:55` 的 fallback 也一并改成 5（这两个是入库改动），`env.bat` / `weasel.props` 的本机改动不入库（符合 AGENTS.md §5）；入库的 `env.bat.template` 与 `weasel.props.template` 不含版本号，无需改。
-- **副作用披露**：第一次打包时 `env.bat` 尚未改版本号，误产出名为 `fluxing-1.1.4-installer.exe` 的载荷并覆盖了 `output/archives/fluxing-1.1.4-installer.exe`（42,792,647 字节，mtime 10-30 21:34:32）。该目录被 `.gitignore:27 /output/archives` 排除、可由 `build.bat weasel installer` 重新生成；`release/` 下的真 1.1.4 载荷（42,771,668 字节）未被动过，与 archives 里那份不是同一个文件。
-- `release/` 仍缺 `fluxing-1.1.1-installer.exe` 与 `fluxing-1.1.2-installer.exe`（`output/archives/` 里有，分别 42,753,471 / 42,763,583 字节），属既有遗留，本轮未回填。
-
-## [1.1.4] - 2026-10-29
-
-### 主要更新
-
-- **输入法图标托盘的「重启算法服务」「程序文件夹」在 fork 下原本是静默空操作**
-  （`include/FluxingInstallPaths.h`、`WeaselTSF/LanguageBar.cpp`、`WeaselTSF/WeaselTSF.cpp`，
-  spec 088 / ADR 0021）：
-  前端读的是**上游的键 + 上游的值名**（32 位分支 `Software\WOW6432Node\Rime\Weasel`、
-  64 位分支 `Software\Fluxing\Weasel`，值名 `WeaselRoot`），而本 fork 的安装器**只写**
-  `Software\Fluxing\Weasel :: InstallDir` ⇒ 拿到空串 ⇒ 旧代码「读不到就整段跳过」
-  ⇒ **点了完全没反应**。
-  更深的坑：`InstallDir` 实际只写在 **32 位注册表视图**
-  （`HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel`），64 位视图下 `HKLM\SOFTWARE\Fluxing\Weasel`
-  **根本不存在** ⇒ 任何「按进程字长猜视图」的固定写法都读不到。
-  现新增单一事实源 `include/FluxingInstallPaths.h`：**显式遍历 32/64 两个视图** → 取安装根
-  → 补 `\weasel`（安装器 `output/install.nsi:25` 的 `WEASEL_ROOT`）→ 按文件系统校验
-  （内含 `WeaselServer.exe` / `start_service.bat`）→ 旧上游键保留为**只读兜底**（spec 002 FR-008）。
-- **解析失败不再「点了没反应」**：一律弹简体中文提示 ——「未找到火流猩程序目录，请重新安装后再试。」/
-  「未找到算法服务启动脚本，请重新安装后再试。」
-- **算法服务异常退出后前端现在能自动拉起**：此前「服务未运行自动拉起」用的是同一个空路径，
-  `ShellExecute` 拿到空串静默失败；现走统一目标选择器（优先 `start_service.bat`，缺失时直接启动
-  `WeaselServer.exe`），两者都没有才报错。
-- 回归测试：`TestFluxingComponents` 新增 `TestFluxingInstallPaths`（T1–T13，19 条断言），含**负对照**
-  —— 复刻上游「只读 `WeaselRoot`」的旧写法，断言它**解析不到程序目录** ⇒ 断言不是恒真；19/19 全过。
-- 本轮**未改安装器**：`output/install.nsi` 与 `output/data/user-custom/**` 一字未动
-  ⇒ 无需 Windows Sandbox 复验。
-
-## [1.1.3] - 2026-10-29
-
-### 主要更新
-
-- **快捷面板「始终显示」的勾选态现在写在正确的用户数据目录里**
-  （`include/FluxingUserPaths.h`、`WeaselServer/QuickPanelDialog.{h,cpp}`，ADR 0020）：
-  v1.1.2 把勾选态持久化到硬编码的 `%APPDATA%\Rime\quickpanel.state`，而**本 fork 的用户数据目录
-  从来不是 `%APPDATA%\Rime`**（`HKCU\Software\Fluxing\Weasel :: RimeUserDir` →
-  `D:\Program Files\fluxing\user1\fluxing`，fork 默认 `%AppData%\fluxing`）⇒ 勾选态落在一条与用户
-  数据目录无关的孤儿路径上，「随用户数据目录一起备份」从未兑现；实测装机后 `%APPDATA%\Rime`、
-  `%APPDATA%\Fluxing`、用户数据目录**三处都没有**该文件 ⇒ 用户从未勾选过「始终显示」，
-  v1.1.2 的持久化修复**未被真机触发**，缺陷一直潜伏。
-  现落点改为 `<用户数据目录>\quickpanel.state`；旧落点保留为**只读兜底**（新落点缺失或损坏时回退读），
-  写入只落新路径，**不再在已迁走的旧目录造文件**。
-- **用户数据目录解析收敛为单一事实源**（`include/FluxingUserPaths.h`）：新增 header-only 的
-  `ResolveFluxingUserDataPath()`，从 `HKCU\Software\Fluxing\Weasel :: RimeUserDir` 解析用户数据目录
-  （读不到回退 `%AppData%\fluxing`）；`WeaselUserDataPath()` 改为委托它，**行为逐字节不变**。
-- 回归测试：`TestQuickPanelDialog` 新增 T15a–T15d（落点文件名 / 父目录 == 解析出的用户数据目录 /
-  不再是 `%APPDATA%\Rime`）与 T16a–T16e（旧落点只读兜底矩阵：都不在 / 仅旧在 / 新优先 / 新=1 /
-  legacy 传空串不兜底），**43/43 全过**（先红后绿已验证：把实现还原成 v1.1.2 行为后
-  T15b/T15c/T15d 如期 FAIL，实测 39/43）。全套件 `scripts/test-infra/run-test-suite.bat`
-  **ALL TESTS PASSED**。
-- 顺带修正两处 tracked 版本线漂移：`build.bat` / `xbuild.bat` 的兜底 `VERSION_*` 自 1.1.0 以来一直
-  停在 **1.0.0**（没有 `env.bat` 的构建会产出 1.0.0 载荷，与 L145 同类隐患），现同步到 **1.1.3**。
-
-## [1.1.2] - 2026-10-29
-
-### fix(WeaselServer): 快捷面板「常驻」态跨重启保持；ESC 不再收起面板（ADR 0019，1.1.1 真机反馈）
-
-- **常驻勾选不再被装包重启清零**：此前「快速面板常驻」勾选只存在于 WeaselServer 进程内存，
-  装包必须重启服务 ⇒ 勾选归零，面板退回「瞬时模式」（鼠标离开约 1.5-2 秒自动收起），
-  被读作「调出后经过几秒钟自动消失」。现勾选态持久化到 `%APPDATA%\Rime\quickpanel.state`
-  （单行 ASCII 键值），服务启动时恢复，且**不会自动弹出面板**（保留 spec 055 不变量）。
-- **ESC 不再隐藏快捷设置栏**：`OnKeyDown VK_ESCAPE` 现只吞键、不再 `Hide()`；
-  面板显隐只由 `Alt+,` 快捷键控制（用户 1.1.1 验收口径）。本条**推翻** spec 084 FR-007、
-  spec 087 FR-087-B 与 ADR 0013 D7 的 Esc 分支，见
-  `docs/adr/0019-quickpanel-always-show-persist-and-esc-no-hide.md`。
-- 回归测试：`TestQuickPanelDialog` 新增 T13a-T13h（持久化往返 / CRLF 容忍 / 坏文件兜底 /
-  恢复不自动 Show / 落盘内容逐字节断言）与 T14a-T14f（ESC 后面板仍可见、`Hide()` 仍可收起），
-  **34/34 全过**；测试落点经 `SetStatePath` 重定向到 `%TEMP%`，不污染真实勾选态。
 
 ## [1.0.0] - 2026-10-28
 
