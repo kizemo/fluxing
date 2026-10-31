@@ -7,6 +7,7 @@
 #include <GdiPlus.h>
 #pragma comment(lib, "gdiplus.lib")
 #include "WeaselService.h"
+#include "ServerCmdLine.h"
 #include <WeaselIPC.h>
 #include <WeaselUI.h>
 #include <RimeWithWeasel.h>
@@ -118,18 +119,25 @@ int WINAPI _tWinMain(HINSTANCE hInstance,
   hRes = _Module.Init(NULL, hInstance);
   ATLASSERT(SUCCEEDED(hRes));
 
-  if (!wcscmp(L"/userdir", lpstrCmdLine)) {
+  // L160 / spec 093: WinMain 的 lpstrCmdLine 是原始 lpCmdLine，参数前带一个
+  // 空格（" /quit"）。旧的整串 wcscmp 恒为假 => 全部命令行选项都是死选项，
+  // /quit 实际会落进"已在运行则重启"分支。改走共享解析（宪法 R7）。
+  const fluxing::servercmd::Option cmdOption =
+      fluxing::servercmd::Parse(lpstrCmdLine);
+
+  if (cmdOption == fluxing::servercmd::Option::UserDir) {
     CreateDirectory(WeaselUserDataPath().c_str(), NULL);
     WeaselServerApp::explore(WeaselUserDataPath());
     return 0;
   }
-  if (!wcscmp(L"/weaseldir", lpstrCmdLine)) {
+  if (cmdOption == fluxing::servercmd::Option::WeaselDir) {
     WeaselServerApp::explore(WeaselServerApp::install_dir());
     return 0;
   }
-  if (!wcscmp(L"/ascii", lpstrCmdLine) || !wcscmp(L"/nascii", lpstrCmdLine)) {
+  if (cmdOption == fluxing::servercmd::Option::Ascii ||
+      cmdOption == fluxing::servercmd::Option::Nascii) {
     weasel::Client client;
-    bool ascii = !wcscmp(L"/ascii", lpstrCmdLine);
+    bool ascii = (cmdOption == fluxing::servercmd::Option::Ascii);
     if (client.Connect())  // try to connect to running server
     {
       if (ascii)
@@ -141,7 +149,7 @@ int WINAPI _tWinMain(HINSTANCE hInstance,
   }
 
   // command line option /q stops the running server
-  bool quit = !wcscmp(L"/q", lpstrCmdLine) || !wcscmp(L"/quit", lpstrCmdLine);
+  bool quit = (cmdOption == fluxing::servercmd::Option::Quit);
   // restart if already running
   {
     weasel::Client client;
@@ -162,7 +170,7 @@ int WINAPI _tWinMain(HINSTANCE hInstance,
       return 0;
   }
 
-  bool check_updates = !wcscmp(L"/update", lpstrCmdLine);
+  bool check_updates = (cmdOption == fluxing::servercmd::Option::Update);
   if (check_updates) {
     WeaselServerApp::check_update();
   }
