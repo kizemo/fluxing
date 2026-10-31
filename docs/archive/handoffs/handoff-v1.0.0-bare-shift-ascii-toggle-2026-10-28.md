@@ -2347,3 +2347,11 @@ FocusOut: 3 param=1
     第一版怀疑是「缓冲未 flush」，属误判；真实根因是「打开方式缺少追加语义」。
     已改为 `FILE_APPEND_DATA` + `FlushFileBuffers`，并在测试起点清空记录文件。
     教训：读不到第二行时，先查「打开方式与文件指针语义」，再查「flush 时机」。
+18. **编辑工具会重写混合行尾文件（本轮实测踩坑）**：`.gitignore` 原本是混合行尾
+    （179 CRLF + 4 LF，尾部注释块用 LF）；用文本编辑工具改一行时，工具把整份文件
+    重写成 CRLF，于是 diff 里多出 4 行无意义改动。已用第 5 条提交还原为原始 LF。
+    正确做法：① 用 `git checkout <rev> -- <path>` 取回父 blob 的**逐字节原始内容**
+    （`core.autocrlf=false` 下 checkout 不做换行转换）；② 用字节级 API 做插入
+    （`[IO.File]::WriteAllBytes` + Latin1 往返），别用会重写行尾的文本编辑；
+    ③ 用 `git cat-file -s <blob>` 取 blob 真实字节数取证，**不要**用 `git show` 取证
+    —— git 的 stdout 会把 LF 规范化成 CRLF，本轮因此差点把父 blob 的真实状态判错。
