@@ -23,8 +23,8 @@
 
 ## 2. 必须强制 (删除就出错)
 
-- **必查图谱**: 探索任何源码前, 用 `codebase-memory-mcp` (`F-soft-00selfmade-rime_claude`,
-  12,679 节点 / 38,137 边);顺序 `search_graph → trace_path → get_code_snippet → query_graph → get_architecture`。
+- **必查图谱**: 探索任何源码前, 用 `codebase-memory-mcp` (`F-soft-00selfmade-rime-claude`,
+  12,715 节点 / 38,206 边);顺序 `search_graph → trace_path → get_code_snippet → query_graph → get_architecture`。
   降级到 Grep / Read 的条件在 [`.claude/rules/codebase-graph.md`](.claude/rules/codebase-graph.md)。
 - **必须中文**: 用户可见字符串保持简体中文 (constitution P2/P5)。
 - **必须 IPC 四边同步**: `include/WeaselIPCData.h` 与协议的任何变更 → server / TSF / deployer 三端 + 一个 ADR + 一个 `test/TestWeaselIPC/*` 测试, 一次性提交。
