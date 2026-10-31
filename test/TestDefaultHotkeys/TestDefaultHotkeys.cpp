@@ -1,4 +1,4 @@
-// TestDefaultHotkeys.cpp
+﻿// TestDefaultHotkeys.cpp
 // spec 005 v1.1 hotkey validation: verifies default.yaml is adjusted per v2
 // spec. compile: cl /EHsc /std:c++17 /I include TestDefaultHotkeys.cpp
 // /Fe:test.exe

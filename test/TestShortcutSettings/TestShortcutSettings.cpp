@@ -1,4 +1,4 @@
-// TestShortcutSettings.cpp
+﻿// TestShortcutSettings.cpp
 // spec 045 v0.19.0.28 — Track 3 单元测试 (Public API only)
 //
 // Public API surface (per header):

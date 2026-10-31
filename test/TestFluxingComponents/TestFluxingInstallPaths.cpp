@@ -1,4 +1,4 @@
-// TestFluxingInstallPaths.cpp - spec 088 T3 (2026-10-29)
+﻿// TestFluxingInstallPaths.cpp - spec 088 T3 (2026-10-29)
 //
 // 行为级测试:程序目录(binary root / WEASEL_ROOT)解析。
 //

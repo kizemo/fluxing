@@ -1,4 +1,4 @@
-// TestShiftSelectBinding.cpp
+﻿// TestShiftSelectBinding.cpp
 // spec 014 runtime test: validate the binding form chosen for the restored
 // has_menu Shift_L/R select 2nd/3rd candidate binding.
 //

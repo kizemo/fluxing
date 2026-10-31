@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 //
 // QuickPanelAlpha - shared alpha math for the Fluxing QuickPanel.
 //

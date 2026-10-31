@@ -1,4 +1,4 @@
-// TestShiftIPCStateMachine.cpp
+﻿// TestShiftIPCStateMachine.cpp
 //
 // 20 unit tests for fluxing::ShiftStateMachine (11 x spec 077 §2.7.1
 // + 6 x ADR 0010 bare-Shift disambiguation

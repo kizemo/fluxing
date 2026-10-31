@@ -1,4 +1,4 @@
-// v0_19_0_30_e2e.cpp — Binary sandbox e2e verification for v0.19.0.30
+﻿// v0_19_0_30_e2e.cpp — Binary sandbox e2e verification for v0.19.0.30
 // spec 070 follow-up: 3 user-visible bugs shipped in v0.19.0.29 must
 // be fixed in v0.19.0.30. This test verifies each fix by exercising
 // the **production WndProc / Show / Hide / SetOn* API paths directly**

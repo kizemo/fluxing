@@ -1,4 +1,4 @@
-//
+﻿//
 // TestPipeChannelRace.cpp — Regression test for spec 076
 //
 // Target: ensure PipeChannelBase's per-thread state initialization is

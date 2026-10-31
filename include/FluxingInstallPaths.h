@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 // Fluxing 程序目录(binary root / WEASEL_ROOT)解析 —— 单一事实源(header-only)。
 //
 // 背景(fork 级缺陷,spec 088 修复):

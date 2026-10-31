@@ -1,4 +1,4 @@
-// TestUserDictionary.cpp
+﻿// TestUserDictionary.cpp
 // spec 044 v0.19.0.28 — Track 2 单元测试
 //
 // 范围 (per spec §10.1):

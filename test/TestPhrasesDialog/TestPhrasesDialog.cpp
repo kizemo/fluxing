@@ -1,4 +1,4 @@
-// TestPhrasesDialog.cpp
+﻿// TestPhrasesDialog.cpp
 // spec 044 v0.19.0.32 — Track 2 unit tests (UX redo)
 //
 // 范围 (per spec 044):

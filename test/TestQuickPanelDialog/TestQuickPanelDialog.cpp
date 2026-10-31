@@ -1,4 +1,4 @@
-// spec 036 + spec 038: TestQuickPanelDialog verifies the dialog
+﻿// spec 036 + spec 038: TestQuickPanelDialog verifies the dialog
 // behavior after the spec 038 refactor to spec 037 FluxingComponents.
 //
 // spec 036 baseline (6 assertions): the dialog instantiated 2 native

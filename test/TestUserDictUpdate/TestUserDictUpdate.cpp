@@ -1,4 +1,4 @@
-// TestUserDictUpdate.cpp : spec 028 (2026-07-04)
+﻿// TestUserDictUpdate.cpp : spec 028 (2026-07-04)
 //
 // 4 behavior-level assertions that exercise the spec 028 stage 1
 // flow: RimeWithWeaselHandler::DeleteCandidateOnCurrentPage

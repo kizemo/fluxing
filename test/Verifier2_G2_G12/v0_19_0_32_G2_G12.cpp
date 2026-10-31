@@ -1,4 +1,4 @@
-// v0_19_0_32_G2_G12.cpp — Verifier #2 supplemental binary checks
+﻿// v0_19_0_32_G2_G12.cpp — Verifier #2 supplemental binary checks
 // Independent probe covering G2-G11 + dark mode G12 against v0.19.0.32 binary
 // (commit cd6f61a9). Each Check() invokes production WndProc / API directly.
 //

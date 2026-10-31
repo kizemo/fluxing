@@ -1,4 +1,4 @@
-// TestServerSideIgnoreMapping.cpp : spec 090 (2026-10-30)
+﻿// TestServerSideIgnoreMapping.cpp : spec 090 (2026-10-30)
 //
 // 服务端候选屏蔽名单的纯函数契约测试。覆盖 include/FluxingCandidateIgnore.h
 // 与 include/ShiftStateMachine.h 里三个被服务端复用的纯函数:

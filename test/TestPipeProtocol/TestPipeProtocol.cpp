@@ -1,4 +1,4 @@
-//
+﻿//
 // TestPipeProtocol.cpp — Sandbox 测试 named pipe IPC 双向通信
 //
 // Phase K2 (v0.19.0.51) T009: 验证 PHRASES / ADD / EDIT / DELETE / INJECT 协议

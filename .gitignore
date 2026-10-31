@@ -178,3 +178,6 @@ release/*.ilk
 /test/**/*.pdb
 /test/**/*.ilk
 /env.bat.bak.*
+
+# 2026-10-31: toolchain scratch dir (commit messages, probe artifacts) - never tracked
+/tmp/

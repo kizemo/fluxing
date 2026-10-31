@@ -1,4 +1,4 @@
-// TestShiftIPCWire.cpp
+﻿// TestShiftIPCWire.cpp
 //
 // 5 wire-format integration tests for spec 077 §2.3 Shift IPC commands.
 // Tests verify the packed message layout (Msg/wParam/lParam order) matches

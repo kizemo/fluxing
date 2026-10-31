@@ -1,4 +1,4 @@
-// TestQuickPanelRefactorMain.cpp - spec 038 T008 (2026-07-05)
+﻿// TestQuickPanelRefactorMain.cpp - spec 038 T008 (2026-07-05)
 //
 // Test runner entry point. TestQuickPanelRefactor.cpp exports
 // int RunRefactorTest() that returns 0 on success. The main()

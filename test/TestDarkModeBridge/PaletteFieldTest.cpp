@@ -1,4 +1,4 @@
-// PaletteFieldTest.cpp - spec 040 T003 (2026-07-12)
+﻿// PaletteFieldTest.cpp - spec 040 T003 (2026-07-12)
 //
 // Layout assertions + field round-trip tests for the extended
 // Palette struct (10 new fields added in spec 040 T001-T002).

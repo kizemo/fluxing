@@ -1,4 +1,4 @@
-// TestCandidateIgnoreFilter.cpp : spec 031 (2026-07-04)
+﻿// TestCandidateIgnoreFilter.cpp : spec 031 (2026-07-04)
 //
 // 5 behavior-level assertions for the candidate ignore filter
 // (stage 3 of spec 008). Pattern: boost::detail::lightweight_test.

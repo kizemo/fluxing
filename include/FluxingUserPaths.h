@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 // Fluxing 用户数据目录解析 —— 单一事实源(header-only)。
 //
 // ADR 0020 的根因:1.1.2 之前 quickpanel.state 硬编码在 %APPDATA%\Rime\,与本

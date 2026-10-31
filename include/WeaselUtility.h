@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 // ADR 0020: 用户数据目录解析下沉到 include/FluxingUserPaths.h(单一事实源):
 // WeaselUserDataPath() 与 QuickPanelDialog 的勾选态落点必须解析出同一个目录。
 #include "FluxingUserPaths.h"

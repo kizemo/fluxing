@@ -1,4 +1,4 @@
-// TestCandidateRButtonDown.cpp : spec 030 (2026-07-04) / spec 090 (2026-10-30)
+﻿// TestCandidateRButtonDown.cpp : spec 030 (2026-07-04) / spec 090 (2026-10-30)
 //
 // 6 behavior-level assertions for the candidate right-click (stage 2 of spec
 // 008, hardened by spec 090). Pattern: boost::detail::lightweight_test (no

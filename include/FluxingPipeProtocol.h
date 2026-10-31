@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 //
 // FluxingPipeProtocol.h — Named pipe IPC 协议定义
 //

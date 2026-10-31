@@ -1,4 +1,4 @@
-// TestBindingResolution.cpp : Behavior-level test for spec 005 v1.1
+﻿// TestBindingResolution.cpp : Behavior-level test for spec 005 v1.1
 // key_binder bindings. spec 018 (2026-07-02) replaces the SCAFFOLD /
 // LINKED stub with 4 real assertions that close the L18 / L19 testing
 // gap (per TDD.md sec 3.2 mock-librime principle).
