@@ -529,33 +529,26 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
 }
 
 void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
-  DLOG(INFO) << "Focus out: ipc_id = " << ipc_id;
+  DLOG(INFO) << "Focus out: ipc_id = " << ipc_id << ", param = " << param;
   if (m_ui)
     m_ui->Hide();
   m_active_session = 0;
-  // L81-fix: 把 L69-fix 残留的 `if (false)` 重新启用。
-  // L69 因 GDI+ heap-corruption (L67-L69 崩溃链) 临时禁掉 QuickPanel。
-  // L70+ spec 070 重新启用并改纯 GDI (L75)。但 L69 的 `if (false)
-  // QuickPanelDialog::Hide()` 一直没改回 `if (true)` — 导致用户切走 (Win+Space
-  // → en-US) 时 panel 残留在屏幕上。
+  // spec 091 / ADR 0024:FocusOut 有两种语义,wParam 带标志区分 ——
   //
-  // L81 实现: FocusOut 是从 WeaselTSF 来的 IPC,**当用户切换到 en-US IME 时**,
-  // WeaselTSF 收到 ITfTextInputProcessorEventSink::OnDeactivate → 通过
-  // WeaselIPC 发 FocusOut → 这次 m_active_session = 0 + 这里 Hide() panel。
-  // 这是最干净的 IME switch path:不依赖 TSF manager 广播 WM_INPUTLANGCHANGE,
-  // 不依赖前景 app 变化,直接走 RIME event chain。
+  //   param 带 PROFILE_DEACTIVATED => 用户切到了别的输入法。Fluxing 已经
+  //     不在场,快捷设置栏必须收起,即便用户勾了「常驻」。这是 spec 091 的
+  //     需求:切到火流猩显示,切到别的输入法不显示。
+  //   param 为 0 => 只是输入焦点离开 / 切窗口 / 应用失焦,尊重常驻开关。
   //
-  // 这是 no-op 保护 (Hide 在 panel 未显示时是 safe no-op):
+  // 过去两条路径都发 wParam=0,服务端一刀切地被 AlwaysShowMode() 守卫挡住,
+  // 于是「切输入法必须消失」被常驻守卫一并挡掉(spec 091 的根因)。
+  // 判定逻辑放在共享头 ShouldHideQuickPanelOnFocusOut() 里,生产代码与测试
+  // 同源(宪法 R7)。
   //
-  // spec 087 / ADR 0016: FocusOut 是面板的第四条自动隐藏路径。前三条
-  // (轮询器 / WM_ACTIVATEAPP / WM_KILLFOCUS) 都在 QuickPanelDialog 内部
-  // 带 AlwaysShowMode() 守卫,唯独这条从 WeaselTSF 过来的 IPC 直接调
-  // Hide(),于是"勾了常驻"的面板在用户一切换输入焦点时仍然消失。
-  //
-  // 守卫加在调用点,不动 Hide() 本体: Hide() 还服务于需要用户明确手势
-  // 的路径 (Alt+, 收起 / ESC / 点词库按钮),把守卫放进 Hide() 内部会让
-  // 那些路径在长显态下失效 (ADR 0013 D7)。
-  if (!QuickPanelDialog::AlwaysShowMode())
+  // 守卫仍然加在调用点,不动 QuickPanelDialog::Hide() 本体:Hide() 还服务于
+  // 需要用户明确手势的路径(Alt+, 收起 / ESC / 点词库按钮),把守卫放进
+  // Hide() 内部会让那些路径在长显态下失效(ADR 0013 D7 / ADR 0016 D1)。
+  if (ShouldHideQuickPanelOnFocusOut(param, QuickPanelDialog::AlwaysShowMode()))
     QuickPanelDialog::Hide();
 }
 

@@ -66,6 +66,7 @@ release/Test*.exe
 release/Test*.pdb
 release/*.exp
 release/*.lib
+release/focusout_param.txt
 test/**/Release/
 test/**/Debug/
 RELEASE_CHANGELOG.md

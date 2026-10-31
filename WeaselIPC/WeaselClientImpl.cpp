@@ -175,8 +175,8 @@ void ClientImpl::CloseThreadChannel() {
   channel.Disconnect();
 }
 
-void ClientImpl::FocusOut() {
-  _SendMessage(WEASEL_IPC_FOCUS_OUT, 0, session_id.load());
+void ClientImpl::FocusOut(DWORD client_caps) {
+  _SendMessage(WEASEL_IPC_FOCUS_OUT, client_caps, session_id.load());
 }
 
 void ClientImpl::TrayCommand(UINT menuId) {
@@ -309,8 +309,8 @@ void Client::FocusIn(DWORD client_caps) {
   m_pImpl->FocusIn(client_caps);
 }
 
-void Client::FocusOut() {
-  m_pImpl->FocusOut();
+void Client::FocusOut(DWORD client_caps) {
+  m_pImpl->FocusOut(client_caps);
 }
 
 void Client::CloseThreadChannel() {

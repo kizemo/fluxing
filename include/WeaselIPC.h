@@ -53,6 +53,41 @@ enum {
   WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED = 1u << 0,
 };
 
+// WEASEL_IPC_FOCUS_OUT 的 wParam 位标志(spec 091 / ADR 0024)。
+// 与上面的 PROFILE_ACTIVATED 完全对称:FocusIn 用「切到 Fluxing」把
+// 「用户刚切换输入法」和「窗口获得焦点」区分开,FocusOut 用「切离 Fluxing」
+// 做同一件事。
+//
+// bit0 = 用户刚把活动输入配置切离 Fluxing。
+//
+// 为什么需要这个标志:FocusOut 有两条来源 ——
+//   (a) 切窗口 / 应用失焦:
+//       ITfKeyEventSink::OnSetFocus(fForeground=false)
+//   (b) 切到别的输入法:
+//       ITfActiveLanguageProfileNotifySink::OnActivated(false)
+// 过去两条都发 wParam=0,服务端无法区分,于是「切到别的输入法必须收起快捷
+// 面板」被常驻守卫一并挡掉(spec 091 的根因)。
+//
+// 只复用既有 wParam 槽位,线格式(命令号 / 字段布局)零变化;旧客户端发 0
+// 仍然是旧语义,安全降级。
+enum {
+  WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED = 1u << 0,
+};
+
+// spec 091 / ADR 0024:快捷面板在 FocusOut 时是否应收起。
+//
+// param 带 WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED
+//   => 用户切到了别的输入法,Fluxing 已经不在场 => 必须收起(即便勾了常驻)。
+// 否则
+//   => 只是输入焦点离开 / 切窗口 / 应用失焦 => 尊重常驻开关。
+//
+// 生产代码与测试用同一份口径(宪法 R7),不要在别处再抄一遍。
+inline bool ShouldHideQuickPanelOnFocusOut(DWORD param, bool always_show) {
+  if (param & WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED)
+    return true;
+  return !always_show;
+}
+
 namespace weasel {
 struct PipeMessage {
   WEASEL_IPC_COMMAND Msg;
@@ -182,7 +217,8 @@ class Client {
   // client_caps: WEASEL_IPC_FOCUS_IN_FLAG_* 位标志(见文件上方定义)
   void FocusIn(DWORD client_caps = 0);
   // 输入窗口失去焦点
-  void FocusOut();
+  // client_caps: WEASEL_IPC_FOCUS_OUT_FLAG_* 位标志(见文件上方定义)
+  void FocusOut(DWORD client_caps = 0);
   // spec 080: close the pipe connection owned by the calling thread only.
   void CloseThreadChannel();
   // spec 080: true when this client owns a live session.

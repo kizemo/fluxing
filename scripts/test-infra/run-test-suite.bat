@@ -203,6 +203,12 @@ rem server is up, right after the client mode.
 echo === Running TestWeaselIPC.exe (/verify-shift-body) ===
 "Release\TestWeaselIPC.exe" /verify-shift-body < nul
 if !errorlevel! NEQ 0 set "FAIL=1"
+rem ADR 0024 / spec 091: the two FocusOut event kinds must be distinguishable
+rem on the wire (plain focus-out vs "the user switched to another IME").
+rem It has to run while the mock server is still up, so it goes before /stop.
+echo === Running TestWeaselIPC.exe (/verify-focusout-flags) ===
+"Release\TestWeaselIPC.exe" /verify-focusout-flags < nul
+if !errorlevel! NEQ 0 set "FAIL=1"
 echo === Shutting down TestWeaselIPC server (/stop) ===
 "Release\TestWeaselIPC.exe" /stop < nul
 if !IPC_RC! NEQ 0 set "FAIL=1"

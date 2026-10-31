@@ -402,8 +402,12 @@ void WeaselTSF::_ProfileNotifyLoop() {
       if (m_client.HasSession())
         m_client.FocusIn(WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED);
     } else if (kind == kProfileNotifyDeactivated) {
+      // spec 091 / ADR 0024: tell the server that the user switched to
+      // another input method. Without this flag the server cannot tell
+      // "switched away from Fluxing" apart from "the edit field lost
+      // focus", so the always-show guard swallows the hide request.
       if (m_client.HasSession())
-        m_client.FocusOut();
+        m_client.FocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED);
     }
     // One-shot notification: drop this thread's pipe connection so
     // WeaselServer does not keep an idle instance around.

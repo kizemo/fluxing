@@ -11,6 +11,7 @@ using namespace boost::interprocess;
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <string>
 
 CAppModule _Module;
 
@@ -18,6 +19,7 @@ int console_main();
 int client_main();
 int server_main();
 int verify_quickpanel_main();
+int verify_focusout_flags_main();
 int verify_shift_body_main();
 int verify_tsf_profile_main(bool allow_profile_switch,
                             bool allow_remote_session);
@@ -61,6 +63,8 @@ int _tmain(int argc, _TCHAR* argv[]) {
     return verify_shift_body_main();
   } else if (argc > 1 && !wcscmp(L"/verify-quickpanel", argv[1])) {
     return verify_quickpanel_main();
+  } else if (argc > 1 && !wcscmp(L"/verify-focusout-flags", argv[1])) {
+    return verify_focusout_flags_main();
   } else if (argc > 1 && !wcscmp(L"/verify-tsf-profile", argv[1])) {
     // spec 080 (crash guard): this mode really switches the active input
     // profile, which is not what a user does and which was observed to
@@ -379,6 +383,192 @@ int verify_quickpanel_main() {
   return -5;
 }
 
+// spec 091: helpers for the FocusOut event kind test.
+//
+// The mock server and the client are the same binary, so the record file
+// lives next to the exe: the directory is the same no matter what the
+// current working directory happens to be.
+std::wstring focusout_record_path() {
+  wchar_t exe_path[MAX_PATH] = {0};
+  DWORD exe_len = GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+  if (exe_len == 0 || exe_len >= MAX_PATH)
+    return std::wstring();
+  std::wstring exe_dir(exe_path, exe_len);
+  size_t slash = exe_dir.find_last_of(L"\\/");
+  if (slash == std::wstring::npos)
+    return std::wstring();
+  return exe_dir.substr(0, slash + 1) + L"focusout_param.txt";
+}
+
+std::string read_text_file(const std::wstring& path) {
+  if (path.empty())
+    return std::string();
+  HANDLE h = CreateFileW(path.c_str(), GENERIC_READ,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (h == INVALID_HANDLE_VALUE)
+    return std::string();
+  char buf[4096];
+  DWORD n = 0;
+  std::string out;
+  for (;;) {
+    if (!ReadFile(h, buf, sizeof(buf), &n, NULL) || n == 0)
+      break;
+    out.append(buf, n);
+  }
+  CloseHandle(h);
+  return out;
+}
+
+int count_lines(const std::string& text) {
+  int n = 0;
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (text[i] == '\n')
+      ++n;
+  }
+  return n;
+}
+
+std::string nth_line(const std::string& text, int index) {
+  int cur = 0;
+  size_t start = 0;
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (text[i] != '\n')
+      continue;
+    if (cur == index)
+      return text.substr(start, i - start);
+    ++cur;
+    start = i + 1;
+  }
+  return std::string();
+}
+
+// Waits until the record file holds at least min_lines lines.
+bool wait_focusout_lines(const std::wstring& path,
+                         int min_lines,
+                         int timeout_ms) {
+  for (int i = 0; i < timeout_ms / 50; ++i) {
+    if (count_lines(read_text_file(path)) >= min_lines)
+      return true;
+    Sleep(50);
+  }
+  return false;
+}
+
+// spec 091: the FocusOut event kinds must be distinguishable end to end.
+//
+// The mock server records the raw wParam of every FocusOut it receives into
+// "focusout_param.txt" next to the exe, one decimal value per line. The
+// client then sends two FocusOut messages - one plain ("the edit field
+// lost focus") and one flagged ("the user switched to another input
+// method") - and reads the recorded values back. If the two kinds travel
+// as the same value, the server can never tell "switched away from
+// Fluxing" apart from "lost focus", and the always-show guard swallows
+// the hide request (spec 091 root cause).
+//
+// The pure decision function is asserted here as well, with exactly the
+// same arguments the server passes, so production code and test share one
+// source of truth (constitution R7).
+int verify_focusout_flags_main() {
+  weasel::Client client;
+  if (!client.Connect()) {
+    std::cerr << "[FOCUSOUT] connect failed" << std::endl;
+    return -2;
+  }
+  client.StartSession();
+  if (!client.Echo()) {
+    std::cerr << "[FOCUSOUT] session failed" << std::endl;
+    return -3;
+  }
+
+  // Identity probe: the mock server answers a key event with the
+  // "Greeting=" marker, while a real WeaselServer.exe answers with a full
+  // "action=status,ctx,config" block. Without this check the test could
+  // silently measure another process that owns the named pipe.
+  std::wstring probe_body;
+  client.ProcessKeyEvent(weasel::KeyEvent(L'a', 0));
+  client.GetResponseData([&probe_body](LPWSTR buffer, DWORD length) -> bool {
+    probe_body.assign(buffer, length);
+    return true;
+  });
+  if (probe_body.find(L"Greeting=") == std::wstring::npos) {
+    std::cerr << "[FOCUSOUT] FAIL: the named pipe is served by another "
+                 "process, not the TestWeaselIPC mock server. A real "
+                 "WeaselServer.exe is probably running; stop it and re-run."
+              << std::endl;
+    client.EndSession();
+    return -6;
+  }
+
+  std::wstring record = focusout_record_path();
+  if (record.empty()) {
+    std::cerr << "[FOCUSOUT] FAIL: cannot resolve the exe directory"
+              << std::endl;
+    client.EndSession();
+    return -7;
+  }
+
+  // Start from a clean record: a leftover file from an earlier run would
+  // make the baseline depend on the previous execution.
+  DeleteFileW(record.c_str());
+  int baseline = count_lines(read_text_file(record));
+  std::cout << "[FOCUSOUT] baseline lines=" << baseline << std::endl;
+
+  // 1. the plain FocusOut ("the edit field lost focus") carries wParam 0
+  client.FocusOut();
+  bool got_plain = wait_focusout_lines(record, baseline + 1, 5000);
+  std::string plain_line =
+      got_plain ? nth_line(read_text_file(record), baseline) : std::string();
+
+  // 2. the flagged FocusOut ("the user switched to another input method")
+  //    carries WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED
+  client.FocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED);
+  bool got_flagged = wait_focusout_lines(record, baseline + 2, 5000);
+  std::string flagged_line =
+      got_flagged ? nth_line(read_text_file(record), baseline + 1)
+                  : std::string();
+
+  client.EndSession();
+
+  // 3..8: the pure decision function, exactly as the server calls it
+  const DWORD kDeactivated = WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED;
+  bool plain_hides_when_not_always = ShouldHideQuickPanelOnFocusOut(0, false);
+  bool plain_keeps_when_always = !ShouldHideQuickPanelOnFocusOut(0, true);
+  bool deactivated_hides_when_not_always =
+      ShouldHideQuickPanelOnFocusOut(kDeactivated, false);
+  bool deactivated_hides_when_always =
+      ShouldHideQuickPanelOnFocusOut(kDeactivated, true);
+  bool unknown_bit_alone_keeps = !ShouldHideQuickPanelOnFocusOut(0x2u, true);
+  bool unknown_bit_with_flag_hides =
+      ShouldHideQuickPanelOnFocusOut(kDeactivated | 0x2u, true);
+
+  bool plain_is_zero = (plain_line == "0");
+  bool flagged_is_set = (flagged_line == std::to_string(kDeactivated));
+
+  std::cout << "[FOCUSOUT] plain=[" << plain_line << "] flagged=["
+            << flagged_line << "]" << std::endl;
+
+  bool ok = plain_is_zero && flagged_is_set && got_plain && got_flagged &&
+            plain_hides_when_not_always && plain_keeps_when_always &&
+            deactivated_hides_when_not_always &&
+            deactivated_hides_when_always && unknown_bit_alone_keeps &&
+            unknown_bit_with_flag_hides;
+  if (ok) {
+    std::cout << "[FOCUSOUT] PASS: the FocusOut event kinds are "
+                 "distinguishable and the hide decision follows them"
+              << std::endl;
+    return 0;
+  }
+  std::cerr << "[FOCUSOUT] FAIL plain_is_zero=" << plain_is_zero
+            << " flagged_is_set=" << flagged_is_set
+            << " got_plain=" << got_plain << " got_flagged=" << got_flagged
+            << " pure=" << plain_hides_when_not_always
+            << plain_keeps_when_always << deactivated_hides_when_not_always
+            << deactivated_hides_when_always << unknown_bit_alone_keeps
+            << unknown_bit_with_flag_hides << std::endl;
+  return -4;
+}
+
 class TestRequestHandler : public weasel::RequestHandler {
  public:
   TestRequestHandler() : m_counter(0) {
@@ -429,6 +619,40 @@ class TestRequestHandler : public weasel::RequestHandler {
       std::wstring msg = L"commit=Fluxing\nstatus.ascii_mode=1\n";
       eat(msg);
     }
+  }
+
+  // spec 091: the FocusOut event kinds must be distinguishable on the
+  // wire. The handler records the raw wParam of every FocusOut it gets
+  // into "focusout_param.txt" next to the exe, one decimal value per
+  // line, so the client can read the values back and assert that
+  // "switched away from Fluxing" and "the edit field lost focus" really
+  // travel as different values.
+  virtual void FocusOut(DWORD param, DWORD session_id) override {
+    std::cerr << "FocusOut: " << session_id << " param=" << param << std::endl;
+    std::wstring exe_path_buf;
+    wchar_t exe_path[MAX_PATH] = {0};
+    DWORD exe_len = GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+    if (exe_len == 0 || exe_len >= MAX_PATH)
+      return;
+    std::wstring exe_dir(exe_path, exe_len);
+    size_t slash = exe_dir.find_last_of(L"\\/");
+    if (slash == std::wstring::npos)
+      return;
+    exe_dir = exe_dir.substr(0, slash + 1);
+    std::wstring record = exe_dir + L"focusout_param.txt";
+    // FILE_APPEND_DATA, not GENERIC_WRITE: a freshly opened GENERIC_WRITE
+    // handle starts at file offset 0, so the second FocusOut overwrote the
+    // first recorded line and the test could only ever observe one value.
+    HANDLE h = CreateFileW(record.c_str(), FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+      return;
+    std::string text = std::to_string(param) + "\n";
+    DWORD written = 0;
+    WriteFile(h, text.c_str(), static_cast<DWORD>(text.size()), &written, NULL);
+    FlushFileBuffers(h);
+    CloseHandle(h);
   }
 
  private:

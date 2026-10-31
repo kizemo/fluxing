@@ -34,8 +34,13 @@
 
 // spec 084 / ADR 0013 D4 + spec 086: quick panel always-show switch.
 // The same id also lives in WeaselServer/resource.h - both values
-// must stay equal, because WeaselTSF.rc and WeaselServer.rc each
-// carry their own popup menu and both need this entry.
+// must stay equal, because WeaselServer.rc carries its own popup menu
+// and still needs this entry.
+//
+// spec 091 / ADR 0024: the language bar popup menu (WeaselTSF.rc, all
+// three locales) no longer carries this entry - the always-show switch
+// is only reachable from the tray menu now. The id stays reserved so
+// the tray menu keeps working and so both headers stay in sync.
 #define ID_QUICKPANEL_ALWAYS_SHOW      40019
 
 // Next default values for new objects
