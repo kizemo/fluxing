@@ -62,6 +62,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestTrayRestoreIgnored", "t
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestOrphanRecovery", "test\TestOrphanRecovery\TestOrphanRecovery.vcxproj", "{940BB5E7-3855-40E8-A7FF-85EC2F70D998}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestServerCmdLine", "test\TestServerCmdLine\TestServerCmdLine.vcxproj", "{93F1B7C2-6E48-4D05-A1B3-8C27D4E95A16}"
+EndProject
 
 
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestWeaselIPC", "test\TestWeaselIPC\TestWeaselIPC.vcxproj", "{9C1CC4BA-18FF-4890-908E-E545881C5586}"
@@ -247,6 +249,10 @@ Global
 	{940BB5E7-3855-40E8-A7FF-85EC2F70D998}.Debug|Win32.Build.0 = Debug|Win32
 	{940BB5E7-3855-40E8-A7FF-85EC2F70D998}.Release|Win32.ActiveCfg = Release|Win32
 	{940BB5E7-3855-40E8-A7FF-85EC2F70D998}.Release|Win32.Build.0 = Release|Win32
+	{93F1B7C2-6E48-4D05-A1B3-8C27D4E95A16}.Debug|Win32.ActiveCfg = Debug|Win32
+	{93F1B7C2-6E48-4D05-A1B3-8C27D4E95A16}.Debug|Win32.Build.0 = Debug|Win32
+	{93F1B7C2-6E48-4D05-A1B3-8C27D4E95A16}.Release|Win32.ActiveCfg = Release|Win32
+	{93F1B7C2-6E48-4D05-A1B3-8C27D4E95A16}.Release|Win32.Build.0 = Release|Win32
 
 
 		{26930622-CFA2-43DF-A9F3-4AA4A313B2A4}.Debug|ARM.ActiveCfg = Debug|ARM

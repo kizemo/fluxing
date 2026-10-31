@@ -128,6 +128,7 @@ run_librime_*.err
 
 # test build artifacts (2026-07-08 spec 042)
 /test/TestOrphanRecovery/*.obj
+/test/TestServerCmdLine/*.obj
 # spec 053 cleanup: stray TestOrphanRecovery.obj at repo root (xmake build artifact)
 /TestOrphanRecovery.obj
 # FluxingConfigEditor build artifacts (2026-07-08 spec 050)
