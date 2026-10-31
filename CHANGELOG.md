@@ -222,6 +222,98 @@
   Windows 资源版本号）；且本 fork 的 CI 发布步骤被
   `github.repository == 'rime/weasel'` 门控 ⇒ `release/` 不会自动对外发版。
 
+## [1.1.5] - 2026-10-30
+
+### 主要更新
+
+本轮落地 1.1.4 装机实测反馈的 4 条（spec 089 / spec 090，ADR 0022 / ADR 0023）。
+
+- **快速面板改为「装完即常驻」，不再需要用户先去勾那个勾不上的选项**（反馈 ①）
+  （`WeaselServer/QuickPanelDialog.cpp`、`WeaselServer/QuickPanelDialog.h`，spec 089 / ADR 0022）：
+  此前「常驻」默认关闭；用户勾上之后功能生效，但**输入法弹出菜单里的勾选态不回显**。
+  根因不在面板，而在语言栏菜单的转换函数 `HMENU2ITfMenu`（`WeaselTSF/LanguageBar.cpp:18-41`）——
+  它只读 `MIIM_FTYPE|MIIM_ID|MIIM_STRING`，**不读 `MIIM_STATE`**，恒以 `flags=0` 调 `AddMenuItem`，
+  从不传 `TF_LBMENUF_CHECKED`；而勾选态活在 `WeaselServer.exe` 进程内，要跨进程回显就得在 TSF 回调里
+  做 IPC 或读盘，撞宪法 **P2**（`ITfTextInputProcessor::*` 回调内禁止阻塞 I/O）。
+  ⇒ **不去修回显，直接把默认值改成常驻**：状态文件缺失或损坏时 `LoadPersistedAlwaysShowModeFrom()`
+  返回 `true`（原为 `false`）。装完即是常驻态，用户无需再碰这个开关。
+  取消入口两条都已存在、本轮不动：`Alt+,`（`ID_HOTKEY_QUICK_PANEL`）与托盘右键「快速面板常驻 (&A)」。
+  「常驻时 1.5 秒自动消失」此前已由 ADR 0019 设防（`QuickPanelDialog.cpp:741-744` 屏蔽
+  `s_outsideMs >= 1500` 的 Hide；`:684` grace 路径带 `!AlwaysShowMode()` 守卫）⇒ **本轮无需新增改动**。
+  登录后仍不会自动弹窗：`RestoreAlwaysShowMode()` 只回填模式、**绝不 auto-show**（spec 055 不变量保留），
+  面板在首次输入动作或 `Alt+,` 触发时才出现并常驻。
+  边界语义（有意保留，ADR 0022 已记录）：**只有「文件缺失/读不出来」才回落到默认常驻**；
+  文件存在但内容不是 `always_show=1` ⇒ 视为用户明确关过，仍返回关。
+- **常驻态 idle 不透明度 60% → 85%**（反馈 ②）（`include/QuickPanelAlpha.h`、`WeaselServer/QuickPanelDialog.h`）：
+  面板是 `UpdateLayeredWindow` 逐像素 alpha，最终可见 alpha = `ApplyAlphaGradient()` 写入的
+  **面板梯度** × 轮询器 park 的 **idle 系数**（`ScaleAlpha`）。要精确落在 85%，两处都得动：
+  `kAlphaPanelTop`/`kAlphaPanelBot` 由 `220`/`80` **拉平为 `255`/`255`**，`kAlphaFactorIdle` 由
+  `153`（60%）抬到 **`217`**（217/255 = 85.1%）。鼠标移上去 `factor = kAlphaFactorFull = 255`
+  触发 `ScaleAlpha` 的 `factor >= kAlphaScaleNum ⇒ return base` 短路 ⇒ **hover 仍是 100% 不透明**，
+  淡入淡出动画与 100ms 轮询节奏逐字节不变。
+  **代价（如实披露）**：牺牲的是 alpha 沿 y 轴 220→80 的递减；**颜色梯度**
+  （`kBgTop=(200,225,250)` → `kBgBot=(155,195,240)`）与**圆角掩码**（`PtInRegion` 外 alpha=0）
+  **都完整保留** ⇒ liquid glass 观感的主要来源没丢。
+- **左右 Shift 选第 2 / 第 3 个候选改为「页内索引」**（反馈 ③）
+  （`RimeWithWeasel/RimeWithWeasel.cpp`、`include/RimeWithWeasel.h`、`include/ShiftStateMachine.h`，
+  spec 090 / ADR 0023 D2）：此前 Shift 走的是 librime 的**全局** `select_candidate`，索引从第 1 页起算；
+  一旦候选翻页，屏幕上显示的是第 2 页，上屏的却仍是**第 1 页**的第 2 / 第 3 个 ⇒ 用户看到的和
+  打出来的不是同一个词。现全部改走 `select_candidate_on_current_page`（0-based 页内索引，
+  取证 `librime/src/rime/api/rime_api_impl.h:982-1000`），涉及 `SelectCandidateOnCurrentPage`、
+  `DeleteCandidateOnCurrentPage`、`HighlightCandidateOnCurrentPage`、`_GetCandidateInfo`、
+  `_Respond`、`_GetContext`、`ShiftUp` 七处。
+  **越界一律不选词、不上屏、不 flush、不回包**（新增 `fluxing::IsPageLocalIndexValid`），
+  函数尾照常重置 ShiftState；明确**禁止**「退回全局 `select_candidate`」的 fallback ——
+  那会选中屏幕上根本没看见的词，比不选更错。
+- **右键点击候选 = 屏蔽这个词**（反馈 ④）（`include/FluxingCandidateIgnore.h`（新）、
+  `RimeWithWeasel/RimeWithWeasel.cpp`，spec 090 / ADR 0023 D5）：
+  链路核实为**通**：候选窗非高亮态右键 → `WeaselPanel::OnRButtonDown`（`:558-561`）→
+  `m_pb->DeleteCandidate(index)` → IPC `COMMAND_DELETE_CANDIDATE` → 服务端
+  `DeleteCandidateOnCurrentPage(index)`。其中 `index` 来自 `m_layout.candies.indexFromPoint(pt)`，
+  是**服务端过滤后的可见位置**，服务端再用 `_MapVisibleIndexToEngine` 翻译成引擎索引 ⇒ 语义一致。
+  过滤做在**服务端**（`_GetCandidateInfo` 内按 `m_ignoreList` 跳过命中项，并重建
+  `m_visibleToEngineIdx` 映射），不在 UI 侧：UI 侧那个 `_FilterIgnoredCandidates` 从 `candies` 里
+  移除却不重建索引映射，会导致选中错位的引擎候选 ⇒ 已标注为死代码，不再接线。
+  名单为空时 label 逻辑与原实现**逐字节一致**；非空时按可见位置重新顺序编号。
+  名单文件只 `OPEN_EXISTING` 读、`FILE_APPEND_DATA` + `OPEN_ALWAYS` 追加，撤销走既有托盘
+  「恢复已忽略的候选项」（`ID_WEASELTRAY_RESTORE_IGNORED`）。
+- **关于反馈 ④ 提到的 `Shift+Ctrl+数字`（重要澄清）**：该组合键**本仓从未实现过** ——
+  无 spec、无 yaml 绑定、无 IPC 消息、无按键 handler（已全仓取证）。因此它**不是「丢失」，
+  也无法「恢复」**。落地它需要新增 IPC 消息类型（触发四边同步 + ADR + `test/TestWeaselIPC/*`）、
+  TSF 侧按键拦截与 P2 论证、以及独立的真机验收 ⇒ **本轮不做**，已写入交接卡延后项。
+  用户想要的「按次序移词」能力由上面那条**右键屏蔽**覆盖。
+
+### 回归测试
+
+- `Release\TestQuickPanelDialog.exe`：**43 / 43** 断言通过（exit 0）。
+  其中 T13b / T16a / T16e 三条按新语义**翻转为正**（缺失 ⇒ 常驻）；**T13h 保持取反**
+  （文件存在但内容非 `always_show=1` ⇒ 关，与「缺失 ⇒ 常驻」是两种不同语义）；
+  T16c 不动（新落点优先）。T12d / T12e 的 `ScaleAlpha` 期望值随 `kAlphaFactorIdle` 更新为
+  `217` / `187`。
+- `Release\TestCandidateIgnoreFilter.exe`：**5 / 5 + 14 / 14** 断言通过，`No errors detected.`
+  新增 `TestServerSideIgnoreMapping.cpp`（14 组，含两条**负对照**）。
+  顺带修掉一个真 bug：`ParseIgnoreListText` 未清空出参，二次调用会累积上一轮结果。
+- `Release\TestCandidateRButtonDown.exe`：**6 / 6** 断言通过（行为级，用 test-local
+  `FakePanel`/`FakeClient`，不链接 `WeaselPanel.cpp`）；含 T5「右键一次 → 移除 1 次 +
+  名单追加**引擎原文**（映射生效）」与 T6「E6 哨兵：引擎返回 true/false 名单都写入（无条件）」。
+- `Release\TestQuickPanelRefactor.exe`：**5 / 5、1 / 1 PASS**（exit 0）。
+- 本轮**不新增 IPC 消息类型** ⇒ 不触发 IPC 四边同步；**未改** `output/install.nsi` 与
+  `output/data/user-custom/**`；**未改** `librime/`（P3 / L10 只读）。
+
+### 产物（v1.1.5）
+
+| 位置 | 文件 | 大小 | SHA256 |
+| --- | --- | --- | --- |
+| `release/` | `fluxing-1.1.5-installer.exe` | 42,786,442 字节（约 40.8 MiB） | `4B7287ADD9755AC41BF493EDACEA811897E29C8602EE5C9AB71A08AE3682EBE7` |
+| `output/archives/` | `fluxing-1.1.5-installer.exe` | 42,786,442 字节（`cmd /c copy /Y` 逐字节复制） | 同上 |
+
+- NSIS 汇总：`Total size: 42786442 / 155195752 bytes (27.5%)`、`Compressed data: 42666630 / 155156836`、`CRC (0x894A264C)`。
+- 版本宏（取自 `tmp/build-115-installer2.log`）：`FLUXING_VERSION=1.1.5`、`PRODUCT_VERSION=1.1.5.0`、`FILE_VERSION=1.1.5.0`、`VERSION_PATCH=5`；rc.exe 与 makensis 两端均已带上。
+- 构建日志 `tmp/build-115-installer2.log`：exit 0、0 错误、58,371 字节。8 条 NSIS 警告全是既有的 `7010: File: ... -> no files found.`（`weaselARM.dll` / `weaselARM64.dll` / `weaselARM64X.dll` @ `install.nsi:745-747` 与 `:891-893`、`data\*.gram` @ `:901`、`data\lua\*.txt` @ `:912`），非本轮引入。
+- **版本号真源是 `env.bat` + `weasel.props`（本机文件、均被 `.gitignore:31/:32` 排除），不是 `build.bat` / `xbuild.bat`。** `build.bat:12-15` 先清空四个版本变量、随后 `env.bat` 硬编码填回，所以 `build.bat:42-44` 的 `if not defined VERSION_PATCH set VERSION_PATCH=5` 只是 fallback —— 只改 `build.bat:44` 完全无效。本轮 `build.bat:44` 与 `xbuild.bat:55` 的 fallback 也一并改成 5（这两个是入库改动），`env.bat` / `weasel.props` 的本机改动不入库（符合 AGENTS.md §5）；入库的 `env.bat.template` 与 `weasel.props.template` 不含版本号，无需改。
+- **副作用披露**：第一次打包时 `env.bat` 尚未改版本号，误产出名为 `fluxing-1.1.4-installer.exe` 的载荷并覆盖了 `output/archives/fluxing-1.1.4-installer.exe`（42,792,647 字节，mtime 10-30 21:34:32）。该目录被 `.gitignore:27 /output/archives` 排除、可由 `build.bat weasel installer` 重新生成；`release/` 下的真 1.1.4 载荷（42,771,668 字节）未被动过，与 archives 里那份不是同一个文件。
+- `release/` 仍缺 `fluxing-1.1.1-installer.exe` 与 `fluxing-1.1.2-installer.exe`（`output/archives/` 里有，分别 42,753,471 / 42,763,583 字节），属既有遗留，本轮未回填。
+
 ## [1.1.4] - 2026-10-29
 
 ### 主要更新
