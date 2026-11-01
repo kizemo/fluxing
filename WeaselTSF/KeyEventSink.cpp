@@ -79,16 +79,19 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
     // spec 094: Ctrl+Shift+<数字> 从用户词典里删除当前可见页的第 N 个候选。
     //
     // 只在「候选窗确实可见」且「N 落在当前可见页范围内」时才拦截:
-    //   - 否则会抢掉 Rime 默认的 Ctrl+Shift+3 / Ctrl+Shift+4
-    //     (ascii_punct / traditionalization,见 output/data/default.yaml);
     //   - 没有候选时按数字键本就该是普通输入,不能吞。
+    //
+    // spec 097 / L163: 这条拦截是「条件性」的 —— 条件不满足时按键按设计放行。
+    //   放行之后, 若还有一条无条件兜底绑定留在同一个 chord 家族上, 每一次
+    //   删词失败都会顺手动一次那个开关 (标点/简繁); 而开关状态被记忆, 于是
+    //   「我按了删词键」和「我的标点变了」被绑成了一件事, 一直错下去。
+    //   所以 ascii_punct / traditionalization 已移出 Ctrl+Shift+<数字> 家族
+    //   (现在是 Control+period / Control+slash), 数字族专属于删词。
     if (!keyCountToSimulate && fluxing::IsKeyDownLParam(lParam)) {
-      const int number =
-          fluxing::MatchCandidateDeleteShortcut(static_cast<int>(wParam),
-                                                ctrl_down, shift_down, true);
-      if (number > 0 &&
-          fluxing::ShouldInterceptCandidateDelete(
-              number, _cand->GetVisibleCandidateCount())) {
+      const int number = fluxing::MatchCandidateDeleteShortcut(
+          static_cast<int>(wParam), ctrl_down, shift_down, true);
+      if (number > 0 && fluxing::ShouldInterceptCandidateDelete(
+                            number, _cand->GetVisibleCandidateCount())) {
         _DeleteCandidateOnCurrentPage(static_cast<size_t>(number - 1));
         *pfEaten = TRUE;
         return;
