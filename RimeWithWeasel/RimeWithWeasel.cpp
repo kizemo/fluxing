@@ -403,7 +403,8 @@ void RimeWithWeaselHandler::SelectCandidateOnCurrentPage(
 
 void RimeWithWeaselHandler::DeleteCandidateOnCurrentPage(
     size_t index,
-    WeaselSessionId ipc_id) {
+    WeaselSessionId ipc_id,
+    EatLine eat) {
   DLOG(INFO) << "delete candidate on current page, ipc_id = " << ipc_id
              << ", index = " << index;
   TryLazyRecovery();  // spec 053 R6 fix
@@ -411,8 +412,12 @@ void RimeWithWeaselHandler::DeleteCandidateOnCurrentPage(
     return;
   // spec 090: 可见页内次序 -> 引擎页内次序(同 SelectCandidateOnCurrentPage)。
   size_t engine_index = 0;
-  if (!_MapVisibleIndexToEngine(index, &engine_index))
+  if (!_MapVisibleIndexToEngine(index, &engine_index)) {
+    // IPC 是请求/应答制:不回包会把客户端挂住(同 HighlightCandidateOnCurrentPage)。
+    _Respond(ipc_id, eat);
+    _UpdateUI(ipc_id);
     return;
+  }
   RimeSessionId session_id = to_session_id(ipc_id);
 
   // spec 090: 先取该候选的原文,用于写屏蔽名单。
@@ -448,6 +453,14 @@ void RimeWithWeaselHandler::DeleteCandidateOnCurrentPage(
   const Bool deleted =
       rime_api->delete_candidate_on_current_page(session_id, engine_index);
   (void)deleted;  // 恒为 true(见上),不用它做任何分流。
+  // spec 094: 本次删除算「中间有键」。用户先按 Shift 再按 Ctrl+数字时,
+  // 前端来不及吞掉那个 Shift,服务端的 ShiftUp 就会走 kSelectCandidate
+  // 分支把候选词误上屏。标记 interveningKey 把这条路径堵死。
+  auto shift_it = m_shiftState.find(ipc_id);
+  if (shift_it != m_shiftState.end())
+    shift_it->second.interveningKey = true;
+  // spec 094: 回 body —— 客户端要靠它刷新候选窗(删词后立即生效)。
+  _Respond(ipc_id, eat);
   _UpdateUI(ipc_id);
 }
 

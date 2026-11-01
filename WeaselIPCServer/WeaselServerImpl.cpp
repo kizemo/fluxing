@@ -363,8 +363,16 @@ DWORD ServerImpl::OnSelectCandidateOnCurrentPage(WEASEL_IPC_COMMAND uMsg,
 DWORD ServerImpl::OnDeleteCandidateOnCurrentPage(WEASEL_IPC_COMMAND uMsg,
                                                  DWORD wParam,
                                                  DWORD lParam) {
-  if (m_pRequestHandler)
-    m_pRequestHandler->DeleteCandidateOnCurrentPage(wParam, lParam);
+  if (m_pRequestHandler) {
+    // spec 094: 删除候选词要回 body(commit/status/ctx/候选列表),否则客户端
+    // 拿到的还是上一次的管道缓冲,候选窗要等下一次按键才刷新
+    // (与 HighlightCandidateOnCurrentPage / ChangePage 同一套 EatLine 通道)。
+    auto eat = [this](std::wstring& msg) -> bool {
+      *channel << msg;
+      return true;
+    };
+    m_pRequestHandler->DeleteCandidateOnCurrentPage(wParam, lParam, eat);
+  }
   return 0;
 }
 

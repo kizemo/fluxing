@@ -88,6 +88,32 @@ inline bool ShouldHideQuickPanelOnFocusOut(DWORD param, bool always_show) {
   return !always_show;
 }
 
+// spec 094:TSF 的 ITfActiveLanguageProfileNotifySink::OnActivated 只把
+//「当前活动配置」这一个 profile 通知给我们。
+//
+// 切离火流猩时,TSF 投递的是「别的 profile 被激活」(clsid != 自身,
+// isActivated == TRUE),而不是「自身被停用」。过去 WeaselTSF::OnActivated
+// 一上来就 `if (!IsEqualCLSID(clsid, c_clsidTextService)) return S_OK;`,
+// 于是「切走」的信号被整个丢掉,快捷设置栏留在屏幕上不消失(spec 094 bug 1)。
+//
+// 判定表搬到共享纯函数,生产代码与 TestWeaselIPC 的 /verify-focusout-flags
+// 共用同一份口径(宪法 R7),不要在别处再抄一遍。
+enum class ProfileNotifyDecision {
+  kIgnore,             // 别的 profile 被停用 —— 与本进程无关
+  kNotifyActivated,    // 自身被激活     —— 用户切到了火流猩
+  kNotifyDeactivated,  // 自身被停用 / 别的 profile 被激活 —— 用户切走了
+};
+
+inline ProfileNotifyDecision DecideProfileNotify(bool is_self_clsid,
+                                                  bool is_activated) {
+  if (is_self_clsid)
+    return is_activated ? ProfileNotifyDecision::kNotifyActivated
+                        : ProfileNotifyDecision::kNotifyDeactivated;
+  // 别的 profile 被激活 => 本进程的火流猩已经不在活动配置里 => 切走了。
+  return is_activated ? ProfileNotifyDecision::kNotifyDeactivated
+                      : ProfileNotifyDecision::kIgnore;
+}
+
 namespace weasel {
 struct PipeMessage {
   WEASEL_IPC_COMMAND Msg;
@@ -119,7 +145,13 @@ struct RequestHandler {
   virtual void CommitComposition(DWORD session_id) {}
   virtual void ClearComposition(DWORD session_id) {}
   virtual void SelectCandidateOnCurrentPage(size_t index, DWORD session_id) {}
-  virtual void DeleteCandidateOnCurrentPage(size_t index, DWORD session_id) {}
+  // spec 094: 删除候选词必须回 body(commit/status/ctx/候选列表)。管道缓冲
+  // 只在服务端真的写了 body 时才刷新(见 ADR 0012 的说明),不回 body 的话
+  // 客户端解析到的还是上一次的响应,候选窗要等下一次按键才更新。
+  // 线格式(命令号 / wParam / lParam)零变化,只是把 EatLine 通道接上。
+  virtual void DeleteCandidateOnCurrentPage(size_t index,
+                                            DWORD session_id,
+                                            EatLine eat = 0) {}
   virtual bool HighlightCandidateOnCurrentPage(size_t index,
                                                DWORD session_id,
                                                EatLine eat) {

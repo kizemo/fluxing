@@ -70,8 +70,11 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
                                             WeaselSessionId ipc_id);
   // spec 028: delete candidate on current page (librime 1.13 delete_candidate
   // API)
+  // spec 094: 加上 EatLine —— 删除候选词后必须回 body(commit/status/ctx/
+  // 候选列表),客户端才能立刻刷新候选窗;否则它拿到的还是上一次的管道缓冲。
   void DeleteCandidateOnCurrentPage(size_t index,
-                                    WeaselSessionId ipc_id) override;
+                                    WeaselSessionId ipc_id,
+                                    EatLine eat = 0) override;
   virtual bool HighlightCandidateOnCurrentPage(size_t index,
                                                WeaselSessionId ipc_id,
                                                EatLine eat);
