@@ -122,11 +122,20 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
   }
 }
 
+// spec 096 / ADR 0027: 普通窗口焦点事件带上「应用焦点」维度的位标志。
+//
+// 过去这里发 wParam=0 —— 与「用户切到火流猩」(PROFILE_ACTIVATED) 之外的
+// 任何标志都无法区分,FocusIn 侧只能靠「有没有 bit0」反推事件种类。
+// FocusOut 侧从 spec 091 起就有 PROFILE_DEACTIVATED 位做同一件事,
+// 现在 FocusIn 侧补齐对称的一格(ADR 0027 协议表 bit1 = app_focus)。
+//
+// 取值变化不是线格式变化:命令号 / 字段布局不变,旧服务端只认 bit0,
+// 收到 bit1 仍是旧语义 => 安全降级。
 STDAPI WeaselTSF::OnSetFocus(BOOL fForeground) {
   if (fForeground)
-    m_client.FocusIn();
+    m_client.FocusIn(WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED);
   else {
-    m_client.FocusOut();
+    m_client.FocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_APP_FOCUS_LOST);
     _AbortComposition();
   }
 
