@@ -34,13 +34,17 @@ if (-not $RepoRoot) {
 # ---------- 0. 前置校验 ----------
 # 待验安装包: 没有显式指定时, 自动挑 output\archives 里版本号最高的那个。
 # 出新版本只要把包丢进 output\archives\ 即可, 不必改脚本。
+# ADR 0012: 公开版本号是三段 (major.minor.patch), 第四段 (WEASEL_BUILD) 只进
+# Windows 资源与内部版本化文件名, 不进包名。所以下面正则的第四段必须可选 ——
+# 之前写成必选, 结果一个包都匹配不上, 门禁静默判失败退出, 自三段式启用以来
+# 从未真正验过任何一个包 (spec 097 / L165)。
 if (-not $InstallerPath) {
     $archivesDir = Join-Path $RepoRoot 'output\archives'
     $cand = Get-ChildItem $archivesDir -Filter 'fluxing-*-installer.exe' -ErrorAction SilentlyContinue |
         ForEach-Object {
-            $m = [regex]::Match($_.Name, '^fluxing-(\d+\.\d+\.\d+)\.(\d+)-installer\.exe$')
+            $m = [regex]::Match($_.Name, '^fluxing-(\d+\.\d+\.\d+)(?:\.(\d+))?-installer\.exe$')
             if ($m.Success) {
-                [pscustomobject]@{ File = $_; Ver = [version]($m.Groups[1].Value + '.' + $m.Groups[2].Value) }
+                [pscustomobject]@{ File = $_; Ver = [version]($m.Groups[1].Value + '.' + $(if ($m.Groups[2].Success) { $m.Groups[2].Value } else { '0' })) }
             }
         } | Sort-Object Ver -Descending
     if (-not $cand) { throw "output\archives 里没有 fluxing-*-installer.exe: $archivesDir" }
@@ -56,9 +60,9 @@ if (-not (Test-Path $InstallerPath)) { throw "Installer not found: $InstallerPat
 if (-not $OldInstallerPath) {
     $old = Get-ChildItem (Join-Path $RepoRoot 'output\archives') -Filter 'fluxing-*-installer.exe' -ErrorAction SilentlyContinue |
         ForEach-Object {
-            $m = [regex]::Match($_.Name, '^fluxing-(\d+\.\d+\.\d+)\.(\d+)-installer\.exe$')
+            $m = [regex]::Match($_.Name, '^fluxing-(\d+\.\d+\.\d+)(?:\.(\d+))?-installer\.exe$')
             if ($m.Success) {
-                [pscustomobject]@{ File = $_; Ver = [version]($m.Groups[1].Value + '.' + $m.Groups[2].Value) }
+                [pscustomobject]@{ File = $_; Ver = [version]($m.Groups[1].Value + '.' + $(if ($m.Groups[2].Success) { $m.Groups[2].Value } else { '0' })) }
             }
         } | Where-Object { $_.File.FullName -ne (Resolve-Path $InstallerPath).Path } |
         Sort-Object Ver
@@ -196,6 +200,7 @@ $deadline  = (Get-Date).AddMinutes($TimeoutMinutes)
 $lastSize  = -1
 $stableCnt = 0
 $found     = $false
+$deadCnt   = 0
 
 Write-Host "[>] 等待沙箱结果 (上限 $TimeoutMinutes 分钟)..." -ForegroundColor Cyan
 while ((Get-Date) -lt $deadline) {
@@ -213,10 +218,18 @@ while ((Get-Date) -lt $deadline) {
     # 沙箱窗口被关掉 -> 提前结束。
     # 注意: WindowsSandbox.exe 只是启动器, 它退出不代表沙箱结束;
     #       真正的沙箱进程是 WindowsSandboxClient.exe, 以它为准。
-    if ($proc.HasExited) {
-        $clientAlive = @(Get-Process -Name 'WindowsSandboxClient' -ErrorAction SilentlyContinue).Count -gt 0
-        if (-not $clientAlive -and -not (Test-Path $jsonPath)) {
-            Write-Host "[!] 沙箱客户端已退出但没有结果文件" -ForegroundColor Red
+    # spec 097 / L166: 「只看客户端」仍然不够 —— 启动器退出后客户端要过好几秒
+    #       才起来, 那个窗口里会被误判成「沙箱已死」并立刻放弃。实测: 启动后
+    #       第 4 秒就误判退出, 而沙箱其实把整轮 7 分钟跑完了, 结果文件也已落盘。
+    #       判据改成「还有没有任何沙箱进程活着」, 并且连续 3 次轮询都没有才
+    #       认死 (15 秒静默足够覆盖客户端启动窗口)。
+    if ($proc.HasExited -and -not (Test-Path $jsonPath)) {
+        $sandboxAlive = @(Get-Process -Name 'WindowsSandboxClient','WindowsSandboxRemoteSession',
+                                                 'WindowsSandboxServer','vmmemWindowsSandbox' `
+                           -ErrorAction SilentlyContinue).Count -gt 0
+        if ($sandboxAlive) { $deadCnt = 0 } else { $deadCnt++ }
+        if ($deadCnt -ge 3) {
+            Write-Host "[!] 沙箱进程全部消失且没有结果文件" -ForegroundColor Red
             break
         }
     }

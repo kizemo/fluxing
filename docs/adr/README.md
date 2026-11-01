@@ -41,6 +41,7 @@ Do not dump all ADRs into every prompt.
 | 0025 | 0025. 切走输入法的判定表抽成共享纯函数；删词 IPC 回 body；前端按物理键位拦截 Ctrl+Shift+数字 | `docs/adr/0025-profile-notify-decision-table-and-delete-candidate-body.md` | Accepted |
 | 0026 | 0026. 快捷面板「常驻」开关收进统一设置面板；运行期状态与落盘策略下沉共享头 | `docs/adr/0026-quickpanel-always-show-setting-in-unified-panel.md` | Accepted |
 | 0027 | 0027. FocusIn / FocusOut 的位标志收敛成一张对称协议表 | `docs/adr/0027-focusin-focusout-symmetric-flag-protocol-table.md` | Accepted |
+| 0028 | 0028. 薄 TSF 壳、IPC 协议只增不改、锁定降级用每次安装唯一文件名 | `docs/adr/0028-thin-tsf-shell-and-additive-ipc.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

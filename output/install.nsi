@@ -33,6 +33,11 @@ Unicode true
 Var FluxingDegraded
 ; L120: 1 = the running WeaselServer.exe is gone.
 Var FluxingQuitDone
+; spec 097 / L164: per-install unique suffix for the locked-shim
+; fallback filename.  Probed at install time (see fluxing_shim_probe_*
+; in the shim branches) so a same-version reinstall no longer collides
+; with the shim a running TSF host still has mapped.
+Var FluxingShimSeq
 ; L120: the TSF shim paths that are really registered.  Normally
 ; the canonical names; when a shim was locked and a versioned
 ; shim had to be used, the versioned names.
@@ -639,16 +644,33 @@ program_files:
       ; SetOverwrite on.  /nonfatal turns a write failure into an error flag
       ; instead of aborting the whole installer.
       ClearErrors
-      Delete "$INSTDIR\weasel.${FLUXING_VERSION}.${WEASEL_BUILD}.dll"
+      ; spec 097 / L164: take the lowest shim suffix nothing currently
+      ; holds.  This name used to be fixed per version, so a reinstall of the
+      ; same version hit the file a running TSF host still has mapped: the
+      ; Delete below failed silently, File /oname= then failed, and the swap
+      ; degraded to the boot-time stage2 path -- exactly the restart this
+      ; shim exists to avoid.  Probing from 0 recycles the lowest free
+      ; suffix; whatever lingers at higher suffixes is swept by the
+      ; uninstaller wildcards (Delete "$INSTDIR\weasel.*.dll" /
+      ; "$INSTDIR\weaselx64.*.dll").
+      StrCpy $FluxingShimSeq 0
+      fluxing_shim_probe_weasel:
+      ClearErrors
+      Delete "$INSTDIR\weasel.${FLUXING_VERSION}.${WEASEL_BUILD}.$FluxingShimSeq.dll"
+      IfFileExists "$INSTDIR\weasel.${FLUXING_VERSION}.${WEASEL_BUILD}.$FluxingShimSeq.dll" 0 fluxing_shim_free_weasel
+      ; still present: something has this suffix mapped.  Try the next one.
+      IntOp $FluxingShimSeq $FluxingShimSeq + 1
+      IntCmp $FluxingShimSeq 64 fluxing_shim_free_weasel fluxing_shim_probe_weasel fluxing_shim_free_weasel
+      fluxing_shim_free_weasel:
       ClearErrors
       SetOverwrite on
-      File /nonfatal /oname=weasel.${FLUXING_VERSION}.${WEASEL_BUILD}.dll "weasel.dll"
+      File /nonfatal /oname=weasel.${FLUXING_VERSION}.${WEASEL_BUILD}.$FluxingShimSeq.dll "weasel.dll"
       SetOverwrite try
       ${If} ${Errors}
         DetailPrint "Fluxing: the versioned shim could not be copied; the old shim is retained"
         StrCpy $FluxingDegraded 1
       ${Else}
-        StrCpy $FluxingWeaselDll "$INSTDIR\weasel.${FLUXING_VERSION}.${WEASEL_BUILD}.dll"
+        StrCpy $FluxingWeaselDll "$INSTDIR\weasel.${FLUXING_VERSION}.${WEASEL_BUILD}.$FluxingShimSeq.dll"
         ExecWait '"$FluxingRegSvr32" /s "$FluxingWeaselDll"' $0
         ${If} $0 != 0
           DetailPrint "Fluxing: regsvr32 on the versioned shim failed (exit $0); the old shim is retained"
@@ -706,10 +728,27 @@ program_files:
         ; stale versioned shim, then write the new bytes through File /oname
         ; with SetOverwrite on.
         ClearErrors
-        Delete "$INSTDIR\weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.dll"
+        ; spec 097 / L164: take the lowest shim suffix nothing currently
+        ; holds.  This name used to be fixed per version, so a reinstall of the
+        ; same version hit the file a running TSF host still has mapped: the
+        ; Delete below failed silently, File /oname= then failed, and the swap
+        ; degraded to the boot-time stage2 path -- exactly the restart this
+        ; shim exists to avoid.  Probing from 0 recycles the lowest free
+        ; suffix; whatever lingers at higher suffixes is swept by the
+        ; uninstaller wildcards (Delete "$INSTDIR\weasel.*.dll" /
+        ; "$INSTDIR\weaselx64.*.dll").
+        StrCpy $FluxingShimSeq 0
+        fluxing_shim_probe_weaselx64:
+        ClearErrors
+        Delete "$INSTDIR\weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.$FluxingShimSeq.dll"
+        IfFileExists "$INSTDIR\weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.$FluxingShimSeq.dll" 0 fluxing_shim_free_weaselx64
+        ; still present: something has this suffix mapped.  Try the next one.
+        IntOp $FluxingShimSeq $FluxingShimSeq + 1
+        IntCmp $FluxingShimSeq 64 fluxing_shim_free_weaselx64 fluxing_shim_probe_weaselx64 fluxing_shim_free_weaselx64
+        fluxing_shim_free_weaselx64:
         ClearErrors
         SetOverwrite on
-        File /nonfatal /oname=weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.dll "weaselx64.dll"
+        File /nonfatal /oname=weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.$FluxingShimSeq.dll "weaselx64.dll"
         SetOverwrite try
         ${If} ${Errors}
           DetailPrint "Fluxing: the versioned shim could not be copied; falling back to the boot-time swap"
@@ -718,7 +757,7 @@ program_files:
           FileClose $R9
           StrCpy $FluxingDegraded 1
         ${Else}
-          StrCpy $FluxingWeaselX64Dll "$INSTDIR\weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.dll"
+          StrCpy $FluxingWeaselX64Dll "$INSTDIR\weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.$FluxingShimSeq.dll"
           ExecWait '"$FluxingRegSvr32x64" /s "$FluxingWeaselX64Dll"' $0
           ${If} $0 != 0
             DetailPrint "Fluxing: regsvr32 on the versioned shim failed (exit $0); falling back to the boot-time swap"

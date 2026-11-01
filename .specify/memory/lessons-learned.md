@@ -13182,3 +13182,187 @@ L148、L131、L113
   不是推断。改的是 `output/data/default.yaml` 本体而非 `default.custom.yaml` ——
   门禁是原始文件扫描、不解析 patch，重述 27 条会把源门禁计数冲到 66 直接破基线。
 
+## L164 - **锁定时降级用的 shim 名里如果没有「每次安装唯一」分量，第二次同版本安装会静默退回「等重启再换」**（2026-11-01）
+
+**现象**：用户报告「更新 `weaselx64.dll` 之后必须重启才生效」，而同一次更新里
+`WeaselServer.exe` / `WeaselDeployer.exe` 都当场换掉了。装机目录里能看到
+`weaselx64.1.1.6.0.dll`（版本化 shim）**存在**，TSF 的 `InprocServer32` 也确实指向它，
+看上去降级路径工作正常 —— 但内容还是旧的。
+
+**根因**：shim 名 `weasel[x64].${FLUXING_VERSION}.${WEASEL_BUILD}.dll` 的每一个分量都
+**只由版本决定**，同版本重装时算出来是**同一个名字**。于是：
+
+1. 第一次安装：plain 名 `weaselx64.dll` 被某个 64 位宿主进程映射 ⇒ `Rename` 失败 ⇒
+   走版本化 shim，写出 `weaselx64.1.1.6.0.dll`，注册指过去。**这一步是对的。**
+2. 第二次同版本安装：那个 shim **自己**现在也被宿主映射着（注册指向它，进程加载的就是它）。
+   `Delete` 对**被映射**的文件静默失败（NSIS 的 `Delete` 不置错误位、不弹窗），
+   `File /oname=` 于是写不进同名目标 ⇒ 落到 `.stage2` marker ⇒ 走「开机补换」。
+   而开机补换需要重启，用户看到的就是「必须重启」。
+
+关键点是：**「不更新 shim」与「需要重启」不是两件事，是同一件事的两面**。
+只要 shim 名会被复用到一个正被映射的文件上，就必然退回开机补换。
+
+**修法**：给 shim 名加一个**每次安装唯一**的序号分量，并在写之前探测出「最低的、
+当前没有任何东西映射着的」序号：
+
+```nsis
+StrCpy $FluxingShimSeq 0
+fluxing_shim_probe_weaselx64:
+  ClearErrors
+  Delete "$INSTDIR\weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.$FluxingShimSeq.dll"
+  IfFileExists "$INSTDIR\weaselx64.${FLUXING_VERSION}.${WEASEL_BUILD}.$FluxingShimSeq.dll" 0 fluxing_shim_free_weaselx64
+  IntOp $FluxingShimSeq $FluxingShimSeq + 1
+  IntCmp $FluxingShimSeq 64 fluxing_shim_free_weaselx64 fluxing_shim_probe_weaselx64 fluxing_shim_free_weaselx64
+fluxing_shim_free_weaselx64:
+  ClearErrors
+```
+
+`Delete` 在这里同时兼作**回收**：对未被映射的旧序号文件它真的删掉，对被映射的它失败，
+于是 `IfFileExists` 就是「这个序号还被占着吗」的判别式。探测停在**最低的空闲序号**，
+更高序号的残留由卸载段的通配（`weaselx64.*.dll`）兜底。64 与 32 位分支对称，
+label 后缀分别是 `_weaselx64` / `_weasel`。
+
+既有不对称**刻意保留**：32 位失败只 `StrCpy $FluxingDegraded 1` 并保留旧 shim（无 stage2）；
+64 位失败写 `weaselx64.dll.stage2` marker 走开机补换。
+
+**教训**：
+
+- **「降级用的临时名」必须每次运行唯一，否则降级路径自己会变成被锁的那一个**。
+  版本化命名（`<ver>.<build>`）解决的是「不同版本并存」，不是「同版本重复安装」——
+  这两个是不同的问题，后者需要一个 install-run 维度的分量。
+- **NSIS 的 `Delete` 对被映射文件是静默失败**，既不置错误位也不弹窗。
+  判占用**只能**用 `Rename` 的成败，或 `Delete` + `IfFileExists` 复查；
+  `SetOverwrite try` 同样静默跳过且不置错误位（见 L11 系）。
+- **「文件存在 + 注册指向它」不能证明内容是新的**。本次两个条件都满足，
+  内容却还是旧的。要验的是**内容**（PE 时间戳 / 尺寸 / 哈希），不是路径。
+  harness 的 P9.x 断言原本只查路径存在，这就是它长期放过这个 bug 的原因。
+- **`File /oname=` 会展开运行时变量**（本次用最小探针实测：编译 + silent 运行，
+  产出目录里只有展开后的 `probe.7.txt`，没有字面量 `probe.$Seq.txt`）。
+  这是本修法能成立的前提，不能靠推断。
+- **架构层面的结论**：追求「更新完全不用重启」在本 fork 做不到 ——
+  `WeaselServer.exe` 是 PPL 常驻服务、宿主进程里的 TSF DLL 是常驻的。
+  能做到的目标是「不重启**系统**、不注销」。`include/WeaselIPC.h` 没有版本号 / magic /
+  握手，所以「硬冻结 IPC 协议」也不可行，只能做「只增不改 + 双向安全降级」，
+  见 ADR 0028。
+
+## L165 - **权威门禁自身的腐化不会报错：包名契约漂移让它静默选不出待验包，断言 ID 撞号让它静默产出损坏报告**（2026-11-01）
+
+改 `output/install.nsi` 必须跑 Windows Sandbox harness（`AGENTS.md:255-258`）。
+本次准备跑它的时候发现两件独立的事，都属于「门禁坏了但没有任何地方报错」。
+
+**其一：包名正则与 ADR 0012 的三段版本契约脱节。**
+
+- `install.nsi:56` 是 `OutFile "archives\fluxing-${FLUXING_VERSION}-installer.exe"`，
+  产出**三段**名；`build.bat:35-37` 引 ADR 0012 明写「公开版本是三段（major.minor.patch），
+  第四段 `WEASEL_BUILD` 只进 Windows 资源与内部版本化 shim 名」。
+- 而 harness 挑待验包的正则是**四段**的：`run-verify.ps1:41`/`:59` 与
+  `in-sandbox-claims.ps1:296`/`:306`，共四处，形如
+  `^fluxing-(\d+\.\d+\.\d+)\.(\d+)-installer\.exe$`。
+- `output/archives` 里 1.0.0–1.1.6 **全是三段名** ⇒ 四处正则一个都匹配不上 ⇒
+  `$candidates` 为空 ⇒ `P0 FAIL` + `exit 2`。唯一四段形状的
+  `fluxing-0.21.0.2-installer.exe` 恰好是被 `$upgradeBaseline` 排除的那个。
+- **结论：权威门禁自 1.0.0 起就选不出待验包，一次也没真正跑起来过。**
+  佐证：`%USERPROFILE%\sandbox-artifacts\rime\logs\` 下 `claims.json` 与 `_DONE`
+  都不存在 —— 这台机器上 harness 从未成功产出过报告。
+- 这是 harness 侧的既有静默腐化，**不是本次改动引入的**。漂移方是正则，不是 OutFile：
+  ADR 0012 是刻意设计，改 `install.nsi:56` 是错的方向。
+
+**其二：新增断言差点撞上已占用的 ID 命名空间。**
+
+- 计划给新 PHASE 用 `P10.0`–`P10.3`。动手前 grep 既有 `Add-Result -Id` 才发现
+  `P10.0`/`P10.1`/`P10.2`/`P10.2b`/`P10.3` 已被 **PHASE 3.5 快捷键验收**占用
+  （`in-sandbox-claims.ps1:563/:579/:588/:613/:616/:636`），且 `P10.2` 本身就已经
+  重复出现两次（`:588` 与 `:613`）—— 是既有缺陷。
+- 若照原计划打补丁，`claims.json` 会出现重复 ID ⇒ 报告静默损坏 ⇒
+  「失败项集合没有意外扩大」这条唯一的验收判据直接失效。改用 `P11.x`（grep 确认零命中）。
+
+**教训**：
+
+- **「文档说必须跑的门禁」要先证明它跑得起来**。`AGENTS.md` 把 harness 定为强制门禁，
+  而它已经静默失效了若干个版本 —— 强制门禁的失效比没有门禁更危险，
+  因为它让人以为有保障。跑之前先看 `%USERPROFILE%\sandbox-artifacts\rime\logs\_DONE`
+  在不在：不在就说明从来没成功过。
+- **命名契约改动的爆炸半径要扫到「消费方」，不只是「生产方」**。
+  ADR 0012 把包名从四段改三段时，`install.nsi` 与 `build.bat` 改了，
+  但 harness 里四处硬编码的正则没跟。改契约时要 grep 全仓库的**字面量模式**，
+  而不是只改生成端。
+- **往一个有 ID 命名空间的报告体系里加条目，动手前先枚举既有 ID**。
+  这条是 memory 铁律 17（自己写的检查必须造坏数据验它有牙）的前置：
+  检查本身要是坏的，坏数据也验不出什么。
+- **正则里的可选组缺席时 `.Value` 是空串，不是 `$null`**。
+  放宽成 `(?:\.(\d+))?` 之后，`[version]('1.1.6.' )` 会抛异常 ⇒
+  必须用 `$m.Groups[2].Success` 判定再兜底成 `'0'`，不能直接拼。
+- **harness 不该从包名反推 `WEASEL_BUILD`**。ADR 0012 之后包名里没有 build 号，
+  而 install.nsi 写出的 shim 名里嵌的是 makensis `/D` 传进来的真实 `${WEASEL_BUILD}`；
+  非 release 构建下它等于「自上个 tag 起的 commit 数」（`build.bat:52-67`），
+  与 harness 兜底的 `'0'` 必然不一致 ⇒ P9.2/P9.4 假 FAIL。
+  正解是从**文件系统反查** shim 名，不是从包名推。
+
+## L166 - **权威门禁自身的腐化不会报错（其二）：宿主侧把「启动器退出」当成「沙箱已死」，断言的世界观漂移让它测的不是现在的产品**（2026-11-02）
+
+上一轮权威门禁 55 项里 4 项 FAIL（`E.2` / `E.4` 是沙箱环境恒定项，`P5.TestDefaultHotkeys`
+是本轮引入的回归，`P7` 一直没被解释）。这一轮把这四项全部归因完毕，其中**两项是门禁
+自己坏了**，且**都没有任何地方报错**。
+
+**其一：宿主侧只看一个进程判存活 ⇒ 第 4 秒误判放弃，而沙箱把整轮跑完了。**
+
+- `run-verify.ps1` 的存活判定只查 `WindowsSandboxClient`。`WindowsSandbox.exe` 只是
+  启动器，它 4 秒内就退出了，真正的客户端要过好几秒才起来 ⇒ 在那个窗口里
+  「客户端不存在」被当成「沙箱已死」，立刻 `break` 并 `exit 2`。
+- 证据：宿主日志 mtime `00:09:02`（放弃时刻），沙箱里 `claims.json` 的 mtime 是
+  `00:16:42`，`claims.log` 显示脚本一路跑到 PHASE 7 并正常收尾 ⇒ 沙箱把整轮
+  7 分 44 秒跑完并落了盘。**「门禁卡死」是宿主侧误判。**
+- 修法：判据改成「还有没有任何沙箱进程活着」（`WindowsSandboxClient` /
+  `WindowsSandboxRemoteSession` / `WindowsSandboxServer` / `vmmemWindowsSandbox`
+  任一），且**连续 3 次轮询（15 秒）都没有**才认死。
+
+**其二：P7 断言的世界观漂移 ⇒ 门禁在测一个已经不存在的默认态。**
+
+- 产品侧：`ADR 0022 R1` 标题即「快捷面板『常驻』**改为默认态**」，正文引用户原话
+  「取消它的默认勾选语义，即默认就常驻」，后果段写「新用户与升级用户**默认常驻**」
+  ⇒ 「状态文件缺失 ⇒ 常驻(true)」是**刻意决策**，不是 bug。
+- 代码侧：`WeaselServerApp.cpp:251` 启动时调 `RestoreAlwaysShowMode()` →
+  `LoadPersistedAlwaysShowMode()` → `ResolveAlwaysShowFromFiles(primary, legacy, true)`
+  ⇒ 全新装机（没有 `quickpanel.state`）命中「缺失 ⇒ 常驻(true)」兜底 ⇒ 运行期是常驻态。
+  常驻态会屏蔽全部自动隐藏路径：`QuickPanelDialog.cpp:684`（前台切走）、
+  `:742`（鼠标在外 1500ms）、`:1319`（OnTimer）、`:1328`（OnKillFocus 不 arm timer）。
+- 门禁侧：`TestWeaselIPC.cpp:326-334` 的 P7 前置是「`FocusOut()` 之后面板必须不可见」，
+  后续还要「鼠标移出必须自动隐藏」——这是 **spec 080 T019/T021 的瞬时模式语义**，
+  写于 0.21.0.5 时代（那时还没有常驻功能；基线 `FINAL-claims.log` 里 P6 日志是
+  `panel auto-hid after the switch=1`，本轮同一行变成 `=0`）。
+- ⇒ **两个世界不在同一条时间线上**：产品按 ADR 0022 走「默认常驻」，门禁按「默认瞬时」
+  断言 ⇒ P7 必然假 FAIL。P7 与本轮改动的文件集零重叠，基线 P7 PASS 也只说明
+  「当时还没有这个特性」，不说明现在该 PASS。
+
+**其一的修法**：见上一节（存活判定改成整族进程 + 连续 3 次静默）。
+
+**其二的修法（改门禁，不改产品）**：在**装机之前**写
+`<InstallDir>\user1\fluxing\quickpanel.state` = `always_show=0` ⇒ 服务器首次启动时
+`RestoreAlwaysShowMode()` 读到 0 ⇒ 瞬时模式 ⇒ P6/P7 的断言回到 spec 080 的原始语义。
+
+- 落点可验证：`install.nsi:981` 用 `CreateDirectory "$R3\user1\fluxing"`
+  （**不删既有文件**）⇒ 预置文件能幸存；`:982` 写 `RimeUserDir` ⇒ 与产品解析路径
+  同源（ADR 0020 / `FluxingUserPaths.h` 的 `EnsureFluxingUserDataSuffix`）。
+- 门禁侧新增 `E.10`（INFO）把钉住的结果写进 `claims.json`，P7 的 claim 文案补上
+  「瞬时模式」前提，避免下一个读报告的人以为那是产品默认态。
+
+**教训**：
+
+- **门禁 FAIL 先问「这条断言的世界观还在不在」，再问「产品是不是坏了」。**
+  基线 PASS 只证明它**当时**成立；中间任何一次「改默认行为」的 ADR 都会悄悄改掉
+  旧断言的前提。
+- **「进程不在」不等于「进程死了」**：启动器/父进程的退出常常只是「交接完成」。
+  判存活要覆盖**整族**相关进程；只盯最容易先退的那个，竞态就会变成假失败。
+- **只允许「连续 N 次静默」触发放弃**。单次查不到就退出 ⇒ 把启动窗口读成死。
+- **超时/放弃之后先看产物目录**（`%USERPROFILE%\sandbox-artifacts\rime\logs\`
+  下的 `claims.json` + `_DONE`）。有 ⇒ 宿主侧判定错，不是门禁卡死。
+  live 检查优先于陈旧日志快照。
+- **「缺失 ⇒ 默认值」的兜底规则会在全新环境里显形**：本机装机目录里有
+  `quickpanel.state`（`always_show=0`，14 B）所以看不出问题；沙箱是全新装机 ⇒ 兜底显形。
+  验收环境必须能区分「有状态文件」与「无状态文件」两种起点。
+- **模式类前提必须是断言的显式前置条件，不能靠默认值碰运气**：钉住模式
+  （写状态文件）比在断言里放宽阈值更诚实。
+- **装机机器上跑全量套件会撞 ADR 0012 的管道检查**：装机版的 `WeaselServer.exe`
+  （PPL）会被 TSF 反复重新拉起，占着命名管道 ⇒ `TestWeaselIPC` 的 mock server
+  无法绑定。装机机器上应以沙箱权威门禁为准，本地只跑不占管道的单测
+  （本轮 `TestDefaultHotkeys.exe` 直跑 91/91 PASS）。

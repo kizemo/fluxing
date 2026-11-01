@@ -165,6 +165,47 @@ recorder 自检 RECORDER-SUMMARY|failures=0
 ```
 
 
+### fix(installer): 覆盖安装不再需要重启才替换 64 位输入模块（spec 097 / L164）
+
+**用户可见改动**：同版本覆盖安装时，输入模块（`weaselx64.dll`）现在直接换成新的一份，
+不再落成「等下次重启再换」—— 用户不必为了升级而重启系统或注销。
+
+**根因**：降级用的带版本号文件名只由版本号与构建号拼成，**没有「每次安装唯一」分量**。
+同一版本重装时安装器要先删掉那个名字，但该文件此刻正被输入宿主进程映射，
+`Delete` 对被映射的文件会**静默失败**（不报错、也不置错误位）；带版本号的那份因此写不进去，
+文件落成 `weaselx64.dll.stage2`，等开机补换。用户观感就是「装完还是旧的，必须重启」。
+
+**改法**：`output/install.nsi` 在写文件前加一段探测循环 —— 先尝试删掉当前序号的副本，
+若它仍存在（说明被映射）就把序号 +1 再试，最多 64 次；成功后落成
+`weaselx64.<ver>.<build>.<seq>.dll` 并把 TIP 注册指向它；确实写不进才退化成 `.stage2`
+标记（保留原有降级路径，不留死角）。32 位与 64 位分支对称处理。
+
+**门禁**（Windows Sandbox 权威门禁 `scripts/sandbox-gate/`，产物
+`%USERPROFILE%\sandbox-artifacts\rime\logs\claims.json` 与 `claims.log`）：
+
+```
+P9.2  改用带安装序号的版本化 shim              name=weaselx64.1.1.6.0.0.dll seq=0 ver=1.1.6 build=0 len=1978368
+P9.3  未退化为「等重启再换」(无 stage2 marker)  marker=C:\FluxingTest\fluxing\weasel\weaselx64.dll.stage2 exists=False
+P9.4  64 位 TIP 注册指向版本化 shim             InprocServer32=C:\FluxingTest\fluxing\weasel\weaselx64.1.1.6.0.0.dll shim=weaselx64.1.1.6.0.0.dll
+P11.1 锁住普通名与序号副本时覆盖安装仍 exit 0  exit=0 timedOut=False
+P11.2 本次安装产出了序号更高的新副本           before=weaselx64.1.1.6.0.0.dll seq=0 after=weaselx64.1.1.6.0.1.dll seq=1
+P11.3 未退化为「等重启再换」(无 stage2 marker)  marker=C:\FluxingTest\fluxing\weasel\weaselx64.dll.stage2 exists=False
+P11.4 64 位 TIP 注册指向新的序号副本           InprocServer32=C:\FluxingTest\fluxing\weasel\weaselx64.1.1.6.0.1.dll shim=weaselx64.1.1.6.0.1.dll
+P11.5 新副本内容与本次构建产物一致             shim=C:\FluxingTest\fluxing\weasel\weaselx64.1.1.6.0.1.dll build=C:\Users\WDAGUtilityAccount\Desktop\buildout\weaselx64.dll
+```
+
+其中 P11.3 是**判别性主断言**：只有真的换了新副本、且没有退回「等重启再换」，
+它才会同时成立（旧安装器在这里会留下 `.stage2` 标记并 FAIL）。
+
+**门禁自身的两处腐化一并修掉**（L165 / L166）：宿主侧不再把「启动器退出」当成
+「沙箱已死」（原判据只盯启动器进程，4 秒内就误判退出的那次就是这么来的）；
+快捷面板的自动隐藏断言改回 spec 080 的**瞬时模式**语义 —— 装机前把常驻开关钉成
+`always_show=0`，不再拿 ADR 0022 的「默认常驻」去套旧断言。
+
+**本轮门禁总账**：56 项，PASS 47 / FAIL 2 / SKIP 0。两项 FAIL 都是环境恒定项
+（`E.2` 沙箱里没有 D: 盘、`E.4` 沙箱里外网不可达），与本次改动无关。
+
+
 ## [1.1.6] - 2026-10-31
 
 ### 主要更新

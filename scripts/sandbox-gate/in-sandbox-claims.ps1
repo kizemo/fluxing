@@ -55,7 +55,12 @@ $InstallTimeoutSeconds = 600   # 每次装机的硬超时; 超时就杀树并落
 #          (Snapshot-Verify.ps1 的 Write-VerifyLog 改为 FileShare.ReadWrite + 重试;
 #           这里的 trap 去掉 continue, 改成在出错作用域内继续)。
 #          断言清单本身没变, 只是 v6 那轮有 6 条断言因工装缺陷没跑到。
-$script:toolingVersion = '2026-10-24.v7'
+# v8 变更 (spec 097 / L164 / L165):
+#          1) 选包正则的第四段改成可选 + 缺省兜底 '0' —— 之前是必选, 与 ADR 0012
+#             的三段式包名脱节, 门禁一个包都选不出来 (L165)。
+#          2) 新增 PHASE 7: 锁定降级用的落地文件名必须每次安装唯一 (L164)。
+#          3) PHASE 6 改成从文件系统反查真实副本名, 不再从包名反推构建号。
+$script:toolingVersion = '2026-11-02.v9'
 
 $logsDir    = Join-Path $artifactsRoot "logs"
 $screensDir = Join-Path $artifactsRoot "screenshots"
@@ -257,6 +262,54 @@ function Get-FluxingRegistry {
     return [pscustomobject]@{ InstallDir = $inst; RimeUserDir = $usr }
 }
 
+# spec 097 / L164: 找出「版本化 + 每次安装唯一序号」的模块副本。
+# 名字形状: <base>.<版本>.<构建>.<序号>.dll, 由安装脚本写出。
+# 不能从安装包名反推构建号: 包名是三段式 (ADR 0012), 构建号只进内部资源与这个
+# 文件名; 非发布构建下它等于「自上个 tag 起的提交数」, 与包名对不上。所以改成从
+# 文件系统反查, 取序号最大者 (最近一次安装留下的那个)。
+function Get-FluxingSeqShim {
+    param(
+        [Parameter(Mandatory)][string]$EngineDir,
+        [Parameter(Mandatory)][string]$EngineBaseName
+    )
+    if (-not (Test-Path -LiteralPath $EngineDir)) { return $null }
+    $reShim = '^' + [regex]::Escape($EngineBaseName) + '\.(\d+\.\d+\.\d+)\.(\d+)\.(\d+)\.dll$'
+    $hits = @()
+    Get-ChildItem -LiteralPath $EngineDir -Filter "$EngineBaseName*.dll" -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $mShim = [regex]::Match($_.Name, $reShim)
+            if ($mShim.Success) {
+                $hits += [pscustomobject]@{
+                    Path      = $_.FullName
+                    Name      = $_.Name
+                    ShimVer   = $mShim.Groups[1].Value
+                    ShimBuild = $mShim.Groups[2].Value
+                    Seq       = [int]$mShim.Groups[3].Value
+                    Length    = $_.Length
+                    MTime     = $_.LastWriteTime
+                }
+            }
+        }
+    if (-not $hits) { return $null }
+    return ($hits | Sort-Object -Property Seq -Descending | Select-Object -First 1)
+}
+
+# 64 位视图的 COM 注册实际指向哪个模块 (取最后一个匹配 weaselx64 的 InprocServer32)。
+function Get-FluxingInproc32 {
+    $script:fluxingInproc32 = ''
+    foreach ($clsidRoot in @('HKLM:\SOFTWARE\Classes\CLSID','HKLM:\SOFTWARE\WOW6432Node\Classes\CLSID')) {
+        Get-ChildItem $clsidRoot -ErrorAction SilentlyContinue | ForEach-Object {
+            $ip = Join-Path $_.PSPath 'InprocServer32'
+            if (Test-Path $ip) {
+                $v = (Get-ItemProperty -Path $ip -ErrorAction SilentlyContinue).'(default)'
+                if ($v -match 'weaselx64') { $script:fluxingInproc32 = $v }
+            }
+        }
+    }
+    if (-not $script:fluxingInproc32) { return '' }
+    return ($script:fluxingInproc32 -replace '^"|"$','')
+}
+
 Write-VerifyLog -Path $verifyLog "=== Fluxing「宣称完成的任务」沙箱复验 v6 (toolingVersion=$script:toolingVersion) ==="
 Write-VerifyLog -Path $verifyLog "sandbox boot: $(Get-Date -Format 'o')"
 
@@ -293,19 +346,19 @@ $fluxBuild = ''
 $candidates = Get-ChildItem $installersDir -Filter 'fluxing-*-installer.exe' -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -ne "fluxing-$upgradeBaseline-installer.exe" } |
     ForEach-Object {
-        $m = [regex]::Match($_.Name, '^fluxing-(\d+\.\d+\.\d+)\.(\d+)-installer\.exe$')
+        $m = [regex]::Match($_.Name, '^fluxing-(\d+\.\d+\.\d+)(?:\.(\d+))?-installer\.exe$')
         if ($m.Success) {
             [pscustomobject]@{
                 File = $_
-                Ver  = [version]($m.Groups[1].Value + '.' + $m.Groups[2].Value)
+                Ver  = [version]($m.Groups[1].Value + '.' + $(if ($m.Groups[2].Success) { $m.Groups[2].Value } else { '0' }))
             }
         }
     } | Sort-Object Ver -Descending
 if ($candidates) {
     $newInstaller = $candidates[0].File
-    $m = [regex]::Match($newInstaller.Name, '^fluxing-(\d+\.\d+\.\d+)\.(\d+)-installer\.exe$')
+    $m = [regex]::Match($newInstaller.Name, '^fluxing-(\d+\.\d+\.\d+)(?:\.(\d+))?-installer\.exe$')
     $fluxVer   = $m.Groups[1].Value
-    $fluxBuild = $m.Groups[2].Value
+    $fluxBuild = $(if ($m.Groups[2].Success) { $m.Groups[2].Value } else { '0' })
 }
 $oldInstaller = Get-ChildItem $installersDir -Filter "fluxing-$upgradeBaseline-installer.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $newInstaller) {
@@ -319,6 +372,47 @@ $itype = Get-InstallerType -ExePath $newInstaller.FullName
 Add-Result -Id "P0.1" -Claim "安装包是 NSIS" -Status $(if($itype -eq 'NSIS'){'PASS'}else{'FAIL'}) -Detail "type=$itype"
 
 $requestedRoot = "C:\FluxingTest\fluxing"
+
+# =====================================================================
+# PHASE 0 · 把「快捷面板常驻」钉在关闭态 (L166)
+# =====================================================================
+# 为什么必须钉:
+#   ADR 0022 R1 把「常驻」定为**默认态** —— 用户原话「取消它的默认勾选语义,
+#   即默认就常驻」, 后果段写「新用户与升级用户默认常驻」。
+#   => 全新装机没有 quickpanel.state => ResolveAlwaysShowFromFiles() 命中
+#      「缺失 => 常驻(true)」兜底(FluxingAlwaysShow.h) => 运行期是常驻态。
+#   => 常驻态下, 面板**不会**因鼠标移出(QuickPanelDialog.cpp:742)或普通
+#      FocusOut(WeaselIPC.h:87-91)而隐藏 —— 这是 ADR 0022 的既定语义。
+#   而 P6/P7 断言的是 spec 080 T019/T021 的**瞬时模式**语义:
+#      切到 Fluxing 弹出面板 -> 鼠标移出自动隐藏 -> focus-out 隐藏。
+#   => 两者不在同一个世界里; 不钉住环境, P7 必然假 FAIL
+#      (上轮实测 P6 日志「panel auto-hid after the switch=0」, 基线是 =1)。
+#
+# 钉法: 装机**之前**写 <InstallDir>\user1\fluxing\quickpanel.state
+#   = "always_show=0" => 服务器首次启动时 WeaselServerApp::RestoreAlwaysShowMode()
+#   读盘得到 0 => 瞬时模式 => P6/P7 的断言回到 spec 080 的原始语义。
+#
+# 落点与产品同源(ADR 0020 / install.nsi:981-982): 用户数据目录 =
+#   <InstallDir>\user1\fluxing == HKCU RimeUserDir; installer 用
+#   CreateDirectory(不删既有文件) => 预置文件能幸存。
+Write-VerifyLog -Path $verifyLog "[PHASE 0] 钉住常驻开关 = 瞬时模式"
+$qpStateDir = Join-Path $requestedRoot "user1\fluxing"
+$qpStateFile = Join-Path $qpStateDir "quickpanel.state"
+$qpStatePinned = $false
+$qpStateDetail = 'not attempted'
+try {
+    New-Item -ItemType Directory -Force -Path $qpStateDir | Out-Null
+    # ParseStateLine 要求内容精确等于 "always_show=0"(容忍尾部 \r / \n)
+    [IO.File]::WriteAllText($qpStateFile, ("always_show=0" + [char]10), [Text.Encoding]::ASCII)
+    $qpStatePinned = Test-Path $qpStateFile
+    $qpStateDetail = "pinned=$qpStateFile bytes=$((Get-Item $qpStateFile).Length)"
+} catch {
+    $qpStateDetail = "pin failed: $($_.Exception.Message)"
+}
+Write-VerifyLog -Path $verifyLog "quickpanel.state pin: $qpStateDetail"
+Add-Result -Id "E.10" -Claim "P6/P7 环境: 常驻开关钉为瞬时模式 (always_show=0)" `
+    -Status $(if($qpStatePinned){'INFO'}else{'FAIL'}) -Detail $qpStateDetail
+
 
 # =====================================================================
 # PHASE 1 · 干净装机 $fluxVer + 8 条不变式
@@ -500,7 +594,7 @@ foreach ($phase in @(
     @{ id='P6'; mode='/verify-tsf-profile'; extra=@('--allow-profile-switch');
        claim="切到 Fluxing 自动弹出快捷设置栏 ($fluxVer / spec 080)"; shot='03-after-tsf-profile.png' },
     @{ id='P7'; mode='/verify-quickpanel'; extra=@();
-       claim='快捷设置栏二次显示后仍会自动隐藏 (spec 080 T019/T021)'; shot='04-after-quickpanel.png' }
+       claim='快捷设置栏二次显示后仍会自动隐藏 (spec 080 T019/T021, 瞬时模式: 常驻钉为 always_show=0)'; shot='04-after-quickpanel.png' }
 )) {
     # v5: P6 的前置条件 —— 服务器运行了吗? 它看到 profile 切换了吗?
 $probeBefore = Get-ServerProbe -Tag 'before-tsf'
@@ -740,7 +834,6 @@ if ($oldInstaller -and $r3.TimedOut) {
 #   LoadLibrary 会执行 TIP 的 DllMain, 在沙箱里注册 COM 对象, 副作用太大。
 #   独占句柄同样能让 NSIS 的 Rename / File 覆盖写失败 —— 这正是要复现的条件。
 $tipX64     = Join-Path $requestedRoot 'weasel\weaselx64.dll'
-$verShim    = Join-Path $requestedRoot ("weasel\weaselx64.{0}.{1}.dll" -f $fluxVer, $fluxBuild)
 $stage2Mark = Join-Path $requestedRoot 'weasel\weaselx64.dll.stage2'
 
 if (-not (Test-Path -LiteralPath $tipX64)) {
@@ -768,30 +861,100 @@ if (-not (Test-Path -LiteralPath $tipX64)) {
             -Status $(if($r6.TimedOut){'FAIL'}elseif($r6.ExitCode -eq 0){'PASS'}else{'FAIL'}) `
             -Detail "exit=$($r6.ExitCode) timedOut=$($r6.TimedOut)"
 
-        $shimExists = Test-Path -LiteralPath $verShim
-        Add-Result -Id "P9.2" -Claim "改用版本化 shim (weaselx64.$fluxVer.$fluxBuild.dll)" `
-            -Status $(if($shimExists){'PASS'}else{'FAIL'}) -Detail "path=$verShim exists=$shimExists"
+        # spec 097 / L164: 副本名带「每次安装唯一」序号, 而构建号只进内部资源,
+        # 从包名反推不出真实名字 —— 改成从文件系统反查, 取序号最大者。
+        $shim6 = Get-FluxingSeqShim -EngineDir (Split-Path -Parent $tipX64) -EngineBaseName 'weaselx64'
+        Add-Result -Id "P9.2" -Claim "改用带安装序号的版本化 shim" `
+            -Status $(if($shim6){'PASS'}else{'FAIL'}) `
+            -Detail $(if($shim6){"name=$($shim6.Name) seq=$($shim6.Seq) ver=$($shim6.ShimVer) build=$($shim6.ShimBuild) len=$($shim6.Length)"}else{"not found under $requestedRoot\weasel"})
 
         $stage2Exists = Test-Path -LiteralPath $stage2Mark
         Add-Result -Id "P9.3" -Claim "未退化为「等重启再换」(无 stage2 marker)" `
             -Status $(if($stage2Exists){'FAIL'}else{'PASS'}) -Detail "marker=$stage2Mark exists=$stage2Exists"
 
         # 64 位视图的 COM 注册必须指向版本化 shim
-        $clsid64v = $null
-        foreach ($clsidRoot in @('HKLM:\SOFTWARE\Classes\CLSID','HKLM:\SOFTWARE\WOW6432Node\Classes\CLSID')) {
-            Get-ChildItem $clsidRoot -ErrorAction SilentlyContinue | ForEach-Object {
-                $ip = Join-Path $_.PSPath 'InprocServer32'
-                if (Test-Path $ip) {
-                    $v = (Get-ItemProperty -Path $ip -ErrorAction SilentlyContinue).'(default)'
-                    if ($v -match 'weaselx64') { $script:clsid64v = $v }
-                }
-            }
-        }
-        $inproc = if ($clsid64v) { $clsid64v -replace '^"|"$','' } else { '<no-key>' }
-        $pointsToShim = ($inproc -like "*weaselx64.$fluxVer.$fluxBuild.dll*")
+        $inproc = Get-FluxingInproc32
+        if (-not $inproc) { $inproc = '<no-key>' }
+        $pointsToShim = ($shim6 -and ($inproc -like "*$($shim6.Name)*"))
         Add-Result -Id "P9.4" -Claim "64 位 TIP 注册指向版本化 shim" `
             -Status $(if($pointsToShim){'PASS'}else{'FAIL'}) `
-            -Detail "InprocServer32=$inproc"
+            -Detail "InprocServer32=$inproc shim=$(if($shim6){$shim6.Name}else{'<none>'})"
+    }
+}
+
+# =====================================================================
+# PHASE 7 · 锁定降级用的落地文件名必须「每次安装唯一」 (spec 097 / L164)
+# =====================================================================
+# 场景: 版本化 shim 的名字以前只由版本号+构建号决定, 没有本次安装唯一的分量。
+#       第二次同版本覆盖安装时, 那个名字已经被上一次留下的副本占着、且正被映射
+#       => 删除静默失败 => 新文件写不进去 => 退化成「等重启再换」(stage2 marker)。
+#       这正是 shim 本来要避免的重启, 而用户看到的现象是「更新完还得重启」。
+#
+# 复现条件: 必须同时锁住「普通名文件」和「当前最大序号的副本」两个文件。
+#       只锁普通名 -> 走不到「同名副本被占」这一步; 只锁副本 -> 普通名覆盖写成功,
+#       也不会走。两者都锁才复现。
+#
+# 判别性断言是 P11.3 (不产生 stage2 marker):
+#       旧实现下, 被锁的副本写不进去 => 必然写 stage2 marker => 该断言 FAIL。
+#       注意「找到了新序号副本」这条在旧实现下是 SKIP 而不是 FAIL, 不能当判别点。
+$engineDir7  = Join-Path $requestedRoot 'weasel'
+$shimBefore7 = Get-FluxingSeqShim -EngineDir $engineDir7 -EngineBaseName 'weaselx64'
+if (-not $shimBefore7) {
+    Add-Result -Id "P11.0" -Claim "PHASE 7 前置: 已存在带序号的版本化副本" -Status "FAIL" `
+        -Detail "no per-install-unique shim under $engineDir7 -- 安装没有产出带序号的副本"
+} else {
+    $lockPlain7 = $null
+    $lockShim7  = $null
+    $r7 = $null
+    try {
+        $lockPlain7 = [System.IO.File]::Open((Join-Path $engineDir7 'weaselx64.dll'), 'Open', 'ReadWrite', 'None')
+        $lockShim7  = [System.IO.File]::Open($shimBefore7.Path, 'Open', 'ReadWrite', 'None')
+        Write-VerifyLog -Path $verifyLog "[PHASE 7] 已独占锁定 普通名 + 序号 $($shimBefore7.Seq) 的副本 $($shimBefore7.Name)"
+        $sw7 = [Diagnostics.Stopwatch]::StartNew()
+        $r7 = Install-NsisSilent -InstallerPath $newInstaller.FullName -InstallDir $requestedRoot `
+                -TimeoutSeconds $InstallTimeoutSeconds -SnapshotDir $logsDir -SnapshotTag 'phase7-seqshim'
+        $sw7.Stop()
+        Write-VerifyLog -Path $verifyLog "phase7 reinstall-under-seq-lock exit = $($r7.ExitCode) elapsed = $([math]::Round($sw7.Elapsed.TotalSeconds,1))s"
+    } catch {
+        Write-VerifyLog -Path $verifyLog "phase7 lock failed: $($_.Exception.Message)"
+        Add-Result -Id "P11.0" -Claim "PHASE 7 可同时独占锁定普通名与序号副本" -Status "FAIL" -Detail $_.Exception.Message
+    } finally {
+        if ($lockPlain7) { try { $lockPlain7.Close() } catch { } }
+        if ($lockShim7)  { try { $lockShim7.Close() } catch { } }
+    }
+
+    if ($r7) {
+        Add-Result -Id "P11.1" -Claim "锁住普通名与序号副本时覆盖安装仍 exit 0" `
+            -Status $(if($r7.TimedOut){'FAIL'}elseif($r7.ExitCode -eq 0){'PASS'}else{'FAIL'}) `
+            -Detail "exit=$($r7.ExitCode) timedOut=$($r7.TimedOut)"
+
+        $shimAfter7 = Get-FluxingSeqShim -EngineDir $engineDir7 -EngineBaseName 'weaselx64'
+        $seqGrew = ($shimAfter7 -and ($shimAfter7.Seq -gt $shimBefore7.Seq))
+        Add-Result -Id "P11.2" -Claim "本次安装产出了序号更高的新副本" `
+            -Status $(if($seqGrew){'PASS'}else{'FAIL'}) `
+            -Detail "before=$($shimBefore7.Name) seq=$($shimBefore7.Seq) after=$(if($shimAfter7){$shimAfter7.Name + ' seq=' + $shimAfter7.Seq}else{'<none>'})"
+
+        $stage2Exists7 = Test-Path -LiteralPath $stage2Mark
+        Add-Result -Id "P11.3" -Claim "未退化为「等重启再换」(无 stage2 marker) -- 判别性主断言" `
+            -Status $(if($stage2Exists7){'FAIL'}else{'PASS'}) -Detail "marker=$stage2Mark exists=$stage2Exists7"
+
+        $inproc7 = Get-FluxingInproc32
+        if (-not $inproc7) { $inproc7 = '<no-key>' }
+        $points7 = ($shimAfter7 -and ($inproc7 -like "*$($shimAfter7.Name)*"))
+        Add-Result -Id "P11.4" -Claim "64 位 TIP 注册指向新的序号副本" `
+            -Status $(if($points7){'PASS'}else{'FAIL'}) `
+            -Detail "InprocServer32=$inproc7 shim=$(if($shimAfter7){$shimAfter7.Name}else{'<none>'})"
+
+        $buildX64_7 = Join-Path $buildOutDir 'weaselx64.dll'
+        if ($shimAfter7 -and (Test-Path -LiteralPath $buildX64_7)) {
+            $same7 = ((Get-Sha256 -Path $shimAfter7.Path) -eq (Get-Sha256 -Path $buildX64_7))
+            Add-Result -Id "P11.5" -Claim "新副本内容与本次构建产物一致" `
+                -Status $(if($same7){'PASS'}else{'FAIL'}) `
+                -Detail "shim=$($shimAfter7.Path) build=$buildX64_7"
+        } else {
+            Add-Result -Id "P11.5" -Claim "新副本内容与本次构建产物一致" -Status "SKIP" `
+                -Detail "missing shim=$(if($shimAfter7){$shimAfter7.Path}else{'<none>'}) or build=$buildX64_7"
+        }
     }
 }
 
