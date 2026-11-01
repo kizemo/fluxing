@@ -26,6 +26,7 @@
 #include "stdafx.h"
 #include <boost/detail/lightweight_test.hpp>
 #include <FluxingCandidateIgnore.h>
+#include <FluxingCandidateDeleteShortcut.h>
 #include <functional>
 #include <windows.h>
 #include <iostream>
@@ -221,6 +222,65 @@ int main() {
               << std::endl;
   }
 
-  std::cout << "6 / 6 assertions passed" << std::endl;
+  // Test 7 (spec 094): Ctrl+Shift+数字 的按键判定表。
+  // 关键点:判定只看 **VK 码 + Ctrl/Shift 键态 + 是不是 key-down**,绝不能用
+  // ConvertKeyEvent 产出的字符(Ctrl+Shift+1 -> '!'),从字符反推不出数字键。
+  {
+    BOOST_TEST_EQ(fluxing::MatchCandidateDeleteShortcut('1', true, true, true),
+                  1);
+    BOOST_TEST_EQ(fluxing::MatchCandidateDeleteShortcut('9', true, true, true),
+                  9);
+    // 缺 Ctrl / 缺 Shift => 不命中
+    BOOST_TEST_EQ(
+        fluxing::MatchCandidateDeleteShortcut('1', false, true, true), 0);
+    BOOST_TEST_EQ(
+        fluxing::MatchCandidateDeleteShortcut('1', true, false, true), 0);
+    // key-up 不命中
+    BOOST_TEST_EQ(
+        fluxing::MatchCandidateDeleteShortcut('1', true, true, false), 0);
+    // 非数字键不命中('0' 不在 1..9 里,VK_F1 也不是数字键)
+    BOOST_TEST_EQ(
+        fluxing::MatchCandidateDeleteShortcut('0', true, true, true), 0);
+    BOOST_TEST_EQ(
+        fluxing::MatchCandidateDeleteShortcut(VK_F1, true, true, true), 0);
+    std::cout << "  PASS: T7 Ctrl+Shift+数字 判定表" << std::endl;
+  }
+
+  // Test 8 (spec 094): 拦截边界 —— 序号必须落在当前可见页范围内;
+  // 没有可见候选时一律不拦(否则会抢掉 Rime 默认的 Ctrl+Shift+3 / 4)。
+  {
+    BOOST_TEST(fluxing::ShouldInterceptCandidateDelete(1, 5));
+    BOOST_TEST(fluxing::ShouldInterceptCandidateDelete(5, 5));
+    BOOST_TEST(!fluxing::ShouldInterceptCandidateDelete(6, 5));
+    BOOST_TEST(!fluxing::ShouldInterceptCandidateDelete(1, 0));
+    BOOST_TEST(!fluxing::ShouldInterceptCandidateDelete(0, 5));
+    BOOST_TEST(!fluxing::ShouldInterceptCandidateDelete(10, 5));
+    std::cout << "  PASS: T8 拦截边界(只在可见页范围内才拦)" << std::endl;
+  }
+
+  // Test 9 (spec 094): 端到端 —— 「候选窗可见 + Ctrl+Shift+3」必须删掉第 3 个
+  // **可见**候选。屏蔽名单已过滤掉「甲」,所以可见第 3 项是「丁」,对应引擎
+  // 索引 3。这正是右键删词走的同一条 IPC 通路。
+  {
+    FakeClient client;
+    SetupPage(client, {L"甲"});
+    BOOST_TEST_EQ(client.visibleTexts.size(), 4u);
+    const int number =
+        fluxing::MatchCandidateDeleteShortcut('3', true, true, true);
+    BOOST_TEST_EQ(number, 3);
+    BOOST_TEST(fluxing::ShouldInterceptCandidateDelete(
+        number, client.visibleTexts.size()));
+    bool ok =
+        client.DeleteCandidateOnCurrentPage(static_cast<size_t>(number - 1));
+    BOOST_TEST(ok);
+    BOOST_TEST_EQ(client.deleteCount, 1);
+    BOOST_TEST_EQ(client.lastDeletedIndex, 3u);  // 引擎索引 3,不是 2
+    BOOST_TEST_EQ(client.ignoreAppended.size(), 1u);
+    BOOST_TEST(client.ignoreAppended[0] == L"丁");
+    std::cout << "  PASS: T9 Ctrl+Shift+3 -> 删可见第 3 项(映射到引擎索引 3)"
+              << std::endl;
+  }
+
+  std::cout << "9 / 9 assertions passed" << std::endl;
   return boost::report_errors();
 }

@@ -21,6 +21,7 @@ int server_main();
 int verify_quickpanel_main();
 int verify_focusout_flags_main();
 int verify_shift_body_main();
+int verify_delete_body_main();
 int verify_tsf_profile_main(bool allow_profile_switch,
                             bool allow_remote_session);
 
@@ -65,6 +66,8 @@ int _tmain(int argc, _TCHAR* argv[]) {
     return verify_quickpanel_main();
   } else if (argc > 1 && !wcscmp(L"/verify-focusout-flags", argv[1])) {
     return verify_focusout_flags_main();
+  } else if (argc > 1 && !wcscmp(L"/verify-delete-body", argv[1])) {
+    return verify_delete_body_main();
   } else if (argc > 1 && !wcscmp(L"/verify-tsf-profile", argv[1])) {
     // spec 080 (crash guard): this mode really switches the active input
     // profile, which is not what a user does and which was observed to
@@ -571,6 +574,21 @@ int verify_focusout_flags_main() {
 
 class TestRequestHandler : public weasel::RequestHandler {
  public:
+  // spec 094: 删词命令必须回 body(commit/status/ctx/候选列表)。
+  // 客户端拿到响应后立刻刷新候选窗 —— 不回 body 的话,用户看到的还是上一次
+  // 的候选,会以为「右键 / Ctrl+Shift+数字 根本没生效」。
+  // body 里带一个可判别的标记:status.composing=1(Status 默认是 0)。
+  virtual void DeleteCandidateOnCurrentPage(size_t index,
+                                            DWORD session_id,
+                                            EatLine eat) override {
+    std::cerr << "DeleteCandidateOnCurrentPage: " << index << std::endl;
+    if (eat) {
+      std::wstring msg = L"status.ascii_mode=0\n";
+      msg += L"status.composing=1\n";
+      eat(msg);
+    }
+  }
+
   TestRequestHandler() : m_counter(0) {
     std::cerr << "handler ctor." << std::endl;
   }
@@ -676,4 +694,99 @@ int server_main() {
   int ret = server.Run();
   std::cerr << "server quitting." << std::endl;
   return ret;
+}
+
+// spec 094: 删词命令必须回 body。
+//
+// 用户侧的现象是「右键 / Ctrl+Shift+数字 点了没反应,候选还在」——候选还在
+// 是因为客户端读到的还是上一次的响应。这个模式用 mock server 直接证明
+// DELETE 命令的响应里带得回新的状态。
+int verify_delete_body_main() {
+  // spec 094: 「切走到别的输入法」时 TSF 投递的是 (别的 clsid, TRUE),而不是
+  // (自己 clsid, FALSE)。判定表抽成共享纯函数,这里逐条断言;生产代码
+  // WeaselTSF::OnActivated 用的是同一份(宪法 R7)。
+  if (DecideProfileNotify(true, true) !=
+      ProfileNotifyDecision::kNotifyActivated) {
+    std::cerr << "[DELETE] profile notify: self+activated != kNotifyActivated"
+              << std::endl;
+    return -2;
+  }
+  if (DecideProfileNotify(true, false) !=
+      ProfileNotifyDecision::kNotifyDeactivated) {
+    std::cerr << "[DELETE] profile notify: self+deactivated != kNotifyDeactivated"
+              << std::endl;
+    return -2;
+  }
+  if (DecideProfileNotify(false, true) !=
+      ProfileNotifyDecision::kNotifyDeactivated) {
+    std::cerr << "[DELETE] profile notify: other+activated != kNotifyDeactivated"
+              << std::endl;
+    return -2;
+  }
+  if (DecideProfileNotify(false, false) != ProfileNotifyDecision::kIgnore) {
+    std::cerr << "[DELETE] profile notify: other+deactivated != kIgnore"
+              << std::endl;
+    return -2;
+  }
+
+  weasel::Client client;
+  if (!client.Connect()) {
+    std::cerr << "[DELETE] connect failed" << std::endl;
+    return -3;
+  }
+  client.StartSession();
+  if (!client.Echo()) {
+    std::cerr << "[DELETE] session failed" << std::endl;
+    return -4;
+  }
+
+  // Identity check: the mock server answers a key event with the "Greeting="
+  // marker, while a real WeaselServer.exe answers with a full
+  // "action=status,ctx,config" block. Without this check the test would
+  // silently measure whatever process happens to own the named pipe.
+  std::wstring probe_body;
+  client.ProcessKeyEvent(weasel::KeyEvent(L'a', 0));
+  client.GetResponseData([&probe_body](LPWSTR buffer, DWORD length) -> bool {
+    probe_body.assign(buffer, length);
+    return true;
+  });
+  if (probe_body.find(L"Greeting=") == std::wstring::npos) {
+    std::cerr << "[DELETE] FAIL: the named pipe is served by another process, "
+                 "not the TestWeaselIPC mock server."
+              << std::endl;
+    client.EndSession();
+    return -8;
+  }
+
+  // 删词命令本体:必须真的发得出去。
+  //
+  // 注意:ServerImpl::OnDeleteCandidateOnCurrentPage 的返回值**恒为 0** ——
+  // 与 HighlightCandidateOnCurrentPage / ChangePage 同构,上游语义是
+  // 「0 = 无错误」(PIPE_MSG_HANDLE 把 handler 返回值直接当事务 LRESULT 回给
+  // 客户端)。所以客户端 DeleteCandidateOnCurrentPage 的返回值**不能**用
+  // 「非 0」判成功;生产代码 WeaselTSF::_DeleteCandidateOnCurrentPage 同样
+  // 不看返回值。真正的判据在下面:只有 DELETE handler 会写 status.composing=1。
+  client.DeleteCandidateOnCurrentPage(2);
+  std::wstring delete_body;
+  bool got = client.GetResponseData(
+      [&delete_body](LPWSTR buffer, DWORD length) -> bool {
+        delete_body.assign(buffer, length);
+        return true;
+      });
+  // 判别标记:mock 只在 DELETE 的响应里写 status.composing=1(Status 默认 0)。
+  bool body_has_status =
+      delete_body.find(L"status.composing=1") != std::wstring::npos;
+
+  client.EndSession();
+
+  std::cout << "[DELETE] got=" << (got ? 1 : 0)
+            << " body_status=" << (body_has_status ? 1 : 0) << std::endl;
+  if (got && body_has_status) {
+    std::cout << "[DELETE] PASS: the delete-candidate IPC carries a response "
+                 "body"
+              << std::endl;
+    return 0;
+  }
+  std::cerr << "[DELETE] FAIL" << std::endl;
+  return -6;
 }

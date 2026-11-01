@@ -209,6 +209,9 @@ rem It has to run while the mock server is still up, so it goes before /stop.
 echo === Running TestWeaselIPC.exe (/verify-focusout-flags) ===
 "Release\TestWeaselIPC.exe" /verify-focusout-flags < nul
 if !errorlevel! NEQ 0 set "FAIL=1"
+echo === Running TestWeaselIPC.exe (/verify-delete-body) ===
+"Release\TestWeaselIPC.exe" /verify-delete-body < nul
+if !errorlevel! NEQ 0 set "FAIL=1"
 echo === Shutting down TestWeaselIPC server (/stop) ===
 "Release\TestWeaselIPC.exe" /stop < nul
 if !IPC_RC! NEQ 0 set "FAIL=1"
