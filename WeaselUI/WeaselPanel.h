@@ -73,6 +73,13 @@ class WeaselPanel
   void SetDeleteCandidateCallback(std::function<void(size_t)> const& func) {
     m_deleteCallback = func;
   }
+  // spec 094: 暴露右键删词回调的只读视图,供 TestWeaselIPC 断言
+  // 「面板拿到的是 UI 上那一个 std::function 对象」(引用绑定,不是值拷贝)。
+  // 判别性:若有人把 m_deleteCallback 改回值成员,这里的地址就不再等于
+  // UI 上的那个地址,断言立刻失败。
+  const std::function<void(size_t)>& deleteCandidateCallback() const {
+    return m_deleteCallback;
+  }
   void LoadIgnoreList(const std::wstring& schema_id);
   void Refresh();
   void DoPaint(CDCHandle dc);
@@ -162,7 +169,19 @@ class WeaselPanel
   PDWR pDWR;
   std::function<void(size_t* const, size_t* const, bool* const, bool* const)>&
       _UICallback;
-  std::function<void(size_t)> m_deleteCallback;
+  // spec 094: 引用绑定,不是值拷贝。
+  //
+  // 过去这里是 `std::function<void(size_t)> m_deleteCallback;`(值),而
+  // WeaselPanel 的构造初始化列表只写了 _UICallback(ui.uiCallback()),
+  // 没有给 m_deleteCallback 赋初值 => 值成员默认构造为空 =>
+  // OnRButtonDown 里的 `if (m_deleteCallback)` 恒假 => 右键删词整条链路
+  // 是死的(spec 094 bug 2 的根因)。
+  //
+  // 改成引用后,面板拿到的就是 UI 上那一个 std::function 对象,与同文件里
+  // 已经生效的 _UICallback 引用模式完全同构:无论
+  // UI::SetDeleteCandidateCallback 在面板创建之前还是之后调用,面板都能
+  // 看到最新值。
+  std::function<void(size_t)>& m_deleteCallback;
   float bar_scale_ = 1.0;
   float dpiScaleLayout = 1.0f;
   int m_hoverIndex = -1;

@@ -93,6 +93,7 @@ WeaselPanel::WeaselPanel(weasel::UI& ui)
       hide_candidates(false),
       pDWR(ui.pdwr()),
       _UICallback(ui.uiCallback()),
+      m_deleteCallback(ui.deleteCandidateCallback()),
       _m_gdiplusToken(0) {
   m_iconDisabled.LoadIconW(IDI_RELOAD, STATUS_ICON_SIZE, STATUS_ICON_SIZE,
                            LR_DEFAULTCOLOR);
