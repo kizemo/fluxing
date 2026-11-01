@@ -104,7 +104,7 @@ rem Note: SolutionDir must be the absolute path WITHOUT a trailing
 rem backslash (otherwise MSBuild parses the escaped quote wrong and
 rem the OutDir ends up nested under test\<name>\Release\ instead of
 rem the top-level Release\). See L31.
-for %%P in (test\TestDefaultHotkeys test\TestShiftSelectBinding test\TestBindingResolution test\TestResponseParser test\TestWeaselIPC test\TestYamlRoundTripE2E test\TestUserDictUpdate test\TestCandidateRButtonDown test\TestCandidateIgnoreFilter test\TestPanelDarkModeSubscribe test\TestTrayRestoreIgnored test\TestDarkModeBridge test\TestDarkModeBroadcast test\TestQuickPanelDialog test\TestFluxingComponents test\TestQuickPanelRefactor test\TestOrphanRecovery test\TestShiftIPCStateMachine test\TestShiftIPCWire test\TestPipeChannelRace test\TestHotkeyBindings test\TestServerCmdLine) do (
+for %%P in (test\TestDefaultHotkeys test\TestShiftSelectBinding test\TestBindingResolution test\TestResponseParser test\TestWeaselIPC test\TestYamlRoundTripE2E test\TestUserDictUpdate test\TestCandidateRButtonDown test\TestCandidateIgnoreFilter test\TestPanelDarkModeSubscribe test\TestTrayRestoreIgnored test\TestDarkModeBridge test\TestDarkModeBroadcast test\TestQuickPanelDialog test\TestFluxingComponents test\TestQuickPanelRefactor test\TestOrphanRecovery test\TestShiftIPCStateMachine test\TestShiftIPCWire test\TestPipeChannelRace test\TestHotkeyBindings test\TestServerCmdLine test\TestShortcutSettings) do (
     echo === Building %%P ===
     "%MSBUILD%" "%%P\%%~nP.vcxproj" /t:Build /p:Configuration=Release /p:Platform=Win32 /p:SolutionDir="%SOL_DIR%" /m:1 /nologo /v:minimal
     if !errorlevel! NEQ 0 set "FAIL=1"
@@ -116,7 +116,7 @@ rem but this is cheap insurance against future test code regression).
 rem TestWeaselIPC is intentionally NOT in this loop: it is an integration test
 rem that requires server-spawn + client + shutdown orchestration. See the
 rem dedicated TestWeaselIPC block below (spec 026).
-for %%E in (TestDefaultHotkeys TestShiftSelectBinding TestBindingResolution TestResponseParser TestYamlRoundTripE2E TestUserDictUpdate TestCandidateRButtonDown TestCandidateIgnoreFilter TestPanelDarkModeSubscribe TestTrayRestoreIgnored TestDarkModeBridge TestDarkModeBroadcast TestQuickPanelDialog TestFluxingComponents TestQuickPanelRefactor TestOrphanRecovery TestShiftIPCStateMachine TestShiftIPCWire TestPipeChannelRace TestServerCmdLine) do (
+for %%E in (TestDefaultHotkeys TestShiftSelectBinding TestBindingResolution TestResponseParser TestYamlRoundTripE2E TestUserDictUpdate TestCandidateRButtonDown TestCandidateIgnoreFilter TestPanelDarkModeSubscribe TestTrayRestoreIgnored TestDarkModeBridge TestDarkModeBroadcast TestQuickPanelDialog TestFluxingComponents TestQuickPanelRefactor TestOrphanRecovery TestShiftIPCStateMachine TestShiftIPCWire TestPipeChannelRace TestServerCmdLine TestShortcutSettings) do (
     echo === Running %%E.exe ===
     rem Use NEQ 0 (not "if errorlevel 1") because BOOST_ASSERT
     rem failures in optimized Release builds raise 0xC0000005 - signed
@@ -208,6 +208,12 @@ rem on the wire (plain focus-out vs "the user switched to another IME").
 rem It has to run while the mock server is still up, so it goes before /stop.
 echo === Running TestWeaselIPC.exe (/verify-focusout-flags) ===
 "Release\TestWeaselIPC.exe" /verify-focusout-flags < nul
+if !errorlevel! NEQ 0 set "FAIL=1"
+rem ADR 0027 / spec 096: the two FocusIn event kinds must be distinguishable
+rem on the wire (ordinary window focus vs "the user switched to Fluxing"), and
+rem the flag protocol table must be symmetric on both sides.
+echo === Running TestWeaselIPC.exe (/verify-focusin-flags) ===
+"Release\TestWeaselIPC.exe" /verify-focusin-flags < nul
 if !errorlevel! NEQ 0 set "FAIL=1"
 echo === Running TestWeaselIPC.exe (/verify-delete-body) ===
 "Release\TestWeaselIPC.exe" /verify-delete-body < nul

@@ -20,6 +20,7 @@ int client_main();
 int server_main();
 int verify_quickpanel_main();
 int verify_focusout_flags_main();
+int verify_focusin_flags_main();
 int verify_shift_body_main();
 int verify_delete_body_main();
 int verify_tsf_profile_main(bool allow_profile_switch,
@@ -66,6 +67,8 @@ int _tmain(int argc, _TCHAR* argv[]) {
     return verify_quickpanel_main();
   } else if (argc > 1 && !wcscmp(L"/verify-focusout-flags", argv[1])) {
     return verify_focusout_flags_main();
+  } else if (argc > 1 && !wcscmp(L"/verify-focusin-flags", argv[1])) {
+    return verify_focusin_flags_main();
   } else if (argc > 1 && !wcscmp(L"/verify-delete-body", argv[1])) {
     return verify_delete_body_main();
   } else if (argc > 1 && !wcscmp(L"/verify-tsf-profile", argv[1])) {
@@ -403,6 +406,19 @@ std::wstring focusout_record_path() {
   return exe_dir.substr(0, slash + 1) + L"focusout_param.txt";
 }
 
+// spec 096: FocusIn 的两类事件也要能在线上区分,记录文件与 FocusOut 同构。
+std::wstring focusin_record_path() {
+  wchar_t exe_path[MAX_PATH] = {0};
+  DWORD exe_len = GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+  if (exe_len == 0 || exe_len >= MAX_PATH)
+    return std::wstring();
+  std::wstring exe_dir(exe_path, exe_len);
+  size_t slash = exe_dir.find_last_of(L"\\/");
+  if (slash == std::wstring::npos)
+    return std::wstring();
+  return exe_dir.substr(0, slash + 1) + L"focusin_param.txt";
+}
+
 std::string read_text_file(const std::wstring& path) {
   if (path.empty())
     return std::string();
@@ -645,6 +661,33 @@ class TestRequestHandler : public weasel::RequestHandler {
   // line, so the client can read the values back and assert that
   // "switched away from Fluxing" and "the edit field lost focus" really
   // travel as different values.
+  // spec 096: FocusIn 的两类事件必须能在线上区分。
+  // 与 FocusOut 同构:把原始 wParam 逐行写进 focusin_param.txt。
+  virtual void FocusIn(DWORD param, DWORD session_id) override {
+    std::cerr << "FocusIn: " << session_id << " param=" << param << std::endl;
+    std::wstring exe_path_buf;
+    wchar_t exe_path[MAX_PATH] = {0};
+    DWORD exe_len = GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+    if (exe_len == 0 || exe_len >= MAX_PATH)
+      return;
+    std::wstring exe_dir(exe_path, exe_len);
+    size_t slash = exe_dir.find_last_of(L"\\/");
+    if (slash == std::wstring::npos)
+      return;
+    exe_dir = exe_dir.substr(0, slash + 1);
+    std::wstring record = exe_dir + L"focusin_param.txt";
+    HANDLE h = CreateFileW(record.c_str(), FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+      return;
+    std::string text = std::to_string(param) + "\n";
+    DWORD written = 0;
+    WriteFile(h, text.c_str(), static_cast<DWORD>(text.size()), &written, NULL);
+    FlushFileBuffers(h);
+    CloseHandle(h);
+  }
+
   virtual void FocusOut(DWORD param, DWORD session_id) override {
     std::cerr << "FocusOut: " << session_id << " param=" << param << std::endl;
     std::wstring exe_path_buf;
@@ -701,6 +744,165 @@ int server_main() {
 // 用户侧的现象是「右键 / Ctrl+Shift+数字 点了没反应,候选还在」——候选还在
 // 是因为客户端读到的还是上一次的响应。这个模式用 mock server 直接证明
 // DELETE 命令的响应里带得回新的状态。
+// spec 096 / ADR 0027: FocusIn 的两类事件必须能在线上区分,且两侧的位标志
+// 必须对称 —— 同一 bit 编号代表同一语义维度。
+//
+// 线上部分:mock server 把每次 FocusIn 的原始 wParam 写进 focusin_param.txt,
+// 客户端发两个 FocusIn(普通窗口焦点 / 切到火流猩),读回两个值必须不同。
+// 纯函数部分:协议表逐行断言对称性、取值、以及分类器优先级。
+// 判定口径与生产代码同一份实现(宪法 R7)。
+int verify_focusin_flags_main() {
+  // --- 1. 协议表的对称性 ---
+  size_t slot_count = 0;
+  const FocusFlagSlot* slots = FocusFlagProtocolTable(slot_count);
+  bool table_ok = (slot_count == 2);
+  bool dim_ok = true;
+  bool bit_ok = true;
+  bool sym_ok = true;
+  for (size_t i = 0; i < slot_count; ++i) {
+    if (slots[i].dimension == NULL || slots[i].dimension[0] == '\0')
+      dim_ok = false;
+    // 每一行都必须是单 bit
+    if (slots[i].in_bit == 0 || (slots[i].in_bit & (slots[i].in_bit - 1)) != 0)
+      bit_ok = false;
+    if (slots[i].out_bit == 0 || (slots[i].out_bit & (slots[i].out_bit - 1)) != 0)
+      bit_ok = false;
+    // 同一 bit 编号在两侧代表同一语义维度
+    if (slots[i].in_bit != slots[i].out_bit)
+      sym_ok = false;
+  }
+  // bit0 的取值必须与既有常量一致(线格式零变化的回归保护)
+  bool bit0_ok = slots[0].in_bit == WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED &&
+                 slots[0].out_bit == WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED;
+  bool bit1_ok = slots[1].in_bit == WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED &&
+                 slots[1].out_bit == WEASEL_IPC_FOCUS_OUT_FLAG_APP_FOCUS_LOST;
+  // 两个维度的名字不能重复
+  bool dim_unique =
+      (slot_count == 2) &&
+      (std::string(slots[0].dimension) != std::string(slots[1].dimension));
+
+  // --- 2. 分类器 ---
+  bool cls_ok =
+      ClassifyFocusIn(WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED) ==
+          FocusInKind::kProfileActivated &&
+      ClassifyFocusIn(WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED) ==
+          FocusInKind::kAppFocusGained &&
+      ClassifyFocusIn(0) == FocusInKind::kUnknown &&
+      // profile 优先:两个位同时在场时取更具体的那个
+      ClassifyFocusIn(WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED |
+                      WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED) ==
+          FocusInKind::kProfileActivated &&
+      ClassifyFocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED) ==
+          FocusOutKind::kProfileDeactivated &&
+      ClassifyFocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_APP_FOCUS_LOST) ==
+          FocusOutKind::kAppFocusLost &&
+      ClassifyFocusOut(0) == FocusOutKind::kUnknown;
+
+  // --- 3. 与 FocusOut 侧对称的判定函数 ---
+  bool show_ok =
+      ShouldShowQuickPanelOnFocusIn(WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED) &&
+      !ShouldShowQuickPanelOnFocusIn(WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED) &&
+      !ShouldShowQuickPanelOnFocusIn(0) &&
+      HasFocusInFlag(WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED,
+                     WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED) &&
+      HasFocusOutFlag(WEASEL_IPC_FOCUS_OUT_FLAG_APP_FOCUS_LOST,
+                      WEASEL_IPC_FOCUS_OUT_FLAG_APP_FOCUS_LOST);
+
+  // --- 4. 语义保护:应用失焦尊重常驻开关,切走输入法必收起 ---
+  // 加了 bit1 之后这两条必须与加之前完全一致(行为不变的回归保护)。
+  bool hide_ok =
+      !ShouldHideQuickPanelOnFocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_APP_FOCUS_LOST, true) &&
+      ShouldHideQuickPanelOnFocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_APP_FOCUS_LOST, false) &&
+      ShouldHideQuickPanelOnFocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED, true);
+
+  if (!(table_ok && dim_ok && bit_ok && sym_ok && bit0_ok && bit1_ok && dim_unique &&
+        cls_ok && show_ok && hide_ok)) {
+    std::cerr << "[FOCUSIN] FAIL table=" << table_ok << dim_ok << bit_ok
+              << sym_ok << bit0_ok << bit1_ok << dim_unique
+              << " cls=" << cls_ok << " show=" << show_ok
+              << " hide=" << hide_ok << std::endl;
+    return -2;
+  }
+
+  weasel::Client client;
+  if (!client.Connect()) {
+    std::cerr << "[FOCUSIN] connect failed" << std::endl;
+    return -3;
+  }
+  client.StartSession();
+  if (!client.Echo()) {
+    std::cerr << "[FOCUSIN] session failed" << std::endl;
+    return -4;
+  }
+
+  // Identity probe: the mock server answers a key event with the "Greeting="
+  // marker, while a real WeaselServer.exe answers with a full
+  // "action=status,ctx,config" block. Without this check the test could
+  // silently measure whatever process happens to own the named pipe.
+  std::wstring probe_body;
+  client.ProcessKeyEvent(weasel::KeyEvent(L'a', 0));
+  client.GetResponseData([&probe_body](LPWSTR buffer, DWORD length) -> bool {
+    probe_body.assign(buffer, length);
+    return true;
+  });
+  if (probe_body.find(L"Greeting=") == std::wstring::npos) {
+    std::cerr << "[FOCUSIN] FAIL: the named pipe is served by another process, "
+                 "not the TestWeaselIPC mock server."
+              << std::endl;
+    client.EndSession();
+    return -8;
+  }
+
+  std::wstring record = focusin_record_path();
+  if (record.empty()) {
+    std::cerr << "[FOCUSIN] FAIL: cannot resolve the exe directory" << std::endl;
+    client.EndSession();
+    return -7;
+  }
+
+  // Start from a clean record: a leftover file from an earlier run would
+  // make the baseline depend on the previous execution.
+  DeleteFileW(record.c_str());
+  int baseline = count_lines(read_text_file(record));
+
+  // 1. the ordinary window focus event carries APP_FOCUS_GAINED
+  client.FocusIn(WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED);
+  bool got_app = wait_focusout_lines(record, baseline + 1, 5000);
+  std::string app_line =
+      got_app ? nth_line(read_text_file(record), baseline) : std::string();
+
+  // 2. the profile activation carries PROFILE_ACTIVATED
+  client.FocusIn(WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED);
+  bool got_profile = wait_focusout_lines(record, baseline + 2, 5000);
+  std::string profile_line =
+      got_profile ? nth_line(read_text_file(record), baseline + 1)
+                  : std::string();
+
+  client.EndSession();
+
+  bool app_is_set =
+      (app_line == std::to_string(WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED));
+  bool profile_is_set =
+      (profile_line == std::to_string(WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED));
+  bool distinct =
+      !app_line.empty() && !profile_line.empty() && (app_line != profile_line);
+
+  std::cout << "[FOCUSIN] app=[" << app_line << "] profile=[" << profile_line
+            << "]" << std::endl;
+
+  if (got_app && got_profile && app_is_set && profile_is_set && distinct) {
+    std::cout << "[FOCUSIN] PASS: the FocusIn event kinds are distinguishable "
+                 "on the wire and the flag protocol table is symmetric"
+              << std::endl;
+    return 0;
+  }
+  std::cerr << "[FOCUSIN] FAIL got_app=" << got_app << " got_profile="
+            << got_profile << " app_is_set=" << app_is_set
+            << " profile_is_set=" << profile_is_set << " distinct=" << distinct
+            << std::endl;
+  return -4;
+}
+
 int verify_delete_body_main() {
   // spec 094: 「切走到别的输入法」时 TSF 投递的是 (别的 clsid, TRUE),而不是
   // (自己 clsid, FALSE)。判定表抽成共享纯函数,这里逐条断言;生产代码

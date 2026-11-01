@@ -176,6 +176,152 @@ static void TestYamlBomAndCrlf() {
   EXPECT(rest.find("\r\n") != std::string::npos);
 }
 
+// ===== spec 095: 「快捷面板常驻」勾选框 =====
+// T-A: 共享头纯函数 —— 状态格式 / 解析 / 三态读 / 写盘回读自证 / 主旧落点优先级
+// T-B: 生产 API 往返 —— ShortcutSettings::AlwaysShowChecked / SetAlwaysShowChecked
+//      (与设置面板勾选框走同一实现,constitution R7)
+//
+// 铁律: 落点必须先注入临时路径 —— 绝不写真实用户目录里的 quickpanel.state。
+
+static std::wstring TempStatePath(const wchar_t* name) {
+  wchar_t dir[MAX_PATH] = {0};
+  DWORD n = ::GetTempPathW(MAX_PATH, dir);
+  if (n == 0 || n >= MAX_PATH)
+    return std::wstring();
+  return std::wstring(dir) + name;
+}
+
+static bool ReadRaw(const std::wstring& path, std::string& out) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f)
+    return false;
+  out.assign((std::istreambuf_iterator<char>(f)),
+             std::istreambuf_iterator<char>());
+  return true;
+}
+
+// T-A1 — 状态行格式与解析
+static void TestAlwaysShowStateFormat() {
+  using namespace fluxing::always_show;
+  EXPECT(FormatStateLine(true) == "always_show=1\n");
+  EXPECT(FormatStateLine(false) == "always_show=0\n");
+
+  std::optional<bool> on = ParseStateLine("always_show=1");
+  EXPECT(on.has_value() && *on);
+  std::optional<bool> off = ParseStateLine("always_show=0");
+  EXPECT(off.has_value() && !*off);
+  // 容忍尾部 \r / \n
+  std::optional<bool> crlf = ParseStateLine("always_show=1\r\n");
+  EXPECT(crlf.has_value() && *crlf);
+  // 不认识的内容 ⇒ nullopt(注意:这与「文件缺失」不是一回事)
+  EXPECT(!ParseStateLine("garbage").has_value());
+  EXPECT(!ParseStateLine("always_show=2").has_value());
+  EXPECT(!ParseStateLine("").has_value());
+}
+
+// T-A2 — 三态读: 缺失 / 空文件 / 读到一行
+static void TestAlwaysShowStateReadTriState() {
+  using namespace fluxing::always_show;
+  const std::wstring p = TempStatePath(L"fluxing_ts_tristate.state");
+  ::DeleteFileW(p.c_str());
+  std::string line;
+  EXPECT(ReadStateLine(p, line) == StateReadStatus::kMissing);
+
+  { std::ofstream f(p, std::ios::binary); }  // 0 字节
+  EXPECT(ReadStateLine(p, line) == StateReadStatus::kEmpty);
+
+  {
+    std::ofstream f(p, std::ios::binary);
+    f << "always_show=1\n";
+  }
+  EXPECT(ReadStateLine(p, line) == StateReadStatus::kRead);
+  EXPECT(line == "always_show=1");
+  ::DeleteFileW(p.c_str());
+}
+
+// T-A3 — 写盘 + 回读自证(本仓铁律)
+static void TestAlwaysShowStateWriteRoundTrip() {
+  using namespace fluxing::always_show;
+  const std::wstring p = TempStatePath(L"fluxing_ts_roundtrip.state");
+  ::DeleteFileW(p.c_str());
+  EXPECT(WriteStateFile(p, true));
+  std::string raw;
+  EXPECT(ReadRaw(p, raw) && raw == "always_show=1\n");
+  std::optional<bool> back = ReadStateFile(p);
+  EXPECT(back.has_value() && *back);
+
+  EXPECT(WriteStateFile(p, false));
+  EXPECT(ReadRaw(p, raw) && raw == "always_show=0\n");
+  back = ReadStateFile(p);
+  EXPECT(back.has_value() && !*back);
+  ::DeleteFileW(p.c_str());
+}
+
+// T-A4 — 主 / 旧落点优先级(与 ADR 0020 的旧实现逐条等价)
+static void TestAlwaysShowResolveFromFiles() {
+  using namespace fluxing::always_show;
+  const std::wstring primary = TempStatePath(L"fluxing_ts_primary.state");
+  const std::wstring legacy = TempStatePath(L"fluxing_ts_legacy.state");
+  ::DeleteFileW(primary.c_str());
+  ::DeleteFileW(legacy.c_str());
+
+  // 都读不到 ⇒ 默认常驻(spec 089 / ADR 0022)
+  EXPECT(ResolveAlwaysShowFromFiles(primary, legacy, true));
+  // primary 缺失 ⇒ 读 legacy 兜底(存量勾选不丢)
+  {
+    std::ofstream f(legacy.c_str(), std::ios::binary);
+    f << "always_show=1\n";
+  }
+  EXPECT(ResolveAlwaysShowFromFiles(primary, legacy, true));
+  // primary 优先
+  {
+    std::ofstream f(primary.c_str(), std::ios::binary);
+    f << "always_show=0\n";
+  }
+  EXPECT(!ResolveAlwaysShowFromFiles(primary, legacy, true));
+  // 读到但内容不认识 ⇒ 不回落 legacy(旧实现语义,TestQuickPanelDialog T13h)
+  {
+    std::ofstream f(primary.c_str(), std::ios::binary);
+    f << "garbage!";
+  }
+  EXPECT(!ResolveAlwaysShowFromFiles(primary, legacy, true));
+  // legacy 传空串 ⇒ 不兜底
+  ::DeleteFileW(primary.c_str());
+  EXPECT(ResolveAlwaysShowFromFiles(primary, L"", true));
+  ::DeleteFileW(legacy.c_str());
+}
+
+// T-B — 生产 API 往返(不建窗口): 设置面板勾选框走的就是这一条路径
+static void TestAlwaysShowProductionApi() {
+  using namespace fluxing::always_show;
+  const std::wstring p = TempStatePath(L"fluxing_ts_api.state");
+  ::DeleteFileW(p.c_str());
+  // 注入落点: 绝不能写真实用户目录里的 quickpanel.state
+  StatePathOverrideRef() = p;
+  SetAlwaysShowFlag(false);
+
+  EXPECT(!ShortcutSettings::AlwaysShowChecked());
+  ShortcutSettings::SetAlwaysShowChecked(true);
+  EXPECT(ShortcutSettings::AlwaysShowChecked());
+  std::string raw;
+  EXPECT(ReadRaw(p, raw) && raw == "always_show=1\n");
+  // 状态能通过落盘读回来(与重启后恢复同一条路径)
+  EXPECT(ResolveAlwaysShowFromFiles(p, L"", false));
+
+  ShortcutSettings::SetAlwaysShowChecked(false);
+  EXPECT(!ShortcutSettings::AlwaysShowChecked());
+  EXPECT(ReadRaw(p, raw) && raw == "always_show=0\n");
+
+  // 同值重复设置 ⇒ 不重复写盘(内容仍是最后一次的合法值)
+  ShortcutSettings::SetAlwaysShowChecked(false);
+  EXPECT(ReadRaw(p, raw) && raw == "always_show=0\n");
+
+  // 收尾: 清注入 + 复位运行期状态
+  StatePathOverrideRef() = L"";
+  SetAlwaysShowFlag(false);
+  ::DeleteFileW(p.c_str());
+}
+
 }  // namespace test
 
 int wmain(int /*argc*/, wchar_t** /*argv*/) {
@@ -189,6 +335,11 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
   TestHotkeyActionEnum();
   TestCapturingStateVars();
   TestYamlBomAndCrlf();
+  TestAlwaysShowStateFormat();
+  TestAlwaysShowStateReadTriState();
+  TestAlwaysShowStateWriteRoundTrip();
+  TestAlwaysShowResolveFromFiles();
+  TestAlwaysShowProductionApi();
   std::wcout << L"[TestShortcutSettings] PASS=" << s_pass
               << L" FAIL=" << s_fail << std::endl;
   return s_fail == 0 ? 0 : 1;
