@@ -1,5 +1,45 @@
 ## [Unreleased]
 
+### feat(fluxing): 「快捷面板常驻」开关收进统一设置面板（spec 095 / ADR 0026）
+
+- **统一设置面板现在有「界面」分组**（`WeaselServer/ShortcutSettings.{h,cpp}`）：
+  窗口标题与自绘标题改为「设置」，副标题改为「快捷键与界面设置 · N 条快捷键」；
+  在工具栏行之后、状态行之前新增「界面」分组，内含「快捷面板常驻」复选框
+  （控件 ID 2130，`BS_AUTOCHECKBOX`）。复选框初值取运行期状态，勾选/取消立即落盘。
+- **常驻态只剩一处真相**（`include/FluxingAlwaysShow.h`，新）：运行期状态、落盘、
+  读盘策略、路径解析下沉到 header-only 共享头；`QuickPanelDialog::s_mode` 被删除，
+  不再有第二真源。写盘后**回读自证**，读回不一致就删掉坏文件。
+- **视觉副作用经观察者承担**：切出常驻时 alpha 复位为满值、常驻开启时重绘面板，
+  由 `QuickPanelDialog` 注册的 `ModeChangedCallback` 处理；共享头不依赖任何 UI 头。
+- **顺带修好设置面板的中文乱码**（lessons L162）：`ShortcutSettings.cpp` 里的中文
+  此前是逐字节 `\xNN` 写进宽字面量的（MSVC 不重组宽字面量里的字节转义 ⇒
+  装机后全是乱码），现还原为真 UTF-8。
+- ⚠️ **语义差异**：复选框只改状态与持久化，**不主动显示/隐藏面板**；
+  托盘菜单的「开⇒显示／关⇒收起」语义不变。
+- **回归测试**：`test/TestShortcutSettings` 新增 5 组用例（格式/解析、三态读、
+  写盘回读自证、主旧落点优先级、生产 API 往返），落点经 `StatePathOverrideRef()`
+  注入临时目录，**绝不写真实用户目录**；既有 `TestQuickPanelDialog` 断言一行未改
+  仍全绿（等价性的机器证据）。
+
+### feat(fluxing): FocusIn / FocusOut 的位标志收敛成一张对称协议表（spec 096 / ADR 0027）
+
+- **两侧的位标志现在收敛在一张表里**（`include/WeaselIPC.h`）：新增 `FocusFlagSlot` +
+  `FocusFlagProtocolTable(size_t&)`，规定「**同一 bit 编号在两侧代表同一语义维度**」——
+  bit0 = 输入法激活状态，bit1 = 应用窗口焦点。新增维度只能加行，不允许单侧加位。
+- **FocusIn 侧补上正向位标志**：`WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED = 1u << 1`
+  与 `WEASEL_IPC_FOCUS_OUT_FLAG_APP_FOCUS_LOST = 1u << 1` 成对加入；
+  普通窗口焦点事件（`WeaselTSF::OnSetFocus`）不再发 `wParam = 0`。
+- **两侧判定对称化**：新增 `ClassifyFocusIn` / `ClassifyFocusOut` /
+  `ShouldShowQuickPanelOnFocusIn`，与既有的 `ShouldHideQuickPanelOnFocusOut` 同构；
+  `RimeWithWeaselHandler::FocusIn` 不再自己写位与运算。
+- **IPC 线格式零变化**（命令号 / 字段布局不变）：旧客户端发 0 ⇒ 判为 `kUnknown` ⇒
+  行为与今天完全一致；旧服务端只认 bit0 ⇒ 收到 bit1 仍是旧语义。**双向安全降级**。
+- **回归测试**：`test/TestWeaselIPC` 新增 `/verify-focusin-flags`，线上断言两类
+  FocusIn 事件走不同的 wParam，纯函数断言协议表逐行对称、bit0 取值不变
+  （线格式零变化的回归保护）、分类器优先级，以及「应用失焦尊重常驻开关 /
+  切走输入法必收起」的行为不变。
+- **deployer 端豁免**：`WeaselDeployer` 没有 `RequestHandler` 实现，不消费 FocusIn/FocusOut。
+
 ### fix(fluxing): 切到别的输入法后快捷设置栏不消失；候选词无法从词典删除（spec 094）
 
 - **切到别的输入法后快捷设置栏现在会消失**（`WeaselTSF/WeaselTSF.cpp`、`include/WeaselIPC.h`，

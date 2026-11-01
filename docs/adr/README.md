@@ -39,6 +39,8 @@ Do not dump all ADRs into every prompt.
 | 0023 | 0023. Shift 选词改走页内索引 + 候选屏蔽的过滤点上移到服务端 | `docs/adr/0023-shift-page-local-select-and-server-side-candidate-ignore.md` | Accepted |
 | 0024 | 0024. 快捷设置栏的显隐跟随输入法激活状态（并从语言栏菜单移除「快速面板常驻」） | `docs/adr/0024-quickpanel-visibility-follows-ime-activation.md` | Proposed |
 | 0025 | 0025. 切走输入法的判定表抽成共享纯函数；删词 IPC 回 body；前端按物理键位拦截 Ctrl+Shift+数字 | `docs/adr/0025-profile-notify-decision-table-and-delete-candidate-body.md` | Accepted |
+| 0026 | 0026. 快捷面板「常驻」开关收进统一设置面板；运行期状态与落盘策略下沉共享头 | `docs/adr/0026-quickpanel-always-show-setting-in-unified-panel.md` | Accepted |
+| 0027 | 0027. FocusIn / FocusOut 的位标志收敛成一张对称协议表 | `docs/adr/0027-focusin-focusout-symmetric-flag-protocol-table.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and
