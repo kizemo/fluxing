@@ -338,8 +338,10 @@ A release is the only time the following files are touched **together**:
    CI) the build falls back to them, and the build number is derived from the
    fork's own `v<version>` tag. Bump them together with the CHANGELOG entry
    and the git tag, or CI keeps shipping the previous line. (L145)
-5. `release/fluxing-<FLUXING_VERSION>.<WEASEL_BUILD>-installer.exe` —
+5. `release/fluxing-<FLUXING_VERSION>-installer.exe` —
    copy from `output/archives/` after a successful `xbuild.bat installer`.
+   装包名是**三段** (ADR 0012): 第四段 `WEASEL_BUILD` 只进 Windows 资源
+   版本号与内部版本化 shim 名, **不进包名**; 见 §4.7 与 L165.
 
 `weasel.props` and `env.bat` are in `.gitignore` — **those version bump
 files do NOT get committed**. The release commit records the version in
