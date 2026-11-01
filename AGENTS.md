@@ -16,15 +16,15 @@
 
 | Concern | Location | Notes |
 |---|---|---|
-| Source root | `F:\soft\00selfmade\rime` (Windows) | Project lives on `F:`, Boost on `F:\b183`. |
+| Source root | `F:\soft\00selfmade\rime_claude` (Windows) | Project lives on `F:`, Boost on `F:\b183`. |
 | Active branch | `Fluxing` | Brand-fork worktree (P8 in constitution). `master` tracks upstream rime/weasel. |
 | Remotes | `kizemo` (this fork), `origin` (rime/weasel) | Push to `kizemo`. Do not push to `origin` directly. |
 | Build system | Visual Studio (`weasel.sln`) OR `xmake` (`xbuild.bat`) OR `build.bat` (msbuild wrapper) | CI matrix runs both. Local devs pick one; see §3. |
 | Submodule | `librime/` (git submodule) | **Never** edit inside `librime/` without a separate PR. |
 | Vendored ext | `thirdparty/librime-lua/` | Tracked in git. Hooked into librime build via `scripts/prepare-librime-lua.bat`. See L10. |
 | Constitution | `.specify/memory/constitution.md` | Binding principles. Read first, follow always. |
-| Specs | `.specify/specs/NNN-*/` (11 active specs as of 0.18.2.0) | spec/plan/tasks per spec-init. |
-| Lessons | `.specify/memory/lessons-learned.md` (L01-L15) | Each L## is a post-mortem. Read before any non-trivial fix. |
+| Specs | `.specify/specs/NNN-*/` | spec/plan/tasks 三件套 per spec-init; 新增走 spec-init 技能。 |
+| Lessons | `.specify/memory/lessons-learned.md` (L01-L166) | Each L## is a post-mortem. Read before any non-trivial fix. |
 | Installer script | `output/install.nsi` | Tracked. **NSIS BOM required** (L09). |
 | User-visible strings | `output/data/*.yaml`, `*.rc` | All user-facing strings stay in Simplified Chinese (P2/P5). |
 | Test code | `test/TestDefaultHotkeys/`, `test/TestResponseParser/`, `test/TestWeaselIPC/` | Built via `weasel.sln` (msbuild) only. xmake path is build-only. |
@@ -117,8 +117,10 @@ introduce surprises).
 
 ```powershell
 $dst = "C:\TEMP\fluxing-test"
-$ver = "0.18.3"   # <-- bump to current FLUXING_VERSION
-$installer = ".\release\fluxing-$ver.0-installer.exe"
+$ver = "1.1.6"   # <-- bump to current FLUXING_VERSION
+# ADR 0012: 公开包名是三段 (major.minor.patch); 第四段 WEASEL_BUILD 只进
+# Windows 资源与内部版本化 shim 名, 不进包名。
+$installer = ".\output\archives\fluxing-$ver-installer.exe"
 
 # 1. Clean test root
 Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue
@@ -422,8 +424,10 @@ $head = [System.IO.File]::ReadAllBytes("output\install.nsi")[0..2]
 Also:
 - 100% CRLF line endings. Lone `\r` (Mac classic) is tolerated but
   inconsistent; lone `\n` is wrong.
-- `OutFile` must be `archives\fluxing-${FLUXING_VERSION}.${WEASEL_BUILD}-installer.exe`
-  — never hard-code a version.
+- `OutFile` must be `archives\fluxing-${FLUXING_VERSION}-installer.exe`
+  — never hard-code a version. 公开包名是**三段** (major.minor.patch): ADR 0012
+  明写第四段 `WEASEL_BUILD` 只进 Windows 资源与内部版本化 shim 名, 不进包名。
+  门禁的选包正则必须与这个约定一致, 否则一个包都选不出来 (L165)。
 - `MUI_ICON ..\resource\weasel.ico` is **cwd-relative**, not
   install.nsi-relative. `xbuild.bat` cds to `output/` before invoking
   makensis to make this work. (L10 §4)

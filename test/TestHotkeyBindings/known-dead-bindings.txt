@@ -23,6 +23,16 @@
 #                the same function, so the duplicates are gone from the
 #                shipped configuration instead of being registered here.
 #
+#   spec 097 / L163: those two remaining twins were themselves moved out
+#                of the Ctrl+Shift+<digit> family as well, because they
+#                collided with the conditional candidate-delete shortcut:
+#                the delete path only intercepts when the candidate window
+#                is open with that many visible candidates, while the two
+#                toggles were unconditional, so every failed delete
+#                silently flipped the punctuation state. ascii_punct now
+#                lives on Control+period and traditionalization on
+#                Control+slash; the digit family belongs to delete alone.
+#
 #   4 entries -> ADR 0009 / L149: the four Shift+punctuation bindings
 #                were renamed to the character key names the front end
 #                actually sends:
