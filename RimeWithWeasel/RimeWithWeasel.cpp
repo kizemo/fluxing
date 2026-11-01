@@ -514,7 +514,16 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
   // process (spec 055 bug 2 root cause).
   //
   // This branch deliberately does NOT touch m_active_session.
-  if (client_caps & WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED) {
+  // spec 096 / ADR 0027: 判定改用共享纯函数,与 FocusOut 侧的
+  // ShouldHideQuickPanelOnFocusOut 同构(宪法 R7)。
+  //
+  //   kProfileActivated => 用户刚切到火流猩 => 请求显示快捷面板
+  //   kAppFocusGained   => 普通的窗口获得焦点 => 不显示,只更新 UI
+  //   kUnknown          => 老客户端发 0 => 与今天完全一致
+  //
+  // profile 位与 app-focus 位同时在场时取 profile 优先。
+  const FocusInKind focus_kind = ClassifyFocusIn(client_caps);
+  if (ShouldShowQuickPanelOnFocusIn(client_caps)) {
     if (m_active_session != 0 && ipc_id != m_active_session) {
       DLOG(INFO) << "profile activated ignored, not the active session";
       return;
@@ -524,6 +533,8 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
       m_onShowQuickPanel();
     return;
   }
+  if (focus_kind == FocusInKind::kAppFocusGained)
+    DLOG(INFO) << "app focus gained, ordinary window focus";
   // v0.19.0.52 (Phase K3 T011 Option B): 抓 user foreground。
   // 此刻: WeaselTSF.dll 已通过 IPC 通知 server 端 user 在 edit field 输入 →
   // server FocusIn handler 在 IPC worker thread 跑 → GetForegroundWindow()
