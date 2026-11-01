@@ -195,18 +195,25 @@ int main(int argc, char** argv) {
   check("旧 = 翻页 (equal Page_Down) 已替换",
         !Contains(content, "accept: equal, send: Page_Down"));
 
-  // F1 切换中英标点 / 简繁: Control+Shift+numbersign / dollar
+  // F1 切换中英标点 / 简繁: Control+period / Control+slash
   // ADR 0009 (L148): an accept: pattern with a modifier has to name the
   // CHARACTER the chord produces, not the base key. The number chords
   // asked for '9' / '0' while the TSF front end sends '(' / ')' => they
   // could never fire and were deleted from default.yaml; the reachable
   // twins below carry the function.
-  check("切换中英标点 = Control+Shift+numbersign",
-        Contains(content,
-                 "toggle: ascii_punct, accept: Control+Shift+numbersign"));
-  check("切换简繁 = Control+Shift+dollar",
-        Contains(content,
-                 "toggle: traditionalization, accept: Control+Shift+dollar"));
+  // spec 097 / L163: those twins were moved out of the Control+Shift+<digit>
+  // family as well, because that family belongs to the candidate-delete
+  // shortcut (spec 094). The two toggles were unconditional, so every
+  // delete that had nothing to delete silently flipped the punctuation
+  // state and the flip stuck (ascii_punct carries no reset, on purpose).
+  check("切换中英标点 = Control+period",
+        Contains(content, "toggle: ascii_punct, accept: Control+period"));
+  check("切换简繁 = Control+slash",
+        Contains(content, "toggle: traditionalization, accept: Control+slash"));
+  check("旧 Control+Shift+numbersign 已让出数字族 (spec 097)",
+        !Contains(content, "accept: Control+Shift+numbersign"));
+  check("旧 Control+Shift+dollar 已让出数字族 (spec 097)",
+        !Contains(content, "accept: Control+Shift+dollar"));
   check("死绑定 Control+Shift+9 已删除 (ADR 0009)",
         !Contains(content, "accept: Control+Shift+9"));
   check("死绑定 Control+Shift+0 已删除 (ADR 0009)",

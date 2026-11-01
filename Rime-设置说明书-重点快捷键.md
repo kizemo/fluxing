@@ -572,8 +572,8 @@ key_binder:
     - {when: composing, accept: "Alt+Right",  send: Shift+Right}
 
     # === 切换中英标点 (始终生效) ===
-    - {when: always, accept: "Control+Shift+numbersign", toggle: ascii_punct}
-    - {when: always, accept: "Control+Shift+dollar", toggle: traditionalization}
+    - {when: always, accept: "Control+period", toggle: ascii_punct}
+    - {when: always, accept: "Control+slash", toggle: traditionalization}
 
     # === 切换 ASCII 模式 (始终生效) ===
     - {when: always, accept: "Control+grave", toggle: ascii_mode}
@@ -725,8 +725,8 @@ Rime `default.yaml` 中**默认的 key_binder/bindings**(小狼毫/鼠鬚管通�
 | 翻页 | `equal` | `Page_Down` | paging | `=` 向后翻 |
 | 翻页 | `comma` | `Page_Up` | paging | `,` 向前翻 |
 | 翻页 | `period` | `Page_Down` | has_menu | `.` 向后翻 |
-| 开关 | `Control+Shift+numbersign` | toggle ascii_punct | always | 切中英标点 |
-| 开关 | `Control+Shift+dollar` | toggle traditionalization | always | 切繁简 |
+| 开关 | `Control+period` | toggle ascii_punct | always | 切中英标点（`Ctrl+.`）|
+| 开关 | `Control+slash` | toggle traditionalization | always | 切繁简（`Ctrl+/`）|
 | 开关 | `Shift+space` | toggle ascii_mode | always | 切中英 |
 | 选字 | (由 selector 默认) | `1`~`9` 选候选 | has_menu | 数字键选字 |
 | 选字 | `space` | confirm | has_menu | 空格确认 |
@@ -742,8 +742,17 @@ Rime `default.yaml` 中**默认的 key_binder/bindings**(小狼毫/鼠鬚管通�
 >
 > ⚠️ **ADR 0009(2026-10-25)**:本 fork 的 TSF 前端发的是「按键产生的字符」,
 > 所以 `Control+Shift+9` / `Control+Shift+0` 这类**写数字键名**的组合**永远不触发**
-> ⇒ 已从出货 `default.yaml` 删除。切中英标点用 `Control+Shift+numbersign`,
-> 切简繁用 `Control+Shift+dollar`。
+> ⇒ 已从出货 `default.yaml` 删除。
+>
+> ⚠️ **spec 097 / L163(2026-11-01)**:ADR 0009 当时把这两条挪到了「可达的孪生键」
+> `Control+Shift+numbersign` / `Control+Shift+dollar` —— 也就是 `Ctrl+Shift+3` /
+> `Ctrl+Shift+4`。但 spec 094 之后 `Ctrl+Shift+1..9` 整族归了「从词库删除当前页
+> 第 N 个候选」。前端只在候选窗可见且 N 落在本页时才拦截,否则按设计放行
+> (`WeaselTSF/KeyEventSink.cpp:79-96`),于是用户按 `Ctrl+Shift+3` 想删词却把
+> `ascii_punct` 静默翻成 ON;又因 `ascii_punct` 刻意不带 `reset:`,这个翻转**会记住**,
+> 表现为「中文一直打英文标点」。两条 toggle 已移到 RIME 社区键位
+> `Control+period`(`Ctrl+.`,切中英标点)/ `Control+slash`(`Ctrl+/`,切简繁);
+> `Ctrl+Shift+1..9` 现在由删词功能独占。
 >
 > ⚠️ **ADR 0009(2026-10-26)**:同一条规则也适用于 `Shift+标点` —— `accept` 必须写
 > **这个组合键产生的字符**的键名（`Shift+quotedbl` / `Shift+bar` /
@@ -780,10 +789,11 @@ key_binder:
     - {accept: period, send: Page_Down, when: has_menu}  # . = 下一页
 
     # --- 开关 (保留 default) ---
-    # ADR 0009:带修饰键的 accept 必须写「该组合产生的字符」的键名,
-    # 所以切中英标点是 Control+Shift+numbersign(#),切简繁是 Control+Shift+dollar($)。
-    - {accept: "Control+Shift+numbersign", toggle: ascii_punct, when: always}
-    - {accept: "Control+Shift+dollar",     toggle: traditionalization, when: always}
+    # ADR 0009:带修饰键的 accept 必须写「该组合产生的字符」的键名。
+    # spec 097 / L163:原先的 Control+Shift+numbersign / Control+Shift+dollar
+    # 就是 Ctrl+Shift+3 / Ctrl+Shift+4,与 spec 094 的删词快捷键撞车,已移走。
+    - {accept: "Control+period", toggle: ascii_punct, when: always}
+    - {accept: "Control+slash",  toggle: traditionalization, when: always}
 
     # --- 小键盘 (保留 default, 16 条) ---
     - {accept: KP_0,         send: 0,        when: composing}
@@ -903,7 +913,7 @@ patch:
 | 中文标点怎么输都不对 | `recognizer/patterns/punct` 覆盖了 `punctuator` | 把 `key_binder` 放 `engine/processors` 头部 |
 | `Shift+Tab` 没用 | modifier 顺序错(应该是 `Shift+Tab` 不是 `Tab+Shift`) | 固定修饰符顺序:Shift → Control → Alt |
 | 单独 Shift 切不了中英 | 前端把 Shift 整段吃掉,librime 根本看不到它;本 fork 的 `ascii_composer/switch_key` 又是 `noop` | **0.21.0.9 起已修好**（ADR 0010）：候选窗没开时裸 Shift 切中英;开着时仍选第 2/3 候选。改 `weasel.yaml` 的 `bare_shift_toggles_ascii: false` 可关闭 |
-| `Ctrl+Shift+9` 切不动标点 | 前端发的是 `(` 不是 `9`,这个组合**永远不触发** | 用 `Control+Shift+numbersign`(ADR 0009) |
+| `Ctrl+Shift+9` 切不动标点 | 前端发的是 `(` 不是 `9`,这个组合**永远不触发** | 不要用 `Ctrl+Shift+数字` 族;它已归删词功能(spec 094)。切标点用 `Control+period`(ADR 0009 + spec 097) |
 | `Control+grave` 没用 | 大小写或修饰符拼错 | 用字面字符时**加引号** |
 | `bindings: [a, b, c]` 整段失效 | 写成 list,不是 list of map | 写成 `- {when:..., accept:...}` |
 

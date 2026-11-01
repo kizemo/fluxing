@@ -13142,3 +13142,43 @@ L148、L131、L113
   并且要自证「校验器有牙」：篡改一处必须让校验器失败。
 - 编译期看不出问题 ⇒ 必须在**真机装机**后看界面。
   本次是 spec 095 要交付设置面板时才发现它其实是乱码的。
+
+## L163 - **两个功能共用同一族 chord 时，「条件性拦截」的那一个会让另一个静默误触**（2026-11-01）
+
+**现象**：用户按 `Ctrl+Shift+3` 想「从词库删除候选窗中对应次序的词」，结果没删词，
+反而变成「中文一直打英文标点」—— 看上去像 `ascii_punct` 开关卡住了。
+
+**根因**：`Ctrl+Shift+<数字>` 这一族键被两个功能同时声明，而两者的触发条件不对称。
+
+- 删词（spec 094）声明整族 `Ctrl+Shift+1..9`，但**只在候选窗确实可见、且序号落在当前页
+  可见候选范围内时才拦截**（`WeaselTSF/KeyEventSink.cpp:79-96` →
+  `ShouldInterceptCandidateDelete`）。这是刻意保守的设计：不能抢掉 Rime 自己的键。
+- `key_binder` 声明 `Control+Shift+numbersign → toggle ascii_punct`，`when: always`，**无条件**。
+- 候选窗没开 ⇒ 前端按设计放行 ⇒ librime 命中 `when: always` ⇒ `ascii_punct` 被静默翻到 ON。
+- 又因为 `switches` 里 `ascii_punct` 刻意不设 `reset`（`output/data/default.yaml:39`：
+  「需要记忆的开关不能设定 reset」），这个误翻状态**被记住**，一次误触变成持续故障。
+
+**修法**：把两条无条件 toggle 搬出 `Ctrl+Shift+数字` 家族，让删词独占该族。
+新键位取仓库自己早已写好并注释掉的 `optimized_mode_switch` 块（引用 RIME 社区默认）：
+`ascii_punct` → `Control+period`，`traditionalization` → `Control+slash`。
+
+**教训**：
+
+- **「条件性拦截 + 无条件兜底」共用一族键 = 必然误触**。条件不满足时按键不会消失，
+  它会落到兜底那一条上。给一个功能分配键族时，必须确认这族里没有别的**无条件**声明；
+  有就把无条件的那条搬走，不要指望「用户不会在候选窗关着的时候按」。
+- **`reset` 的缺失会放大误触后果**。不设 `reset` 本身是对的（记忆型开关必须记），
+  但它意味着任何一次误翻都是**持久**的 ⇒ 记忆型开关尤其不能被放在易误触的键位上。
+- **报障里的功能名可能不是真实功能名**。用户说「切换全半角」，实际是「切换中英标点」：
+  `full_shape`（全半角）在本 fork 根本没有热键（两条绑定一直是注释状态）。
+  按用户给的词去查会一路查空 —— 要用**键位**反查功能，不要用功能名反查键位。
+- **别在错误的层找根因**。本次先排掉三条死路才定位到键位：`punctuator/half_shape` 映射表
+  （`build/double_pinyin_sogou.schema.yaml:177-209` 全角映射完全正确）、
+  `style/inline_preedit`（标点转换发生在 librime punctuator 内部，与 preedit 无关）、
+  「开关卡住」（开关是好的，是被合法翻过去的）。判别性证据是「候选窗关着时按才有事」，
+  这条一开始就该问。
+- **YAML-only 的改动也要跑门禁**：`Release\TestHotkeyBindings.exe` 五条调用全绿
+  （出货配置 `bindings=39|reachable=39|dead=0|mismatches=0`），新键位的可达性由门禁判定，
+  不是推断。改的是 `output/data/default.yaml` 本体而非 `default.custom.yaml` ——
+  门禁是原始文件扫描、不解析 patch，重述 27 条会把源门禁计数冲到 66 直接破基线。
+

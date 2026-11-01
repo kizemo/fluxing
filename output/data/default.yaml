@@ -260,10 +260,17 @@ key_binder:
     # ADR 0009 (L148): the TSF front end sends the CHARACTER a key produced,
     # not the physical key -- so an accept: pattern with a modifier has to
     # name that character. The number chords asked for '9' / '0' while the
-    # front end sends '(' / ')' => they could never fire, so they are gone;
-    # the reachable twins below carry the function.
-    - { when: always, toggle: ascii_punct, accept: Control+Shift+numbersign }     # 切换中英标点
-    - { when: always, toggle: traditionalization, accept: Control+Shift+dollar }  # 切换简繁
+    # front end sends '(' / ')' => they could never fire, so they are gone.
+    # spec 097 / L163: the whole Control+Shift+<digit> family now belongs to
+    # the candidate-delete shortcut (spec 094). Its twins used to sit here on
+    # numbersign / dollar, i.e. Ctrl+Shift+3 / Ctrl+Shift+4 -- a user pressing
+    # Ctrl+Shift+3 to delete a candidate got ascii_punct flipped ON instead
+    # whenever no candidate window was open, and the flip stuck because
+    # ascii_punct carries no reset: on purpose (see the switches note above).
+    # Both toggles move to the RIME community keys that the commented-out
+    # optimized_mode_switch block below already proposed.
+    - { when: always, toggle: ascii_punct, accept: Control+period }      # 切换中英标点（Ctrl+.）
+    - { when: always, toggle: traditionalization, accept: Control+slash }  # 切换简繁（Ctrl+/）
     # - { when: always, toggle: full_shape, accept: Control+Shift+5 }             # 切换全半角
     # - { when: always, toggle: full_shape, accept: Control+Shift+percent }       # 切换全半角
 
@@ -283,7 +290,12 @@ key_binder:
     # - { when: composing, accept: Alt+v, send: Page_Up }
     # - { when: composing, accept: Control+v, send: Page_Down }
 
-    # optimized_mode_switch:
+    # optimized_mode_switch: (RIME community block, kept for reference)
+    # spec 097: the Control+period / Control+slash pair below is now LIVE above
+    # (it replaced the Control+Shift+numbersign / Control+Shift+dollar twins
+    # that collided with the Ctrl+Shift+1..9 candidate-delete shortcut).
+    # Shift+space is already live above; Control+comma (full_shape) is still
+    # deliberately unbound -- 全半角 currently has no hotkey.
     # - { when: always, accept: Control+Shift+space, select: .next }
     # - { when: always, accept: Shift+space, toggle: ascii_mode }
     # - { when: always, accept: Control+comma, toggle: full_shape }

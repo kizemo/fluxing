@@ -119,6 +119,52 @@
   故只能从 `output/archives/` 的原件回填，**不是重新构建**。
 - **`docs/adr/README.md` 补 ADR 编号索引**（19 个 ADR：0001、0007–0024）。
 
+### fix(fluxing): 中英标点／简繁切换键让出 Ctrl+Shift+数字族（spec 097 / L163）
+
+**用户可见改动**：两条默认快捷键换了键位（P5：绝不静默改默认键位）。
+
+| 功能 | 旧键位 | 新键位 |
+|---|---|---|
+| 切换中英标点 | `Ctrl+Shift+3`（`Control+Shift+numbersign`） | **`Ctrl+.`**（`Control+period`） |
+| 切换简繁 | `Ctrl+Shift+4`（`Control+Shift+dollar`） | **`Ctrl+/`**（`Control+slash`） |
+
+**为什么改**：`Ctrl+Shift+1..9` 整族在 spec 094 之后归「从词库删除候选窗中对应次序的词」
+（`include/FluxingCandidateDeleteShortcut.h::kCandidateDeleteMaxNumber = 9`）。删词只在候选窗确实
+可见、且序号落在当前页可见候选范围内时才拦截（`WeaselTSF/KeyEventSink.cpp:79-96` 的
+`ShouldInterceptCandidateDelete`）；候选窗没开时前端**按设计放行**，按键落到 librime `key_binder`
+的 `when: always` 绑定上 —— 于是「想按 `Ctrl+Shift+3` 删词」实际把 `ascii_punct` 静默翻到 ON。
+又因为 `switches` 里 `ascii_punct` 刻意不设 `reset`（`output/data/default.yaml:39` 注释明写
+「需要记忆的开关不能设定 reset」，否则每次切换方案都被打回默认值），这个误翻状态会被记住，
+表现就是「中文一直打英文标点」。**这是键位分配冲突，不是开关卡住，也不是 spec 094 的 bug。**
+
+**为什么选 `Ctrl+.` / `Ctrl+/`**：不是新造键位，是本仓库 `output/data/default.yaml` 的
+`optimized_mode_switch` 注释块（原 `:289-291`）早已写好、引用 RIME 社区默认的那一对，直接启用。
+改前已确认这两个键名在整个 `output/data/` 里没有任何 active 绑定占用；改后由门禁判定其可达性
+（`bindings=39|reachable=39|dead=0`，任何一条死绑定都会直接红），不是推断。`Ctrl+/` 是 Windows
+原生「加书签」，但那是宿主程序在 IME 未吃键时的行为，与 IME 激活态下的 key_binder 不冲突。
+
+**全半角（`full_shape`）没有任何变化**：它的两条绑定（`Control+Shift+5` /
+`Control+Shift+percent`）本来就是注释状态、当前无热键，本次未启用 —— 报障里说的
+「切换全半角」实为「切换中英标点」。不要顺手给用户加一个他没要求的新键位。
+
+**同步更新**：`Rime-设置说明书-重点快捷键.md` 5 处陈述出货键位的地方（§6.7 示例、§8 出货绑定表、
+ADR 0009 附注、§9 本机现状 dump、§10.2 常见坑表）。纯语法性的键名对照表与修饰符顺序示例
+（`:481-482`、`:498`、`:979-980`）刻意未动 —— 它们讲的是 librime 怎么解析键名，不是出货内容。
+ADR 0009 的结论仍成立，只是那两条「可达孪生键」被移到别处，不再占 `Ctrl+Shift+数字` 家族。
+
+**门禁**（`Release\TestHotkeyBindings.exe`，日志 `tmp/gate-097.log`，五条全 PASS / exit 0，
+键盘布局 `LAYOUT|00000409|00000409` + `LAYOUT-PROBE|Shift+quote=0x22 OK`）：
+
+```
+出货配置    SUMMARY|bindings=39|reachable=39|dead=0|known_dead=0|mismatches=0
+负控制      SUMMARY|bindings=9|reachable=3|dead=6|expectations=9|mismatches=0
+recorder    SUMMARY|bindings=21|reachable=20|dead=1|expectations=21|mismatches=0
+mapper      MAPPER|table names=1097 / chords=4032|refused=652 / captured=1716|refused=348
+            MAPPER-SUMMARY|failures=0
+recorder 自检 RECORDER-SUMMARY|failures=0
+```
+
+
 ## [1.1.6] - 2026-10-31
 
 ### 主要更新
