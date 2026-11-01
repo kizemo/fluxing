@@ -1,5 +1,35 @@
 ## [Unreleased]
 
+### fix(fluxing): 切到别的输入法后快捷设置栏不消失；候选词无法从词典删除（spec 094）
+
+- **切到别的输入法后快捷设置栏现在会消失**（`WeaselTSF/WeaselTSF.cpp`、`include/WeaselIPC.h`，
+  spec 094 / ADR 0025）：
+  1.1.6 装机实测反馈。根因**不是**面板忘了隐藏，而是「该隐藏」这个信号**从未送到**：
+  - `ITfActiveLanguageProfileNotifySink::OnActivated` 投递的 `clsid` 是「**新的上位者是谁**」，
+    不是「自己还在不在」。用户切到别的输入法时，本进程收到的是
+    `(别的输入法 clsid, isActivated=TRUE)`；旧代码首行
+    `if (!IsEqualCLSID(clsid, c_clsidTextService)) return S_OK;` 把这条信号**整条丢弃**。
+  - `Deactivate()` 第一件事就是 `m_client.EndSession()`（会话号清零），而通知循环的
+    Deactivated 分支又要求 `m_client.HasSession()` 才肯发 ⇒ 门禁恒假 ⇒ 通知必丢。
+  现改为：`Deactivate()` 在 `EndSession()` **之前**投递 Deactivated、通知循环去掉
+  `HasSession()` 门禁、`OnActivated` 改用共享判定表 `DecideProfileNotify`
+  （生产代码与 `TestWeaselIPC` 同源，宪法 R7）。**IPC 线格式零变化**，服务端不改。
+
+- **候选词现在能真的从词典里去掉**（`WeaselUI/WeaselPanel.{h,cpp}`、
+  `WeaselTSF/KeyEventSink.cpp`、`WeaselTSF/CandidateList.{h,cpp}`、
+  `include/FluxingCandidateDeleteShortcut.h`，spec 094 / ADR 0025）：
+  - **右键删词此前从未真正生效**：`WeaselPanel::m_deleteCallback` 声明为**值**
+    `std::function<void(size_t)>`，构造时没赋值 ⇒ 恒为空 ⇒ `OnRButtonDown` 里的
+    `if (m_deleteCallback)` 永假。现改为**引用绑定**（与同文件已生效的 `_UICallback` 同构）。
+  - **新增 `Ctrl+Shift+<1..9>` 删词**：在**候选窗可见**时删除当前可见页的第 N 个候选；
+    候选窗不可见、或序号超出可见页范围时**不拦截**，让位给 Rime 默认的
+    `Ctrl+Shift+3` / `Ctrl+Shift+4` 绑定。判定只看 **VK 码 + 键盘状态位 + key-down 位**
+    （`Ctrl+Shift+1` 产生的是字符 `!`，从字符反推不出数字键）。
+  - **删词后候选窗立即刷新**：服务端 DELETE 命令此前**不回响应体**，客户端读到的是
+    上一次的缓冲 ⇒ 候选窗要等下一次按键才刷新，用户看到的是「点了没反应」。
+    现让 DELETE 回 body（`RequestHandler::DeleteCandidateOnCurrentPage` 增加 `EatLine eat`，
+    **命令号 / wParam / lParam 零变化**），客户端发完立刻 `GetResponseData` + `_UpdateUI`。
+
 ### fix(fluxing): `/quit` 等 7 个命令行选项此前**全部静默失效**（spec 093）
 
 - **根因**：`_tWinMain` 收到的是 WinMain 的**原始** `lpCmdLine`，参数前带一个空格

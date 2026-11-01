@@ -13050,3 +13050,74 @@ L148、L131、L113
 
 **关联**: spec 093、`WeaselServer/ServerCmdLine.h`、`test/TestServerCmdLine/`
 
+## L161 - **「TSF 激活通知的 clsid 是「新上位者」而不是「自己」；`std::function` 按值存进 UI 成员会让回调永远为空**（2026-11-01）
+
+**现象**：
+
+- 切到别的输入法后，快捷设置栏（QuickPanel）留在屏幕上不消失（即便勾了「常驻」）。
+- 候选窗打开时，**右键**候选词、或按 `Ctrl+Shift+数字`，都无法把候选词从词典去掉。
+- 两个现象的共同表象是「用户操作了，界面完全没反应」，很容易被误判成「功能没接线」。
+
+**根因**：
+
+- **激活通知的语义被读反了。** `ITfActiveLanguageProfileNotifySink::OnActivated`
+  投递的 `clsid` 是「**新的上位者是谁**」，不是「自己还在不在」。用户切到别的
+  输入法时，本进程收到的是 `(别的输入法 clsid, isActivated=TRUE)`。旧代码首行
+  `if (!IsEqualCLSID(clsid, c_clsidTextService)) return S_OK;` ⇒ 「切走」信号被
+  整条丢弃。
+- **时序门禁互相夹击。** `Deactivate()` 第一件事就是 `m_client.EndSession()`
+  （session_id → 0），而通知循环的 Deactivated 分支要求
+  `m_client.HasSession()` 才肯发 ⇒ 门禁恒假 ⇒ 即使通知被投递也会被丢。
+  两者叠加 ⇒ 「切走」这条路径**从来就没通**过。
+- **`std::function` 按值存进 UI 成员 ⇒ 回调恒为空。**
+  `WeaselPanel::m_deleteCallback` 声明为**值** `std::function<void(size_t)>`，
+  构造初始化列表只写了 `_UICallback(...)`（那是**引用**）⇒ 值成员默认构造为空
+  ⇒ `OnRButtonDown` 里的 `if (m_deleteCallback)` 永假 ⇒ 右键删词整条链路
+  **从未真正生效过**（不是「坏了」，是「没上线」）。
+- **「产生的字符」不足以判定物理按键。** `ConvertKeyEvent` 产出的是字符
+  （`Ctrl+Shift+1` → `!`），从字符反推不出数字键；而 `Ctrl+Shift+3/4` 在 Rime
+  默认配置里已绑定 `ascii_punct` / `traditionalization`，抢占需要明确边界。
+- **IPC 不回 body ⇒ 客户端读到旧数据。** 服务端 DELETE 命令不写响应体，
+  客户端删词后解析到的仍是上一次的管道缓冲 ⇒ 候选窗要等下一次按键才刷新
+  ⇒ 用户看到的是「点了没反应」。
+- **命令的「返回值」不等于「成功标志」。** `PIPE_MSG_HANDLE` 把 handler 的
+  返回值直接当事务 LRESULT 回给客户端，而 `OnDeleteCandidateOnCurrentPage` /
+  `OnHighlightCandidateOnCurrentPage` / `OnChangePage` 的返回值**恒为 0**
+  （上游语义是「0 = 无错误」）⇒ 客户端 `ClientImpl::DeleteCandidateOnCurrentPage`
+  里那句 `return ret != 0;` **恒为假**。生产代码不看返回值，功能不受影响；
+  但任何拿它当「命令被拒绝」判据的代码都会得到假阴性（本次 IPC 集成测试就
+  先栽在这上面：命令其实已送达、mock 也执行了，却报「command rejected」）。
+
+**教训**：
+
+- **第三方回调的语义要查文档，不能按字面猜。** `OnActivated(clsid, isActivated)`
+  里的 `clsid` 是「**谁上位了**」，不是「是不是我」。凡是「收到 A ⇒ 认为是 B」
+  的写法，都要先确认 A 的真实语义。
+- **「会话已结束」与「事件还没发生」要用不同顺序处理。** 只要事件的语义是
+  「会话结束时也要送达」，就必须在 `EndSession()` **之前**投递；事后补发必然
+  带不上会话号。**门禁条件要看清它拦的是谁**，不要用一个「看起来相关」的状态
+  当门禁。
+- **回调成员优先用引用或 `shared_ptr`，不要用值。** 值成员一旦没在构造时赋值，
+  就是「永远为空」，而 `if (cb)` 这种写法**编译期毫无异常、运行期静默失效**。
+  同文件里已有可用的参照（`_UICallback` 是引用且工作正常）⇒ **同一文件里
+  两种写法并存时，「能工作的那种」就是正确范式**。
+- **判定物理按键只能用 VK 码 + 键盘状态位 + lParam 的 key-down 位**，
+  绝不能用「产生的字符」反推（与 ADR 0009/0011 的契约不冲突：那是给引擎的
+  字符，这里是给前端的物理判定）。
+- **抢占引擎默认绑定必须有明确边界**：只在「候选窗可见」且「序号落在当前可见页
+  范围内」时拦截，其余一律放行。
+- **命令回不回 body 是接口契约，不是实现细节。** 不回 body 时客户端读到的是
+  **上一帧**数据，看起来像「操作没生效」，实际上服务端已经改了。
+- **拿到返回值先确认它的语义，再决定能不能当判据。**「0」既可能是「成功」也
+  可能是「失败」，取决于服务端 handler 的返回约定。写判据前先读那个 handler
+  到底返回什么；否则会出现「命令明明送达了，测试却报拒绝」这种自相矛盾的
+  现象。**判据要用只可能由目标路径产生的标记**（本例用 `status.composing=1`），
+  而不是用「返回值非 0」。
+- **「用户说功能没用」先分清「坏了」还是「从没生效」**：本例两条链路都是
+  「从未生效」（值成员恒空 / 通知恒被丢），定位方向完全不同。
+- **装机实测前先排除「载荷陈旧」**：比对 `output/` 产物与装机目录的 SHA256，
+  一致才能断定是代码缺陷（本次两边 SHA256 完全相同 ⇒ 排除）。
+
+**关联**: spec 094、ADR 0025、ADR 0024、ADR 0023、`include/WeaselIPC.h`、
+`include/FluxingCandidateDeleteShortcut.h`、`WeaselUI/WeaselPanel.h`
+
