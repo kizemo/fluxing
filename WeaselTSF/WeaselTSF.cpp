@@ -107,9 +107,14 @@ STDAPI WeaselTSF::Activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
 STDAPI WeaselTSF::Deactivate() {
   // spec 080: the notification thread is NOT stopped here. Deactivate runs
   // on the TSF thread, and joining a thread there would block the TSF
-  // thread (constitution P2). The thread is idle most of the time and it
-  // re-checks m_client.HasSession() before every send, so a notification
-  // that arrives after the session ended is simply dropped.
+  // thread (constitution P2). The thread is idle most of the time.
+  //
+  // spec 094: 「切走输入法 => 快捷设置栏必须消失」。这条通知必须在
+  // EndSession() **之前** 投递:EndSession() 把 session_id 置 0,之后再发
+  // 的 FocusOut 已经带不上会话号;而旧的 Deactivated 分支又要求
+  // m_client.HasSession() 才肯发 —— 两者一夹,这条通知必被丢弃
+  // (spec 094 bug 1 的根因之一)。
+  _PostProfileNotify(kProfileNotifyDeactivated);
   m_client.EndSession();
 
   _InitTextEditSink(com_ptr<ITfDocumentMgr>());
@@ -406,8 +411,12 @@ void WeaselTSF::_ProfileNotifyLoop() {
       // another input method. Without this flag the server cannot tell
       // "switched away from Fluxing" apart from "the edit field lost
       // focus", so the always-show guard swallows the hide request.
-      if (m_client.HasSession())
-        m_client.FocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED);
+      //
+      // spec 094: 这里**不能**再用 m_client.HasSession() 当门禁 ——
+      // Deactivate() 先 EndSession() 再发通知的话门禁恒假,通知必丢。
+      // ClientImpl::FocusOut 本身没有 _Active() 门禁(session_id=0 也能发),
+      // 服务端的 OnFocusOut 也不校验 session_id,直接透传 wParam。
+      m_client.FocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED);
     }
     // One-shot notification: drop this thread's pipe connection so
     // WeaselServer does not keep an idle instance around.
@@ -418,34 +427,45 @@ void WeaselTSF::_ProfileNotifyLoop() {
 STDMETHODIMP WeaselTSF::OnActivated(REFCLSID clsid,
                                     REFGUID guidProfile,
                                     BOOL isActivated) {
-  if (!IsEqualCLSID(clsid, c_clsidTextService)) {
-    return S_OK;
-  }
-
   // spec 061: ITfActiveLanguageProfileNotifySink::OnActivated is the
   // CORRECT trigger for "user switched to/from Fluxing IME". Unlike
   // OnKillThreadFocus (which fires on every focus jitter, see the
   // L60 fix that broke Bug 3/4), OnActivated fires exactly once
   // per real IME switch.
   //
-  // But: isActivated is "is Fluxing now the active text service",
-  // NOT "is the user typing". So:
-  //   isActivated = true  -> user just switched TO Fluxing
-  //   isActivated = false -> user just switched AWAY from Fluxing
+  // spec 094 修正: clsid 的语义不是「谁还在活动」,而是「**新的上位者是谁**」。
+  //   (自己 clsid, TRUE)  -> 用户切到了火流猩
+  //   (自己 clsid, FALSE) -> 火流猩自己被停用
+  //   (别的 clsid, TRUE)  -> 用户切到了别的输入法:本进程的火流猩已经不在活动
+  //                          配置里 => 等价于「切走」=> 必须收起快捷设置栏
+  //   (别的 clsid, FALSE) -> 别的 profile 被停用,与本进程无关,忽略
+  //
+  // 过去第一句 `if (!IsEqualCLSID(clsid, c_clsidTextService)) return S_OK;`
+  // 把后两种全丢掉了,于是切走后快捷设置栏留在屏幕上不消失(spec 094 bug 1)。
+  //
+  // 判定表抽成共享纯函数 DecideProfileNotify(include/WeaselIPC.h),
+  // 生产代码与 TestWeaselIPC 的 /verify-focusout-flags 共用同一份口径
+  // (宪法 R7)。
   //
   // spec 080 (ADR 0008): this callback must not block the TSF thread on
   // I/O (constitution P2), so it performs no pipe traffic at all. It only
   // records the intent; the notification thread performs the IPC.
   //
-  //   isActivated = true  -> user just switched TO Fluxing
-  //   isActivated = false -> user just switched AWAY from Fluxing
-  //
   // OnActivated is a per-process subscription: every process that loaded
   // the Fluxing TIP receives it. The server side de-duplicates by
   // comparing the session id with its active session, so only the front
   // most application ends up showing the QuickPanel.
-  _PostProfileNotify(isActivated ? kProfileNotifyActivated
-                                 : kProfileNotifyDeactivated);
+  const bool is_self = (IsEqualCLSID(clsid, c_clsidTextService) != FALSE);
+  switch (DecideProfileNotify(is_self, isActivated != FALSE)) {
+    case ProfileNotifyDecision::kNotifyActivated:
+      _PostProfileNotify(kProfileNotifyActivated);
+      break;
+    case ProfileNotifyDecision::kNotifyDeactivated:
+      _PostProfileNotify(kProfileNotifyDeactivated);
+      break;
+    case ProfileNotifyDecision::kIgnore:
+      break;
+  }
   return S_OK;
 }
 

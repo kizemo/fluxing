@@ -3,6 +3,7 @@
 #include "WeaselTSF.h"
 #include <KeyEvent.h>
 #include "CandidateList.h"
+#include <FluxingCandidateDeleteShortcut.h>
 
 static weasel::KeyEvent prevKeyEvent;
 static BOOL prevfEaten = FALSE;
@@ -23,6 +24,11 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
   }
   weasel::KeyEvent ke;
   GetKeyboardState(_lpbKeyState);
+  // spec 094: 「Ctrl+Shift+数字」删词必须看**键盘状态**而不是 ConvertKeyEvent
+  // 产出的 keycode —— 那是「产生的字符」(Ctrl+Shift+1 -> '!'),从字符反推不出
+  // 数字键。GetKeyboardState 是 Win32 的硬保证。
+  const bool ctrl_down = fluxing::IsKeyStateDown(_lpbKeyState, VK_CONTROL);
+  const bool shift_down = fluxing::IsKeyStateDown(_lpbKeyState, VK_SHIFT);
   if (!ConvertKeyEvent(static_cast<UINT>(wParam), lParam, _lpbKeyState, ke)) {
     /* Unknown key event */
     *pfEaten = FALSE;
@@ -45,16 +51,48 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
       BOOL isLeft = (ke.keycode == ibus::Shift_L);
       BOOL isDown = !(ke.mask & ibus::RELEASE_MASK);
       if (isDown) {
+        // spec 094: Ctrl+Shift+数字 是删词快捷键。这个组合里的 Shift 绝不能
+        // 原样转发给服务端 —— 服务端 Shift 状态机会把它当成「选词 Shift」,
+        // 菜单打开时直接 commit_composition 把候选上屏(spec 077 / ADR 0023)。
+        // 所以 Ctrl 按住时吞掉 Shift down,并记住配对的 up 也要吞。
+        if (ctrl_down) {
+          _shiftSuppressed = TRUE;
+          *pfEaten = TRUE;
+          return;
+        }
         m_client.ShiftDown(isLeft ? TRUE : FALSE);
         _shiftDown = TRUE;
         _shiftDownIsLeft = isLeft ? TRUE : FALSE;
       } else {
+        if (_shiftSuppressed) {
+          _shiftSuppressed = FALSE;
+          *pfEaten = TRUE;
+          return;
+        }
         m_client.ShiftUp(isLeft ? TRUE : FALSE);
         _shiftDown = FALSE;
         _shiftDownIsLeft = FALSE;
       }
       *pfEaten = TRUE;
       return;  // C6: never feed Shift to ProcessKeyEvent
+    }
+    // spec 094: Ctrl+Shift+<数字> 从用户词典里删除当前可见页的第 N 个候选。
+    //
+    // 只在「候选窗确实可见」且「N 落在当前可见页范围内」时才拦截:
+    //   - 否则会抢掉 Rime 默认的 Ctrl+Shift+3 / Ctrl+Shift+4
+    //     (ascii_punct / traditionalization,见 output/data/default.yaml);
+    //   - 没有候选时按数字键本就该是普通输入,不能吞。
+    if (!keyCountToSimulate && fluxing::IsKeyDownLParam(lParam)) {
+      const int number =
+          fluxing::MatchCandidateDeleteShortcut(static_cast<int>(wParam),
+                                                ctrl_down, shift_down, true);
+      if (number > 0 &&
+          fluxing::ShouldInterceptCandidateDelete(
+              number, _cand->GetVisibleCandidateCount())) {
+        _DeleteCandidateOnCurrentPage(static_cast<size_t>(number - 1));
+        *pfEaten = TRUE;
+        return;
+      }
     }
     if (!keyCountToSimulate)
       *pfEaten = (BOOL)m_client.ProcessKeyEvent(ke);

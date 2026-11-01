@@ -4,6 +4,7 @@
 #include "CandidateList.h"
 #include <KeyEvent.h>
 #include <math.h>
+#include <ResponseParser.h>
 
 using namespace std;
 using namespace weasel;
@@ -297,13 +298,16 @@ void CCandidateList::StartUI() {
     return;
   }
 
+  // spec 094: 删词回调必须**无条件**设置。之前它被写成了上面那个 if 语句的
+  // 兄弟分支(缩进骗人),看上去像「只在没有 UI 回调时才设」——实际是每次
+  // StartUI 都设。这次顺手把缩进对齐,免得以后再有人读错。
   if (!_ui->uiCallback())
     _ui->SetUICallBack([this](size_t* const sel, size_t* const hov,
                               bool* const next, bool* const scroll_next) {
       _tsf->HandleUICallback(sel, hov, next, scroll_next);
     });
-    _ui->SetDeleteCandidateCallback(
-        [this](size_t index) { _tsf->HandleDeleteCandidate(index); });
+  _ui->SetDeleteCandidateCallback(
+      [this](size_t index) { _tsf->HandleDeleteCandidate(index); });
   pUIElementMgr->BeginUIElement(this, &_pbShow, &uiid);
   // pUIElementMgr->UpdateUIElement(uiid);
   if (_pbShow) {
@@ -394,8 +398,13 @@ void WeaselTSF::_SelectCandidateOnCurrentPage(size_t index) {
 
 void WeaselTSF::_DeleteCandidateOnCurrentPage(size_t index) {
   m_client.DeleteCandidateOnCurrentPage(index);
-  // 不模拟 VK_SELECT — server 端 DeleteCandidateOnCurrentPage
-  // 内部已 _UpdateUI，候选窗自动刷新。
+  // spec 094: 服务端删词后会把新的候选数据写回管道,这里必须**立刻**读出来
+  // 刷新候选窗。旧实现什么都不做,客户端解析到的还是上一次的响应 =>
+  // 用户看不到「词已经没了」,以为右键 / 快捷键根本没生效。
+  weasel::Context ctx;
+  weasel::ResponseParser parser(NULL, &ctx, &_status, NULL, &_cand->style());
+  if (m_client.GetResponseData(std::ref(parser)))
+    _UpdateUI(ctx, _status);
 }
 
 void WeaselTSF::HandleDeleteCandidate(size_t index) {

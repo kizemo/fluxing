@@ -2,6 +2,8 @@
 #include <WeaselUI.h>
 #include "ctffunc.h"
 
+#include <cstddef>
+
 class WeaselTSF;
 
 class CCandidateList : public ITfIntegratableCandidateListUIElement,
@@ -64,6 +66,15 @@ class CCandidateList : public ITfIntegratableCandidateListUIElement,
   }
 
   weasel::UIStyle& style();
+
+  // spec 094: 当前**可见**(已过滤掉屏蔽名单)且候选窗确实显示时的候选条数。
+  // 「Ctrl+Shift+数字」删词用它判断「序号落在当前可见页范围内」,
+  // 避免抢掉 Rime 默认的 Ctrl+Shift+3 / Ctrl+Shift+4 绑定。
+  std::size_t GetVisibleCandidateCount() {
+    if (!_ui || !_ui->IsShown())
+      return 0;
+    return _ui->ctx().cinfo.candies.size();
+  }
 
  private:
   // void _UpdateOwner();

@@ -251,6 +251,12 @@ class WeaselTSF : public ITfTextInputProcessorEx,
      Server even if a transient pipe failure drops the matching Down. */
   BOOL _shiftDown = FALSE;
   BOOL _shiftDownIsLeft = FALSE;
+  /* spec 094: 「Ctrl+Shift+数字」删词快捷键。Ctrl 按住时前端吞掉
+     Shift_L/Shift_R,不让它们进服务端的 Shift 状态机 —— 服务端 ShiftUp
+     在菜单打开时会走 kSelectCandidate 分支(commit_composition),把候选词
+     误上屏。本标志记录「本次 Shift 的 down 被吞了」,以便把配对的 up 也
+     吞掉,否则服务端会收到一条没有 Down 配对的 ShiftUp。 */
+  BOOL _shiftSuppressed = FALSE;
 
   /* spec 080 (ADR 0008): IME profile switch notification.
      constitution P2 forbids blocking the TSF thread for I/O, so the
