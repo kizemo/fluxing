@@ -51,6 +51,7 @@ enum WEASEL_IPC_COMMAND {
 // QuickPanel 会在每次切窗口时弹出(spec 055 bug 2 的根因)。
 enum {
   WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED = 1u << 0,
+  WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED = 1u << 1,
 };
 
 // WEASEL_IPC_FOCUS_OUT 的 wParam 位标志(spec 091 / ADR 0024)。
@@ -72,6 +73,7 @@ enum {
 // 仍然是旧语义,安全降级。
 enum {
   WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED = 1u << 0,
+  WEASEL_IPC_FOCUS_OUT_FLAG_APP_FOCUS_LOST = 1u << 1,
 };
 
 // spec 091 / ADR 0024:快捷面板在 FocusOut 时是否应收起。
@@ -112,6 +114,78 @@ inline ProfileNotifyDecision DecideProfileNotify(bool is_self_clsid,
   // 别的 profile 被激活 => 本进程的火流猩已经不在活动配置里 => 切走了。
   return is_activated ? ProfileNotifyDecision::kNotifyDeactivated
                       : ProfileNotifyDecision::kIgnore;
+}
+
+// ===== spec 096 / ADR 0027:FocusIn / FocusOut 位标志协议表 =====
+//
+// 两侧的 wParam 是**同一张表**的两个方向投影:
+//   - 同一 bit 编号在两侧代表**同一个语义维度**;
+//   - bit0 = 输入法激活状态维度(PROFILE_ACTIVATED <-> PROFILE_DEACTIVATED);
+//   - bit1 = 应用窗口焦点维度(APP_FOCUS_GAINED <-> APP_FOCUS_LOST)。
+//
+// 表是唯一的对称性真相源:新增维度只能**加行**,不允许某一侧单独加位。
+// 生产代码(WeaselTSF / RimeWithWeasel)与 TestWeaselIPC 的 /verify-focusin-flags
+// 引用同一份实现(宪法 R7),不要在别处再抄一遍。
+struct FocusFlagSlot {
+  DWORD in_bit;           // FocusIn 侧位掩码
+  DWORD out_bit;          // FocusOut 侧位掩码(与 in_bit 同 bit 编号)
+  const char* dimension;  // 语义维度名(两侧共用)
+};
+
+inline const FocusFlagSlot* FocusFlagProtocolTable(size_t& count) {
+  static const FocusFlagSlot kTable[] = {
+      {WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED,
+       WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED, "ime_profile_activation"},
+      {WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED,
+       WEASEL_IPC_FOCUS_OUT_FLAG_APP_FOCUS_LOST, "app_focus"},
+  };
+  count = sizeof(kTable) / sizeof(kTable[0]);
+  return kTable;
+}
+
+inline bool HasFocusInFlag(DWORD param, DWORD flag) {
+  return (param & flag) != 0;
+}
+
+inline bool HasFocusOutFlag(DWORD param, DWORD flag) {
+  return (param & flag) != 0;
+}
+
+// spec 096: 两侧的「这次焦点事件是什么」分类器,互为镜像。
+// 未知位(老客户端发 0)落在 kUnknown,行为与今天完全一致。
+enum class FocusInKind {
+  kProfileActivated,  // 用户刚切到火流猩
+  kAppFocusGained,    // 普通的窗口获得焦点
+  kUnknown,           // 老客户端 / 未知位组合
+};
+
+enum class FocusOutKind {
+  kProfileDeactivated,  // 用户刚切离火流猩
+  kAppFocusLost,        // 普通的应用失焦 / 切窗口
+  kUnknown,             // 老客户端 / 未知位组合
+};
+
+inline FocusInKind ClassifyFocusIn(DWORD param) {
+  if (HasFocusInFlag(param, WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED))
+    return FocusInKind::kProfileActivated;
+  if (HasFocusInFlag(param, WEASEL_IPC_FOCUS_IN_FLAG_APP_FOCUS_GAINED))
+    return FocusInKind::kAppFocusGained;
+  return FocusInKind::kUnknown;
+}
+
+inline FocusOutKind ClassifyFocusOut(DWORD param) {
+  if (HasFocusOutFlag(param, WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED))
+    return FocusOutKind::kProfileDeactivated;
+  if (HasFocusOutFlag(param, WEASEL_IPC_FOCUS_OUT_FLAG_APP_FOCUS_LOST))
+    return FocusOutKind::kAppFocusLost;
+  return FocusOutKind::kUnknown;
+}
+
+// spec 096: 与 ShouldHideQuickPanelOnFocusOut 对称的 FocusIn 侧判定。
+// 只有「用户切到火流猩」才请求显示快捷面板;普通窗口获得焦点不显示。
+// profile 位与 app-focus 位同时在场时取 profile 优先(更具体的信号)。
+inline bool ShouldShowQuickPanelOnFocusIn(DWORD param) {
+  return ClassifyFocusIn(param) == FocusInKind::kProfileActivated;
 }
 
 namespace weasel {
