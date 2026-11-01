@@ -191,8 +191,6 @@ void QuickPanelDialog::DrawIconAccount(HDC hdc,
 
 // ===== 静态成员定义 =====
 HWND QuickPanelDialog::s_hwnd = NULL;
-QuickPanelDialog::Mode QuickPanelDialog::s_mode =
-    QuickPanelDialog::Mode::kHidden;
 bool QuickPanelDialog::s_fullwidth = false;
 bool QuickPanelDialog::s_mouseTracked = false;
 bool QuickPanelDialog::s_dragging = false;  // L87-fix 手动 drag 状态
@@ -1464,14 +1462,17 @@ void QuickPanelDialog::ToggleMode() {
 }
 
 // ===== v1.1.2 (ADR 0019):「常驻」勾选态跨 WeaselServer 重启持久化 =====
-// 根因: s_mode 原是纯内存态 ⇒ 装机换 DLL 所需的重启把勾选清零,面板退回
+// 根因: 运行期状态原是纯内存态 ⇒ 装机换 DLL 所需的重启把勾选清零,面板退回
 // 瞬时模式(grace 2s + 鼠标在面板外累计 1.5s ⇒ 用户看到的「调出几秒后消失」)。
 // v1.1.3 (ADR 0020): 介质改跟随用户数据目录 —— 原来硬编码 %APPDATA%\Rime\,
 // 与 WeaselUserDataPath() 分叉(用户数据目录被指到 D 盘时,状态会单独住一份,
 // 而且会在本 fork 已迁走的旧路径上重新造目录)。
 // 现在落点 = <用户数据目录>\quickpanel.state,单行 ASCII "always_show=0|1\n";
 // 旧落点 %APPDATA%\Rime\quickpanel.state 仅作只读兜底(存量勾选不丢)。
-static std::wstring s_statePathOverride;
+// spec 095: 运行期状态 + 落盘 + 读盘策略统一下沉到 include/FluxingAlwaysShow.h
+// (QuickPanelDialog 与 ShortcutSettings 共用单一事实源,constitution R7)。
+// 本文件只剩「旧落点」留在 QuickPanelDialog —— 它要 SHGetFolderPathW(shell32),
+// 共享头不引入 shell32。
 #pragma comment(lib, "shell32.lib")
 
 // 旧落点(1.1.2 及更早):%APPDATA%\Rime\quickpanel.state —— 只读兜底,不再写。
@@ -1484,81 +1485,36 @@ std::wstring QuickPanelDialog::LegacyStatePath() {
 
 // 默认落点:用户数据目录下的 quickpanel.state(与 WeaselUserDataPath() 同源)。
 std::wstring QuickPanelDialog::DefaultStatePath() {
-  std::filesystem::path dir = ResolveFluxingUserDataPath();
-  if (dir.empty())
-    return L"quickpanel.state";
-  return (dir / std::filesystem::path(L"quickpanel.state")).wstring();
-}
-
-static std::wstring QuickPanelStatePath() {
-  if (!s_statePathOverride.empty())
-    return s_statePathOverride;
-  return QuickPanelDialog::DefaultStatePath();
-}
-
-static void WriteQuickPanelState(bool alwaysShow) {
-  const std::wstring path = QuickPanelStatePath();
-  const std::wstring dir = path.substr(0, path.find_last_of(L"\\/"));
-  if (!dir.empty())
-    CreateDirectoryW(dir.c_str(), nullptr);
-  std::ofstream f(path, std::ios::binary | std::ios::trunc);
-  if (!f)
-    return;  // 写失败降级为「重启后回到瞬时」,不阻塞切换本身
-  f << (alwaysShow ? "always_show=1\n" : "always_show=0\n");
-  f.flush();
-  if (!f)
-    return;
-  // 本仓铁律: 写完必须回读自证,0 字节坏文件比没文件更危险
-  std::ifstream r(path, std::ios::binary);
-  std::string back((std::istreambuf_iterator<char>(r)),
-                   std::istreambuf_iterator<char>());
-  if (back.empty())
-    DeleteFileW(path.c_str());
+  return fluxing::always_show::DefaultStatePath();
 }
 
 // 读一个状态文件的第一行。文件缺失/读不出 ⇒ false(由调用方决定是否兜底)。
-static bool ReadAlwaysShowStateLine(const std::wstring& path,
-                                    std::string& line) {
-  if (path.empty())
-    return false;
-  std::ifstream f(path, std::ios::binary);
-  if (!f)
-    return false;
-  if (!std::getline(f, line))
-    return false;
-  if (!line.empty() && line.back() == '\r')
-    line.pop_back();  // 容忍手工/CRLF 写盘
-  return true;
-}
-
 // ADR 0020: primary 优先;primary 读不到才读 legacy(1.1.2 旧落点只读兜底)。
 bool QuickPanelDialog::LoadPersistedAlwaysShowModeFrom(
     const std::wstring& primary,
     const std::wstring& legacy) {
-  std::string line;
-  if (ReadAlwaysShowStateLine(primary, line))
-    return line == "always_show=1";
-  if (!legacy.empty() && legacy != primary &&
-      ReadAlwaysShowStateLine(legacy, line))
-    return line == "always_show=1";
-  return true;  // spec 089 / ADR 0022: 状态文件缺失或损坏 ⇒
-                // 默认常驻(不再要求用户先勾选)
+  // ADR 0020: primary 优先;primary 读不到才读 legacy(1.1.2 旧落点只读兜底);
+  // 都读不到 ⇒ 默认常驻(spec 089 / ADR 0022)。
+  return fluxing::always_show::ResolveAlwaysShowFromFiles(primary, legacy,
+                                                         true);
 }
 
 bool QuickPanelDialog::LoadPersistedAlwaysShowMode() {
   // 测试注入路径时不做旧落点兜底,免得读到真实用户目录里的文件(测试必须确定)。
-  const std::wstring legacy =
-      s_statePathOverride.empty() ? LegacyStatePath() : std::wstring();
-  return LoadPersistedAlwaysShowModeFrom(QuickPanelStatePath(), legacy);
+  const std::wstring legacy = fluxing::always_show::HasStatePathOverride()
+                                  ? std::wstring()
+                                  : LegacyStatePath();
+  return fluxing::always_show::ResolveAlwaysShowFromFiles(
+      fluxing::always_show::ResolveStatePath(), legacy, true);
 }
 
 void QuickPanelDialog::SetStatePath(const std::wstring& path) {
-  s_statePathOverride = path;
+  fluxing::always_show::StatePathOverrideRef() = path;
 }
 
 void QuickPanelDialog::RestoreAlwaysShowMode() {
   // 只做模式回填: 不 Show、不回写盘 —— spec 055「启动不自动显示面板」不变。
-  s_mode = LoadPersistedAlwaysShowMode() ? Mode::kAlwaysShow : Mode::kHidden;
+  fluxing::always_show::SetAlwaysShowFlag(LoadPersistedAlwaysShowMode());
 }
 
 // spec 084 / ADR 0013 D4/D5: 长显模式开关。
@@ -1568,8 +1524,14 @@ void QuickPanelDialog::RestoreAlwaysShowMode() {
 void QuickPanelDialog::SetAlwaysShowMode(bool enabled) {
   if (AlwaysShowMode() == enabled)
     return;
-  s_mode = enabled ? Mode::kAlwaysShow : Mode::kHidden;
-  WriteQuickPanelState(enabled);
+  // spec 095: 状态 + 落盘 + 通知观察者(alpha 复位 / 重绘)统一走共享头。
+  fluxing::always_show::ApplyAlwaysShow(enabled);
+}
+
+// spec 095: 模式变化观察者 —— 由 include/FluxingAlwaysShow.h 的
+// ModeChangedCallback 机制触发。
+// 关 ⇒ alpha 复位为满值(否则面板会停在淡显状态);开关都 ⇒ 面板可见时重绘。
+void QuickPanelDialog::OnAlwaysShowModeChanged(bool enabled) {
   if (!enabled) {
     s_alphaFactor = fluxing::kAlphaFactorFull;
     s_targetAlphaFactor = fluxing::kAlphaFactorFull;
@@ -1578,6 +1540,18 @@ void QuickPanelDialog::SetAlwaysShowMode(bool enabled) {
     RepaintLayered(s_hwnd);
   }
 }
+
+namespace {
+// 注册观察者。文件作用域静态对象 ⇒ 进程启动即注册,早于任何一次
+// SetAlwaysShowMode()(托盘菜单 / 设置面板)。
+struct AlwaysShowCallbackRegistrar {
+  AlwaysShowCallbackRegistrar() {
+    fluxing::always_show::SetModeChangedCallback(
+        &QuickPanelDialog::OnAlwaysShowModeChanged);
+  }
+};
+const AlwaysShowCallbackRegistrar g_always_show_callback_registrar;
+}  // namespace
 
 void QuickPanelDialog::EnableAlwaysShowMode(OnClick onSchema,
                                             OnClick onUserFolder,

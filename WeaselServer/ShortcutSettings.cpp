@@ -30,6 +30,7 @@ HWND ShortcutSettings::s_hBtnImport = nullptr;
 HWND ShortcutSettings::s_hBtnExport = nullptr;
 HWND ShortcutSettings::s_hBtnCancel = nullptr;
 HWND ShortcutSettings::s_hBtnSave = nullptr;
+HWND ShortcutSettings::s_hChkAlwaysShow = nullptr;
 std::wstring ShortcutSettings::s_yamlPath;
 DWORD ShortcutSettings::s_showTime = 0;
 HHOOK ShortcutSettings::s_hKeyboardHook = nullptr;
@@ -57,6 +58,11 @@ constexpr int kBtnW = 92;
 constexpr int kBtnGap = 8;
 constexpr int kGap = 10;
 constexpr int kDlgRadius = 14;  // radius.lg
+
+// spec 095: 「界面」分组行(快捷面板常驻勾选框所在行)
+constexpr int kPrefsH = 30;
+// spec 095: 「界面」分组行 y —— 工具栏行之后、状态行之前。
+constexpr int kPrefsY = kTitleH + kToolbarH;
 
 constexpr int kPopoverW = 240;  // size.shortcut.popover.w
 constexpr int kPopoverH = 100;  // size.shortcut.popover.h
@@ -185,7 +191,7 @@ void ShortcutSettings::Show() {
 
   s_hwnd =
       CreateWindowExW(exStyle, L"FluxingShortcutSettings",
-                      L"\x5feb\x6377\x952e\x8bbe\x7f6e",  // 快捷键设置
+                      L"设置",  // 设置
                       style, CW_USEDEFAULT, CW_USEDEFAULT, kDialogW, kDialogH,
                       nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
   if (!s_hwnd) {
@@ -230,6 +236,7 @@ void ShortcutSettings::Hide() {
   s_hTable = s_hStatus = s_hToolbar = s_hSearch = s_hPopover = nullptr;
   s_hBtnAdd = s_hBtnReset = s_hBtnImport = s_hBtnExport = nullptr;
   s_hBtnCancel = s_hBtnSave = nullptr;
+  s_hChkAlwaysShow = nullptr;
 }
 
 void ShortcutSettings::Toggle() {
@@ -291,49 +298,49 @@ ShortcutSettings::GetBuiltinBindings() {
   static const std::vector<BuiltinBinding> kBuiltins = {
       // always
       {L"Control+space", L"always", L"commit_code",
-       L"\xe4\xb8\x8a\xe5\xb1\x8f\xe7\xbc\x96\xe7\xa0\x81"},  // 上屏编码
+       L"上屏编码"},  // 上屏编码
       {L"Escape", L"always", L"clear",
-       L"\xe6\xb8\x85\xe7\xa9\xba\xe7\xad\x9b\xe9\x80\x89"},  // 清空候选
+       L"清空筛选"},  // 清空候选
       {L"Return", L"always", L"commit",
-       L"\xe5\x9b\x9e\xe8\xbd\xa6\xe4\xb8\x8a\xe5\xb1\x8f"},  // 回车上屏
+       L"回车上屏"},  // 回车上屏
       {L"Control+Return", L"always", L"commit_raw",
-       L"Ctrl+Enter \xe4\xb8\x8a\xe5\xb1\x8f"},  // 上屏
+       L"Ctrl+Enter 上屏"},  // 上屏
       {L"BackSpace", L"always", L"backspace",
-       L"\xe9\x80\x80\xe6\xa0\xbc"},                                   // 退格
-      {L"Delete", L"always", L"delete", L"\xe5\x88\xa0\xe9\x99\xa4"},  // 删除
+       L"退格"},                                   // 退格
+      {L"Delete", L"always", L"delete", L"删除"},  // 删除
       // composing
       {L"Shift+Left", L"composing", L"cursor_left",
-       L"\xe5\x85\x89\xe6\xa0\x87\xe5\xb7\xa6\xe7\xa7\xbb"},  // 光标左移
+       L"光标左移"},  // 光标左移
       {L"Shift+Right", L"composing", L"cursor_right",
-       L"\xe5\x85\x89\xe6\xa0\x87\xe5\x8f\xb3\xe7\xa7\xbb"},  // 光标右移
+       L"光标右移"},  // 光标右移
       {L"Home", L"composing", L"cursor_home",
-       L"\xe5\x85\x89\xe6\xa0\x87\xe5\x88\xb0\xe9\xa6\x96"},  // 光标到首
+       L"光标到首"},  // 光标到首
       {L"End", L"composing", L"cursor_end",
-       L"\xe5\x85\x89\xe6\xa0\x87\xe5\x88\xb0\xe5\xb0\xbe"},  // 光标到尾
+       L"光标到尾"},  // 光标到尾
       // has_menu
       {L"1", L"has_menu", L"select 1",
-       L"\xe9\x80\x89\xe7\xac\xac 1 \xe5\x80\x99\xe9\x80\x89"},  // 选第 1 候选
+       L"选第 1 候选"},  // 选第 1 候选
       {L"2", L"has_menu", L"select 2",
-       L"\xe9\x80\x89\xe7\xac\xac 2 \xe5\x80\x99\xe9\x80\x89"},
+       L"选第 2 候选"},
       {L"3", L"has_menu", L"select 3",
-       L"\xe9\x80\x89\xe7\xac\xac 3 \xe5\x80\x99\xe9\x80\x89"},
+       L"选第 3 候选"},
       {L"Tab", L"has_menu", L"select_next",
-       L"\xe4\xb8\x8b\xe4\xb8\xaa\xe5\x80\x99\xe9\x80\x89"},  // 下个候选
+       L"下个候选"},  // 下个候选
       {L"Shift+Tab", L"has_menu", L"select_prev",
-       L"\xe4\xb8\x8a\xe4\xb8\xaa\xe5\x80\x99\xe9\x80\x89"},  // 上个候选
+       L"上个候选"},  // 上个候选
       // paging (when=paging in librime)
       {L"comma", L"paging", L"Page_Up",
-       L"\xe7\xbf\xbb\xe9\xa1\xb5\xe4\xb8\x8a"},  // 翻页上
+       L"翻页上"},  // 翻页上
       {L"period", L"paging", L"Page_Down",
-       L"\xe7\xbf\xbb\xe9\xa1\xb5\xe4\xb8\x8b"},  // 翻页下
+       L"翻页下"},  // 翻页下
       // toggle (ascii_mode 当 accept 是 Shift+space 等)
       {L"Shift+space", L"always", L"toggle ascii_mode",
-       L"\xe5\x88\x87\xe6\x8d\xa2\xe4\xb8\xad\xe8\x8b\xb1"},  // 切换中英
+       L"切换中英"},  // 切换中英
       {L"Control+Shift+numbersign", L"always", L"toggle ascii_punct",
-       L"\xe4\xb8\xad\xe8\x8b\xb1\xe6\xa0\x87\xe7\x82\xb9\xe5\x88\x87\xe6\x8d"
-       L"\xa2"},  // 中英标点切换
+       L"中英标点切换"
+       L""},  // 中英标点切换
       {L"Control+Shift+dollar", L"always", L"toggle traditionalization",
-       L"\xe7\xae\x80\xe7\xb9\x81\xe5\x88\x87\xe6\x8d\xa2"},  // 简繁切换
+       L"简繁切换"},  // 简繁切换
   };
   return kBuiltins;
 }
@@ -343,62 +350,62 @@ bool ShortcutSettings::LoadDefaults(std::vector<Hotkey>& out) {
   out.clear();
   out.push_back(MakeBuiltin(
       Action_ToggleChinese, L"always", L"Shift+space",
-      L"\xe5\x88\x87\xe6\x8d\xa2\xe4\xb8\xad\xe8\x8b\xb1",  // 切换中英
+      L"切换中英",  // 切换中英
       L"accept: \"Shift+space\" toggle: ascii_mode", L"toggle: ascii_mode"));
   out.push_back(MakeBuiltin(Action_ToggleFullHalf, L"always",
                             L"Control+Shift+F",
-                            L"\xe5\x85\xa8/"
-                            L"\xe5\x8d\x8a\xe8\xa7\x92\xe5\x88\x87\xe6\x8d"
-                            L"\xa2",  // 全/半角切换
+                            L"全/"
+                            L"半角切换"
+                            L"",  // 全/半角切换
                             L"accept: \"Control+Shift+F\" toggle: full_shape",
                             L"toggle: full_shape"));
   out.push_back(MakeBuiltin(
       Action_ToggleAsciiPunct, L"always", L"Control+Shift+numbersign",
-      L"\xe4\xb8\xad\xe8\x8b\xb1\xe6\xa0\x87\xe7\x82\xb9\xe5\x88\x87\xe6\x8d"
-      L"\xa2",
+      L"中英标点切换"
+      L"",
       L"accept: \"Control+Shift+numbersign\" toggle: ascii_punct",
       L"toggle: ascii_punct"));
   out.push_back(MakeBuiltin(
       Action_ToggleTrad, L"always", L"Control+Shift+dollar",
-      L"\xe7\xae\x80\xe7\xb9\x81\xe5\x88\x87\xe6\x8d\xa2",
+      L"简繁切换",
       L"accept: \"Control+Shift+dollar\" toggle: traditionalization",
       L"toggle: traditionalization"));
   out.push_back(MakeBuiltin(
       Action_PageUp, L"paging", L"comma",
-      L"\xe7\xbf\xbb\xe9\xa1\xb5 - \xe4\xb8\x8a\xe9\xa1\xb5",  // 翻页 - 上页
+      L"翻页 - 上页",  // 翻页 - 上页
       L"when: paging accept: comma send: Page_Up", L"send: Page_Up"));
   out.push_back(MakeBuiltin(
       Action_PageDown, L"paging", L"period",
-      L"\xe7\xbf\xbb\xe9\xa1\xb5 - \xe4\xb8\x8b\xe9\xa1\xb5",  // 翻页 - 下页
+      L"翻页 - 下页",  // 翻页 - 下页
       L"when: paging accept: period send: Page_Down", L"send: Page_Down"));
   out.push_back(MakeBuiltin(
       Action_SelectN, L"has_menu", L"Control+1",
-      L"\xe9\x80\x89\xe7\xac\xac 2 \xe5\x80\x99\xe9\x80\x89",  // 选第 2 候选
+      L"选第 2 候选",  // 选第 2 候选
       L"when: has_menu accept: \"Control+1\" send: 2", L"send: 2"));
   out.push_back(
       MakeBuiltin(Action_SelectN, L"has_menu", L"Control+2",
-                  L"\xe9\x80\x89\xe7\xac\xac 3 \xe5\x80\x99\xe9\x80\x89",
+                  L"选第 3 候选",
                   L"when: has_menu accept: \"Control+2\" send: 3", L"send: 3"));
   out.push_back(MakeBuiltin(
       Action_OpenQuickPanel, L"always", L"Alt+comma",
-      L"\xe5\xbf\xab\xe6\x8d\xb7\xe9\x9d\x99\xe6\x80\x81",  // 快捷静态
+      L"快捷静态",  // 快捷静态
                                                             // (QuickPanel =
                                                             // Alt+,)
       L"accept: \"Alt+comma\" custom: open_quick_panel",
       L"custom: open_quick_panel"));
   out.push_back(MakeBuiltin(
       Action_OpenPhrases, L"always", L"Alt+period",
-      L"\xe5\xb8\xb8\xe7\x94\xa8\xe7\x9f\xad\xe8\xaf\xad",  // 常用短语
+      L"常用短语",  // 常用短语
       L"accept: \"Alt+period\" custom: open_phrases", L"custom: open_phrases"));
   // v0.19.0.60 (Phase L 调整 1): Action_OpenUserDict 删除 — UserDictionary
   // 模块下线。
   out.push_back(MakeBuiltin(
       Action_SecondCandidate, L"has_menu", L"grave",
-      L"\xe7\xac\xac\xe4\xba\x8c\xe5\x80\x99\xe9\x80\x89",  // 第二候选
+      L"第二候选",  // 第二候选
       L"when: has_menu accept: grave send: 2", L"send: 2"));
   out.push_back(MakeBuiltin(
       Action_TriggerDeploy, L"always", L"Control+F5",
-      L"\xe9\x87\x8d\xe6\x96\xb0\xe9\x83\xa8\xe7\xbd\xb2",  // 重新部署
+      L"重新部署",  // 重新部署
       L"accept: \"Control+F5\" custom: trigger_deploy",
       L"custom: trigger_deploy"));
   return true;
@@ -515,7 +522,7 @@ bool ShortcutSettings::LoadHotkeys(const std::wstring& path,
         }
         if (!hk.accept.empty() && !hk.action_yaml.empty()) {
           hk.action_desc =
-              L"\xe8\x87\xaa\xe5\xae\x9a\xe4\xb9\x89";  // 自定义 (raw fallback)
+              L"自定义";  // 自定义 (raw fallback)
           hk.accept_new.clear();
           hk.yaml_raw = trimmed;
           out.push_back(hk);
@@ -570,8 +577,8 @@ bool ShortcutSettings::SaveHotkeys(const std::wstring& path,
   };
 
   appendLine(
-      L"# default.custom.yaml \xe2\x80\x94 Fluxing "
-      L"\xe5\xbf\xab\xe6\x8d\xb7\xe9\x94\xae\xe8\xae\xbe\xe7\xbd\xae "
+      L"# default.custom.yaml — Fluxing "
+      L"快捷键设置 "
       L"(v0.19.0.28)");  // 快捷键设置
   appendLine(L"# schema: patch.key_binder/bindings");
   appendLine(L"# editor: ShortcutSettings (spec 045)");
@@ -693,8 +700,8 @@ ShortcutSettings::ConflictReport ShortcutSettings::CheckConflict(
     r.score = 2;
     r.l18_l19_error = true;
     r.warning_action =
-        L"\xe6\xad\xa4\xe7\xbb\x84\xe5\x90\x88\xe4\xb8\x8d\xe8\xa2\xab\xe5\x85"
-        L"\x81\xe8\xae\xb8 (Shift_L/R \xe5\x8d\x95\xe9\x94\xae)";  // 此组合不被允许
+        L"此组合不被允"
+        L"许 (Shift_L/R 单键)";  // 此组合不被允许
                                                                    // (Shift_L/R
                                                                    // 单键)
     return r;
@@ -709,8 +716,8 @@ ShortcutSettings::ConflictReport ShortcutSettings::CheckConflict(
     if (fluxing::AcceptEquals(eff, combo) && h.when == when) {
       r.score = 2;
       r.duplicate_error = true;
-      r.warning_action = L"\xe4\xb8\x8e \x22" + h.action_desc +
-                         L"\x22 \xe5\x86\xb2\xe7\xaa\x81";  // 与「…」冲突
+      r.warning_action = L"与 \"" + h.action_desc +
+                         L"\" 冲突";  // 与「…」冲突
       return r;
     }
   }
@@ -722,9 +729,9 @@ ShortcutSettings::ConflictReport ShortcutSettings::CheckConflict(
       if (r.score < 1) {
         r.score = 1;
         r.warning_action =
-            L"\xe8\xa6\x86\xe7\x9b\x96\xe9\xbb\x98\xe8\xae\xa4\xe8\xa1\x8c\xe4"
-            L"\xb8\xba \x22" +
-            b.desc_zh + L"\x22";  // 覆盖默认行为「…」
+            L"覆盖默认行为"
+            L" \"" +
+            b.desc_zh + L"\"";  // 覆盖默认行为「…」
       }
       break;
     }
@@ -814,8 +821,8 @@ void ShortcutSettings::EnterCapturing(int row) {
   if (!s_hPopover || !IsWindow(s_hPopover)) {
     s_hPopover =
         CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"STATIC",
-                        L"\xe8\xaf\xb7\xe6\x8c\x89\xe5\xbf\xab\xe6\x8d\xb7\xe9"
-                        L"\x94\xae...",  // 请按快捷键...
+                        L"请按快捷键"
+                        L"...",  // 请按快捷键...
                         WS_POPUP | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
                         kPopoverW, kPopoverH + kPopoverTailH, s_hwnd, nullptr,
                         GetModuleHandle(nullptr), nullptr);
@@ -1001,9 +1008,12 @@ LRESULT ShortcutSettings::OnCreate(HWND hwnd) {
   // 修法:删 LWA_ALPHA + OnPaint 改画整 client (见 OnPaint fix)。
 
   // 几何 (runtime)
-  kTableH_phys =
-      kDialogH - kTitleH - kToolbarH - kStatusBarH - kBtnH - 6 * kGap;
-  kBtnY_phys = kTitleH + kToolbarH + kStatusBarH + kTableH_phys + 2 * kGap;
+  // spec 095: 「界面」分组行(kPrefsH)插在工具栏行与状态行之间 ⇒ 表格变矮、
+  // 按钮行下移。旧公式不含 kPrefsH,新增这一行必须同步改这两个式子。
+  kTableH_phys = kDialogH - kTitleH - kToolbarH - kStatusBarH - kBtnH -
+                 6 * kGap - kPrefsH;
+  kBtnY_phys = kTitleH + kToolbarH + kStatusBarH + kPrefsH + kTableH_phys +
+               2 * kGap;
   if (kTableH_phys < 100)
     kTableH_phys = 100;
   if (kBtnY_phys + kBtnH > kDialogH)
@@ -1036,12 +1046,32 @@ LRESULT ShortcutSettings::OnCreate(HWND hwnd) {
     SendMessageW(s_hSearch, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
   }
 
+  // spec 095: 「界面」分组行 —— 快捷面板常驻勾选框。
+  // 只改「常驻」状态 + 落盘,不主动 Show/Hide 面板(与托盘菜单
+  // 「开⇒显示 / 关⇒收起」的语义不同,差异见 spec 095 决策 D7)。
+  // 视觉副作用(alpha 复位 / 重绘)由 QuickPanelDialog 注册的
+  // ModeChangedCallback 承担,这里只负责状态。
+  s_hChkAlwaysShow = CreateWindowExW(
+      0, L"BUTTON", L"快捷面板常驻",
+      WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_AUTOCHECKBOX,
+      kGap + 56, kPrefsY + 2, 200, kPrefsH - 4, hwnd,
+      reinterpret_cast<HMENU>(ID_CHK_ALWAYS_SHOW), GetModuleHandle(nullptr),
+      nullptr);
+  if (s_hChkAlwaysShow && hfUi) {
+    SendMessageW(s_hChkAlwaysShow, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi),
+                 TRUE);
+  }
+  if (s_hChkAlwaysShow) {
+    SendMessageW(s_hChkAlwaysShow, BM_SETCHECK,
+                 AlwaysShowChecked() ? BST_CHECKED : BST_UNCHECKED, 0);
+  }
+
   // Status row: 副标题 (status)
-  int statusY = kTitleH + kToolbarH + kGap;
+  int statusY = kTitleH + kToolbarH + kPrefsH + kGap;
   s_hStatus = CreateWindowExW(
       0, L"STATIC",
-      L"\xe2\x97\x8f \xe6\x9c\xaa\xe4\xbf\x9d\xe5\xad\x98 (0 "
-      L"\xe4\xbf\xae\xe6\x94\xb9)",  // ● 未保存 (0 修改)
+      L"● 未保存 (0 "
+      L"修改)",  // ● 未保存 (0 修改)
       WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE | WS_CLIPSIBLINGS, 0,
       statusY, kDialogW, kStatusBarH, hwnd, nullptr, GetModuleHandle(nullptr),
       nullptr);
@@ -1064,15 +1094,15 @@ LRESULT ShortcutSettings::OnCreate(HWND hwnd) {
   {
     LVCOLUMNW col = {};
     col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
-    col.pszText = const_cast<LPWSTR>(L"\xe5\x8a\xa8\xe4\xbd\x9c");  // 动作
+    col.pszText = const_cast<LPWSTR>(L"动作");  // 动作
     col.cx = 280;
     col.iSubItem = 0;
     ListView_InsertColumn(s_hTable, 0, &col);
-    col.pszText = const_cast<LPWSTR>(L"\xe5\xbd\x93\xe5\x89\x8d");  // 当前
+    col.pszText = const_cast<LPWSTR>(L"当前");  // 当前
     col.cx = 200;
     col.iSubItem = 1;
     ListView_InsertColumn(s_hTable, 1, &col);
-    col.pszText = const_cast<LPWSTR>(L"\xe6\x96\xb0\xe5\x80\xbc");  // 新值
+    col.pszText = const_cast<LPWSTR>(L"新值");  // 新值
     col.cx = 200;
     col.iSubItem = 2;
     ListView_InsertColumn(s_hTable, 2, &col);
@@ -1096,23 +1126,23 @@ LRESULT ShortcutSettings::OnCreate(HWND hwnd) {
 
   int btnY = kBtnY_phys;
   int btnX = kGap;
-  makeBtn(s_hBtnAdd, L"+ \xe8\x87\xaa\xe5\xae\x9a\xe4\xb9\x89",
+  makeBtn(s_hBtnAdd, L"+ 自定义",
           ID_BTN_ADD,  // + 自定义
           btnX, btnY);
   btnX += kBtnW + kBtnGap;
-  makeBtn(s_hBtnReset, L"\xe2\x9f\xb3 \xe6\x81\xa2\xe5\xa4\x9a\xe9\xbb\x98",
+  makeBtn(s_hBtnReset, L"⟳ 恢复默认",
           ID_BTN_RESET,  // ⟳ 恢复默认 (注:这会是 ⟳ 字符 + 恢复)
           btnX, btnY);
   btnX += kBtnW + kBtnGap;
-  makeBtn(s_hBtnImport, L"\xe5\xaf\xbc\xe5\x85\xa5", ID_BTN_IMPORT, btnX, btnY);
+  makeBtn(s_hBtnImport, L"导入", ID_BTN_IMPORT, btnX, btnY);
   btnX += kBtnW + kBtnGap;
-  makeBtn(s_hBtnExport, L"\xe5\xaf\xbc\xe5\x87\xba", ID_BTN_EXPORT, btnX, btnY);
+  makeBtn(s_hBtnExport, L"导出", ID_BTN_EXPORT, btnX, btnY);
   // right-aligned: 取消 + 保存
   int rightX = kDialogW - kGap;
-  makeBtn(s_hBtnSave, L"\xe4\xbf\x9d\xe5\xad\x98", ID_BTN_SAVE,  // 保存
+  makeBtn(s_hBtnSave, L"保存", ID_BTN_SAVE,  // 保存
           rightX - kBtnW, btnY);
   rightX -= kBtnW + kBtnGap;
-  makeBtn(s_hBtnCancel, L"\xe5\x8f\x96\xe6\xb6\x88", ID_BTN_CANCEL,  // 取消
+  makeBtn(s_hBtnCancel, L"取消", ID_BTN_CANCEL,  // 取消
           rightX - kBtnW, btnY);
 
   // Populate + initial selection
@@ -1132,6 +1162,7 @@ LRESULT ShortcutSettings::OnDestroy(HWND hwnd) {
   s_hTable = s_hStatus = s_hToolbar = s_hSearch = s_hPopover = nullptr;
   s_hBtnAdd = s_hBtnReset = s_hBtnImport = s_hBtnExport = nullptr;
   s_hBtnCancel = s_hBtnSave = nullptr;
+  s_hChkAlwaysShow = nullptr;
   return 0;
 }
 
@@ -1157,9 +1188,8 @@ LRESULT ShortcutSettings::OnPaint(HWND hwnd) {
     RECT titleRc = {20, 6, kDialogW - 60, 32};
     DrawTextW(
         hdc,
-        L"\xe2\x8c\xa8 "
-        L"\xe5\xbf\xab\xe6\x8d\xb7\xe9\x94\xae\xe8\xae\xbe\xe7\xbd\xae",  // ⌨
-                                                                          // 快捷键设置
+        L"⌨ "
+        L"设置",  // 设置
         -1, &titleRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hfOld);
     DeleteObject(hfTitle);
@@ -1171,12 +1201,38 @@ LRESULT ShortcutSettings::OnPaint(HWND hwnd) {
     HFONT hfOld2 = static_cast<HFONT>(SelectObject(hdc, hfSub));
     SetTextColor(hdc, kTextSecondary);
     RECT subRc = {20, 32, kDialogW - 60, 50};
-    std::wstring sub = L"Customize keyboard shortcuts \xc2\xb7 " +  // ·
-                       std::to_wstring(m_hotkeys.size()) + L" bindings";
+    std::wstring sub = L"快捷键与界面设置 · " +
+                       std::to_wstring(m_hotkeys.size()) + L" 条快捷键";
     DrawTextW(hdc, sub.c_str(), -1, &subRc,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hfOld2);
     DeleteObject(hfSub);
+  }
+
+  // spec 095: 「界面」分组标题 + 分隔线(自绘,与标题栏同一套字体)。
+  {
+    HFONT hfGrp = CreateFontW(
+        kSmallFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, VARIABLE_PITCH | FF_SWISS, L"Segoe UI Variable");
+    HFONT hfOldGrp = static_cast<HFONT>(SelectObject(hdc, hfGrp));
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, kTextTertiary);
+    RECT grpRc = {kGap, kPrefsY, kGap + 48, kPrefsY + kPrefsH};
+    DrawTextW(hdc, L"界面", -1, &grpRc,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, hfOldGrp);
+    DeleteObject(hfGrp);
+
+    HPEN hLine = CreatePen(PS_SOLID, 1, kBorderColor);
+    HPEN hOldPen = static_cast<HPEN>(SelectObject(hdc, hLine));
+    HBRUSH hOldBrush =
+        static_cast<HBRUSH>(SelectObject(hdc, GetStockObject(NULL_BRUSH)));
+    MoveToEx(hdc, kGap, kPrefsY + kPrefsH, nullptr);
+    LineTo(hdc, kDialogW - kGap, kPrefsY + kPrefsH);
+    SelectObject(hdc, hOldBrush);
+    SelectObject(hdc, hOldPen);
+    DeleteObject(hLine);
   }
 
   // 4) 圆形 X 按钮 (右上角)
@@ -1200,7 +1256,7 @@ LRESULT ShortcutSettings::OnPaint(HWND hwnd) {
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, kButtonFgPrimary);
     RECT xRc = {cx - 10, cy - 10, cx + 10, cy + 10};
-    DrawTextW(hdc, L"\xc3\x97", -1, &xRc,  // ×
+    DrawTextW(hdc, L"×", -1, &xRc,  // ×
               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hfXO);
     DeleteObject(hfX);
@@ -1230,7 +1286,7 @@ LRESULT ShortcutSettings::OnNotify(HWND hwnd, LPARAM lp) {
       HMENU hMenu = CreatePopupMenu();
       AppendMenuW(
           hMenu, MF_STRING, 1001,
-          L"\xe9\x87\x8d\xe7\xbd\xae\xe6\xad\xa4\xe8\xa1\x8c");  // 重置此行
+          L"重置此行");  // 重置此行
       POINT pt;
       GetCursorPos(&pt);
       int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY, pt.x, pt.y,
@@ -1263,9 +1319,9 @@ LRESULT ShortcutSettings::OnCommand(HWND hwnd, WPARAM wp) {
       // 简化: push 新行 placeholder,等 popover/capture
       m_hotkeys.push_back(
           MakeBuiltin(Action_CustomUser, L"always", L"",
-                      L"\xe8\x87\xaa\xe5\xae\x9a\xe4\xb9\x89 - "
-                      L"\xe7\xa1\xae\xe8\xae\xa4\xe5\x90\x8e\xe8\xae\xb0\xe5"
-                      L"\xbd\x95",  // 自定义 - 确认后记录
+                      L"自定义 - "
+                      L"确认后记录"
+                      L"",  // 自定义 - 确认后记录
                       L"custom: user_added", L"custom: user_added"));
       PopulateTable();
       RepaintLayered(hwnd);
@@ -1274,11 +1330,11 @@ LRESULT ShortcutSettings::OnCommand(HWND hwnd, WPARAM wp) {
       // ⟳ 恢复默认: 弹确认后全 reset (spec §8 table decision)
       int ok = MessageBoxW(
           hwnd,
-          L"\xe5\xb0\x86\xe4\xb8\xa2\xe5\xbc\x83\xe6\x89\x80\xe6\x9c"
-          L"\x89\xe8\x87\xaa\xe5\xae\x9a\xe4\xb9\x89\xe5\xbf\xab\xe6"
-          L"\x8d\xb7\xe9\x94\xae\xef\xbc\x8c\xe7\xa1\xae\xe5\xae\x9a"
-          L"\xef\xbc\x9f",  // 将丢弃所有自定义快捷键，确定？
-          L"\xe6\x81\xa2\xe5\xa4\x9a\xe9\xbb\x98",  // 恢复默认
+          L"将丢弃所有"
+          L"自定义快捷"
+          L"键，确定"
+          L"？",  // 将丢弃所有自定义快捷键，确定？
+          L"恢复默认",  // 恢复默认
           MB_YESNO | MB_ICONWARNING);
       if (ok == IDYES) {
         m_hotkeys = m_defaults;
@@ -1296,6 +1352,16 @@ LRESULT ShortcutSettings::OnCommand(HWND hwnd, WPARAM wp) {
     }
     case ID_BTN_EXPORT: {
       SaveHotkeys(s_yamlPath, m_hotkeys);
+      return 0;
+    }
+    case ID_CHK_ALWAYS_SHOW: {
+      // spec 095: 勾选框只改「常驻」状态 + 落盘,不主动 Show/Hide 面板。
+      if (HIWORD(wp) == BN_CLICKED) {
+        const bool checked =
+            (SendMessageW(s_hChkAlwaysShow, BM_GETCHECK, 0, 0) ==
+             BST_CHECKED);
+        SetAlwaysShowChecked(checked);
+      }
       return 0;
     }
     case ID_SEARCH: {
@@ -1377,8 +1443,8 @@ bool ShortcutSettings::SaveAndDeploy() {
   if (s_hStatus && IsWindow(s_hStatus)) {
     SetWindowTextW(
         s_hStatus,
-        L"\xe2\x9c\x93 \xe5\xb7\xb2\xe4\xbf\x9d\xe5\xad\x98 \xc2\xb7 deploy "
-        L"\xe5\xb7\xb2\xe8\xa7\xa6\xe5\x8f\x91");  // ✓ 已保存 · deploy 已触发
+        L"✓ 已保存 · deploy "
+        L"已触发");  // ✓ 已保存 · deploy 已触发
   }
   return true;
 }
@@ -1386,6 +1452,22 @@ bool ShortcutSettings::SaveAndDeploy() {
 void ShortcutSettings::SpawnDeploy() {
   // spec §7.1: 触发 WeaselDeployer /deploy。spec AP-045-B: 不在 hook 做 IPC。
   // 后续 ship 加 ShellExecuteW(L"WeaselDeployer.exe", L"/deploy"); 这里占位。
+}
+
+// ===== spec 095: 「界面 > 快捷面板常驻」勾选框的生产 API =====
+// 设置面板的勾选框与单元测试共用同一实现(constitution R7);不建窗口也能读写,
+// 所以 test/TestShortcutSettings 可以直接断言它们。
+bool ShortcutSettings::AlwaysShowChecked() {
+  return fluxing::always_show::AlwaysShowEnabled();
+}
+
+void ShortcutSettings::SetAlwaysShowChecked(bool checked) {
+  // 落盘 + 通知观察者(QuickPanelDialog 注册的回调负责 alpha 复位 / 重绘)。
+  fluxing::always_show::ApplyAlwaysShow(checked);
+  if (s_hChkAlwaysShow && IsWindow(s_hChkAlwaysShow)) {
+    SendMessageW(s_hChkAlwaysShow, BM_SETCHECK,
+                 checked ? BST_CHECKED : BST_UNCHECKED, 0);
+  }
 }
 
 // ===== Center / Repaint =====

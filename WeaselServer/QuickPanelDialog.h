@@ -37,6 +37,9 @@
 // ADR 0020: 用户数据目录解析(单一事实源):面板勾选态落点必须与
 // WeaselUserDataPath() 落在同一个用户数据目录里。
 #include <FluxingUserPaths.h>
+// spec 095: 「快捷面板常驻」的运行期状态 + 状态文件读写的单一事实源
+// (QuickPanelDialog 与 ShortcutSettings 共用,constitution R7)。
+#include <FluxingAlwaysShow.h>
 
 class QuickPanelDialog {
  public:
@@ -75,7 +78,10 @@ class QuickPanelDialog {
                                    OnClick onSymbols,
                                    OnClick onLogin);
 
-  static Mode CurrentMode() { return s_mode; }
+  static Mode CurrentMode() {
+    return fluxing::always_show::AlwaysShowEnabled() ? Mode::kAlwaysShow
+                                                      : Mode::kHidden;
+  }
   static HWND ActiveHwnd() { return s_hwnd; }
   // spec 084 / ADR 0013: 当前整体不透明度系数(0..255),不是 alpha 通道值。
   static int CurrentAlpha() { return s_alphaFactor; }
@@ -83,8 +89,17 @@ class QuickPanelDialog {
 
   // spec 084 / ADR 0013 D4: 长显模式(快捷设置栏常驻)开关。
   // 默认关;打开后面板常驻屏幕右下角,常态 85% 不透明度,悬停渐变到 100%。
+  // spec 095: 运行期状态的唯一真源下沉到 include/FluxingAlwaysShow.h
+  // (QuickPanelDialog 与 ShortcutSettings 共用,constitution R7);
+  // 原来这里的 s_mode 静态成员已删除,避免出现第二个真源。
   static void SetAlwaysShowMode(bool enabled);
-  static bool AlwaysShowMode() { return s_mode == Mode::kAlwaysShow; }
+  // spec 095: 模式变化观察者。由 include/FluxingAlwaysShow.h 的
+  // ModeChangedCallback 机制触发 —— 设置面板改「常驻」态时,面板要把 alpha
+  // 复位并重绘,否则会停在淡显状态。
+  static void OnAlwaysShowModeChanged(bool enabled);
+  static bool AlwaysShowMode() {
+    return fluxing::always_show::AlwaysShowEnabled();
+  }
   // v1.1.2 (用户 1.1.1 验收反馈, ADR 0019):「常驻」勾选态跨 WeaselServer
   // 重启持久化 —— 推翻 spec 084 FR-007「重启回到默认(关)」。
   // v1.1.3 (ADR 0020): 介质改跟随用户数据目录
@@ -93,7 +108,7 @@ class QuickPanelDialog {
   //   仅作只读兜底(存量勾选不丢)。
   // Restore 只恢复模式、绝不 auto-show (spec 055 不变量保留)。
   static void SetStatePath(const std::wstring& path);  // 测试注入;空串=回默认
-  static void RestoreAlwaysShowMode();  // 服务器启动时读盘恢复 s_mode
+  static void RestoreAlwaysShowMode();  // 服务器启动时读盘恢复运行期状态
   static bool LoadPersistedAlwaysShowMode();  // 文件缺失/损坏 ⇒ true(spec 089 /
                                               // ADR 0022: 默认常驻)
   // ADR 0020: 默认落点(不含测试注入覆盖)与旧落点。
@@ -108,7 +123,6 @@ class QuickPanelDialog {
 
   // ===== Static state (D2D 字段全部移除) =====
   static HWND s_hwnd;
-  static Mode s_mode;
   static bool s_fullwidth;
   static bool s_mouseTracked;
   // spec 084 / ADR 0013 D1/D2: 整体不透明度系数(0..255)。

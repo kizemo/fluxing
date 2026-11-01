@@ -39,6 +39,10 @@
 #include <windows.h>
 #include <commctrl.h>
 
+// spec 095: 「快捷面板常驻」的运行期状态 + 落盘(与 QuickPanelDialog 共用
+// 单一事实源,constitution R7)。
+#include <FluxingAlwaysShow.h>
+
 class ShortcutSettings {
  public:
   // ===== 单例 API =====
@@ -47,6 +51,13 @@ class ShortcutSettings {
   static void Show();
   static void Hide();
   static void Toggle();
+
+  // spec 095: 「界面 > 快捷面板常驻」勾选框的生产 API。
+  // AlwaysShowChecked() 读运行期状态;SetAlwaysShowChecked() 改状态 +
+  // 落盘 + 通知观察者(alpha 复位 / 重绘)。两者都不需要建窗口 ⇒ 可被
+  // test/TestShortcutSettings 直接断言(生产代码与测试共用同一实现)。
+  static bool AlwaysShowChecked();
+  static void SetAlwaysShowChecked(bool checked);
 
   // 设置 YAML 路径(测试用,默认 = <user_data>/default.custom.yaml via
   // RimeGetUserDataDir)
@@ -113,6 +124,7 @@ class ShortcutSettings {
   static HWND s_hBtnExport;
   static HWND s_hBtnCancel;
   static HWND s_hBtnSave;
+  static HWND s_hChkAlwaysShow;  // spec 095: 「快捷面板常驻」勾选框
   static std::wstring s_yamlPath;
   static DWORD s_showTime;  // Show() 时刻(GetTickCount), auto-hide grace
 
@@ -142,6 +154,8 @@ class ShortcutSettings {
   static constexpr UINT ID_BTN_CANCEL = 2114;
   static constexpr UINT ID_BTN_SAVE = 2115;
   static constexpr UINT ID_POPOVER = 2120;
+  // spec 095: 「界面 > 快捷面板常驻」勾选框 ID(2130 段空闲)。
+  static constexpr UINT ID_CHK_ALWAYS_SHOW = 2130;
 
   // 静态 hook proc (WH_KEYBOARD_LL)
   static LRESULT CALLBACK LowLevelKeyboardProc(int, WPARAM, LPARAM);
