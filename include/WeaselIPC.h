@@ -188,6 +188,45 @@ inline bool ShouldShowQuickPanelOnFocusIn(DWORD param) {
   return ClassifyFocusIn(param) == FocusInKind::kProfileActivated;
 }
 
+// spec 097:「火流猩是否在场」的三态状态机。
+//
+// 为什么需要它(spec 097 bug:切换到其他输入法时快捷设置栏不消失):
+//   服务端的「显示」与「隐藏」原先走两条不同的线程路径 ——
+//     显示: FocusIn(PROFILE_ACTIVATED)  -> PostMessage(WM_COMMAND, SHOW)
+//     隐藏: FocusOut(PROFILE_DEACTIVATED) -> 直接在 IPC 线程调 Hide()
+//   PostMessage 是异步的:「隐藏」在 IPC 线程上立刻生效,排队的「显示」却在
+//   UI 线程上晚一步执行 —— 面板在隐藏之后又被显示出来,留在屏幕上不消失。
+//
+//   本状态机把「用户当前在不在火流猩」变成服务端的显式状态:
+//     FocusIn  带 PROFILE_ACTIVATED  => kPresent
+//     FocusOut 带 PROFILE_DEACTIVATED => kAbsent
+//   UI 线程真正执行显示之前复核该状态:已经是 kAbsent 就作废本次显示。
+//   隐藏请求同时改走 UI 线程队列,于是显示与隐藏在同一个队列里定序。
+//
+// 判定逻辑放共享纯函数,生产代码与 TestWeaselIPC 共用同一份口径(宪法 R7)。
+enum class FluxingPresence {
+  kUnknown,  // 还没收到任何输入法切换信号
+  kPresent,  // 用户刚切到火流猩
+  kAbsent,   // 用户刚切离火流猩
+};
+
+inline FluxingPresence UpdateFluxingPresence(FluxingPresence prev,
+                                             bool focus_in_profile,
+                                             bool focus_out_profile) {
+  if (focus_out_profile)
+    return FluxingPresence::kAbsent;
+  if (focus_in_profile)
+    return FluxingPresence::kPresent;
+  return prev;
+}
+
+// 在场状态是否允许显示快捷面板。
+// kAbsent(已切走)不允许;kUnknown(还没信号)与 kPresent(在场)都允许 ——
+// 「没收到信号」不能当成「不在场」,否则老客户端永远弹不出面板。
+inline bool ShouldShowQuickPanelForPresence(FluxingPresence presence) {
+  return presence != FluxingPresence::kAbsent;
+}
+
 namespace weasel {
 struct PipeMessage {
   WEASEL_IPC_COMMAND Msg;
@@ -324,7 +363,11 @@ class Client {
   void FocusIn(DWORD client_caps = 0);
   // 输入窗口失去焦点
   // client_caps: WEASEL_IPC_FOCUS_OUT_FLAG_* 位标志(见文件上方定义)
-  void FocusOut(DWORD client_caps = 0);
+  // spec 097: 返回「这条消息是否真的送达服务端」。
+  // 不能拿服务端应答值当成功标志 —— OnFocusOut 的应答恒为 0,正常送达也是 0。
+  // 旧代码 void 返回 + _SendMessage 的 catch(DWORD)->return 0 把管道错误
+  // 静默吞掉,于是「切走了」丢没丢完全不可见,前端只能盲目重试或者直接放弃。
+  bool FocusOut(DWORD client_caps = 0);
   // spec 080: close the pipe connection owned by the calling thread only.
   void CloseThreadChannel();
   // spec 080: true when this client owns a live session.

@@ -19,6 +19,7 @@ int console_main();
 int client_main();
 int server_main();
 int verify_quickpanel_main();
+int verify_quickpanel_presence_main();
 int verify_focusout_flags_main();
 int verify_focusin_flags_main();
 int verify_shift_body_main();
@@ -65,6 +66,12 @@ int _tmain(int argc, _TCHAR* argv[]) {
     return verify_shift_body_main();
   } else if (argc > 1 && !wcscmp(L"/verify-quickpanel", argv[1])) {
     return verify_quickpanel_main();
+  } else if (argc > 1 &&
+             !wcscmp(L"/verify-quickpanel-presence", argv[1])) {
+    // spec 097: the "is Fluxing present" state machine.
+    // The production code and this test share the very same implementation
+    // in include/WeaselIPC.h (constitution R7).
+    return verify_quickpanel_presence_main();
   } else if (argc > 1 && !wcscmp(L"/verify-focusout-flags", argv[1])) {
     return verify_focusout_flags_main();
   } else if (argc > 1 && !wcscmp(L"/verify-focusin-flags", argv[1])) {
@@ -991,4 +998,62 @@ int verify_delete_body_main() {
   }
   std::cerr << "[DELETE] FAIL" << std::endl;
   return -6;
+}
+
+// spec 097: verify the shared "is Fluxing present" state machine.
+//
+// The production code (RimeWithWeaselHandler) and this test call the same
+// inline functions from include/WeaselIPC.h, so a drift between the two is
+// impossible by construction (constitution R7).
+int verify_quickpanel_presence_main() {
+  int failures = 0;
+  auto check = [&](bool cond, const char* what) {
+    if (cond) {
+      std::cout << "ok   : " << what << std::endl;
+    } else {
+      std::cerr << "FAIL : " << what << std::endl;
+      ++failures;
+    }
+  };
+
+  // 1. Unknown state must not forbid the panel: a client that never sends
+  //    a profile notification still has to be able to show the panel.
+  check(ShouldShowQuickPanelForPresence(FluxingPresence::kUnknown),
+        "unknown presence allows show");
+
+  // 2. Switching TO Fluxing => present => show allowed.
+  FluxingPresence p =
+      UpdateFluxingPresence(FluxingPresence::kUnknown, true, false);
+  check(p == FluxingPresence::kPresent, "profile focus-in -> present");
+  check(ShouldShowQuickPanelForPresence(p), "present allows show");
+
+  // 3. Switching AWAY from Fluxing => absent => show forbidden.
+  p = UpdateFluxingPresence(p, false, true);
+  check(p == FluxingPresence::kAbsent, "profile focus-out -> absent");
+  check(!ShouldShowQuickPanelForPresence(p), "absent forbids show");
+
+  // 4. An ordinary app focus change must not touch the presence state.
+  p = UpdateFluxingPresence(p, false, false);
+  check(p == FluxingPresence::kAbsent, "app focus keeps presence");
+  p = UpdateFluxingPresence(p, true, false);
+  check(p == FluxingPresence::kPresent, "profile focus-in restores present");
+
+  // 5. When both arrive in the same batch, "focus out" wins: the panel
+  //    must never reappear after the user already left Fluxing.
+  p = UpdateFluxingPresence(FluxingPresence::kPresent, true, true);
+  check(p == FluxingPresence::kAbsent, "focus-out wins over focus-in");
+  check(!ShouldShowQuickPanelForPresence(p), "absent still forbids show");
+
+  // 6. The existing focus flag protocol keeps working unchanged.
+  check(ClassifyFocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED) ==
+            FocusOutKind::kProfileDeactivated,
+        "focus-out flag classifies as profile-deactivated");
+  check(ShouldHideQuickPanelOnFocusOut(
+            WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED, true),
+        "profile-deactivated hides even in always-show mode");
+
+  std::cout << (failures == 0 ? "verify-quickpanel-presence: PASS"
+                              : "verify-quickpanel-presence: FAIL")
+            << std::endl;
+  return failures == 0 ? 0 : 1;
 }

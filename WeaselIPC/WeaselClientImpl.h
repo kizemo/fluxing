@@ -36,7 +36,10 @@ class ClientImpl {
   // spec 080: client_caps carries WEASEL_IPC_FOCUS_IN_FLAG_* bit flags.
   void FocusIn(DWORD client_caps = 0);
   // spec 091: client_caps carries WEASEL_IPC_FOCUS_OUT_FLAG_* bit flags.
-  void FocusOut(DWORD client_caps = 0);
+  // spec 097: returns true only when the message really reached the server.
+  // The server answers 0 for FOCUS_OUT, so the reply value cannot be used
+  // as a success signal; only the transport outcome can.
+  bool FocusOut(DWORD client_caps = 0);
   // spec 080: close the pipe connection owned by the CALLING thread only.
   // PipeChannel keeps its pipe handle in a thread_local slot, so every
   // thread that talks to WeaselServer owns a separate connection. The TSF

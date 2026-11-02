@@ -175,8 +175,18 @@ void ClientImpl::CloseThreadChannel() {
   channel.Disconnect();
 }
 
-void ClientImpl::FocusOut(DWORD client_caps) {
-  _SendMessage(WEASEL_IPC_FOCUS_OUT, client_caps, session_id.load());
+bool ClientImpl::FocusOut(DWORD client_caps) {
+  // spec 097: 单独 try/catch,不复用 _SendMessage。
+  // _SendMessage 把管道错误 catch(DWORD) 之后 return 0,而 FOCUS_OUT 的正常
+  // 应答也是 0 —— 两者无法区分,「切走了」到底送没送达完全不可见。
+  // 这里只要管道往返没抛异常就算送达,应答值一律不看。
+  try {
+    PipeMessage req{WEASEL_IPC_FOCUS_OUT, client_caps, session_id.load()};
+    channel.Transact(req);
+    return true;
+  } catch (DWORD) {
+    return false;
+  }
 }
 
 void ClientImpl::TrayCommand(UINT menuId) {
@@ -309,8 +319,8 @@ void Client::FocusIn(DWORD client_caps) {
   m_pImpl->FocusIn(client_caps);
 }
 
-void Client::FocusOut(DWORD client_caps) {
-  m_pImpl->FocusOut(client_caps);
+bool Client::FocusOut(DWORD client_caps) {
+  return m_pImpl->FocusOut(client_caps);
 }
 
 void Client::CloseThreadChannel() {

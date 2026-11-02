@@ -9,6 +9,9 @@
 #include "CandidateList.h"
 #include "LanguageBar.h"
 #include <FluxingInstallPaths.h>
+// spec 097: 快捷设置栏显隐链路的诊断日志。只在前端通知线程写,
+// 绝不进 ITfTextInputProcessorEx::* 回调(宪法 P2)。
+#include <FluxingDiagLog.h>
 #include "Compartment.h"
 #include "ResponseParser.h"
 
@@ -388,10 +391,20 @@ void WeaselTSF::_ProfileNotifyLoop() {
         return m_profileNotifyStop ||
                m_profileNotifyPending != kProfileNotifyNone;
       });
-      if (m_profileNotifyStop)
-        return;
+      // spec 097: 先取 pending,再判断 stop。
+      //
+      // 旧顺序(stop 早于取 pending)会在「TIP 实例被销毁」这条最常见的路径
+      // 上把「用户已经切走了」整个丢掉:Deactivate() 先投递
+      // kProfileNotifyDeactivated,紧接着析构函数 _JoinProfileNotifyThread()
+      // 置 stop,通知线程醒来后直接 return,pending 里的意图一次也没发出去。
+      // 服务端因此永远收不到 PROFILE_DEACTIVATED,快捷设置栏留在屏幕上。
+      //
+      // 新顺序:有 pending 就先取走并发出去;只有在「没有 pending」且 stop
+      // 时才退出线程。停机最多多发一条消息,不会少发。
       kind = m_profileNotifyPending;
       m_profileNotifyPending = kProfileNotifyNone;
+      if (m_profileNotifyStop && kind == kProfileNotifyNone)
+        return;
     }
     if (kind == kProfileNotifyActivated) {
       // The flag tells the server "the user just switched to Fluxing",
@@ -416,7 +429,19 @@ void WeaselTSF::_ProfileNotifyLoop() {
       // Deactivate() 先 EndSession() 再发通知的话门禁恒假,通知必丢。
       // ClientImpl::FocusOut 本身没有 _Active() 门禁(session_id=0 也能发),
       // 服务端的 OnFocusOut 也不校验 session_id,直接透传 wParam。
-      m_client.FocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED);
+      //
+      // spec 097: 送达确认 + 有界重试。
+      // 旧代码发完就当成功,而管道错误被 _SendMessage 的 catch(DWORD)->return 0
+      // 静默吞掉 —— 「切走了」这条消息丢没丢完全不可见。现在 FocusOut 返回
+      // 「是否真的送达」,失败时以 120ms 间隔最多重试 3 次。
+      bool sent = false;
+      for (int attempt = 0; attempt < 3 && !sent; ++attempt) {
+        if (attempt > 0)
+          ::Sleep(120);
+        sent = m_client.FocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED);
+      }
+      fluxing::diag::AppendLine(
+          "tsf", std::string("deactivated sent=") + (sent ? "1" : "0"));
     }
     // One-shot notification: drop this thread's pipe connection so
     // WeaselServer does not keep an idle instance around.

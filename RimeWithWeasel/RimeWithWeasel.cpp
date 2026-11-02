@@ -14,6 +14,8 @@
 //   GetForegroundWindow() 是 session-global (跟 caller 进程无关),所以
 //   IPC worker thread 调 = 拿 user app 当前 foreground (= 最稳的 capture 点)。
 #include "ForegroundCapture.h"
+// spec 097: 服务端侧的显隐链路诊断。写盘发生在 IPC 线程,不在 UI 线程。
+#include <FluxingDiagLog.h>
 
 #include <filesystem>
 #include <map>
@@ -50,6 +52,8 @@ int expand_ibus_modifier(int m) {
 RimeWithWeaselHandler::RimeWithWeaselHandler(UI* ui)
     : m_ui(ui),
       m_active_session(0),
+      // spec 097: 服务端记录「火流猩是否在场」。初始未知 => 允许显示。
+      m_fluxing_presence(FluxingPresence::kUnknown),
       m_disabled(true),
       m_current_dark_mode(false),
       m_global_ascii_mode(false),
@@ -269,6 +273,19 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
 DWORD RimeWithWeaselHandler::RemoveSession(WeaselSessionId ipc_id) {
   if (m_ui)
     m_ui->Hide();
+  // spec 097: 活动会话结束 = 「火流猩离场」的兜底信号。
+  // 切走输入法时 TSF 前端会 EndSession(),但那条路径上的
+  // FocusOut(PROFILE_DEACTIVATED) 可能因为管道错误整条丢失(旧代码把管道
+  // 错误静默吞成 0)。会话消失本身是不可伪造的事实:活动会话没了,火流猩就
+  // 不在场了,快捷面板必须收起。
+  if (ipc_id == m_active_session) {
+    m_fluxing_presence.store(FluxingPresence::kAbsent,
+                              std::memory_order_relaxed);
+    if (m_onHideQuickPanel)
+      m_onHideQuickPanel();
+    fluxing::diag::AppendLine("server",
+                               "remove_session active presence=absent");
+  }
   TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return 0;
@@ -528,7 +545,15 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
       DLOG(INFO) << "profile activated ignored, not the active session";
       return;
     }
+    // spec 097: 先更新在场状态,再请求显示。
+    // UI 线程执行显示之前会复核该状态 —— 若「切走」已经先到服务端,本次
+    // 显示会被作废,面板不会在隐藏之后又冒出来。
+    m_fluxing_presence.store(
+        UpdateFluxingPresence(
+            m_fluxing_presence.load(std::memory_order_relaxed), true, false),
+        std::memory_order_relaxed);
     DLOG(INFO) << "profile activated, request QuickPanel";
+    fluxing::diag::AppendLine("server", "focus_in profile presence=present");
     if (m_onShowQuickPanel)
       m_onShowQuickPanel();
     return;
@@ -572,8 +597,27 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
   // 守卫仍然加在调用点,不动 QuickPanelDialog::Hide() 本体:Hide() 还服务于
   // 需要用户明确手势的路径(Alt+, 收起 / ESC / 点词库按钮),把守卫放进
   // Hide() 内部会让那些路径在长显态下失效(ADR 0013 D7 / ADR 0016 D1)。
-  if (ShouldHideQuickPanelOnFocusOut(param, QuickPanelDialog::AlwaysShowMode()))
-    QuickPanelDialog::Hide();
+  //
+  // spec 097: 「切走」消息先落成在场状态,再请求隐藏。
+  const bool profile_deactivated =
+      HasFocusOutFlag(param, WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED);
+  m_fluxing_presence.store(
+      UpdateFluxingPresence(
+          m_fluxing_presence.load(std::memory_order_relaxed), false,
+          profile_deactivated),
+      std::memory_order_relaxed);
+  fluxing::diag::AppendLine(
+      "server",
+      std::string("focus_out param=") + std::to_string(param) +
+          " presence=" + (profile_deactivated ? "absent" : "kept"));
+  if (ShouldHideQuickPanelOnFocusOut(param, QuickPanelDialog::AlwaysShowMode())) {
+    // spec 097: 隐藏也走 UI 线程队列,与显示共用同一个队列 => 显示与隐藏
+    // 在 UI 线程上定序,不会出现「隐藏之后又被显示」。
+    if (m_onHideQuickPanel)
+      m_onHideQuickPanel();
+    else
+      QuickPanelDialog::Hide();
+  }
 }
 
 void RimeWithWeaselHandler::UpdateInputPosition(RECT const& rc,

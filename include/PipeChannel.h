@@ -167,8 +167,13 @@ class PipeChannel : public PipeChannelBase {
     try {
       _WritePipe(pipe, data_sz, pbuff);
     } catch (...) {
+      // spec 097: 重连之后必须**重新取句柄**。
+      // 旧代码用的是局部变量 pipe(重连前的旧句柄),写它必然失败,异常一路
+      // 抛到 ClientImpl::_SendMessage 的 catch(DWORD)->return 0 被静默吞掉 ——
+      // 于是「切走了」这条消息在服务端根本没到,前端却以为发出去了。
       _Reconnect();
-      _WritePipe(pipe, data_sz, pbuff);
+      HANDLE* phandle = _GetPipeHandle();
+      _WritePipe(*phandle, data_sz, pbuff);
     }
     ClearBufferStream();
   }

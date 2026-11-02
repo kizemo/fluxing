@@ -4,6 +4,7 @@
 #include <map>
 #include <string>
 #include <mutex>
+#include <atomic>
 #include <unordered_map>
 // spec 090: 候选词屏蔽名单(std::unordered_set)与页内索引映射(std::vector)。
 #include <unordered_set>
@@ -124,6 +125,19 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   void SetOnShowQuickPanel(std::function<void()> const& cb) {
     m_onShowQuickPanel = cb;
   }
+  // spec 097: 隐藏快捷面板也必须走 UI 线程队列。
+  // 旧代码在服务端 IPC 线程里直接调 QuickPanelDialog::Hide(),而显示走的是
+  // PostMessage(UI 线程队列) —— 两条不同线程的路径没有共同的定序点,于是
+  // 「先显示后隐藏」会被 UI 线程在隐藏之后才执行的那次显示覆盖掉,面板留在
+  // 屏幕上不消失(spec 097 bug 的服务端一半根因)。
+  void SetOnHideQuickPanel(std::function<void()> const& cb) {
+    m_onHideQuickPanel = cb;
+  }
+  // spec 097: 服务端当前记录的「火流猩是否在场」。UI 线程执行显示之前
+  // 复核它:已经切走(kAbsent)就作废本次显示。
+  FluxingPresence GetFluxingPresence() const {
+    return m_fluxing_presence.load(std::memory_order_relaxed);
+  }
 
  private:
   void _Setup();
@@ -181,6 +195,9 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   AppOptionsByAppName m_app_options;
   weasel::UI* m_ui;  // reference
   DWORD m_active_session;
+  // spec 097: 「火流猩是否在场」的服务端状态。IPC 线程写、UI 线程读,
+  // 必须是无锁原子(宪法 P2:不得在 TSF/IO 路径上加锁)。
+  std::atomic<FluxingPresence> m_fluxing_presence;
   // spec 045: cached scheme + option bools (refreshed by _GetStatus).
   std::string m_current_schema_id;
   std::vector<std::string> m_available_schemas;
@@ -195,6 +212,10 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   std::map<std::string, bool> m_show_notifications_base;
   std::function<void()> _UpdateUICallback;
   std::function<void()> m_onShowQuickPanel;
+  // spec 097: 隐藏回调。与 m_onShowQuickPanel 成对,由服务端注入
+  // (PostMessage 到 UI 线程),保证 show / hide 在同一线程排队。未注入时
+  // FocusOut 直接回退到 QuickPanelDialog::Hide()。
+  std::function<void()> m_onHideQuickPanel;
 
   static void OnNotify(void* context_object,
                        uintptr_t session_id,

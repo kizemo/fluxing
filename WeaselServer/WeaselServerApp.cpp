@@ -6,7 +6,8 @@
 #include "PhrasesDialogIPC.h"  // v0.19.0.52 (Phase K3 T010): out-of-process IPC 替代 in-process PhrasesDialog
 #include "UserDictionary.h"    // v0.19.0.28(spec 044 §3.2):Track 3 wiring
 #include "ShortcutSettings.h"  // spec 045 v0.19.0.28: Track 3 wiring
-// spec 070 T007: D2D factory 创建 (在 WeaselServerApp::Run 入口)
+
+#include "FluxingDiagLog.h"  // spec 097: 诊断日志（服务端 DLOG 被 no_logging.h 编译为空操作）// spec 070 T007: D2D factory 创建 (在 WeaselServerApp::Run 入口)
 #include <d2d1.h>
 #pragma comment(lib, "d2d1.lib")
 
@@ -37,6 +38,11 @@ WeaselServerApp::WeaselServerApp()
   m_handler->SetOnShowQuickPanel([this] {
     ::PostMessage(m_server.GetHWnd(), WM_COMMAND,
                   MAKEWPARAM(ID_WEASELTRAY_QUICK_PANEL_SHOW, 0), 0);
+  });
+  // spec 097: 隐藏走同一条 UI 线程队列,显示与隐藏因此有共同的定序点。
+  m_handler->SetOnHideQuickPanel([this] {
+    ::PostMessage(m_server.GetHWnd(), WM_COMMAND,
+                  MAKEWPARAM(ID_WEASELTRAY_QUICK_PANEL_HIDE, 0), 0);
   });
 }
 
@@ -367,7 +373,27 @@ void WeaselServerApp::SetupMenuHandlers() {
                     MAKEWPARAM(ID_WEASELTRAY_QUICK_PANEL_SHOW, 0), 0);
       return true;
     }
+    // spec 097: 复核「火流猩是否在场」。
+    // 「切走」消息可能先于这次显示到达服务端(显示是 PostMessage 排队的,
+    // 隐藏是即时处理的)。此时面板已经不该出现,作废本次显示。
+    if (m_handler &&
+        !ShouldShowQuickPanelForPresence(m_handler->GetFluxingPresence())) {
+      fluxing::diag::AppendLine("server", "quickpanel_show_cancelled absent");
+      return true;
+    }
     ShowQuickPanel();
+    return true;
+  });
+
+  // spec 097: 强制隐藏快捷面板(用户切到别的输入法)。与 SHOW 走同一条
+  // UI 线程队列,保证「先显示后隐藏」不会被反转。
+  m_server.AddMenuHandler(ID_WEASELTRAY_QUICK_PANEL_HIDE, [this] {
+    if (GetCurrentThreadId() != m_uiThreadId) {
+      ::PostMessage(m_server.GetHWnd(), WM_COMMAND,
+                    MAKEWPARAM(ID_WEASELTRAY_QUICK_PANEL_HIDE, 0), 0);
+      return true;
+    }
+    QuickPanelDialog::Hide();
     return true;
   });
 

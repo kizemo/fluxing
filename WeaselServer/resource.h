@@ -56,6 +56,11 @@
 // user switches the active input profile to Fluxing.
 #define ID_WEASELTRAY_QUICK_PANEL_SHOW 40020
 
+// spec 097: force-hide the QuickPanel (the "the user switched to another
+// input method" entry point). Marshalled to the server UI thread so that
+// show and hide share one ordering queue.
+#define ID_WEASELTRAY_QUICK_PANEL_HIDE 40021
+
 #define IDR_FLUXING_LOGO                108
 #define ID_QUICKPANEL_BTN_ASCII        41001
 #define ID_QUICKPANEL_BTN_DEPLOY       41002

@@ -40,8 +40,17 @@ bool PipeChannelBase::_Ensure() {
 
 HANDLE PipeChannelBase::_Connect(const wchar_t* name) {
   HANDLE pipe = INVALID_HANDLE_VALUE;
-  while (_Invalid(pipe = _TryConnect()))
+  // spec 097: 有界重试。旧代码是无限循环 —— 服务端把命名管道实例占满
+  // (或者中途退出)时,前端会永久卡在 WaitNamedPipe 上,连「报告失败」都
+  // 做不到。预算 3 秒;FILE_NOT_FOUND 由 _TryConnect 直接抛出,不在此重试。
+  const DWORD kConnectBudgetMs = 3000;
+  DWORD waited = 0;
+  while (_Invalid(pipe = _TryConnect())) {
+    if (waited >= kConnectBudgetMs)
+      throw DWORD(ERROR_PIPE_BUSY);
     ::WaitNamedPipe(name, 500);
+    waited += 500;
+  }
   DWORD mode = PIPE_READMODE_MESSAGE;
   if (!SetNamedPipeHandleState(pipe, &mode, NULL, NULL)) {
     _ThrowLastError;
