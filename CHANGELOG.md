@@ -1,5 +1,26 @@
 ## [Unreleased]
 
+### fix(installer): 安装路径守卫下沉到 NSIS 权威层，危险目标在动真机之前就被拦下（L169）
+
+- **事故根因有两层**：脚本层守卫（`scripts/install/silent-install.ps1`）已修，
+  但**权威层**（安装器本体）仍无守卫。新增 `output/guard_install_path.nsh`，
+  由 `output/install.nsi` 在 `.onInit` **第一条语句**调用 —— 必须早于那段 3 次
+  `taskkill WeaselServer.exe` 的扫荡与写死路径的 `Delete`，否则守卫形同虚设。
+- **命中即中止，不回落默认路径**：`SetErrorLevel 2` + `Abort`；静默模式不弹窗，
+  交互模式弹框说明原因与被拒路径。「静默改路径」正是 L169「装错地方还不吭声」的病根。
+- **判定规则（大小写不敏感）**：拦 `rime_claude` / `00selfmade` 子串、`\tmp\` 路径段
+  （及以 `\tmp` 结尾）、`C:\TEMP\` 冒烟根、`C:\Users\test` 冒烟根；其余一律放行。
+- **交互安装补口**：目录页 leave 回调（`FluxingDirectoryPageLeave`）再过一次守卫，
+  覆盖 GUI 改路径这条绕过 `.onInit` 的路。
+- **验证**：makensis 编译门禁 rc=0；判定逻辑单元测试 **16/16、MISMATCH=0** ——
+  `output/guard_install_path_test.nsi` 与安装器 **include 同一个** `.nsh`
+  ⇒ 「测的代码 == 装的代码」；含 3 条负对照（`tmp2` / `tempfiles` / `tmpstore`
+  必须放行 ⇒ 不会误拦合法路径）。真机安全冒烟：被拦目标**退出码 2**、零落盘，
+  真机 `WeaselServer.exe` 的 size / mtime 与进程 pid **分毫未变**。
+- **`OutFile` 可被 `/DFLUXING_OUTFILE=` 覆盖**（默认行为不变）⇒ 验收构建不再覆盖
+  已发布产物 `output/archives/fluxing-1.1.6-installer.exe`（本次未被触碰，
+  替换已发布安装器须用户签字）。
+
 ### fix(fluxing): 快捷面板双击不上屏；上屏由逐字注入改为剪贴板粘贴（spec 097 诉求 2）
 
 - **双击此前完全不上屏，根因不在服务端**（`FluxingPhrasesDialog/PhrasesDialog.cpp`）：

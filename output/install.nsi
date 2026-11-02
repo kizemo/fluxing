@@ -10,6 +10,12 @@
 
 Unicode true
 
+; L169 权威层：安装路径守卫的判定逻辑放在独立可共享的 include 里。
+;   同一个文件被 output\guard_install_path_test.nsi 引入 ⇒ 「测的代码 == 装的代码」。
+;   位置说明：StrFunc.nsh / LogicLib.nsh 只含宏定义，可以出现在 Unicode true
+;   之前；而本文件含 Var / Function 声明，必须排在 Unicode true 之后。
+!include "guard_install_path.nsh"
+
 ;--------------------------------
 ; General
 
@@ -53,7 +59,14 @@ Var FluxingRegSvr32x64
 Name "Fluxing ${FLUXING_VERSION}"
 
 ; The file to write
-OutFile "archives\fluxing-${FLUXING_VERSION}-installer.exe"
+; L169 验收：允许用 /DFLUXING_OUTFILE=<绝对路径> 把构建产物导到别处
+;   （例如 tmp\），避免验收/守卫测试构建覆盖已发布的
+;   archives\fluxing-<version>-installer.exe。默认行为不变。
+!ifdef FLUXING_OUTFILE
+  OutFile "${FLUXING_OUTFILE}"
+!else
+  OutFile "archives\fluxing-${FLUXING_VERSION}-installer.exe"
+!endif
 
 VIProductVersion "${FLUXING_VERSION}.${WEASEL_BUILD}"
 VIAddVersionKey /LANG=2052 "ProductName" "火流猩输入法"
@@ -75,7 +88,10 @@ RequestExecutionLevel admin
 ; Pages
 
 !insertmacro MUI_PAGE_LICENSE "LICENSE.txt"
-!define MUI_PAGE_CUSTOMFUNCTION_LEAVE "ForceFluxingSuffix"
+; L169: 交互安装时用户可以在目录页改路径 —— 落盘前再过一次守卫，
+; 否则 GUI 这条路径仍能把文件装进临时目录/源码工作区（.onInit 的守卫那时
+; 只看得到旧值）。守卫命中即中止安装。
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE "FluxingDirectoryPageLeave"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -141,6 +157,14 @@ LangString AUTOCHKUPDATE ${LANG_ENGLISH} "Automatically check for updates?"
 
 
 Function .onInit
+  ; L169 权威层守卫 —— 必须保持为本函数的第一条语句：
+  ;   下面的 taskkill 循环（3 次重试）与写死路径的 Delete
+  ;   （D:\Program Files\Fluxing\weasel\WeaselServer.exe，NTFS 大小写不敏感 ⇒
+  ;   命中的就是真机）会动真机文件。守卫若排在其后 = L169 事故照旧。
+  ;   判定逻辑在 guard_install_path.nsh：命中即中止（SetErrorLevel 2 + Abort），
+  ;   不改成「重置成默认路径」——静默忽略用户意图正是 L169 的病根。
+  Call GuardInstallPath
+
   ; L13 fix: pre-install cleanup. Force-kill any zombie WeaselServer.exe
   ; BEFORE any other NSIS logic. This is needed because:
   ;  (1) the polite /quit in call_uninstaller may hang on a crashed process
@@ -1282,6 +1306,12 @@ SectionEnd
 
 
 
+
+; L169: 目录页离开时的回调 = 先过安装路径守卫，再补 fluxing 后缀。
+Function FluxingDirectoryPageLeave
+  Call GuardInstallPath
+  Call ForceFluxingSuffix
+FunctionEnd
 
 Function ForceFluxingSuffix
   ; L14: Enforce fluxing suffix on $INSTDIR (idempotent). Bug fix 0.18.3.0.
