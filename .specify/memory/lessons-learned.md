@@ -13480,9 +13480,42 @@ spec 097 诉求 3：快捷设置栏在**切换到其他输入法后仍留在屏�
 - **判定「装机版有没有问题」前，先确认装机目录里真的有那个二进制。** 本轮发现
   `D:\Program Files\fluxing\weasel\WeaselServer.exe` **已不存在**、进程也没在跑，而卸载器
   注册表的 `DisplayIcon` 仍指向它 ⇒ 注册表只能证明「曾经装过」，不能证明「现在是完整安装」。
-  先 `Get-ChildItem` 装机目录 + 查进程，再谈复现。
+  先 `Get-ChildItem` 装机目录 + 查进程，再谈复现。（2026-11-03 修订：真机 `WeaselServer.exe` 已由 1.1.6 重装恢复，见 L169。）
 - **写不进受保护路径时不要绕。** 本轮 shell 硬策略禁止写 `D:\Program Files\`，正确做法是产出
   可复现的部署脚本（`tmp\deploy-20261102.cmd`：停服务 → 备份 → 版本化替换 DLL
   （先 `ren` 再 `move`，绕开被加载的镜像）→ 列 sha256 → 重启服务）交用户执行，并把这一步
   写进 handoff 的「待用户操作」；不要用间接方式把路径藏起来规避策略。
 
+
+## L169 - **拿「负对照」去跑会写系统的脚本 = 真执行**：守卫必须先于「目标存在」，负对照要挑「不像目标」的路径（2026-11-03）
+
+- **事故**：为验证 `tmp\silent-install-116.cmd`（真机 silent install 包装器），
+  把工作区内的 `tmp\` 当作「目标目录」传进去做负对照。脚本预检只检查「目标目录存在」
+  就放行，于是 **真的执行了 NSIS 安装器**：装出一棵 `tmp\fluxing\`（235 文件 / 221 MB），
+  并把 `HKLM Run\WeaselServer`、两侧 `CLSID\{A3F4CDED-…}\InprocServer32`、
+  `WOW6432Node\Fluxing\Weasel\InstallDir`、`Uninstall\Fluxing` 的
+  DisplayIcon / UninstallString 全改指到 `tmp\`。
+- **更隐蔽的一层：安装器会先删旧路径，不是只写自己的目标目录。**
+  `output\install.nsi:244-257` 按注册表里的旧 `InstallDir` 拼出旧服务端路径并 `Delete`；
+  `install.nsi:214` 写死的是 `D:\Program Files\Fluxing\weasel\WeaselServer.exe`，
+  **NTFS 大小写不敏感** ⇒ 命中的就是真机路径。于是真机的 `WeaselServer.exe` 被删掉，
+  `HKLM Run` 指向不存在的文件，装机静默残废（服务端没了，自启项悬空）。
+- **处置顺序：先取证 → 立即还原注册表 → 双路回读 → 最后清落盘文件。**
+  还原用 .NET `Registry.LocalMachine.OpenSubKey(..., $true).SetValue(...)`（比 `reg add` 可靠）；
+  回读用 `reg.exe query`（`Get-ItemProperty` 读不到 Default 值）。
+- **负对照该怎么设计（本次的直接教训）**：对任何「会写系统 / 会落盘」的脚本，
+  负对照必须选 **「路径存在但不像目标」** 或 **「路径不存在」** 并让脚本在预检处 **exit 2**；
+  **绝不能**拿「存在且合法」的路径去跑真脚本。预检至少要有两条：
+  ① 目标必须像引擎目录（存在 `WeaselServer.exe`）；② **dry-run 模式**（只打印不执行）。
+- **收尾核验**：重装后对 HKLM / HKCU 的 11 个已知子树做全量特征串扫描
+  （`tmp|rime_claude`）⇒ **0 命中**，事故清零；用户数据目录
+  `D:\Program Files\fluxing\user1\fluxing` 全程未被触碰。
+- **副产物**：本条同时修订 L168 里那句「`WeaselServer.exe` 已不存在」—— 那是对 11-02
+  装机状态的观察；现已由 1.1.6 重装恢复，运行中的服务端也来自该路径。
+- **守卫已于 2026-11-03 落地，并搬进仓库**（`tmp/` 被 gitignore，修在 `tmp/` 里等于没修）：
+  `scripts/install/silent-install.ps1` 持守卫（G1 工作区 / G2 临时根 / G3 形态 /
+  G4 dry-run，一律 **exit 2**）、`scripts/install/silent-install.cmd` 持 NSIS 启动
+  （经 `cmd /c`，见 L28 / L1214）、`scripts/install/acceptance-check.ps1` 持判定。
+  顺带修正一处**单位错配**：安装器 `/D=` 要的是**安装根**，判定脚本 `-InstallDir` 要的是
+  **引擎目录**（`output/install.nsi:24-25` `WEASEL_ROOT = $INSTDIR\weasel`）——
+  旧脚本把同一个路径喂给两者，引擎会被多嵌一层、真实用户资料被孤立。

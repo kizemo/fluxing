@@ -388,11 +388,55 @@ C4 diag: [server] focus_in profile presence=present
   / `diag`（面板没动但诊断日志长了）/ `end`；
 - 已在后台跑（3300 s ≈ 55 min）。
 
+#### 5.9.2.1 新增：`real_switch_probe.py`（自动判会话 + 自动注入，2026-11-03 01:34）
+
+`tmp/real_switch_probe.py` —— **先判会话是否可交互，再决定要不要注入**：
+
+1. `GetForegroundWindow()` 拿前台窗口句柄；**为 0 ⇒ 直接判定 `SESSION_LOCKED_OR_NO_FOREGROUND`
+   并退出（exit 2），一个按键都不发**；
+2. 可交互才注入系统级 IME 循环热键 `Ctrl+Shift`（**真和弦** Ctrl↓ Shift↓ Shift↑ Ctrl↑），
+   最多 4 轮，每轮后回读 `IsWindowVisible` 与诊断日志新增行；
+3. 判据：`focus_out param=1` + `deactivated sent=1` + 出现过 hidden + 出现过 visible ⇒ `PASS`。
+
+```powershell
+& 'C:\Python314\python.exe' 'F:\soft\00selfmade\rime_claude\tmp\real_switch_probe.py' 4
+# -> tmp/real-switch-<ts>.json
+```
+
+**2026-11-03 01:34 实跑结果**：`VERDICT=SESSION_LOCKED_OR_NO_FOREGROUND`、
+`FG_BEFORE={'hwnd': 0, ...}`、`PROBE_EXIT=2` ⇒ 会话仍锁定，**按设计跳过注入**，
+没有产生任何副作用。解锁后直接再跑同一条命令即可自动完成端到端取证。
+
+> **2026-11-03 01:49（重装之后）再跑一次，结果不变**：`VERDICT=SESSION_LOCKED_OR_NO_FOREGROUND`、
+> `PROBE_EXIT=2`（证据 `tmp/real-switch-20261103-014909.json`）。
+> ⇒ 这条探针的阻塞点自始至终只有一个：**桌面会话没解锁**，
+> 与装的是哪个二进制、服务进程起没起都无关。
+
+#### 5.9.2.2 关键复核：**装机版二进制确为修复版**（2026-11-03 01:39）
+
+诊断日志里那 3 次 `[tsf] deactivated sent=1` 是不是「旧二进制写的」？
+用**特征串扫描**证伪了怀疑：
+
+| 文件 | 含 `deactivated sent=`（ASCII） | 含 `focus_in profile presence=`（ASCII） | 归属 |
+|---|---|---|---|
+| `D:\Program Files\fluxing\weasel\weaselx64.dll` | ✅ | ❌ | TSF 前端（写 `[tsf]` 行） |
+| `D:\Program Files\fluxing\weasel\WeaselServer.exe` | ❌ | ✅ | 服务端（写 `[server]` 行） |
+
+两个特征串**各归其位** ⇒ 装机的就是含 F1–F6 全部修复的二进制，
+那 3 次 `[tsf] deactivated sent=1` 是**修复后代码**在真实运行中写出来的。
+
+⇒ **TSF→服务端这一段已有真机实证**（通知必达 / 管道重连重取句柄都已在真实运行中触发并成功）。
+ADR 0029 的验收缺口因此收窄为**只剩「窗口跃迁与 TSF 事件同轴」这一条**。
+
 #### 5.9.3 你解锁后怎么配合
 
 1. 解锁桌面；
 2. 切到别的输入法（面板应变 hidden）→ 切回火流猩（面板应变 VISIBLE）；
 3. 回一句「切过了」即可 —— 我读 `tmp/quickpanel-stream.jsonl` 判定是否对齐。
+
+> **更省事的一条路**（推荐）：你解锁后**不用手按**，直接让我跑
+> `real_switch_probe.py` —— 它自己判断会话、自己注入 `Ctrl+Shift`、自己采证，
+> 判完直接给 `PASS/FAIL` 与 JSON 证据。
 
 预期 JSONL 形如：
 
@@ -437,12 +481,75 @@ HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 
 ---
 
-## 6. 提交状态（截至 2026-11-03 01:20）
+### 5.11 事故与修复：负对照真执行 → 装机残废 → 已重装恢复（2026-11-03 01:30–01:55）
 
-`HEAD = aa275ac`（本次文档增补的上一提交），分支 `Fluxing`，
-`## Fluxing...kizemo/Fluxing [ahead 7]` —— **7 个 commit 全部未 push**。
+**发生了什么**：为验证 `tmp\silent-install-116.cmd`（真机 silent install 包装器），
+把工作区内的 `tmp\` 当作「目标目录」传进去做**负对照**。该脚本的预检只检查
+「目标目录存在」就放行，于是 **真的执行了 NSIS 安装器**：
 
-本轮新增的四个：
+- 落盘 `F:\soft\00selfmade\rime_claude\tmp\fluxing\{weasel,user1\fluxing}`（235 文件 / 221 MB）；
+- 注册表被改 4 处：`HKLM Run\WeaselServer`、两侧 `CLSID\{A3F4CDED-…}\InprocServer32`、
+  `WOW6432Node\Fluxing\Weasel\InstallDir`、`Uninstall\Fluxing` 的 DisplayIcon / UninstallString；
+- **更隐蔽的一层**：安装器在 `.onInit` 里会按旧 `InstallDir` **删旧服务端**
+  （`output/install.nsi:244-257`），而 `install.nsi:214` 写死的是
+  `D:\Program Files\Fluxing\weasel\WeaselServer.exe` —— **NTFS 大小写不敏感**，命中的就是真机路径
+  ⇒ 真机的 `WeaselServer.exe` 被删掉，`HKLM Run` 指向不存在的文件，**装机静默残废**。
+
+**处置顺序**：取证 → 还原注册表 → 双路回读 → 清落盘 → 重装修复 → 全量复扫。
+
+| 步骤 | 结果 |
+|---|---|
+| 还原 4 处注册表 | 全部指回 `D:\Program Files\fluxing\weasel`（`InstallDir` 指装机根 `D:\Program Files\fluxing`） |
+| 删 `tmp\fluxing` | 两棵子树进回收站（`mavis-trash`），残目录已空 |
+| 重装 | `output\archives\fluxing-1.1.6-installer.exe /S /D=D:\Program Files\fluxing`（`/D=` 不带引号、必须是最后一个参数） |
+| 复核文件 | `WeaselServer.exe` 2267648 B @ 2026-11-02 22:19:34（与 `output\Win32\WeaselServer.exe` 同源） |
+| 复核特征串 | 装机服务端含 `focus_in profile presence=` / `focus_out param=` ⇒ 确为修复版 |
+| 复核注册表 | Run / 两侧 CLSID / Uninstall 指向 `...\fluxing\weasel`；InstallDir 指向 `...\fluxing` |
+| 复核进程 | `WeaselServer.exe` 由 `D:\Program Files\fluxing\weasel\WeaselServer.exe` 启动 |
+| 全量复扫 | HKLM/HKCU 11 个已知子树按 `tmp|rime_claude` 扫描 ⇒ **0 命中** |
+| 用户数据 | `D:\Program Files\fluxing\user1\fluxing` 全程未被触碰；`RimeUserDir` 仍指向它 |
+
+**沉淀**：`.specify/memory/lessons-learned.md` **L169**（含「负对照该怎么设计」与
+「安装器会先删旧路径」两条），同时修订 L168 里那句已经过时的「`WeaselServer.exe` 已不存在」。
+
+**遗留（2026-11-03 02:2x 已补）**：`tmp\silent-install-116.cmd` 的预检守卫已补齐，
+并且**搬进了仓库**（`tmp/` 被 gitignore，修在 `tmp/` 里等于没修）：
+
+| 文件 | 职责 |
+|---|---|
+| `scripts/install/silent-install.ps1` | 守卫 + 编排（保存/还原 `RimeUserDir`、跑安装器、跑判定） |
+| `scripts/install/silent-install.cmd` | NSIS 启动器：经 `cmd /c` 启动，发裸 `/D=` 尾参 |
+| `scripts/install/acceptance-check.ps1` | 判定脚本（原先只在 `tmp/`，现入库） |
+
+四条守卫**全部先于「目标存在」判定**（这正是 L169 的结论）：
+
+- **G1** 目标不得落在源码工作区内，也不得是任何 `tmp` 路径 —— 这正是事故靶子；
+- **G2** 目标不得落在 smoke-test / 临时根下（对齐 `output/install.nsi` 的 `check_reg` 守卫）；
+- **G3** 目标存在但**不像**安装根（既无 `weasel\WeaselServer.exe` 又非空目录）⇒ 拒绝；
+- **G4** `-DryRun` 只打印计划，**什么都不执行**。
+
+**负对照已实测**（零副作用）：工作区路径 / 临时根 / 非安装根 / 不存在路径 ⇒ 一律 **exit 2**；
+`-DryRun` ⇒ exit 0 且**未启动安装器**（真机 `WeaselServer` 的 pid 与 mtime 均未变）。
+
+**另修一处单位错配**：安装器 `/D=` 要的是**安装根**，而 `acceptance-check.ps1 -InstallDir`
+要的是**引擎目录**（`output/install.nsi:24-25` `WEASEL_ROOT = $INSTDIR\weasel`）——
+旧脚本把同一个路径喂给两者 ⇒ 引擎被多嵌一层（`...\weasel\weasel`）、真实用户资料被孤立。
+
+**启动方式按既有教训固化**：安装器由 `.bat` 经 `cmd /c` 启动
+（L28 / L1214：`Start-Process -Wait -PassThru` 在 PS 5.1 下会挂死 5 分钟；
+AGENTS.md §2.5 亦规定静默安装用 `cmd /c`）；`/D=` 的路径经**环境变量**传递
+（带空格的路径作为 `.bat` 的 `%1` 会被 `cmd /c` 截断）。
+
+**顺带结论**：这次事故也**反向验证了 §5.9.2.2 的特征串核对法**有效 ——
+`WeaselServer.exe` 一旦被换成别的构建，`focus_in profile presence=` 立刻就不在了。
+
+---
+
+## 6. 提交状态（截至 2026-11-03 02:2x）
+
+分支 `Fluxing`，`## Fluxing...kizemo/Fluxing [ahead 10]` —— **10 个 commit 全部未 push**。
+
+本轮新增的五个：
 
 | commit | 范围 | 内容 |
 |---|---|---|
@@ -450,9 +557,20 @@ HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 | `4a0c630` | `docs(fluxing)` | `docs/adr/0029-quickpanel-hide-delivery-and-ordering.md`、`docs/adr/README.md` 索引、`.specify/memory/lessons-learned.md`（L168）、本文档 |
 | `51eca2c` | `docs(fluxing)` | 本文档改为「部署 + 真机验证完成」版（§0 / §5.5 / §5.6） |
 | `aa275ac` | `docs(fluxing)` | 交接卡增补 §5.8（窗口级可见性验证，含负对照）与 §5.9（实机时间轴待补项） |
+| `2e2e580` | `docs(fluxing)` | 交接卡增补 §5.9.1–§5.9.3（真实切换探针 + 特征串复核 + 取证口径） |
 
 再往后的那一次（本文档 §5.7 / §5.9.1 / §5.9.2 / §5.9.3 / §5.10 / §6 / §7 的修订）
-就是 **`HEAD`**，哈希见 `git log --oneline -1`。
+是 `2e2e580`；**本轮最新的一次**（§5.9.3 / §5.11 / §6 / §7 修订 + `CHANGELOG.md` 条目 +
+ADR 0029 证据段 + **L169** 事故沉淀）就是 **`HEAD`**，哈希见 `git log --oneline -1`。
+
+**再往后的两个（02:2x）**：
+
+| commit | 范围 | 内容 |
+|---|---|---|
+| `HEAD~1` | `fix(fluxing)` | `CHANGELOG.md`（0029 条目修正 + 静默安装守卫条目）、ADR 0029 证据段、本文档 §5.11 / §6 / §7、`.specify/memory/lessons-learned.md`（L168 修订 + **L169** 事故沉淀） |
+| `HEAD` | `fix(installer)` | 新增 `scripts/install/silent-install.ps1` / `silent-install.cmd` / `acceptance-check.ps1` —— L169 守卫落地 |
+
+（用 `HEAD~1` / `HEAD` 相对引用以避免哈希自指；实际哈希见 `git log --oneline -2`。）
 
 更早的三个（仍未 push）：
 
@@ -469,10 +587,13 @@ HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 
 ## 7. 下阶段计划（按顺序）
 
-1. **请用户肉眼复测一次**：切到火流猩 ⇒ 面板出现；切到其他输入法（微软拼音等）⇒
-   **面板必须消失**（**建议同时勾上「常驻显示」再测**，这才是本 bug 的原始触发条件）。
-   同时看 `%TEMP%\fluxing-profile-notify.log` 是否新增 `focus_out param=1 presence=absent`
-   与 `deactivated sent=1`（应当都有）。
+1. **取证改为全自动（不再需要人手按）**：桌面会话**解锁**后跑 `tmp\real_switch_probe.py 4`
+   —— 脚本自己判会话活性 → 真和弦注入 `Ctrl+Shift` → 采证 → 给 `PASS` / `FAIL` 与
+   JSON 证据（`tmp\real-switch-*.json`）。
+   - 会话**仍锁定**时（`LogonUI.exe` 在跑 / `GetForegroundWindow()` = 0）脚本按设计
+     **跳过注入并零副作用**，输出 `VERDICT=SESSION_LOCKED_OR_NO_FOREGROUND`（退出码 2）。
+   - 2026-11-03 01:49（重装后）实跑结果仍是 `SESSION_LOCKED` ⇒ **这是当前唯一的阻塞点**。
+   - 「常驻显示」保持 `always_show=1`（原 bug 的触发条件），**不要**去关它。
 2. 用户确认通过 ⇒ 把 `docs/adr/0029-quickpanel-hide-delivery-and-ordering.md` 的
    `- **Status**: Proposed` 改为 `Accepted`（同一 commit 里一并改）。
 3. ~~**补 `WeaselServer` 自启项**~~ —— **已于 2026-11-03 01:11 完成**，详见 §5.10。

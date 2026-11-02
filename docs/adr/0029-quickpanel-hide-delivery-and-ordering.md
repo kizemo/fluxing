@@ -111,7 +111,10 @@ TSF 通知线程的循环体先判停止标志、再取待办种类。于是 `De
 
 - ✅ 「切走必隐」不再依赖某一条消息恰好没丢：通知必达（决策 1/2）、管道不静默吞（决策 3）、
   显隐同队列（决策 4）、会话结束兜底（决策 6）—— 四道独立防线。
-- ✅ 判定逻辑只有一份实现（决策 5），`/verify-quickpanel-presence` 八条断言可在无输入法环境下跑。
+- ✅ 判定逻辑只有一份实现（决策 5），`/verify-quickpanel-presence` **十一条**断言可在无输入法环境下跑
+  （2026-11-03 01:5x 实跑 11/11 ok、exit 0；其中一条断言的原文就是
+  「profile-deactivated hides even in always-show mode」——诉求 2 的可执行判据）。
+  `/verify-focusout-flags` 同日实跑 **PASS**：线上 plain=[0] / flagged=[1]，隐藏判定随事件种类走。
 - ✅ 现场可取证：`%TEMP%\fluxing-profile-notify.log` 记下每次投递、重试、隐藏、闸门否决。
 - ⚠️ **新增一条跨进程状态**（presence）。它是内存态、随服务端进程重启归零，不落盘、不需要迁移，
   但读它的人必须知道 `kUnknown` 是合法初值。
@@ -119,8 +122,35 @@ TSF 通知线程的循环体先判停止标志、再取待办种类。于是 `De
   只有客户端侧接口变化 —— 线格式零变化，`include/WeaselIPCData.h` 未改。
 - ⚠️ `_Connect()` 的有界重试会让「服务端正在启动」从「立刻失败」变成「最多等 3 秒」。
   这是刻意的取舍：冷启动窗口里丢一条切走通知，代价比多等 3 秒高。
-- ⚠️ **本 ADR 的端到端结论尚未在真机输入法切换下复测**（需要用户在真实桌面切一次输入法）。
-  验收前状态保持 `Proposed`。已完成的验证是：`/verify-quickpanel-presence` 单元断言、
-  构建通过、以及服务端判定语义的活体探针（这一项在改动前就已证明正确）。
+- ✅ **真机 TSF→服务端这一段已有实证**（2026-11-03 01:4x 复核）：装机版
+  `D:\Program Files\fluxing\weasel\weaselx64.dll`（2026-11-02 22:15:26 构建）字节内含
+  `deactivated sent=` 特征串 ⇒ 装机的就是含本 ADR 修复的二进制；而
+  `%TEMP%\fluxing-profile-notify.log` 里出现了 **3 组完整的真实切换序列**：
+  `[server] focus_out param=1 presence=absent` 紧跟 `[tsf] deactivated sent=1`。
+  `[tsf]` 前缀只由 `WeaselTSF.cpp:444` 写出，探针（只发 IPC）写不出它
+  ⇒ 这 3 次是**真实 TSF 前端**送达的，不是探针合成的。
+  即：决策 1/2（通知必达）与决策 3（管道重连重取句柄）在真实运行中已被触发并成功。
+- ✅ **装机完整性已复核并恢复**（2026-11-03 01:48）：用重打包安装器
+  `output\archives\fluxing-1.1.6-installer.exe /S /D=D:\Program Files\fluxing` 就地重装，
+  `D:\Program Files\fluxing\weasel\WeaselServer.exe` 回到 2267648 B（与 `output\Win32\WeaselServer.exe`
+  同源）；该二进制字节内含 `focus_in profile presence=` 与 `focus_out param=` 特征串
+  ⇒ 装机的**服务端**确为本 ADR 修复版（此前只对 `weaselx64.dll` 做过同样核对）。
+  注册表四点复核：`Run` / 两侧 `CLSID` / `Uninstall` 全部指向 `D:\Program Files\fluxing\weasel`，
+  `InstallDir` 指向装机根 `D:\Program Files\fluxing`（`WEASEL_ROOT = $INSTDIR\weasel`，
+  `output/install.nsi:25` 与 `:457`）。
+- ⚠️ **仍缺的只有「窗口跃迁与 TSF 事件同轴」这一条**（需要用户在真实桌面切一次输入法，
+  且要求全程有可见性采样）。2026-11-03 01:0x–01:3x 的三段采样窗口（`watch 300` /
+  `watch 900` / 流式观察器）**零跃迁**，根因是**桌面会话处于锁定态**
+  （`LogonUI.exe` 在跑、`GetForegroundWindow()` 返回 0）⇒ 期间根本没有发生 profile 切换，
+  面板自始至终 `visible=True`，「无跃迁」不能读作「隐藏失效」。
+  服务端→窗口这一段另有独立实证：向服务端直发 `FOCUS_OUT(PROFILE_DEACTIVATED)`
+  后 `IsWindowVisible` 在 18 ms 内由 `True` 变 `False`（5/5 PASS + 负对照 PASS）。
+- ⚠️ 因此本 ADR 状态**暂留 `Proposed`**：两条边界（TSF→服务端、服务端→窗口）各自有实证，
+  但「一次真实切换里三者同轴」尚未取证。取证**不需要人手按**：解锁桌面后跑
+  `tmp\real_switch_probe.py 4`，它自动完成「切走 → 切回」，同时断言 `IsWindowVisible` 的跃迁
+  与诊断日志增量；会话仍锁定时它直接跳过注入并 exit 2（零副作用）。
+  判定口径见 handoff §5.9.3。
+  已完成的验证是：`/verify-quickpanel-presence` 单元断言（11/11）、`/verify-focusout-flags`
+  线格式断言、构建通过、服务端判定语义的活体探针、以及上述真机 TSF 送达实证。
 - 可逆性：单点可逆。决策 3 与决策 4 各自独立，撤掉任一条不影响其余；决策 5 的枚举一旦被
   其它模块引用，撤销就需要一次性的接口迁移。

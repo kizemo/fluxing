@@ -239,6 +239,54 @@ P11.5 新副本内容与本次构建产物一致             shim=C:\FluxingTest
 （`E.2` 沙箱里没有 D: 盘、`E.4` 沙箱里外网不可达），与本次改动无关。
 
 
+### fix(fluxing): 切到别的输入法时快捷设置栏现在**必定**收起（ADR 0029 / L168）
+
+**用户可见改动**：从火流猩切到任何其他输入法时，屏幕上的快捷设置栏**必定消失**
+——即使托盘菜单里勾着「快捷面板常驻」也一样。此前的表现是「切走了但面板还挂在屏幕上」，
+且**不报错、不留痕**。
+
+根因不是判定错了，而是**承载路径有三处各自会静默失效**（ADR 0029）：
+
+1. **通知丢失**：TSF 通知线程的循环体先判停止标志、再取待办种类
+   ⇒ `Deactivate()` 投递的「已切走」只要落在「停止标志已置、线程尚未真正退出」这个窗口里就被整条丢弃。
+   现改为**先取待办、再判停止**（决策 1）。
+2. **管道失联**：管道层写失败后会重连，但重连之后写的仍是**重连前的旧句柄**；
+   二次失败被 `catch (DWORD) { return 0; }` 吞成 0，而服务端对该命令的应答本来就恒为 0
+   ⇒ **「发送失败」与「发送成功但对方没照做」在调用点上完全不可区分**。
+   现改为重连后**重新取句柄**再写（决策 3），并把 `FocusOut()` 的返回类型由 `void` 改为 `bool`
+   （**送达判据 = 是否真的发出去了**，不是返回值的内容），
+   通知线程据此最多重试 3 次、间隔 120 ms（决策 2）。
+3. **显隐乱序**：服务端把「显示」投递到 UI 线程队列、把「隐藏」就地执行
+   ⇒ 已排队的显示完全可能在隐藏之后才执行，**面板就此复活**。
+   现改为显隐都走同一条 `PostMessage` 队列（FIFO 由队列本身保证），并给显示处理器加**在场闸门**：
+   已经不在场就把本次显示作废（决策 4）。手动唤起路径（`Alt+,`、托盘菜单）**不经过闸门**
+   ——那是用户的显式意图。
+
+配套改动：
+
+- **在场状态收敛为共享纯函数**（决策 5）：`FluxingPresence` / `UpdateFluxingPresence` /
+  `ShouldShowQuickPanelForPresence` 落在 `include/WeaselIPC.h`，生产代码与 `test/TestWeaselIPC` 同源
+  （宪法 R7 禁止同一判定出现两份实现）。`kUnknown` 允许显示，避免服务端刚起时把面板锁死。
+- **会话结束兜底**（决策 6）：`RemoveSession()` 里若结束的是活动会话，直接置 `kAbsent` 并请求隐藏
+  ——即使整条 FocusOut 路径都丢了，切走之后面板也不会挂在那里。
+- **现场取证**：新增 `%TEMP%\fluxing-profile-notify.log`（append-only、2 MB 上限、无时间戳）
+  记下每次投递、重试、隐藏、闸门否决（决策 7）。真实切换形如
+  `[server] focus_in profile presence=present` → `[server] focus_out param=1 presence=absent`
+  → `[tsf] deactivated sent=1`。
+- **IPC 线格式零变化**：`include/WeaselIPCData.h` 未改；`RequestHandler::FocusOut` 仍保持 `void`，
+  只有客户端侧接口变化 ⇒ 旧客户端安全降级。
+- **回归测试**：`test/TestWeaselIPC` 新增 `/verify-quickpanel-presence` **十一条**断言，
+  覆盖 presence 收敛、在场闸门与「常驻开着也必隐」的行为
+  （第 6 条原文即 `profile-deactivated hides even in always-show mode`）；
+  另有 `/verify-focusout-flags` 线格式校验（plain=0 / flagged=1）PASS。
+- **证据已闭合三层，只差同轴**：TSF→服务端（真机 3 次 `[tsf] deactivated sent=1`
+  + 装机服务端特征串核对）、服务端→窗口（IPC 合成 + `IsWindowVisible` 18 ms 内
+  True→False，5/5 + 负对照）、决策表（单测 11/11 + 线格式 PASS）。
+
+⚠️ **仍待确认**：端到端结论还需在真实桌面切一次输入法做**同轴确认**
+（TSF 事件与窗口跃迁落在同一刻）——目前只差这一层；
+桌面会话解锁后跑 `tmp\real_switch_probe.py 4` 即可自动取证，拿到 PASS 后 ADR 0029 转 `Accepted`。
+
 ## [1.1.6] - 2026-10-31
 
 ### 主要更新
