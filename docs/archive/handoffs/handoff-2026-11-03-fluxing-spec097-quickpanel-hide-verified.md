@@ -14,10 +14,13 @@
 
 **根因已坐实（三个独立缺陷叠加）、源码修复已落码、已构建、已单测、已部署到装机目录、
 真机切输入法的事件链已在诊断日志中留痕且「通知送达」被确认（`sent=1`）；
+**窗口级可见性也已由探针在装机版上直接断言**（切走 18 ms 内隐藏 / 切回 16 ms 内恢复，
+含负对照证明断言有牙，见 §5.8）；
 代码已 commit（`1733f6d` + `4a0c630`）但**尚未 push**。**
 
 剩余三件事，都要人：
-① 用户肉眼确认「切到别的输入法 ⇒ 面板消失」⇒ 之后把 ADR 0029 从 `Proposed` 转 `Accepted`；
+① 真实桌面切一次输入法，确认「TSF 事件 → 窗口跃迁」在同一条时间轴上对齐（探针已在跑，
+   见 §5.9）⇒ 之后把 ADR 0029 从 `Proposed` 转 `Accepted`；
 ② 补 `WeaselServer` 自启项（本机**至今没有**，重启机器后服务端不会自动起来）；
 ③ 用户签字后 `git push kizemo Fluxing`。
 
@@ -251,9 +254,97 @@ Agent 的 shell 安全策略禁止写 `D:\Program Files\`，因此部署由用�
 
 ### 5.7 未验证项（明确记账，不要当成已修）
 
-- 面板的**实际可见性**未由任何自动化手段断言（无 UI 断言、无截图证据）。
-- ADR 0029 因此**保持 `Proposed`**，未转 `Accepted`。
+- ~~面板的**实际可见性**未由任何自动化手段断言（无 UI 断言、无截图证据）。~~
+  → **已于 2026-11-03 01:04 补齐**，见 §5.8（窗口级 `IsWindowVisible` 断言，含负对照）。
+- **真实桌面切一次输入法**（OS 发起的 profile 切换 → TSF → IPC → 窗口）这条**完整链路**
+  尚未在同一条时间轴上对齐取证 —— 探针已就位，见 §5.9。
+- ADR 0029 因此**仍保持 `Proposed`**，未转 `Accepted`（等 §5.9 的实机切换证据）。
 - 诉求①（真机 silent install）与诉求③（物理按键验收）与本 bug 无关，仍未做。
+
+### 5.8 窗口级可见性验证（2026-11-03 01:04，装机版 WeaselServer 上实跑）
+
+上一版文档只证到「服务端收到了切走通知」。本轮补上「**窗口真的消失了**」这一段，
+断言对象是快捷设置栏窗口的 `IsWindowVisible` —— **真实窗口状态**，不是纯函数判定。
+
+探针：`tmp/verify_quickpanel_visibility.py`（`tmp/` 已 gitignore，不入库）
+
+```powershell
+& 'C:\Python314\python.exe' 'F:\soft\00selfmade\rime_claude\tmp\verify_quickpanel_visibility.py' probe
+```
+
+被测对象（运行时实测，不是文档抄的）：
+
+| 项 | 值 |
+|---|---|
+| 窗口类名 | `FluxingQuickPanel_v3` |
+| 窗口标题 | `Fluxing QuickPanel` |
+| 所属进程 | `WeaselServer.exe` pid=19388（= 装机目录 `D:\Program Files\fluxing\weasel\`） |
+| 常驻开关 | `D:\Program Files\fluxing\user1\fluxing\quickpanel.state` = `always_show=1`（**原 bug 的触发条件在位**） |
+
+探针只发两种已有 IPC 命令，**线格式零变化**（`PipeMessage` 12 字节小端，
+`WEASEL_IPC_ECHO = WM_APP+1 = 0x8001` 顺延 ⇒ `FOCUS_IN=0x8006`、`FOCUS_OUT=0x8007`），
+因此不触发 CLAUDE.md §2 的「IPC 四边同步」要求。
+
+实跑结果（`PROBE_EXIT=0`，证据文件 `tmp/quickpanel-visibility-20261103-010448.json`）：
+
+| 用例 | 动作 | 期望 | 实测 | 结论 |
+|---|---|---|---|---|
+| C1 | `FOCUS_IN(PROFILE_ACTIVATED)` | 面板出现 | `False → True`，**15 ms** | PASS |
+| C2 | `FOCUS_OUT(param=0)`（仅应用失焦） | 常驻态下**不**隐藏 | 保持 visible | PASS |
+| C3 | `FOCUS_OUT(PROFILE_DEACTIVATED)`（切走） | **必隐**（常驻开着也必隐） | `True → False`，**18 ms** | PASS |
+| C4 | 显示请求排队中紧接切走 | 不得复活 | 末态 hidden，无 visible 回升 | PASS |
+| C5 | 切回火流猩 | 重新显示 | `False → True`，**16 ms** | PASS |
+| NEG | 面板已隐藏却断言「应当可见」 | **必须 FAIL** | FAIL | PASS（断言有牙） |
+
+**NEG 是这套证据的关键**：没有它，「C1–C5 全绿」可能只是探针在自说自话
+（一个恒返回 `True` 的检测函数也能让某些用例蒙混过关）。负对照用**故意写错的预期**
+跑同一条路径，必须报 FAIL —— 它确实 FAIL 了，所以 C3 的 `visible=False` 是真断言。
+
+诊断日志与窗口跃迁同案核对（探针按**行数增量**把两侧对齐，诊断日志本身不带时间戳）：
+
+```
+C1 diag: [server] focus_in profile presence=present          窗口: False -> True
+C3 diag: [server] focus_out param=1 presence=absent          窗口: True  -> False
+C4 diag: [server] focus_in profile presence=present
+         [server] focus_out param=1 presence=absent           窗口: 始终 hidden,无复活
+```
+
+**这份证据能证明 / 不能证明什么**：
+
+- ✅ 能证明：**装机版** WeaselServer 上，服务端收到「切走」后**面板窗口确实不可见了**，
+  收到「切入」后**确实可见**，且「常驻开着」不再挡住必隐；显示/隐藏同队列的定序修复有效
+  （隐藏之后不会被排队的显示反转）。这正是原 bug 的诉求本体。
+- ✅ 能证明：服务端在场状态机与窗口可见性**一致**，没有「状态说 absent、窗口还在」的分裂。
+- ❌ **不能**证明：TSF 前端在**真实 OS 切换**时一定送达通知 —— 那一段由诊断日志的
+  `[tsf] deactivated sent=1` 证明（真机切换时已反复出现），但与窗口跃迁**不在同一次
+  操作里**，需要 §5.9 把两段合到一条时间轴上。
+- ❌ 不能证明：其它 IME（微软拼音等）的 profile 标识在本机上的具体行为 —— 本探针
+  走的是**服务端协议边界**，与「对面是谁」无关。
+
+### 5.9 待补：真实桌面切换的时间轴对齐（探针已就位）
+
+`tmp/verify_quickpanel_visibility.py watch <秒>` 会同时采样**窗口可见性**与
+**诊断日志行数**，输出逐条对齐的时间轴：
+
+```
+  <秒> | VISIBLE/hidden | 该区间新增的诊断日志行
+```
+
+用法（需人在真实桌面操作）：
+
+```powershell
+& 'C:\Python314\python.exe' 'F:\soft\00selfmade\rime_claude\tmp\verify_quickpanel_visibility.py' watch 300
+```
+
+期间做一次：**切到别的输入法（面板应变 hidden）+ 切回火流猩（面板应变 VISIBLE）**。
+预期时间轴形如：
+
+```
+   12.4xxs | hidden  | [server] focus_out param=1 presence=absent ; [tsf] deactivated sent=1
+   20.1xxs | VISIBLE | [server] focus_in profile presence=present
+```
+
+对齐成立 ⇒ ADR 0029 的验收门槛（§后果 最后一条）满足 ⇒ 转 `Accepted`。
 
 ---
 
