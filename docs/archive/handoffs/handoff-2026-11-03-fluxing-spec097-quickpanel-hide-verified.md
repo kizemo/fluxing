@@ -428,6 +428,29 @@ C4 diag: [server] focus_in profile presence=present
 ⇒ **TSF→服务端这一段已有真机实证**（通知必达 / 管道重连重取句柄都已在真实运行中触发并成功）。
 ADR 0029 的验收缺口因此收窄为**只剩「窗口跃迁与 TSF 事件同轴」这一条**。
 
+#### 5.9.2.3 流式观察器交卷：55 min 全程留痕（2026-11-03 02:08:11 收尾）
+
+`tmp/watch_quickpanel_stream.py 3300`（01:13:11 起）跑满 55 min，
+落 `tmp/quickpanel-stream.jsonl` **13 条事件**：
+
+| 时间 | 事件 | 含义 |
+|---|---|---|
+| 01:13:11 | `start` visible=true | 起点：面板可见（`always_show=1`） |
+| 01:13:31 – 01:41:50 | `diag` ×9 | 9 次 `focus_in profile presence=present`；面板本就可见 ⇒ 不产生跃迁（全程未切走） |
+| **01:42:01** | **`transition` visible: true→false** | 一次**真实窗口隐藏**，但 `diag_new: []` |
+| 01:51:30 | `diag` | **`[server] remove_session active presence=absent`** ⇒ F5 会话结束兜底在真机上被触发 |
+| 02:08:11 | `end` visible=false | 观察器收尾 |
+
+**这两次事件都不构成「切走必隐」的同轴证据**，必须说清楚：
+
+- 01:42:01 的隐藏落在 **§5.11 装机事故窗口**内（旧 `WeaselServer` 被重装安装器替换，
+  面板窗口随旧进程消失），且**没有伴随任何诊断增量**；
+- 01:51:30 的 `remove_session` 是**服务端会话结束兜底**（`RimeWithWeasel.cpp:286`），
+  此时面板自 01:42:01 起已是 hidden ⇒ 观察器记为 `diag`（状态未变）而非 `transition`。
+
+⇒ 结论不变：**ADR 0029 的验收缺口仍只有「一次真实切换里 TSF 事件与窗口跃迁同轴」**，
+解锁后跑 `real_switch_probe.py 4` 一次性取齐（§5.9.3）。
+
 #### 5.9.3 你解锁后怎么配合
 
 1. 解锁桌面；
@@ -508,6 +531,7 @@ HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 | 复核进程 | `WeaselServer.exe` 由 `D:\Program Files\fluxing\weasel\WeaselServer.exe` 启动 |
 | 全量复扫 | HKLM/HKCU 11 个已知子树按 `tmp|rime_claude` 扫描 ⇒ **0 命中** |
 | 用户数据 | `D:\Program Files\fluxing\user1\fluxing` 全程未被触碰；`RimeUserDir` 仍指向它 |
+| 流式观察器 | 01:42:01 记录到一次 `visible: true→false`（**旧服务端被替换所致，非「切走必隐」**）；01:51:30 `remove_session active presence=absent` ⇒ F5 会话结束兜底在真机上被触发（详见 §5.9.2.3） |
 
 **沉淀**：`.specify/memory/lessons-learned.md` **L169**（含「负对照该怎么设计」与
 「安装器会先删旧路径」两条），同时修订 L168 里那句已经过时的「`WeaselServer.exe` 已不存在」。
@@ -545,11 +569,11 @@ AGENTS.md §2.5 亦规定静默安装用 `cmd /c`）；`/D=` 的路径经**环�
 
 ---
 
-## 6. 提交状态（截至 2026-11-03 02:2x）
+## 6. 提交状态（截至 2026-11-03 02:1x）
 
-分支 `Fluxing`，`## Fluxing...kizemo/Fluxing [ahead 10]` —— **10 个 commit 全部未 push**。
+分支 `Fluxing`，`## Fluxing...kizemo/Fluxing [ahead 11]` —— **11 个 commit 全部未 push**。
 
-本轮新增的五个：
+本轮新增的五个（另有三次在文末段落补记）：
 
 | commit | 范围 | 内容 |
 |---|---|---|
@@ -560,8 +584,11 @@ AGENTS.md §2.5 亦规定静默安装用 `cmd /c`）；`/D=` 的路径经**环�
 | `2e2e580` | `docs(fluxing)` | 交接卡增补 §5.9.1–§5.9.3（真实切换探针 + 特征串复核 + 取证口径） |
 
 再往后的那一次（本文档 §5.7 / §5.9.1 / §5.9.2 / §5.9.3 / §5.10 / §6 / §7 的修订）
-是 `2e2e580`；**本轮最新的一次**（§5.9.3 / §5.11 / §6 / §7 修订 + `CHANGELOG.md` 条目 +
-ADR 0029 证据段 + **L169** 事故沉淀）就是 **`HEAD`**，哈希见 `git log --oneline -1`。
+是 `2e2e580`；随后的两次分别是 `c69ae49`（§5.9.3 / §5.11 / §6 / §7 修订 +
+`CHANGELOG.md` 条目 + ADR 0029 证据段 + **L169** 事故沉淀）与 `b7538cb`
+（静默安装路径守卫 + root/engine 单位错配 + 三个脚本入库）；
+**最新的一次**（§5.9.2.3 流式观察器交卷 / §5.11 处置表 / ADR 0029 证据段增补）
+就是 **`HEAD`**，哈希见 `git log --oneline -1`。
 
 **再往后的两个（02:2x）**：
 

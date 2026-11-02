@@ -138,6 +138,17 @@ TSF 通知线程的循环体先判停止标志、再取待办种类。于是 `De
   注册表四点复核：`Run` / 两侧 `CLSID` / `Uninstall` 全部指向 `D:\Program Files\fluxing\weasel`，
   `InstallDir` 指向装机根 `D:\Program Files\fluxing`（`WEASEL_ROOT = $INSTDIR\weasel`，
   `output/install.nsi:25` 与 `:457`）。
+- ✅ **会话结束兜底（决策 6）在真机上确实会被触发**（2026-11-03 01:51:30，
+  流式观察器 55 min 全程留痕）：装机事故中重装安装器替换了旧 `WeaselServer`，
+  服务端随后写下 `[server] remove_session active presence=absent`
+  ⇒ F5 兜底（`RimeWithWeasel.cpp:286`）不只是单元测试里的可达分支，
+  在「服务端被强杀 / 前端会话骤失」这条真实路径上被走到了。
+- ⚠️ **观察器在 01:42:01 记录到的那次 `visible: true → false` 跃迁，不能算作本 ADR 的同轴证据**：
+  它落在 §5.11 的装机事故窗口内（旧服务端被安装器替换，面板窗口随旧进程消失），
+  且该次跃迁**没有伴随任何诊断增量**（`diag_new: []`）⇒ 与「切走必隐」机制无关。
+  同理 01:51:30 的 `remove_session` 记为 `diag` 而非 `transition`
+  （面板自 01:42:01 起已是 hidden，状态未变）。
+  ⇒ **ADR 0029 的验收缺口不变，仍只有「一次真实切换里 TSF 事件与窗口跃迁同轴」。**
 - ⚠️ **仍缺的只有「窗口跃迁与 TSF 事件同轴」这一条**（需要用户在真实桌面切一次输入法，
   且要求全程有可见性采样）。2026-11-03 01:0x–01:3x 的三段采样窗口（`watch 300` /
   `watch 900` / 流式观察器）**零跃迁**，根因是**桌面会话处于锁定态**
