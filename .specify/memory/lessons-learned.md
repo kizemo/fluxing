@@ -13432,3 +13432,57 @@ spec 097 诉求 2：快捷面板**双击**一条词组完全不上屏，**回车
 - **诊断插桩期间绝不可打包安装器**：插桩版二进制一旦进安装包就会流到用户机器上。
   这条阻塞只有在**二进制级**证明探针零残留（宽串 + 窄串两种编码都查）之后才解除。
 
+## L168 - **同一条「不生效」症状下叠着三层缺陷：消息丢失、失败不可区分、显隐不同线程；只修一层症状照旧**（2026-11-02）
+
+spec 097 诉求 3：快捷设置栏在**切换到其他输入法后仍留在屏幕上**（期望：切入火流猩显示、
+切走即隐，即使开了「常驻显示」）。用户明说「还是存在」，说明此前某一轮修复没落到真实链路。
+
+**先用探针把「判定语义」证伪掉，再怀疑投递链路。**
+
+- 活体探针 `tmp\probe_quickpanel.py` 直接对装机版服务端发 `FOCUS_OUT(PROFILE_DEACTIVATED)`
+  ⇒ 面板 `visible=False`；发 `FOCUS_OUT(param=0)` ⇒ 仍可见；发 `FOCUS_IN(PROFILE_ACTIVATED)`
+  ⇒ 可见。**服务端判定语义本身是对的**，火力随即从「逻辑写错」转向「消息投递与顺序」。
+
+**三层缺陷，任何一层单独坏掉都能复现同一症状：**
+
+1. **通知线程把消息整条丢弃。** `WeaselTSF/WeaselTSF.cpp` 的 `_ProfileNotifyLoop()` 先判
+   `m_profileNotifyStop`、再取 `m_profileNotifyPending`；`Deactivate()` 在析构竞态窗口里投递
+   `kProfileNotifyDeactivated`，此时线程已在退出路径 ⇒ pending 被读出但**未处理即 return**。
+   修法：先取 pending，仅当 `kind == kProfileNotifyNone && m_profileNotifyStop` 才退出。
+2. **发送失败与发送成功不可区分。** `include/PipeChannel.h` 的 `_Send()` catch 后调
+   `_Reconnect()`，却继续用**重连前的局部句柄**写；二次失败又被
+   `ClientImpl::_SendMessage` 的 `catch(DWORD) -> return 0` 吞掉。而服务端 `OnFocusOut` 的应答
+   **本来就是 0** ⇒ 「0」既可能是成功也可能是失败。修法：`_Send()` 重连后**重取句柄**再写；
+   `Client::FocusOut` 由 `void` 改 `bool`，返回「是否真的送达」；通知线程对 deactivated
+   重试 3 次、间隔 120 ms。
+3. **显示与隐藏不在同一线程，顺序会翻转。** 服务端 `FocusIn` 走
+   `PostMessage(WM_COMMAND, ID_WEASELTRAY_QUICK_PANEL_SHOW)`（异步、进 UI 线程队列），
+   `FocusOut` 却直接在 IPC 线程调 `QuickPanelDialog::Hide()` ⇒ 已排队的 show 会在 hide
+   **之后**执行，面板复活。修法：新增 `ID_WEASELTRAY_QUICK_PANEL_HIDE` +
+   `SetOnHideQuickPanel()` 回调，hide 也进 UI 线程队列，显隐同队列同序。
+
+**教训：**
+
+- **「不生效」要分层归因：语义对不对 / 消息到没到 / 到的顺序对不对。** 三层里任何一层坏掉，
+  用户看到的都是同一个「面板还在」。只修一层症状照旧 ⇒ 别急着宣布修好，先给三层各造一个
+  可判定的探针。
+- **失败路径必须返回可区分的结果。** `catch(DWORD) -> return 0` 等于把故障编码成一个合法
+  返回值，把故障藏进成功里。同步 IPC 的每个 `void` 应答都值得问一句：调用点如何知道对方
+  真的照做了？
+- **跨线程显隐必须收进同一个消息队列。** 一处 `PostMessage`、一处直接调用，就足以让
+  「先隐后显」变成「先显后隐」，这类竞态在单步复测里几乎必然偶发。
+- **重连之后不要再碰旧句柄。** `_Reconnect()` 成功只代表新连接建立了，不代表手上那个
+  `HANDLE` 还有效。
+- **`DLOG` 在服务端是被编译掉的空操作**（`include/no_logging.h`），取证要另开通道：本轮新建
+  `include/FluxingDiagLog.h`（append-only、`FILE_APPEND_DATA` + 共享写、单次 `WriteFile`、
+  2 MB 上限、失败静默），落 `%TEMP%\fluxing-profile-notify.log`；写文件放在**通知线程**，
+  不碰 TSF 回调（P2 禁止阻塞 I/O）。
+- **判定「装机版有没有问题」前，先确认装机目录里真的有那个二进制。** 本轮发现
+  `D:\Program Files\fluxing\weasel\WeaselServer.exe` **已不存在**、进程也没在跑，而卸载器
+  注册表的 `DisplayIcon` 仍指向它 ⇒ 注册表只能证明「曾经装过」，不能证明「现在是完整安装」。
+  先 `Get-ChildItem` 装机目录 + 查进程，再谈复现。
+- **写不进受保护路径时不要绕。** 本轮 shell 硬策略禁止写 `D:\Program Files\`，正确做法是产出
+  可复现的部署脚本（`tmp\deploy-20261102.cmd`：停服务 → 备份 → 版本化替换 DLL
+  （先 `ren` 再 `move`，绕开被加载的镜像）→ 列 sha256 → 重启服务）交用户执行，并把这一步
+  写进 handoff 的「待用户操作」；不要用间接方式把路径藏起来规避策略。
+
