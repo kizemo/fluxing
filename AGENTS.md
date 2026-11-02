@@ -95,6 +95,30 @@ If you are on Windows without bash, use the PowerShell equivalent:
 
 ### 2.5 End-to-end silent-install smoke test (MANDATORY for any install.nsi change)
 
+> **L169 修订（2026-11-03）**：本节原配方**已作废**，请勿照抄。
+> 安装器现在有权威层路径守卫（`output/guard_install_path.nsh`），
+> `C:\TEMP\` / `C:\Users\test` / 任何 `tmp` 路径段 / 源码工作区路径
+> 会在 `.onInit` **第一条语句**就被拦下（退出码 2、零落盘）⇒ 下面那条
+> `cmd /c ... /S /D=$dst\ProgramFiles` 现在**必然被拒**，断言全成假阴性。
+>
+> 更要紧的是：**silent install 没有隔离性**。任何 install.nsi 运行（不论装到哪个根）
+> ① 都会删掉写死的 `D:\Program Files\Fluxing\weasel\WeaselServer.exe`
+> （`install.nsi:214`，NTFS 大小写不敏感 ⇒ 命中的就是真机），
+> ② 都会把 HKLM `Run` / 两侧 `CLSID` / `Uninstall` 改指到安装根。
+> 2026-11-03 的事故就是这么来的（L169）⇒ **拿临时根做「冒烟测试」= 拆机器**。
+>
+> ⇒ `install.nsi` 改动的**强制验收改为三道无副作用门禁**：
+>
+> - **G-a 编译门禁**：`makensis` rc=0（产物用 `/DFLUXING_OUTFILE=` 导到 `tmp\`，
+>   别覆盖已发布包）；
+> - **G-b 守卫单测**：`output/guard_install_path_test.nsi`（与安装器 **include 同一个**
+>   `.nsh`）⇒ `TOTAL=16 MISMATCH=0`；
+> - **G-c 拦截冒烟**：把产物 `/S /D=<必被拒的路径>` 跑一遍 ⇒ **退出码 2**、零落盘，
+>   且真机 `WeaselServer.exe` 的 size / mtime / 进程 pid 分毫未变。
+>
+> 真安装是**部署动作，不是测试**：只能装到产品根 `D:\Program Files\fluxing`，
+> 装完复核注册表四点。旧配方保留在下面仅作历史记录。
+
 **This test is MANDATORY** before committing any change to `output/install.nsi`.
 It is the only test that exercises the silent-mode code path, which is
 the only mode CI / scripted upgrades / mass deployment use. The GUI

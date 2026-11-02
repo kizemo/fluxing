@@ -13519,3 +13519,20 @@ spec 097 诉求 3：快捷设置栏在**切换到其他输入法后仍留在屏�
   顺带修正一处**单位错配**：安装器 `/D=` 要的是**安装根**，判定脚本 `-InstallDir` 要的是
   **引擎目录**（`output/install.nsi:24-25` `WEASEL_ROOT = $INSTDIR\weasel`）——
   旧脚本把同一个路径喂给两者，引擎会被多嵌一层、真实用户资料被孤立。
+- **权威层守卫也已落地**（2026-11-03 02:4x）：`output/guard_install_path.nsh` +
+  `output/install.nsi` 在 `.onInit` **第一条语句**调用。判定逻辑大小写不敏感，
+  拦 `rime_claude` / `00selfmade` / `\tmp\` / `C:\TEMP\` / `C:\Users\test`；
+  命中即 `SetErrorLevel 2` + `Abort`，**不回落默认路径**。判定逻辑抽到独立 include ⇒
+  `output/guard_install_path_test.nsi` 与安装器**测的是同一份代码**；单元测试 16/16
+  （含 3 条「合法路径必须放行」的负对照），真机冒烟：被拦目标退出码 2、零落盘，
+  真机服务端 size / mtime / pid 分毫未变。
+  ⇒ **新的教训：守卫的「位置」比「规则」更要命** —— 规则写对了（判定函数单独可测），
+  但调用点放错一行（放到 taskkill 之后）就等于没写。评审守卫时先看**调用点相对副作用
+  发生点的位置**，再看规则。
+- **NSIS 侧的实现坑（复用价值高）**：`StrCpy dest src [length] [offset]`（**length 在前**）；
+  `${StrStr}` **大小写敏感**且命中时返回「命中位置之后的尾巴」（命中在末尾=空 ⇒ 需加哨兵）；
+  StrFunc 宏必须先 `${Using:StrFunc}` 声明；`!include` 按**脚本所在目录**解析（不是 cwd）；
+  makensis 读被 include 的文件时**不剥 BOM** ⇒ 被 include 的文件带 BOM 会报
+  「Invalid command」（主脚本自己的 BOM 则正常）；`LogSet` 在未定义 `NSIS_CONFIG_LOG`
+  的构建里不可用（改用 `DetailPrint` + `/LOG=`）；makensis 的 `/O` 是**日志文件**开关，
+  **不是输出路径**（要改产物名得用 `!ifdef` 覆盖 `OutFile`）。
