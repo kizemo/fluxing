@@ -1,5 +1,38 @@
 ## [Unreleased]
 
+### fix(fluxing): 快捷面板双击不上屏；上屏由逐字注入改为剪贴板粘贴（spec 097 诉求 2）
+
+- **双击此前完全不上屏，根因不在服务端**（`FluxingPhrasesDialog/PhrasesDialog.cpp`）：
+  `HideWithoutDisconnect()` 的「隐藏但保留管道」前提被**面板自己的自动隐藏连锁**破坏——
+  `DestroyWindow` ⇒ 失焦 ⇒ `WM_ACTIVATEAPP(wp==FALSE)` / `WM_KILLFOCUS` ⇒
+  grace 期（`kShowGraceMs = 2000`）已过 ⇒ `Hide()` ⇒ 而 `Hide()` 末尾是**无条件**的
+  `s_pipeClient->Disconnect()`；等代码走回双击分支时 `IsConnected()` 已是 false ⇒
+  `INJECT` 命令**从未发出**。回车路径幸存，只因它不触发这条失焦连锁
+  （首轮插桩里两条路径的唯一差异就是 `lbtn=1` vs `lbtn=0`）。
+  现改为文件级 `g_hideKeepPipe` 门控 `Hide()` 的断管道动作，三个上屏分支
+  （`VK_RETURN` / `NM_DBLCLK` / `NM_RETURN`）各自置位并在返回前清零。
+- **上屏延时从 625/703 ms 降到 16/31/0 ms**（`WeaselServer/PhrasesDialogIPC.cpp`、
+  `include/FluxingTextInjector.h`，新）：毫秒探针证明整段延时**全部**落在服务端
+  逐字 `SendInput` 内部（206 个 INPUT 事件 ⇒ ≈3.1–3.4 ms/事件，每字一次
+  WeaselIPC 往返 + Rime 处理）；客户端隐藏链只占 16–32 ms、管道往返 0 ms、ACK 0 ms。
+  现改为「剪贴板 + `Ctrl+V`」**一次性提交**（4 个按键事件），三次复现全走粘贴路径、
+  降级路径未触发。
+- **附带修好换行**：逐字 `KEYEVENTF_UNICODE` 送不进换行符，多行词组此前会被压成一行；
+  粘贴路径保留 `\n`，现在能正常进多行编辑框。
+- **`Ctrl+V` 不会被 IME 吃掉**（静态验证）：`output/data/default.yaml` 里 `Control+v`
+  只出现在注释（`:289-291`）无实际绑定；`WeaselTSF/KeyEventSink.cpp:101`
+  `*pfEaten = (BOOL)m_client.ProcessKeyEvent(ke)` → `RimeWithWeasel/RimeWithWeasel.cpp:329`
+  `handled = rime_api->process_key(...)` → `:361` `return (BOOL)handled;` ⇒
+  未绑定键 `handled = false` ⇒ 不 eat ⇒ 粘贴键必达宿主应用。
+- **注入逻辑收进 header-only 共享头**（`include/FluxingTextInjector.h`）：客户端与服务端
+  同源同一份实现（宪法 R7）；两个 `.vcxproj` 的 `AdditionalIncludeDirectories` 已含
+  `$(SolutionDir)\include`，无需登记工程文件。
+- ⚠️ **已知限制（剪贴板是借用的，不是独占的）**：上屏会短暂占用剪贴板约 2 s；
+  恢复是**条件**的——只有当剪贴板里仍是我们放进去的那段文本时才还原，期间用户自己
+  复制过内容则**不覆盖**；原剪贴板本来没有文本时**不清空**；
+  **非文本格式（图片 / 文件 / 富文本）无法恢复。**
+  剪贴板被其它进程独占时自动降级回逐字 `SendInput`（`OpenClipboard` 重试 5 次 × 40 ms）。
+
 ### feat(fluxing): 「快捷面板常驻」开关收进统一设置面板（spec 095 / ADR 0026）
 
 - **统一设置面板现在有「界面」分组**（`WeaselServer/ShortcutSettings.{h,cpp}`）：
