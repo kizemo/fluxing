@@ -18,11 +18,15 @@
 含负对照证明断言有牙，见 §5.8）；
 代码已 commit（`1733f6d` + `4a0c630`）但**尚未 push**。**
 
-剩余三件事，都要人：
+剩余两件事，都要人：
 ① 真实桌面切一次输入法，确认「TSF 事件 → 窗口跃迁」在同一条时间轴上对齐（探针已在跑，
    见 §5.9）⇒ 之后把 ADR 0029 从 `Proposed` 转 `Accepted`；
-② 补 `WeaselServer` 自启项（本机**至今没有**，重启机器后服务端不会自动起来）；
-③ 用户签字后 `git push kizemo Fluxing`。
+   ⚠️ 本轮 Agent 尝试自行触发切换**失败**，原因是**桌面会话处于锁定态**
+   （`LogonUI.exe` 在跑、`GetForegroundWindow()` 返回 0）⇒ 按键注入静默失效，
+   必须人解锁后手按，详见 §5.9.1；
+② 用户签字后 `git push kizemo Fluxing`。
+
+（`WeaselServer` 自启项已于本轮补上并双路回读确认，见 §5.10 —— 已从待办里划掉。）
 
 ---
 
@@ -258,8 +262,12 @@ Agent 的 shell 安全策略禁止写 `D:\Program Files\`，因此部署由用�
   → **已于 2026-11-03 01:04 补齐**，见 §5.8（窗口级 `IsWindowVisible` 断言，含负对照）。
 - **真实桌面切一次输入法**（OS 发起的 profile 切换 → TSF → IPC → 窗口）这条**完整链路**
   尚未在同一条时间轴上对齐取证 —— 探针已就位，见 §5.9。
+  ⚠️ 2026-11-03 01:06–01:14 连跑两个观察窗均**零跃迁**；根因是**桌面会话锁定**
+  （`LogonUI.exe` 在跑、`GetForegroundWindow()`=0），Agent 侧按键注入静默失效
+  —— **不是代码问题**，见 §5.9.1 ⇒ 仍**必须由人解锁后手按一次**。
 - ADR 0029 因此**仍保持 `Proposed`**，未转 `Accepted`（等 §5.9 的实机切换证据）。
-- 诉求①（真机 silent install）与诉求③（物理按键验收）与本 bug 无关，仍未做。
+- 诉求①（真机 silent install）仍未做；诉求③（物理按键验收）**并不是全新验收** ——
+  spec 097 的 T1.4 已记录用户确认，只剩「本轮改动落地后是否仍生效」的一次复验（见 §7 旧诉求③）。
 
 ### 5.8 窗口级可见性验证（2026-11-03 01:04，装机版 WeaselServer 上实跑）
 
@@ -346,19 +354,105 @@ C4 diag: [server] focus_in profile presence=present
 
 对齐成立 ⇒ ADR 0029 的验收门槛（§后果 最后一条）满足 ⇒ 转 `Accepted`。
 
+#### 5.9.1 本轮实测：Agent 自己触发不了（桌面会话锁定）
+
+2026-11-03 01:06–01:14 连跑两个观察窗，**都是零跃迁**：
+
+| 观察窗 | 区间 | 可见性跃迁 | 新增诊断行 |
+|---|---|---|---|
+| `watch 300` | 01:06:17–01:11:17 | **0** | 1（`focus_in profile presence=present`） |
+| 流式观察器 | 01:13:11 起 | **0** | 01:13:31 收到 1 行 `focus_in`（面板本就可见，故不产生跃迁） |
+
+根因**不是代码**，是**桌面会话处于锁定态**：
+
+- `query session`：console 会话 ID=1 状态 `Active`；
+- 但 `LogonUI.exe`（锁屏界面）在跑（pid 11072）；
+- `GetForegroundWindow()` 返回 **0**（锁定态下没有前台窗口）；
+- Agent 用 `SendInput` 模拟 `Ctrl+Shift`（系统级 IME 循环热键，真和弦：Ctrl↓ Shift↓ Shift↑ Ctrl↑）
+  → **诊断日志 0 新增**、面板可见性 0 变化。
+
+这条印证铁律「桌面会话不活动时，所有输入注入会静默失败」：
+**API 调用返回成功 ≠ 状态改变**，必须回读可观测副作用（诊断日志行数增量）再下结论。
+
+#### 5.9.2 换成持久化观察器（你一回来就自动留痕）
+
+`tmp/watch_quickpanel_stream.py` —— **纯只读**：不发 IPC、不点窗口、不注入按键，可以长期挂着。
+
+```powershell
+& 'C:\Python314\python.exe' 'F:\soft\00selfmade\rime_claude\tmp\watch_quickpanel_stream.py' 3300
+```
+
+- 输出：`tmp/quickpanel-stream.jsonl`（追加写，每行一条 JSON 事件，带 `HH:MM:SS`）
+  与 `tmp/quickpanel-stream.log`（人读镜像）；
+- 事件类型：`start` / `transition`（带 `visible`、`from`、该区间新增诊断行）
+  / `diag`（面板没动但诊断日志长了）/ `end`；
+- 已在后台跑（3300 s ≈ 55 min）。
+
+#### 5.9.3 你解锁后怎么配合
+
+1. 解锁桌面；
+2. 切到别的输入法（面板应变 hidden）→ 切回火流猩（面板应变 VISIBLE）；
+3. 回一句「切过了」即可 —— 我读 `tmp/quickpanel-stream.jsonl` 判定是否对齐。
+
+预期 JSONL 形如：
+
+```json
+{"t":"01:2x:xx","ev":"transition","visible":false,"from":true,
+ "diag_new":["[server] focus_out param=1 presence=absent","[tsf] deactivated sent=1"]}
+{"t":"01:2x:yy","ev":"transition","visible":true,"from":false,
+ "diag_new":["[server] focus_in profile presence=present"]}
+```
+
+对齐成立 ⇒ ADR 0029 的验收门槛（§后果 最后一条）满足 ⇒ 转 `Accepted`。
+
+> 旧探针仍可用：`verify_quickpanel_visibility.py watch 300`
+> （本轮产出 `tmp/quickpanel-watch-20261103-011117.json`，同为零跃迁）。
+
+### 5.10 `WeaselServer` 自启项：来源核实 + 已补写（2026-11-03 01:11）
+
+**原交接卡 §7 第 3 项写的「走 `WeaselSetup.exe` 的注册逻辑最稳」是错的** —— 读源码证伪：
+
+| 谁 | 写不写自启 | 证据 |
+|---|---|---|
+| `WeaselSetup.exe` | **不写** | `WeaselSetup/imesetup.cpp` 只写 `HKLM\...\Fluxing\Weasel\{WeaselRoot,ServerExecutable}` 与 WER 键；`WeaselSetup/WeaselSetup.cpp` 只写 `HKCU\...\Fluxing\Weasel\{RimeUserDir,Hant,Language,ToggleImeOnOpenClose,UpdateChannel}` 及 `HKCU\...\Rime\weasel\Updates\CheckForUpdates` —— **全文没有任何 `CurrentVersion\Run` 写入** |
+| NSIS 安装器 | **写** | `output/install.nsi:1159`：`WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "WeaselServer" "$INSTDIR\WeaselServer.exe"` |
+| NSIS 卸载器 | 删 | `output/install.nsi:418`：`DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "WeaselServer"` |
+
+⇒ 本机没有自启项，说明**本机不是用这个 NSIS 安装器装的**（或装完被手工清理过）。
+
+**本轮已补（选 HKCU Run：不需要管理员、一条命令可回滚）**：
+
+```
+HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+    WeaselServer    REG_SZ    "D:\Program Files\fluxing\weasel\WeaselServer.exe"
+```
+
+- 双路回读确认一致：.NET `Registry.CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run').GetValue('WeaselServer')`
+  与 `reg.exe query 'HKCU\...\Run' /v WeaselServer` 返回同值；
+- `HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run` 仍无该值（保持原状）；
+- 回滚：`reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v WeaselServer /f`。
+
+> 与 NSIS 的 HKLM 写法差异：HKCU = 每人登录即起、无需管理员；HKLM = 全机。
+> 两者可共存（是否会重复拉起未验证，不做断言）。
+
 ---
 
-## 6. 提交状态（截至 2026-11-03 00:47）
+## 6. 提交状态（截至 2026-11-03 01:20）
 
-`HEAD = 4a0c6301d6ea07c27ebfb39c45e7afa45f347cd1`，分支 `Fluxing`，
-`## Fluxing...kizemo/Fluxing [ahead 5]` —— **5 个 commit 全部未 push**。
+`HEAD = aa275ac`（本次文档增补的上一提交），分支 `Fluxing`，
+`## Fluxing...kizemo/Fluxing [ahead 7]` —— **7 个 commit 全部未 push**。
 
-本轮新增的两个：
+本轮新增的四个：
 
 | commit | 范围 | 内容 |
 |---|---|---|
 | `1733f6d` | `fix(fluxing)` | 12 个文件：F1–F6 全部源码 + `test/TestWeaselIPC/TestWeaselIPC.cpp` + 新建 `include/FluxingDiagLog.h` |
 | `4a0c630` | `docs(fluxing)` | `docs/adr/0029-quickpanel-hide-delivery-and-ordering.md`、`docs/adr/README.md` 索引、`.specify/memory/lessons-learned.md`（L168）、本文档 |
+| `51eca2c` | `docs(fluxing)` | 本文档改为「部署 + 真机验证完成」版（§0 / §5.5 / §5.6） |
+| `aa275ac` | `docs(fluxing)` | 交接卡增补 §5.8（窗口级可见性验证，含负对照）与 §5.9（实机时间轴待补项） |
+
+再往后的那一次（本文档 §5.7 / §5.9.1 / §5.9.2 / §5.9.3 / §5.10 / §6 / §7 的修订）
+就是 **`HEAD`**，哈希见 `git log --oneline -1`。
 
 更早的三个（仍未 push）：
 
@@ -366,12 +460,10 @@ C4 diag: [server] focus_in profile presence=present
 - `7c07862` docs(fluxing) CHANGELOG + lessons
 - `7e20129` docs(agents) AGENTS.md
 
-**工作区状态**：`git status -sb` 只剩 ` m librime`（脏子模块，**永不提交**）。
-其余 15 个文件已全部入库（已用 `git rev-parse HEAD:<path>` 与 `git hash-object <path>`
-逐个核对一致）。
+**工作区状态**：本次提交后 `git status -sb` 只剩 ` m librime`（脏子模块，**永不提交**）。
+`tmp/` 全被 `.gitignore` 挡住（`/tmp/` 命中 `.gitignore:185`）⇒ 探针与证据文件不入库。
 
-**push 刻意推迟**：commit 可逆、push 不可逆 ⇒ 等用户确认复测通过后再
-`git push kizemo Fluxing`。
+**push 刻意推迟**：commit 可逆、push 不可逆 ⇒ 等用户签字后再 `git push kizemo Fluxing`。
 
 ---
 
@@ -383,15 +475,13 @@ C4 diag: [server] focus_in profile presence=present
    与 `deactivated sent=1`（应当都有）。
 2. 用户确认通过 ⇒ 把 `docs/adr/0029-quickpanel-hide-delivery-and-ordering.md` 的
    `- **Status**: Proposed` 改为 `Accepted`（同一 commit 里一并改）。
-3. **补 `WeaselServer` 自启项**（当前**没有**，重启机器后服务端不会自动起来）：
-   - `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 内无 `WeaselServer`/`Fluxing` 项；
-   - `HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run` 存在但无相关项；
-   - `schtasks /tn WeaselServer` 不存在；
-   - `HKLM\SOFTWARE\Fluxing\Weasel` 键不存在。
-   → 走 `WeaselSetup.exe` 的注册逻辑最稳；手工补 Run 项也可，但必须**写死完整路径**
-   `"D:\Program Files\fluxing\weasel\WeaselServer.exe"`。
-   ⚠️ 写 `HKLM` 需要管理员权限；写 `HKCU\...\Run` 不需要。**这一项涉及注册表写入，
-   建议先问用户选哪条路径**（HKCU Run / WeaselSetup / 不加）。
+3. ~~**补 `WeaselServer` 自启项**~~ —— **已于 2026-11-03 01:11 完成**，详见 §5.10。
+   - 原判断（自启项缺失、来源不明）已核实：真正的写入者是 NSIS 安装器
+     `output/install.nsi:1159`，**`WeaselSetup.exe` 不参与**
+     （本卡片原文「走 `WeaselSetup.exe` 的注册逻辑最稳」是错的，已在 §5.10 证伪并更正）。
+   - 已写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\WeaselServer`
+     = `"D:\Program Files\fluxing\weasel\WeaselServer.exe"`，双路回读确认。
+   - 仍待用户拍板一件事：**要不要同时补一份 HKLM 版**（与 NSIS 行为完全一致，但需要管理员权限）。
 4. 用户签字 ⇒ `git push kizemo Fluxing`。
 5. 清理可选项（都属受保护路径，Agent 不代劳）：装机目录内的
    `.bak-20261102` / `.old-20261102` / `.old.tmp` 备份文件，
@@ -406,6 +496,14 @@ C4 diag: [server] focus_in profile presence=present
   （注：装机目录里现存 `weasel.1.1.6.0.0.dll`、`weaselx64.1.1.6.0.dll` 等版本化副本，
   说明此前的安装确实走过版本化流程。）
 - **诉求③ 物理按键验收**：`Ctrl+.` / `Ctrl+/` / `Ctrl+Shift+3`。
+  ⚠️ 澄清（2026-11-03 01:15 核实）：这三个键**在 spec 097 的 T1.4 就已由用户确认过**
+  （`.specify/specs/097-shim-name-collision-and-hotkey-chord-separation/tasks.md:37`：
+  「用户确认 `Ctrl+.` 切中英标点、`Ctrl+/` 切简繁、`Ctrl+Shift+3` 只删词不翻标点」）。
+  另外 **`Ctrl+Shift+3` 的语义已被 spec 097 改写**：它不再是「切中英标点」，
+  而是「删候选窗第 3 个候选」，由 TSF 前端拦截（`include/FluxingCandidateDeleteShortcut.h`）；
+  **所以在 `output/data/default.yaml` 里搜不到它的 yaml 绑定是正常的**
+  （`default.yaml:272-273` 只有 `Control+period` / `Control+slash` 两条）。
+  ⇒ 本项**不是全新验收**，只剩「本轮 quickpanel 改动落地后是否仍生效」的一次复验。
 
 ---
 
@@ -464,6 +562,19 @@ $bom = ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0
   （不要把路径塞进脚本再执行）。正解 = 产出 `.cmd` 交用户执行。
 - **注册表读「默认值」用 `Get-ItemProperty` 读不到** ⇒ 用 `reg.exe query`。
 - **`Select-String -Path <目录>` 不递归** ⇒ 用 `-LiteralPath` 指定文件。
+- **桌面会话锁定时，一切输入注入静默失效**（2026-11-03 01:12 实测）：
+  `query session` 显示 console 会话 `Active`，但 `LogonUI.exe` 在跑、
+  `GetForegroundWindow()` 返回 **0** ⇒ 此时 `SendInput` 模拟 `Ctrl+Shift`
+  **诊断日志 0 新增、面板 0 变化**，而 API 调用本身「成功」。
+  ⇒ 注入类验证**先判会话是否活跃**（`LogonUI.exe` 存在 + `GetForegroundWindow() != 0`），
+  再判 API 行为；「调用没报错」≠「状态改变了」。
+- **模拟组合键必须是真和弦**：`Ctrl↓ → Shift↓ → Shift↑ → Ctrl↑`。
+  用「每个键各自 down+up」会把组合键变成两个独立键（等于什么也没按）。
+- **`SendInput` 的 `KEYBDINPUT` 字段名是 `dwFlags`**，不是 `wFlags`（写错编译不过）。
+  C# 里 `INPUT` 要用 `StructLayout(LayoutKind.Explicit)` 显式联合体，
+  `Marshal.SizeOf(typeof(INPUT))` 传长度。
+- **写注册表用 .NET API 而不是 `reg add`**：给原生 exe 传带引号的值容易掉引号；
+  写完用 .NET 读 + `reg.exe query` **双路回读**才可信。
 
 ---
 
@@ -491,3 +602,12 @@ $bom = ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0
   `ShouldHideQuickPanelOnFocusOut` / `UpdateFluxingPresence` /
   `ShouldShowQuickPanelForPresence` / `FluxingPresence`
 - `include/FluxingDiagLog.h`（F6 诊断日志实现）
+
+**本轮新增的验证工具（都在 `tmp/`，被 `.gitignore` 挡住，不入库）**：
+
+- `tmp/verify_quickpanel_visibility.py` —— `probe`（确定性语义矩阵 + 负对照）
+  / `watch <秒>`（窗口跃迁 ↔ 诊断日志行对齐）；
+- `tmp/watch_quickpanel_stream.py` —— 持久化流式观察器（只读，追加写
+  `tmp/quickpanel-stream.jsonl` + `.log`）；
+- 证据：`tmp/quickpanel-visibility-20261103-010448.json`（5/5 PASS + NEG PASS）、
+  `tmp/quickpanel-watch-20261103-011117.json`（300 s 窗，零跃迁 —— 会话锁定所致）。
