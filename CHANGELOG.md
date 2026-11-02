@@ -287,6 +287,32 @@ P11.5 新副本内容与本次构建产物一致             shim=C:\FluxingTest
 （TSF 事件与窗口跃迁落在同一刻）——目前只差这一层；
 桌面会话解锁后跑 `tmp\real_switch_probe.py 4` 即可自动取证，拿到 PASS 后 ADR 0029 转 `Accepted`。
 
+### fix(installer): 静默安装脚本加装路径守卫，修正 root/engine 单位错配（L169）
+
+- **事故复盘留下的必修项**（L169）：上一版的 `tmp\silent-install-116.cmd`
+  预检只问「目标目录存在吗」，于是工作区里的 `tmp\` 路径也被放行，
+  **真的执行了 NSIS 安装器**：落盘 235 个文件 / 220.96 MB，并改写了 4 处 HKLM
+  注册表（Run / 双侧 CLSID / InstallDir / Uninstall）。
+- **守卫搬进仓库**（`scripts/install/silent-install.ps1` 新增）：`tmp\` 被 gitignore，
+  修在 `tmp\` 里等于没修。守卫以**退出码 2** 拒绝四种靶子：
+  - **G1** 目标落在源码工作区内（含任何 `tmp` 路径）——这正是事故靶子；
+  - **G2** 目标落在 smoke-test / 临时根下（对齐 `output/install.nsi` 的 `check_reg` 守卫）；
+  - **G3** 目标存在但**不像**安装根（既无 `weasel\WeaselServer.exe` 又非空目录）；
+  - **G4** `-DryRun` 只打印计划，**什么都不执行**。
+  四条负对照已实测：工作区 / 临时根 / 非安装根 / 不存在路径 → 一律 exit 2；
+  `-DryRun` → exit 0 且不启动安装器。
+- **修正 root/engine 单位错配**：安装器的 `/D=` 要的是**安装根**
+  （`output/install.nsi:24-25` `WEASEL_ROOT = $INSTDIR\weasel` ⇒ 引擎在根下一层），
+  而 `acceptance-check.ps1 -InstallDir` 要的是**引擎目录**（`data\`、`weasel*.dll` 同级）。
+  旧脚本把同一个路径同时喂给两者 ⇒ 引擎被多嵌一层（`...\weasel\weasel`）、
+  真实用户资料被孤立。现按两个单位分开传参。
+- **结论不再依赖 `$LASTEXITCODE`**：NSIS 安装器是 GUI 子系统程序，
+  退出码不可靠；改用 `Start-Process -Wait -PassThru` 取真实 ExitCode，
+  最终判定一律以 `acceptance-check.ps1` 为准。
+- **校验脚本一并入库**（`scripts/install/acceptance-check.ps1`）：
+  C1 `data\default.yaml` 大小+sha256、C2 无 `*.stage2` 残留、
+  C3 版本化 shim 与 TIP 指向、C4 自启项。
+
 ## [1.1.6] - 2026-10-31
 
 ### 主要更新
