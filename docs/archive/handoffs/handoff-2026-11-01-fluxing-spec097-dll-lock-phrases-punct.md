@@ -1,5 +1,9 @@
 # 交接文档 · Fluxing 1.1.6 · spec 094/095/096 已交付 + 三项新诉求取证
 
+> ⚠️ **本文档已被取代，仅作历史记录保留。**
+> 现行交接文档：`F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-02-fluxing-spec097-phrases-paste.md`
+> 取代原因：诉求 2（快捷面板双击/回车上屏 + 上屏延时）已在 2026-11-02 完全修复并经用户实测通过（注入耗时 625/703 ms → 16/31/0 ms），且新增了「诊断探针待剥离 + 干净构建」这一硬收尾步骤。新文档才是接手入口。
+
 - 生成时间：2026-11-01（GMT+8）
 - 生成会话：`mvs_d8aee02cc7c048bb8d4fcb737f24b8e7`
 - 仓库：`F:\soft\00selfmade\rime_claude`　分支：`Fluxing`　状态：`## Fluxing...kizemo/Fluxing [ahead 11]`，工作区干净（仅 ` m librime` 既有脏子模块），**未 push**
