@@ -64,14 +64,18 @@ Without it, you get just the .exe and .dll under `output/` and `output\Win32\`.
 ### 2.3 Tests
 
 ```batch
-:: Build + run unit tests (20/20 PASS is the bar, see commit 6277b59).
+:: Build + run unit tests (zero failures is the bar - 91/91 as of spec 097,
+::   see commit 6277b59 for the required output shape).
 msbuild weasel.sln /t:Build /p:Configuration=Release /p:Platform=Win32
-test\TestDefaultHotkeys\Release\TestDefaultHotkeys.exe
-test\TestResponseParser\Release\TestResponseParser.exe
-test\TestWeaselIPC\Release\TestWeaselIPC.exe
+release\TestDefaultHotkeys.exe
+release\TestResponseParser.exe
+release\TestWeaselIPC.exe
 ```
 
-Test executables land in `test\<Name>\Release\`. The three test projects
+Test executables land in repo-root `release\`, NOT `test\<Name>\Release\`: every
+test `.vcxproj` sets `<OutDir>$(SolutionDir)\$(Configuration)\</OutDir>` (see
+`test/TestDefaultHotkeys/TestDefaultHotkeys.vcxproj:118`), so only intermediates
+(`.obj` / `.tlog` / `.iobj`) stay under `test\<Name>\Release\`. The three test projects
 **build only under `Release|Win32`** (x86). x64 build matrix is intentionally
 not exercised by tests; installable binary is 32-bit and works on x64 OS via
 WoW64. (See L10 §3 for the librime Win32-only constraint.)
@@ -535,11 +539,12 @@ response (R6: evidence before assertion).
 
 2. **Unit tests**:
    ```
-   test\TestDefaultHotkeys\Release\TestDefaultHotkeys.exe
+   release\TestDefaultHotkeys.exe
    ```
-   Must report `20/20 PASS` (or your new test count if you added
-   tests). A regression in spec 005 hotkeys is the most common cause
-   of 0/20.
+   Must report `Passed: N / N` with zero failures and exit code 0
+   (91/91 as of spec 097; the count grows as tests are added, so
+   never hard-code it). A regression in spec 005 hotkeys is the most
+   common cause of a non-zero failure count.
 
 3. **Build hygiene**:
    - No new `*.log` / `*.log.err` / `*.build.log` in `git status`.
@@ -624,7 +629,7 @@ When you start a session and the user gives a non-trivial task:
   `$INSTDIR`.
 - **PowerShell corrupts a text file** → check `L01` / `L02`; switch to
   byte-level APIs.
-- **Tests fail with 0/20** → check `L04` (librime key_binder action
+- **Tests fail wholesale (0 passed)** → check `L04` (librime key_binder action
   names) and `L03` (modifier case — `Shift+L` not `shift+l`).
 - **GitHub API returns 422 on PATCH** → check `L08` (Chinese in body
   is mangled).
