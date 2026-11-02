@@ -19,12 +19,21 @@
 #include "ModalChrome.h"
 #include "PipeClient.h"
 #include "FluxingPipeProtocol.h"
+#include "FluxingTextInjector.h"  // spec 097 诉求 2: 剪贴板 + 粘贴快捷键上屏
 
 #include <algorithm>
 #include <cassert>
 #include <commctrl.h>
 #include <iostream>
 #include <shlobj.h>
+
+// spec 097 诉求 2 修复: 「先隐藏、再注入」窗口期标志。
+// HideWithoutDisconnect() 销毁窗口 → 失焦 → WM_KILLFOCUS / WM_ACTIVATEAPP
+//   → grace 期已过 → Hide() → s_pipeClient->Disconnect()
+//   ⇒ HideWithoutDisconnect 的「保留 pipe」前提被自动隐藏连锁掐断,
+//     回到分支时 IsConnected()==false ⇒ INJECT 从未发出 (双击不上屏)。
+// 该窗口期内 Hide() 必须跳过 Disconnect()。
+static bool g_hideKeepPipe = false;
 
 // ===== Static state 定义 =====
 HWND PhrasesDialog::s_hwnd = nullptr;
@@ -334,7 +343,9 @@ void PhrasesDialog::Hide() {
   s_longPressActive = false;
 
   // Phase K2: pipe 断开 (但不发 SHUTDOWN — Hide 后可能还要 Show)
-  if (s_pipeClient && s_pipeClient->IsConnected()) {
+  // spec 097 诉求 2: g_hideKeepPipe 窗口期内跳过 Disconnect,
+  //   否则注入分支回不去 INJECT (见 g_hideKeepPipe 声明处)。
+  if (s_pipeClient && s_pipeClient->IsConnected() && !g_hideKeepPipe) {
     s_pipeClient->Disconnect();
   }
 }
@@ -439,20 +450,11 @@ bool PhrasesDialog::SavePhrases(const std::wstring& path,
 void PhrasesDialog::DefaultInject(const std::wstring& text) {
   if (text.empty())
     return;
-  std::vector<INPUT> inputs;
-  inputs.reserve(text.size() * 2);
-  for (wchar_t c : text) {
-    INPUT down = {};
-    down.type = INPUT_KEYBOARD;
-    down.ki.wScan = c;
-    down.ki.dwFlags = KEYEVENTF_UNICODE;
-    inputs.push_back(down);
-
-    INPUT up = down;
-    up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
-    inputs.push_back(up);
-  }
-  SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+  // spec 097 诉求 2 延时修复: 与服务端同一套剪贴板 + 粘贴快捷键路径。
+  //   无 pipe 时的降级路径原本也是逐字 SendInput (同样 ≈3.1 ms/字 ×
+  //   每字穿过前台 IME/TSF 栈)。 剪贴板被独占时自动降级回逐字注入 (见
+  //   FluxingTextInjector.h)。
+  fluxing::InjectTextWithFallback(text);
 }
 
 void PhrasesDialog::InjectText(const std::wstring& text) {
@@ -947,11 +949,13 @@ LRESULT PhrasesDialog::OnKeyDown(HWND hwnd, WPARAM wp) {
         int idx = m_selectedIndex;
         std::wstring text = m_phrases[idx].text;
         if (s_pipeClient && s_pipeClient->IsConnected()) {
+          g_hideKeepPipe = true;
           HideWithoutDisconnect();
           if (s_pipeClient && s_pipeClient->IsConnected()) {
             s_pipeClient->SendMessage(fluxing::BuildINJECT(idx));
             s_pipeClient->ReadMessage();  // 读 ACK
           }
+          g_hideKeepPipe = false;
           Hide();
         } else {
           Hide();
@@ -1093,11 +1097,13 @@ LRESULT PhrasesDialog::OnNotify(HWND hwnd, LPARAM lp) {
           std::wstring text = m_phrases[idx].text;
           m_selectedIndex = idx;
           if (s_pipeClient && s_pipeClient->IsConnected()) {
+            g_hideKeepPipe = true;
             HideWithoutDisconnect();
             if (s_pipeClient && s_pipeClient->IsConnected()) {
               s_pipeClient->SendMessage(fluxing::BuildINJECT(idx));
               s_pipeClient->ReadMessage();  // 读 ACK
             }
+            g_hideKeepPipe = false;
             Hide();
           } else {
             Hide();
@@ -1112,11 +1118,13 @@ LRESULT PhrasesDialog::OnNotify(HWND hwnd, LPARAM lp) {
           int idx = m_selectedIndex;
           std::wstring text = m_phrases[idx].text;
           if (s_pipeClient && s_pipeClient->IsConnected()) {
+            g_hideKeepPipe = true;
             HideWithoutDisconnect();
             if (s_pipeClient && s_pipeClient->IsConnected()) {
               s_pipeClient->SendMessage(fluxing::BuildINJECT(idx));
               s_pipeClient->ReadMessage();  // 读 ACK
             }
+            g_hideKeepPipe = false;
             Hide();
           } else {
             Hide();

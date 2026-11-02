@@ -7,6 +7,7 @@
 #include "stdafx.h"
 #include "PhrasesDialogIPC.h"
 #include "FluxingPipeProtocol.h"
+#include "FluxingTextInjector.h"  // spec 097 诉求 2: 剪贴板 + 粘贴快捷键上屏
 #include "ForegroundCapture.h"  // v0.19.0.52 (Phase K3 T011 Option B): InjectText 抢 foreground
 #include <WeaselUtility.h>      // WeaselUserDataPath (懒初始化 yaml path 用)
 #include <fstream>
@@ -343,20 +344,11 @@ void PhrasesDialogIPC::TerminatePhrasesDialog() {
 
 void PhrasesDialogIPC::InjectText(const std::wstring& text) {
   if (text.empty()) return;
-  std::vector<INPUT> inputs;
-  inputs.reserve(text.size() * 2);
-  for (wchar_t c : text) {
-    INPUT down = {};
-    down.type = INPUT_KEYBOARD;
-    down.ki.wScan = c;
-    down.ki.dwFlags = KEYEVENTF_UNICODE;
-    inputs.push_back(down);
-
-    INPUT up = down;
-    up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
-    inputs.push_back(up);
-  }
-  SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+  // spec 097 诉求 2 延时修复: 剪贴板 + 粘贴快捷键一次性提交。
+  //   旧的逐字 SendInput 每个字符都要穿过前台应用的 IME/TSF 栈
+  //   (≈3.1 ms/字; 103 字 ⇒ ~600 ms 可见延时), 改成一次粘贴只剩 4 个按键事件。
+  //   剪贴板被别人独占 ⇒ 降级回逐字注入 (见 FluxingTextInjector.h)。
+  fluxing::InjectTextWithFallback(text);
 }
 
 // ===== YAML I/O (从 WeaselServer/PhrasesDialog.cpp 搬过来) =====
