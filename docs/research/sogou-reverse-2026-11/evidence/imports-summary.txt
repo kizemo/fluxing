@@ -1,0 +1,26 @@
+SogouTSF.dll	DLLs=4	jsonFields=79
+   DLLs: ADVAPI32.dll, KERNEL32.dll, ole32.dll, SogouTSF.dll
+ImeFunc.dll	DLLs=14	jsonFields=310
+   DLLs: ADVAPI32.dll, bcrypt.dll, CRYPT32.dll, ImeFunc.dll, IMM32.dll, KERNEL32.dll, ole32.dll, PSAPI.DLL, SHELL32.dll, SHLWAPI.dll, USER32.dll, VERSION.dll, WINMM.dll, WS2_32.dll
+UIPlugin.dll	DLLs=18	jsonFields=467
+   DLLs: ADVAPI32.dll, bcrypt.dll, CRYPT32.dll, GDI32.dll, IMM32.dll, KERNEL32.dll, MSIMG32.dll, ole32.dll, OLEACC.dll, OLEAUT32.dll, PSAPI.DLL, SHELL32.dll, SHLWAPI.dll, UIPlugin.dll, USER32.dll, VERSION.dll, WINMM.dll, WS2_32.dll
+SGTool.exe	DLLs=28	jsonFields=796
+   DLLs: ADVAPI32.dll, bcrypt.dll, COMCTL32.dll, COMDLG32.dll, CRYPT32.dll, GDI32.dll, gdiplus.dll, IMM32.dll, IPHLPAPI.DLL, KERNEL32.dll, MSIMG32.dll, ole32.dll, OLEACC.dll, OLEAUT32.dll, PSAPI.DLL, Secur32.dll, SETUPAPI.dll, SHELL32.dll, SHLWAPI.dll, USER32.dll, USERENV.dll, VERSION.dll, WINHTTP.dll, WININET.dll, WINMM.dll, WLDAP32.dll, WS2_32.dll, WTSAPI32.dll
+SogouCloud.exe	DLLs=23	jsonFields=589
+   DLLs: ADVAPI32.dll, bcrypt.dll, CRYPT32.dll, dbghelp.dll, dxgi.dll, GDI32.dll, gdiplus.dll, imagehlp.dll, IMM32.dll, KERNEL32.dll, networkbase.dll, ole32.dll, OLEAUT32.dll, POWRPROF.dll, PSAPI.DLL, SHELL32.dll, SHLWAPI.dll, USER32.dll, VERSION.dll, WINHTTP.dll, WININET.dll, WINMM.dll, WS2_32.dll
+SGMyInput.exe	DLLs=26	jsonFields=755
+   DLLs: ADVAPI32.dll, bcrypt.dll, COMCTL32.dll, COMDLG32.dll, CRYPT32.dll, GDI32.dll, gdiplus.dll, ImageMagik.dll, IMM32.dll, KERNEL32.dll, MSIMG32.dll, ole32.dll, OLEACC.dll, OLEAUT32.dll, PSAPI.DLL, Secur32.dll, SHELL32.dll, SHLWAPI.dll, USER32.dll, USERENV.dll, VERSION.dll, WINHTTP.dll, WININET.dll, WINMM.dll, WLDAP32.dll, WS2_32.dll
+networkbase.dll	DLLs=7	jsonFields=207
+   DLLs: ADVAPI32.dll, bcrypt.dll, CRYPT32.dll, KERNEL32.dll, networkbase.dll, USER32.dll, WS2_32.dll
+shiply.dll	DLLs=14	jsonFields=376
+   DLLs: ADVAPI32.dll, bcrypt.dll, CRYPT32.dll, dbghelp.dll, IPHLPAPI.DLL, KERNEL32.dll, PSAPI.DLL, Secur32.dll, SHELL32.dll, shiply.dll, SHLWAPI.dll, USER32.dll, USERENV.dll, WS2_32.dll
+beacon_sdk.dll	DLLs=9	jsonFields=212
+   DLLs: ADVAPI32.dll, beacon_sdk.dll, KERNEL32.dll, NETAPI32.dll, ole32.dll, SHELL32.dll, SHLWAPI.dll, USER32.dll, WS2_32.dll
+SGSmartAssistant.exe	DLLs=25	jsonFields=738
+   DLLs: ADVAPI32.dll, bcrypt.dll, COMCTL32.dll, COMDLG32.dll, CRYPT32.dll, GDI32.dll, gdiplus.dll, ImageMagik.dll, IMM32.dll, KERNEL32.dll, MSIMG32.dll, ole32.dll, OLEACC.dll, OLEAUT32.dll, PSAPI.DLL, SETUPAPI.dll, SHELL32.dll, SHLWAPI.dll, USER32.dll, VERSION.dll, WINHTTP.dll, WININET.dll, WINMM.dll, WLDAP32.dll, WS2_32.dll
+SGWizard.exe	DLLs=22	jsonFields=606
+   DLLs: ADVAPI32.dll, bcrypt.dll, COMCTL32.dll, CRYPT32.dll, GDI32.dll, gdiplus.dll, ImageMagik.dll, IMM32.dll, KERNEL32.dll, MSIMG32.dll, ole32.dll, OLEACC.dll, OLEAUT32.dll, PSAPI.DLL, SHELL32.dll, SHLWAPI.dll, USER32.dll, VERSION.dll, WINHTTP.dll, WININET.dll, WINMM.dll, WS2_32.dll
+SGKaomoji.exe	DLLs=19	jsonFields=408
+   DLLs: ADVAPI32.dll, bcrypt.dll, CRYPT32.dll, GDI32.dll, IMM32.dll, KERNEL32.dll, MSIMG32.dll, ole32.dll, OLEACC.dll, OLEAUT32.dll, PSAPI.DLL, SHELL32.dll, SHLWAPI.dll, USER32.dll, VERSION.dll, WINHTTP.dll, WININET.dll, WINMM.dll, WS2_32.dll
+SogouToolkits.exe	DLLs=17	jsonFields=39
+   DLLs: ADVAPI32.dll, COMCTL32.dll, COMDLG32.dll, GDI32.dll, gdiplus.dll, IMM32.dll, KERNEL32.DLL, ole32.dll, OLEAUT32.dll, PSAPI.DLL, SHELL32.dll, USER32.dll, VERSION.dll, WININET.dll, WINMM.dll, WLDAP32.dll, WS2_32.dll

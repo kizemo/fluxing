@@ -43,6 +43,8 @@ Do not dump all ADRs into every prompt.
 | 0027 | 0027. FocusIn / FocusOut 的位标志收敛成一张对称协议表 | `docs/adr/0027-focusin-focusout-symmetric-flag-protocol-table.md` | Accepted |
 | 0028 | 0028. 薄 TSF 壳、IPC 协议只增不改、锁定降级用每次安装唯一文件名 | `docs/adr/0028-thin-tsf-shell-and-additive-ipc.md` | Accepted |
 | 0029 | 0029. 快捷设置栏「切走必隐」：通知必达、管道重连重取句柄、显隐同线程排序 | `docs/adr/0029-quickpanel-hide-delivery-and-ordering.md` | Proposed |
+| 0030 | 0030. 路线定案：继续火流猩既有 fork，不做搜狗逆向重写；性能验收基线立标；UI 插件化以 UIPlugin.dll 导出切面为契约参考 | `docs/adr/0030-continue-fluxing-fork-no-rewrite-perf-baseline.md` | Accepted |
+| 0031 | 0031. 进程拓扑定案：全局热键只属于 console 会话；非 console 拒绝启动并留痕；console 缺位自愈 | `docs/adr/0031-console-session-single-server-and-self-heal.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and
