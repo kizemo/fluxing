@@ -1,0 +1,52 @@
+name: gate
+
+on:
+  push:
+    branches: [Fluxing]
+  pull_request:
+    branches: [Fluxing]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-gate:
+    name: L0 static + L3 mutation + L4 fast cases
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Diagnostics
+        shell: pwsh
+        run: |
+          $PSVersionTable | Out-String | Write-Host
+          Write-Host ("repo = {0}" -f (Get-Location).Path)
+          $mk = @(
+            'C:\Program Files (x86)\NSIS\Bin\makensis.exe',
+            'C:\Program Files\NSIS\Bin\makensis.exe'
+          ) | Where-Object { Test-Path -LiteralPath $_ }
+          if ($mk) { Write-Host ("makensis = {0}" -f $mk[0]) } else { Write-Host 'makensis = (absent)' }
+          Write-Host ("version.txt = {0}" -f ((Get-Content -LiteralPath version.txt -Raw).Trim()))
+
+      # 源码层：CI 上没有构建产物、不保证有 makensis，所以跳掉两个重项。
+      - name: L0 static gate (source mode)
+        shell: pwsh
+        run: ./scripts/gate/L0-static.ps1 -Mode source -SkipNsisCompile -SkipGuardUnitTest
+
+      # 变异自检：证明上面的检查会翻红（否则门禁是假牙）。
+      - name: L3 mutation self-check
+        shell: pwsh
+        run: ./scripts/gate/L3-mutation.ps1 -SkipCompile
+
+      # fast 用例在没有构建产物时会全部 SKIP（退出码 2），按设计接受，不当作失败。
+      - name: L4 fast regression cases
+        shell: pwsh
+        run: |
+          ./test/regression/run-cases.ps1 -Level fast
+          if ($LASTEXITCODE -eq 2) {
+            Write-Host 'L4: all fast cases skipped (no build artifacts on CI) - accepted by design'
+            exit 0
+          }
+          exit $LASTEXITCODE

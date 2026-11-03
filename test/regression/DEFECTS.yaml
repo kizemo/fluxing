@@ -1,0 +1,75 @@
+# 缺陷 ⇄ 回归用例 登记表
+#
+# 规则（L0 门禁 test/regression/lib 会校验，见 scripts/gate/L0-static.ps1 的 defects-registry 项）：
+#   1. 每个 status=guarded 的缺陷，guard.case 必须指向一个真实存在的 cases/C####-*.ps1
+#   2. 每个 cases/*.ps1 必须被至少一个条目引用（不许有孤儿用例）
+#   3. 用例文件内不得出现 tmp/ 路径（tmp 被 git-ignore，等于资产丢失）
+#
+# 字段说明：
+#   id        缺陷编号（D + 四位序号，与用例 C#### 对齐，便于互查）
+#   class     缺陷类别：behavior-regression（功能回退）/ installer / build-metadata
+#   status    guarded（有用例守）/ unguarded（已知无守护，禁止长期停留）/ wontfix-with-reason
+#   fixed_ref 修复的可追溯锚点：ADR / lesson / 提交 / 发布版本
+#   symptom   用户可观察到的现象（写现象，不写实现）
+#   guard     守它的用例：case / level(fast|heavy|manual) / needs / last_verified
+schema: 1
+updated: 2026-11-03
+
+defects:
+  - id: D0032
+    title: 按 Esc 关闭「用户短语」窗口时，快捷设置栏被连带收起
+    class: behavior-regression
+    status: guarded
+    fixed_ref: "ADR 0032 (docs/adr/0032-own-ui-client-identity-not-focus-order.md) / v1.1.8 / commit 2cece41"
+    lesson: [L171, L172]
+    symptom: >
+      打开「用户短语」界面 → 按 Esc 关掉它 → 快捷设置栏跟着消失。
+      根因是自家 UI 进程销毁时发出的 profile 事件与「用户真的切走输入法」同形，
+      按焦点顺序判别必然两头都错，只能改成按 IPC 会话的客户端身份判别。
+    guard:
+      case: C0032
+      level: heavy
+      needs: [installed-product, deployed-server-from-build, hotkey-9002]
+      last_verified: "2026-11-03"
+    note: >
+      真机 UI 探针（probes/ReproEsc.cs）分三阶段归因：A 不按 Esc 的对照、
+      B Esc 归因窗、C 反向（真切走输入法必须收起）。缺任一阶段结论都不可信。
+
+  - id: D0174
+    title: 安装报「无法打开要写入的文件：FluxingPhrasesDialog.exe」，升级装不上
+    class: installer
+    status: guarded
+    fixed_ref: "L174 (lessons-learned) / install.nsi 4 处按映像名清理 / v1.1.9"
+    lesson: [L174]
+    symptom: >
+      交互安装时弹出「无法打开要写入的文件」，安装中止；文件没被换掉。
+      根因是上一代自家 UI 子进程在 server 被强杀后成了孤儿，
+      目标 exe 被独占锁；旧的清理只认活着的进程树（taskkill /T），打不到孤儿。
+    guard:
+      case: C0174
+      level: heavy
+      needs: [old-installer, new-installer, protected-install-dir]
+      last_verified: "2026-11-03"
+    note: >
+      判据不认安装器退出码（NSIS 静默模式会吞掉 File 失败并仍返回 0）：
+      必须比对「落盘 sha256 == 构建产物」+「卸载注册表 DisplayVersion 已写到尾」。
+      反向对照是硬要求：同一场景下旧安装器必须失败，否则复现是假阳性。
+
+  - id: D0175
+    title: PE 版本资源 FileVersion 恒为空 ⇒ AGENTS.md §4.3 的版本核验门禁形同虚设
+    class: build-metadata
+    status: guarded
+    fixed_ref: "L175 (lessons-learned) / 10 处 rc 改 STRZ(FILE_VERSION) / v1.1.9"
+    lesson: [L175]
+    symptom: >
+      `(Get-Item output\Win32\WeaselServer.exe).VersionInfo.FileVersion` 长期返回空串，
+      门禁命令跑得通、断言永远不成立。PE 固定版本信息（VS_FIXEDFILEINFO）其实是对的，
+      错在字符串表：rc 里写 `VALUE "FileVersion", FILE_VERSION` 展开成无引号数字，存不进字符串表。
+    guard:
+      case: C0175
+      level: fast
+      needs: [build-output]
+      last_verified: "2026-11-03"
+    note: >
+      三层取证缺一不可：① 直接解析 VS_FIXEDFILEINFO；② .NET VersionInfo.FileVersion；
+      ③ 两者一致。只验一层会被掩盖（本轮就是这么被掩盖了一整轮的）。
