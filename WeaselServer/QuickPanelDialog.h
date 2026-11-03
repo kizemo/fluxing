@@ -275,6 +275,11 @@ class QuickPanelDialog {
   static constexpr BYTE kAlphaPanelBot = 255;
 
   // ===== Internal =====
+  // 缺陷修复 (快捷面板 150% DPI 未按缩放放大): 把「当前窗口客户区尺寸」换算成
+  // physical 布局 (dpr + 全部 _phys 常量 + offscreen DIB)。OnCreate 与
+  // WM_DPICHANGED 共用 —— 窗口尺寸变了必须重算,否则 layered surface 与新尺寸
+  // 不一致。返回 false = 客户区退化 (w/h <= 0),调用方应跳过资源创建。
+  static bool ApplyPhysicalLayout(HWND hwnd);
   static LRESULT OnCreate(HWND);
   static LRESULT OnPaint(HWND);
   // v0.19.0.32-fix (Bug 2): 删除 OnLButtonUp/OnLButtonDown dead-stub 声明。

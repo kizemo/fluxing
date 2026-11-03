@@ -32,9 +32,91 @@
 #include <wrl/client.h>
 #include <shlobj.h>
 #include <fstream>
+#include <string>
+// spec 097 诊断日志口径 (UpdateLayeredWindow 失败不再静默吞错)
+#include "FluxingDiagLog.h"
 #pragma comment(lib, "windowscodecs.lib")
 
 static const wchar_t kWindowClassName[] = L"FluxingQuickPanel_v3";
+
+namespace {
+// ===== DPI 缩放辅助 =====
+// 缺陷: 快捷面板在 150% (DPI=144) 屏上物理只有 245×48,未按缩放放大。
+// 根因: WeaselServer 是 PerMonitor aware (manifest True/PM),Windows **不会**
+// 替它拉伸窗口 —— 自动 scale 只对 DPI-unaware 进程成立;而 Show() /
+// WM_DPICHANGED 把 logical 常量 kPanelW/kPanelH 直接当物理像素用了。
+// 参照实现: FluxingPhrasesDialog/PhrasesDialog.cpp:600-621 (dpi + clamp 风格)。
+struct PanelDpi {
+  UINT x;
+  UINT y;
+};
+
+// Show() 建窗之前还没有 hwnd,只能走 monitor API。GetDpiForMonitor **不静态
+// 链接** —— spec 064 教训 (WeaselUI/WeaselPanel.cpp:16-39 同一手法): 静态导入
+// api-ms-win-shcore-scaling-l1-1-1.dll 在该 DLL 缺失的系统上会让进程直接起不
+// 来。运行时解析失败就退 GetDpiForSystem() (Win10 1607+;WeaselServer stdafx.h
+// 已把 _WIN32_WINNT 定在 0x0A00)。
+PanelDpi QueryPanelDpi(POINT anchor) {
+  typedef HRESULT(WINAPI * GetDpiForMonitor_t)(HMONITOR, INT, UINT*, UINT*);
+  static GetDpiForMonitor_t fn = []() -> GetDpiForMonitor_t {
+    HMODULE h = LoadLibraryW(L"shcore.dll");
+    if (!h)
+      return nullptr;
+    return (GetDpiForMonitor_t)GetProcAddress(h, "GetDpiForMonitor");
+  }();
+  UINT sys = GetDpiForSystem();
+  if (sys == 0)
+    sys = 96;
+  PanelDpi out = {sys, sys};
+  HMONITOR mon = MonitorFromPoint(anchor, MONITOR_DEFAULTTONEAREST);
+  if (fn && mon) {
+    UINT dx = 0, dy = 0;
+    if (SUCCEEDED(fn(mon, 0 /* MDT_EFFECTIVE_DPI */, &dx, &dy)) && dx != 0 &&
+        dy != 0) {
+      out.x = dx;
+      out.y = dy;
+    }
+  }
+  // clamp 50%..400%,与 PhrasesDialog 的 dpiScale clamp 同口径
+  if (out.x < 48)
+    out.x = 48;
+  if (out.x > 384)
+    out.x = 384;
+  if (out.y < 48)
+    out.y = 48;
+  if (out.y > 384)
+    out.y = 384;
+  return out;
+}
+
+// logical → physical;MulDiv 自带四舍五入,异常 dpi 退化时不塌成 0。
+inline int ScaleLogicalByDpi(int logical, UINT dpi) {
+  const int v = MulDiv(logical, (int)dpi, 96);
+  return v > 0 ? v : logical;
+}
+
+// 面板贴 workArea 右下角;尺寸与 margin 一起缩放。clamp 保证低分辨率/超大
+// 缩放下不出屏 (L92-fix)。所有入参一律物理像素。
+void PlacePanelAtBottomRight(const RECT& workArea,
+                             int panelW,
+                             int panelH,
+                             int margin,
+                             int* x,
+                             int* y) {
+  int px = workArea.right - panelW - margin;
+  int py = workArea.bottom - panelH - margin;
+  if (px < workArea.left)
+    px = workArea.left;
+  if (py < workArea.top)
+    py = workArea.top;
+  if (px + panelW > workArea.right)
+    px = workArea.right - panelW;
+  if (py + panelH > workArea.bottom)
+    py = workArea.bottom - panelH;
+  *x = px;
+  *y = py;
+}
+}  // namespace
 
 namespace {
 // 圆角掩码测试:4 corner cells 用 circle equation,其余 (W-r)..(H-r) 范围内的
@@ -515,28 +597,38 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
         return HTCAPTION;  // 空白/品牌区 — 拖动
       return HTCLIENT;     // 按钮区 — 正常 click/hover
     }
-    // L92-fix: WM_DPICHANGED 重新计算 panel 位置
-    // Phase 1 root cause:Show() 在启动时计算位置 (workArea.right - kPanelW -
-    // 12, ...) 单次。 DPI 切换后 panel 不动,可能出屏。修复:监 WM_DPICHANGED
-    // 重新计算并 SetWindowPos。 保持视觉大小不变(panel logical 尺寸
-    // kPanelW/kPanelH 不变,Windows 自动 scale)。
+    // L92-fix + 本次缺陷修复: WM_DPICHANGED 要重算 **尺寸** 和位置。
+    // 之前的注释以为「保持 logical 尺寸不变,Windows 自动 scale」—— 那只对
+    // DPI-unaware 进程成立;WeaselServer 是 PerMonitor aware,系统不会改窗口
+    // 尺寸,所以必须自己按新 DPI 缩放,并重建随尺寸走的 physical 布局。
     case WM_DPICHANGED: {
-      // 重新计算右下角位置(workArea 是新 DPI 物理像素)
-      RECT newRc;
-      SystemParametersInfoW(SPI_GETWORKAREA, 0, &newRc, 0);
-      int newX = newRc.right - kPanelW - 12;
-      int newY = newRc.bottom - kPanelH - 12;
-      // L92-fix: clamp 到 workArea,避免低分辨率下 panel 出屏
-      if (newX < 0)
-        newX = 0;
-      if (newY < 0)
-        newY = 0;
-      if (newX + kPanelW > newRc.right)
-        newX = newRc.right - kPanelW;
-      if (newY + kPanelH > newRc.bottom)
-        newY = newRc.bottom - kPanelH;
-      SetWindowPos(s_hwnd, HWND_TOPMOST, newX, newY, kPanelW, kPanelH,
+      UINT dpiX = LOWORD(w);
+      UINT dpiY = HIWORD(w);
+      if (dpiX == 0)
+        dpiX = 96;
+      if (dpiY == 0)
+        dpiY = 96;
+      const int panelW = ScaleLogicalByDpi(kPanelW, dpiX);
+      const int panelH = ScaleLogicalByDpi(kPanelH, dpiY);
+      const int margin = ScaleLogicalByDpi(12, dpiX);
+      // 新 monitor 的工作区 —— SPI_GETWORKAREA 只返回 primary,跨屏 DPI 切换
+      // 时会算错,所以这里用 MonitorFromWindow + rcWork。
+      RECT newRc = {};
+      MONITORINFO mi = {};
+      mi.cbSize = sizeof(mi);
+      if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
+                           &mi))
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &newRc, 0);
+      else
+        newRc = mi.rcWork;
+      int newX = 0;
+      int newY = 0;
+      PlacePanelAtBottomRight(newRc, panelW, panelH, margin, &newX, &newY);
+      SetWindowPos(s_hwnd, HWND_TOPMOST, newX, newY, panelW, panelH,
                    SWP_NOZORDER | SWP_NOACTIVATE);
+      // 尺寸变了: 重算 dpr / _phys 常量并重建 offscreen DIB,否则
+      // UpdateLayeredWindow 提交的是旧大小的 surface
+      ApplyPhysicalLayout(hwnd);
       // 重新画 panel
       InvalidateRect(s_hwnd, NULL, FALSE);
       RepaintLayered(s_hwnd);
@@ -775,19 +867,21 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
   return DefWindowProc(hwnd, msg, w, l);
 }
 
-LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
-  s_hwnd = hwnd;
+// 由窗口客户区尺寸(物理像素)推导 physical 布局。
+// Show() 建窗时已按 monitor DPI 把窗口缩放到物理尺寸,所以这里从客户区反推
+// dpr —— OnCreate 与 WM_DPICHANGED(DPI 切换后尺寸变了)都走这一条路。
+bool QuickPanelDialog::ApplyPhysicalLayout(HWND hwnd) {
   RECT rc;
   GetClientRect(hwnd, &rc);
   int w = rc.right - rc.left;
   int h = rc.bottom - rc.top;
   if (w <= 0 || h <= 0)
-    return 0;
+    return false;
 
-  // L83-fix: DPI 缩放。计算 dpr 并把所有设计常量 (logical 360x68) 缩放到
-  // 物理 surface 大小。sandbox 显示器 sub-100% DPI (Windows auto-scale 窗口到
-  // 240x45 physical),不缩放的话 drawing 用 logical 360 出界 → icons 2-4 看不见
-  // / HitTest 错位。
+  // L83-fix: DPI 缩放。计算 dpr 并把所有设计常量 (logical 245x48) 缩放到
+  // 物理 surface 大小。显示器 sub-100% DPI 时窗口被系统压小,不缩放的话
+  // drawing 用 logical 值出界 → icons 看不见 / HitTest 错位;150% DPI 时反过来
+  // 需要把常量放大到 1.5 倍物理像素。
   s_panelW_phys = w;
   s_panelH_phys = h;
   s_dpr_x = (float)w / (float)kPanelW;
@@ -811,6 +905,15 @@ LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
   s_brandSize_phys = scale_x(kBrandSize);
   s_panelRadius_phys = scale_x(kPanelRadius);
   s_btnGap_phys = scale_x(kBtnGap);
+  // off-screen DC 尺寸必须跟着窗口走,否则 UpdateLayeredWindow 提交旧 surface
+  CreateOffscreenDC(w, h);
+  return true;
+}
+
+LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
+  s_hwnd = hwnd;
+  if (!ApplyPhysicalLayout(hwnd))
+    return 0;
 
   // 创建资源
   LoadLogoWIC(hwnd, s_hBmpLogo);
@@ -825,9 +928,7 @@ LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
   s_hPenIconAccent = CreatePen(PS_SOLID, 2, kAccentC);
   s_hPenHighlight = CreatePen(PS_SOLID, 1, kHighlight);
 
-  // off-screen DC
-  CreateOffscreenDC(w, h);
-
+  // off-screen DC 与 physical 布局已由 ApplyPhysicalLayout 建好
   return 0;
 }
 
@@ -1286,9 +1387,23 @@ void QuickPanelDialog::RepaintLayered(HWND hwnd) {
 
   if (!UpdateLayeredWindow(hwnd, NULL, &ptPos, &sizeWnd, s_hdcMem, &ptSrc, 0,
                            &blend, ULW_ALPHA)) {
-    // UpdateLayeredWindow 失败 — 调试钩子 (L74 教训)
-    DWORD err = GetLastError();
-    (void)err;
+    // UpdateLayeredWindow 失败 — 调试钩子 (L74 教训)。之前 (void)err 把错误码
+    // 吞掉,现场无法归因;现按 spec 097 的 include/FluxingDiagLog.h 口径落一行
+    // (写失败本身静默忽略,诊断通道不会成为故障源)。
+    const DWORD err = GetLastError();
+    std::string line = "quickpanel_updatelayered_failed err=";
+    line += std::to_string((unsigned long long)err);
+    line += " size=";
+    line += std::to_string(sizeWnd.cx);
+    line += "x";
+    line += std::to_string(sizeWnd.cy);
+    line += " pos=";
+    line += std::to_string((long long)ptPos.x);
+    line += ",";
+    line += std::to_string((long long)ptPos.y);
+    line += " dpr=";
+    line += std::to_string((double)s_dpr_x);
+    fluxing::diag::AppendLine("server", line);
   }
 }
 
@@ -1396,21 +1511,21 @@ void QuickPanelDialog::Show(bool currentFullwidth,
 
   RECT workArea;
   SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
-  int x = workArea.right - kPanelW - 12;
-  int y = workArea.bottom - kPanelH - 12;
+  // 缺陷修复: kPanelW/kPanelH 是 **logical** 设计值,PerMonitor aware 进程必须
+  // 自己按 monitor DPI 放大窗口。锚点取面板将要落到的右下角,据此选 monitor。
+  const POINT anchor = {workArea.right - 1, workArea.bottom - 1};
+  const PanelDpi dpi = QueryPanelDpi(anchor);
+  const int panelW = ScaleLogicalByDpi(kPanelW, dpi.x);
+  const int panelH = ScaleLogicalByDpi(kPanelH, dpi.y);
+  const int margin = ScaleLogicalByDpi(12, dpi.x);
   // L92-fix: clamp 到 workArea,避免低分辨率下 panel 出屏(Phase 1 root cause)
-  if (x < 0)
-    x = 0;
-  if (y < 0)
-    y = 0;
-  if (x + kPanelW > workArea.right)
-    x = workArea.right - kPanelW;
-  if (y + kPanelH > workArea.bottom)
-    y = workArea.bottom - kPanelH;
+  int x = 0;
+  int y = 0;
+  PlacePanelAtBottomRight(workArea, panelW, panelH, margin, &x, &y);
 
   s_hwnd = CreateWindowExW(
       WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TOPMOST,
-      kWindowClassName, L"Fluxing QuickPanel", WS_POPUP, x, y, kPanelW, kPanelH,
+      kWindowClassName, L"Fluxing QuickPanel", WS_POPUP, x, y, panelW, panelH,
       NULL, NULL, GetModuleHandle(NULL), NULL);
   if (!s_hwnd)
     return;
