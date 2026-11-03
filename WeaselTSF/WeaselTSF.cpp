@@ -1,7 +1,9 @@
 ﻿#include "stdafx.h"
 
 #include <WeaselIPCData.h>
+#include <atomic>
 #include <chrono>
+#include <string>
 #include <thread>
 #include <shellapi.h>
 #include <tlhelp32.h>
@@ -12,6 +14,8 @@
 // spec 097: 快捷设置栏显隐链路的诊断日志。只在前端通知线程写,
 // 绝不进 ITfTextInputProcessorEx::* 回调(宪法 P2)。
 #include <FluxingDiagLog.h>
+// ADR 0031: 补拉留痕要带上当前会话 / console 会话两个 SessionId。
+#include <FluxingSessionPolicy.h>
 #include "Compartment.h"
 #include "ResponseParser.h"
 
@@ -516,48 +520,126 @@ void WeaselTSF::_Reconnect() {
 
 static unsigned int retry = 0;
 
+// ADR 0031 决策 4 — console 缺位自愈。
+//
+// 先说清"复用了什么": 用 codebase-memory-mcp 以 trace_path(inbound) 核实过,
+// _EnsureServerConnected 的调用方是 KeyEventSink::_ProcessKeyEvent 与
+// WeaselTSF::ActivateEx —— 两者都跑在 TSF 回调线程上。该函数在 retry >= 6 时
+// **早已存在**"起一个 detached 线程 ShellExecuteW 拉起服务"的机制, 因此按决策 4
+// 的明文("若实现审查发现 TSF 侧已有等价拉起机制, 则只做节流 + 留痕增强")
+// 不新增机制, 只补三项缺口:
+//   1. 最小间隔节流 —— 原来只要 retry 攒满 6 就可能再拉一次, 没有时间下限;
+//   2. 跨回调单飞     —— 原来多次回调可各自 detach 一个线程, 互相不知道;
+//   3. 结构化留痕     —— 原来整个拉起过程零记录, 事后无法判断前端试过没有。
+// 顺带把 CreateMutex / CreateToolhelp32Snapshot / 注册表读 / Echo /
+// ShellExecuteW / 写日志全部挪进工作线程: 宪法 P2 禁止 ITfTextInputProcessor::*
+// 回调里做阻塞 I/O。 于是回调线程上只剩 GetTickCount64() 比较 + 一次 atomic
+// exchange。 注: 工作线程里碰 m_client
+// 是本函数改动前就有的行为(原线程尾部已调用 _Reconnect());
+// 单飞闸门保证同一时刻最多一个工作线程, 不额外放大竞争面。
+static constexpr ULONGLONG kServerRelaunchMinIntervalMs = 60ull * 1000ull;
+static std::atomic<ULONGLONG> g_serverRelaunchLastMs(0);
+static std::atomic<bool> g_serverRelaunchInFlight(false);
+
 bool WeaselTSF::_EnsureServerConnected() {
   if (!m_client.Echo()) {
     _Reconnect();
     retry++;
     if (retry >= 6) {
-      HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerExclusiveMutex");
-      const auto count_server_process = []() -> int {
-        int count = 0;
-        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (snap == INVALID_HANDLE_VALUE)
-          return 0;
-        PROCESSENTRY32 pe;
-        pe.dwSize = sizeof(pe);
-        if (Process32First(snap, &pe)) {
-          do {
-            if (_wcsicmp(pe.szExeFile, L"WeaselServer.exe") == 0)
-              count++;
-          } while (Process32Next(snap, &pe));
-        }
-        CloseHandle(snap);
-        return count;
-      };
-      if (!m_client.Echo() && GetLastError() != ERROR_ALREADY_EXISTS &&
-          !count_server_process()) {
-        // spec 088: 以前这里无条件拼 "<dir>\start_service.bat",而 dir 来自
-        // 只读 "WeaselRoot" 的注册表查询 ⇒ 本 fork 下恒为空路径,拉起静默失败。
-        // 现在走统一的"启动目标"选择器(优先 bat,退回 WeaselServer.exe)。
-        const std::wstring dir = _GetRootDir();
-        const std::wstring target = fluxing::WeaselServiceLaunchTarget(dir);
-        if (!target.empty()) {
-          std::thread th([dir, target, this]() {
-            ShellExecuteW(NULL, L"open", target.c_str(), NULL, dir.c_str(),
-                          SW_HIDE);
-            // wait 500ms, then reconnect
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            _Reconnect();
-          });
-          th.detach();
-        }
+      const ULONGLONG now = ::GetTickCount64();
+      const ULONGLONG last =
+          g_serverRelaunchLastMs.load(std::memory_order_relaxed);
+      // last == 0 表示本进程从未补拉过, 不受节流约束。
+      const bool throttled =
+          (last != 0 && now - last < kServerRelaunchMinIntervalMs);
+      bool claimed = false;
+      if (!throttled) {
+        claimed = (g_serverRelaunchInFlight.exchange(
+                       true, std::memory_order_acq_rel) == false);
       }
-      if (hMutex) {
-        CloseHandle(hMutex);
+      if (claimed) {
+        g_serverRelaunchLastMs.store(now, std::memory_order_relaxed);
+        std::thread th([this]() {
+          // 以下一律在工作线程执行。
+          struct InFlightRelease {
+            ~InFlightRelease() {
+              g_serverRelaunchInFlight.store(false, std::memory_order_release);
+            }
+          } const releaseGuard;
+
+          const auto count_server_process = []() -> int {
+            int count = 0;
+            HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (snap == INVALID_HANDLE_VALUE)
+              return 0;
+            PROCESSENTRY32 pe;
+            pe.dwSize = sizeof(pe);
+            if (Process32First(snap, &pe)) {
+              do {
+                if (_wcsicmp(pe.szExeFile, L"WeaselServer.exe") == 0)
+                  count++;
+              } while (Process32Next(snap, &pe));
+            }
+            CloseHandle(snap);
+            return count;
+          };
+
+          HANDLE hMutex =
+              CreateMutex(NULL, TRUE, L"WeaselDeployerExclusiveMutex");
+          // 紧跟 CreateMutex 取走, 否则后面任何调用都会把这个码冲掉。
+          const DWORD mutexError = ::GetLastError();
+          const bool deployerBusy = (mutexError == ERROR_ALREADY_EXISTS);
+          const bool stillDown = !m_client.Echo();
+          int serverCount = 0;
+          bool launched = false;
+          bool noTarget = false;
+          if (stillDown && !deployerBusy) {
+            serverCount = count_server_process();
+            if (serverCount == 0) {
+              // spec 088: 以前这里无条件拼 "<dir>\start_service.bat",而 dir
+              // 来自 只读 "WeaselRoot" 的注册表查询 ⇒ 本 fork
+              // 下恒为空路径,拉起静默失败。 现在走统一的"启动目标"选择器(优先
+              // bat,退回 WeaselServer.exe)。
+              const std::wstring dir = _GetRootDir();
+              const std::wstring target =
+                  fluxing::WeaselServiceLaunchTarget(dir);
+              if (!target.empty()) {
+                ShellExecuteW(NULL, L"open", target.c_str(), NULL, dir.c_str(),
+                              SW_HIDE);
+                launched = true;
+                // wait 500ms, then reconnect
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                _Reconnect();
+              } else {
+                noTarget = true;
+              }
+            }
+          }
+          if (hMutex) {
+            CloseHandle(hMutex);
+          }
+
+          std::string line = fluxing::session::Describe(
+              launched ? "server_relaunch_launched"
+                       : (noTarget ? "server_relaunch_skipped_no_target"
+                                   : "server_relaunch_skipped"),
+              fluxing::session::EvaluateCurrent());
+          line += " echo_ok=";
+          line += (stillDown ? "0" : "1");
+          line += " deployer_busy=";
+          line += (deployerBusy ? "1" : "0");
+          line += " server_process_count=";
+          line += std::to_string((long long)serverCount);
+          line += " mutex_error=";
+          line += std::to_string((unsigned long long)mutexError);
+          fluxing::diag::AppendLine("tsf", line);
+        });
+        th.detach();
+      } else {
+        // 节流/单飞命中也要留痕, 但写在回调线程上会违反宪法 P2,
+        // 因此只在确实被节流时记一个 tick 差值 —— 由工作线程之外的路径
+        // 走到这里时没有线程可借, 遂不写盘: 这条分支的信息量(距上次 N ms)
+        // 已经由上一条 server_relaunch_* 记录的时间戳隐含。
       }
       retry = 0;
     }

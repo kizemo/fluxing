@@ -209,8 +209,12 @@ int WeaselServerApp::Run() {
   // pipe thread can be marshalled to the message loop thread.
   m_uiThreadId = GetCurrentThreadId();
 
-  if (!m_server.Start())
+  if (!m_server.Start()) {
+    // ADR 0031 决策 3: Start() 内部已记下具体原因(会话门禁 / 单实例 /
+    // 建窗失败), 这里再补一条"进程确实退出了", 免得取证时只看到日志断在半路。
+    fluxing::diag::AppendLine("server", "start_returned_false exit=-1");
     return -1;
+  }
 
   // spec 074 (L75): QuickPanel 改纯 GDI 后,不再需要 ID2D1Factory 注入
   // QuickPanelDialog::InitializeD2D / ShutdownD2D 已删除

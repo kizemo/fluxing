@@ -11,11 +11,17 @@ using namespace boost::interprocess;
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <fstream>
 #include <string>
+// ADR 0031: console 会话门禁的判别性探针。生产代码(WeaselIPCServer)与本测试
+// 共用 include/FluxingSessionPolicy.h 同一实现 (constitution R7)。
+#include <FluxingDiagLog.h>
+#include <FluxingSessionPolicy.h>
 
 CAppModule _Module;
 
 int console_main();
+int verify_console_session_main();
 int client_main();
 int server_main();
 int verify_quickpanel_main();
@@ -94,6 +100,11 @@ int _tmain(int argc, _TCHAR* argv[]) {
         allow_remote_session = true;
     }
     return verify_tsf_profile_main(allow_profile_switch, allow_remote_session);
+  } else if (argc > 1 && !wcscmp(L"/verify-console-session", argv[1])) {
+    // ADR 0031 决策 4 的验收探针: console 会话门禁的判定真值表 +
+    // 启动留痕是否真的落进诊断文件。只读判定与写自己的探针行,
+    // 不启动/不杀任何 WeaselServer.exe。
+    return verify_console_session_main();
   }
 
   return -1;
@@ -1054,6 +1065,124 @@ int verify_quickpanel_presence_main() {
 
   std::cout << (failures == 0 ? "verify-quickpanel-presence: PASS"
                               : "verify-quickpanel-presence: FAIL")
+            << std::endl;
+  return failures == 0 ? 0 : 1;
+}
+
+// ADR 0031 决策 1/3/4 的判别性验收。
+//
+// 为什么这些断言"有牙":
+//   * Evaluate() 是生产代码 WeaselIPCServer\WeaselServerImpl.cpp:Start() 调的
+//     **同一个函数**(include/FluxingSessionPolicy.h, constitution R7)。
+//     (current=3, console=1) 这一组正是 2026-11-03 事故的精确复刻 ——
+//     ToDesk Session 3 里的服务端抢注了它那个会话的全局热键, console Session 1
+//     无人服务。比较一旦被写成恒真、或两个 SessionId 取反, 这里立刻红。
+//   * 留痕断言不是"格式对不对"的软检查: 它把 Describe() 产出的生产口径原样
+//     写进 %TEMP%\fluxing-profile-notify.log(ADR 0029 决策 7 的同一通道)
+//     再整文件读回来比对。写通道坏掉(路径取不到 / 2 MB 上限命中 / 静默吞异常)
+//     会直接 FAIL, 而不是"看起来过了"。
+//   * 全程只读判定 + 只写自己那一行探针, 不启动也不杀任何 WeaselServer.exe。
+int verify_console_session_main() {
+  int failures = 0;
+  const auto expect = [&](bool cond, const char* what) {
+    if (!cond) {
+      ++failures;
+      std::cout << "  FAIL: " << what << std::endl;
+    }
+  };
+
+  // --- 1. 判定真值表(伪造 SessionId, 无需真实多会话环境) ---
+  const fluxing::session::Verdict incident =
+      fluxing::session::Evaluate(3, 1, true);
+  expect(incident.allowed == false,
+         "server in Session 3 while console is Session 1 must be refused");
+  expect(std::string(incident.reason) == "not_console_session",
+         "refusal reason key is not_console_session");
+  expect(incident.current_session == 3 && incident.console_session == 1,
+         "refusal keeps both session ids for forensics");
+
+  const fluxing::session::Verdict mirror =
+      fluxing::session::Evaluate(1, 3, true);
+  expect(mirror.allowed == false,
+         "mirror case current=1 console=3 refused too");
+
+  const fluxing::session::Verdict match =
+      fluxing::session::Evaluate(1, 1, true);
+  expect(match.allowed == true, "console session is allowed to start");
+  expect(std::string(match.reason) == "console_session_match",
+         "allow reason key is console_session_match");
+
+  // 会话 0 是服务会话, 不是任何人的 console。
+  const fluxing::session::Verdict service =
+      fluxing::session::Evaluate(0, 1, true);
+  expect(service.allowed == false, "Session 0 service context must be refused");
+
+  // 取不到 console SessionId(无主控台机器 / WTS 失败)时 fail-open:
+  // 宁可放行留痕, 也不能让正常 console 用户因为一次 API 失败彻底失去服务。
+  const fluxing::session::Verdict failOpen =
+      fluxing::session::Evaluate(1, fluxing::session::kInvalidSessionId, false);
+  expect(failOpen.allowed == true, "unknown console session fails open");
+  expect(std::string(failOpen.reason) == "console_session_unknown_fail_open",
+         "fail-open reason key");
+  expect(failOpen.console_session == 0,
+         "fail-open hides the unusable console id");
+
+  // --- 2. 生产日志行的确切形状 ---
+  const std::string refusalLine =
+      fluxing::session::Describe("startup_refused", incident);
+  expect(
+      refusalLine ==
+          "startup_refused allowed=0 reason=not_console_session "
+          "current_session_id=3 console_session_id=1",
+      "refusal line shape is <event> allowed=0 reason=... current/console ids");
+  const std::string failOpenLine =
+      fluxing::session::Describe("startup_allowed", failOpen);
+  expect(failOpenLine.find("console_session_id=unknown") != std::string::npos,
+         "unknown console session is printed as unknown, not 4294967295");
+
+  // --- 3. 本进程的真实判定必须与纯函数一致(防止两边各写一套) ---
+  bool known = false;
+  const DWORD console = fluxing::session::ConsoleSessionId(&known);
+  const DWORD current = fluxing::session::CurrentSessionId();
+  expect(current != 0, "ProcessIdToSessionId must resolve this test process");
+  const fluxing::session::Verdict live = fluxing::session::EvaluateCurrent();
+  const fluxing::session::Verdict recomputed =
+      fluxing::session::Evaluate(current, console, known);
+  expect(live.allowed == recomputed.allowed,
+         "EvaluateCurrent agrees with Evaluate over the same ids");
+  expect(std::string(live.reason) == std::string(recomputed.reason),
+         "EvaluateCurrent reports the same reason key");
+  std::cout << "  info: current_session_id=" << (unsigned long long)current
+            << " console_session_id="
+            << (known ? std::to_string((unsigned long long)console)
+                      : std::string("unknown"))
+            << " allowed=" << (live.allowed ? "1" : "0")
+            << " reason=" << live.reason << std::endl;
+
+  // --- 4. 留痕通道: 写进去再读回来 ---
+  const std::wstring path = fluxing::diag::DiagLogPath();
+  expect(!path.empty(), "diag log path resolves");
+  expect(fluxing::diag::DiagLogShouldWrite(),
+         "diag log below its 2 MB cap, otherwise the probe line cannot be "
+         "written");
+  const std::string marker =
+      refusalLine + " probe_pid=" +
+      std::to_string((unsigned long long)::GetCurrentProcessId());
+  fluxing::diag::AppendLine("server", marker);
+
+  std::ifstream in(path.c_str(), std::ios::binary);
+  expect(in.good(), "diag log is readable back");
+  const std::string content((std::istreambuf_iterator<char>(in)),
+                            std::istreambuf_iterator<char>());
+  const std::string needle = "[server] " + marker + "\n";
+  expect(content.find(needle) != std::string::npos,
+         "the production-shaped refusal line really lands in the diag log");
+  // 反向自检: 同一套查找必须能"查不到", 证明上一条命中不是恒真。
+  expect(content.find(needle + "XX_NO_SUCH_MARKER_XX") == std::string::npos,
+         "substring search can still miss (probe is not vacuous)");
+
+  std::cout << (failures == 0 ? "verify-console-session: PASS"
+                              : "verify-console-session: FAIL")
             << std::endl;
   return failures == 0 ? 0 : 1;
 }

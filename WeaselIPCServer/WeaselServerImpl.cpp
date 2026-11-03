@@ -5,6 +5,9 @@
 #include "../WeaselServer/resource.h"  // spec 036: ID_HOTKEY_QUICK_PANEL + ID_WEASELTRAY_QUICK_PANEL
 #include <ShiftStateMachine.h>
 #include <WeaselUtility.h>
+// ADR 0031: console 会话门禁 + 启动失败留痕。日志口径复用 ADR 0029 决策 7。
+#include <FluxingDiagLog.h>
+#include <FluxingSessionPolicy.h>
 
 namespace weasel {
 class PipeServer : public PipeChannel<DWORD, PipeMessage> {
@@ -168,17 +171,57 @@ LRESULT ServerImpl::OnHotkey(UINT uMsg,
 }
 
 HWND ServerImpl::Start() {
+  // ADR 0031 决策 1: console 会话是全局热键的唯一持有人。门禁放在创建 mutex
+  // **之前** —— 远程会话(ToDesk/RDP)经 Startup\WeaselServer.bat 拉起的实例
+  // 由此被挡在门外, 不再产生"抢注它那个会话的热键、console 用户无人服务"的
+  // 僵尸服务端。决策 2: mutex 仍保持会话局部, 不加 Global\ 前缀。
+  const fluxing::session::Verdict gate = fluxing::session::EvaluateCurrent();
+  if (!gate.allowed) {
+    // ADR 0031 决策 3: 拒绝启动必须留痕(旧代码只 return 0, 静默失效)。
+    fluxing::diag::AppendLine(
+        "server", fluxing::session::Describe("startup_refused", gate));
+    return 0;
+  }
+  fluxing::diag::AppendLine(
+      "server", fluxing::session::Describe("startup_allowed", gate));
+
   std::wstring instanceName = L"(WEASEL)Furandōru-Sukāretto-";
   instanceName += getUsername();
   HANDLE hMutexOneInstance = ::CreateMutex(NULL, FALSE, instanceName.c_str());
-  bool areYouOK = (::GetLastError() == ERROR_ALREADY_EXISTS ||
-                   ::GetLastError() == ERROR_ACCESS_DENIED);
+  // GetLastError 必须紧跟 CreateMutex 取走: 中间插任何会设置 last-error 的
+  // API(包括写诊断日志)都会把它冲掉, 留下的码就是假的。
+  const DWORD mutexError = ::GetLastError();
+  bool areYouOK =
+      (mutexError == ERROR_ALREADY_EXISTS || mutexError == ERROR_ACCESS_DENIED);
 
   if (areYouOK) {
+    // 命中单实例同样是一次"带原因返回", 不能什么都不留。
+    std::string line = fluxing::session::Describe("startup_refused", gate);
+    line += " detail=already_running mutex_error=";
+    line += std::to_string((unsigned long long)mutexError);
+    fluxing::diag::AppendLine("server", line);
     return 0;  // assure single instance
   }
 
+  if (hMutexOneInstance == NULL) {
+    // 判定器维持原行为(继续尝试建窗), 但不再让"mutex 建不出来"这件事静默。
+    std::string line =
+        fluxing::session::Describe("startup_mutex_unavailable", gate);
+    line += " mutex_error=";
+    line += std::to_string((unsigned long long)mutexError);
+    fluxing::diag::AppendLine("server", line);
+  }
+
   HWND hwnd = Create(NULL);
+
+  if (!hwnd) {
+    std::string line = fluxing::session::Describe("startup_failed", gate);
+    line += " detail=create_window_failed last_error=";
+    line += std::to_string((unsigned long long)::GetLastError());
+    line += " mutex_error=";
+    line += std::to_string((unsigned long long)mutexError);
+    fluxing::diag::AppendLine("server", line);
+  }
 
   return hwnd;
 }

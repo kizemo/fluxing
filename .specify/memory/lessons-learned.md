@@ -13536,3 +13536,45 @@ spec 097 诉求 3：快捷设置栏在**切换到其他输入法后仍留在屏�
   「Invalid command」（主脚本自己的 BOM 则正常）；`LogSet` 在未定义 `NSIS_CONFIG_LOG`
   的构建里不可用（改用 `DetailPrint` + `/LOG=`）；makensis 的 `/O` 是**日志文件**开关，
   **不是输出路径**（要改产物名得用 `!ifdef` 覆盖 `OutFile`）。
+
+## L170 - **会话才是全局热键的作用域边界：会话局部 mutex + 每会话自启 = 远程会话抢注、console 静默无服务；取证探针两坑（`FindWindowW` 恒返 0、DPI-unaware 几何被 ÷1.5）**（2026-11-03）
+
+- **症状与根因分处两层**：用户报「快捷设置栏调不出、`Alt+.` 用户短语调不出」。
+  第一反应是热键 / yaml —— 两条都不是。运行时取证（`Win32_Process.SessionId`）坐实：
+  `WeaselServer.exe`（pid 17304）于 08:53 由 **ToDesk 远程会话 Session 3** 的 explorer
+  经 `Startup\WeaselServer.bat auto` 拉起，而用户坐在 **console（`WTSGetActiveConsoleSessionId()=1`）**。
+- **机制（本条的持久价值）**：`RegisterHotKey` 是**会话级**作用域，而单实例 mutex
+  `(WEASEL)Furandōru-Sukāretto-<user>`（`WeaselIPCServer\WeaselServerImpl.cpp` `Start()`）
+  **不带 `Global\` 前缀 ⇒ 会话隔离**。两者叠加的后果不是「两个实例打架」，而是
+  **两个实例各自安好、谁都没服务到用户**：Session 3 的实例注册的是它那个会话的热键，
+  console 会话无人接管。`output/data/Startup/` 的自启 bat（L106）在**每个**会话登录时
+  都会执行 ⇒ 天然多实例，这是常态而非异常。
+- **最致命的一层是静默**：console 会话当时没有任何服务端实例，而 `Start()` 的失败路径
+  只 `return 0`，**无日志无提示** ⇒「什么都没发生」再次成为最难查的症状（同 L168 / L169）。
+- **反直觉的修法取舍**：直觉方案是给 mutex 加 `Global\` —— **否决**：那只会让
+  「远程会话里先启动的那个实例」占死全局唯一锁，console 会话反而彻底静默，
+  等于把事故换成一个**更安静的事故**。定案方向相反：mutex 维持会话局部（决策 2），
+  改由 **console 会话门禁**拒绝非 console 会话启动（决策 1）。
+- **取证探针坑 ①**：`FindWindowW` 对本项目的窗口**恒返回 0**，必须改用 `EnumWindows`
+  + 类名回调遍历，否则会误判「窗口不存在」。
+- **取证探针坑 ②**：DPI-unaware 探针在 150% 屏上读到的窗口几何全被 **÷1.5**，
+  曾据此误判「面板塌成 163×32 空壳」，实为物理 245×48、逻辑尺寸未放大（另案处理）。
+  ⇒ 读几何的探针进程必须自身 DPI-aware，或显式换算。
+- **复现即结论**：杀掉旧 pid、在 Session 1 重启后，`Alt+.` / `Alt+,` /
+  `Ctrl+Shift+K` / `Alt+/` 全部 `HELD (err=1409)`，症状当场消失 ⇒ 根因成立（运行时层面）。
+- **修复**：ADR 0031「console 会话隔离 + 失败留痕 + TSF 自愈」。
+  `include/FluxingSessionPolicy.h` 承载**唯一**判定核心 `Evaluate(current, console, known)`，
+  服务端 `Start()` 与 `TestWeaselIPC.exe /verify-console-session` 共用同一实现（R7），
+  因此伪造成 `current=3, console=1` 就能构造必失败场景，无需真实多会话环境。
+  非 console 会话拒绝启动并写
+  `[server] startup_refused allowed=0 reason=not_console_session current_session_id=3 console_session_id=1`
+  到 ADR 0029 决策 7 的既有通道 `%TEMP%\fluxing-profile-notify.log`（不另造日志口径）；
+  `Start()` 全部分叉（会话门禁 / 单实例命中 / mutex 建不出来 / 建窗失败）一律留痕。
+  TSF 侧「IPC 连不上就异步拉起」原本已存在，只补三项缺口：60 s 节流、跨回调 atomic 单飞、
+  结构化留痕；并把 `CreateMutex` / `CreateToolhelp32Snapshot` / 注册表读 / `ShellExecuteW` /
+  写日志全部移出回调线程，回调上只剩 `GetTickCount64()` 比较与一次 exchange（宪法 P2）。
+- **可迁移规则**：**「进程活着」不等于「进程在服务这个用户」**。凡持有**会话级系统资源**
+  （全局热键 / 剪贴板链 / 前台窗口 / 托盘）的单实例服务，必须自己校验
+  「我是否就在用户真正交互的那个会话里」，并把拒绝原因写进独立 append-only 诊断文件。
+  远程桌面 / ToDesk 时代，多会话同时自启是常态；判定核心要抽成**可注入参数的纯函数**，
+  否则这类缺陷在没有第二台机器的情况下永远测不到。
