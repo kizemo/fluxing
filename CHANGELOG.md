@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+### fix(WeaselServer): 快捷面板按窗口 DPI 缩放，150% 缩放下物理尺寸 245×48 修正为 368×72
+
+- **症状**：150% 缩放屏上快捷面板仍按 96 DPI 裸像素画成 245×48，字与控件整体偏小。
+- **根因**：`QuickPanelDialog.cpp` 的建窗尺寸、`WM_DPICHANGED` 处理与渲染缩放链路全部使用裸值；`s_dpr` 取不到 shcore DPI 时静默退化为 1.0。
+- **修复**：新增 `QueryPanelDpi`（运行时加载 shcore、clamp 48..384）；布局值统一 `MulDiv(v, dpi, 96)`；`WM_DPICHANGED` 经 `MonitorFromWindow` 按锚点重算；`Show()` 按所在窗口实际 DPI 出图；`UpdateLayeredWindow` 失败落诊断留痕。
+- **验证**：构建产物面板实测 368×72 @ dpi=144（目标值）；装机 1.1.6 同路径对照仍为 245×48。证据与探针见 `tmp/quickpanel-evidence/`（不入库）。96 DPI 零回归与跨屏动态 DPI 尚未实测（本机单屏）。
+
+### feat(fluxing): WeaselServer 仅在本机 console 会话启动，TSF 断连后异步节流补拉自愈（ADR 0031 / L170）
+
+- **症状**：远程/后台登录会话各自拉起 server，与交互桌面实例抢 IPC 管道与托盘，交互侧表现为候选不更新。
+- **策略**：启动门禁判定「当前进程会话 == `WTSGetActiveConsoleSessionId`」，非 console 会话拒绝启动并留痕（`startup_refused/allowed/mutex_unavailable/failed` 四类，沿用 ADR 0029 决策7 日志口径）；mutex 维持不加 `Global\` 前缀（ADR 0031 已记录否决理由）。
+- **自愈**：TSF 复用既有 retry≥6 断连触发点，在工作线程以 60s 节流 + 跨回调单飞（atomic）异步补拉 server；阻塞 I/O 全部移出 TSF 回调线程（constitution P2）。
+- **测试**：`include/FluxingSessionPolicy.h` 生产/测试同源纯函数；`TestWeaselIPC /verify-console-session` 基线 PASS，并做变异反证（判定改为反向时 7 条断言翻红）。
 ### fix(installer): 安装路径守卫下沉到 NSIS 权威层，危险目标在动真机之前就被拦下（L169）
 
 - **事故根因有两层**：脚本层守卫（`scripts/install/silent-install.ps1`）已修，
