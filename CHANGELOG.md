@@ -1,6 +1,15 @@
 ## [Unreleased]
 
 ## [1.1.9] - 2026-11-03
+### fix(fluxing): PE 版本资源的 `FileVersion` 字符串写成空串，补 `STRZ()` 后恢复为 1.1.9.0（L175）
+
+- **症状**：`(Get-Item output\Win32\WeaselServer.exe).VersionInfo.FileVersion` 读出**空字符串**，而 `ProductVersion` 正常为 `1.1.9.0`。
+- **根因**：四个 rc（`WeaselServer` / `WeaselTSF` / `WeaselSetup` / `WeaselDeployer`）的字符串表写的是 `VALUE "FileVersion", FILE_VERSION`，而 `FILE_VERSION` 展开成**无引号**的 `1.1.9.0`，rc.exe 无法把它存进字符串表 ⇒ 该条被写成空串；同一处的 `VALUE "ProductVersion", STRZ(PRODUCT_VERSION)` 因为 `STRZ(x)=STRZ2(x)=#x` 会**先展开再字符串化** ⇒ 一直是对的。**同一个文件里只差一个 `STRZ()`，一个对一个错。**
+- **三层证据**：① PE 内 `VS_FIXEDFILEINFO` 的 `dwFileVersionMS/LS` = 1.1.9.0（固定版本信息**正确**）；② 字符串表的 `FileVersion` 条目为空 ⇒ 资源管理器属性页「文件版本」空白；③ .NET 的 `VersionInfo.FileVersion` 读的是字符串表而非固定版本信息 ⇒ 固定版本信息正确也会被掩盖成空。
+- **修法**：10 处统一改成 `VALUE "FileVersion", STRZ(FILE_VERSION)`（rc 是 UTF-16LE+BOM，用字节级补丁脚本落地：锚点计数断言 + BOM/行尾自证 + 幂等复跑）。
+- **影响面**：`AGENTS.md §4.3` 把 `Get-Item output\Win32\WeaselServer.exe | ?{$_.VersionInfo.FileVersion}` 当作 `weasel.props` 版本一致性的**核验命令** ⇒ 该命令长期返回空，**门禁形同虚设**（不是「版本对不上」，是「查不出来」）；修复后读数为 `1.1.9.0`。
+- **A/B**：同版本号（1.1.9.0）、同大小（2,287,104 B）的两个二进制仅差此一处 ⇒ 修复前 `.VersionInfo.FileVersion=''`、修复后 `'1.1.9.0'`；PE 固定版本信息两侧都是 1.1.9.0。
+
 
 ### fix(installer): 安装前按映像名清理自家 UI 进程，修「无法打开要写入的文件：FluxingPhrasesDialog.exe」（L174）
 
