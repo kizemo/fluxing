@@ -21,13 +21,17 @@
 - [ ] 每行填「借鉴来源（证据文件全路径）」与「差异化实现」；填不出的行删除
 - [ ] 产出 `.specify\specs\099-quickpanel-sogou-benchmark\gap-matrix.md`
 
-## P0-3 · Account 占位槽处置 【可立即开工，不依赖 P0-1】
+## P0-3 · Account 槽实装（用户 2026-11-04 00:01 定稿：不摘除）
 
 - [ ] 先写判别性测试：断言「每个可见槽位点击必产生确定的用户可见效果」——当前必红（hit==3 为 no-op）
-- [ ] 决策：实装 or 整槽摘除（UserDict 整槽删除的先例见 `QuickPanelDialog.h:132` 注释）
-- [ ] 实现（`WeaselServer\QuickPanelDialog.cpp` `kButtonCount`/`HitTest`/`OnLButtonUp` + `WeaselServerApp.cpp:439-447`）
-- [ ] 若改动 `kButtonCount` ⇒ 同步 `L1-quickpanel-icon.ps1` 的槽位数量期望（改期望值前先看它测的是什么）
-- [ ] `scripts\gate\run-all.ps1 -Level L0` 全绿 + 贴输出
+- [x] **决策（用户定）：实装** —— 第 4 槽（Account）点击打开 **「关于 / 账号说明」页**；不采用整槽摘除。UserDict 整槽删除先例（`QuickPanelDialog.h:132`）仅作实现参照，不适用于本槽
+- [ ] 先定「关于 / 账号说明」页的载体（**动手前必查图谱，不许新建平行实现**）：现状实测 = WeaselServer/WeaselUI/include 源码内**没有**任何现成 About 对话框（本轮 grep `关于|About|github\.com` 仅命中 `include\winsparkle.h` 与 `WeaselUI\GdiplusBlur.cpp`，均非 About UI）⇒ 需新增
+- [ ] 内容规格先写清（简体中文，P5）：产品名/版本号（取自 `include\WeaselIPCData.h` 与 PE 版本资源，**不得硬编码第二处**）、账号与数据说明（本输入法**无云端账号** ⇒ 文案必须与事实一致，不得暗示存在登录）、可点项（如检查更新走 WinSparkle 现有通道）
+- [ ] **P2 红线**：点击处理内禁止阻塞 I/O；若需外网/更新检查，走已有 WinSparkle 异步通道，**不得**在 `OnLButtonUp` 里同步 `ShellExecute` 等待
+- [ ] 实现（`WeaselServer\QuickPanelDialog.cpp` `HitTest`/`OnLButtonUp` hit==3 + `WeaselServerApp.cpp:439-447` 的 `onLogin` 空 lambda 填充）
+- [ ] 若引入新 IPC 语义或改 `include\WeaselIPCData.h` ⇒ 触发 **IPC 四边同步**（server/TSF/deployer 三端 + ADR + `test/TestWeaselIPC/*` 一次提交）；ADR 编号先 `ls docs\adr/` 确认
+- [ ] `kButtonCount` 保持 4 ⇒ `L1-quickpanel-icon.ps1` 槽位数量期望**不应改动**；若该测试因本改动变红，先确认它测的是槽数还是图标名
+- [ ] 收尾：判别性测试转绿并贴输出 + `run-all.ps1 -Level L0` 全绿 + CHANGELOG `[Unreleased]`（P5 用户可见改动）+ 装机验收 `scripts\install\verify-installed.ps1` 与用户实际点击确认
 
 ## P0-4 · 当前输入状态回显（中/英 + 全/半角）
 
