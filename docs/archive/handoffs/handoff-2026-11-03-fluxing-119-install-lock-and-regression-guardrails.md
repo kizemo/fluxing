@@ -13,8 +13,8 @@
 2. **复盘**「开发过程中反复出现**已开发好的功能丢失**、**已修的 bug 复现**」，并给出**系统性预防机制**。
 3. **更新完整 handoff 文档 + 一句话 prompt**（prompt 只给全路径引导，不复述 handoff 内容）。
 
-本轮实际完成：① 安装报错的根因坐实 + **根治修复 + 1.1.9 装机验收通过**；② 复盘分析落盘（8 条根因 + 7 根支柱 + 固定验收矩阵）；③ 本交接卡 + 接力 prompt 落盘；④ 发布前自查发现并修掉 **PE 版本资源 `FileVersion` 恒空**（连带让 `AGENTS.md §4.3` 的版本门禁从「形同虚设」恢复成真门禁）。
-**预防机制本身尚未落地**（见 §4）。
+本轮实际完成：① 安装报错的根因坐实 + **根治修复 + 1.1.9 装机验收通过**；② 复盘分析落盘（8 条根因 + 7 根支柱 + 固定验收矩阵）；③ 本交接卡 + 接力 prompt 落盘；④ 发布前自查发现并修掉 **PE 版本资源 `FileVersion` 恒空**（连带让 `AGENTS.md §4.3` 的版本门禁从「形同虚设」恢复成真门禁）；⑤ **v1.1.9 已对外发布**（用户已签字）：分支推 `kizemo/Fluxing`=`778ce35`、轻量 tag `v1.1.9`、GitHub Release 公开、安装器资产远端 digest 与本地产物 sha256 逐字节一致（详见 §8.2）。
+**预防机制本身尚未落地**（见 §4）—— 这是下一会话的第一任务。
 
 ---
 
@@ -246,7 +246,7 @@ GitHub Actions 跑 L0–L4（nightly 跑 L5）；`env.bat` 的版本号移到**�
 
 ## 8. 仓库状态（交棒时）
 
-- 分支 `Fluxing`，remote `kizemo/Fluxing`；HEAD 见 §8.1（提交信息见 commit message）。
+- 分支 `Fluxing`，remote `kizemo/Fluxing`；**HEAD = `778ce35`**（已推；§8.1 列本轮 4 个提交）。
 - 工作树脏项应仅剩 ` m librime`（子模块，不提交）。
 - 装机版本：**1.1.9**（`D:\Program Files\fluxing`，`HKLM\SOFTWARE\WOW6432Node\Fluxing\Weasel` → `InstallDir`），卸载键 `DisplayVersion=1.1.9`；**当前无自家 UI 残留进程**。
 
@@ -264,16 +264,22 @@ GitHub Actions 跑 L0–L4（nightly 跑 L5）；`env.bat` 的版本号移到**�
 
 - 提交 1 = `2eb8faa` —— `fix(installer)`：`output/install.nsi` + `CHANGELOG.md`
 - 提交 2 = `aaaa889` —— `docs(fluxing)`：`lessons-learned.md`（L174）+ 复盘分析 + 本卡 + prompt
-- 提交 3 = `fix(fluxing)`：4 个 rc + `CHANGELOG.md`（版本资源）
-- 提交 4 = `docs(fluxing)`：`lessons-learned.md`（L175）+ 本卡更新
+- 提交 3 = `f101448` —— `fix(fluxing)`：4 个 rc + `CHANGELOG.md`（版本资源）
+- 提交 4 = `778ce35` —— `docs(fluxing)`：`lessons-learned.md`（L175）+ 本卡更新
 
-### 8.2 对外发布状态
+### 8.2 对外发布状态（2026-11-03 已发布，用户已签字）
 
-`v1.1.9` 的 GitHub Release **未发布**（发布属对外操作，需用户签字）。待发资产：
-`output/archives/fluxing-1.1.9-installer.exe`（**42,797,082 B**；
-sha256 `8D5DD1A877E7F9FF40DFD87B4BDBD060070A80038184D1397D323FDA8AD6C18E`；
-md5 `556BB87230FBB9E3C767DDF4796A818B`）。
-发布说明草稿：`tmp/release-119-notes.md`。
+- 分支已推：`kizemo/Fluxing` = `778ce35`（本轮 4 个提交）。
+- 轻量 tag：`v1.1.9` → `778ce35`（与远端 `v1.1.8` 同习俗）。
+- GitHub Release：**已发布**（非 draft / 非 prerelease）
+  `https://github.com/kizemo/fluxing/releases/tag/v1.1.9`
+  标题：`v1.1.9 - 修「无法打开要写入的文件：FluxingPhrasesDialog.exe」安装报错 + 补齐 PE 版本资源 FileVersion (L174/L175)`
+- 资产：`fluxing-1.1.9-installer.exe`，**42,797,082 B**；
+  sha256 `8D5DD1A877E7F9FF40DFD87B4BDBD060070A80038184D1397D323FDA8AD6C18E`；
+  md5 `556BB87230FBB9E3C767DDF4796A818B`。
+  **远端 digest 与本地产物 sha256 逐字节一致**（GitHub API `assets[].digest` = `sha256:8d5dd1a8…`）⇒ 上传的就是 A/B 验收过的那个二进制。
+- 发布说明：`tmp/release-119-notes.md`（同一份内容进 GitHub Release body；仓库内不另存 release-notes 目录 —— 沿用既有习惯，仓库内发布记录以 `CHANGELOG.md` 的 `[1.1.9]` 段为准）。
+- 注意：安装器二进制**未**提交进 `release/`（该目录只跟到 `fluxing-1.1.6-installer.exe`；1.1.7 / 1.1.8 同样只发 Release 资产）⇒ 不要在后续版本「顺手补交」历史安装器进 git 历史。
 
 ---
 
