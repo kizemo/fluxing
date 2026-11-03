@@ -276,6 +276,8 @@ HWND QuickPanelDialog::s_hwnd = NULL;
 bool QuickPanelDialog::s_fullwidth = false;
 bool QuickPanelDialog::s_mouseTracked = false;
 bool QuickPanelDialog::s_dragging = false;  // L87-fix 手动 drag 状态
+// L178-fix: 按下时是否真的拿到了有效光标位置(GetCursorPos 可能失败)。
+bool QuickPanelDialog::s_dragCursorValid = false;
 POINT QuickPanelDialog::s_dragStartCursor = {0,
                                              0};  // L87-fix drag 开始时 cursor
 RECT QuickPanelDialog::s_dragStartWindow = {
@@ -525,6 +527,71 @@ void QuickPanelDialog::DestroyOffscreenDC() {
   }
 }
 
+// spec 099 P0-3: 槽位矩形(物理像素)—— 布局的**单一事实源**。
+// HitTest 与 test/TestQuickPanelDialog 都从这里取值,避免测试复制一份
+// 布局公式(复制即漂移)。
+bool QuickPanelDialog::SlotRect(int index, int* x, int* y, int* w, int* h) {
+  if (index < 0 || index >= kButtonCount)
+    return false;
+  if (s_panelW_phys == 0)
+    return false;
+  const int padding = s_panelPadding_phys;
+  // L93-fix:brand→btn gap = max(2, 2*dpr),跟 PaintOpaqueContent 的
+  // `buttonStartX = pad + s_brandSize_phys + max(2,2*dpr)` 保持一致。
+  const int buttonStartX =
+      padding + s_brandSize_phys + max(2, (int)(2 * s_dpr_x + 0.5f));
+  const int x0 = buttonStartX + index * (s_btnSize_phys + s_btnGap_phys);
+  if (x)
+    *x = x0;
+  // v0.19.0.24-fix(issue 1):Y 范围用 s_btnYOffset_phys
+  // (=(kPanelH-kBtnSize)/2=6 dpr 缩放),跟 PaintOpaqueContent 的 y0 同步。
+  if (y)
+    *y = s_btnYOffset_phys;
+  if (w)
+    *w = s_btnSize_phys;
+  if (h)
+    *h = s_btnSize_phys;
+  return true;
+}
+
+// spec 099 P0-3: 槽位点击路由 —— 每个可见槽位点击都必须产生确定的
+// 用户可见效果(spec 099 §7 P0-3 验收判据)。
+//   0 Schema  → 切换到下一个输入方案(此前是死槽:注释写着 no-op)
+//   1 Phrase  → 短语库
+//   2 Settings→ 快捷键设置(走 SetOnShortcut 注入)
+//   3 Account → 关于/账号说明页(此前是死槽)
+// 返回 true 表示该槽位确实触发了回调。
+bool QuickPanelDialog::DispatchSlotClick(int index) {
+  switch (index) {
+    case 0:
+      if (s_onSchema) {
+        s_onSchema();
+        return true;
+      }
+      return false;
+    case 1:
+      if (s_onPhrases) {
+        s_onPhrases();
+        return true;
+      }
+      return false;
+    case 2:
+      if (s_onShortcut) {
+        s_onShortcut();
+        return true;
+      }
+      return false;
+    case 3:
+      if (s_onLogin) {
+        s_onLogin();
+        return true;
+      }
+      return false;
+    default:
+      return false;
+  }
+}
+
 int QuickPanelDialog::HitTest(int x, int y) {
   if (s_panelW_phys == 0)
     return -1;
@@ -543,24 +610,12 @@ int QuickPanelDialog::HitTest(int x, int y) {
   if (x >= brandX && x < brandX + s_brandSize_phys && y >= brandY &&
       y < brandY + s_brandSize_phys)
     return -2;  // brand
-  // L93-fix:brand→btn gap 从 max(1,4*dpr) 修正为 max(2,2*dpr) — 跟
-  // PaintOpaqueContent 的 `buttonStartX = pad + s_brandSize_phys +
-  // max(2,2*dpr)` 保持一致。L91 改 PaintOpaqueContent 时漏 HitTest,导致 HitTest
-  // 算的 button0 起点 (44 when dpr=1) 跟 visual button0 起点 (42 when dpr=1)
-  // 偏右 2 px,点击 button0 最左 2 px 区域 走 HTCAPTION 拖动而非 click。Fix。
-  int buttonStartX =
-      padding + s_brandSize_phys + max(2, (int)(2 * s_dpr_x + 0.5f));
-  // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons (UserDict 槽位删除)
+  // spec 099 P0-3: 槽位矩形改由 SlotRect() 统一给出(布局单一事实源)。
   for (int i = 0; i < kButtonCount; i++) {
-    int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
-    // v0.19.0.24-fix(issue 1):Y 范围从 `padding`(kPanelPadding=5 X padding)改
-    // `s_btnYOffset_phys`
-    // (=(kPanelH-kBtnSize)/2=6 dpr 缩放),跟 PaintOpaqueContent 的 y0 同步,避免
-    // paint 跟 hit 区域错位。L93 时 y0=pad=5 跟 HitTest 的 `y >= padding`
-    // 一致,所以未暴露 bug; v0.19.0.24 改 y0=6 后必须同步
-    // HitTest,否则按钮视觉下移 1 px 但 click hit 上 1 px。
-    if (x >= x0 && x < x0 + s_btnSize_phys && y >= s_btnYOffset_phys &&
-        y < s_btnYOffset_phys + s_btnSize_phys)
+    int x0 = 0, y0 = 0, w = 0, h = 0;
+    if (!SlotRect(i, &x0, &y0, &w, &h))
+      break;
+    if (x >= x0 && x < x0 + w && y >= y0 && y < y0 + h)
       return i;
   }
   return -1;
@@ -644,7 +699,14 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
       // 时检查 s_activeIdx 是否释放前还在同一按钮)。
       SetCapture(hwnd);
       s_dragging = TRUE;
-      GetCursorPos(&s_dragStartCursor);
+      // L178-fix: GetCursorPos 可能失败(无输入设备 / 非交互 window station)。
+      // 失败时不能把未初始化的栈内存当成光标位置 —— 否则 LButtonUp 会拿垃圾值
+      // 算位移,把「点击」误判成「拖拽」而吞掉回调(槽位点击随机失效)。
+      // 记 s_dragCursorValid,抬起时按「无位移」处理。
+      POINT start = {0, 0};
+      s_dragCursorValid = (GetCursorPos(&start) != FALSE);
+      if (s_dragCursorValid)
+        s_dragStartCursor = start;
       RECT rc;
       GetWindowRect(hwnd, &rc);
       s_dragStartWindow = rc;
@@ -660,8 +722,10 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
     }
     case WM_MOUSEMOVE: {
       if (s_dragging) {
-        POINT cur;
-        GetCursorPos(&cur);
+        // L178-fix: 取不到真实光标就无法算位移(否则窗口会瞬移)。
+        POINT cur = {0, 0};
+        if (!GetCursorPos(&cur))
+          return 0;
         int dx = cur.x - s_dragStartCursor.x;
         int dy = cur.y - s_dragStartCursor.y;
         SetWindowPos(hwnd, NULL, s_dragStartWindow.left + dx,
@@ -697,10 +761,16 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
         // fall through invoke 回调。 注意:必须 reset s_activeIdx 之后再判断
         // (L94 Fix A 是 reset,不能漏), 但要在 reset 之前用 oldActiveIdx 记住
         // index 用于路由。
-        POINT cur;
-        GetCursorPos(&cur);
-        int dx = cur.x - s_dragStartCursor.x;
-        int dy = cur.y - s_dragStartCursor.y;
+        // L178-fix: GetCursorPos 失败时 cur 是未初始化内存 ⇒ 位移是垃圾值 ⇒
+        // 点击被误判成拖拽而吞掉(槽位点击随机失效)。取不到光标、或按下时
+        // 没拿到有效光标 ⇒ 一律按「无位移」处理,保证点击一定派发。
+        POINT cur = {0, 0};
+        const bool curValid = (GetCursorPos(&cur) != FALSE);
+        int dx = 0, dy = 0;
+        if (curValid && s_dragCursorValid) {
+          dx = cur.x - s_dragStartCursor.x;
+          dy = cur.y - s_dragStartCursor.y;
+        }
         int dragDist2 = dx * dx + dy * dy;
         constexpr int kDragThresholdPx = 4;  // 4 物理像素,经验值(防手指抖动)
         bool actualDrag = (dragDist2 >= kDragThresholdPx * kDragThresholdPx);
@@ -726,14 +796,11 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
         // Shortcut 真接通。 v0.19.0.60 (Phase L 调整 1): 2 (UserDict) 删除 —
         // UserDictionary 模块下线。 见 docs/design/mockups-v0.19.0.28/ 设计稿。
         // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons, hit 索引重映射:
-        //   0 Schema (no-op), 1 Phrase, 2 Settings→Shortcut, 3 Account
-        //   (no-op)。
+        //   0 Schema, 1 Phrase, 2 Settings→Shortcut, 3 Account。
+        // spec 099 P0-3: 0/3 不再是 no-op —— 每个可见槽位点击都必须产生
+        // 确定的用户可见效果(0 = 切换到下一个输入方案,3 = 关于/账号说明页)。
         if (!actualDrag) {
-          if (oldActiveIdx == 1 && s_onPhrases)
-            s_onPhrases();
-          else if (oldActiveIdx == 2 && s_onShortcut)
-            s_onShortcut();
-          // hit 0/3: no-op (0 Schema 跟 3 Account 都是历史 placeholder)
+          DispatchSlotClick(oldActiveIdx);
         }
       } else {
         POINT p = {LOWORD(l), HIWORD(l)};
@@ -747,13 +814,10 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
           // invoke。 v0.19.0.29:扩展 hit 分支 — 1 Phrase / 3 Shortcut。0/2/4 仍
           // no-op。 v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons, hit 索引重映射:
           //   hit==1 Phrase (不变), hit==2 Settings → s_onShortcut (was hit==3
-          //   in v0.19.0.61) hit==3 Account 仍 no-op (was hit==4)
-          if (hit == 1 && s_onPhrases) {
-            s_onPhrases();
-          } else if (hit == 2 && s_onShortcut) {
-            s_onShortcut();
-          }
-          // hit 0/3: no-op (0 Schema 跟 3 Account 都是历史 placeholder)
+          //   in v0.19.0.61) hit==3 Account (was hit==4)
+          // spec 099 P0-3: 0/3 不再是 no-op —— 每个可见槽位点击都必须产生
+          // 确定的用户可见效果(0 = 切换到下一个输入方案,3 = 关于/账号说明页)。
+          DispatchSlotClick(hit);
         }
         s_activeIdx = -1;
         // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered。

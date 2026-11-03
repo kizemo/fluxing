@@ -983,6 +983,30 @@ void RimeWithWeaselHandler::SelectSchema(const std::string& schema_id) {
   }
 }
 
+// spec 099 P0-3: 快捷面板槽 0 = 「切换到下一个输入方案」。
+//
+// 与 SelectSchema 的差别(本函数存在的理由):
+//   SelectSchema 用 rime_api->create_session() —— 那是**新会话**,改它对当前
+//   正在输入的窗口没有任何可见效果(槽位点了没反应)。槽 0 必须作用于**活动
+//   会话**(to_session_id(m_active_session)),与 SetOption(0, ...) 同一形状。
+//   目标 id 的选择走 fluxing::NextSchemaId(纯函数,可单测)。
+void RimeWithWeaselHandler::SwitchToNextSchema() {
+  if (!rime_api)
+    return;
+  if (m_available_schemas.empty())
+    _RefreshSchemaList();
+  const std::string next_id =
+      fluxing::NextSchemaId(m_available_schemas, m_current_schema_id);
+  if (next_id.empty())
+    return;
+  if (rime_api->select_schema(to_session_id(m_active_session),
+                              next_id.c_str())) {
+    m_current_schema_id = next_id;
+    if (_UpdateUICallback)
+      _UpdateUICallback();
+  }
+}
+
 void RimeWithWeaselHandler::_RefreshSchemaList() {
   m_available_schemas.clear();
   if (!rime_api)

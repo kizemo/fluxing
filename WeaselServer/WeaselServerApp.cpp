@@ -6,6 +6,9 @@
 #include "PhrasesDialogIPC.h"  // v0.19.0.52 (Phase K3 T010): out-of-process IPC 替代 in-process PhrasesDialog
 #include "UserDictionary.h"    // v0.19.0.28(spec 044 §3.2):Track 3 wiring
 #include "ShortcutSettings.h"  // spec 045 v0.19.0.28: Track 3 wiring
+// spec 099 P0-3: 槽 3(Account)→ 关于/账号说明页;版本/产品名的单一真相源
+// = 宿主 exe 的 PE 版本资源(启动期读一次并缓存)。
+#include "AboutDialog.h"
 
 #include "FluxingDiagLog.h"  // spec 097: 诊断日志（服务端 DLOG 被 no_logging.h 编译为空操作）// spec 070 T007: D2D factory 创建 (在 WeaselServerApp::Run 入口)
 #include <d2d1.h>
@@ -24,6 +27,9 @@ void WeaselServerApp::SetQuickPanelShortcutCallback(
 WeaselServerApp::WeaselServerApp()
     : m_handler(std::make_unique<RimeWithWeaselHandler>(&m_ui)),
       tray_icon(m_ui) {
+  // spec 099 P0-3: 关于页需要的「产品名 / 版本号」在启动期从宿主 exe 的 PE
+  // 版本资源读一次并缓存;关于页的显示与点击路径零 I/O(守 P2 红线)。
+  AboutDialog::Initialize();
   // spec 084 / ADR 0013 D4/D10: 托盘菜单弹出前询问「长显」这一项是否打勾。
   tray_icon.SetMenuItemCheckedCallback([](UINT id) {
     return id == ID_QUICKPANEL_ALWAYS_SHOW &&
@@ -440,10 +446,15 @@ void WeaselServerApp::ShowQuickPanel() {
   bool currentFull = m_handler ? m_handler->IsFullShape() : false;
   QuickPanelDialog::Show(
       currentFull,
+      // spec 099 P0-3: 槽 0 改为「切换到下一个输入方案」。
+      // 原实现拉起 WeaselDeployer /hotkey(旧热键编辑器);该调用点是全仓唯一一处
+      // /hotkey 引用(死代码),且「拉起另一个进程的热键窗」既不是确定的用户可见
+      // 效果、又违反 spec 099 的槽位验收「每个可见槽位点击必产生确定的用户可见效果」。
+      // Rime 会话宿主就在 WeaselServer 进程内,直接切活动会话即可;
+      // 不动 include/WeaselIPCData.h ⇒ 不触发 IPC 四边同步。
       [this]() {
-        fs::path deployer = install_dir() / L"WeaselDeployer.exe";
-        ShellExecuteW(NULL, NULL, deployer.c_str(), L"/hotkey", NULL,
-                      SW_SHOWNORMAL);
+        if (m_handler)
+          m_handler->SwitchToNextSchema();
       },
       [this]() { explore(WeaselUserDataPath()); },
       [this]() {
@@ -467,5 +478,9 @@ void WeaselServerApp::ShowQuickPanel() {
         if (m_handler)
           m_handler->SetOption(0, "full_shape", newFull);
       },
-      [this]() { UserDictionary::Show(); }, []() {});
+      // spec 099 P0-3: 槽 3(Account)→「关于 / 账号说明」页。
+      // 页内文案明示:本输入法不含云端账号,词库/配置/用户数据全部留在本机,
+      // 不上传、不同步;并给出「打开数据目录」入口(本地 explore,不联网、不等待)。
+      [this]() { UserDictionary::Show(); },
+      [this]() { AboutDialog::Show(); });
 }

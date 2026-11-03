@@ -3,7 +3,7 @@ target("WeaselServer")
   add_files("./*.cpp")  -- includes PhrasesDialog.cpp via glob
   add_includedirs("$(projectdir)/WeaselUI", "$(projectdir)/WeaselUI/FluxingComponents")
   add_rules("add_rcfiles", "subwin")
-  add_links("imm32", "kernel32", "rime", "windowscodecs")
+  add_links("imm32", "kernel32", "rime", "version", "windowscodecs")
   add_deps("WeaselUI", "WeaselIPC", "RimeWithWeasel", "WeaselIPCServer")
 
   add_files("$(projectdir)/PerMonitorHighDPIAware.manifest")

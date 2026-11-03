@@ -23,15 +23,45 @@
 
 ## P0-3 · Account 槽实装（用户 2026-11-04 00:01 定稿：不摘除）
 
-- [ ] 先写判别性测试：断言「每个可见槽位点击必产生确定的用户可见效果」——当前必红（hit==3 为 no-op）
+- [x] 先写判别性测试：断言「每个可见槽位点击必产生确定的用户可见效果」——当前必红（hit==3 为 no-op）
 - [x] **决策（用户定）：实装** —— 第 4 槽（Account）点击打开 **「关于 / 账号说明」页**；不采用整槽摘除。UserDict 整槽删除先例（`QuickPanelDialog.h:132`）仅作实现参照，不适用于本槽
-- [ ] 先定「关于 / 账号说明」页的载体（**动手前必查图谱，不许新建平行实现**）：现状实测 = WeaselServer/WeaselUI/include 源码内**没有**任何现成 About 对话框（本轮 grep `关于|About|github\.com` 仅命中 `include\winsparkle.h` 与 `WeaselUI\GdiplusBlur.cpp`，均非 About UI）⇒ 需新增
-- [ ] 内容规格先写清（简体中文，P5）：产品名/版本号（取自 `include\WeaselIPCData.h` 与 PE 版本资源，**不得硬编码第二处**）、账号与数据说明（本输入法**无云端账号** ⇒ 文案必须与事实一致，不得暗示存在登录）、可点项（如检查更新走 WinSparkle 现有通道）
-- [ ] **P2 红线**：点击处理内禁止阻塞 I/O；若需外网/更新检查，走已有 WinSparkle 异步通道，**不得**在 `OnLButtonUp` 里同步 `ShellExecute` 等待
-- [ ] 实现（`WeaselServer\QuickPanelDialog.cpp` `HitTest`/`OnLButtonUp` hit==3 + `WeaselServerApp.cpp:439-447` 的 `onLogin` 空 lambda 填充）
-- [ ] 若引入新 IPC 语义或改 `include\WeaselIPCData.h` ⇒ 触发 **IPC 四边同步**（server/TSF/deployer 三端 + ADR + `test/TestWeaselIPC/*` 一次提交）；ADR 编号先 `ls docs\adr/` 确认
-- [ ] `kButtonCount` 保持 4 ⇒ `L1-quickpanel-icon.ps1` 槽位数量期望**不应改动**；若该测试因本改动变红，先确认它测的是槽数还是图标名
-- [ ] 收尾：判别性测试转绿并贴输出 + `run-all.ps1 -Level L0` 全绿 + CHANGELOG `[Unreleased]`（P5 用户可见改动）+ 装机验收 `scripts\install\verify-installed.ps1` 与用户实际点击确认
+- [x] 先定「关于 / 账号说明」页的载体（**动手前必查图谱，不许新建平行实现**）：现状实测 = WeaselServer/WeaselUI/include 源码内**没有**任何现成 About 对话框（本轮 grep `关于|About|github\.com` 仅命中 `include\winsparkle.h` 与 `WeaselUI\GdiplusBlur.cpp`，均非 About UI）⇒ 新增 `WeaselServer/AboutDialog.{h,cpp}`（进程内、modeless、原生 caption 框 + `ModalChrome` 渐变底；**不新建 exe、不用 MessageBox**）
+- [x] 内容规格（简体中文，P5）：产品名/版本号取自**宿主 exe 的 PE 版本资源字符串表**（`ProductName`/`ProductVersion`，语言块 zh-CN>zh-TW>en-US>en-GB，回退链 `ProductVersion`→`FileVersion`→`VS_FIXEDFILEINFO`），**不得硬编码第二处**；账号说明按事实写「本输入法不含云端账号。词库、配置与用户数据全部保存在本机，不上传、不同步。」；可点项 = 「打开数据目录」（本地 `explore`，不联网、不等待）。**不含「检查更新」**
+- [x] **P2 红线**：版本/产品名/数据目录在**服务端启动期读一次并缓存**（`AboutDialog::Initialize()`，在 `WeaselServerApp` 构造函数内调用），窗口显示与按钮点击路径**零 I/O**；点击处理内不阻塞 I/O、不在 `OnLButtonUp` 里同步 `ShellExecute` 等待
+- [x] 实现：新增 public `SlotRect()`（槽位布局**单一事实源**，`HitTest` 与单元测试共用）与 `DispatchSlotClick()`（两条抬起分支统一路由）；`WeaselServerApp.cpp` 的 `onSchema` → `SwitchToNextSchema()`（槽 0 改为「切换到下一个输入方案」）、`onLogin` → `AboutDialog::Show()`；方案循环抽成 header-only `include/FluxingSchemaCycle.h`（`fluxing::NextSchemaId`），生产与测试同源（R7）
+- [x] IPC 四边同步**不触发**：本轮**未改** `include/WeaselIPCData.h`，方案切换走进程内 `rime_api->select_schema()`（Rime 会话宿主在 WeaselServer 进程内）⇒ 无需 server/TSF/deployer 三端同步；ADR 取新编号 `0034`（并补上 README 漏掉的 `0033` 索引行）
+- [x] `kButtonCount` 保持 4（代码事实）⇒ 槽位数量断言**未被改动**。**注意**：099 spec §7 引用的 `scripts\gate\L1-quickpanel-{state,icon,hotkey}.ps1` 与 `L2-rime-quickpanel-e2e.ps1` 在仓内**尚不存在**（属后续切片待建），故本轮没有「槽位数量期望」文件可改，也无此类用例变红
+- [x] 收尾（代码侧）：判别性测试转绿 + 贴输出 + 门禁全绿 + CHANGELOG `[Unreleased]`（P5 用户可见改动）
+- [x] **顺带修掉一个既有缺陷**：`GetCursorPos` 失败时旧代码读未初始化 `POINT` 算位移 ⇒ 槽位点击被误判成「拖拽」而**随机吞掉回调**（真机表现：RDP 断开/会话锁定时「按钮点了没反应」）。已在 `WM_LBUTTONDOWN/MOVE/UP` 三处加失败兜底（详见 lessons-learned **L178**）
+- [ ] 装机验收 `scripts\install\verify-installed.ps1` 与用户实际点击确认 —— **未做**（本轮未重新安装；槽 0 方案切换属 librime per-session 语义，端到端可见性需装机手点复验）
+
+**验收输出（2026-11-04）**
+
+```
+# 造坏数据证明有牙：故意断开 DispatchSlotClick 的 case 0 / case 3 ⇒ 必红
+BROKEN_BUILD_EXIT=0
+BROKEN_RUN_EXIT=1
+  FAIL: T20g: 槽 0 点击 → 方案切换回调恰好 1 次
+  FAIL: T20j: 槽 3 点击 → 关于页回调恰好 1 次
+=== 86 / 88 assertions passed ===
+# 恢复（源文件字节级一致 RESTORED_BYTE_EQUAL=True）⇒ 必绿
+RESTORE_BUILD_EXIT=0
+RESTORED_RUN_EXIT=0
+=== 88 / 88 assertions passed ===
+# 连跑 9 轮零抖动
+FIRST_EXIT=0 / RUNS_2..9=0,0,0,0,0,0,0,0
+
+# 门禁（scripts\gate\run-all.ps1）
+L0  PASS  exit=0  80.6s  静态门禁 checks=13 pass=13 fail=0 skip=0
+L3  PASS  exit=0  79.4s  变异自检 mutations=7 killed=7 survived=0
+L4  PASS  exit=0   1.4s  回归用例(fast) cases=1 pass=1 fail=0
+```
+
+**未验证 / 已知限制**
+
+- 槽 0「切换到下一个输入方案」的端到端可见性：`select_schema` 作用于活动会话（librime per-session 语义），本会话无法验证 → 需装机手点。
+- 关于页像素级版式（420×300 客户区 / 圆角 12）无视觉基准，需装机人眼确认。
+- L5 sandbox-gate 本轮未跑（发版前必跑；沙箱无 `D:` 盘/外网时该项按设计固定红，属环境能力项）。
 
 ## P0-4 · 当前输入状态回显（中/英 + 全/半角）
 

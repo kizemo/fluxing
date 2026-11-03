@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <WeaselIPC.h>
 #include <WeaselUI.h>
 #include <map>
@@ -15,6 +15,8 @@
 // spec 090 / ADR 0023: 屏蔽名单读写、可见->引擎索引映射与名单文件指纹
 // (fluxing::IgnoreListStamp)。header-only 纯函数,服务端与单元测试工程共用。
 #include <FluxingCandidateIgnore.h>
+// spec 099 P0-3: 「下一个输入方案」的纯函数(header-only,服务端与测试共用)。
+#include <FluxingSchemaCycle.h>
 
 struct CaseInsensitiveCompare {
   bool operator()(const std::string& str1, const std::string& str2) const {
@@ -111,6 +113,10 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
     return m_available_schemas;
   }
   void SelectSchema(const std::string& schema_id);
+  // spec 099 P0-3: 快捷面板槽 0 = 「切换到下一个输入方案」。
+  // 与 SelectSchema 的差别:作用于**活动会话**(当前正在输入的窗口立即
+  // 生效),而不是 create_session() 造出来的新会话。
+  void SwitchToNextSchema();
   // Read the cached 简/繁 / 全/半角 option bools.
   bool IsSimplification() const;
   bool IsFullShape() const;

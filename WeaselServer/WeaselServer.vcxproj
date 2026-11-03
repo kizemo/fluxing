@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|ARM">
@@ -495,6 +495,8 @@
     <ClCompile Include="WeaselService.cpp" />
     <ClCompile Include="WeaselTrayIcon.cpp" />
     <ClCompile Include="QuickPanelDialog.cpp" />
+    <!-- spec 099 P0-3: 槽 3(Account)落点的「关于页」实现 -->
+    <ClCompile Include="AboutDialog.cpp" />
     <!-- v0.19.0.30 fix (历史): PhrasesDialog.cpp 之前漏加,WeaselServerApp.cpp 引用
          PhrasesDialog::Show() 但 vcxproj 没 include 此 cpp,导致 LNK2001。
          v0.19.0.28 commit c6fec000 加 ShortcutSettings.cpp + UserDictionary.cpp
@@ -520,6 +522,7 @@
     <ClCompile Include="ForegroundCapture.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AboutDialog.h" />
     <ClInclude Include="ModalChrome.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="stdafx.h" />

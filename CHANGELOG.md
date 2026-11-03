@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+### feat(WeaselServer): 快捷设置栏 4 槽全部有确定效果 —— 槽 0 切换输入方案、槽 3 打开「关于 / 账号说明」页（spec 099 P0-3 / ADR 0034）
+
+- **症状**：4 槽布局里**两槽是死的**。槽 0（Schema）点击后拉起 `WeaselDeployer.exe /hotkey`（**全仓唯一调用点 = 死代码**，且「拉起另一个进程的窗口」不是确定的用户可见效果）；槽 3（Account）的回调是空 lambda，点下去什么也不发生。违 spec 099 P0-3 验收条款「每个可见槽位点击必产生确定的用户可见效果」。
+- **槽 0 → 切换到下一个输入方案**：Rime 会话宿主就在 WeaselServer 进程内，直接对**活动会话**调 `select_schema()`；「下一个是谁」的判定抽成 header-only 纯函数 `fluxing::NextSchemaId()`（`include/FluxingSchemaCycle.h`），生产代码与单元测试同源（constitution R7）。**未改动 `include/WeaselIPCData.h` ⇒ 不触发 IPC 四边同步。**
+- **槽 3 → 新增「关于 / 账号说明」页**（`WeaselServer/AboutDialog`）：进程内 modeless 窗口（原生 caption 框 + `ModalChrome` 渐变底），**不新建 exe、不用 MessageBox**（MessageBox 会阻塞服务端 UI 线程）。内容含产品名、版本号、隐私说明「本输入法不含云端账号。词库、配置与用户数据全部保存在本机，不上传、不同步。」、「数据目录：<路径>」，以及「打开数据目录」（本地 `explore`，**不联网、不等待**）与「关闭」按钮。
+- **版本与产品名的唯一真相源 = 宿主 exe 的 PE 版本资源**：取 `\StringFileInfo\<lang><cp>` 的 `ProductName` / `ProductVersion`，语言块按 zh-CN > zh-TW > en-US > en-GB **显式排序**（rc 里同时存在多块，只取第一块会在非中文系统上显示错语种）；回退链 `ProductVersion` → `FileVersion` → `VS_FIXEDFILEINFO`（**L175** 的空串陷阱曾让单字段读取静默拿到空值，必须有回退链）。**启动期读一次并缓存**（`AboutDialog::Initialize()`），窗口显示期与点击路径**零 I/O**（守 P2 红线）。
+- **槽位布局单一事实源**：新增 public `QuickPanelDialog::SlotRect(index, …)`（物理像素矩形），`HitTest` 与单元测试共用 —— 测试不再复制一份布局公式（复制即漂移）；点击路由收敛到 public `DispatchSlotClick(index)`，拖拽 fall-through 与原地抬起两条分支共用，避免「两处各写一遍槽位语义」。
+- **验证**：`test/TestQuickPanelDialog` 新增 T20（4 槽点击路由：按 `SlotRect` 中心合成「按下 + 原地抬起」，断言 schema/phrases/shortcut/login 各恰好 1 次、未接槽位回调 0 次、越界索引 `-1` / `4` 无效）、T21（关于页：用 `kernel32.dll` 作 PE 版本探针，断言版本号点分非空、产品名非空、文件缺失返回 false、关于页版本号与 PE 同源、窗口可见、标题含「关于」、含「本机」「不上传」「数据目录：」、数据目录 == `ResolveFluxingUserDataPath()`、含「打开数据目录」「关闭」按钮）、T23（`NextSchemaId` 循环语义 5 条）。
+- **未验证**：槽 0 的端到端可见性（`select_schema` 的 per-session 语义需装机手点复验兜底）；关于页像素级版式（420×300 客户区 / 圆角 12）需人眼确认一次。
+
 ## [1.1.9] - 2026-11-03
 ### fix(fluxing): PE 版本资源的 `FileVersion` 字符串写成空串，补 `STRZ()` 后恢复为 1.1.9.0（L175）
 

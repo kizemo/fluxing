@@ -86,6 +86,14 @@ class QuickPanelDialog {
   // spec 084 / ADR 0013: 当前整体不透明度系数(0..255),不是 alpha 通道值。
   static int CurrentAlpha() { return s_alphaFactor; }
   static bool IsFullwidth() { return s_fullwidth; }
+  // spec 099 P0-3: 4 个槽位的物理像素矩形(布局的**单一事实源**)。
+  // HitTest 与单元测试都从这里取值 —— 测试不再复制一份布局公式
+  // (复制即漂移)。返回 false = 索引越界或面板还没建立。
+  static bool SlotRect(int index, int* x, int* y, int* w, int* h);
+  // spec 099 P0-3: 槽位点击路由 —— 每个可见槽位点击都必须产生确定的
+  // 用户可见效果。返回 true 表示该槽位确实触发了回调。
+  //   0 Schema(切换到下一个输入方案) / 1 Phrase / 2 Settings / 3 Account
+  static bool DispatchSlotClick(int index);
 
   // spec 084 / ADR 0013 D4: 长显模式(快捷设置栏常驻)开关。
   // 默认关;打开后面板常驻屏幕右下角,常态 85% 不透明度,悬停渐变到 100%。
@@ -185,6 +193,9 @@ class QuickPanelDialog {
   // L87-fix: 手动 drag 状态 — 当 s_dragging = true 时,WM_MOUSEMOVE 把 panel
   // 移动到 s_dragStartWindow + cursor 当前位置 offset。
   static bool s_dragging;          // 是否正在拖动
+  // L178-fix: 按下时是否真的拿到了有效光标位置(GetCursorPos 失败 ⇒ 抬起按
+  // 「无位移」处理,保证点击一定派发)。
+  static bool s_dragCursorValid;
   static POINT s_dragStartCursor;  // 拖动开始时 cursor screen pos
   static RECT s_dragStartWindow;   // 拖动开始时 window screen pos
   static int s_outsideMs;  // L89-fix: 鼠标在 panel 外的累计毫秒(>=1500→Hide)

@@ -46,6 +46,8 @@ Do not dump all ADRs into every prompt.
 | 0030 | 0030. 路线定案：继续火流猩既有 fork，不做搜狗逆向重写；性能验收基线立标；UI 插件化以 UIPlugin.dll 导出切面为契约参考 | `docs/adr/0030-continue-fluxing-fork-no-rewrite-perf-baseline.md` | Accepted |
 | 0031 | 0031. 进程拓扑定案：全局热键只属于 console 会话；非 console 拒绝启动并留痕；console 缺位自愈 | `docs/adr/0031-console-session-single-server-and-self-heal.md` | Accepted |
 | 0032 | 0032. 自家 UI 进程用「客户端身份」而不是「焦点顺序」与「用户切走输入法」区分 | `docs/adr/0032-own-ui-client-identity-not-focus-order.md` | Accepted |
+| 0033 | 0033. 把验收资产产品化：缺陷登记表 + 分层门禁 + 变异自检 | `docs/adr/0033-regression-asset-and-staged-gate.md` | Accepted |
+| 0034 | 0034. 快捷设置栏第 4 槽承载「关于 / 账号说明」页，第 1 槽切换输入方案；版本与产品名的唯一真相源是宿主 exe 的 PE 版本资源 | `docs/adr/0034-quickpanel-about-dialog-and-slot0-schema-switch.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

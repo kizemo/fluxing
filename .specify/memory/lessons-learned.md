@@ -13801,3 +13801,28 @@ spec 097 诉求 3：快捷设置栏在**切换到其他输入法后仍留在屏�
   做 `Copy-Item -Force` 覆盖，**全脚本无 try/finally、无 exe 还原段** ⇒ 破坏现场后无法自愈。
   破坏性验收一律：先备份到**工作区内的沙箱副本**，或只走安装器；不要直接改写生产目录。
 
+## L177 - **Win32 `CreateWindowExW` 是 12 参不是 13 参（`hWndParent` 之后紧跟 `hMenu`）；Win32 下 `INT_PTR` 就是 `int`，`reinterpret_cast<int>(int)` 触发 C2440；自绘面板的 `WM_CTLCOLORSTATIC` 回 `COLOR_WINDOW` 会刷出直角白块**（2026-11-04）
+
+- **现象**：新增 `WeaselServer/AboutDialog.cpp`（modeless「关于 / 账号说明」页）时连续踩三个 MSVC 编译错：
+  ① `C2082: 'h' : redefinition of formal parameter 'h'`；② `C2440: 'reinterpret_cast': cannot convert from 'int' to 'HMENU'`；③ 编译过了但界面上出现白色直角块。
+- **定性**：都不是设计缺陷，是 **Win32 API 真实签名**与「64/32 位整型直觉」的错配；第 ③ 条是自绘窗口与系统刷子的经典冲突。
+- **取证（签名）**：`CreateWindowExW` 的真实签名是
+  `HWND CreateWindowExW(DWORD dwExStyle, LPCWSTR lpClassName, LPCWSTR lpWindowName, DWORD dwStyle, int X, int Y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance, LPVOID lpParam)`
+  —— `hWndParent` 之后**紧跟 `hMenu`，总参 12 个**；控件 ID 只能走 `hMenu`。凭记忆按 13 参写会把 `hMenu` 之后的实参整体错位（能编译，但控件行为诡异）。
+- **根因 ②**：`INT_PTR` 在 **Win32（32 位）** 下就是 `int`，于是 `reinterpret_cast<int>(id)` 属于「标准转换」，MSVC 按 C2440 拒绝（`reinterpret_cast` 只允许指针↔指针 / 指针↔整型）。
+- **修法**：① 局部变量改名避开形参（`HWND child`）；② ID 走 `hMenu`，写法是 `reinterpret_cast<HMENU>(static_cast<INT_PTR>(id))`（先 `static_cast<INT_PTR>` 提升到指针宽度整型，再 reinterpret）；③ `WM_CTLCOLORSTATIC` 改回 `GetStockObject(NULL_BRUSH)`，让自绘的渐变/圆角底透出来（回 `COLOR_WINDOW` 会在渐变底上刷出直角白块）。
+- **预防**：写 Win32 窗口/控件代码前先确认 API 的真实签名与参数个数，不要凭记忆；整数当句柄/ID 传参时，中间显式过一遍 `static_cast<INT_PTR>`。
+- **可迁移规则 1**：**「整数当 ID / 句柄」传给 Win32 API 时，中间必须过一次 `static_cast<INT_PTR>`**；直接 `reinterpret_cast<int>(…)` 在 32 位构建下必然编译失败。
+- **可迁移规则 2**：**自绘窗口里的静态子控件不要用系统刷子重绘背景**；`WM_CTLCOLORSTATIC` 回 `NULL_BRUSH`，否则直角系统刷子会盖掉圆角 / 渐变底。
+
+## L178 - **`GetCursorPos` 会失败（非交互 window station / RDP 断开 / 无输入设备），失败后读未初始化的 `POINT` ⇒ 拖拽位移是栈垃圾 ⇒ 「点击」被误判成「拖拽」而吞掉回调；同一份生产代码因此出现「只改测试文件就红/绿翻转」**（2026-11-04）
+
+- **现象**：`test/TestQuickPanelDialog` 新增的「4 槽点击路由」用例，在**生产代码一行未改**的前提下出现：第一次跑 79/83（4 个槽位回调全红）→ 加两行诊断后 88/88 全绿 → 把诊断换成「钉光标」又稳定红。翻转点全在测试文件改动上。
+- **定性**：不是测试写错，也不是生产代码的随机性 —— 是**未初始化内存读（UB）**。翻转的触发条件是「调用栈布局变了」，于是同一个未初始化槽位里残留的垃圾值不同（残留来自上一次同深度的调用）。
+- **取证**：面板的「拖拽 vs 点击」判定在 `WM_LBUTTONUP` 里读**真实光标位置**：`POINT cur; GetCursorPos(&cur);` —— `cur` **未初始化**。而 `GetCursorPos` 在非交互 window station 下**直接失败并返回 FALSE（不写入 POINT）**：本机实测 `GetCursorPos ok=False pos=(0,0) err=5`（ERROR_ACCESS_DENIED），`SetCursorPos` 同样返回 FALSE。于是 `cur` 保持栈上的残留值 ⇒ `dragDist2` 是垃圾 ⇒ `actualDrag` 随机为真 ⇒ `DispatchSlotClick()` 不被调用 ⇒ 槽位点击「0 次派发」。
+- **根因**：**「取不到光标」被当成了「光标在别处」**。失败路径没有兜底 ⇒ 读未初始化内存 ⇒ 行为不可判定。这不只是测试环境的问题：真机上 RDP 断开 / 会话锁定 / 无输入设备时同样会触发，用户看到的是「快捷设置栏的按钮点了没反应」。
+- **修法**：① `WM_LBUTTONDOWN` 记 `s_dragCursorValid = (GetCursorPos(&start) != FALSE)`，失败就不更新 `s_dragStartCursor`；② `WM_LBUTTONUP` 里 `POINT cur = {0, 0};` 显式初始化，且仅当 `curValid && s_dragCursorValid` 才计算位移，两者任一不成立 ⇒ `dx = dy = 0` ⇒ **按「无位移」处理，点击一定派发**；③ `WM_MOUSEMOVE` 同理：取不到光标就本帧不移动窗口（否则窗口会瞬移）。
+- **预防（判别性证据）**：① 断开槽 0 / 槽 3 的路由（`DispatchSlotClick` 的 `case 0` / `case 3` 直接 `return false`）⇒ `T20g` / `T20j` **必红**（86/88，exit=1），恢复后 88/88 全绿 ⇒ **用例有牙**；② 修完后连跑 9 轮全绿、零抖动。
+- **可迁移规则 1**：**凡是把 Win32 读值 API（`GetCursorPos` / `GetMessage` / `GetFileAttributes` …）的返回值喂给指针形参，都要先判返回值**，并给「失败」一个**语义正确**的兜底（本例：取不到光标 ⇒ 视作「没动」，而不是「乱动」）。
+- **可迁移规则 2**：**「红/绿随无关改动翻转」是 UB 的指纹**。看到这种症状，先怀疑未初始化读，不要先怀疑测试写错；判定手段是把可疑局部变量显式初始化，看红/绿是否随之钉死，再用「故意断开功能 ⇒ 用例必红」证明用例本身有牙。
+- **可迁移规则 3**：**「取不到输入」与「输入为零」是两种语义，不能混用**：位移类计算里「读不到」应等价于「没动」，而不是「未知的大数」。

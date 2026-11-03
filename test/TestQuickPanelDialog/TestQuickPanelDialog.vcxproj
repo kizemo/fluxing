@@ -104,6 +104,9 @@
     <ClCompile Include="..\..\WeaselUI\FluxingComponents\FluxingTheme.cpp" />
     <ClCompile Include="..\..\WeaselUI\FluxingComponents\D2DRenderer.cpp" />
     <ClCompile Include="..\..\RimeWithWeasel\FluxingDarkModeBridge.cpp" />
+    <!-- spec 099 P0-3: 槽 3(Account)落点的「关于页」实现 + 共用 chrome -->
+    <ClCompile Include="..\..\WeaselServer\AboutDialog.cpp" />
+    <ClCompile Include="..\..\WeaselServer\ModalChrome.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets"></ImportGroup>
