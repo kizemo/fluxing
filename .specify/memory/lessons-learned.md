@@ -13724,3 +13724,35 @@ spec 097 诉求 3：快捷设置栏在**切换到其他输入法后仍留在屏�
 - **可迁移规则 3**：**干净环境下的全绿不能证明升级/重装路径可用**。
   凡是要发布一个「装在系统目录、会被自身占锁」的产品，验收矩阵必须包含
   「残留进程」「孤儿进程」两维，且每次发布都要复现一次。
+
+## L175 - **rc 版本资源的 `FileVersion` 字符串被写成空串（裸宏没加 `STRZ`）：`VersionInfo.FileVersion` 恒为空 ⇒ `AGENTS.md` 里当门禁用的版本核验命令长期失效；`ProductVersion` 因为加了 `STRZ` 反而是对的 —— 同一个文件里「差一个括号」的错误会被固定版本信息掩盖**（2026-11-03）
+
+- **现象**：发布前核对产物时发现 `(Get-Item output\Win32\WeaselServer.exe).VersionInfo.FileVersion` 读出**空字符串**，
+  而 `ProductVersion` 是 `1.1.9.0`。
+- **取证（必须分三层，只看一层会被误导）**：
+  ① **固定版本信息是对的**：直接解析 PE 里的 `VS_FIXEDFILEINFO`（签名 `0xFEEF04BD`）→
+     `dwFileVersionMS/LS` = 1.1.9.0、`dwProductVersionMS/LS` = 1.1.9.0（三处语言块全对）；
+  ② **字符串表里的 `FileVersion` 是空串**：同一份文件里 `ProductVersion` 正常 ⇒ 不是资源缺失，而是那一条 VALUE 写空了；
+  ③ **.NET 的 `FileVersionInfo.FileVersion` 读的是字符串表**（不是固定版本信息）⇒ 固定版本信息完全正确，
+     也照样会被读成空。
+- **根因**：`WeaselServer.rc` / `WeaselTSF.rc` / `WeaselSetup.rc` / `WeaselDeployer.rc` 里写的是
+  `VALUE "FileVersion", FILE_VERSION`，而 `FILE_VERSION` 展开成**无引号**的 `1.1.9.0`，
+  rc.exe 无法把它存进字符串表 ⇒ 该条写成空串；同处的 `VALUE "ProductVersion", STRZ(PRODUCT_VERSION)`
+  因为 `STRZ(x)`＝`STRZ2(x)`＝`#x` 会把参数**先展开再字符串化** ⇒ 得到 `"1.1.9.0"` ⇒ 一直是对的。
+  **同一个文件里只差一个 `STRZ()`，一个对一个错。**
+- **修法**：10 处（WeaselServer 3 / WeaselTSF 3 / WeaselSetup 1 / WeaselDeployer 3）统一改成
+  `VALUE "FileVersion", STRZ(FILE_VERSION)`。rc 文件是 **UTF-16LE + BOM**，必须**字节级**补丁
+  （`tmp/patch-rc-fileversion-strz.py`：锚点计数断言 + BOM/行尾自证 + 幂等复跑）。
+- **影响面**：`AGENTS.md §4.3` 把 `Get-Item output\Win32\WeaselServer.exe | ?{$_.VersionInfo.FileVersion}`
+  当作 `weasel.props` 版本一致性的**核验命令** —— 该命令长期返回空 ⇒ **门禁是失效的**。
+  资源管理器属性页的「文件版本」同样显示空白。
+- **A/B 证据**：同版本号（1.1.9.0）、同大小（2,287,104 B）的两个二进制仅差此一处 ⇒
+  修复前 `.VersionInfo.FileVersion=''`、修复后 `'1.1.9.0'`；两侧 PE 固定版本信息都是 1.1.9.0。
+- **可迁移规则 1**：**同一份产物要分层验版本** —— 固定版本信息（`VS_FIXEDFILEINFO`）、
+  字符串表（`StringFileInfo`）、.NET/PowerShell 读到的 `VersionInfo` 是**三个不同的东西**；
+  只看一层，会被另外两层掩盖。
+- **可迁移规则 2**：**文档里写下来的核验命令本身要有回归测试**。
+  「命令写错了 / 命令恒返回空」与「产物坏了」一样严重 —— 本例中 `AGENTS.md` 的版本门禁
+  在多轮发布里一直「通过」（因为没人断言它的输出非空）。
+- **可迁移规则 3**：rc 的字符串表里，**宏展开出来的数值必须显式加 `STRZ()`**；
+  数值型 `FILEVERSION` 用宏（`VERSION_MAJOR` 等）是对的，**字符串型 `VALUE` 必须自己带引号**。
