@@ -13756,3 +13756,48 @@ spec 097 诉求 3：快捷设置栏在**切换到其他输入法后仍留在屏�
   在多轮发布里一直「通过」（因为没人断言它的输出非空）。
 - **可迁移规则 3**：rc 的字符串表里，**宏展开出来的数值必须显式加 `STRZ()`**；
   数值型 `FILEVERSION` 用宏（`VERSION_MAJOR` 等）是对的，**字符串型 `VALUE` 必须自己带引号**。
+
+## L176 - **升级段「Rename 旧文件成功、`File` 写新文件失败」没有回滚，紧接着又无条件删掉 `.old.tmp` ⇒ 升级后目标 exe 彻底消失、安装器仍 `exit 0`；验收脚本只校验「存在的文件对不对」、不校验「该有的文件在不在」 ⇒ 双重漏网**（2026-11-03）
+
+- **现象**（用户截图）：弹框标题 `WeaselServer.exe`，正文「Windows 找不到文件 'WeaselServer.exe'」。
+  现场 `D:\Program Files\fluxing\weasel\` 下 `WeaselServer.exe` **不存在**，只剩 4 个
+  `WeaselServer.exe.bak-*`（全部 2,274,816 B、同一个 1.1.8 时间戳），**没有任何 `.old.tmp` 残留**；
+  同目录其余 1.1.9 产物齐全，`uninstall.exe` 的 mtime 证明安装器确实跑过且**退出码为 0**。
+- **定性**：**不是 L174（孤儿锁）复现**，而是 `output/install.nsi` 升级段自身**一直存在、此前未触发**的第二个缺陷。
+  触发条件是「安装器运行期间该 exe 正在运行」（本轮由回归脚本刚 `Start-Server` 后紧接跑安装器造成）。
+- **取证（读结构，不靠推测）**：`install.nsi` 的 L72-fix 升级段（`WeaselServer` / `WeaselDeployer` / `WeaselSetup` 三个）
+  原结构是：`IfFileExists` → `ClearErrors` → `Rename "$INSTDIR\<X>.exe" "...old.tmp"` →
+  **`IfErrors` 只出现在 Rename 失败的分支里**；Rename 成功的分支则裸跑 `File`（**无 `IfErrors`**）→
+  **无条件 `Delete "$INSTDIR\<X>.exe.old.tmp"`** → `ClearErrors`。
+- **根因**：`Rename` 与 `File` 是**两次独立的 I/O，各有各的失败**。Rename 成功但 `File` 写失败
+  （目标仍被占用 / 杀软拦截 / `SetOverwrite try` 静默跳过）时：旧文件已被搬走、新文件没写上、
+  旧文件又被无条件删掉 ⇒ **净效果 = 目标 exe 彻底消失**，而 NSIS 静默模式退出码仍是 0。
+  「有条件搬到别处、无条件删备份」= 失败时净损失。
+- **修法**：`File` 之后立刻 `IfErrors 0 <X>_rename_ok` —— 失败就把 `.old.tmp` **Rename 回原名**，
+  再 `StrCpy $FluxingDegraded 1` + `DetailPrint`，`Goto <X>_done` 跳出；成功才走 `<X>_rename_ok:` 删旧副本。
+  收尾 sweep 的 `Delete .old.tmp` 一并加 `${If} ${FileExists} "$INSTDIR\<X>.exe"` 守卫。
+  落地方式仍是**字节级补丁 + 锚点计数断言 + 幂等复跑**（`tmp/patch-installer-upgrade-rollback.py`），
+  不手改（L09：UTF-8 BOM + 100% CRLF）。
+- **预防 = 两层静态齿，不做运行时复现**（复现该故障需要在「Rename 成功后瞬间加锁」，不可确定性构造）：
+  ① `scripts/gate/lib/GateChecks.ps1` 新增 `Test-InstallerUpgradeRollback`，注册为 L0 检查项
+  `installer-upgrade-rollback`，对三个 exe 各断言：`IfErrors 0 <X>_rename_ok` 存在且 label 恰好 1 次、
+  `Rename .old.tmp` 回原名位于 guard 之后 `done` 之前、最后一次 `Delete .old.tmp` 前 2 行内有 `FileExists` 守卫。
+  **4 条变异**（删 IfErrors / 删 Rename / 删尾部守卫 / 删收尾 Delete）全部翻红，控制组保持绿。
+  ② `scripts/install/verify-installed.ps1` 新增 §0「必备文件存在性」：5 个必备 exe 缺一即计入 `problems`，
+  长度 ≤ 0 也报；`*.old.tmp` 残留记入 `notes`（说明上次写入被打断或回滚未完成，需人看但不等于安装失败）。
+  用 `tmp\fake-install`（故意缺 `WeaselServer.exe`）验证有牙 → `exit 1`。
+- **为什么要两层**：静态齿保证「源码里不能再把回滚删掉」，存在性校验保证「装完的用户机器上真的能判出来」；
+  两者互不替代 —— 只做前者，一个被篡改的安装包仍能装出一台坏机器。
+- **可迁移规则 1**：**「先搬走旧文件、再写新文件」的升级流程，写失败必须把旧文件搬回原位**。
+  任何「搬走旧文件后无条件删备份」的分支都是「失败即净损失」，必须改成「先确认新文件写成功，再删备份」。
+- **可迁移规则 2**：**验收脚本不能只校验「存在的文件内容对不对」，必须校验「该存在的文件在不在」**。
+  只比哈希的脚本在文件消失时会**沉默**（没有候选就没有可比的哈希）。缺文件是比内容错更严重的一类故障，
+  必须有独立的、不依赖构建产物的「必备文件清单」维度。
+- **可迁移规则 3**：**NSIS 的 `SetOverwrite try` + 静默模式 = 失败静默**。凡是「必须写成功」的文件，
+  `File` 之后必须有 `IfErrors` 且失败有兜底，**不能靠安装器退出码判断安装是否成功**（本轮退出码 0、
+  注册表写到尾、文件却没写）。
+- **可迁移规则 4**：**在别人的生产安装目录上做破坏性验收必须有 try/finally 还原**。本轮的直接执行者
+  `tmp/run-0032-verify-v3.ps1`（同型：`tmp/run-0032-verify.ps1`）直接对 `D:\Program Files\fluxing\weasel\`
+  做 `Copy-Item -Force` 覆盖，**全脚本无 try/finally、无 exe 还原段** ⇒ 破坏现场后无法自愈。
+  破坏性验收一律：先备份到**工作区内的沙箱副本**，或只走安装器；不要直接改写生产目录。
+

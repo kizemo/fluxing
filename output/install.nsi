@@ -895,7 +895,17 @@ program_files:
       Goto WeaselServer_done
     ${EndIf}
     ; Rename 成功,旧文件已经不在
+    ; L176: File 失败必须回滚 —— 否则「旧文件已改名 + 新文件没写上
+    ; + 随后 Delete .old.tmp」= 该 exe 从安装目录彻底消失, 且退出码仍为 0。
+    ClearErrors
     File "Win32\WeaselServer.exe"
+    IfErrors 0 WeaselServer_rename_ok
+    ClearErrors
+    Rename "$INSTDIR\WeaselServer.exe.old.tmp" "$INSTDIR\WeaselServer.exe"
+    StrCpy $FluxingDegraded 1
+    DetailPrint "Fluxing: WeaselServer.exe write failed; rolled back to previous binary."
+    Goto WeaselServer_done
+  WeaselServer_rename_ok:
     Delete "$INSTDIR\WeaselServer.exe.old.tmp"
     ClearErrors
   ${Else}
@@ -938,7 +948,17 @@ program_files:
       SetOverwrite on
       Goto WeaselDeployer_done
     ${EndIf}
+    ; L176: File 失败必须回滚 —— 否则「旧文件已改名 + 新文件没写上
+    ; + 随后 Delete .old.tmp」= 该 exe 从安装目录彻底消失, 且退出码仍为 0。
+    ClearErrors
     File "Win32\WeaselDeployer.exe"
+    IfErrors 0 WeaselDeployer_rename_ok
+    ClearErrors
+    Rename "$INSTDIR\WeaselDeployer.exe.old.tmp" "$INSTDIR\WeaselDeployer.exe"
+    StrCpy $FluxingDegraded 1
+    DetailPrint "Fluxing: WeaselDeployer.exe write failed; rolled back to previous binary."
+    Goto WeaselDeployer_done
+  WeaselDeployer_rename_ok:
     Delete "$INSTDIR\WeaselDeployer.exe.old.tmp"
     ClearErrors
   ${Else}
@@ -966,7 +986,17 @@ program_files:
       SetOverwrite on
       Goto WeaselSetup_done
     ${EndIf}
+    ; L176: File 失败必须回滚 —— 否则「旧文件已改名 + 新文件没写上
+    ; + 随后 Delete .old.tmp」= 该 exe 从安装目录彻底消失, 且退出码仍为 0。
+    ClearErrors
     File "WeaselSetup.exe"
+    IfErrors 0 WeaselSetup_rename_ok
+    ClearErrors
+    Rename "$INSTDIR\WeaselSetup.exe.old.tmp" "$INSTDIR\WeaselSetup.exe"
+    StrCpy $FluxingDegraded 1
+    DetailPrint "Fluxing: WeaselSetup.exe write failed; rolled back to previous binary."
+    Goto WeaselSetup_done
+  WeaselSetup_rename_ok:
     Delete "$INSTDIR\WeaselSetup.exe.old.tmp"
     ClearErrors
   ${Else}
@@ -988,11 +1018,17 @@ program_files:
   ClearErrors
   Delete "$INSTDIR\weaselx64.dll.old.tmp"
   ClearErrors
+  ${If} ${FileExists} "$INSTDIR\WeaselServer.exe"
   Delete "$INSTDIR\WeaselServer.exe.old.tmp"
+  ${EndIf}
   ClearErrors
+  ${If} ${FileExists} "$INSTDIR\WeaselDeployer.exe"
   Delete "$INSTDIR\WeaselDeployer.exe.old.tmp"
+  ${EndIf}
   ClearErrors
+  ${If} ${FileExists} "$INSTDIR\WeaselSetup.exe"
   Delete "$INSTDIR\WeaselSetup.exe.old.tmp"
+  ${EndIf}
   ClearErrors
 
   File "Win32\rime.dll"
