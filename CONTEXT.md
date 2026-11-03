@@ -118,6 +118,7 @@ specs. Use these strings verbatim when searching or filing issues.
 | **RELEASE_BUILD=1** | Required in `env.bat` for release builds (L10 §6 — `git describe` is unreliable) |
 | **PPL caveat** | New WeaselServer.exe requires user logout/reboot to load (L17/L18) |
 | **`/D=` flag** | NSIS silent-install `InstallDir` override. L13/L17: silent install requires explicit `/D=`; `InstallDirRegKey` runs before `.onInit` |
+| **自家 UI 进程** | 本 fork 自带的用户界面程序（如用户短语界面 `FluxingPhrasesDialog.exe`）。它加载 `weasel.dll`，因此会发出与「用户真的切走输入法」**完全同形**的 `focus_in` / `remove_session` / `focus_out` 事件，事件顺序无法区分二者。ADR 0032 起改用 IPC 会话**自报的 `client_app`**（小写 exe 名）做身份判定：自家 UI 的 IME 生命周期事件不再请求显示、不再请求收起快捷设置栏，也不改变 `m_fluxing_presence`。判定为纯函数，位于 `include/WeaselIPC.h` 的 `namespace fluxing` 块，生产代码与 `test/TestWeaselIPC` 同源 |
 
 ### 3.4 Engineering-skill terms
 

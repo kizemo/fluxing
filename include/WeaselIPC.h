@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <functional>
 #include <memory>
+#include <string>
 #include <KeyEvent.h>
 
 #define WEASEL_IPC_WINDOW L"WeaselIPCWindow_1.0"
@@ -226,6 +227,91 @@ inline FluxingPresence UpdateFluxingPresence(FluxingPresence prev,
 inline bool ShouldShowQuickPanelForPresence(FluxingPresence presence) {
   return presence != FluxingPresence::kAbsent;
 }
+
+// ===== ADR 0032: 自家 UI 进程的 IME 生命周期不得影响快捷设置栏 =====
+//
+// 背景(lessons L171):「用户短语」窗口是独立进程 FluxingPhrasesDialog.exe,
+// 它自己加载 weasel.dll(TSF tip)。于是它的一次「窗口销毁」会顺着 tip 生命周期
+// 发出 focus_in(profile) -> remove_session(active) -> focus_out(param=1) ——
+// 与「用户真的切到别的输入法」的事件序列**完全同形**,顺序判据不可用。
+//
+// 判据改为**客户端身份**:IPC 会话在 StartSession 时自报 session.client_app
+// (小写的宿主 exe 名),服务端本来就拿它做按应用生效的选项(既有先例:
+// _RefreshTrayIcon 就是按 "explorer.exe" 特判)。自家 UI 进程的身份因此是
+// **已知事实**,不需要给 IPC 协议加字段 ⇒ 线格式零变化 ⇒ deployer 端零改动。
+//
+// 判定逻辑全部放共享纯函数,生产代码与 TestWeaselIPC 的 /verify-own-ui-events
+// 共用同一份口径(宪法 R7),不要在别处再抄一遍。
+namespace fluxing {
+
+// 自家 UI 进程的可执行文件名(规范大小写,全仓唯一字面量)。
+inline const char* OwnUiClientExeName() { return "FluxingPhrasesDialog.exe"; }
+
+// ASCII 小写转换(不依赖 <cctype> 的 locale 行为)。
+inline char ToLowerAscii(char c) {
+  return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+// 身份判定用的小写形式。session.client_app 的口径是「全小写 exe 名」,
+// 所以判定前把客户端自报的名字也转小写,两边必须用同一套转换。
+inline std::string OwnUiClientExeNameLower() {
+  std::string s;
+  for (const char* p = OwnUiClientExeName(); *p; ++p)
+    s.push_back(ToLowerAscii(*p));
+  return s;
+}
+
+// 宽字符形式(拼可执行文件路径用;这个名字只含 ASCII)。
+inline std::wstring OwnUiClientExeNameW() {
+  std::wstring w;
+  for (const char* p = OwnUiClientExeName(); *p; ++p)
+    w.push_back((wchar_t)(unsigned char)*p);
+  return w;
+}
+
+// IPC 会话归属的两类客户端。
+enum class IpcClientKind {
+  kUserApp,  // 普通用户应用(未知的、空的名字都归这一类 = 保持既有行为)
+  kOwnUi,    // 本产品自有 UI 进程
+};
+
+inline IpcClientKind ClassifyIpcClient(const std::string& client_app) {
+  std::string lower;
+  lower.reserve(client_app.size());
+  for (size_t i = 0; i < client_app.size(); ++i)
+    lower.push_back(ToLowerAscii(client_app[i]));
+  if (lower == OwnUiClientExeNameLower())
+    return IpcClientKind::kOwnUi;
+  return IpcClientKind::kUserApp;
+}
+
+inline bool IsOwnUiClient(IpcClientKind kind) {
+  return kind == IpcClientKind::kOwnUi;
+}
+
+// 自家 UI 进程的 profile 激活**不请求显示**快捷设置栏。
+inline bool ShouldShowQuickPanelOnFocusInForClient(DWORD param,
+                                                    IpcClientKind kind) {
+  if (IsOwnUiClient(kind))
+    return false;
+  return ShouldShowQuickPanelOnFocusIn(param);
+}
+
+// 自家 UI 进程的 FocusOut**不请求收起**快捷设置栏(连「常驻」态也不收)。
+inline bool ShouldHideQuickPanelOnFocusOutForClient(DWORD param,
+                                                     bool always_show,
+                                                     IpcClientKind kind) {
+  if (IsOwnUiClient(kind))
+    return false;
+  return ShouldHideQuickPanelOnFocusOut(param, always_show);
+}
+
+// 自家 UI 的会话结束**不等于**「火流猩离场」:不得改在场状态,不得收起面板。
+inline bool ShouldTreatSessionEndAsFluxingAbsent(IpcClientKind kind) {
+  return !IsOwnUiClient(kind);
+}
+
+}  // namespace fluxing
 
 namespace weasel {
 struct PipeMessage {

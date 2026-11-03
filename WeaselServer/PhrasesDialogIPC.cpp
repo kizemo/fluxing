@@ -10,6 +10,7 @@
 #include "FluxingTextInjector.h"  // spec 097 诉求 2: 剪贴板 + 粘贴快捷键上屏
 #include "ForegroundCapture.h"  // v0.19.0.52 (Phase K3 T011 Option B): InjectText 抢 foreground
 #include <WeaselUtility.h>      // WeaselUserDataPath (懒初始化 yaml path 用)
+#include <WeaselIPC.h>          // ADR 0032: 自家 UI exe 名的共享常量
 #include <fstream>
 #include <iostream>
 #include <filesystem>
@@ -294,7 +295,9 @@ bool PhrasesDialogIPC::LaunchPhrasesDialog(const std::wstring& pipeName) {
   if (lastSlash != std::wstring::npos) {
     dir = dir.substr(0, lastSlash);
   }
-  std::wstring phrasesExe = dir + L"\\FluxingPhrasesDialog.exe";
+  // ADR 0032: exe 名取自共享常量(单一真相源)—— 与服务端「自家 UI 身份」
+  // 判定用的是同一个名字。
+  std::wstring phrasesExe = dir + L"\\" + fluxing::OwnUiClientExeNameW();
 
   // 检查 exe 是否存在
   if (!std::filesystem::exists(phrasesExe)) {

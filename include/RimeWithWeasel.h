@@ -155,7 +155,13 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
                                 bool ignore_app_name = false);
   bool _ShowMessage(weasel::Context& ctx, weasel::Status& status);
   bool _Respond(WeaselSessionId ipc_id, EatLine eat);
-  void _ReadClientInfo(WeaselSessionId ipc_id, LPWSTR buffer);
+  // ADR 0032: 读出本次会话的客户端身份(小写 exe 名),供「自家 UI 进程」判定。
+  std::string _ReadClientInfo(WeaselSessionId ipc_id, LPWSTR buffer);
+  // ADR 0032: 记录 / 查询 IPC 会话的客户端归属。
+  // 身份必须活过 RemoveSession(TSF 的 Deactivate 先 EndSession 再发 FocusOut),
+  // 因此 RemoveSession 不删这张表;ipc_id 会被回收复用,所以 AddSession 先清同 id 旧值。
+  void _RememberClientKind(WeaselSessionId ipc_id, fluxing::IpcClientKind kind);
+  fluxing::IpcClientKind _ClientKind(WeaselSessionId ipc_id) const;
   // spec 090: 入参多带一个会话标识,用于按当前方案加载对应的屏蔽名单,并在
   // 同一次遍历里产出「可见页内索引 -> 引擎页内索引」映射(FR-005 / FR-006)。
   void _GetCandidateInfo(weasel::CandidateInfo& cinfo,
@@ -227,6 +233,10 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   static std::string m_option_name;
   static std::mutex m_notifier_mutex;
   SessionStatusMap m_session_status_map;
+  // ADR 0032: IPC 会话 -> 客户端归属。身份必须活过 RemoveSession(FocusOut 在
+  // 其后到达),所以不随会话结束删除;用容量上限(kMaxRememberedClientKinds)
+  // 防无界增长。
+  std::map<WeaselSessionId, fluxing::IpcClientKind> m_session_client_kinds;
   // spec 077: per-session Shift state machine for release-only select.
   std::unordered_map<WeaselSessionId, ShiftState> m_shiftState;
   bool m_current_dark_mode;

@@ -239,7 +239,17 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
   session_status.session_id = session_id;
   // spec 077: ensure ShiftState is fresh per session (R2 cross-session safety).
   m_shiftState[ipc_id] = ShiftState{};
-  _ReadClientInfo(ipc_id, buffer);
+  // ADR 0032: 记录本次会话的客户端身份。ipc_id 会被回收复用
+  // (见 _GenerateNewWeaselSessionId),所以必须先清掉同 id 的旧身份,
+  // 否则复用后的用户应用会被误判成自家 UI。
+  const std::string client_app = _ReadClientInfo(ipc_id, buffer);
+  _RememberClientKind(ipc_id, fluxing::ClassifyIpcClient(client_app));
+  if (fluxing::IsOwnUiClient(_ClientKind(ipc_id))) {
+    fluxing::diag::AppendLine(
+        "server",
+        "own_ui_session ipc_id=" + std::to_string(ipc_id) + " app=" +
+            client_app);
+  }
 
   RIME_STRUCT(RimeStatus, status);
   if (rime_api->get_status(session_id, &status)) {
@@ -279,12 +289,20 @@ DWORD RimeWithWeaselHandler::RemoveSession(WeaselSessionId ipc_id) {
   // 错误静默吞成 0)。会话消失本身是不可伪造的事实:活动会话没了,火流猩就
   // 不在场了,快捷面板必须收起。
   if (ipc_id == m_active_session) {
-    m_fluxing_presence.store(FluxingPresence::kAbsent,
-                              std::memory_order_relaxed);
-    if (m_onHideQuickPanel)
-      m_onHideQuickPanel();
-    fluxing::diag::AppendLine("server",
-                               "remove_session active presence=absent");
+    // ADR 0032: 自家 UI(用户短语窗口)的会话结束**不代表**「用户切走了输入法」。
+    // 它只是自家窗口被销毁,必须既不改在场状态,也不收起快捷设置栏(L171)。
+    const fluxing::IpcClientKind client_kind = _ClientKind(ipc_id);
+    if (fluxing::ShouldTreatSessionEndAsFluxingAbsent(client_kind)) {
+      m_fluxing_presence.store(FluxingPresence::kAbsent,
+                                std::memory_order_relaxed);
+      if (m_onHideQuickPanel)
+        m_onHideQuickPanel();
+      fluxing::diag::AppendLine("server",
+                                 "remove_session active presence=absent");
+    } else {
+      fluxing::diag::AppendLine("server",
+                                 "remove_session active own_ui presence=kept");
+    }
   }
   TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
@@ -540,7 +558,17 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
   //
   // profile 位与 app-focus 位同时在场时取 profile 优先。
   const FocusInKind focus_kind = ClassifyFocusIn(client_caps);
-  if (ShouldShowQuickPanelOnFocusIn(client_caps)) {
+  const fluxing::IpcClientKind client_kind = _ClientKind(ipc_id);
+  // ADR 0032: 自家 UI 进程(用户短语窗口)的 profile 激活**不是**「用户切到了
+  // 火流猩」,既不请求显示快捷设置栏,也不改在场状态(L171)。
+  if (fluxing::IsOwnUiClient(client_kind) &&
+      focus_kind == FocusInKind::kProfileActivated) {
+    fluxing::diag::AppendLine("server",
+                               "focus_in own_ui profile presence=kept");
+    return;
+  }
+  if (fluxing::ShouldShowQuickPanelOnFocusInForClient(client_caps,
+                                                      client_kind)) {
     if (m_active_session != 0 && ipc_id != m_active_session) {
       DLOG(INFO) << "profile activated ignored, not the active session";
       return;
@@ -582,6 +610,15 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
   if (m_ui)
     m_ui->Hide();
   m_active_session = 0;
+  // ADR 0032: 自家 UI 进程的 FocusOut 是「自家窗口没了」,不是「用户切走了
+  // 输入法」。必须不改在场状态、不收起快捷设置栏(L171)。
+  if (fluxing::IsOwnUiClient(_ClientKind(ipc_id))) {
+    fluxing::diag::AppendLine(
+        "server",
+        std::string("focus_out param=") + std::to_string(param) +
+            " presence=kept own_ui=1");
+    return;
+  }
   // spec 091 / ADR 0024:FocusOut 有两种语义,wParam 带标志区分 ——
   //
   //   param 带 PROFILE_DEACTIVATED => 用户切到了别的输入法。Fluxing 已经
@@ -667,8 +704,8 @@ void RimeWithWeaselHandler::OnNotify(void* context_object,
   }
 }
 
-void RimeWithWeaselHandler::_ReadClientInfo(WeaselSessionId ipc_id,
-                                            LPWSTR buffer) {
+std::string RimeWithWeaselHandler::_ReadClientInfo(WeaselSessionId ipc_id,
+                                                   LPWSTR buffer) {
   std::string app_name;
   // parse request text
   wbufferstream bs(buffer, WEASEL_IPC_BUFFER_LENGTH);
@@ -707,6 +744,39 @@ void RimeWithWeaselHandler::_ReadClientInfo(WeaselSessionId ipc_id,
   rime_api->set_option(session_id, "inline_preedit", Bool(inline_preedit));
   // show soft cursor on weasel panel but not inline
   rime_api->set_option(session_id, "soft_cursor", Bool(!inline_preedit));
+  // ADR 0032: 把客户端自报的名字交回去,调用方据此判定「自家 UI 进程」。
+  return app_name;
+}
+
+namespace {
+// ADR 0032: 客户端身份表的容量上限。身份表不随会话结束删除(必须活过
+// RemoveSession),所以自己封顶,防长时间运行无界增长。
+const size_t kMaxRememberedClientKinds = 256;
+}  // namespace
+
+// ADR 0032: 记住某个 IPC 会话的客户端归属。
+//
+// 为什么身份必须活过 RemoveSession:TSF 的 Deactivate 路径是「先 EndSession
+// (→ RemoveSession)再发 FocusOut(PROFILE_DEACTIVATED)」,FocusOut 到达时
+// 会话已经销毁 —— 若那时身份已被删,自家 UI 的 FocusOut 就会被当成
+// 「用户切走了输入法」(L171 的 bug 现场)。
+void RimeWithWeaselHandler::_RememberClientKind(
+    WeaselSessionId ipc_id, fluxing::IpcClientKind kind) {
+  m_session_client_kinds.erase(ipc_id);
+  m_session_client_kinds[ipc_id] = kind;
+  if (m_session_client_kinds.size() > kMaxRememberedClientKinds) {
+    // 删最小的 id(最老的会话)。最坏情况只是某条身份丢失,退回到
+    // 「按普通用户应用处理」—— 那是安全方向(行为与改动前一致)。
+    m_session_client_kinds.erase(m_session_client_kinds.begin());
+  }
+}
+
+fluxing::IpcClientKind RimeWithWeaselHandler::_ClientKind(
+    WeaselSessionId ipc_id) const {
+  auto it = m_session_client_kinds.find(ipc_id);
+  if (it == m_session_client_kinds.end())
+    return fluxing::IpcClientKind::kUserApp;  // 未知 = 保持既有行为
+  return it->second;
 }
 
 void RimeWithWeaselHandler::_GetCandidateInfo(CandidateInfo& cinfo,

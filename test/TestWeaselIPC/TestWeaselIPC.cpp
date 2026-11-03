@@ -3,6 +3,7 @@
 
 #include "stdafx.h"
 #include <WeaselIPC.h>
+#include <stdlib.h>
 #include <RimeWithWeasel.h>
 
 #include <boost/interprocess/streams/bufferstream.hpp>
@@ -22,6 +23,8 @@ CAppModule _Module;
 
 int console_main();
 int verify_console_session_main();
+int verify_own_ui_events_main();
+int hold_presence_main(int hold_ms, int focusout_at_ms);
 int client_main();
 int server_main();
 int verify_quickpanel_main();
@@ -105,6 +108,20 @@ int _tmain(int argc, _TCHAR* argv[]) {
     // 启动留痕是否真的落进诊断文件。只读判定与写自己的探针行,
     // 不启动/不杀任何 WeaselServer.exe。
     return verify_console_session_main();
+  } else if (argc > 1 && !wcscmp(L"/verify-own-ui-events", argv[1])) {
+    // ADR 0032: 自家 UI 进程(用户短语窗口)的 IME 生命周期不得影响快捷设置栏。
+    // 生产代码与本测试共用 include/WeaselIPC.h 的同一份纯函数 (constitution R7)。
+    return verify_own_ui_events_main();
+  } else if (argc > 1 && !wcscmp(L"/hold-presence", argv[1])) {
+    // ADR 0032 验收探针的「保持在场」客户端:以**普通用户应用**身份连上服务端,
+    // 发 FocusIn(PROFILE_ACTIVATED) 把「火流猩在场」置为 present 并请求显示
+    // 快捷设置栏;到点再发 FocusOut(PROFILE_DEACTIVATED)(= 用户真的切到别的
+    // 输入法)把面板收起来,用来做反向对照。
+    int hold_ms = 14000;
+    int focusout_at_ms = 9000;
+    if (argc > 2) hold_ms = _wtoi(argv[2]);
+    if (argc > 3) focusout_at_ms = _wtoi(argv[3]);
+    return hold_presence_main(hold_ms, focusout_at_ms);
   }
 
   return -1;
@@ -1185,4 +1202,122 @@ int verify_console_session_main() {
                               : "verify-console-session: FAIL")
             << std::endl;
   return failures == 0 ? 0 : 1;
+}
+
+// ADR 0032: 自家 UI 进程的身份判定 + 快捷设置栏联动口径。
+//
+// 为什么这些断言「有牙」:
+//   * 生产代码(RimeWithWeasel.cpp 的 FocusIn / FocusOut / RemoveSession)调的就是
+//     这几个纯函数,不是另抄一份(include/WeaselIPC.h,constitution R7);
+//   * 断言同时覆盖**两个方向**:自家 UI 不影响面板,用户应用仍按老口径影响面板。
+//     只测前一半的话,把判定反过来(自家 UI 也收起)测试照样会绿 —— 那是假绿;
+//   * 变异反证:把 IsOwnUiClient 的判定取反,第 2/3/4 组断言必须翻红。
+//
+// 本模式是纯函数测试:不需要跑服务端,不写任何文件,不碰进程。
+int verify_own_ui_events_main() {
+  int failures = 0;
+  const auto expect = [&](bool cond, const char* what) {
+    if (!cond) {
+      ++failures;
+      std::cout << "  FAIL: " << what << std::endl;
+    }
+  };
+
+  const DWORD kActivated = WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED;
+  const DWORD kDeactivated = WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED;
+  const fluxing::IpcClientKind kOwnUi = fluxing::IpcClientKind::kOwnUi;
+  const fluxing::IpcClientKind kUserApp = fluxing::IpcClientKind::kUserApp;
+
+  // --- 1. 身份判定 ---
+  expect(fluxing::ClassifyIpcClient("fluxingphrasesdialog.exe") == kOwnUi,
+         "the phrases dialog exe is classified as our own UI");
+  expect(fluxing::ClassifyIpcClient("FluxingPhrasesDialog.exe") == kOwnUi,
+         "the classification is case insensitive");
+  expect(fluxing::ClassifyIpcClient("notepad.exe") == kUserApp,
+         "a normal application is classified as a user app");
+  expect(fluxing::ClassifyIpcClient("") == kUserApp,
+         "an unknown client falls back to the user-app behaviour");
+  expect(std::string(fluxing::OwnUiClientExeName()) ==
+             "FluxingPhrasesDialog.exe",
+         "the canonical own-UI exe name is the one on disk");
+  expect(fluxing::OwnUiClientExeNameLower() ==
+             "fluxingphrasesdialog.exe",
+         "the lower-case form matches the session.client_app convention");
+
+  // --- 2. FocusIn:自家 UI 的 profile 激活不请求显示面板 ---
+  expect(!fluxing::ShouldShowQuickPanelOnFocusInForClient(kActivated, kOwnUi),
+         "our own UI must not request the QuickPanel");
+  expect(fluxing::ShouldShowQuickPanelOnFocusInForClient(kActivated, kUserApp),
+         "a user app switching to Fluxing still requests the QuickPanel");
+  expect(!fluxing::ShouldShowQuickPanelOnFocusInForClient(0, kUserApp),
+         "an ordinary focus change never requests the QuickPanel");
+
+  // --- 3. FocusOut:自家 UI 的失焦不收起面板;用户应用仍按老口径收起 ---
+  expect(!fluxing::ShouldHideQuickPanelOnFocusOutForClient(kDeactivated, false,
+                                                            kOwnUi),
+         "our own UI must not hide the QuickPanel");
+  expect(!fluxing::ShouldHideQuickPanelOnFocusOutForClient(kDeactivated, true,
+                                                            kOwnUi),
+         "our own UI must not hide the QuickPanel even in always-show mode");
+  expect(fluxing::ShouldHideQuickPanelOnFocusOutForClient(kDeactivated, false,
+                                                          kUserApp),
+         "a user app switching away hides the QuickPanel");
+  expect(fluxing::ShouldHideQuickPanelOnFocusOutForClient(kDeactivated, true,
+                                                          kUserApp),
+         "a user app switching away hides the QuickPanel even in always-show "
+         "mode (spec 091)");
+  expect(fluxing::ShouldHideQuickPanelOnFocusOutForClient(0, false, kUserApp),
+         "an ordinary focus loss hides the QuickPanel when not always-show");
+  expect(!fluxing::ShouldHideQuickPanelOnFocusOutForClient(0, true, kUserApp),
+         "an ordinary focus loss keeps the QuickPanel in always-show mode");
+
+  // --- 4. 会话结束:自家 UI 不等于「火流猩离场」 ---
+  expect(!fluxing::ShouldTreatSessionEndAsFluxingAbsent(kOwnUi),
+         "our own UI session end is not a Fluxing-absent signal");
+  expect(fluxing::ShouldTreatSessionEndAsFluxingAbsent(kUserApp),
+         "a user app session end still means Fluxing is gone");
+
+  std::cout << (failures == 0 ? "verify-own-ui-events: PASS"
+                              : "verify-own-ui-events: FAIL")
+            << std::endl;
+  return failures == 0 ? 0 : 1;
+}
+// ADR 0032 验收探针:「保持在场」客户端。
+//
+// 为什么需要它:真机验收必须在「快捷设置栏本来就该可见」的正常场景下复现。
+// 而修复之后,自家 UI 的 focus_in(profile) 不再请求显示面板(那正是被抑制的
+// 副作用),于是「先弹面板、再开短语窗」的老探针前提已经不存在 —— 面板从没
+// 显示过,探针却会报「没复现」,那是假绿。本客户端以**普通用户应用**身份
+// 把在场状态置成 present 并请求显示面板,恢复真实前提。
+//
+// 客户端身份口径:weasel::ClientImpl 把**宿主进程 exe 名**(小写)写进
+// session.client_app(WeaselClientImpl.cpp:30-37 / :238),所以本进程自报
+// "testweaselipc.exe" ⇒ 服务端判定为普通用户应用,与自家 UI 无关。
+int hold_presence_main(int hold_ms, int focusout_at_ms) {
+  weasel::Client client;
+  if (!client.Connect()) {
+    std::cerr << "hold-presence: server not running." << std::endl;
+    return 3;
+  }
+  client.StartSession();
+  if (!client.HasSession()) {
+    std::cerr << "hold-presence: StartSession failed." << std::endl;
+    return 3;
+  }
+  std::cout << "hold-presence: session started, FocusIn(PROFILE_ACTIVATED)"
+            << std::endl;
+  client.FocusIn(WEASEL_IPC_FOCUS_IN_FLAG_PROFILE_ACTIVATED);
+  if (focusout_at_ms > 0 && focusout_at_ms < hold_ms) {
+    Sleep(static_cast<DWORD>(focusout_at_ms));
+    bool delivered =
+        client.FocusOut(WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED);
+    std::cout << "hold-presence: FocusOut(PROFILE_DEACTIVATED) delivered="
+              << (delivered ? 1 : 0) << std::endl;
+    Sleep(static_cast<DWORD>(hold_ms - focusout_at_ms));
+  } else {
+    Sleep(static_cast<DWORD>(hold_ms));
+  }
+  client.EndSession();
+  std::cout << "hold-presence: session ended." << std::endl;
+  return 0;
 }

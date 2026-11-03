@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [1.1.8] - 2026-11-03
+
+### fix(WeaselIPC): 按 Esc 退出用户短语界面不再连带收起快捷设置栏（ADR 0032）
+
+- **症状**：打开用户短语界面后按 Esc 关闭，快捷设置栏（QuickPanel）跟着一起消失；长显态与瞬时态都会发生。
+- **根因**：用户短语界面进程（`FluxingPhrasesDialog.exe`）加载 `weasel.dll`，其 tip 生命周期会发出与「用户真的切走输入法」**完全同形**的 `focus_in` / `remove_session` / `focus_out` 事件序列。服务端若按事件顺序判断，两种情形不可区分 ⇒ 自家 UI 的会话结束被当成「用户切走」⇒ 收起快捷设置栏。
+- **修复**：改用 IPC 会话**自报的 `client_app`**（小写 exe 名）判定身份。新增 `include/WeaselIPC.h` 的 `namespace fluxing` 纯函数块（`OwnUiClientExeName` / `ClassifyIpcClient` / `IsOwnUiClient` / `ShouldShowQuickPanelOnFocusInForClient` / `ShouldHideQuickPanelOnFocusOutForClient` / `ShouldTreatSessionEndAsFluxingAbsent`），生产代码与 `test/TestWeaselIPC` 同源（constitution R7）。自家 UI 的三条 IME 生命周期路径（FocusIn profile / FocusOut / RemoveSession(active)）不再请求显示、不再请求收起、不改变 `m_fluxing_presence`；`_UpdateUI`、`m_active_session` 赋值与候选窗隐藏行为保持原样。
+- **线格式零变化**：不新增字段、不改 `include/WeaselIPCData.h` ⇒ deployer 端零改动（ADR 0032 已显式记录）。
+- **反向口径未破坏**：用户真的切到别的输入法时，快捷设置栏**仍然**收起（spec 091/094），已由探针的反向对照阶段验证。
+- **验证**：`TestWeaselIPC /verify-own-ui-events` 真值表 PASS（exit 0）；真机探针（`tmp/quickpanel-evidence/ReproEsc.cs`，三阶段归因：A 自动隐藏对照 / B Esc 归因窗 / C 反向对照）在**长显态与瞬时态双模态**下均从 `BUG REPRODUCED` 变为 `NOT REPRODUCED`，同一探针对旧构建仍能抓出缺陷（探针有牙）。变异测试：`IsOwnUiClient` 判定取反后单测断言翻红。
+- **附带**：`WeaselServer/PhrasesDialogIPC.cpp` 改用共享常量，消除 exe 名字面量的第二份副本。
+
 ## [1.1.7] - 2026-11-03
 
 ### fix(WeaselServer): 快捷面板按窗口 DPI 缩放，150% 缩放下物理尺寸 245×48 修正为 368×72
