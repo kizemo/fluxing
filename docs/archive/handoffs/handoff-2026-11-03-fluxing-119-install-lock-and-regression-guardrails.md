@@ -305,6 +305,45 @@ L0 新增的第 13 项就是 `installer-upgrade-rollback`（PASS）。
 
 **本轮不做的事（避免告警疲劳的正确做法要单独设计）**：没有把 E.2/E.4 从 FAIL 改成 SKIP 来把门禁刷绿 —— 那正是 L176 记录的「静默跳过」反模式。把「环境能力缺失」与「产品缺陷」在报告里分成两类、并让覆盖缺口显式可见，是独立的一件事，需要改 `scripts/sandbox-gate` 的断言分类语义，本轮不动。
 
-## 9. 接力 prompt（一句话）
+## 11. 追加（2026-11-03 深夜·二）：下一阶段任务目标 = 快捷设置栏对标搜狗
 
-见 `F:\soft\00selfmade\rime_claude\docs\archive\prompts\prompt-next-session-2026-11-03-fluxing-119.md`。
+> **本节是下一阶段的任务目标本体。** 新会话从这里接手，不要另起方向。
+
+### 11.1 用户指令（2026-11-03 23:44）
+
+> 「下一阶段，参考逆向搜狗输入法，对快捷设置栏进行优化。请制定计划并执行。请把任务目标写入Handoff」
+
+同一条指令还要求：① 设定 2026-11-04 03:30 关机（**已执行**，`shutdown /s /t 13431`，RC=0，到点强制关闭应用，本会话与所有后台任务被终止）；② 更新完整 handoff + 一句话 prompt。
+
+### 11.2 本轮已交付（P0-0 立项完成）
+
+- **计划**：`F:\soft\00selfmade\rime_claude\.specify\specs\099-quickpanel-sogou-benchmark\spec.md` —— 任务目标、已有底座表、我方现状（实测）、搜狗侧可借鉴点（导出表级证据）、合规红线、6 条不可破坏的不变量、P0-1..P0-7 + P1 切片与验收判据、资源基线与门禁节奏、工具坑。
+- **执行清单**：同目录 `tasks.md` —— 每片带「先写失败测试」与收尾必做项。
+- 提交：`c6d2420 docs(specs): 立 099 快捷设置栏对标搜狗(spec+tasks)并写入交接卡下一阶段目标`（spec/tasks/prompt 三文件）；交接卡本段单独成提交。
+- **执行尚未开始**：P0-1..P0-7 均未动手。可立即开工且不依赖搜狗观察的是 **P0-3**（Account 占位槽是用户可见缺陷）、**P0-6**（装机版 DPI 复验收口 ROADMAP 的 T5）、**P0-7**（位置持久化）。
+
+### 11.3 接手时要知道的三件事
+
+1. **不重做逆向**。`F:\soft\00selfmade\rime_claude\docs\research\sogou-reverse-2026-11\`（提交 `ac69a4f`）已有 `REPORT.md` + `ROADMAP.md` + 21 份 `evidence\`；099 只做「快捷设置栏」这一条波次的细化，并复用 ADR 0030 的三数字基线与网络边界。
+2. **合规边界是项目定案，不是我的临时自限**：只读静态证据 + 黑盒行为观察，**不提取/不复用搜狗的二进制、资源、词库、`.cupf` 皮肤包与专有文案**（本仓库 GPL 系，抄资产污染许可）；**永不连接** `evidence\urls-hosts.txt` 内 185 主机；每条借鉴须在 spec 记「来源证据 + 差异化实现」。
+3. **P0-1 需要用户在场**：黑盒采集要点搜狗自己的状态栏/快捷设置面板，无法在沙箱内自动化，也不能拿我们的实现替它想象。
+
+### 11.4 环境事实（本轮实测，新会话可直接采信）
+
+- 搜狗已装本机：`16.8.0.5415`，`InstallLocation = D:\Program Files (x86)\SogouInput`；在跑 `SGTool` / `SogouCloud` / `SogouImeBroker`。UI 大件 = `16.8.0.5415\UIPlugin.dll`（11,595,648 B）、`SGIGuideHelper.exe`；组件内有 `soui-sys-resource.dll` ⇒ UI 框架疑为 SOUI（**推断，无伪代码**）。
+- 我方面板现状：`WeaselServer\QuickPanelDialog.{h,cpp}`（337 / 1687 行，v3-rev3），`kButtonCount = 4`，**hit==3 Account 为 no-op 占位**；缺槽位 tooltip / 键盘可达 / 位置持久化 / 中英语音状态回显。
+- 装机状态：`D:\Program Files\fluxing\weasel\` 5 个 exe 齐全，`WeaselServer.exe` = `1.1.9.0`（2,287,104 B，哈希与构建产物一致），`verify-installed` EXIT=0。注册表实际路径 `HKLM:\Software\WOW6432Node\Fluxing\Weasel`。
+- 门禁终态：L0 PASS(13/13) / L3 PASS(变异 7/7 KILLED) / L4 PASS / **L5 exit=1（仅两条环境能力断言红：沙箱无 `D:` 盘、无外网）**，日志 `F:\soft\00selfmade\rime_claude\tmp\gate-final-rollback.log`。
+
+### 11.5 本轮新增工具坑（勿重试）
+
+- `Select-String` **没有 `-Recurse` 参数**（实测报「找不到与参数名称 'Recurse' 匹配的参数」）⇒ 目录级内容搜索用 `grep` 工具。
+- `HKLM:\SOFTWARE\Microsoft\CTF\TIP\*\LanguageProfile\*` 按 `Description -match '搜狗'` 返回空 ⇒ 该路径无效。
+- Python 脚本里写 Windows 路径的三引号串**必须用 raw 字符串**：`...5415\UIPlugin.dll` 中的 `\U` 触发 `unicodeescape` SyntaxError（本轮踩到）。
+
+## 12. 接力 prompt（一句话）
+
+> 编号说明：原 §9「接力 prompt」在深夜追加 §10/§11 后顺延为末节 §12，内容与职能未变（§9 号位空出，属编排产物，不代表内容缺失）。
+
+- **接力 prompt（当前 = 下一阶段 099 快捷设置栏对标搜狗）**：`F:\soft\00selfmade\rime_claude\docs\archive\prompts\prompt-next-session-2026-11-04-quickpanel-sogou.md`
+- 上一阶段（1.1.9 安装器锁与回归护栏）的 prompt 仍在 `F:\soft\00selfmade\rime_claude\docs\archive\prompts\prompt-next-session-2026-11-03-fluxing-119.md`，仅供回溯。
