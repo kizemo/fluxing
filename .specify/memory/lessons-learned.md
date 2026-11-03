@@ -13578,3 +13578,51 @@ spec 097 诉求 3：快捷设置栏在**切换到其他输入法后仍留在屏�
   「我是否就在用户真正交互的那个会话里」，并把拒绝原因写进独立 append-only 诊断文件。
   远程桌面 / ToDesk 时代，多会话同时自启是常态；判定核心要抽成**可注入参数的纯函数**，
   否则这类缺陷在没有第二台机器的情况下永远测不到。
+
+## L171 - **「按 Esc 退出用户短语窗口」会连带收起快捷设置栏：根因是短语窗口销毁那一瞬被系统判成「用户已切走输入法」；ADR 0019 的「ESC 不收起」只管住了链路的一半**（2026-11-03）
+
+- **症状**：调出「用户短语」窗口（`Alt+.`）后按 `Esc` 关闭它，屏幕上的快捷设置栏
+  （QuickPanel）跟着一起消失。用户并没有切走输入法，面板却按「已切走」处理。
+- **运行时坐实（不是读码推测）**：自建探针 `tmp/quickpanel-evidence/ReproEsc.cs`
+  （先 `WM_COMMAND 40020` 显示面板 → 再 `WM_HOTKEY 9002` 走 `Alt+.` 同一条
+  路径调出短语窗口 → 注入**真实** `Esc` 键 → 逐 200 ms 采样两个窗口的可见性），
+  15:47:01~15:47:09 时间线：面板 `visible=True` → 短语窗口弹出后面板**连续 2 秒
+  仍为 True** → 注入 Esc 后 `panel.visible` 与 `phrases.visible` **同帧
+  True→False**，探针判定 `BUG REPRODUCED`。
+- **同刻的诊断留痕**（`%TEMP%\fluxing-profile-notify.log`，ADR 0029 决策 7 既有通道）
+  新增四行，顺序为
+  `[server] focus_in profile presence=present` →
+  `[server] remove_session active presence=absent` →
+  `[server] focus_out param=1 presence=absent` →
+  `[tsf] deactivated sent=1`。
+  `param=1` 即 `WEASEL_IPC_FOCUS_OUT_FLAG_PROFILE_DEACTIVATED`。
+- **完整链路**：短语窗口是**独立进程**（`FluxingPhrasesDialog.exe`），它自己
+  `SetForegroundWindow` 抢前台；`Esc` 销毁该窗口后前台回到原 app，Windows 在这一瞬
+  把 profile 状态判成「火流猩不在场」⇒ TSF 前端
+  (`WeaselTSF.cpp` `OnActivated` → `DecideProfileNotify` → `kNotifyDeactivated`)
+  发 `FocusOut(PROFILE_DEACTIVATED)` ⇒ server
+  (`RimeWithWeasel.cpp` `FocusOut`) 走
+  `ShouldHideQuickPanelOnFocusOut(param, AlwaysShowMode())` 判 true ⇒
+  **连长显态也收起**快捷设置栏。
+- **为什么 ADR 0019 拦不住（缺口的准确位置）**：0019 只在
+  `QuickPanelDialog::OnKeyDown` 里吞掉「**面板自己**收到的 `Esc`」；
+  它管不到「**别的窗口**收到 `Esc` → 焦点/profile 事件 → 服务端隐藏面板」
+  这条链路。两处口径各管一段，缺口在中间 —— 这就是同一句「ESC 不收起快捷设置栏」
+  在两条路径上表现不一致的原因。
+- **诊断口径的坑**：单看 `focus_out param=1` 会误判成「用户真的切走了输入法」，
+  实际是**自家 UI 造成的焦点往返**。当前 IPC 协议**无法区分**
+  「用户切到别的输入法」与「切到火流猩自己的 UI 窗口」——
+  协议里没有第三个态（spec 091/094 只定义了 `PROFILE_ACTIVATED` /
+  `PROFILE_DEACTIVATED` 两个 profile 位）。
+- **可迁移规则**：凡是**本产品自有 UI 是独立进程**的输入法 / 托盘类程序，
+  必须把「焦点离开是因为我自己的窗口」与「用户真的切走了」在协议层分开；
+  否则「切走必隐」这类守卫必然误伤自家 UI 的正常往返，且现象发生在
+  **另一个进程**里，排查时极易归错因。
+- **本条只坐实根因并留证，尚未修**：修复必然触及 IPC 语义 ⇒ 按 CLAUDE.md §2
+  需 **server / TSF / deployer 三端 + 一个 ADR + 一个 `test/TestWeaselIPC/*`
+  测试**一次性提交；修复方案与取舍留给下一阶段决策。
+- **附：本文件的真实编码是 UTF-8 with BOM**（头字节 `EF BB BF`），此前被误记为
+  UTF-16 LE。PowerShell `Get-Content -Encoding unicode` 因 BOM 自动探测仍能读出
+  正常中文，所以误判一直没暴露；**按 UTF-16 追加会写坏文件**（追加内容变成
+  UTF-16 字节，文件变成混合编码）。追加前用
+  `New-Object System.Text.UTF8Encoding($false,$true)` 严格解码探测，别信 `-Encoding unicode`。
