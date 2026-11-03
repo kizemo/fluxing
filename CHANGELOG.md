@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+## [1.1.9] - 2026-11-03
+
+### fix(installer): 安装前按映像名清理自家 UI 进程，修「无法打开要写入的文件：FluxingPhrasesDialog.exe」（L174）
+
+- **症状**：1.1.8 交互安装报「无法打开要写入的文件：`D:\Program Files\fluxing\weasel\FluxingPhrasesDialog.exe`」。
+- **根因**：目标 exe 被**独占锁**。占用源是 20 个 `FluxingPhrasesDialog.exe` 残留进程（隐藏孤儿，合计约 350 MB WS），其中 19 个的父进程早已消失。短语窗口按 Esc 只隐藏不退出（L167），server 被强杀时子进程回收代码根本不执行 ⇒ 孤儿累积；而 `output/install.nsi` 的清理覆盖面**只有 `WeaselServer.exe`**，`taskkill /T` 又只沿**活着的**子进程树走 ⇒ 父已死的孤儿打不到 ⇒ 文件被锁。
+- **修复**：安装器在 `.onInit` / `call_uninstaller` / install 段 / uninstall 段四处**按映像名**杀 `FluxingPhrasesDialog.exe`（不带 `/T`，因此能覆盖父进程已死的孤儿）；exe 名与 `fluxing::OwnUiClientExeName()`（`include/WeaselIPC.h`，ADR 0032）保持同源。
+- **验证**：在「6 个真实孤儿进程占锁」的复现场景下（独占打开报 `being used by another process`，与用户现场报错一致）跑安装器：`INSTALL_EXIT=0`、新二进制落盘（1,098,752 B 与构建产物一致）、孤儿进程被清空、卸载注册表 `DisplayVersion=1.1.9`；**A/B 反向对照**：同一场景下旧 1.1.8 安装器失败且不清理孤儿 ⇒ 复现场景有牙、结论成立。
+- **附带**：修 `output/install.nsi` 的 46 处裸 LF，恢复 L09 要求的「UTF-8 BOM + 100% CRLF」。
+- **未修（留待后续）**：短语窗口在 pipe 断开（server 死）时仍不自退、server 启动时不回收上一代自家 UI 残留 —— 属产品侧加固，见交接卡 §4。
+
 ## [1.1.8] - 2026-11-03
 
 ### fix(WeaselIPC): 按 Esc 退出用户短语界面不再连带收起快捷设置栏（ADR 0032）

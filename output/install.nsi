@@ -204,6 +204,22 @@ Function .onInit
     Pop $1
     Sleep 1000
   ${Next}
+  ; L174 fix (2026-11-03): also force-kill our OWN UI process.
+  ; Root cause of the 1.1.8 install failure ("cannot open file for writing:
+  ; ...\weasel\FluxingPhrasesDialog.exe"): the phrases dialog hides on Esc but
+  ; KEEPS RUNNING (L167), so a force-killed WeaselServer.exe leaves it behind
+  ; as an ORPHAN whose parent PID is already gone.  `taskkill /T` only walks
+  ; LIVE children, so killing WeaselServer.exe alone never reached those
+  ; orphans; the .exe stayed locked and the NSIS File command below failed.
+  ; Kill BY IMAGE NAME (no /T): reaches orphans and live children alike.
+  ; Keep this name in sync with fluxing::OwnUiClientExeName()
+  ; (include/WeaselIPC.h, ADR 0032) and with the File command further down.
+  ${For} $R9 1 3
+    nsExec::ExecToStack 'taskkill /F /IM FluxingPhrasesDialog.exe'
+    Pop $0
+    Pop $1
+    Sleep 500
+  ${Next}
 
   ; Phase D (v0.19.0.36) Reinforcement E: 老 binary 路径 force delete.
   ; Root cause: even after 5x taskkill, autorun respawn can land a fresh
@@ -430,6 +446,22 @@ skip_uninst_runner:
     Pop $0
     Pop $1
   ExecWait '"$R1\WeaselSetup.exe" /u'
+  ; L174 fix (2026-11-03): also force-kill our OWN UI process.
+  ; Root cause of the 1.1.8 install failure ("cannot open file for writing:
+  ; ...\weasel\FluxingPhrasesDialog.exe"): the phrases dialog hides on Esc but
+  ; KEEPS RUNNING (L167), so a force-killed WeaselServer.exe leaves it behind
+  ; as an ORPHAN whose parent PID is already gone.  `taskkill /T` only walks
+  ; LIVE children, so killing WeaselServer.exe alone never reached those
+  ; orphans; the .exe stayed locked and the NSIS File command below failed.
+  ; Kill BY IMAGE NAME (no /T): reaches orphans and live children alike.
+  ; Keep this name in sync with fluxing::OwnUiClientExeName()
+  ; (include/WeaselIPC.h, ADR 0032) and with the File command further down.
+  ${For} $R9 1 3
+    nsExec::ExecToStack 'taskkill /F /IM FluxingPhrasesDialog.exe'
+    Pop $0
+    Pop $1
+    Sleep 500
+  ${Next}
   ; Remove registry keys
   DeleteRegKey HKLM SOFTWARE\Rime
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Fluxing"
@@ -569,6 +601,22 @@ Section "Fluxing"
   ; L72-fix Rename-then-File (9b3e0824) 已经能释放 file handle, 不需要
   ; 杀 explorer 兜底。撤掉 explorer.exe taskkill + 重启段。
 
+  ; L174 fix (2026-11-03): also force-kill our OWN UI process.
+  ; Root cause of the 1.1.8 install failure ("cannot open file for writing:
+  ; ...\weasel\FluxingPhrasesDialog.exe"): the phrases dialog hides on Esc but
+  ; KEEPS RUNNING (L167), so a force-killed WeaselServer.exe leaves it behind
+  ; as an ORPHAN whose parent PID is already gone.  `taskkill /T` only walks
+  ; LIVE children, so killing WeaselServer.exe alone never reached those
+  ; orphans; the .exe stayed locked and the NSIS File command below failed.
+  ; Kill BY IMAGE NAME (no /T): reaches orphans and live children alike.
+  ; Keep this name in sync with fluxing::OwnUiClientExeName()
+  ; (include/WeaselIPC.h, ADR 0032) and with the File command further down.
+  ${For} $R9 1 3
+    nsExec::ExecToStack 'taskkill /F /IM FluxingPhrasesDialog.exe'
+    Pop $0
+    Pop $1
+    Sleep 500
+  ${Next}
   SetOverwrite on
   ; Set output path to the installation directory.
   SetOutPath $INSTDIR
@@ -1265,6 +1313,22 @@ Section "Uninstall"
   nsExec::ExecToStack 'taskkill /F /IM WeaselServer.exe /T'
     Pop $0
     Pop $1
+  ; L174 fix (2026-11-03): also force-kill our OWN UI process.
+  ; Root cause of the 1.1.8 install failure ("cannot open file for writing:
+  ; ...\weasel\FluxingPhrasesDialog.exe"): the phrases dialog hides on Esc but
+  ; KEEPS RUNNING (L167), so a force-killed WeaselServer.exe leaves it behind
+  ; as an ORPHAN whose parent PID is already gone.  `taskkill /T` only walks
+  ; LIVE children, so killing WeaselServer.exe alone never reached those
+  ; orphans; the .exe stayed locked and the NSIS File command below failed.
+  ; Kill BY IMAGE NAME (no /T): reaches orphans and live children alike.
+  ; Keep this name in sync with fluxing::OwnUiClientExeName()
+  ; (include/WeaselIPC.h, ADR 0032) and with the File command further down.
+  ${For} $R9 1 3
+    nsExec::ExecToStack 'taskkill /F /IM FluxingPhrasesDialog.exe'
+    Pop $0
+    Pop $1
+    Sleep 500
+  ${Next}
 
   ExecWait '"$INSTDIR\WeaselSetup.exe" /u'
 
