@@ -262,7 +262,8 @@ L3 的 7 条变异：M01 / M02 / M03 / M04 / M05a / M05b / M06，**全部 KILLED
 L0 RESULT mode=all checks=13 pass=13 fail=0 skip=0     exit=0 (90.6s)   ← 由 12 项增到 13 项
 L3 RESULT mutations=7 killed=7 survived=0 invalid=0    exit=0 (115.9s)
 L4 REGRESSION level=fast cases=1 pass=1 fail=0 skip=0  exit=0 (2.2s)
-L5 sandbox-gate  未出结果（只测已发布的 archives\fluxing-1.1.9-installer.exe 与本轮未改的 scripts/sandbox-gate ⇒ 与本轮 diff 无因果）
+GATE RESULT steps=4 passed=3 failed=1                     ← 红的只有 L5，原因见 10.7
+L5 sandbox-gate  exit=1 (577.9s)  ← 失败的是两条「环境能力」断言，产品行为断言全绿，见 10.7
 ```
 
 L0 新增的第 13 项就是 `installer-upgrade-rollback`（PASS）。
@@ -283,6 +284,26 @@ L0 新增的第 13 项就是 `installer-upgrade-rollback`（PASS）。
 - **`.cmd` 必须纯 ASCII**（UTF-8 BOM 让首行崩）。
 - **补丁脚本必须原子写**（全内存改完再落盘）；三次 ABORT / 异常都没有污染文件。
 - **用户报错时先 `task_stop` 正在跑的门禁以保现场**，再诊断。
+
+### 10.7 L5 sandbox-gate 的终态：环境能力不成立，不是产品缺陷
+
+`GATE RESULT steps=4 passed=3 failed=1`；L5 单独 `exit=1`，耗时 577.9s。**未达标明细只有两条，且都是「沙箱环境能力」断言**：
+
+```
+- E.2 : 沙箱存在 D: 盘 (install.nsi 默认路径 = D:\Program Files\fluxing, 产品要求) -- drives=C:
+- E.4 : 沙箱外网可达 (1.1.1.1:443, 3s) -- reachable=False
+```
+
+同一次 L5 里**产品行为断言全部 PASS**：本次安装产出了序号更高的新副本（`weaselx64.1.1.9.0.0.dll` → `.1`）、未退化为「等重启再换」（无 stage2 marker，判别性主断言）、64 位 TIP 注册指向新序号副本、新副本内容与构建产物一致。
+
+**定性（已验证 / 推断分开）**：
+- 已验证：L5 的红与 L176 的回滚补丁、与 L0 新增的 `installer-upgrade-rollback` **无因果关系** —— 本轮改的是 `output/install.nsi` 与 `scripts/gate/**`，L5 只消费已发布的 `archives\fluxing-1.1.9-installer.exe` 与未改动的 `scripts/sandbox-gate`。
+- 已验证：这两条断言在本机**长期不成立**（`drives=C:` / `reachable=False`），属前置环境，不是随机抖动。
+- 推断（未验证）：`E.4` 可通过在 `.wsb` 里开 `<Networking>Enable</Networking>` 解掉；`E.2` 需要挂 VHD 才能有真的 `D:`，映射文件夹给不了盘符。
+
+**真正的覆盖缺口（必须记住）**：因为没有 `D:` 盘，L5 里的安装走的是 `C:\FluxingTest\fluxing` 覆盖路径，**`install.nsi` 的默认安装路径 `D:\Program Files\fluxing` 在沙箱里从未被真机验证过**。真机验证靠的是 `scripts/install/verify-installed.ps1`（本轮已加 §0 必备文件存在性，真机 EXIT=0）。
+
+**本轮不做的事（避免告警疲劳的正确做法要单独设计）**：没有把 E.2/E.4 从 FAIL 改成 SKIP 来把门禁刷绿 —— 那正是 L176 记录的「静默跳过」反模式。把「环境能力缺失」与「产品缺陷」在报告里分成两类、并让覆盖缺口显式可见，是独立的一件事，需要改 `scripts/sandbox-gate` 的断言分类语义，本轮不动。
 
 ## 9. 接力 prompt（一句话）
 
