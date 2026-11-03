@@ -215,7 +215,12 @@ L3 的 7 条变异：M01 / M02 / M03 / M04 / M05a / M05b / M06，**全部 KILLED
 
 - 分支 `Fluxing`，remote `kizemo` = `https://github.com/kizemo/fluxing.git`（公开仓库）。
 - 已发布提交链：`2cece41..778ce35`、`778ce35..35d6885`；tag `v1.1.9` → `778ce35`。
-- 本轮新增/修改（**待提交批次**，见 §8.2）：`version.txt`、`test/regression/**`、`scripts/gate/**`、`scripts/install/verify-installed.ps1`、`docs/adr/0033-*.md`、`.github/workflows/gate.yml`、3 个 rc 文件（仅行尾归一化）。
+- 本轮新增/修改**已全部入库并推送**（远端 HEAD = `980a425`），提交链：
+  - `b55f39d` `fix(installer)`：升级段写失败回滚旧文件 + 收尾清理存在性守卫（含 L176）
+  - `9f4891c` `ci(gate)`：分层门禁 L0/L3/L4 + 回归资产库 + CI 工作流 + `verify-installed.ps1` + `version.txt`
+  - `2bd4fe2` `docs(adr)`：ADR 0033 + 交接卡定稿
+  - `980a425` `WeaselDeployer`：rc 行尾归一化（纯行尾，逐行文本 diff 为 0）
+- 尚未提交：仅 `librime` 子模块脏改动（**永不提交**）。
 - `CHANGELOG.md` 已有 `[1.1.9] - 2026-11-03`（`fix(fluxing)` + `fix(installer)`）；`.specify/memory/lessons-learned.md` 已有 L174 / L175。
 - `librime` 子模块脏（` m librime`）**不得提交**。
 
@@ -224,6 +229,60 @@ L3 的 7 条变异：M01 / M02 / M03 / M04 / M05a / M05b / M06，**全部 KILLED
 - Release `https://github.com/kizemo/fluxing/releases/tag/v1.1.9` 为 **Latest**。
 - 远端资产 digest `sha256:8d5dd1a877e7f9ff40dfd87b4bdbd060070a80038184d1397d323fda8ad6c18e`、size=42797082。
 - 本机已装 1.1.9，用户已确认两条修复生效。
+
+## 10. 追加（同日深夜）：L176 安装器升级段「Rename 成功后 File 失败」缺陷
+
+> 触发：用户贴截图，弹框标题 `WeaselServer.exe`，正文「Windows 找不到文件 'WeaselServer.exe'。请确定文件名是否正确后，再试一次。」，并问「是正在修改文件导致的，还是 bug 复现」。
+> **定性结论：不是 L174（1.1.8 孤儿锁）复现。** L174 已修好且用户已验收。这是 `install.nsi` 升级段**自身的第二个缺陷**，一直存在、此前未触发。
+
+### 10.1 根因（与 L174 完全不同的机制）
+
+- `install.nsi` 升级段对每个 exe 做**两次独立 I/O**：① `Rename` 把旧 `X.exe` → `X.exe.old.tmp`；② `File` 把新 exe 写入 `X.exe`。
+- 当 ② 失败时（目标被**正在运行**的 `WeaselServer.exe` / Deployer / Setup 挡住），`SetOverwrite try` **静默跳过且不置错误位**，静默安装退出码仍是 0、注册表写到尾 ⇒ **旧文件名已消失、新文件没写入** ⇒ 之后任何 `start WeaselServer.exe` 都报「找不到文件」。
+- 触发条件：安装器运行期间该 exe 正在运行。本轮执行触发者是回归脚本 C0032 刚 `Start-Server` + 22:22 跑安装器。
+- 与 L174 的区别：L174 是「目标被**孤儿进程独占锁**，`File` 打不开」；L176 是「**Rename 已经成功**、目标名腾空后 `File` 因同目录新文件仍被运行中的映像占用而失败」。两者都表现为装不上，但机制、修法、预防手段都不同。
+
+### 10.2 修法（提交 `b55f39d`）
+
+- 三个 exe（`WeaselServer` / `WeaselDeployer` / `WeaselSetup`）的 `File` 后紧跟 `IfErrors 0 <X>_rename_ok`；失败分支立刻
+  `Rename "$INSTDIR\<X>.exe.old.tmp" "$INSTDIR\<X>.exe"` 把旧文件**还原**，再 `StrCpy $FluxingDegraded 1` + `DetailPrint` + `Goto <X>_done`。
+- 收尾 sweep 的 `Delete "$INSTDIR\<X>.exe.old.tmp"` 用 `${If} ${FileExists} "$INSTDIR\<X>.exe"` / `${EndIf}` 包住（边际加固：回滚成功后 `.old.tmp` 已不存在，`Delete` 无害）。
+- 补丁脚本 `tmp/patch-installer-upgrade-rollback.py`（幂等 + 原子写 + 锚点计数断言）。`install.nsi` 68193 → 69937 B，BOM=True，crlf=1429，bare_lf=0，`NSIS_EXIT=0`。
+
+### 10.3 预防（两层静态齿，均已造坏数据验证有牙）
+
+1. **L0 新检查 `installer-upgrade-rollback`**：每个 exe 三判据 —— ① `IfErrors 0 <X>_rename_ok` 存在且 label 恰好 1 次；② 回滚 `Rename` 在 guard 之后、done label 之前；③ 最后一次 `Delete .old.tmp` 前必须有 `${If} ${FileExists}` 守卫。4 个变异（删 IfErrors / 删 Rename / 删尾部守卫 / 删收尾 Delete）**全部翻红**，控制组保持 `OK=True`。
+2. **`scripts/install/verify-installed.ps1` §0 必备文件存在性**：`WeaselServer.exe` / `WeaselDeployer.exe` / `WeaselSetup.exe` / `uninstall.exe` / `FluxingPhrasesDialog.exe` 缺一即 `problems`；`*.old.tmp` 存在归 `notes`（是退路，说明写入/回滚被打断，需人看但不等于安装失败）。有牙验证：`tmp\fake-install`（缺 `WeaselServer.exe`）+ `-SkipHash` → **EXIT=1**。
+
+> **未做运行时复现**的原因已写进 L176：`File` 失败需要「`Rename` 成功后瞬间目标被加锁」的竞态，不可确定性复现 ⇒ 用两层静态齿覆盖，而不是靠一次手工复现。
+
+### 10.4 门禁终态（本轮实跑，日志 `tmp/gate-final-rollback.log`）
+
+```
+L0 RESULT mode=all checks=13 pass=13 fail=0 skip=0     exit=0 (90.6s)   ← 由 12 项增到 13 项
+L3 RESULT mutations=7 killed=7 survived=0 invalid=0    exit=0 (115.9s)
+L4 REGRESSION level=fast cases=1 pass=1 fail=0 skip=0  exit=0 (2.2s)
+L5 sandbox-gate  未出结果（只测已发布的 archives\fluxing-1.1.9-installer.exe 与本轮未改的 scripts/sandbox-gate ⇒ 与本轮 diff 无因果）
+```
+
+L0 新增的第 13 项就是 `installer-upgrade-rollback`（PASS）。
+
+### 10.5 现场恢复与现状
+
+- 唯一合规的恢复路径是重跑安装器（`bash` 工具里任何 `Copy-Item` 目标是 `D:\Program Files\` 都会被硬安全策略整条拦掉）。
+  `installer.exe /S` → exit 0 ⇒ `D:\Program Files\fluxing\weasel\` 5 个必备 exe 齐全，`WeaselServer.exe` 2,287,104 B / FileVersion `1.1.9.0` / SHA256 与 `output\Win32\WeaselServer.exe` 一致；`verify-installed` **EXIT=0**；server 已启动。
+- `weasel.dll.old.tmp`(1675264 B) 与 `weaselx64.dll.old.tmp`(1981952 B) 仍留在安装目录，`verify-installed` 以 notes 报出。
+- 产物 `output\archives\fluxing-1.1.9-installer.exe` = 42,797,082 B / mtime 2026/11/3 20:36:38，**未被本轮冒烟编译覆盖**（与已发布 Release 仍逐字节一致）。
+- ⚠️ 本轮 makensis 冒烟编译曾因未传 `/DFLUXING_OUTFILE` 误覆盖本地 `output\archives\fluxing-1.0.0-installer.exe`（旧版本历史归档，未发布、无远端对应）。
+
+### 10.6 本轮新增的工具坑（补充 §7）
+
+- **makensis 编译 `install.nsi` 必须传 `/DFLUXING_OUTFILE=<绝对路径>`**（该文件自己声明的宏，:62/:65-66/:68）；`/O` 无效。不传会覆盖 `archives\fluxing-<ver>-installer.exe`，且**直接编译时版本会退化成 `1.0.0`**。
+- **`File /oname=` 才是 NSIS 改名语法**；`File "src" "dst"` 会把两个路径都当源文件 ⇒ `no files found.` 并中止打包。
+- **NSIS `SetOverwrite try` 静默跳过且不置错误位** ⇒ 判断写入成败必须用 `IfErrors`，不能靠退出码。
+- **`.cmd` 必须纯 ASCII**（UTF-8 BOM 让首行崩）。
+- **补丁脚本必须原子写**（全内存改完再落盘）；三次 ABORT / 异常都没有污染文件。
+- **用户报错时先 `task_stop` 正在跑的门禁以保现场**，再诊断。
 
 ## 9. 接力 prompt（一句话）
 
