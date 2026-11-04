@@ -1,0 +1,75 @@
+﻿spec 099 P0-4/P0-5/P0-6 mutation proof (tests must have teeth)
+run_at=2026-11-05 00:58:32
+baseline: 190/190 green (T25-T29 added on top of previous 120)
+
+=== M1 :: include\FluxingPanelDpi.h ===
+why: DPI rounding nearest -> truncate (245@144%: 368 -> 367)
+anchor: '+ 48) / 96;' -> ') / 96;'
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=2  expected_pattern_hit=2
+  FAIL: T25b: 150% ⇒ 368×72(P0-6 核心判据)
+  FAIL: T25g: 245@144% 就近舍入 = 368(截断成 367 会红)
+summary_line: === 188 / 190 assertions passed ===
+MUTATION_DETECTED=True
+restored_sha256_match=True
+
+=== M2 :: include\FluxingPanelTooltip.h ===
+why: tooltip slot1 uses shape text instead of ascii text
+anchor: 'panel_status::AsciiModeText(st.ascii_mode);' -> 'panel_status::ShapeModeText(st.ascii_mode);'
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=3  expected_pattern_hit=2
+  FAIL: T28g: 槽 1 tooltip = 名称 + 当前输入态
+  FAIL: T28k: 英文态 tooltip 显示「英」
+  FAIL: T28m: 生产 TooltipText(1) 与纯逻辑一致
+summary_line: === 187 / 190 assertions passed ===
+MUTATION_DETECTED=True
+restored_sha256_match=True
+
+=== M3 :: include\FluxingPanelKeyboard.h ===
+why: Shift+Tab direction broken (always forward)
+anchor: 'shift ? -1 : 1' -> '1'
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=3  expected_pattern_hit=1
+  FAIL: T27h: Shift+Tab 后退一步 ⇒ 槽 0
+  FAIL: T27i: ← 从槽 0 回绕到槽 3
+  FAIL: T27j: → 从槽 3 回到槽 0
+summary_line: === 187 / 190 assertions passed ===
+MUTATION_DETECTED=True
+restored_sha256_match=True
+
+=== M4 :: include\FluxingPanelKeyboard.h ===
+why: Esc always closes panel (breaks ADR 0019 D2)
+anchor: 'if (!st.interactive)' -> 'if (false)'
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=2  expected_pattern_hit=1
+  FAIL: T14e: ESC 不再隐藏面板 —— 用户口径『显隐只靠 Alt+,』
+  FAIL: T27o: 未进入键盘交互态时 Esc 只吞掉(守 ADR 0019 D2)
+summary_line: === 188 / 190 assertions passed ===
+MUTATION_DETECTED=True
+restored_sha256_match=True
+
+=== M5 :: WeaselServer\QuickPanelDialog.cpp ===
+why: status area moved left -> overlaps last slot (breaks hit-area invariant)
+anchor: 'const int left = lx + lw + gap;' -> 'const int left = lx + lw - 40;'
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=6  expected_pattern_hit=6
+  FAIL: T26c0: 96% 下状态区与 4 个槽位两两不相交
+  FAIL: T26d0: 96% 下状态区左界 > 最后一个槽位右界
+  FAIL: T26c1: 144% 下状态区与 4 个槽位两两不相交
+  FAIL: T26d1: 144% 下状态区左界 > 最后一个槽位右界
+  FAIL: T26c2: 192% 下状态区与 4 个槽位两两不相交
+  FAIL: T26d2: 192% 下状态区左界 > 最后一个槽位右界
+summary_line: === 184 / 190 assertions passed ===
+MUTATION_DETECTED=True
+restored_sha256_match=True
+
+=== final restore verification: rebuild + rerun on pristine tree ===
+build_exit=0
+run_exit=0
+summary_line: === 190 / 190 assertions passed ===
+fail_lines=0

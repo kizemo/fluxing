@@ -1,0 +1,219 @@
+﻿================================================================================
+spec 099 L1 静态门禁「有牙」证明(spec099-l1-gate-toothproof)
+================================================================================
+
+被验证的门禁脚本 : scripts/gate/L1-quickpanel-hotkey.ps1
+被验证的生产实现 : spec 099 P0-4 / P0-5 / P0-6(快捷设置栏快捷键与状态回显)
+仓库根目录       : F:\soft\00selfmade\rime_claude
+分支             : Fluxing
+证明日期         : 2026-11-05
+
+--------------------------------------------------------------------------------
+一、证明方法
+--------------------------------------------------------------------------------
+门禁最大的风险不是「漏检」,而是「检查恒绿」——看起来在跑,其实永远返回通过。
+本次用**变异测试**证明 L1 门禁真的有齿:
+
+  1. 把门禁要读的 7 个文件复制到仓库外的临时目录(不让任何变异污染工作区):
+         include\FluxingPanelDpi.h
+         include\FluxingPanelStatus.h
+         include\FluxingPanelKeyboard.h
+         include\FluxingPanelTooltip.h
+         include\WeaselIPCData.h
+         WeaselServer\QuickPanelDialog.cpp
+         WeaselServer\WeaselServerApp.cpp
+
+  2. 门禁用 -Root <临时目录> 读取副本 ⇒ 同一份检查实现被指向不同源码树。
+
+  3. 五轮运行:
+         CONTROL   未变异的副本          —— 必须绿(exit=0),否则无法区分「有齿」和「坏掉」
+         MUTANT M1 删掉 WM_TIMER 里的 RefreshInputState() 调用 —— 必须红(exit≠0)
+         MUTANT M2 把共享 DPI 调用换成手抄的缩放公式        —— 必须红(exit≠0)
+         MUTANT M3 让 FluxingPanelStatus.h 引入 WeaselIPCData.h —— 必须红(exit≠0)
+         ORIGINAL  原仓库工作树          —— 必须绿(exit=0)
+
+--------------------------------------------------------------------------------
+二、变异体清单
+--------------------------------------------------------------------------------
+M1  变异点 : WeaselServer\QuickPanelDialog.cpp
+    位置   : WM_TIMER(id=2) 分支里的 RefreshInputState();
+    做法   : 该调用整行替换为注释
+    期望翻红: C1 state-echo-refresh
+              (状态回显的刷新点从 2 处掉到 1 处 —— 轮询节拍没了,状态会停在注入那一瞬)
+
+M2  变异点 : WeaselServer\QuickPanelDialog.cpp
+    位置   : 局部包装 ScaleLogicalByDpi(int, UINT)
+    做法   : return fluxing::panel_dpi::ScaleLogicalByDpi(logical, (int)dpi);
+             换成 return (logical * (int)dpi + 48) / 96;   ← 自己抄了一份真相源
+    期望翻红: B2 dpi-single-source
+              (共享缩放实现不再被调用,且源码里出现手抄公式的指纹)
+
+M3  变异点 : include\FluxingPanelStatus.h
+    位置   : 文件头
+    做法   : 插入 #include "WeaselIPCData.h"
+    期望翻红: H1 ipc-boundary-intact
+              (spec 099 P0-4/P0-5 不得改动 IPC 协议边界 —— 纯逻辑 header 不该知道 IPC 长什么样)
+
+--------------------------------------------------------------------------------
+三、五轮完整输出(含每条 PASS/FAIL 行与退出码)
+--------------------------------------------------------------------------------
+L1 gate tooth-proof  repo=F:\soft\00selfmade\rime_claude
+work=C:\Users\Duanyi\AppData\Local\Temp\fluxing-l1-mutate-20261105-010114-9847
+
+#### CONTROL (unmutated copy)   root=C:\Users\Duanyi\AppData\Local\Temp\fluxing-l1-mutate-20261105-010114-9847\control
+  
+  L1 quickpanel gate  root=C:\Users\Duanyi\AppData\Local\Temp\fluxing-l1-mutate-20261105-010114-9847\control
+  
+  [PASS] A1 panel-headers-exist     4 个 header 均存在且非空:FluxingPanelDpi.h(1875B) FluxingPanelStatus.h(2750B) FluxingPanelKeyboard.h(5229B) FluxingPanelTooltip.h(2574B)
+  [PASS] B1 dpi-header-api          FluxingPanelDpi.h 含 ScaleLogicalByDpi / PanelPhysicalSize(panel_dpi 命名空间内)
+  [PASS] B2 dpi-single-source       缩放只走 fluxing::panel_dpi::ScaleLogicalByDpi,无本地抄写的公式
+  [PASS] C1 state-echo-refresh      RefreshInputState() 定义 1 处 / 调用 2 处 + WM_TIMER 轮询就位
+  [PASS] C2 state-provider-wiring   WeaselServerApp.cpp 注入 QuickPanelDialog::SetStateProvider(
+  [PASS] C3 startup-prewarm         Initialize() 之后有 IsFullShape() / IsSimplification() 启动期预热(显示路径不触发 user_config_open)
+  [PASS] D1 keyboard-handler        键位裁决走 fluxing::panel_keyboard::HandleKey( + State)
+  [PASS] D2 keyboard-messages       WM_CHAR 吞键 + WM_SETFOCUS 进键盘交互态
+  [PASS] D3 focus-lifecycle         CaptureKeyboardFocus / RestoreKeyboardFocus / ResetKeyboardState 三件套就位
+  [PASS] E1 tooltip-wiring          ShowTooltip / HideTooltip / DestroyWindow(s_hwndTooltip) 就位
+  [PASS] E2 tooltip-include         QuickPanelDialog.cpp include 了 FluxingPanelTooltip.h
+  [PASS] F1 display-path-zero-io    显示路径无阻塞 I/O / 等待 / 同步注册表 (已排除 env 门控诊断 dump 内的 3 处)
+  [PASS] G1 zh-required-strings     7 条中文文案全部就位
+  [PASS] G2 zh-no-english-visible   20 个宽字面量全中文,禁用的英文文案 0 处
+  [PASS] H1 ipc-boundary-intact     FluxingPanel*.h 与 WeaselIPCData.h 互不依赖(IPC 边界未被本轮破坏)
+  
+  L1 RESULT checks=15 pass=15 fail=0 skip=0
+#### CONTROL (unmutated copy) exit=0
+
+#### MUTANT M1 (WM_TIMER RefreshInputState() call removed)   root=C:\Users\Duanyi\AppData\Local\Temp\fluxing-l1-mutate-20261105-010114-9847\m1
+  
+  L1 quickpanel gate  root=C:\Users\Duanyi\AppData\Local\Temp\fluxing-l1-mutate-20261105-010114-9847\m1
+  
+  [PASS] A1 panel-headers-exist     4 个 header 均存在且非空:FluxingPanelDpi.h(1875B) FluxingPanelStatus.h(2750B) FluxingPanelKeyboard.h(5229B) FluxingPanelTooltip.h(2574B)
+  [PASS] B1 dpi-header-api          FluxingPanelDpi.h 含 ScaleLogicalByDpi / PanelPhysicalSize(panel_dpi 命名空间内)
+  [PASS] B2 dpi-single-source       缩放只走 fluxing::panel_dpi::ScaleLogicalByDpi,无本地抄写的公式
+  [FAIL] C1 state-echo-refresh      RefreshInputState() 调用点只有 1 处(应 >= 2:provider 注入 + 轮询 timer)
+  [PASS] C2 state-provider-wiring   WeaselServerApp.cpp 注入 QuickPanelDialog::SetStateProvider(
+  [PASS] C3 startup-prewarm         Initialize() 之后有 IsFullShape() / IsSimplification() 启动期预热(显示路径不触发 user_config_open)
+  [PASS] D1 keyboard-handler        键位裁决走 fluxing::panel_keyboard::HandleKey( + State)
+  [PASS] D2 keyboard-messages       WM_CHAR 吞键 + WM_SETFOCUS 进键盘交互态
+  [PASS] D3 focus-lifecycle         CaptureKeyboardFocus / RestoreKeyboardFocus / ResetKeyboardState 三件套就位
+  [PASS] E1 tooltip-wiring          ShowTooltip / HideTooltip / DestroyWindow(s_hwndTooltip) 就位
+  [PASS] E2 tooltip-include         QuickPanelDialog.cpp include 了 FluxingPanelTooltip.h
+  [PASS] F1 display-path-zero-io    显示路径无阻塞 I/O / 等待 / 同步注册表 (已排除 env 门控诊断 dump 内的 3 处)
+  [PASS] G1 zh-required-strings     7 条中文文案全部就位
+  [PASS] G2 zh-no-english-visible   20 个宽字面量全中文,禁用的英文文案 0 处
+  [PASS] H1 ipc-boundary-intact     FluxingPanel*.h 与 WeaselIPCData.h 互不依赖(IPC 边界未被本轮破坏)
+  
+  FAIL C1 state-echo-refresh: RefreshInputState() 调用点只有 1 处(应 >= 2:provider 注入 + 轮询 timer)
+  L1 RESULT checks=15 pass=14 fail=1 skip=0
+#### MUTANT M1 (WM_TIMER RefreshInputState() call removed) exit=1
+
+#### MUTANT M2 (local copy of the DPI formula)   root=C:\Users\Duanyi\AppData\Local\Temp\fluxing-l1-mutate-20261105-010114-9847\m2
+  
+  L1 quickpanel gate  root=C:\Users\Duanyi\AppData\Local\Temp\fluxing-l1-mutate-20261105-010114-9847\m2
+  
+  [PASS] A1 panel-headers-exist     4 个 header 均存在且非空:FluxingPanelDpi.h(1875B) FluxingPanelStatus.h(2750B) FluxingPanelKeyboard.h(5229B) FluxingPanelTooltip.h(2574B)
+  [PASS] B1 dpi-header-api          FluxingPanelDpi.h 含 ScaleLogicalByDpi / PanelPhysicalSize(panel_dpi 命名空间内)
+  [FAIL] B2 dpi-single-source       QuickPanelDialog.cpp 没有调用 fluxing::panel_dpi::ScaleLogicalByDpi(缩放真相源没被用上);本地缩放公式嫌疑 / 96 @line 110;本地缩放公式嫌疑 + 48 @line 110
+  [PASS] C1 state-echo-refresh      RefreshInputState() 定义 1 处 / 调用 2 处 + WM_TIMER 轮询就位
+  [PASS] C2 state-provider-wiring   WeaselServerApp.cpp 注入 QuickPanelDialog::SetStateProvider(
+  [PASS] C3 startup-prewarm         Initialize() 之后有 IsFullShape() / IsSimplification() 启动期预热(显示路径不触发 user_config_open)
+  [PASS] D1 keyboard-handler        键位裁决走 fluxing::panel_keyboard::HandleKey( + State)
+  [PASS] D2 keyboard-messages       WM_CHAR 吞键 + WM_SETFOCUS 进键盘交互态
+  [PASS] D3 focus-lifecycle         CaptureKeyboardFocus / RestoreKeyboardFocus / ResetKeyboardState 三件套就位
+  [PASS] E1 tooltip-wiring          ShowTooltip / HideTooltip / DestroyWindow(s_hwndTooltip) 就位
+  [PASS] E2 tooltip-include         QuickPanelDialog.cpp include 了 FluxingPanelTooltip.h
+  [PASS] F1 display-path-zero-io    显示路径无阻塞 I/O / 等待 / 同步注册表 (已排除 env 门控诊断 dump 内的 3 处)
+  [PASS] G1 zh-required-strings     7 条中文文案全部就位
+  [PASS] G2 zh-no-english-visible   20 个宽字面量全中文,禁用的英文文案 0 处
+  [PASS] H1 ipc-boundary-intact     FluxingPanel*.h 与 WeaselIPCData.h 互不依赖(IPC 边界未被本轮破坏)
+  
+  FAIL B2 dpi-single-source: QuickPanelDialog.cpp 没有调用 fluxing::panel_dpi::ScaleLogicalByDpi(缩放真相源没被用上);本地缩放公式嫌疑 / 96 @line 110;本地缩放公式嫌疑 + 48 @line 110
+  L1 RESULT checks=15 pass=14 fail=1 skip=0
+#### MUTANT M2 (local copy of the DPI formula) exit=1
+
+#### MUTANT M3 (FluxingPanelStatus.h includes WeaselIPCData.h)   root=C:\Users\Duanyi\AppData\Local\Temp\fluxing-l1-mutate-20261105-010114-9847\m3
+  
+  L1 quickpanel gate  root=C:\Users\Duanyi\AppData\Local\Temp\fluxing-l1-mutate-20261105-010114-9847\m3
+  
+  [PASS] A1 panel-headers-exist     4 个 header 均存在且非空:FluxingPanelDpi.h(1875B) FluxingPanelStatus.h(2778B) FluxingPanelKeyboard.h(5229B) FluxingPanelTooltip.h(2574B)
+  [PASS] B1 dpi-header-api          FluxingPanelDpi.h 含 ScaleLogicalByDpi / PanelPhysicalSize(panel_dpi 命名空间内)
+  [PASS] B2 dpi-single-source       缩放只走 fluxing::panel_dpi::ScaleLogicalByDpi,无本地抄写的公式
+  [PASS] C1 state-echo-refresh      RefreshInputState() 定义 1 处 / 调用 2 处 + WM_TIMER 轮询就位
+  [PASS] C2 state-provider-wiring   WeaselServerApp.cpp 注入 QuickPanelDialog::SetStateProvider(
+  [PASS] C3 startup-prewarm         Initialize() 之后有 IsFullShape() / IsSimplification() 启动期预热(显示路径不触发 user_config_open)
+  [PASS] D1 keyboard-handler        键位裁决走 fluxing::panel_keyboard::HandleKey( + State)
+  [PASS] D2 keyboard-messages       WM_CHAR 吞键 + WM_SETFOCUS 进键盘交互态
+  [PASS] D3 focus-lifecycle         CaptureKeyboardFocus / RestoreKeyboardFocus / ResetKeyboardState 三件套就位
+  [PASS] E1 tooltip-wiring          ShowTooltip / HideTooltip / DestroyWindow(s_hwndTooltip) 就位
+  [PASS] E2 tooltip-include         QuickPanelDialog.cpp include 了 FluxingPanelTooltip.h
+  [PASS] F1 display-path-zero-io    显示路径无阻塞 I/O / 等待 / 同步注册表 (已排除 env 门控诊断 dump 内的 3 处)
+  [PASS] G1 zh-required-strings     7 条中文文案全部就位
+  [PASS] G2 zh-no-english-visible   20 个宽字面量全中文,禁用的英文文案 0 处
+  [FAIL] H1 ipc-boundary-intact     include\FluxingPanelStatus.h 引入了 WeaselIPCData.h;include\FluxingPanelStatus.h 提到了 WeaselIPCData
+  
+  FAIL H1 ipc-boundary-intact: include\FluxingPanelStatus.h 引入了 WeaselIPCData.h;include\FluxingPanelStatus.h 提到了 WeaselIPCData
+  L1 RESULT checks=15 pass=14 fail=1 skip=0
+#### MUTANT M3 (FluxingPanelStatus.h includes WeaselIPCData.h) exit=1
+
+#### ORIGINAL TREE   root=F:\soft\00selfmade\rime_claude
+  
+  L1 quickpanel gate  root=F:\soft\00selfmade\rime_claude
+  
+  [PASS] A1 panel-headers-exist     4 个 header 均存在且非空:FluxingPanelDpi.h(1875B) FluxingPanelStatus.h(2750B) FluxingPanelKeyboard.h(5229B) FluxingPanelTooltip.h(2574B)
+  [PASS] B1 dpi-header-api          FluxingPanelDpi.h 含 ScaleLogicalByDpi / PanelPhysicalSize(panel_dpi 命名空间内)
+  [PASS] B2 dpi-single-source       缩放只走 fluxing::panel_dpi::ScaleLogicalByDpi,无本地抄写的公式
+  [PASS] C1 state-echo-refresh      RefreshInputState() 定义 1 处 / 调用 2 处 + WM_TIMER 轮询就位
+  [PASS] C2 state-provider-wiring   WeaselServerApp.cpp 注入 QuickPanelDialog::SetStateProvider(
+  [PASS] C3 startup-prewarm         Initialize() 之后有 IsFullShape() / IsSimplification() 启动期预热(显示路径不触发 user_config_open)
+  [PASS] D1 keyboard-handler        键位裁决走 fluxing::panel_keyboard::HandleKey( + State)
+  [PASS] D2 keyboard-messages       WM_CHAR 吞键 + WM_SETFOCUS 进键盘交互态
+  [PASS] D3 focus-lifecycle         CaptureKeyboardFocus / RestoreKeyboardFocus / ResetKeyboardState 三件套就位
+  [PASS] E1 tooltip-wiring          ShowTooltip / HideTooltip / DestroyWindow(s_hwndTooltip) 就位
+  [PASS] E2 tooltip-include         QuickPanelDialog.cpp include 了 FluxingPanelTooltip.h
+  [PASS] F1 display-path-zero-io    显示路径无阻塞 I/O / 等待 / 同步注册表 (已排除 env 门控诊断 dump 内的 3 处)
+  [PASS] G1 zh-required-strings     7 条中文文案全部就位
+  [PASS] G2 zh-no-english-visible   20 个宽字面量全中文,禁用的英文文案 0 处
+  [PASS] H1 ipc-boundary-intact     FluxingPanel*.h 与 WeaselIPCData.h 互不依赖(IPC 边界未被本轮破坏)
+  
+  L1 RESULT checks=15 pass=15 fail=0 skip=0
+#### ORIGINAL TREE exit=0
+
+#### VERDICT
+  control exit=0 (expect 0)
+  M1 exit=1 (expect non-zero)
+  M2 exit=1 (expect non-zero)
+  M3 exit=1 (expect non-zero)
+  original exit=0 (expect 0)
+  TOOTHPROOF=OK
+
+
+--------------------------------------------------------------------------------
+四、结论
+--------------------------------------------------------------------------------
+  CONTROL   exit=0   绿(15 项检查全过)—— 门禁在未变异的源码上不会误报
+  MUTANT M1 exit=1   红(C1 state-echo-refresh 失败)
+  MUTANT M2 exit=1   红(B2 dpi-single-source 失败)
+  MUTANT M3 exit=1   红(H1 ipc-boundary-intact 失败)
+  ORIGINAL  exit=0   绿(15 项检查全过)
+
+  ⇒ L1 门禁「有牙」:三处变异全部被检出,未变异的源码(含原仓库工作树)保持绿。
+
+--------------------------------------------------------------------------------
+五、遗留说明
+--------------------------------------------------------------------------------
+1. 临时副本目录(仓库外,未删除,保留供复核):
+     C:\Users\Duanyi\AppData\Local\Temp\fluxing-l1-mutate-20261105-010114-9847
+   含 control / m1 / m2 / m3 四个变体树 + harness.ps1 + run.log。
+   未做永久删除(按可恢复删除原则保留)。
+
+2. F1(display-path-zero-io)检查里,WeaselServer\QuickPanelDialog.cpp 存在 3 处
+   CreateFileW(v0.19.0.10 起就有的诊断 dump),全部位于
+   `GetEnvironmentVariableW(L"FLUXING_QP_DIAG_DUMP", ...)` 门控的块内 ——
+   即「显式设了环境变量才会跑」的诊断路径,不在正常显示路径上。
+   门禁把这块**按 env 门控识别出来并排除**,并在 PASS 明细里显式报出排除了几处。
+   门控一旦被摘掉(诊断 dump 落回显示路径),F1 会立刻翻红。
+
+3. 门禁脚本本身用 UTF-8 + BOM + CRLF;期望的中文文案由**码点构造**
+   (见脚本内 $script:RequiredZh),不依赖脚本文件自身的编码 ——
+   即使 BOM 被编辑器抹掉,检查结果也不变。
+================================================================================

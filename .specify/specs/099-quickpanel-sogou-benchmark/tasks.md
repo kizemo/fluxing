@@ -65,24 +65,44 @@ L4  PASS  exit=0   1.4s  回归用例(fast) cases=1 pass=1 fail=0
 
 ## P0-4 · 当前输入状态回显（中/英 + 全/半角）
 
-- [ ] 确认状态来源：面板 `Show()` 现有 `currentFullwidth` 入参；中文态需从 server 侧取（**禁 TSF 阻塞 I/O，P2**）
-- [ ] 先写失败测试：状态切换后面板回显跟随
-- [ ] 实现绘制 + 命中区不变；不得改动 `quickpanel.state` 语义
-- [ ] 贴 e2e 输出
+- [x] 确认状态来源：面板 `Show()` 现有 `currentFullwidth` 入参；中文态需从 server 侧取（**禁 TSF 阻塞 I/O，P2**）
+  - 落地：`include/FluxingPanelStatus.h` 的 `PanelState` 内存快照由 `StateProvider` 注入（`WeaselServerApp.cpp`）；面板在**已有的 100ms timer（id=2）**里拉取并比对 5 字段，变化才重绘 ⇒ 显示路径零 I/O（P2）
+  - 预热：`WeaselServerApp::Run()` 在 `m_handler->Initialize();` 之后强制 `(void)m_handler->IsFullShape(); (void)m_handler->IsSimplification();` ⇒ 首次轮询不触发 `user_config_open`（lessons-learned **L180**）
+  - 常驻开关唯一真相源 = `AlwaysShowMode()`（`RefreshInputState()` 强制覆盖 provider 的 `always_show`）⇒ R7 守住
+- [x] 先写失败测试：状态切换后面板回显跟随
+  - 验收输出：`test/TestQuickPanelDialog` T26（状态区几何 + 中/英/全/半 文字映射 + `SetInputState`/`CurrentInputState` 回读）—— **190/190 断言全绿**
+- [x] 实现绘制 + 命中区不变；不得改动 `quickpanel.state` 语义
+  - 状态区几何：左界 = 最后一个槽位右界 + 间隙（`kStatusGap=1`），右界 = 内容右界（面板宽 − padding）；100% ⇒ x=225..240 / 150% ⇒ x=341..360 / 200% ⇒ x=450..480 ⇒ 任意 DPI 与 4 槽位两两不相交
+  - `quickpanel.state` 语义未动；`include/WeaselIPCData.h` **零改动**（IPC 边界未破）
+- [x] 贴 e2e 输出
+  - 本轮贴的是**单测输出**（`Release\TestQuickPanelDialog.exe` exit=0，190/190，无回归）；真机 e2e 需装机，随 P0-6 一并手点
 
 ## P0-5 · 键盘可达性 + 槽位 tooltip
 
-- [ ] 失败测试先行：Tab / Shift+Tab / ← → 移焦、Enter|Space 激活、Esc 收起
-- [ ] Esc 行为**必守 D0032**（只收面板、不得连带收起候选窗；用例 `test\regression\cases\D0032-esc-no-cascade.ps1`）
-- [ ] tooltip：每槽「名称 + 当前态」，品牌 tooltip 现有实现可扩展
-- [ ] 扩展 `scripts\gate\L1-quickpanel-hotkey.ps1` 并**造坏数据证明新断言会红**
+- [x] 失败测试先行：Tab / Shift+Tab / ← → 移焦、Enter|Space 激活、Esc 收起
+  - T27（纯逻辑状态机）+ T29（走真实 `WndProc` 端到端：Show → Tab 得焦点槽 0 + 进交互态 → Enter 触发槽 0 回调 → Esc 收起面板自身）
+- [x] Esc 行为**必守 D0032**（只收面板、不得连带收起候选窗；用例 `test\regression\cases\D0032-esc-no-cascade.ps1`）
+  - 路径纠正：tasks 里写的 `D0032-esc-no-cascade.ps1` **不存在**，实际用例是 `test\regression\cases\C0032-phrasesdialog-esc-panel.ps1`（heavy，需 `FLUXING_ALLOW_UI_AUTOMATION=1` + 装机版 SHA256 == `output\Win32\WeaselServer.exe`，用 `csc.exe` 编译 `test/regression/probes/ReproEsc.cs`）—— 本轮**未跑** heavy 用例
+  - 语义调和（ADR 0036）：用**键盘交互态**这一可判定状态位分流 —— 未交互 ⇒ Esc 只吞掉、面板不隐藏（守 ADR 0019 D2）；已交互 ⇒ Esc 收起**面板自身**、不触碰任何其他窗口（守 D0032）
+- [x] tooltip：每槽「名称 + 当前态」，品牌 tooltip 现有实现可扩展
+  - 自绘轻量顶层窗（类名 `FluxingQuickPanel_Tooltip`，`WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_NOACTIVATE|WS_EX_TRANSPARENT`），不引 comctl32、不改 `.vcxproj`；文本由 `include/FluxingPanelTooltip.h` 的 `BuildTooltip()` 生成（分隔符「 · 」）
+  - hover 真相源 = **100ms 轮询**而非 `WM_MOUSEMOVE`（L84-fix 已证投递不可靠）；位置在面板上方并钳制在工作区内
+  - 验收输出：T28（4 个槽名 / 越界空串 / `BuildTooltip` 全文 / 英文态显示「英」/ 缺方案名「未知」/ 生产 `TooltipText` 与纯逻辑一致 / 跟随 `AlwaysShowMode()`）
+- [x] 扩展 `scripts\gate\L1-quickpanel-hotkey.ps1` 并**造坏数据证明新断言会红**
+  - 该脚本本轮**新建**（15 项检查：A 资产存在 / B DPI 单一真相源 / C 状态回显接线 / D 键盘接线 / E tooltip 接线 / F 显示路径零 I/O / G 中文文案 / H IPC 边界未破），已接进 `scripts\gate\run-all.ps1`（新增 `-SkipL1`）
+  - 造坏数据证明：`docs/archive/evidence/spec099-l1-gate-toothproof.txt` —— CONTROL 绿 / M1（删 `WM_TIMER` 里的 `RefreshInputState()`）红 / M2（本地抄一份 DPI 公式）红 / M3（`FluxingPanelStatus.h` 引入 `WeaselIPCData.h`）红 / ORIGINAL 绿 ⇒ `TOOTHPROOF=OK`
+  - 单测侧另有 `docs/archive/evidence/spec099-mutation-proof.txt`（5 处变异全被抓住，还原后 SHA256 一致）
 
 ## P0-6 · 装机版 DPI 复验（T5 收口）【可立即开工】
 
-- [ ] 探测 `D:\Program Files\fluxing\weasel\WeaselServer.exe` 版本（应为 1.1.9.0，本轮已证）
+- [x] 探测 `D:\Program Files\fluxing\weasel\WeaselServer.exe` 版本（应为 1.1.9.0，本轮已证）
+  - 实跑：ProductName `Fluxing` / ProductVersion `1.1.9.0` / FileVersion `1.1.9.0`，Length 2287104
 - [ ] 起 server（**先停计划任务 `FluxingDeployerMaintenance` 再 `Start-Process`**），在 150% DPI 下量面板物理尺寸
+  - **需用户在场**：非交互会话无法切 DPI、无法量像素。无头部分已用断言钉住 —— T25b/T25g：150% ⇒ 面板 **368×72**、4 槽位在面板内且互不重叠
 - [ ] 期望 368×72（修复后），若仍 245×48 ⇒ 登记 `test\regression\DEFECTS.yaml` 新 `D00xx` 并写 heavy 复现用例
+  - 代码级断言已是 368×72（`include/FluxingPanelDpi.h` 就近舍入 `(logical*dpi+48)/96`，245@144% = 368 非 367）；真机像素仍待手点确认
 - [ ] 100% / 200% 各测一次；多屏各测一次
+  - 断言侧三档齐备（245×48 / 368×72 / 490×96，`dpi<=0` 退化 96）；真机多屏落点待手点
 
 ## P0-7 · 面板位置持久化
 

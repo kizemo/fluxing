@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-分层门禁总入口：依次跑 L0 静态 / L3 变异 / L4 回归用例 / L5 sandbox-gate。
+分层门禁总入口：依次跑 L0 静态 / L1 快捷设置栏静态 / L3 变异 / L4 回归用例 / L5 sandbox-gate。
 
 .DESCRIPTION
 每一层都独立记时、独立记退出码；任何一层非 0 ⇒ 整体失败。
@@ -11,7 +11,7 @@
 .PARAMETER Root
 仓库根目录。
 
-.PARAMETER SkipL0 / SkipL3 / SkipCases / SkipSandboxGate
+.PARAMETER SkipL0 / SkipL1 / SkipL3 / SkipCases / SkipSandboxGate
 跳过对应分层。
 
 .PARAMETER CaseTimeoutSec
@@ -24,6 +24,7 @@ pwsh -NoProfile -File scripts\gate\run-all.ps1
 param(
     [string]$Root = '',
     [switch]$SkipL0,
+    [switch]$SkipL1,
     [switch]$SkipL3,
     [switch]$SkipCases,
     [switch]$SkipSandboxGate,
@@ -93,6 +94,21 @@ elseif (-not (Test-Path -LiteralPath $l0)) {
 else {
     Invoke-Step 'L0' '静态门禁' {
         & $script:HostExe -NoProfile -ExecutionPolicy Bypass -File $l0 -Mode all -Root $Root | ForEach-Object { Write-Host $_ }
+        return $LASTEXITCODE
+    }
+}
+
+# ------------------------------ L1 快捷设置栏静态 ------------------------------
+$l1 = Join-Path $Root 'scripts\gate\L1-quickpanel-hotkey.ps1'
+if ($SkipL1) {
+    Add-Skip 'L1' '快捷设置栏静态门禁' '按 -SkipL1 跳过'
+}
+elseif (-not (Test-Path -LiteralPath $l1)) {
+    Add-Skip 'L1' '快捷设置栏静态门禁' "缺 $l1"
+}
+else {
+    Invoke-Step 'L1' '快捷设置栏静态门禁' {
+        & $script:HostExe -NoProfile -ExecutionPolicy Bypass -File $l1 -Root $Root | ForEach-Object { Write-Host $_ }
         return $LASTEXITCODE
     }
 }

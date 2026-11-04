@@ -1,4 +1,20 @@
 ## [Unreleased]
+### feat(WeaselServer): 快捷设置栏回显当前输入状态（中/英 + 全/半角）、键盘可达（Tab/方向键/Enter/Space/Esc）与每槽 tooltip（spec 099 P0-4 / P0-5 / P0-6 / ADR 0036）
+
+- **症状**：面板 4 个槽只有图标，用户看不出当前是中文态还是英文态、是全角还是半角（切换只能盲试）；面板用 `WS_EX_NOACTIVATE` 显示（L89-fix 的事故修复：抢焦点会让用户打不了中文）⇒ 面板收不到按键，纯键盘用户完全用不了它；图标无文字说明，新用户不知道 4 个槽分别干什么。
+- **状态回显**（P0-4）：面板右侧新增竖排两字的**状态区**（上=中/英，下=全/半）。状态语义与文字映射下沉到 header-only `include/FluxingPanelStatus.h`（namespace `fluxing::panel_status`），生产与单元测试**同源**（constitution R7）。状态来源 = 服务端注入的 `StateProvider`，只读 `RimeWithWeaselHandler` 的**内存镜像字段**（`IsAsciiMode` / `IsFullShape` / `GetCurrentSchemaId`）与启动期已缓存的 `AboutDialog::VersionText()`。拉取挂在面板**已有的** 100ms 轮询 timer 里，比对 5 个字段、**变了才**重绘 ⇒ 无变化时零重绘、零像素抖动。
+- **零 I/O 硬要求（P2）**：`WeaselServerApp::Run()` 在 `m_handler->Initialize();` 之后立即调用一次 `IsFullShape()` / `IsSimplification()`，把 Rime 选项缓存**预热**成「已缓存」—— 否则显示路径上的**首次**调用会触发 `user_config_open`（文件 I/O），破防在最难察觉的第一次。「常驻显示」仍唯一取 `AlwaysShowMode()`，provider 只做镜像（R7）。
+- **状态区几何**：左界 = **最后一个槽位的右边界 + 间隙**，右界 = 内容右界（面板宽 − padding）—— 不是写死 `x=225`（150% 下会压到槽 3 上 ⇒ 槽位命中区被改）。100% ⇒ x=225..240；150% ⇒ x=341..360；200% ⇒ x=450..480。任意 DPI 下与全部槽位**不相交**。几何公式集中在 `QuickPanelDialog.cpp` 的 `ComputeLayout()` / `SlotRectForLayout()` / `StatusRectForLayout()`，对外暴露 `SlotRectForSize()` / `StatusRectForSize()` 供单测断言（测试不复制公式）。
+- **DPI 缩放下沉**（P0-6）：新增 header-only `include/FluxingPanelDpi.h`，`ScaleLogicalByDpi(logical,dpi)` = `(logical*dpi+48)/96`（就近舍入、.5 向上；`dpi<=0` 退化 96；结果不大于 0 时回退 logical），生产代码原本的本地缩放函数改为**调用**它 ⇒ **150% ⇒ 368×72** 物理像素。
+- **键盘可达性**（P0-5）：键位语义下沉到 header-only `include/FluxingPanelKeyboard.h`（namespace `fluxing::panel_keyboard`）。Tab / Shift+Tab / ← → / Home / End 在 `[0, slot_count)` 内循环移焦；Enter / Space 激活当前焦点槽（**无焦点槽位时只吞掉**，绝不误触发槽 0）；`WM_CHAR` 一律吞掉（面板不是输入框 ⇒ 不产生系统提示音、不进 IME）；焦点槽位画蓝色虚线焦点环。
+- **焦点方案**：保留 `WS_EX_NOACTIVATE` + `SW_SHOWNOACTIVATE`（面板出现时**不抢**用户编辑框焦点，避免重演 L89-fix 的「无法输入中文」），用户**点击面板**时才 `CaptureKeyboardFocus()`（跨线程用 `AttachThreadInput` 记住原焦点窗口），收起时 `RestoreKeyboardFocus()` 归还（**仅当焦点此刻仍在面板上**才归还，绝不抢走用户新点的窗口）。
+- **Esc 语义调和**：用「键盘交互态」这一**可判定的状态位**分流 —— 未交互 ⇒ Esc 只吞掉、面板不隐藏（守 ADR 0019 D2「显隐只靠 Alt+,」）；已交互 ⇒ Esc 收起**面板自身**、不触碰任何其他窗口（守 D0032：关「用户短语」不得连带收起快捷设置栏）。按状态判断 ⇒ 可单测、可判别。
+- **每槽 tooltip**：hover 显示「名称 · 当前态」（槽 0 当前方案名 / 槽 1 当前输入中英 / 槽 2 常驻显示开关 / 槽 3 版本号），文本由 header-only `include/FluxingPanelTooltip.h`（namespace `fluxing::panel_tooltip`）生成，生产与测试同源。自绘轻量顶层窗（不引 comctl32、不改 `.vcxproj`、不抢焦点）；hover 真相源是**轮询**而非 `WM_MOUSEMOVE`（L84-fix 已证投递不可靠）。
+- **未改动 `include/WeaselIPCData.h` ⇒ 不触发 IPC 四边同步。**
+- **验证**：`test/TestQuickPanelDialog` 从 120 条增至 **190 条**断言（新增 T25 DPI 缩放与物理布局、T26 状态区几何与文字映射、T27 键盘状态机、T28 每槽 tooltip、T29 生产级键盘端到端）。**变异证明 5 处定向变异全部被抓住**：DPI 舍入截断（T25b/T25g 红）、tooltip 取错字段（T28g/T28k/T28m 红）、Shift+Tab 方向写反（T27h/T27i/T27j 红）、Esc 无条件收起（**既有 T14e 与 T27o 同时红**）、状态区左移压到槽位（3 档 DPI × 2 条 = 6 条红）。每轮变异后还原并 **SHA256 校验一致**，最终 190/190 绿。证据落盘 `docs/archive/evidence/spec099-mutation-proof.txt`。
+- **未验证（真机）**：`CaptureKeyboardFocus()` / `RestoreKeyboardFocus()` 的跨线程 `AttachThreadInput` 行为、以及面板作为 `WeaselServer.exe` 进程内窗口能否稳定拿到键盘焦点，只能在装机环境确认；真实 100% / 150% / 200% DPI 切换下 368×72 的物理尺寸与状态区需人工复验；多显示器拔插时的落点（P0-7 遗留）仍需人工复验。面板**出现时**仍收不到按键（`WS_EX_NOACTIVATE` 的固有代价），用户须先点一下面板才能用键盘。
+
+
 ### feat(WeaselServer): 快捷设置栏面板位置持久化 —— 拖到哪记住到哪，重启后回到原位并钳制回可视区（spec 099 P0-7 / ADR 0035）
 
 - **症状**：快捷设置栏（常驻面板）自 v0.19.0.62 起每次显示都固定落在主屏右下角（`PlacePanelAtBottomRight()`）。用户既拖不动它，也没法把它放到副屏或顺手的位置。

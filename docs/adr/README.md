@@ -49,6 +49,7 @@ Do not dump all ADRs into every prompt.
 | 0033 | 0033. 把验收资产产品化：缺陷登记表 + 分层门禁 + 变异自检 | `docs/adr/0033-regression-asset-and-staged-gate.md` | Accepted |
 | 0034 | 0034. 快捷设置栏第 4 槽承载「关于 / 账号说明」页，第 1 槽切换输入方案；版本与产品名的唯一真相源是宿主 exe 的 PE 版本资源 | `docs/adr/0034-quickpanel-about-dialog-and-slot0-schema-switch.md` | Accepted |
 | 0035 | 0035. 快捷设置栏的位置持久化到独立文件 `quickpanel.position`；启动期读一次并缓存，恢复时钳制回可见工作区 | `docs/adr/0035-quickpanel-position-persistence.md` | Accepted |
+| 0036 | 0036. 快捷设置栏回显当前输入状态、键盘可达性与每槽 tooltip；状态区从「最后一个槽位右边界」推导；Esc 语义用「键盘交互态」调和 | `docs/adr/0036-quickpanel-status-echo-keyboard-reachability-and-tooltip.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and
