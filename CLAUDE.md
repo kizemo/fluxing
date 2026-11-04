@@ -37,6 +37,8 @@
 - **必须 `git status -sb` + `git diff --stat`** 在 commit 前 — 阻止 `weasel.props` / `env.bat` / `*.obj` 误提交。
 - **必须先读 [`Rime-设置说明书-重点快捷键.md`](Rime-设置说明书-重点快捷键.md)** 当修改 `output/data/**/*.yaml` / `output/data/**/*.custom.yaml` 的 `key_binder/bindings` / `editor/bindings` / `ascii_composer/switch_key` / `switches` / `recognizer/patterns` / `punctuator/*` / `translator/*` / `app_options` / `switcher/hotkeys`;遵循 §3 补靪语法、§6/§7 action 完整列表、§9.3 WeaselTSF `RELEASE_MASK` 坑。
 
+- **必须阶段收尾双产物**: 完成 `.specify/specs/NNN-*/tasks.md` 任一阶段任务时, 必须同步更新 `docs/archive/handoffs/handoff-YYYY-MM-DD-<slug>.md` 并就地改写 `docs/archive/prompts/prompt-next-session-YYYY-MM-DD-<slug>.md` (接力 prompt 只给全路径指针, 不复述 handoff 内容); 规则全文见 [`AGENTS.md` §9](AGENTS.md#9-handoff--relay-prompt-mandatory)。
+
 完整的 "为什么" 与事故溯源在 `lessons-learned.md`;Const. 链接 + Verification 见各专项 `.claude/rules/`。
 
 ---

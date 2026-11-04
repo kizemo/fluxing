@@ -661,3 +661,53 @@ When you start a session and the user gives a non-trivial task:
 If none of these match, the issue is novel — open a new `L##` entry
 in `.specify/memory/lessons-learned.md` once you resolve it, so the
 next agent (or future you) doesn't have to rediscover the fix.
+
+---
+
+## 9. Handoff & Relay Prompt (mandatory)
+
+Every **stage task** completion in this repo — any item you tick off in
+`.specify/specs/NNN-*/tasks.md` — MUST leave two artifacts behind, in
+the same change as the code:
+
+1. **A handoff document** —
+   `docs/archive/handoffs/handoff-YYYY-MM-DD-<slug>.md`
+   (slug = repo or spec identifier; same day + same spec ⇒ **update the
+   existing file in place**, never create a duplicate). It carries, in
+   this order:
+   - one-paragraph current state (what is done, what is not);
+   - a table of **must-read documents with full absolute paths**
+     (handoff first, then spec / tasks / ADRs / constitution);
+   - per-task progress for the stage (done / in-flight / pending);
+   - the **next stage plan**, ordered, with the reason for that order;
+   - **evidence paths** (test output, mutation proof, gate logs);
+   - environment facts and tool pitfalls that are **not derivable from
+     the repo**;
+   - anything that needs the user physically present.
+
+2. **A relay prompt** —
+   `docs/archive/prompts/prompt-next-session-YYYY-MM-DD-<slug>.md`
+   (one file per spec + day, updated in place). It is **one sentence** and it:
+   - points at the handoff + spec + tasks by **full absolute path**;
+   - tells the next session to read them first and **not redo finished
+     work**;
+   - does **NOT restate** the handoff's content — no status recap, no
+     evidence list, no plan detail. The handoff is the single source of
+     truth;
+   - is droppable into a fresh session as-is.
+
+3. **A pointer in `CLAUDE.md` §2** so the next session meets the
+   requirement before it finishes a stage. `CLAUDE.md` carries the
+   pointer only; the rule body lives here.
+
+Rules:
+- The handoff is **state, not a diary** — rewrite it to describe the
+  state at hand-off time; do not append a running log.
+- Every claim in the handoff is labelled **verified / inferred / not
+  verified**. Anything you could not actually run is "not verified" —
+  never speculate.
+- If a stage task needs the user's machine (DPI scaling, multi-monitor,
+  real clicks, black-box capture), list it under "needs the user" rather
+  than claiming success.
+- Keep `docs/adr/README.md` "See also" links pointing at sections that
+  actually exist (e.g. `AGENTS.md#9-handoff--relay-prompt-mandatory`).
