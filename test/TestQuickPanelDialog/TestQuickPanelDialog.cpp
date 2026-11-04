@@ -33,10 +33,13 @@
 // spec 099 P0-3: 槽 0(切换到下一个输入方案)的纯逻辑 + 关于/账号说明页
 // (版本与产品名的单一真相源 = PE 版本资源)。
 #include "../../include/FluxingSchemaCycle.h"
+#include "../../include/FluxingPanelPosition.h"
 #include "../../WeaselServer/AboutDialog.h"
 
 #include <cstdio>
 #include <fstream>
+#include <iterator>
+#include <vector>
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -462,31 +465,62 @@ int main() {
     // 合成点击的**确定性**:面板的「拖拽 vs 点击」判定读的是**真实光标位置**
     // (WM_LBUTTONUP 里 GetCursorPos,阈值 4 物理像素 —— 见
     // QuickPanelDialog.cpp)。真实光标一旦发生位移 ⇒ 被判成拖拽 ⇒ 回调不触发。
-    // 因此按下前 / 抬起前各把光标钉一次到被点槽位;若 SetCursorPos 无效
-    // (无输入设备的非交互 window station),生产代码侧的 L178-fix 会把
-    // 「取不到光标」按「无位移」处理,行为同样确定。
-    auto click_slot = [&](int idx) {
+    //
+    // 合成点击要过三道真实光标关:
+    //  (a) **钉住**:按下前 / 抬起前各把光标钉一次到被点槽位,并**读回自证**
+    //      (SetCursorPos 之后位置可能被指针平滑 / 外部鼠标移动带偏);
+    //  (b) **DOWN 与 UP 之间不得有慢 I/O**:原来这里夹着一个 Check(printf),
+    //      把「真实光标可能漂移」的时间窗从微秒拉到毫秒,是偶发红的放大器;
+    //  (c) **环境干扰重试**:外部鼠标在按下与抬起之间移动时,生产侧(正确地)
+    //      判成拖拽而不派发 —— 此时重新钉住再试。
+    //      注意 (c) **不削弱判别性**:若生产代码回归(本该派发却不派发),
+    //      光标并没有漂移,重试不会让它变绿,重试用尽后断言仍然红。
+    // 若 SetCursorPos/GetCursorPos 不可用(无输入设备的非交互 window station),
+    // 生产代码侧的 L178-fix 会把「取不到光标」按「无位移」处理,行为同样确定。
+    auto pin_cursor = [](POINT target) {
+      for (int i = 0; i < 4; ++i) {
+        if (!SetCursorPos(target.x, target.y))
+          return false;
+        POINT now = {0, 0};
+        if (!GetCursorPos(&now))
+          return false;
+        if (now.x == target.x && now.y == target.y)
+          return true;  // 读回自证:光标确实落在目标点
+      }
+      return true;
+    };
+    auto click_slot = [&](int idx, int& counter) {
       int x = 0, y = 0, w = 0, h = 0;
       if (!QuickPanelDialog::SlotRect(idx, &x, &y, &w, &h))
         return false;
       const LPARAM lp = MAKELPARAM(x + w / 2, y + h / 2);
       POINT screen = {x + w / 2, y + h / 2};
       ClientToScreen(panel, &screen);
-      SetCursorPos(screen.x, screen.y);
-      QuickPanelDialog::WndProc(panel, WM_LBUTTONDOWN, 1, lp);
-      // 判别性:按下后 active 索引必须落在该槽位 —— 否则点击根本不会被路由
-      // (HitTest 没命中 ⇒ s_activeIdx 保持 -1 ⇒ 两条抬起分支都不派发)。
-      Check(QuickPanelDialog::s_activeIdx == idx,
+      constexpr int kMaxAttempt = 5;
+      int active_after_down = -1;
+      for (int attempt = 0; attempt < kMaxAttempt; ++attempt) {
+        const int before = counter;
+        pin_cursor(screen);
+        QuickPanelDialog::WndProc(panel, WM_LBUTTONDOWN, 1, lp);
+        // 判别性:按下后 active 索引必须落在该槽位 —— 否则点击根本不会被路由
+        // (HitTest 没命中 ⇒ s_activeIdx 保持 -1 ⇒ 两条抬起分支都不派发)。
+        // 必须在 UP 之前取样(UP 会把 s_activeIdx 复位成 -1)。
+        active_after_down = QuickPanelDialog::s_activeIdx;
+        pin_cursor(screen);  // 抵消 DOWN 期间的真实光标位移
+        QuickPanelDialog::WndProc(panel, WM_LBUTTONUP, 0, lp);
+        if (counter > before)
+          break;  // 本次尝试已派发回调
+        // 没派发 ⇒ 生产侧判成了拖拽(见 (c)):重新钉住再试。
+      }
+      Check(active_after_down == idx,
             "T20q: WM_LBUTTONDOWN 后 active 索引落在被点槽位");
-      SetCursorPos(screen.x, screen.y);  // 抵消 DOWN 期间的真实光标位移
-      QuickPanelDialog::WndProc(panel, WM_LBUTTONUP, 0, lp);
       return true;
     };
 
-    Check(click_slot(0), "T20c: 槽 0 (Schema) 矩形可解析");
-    Check(click_slot(1), "T20d: 槽 1 (Phrase) 矩形可解析");
-    Check(click_slot(2), "T20e: 槽 2 (Settings) 矩形可解析");
-    Check(click_slot(3), "T20f: 槽 3 (Account) 矩形可解析");
+    Check(click_slot(0, n_schema), "T20c: 槽 0 (Schema) 矩形可解析");
+    Check(click_slot(1, n_phrases), "T20d: 槽 1 (Phrase) 矩形可解析");
+    Check(click_slot(2, n_shortcut), "T20e: 槽 2 (Settings) 矩形可解析");
+    Check(click_slot(3, n_login), "T20f: 槽 3 (Account) 矩形可解析");
     Check(n_schema == 1, "T20g: 槽 0 点击 → 方案切换回调恰好 1 次");
     Check(n_phrases == 1, "T20h: 槽 1 点击 → 短语库回调恰好 1 次");
     Check(n_shortcut == 1, "T20i: 槽 2 点击 → 快捷键设置回调恰好 1 次");
@@ -592,6 +626,189 @@ int main() {
           "T23d: 当前不在列表 ⇒ 取第一个");
     Check(fluxing::NextSchemaId({}, "a").empty(),
           "T23e: 列表为空 ⇒ 不切(空串)");
+  }
+
+  // ----------------------------------------------------------------
+  // spec 099 P0-7: 面板位置持久化 —— 跨重启保留 + 分辨率/DPI 变化后钳回可视区。
+  //   落点 = <用户数据目录>\quickpanel.position(独立文件,ADR 0035);
+  //   quickpanel.state 是 always_show 的单一真相源(R7)⇒ 位置不得污染它。
+  // ----------------------------------------------------------------
+  std::printf("\n[spec 099 P0-7] 面板位置持久化\n");
+  {
+    namespace pp = fluxing::panel_position;
+
+    // ===== 落盘格式(纯逻辑) =====
+    Check(pp::FormatPosition(1234, -567) == "pos_x=1234\npos_y=-567\n",
+          "T24a: 落盘格式 = pos_x / pos_y 两行 ASCII");
+    auto parsed = pp::ParsePosition("pos_x=1234\npos_y=-567\n");
+    Check(parsed.has_value() && parsed->x == 1234 && parsed->y == -567,
+          "T24b: 往返解析(含负坐标)");
+    Check(!pp::ParsePosition("pos_x=1234\n").has_value(),
+          "T24c: 缺 pos_y ⇒ 不认");
+    Check(!pp::ParsePosition("always_show=1\n").has_value(),
+          "T24d: 不是位置文件 ⇒ 不认");
+    Check(!pp::ParsePosition("pos_x=abc\npos_y=1\n").has_value(),
+          "T24e: 非数字 ⇒ 不认");
+    Check(!pp::ParsePosition("pos_x=999999\npos_y=1\n").has_value(),
+          "T24f: 坐标越界 ⇒ 不认");
+    Check(!pp::ParsePosition("").has_value(), "T24g: 空内容 ⇒ 不认");
+    Check(!pp::ParsePosition("pos_x=12x\npos_y=1\n").has_value(),
+          "T24h: 尾巴有垃圾字符 ⇒ 不认");
+
+    // ===== 读写 =====
+    wchar_t tmpDir[MAX_PATH] = {0};
+    ::GetTempPathW(MAX_PATH, tmpDir);
+    const std::wstring tmpDirW(tmpDir);
+    const std::wstring posFile =
+        tmpDirW + L"fluxing_qp_position_test.position";
+    const std::wstring stateFile =
+        tmpDirW + L"fluxing_qp_state_guard.state";
+    const std::wstring missingFile =
+        tmpDirW + L"fluxing_qp_position_missing.position";
+    ::DeleteFileW(posFile.c_str());
+    ::DeleteFileW(stateFile.c_str());
+    ::DeleteFileW(missingFile.c_str());
+
+    Check(pp::WritePositionFile(posFile, 321, -654), "T24i: 位置写盘成功");
+    {
+      std::ifstream probe(posFile, std::ios::binary);
+      const std::string content((std::istreambuf_iterator<char>(probe)),
+                                std::istreambuf_iterator<char>());
+      Check(content == "pos_x=321\npos_y=-654\n", "T24j: 落盘内容符合格式");
+    }
+    Check(!pp::WritePositionFile(tmpDirW, 1, 2),
+          "T24k: 写盘目标不可写 ⇒ 失败(不静默成功)");
+
+    // ===== 跨重启:文件已落盘,读走生产读盘路径 =====
+    QuickPanelDialog::SetPositionPath(posFile);
+    Check(QuickPanelDialog::RestorePosition(), "T24l: 启动期读回持久化位置");
+    Check(QuickPanelDialog::HasSavedPosition() &&
+              QuickPanelDialog::SavedPosition().x == 321 &&
+              QuickPanelDialog::SavedPosition().y == -654,
+          "T24m: 跨重启保留位置(含负坐标)");
+
+    // ===== 损坏文件 ⇒ 保持现状(右下角默认锚点) =====
+    {
+      std::ofstream bad(posFile, std::ios::binary | std::ios::trunc);
+      bad << "garbage\n";
+    }
+    Check(!QuickPanelDialog::RestorePosition(),
+          "T24n: 位置文件损坏 ⇒ 读盘失败(不认)");
+    Check(!QuickPanelDialog::HasSavedPosition(),
+          "T24n2: 损坏 ⇒ 运行期缓存清空(面板走默认锚点)");
+
+    // ===== 写盘路径 =====
+    Check(QuickPanelDialog::SavePositionAt(100, 200), "T24o: SavePositionAt 写盘成功");
+    Check(QuickPanelDialog::SavedPosition().x == 100 &&
+              QuickPanelDialog::SavedPosition().y == 200,
+          "T24o2: 写盘后运行期缓存同步");
+
+    // ===== R7 守卫:位置落盘不得动 quickpanel.state =====
+    {
+      std::ofstream st(stateFile, std::ios::binary | std::ios::trunc);
+      st << "always_show=1\n";
+    }
+    std::string stateBefore;
+    {
+      std::ifstream f(stateFile, std::ios::binary);
+      stateBefore.assign((std::istreambuf_iterator<char>(f)),
+                         std::istreambuf_iterator<char>());
+    }
+    Check(stateBefore == "always_show=1\n", "T24p0: always_show 状态文件已就位");
+    QuickPanelDialog::SavePositionAt(111, 222);
+    std::string stateAfter;
+    {
+      std::ifstream f(stateFile, std::ios::binary);
+      stateAfter.assign((std::istreambuf_iterator<char>(f)),
+                        std::istreambuf_iterator<char>());
+    }
+    Check(stateBefore == stateAfter,
+          "T24p1: 写位置不动 quickpanel.state(R7 单一真相源不被污染)");
+
+    // ===== 钳制:分辨率 / DPI 变化后钳回可视区 =====
+    std::vector<pp::Rect> areas;
+    areas.push_back(pp::Rect{0, 0, 1920, 1040});     // 主屏
+    areas.push_back(pp::Rect{-1920, 0, -1, 1000});  // 左侧副屏(负坐标)
+    const int W = 245;
+    const int H = 48;
+    {
+      pp::Point p = pp::ClampToVisibleArea(1600, 900, W, H, areas);
+      Check(p.x == 1600 && p.y == 900,
+            "T24q: 完全在主屏工作区内 ⇒ 原样保留");
+    }
+    {
+      pp::Point p = pp::ClampToVisibleArea(-1500, 500, W, H, areas);
+      Check(p.x == -1500 && p.y == 500,
+            "T24r: 左侧副屏(负坐标)工作区内 ⇒ 原样保留(多屏)");
+    }
+    {
+      // 规则 1 必须与规则 2 **可区分**:这里两块工作区互相重叠(Windows 允许
+      // 副屏与主屏部分重叠),面板完整落在主屏内,但「中心最近」的小屏离面板
+      // 中心更近 —— 若实现里没有「完整落在某个工作区内 ⇒ 原样保留」这条规则,
+      // 面板会被吸到小屏里(100,500 ⇒ 222,524)。
+      // 这条用例是规则 1 唯一的判别点:T24q / T24r 在规则 1 被删掉时仍全绿。
+      std::vector<pp::Rect> overlap;
+      overlap.push_back(pp::Rect{0, 0, 1920, 1040});   // 主屏
+      overlap.push_back(pp::Rect{200, 400, 500, 600});  // 与主屏重叠的小屏
+      pp::Point p = pp::ClampToVisibleArea(100, 500, W, H, overlap);
+      Check(p.x == 100 && p.y == 500,
+            "T24r2: 重叠多屏下完整落在某屏内 ⇒ 原样保留(不被最近屏吸走)");
+    }
+    {
+      pp::Point p = pp::ClampToVisibleArea(1900, 900, W, H, areas);
+      Check(p.x == 1920 - W && p.y == 900,
+            "T24s: 超出右边界(分辨率变小)⇒ 钳回可视区");
+    }
+    {
+      pp::Point p = pp::ClampToVisibleArea(1600, 1200, W, H, areas);
+      Check(p.x == 1600 && p.y == 1040 - H,
+            "T24t: 超出下边界(DPI 变化)⇒ 钳回可视区");
+    }
+    {
+      pp::Point p = pp::ClampToVisibleArea(5000, 5000, W, H, areas);
+      Check(p.x == 1920 - W && p.y == 1040 - H,
+            "T24u: 完全在屏外 ⇒ 吸附回最近工作区");
+    }
+    {
+      pp::Point p =
+          pp::ClampToVisibleArea(-1500, 500, W, H, std::vector<pp::Rect>());
+      Check(p.x == 0 && p.y == 0, "T24v: 没有工作区 ⇒ (0,0)");
+    }
+    {
+      std::vector<pp::Rect> tiny;
+      tiny.push_back(pp::Rect{0, 0, 100, 50});  // 容不下 245x48
+      pp::Point p = pp::ClampToVisibleArea(10, 10, W, H, tiny);
+      Check(p.x == 0 && p.y == 0, "T24w: 工作区容不下面板 ⇒ (0,0)");
+    }
+
+    // ===== 默认落点 =====
+    {
+      const std::wstring defPos = pp::DefaultPositionPath();
+      const std::wstring defState = QuickPanelDialog::DefaultStatePath();
+      const std::wstring posName = L"quickpanel.position";
+      Check(defPos.size() >= posName.size() &&
+                defPos.compare(defPos.size() - posName.size(), posName.size(),
+                               posName) == 0,
+            "T24x: 默认落点文件名 = quickpanel.position");
+      Check(defPos != defState,
+            "T24y: 默认落点 != quickpanel.state(独立文件,R7)");
+      const size_t sp = defState.find_last_of(L"\\");
+      const size_t dp = defPos.find_last_of(L"\\");
+      Check(sp != std::wstring::npos && dp != std::wstring::npos &&
+                defState.substr(0, sp) == defPos.substr(0, dp),
+            "T24z: 位置与状态落在同一个用户数据目录");
+    }
+
+    // ===== 收尾:恢复默认落点 + 清临时文件 =====
+    QuickPanelDialog::SetPositionPath(missingFile);
+    Check(!QuickPanelDialog::RestorePosition(),
+          "T24zz: 文件缺失 ⇒ 无位置(保持右下角默认锚点)");
+    Check(!QuickPanelDialog::HasSavedPosition(),
+          "T24zz2: 缺失 ⇒ 运行期缓存清空");
+    QuickPanelDialog::SetPositionPath(L"");
+    ::DeleteFileW(posFile.c_str());
+    ::DeleteFileW(stateFile.c_str());
+    ::DeleteFileW(missingFile.c_str());
   }
 
   std::printf("\n=== %d / %d assertions passed ===\n", g_pass, g_pass + g_fail);

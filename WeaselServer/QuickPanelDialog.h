@@ -40,6 +40,10 @@
 // spec 095: 「快捷面板常驻」的运行期状态 + 状态文件读写的单一事实源
 // (QuickPanelDialog 与 ShortcutSettings 共用,constitution R7)。
 #include <FluxingAlwaysShow.h>
+// spec 099 P0-7: 面板位置的落盘格式 + 钳制算法(单一事实源,生产代码与测试同源)。
+// 落点 = <用户数据目录>\quickpanel.position —— **独立文件**,不污染
+// quickpanel.state(always_show 的单一真相源,constitution R7;ADR 0035)。
+#include <FluxingPanelPosition.h>
 
 class QuickPanelDialog {
  public:
@@ -126,6 +130,51 @@ class QuickPanelDialog {
   // legacy 传空串表示不兜底。
   static bool LoadPersistedAlwaysShowModeFrom(const std::wstring& primary,
                                               const std::wstring& legacy);
+
+  // ===== spec 099 P0-7: 面板位置持久化 =====
+  // 落点 = <用户数据目录>\quickpanel.position(独立文件,ADR 0035;
+  // **不污染** quickpanel.state —— 那是 always_show 的单一真相源,R7)。
+  // 写盘时机:拖动结束(WM_LBUTTONUP)。读盘时机:服务端启动期(RestorePosition),
+  // Show() 建窗时只读内存缓存 ⇒ 显示路径零 I/O(守 P2 红线)。
+  static void SetPositionPath(const std::wstring& path);  // 测试注入;空串=回默认
+  static bool HasSavedPosition() {
+    return fluxing::panel_position::HasSavedPositionRef();
+  }
+  static POINT SavedPosition() {
+    const fluxing::panel_position::Point& p =
+        fluxing::panel_position::SavedPositionRef();
+    POINT out = {p.x, p.y};
+    return out;
+  }
+  // 启动期读盘:成功 ⇒ 运行期缓存有位置。文件缺失/损坏 ⇒ 返回 false,
+  // 缓存保持「无位置」⇒ 面板沿用右下角默认锚点(行为与本特性之前一致)。
+  static bool RestorePosition() {
+    bool& has = fluxing::panel_position::HasSavedPositionRef();
+    fluxing::panel_position::Point& pos =
+        fluxing::panel_position::SavedPositionRef();
+    has = false;
+    pos = fluxing::panel_position::Point{0, 0};
+    auto p = fluxing::panel_position::ReadPositionFile(
+        fluxing::panel_position::ResolvePositionPath());
+    if (!p.has_value())
+      return false;
+    pos = *p;
+    has = true;
+    return true;
+  }
+  // 写指定位置(拖动结束与测试注入共用同一条写盘路径)。
+  static bool SavePositionAt(int x, int y) {
+    const bool ok = fluxing::panel_position::WritePositionFile(
+        fluxing::panel_position::ResolvePositionPath(), x, y);
+    if (ok) {
+      fluxing::panel_position::SavedPositionRef() =
+          fluxing::panel_position::Point{x, y};
+      fluxing::panel_position::HasSavedPositionRef() = true;
+    }
+    return ok;
+  }
+  // 拖动结束:写当前窗口位置(屏幕坐标,左上角)。
+  static bool SavePosition();
 
   static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 

@@ -30,6 +30,10 @@ WeaselServerApp::WeaselServerApp()
   // spec 099 P0-3: 关于页需要的「产品名 / 版本号」在启动期从宿主 exe 的 PE
   // 版本资源读一次并缓存;关于页的显示与点击路径零 I/O(守 P2 红线)。
   AboutDialog::Initialize();
+  // spec 099 P0-7: 恢复上次的面板位置(只回填位置缓存,**不显示**面板;
+  // spec 055 不变量原样保留)。放在构造期是为了抢在第一次 IPC 请求到达之前
+  // 读完 —— Show() 建窗时只读内存缓存 ⇒ 显示路径零 I/O(守 P2 红线)。
+  QuickPanelDialog::RestorePosition();
   // spec 084 / ADR 0013 D4/D10: 托盘菜单弹出前询问「长显」这一项是否打勾。
   tray_icon.SetMenuItemCheckedCallback([](UINT id) {
     return id == ID_QUICKPANEL_ALWAYS_SHOW &&

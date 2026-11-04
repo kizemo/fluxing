@@ -86,9 +86,18 @@ L4  PASS  exit=0   1.4s  回归用例(fast) cases=1 pass=1 fail=0
 
 ## P0-7 · 面板位置持久化
 
-- [ ] 决策落 ADR：位置存在哪（**不得污染 `quickpanel.state` 的单一真相源语义，R7**）
-- [ ] 失败测试：跨重启保留位置；屏幕分辨率/ DPI 变化后钳制回可视区
-- [ ] 实现 + 多屏负坐标用例
+- [x] 决策落 ADR：位置存在哪（**不得污染 `quickpanel.state` 的单一真相源语义，R7**）→ **ADR 0035**（`docs/adr/0035-quickpanel-position-persistence.md`）
+- [x] 失败测试：跨重启保留位置；屏幕分辨率/ DPI 变化后钳制回可视区
+- [x] 实现 + 多屏负坐标用例
+  - 落点：`<用户数据目录>\quickpanel.position`（**独立文件**，与 `quickpanel.state` 同目录不同文件）⇒ R7 守住；格式 `pos_x=<int>` / `pos_y=<int>`，允许负坐标
+  - 读：**服务端启动期**读一次并缓存 ⇒ `Show()` 显示路径零 I/O（P2）；恢复**只回填缓存、不 auto-show**（spec 055）
+  - 写：拖动结束写**原始位置**（不在保存时钳制，避免松手瞬间跳动）；纯点击不写盘
+  - 钳制三段：完整落在某工作区内⇒原样 / 否则吸附到「中心最近且容得下面板」的工作区 / 都容不下⇒(0,0)；工作区取 `EnumDisplayMonitors` + `GetMonitorInfoW` 的 `rcWork`
+  - 共享纯函数下沉 `include/FluxingPanelPosition.h`（header-only，namespace `fluxing::panel_position`）⇒ 生产代码与测试同源
+  - 验收输出：`test/TestQuickPanelDialog` T24 系列 **32 条断言全绿（120/120）**
+  - **造坏数据（变异）证明有牙**：M1「破坏右边界上界 `best->right - w` → `best->right`」⇒ T24s + T24u 红（118/120）；M3「包含判据参数顺序写反 `RectContains(wa, panel)` → `RectContains(panel, wa)`」⇒ T24r2 红（119/120）；两次恢复后 **SHA256 字节级一致** + 120/120 全绿
+  - 稳定性：先修掉槽位点击用例自身的**全局光标抖动**（lessons-learned **L179**；基线 30 轮 1 红 → 修复后 **30 轮 0 失败**）
+  - 未验证：真实多屏拔插 + 100% / 150% / 200% DPI 下的实际落点（需装机手点复验）
 
 ## P1 · 声明式槽位表（不排进 1.1.x）
 

@@ -678,7 +678,26 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
         newRc = mi.rcWork;
       int newX = 0;
       int newY = 0;
-      PlacePanelAtBottomRight(newRc, panelW, panelH, margin, &newX, &newY);
+      if (HasSavedPosition()) {
+        // spec 099 P0-7: 用户自己摆过位置 ⇒ DPI 变化时**保留**用户位置,只把它
+        // 钳回可见区(否则面板会跑到看不见的地方);没有持久化位置 ⇒ 沿用右下角
+        // 默认锚点(行为与本特性之前一致)。
+        RECT cur = {};
+        GetWindowRect(hwnd, &cur);
+        const std::vector<fluxing::panel_position::Rect> areas =
+            fluxing::panel_position::EnumerateWorkAreas();
+        if (!areas.empty()) {
+          const fluxing::panel_position::Point p =
+              fluxing::panel_position::ClampToVisibleArea(cur.left, cur.top,
+                                                          panelW, panelH, areas);
+          newX = p.x;
+          newY = p.y;
+        } else {
+          PlacePanelAtBottomRight(newRc, panelW, panelH, margin, &newX, &newY);
+        }
+      } else {
+        PlacePanelAtBottomRight(newRc, panelW, panelH, margin, &newX, &newY);
+      }
       SetWindowPos(s_hwnd, HWND_TOPMOST, newX, newY, panelW, panelH,
                    SWP_NOZORDER | SWP_NOACTIVATE);
       // 尺寸变了: 重算 dpr / _phys 常量并重建 offscreen DIB,否则
@@ -801,6 +820,10 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
         // 确定的用户可见效果(0 = 切换到下一个输入方案,3 = 关于/账号说明页)。
         if (!actualDrag) {
           DispatchSlotClick(oldActiveIdx);
+        } else {
+          // spec 099 P0-7: 真的拖动了 ⇒ 把新位置落盘(跨重启保留)。
+          // 只在 actualDrag 时写:纯点击不该产生写盘。
+          SavePosition();
         }
       } else {
         POINT p = {LOWORD(l), HIWORD(l)};
@@ -1586,6 +1609,20 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   int x = 0;
   int y = 0;
   PlacePanelAtBottomRight(workArea, panelW, panelH, margin, &x, &y);
+  // spec 099 P0-7: 有持久化位置 ⇒ 用它(并钳制回当前可见区:分辨率/DPI 变化后
+  // 旧位置可能落到屏外)。没有持久化位置 ⇒ 保持右下角默认锚点(行为不变)。
+  if (HasSavedPosition()) {
+    const std::vector<fluxing::panel_position::Rect> areas =
+        fluxing::panel_position::EnumerateWorkAreas();
+    if (!areas.empty()) {
+      const POINT saved = SavedPosition();
+      const fluxing::panel_position::Point p =
+          fluxing::panel_position::ClampToVisibleArea(saved.x, saved.y, panelW,
+                                                      panelH, areas);
+      x = p.x;
+      y = p.y;
+    }
+  }
 
   s_hwnd = CreateWindowExW(
       WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TOPMOST,
@@ -1665,6 +1702,22 @@ std::wstring QuickPanelDialog::LegacyStatePath() {
 // 默认落点:用户数据目录下的 quickpanel.state(与 WeaselUserDataPath() 同源)。
 std::wstring QuickPanelDialog::DefaultStatePath() {
   return fluxing::always_show::DefaultStatePath();
+}
+
+// spec 099 P0-7: 测试注入位置落点(空串 = 回默认落点)。
+void QuickPanelDialog::SetPositionPath(const std::wstring& path) {
+  fluxing::panel_position::SetPositionPathOverride(path);
+}
+
+// spec 099 P0-7: 拖动结束写盘 —— 取当前窗口的屏幕坐标左上角。
+// 写盘发生在 WeaselServer 进程的拖动回调里(不是 TSF 回调)⇒ 不违反 P2 红线。
+bool QuickPanelDialog::SavePosition() {
+  if (!s_hwnd || !IsWindow(s_hwnd))
+    return false;
+  RECT r = {};
+  if (!GetWindowRect(s_hwnd, &r))
+    return false;
+  return SavePositionAt(r.left, r.top);
 }
 
 // 读一个状态文件的第一行。文件缺失/读不出 ⇒ false(由调用方决定是否兜底)。
