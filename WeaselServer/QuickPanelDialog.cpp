@@ -24,6 +24,10 @@
 #include "QuickPanelDialog.h"
 // spec 084 / ADR 0013 D9: 纯函数的共享单元(header-only,不依赖 windows.h)。
 #include <QuickPanelAlpha.h>
+// spec 099 P0-6: DPI 缩放的纯逻辑(单一真相源:生产与单测同源)。
+#include <FluxingPanelDpi.h>
+// spec 099 P0-5: tooltip 文本(单一真相源:名称 + 当前态)。
+#include <FluxingPanelTooltip.h>
 
 // L81-fix: PNG logo 加载改用 WIC 不用 GDI+ Bitmap(IStream*) (L67-L69 雷区)
 // 也不用 LoadImageW(IMAGE_BITMAP) (L81 — IMAGE_BITMAP 不含 PNG,静默失败)。 需要
@@ -38,6 +42,15 @@
 #pragma comment(lib, "windowscodecs.lib")
 
 static const wchar_t kWindowClassName[] = L"FluxingQuickPanel_v3";
+// spec 099 P0-5: tooltip 是自绘顶层窗(不引 comctl32 —— 不往 vcxproj 里加
+// 新依赖,避免构建链变动)。
+static const wchar_t kTooltipClassName[] = L"FluxingQuickPanel_Tooltip";
+namespace {
+// tooltip 视觉常量(logical 像素;按 dpr 缩放)。
+constexpr int kTooltipPadPx = 6;          // 文字四周内边距
+constexpr int kTooltipGapPx = 4;          // 与面板的垂直间距
+constexpr int kTooltipFontHeightPx = 14;  // 字号
+}  // namespace
 
 namespace {
 // ===== DPI 缩放辅助 =====
@@ -89,10 +102,100 @@ PanelDpi QueryPanelDpi(POINT anchor) {
   return out;
 }
 
-// logical → physical;MulDiv 自带四舍五入,异常 dpi 退化时不塌成 0。
+// logical → physical。spec 099 P0-6: 缩放口径下沉到 include/FluxingPanelDpi.h,
+// 生产代码与单测读**同一份**公式(测试复制公式就是漂移源,constitution R7)。
+// 旧实现是 MulDiv(logical, dpi, 96);对正数它等价于 (logical*dpi + 48) / 96
+// (就近舍入,.5 向上)—— include/FluxingPanelDpi.h 用纯整数复刻同一口径。
 inline int ScaleLogicalByDpi(int logical, UINT dpi) {
-  const int v = MulDiv(logical, (int)dpi, 96);
-  return v > 0 ? v : logical;
+  return fluxing::panel_dpi::ScaleLogicalByDpi(logical, (int)dpi);
+}
+
+// ===== spec 099 P0-6: 物理布局的推演(单一真相源,constitution R7) =====
+// ApplyPhysicalLayout / SlotRect / StatusRect / *ForSize 全部走这一份;
+// 单测通过 SlotRectForSize / StatusRectForSize 走同一条路径 ⇒
+// 测试**不复制**布局公式(复制即漂移 —— spec 092 记的「假绿」死法)。
+struct PanelLayout {
+  float dpr_x;
+  float dpr_y;
+  int padding;
+  int brand_size;
+  int btn_size;
+  int btn_gap;
+  int btn_y_offset;
+  int brand_gap;  // brand → 第一个槽位的间隙
+};
+
+// logical → physical(就近舍入;最小 1 —— 与旧的 scale_x/scale_y 同口径)。
+int ScaleRound(int logical, float dpr) {
+  const int v = (int)(logical * dpr + 0.5f);
+  return v < 1 ? 1 : v;
+}
+
+PanelLayout ComputeLayout(int panel_w_phys, int panel_h_phys) {
+  PanelLayout L;
+  L.dpr_x = (float)panel_w_phys / (float)QuickPanelDialog::kPanelW;
+  L.dpr_y = (float)panel_h_phys / (float)QuickPanelDialog::kPanelH;
+  L.padding = ScaleRound(QuickPanelDialog::kPanelPadding, L.dpr_x);
+  L.brand_size = ScaleRound(QuickPanelDialog::kBrandSize, L.dpr_x);
+  L.btn_size = ScaleRound(QuickPanelDialog::kBtnSize, L.dpr_x);
+  L.btn_gap = ScaleRound(QuickPanelDialog::kBtnGap, L.dpr_x);
+  L.btn_y_offset = ScaleRound(QuickPanelDialog::kPanelVPadding, L.dpr_y);
+  // brand→btn gap = max(2, 2*dpr),跟 PaintOpaqueContent 保持一致。
+  L.brand_gap = max(2, (int)(2 * L.dpr_x + 0.5f));
+  return L;
+}
+
+// 第 index 个槽位的矩形(物理像素)。
+bool SlotRectForLayout(const PanelLayout& L,
+                        int index,
+                        int* x,
+                        int* y,
+                        int* w,
+                        int* h) {
+  if (index < 0 || index >= QuickPanelDialog::kButtonCount)
+    return false;
+  const int button_start_x = L.padding + L.brand_size + L.brand_gap;
+  const int x0 = button_start_x + index * (L.btn_size + L.btn_gap);
+  if (x)
+    *x = x0;
+  if (y)
+    *y = L.btn_y_offset;
+  if (w)
+    *w = L.btn_size;
+  if (h)
+    *h = L.btn_size;
+  return true;
+}
+
+// 状态区(中/英 + 全/半角回显)的矩形(物理像素)。
+// 关键约束:**必须与全部槽位矩形不相交** —— 否则状态像素会压到槽位上,
+// 槽位命中区就不可能保持不变(spec 099 P0-4「命中区不变」)。
+// 算法:左界 = 最后一个槽位的右边界 + 间隙;右界 = 内容右界(面板宽 - padding)。
+// 这样在任意 DPI 下都不会压到槽位(把 x 写死成 225 在 150% 会压到槽位 3 上)。
+bool StatusRectForLayout(const PanelLayout& L,
+                          int panel_w_phys,
+                          int* x,
+                          int* y,
+                          int* w,
+                          int* h) {
+  int lx = 0, ly = 0, lw = 0, lh = 0;
+  if (!SlotRectForLayout(L, QuickPanelDialog::kButtonCount - 1, &lx, &ly, &lw,
+                         &lh))
+    return false;
+  const int gap = ScaleRound(fluxing::panel_status::kStatusGap, L.dpr_x);
+  const int left = lx + lw + gap;
+  const int right = panel_w_phys - L.padding;
+  if (right <= left)
+    return false;  // 极端窄面板 ⇒ 不画状态区(而不是画到槽位上)
+  if (x)
+    *x = left;
+  if (y)
+    *y = L.btn_y_offset;
+  if (w)
+    *w = right - left;
+  if (h)
+    *h = L.btn_size;
+  return true;
 }
 
 // 面板贴 workArea 右下角;尺寸与 margin 一起缩放。clamp 保证低分辨率/超大
@@ -334,6 +437,17 @@ int QuickPanelDialog::s_btnRadius_phys = 0;
 int QuickPanelDialog::s_brandSize_phys = 0;
 int QuickPanelDialog::s_panelRadius_phys = 0;
 int QuickPanelDialog::s_btnGap_phys = 0;
+// spec 099 P0-4: 当前输入状态的内存快照 + 状态提供者(零 I/O,P2)。
+fluxing::panel_status::PanelState QuickPanelDialog::s_inputState;
+QuickPanelDialog::StateProvider QuickPanelDialog::s_stateProvider;
+// spec 099 P0-4: 状态文字字体(按 dpr 重建;OnDestroy 释放)。
+HFONT QuickPanelDialog::s_hFontStatus = NULL;
+// spec 099 P0-5: 键盘交互状态(焦点槽位 / 是否已进入键盘交互态)。
+fluxing::panel_keyboard::State QuickPanelDialog::s_keyboard;
+// spec 099 P0-5: tooltip 顶层窗 + 字体 + 接管键盘焦点前的原焦点窗口。
+HWND QuickPanelDialog::s_hwndTooltip = NULL;
+HFONT QuickPanelDialog::s_hFontTooltip = NULL;
+HWND QuickPanelDialog::s_prevFocusHwnd = NULL;
 
 // ===== 内部 =====
 // L81 + L82: LoadLogoWIC 用 WIC 解码 PNG(不用
@@ -531,27 +645,301 @@ void QuickPanelDialog::DestroyOffscreenDC() {
 // HitTest 与 test/TestQuickPanelDialog 都从这里取值,避免测试复制一份
 // 布局公式(复制即漂移)。
 bool QuickPanelDialog::SlotRect(int index, int* x, int* y, int* w, int* h) {
-  if (index < 0 || index >= kButtonCount)
-    return false;
   if (s_panelW_phys == 0)
     return false;
-  const int padding = s_panelPadding_phys;
-  // L93-fix:brand→btn gap = max(2, 2*dpr),跟 PaintOpaqueContent 的
-  // `buttonStartX = pad + s_brandSize_phys + max(2,2*dpr)` 保持一致。
-  const int buttonStartX =
-      padding + s_brandSize_phys + max(2, (int)(2 * s_dpr_x + 0.5f));
-  const int x0 = buttonStartX + index * (s_btnSize_phys + s_btnGap_phys);
-  if (x)
-    *x = x0;
-  // v0.19.0.24-fix(issue 1):Y 范围用 s_btnYOffset_phys
-  // (=(kPanelH-kBtnSize)/2=6 dpr 缩放),跟 PaintOpaqueContent 的 y0 同步。
-  if (y)
-    *y = s_btnYOffset_phys;
-  if (w)
-    *w = s_btnSize_phys;
-  if (h)
-    *h = s_btnSize_phys;
-  return true;
+  return SlotRectForSize(s_panelW_phys, s_panelH_phys, index, x, y, w, h);
+}
+
+// spec 099 P0-6: 给定物理面板尺寸推演槽位矩形 —— 单测用它断言
+// 100% / 150% / 200% 三档 DPI 下的几何,而不必真的切系统 DPI。
+// 与运行期 SlotRect 走**同一条**公式(单一真相源,constitution R7)。
+bool QuickPanelDialog::SlotRectForSize(int panel_w_phys,
+                                        int panel_h_phys,
+                                        int index,
+                                        int* x,
+                                        int* y,
+                                        int* w,
+                                        int* h) {
+  if (panel_w_phys <= 0 || panel_h_phys <= 0)
+    return false;
+  const PanelLayout L = ComputeLayout(panel_w_phys, panel_h_phys);
+  return SlotRectForLayout(L, index, x, y, w, h);
+}
+
+// spec 099 P0-4: 状态区(中/英 + 全/半角回显)矩形 —— 运行期。
+bool QuickPanelDialog::StatusRect(int* x, int* y, int* w, int* h) {
+  if (s_panelW_phys == 0)
+    return false;
+  return StatusRectForSize(s_panelW_phys, s_panelH_phys, x, y, w, h);
+}
+
+// spec 099 P0-4: 给定物理面板尺寸推演状态区矩形。
+bool QuickPanelDialog::StatusRectForSize(int panel_w_phys,
+                                          int panel_h_phys,
+                                          int* x,
+                                          int* y,
+                                          int* w,
+                                          int* h) {
+  if (panel_w_phys <= 0 || panel_h_phys <= 0)
+    return false;
+  const PanelLayout L = ComputeLayout(panel_w_phys, panel_h_phys);
+  return StatusRectForLayout(L, panel_w_phys, x, y, w, h);
+}
+
+// ===== spec 099 P0-4: 当前输入状态回显(状态区「中/英」+「全/半」) =====
+// 状态的**语义**在 include/FluxingPanelStatus.h(单一真相源,constitution R7);
+// 这里只负责「从哪里拿」与「什么时候重绘」。
+//  - 来源:服务端注入的 StateProvider(读 handler 的缓存字段,纯内存);
+//  - 时机:面板**已有的** 100ms 轮询 timer ⇒ 显示路径零 I/O(守 P2)。
+void QuickPanelDialog::SetStateProvider(StateProvider fn) {
+  s_stateProvider = fn;
+  RefreshInputState();
+}
+
+void QuickPanelDialog::SetInputState(bool ascii_mode, bool fullwidth) {
+  s_inputState.ascii_mode = ascii_mode;
+  s_inputState.fullwidth = fullwidth;
+  s_inputState.always_show = AlwaysShowMode();
+  if (s_hwnd && IsWindowVisible(s_hwnd))
+    RepaintLayered(s_hwnd);
+}
+
+fluxing::panel_status::PanelState QuickPanelDialog::CurrentInputState() {
+  return s_inputState;
+}
+
+// 拉一次快照并与当前快照比对:变了才重绘(避免每 100ms 无谓重画)。
+void QuickPanelDialog::RefreshInputState() {
+  if (!s_stateProvider)
+    return;
+  fluxing::panel_status::PanelState next = s_stateProvider();
+  // 「常驻显示」开关的真相源是 include/FluxingAlwaysShow.h(运行期内存),
+  // 不从 provider 拿(否则就是第二个真相源,违 R7)。
+  next.always_show = AlwaysShowMode();
+  const fluxing::panel_status::PanelState& cur = s_inputState;
+  const bool changed = (next.ascii_mode != cur.ascii_mode) ||
+                       (next.fullwidth != cur.fullwidth) ||
+                       (next.always_show != cur.always_show) ||
+                       (next.schema_name != cur.schema_name) ||
+                       (next.version != cur.version);
+  if (!changed)
+    return;
+  s_inputState = next;
+  if (s_hwnd && IsWindowVisible(s_hwnd))
+    RepaintLayered(s_hwnd);
+}
+
+// ===== spec 099 P0-5: 键盘可达性 =====
+// 键位语义在 include/FluxingPanelKeyboard.h(单一真相源);这里只负责把裁决
+// 结果落到真实窗口行为上。
+void QuickPanelDialog::ResetKeyboardState() {
+  s_keyboard.focused = -1;
+  s_keyboard.slot_count = kButtonCount;
+  s_keyboard.interactive = false;
+}
+
+// 接管键盘焦点。
+// 背景:面板窗口带 WS_EX_NOACTIVATE + ShowWindow(SW_SHOWNOACTIVATE)
+// ⇒ 面板出现时**不抢**用户编辑框焦点(否则用户没法继续打字 —— L89-fix
+// 记的「无法输入中文」事故)。代价是面板收不到按键。
+// 折中:用户**主动点击**面板时才接管焦点;收起时归还。
+// 真机行为(跨线程 SetFocus / AttachThreadInput)只能在装机环境确认 ——
+// 见 ADR 0036「未验证(真机)」。
+void QuickPanelDialog::CaptureKeyboardFocus(HWND hwnd) {
+  if (!hwnd || !IsWindow(hwnd))
+    return;
+  HWND fg = GetForegroundWindow();
+  s_prevFocusHwnd = NULL;
+  if (fg) {
+    const DWORD fgThread = GetWindowThreadProcessId(fg, nullptr);
+    const DWORD curThread = GetCurrentThreadId();
+    if (fgThread && fgThread != curThread) {
+      // 跨线程:临时把两个线程的输入队列接起来,才能读到/归还别的线程的焦点。
+      AttachThreadInput(curThread, fgThread, TRUE);
+      s_prevFocusHwnd = GetFocus();
+      AttachThreadInput(curThread, fgThread, FALSE);
+    } else {
+      s_prevFocusHwnd = GetFocus();
+    }
+  }
+  SetFocus(hwnd);
+  s_keyboard.slot_count = kButtonCount;
+  s_keyboard.interactive = true;
+}
+
+// 归还焦点。只在「焦点此刻仍在面板上」时归还 —— 用户若已经点了别的窗口,
+// 绝不能把它抢回来。
+void QuickPanelDialog::RestoreKeyboardFocus() {
+  HWND target = s_prevFocusHwnd;
+  s_prevFocusHwnd = NULL;
+  if (!target || !IsWindow(target))
+    return;
+  if (s_hwnd && GetFocus() != s_hwnd)
+    return;
+  const DWORD targetThread = GetWindowThreadProcessId(target, nullptr);
+  const DWORD curThread = GetCurrentThreadId();
+  if (targetThread && targetThread != curThread) {
+    AttachThreadInput(curThread, targetThread, TRUE);
+    SetFocus(target);
+    AttachThreadInput(curThread, targetThread, FALSE);
+  } else {
+    SetFocus(target);
+  }
+}
+
+// ===== spec 099 P0-5: 每槽 tooltip(自绘顶层窗) =====
+std::wstring QuickPanelDialog::s_tooltipText;
+int QuickPanelDialog::s_tooltipSlot = -1;
+
+void QuickPanelDialog::HideTooltip() {
+  if (s_hwndTooltip && IsWindow(s_hwndTooltip))
+    ShowWindow(s_hwndTooltip, SW_HIDE);
+  s_tooltipText.clear();
+  s_tooltipSlot = -1;
+}
+
+void QuickPanelDialog::ShowTooltip(int slot) {
+  if (!s_hwnd || !IsWindow(s_hwnd) || slot < 0 || slot >= kButtonCount) {
+    HideTooltip();
+    return;
+  }
+  const std::wstring text = TooltipText(slot);
+  if (text.empty()) {
+    HideTooltip();
+    return;
+  }
+  if (!s_hwndTooltip || !IsWindow(s_hwndTooltip)) {
+    WNDCLASSEXW wc = {0};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = &QuickPanelDialog::TooltipWndProc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.lpszClassName = kTooltipClassName;
+    RegisterClassExW(&wc);
+    s_hwndTooltip = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+        kTooltipClassName, L"", WS_POPUP, 0, 0, 10, 10, NULL, NULL,
+        GetModuleHandle(NULL), NULL);
+    if (!s_hwndTooltip)
+      return;
+  }
+  if (!s_hFontTooltip) {
+    const int fh = ScaleRound(kTooltipFontHeightPx, s_dpr_y);
+    s_hFontTooltip = CreateFontW(-fh, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                 CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                                 DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei");
+  }
+  s_tooltipText = text;
+  s_tooltipSlot = slot;
+
+  // 量文字尺寸 ⇒ 决定 tooltip 窗口大小。
+  int text_w = 0;
+  int text_h = 0;
+  HDC hdc = GetDC(s_hwndTooltip);
+  if (hdc) {
+    HGDIOBJ old = SelectObject(hdc, s_hFontTooltip);
+    SIZE sz = {0, 0};
+    GetTextExtentPoint32W(hdc, text.c_str(), static_cast<int>(text.size()),
+                          &sz);
+    SelectObject(hdc, old);
+    ReleaseDC(s_hwndTooltip, hdc);
+    text_w = sz.cx;
+    text_h = sz.cy;
+  }
+  const int pad = ScaleRound(kTooltipPadPx, s_dpr_x);
+  const int gap = ScaleRound(kTooltipGapPx, s_dpr_y);
+  const int w = text_w + pad * 2;
+  const int h = text_h + pad * 2;
+
+  // 位置:面板**上方**、水平对准槽位中心;钳制在面板所在显示器的工作区内。
+  int px = 0;
+  int py = 0;
+  int sx = 0, sy = 0, sw = 0, sh = 0;
+  RECT wr = {};
+  GetWindowRect(s_hwnd, &wr);
+  if (SlotRect(slot, &sx, &sy, &sw, &sh)) {
+    px = wr.left + sx + sw / 2 - w / 2;
+    py = wr.top + sy - h - gap;
+  } else {
+    px = wr.left;
+    py = wr.top - h - gap;
+  }
+  MONITORINFO mi = {};
+  mi.cbSize = sizeof(mi);
+  HMONITOR mon = MonitorFromWindow(s_hwnd, MONITOR_DEFAULTTONEAREST);
+  if (GetMonitorInfoW(mon, &mi)) {
+    if (px < mi.rcWork.left)
+      px = mi.rcWork.left;
+    if (px + w > mi.rcWork.right)
+      px = mi.rcWork.right - w;
+    if (py < mi.rcWork.top)
+      py = mi.rcWork.top;
+    if (py + h > mi.rcWork.bottom)
+      py = mi.rcWork.bottom - h;
+  }
+  SetWindowPos(s_hwndTooltip, HWND_TOPMOST, px, py, w, h,
+               SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  InvalidateRect(s_hwndTooltip, NULL, FALSE);
+  UpdateWindow(s_hwndTooltip);
+}
+
+void QuickPanelDialog::PaintTooltip(HDC hdc) {
+  if (!s_hwndTooltip)
+    return;
+  RECT rc = {};
+  GetClientRect(s_hwndTooltip, &rc);
+  HBRUSH bg = CreateSolidBrush(RGB(38, 40, 48));
+  if (bg) {
+    FillRect(hdc, &rc, bg);
+    DeleteObject(bg);
+  }
+  HPEN border = CreatePen(PS_SOLID, 1, RGB(92, 96, 112));
+  if (border) {
+    HGDIOBJ oldPen = SelectObject(hdc, border);
+    HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    Rectangle(hdc, rc.left, rc.top, rc.right, rc.bottom);
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(border);
+  }
+  if (!s_hFontTooltip || s_tooltipText.empty())
+    return;
+  HGDIOBJ oldFont = SelectObject(hdc, s_hFontTooltip);
+  SetBkMode(hdc, TRANSPARENT);
+  SetTextColor(hdc, RGB(238, 240, 246));
+  RECT tr = rc;
+  DrawTextW(hdc, s_tooltipText.c_str(), -1, &tr,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  SelectObject(hdc, oldFont);
+}
+
+LRESULT CALLBACK QuickPanelDialog::TooltipWndProc(HWND hwnd,
+                                                  UINT msg,
+                                                  WPARAM w,
+                                                  LPARAM l) {
+  switch (msg) {
+    case WM_PAINT: {
+      PAINTSTRUCT ps;
+      HDC hdc = BeginPaint(hwnd, &ps);
+      if (hdc)
+        PaintTooltip(hdc);
+      EndPaint(hwnd, &ps);
+      return 0;
+    }
+    case WM_ERASEBKGND:
+      return 1;
+    // 鼠标穿透:tooltip 不抢点击,也不打断面板的 hover。
+    case WM_NCHITTEST:
+      return HTTRANSPARENT;
+    default:
+      break;
+  }
+  return DefWindowProc(hwnd, msg, w, l);
+}
+
+std::wstring QuickPanelDialog::TooltipText(int slot) {
+  return fluxing::panel_tooltip::BuildTooltip(slot, s_inputState);
 }
 
 // spec 099 P0-3: 槽位点击路由 —— 每个可见槽位点击都必须产生确定的
@@ -716,6 +1104,9 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
       // 不响应。修复:无论 hit 是什么, SetCapture + record,这样整个 panel
       // 任何地方长按都拖动。button click 仍然 通过 s_activeIdx 处理(LButtonUp
       // 时检查 s_activeIdx 是否释放前还在同一按钮)。
+      // spec 099 P0-5: 用户**主动点击**面板 ⇒ 接管键盘焦点(面板平时是
+      // WS_EX_NOACTIVATE,收不到按键)。收起时 RestoreKeyboardFocus() 归还。
+      CaptureKeyboardFocus(hwnd);
       SetCapture(hwnd);
       s_dragging = TRUE;
       // L178-fix: GetCursorPos 可能失败(无输入设备 / 非交互 window station)。
@@ -757,6 +1148,12 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
         int hit = HitTest(p.x, p.y);
         if (hit != s_hoveredIdx) {
           s_hoveredIdx = hit;
+          // spec 099 P0-5: 悬停槽位 ⇒ 显示该槽 tooltip(名称 + 当前态);
+          // 移出面板 ⇒ 收起 tooltip。
+          if (hit >= 0)
+            ShowTooltip(hit);
+          else
+            HideTooltip();
           // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered,InvalidateRect
           // 死代码。
           RepaintLayered(hwnd);
@@ -877,11 +1274,21 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
     // GetCursorPos + ScreenToClient 自己查鼠标位置,绕过 WM 投递。
     case WM_TIMER: {
       if (w == 2) {  // hover polling timer (id 2, 100ms) — 同时负责 auto-hide
+        // spec 099 P0-4: 在**已有的**轮询 timer 里拉一次状态快照 ⇒
+        // 显示路径零 I/O(守 P2)。快照来自服务端注入的 provider(纯内存读)。
+        RefreshInputState();
         POINT p;
         if (GetCursorPos(&p) && ScreenToClient(hwnd, &p)) {
           int hit = HitTest(p.x, p.y);
           if (hit != s_hoveredIdx) {
             s_hoveredIdx = hit;
+            // spec 099 P0-5: hover 真相源是本轮询(L84-fix 已证 WM_MOUSEMOVE
+            // 投递不可靠),所以 tooltip 也在这里同步,不能只靠 WM_MOUSEMOVE。
+            // ShowTooltip 内部做槽位越界保护。
+            if (hit >= 0)
+              ShowTooltip(hit);
+            else
+              HideTooltip();
             // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered。
             RepaintLayered(hwnd);
           }
@@ -937,6 +1344,8 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
     // duplicates (case 503/509/519),避免 C2196 "case 重复" 错误。
     case WM_MOUSELEAVE: {
       s_mouseTracked = false;
+      // spec 099 P0-5: 鼠标离开面板 ⇒ 收起 tooltip。
+      HideTooltip();
       if (s_hoveredIdx != -1) {
         s_hoveredIdx = -1;
         // L97-fix(Fix A):WS_EX_LAYERED 路径必须 RepaintLayered。
@@ -946,6 +1355,17 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
     }
     case WM_KILLFOCUS:
       return OnKillFocus(hwnd);
+    // spec 099 P0-5: 面板拿到键盘焦点 ⇒ 进入键盘交互态。
+    // 此时 Esc 才收起面板(未交互时 Esc 只被吞掉,守 ADR 0019 D2)。
+    case WM_SETFOCUS:
+      s_keyboard.interactive = true;
+      s_keyboard.slot_count = kButtonCount;
+      if (s_hwnd)
+        RepaintLayered(s_hwnd);
+      return 0;
+    // spec 099 P0-5: 面板不是输入框 ⇒ 字符一律吞掉(不产生 beep、不进 IME)。
+    case WM_CHAR:
+      return 0;
     case WM_KEYDOWN:
       return OnKeyDown(hwnd, w);
     default:
@@ -969,29 +1389,35 @@ bool QuickPanelDialog::ApplyPhysicalLayout(HWND hwnd) {
   // 物理 surface 大小。显示器 sub-100% DPI 时窗口被系统压小,不缩放的话
   // drawing 用 logical 值出界 → icons 看不见 / HitTest 错位;150% DPI 时反过来
   // 需要把常量放大到 1.5 倍物理像素。
+  // spec 099 P0-6: 布局推演下沉到 ComputeLayout(单一真相源)—— 槽位矩形、
+  // 状态区矩形、单测用的 *ForSize 全部读同一份。
+  const PanelLayout L = ComputeLayout(w, h);
   s_panelW_phys = w;
   s_panelH_phys = h;
-  s_dpr_x = (float)w / (float)kPanelW;
-  s_dpr_y = (float)h / (float)kPanelH;
-  // DPI 缩放 round-down (>=1) 避免 0 出现 — 保护 drawing 不会 sub-pixel
-  // 全部丢失
-  auto scale_x = [&](int logical) {
-    int v = (int)(logical * s_dpr_x + 0.5f);
-    return v < 1 ? 1 : v;
-  };
-  auto scale_y = [&](int logical) {
-    int v = (int)(logical * s_dpr_y + 0.5f);
-    return v < 1 ? 1 : v;
-  };
-  s_panelPadding_phys = scale_x(kPanelPadding);
+  s_dpr_x = L.dpr_x;
+  s_dpr_y = L.dpr_y;
+  s_panelPadding_phys = L.padding;
   // v0.19.0.24-fix(issue 1):Y 方向 padding 独立算,scale_y 让跨 DPI 跟随
-  s_btnYOffset_phys = scale_y(kPanelVPadding);
-  s_btnSize_phys = scale_x(kBtnSize);
-  s_icoSize_phys = scale_y(kIcoSize);
-  s_btnRadius_phys = scale_x(kBtnRadius);
-  s_brandSize_phys = scale_x(kBrandSize);
-  s_panelRadius_phys = scale_x(kPanelRadius);
-  s_btnGap_phys = scale_x(kBtnGap);
+  s_btnYOffset_phys = L.btn_y_offset;
+  s_btnSize_phys = L.btn_size;
+  s_icoSize_phys = ScaleRound(kIcoSize, L.dpr_y);
+  s_btnRadius_phys = ScaleRound(kBtnRadius, L.dpr_x);
+  s_brandSize_phys = L.brand_size;
+  s_panelRadius_phys = ScaleRound(kPanelRadius, L.dpr_x);
+  s_btnGap_phys = L.btn_gap;
+  // spec 099 P0-4: 状态文字字体随 dpr 重建(旧字体必须先释放,否则 GDI 泄漏)。
+  if (s_hFontStatus) {
+    DeleteObject(s_hFontStatus);
+    s_hFontStatus = NULL;
+  }
+  {
+    const int char_h =
+        ScaleRound(fluxing::panel_status::kStatusCharHeight, L.dpr_y);
+    s_hFontStatus = CreateFontW(-char_h, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                                DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei");
+  }
   // off-screen DC 尺寸必须跟着窗口走,否则 UpdateLayeredWindow 提交旧 surface
   CreateOffscreenDC(w, h);
   return true;
@@ -1022,6 +1448,21 @@ LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
 LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
   s_hoveredIdx = -1;
   s_activeIdx = -1;
+  // spec 099 P0-5: tooltip 窗口与字体随面板一起销毁(不留孤儿顶层窗)。
+  HideTooltip();
+  if (s_hwndTooltip && IsWindow(s_hwndTooltip)) {
+    DestroyWindow(s_hwndTooltip);
+  }
+  s_hwndTooltip = NULL;
+  if (s_hFontTooltip) {
+    DeleteObject(s_hFontTooltip);
+    s_hFontTooltip = NULL;
+  }
+  // spec 099 P0-4: 状态文字字体。
+  if (s_hFontStatus) {
+    DeleteObject(s_hFontStatus);
+    s_hFontStatus = NULL;
+  }
   DestroyOffscreenDC();
   if (s_hBmpLogo) {
     DeleteObject(s_hBmpLogo);
@@ -1205,6 +1646,23 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
       DeleteObject(outlinePen);
     }
 
+    // spec 099 P0-5: 键盘焦点环。只在**已进入键盘交互态**时画(否则鼠标用户
+    // 会看到莫名其妙的虚线框)。PS_DOT 虚线 + 蓝色,画在按钮外侧 2px。
+    if (s_keyboard.interactive && i == s_keyboard.focused) {
+      const int ring = max(1, (int)(2 * s_dpr_x + 0.5f));
+      HPEN focusPen = CreatePen(PS_DOT, max(1, (int)(1.0f * s_dpr_x + 0.5f)),
+                                 RGB(0, 120, 215));
+      HPEN oldFocusPen = (HPEN)SelectObject(hdc, focusPen);
+      HBRUSH oldFocusBrush =
+          (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+      RoundRect(hdc, x0 - ring, y0 - ring, x0 + s_btnSize_phys + ring,
+                y0 + s_btnSize_phys + ring, s_btnRadius_phys + ring,
+                s_btnRadius_phys + ring);
+      SelectObject(hdc, oldFocusBrush);
+      SelectObject(hdc, oldFocusPen);
+      DeleteObject(focusPen);
+    }
+
     HPEN iconPen;
     if (isActive)
       iconPen = (HPEN)GetStockObject(WHITE_PEN);
@@ -1269,6 +1727,35 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
         break;  // was hit==4 in v0.19.0.61
     }
     SelectObject(hdc, oldPen);
+  }
+
+  // spec 099 P0-4: 当前输入状态回显(中/英 + 全/半角)。
+  // 竖排两字:上 = 中/英,下 = 全/半。画在**槽位区之外**的右侧状态区
+  // (状态区左界由最后一个槽位的右边界推导 ⇒ 与全部槽位不相交,
+  //  守 spec 099 P0-4「命中区不变」)。
+  {
+    int sx = 0, sy = 0, sw = 0, sh = 0;
+    if (StatusRect(&sx, &sy, &sw, &sh) && s_hFontStatus) {
+      const int char_h =
+          ScaleRound(fluxing::panel_status::kStatusCharHeight, s_dpr_y);
+      const int char_gap =
+          ScaleRound(fluxing::panel_status::kStatusCharGap, s_dpr_y);
+      const int total_h = 2 * char_h + char_gap;
+      const int top = sy + (sh - total_h) / 2;
+      const wchar_t* texts[2] = {
+          fluxing::panel_status::AsciiModeText(s_inputState.ascii_mode),
+          fluxing::panel_status::ShapeModeText(s_inputState.fullwidth)};
+      HGDIOBJ oldFont = SelectObject(hdc, s_hFontStatus);
+      SetBkMode(hdc, TRANSPARENT);
+      SetTextColor(hdc, kIcoDimC);
+      for (int i = 0; i < 2; ++i) {
+        const int ty = top + i * (char_h + char_gap);
+        RECT r = {sx, ty, sx + sw, ty + char_h};
+        DrawTextW(hdc, texts[i], -1, &r,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+      }
+      SelectObject(hdc, oldFont);
+    }
   }
 }
 
@@ -1534,10 +2021,32 @@ LRESULT QuickPanelDialog::OnKillFocus(HWND hwnd) {
 }
 
 LRESULT QuickPanelDialog::OnKeyDown(HWND hwnd, WPARAM key) {
-  // v1.1.2 (ADR 0019, 用户 1.1.1 验收口径): ESC 不再收起快捷设置栏。
-  // 显隐统一交给 Alt+, 快捷键;ESC 被面板吞掉、不产生任何动作。
-  if (key == VK_ESCAPE)
-    return 0;
+  // spec 099 P0-5: 键盘可达性统一走 include/FluxingPanelKeyboard.h 的状态机
+  // (单一真相源,constitution R7)。Esc 语义由「键盘交互态」调和:
+  //   - 未交互 ⇒ 只吞掉,面板不隐藏(守 ADR 0019 D2「显隐只靠 Alt+,」);
+  //   - 已交互 ⇒ 只收起**面板自身**,不触碰任何其他窗口(守 D0032:
+  //     按 Esc 关「用户短语」窗口不得连带收起快捷设置栏)。
+  const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+  const fluxing::panel_keyboard::Action act =
+      fluxing::panel_keyboard::HandleKey(s_keyboard, static_cast<int>(key),
+                                          shift);
+  switch (act) {
+    case fluxing::panel_keyboard::Action::kSwallow:
+      return 0;
+    case fluxing::panel_keyboard::Action::kMoveFocus:
+      if (s_hwnd)
+        RepaintLayered(s_hwnd);
+      return 0;
+    case fluxing::panel_keyboard::Action::kActivate:
+      if (s_keyboard.focused >= 0)
+        DispatchSlotClick(s_keyboard.focused);
+      return 0;
+    case fluxing::panel_keyboard::Action::kClose:
+      Hide();
+      return 0;
+    case fluxing::panel_keyboard::Action::kNone:
+      break;
+  }
   return DefWindowProc(hwnd, key, 0, 0);
 }
 
@@ -1557,7 +2066,13 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   s_onFullwidth = onFullwidth;
   s_onSymbols = onSymbols;
   s_onLogin = onLogin;
-  (void)currentFullwidth;
+  // spec 099 P0-4: 全/半角当前态必须**真正**写进静态字段(此前是
+  // (void)currentFullwidth —— 状态区永远显示「半」)。同时同步状态快照。
+  s_fullwidth = currentFullwidth;
+  s_inputState.fullwidth = currentFullwidth;
+  s_inputState.always_show = AlwaysShowMode();
+  // spec 099 P0-5: 面板重新显示 ⇒ 键盘状态复位(焦点槽位清空、退出键盘交互态)。
+  ResetKeyboardState();
   // spec 084 / ADR 0013 D3: 长显态以 85% 系数起步,再由 100ms 轮询器按
   // 鼠标位置渐变到满值;瞬时态保持满值 => 渲染与今天逐像素一致。
   s_alphaFactor =
@@ -1654,6 +2169,10 @@ void QuickPanelDialog::Show(bool currentFullwidth,
 }
 
 void QuickPanelDialog::Hide() {
+  // spec 099 P0-5: 收起时先收起 tooltip、归还键盘焦点(否则用户的编辑框
+  // 永远拿不回焦点 ⇒ 打不了字 —— L89-fix 记的事故形态)。
+  HideTooltip();
+  RestoreKeyboardFocus();
   if (s_hwnd && IsWindow(s_hwnd)) {
     KillTimer(s_hwnd, 1);
     KillTimer(s_hwnd, 2);  // L84-fix: kill hover polling timer
@@ -1664,6 +2183,8 @@ void QuickPanelDialog::Hide() {
   s_targetAlphaFactor = fluxing::kAlphaFactorFull;
   s_hoveredIdx = -1;
   s_activeIdx = -1;
+  // spec 099 P0-5: 键盘状态复位 —— 下次显示时不带旧焦点槽 / 旧交互态。
+  ResetKeyboardState();
 }
 
 void QuickPanelDialog::ToggleMode() {

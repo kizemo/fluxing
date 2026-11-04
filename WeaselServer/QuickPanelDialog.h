@@ -44,6 +44,10 @@
 // 落点 = <用户数据目录>\quickpanel.position —— **独立文件**,不污染
 // quickpanel.state(always_show 的单一真相源,constitution R7;ADR 0035)。
 #include <FluxingPanelPosition.h>
+// spec 099 P0-4: 当前输入状态快照 + 状态区几何常量(单一真相源,constitution R7)。
+#include <FluxingPanelStatus.h>
+// spec 099 P0-5: 键盘可达性状态机(单一真相源,constitution R7)。
+#include <FluxingPanelKeyboard.h>
 
 class QuickPanelDialog {
  public:
@@ -98,6 +102,51 @@ class QuickPanelDialog {
   // 用户可见效果。返回 true 表示该槽位确实触发了回调。
   //   0 Schema(切换到下一个输入方案) / 1 Phrase / 2 Settings / 3 Account
   static bool DispatchSlotClick(int index);
+
+  // ===== spec 099 P0-6: 物理布局的单一事实源 =====
+  // 给定**物理**面板尺寸,推演槽位矩形。生产代码(SlotRect)与单测用
+  // 同一份公式 —— 测试不复制布局公式(复制即漂移,constitution R7)。
+  // 用途:让单测能在 100% / 150% / 200% 三档 DPI 下断言几何,
+  // 而不必真的切系统 DPI。
+  static bool SlotRectForSize(int panel_w_phys,
+                              int panel_h_phys,
+                              int index,
+                              int* x,
+                              int* y,
+                              int* w,
+                              int* h);
+  // spec 099 P0-4: 状态区(中/英 + 全/半角回显)的物理矩形。
+  // **必须与全部槽位矩形不相交** —— 否则状态像素会压到槽位上,
+  // 槽位命中区就不可能保持不变(spec 099 P0-4「命中区不变」)。
+  static bool StatusRect(int* x, int* y, int* w, int* h);
+  static bool StatusRectForSize(int panel_w_phys,
+                                int panel_h_phys,
+                                int* x,
+                                int* y,
+                                int* w,
+                                int* h);
+
+  // ===== spec 099 P0-4: 当前输入状态回显 =====
+  // 状态提供者:由 WeaselServerApp 注入,面板在已有的 100ms 轮询 timer
+  // 里拉取**内存快照**(零 I/O,守 constitution P2)。快照内容来自
+  // RimeWithWeaselHandler 的缓存字段(IsAsciiMode / IsFullShape /
+  // GetCurrentSchemaId),不是磁盘配置。
+  using StateProvider = std::function<fluxing::panel_status::PanelState()>;
+  static void SetStateProvider(StateProvider fn);
+  // 直接设置状态(测试注入 / 无 provider 时的回填路径)。
+  static void SetInputState(bool ascii_mode, bool fullwidth);
+  static fluxing::panel_status::PanelState CurrentInputState();
+
+  // ===== spec 099 P0-5: 键盘可达性 =====
+  // 当前焦点槽位(-1 = 无焦点)。生产代码用它决定 Enter/Space 激活谁。
+  static int FocusedSlot() { return s_keyboard.focused; }
+  // 键盘交互态(面板拿到过键盘焦点)。Esc 语义靠它区分:
+  // 未交互 ⇒ 只吞掉不收起(守 ADR 0019 D2);已交互 ⇒ 收起面板(守 D0032)。
+  static bool KeyboardInteractive() { return s_keyboard.interactive; }
+  // 复位键盘状态(测试注入 / 面板重新显示时)。
+  static void ResetKeyboardState();
+  // 每槽 tooltip 文本(「名称 + 当前态」),由生产代码按当前快照生成。
+  static std::wstring TooltipText(int slot);
 
   // spec 084 / ADR 0013 D4: 长显模式(快捷设置栏常驻)开关。
   // 默认关;打开后面板常驻屏幕右下角,常态 85% 不透明度,悬停渐变到 100%。
@@ -218,6 +267,20 @@ class QuickPanelDialog {
   static HPEN s_hPenHighlight;
   static HDC s_hdcMem;       // off-screen DC (避免闪烁)
   static HBITMAP s_hBmpMem;  // off-screen bitmap (32-bit BGRA)
+  // spec 099 P0-4: 当前输入状态的内存快照 + 状态提供者。
+  static fluxing::panel_status::PanelState s_inputState;
+  static StateProvider s_stateProvider;
+  // spec 099 P0-4: 状态文字字体(按 dpr 重建;OnDestroy 释放)。
+  static HFONT s_hFontStatus;
+  // spec 099 P0-5: 键盘交互状态(焦点槽位 / 是否已进入键盘交互态)。
+  static fluxing::panel_keyboard::State s_keyboard;
+  // spec 099 P0-5: tooltip 顶层窗 + 字体 + 接管键盘焦点前的原焦点窗口。
+  static HWND s_hwndTooltip;
+  static HFONT s_hFontTooltip;
+  static HWND s_prevFocusHwnd;
+  // spec 099 P0-5: tooltip 当前展示的文本与槽位(自绘顶层窗用)。
+  static std::wstring s_tooltipText;
+  static int s_tooltipSlot;
   static int s_panelW_phys;  // panel 物理像素宽
   static int s_panelH_phys;  // panel 物理像素高
 
@@ -335,6 +398,20 @@ class QuickPanelDialog {
   static constexpr BYTE kAlphaPanelBot = 255;
 
   // ===== Internal =====
+  // spec 099 P0-4: 轮询状态提供者(在已有的 100ms timer 里调 ⇒ 显示路径
+  // 零 I/O,守 constitution P2)。
+  static void RefreshInputState();
+  // spec 099 P0-5: 键盘焦点接管 / 归还。
+  // 面板平时不抢焦点(WS_EX_NOACTIVATE);用户**主动点击**面板时才接管键盘
+  // 焦点(否则永远收不到 Tab / 方向键),收起时把焦点还给用户原来的编辑框
+  // —— 否则用户打完字就没法继续输入(L89-fix 记的事故)。
+  static void CaptureKeyboardFocus(HWND hwnd);
+  static void RestoreKeyboardFocus();
+  // spec 099 P0-5: tooltip 顶层窗(自绘,不引 comctl32 依赖)。
+  static void ShowTooltip(int slot);
+  static void HideTooltip();
+  static void PaintTooltip(HDC hdc);
+  static LRESULT CALLBACK TooltipWndProc(HWND, UINT, WPARAM, LPARAM);
   // 缺陷修复 (快捷面板 150% DPI 未按缩放放大): 把「当前窗口客户区尺寸」换算成
   // physical 布局 (dpr + 全部 _phys 常量 + offscreen DIB)。OnCreate 与
   // WM_DPICHANGED 共用 —— 窗口尺寸变了必须重算,否则 layered surface 与新尺寸

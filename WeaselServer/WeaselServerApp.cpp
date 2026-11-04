@@ -245,6 +245,41 @@ int WeaselServerApp::Run() {
   m_handler->Initialize();
   m_handler->OnUpdateUI([this]() { tray_icon.Refresh(); });
 
+  // spec 099 P0-4: 启动期预热 Rime 的选项缓存(显示路径零 I/O,constitution P2)。
+  // 原因:RimeWithWeaselHandler::IsFullShape() / IsSimplification() **首次**调用
+  // 会打开用户配置(user_config_open ⇒ 文件 I/O)。而面板的 100ms 轮询 timer
+  // 要读这两个状态做「全/半角」回显 —— 面板是显示路径,不允许 I/O。
+  // ⇒ 必须在启动期就把缓存置为「已缓存」,此后显示路径只读内存。
+  (void)m_handler->IsFullShape();
+  (void)m_handler->IsSimplification();
+
+  // spec 099 P0-4: 注入「当前输入状态」快照 provider。
+  // 面板每次轮询只调一次 provider,拿到纯内存快照;provider 内部只读
+  // handler 的内存镜像字段(IsAsciiMode / GetCurrentSchemaId)与已预热的
+  // IsFullShape 缓存 —— **不碰文件**。
+  QuickPanelDialog::SetStateProvider([this]() {
+    fluxing::panel_status::PanelState st;
+    st.ascii_mode = m_handler->IsAsciiMode();
+    st.fullwidth = m_handler->IsFullShape();
+    // 「常驻显示」的真相源唯一 = QuickPanelDialog::AlwaysShowMode()
+    // (spec 099 不变量,constitution R7),这里只做镜像,不另立真相源。
+    st.always_show = QuickPanelDialog::AlwaysShowMode();
+    const std::string schema = m_handler->GetCurrentSchemaId();
+    if (!schema.empty()) {
+      const int wlen = MultiByteToWideChar(CP_UTF8, 0, schema.c_str(),
+                                            static_cast<int>(schema.size()),
+                                            nullptr, 0);
+      if (wlen > 0) {
+        st.schema_name.resize(wlen);
+        MultiByteToWideChar(CP_UTF8, 0, schema.c_str(),
+                            static_cast<int>(schema.size()), &st.schema_name[0],
+                            wlen);
+      }
+    }
+    st.version = AboutDialog::VersionText();
+    return st;
+  });
+
   tray_icon.Create(m_server.GetHWnd());
   tray_icon.Refresh();
 
