@@ -1,0 +1,3 @@
+# 接力 prompt · 下一阶段：火流猩「删除候选（屏蔽）」缺陷 —— 先取证段 0，再按判定结果修（2026-11-05 第四棒）
+
+按 `F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-05-fluxing-candidate-delete-bug.md`（背景 / 目标 / 本棒进度 / 下阶段计划 / 已验证·推断·未验证 / 证据路径 / 环境事实与工具坑都在里面；§3 是缺陷分析、§4 是段 0→段 3 修复计划、§5 是三分法、§6 是逐行证据索引、§8 是下阶段计划）、`F:\soft\00selfmade\rime_claude\.specify\specs\099-quickpanel-sogou-benchmark\spec.md` + 同目录 `tasks.md` + `gap-matrix.md`、`F:\soft\00selfmade\rime_claude\docs\adr\0025-profile-notify-decision-table-and-delete-candidate-body.md` 与 `F:\soft\00selfmade\rime_claude\docs\adr\0023-shift-page-local-select-and-server-side-candidate-ignore.md` 接手「参考逆向搜狗输入法优化快捷设置栏 / 删除候选缺陷」这一阶段任务——先读完这些文件再动手，不要从零重做已完成的部分。
