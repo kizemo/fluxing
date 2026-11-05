@@ -438,3 +438,91 @@
 
 - `docs(fluxing)`：本 handoff 的 §十二 + 接力 prompt 改成「已复验」版本。**代码一行没再动**（上一棒的 `fix(WeaselUI)` = `065383e`、`chore(installer)` = `7181f56`）。
 - 分支 `Fluxing...kizemo/Fluxing` 本棒前 **ahead 5**，加本棒 1 笔 ⇒ **ahead 6**，**仍未 push**（等用户点头）。
+
+---
+
+## 十三、本棒（2026-11-06 上午 · 用户真机反馈「仍无法删除」⇒ **任务未完成**，§十二 结论收窄）
+
+### 13.0 用户反馈原文（最高优先级运行时证据）
+
+2026-11-06 07:54 用户：
+
+> 当前使用 ctrl+shift+数字，以及右键，仍然无法删除候选窗的候选词。
+
+**判定：缺陷在用户真实场景下未修复 ⇒ 本线任务未完成。**
+
+### 13.1 对 §十二「复验通过」的结论收窄（修订声明）
+
+§十二 的 PASS **不推翻**，但**适用范围收窄**为：
+
+| 维度 | §十二 实际覆盖 | 未覆盖 |
+|---|---|---|
+| 目标程序 | WinForms 原生 `EDIT` 控件（自建 `e2e_target_winforms.ps1`） | 微信 / 钉钉 / Edge / 用户真实编辑场景 |
+| 操作 | 鼠标**右键** | `Ctrl+Shift+<数字>` |
+| 落点 | 面板**左起第 26px**（约第一个候选左边缘） | 候选**文字中心** |
+| 配置 | `hover_type: none` + `hilite_padding: 8` | 用户其它 `weasel.yaml` 差异 |
+| 会话 | 桌面已解锁、目标程序前台 | 用户真实使用节奏 |
+
+⇒ **不得对外宣称「缺陷已修复」**。§十二 只能证明：**在该目标 / 该落点 / 该配置下，删词链路（右键 → 写 `user_ignore.txt`）是通的**。
+
+### 13.2 方法论缺陷（必须写明，否则下一棒会误用 §十二 的 PASS）
+
+§十二 的 PASS **没有做对照组**：
+
+- 未证明「装 1.1.9（修复前版本）时同一探针会失败」；
+- 未证明「把命中守卫改回旧写法时同一探针会失败」。
+
+⇒ 该 PASS **不能单独证明修复有效**，只能证明「在该目标 / 该落点下删词链路通」。
+下一棒**必须补对照组**（靶子自己造，见 13.5-③），否则「探针有牙」这件事从未被证明。
+
+### 13.3 本轮排除性取证（全部已定案，勿重复劳动）
+
+| # | 假说 | 取证方式 | 结论 |
+|---|---|---|---|
+| 1 | 用户进程仍加载 **1.1.9 旧 shim** | 全进程扫描 + `Get-Process -Modules`，读 `weaselx64.dll` 路径与 FileVersion | **排除**：加载的全是 1.2.0 规范名 `D:\Program Files\fluxing\weasel\weaselx64.dll`（`weasel.dll` FileVersion `1.2.0.0`）。已见进程：Notepad(57788)、DingTalk、Weixin、explorer、WeaselServer、Claude Code Haha、MiniMax Code、WindowsTerminal、electron、aboboo、FluxingPhrasesDialog |
+| 2 | 生效配置里 `hover_type` 不是 `none`（⇒ 走了别的分支） | 读生效配置 `D:\Program Files\fluxing\user1\fluxing\build\weasel.yaml:523`（mtime 11-03） | **排除**：`:523` = `hover_type: none`，`:534` = `hilite_padding: 8`；仓库默认 `output/data/weasel.yaml:85` 亦为 none ⇒ 落在修复路径上 |
+| 3 | `m_layout` 为空导致 `if (!m_layout) return -1` | 读 `WeaselPanel.cpp` 调用链 | **排除**：`_CreateLayout()` 在 `UpdateUI` 路径 `WeaselPanel.cpp:198` 被调用 ⇒ 布局非空 |
+| 4 | 右键消息根本没进处理函数 | 读消息映射 | **排除**：`WeaselPanel.h:43` `MESSAGE_HANDLER(WM_RBUTTONDOWN, OnRButtonDown)` 存在 |
+| 5 | 命中判定与 hover 高亮**坐标系错位** | 对比 `OnMouseMove`(:507-527) 与 `_HitTestCandidateIndex`(:561-574) | **排除**：两者都用**客户区坐标** `GET_X_LPARAM(lParam)` + `m_layout->GetCandidateRect(i)` + `m_istorepos` 纵向偏移 + `DPI_SCALE(hilite_padding_x/y)` 扩张 + `PtInRect`。**但**：二者共享同一几何 ⇒ 若几何本身偏，则 hover 高亮与命中**同时**失灵（与同批次记录的「候选窗 hover 无高亮」症状同源，见 13.4-③） |
+
+### 13.4 尚未排除的出口（下一棒重点）
+
+- **① `OnRButtonDown` 首行静默早退（最高嫌疑）**
+  `WeaselPanel.cpp:580-583`：`if (hide_candidates) { bHandled = true; return 0; }`
+  `hide_candidates` 唯一赋值点 `WeaselPanel.cpp:191-192`：
+  `inline_no_candidates || (margin_negative && !show_tips && !show_schema_menu)`
+  初值 `false`（`:95`）。
+  ⇒ **下一棒必须核对这两个布尔量在用户真实场景下的取值**（必要时加临时日志 / 调试钩子）。
+
+- **② `GetCandidateRect` 与渲染文字矩形不是同一个**
+  `StandardLayout.h:37` `GetCandidateRect` 返回 `_candidateRects[id]`（布局坐标）；渲染文字另用 `GetCandidateTextRect`。
+  ⇒ 命中用前者 ⇒ **可能偏宽 / 偏窄**，需实测定。
+
+- **③ hover 高亮是否真的生效（与 ① 同源）**
+  用户若反馈「候选窗 hover 无高亮」，则 ① / ② 嫌疑大幅上升。
+
+### 13.5 下一棒执行顺序（按此序走，不要跳）
+
+1. **先问用户三件事**（缺一不可，直接决定后面怎么走）：
+   - 在**哪个应用**里测的？（微信 / 钉钉 / Edge / 记事本 / 其它）
+     ⚠️ **现代记事本是 WinUI，不吃 TSF，候选窗根本不弹** ⇒ 若用户答案是记事本，本身就解释得通「无效」。
+   - 右击之后候选窗**是否消失**？有没有任何提示？
+   - **hover 时候选是否高亮**？
+2. **在用户指定应用里复跑 `e2e_probe3.py`**，右击点**精确到候选文字中心**（从截图量坐标），不再用「面板左起 26px」。
+3. **补对照组**：证明同一探针在「修复前 / 旧守卫」下会失败 ⇒ 证明探针有牙。
+4. 核对 `hide_candidates` 两个分量 + 右键消息是否真到达 `OnRButtonDown`（必要时临时日志）。
+5. 若命中几何确实偏 ⇒ 补偿 `m_layout` 偏移，并用**真实 Layout** 写单测。
+   ⚠️ **L186 教训：别抄 FakePanel** —— 用假 Layout 写的测试会与真实几何不一致，给出假绿。
+6. `Ctrl+Shift+<数字>`：先取 `WeaselPanel::IsShown()` 运行态，再决定改键位还是修路径。
+
+### 13.6 仍未验证 / 未修（继续有效）
+
+- **`Ctrl+Shift+<数字>` 断点从未修**：`WeaselTSF/KeyEventSink.cpp:90-99` + `CandidateList.h:73-77` 的 `!_ui || !_ui->IsShown()` 守卫。用户 2026-11-06 再次确认无效，与 §10.7-2 / §12.5 一致 ⇒ **该断点确认为真断点，非探测误差**。
+- **托盘「恢复已忽略的候选项」撤销未验**（§10.7-①③ / §12.5）。
+- **残留用户数据仍在**：`D:\Program Files\fluxing\user1\fluxing\double_pinyin_sogou.user_ignore.txt`（27 B，内容 `你哈哦 / 你 / 拟哈哦`，含常用词「你」）—— 删除路径受保护、agent 删不掉，**仍需用户手工删除**。
+
+### 13.7 本棒 commit 划分
+
+- `docs(fluxing)`：本 handoff §十三 + 接力 prompt 改写为「任务未完成」版本。**代码本棒一行未改**，也未做新实验。
+- 分支 `Fluxing...kizemo/Fluxing` 本棒前 **ahead 6**，加本棒 1 笔 ⇒ **ahead 7**，**仍未 push**（等用户点头）。
+- 本棒新增证据文件（均在 `.superpowers/sdd/`，不入库）：`user_report_probe.log`（用户反馈复现探针日志）、`code_probe_hitbox.log`（命中几何代码取证日志）。
