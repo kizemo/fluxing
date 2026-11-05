@@ -368,3 +368,73 @@
 - `chore(installer)`：`version.txt` + `build.bat` + `CHANGELOG.md` 的 `## [1.2.0] - 2026-11-05` 发布段。
 
 不入库：`env.bat` / `weasel.props`（gitignored）、`librime`（子模块只有本地构建脏文件，**指针未变**，别 `git add librime`）、`.superpowers/`（工具与日志）。
+
+## 十二、本棒（2026-11-06 上午 · 真机端到端复验 **通过**）
+
+### 12.1 结论：判据已满足
+
+§10.7-① 的唯一可信判据（候选消失 + `<schema_id>.user_ignore.txt` 出现）**已满足**：在 `hover_type: none` 生效配置下右键第一个候选 ⇒ 该候选被忽略 ⇒ 真实用户数据目录生成 `double_pinyin_sogou.user_ignore.txt`。
+
+- 复验窗口：2026-11-06 07:29–07:38（桌面已解锁，`LogonUI` 进程数 = 0；03:00 计划关机已执行过，机器重启后所有进程都是新进程）。
+- 探针状态：**连续 3 次 `PASS_IGNORE_FILE_CREATED`**，每次都往 `user_ignore.txt` 追加一个真实候选词：
+
+  | 次序 | 候选面板 rect（屏幕坐标） | 右击点 | 追加的忽略词 |
+  |---|---|---|---|
+  | 1 | 214,248,544,297 | (240,272) | `你哈哦` |
+  | 2 | 214,248,448,297 | (240,272) | `你` |
+  | 3 | 214,248,486,297 | (240,272) | `拟哈哦` |
+
+  面板宽度随被忽略的候选变化（330 → 234 → 272）⇒ 候选列表真的在刷新，不是假写盘。
+- 右击后截屏（`evidence/e2e_candidate_after.png`）显示候选栏区域已空 ⇒ **候选确实从界面消失**，不只是名单写盘。
+- 生效二进制：`HKLM\SOFTWARE\Classes\CLSID\{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}\InprocServer32` = `D:\Program Files\fluxing\weasel\weaselx64.dll`，该 DLL `FileVersion = 1.2.0.0`（`weasel.dll` 同为 1.2.0.0）；候选面板 HWND 属于**目标应用进程 PID** ⇒ 该进程经 TSF 加载的就是这版 DLL。
+
+### 12.2 探测方法的三处更正（前几次「失败」全是探针写错，不是缺陷）
+
+1. **候选窗类名不含 `weasel`**：`WeaselPanel` 继承 `CWindowImpl<WeaselPanel, CWindow, CWeaselPanelTraits>`，`CWeaselPanelTraits` = `WS_POPUP | WS_CLIPSIBLINGS | WS_DISABLED` + `WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_LAYERED` ⇒ ATL 默认类名是 `ATL:xxxxxxxx`。按 `weasel` / `fluxing` 关键字匹配的探针**必然扑空** —— §11.2 报的 `NO_CANDIDATE_WINDOW` 就是这个原因。
+   **正确做法**：枚举**目标进程 PID 的顶层窗口**，挑 `cls` 以 `ATL:` 开头、可见、宽 > 高的横向条 ⇒ 即候选面板。
+2. **现代记事本（WinUI）不吃 TSF**：`Microsoft.WindowsNotepad` 里打 `nihao` **不弹候选栏**（截图确认：只有文本，无候选条）⇒ 复验目标必须是**原生 EDIT 控件**（本棒用 WinForms `TextBox`）。与 §11.3「Tk Text 不吃 IME」同源，但**记事本与 Tk 表现不同，别混为一谈**。
+3. **PowerShell `@($null).Count` 返回 1（不是 0）** ⇒ 用它判「文件个数」会把「一个文件都没有」读成「1 个文件」。本棒第一次因此误报 `ignore_after=1`，**差点把「没删成」读成「已 PASS」**。必须先判 `$null`：`if ($null -eq $r.x) { 0 } else { @($r.x).Count }`。
+
+### 12.3 本棒新增工具坑（实测）
+
+- `D:\Program Files\` 属受保护路径，**删除操作被硬安全策略拦下** ⇒ 复验残留的 `user_ignore.txt` 删不掉，需用户手工清理（§12.4）。
+- `Start-Process` 起目标后若目标进程提前退出（用户手关窗口等），事后 `Get-Process -Id … -Modules` 会报「找不到进程标识符」⇒ **模块取证必须在输入之后立刻做**，并预设目标可能已死。
+- 候选面板虽是 `WS_POPUP` 顶层窗口，但**只在宿主进程 PID 内枚举才找得到**；全屏枚举时它只是众多窗口之一，且类名匹配不上。
+- `Get-Process -Modules` 查询 64 位进程时，查询器也须是 64 位（用 `powershell.exe` 而非 32 位宿主）。
+
+### 12.4 需要用户手工处理的一件事（复验副作用）
+
+复验在真实用户数据里留下 3 个被忽略的候选词（`double_pinyin_sogou.user_ignore.txt`，27 B）：
+
+```
+你哈哦
+你
+拟哈哦
+```
+
+其中 **`你`** 是常用词，会影响日常输入。删除路径受保护、agent 删不掉，请手工删除该文件：
+`D:\Program Files\fluxing\user1\fluxing\double_pinyin_sogou.user_ignore.txt`
+（内容副本已留在 `.superpowers\sdd\evidence\user_ignore_final.txt`，便于核对。）
+
+### 12.5 仍未验证 / 未修（别当已解决）
+
+- **`Ctrl+Shift+<数字>` 第二处断点未复验也未修**（§10.7-2 / §11.4-4）：本棒只验了右键路径。复验须在**候选窗已弹出**的状态下单按 `Ctrl+Shift+1`；若仍无反应，先取 `WeaselPanel::IsShown()` 运行态，**别改代码**。
+- **托盘「恢复已忽略的候选项」撤销未验**（§10.7-①③）。
+- **模块级取证缺一格**：目标进程在事后枚举前已退出 ⇒ 没能直接打印「目标进程内 `weaselx64.dll` FileVersion=1.2.0.0」。证据链（CLSID → DLL 路径 → 文件版本 1.2.0.0 + 候选面板属于目标 PID + 修复后的行为）已闭合，但这一格属于**推断**。
+
+### 12.6 复验脚本与证据（均在 `.superpowers/sdd/`，不入库）
+
+| 文件 | 作用 |
+|---|---|
+| `e2e_probe3.py` | **最终探针**：WinForms 原生 EDIT 目标 → 强制前台 → 打 `nihao` → 定位 `ATL:` 候选面板 → 右击第一个候选 → 查 `*user_ignore*` → 前后截屏 |
+| `e2e_target_winforms.ps1` | 起原生 EDIT 目标窗（写 `e2e_target.json`） |
+| `e2e_candidate_delete.py` / `e2e_probe2.py` | 前两版探针（按类名匹配 / 全屏枚举），**留作反面教材**：都因类名假设扑空 |
+| `verify_candidate_delete_manual.ps1` / `.cmd` | 纯人工复验脚本（用户双击即可，自动监测名单生成） |
+| `evidence/e2e_probe3_result.json` | PASS 的完整结果（面板 rect、右击点、名单内容） |
+| `evidence/e2e_candidate_before.png` / `e2e_candidate_after.png` | 右击前 / 右击后截屏（after 显示候选栏已空） |
+| `evidence/user_ignore_final.txt` | 复验残留的名单内容副本（供用户核对） |
+
+### 12.7 本棒 commit 划分
+
+- `docs(fluxing)`：本 handoff 的 §十二 + 接力 prompt 改成「已复验」版本。**代码一行没再动**（上一棒的 `fix(WeaselUI)` = `065383e`、`chore(installer)` = `7181f56`）。
+- 分支 `Fluxing...kizemo/Fluxing` 本棒前 **ahead 5**，加本棒 1 笔 ⇒ **ahead 6**，**仍未 push**（等用户点头）。
