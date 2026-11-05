@@ -1,0 +1,11 @@
+error: Analysis failed
+code: capability_unavailable
+category: unsupported_provider
+message: This analysis is unavailable for the current target. Choose another analysis or target.
+retryable: false
+remediation:
+  action: This analysis is unavailable for the current target. Choose another analysis or target.
+details:
+  provider_id: "composite:native-macos+rea-artifact-graph+rea-dotnet-static"
+  operation: observe_native_ui
+  reason: Native macOS utilities require macOS.

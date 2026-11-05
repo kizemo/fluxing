@@ -1,0 +1,21 @@
+=== PROBE7 start ===
+COMP rect=[696,378,1409,500] 713x122
+COMP geometry L=696 T=378 R=1409 B=500
+### target chev0 click=(1276,449)  [comp 696,378,1409,500]
+pre = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-chev0-pre.png
+  comp_after rect=[696,378,1409,500] 713x122
+  new_count=0
+  region = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-chev0-region.png
+  comp_children=0
+### target hamb click=(1359,449)  [comp 696,378,1409,500]
+pre = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-hamb-pre.png
+  comp_after rect=[696,378,1409,500] 713x122
+  NEW cls='CherryIMEWindowClass' title='' pid=75684 rect=[1382,381,1862,1355] 480x974
+   shot = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-hamb-new-CherryIMEWindowClass.png
+   print = ERR 调用“Save”并传入“2”个参数时发生异常：“The directory F:\soft\00selfmade\rime_claude\tmp\spec099-probe\F:\soft\00selfmade\rime_claude\tmp\spec099-probe of the filename F:\soft\00selfmade\rime_claude\tmp\spec099-probe\F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-hamb-new-CherryIMEWindowClass-print.png does not exist.”
+  new_count=1
+  region = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-hamb-region.png
+  comp_children=0
+  HIT - stopping sweep
+desktop = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-desktop.png
+=== PROBE7 end ===

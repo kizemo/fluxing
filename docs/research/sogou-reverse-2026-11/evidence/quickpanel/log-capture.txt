@@ -1,0 +1,21 @@
+host=0x41560 rect=[-48000,-48000,-47644,-47941] vis=True edit=0x415A0
+host after restore: rect=[600,300,1800,900] vis=True
+clicking EDIT at (1200,618)
+after click focus=0x415A0 edit=0x415A0 match=True
+typed nihao
+COMP_H=0x1814DC STATUS_H=0x715E4
+COMP rect=[696,378,1409,500] 713x122
+COMP_REGION origin=626,308 size=853x262
+shot comp region = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p6-comp-region.png
+comp print = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p6-comp-print.png (True)
+COMP_CHILD_COUNT=0
+STATUS rect=[3369,1964,3722,2030] 353x66
+shot status wide = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p6-status-wide.png
+status print = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p6-status-print.png (True)
+GUESS_CLICK at 1391,474
+shot after guess = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p6-after-guess.png
+shot new SoPY_Comp = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p6-new-SoPY_Comp.png
+
+### NEW visible top-level windows: 1
+  NEW cls='SoPY_Comp' title='' pid=75684 rect=[696,378,1409,500] 713x122
+shot desktop = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p6-desktop.png

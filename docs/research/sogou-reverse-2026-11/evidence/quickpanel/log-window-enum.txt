@@ -1,0 +1,17 @@
+=== PROBE4 start ===
+HOST hwnd=267616 pid=75684 title=FluxingIMEProbeHost
+--- Sogou windows in host pid ---
+  cls=SoPY_Hint vis=False hwnd=2430390 rect=[0,0,0,0] 0x0
+  cls=SoPY_Comp vis=False hwnd=1578204 rect=[611,378,1324,500] 713x122
+  cls=SoPY_Status vis=True hwnd=464356 rect=[3369,1964,3722,2030] 353x66
+  cls=SoPY_Hint vis=False hwnd=333180 rect=[0,0,0,0] 0x0
+  cls=SoPY_UI vis=False hwnd=267638 rect=[0,0,0,0] 0x0
+  cls=Sogou_TSF_UI vis=False hwnd=267636 rect=[0,0,0,0] 0x0
+--- child windows of SoPY_Status ---
+STATUS printwin=True
+STATUS screen=True
+--- child windows of SoPY_Comp ---
+COMP printwin=True
+BASE_VISIBLE_TOPLEVEL=35
+MENU_FOUND=False
+=== PROBE4 end ===

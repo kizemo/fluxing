@@ -13920,3 +13920,57 @@ PS 7 默认按 UTF-8 读 ⇒ 正常。
 **可迁移规则**：引用系统工具时用**可解析**的方式取路径（`Get-Command pwsh`），不要把某个版本目录写死；
 本机 `C:\Program Files\PowerShell\7\` 不存在，pwsh 7.6.9 实际在
 `$env:LOCALAPPDATA\Microsoft\WindowsApps\Microsoft.PowerShell_8wekyb3d8bbwe\pwsh.exe`。
+
+## L184 - **REA 的运行时原生 UI 观察在 Windows 上不可用（provider 是 macOS-only 组合），黑盒观察必须自建 Win32 链；而完全自绘的第三方窗口在 UIA 下拿不到任何 AX 节点，`PrintWindow` 与屏幕截图给出的形态可能不是一回事 —— 尺寸一律记物理像素**（2026-11-05）
+
+**现象**：`rea observe-native-ui` 在 Windows 上恒返回 `capability_unavailable` / `unsupported_provider`，
+provider 组合是 `composite:native-macos+rea-artifact-graph+rea-dotnet-static`，reason 原文写着
+「Native macOS utilities require macOS」。
+
+**判定**：这是 **provider 的能力边界**，不是「没注册好 / 参数写错 / 版本太老」。
+重试、换参数、换 MCP transport、重装 CLI 全部无效 —— 再试就是浪费预算。
+
+**替代路径（已跑通）**：REA 只承担 **target-free 静态 PE 侧**（`inspect-pe-resources`），
+运行时观察全部自建 Win32 链：
+
+- `EnumWindows` + `GetWindowRect` ⇒ 窗口清单与物理尺寸
+- `EnumChildWindows` ⇒ 子窗口数（自绘窗口恒为 0）
+- `PrintWindow` ⇒ 窗口内容位图（可读槽位顺序，但**不是外观真像**）
+- 屏幕区域截图 ⇒ 外观真像（背景、渐变、叠加态都在）
+- `keybd_event` / `mouse_event` ⇒ 合成输入（`SendInput` 在本机不可靠）
+
+**自绘窗口的 UIA 空结果**：`SoPY_Status` / `SoPY_Comp` / `CherryIMEWindowClass` 三者在 UIA 顶层枚举下
+**0 个 AX 节点**（只枚举到无关的 `MSCTFIME Composition`）⇒ 对方是**完全自绘、不可访问**的。
+
+**形态口径的坑**：`PrintWindow` 输出**未旋转**（353×66 原生分辨率、槽位顺序清晰），
+先前得出的「90° 旋转」结论只适用于自建的 `*-rot90.png` 旋转试验图，不能当成窗口形态写进结论。
+**尺寸一律记物理像素**（DPI 感知进程读数），逻辑值只能当缩放口径的旁证。
+
+**证据必须入库，不能留在 `tmp/`**：`tmp/` 被 gitignore，随时会被清。
+文档里引用的证据路径必须落在 `docs/research/<项目>/evidence/` 下，
+否则下一次清理就会让「证据路径」集体失效，而正文不会报错。
+
+**推广**：任何「逆向 / 观察第三方产品」的任务，先花一次调用确认**观察工具在目标平台有没有 provider**；
+没有就立刻切自建链，不要在同一个必然失败的原语上反复试探。
+
+## L185 - **交接卡可能属于另一个项目：交叉会话接手时必须核对「路径 + session id + 提交历史」三件事，否则会把别的项目的状态当成本项目的进度**（2026-11-05）
+
+**现象**：本会话开头注入的交接卡
+`E:\Users\Duanyi\.minimax\.minimax\maintenance\task-state\LATEST.md`
+写的是「Alpha File Manager / `src-tauri` / v3.10.1」，session id `mvs_8eb8c5acfaa34a6f80d4e2736e0c05c7`，
+而当前会话是 `mvs_f82553b210194350bfc4760dec078752`，仓库是 `F:\soft\00selfmade\rime_claude` —— **完全不相干**。
+
+**判据（三选一不符即不采信）**：
+
+1. 卡片里提到的文件路径属于**本仓库**吗？
+2. 卡片的 session id 与**当前会话**一致吗？
+3. 卡片「最近进展」里的产物能在本仓库 `git status` / `git log` 里**找到对应物**吗？
+
+**处置**：交接卡只当**线索**，不当真相；**本会话的用户指令优先**。
+被注入的卡片与本仓库任务不符时，要在汇报里显式说明「该卡属另一项目，未采信」，别默默照着它开工。
+
+**同理适用于跨会话同步消息**：滞后的队列消息若与本轮实测**逐字对上**，就说明没有新增事项，
+不要据此重新开工或重跑已完成的采集。
+
+**推广**：所有「自动生成的交接 / 状态卡」在跨会话、跨项目复用时都是**未验证二手结论**，
+先花一次调用核对来源，再决定采不采信。

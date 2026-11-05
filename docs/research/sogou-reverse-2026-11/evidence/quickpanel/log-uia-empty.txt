@@ -1,0 +1,2 @@
+UIA-TOP name='' class='MSCTFIME Composition' pid=81348 proc='DingTalk' rect=2137,1172,28,26
+UIA-TOP name='' class='MSCTFIME Composition' pid=81348 proc='DingTalk' rect=2211,1146,9,26

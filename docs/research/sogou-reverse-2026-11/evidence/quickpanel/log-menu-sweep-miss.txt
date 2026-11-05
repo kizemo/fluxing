@@ -1,0 +1,29 @@
+=== PROBE7 start ===
+COMP rect=[696,378,1538,500] 842x122
+COMP geometry L=696 T=378 R=1538 B=500
+### target hamb click=(1488,449)  [comp 696,378,1538,500]
+  new_count=0
+  region = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-hamb-region.png
+  comp_children=0
+### target hamb2 click=(1494,449)  [comp 696,378,1538,500]
+  new_count=0
+  region = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-hamb2-region.png
+  comp_children=0
+### target hamb3 click=(1482,449)  [comp 696,378,1538,500]
+  new_count=0
+  region = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-hamb3-region.png
+  comp_children=0
+### target chev click=(1405,449)  [comp 696,378,1538,500]
+  new_count=0
+  region = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-chev-region.png
+  comp_children=0
+### target hamb4 click=(1488,441)  [comp 696,378,1538,500]
+  new_count=0
+  region = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-hamb4-region.png
+  comp_children=0
+### target hamb5 click=(1488,457)  [comp 696,378,1538,500]
+  new_count=0
+  region = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-hamb5-region.png
+  comp_children=0
+desktop = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\p7-desktop.png
+=== PROBE7 end ===

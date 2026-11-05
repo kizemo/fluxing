@@ -85,26 +85,22 @@ tmp/spec099-probe/
 
 ## 3. 仍未完成（都需要用户在场，不是我能替的）
 
-### 3.1 P0-1 搜狗快捷设置栏黑盒行为采集
+### 3.1 P0-1 搜狗快捷设置栏黑盒行为采集 —— ✅ 已完成（见 §8）
 
-现状：搜狗进程在跑（`SGTool` / `SogouCloud` / `SogouImeBroker`），但**状态栏窗口不存在**——
-顶层窗口枚举里搜狗相关窗口全部 `Visible=False`，说明搜狗当前**不是活动输入法**。
-要把搜狗切成活动输入法才能看到状态栏与属性面板，**这会打断用户正在用的输入法**，不能替用户做。
+用户已于 2026-11-05 把输入法切到搜狗，采集由本棒完成。
+产出：`docs\research\sogou-reverse-2026-11\evidence\quickpanel-behavior.md`（9 节）
++ `docs\research\sogou-reverse-2026-11\evidence\quickpanel\`（16 个文件：截图 / 日志 / 脚本）。
+**仍需用户在场**的只剩 §8.4 列出的 11 项「未验证」（点位命中、拖拽、多屏落点、皮肤态等）。
 
-用户在场时的最小步骤：
-1. 切到搜狗输入法（Win+Space 或点任务栏），让状态栏出现在屏幕边缘；
-2. 我（新会话）跑 `tmp\spec099-probe\probe-windows.ps1 -DumpUia` 枚举状态栏窗口 + UIA 树；
-3. 右键状态栏开属性面板，我截屏 + 逐项登记名称/图标含义；
-4. 切中/英、全/半角，各截一次，记录回显变化（这直接决定 P0-4 的状态区规格是否还要调）。
+### 3.2 P0-2 差距矩阵 —— ✅ 已完成（见 §8）
 
-合规红线（spec 099）：**只做只读静态证据 + 黑盒观察**；不提取/复用搜狗二进制、资源、词库、
-`.cupf` 皮肤与专有文案；**永不连接** `docs\research\sogou-reverse-2026-11\evidence\urls-hosts.txt`
-内的 185 个主机；每条借鉴须写「来源证据 + 差异化实现」。
+产出：`.specify\specs\099-quickpanel-sogou-benchmark\gap-matrix.md`
+（10 行矩阵：借鉴 3 / 改造 2 / 不抄 4 / 反向借鉴 1，另有 7 项「不列入的候选项」与不变量对照表）。
+每行均写明「来源证据（证据文件全路径）+ 差异化实现」。
 
-### 3.2 P0-2 差距矩阵
-
-依赖 P0-1 的采集结果。三列表：搜狗行为 × 我方现状（源码位置） × 设计意图
-（`docs\design\quickpanel-v{3,4,5}`）。P0-1 一完成即可写，不需要再等任何人。
+合规红线（spec 099，已全程遵守）：**只做只读静态证据 + 黑盒观察**；未提取/复用搜狗二进制、资源、词库、
+`.cupf` 皮肤与专有文案；**未连接** `docs\research\sogou-reverse-2026-11\evidence\urls-hosts.txt`
+内的 185 个主机。
 
 ### 3.3 P0-6 剩余两档
 
@@ -127,13 +123,17 @@ FileVersion `1.1.9.0`，mtime 2026-11-03，而 `env.bat` 的版本也是 `1.1.9.
 
 ## 4. 下阶段计划（按优先级）
 
-1. **P0-1 采集 → P0-2 矩阵**：需要用户先切搜狗。一次会话内可做完两片。
+> **2026-11-05 续棒更新**：原第 1 项（P0-1 → P0-2）**已完成**，见 §8；原第 4 项（lessons）本棒已追加
+> L184 / L185，`CHANGELOG.md` 因本棒无用户可见改动按 P5 不动。
+
+1. **~~P0-1 采集 → P0-2 矩阵~~ ✅ 已完成**（§8.1 / §8.2）。
 2. **bump 版本 1.2.0 → 打包安装器 → 静默安装 → `verify-installed.ps1`**：
    这一步同时收掉 P0-3 最后一条，并为 P0-5 人工点按、P0-6 剩余两档提供装机产物。
    注意 `AGENTS.md` §2.5 / lessons **L169**：静默安装必须 `/D=<path>` 显式、先清
    `HKLM\Software\Fluxing\Weasel` 与 `HKCU\Software\Fluxing`；**装机是部署动作不是测试**。
 3. **P0-5 / P0-6 人工点按**：用户重登切 100% / 200% 各量一次。
-4. 收尾：`CHANGELOG.md` 未发布段（P5）+ `lessons-learned.md`（BOM + CRLF）。
+4. **P0-2 结论落地**：按 `gap-matrix.md` 的「借鉴 3 / 改造 2 / 反向借鉴 1」逐条决定是否进 spec，
+   改动仍须走 ADR + IPC 四边同步 + 不变量（R7 / P2）约束。
 
 ---
 
@@ -193,3 +193,48 @@ FileVersion `1.1.9.0`，mtime 2026-11-03，而 `env.bat` 的版本也是 `1.1.9.
 - 单测改生产代码后必须重跑 `release\TestQuickPanelDialog.exe`（当前基线 190/190）。
 - 提交前 `git status -sb` + `git diff --stat`；`git add` 逐路径；`m librime` 脏标记不得进提交。
 - Conventional Commits + 模块前缀。
+---
+
+## 8. 本棒追加（2026-11-05 续棒）：P0-1 / P0-2 已收口
+
+提交：`394a74d` `docs(fluxing): spec 099 P0-1/P0-2 搜狗黑盒采集与差距矩阵落盘`（21 文件 / +912 −14）。
+
+### 8.1 P0-1 搜狗黑盒采集（已完成 · 已验证）
+
+- **REA MCP 只承担 target-free 静态 PE 侧**：`rea inspect-pe-resources "<…>\SogouInput\16.8.0.5415\UIPlugin.dll" --format json --full-output` → exit=0，
+  产物入库 `docs\research\sogou-reverse-2026-11\evidence\rea-uiplugin-resources.json`。
+- **REA 运行时原生 UI 在 Windows 不可用（已坐实，勿重试）**：`observe-native-ui` 返回
+  `capability_unavailable` / `unsupported_provider`，provider = `composite:native-macos+rea-artifact-graph+rea-dotnet-static`，
+  reason 原文「Native macOS utilities require macOS」。⇒ 运行时观察全部改由自建 Win32 链完成
+  （`EnumWindows` / `GetWindowRect` / `EnumChildWindows` / `PrintWindow` / 屏幕区域截图 / `keybd_event` / `mouse_event`）。
+- **采集到的关键事实（尺寸一律记物理像素，DPI 感知进程读数）**：
+  - `SoPY_Status` 常驻可见，**353×66**，rect `[3369,1964,3722,2030]`，0 子窗口；7 可点项 + 1 竖分隔线。
+  - `SoPY_Comp` 组合时可见，**713×122**（内容多时 842），rect `[696,378,1409,500]`，0 子窗口。
+  - `≡` 点击命中点 ≈ (R−50, T+71) → 新顶层窗 `CherryIMEWindowClass` **480×974**，rect `[1382,381,1862,1355]`，同 pid。
+- **UIA 顶层枚举拿不到搜狗任何 AX 节点**（只枚举到无关的 DingTalk `MSCTFIME Composition`）⇒ 完全自绘、不可访问
+  ⇒ 定为我方「反向借鉴」条目：不得做成单一自绘位图，须保留每槽独立命中区 + 键盘焦点环 + 可读 tooltip。
+- **合规**：全程只读 + 黑盒；未提取/复用搜狗二进制、资源、词库、`.cupf` 皮肤与专有文案；未连接 `urls-hosts.txt` 内 185 主机。
+
+### 8.2 P0-2 差距矩阵（已完成 · 已验证）
+
+产出 `.specify\specs\099-quickpanel-sogou-benchmark\gap-matrix.md`：10 行矩阵
+（借鉴 3 / 改造 2 / 不抄 4 / 反向借鉴 1），另有 7 项「不列入的候选项」+ 不变量对照表。
+
+**结论方向**：`kButtonCount = 4` 不变；**不引入二级面板**；不引入账号区与皮肤入口；
+只加强两处——Toggle 开关「名称 + 当前态」表述、状态区文字回显；
+保持 `quickpanel.state` 唯一真相源（R7）与显示路径零阻塞 I/O（P2）。
+
+### 8.3 证据索引
+
+- 行为文档：`docs\research\sogou-reverse-2026-11\evidence\quickpanel-behavior.md`（14,440 B，9 节，含 11 项未验证）
+- 原始证据：`docs\research\sogou-reverse-2026-11\evidence\quickpanel\`（16 文件 / 596,797 B）
+- 静态 PE：`docs\research\sogou-reverse-2026-11\evidence\rea-uiplugin-resources.json`
+
+### 8.4 仍未验证（需用户在场）
+
+`quickpanel-behavior.md` 的 11 项未验证清单：`⌄` 下拉点位未命中、拖拽行为、多屏落点、皮肤态差异等。
+
+### 8.5 本棒新增教训（已写入 `.specify\memory\lessons-learned.md`）
+
+- **L184**：REA native UI 在 Windows 不可用（macOS-only provider）+ 自绘窗口观察口径（`PrintWindow` ≠ 外观真像）+ 证据必须入库。
+- **L185**：交接卡可能属于另一项目，须核对「路径 + session id + 提交历史」三件事再采信。
