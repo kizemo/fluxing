@@ -1,4 +1,6 @@
 ## [Unreleased]
+
+## [1.2.0] - 2026-11-05
 ### fix(WeaselUI): 右键删候选在 hover_type: none 下静默失效（改为点击坐标命中兜底）
 
 - **症状**：切到火流猩 -> 输入拼音出候选 -> 右键点候选「没有反应」，服务端从不写 `<schema_id>.user_ignore.txt`；同一缺陷此前被"修"过 4 轮未好（见 lessons-learned.md L186）。
