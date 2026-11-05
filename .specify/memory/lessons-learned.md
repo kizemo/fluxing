@@ -13974,3 +13974,27 @@ provider 组合是 `composite:native-macos+rea-artifact-graph+rea-dotnet-static`
 
 **推广**：所有「自动生成的交接 / 状态卡」在跨会话、跨项目复用时都是**未验证二手结论**，
 先花一次调用核对来源，再决定采不采信。
+
+## L186 - **把「鼠标点击命中」的实现挂在可选 hover 状态上 = 给功能装了个用户能自己关掉的总开关：`hover_type: none` 时 `m_hoverIndex` 恒为 -1，右键删候选静默 return，回调与 IPC 一次都不发**（2026-11-05）
+
+**现象**：切到火流猩 → 出候选 → 右键点第 1 个候选「没有反应」。同一缺陷已被"修过"4 轮，每轮都以为修好了。
+
+**根因链**（`WeaselUI/WeaselPanel.cpp`）：
+
+1. `OnMouseMove` 首行 `if (m_style.hover_type == UIStyle::NONE) return 0;` —— `hover_type: none`（`UIStyle` 默认值即 NONE，`include/WeaselIPCData.h:309`，`output/data/weasel.yaml:85` 亦为 none）时**永不**给 `m_hoverIndex` 赋值；
+2. `OnMouseLeave` 把它复位成 `-1`；
+3. `OnRButtonDown` 旧守卫 `if (hide_candidates || m_hoverIndex < 0) { bHandled = true; return 0; }` ⇒ **静默 return**，`m_deleteCallback` 与 IPC 一次都不发。
+4. 服务端因此从不写名单文件 ⇒ 「用户数据目录里没有 `*.user_ignore.txt`」是**必然**，不能当故障证据用。
+
+**为什么前 4 轮没找到**：修复都集中在服务端与 UI 过滤（ADR 0023 D9 明令禁止接回的那套），而断点在**入口守卫**。更坏的是它不崩溃、无日志、无返回码 —— 典型的静默失效。
+
+**判据（下次开工先跑）**：
+
+- 读 `build\weasel.yaml` 的 `hover_type`。`none` ⇒ 任何依赖 `m_hoverIndex` 的鼠标功能**当时就不可用**。
+- 「客户端有没有可能根本没发 IPC」的判据 = 客户端回调调用点是否被可选状态门控，不是「服务端日志没有」。
+
+**处置**：`OnRButtonDown` 改为**双索引来源** —— hover 命中优先，否则用点击坐标做几何命中（新增 `fluxing::HitTestCandidateIndex`，逐字复刻 `OnMouseMove` 的 `OffsetRect(istorepos) → InflateRect(DPI_SCALE(hilite_padding)) → PtInRect` 口径，落在 header-only `include/FluxingCandidateHitTest.h`）。**只加命中判定，不加任何 UI 侧过滤**（D9 仍成立）。
+
+**推广**：凡是「鼠标/键盘交互入口」读一个**可被样式开关关掉**的缓存状态（hover、focus、highlight index），都要问：这个开关关掉时，功能是降级、还是整体消失？交互入口应当自己持有**必然存在**的信息（点击坐标），而不是复用「只在某模式下才更新」的状态。
+
+**测试**：`test/TestCandidateRButtonDown` 新增 T10（hover=-1 时点第 3 格必须派回调 1 次 index=2；修复前必挂）与 T11（padding / reposition / 右开下开区间）。T11 首跑暴露**我算错了 2 条期望**（padding 后第 0 项矩形先吃掉 `x=52` 的点；上移后 `bottom=-10` 是开区间）—— 生产代码无错。**教训复用 L17：新写的断言先证明它会红，也要证明红的理由是几何而不是实现。**

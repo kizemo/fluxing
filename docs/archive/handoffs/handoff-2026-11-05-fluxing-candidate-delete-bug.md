@@ -244,3 +244,127 @@
 ## 九、一句话 prompt（交给新会话）
 
 见 `F:\soft\00selfmade\rime_claude\docs\archive\prompts\prompt-next-session-2026-11-05-candidate-delete-bug.md`
+
+---
+
+## 十、本棒（2026-11-05 下午 · 段 1 落地 + 生产编译 + 1.2.0 打包）
+
+### 10.1 段 0 判据结果（决定后续一切）
+
+- 两处用户数据目录 `D:\Program Files\fluxing\user1\fluxing`（= `HKCU:\Software\Fluxing\Weasel` 的 `RimeUserDir`）与 `%APPDATA%\FluxingUserData\user1\fluxing` **均无任何 `*.user_ignore.txt`**（历史上也从未出现过）⇒ 按 §4 判定表：断点在**客户端 → 服务端之间**，不进服务端。
+- **复验时两个目录都要查**，只查一处会误判「没生效」。
+
+### 10.2 真实根因（已验证，逐行；已记 L186）
+
+`WeaselUI/WeaselPanel.cpp`：
+
+1. `OnMouseMove` 首行 `if (m_style.hover_type == UIStyle::NONE) return 0;`（HEAD 行号 493）⇒ `hover_type: none` 时 `m_hoverIndex` **永不赋值**；
+2. `OnMouseLeave`（:544-552）复位 `-1`；初值 `int m_hoverIndex = -1;`（`WeaselPanel.h:187`）；
+3. `OnRButtonDown` 旧守卫（:558）`if (hide_candidates || m_hoverIndex < 0) { bHandled = true; return 0; }` ⇒ **静默 return**，`m_deleteCallback` 与 IPC 一次都不发。
+
+`hover_type` 默认三处一致为 NONE：`include/WeaselIPCData.h:205`（`enum HoverType { NONE, SEMI_HILITE, HILITE }`）、`:309 hover_type(NONE)`、`output/data/weasel.yaml:85` = `hover_type: none`；本机生效产物 `D:\Program Files\fluxing\user1\fluxing\build\weasel.yaml:523` 亦 `none`（用户 `weasel.custom.yaml` 只 patch 了 `style/color_scheme: flypy`）。
+⇒ **默认配置下必然失效**，与用户机器、与 DLL 版本无关。
+
+### 10.3 已排除的两个假说（别再翻）
+
+- **「装机二进制过期」不成立**（verifier `bg_12029257-2533-43a6-bada-1d0b888fe54a` succeeded）：64-bit view 的 `CLSID\{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}\InprocServer32` = `weaselx64.1.1.9.0.2.dll`（hash `C401266DA8C37EF1`），`weaselx64.dll`(1.1.7.0) 只是残留；1.1.8↔1.1.9 `.text` 差 0 字节；三棵源码树删词链路 blob 全同（`WeaselPanel.h 553755d3` / `WeaselPanel.cpp 1be23df6` / `FluxingCandidateDeleteShortcut.h f5cacfc6`）。
+- **「服务端 UI 未创建所以无回调」不成立**：全仓 `ShowUI|showUI|m_showUI` 只命中 `WeaselTSF.h:140` / `ThreadMgrEventSink.cpp:23` / `CandidateList.cpp:370` ⇒ `Status` 里根本没有 showUI 字段；可见候选窗由 TSF 在应用进程内创建（`CandidateList.cpp:313-316`、`:353-356`）。
+
+### 10.4 本棒改动（4 文件）
+
+| 文件 | 改动 |
+|---|---|
+| `include/FluxingCandidateHitTest.h` | 新增（2764 B，LF+BOM，与 `include/FluxingCandidateIgnore.h` 同风格）。`fluxing::CandidateHitRect{RECT rect; int offsetY;}` + `inline int HitTestCandidateIndex(items, pt, istorepos, padX, padY)`；逐字复刻 `OnMouseMove` 口径 `OffsetRect(0,offsetY)`（istorepos 时）→ `InflateRect(padX,padY)` → `PtInRect`；只依赖 `<windows.h>`，不碰 ATL/IPC |
+| `WeaselUI/WeaselPanel.h` | `void _IgnoreCurrentCandidate();` 之后新增 `int _HitTestCandidateIndex(CPoint point);`（CRLF 无 BOM 保持不变） |
+| `WeaselUI/WeaselPanel.cpp` | 顶部新增 `#include <vector>` / `#include <FluxingCandidateHitTest.h>`；实现 `_HitTestCandidateIndex`（`if (!m_layout) return -1;` + `for (size_t i = 0; i < m_candidateCount && i < MAX_CANDIDATES_COUNT; ++i)` + `item.rect = m_layout->GetCandidateRect((int)i);` + `item.offsetY = m_istorepos ? m_offsetys[i] : 0;` + `DPI_SCALE(m_style.hilite_padding_x/y)`）；重写 `OnRButtonDown`：`hide_candidates` 单独早退 → `index = m_hoverIndex; if (index < 0) index = _HitTestCandidateIndex(point);` → `index < 0` 早退 → 同 index 100 ms 去抖 → `m_deleteCallback(index)`；`bHandled = true; return 0;` 保持。**未**接回 UI 侧过滤（ADR 0023 D9 仍成立），**未**改 IPC 线格式（ADR 0025） |
+| `test/TestCandidateRButtonDown/TestCandidateRButtonDown.cpp` | `FakePanel` 升级为「hover 优先、否则坐标命中」双源；T2 语义改为「既没 hover 也没命中 ⇒ 不派回调不发 IPC」；新增 **T10**（`m_hoverIndex=-1` + 点第 3 格 ⇒ 回调 1 次 index=2；点空白 ⇒ 仍 1 次；**修复前必挂**）与 **T11**（padding 扩张 / reposition 偏移 / `PtInRect` 右开下开 / 空列表恒 -1）；末行 `11 / 11 assertions passed` |
+
+文档：`.specify/memory/lessons-learned.md` 新增 **L186**（+2890 B）；`CHANGELOG.md` 在 `## [Unreleased]` 下新增 `### fix(WeaselUI): 右键删候选在 hover_type: none 下静默失效`（+1645 B）。
+
+### 10.5 编译与测试证据（已验证）
+
+- 单测：`cmd /c "F:\soft\00selfmade\rime_claude\.superpowers\sdd\build_test_rbutton.cmd"` ⇒ `11 / 11 assertions passed` / `No errors detected` / `TESTRUN_EXIT=0`；exe 落在 `release\TestCandidateRButtonDown.exe`（**不是** `output\`）。
+- 生产编译：`\.superpowers\sdd\build_weaselui.cmd`（vcvars64 + `msbuild WeaselUI\WeaselUI.vcxproj /t:ClCompile /p:Platform=x64 /p:BuildProjectReferences=false /p:BOOST_ROOT=F:\b183 /p:SolutionDir=%R%\`）⇒ `WEASELUI_EXIT=0`，唯一告警 `WeaselPanel.cpp(167,22) C4267 size_t→BYTE` 是**既有**代码（HEAD 165 行 `m_candidateCount = min(...size(), MAX_CANDIDATES_COUNT)`，被我新增的 2 行 include 下移）。
+- 整包 + 安装器：`cmd /c build.bat weasel installer data`，日志 `\.superpowers\sdd\build_120.log`；14:46 已进入 makensis，产物 `output\archives\fluxing-1.2.0-installer.exe`。
+
+### 10.6 版本号 1.1.9 → 1.2.0（L107 同版本重装会撞车，必须先 bump）
+
+三处同步：本地 `env.bat`（**gitignored**：`FLUXING_VERSION` / `PRODUCT_VERSION` / `FILE_VERSION` / `VERSION_MAJOR|MINOR|PATCH`，`RELEASE_BUILD=1` 保持）、tracked `build.bat` 兜底数字（L158 要求同步，否则 CI/新克隆产出旧版本）、`version.txt`。`weasel.props` 是 `build.bat :render_props` 用 `cscript render.js` 生成的（.gitignore:32），**不要手改、不要提交**。门禁 `scripts/gate/L0-static.ps1:167`（RC7）与 `L3-mutation.ps1:161`（M03）会查这四者一致性。
+
+### 10.7 下一棒要做的事（按序）
+
+1. **装机端到端复验**（这是「链路通了」的唯一判据，纯函数绿不算）。装 1.2.0：先 `cmd /c "taskkill /F /IM WeaselServer.exe"`，再清 `HKLM:\SOFTWARE\WOW6432Node\Fluxing` 与 `HKCU:\Software\Fluxing`，再 `installer.exe /S /D=D:\Program Files\fluxing`（`/D=` 必须最后且不带引号）。验：① 右键点候选 → 该候选消失且 `build\..\ <schema_id>.user_ignore.txt` 出现；② 单独按 `Ctrl+Shift+1` 的 32/64 位两条路径；③ 托盘「恢复已忽略的候选项」能撤销。
+2. **`Ctrl+Shift+数字` 入口仍只有源码在场证据**（`WeaselTSF/KeyEventSink.cpp:90-99` 拦截块 + `CandidateList.h:73-77 GetVisibleCandidateCount()`，`!_ui || !_ui->IsShown()` ⇒ 0 ⇒ 同样「什么都不发生」）；用户至今只回报跑了右键。若真机复验仍不通，**先取 `IsShown()` 运行态**。
+3. **快捷设置栏对标搜狗（spec 099）—— 本棒未动，且状态比上一棒 handoff 记录的好**：`CHANGELOG.md` 的 `## [Unreleased]` 已有 3 条 feat（`L18` P0-7 位置持久化、`L32` 4 槽全部有确定效果 / 槽 0 切方案 + 槽 3 关于、`L2` P0-4/5/6 状态回显 + 键盘可达 + tooltip + DPI），说明这条线**大部分已落地并 commit**。 ⇒ 开工前**必须**先读 `.specify/specs/099-quickpanel-sogou-benchmark/tasks.md`（18432 B）与 `gap-matrix.md`（20129 B）核对剩余缺口，别按 §8 的旧清单重做已完成项。
+4. commit 前跑 `git status -sb` + `git diff --stat`（`env.bat` / `weasel.props` / `*.obj` / `.superpowers/` 不得入库），按 Conventional Commits + 模块前缀 `WeaselUI`。
+
+### 10.8 本棒新增工具坑（实测）
+
+- **锚点唯一性救了一次**：`## [Unreleased]` 在 CHANGELOG 里命中 **2 次**（L1、L5498）⇒ 用带下一行的长锚点 `## [Unreleased]\r\n### feat(WeaselServer)`（命中 1 次）。throw 在写盘前，文件没坏（铁律 05 / 23）。
+- **保行尾最省事的做法**：纯 ASCII 替换用 `[Text.Encoding]::GetEncoding(28591)`（Latin-1，字节 1:1）读→`Replace`→同编码写字节，任何编码/行尾都不会被改坏；含中文的文件用 `UTF8.GetString` + `New-Object Text.UTF8Encoding($bom)` 写 bytes。
+- `Get-ChildItem -Include` 与 `-Path` 混用时我写成 `Get-ChildItem $R -Include ... -Path ...` 会静默无输出，别依赖它判进度；判构建进度直接看 `Get-Process makensis/msbuild/cl` + `output\archives\` 新文件 + 日志 tail。
+- `Select-String` 无 `-Recurse`；`foreach {} | Select-Object -First N` 报「不允许空管道元素」；脚本内 `Set-Location` 被硬策略拒绝。
+- PowerShell 里给字符串补零对齐用 `'{0,4}: {1}' -f $i,$_` 必须写成 `(Get-Content ...)[a..b] | ForEach-Object { ... }`，我上面 `{ '{0,4}...' -f ... }` 的花括号把脚本块当对象打印出来了 —— 输出是 `'{0,4}: {1}' -f $_` 原文时就是这个坑。
+
+### 10.5 装机（1.2.0）已完成 —— 端到端复验的前置与判据
+
+1. **已静默装上本机**：`cmd /c .superpowers\sdd\install_120.cmd` ⇒ `INSTALL_EXIT=0`（配方：直接调用安装包 + `"/S" "/D=$INSTDIR"` 作**裸尾参**，`/D=` 不带引号；见 `project-knowledge.md §11.1`）。装机前快照 `\.superpowers\sdd\pre_install_120_snapshot.txt`（42 文件 name|size|SHA256 前 16 位）留作回滚参照。**本棒没有删任何注册表键** —— 版本已 bump，不需要 L107 那套清理，也避免动到 `RimeUserDir` 指向的用户数据。
+2. **装机产物已取证**：`WeaselServer.exe` / `weaselx64.dll` / `weasel.dll` / `WeaselDeployer.exe` 全部 fv=pv=`1.2.0.0`；装机 `weaselx64.dll` 与 `output\weaselx64.dll` **SHA256 相同**；`output\weaselx64.pdb` 内含 `_HitTestCandidateIndex` ⇒ 新代码确实在出货二进制里。安装器覆盖的是**规范名** `weaselx64.dll` / `weasel.dll`（未生成 `weaselx64.1.2.*` 版本化 shim），残留 `.old.tmp` 已清；TSF 注册表 64-bit view 与 WOW6432Node 里 fluxing 的 `InprocServer32` 只剩这两条路径。WeaselServer 由安装器自启（新 exe）。
+3. **复验前必须重启目标应用**（否则测的是旧客户端，会得出假阴性）：装机不会替换已在运行进程里已映射的 DLL —— 实测 14 处仍映射 `weaselx64.1.1.9.0.2.dll`（explorer / Excel / Edge / 飞书 / 钉钉 / 微信 / MiniMax Code / ToDesk 等）；注销或重启最彻底。目标应用 32 位加载 `weasel.dll`、64 位加载 `weaselx64.dll`，两条都已带修复。
+4. **生效配置仍是 `hover_type: none`**（`D:\Program Files\fluxing\user1\fluxing\build\weasel.yaml`，mtime 2026-11-03，未被本次装机改写）⇒ 复验正好落在修复路径上，**不要**先把 hover_type 改成 `mouse` 再测。忽略名单基线 = 两处用户数据目录共 **0** 个 `*user_ignore*`。
+5. **同批次交接文档**（`handoff-2026-11-05-fluxing-quickpanel-ui-acceptance.md`，同项目同批次 ⇒ 采信）记录 1.1.9 真机 3 条与本条线同源的症状：右键点候选「候选窗直接消失、不弹菜单」；`Ctrl+Shift+1..9` **与** `Ctrl+Alt+1..9` 全无反应；候选窗 hover 无高亮。前两者与 hover 无高亮都由 `hover_type: none` + 旧 `m_hoverIndex` 守卫解释。**`Ctrl+Shift+<数字>` 是独立的第二处断点，本棒未修** —— 唯一剩余判据：重启过的目标应用里、候选窗已弹出时单按 `Ctrl+Shift+1`；若仍无反应，先取 TSF 侧 `WeaselPanel::IsShown()` 运行态（`CandidateList.h:73-77` 在 `!_ui || !_ui->IsShown()` 时返回 0 ⇒ 与本次缺陷同构的静默失效），**别改代码**。用户已授权：若与其它快捷键冲突可改 `Ctrl+Alt+数字`（本棒判定数字族已腾空 ⇒ 未动键位）。
+6. 更正一处误记：`weasel.user.yaml` **在本机两个用户数据目录都不存在**，源码 `findstr` 亦无引用 ⇒ 装机没有删用户数据；`weasel.custom.yaml`(264 B/10-22) / `default.custom.yaml` / `rime_ice.custom.yaml` / `double_pinyin_sogou.custom.yaml` / `radical_pinyin.custom.yaml` / `phrases.yaml` / `installation.yaml` mtime 全部早于装机，原样保留（`user.yaml` 被部署器 14:56 重写，内容与 APPDATA 副本同长 146 B）。
+7. commit 前唯一待核事实：`git status` 未列 `version.txt`（本棒写入 `1.2.0`）⇒ 确认它是 gitignore 还是已进 ahead 3 的某个 commit。
+
+## 十一、本棒（2026-11-06 凌晨 · 版本同步收口 + 门禁全绿 + 真机 E2E 被锁屏挡住）
+
+### 11.1 已做（可提交的部分）
+
+1. **版本号三处同步补齐**：`version.txt` 仍是 `1.1.9`（§10.7-7 那条「待核事实」**已坐实为真缺陷**）→ 改成 `1.2.0`（5 字节、无 BOM、无换行，与 gate 的形状要求一致）；`build.bat` 的 `VERSION_MINOR/PATCH` 已是 `2/0`；本地 `env.bat` 已是 `1.2.0`（gitignored，不入库）。
+2. **`CHANGELOG.md` 缺 1.2.0 发布段** → 按仓库惯例切出 `## [1.2.0] - 2026-11-05`（gate 的 `version-consistency` 取的是**首个数字版本头**，原先是 `1.1.9` ⇒ 判红）。
+3. **`.specify/memory/lessons-learned.md` 丢了 UTF-8 BOM**（L186 那次写入的后果）→ 字节级前置 `EF BB BF`，14000 处 CRLF 与 904850 字节正文一字未动。
+4. **格式化**：CI 的 lint 门禁「只检查本次 push 触及的文件」⇒ 用 `git clang-format --force HEAD` 只重排本次改动行（测试文件 T10/T11 段）。`WeaselPanel.cpp/.h` 的 84/18 条违规是 **HEAD 既有欠账**（改动前后条数相同），不做无关重排。
+5. **门禁全绿**：`L0-static -Mode all` 12/12（`nsis-compile` 在完整跑那次 PASS）、`L1` 15/15、`L3` 变异 **7/7 全杀**（M03 现在会连 CHANGELOG 顶部版本一起判红）。
+6. **单测**：`release\TestDefaultHotkeys.exe` **91/91 PASS**（exit 0）；`release\TestCandidateRButtonDown.exe` **11/11 PASS**（exit 0，含 T10「修复前必挂」）。
+
+### 11.2 真机 E2E：被「桌面已锁屏」挡住（**不是代码问题**）
+
+- **现象链**：`GetForegroundWindow()` 返回 **0**、`Graphics.CopyFromScreen` 抛「句柄无效」、枚举却能看见记事本/Edge/微信等真实窗口；`LogonUI` 进程在跑 ⇒ **会话处于锁屏态**。锁屏时 Windows 拒绝输入注入与屏幕捕获 ⇒ 「右键删候选」这条判据在**无人解锁时物理上无法自动完成**。
+- **中途两次「假失败」已排除，别再翻**：
+  - Tk 的 `Text` 是**自绘控件，不吃 IME** ⇒ 没有候选窗是正常现象，不是缺陷复现。
+  - 打包版记事本的窗口**不在 `notepad.exe` 的 PID 里** ⇒ 必须全进程枚举按类名 `Notepad` 找，按启动进程 PID 找必然扑空。
+  - `ctypes` 侧：`GetForegroundWindow` 不声明 `restype=HWND` 会把 64 位句柄**截断成 0**（误判成「抢不到焦点」）；`EnumWindows` 的回调必须是 `WINFUNCTYPE` 实例且要给 `argtypes`。
+- **复验怎么做（解锁后一条命令）**：
+  `F:\soft\00selfmade\rime_claude\.superpowers\sdd\verify_candidate_delete_manual.cmd`
+  它会起一个记事本、提示输入 `nihao` 并**右键第一个候选**，随后自动监视两处用户数据目录里新出现的 `*user_ignore*` 文件，打印 PASS/FAIL 与文件内容。
+- **复验前必做：重启目标应用**（装机不替换已运行进程里已映射的 DLL）。本机实测映射情况：
+  - 仍映射**旧** `weaselx64.1.1.9.0.2.dll`：`explorer` / `msedge` / `msedgewebview2` / `MiniMax Code` / `Feishu` / `DingTalk` / `ToDesk` / `Claude Code Haha` / `ShadowBot.Shell`；
+  - 映射**规范名** `weaselx64.dll`（= 1.2.0，**修复在位**）：`Notepad`（00:16:43 启动，晚于 11-05 14:44 装机）/ `EXCEL` / `powershell` / `SearchHost` / `Doubao` / `ApplicationFrameHost`。
+- **其它环境事实**：本机已排每日 **03:00 自动关机**计划任务 `Fluxing-Daily-Shutdown-0300`（下次 2026/11/6 03:00，`shutdown /s /t 60`）；`D:\Program Files\fluxing\user1\fluxing\build\weasel.yaml` 的 `hover_type` 仍是 `none`（**不要**先改成 `mouse` 再测）；两处用户数据目录的 `*user_ignore*` 基线仍是 0。
+
+### 11.3 本棒新增工具坑（实测）
+
+- `ctypes.cast(int, c_void_p)` 直接抛「Don't know how to convert parameter 1」——回调里的 HWND 已是 int，用 `int(hwnd)`。
+- `EnumWindows` 不给 `argtypes` 就传回调 → 「expected WinFunctionType instance instead of function」；给了 `argtypes` 后又必须把回调包成 `WINFUNCTYPE` 实例。
+- `GetForegroundWindow` / `SetForegroundWindow` / `SetFocus` / `AttachThreadInput` 等 64 位 HWND API **必须**显式声明 `restype/argtypes`，否则句柄被截断成 0。
+- 打包应用（记事本）**窗口不在启动进程 PID 里**；按 PID 枚举必然扑空。
+- 自绘控件（Tk Text）不吃 IME；验证 IME 链路必须用**原生 EDIT 控件**。
+- 锁屏会话下输入注入与屏幕捕获**静默失败**：`GetForegroundWindow()==0` + `CopyFromScreen`「句柄无效」就是锁屏指纹（枚举窗口仍然正常，别被误导成「看不见桌面」）。
+- `taskkill /F /IM python.exe` 会连**别的项目的** python 一起杀（本机一次干掉 8 个）——要按 PID 精确杀。
+- 长驻子进程会持有父进程的 stdout 管道 ⇒ `| Select-Object -Last N` 永远等不到 EOF（子进程退出前管道不关）。把输出重定向到文件，或让子进程自己脱离。
+- `git clang-format` 拒绝在有未暂存改动时运行，要加 `--force`。
+
+### 11.4 下一棒（按序）
+
+1. 解锁桌面 → 跑 `verify_candidate_delete_manual.cmd` → 右键第一个候选 → 看 PASS/FAIL。
+2. PASS 后：把结果回填到本文件 §十一，并把接力 prompt 改成「已复验」版本。
+3. 未 PASS：**先取 TSF 侧运行态**（`WeaselPanel::IsShown()`），**别改代码**（与本缺陷同构的静默失效，§10.7-2 已写明）。
+4. `Ctrl+Shift+<数字>` 那条独立断点**仍未修**（§10.7-2），用户已授权：若冲突可改 `Ctrl+Alt+数字`。
+5. spec 099 快捷设置栏那条线**另棒继续**：按 `.specify/specs/099-quickpanel-sogou-benchmark/{spec.md,tasks.md,gap-matrix.md}` 与同批次 `docs/archive/handoffs/handoff-2026-11-05-fluxing-quickpanel-ui-acceptance.md` 核对剩余缺口，**勿重做已完成项**。
+
+### 11.5 本棒 commit 划分（scope 单一，避免 P4 判红）
+
+- `fix(WeaselUI)`：`WeaselUI/WeaselPanel.cpp` + `.h` + `include/FluxingCandidateHitTest.h` + `test/TestCandidateRButtonDown/TestCandidateRButtonDown.cpp` + `.specify/memory/lessons-learned.md` + `CHANGELOG.md` 的修复条目 + 本 handoff + 接力 prompt。
+- `chore(installer)`：`version.txt` + `build.bat` + `CHANGELOG.md` 的 `## [1.2.0] - 2026-11-05` 发布段。
+
+不入库：`env.bat` / `weasel.props`（gitignored）、`librime`（子模块只有本地构建脏文件，**指针未变**，别 `git add librime`）、`.superpowers/`（工具与日志）。

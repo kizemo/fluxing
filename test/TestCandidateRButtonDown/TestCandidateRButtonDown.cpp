@@ -25,6 +25,7 @@
 
 #include "stdafx.h"
 #include <boost/detail/lightweight_test.hpp>
+#include <FluxingCandidateHitTest.h>
 #include <FluxingCandidateIgnore.h>
 #include <FluxingCandidateDeleteShortcut.h>
 #include <functional>
@@ -45,19 +46,29 @@ class FakePanel {
   DWORD m_lastDispatchTick = 0;
   int m_lastDispatchIndex = -1;
   int m_dispatchCount = 0;
+  // L186: 修复后的第二索引来源 —— 点击坐标 + 与 OnMouseMove 同源的几何。
+  std::vector<fluxing::CandidateHitRect> m_items;
+  POINT m_click = {0, 0};
+  bool m_istorepos = false;
+  int m_padX = 0;
+  int m_padY = 0;
 
   void OnRButtonDown_simulated() {
-    if (m_hoverIndex < 0)
-      return;  // no hover -> no dispatch
+    int index = m_hoverIndex;
+    if (index < 0) {
+      index = fluxing::HitTestCandidateIndex(m_items, m_click, m_istorepos,
+                                             m_padX, m_padY);
+    }
+    if (index < 0)
+      return;  // 既没 hover 也没命中 -> 不派回调、不发 IPC
     DWORD now = GetTickCount();
-    if (m_hoverIndex == m_lastDispatchIndex &&
-        (now - m_lastDispatchTick) < 100) {
+    if (index == m_lastDispatchIndex && (now - m_lastDispatchTick) < 100) {
       return;  // debounce within 100ms
     }
     m_lastDispatchTick = now;
-    m_lastDispatchIndex = m_hoverIndex;
+    m_lastDispatchIndex = index;
     if (m_deleteCallback) {
-      m_deleteCallback(static_cast<size_t>(m_hoverIndex));
+      m_deleteCallback(static_cast<size_t>(index));
     }
     m_dispatchCount++;
   }
@@ -281,6 +292,68 @@ int main() {
               << std::endl;
   }
 
-  std::cout << "9 / 9 assertions passed" << std::endl;
+  // Test 10 (spec 100 / L186 判别性): hover_type: none(出厂默认)下
+  // m_hoverIndex 恒为 -1, 右键必须按点击坐标命中并派回调。
+  // 这条在修复前必挂 —— 旧 OnRButtonDown 的第一行守卫是
+  // `if (hide_candidates || m_hoverIndex < 0) return`, 默认配置下永远静默。
+  {
+    FakePanel p;
+    int count = 0;
+    size_t idx = 999;
+    p.m_deleteCallback = [&](size_t i) {
+      count++;
+      idx = i;
+    };
+    p.m_items = {
+        {{0, 0, 50, 20}, 0}, {{50, 0, 100, 20}, 0}, {{100, 0, 150, 20}, 0}};
+    p.m_hoverIndex = -1;  // 等价于 hover_type: none, OnMouseMove 从不赋值
+    p.m_click = {120, 5};  // 可见第 3 项
+    p.OnRButtonDown_simulated();
+    BOOST_TEST_EQ(count, 1);
+    BOOST_TEST_EQ(idx, 2u);
+    // 点在候选之间的空白 / 面板外 -> 不命中 -> 一次都不派
+    p.m_lastDispatchTick = 0;  // 绕开去抖, 只验命中
+    p.m_lastDispatchIndex = -1;
+    p.m_click = {200, 5};
+    p.OnRButtonDown_simulated();
+    BOOST_TEST_EQ(count, 1);
+    std::cout << "  PASS: T10 hover_type:none 下按坐标命中仍派回调(修复前必挂)"
+              << std::endl;
+  }
+
+  // Test 11 (spec 100 / L186): 命中几何口径 —— padding 扩张 + reposition 偏移
+  // + PtInRect 的右/下开区间, 必须与 OnMouseMove 逐字一致。
+  {
+    std::vector<fluxing::CandidateHitRect> items = {{{0, 0, 50, 20}, -30},
+                                                    {{50, 0, 100, 20}, -30}};
+    // 未扩张时 (52, 21) 落在两格之外
+    BOOST_TEST_EQ(fluxing::HitTestCandidateIndex(items, {52, 21}, false, 0, 0),
+                  -1);
+    // padding(3,2) 之后 (52,21) 被**第 1 项**的扩张矩形 (-3,-2)-(53,22) 先吃掉,
+    // 证明命中取「第一个」; 而 (102,5) 未扩张时在 right=100 之外, 扩张后落入。
+    BOOST_TEST_EQ(fluxing::HitTestCandidateIndex(items, {52, 21}, false, 3, 2),
+                  0);
+    BOOST_TEST_EQ(fluxing::HitTestCandidateIndex(items, {102, 5}, false, 0, 0),
+                  -1);
+    BOOST_TEST_EQ(fluxing::HitTestCandidateIndex(items, {102, 5}, false, 3, 2),
+                  1);
+    // 右/下边界是开区间: x == right 不命中
+    BOOST_TEST_EQ(fluxing::HitTestCandidateIndex(items, {100, 5}, false, 0, 0),
+                  -1);
+    // istorepos: 整列上移 30px, 于是 (5, -15) 命中第 1 项, (5, 5) 反而不命中
+    BOOST_TEST_EQ(fluxing::HitTestCandidateIndex(items, {5, -15}, true, 0, 0),
+                  0);
+    // bottom 仍是开区间: 上移后第 1 项 bottom = -10, 所以 (5,-10) 不命中
+    BOOST_TEST_EQ(fluxing::HitTestCandidateIndex(items, {5, -10}, true, 0, 0),
+                  -1);
+    BOOST_TEST_EQ(fluxing::HitTestCandidateIndex(items, {5, 5}, true, 0, 0),
+                  -1);
+    // 空列表(候选窗无候选)恒不命中
+    BOOST_TEST_EQ(fluxing::HitTestCandidateIndex({}, {5, 5}, false, 8, 8), -1);
+    std::cout << "  PASS: T11 命中几何口径(padding / reposition / 开区间)"
+              << std::endl;
+  }
+
+  std::cout << "11 / 11 assertions passed" << std::endl;
   return boost::report_errors();
 }

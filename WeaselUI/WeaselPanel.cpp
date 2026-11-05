@@ -1,5 +1,7 @@
 #include "stdafx.h"
 #include "WeaselPanel.h"
+#include <vector>
+#include <FluxingCandidateHitTest.h>
 
 #include <utility>
 #include <VersionHelpers.hpp>
@@ -551,25 +553,65 @@ LRESULT WeaselPanel::OnMouseLeave(UINT uMsg,
   return 0;
 }
 
+// spec 100 / L186: 与 OnMouseMove 逐字同口径的坐标命中测试 —— GetCandidateRect
+// → reposition 纵向偏移 → hilite padding 扩张 → PtInRect。几何本体在
+// include/FluxingCandidateHitTest.h 里, 这样 test/TestCandidateRButtonDown
+// 能 include 真实实现来断言, 而不是像以前那样手抄一份 FakePanel(生产代码怎么
+// 改它都全绿, L186 因此潜伏了 4 轮)。
+int WeaselPanel::_HitTestCandidateIndex(CPoint point) {
+  if (!m_layout)
+    return -1;
+  std::vector<fluxing::CandidateHitRect> items;
+  for (size_t i = 0; i < m_candidateCount && i < MAX_CANDIDATES_COUNT; ++i) {
+    fluxing::CandidateHitRect item;
+    item.rect = m_layout->GetCandidateRect(static_cast<int>(i));
+    item.offsetY = m_istorepos ? m_offsetys[i] : 0;
+    items.push_back(item);
+  }
+  return fluxing::HitTestCandidateIndex(items, point, m_istorepos,
+                                        DPI_SCALE(m_style.hilite_padding_x),
+                                        DPI_SCALE(m_style.hilite_padding_y));
+}
+
 LRESULT WeaselPanel::OnRButtonDown(UINT uMsg,
                                    WPARAM wParam,
                                    LPARAM lParam,
                                    BOOL& bHandled) {
-  if (hide_candidates || m_hoverIndex < 0) {
+  if (hide_candidates) {
+    bHandled = true;
+    return 0;
+  }
+  // spec 090 / ADR 0023 D5: 本函数只做「命中索引 + 100ms 去抖 + 调
+  // m_deleteCallback」, IPC 线格式(ADR 0025)与命令号零变化。
+  //
+  // L186 根因: 索引过去**只**取 m_hoverIndex, 而 OnMouseMove 第一行就是
+  //   if (m_style.hover_type == UIStyle::NONE) return 0;
+  // 出厂默认与 include/WeaselIPCData.h 的 UIStyle 默认值都是 hover_type: none,
+  // 于是 m_hoverIndex 永远是 -1 => 右键静默 return, 回调与 IPC 一次都不发。
+  // 现在: 有 hover 高亮时沿用 hover 索引(行为与 spec 030/090 完全一致),
+  // 没有 hover 时按本次点击坐标命中。
+  CPoint point;
+  point.x = GET_X_LPARAM(lParam);
+  point.y = GET_Y_LPARAM(lParam);
+  int index = m_hoverIndex;
+  if (index < 0) {
+    index = _HitTestCandidateIndex(point);
+  }
+  if (index < 0) {
     bHandled = true;
     return 0;
   }
   static DWORD s_lastTick = 0;
   static int s_lastIndex = -1;
   DWORD now = GetTickCount();
-  if (m_hoverIndex == s_lastIndex && (now - s_lastTick) < 100) {
+  if (index == s_lastIndex && (now - s_lastTick) < 100) {
     bHandled = true;
     return 0;
   }
   s_lastTick = now;
-  s_lastIndex = m_hoverIndex;
+  s_lastIndex = index;
   if (m_deleteCallback) {
-    m_deleteCallback(static_cast<size_t>(m_hoverIndex));
+    m_deleteCallback(static_cast<size_t>(index));
   }
   bHandled = true;
   return 0;

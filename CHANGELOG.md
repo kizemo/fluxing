@@ -1,4 +1,10 @@
 ## [Unreleased]
+### fix(WeaselUI): 右键删候选在 hover_type: none 下静默失效（改为点击坐标命中兜底）
+
+- **症状**：切到火流猩 -> 输入拼音出候选 -> 右键点候选「没有反应」，服务端从不写 `<schema_id>.user_ignore.txt`；同一缺陷此前被"修"过 4 轮未好（见 lessons-learned.md L186）。
+- **根因**：`OnRButtonDown` 的索引唯一来源是 `m_hoverIndex`，而 `OnMouseMove` 在 `hover_type == NONE` 时首行 return，故 `m_hoverIndex` 恒为 `-1`，守卫 `m_hoverIndex < 0` 静默 return，回调与 IPC 一次都不发。`UIStyle::hover_type` 默认即 NONE，`output/data/weasel.yaml` 也是 `hover_type: none`，所以这是**默认配置下必然失效**，不是偶发。
+- **修复**：索引改为双来源 —— hover 命中优先，否则用点击坐标做几何命中（`include/FluxingCandidateHitTest.h` 的纯函数 `fluxing::HitTestCandidateIndex`，逐字复刻 `OnMouseMove` 口径：`OffsetRect(m_istorepos ? m_offsetys[i] : 0)` -> `InflateRect(DPI_SCALE(hilite_padding_x/y))` -> `PtInRect`）。100 ms 同 index 去抖与 ADR 0023 D5「`OnRButtonDown` 只调 `m_deleteCallback`」保持不变；**未**接回任何 UI 侧过滤（D9 仍成立），**未**改 IPC 线格式（ADR 0025）。
+- **验证**：`test/TestCandidateRButtonDown` 新增 T10（hover 缺失时坐标命中，**修复前必挂**）与 T11（padding / reposition / 右开下开区间），共 **11 / 11 assertions passed**；`msbuild WeaselUI\WeaselUI.vcxproj /t:ClCompile` 生产编译通过（`WEASELUI_EXIT=0`，唯一告警为既有 C4267）。真机端到端复验随 1.2.0 装机包进行。
 ### feat(WeaselServer): 快捷设置栏回显当前输入状态（中/英 + 全/半角）、键盘可达（Tab/方向键/Enter/Space/Esc）与每槽 tooltip（spec 099 P0-4 / P0-5 / P0-6 / ADR 0036）
 
 - **症状**：面板 4 个槽只有图标，用户看不出当前是中文态还是英文态、是全角还是半角（切换只能盲试）；面板用 `WS_EX_NOACTIVATE` 显示（L89-fix 的事故修复：抢焦点会让用户打不了中文）⇒ 面板收不到按键，纯键盘用户完全用不了它；图标无文字说明，新用户不知道 4 个槽分别干什么。

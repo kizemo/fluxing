@@ -101,6 +101,10 @@ class WeaselPanel
   void _InitFontRes(bool forced = false);
   void _CaptureRect(CRect& rect);
   void _IgnoreCurrentCandidate();
+  // spec 100 / L186: 按点击坐标命中候选索引, 口径与 OnMouseMove 一致。
+  // 必须存在: m_hoverIndex 只在 hover_type != NONE 时被赋值, 出厂默认
+  // hover_type: none 下它恒为 -1, 右键删词不能依赖它。
+  int _HitTestCandidateIndex(CPoint point);
   void _FilterIgnoredCandidates();
   void _RefreshStylePalette();
   std::unordered_set<std::wstring> m_ignoreList;
