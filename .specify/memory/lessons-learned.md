@@ -13880,3 +13880,43 @@ PS 7 默认按 UTF-8 读 ⇒ 正常。
 1. 它 dot-source 的每个共享库是不是「无 BOM + 中文」；
 2. `#Requires` 声明的版本与 CI 实际宿主是否一致；
 3. 在 `pwsh` 与 `powershell` 两个宿主各跑一次再算通过。
+
+## L182 - **判「系统缩放是多少」不能读 `SystemInformation.VirtualScreen`：DPI 未感知进程看到的是被虚拟化的逻辑分辨率（3840x2160 @150% 显示成 2560x1440），据此会得出「当前 100%」的反向结论**（2026-11-05）
+
+**现象**：本机真实缩放 **150%**（物理屏 3840x2160），但交接文档写的是「当前 100% DPI、虚拟屏 2560x1440」。
+`2560 = 3840/1.5`、`1440 = 2160/1.5` —— 那不是分辨率，那是**同一个物理屏在未感知 DPI 的进程里的逻辑坐标**。
+按这个结论去解释「为什么面板量出来不是 245x48」，会往完全错误的方向查（以为是缩放没生效/代码没编进去）。
+
+**三条独立来源互证才作数**：
+
+1. `GetDeviceCaps(GetDC(NULL), LOGPIXELSX/LOGPIXELSY)` = 144
+2. `GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI)` = 144 x 144（`hr=0`）
+3. `HKCU:\Control Panel\Desktop` 的 `LogPixels=144` + `Win8DpiScaling=1`
+
+**可迁移规则**：
+
+- 任何「我这边的 DPI / 分辨率 / 缩放」事实，必须由**DPI 感知**的 API 给出（`GetDeviceCaps` / `GetDpiForMonitor`），
+  或直接读注册表；**`VirtualScreen` / `Screen.Bounds` 只能用于「布局容器多大」，不能用于「系统缩放是多少」**。
+- 交接文档里的环境事实要写**来源 API**，不能只写结论；上一棒漏了来源，把虚拟化值当成了真值。
+- 反过来：`grep` 一个数值（2560x1440）在文档里出现时，先问「这是物理还是逻辑」。
+
+## L183 - **后台任务 `succeeded` 只代表 shell 退出码 0；命令根本没跑起来（路径不存在）也是 0 之外的壳层成功** —— 判门禁结果只能看 `RESULT` / `GATE RESULT` 行（2026-11-05）
+
+**现象**：后台跑门禁，任务状态 `succeeded`，实际输出只有一行
+`&: 术语 'C:\Program Files\PowerShell\7\pwsh.exe' 不会被识别为 cmdlet`（该路径不存在）。
+如果只看任务状态，会把「门禁压根没执行」记录成「门禁通过」。
+
+**同时踩到的第二个坑**：`scripts\gate\run-all.ps1` **没有 `-Level` 参数**（真实参数是
+`-Root` / `-SkipL0` / `-SkipL1` / `-SkipL3` / `-SkipCases` / `-SkipSandboxGate` / `-CaseTimeoutSec`）。
+传错参数时脚本 `exit=1`，但后台包装仍可能报 `succeeded`。
+
+**可迁移规则**：
+
+1. 门禁/测试类后台任务**必须读日志正文**、找 `RESULT` / `GATE RESULT` / `EXIT=` 这一行，再看任务状态；
+   日志里没有任何 RESULT 行 = 没跑，不是通过。
+2. 起后台任务前后都 `Test-Path` 一下关键可执行文件与日志路径；日志不存在就别读状态。
+3. 包装脚本前先读它的 `param()` 块，别按记忆里的参数名调用。
+
+**可迁移规则**：引用系统工具时用**可解析**的方式取路径（`Get-Command pwsh`），不要把某个版本目录写死；
+本机 `C:\Program Files\PowerShell\7\` 不存在，pwsh 7.6.9 实际在
+`$env:LOCALAPPDATA\Microsoft\WindowsApps\Microsoft.PowerShell_8wekyb3d8bbwe\pwsh.exe`。

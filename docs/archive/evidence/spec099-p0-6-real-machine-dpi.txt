@@ -1,0 +1,74 @@
+spec 099 · P0-6 · 装机版 DPI 复验 —— 真机实测证据
+================================================================
+采集时间：2026-11-05（本地机器，交互式会话 SessionId=1）
+采集方式：只读测量。起本仓源码构建的 WeaselServer.exe → PostMessage(WM_COMMAND,
+          ID_WEASELTRAY_QUICK_PANEL_SHOW) 唤出面板 → GetDpiForWindow + GetWindowRect
+          → 截面板区域图 → PostMessage(HIDE) → Stop-Process。
+          未安装、未改写任何已安装二进制或用户数据。
+探针脚本：tmp/spec099-probe/measure-panel.ps1（可复跑）
+原始输出：tmp/spec099-probe/measure-panel.txt
+
+----------------------------------------------------------------
+1. 环境事实（三条独立来源交叉验证，互相一致）
+----------------------------------------------------------------
+GetDeviceCaps(desktop DC, LOGPIXELSX) = 144
+GetDeviceCaps(desktop DC, LOGPIXELSY) = 144
+GetDpiForMonitor(MONITOR_DEFAULTTONEAREST, MDT_EFFECTIVE_DPI) = 144x144, hr=0
+GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN) = 3840 x 2160（物理像素）
+HKCU:\Control Panel\Desktop\LogPixels     = 144
+HKCU:\Control Panel\Desktop\Win8DpiScaling = 1
+=> 系统缩放 = 144/96 = **150%**，单显示器，主屏 3840x2160。
+
+> 修正前一版交接文档的一处错误结论：交接卡曾记「当前 100% DPI、虚拟屏 2560x1440」。
+> 该 2560x1440 是 **DPI 未感知进程看到的虚拟化逻辑分辨率**（3840/1.5=2560，
+> 2160/1.5=1440），不是真实缩放。真实缩放是 150%。
+
+----------------------------------------------------------------
+2. 面板实测（被测对象 = 源码构建 output/Win32/WeaselServer.exe）
+----------------------------------------------------------------
+被测进程 PID            = 168492（新起，启动前无任何 WeaselServer 在跑）
+命中触发窗口            = class `WeaselIPCWindow_1.0`  hwnd 0x48040A
+                           PostMessage(WM_COMMAND=0x0111, wParam=40020 /*ID_WEASELTRAY_QUICK_PANEL_SHOW*/) => ok=True
+面板窗口                = class `FluxingQuickPanel_v3`  hwnd 0x2E510C8
+GetDpiForWindow(面板)    = **144**
+GetWindowRect(面板)      = left=1450 top=852 right=1818 bottom=924
+面板物理尺寸            = **368 x 72**
+
+期望值（include/FluxingPanelDpi.h 就近舍入 (logical*dpi+48)/96）：
+  150% 档 => 245*144/96 = 367.5 -> 就近舍入 **368**；48*144/96 = 72 -> **72**
+实测 368x72 与断言**逐像素一致**。
+
+----------------------------------------------------------------
+3. 渲染非空白（防「窗口在但没画出来」的假绿）
+----------------------------------------------------------------
+面板截图 panel-48566472.png = 368x72，文件 6807 B；
+隔像素采样去重后 distinct_colors = 362 种
+=> 窗口内容确有绘制（非纯色/未绘制空窗）。
+
+----------------------------------------------------------------
+4. 与代码级断言的对照（三档齐备）
+----------------------------------------------------------------
+100%  ⇒ 245 x 48   （代码断言；本机不可直测，需重登改缩放）
+150%  ⇒ 368 x 72   （**本证据：真机实测通过**）
+200%  ⇒ 490 x 96   （代码断言；需重登改缩放）
+dpi<=0 退化 96 档  （代码断言）
+
+----------------------------------------------------------------
+5. 结论与仍未覆盖的部分
+----------------------------------------------------------------
+已验证：
+  - 150% DPI 下面板物理尺寸真机 = 368x72，与 `FluxingPanelDpi.h` 断言逐像素一致（P0-6 主项收口）
+  - 面板在 150% 下能正常创建/绘制，窗口类名 `FluxingQuickPanel_v3` 未漂移
+  - 触发链路 `WM_COMMAND 40020 -> 面板显示` 在真机可用（P0-3/P0-4/P0-5 的可达性前提成立）
+
+未验证（需用户在场，非本会话能力范围）：
+  - 100% / 200% 两档真机像素（改系统缩放任一档都要注销重登，无法在会话内完成）
+  - 多显示器 / 拔插后落点（本机单屏）
+  - 面板上人工点按每一项（键盘可达性、tooltip、状态回显的**人眼观感**）
+  - 已安装版（D:\Program Files\fluxing\weasel\WeaselServer.exe，FileVersion 1.1.9.0）
+    仍是 2026-11-03 旧构建，**不含** P0-3~P0-7 代码；装机验收须先 bump 版本再打包安装。
+
+复现命令：
+  & "$env:LOCALAPPDATA\Microsoft\WindowsApps\Microsoft.PowerShell_8wekyb3d8bbwe\pwsh.exe" `
+    -NoProfile -ExecutionPolicy Bypass `
+    -File 'F:\soft\00selfmade\rime_claude\tmp\spec099-probe\measure-panel.ps1'

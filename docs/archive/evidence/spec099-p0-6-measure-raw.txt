@@ -1,0 +1,12 @@
+STARTED_PID = 168492
+WINDOW_COUNT = 4
+WIN = hwnd=0x18D0178 vis=False ex=0x80000A8 cls='ATL:008FCCF0' txt=''
+WIN = hwnd=0xE109C vis=False ex=0x0 cls='TrayIconClass' txt=''
+WIN = hwnd=0x48040A vis=False ex=0x120 cls='WeaselIPCWindow_1.0' txt='WeaselIPCWindow_1.0'
+WIN = hwnd=0x3C0162 vis=False ex=0x0 cls='GDI+ Hook Window Class' txt='GDI+ Window (WeaselServer.exe)'
+POST_SHOW = hwnd=0x48040A cls='WeaselIPCWindow_1.0' ok=True
+PANEL_CANDIDATES = 1
+PANEL = hwnd=0x2E510C8 cls='FluxingQuickPanel_v3' dpi=144 rect=1450,852,1818,924 size=368x72
+PANEL_SHOT = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\panel-48566472.png (6807 B)
+DESKTOP_SHOT = F:\soft\00selfmade\rime_claude\tmp\spec099-probe\desktop-with-panel.png (644808 B)
+STOPPED = 168492

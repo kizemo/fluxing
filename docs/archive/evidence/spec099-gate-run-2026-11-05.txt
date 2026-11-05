@@ -1,0 +1,73 @@
+
+=== L0 静态门禁 ===
+
+L0 static gate  root=F:\soft\00selfmade\rime_claude  mode=all
+
+[PASS] version.txt                size=5 BOM=False crlf=0 bareLF=0
+[PASS] CHANGELOG.md               size=498035 BOM=False crlf=7079 bareLF=0
+[PASS] lessons-learned.md         size=894949 BOM=True crlf=13882 bareLF=0
+[PASS] install.nsi                size=69937 BOM=True crlf=1429 bareLF=0
+[PASS] rc-utf16le                 rc 4 个全部 UTF-16LE + CRLF
+[PASS] installer-ownui-kill       按映像名清理块=4（无 /T）同源注释=4
+[PASS] installer-upgrade-rollback 三段升级回滚完整（3 个 exe，均有 IfErrors/Rename/_rename_ok + 收尾 FileExists 守卫）
+[PASS] version-consistency        version=1.1.9 一致
+[PASS] script-syntax              ps1=32 个可解析, cmd=3 个纯 ASCII
+[PASS] defects-registry           缺陷=3 用例=3 双向一致，无 tmp/ 引用
+[PASS] nsis-compile               makensis ok -> install-l0-smoke.exe (42822455 B)
+[PASS] guard-unit-test            TOTAL=16 MISMATCH=0 rc=0（guard_install_path_result.txt）
+[PASS] artifact-version-resource  5 个产物 FileVersion 均为 1.1.9.0
+
+L0 RESULT mode=all checks=13 pass=13 fail=0 skip=0
+--- L0 exit=0 (96.1s)
+
+=== L1 快捷设置栏静态门禁 ===
+
+L1 quickpanel gate  root=F:\soft\00selfmade\rime_claude
+
+[PASS] A1 panel-headers-exist     4 个 header 均存在且非空:FluxingPanelDpi.h(1875B) FluxingPanelStatus.h(2750B) FluxingPanelKeyboard.h(5229B) FluxingPanelTooltip.h(2574B)
+[PASS] B1 dpi-header-api          FluxingPanelDpi.h 含 ScaleLogicalByDpi / PanelPhysicalSize(panel_dpi 命名空间内)
+[PASS] B2 dpi-single-source       缩放只走 fluxing::panel_dpi::ScaleLogicalByDpi,无本地抄写的公式
+[PASS] C1 state-echo-refresh      RefreshInputState() 定义 1 处 / 调用 2 处 + WM_TIMER 轮询就位
+[PASS] C2 state-provider-wiring   WeaselServerApp.cpp 注入 QuickPanelDialog::SetStateProvider(
+[PASS] C3 startup-prewarm         Initialize() 之后有 IsFullShape() / IsSimplification() 启动期预热(显示路径不触发 user_config_open)
+[PASS] D1 keyboard-handler        键位裁决走 fluxing::panel_keyboard::HandleKey( + State)
+[PASS] D2 keyboard-messages       WM_CHAR 吞键 + WM_SETFOCUS 进键盘交互态
+[PASS] D3 focus-lifecycle         CaptureKeyboardFocus / RestoreKeyboardFocus / ResetKeyboardState 三件套就位
+[PASS] E1 tooltip-wiring          ShowTooltip / HideTooltip / DestroyWindow(s_hwndTooltip) 就位
+[PASS] E2 tooltip-include         QuickPanelDialog.cpp include 了 FluxingPanelTooltip.h
+[PASS] F1 display-path-zero-io    显示路径无阻塞 I/O / 等待 / 同步注册表 (已排除 env 门控诊断 dump 内的 3 处)
+[PASS] G1 zh-required-strings     7 条中文文案全部就位
+[PASS] G2 zh-no-english-visible   20 个宽字面量全中文,禁用的英文文案 0 处
+[PASS] H1 ipc-boundary-intact     FluxingPanel*.h 与 WeaselIPCData.h 互不依赖(IPC 边界未被本轮破坏)
+
+L1 RESULT checks=15 pass=15 fail=0 skip=0
+--- L1 exit=0 (1s)
+
+=== L3 变异自检 ===
+MUTATION M01       KILLED    变异后被判红：按映像名清理块 3 处 < 要求 4 处
+MUTATION M02       KILLED    变异后被判红：按映像名清理块 3 处 < 要求 4 处; 有 1 处清理块带了 /T（/T 只走活着的进程树，打不到孤儿）
+MUTATION M03       KILLED    变异后被判红：weasel.props VERSION_MAJOR=1 != 9; weasel.props VERSION_MINOR=1 != 9; weasel.props PRODUCT_VERSION=1.1.9.0 != 9.9.9.0; weasel.props FILE_VERSION=1.1.9.0 != 9.9.9.0; env.bat FLUXING_VERSION=1.1.9 != 9.9.9; env.bat PRODUCT_VERSION=1.1.9.0 != 9.9.9.0; env.bat FILE_VERSION=1.1.9.0 != 9.9.9.0; CHANGELOG.md 顶部版本=1.1.9 != 9.9.9
+MUTATION M03-note  INFO      临时根拷入 4 个版本文件（缺失的 git-ignored 文件自动跳过）
+MUTATION M04       KILLED    变异后被判红：D0032: guard.case=C9999 在 cases/ 下不存在; C0032: 用例没有被 DEFECTS.yaml 任何条目引用（孤儿用例）
+MUTATION M05a      KILLED    变异后被判红：BOM=False（期望 True）
+MUTATION M05b      KILLED    变异后被判红：裸 LF=1 处（必须 100% CRLF）
+MUTATION M06       KILLED    变异后被判红：makensis 退出码=1: Command line defined: "FLUXING_OUTFILE=C:\Users\Duanyi\AppData\Local\Temp\fluxing-l3\run-20261105-103334\M06\mutant.exe" / Processing config: C:\Program Files (x86)\NSIS\nsisconf.nsh / Processing script file: ".l3-mutant.nsi" (UTF8) / !error: L3 mutation / Error in script ".l3-mutant.nsi" on line 1 -- aborting creation process
+L3 RESULT mutations=7 killed=7 survived=0 invalid=0 skipped=0 workdir=C:\Users\Duanyi\AppData\Local\Temp\fluxing-l3\run-20261105-103334
+--- L3 exit=0 (91.6s)
+
+=== L4 回归用例(fast) ===
+REGRESSION level=fast cases=1 pwsh=C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.9.0_x64__8wekyb3d8bbwe\pwsh.exe
+log -> C:\Users\Duanyi\AppData\Local\Temp\fluxing-regression\20261105-103506
+  [PASS ] C0175  ok  (0.8s)
+
+REGRESSION RESULT level=fast cases=1 pass=1 fail=0 skip=0 error=0 log=C:\Users\Duanyi\AppData\Local\Temp\fluxing-regression\20261105-103506
+--- L4 exit=0 (1.6s)
+=== L5 sandbox-gate === SKIP：按 -SkipSandboxGate 跳过
+
+GATE SUMMARY
+  L0  PASS  exit=0      96.1s  静态门禁
+  L1  PASS  exit=0         1s  快捷设置栏静态门禁
+  L3  PASS  exit=0      91.6s  变异自检
+  L4  PASS  exit=0       1.6s  回归用例(fast)
+  L5  SKIP  exit=-1        0s  sandbox-gate 按 -SkipSandboxGate 跳过
+GATE RESULT steps=5 passed=4 failed=0 skipped=1

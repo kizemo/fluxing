@@ -97,12 +97,16 @@ L4  PASS  exit=0   1.4s  回归用例(fast) cases=1 pass=1 fail=0
 
 - [x] 探测 `D:\Program Files\fluxing\weasel\WeaselServer.exe` 版本（应为 1.1.9.0，本轮已证）
   - 实跑：ProductName `Fluxing` / ProductVersion `1.1.9.0` / FileVersion `1.1.9.0`，Length 2287104
-- [ ] 起 server（**先停计划任务 `FluxingDeployerMaintenance` 再 `Start-Process`**），在 150% DPI 下量面板物理尺寸
-  - **需用户在场**：非交互会话无法切 DPI、无法量像素。无头部分已用断言钉住 —— T25b/T25g：150% ⇒ 面板 **368×72**、4 槽位在面板内且互不重叠
-- [ ] 期望 368×72（修复后），若仍 245×48 ⇒ 登记 `test\regression\DEFECTS.yaml` 新 `D00xx` 并写 heavy 复现用例
-  - 代码级断言已是 368×72（`include/FluxingPanelDpi.h` 就近舍入 `(logical*dpi+48)/96`，245@144% = 368 非 367）；真机像素仍待手点确认
+- [x] 起 server（从源码构建 `output/Win32/WeaselServer.exe` 直接起，未动已安装版），在 150% DPI 下量面板物理尺寸
+  - **本机真实缩放就是 150%**（前一版交接文档记的「100% / 虚拟屏 2560×1440」是**错的**：2560×1440 是 DPI 未感知进程看到的虚拟化逻辑分辨率，真实屏 3840×2160 @ 150%）
+  - 三条独立来源一致：`GetDeviceCaps(LOGPIXELSX)=144` / `GetDpiForMonitor=144x144 hr=0` / `HKCU:\Control Panel\Desktop\LogPixels=144` + `Win8DpiScaling=1`
+  - 实测：触发表 `WM_COMMAND 40020 → WeaselIPCWindow_1.0 (0x48040A)`；面板 `FluxingQuickPanel_v3`，`GetDpiForWindow=144`，`GetWindowRect=(1450,852,1818,924)` ⇒ **物理 368×72**
+  - 证据：`docs/archive/evidence/spec099-p0-6-real-machine-dpi.txt` + `spec099-p0-6-measure-raw.txt` + `spec099-p0-6-panel-150dpi-368x72.png`（368×72 截图，隔像素去重 362 色 ⇒ 确已绘制非空窗）+ 可复跑探针 `spec099-p0-6-measure-panel.ps1`
+- [x] 期望 368×72（修复后），若仍 245×48 ⇒ 登记 `test\regression\DEFECTS.yaml` 新 `D00xx` 并写 heavy 复现用例
+  - **真机实测 368×72，与 `include/FluxingPanelDpi.h` 断言逐像素一致 ⇒ 不需要登记缺陷**
 - [ ] 100% / 200% 各测一次；多屏各测一次
-  - 断言侧三档齐备（245×48 / 368×72 / 490×96，`dpi<=0` 退化 96）；真机多屏落点待手点
+  - 断言侧三档齐备（245×48 / 368×72 / 490×96，`dpi<=0` 退化 96）
+  - **仍需用户在场**：改系统缩放到 100% / 200% 必须注销重登，会话内无法完成；本机单屏，多屏落点无设备可测
 
 ## P0-7 · 面板位置持久化
 
