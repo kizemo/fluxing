@@ -1,3 +1,14 @@
+## [Unreleased]
+
+### feat(WeaselTSF): 语言栏右键菜单补上「导入搜狗用户词库」（此前只有托盘主程序那套菜单有）
+
+- **症状**：v1.2.1 已经把「导入搜狗用户词库」放进 `WeaselServer` 的托盘右键菜单，但用户在自己实际右键的那个图标上找不到 —— 火流猩在输入法语言栏上弹出的是 `WeaselTSF`（`weasel.dll` / `weaselx64.dll`）里**另一套独立维护**的菜单资源。
+- **根因（二进制资源级坐实）**：用 `LoadLibraryEx(LOAD_LIBRARY_AS_DATAFILE)` + `FindResource(RT_MENU)` 解出装机版模板 —— `id=105`（英）518 B、`id=108`（繁）404 B、`id=109`（简）404 B，各 **13 条**，均无搜狗导入项；而 `WeaselServer.exe` 的同号菜单有 **15 条**且含该项。spec 037 只改了 server 侧资源 ⇒ 语言栏这套入口从未出现。TSF 侧还一并缺「快速面板常驻」「恢复已忽略的候选项」。
+- **修复**：`WeaselTSF/WeaselTSF.rc` 三个语言块各插一条 `MENUITEM "... ID_WEASELTRAY_SOGOU_IMPORT"`（简 / 繁 / 英同步；`&G` 加速键在三套菜单内均未被占用），`include/resource.h` 补 `#define ID_WEASELTRAY_SOGOU_IMPORT 40022`（与 `WeaselServer/resource.h` 同号，两边必须一致）。**C++ 零改动** —— `WeaselTSF/LanguageBar.cpp` 的 `_HandleLangBarMenuSelect` 末尾已有 `default: m_client.TrayCommand(wID)`，新 ID 自动经 IPC 转发到 `WeaselServerApp` 既有的 `AddMenuHandler(ID_WEASELTRAY_SOGOU_IMPORT, ... L"/sogou")`，不新写本地执行路径（否则会绕开 server 统一入口，违反 ADR 0037）。
+- **未改**：`include/WeaselIPCData.h`（不触发 IPC 四边同步）、`output/install.nsi`、`librime/` 子模块。
+- **验证（资源级）**：重建后 `output/weaselx64.dll`（1,989,632 B）与 `output/weasel.dll`（1,678,336 B）的 `RT_MENU` 全部变成 `105=590 B` / `108=436 B` / `109=436 B`，三个模板均含 `Import Sogou user dictionary (&G)` / `匯入搜狗用戶詞庫 (&G)` / `导入搜狗用户词库 (&G)`；每处字符串前紧邻 `U+9C36`（即 `0x9C36` = 40022），说明 `mtID` 确实落在该项上。
+- **构建链**：`xbuild.bat weasel` 只编 x86（librime Win32-only），**不会刷新 `weaselx64.dll`**，而用户点的正是 x64 那份。本次按 L128 配方分两步显式编 —— `WeaselTSF.vcxproj /p:Platform=x64 /p:SolutionDir=<repo>\` 产出 `weaselx64.dll`，再编 `weasel.sln /p:Platform=Win32` —— 三步（x64 / x86 / makensis）全绿，产出 `output\archives\fluxing-1.2.1-installer.exe`（42,835,332 B）。
+- **未验证（真机）**：装包后在语言栏图标右键是否真的出现中文「导入搜狗用户词库 (&G)」并能点通。**装包前须确认宿主进程实际映射的是新 DLL** —— TSF 会锁住已加载的 DLL，装机对锁住的文件会改装版本化 shim，文件时间戳不足以作证据（同 1.2.1 条目末的告诫）。
 ## [1.2.1] - 2026-11-06
 
 ### fix(WeaselDeployer): 「导入搜狗用户词库」对普通态主词库解析出 0 条（补上 SGPU 记录语法，94,290 条自造词回来了）
