@@ -28,6 +28,8 @@
 #include <FluxingPanelDpi.h>
 // spec 099 P0-5: tooltip 文本(单一真相源:名称 + 当前态)。
 #include <FluxingPanelTooltip.h>
+// v4 需求⑦: 品牌 logo 预合成纯函数(生产与单测同源, R7 单一真相源)。
+#include <FluxingPanelLogo.h>
 
 // L81-fix: PNG logo 加载改用 WIC 不用 GDI+ Bitmap(IStream*) (L67-L69 雷区)
 // 也不用 LoadImageW(IMAGE_BITMAP) (L81 — IMAGE_BITMAP 不含 PNG,静默失败)。 需要
@@ -506,9 +508,9 @@ HWND QuickPanelDialog::s_prevFocusHwnd = NULL;
 // 渲染出来是橘红色块,不是 design 上的小 icon)。
 //
 // L83-fix: 加 IWICBitmapScaler 在 WIC 阶段把 PNG 预缩放到 s_brandSize_phys
-// (DPI-aware 物理像素)。原因:GDI AlphaBlend **不支持拉伸**(MS docs 显式说
-// "AlphaBlend does not support stretching or compressing"),L82
-// 误以为会拉伸。预缩放到 dest 大小后 AlphaBlend 1:1 OK。
+// (DPI-aware 物理像素)。原因:GDI 的 AlphaBlend / BitBlt **都不支持拉伸**
+// (MS docs 对 AlphaBlend 显式说 "AlphaBlend does not support stretching or
+// compressing"),L82 误以为会拉伸。预缩放到 dest 大小后 1:1 贴图 OK。
 HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
   hBmpOut = NULL;
   wchar_t exeDir[MAX_PATH] = {0};
@@ -549,8 +551,8 @@ HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
   if (FAILED(hr))
     return hr;
 
-  // L83: IWICBitmapScaler 预缩放到 brand area 物理大小。保证 GDI AlphaBlend
-  // 1:1, 不需要 AlphaBlend 拉伸(它不支持)。 用 s_brandSize_phys(DPI
+  // L83: IWICBitmapScaler 预缩放到 brand area 物理大小。保证 GDI 1:1 贴图
+  // (BitBlt/AlphaBlend 都不支持拉伸)。 用 s_brandSize_phys(DPI
   // 缩放后的物理像素),不是 logical kBrandSize。
   Microsoft::WRL::ComPtr<IWICBitmapScaler> scaler;
   hr = wic->CreateBitmapScaler(&scaler);
@@ -611,17 +613,33 @@ HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
     DeleteObject(hbmp);
     return hr;
   }
-  // Fluxing v4 (用户指令⑦: 品牌标志不应有黑色框) —— 根因已坐实并已处置。
-  // 运行时加载的是 fluxing-logo_small.png(20×20; L84-fix 先小后大兜底),
-  // 素材自带一圈近黑描边(keyline): 36 个不透明像素的感知亮度 luma<=64
-  // (如 (152,0,0)/(147,0,0), G/B 通道为 0), 沿红色主体轮廓闭合分布 ——
-  // 这就是用户看到的「品牌标志上的黑色框」(既不是管线 artifact, 也不是暗底色)。
-  // 处置 = 素材层改色: docs/design/fluxing-logo_small.png 与
-  // output/fluxing-logo_small.png 同源更新, keyline 像素改色为最近的同族红色
-  // 邻居(保留形状、消除黑色); 回读校验 keyline 像素数 0 / 不透明暗像素数 0。
-  // 回归护栏: test/TestQuickPanelDialog 断言已发布素材的不透明暗像素数 == 0。
-  // 本函数保留的改动只有上面的 Fant 插值(高质缩放, 减少放大噪点; 它不是黑框主因);
-  // 旧的「按深色四角抠底」猜测已删除 —— 实测两张素材四角 luma 都是 205, 恒不触发 = 死代码。
+  // ===== v4 需求⑦ (品牌标志上的黑色框) —— 二次根因与修复 =====
+  //
+  // 【先前的结论已被运行时证据推翻】旧注释断言「素材自带 36px 近黑 keyline
+  // 描边 ⇒ 黑框根因」, 并据此只做了素材层改色(a04cc41)。2026-11-07 的真机
+  // 渲染落盘取证(服务端把 s_hBmpMem 全图与 s_hBmpLogo 原图各存一份 BMP)证明:
+  //   - s_hBmpLogo 位图本身 **不含任何不透明近黑像素**(opaque near-black == 0,
+  //     边缘列是 (254,254,254, α≈242~251) 的半透明白);
+  //   - 但渲染后的面板品牌区出现 **203 个近黑像素**, 位置恰好等于 logo 的
+  //     **半透明边缘列**, 像素值 ≈ 255 − 源 alpha;
+  //   ⇒ 病灶是 **GDI 的 alpha 合成路径**(AlphaBlend 把半透明源像素画成了
+  //     近黑), 与素材无关。素材改色保留(去掉了一个真实暗像素来源), 但它不是修复。
+  //
+  // 【修复】两步, 彻底绕开 GDI alpha:
+  //   1) 在这里(WIC 解码后、交给绘制层之前)把 logo **预合成到面板底色
+  //      kBgTop** 上, 得到 alpha 恒 255 的不透明位图;
+  //      纯函数在 include/FluxingPanelLogo.h(生产与单测同源, R7)。
+  //   2) 绘制阶段改用 BitBlt(SRCCOPY) 1:1 贴图, **不再调用 AlphaBlend**
+  //      (见 PaintOpaqueContent)。
+  //
+  // 【为什么预合成是必要的】GDI 的 SRCCOPY 不看 alpha 通道, 源里 alpha=0 的
+  // 像素会按其 RGB 原样贴上去 —— 这正是历史上「黑底 + 红 logo」的成因。
+  // 预合成之后每个像素的 RGB 已是最终融合色、alpha 恒 255, SRCCOPY 行为确定。
+  fluxing::panel_logo::CompositeOpaqueOverBg(
+      static_cast<uint8_t*>(bits), static_cast<int>(w), static_cast<int>(h),
+      static_cast<uint8_t>(GetRValue(kBgTop)),
+      static_cast<uint8_t>(GetGValue(kBgTop)),
+      static_cast<uint8_t>(GetBValue(kBgTop)));
 
   hBmpOut = hbmp;
   return S_OK;
@@ -1664,31 +1682,26 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   FillRect(hdc, &botShadow, s_hBrushShadow);
 
   // 2. 画 logo (Fluxing 红色猿猴)
-  // L81-fix: 用 AlphaBlend + AC_SRC_ALPHA 替代 BitBlt(SRCCOPY)。
-  // 原因:v0.19.0.10 用 BitBlt(SRCCOPY) 把 WIC 加载的 32-bit BGRA logo 画到
-  // 32-bit BGRA panel, GDI 在两个 32-bit DIB 之间 BitBlt(SRCCOPY) 行为:
-  //   - dest 是 BI_BITFIELDS DIB
-  //   - src 是 BI_BITFIELDS DIB
-  //   - SRCCOPY 在这种情况下**会剥离 alpha** — dest alpha 全部被写成 255
-  //     (GDI 不区分 source alpha channel,直接当 RGB 复制)
-  // 加上 source 的 transparent pixels (alpha=0) 会变成 RGB only 的黑色,
-  // 整张 logo 在 panel 上看起来是黑底 + 红 logo。
-  // AlphaBlend(AC_SRC_ALPHA) 是 GDI 唯一能保留 per-pixel alpha 的合成操作。
+  // v4 需求⑦: 改用 **BitBlt(SRCCOPY) 1:1 贴图**, 不再走 GDI 的 alpha 合成。
   //
-  // L81-fix2: 大 PNG (700x700) 中心裁切。
-  // L82-fix: 小 PNG (20x20 用户实际 logo `fluxing-logo_small.png`) 用全画布
-  // 2. 画 logo (Fluxing 红色猿猴)
-  // L83-fix: 用 IWICBitmapScaler 在 WIC 阶段把 PNG 预缩放到 brand area 大小
-  // (s_brandSize_phys),AlphaBlend 1:1 不需要拉伸。**GDI AlphaBlend 不支持拉伸**
-  // (MS docs 显式说),所以必须预缩放。L82 误以为 AlphaBlend 会拉伸。
+  // 【历史】v0.19.0.10 用 BitBlt(SRCCOPY), 但那时源 PNG 含 alpha=0 且 RGB=0 的
+  // 透明像素 —— GDI 的 SRCCOPY 不看 alpha 通道, 直接把 RGB 复制过去, 于是整张
+  // logo 变成「黑底 + 红 logo」。为此 v0.19.0.10 改用 AlphaBlend(AC_SRC_ALPHA)。
+  //
+  // 【v4 的二次根因】真机渲染落盘取证证明 AlphaBlend 这条路径在本面板上把 logo
+  // 的**半透明边缘像素画成了近黑**(面板像素 ≈ 255 − 源 alpha), 这才是用户看到
+  // 的「品牌标志上的黑色框」—— 与素材本身无关。
+  //
+  // 【现在的做法】LoadLogoWIC 已把 logo 预合成到面板底色 kBgTop 上(alpha 恒
+  // 255 的不透明位图), 每个像素的 RGB 已是最终融合色 ⇒ SRCCOPY 不会出错,
+  // 且完全绕开 alpha 合成。src/dst 都是 s_brandSize_phys ⇒ 1:1, 不需拉伸
+  // (BitBlt/AlphaBlend 都不支持拉伸, 预缩放在 WIC 阶段做)。
   if (s_hBmpLogo) {
     HDC hdcMemLogo = CreateCompatibleDC(hdc);
     if (hdcMemLogo) {
       HGDIOBJ prev = SelectObject(hdcMemLogo, s_hBmpLogo);
-      BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-      // AlphaBlend src/dst 都是 s_brandSize_phys → 1:1 复制
-      AlphaBlend(hdc, pad, pad, s_brandSize_phys, s_brandSize_phys, hdcMemLogo,
-                 0, 0, s_brandSize_phys, s_brandSize_phys, bf);
+      BitBlt(hdc, pad, pad, s_brandSize_phys, s_brandSize_phys, hdcMemLogo,
+             0, 0, SRCCOPY);
       SelectObject(hdcMemLogo, prev);
       DeleteDC(hdcMemLogo);
     }

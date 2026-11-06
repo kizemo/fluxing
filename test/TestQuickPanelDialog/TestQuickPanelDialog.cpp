@@ -41,6 +41,7 @@
 #include "../../include/FluxingPanelStatus.h"
 #include "../../include/FluxingPanelKeyboard.h"
 #include "../../include/FluxingPanelTooltip.h"
+#include "../../include/FluxingPanelLogo.h"
 #include "../../WeaselServer/AboutDialog.h"
 
 #include <cstdio>
@@ -1342,6 +1343,58 @@ int main() {
         }
         Check(dark == 0,
               "T31d: 已发布素材无近黑描边像素(需求⑦ 黑框根因已消除)");
+      }
+    }
+  }
+
+  // ----------------------------------------------------------------
+  // T32 (需求⑦ 二次根因): logo 位图必须先预合成到面板底色再贴图。
+  // 素材层(T31)只是第一道护栏; 真正的黑框来自 GDI alpha 合成路径, 这里
+  // 守住「预合成」这个动作: 合成后 alpha 恒 255, 且无任何近黑像素。
+  // ----------------------------------------------------------------
+  std::printf("\n[需求⑦] logo 预合成到面板底色\n");
+  {
+    // T32a: 判据有牙 —— α=0 且 RGB=(0,0,0) 的像素, 合成后必须是**底色**
+    // 而不是黑色(任何漏掉全透明分支的实现都会在这里产出黑块)。
+    uint8_t probe[4] = {0, 0, 0, 0};  // BGRA
+    fluxing::panel_logo::CompositeOpaqueOverBg(probe, 1, 1, 200, 225, 250);
+    Check(probe[3] == 255 && probe[0] == 250 && probe[1] == 225 &&
+              probe[2] == 200,
+          "T32a: α=0 像素合成后是底色而非黑色(判据有牙)");
+
+    // T32b: 半透明像素合成后 alpha 恒 255, 且亮度介于源色与底色之间。
+    // (源 (0,0,0) α=128 合成到 kBgTop(200,225,250) ⇒ R≈100 G≈112 B≈125)
+    uint8_t half[4] = {0, 0, 0, 128};
+    fluxing::panel_logo::CompositeOpaqueOverBg(half, 1, 1, 200, 225, 250);
+    Check(half[3] == 255 && half[2] >= 95 && half[2] <= 105 &&
+              half[1] >= 107 && half[1] <= 117 && half[0] >= 120 &&
+              half[0] <= 130,
+          "T32b: α=128 像素合成后 alpha=255 且亮度介于源色与底色之间");
+
+    // T32c: 真实素材走一遍生产同款解码 + 合成路径。
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const std::wstring asset = FindLogoAsset();
+    Check(!asset.empty(),
+          "T32c: 找到已发布素材 output/fluxing-logo_small.png");
+    if (!asset.empty()) {
+      std::vector<BYTE> buf;
+      UINT w = 0, h = 0;
+      const bool ok = DecodePngBgra(asset, buf, w, h);
+      Check(ok, "T32d: WIC 成功解码已发布品牌素材");
+      if (ok) {
+        fluxing::panel_logo::CompositeOpaqueOverBg(buf.data(), (int)w, (int)h,
+                                                    200, 225, 250);
+        int dark = 0;
+        int nonOpaque = 0;
+        for (size_t i = 0; i < (size_t)w * h; ++i) {
+          const BYTE* px = &buf[i * 4];  // BGRA
+          if (px[3] != 255)
+            ++nonOpaque;
+          if (fluxing::panel_logo::IsNearBlack(px, 70))
+            ++dark;
+        }
+        Check(nonOpaque == 0, "T32e: 预合成后 alpha 恒 255(不透明位图)");
+        Check(dark == 0, "T32f: 预合成后无近黑像素(需求⑦ 黑框已消除)");
       }
     }
   }
