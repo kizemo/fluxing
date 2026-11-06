@@ -83,3 +83,17 @@
 #define IDC_STATIC_KEYHELP             32786
 #define IDC_STATIC_KEYTIP              32787
 #define ID_HOTKEY_EDITOR               32788
+
+// spec 037: 导入搜狗输入法用户词库
+#define IDD_SOGOU_IMPORT               32789
+#define IDC_SOGOU_SOURCE_LIST          32790
+#define IDC_SOGOU_TARGET_DICT          32791
+#define IDC_SOGOU_IMPORT_BTN           32792
+#define IDC_SOGOU_STATUS               32793
+#define IDS_STR_SOGOU_NO_SOURCE        32794
+#define IDS_STR_SOGOU_FOUND            32795
+#define IDS_STR_SOGOU_SELECT_SOURCE    32796
+#define IDS_STR_SOGOU_SELECT_TARGET    32797
+#define IDS_STR_SOGOU_PARSE_FAILED     32798
+#define IDS_STR_SOGOU_IMPORT_FAILED    32799
+#define IDS_STR_SOGOU_DONE             32800

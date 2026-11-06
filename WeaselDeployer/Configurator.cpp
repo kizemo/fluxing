@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "WeaselDeployer.h"
 #include "Configurator.h"
+#include "SogouImportDialog.h"
 #include "SwitcherSettingsDialog.h"
 #include "UIStyleSettings.h"
 #include "UIStyleSettingsDialog.h"
@@ -188,6 +189,44 @@ int Configurator::DictManagement() {
   return 0;
 }
 
+int Configurator::SogouImport() {
+  HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerMutex");
+  if (!hMutex) {
+    LOG(ERROR) << "Error creating WeaselDeployerMutex.";
+    return 1;
+  }
+  if (GetLastError() == ERROR_ALREADY_EXISTS) {
+    LOG(WARNING) << "another deployer process is running; aborting operation.";
+    CloseHandle(hMutex);
+    MSG_BY_IDS(IDS_STR_DEPLOYING_WAIT, IDS_STR_WEASEL,
+               MB_OK | MB_ICONINFORMATION);
+    return 1;
+  }
+
+  weasel::Client client;
+  weasel::deployer::MaintenanceGuard<weasel::Client> guard(client);
+
+  {
+    RimeApi* rime = rime_get_api();
+    if (RIME_API_AVAILABLE(rime, run_task)) {
+      rime->run_task("installation_update");  // setup user data sync dir
+    }
+    // spec 037: run_task is async; wait for the maintenance thread so the
+    // modal dialog runs on a quiesced state.
+    if (RIME_API_AVAILABLE(rime, join_maintenance_thread)) {
+      rime->join_maintenance_thread();
+    }
+    // The dialog is shown inside the MaintenanceGuard scope, so every
+    // import_user_dict call lands between StartMaintenance/EndMaintenance
+    // (librime leveldb exclusive lock requirement, ADR 0037).
+    SogouImportDialog dlg;
+    dlg.DoModal();
+  }
+
+  CloseHandle(hMutex);  // should be closed before resuming service.
+  // guard destructor: EndMaintenance() called here
+  return 0;
+}
 int Configurator::SyncUserData() {
   HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerMutex");
   if (!hMutex) {

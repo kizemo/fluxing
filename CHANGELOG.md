@@ -9,6 +9,18 @@
 - **全量单测**：`scripts/run-tests.bat` 0 条 `error C` / `error LNK` / `error MSB`；`TestResponseParser`、`TestUserDictUpdate 4/4`、`TestCandidateRButtonDown`、`TestShiftIPC 49/0`、`TestShiftIPCWire 10/0`、`TestPipeChannelRace 12/0`、`TestShortcutSettings 52/0`、`MAPPER-SUMMARY|failures=0`、`RECORDER-SUMMARY|failures=0` 全绿。末段 `=== TESTS FAILED ===` 来自「`WeaselServer.exe` 或 `TestWeaselIPC.exe` 已在运行」的环境前置检查，**非代码失败**。
 - **门禁**：`clang-format --style=file` 18.1.8 对两个改动文件均 0 告警（`scripts/lint-changed-cpp.sh` 的口径是「碰过的文件整文件必须干净」，故 `TestResponseParser.cpp` 文件尾一**既有**违规一并清掉，属门禁要求范围内的最小改动）。
 - **未验证（真机）**：需装 x64 包在飞书 / MiniMax Code 里复验右键删候选不再杀宿主；装包前须确认进程里实际映射的是新 `weaselx64.dll`（装机对已被 TSF 锁住的 DLL 会改装版本化 shim，文件时间戳不足以作证据）。`Ctrl+Shift+<数字>` 那条入口现象是「候选窗消失、宿主毫无反应」，与「同一条必崩通路」不符 ⇒ 已基本排除崩溃通路，倾向 `KeyEventSink.cpp` 拦截门的 `GetVisibleCandidateCount()`（依赖 `Ui::IsShown()`）在 Electron 宿主里取到 0，仍需装机取运行态证据。
+### feat(WeaselDeployer): 托盘右键新增「导入搜狗用户词库」，把搜狗自造词搬进火流猩（ADR 0037）
+
+- **动机**：用户在搜狗输入法里积累的自造词搬不到火流猩。火流猩不打算照搬搜狗的云端 / 账号 / 广告那套，但「把用户自己造的词搬过来」是纯本地、可逆、对用户有实际价值的动作。
+- **入口**：托盘图标右键菜单新增「导入搜狗用户词库 (&G)」，简 / 繁 / 英三语同步。实现路径 = 托盘菜单 → 拉起 `WeaselDeployer.exe /sogou` → `Configurator::SogouImport()` → `SogouImportDialog`。**未新增任何 IPC 协议**，**未改 `include/WeaselIPCData.h`** ⇒ 不触发 IPC 四边同步。
+- **来源扫描**：自动扫描搜狗的两个用户目录 —— 普通态 `%LOCALAPPDATA%\Low\SogouPY\` 与账号态 `%LOCALAPPDATA%\Low\SogouPY.users\00000001\`，列出 `sgim_gd_usr*.bin` 候选供用户选择；背景库 `sgim_gd_usrbg.bin` 不导入。**全程只读，不改写搜狗任何文件**。
+- **解析**：`WeaselDeployer/SogouUserDictParser.*` —— 签名扫描（`A == B + 2`、`B` 为偶数且落在 2..64、其后全为 CJK 的 UTF-16LE）逐条切出词条，不硬编码偏移；词条之后的音节索引块只有在 `K == 词条字数` 时才采信，否则降级为「只取词条、丢弃音节索引」，功能仍可用。纯 C++17、无 Windows API 依赖（`PrecompiledHeader=NotUsing`，生产与单测编译同一份源文件）。
+- **拼音反查**：`WeaselDeployer/SogouPinyinResolver.*` —— 用**随包** `cn_dicts` 反查无调全拼：`base.dict.yaml` 整词优先（同词多行取权重最高）+ `8105.dict.yaml` 逐字回退。**不把任何搜狗资产放进仓库或安装器**（ROADMAP §6.2 红线）。
+- **写入**：生成 `词条 \t 码 \t commits` 临时 TSV → `RimeLeversApi::import_user_dict()` → 立即删除临时文件。导入**必须**落在 `StartMaintenance` / `EndMaintenance` 之间（leveldb 独占锁，见 ADR 0032），对话框在 `MaintenanceGuard` RAII 作用域内 `DoModal()`。
+- **权重**：新导入 key 的 `tick=0`，在已有库上权重几乎全由 `commits` 决定 ⇒ 固定 `commits=100`（≈手打 7 次等效权重，**推断值，未实机复验**）。若实机排序不合理，只需改这一个常量。
+- **验证**：`test/TestSogouUserDict` **56 条断言全绿**，fixture 全部自造（**未引入任何真实搜狗资产**）；**8 处定向变异全部被抓**（签名 `B+2`→`B+1`、去掉 `K==字数` 自校验、去掉 CJK 判定、权重取最高→最低、逐字回退去空格、码整体 trim、去掉 wanted 过滤、去掉「只收单字」），每轮变异后还原重编译均回到 56/56 绿。证据落盘 `docs/archive/evidence/test-sogou-userdict-mutation.txt`。
+- **未改**：`include/WeaselIPCData.h`、`output/install.nsi`、`librime/` 子模块。
+
 ## [1.2.0] - 2026-11-05
 ### fix(WeaselUI): 右键删候选在 hover_type: none 下静默失效（改为点击坐标命中兜底）
 

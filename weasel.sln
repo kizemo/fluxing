@@ -80,6 +80,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WeaselSetup", "WeaselSetup\
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "FluxingPhrasesDialog", "FluxingPhrasesDialog\FluxingPhrasesDialog.vcxproj", "{D4E8F2A6-1B3C-4E5F-8A9B-7C6D5E4F3021}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestSogouUserDict", "test\TestSogouUserDict\TestSogouUserDict.vcxproj", "{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|ARM = Debug|ARM
@@ -319,6 +321,18 @@ Global
 		{D4E8F2A6-1B3C-4E5F-8A9B-7C6D5E4F3021}.Release|Win32.Build.0 = Release|Win32
 		{D4E8F2A6-1B3C-4E5F-8A9B-7C6D5E4F3021}.Release|x64.ActiveCfg = Release|x64
 		{D4E8F2A6-1B3C-4E5F-8A9B-7C6D5E4F3021}.Release|x64.Build.0 = Release|x64
+		{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}.Debug|ARM.ActiveCfg = Debug|Win32
+		{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}.Debug|ARM64.ActiveCfg = Debug|Win32
+		{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}.Debug|Win32.ActiveCfg = Debug|Win32
+		{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}.Debug|Win32.Build.0 = Debug|Win32
+		{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}.Debug|x64.ActiveCfg = Debug|x64
+		{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}.Debug|x64.Build.0 = Debug|x64
+		{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}.Release|ARM.ActiveCfg = Release|Win32
+		{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}.Release|ARM64.ActiveCfg = Release|Win32
+		{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}.Release|Win32.ActiveCfg = Release|Win32
+		{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}.Release|Win32.Build.0 = Release|Win32
+		{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}.Release|x64.ActiveCfg = Release|x64
+		{E1C0B4A7-7F3D-4C22-9B18-6D2A5F41C701}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

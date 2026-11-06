@@ -61,6 +61,9 @@
 // show and hide share one ordering queue.
 #define ID_WEASELTRAY_QUICK_PANEL_HIDE 40021
 
+// spec 037: 导入搜狗输入法用户词库（托盘右键入口 -> WeaselDeployer.exe /sogou）
+#define ID_WEASELTRAY_SOGOU_IMPORT     40022
+
 #define IDR_FLUXING_LOGO                108
 #define ID_QUICKPANEL_BTN_ASCII        41001
 #define ID_QUICKPANEL_BTN_DEPLOY       41002

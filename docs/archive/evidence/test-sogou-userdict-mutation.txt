@@ -1,0 +1,177 @@
+﻿test-sogou-userdict 变异证明（副本变异；仓库生产代码未改）
+run_at=2026-11-06 21:48:22
+repo=F:\soft\00selfmade\rime_claude
+test_project=test\TestSogouUserDict\TestSogouUserDict.vcxproj
+test_source=test\TestSogouUserDict\TestSogouUserDict.cpp
+mut_dir=F:\soft\00selfmade\rime_claude\tmp\sogou-mutation
+tmp_proj=F:\soft\00selfmade\rime_claude\tmp\sogou-mutation\TestSogouUserDictMut.vcxproj
+method=复制 WeaselDeployer\{SogouUserDictParser,SogouPinyinResolver}.{h,cpp} 到 tmp\sogou-mutation\，
+       在副本上定点改坏 → 临时 vcxproj 编译「副本 + 测试」→ 运行 → 还原副本重编译重跑。
+       仓库里的 WeaselDeployer 被测源文件全程只读（sha256 前后一致，见文末）。
+build_cmd=MSBuild test\TestSogouUserDict\TestSogouUserDict.vcxproj /t:Build
+          /p:Configuration=Release /p:Platform=Win32 /p:SolutionDir=F:\soft\00selfmade\rime_claude /m:1 /nologo /v:minimal
+run_cmd=F:\soft\00selfmade\rime_claude\Release\TestSogouUserDict.exe
+repo_production_sha256_before=38A581EFC3E7F01A4316342EE96D067971515BF0B8CAE3F7769E6511D200CB55/7B138FB64D36DF577F5F09ABCF96E8107EA86C9D4B070FC3C158DCCE4BB55733
+                      (SogouUserDictParser.cpp / SogouPinyinResolver.cpp)
+
+=== 基线（未变异，生产版本） ===
+build_exit=0
+run_exit=0
+fail_lines=0
+summary_line: 断言总数: 56（通过 56 / 失败 0）
+summary_line: TESTS PASSED
+summary_line: FAILURES=0
+
+=== M1 :: WeaselDeployer\SogouUserDictParser.cpp（副本被改坏） ===
+why: 签名判据 A == B+2 被改成 A == B+1（签名错位）
+anchor: if (a != static_cast<uint16_t>(b + 2)) {
+mutated: if (a != static_cast<uint16_t>(b + 1)) {
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=19
+  FAIL: A1 解析返回成功
+  FAIL: A2 命中记录数 == 3 (期望: 3 实际: 0)
+  FAIL: A3 取回词条数 == 3 (期望: 3 实际: 0)
+  FAIL: A4 首条词条 == 你好 (期望: [你好] 实际: [])
+  FAIL: A5 次条词条 == 输入法 (期望: [输入法] 实际: [])
+  FAIL: A6 末条词条 == 火流猩 (期望: [火流猩] 实际: [])
+  FAIL: A7 首条音节索引被采信 (期望: [0x0001, 0x0002] 实际: [])
+  FAIL: A8 三字词的音节数 == 3 (期望: 3 实际: 0)
+  FAIL: B1 A == B+1 的记录不被采信 (record_count == 0) (期望: 0 实际: 1)
+  FAIL: B2 A == B+1 的记录解析返回失败
+  FAIL: B7 混合缓冲区只命中 2 条合法记录 (期望: 2 实际: 1)
+  FAIL: B8 混合缓冲区取回的第一条 == 你好 (期望: [你好] 实际: [输入法])
+  FAIL: B9 混合缓冲区取回的第二条 == 火流猩 (期望: [火流猩] 实际: [])
+  FAIL: C1 K != 字数时词条仍被保留 (record_count == 1) (期望: 1 实际: 0)
+  FAIL: C2 K != 字数时词条内容仍正确 (期望: [你好] 实际: [])
+  FAIL: C3 K != 字数时音节索引为空 (期望: 0 实际: 1)
+  FAIL: C4 K != 字数时 skipped == 1 (期望: 1 实际: 0)
+  FAIL: C5 K == 字数时音节数 == 字数 (期望: 3 实际: 0)
+  FAIL: C6 K == 字数时音节索引值逐个相等 (期望: [0x0003, 0x0004, 0x0005] 实际: [])
+first_fail: FAIL: A1 解析返回成功
+summary_line: 断言总数: 56（通过 37 / 失败 19）
+MUTATION_DETECTED=True
+restored: build_exit=0 run_exit=0 fail_lines=0 summary_line: 断言总数: 56（通过 56 / 失败 0） marker: TESTS PASSED restored_ok=True
+
+=== M2 :: WeaselDeployer\SogouUserDictParser.cpp（副本被改坏） ===
+why: 后缀可信度判据 K == 词条字数 被去掉（任何 K 都采信音节索引）
+anchor: if (flag == 1 && count == phrase.size() / 3) {
+mutated: if (flag == 1) {
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=2
+  FAIL: C3 K != 字数时音节索引为空 (期望: 0 实际: 1)
+  FAIL: C4 K != 字数时 skipped == 1 (期望: 1 实际: 0)
+first_fail: FAIL: C3 K != 字数时音节索引为空 (期望: 0 实际: 1)
+summary_line: 断言总数: 56（通过 54 / 失败 2）
+MUTATION_DETECTED=True
+restored: build_exit=0 run_exit=0 fail_lines=0 summary_line: 断言总数: 56（通过 56 / 失败 0） marker: TESTS PASSED restored_ok=True
+
+=== M3 :: WeaselDeployer\SogouUserDictParser.cpp（副本被改坏） ===
+why: CJK 判定被去掉（非 CJK 字符也被当词条收下）
+anchor: inline bool IsCjk(uint32_t cp) {
+          return (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
+                 (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0x20000 && cp <= 0x2A6DF);
+        }
+mutated: inline bool IsCjk(uint32_t cp) {
+           (void)cp;
+           return true;
+         }
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=1
+  FAIL: B6 词条含非 CJK 的记录不被采信 (record_count == 0) (期望: 0 实际: 1)
+first_fail: FAIL: B6 词条含非 CJK 的记录不被采信 (record_count == 0) (期望: 0 实际: 1)
+summary_line: 断言总数: 56（通过 55 / 失败 1）
+MUTATION_DETECTED=True
+restored: build_exit=0 run_exit=0 fail_lines=0 summary_line: 断言总数: 56（通过 56 / 失败 0） marker: TESTS PASSED restored_ok=True
+
+=== M4 :: WeaselDeployer\SogouPinyinResolver.cpp（副本被改坏） ===
+why: 同词多行「取权重最高」被改成「取权重最低」（ScanBase / ScanChars 两处同时命中）
+anchor: } else if (weight > it->second.second) {
+mutated: } else if (weight < it->second.second) {
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=4
+  FAIL: E9 同词多行取权重最高：行 → hang
+  FAIL: E10 整词表优先于单字表：行 ≠ xing
+  FAIL: E11 整词未命中时逐字回退：好啊 → hao a
+  FAIL: E12 逐字回退：单字表同词多行取权重最高（啊 取权重更高的 a） (期望: [hao a] 实际: [hao a a])
+first_fail: FAIL: E9 同词多行取权重最高：行 → hang
+summary_line: 断言总数: 56（通过 52 / 失败 4）
+MUTATION_DETECTED=True
+restored: build_exit=0 run_exit=0 fail_lines=0 summary_line: 断言总数: 56（通过 56 / 失败 0） marker: TESTS PASSED restored_ok=True
+
+=== M5 :: WeaselDeployer\SogouPinyinResolver.cpp（副本被改坏） ===
+why: 逐字回退时音节之间的空格分隔被去掉
+anchor:     if (!out.empty()) {
+                out.push_back(' ');
+              }
+mutated:     // M5: 音节之间的空格被去掉
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=2
+  FAIL: E11 整词未命中时逐字回退：好啊 → hao a
+  FAIL: E12 逐字回退：单字表同词多行取权重最高（啊 取权重更高的 a） (期望: [hao a] 实际: [haoa])
+first_fail: FAIL: E11 整词未命中时逐字回退：好啊 → hao a
+summary_line: 断言总数: 56（通过 54 / 失败 2）
+MUTATION_DETECTED=True
+restored: build_exit=0 run_exit=0 fail_lines=0 summary_line: 断言总数: 56（通过 56 / 失败 0） marker: TESTS PASSED restored_ok=True
+
+=== M6 :: WeaselDeployer\SogouPinyinResolver.cpp（副本被改坏） ===
+why: 码被整体 trim（码内部空格被吞掉：a a -> aa、ba ba -> baba）
+anchor:   while (!code->empty() && (code->back() == '\r' || code->back() == '\n')) {
+mutated:   { std::string t; for (char ch : *code) if (ch != ' ') t.push_back(ch); code->swap(t); }
+            while (!code->empty() && (code->back() == '\r' || code->back() == '\n')) {
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=6
+  FAIL: E4 整词命中：啊啊
+  FAIL: E5 整词命中：码内部空格原样保留 (期望: [a a] 实际: [aa])
+  FAIL: E6 两列行：爸爸
+  FAIL: E7 两列行：行尾 \r 已剥除且码内空格保留 (期望: [ba ba] 实际: [baba])
+  FAIL: E8 整词命中：你好
+  FAIL: E19 缺 8105 词表时已读到的整词仍可用
+first_fail: FAIL: E4 整词命中：啊啊
+summary_line: 断言总数: 56（通过 50 / 失败 6）
+MUTATION_DETECTED=True
+restored: build_exit=0 run_exit=0 fail_lines=0 summary_line: 断言总数: 56（通过 56 / 失败 0） marker: TESTS PASSED restored_ok=True
+
+=== M7 :: WeaselDeployer\SogouPinyinResolver.cpp（副本被改坏） ===
+why: wanted 过滤被去掉（整词表把无关词也收进来）
+anchor:     if (wanted.find(phrase) == wanted.end()) {
+                continue;
+              }
+mutated:     // M7: wanted 过滤被去掉
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=2
+  FAIL: E2 整词表只收 wanted 里的词（与查询无关被过滤） (期望: 4 实际: 5)
+  FAIL: E17 不在 wanted 的词条无法解析
+first_fail: FAIL: E2 整词表只收 wanted 里的词（与查询无关被过滤） (期望: 4 实际: 5)
+summary_line: 断言总数: 56（通过 54 / 失败 2）
+MUTATION_DETECTED=True
+restored: build_exit=0 run_exit=0 fail_lines=0 summary_line: 断言总数: 56（通过 56 / 失败 0） marker: TESTS PASSED restored_ok=True
+
+=== M8 :: WeaselDeployer\SogouPinyinResolver.cpp（副本被改坏） ===
+why: 8105 单字表「只收单字」判据被去掉
+anchor:     if (CountUtf8Chars(phrase) != 1) {
+                continue;
+              }
+mutated:     // M8: 只收单字的判据被去掉
+build_exit=0
+run_exit=1  (expect NON-zero)
+fail_lines=1
+  FAIL: E3 单字表只收单字（两字行被排除） (期望: 5 实际: 6)
+first_fail: FAIL: E3 单字表只收单字（两字行被排除） (期望: 5 实际: 6)
+summary_line: 断言总数: 56（通过 55 / 失败 1）
+MUTATION_DETECTED=True
+restored: build_exit=0 run_exit=0 fail_lines=0 summary_line: 断言总数: 56（通过 56 / 失败 0） marker: TESTS PASSED restored_ok=True
+
+=== 结论 ===
+ALL_MUTATIONS_DETECTED=True
+repo_production_sha256_after=38A581EFC3E7F01A4316342EE96D067971515BF0B8CAE3F7769E6511D200CB55/7B138FB64D36DF577F5F09ABCF96E8107EA86C9D4B070FC3C158DCCE4BB55733
+repo_production_untouched=True
+note=8/8 变异全部被测试抓到（每个变异 run_exit=1 且有 FAIL 行）；每次还原副本后重编译重跑均 56/56 全绿、run_exit=0。
+note=仓库 WeaselDeployer\ 下的被测源文件全程只读；变异副本位于 tmp\sogou-mutation\（已被 .gitignore 的 /tmp/ 规则忽略），末尾已还原。
+note=fixture 全部由 test\TestSogouUserDict\TestSogouUserDict.cpp 合成，不含任何搜狗真实二进制/词库资产。

@@ -188,6 +188,9 @@
   <ItemGroup>
     <ClInclude Include="Configurator.h" />
     <ClInclude Include="DictManagementDialog.h" />
+    <ClInclude Include="SogouImportDialog.h" />
+    <ClInclude Include="SogouPinyinResolver.h" />
+    <ClInclude Include="SogouUserDictParser.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="SwitcherSettingsDialog.h" />
@@ -204,6 +207,13 @@
     <ClCompile Include="..\FluxingConfigEditor\KeyRecorder.cpp" />
     <ClCompile Include="..\FluxingConfigEditor\YamlRoundTrip.cpp" />
     <ClCompile Include="DictManagementDialog.cpp" />
+    <ClCompile Include="SogouImportDialog.cpp" />
+    <ClCompile Include="SogouPinyinResolver.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SogouUserDictParser.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>

@@ -96,6 +96,12 @@ static int Run(LPTSTR lpCmdLine) {
     return configurator.SyncUserData();
   }
 
+  // spec 037: /sogou - 导入搜狗输入法用户词库
+  bool sogou_import = !wcscmp(L"/sogou", lpCmdLine);
+  if (sogou_import) {
+    return configurator.SogouImport();
+  }
+
   bool installing = !wcscmp(L"/install", lpCmdLine);
   if (installing) return configurator.Run(installing);
 
