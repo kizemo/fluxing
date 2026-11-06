@@ -183,3 +183,13 @@ release/*.ilk
 
 # 2026-10-31: toolchain scratch dir (commit messages, probe artifacts) - never tracked
 /tmp/
+
+# 2026-11-06: superpowers skill working dir (build logs, scratch images) - tool
+# output, never part of the source tree. Kept on disk because the skill scripts
+# read their own state from here.
+/.superpowers/
+
+# 2026-11-06: stray YAML fixture written into the repo root by
+# test/TestShortcutSettings (it used the process CWD). The test now writes into
+# tmp/; this entry keeps the root clean if an older build re-creates it.
+/_ts_yaml_fixture.yaml

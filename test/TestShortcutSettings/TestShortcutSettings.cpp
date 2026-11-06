@@ -161,7 +161,9 @@ static void TestCapturingStateVars() {
 // API 通过 SetYamlPath + Hotkeys() 内部反映.
 static void TestYamlBomAndCrlf() {
   // 验证我们写的 test fixture 是 UTF-8 BOM + CRLF (符合 L09 教训)
-  std::wstring path = L"_ts_yaml_fixture.yaml";
+  // 2026-11-06: 不再写仓库根 (会污染工作树), 改写 tmp/ 下, 目录不存在则创建
+  ::CreateDirectoryW(L"tmp", NULL);
+  std::wstring path = L"tmp/_ts_yaml_fixture.yaml";
   std::wstring content = L"patch:\r\n  key_binder/bindings:\r\n    - { when: always, accept: \"Shift+space\", toggle: ascii_mode }\r\n";
   EXPECT(WriteUtf8(path, content));
   std::ifstream f(path, std::ios::binary);
