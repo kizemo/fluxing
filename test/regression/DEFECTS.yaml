@@ -13,7 +13,7 @@
 #   symptom   用户可观察到的现象（写现象，不写实现）
 #   guard     守它的用例：case / level(fast|heavy|manual) / needs / last_verified
 schema: 1
-updated: 2026-11-03
+updated: 2026-11-06
 
 defects:
   - id: D0032
@@ -73,3 +73,43 @@ defects:
     note: >
       三层取证缺一不可：① 直接解析 VS_FIXEDFILEINFO；② .NET VersionInfo.FileVersion；
       ③ 两者一致。只验一层会被掩盖（本轮就是这么被掩盖了一整轮的）。
+
+  - id: D0176
+    title: 快捷设置栏被拖到屏幕外后位置被持久化 ⇒ 该进程内 Alt+, 再也调不出面板（体感「时好时坏」）
+    class: behavior-regression
+    status: guarded
+    fixed_ref: "L193 (lessons-learned) / QuickPanelDialog::SavePosition 落盘守卫 + Show() 复用路径自愈"
+    lesson: [L193]
+    symptom: >
+      快捷设置栏被拖到显示器可见区域之外后，坐标会被写进用户目录的 quickpanel.position；
+      本进程内再按 Alt+,，面板「显示成功」但整块落在屏幕外，用户体感仍是「设置栏又消失了」。
+      把服务端重启一次，首建钳制又把它拉回屏内，于是表现为时好时坏。
+    guard:
+      case: C0176
+      level: fast
+      needs: [build-output, test-binary-quickpanel]
+      last_verified: "2026-11-06"
+    note: >
+      用例是单元级 + 结构级守卫（RectIntersectsVisibleArea 存在性、SavePosition 落盘守卫接线、
+      Show() 复用路径自愈调用、TestQuickPanelDialog 全绿），不替代真机复验；真机复验步骤见 handoff。
+      判据口径固定为「物理 rect 与 rcMonitor / rcWork 同坐标系比较 + on_screen_px」，
+      探针必须先 SetThreadDpiAwarenessContext(-4)（PMv2）。vis=True 只代表 WS_VISIBLE，不等于用户能看见。
+
+  - id: D0177
+    title: 候选词删除快捷键（Ctrl+Shift+数字 / Shift+Ctrl+数字）失效，且按下第二个修饰键时候选窗消失
+    class: behavior-regression
+    status: guarded
+    fixed_ref: "L190 + L192 (lessons-learned) / default.yaml ascii_composer.switch_key 四键 noop / KeyEventSink 拦截门 / commit fde34a1"
+    lesson: [L190, L192]
+    symptom: >
+      有候选窗时按 Ctrl+Shift+数字（或 Shift+Ctrl+数字）删不掉候选词；按下第二个修饰键时候选窗直接消失。
+      两层阻断叠加：ascii_composer 抢走第二个修饰键 ⇒ 面板不可见；拦截门又在面板不可见时必然返回 0。
+    guard:
+      case: C0177
+      level: fast
+      needs: [build-output, test-binary-candidate-delete]
+      last_verified: "2026-11-06"
+    note: >
+      四颗齿：头文件 API 存在、KeyEventSink 接线未断、default.yaml 的 switch_key 四键仍为 noop、
+      TestCandidateRButtonDown 全绿。managed 的 default.yaml 被后续 spec 覆写是本缺陷的复发通道，
+      齿 3 专为它设。单元级守卫不替代真机复验（用户物理按键矩阵见 handoff 对应章节）。
