@@ -510,6 +510,178 @@ void TestResolver() {
   fs::remove_all(dir, ec);
 }
 
+// ---------------------------------------------------------------------------
+// F. 普通态 SGPU 主词库（语法 B）
+// ---------------------------------------------------------------------------
+
+// 合成一条 SGPU（语法 B）记录并追加到 buf：
+//   [u16 B][B 字节 音节索引][u16 X][u16 B][词条][u16 B][B 字节 音节索引]
+//   X == 2B + 4；两处音节索引逐字节相同。
+// 负例开关：break_x / break_b2 / break_b3 / break_syll / non_cjk。
+void AppendRecordB(std::vector<unsigned char>& buf,
+                   const std::vector<uint16_t>& phrase,
+                   const std::vector<uint16_t>& syllables,
+                   bool break_x = false,
+                   bool break_b2 = false,
+                   bool break_b3 = false,
+                   bool break_syll = false,
+                   bool non_cjk = false) {
+  std::vector<uint16_t> cp = phrase;
+  if (non_cjk && !cp.empty()) {
+    cp[0] = 0x0041;  // ASCII 'A'，不属于 CJK
+  }
+  const uint16_t b = static_cast<uint16_t>(cp.size() * 2);
+  PushU16(buf, b);
+  for (uint16_t s : syllables) {
+    PushU16(buf, s);
+  }
+  PushU16(buf, break_x ? static_cast<uint16_t>(2 * b + 6)
+                       : static_cast<uint16_t>(2 * b + 4));
+  PushU16(buf, break_b2 ? static_cast<uint16_t>(b + 2) : b);
+  for (uint16_t c : cp) {
+    PushU16(buf, c);
+  }
+  PushU16(buf, break_b3 ? static_cast<uint16_t>(b + 2) : b);
+  std::vector<uint16_t> tail = syllables;
+  if (break_syll && !tail.empty()) {
+    tail[0] = static_cast<uint16_t>(tail[0] ^ 0x0001);
+  }
+  for (uint16_t s : tail) {
+    PushU16(buf, s);
+  }
+}
+
+void TestParserGrammarB() {
+  std::cout << "[F] 普通态 SGPU 主词库（语法 B）" << std::endl;
+
+  // F 组 1：三条合法记录
+  {
+    std::vector<unsigned char> buf;
+    AppendRecordB(buf, {kNi, kHao}, {0x0001, 0x0002});
+    AppendRecordB(buf, {kShu, kRu, kFa}, {0x0003, 0x0004, 0x0005});
+    AppendRecordB(buf, {kHuo, kLiu, kXing}, {0x0006, 0x0007, 0x0008});
+    weasel::sogou::SogouParseStats stats;
+    std::vector<weasel::sogou::SogouEntry> entries;
+    const bool ok = weasel::sogou::ParseSogouUserDict(
+        buf.data(), buf.size(), &stats, &entries);
+    Check("F1 语法 B 解析返回成功", ok);
+    CheckEqNum("F2 语法 B 命中记录数 == 3", 3, stats.record_count);
+    CheckEqStr("F3 语法 B 首条词条 == 你好", "你好",
+               entries.size() > 0 ? entries[0].phrase : std::string());
+    CheckEqStr("F4 语法 B 末条词条 == 火流猩", "火流猩",
+               entries.size() > 2 ? entries[2].phrase : std::string());
+    CheckEqSyl("F5 语法 B 音节索引被采信", {0x0003, 0x0004, 0x0005},
+               entries.size() > 1 ? entries[1].syllables
+                                  : std::vector<uint16_t>());
+    CheckEqNum("F6 语法 B 不计为 skipped", 0, stats.skipped);
+    CheckEqNum("F7 语法 B 不产生被拒记录", 0, stats.rejected);
+  }
+
+  // F 组 2：X != 2B + 4
+  {
+    std::vector<unsigned char> buf;
+    AppendRecordB(buf, {kNi, kHao}, {0x0001, 0x0002}, /*break_x=*/true);
+    weasel::sogou::SogouParseStats stats;
+    std::vector<weasel::sogou::SogouEntry> entries;
+    weasel::sogou::ParseSogouUserDict(buf.data(), buf.size(), &stats, &entries);
+    CheckEqNum("F8 X != 2B+4 的记录不被采信", 0, stats.record_count);
+  }
+
+  // F 组 3：第二个 B 与 B 不一致
+  {
+    std::vector<unsigned char> buf;
+    AppendRecordB(buf, {kNi, kHao}, {0x0001, 0x0002},
+                  /*break_x=*/false, /*break_b2=*/true);
+    weasel::sogou::SogouParseStats stats;
+    std::vector<weasel::sogou::SogouEntry> entries;
+    weasel::sogou::ParseSogouUserDict(buf.data(), buf.size(), &stats, &entries);
+    CheckEqNum("F9 第二个 B 不一致的记录不被采信", 0, stats.record_count);
+  }
+
+  // F 组 4：第三个 B 与 B 不一致
+  {
+    std::vector<unsigned char> buf;
+    AppendRecordB(buf, {kNi, kHao}, {0x0001, 0x0002},
+                  /*break_x=*/false, /*break_b2=*/false, /*break_b3=*/true);
+    weasel::sogou::SogouParseStats stats;
+    std::vector<weasel::sogou::SogouEntry> entries;
+    weasel::sogou::ParseSogouUserDict(buf.data(), buf.size(), &stats, &entries);
+    CheckEqNum("F10 第三个 B 不一致的记录不被采信", 0, stats.record_count);
+  }
+
+  // F 组 5：两处音节索引不一致
+  {
+    std::vector<unsigned char> buf;
+    AppendRecordB(buf, {kNi, kHao}, {0x0001, 0x0002},
+                  /*break_x=*/false, /*break_b2=*/false, /*break_b3=*/false,
+                  /*break_syll=*/true);
+    weasel::sogou::SogouParseStats stats;
+    std::vector<weasel::sogou::SogouEntry> entries;
+    weasel::sogou::ParseSogouUserDict(buf.data(), buf.size(), &stats, &entries);
+    CheckEqNum("F11 两处音节索引不一致的记录不被采信", 0,
+               stats.record_count);
+  }
+
+  // F 组 6：词条含非 CJK → 被拒（不进词条表，但计入 rejected）
+  {
+    std::vector<unsigned char> buf;
+    AppendRecordB(buf, {kNi, kHao}, {0x0001, 0x0002},
+                  /*break_x=*/false, /*break_b2=*/false, /*break_b3=*/false,
+                  /*break_syll=*/false, /*non_cjk=*/true);
+    weasel::sogou::SogouParseStats stats;
+    std::vector<weasel::sogou::SogouEntry> entries;
+    weasel::sogou::ParseSogouUserDict(buf.data(), buf.size(), &stats, &entries);
+    CheckEqNum("F12 词条含非 CJK 的记录不进词条表", 0, stats.record_count);
+    CheckEqNum("F13 词条含非 CJK 的记录计入 rejected", 1, stats.rejected);
+  }
+
+  // F 组 7：重复词条被合并
+  {
+    std::vector<unsigned char> buf;
+    AppendRecordB(buf, {kNi, kHao}, {0x0001, 0x0002});
+    AppendRecordB(buf, {kNi, kHao}, {0x0003, 0x0004});
+    weasel::sogou::SogouParseStats stats;
+    std::vector<weasel::sogou::SogouEntry> entries;
+    weasel::sogou::ParseSogouUserDict(buf.data(), buf.size(), &stats, &entries);
+    CheckEqNum("F14 重复词条只保留一条", 1, stats.record_count);
+    CheckEqNum("F15 重复词条计入 duplicates", 1, stats.duplicates);
+  }
+
+  // F 组 8：语法 A 与语法 B 混在同一缓冲区，两者都要能解析
+  {
+    std::vector<unsigned char> buf;
+    AppendRecord(buf, {kShu, kRu, kFa}, {0x0003, 0x0004, 0x0005});
+    AppendRecordB(buf, {kHuo, kLiu, kXing}, {0x0006, 0x0007, 0x0008});
+    weasel::sogou::SogouParseStats stats;
+    std::vector<weasel::sogou::SogouEntry> entries;
+    weasel::sogou::ParseSogouUserDict(buf.data(), buf.size(), &stats, &entries);
+    CheckEqNum("F16 两种语法混排时都命中", 2, stats.record_count);
+    CheckEqStr("F17 混排时语法 A 词条在前", "输入法",
+               entries.size() > 0 ? entries[0].phrase : std::string());
+    CheckEqStr("F18 混排时语法 B 词条在后", "火流猩",
+               entries.size() > 1 ? entries[1].phrase : std::string());
+  }
+
+  // F 组 9：16 字词条（B = 32）必须被接受
+  {
+    std::vector<uint16_t> long_phrase;
+    for (int i = 0; i < 16; ++i) {
+      long_phrase.push_back(static_cast<uint16_t>(0x4E00 + i));
+    }
+    std::vector<unsigned char> buf;
+    AppendRecordB(buf, long_phrase, {0x0001, 0x0002, 0x0003, 0x0004,
+                                      0x0005, 0x0006, 0x0007, 0x0008,
+                                      0x0009, 0x000A, 0x000B, 0x000C,
+                                      0x000D, 0x000E, 0x000F, 0x0010});
+    weasel::sogou::SogouParseStats stats;
+    std::vector<weasel::sogou::SogouEntry> entries;
+    weasel::sogou::ParseSogouUserDict(buf.data(), buf.size(), &stats, &entries);
+    CheckEqNum("F19 16 字词条被接受", 1, stats.record_count);
+    CheckEqNum("F20 16 字词条的音节数 == 16", 16,
+               entries.size() > 0 ? entries[0].syllables.size() : 0u);
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -518,6 +690,7 @@ int main() {
   TestParserValidRecords();
   TestParserNegativeRecords();
   TestParserSuffixTrust();
+  TestParserGrammarB();
   TestParserIoAndNames();
   TestResolver();
 
