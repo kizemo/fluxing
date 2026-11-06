@@ -291,6 +291,17 @@ int WeaselServerApp::Run() {
     tray_icon.ShowPopupMenuAt(pt);
   });
 
+  // Fluxing QuickPanel v4 需求④: 中英文切换键(槽 4)的回调注入。
+  // 与全半角键(Show() 第 5 参注入)对称, 同样只改**显示路径**, 不碰 IPC 协议
+  // ⇒ 不触发 IPC 四边同步。ipc_id=0 ⇒ RimeWithWeasel 走
+  // DecideAsciiModeScope(explicit_control=true): 用户显式点击 ⇒ 若 yaml 配了
+  // global_ascii 则广播到全部会话, 否则只作用于当前会话。
+  // 回调收到的是**目标值**(true = 英文态), 不是「翻转」标记。
+  QuickPanelDialog::SetOnAscii([this](bool newAscii) {
+    if (m_handler)
+      m_handler->SetOption(0, "ascii_mode", newAscii);
+  });
+
   // spec 055 bugfix: QuickPanel MUST NOT auto-show on service start.
   // spec 052's "always-show mode" was a design intention; the original
   // implementation called EnableAlwaysShowMode() here, which made the
