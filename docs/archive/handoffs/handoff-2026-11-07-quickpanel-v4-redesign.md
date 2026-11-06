@@ -478,19 +478,26 @@ commit `a04cc41 fix(WeaselUI): 去除品牌标志近黑描边,消除标志上的
 | ⑥ 去掉右侧竖排回显 | **已实现**（绘制块删除 + `StatusRect` 恒 false）；断言绿；未真机验 |
 | ⑦ 品牌标志黑框 | **根因已坐实并已修**（素材层改色 + 回读 0 暗像素 + T31 护栏 + 反例有牙）；**仍未经真机像素验证** |
 
-### 10.6 ★ 装机前必读：安装目录里还是旧版
+### 10.6 ★ 装机部署已完成（2026-11-07 01:34，本轮实测并字节级校验）
 
-`D:\Program Files\fluxing\weasel\` 实测：
+安装目录 `D:\Program Files\fluxing\weasel\` 已替换，并**逐文件 SHA256 校验与仓库一致**：
 
-- `fluxing-logo_small.png` = **1015 B（旧版，带黑框）** ← 新素材尚未落进去
-- `WeaselServer.exe` = **2,327,040 B（旧版）**；本轮构建产出 `output\Win32\WeaselServer.exe` = **2,328,576 B**
-- 同目录另有嵌套备份目录 `engine-nested-fluxing-bak-20261103\weasel\` 与 `weasel\weasel\`
+| 文件 | 部署前 | 部署后 | SHA256（部署后） |
+|---|---|---|---|
+| `WeaselServer.exe` | 2,327,040 B | **2,328,576 B** | `205457DF030BB9670CF40A0281D44F4A242FB48F31296F17C1019A0C52F0CB59` |
+| `fluxing-logo_small.png` | 1015 B（旧素材，带黑框） | **805 B** | `000E1BEAD8BED5AF75213A30A2CA6BC7C77C07BCC8A40039CA2338DA2959CE9A` |
+| `weasel\fluxing-logo_small.png` | 1015 B | **805 B** | 同上 |
 
-⇒ **要看到效果，必须重装或手动替换上述两个文件并重启输入法进程**，否则用户看到的仍是旧面板 + 旧 logo。
+- **备份可回滚**：`WeaselServer.exe.bak-20261107-qpv4`、`fluxing-logo_small.png.bak-20261107-qpv4`（`weasel\` 子目录那份也备份了）。
+- **服务已重启**：旧进程 PID 96900 已终止 → 新进程 PID **77772**（Console，会话 1）已启动并驻留。
+- **版本号无握手风险**：`build.bat:36` 注释明确「第四位 `WEASEL_BUILD` 只进 Windows 资源」，本轮 IPC 协议未改 ⇒ 服务端 exe 可单独替换，不必连 TSF dll 一起换（TSF dll 被各进程占用，换了也需重启才生效）。
+- 脚本与证据：`C:\Users\Duanyi\AppData\Local\Temp\fluxing-qpanel\deploy_qpv4.cmd` / `deploy_qpv4.log` / `deploy-verify.txt`。
+
+⇒ 用户解锁后即可直接看到 v4 面板与去黑边标志，**不需要再重装**。
 
 ### 10.7 下一步（严格顺序）
 
-1. **替换安装目录素材 + exe（需用户点头，因为覆盖的是用户正在用的输入法）**：新 logo（805 B）与新 `WeaselServer.exe` 覆盖到 `D:\Program Files\fluxing\weasel\`，然后重启 `WeaselServer.exe`（或整体重装）。
+1. ~~**替换安装目录素材 + exe**~~【**已完成，见 §10.6**：已备份 → 替换 → 重启（PID 77772），SHA256 逐文件校验一致】
 2. **解锁后做真机像素验收**：面板高度 36、6 个键、中英/全半键帽单字、右侧竖排回显消失、品牌标志黑框是否消除。取证通道是 `cpp` 内既有的 `qp-logo.bmp` 调试落盘路径（`GetObject` 读 `bmL.bmBits`）。
 3. **150% DPI 左右留白不对称（3 物理像素）**：`239` 只在 100%/200% 精确闭合；用户反馈再单独调 `kPanelW`（**不要**动 `kBtnGap`/`kPadding`，否则 100%/200% 闭合性就破了）。
 4. 收尾仍受 §2 预算纪律约束：每轮至少一次仓库改动或可交付产物。
