@@ -801,3 +801,22 @@ Get-WinUserLanguageList      : zh-Hans-CN, en-US
 | `sdd/evidence/tochar_probe2.log` | 三布局全表 + Preload/Toggle/LangList 实测 |
 
 **本轮工具坑（追加）**：① `Add-Type` 的 C# MemberDefinition 里裸 `StringBuilder` ⇒ CS0246（须全限定或 `-UsingNamespace`）；② 探针里那行「gate REACHED」的判据写成 `code` 落在 `0x31..0x39`，与真实判定（看 VK）不符 ⇒ 该诊断行**永不亮**，只当 `ret`/`code` 原始值看；③ `Get-WinUserLanguageList` 的 `TipInstances` 段打印为空 ⇒ 「zh-Hans-CN 下到底挂了几个 TIP」这个事实**仍未量到**，而下棒判 15.5 时正好需要它。
+
+### 15.8 装机复验的第一号前置（本轮实测，硬事实）
+
+**当前机器上跑的还是 11/5 的旧 DLL，崩溃修复根本没生效。** 取证（SHA256 前 16 位）：
+
+| 文件 | 哈希前 16 | 大小 | 时间 |
+|---|---|---|---|
+| `D:\Program Files\fluxing\weasel\weaselx64.dll`（装机） | `1E9821AA26528BB0` | 1,989,632 B | 2026/11/5 14:44:40 |
+| `output\weaselx64.dll`（含修复的新产物） | `AD6A7A7922E67362` | 1,989,632 B | 2026/11/6 11:36:11 |
+| `D:\Program Files\fluxing\weasel\weasel.dll`（装机） | `3F8F21844B66FE73` | 1,678,336 B | 2026/11/5 14:44:56 |
+| `output\weasel.dll`（新产物） | `15BF689ECC3770F8` | 1,678,336 B | 2026/11/6 11:36:25 |
+
+**大小完全相同、哈希不同 ⇒ 不能靠大小或文件名判断新旧，必须比哈希。** 修复提交 `fde34a1` 于 11:32:50，新 DLL 构建于 11:36:11 ⇒ 新产物确实含修复；新包 `output\archives\fluxing-1.2.0-installer.exe`（11:39:57）由它打出。
+
+**因此**：用户 11/6 07:49 / 09:12 的两次崩溃都由**旧 DLL** 造成，与「修了但没用」无关 —— 右键那条线**至今还没有被真机检验过一次**。装机目录里还留着十余个历史 shim（`weaselx64.0.21.0.5.dll` 一直到 `weaselx64.1.1.9.0.2.dll`），装完后要按 §14.7 的教训核对**进程里实际映射的文件路径与哈希**，别只看 `weaselx64.dll` 的时间戳。
+
+**本轮附带事实**：`HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Sharing Engines\Server`（含 `WOW6432Node` 同路径）在本机**不存在** ⇒ 「从注册表读 TSF server 注册路径」这条抓手作废；要拿装机路径，直接读运行中 `WeaselServer.exe` 进程的 `.Path`（本机为 `D:\Program Files\fluxing\weasel\WeaselServer.exe`，PID 46560，启动于 11/6 7:28:37）。另：我第一轮凭记忆写死 Sharing Engines 的 CLSID 子键去 `Get-ItemProperty`，直接报「路径不存在」—— 这类 GUID 一律先枚举再取，不要凭记忆写。
+
+**修正 §15.6 / §14.7 的复验顺序第 1 步**：原文「先确认进程里实际映射的是新 `weaselx64.dll`」应理解为 **「先装新包 `output\archives\fluxing-1.2.0-installer.exe`，再核对映射的 DLL 哈希」**；在装新包之前做的任何真机复验（右键、`Ctrl+Shift+<数字>`）都只是在重复测旧 binary，结论无效。
