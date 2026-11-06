@@ -47,6 +47,8 @@
 #include <fstream>
 #include <iterator>
 #include <vector>
+#include <wincodec.h>
+#include <wrl/client.h>
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -73,6 +75,63 @@ static int CountAllDescendants(HWND parent) {
   EnumChildWindows(parent, &Local::Cb, reinterpret_cast<LPARAM>(&count));
   return count;
 }
+
+// ===== 需求⑦ 回归护栏辅助 (T31) =====
+namespace {
+
+// 感知亮度 (299R+587G+114B)/1000 —— 与素材分析脚本同一口径。
+int LogoLuma(int r, int g, int b) {
+  return (299 * r + 587 * g + 114 * b) / 1000;
+}
+
+// 从当前目录向上最多 6 层找 output/fluxing-logo_small.png。
+std::wstring FindLogoAsset() {
+  wchar_t cwd[MAX_PATH] = {0};
+  if (!GetCurrentDirectoryW(MAX_PATH, cwd))
+    return L"";
+  std::wstring dir(cwd);
+  for (int i = 0; i < 6; ++i) {
+    std::wstring cand = dir + L"\\output\\fluxing-logo_small.png";
+    if (GetFileAttributesW(cand.c_str()) != INVALID_FILE_ATTRIBUTES)
+      return cand;
+    size_t pos = dir.find_last_of(L'\\');
+    if (pos == std::wstring::npos || pos == 0)
+      break;
+    dir = dir.substr(0, pos);
+  }
+  return L"";
+}
+
+// WIC 解码 PNG → 32bppBGRA(与生产 LoadLogoWIC 同一解码器)。
+bool DecodePngBgra(const std::wstring& path, std::vector<BYTE>& buf,
+                   UINT& w, UINT& h) {
+  Microsoft::WRL::ComPtr<IWICImagingFactory> wic;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_ALL,
+                              IID_PPV_ARGS(&wic))))
+    return false;
+  Microsoft::WRL::ComPtr<IWICBitmapDecoder> dec;
+  if (FAILED(wic->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ,
+                                           WICDecodeMetadataCacheOnLoad,
+                                           &dec)))
+    return false;
+  Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
+  if (FAILED(dec->GetFrame(0, &frame)))
+    return false;
+  Microsoft::WRL::ComPtr<IWICFormatConverter> conv;
+  if (FAILED(wic->CreateFormatConverter(&conv)))
+    return false;
+  if (FAILED(conv->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGRA,
+                               WICBitmapDitherTypeNone, nullptr, 0.0,
+                               WICBitmapPaletteTypeCustom)))
+    return false;
+  if (FAILED(conv->GetSize(&w, &h)) || w == 0 || h == 0)
+    return false;
+  const UINT stride = w * 4;
+  buf.assign((size_t)stride * h, 0);
+  return SUCCEEDED(conv->CopyPixels(nullptr, stride, stride * h, buf.data()));
+}
+
+}  // namespace
 
 int main() {
   // ----------------------------------------------------------------
@@ -1249,6 +1308,42 @@ int main() {
     QuickPanelDialog::WndProc(panel, WM_KEYDOWN, VK_ESCAPE, 0);
     Check(!IsWindowVisible(panel), "T29g: 已交互态 Esc 收起面板自身(D0032)");
     QuickPanelDialog::Hide();
+  }
+
+  // ----------------------------------------------------------------
+  // T31 (需求⑦): 已发布品牌素材不得含近黑描边(keyline ⇒ 标志上的黑框)。
+  // 判据 luma<=64 的依据: 旧素材 36 个描边像素 luma 43~55; 品牌红主体
+  // (175,49,35) luma=85; 白底 255; 面板图标灰 (130,130,140) luma=131。
+  // ----------------------------------------------------------------
+  std::printf("\n[需求⑦] 品牌素材无近黑描边\n");
+  {
+    // 判据自检: 近黑命中 / 品牌红不命中 —— 防止这条检查变成「没牙」的恒真。
+    Check(LogoLuma(152, 0, 0) <= 64 && LogoLuma(175, 49, 35) > 64,
+          "T31a: 近黑判据有牙(152,0,0 命中 / 品牌红 175,49,35 不命中)");
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const std::wstring asset = FindLogoAsset();
+    Check(!asset.empty(),
+          "T31b: 找到已发布素材 output/fluxing-logo_small.png");
+    if (!asset.empty()) {
+      std::vector<BYTE> buf;
+      UINT w = 0, h = 0;
+      const bool ok = DecodePngBgra(asset, buf, w, h);
+      Check(ok, "T31c: WIC 成功解码已发布品牌素材");
+      if (ok) {
+        int dark = 0;
+        for (UINT y = 0; y < h; ++y) {
+          for (UINT x = 0; x < w; ++x) {
+            const BYTE* px = &buf[((size_t)y * w + x) * 4];  // BGRA
+            if (px[3] < 200)
+              continue;  // 半透明抗锯齿像素不算描边
+            if (LogoLuma(px[2], px[1], px[0]) <= 64)
+              ++dark;
+          }
+        }
+        Check(dark == 0,
+              "T31d: 已发布素材无近黑描边像素(需求⑦ 黑框根因已消除)");
+      }
+    }
   }
 
   std::printf("\n=== %d / %d assertions passed ===\n", g_pass, g_pass + g_fail);

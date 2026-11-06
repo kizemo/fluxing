@@ -611,17 +611,17 @@ HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
     DeleteObject(hbmp);
     return hr;
   }
-  // Fluxing v4 (用户指令⑦: 品牌标志不应有黑色框)。
-  // 素材 fluxing-logo_small 若带不透明深色底, 缩放后会在面板圆角区露一圈黑框。
-  // v4 需求⑦ 诊断记录(实测, 未生效的猜测已删除): 两张候选素材
-  // output/fluxing-logo.png 700x700 与 output/fluxing-logo_small.png 20x20 的
-  // **四角平均 luma 都是 205(亮底)**, alpha 通道分别为 0 与 168~176。
-  // 因此"按深色四角做色键抠底"这类路径对现素材恒不触发, 黑框不是暗底色造成的。
-  // 本函数保留的有效改动只有上面的 Fant 插值: 32bppBGRA + HighQualityCubic 在
-  // α≈170 的半透明边缘环上会产生负向过冲, 截断后即成暗环 —— 这是黑框的现行主因假设。
-  // 剩余两条假设需运行时取证(见 handoff §8): (a) brand 区在 AlphaBlend 之前没有被
-  // 面板底色覆盖; (b) 直通/预乘 alpha 口径与 AC_SRC_ALPHA 不匹配。
-  // 取证通道: 本文件既有的 qp-logo.bmp 调试落盘路径。
+  // Fluxing v4 (用户指令⑦: 品牌标志不应有黑色框) —— 根因已坐实并已处置。
+  // 运行时加载的是 fluxing-logo_small.png(20×20; L84-fix 先小后大兜底),
+  // 素材自带一圈近黑描边(keyline): 36 个不透明像素的感知亮度 luma<=64
+  // (如 (152,0,0)/(147,0,0), G/B 通道为 0), 沿红色主体轮廓闭合分布 ——
+  // 这就是用户看到的「品牌标志上的黑色框」(既不是管线 artifact, 也不是暗底色)。
+  // 处置 = 素材层改色: docs/design/fluxing-logo_small.png 与
+  // output/fluxing-logo_small.png 同源更新, keyline 像素改色为最近的同族红色
+  // 邻居(保留形状、消除黑色); 回读校验 keyline 像素数 0 / 不透明暗像素数 0。
+  // 回归护栏: test/TestQuickPanelDialog 断言已发布素材的不透明暗像素数 == 0。
+  // 本函数保留的改动只有上面的 Fant 插值(高质缩放, 减少放大噪点; 它不是黑框主因);
+  // 旧的「按深色四角抠底」猜测已删除 —— 实测两张素材四角 luma 都是 205, 恒不触发 = 死代码。
 
   hBmpOut = hbmp;
   return S_OK;

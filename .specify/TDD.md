@@ -578,7 +578,7 @@ never rely on ASCII strings alone — C++ class/function names are stored as UTF
   | 改动 | 对测试的影响 | 处置 |
   |---|---|---|
   | `output/install.nsi` 恢复 `File "fluxing-logo_small.png"` | 无源码测试受影响；**NSIS 打包路径多一个载荷** | 打包后需确认安装器含 `weasel\fluxing-logo_small.png`（1015 字节） |
-  | `output/fluxing-logo_small.png` 还原（83 B 垃圾 → 1015 B 真 PNG） | 无 | 字节级复验 SHA256 = 43B994AD…25AC |
+  | `output/fluxing-logo_small.png` 还原（83 B 垃圾 → 1015 B 真 PNG） | 无 | 字节级复验 SHA256 = 43B994AD…25AC（2026-11-07 需求⑦ 去黑边改色后 805 B / SHA256 000E1BEA…9CE9A） |
   | `update/appcast.xml` / `testing-appcast.xml` 品牌化 | 无 | XML 良构性复验 + 品牌字段复核 |
   | `update/bump-version.ps1` 编码与版本号替换逻辑修正 | 无 | PowerShell AST 解析 0 error；**未实跑**（会改版本号，需在 tag 流程里验证） |
   | `.github/workflows/update-appcast.yml` 改为守门任务 | 无本地测试 | 首次 release 时才触发；逻辑为纯文本断言 |

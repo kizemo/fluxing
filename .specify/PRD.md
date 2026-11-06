@@ -665,7 +665,7 @@ spec 042 优先级最高 (P1 路线图需求 F2 完整化), 其它按需选取�
   3. 小 logo 回归：`File "fluxing-logo_small.png"` 在 v0.20.0.0 被 ROLLBACK（当时源文件缺失，
      留着会 NSIS abort），到 0.21.0.1 仍未恢复 → QuickPanel 一直回退到 700×700 大 logo（L82 修过
      的老问题）。本轮从 `docs/design/fluxing-logo_small.png` 还原 `output/fluxing-logo_small.png`
-     （83 字节 git 错误文本 → 1015 字节真 PNG，SHA256 43B994AD…25AC）并恢复 NSIS 安装行。
+     （83 字节 git 错误文本 → 1015 字节真 PNG，SHA256 43B994AD…25AC；2026-11-07 需求⑦ 去黑边改色后为 805 字节，SHA256 000E1BEA…9CE9A）并恢复 NSIS 安装行。
   4. 本 PRD / TDD / CONTEXT 状态快照刷新到 0.21.0.1（§3.1 表头 + §10 续篇 + CONTEXT 三处）。
   5. 仓库卫生：清理 0-tracked 的验证残留（`output/verify-*`、`output/_extract_*`、`$extractDir/`、
      `$out/`、`output/archives/`、`deps/boost_1_83_0/` 解压树、msbuild/build 中间产物等），
