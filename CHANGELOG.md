@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### fix(WeaselIPC): 右键删候选词把宿主进程整个带崩（Configurator::Store 漏判 p_config）
+
+- **症状**：在飞书、MiniMax Code 等 Electron 宿主里右键点候选词想删 ⇒ 宿主进程被整个杀死，`WeaselServer.exe` 跟着失联；用户 2026-11-06 反馈「`Ctrl+Shift+<数字>` 与右键仍无法删除候选词」。同批另有一条 `Ctrl+Shift+<数字>` 现象（见末条，不在本次修复范围内）。
+- **根因（已符号化坐实）**：两次 WER 报告偏移完全一致 —— `weaselx64.dll` + `0x428ba` = `Configurator::Store + 0xaa`（MiniMax Code 3.1.10.203 @07:49:39 / Feishu 8.4.0.18 @09:12:18），异常码 `0xc000041d`（`STATUS_FATAL_USER_CALLBACK_EXCEPTION`），首次异常 `0xc0000005`。客户端解析 `action=config` 那行时，判空只挡了 `p_context`，漏了 `p_config`；而 `WeaselTSF::_DeleteCandidateOnCurrentPage` 构造 `ResponseParser` 时传了 `&ctx` 却不传 config（它按设计只关心 status / context / style），服务端 `RimeWithWeasel` 又对**每条**响应无条件把 `config` 列进 `action=` 名单 ⇒ 只要走到删候选词就**必定**解引用空指针，是确定性崩溃，不是竞态。同批 deserializer（Styler / ContextUpdater / Committer / StatusUpdater）都判了自己的 target 指针，只有这里漏。
+- **修复**：在解引用点 `WeaselIPC/Configurator.cpp` 补 `!m_pTarget->p_config` 判空后早退 —— 对所有传 `NULL` 的调用者一次性生效，比在各调用点补局部 `Config` 更收口。未改 IPC 线格式、**未改动 `include/WeaselIPCData.h` ⇒ 不触发 IPC 四边同步**；未改 `output/install.nsi`；注释只引用函数名与 `lessons-learned.md` 条号，不写会漂移的硬编码行号（L188）。
+- **验证**：`test/TestResponseParser` 新增**成对**用例 —— test_5 复刻 `p_config == NULL` 断言「不崩 + 同一响应的后续 `status.*` 行仍被解析」，test_6 传真 `Config` 防止「过度修复」把整条 config 通道哑化；`TestResponseParser.exe` 输出 `No errors detected.`。三阶段有牙证明：`git checkout HEAD -- WeaselIPC/Configurator.cpp` 还原旧实现后，**同一条用例** exit code `-1073741819`（`0xC0000005`），证明用例确实咬到被测代码；随后 `/t:Rebuild` 复跑回到 `TEST_EXIT=0`（`copy` 还原保留旧时间戳会导致 `/t:Build` 用陈旧 `.obj` 重链，是构建假失败，见 L188）。
+- **全量单测**：`scripts/run-tests.bat` 0 条 `error C` / `error LNK` / `error MSB`；`TestResponseParser`、`TestUserDictUpdate 4/4`、`TestCandidateRButtonDown`、`TestShiftIPC 49/0`、`TestShiftIPCWire 10/0`、`TestPipeChannelRace 12/0`、`TestShortcutSettings 52/0`、`MAPPER-SUMMARY|failures=0`、`RECORDER-SUMMARY|failures=0` 全绿。末段 `=== TESTS FAILED ===` 来自「`WeaselServer.exe` 或 `TestWeaselIPC.exe` 已在运行」的环境前置检查，**非代码失败**。
+- **门禁**：`clang-format --style=file` 18.1.8 对两个改动文件均 0 告警（`scripts/lint-changed-cpp.sh` 的口径是「碰过的文件整文件必须干净」，故 `TestResponseParser.cpp` 文件尾一**既有**违规一并清掉，属门禁要求范围内的最小改动）。
+- **未验证（真机）**：需装 x64 包在飞书 / MiniMax Code 里复验右键删候选不再杀宿主；装包前须确认进程里实际映射的是新 `weaselx64.dll`（装机对已被 TSF 锁住的 DLL 会改装版本化 shim，文件时间戳不足以作证据）。`Ctrl+Shift+<数字>` 那条入口现象是「候选窗消失、宿主毫无反应」，与「同一条必崩通路」不符 ⇒ 已基本排除崩溃通路，倾向 `KeyEventSink.cpp` 拦截门的 `GetVisibleCandidateCount()`（依赖 `Ui::IsShown()`）在 Electron 宿主里取到 0，仍需装机取运行态证据。
 ## [1.2.0] - 2026-11-05
 ### fix(WeaselUI): 右键删候选在 hover_type: none 下静默失效（改为点击坐标命中兜底）
 

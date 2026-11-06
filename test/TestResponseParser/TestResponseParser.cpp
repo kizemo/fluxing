@@ -112,12 +112,77 @@ void test_4() {
   BOOST_TEST(restored.labels[1].str == L"2");
 }
 
+// test_5 (2026-11-06 宿主崩溃回归): WeaselTSF 的候选窗刷新路径按
+// (commit = NULL, context = &ctx, status = &status, config = NULL,
+//  style = &style) 构造 ResponseParser (WeaselTSF/CandidateList.cpp:405),
+// 而服务端对**每一条**响应都无条件写 "config.inline_preedit=..."
+// (RimeWithWeasel/RimeWithWeasel.cpp:1472). 修复前 Configurator::Store 只判
+// p_context, 于是在宿主进程(飞书 / MiniMax Code 等 Electron)的 WndProc 回调里
+// 解引用 p_config == NULL, 异常码 0xc000041d, 表现为「右键候选窗 => 宿主
+// 软件一起被杀死」.
+//
+// 判别性(本用例必须有牙): 去掉 WeaselIPC/Configurator.cpp 的 !p_config 守卫后,
+// 本用例直接写空指针、测试进程崩溃; 加上守卫后应无副作用地跳过该行, 且**同一
+// 响应里后续行仍须正常解析** —— 故这里用 status 行断言解析没有被整条吞掉.
+//
+// 【载荷必须写 action= 名单】2026-11-06 第一版把载荷写成 "action=ctx",
+// 结果 config.* / status.* 两行**根本没被派发**, test_5 看似在测崩溃点,
+// 实际连 Configurator::Store 都没进(4 条断言全红才暴露). 机制:
+// ResponseParser 的 deserializers 图默认只有 "action" 一项
+// (WeaselIPC/Deserializer.cpp:27 Require(L"action")), 后面每行的 key[0]
+// 必须在图里才会被 Store(ResponseParser.cpp:59-68); 把 key[0] 加进图的唯一
+// 途径是 ActionLoader::Store 逐条 Require(WeaselIPC/ActionLoader.cpp:26-29),
+// 而它只认 action= 后面逗号分隔的那份名单.
+// 服务端每条响应都 actions.push_back("config")
+// (RimeWithWeasel/RimeWithWeasel.cpp:1471) => 真实线上载荷里 config 恒在名单内,
+// 所以 p_config == NULL 的崩溃是确定性的, 与本机制一致.
+void test_5() {
+  WCHAR resp[] =
+      L"action=config,status\n"
+      L"config.inline_preedit=1\n"
+      L"status.schema_id=double_pinyin_sogou\n"
+      L"status.ascii_mode=1\n";
+  DWORD len = wcslen(resp);
+  weasel::Context ctx;
+  weasel::Status status;
+  weasel::UIStyle style;
+  // 与 CandidateList.cpp:405 完全一致的形参组合: commit / config 留空
+  weasel::ResponseParser parser(NULL, &ctx, &status, NULL, &style);
+  parser(resp, len);
+  // 走到这里即证明未发生空指针写入; 以下断言证明响应整体仍在被解析
+  BOOST_TEST(status.schema_id == L"double_pinyin_sogou");
+  BOOST_TEST(status.ascii_mode == true);
+}
+
+// test_6 (与 test_5 配对的正向对照): 守卫只应放过「调用方没给 config」的情况,
+// 不能把整条 config 通道一起哑化. 否则 p_config 非空时 inline_preedit 会被
+// 静默丢弃, 「内联编辑」行为悄悄回归. 传真实 Config 必须仍能写入.
+void test_6() {
+  WCHAR resp[] = L"action=config\nconfig.inline_preedit=1\n";
+  DWORD len = wcslen(resp);
+  weasel::Context ctx;
+  weasel::Status status;
+  weasel::Config config;
+  config.inline_preedit = false;
+  weasel::ResponseParser parser(NULL, &ctx, &status, &config, NULL);
+  parser(resp, len);
+  BOOST_TEST(config.inline_preedit == true);
+
+  WCHAR resp0[] = L"action=config\nconfig.inline_preedit=0\n";
+  DWORD len0 = wcslen(resp0);
+  config.inline_preedit = true;
+  // 复用同一 parser 对象: 只验证「p_config 非空时仍能写入」
+  parser(resp0, len0);
+  BOOST_TEST(config.inline_preedit == false);
+}
+
 int _tmain(int argc, _TCHAR* argv[]) {
   test_1();
   test_2();
   test_3();
   test_4();
+  test_5();
+  test_6();
 
   return boost::report_errors();
 }
-
