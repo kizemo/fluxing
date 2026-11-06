@@ -43,6 +43,16 @@
 // the tray menu keeps working and so both headers stay in sync.
 #define ID_QUICKPANEL_ALWAYS_SHOW      40019
 
+// spec 037 / ADR 0037: import Sogou user dictionary from the language bar
+// popup menu (WeaselTSF.rc, all three locales). The id is forwarded verbatim
+// by WeaselTSF::_HandleLangBarMenuSelect's default branch ->
+// CWeaselClient::TrayCommand -> WeaselServer, which already registers
+// AddMenuHandler(ID_WEASELTRAY_SOGOU_IMPORT) and launches
+// "WeaselDeployer.exe /sogou". No new IPC, no local execution here.
+// The same id also lives in WeaselServer/resource.h - both values must
+// stay equal.
+#define ID_WEASELTRAY_SOGOU_IMPORT      40022
+
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
