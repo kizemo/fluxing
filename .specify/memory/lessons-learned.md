@@ -14096,3 +14096,37 @@ provider 组合是 `composite:native-macos+rea-artifact-graph+rea-dotnet-static`
 **推广**：探针的因果门要按被测对象的**真实生命周期**设计。凡是「恒不成立」的门，症状不是 FAIL 而是**永远 skip** —— 看到 `skipped_*` 要当成缺陷去查，不要当成「本次没测到」继续往下走。
 
 **关联**：handoff 同上 §十六（16.4 / 16.5）；L17（自写检查要有牙）；L30（后台产物读到半截）。
+
+
+## L192 - **探针必须自证「键真的到达了目标」：SendInput 只发给前台窗口，前台被 UWP 浮窗抢走时，数据全部是平凡的假阴性**（2026-11-06）
+
+**现象**：「Ctrl+Shift 让候选面板消失」这条缺陷，探针连跑两轮都是 `exit 4`（面板召唤不出来），
+中间日志还打出一个看似确凿的结论「**面板召唤不出来，即使按 Shift 切 ascii 模式后重试也不行**」——
+差点被当成「IME 卡在 ASCII 模式」写进分析。
+
+**根因（三层叠加，全部与被测代码无关）**：
+
+1. **前台被 `Windows.UI.Core.CoreWindow` 抢占**（Windows 搜索浮窗）。`SendInput` **只发给前台窗口** ⇒
+   键全打给了浮窗，**目标编辑框一个字符都没进**（`edit_len` 恒 0）。
+   ESC 能关掉它，但**只关一次不够**，它会再抢回来。
+2. **焦点控件不是预设的那个**：记事本（Win11 打包版）里真正持有键盘焦点的是 `InputSiteWindowClass`
+   （XAML island 输入宿主），**不是** `RichEditD2DPT`；而 `InputSiteWindowClass` **读不到文本** ⇒
+   「字母有没有上屏」这个 IME 模式判据**当场失效**。
+3. **探针原语签名错**：`cp.down/upk/tap` 收 **int VK**，传了 str ⇒ 抛 `ArgumentError` 被 except 吞掉
+   ⇒ **所有按键都没发出去**，脚本却照常打印「delta=0 ⇒ CHINESE」——**一个恒真的平凡探针**。
+
+**判据 / 处置**：
+
+- **探针自检必须包含「按键是否到达」**：断言 `GetForegroundWindow()==目标根窗口` **且** `GetGUIThreadInfo` 的 `hwndFocus` 落在目标进程内；
+  **断言失败就 exit 非 0，不产出任何数据**（平凡数据比没有数据更坏）。
+- **切前台**：先循环 ESC 关掉 `Windows.UI.Core.CoreWindow` 这类浮窗，再用 **ALT trick**（按住 ALT 时 `SetForegroundWindow` 才被系统允许）；
+  `AttachThreadInput` 必须在聚焦**之后**做。
+- **靶子选原生控件**：Win11 记事本是打包应用（`notepad.exe` stub 的 pid **没有窗口**，要用全量 `EnumWindows` 按类名找真实 pid），
+  编辑区 `RichEditD2DPT`；Electron 类应用（webview 输入）**拿不到焦点**，不能当 IME 靶子。
+- **不要用「文本有没有变」当唯一判据**：IME 模式下字母本来就不上屏；能用文本控件读数时它只用来判「ASCII 模式」，其余靠**面板三态**。
+- **面板状态必须记 `vis` + rect + owner/parent**：用「枚举不到 = 消失」会得到**测量假象**（32×8 塌缩被尺寸过滤器滤掉）——同 L191 的族。
+
+**推广**：任何「按键注入 → 观察反应」的实验，**注入成功**是实验成立的前提而不是细节。
+先证明键到了（前台断言 + 焦点断言），再解释现象；否则你解释的可能只是一次没送到的按键。
+
+**关联**：handoff `docs\archive\handoffs\handoff-2026-11-05-fluxing-candidate-delete-bug.md` §十七（17.4 / 17.7）；L191（面板 hwnd 每次重建）；L17（自写检查要有牙）；L30（后台产物读到半截）；§十六.8-3 那一行修复实测无效。

@@ -940,3 +940,139 @@ Remove-Item 'D:\Program Files\fluxing\user1\fluxing\double_pinyin_sogou.user_ign
 - 同一份「探针原语」要复用时**另立新脚本**（`chord_rba.py`）而不是在旧脚本上打补丁：`--only=H` 复用旧门必然再次跳过，且同文件多次写是冲突写。
 
 **关联**：§十三（结论收窄）/ §十四（崩溃根因与修复）/ §十五（静态离线探针，其 15.6 复验顺序已被本棒 §16.4 修正）；lessons **L190**（吞修饰键 vs 依赖线程键盘状态的自相矛盾）、**L191**（进程内面板 hwnd 每次 composition 重建 ⇒ 同 hwnd 因果门永不成立）；ADR 0023 / spec 094 / spec 097 / L163。
+
+---
+
+## 十七. 第二棒（2026-11-06）：(b) 已定案；chord 杀面板坐实；修复待仪表化
+
+### 17.0 当前状态（一段）
+
+§十六.8 的 (b)「谁隐藏了面板」**已定案**：**没有任何代码隐藏面板**——候选面板窗属**宿主进程**
+（class `ATL:…`，owner/parent = 宿主主窗），Ctrl+Shift 期间 `IsWindowVisible` 仍为 true，
+只是 ctx 候选被清空 ⇒ 布局塌成 **32×8**（只剩空预编辑行）⇒ 用户观感 = 「面板消失」；
+旧探针 `_panel_like`（宽≥60 且高≥14）把这个尺寸过滤掉了，于是「枚举不到 = 消失」是**测量假象**。
+本棒同时用记事本靶子跑通终局实验，**坐实「Ctrl+Shift chord 会让候选面板消失（快 chord 可逆、慢 chord 不可逆）」**，
+并逐字读码确认了 Shift 的两条转发路径（见 17.4）。
+**§十六.8-3 那一行修复（`shift_down || _shiftSuppressed`）已被实测判决为无效**（`shift_down` 本来就 true）⇒ **不提交**。
+**当前无任何生产代码改动**，修复方案待仪表化区分「服务端真结束合成」与「客户端读到污染 body」后再定稿。
+
+### 17.1 必读文档（绝对路径）
+
+| 顺序 | 文档 | 绝对路径 |
+|---|---|---|
+| 1 | 本 handoff（§十七 最新；§十六 背景） | `F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-05-fluxing-candidate-delete-bug.md` |
+| 2 | 本棒分析（第一轮） | `F:\soft\00selfmade\rime_claude\.superpowers\sdd\analysis-ctrl-shift-collapse-2026-11-06.md` |
+| 3 | 本棒分析（第二轮） | `F:\soft\00selfmade\rime_claude\.superpowers\sdd\analysis-part2-2026-11-06.md` |
+| 4 | lessons（本棒新增 L192） | `F:\soft\00selfmade\rime_claude\.specify\memory\lessons-learned.md` |
+| 5 | constitution | `F:\soft\00selfmade\rime_claude\.specify\memory\constitution.md` |
+| 6 | 操作手册（§1 首屏 / §4 危险区 / §9 交接强制） | `F:\soft\00selfmade\rime_claude\AGENTS.md` |
+| 7 | spec 094（删词快捷键） / spec 097（L163） | `F:\soft\00selfmade\rime_claude\.specify\specs\094-*\spec.md` / `…\097-*\spec.md` |
+| 8 | ADR 0023（Shift 转发语义） | `F:\soft\00selfmade\rime_claude\docs\adr\0023-*.md` |
+
+> spec 099 快捷设置栏是**另一棒**，勿碰。
+
+### 17.2 本棒任务进度
+
+| 任务 | 状态 | 结论 / 证据 |
+|---|---|---|
+| (b) 谁隐藏了面板 | **done** | 没人隐藏；面板 visible 但 ctx 空 ⇒ 塌成 32×8（探针 B+C） |
+| 排除假说（ascii 切换 / 系统布局热键 / ResolveCharacter / Hide 调用） | **done** | `output/data/default.yaml:72-79` `switch_key` 全 `noop` ⇒ librime 侧 ascii 切换被屏蔽 |
+| 判决 §16.8-3 那一行 | **done** | 实测 `shift_down` 本来就 true ⇒ 改不改行为都一样 ⇒ **不提交** |
+| 探针 D（裸 Ctrl / 快慢 chord 是否杀合成） | **done** | 前两次 exit 4 的真因已定位（前台被 CoreWindow 抢占 + 焦点控件非预设）；重建靶子后跑通：**chord 杀面板** |
+| 仪表化（5–6 处打点 + DBWIN 监听器） | **pending** | 下一棒第一步；部署用 install.nsi 的**版本化 shim** 模式 |
+| 定稿修法并提交 | **pending** | 取决于仪表化结论：R1（buffer 作废）或 R4（chord 期间连 Ctrl 一起吞） |
+| 用户手工清理 `user_ignore.txt` + 重新部署 | **pending（需用户）** | 见 17.6 |
+| 用户物理按键复测 | **pending（需用户）** | 见 17.6 |
+
+### 17.3 下阶段计划（按序，勿并行）
+
+1. **仪表化坐实「ctx 为什么空」**（唯一阻塞项）。
+   打点：`WeaselIPC/ResponseParser.cpp:21`、`WeaselTSF/EditSession.cpp:14/44`、
+   `WeaselTSF/KeyEventSink.cpp:26/58`、`WeaselIPC/WeaselClientImpl.cpp:244`、服务端 `_Respond`。
+   介质：`OutputDebugStringA` + `DBWIN_BUFFER`/`DBWIN_BUFFER_READY` 共享内存 Python 监听器
+   （**TSF 回调内禁阻塞 I/O**，P2）。清单见 `analysis-part2-2026-11-06.md` §6。
+   **理由**：只有这一条能区分 (i) 服务端真报了 `composing=0` 与 (ii) 客户端读到被污染/过期的 body；
+   两者的修法完全相反（分别是 R4 与 R1），不坐实就提交 = 制造「已修」错觉。
+2. **构建 + 版本化 shim 部署**：新建 `weaselx64.<ver>.dll` + 改 TSF 注册指向，避开运行中进程锁 DLL；
+   复验前**必须比对进程实际映射的 DLL sha256**（装机基线 `weaselx64.dll` sha256 前 16 = `AD6A7A7922E67362`）。
+3. **按仪表化结论定稿修法并提交**（完整 fix 链：构建 + `TestResponseParser` + CHANGELOG +
+   Conventional Commits，`fix(WeaselTSF): …` 或 `fix(WeaselIPC): …`）。
+4. **请用户物理按键复测**（注入阴性不可外推）：见 17.6。
+5. **收尾双产物**（AGENTS.md §9）：更新本 handoff（§十八）+ 接力 prompt（就地改写）+ lessons L193。
+
+### 17.4 本棒新结论（verified / inferred / not verified）
+
+**verified（代码逐字读码 + 运行时观测）**
+
+- 面板不是被隐藏：Ctrl+Shift 期间 `IsWindowVisible=true`，rect 由 176×49 变成 **32×8**（探针 C 实测 30ms 轨迹）。
+- 客户端算出的 `shift_down` 本来就是 true（宿主线程 `GetKeyboardState`：ctrl+shift 同按住时 shift=True）。
+- **`KeyEventSink.cpp:50-78` 的 Shift 两条路径**：
+  - **Ctrl 先按住 → Shift**：`ctrl_down==TRUE` ⇒ 吞 Shift down（`:58-61`，**不发任何 IPC**），
+    松开时 `_shiftSuppressed` ⇒ 吞 Shift up（`:67-71`，**不发 ShiftUp**）
+    ⇒ **服务端完全不知道 Shift 存在** ⇒ 服务端**不可能**触发 select / toggleAsciiMode。
+  - **Shift 先按住 → Ctrl**：Shift down 已转发（`:63`）⇒ Shift up 转发（`:72`）
+    ⇒ **服务端能看到 Shift** ⇒ 服务端 `ShiftUp` 分支（`RimeWithWeasel.cpp:2139-2258`）有机会执行
+    **select / toggleAsciiMode** ⇒ **「按 chord 把 IME 切成英文」的代码级路径坐实（只在这条顺序上成立）**。
+- **chord 会让候选面板消失**：记事本靶子上，快 chord（Shift 先按住 0.02s）后面板 DEAD 但**再打字能恢复**（MENU）；
+  **慢 chord（按住 1.5s）后面板 DEAD 且再打字也回不来**（不可逆）。
+  与探针 C 在豆包里的观测（「`shift_up` 后 180ms 内面板**被销毁** alive=False」）互相印证：
+  记事本表现为窗口消失（DEAD），豆包表现为窗口在但内容空（32×8 EMPTY）。
+
+**inferred（机制模型，尚未直接观测到那一次解析）**
+
+- 管道单缓冲被「无 body 响应 + `_Send` 覆盖前 12 字节」污染（`PipeChannel.cpp:97-111`：`ERROR_MORE_DATA` 才整条重读，
+  4 字节消息**不刷新 buffer**），叠加 `DoEditSession` 是**异步 edit session** ⇒ 解析可能读到被污染/过期的 body
+  ⇒ 解析出空 ctx 而持久 `_status.composing` 仍为 1 ⇒ 面板塌成 32×8。
+- 「Ctrl 先按住」路径下服务端没收到 Shift，那面板为何还是 DEAD ⇒ 剩余两解释：
+  (i) 服务端确实收到了合成结束信号（来自 Ctrl 自身被 `ProcessKeyEvent` 转发）；
+  (ii) 客户端收到了**错误/过期**的 body。**必须靠仪表化区分。**
+
+**not verified**
+
+- 哪一种解释成立（(i) 还是 (ii)）—— 仪表化未做。
+- 「面板 DEAD/EMPTY」与服务端 `composing` 字段的**直接**因果——未观测到服务端那一帧的响应体。
+- 修复方案**未落地、未构建、未提交**。
+
+### 17.5 证据路径
+
+| 证据 | 路径 |
+|---|---|
+| 本棒分析（第一轮：(b) 答案 / 塌缩时刻表 / 那一行判决 / 已排除假说） | `.superpowers\sdd\analysis-ctrl-shift-collapse-2026-11-06.md` |
+| 本棒分析（第二轮：探针 D 真因 / 记事本靶子 / chord 杀面板 / 仪表化清单） | `.superpowers\sdd\analysis-part2-2026-11-06.md` |
+| 终局实验脚本（自足） | `.superpowers\sdd\ime_chord_final.py` |
+| 终局实验结果 / 日志 | `.superpowers\sdd\ime_chord_final_result.json` / `ime_chord_final_run.log` |
+| 探针 C（30ms 塌缩轨迹 + 宿主线程 GetKeyboardState） | `.superpowers\sdd\chord_winprobe2.py` / `chord_winprobe2_result.json` |
+| 探针 B（窗口拓扑：owner/parent/vis） | `.superpowers\sdd\chord_winprobe.py` |
+| 探针 D（两次 exit 4 的日志） | `.superpowers\sdd\chord_probe3.py` / `chord_probe3_trace.log` / `probe3_run.log` / `probe3_run2.log` |
+
+> `.superpowers\sdd\` **不入库**。
+
+### 17.6 需要用户在场的事项（**agent 不得代做**）
+
+1. **清理残留用户数据**（受保护路径，agent 不代删）。管理员 PowerShell：
+   ```powershell
+   Copy-Item 'D:\Program Files\fluxing\user1\fluxing\double_pinyin_sogou.user_ignore.txt' "$env:USERPROFILE\Desktop\user_ignore.backup.txt" -Force
+   Remove-Item 'D:\Program Files\fluxing\user1\fluxing\double_pinyin_sogou.user_ignore.txt' -Force
+   ```
+   删完**必须重新部署**（托盘图标右键 → 重新部署，或退出 WeaselServer 再启动），否则 librime 内存里的 ignore 列表不变。
+   该文件现 56 B（sha256 前缀 `4B2C4EFC1930D689`），含「的」「得」等常用字。
+2. **物理按键复测**（注入阴性不可外推）。前提：**完全退出并重开飞书 / MiniMax Code**（两者在 11:55 装机前启动，仍持旧 image）。
+   步骤 ① `Ctrl` 先按住 → 再 `Shift` → 再主键盘 `1/2/3`；② `Shift` 先按住 → 再 `Ctrl` → 再 `1/2/3`。
+   记录：候选窗是否在按下第二个修饰键时消失、是否切换输入法语言、是否上屏、用的左还是右 Shift。
+   **新增**：按完 chord 后随手打一个字母，看是否**直接上屏**（= 进了 ASCII 模式 ⇒ 佐证服务端 `ShiftUp`→`toggleAsciiMode` 路径）。
+
+### 17.7 环境事实与工具坑（不可从仓库推导）
+
+- **SendInput 只发给前台窗口**：前台不是目标 ⇒ 键凭空消失（`edit_len` 恒 0）。判定「键是否到达」必须查前台 + 焦点。
+- **`Windows.UI.Core.CoreWindow` 会持续抢前台**（Windows 搜索浮窗，标题「搜索」）：一次 ESC 不够，要循环关；本棒探针两次 exit 4 都栽在这。
+- **Win11 记事本是打包应用**：`notepad.exe` stub 的 pid **没有窗口** ⇒ 必须全量 `EnumWindows` 找类名含 `Note` 的窗口，再用它的真实 pid；
+  编辑区控件类名 `RichEditD2DPT`；**真正持有键盘焦点的是 `InputSiteWindowClass`（XAML island 输入宿主），
+  它读不到文本** ⇒ 「字母是否上屏」这个 IME 模式判据在本靶子上**不可用**，只能用面板三态。
+- 记事本是本线**唯一可靠靶子**（豆包是 Electron，webview 输入拿不到焦点）。
+- 切前台要用 **ALT trick**（按住 ALT 时 `SetForegroundWindow` 才被系统允许）；`AttachThreadInput` 必须在聚焦**之后**做。
+- Win32 API 归属：`GetCurrentThreadId` 在 **kernel32**；`VkKeyScanW` 收 **char**（不是 int）。
+- 探针原语 `cp.down/upk/tap` 收 **int VK**；传字符串会 `ArgumentError` ⇒ 探针**静默退化成平凡探针**而不报错。
+- 判「面板状态」必须记 `vis` / rect / owner / parent，**不能用「枚举不到 = 消失」**（L191 的同类坑）。
+- 改脚本声明必须**同时改调用点**（本棒连踩两次「声明改了、调用点没改」）。
+- `chord_probe.py` 的 `panels()` / `_panel_like`（宽≥60 且 高≥14）**口径已判定不可信**，只能用于「面板出不来⇒跳过」的自检；
+  面板三态（MENU / EMPTY(32×8) / DEAD）作**相对**判据。

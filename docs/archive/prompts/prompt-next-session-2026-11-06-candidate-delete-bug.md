@@ -1,0 +1,1 @@
+请先读 F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-05-fluxing-candidate-delete-bug.md 的 §十七（最新状态与下阶段顺序，§十六 为背景）、F:\soft\00selfmade\rime_claude\.specify\memory\lessons-learned.md 的 L192、F:\soft\00selfmade\rime_claude\AGENTS.md 与 F:\soft\00selfmade\rime_claude\.specify\memory\constitution.md，然后按 §十七.3 的顺序继续 Fluxing 删除候选词缺陷线，不要重做已完成的工作，也不要碰 spec 099。
