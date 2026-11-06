@@ -13998,3 +13998,52 @@ provider 组合是 `composite:native-macos+rea-artifact-graph+rea-dotnet-static`
 **推广**：凡是「鼠标/键盘交互入口」读一个**可被样式开关关掉**的缓存状态（hover、focus、highlight index），都要问：这个开关关掉时，功能是降级、还是整体消失？交互入口应当自己持有**必然存在**的信息（点击坐标），而不是复用「只在某模式下才更新」的状态。
 
 **测试**：`test/TestCandidateRButtonDown` 新增 T10（hover=-1 时点第 3 格必须派回调 1 次 index=2；修复前必挂）与 T11（padding / reposition / 右开下开区间）。T11 首跑暴露**我算错了 2 条期望**（padding 后第 0 项矩形先吃掉 `x=52` 的点；上移后 `bottom=-10` 是开区间）—— 生产代码无错。**教训复用 L17：新写的断言先证明它会红，也要证明红的理由是几何而不是实现。**
+
+
+## L187 - **服务端对每条响应无条件追加 `action=config` + `config.inline_preedit=`，而 `Configurator::Store` 只判 `p_context` 没判 `p_config`：凡按设计把 config 形参留空的 `ResponseParser` 调用点，一触发就在宿主进程内空指针崩溃（右键删候选 ⇒ 宿主软件一起被杀死）**（2026-11-06）
+
+**现象**：用户在飞书 / MiniMax Code（均为 Electron）里右键候选窗 ⇒ **宿主进程一起退出**；`Ctrl+Shift+<数字>` ⇒ 候选窗消失、词没删。WER 两次记录（飞书 8.4.0.18 @ 09:12:18、MiniMax Code 3.1.10.203 @ 07:49:39）偏移**完全一致**：`weaselx64.dll + 0x428ba`，异常码 `0xc000041d`（回调内未处理异常）。
+
+**根因链**：
+
+1. 服务端 `RimeWithWeasel/RimeWithWeasel.cpp:1470-1474`：**无条件** `actions.push_back("config")` 并 append `config.inline_preedit=<0|1>` ⇒ 线上载荷的 `action=` 名单里 config **恒在**，与是否 composing 无关。
+2. `WeaselTSF/CandidateList.cpp:399-408` 的 `_DeleteCandidateOnCurrentPage`：`:405` 构造 `ResponseParser parser(NULL, &ctx, &_status, NULL, &_cand->style())` ⇒ `p_commit == NULL && p_config == NULL`（按设计：删词后只关心 ctx/status/style）。
+3. `WeaselIPC/Configurator.cpp`（修复前）守卫只有 `if (!m_pTarget->p_context || key.size() < 2) return;` ⇒ `p_context` 非空、`p_config` 为空这一组合落到解引用点 ⇒ **AV**。
+4. 该 AV 发生在 TSF 的 WndProc 回调里，宿主进程无 SEH 兜底 ⇒ `0xc000041d` ⇒ Electron 多进程把它表现成「宿主被杀」或「渲染进程死 + 标签重载」。
+
+**为什么前几轮没找到**：`065383e` 的重构本身不是缺陷，它是**第一次把执行流带进这条早已存在、从未被触发**的空指针路径（此前 `Configurator::Store` 只在「主刷新路径」被调，那条路径 `p_config` 恒非空）。审计同类 deserializer 后结论明确：`Styler.cpp:11-14`、`ContextUpdater.cpp:96-99`、`Committer`、`StatusUpdater` 都判了自己那个 target 指针，**只有 `Configurator` 漏判 `p_config`**。
+
+**判据（下次同类故障先跑这三条）**：
+
+- 拿 WER/事件日志里的 `模块名 + 偏移`，用**同批次 PDB** 符号化（`.superpowers/sdd/symprobe.py`，需 `PYTHONIOENCODING=utf-8`）⇒ 直接得到函数名与源文件行号。偏移一致 = 确定性触发，不是竞态。
+- 问「这个 `action=` 是谁加的、是否无条件」⇒ 在 `RimeWithWeasel.cpp` 里搜 `actions.push_back`，别假设某个字段只在特定分支才发。
+- 问「这个 `ResponseParser` 的四个 target 形参，调用点分别传了什么」⇒ 全仓搜 `ResponseParser` 构造，逐个核对 NULL。`WeaselTSF.cpp:227/:505`、`Compartment.cpp:271`、`CandidateList.cpp:405` 都有传 NULL 的。
+
+**处置**：守卫补 `!m_pTarget->p_config` 分量（一行），并在源文件里写清四处 NULL 调用点。**修复位置选在解引用点，而不是在 `CandidateList.cpp:405` 补一个用完即弃的局部 `Config`** —— 后者只治一个调用点，前者对所有传 NULL 的调用者一次性生效。
+
+**推广**：凡「一条 IPC 响应的多个字段分发给多个 deserializer」的设计，每个 deserializer 都必须判自己那个 target 指针；「某字段恒发送」+「某调用点恒传 NULL」这两件事各自都合理，组合起来就是确定性崩溃。新增 deserializer 或新增「无条件 append 的字段」时，要把**全部** `ResponseParser` 构造点过一遍。
+
+**假探针教训（同一轮踩到，代价一整个 turn）**：`ResponseParser` 的 deserializer 图**默认只有 `action`**（`WeaselIPC/Deserializer.cpp:27` 只 `Require(L"action")`）；`ResponseParser.cpp:59-68` 对每行按 `key[0]` 查图，**查不到就整行丢弃**；把 `key[0]` 加进图的**唯一**途径是 `ActionLoader::Store`（`ActionLoader.cpp:17-31`）按 `action=` 的逗号名单逐条 `Require`。⇒ 第一版回归用例载荷写 `action=ctx`，`config.*` / `status.*` 两行**从未被派发**，`Configurator::Store` 根本没进 —— 用例看似在测崩溃点，实则**没有牙**。**写 IPC 解析类测试时，载荷必须显式列出 `action=` 名单，且名单要覆盖你想测的每个字段。**
+
+**测试**：`test/TestResponseParser` 新增 `test_5` / `test_6`，载荷刻意只用**纯文本行**（`config.*` / `status.*`，不喂 `ctx.cand=` / `style=`，因为 Release|NDEBUG 下 `text_wiarchive` 会在测试进程里 AV，见 `test_4` 注释）。`test_5` 复刻 `CandidateList.cpp:405` 的形参组合（commit/config 均 NULL）验「不崩 + 同一响应后续行仍被解析」；`test_6` 传**真实** `Config` 验「守卫没把整条 config 通道哑化」—— 专门防「过度修复」这类静默回归。**有牙证明（L17）**：把守卫临时还原成 HEAD 版本重建 ⇒ `TestResponseParser.exe` 退出码 `-1073741819`（`0xC0000005`）；恢复修复并强制重建 ⇒ `No errors detected.` / `TEST_EXIT=0`。证据：`.superpowers/sdd/evidence/verify_configurator_guard.log`、`phase_C_rebuild.log`。
+
+**关联**：`CONTEXT.md` §5「Recurring failure patterns」此前无此模式，本条即新增记录；IPC 变更四边同步见 `CONTEXT.md` §4 Invariants 与 `.claude/rules/ipc-boundary.md`；spec 094 `tasks.md`；handoff `docs/archive/handoffs/handoff-2026-11-05-fluxing-candidate-delete-bug.md` §十四。
+
+## L188 - **验证脚本自身的两类假结论：① `copy` 还原源文件会带回旧时间戳 ⇒ MSBuild `/t:Build` 跳过重编译、用陈旧 `.obj` 重链 ⇒ 「修复已还原」的对照组仍然崩；② 编辑工具把 LF 文件写成 CRLF ⇒ `git diff` 变成整文件重写，掩盖真实改动**（2026-11-06）
+
+**现象**：三阶段验证（修复态 ⇒ 去守卫 ⇒ 还原修复）跑出 A=0、B=`0xC0000005`、**C=`0xC0000005`**。C 应当恢复通过。
+
+**根因①（时间戳陷阱）**：阶段 C 用 `copy /Y` 从 `.bak` 还原 `Configurator.cpp`，`copy` **保留源文件的 LastWriteTime**，而该时间早于阶段 A 生成的 `.obj` ⇒ MSBuild 增量判定「up-to-date」，只重链不重编译（日志里阶段 B 有 `Configurator.cpp` 编译行，阶段 C **没有**）⇒ 链接的仍是阶段 B 那个「无守卫」的 `.obj` ⇒ 必然崩。**这是构建产物的假失败，不是代码问题。**
+
+**判据 / 处置**：
+- 看构建日志里**有没有目标源文件的编译行**，不要只看 `-> xxx.lib` / `-> xxx.exe` 这类链接输出行 —— 后者在「什么都没重编译」时照样打印。
+- 凡「还原文件后重建」的对照组，一律用 `/t:Rebuild`，或还原后显式 `(Get-Item $f).LastWriteTime = Get-Date` 刷新时间戳。用 `copy` 做备份/还原时**必须**假设它带回旧时间戳。
+
+**根因②（行尾陷阱）**：本仓 `core.autocrlf=false` 且**无 `.gitattributes`**，但 index 与工作区的行尾**按文件各异**：`WeaselIPC/Configurator.cpp` 是 `i/lf`，`test/TestResponseParser/TestResponseParser.cpp` 是 `i/crlf`，`lessons-learned.md` 是 `i/crlf` + BOM，handoff 是 `i/lf`。用编辑工具改 `i/lf` 的文件时写出 CRLF ⇒ `git diff --numstat` 从「8 insertions / 1 deletion」变成「30 / 23」（整文件重写），**真实改动被淹没**，review 与 commit 都会带噪音。
+
+**判据 / 处置**：
+- 改文件前后各跑一次 `git ls-files --eol -- <path>`，并核对 `git diff --numstat`：若改动行数远大于你实际写的行数，几乎一定是行尾被翻转。
+- 快速确认法：`git diff --ignore-cr-at-eol --numstat` —— 与不带该选项的结果一比即知。
+- 复原法：读 bytes → `.Replace("`r`n","`n")` → `WriteAllBytes`（**不要**走 `Set-Content` / `Out-File`，它们会再做一次转换）。写完回读断言 `CR==0` 且 `size>0`（L08）。
+
+**推广**：任何「自己写的验证脚本」都可能给出与代码无关的结论。判定验证结果前先问：**这次真的重编译了吗？这次真的比的是同一份内容吗？** 日志里的编译行与 `git diff` 的行数口径，是这两个问题的判据。

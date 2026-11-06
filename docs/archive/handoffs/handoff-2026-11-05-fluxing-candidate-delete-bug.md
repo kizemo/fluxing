@@ -526,3 +526,188 @@
 - `docs(fluxing)`：本 handoff §十三 + 接力 prompt 改写为「任务未完成」版本。**代码本棒一行未改**，也未做新实验。
 - 分支 `Fluxing...kizemo/Fluxing` 本棒前 **ahead 6**，加本棒 1 笔 ⇒ **ahead 7**，**仍未 push**（等用户点头）。
 - 本棒新增证据文件（均在 `.superpowers/sdd/`，不入库）：`user_report_probe.log`（用户反馈复现探针日志）、`code_probe_hitbox.log`（命中几何代码取证日志）。
+
+---
+
+## 十四、崩溃根因闭环 + 修复落地（2026-11-06 会话）
+
+> 本棒把 §13.4 #2 / §13.5 #2「右键崩」这条**从假设做成已验证事实，并当场落盘修复 + 造出能咬的回归测试**。
+> 探索按 CLAUDE.md §2 应先走 `codebase-memory-mcp`（`F-soft-00selfmade-rime-claude`，`search_graph` → `trace_path` → …），
+> 但本会话 `mcp_invoke` 以 `tool_name: "search_graph"` 调用返回 `Unknown tool_name`（图谱工具名未被解析），
+> 已按 `.claude/rules/codebase-graph.md` 降级到 grep/read。**下一棒若图谱工具恢复，请改回图谱优先。**
+
+### 14.1 已验证：崩溃链路（符号级 + 源码级 + 构建级三重证据）
+
+**两次独立 WER 报告的偏移完全一致**（`weaselx64.dll` @ base `0x7FF9583E0000`，崩溃偏移 **`0x428ba`**）：
+
+| 报告 | 应用 | 时间 |
+|---|---|---|
+| `d7bdb876-a248-334e-2480-c6199447f596` | MiniMax Code 3.1.10.203 | 2026-11-06 **07:49:39** |
+| `43190ee7-cc65-36f8-a358-4a8717766c06` | Feishu 8.4.0.18 | 2026-11-06 **09:12:18**（用户答完三问后又崩了一次） |
+
+符号化（`.superpowers/sdd/symprobe.py`，用 `Release\Win32` 下同名 PDB）：
+```
+0x428ba  Configurator::Store + 0xaa   WeaselIPC\Configurator.cpp:21
+         函数入口 RVA 0x42810 = public symbol "Configurator::Store"（ClassParent 修正）
+```
+异常码 **`0xc000041d` = `STATUS_FATAL_USER_CALLBACK_EXCEPTION`** —— 它本身的含义就是
+「异常从 OS 派发给用户态的回调里逃了出来」，与下面的通路定性互相印证；
+首次异常是 `WeaselServer.exe` 侧记录的 `0xc0000005`（`STATUS_ACCESS_VIOLATION`，§13.1）。
+
+**完整链路（每一环都有源码行号为证）**：
+1. **两条入口共用同一条删除通路**：
+   `WeaselTSF/KeyEventSink.cpp:90-99`（`Ctrl+Shift+<数字>`，位于 `CKeyEventSink::OnKeyDown` 内）
+   与 `WeaselTSF/CandidateList.cpp:410-412` `HandleDeleteCandidate`（右键菜单 → `WeaselUI/WeaselPanel.cpp` 回调）
+   ⇒ 都调 `WeaselTSF/CandidateList.cpp:399-408` `_DeleteCandidateOnCurrentPage`。
+2. `CandidateList.cpp:405` `ResponseParser parser(NULL, &ctx, &_status, NULL, &_cand->style())`
+   ⇒ 第 4 个实参使 `p_config == NULL`。
+3. `RimeWithWeasel/RimeWithWeasel.cpp:1470-1474` 对**每一条**响应**无条件**追加 config：
+   ```cpp
+   // 无论是否存在配置变更, 都返回 inline_preedit 状态
+   w << "config.inline_preedit" << "=" << (double(status.inline_preedit) ? "1" : "0") << "\n";
+   actions.push_back("config");
+   ```
+   ⇒ 线上报头必含 `action=...,config,...`，`ResponseParser.cpp` 按名单逐个 `Require(L"config", pTarget)`，
+   `Deserializer.cpp:24,48-49` 从工厂表取出 `Configurator` 实例。
+4. 原 `Configurator::Store` 只判 `p_context`，下一句 `m_pTarget->p_config->inline_preedit = bool_value`
+   解引用 NULL ⇒ `0xc0000005` ⇒ 在宿主进程内不可恢复 ⇒ **宿主被带走**。
+   ⇒ **确定性崩溃，不是竞态**：只要走这条路必崩。
+
+**线程定性（重要，别写错）**：快捷键那条 `KeyEventSink.cpp:95` 的同步删除**确实跑在 TSF
+`ITfKeyEventSink::OnKeyDown` 回调里**，右键那条跑在 `WeaselPanel` 的 WndProc 里 ——
+两者都是宿主 UI 线程。故本缺陷**不是**「某个非 TSF 通路」的例外。
+遗留风险（本棒**不动**，交下一棒评估）：这条「OnKeyDown 内同步 IPC」本身与 constitution **P2**
+（TSF 回调内禁止阻塞 I/O）的精神相悖，崩溃修掉之后仍值得单独开一条 spec 评估。
+
+**同类 deserializer 审计（四对一）**：`Styler.cpp:13-14`、`ContextUpdater.cpp:97-98`、`Committer.cpp:13`、
+`StatusUpdater.cpp:13` **都判了自己那个 target 指针** ⇒ 唯独 `Configurator` 漏判 `p_config` —— 这是**缺陷**，
+不是「契约要求非 NULL」。故修复选在解引用点补判空，而**不是**给每个 NULL 调用者塞一个用完即弃的局部 `Config`：
+后者只遮症状，且挡不住未来任何新的 NULL 调用点（`WeaselTSF.cpp:227/:505`、`Compartment.cpp:271` 本来就传 NULL）。
+
+**为什么 spec 094 之前没发现**：`065383e` 把删除改成「同步 IPC 调用」之前，这条通路不走
+`ResponseParser(NULL,…)`；重构之后，`RimeWithWeasel` 侧那条无条件 `action=config` 又刚好命中唯一漏判的 deserializer。
+
+### 14.2 已落地修复（未 commit，在工作树）
+
+`WeaselIPC/Configurator.cpp` —— 中文事故注释在 `:17-25`，守卫在 `:26-27`：
+```cpp
+if (!m_pTarget->p_context || !m_pTarget->p_config || key.size() < 2)
+  return;
+```
+注释里**不写会漂移的硬编码行号**（只描述本函数内部逻辑）。
+文件归一化为 **LF**（`size=1477 CR=0 LF=32`，index 口径 `i/lf`）。
+`git diff --numstat` 当前：`WeaselIPC/Configurator.cpp` **10/1**、
+`test/TestResponseParser/TestResponseParser.cpp` **66/0**、`.specify/memory/lessons-learned.md` **49/0**；
+`librime` 子模块脏（` m`）**不得入库**。
+
+### 14.3 本轮踩到的两个「会给出假结论」的陷阱（务必先读）
+
+**陷阱 1 —— 假探针（载荷写法不合法，测试根本没执行到被测代码）**
+`ResponseParser` 的 deserializer 图**默认只注册 `action`**（`Deserializer.cpp:27`），
+`ResponseParser.cpp:59-64` 按 `key[0]` 查图，**查不到就整行丢弃**；只有 `ActionLoader::Store`
+按报头 `action=` 名单逐个 `Require` 才会把 `config`/`status` 挂进图。
+第一版新用例载荷写成 `action=ctx`，⇒ `config.*` / `status.*` 两行**从未派发** ⇒
+「没崩」是平凡真，**永远咬不到 bug**。已把载荷改成 `action=config,status` / `action=config` 并补注释。
+⇒ **判据：新用例「不崩」本身不算证据，必须做「去掉修复必须崩」的反向对照。**
+
+**陷阱 2 —— 构建时间戳造成的假失败**
+`.bak` 用 `copy` 还原源文件时带着**旧的 LastWriteTime**，MSBuild `/t:Build` 判 up-to-date、
+**没有重编译 `Configurator.cpp`**，于是拿 Phase B 的陈旧 `.obj` 重链 ⇒ 还原了修复却照样崩（exit `-1073741819`）。
+判据 = **构建日志里有没有目标源文件的编译行**（`-> xxx.lib` / `-> xxx.exe` 这类链接行在
+「什么都没重编译」时也会打印，不能当证据）。
+⇒ 凡「还原文件后重建」的对照组一律用 `/t:Rebuild`（或显式刷新 LastWriteTime）。
+
+**附带：编辑工具把 LF 文件写成 CRLF**（本仓库 index 行尾不统一：`Configurator.cpp` 是 `i/lf`、
+`TestResponseParser.cpp` 是 `i/crlf`、`lessons-learned.md` 是 `i/crlf` + BOM、handoff 是 `i/lf`），
+造成 22 行「整文件重写」假 diff。已按字节还原为 LF；`weasel.props` / `env.bat` 未被改动。
+**改任何文本文件前先 `git ls-files --eol -- <path>` 看该文件的 index 口径。**
+
+### 14.4 已验证：三阶段「有牙」证明（`.superpowers/sdd/evidence/verify_configurator_guard.log`）
+
+| 阶段 | 树状态 | 构建 | `TestResponseParser.exe` 退出码 | 结论 |
+|---|---|---|---|---|
+| A | 修复态 | `Configurator.cpp` 重编译，`No errors detected.` | **0** | 用例通过 |
+| B | `git checkout HEAD -- Configurator.cpp`（去掉守卫） | `Configurator.cpp` 重编译 | **-1073741819 = 0xC0000005** | **用例确实咬到被测代码** |
+| C | `copy` 还原（未重编译，假失败） | 日志无编译行 | -1073741819 | 陷阱 2，作废 |
+| D | `/t:Rebuild` 强制重编译 | 有 `Configurator.cpp` 编译行，`No errors detected.` | **0** `TEST_EXIT=0` | **最终树状态是绿的** |
+
+新增用例 `test_5` / `test_6`（`test/TestResponseParser/TestResponseParser.cpp:115-177`，`_tmain` 在 `:184-185` 调用）
+是**成对的**：
+- `test_5` 复刻 `CandidateList.cpp:405` 的真实形参组合（`p_config == NULL`）⇒ 既验「不崩」，
+  也验**同一响应的后续 `status.*` 行仍被解析**（守卫不能把整条响应哑掉）。
+- `test_6` 传**真实** `Config` ⇒ 守卫没把正常 config 通道关死。**专门防「过度修复」这类静默回归。**
+
+### 14.5 已验证：全量单测（`scripts/run-tests.bat` → `.superpowers/sdd/evidence/runtests_final.log`，850 行）
+
+**构建零错误**（`error C` / `error LNK` / `error MSB` 命中数 **0**），改过的 `WeaselIPC` 被整套一起重建。
+关键套件全绿：
+```
+TestResponseParser        No errors detected.   exit 0     ← 含新增 test_5/test_6
+TestUserDictUpdate        4/4
+TestCandidateRButtonDown  T1.. 全 PASS
+TestShiftIPC            PASS=49 FAIL=0
+TestShiftIPCWire          PASS=10 FAIL=0
+TestPipeChannelRace       12 passed, 0 failed
+TestShortcutSettings      PASS=52 FAIL=0
+MAPPER-SUMMARY failures=0 / RECORDER-SUMMARY failures=0
+=== ALL TESTS PASSED === x2  (TestWeaselTSF / TestRimeWithWeasel)
+```
+唯一 FAIL 是**环境前置条件**（`runtests_final.log:845`）：
+`[ERROR] A WeaselServer.exe or TestWeaselIPC.exe process is already running.` ⇒
+本机输入法常驻，`TestWeaselIPC` 不能与生产 server 并存。**与本次改动无关，不是代码失败。**
+`LNK4020` 经查是既有噪音：官方套件同样出现，来自中间目录 `rime_claudemsbuild` 的 PDB 类型记录
+（`scripts/test-infra/run-test-suite.bat:27-29` 的 `SOL_DIR` 不带尾反斜杠），非本次引入。
+
+### 14.6 状态分层
+
+- **已验证**：崩溃点符号 / 无条件 `action=config` 使该崩溃**确定**而非竞态 / 四个同类 deserializer 都判空 /
+  修复后 `TestResponseParser` 退出码 0 且去掉守卫后 0xC0000005 / 全量单测构建与套件（除环境前置）全绿。
+- **推断**：装机后飞书 / MiniMax Code 的右键崩溃会消失（同一段代码、同一条通路、缺陷已消除）。
+- **未验证**：**真机复验未做**（需 `build.bat` Release x64 出包 + 重启宿主，重放崩溃会再杀 MiniMax Code ——
+  它就是本宿主）。⇒ 对外**不得宣称「缺陷已修」**，只能说「已定位并修复，单测已验证，待装机复验」。
+- **仍未定性**：`Ctrl+Shift+<数字>`「候选窗消失」的两条互斥机制：
+  - **A（门没开）**：`KeyEventSink.cpp:93-94` 的拦截门要 `ShouldInterceptCandidateDelete(number, _cand->GetVisibleCandidateCount())`，
+    而 `WeaselTSF/CandidateList.h:73-77` 的 `GetVisibleCandidateCount()` 在 `!_ui || !_ui->IsShown()` 时返回 0
+    ⇒ 门关 ⇒ 按键落到 `:101 m_client.ProcessKeyEvent(ke)` ⇒ Electron 把 `Ctrl+Shift+<n>` 当切标签页加速器吃掉。
+  - **B（门开了但崩了）**：门过 ⇒ 进 `_DeleteCandidateOnCurrentPage` ⇒ 同一空指针崩溃 ⇒
+    Electron 把「渲染进程死 + 标签重载」表现成「候选窗消失」。
+  机制 A 成立时「右键崩 + 快捷键吞窗」两条症状同时自洽；机制 B 也自洽。**只能由运行态区分**。
+  ⇒ **本棒的 `p_config` 修复装机后，若该现象一并消失 ⇒ B；若仍在 ⇒ A（且需再查宿主加速器）。**
+  这条判别实验**无需再改代码**。
+- **不得再用作区分性证据**：「hover 无高亮」= 生效配置 `hover_type: none` + `WeaselPanel::OnMouseMove` 首行
+  `return 0` 的**预期行为**（§13.3）；用户答的第三问已证实它是配置所致。
+
+### 14.7 下一棒请按此顺序
+
+1. **取得用户点头**再动：① `build.bat` Release x64 + 装机复验（会重启/可能杀掉宿主，含 MiniMax Code 本身）
+   ② commit（`WeaselIPC/Configurator.cpp` + `test/TestResponseParser/TestResponseParser.cpp` +
+   本 handoff + `.specify/memory/lessons-learned.md` L187/L188；排除脏 `librime`、`.superpowers/`、
+   `_ts_yaml_fixture.yaml`、`env.bat`、`weasel.props`）③ push（当前 `ahead 7` 未 push）。
+   commit 前必须 `git status -sb` + `git diff --stat`，格式 Conventional Commits + 模块前缀（建议 `WeaselIPC: fix ...`）。
+2. 装机复验判据：在**飞书**与**自建 WinForms 原生 EDIT 目标**（`.superpowers/sdd/e2e_target_winforms.ps1`）
+   里各做「右键删词」+「`Ctrl+Shift+<数字>`」；
+   **先确认进程里实际映射的是新 `weaselx64.dll`**（`install.nsi` 的「DLL 被 TSF 锁住 ⇒ 改装版本化 shim」机制
+   可能让宿主继续用旧 binary，光看文件时间戳不算证据；装机目录残留十余个 `weaselx64.*.dll`）。
+   重放崩溃会杀掉所测宿主，**别拿 MiniMax Code 裸做实验**（本棒已崩过两次，属既有行为）。
+3. 若装机后 `Ctrl+Shift+<数字>` **仍**不删词**且不崩** ⇒ 走机制 A：先补**对照组**（自建非 Electron 原生 EDIT 宿主里
+   同一快捷键能否删词），那里能删 ⇒ Electron 宿主加速器成立；那里也不删 ⇒ 才需要 `GetVisibleCandidateCount()`
+   运行态插桩。
+4. §十二 的 PASS 仍**严格限域**：WinForms 原生 EDIT + 右键 + 面板左起 26px 落点 + `hover_type: none`，
+   **不推翻但不得外推**。
+5. 顺手项（低优先，本棒未做）：`TestWeaselIPC` 与常驻 `WeaselServer.exe` 的前置冲突，可让脚本自己拉起/关闭
+   测试 server，否则本机永远跑不出全绿。
+6. 残留待用户手工删除：`D:/Program Files/fluxing/user1/fluxing/double_pinyin_sogou.user_ignore.txt`
+   （27 B，含常用词「你」；副本 `.superpowers/sdd/evidence/user_ignore_final.txt`）。agent 删不掉受保护路径。
+
+### 14.8 本棒新增/更新的资产（`.superpowers/` 不入库）
+
+| 文件 | 说明 |
+|---|---|
+| `sdd/verify_configurator_guard.bat` | A/B/C 三阶段有牙验证驱动（**C 用 copy 还原 ⇒ 已判定不可信**） |
+| `sdd/rebuild_phaseC.bat` | 修正版：`WeaselIPC.vcxproj /t:Rebuild` + 重跑测试（**Phase D 用它**） |
+| `sdd/Configurator_fixed.bak` | 修复版源文件备份（与工作树等价，仅编码/行尾不同） |
+| `sdd/symprobe.py` | DbHlp 符号化探针（已调通；纯 ASCII + `PYTHONIOENCODING=utf-8`） |
+| `sdd/evidence/verify_configurator_guard.log` | 112 行，含 A/B/C 三段退出码 |
+| `sdd/evidence/phase_D_final.log` | 33 行，最终态绿 |
+| `sdd/evidence/runtests_final.log` | 850 行全量单测（唯一 FAIL = 环境前置） |
+| `sdd/evidence/runtests_after_fix.log` | 956 行，**假载荷那一版**的记录（保留作反面教材） |
