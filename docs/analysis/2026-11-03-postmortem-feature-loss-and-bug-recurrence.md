@@ -200,3 +200,118 @@
 - 安装器 kill 覆盖面：`F:\soft\00selfmade\rime_claude\output\install.nsi`（`.onInit` / `call_uninstaller` / install 段 / uninstall 段）
 - 权威沙箱门禁：`F:\soft\00selfmade\rime_claude\scripts\sandbox-gate\run-verify.cmd`
 - 单测套件：`F:\soft\00selfmade\rime_claude\scripts\test-infra\run-test-suite.bat`
+
+---
+
+## 7. 第二轮复盘（2026-11-06）：门禁建起来了，但**有一半守护从不运行**
+
+> 本节是对 §2 / §3 的**证据追加**，不另立体系。§3 的七根支柱（P1–P7）继续有效。
+> 本节只补三条「支柱落地后**仍然**漏掉的通道」，并各自写成可执行规则（R1–R7）。
+
+### 7.1 新证据①：登记在册的 heavy 守护，在 L4 里从未被执行过
+
+`scripts/gate/run-all.ps1:131-147` 的 L4 段**固定只跑 `-Level fast`**：
+
+```powershell
+& pwsh ... -File test/regression/run-cases.ps1 -Level fast
+```
+
+而本轮回溯的全部守护分布是：
+
+| 缺陷 | 用例 | level | 在 L4 里跑吗 |
+|---|---|---|---|
+| D0032 Esc 关短语窗连带收起设置栏 | C0032 | **heavy** | **不跑** |
+| D0174 安装报「无法打开要写入的文件」 | C0174 | **heavy** | **不跑** |
+| D0175 PE FileVersion 恒空 | C0175 | fast | 跑 |
+| D0176 设置栏被拖到屏外后位置被持久化 | C0176 | fast | 跑 |
+| D0177 删词快捷键失效 / 候选窗消失 | C0177 | fast | 跑 |
+
+**结论：P1（回归用例入库）与 P2（缺陷→用例映射）都做到了，但被映射的守护有 2/3 从未进入门禁。**
+「已登记」被误当成「已被守护」。这是「加了新功能、旧功能悄悄回退而没人发现」最经济的一条通道——
+不需要任何代码冲突，只需要**守护被写在一个不会被执行的层**。
+
+### 7.2 新证据②：SKIP 被当成成功，且脚本里有一段防它的死代码
+
+`test/regression/run-cases.ps1:273-274` 的退出码只有 `0`（全 PASS）与 `1`（有 FAIL/ERROR）。
+`scripts/gate/run-all.ps1:144` 写着 `if ($rc -eq 2) { ... }` 来处理 SKIP，
+但下游**永远不会返回 2** ⇒ 这段是死代码。
+
+配合另一条实测：用例前置缺失时（本棒把 `Release\TestQuickPanelDialog.exe` 改名后跑 C0176）
+确实返回了 SKIP，`run-cases` 汇总 `pass=2 fail=0 skip=1` 并**退出 0**。
+
+⇒ **「依赖没装好 / 二进制没编出来」与「守护通过」在门禁层面同形。**
+一个长期读不到测试二进制的机器，会得到一份长期全绿的门禁报告。
+
+### 7.3 新证据③：「功能丢失」有三种，只有一种是代码丢失
+
+用户体感只有一句话——「原来好好的功能又没了」。但本轮回溯出的三条通道完全不同：
+
+| 通道 | 机制 | 本轮实例 | 修的地方 |
+|---|---|---|---|
+| **代码通道** | 源码被后续 spec 改写 | `default.yaml` 的 `ascii_composer.switch_key` 四键必须 `noop`，被别的 spec 覆写后删词失效 | 源码 + C0177 齿 3 |
+| **状态通道** | 代码没变，**被持久化的坏数据**让功能不可用 | `quickpanel.position` 被写成 `(3296,1983)`（屏外），该进程内 `Alt+,` 永久无效 | 落盘守卫 + 复用路径自愈（L193） |
+| **度量通道** | 代码和数据都对，**但守护没跑 / 跑了被判成通过** | heavy 守护不进 L4；SKIP 退出 0 | 本节 R1 / R2 |
+
+**「状态通道」是本次最大的认知缺口**：前两次修 spec 099 都在改代码，而用户看到的是「又消失了」——
+因为真正的持久化污染在用户数据目录里，`git status` 永远看不见它。
+凡「时好时坏」「重启就好了」，优先怀疑**有东西被落盘、而落盘处没有不变量校验**（L193）。
+
+### 7.4 可执行规则（R1–R7，替代「以后注意」）
+
+**R1 · fast 法则**
+新增 `status: guarded` 的用例**一律 `level: fast`**。
+确需 `heavy`（要装机、要真机 UI、要起虚拟机）的，必须在 `test/regression/DEFECTS.yaml` 的 `needs` 里写明，
+并在 L4 的汇总里单独打印「本层未覆盖的 heavy 守护清单」。
+判据：`pwsh -File test/regression/run-cases.ps1 -Level fast` 的输出里出现的缺陷数，
+必须等于 `DEFECTS.yaml` 里 `status: guarded` 的总数，或差额有显式说明。
+
+**R2 · SKIP ≠ PASS**
+`run-cases.ps1` 的汇总行必须让 `skip>0` 可见（现状已经有 `skip=N`），
+且**对着一个「前置必然具备」的环境跑时，`skip>0` 就是红灯**（本机已装产品、已编产物时不允许跳过）。
+死代码 `if ($rc -eq 2)` 应予删除或让 `run-cases` 真的返回 2 —— 二者择一，不许留悬空分支。
+
+**R3 · managed 文件单一所有者**
+改 `output/data/**/*.yaml` 之前，先 `grep -r "<该行文本>" test/regression/cases/` 看谁在断言它。
+同一行被两个 spec 需要时，**断言必须进 fast 用例**，不能只写在文档或 handoff 里。
+（本轮 `Shift_L: noop` 四键就是靠 C0177 齿 3 才守住的。）
+
+**R4 · 写盘口双步**
+任何持久化 UI 状态（位置 / 尺寸 / 主题 / 开关）的写盘函数，必须**写前校验不变量 + 写后回读断言**。
+**只在「创建路径」做校验 = 未校验**（L193：用户一次误操作永久污染后续所有运行）。
+
+**R5 · 可见性四元组**
+面板 / 窗口「可见」必须同时记 `vis`（`WS_VISIBLE`）+ rect + owner/parent + `on_screen_px`，
+且在同一坐标系下比较（探针先 `SetThreadDpiAwarenessContext(-4)`）。
+`vis=True` 只是「窗口被标记可见」，**不构成「用户能看见」**，不得单独作为验收依据。
+
+**R6 · 三段验收**
+「修好了」= ①门禁绿 ②装机真机探针 PASS ③用户肉眼确认。缺任一段，只能说「已改，未验收」。
+本轮的删词线就是靠用户第 5 次物理复测才真正闭环的（前 4 次都是①②自洽、③不成立）。
+
+**R7 · 每棒首尾各跑一次基线**
+开工第一件事跑 `run-cases.ps1 -Level fast` + `scripts/gate/L0-static.ps1` 取基线，收尾再跑一次。
+两次之间只允许「绿→绿」或「红→绿」，一旦出现「绿→红」，**先判定是不是自己改坏的，再继续**。
+这条把「我改的地方和它有没有关系」从猜测变成对照实验。
+
+### 7.5 本轮落地的具体物证
+
+| 物证 | 路径 | 状态 |
+|---|---|---|
+| 两条新回归用例 | `test/regression/cases/C0176-quickpanel-offscreen-persist.ps1` / `C0177-candidate-delete-shortcut.ps1` | 已入库，fast，实跑 PASS |
+| 缺陷登记 | `test/regression/DEFECTS.yaml` D0176 / D0177 | `defects-registry 缺陷=5 用例=5 双向一致` |
+| 用例有牙（变异 1） | `default.yaml` `Shift_L: noop` → `commit_code` ⇒ C0177 FAIL | 已还原 |
+| 用例有牙（变异 2） | 改走 `Release\TestQuickPanelDialog.exe` ⇒ C0176 SKIP | 已还原 |
+| 教训 | `.specify/memory/lessons-learned.md` L193 | 已写 |
+| L0 门禁 | `scripts/gate/L0-static.ps1` | 13/13 PASS |
+
+### 7.6 证据锚点（完整路径）
+
+- 门禁编排：`F:\soft\00selfmade\rime_claude\scripts\gate\run-all.ps1:131-147`
+- 用例执行器：`F:\soft\00selfmade\rime_claude\test\regression\run-cases.ps1:273-274`
+- 缺陷登记校验：`F:\soft\00selfmade\rime_claude\scripts\gate\lib\GateChecks.ps1:457-523`
+- 缺陷表：`F:\soft\00selfmade\rime_claude\test\regression\DEFECTS.yaml`
+- 面板位置持久化：`F:\soft\00selfmade\rime_claude\WeaselServer\QuickPanelDialog.cpp`（`SavePosition()`）、
+  `F:\soft\00selfmade\rime_claude\include\FluxingPanelPosition.h`（`RectIntersectsVisibleArea`）
+- 删词接线：`F:\soft\00selfmade\rime_claude\WeaselTSF\KeyEventSink.cpp:91-95`、
+  `F:\soft\00selfmade\rime_claude\output\data\default.yaml:73-78`
+- 用户数据：`D:\Program Files\fluxing\user1\fluxing\quickpanel.position`

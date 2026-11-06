@@ -1076,3 +1076,215 @@ Remove-Item 'D:\Program Files\fluxing\user1\fluxing\double_pinyin_sogou.user_ign
 - 改脚本声明必须**同时改调用点**（本棒连踩两次「声明改了、调用点没改」）。
 - `chord_probe.py` 的 `panels()` / `_panel_like`（宽≥60 且 高≥14）**口径已判定不可信**，只能用于「面板出不来⇒跳过」的自检；
   面板三态（MENU / EMPTY(32×8) / DEAD）作**相对**判据。
+
+## 十八、第三棒（2026-11-06 晚 · 用户四项指令：删词巩固 + 设置栏再修 + 深层复盘 + 交接）
+
+### 18.0 一段话现状
+
+用户物理复测**通过**（删词四档全绿）。快捷设置栏「又消失 + `Alt+,` 调不出」的根因**已坐实**：
+不是热键丢失、不是锁屏、不是装机二进制缺钳制，而是**面板几何落在桌面外、并且该屏外坐标被持久化**
+（`quickpanel.position` = `pos_x=3296 / pos_y=1983`，主屏 `rcWork=[0,0..2560,1368]`）。
+数据侧已修好并量化验证（面板 `rect=[2192,1296..2560,1368]`、`on_screen_px=26496`、可见 ≥4.5 s）；
+代码侧 5 处改动**已编译、单测全绿、L0 13/13、fast 回归 3/3**，**已提交（见 §18.11），但尚未装机复验**。
+
+### 18.1 用户本棒指令原文（四项，按序）
+
+1. 巩固已验证成果：物理按键复测已通过（Ctrl 先按 → Shift → 1/2/3；Shift 先按 → Ctrl → 1/2/3 均可删词；
+   按下第二个修饰键时候选窗不消失；用的是左修饰键；双拼下按完 chord 出现候选词 `chord` 后再打一个字母不上屏）。
+   **要求后续开发不得导致该功能丢失，必须落成可执行回归门。**
+2. 修复新故障：快捷设置栏**又消失了**，`Alt+,` 也调不出来。
+3. 深层复盘并总结教训：为什么每次加新功能，总反复导致旧 bug 复现 / 已开发好的功能丢失，**要求形成可执行规则**。
+4. 更新完整 handoff + 一句话接力 prompt（只给全路径指针，**不复述 handoff 内容**）。
+
+### 18.2 第 1 项：删词成果已落成可执行门禁（**已验证**）
+
+**两条用例入库并纳入 fast 层**（`test/regression/run-cases.ps1 -Level fast` 会跑到）：
+
+| 用例 | 文件 | 齿 |
+|---|---|---|
+| C0177 | `test/regression/cases/C0177-candidate-delete-shortcut.ps1` | ①头文件仍提供 `MatchCandidateDeleteShortcut` / `ShouldInterceptCandidateDelete`；②`KeyEventSink.cpp` 仍 include 且调用两处 + `_DeleteCandidateOnCurrentPage`；③`output/data/default.yaml` 的 `ascii_composer.switch_key` 的 `Shift_L/Shift_R/Control_L/Control_R` 全为 `noop`；④`Release\TestCandidateRButtonDown.exe` 全绿（`passedN==totalN && totalN>=11`） |
+| C0176 | `test/regression/cases/C0176-quickpanel-offscreen-persist.ps1` | ①`FluxingPanelPosition.h` 仍有 `RectIntersectsVisibleArea`；②`RepairOffscreenPanel` 出现 ≥4 次、无条件钳制行仍在、`SavePosition()` 函数体含三个守卫；③`Release\TestQuickPanelDialog.exe` 全绿（`totalN>=190`） |
+
+**两条用例都有牙（已用变异实测，不是声称）**：
+
+- 变异 1：`default.yaml` 的 `    Shift_L: noop` → `commit_code` ⇒ **C0177 FAIL**，
+  detail = `default.yaml ascii_composer.switch_key.Shift_L = 'commit_code'（必须 noop，否则按下第二个修饰键时候选窗消失）`；
+  已用 `git checkout -- output\data\default.yaml` 还原（还原后该文件从 `git status` 消失）。
+- 变异 2：把 `Release\TestQuickPanelDialog.exe` 改名 ⇒ **C0176 SKIP**，
+  detail = `缺 Release\TestQuickPanelDialog.exe（先跑 build.bat release weasel）`；已改回，`bin_exists=True`。
+
+**注册表已补**：`test/regression/DEFECTS.yaml` 新增 D0176（`lesson: [L193]`）/ D0177（`lesson: [L190, L192]`），
+`updated: 2026-11-06`；`scripts\gate\L0-static.ps1` 实测 `defects-registry 缺陷=5 用例=5 双向一致，无 tmp/ 引用`。
+
+**诚实标注**：两条用例都是**单元级 + 接线级**守卫，**不替代真机复验**。用例头已写明这一点。
+
+### 18.3 第 2 项：快捷设置栏消失（根因坐实 + 代码已改，**未装机复验**）
+
+#### 18.3.1 根因链（**已验证**）
+
+```
+用户把设置栏拖到屏幕外
+  → QuickPanelDialog::SavePosition()（WM_LBUTTONUP 唯一调用点 :1223）裸写盘，落盘前零可见性校验
+  → quickpanel.position 被写成 (3296,1983)（桌面外）
+  → Show() 的钳制只在「无保存位置 / 首建」路径生效，复用路径（hwnd 已存在）零重定位
+  → 该进程内 Alt+, 永久调不出「用户能看见的」面板（vis=True 但 rect 在屏外）
+  → 重启 server，首建钳制把它拉回屏内 ⇒ 用户体感「时好时坏」
+```
+
+`WM_DPICHANGED`（`:1047-1098`）只调整窗口矩形，**不回写文件**，不构成第三条自愈路径。
+
+#### 18.3.2 已证伪的假说（**别再翻**）
+
+- **「装机二进制缺钳制」**：把文件写成 `(4000,3000)` 后重启 server，注入 `Alt+,` 得到
+  `hwnd=0x3C12C6 vis=True rect=[2192,1296..2560,1368] size=368x72`、`work=[0,0..2560,1368] PRIMARY`、
+  `fully_on_monitor=True on_screen_px=26496` ⇒ `(4000,3000)` 被钳成 `(2192,1296)`，钳制算术没问题。
+- **「热键未送达」**：`PostMessage(WM_HOTKEY,9001)` / `PostMessage(WM_COMMAND,40018)` 双向切换成功。
+- **「面板 handler 崩溃」**：无崩溃，窗口确实被 Show。
+- **「锁屏」**：`LogonUI` 未运行。
+- **`2197 / 1322` 算式线索永久作废**：那是 DPI-unaware 探针把物理值 ÷1.5 的产物（`3296/1.5≈2197.3`、`1983/1.5=1322`）。
+
+#### 18.3.3 生产改动 5 处（**已提交 `962c50e`**）
+
+| # | 文件 | 位置 | 内容 |
+|---|---|---|---|
+| 1 | `include/FluxingPanelPosition.h` | `RectContains:61` 之后 | 新增 `RectIntersectsVisibleArea`（+24 行）——「至少露出像素」语义，区别于 `RectContains` 的「完整可见」 |
+| 2 | `WeaselServer/QuickPanelDialog.cpp` | 匿名 namespace，定义 `:2066` | 新增 `RepairOffscreenPanel(HWND)`：按当前矩形与工作区求交，屏外则重新 `PlacePanelAtBottomRight` |
+| 3 | 同上 | `Show()` 复用路径 `:2131`（`ShowWindow` 前） | 复用路径自愈调用 |
+| 4 | 同上 | `Show()` 首建 `:2186` | 钳制无条件化：`const POINT target = HasSavedPosition() ? SavedPosition() : POINT{x, y};`，`EnumerateWorkAreas()` `:2183-2184`，`ClampToVisibleArea` `:2188`；建窗后二次复核 `:2202` |
+| 5 | 同上 | `SavePosition()` `:2290-2312` | **落盘守卫**：`EnumerateWorkAreas()` `:2302-2303` → `RectIntersectsVisibleArea` 判定 `:2304-2306` → 屏外则 `RepairOffscreenPanel(s_hwnd); return false;` `:2307-2308`；否则 `return SavePositionAt(r.left, r.top);` `:2311` |
+
+**为什么守卫放 `SavePosition()` 而**不**放 `SavePositionAt()`**：后者是裸写盘口，单测 T24o 依赖它与真实多屏几何解耦；
+把守卫塞进去会把纯逻辑单测变成环境依赖测试。
+
+**新增单测 7 条**：T24w2–T24w8（含污染值回归 T24w5、边缘相接 ≠ 可见 T24w6），
+在 `test/TestQuickPanelDialog/TestQuickPanelDialog.cpp` 的 T24w 之后、`// ===== 默认落点 =====` 之前。
+
+#### 18.3.4 验证证据（**已验证**）
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 编译 | `build.bat release weasel` | 0 错误 4 警告（全存量） |
+| 面板单测 | `Release\TestQuickPanelDialog.exe` | **197/197 PASS** |
+| 删词单测 | `Release\TestCandidateRButtonDown.exe` | **11/11 PASS** |
+| L0 静态门禁 | `scripts\gate\L0-static.ps1` | **13/13 PASS**（含 `defects-registry`） |
+| 回归 fast | `test\regression\run-cases.ps1 -Level fast` | **3/3 PASS**（C0175 0.9s / C0176 1.2s / C0177 1s） |
+| 真机面板可见 | `.superpowers\sdd\panel_show_verify.ps1` | `VERDICT=PANEL-VISIBLE-ON-SCREEN`，可见 ≥4.5 s |
+
+#### 18.3.5 用户数据当前状态（**已验证**）
+
+- `D:\Program Files\fluxing\user1\fluxing\quickpanel.position` = `pos_x=2192` / `pos_y=1296`（22 B，合法值）。
+- 污染值原样备份在 `.superpowers\sdd\quickpanel.position.bak`（21 B，`pos_x=3296` / `pos_y=1983`，
+  原文件 `SRC_SHA=72300451316CD4F2158688086CFC0B335205ADBEB1061C6CD1C63E635172B71D`）。
+- 服务端当前 pid=21040（19:59:08 启动），面板 `hwnd=0x3C12C6`、`rect=[2192,1296..2560,1368]`、`vis=True`。
+
+### 18.4 第 3 项：深层复盘（新证据 + 可执行规则 R1–R7）
+
+**结论一句话**：「旧功能反复丢失」不是纪律问题，是三条**结构性通道**：
+**heavy 守护从不进 L4**（度量通道）、**用户数据被写坏而 `git status` 看不见**（状态通道）、
+**managed yaml 被多个 spec 交叉改写且无 fast 断言**（代码通道）。
+
+**追加位置**：`docs/analysis/2026-11-03-postmortem-feature-loss-and-bug-recurrence.md` **§7**（不另写一份）。
+本棒新证据：
+
+1. **heavy 守护 2/3 从未执行**：`scripts/gate/run-all.ps1:131-147` 的 L4 固定 `-Level fast`；
+   而 D0032（C0032）/ D0174（C0174）都是 `level: heavy` ⇒ **登记在册但从不运行**。
+2. **SKIP 被当成成功**：`run-cases.ps1:273-274` 只返回 0/1，`run-all.ps1:144` 的 `if ($rc -eq 2)` 是死代码；
+   实测抽走测试二进制后 `pass=2 fail=0 skip=1` 仍 **exit 0**。
+3. **三种「功能丢失」通道**（代码 / 状态 / 度量），本轮三条全部命中，见 §7.3 表。
+
+**可执行规则（写入 §7.4，本节只列标题，细节见该文件）**：
+
+- **R1 fast 法则**：新增 guarded 用例一律 `fast`；heavy 必须显式说明且汇总里单列。
+- **R2 SKIP ≠ PASS**：前置必然具备的环境里 `skip>0` 即红灯；悬空的 `if ($rc -eq 2)` 必须删或让它成立。
+- **R3 managed 文件单一所有者**：改 `output/data/**` 前先 `grep` 谁在断言它，断言必须进 fast 用例。
+- **R4 写盘口双步**：持久化 UI 状态必须「写前校验不变量 + 写后回读断言」；只在创建路径校验 = 未校验。
+- **R5 可见性四元组**：`vis` + rect + owner/parent + `on_screen_px` 同坐标系比较；`vis=True` ≠ 用户能看见。
+- **R6 三段验收**：「修好了」= 门禁绿 + 装机真机 PASS + 用户肉眼确认，缺一段只能说「已改，未验收」。
+- **R7 每棒首尾各跑一次基线**：两次之间只允许「绿→绿」或「红→绿」，出现「绿→红」先判定是不是自己改坏的。
+
+**教训条目**：`.specify/memory/lessons-learned.md` **L193**（几何静默持久化：落盘那刻就是最后一道防线）。
+
+### 18.5 第 4 项：交接产物
+
+- 本文件（就地追加 §十八，同日同 spec 不新建）。
+- 接力 prompt：`docs/archive/prompts/prompt-next-session-2026-11-06-candidate-delete-bug.md`（就地改写，只给全路径指针）。
+
+### 18.6 已验证 / 推断 / 未验证（严格三分）
+
+**已验证（本棒实测）**
+- 删词四档物理复测通过（用户口述，最高优先级运行时证据）。
+- 两条用例有牙（两次变异，均翻转后还原）。
+- L0 13/13、fast 3/3、`TestQuickPanelDialog` 197/197、`TestCandidateRButtonDown` 11/11。
+- `build.bat release weasel` 0 错误。
+- 屏外位置是本次 `Alt+,` 失效的直接原因（数据侧 `(3296,1983)` vs `rcWork` 到 1368）。
+- 装机二进制**有**钳制（`(4000,3000)` → `(2192,1296)`）。
+
+**推断（源码一致，未真机复现故障场景）**
+- 「拖到屏外 → 落盘守卫拦住 → 自动回落到右下角」这条新路径**尚未在真机上被人手拖动触发过**。
+- 复用路径自愈（`:2131`）在真实 `WM_LBUTTONUP` 之后再 `Alt+,` 的场景未验。
+
+**未验证（下一棒才成立）**
+- **装机复验**：5 处改动尚未进入 `output\archives\*.exe`，用户装的是旧二进制。
+- 用户肉眼确认面板确实出现在屏幕右下角。
+- `ctx` 为什么空（仪表化 DBWIN + `OutputDebugStringA` 未做）。
+- 两个 `FluxingPhrasesDialog` 孤儿进程（pid=59924、pid=94712）未清理、未归因（D0032 / L174 雷区）。
+
+### 18.7 下一棒执行顺序（按序，勿并行）
+
+1. **先取基线**（R7）：`pwsh -NoProfile -ExecutionPolicy Bypass -File test\regression\run-cases.ps1 -Level fast`
+   与 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\gate\L0-static.ps1`，两次都必须绿。
+2. **提交本棒工作**（commit 划分见 18.9）—— 两条用例入库才算「可执行回归门」，否则仍是工作树里的私有资产。
+3. **打包并装机**：`build.bat release weasel installer`（**先过 L0–L5**，R1/P5），产物在 `output\archives\`。
+   装机前先清 `HKLM\Software\Fluxing\Weasel` 与 `HKCU\Software\Fluxing`（CLAUDE.md §2 / L54），
+   silent-install 必须显式 `/D=<path>`。
+4. **真机复验面板**（判据 R5）：人手把设置栏拖到屏幕外 → 松手 → 按 `Alt+,` ⇒ 必须回到屏内右下角；
+   同时读 `quickpanel.position` 确认**没有被写成屏外值**。用 `.superpowers\sdd\panel_show_verify.ps1` 作模板。
+5. **请用户肉眼确认**面板在右下角可见（`vis=True` 不等于用户能看见）。
+6. **只剩清理项**：孤儿 `FluxingPhrasesDialog` 两个 pid；`D:\Program Files\fluxing\user1\fluxing\user_ignore.txt` 由用户手工处理。
+
+### 18.8 本棒工具坑（实测，勿重试）
+
+- `test/regression/run-cases.ps1` **永不返回 2**，所以「SKIP 当成功」是真实缺陷，不是误读。
+- 变异检验 2 首次失败：`Rename-Item -NewName` 传了含目录的路径 ⇒
+  `无法重命名指定的目标，因为它代表的是路径或设备名称`；**只传文件名**。
+- `git ls-files --eol -- <单个未跟踪文件>` 不输出该文件 ⇒ 会误判「文件不存在」；先用 `Test-Path` 分辨。
+- 写 CRLF 文件必须用 `[System.IO.File]::WriteAllText(..., UTF8Encoding($false))` + 显式 `` `r`n ``；
+  用片段文件 + 拼接脚本可避免 `edit` 工具把新行写成 LF。`lessons-learned.md` **带 BOM**（`bom=True`），
+  `DEFECTS.yaml` / handoff / postmortem **不带 BOM**。
+- 自写的校验行也可能没牙：`$dv -match '^\s*- id: D0176'` 在**非多行模式**下只匹配串首 ⇒ 恒 False；
+  真正的判据要用 `Select-String`/`-split` 逐行看。
+- 复合命令禁令继续有效：跨盘「写 + 停进程」同命令必被硬安全策略拒绝。
+- `Remove-Item` 仍被硬策略拦截，删除只能走顶层 `rm --`。
+- 桌面 UI 自动化开工前先判 `LogonUI`（锁屏时注入全部静默失效）。
+
+### 18.9 本棒 commit 划分（scope 单一，避免 P4 判红）
+
+| # | 建议 message | 文件 |
+|---|---|---|
+| 1 | `WeaselServer: 快捷设置栏屏外位置不再落盘, 复用路径自愈` | `include/FluxingPanelPosition.h`、`WeaselServer/QuickPanelDialog.cpp` |
+| 2 | `test: 面板屏外位置落盘守卫单测 (T24w2–T24w8)` | `test/TestQuickPanelDialog/TestQuickPanelDialog.cpp` |
+| 3 | `ci: 新增 D0176/D0177 回归用例并注册缺陷表` | `test/regression/cases/C0176-*.ps1`、`C0177-*.ps1`、`test/regression/DEFECTS.yaml` |
+| 4 | `docs: 复盘追加 §7 (三条丢失通道 + R1–R7) 与 L193` | `docs/analysis/2026-11-03-postmortem-*.md`、`.specify/memory/lessons-learned.md`、本 handoff、接力 prompt |
+
+**提交前必查**：`git status -sb` + `git diff --stat`；确认 **`librime` 子模块（` m`）不入库**、
+`.superpowers/` 与 `_ts_yaml_fixture.yaml` 不入库。
+
+### 18.10 需用户在场 / 不得代做的事
+
+- **装机复验必须在用户桌面进行**（锁屏时注入静默失效，L31）。
+- **人手拖到屏外**这一步 agent 做不了（要真实鼠标拖动触发 `WM_LBUTTONUP`）；可考虑先用
+  `SetWindowPos` + `SendMessage(WM_LBUTTONUP)` 近似，但**近似结果不得当作真机通过**。
+- `user_ignore.txt` 由用户手工清理，agent 不代删。
+- 用户之前试 `Alt+,` 失败时若有飞书 / MiniMax Code 在跑，建议完全退出后重开再试。
+### 18.11 本棒收尾实况（2026-11-06 20:28 回填）
+
+| 项 | 状态 |
+|---|---|
+| 提交 | **已提交 4 段，`## Fluxing...kizemo/Fluxing [ahead 5]`，未 push** |
+| 哈希 | `962c50e` 生产改动 · `59c1699` 单测 · `fd22f6e` 回归用例 + 缺陷表 · **本条 docs 提交**（含本 handoff / L193 / §7 / 接力 prompt；写自身 hash 会造成 amend 自指漂移，故不记） |
+| 安装包 | `F:\soft\00selfmade\rime_claude\output\archives\fluxing-1.2.0-installer.exe`（2026-11-06 20:27:51，42816236 B，`build.bat release installer` EXIT=0） |
+| 门禁 | L0 `checks=13 pass=13 fail=0 skip=0`；fast 回归 `cases=3 pass=3 fail=0 skip=0 error=0`（log `20261106-202509`） |
+| 仍缺 | **装机真机复验 + 用户肉眼确认**（R6 第 ② ③ 段）。未做完不得宣称「缺陷已修复」 |
+| 未入库 | `librime` 子模块 ` m`、`.superpowers/`、`_ts_yaml_fixture.yaml` —— 有意排除 |
+
+**注意**：`18.0` 与 `18.3.3` 里「未提交 / 工作树内」是当棒写作时的历史状态，以本节为准。
