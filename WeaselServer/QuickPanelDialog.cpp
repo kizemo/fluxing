@@ -2050,6 +2050,52 @@ LRESULT QuickPanelDialog::OnKeyDown(HWND hwnd, WPARAM key) {
   return DefWindowProc(hwnd, key, 0, 0);
 }
 
+// ===== D0176:屏外面板自愈 =====
+namespace {
+
+// 面板当前矩形若与**所有**显示器工作区零交集 ⇒ 挪回主屏右下角默认锚点。
+// 返回 true 表示真的重定位过。
+//
+// 为什么需要它(2026-11-06 事故):Show() 的复用路径原本只 ShowWindow + 置顶,
+// 零重定位。用户把面板拖到屏外松手 ⇒ WM_LBUTTONUP 把屏外坐标写盘 ⇒ 本进程内
+// 之后每次 Alt+, 都是「把一个不可见窗口设为可见」,用户的体感是快捷键坏了;
+// 只有重启 server 才被首建钳制救回。所以复用路径必须先自愈。
+//
+// 只在**零交集**时动手:部分可见(用户故意拖到半屏)不动,尊重用户位置。
+// 调用面是 WeaselServer 的窗口消息/拖动回调,不在 TSF 回调里 ⇒ 不触及 P2 红线。
+bool RepairOffscreenPanel(HWND hwnd) {
+  RECT rc = {};
+  if (!GetWindowRect(hwnd, &rc))
+    return false;
+  const std::vector<fluxing::panel_position::Rect> areas =
+      fluxing::panel_position::EnumerateWorkAreas();
+  if (areas.empty())
+    return false;  // 枚举失败 ⇒ 不猜(钳制算法同样依赖 areas)
+  if (fluxing::panel_position::RectIntersectsVisibleArea(
+          rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, areas))
+    return false;
+  RECT workArea = {};
+  if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0)) {
+    workArea.left = areas[0].left;
+    workArea.top = areas[0].top;
+    workArea.right = areas[0].right;
+    workArea.bottom = areas[0].bottom;
+  }
+  // 尺寸**沿用当前窗口**(DPI 缩放由 WM_DPICHANGED 负责),这里只搬位置。
+  const int panelW = rc.right - rc.left;
+  const int panelH = rc.bottom - rc.top;
+  const POINT anchor = {workArea.right - 1, workArea.bottom - 1};
+  const PanelDpi dpi = QueryPanelDpi(anchor);
+  const int margin = ScaleLogicalByDpi(12, dpi.x);
+  int x = 0;
+  int y = 0;
+  PlacePanelAtBottomRight(workArea, panelW, panelH, margin, &x, &y);
+  SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+  return true;
+}
+
+}  // namespace
+
 // ===== Public API =====
 void QuickPanelDialog::Show(bool currentFullwidth,
                             OnClick onSchema,
@@ -2079,6 +2125,10 @@ void QuickPanelDialog::Show(bool currentFullwidth,
       AlwaysShowMode() ? fluxing::kAlphaFactorIdle : fluxing::kAlphaFactorFull;
   s_targetAlphaFactor = s_alphaFactor;
   if (s_hwnd) {
+    // D0176 (2026-11-06): 复用路径原本零重定位 —— 面板矩形若已在屏外
+    // (拖动落点被写盘 / 显示器布局变化),ShowWindow 只是把一个用户看不见的
+    // 窗口设为可见,体感就是「Alt+, 没反应」。先自愈再显示,顺序不可交换。
+    RepairOffscreenPanel(s_hwnd);
     ShowWindow(s_hwnd, SW_SHOWNOACTIVATE);
     // L81-fix: reuse 路径也强制置顶(防止其他窗口在 hide→show 间隙盖上面板)
     SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
@@ -2126,13 +2176,16 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   PlacePanelAtBottomRight(workArea, panelW, panelH, margin, &x, &y);
   // spec 099 P0-7: 有持久化位置 ⇒ 用它(并钳制回当前可见区:分辨率/DPI 变化后
   // 旧位置可能落到屏外)。没有持久化位置 ⇒ 保持右下角默认锚点(行为不变)。
-  if (HasSavedPosition()) {
+  // D0176 (2026-11-06): 钳制改为**无条件**执行 —— 原写法把 ClampToVisibleArea
+  // 关在 HasSavedPosition() 门内,一旦 EnumerateWorkAreas() 返回空,持久化的
+  // 屏外坐标就直接进了 CreateWindowExW,没有任何兜底。
+  {
     const std::vector<fluxing::panel_position::Rect> areas =
         fluxing::panel_position::EnumerateWorkAreas();
     if (!areas.empty()) {
-      const POINT saved = SavedPosition();
+      const POINT target = HasSavedPosition() ? SavedPosition() : POINT{x, y};
       const fluxing::panel_position::Point p =
-          fluxing::panel_position::ClampToVisibleArea(saved.x, saved.y, panelW,
+          fluxing::panel_position::ClampToVisibleArea(target.x, target.y, panelW,
                                                       panelH, areas);
       x = p.x;
       y = p.y;
@@ -2145,6 +2198,8 @@ void QuickPanelDialog::Show(bool currentFullwidth,
       NULL, NULL, GetModuleHandle(NULL), NULL);
   if (!s_hwnd)
     return;
+  // D0176: 建窗后再复核一次 —— 钳制被绕过时兜底,零交集就挪回默认锚点。
+  RepairOffscreenPanel(s_hwnd);
   // v0.19.0.10: 不再 SetLayeredWindowAttributes(LWA_ALPHA) — 那种 uniform
   // 半透明 不是 liquid glass (面板整体 86% 不透明)。 per-pixel alpha 走
   // RepaintLayered → ApplyAlphaGradient → UpdateLayeredWindow(ULW_ALPHA)。
@@ -2238,6 +2293,21 @@ bool QuickPanelDialog::SavePosition() {
   RECT r = {};
   if (!GetWindowRect(s_hwnd, &r))
     return false;
+  // D0176 (2026-11-06):落盘前先问一句「这个矩形用户看得见吗」。
+  // 事故链:拖动落点被**无条件**写盘 ⇒ 下一个进程读到一个屏外坐标 ⇒ 面板永远
+  // 停在桌面外,用户只看到「Alt+, 没反应」;重启后靠首建钳制才自愈,所以这个
+  // 缺陷看起来是「时好时坏」。零交集 ⇒ 拒写(污染值不进文件),并当场救回面板。
+  // 部分可见 ⇒ 照写,尊重用户故意把面板拖到半屏的自由。
+  // 不放进 SavePositionAt:那是裸写盘口,单测(T24o)依赖它与真实多屏几何解耦。
+  const std::vector<fluxing::panel_position::Rect> areas =
+      fluxing::panel_position::EnumerateWorkAreas();
+  if (!areas.empty() &&
+      !fluxing::panel_position::RectIntersectsVisibleArea(
+          r.left, r.top, r.right - r.left, r.bottom - r.top, areas)) {
+    RepairOffscreenPanel(s_hwnd);
+    return false;
+  }
+  // 枚举失败(areas 为空)⇒ 不拦:宁可照旧写盘,也不凭空否决用户的一次拖动。
   return SavePositionAt(r.left, r.top);
 }
 

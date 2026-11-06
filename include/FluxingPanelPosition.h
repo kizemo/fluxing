@@ -63,6 +63,30 @@ inline bool RectContains(const Rect& outer, const Rect& inner) {
          inner.right <= outer.right && inner.bottom <= outer.bottom;
 }
 
+// D0176 (2026-11-06):面板矩形与任一工作区是否有**正面积**交集。
+// 与 RectContains 的区别:那是「完整可见」,这是「至少露出像素」。
+// 用途 —— 落盘与复用路径的硬门槛:与所有工作区零交集的窗口,在用户眼里
+// 等于不存在;此时任何「显示成功」都是假的成功。
+// 注意:这里是**必要条件**判断,不做钳制;钳制仍走 ClampToVisibleArea。
+inline bool RectIntersectsVisibleArea(int x,
+                                      int y,
+                                      int w,
+                                      int h,
+                                      const std::vector<Rect>& work_areas) {
+  if (w <= 0 || h <= 0)
+    return false;
+  const Rect panel{x, y, x + w, y + h};
+  for (const Rect& wa : work_areas) {
+    const int iw = (panel.right < wa.right ? panel.right : wa.right) -
+                   (panel.left > wa.left ? panel.left : wa.left);
+    const int ih = (panel.bottom < wa.bottom ? panel.bottom : wa.bottom) -
+                   (panel.top > wa.top ? panel.top : wa.top);
+    if (iw > 0 && ih > 0)
+      return true;
+  }
+  return false;
+}
+
 // ===== 落点 =====
 
 // 位置文件名(不含目录)。**独立于 quickpanel.state**(ADR 0035)。
