@@ -820,3 +820,123 @@ Get-WinUserLanguageList      : zh-Hans-CN, en-US
 **本轮附带事实**：`HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Sharing Engines\Server`（含 `WOW6432Node` 同路径）在本机**不存在** ⇒ 「从注册表读 TSF server 注册路径」这条抓手作废；要拿装机路径，直接读运行中 `WeaselServer.exe` 进程的 `.Path`（本机为 `D:\Program Files\fluxing\weasel\WeaselServer.exe`，PID 46560，启动于 11/6 7:28:37）。另：我第一轮凭记忆写死 Sharing Engines 的 CLSID 子键去 `Get-ItemProperty`，直接报「路径不存在」—— 这类 GUID 一律先枚举再取，不要凭记忆写。
 
 **修正 §15.6 / §14.7 的复验顺序第 1 步**：原文「先确认进程里实际映射的是新 `weaselx64.dll`」应理解为 **「先装新包 `output\archives\fluxing-1.2.0-installer.exe`，再核对映射的 DLL 哈希」**；在装新包之前做的任何真机复验（右键、`Ctrl+Shift+<数字>`）都只是在重复测旧 binary，结论无效。
+
+## 十六、本棒（2026-11-06 下午 · `Ctrl+Shift+<数字>` 顺序敏感**定性为真实缺陷** + 右键修复装机真机验收 **PASS**）
+
+> 本棒用户指令：接手本线；用户 07:54 反馈「`ctrl+shift+数字` 与右键仍无法删除候选词」，并回答三问 ——
+> ① 测于**飞书 / MiniMax Code**，「有候选窗时按 shift+ctrl+数字，候选窗会消失」；
+> ② 「右键点击候选窗会导致宿主软件一起被杀死」；③ 「hover 时候选没有高亮」。
+> 前三棒（§十三 / §十四 / §十五）分别记录了：结论收窄、崩溃根因与修复、静态/离线探针。**本棒以 §十五 为起点，只读 §15.6 的复验顺序**（勿重跑 §十五 已作废的判据）。
+
+### 16.1 环境前提（已实测核对，勿重复取证）
+
+| 项 | 实测值 | 判据来源 |
+|---|---|---|
+| 装机 image | `D:\Program Files\fluxing\weasel\weaselx64.dll` = `1989632 B / mtime 2026-11-06 11:36:10 / sha256_16 AD6A7A7922E67362` ⇒ **含 `fde34a1` 空值守卫的新产物** | `chord_rba_result.json.installed_dll` |
+| 安装时刻 | 约 `2026-11-06 11:55:12`（`fluxing-1.2.0-installer.exe`，42789863 B @11:39:57） | §十五 表 + 注册表/文件核对 |
+| 靶进程 | powershell WinForms `pid 88156`，`proc_start 2026-11-06 14:33:49` ⇒ **晚于安装**，映射必为新 image | `chord_rba_result.json.target` |
+| WeaselServer | `pid 74356`（安装后新起） | `chord_rba.log` |
+| 锁屏 | `LogonUI` 未运行 ⇒ 注入与截屏可用 | `session_health()` / `chord_rba.log:1` |
+
+> **口径限定**：本棒全部结论**仅对「安装 1.2.0 之后新启动的宿主进程」成立**。安装前启动的 explorer(7:12) / DingTalk / Weixin / TextInputHost / `Claude Code Haha`(9:09) / **`MiniMax Code`(9:13)** 仍持旧 image；其中 `MiniMax Code` 就是当前宿主 ⇒ **不可**在本机重放右键崩溃做正对照。
+
+### 16.2 判别矩阵 exp3：顺序敏感是真实缺陷，两个伪因当场证伪
+
+资产 `.superpowers/sdd/chord_exp3.py`（结果 `chord_exp3_result.json` 22324 B @14:52:48；日志 `chord_exp3.log` + `evidence/exp3_stdout.log`；运行标记 `evidence/exp3_run.txt` = `RUN_START 14:52:12.83 / EXIT=0 / RUN_END 14:52:48.21`，35 s 属正常 —— 5 变体 + 被跳过的 H 门很快）。
+
+| 变体 | 顺序 | 每事件间隔 | 删词（ignore 文件变化） | 数字键时刻面板 |
+|---|---|---|---|---|
+| R1 | Ctrl 先 → Shift 后 → `1` | 0.12 s | **无** | `[]`（已消失） |
+| R2 | **Shift 先 → Ctrl 后** → `1` | 0.12 s | **成功**（新增 `嘚嘚`；29 B `5A23503366C8FA31`→37 B `401288373BCE9DFC`） | 非空 |
+| R3 | Ctrl 先 → Shift 后 → `1` | **0.60 s**（人类慢时序） | **无** | `[]` |
+| R4 | Shift 先 → Ctrl 后 → `1` | 0.60 s | **成功**（新增 `得得得得`；→51 B `96526A0E8C8A0744`） | 非空 |
+| R5 | Ctrl 先 → **右 Shift** → `1` | 0.12 s | **无** | `[]` |
+
+- **H2「注入时序伪影」被证伪**：R3 把每个事件放慢到 0.60 s（比人手更慢）仍然失败 ⇒ 撤销 §十五「先排除注入时序再决定是否报缺陷」的保留，**直接定性为「Ctrl-first 手势下删词功能失效」**。
+- **H3「左/右 Shift 分叉」不支持**：R5 右 Shift 与 R1 左 Shift 同败。
+- **决定性观测**：五个变体在数字键时刻的异步键状态**全部**显示修饰键真按住（`shift_generic=true / ctrl_generic=true`，R5 为 `rshift=true`），但**失败变体的面板 `panel_before_digit=[]`** —— 面板在「按住第二个修饰键那一瞬」就消失；成功变体在 `after_hold_shift.panel` / `after_hold_ctrl.panel` 全程可见。**用户自述的「候选窗会消失」与失败变体逐字吻合 ⇒ 用户观察不是错觉，是本缺陷的第一手现象。**
+- 其余恒定值：`hkl` 变体前后 `0x08040804`、`foreground=854074`（靶窗口）、`target_alive=True`、`wer_new=[]`、`text_after=''`（**没有上屏**）、WER 基线 102 → 末 102。
+
+### 16.3 代码层根因：Ctrl-first 路径上有**两个独立阻断点**（勿写成单一根因）
+
+读源码切片（`WeaselTSF/KeyEventSink.cpp` 全 174+ 行，实测读到）：
+
+- `:26` `GetKeyboardState(_lpbKeyState)`；`:27-31` `ctrl_down / shift_down = fluxing::IsKeyStateDown(...)` —— **读的是宿主线程的键盘状态表**。
+- `:50-78` Shift 分支：`:58-61` `if (ctrl_down) { _shiftSuppressed = TRUE; *pfEaten = TRUE; return; }` —— **Ctrl 已按下时 TSF 自己吞掉 Shift down**（注释 spec 094 明写目的：不让服务端 Shift 状态机把它当成「选词 Shift」而 `commit_composition`，见 spec 077 / ADR 0023）；`:63-65` 仅在 **Ctrl 未按下**时才 `m_client.ShiftDown()`；`:67-71` 吞配对的 up。
+- `:90-98` 删词门：`if (!keyCountToSimulate && fluxing::IsKeyDownLParam(lParam))` → `MatchCandidateDeleteShortcut(wParam, ctrl_down, shift_down, true)` → `ShouldInterceptCandidateDelete(number, _cand->GetVisibleCandidateCount())` → `_DeleteCandidateOnCurrentPage(number-1)`。
+- `include/FluxingCandidateDeleteShortcut.h:31-71`（header-only，73 行，UTF-8+BOM）：`MatchCandidateDeleteShortcut` 在 `!ctrl_down || !shift_down` 时**直接返回 0**；`ShouldInterceptCandidateDelete` 在 `visible_count==0` 时返回 false。
+- `WeaselTSF/CandidateList.h:73-77`：`GetVisibleCandidateCount()` **第一句就是 `if (!_ui || !_ui->IsShown()) return 0;`** ⇒ 面板不可见 ⇒ 门必然不命中。
+
+⇒ **(a)** Shift keydown 被 TSF 吞掉 ⇒ 宿主线程 `GetKeyboardState` 可能从未记录 `VK_SHIFT` ⇒ `MatchCandidateDeleteShortcut` 返回 0（代码推出，**进程外无法读取宿主线程键盘状态表，尚未坐实**）。
+⇒ **(b)** 实测面板在按住第二个修饰键那一瞬已消失 ⇒ `GetVisibleCandidateCount()==0` ⇒ 门不命中（**直接观测到的事实**）。
+**(b) 单独就足以解释全部失败**；因此真正的上游问题是「**谁在 Ctrl-first 时隐藏了面板**」，(a) 在 (b) 成立时是 moot 的 —— 下一棒必须先答 (b)。
+已排除：服务端 ShiftUp 状态机不是隐藏者（`RimeWithWeasel/RimeWithWeasel.cpp:2205-2258` 复核，`ShiftUp` 只在 `kSelectCandidate` / `kToggleAsciiMode` 动作下做事，`:2257 s = ShiftState{}` 无条件复位；而 Ctrl-first 下客户端根本没把 Shift 转发到服务端）。
+未排除：系统「Layout Hotkey = 2」（Ctrl+Shift 切换输入语言）触发切换器导致 TSF 结束 composition —— 本机 `Preload = 1:00000804 / 2:00000409` 确实启用了该热键；本棒 `hkl` **只在变体前后采样**，中间态采到的 `hkl_probe_thread=134481924` 是**探针线程自己的** hkl，对靶线程无意义 ⇒ 瞬态布局切换**未被证伪**（但「R2/R4 同 chord 却成功」这条不对称削弱它）。
+
+### 16.4 作废 §十五 的 H 变体「同 hwnd 因果门」
+
+`chord_probe.py:510-515` 要求「Escape 使面板消失后、重打必须**同一个 hwnd** 再现」才允许下右键。14:52 实测 `gone=True rearm=[214,248,448,297]` 而待点是 `0xEC0D1C@[214,248,541,297]` ⇒ 判 `skipped_panel_not_causal`，H **从未执行**。
+**原因（新认知）**：候选面板是**宿主进程内**由 WeaselTSF 自建的 ATL 窗（类名 `ATL:00007FFB…`，归属靶 pid），每次 composition 结束即 `Dispose`、重开重建 ⇒ **hwnd 必变** ⇒ 「同 hwnd」门永远过不了。
+**新口径**（已写进 `chord_rba.py` 并跑通）：`Escape 使面板消失` + `重新打字后同类名面板再现` ⇒ 面板因果成立，可下右键。
+
+### 16.5 右键线：1.2.0 修复的**装机真机验收 PASS**（本线第一次真机通过）
+
+资产 `.superpowers/sdd/chord_rba.py`（7751 B）+ `run_rba.cmd`（606 B，纯 ASCII，先 `del` 再写，自带 `RUN_START/EXIT=/RUN_END` 标记）。启动方式（实测可用）：
+
+```powershell
+cmd /c "F:\soft\00selfmade\rime_claude\.superpowers\sdd\run_rba.cmd"   # run_in_background=true
+```
+
+结果（`chord_rba_result.json` 2865 B / `chord_rba.log` 974 B / `evidence/rba_run.txt` = `RUN_START 14:59:26.78 / RUN_END 14:59:38.50`）：
+
+- `verdict = "PASS 右键删词成功且宿主存活、无新 WER ⇒ 1.2.0 修复装机真机验收通过"`
+- 面板 `0x90848 rect=[214,248,448,297]`，输入 `de`；因果门 `gone=True rearm=[214,248,448,297]` 同类名再现。
+- 落点 `(240,272)`（候选文字中心，非 §十二 的「左起 26px」粗口径）。
+- **主判据三取齐**：`ignore_changed` 非空（`double_pinyin_sogou.user_ignore.txt` 51 B `96526A0E8C8A0744` → 56 B `4B2C4EFC1930D689`，新增 `得`）**且** `target_alive=true` **且** `wer_new=[]`。
+- `text_after=''`（未误上屏）。
+
+⇒ §十三 里「右键会导致宿主被杀」的现象，在 **1.2.0 + 安装后新起的宿主**上已不复现；根因（`WeaselIPC/Configurator.cpp` `Store` 空指针解引用）与修复（一行空值守卫）+ 单测三阶段有牙验证（§十四）+ 真机 PASS 形成完整闭环。
+
+### 16.6 用户反馈③「hover 不高亮」：**复现**（像素级证据）
+
+同一次 exp4 里在右键前采集三帧全屏截图（`.superpowers/sdd/rba_hover_on_candidate.png` / `rba_cursor_away.png` / `rba_hover_again.png`，2517147 B）：
+
+```
+rba_hover_on_candidate.png 784b4bc9538c1ea0
+rba_cursor_away.png        784b4bc9538c1ea0
+rba_hover_again.png        784b4bc9538c1ea0
+rba_final.png              dcd3d737ecba7241   # 删词后面板消失 ⇒ 不同
+```
+
+三帧**同哈希 ⇒ 像素完全一致**：光标从候选文字中心移到 (40,40) 再指回，面板没有任何重绘。`CopyFromScreen` 不含光标图像本身，所以差异只可能来自候选高亮 —— 没有差异。
+**口径**：这证明「合成光标移动（`SetCursorPos`）下无高亮」；物理鼠标是否走另一条消息路径**未验证**，但该现象与用户描述一致，可判为缺陷复现，交由 spec 层排查 `WeaselUI/WeaselPanel.cpp` 的 mouse-move → highlight 链路。
+
+### 16.7 残留用户数据污染（**必须请用户手工清理**，agent 删不动受保护路径）
+
+`D:/Program Files/fluxing/user1/fluxing/double_pinyin_sogou.user_ignore.txt`（当前 56 B，`4B2C4EFC1930D689`，mtime 14:59:35）内容 = 探针删词记录：
+`策士 / 中过 / 中果 / 的 / 嘚嘚 / 得得得得 / 得`
+**其中 `的` 与 `得` 是超常用字** —— 不删直接影响日常打字（输入 `de` 不再给出「的/得」候选）。清理命令（管理员 PowerShell）：
+
+```powershell
+Copy-Item 'D:\Program Files\fluxing\user1\fluxing\double_pinyin_sogou.user_ignore.txt' "$env:USERPROFILE\Desktop\user_ignore.backup.txt" -Force
+Remove-Item 'D:\Program Files\fluxing\user1\fluxing\double_pinyin_sogou.user_ignore.txt' -Force
+```
+
+删完必须**重新部署**（托盘图标右键 → 重新部署，或退出 WeaselServer 再启动），因为 librime 把 ignore 列表读进了内存，只删文件不重新部署不生效。本棒**没有**代用户写这个文件（避免在服务持有内存态时造成写回冲突）。
+
+### 16.8 下一棒顺序（按序，勿并行）
+
+1. **答 16.3 的 (b)「谁隐藏了面板」**：`Release` 下 `DLOG(INFO)` 可能被 `NDEBUG` 整段编不出（**尚未坐实**）⇒ 改用 `OutputDebugStringA`，配一个 ~40 行的 `DBWIN_BUFFER` / `DBWIN_BUFFER_READY` 共享内存 Python 监听器（无需管理员）。仪表化三处：`KeyEventSink.cpp:58` 进入吞 Shift 分支时、`:90-98` 门口打印 `ctrl_down/shift_down/_shiftSuppressed/number/visible_count`、`CandidateList::Hide()` 的调用栈来源。
+2. 若 (b) 答案是「系统 Ctrl+Shift 布局热键」⇒ 修复方向变成**换 chord**（例如 `Ctrl+Alt+<数字>`）或在 `OnTestKeyDown` 提前识别 chord 并阻止框架走语言切换；若答案是「TSF 自身吞 Shift 的副作用」⇒ 才轮到改判定入参。
+3. **候选一行修复（本棒未提交，机制未坐实）**：`KeyEventSink.cpp:92` 传 `shift_down || _shiftSuppressed`。它**不会**重新引入 spec 094 的上屏问题（只改客户端拦截判定，不改变转发给服务端的内容），且在 (b) 成立时**单独无效**。坐实 (a) 之后再提交，走完整 fix 链（构建 + `TestResponseParser` + CHANGELOG + Conventional Commit `fix(WeaselTSF): …`）。
+4. **请用户做物理按键复测**（注入阴性不可外推）：前提**先完全退出并重开飞书 / MiniMax Code**（两者 11:55 安装前启动，仍持旧 image）。步骤 ① `Ctrl` 先按住 → 再 `Shift` → 再主键盘 `1/2/3`；② `Shift` 先按住 → 再 `Ctrl` → 再 `1/2/3`；记录候选窗是否在按下第二个修饰键时消失、是否切换了输入法语言、是否上屏、用的左还是右 Shift。
+5. spec 099 快捷设置栏那条线**另棒继续，本棒未触碰**。
+
+### 16.9 本棒工具坑（新增）
+
+- 抽 `chord_exp3_result.json` 摘要时对 `variants` **末条 H 记录** `print(v['dwell'])` ⇒ `KeyError: 'dwell'`，脚本 `exit code 1`，但**数据其实已全打出来** —— H 记录字段集与其它变体不同。**判据**：取数前先按 `variant` 名分支或用 `.get()`；非零退出码不必然意味着测量失败，先看已打印内容。
+- `edit` 工具参数名必须 `file_path`（写成 `path` 报 `root: must not have additional properties`）。
+- 后台长时探针**唯一正确读法**：先看 `evidence/*_run.txt` 的 `RUN_START / EXIT= / RUN_END` 三行与时间差，再看日志；`task status=succeeded` 不代表真跑过（本棒 exp3 的 35 s 需要靠时间戳解释，不能靠「比预估短」推断）。
+- 同一份「探针原语」要复用时**另立新脚本**（`chord_rba.py`）而不是在旧脚本上打补丁：`--only=H` 复用旧门必然再次跳过，且同文件多次写是冲突写。
+
+**关联**：§十三（结论收窄）/ §十四（崩溃根因与修复）/ §十五（静态离线探针，其 15.6 复验顺序已被本棒 §16.4 修正）；lessons **L190**（吞修饰键 vs 依赖线程键盘状态的自相矛盾）、**L191**（进程内面板 hwnd 每次 composition 重建 ⇒ 同 hwnd 因果门永不成立）；ADR 0023 / spec 094 / spec 097 / L163。

@@ -14062,3 +14062,37 @@ provider 组合是 `composite:native-macos+rea-artifact-graph+rea-dotnet-static`
 **推广**：凡是「自己写的、要用来下结论」的探针/校验脚本（对应 L17 的「检查必须会咬人」），交付结论前先问第三个问题：**这个脚本自己有没有报过错，而我把它当成了测量仪？** 全表都是同一个值（全 0 / 全失败 / 全相同）是强烈的信号 —— 真实系统极少对整批输入给出完全一致的输出，先怀疑工具，再怀疑被测对象。
 
 **关联**：handoff `docs/archive/handoffs/handoff-2026-11-05-fluxing-candidate-delete-bug.md` §十五；L17（自写检查要有牙）；L08（写完回读断言）；`.claude/rules/codebase-graph.md`（读源码核签名优先于凭记忆）。
+## L190 - **同一个 spec 内自相矛盾：TSF 吞掉 Shift 的转发，却要求「宿主线程键盘状态里 Shift 按下」才允许删词 ⇒ Ctrl-first 手势必然失效**（2026-11-06）
+
+**现象**：用户 2026-11-06 反馈「有候选窗时按 shift+ctrl+数字，候选窗会消失」且删不掉候选词。判别矩阵 exp3（`.superpowers/sdd/chord_exp3.py`，R1–R5）实测：**Shift 先按住再按 Ctrl**（R2/R4）删词成功；**Ctrl 先按住再按 Shift**（R1/R3/R5）一律失败。把每事件间隔从 0.12 s 放慢到 0.60 s（R3，比人手更慢）仍然失败 ⇒ **不是注入时序伪影**；左右 Shift 同败 ⇒ **不是左右键分叉**。
+
+**根因（代码级，`WeaselTSF/KeyEventSink.cpp`）**：`:58-61` `if (ctrl_down) { _shiftSuppressed = TRUE; *pfEaten = TRUE; return; }` —— spec 094 为了「不让服务端 Shift 状态机把 Shift 当成选词键而 `commit_composition`」（spec 077 / ADR 0023）**故意吞掉 Ctrl 已按下时的 Shift down**；而 `:90-98` 的删词门调 `MatchCandidateDeleteShortcut(wParam, ctrl_down, shift_down, true)`，其中 `shift_down` 来自 `:26` `GetKeyboardState(_lpbKeyState)`，**读的正是宿主线程的键盘状态表**，而该表**恰恰依赖刚才那个被吞掉的 Shift keydown**（`include/FluxingCandidateDeleteShortcut.h:31-71` 在 `!ctrl_down || !shift_down` 时直接返回 0）。两个守卫写在同一个 spec 里，前者消灭后者成立的前提。
+**同时还有第二个独立阻断点**：`:94` 传 `_cand->GetVisibleCandidateCount()`，而 `WeaselTSF/CandidateList.h:73-77` 第一句就是 `if (!_ui || !_ui->IsShown()) return 0;` —— exp3 实测**失败变体在数字键时刻面板已消失**（`panel_before_digit=[]`），成功变体全程可见。面板消失 ⇒ `visible_count==0` ⇒ 门单独就足以失败。
+
+**判据 / 处置**：
+
+- **写「吞事件」的守卫前，必须全文搜谁在读该事件的状态**：`grep -n "GetKeyboardState\|shift_down\|_shiftSuppressed"` 一遍即可发现下游门在依赖被吞掉的键态。吞一个输入事件不等于吞掉它的「副作用为零」—— 线程键盘状态、异步键态、上层框架的热键判定都可能是它的副作用。
+- **两个都能独立致失败的阻断点，不许写成「单一根因」**：先用「上游充分性」排序（面板不可见 ⇒ 下游一律不命中），再去坐实谁先短路；否则修好 (a) 依然不生效，会误判成「修了没用」。
+- **顺序敏感缺陷的最小判别矩阵**：`{A先, B先} × {0.12 s, 0.60 s} × {左, 右}`，并把「人类慢时序」当成必测档 —— 本棒正是 R3 一条把「注入太快」这个逃逸出口彻底堵掉。
+- 候选修复 `shift_down || _shiftSuppressed`（`:92`）**只覆盖 (a)**，且因为只改客户端拦截判定、不改变转发给服务端的内容，**不会**重新引入 spec 094 修掉的上屏问题 —— 但在 (b) 未解前单独无效。机制未坐实时**不提交代码修复**，只把候选 patch 写进 handoff。
+
+**推广**：任何「在 A 处吞掉/抑制某个输入事件」+「在 B 处依据该事件的状态做判定」的组合，都是同一条不变量被两处代码互相拆台。加守卫时先问：**我消灭的这个事件，还有谁在通过间接渠道观察它？**
+
+**关联**：handoff `docs/archive/handoffs/handoff-2026-11-05-fluxing-candidate-delete-bug.md` §十六（16.2 / 16.3）；L163（放行链路上的无条件兜底）；L17（检查必须会咬人）；ADR 0023 / spec 094 / spec 097。
+
+## L191 - **进程内自建的候选面板 hwnd 每次 composition 都会重建 ⇒「同一个 hwnd 再现」这种因果门永远过不了；改判同类名 + 同矩形**（2026-11-06）
+
+**现象**：右键验收脚本 `chord_probe.py:510-515` 的因果门要求「Escape 使面板消失后，重新打字必须**同一个 hwnd** 再现」才允许下右键。实测 `gone=True rearm=[214,248,448,297]` 而待点是 `0xEC0D1C@[214,248,541,297]` ⇒ 判 `skipped_panel_not_causal`，**H 变体从未执行过一次**，右键线整整一棒的「真机验收」实际是空跑。
+
+**根因**：候选面板不是独立进程窗口，而是**宿主进程内**由 WeaselTSF 自建的 ATL 窗（类名 `ATL:00007FFB…`，`GetWindowThreadProcessId` 归属靶 pid）。每次 composition 结束时 `Dispose`、下一次重新创建 ⇒ **hwnd 必然变化**。「同 hwnd」这个条件描述的是一个**被测系统根本不会产生的行为**，于是门是恒不成立的，而不是「测试没通过」。
+
+**判据 / 处置**：
+
+- **写因果门之前，先问这个不变量在被测系统里可能成立吗**：把「我以为它的窗口是长命的」换成实测 —— `EnumWindows` 两次采样对比 hwnd 即可（本棒 30 秒就能发现，却白跑了一棒）。
+- **正确口径**：`Escape 使面板消失` + `重打后同类名（`ATL:` 前缀）面板再现` + 矩形落在同一候选区 ⇒ 因果成立。已按此实现 `.superpowers/sdd/chord_rba.py` 并跑通 PASS。
+- **同族陷阱一并记**：装机目录里十余个历史 shim（`weaselx64.0.21.0.5.dll` … `weaselx64.dll.old.tmp`）⇒ **文件时间戳不算证据，必须哈希；哈希只证磁盘，映射要证进程启动时间晚于安装时刻**（`chord_rba.py` 在脚本内自证 `installed_dll` 哈希 + `proc_start(pid)`）。
+- **验收动作必须排在「确认代理/后台任务已到终态」之后**：本轮多次靠 `evidence/*_run.txt` 的 `RUN_START / EXIT= / RUN_END` 三行与时间差判断探针真跑过，而不是靠 `task status=succeeded`。
+
+**推广**：探针的因果门要按被测对象的**真实生命周期**设计。凡是「恒不成立」的门，症状不是 FAIL 而是**永远 skip** —— 看到 `skipped_*` 要当成缺陷去查，不要当成「本次没测到」继续往下走。
+
+**关联**：handoff 同上 §十六（16.4 / 16.5）；L17（自写检查要有牙）；L30（后台产物读到半截）。
