@@ -140,8 +140,9 @@ PanelLayout ComputeLayout(int panel_w_phys, int panel_h_phys) {
   L.btn_size = ScaleRound(QuickPanelDialog::kBtnSize, L.dpr_x);
   L.btn_gap = ScaleRound(QuickPanelDialog::kBtnGap, L.dpr_x);
   L.btn_y_offset = ScaleRound(QuickPanelDialog::kPanelVPadding, L.dpr_y);
-  // brand→btn gap = max(2, 2*dpr),跟 PaintOpaqueContent 保持一致。
-  L.brand_gap = max(2, (int)(2 * L.dpr_x + 0.5f));
+  // v4: brand→btn gap 取 kBrandGap 单一来源(与绘制面一致, AGENTS.md R7)。
+  L.brand_gap = max(QuickPanelDialog::kBrandGap,
+                    (int)(QuickPanelDialog::kBrandGap * L.dpr_x + 0.5f));
   return L;
 }
 
@@ -172,6 +173,8 @@ bool SlotRectForLayout(const PanelLayout& L,
 // 槽位命中区就不可能保持不变(spec 099 P0-4「命中区不变」)。
 // 算法:左界 = 最后一个槽位的右边界 + 间隙;右界 = 内容右界(面板宽 - padding)。
 // 这样在任意 DPI 下都不会压到槽位(把 x 写死成 225 在 150% 会压到槽位 3 上)。
+// Fluxing QuickPanel v4 需求⑥: 竖排状态回显区已删除, 状态改由槽 4/5 键帽承担。
+// v4 几何下槽位行铺满整宽 ⇒ right <= left 恒成立 ⇒ 本函数恒返回 false。
 bool StatusRectForLayout(const PanelLayout& L,
                           int panel_w_phys,
                           int* x,
@@ -396,6 +399,8 @@ QuickPanelDialog::OnClick QuickPanelDialog::s_onSchema;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onUserFolder;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onPhrases;
 QuickPanelDialog::OnToggle QuickPanelDialog::s_onFullwidth;
+// Fluxing QuickPanel v4 需求④: 中英文切换键的回调(Setter 注入)。
+QuickPanelDialog::OnToggle QuickPanelDialog::s_onAscii;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onSymbols;
 QuickPanelDialog::OnClick QuickPanelDialog::s_onLogin;
 // v0.19.0.29:hit==3 走 SetOn* setter 注入 callback。
@@ -403,13 +408,18 @@ QuickPanelDialog::OnClick QuickPanelDialog::s_onLogin;
 // UserDictionary 模块下线。
 QuickPanelDialog::OnShowShortcut QuickPanelDialog::s_onShortcut;
 
-// v0.19.0.29 setter 实现。SetOn* 在 WeaselServerApp::Run() 末尾(after m_server
 // spec 100 / ADR 0038: 品牌图标右键入口。
 QuickPanelDialog::OnBrandRightClick QuickPanelDialog::s_onBrandRightClick;
 bool QuickPanelDialog::s_menuOpen = false;
 
 void QuickPanelDialog::SetOnBrandRightClick(OnBrandRightClick fn) {
   s_onBrandRightClick = fn;
+}
+
+// Fluxing QuickPanel v4 需求④: 中英文切换键的回调注入(Setter 路径)。
+// 与全半角键(Show() 第 5 参)对称; 语义 = 传**目标值**(true = 英文态)。
+void QuickPanelDialog::SetOnAscii(OnToggle fn) {
+  s_onAscii = fn;
 }
 
 // spec 100 / ADR 0038: 品牌图标的物理矩形 —— **单一事实源**。
@@ -439,6 +449,7 @@ bool QuickPanelDialog::BrandRect(int* x, int* y, int* w, int* h) {
   return BrandRectForSize(s_panelW_phys, s_panelH_phys, x, y, w, h);
 }
 
+// v0.19.0.29 setter 实现。SetOn* 在 WeaselServerApp::Run() 末尾(after m_server
 // Start + RegisterPhrasesHotkey,before m_server.Run 进入消息循环)调一次,
 // 跟 m_server 同 lifecycle。
 void QuickPanelDialog::SetOnShortcut(OnShowShortcut fn) {
@@ -549,7 +560,7 @@ HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
   if (targetSize < 1)
     targetSize = 1;  // 保护 0
   hr = scaler->Initialize(frame.Get(), targetSize, targetSize,
-                          WICBitmapInterpolationModeHighQualityCubic);
+                          WICBitmapInterpolationModeFant);  // v4: 缩到 30px 避免黑框发暗
   if (FAILED(hr))
     return hr;
 
@@ -600,6 +611,17 @@ HRESULT QuickPanelDialog::LoadLogoWIC(HWND /*hwnd*/, HBITMAP& hBmpOut) {
     DeleteObject(hbmp);
     return hr;
   }
+  // Fluxing v4 (用户指令⑦: 品牌标志不应有黑色框)。
+  // 素材 fluxing-logo_small 若带不透明深色底, 缩放后会在面板圆角区露一圈黑框。
+  // v4 需求⑦ 诊断记录(实测, 未生效的猜测已删除): 两张候选素材
+  // output/fluxing-logo.png 700x700 与 output/fluxing-logo_small.png 20x20 的
+  // **四角平均 luma 都是 205(亮底)**, alpha 通道分别为 0 与 168~176。
+  // 因此"按深色四角做色键抠底"这类路径对现素材恒不触发, 黑框不是暗底色造成的。
+  // 本函数保留的有效改动只有上面的 Fant 插值: 32bppBGRA + HighQualityCubic 在
+  // α≈170 的半透明边缘环上会产生负向过冲, 截断后即成暗环 —— 这是黑框的现行主因假设。
+  // 剩余两条假设需运行时取证(见 handoff §8): (a) brand 区在 AlphaBlend 之前没有被
+  // 面板底色覆盖; (b) 直通/预乘 alpha 口径与 AC_SRC_ALPHA 不匹配。
+  // 取证通道: 本文件既有的 qp-logo.bmp 调试落盘路径。
 
   hBmpOut = hbmp;
   return S_OK;
@@ -983,6 +1005,7 @@ std::wstring QuickPanelDialog::TooltipText(int slot) {
 //   1 Phrase  → 短语库
 //   2 Settings→ 快捷键设置(走 SetOnShortcut 注入)
 //   3 Account → 关于/账号说明页(此前是死槽)
+//   4 中英文切换(Fluxing v4 需求④) / 5 全半角切换(Fluxing v4 需求③)
 // 返回 true 表示该槽位确实触发了回调。
 bool QuickPanelDialog::DispatchSlotClick(int index) {
   switch (index) {
@@ -1010,6 +1033,29 @@ bool QuickPanelDialog::DispatchSlotClick(int index) {
         return true;
       }
       return false;
+    case 4: {
+      // Fluxing v4 需求④: 中英文切换键。点击瞬间先刷一次快照, 避免落在
+      // 100ms 轮询窗口内时按**陈旧**状态算目标值(那会让按键「点了没反应」)。
+      // 快照来自 provider(只读内存, 显示路径零 I/O, constitution P2)。
+      RefreshInputState();
+      if (!s_onAscii)
+        return false;
+      s_onAscii(!s_inputState.ascii_mode);
+      return true;
+    }
+    case 5: {
+      // Fluxing v4 需求③: 全半角切换键。复用 Show() 注入的既有 s_onFullwidth
+      // (不新增回调 ⇒ Show() 签名与所有调用点不变)。
+      RefreshInputState();
+      if (!s_onFullwidth)
+        return false;
+      const bool target = !s_inputState.fullwidth;
+      // 只更新公开访问器的镜像; **不**乐观改 s_inputState —— 轮询器会拿
+      // provider 的真值比对后重绘(乐观改会让「无变化 ⇒ 不重绘」吃掉刷新)。
+      s_fullwidth = target;
+      s_onFullwidth(target);
+      return true;
+    }
     default:
       return false;
   }
@@ -1165,18 +1211,6 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
       }
       return 0;
     }
-    case WM_MOUSEMOVE: {
-      if (s_dragging) {
-        // L178-fix: 取不到真实光标就无法算位移(否则窗口会瞬移)。
-        POINT cur = {0, 0};
-        if (!GetCursorPos(&cur))
-          return 0;
-        int dx = cur.x - s_dragStartCursor.x;
-        int dy = cur.y - s_dragStartCursor.y;
-        SetWindowPos(hwnd, NULL, s_dragStartWindow.left + dx,
-                     s_dragStartWindow.top + dy, 0, 0,
-                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-      } else {
     // spec 100 / ADR 0038: 品牌图标右键 ⇒ 弹出与托盘**同一份**菜单。
     // 面板只做命中 + 转发屏幕坐标;菜单本身由 WeaselServer 弹出
     // (CSystemTray::ShowPopupMenuAt),所以菜单资源/命令路由/勾选态
@@ -1197,6 +1231,18 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
       }
       return 0;
     }
+    case WM_MOUSEMOVE: {
+      if (s_dragging) {
+        // L178-fix: 取不到真实光标就无法算位移(否则窗口会瞬移)。
+        POINT cur = {0, 0};
+        if (!GetCursorPos(&cur))
+          return 0;
+        int dx = cur.x - s_dragStartCursor.x;
+        int dy = cur.y - s_dragStartCursor.y;
+        SetWindowPos(hwnd, NULL, s_dragStartWindow.left + dx,
+                     s_dragStartWindow.top + dy, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+      } else {
         // L87-fix 替代 v0.19.0.14 L84 polling timer 的 WM_MOUSEMOVE 路径
         // (L86 仍保留 polling timer,这里双保险)
         POINT p = {LOWORD(l), HIWORD(l)};
@@ -1656,7 +1702,7 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // 物理 px)。 现在 kBtnGap 改 4,buttons 之间有足够间距,起始 gap 不用再大。减到
   // 2 px 让 brand→btns 间距合理,btn4 右边距 +2 px (panelW=252
   // 5*37+4*4=201+44+5=250 < 252)
-  int buttonStartX = pad + s_brandSize_phys + max(2, (int)(2 * s_dpr_x + 0.5f));
+  int buttonStartX = pad + s_brandSize_phys + max(QuickPanelDialog::kBrandGap, (int)(QuickPanelDialog::kBrandGap * s_dpr_x + 0.5f));
   // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons (UserDict 槽位删除)
   for (int i = 0; i < kButtonCount; i++) {
     int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
@@ -1782,38 +1828,37 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
       case 3:
         DrawIconAccount(hdc, iconX, iconY, penRgb);
         break;  // was hit==4 in v0.19.0.61
+      case 4:
+      case 5: {
+        // Fluxing v4 需求③⑤: 全半角 / 中英文两个**文字键**。
+        // 键帽上直接画当前态单字(「中」/「英」, 「全」/「半」), 取代 v4 之前
+        // 面板右侧的竖排文字回显(需求⑥)。复用 s_hFontStatus(YaHei 粗体),
+        // 不新增 GDI 字体资源。
+        if (!s_hFontStatus)
+          break;
+        const wchar_t* label =
+            (i == 4)
+                ? fluxing::panel_status::AsciiModeText(s_inputState.ascii_mode)
+                : fluxing::panel_status::ShapeModeText(s_inputState.fullwidth);
+        HGDIOBJ oldFont = SelectObject(hdc, s_hFontStatus);
+        const int oldBk = SetBkMode(hdc, TRANSPARENT);
+        const COLORREF oldColor = SetTextColor(hdc, penRgb);
+        RECT tr = {x0, y0, x0 + s_btnSize_phys, y0 + s_btnSize_phys};
+        DrawTextW(hdc, label, -1, &tr,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SetTextColor(hdc, oldColor);
+        SetBkMode(hdc, oldBk);
+        SelectObject(hdc, oldFont);
+        break;
+      }
     }
     SelectObject(hdc, oldPen);
   }
 
-  // spec 099 P0-4: 当前输入状态回显(中/英 + 全/半角)。
-  // 竖排两字:上 = 中/英,下 = 全/半。画在**槽位区之外**的右侧状态区
-  // (状态区左界由最后一个槽位的右边界推导 ⇒ 与全部槽位不相交,
-  //  守 spec 099 P0-4「命中区不变」)。
-  {
-    int sx = 0, sy = 0, sw = 0, sh = 0;
-    if (StatusRect(&sx, &sy, &sw, &sh) && s_hFontStatus) {
-      const int char_h =
-          ScaleRound(fluxing::panel_status::kStatusCharHeight, s_dpr_y);
-      const int char_gap =
-          ScaleRound(fluxing::panel_status::kStatusCharGap, s_dpr_y);
-      const int total_h = 2 * char_h + char_gap;
-      const int top = sy + (sh - total_h) / 2;
-      const wchar_t* texts[2] = {
-          fluxing::panel_status::AsciiModeText(s_inputState.ascii_mode),
-          fluxing::panel_status::ShapeModeText(s_inputState.fullwidth)};
-      HGDIOBJ oldFont = SelectObject(hdc, s_hFontStatus);
-      SetBkMode(hdc, TRANSPARENT);
-      SetTextColor(hdc, kIcoDimC);
-      for (int i = 0; i < 2; ++i) {
-        const int ty = top + i * (char_h + char_gap);
-        RECT r = {sx, ty, sx + sw, ty + char_h};
-        DrawTextW(hdc, texts[i], -1, &r,
-                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-      }
-      SelectObject(hdc, oldFont);
-    }
-  }
+  // Fluxing v4 (用户指令⑥): 取消右侧竖排「中/英 · 全/半」文字回显 ——
+  // 该回显是面板宽度 245 的主要占用者; 状态显示改由槽位键帽直接承担
+  // (槽 4 中英文键 + 槽 5 全半角键, 见上方 switch(i) 的 case 4/5)。
+  // StatusRect 定义保留(恒返回 false), 命中区语义不变。
 }
 
 // ApplyAlphaGradient: v0.19.0.10 新增 per-pixel alpha pipeline。
@@ -2174,6 +2219,9 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   s_fullwidth = currentFullwidth;
   s_inputState.fullwidth = currentFullwidth;
   s_inputState.always_show = AlwaysShowMode();
+  // Fluxing v4 需求④⑤: 面板一出现就要显示**当前**中英/全半角态 ⇒ 立即拉
+  // 一次快照(provider 只读内存, 零 I/O), 否则首帧最多 100ms 显示的是旧态。
+  RefreshInputState();
   // spec 099 P0-5: 面板重新显示 ⇒ 键盘状态复位(焦点槽位清空、退出键盘交互态)。
   ResetKeyboardState();
   // spec 084 / ADR 0013 D3: 长显态以 85% 系数起步,再由 100ms 轮询器按

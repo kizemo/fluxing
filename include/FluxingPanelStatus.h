@@ -39,9 +39,10 @@ struct PanelState {
 };
 
 // 状态区几何(logical 像素)。
-// 两个状态字符的字高与行间距(竖排两字:上=中/英,下=全/半)。
-constexpr int kStatusCharHeight = 12;
-constexpr int kStatusCharGap = 3;
+// Fluxing QuickPanel v4 需求⑥: 右侧竖排状态回显区已删除 —— 状态改由
+// 槽 4 / 槽 5 的**键帽单字**承担 ⇒ kStatusCharHeight 的语义从「竖排字高」
+// 变成「键帽标签字高」(竖排行间距常量 kStatusCharGap 随竖排区一并删除)。
+constexpr int kStatusCharHeight = 16;
 // 状态区与最后一个槽位之间的间隙(logical)。必须 >= 1,否则状态像素会
 // 贴住槽位边框(命中区不变的前提)。
 constexpr int kStatusGap = 1;

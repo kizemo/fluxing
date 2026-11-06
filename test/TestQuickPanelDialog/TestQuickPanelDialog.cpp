@@ -307,7 +307,7 @@ int main() {
   // T17–T19(spec 092): 现行面板结构锚点。
   //   v3-rev3 整体重写后的现行生产契约:
   //   - 窗口类名固定 FluxingQuickPanel_v3;
-  //   - 面板是 WS_POPUP 自绘顶层窗,零子控件(4 个按钮全部 GDI 直绘);
+  //   - 面板是 WS_POPUP 自绘顶层窗,零子控件(6 个按钮全部 GDI 直绘);
   //   - Hide() 只 KillTimer + ShowWindow(SW_HIDE),**不销毁**窗口;
   //     再次 Show() 复用同一个 HWND(不重建)。
   //   这三条此前只活在"老 spec 038 断言"的注释里,没有任何测试钉住 ——
@@ -324,7 +324,7 @@ int main() {
           "T17b: 窗口类名 == FluxingQuickPanel_v3");
 
     Check(CountAllDescendants(panel) == 0,
-          "T18a: 面板零子控件(4 按钮 GDI 直绘,不是子窗口)");
+          "T18a: 面板零子控件(6 按钮 GDI 直绘,不是子窗口)");
 
     QuickPanelDialog::Hide();
     Check(IsWindow(panel), "T19a: Hide() 后窗口句柄仍有效(未销毁)");
@@ -438,10 +438,11 @@ int main() {
   //   槽 1 Phrase  → 短语库(既有)
   //   槽 2 Settings→ 快捷键设置(既有,走 SetOnShortcut)
   //   槽 3 Account → 关于/账号说明页(此前是死槽)
+  //   槽 4 中英文切换 / 槽 5 全半角切换 (Fluxing v4 需求③④⑤)
   //
   // 判别性:改生产代码之前槽 0/3 的回调触发次数恒为 0 ⇒ T20g/T20j 必红。
   // ----------------------------------------------------------------
-  std::printf("\n[spec 099 P0-3] 4 槽点击路由\n");
+  std::printf("\n[spec 099 P0-3] 6 槽点击路由\n");
   {
     int n_schema = 0, n_phrases = 0, n_shortcut = 0, n_login = 0, n_userfolder = 0;
     QuickPanelDialog::SetOnShortcut([&n_shortcut]() { ++n_shortcut; });
@@ -461,13 +462,13 @@ int main() {
     // 判别性:槽位中心点必须被 HitTest 判为该槽位(HitTest 与 SlotRect 同源,
     // 复制布局公式才是漂移的来源)。
     bool hit_ok = true;
-    for (int idx = 0; idx < 4; ++idx) {
+    for (int idx = 0; idx < QuickPanelDialog::kButtonCount; ++idx) {
       int sx = 0, sy = 0, sw = 0, sh = 0;
       QuickPanelDialog::SlotRect(idx, &sx, &sy, &sw, &sh);
       if (QuickPanelDialog::HitTest(sx + sw / 2, sy + sh / 2) != idx)
         hit_ok = false;
     }
-    Check(hit_ok, "T20p: 四个槽位中心点都被 HitTest 判为对应槽位");
+    Check(hit_ok, "T20p: 全部槽位中心点都被 HitTest 判为对应槽位");
 
     // 合成点击的**确定性**:面板的「拖拽 vs 点击」判定读的是**真实光标位置**
     // (WM_LBUTTONUP 里 GetCursorPos,阈值 4 物理像素 —— 见
@@ -537,8 +538,31 @@ int main() {
     int bx = 0, by = 0, bw = 0, bh = 0;
     Check(!QuickPanelDialog::SlotRect(-1, &bx, &by, &bw, &bh),
           "T20l: 槽位索引 -1 无效");
-    Check(!QuickPanelDialog::SlotRect(4, &bx, &by, &bw, &bh),
-          "T20m: 槽位索引 4(kButtonCount=4)无效");
+    Check(!QuickPanelDialog::SlotRect(QuickPanelDialog::kButtonCount, &bx, &by,
+                                       &bw, &bh),
+          "T20m: 槽位索引 == kButtonCount 无效");
+
+    // Fluxing v4 需求③④⑤: 槽 4(中英文切换)/ 槽 5(全半角切换) 必须真的可点、
+    // 且回调收到的是**目标值**而不是「翻转」标记。
+    {
+      int n_ascii = 0;
+      int n_full = 0;
+      bool ascii_target = false;
+      const bool expect_target =
+          !QuickPanelDialog::CurrentInputState().ascii_mode;
+      QuickPanelDialog::SetOnAscii([&n_ascii, &ascii_target](bool v) {
+        ++n_ascii;
+        ascii_target = v;
+      });
+      QuickPanelDialog::Show(false, nullptr, nullptr, nullptr,
+                             [&n_full](bool) { ++n_full; }, nullptr, nullptr);
+      Check(click_slot(4, n_ascii), "T20n: 槽 4 (中英文) 矩形可解析");
+      Check(n_ascii == 1 && ascii_target == expect_target,
+            "T20n2: 槽 4 点击 → 中英文回调恰好 1 次且收到目标值");
+      Check(click_slot(5, n_full), "T20p2: 槽 5 (全半角) 矩形可解析");
+      Check(n_full == 1, "T20p3: 槽 5 点击 → 全半角回调恰好 1 次");
+      QuickPanelDialog::SetOnAscii(nullptr);
+    }
     // 复位注入的回调,避免悬垂引用影响后续用例。
     QuickPanelDialog::SetOnShortcut([]() {});
     QuickPanelDialog::Hide();
@@ -736,8 +760,8 @@ int main() {
     std::vector<pp::Rect> areas;
     areas.push_back(pp::Rect{0, 0, 1920, 1040});     // 主屏
     areas.push_back(pp::Rect{-1920, 0, -1, 1000});  // 左侧副屏(负坐标)
-    const int W = 245;
-    const int H = 48;
+    const int W = QuickPanelDialog::kPanelW;
+    const int H = QuickPanelDialog::kPanelH;
     {
       pp::Point p = pp::ClampToVisibleArea(1600, 900, W, H, areas);
       Check(p.x == 1600 && p.y == 900,
@@ -783,7 +807,7 @@ int main() {
     }
     {
       std::vector<pp::Rect> tiny;
-      tiny.push_back(pp::Rect{0, 0, 100, 50});  // 容不下 245x48
+      tiny.push_back(pp::Rect{0, 0, 100, 50});  // 容不下整块面板
       pp::Point p = pp::ClampToVisibleArea(10, 10, W, H, tiny);
       Check(p.x == 0 && p.y == 0, "T24w: 工作区容不下面板 ⇒ (0,0)");
     }
@@ -795,8 +819,8 @@ int main() {
     //   T24w6 是边界判别 —— 「边缘相接」不算可见,用 >= / <= 实现的版本在此翻绿;
     //   T24w7 是未初始化矩形(建窗前 GetWindowRect 拿到 0 宽)不得被判可见。
     {
-      const int PW = 245;
-      const int PH = 48;
+      const int PW = QuickPanelDialog::kPanelW;
+      const int PH = QuickPanelDialog::kPanelH;
       Check(pp::RectIntersectsVisibleArea(1600, 900, PW, PH, areas),
             "T24w2: 完整落在主屏工作区内 ⇒ 相交");
       Check(pp::RectIntersectsVisibleArea(-1500, 500, PW, PH, areas),
@@ -846,7 +870,7 @@ int main() {
 
   // ----------------------------------------------------------------
   // T25 (spec 099 P0-6): DPI 缩放与物理布局。
-  //   核心判据:150% ⇒ 368×72。
+  //   核心判据:150% ⇒ 359×54。
   //   测试直接调 fluxing::panel_dpi::* 与 QuickPanelDialog::SlotRectForSize /
   //   StatusRectForSize(与生产**同一份**公式),不复制任何布局算式(R7)。
   // ----------------------------------------------------------------
@@ -856,38 +880,48 @@ int main() {
     using fluxing::panel_dpi::ScaleLogicalByDpi;
 
     int w = 0, h = 0;
-    PanelPhysicalSize(245, 48, 96, 96, &w, &h);
-    Check(w == 245 && h == 48, "T25a: 100% ⇒ 245×48");
+    PanelPhysicalSize(QuickPanelDialog::kPanelW, QuickPanelDialog::kPanelH, 96,
+                      96, &w, &h);
+    Check(w == 239 && h == 36, "T25a: 100% ⇒ 239×36");
 
-    PanelPhysicalSize(245, 48, 144, 144, &w, &h);
-    Check(w == 368 && h == 72, "T25b: 150% ⇒ 368×72(P0-6 核心判据)");
+    PanelPhysicalSize(QuickPanelDialog::kPanelW, QuickPanelDialog::kPanelH, 144,
+                      144, &w, &h);
+    Check(w == 359 && h == 54, "T25b: 150% ⇒ 359×54(P0-6 核心判据)");
 
-    PanelPhysicalSize(245, 48, 192, 192, &w, &h);
-    Check(w == 490 && h == 96, "T25c: 200% ⇒ 490×96");
+    PanelPhysicalSize(QuickPanelDialog::kPanelW, QuickPanelDialog::kPanelH, 192,
+                      192, &w, &h);
+    Check(w == 478 && h == 72, "T25c: 200% ⇒ 478×72");
 
     // dpi <= 0 ⇒ 退化到 96(=100%),不塌成 0。
-    Check(ScaleLogicalByDpi(245, 0) == 245 &&
-              ScaleLogicalByDpi(245, -1) == 245,
+    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 0) ==
+                  QuickPanelDialog::kPanelW &&
+              ScaleLogicalByDpi(QuickPanelDialog::kPanelW, -1) ==
+                  QuickPanelDialog::kPanelW,
           "T25d: dpi<=0 退化到 96(=100%)");
-    Check(ScaleLogicalByDpi(48, 0) == 48,
+    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelH, 0) ==
+              QuickPanelDialog::kPanelH,
           "T25e: dpi<=0 时高度同样退化");
     Check(ScaleLogicalByDpi(0, 144) == 0,
           "T25f: logical=0 ⇒ 0(不产生负数)");
 
     // 就近舍入(.5 向上)—— 变异点:改成整除(367 / 72→72)会红。
-    Check(ScaleLogicalByDpi(245, 144) == 368,
-          "T25g: 245@144% 就近舍入 = 368(截断成 367 会红)");
-    Check(ScaleLogicalByDpi(48, 144) == 72, "T25h: 48@144% = 72");
-    Check(ScaleLogicalByDpi(245, 192) == 490, "T25i: 245@200% = 490");
-    Check(ScaleLogicalByDpi(48, 192) == 96, "T25j: 48@200% = 96");
+    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 144) == 359,
+          "T25g: 239@144% 就近舍入 = 359(截断成 358 会红)");
+    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelH, 144) == 54,
+          "T25h: 36@144% = 54");
+    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 192) == 478,
+          "T25i: 239@200% = 478");
+    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelH, 192) == 72,
+          "T25j: 36@200% = 72");
 
-    // 三档 DPI 下:4 个槽位都在面板内、互不重叠(命中区保持可分)。
+    // 三档 DPI 下:全部槽位都在面板内、互不重叠(命中区保持可分)。
     const int dpi_list[3] = {96, 144, 192};
     for (int k = 0; k < 3; ++k) {
-      PanelPhysicalSize(245, 48, dpi_list[k], dpi_list[k], &w, &h);
+      PanelPhysicalSize(QuickPanelDialog::kPanelW, QuickPanelDialog::kPanelH,
+                        dpi_list[k], dpi_list[k], &w, &h);
       bool ok = true;
       int prev_right = -1;
-      for (int i = 0; i < 4; ++i) {
+      for (int i = 0; i < QuickPanelDialog::kButtonCount; ++i) {
         int sx = 0, sy = 0, sw = 0, sh = 0;
         if (!QuickPanelDialog::SlotRectForSize(w, h, i, &sx, &sy, &sw, &sh)) {
           ok = false;
@@ -901,57 +935,74 @@ int main() {
       }
       const std::string lbl = "T25k" + std::to_string(k) + ": " +
                               std::to_string(dpi_list[k]) +
-                              "% 下 4 槽位都在面板内且互不重叠";
+                              "% 下 6 槽位都在面板内且互不重叠";
       Check(ok, lbl.c_str());
     }
   }
 
   // ----------------------------------------------------------------
-  // T26 (spec 099 P0-4): 状态区几何 + 文字映射。
-  //   状态区必须与全部槽位**不相交** —— 否则状态像素压到槽位上,
-  //   槽位命中区就不可能保持不变(spec 099 P0-4「命中区不变」)。
+  // T26 (spec 099 P0-4 → QuickPanel v4): 面板几何 + 状态文字映射。
+  //   v4 需求⑥ 已删除右侧竖排状态回显, 状态改由槽 4/5 键帽单字显示。
+  //   新几何 kPanelPadding + kBrandSize + kBrandGap
+  //     + kButtonCount * kBtnSize + (kButtonCount-1) * kBtnGap + kPanelPadding
+  //     = kPanelW 精确闭合 ⇒ 状态区在任意 DPI 下都推演不出矩形
+  //   (StatusRectForSize 返回 false), 状态像素因此不可能压到槽位上。
   // ----------------------------------------------------------------
-  std::printf("\n[spec 099 P0-4] 状态区几何与文字映射\n");
+  std::printf("\n[spec 099 P0-4] 面板几何与状态文字映射\n");
   {
     const int dpi_list[3] = {96, 144, 192};
+    // T26a: v4 不再保留状态回显区 —— 100/150/200% 都必须推演不出矩形。
+    bool status_area_gone = true;
     for (int k = 0; k < 3; ++k) {
       int w = 0, h = 0;
-      fluxing::panel_dpi::PanelPhysicalSize(245, 48, dpi_list[k], dpi_list[k],
-                                             &w, &h);
+      fluxing::panel_dpi::PanelPhysicalSize(QuickPanelDialog::kPanelW,
+                                            QuickPanelDialog::kPanelH,
+                                            dpi_list[k], dpi_list[k], &w, &h);
       int sx = 0, sy = 0, sw = 0, sh = 0;
-      if (!QuickPanelDialog::StatusRectForSize(w, h, &sx, &sy, &sw, &sh)) {
-        Check(false, "T26a: 状态区矩形可推演");
-        continue;
-      }
-      const bool inside = (sw > 0 && sh > 0 && sx >= 0 && sy >= 0 &&
-                           sx + sw <= w && sy + sh <= h);
-      bool disjoint = true;
-      int last_right = -1;
-      for (int i = 0; i < 4; ++i) {
-        int bx = 0, by = 0, bw = 0, bh = 0;
-        if (!QuickPanelDialog::SlotRectForSize(w, h, i, &bx, &by, &bw, &bh)) {
-          disjoint = false;
-          break;
+      if (QuickPanelDialog::StatusRectForSize(w, h, &sx, &sy, &sw, &sh))
+        status_area_gone = false;
+    }
+    Check(status_area_gone, "T26a: v4 面板不再保留状态回显区(100/150/200%)");
+
+    // T26b: 100% 下 brand + 槽位行 + 左右 padding 必须精确铺满 kPanelW,
+    //       且末槽不得越界(几何单一事实源, 本测试不复制布局公式 —— R7)。
+    {
+      int w = 0, h = 0;
+      fluxing::panel_dpi::PanelPhysicalSize(QuickPanelDialog::kPanelW,
+                                            QuickPanelDialog::kPanelH,
+                                            96, 96, &w, &h);
+      int bx = 0, by = 0, bw = 0, bh = 0;
+      const bool tail = QuickPanelDialog::SlotRectForSize(
+          w, h, QuickPanelDialog::kButtonCount - 1, &bx, &by, &bw, &bh);
+      const bool fits = tail && by >= 0 && bx >= 0 && bx + bw <= w &&
+                        bx + bw + QuickPanelDialog::kPanelPadding == w &&
+                        w == QuickPanelDialog::kPanelW;
+      Check(fits, "T26b: 100% 下槽位行与左右 padding 精确铺满 kPanelW");
+    }
+
+    // T26c: 三档 DPI 下全部槽位都在面板内且互不重叠(命中区不变)。
+    {
+      bool slots_ok = true;
+      for (int k = 0; k < 3; ++k) {
+        int w = 0, h = 0;
+        fluxing::panel_dpi::PanelPhysicalSize(QuickPanelDialog::kPanelW,
+                                              QuickPanelDialog::kPanelH,
+                                              dpi_list[k], dpi_list[k], &w, &h);
+        int prev_right = -1;
+        for (int i = 0; i < QuickPanelDialog::kButtonCount; ++i) {
+          int bx = 0, by = 0, bw = 0, bh = 0;
+          if (!QuickPanelDialog::SlotRectForSize(w, h, i, &bx, &by, &bw, &bh)) {
+            slots_ok = false;
+            break;
+          }
+          if (bx < 0 || by < 0 || bx + bw > w || by + bh > h)
+            slots_ok = false;
+          if (prev_right >= 0 && bx < prev_right)
+            slots_ok = false;
+          prev_right = bx + bw;
         }
-        if (bx + bw > last_right)
-          last_right = bx + bw;
-        const bool no_x = (sx + sw <= bx) || (bx + bw <= sx);
-        const bool no_y = (sy + sh <= by) || (by + bh <= sy);
-        if (!(no_x || no_y))
-          disjoint = false;
       }
-      const std::string l1 = "T26b" + std::to_string(k) + ": " +
-                             std::to_string(dpi_list[k]) +
-                             "% 下状态区完整落在面板内";
-      const std::string l2 = "T26c" + std::to_string(k) + ": " +
-                             std::to_string(dpi_list[k]) +
-                             "% 下状态区与 4 个槽位两两不相交";
-      const std::string l3 = "T26d" + std::to_string(k) + ": " +
-                             std::to_string(dpi_list[k]) +
-                             "% 下状态区左界 > 最后一个槽位右界";
-      Check(inside, l1.c_str());
-      Check(disjoint, l2.c_str());
-      Check(sx > last_right, l3.c_str());
+      Check(slots_ok, "T26c: 100/150/200% 下全部槽位在面板内且互不重叠");
     }
 
     // 文字映射(用户可见,简体中文 —— constitution P5)。
@@ -977,23 +1028,6 @@ int main() {
           "T26j: 状态快照映射出「英」「全」");
     QuickPanelDialog::SetInputState(false, false);
   }
-
-  // ----------------------------------------------------------------
-  // T27 (spec 099 P0-5): 键盘可达性状态机(纯逻辑)。
-  //   Esc 语义调和:未交互 ⇒ 只吞掉(ADR 0019 D2);已交互 ⇒ 收起面板
-  //   自身、不触碰其他窗口(D0032)。
-  // ----------------------------------------------------------------
-  std::printf("\n[spec 099 P0-5] 键盘可达性状态机(纯逻辑)\n");
-  {
-    using namespace fluxing::panel_keyboard;
-    State st;
-    st.slot_count = 4;
-    st.focused = -1;
-    st.interactive = false;
-
-    Check(HandleKey(st, vk::kReturn, false) == Action::kSwallow,
-          "T27a: 无焦点槽位时 Enter 只吞掉(不误触发槽 0)");
-    Check(st.focused == -1, "T27b: 无焦点槽位时 Enter 不产生焦点");
 
   // ----------------------------------------------------------------
   // T30 (spec 100 / ADR 0038): 品牌图标右键命中区。
@@ -1042,13 +1076,31 @@ int main() {
           "T30g: 非法尺寸(-1×-1)返回 false");
   }
 
+  // ----------------------------------------------------------------
+  // T27 (spec 099 P0-5): 键盘可达性状态机(纯逻辑)。
+  //   Esc 语义调和:未交互 ⇒ 只吞掉(ADR 0019 D2);已交互 ⇒ 收起面板
+  //   自身、不触碰其他窗口(D0032)。
+  // ----------------------------------------------------------------
+  std::printf("\n[spec 099 P0-5] 键盘可达性状态机(纯逻辑)\n");
+  {
+    using namespace fluxing::panel_keyboard;
+    State st;
+    st.slot_count = QuickPanelDialog::kButtonCount;
+    st.focused = -1;
+    st.interactive = false;
+
+    Check(HandleKey(st, vk::kReturn, false) == Action::kSwallow,
+          "T27a: 无焦点槽位时 Enter 只吞掉(不误触发槽 0)");
+    Check(st.focused == -1, "T27b: 无焦点槽位时 Enter 不产生焦点");
+
     Check(HandleKey(st, vk::kTab, false) == Action::kMoveFocus, "T27c: Tab 移焦");
     Check(st.focused == 0, "T27d: Tab 后焦点 = 槽 0");
     Check(st.interactive, "T27e: Tab 后进入键盘交互态");
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < QuickPanelDialog::kButtonCount; ++i)
       HandleKey(st, vk::kTab, false);
-    Check(st.focused == 0, "T27f: 连按 4 次 Tab 绕回槽 0(4 槽循环)");
+    Check(st.focused == 0,
+          "T27f: 连按 6 次 Tab 绕回槽 0(6 槽循环)");
 
     HandleKey(st, vk::kTab, false);
     Check(st.focused == 1, "T27g: Tab 前进一步 ⇒ 槽 1");
@@ -1056,12 +1108,12 @@ int main() {
     Check(st.focused == 0, "T27h: Shift+Tab 后退一步 ⇒ 槽 0");
 
     HandleKey(st, vk::kLeft, false);
-    Check(st.focused == 3, "T27i: ← 从槽 0 回绕到槽 3");
+    Check(st.focused == 5, "T27i: ← 从槽 0 回绕到槽 5");
     HandleKey(st, vk::kRight, false);
     Check(st.focused == 0, "T27j: → 从槽 3 回到槽 0");
 
     HandleKey(st, vk::kEnd, false);
-    Check(st.focused == 3, "T27k: End ⇒ 末槽");
+    Check(st.focused == 5, "T27k: End ⇒ 末槽");
     HandleKey(st, vk::kHome, false);
     Check(st.focused == 0, "T27l: Home ⇒ 首槽");
 
@@ -1071,7 +1123,7 @@ int main() {
           "T27n: Space 激活焦点槽");
 
     State fresh;
-    fresh.slot_count = 4;
+    fresh.slot_count = QuickPanelDialog::kButtonCount;
     fresh.focused = -1;
     fresh.interactive = false;
     Check(HandleKey(fresh, vk::kEscape, false) == Action::kSwallow,
@@ -1112,22 +1164,38 @@ int main() {
     Check(wcscmp(SlotName(2), L"快捷键设置") == 0, "T28c: 槽 2 名称 = 快捷键设置");
     Check(wcscmp(SlotName(3), L"关于 / 账号说明") == 0,
           "T28d: 槽 3 名称 = 关于 / 账号说明");
-    Check(SlotName(4)[0] == L'\0', "T28e: 越界槽名 = 空串");
+    // v4 stage2: 槽 4/5 = 中英文切换 / 全半角切换;槽 6 才是越界。
+    Check(wcscmp(SlotName(4), L"中英文切换") == 0,
+          "T28e: 槽 4 名称 = 中英文切换");
+    Check(wcscmp(SlotName(5), L"全半角切换") == 0,
+          "T28e2: 槽 5 名称 = 全半角切换");
+    Check(SlotName(6)[0] == L'\0', "T28e3: 越界槽名 = 空串");
 
     Check(BuildTooltip(0, st) == L"切换到下一个输入方案 · 当前:小狼毫",
           "T28f: 槽 0 tooltip = 名称 + 当前方案名");
-    Check(BuildTooltip(1, st) == L"用户短语 · 当前输入:中",
-          "T28g: 槽 1 tooltip = 名称 + 当前输入态");
+    // v4 stage2: 槽 1 语义改为「用户短语」⇒ 无当前态(中英态迁到槽 4)。
+    Check(BuildTooltip(1, st) == L"用户短语",
+          "T28g: 槽 1 tooltip = 仅名称(无当前态)");
     Check(BuildTooltip(2, st) == L"快捷键设置 · 常驻显示:开",
           "T28h: 槽 2 tooltip = 名称 + 常驻显示态");
     Check(BuildTooltip(3, st) == L"关于 / 账号说明 · 版本:1.1.9.0",
           "T28i: 槽 3 tooltip = 名称 + 版本号");
+    // v4 stage2: 槽 4/5 tooltip 承载中英 / 全半角当前态(需求⑤)。
+    Check(BuildTooltip(4, st) == L"中英文切换 · 当前:中",
+          "T28i2: 槽 4 tooltip = 中英文切换 + 当前态");
+    Check(BuildTooltip(5, st) == L"全半角切换 · 当前:全",
+          "T28i3: 槽 5 tooltip = 全半角切换 + 当前态");
     Check(BuildTooltip(9, st).empty(), "T28j: 越界槽 tooltip = 空串");
 
     fluxing::panel_status::PanelState en = st;
     en.ascii_mode = true;
-    Check(BuildTooltip(1, en) == L"用户短语 · 当前输入:英",
+    Check(BuildTooltip(4, en) == L"中英文切换 · 当前:英",
           "T28k: 英文态 tooltip 显示「英」");
+
+    fluxing::panel_status::PanelState half = st;
+    half.fullwidth = false;
+    Check(BuildTooltip(5, half) == L"全半角切换 · 当前:半",
+          "T28k2: 半角态 tooltip 显示「半」");
 
     fluxing::panel_status::PanelState unk = st;
     unk.schema_name.clear();
@@ -1136,7 +1204,8 @@ int main() {
 
     // 生产通道:TooltipText 必须与纯逻辑同源。
     QuickPanelDialog::SetInputState(false, false);
-    Check(QuickPanelDialog::TooltipText(1) == L"用户短语 · 当前输入:中",
+    // v4 stage2: 槽 1 无当前态 ⇒ tooltip 仅名称。
+    Check(QuickPanelDialog::TooltipText(1) == L"用户短语",
           "T28m: 生产 TooltipText(1) 与纯逻辑一致");
     const std::wstring expect2 =
         std::wstring(L"快捷键设置 · 常驻显示:") +
@@ -1145,6 +1214,11 @@ int main() {
           "T28n: 生产 TooltipText(2) 跟随唯一真相源 AlwaysShowMode()");
     Check(QuickPanelDialog::TooltipText(0) == L"切换到下一个输入方案 · 当前:未知",
           "T28o: 无 provider 时槽 0 tooltip 兜底「未知」");
+    // v4 stage2: 生产通道的槽 4/5 也必须回显当前态(需求⑤)。
+    Check(QuickPanelDialog::TooltipText(4) == L"中英文切换 · 当前:中",
+          "T28o2: 生产 TooltipText(4) 回显中英态");
+    Check(QuickPanelDialog::TooltipText(5) == L"全半角切换 · 当前:半",
+          "T28o3: 生产 TooltipText(5) 回显全半角态");
   }
 
   // ----------------------------------------------------------------

@@ -60,14 +60,19 @@ class QuickPanelDialog {
   //                鼠标移上去渐变到 100%,且屏蔽全部自动隐藏路径。
   enum class Mode { kHidden, kAlwaysShow };
 
-  // v0.19.0.29(spec 070 T007 follow-up + mockups-v0.19.0.28 设计稿):
-  // 5 按钮中 0/4 仍 no-op (历史 placeholder,follow-up spec 加 ASCII mode toggle
-  // / 登录);1 Phrase / 3 Shortcut (NEW)。
+  // Fluxing QuickPanel v4 (2026-11-06 用户指令③④⑤): 面板从 4 槽扩为 6 槽。
+  //   0 切换到下一个输入方案 / 1 用户短语 / 2 快捷键设置 / 3 关于·账号说明
+  //   4 中英文切换 / 5 全半角切换  ← v4 新增, 键帽上直接显示当前态单字
   // Shortcut 通过 SetOn* setter 注入,与现有 s_onPhrases (Show 时传) 路径平行。
   // v0.19.0.61 (Phase L 调整 1.1): OnShowUserDict / SetOnUserDict 整体删除 —
   // UserDictionary 模块下线,button 2 完全 invisible + no-op。
   using OnShowShortcut = std::function<void()>;
   static void SetOnShortcut(OnShowShortcut fn);
+  // Fluxing QuickPanel v4 需求④: 中英文切换键的回调(Setter 注入,不走 Show()
+  // 7 参 —— 不改 Show 签名 ⇒ 不破坏任何既有调用点)。
+  // 语义与 s_onFullwidth 对称: 回调收到的是**目标值**(true = 英文态),
+  // 不是「翻转」标记。
+  static void SetOnAscii(OnToggle fn);
 
   // Public API (与 D2D 版本完全兼容)
   static void Show(bool currentFullwidth,
@@ -94,13 +99,14 @@ class QuickPanelDialog {
   // spec 084 / ADR 0013: 当前整体不透明度系数(0..255),不是 alpha 通道值。
   static int CurrentAlpha() { return s_alphaFactor; }
   static bool IsFullwidth() { return s_fullwidth; }
-  // spec 099 P0-3: 4 个槽位的物理像素矩形(布局的**单一事实源**)。
+  // spec 099 P0-3: 6 个槽位的物理像素矩形(布局的**单一事实源**)。
   // HitTest 与单元测试都从这里取值 —— 测试不再复制一份布局公式
   // (复制即漂移)。返回 false = 索引越界或面板还没建立。
   static bool SlotRect(int index, int* x, int* y, int* w, int* h);
   // spec 099 P0-3: 槽位点击路由 —— 每个可见槽位点击都必须产生确定的
   // 用户可见效果。返回 true 表示该槽位确实触发了回调。
   //   0 Schema(切换到下一个输入方案) / 1 Phrase / 2 Settings / 3 Account
+  //   4 中英文切换 / 5 全半角切换   ← Fluxing QuickPanel v4 需求③④⑤
   static bool DispatchSlotClick(int index);
 
   // ===== spec 099 P0-6: 物理布局的单一事实源 =====
@@ -115,9 +121,11 @@ class QuickPanelDialog {
                               int* y,
                               int* w,
                               int* h);
-  // spec 099 P0-4: 状态区(中/英 + 全/半角回显)的物理矩形。
-  // **必须与全部槽位矩形不相交** —— 否则状态像素会压到槽位上,
-  // 槽位命中区就不可能保持不变(spec 099 P0-4「命中区不变」)。
+  // Fluxing QuickPanel v4 需求⑥: 右侧竖排「中/英 · 全/半角」状态回显区
+  // **已删除** —— 状态改由槽 4 / 槽 5 的键帽单字直接显示(需求⑤)。
+  // 本函数保留(公共 API 与测试锚点不变), 但 v4 几何下槽位行铺满整宽
+  // ⇒ 状态区恒推演不出矩形 ⇒ 恒返回 false, 状态像素不可能压到槽位上
+  // (spec 099 P0-4「命中区不变」依然成立)。
   static bool StatusRect(int* x, int* y, int* w, int* h);
   static bool StatusRectForSize(int panel_w_phys,
                                 int panel_h_phys,
@@ -260,6 +268,8 @@ class QuickPanelDialog {
   static OnClick s_onUserFolder;
   static OnClick s_onPhrases;
   static OnToggle s_onFullwidth;
+  // Fluxing QuickPanel v4 需求④: 中英文切换键的回调(Setter 注入)。
+  static OnToggle s_onAscii;
   static OnClick s_onSymbols;
   static OnClick s_onLogin;
   // v0.19.0.29:hit==3 → Shortcut。Setter 注入(与 Show() 7 参 路径并存;
@@ -293,7 +303,8 @@ class QuickPanelDialog {
   // spec 099 P0-4: 当前输入状态的内存快照 + 状态提供者。
   static fluxing::panel_status::PanelState s_inputState;
   static StateProvider s_stateProvider;
-  // spec 099 P0-4: 状态文字字体(按 dpr 重建;OnDestroy 释放)。
+  // Fluxing QuickPanel v4 需求⑤: 键帽标签字体(槽 4「中/英」、槽 5「全/半」
+  // 单字; 按 dpr 重建; OnDestroy 释放)。
   static HFONT s_hFontStatus;
   // spec 099 P0-5: 键盘交互状态(焦点槽位 / 是否已进入键盘交互态)。
   static fluxing::panel_keyboard::State s_keyboard;
@@ -338,41 +349,27 @@ class QuickPanelDialog {
       s_showTime;  // v0.19.0.24-fix:Show() 时刻(GetTickCount),auto-hide grace
 
   // 设计几何常量 (logical pixels)。
+  // ---------------------------------------------------------------------------
+  // Fluxing QuickPanel v4 (2026-11-06 用户指令: 压矮 / 美化 / 去竖排回显 / 去黑框)。
+  //   高度 48 → 36 logical = vpadding 3 + 按钮 30 + vpadding 3
+  //   宽度 245 → 239 logical = padding 5 + brand 30 + gap 4
+  //                          + (6 x 按钮30 + 5 x 间隙3) + padding 5 = 239
+  //   三档 DPI 全部由这两个常量推导: 100% 239x36 / 150% 359x54 / 200% 478x72
+  //   kBrandGap 首次常量化: ComputeLayout 与绘制面共用同一来源 (AGENTS.md R7);
+  //   brand gap 不折进 padding, 否则品牌区与首个按钮粘连。
   // 注意:**不要**直接用这些 GDI 坐标;用 _phys 等版本(运行时按 dpr 缩放)。
-  //
-  // v0.19.0.24-fix(issue 1+2):user 反馈 v0.19.0.23 后"按钮偏上 + 间距不够"。
-  // 几何重算:
-  //   - issue 1 按钮偏上:btn y0 之前用 pad=5,但 (48-35)/2=6.5 取整 6 才让 btn
-  //   几何
-  //     中心 23.5 接近 panel 中心 24。新增 `kPanelVPadding = (kPanelH -
-  //     kBtnSize) / 2 = 6`, 跟 `kPanelPadding=5` 区分(X/Y 独立 padding)。
-  //   - issue 2 间距+3:user 再要 +3 px。保守路线保留 rightPad=16 不变,扩
-  //   panelW:
-  //     pad 5 + brand 35 + brandGap 2 + 5*35 + 4*kBtnGap + 16 =
-  //     5+35+2+175+4*kBtnGap+16 = 233 + 4*kBtnGap;kBtnGap=14 → 233+56=289
-  //   激进备选(§3.2.3):kPanelW=277,rightPad=4,user 觉得 289 太宽时切回
-  //   v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons (UserDict 整槽删除)。
-  //     公式 = 5 + 35 + 2 + 4*35 + 3*kBtnGap + 16 = 198 + 3*14 = 240;v0.19.0.62
-  //     取 245 (保守 +5 px 微调;下次 review 可压回 240)。
-  static constexpr int kPanelPadding =
-      5;  // X 方向 padding (L93,v0.19.0.24 不变)
-  static constexpr int kPanelVPadding =
-      6;  // v0.19.0.24 新增:Y 方向 padding=(48-35)/2
-  static constexpr int kBtnSize = 35;  // v0.19.0.24 不变
-  static constexpr int kBtnGap = 14;  // v0.19.0.24:11→14 (L93 6→11→14 累计 +8)
-  static constexpr int kIcoSize = 19;      // L93:30→19
-  static constexpr int kBtnRadius = 10;    // L93:14→10
-  static constexpr int kBrandSize = 35;    // L93:56→35
-  static constexpr int kPanelRadius = 20;  // L93:28→20
-  static constexpr int kPanelW =
-      245;  // v0.19.0.62:289→245 (5 buttons→4 buttons, -44 px)
-  static constexpr int kPanelH = 48;  // L93:68→48
-  // v0.19.0.62 (Phase L 调整 1.2): kButtonCount 显式 — paint / HitTest
-  // 循环用这个。 5 按钮版:0 Schema / 1 Phrase / 2 UserDict / 3 Settings / 4
-  // Account 4 按钮版 (UserDict 整槽删除):0 Schema / 1 Phrase / 2 Settings / 3
-  // Account
-  //   — hit==2 现在走 Settings (之前 hit==3),hit==3 Account 仍是 no-op。
-  static constexpr int kButtonCount = 4;  // v0.19.0.62: 5→4 (UserDict 槽位删除)
+  static constexpr int kPanelPadding = 5;    // X 方向 padding (v4 保持 5)
+  static constexpr int kPanelVPadding = 3;   // Y 方向 padding: 3 + 30 + 3 = 36
+  static constexpr int kBtnSize = 30;        // v4: 35 → 30
+  static constexpr int kBtnGap = 3;          // v4: 14 → 3 (收窄按钮行)
+  static constexpr int kIcoSize = 19;        // 图标 19×19 (v4 不变)
+  static constexpr int kBtnRadius = 12;      // v4: 10 → 12 = 键帽高度一半(胶囊)
+  static constexpr int kBrandSize = 30;      // v4: 35 → 30 (与 kBtnSize 等高)
+  static constexpr int kBrandGap = 4;        // v4 新增: 品牌区 → 按钮行呼吸位
+  static constexpr int kPanelRadius = 16;    // v4: 20 → 16
+  static constexpr int kPanelW = 239;        // v4: 245 → 239 (去竖排回显区 + 扩 6 槽)
+  static constexpr int kPanelH = 36;         // v4: 48 → 36
+  static constexpr int kButtonCount = 6;     // v4 stage2: 4 → 6 (新增中英文 / 全半角键)
   // v0.19.0.24 新增:Show() 后 auto-hide grace period(毫秒)。
   // 之前 L89-fix 直接累加 outsideMs,Show 启动时 cursor 在 panel 外 → 1.5s 内
   // Hide。 改:Show 时记 s_showTime,polling timer 在 (now - s_showTime) <

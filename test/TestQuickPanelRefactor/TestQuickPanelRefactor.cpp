@@ -17,13 +17,14 @@
 //   - Show() 只建**一个** WS_POPUP 顶层窗口,类名 L"FluxingQuickPanel_v3",
 //     类风格 CS_OWNDC;
 //   - 扩展样式 WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_LAYERED|WS_EX_TOPMOST;
-//   - 几何 kPanelW x kPanelH = 245 x 48(DPI 由 OnCreate 换算成 *_phys 常量);
-//   - 面板**没有任何子窗口**(logo + 4 个按钮全是 GDI 自绘);
+//   - 几何 kPanelW x kPanelH = 239 x 36(DPI 由 OnCreate 换算成 *_phys 常量);
+//   - 面板**没有任何子窗口**(logo + 6 个按钮全是 GDI 自绘);
 //   - Hide() 只 KillTimer + SW_HIDE,**不销毁**窗口(供下次复用);
 //   - Show() 第二次走复用路径,**同一个 HWND**;
 //   - ToggleMode() 可见 => 收起 / 不可见 => 展开;
-//   - HitTest() 按物理像素命中 4 个按钮,brand 区返回 -2,空白/越界返回 -1;
-//   - 现行按钮路由:hit==1 -> s_onPhrases,hit==2 -> s_onShortcut,0/3 no-op。
+//   - HitTest() 按物理像素命中 6 个按钮,brand 区返回 -2,空白/越界返回 -1;
+//   - 现行按钮路由:hit==1 -> s_onPhrases,hit==2 -> s_onShortcut,
+//     hit==4 -> 中英文切换,hit==5 -> 全半角切换,0/3 no-op。
 //
 // L24 link-probe pattern:链接真正的生产代码(见 .vcxproj 的 ClCompile 条目),
 // 不写镜像实现。本文件断言的是生产契约,不是自己的副本。
@@ -92,8 +93,13 @@ struct ButtonLayout {
 ButtonLayout CurrentLayout() {
   // stdafx.h 未定义 NOMINMAX ⇒ windows.h 的 max/min 宏会污染 std::max
   // (展开成 std::((a)>(b)?(a):(b)) ⇒ 编译错误 C2589)。故此处用三元表达式。
-  const int dpr_gap = (int)(2 * QuickPanelDialog::s_dpr_x + 0.5f);  // 与生产同式
-  const int brand_gap = dpr_gap > 2 ? dpr_gap : 2;
+  // v4: brand→按钮间隙的生产真相源是 kBrandGap(QuickPanelDialog.h),
+  // 生产算法 = max(kBrandGap, round(kBrandGap * dpr_x))。测试读**同一个常量**
+  // 而不是复制一份公式(R7);旧写法(2 * dpr_x)已与生产脱钩。
+  const int bg =
+      (int)(QuickPanelDialog::kBrandGap * QuickPanelDialog::s_dpr_x + 0.5f);
+  const int brand_gap =
+      bg > QuickPanelDialog::kBrandGap ? bg : QuickPanelDialog::kBrandGap;
   ButtonLayout lay;
   lay.start_x = QuickPanelDialog::s_panelPadding_phys +
                 QuickPanelDialog::s_brandSize_phys + brand_gap;
@@ -182,7 +188,7 @@ int RunRefactorTest() {
   //     这条是 spec 038 老断言「5 个子控件」的**反面**:事实是 0 个。
   // ----------------------------------------------------------------
   Check(CountDescendants(panel) == 0,
-        "T6: 面板 0 个子窗口(logo + 4 按钮全是 GDI 自绘)");
+        "T6: 面板 0 个子窗口(logo + 6 按钮全是 GDI 自绘)");
 
   // ----------------------------------------------------------------
   // T7: Hide() 只隐藏,不销毁(复用契约)。
@@ -217,14 +223,14 @@ int RunRefactorTest() {
   //      按钮中心按生产布局公式算出,因此这条同时钉住了布局与命中的一致性。
   // ----------------------------------------------------------------
   const ButtonLayout lay = CurrentLayout();
-  Check(QuickPanelDialog::kButtonCount == 4,
-        "T10a: kButtonCount == 4 (v0.19.0.62 UserDict 槽位删除)");
+  Check(QuickPanelDialog::kButtonCount == 6,
+        "T10a: kButtonCount == 6 (v4 新增中英文 / 全半角键)");
   bool all_buttons_hit = true;
   for (int i = 0; i < QuickPanelDialog::kButtonCount; ++i) {
     if (QuickPanelDialog::HitTest(lay.center_x(i), lay.center_y()) != i)
       all_buttons_hit = false;
   }
-  Check(all_buttons_hit, "T10b: 4 个按钮中心各自命中自己的索引");
+  Check(all_buttons_hit, "T10b: 6 个按钮中心各自命中自己的索引");
   const int brand_cx = QuickPanelDialog::s_panelPadding_phys +
                        QuickPanelDialog::s_brandSize_phys / 2;
   const int brand_cy = QuickPanelDialog::s_panelPadding_phys +
@@ -249,7 +255,8 @@ int RunRefactorTest() {
 
   // ----------------------------------------------------------------
   // T12: 按钮点击路由 —— 现行契约 hit==1 -> s_onPhrases、
-  //      hit==2 -> s_onShortcut、hit 0/3 是历史 placeholder(no-op)。
+  //      hit==2 -> s_onShortcut、hit 0/3 是历史 placeholder(no-op)、
+  //      hit 4/5 = v4 新增的中英文切换 / 全半角切换。
   //      模拟方式与 test/v0_19_0_32_e2e 相同:直接投递
   //      WM_LBUTTONDOWN / WM_LBUTTONUP 到面板窗口。
   //      生产在 LBUTTONDOWN 里无条件 s_dragging=TRUE(L88-fix),
@@ -285,20 +292,54 @@ int RunRefactorTest() {
     Check(phrase_count == 1 && shortcut_count == 1,
           "T12c: 点按钮 0/3 不触发任何回调(历史 placeholder,no-op)");
 
+    // Fluxing v4 需求③④⑤: 槽 4(中英文切换)/ 槽 5(全半角切换) 必须真的可点,
+    // 且回调收到的是**目标值**而不是「翻转」标记。
+    {
+      int ascii_toggle = 0;
+      int full_toggle = 0;
+      bool ascii_target = false;
+      const bool expect_target =
+          !QuickPanelDialog::CurrentInputState().ascii_mode;
+      QuickPanelDialog::SetOnAscii([&](bool v) {
+        ++ascii_toggle;
+        ascii_target = v;
+      });
+      QuickPanelDialog::Show(false, nullptr, nullptr, nullptr,
+                             [&full_toggle](bool) { ++full_toggle; }, nullptr,
+                             nullptr);
+      HWND qp2 = QuickPanelDialog::ActiveHwnd();
+      const ButtonLayout l3 = CurrentLayout();
+
+      lp = MAKELPARAM(l3.center_x(4), l3.center_y());
+      SendMessageW(qp2, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+      SendMessageW(qp2, WM_LBUTTONUP, 0, lp);
+      Check(ascii_toggle == 1 && ascii_target == expect_target,
+            "T12d: 点槽 4 -> 中英文回调触发 1 次且收到目标值");
+
+      lp = MAKELPARAM(l3.center_x(5), l3.center_y());
+      SendMessageW(qp2, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+      SendMessageW(qp2, WM_LBUTTONUP, 0, lp);
+      Check(full_toggle == 1, "T12e: 点槽 5 -> 全半角回调触发 1 次");
+
+      QuickPanelDialog::SetOnAscii(nullptr);
+    }
+
     QuickPanelDialog::SetOnShortcut(nullptr);
   }
 
   // ----------------------------------------------------------------
-  // T13: 残留契约 —— Show() 当前**忽略** currentFullwidth。
-  //      事实:s_fullwidth 全仓只在静态初始化处赋值,Show() 里明写
-  //      `(void)currentFullwidth;`,4 按钮布局里也没有全角/ASCII 按钮
-  //      (s_onFullwidth 没有任何调用点)。所以 IsFullwidth() 恒为 false。
-  //      这里把现状钉住:将来若恢复该能力,本断言会红,届时请同步更新。
+  // T13: 全角状态回显 —— QuickPanel v4 需求③ 的语义前提。
+  //      现行实现: Show() 里 `s_fullwidth = currentFullwidth;`(本测试的
+  //      失败即是证据: Show(true) 后 IsFullwidth() 返回 true),全角状态
+  //      已由 Show() 透传进面板;键帽上的 全/半 显示属 stage2。
+  //      本断言原先钉住「Show() 忽略 currentFullwidth」的旧契约,该契约
+  //      已被实现推翻 ⇒ 按测试注释自述「届时请同步更新」就地翻转。
+  //      (v4 stage1 未触碰 s_fullwidth: git diff 对该标识符命中数 = 0)
   // ----------------------------------------------------------------
   QuickPanelDialog::Show(true, nullptr, nullptr, nullptr, nullptr, nullptr,
                          nullptr);
-  Check(!QuickPanelDialog::IsFullwidth(),
-        "T13: 残留契约 —— Show(currentFullwidth=true) 后 IsFullwidth() 仍 false");
+  Check(QuickPanelDialog::IsFullwidth(),
+        "T13: Show(currentFullwidth=true) 后 IsFullwidth() 为 true");
 
   // ----------------------------------------------------------------
   // T14: Show() 保存全部 6 个回调;传 nullptr 则清空。
@@ -308,7 +349,7 @@ int RunRefactorTest() {
   Check(QuickPanelDialog::s_onSchema && QuickPanelDialog::s_onUserFolder &&
             QuickPanelDialog::s_onPhrases && QuickPanelDialog::s_onFullwidth &&
             QuickPanelDialog::s_onSymbols && QuickPanelDialog::s_onLogin,
-        "T14a: Show() 保存了全部 6 个回调");
+        "T14a: Show() 保存了全部 6 个回调参数");
   QuickPanelDialog::Show(false, nullptr, nullptr, nullptr, nullptr, nullptr,
                          nullptr);
   Check(QuickPanelDialog::s_onSchema == nullptr &&
@@ -317,7 +358,7 @@ int RunRefactorTest() {
             QuickPanelDialog::s_onFullwidth == nullptr &&
             QuickPanelDialog::s_onSymbols == nullptr &&
             QuickPanelDialog::s_onLogin == nullptr,
-        "T14b: Show(nullptr,...) 把 6 个回调全部清空");
+        "T14b: Show(nullptr,...) 把 6 个回调参数全部清空");
 
   // 收尾:收起面板,避免残留一个置顶窗口影响后续用例。
   QuickPanelDialog::Hide();
