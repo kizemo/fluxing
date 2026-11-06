@@ -20,6 +20,7 @@
 | 注册 | x64 CLSID `{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}` → `weaselx64.1.2.1.0.0.dll`；WOW6432Node → `weasel.dll` | HKLM `Software\Classes\` 与 `Software\WOW6432Node\Classes\` |
 | 生效 | **explorer.exe pid 18112（2026-11-07 00:00:22）已映射 `weaselx64.1.2.1.0.0.dll`** | `Get-Process explorer \| ForEach Modules \| ? ModuleName -like 'weasel*'` |
 | 菜单资源 | 两个 DLL 的 `RT_MENU` 由 518/404/404 B 变为 **590/436/436 B**，模板内含三条新文案；前缀 `鱖`=U+9C36=**40022** 恰为新项 `mtID` | `tmp\verify-tsf-menu.ps1`（`LoadLibraryEx(...,2)` + `EnumResourceNames(RT_MENU)` + 宽串扫描） |
+| **菜单构建（TSF 真实路径）** | 安装版 `weaselx64.1.2.1.0.0.dll` 与 `weasel.dll` 经 `LoadMenuW` + `GetSubMenu(menu,0)` 均枚举出 **18 项**，`id=40022`「导入搜狗用户词库 (&G)」位于 **index 3**；英/繁/简三套齐全 | `tmp\verify-menu-loadmenu.ps1`（与 `LanguageBar.cpp:173-192` 完全相同的调用序列） |
 | 文档 | CHANGELOG 顶部新增 `## [Unreleased]` 段 | 断言 `bareLF=0`、`HEAD_OK=True` |
 
 ## 3. 唯一未完成：人工真机验收
@@ -27,6 +28,8 @@
 **做法**：右键任务栏右下角输入指示器（UIA 名称 `任务栏输入指示 简体中文(中国大陆) 火流猩输入法`，矩形 `2240,1368,66,72`）→ 简中菜单里应出现「导入搜狗用户词库 (&G)」→ 点它应拉起 `WeaselDeployer.exe /sogou` 弹出导入框。
 
 **为什么没自动验**：模拟右键在 4 个候选坐标（`2216,1404` / `2200,1404` / `2273,1404` / `2216,1380`）下均未产生 `#32768` 菜单窗口，判定为 Win11 XAML 任务栏对合成输入的自动化限制，非代码缺陷（`tmp\probe-tray-menu.ps1` 保留）。
+
+**可见性已在代码路径上闭合**：`tmp\verify-menu-loadmenu.ps1` 用与 `LanguageBar.cpp:173-192` 完全相同的 `LoadMenuW` → `GetSubMenu(0)` → 逐项 `GetMenuString` 序列，在**安装版 DLL** 上拿到 18 项且含 `id=40022`。因此唯一剩下的变量是「用户是否点了正确的那个图标」。
 
 **点击前提醒**：点「导入搜狗用户词库」会**真的执行一次导入**（写 userdb），不是空跑。
 
