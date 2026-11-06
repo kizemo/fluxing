@@ -14221,3 +14221,40 @@ C0176；L191（面板 hwnd 每次 composition 重建）；L192（探针必须自
 
 **关联**：ADR 0037 D2；L188（编辑工具把 LF 写成 CRLF / 陈旧 `.obj` 假失败）；L189（探针静默编译
 失败会产出整表垃圾）；ROADMAP §6.2（搜狗资产不入库，真实文件只在 `tmp/` 只读探针）。
+## L195 - **`SendMessage(BM_CLICK)` 点「会弹模态框」的按钮会永久阻塞：同线程同步等待，按钮处理函数里弹出的模态消息框把调用方一起挂死**（2026-11-06）
+
+**现象**：真机验收「导入搜狗用户词库」的自动化脚本点「开始导入」后**卡住 3 分钟无任何进展**，
+日志停在 `BTN_ENABLED_AFTER=True` 就再没有下一行（缺 `IMPORT_CLICKED`）。窗口枚举能看到主对话框仍在、
+按钮已 enabled —— 一切「看起来正常」，只是脚本自己不动了。
+
+**根因**：`SendMessageW(hBtn, BM_CLICK)` 是**同步**调用，它把消息投给按钮的窗口过程后**等待其返回**。
+而该按钮的处理函数里 `MessageBoxW(...)` 跑起了一个**自己的模态消息循环**，直到用户/程序关掉消息框才返回
+⇒ `SendMessage` 在同一线程里等一个「必须由该线程自己的消息循环来处理关闭」的事件 —— 自己等自己。
+
+**判据 / 处置**：
+
+- **点击必须用 `PostMessageW`**（异步投递，立刻返回），然后**轮询目标状态**取证：
+  `EnumWindows` 找 `#32770` 且 caption 匹配的新窗口 → 读其 `Static` 文本。
+  等价写法 `PostMessageW(hDlg, WM_COMMAND, MAKEWPARAM(id, BN_CLICKED), hBtn)`。
+- **判据别只看「按钮点了没」**，要看**结果落盘**：本轮同时取证了状态栏 `IDC_SOGOU_STATUS` 文本、
+  消息框正文（`成功导入 94241 条词条。`）、以及 `rime_ice.userdb` 目录**文件数与字节数**三处变化。
+  只有第三处能证明「真的写进 librime」而不只是「弹了个框」。
+- **取消任务 = 连坐杀掉 GUI 子进程**：`task_stop` 会结束脚本以及它 `Start-Process` 起的子进程，
+  而子进程被强杀时**跳过 `EndMaintenance()`** ⇒ leveldb 维护态残留。
+  本轮靠事后 `Stop-Process WeaselServer` + 重启兜底；今后**不要在有模态框打开时取消任务**，
+  先 `PostMessageW(IDCANCEL, BM_CLICK)` 让对话框正常退出。
+- **相邻的同类坑：命令行的退出码可能是解析期预展开的假值**。
+  `cmd /c '"x.exe" /S & echo INSTALL_EXIT=%ERRORLEVEL%'` 打出的 `INSTALL_EXIT=0` **不可信**
+  （`%ERRORLEVEL%` 在解析整行时就已展开）。真凭据是**产物本身**：本轮改看 `WeaselServer.exe` /
+  `WeaselDeployer.exe` 的 `VersionInfo.FileVersion == 1.2.1.0`（装机前为 1.2.0.0）。
+- **`Start-Process -FilePath <GUI>.exe -Wait` 在 PS 5.1 下会挂死** ⇒ GUI 程序一律走
+  `cmd /c 'start "" "..."'`（要等退出就用 `.bat` 由 `cmd` 等），与 L09/L13/L17 的族一致。
+
+**推广**：「自动化点了一个按钮，然后卡住」几乎从不是脚本语法问题，而是**同步消息语义遇到重入**。
+凡是目标程序在按钮/菜单处理里会弹模态框、开 `DoModal()`、进 `EndMaintenance()`/`StartMaintenance()`
+这类**阻塞式长操作**，自动化一侧就必须用**异步投递 + 轮询取证**，并且判据要锚在**副作用（落盘/注册表/进程状态）**
+而不是「操作返回了」。
+
+**关联**：handoff 待补（本轮 v1.2.1 装机 + 导入验收）；L194（SGPU 词库解析）；L30（后台产物读到半截）；
+L17（自写检查要有牙）；`.claude/rules/ipc-boundary.md`（维护态必须 `StartMaintenance`/`EndMaintenance` 成对）。
+
