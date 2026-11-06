@@ -674,6 +674,10 @@ MAPPER-SUMMARY failures=0 / RECORDER-SUMMARY failures=0
   机制 A 成立时「右键崩 + 快捷键吞窗」两条症状同时自洽；机制 B 也自洽。**只能由运行态区分**。
   ⇒ **本棒的 `p_config` 修复装机后，若该现象一并消失 ⇒ B；若仍在 ⇒ A（且需再查宿主加速器）。**
   这条判别实验**无需再改代码**。
+  > **§十五 更新（2026-11-06 探针轮）**：机制 B **基本排除** —— 用户答「什么都没发生、只是窗没了」，
+  > 而该崩溃**每次必崩**（§14.2）；且 A 里的子假设「`ConvertKeyEvent` 返回 false 使主键盘 chord 不可达」
+  > **已被实测证伪**（拦截门静态可达，见 15.2 #1/#2）。A 收窄为「运行时 `GetVisibleCandidateCount()` 是否为 0」，
+  > 并新增一条与之并列的出口 ②「Windows `Layout Hotkey=2` 系统抢键」（15.4/15.5）。
 - **不得再用作区分性证据**：「hover 无高亮」= 生效配置 `hover_type: none` + `WeaselPanel::OnMouseMove` 首行
   `return 0` 的**预期行为**（§13.3）；用户答的第三问已证实它是配置所致。
 
@@ -684,14 +688,20 @@ MAPPER-SUMMARY failures=0 / RECORDER-SUMMARY failures=0
    本 handoff + `.specify/memory/lessons-learned.md` L187/L188；排除脏 `librime`、`.superpowers/`、
    `_ts_yaml_fixture.yaml`、`env.bat`、`weasel.props`）③ push（当前 `ahead 7` 未 push）。
    commit 前必须 `git status -sb` + `git diff --stat`，格式 Conventional Commits + 模块前缀（建议 `WeaselIPC: fix ...`）。
+   > **§十五 更新**：本条 ①②③ **均已完成** —— 包已出（`output/archives/fluxing-1.2.0-installer.exe`，
+   > 2026-11-06 11:39:57，42789863 B，含修复），代码与文档已提交（`fde34a1` / `b9d5f24`）并已 push；
+   > 分支现与 `kizemo/Fluxing` 同步。**尚未做的只剩「装机复验」**。
 2. 装机复验判据：在**飞书**与**自建 WinForms 原生 EDIT 目标**（`.superpowers/sdd/e2e_target_winforms.ps1`）
    里各做「右键删词」+「`Ctrl+Shift+<数字>`」；
    **先确认进程里实际映射的是新 `weaselx64.dll`**（`install.nsi` 的「DLL 被 TSF 锁住 ⇒ 改装版本化 shim」机制
    可能让宿主继续用旧 binary，光看文件时间戳不算证据；装机目录残留十余个 `weaselx64.*.dll`）。
    重放崩溃会杀掉所测宿主，**别拿 MiniMax Code 裸做实验**（本棒已崩过两次，属既有行为）。
-3. 若装机后 `Ctrl+Shift+<数字>` **仍**不删词**且不崩** ⇒ 走机制 A：先补**对照组**（自建非 Electron 原生 EDIT 宿主里
-   同一快捷键能否删词），那里能删 ⇒ Electron 宿主加速器成立；那里也不删 ⇒ 才需要 `GetVisibleCandidateCount()`
-   运行态插桩。
+3. 若装机后 `Ctrl+Shift+<数字>` **仍**不删词**且不崩** ⇒ **先跑 15.5 的 30 秒人工判据**
+   （只按 `Ctrl+Shift` 看不切不切输入法），再决定是否走机制 A 的注入探针：
+   - 指示器**变** ⇒ 出口 ② 成立，与代码无关，修法属产品层 chord 决策（需 ADR），**别去插桩**。
+   - 指示器**不变** ⇒ 才走机制 A：自建**非 Electron 原生 EDIT 宿主**补**对照组**
+     （那里能删 ⇒ Electron 宿主加速器成立；那里也不删 ⇒ 才需要 `GetVisibleCandidateCount()` 运行态插桩）。
+   - 另外：**若用户按的是小键盘，现象已被 15.2 #3 完整解释，不必做任何运行态实验。**
 4. §十二 的 PASS 仍**严格限域**：WinForms 原生 EDIT + 右键 + 面板左起 26px 落点 + `hover_type: none`，
    **不推翻但不得外推**。
 5. 顺手项（低优先，本棒未做）：`TestWeaselIPC` 与常驻 `WeaselServer.exe` 的前置冲突，可让脚本自己拉起/关闭
@@ -711,3 +721,83 @@ MAPPER-SUMMARY failures=0 / RECORDER-SUMMARY failures=0
 | `sdd/evidence/phase_D_final.log` | 33 行，最终态绿 |
 | `sdd/evidence/runtests_final.log` | 850 行全量单测（唯一 FAIL = 环境前置） |
 | `sdd/evidence/runtests_after_fix.log` | 956 行，**假载荷那一版**的记录（保留作反面教材） |
+
+---
+
+## 十五、`Ctrl+Shift+<数字>` 静态/离线探针轮（2026-11-06）
+
+> 本轮性质：**纯取证，零代码改动、零提交**。分支已与 `kizemo/Fluxing` 同步
+> （`git status -sb` 只剩禁入项 ` m librime` / `?? .superpowers/` / `?? _ts_yaml_fixture.yaml`）。
+> 产出 = 把 §13.2 / §14.7 的「未排除出口」收窄到 2 个，并**证伪两条**曾挂在账上的假设。
+
+### 15.1 探针 `sdd/tochar_probe2.ps1`（已自检，输出可用）
+
+复刻口径 = 生产代码链路 `ConvertKeyEvent` → `ResolveCharacter` → `ToUnicodeEx`
+（`include/KeyNameMapper.h:586-606`、`WeaselTSF/KeyEvent.cpp:54`），关键点：
+
+- `UINT(kinfo)` 是**整条 `WM_KEYDOWN` 的 lParam**（位域视图见 `include/KeyEvent.h:3-15`），
+  scan code 在 bit16-23、repeat 在 bit0-15 —— **不是裸 scan code**（本轮前我曾凭记忆写错）。
+- 调用前复制 keyState 并**清掉 `VK_CONTROL` / `VK_MENU`**，`wReserved` 传 0，`hkl` 依次试
+  `NULL` / 当前线程布局 / 英文布局。
+- **自检先行**：`Shift+A → ret=1 code=0x41` 通过才允许采信全表。
+
+⚠ 弃用 `sdd/tmp/tochar_probe.ps1`（v1）：`Add-Type` 的 C# 里裸写 `StringBuilder` ⇒ CS0246 编译失败
+⇒ 整表 `code=0x00`、`HKL=0` 全是**工具自身报错的产物**。教训：**别把工具自身报错的产物当测量值**。
+
+### 15.2 实测结论（日志 `sdd/evidence/tochar_probe2.log`）
+
+| # | 事实 | 证据 | 定级 |
+|---|---|---|---|
+| 1 | 主键盘 `Ctrl+Shift+1..9`（VK `0x31..0x39`，scan `0x02..0x0A`）在三种 `hkl` 口径下**全部** `ret=1`、`code = ! @ # $ % ^ & * (` | 探针全表 | **已验证** |
+| 2 | ⇒ `ConvertKeyEvent` 返回 true ⇒ `KeyEventSink.cpp:90-94` **拦截门可达**（主键盘行） | 由 #1 + `KeyEvent.cpp:60-61` | **已验证**（仅「可达」） |
+| 3 | 小键盘 `Numpad1/2/3`（VK `0x61..0x63`）`ToUnicodeEx ret=0` ⇒ `ConvertKeyEvent` FALSE ⇒ 门**永不达**（`KeyEvent.cpp:60-61` 是唯一 false 出口）；且 `IsCandidateDeleteDigitVk` 只认 `0x31..0x39` ⇒ **两重确定性死路** | 探针 + `include/FluxingCandidateDeleteShortcut.h` | **已验证（源码+实测）** |
+| 4 | `Ctrl+Shift+grave`（VK `0xC0`，scan `0x29`）`ret=1 code=0x7E '~'` —— 与 spec 097 / L163「该 chord 已移出删除候选词家族」自洽 | 探针 | **已验证** |
+
+**边界（务必别越）**：#2 只证明「门在静态上可达」，**不**证明运行时真删词。
+
+**两条作废假设**（不要再挂账）：
+- ~~「Shift+数字被解析成 `!@#` 所以永不命中」~~ —— 判定只看 **VK**（`MatchCandidateDeleteShortcut(int vkey, bool ctrl_down, bool shift_down, bool key_down)`，4 参形式，见 `test/TestCandidateRButtonDown/TestCandidateRButtonDown.cpp:236-284` 的 Test 7/8/9），keycode 是什么与命中无关。
+- ~~「`ConvertKeyEvent` 返回 false 使主键盘 chord 不可达」~~ —— 由 #1 直接证伪。
+
+### 15.3 「功能被某个开关默认关闭」—— 证伪
+
+全仓 `delete_candidate` 检索（`*.{h,cpp,yaml,custom.yaml,md}`）没有任何 bool 开关/option 读取点；命中的只有 IPC 命令（`include/WeaselIPC.h:35`）、librime API（`include/rime_api.h:483/485`）、各 schema 的 `Control+Delete: delete_candidate`、以及文档/ADR/spec 叙述。⇒ 客户端拦截门**不受任何开关控制**。
+
+### 15.4 本机 Windows 抢键配置（候选解释，尚未证实）
+
+实测注册表与语言列表：
+
+```
+HKCU\Keyboard Layout\Preload : 1=00000804  2=00000409
+HKCU\Keyboard Layout\Toggle  : Language Hotkey=1  Layout Hotkey=2
+Get-WinUserLanguageList      : zh-Hans-CN, en-US
+```
+
+`Toggle` 两值含义按注册表口径（1 = Left Alt+Shift，2 = Ctrl+Shift，3 = 未分配）⇒
+**本机 Ctrl+Shift 被 Windows 系统级绑成「切换同一语言的键盘布局」**。这用户户描述「按下去候选窗消失、什么也没删」高度自洽，但仍是**推断**：注册表值只证明热键**处于开启**，不证明它在本机真的会切走（Windows 通常只在当前语言下有多于一个布局时才切）。
+
+### 15.5 下一棒第一步（零风险、用户 30 秒，优先于任何注入探针）
+
+在记事本里用 Fluxing 打出 `ni` 让候选窗出现，然后**只按 `Ctrl+Shift`**（不按数字），看任务栏输入法指示器 / 语言栏是否变化：
+
+- **变** ⇒ 出口 ②（系统抢键）成立。修法方向是产品层规避（例如改 chord，或按 `default.yaml:37` 那条 `Control+Shift+grave` 的既有先例另择不冲突的组合），属需 ADR 的架构决策，**不在本轮范围**。
+- **不变** ⇒ 该假设不成立，再走 15.6 的注入探针。
+
+### 15.6 收窄后的两个出口
+
+| 出口 | 内容 | 状态 | 怎么判 |
+|---|---|---|---|
+| ① 运行时 | `ShouldInterceptCandidateDelete(number, _cand->GetVisibleCandidateCount())` 因 `GetVisibleCandidateCount()==0` 不拦（`CandidateList.h:73-77` 需 `_ui->IsShown()` 为真） | **未证实/未证伪** | 注入探针 + 运行态插桩 |
+| ② 环境 | Windows `Layout Hotkey=2` 在 chord 到达 TSF sink 前抢走 | **有配置证据，无行为证据** | 15.5，用户 30 秒 |
+
+另：**若用户按的是小键盘 ⇒ 现象已被 #3 完整解释**，无需任何运行态实验。
+
+### 15.7 本轮新增/更新的资产（`.superpowers/` 不入库）
+
+| 文件 | 说明 |
+|---|---|
+| `sdd/tochar_probe2.ps1` | 7586 B，自检版 ToUnicodeEx 探针，**本轮唯一可信探针** |
+| `sdd/tmp/tochar_probe.ps1` | v1，**坏**（CS0246 静默失败），保留作反面教材 |
+| `sdd/evidence/tochar_probe2.log` | 三布局全表 + Preload/Toggle/LangList 实测 |
+
+**本轮工具坑（追加）**：① `Add-Type` 的 C# MemberDefinition 里裸 `StringBuilder` ⇒ CS0246（须全限定或 `-UsingNamespace`）；② 探针里那行「gate REACHED」的判据写成 `code` 落在 `0x31..0x39`，与真实判定（看 VK）不符 ⇒ 该诊断行**永不亮**，只当 `ret`/`code` 原始值看；③ `Get-WinUserLanguageList` 的 `TipInstances` 段打印为空 ⇒ 「zh-Hans-CN 下到底挂了几个 TIP」这个事实**仍未量到**，而下棒判 15.5 时正好需要它。

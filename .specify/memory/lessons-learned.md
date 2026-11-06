@@ -14047,3 +14047,18 @@ provider 组合是 `composite:native-macos+rea-artifact-graph+rea-dotnet-static`
 - 复原法：读 bytes → `.Replace("`r`n","`n")` → `WriteAllBytes`（**不要**走 `Set-Content` / `Out-File`，它们会再做一次转换）。写完回读断言 `CR==0` 且 `size>0`（L08）。
 
 **推广**：任何「自己写的验证脚本」都可能给出与代码无关的结论。判定验证结果前先问：**这次真的重编译了吗？这次真的比的是同一份内容吗？** 日志里的编译行与 `git diff` 的行数口径，是这两个问题的判据。
+
+## L189 - **探针脚本「静默编译失败」会产出整表垃圾数据：`Add-Type` 里裸写 `StringBuilder` ⇒ CS0246 ⇒ 全表 `code=0x00`；必须先跑自检行再采信任何一行**（2026-11-06）
+
+**现象**：为了回答「`Ctrl+Shift+<数字>` 到底能不能走到客户端拦截门」，写了个 P/Invoke `ToUnicodeEx` 的 PowerShell 探针。第一版（`.superpowers/sdd/tmp/tochar_probe.ps1`）输出**全部键位 `code=0x00`、`HKL=0`**，看起来像「本机 ToUnicodeEx 对所有 chord 都返回空」——如果采信，就会把「主键盘快捷键在 keycode 层死透」当成已验证事实写进 handoff，并据此去改代码。
+
+**根因**：`Add-Type -MemberDefinition` 的 C# 源码里裸写 `StringBuilder`，该类型在 `Add-Type` 默认 using 集之外 ⇒ **CS0246 编译失败** ⇒ 包装类型根本不存在 ⇒ 后续每次 P/Invoke 都走了失败分支 ⇒ 输出的 `0x00` 与 `0` 是**工具自身报错的产物，不是对系统的测量**。`GetKeyboardLayout` 返回 0 同理（0 不代表失败，需按 `GetLastError` 与全限定类型重试）。
+
+**判据 / 处置**：
+- **探针必须先自检，且自检不过就整批作废**：第二版（`.superpowers/sdd/tochar_probe2.ps1`）先跑已知答案行 `Shift+A ⇒ ret=1, code=0x41`，通过才打印全表；类型一律全限定（`System.Text.StringBuilder`）或 `-UsingNamespace`，字符串出参用 `[Out, MarshalAs(UnmanagedType.LPWStr)]`。
+- 判定「一次运行有没有真跑起来」，去看**编译期报错**（把脚本输出整段落盘再 grep `Exception|error CS|失败`），不要只看最终表格长得像不像结果。
+- **复刻生产代码的调用口径必须读源码，不能凭记忆**：本轮两处记忆出错 ——① 以为拦截判定函数收 `KeyEvent`（实际签名 `(int vkey, bool ctrl_down, bool shift_down, bool key_down)`，只看 VK，所以「Shift+数字被解析成 `!@#` 因此永不命中」这条假设当场作废）；② 以为 `ToUnicodeEx` 的 `wScan` 传裸 scan code（实际 `include/KeyEvent.h:3-15` 的 `KeyInfo` 是整条 lParam 的位域视图，`UINT(kinfo)` 里 scan 在 bit16-23、repeat 在 bit0-15）。传错 `wScan` 会让整张表的可比性归零。
+
+**推广**：凡是「自己写的、要用来下结论」的探针/校验脚本（对应 L17 的「检查必须会咬人」），交付结论前先问第三个问题：**这个脚本自己有没有报过错，而我把它当成了测量仪？** 全表都是同一个值（全 0 / 全失败 / 全相同）是强烈的信号 —— 真实系统极少对整批输入给出完全一致的输出，先怀疑工具，再怀疑被测对象。
+
+**关联**：handoff `docs/archive/handoffs/handoff-2026-11-05-fluxing-candidate-delete-bug.md` §十五；L17（自写检查要有牙）；L08（写完回读断言）；`.claude/rules/codebase-graph.md`（读源码核签名优先于凭记忆）。
