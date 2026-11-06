@@ -788,6 +788,32 @@ int main() {
       Check(p.x == 0 && p.y == 0, "T24w: 工作区容不下面板 ⇒ (0,0)");
     }
 
+    // ===== D0176 (2026-11-06): 可见性判据 RectIntersectsVisibleArea =====
+    // 这条纯函数是「拖动落盘守卫」与「Show() 复用路径自愈」的**唯一**判据,
+    // 所以它自己必须有判别性:
+    //   T24w5 是污染值回归 —— 2560x1440 单屏下被写坏的 3296/1983;
+    //   T24w6 是边界判别 —— 「边缘相接」不算可见,用 >= / <= 实现的版本在此翻绿;
+    //   T24w7 是未初始化矩形(建窗前 GetWindowRect 拿到 0 宽)不得被判可见。
+    {
+      const int PW = 245;
+      const int PH = 48;
+      Check(pp::RectIntersectsVisibleArea(1600, 900, PW, PH, areas),
+            "T24w2: 完整落在主屏工作区内 ⇒ 相交");
+      Check(pp::RectIntersectsVisibleArea(-1500, 500, PW, PH, areas),
+            "T24w3: 左侧副屏(负坐标)⇒ 相交(多屏)");
+      Check(pp::RectIntersectsVisibleArea(1900, 900, PW, PH, areas),
+            "T24w4: 骑在右边界上(部分可见)⇒ 相交(不误杀用户的半屏摆放)");
+      Check(!pp::RectIntersectsVisibleArea(3296, 1983, 368, 72, areas),
+            "T24w5: 污染值回归(1920x1040 下的 3296,1983)⇒ 零交集");
+      Check(!pp::RectIntersectsVisibleArea(1920, 900, PW, PH, areas),
+            "T24w6: 恰好贴着右边界 ⇒ 零交集(零面积不算可见)");
+      Check(!pp::RectIntersectsVisibleArea(100, 100, 0, PH, areas),
+            "T24w7: 零宽矩形 ⇒ 不相交");
+      Check(!pp::RectIntersectsVisibleArea(100, 100, PW, PH,
+                                          std::vector<pp::Rect>()),
+            "T24w8: 没有工作区 ⇒ 不相交(枚举失败不猜)");
+    }
+
     // ===== 默认落点 =====
     {
       const std::wstring defPos = pp::DefaultPositionPath();
