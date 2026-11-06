@@ -171,34 +171,23 @@ STDAPI CLangBarItemButton::OnClick(TfLBIClick click,
       _pLangBarItemSink->OnUpdate(TF_LBI_STATUS | TF_LBI_ICON);
     }
   } else if (click == TF_LBI_CLK_RIGHT) {
-    /* Open menu */
-    HWND hwnd = _pTextService->_GetFocusedContextWindow();
-    if (hwnd != NULL) {
-      LANGID langid = get_language_id();
-      HMENU menu;
-      if (langid == TEXTSERVICE_LANGID_HANS) {
-        menu = LoadMenuW(g_hInst, MAKEINTRESOURCE(IDR_MENU_POPUP_HANS));
-      } else if (langid == TEXTSERVICE_LANGID_HANT) {
-        menu = LoadMenuW(g_hInst, MAKEINTRESOURCE(IDR_MENU_POPUP_HANT));
-      } else {
-        menu = LoadMenuW(g_hInst, MAKEINTRESOURCE(IDR_MENU_POPUP));
-      }
-      HMENU popupMenu = GetSubMenu(menu, 0);
-      UINT wID = TrackPopupMenuEx(
-          popupMenu, TPM_NONOTIFY | TPM_RETURNCMD | TPM_HORPOSANIMATION, pt.x,
-          pt.y, hwnd, NULL);
-      DestroyMenu(menu);
-      _pTextService->_HandleLangBarMenuSelect(wID);
-    }
+    // spec 100 / ADR 0038:语言栏(任务栏输入指示器)右键弹菜单**已下线**。
+    // 原因:菜单唯一化到 WeaselServer 的 IDR_MENU_POPUP —— 快捷设置栏品牌图标
+    // 右键 / 托盘右键共用同一份菜单资源、同一套命令路由与勾选态。此前
+    // WeaselTSF 另带三套 MENU 资源(英/繁/简),与托盘菜单措辞不一致,
+    // 造成「同一功能两个入口、两份文案」,用户容易误改。
+    // 现在这里**不再**弹任何菜单;任务栏右键只剩系统自己的语言列表。
+    return S_OK;
   }
   return S_OK;
 }
 
 STDAPI CLangBarItemButton::InitMenu(ITfMenu* pMenu) {
-  HMENU menu = LoadMenuW(g_hInst, MAKEINTRESOURCE(IDR_MENU_POPUP));
-  HMENU popupMenu = GetSubMenu(menu, 0);
-  HMENU2ITfMenu(popupMenu, pMenu);
-  DestroyMenu(menu);
+  // spec 100 / ADR 0038:语言栏不再拥有任何菜单项 —— WeaselTSF.rc 里三套
+  // MENU 资源(IDR_MENU_POPUP / _HANT / _HANS)已删除,LoadMenuW 必然返回
+  // NULL,继续 GetSubMenu 会直接崩(所以这里**必须**连 LoadMenu 一起停掉)。
+  // 返回 S_OK 且不注册任何项 ⇒ 系统只显示它自己的默认语言列表。
+  (void)pMenu;
   return S_OK;
 }
 

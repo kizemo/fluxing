@@ -1,6 +1,16 @@
 ## [Unreleased]
 
-### feat(WeaselTSF): 语言栏右键菜单补上「导入搜狗用户词库」（此前只有托盘主程序那套菜单有）
+### feat(WeaselServer): 右键菜单唯一化到 WeaselServer，并新增「快捷设置栏品牌图标右键」入口（ADR 0038）
+
+- **症状**：火流猩存在**两套**右键菜单 —— `WeaselTSF`（`weasel.dll` / `weaselx64.dll`）里三套独立维护的 MENU 资源，与 `WeaselServer.exe` 的 `IDR_MENU_POPUP` **措辞不一致**（TSF 版「快捷设置栏 (&K) Alt+,」「退出算法服务 (Q)」；Server 版「快速面板 (&K)」「退出 (&Q)」）。用户右键的是 Win11 任务栏**输入指示器**（TSF 语言栏按钮）而非系统托盘里的 Server 图标，只看见其中一套。
+- **取证（二进制资源级，推翻了「有一套无效」的假设）**：`LoadLibraryEx(LOAD_AS_IMAGE_RESOURCE)` + `EnumResourceNames(RT_MENU)` + `LoadMenu` + 逐项 `GetMenuString` ⇒ `WeaselServer.exe` 的 RT_MENU **只有 id=105 一套**（18 项，含 `id=40022 导入搜狗用户词库 (&G)`）；`weaselx64.1.2.1.0.0.dll` / `weasel.dll` 的 RT_MENU 有 **id=105（英）/ 108（繁）/ 109（简）三套**（各 18 项，均含 40022）。⇒ **两套都有效、都含搜狗导入项**，问题不是「一套无效」而是「两份定义 + 两套措辞 + 用户只发现一套」。
+- **修复（ADR 0038）**：① `WeaselTSF/WeaselTSF.rc` **删除三套 MENU 资源**（UTF-16LE + BOM + CRLF 保持不变），`include/resource.h` 同步删掉三个 `IDR_MENU_POPUP*` 定义；② `WeaselTSF/LanguageBar.cpp` 删除 `TF_LBI_CLK_RIGHT` 弹菜单分支，`InitMenu` 不再 `LoadMenuW`（资源已删，`LoadMenuW` 必返 NULL，再 `GetSubMenu` 会崩）⇒ **任务栏输入指示器右键不再有火流猩菜单**；③ 新增入口：**右键「快捷设置栏」品牌图标**弹菜单 —— `QuickPanelDialog` 新增 `SetOnBrandRightClick` 回调 + `BrandRect` / `BrandRectForSize`（品牌矩形**单一事实源**，与 `HitTest` 的 `-2` 判定同源 ⇒ 命中区与右键区逐像素重合），面板只做命中 + 转发屏幕坐标，菜单由 `CSystemTray::ShowPopupMenuAt(POINT)` 弹出（把托盘右键那段 `LoadMenu → CustomizeMenu → TrackPopupMenu` 抽成公开方法，**两个入口共用同一段代码**）⇒ 菜单资源、命令目标窗口、勾选态三者天然一致。
+- **未新增 IPC 协议**：快捷设置栏与菜单同在 `WeaselServer` 进程内，命令经既有 `WM_COMMAND → AddMenuHandler` 路由，`ID_WEASELTRAY_SOGOU_IMPORT`（40022）handler 原样复用 ⇒ **未改 `include/WeaselIPCData.h`**，不触发 IPC 四边同步。
+- **自动隐藏抑制**：菜单弹出期间面板不得收走 ⇒ 新增 `s_menuOpen`，屏蔽两条自动隐藏路径（`WM_ACTIVATEAPP` 前台切走 / 鼠标移出 1500 ms）。
+- **语言取舍（如实标注）**：`WeaselServer.rc` 的菜单是**构建期语言**（当前安装版只编入简体一套）。删除 TSF 三语言菜单后，繁体/英文用户只剩 Server 构建语言菜单 —— 与**改动前托盘菜单的行为一致**，属非相对现状的回退，本轮不扩展（见 ADR 0038 D5）。
+- **未改**：`output/install.nsi`、`librime/` 子模块。
+
+### feat(WeaselTSF): 语言栏右键菜单补上「导入搜狗用户词库」（此前只有托盘主程序那套菜单有）〔**已被上一条 ADR 0038 取代**：该入口随语言栏菜单下线一并移除，搜狗导入项改由托盘 / 品牌图标右键的同一份菜单提供〕
 
 - **症状**：v1.2.1 已经把「导入搜狗用户词库」放进 `WeaselServer` 的托盘右键菜单，但用户在自己实际右键的那个图标上找不到 —— 火流猩在输入法语言栏上弹出的是 `WeaselTSF`（`weasel.dll` / `weaselx64.dll`）里**另一套独立维护**的菜单资源。
 - **根因（二进制资源级坐实）**：用 `LoadLibraryEx(LOAD_LIBRARY_AS_DATAFILE)` + `FindResource(RT_MENU)` 解出装机版模板 —— `id=105`（英）518 B、`id=108`（繁）404 B、`id=109`（简）404 B，各 **13 条**，均无搜狗导入项；而 `WeaselServer.exe` 的同号菜单有 **15 条**且含该项。spec 037 只改了 server 侧资源 ⇒ 语言栏这套入口从未出现。TSF 侧还一并缺「快速面板常驻」「恢复已忽略的候选项」。

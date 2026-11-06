@@ -757,6 +757,43 @@ LRESULT CSystemTray::OnSettingChange(UINT uFlags, LPCTSTR lpszSection) {
 }
 #endif
 
+// spec 100 / ADR 0038: 弹出与托盘右键**完全同一份**菜单。
+// 托盘右键(OnTrayNotification)与「快捷设置栏品牌图标右键」
+// (WeaselServerApp → QuickPanelDialog::SetOnBrandRightClick → 本方法)
+// 走同一段代码 ⇒ 菜单资源(id = m_tnd.uID = IDR_MENU_POPUP)、命令目标窗口
+// (GetTargetWnd())、勾选态(CustomizeMenu)三者天然一致。
+BOOL CSystemTray::ShowPopupMenuAt(POINT screenPos) {
+  HWND hTargetWnd = GetTargetWnd();
+  if (!hTargetWnd)
+    return FALSE;
+
+  HMENU hMenu = ::LoadMenu(m_hInstance, MAKEINTRESOURCE(m_tnd.uID));
+  if (!hMenu)
+    return FALSE;
+
+  HMENU hSubMenu = ::GetSubMenu(hMenu, 0);
+  if (!hSubMenu) {
+    ::DestroyMenu(hMenu);  // Be sure to Destroy Menu Before Returning
+    return FALSE;
+  }
+
+#ifndef _WIN32_WCE
+  // Make chosen menu item the default (bold font)
+  ::SetMenuDefaultItem(hSubMenu, m_DefaultMenuItemID, m_DefaultMenuItemByPos);
+#endif
+
+  CustomizeMenu(hSubMenu);
+
+  ::SetForegroundWindow(m_tnd.hWnd);
+  ::TrackPopupMenu(hSubMenu, 0, screenPos.x, screenPos.y, 0, hTargetWnd, NULL);
+
+  // BUGFIX: See "PRB: Menus for Notification Icons Don't Work Correctly"
+  ::PostMessage(m_tnd.hWnd, WM_NULL, 0, 0);
+
+  DestroyMenu(hMenu);
+  return TRUE;
+}
+
 LRESULT CSystemTray::OnTrayNotification(WPARAM wParam, LPARAM lParam) {
   // Return quickly if its not for this tray icon
   if (wParam != m_tnd.uID)
@@ -775,24 +812,9 @@ LRESULT CSystemTray::OnTrayNotification(WPARAM wParam, LPARAM lParam) {
   if (LOWORD(lParam) == WM_RBUTTONUP)
 #endif
   {
-    HMENU hMenu = ::LoadMenu(m_hInstance, MAKEINTRESOURCE(m_tnd.uID));
-    if (!hMenu)
-      return 0;
-
-    HMENU hSubMenu = ::GetSubMenu(hMenu, 0);
-    if (!hSubMenu) {
-      ::DestroyMenu(hMenu);  // Be sure to Destroy Menu Before Returning
-      return 0;
-    }
-
-#ifndef _WIN32_WCE
-    // Make chosen menu item the default (bold font)
-    ::SetMenuDefaultItem(hSubMenu, m_DefaultMenuItemID, m_DefaultMenuItemByPos);
-#endif
-
-    CustomizeMenu(hSubMenu);
-
-    // Display and track the popup menu
+    // spec 100 / ADR 0038: 弹菜单逻辑已抽到 ShowPopupMenuAt,让托盘右键与
+    // 「快捷设置栏品牌图标右键」走同一条路径(同一菜单资源 / 同一命令目标 /
+    // 同一勾选态),不再各带一套措辞不同的菜单。
     POINT pos;
 #ifdef _WIN32_WCE
     DWORD messagepos = ::GetMessagePos();
@@ -801,14 +823,7 @@ LRESULT CSystemTray::OnTrayNotification(WPARAM wParam, LPARAM lParam) {
 #else
     GetCursorPos(&pos);
 #endif
-
-    ::SetForegroundWindow(m_tnd.hWnd);
-    ::TrackPopupMenu(hSubMenu, 0, pos.x, pos.y, 0, hTargetWnd, NULL);
-
-    // BUGFIX: See "PRB: Menus for Notification Icons Don't Work Correctly"
-    ::PostMessage(m_tnd.hWnd, WM_NULL, 0, 0);
-
-    DestroyMenu(hMenu);
+    ShowPopupMenuAt(pos);
   }
 #if defined(_WIN32_WCE)  //&& _WIN32_WCE < 211
   if (LOWORD(lParam) == WM_LBUTTONDBLCLK && bAltPressed)

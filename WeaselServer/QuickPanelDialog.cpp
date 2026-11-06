@@ -404,6 +404,41 @@ QuickPanelDialog::OnClick QuickPanelDialog::s_onLogin;
 QuickPanelDialog::OnShowShortcut QuickPanelDialog::s_onShortcut;
 
 // v0.19.0.29 setter 实现。SetOn* 在 WeaselServerApp::Run() 末尾(after m_server
+// spec 100 / ADR 0038: 品牌图标右键入口。
+QuickPanelDialog::OnBrandRightClick QuickPanelDialog::s_onBrandRightClick;
+bool QuickPanelDialog::s_menuOpen = false;
+
+void QuickPanelDialog::SetOnBrandRightClick(OnBrandRightClick fn) {
+  s_onBrandRightClick = fn;
+}
+
+// spec 100 / ADR 0038: 品牌图标的物理矩形 —— **单一事实源**。
+// 与 HitTest 的 -2(brand)判定同源(同一份 ComputeLayout)⇒ 命中区与右键区
+// 永远重合;否则用户右键品牌图标却弹不出菜单(这种 bug 极难靠肉眼发现)。
+bool QuickPanelDialog::BrandRectForSize(int panel_w_phys,
+                                        int panel_h_phys,
+                                        int* x,
+                                        int* y,
+                                        int* w,
+                                        int* h) {
+  if (panel_w_phys <= 0 || panel_h_phys <= 0)
+    return false;
+  const PanelLayout L = ComputeLayout(panel_w_phys, panel_h_phys);
+  if (x)
+    *x = L.padding;
+  if (y)
+    *y = L.padding;
+  if (w)
+    *w = L.brand_size;
+  if (h)
+    *h = L.brand_size;
+  return true;
+}
+
+bool QuickPanelDialog::BrandRect(int* x, int* y, int* w, int* h) {
+  return BrandRectForSize(s_panelW_phys, s_panelH_phys, x, y, w, h);
+}
+
 // Start + RegisterPhrasesHotkey,before m_server.Run 进入消息循环)调一次,
 // 跟 m_server 同 lifecycle。
 void QuickPanelDialog::SetOnShortcut(OnShowShortcut fn) {
@@ -992,11 +1027,11 @@ int QuickPanelDialog::HitTest(int x, int y) {
   // layout 算 hit = btn2,但 user 实际在物理 btn1 (x=148/240=61%
   // 横向位置)。Hover 完全错位。改用 physical 常量后,physical 222 → btn1 (btn1
   // 在 physical x=83..120)。
-  int padding = s_panelPadding_phys;
-  int brandX = padding;
-  int brandY = padding;
-  if (x >= brandX && x < brandX + s_brandSize_phys && y >= brandY &&
-      y < brandY + s_brandSize_phys)
+  // spec 100 / ADR 0038: brand 命中区改由 BrandRect() 给出(单一事实源) ——
+  // 右键弹菜单的命中区必须与这里**逐像素**一致,否则用户右键图标却没反应。
+  int brandX = 0, brandY = 0, brandW = 0, brandH = 0;
+  if (BrandRect(&brandX, &brandY, &brandW, &brandH) && x >= brandX &&
+      x < brandX + brandW && y >= brandY && y < brandY + brandH)
     return -2;  // brand
   // spec 099 P0-3: 槽位矩形改由 SlotRect() 统一给出(布局单一事实源)。
   for (int i = 0; i < kButtonCount; i++) {
@@ -1142,6 +1177,26 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
                      s_dragStartWindow.top + dy, 0, 0,
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
       } else {
+    // spec 100 / ADR 0038: 品牌图标右键 ⇒ 弹出与托盘**同一份**菜单。
+    // 面板只做命中 + 转发屏幕坐标;菜单本身由 WeaselServer 弹出
+    // (CSystemTray::ShowPopupMenuAt),所以菜单资源/命令路由/勾选态
+    // 与托盘右键天然一致,不存在「两套菜单」。
+    case WM_RBUTTONDOWN: {
+      POINT p = {LOWORD(l), HIWORD(l)};
+      int bx = 0, by = 0, bw = 0, bh = 0;
+      const bool on_brand = BrandRect(&bx, &by, &bw, &bh) && p.x >= bx &&
+                            p.x < bx + bw && p.y >= by && p.y < by + bh;
+      if (on_brand && s_onBrandRightClick) {
+        POINT sp = p;
+        ClientToScreen(hwnd, &sp);
+        // TrackPopupMenu 是阻塞的(内部模态循环直到菜单被关掉)⇒ 期间
+        // s_menuOpen 必须保持 true,否则轮询 timer 会把面板收走。
+        s_menuOpen = true;
+        s_onBrandRightClick(sp);
+        s_menuOpen = false;
+      }
+      return 0;
+    }
         // L87-fix 替代 v0.19.0.14 L84 polling timer 的 WM_MOUSEMOVE 路径
         // (L86 仍保留 polling timer,这里双保险)
         POINT p = {LOWORD(l), HIWORD(l)};
@@ -1257,7 +1312,8 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
       if (w == FALSE) {  // app 被 deactivate (前台切走)
         DWORD nowTick = GetTickCount();
         // spec 084 / ADR 0013 D5: 长显态屏蔽「前台切走就隐藏」。
-        if (!AlwaysShowMode() && (nowTick - s_showTime) >= kShowGraceMs) {
+        if (!AlwaysShowMode() && !s_menuOpen && (nowTick - s_showTime) >=
+                                       kShowGraceMs) {
           Hide();
         }
       }
@@ -1325,7 +1381,8 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
             RepaintLayered(hwnd);
           }
           // spec 084 / ADR 0013 D5: 长显态屏蔽「鼠标在外 1500ms 自动隐藏」。
-          if (!AlwaysShowMode() && hit == -1 && !s_dragging && !inGrace) {
+          if (!AlwaysShowMode() && !s_menuOpen && hit == -1 && !s_dragging &&
+              !inGrace) {
             s_outsideMs += 100;
             if (s_outsideMs >= 1500) {
               s_outsideMs = 0;

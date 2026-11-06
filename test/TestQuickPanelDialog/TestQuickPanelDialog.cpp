@@ -995,6 +995,53 @@ int main() {
           "T27a: 无焦点槽位时 Enter 只吞掉(不误触发槽 0)");
     Check(st.focused == -1, "T27b: 无焦点槽位时 Enter 不产生焦点");
 
+  // ----------------------------------------------------------------
+  // T30 (spec 100 / ADR 0038): 品牌图标右键命中区。
+  //   品牌图标右键弹菜单 ⇒ 命中区必须与 HitTest 的 -2(brand)判定**逐像素**重合,
+  //   否则用户右键品牌图标却弹不出菜单(肉眼极难发现)。BrandRectForSize 与
+  //   生产绘制/命中走**同一份** ComputeLayout(单一事实源,R7);本测试**不复制**
+  //   布局算式,只断言可判别的**不变量**:
+  //     ① 返回 true;② 矩形在面板内;③ 宽=高(正方形)且非空;
+  //     ④ 与槽位 0 **不相交**(否则品牌区会吃掉第一个按钮的命中区);
+  //     ⑤ 左上角落在 padding(与面板 padding 对齐,容差 1 物理像素);
+  //     ⑥ 非法尺寸(≤0)必须返回 false(否则运行期会算出垃圾矩形)。
+  // ----------------------------------------------------------------
+  std::printf("\n[spec 100 / ADR 0038] 品牌图标右键命中区\n");
+  {
+    const int dpi_list[3] = {96, 144, 192};
+    for (int k = 0; k < 3; ++k) {
+      int w = 0, h = 0;
+      fluxing::panel_dpi::PanelPhysicalSize(QuickPanelDialog::kPanelW,
+                                            QuickPanelDialog::kPanelH,
+                                            dpi_list[k], dpi_list[k], &w, &h);
+      int bx = 0, by = 0, bw = 0, bh = 0;
+      const bool got =
+          QuickPanelDialog::BrandRectForSize(w, h, &bx, &by, &bw, &bh);
+      const std::string tag = std::to_string(dpi_list[k]) + "%";
+      Check(got, ("T30a" + tag + ": BrandRectForSize 返回 true").c_str());
+      Check(got && bx >= 0 && by >= 0 && bx + bw <= w && by + bh <= h,
+            ("T30b" + tag + ": 品牌矩形在面板内").c_str());
+      Check(got && bw == bh && bw > 0,
+            ("T30c" + tag + ": 品牌矩形是正方形且非空").c_str());
+      int s0x = 0, s0y = 0, s0w = 0, s0h = 0;
+      const bool slot0 = QuickPanelDialog::SlotRectForSize(w, h, 0, &s0x,
+                                                           &s0y, &s0w, &s0h);
+      Check(got && slot0 && bx + bw <= s0x,
+            ("T30d" + tag + ": 品牌矩形与槽位 0 不相交").c_str());
+      const int exp_pad = fluxing::panel_dpi::ScaleLogicalByDpi(
+          QuickPanelDialog::kPanelPadding, dpi_list[k]);
+      const int dx = bx - exp_pad;
+      const int dy = by - exp_pad;
+      Check(got && dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1,
+            ("T30e" + tag + ": 品牌左上角落在 padding").c_str());
+    }
+    int bx = 0, by = 0, bw = 0, bh = 0;
+    Check(!QuickPanelDialog::BrandRectForSize(0, 0, &bx, &by, &bw, &bh),
+          "T30f: 非法尺寸(0×0)返回 false");
+    Check(!QuickPanelDialog::BrandRectForSize(-1, -1, &bx, &by, &bw, &bh),
+          "T30g: 非法尺寸(-1×-1)返回 false");
+  }
+
     Check(HandleKey(st, vk::kTab, false) == Action::kMoveFocus, "T27c: Tab 移焦");
     Check(st.focused == 0, "T27d: Tab 后焦点 = 槽 0");
     Check(st.interactive, "T27e: Tab 后进入键盘交互态");

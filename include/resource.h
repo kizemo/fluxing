@@ -6,11 +6,14 @@
 #define IDI_EN                          101
 #define IDI_ZH                          102
 #define IDI_RELOAD                      103
+// spec 100 / ADR 0038: 菜单唯一化到 WeaselServer 的 IDR_MENU_POPUP。
+// WeaselTSF.rc 的三套 MENU 资源(英/繁/简)已删除 —— 但这个 id **不能删**:
+// WeaselServer 的 WeaselTrayIcon.cpp 用 `#include <resource.h>`(尖括号 ⇒ 命中
+// 本文件,不是 WeaselServer/resource.h)引用它。同号定义也存在于
+// WeaselServer/resource.h,两边取值必须一致(都是 105)。
 #define IDR_MENU_POPUP                  105
 #define IDI_FULL_SHAPE                  106
 #define IDI_HALF_SHAPE                  107
-#define IDR_MENU_POPUP_HANT             108
-#define IDR_MENU_POPUP_HANS             109
 #define IDS_STR_UNDER_MAINTENANCE       302
 #define ID_WEASELTRAY_QUIT              40001
 #define ID_WEASELTRAY_DEPLOY            40002
@@ -37,18 +40,19 @@
 // must stay equal, because WeaselServer.rc carries its own popup menu
 // and still needs this entry.
 //
-// spec 091 / ADR 0024: the language bar popup menu (WeaselTSF.rc, all
-// three locales) no longer carries this entry - the always-show switch
-// is only reachable from the tray menu now. The id stays reserved so
-// the tray menu keeps working and so both headers stay in sync.
+// spec 091 / ADR 0024 + spec 100 / ADR 0038: the always-show switch lives
+// **only** in the WeaselServer popup menu (IDR_MENU_POPUP in WeaselServer.rc).
+// The language bar popup menu was removed entirely in spec 100 (ADR 0038),
+// so this entry now has exactly one owner. The id stays reserved here so
+// both headers stay in sync.
 #define ID_QUICKPANEL_ALWAYS_SHOW      40019
 
-// spec 037 / ADR 0037: import Sogou user dictionary from the language bar
-// popup menu (WeaselTSF.rc, all three locales). The id is forwarded verbatim
-// by WeaselTSF::_HandleLangBarMenuSelect's default branch ->
-// CWeaselClient::TrayCommand -> WeaselServer, which already registers
-// AddMenuHandler(ID_WEASELTRAY_SOGOU_IMPORT) and launches
-// "WeaselDeployer.exe /sogou". No new IPC, no local execution here.
+// spec 037 / ADR 0037 + spec 100 / ADR 0038: import Sogou user dictionary.
+// The entry now lives **only** in the WeaselServer popup menu; WeaselServer
+// registers AddMenuHandler(ID_WEASELTRAY_SOGOU_IMPORT) and launches
+// "WeaselDeployer.exe /sogou". The WeaselTSF language bar no longer owns a
+// menu (its three MENU resources were deleted), so nothing forwards this id
+// from the TSF side any more.
 // The same id also lives in WeaselServer/resource.h - both values must
 // stay equal.
 #define ID_WEASELTRAY_SOGOU_IMPORT      40022

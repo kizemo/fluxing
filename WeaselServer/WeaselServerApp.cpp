@@ -283,6 +283,14 @@ int WeaselServerApp::Run() {
   tray_icon.Create(m_server.GetHWnd());
   tray_icon.Refresh();
 
+  // spec 100 / ADR 0038:「快捷设置栏」品牌图标右键 ⇒ 弹出与托盘右键**同一份**
+  // 菜单(CSystemTray::ShowPopupMenuAt 复用托盘那段 LoadMenu/TrackPopupMenu
+  // 代码)。菜单资源、命令目标窗口(GetTargetWnd)、勾选态(CustomizeMenu)
+  // 三者天然一致 —— 不再存在两套菜单各说各话。
+  QuickPanelDialog::SetOnBrandRightClick([this](POINT pt) {
+    tray_icon.ShowPopupMenuAt(pt);
+  });
+
   // spec 055 bugfix: QuickPanel MUST NOT auto-show on service start.
   // spec 052's "always-show mode" was a design intention; the original
   // implementation called EnableAlwaysShowMode() here, which made the

@@ -68,6 +68,12 @@ public:
     BOOL Enabled() { return m_bEnabled; }
     BOOL Visible() { return !m_bHidden; }
 
+    // spec 100 / ADR 0038: 在指定屏幕坐标弹出**与托盘右键完全同一份**菜单。
+    // 「快捷设置栏的品牌图标右键」走这里(WeaselServerApp 注入的回调调用),
+    // 于是菜单资源(id = m_tnd.uID)、命令目标窗口(GetTargetWnd())、勾选态
+    // (CustomizeMenu)三者天然一致 —— 不再出现两套菜单各说各话。
+    BOOL ShowPopupMenuAt(POINT screenPos);
+
     // Create the tray icon
     BOOL Create(HINSTANCE hInst, HWND hParent, UINT uCallbackMessage, LPCTSTR szTip,
 		   HICON icon, UINT uID, BOOL bHidden = FALSE,

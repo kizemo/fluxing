@@ -126,6 +126,24 @@ class QuickPanelDialog {
                                 int* w,
                                 int* h);
 
+  // ===== spec 100 / ADR 0038: 品牌图标右键 =====
+  // 「快捷设置栏」左侧品牌图标右键 ⇒ 弹出**与托盘右键完全同一份**菜单
+  // (WeaselServer 的 IDR_MENU_POPUP)。分工:面板只负责**命中 + 转发屏幕坐标**,
+  // 菜单资源 / 命令路由 / 勾选态全部由 WeaselServer 侧负责 —— 单一事实源
+  // (constitution R7),不再出现两套菜单各说各话。
+  // 回调由 WeaselServerApp 注入,内部调用 CSystemTray::ShowPopupMenuAt。
+  using OnBrandRightClick = std::function<void(POINT screenPt)>;
+  static void SetOnBrandRightClick(OnBrandRightClick fn);
+  // 品牌图标的**物理**矩形(布局的单一事实源:与 HitTest 的 -2 判定同源)。
+  // 命中区与右键区必须逐像素重合,否则用户右键图标却弹不出菜单。
+  static bool BrandRect(int* x, int* y, int* w, int* h);
+  static bool BrandRectForSize(int panel_w_phys,
+                               int panel_h_phys,
+                               int* x,
+                               int* y,
+                               int* w,
+                               int* h);
+
   // ===== spec 099 P0-4: 当前输入状态回显 =====
   // 状态提供者:由 WeaselServerApp 注入,面板在已有的 100ms 轮询 timer
   // 里拉取**内存快照**(零 I/O,守 constitution P2)。快照内容来自
@@ -249,6 +267,11 @@ class QuickPanelDialog {
   // v0.19.0.60 (Phase L 调整 1): s_onUserDict 删除 — UserDictionary 模块下线。
   // hit==2 (UserDict button) 仍画但 click no-op (后续会话可整槽删)。
   static OnShowShortcut s_onShortcut;
+  // spec 100 / ADR 0038: 品牌图标右键回调(屏幕坐标) + 「菜单正在弹出」标记。
+  // s_menuOpen 用于屏蔽两条自动隐藏路径(WM_ACTIVATEAPP 前台切走 / 鼠标移出),
+  // 否则鼠标移到菜单上时面板会被收走,菜单失去依附窗口。
+  static OnBrandRightClick s_onBrandRightClick;
+  static bool s_menuOpen;
 
   // T005: hover/active 索引 (-1 = none)
   static int s_hoveredIdx;
