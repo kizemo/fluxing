@@ -382,93 +382,82 @@ void QuickPanelDialog::DrawIconAccount(HDC hdc,
   DeleteObject(SelectObject(hdc, pen));
 }
 
-// v6 需求①: 全/半角键的图标 —— 中英文「逗号 + 句号」组合。
-//   全角 = 「，。」(U+FF0C + U+3002) / 半角 = 「,.」(U+002C + U+002E)。
-//   两个字形共用一条基线;墨迹盒**并集**在 kIconViewBox×kIconViewBox 的
-//   viewBox 内做水平 + 垂直居中(viewBox 中心恒为 (15,15),与既有 5 个线描
-//   图标同一约定),字形尺寸 raw pixel 不随 dpr 缩放。
+// v7 需求(用户指令 2026-11-07): 全/半角键的图标 —— **按钮内对角线布局**的
+// 矢量图元(参考搜狗输入法状态栏槽 3 =「。,」)。
+//   全角 = 右上**空心环**(宋体式「。」,路径直径 14 raw px、2px 描边)
+//         + 左下**逗号尾**(「，」)
+//   半角 = 右上**实心点**(ASCII「.」,路径直径 10 raw px)
+//         + 左下**小逗号尾**(「,」)
+// 两个标点沿对角排布,互不遮挡;「空心 vs 实心 + 尺寸差」双重编码当前态。
 //
-// 为什么换掉 v5 的宽/窄圆角框:用户 2026-11-07 指令 —— 图标要「更清晰直接」。
-// 文字组合直接画出输入法此刻会打出的标点,不需要用户再理解「宽框=全角」。
+// 为什么从 v6 的字体字形组合改成矢量图元:
+//   CJK 标点墨迹只占 em 盒约 0.2 ⇒ -15px 字号下全角墨迹仅 18×4 raw px、
+//   半角仅 8×5,浅灰压在浅蓝底上几乎不可见(用户原话「太小,不具有可视度」);
+//   放大字号长不大且会撑破 28 键帽。矢量图元可精确控制直径 ⇒ 25×25 raw px。
 //
 // 实现约束(均为已踩过的坑,勿简化):
-//   - 纯 GDI 文本描画,**绝不**走 AlphaBlend(v4 品牌图标黑框前科);
-//   - 度量必须传**单位 MAT2**(fluxing::panel_ink::FillUnitMat2):零矩阵会让
-//     GetGlyphOutlineW 返回 GDI_ERROR ⇒ 度量恒 0 ⇒ 静默漏画;
-//   - 居中用**墨迹盒并集**而不是 em 盒:`，` 的墨迹偏左下、`。` 居中,
-//     按 em 盒居中会让整对符号明显偏上,且半角态 (宽度只有约 0.6em) 必须
-//     单独算,不能沿用全角的字号盒。
+//   - 纯 GDI 矢量,**绝不**走 AlphaBlend(v4 品牌图标黑框前科);
+//   - 空心环必须配 NULL_BRUSH(内部留面板底色),实心件必须配 NULL_PEN
+//     (不描边,否则 2px 描边会把小逗号糊成一坨);
+//   - 只 DeleteObject 自己 Create 出来的 pen/brush:GetStockObject 取的
+//     NULL_PEN / NULL_BRUSH 是共享 stock 对象,删不掉也不该删;
+//   - 图元表与居中公式在 fluxing::panel_fwicon(纯函数,生产与单测同源)。
 void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
                                          int x,
                                          int y,
                                          COLORREF penColor,
                                          bool fullwidth) {
-  if (!hdc || !s_hFontPunct)
+  if (!hdc)
     return;
-  static const wchar_t kFullPair[] = L"\uFF0C\u3002";  // ，。
-  static const wchar_t kHalfPair[] = L",.";            // ,.
-  const wchar_t* pair = fullwidth ? kFullPair : kHalfPair;
+  const fluxing::panel_fwicon::Icon ic =
+      fluxing::panel_fwicon::Build(fullwidth);
+  const POINT off = fluxing::panel_fwicon::CenteringOffset(ic, kIconViewBox);
+  const int ox = x + off.x;
+  const int oy = y + off.y;
 
-  HGDIOBJ oldFont = SelectObject(hdc, s_hFontPunct);
-  MAT2 mat;
-  fluxing::panel_ink::FillUnitMat2(&mat);
+  HPEN pen = (HPEN)CreatePen(PS_SOLID, fluxing::panel_fwicon::kStrokeWidth,
+                             penColor);
+  HBRUSH solid = (HBRUSH)CreateSolidBrush(penColor);
+  HGDIOBJ oldPen = SelectObject(hdc, pen);
+  HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
 
-  // 逐字累进笔位,求和集墨迹盒(相对「笔位 0 / 基线 0」;GDI 墨迹盒模型见
-  // DrawInkCenteredChar 上方长注释)。
-  int pen = 0;
-  int inkL = 0, inkT = 0, inkR = 0, inkB = 0;
-  bool haveInk = false;
-  for (int i = 0; i < 2 && pair[i]; ++i) {
-    GLYPHMETRICS gm;
-    ZeroMemory(&gm, sizeof(gm));
-    if (GetGlyphOutlineW(hdc, pair[i], GGO_METRICS, &gm, 0, nullptr, &mat) ==
-        GDI_ERROR) {
-      haveInk = false;
-      break;
-    }
-    if (gm.gmBlackBoxX > 0 && gm.gmBlackBoxY > 0) {
-      const int l = pen + static_cast<int>(gm.gmptGlyphOrigin.x);
-      const int t = -static_cast<int>(gm.gmptGlyphOrigin.y);
-      const int r = l + static_cast<int>(gm.gmBlackBoxX) - 1;
-      const int b = t + static_cast<int>(gm.gmBlackBoxY) - 1;
-      if (!haveInk) {
-        inkL = l;
-        inkT = t;
-        inkR = r;
-        inkB = b;
-        haveInk = true;
-      } else {
-        if (l < inkL)
-          inkL = l;
-        if (t < inkT)
-          inkT = t;
-        if (r > inkR)
-          inkR = r;
-        if (b > inkB)
-          inkB = b;
+  // ① 空心环(仅全角态有):描边 + 内部不填充(留面板底色)。
+  for (int i = 0; i < ic.shapeCount; ++i) {
+    const fluxing::panel_fwicon::Shape& s = ic.shapes[i];
+    if (s.kind == fluxing::panel_fwicon::kHollowEllipse)
+      Ellipse(hdc, ox + s.rect.left, oy + s.rect.top, ox + s.rect.right,
+              oy + s.rect.bottom);
+  }
+
+  // ② 实心件(实心点 / 逗号头 / 逗号尾):实心画刷 + NULL_PEN(不描边)。
+  SelectObject(hdc, solid);
+  SelectObject(hdc, GetStockObject(NULL_PEN));
+  for (int i = 0; i < ic.shapeCount; ++i) {
+    const fluxing::panel_fwicon::Shape& s = ic.shapes[i];
+    if (s.kind == fluxing::panel_fwicon::kSolidRoundRect) {
+      // 圆角半径 = 半边长 ⇒ GDI 画出来是**正圆**。
+      // 为什么不用 Ellipse:实测 GDI 把 ≤10px 的实心椭圆光栅化成**四角星**
+      // (顶点只有 1 px),根本不像「点」;RoundRect 同尺寸是干净正圆。
+      // 证据:tmp/gdi-shape2.txt(10px Ellipse vs 10px RoundRect 逐像素图)。
+      const int cw = (s.rect.right - s.rect.left) / 2;
+      const int ch = (s.rect.bottom - s.rect.top) / 2;
+      RoundRect(hdc, ox + s.rect.left, oy + s.rect.top, ox + s.rect.right,
+                oy + s.rect.bottom, cw, ch);
+    } else if (s.kind == fluxing::panel_fwicon::kSolidPolygon) {
+      POINT pts[3];
+      for (int k = 0; k < 3; ++k) {
+        pts[k].x = ox + s.pts[k].x;
+        pts[k].y = oy + s.pts[k].y;
       }
+      Polygon(hdc, pts, 3);
     }
-    pen += static_cast<int>(gm.gmCellIncX);
-  }
-  if (!haveInk) {
-    SelectObject(hdc, oldFont);
-    return;
   }
 
-  const int inkW = inkR - inkL + 1;
-  const int inkH = inkB - inkT + 1;
-  // 让墨迹盒并集居中于 viewBox(中心 = (x+kIconBboxCxOff, y+kIconBboxCyOff))。
-  const int penX = x + (kIconViewBox - inkW) / 2 - inkL;
-  const int baselineY = y + (kIconViewBox - inkH) / 2 - inkT;
-
-  const COLORREF oldColor = SetTextColor(hdc, penColor);
-  const int oldBk = SetBkMode(hdc, TRANSPARENT);
-  const UINT oldAlign = SetTextAlign(hdc, TA_LEFT | TA_BASELINE);
-  TextOutW(hdc, penX, baselineY, pair, 2);
-  SetTextAlign(hdc, oldAlign);
-  SetBkMode(hdc, oldBk);
-  SetTextColor(hdc, oldColor);
-  SelectObject(hdc, oldFont);
+  // 还原调用方的 pen/brush;只删自己 Create 出来的对象。
+  SelectObject(hdc, oldBrush);
+  SelectObject(hdc, oldPen);
+  DeleteObject(solid);
+  DeleteObject(pen);
 }
 
 namespace {
@@ -669,8 +658,6 @@ fluxing::panel_status::PanelState QuickPanelDialog::s_inputState;
 QuickPanelDialog::StateProvider QuickPanelDialog::s_stateProvider;
 // spec 099 P0-4: 状态文字字体(按 dpr 重建;OnDestroy 释放)。
 HFONT QuickPanelDialog::s_hFontStatus = NULL;
-// v6 需求①: 全/半角字形字体(固定 raw px,不随 dpr 缩放)。
-HFONT QuickPanelDialog::s_hFontPunct = NULL;
 // spec 099 P0-5: 键盘交互状态(焦点槽位 / 是否已进入键盘交互态)。
 fluxing::panel_keyboard::State QuickPanelDialog::s_keyboard;
 // spec 099 P0-5: tooltip 顶层窗 + 字体 + 接管键盘焦点前的原焦点窗口。
@@ -1732,20 +1719,7 @@ bool QuickPanelDialog::ApplyPhysicalLayout(HWND hwnd) {
                                 CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
                                 DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei");
   }
-  // v6 需求①: 全/半角字形字体。**固定 raw px**(不乘 dpr)—— 与另外 5 个
-  // 线描图标同口径(它们的描线坐标本身就不缩放),否则 150% DPI 下「，。」会
-  // 撑破 28 logical 的键帽;且两个标点的墨迹盒并集是按 raw px 度量后在
-  // kIconViewBox 内居中的,缩放字号会让居中量失衡。
-  // 生命周期与 s_hFontStatus 一致:先释放旧的再建,避免 WM_DPICHANGED 反复
-  // 触发时泄漏 GDI 句柄。
-  if (s_hFontPunct) {
-    DeleteObject(s_hFontPunct);
-    s_hFontPunct = NULL;
-  }
-  s_hFontPunct = CreateFontW(-15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                             CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                             DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei");
+
   // off-screen DC 尺寸必须跟着窗口走,否则 UpdateLayeredWindow 提交旧 surface
   CreateOffscreenDC(w, h);
   return true;
@@ -1790,11 +1764,6 @@ LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
   if (s_hFontStatus) {
     DeleteObject(s_hFontStatus);
     s_hFontStatus = NULL;
-  }
-  // v6 需求①: 全/半角字形字体。
-  if (s_hFontPunct) {
-    DeleteObject(s_hFontPunct);
-    s_hFontPunct = NULL;
   }
   DestroyOffscreenDC();
   if (s_hBmpLogo) {
@@ -2077,8 +2046,9 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
         break;
       }
       case 5: {
-        // 全半角键:v5 需求⑥ —— 由文字键改为**图标**,形状随当前态切换
-        // (宽框=全角 / 窄框=半角)。纯 GDI 矢量,不走 GDI AlphaBlend。
+        // 全半角键:v7 需求 —— **对角线布局**的矢量图元,形状随当前生效宽度
+        // 切换(全角 = 空心环 + 逗号尾 / 半角 = 实心点 + 小逗号尾)。
+        // 纯 GDI 矢量,不走 GDI AlphaBlend。
         DrawIconFullwidth(hdc, iconX, iconY, penRgb, s_inputState.fullwidth);
         break;
       }

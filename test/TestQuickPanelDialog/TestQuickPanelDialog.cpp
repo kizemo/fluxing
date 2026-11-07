@@ -40,6 +40,7 @@
 #include "../../include/FluxingPanelDpi.h"
 #include "../../include/FluxingPanelStatus.h"
 #include "../../include/FluxingPanelKeyboard.h"
+#include "../../include/FluxingPanelFwIcon.h"
 #include "../../include/FluxingPanelTooltip.h"
 #include "../../include/FluxingPanelLogo.h"
 #include "../../WeaselServer/AboutDialog.h"
@@ -1408,6 +1409,94 @@ int main() {
     }
   }
 
+  // ============================================================
+  // T33 · 全/半角图标 v7: 按钮内**对角线布局**矢量图元
+  // 需求(用户 2026-11-07):「全半角符号太小,不具有可视度。
+  // 可以调整排版,参考搜狗输入法,按钮内对角线布局,从而可以放大。」
+  // 判据: 墨迹盒远大于 v6 字形(全角 18x4 / 半角 8x5);
+  // 居中后中心恰为 viewBox 中心; 空心/实心 + 对角方位不得退化。
+  // ============================================================
+  {
+    const fluxing::panel_fwicon::Icon fw =
+        fluxing::panel_fwicon::Build(true);
+    const fluxing::panel_fwicon::Icon hw =
+        fluxing::panel_fwicon::Build(false);
+    const int vb = QuickPanelDialog::kIconViewBox;  // 生产常量, 不复制
+
+    const int fw_w = fw.ink.right - fw.ink.left + 1;
+    const int fw_h = fw.ink.bottom - fw.ink.top + 1;
+    const int hw_w = hw.ink.right - hw.ink.left + 1;
+    const int hw_h = hw.ink.bottom - hw.ink.top + 1;
+    Check(fw_w == 25 && fw_h == 25,
+          "T33a: 全角墨迹盒 25x25 (v6 字形仅 18x4)");
+    Check(hw_w == 21 && hw_h == 23,
+          "T33b: 半角墨迹盒 21x23 (v6 字形仅 8x5)");
+
+    const POINT fw_off = fluxing::panel_fwicon::CenteringOffset(fw, vb);
+    const POINT hw_off = fluxing::panel_fwicon::CenteringOffset(hw, vb);
+    const int fw_cx = fw.ink.left + fw_off.x + (fw_w - 1) / 2;
+    const int fw_cy = fw.ink.top + fw_off.y + (fw_h - 1) / 2;
+    const int hw_cx = hw.ink.left + hw_off.x + (hw_w - 1) / 2;
+    const int hw_cy = hw.ink.top + hw_off.y + (hw_h - 1) / 2;
+    Check(fw_cx == vb / 2 && fw_cy == vb / 2,
+          "T33c: 全角居中后中心 == viewBox 中心 (15,15)");
+    Check(hw_cx == vb / 2 && hw_cy == vb / 2,
+          "T33d: 半角居中后中心 == viewBox 中心 (15,15)");
+
+    int fw_hollow = 0, fw_solid = 0;
+    for (int i = 0; i < fw.shapeCount; ++i) {
+      if (fw.shapes[i].kind == fluxing::panel_fwicon::kHollowEllipse)
+        ++fw_hollow;
+      else
+        ++fw_solid;
+    }
+    int hw_hollow = 0, hw_solid = 0;
+    for (int i = 0; i < hw.shapeCount; ++i) {
+      if (hw.shapes[i].kind == fluxing::panel_fwicon::kHollowEllipse)
+        ++hw_hollow;
+      else
+        ++hw_solid;
+    }
+    Check(fw_hollow == 1 && fw_solid == 2,
+          "T33e: 全角 = 1 空心环 + 2 实心件(逗号头/尾)");
+    Check(hw_hollow == 0 && hw_solid == 3,
+          "T33f: 半角 = 0 空心 + 3 实心件(点/逗号头/尾)");
+
+    const int ring_d = fw.shapes[0].rect.right - fw.shapes[0].rect.left;
+    Check(ring_d >= 14, "T33g: 全角空心环直径 >= 14 raw px");
+
+    const int fw_l = fw.ink.left + fw_off.x;
+    const int fw_t = fw.ink.top + fw_off.y;
+    const int fw_r = fw.ink.right + fw_off.x;
+    const int fw_b = fw.ink.bottom + fw_off.y;
+    const int hw_l = hw.ink.left + hw_off.x;
+    const int hw_t = hw.ink.top + hw_off.y;
+    const int hw_r = hw.ink.right + hw_off.x;
+    const int hw_b = hw.ink.bottom + hw_off.y;
+    Check(fw_l >= 0 && fw_t >= 0 && fw_r <= vb - 1 && fw_b <= vb - 1 &&
+              hw_l >= 0 && hw_t >= 0 && hw_r <= vb - 1 && hw_b <= vb - 1 &&
+              fw_w <= 28 && hw_w <= 28,
+          "T33h: 居中后墨迹盒落在 viewBox 内且不超 28 键帽");
+
+    const int ring_cx =
+        (fw.shapes[0].rect.left + fw.shapes[0].rect.right) / 2;
+    const int ring_cy = (fw.shapes[0].rect.top + fw.shapes[0].rect.bottom) / 2;
+    const int fw_tail_cx =
+        (fw.shapes[2].pts[0].x + fw.shapes[2].pts[1].x + fw.shapes[2].pts[2].x) / 3;
+    const int fw_tail_cy =
+        (fw.shapes[2].pts[0].y + fw.shapes[2].pts[1].y + fw.shapes[2].pts[2].y) / 3;
+    const int dot_cx =
+        (hw.shapes[0].rect.left + hw.shapes[0].rect.right) / 2;
+    const int dot_cy = (hw.shapes[0].rect.top + hw.shapes[0].rect.bottom) / 2;
+    const int hw_tail_cx =
+        (hw.shapes[2].pts[0].x + hw.shapes[2].pts[1].x + hw.shapes[2].pts[2].x) / 3;
+    const int hw_tail_cy =
+        (hw.shapes[2].pts[0].y + hw.shapes[2].pts[1].y + hw.shapes[2].pts[2].y) / 3;
+    Check(ring_cx > fw_tail_cx && ring_cy < fw_tail_cy &&
+              dot_cx > hw_tail_cx && dot_cy < hw_tail_cy,
+          "T33i: 环/点在右上、逗号尾在左下(对角线布局)");
+  }
+
   std::printf("\n=== %d / %d assertions passed ===\n", g_pass, g_pass + g_fail);
   std::fflush(stdout);
   // L48: ExitProcess bypasses atexit static destructors. The
@@ -1421,3 +1510,4 @@ int main() {
   // lessons-learned L48 for the full root-cause post-mortem.
   ExitProcess(g_fail == 0 ? 0 : 1);
 }
+

@@ -48,6 +48,7 @@
 #include <FluxingPanelStatus.h>
 // spec 099 P0-5: 键盘可达性状态机(单一真相源,constitution R7)。
 #include <FluxingPanelKeyboard.h>
+#include <FluxingPanelFwIcon.h>
 
 class QuickPanelDialog {
  public:
@@ -314,11 +315,6 @@ class QuickPanelDialog {
   // Fluxing QuickPanel v4 需求⑤: 键帽标签字体(槽 4「中/英」单字; 按 dpr 重建;
   // OnDestroy 释放)。
   static HFONT s_hFontStatus;
-  // v6 需求①: 全/半角键「，。」/「,.」的字形字体。与 5 个线描图标同口径 ——
-  // 固定 raw px(**不乘 dpr**),否则 150% DPI 下两个标点会撑破 28 logical 的
-  // 键帽。在 ApplyPhysicalLayout 里与 s_hFontStatus 同生命周期重建(尺寸恒定,
-  // 只是复用同一条创建/释放路径),OnDestroy 释放。
-  static HFONT s_hFontPunct;
   // spec 099 P0-5: 键盘交互状态(焦点槽位 / 是否已进入键盘交互态)。
   static fluxing::panel_keyboard::State s_keyboard;
   // spec 099 P0-5: tooltip 顶层窗 + 字体 + 接管键盘焦点前的原焦点窗口。
@@ -530,13 +526,16 @@ class QuickPanelDialog {
   static void DrawIconSymbols(HDC hdc, int x, int y, COLORREF penColor);
   static void DrawIconSettings(HDC hdc, int x, int y, COLORREF penColor);
   static void DrawIconAccount(HDC hdc, int x, int y, COLORREF penColor);
-  // v6 需求①: 全/半角键的图标 = 中英文「逗号 + 句号」组合。
-  // 全角 = 「，。」(U+FF0C U+3002) / 半角 = 「,.」(U+002C U+002E)。
-  // 两个字形共用一条基线,墨迹盒**并集**在 kIconViewBox×kIconViewBox 内做
-  // 水平 + 垂直居中(viewBox 中心 (15,15),与既有 5 个线描图标同约定)。
+  // v7 需求(用户指令 2026-11-07): 全/半角键的图标 = **按钮内对角线布局**的
+  // 矢量图元(参考搜狗输入法状态栏)。
+  //   全角 = 右上**空心环**(宋体式「。」)+ 左下**逗号尾**(「，」)
+  //   半角 = 右上**实心点**(ASCII「.」)+ 左下小逗号尾(「,」)
+  // 图元表与居中公式在 fluxing::panel_fwicon(纯函数,生产与单测同源);
+  // 坐标系 = viewBox 局部坐标(raw px,不随 dpr 缩放),中心 (15,15),
+  // 与既有 5 个线描图标同约定。
   // 形状随当前**生效**宽度切换 ⇒ 英文态下必须显示半角(判据见
   // RimeWithWeasel::GetPanelInputState:full_shape && !ascii_mode)。
-  // (v5 的宽/窄圆角框方案已被 v6 覆盖,勿回退。)
+  // (v5 宽/窄圆角框、v6 字体字形组合两版均已被 v7 覆盖,勿回退。)
   static void DrawIconFullwidth(HDC hdc,
                                 int x,
                                 int y,
@@ -614,3 +613,4 @@ inline int InkBaselineForCap(int box_top, int box_bottom, int origin_y, int ink_
 
 }  // namespace panel_ink
 }  // namespace fluxing
+
