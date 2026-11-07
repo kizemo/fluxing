@@ -2,6 +2,8 @@
 
 > **状态：批次 E 已执行完毕** —— 代码 / 门禁 / 单测 / 构建 / 打包 / 静默安装 / 150% DPI 像素验收全部走完一遍。
 > 本文已**就地改写**为「批次 E 完成态 + 下一批起点」；下一会话请按 §八 执行序接手，**勿重做已完成的取证**，**勿改写更早的 handoff / prompt**。
+>
+> **分支 / 推送**：分支 `Fluxing`，HEAD = `7a052f7`；已按用户确认推送到 `kizemo/Fluxing`（`e438fa1..7a052f7`，本批 7 个 commit + 上一批 1 个）；工作区仅剩 ` m librime` 子模块假脏（**不得提交**）。
 
 ---
 
@@ -160,7 +162,7 @@
 2. **问卷回执**：全/半角图标形态 A / B / C；若非 A，按 §六-5 返工。
 3. **Bug#4 运行时取证**（可选）：先定位 WeaselServer 日志目录，再复现「切换后短暂英文」并留时间窗；坐实后决定是出 ADR 还是维持「不改码」结论。
 4. **遗留项清理**：x86 `weasel.dll` 陈旧（需改 WeaselTSF 代码触发重链）；`.rc` 其余 en-US 对话框中文化（可另开小批）。
-5. **收尾纪律**： Conventional Commits + 模块 scope（`WeaselServer` / `WeaselDeployer` / `test(ci)` / `installer` / `docs` / `chore(build)`）；**push 前先问用户**。
+5. **收尾纪律**： Conventional Commits + 模块 scope（`WeaselServer` / `WeaselDeployer` / `test(ci)` / `installer` / `docs` / `chore(build)`）；**push 前先问用户**。✅ 本批已按用户确认推送（`e438fa1..7a052f7`，8 个提交）。
 
 ---
 
