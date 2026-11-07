@@ -19,6 +19,8 @@ switches:
   - name: ascii_mode
     reset: 0
     states: [ASCII-OFF, ASCII-ON]
+  - name: ascii_punct  # 中英标点
+    states: [ ¥, $ ]
 
 engine:
   processors:

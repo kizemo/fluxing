@@ -201,6 +201,17 @@ L4  PASS  exit=0   1.4s  回归用例(fast) cases=1 pass=1 fail=0
   - 单测新增 T33m（笔宽 == 1）/ T33n（墨迹盒 == 路径框减边界）⇒ Dialog **245 / 245**、Refactor **40 / 40**
   - 取证限制：`full_shape` 无外部翻转入口 + 合成点击与真实 `mouse_event` 均不生效 ⇒ 全角态 1px 效果只能靠单测 + 人眼确认
 
+- [x] 追补 **v9 / 批次 H**：图标分离 + 半角=英文标点 + Shift 中英联动标点（用户三条指令）
+  - 图标 v9：全角环 `RECT{16,2,28,14}` + 12 点中文逗号、半角点 `RECT{17,4,24,11}` + 10 点小逗号；并集墨迹盒 全角 **25×27** / 半角 **19×25**（奇×奇 ⇒ 居中中心仍 (15,15)）
+  - 判据：两态两图元 **≥2 空列 + ≥2 空行**，x/y 皆不相交（像素探针 `tmp/probe-fwicon-v9.ps1`）
+  - 状态口径：新增 `include/FluxingPanelStatus.h` 的 `fluxing::panel_status::ShapeIsFullwidth(ascii_mode, ascii_punct)`；面板不再读裸 `full_shape`
+  - 服务端新增 `SetPunctuationWidth(bool halfwidth, WeaselSessionId)`；设置栏「全/半角」改为驱动 `ascii_punct`（为真 ⇒ punctuator `kNoop` ⇒ 英文标点）
+  - Shift 联动：`ShiftUp` 的 `kToggleAsciiMode` 分支追加 `_ApplyPunctWidth`；`GetPanelInputState` 改 live 读取（零 `set_option`、零文件 I/O）；新增「最近焦点会话」回退 `m_last_focus_session`
+  - yaml：`melt_eng` / `radical_pinyin` 补 `ascii_punct` 声明（不写 `reset` ⇒ 默认 ¥ = 中文标点）
+  - 单测新增 T33o / T33p / T33q / T34a–T34d ⇒ Dialog **252/252**、Refactor **40/40**
+  - 真机隔离实验 `Ctrl+.` 六段全绿（`tmp/probe-ctrl-punct.ps1` → `tmp/probe-ctrl-punct.txt`）
+  - 打包链路：改 `output/data/*.yaml` 后必须**重打安装包 + 静默重装**（数据落在 `$INSTDIR\weasel\data`），本轮已重打（NSIS_RC=0）并重装（四二进制 MATCH=True）
+
 ## P1 · 声明式槽位表（不排进 1.1.x）
 
 - [ ] ADR 草案：槽位表驱动（对齐 `UIPlugin.dll` 的 `AddUIFunction` 思路，自有实现，不抄代码）

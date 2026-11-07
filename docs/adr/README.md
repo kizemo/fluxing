@@ -53,6 +53,7 @@ Do not dump all ADRs into every prompt.
 | 0037 | 0037. 导入搜狗输入法用户词库：托盘入口挂在部署器子命令，解析器只做签名扫描，拼音取随包 cn_dicts | `docs/adr/0037-sogou-user-dictionary-import.md` | Accepted |
 | 0038 | 0038. 右键菜单唯一化：语言栏三套 MENU 资源下线，右键入口迁到「快捷设置栏」品牌图标 | `docs/adr/0038-single-context-menu-brand-icon-entry.md` | Accepted |
 | 0039 | 0039. 云端账号与多端同步：Cloudflare Workers + R2/D1 后端，客户端用系统自带能力，端到端加密，合并落在客户端 | `docs/adr/0039-cloud-account-sync-architecture.md` | Accepted |
+| 0040 | 0040. 快捷设置栏的全/半角状态源统一为 `ascii_punct`，并由中英切换联动标点宽度 | `docs/adr/0040-panel-fullwidth-state-source-and-shift-punct-linkage.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

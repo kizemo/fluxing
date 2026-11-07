@@ -1,4 +1,14 @@
 ## [Unreleased]
+### fix(WeaselServer): 快捷设置栏「全/半角」图标分离（v9）+ 半角对齐英文标点 + Shift 中英联动标点（批次 H）
+
+- **用户原话**：①「全半角符号不清晰，糊成一块的感觉。请再次调用 /frontend-ui-engineering 进行优化」；②「半角符号，应该对应英文标点。在中文状态，点击设置栏切换半角符号，输入的仍然是中文标点」；③「使用 shift 快捷键切换中英文，标点符号也会同步切换全半角，对应设置栏的全半角符号也应该切换。当前不仅全半角符号不切换，中英文标志也没有切换。」
+- **图标 v9（指令 ①）**：全角 = 右上**空心环**（路径框 `RECT{16,2,28,14}`）+ 左下**12 点中文逗号**（宽头→细尾）；半角 = 右上**实心点**（`RECT{17,4,24,11}`）+ 左下**10 点小逗号**。并集墨迹盒 **全角 25×27 / 半角 19×25**（奇×奇 ⇒ 居中中心恰 (15,15)，不触发奇偶补边）。判据：两态各自两图元 **≥2 空列 + ≥2 空行**、x/y 皆不相交 ⇒ 解决「糊成一块」。`kMaxPolyPoints` 10 → **12**。
+- **半角 = 英文标点（指令 ②）**：状态源从裸 `full_shape` 换成 `ascii_punct`（为真 ⇒ librime `punctuator` 直接 `kNoop` ⇒ 标点原样 ASCII）。新增 `include/FluxingPanelStatus.h` 的 `fluxing::panel_status::ShapeIsFullwidth(ascii_mode, ascii_punct)`（生产 + 单测同源，R7）；服务端新增 `RimeWithWeaselHandler::SetPunctuationWidth(bool halfwidth, WeaselSessionId)`（`include/RimeWithWeasel.h`），设置栏「全/半角」回调由 `SetOption(0,"full_shape",newFull)` 改为 `SetPunctuationWidth(!newFull, 0)`。
+- **中英联动标点（指令 ③）**：`ShiftUp` 的 `kToggleAsciiMode` 分支追加 `_ApplyPunctWidth(session, !ascii)`（`ascii` = 切换**前**旧值 ⇒ 旧中文 → 新英文 ⇒ 半角）；`GetPanelInputState` 改为 live 读取 `status.is_ascii_mode / is_full_shape / is_ascii_punct`，输出口径走 `ShapeIsFullwidth` ⇒ 面板图标与「中/英」标志同步。**显示路径零 `set_option`、零文件 I/O**（spec 099 / 宪法 P2）。`m_active_session` 会被 `FocusOut` 清零 ⇒ 新增「最近焦点会话」`m_last_focus_session` 回退（`FocusOut` 不清）。
+- **yaml**：`melt_eng.schema.yaml` / `radical_pinyin.schema.yaml` 补 `ascii_punct` 声明（**不写 `reset`** ⇒ 默认 index 0 = ¥ = 中文标点，与 `rime_ice.schema.yaml` 同口径；缺声明时 `set_option("ascii_punct")` 会静默失败）。
+- **验收**：单测新增 **T33o/T33p/T33q**（间隙 / x-y 不相交 / 12 点与 10 点）与 **T34a–T34d**（`ShapeIsFullwidth` 四组合）⇒ Dialog **252/252**、Refactor **40/40**；L0 静态门禁 `checks=14 pass=12 fail=0 skip=2`；真机隔离实验 `Ctrl+.`（与设置栏同一 `set_option` 路径）六段全绿：A 中文态 `,` → **U+FF0C**；B `Ctrl+.` → **U+002C**；C 再按 → U+FF0C；D/E `Shift+space` → U+002C / U+FF0C；F 裸 Shift → **U+002C**（中→英 ⇒ 标点同步半角）。
+- **未改**：`include/WeaselIPCData.h`、IPC 协议、`output/install.nsi`、`librime/` 子模块、面板几何常量（215×32）、`DrawIconFullwidth()` 仍为纯 GDI 矢量（零 `AlphaBlend`）。
+
 
 ### fix(WeaselServer): 快捷设置栏全半角图标收小句号、重画中文逗号（v8）
 

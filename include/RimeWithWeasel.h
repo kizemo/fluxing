@@ -135,6 +135,20 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   //   - 非 const:校正镜像需要写 m_global_ascii_mode / m_full_shape。
   void GetPanelInputState(bool* ascii, bool* fullwidth);
 
+  // 批次 H(用户需求②):设置栏「全/半角」⇒ **英文标点** 的落点。
+  //
+  // ★ 为什么不是 full_shape:本 fork 的 output/data/default.yaml 里
+  //   punctuator/full_shape 与 punctuator/half_shape **两张表都把 , . ? ; : ( [
+  //   { 映射成中文标点**(上游 librime 也是这个约定),所以「切 full_shape」在
+  //   中文标点语义下切不出任何差别 —— 这正是用户说的「点了半角,输入的仍然是
+  //   中文标点」。
+  // ★ 为什么是 ascii_punct:librime 的 punctuator 在 ascii_punct=true 时
+  //   直接 `return kNoop`(librime/src/rime/gear/punctuator.cc),标点**原样
+  //   直出 ASCII**。这是既有开关里唯一能真正产出英文标点的那个。
+  // 口径:halfwidth=true ⇒ ascii_punct=true ⇒ 英文标点;
+  //       halfwidth=false ⇒ ascii_punct=false ⇒ 回到中文标点。
+  void SetPunctuationWidth(bool halfwidth, WeaselSessionId ipc_id = 0);
+
   void OnUpdateUI(std::function<void()> const& cb);
 
   // spec 080: called when the user switches the active input profile to
@@ -211,6 +225,26 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   RimeSessionId to_session_id(WeaselSessionId ipc_id) {
     return m_session_status_map[ipc_id].session_id;
   }
+  // 批次 H:解析「这次操作该作用到哪个 rime 会话」。
+  //
+  // 顺序:显式 ipc_id → 活动会话(m_active_session)→ **最近一次获得焦点的
+  // 会话**(m_last_focus_session)→ 唯一会话。
+  //
+  // ★ 第三档是批次 H 新增的,直接对应用户需求③的症状
+  //   「Shift 切中英文,设置栏的中/英与全/半角都不切换」:
+  //   面板的 100ms 轮询与用户的点击都可能发生在 m_active_session 已被
+  //   FocusOut 清零之后,没有这一档就永远读不到 **live** 状态,只能回落到
+  //   陈旧镜像 ⇒ 图标看起来「按了没反应」。
+  //
+  // ★ 全程用 find() 读,**不用 to_session_id()** —— 它的 operator[] 会在键
+  //   不存在时**插入**一个假会话,把「只有一个会话」这个事实破坏掉
+  //   (SetOption 的唯一会话回退就靠它)。
+  RimeSessionId _ResolveTargetSession(WeaselSessionId ipc_id);
+  // 批次 H:把「标点宽度」落到某个会话,并同步服务端镜像。
+  // halfwidth=true ⇒ ascii_punct=true(英文标点)且 full_shape=false;
+  // halfwidth=false ⇒ ascii_punct=false(中文标点)且 full_shape=true。
+  // 两个 option **同向**拨,避免引擎里留下两套互相矛盾的状态。
+  void _ApplyPunctWidth(RimeSessionId session_id, bool halfwidth);
   SessionStatus& get_session_status(WeaselSessionId ipc_id) {
     return m_session_status_map[ipc_id];
   }
@@ -229,6 +263,14 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   std::vector<std::string> m_available_schemas;
   mutable bool m_simplification = false;
   mutable bool m_full_shape = false;
+  // 批次 H:ascii_punct 运行时镜像(true = 英文标点 = 面板上的「半角」)。
+  // 与 m_full_shape 不同向:面板显示的是「**生效**标点是不是英文」,
+  // 判据是 !ascii_mode && !ascii_punct(英文态本身就打 ASCII 标点)。
+  mutable bool m_ascii_punct = false;
+  // 批次 H:最近一次获得输入焦点的会话(WeaselSessionId)。
+  // FocusOut **不清**它 —— 面板轮询要靠它读到 live 的 ascii_mode /
+  // ascii_punct;只有 RemoveSession(会话真的没了)才清。
+  WeaselSessionId m_last_focus_session = 0;
   mutable bool m_cached_options = false;
   bool m_disabled;
   std::string m_last_schema_id;

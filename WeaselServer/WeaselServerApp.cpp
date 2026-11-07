@@ -259,10 +259,13 @@ int WeaselServerApp::Run() {
   // IsSimplification 缓存 —— **不碰文件**。
   QuickPanelDialog::SetStateProvider([this]() {
     fluxing::panel_status::PanelState st;
-    // v6 需求②: 面板要的是「**生效**标点宽度」= full_shape && !ascii_mode。
-    // 英文态下 rime 的 punctuator 走 ascii 分支,即使 full_shape 为 true 也打
-    // 半角 —— 所以不能像旧代码那样直接拿 IsFullShape()(那个 option 在中英
-    // 切换时根本不变,正是「切到英文图标仍是全角」的根因)。
+    // v6 需求② + 批次 H: 面板要的是「**生效**标点宽度」。
+    // 口径已改为 `!ascii_mode && !ascii_punct`(= 生效标点是不是中文全角):
+    //   英文态 ⇒ ascii_composer 直接提交 ASCII ⇒ 半角;
+    //   中文态 + ascii_punct ⇒ punctuator kNoop ⇒ 原样 ASCII ⇒ 半角;
+    //   中文态 + 无 ascii_punct ⇒ 中文标点表 ⇒ 全角。
+    // 不能像旧代码那样直接拿 IsFullShape()(full_shape 在中英切换时根本不变,
+    // 正是「切到英文图标仍是全角」的根因)。
     // GetPanelInputState 只读内存镜像 + get_status(进程内 C API 读内存),
     // 不碰文件,仍满足 spec 099 的显示路径零 I/O。
     bool panel_ascii = false;
@@ -514,7 +517,7 @@ void WeaselServerApp::ToggleAlwaysShowMode() {
 
 void WeaselServerApp::ShowQuickPanel() {
   // 批次 F 缺陷①:首帧口径必须与 100ms 轮询(SetStateProvider)完全一致 ——
-  // 取「生效标点宽度」= full_shape && !ascii_mode。裸 IsFullShape() 只反映
+  // 取「生效标点宽度」(口径见上面 provider 的注释)。裸 IsFullShape() 只反映
   // full_shape 开关,英文态下 full_shape 可能仍为 true,于是英文态唤起面板会
   // 先闪一帧全角图标再被轮询纠正回半角。
   bool currentFull = false;
@@ -553,10 +556,19 @@ void WeaselServerApp::ShowQuickPanel() {
         }
         fluxing::PhrasesDialogIPC::Show();
       },
-      // 批次 F 缺陷②/D3:点「全半角」的用户意图就是「我要全角标点」。
+      // 批次 F 缺陷②/D3 + 批次 H 需求②:点「全半角」的用户意图就是「我要换
+      // 标点宽度」,而且**半角必须对应英文标点**。
       // 英文态下生效标点宽度恒为半角(ascii_mode 优先于 full_shape),只置
       // full_shape 用户看不到任何变化 —— 这正是「点击无法切换全半角」的真身。
-      // 所以打开全角前先退出英文态;关闭全角只动 full_shape,不打扰中英状态。
+      // 所以打开全角前先退出英文态。
+      //
+      // ★ 批次 H:落点从 full_shape 改成 **ascii_punct**。
+      //   本 fork 的 output/data/default.yaml 里 punctuator/full_shape 与
+      //   punctuator/half_shape **两张表都把标点映射成中文** ⇒ 切 full_shape
+      //   在中文标点语义下切不出任何差别,这正是用户说的「在中文状态点击设置
+      //   栏切换半角,输入的仍然是中文标点」。
+      //   ascii_punct=true 时 librime 的 punctuator 直接 kNoop ⇒ 标点原样
+      //   直出 ASCII,才是真正的「半角 = 英文标点」。
       [this](bool newFull) {
         if (!m_handler)
           return;
@@ -566,7 +578,7 @@ void WeaselServerApp::ShowQuickPanel() {
           if (panel_ascii)
             m_handler->SetOption(0, "ascii_mode", false);
         }
-        m_handler->SetOption(0, "full_shape", newFull);
+        m_handler->SetPunctuationWidth(!newFull, 0);
       },
       // spec 099 P0-3: 槽 3(Account)→「关于 / 账号说明」页。
       // 页内文案明示:本输入法不含云端账号,词库/配置/用户数据全部留在本机,

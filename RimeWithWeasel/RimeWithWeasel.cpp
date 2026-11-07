@@ -26,6 +26,8 @@
 #include <ShiftStateMachine.h>  // ADR 0010: bare Shift disambiguation policy
 // spec 090 / ADR 0023: 候选词屏蔽名单(读写 + 可见->引擎索引映射)。
 #include <FluxingCandidateIgnore.h>
+// 批次 H: 面板「全/半角」的显示口径纯函数(单一事实源,constitution R7)。
+#include <FluxingPanelStatus.h>
 
 #define TRANSPARENT_COLOR 0x00000000
 #define ARGB2ABGR(value)                                 \
@@ -277,6 +279,9 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
   _UpdateUI(ipc_id);
   add_session = false;
   m_active_session = ipc_id;
+  // 批次 H:记住最近一次拿到输入焦点的会话。面板的 100ms 轮询要靠它读到
+  // live 的 ascii_mode / ascii_punct(见 _ResolveTargetSession)。
+  m_last_focus_session = ipc_id;
   return ipc_id;
 }
 
@@ -315,6 +320,10 @@ DWORD RimeWithWeaselHandler::RemoveSession(WeaselSessionId ipc_id) {
   // WeaselSessionId that maps to a recycled ipc_id later.
   m_shiftState.erase(ipc_id);
   m_active_session = 0;
+  // 批次 H:会话真的没了,「最近焦点会话」这档回退也就失效了 ⇒ 清掉。
+  // (FocusOut **不**清 —— 面板轮询要靠它读 live 状态。)
+  if (m_last_focus_session == ipc_id)
+    m_last_focus_session = 0;
   return 0;
 }
 
@@ -380,6 +389,8 @@ BOOL RimeWithWeaselHandler::ProcessKeyEvent(KeyEvent keyEvent,
   _Respond(ipc_id, eat);
   _UpdateUI(ipc_id);
   m_active_session = ipc_id;
+  // 批次 H:打过字 = 这个会话就是当前输入上下文,记下来给面板回退用。
+  m_last_focus_session = ipc_id;
   // spec 077: intervening (non-release, non-Shift) key between ShiftDown
   // and ShiftUp suppresses the release-only select. Per R4: only the
   // **down** event counts as intervening; letter releases don't.
@@ -596,6 +607,8 @@ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
   fluxing::foreground_restore::CaptureFromCurrentThread();
   _UpdateUI(ipc_id);
   m_active_session = ipc_id;
+  // 批次 H:拿到输入焦点 ⇒ 这是「当前」的会话,记下来。
+  m_last_focus_session = ipc_id;
   // spec 080 (ADR 0008): the old "show the QuickPanel on every
   // FocusIn" call site was disabled with `if (false && ipc_id > 0)`
   // because the GDI+ Bitmap(IStream*) lifetime bug (L67-L69) crashed
@@ -610,6 +623,16 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
   if (m_ui)
     m_ui->Hide();
   m_active_session = 0;
+  // 批次 H:FocusOut **不清** m_last_focus_session。
+  //
+  // 缺陷背景(用户 2026-11-07 需求③):「Shift 切中英文,设置栏的全/半角符号
+  // 与中/英标志都不切换」。根因之一就是面板读 live 状态时唯一的入口
+  // (m_active_session)在这里被清零 ⇒ GetPanelInputState 只能回落到陈旧
+  // 镜像 ⇒ 图标看起来「按了没反应」。
+  //
+  // 为什么留着安全:m_last_focus_session 只用于**读**当前会话的 live 状态,
+  // 它不产生任何副作用;会话真的没了(RemoveSession)时会被清掉。
+  //
   // ADR 0032: 自家 UI 进程的 FocusOut 是「自家窗口没了」,不是「用户切走了
   // 输入法」。必须不改在场状态、不收起快捷设置栏(L171)。
   if (fluxing::IsOwnUiClient(_ClientKind(ipc_id))) {
@@ -932,23 +955,24 @@ void RimeWithWeaselHandler::SetOption(WeaselSessionId ipc_id,
   //      静默无效(调和 set_option 都不会报错);
   //   ② 下面的缓存块照旧写 m_full_shape = val ⇒ 镜像与真实状态永久劈叉,
   //      从此面板图标再也不跟着变。
-  // 修法:按「ipc_id → 活动会话 → 唯一会话」顺序解析;解析不出来就直接
-  // return 且**不写缓存** —— 宁可这一下按不动,也不能让镜像说谎。
+  // 修法:按「ipc_id → 活动会话 → 最近焦点会话 → 唯一会话」顺序解析;解析
+  // 不出来就直接 return 且**不写缓存** —— 宁可这一下按不动,也不能让镜像说谎。
   //
   // ★ 全程不用 to_session_id() 取 session_id:它的 operator[] 副作用正是 ①
   //   那个假会话的来源。只在已确认存在的 map 条目上读 .session_id。
-  RimeSessionId target = 0;
-  if (ipc_id) {
-    auto it = m_session_status_map.find(ipc_id);
-    if (it != m_session_status_map.end())
-      target = it->second.session_id;
-  } else {
-    auto it = m_session_status_map.find(m_active_session);
-    if (it != m_session_status_map.end())
-      target = it->second.session_id;
-    // 回退:只有恰好一个会话时,才能确定用户指的是谁。
-    if (!target && m_session_status_map.size() == 1)
-      target = m_session_status_map.begin()->second.session_id;
+  //   (批次 H 把这套顺序抽成 _ResolveTargetSession,设置栏与面板共用同源。)
+  RimeSessionId target = _ResolveTargetSession(ipc_id);
+
+  // 批次 H:「标点宽度」这组 option 统一走 _ApplyPunctWidth 落点 ——
+  // ascii_punct 与 full_shape 必须**同向**,否则引擎里会留下两套互相矛盾的
+  // 状态(面板显示半角、引擎还在打中文标点)。
+  //   ascii_punct=true ⇒ 半角 ⇒ 英文标点(punctuator 直接 kNoop)
+  //   full_shape=true  ⇒ 全角 ⇒ 中文标点
+  if (opt == "ascii_punct" || opt == "full_shape") {
+    if (!target)
+      return;  // 无法解析目标会话 ⇒ 不 set_option,也不写缓存(见上)
+    _ApplyPunctWidth(target, opt == "ascii_punct" ? val : !val);
+    return;
   }
 
   if (broadcast_ascii) {
@@ -968,12 +992,23 @@ void RimeWithWeaselHandler::SetOption(WeaselSessionId ipc_id,
     rime_api->set_option(target, opt.c_str(), val);
   }
   // spec 045: cache 简/繁 / 全/半角 / ascii mode for QuickPanel initial state.
+  // (批次 H:full_shape 的镜像改由 _ApplyPunctWidth 写 —— 它与 ascii_punct
+  //  同源,不能在这里各写各的。)
   if (opt == "simplification")
     m_simplification = val;
-  else if (opt == "full_shape")
-    m_full_shape = val;
   else if (opt == "ascii_mode")
     m_global_ascii_mode = val;
+}
+
+void RimeWithWeaselHandler::SetPunctuationWidth(bool halfwidth,
+                                                 WeaselSessionId ipc_id) {
+  // 批次 H:设置栏「全/半角」的唯一入口。
+  // halfwidth=true  ⇒ ascii_punct=true ⇒ 英文标点(半角)
+  // halfwidth=false ⇒ ascii_punct=false ⇒ 中文标点(全角)
+  const RimeSessionId target = _ResolveTargetSession(ipc_id);
+  if (!target)
+    return;  // 解析不出会话 ⇒ 什么都不做(绝不让镜像说谎)
+  _ApplyPunctWidth(target, halfwidth);
 }
 
 void RimeWithWeaselHandler::SelectSchema(const std::string& schema_id) {
@@ -2125,50 +2160,107 @@ bool RimeWithWeaselHandler::IsSimplification() const {
   return m_simplification;
 }
 
-// v6 需求②: 面板的「生效输入态」。
+// 批次 H:解析目标会话(顺序与理由见 RimeWithWeasel.h 的声明处注释)。
+RimeSessionId RimeWithWeaselHandler::_ResolveTargetSession(
+    WeaselSessionId ipc_id) {
+  if (ipc_id) {
+    auto it = m_session_status_map.find(ipc_id);
+    if (it != m_session_status_map.end() && it->second.session_id)
+      return it->second.session_id;
+    return 0;
+  }
+  auto it = m_session_status_map.find(m_active_session);
+  if (it != m_session_status_map.end() && it->second.session_id)
+    return it->second.session_id;
+  // 批次 H 第三档:最近一次拿到输入焦点的会话。
+  // m_active_session 会被 FocusOut 清零,而面板轮询 / 用户点击完全可能发生在
+  // 那之后 —— 没有这一档就永远读不到 live 状态(用户需求③的症状)。
+  it = m_session_status_map.find(m_last_focus_session);
+  if (it != m_session_status_map.end() && it->second.session_id)
+    return it->second.session_id;
+  // 回退:只有恰好一个会话时,才能确定用户指的是谁。
+  if (m_session_status_map.size() == 1) {
+    auto only = m_session_status_map.begin();
+    if (only->second.session_id)
+      return only->second.session_id;
+  }
+  return 0;
+}
+
+void RimeWithWeaselHandler::_ApplyPunctWidth(RimeSessionId session_id,
+                                              bool halfwidth) {
+  if (!rime_api || !session_id)
+    return;
+  // 半角 ⇒ ascii_punct=true:librime 的 punctuator 在这个 option 为真时直接
+  // `return kNoop`(librime/src/rime/gear/punctuator.cc)⇒ 标点**原样直出
+  // ASCII**。这是既有开关里唯一能真正打出英文标点的那个
+  // (full_shape / half_shape 两张表在本 fork 里都映射中文标点)。
+  rime_api->set_option(session_id, "ascii_punct", halfwidth ? True : False);
+  // full_shape 与 ascii_punct 同向,保证「全/半角」在引擎里只有一套状态。
+  // 只在当前值不同才写:否则每次 Shift 都要多落一次 user.yaml。
+  const bool cur_full =
+      rime_api->get_option(session_id, "full_shape") != False;
+  const bool want_full = !halfwidth;
+  if (cur_full != want_full)
+    rime_api->set_option(session_id, "full_shape", want_full ? True : False);
+  // 服务端镜像(面板读不到 live 状态时用它兜底)。
+  m_ascii_punct = halfwidth;
+  m_full_shape = want_full;
+}
+
+// v6 需求② + 批次 H: 面板的「生效输入态」。
 //
 // 缺陷背景(用户 2026-11-07 报告):「全半角符号随中英文切换自动变化,设置栏的
-// 图标也应该变化;当前这个键不会改变」。根因是面板只拿到 IsFullShape()——
-// full_shape 这个 option 在中英文切换时**并不变**,变的是 punctuator 分支
-// (英文态走 ascii 分支 ⇒ 打出半角)。真正的判据必须是
-// `full_shape && !ascii_mode`。
+// 图标也应该变化;当前这个键不会改变」。两轮根因:
+//   v6:面板只拿到 IsFullShape()—— full_shape 这个 option 在中英文切换时
+//       **并不变**,变的是 punctuator 分支(英文态走 ascii 分支 ⇒ 半角);
+//   批次 H:面板的 live 读取入口只有 m_active_session,而它会被 FocusOut
+//       清零 ⇒ 面板读不到 live 状态,只能回落到陈旧镜像 ⇒「按了没反应」
+//       (用户原话:「当前不仅全半角符号不切换,中英文标志也没有切换」)。
+//
+// 现在的口径:**「全角」= 生效标点是中文全角标点** = !ascii_mode && !ascii_punct
+//   - 英文态:ascii_composer 直接提交 ASCII ⇒ 标点自然是英文 ⇒ 记半角;
+//   - 中文态 + ascii_punct:punctuator kNoop ⇒ 原样 ASCII ⇒ 也是半角;
+//   - 中文态 + 无 ascii_punct:中文标点表 ⇒ 全角。
 //
 // 实现约束(勿简化,均为已踩过的坑):
 //   - **不调 IsFullShape()**:它首次调用要 rime_api->user_config_open(文件 I/O),
 //     而本函数由显示路径每 100ms 调一次,会撞 constitution P2(显示路径零 I/O);
-//   - **不写 to_session_id(m_active_session)**:它内部是
-//     `m_session_status_map[ipc_id]` —— 键不存在时会**插入**一个空 status,
-//     把「只有一个会话」的事实破坏掉(SetOption 的唯一会话回退就靠它);
+//   - **不写 to_session_id(...)**:它内部是 `m_session_status_map[ipc_id]` ——
+//     键不存在时会**插入**一个空 status,把「只有一个会话」的事实破坏掉
+//     (SetOption 的唯一会话回退就靠它);统一走 _ResolveTargetSession。
 //   - get_status 是进程内 C API 读内存(与 ProcessKeyEvent 热路径同形态),
 //     拿到结果必须 free_status,否则泄漏 status 内部指针。
+//   - 这里**只读**状态、**绝不**调 set_option —— set_option 会触发 switcher
+//     写 user.yaml(文件 I/O),出现在 100ms 轮询里就是 P2 违规。
 void RimeWithWeaselHandler::GetPanelInputState(bool* ascii, bool* fullwidth) {
   bool a = m_global_ascii_mode;
-  bool f = m_full_shape;
+  bool p = m_ascii_punct;
 
-  if (rime_api && m_active_session) {
-    auto it = m_session_status_map.find(m_active_session);
-    if (it != m_session_status_map.end() && it->second.session_id) {
-      RimeStatus status = {0};
-      if (rime_api->get_status(it->second.session_id, &status)) {
-        const bool live_ascii = status.is_ascii_mode != 0;
-        const bool live_full = status.is_full_shape != 0;
-        rime_api->free_status(&status);
-        // 顺手校正镜像:用户按 Shift 切中英、短语触发的开关都走不到 SetOption,
-        // 只有这里校正,面板下一帧才会跟着变。
-        m_global_ascii_mode = live_ascii;
-        m_full_shape = live_full;
-        a = live_ascii;
-        f = live_full;
-        // 注意:这里**不能**置 m_cached_options —— 那个标志同时管
-        // IsSimplification(),置 true 会让简繁状态被误报成 false。
-      }
+  const RimeSessionId sid = _ResolveTargetSession(0);
+  if (rime_api && sid) {
+    RimeStatus status = {0};
+    if (rime_api->get_status(sid, &status)) {
+      const bool live_ascii = status.is_ascii_mode != 0;
+      const bool live_full = status.is_full_shape != 0;
+      const bool live_punct = status.is_ascii_punct != 0;
+      rime_api->free_status(&status);
+      // 顺手校正镜像:用户按 Shift 切中英、短语触发的开关都走不到 SetOption,
+      // 只有这里校正,面板下一帧才会跟着变。
+      m_global_ascii_mode = live_ascii;
+      m_full_shape = live_full;
+      m_ascii_punct = live_punct;
+      a = live_ascii;
+      p = live_punct;
+      // 注意:这里**不能**置 m_cached_options —— 那个标志同时管
+      // IsSimplification(),置 true 会让简繁状态被误报成 false。
     }
   }
 
   if (ascii)
     *ascii = a;
   if (fullwidth)
-    *fullwidth = f && !a;
+    *fullwidth = fluxing::panel_status::ShapeIsFullwidth(a, p);
 }
 
 bool RimeWithWeaselHandler::IsFullShape() const {
@@ -2321,6 +2413,17 @@ void RimeWithWeaselHandler::ShiftUp(bool is_left,
     // another session -- exactly the scope of the yaml `Shift+space` toggle.
     bool ascii = rime_api->get_option(to_session_id(ipc_id), "ascii_mode");
     rime_api->set_option(to_session_id(ipc_id), "ascii_mode", !ascii);
+    // 批次 H(用户需求③):「使用 shift 快捷键切换中英文,标点符号也会同步切换
+    // 全半角」⇒ 切中英文时**同时**拨标点宽度:
+    //   切到英文 ⇒ 半角(英文标点);切回中文 ⇒ 全角(中文标点)。
+    // 落在 ascii_punct 上(半角 = ascii_punct=true ⇒ punctuator kNoop ⇒
+    // 标点原样直出 ASCII)。
+    //
+    // 作用域仍然限**当前会话**(ADR 0010 P2):裸 Shift 绝不广播到别的会话。
+    // 为什么这里不写 m_global_ascii_mode:那是**全局**镜像,ADR 0012 规定
+    // 它的传播判据由另一个开关(m_global_ascii_configured)决定;面板显示
+    // 由 GetPanelInputState 的 live 读取负责校正(读的就是本会话)。
+    _ApplyPunctWidth(to_session_id(ipc_id), !ascii);
     DLOG(INFO) << "toggle ascii_mode -> " << !ascii << " ipc_id=" << ipc_id;
     // ADR 0012: answer with a body so that the client learns the new
     // status.ascii_mode and the language bar icon follows the input mode.

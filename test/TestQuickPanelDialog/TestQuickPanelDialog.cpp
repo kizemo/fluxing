@@ -38,6 +38,8 @@
 // **纯逻辑单一真相源**(生产与测试读同一份,constitution R7)。
 // 测试**不复制**这些公式 —— 复制即漂移(spec 092 记的「假绿」死法)。
 #include "../../include/FluxingPanelDpi.h"
+// 批次 H: 面板「全/半角」显示口径的纯函数(生产与测试同源,constitution R7)。
+#include "../../include/FluxingPanelStatus.h"
 #include "../../include/FluxingPanelStatus.h"
 #include "../../include/FluxingPanelKeyboard.h"
 #include "../../include/FluxingPanelFwIcon.h"
@@ -1429,10 +1431,10 @@ int main() {
     const int fw_h = fw.ink.bottom - fw.ink.top + 1;
     const int hw_w = hw.ink.right - hw.ink.left + 1;
     const int hw_h = hw.ink.bottom - hw.ink.top + 1;
-    Check(fw_w == 23 && fw_h == 25,
-          "T33a: 全角墨迹盒 23x25 (v8 收小句号; v6 字形仅 18x4)");
-    Check(hw_w == 17 && hw_h == 23,
-          "T33b: 半角墨迹盒 17x23 (v8 收小句号; v6 字形仅 8x5)");
+    Check(fw_w == 25 && fw_h == 27,
+          "T33a: 全角墨迹盒 25x27 (v9 拉开两图元; v8.1 的 23x25 糊成一块)");
+    Check(hw_w == 19 && hw_h == 25,
+          "T33b: 半角墨迹盒 19x25 (v9 拉开两图元; v8 的 17x23)");
 
     const POINT fw_off = fluxing::panel_fwicon::CenteringOffset(fw, vb);
     const POINT hw_off = fluxing::panel_fwicon::CenteringOffset(hw, vb);
@@ -1528,13 +1530,51 @@ int main() {
     Check(fw_comma.right - fw_comma.left + 1 == 11 &&
               fw_comma.bottom - fw_comma.top + 1 == 13 &&
               hw_comma.right - hw_comma.left + 1 == 8 &&
-              hw_comma.bottom - hw_comma.top + 1 == 12,
-          "T33k: 逗号轮廓 全角 11x13 / 半角 8x12 (v7 全角仅 9x12)");
+              hw_comma.bottom - hw_comma.top + 1 == 13,
+          "T33k: 逗号轮廓 全角 11x13 / 半角 8x13 (v7 全角仅 9x12)");
     Check(fw.shapes[1].kind == fluxing::panel_fwicon::kSolidPolygon &&
               fw.shapes[1].ptCount >= 8 &&
               hw.shapes[1].kind == fluxing::panel_fwicon::kSolidPolygon &&
               hw.shapes[1].ptCount >= 8,
           "T33l: 逗号是单一 >=8 点多边形(非 v7 的头+尾两块)");
+
+    // ===== v9(用户指令 2026-11-07):「全半角符号不清晰,糊成一块的感觉」 =====
+    // 病灶不是线粗(v8.1 已把空心环壁收到 1 px),而是**两个图元贴在一起**:
+    // v8.1 的全角环墨迹左边界 x=16 与逗号墨迹右边界 x=15 只有 **0 个空列**,
+    // 且环底边 y=14 与逗号顶边 y=15 相邻 ⇒ 两图元在 (16,14)/(15,15) 处
+    // **斜向相接**,肉眼看成一坨「糊」。
+    // v9 的判据:两图元之间**至少 2 个空列 + 2 个空行**,且在 x、y 上都不相交。
+    const int fw_gap_x = ring_ink.left - fw_comma.right - 1;
+    const int fw_gap_y = fw_comma.top - ring_ink.bottom - 1;
+    const int hw_gap_x = dot_ink.left - hw_comma.right - 1;
+    const int hw_gap_y = hw_comma.top - dot_ink.bottom - 1;
+    Check(fw_gap_x >= 2 && fw_gap_y >= 2 && hw_gap_x >= 2 && hw_gap_y >= 2,
+          "T33o: 环/点 与 逗号之间 >=2 空列且 >=2 空行(v9 不再糊成一块)");
+    Check(fw_gap_x > 0 && fw_gap_y > 0 && hw_gap_x > 0 && hw_gap_y > 0,
+          "T33p: 两图元在 x、y 上互不相交(没有斜向相接的「糊」)");
+    Check(fw.shapes[1].ptCount == 12 && hw.shapes[1].ptCount == 10,
+          "T33q: 全角逗号 12 点(宽头→细尾是曲率)、半角 10 点");
+  }
+
+  // ============================================================
+  // T34 · 批次 H:面板「全/半角」显示口径(纯函数,单一真相源)
+  //
+  // 口径:全角 = 生效标点是**中文全角标点** = !ascii_mode && !ascii_punct
+  //   - 英文态 ⇒ ascii_composer 直出 ASCII ⇒ 半角
+  //   - 中文态 + ascii_punct ⇒ punctuator kNoop ⇒ 原样 ASCII ⇒ 半角
+  //     (用户需求②:「半角符号应该对应英文标点」)
+  //   - 中文态 + 无 ascii_punct ⇒ 中文标点表 ⇒ 全角
+  // ============================================================
+  {
+    using fluxing::panel_status::ShapeIsFullwidth;
+    Check(ShapeIsFullwidth(false, false),
+          "T34a: 中文态 + 无 ascii_punct ⇒ 全角(中文标点)");
+    Check(!ShapeIsFullwidth(true, false),
+          "T34b: 英文态 ⇒ 半角(标点自然是英文)");
+    Check(!ShapeIsFullwidth(false, true),
+          "T34c: 中文态 + ascii_punct ⇒ 半角(半角 = 英文标点)");
+    Check(!ShapeIsFullwidth(true, true),
+          "T34d: 英文态 + ascii_punct ⇒ 半角");
   }
 
   std::printf("\n=== %d / %d assertions passed ===\n", g_pass, g_pass + g_fail);

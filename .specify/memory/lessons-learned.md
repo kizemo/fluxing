@@ -14307,3 +14307,26 @@ L17（自写检查要有牙）；`.claude/rules/ipc-boundary.md`（维护态必�
 **关联**：`RimeWithWeasel/RimeWithWeasel.cpp:128-139 / 209-231 / 355-396 / 1043-1067 / 1078-1093`；
 ADR 0012（ascii_mode 作用域）；ADR 0037（maintenance 成对约束）；L107（同版本不同内容）；
 handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四.3。
+
+## L197 - **「英文态标点天然是 ASCII」会让验收证据失效；且本机活动 Rime 用户目录不在 `%APPDATA%`**（2026-11-07）
+
+- **证据歧义（指令②验收踩坑）**：`librime/src/rime/gear/ascii_composer.cc` 在 `ascii_mode` 且非组合键时返回 `kRejected`
+  ⇒ **英文态打出的标点天然就是 ASCII**。所以「切到英文后打出 `,`」**不能**证明 `ascii_punct` 生效。
+  正确取证：用 `Ctrl+.`（`output/data/default.yaml` 的 `- { when: always, toggle: ascii_punct, accept: Control+period }`）
+  在**中文态**做隔离实验 —— 中文态 `Ctrl+.` 之后打出 ASCII `,` 才证明 `set_option("ascii_punct", true)` 真落地
+  （`librime/src/rime/gear/punctuator.cc:102-104` 命中 `ascii_punct` ⇒ `kNoop` ⇒ 标点原样直出）。
+- **活动用户目录不在 `%APPDATA%`**：本机活动 Rime 用户目录是 **`D:\Program Files\fluxing\user1\fluxing\`**
+  （`user.yaml` / `*.custom.yaml` / `build\`），`C:\Users\Duanyi\AppData\Roaming\Fluxing\` 是 7/8 的**旧目录**。
+  读错副本比不读更危险：本例误读旧目录会得出「选项没有持久化」的假结论 —— 而活动 `user.yaml` 只有
+  `var:` 三项、**根本没有 `switcher:` 段** ⇒ 该观察面本来就无效。
+- **装机数据目录是 `$INSTDIR\weasel\data`**：`output/install.nsi` 在 `StrCpy $INSTDIR "${WEASEL_ROOT}"`
+  （`WEASEL_ROOT = $INSTDIR\weasel`）之后才铺数据 ⇒ **只改仓库里的 `output/data/*.yaml` 不会到机器**，
+  必须重打安装包 + 静默重装，再等部署产物 `build\*.yaml` 刷新。
+- **编辑 yaml 不得整文件换行尾**：`melt_eng.schema.yaml` 原为 LF，被整体写成 CRLF ⇒ **743 行假 diff**。
+  修法：`git checkout -- <file>` 恢复后按**原行尾**精确重插，用 `git diff --numstat` 判据（本例 2/0 与 9/0）。
+- **推广**：① 验收「某个开关是否生效」时，先确认**该现象在对照条件下是否天然成立**（英文态 ASCII 是天然的）
+  ⇒ 天然成立的现象不能当证据；② 读运行态文件前先确认**活动副本路径**；③ 改「安装包内数据」类资源时把
+  「仓库 → 安装包 → 装机目录 → 部署产物」四段链路逐段验。
+- **关联**：`librime/src/rime/gear/ascii_composer.cc:95-123`、`librime/src/rime/gear/punctuator.cc:102-104`、
+  `output/data/default.yaml:272`、`output/install.nsi:31/513/547`、`RimeWithWeasel/RimeWithWeasel.cpp`、
+  `WeaselServer/WeaselServerApp.cpp`；handoff-2026-11-07-quickpanel-v9-fwicon-batch-h.md。

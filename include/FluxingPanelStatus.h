@@ -57,5 +57,22 @@ inline const wchar_t* ShapeModeText(bool fullwidth) {
   return fullwidth ? L"全" : L"半";
 }
 
+// 批次 H:面板「全角」的**显示口径**(单一事实源,constitution R7)。
+//
+// 「全角」= 生效的标点是**中文全角标点**:
+//   - 英文态(ascii_mode):ascii_composer 直接提交 ASCII ⇒ 标点自然是英文
+//     ⇒ 面板记「半角」;
+//   - 中文态 + ascii_punct:librime 的 punctuator 直接 kNoop ⇒ 原样 ASCII
+//     ⇒ 也是「半角」(这正是用户需求②要的「半角 = 英文标点」);
+//   - 中文态 + 无 ascii_punct:走中文标点表 ⇒ 「全角」。
+//
+// ★ 为什么不能沿用 v6 的 `full_shape && !ascii_mode`:本 fork 的
+//   punctuator/full_shape 与 punctuator/half_shape **两张表都映射中文标点**
+//   (output/data/default.yaml),而且 full_shape 在中英切换时**根本不变** ——
+//   拿它当判据就是「切到英文图标仍是全角」那个缺陷的根因(v6)。
+inline bool ShapeIsFullwidth(bool ascii_mode, bool ascii_punct) {
+  return !ascii_mode && !ascii_punct;
+}
+
 }  // namespace panel_status
 }  // namespace fluxing

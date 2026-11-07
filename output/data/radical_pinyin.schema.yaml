@@ -12,6 +12,15 @@ schema:
     注音、校对、方案：Mirtle
     仓库：https://github.com/mirtlecn/rime_radical_pinyin
 
+# 批次 H:设置栏「全/半角」要落到 ascii_punct 这个既有开关(它为真时
+# librime 的 punctuator 直接 kNoop ⇒ 标点原样直出 ASCII)。
+# 没有这条声明,set_option("ascii_punct") 会因选项不存在而静默失败。
+# 口径与 rime_ice.schema.yaml 一致:不写 reset ⇒ 默认 index 0(¥ = 全角/中文标点),
+# 切窗口不被重置(default.yaml 的 switcher/save_options 会记住它)。
+switches:
+  - name: ascii_punct  # 中英标点
+    states: [ ¥, $ ]
+
 engine:
   processors:
     - key_binder
