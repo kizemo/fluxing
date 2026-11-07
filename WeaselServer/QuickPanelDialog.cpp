@@ -149,6 +149,9 @@ PanelLayout ComputeLayout(int panel_w_phys, int panel_h_phys) {
 }
 
 // 第 index 个槽位的矩形(物理像素)。
+// **index = 视觉位置**(面板上从左到右 0..5)。几何公式 x0 = start +
+// index*(btn+gap) 天然把「第 i 个视觉位置」放在第 i 个位置 ——
+// 按钮重排(v5 需求⑦)只改 kVisualToLogical 映射表,这里的公式一个字都不用动。
 bool SlotRectForLayout(const PanelLayout& L,
                         int index,
                         int* x,
@@ -379,6 +382,111 @@ void QuickPanelDialog::DrawIconAccount(HDC hdc,
   DeleteObject(SelectObject(hdc, pen));
 }
 
+// v5 需求⑥: 全/半角键的图标 —— 形状随当前态切换。
+// 全角 = 宽圆角框(viewBox x[4..26] y[9..21]),半角 = 窄圆角框(x[9..21]
+// y[9..21]);两者都以 (15,15) 为中心(与既有 icon bbox 约定一致:
+// kIconBboxCxOff/CyOff = 15),描线 raw pixel 不随 dpr 缩放(同其它 5 个图标)。
+// 纯矢量描边,绝不走 GDI AlphaBlend(v4 黑框前科)。
+void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
+                                          int x,
+                                          int y,
+                                          COLORREF penColor,
+                                          bool fullwidth) {
+  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
+  HBRUSH brush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+  if (fullwidth)
+    RoundRect(hdc, x + 4, y + 9, x + 26, y + 21, 4, 4);
+  else
+    RoundRect(hdc, x + 9, y + 9, x + 21, y + 21, 4, 4);
+  DeleteObject(SelectObject(hdc, pen));
+  DeleteObject(SelectObject(hdc, brush));
+}
+
+namespace {
+
+// v5 需求⑥: 文字键按**墨迹盒**垂直居中。
+//
+// 为什么不用 DT_VCENTER:DT_VCENTER 居中的是**行盒**(tmAscent+tmDescent),
+// 而中文字形的实际着墨像素落在行盒里偏下 ⇒ 观感「没垂直居中、字往下沉」
+// (用户原话:「文字键也适当上移」)。这里量**墨迹盒**
+// (GetGlyphOutlineW + GGO_METRICS)再反推基线,让墨迹盒中心落在键帽中心。
+//
+// ★ SDK 事实(Windows Kits 10.0.26100 wingdi.h —— 均为实测结论,勿再踩坑):
+//   - MAT2 = 4 × FIXED = 16 字节;GDI 按 16.16 形态读这 4 个 32bit 字
+//     (eM11 / eM12 / eM21 / eM22)。**单位矩阵 = {0x00010000, 0, 0, 0x00010000}**。
+//     ★ 传**零矩阵**会让 GetGlyphOutlineW(GGO_METRICS) 返回 GDI_ERROR
+//       ⇒ gm 恒为 0 ⇒ 墨迹盒路径永远失效、静默回退 DT_VCENTER。
+//       (2026-11-07 真机「改了没变化」的根因就是它 —— 公式改对了,但度量
+//        根本没取到,前两轮改动全是空转。)
+//   - GetGlyphOutlineW(hdc, uChar, fuFormat, lpgm, c, pv, lpmat) —— **度量在
+//     第 4 位**、缓冲区长度在前、MAT2 在**最后**;老原型
+//     (hdc, uChar, fuFormat, lpmat, lpBuffer, lBufSize, lpgm)在 10.0.26100
+//     下已不适用(C2664)。
+//   - GGO_METRICS 是 `#define GGO_METRICS 0`(**标志位,不是类型**);度量结构体
+//     叫 GLYPHMETRICS{gmBlackBoxX, gmBlackBoxY, gmptGlyphOrigin, gmCellIncX/Y},
+//     **没有 gmBlackBoxHeight 字段**。
+//   - GGO_GLYPH_INDEX 表示 uChar 是**字形索引**;这里传的是 Unicode 字符码,
+//     **不能**加这个标志(否则拿中文码当索引会取错字形/直接失败)。
+//
+// 墨迹盒模型(GDI 约定):字形原点在基线上方 gmptGlyphOrigin.y 处,黑盒自原点
+// 向下延伸 gmBlackBoxY 行 ⇒
+//   ink_top    = baseline − origin_y
+//   ink_bottom = ink_top + ink_h − 1
+//   ink_center = ink_top + (ink_h − 1)/2
+// 令 ink_center == 键帽中心 ⇒ 基线公式见
+// fluxing::panel_ink::InkBaselineForCap(纯函数,可单测)。
+//
+// 2026-11-07 真机实测(150% DPI,YaHei Bold,键帽 45px,box.top=5 / box.bottom=50,
+// origin_y=20, ink_h=24):
+//   旧式 DT_VCENTER ⇒「中」墨迹落在 17..40,中心 28.5,比键帽中心 27.5 低 1px。
+//   现式 ⇒ 基线 36 ⇒ 墨迹 16..39,中心 27.5 == 键帽中心(真正居中)。
+//
+// 返回 false = 量不到(字体没该字形 / GDI 接口不可用)⇒ 调用方回退旧的
+// DT_VCENTER 行为(不引入新的失败面,也不写死任何 fudge 值)。
+bool DrawInkCenteredChar(HDC hdc, const wchar_t* text, const RECT& box) {
+  if (!hdc || !text || !*text)
+    return false;
+  // 单位矩阵:见 fluxing::panel_ink::FillUnitMat2(生产与单测共用同一份实现,
+  // 保证「悄悄回归成零矩阵」这种错会被单测抓到,而不是静默回退 DT_VCENTER)。
+  MAT2 mat;
+  fluxing::panel_ink::FillUnitMat2(&mat);
+  GLYPHMETRICS gm;
+  ZeroMemory(&gm, sizeof(gm));
+  BYTE scratch[1024];
+  ZeroMemory(scratch, sizeof(scratch));
+  // GGO_METRICS:只取度量(轮廓缓冲区不参与);uChar 按 Unicode 字符码解释。
+  DWORD rc = GetGlyphOutlineW(hdc, text[0], GGO_METRICS, &gm, sizeof(scratch),
+                               scratch, &mat);
+  if (rc == GDI_ERROR) {
+    // 某些 GDI 版本在 GGO_METRICS 下仍要求缓冲区非空 ⇒ 退一步用空缓冲。
+    ZeroMemory(&gm, sizeof(gm));
+    rc = GetGlyphOutlineW(hdc, text[0], GGO_METRICS, &gm, 0, nullptr, &mat);
+  }
+  if (rc == GDI_ERROR)
+    return false;
+  const int ink_h = (int)gm.gmBlackBoxY;
+  if (ink_h <= 0)
+    return false;
+  const int origin_y = (int)gm.gmptGlyphOrigin.y;
+  SIZE sz = {0, 0};
+  if (!GetTextExtentPoint32W(hdc, text, 1, &sz))
+    return false;
+
+  // 基线:令墨迹盒中心 == 键帽中心。键帽中心 = (box.top + box.bottom)/2
+  // (GDI 圆角矩形的下边界线画在 box.bottom 那一行上 ⇒ 可见像素 top..bottom)。
+  const int baseline = fluxing::panel_ink::InkBaselineForCap(box.top, box.bottom,
+                                                             origin_y, ink_h);
+  const int cap_cx = box.left + (box.right - box.left) / 2;
+  const int tx = cap_cx - sz.cx / 2;
+
+  const UINT oldAlign = SetTextAlign(hdc, TA_LEFT | TA_BASELINE);
+  TextOutW(hdc, tx, baseline, text, 1);
+  SetTextAlign(hdc, oldAlign);
+  return true;
+}
+
+}  // namespace
+
 // ===== 静态成员定义 =====
 HWND QuickPanelDialog::s_hwnd = NULL;
 bool QuickPanelDialog::s_fullwidth = false;
@@ -439,7 +547,9 @@ bool QuickPanelDialog::BrandRectForSize(int panel_w_phys,
   if (x)
     *x = L.padding;
   if (y)
-    *y = L.padding;
+    // v5 需求⑤: 品牌整体上移 kBrandYOffset 个 logical px(按 dpr_y 缩放)。
+    // 命中区(-2)、绘制位图、ADR 0038 的右键菜单区三处同源 ⇒ 只此一处改动。
+    *y = L.padding - ScaleRound(QuickPanelDialog::kBrandYOffset, L.dpr_y);
   if (w)
     *w = L.brand_size;
   if (h)
@@ -1014,7 +1124,13 @@ LRESULT CALLBACK QuickPanelDialog::TooltipWndProc(HWND hwnd,
 }
 
 std::wstring QuickPanelDialog::TooltipText(int slot) {
-  return fluxing::panel_tooltip::BuildTooltip(slot, s_inputState);
+  // slot = **视觉位置**;文案按**功能槽位**取(include/FluxingPanelTooltip.h 的
+  // 0 切换方案 / 1 用户短语 / 2 快捷键设置 / 3 关于 / 4 中英文 / 5 全半角
+  // 是语义空间,不是屏幕位置)。换算只经 kVisualToLogical 一处。
+  const int logical = LogicalAtVisual(slot);
+  if (logical < 0)
+    return std::wstring();
+  return fluxing::panel_tooltip::BuildTooltip(logical, s_inputState);
 }
 
 // spec 099 P0-3: 槽位点击路由 —— 每个可见槽位点击都必须产生确定的
@@ -1025,8 +1141,14 @@ std::wstring QuickPanelDialog::TooltipText(int slot) {
 //   3 Account → 关于/账号说明页(此前是死槽)
 //   4 中英文切换(Fluxing v4 需求④) / 5 全半角切换(Fluxing v4 需求③)
 // 返回 true 表示该槽位确实触发了回调。
+//
+// ⚠ 上面列的是**功能槽位(逻辑空间)**;而形参 index 是**视觉位置** ——
+// v5 需求⑦(中英文/全半角前移)之后两者不再相同(视觉 1 = 中英文、
+// 视觉 2 = 全半角、视觉 3 = 用户短语…),所以进来先经 kVisualToLogical
+// 换算一次,switch 只认逻辑槽位。
 bool QuickPanelDialog::DispatchSlotClick(int index) {
-  switch (index) {
+  const int slot = LogicalAtVisual(index);
+  switch (slot) {
     case 0:
       if (s_onSchema) {
         s_onSchema();
@@ -1639,7 +1761,6 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // s_panelH_phys, layout 物理常量已按 dpr 缩放。
   const int W = s_panelW_phys;
   const int H = s_panelH_phys;
-  const int pad = s_panelPadding_phys;
   const int radius = s_panelRadius_phys;
 
   // 1a. 圆角 panel 背景 — 浅玻璃冷色,L82-fix:任何背景下都可见
@@ -1696,14 +1817,18 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // 255 的不透明位图), 每个像素的 RGB 已是最终融合色 ⇒ SRCCOPY 不会出错,
   // 且完全绕开 alpha 合成。src/dst 都是 s_brandSize_phys ⇒ 1:1, 不需拉伸
   // (BitBlt/AlphaBlend 都不支持拉伸, 预缩放在 WIC 阶段做)。
+  // v5 需求⑤: 贴图矩形改由 BrandRect() 给出 —— 与 HitTest 的 -2(brand)判定、
+  // ADR 0038 的右键命中区**同一份几何**(R7);品牌整体上移 kBrandYOffset。
   if (s_hBmpLogo) {
-    HDC hdcMemLogo = CreateCompatibleDC(hdc);
-    if (hdcMemLogo) {
-      HGDIOBJ prev = SelectObject(hdcMemLogo, s_hBmpLogo);
-      BitBlt(hdc, pad, pad, s_brandSize_phys, s_brandSize_phys, hdcMemLogo,
-             0, 0, SRCCOPY);
-      SelectObject(hdcMemLogo, prev);
-      DeleteDC(hdcMemLogo);
+    int brandX = 0, brandY = 0, brandW = 0, brandH = 0;
+    if (BrandRect(&brandX, &brandY, &brandW, &brandH)) {
+      HDC hdcMemLogo = CreateCompatibleDC(hdc);
+      if (hdcMemLogo) {
+        HGDIOBJ prev = SelectObject(hdcMemLogo, s_hBmpLogo);
+        BitBlt(hdc, brandX, brandY, brandW, brandH, hdcMemLogo, 0, 0, SRCCOPY);
+        SelectObject(hdcMemLogo, prev);
+        DeleteDC(hdcMemLogo);
+      }
     }
   }
 
@@ -1715,16 +1840,18 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // 物理 px)。 现在 kBtnGap 改 4,buttons 之间有足够间距,起始 gap 不用再大。减到
   // 2 px 让 brand→btns 间距合理,btn4 右边距 +2 px (panelW=252
   // 5*37+4*4=201+44+5=250 < 252)
-  int buttonStartX = pad + s_brandSize_phys + max(QuickPanelDialog::kBrandGap, (int)(QuickPanelDialog::kBrandGap * s_dpr_x + 0.5f));
-  // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons (UserDict 槽位删除)
+  // v5: 槽位矩形改由 SlotRectForLayout 给出(布局**单一事实源**, R7)。
+  // 之前这里自己算 x0 = buttonStartX + i*(btn+gap),与 SlotRect / HitTest
+  // 重复了同一份公式 —— 改一边漏一边就是 lessons-learned 的 AP-L93-B 耦合
+  // 陷阱(v0.19.0.24 的 hover 错位就是这么来的)。
+  const PanelLayout L = ComputeLayout(s_panelW_phys, s_panelH_phys);
   for (int i = 0; i < kButtonCount; i++) {
-    int x0 = buttonStartX + i * (s_btnSize_phys + s_btnGap_phys);
-    // v0.19.0.24-fix(issue 1):Y 起点改用
-    // s_btnYOffset_phys(=(kPanelH-kBtnSize)/2 dpr 缩放)。 之前 y0=pad=5,btn at
-    // y=[5..40] 距顶 5 距底 8 偏上 1.5 px。改 y0=6 → btn at y=[6..41] 距顶 6
-    // 距底 7(整数下最接近对称);btn 中心 23.5 vs panel 中心 24,差 0.5 px
-    // 不可避免(48-35=13 奇数,1 px 离散)。同步 HitTest Y 范围。
-    int y0 = s_btnYOffset_phys;
+    // i = **视觉位置**(面板上从左到右);功能语义经 LogicalAtVisual(i) 取。
+    // v0.19.0.24-fix(issue 1):Y 起点来自同一份布局(= (kPanelH-kBtnSize)/2
+    // dpr 缩放),与 HitTest 的 Y 范围天然同步。
+    int x0 = 0, y0 = 0, bw = 0, bh = 0;
+    if (!SlotRectForLayout(L, i, &x0, &y0, &bw, &bh))
+      continue;
 
     bool isActive = (i == s_activeIdx);
     bool isHover = (i == s_hoveredIdx);
@@ -1741,9 +1868,8 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     // hover: NO bg change. Only icon stroke color changes below.
 
     if (bgBrush) {
-      HRGN rgn =
-          CreateRoundRectRgn(x0, y0, x0 + s_btnSize_phys, y0 + s_btnSize_phys,
-                             s_btnRadius_phys, s_btnRadius_phys);
+      HRGN rgn = CreateRoundRectRgn(x0, y0, x0 + bw, y0 + bh,
+                                     s_btnRadius_phys, s_btnRadius_phys);
       FillRgn(hdc, rgn, bgBrush);
       DeleteObject(rgn);
     }
@@ -1755,8 +1881,8 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
                     RGB(220, 60, 30));  // active: 暗橙
       HPEN oldOutline = (HPEN)SelectObject(hdc, outlinePen);
       HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
-      RoundRect(hdc, x0, y0, x0 + s_btnSize_phys, y0 + s_btnSize_phys,
-                s_btnRadius_phys, s_btnRadius_phys);
+      RoundRect(hdc, x0, y0, x0 + bw, y0 + bh, s_btnRadius_phys,
+                s_btnRadius_phys);
       SelectObject(hdc, oldBrush);
       SelectObject(hdc, oldOutline);
       DeleteObject(outlinePen);
@@ -1771,9 +1897,8 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
       HPEN oldFocusPen = (HPEN)SelectObject(hdc, focusPen);
       HBRUSH oldFocusBrush =
           (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
-      RoundRect(hdc, x0 - ring, y0 - ring, x0 + s_btnSize_phys + ring,
-                y0 + s_btnSize_phys + ring, s_btnRadius_phys + ring,
-                s_btnRadius_phys + ring);
+      RoundRect(hdc, x0 - ring, y0 - ring, x0 + bw + ring, y0 + bh + ring,
+                s_btnRadius_phys + ring, s_btnRadius_phys + ring);
       SelectObject(hdc, oldFocusBrush);
       SelectObject(hdc, oldFocusPen);
       DeleteObject(focusPen);
@@ -1823,12 +1948,12 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     // = 26.5,int mid = 26)。 跨 DPI 都对齐。注意:icon 描线 raw pixel
     // 不缩放,设计固定 5..25 宽度 (20 px) 在所有 DPI 都一样,designer 刻意 — 高
     // DPI 不会按比例放大,保持视觉清晰度。
-    int iconX = x0 + s_btnSize_phys / 2 - kIconBboxCxOff;
-    int iconY = y0 + s_btnSize_phys / 2 - kIconBboxCyOff;
-    // v0.19.0.62 (Phase L 调整 1.2): 5→4 buttons,case 重新映射:
-    //   0 Schema / 1 Phrase / 2 Settings (was 3) / 3 Account (was 4)
-    //   — case 2 (UserDict) 整槽已删,无对应 icon 绘制。
-    switch (i) {
+    int iconX = x0 + bw / 2 - kIconBboxCxOff;
+    int iconY = y0 + bh / 2 - kIconBboxCyOff;
+    // v5 需求⑦: 视觉位置 → 逻辑槽位。switch 一律按**逻辑槽位**分支,几何
+    // 坐标仍取视觉位置(i)。kVisualToLogical = {0, 4, 5, 1, 2, 3} ⇒ 视觉 0
+    // 切换输入法 / 1 中英文 / 2 全半角 / 3 用户短语 / 4 快捷键设置 / 5 关于。
+    switch (LogicalAtVisual(i)) {
       case 0:
         DrawIconSchema(hdc, iconX, iconY, penRgb);
         break;
@@ -1837,31 +1962,34 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
         break;
       case 2:
         DrawIconSettings(hdc, iconX, iconY, penRgb);
-        break;  // was hit==3 in v0.19.0.61
+        break;
       case 3:
         DrawIconAccount(hdc, iconX, iconY, penRgb);
-        break;  // was hit==4 in v0.19.0.61
-      case 4:
-      case 5: {
-        // Fluxing v4 需求③⑤: 全半角 / 中英文两个**文字键**。
-        // 键帽上直接画当前态单字(「中」/「英」, 「全」/「半」), 取代 v4 之前
-        // 面板右侧的竖排文字回显(需求⑥)。复用 s_hFontStatus(YaHei 粗体),
-        // 不新增 GDI 字体资源。
+        break;
+      case 4: {
+        // 中英文文字键:「中」/「英」。v5 需求⑥ —— 用**墨迹盒**垂直居中
+        // (DrawInkCenteredChar),量不到时回退旧的 DT_VCENTER。
         if (!s_hFontStatus)
           break;
         const wchar_t* label =
-            (i == 4)
-                ? fluxing::panel_status::AsciiModeText(s_inputState.ascii_mode)
-                : fluxing::panel_status::ShapeModeText(s_inputState.fullwidth);
+            fluxing::panel_status::AsciiModeText(s_inputState.ascii_mode);
         HGDIOBJ oldFont = SelectObject(hdc, s_hFontStatus);
         const int oldBk = SetBkMode(hdc, TRANSPARENT);
         const COLORREF oldColor = SetTextColor(hdc, penRgb);
-        RECT tr = {x0, y0, x0 + s_btnSize_phys, y0 + s_btnSize_phys};
-        DrawTextW(hdc, label, -1, &tr,
-                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        RECT tr = {x0, y0, x0 + bw, y0 + bh};
+        if (!DrawInkCenteredChar(hdc, label, tr)) {
+          DrawTextW(hdc, label, -1, &tr,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        }
         SetTextColor(hdc, oldColor);
         SetBkMode(hdc, oldBk);
         SelectObject(hdc, oldFont);
+        break;
+      }
+      case 5: {
+        // 全半角键:v5 需求⑥ —— 由文字键改为**图标**,形状随当前态切换
+        // (宽框=全角 / 窄框=半角)。纯 GDI 矢量,不走 GDI AlphaBlend。
+        DrawIconFullwidth(hdc, iconX, iconY, penRgb, s_inputState.fullwidth);
         break;
       }
     }

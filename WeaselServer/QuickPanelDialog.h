@@ -102,11 +102,15 @@ class QuickPanelDialog {
   // spec 099 P0-3: 6 个槽位的物理像素矩形(布局的**单一事实源**)。
   // HitTest 与单元测试都从这里取值 —— 测试不再复制一份布局公式
   // (复制即漂移)。返回 false = 索引越界或面板还没建立。
+  // **index = 视觉位置**(面板上从左到右 0..5),不是功能语义 ——
+  // 语义换算走 kVisualToLogical(见上方映射表)。
   static bool SlotRect(int index, int* x, int* y, int* w, int* h);
   // spec 099 P0-3: 槽位点击路由 —— 每个可见槽位点击都必须产生确定的
   // 用户可见效果。返回 true 表示该槽位确实触发了回调。
-  //   0 Schema(切换到下一个输入方案) / 1 Phrase / 2 Settings / 3 Account
-  //   4 中英文切换 / 5 全半角切换   ← Fluxing QuickPanel v4 需求③④⑤
+  // **index = 视觉位置**(与 SlotRect / HitTest 同一空间);内部只经
+  // kVisualToLogical 换算成功能槽位后路由:
+  //   视觉 0 切换输入法(切换到下一个输入方案) / 视觉 1 中英文切换
+  //   视觉 2 全半角切换 / 视觉 3 用户短语 / 视觉 4 快捷键设置 / 视觉 5 关于
   static bool DispatchSlotClick(int index);
 
   // ===== spec 099 P0-6: 物理布局的单一事实源 =====
@@ -114,6 +118,7 @@ class QuickPanelDialog {
   // 同一份公式 —— 测试不复制布局公式(复制即漂移,constitution R7)。
   // 用途:让单测能在 100% / 150% / 200% 三档 DPI 下断言几何,
   // 而不必真的切系统 DPI。
+  // **index = 视觉位置**(左→右 0..5),与 SlotRect / HitTest 一致。
   static bool SlotRectForSize(int panel_w_phys,
                               int panel_h_phys,
                               int index,
@@ -165,6 +170,7 @@ class QuickPanelDialog {
 
   // ===== spec 099 P0-5: 键盘可达性 =====
   // 当前焦点槽位(-1 = 无焦点)。生产代码用它决定 Enter/Space 激活谁。
+  // **返回视觉位置**(左→右 0..5)⇒ 方向键 / Tab 天然按屏幕左右移动。
   static int FocusedSlot() { return s_keyboard.focused; }
   // 键盘交互态(面板拿到过键盘焦点)。Esc 语义靠它区分:
   // 未交互 ⇒ 只吞掉不收起(守 ADR 0019 D2);已交互 ⇒ 收起面板(守 D0032)。
@@ -172,6 +178,8 @@ class QuickPanelDialog {
   // 复位键盘状态(测试注入 / 面板重新显示时)。
   static void ResetKeyboardState();
   // 每槽 tooltip 文本(「名称 + 当前态」),由生产代码按当前快照生成。
+  // **slot = 视觉位置**(与 SlotRect / HitTest 一致);文案按**功能槽位**取
+  // (FluxingPanelTooltip.h 的 0 切换方案 / 1 用户短语 / ... 是语义空间)。
   static std::wstring TooltipText(int slot);
 
   // spec 084 / ADR 0013 D4: 长显模式(快捷设置栏常驻)开关。
@@ -369,7 +377,42 @@ class QuickPanelDialog {
   static constexpr int kPanelRadius = 16;    // v4: 20 → 16
   static constexpr int kPanelW = 239;        // v4: 245 → 239 (去竖排回显区 + 扩 6 槽)
   static constexpr int kPanelH = 36;         // v4: 48 → 36
+  // Fluxing QuickPanel v5 需求⑤: 品牌图标整体上移 1 logical px(正值 = 上移)。
+  // 品牌矩形 y = padding − ScaleRound(kBrandYOffset, dpr_y)
+  //   100%: 5→4 / 125%: 6→5 / 150%: 8→6 / 200%: 10→8。
+  // 上移的真实目的: 原先品牌位图下沿会压到面板底边框线(150% 实测位图覆盖
+  // y=8..52,而边框线落在 y=51..52)—— 位图是**预合成到面板底色**的不透明
+  // 贴图(SRCCOPY,不走 alpha),重叠处会把边框啃掉一截。上移后 96/120/144/192%
+  // 四档 DPI 下品牌位图都不再触及边框(已逐档核算)。
+  static constexpr int kBrandYOffset = 1;
   static constexpr int kButtonCount = 6;     // v4 stage2: 4 → 6 (新增中英文 / 全半角键)
+
+  // ===== 视觉位置 ⇄ 逻辑槽位:唯一映射表(单一事实源, constitution R7) =====
+  // 「视觉位置」= 面板上从左到右的第 i+1 个按钮(0..5)。
+  // 「逻辑槽位」= 该按钮承载的功能:0 切换输入方案 / 1 用户短语 / 2 快捷键设置 /
+  //               3 关于·账号说明 / 4 中英文切换 / 5 全半角切换。
+  //
+  // 面板**所有公开 API 的 index 一律是视觉位置**(SlotRect / SlotRectForSize /
+  // HitTest / DispatchSlotClick / TooltipText / FocusedSlot 完全一致);
+  // 「这个按钮是什么功能」只经下面这张表换算一次 —— 别处**不许**再写一份映射。
+  //
+  // v5 需求⑦: 中英文、全半角两个按钮移到「切换输入法」之后、「用户短语」之前,
+  // 于是视觉 0..5 = 切换输入法 / 中英文 / 全半角 / 用户短语 / 快捷键设置 / 关于。
+  static constexpr int kVisualToLogical[kButtonCount] = {0, 4, 5, 1, 2, 3};
+
+  // 视觉位置 → 逻辑槽位(越界返回 -1)。
+  static constexpr int LogicalAtVisual(int visual) {
+    return (visual >= 0 && visual < kButtonCount) ? kVisualToLogical[visual]
+                                                   : -1;
+  }
+  // 逻辑槽位 → 视觉位置(越界返回 -1)。
+  static constexpr int VisualAtLogical(int logical) {
+    for (int i = 0; i < kButtonCount; ++i) {
+      if (kVisualToLogical[i] == logical)
+        return i;
+    }
+    return -1;
+  }
   // v0.19.0.24 新增:Show() 后 auto-hide grace period(毫秒)。
   // 之前 L89-fix 直接累加 outsideMs,Show 启动时 cursor 在 panel 外 → 1.5s 内
   // Hide。 改:Show 时记 s_showTime,polling timer 在 (now - s_showTime) <
@@ -468,6 +511,14 @@ class QuickPanelDialog {
   static void DrawIconSymbols(HDC hdc, int x, int y, COLORREF penColor);
   static void DrawIconSettings(HDC hdc, int x, int y, COLORREF penColor);
   static void DrawIconAccount(HDC hdc, int x, int y, COLORREF penColor);
+  // v5 需求⑥: 全/半角键的图标(取代原来的「全」/「半」文字键帽)。
+  // 形状**随当前态切换**:全角 = 宽圆角框(22×12),半角 = 窄圆角框(12×12);
+  // 两者都在 30×30 viewBox 内以 (15,15) 为中心(与既有 icon bbox 约定一致)。
+  static void DrawIconFullwidth(HDC hdc,
+                                int x,
+                                int y,
+                                COLORREF penColor,
+                                bool fullwidth);
   // v0.19.0.61 (Phase L 调整 1.1): DrawIconUserDict 已彻底删除 — UserDictionary
   // 模块下线。 button 2 hit + paint 都 no-op (case 2 在 paint loop 跳过)。
 
@@ -492,3 +543,51 @@ class QuickPanelDialog {
   static void PaintOpaqueContent(HDC hdc);
   static void RepaintLayered(HWND hwnd);
 };
+
+namespace fluxing {
+namespace panel_ink {
+
+// v5 需求⑥: GDI **单位矩阵**(eM11 = eM22 = 1.0,其余 0)。
+//
+// ★ 关键坑:**零矩阵会让 GetGlyphOutlineW(GGO_METRICS) 返回 GDI_ERROR**
+//   ⇒ 度量恒 0 ⇒ 墨迹盒路径永远失效、静默回退 DT_VCENTER
+//   (2026-11-07 真机「改了没变化」的根因 —— 公式改对了但度量从没取到)。
+// MAT2 = 4 × FIXED = 16 字节;GDI 按 16.16 形态读这 4 个 32bit 字
+// (eM11 / eM12 / eM21 / eM22)⇒ 直接写 32bit 字,不依赖 FIXED 的成员顺序。
+// 生产代码与单测共用这一份实现 ⇒ 回归成零矩阵会被单测当场抓住。
+inline void FillUnitMat2(MAT2* mat) {
+  if (!mat)
+    return;
+  ZeroMemory(mat, sizeof(*mat));
+  DWORD* words = reinterpret_cast<DWORD*>(mat);
+  words[0] = 0x00010000u;  // eM11 = 1.0
+  words[1] = 0u;           // eM12 = 0
+  words[2] = 0u;           // eM21 = 0
+  words[3] = 0x00010000u;  // eM22 = 1.0
+}
+
+// v5 需求⑥: 文字键「墨迹盒垂直居中」的基线公式(**纯函数**,生产代码与单测共用)。
+//
+// 背景:GDI 的 DT_VCENTER 居中的是**行盒**(tmAscent+tmDescent),而中文字形的实际
+// 着墨像素落在行盒里偏下 ⇒ 观感「没垂直居中、字往下沉」。真修法是量**墨迹盒**
+// (GetGlyphOutlineW + GGO_METRICS)再反推基线。
+//
+// 墨迹盒(GDI 约定):字形原点在基线上方 origin_y 处,黑盒自原点向下延伸 ink_h 行 ⇒
+//   ink_top    = baseline − origin_y
+//   ink_bottom = ink_top + ink_h − 1
+//   ink_center = ink_top + (ink_h − 1)/2
+// 令 ink_center == 键帽中心 cap_center(= (box_top + box_bottom)/2)⇒
+//   baseline = (box_top + box_bottom + 2*origin_y − (ink_h − 1)) / 2
+//
+// 150% DPI 真机实测(YaHei Bold,键帽 45px,box_top=5 / box_bottom=50,
+// origin_y=20, ink_h=24)⇒ baseline = 36,「中」墨迹落在 16..39,中心 27.5
+// == 键帽中心 27.5(旧 DT_VCENTER 是 17..40 / 中心 28.5,低 1px)。
+//
+// 舍入口径:就近舍入(.5 向上);纯整数实现 ⇒ 跨 DPI 可复现、无浮点漂移。
+inline int InkBaselineForCap(int box_top, int box_bottom, int origin_y, int ink_h) {
+  const int num = box_top + box_bottom + 2 * origin_y - (ink_h - 1);
+  return num >= 0 ? (num + 1) / 2 : -((-num + 1) / 2);
+}
+
+}  // namespace panel_ink
+}  // namespace fluxing
