@@ -57,9 +57,15 @@
 ## 5. 下一步建议（按优先级）
 
 1. **用户方便时补 §3 最后一条目视确认**（右键 Win11 任务栏输入指示器 → 只剩系统默认语言列表）；其余验收已由程序化探针闭环。
-2. **验收通过后再 push**：`git push` 到 `kizemo/Fluxing`（当前分支 `Fluxing` ahead 13，含本轮 `d991005` + handoff/prompt 文档 + 并发会话的 v4 提交）。**未获用户明确同意前不得 push**。
+2. **已 push（2026-11-07 08:45，用户明确同意后执行）**：`git push kizemo Fluxing` ⇒ `260ab2a..79db46f`，本地 `Fluxing` 与 `kizemo/Fluxing` **已同步**（`git status -sb` 不再显示 ahead）。远端 `kizemo` = `https://github.com/kizemo/fluxing.git`（另有 `kizemo-ssh` = `git@github.com:kizemo/fluxing.git`）。
 3. **并发会话的 QuickPanel v4 stage1/stage2 已自行提交**（`a40a766` 注入中英文切换回调、`a04cc41` 去黑框、`00dad0b` logo 预合成+BitBlt、`3dcbc89`/`9be20a1`/`8f7c9e2` docs），并已重新构建安装新的 `WeaselServer.exe`（2,328,576 B, 02:02:48）—— 本轮的资源级核对与真机探针都是在**该版本**上做的，结论依然成立。它的 handoff 在 `docs/archive/handoffs/handoff-2026-11-07-quickpanel-v4-redesign.md`，**不要改写那两个文件**。
-4. **安装目录残留旧版 `weaselx64.1.2.1.0.0.dll`**（1,989,632 B, 11-06 23:48，仍带 id=105/108/109 三套菜单）：当前 CLSID 指向 `.0.1`，**不受影响**；但若注册表将来被改写会误用旧菜单 ⇒ 建议清理（本次未擅自删除用户安装目录文件）。
+4. **安装目录残留旧版 `weaselx64.1.2.1.0.0.dll`（1,989,632 B, 11-06 23:48，仍带 id=105/108/109 三套菜单）**：当前 CLSID 指向 `.0.1`，**不影响使用**。
+   - 已备份到 `F:\soft\00selfmade\rime_claude\tmp\backup\weaselx64.1.2.1.0.0.dll.bak`（SHA256 `C708E86C13C67EA05286EBAA185AB94F80E1CBE99FBBDA17B2C631145198BFDC`，与源一致）。
+   - **删除被本机硬安全策略拦截**：`D:\Program Files\` 是受保护路径，`rm --` 与 `mavis-trash`（含 `mavis-trash.cmd`）**均被 bash 门禁拒绝**，Agent 侧无路可走 ⇒ **需用户手动执行**：
+     ```powershell
+     Remove-Item -LiteralPath 'D:\Program Files\fluxing\weasel\weaselx64.1.2.1.0.0.dll'
+     ```
+   - 若将来注册表被改写误指 `.0.0`，会重新出现「两套菜单」，故建议尽快清掉。
 5. 可选后续：把「快捷设置栏品牌图标右键」加入 `Rime-设置说明书-重点快捷键.md` 的用户可见说明。
 
 ## 6. 复现命令（可直接抄）
