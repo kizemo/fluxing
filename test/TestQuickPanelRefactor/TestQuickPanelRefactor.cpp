@@ -23,8 +23,9 @@
 //   - Show() 第二次走复用路径,**同一个 HWND**;
 //   - ToggleMode() 可见 => 收起 / 不可见 => 展开;
 //   - HitTest() 按物理像素命中 6 个按钮,brand 区返回 -2,空白/越界返回 -1;
-//   - 现行按钮路由:hit==1 -> s_onPhrases,hit==2 -> s_onShortcut,
-//     hit==4 -> 中英文切换,hit==5 -> 全半角切换,0/3 no-op。
+//   - 现行按钮路由(索引 = **视觉位置** 左→右):hit==0 -> 切换输入法,
+//     hit==1 -> 中英文切换,hit==2 -> 全半角切换,hit==3 -> s_onPhrases,
+//     hit==4 -> s_onShortcut,hit==5 -> 关于/账号。
 //
 // L24 link-probe pattern:链接真正的生产代码(见 .vcxproj 的 ClCompile 条目),
 // 不写镜像实现。本文件断言的是生产契约,不是自己的副本。
@@ -231,11 +232,13 @@ int RunRefactorTest() {
       all_buttons_hit = false;
   }
   Check(all_buttons_hit, "T10b: 6 个按钮中心各自命中自己的索引");
-  const int brand_cx = QuickPanelDialog::s_panelPadding_phys +
-                       QuickPanelDialog::s_brandSize_phys / 2;
-  const int brand_cy = QuickPanelDialog::s_panelPadding_phys +
-                       QuickPanelDialog::s_brandSize_phys / 2;
-  Check(QuickPanelDialog::HitTest(brand_cx, brand_cy) == -2,
+  // 品牌矩形用**生产同源**的 BrandRect()(不复制布局公式,R7)——
+  // v5 需求⑤ 品牌上移 1px 后,中心不再等于 padding + size/2。
+  int brx = 0, bry = 0, brw = 0, brh = 0;
+  const bool got_brand = QuickPanelDialog::BrandRect(&brx, &bry, &brw, &brh);
+  const int brand_cx = brx + brw / 2;
+  const int brand_cy = bry + brh / 2;
+  Check(got_brand && QuickPanelDialog::HitTest(brand_cx, brand_cy) == -2,
         "T10c: brand 区命中返回 -2");
   Check(QuickPanelDialog::HitTest(
             lay.center_x(QuickPanelDialog::kButtonCount), lay.center_y()) == -1,
@@ -273,27 +276,32 @@ int RunRefactorTest() {
     HWND qp = QuickPanelDialog::ActiveHwnd();
     const ButtonLayout l2 = CurrentLayout();
 
-    LPARAM lp = MAKELPARAM(l2.center_x(1), l2.center_y());
+    // v5 需求⑦: 索引 = **视觉位置**(左→右)。视觉 0 切换输入法 / 1 中英文 /
+    // 2 全半角 / 3 用户短语 / 4 快捷键设置 / 5 关于。
+    LPARAM lp = MAKELPARAM(l2.center_x(3), l2.center_y());
     SendMessageW(qp, WM_LBUTTONDOWN, MK_LBUTTON, lp);
     SendMessageW(qp, WM_LBUTTONUP, 0, lp);
-    Check(phrase_count == 1, "T12a: 点按钮 1 -> s_onPhrases 触发 1 次");
+    Check(phrase_count == 1, "T12a: 点按钮 3 (用户短语) -> s_onPhrases 触发 1 次");
 
-    lp = MAKELPARAM(l2.center_x(2), l2.center_y());
+    lp = MAKELPARAM(l2.center_x(4), l2.center_y());
     SendMessageW(qp, WM_LBUTTONDOWN, MK_LBUTTON, lp);
-    SendMessageW(qp, WM_LBUTTONUP, 0, lp);
-    Check(shortcut_count == 1, "T12b: 点按钮 2 -> s_onShortcut 触发 1 次");
+    SendMessageW(qp, WM_LBUTTONUP, 0,lp);
+    Check(shortcut_count == 1, "T12b: 点按钮 4 (快捷键设置) -> s_onShortcut 触发 1 次");
 
+    // 视觉 0(切换输入法)/ 5(关于)在本测试里不注入回调 ⇒ 不应触发任何回调。
     lp = MAKELPARAM(l2.center_x(0), l2.center_y());
     SendMessageW(qp, WM_LBUTTONDOWN, MK_LBUTTON, lp);
     SendMessageW(qp, WM_LBUTTONUP, 0, lp);
-    lp = MAKELPARAM(l2.center_x(3), l2.center_y());
+    lp = MAKELPARAM(l2.center_x(5), l2.center_y());
     SendMessageW(qp, WM_LBUTTONDOWN, MK_LBUTTON, lp);
     SendMessageW(qp, WM_LBUTTONUP, 0, lp);
     Check(phrase_count == 1 && shortcut_count == 1,
-          "T12c: 点按钮 0/3 不触发任何回调(历史 placeholder,no-op)");
+          "T12c: 点按钮 0/5 不触发任何回调(未注入回调)");
 
-    // Fluxing v4 需求③④⑤: 槽 4(中英文切换)/ 槽 5(全半角切换) 必须真的可点,
+    // Fluxing v4 需求③④⑤ + v5 需求⑦: 中英文 / 全半角两个文字键必须真的可点,
     // 且回调收到的是**目标值**而不是「翻转」标记。
+    // v5 重排后索引 = **视觉位置**:视觉 1 = 中英文、视觉 2 = 全半角
+    // (视觉 3 = 用户短语 / 4 = 快捷键设置 / 5 = 关于 / 0 = 切换输入法)。
     {
       int ascii_toggle = 0;
       int full_toggle = 0;
@@ -310,16 +318,16 @@ int RunRefactorTest() {
       HWND qp2 = QuickPanelDialog::ActiveHwnd();
       const ButtonLayout l3 = CurrentLayout();
 
-      lp = MAKELPARAM(l3.center_x(4), l3.center_y());
+      lp = MAKELPARAM(l3.center_x(1), l3.center_y());
       SendMessageW(qp2, WM_LBUTTONDOWN, MK_LBUTTON, lp);
       SendMessageW(qp2, WM_LBUTTONUP, 0, lp);
       Check(ascii_toggle == 1 && ascii_target == expect_target,
-            "T12d: 点槽 4 -> 中英文回调触发 1 次且收到目标值");
+            "T12d: 点视觉槽 1 -> 中英文回调触发 1 次且收到目标值");
 
-      lp = MAKELPARAM(l3.center_x(5), l3.center_y());
+      lp = MAKELPARAM(l3.center_x(2), l3.center_y());
       SendMessageW(qp2, WM_LBUTTONDOWN, MK_LBUTTON, lp);
       SendMessageW(qp2, WM_LBUTTONUP, 0, lp);
-      Check(full_toggle == 1, "T12e: 点槽 5 -> 全半角回调触发 1 次");
+      Check(full_toggle == 1, "T12e: 点视觉槽 2 -> 全半角回调触发 1 次");
 
       QuickPanelDialog::SetOnAscii(nullptr);
     }
@@ -359,6 +367,58 @@ int RunRefactorTest() {
             QuickPanelDialog::s_onSymbols == nullptr &&
             QuickPanelDialog::s_onLogin == nullptr,
         "T14b: Show(nullptr,...) 把 6 个回调参数全部清空");
+
+  // ----------------------------------------------------------------
+  // T15: 文字键「墨迹盒垂直居中」—— v5 需求⑥ 的公式与 GDI 前提。
+  //      (1) 纯函数:150% DPI 真机实测参数 ⇒ 基线 36 ⇒ 墨迹 16..39,
+  //          中心 27.5 == 键帽中心 27.5(旧 DT_VCENTER 是 17..40 / 28.5)。
+  //      (2) GDI 前提:必须用**单位矩阵**;零矩阵会让
+  //          GetGlyphOutlineW(GGO_METRICS) 返回 GDI_ERROR ⇒ 度量恒 0 ⇒
+  //          墨迹盒路径永远失效(2026-11-07 真机「改了没变化」的根因)。
+  //          这里直接调**生产同一份** FillUnitMat2 ⇒ 生产回归成零矩阵会红。
+  // ----------------------------------------------------------------
+  {
+    const int baseline = fluxing::panel_ink::InkBaselineForCap(5, 50, 20, 24);
+    const int ink_top = baseline - 20;
+    const int ink_bottom = ink_top + 24 - 1;
+    Check(baseline == 36, "T15a: 基线公式 ⇒ baseline = 36");
+    Check(ink_top == 16 && ink_bottom == 39,
+          "T15b: 墨迹盒落在 16..39(旧 DT_VCENTER 是 17..40)");
+    Check(ink_top + ink_bottom == 55,
+          "T15c: 墨迹中心 27.5 == 键帽中心 27.5");
+
+    HDC hdc = CreateCompatibleDC(nullptr);
+    Check(hdc != nullptr, "T15d: 创建内存 DC 成功");
+    if (hdc) {
+      HFONT font = CreateFontW(-24, 0, 0, 0, FW_BOLD, 0, 0, 0,
+                               DEFAULT_CHARSET, OUT_TT_PRECIS,
+                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                               DEFAULT_PITCH, L"Microsoft YaHei");
+      HGDIOBJ old_font = font ? SelectObject(hdc, font) : nullptr;
+      MAT2 mat;
+      fluxing::panel_ink::FillUnitMat2(&mat);
+      GLYPHMETRICS gm;
+      ZeroMemory(&gm, sizeof(gm));
+      DWORD rc = GetGlyphOutlineW(hdc, (UINT)L'中', GGO_METRICS, &gm, 0, nullptr,
+                                   &mat);
+      Check(rc != GDI_ERROR && gm.gmBlackBoxY > 0 && gm.gmptGlyphOrigin.y > 0,
+            "T15e: 生产单位矩阵下能取到「中」字形度量");
+      // 反例对照:零矩阵必须失败(证明这个前提确实有牙,不是恒真断言)。
+      MAT2 zero;
+      ZeroMemory(&zero, sizeof(zero));
+      GLYPHMETRICS gm_zero;
+      ZeroMemory(&gm_zero, sizeof(gm_zero));
+      DWORD rc_zero = GetGlyphOutlineW(hdc, (UINT)L'中', GGO_METRICS, &gm_zero,
+                                       0, nullptr, &zero);
+      Check(rc_zero == GDI_ERROR,
+            "T15f: 反例对照 —— 零矩阵下 GetGlyphOutlineW 失败");
+      if (font) {
+        SelectObject(hdc, old_font);
+        DeleteObject(font);
+      }
+      DeleteDC(hdc);
+    }
+  }
 
   // 收尾:收起面板,避免残留一个置顶窗口影响后续用例。
   QuickPanelDialog::Hide();

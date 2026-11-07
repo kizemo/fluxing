@@ -494,11 +494,9 @@ int main() {
   // ----------------------------------------------------------------
   // spec 099 P0-3:「每个可见槽位点击必产生确定的用户可见效果」
   //
-  //   槽 0 Schema  → 切换到下一个输入方案(此前是死槽,注释写着 no-op)
-  //   槽 1 Phrase  → 短语库(既有)
-  //   槽 2 Settings→ 快捷键设置(既有,走 SetOnShortcut)
-  //   槽 3 Account → 关于/账号说明页(此前是死槽)
-  //   槽 4 中英文切换 / 槽 5 全半角切换 (Fluxing v4 需求③④⑤)
+  //   v5 需求⑦: 槽号 = **视觉位置**(面板上从左到右)——
+  //   槽 0 切换输入法 / 槽 1 中英文切换 / 槽 2 全半角切换 /
+  //   槽 3 用户短语 / 槽 4 快捷键设置 / 槽 5 关于
   //
   // 判别性:改生产代码之前槽 0/3 的回调触发次数恒为 0 ⇒ T20g/T20j 必红。
   // ----------------------------------------------------------------
@@ -585,14 +583,16 @@ int main() {
       return true;
     };
 
+    // v5 需求⑦: 索引 = **视觉位置**(左→右)。视觉 0 切换输入法 / 1 中英文 /
+    // 2 全半角 / 3 用户短语 / 4 快捷键设置 / 5 关于。
     Check(click_slot(0, n_schema), "T20c: 槽 0 (Schema) 矩形可解析");
-    Check(click_slot(1, n_phrases), "T20d: 槽 1 (Phrase) 矩形可解析");
-    Check(click_slot(2, n_shortcut), "T20e: 槽 2 (Settings) 矩形可解析");
-    Check(click_slot(3, n_login), "T20f: 槽 3 (Account) 矩形可解析");
+    Check(click_slot(3, n_phrases), "T20d: 槽 3 (Phrase) 矩形可解析");
+    Check(click_slot(4, n_shortcut), "T20e: 槽 4 (Settings) 矩形可解析");
+    Check(click_slot(5, n_login), "T20f: 槽 5 (Account) 矩形可解析");
     Check(n_schema == 1, "T20g: 槽 0 点击 → 方案切换回调恰好 1 次");
-    Check(n_phrases == 1, "T20h: 槽 1 点击 → 短语库回调恰好 1 次");
-    Check(n_shortcut == 1, "T20i: 槽 2 点击 → 快捷键设置回调恰好 1 次");
-    Check(n_login == 1, "T20j: 槽 3 点击 → 关于页回调恰好 1 次");
+    Check(n_phrases == 1, "T20h: 槽 3 点击 → 短语库回调恰好 1 次");
+    Check(n_shortcut == 1, "T20i: 槽 4 点击 → 快捷键设置回调恰好 1 次");
+    Check(n_login == 1, "T20j: 槽 5 点击 → 关于页回调恰好 1 次");
     Check(n_userfolder == 0, "T20k: 未接槽位的回调不得被误触发");
 
     int bx = 0, by = 0, bw = 0, bh = 0;
@@ -602,8 +602,8 @@ int main() {
                                        &bw, &bh),
           "T20m: 槽位索引 == kButtonCount 无效");
 
-    // Fluxing v4 需求③④⑤: 槽 4(中英文切换)/ 槽 5(全半角切换) 必须真的可点、
-    // 且回调收到的是**目标值**而不是「翻转」标记。
+    // Fluxing v4 需求③④⑤ + v5 需求⑦: 中英文切换(视觉 1)/ 全半角切换(视觉 2)
+    // 必须真的可点、且回调收到的是**目标值**而不是「翻转」标记。
     {
       int n_ascii = 0;
       int n_full = 0;
@@ -616,11 +616,11 @@ int main() {
       });
       QuickPanelDialog::Show(false, nullptr, nullptr, nullptr,
                              [&n_full](bool) { ++n_full; }, nullptr, nullptr);
-      Check(click_slot(4, n_ascii), "T20n: 槽 4 (中英文) 矩形可解析");
+      Check(click_slot(1, n_ascii), "T20n: 槽 1 (中英文) 矩形可解析");
       Check(n_ascii == 1 && ascii_target == expect_target,
-            "T20n2: 槽 4 点击 → 中英文回调恰好 1 次且收到目标值");
-      Check(click_slot(5, n_full), "T20p2: 槽 5 (全半角) 矩形可解析");
-      Check(n_full == 1, "T20p3: 槽 5 点击 → 全半角回调恰好 1 次");
+            "T20n2: 槽 1 点击 → 中英文回调恰好 1 次且收到目标值");
+      Check(click_slot(2, n_full), "T20p2: 槽 2 (全半角) 矩形可解析");
+      Check(n_full == 1, "T20p3: 槽 2 点击 → 全半角回调恰好 1 次");
       QuickPanelDialog::SetOnAscii(nullptr);
     }
     // 复位注入的回调,避免悬垂引用影响后续用例。
@@ -1124,10 +1124,15 @@ int main() {
             ("T30d" + tag + ": 品牌矩形与槽位 0 不相交").c_str());
       const int exp_pad = fluxing::panel_dpi::ScaleLogicalByDpi(
           QuickPanelDialog::kPanelPadding, dpi_list[k]);
+      // v5 需求⑤: 品牌整体上移 kBrandYOffset 个 logical px ⇒ y 比 padding 小。
+      // 期望值用与生产同口径的缩放函数算(ScaleLogicalByDpi 与生产的
+      // ScaleRound 就近舍入一致),不复制布局公式(R7)。
+      const int exp_brand_off = fluxing::panel_dpi::ScaleLogicalByDpi(
+          QuickPanelDialog::kBrandYOffset, dpi_list[k]);
       const int dx = bx - exp_pad;
-      const int dy = by - exp_pad;
+      const int dy = by - (exp_pad - exp_brand_off);
       Check(got && dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1,
-            ("T30e" + tag + ": 品牌左上角落在 padding").c_str());
+            ("T30e" + tag + ": 品牌左上角落在 padding(上移 1px)").c_str());
     }
     int bx = 0, by = 0, bw = 0, bh = 0;
     Check(!QuickPanelDialog::BrandRectForSize(0, 0, &bx, &by, &bw, &bh),
@@ -1265,20 +1270,24 @@ int main() {
     // 生产通道:TooltipText 必须与纯逻辑同源。
     QuickPanelDialog::SetInputState(false, false);
     // v4 stage2: 槽 1 无当前态 ⇒ tooltip 仅名称。
-    Check(QuickPanelDialog::TooltipText(1) == L"用户短语",
-          "T28m: 生产 TooltipText(1) 与纯逻辑一致");
+    // v5 需求⑦: 生产 TooltipText 的 slot = **视觉位置**;纯逻辑 BuildTooltip 的
+    // 槽位仍是**语义空间**(0 切换方案 / 1 用户短语 / …)—— 两者经
+    // kVisualToLogical 换算,这里直接断言视觉位置。
+    Check(QuickPanelDialog::TooltipText(3) == L"用户短语",
+          "T28m: 生产 TooltipText(3) 与纯逻辑一致");
     const std::wstring expect2 =
         std::wstring(L"快捷键设置 · 常驻显示:") +
         (QuickPanelDialog::AlwaysShowMode() ? L"开" : L"关");
-    Check(QuickPanelDialog::TooltipText(2) == expect2,
-          "T28n: 生产 TooltipText(2) 跟随唯一真相源 AlwaysShowMode()");
+    Check(QuickPanelDialog::TooltipText(4) == expect2,
+          "T28n: 生产 TooltipText(4) 跟随唯一真相源 AlwaysShowMode()");
     Check(QuickPanelDialog::TooltipText(0) == L"切换到下一个输入方案 · 当前:未知",
           "T28o: 无 provider 时槽 0 tooltip 兜底「未知」");
-    // v4 stage2: 生产通道的槽 4/5 也必须回显当前态(需求⑤)。
-    Check(QuickPanelDialog::TooltipText(4) == L"中英文切换 · 当前:中",
-          "T28o2: 生产 TooltipText(4) 回显中英态");
-    Check(QuickPanelDialog::TooltipText(5) == L"全半角切换 · 当前:半",
-          "T28o3: 生产 TooltipText(5) 回显全半角态");
+    // v4 stage2 + v5 需求⑦: 生产通道的中英文(视觉 1)/ 全半角(视觉 2)
+    // 也必须回显当前态(需求⑤)。
+    Check(QuickPanelDialog::TooltipText(1) == L"中英文切换 · 当前:中",
+          "T28o2: 生产 TooltipText(1) 回显中英态");
+    Check(QuickPanelDialog::TooltipText(2) == L"全半角切换 · 当前:半",
+          "T28o3: 生产 TooltipText(2) 回显全半角态");
   }
 
   // ----------------------------------------------------------------
