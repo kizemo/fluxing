@@ -2,7 +2,7 @@
 
 ## 1. 结论（一句话）
 
-用户以为「有两套右键菜单、其中一套无效」——**取证结论相反：两套都有效、都含「导入搜狗用户词库」，问题是重复定义 + 两套措辞 + 用户只发现一套**。现已完成：菜单**唯一化到 `WeaselServer.exe` 的 `IDR_MENU_POPUP`(105)**，删除 `WeaselTSF` 的三套菜单资源（105/108/109）与语言栏右键弹菜单能力；**新入口 = 右键「快捷设置栏」左侧品牌图标**，与托盘右键复用同一份菜单。代码 / 构建 / 单测 / 资源级核对 / 静默安装均已完成并落盘提交（`d991005`），**仅剩真机目视验收**。
+用户以为「有两套右键菜单、其中一套无效」——**取证结论相反：两套都有效、都含「导入搜狗用户词库」，问题是重复定义 + 两套措辞 + 用户只发现一套**。现已完成：菜单**唯一化到 `WeaselServer.exe` 的 `IDR_MENU_POPUP`(105)**，删除 `WeaselTSF` 的三套菜单资源（105/108/109）与语言栏右键弹菜单能力；**新入口 = 右键「快捷设置栏」左侧品牌图标**，与托盘右键复用同一份菜单。代码 / 构建 / 单测 / 资源级核对 / 静默安装 / **真机程序化验收（菜单弹出 + 18 项含「导入搜狗用户词库」+ 弹出时面板不被收走）** 均已完成并落盘提交（`d991005`），**仅剩「任务栏语言栏右键」一条纯目视确认**。
 
 ## 2. 已完成（逐项有证据）
 
@@ -21,13 +21,26 @@
 | 提交 | `d991005 feat(WeaselServer): 快捷设置栏品牌图标右键弹出唯一菜单`（12 files, +340/−72），**未夹带并发会话的 v4 改动** |
 | 架构决策 | `docs/adr/0038-single-context-menu-brand-icon-entry.md`；`CHANGELOG.md` `[Unreleased]`；spec 091 的 AC-5/B6 已就地改写为作废 |
 
-## 3. 唯一未完成：真机目视验收（需用户在场）
+## 3. 真机验收：程序化探针已完成（2026-11-07 08:40 补完）
 
-**本会话期间桌面处于锁屏态**（`LogonUI` 进程在跑）⇒ 按项目铁律，UI 自动化 / 屏幕捕获 / 合成输入在此状态下**会静默失败**，不作为缺陷证据。请解锁后手工确认：
+原计划的「需用户在场目视」已由程序化探针代替完成。脚本 `tmp/probe-qpanel-menu.ps1`，日志 `tmp/probe-qpanel-menu.log`，取证截图 `tmp/probe-qpanel-menu.png` / `.bmp`（机器可读，人眼可查）：
 
-1. `Alt+,`（或托盘菜单「快速面板」）呼出快捷设置栏 → **右键面板左侧品牌图标** → 应弹出含「导入搜狗用户词库」的菜单，且**不再有**「快速面板常驻」被移除的旧行为差异（该项仍在菜单中，可勾选/取消）。
-2. 右键 **Win11 任务栏输入指示器（语言栏）** → 应**只**剩系统默认语言列表，**不再**出现火流猩菜单（TF 框架行为，需目视确认）。
-3. 菜单弹出时鼠标移到菜单上 → 快捷设置栏**不应**被收走（`s_menuOpen` 生效）。
+| 验收点 | 证据 | 结论 |
+|---|---|---|
+| 右键品牌图标真的弹出菜单 | 合成 `WM_RBUTTONDOWN` 到 `FluxingQuickPanel_v3` 客户区 (30,30)（brand 物理矩形 (8,8,45,45)），**7–44 ms** 内枚举到 `#32768` 菜单窗口（pid = WeaselServer，212×376，vis=True） | ✅ |
+| 弹的是托盘那份、含搜狗导入 | `MN_GETHMENU`(0x01E1) 取 HMENU → **18 项**，第 5 项 `id=40022 导入搜狗用户词库 (&G)` | ✅ |
+| 菜单弹出时面板不被收走 | 同一张截图里菜单与左下角**品牌 logo 同时在屏** | ✅ `s_menuOpen` 生效 |
+| 语言栏不再弹火流猩菜单 | 资源级核对：`weaselx64.dll` / `weasel.dll` → `RT_MENU: (none)`；唯一菜单在 `WeaselServer.exe` id=105（18 项含 40022） | ✅（二进制层） |
+
+**仍需用户目视的只剩 1 条**（纯 TF 框架行为，程序无法代劳）：右键 Win11 任务栏输入指示器 → 应**只**剩系统默认语言列表。
+
+### 探针要点（下次直接复用，别重新踩）
+
+- **必须先把 WeaselServer 弄成前台进程**（`AttachThreadInput` + `SetForegroundWindow(panel)`），否则 `TrackPopupMenu` 弹出即被前台锁吞掉、菜单瞬时消失，探针什么都抓不到（这正是首轮失败的根因）。
+- **必须 10 ms 高频轮询** `#32768`；「弹完等 1500 ms 再枚举」抓不到（菜单已经没了）。
+- **DPI-非感知进程里 `GetWindowRect` 返回逻辑坐标**（96dpi 基准），而抓屏用物理像素 ⇒ 抓取区域要乘 `GetDpiForWindow/96`（本机 144dpi ⇒ ×1.5），否则截到的是错误区域（首轮截到的是用户的文档页）。
+- 抓屏用 **`CreateDC("DISPLAY")`**（覆盖虚拟桌面），`GetDC(NULL)` 只覆盖主显示器。
+- 关闭菜单：**`EndMenu()` 对跨线程菜单无效**；有效路径 = `PostMessage(菜单窗口, WM_KEYDOWN/WM_KEYUP, VK_ESCAPE)`。
 
 ## 4. 本轮踩的坑（下次别再踩）
 
@@ -43,10 +56,11 @@
 
 ## 5. 下一步建议（按优先级）
 
-1. **用户解锁后做上面 §3 的 3 条目视验收**（这是本阶段唯一缺口）。
-2. **真机验收通过后再 push**：`git push` 到 `kizemo/Fluxing`（当前分支 `Fluxing` ahead 6，含本轮 `d991005` + 待提交的 handoff/prompt 文档）。
-3. **并发会话的 QuickPanel v4 stage1 改动仍在工作区未提交**（`WeaselServer/QuickPanelDialog.{h,cpp}`、`include/FluxingPanelTooltip.h`、两个测试文件）—— 它的 handoff 在 `docs/archive/handoffs/handoff-2026-11-07-quickpanel-v4-redesign.md`，**不要改写那两个文件**。
-4. 可选后续：把「快捷设置栏品牌图标右键」加入 `Rime-设置说明书-重点快捷键.md` 的用户可见说明。
+1. **用户方便时补 §3 最后一条目视确认**（右键 Win11 任务栏输入指示器 → 只剩系统默认语言列表）；其余验收已由程序化探针闭环。
+2. **验收通过后再 push**：`git push` 到 `kizemo/Fluxing`（当前分支 `Fluxing` ahead 13，含本轮 `d991005` + handoff/prompt 文档 + 并发会话的 v4 提交）。**未获用户明确同意前不得 push**。
+3. **并发会话的 QuickPanel v4 stage1/stage2 已自行提交**（`a40a766` 注入中英文切换回调、`a04cc41` 去黑框、`00dad0b` logo 预合成+BitBlt、`3dcbc89`/`9be20a1`/`8f7c9e2` docs），并已重新构建安装新的 `WeaselServer.exe`（2,328,576 B, 02:02:48）—— 本轮的资源级核对与真机探针都是在**该版本**上做的，结论依然成立。它的 handoff 在 `docs/archive/handoffs/handoff-2026-11-07-quickpanel-v4-redesign.md`，**不要改写那两个文件**。
+4. **安装目录残留旧版 `weaselx64.1.2.1.0.0.dll`**（1,989,632 B, 11-06 23:48，仍带 id=105/108/109 三套菜单）：当前 CLSID 指向 `.0.1`，**不受影响**；但若注册表将来被改写会误用旧菜单 ⇒ 建议清理（本次未擅自删除用户安装目录文件）。
+5. 可选后续：把「快捷设置栏品牌图标右键」加入 `Rime-设置说明书-重点快捷键.md` 的用户可见说明。
 
 ## 6. 复现命令（可直接抄）
 
@@ -59,6 +73,10 @@
 
 # 菜单资源核对（dll 应 RT_MENU: (none)；Server 应只有 id=105 且含 40022）
 pwsh -NoProfile -File 'F:\soft\00selfmade\rime_claude\tmp\verify-menu-unique.ps1'
+
+# 真机探针（品牌图标右键 → 弹菜单 → 抓 18 项 + 截图；成功标志 PROBE_EXIT=0）
+pwsh -NoProfile -File 'F:\soft\00selfmade\rime_claude\tmp\probe-qpanel-menu.ps1'
+ffmpeg -y -loglevel error -i 'F:\soft\00selfmade\rime_claude\tmp\probe-qpanel-menu.bmp' 'F:\soft\00selfmade\rime_claude\tmp\probe-qpanel-menu.png'
 
 # 静默安装（cmd /c；/D= 裸尾参且最后）
 cmd /c '"F:\soft\00selfmade\rime_claude\output\archives\fluxing-1.2.1-installer.exe" /S /D=D:\Program Files\fluxing'
