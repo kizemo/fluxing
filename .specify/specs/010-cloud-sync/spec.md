@@ -1,6 +1,9 @@
 # 010 · 火流猩输入法 v2 · 跨设备云同步（v2 P2 仅设计）
 
 > 元 spec 004 拆分。v2 阶段 P2 仅交付 design；v2.1+ 实施。
+>
+> ⚠️ **本文技术结论已被取代（2026-11-07）**：后端（Vercel + Postgres）、客户端依赖（libcurl，**仓库中并不存在**）、认证方案（Passkey）、冲突策略（服务端 LWW）四项均已变更。
+> **实施以 spec `100-fluxing-cloud-account-sync` 为准**（决策记录见 `docs/adr/0039-cloud-account-sync-architecture.md`）。本文仅保留作历史依据，**不得作为实现引用**。
 
 ## 0. 上下文
 
