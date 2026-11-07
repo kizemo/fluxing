@@ -1,5 +1,44 @@
 ## [Unreleased]
 
+### fix(WeaselDeployer): 导入搜狗用户词库对话框点「取消」/按 Esc 关不掉窗口（补 IDCANCEL 消息映射）
+
+- **症状**：托盘右键「导入搜狗用户词库」弹出对话框后，点「取消」按钮或按 Esc 都**关不掉窗口**（右上角 X 可以关）。导入本身成功。
+- **根因（已坐实）**：对话框模板 `WeaselDeployer.rc` 里取消按钮的 id 就是 `IDCANCEL`，但 `SogouImportDialog.h` 的消息映射**没有** `COMMAND_ID_HANDLER(IDCANCEL, …)`；WTL 的 `CDialogImpl` 不会自动处理 `IDCANCEL` ⇒ 按钮/Esc 发出的 `WM_COMMAND/IDCANCEL` 无人处理 ⇒ 不 `EndDialog` ⇒ 窗口不关。而右上角 X 走 `WM_CLOSE → OnClose → EndDialog(IDCANCEL)`，所以 X 能关。症状完全吻合。
+- **修复**：消息映射加 `COMMAND_ID_HANDLER(IDCANCEL, OnCancel)`，`OnCancel` 实现 `EndDialog(IDCANCEL); return 0;`。**未触碰** `Configurator.cpp` 的 `MaintenanceGuard`（ADR 0037：`import_user_dict` 必须在 `StartMaintenance`/`EndMaintenance` 之间）。
+- **同类排查**：全仓 `.rc` 仅 3 个模板含 IDCANCEL 按钮（`IDD_SOGOU_IMPORT` / `IDD_HOTKEY_EDITOR` / `IDD_KEY_RECORDER`），后两者均已有 handler；`IDD_DICT_MANAGEMENT` 无取消按钮 ⇒ **同类缺陷仅此一处**。
+
+### fix(WeaselDeployer): 导入对话框模板的用户可见文案英文化（5 处改简体中文，违反 constitution P2/P5）
+
+- `IDD_SOGOU_IMPORT` 的 **en-US 语言块** 5 处英文（`CAPTION`、「来源」、「导入到用户词典」、`DEFPUSHBUTTON "开始导入(&I)"`、`PUSHBUTTON "取消",IDCANCEL`）改为**简体中文**，坐标 150 不变；简体块与繁体块原本已全中文，未改。
+- `.rc` 为 **UTF-16LE + BOM + CRLF**，编辑走 `[Text.Encoding]::Unicode` 读写；字节级校验：`len=52284, BOM=FF FE, bareLF=0`，与 HEAD 逐行对比**恰好 5 行**变化。
+- 遗留项（如实标注）：上游 en-US 对话框的其余本地化资源仍保留上游措辞，未扩展。
+
+### feat(WeaselServer): 快捷设置栏槽位重排 + 品牌图标上移 1px + 「全/半角」键改图标 + 文字键按墨迹盒垂直居中
+
+- **槽位重排（需求⑦）**：视觉顺序改为「切换输入法 → 中 → 全/半角 → 用户短语 → 快捷键设置 → 关于」。**面板所有公开 API 的 index 一律 = 视觉位置**（`SlotRect` / `SlotRectForSize` / `HitTest` / `DispatchSlotClick` / `TooltipText` / `FocusedSlot` 口径一致）；功能语义只经 `kVisualToLogical = {0,4,5,1,2,3}` 换算一次。`include/FluxingPanelTooltip.h` 的 `BuildTooltip` 保持逻辑语义不变；槽位几何公式、状态区、键盘焦点机**均未改**。
+- **品牌图标上移 1px（需求⑤）**：品牌 y = `padding − ScaleRound(kBrandYOffset=1, dpr_y)`；`BrandRect()` 仍是品牌矩形的**单一事实源**，绘制与 `HitTest(-2)` 逐像素同源 ⇒ 命中区随动不漂移。
+- **「全/半角」键改图标（需求⑥）**：由文字「全/半」改为**纯 GDI 矢量图标**，形状随当前态切换（宽圆角框 = 全角 / 窄圆角框 = 半角），30×30 viewBox 中心 (15,15)。**不走 GDI `AlphaBlend`**（v4 黑框前科，见 `handoff-2026-11-07-quickpanel-v4-redesign`）。
+- **文字键垂直居中（需求⑥）**：「中」「英」改为**按墨迹盒**垂直居中 —— `DT_VCENTER` 居中的是**行盒**(ascent+descent)，中文字形的着墨像素落在行盒里偏下（实测 YaHei Bold 约 0.5px；150% DPI 整数化后 = 1px）⇒ 观感「没垂直居中」。现用 `GetGlyphOutlineW` + `GGO_METRICS` 量墨迹盒（`gmBlackBoxY` 高度 + `gmptGlyphOrigin.y` 原点）再反推基线：`baseline = (box_top + box_bottom + 2*origin_y − (ink_h − 1)) / 2`（量不到时**回退** `DT_VCENTER`：不引入新的失败面，也不写死 ±1 fudge）。真机 150% DPI 实测：「中」墨迹由 17..40（中心 28.5）→ **16..39（中心 27.5 == 键帽中心）**。
+  - ★ 关键坑（曾导致两轮改动**完全空转**）：`GetGlyphOutlineW` 必须传**单位矩阵** `MAT2 = {0x00010000, 0, 0, 0x00010000}`；传**零矩阵**会让它返回 `GDI_ERROR` ⇒ 度量恒 0 ⇒ 墨迹盒路径永远失效、静默回退 `DT_VCENTER`（看起来就像「改了没反应」）。墨迹盒模型也须用 `ink_top = baseline − gmptGlyphOrigin.y`（**不是** `baseline − gmBlackBoxY`）。
+  - SDK 事实（Windows Kits 10.0.26100 `wingdi.h`）：`MAT2` = 16 字节（4×FIXED，GDI 按 16.16 形态读）、`GGO_METRICS` 是**标志位不是类型**、度量结构体是 `GLYPHMETRICS`（**没有** `gmBlackBoxHeight`）、新版原型参数顺序为 `(hdc, uChar, fuFormat, lpgm, c, pv, lpmat)`。
+  - 单位矩阵与基线公式抽为 `fluxing::panel_ink::FillUnitMat2()` / `InkBaselineForCap()`（**生产代码与单测共用同一份**），`TestQuickPanelRefactor` 新增 T15a–T15f（含**零矩阵反例**）钉死这两条前提。
+- **未改**：`include/WeaselIPCData.h`（不触发 IPC 四边同步）、`output/install.nsi`、`librime/` 子模块。
+
+### docs: 「切到火流猩后一小段时间只能输入英文」的根因结论（部署/维护窗口内的 `m_disabled` 闸门）
+
+- **结论**：**不是随机 bug**。`RimeWithWeaselHandler::Initialize()` 的 `m_disabled` 是**全通路闸门** —— 部署器进程在跑（`_IsDeployerRunning()` 查命名互斥量 `WeaselDeployerMutex`，**导入窗开着时即被持有**）或 `start_maintenance()` 在跑（首次部署 / 词库同步）时 `m_disabled = true` ⇒ `ProcessKeyEvent` / `AddSession` / `CommitComposition` 等**所有**输入通路早退 ⇒ 按键不被 IME 消费 ⇒ 宿主按普通英文键盘处理 ⇒ 观感「只能打英文、无法切中文」；部署一结束 `TryLazyRecovery()` 复位 ⇒ **「切换数次后恢复」= 那时部署已结束**。
+- **已排除**：`global_ascii` 嫌疑（本机 `weasel.yaml` 为 `false`，`AddSession` 的 ascii_mode 继承分支根本不走）。
+- **未改码**：放宽该闸门与 ADR 0037 的 maintenance 成对约束冲突（leveldb LOCK），属架构决策 ⇒ 本轮只出结论与改进方向（输入侧提示 / 缩短首次部署），详见 `lessons-learned.md` L196。
+
+### test(ci): 新增导入对话框「取消处理」与「模板中文化」两道静态门禁（含变异自检）
+
+- `scripts/gate/lib/GateChecks.ps1` 新增 `Get-RcDialogBlocks` / `Test-DialogCancelHandlerCoverage` / `Test-DialogTemplateChinese`；`L0-static.ps1` source 层注册 `dialog-cancel-handler` / `dialog-template-chinese`；`L3-mutation.ps1` 新增 **M07（删 IDCANCEL handler）/ M08（rc CAPTION 改回英文）** 两条变异，自检「脚本自己会咬」—— 实测两条变异均被 **KILLED**。
+
+### chore(build): 版本号对齐 —— `version.txt` 1.2.0 → 1.2.1，`env.bat` 构建号 +1
+
+- `version.txt` 由陈旧的 `1.2.0` 更正为 `1.2.1`（此前版本门禁 `version-consistency` **恒红**）。
+- `env.bat` `WEASEL_BUILD` 0 → 1 ⇒ 安装器 `VIProductVersion` = **1.2.1.1**、版本化 shim 名变为 `weaselx64.1.2.1.1.dll`；**不动**构建号会覆盖**仍被运行中的 WeaselTSF 加载**的 `weaselx64.1.2.1.0.dll`（L107「同版本不同内容 = 发版事故」）。二进制资源版本保持 `1.2.1.0`（版本门禁要求 `PRODUCT_VERSION == version.txt + ".0"`）。
+
 ### feat(WeaselServer): 右键菜单唯一化到 WeaselServer，并新增「快捷设置栏品牌图标右键」入口（ADR 0038）
 
 - **症状**：火流猩存在**两套**右键菜单 —— `WeaselTSF`（`weasel.dll` / `weaselx64.dll`）里三套独立维护的 MENU 资源，与 `WeaselServer.exe` 的 `IDR_MENU_POPUP` **措辞不一致**（TSF 版「快捷设置栏 (&K) Alt+,」「退出算法服务 (Q)」；Server 版「快速面板 (&K)」「退出 (&Q)」）。用户右键的是 Win11 任务栏**输入指示器**（TSF 语言栏按钮）而非系统托盘里的 Server 图标，只看见其中一套。

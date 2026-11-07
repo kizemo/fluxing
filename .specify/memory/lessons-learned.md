@@ -14258,3 +14258,51 @@ C0176；L191（面板 hwnd 每次 composition 重建）；L192（探针必须自
 **关联**：handoff 待补（本轮 v1.2.1 装机 + 导入验收）；L194（SGPU 词库解析）；L30（后台产物读到半截）；
 L17（自写检查要有牙）；`.claude/rules/ipc-boundary.md`（维护态必须 `StartMaintenance`/`EndMaintenance` 成对）。
 
+## L196 - **「切到火流猩后一小段时间只能打英文」= 部署/维护窗口内 `m_disabled` 全局闸门把输入通路短路，不是随机 bug**（2026-11-07）
+
+**现象**：用户报告「切换到火流猩后一小段时间只能输入英文、无法切中文；切换数次后恢复」。
+时间线线索：04:00 定时关机 → 07:50 冷启动 → 装 `.0.1` shim 后重启过 explorer → 09:45 报告；
+期间刚用搜狗导入窗导入过用户词库（`WeaselDeployer.exe` 在跑）。
+
+**根因（源码级坐实，未改码）**：`RimeWithWeasel/RimeWithWeasel.cpp` 的 `RimeWithWeaselHandler::Initialize()`（cpp:128-139）
+
+1. `m_disabled = _IsDeployerRunning();` —— 部署器进程在跑就**直接 return，连 rime 都不初始化**；
+   `_IsDeployerRunning()`（cpp:1043）探的是命名互斥量 `WeaselDeployerMutex`，**导入窗开着时该互斥量被持有**；
+2. `rime_api->initialize(NULL)` 之后 `if (rime_api->start_maintenance(False)) { m_disabled = true; rime_api->join_maintenance_thread(); }`
+   —— **首次部署 / 词库同步期间 `m_disabled = true`**。
+
+而 `m_disabled` 是**全通路闸门**：`ProcessKeyEvent`（cpp:360-362）、`AddSession`（cpp:216-219）、
+`RemoveSession`、`CommitComposition`、`ClearComposition`、`FocusIn`、`ShiftDown/ShiftUp`、
+`UpdateInputPosition` 全部 `if (m_disabled) return FALSE/0;`
+⇒ **按键根本不被 IME 消费**，宿主应用按普通英文键盘处理 ⇒ 观感就是「只能打英文、无法切中文」。
+
+`TryLazyRecovery()`（cpp:1078-1093）在每个早退点复查 `_IsDeployerRunning()`，部署器一退出就
+`Initialize()` 复位 ⇒ **「切换数次后恢复」= 那时部署/导入已经结束**，不是随机恢复。
+
+**判据 / 处置**：
+
+- **先排除配置嫌疑再怀疑架构**：本轮 `global_ascii` 这条路已排除 —— 本机 `weasel.yaml` 是
+  `global_ascii: false`，`AddSession` 里 `if (m_global_ascii_configured)` 的 ascii_mode 继承分支根本不走。
+- **判「是不是维护/部署窗口」的三条信号**（任一成立即坐实）：① 托盘处于「Under maintenance」
+  （`WeaselTrayIcon.cpp` 有该文案）；② `WeaselDeployer.exe` 进程还在跑（它持有 `WeaselDeployerMutex`）；
+  ③ 服务端日志里没有 `Process key event` 行、却有 `AddSession: m_disabled still true after TryLazyRecovery`。
+- **本轮的证据边界（别越界引用）**：以上是**源码级静态链路**；本轮**未取到运行时日志**
+  （`WeaselServer` 的 glog 输出文件位置未定位到），故「现场日志复现」仍属未验证项。
+- **为什么不改码**：放宽 `m_disabled` 闸门 = 在 librime maintenance 期间使用同一个 leveldb/词库实例，
+  与 ADR 0037 的 `StartMaintenance`/`EndMaintenance` 成对约束冲突（leveldb LOCK）⇒ 属架构决策，
+  按 handoff §四.3「确认为启动部署窗口类固有行为 → 向用户解释 + 评估可否改善」，本轮只出结论。
+
+**改进方向（待用户/ADR 决策，本轮未实施）**：
+
+- (a) 维护窗口内继续用**旧 session** 工作 —— librime 在 maintenance 期间不保证安全，风险高；
+- (b) 部署窗口内给**输入侧**的用户可见提示（当前只有托盘文案 "Under maintenance"，
+  用户从输入侧只看到「打不出中文」⇒ 症状与原因之间没有任何提示，这是真正的 UX 缺口）；
+- (c) 缩短首次部署耗时（部署期间完全不可输入，时长 = 不可用时长）。
+
+**推广**：「切到输入法后一小段时间行为退化」这类问题，**先查服务端的全局闸门**（本项目是 `m_disabled`），
+再查会话/配置状态；不要一上来怀疑输入法配置或会话状态机。
+同理，「某功能整体不生效且会自愈」的十有八九是**一个布尔闸门**在按条件短路。
+
+**关联**：`RimeWithWeasel/RimeWithWeasel.cpp:128-139 / 209-231 / 355-396 / 1043-1067 / 1078-1093`；
+ADR 0012（ascii_mode 作用域）；ADR 0037（maintenance 成对约束）；L107（同版本不同内容）；
+handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四.3。
