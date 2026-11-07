@@ -255,12 +255,21 @@ int WeaselServerApp::Run() {
 
   // spec 099 P0-4: 注入「当前输入状态」快照 provider。
   // 面板每次轮询只调一次 provider,拿到纯内存快照;provider 内部只读
-  // handler 的内存镜像字段(IsAsciiMode / GetCurrentSchemaId)与已预热的
-  // IsFullShape 缓存 —— **不碰文件**。
+  // handler 的内存镜像字段(GetPanelInputState / GetCurrentSchemaId)与已预热的
+  // IsSimplification 缓存 —— **不碰文件**。
   QuickPanelDialog::SetStateProvider([this]() {
     fluxing::panel_status::PanelState st;
-    st.ascii_mode = m_handler->IsAsciiMode();
-    st.fullwidth = m_handler->IsFullShape();
+    // v6 需求②: 面板要的是「**生效**标点宽度」= full_shape && !ascii_mode。
+    // 英文态下 rime 的 punctuator 走 ascii 分支,即使 full_shape 为 true 也打
+    // 半角 —— 所以不能像旧代码那样直接拿 IsFullShape()(那个 option 在中英
+    // 切换时根本不变,正是「切到英文图标仍是全角」的根因)。
+    // GetPanelInputState 只读内存镜像 + get_status(进程内 C API 读内存),
+    // 不碰文件,仍满足 spec 099 的显示路径零 I/O。
+    bool panel_ascii = false;
+    bool panel_full = false;
+    m_handler->GetPanelInputState(&panel_ascii, &panel_full);
+    st.ascii_mode = panel_ascii;
+    st.fullwidth = panel_full;
     // 「常驻显示」的真相源唯一 = QuickPanelDialog::AlwaysShowMode()
     // (spec 099 不变量,constitution R7),这里只做镜像,不另立真相源。
     st.always_show = QuickPanelDialog::AlwaysShowMode();
@@ -504,7 +513,16 @@ void WeaselServerApp::ToggleAlwaysShowMode() {
 }
 
 void WeaselServerApp::ShowQuickPanel() {
-  bool currentFull = m_handler ? m_handler->IsFullShape() : false;
+  // 批次 F 缺陷①:首帧口径必须与 100ms 轮询(SetStateProvider)完全一致 ——
+  // 取「生效标点宽度」= full_shape && !ascii_mode。裸 IsFullShape() 只反映
+  // full_shape 开关,英文态下 full_shape 可能仍为 true,于是英文态唤起面板会
+  // 先闪一帧全角图标再被轮询纠正回半角。
+  bool currentFull = false;
+  if (m_handler) {
+    bool panel_ascii = false, panel_full = false;
+    m_handler->GetPanelInputState(&panel_ascii, &panel_full);
+    currentFull = panel_full;
+  }
   QuickPanelDialog::Show(
       currentFull,
       // spec 099 P0-3: 槽 0 改为「切换到下一个输入方案」。
@@ -535,9 +553,20 @@ void WeaselServerApp::ShowQuickPanel() {
         }
         fluxing::PhrasesDialogIPC::Show();
       },
+      // 批次 F 缺陷②/D3:点「全半角」的用户意图就是「我要全角标点」。
+      // 英文态下生效标点宽度恒为半角(ascii_mode 优先于 full_shape),只置
+      // full_shape 用户看不到任何变化 —— 这正是「点击无法切换全半角」的真身。
+      // 所以打开全角前先退出英文态;关闭全角只动 full_shape,不打扰中英状态。
       [this](bool newFull) {
-        if (m_handler)
-          m_handler->SetOption(0, "full_shape", newFull);
+        if (!m_handler)
+          return;
+        if (newFull) {
+          bool panel_ascii = false, panel_full = false;
+          m_handler->GetPanelInputState(&panel_ascii, &panel_full);
+          if (panel_ascii)
+            m_handler->SetOption(0, "ascii_mode", false);
+        }
+        m_handler->SetOption(0, "full_shape", newFull);
       },
       // spec 099 P0-3: 槽 3(Account)→「关于 / 账号说明」页。
       // 页内文案明示:本输入法不含云端账号,词库/配置/用户数据全部留在本机,

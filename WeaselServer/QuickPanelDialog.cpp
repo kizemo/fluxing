@@ -382,24 +382,93 @@ void QuickPanelDialog::DrawIconAccount(HDC hdc,
   DeleteObject(SelectObject(hdc, pen));
 }
 
-// v5 需求⑥: 全/半角键的图标 —— 形状随当前态切换。
-// 全角 = 宽圆角框(viewBox x[4..26] y[9..21]),半角 = 窄圆角框(x[9..21]
-// y[9..21]);两者都以 (15,15) 为中心(与既有 icon bbox 约定一致:
-// kIconBboxCxOff/CyOff = 15),描线 raw pixel 不随 dpr 缩放(同其它 5 个图标)。
-// 纯矢量描边,绝不走 GDI AlphaBlend(v4 黑框前科)。
+// v6 需求①: 全/半角键的图标 —— 中英文「逗号 + 句号」组合。
+//   全角 = 「，。」(U+FF0C + U+3002) / 半角 = 「,.」(U+002C + U+002E)。
+//   两个字形共用一条基线;墨迹盒**并集**在 kIconViewBox×kIconViewBox 的
+//   viewBox 内做水平 + 垂直居中(viewBox 中心恒为 (15,15),与既有 5 个线描
+//   图标同一约定),字形尺寸 raw pixel 不随 dpr 缩放。
+//
+// 为什么换掉 v5 的宽/窄圆角框:用户 2026-11-07 指令 —— 图标要「更清晰直接」。
+// 文字组合直接画出输入法此刻会打出的标点,不需要用户再理解「宽框=全角」。
+//
+// 实现约束(均为已踩过的坑,勿简化):
+//   - 纯 GDI 文本描画,**绝不**走 AlphaBlend(v4 品牌图标黑框前科);
+//   - 度量必须传**单位 MAT2**(fluxing::panel_ink::FillUnitMat2):零矩阵会让
+//     GetGlyphOutlineW 返回 GDI_ERROR ⇒ 度量恒 0 ⇒ 静默漏画;
+//   - 居中用**墨迹盒并集**而不是 em 盒:`，` 的墨迹偏左下、`。` 居中,
+//     按 em 盒居中会让整对符号明显偏上,且半角态 (宽度只有约 0.6em) 必须
+//     单独算,不能沿用全角的字号盒。
 void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
-                                          int x,
-                                          int y,
-                                          COLORREF penColor,
-                                          bool fullwidth) {
-  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
-  HBRUSH brush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
-  if (fullwidth)
-    RoundRect(hdc, x + 4, y + 9, x + 26, y + 21, 4, 4);
-  else
-    RoundRect(hdc, x + 9, y + 9, x + 21, y + 21, 4, 4);
-  DeleteObject(SelectObject(hdc, pen));
-  DeleteObject(SelectObject(hdc, brush));
+                                         int x,
+                                         int y,
+                                         COLORREF penColor,
+                                         bool fullwidth) {
+  if (!hdc || !s_hFontPunct)
+    return;
+  static const wchar_t kFullPair[] = L"\uFF0C\u3002";  // ，。
+  static const wchar_t kHalfPair[] = L",.";            // ,.
+  const wchar_t* pair = fullwidth ? kFullPair : kHalfPair;
+
+  HGDIOBJ oldFont = SelectObject(hdc, s_hFontPunct);
+  MAT2 mat;
+  fluxing::panel_ink::FillUnitMat2(&mat);
+
+  // 逐字累进笔位,求和集墨迹盒(相对「笔位 0 / 基线 0」;GDI 墨迹盒模型见
+  // DrawInkCenteredChar 上方长注释)。
+  int pen = 0;
+  int inkL = 0, inkT = 0, inkR = 0, inkB = 0;
+  bool haveInk = false;
+  for (int i = 0; i < 2 && pair[i]; ++i) {
+    GLYPHMETRICS gm;
+    ZeroMemory(&gm, sizeof(gm));
+    if (GetGlyphOutlineW(hdc, pair[i], GGO_METRICS, &gm, 0, nullptr, &mat) ==
+        GDI_ERROR) {
+      haveInk = false;
+      break;
+    }
+    if (gm.gmBlackBoxX > 0 && gm.gmBlackBoxY > 0) {
+      const int l = pen + static_cast<int>(gm.gmptGlyphOrigin.x);
+      const int t = -static_cast<int>(gm.gmptGlyphOrigin.y);
+      const int r = l + static_cast<int>(gm.gmBlackBoxX) - 1;
+      const int b = t + static_cast<int>(gm.gmBlackBoxY) - 1;
+      if (!haveInk) {
+        inkL = l;
+        inkT = t;
+        inkR = r;
+        inkB = b;
+        haveInk = true;
+      } else {
+        if (l < inkL)
+          inkL = l;
+        if (t < inkT)
+          inkT = t;
+        if (r > inkR)
+          inkR = r;
+        if (b > inkB)
+          inkB = b;
+      }
+    }
+    pen += static_cast<int>(gm.gmCellIncX);
+  }
+  if (!haveInk) {
+    SelectObject(hdc, oldFont);
+    return;
+  }
+
+  const int inkW = inkR - inkL + 1;
+  const int inkH = inkB - inkT + 1;
+  // 让墨迹盒并集居中于 viewBox(中心 = (x+kIconBboxCxOff, y+kIconBboxCyOff))。
+  const int penX = x + (kIconViewBox - inkW) / 2 - inkL;
+  const int baselineY = y + (kIconViewBox - inkH) / 2 - inkT;
+
+  const COLORREF oldColor = SetTextColor(hdc, penColor);
+  const int oldBk = SetBkMode(hdc, TRANSPARENT);
+  const UINT oldAlign = SetTextAlign(hdc, TA_LEFT | TA_BASELINE);
+  TextOutW(hdc, penX, baselineY, pair, 2);
+  SetTextAlign(hdc, oldAlign);
+  SetBkMode(hdc, oldBk);
+  SetTextColor(hdc, oldColor);
+  SelectObject(hdc, oldFont);
 }
 
 namespace {
@@ -600,6 +669,8 @@ fluxing::panel_status::PanelState QuickPanelDialog::s_inputState;
 QuickPanelDialog::StateProvider QuickPanelDialog::s_stateProvider;
 // spec 099 P0-4: 状态文字字体(按 dpr 重建;OnDestroy 释放)。
 HFONT QuickPanelDialog::s_hFontStatus = NULL;
+// v6 需求①: 全/半角字形字体(固定 raw px,不随 dpr 缩放)。
+HFONT QuickPanelDialog::s_hFontPunct = NULL;
 // spec 099 P0-5: 键盘交互状态(焦点槽位 / 是否已进入键盘交互态)。
 fluxing::panel_keyboard::State QuickPanelDialog::s_keyboard;
 // spec 099 P0-5: tooltip 顶层窗 + 字体 + 接管键盘焦点前的原焦点窗口。
@@ -1661,6 +1732,20 @@ bool QuickPanelDialog::ApplyPhysicalLayout(HWND hwnd) {
                                 CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
                                 DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei");
   }
+  // v6 需求①: 全/半角字形字体。**固定 raw px**(不乘 dpr)—— 与另外 5 个
+  // 线描图标同口径(它们的描线坐标本身就不缩放),否则 150% DPI 下「，。」会
+  // 撑破 28 logical 的键帽;且两个标点的墨迹盒并集是按 raw px 度量后在
+  // kIconViewBox 内居中的,缩放字号会让居中量失衡。
+  // 生命周期与 s_hFontStatus 一致:先释放旧的再建,避免 WM_DPICHANGED 反复
+  // 触发时泄漏 GDI 句柄。
+  if (s_hFontPunct) {
+    DeleteObject(s_hFontPunct);
+    s_hFontPunct = NULL;
+  }
+  s_hFontPunct = CreateFontW(-15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                             DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei");
   // off-screen DC 尺寸必须跟着窗口走,否则 UpdateLayeredWindow 提交旧 surface
   CreateOffscreenDC(w, h);
   return true;
@@ -1705,6 +1790,11 @@ LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
   if (s_hFontStatus) {
     DeleteObject(s_hFontStatus);
     s_hFontStatus = NULL;
+  }
+  // v6 需求①: 全/半角字形字体。
+  if (s_hFontPunct) {
+    DeleteObject(s_hFontPunct);
+    s_hFontPunct = NULL;
   }
   DestroyOffscreenDC();
   if (s_hBmpLogo) {

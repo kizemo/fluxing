@@ -1,5 +1,25 @@
 ## [Unreleased]
 
+### feat(WeaselServer): 快捷设置栏「全/半角」键改为「，。」/「,.」字形组合 + 整体缩小（215×32）
+
+- **图标形态（用户指令 ①）**：上一版的「宽圆角框 = 全角 / 窄圆角框 = 半角」**整段作废**，改为直接画字符组合 —— 全角态 `，。`、半角态 `,.`。两个字形共用一条基线，逐字 `GetGlyphOutlineW(GGO_METRICS, …, &mat)` 累进笔位求和集墨迹盒，再按**并集墨迹盒**在 30×30 viewBox 内水平 + 垂直居中（`penX = x + (kIconViewBox − inkW)/2 − inkL`、`baselineY = y + (kIconViewBox − inkH)/2 − inkT`），`SetTextAlign(TA_LEFT|TA_BASELINE)` + `TextOutW`。字体固定 raw px（`−15`、FW_BOLD、Microsoft YaHei，不乘 dpr，与另外 5 个线描图标同口径）⇒ 新增 `s_hFontPunct`（`ApplyPhysicalLayout` 重建 / `OnDestroy` 释放）。**仍禁用 GDI `AlphaBlend`**（v4 黑框前科），复用 `fluxing::panel_ink::FillUnitMat2()`（零 MAT2 ⇒ `GDI_ERROR`）。**未改**：`include/WeaselIPCData.h`、`output/install.nsi`、`librime/` 子模块。
+- **面板缩小（用户指令 ③）**：几何常量整体下调 —— `kPanelPadding 6→4`、`kPanelVPadding 3→2`、`kBtnSize 31→28`、`kBtnGap 3→2`、`kIcoSize 19→17`、`kBtnRadius 11→10`、`kBrandSize 28→26`、`kBrandGap 4→3`、`kPanelRadius 15→14`、`kPanelW 239→215`、`kPanelH 36→32`（逻辑 px）。150% DPI 实测面板 **359×54 → 323×48**，200% ⇒ 430×64，面积降约 21%。`kBtnSize` 有下界 **28**：Symbols 线描最宽横跨 `X[3..27]` = 25 raw px 且不随 dpr 缩放，再压会被裁切。
+- **单测同步**：`TestQuickPanelDialog` T25a/T25b/T25c/T25g–T25j 的硬编码由 `239×36 / 359×54 / 478×72` 改为 `215×32 / 323×48 / 430×64`（就近舍入 .5 向上的判别性保留：截断会得 322 而非 323）。Dialog **231/231**、Refactor **40/40** 全绿；其余像素/布局断言本就从 `kPanelW/kPanelH` 派生，未改。
+
+### fix(WeaselServer): 快捷设置栏全半角图标不随中英切换变化 + 点击无法切换全半角（用户指令 ②）
+
+- **症状**：① 中英文切换时全半角符号本来会跟着变，但设置栏图标**恒定不变**；② 点该键**没有任何效果**。
+- **根因①（状态源口径错）**：面板图标由 `s_inputState.fullwidth` 驱动，而状态源取的是**裸 `full_shape` 开关**。Rime 里 `full_shape` 与 `ascii_mode` 是两把独立开关，切中英只动 `ascii_mode` ⇒ 裸 `full_shape` 不变 ⇒ 图标不动。**用户看到的「全半角」= 生效标点宽度 = `full_shape && !ascii_mode`**。同时原 `IsFullShape()` 内部走 `user_config_open`（文件 I/O），而面板可见期间每 100 ms 轮询一次 ⇒ 违 spec 099「显示路径零 I/O」，也不适合当状态源。
+  - **修复**：`include/RimeWithWeasel.h` + `RimeWithWeasel.cpp` 新增 `GetPanelInputState(bool* ascii, bool* fullwidth)` —— 只在 `m_active_session` 非 0 且命中 `m_session_status_map` 时调 `get_status`/`free_status`（**进程内 C API 读内存，零文件 I/O**），成功则顺带校正 `m_global_ascii_mode`/`m_full_shape` 镜像，输出口径为 `*fullwidth = f && !a`。**不写 `m_cached_options`**（它同时服务 `IsSimplification()`，写进去会串味）。`WeaselServerApp::SetStateProvider` 改用它。
+- **根因②（点击写不进任何会话）**：`SetOption(0, "full_shape", newFull)` 的会话回退走 `to_session_id(m_active_session)` —— 该函数用 `operator[]`（缺键时插入默认项），且活动会话过期/未建立时解析出 0 ⇒ 函数提前 `return`，**一个会话都没被置**。且英文态下 `full_shape` 本就不是生效宽度 ⇒ 即使置上也看不见变化，两条叠加 = 「点了没反应」。
+  - **修复**：`SetOption` 重排会话解析顺序 —— `ipc_id` → `m_active_session` → **仅当 `m_session_status_map.size() == 1`** 时取唯一项；`broadcast_ascii` 分支遍历 `pair.second.session_id`（跳过已单独置过的 `ipc_id`），其余情况 `if (!target) return;` 且**不写缓存**（避免把「没找到会话」固化成状态）。
+- **行为变更（用户可知）**：点「全/半角」的用户意图就是「我要全角标点」⇒ 英文态下单击会**先退出英文态再置全角**；关闭全角只动 `full_shape`，不打扰中英状态。`ShowQuickPanel` 首帧口径同步改为 `GetPanelInputState`，否则英文态唤起面板会先闪一帧全角图标再被轮询纠正。
+
+### chore(build): `env.bat` 构建号 1 → 2（同版本号不同内容 = L107 发版事故）
+
+- `WEASEL_BUILD` 1 → 2 ⇒ 安装器 `VIProductVersion` = **1.2.1.2**、版本化 shim 名变为 `weaselx64.1.2.1.2.dll`。批次 F 只改 `WeaselServer.exe` 相关源码，但安装器仍会带 `weaselx64.dll`；`install.nsi` 里全部用 `${FLUXING_VERSION}.${WEASEL_BUILD}` 派生，改号安全。
+- 二进制资源版本**保持** `1.2.1.0`（版本门禁要求 `PRODUCT_VERSION/FILE_VERSION == version.txt + ".0"`）。
+
 ### fix(WeaselDeployer): 导入搜狗用户词库对话框点「取消」/按 Esc 关不掉窗口（补 IDCANCEL 消息映射）
 
 - **症状**：托盘右键「导入搜狗用户词库」弹出对话框后，点「取消」按钮或按 Esc 都**关不掉窗口**（右上角 X 可以关）。导入本身成功。

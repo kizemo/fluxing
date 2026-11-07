@@ -930,7 +930,7 @@ int main() {
 
   // ----------------------------------------------------------------
   // T25 (spec 099 P0-6): DPI 缩放与物理布局。
-  //   核心判据:150% ⇒ 359×54。
+  //   核心判据:150% ⇒ 323×48(批次 F 面板缩小后;原 359×54)。
   //   测试直接调 fluxing::panel_dpi::* 与 QuickPanelDialog::SlotRectForSize /
   //   StatusRectForSize(与生产**同一份**公式),不复制任何布局算式(R7)。
   // ----------------------------------------------------------------
@@ -942,15 +942,15 @@ int main() {
     int w = 0, h = 0;
     PanelPhysicalSize(QuickPanelDialog::kPanelW, QuickPanelDialog::kPanelH, 96,
                       96, &w, &h);
-    Check(w == 239 && h == 36, "T25a: 100% ⇒ 239×36");
+    Check(w == 215 && h == 32, "T25a: 100% ⇒ 215×32");
 
     PanelPhysicalSize(QuickPanelDialog::kPanelW, QuickPanelDialog::kPanelH, 144,
                       144, &w, &h);
-    Check(w == 359 && h == 54, "T25b: 150% ⇒ 359×54(P0-6 核心判据)");
+    Check(w == 323 && h == 48, "T25b: 150% ⇒ 323×48(P0-6 核心判据)");
 
     PanelPhysicalSize(QuickPanelDialog::kPanelW, QuickPanelDialog::kPanelH, 192,
                       192, &w, &h);
-    Check(w == 478 && h == 72, "T25c: 200% ⇒ 478×72");
+    Check(w == 430 && h == 64, "T25c: 200% ⇒ 430×64");
 
     // dpi <= 0 ⇒ 退化到 96(=100%),不塌成 0。
     Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 0) ==
@@ -964,15 +964,15 @@ int main() {
     Check(ScaleLogicalByDpi(0, 144) == 0,
           "T25f: logical=0 ⇒ 0(不产生负数)");
 
-    // 就近舍入(.5 向上)—— 变异点:改成整除(367 / 72→72)会红。
-    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 144) == 359,
-          "T25g: 239@144% 就近舍入 = 359(截断成 358 会红)");
-    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelH, 144) == 54,
-          "T25h: 36@144% = 54");
-    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 192) == 478,
-          "T25i: 239@200% = 478");
-    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelH, 192) == 72,
-          "T25j: 36@200% = 72");
+    // 就近舍入(.5 向上)—— 变异点:改成整除(322.5→322 / 48→48)会红。
+    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 144) == 323,
+          "T25g: 215@144% 就近舍入 = 323(截断成 322 会红)");
+    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelH, 144) == 48,
+          "T25h: 32@144% = 48");
+    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 192) == 430,
+          "T25i: 215@200% = 430");
+    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelH, 192) == 64,
+          "T25j: 32@200% = 64");
 
     // 三档 DPI 下:全部槽位都在面板内、互不重叠(命中区保持可分)。
     const int dpi_list[3] = {96, 144, 192};

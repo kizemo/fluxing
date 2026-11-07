@@ -311,9 +311,14 @@ class QuickPanelDialog {
   // spec 099 P0-4: 当前输入状态的内存快照 + 状态提供者。
   static fluxing::panel_status::PanelState s_inputState;
   static StateProvider s_stateProvider;
-  // Fluxing QuickPanel v4 需求⑤: 键帽标签字体(槽 4「中/英」、槽 5「全/半」
-  // 单字; 按 dpr 重建; OnDestroy 释放)。
+  // Fluxing QuickPanel v4 需求⑤: 键帽标签字体(槽 4「中/英」单字; 按 dpr 重建;
+  // OnDestroy 释放)。
   static HFONT s_hFontStatus;
+  // v6 需求①: 全/半角键「，。」/「,.」的字形字体。与 5 个线描图标同口径 ——
+  // 固定 raw px(**不乘 dpr**),否则 150% DPI 下两个标点会撑破 28 logical 的
+  // 键帽。在 ApplyPhysicalLayout 里与 s_hFontStatus 同生命周期重建(尺寸恒定,
+  // 只是复用同一条创建/释放路径),OnDestroy 释放。
+  static HFONT s_hFontPunct;
   // spec 099 P0-5: 键盘交互状态(焦点槽位 / 是否已进入键盘交互态)。
   static fluxing::panel_keyboard::State s_keyboard;
   // spec 099 P0-5: tooltip 顶层窗 + 字体 + 接管键盘焦点前的原焦点窗口。
@@ -366,17 +371,27 @@ class QuickPanelDialog {
   //   kBrandGap 首次常量化: ComputeLayout 与绘制面共用同一来源 (AGENTS.md R7);
   //   brand gap 不折进 padding, 否则品牌区与首个按钮粘连。
   // 注意:**不要**直接用这些 GDI 坐标;用 _phys 等版本(运行时按 dpr 缩放)。
-  static constexpr int kPanelPadding = 5;    // X 方向 padding (v4 保持 5)
-  static constexpr int kPanelVPadding = 3;   // Y 方向 padding: 3 + 30 + 3 = 36
-  static constexpr int kBtnSize = 30;        // v4: 35 → 30
-  static constexpr int kBtnGap = 3;          // v4: 14 → 3 (收窄按钮行)
-  static constexpr int kIcoSize = 19;        // 图标 19×19 (v4 不变)
-  static constexpr int kBtnRadius = 12;      // v4: 10 → 12 = 键帽高度一半(胶囊)
-  static constexpr int kBrandSize = 30;      // v4: 35 → 30 (与 kBtnSize 等高)
-  static constexpr int kBrandGap = 4;        // v4 新增: 品牌区 → 按钮行呼吸位
-  static constexpr int kPanelRadius = 16;    // v4: 20 → 16
-  static constexpr int kPanelW = 239;        // v4: 245 → 239 (去竖排回显区 + 扩 6 槽)
-  static constexpr int kPanelH = 36;         // v4: 48 → 36
+  // v6 需求③: 整体再缩小一档 —— 用户指令「再进一步适当缩小，避免屏幕遮挡，
+  // 大小可以参考搜狗输入法的设置栏」。参考量级:搜狗拼音的候选/工具条高度
+  // 约 26–30 logical px,本面板含 6 个键 + 品牌图标,取 32 高 / 215 宽。
+  //   高度 32 = vpadding 2 + 按钮 28 + vpadding 2
+  //   宽度 215 = padding 4 + brand 26 + gap 3
+  //              + (6 × 按钮28 + 5 × 间隙2) + padding 4 = 4+26+3+168+10+4 = 215
+  //   三档 DPI 全部由这两个常量推导: 100% 215×32 / 150% 323×48 / 200% 430×64
+  //   (原 v5: 100% 239×36 / 150% 359×54 / 200% 478×72 ⇒ 面积降约 21%)
+  // 下界约束: kBtnSize 不能低于 28 —— DrawIcon* 的线描最宽 bbox 是 Symbols 的
+  // X[3..27] = 25 raw px(raw pixel 不随 dpr 缩放),再小图标就会顶到键帽边缘。
+  static constexpr int kPanelPadding = 4;    // X 方向 padding
+  static constexpr int kPanelVPadding = 2;   // Y 方向 padding: 2 + 28 + 2 = 32
+  static constexpr int kBtnSize = 28;
+  static constexpr int kBtnGap = 2;          // 收窄按钮行
+  static constexpr int kIcoSize = 17;        // 图标盒参考尺寸
+  static constexpr int kBtnRadius = 10;      // = 键帽高度一半(胶囊)
+  static constexpr int kBrandSize = 26;      // 品牌图标(略小于键帽高,留呼吸位)
+  static constexpr int kBrandGap = 3;        // 品牌区 → 按钮行呼吸位
+  static constexpr int kPanelRadius = 14;
+  static constexpr int kPanelW = 215;
+  static constexpr int kPanelH = 32;
   // Fluxing QuickPanel v5 需求⑤: 品牌图标整体上移 1 logical px(正值 = 上移)。
   // 品牌矩形 y = padding − ScaleRound(kBrandYOffset, dpr_y)
   //   100%: 5→4 / 125%: 6→5 / 150%: 8→6 / 200%: 10→8。
@@ -440,6 +455,10 @@ class QuickPanelDialog {
       15;  // L93 新增:icon visual bbox X 中心(viewBox 局部)
   static constexpr int kIconBboxCyOff =
       15;  // L93 新增:icon visual bbox Y 中心(Account 略 16,统一 15)
+  // v6 需求①: 字形图标的 viewBox 边长。墨迹盒(并集)在这个方框内做水平 +
+  // 垂直居中,等价于「中心 = (x+15, y+15)」—— 与上面 kIconBboxCx/CyOff 同一
+  // 约定,故 2 * 15 = 30。改这个值必须同时改两个 kIconBbox*Off。
+  static constexpr int kIconViewBox = 30;
 
   // 颜色(0xAABBGGRR)
   // L90-fix: 边框颜色降低深度 — user 反馈"边框颜色深度太深"。
@@ -511,9 +530,13 @@ class QuickPanelDialog {
   static void DrawIconSymbols(HDC hdc, int x, int y, COLORREF penColor);
   static void DrawIconSettings(HDC hdc, int x, int y, COLORREF penColor);
   static void DrawIconAccount(HDC hdc, int x, int y, COLORREF penColor);
-  // v5 需求⑥: 全/半角键的图标(取代原来的「全」/「半」文字键帽)。
-  // 形状**随当前态切换**:全角 = 宽圆角框(22×12),半角 = 窄圆角框(12×12);
-  // 两者都在 30×30 viewBox 内以 (15,15) 为中心(与既有 icon bbox 约定一致)。
+  // v6 需求①: 全/半角键的图标 = 中英文「逗号 + 句号」组合。
+  // 全角 = 「，。」(U+FF0C U+3002) / 半角 = 「,.」(U+002C U+002E)。
+  // 两个字形共用一条基线,墨迹盒**并集**在 kIconViewBox×kIconViewBox 内做
+  // 水平 + 垂直居中(viewBox 中心 (15,15),与既有 5 个线描图标同约定)。
+  // 形状随当前**生效**宽度切换 ⇒ 英文态下必须显示半角(判据见
+  // RimeWithWeasel::GetPanelInputState:full_shape && !ascii_mode)。
+  // (v5 的宽/窄圆角框方案已被 v6 覆盖,勿回退。)
   static void DrawIconFullwidth(HDC hdc,
                                 int x,
                                 int y,
