@@ -120,6 +120,20 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   // Read the cached 简/繁 / 全/半角 option bools.
   bool IsSimplification() const;
   bool IsFullShape() const;
+  // v6 需求②: 快捷面板要的「**生效**输入态」。
+  //
+  // 面板的全半角图标必须随中英文切换变化,而「此刻真正打出的标点宽度」是
+  // full_shape && !ascii_mode —— 英文态下 rime 的 punctuator 走 ascii 分支,
+  // 即使 full_shape 为 true 也打半角。所以**不能**把 IsFullShape() 直接丢给
+  // 面板(那正是「切到英文,图标仍是全角」这个缺陷的根因)。
+  //
+  // 实现要点(勿简化):
+  //   - 内部**不调 IsFullShape()**:它首次调用要 user_config_open(文件 I/O),
+  //     而本函数由显示路径每 100ms 调一次 ⇒ 违反 constitution P2;
+  //   - 只有活动会话确实登记在 m_session_status_map 里才调 get_status(进程内
+  //     C API 读内存,与 ProcessKeyEvent 热路径同形态);
+  //   - 非 const:校正镜像需要写 m_global_ascii_mode / m_full_shape。
+  void GetPanelInputState(bool* ascii, bool* fullwidth);
 
   void OnUpdateUI(std::function<void()> const& cb);
 

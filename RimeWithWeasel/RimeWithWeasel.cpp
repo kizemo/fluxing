@@ -923,22 +923,49 @@ void RimeWithWeaselHandler::SetOption(WeaselSessionId ipc_id,
       fluxing::DecideAsciiModeScope(/*explicit_control=*/true,
                                     m_global_ascii_configured) ==
           fluxing::AsciiModeScope::kAllSessions;
-  // from no-session client, not actual typing session
-  if (!ipc_id) {
-    if (broadcast_ascii) {
-      for (auto& pair : m_session_status_map)
-        rime_api->set_option(to_session_id(pair.first), "ascii_mode", val);
-    } else {
-      rime_api->set_option(to_session_id(m_active_session), opt.c_str(), val);
+  // v6 需求②: 先解析出**真实**的目标会话,再 set_option。
+  //
+  // 缺陷背景(用户 2026-11-07 报告:「点击也无法切换全半角」):原来的
+  // !ipc_id 分支直接 `to_session_id(m_active_session)` ——
+  //   ① m_active_session == 0(焦点还没落到任何输入窗口)时,to_session_id 会
+  //      **插入**一个 key=0 的空 status 并拿 session_id=0 去 set_option ⇒
+  //      静默无效(调和 set_option 都不会报错);
+  //   ② 下面的缓存块照旧写 m_full_shape = val ⇒ 镜像与真实状态永久劈叉,
+  //      从此面板图标再也不跟着变。
+  // 修法:按「ipc_id → 活动会话 → 唯一会话」顺序解析;解析不出来就直接
+  // return 且**不写缓存** —— 宁可这一下按不动,也不能让镜像说谎。
+  //
+  // ★ 全程不用 to_session_id() 取 session_id:它的 operator[] 副作用正是 ①
+  //   那个假会话的来源。只在已确认存在的 map 条目上读 .session_id。
+  RimeSessionId target = 0;
+  if (ipc_id) {
+    auto it = m_session_status_map.find(ipc_id);
+    if (it != m_session_status_map.end())
+      target = it->second.session_id;
+  } else {
+    auto it = m_session_status_map.find(m_active_session);
+    if (it != m_session_status_map.end())
+      target = it->second.session_id;
+    // 回退:只有恰好一个会话时,才能确定用户指的是谁。
+    if (!target && m_session_status_map.size() == 1)
+      target = m_session_status_map.begin()->second.session_id;
+  }
+
+  if (broadcast_ascii) {
+    // ascii_mode 广播到所有会话(ADR 0012 的显式控制路径)。
+    if (ipc_id && target)
+      rime_api->set_option(target, opt.c_str(), val);
+    for (auto& pair : m_session_status_map) {
+      if (!pair.second.session_id)
+        continue;
+      if (ipc_id && pair.first == ipc_id)
+        continue;  // 上面已经单独设过,不重复
+      rime_api->set_option(pair.second.session_id, "ascii_mode", val);
     }
   } else {
-    rime_api->set_option(to_session_id(ipc_id), opt.c_str(), val);
-    if (broadcast_ascii) {
-      for (auto& pair : m_session_status_map) {
-        if (pair.first != ipc_id)
-          rime_api->set_option(to_session_id(pair.first), "ascii_mode", val);
-      }
-    }
+    if (!target)
+      return;  // 无法解析目标会话 ⇒ 不 set_option,也不写缓存(见上)
+    rime_api->set_option(target, opt.c_str(), val);
   }
   // spec 045: cache 简/繁 / 全/半角 / ascii mode for QuickPanel initial state.
   if (opt == "simplification")
@@ -2096,6 +2123,52 @@ bool RimeWithWeaselHandler::IsSimplification() const {
   }
   m_cached_options = true;
   return m_simplification;
+}
+
+// v6 需求②: 面板的「生效输入态」。
+//
+// 缺陷背景(用户 2026-11-07 报告):「全半角符号随中英文切换自动变化,设置栏的
+// 图标也应该变化;当前这个键不会改变」。根因是面板只拿到 IsFullShape()——
+// full_shape 这个 option 在中英文切换时**并不变**,变的是 punctuator 分支
+// (英文态走 ascii 分支 ⇒ 打出半角)。真正的判据必须是
+// `full_shape && !ascii_mode`。
+//
+// 实现约束(勿简化,均为已踩过的坑):
+//   - **不调 IsFullShape()**:它首次调用要 rime_api->user_config_open(文件 I/O),
+//     而本函数由显示路径每 100ms 调一次,会撞 constitution P2(显示路径零 I/O);
+//   - **不写 to_session_id(m_active_session)**:它内部是
+//     `m_session_status_map[ipc_id]` —— 键不存在时会**插入**一个空 status,
+//     把「只有一个会话」的事实破坏掉(SetOption 的唯一会话回退就靠它);
+//   - get_status 是进程内 C API 读内存(与 ProcessKeyEvent 热路径同形态),
+//     拿到结果必须 free_status,否则泄漏 status 内部指针。
+void RimeWithWeaselHandler::GetPanelInputState(bool* ascii, bool* fullwidth) {
+  bool a = m_global_ascii_mode;
+  bool f = m_full_shape;
+
+  if (rime_api && m_active_session) {
+    auto it = m_session_status_map.find(m_active_session);
+    if (it != m_session_status_map.end() && it->second.session_id) {
+      RimeStatus status = {0};
+      if (rime_api->get_status(it->second.session_id, &status)) {
+        const bool live_ascii = status.is_ascii_mode != 0;
+        const bool live_full = status.is_full_shape != 0;
+        rime_api->free_status(&status);
+        // 顺手校正镜像:用户按 Shift 切中英、短语触发的开关都走不到 SetOption,
+        // 只有这里校正,面板下一帧才会跟着变。
+        m_global_ascii_mode = live_ascii;
+        m_full_shape = live_full;
+        a = live_ascii;
+        f = live_full;
+        // 注意:这里**不能**置 m_cached_options —— 那个标志同时管
+        // IsSimplification(),置 true 会让简繁状态被误报成 false。
+      }
+    }
+  }
+
+  if (ascii)
+    *ascii = a;
+  if (fullwidth)
+    *fullwidth = f && !a;
 }
 
 bool RimeWithWeaselHandler::IsFullShape() const {
