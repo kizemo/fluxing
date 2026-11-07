@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### feat(WeaselServer): 快捷设置栏「全/半角」图标改为按钮内对角线布局的矢量图元（空心环 + 逗号尾）
+
+- **用户原话**：「设置栏图标中，全半角符号太小，不具有可视度。可以调整排版，参考搜狗输入法，按钮内对角线布局，从而可以放大。」
+- **形态（v7 定稿）**：全角 = 右上**空心环**（宋体式「。」，路径直径 14 raw px、2px 描边）+ 左下**逗号尾**（「，」实心头椭圆 + 尾巴三角）⇒ 声明墨迹盒 **25×25** raw px；半角 = 右上**实心点**（ASCII「.」，路径直径 10 raw px）+ 左下**小逗号尾** ⇒ 声明墨迹盒 **21×23** raw px。「空心 vs 实心 + 尺寸差」双重编码当前态；形状随 `s_inputState.fullwidth` 切换的既有语义不变。
+- **为什么弃用 v6 的字体字形组合**：CJK 标点墨迹只占 em 盒约 0.2 ⇒ `−15` px 字号下全角墨迹仅 **18×4** raw px、半角仅 **8×5**，浅灰 `RGB(130,130,140)` 压在浅蓝底 `RGB(200,225,250)` 上几乎不可见；字号调大也长不大（墨迹 ≈ 0.2 em）且会撑破 28 键帽。改用 GDI 矢量图元后直径 / 线宽可精确控制。v5 的宽 / 窄圆角框一版同样作废。
+- **实现**：图元表 + 居中公式下沉到新文件 `include/FluxingPanelFwIcon.h`（namespace `fluxing::panel_fwicon`，纯函数），生产代码与单测**同源**（constitution R7）；`DrawIconFullwidth()` 改为纯 GDI 矢量绘制 —— 空心环配 `NULL_BRUSH`（内部留面板底色）、实心件配 `NULL_PEN`（2px 描边会把小逗号糊成一坨），**全程不走 `AlphaBlend`**（v4 黑框前科）。居中按「墨迹盒并集 + 就近舍入」⇒ 中心恰为 viewBox 中心 (15,15)，与另外 5 个线描图标对齐。`s_hFontPunct` 整条生命周期（声明 / 定义 / 创建 / 释放）已删除。
+- **未改**：`include/WeaselIPCData.h`（不触发 IPC 四边同步与 ADR）、`output/install.nsi`、`librime/` 子模块、面板几何常量（215×32）。
+- **渲染修正（真机发现）**：半角的 10 px 实心「点」若用 GDI `Ellipse` 会被光栅化成**四角星**（顶点仅 1 px，不像点；实测 box=10/12 顶点均 1 px、box=14 才 3 px 成正圆）⇒ 改用 `RoundRect`（圆角半径 = 半边长，box=10 即为干净 9×9 正圆），`kSolidEllipse` 枚举值整个删除并改名 `kSolidRoundRect`；三处实心件（半角点 + 两个逗号头）全走 `RoundRect`，几何与墨迹盒不变 ⇒ T33 全成立。证据 `tmp/gdi-shape2.txt`。- **验收**：`test/TestQuickPanelDialog` 新增 **T33a–T33i** 共 9 条断言（墨迹盒 25×25 / 21×23、两态居中中心 == (15,15)、全角 1 空心 + 2 实心 / 半角 0 空心 + 3 实心、空心环直径 ≥ 14 raw px、墨迹盒落在 viewBox 内且不超 28 键帽、两态对角方位）⇒ Dialog **240/240**、Refactor **40/40** 全绿；真机像素验收见 `docs/archive/handoffs/handoff-2026-11-07-quickpanel-v7-fwicon-diagonal.md`；**真机复验 VERDICT=PASS（7/7）** —— 全角墨迹 **22×23**、半角 **18×22** raw px，双轴居中 (20.5,21)/(20.5,20.5)，`A_vs_B=165`、`B_vs_C=165`、`B_vs_E=0`、`C_vs_F=0`，逐像素 ASCII 确认「右上环 + 左下逗号」对角成立。
+
 ### feat(WeaselServer): 快捷设置栏「全/半角」键改为「，。」/「,.」字形组合 + 整体缩小（215×32）
 
 - **图标形态（用户指令 ①）**：上一版的「宽圆角框 = 全角 / 窄圆角框 = 半角」**整段作废**，改为直接画字符组合 —— 全角态 `，。`、半角态 `,.`。两个字形共用一条基线，逐字 `GetGlyphOutlineW(GGO_METRICS, …, &mat)` 累进笔位求和集墨迹盒，再按**并集墨迹盒**在 30×30 viewBox 内水平 + 垂直居中（`penX = x + (kIconViewBox − inkW)/2 − inkL`、`baselineY = y + (kIconViewBox − inkH)/2 − inkT`），`SetTextAlign(TA_LEFT|TA_BASELINE)` + `TextOutW`。字体固定 raw px（`−15`、FW_BOLD、Microsoft YaHei，不乘 dpr，与另外 5 个线描图标同口径）⇒ 新增 `s_hFontPunct`（`ApplyPhysicalLayout` 重建 / `OnDestroy` 释放）。**仍禁用 GDI `AlphaBlend`**（v4 黑框前科），复用 `fluxing::panel_ink::FillUnitMat2()`（零 MAT2 ⇒ `GDI_ERROR`）。**未改**：`include/WeaselIPCData.h`、`output/install.nsi`、`librime/` 子模块。
@@ -7194,6 +7203,7 @@ elease/fluxing-0.18.21.0-installer.exe (rebuilt from current source; 0.18.20.1 s
 - **Caveat - 切换 button placeholder**: spec 046 (next ship) will replace the
   cycle-to-next behavior with a real popup list. Current implementation calls
   rime_api->select_schema with a fresh create_session id.
+
 
 
 

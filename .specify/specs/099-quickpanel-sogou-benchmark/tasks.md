@@ -168,6 +168,28 @@ L4  PASS  exit=0   1.4s  回归用例(fast) cases=1 pass=1 fail=0
   - 稳定性：先修掉槽位点击用例自身的**全局光标抖动**（lessons-learned **L179**；基线 30 轮 1 红 → 修复后 **30 轮 0 失败**）
   - 未验证：真实多屏拔插 + 100% / 150% / 200% DPI 下的实际落点（需装机手点复验）
 
+## P0-8 · 全半角图标按钮内对角线重做（v7）
+
+- [x] 取证：旧图标真机墨迹过小（用户否决）
+  - v6（字形组合 `，。` / `,.`）：全角墨迹仅 **18×4 raw px**、半角仅 **8×5**，浅灰 `RGB(130,130,140)` 压在浅蓝底 `RGB(200,225,250)` 上几乎不可见 ⇒ 用户原话「全半角符号太小，不具有可视度」
+  - 根因：CJK 标点墨迹只占 em 盒约 0.2 ⇒ 字号调大也长不大，且会撑破 28 键帽
+  - 证据：`tmp/crop-batchf5-slot2-B.png`（旧图标真机裁片）
+- [x] 参考物采集：搜狗输入法状态栏槽 3 =「。」+「,」对角排布
+  - 证据：`docs/research/sogou-reverse-2026-11/evidence/quickpanel/sogou-status-zoom.png`
+- [x] 设计定稿（v7）：**按钮内对角线布局**的 GDI 矢量图元
+  - 全角 = 右上**空心环**（宋体式「。」，路径直径 14 raw px、2px 描边）+ 左下**逗号尾** ⇒ 声明墨迹盒 **25×25** raw px
+  - 半角 = 右上**实心点**（ASCII「.」，路径直径 10 raw px）+ 左下**小逗号尾** ⇒ 声明墨迹盒 **21×23** raw px
+  - 「空心 vs 实心 + 尺寸差」双重编码当前态；形状随 `s_inputState.fullwidth` 切换的既有语义不得退化
+  - 弃用记录：v5 宽 / 窄圆角框、v6 字体字形组合 —— **两版均已作废**
+- [x] 实现：图元表 + 居中公式下沉 `include/FluxingPanelFwIcon.h`（namespace `fluxing::panel_fwicon`，纯函数，生产与单测同源 / R7）
+  - `DrawIconFullwidth()` 改为纯 GDI 矢量：空心环配 `NULL_BRUSH`、实心件配 `NULL_PEN`，**不走 `AlphaBlend`**（v4 黑框前科）
+  - 居中按「墨迹盒并集 + 就近舍入」⇒ 中心恰为 viewBox 中心 (15,15)，与另外 5 个线描图标对齐
+  - `s_hFontPunct` 整条生命周期（声明 / 定义 / 创建 / 释放）已删除
+- [x] 单测：T33a–T33i 共 9 条断言
+  - 墨迹盒 25×25 / 21×23、两态居中中心 == (15,15)、全角 1 空心 + 2 实心 / 半角 0 空心 + 3 实心、空心环直径 ≥ 14 raw px、墨迹盒落在 viewBox 内且不超 28 键帽、两态对角方位
+  - 验收输出：`Release\TestQuickPanelDialog.exe` exit=0，**240 / 240**（原 231 + 新 9）；`TestQuickPanelRefactor` **40 / 40**
+- [x] 真机像素验收：装机后裁 slot 2 交用户目视（需人眼确认「够大够清楚」）
+
 ## P1 · 声明式槽位表（不排进 1.1.x）
 
 - [ ] ADR 草案：槽位表驱动（对齐 `UIPlugin.dll` 的 `AddUIFunction` 思路，自有实现，不抄代码）
@@ -180,3 +202,4 @@ L4  PASS  exit=0   1.4s  回归用例(fast) cases=1 pass=1 fail=0
 - [ ] 架构决策进 `docs\adr\`（下一个编号从 0034 起，先 `ls` 确认）
 - [ ] push 前 `scripts\gate\run-all.ps1 -Level L0`；发版前 `-Level L0,L3,L4,L5 -Build`
 - [ ] 提交用 Conventional Commits + 单一 scope；`git status -sb` 确认 ` m librime` 未被带进去
+

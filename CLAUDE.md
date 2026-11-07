@@ -39,6 +39,7 @@
 
 - **必须阶段收尾双产物**: 完成 `.specify/specs/NNN-*/tasks.md` 任一阶段任务时, 必须同步更新 `docs/archive/handoffs/handoff-YYYY-MM-DD-<slug>.md` 并就地改写 `docs/archive/prompts/prompt-next-session-YYYY-MM-DD-<slug>.md` (接力 prompt 只给全路径指针, 不复述 handoff 内容); 规则全文见 [`AGENTS.md` §9](AGENTS.md#9-handoff--relay-prompt-mandatory)。
 
+- **本批交接指针**: [批次 G · 全半角按钮图标 v7 对角矢量布局](docs/archive/handoffs/handoff-2026-11-07-quickpanel-v7-fwicon-diagonal.md) · 接力 prompt: [prompt-next-session-2026-11-07-quickpanel-v7-fwicon-diagonal.md](docs/archive/prompts/prompt-next-session-2026-11-07-quickpanel-v7-fwicon-diagonal.md)
 完整的 "为什么" 与事故溯源在 `lessons-learned.md`;Const. 链接 + Verification 见各专项 `.claude/rules/`。
 
 ---
