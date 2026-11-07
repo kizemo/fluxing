@@ -1,6 +1,7 @@
 # Handoff 2026-11-07（批次 G）：全半角按钮图标重做为「按钮内对角线」矢量布局（v7）
 
 > **状态：代码 / 单测 / 全量构建 / NSIS 打包 / 静默装机 / 真机像素验收全部走完并通过**；L0 静态门禁 PASS。**唯一未完成的是提交与推送**（见 §五 执行序第 1 步）。
+> **⚠ 追补（v8 / v8.1）**：本文 §一–§九 是 **v7 完成态的历史记录**（保持原样不改）；之后又按两条用户指令做了 **v8**（句号收小 + 中文逗号重画）与 **v8.1**（描边 2px → 1px）。**终态、证据与执行序更新一律以 §十 为准。**
 > 本文是**新建**文件（未改写 `handoff-2026-11-07-quickpanel-v6-punct-icon-and-shrink.md` 等更早文档）。下一会话请按 §五 执行序接手，**勿重做已完成的取证与构建**，**勿改写本文以外的历史 handoff / prompt**。
 >
 > **分支 / 提交**：分支 `Fluxing`，本地 **ahead 3**（`38b4c73` / `1df3fad` / `5b1a46f` 均为批次 F，**尚未推送**，`kizemo/Fluxing` 仍停在 `d4aa63a`）；本文对应的工作区改动**尚未提交**。工作区除本文 §四 所列文件外仅剩 ` m librime` 子模块假脏（**不得提交**）。
@@ -155,3 +156,58 @@ Get-Content 'F:\soft\00selfmade\rime_claude\tmp\batchh.log' -Encoding utf8
 10. **禁止 `git add .`**；`scripts\gate\` 内**没有** clang-format 自动检查（grep 0 命中），`.clang-format` = Chromium + `SortIncludes: false`（列宽 80、CJK 按显示宽度计），改完需人工保持 ≤80 列。
 11. **本批中断原因** —— 上一轮工具调用累计 400+，上下文被压缩两次后终止。预防：每阶段结束立即落盘、单轮 ≤10 次调用。
 12. **装机后立刻跑探针会假失败** —— 本批 chain-batch-h 首轮 VERDICT=FAIL（WHOLE_PANEL_DIFF=0、slot2 多一条贯穿横线），**同一二进制重跑即 PASS**。装机后先让 WeaselServer 稳定驻留再探；WHOLE_PANEL_DIFF=0 优先怀疑「点击未送达」而非图标逻辑。
+---
+
+## 十、批次 G 追补：v8（句号收小 + 中文逗号重画）与 v8.1（描边调细）
+
+> 本节写于 §一–§九 之后。§一–§九 保留 v7 完成态作为历史，**读到本节即以本节为准**。
+
+### 10.1 状态
+
+两条用户指令**已全部落地**：代码 / 单测 / L0 静态门禁 / 全量构建 / NSIS 打包 / 静默装机 **全部通过**。**剩余只有提交**（§五 第 1 步）。**人眼观感确认仍需用户做**（§10.5）。
+
+### 10.2 两条用户指令与落点
+
+| # | 用户原话 | 结论 | 验证等级 |
+|---|---|---|---|
+| 6 | 「全半角符号，句号（中英文）都偏大，而中文逗号则偏小，且变形，看不出是中文逗号。」 | **v8**：环路径直径 14→**10**（配 2px 笔）、半角实心点 10→**7**；逗号弃「圆头 + 尾巴三角」两块拼接，改为**单一 10 点凹形轮廓**（全角 9×12→**11×13**、半角 **8×12**）；`shapes` 3→2、`pts` 3→10；墨迹盒改由 `ShapeInkBox()` 推导 ⇒ 全角 **23×25**、半角 **17×23** | verified（T33a–T33l 12 条，Dialog 243/243） |
+| 7 | 「全半角符号的线，需要调细，才能更清楚分辨出来。」 | **v8.1**：`kStrokeWidth` 2→**1**，环路径框 `{17,4,27,14}`→`{16,3,28,15}`（外扩 1px），`ShapeInkBox()` 去掉 `stroke/2` 外扩 ⇒ 真实墨迹 10×10 / 50 px → **12×12 / 32 px** | verified（T33m / T33n，Dialog **245/245**，GDI 实测 `tmp\probe-pen1.ps1`）；**真机全角态不可达**（§10.4） |
+
+### 10.3 图元几何终态（唯一事实源：`include\FluxingPanelFwIcon.h`）
+
+| 态 | 右上 | 左下 | 墨迹盒 | 中心 |
+|---|---|---|---|---|
+| 全角 | 空心环：路径框 `{16,3,28,15}`、笔宽 **1** ⇒ 实测外径 **12**、洞 ≈10×10 | 逗号轮廓 **11×13**（10 点） | `(5,3)-(27,27)` = **23×25** | (15,15)；环心 (20.5,8.5) |
+| 半角 | 实心圆点 **7×7**（`RoundRect`，圆角 = 半边长） | 逗号轮廓 **8×12**（10 点） | `(7,5)-(23,27)` = **17×23** | (15,15) |
+
+`CenteringOffset` 两态均不变（`off=(-1,0)`）；两轴墨迹宽高均为奇数 ⇒ 奇偶补边兜底**不触发**。
+
+### 10.4 真机取证到不了全角态（**别再去试**）
+
+`full_shape` 没有任何外部翻转入口：无 IPC 命令、无托盘菜单项，唯一入口就是面板自身那颗按钮。而本机实测：合成 `SendMessage(WM_LBUTTONDOWN/UP)` **与** 真实 `SetCursorPos + mouse_event` **都不触发点击**（面板已前台、`WindowFromPoint` 命中、`AttachThreadInput` + `SetForegroundWindow` + `SetActiveWindow` + `SetFocus` + `BringWindowToTop` 全无效）。⇒ 全角态像素取证在本机**不可达**；探针能抓的半角态**天生不含描边**，对 v8.1 无判别力。**别再为此改生产代码**（不加 IPC 调试开关、不加假按钮）。`ASSERT CLICK_CHANGES_ICON=False` 不算缺陷。
+
+### 10.5 需要用户做的唯一一件事
+
+看真机面板的「全/半角」图标：① 全角态的**环线是否变细**（2px → 1px）且仍清楚是「空心圈」；② 中文逗号是否不再「变形」、一眼能看出是「，」。若不满意，要改的只有 `include\FluxingPanelFwIcon.h` 里的 `kStrokeWidth` 与环的 `RECT`，改完必须同步跑 T33g / T33m / T33n（或同步调整它们）。
+
+### 10.6 Bug #4 记录（**未复现，未修，勿谎称已修**）
+
+用户按 §八 指引尝试复现「切输入法后一小段时间只能打英文」，**未成功**（2026-11-07）。⇒ 本批**不改代码、不宣称已修**。`lessons-learned.md` **L196** 的 `m_disabled` 全通路闸门根因仍只是**源码级静态链路 + 用户经验吻合**，缺运行时日志佐证（glog 落盘位置仍未定位，见 `handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5.md` 未验证项）。下次要坐实需先定位日志目录。**也不要把它登记进 `test/regression/DEFECTS.yaml`**：该表要求「缺陷 ⇄ 用例」双向一致，未复现的缺陷写不出判别性用例，登记会直接让 L0 门禁变红。
+
+### 10.7 验收与证据（本轮新增）
+
+| 项 | 值 |
+|---|---|
+| 单测 | `Release\TestQuickPanelDialog.exe` exit=0，**245 / 245**（v8 的 243 + T33m + T33n）；`TestQuickPanelRefactor` **40 / 40** |
+| L0 静态门禁 | `checks=14 pass=12 fail=0 skip=2`（`-Mode source -SkipNsisCompile -SkipGuardUnitTest`） |
+| 全量构建 | `tmp\build-batch-h.log`，`BUILD_EXIT=0` |
+| 安装器 | `output\archives\fluxing-1.2.1-installer.exe` = **42,838,087 B**，sha256 `556F10026EBC2D8305C2211019EDEE1057CAD36B9C3AC1C9F0D15E7E4720BA61` |
+| 静默装机 | 四个文件 sha256 **MATCH=True**（`WeaselServer.exe` 2,331,648 / `weaselx64.dll` 1,987,072 / `weasel.dll` 1,675,264 / `WeaselDeployer.exe` 1,004,544）；`WeaselServer` pid=31112；`LogonUI=0`（未锁屏） |
+| GDI 笔宽实测 | `tmp\probe-pen1.ps1`（三组对照，见 §10.2 v8.1 行） |
+
+### 10.8 本轮新增工具坑
+
+1. **GDI `Ellipse` 的笔不向外溢出** —— 墨迹盒恒等于「路径框减右 / 下边界」：笔宽 1 与 2 在 `{17,4,27,14}` 上都是 10×10（仅墨量 50 → 24 px）。任何「笔沿路径居中、外溢 stroke/2」的建模都是错的，会写出**假绿的断言**（v8 的 T33g 就是）
+2. **`edit` 里写含中文的整段几乎必失败**（`\uFF0C` 被 JSON 解析成真字符；空 `new_string` 偶发报「must be string」）⇒ 一律改用 PowerShell 脚本按锚点子串替换，并保留 BOM / EOL
+3. **行号 → 数组下标要减 1**：本批首个补丁脚本把 `405 + $add.Count` 写成 `406 + …` 触发锚点自检 throw。幸运的是 throw 发生在写盘之前，文件未损坏，脚本可安全重跑 ⇒ **按行号插入前必须断言锚点内容**
+4. **`Add-Type -TypeDefinition -ReferencedAssemblies System.Drawing` 在 PS7 必失败**（CS1069）⇒ GDI 像素探测走纯 `CreateDIBSection` + `Marshal.Copy`；仅在运行期转换图片时用 `Add-Type -AssemblyName System.Drawing.Common`

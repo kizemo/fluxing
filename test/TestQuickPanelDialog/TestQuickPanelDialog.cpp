@@ -1410,11 +1410,13 @@ int main() {
   }
 
   // ============================================================
-  // T33 · 全/半角图标 v7: 按钮内**对角线布局**矢量图元
+  // T33 · 全/半角图标 v7→v8: 按钮内**对角线布局**矢量图元
   // 需求(用户 2026-11-07):「全半角符号太小,不具有可视度。
   // 可以调整排版,参考搜狗输入法,按钮内对角线布局,从而可以放大。」
-  // 判据: 墨迹盒远大于 v6 字形(全角 18x4 / 半角 8x5);
-  // 居中后中心恰为 viewBox 中心; 空心/实心 + 对角方位不得退化。
+  // v8 校正(同批真机人眼反馈):「句号(中英文)都偏大,而中文逗号则偏小,
+  // 且变形,看不出是中文逗号。」
+  // 判据: 墨迹盒远大于 v6 字形(全角 18x4 / 半角 8x5); 居中后中心恰为
+  // viewBox 中心; 句号收小、逗号放大且为**单一连续轮廓**; 对角方位不退化。
   // ============================================================
   {
     const fluxing::panel_fwicon::Icon fw =
@@ -1427,10 +1429,10 @@ int main() {
     const int fw_h = fw.ink.bottom - fw.ink.top + 1;
     const int hw_w = hw.ink.right - hw.ink.left + 1;
     const int hw_h = hw.ink.bottom - hw.ink.top + 1;
-    Check(fw_w == 25 && fw_h == 25,
-          "T33a: 全角墨迹盒 25x25 (v6 字形仅 18x4)");
-    Check(hw_w == 21 && hw_h == 23,
-          "T33b: 半角墨迹盒 21x23 (v6 字形仅 8x5)");
+    Check(fw_w == 23 && fw_h == 25,
+          "T33a: 全角墨迹盒 23x25 (v8 收小句号; v6 字形仅 18x4)");
+    Check(hw_w == 17 && hw_h == 23,
+          "T33b: 半角墨迹盒 17x23 (v8 收小句号; v6 字形仅 8x5)");
 
     const POINT fw_off = fluxing::panel_fwicon::CenteringOffset(fw, vb);
     const POINT hw_off = fluxing::panel_fwicon::CenteringOffset(hw, vb);
@@ -1457,13 +1459,29 @@ int main() {
       else
         ++hw_solid;
     }
-    Check(fw_hollow == 1 && fw_solid == 2,
-          "T33e: 全角 = 1 空心环 + 2 实心件(逗号头/尾)");
-    Check(hw_hollow == 0 && hw_solid == 3,
-          "T33f: 半角 = 0 空心 + 3 实心件(点/逗号头/尾)");
+    Check(fw_hollow == 1 && fw_solid == 1,
+          "T33e: 全角 = 1 空心环 + 1 单一逗号轮廓(v8 合并 v7 头/尾)");
+    Check(hw_hollow == 0 && hw_solid == 2,
+          "T33f: 半角 = 0 空心 + 2 实心件(圆点 + 单一逗号轮廓)");
 
-    const int ring_d = fw.shapes[0].rect.right - fw.shapes[0].rect.left;
-    Check(ring_d >= 14, "T33g: 全角空心环直径 >= 14 raw px");
+    // v8 句号收小(用户原话「句号(中英文)都偏大」)。环径按**墨迹覆盖**
+    // 计,不是路径框边长 —— 且笔**不**向外溢出(见 ShapeInkBox 实测口径)。
+    const RECT ring_ink = fluxing::panel_fwicon::ShapeInkBox(fw.shapes[0]);
+    const RECT dot_ink = fluxing::panel_fwicon::ShapeInkBox(hw.shapes[0]);
+    Check(ring_ink.right - ring_ink.left + 1 == 12,
+          "T33g: 全角空心环外径 12 raw px (v7 的 16 被判偏大)");
+
+    // v8.1(用户指令 2026-11-07):「全半角符号的线,需要调细,才能更清楚
+    // 分辨出来」⇒ 空心环壁 2px → 1px。下面两条把「细」与「笔不外溢」钉死:
+    // 后人把笔宽调回 2、或改回「含 stroke/2 外扩」的旧模型,这里当场变红。
+    Check(fw.shapes[0].kind == fluxing::panel_fwicon::kHollowEllipse &&
+              fluxing::panel_fwicon::kStrokeWidth == 1,
+          "T33m: 全角空心环笔宽 1 raw px (v8 的 2 px 被判「线太粗」)");
+    Check(ring_ink.left == fw.shapes[0].rect.left &&
+              ring_ink.top == fw.shapes[0].rect.top &&
+              ring_ink.right == fw.shapes[0].rect.right - 1 &&
+              ring_ink.bottom == fw.shapes[0].rect.bottom - 1,
+          "T33n: 环墨迹盒 == 路径框减右/下边界 (笔不向外溢出)");
 
     const int fw_l = fw.ink.left + fw_off.x;
     const int fw_t = fw.ink.top + fw_off.y;
@@ -1478,23 +1496,45 @@ int main() {
               fw_w <= 28 && hw_w <= 28,
           "T33h: 居中后墨迹盒落在 viewBox 内且不超 28 键帽");
 
-    const int ring_cx =
-        (fw.shapes[0].rect.left + fw.shapes[0].rect.right) / 2;
-    const int ring_cy = (fw.shapes[0].rect.top + fw.shapes[0].rect.bottom) / 2;
-    const int fw_tail_cx =
-        (fw.shapes[2].pts[0].x + fw.shapes[2].pts[1].x + fw.shapes[2].pts[2].x) / 3;
-    const int fw_tail_cy =
-        (fw.shapes[2].pts[0].y + fw.shapes[2].pts[1].y + fw.shapes[2].pts[2].y) / 3;
-    const int dot_cx =
-        (hw.shapes[0].rect.left + hw.shapes[0].rect.right) / 2;
-    const int dot_cy = (hw.shapes[0].rect.top + hw.shapes[0].rect.bottom) / 2;
-    const int hw_tail_cx =
-        (hw.shapes[2].pts[0].x + hw.shapes[2].pts[1].x + hw.shapes[2].pts[2].x) / 3;
-    const int hw_tail_cy =
-        (hw.shapes[2].pts[0].y + hw.shapes[2].pts[1].y + hw.shapes[2].pts[2].y) / 3;
-    Check(ring_cx > fw_tail_cx && ring_cy < fw_tail_cy &&
-              dot_cx > hw_tail_cx && dot_cy < hw_tail_cy,
-          "T33i: 环/点在右上、逗号尾在左下(对角线布局)");
+    // T33i: 对角方位 —— 环/点在右上、逗号轮廓在左下。10 点凹凸轮廓没有
+    // 解析重心,顶点均值足以区分方位(v7 的 3 点三角尾已不存在)。
+    auto poly_center = [](const fluxing::panel_fwicon::Shape& s) {
+      POINT c = {0, 0};
+      for (int i = 0; i < s.ptCount; ++i) {
+        c.x += s.pts[i].x;
+        c.y += s.pts[i].y;
+      }
+      c.x /= s.ptCount;
+      c.y /= s.ptCount;
+      return c;
+    };
+    const int ring_cx = (ring_ink.left + ring_ink.right) / 2;
+    const int ring_cy = (ring_ink.top + ring_ink.bottom) / 2;
+    const POINT fw_comma_c = poly_center(fw.shapes[1]);
+    const int dot_cx = (dot_ink.left + dot_ink.right) / 2;
+    const int dot_cy = (dot_ink.top + dot_ink.bottom) / 2;
+    const POINT hw_comma_c = poly_center(hw.shapes[1]);
+    Check(ring_cx > fw_comma_c.x && ring_cy < fw_comma_c.y &&
+              dot_cx > hw_comma_c.x && dot_cy < hw_comma_c.y,
+          "T33i: 环/点在右上、逗号轮廓在左下(对角线布局)");
+
+    // v8 逗号放大,且必须是**单一连续轮廓**: v7 的「头+尾」两块在 11x13
+    // 尺寸下读成「点 + 划痕」,即用户说的「变形,看不出是中文逗号」。
+    const RECT fw_comma = fluxing::panel_fwicon::ShapeInkBox(fw.shapes[1]);
+    const RECT hw_comma = fluxing::panel_fwicon::ShapeInkBox(hw.shapes[1]);
+    Check(dot_ink.right - dot_ink.left + 1 == 7 &&
+              dot_ink.bottom - dot_ink.top + 1 == 7,
+          "T33j: 半角实心点 7x7 (v7 的 10 被判偏大)");
+    Check(fw_comma.right - fw_comma.left + 1 == 11 &&
+              fw_comma.bottom - fw_comma.top + 1 == 13 &&
+              hw_comma.right - hw_comma.left + 1 == 8 &&
+              hw_comma.bottom - hw_comma.top + 1 == 12,
+          "T33k: 逗号轮廓 全角 11x13 / 半角 8x12 (v7 全角仅 9x12)");
+    Check(fw.shapes[1].kind == fluxing::panel_fwicon::kSolidPolygon &&
+              fw.shapes[1].ptCount >= 8 &&
+              hw.shapes[1].kind == fluxing::panel_fwicon::kSolidPolygon &&
+              hw.shapes[1].ptCount >= 8,
+          "T33l: 逗号是单一 >=8 点多边形(非 v7 的头+尾两块)");
   }
 
   std::printf("\n=== %d / %d assertions passed ===\n", g_pass, g_pass + g_fail);

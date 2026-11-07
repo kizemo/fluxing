@@ -384,21 +384,31 @@ void QuickPanelDialog::DrawIconAccount(HDC hdc,
 
 // v7 需求(用户指令 2026-11-07): 全/半角键的图标 —— **按钮内对角线布局**的
 // 矢量图元(参考搜狗输入法状态栏槽 3 =「。,」)。
-//   全角 = 右上**空心环**(宋体式「。」,路径直径 14 raw px、2px 描边)
-//         + 左下**逗号尾**(「，」)
-//   半角 = 右上**实心点**(ASCII「.」,路径直径 10 raw px)
-//         + 左下**小逗号尾**(「,」)
+//   全角 = 右上**空心环**(宋体式「。」,外径 12 raw px、1px 描边)
+//         + 左下**中文逗号**(「，」,单一 10 点凹形轮廓 11×13)
+//   半角 = 右上**实心点**(ASCII「.」,7×7 raw px)
+//         + 左下**小逗号**(「,」,同轮廓收窄版 8×12)
 // 两个标点沿对角排布,互不遮挡;「空心 vs 实心 + 尺寸差」双重编码当前态。
+//
+// v8 校正(用户真机人眼反馈 2026-11-07):「句号(中英文)都偏大,而中文逗号
+// 则偏小,且变形,看不出是中文逗号」⇒ 句号收小(环 16→12 / 点 10→7)、逗号
+// 放大(9×12→11×13),并把「圆头 + 三角尾」两个**分离图元**换成**一条连续
+// 凹形轮廓**:11×13 尺寸下分离图元的头会被读成点、尾被读成划痕。
+// v8.1 加细(用户指令 2026-11-07):「全半角符号的线,需要调细,才能更清楚
+// 分辨出来」⇒ 只收细**全角空心环的壁**(笔宽 2px → **1px**),环框同步外扩
+// 1 px 以保住外径 12;实心点与两个逗号是填充件、无描边,不动。判据(真机
+// GDI 实测):环墨量 50 px(2px 壁,洞 6×6)→ **32 px**(1px 壁,洞 10×10),
+// 壁比半角实心点轻,「空」与「实」才分得开。
 //
 // 为什么从 v6 的字体字形组合改成矢量图元:
 //   CJK 标点墨迹只占 em 盒约 0.2 ⇒ -15px 字号下全角墨迹仅 18×4 raw px、
 //   半角仅 8×5,浅灰压在浅蓝底上几乎不可见(用户原话「太小,不具有可视度」);
-//   放大字号长不大且会撑破 28 键帽。矢量图元可精确控制直径 ⇒ 25×25 raw px。
+//   放大字号长不大且会撑破 28 键帽。矢量图元可精确控制直径 ⇒ 23×25 raw px。
 //
 // 实现约束(均为已踩过的坑,勿简化):
 //   - 纯 GDI 矢量,**绝不**走 AlphaBlend(v4 品牌图标黑框前科);
 //   - 空心环必须配 NULL_BRUSH(内部留面板底色),实心件必须配 NULL_PEN
-//     (不描边,否则 2px 描边会把小逗号糊成一坨);
+//     (不描边,否则描边会把小逗号糊成一坨);
 //   - 只 DeleteObject 自己 Create 出来的 pen/brush:GetStockObject 取的
 //     NULL_PEN / NULL_BRUSH 是共享 stock 对象,删不掉也不该删;
 //   - 图元表与居中公式在 fluxing::panel_fwicon(纯函数,生产与单测同源)。
@@ -444,12 +454,12 @@ void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
       RoundRect(hdc, ox + s.rect.left, oy + s.rect.top, ox + s.rect.right,
                 oy + s.rect.bottom, cw, ch);
     } else if (s.kind == fluxing::panel_fwicon::kSolidPolygon) {
-      POINT pts[3];
-      for (int k = 0; k < 3; ++k) {
+      POINT pts[fluxing::panel_fwicon::kMaxPolyPoints];
+      for (int k = 0; k < s.ptCount; ++k) {
         pts[k].x = ox + s.pts[k].x;
         pts[k].y = oy + s.pts[k].y;
       }
-      Polygon(hdc, pts, 3);
+      Polygon(hdc, pts, s.ptCount);
     }
   }
 
