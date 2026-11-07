@@ -521,3 +521,150 @@ function Test-DefectsRegistry {
     if ($problems.Count -gt 0) { return New-CheckResult $false ($problems -join '; ') }
     return New-CheckResult $true ("缺陷={0} 用例={1} 双向一致，无 tmp/ 引用" -f $entries.Count, $caseIds.Count)
 }
+
+# ---------------------------------------------------------------------------
+# rc 对话框模板解析：把每个 IDD_* DIALOGEX 块切成 { Id, Lines }
+#
+# rc 是 UTF-16LE + BOM：必须按字节判 BOM 再用 Unicode 解码，
+# 用默认编码读会得到乱码（而且「读出来像乱码」很容易被误当成「模板里就是乱码」）。
+# ---------------------------------------------------------------------------
+function Get-RcDialogBlocks {
+    param([Parameter(Mandatory = $true)][string]$RcPath)
+
+    if (-not (Test-Path -LiteralPath $RcPath)) {
+        return [pscustomobject]@{ Ok = $false; Detail = "缺 rc 文件：$RcPath"; Blocks = @() }
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($RcPath)
+    if ($bytes.Length -lt 2 -or $bytes[0] -ne 0xFF -or $bytes[1] -ne 0xFE) {
+        return [pscustomobject]@{ Ok = $false; Detail = "$RcPath 不是 UTF-16LE + BOM"; Blocks = @() }
+    }
+    $rcText = [System.Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
+
+    $blocks = @()
+    $curId = ''
+    $cur = @()
+    foreach ($ln in ($rcText -split "`r`n")) {
+        if ($ln -match '^\s*(IDD_\w+)\s+DIALOGEX') {
+            if ($curId -ne '') { $blocks += [pscustomobject]@{ Id = $curId; Lines = $cur } }
+            $curId = $Matches[1]
+            $cur = @()
+            continue
+        }
+        if ($curId -eq '') { continue }
+        if ($ln -match '^\s*END\s*$') {
+            $blocks += [pscustomobject]@{ Id = $curId; Lines = $cur }
+            $curId = ''
+            $cur = @()
+            continue
+        }
+        $cur += $ln
+    }
+    if ($curId -ne '') { $blocks += [pscustomobject]@{ Id = $curId; Lines = $cur } }
+    return [pscustomobject]@{ Ok = $true; Detail = ''; Blocks = $blocks }
+}
+
+# ---------------------------------------------------------------------------
+# Bug #3 的防回归齿：模板有「取消」按钮 ⇄ 消息映射必须处理 IDCANCEL
+#
+# WTL 的 CDialogImpl 不会自动处理 IDCANCEL：模板里的「取消」按钮与 Esc 键
+# 都发 WM_COMMAND/IDCANCEL，消息映射里没有对应 handler 就没人 EndDialog，
+# 窗口关不掉（Bug #3 的根因）。它依赖消息循环，单测测不出来，只能静态扫。
+#
+# 判据失效也要判红：rc 里一个取消按钮都找不到、或者取消按钮对不上任何
+# 对话框类，都说明这条检查已经没在管事 —— 恒绿比漏检更危险。
+# ---------------------------------------------------------------------------
+function Test-DialogCancelHandlerCoverage {
+    param(
+        [Parameter(Mandatory = $true)][string]$DeployerDir,
+        [Parameter(Mandatory = $true)][string]$RcPath
+    )
+
+    if (-not (Test-Path -LiteralPath $DeployerDir)) { return New-CheckResult $false "缺目录：$DeployerDir" }
+
+    $parsed = Get-RcDialogBlocks -RcPath $RcPath
+    if (-not $parsed.Ok) { return New-CheckResult $false $parsed.Detail }
+
+    # 1) 哪些模板带了 IDCANCEL 按钮
+    $cancelIds = @()
+    foreach ($b in $parsed.Blocks) {
+        foreach ($ln in $b.Lines) {
+            if ($ln -match '^\s*(?:PUSHBUTTON|DEFPUSHBUTTON)\b[^,]*,\s*IDCANCEL\s*,') {
+                $cancelIds += $b.Id
+                break
+            }
+        }
+    }
+    $cancelIds = @($cancelIds | Select-Object -Unique)
+    if ($cancelIds.Count -eq 0) { return New-CheckResult $false 'rc 里找不到任何带 IDCANCEL 按钮的对话框 ⇒ 判据失效' }
+
+    # 2) 头文件里「资源 id → 类 → 消息映射」
+    $classes = @{}
+    foreach ($h in @(Get-ChildItem -LiteralPath $DeployerDir -Recurse -File -Filter '*.h' -ErrorAction SilentlyContinue)) {
+        $text = [System.IO.File]::ReadAllText($h.FullName)
+        foreach ($m in [regex]::Matches($text, 'class\s+(\w+)\s*:\s*public\s+CDialogImpl<\s*\1\s*>')) {
+            $cls = $m.Groups[1].Value
+            $tail = $text.Substring($m.Index)
+            $idm = [regex]::Match($tail, 'enum\s*\{\s*IDD\s*=\s*(IDD_\w+)\s*\}')
+            if (-not $idm.Success) { continue }
+            $mapm = [regex]::Match($tail, 'BEGIN_MSG_MAP[\s\S]*?END_MSG_MAP')
+            $map = ''
+            if ($mapm.Success) { $map = $mapm.Value }
+            $classes[$idm.Groups[1].Value] = [pscustomobject]@{ Class = $cls; File = $h.Name; Map = $map }
+        }
+    }
+
+    $problems = @()
+    $checked = 0
+    foreach ($rid in $cancelIds) {
+        if (-not $classes.ContainsKey($rid)) { continue }
+        $checked++
+        $c = $classes[$rid]
+        if ($c.Map -notmatch 'IDCANCEL') {
+            $problems += ("{0}：模板有 IDCANCEL 按钮，但 {1} 的消息映射没有 IDCANCEL handler ⇒ 点「取消」/按 Esc 关不掉窗口" -f $rid, $c.Class)
+        }
+    }
+    if ($checked -eq 0) { return New-CheckResult $false 'rc 里的取消按钮没有对上任何对话框类 ⇒ 判据失效' }
+    if ($problems.Count -gt 0) { return New-CheckResult $false ($problems -join '; ') }
+    return New-CheckResult $true ("带取消按钮的对话框 {0} 个，消息映射均已处理 IDCANCEL" -f $checked)
+}
+
+# ---------------------------------------------------------------------------
+# P2 的防回归齿：fork 自有对话框模板的用户可见文案必须是简体中文
+#
+# constitution P2：「用户可见错误消息保持中文（简体）」。
+# 只对 fork 自有对话框生效（上游 weasel 的 en-US 语言块是上游本地化资源，
+# 不在 P2 的整改范围内），避免误伤。
+# ---------------------------------------------------------------------------
+function Test-DialogTemplateChinese {
+    param(
+        [Parameter(Mandatory = $true)][string]$RcPath,
+        [Parameter(Mandatory = $true)][string]$DialogId
+    )
+
+    $parsed = Get-RcDialogBlocks -RcPath $RcPath
+    if (-not $parsed.Ok) { return New-CheckResult $false $parsed.Detail }
+
+    $targets = @($parsed.Blocks | Where-Object { $_.Id -eq $DialogId })
+    if ($targets.Count -eq 0) { return New-CheckResult $false "rc 里找不到 $DialogId 模板 ⇒ 判据失效" }
+
+    $problems = @()
+    $literals = 0
+    foreach ($b in $targets) {
+        foreach ($ln in $b.Lines) {
+            if ($ln -notmatch '^\s*(LTEXT|RTEXT|CTEXT|PUSHBUTTON|DEFPUSHBUTTON|GROUPBOX|CHECKBOX|RADIOBUTTON|CAPTION)\b') { continue }
+            $m = [regex]::Match($ln, '"([^"]*)"')
+            if (-not $m.Success) { continue }
+            $lit = $m.Groups[1].Value
+            if ($lit -eq '') { continue }
+            $literals++
+            # 去掉快捷键助记符（&I 之类）再判拉丁字母，否则 "开始导入(&I)" 会被误判成英文。
+            $probe = $lit -replace '&[A-Za-z0-9]', ''
+            if ($probe -match '[A-Za-z]') {
+                $problems += ("{0}：用户可见文案含英文 —— '{1}'" -f $DialogId, $lit)
+            }
+        }
+    }
+    if ($literals -eq 0) { return New-CheckResult $false "$DialogId 模板里没解析出任何用户可见文案 ⇒ 判据失效" }
+    if ($problems.Count -gt 0) { return New-CheckResult $false ($problems -join '; ') }
+    return New-CheckResult $true ("{0} 的 {1} 条用户可见文案均为简体中文" -f $DialogId, $literals)
+}

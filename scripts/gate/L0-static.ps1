@@ -178,6 +178,21 @@ if ($Mode -eq 'source' -or $Mode -eq 'all') {
         Test-DefectsRegistry -Root $script:RepoRoot
     }
 
+    # Bug #3 的防回归齿：模板有「取消」按钮 ⇄ 消息映射必须处理 IDCANCEL
+    # （WTL 不会自动处理 IDCANCEL，缺 handler ⇒ 点取消/按 Esc 关不掉窗口）
+    Invoke-Check 'dialog-cancel-handler' {
+        Test-DialogCancelHandlerCoverage `
+            -DeployerDir (Join-Path $script:RepoRoot 'WeaselDeployer') `
+            -RcPath (Join-Path $script:RepoRoot 'WeaselDeployer\WeaselDeployer.rc')
+    }
+
+    # P2 的防回归齿：fork 自有对话框模板的用户可见文案必须是简体中文
+    Invoke-Check 'dialog-template-chinese' {
+        Test-DialogTemplateChinese `
+            -RcPath (Join-Path $script:RepoRoot 'WeaselDeployer\WeaselDeployer.rc') `
+            -DialogId 'IDD_SOGOU_IMPORT'
+    }
+
     $mk = Resolve-MakensisPath -Explicit $MakensisPath
 
     if ($SkipNsisCompile) {

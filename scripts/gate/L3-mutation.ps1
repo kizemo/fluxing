@@ -305,6 +305,85 @@ else {
 }
 
 # ---------------------------------------------------------------------------
+# M07 / M08：对话框「取消」按钮 ⇄ 消息映射（Bug #3 的齿）+ 模板文案中文化（P2 的齿）
+# ---------------------------------------------------------------------------
+function Copy-TreeFiles {
+    param([string]$SourceDir, [string]$DestDir, [string[]]$Include)
+    if (-not (Test-Path -LiteralPath $SourceDir)) { return }
+    foreach ($inc in $Include) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $SourceDir -Recurse -File -Filter $inc -ErrorAction SilentlyContinue)) {
+            $rel = $f.FullName.Substring($SourceDir.Length).TrimStart([char]'\', [char]'/')
+            $dest = Join-Path $DestDir $rel
+            $dd = Split-Path -Parent $dest
+            if (-not (Test-Path -LiteralPath $dd)) { New-Item -ItemType Directory -Path $dd -Force | Out-Null }
+            [System.IO.File]::WriteAllBytes($dest, [System.IO.File]::ReadAllBytes($f.FullName))
+        }
+    }
+}
+
+$m07CtlRoot = New-CaseDir 'M07\control'
+$m07MutRoot = New-CaseDir 'M07\mutant'
+foreach ($r in @($m07CtlRoot, $m07MutRoot)) {
+    Copy-TreeFiles -SourceDir (Join-Path $Root 'WeaselDeployer') -DestDir (Join-Path $r 'WeaselDeployer') -Include @('*.h', '*.rc')
+}
+$m07Hdr = Join-Path $m07MutRoot 'WeaselDeployer\SogouImportDialog.h'
+$m07CtlRc = Join-Path $m07CtlRoot 'WeaselDeployer\WeaselDeployer.rc'
+$m07MutRc = Join-Path $m07MutRoot 'WeaselDeployer\WeaselDeployer.rc'
+if (-not (Test-Path -LiteralPath $m07Hdr)) {
+    Add-Row 'M07' 'INVALID' '拷不到 SogouImportDialog.h，无法造变异'
+}
+elseif (-not (Test-Path -LiteralPath $m07CtlRc)) {
+    Add-Row 'M07' 'INVALID' '拷不到 WeaselDeployer.rc，无法造变异'
+}
+else {
+    # 变异：把 IDCANCEL handler 从消息映射里删掉 ⇒ 必须被判红
+    $t = [System.IO.File]::ReadAllText($m07Hdr)
+    $kept = @($t -split "`r?`n" | Where-Object { $_ -notmatch 'COMMAND_ID_HANDLER\(\s*IDCANCEL' })
+    $mut = $kept -join "`r`n"
+    if ($mut -eq $t) {
+        Add-Row 'M07' 'INVALID' '头文件里找不到 IDCANCEL handler 行，无法造变异'
+    }
+    else {
+        [System.IO.File]::WriteAllText($m07Hdr, $mut, (New-Object System.Text.UTF8Encoding($false)))
+        Test-Pair 'M07' {
+            Test-DialogCancelHandlerCoverage -DeployerDir (Join-Path $m07CtlRoot 'WeaselDeployer') -RcPath $m07CtlRc
+        } {
+            Test-DialogCancelHandlerCoverage -DeployerDir (Join-Path $m07MutRoot 'WeaselDeployer') -RcPath $m07MutRc
+        }
+    }
+}
+
+$m08CtlRc = $m07CtlRc
+$m08MutRc = Join-Path $m07MutRoot 'WeaselDeployer\WeaselDeployer.rc'
+if (-not (Test-Path -LiteralPath $m08MutRc)) {
+    Add-Row 'M08' 'INVALID' '缺 rc 副本，无法造变异'
+}
+else {
+    # 变异：把英文语言块的 CAPTION 改回英文 ⇒ 中文化检查必须被判红
+    $bytes = [System.IO.File]::ReadAllBytes($m08MutRc)
+    $txt = [System.Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
+    $needle = 'CAPTION "【火流猩输入法】导入搜狗用户词库"'
+    $idx = $txt.LastIndexOf($needle)
+    if ($idx -lt 0) {
+        Add-Row 'M08' 'INVALID' 'rc 里找不到 IDD_SOGOU_IMPORT 的中文 CAPTION，无法造变异'
+    }
+    else {
+        $newTxt = $txt.Remove($idx, $needle.Length).Insert($idx, 'CAPTION "【Fluxing】Import Sogou User Dictionary"')
+        $body = [System.Text.Encoding]::Unicode.GetBytes($newTxt)
+        $out = New-Object byte[] (2 + $body.Length)
+        $out[0] = 0xFF
+        $out[1] = 0xFE
+        [Array]::Copy($body, 0, $out, 2, $body.Length)
+        [System.IO.File]::WriteAllBytes($m08MutRc, $out)
+        Test-Pair 'M08' {
+            Test-DialogTemplateChinese -RcPath $m08CtlRc -DialogId 'IDD_SOGOU_IMPORT'
+        } {
+            Test-DialogTemplateChinese -RcPath $m08MutRc -DialogId 'IDD_SOGOU_IMPORT'
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 汇总
 # ---------------------------------------------------------------------------
 foreach ($r in $script:Rows) {
