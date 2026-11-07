@@ -51,6 +51,8 @@ Do not dump all ADRs into every prompt.
 | 0035 | 0035. 快捷设置栏的位置持久化到独立文件 `quickpanel.position`；启动期读一次并缓存，恢复时钳制回可见工作区 | `docs/adr/0035-quickpanel-position-persistence.md` | Accepted |
 | 0036 | 0036. 快捷设置栏回显当前输入状态、键盘可达性与每槽 tooltip；状态区从「最后一个槽位右边界」推导；Esc 语义用「键盘交互态」调和 | `docs/adr/0036-quickpanel-status-echo-keyboard-reachability-and-tooltip.md` | Accepted |
 | 0037 | 0037. 导入搜狗输入法用户词库：托盘入口挂在部署器子命令，解析器只做签名扫描，拼音取随包 cn_dicts | `docs/adr/0037-sogou-user-dictionary-import.md` | Accepted |
+| 0038 | 0038. 右键菜单唯一化：语言栏三套 MENU 资源下线，右键入口迁到「快捷设置栏」品牌图标 | `docs/adr/0038-single-context-menu-brand-icon-entry.md` | Accepted |
+| 0039 | 0039. 云端账号与多端同步：Cloudflare Workers + R2/D1 后端，客户端用系统自带能力，端到端加密，合并落在客户端 | `docs/adr/0039-cloud-account-sync-architecture.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and
