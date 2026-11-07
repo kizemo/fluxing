@@ -30,6 +30,7 @@ class SogouImportDialog : public CDialogImpl<SogouImportDialog> {
   BEGIN_MSG_MAP(SogouImportDialog)
   MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
   MESSAGE_HANDLER(WM_CLOSE, OnClose)
+  COMMAND_ID_HANDLER(IDCANCEL, OnCancel)
   COMMAND_ID_HANDLER(IDC_SOGOU_IMPORT_BTN, OnImport)
   COMMAND_HANDLER(IDC_SOGOU_SOURCE_LIST, LBN_SELCHANGE, OnSourceSelChange)
   COMMAND_HANDLER(IDC_SOGOU_TARGET_DICT, CBN_SELCHANGE, OnTargetSelChange)
@@ -37,6 +38,7 @@ class SogouImportDialog : public CDialogImpl<SogouImportDialog> {
 
   LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnCancel(WORD, WORD, HWND, BOOL&);
   LRESULT OnImport(WORD, WORD, HWND, BOOL&);
   LRESULT OnSourceSelChange(WORD, WORD, HWND, BOOL&);
   LRESULT OnTargetSelChange(WORD, WORD, HWND, BOOL&);

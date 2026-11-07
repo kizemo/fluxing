@@ -229,6 +229,14 @@ LRESULT SogouImportDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {
   return 0;
 }
 
+// 「取消」按钮（IDCANCEL）与 Esc 键都经由 WM_COMMAND/IDCANCEL 到达这里。
+// 少了这一条处理器，点「取消」/按 Esc 都没有人 EndDialog —— 窗口关不掉（Bug #3）。
+// 与 OnClose 等价：EndDialog 的返回值同样是 IDCANCEL，调用方无需区分关闭方式。
+LRESULT SogouImportDialog::OnCancel(WORD, WORD, HWND, BOOL&) {
+  EndDialog(IDCANCEL);
+  return 0;
+}
+
 LRESULT SogouImportDialog::OnSourceSelChange(WORD, WORD, HWND, BOOL&) {
   UpdateButtons();
   const int sel = source_list_.GetCurSel();
