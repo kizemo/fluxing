@@ -39,10 +39,12 @@
 
 - **必须阶段收尾双产物**: 完成 `.specify/specs/NNN-*/tasks.md` 任一阶段任务时, 必须同步更新 `docs/archive/handoffs/handoff-YYYY-MM-DD-<slug>.md` 并就地改写 `docs/archive/prompts/prompt-next-session-YYYY-MM-DD-<slug>.md` (接力 prompt 只给全路径指针, 不复述 handoff 内容); 规则全文见 [`AGENTS.md` §9](AGENTS.md#9-handoff--relay-prompt-mandatory)。
 
-- **本批交接指针**: [批次 H2 · 快捷面板图标 v10 字符逗号 + 全角=中文标点 + 点击不失焦](docs/archive/handoffs/handoff-2026-11-08-quickpanel-v10-punct-semantics.md) · 接力 prompt: [prompt-next-session-2026-11-08-quickpanel-v10-punct-semantics.md](docs/archive/prompts/prompt-next-session-2026-11-08-quickpanel-v10-punct-semantics.md)
-- **上一批交接指针**: [批次 H · 快捷面板全半角图标 v9 + 半角=英文标点 + 中英联动标点](docs/archive/handoffs/handoff-2026-11-07-quickpanel-v9-fwicon-batch-h.md) · 接力 prompt: [prompt-next-session-2026-11-07-quickpanel-v9-fwicon-batch-h.md](docs/archive/prompts/prompt-next-session-2026-11-07-quickpanel-v9-fwicon-batch-h.md)
+- **本批交接指针**: [批次 J · 快捷设置栏图标 v12 英文逗号 + 语言栏退出常驻托盘](docs/archive/handoffs/handoff-2026-11-08-batch-j-v12-punct-comma-tray-icon.md) · 接力 prompt: [prompt-next-session-2026-11-08-batch-j-v12-punct-comma-tray-icon.md](docs/archive/prompts/prompt-next-session-2026-11-08-batch-j-v12-punct-comma-tray-icon.md)
+- **上一批交接指针**: [批次 I · 图标 v11 + 标点跟随状态 + 会话门禁 + 提交边界标点](docs/archive/handoffs/handoff-2026-11-08-batch-i-v11-punct-session-gate.md) · 接力 prompt: [prompt-next-session-2026-11-08-batch-i-v11-punct-session-gate.md](docs/archive/prompts/prompt-next-session-2026-11-08-batch-i-v11-punct-session-gate.md)
+- **更早批次交接指针（H2）**: [批次 H2 · 快捷面板图标 v10 字符逗号 + 全角=中文标点 + 点击不失焦](docs/archive/handoffs/handoff-2026-11-08-quickpanel-v10-punct-semantics.md) · 接力 prompt: [prompt-next-session-2026-11-08-quickpanel-v10-punct-semantics.md](docs/archive/prompts/prompt-next-session-2026-11-08-quickpanel-v10-punct-semantics.md)
+- **更早批次交接指针（H）**: [批次 H · 快捷面板全半角图标 v9 + 半角=英文标点 + 中英联动标点](docs/archive/handoffs/handoff-2026-11-07-quickpanel-v9-fwicon-batch-h.md) · 接力 prompt: [prompt-next-session-2026-11-07-quickpanel-v9-fwicon-batch-h.md](docs/archive/prompts/prompt-next-session-2026-11-07-quickpanel-v9-fwicon-batch-h.md)
 - **并行线交接指针（spec 100 · 云端账号与多端同步）**: [云端账号与多端同步 · 规划落地（spec 100）](docs/archive/handoffs/handoff-2026-11-07-fluxing-cloud-sync-plan.md) · 接力 prompt: [prompt-next-session-2026-11-07-fluxing-cloud-sync-plan.md](docs/archive/prompts/prompt-next-session-2026-11-07-fluxing-cloud-sync-plan.md)
-- **再上一批交接指针**: [批次 G · 全半角按钮图标 v7 对角矢量布局](docs/archive/handoffs/handoff-2026-11-07-quickpanel-v7-fwicon-diagonal.md) · 接力 prompt: [prompt-next-session-2026-11-07-quickpanel-v7-fwicon-diagonal.md](docs/archive/prompts/prompt-next-session-2026-11-07-quickpanel-v7-fwicon-diagonal.md)
+- **更早批次交接指针（G）**: [批次 G · 全半角按钮图标 v7 对角矢量布局](docs/archive/handoffs/handoff-2026-11-07-quickpanel-v7-fwicon-diagonal.md) · 接力 prompt: [prompt-next-session-2026-11-07-quickpanel-v7-fwicon-diagonal.md](docs/archive/prompts/prompt-next-session-2026-11-07-quickpanel-v7-fwicon-diagonal.md)
 完整的 "为什么" 与事故溯源在 `lessons-learned.md`;Const. 链接 + Verification 见各专项 `.claude/rules/`。
 
 ---

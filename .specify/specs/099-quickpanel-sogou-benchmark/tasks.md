@@ -248,3 +248,39 @@ L4  PASS  exit=0   1.4s  回归用例(fast) cases=1 pass=1 fail=0
 - [ ] push 前 `scripts\gate\run-all.ps1 -Level L0`；发版前 `-Level L0,L3,L4,L5 -Build`
 - [ ] 提交用 Conventional Commits + 单一 scope；`git status -sb` 确认 ` m librime` 未被带进去
 
+---
+
+## 批次 J 追补 · 英文逗号辨识度 v12 + 语言栏项退出常驻托盘（2026-11-08）
+
+> 本轮两条用户验收：①「中文标点辨识度已经很高，但英文的逗号辨识度仍然需要改进」；
+> ②「去除任务栏托盘区的输入法『中英文』图标，这个图标不需要常驻」。
+> 交接「下一阶段执行序」里的**补 `t9.schema.yaml` switches 经实测证伪，未做**（T-9J5）。
+
+- [x] **T-9J1 v12 · 半角逗号墨迹盒 6×9 → 8×12** — `include/FluxingPanelFwIcon.h`
+      `kCommaInkWidthEn=8` / `kCommaInkHeightEn=12`（中文态 8×13 不动）；字号仍由
+      `ScaleFontHeight(48,11,12)=52` 反解，实际落点由 `GlyphPenPointForInk` 单调迭代命中目标盒。
+      单测 `T33k(v12)` 契约 + `T33q2` 目标盒同步（`{5,17,12,28}` / `hw_pen(3,20)`）。
+      代价如实记录：两态逗号同宽 8（高 13 vs 12）⇒ 辨识度改由「形状 + 句号图元
+      （12px 空心环 vs 7px 实心点）」承担。
+- [x] **T-9J2 语言栏项退出常驻托盘** — `WeaselTSF/LanguageBar.cpp` `GetInfo()` 摘掉
+      `TF_LBI_STYLE_SHOWNINTRAY`，保留 `BTN_BUTTON | BTN_MENU`（左键开面板、状态文字「英/中」
+      等能力零损失；明确不用会删掉整项的 `TF_LBI_STYLE_INVISIBLE`）；决策记录 **ADR 0044**。
+- [x] **T-9J3 单测回归** — `TestQuickPanelDialog` 255/255 + `TestQuickPanelRefactor` 40/40。
+      T12d/T12e 在中途一次运行里红过：插判别性诊断实测 `hit0..3 = 0..3`、回调计数与目标值全正常，
+      摘掉诊断再跑即全绿 ⇒ **定性为间歇性 flaky（测试侧），非本批引入、非生产缺陷**；
+      批次 I CHANGELOG 里「40/40」的声称与当前 HEAD 实跑存在同一条抖动，按 flaky 处理。
+- [x] **T-9J4 全量构建 + NSIS + 静默重装** — `tmp/build-batch-j.log`；
+      `tmp/reinstall*-*.log` 校验 `INSTALL_EXIT=0` 与已装二进制 SHA256 三方一致。
+- [ ] **T-9J5 ~~给 `t9.schema.yaml` 补 `switches:` 段~~（证伪，不做）** — 两条反证：
+      ① `output/data/t9.schema.yaml:98` 已有 `__include: rime_ice.schema.yaml:/`，
+      **继承** rime_ice 的 `switches`（含 `ascii_punct`），显式补段反而覆盖继承结果；
+      ② 活动用户目录 `build/` 下**没有 `t9.schema.yaml`** ⇒ t9 本机从未部署，
+      「t9 下 ADR 0043 不生效」缺事实基础。若要终验：启用 t9 方案 + 重新部署，
+      再看 `build/t9.schema.yaml` 的 `switches`，**而不是改源 yaml**。
+- [ ] **T-9J6 真机终确认（需人眼 + 需用户侧动作）**
+      ① 英文逗号辨识度 — 运行时像素已分离（`tmp/v12b-*`：`P4 VERDICT punct_follows_state = PASS`，state0 `，` U+FF0C / state1、state2 `,` U+002C；slot2 墨迹 state0 `67px 23×26` vs state1 `59px 18×24`；`CJK-CHECK text=[你 ] cjk=True`），**待用户目视** `tmp/v12b-P4-slot2-state0.png` vs `tmp/v12b-P4-slot2-state1.png`。`P6` 那一步 FAIL 与批次 I 基线逐字符相同 ⇒ 探针既有缺陷、非本批回归。
+      ② 通知区域不再常驻「中/英」— **代码已落地、真机未生效**：装机副本 `weaselx64.dll` 被 17 个在跑 64 位进程占用、无法替换（x86 `weasel.dll` 已替换成功），需注销 / 重启 Windows 后重装。
+      ★ **判据修正（勿再用字形计数）**：UIA（`tmp/v12-tray-j.txt`）显示通知区域**并存两个「任务栏输入指示」** —— 火流猩自己的（tooltip「左键切换模式，右键打开菜单」，显示方框「中」，即本批摘除对象）与 Windows 自带 IME 指示器（红猿头 logo，**本仓库代码改不掉**，需 Windows 设置 / 组策略）。我们的项在 UIA 中以 tooltip 文案出现、glyph 名为空 ⇒ 按「英/中」计数必然 0 命中 = 假阴性。正确判据 = 按该 tooltip 匹配，或数按钮个数（改前 2 → 改后应 1），并与抓屏 `tmp/v12b-tray-ime.png` 互证。
+      ③ tooltip 是否遮挡面板槽位（批次 I 遗留，人眼项）。
+- [ ] **T-9J7 开机首次切换卡顿复验**（ADR 0042 遗留）— 需重启 Windows，Agent 不可执行，交用户。
+

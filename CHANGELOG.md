@@ -1,4 +1,18 @@
 ## [Unreleased]
+
+### feat(fluxing): 快捷面板英文标点逗号图标 v12 + 任务栏常驻「中英文」托盘图标摘除（批次 J）
+
+- **用户原话**：①「快捷设置栏中英文标点中，中文标点辨识度已经很高，但英文的逗号，辨识度仍然需要改进」；②「请去除在任务栏托盘区的输入法"中英文"图标，这个图标不需要常驻」。
+- **英文态逗号放大（需求①，图标 v12）**：半角态逗号墨迹目标盒 6×9 → **8×12**（`kCommaInkWidthEn = 8`、`kCommaInkHeightEn = 12`，字号由 `ScaleFontHeight(48, 11, 12) = 52` 反解），字体仍为 `kCommaFaceEn = "Times New Roman"`；中文态维持 v11 的 8×13 不动。两态逗号同宽 ⇒ **辨识度改由「逗号形状 + 句号图元」承担**：英文句号 = 基线实心点（7 px 内径）、中文句号 = 居中空心环（12 px 外径）。同源常量仍只在 `include/FluxingPanelFwIcon.h`（constitution R7），生产代码 `WeaselServer/QuickPanelDialog.cpp` 与单测共用。
+- 单测同步：`T33k`（v12 消息）、`T33q2`（英文态逗号手写盒 `(2, 3, 8, 12)`、期望 `hw_pen(3, 20)` / `fw_pen(-3, 27)`）、`:1540-1541` 契约注释指向 v12 常量。
+- **常驻托盘图标摘除（需求②）**：`WeaselTSF/LanguageBar.cpp` 的 `LanguageBarItem::GetInfo()` 摘掉 `TF_LBI_STYLE_SHOWNINTRAY`，改为 `TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_BTN_MENU`。该标志是「通知区域常驻显示输入法中/英图标」的唯一开关（本机现象 + 标志语义 + `output/data/weasel.yaml:81 display_tray_icon: false` 三重吻合）。**语言栏项本身保留** —— 状态文字「英/中」、左键开快捷设置面板、右键菜单能力零损失；未使用会删掉整项的 `TF_LBI_STYLE_INVISIBLE`。单点改动，加回该标志即回退。决策见 `docs/adr/0044-language-bar-item-exits-persistent-tray.md`。
+- **装机限制（本批唯一未闭环项）**：该 TSF 改动编进 `weasel.dll`（x86）与 `weaselx64.dll`（x64）。实测 `D:\Program Files\fluxing\weasel\weaselx64.dll` 被 explorer / msedge / msedgewebview2 / 飞书 / WeChatAppEx / WindowsTerminal 等 **17 个进程作为已映射映像占用**，静默重装（`INSTALL_EXIT=0`）与手工覆盖均失败（`being used by another process`），装机副本仍是重装前那份（同尺寸、mtime 未变）。⇒ **需关闭这些 64 位宿主（或直接注销/重启 Windows）后重新安装，托盘图标才会从通知区域消失**；`WeaselServer.exe` / `weasel.dll` / `WeaselDeployer.exe` 均已核对 MATCH=True，故图标 v12 已在本机生效。
+- UIA 实测（`tmp/v12-tray-j.txt`）：通知区域**并存两个「任务栏输入指示」按钮** —— 火流猩自己的（tooltip「左键切换模式，右键打开菜单」，当前显示方框「中」，即本次摘除的对象，改动未上机故仍在）与 Windows 自带 IME 指示器（红猿头 logo，**不受本仓库代码控制**，只能用 Windows 设置 / 策略关闭）。探针原先按「英/中」字形计数得 0 属**假阴性**（我们的项在 UIA 里以 tooltip 文案出现、glyph 名为空），判据已改用该 tooltip 文案并与抓屏 `tmp/v12b-tray-ime.png` 互证。
+- 运行时像素取证（`tmp/v12b-*`）：`P4 VERDICT punct_follows_state = PASS`（state0 `，` U+FF0C / state1、state2 `,` U+002C，**批次 I 同一步为 FAIL** ⇒ ADR 0043 在装机版上生效）；slot2 墨迹 state0 `67 px / 23×26` vs state1 `59 px / 18×24` ⇒ 两态形状已分离；`CJK-CHECK text=[你 ] cjk=True`。`P6` 那一步 FAIL 与批次 I 基线逐字符相同 ⇒ 属探针既有缺陷、非本批回归。
+- 门禁与单测：`scripts/gate/L0-static.ps1 -Mode source` = checks=14 pass=12 fail=0 skip=2；`TestQuickPanelDialog` **255/255**、`TestQuickPanelRefactor` **40/40**（删除诊断代码后的 HEAD 形态复跑）。
+- **T12d/T12e 结案为间歇性 flaky（非本批引入、非生产缺陷）**：批次 I 遗留的 `[DIAG11]` 只记录回调计数，不足以定位；本轮补 `[DIAG12]` 一次性取证，实测 `hit0=0 hit1=1 hit2=2 hit3=3 ascii_target=1 full_target=1 expect_target=1` ⇒ 命中区、回调注册、目标值三者全对，而 `cb_ascii=1 cb_full=1`（回调未触达）⇒ 判定用例内状态污染。**未改生产代码、未放宽断言**；诊断代码已从 `test/TestQuickPanelRefactor/TestQuickPanelRefactor.cpp` 删除、不入仓。
+- **证伪并取消一条交接待办**：原拟「给 `output/data/t9.schema.yaml` 补 `switches: ascii_punct`」。实测 ① 该文件 `:98` 已有 `__include: rime_ice.schema.yaml:/`，**已继承**含 `ascii_punct` 的 `switches`，显式补段反而覆盖继承结果并可能丢 `emoji` / `traditionalization` / `search_single_char`；② 活动用户目录 `D:\Program Files\fluxing\user1\fluxing\build\` 下 `t9.schema.yaml` **NOT FOUND** ⇒ t9 本机从未部署，「t9 下 ADR 0043 不生效」缺事实基础。**本批未改动任何 `output/data/**`**；t9 的正确终验姿势见 `Rime-设置说明书-重点快捷键.md` §10.3 第 3 条（启用 t9 → 重新部署 → 检查 `build/t9.schema.yaml`）。
+
 ### fix(WeaselServer): 快捷面板图标 v11 中英文逗号可区分 + 半角标点真出英文标点 + 开机首次切换卡顿修复（批次 I）
 
 - **用户原话**：①「面板『中英文标点』图标两态：句号可以达到要求，逗号形态仍然不好，且无法区分中英文逗号，请参考搜狗输入法的标点图标。建议直接使用输入字符」；②「开机后第一次切换到火流猩输入法时，会出现比较久的延时，才能正常使用输入法……请检查日志，是否存在 bug 导致卡顿」。

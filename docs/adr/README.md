@@ -57,6 +57,7 @@ Do not dump all ADRs into every prompt.
 | 0041 | 0041. 快捷面板的「全/半角」只驱动 `ascii_punct`（全角 = 中文标点），数字与其他符号恒半角；点按钮不抢宿主焦点 | `docs/adr/0041-punct-width-drives-ascii-punct-only.md` | Accepted |
 | 0042 | 0042. 会话门禁前置到「杀旧实例」之前；前端补拉改为连续失败阈值 + 按会话计数；诊断日志带毫秒时间戳 | `docs/adr/0042-session-gate-precedes-server-shutdown.md` | Accepted |
 | 0043 | 0043. 标点语言在提交边界转换：纯标点提交按 `ascii_punct` 转半角/全角，不引入 `full_shape` 选表 | `docs/adr/0043-punct-language-conversion-at-commit-boundary.md` | Accepted |
+| 0044 | 0044. 语言栏项退出常驻托盘：摘除 `TF_LBI_STYLE_SHOWNINTRAY`，保留语言栏项本身（状态文字 / 左键面板 / 右键菜单） | `docs/adr/0044-language-bar-item-exits-persistent-tray.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and
