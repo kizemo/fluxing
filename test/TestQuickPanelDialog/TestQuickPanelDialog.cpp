@@ -1536,7 +1536,8 @@ int main() {
     // 尾巴部分连接不圆滑。建议直接使用字符逗号」⇒ 逗号改成**真字形渲染**,
     // 不再有轮廓多边形。旧 T33k(11x13 / 8x13 多边形包围盒)与 T33l
     // (>=8 点单轮廓)随之删除(tasks.md 有记录),改为钉住字形契约:
-    //   ① 两态的**目标**墨迹盒都是 7x13 = kCommaInkWidth x kCommaInkHeight;
+    //   ① 两态的**目标**墨迹盒 = 各自字体真字形的实测墨迹尺寸
+    //      (中 8x13 SimSun 48px / 英 8x12 Times New Roman 52px, v12);
     //   ② 码点必须是中文逗号 / ASCII 逗号,别被换成句号。
     // 真机落位由 DrawInkPlacedChar 的中心对齐保证,T33q 用往返断言兜住。
     Check(fw_comma.right - fw_comma.left + 1 ==
@@ -1547,7 +1548,7 @@ int main() {
                   fluxing::panel_fwicon::kCommaInkWidthEn &&
               hw_comma.bottom - hw_comma.top + 1 ==
                   fluxing::panel_fwicon::kCommaInkHeightEn,
-          "T33k(v11): 两态逗号目标墨迹盒 中 8x13 / 英 6x9 (v10 两态同 7x13 像素几乎全同)");
+          "T33k(v12): 两态逗号目标墨迹盒 中 8x13 / 英 8x12 (v10 两态同 7x13 像素几乎全同)");
     Check(fw.commaChar == L'\xFF0C' && hw.commaChar == L',',
           "T33l: 逗号码点 全角 U+FF0C / 半角 U+002C (改用字符逗号)");
     // T33r(v11): 两态逗号必须用**不同字体** —— v10 两态都用 Microsoft YaHei,
@@ -1593,16 +1594,16 @@ int main() {
       fw_m.originX = 6;   // SimSun 48px U+FF0C 实测
       fw_m.originY = 11;
       const POINT fw_pen = GlyphPenPointForInk(fw_target, fw_m);
-      const RECT hw_target = {5, 20, 10, 28};
+      const RECT hw_target = {5, 17, 12, 28};
       GlyphInk hw_m;
-      hw_m.width = 6;
-      hw_m.height = 9;
-      hw_m.originX = 2;   // Times New Roman 39px U+002C 实测
+      hw_m.width = 8;
+      hw_m.height = 12;
+      hw_m.originX = 2;   // Times New Roman 52px U+002C 实测
       hw_m.originY = 3;
       const POINT hw_pen = GlyphPenPointForInk(hw_target, hw_m);
       Check(fw_pen.x == -3 && fw_pen.y == 27 && hw_pen.x == 3 &&
-                hw_pen.y == 23,
-            "T33q2(v11): 落笔点 全角 (-3,27) / 半角 (3,23)(中心对齐)");
+                hw_pen.y == 20,
+            "T33q2(v12): 落笔点 全角 (-3,27) / 半角 (3,20)(中心对齐)");
       Check(fw_pen.x + fw_m.originX == fw_target.left &&
                 fw_pen.y - fw_m.originY == fw_target.top &&
                 hw_pen.x + hw_m.originX == hw_target.left &&

@@ -22,6 +22,9 @@
 // v10 (用户指令 2026-11-07,批次 H 追加):
 //    「全半角图标中,逗号仍然形状不佳,有锯齿,且圆形部分和尾巴部分连接不圆滑。
 //     建议直接使用字符逗号。」⇒ **逗号改为真字形**,环/点保持矢量图元不动。
+// v12 (用户指令 2026-11-08,批次 J):「中文标点辨识度已经很高,但英文的逗号,
+//    辨识度仍然需要改进」⇒ 英文态逗号目标墨迹盒 6×9 → **8×12**
+//    (Times New Roman 52px, origin=(2,3)),墨量 +78%,与中文态 8×13 同量级。
 //
 // ── 为什么 v9 的多边形一定有锯齿(别再用手绘轮廓修)─────────────────────
 // GDI 的 `Polygon` / 扫描线填充族**没有抗锯齿**:每条边都被光栅化成整像素台阶。
@@ -82,16 +85,32 @@ constexpr int kCommaFontHeight = 48;
 // **尺寸**也不同(13 vs 9)⇒ 形状 + 尺寸双重可区分。
 // (用户诉求原文:「逗号形态仍然不好,且无法区分中英文逗号…建议直接使用输入字符」)
 //
-// 目标墨迹盒 = 实测值(探针 tmp/probe-fwicon-v11b.ps1,96 dpi raw px):
-//   宋体 SimSun 48px U+FF0C ⇒ 8×13  origin=(6,11)
-//   Times New Roman 39px U+002C ⇒ 6×9  origin=(2,3)
+// 目标墨迹盒 = 实测值(探针 tmp/probe-fwicon-v11b.ps1 / tmp/probe-fwicon-v12.ps1,
+// 96 dpi raw px):
+//   宋体 SimSun 48px U+FF0C ⇒ 8×13  origin=(6,11)   (v11 定稿)
+//   Times New Roman 52px U+002C ⇒ 8×12  origin=(2,3)  (v12:英文态放大)
+//   (v11 的英文态是 TNR **39px** ⇒ 6×9 origin=(2,3),被用户判「辨识度仍需改进」)
 // ★ 宽度常量是**字体替换敏感项**:目标机器若缺该字体,GDI 换别的字体 ⇒
 //   墨迹宽度会变、字形相对目标框横向偏 0~1 px(ScaleFontHeight 只自校正
-//   **高度**)。后果不影响可读性;要彻底修得把宽度也改成运行时测量。
+//   **高度**)。后果不影响可读性;要彻底修得把宽度也改成运行时测量.
+//
+// ── v12:英文态逗号放大到与中文态**同量级** ─────────────────────────────
+// 用户原话(2026-11-08):「中文标点辨识度已经很高,但英文的逗号,辨识度仍然
+// 需要改进」。病灶 = 英文态目标墨迹盒只有 6×9 ⇒ 墨量 54 px,是中文态
+// (8×13 = 104 px)的 **52%**;缩到面板实际像素后笔画只剩 1~2 px 宽,
+// 肉眼看得出「有个笔画」但读不出「是逗号」。
+// 修法:6×9 → **8×12**(Times New Roman **52px** 实测 8×12、origin=(2,3)),
+// 墨量 96 px(+78%),与中文态 104 px 同量级。
+// ★ 为什么是 52px 而不是种子 48px:TNR 在 48px 下逗号墨迹只有 7×11,
+//   ScaleFontHeight(48,11,12)=52 才落到 8×12(实测表见 tmp/v12-notes.txt)。
+// ★ 代价(明写,别当没看见):两态逗号**宽度**同为 8(高度 13 vs 12)⇒ v11 的
+//   「形状 + 尺寸双重可区分」退化为「形状 + 句号图元(空心环 vs 实心点)」;
+//   环(12px 空心) 与 点(7px 实心) 的对比远强于逗号的 1 px 尺寸差,
+//   两态仍可分辨;换来的是英文逗号与中文逗号同样的可读性。
 constexpr int kCommaInkWidthCn = 8;
 constexpr int kCommaInkHeightCn = 13;
-constexpr int kCommaInkWidthEn = 6;
-constexpr int kCommaInkHeightEn = 9;
+constexpr int kCommaInkWidthEn = 8;
+constexpr int kCommaInkHeightEn = 12;
 
 // 两态逗号各自用的字体(中文字体出中文逗号,拉丁字体出拉丁逗号)。
 constexpr const wchar_t* kCommaFaceCn = L"SimSun";  // 宋体
@@ -184,7 +203,8 @@ inline POINT GlyphPenPointForInk(const RECT& targetInk, const GlyphInk& m) {
 //     GDI 必须用 RoundRect(圆角 = 半边长),`Ellipse` 在 ≤10px 会光栅化成四角星
 //     (证据 tmp/gdi-shape2.txt:10px 与 12px Ellipse 顶点只有 1 px)。
 //   逗号「,」= **真字形** U+002C,字体 **Times New Roman**(v11),
-//     墨迹盒 (5,20)-(10,28) = **6×9**(下沿与中文态同为 28,上沿随高度上移)。
+//     墨迹盒 (5,17)-(12,28) = **8×12**(v12 由 6×9 放大;下沿与中文态同为 28,
+//     上沿随高度上移)。
 //   两图元不相交(6 空列 / 9 空行)。
 //   墨迹并集 = (5,4)-(23,28) = 19×25。
 inline Icon Build(bool fullwidth) {
