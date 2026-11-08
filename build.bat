@@ -47,7 +47,15 @@ if not defined FLUXING_VERSION set FLUXING_VERSION=%VERSION_MAJOR%.%VERSION_MINO
 if not defined WEASEL_BUILD set WEASEL_BUILD=0
 
 rem use numeric build version for release build
-set PRODUCT_VERSION=%FLUXING_VERSION%.%WEASEL_BUILD%
+rem L159 (2026-11-08): env.bat 可以显式钉住 PRODUCT_VERSION —— 发布线的口径
+rem 是 version.txt + ".0"（env.bat 里写明了 "the version gate requires
+rem version.txt + '.0'"），而 WEASEL_BUILD 只该进 Windows 资源与版本化
+rem shim 文件名（install.nsi 用的是 ${FLUXING_VERSION}.${WEASEL_BUILD}，
+rem 跟 PRODUCT_VERSION 无关）。原来这里无条件赋值，build.bat 每跑一次就把
+rem weasel.props 写成 FLUXING_VERSION.WEASEL_BUILD（1.2.1.2），L0 门禁的
+rem version-consistency 从 batch F 之后恒红。下面的 FILE_VERSION 本来就有
+rem `if not defined` 守卫，这里补齐同一守卫：env.bat 钉了就用 env.bat 的。
+if not defined PRODUCT_VERSION set PRODUCT_VERSION=%FLUXING_VERSION%.%WEASEL_BUILD%
 rem for non-release build, try to use git commit hash as product build version
 if not defined RELEASE_BUILD (
   rem check if git is installed and available, then get the short commit id of head

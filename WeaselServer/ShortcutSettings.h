@@ -100,6 +100,13 @@ class ShortcutSettings {
         is_default;  // 来自 default.yaml 内置 (vs default.custom.yaml override)
   };
 
+  // YAML 落盘 (T106 托管块)。public 是为了让 test/TestShortcutSettings 能直接
+  // 盯落盘逻辑;界面"保存"与"导出"共用同一实现,overwrite_file=true 表示整份
+  // 覆写(导出/全新文件),false 表示只替换文件里的托管块、保留块外内容。
+  static bool SaveHotkeys(const std::wstring& path,
+                          const std::vector<Hotkey>& data,
+                          bool overwrite_file = false);
+
   static std::vector<Hotkey>& MutableHotkeys();
   static const std::vector<Hotkey>& Hotkeys();
 
@@ -186,6 +193,10 @@ class ShortcutSettings {
   // 捕获提示: popover + 状态行 (抓到的组合 / 拒绝原因)
   static void SetCaptureHint(const wchar_t* text);
 
+  // T101: popover 单独更新 —— 状态行不再被捕获提示覆盖,改由 RefreshStatus()
+  // 统一持有 ("● 未保存 (N 修改)" + 冲突计数)。
+  static void SetPopoverHint(const std::wstring& text);
+
   // Conflict detection (spec §4.5)
   struct ConflictReport {
     int score =
@@ -199,6 +210,21 @@ class ShortcutSettings {
                                       const std::wstring& when,
                                       int exclude_row);
 
+  // T101: 把 ConflictReport 翻成 design §4.5 的四档中文文案
+  //   ✓ 无冲突
+  //   ⚠ 与「{action}」冲突，仍可保存
+  //   ⚠ 覆盖默认行为「{action}」
+  //   ✗ 此组合不被允许 (Shift_L/R 单键)
+  static std::wstring ConflictHintText(const ConflictReport& r);
+
+  // T101: 捕获过程中的实时冲突检测 —— 读 s_pendingChord + s_capturingRow,
+  // 结果写 popover 与状态行。只做内存比较,不做 I/O (design AP-045-B)。
+  static void UpdateCaptureConflict();
+
+  // T102: 状态行统一刷新。所有会改动 in-memory 状态的路径最后都落到
+  // PopulateTable(),由它收口调用这里 ⇒ 编辑后状态行不会停在旧值。
+  static void RefreshStatus();
+
   // 静态内置 binding db (spec §6.1 ~30 条)
   struct BuiltinBinding {
     std::wstring combo;  // normalized
@@ -208,16 +234,19 @@ class ShortcutSettings {
   };
   static const std::vector<BuiltinBinding>& GetBuiltinBindings();
 
-  // YAML 落盘 (LoadHotkeys / SaveHotkeys)
+  // YAML 读入 (SaveHotkeys 见 public 区: 单测要直接调)
   static bool LoadHotkeys(const std::wstring& path, std::vector<Hotkey>& out);
-  static bool SaveHotkeys(const std::wstring& path,
-                          const std::vector<Hotkey>& data);
   // 加载 default.yaml 内置 (作为 fallback)
   static bool LoadDefaults(std::vector<Hotkey>& out);
 
   // Save() 触发 deploy 链 (spec §7.1)
   static bool SaveAndDeploy();
-  static void SpawnDeploy();
+  // spec 045 P0: 原来 SpawnDeploy() 是空占位(状态栏却写"deploy 已触发")。
+  // 现在真的去拉 WeaselDeployer.exe /deploy,并把成功与否返回给调用方。
+  static bool SpawnDeploy();
+  // spec 045 P0: 导入/导出用的往返文件(与线上 default.custom.yaml 分开,
+  // 导出不再覆写线上配置)。
+  static std::wstring ExportYamlPath();
 
   // 工具
   static void CenterOnPrimaryMonitor(HWND, int, int);
@@ -228,4 +257,11 @@ class ShortcutSettings {
   // 数据 (in-memory)
   static std::vector<Hotkey> m_hotkeys;
   static std::vector<Hotkey> m_defaults;  // reset 时还原
+
+  // T103: 搜索框过滤词 (空 = 显示全部)。PopulateTable 按它重建列表 ⇒
+  // 过滤是"真的不显示",而不是把匹配结果算完就丢掉。
+  static std::wstring s_filterQuery;
+
+  // T102: 当前状态行是否存在冲突 (供 OnCtlColor 决定文字颜色)
+  static bool s_statusConflict;
 };

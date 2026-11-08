@@ -9,6 +9,7 @@
 #include "ModalChrome.h"  // v0.19.0.31: BG+Border paint helper
 
 #include <KeyNameMapper.h>  // ADR 0011 D1: shared key name unit
+#include <WeaselUtility.h>  // WeaselUserDataPath: 用户目录单一事实源 (ADR 0020)
 
 #include <algorithm>
 #include <cassert>
@@ -16,6 +17,7 @@
 #include <fstream>
 #include <iostream>
 #include <shlobj.h>
+#include <shellapi.h>  // ShellExecuteW: SpawnDeploy 拉起 WeaselDeployer
 
 // ===== Static state 定义 =====
 HWND ShortcutSettings::s_hwnd = nullptr;
@@ -40,6 +42,10 @@ std::wstring ShortcutSettings::s_pendingChord;
 
 std::vector<ShortcutSettings::Hotkey> ShortcutSettings::m_hotkeys;
 std::vector<ShortcutSettings::Hotkey> ShortcutSettings::m_defaults;
+
+// T103: 搜索过滤词;T102: 状态行是否存在冲突
+std::wstring ShortcutSettings::s_filterQuery;
+bool ShortcutSettings::s_statusConflict = false;
 
 int ShortcutSettings::kTableH_phys = 0;
 int ShortcutSettings::kBtnY_phys = 0;
@@ -141,20 +147,28 @@ void ShortcutSettings::Show() {
   }
 
   // 1. 加载 YAML (default.custom.yaml -> fallback default 内置 30 条)
+  // spec 045 P0: 原来这里硬编码 %APPDATA%\Rime\default.custom.yaml,而本 fork
+  // 的真实用户目录是 %APPDATA%\fluxing(ADR 0020 单一事实源
+  // WeaselUserDataPath())。写到 Rime 目录, librime 那边根本读不到, 保存等于
+  // 没保存。改用 WeaselUserDataPath(),与 WeaselDeployer/HotkeyEditorDialog.cpp
+  // 同源。
   if (s_yamlPath.empty()) {
-    wchar_t path[MAX_PATH] = {};
-    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, path))) {
-      std::wstring base = std::wstring(path) + L"\\Rime";
-      s_yamlPath = base + L"\\default.custom.yaml";
-    } else {
+    const std::wstring user_dir = WeaselUserDataPath().wstring();
+    if (user_dir.empty()) {
       s_yamlPath = L"default.custom.yaml";
+    } else {
+      s_yamlPath = user_dir + L"\\default.custom.yaml";
     }
   }
   m_hotkeys.clear();
-  if (!LoadHotkeys(s_yamlPath, m_hotkeys)) {
-    // 解析失败 fallback 到默认 (LoadDefaults 是 schema 内的硬编码 ~14 条)
+  if (!LoadHotkeys(s_yamlPath, m_hotkeys) || m_hotkeys.empty()) {
+    // 解析失败 / 文件里没有 bindings 段 => fallback 到内置默认表
+    // (LoadDefaults 是 schema 内的硬编码 ~14 条)。
+    // spec 045 P0: 原来只判 LoadHotkeys 的返回值 —— 文件能打开但没有
+    // bindings 段时会得到 0 行,表格全空,用户以为界面坏了。
     std::wcerr << L"[ShortcutSettings] WARN: cannot load " << s_yamlPath
                << L", fallback to defaults" << std::endl;
+    m_hotkeys.clear();
     LoadDefaults(m_hotkeys);
   }
   m_defaults = m_hotkeys;  // reset 用
@@ -469,8 +483,13 @@ bool ShortcutSettings::LoadHotkeys(const std::wstring& path,
     if (!inBindings) {
       // 探测 patch.key_binder/bindings: 行 (可能是 "key_binder/bindings:" 前缀
       // path)
-      if (trimmed.size() >= 18 &&
-          trimmed.substr(trimmed.size() - 18) == L"key_binder/bindings:") {
+      // 注意: "key_binder/bindings:" 是 20 个字符,原来这里取尾 18 个字符
+      // 去比 —— 永远不相等 ⇒ 用户 yaml 的 bindings 段从来没被解析到,
+      // 界面里的行全是内置默认值(spec 045 P0)。改成按 20 取尾;
+      // 带前缀的 path 也覆盖("patch.key_binder/bindings:" 的尾部同样
+      // 是这 20 个字符)。
+      if (trimmed.size() >= 20 &&
+          trimmed.substr(trimmed.size() - 20) == L"key_binder/bindings:") {
         inBindings = true;
       }
       continue;
@@ -518,6 +537,10 @@ bool ShortcutSettings::LoadHotkeys(const std::wstring& path,
             hk.action_yaml = L"send: " + val;
           } else if (key == L"toggle") {
             hk.action_yaml = L"toggle: " + val;
+          } else if (!key.empty() && !val.empty()) {
+            // 其余一切 "动作: 参数" (custom / key / paging / ...) 原样收下。
+            // 否则本界面自己写出的 custom: 行读回来就丢了 (T106 修)。
+            hk.action_yaml = key + L": " + val;
           }
         }
         if (!hk.accept.empty() && !hk.action_yaml.empty()) {
@@ -557,10 +580,95 @@ bool ShortcutSettings::LoadHotkeys(const std::wstring& path,
   return true;
 }
 
+// ===== T106: 托管块落盘 (default.custom.yaml) =====
+//
+// 旧实现把整张表 (含一行没改过的内置默认) 全量写进 default.custom.yaml, 并且
+// trunc 重写整份文件 —— 用户在这个文件里的 schema_list / menu / switcher 等段
+// 一次保存就没了; action_yaml 为空的行还会写成
+// "- { when: X, accept: Y,  }" 这种无动作 binding, librime 直接忽略。
+//
+// 现在只写「真正需要 override 的行」, 并且只替换文件里的托管块。
+
+namespace {
+
+// 每次落盘的账目, 供 SaveAndDeploy 拼状态文案 —— UI 不对自己做的事说谎,
+// 静默跳过和静默失败一样不可接受 (spec 045 P0 教训, 见 SaveAndDeploy)。
+struct SaveStats {
+  int written = 0;            // 写进 bindings 的行数
+  int skipped_no_action = 0;  // 改过但没有 YAML 动作 ⇒ 写出来是坏 binding
+  bool backed_up = false;     // 首次接管前备份了旧文件
+  bool refused = false;       // 旧文件已有 patch 段且无托管块 ⇒ 拒绝写
+};
+SaveStats g_saveStats;
+
+// 托管块标记: 纯 ASCII, 便于按字节定位与替换。
+const char kManagedBegin[] =
+    "# >>> fluxing-shortcuts (spec 045) managed block - do not edit";
+const char kManagedEnd[] = "# <<< fluxing-shortcuts (spec 045) end";
+
+// 顶层 `patch:` 键 (行首, 非注释)。存在时拒绝自动接管: 再追加一个 patch:
+// 就是 YAML 重复键, librime 会读错或整份失效。
+bool HasTopLevelPatch(const std::string& utf8) {
+  size_t pos = 0;
+  while (pos < utf8.size()) {
+    const size_t lineStart = pos;
+    size_t eol = utf8.find('\n', pos);
+    if (eol == std::string::npos)
+      eol = utf8.size();
+    pos = eol + 1;
+    size_t a = lineStart;
+    while (a < eol && (utf8[a] == ' ' || utf8[a] == '\t'))
+      ++a;
+    // 只认「行首无缩进」的 patch: —— 缩进的 patch: 是别的段的子键, 追加不冲突。
+    if (a == lineStart && a < eol && utf8[a] != '#' && eol - a >= 6 &&
+        utf8.compare(a, 6, "patch:") == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// 首次接管前整份备份。备份失败就不写 —— 没有退路不该覆盖用户配置。
+bool BackupFile(const std::wstring& path) {
+  SYSTEMTIME st;
+  GetLocalTime(&st);
+  auto two = [](int v) {
+    return (v < 10 ? std::wstring(L"0") : std::wstring()) + std::to_wstring(v);
+  };
+  const std::wstring dst = path + L".bak-" + std::to_wstring(st.wYear) +
+                           two(st.wMonth) + two(st.wDay) + L"-" +
+                           two(st.wHour) + two(st.wMinute) + two(st.wSecond);
+  return CopyFileW(path.c_str(), dst.c_str(), FALSE) != FALSE;
+}
+
+}  // namespace
+
 bool ShortcutSettings::SaveHotkeys(const std::wstring& path,
-                                   const std::vector<Hotkey>& data) {
+                                   const std::vector<Hotkey>& data,
+                                   bool overwrite_file) {
+  g_saveStats = SaveStats();
+
+  // ---- 1. 读旧文件 (T106: 只替换托管块, 块外内容原样保留) ----
+  std::string existing;
+  {
+    std::ifstream in(path, std::ios::binary);
+    if (in) {
+      existing.assign(std::istreambuf_iterator<char>(in),
+                      std::istreambuf_iterator<char>());
+    }
+  }
+  if (existing.size() >= 3 && (unsigned char)existing[0] == 0xEF &&
+      (unsigned char)existing[1] == 0xBB &&
+      (unsigned char)existing[2] == 0xBF) {
+    existing = existing.substr(3);
+  }
+
+  // ---- 2. 组织托管块 (BOM 不在这里加, 最后统一加在文件开头) ----
   std::string utf8;
-  utf8 += "\xEF\xBB\xBF";  // UTF-8 BOM (L09 教训)
+  auto appendAscii = [&utf8](const char* s) {
+    utf8 += s;
+    utf8 += "\r\n";
+  };
 
   auto appendLine = [&utf8](const std::wstring& wline) {
     int len = WideCharToMultiByte(CP_UTF8, 0, wline.c_str(),
@@ -576,15 +684,9 @@ bool ShortcutSettings::SaveHotkeys(const std::wstring& path,
     utf8 += "\r\n";
   };
 
-  appendLine(
-      L"# default.custom.yaml — Fluxing "
-      L"快捷键设置 "
-      L"(v0.19.0.28)");  // 快捷键设置
-  appendLine(L"# schema: patch.key_binder/bindings");
-  appendLine(L"# editor: ShortcutSettings (spec 045)");
-  appendLine(L"");
-  appendLine(L"patch:");
-  appendLine(L"  key_binder/bindings:");
+  appendAscii(kManagedBegin);
+  appendLine(L"# 本段由「快捷键设置」托管, 手工修改会被下次保存覆盖。");
+  appendLine(L"# 生成者: spec 045 ShortcutSettings (v0.19.0.28)");
 
   auto quoteIfNeeded = [](const std::wstring& s) -> std::wstring {
     bool needQuote = false;
@@ -599,30 +701,82 @@ bool ShortcutSettings::SaveHotkeys(const std::wstring& path,
     return L"\"" + s + L"\"";
   };
 
+  // 只写「需要 override 的行」: 用户改过的, 或本来就来自文件的 (自定义行 /
+  // 既有 override, 必须原样写回, 否则一次保存就把用户的绑定全删了)。
+  // 没动过的内置默认不该出现在 custom 文件里。
+  std::vector<std::wstring> rows;
   for (const auto& h : data) {
-    // accept_new 若非空,即代表用户改过;存为 accept 新值
-    std::wstring effectiveAccept =
+    const std::wstring effectiveAccept =
         h.accept_new.empty() ? h.accept : h.accept_new;
-    std::wstring yamlAction =
-        h.action_yaml;  // "toggle: ascii_mode" / "send: Page_Down"
-    if (yamlAction.empty()) {
-      // 内置行 (无 custom) → 跳过默认未改的(spec §5.3: 用户删除默认用空
-      // placeholder) 简化: 这里全部写出,虽然是简化(实际 librime 不支持空
-      // accept),仅保留结构调整
-      if (effectiveAccept.empty())
-        continue;
+    const bool edited = !h.accept_new.empty() && h.accept_new != h.accept;
+    if (!edited && h.is_default)
+      continue;
+    if (effectiveAccept.empty())
+      continue;
+    if (h.action_yaml.empty()) {
+      // 没有 YAML 动作 ⇒ 写出来是 "- { when: X, accept: Y,  }" 这种坏
+      // binding, librime 直接忽略。跳过并记账, 由状态行说明, 不静默吞。
+      ++g_saveStats.skipped_no_action;
+      continue;
     }
-    std::wstring line = L"    - { when: " +
-                        (h.when.empty() ? L"always" : h.when) + L", accept: " +
-                        quoteIfNeeded(effectiveAccept) + L", " + yamlAction +
-                        L" }";
-    appendLine(line);
+    rows.push_back(L"    - { when: " + (h.when.empty() ? L"always" : h.when) +
+                   L", accept: " + quoteIfNeeded(effectiveAccept) + L", " +
+                   h.action_yaml + L" }");
+  }
+
+  if (rows.empty()) {
+    // 不写空的 patch:/bindings: —— patch 里的空 bindings 会把用户已配的
+    // key_binder 覆盖成空。
+    appendLine(L"# 当前没有需要落盘的改动 (不写空 patch, 避免清空 key_binder)。");
+  } else {
+    appendLine(L"patch:");
+    appendLine(L"  key_binder/bindings:");
+    for (const auto& r : rows)
+      appendLine(r);
+  }
+  g_saveStats.written = static_cast<int>(rows.size());
+  appendAscii(kManagedEnd);
+
+  // ---- 3. 组装: 只替换托管块, 块外内容原样保留 ----
+  std::string out;
+  const size_t beg = existing.find(kManagedBegin);
+  if (overwrite_file || existing.empty()) {
+    // 导出 / 全新文件: 整份就是托管块
+    out = utf8;
+  } else if (beg != std::string::npos) {
+    size_t end = existing.find(kManagedEnd, beg);
+    if (end == std::string::npos) {
+      end = existing.size();  // 只有头没有尾 ⇒ 当成坏块吃到最后重写
+    } else {
+      end += sizeof(kManagedEnd) - 1;
+      while (end < existing.size() &&
+             (existing[end] == '\r' || existing[end] == '\n')) {
+        ++end;  // 顺带吃掉标记行余下的换行
+      }
+    }
+    out = existing.substr(0, beg) + utf8 + existing.substr(end);
+  } else if (HasTopLevelPatch(existing)) {
+    // 旧文件已有顶层 `patch:` 段但没有托管块 ⇒ 再追加一个就是 YAML 重复键,
+    // librime 会读错甚至整份失效。不猜、不做半吊子合并, 明确拒绝并让用户
+    // 决定 (正文级真合并是 T107)。
+    g_saveStats.refused = true;
+    return false;
+  } else {
+    if (!BackupFile(path))
+      return false;  // 没有退路就不覆盖用户配置
+    g_saveStats.backed_up = true;
+    out = existing;
+    if (out.back() != '\n')
+      out += "\r\n";
+    out += utf8;
   }
 
   std::ofstream f(path, std::ios::binary);
   if (!f)
     return false;
-  f.write(utf8.c_str(), static_cast<std::streamsize>(utf8.size()));
+  const char bom[3] = {'\xEF', '\xBB', '\xBF'};
+  f.write(bom, 3);
+  f.write(out.c_str(), static_cast<std::streamsize>(out.size()));
   return f.good();
 }
 
@@ -746,17 +900,27 @@ void ShortcutSettings::PopulateTable() {
     return;
   ListView_DeleteAllItems(s_hTable);
 
+  // T103: 搜索过滤在这里落地 —— 不匹配的行根本不进列表(LVS_REPORT 不支持
+  // 隐藏单项;SetItemState(LVIS_CUT) 只是把文字画淡,行还在,等于没过滤)。
+  // 同时 lParam 改存"数据下标",显示行号与 m_hotkeys 下标从此解耦 ⇒ 过滤
+  // 生效后点第三行不会误改第一条快捷键。
   int row = 0;
-  for (const auto& h : m_hotkeys) {
+  for (int i = 0; i < static_cast<int>(m_hotkeys.size()); ++i) {
+    const auto& h = m_hotkeys[i];
+    std::wstring eff = h.accept_new.empty() ? h.accept : h.accept_new;
+    if (!s_filterQuery.empty() && !ContainsCI(h.action_desc, s_filterQuery) &&
+        !ContainsCI(eff, s_filterQuery) && !ContainsCI(h.when, s_filterQuery) &&
+        !ContainsCI(h.action_yaml, s_filterQuery)) {
+      continue;
+    }
     LVITEMW li = {};
     li.mask = LVIF_TEXT | LVIF_PARAM;
     li.iItem = row;
     li.iSubItem = 0;
     li.pszText = const_cast<LPWSTR>(h.action_desc.c_str());
-    li.lParam = static_cast<LPARAM>(row);
+    li.lParam = static_cast<LPARAM>(i);  // 数据下标,不是显示行号
     ListView_InsertItem(s_hTable, &li);
 
-    std::wstring eff = h.accept_new.empty() ? h.accept : h.accept_new;
     ListView_SetItemText(s_hTable, row, 1, const_cast<LPWSTR>(eff.c_str()));
     // New 列 (col 2): 用户编辑后显示;否则显示空(绿对勾),或 "未改"
     if (!h.accept_new.empty() && h.accept_new != h.accept) {
@@ -767,40 +931,62 @@ void ShortcutSettings::PopulateTable() {
     }
     ++row;
   }
+  // T102: 状态行收口 —— 所有改动 in-memory 状态的路径都经过这里刷新
+  RefreshStatus();
 }
 
-void ShortcutSettings::UpdateRow(int row) {
+// T103: 显示行 → m_hotkeys 数据下标。commctrl.h 既无 ListView_GetItemData 宏，
+// 也无 LVM_GETITEMDATA 常量（SDK 10.0.26100 核对：整棵 Include 树 0 命中，
+// 该消息位被跳过），故走 ListView_GetItem + LVIF_PARAM 读 lParam。
+static int TableItemData(HWND hTable, int item) {
+  LVITEMW lvi = {};
+  lvi.mask = LVIF_PARAM;
+  lvi.iItem = item;
+  lvi.iSubItem = 0;
+  if (!ListView_GetItem(hTable, &lvi))
+    return -1;
+  return static_cast<int>(lvi.lParam);
+}
+
+void ShortcutSettings::UpdateRow(int dataRow) {
   if (!s_hTable || !IsWindow(s_hTable))
     return;
-  if (row < 0 || row >= static_cast<int>(m_hotkeys.size()))
+  if (dataRow < 0 || dataRow >= static_cast<int>(m_hotkeys.size()))
     return;
-  const auto& h = m_hotkeys[row];
+  // T103: 显示行号 != 数据下标,必须按 lParam 反查
+  const int count = ListView_GetItemCount(s_hTable);
+  int item = -1;
+  for (int i = 0; i < count; ++i) {
+    if (TableItemData(s_hTable, i) == dataRow) {
+      item = i;
+      break;
+    }
+  }
+  if (item < 0) {  // 被过滤掉 / 尚未填充
+    PopulateTable();
+    return;
+  }
+  const auto& h = m_hotkeys[dataRow];
   std::wstring eff = h.accept_new.empty() ? h.accept : h.accept_new;
-  ListView_SetItemText(s_hTable, row, 1, const_cast<LPWSTR>(eff.c_str()));
+  ListView_SetItemText(s_hTable, item, 1, const_cast<LPWSTR>(eff.c_str()));
   if (!h.accept_new.empty() && h.accept_new != h.accept) {
-    ListView_SetItemText(s_hTable, row, 2,
+    ListView_SetItemText(s_hTable, item, 2,
                          const_cast<LPWSTR>(h.accept_new.c_str()));
   } else {
-    ListView_SetItemText(s_hTable, row, 2, const_cast<wchar_t*>(L""));
+    ListView_SetItemText(s_hTable, item, 2, const_cast<wchar_t*>(L""));
   }
+  RefreshStatus();
 }
 
 // ===== Search filter =====
 
 void ShortcutSettings::ApplySearchFilter(const std::wstring& q) {
-  if (!s_hTable || !IsWindow(s_hTable))
-    return;
-  // 简单 substring + case-insensitive (spec §8 decision)
-  for (int i = 0; i < ListView_GetItemCount(s_hTable); ++i) {
-    const auto& h = m_hotkeys[i];
-    std::wstring eff = h.accept_new.empty() ? h.accept : h.accept_new;
-    bool match = q.empty() || ContainsCI(h.action_desc, q) ||
-                 ContainsCI(h.accept, q) || ContainsCI(eff, q) ||
-                 ContainsCI(h.action_yaml, q);
-    // 简化: 这里不实际 hide item (LVS_REPORT 不支持),只是 repopulate
-    // 真要 hide 用 ListView_SetItemState(LVIS_CUT); 简化为刷新
-  }
+  // T103: 原实现把 match 算完就丢,再无条件 PopulateTable ⇒ 输入任何关键词
+  // 列表都不变(假过滤)。现在过滤词进 s_filterQuery,由 PopulateTable 真正
+  // 按匹配重建列表。
+  s_filterQuery = q;
   PopulateTable();
+  RepaintLayered(s_hwnd);
 }
 
 // ===== Capturing =====
@@ -828,6 +1014,7 @@ void ShortcutSettings::EnterCapturing(int row) {
                         GetModuleHandle(nullptr), nullptr);
   }
   SetTimer(s_hwnd, IDT_POPOVER, kPopoverShowMs, nullptr);
+  SetPopoverHint(L"请按快捷键…（Esc 还原 / Backspace 清空）");
   PopulateTable();  // refresh (no special UI marking - lParam remains, captured
                     // row handled in repaint)
   RepaintLayered(s_hwnd);
@@ -837,9 +1024,20 @@ void ShortcutSettings::ExitCapturing(bool save) {
   if (s_capturingRow < 0)
     return;
   if (save) {
-    // 把 s_pendingChord 写入 m_hotkeys[s_capturingRow].accept_new
     if (s_capturingRow >= 0 &&
         s_capturingRow < static_cast<int>(m_hotkeys.size())) {
+      // T101: 硬错误拦截 (design §4.5 / §6.3) —— Shift_L / Shift_R 单键
+      // 写进 accept 会破坏 librime 的 Shift 语义, 命中时报错并**留在捕获态**,
+      // 让用户重按或 Esc 还原, 绝不写进 accept_new。
+      const ConflictReport hard = CheckConflict(
+          s_pendingChord, m_hotkeys[s_capturingRow].when, s_capturingRow);
+      if (hard.score >= 2 && hard.l18_l19_error) {
+        SetPopoverHint(ConflictHintText(hard));
+        RefreshStatus();
+        RepaintLayered(s_hwnd);
+        return;
+      }
+      // 把 s_pendingChord 写入 m_hotkeys[s_capturingRow].accept_new
       m_hotkeys[s_capturingRow].accept_new = s_pendingChord;
     }
   } else {
@@ -879,10 +1077,81 @@ void ShortcutSettings::ResetCapturingRow() {
 void ShortcutSettings::SetCaptureHint(const wchar_t* text) {
   if (!text)
     return;
+  // T101: 只写 popover。状态行现在由 RefreshStatus() 独占持有
+  // ("● 未保存 (N 修改)" + 冲突计数),不再被一次性提示覆盖。
+  SetPopoverHint(text);
+}
+
+void ShortcutSettings::SetPopoverHint(const std::wstring& text) {
   if (s_hPopover && IsWindow(s_hPopover))
-    SetWindowTextW(s_hPopover, text);
-  if (s_hStatus && IsWindow(s_hStatus))
-    SetWindowTextW(s_hStatus, text);
+    SetWindowTextW(s_hPopover, text.c_str());
+}
+
+// T101: design §4.5 的四档中文文案
+std::wstring ShortcutSettings::ConflictHintText(const ConflictReport& r) {
+  if (r.l18_l19_error)
+    return L"✗ 此组合不被允许 (Shift_L/R 单键)";
+  if (r.duplicate_error)
+    return L"⚠ " + r.warning_action + L"，仍可保存";
+  if (r.score >= 1)
+    return L"⚠ " + r.warning_action;
+  return L"✓ 无冲突";
+}
+
+// T101: 捕获过程中的实时冲突检测 (hook 路径 —— 只做内存比较, 无 I/O)
+void ShortcutSettings::UpdateCaptureConflict() {
+  if (s_capturingRow < 0 ||
+      s_capturingRow >= static_cast<int>(m_hotkeys.size())) {
+    return;
+  }
+  if (s_pendingChord.empty())
+    return;
+  const ConflictReport r = CheckConflict(
+      s_pendingChord, m_hotkeys[s_capturingRow].when, s_capturingRow);
+  SetPopoverHint(L"⌨ " + s_pendingChord + L" · " + ConflictHintText(r));
+  RefreshStatus();
+  RepaintLayered(s_hwnd);
+}
+
+// T102: 状态行统一刷新
+void ShortcutSettings::RefreshStatus() {
+  if (!s_hStatus || !IsWindow(s_hStatus))
+    return;
+  int modified = 0;
+  int conflicts = 0;
+  for (int i = 0; i < static_cast<int>(m_hotkeys.size()); ++i) {
+    const auto& h = m_hotkeys[i];
+    const bool changed = !h.accept_new.empty() && h.accept_new != h.accept;
+    if (changed)
+      ++modified;
+    const bool capturing = (i == s_capturingRow);
+    // 未改动的行不参与冲突统计 —— 否则一开面板就报一片"覆盖默认行为"
+    if (!changed && !capturing)
+      continue;
+    if (capturing && s_pendingChord.empty())
+      continue;
+    std::wstring eff = changed ? h.accept_new : h.accept;
+    if (capturing && !s_pendingChord.empty())
+      eff = s_pendingChord;
+    if (eff.empty())
+      continue;
+    if (CheckConflict(eff, h.when, i).score > 0)
+      ++conflicts;
+  }
+
+  std::wstring text = L"● 未保存 (" + std::to_wstring(modified) + L" 修改)";
+  if (conflicts > 0)
+    text += L"   ⚠ " + std::to_wstring(conflicts) + L" 个冲突";
+  else
+    text += L"   ✓ 无冲突";
+  SetWindowTextW(s_hStatus, text.c_str());
+
+  // OnCtlColor 据此决定文字颜色 (冲突=警示橙)
+  const bool nowConflict = (conflicts > 0);
+  if (nowConflict != s_statusConflict) {
+    s_statusConflict = nowConflict;
+    InvalidateRect(s_hStatus, nullptr, TRUE);
+  }
 }
 
 LRESULT CALLBACK ShortcutSettings::LowLevelKeyboardProc(int nCode,
@@ -943,9 +1212,8 @@ LRESULT CALLBACK ShortcutSettings::LowLevelKeyboardProc(int nCode,
   }
 
   ShortcutSettings::s_pendingChord = captured.pattern;
-  // 实时冲突检测 → 更新 popover text (此处简化:re-paint)
-  SetCaptureHint(captured.pattern.c_str());
-  ShortcutSettings::RepaintLayered(ShortcutSettings::s_hwnd);
+  // T101: 实时冲突检测 —— 纯内存比较, 不 SendInput / 不 IPC (AP-045-B)
+  ShortcutSettings::UpdateCaptureConflict();
 
   // 不吞掉修饰键以外的键 → 让用户按键透传到 WeaselServer,但我们已经记录
   // 这里为了 UX 完整,继续传给下一 hook(避免吞掉其他应用);若 ShortcutSettings
@@ -1273,14 +1541,16 @@ LRESULT ShortcutSettings::OnNotify(HWND hwnd, LPARAM lp) {
   }
   if (nmhdr->code == NM_CLICK || nmhdr->code == NM_DBLCLK) {
     LPNMITEMACTIVATE ia = reinterpret_cast<LPNMITEMACTIVATE>(lp);
-    int row = ia->iItem;
+    // T103: 搜索框过滤后 显示行号 ≠ m_hotkeys 下标 ⇒ 一律按 lParam 取数据下标
+    int row = ia->iItem >= 0 ? TableItemData(s_hTable, ia->iItem) : -1;
     if (row >= 0 && row < static_cast<int>(m_hotkeys.size())) {
       EnterCapturing(row);
       return 1;
     }
   } else if (nmhdr->code == NM_RCLICK) {
     LPNMITEMACTIVATE ia = reinterpret_cast<LPNMITEMACTIVATE>(lp);
-    int row = ia->iItem;
+    // T103: 同上 —— 右键命中的行也按 lParam 取数据下标
+    int row = ia->iItem >= 0 ? TableItemData(s_hTable, ia->iItem) : -1;
     if (row >= 0 && row < static_cast<int>(m_hotkeys.size())) {
       // 弹简易菜单:重置此行
       HMENU hMenu = CreatePopupMenu();
@@ -1337,21 +1607,46 @@ LRESULT ShortcutSettings::OnCommand(HWND hwnd, WPARAM wp) {
           L"恢复默认",  // 恢复默认
           MB_YESNO | MB_ICONWARNING);
       if (ok == IDYES) {
-        m_hotkeys = m_defaults;
+        // spec 045 P0: 原来还原的是 m_defaults —— 而 m_defaults 是"打开时
+        // 读到的内容",所以对有自定义的用户来说,"恢复默认"等于什么都没做。
+        // 这里真的回到 schema 内置默认表。
+        m_hotkeys.clear();
+        LoadDefaults(m_hotkeys);
         PopulateTable();
         RepaintLayered(hwnd);
       }
       return 0;
     }
     case ID_BTN_IMPORT: {
-      // 简化: 同 LoadHotkeys 用户路径
-      LoadHotkeys(s_yamlPath, m_hotkeys);
+      // spec 045 P0: 原来"导入"是重读同一个线上文件(把未保存的编辑丢掉),
+      // "导出"是覆写同一个线上文件(既不 deploy 又骗人)。现在导入/导出走
+      // 一对独立的往返文件,线上配置只由"保存"按钮改。
+      std::vector<Hotkey> imported;
+      if (!LoadHotkeys(ExportYamlPath(), imported) || imported.empty()) {
+        if (s_hStatus && IsWindow(s_hStatus)) {
+          SetWindowTextW(s_hStatus, L"✗ 导入失败：没有可导入的导出文件");
+        }
+        return 0;
+      }
+      m_hotkeys = imported;
       PopulateTable();
       RepaintLayered(hwnd);
+      if (s_hStatus && IsWindow(s_hStatus)) {
+        SetWindowTextW(s_hStatus, L"✓ 已导入导出文件");
+      }
       return 0;
     }
     case ID_BTN_EXPORT: {
-      SaveHotkeys(s_yamlPath, m_hotkeys);
+      const std::wstring path = ExportYamlPath();
+      if (!SaveHotkeys(path, m_hotkeys, true)) {
+        if (s_hStatus && IsWindow(s_hStatus)) {
+          SetWindowTextW(s_hStatus, L"✗ 导出失败：无法写入导出文件");
+        }
+        return 0;
+      }
+      if (s_hStatus && IsWindow(s_hStatus)) {
+        SetWindowTextW(s_hStatus, (L"✓ 已导出到 " + path).c_str());
+      }
       return 0;
     }
     case ID_CHK_ALWAYS_SHOW: {
@@ -1423,7 +1718,8 @@ LRESULT ShortcutSettings::OnCtlColor(HWND hwnd, WPARAM wp, LPARAM lp) {
   }
   if (target == s_hStatus) {
     SetBkColor(hdc, kBgTop);
-    SetTextColor(hdc, kTextSecondary);
+    // T102: 有冲突时警示橙, 否则沿用次级文字色 (不新增硬编码颜色)
+    SetTextColor(hdc, s_statusConflict ? kWarningText : kTextSecondary);
     static HBRUSH sb2 = nullptr;
     if (!sb2)
       sb2 = CreateSolidBrush(kBgTop);
@@ -1437,21 +1733,60 @@ LRESULT ShortcutSettings::OnCtlColor(HWND hwnd, WPARAM wp, LPARAM lp) {
 bool ShortcutSettings::SaveAndDeploy() {
   if (s_yamlPath.empty())
     return false;
-  if (!SaveHotkeys(s_yamlPath, m_hotkeys))
+  if (!SaveHotkeys(s_yamlPath, m_hotkeys)) {
+    if (s_hStatus && IsWindow(s_hStatus)) {
+      // 拒绝写入和写失败是两件事,文案不能混:前者要用户手工合并旧 patch,
+      // 后者是权限/占用问题。UI 不对自己做的事说谎。
+      SetWindowTextW(
+          s_hStatus,
+          g_saveStats.refused
+              ? L"✗ 未写入：default.custom.yaml 已有 patch 段，请手工合并后再保存"
+              : L"✗ 保存失败：无法写入 default.custom.yaml");
+    }
     return false;
-  SpawnDeploy();
+  }
+  const bool deployed = SpawnDeploy();
+  // spec 045 P0: 原来这里无条件写 "deploy 已触发", 而 SpawnDeploy() 是空函数
+  // —— UI 在说谎,新快捷键其实永远不生效。现在按实际返回值给文案。
   if (s_hStatus && IsWindow(s_hStatus)) {
-    SetWindowTextW(
-        s_hStatus,
-        L"✓ 已保存 · deploy "
-        L"已触发");  // ✓ 已保存 · deploy 已触发
+    std::wstring msg =
+        deployed ? L"✓ 已保存 · 已触发部署，新快捷键已生效"
+                 : L"⚠ 已保存 · 部署未触发（新快捷键尚未生效）";
+    // 跳过与备份也要说出来,静默处理等于悄悄丢用户的编辑。
+    if (g_saveStats.skipped_no_action > 0) {
+      msg += L" · " + std::to_wstring(g_saveStats.skipped_no_action) +
+             L" 行缺 YAML 动作已跳过";
+    }
+    if (g_saveStats.backed_up)
+      msg += L" · 原文件已备份";
+    SetWindowTextW(s_hStatus, msg.c_str());
   }
   return true;
 }
 
-void ShortcutSettings::SpawnDeploy() {
-  // spec §7.1: 触发 WeaselDeployer /deploy。spec AP-045-B: 不在 hook 做 IPC。
-  // 后续 ship 加 ShellExecuteW(L"WeaselDeployer.exe", L"/deploy"); 这里占位。
+bool ShortcutSettings::SpawnDeploy() {
+  // spec §7.1: 触发 WeaselDeployer /deploy。spec AP-045-B: 不在 hook 做 IPC
+  // —— 这里跑在按钮点击路径上,不在键盘 hook 里,合规。
+  // WeaselDeployer.exe 与 WeaselServer.exe 同目录(output/install.nsi 如此安装)。
+  wchar_t exe_path[MAX_PATH] = {0};
+  GetModuleFileNameW(nullptr, exe_path, _countof(exe_path));
+  std::wstring dir(exe_path);
+  const size_t pos = dir.find_last_of(L"\\/");
+  if (pos == std::wstring::npos)
+    return false;
+  const std::wstring deployer = dir.substr(0, pos + 1) + L"WeaselDeployer.exe";
+  if (GetFileAttributesW(deployer.c_str()) == INVALID_FILE_ATTRIBUTES)
+    return false;
+  const HINSTANCE rc = ShellExecuteW(nullptr, nullptr, deployer.c_str(),
+                                      L"/deploy", nullptr, SW_SHOWNORMAL);
+  return reinterpret_cast<INT_PTR>(rc) > 32;
+}
+
+std::wstring ShortcutSettings::ExportYamlPath() {
+  const std::wstring dir = WeaselUserDataPath().wstring();
+  if (dir.empty())
+    return L"default.custom.exported.yaml";
+  return dir + L"\\default.custom.exported.yaml";
 }
 
 // ===== spec 095: 「界面 > 快捷面板常驻」勾选框的生产 API =====

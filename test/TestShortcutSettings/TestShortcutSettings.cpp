@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -26,6 +27,17 @@
 #include <commctrl.h>
 
 #include "ShortcutSettings.h"
+
+// 测试本地实现: 生产版在 RimeWithWeasel/WeaselUtility.cpp, 本测试工程不链接那个
+// TU(会把 librime 依赖整串拖进来, 直接 LNK2001)。与 test/TestTrayRestoreIgnored
+// 同思路 —— 只提供链接需要的最小实现; 用例一律用 SetYamlPath 显式指定路径,
+// 谁都不读这个目录。
+std::filesystem::path WeaselUserDataPath() {
+  wchar_t buf[MAX_PATH] = {0};
+  DWORD n = ::GetTempPathW(MAX_PATH, buf);
+  if (n == 0 || n >= MAX_PATH) return std::filesystem::path(L".");
+  return std::filesystem::path(buf) / L"FluxingTestUserData";
+}
 
 namespace test {
 
@@ -324,6 +336,130 @@ static void TestAlwaysShowProductionApi() {
   ::DeleteFileW(p.c_str());
 }
 
+// ===== T106 — default.custom.yaml 增量托管块落盘 =====
+//
+// 这几条打的是「一次保存会不会毁用户配置」这个真风险: 全量 trunc 重写会吃掉
+// 用户的 schema_list / menu 段, 空 patch 会清空 key_binder。判据都打在落盘字节
+// 上, 不看函数返回值自证。
+
+static bool WriteRaw(const std::wstring& path, const std::string& bytes) {
+  std::ofstream f(path, std::ios::binary | std::ios::trunc);
+  if (!f)
+    return false;
+  f.write(bytes.c_str(), static_cast<std::streamsize>(bytes.size()));
+  return f.good();
+}
+
+static int CountOf(const std::string& hay, const std::string& needle) {
+  int n = 0;
+  for (size_t p = hay.find(needle); p != std::string::npos;
+       p = hay.find(needle, p + needle.size()))
+    ++n;
+  return n;
+}
+
+static ShortcutSettings::Hotkey MakeHk(const wchar_t* accept,
+                                       const wchar_t* action_yaml,
+                                       bool is_default) {
+  ShortcutSettings::Hotkey h{};
+  h.action = ShortcutSettings::Action_CustomUser;
+  h.action_desc = L"自定义";
+  h.accept = accept;
+  h.when = L"always";
+  h.action_yaml = action_yaml;
+  h.is_custom = !is_default;
+  h.is_default = is_default;
+  return h;
+}
+
+// T106-a — 首次落盘: 只写改过的行, 带托管块标记与 UTF-8 BOM
+static void TestSaveHotkeysWritesOnlyEdited() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t106_a.yaml");
+  ::DeleteFileW(p.c_str());
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(MakeHk(L"Shift+Space", L"toggle: full_shape", true));
+  rows.push_back(MakeHk(L"Control+Shift+L", L"custom: open_quick_panel", true));
+  rows.back().accept_new = L"Control+Alt+L";  // 用户改过这一行
+
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(raw.size() > 3 && (unsigned char)raw[0] == 0xEF);
+  EXPECT(CountOf(raw, "fluxing-shortcuts (spec 045) managed block") == 1);
+  EXPECT(CountOf(raw, "fluxing-shortcuts (spec 045) end") == 1);
+  EXPECT(raw.find("Control+Alt+L") != std::string::npos);
+  // 没动过的内置默认不该出现在 custom 文件里
+  EXPECT(raw.find("Shift+Space") == std::string::npos);
+  EXPECT(CountOf(raw, "\npatch:") == 1);
+  ::DeleteFileW(p.c_str());
+}
+
+// T106-b — 二次保存只替换托管块: 块外内容 (schema_list 等) 必须原样活着
+static void TestSaveHotkeysPreservesOutsideBlock() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t106_b.yaml");
+  const std::string outside =
+      "\xEF\xBB\xBF"
+      "schema_list:\r\n  - schema: rime_ice\r\n";
+  EXPECT(WriteRaw(p, outside));
+
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(MakeHk(L"Control+Shift+L", L"custom: open_quick_panel", true));
+  rows.back().accept_new = L"Control+Alt+L";
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(raw.find("schema_list:") != std::string::npos);
+  EXPECT(CountOf(raw, "managed block") == 1);
+
+  // 换一个键再存 ⇒ 旧块被替换, 不是追加第二个块
+  rows.back().accept_new = L"Control+Alt+K";
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(CountOf(raw, "managed block") == 1);
+  EXPECT(raw.find("Control+Alt+K") != std::string::npos);
+  EXPECT(raw.find("Control+Alt+L") == std::string::npos);
+  EXPECT(raw.find("schema_list:") != std::string::npos);
+  ::DeleteFileW(p.c_str());
+}
+
+// T106-c — 旧文件已有顶层 patch: 且无托管块 ⇒ 拒绝写, 一个字节都不许动
+static void TestSaveHotkeysRefusesExistingPatch() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t106_c.yaml");
+  const std::string manual =
+      "\xEF\xBB\xBF"
+      "patch:\r\n  key_binder/bindings:\r\n"
+      "    - { when: always, accept: X, send: Y }\r\n";
+  EXPECT(WriteRaw(p, manual));
+
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(MakeHk(L"Control+Alt+L", L"custom: open_quick_panel", true));
+  EXPECT(!ShortcutSettings::SaveHotkeys(p, rows));  // 明确拒绝
+
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(raw == manual);
+  ::DeleteFileW(p.c_str());
+}
+
+// T106-d — 没有 YAML 动作的行不许写盘 (否则是 librime 直接忽略的坏 binding)
+static void TestSaveHotkeysSkipsNoAction() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t106_d.yaml");
+  ::DeleteFileW(p.c_str());
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(MakeHk(L"Control+Alt+L", L"", true));
+  rows.back().accept_new = L"Control+Alt+K";
+
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(raw.find("managed block") != std::string::npos);
+  // 空 patch 会把用户已配的 key_binder 覆盖成空 ⇒ 宁可只写注释
+  EXPECT(raw.find("\npatch:") == std::string::npos);
+  EXPECT(raw.find("Control+Alt+K") == std::string::npos);
+  ::DeleteFileW(p.c_str());
+}
+
 }  // namespace test
 
 int wmain(int /*argc*/, wchar_t** /*argv*/) {
@@ -342,6 +478,10 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
   TestAlwaysShowStateWriteRoundTrip();
   TestAlwaysShowResolveFromFiles();
   TestAlwaysShowProductionApi();
+  TestSaveHotkeysWritesOnlyEdited();
+  TestSaveHotkeysPreservesOutsideBlock();
+  TestSaveHotkeysRefusesExistingPatch();
+  TestSaveHotkeysSkipsNoAction();
   std::wcout << L"[TestShortcutSettings] PASS=" << s_pass
               << L" FAIL=" << s_fail << std::endl;
   return s_fail == 0 ? 0 : 1;
