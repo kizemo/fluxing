@@ -1416,6 +1416,15 @@ LRESULT CALLBACK ShortcutSettings::WndProc(HWND hwnd,
       return 0;
     }
     case WM_KILLFOCUS: {
+      // v0.19.0.33 fix: 焦点在对话框自己的子控件之间转移时,父窗口同样会收到
+      // WM_KILLFOCUS(wParam = 获得焦点的子窗口)。原来这里无条件 Hide() ⇒
+      // 用户打开面板超过 kShowGraceMs 之后点任意一行,面板当场自毁:
+      // 真机实测(批次 N)先点行 → 捕获 popover 刚创建就被销毁,后面所有键捕获
+      // 步骤全部无从触发。只有焦点真的离开本窗口(落到别的窗口)才该隐藏。
+      HWND next = reinterpret_cast<HWND>(wp);
+      if (next == hwnd || (next && IsChild(hwnd, next))) {
+        return 0;
+      }
       DWORD nowTick = GetTickCount();
       if ((nowTick - s_showTime) >= kShowGraceMs) {
         Hide();
@@ -1541,12 +1550,18 @@ LRESULT ShortcutSettings::OnCreate(HWND hwnd) {
                                     LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
 
   // 按钮行: + 自定义 / ⟳ 恢复默认 / 导入 / 导出 / 取消 / 保存
-  auto makeBtn = [&hfUi](HWND& out, const wchar_t* label, UINT id, int x,
-                         int y) {
+  // v0.19.0.32 fix: 父窗口必须用 OnCreate 的入参 hwnd,不能用
+  // ShortcutSettings::s_hwnd —— s_hwnd 是在 CreateWindowExW 返回之后才被赋值,
+  // WM_CREATE 期间它仍是 nullptr ⇒ CreateWindowExW(WS_CHILD, 父=NULL) 失败 ⇒
+  // 底栏 6 个按钮(自定义/恢复默认/导入/导出/取消/保存)全部从未创建。
+  // 真机实测症状:对话框能打开,但子控件只有搜索框/勾选框/状态行/表格,
+  // 保存按钮不存在 ⇒ 界面路径无法落盘。
+  auto makeBtn = [&hfUi, hwnd](HWND& out, const wchar_t* label, UINT id, int x,
+                               int y) {
     out = CreateWindowExW(
         0, L"BUTTON", label,
         WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON, x, y, kBtnW,
-        kBtnH, ShortcutSettings::s_hwnd, reinterpret_cast<HMENU>(id),
+        kBtnH, hwnd, reinterpret_cast<HMENU>(id),
         GetModuleHandle(nullptr), nullptr);
     if (out && hfUi) {
       SendMessageW(out, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);

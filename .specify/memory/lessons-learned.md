@@ -14466,3 +14466,64 @@ handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四
 
 **关联**：`WeaselServer/ShortcutSettings.cpp`、`.specify/specs/045-shortcut-settings/tasks.md`、
 `WeaselDeployer/HotkeyEditorDialog.cpp`（同源正确写法参照）、批次 L 交接。
+
+## L204 - `CreateWindowExW` 的父窗口不能用「`CreateWindowExW` 返回后才赋值的静态句柄」：`WM_CREATE` 期间它还是 `nullptr` ⇒ 子控件**静默**不创建（2026-11-09）
+
+**证据**：2026-11-09 批次 N 真机验收 spec 045 快捷键设置面板。`OnCreate()` 里的 `makeBtn` lambda 用
+`ShortcutSettings::s_hwnd` 当父窗口，而 `s_hwnd` 是在 `CreateWindowExW` **返回之后**才被赋值的静态成员
+⇒ `WM_CREATE` 回调期间它仍是 `nullptr` ⇒ `CreateWindowExW(WS_CHILD, hWndParent=NULL, …)` **失败**，
+`CreateWindowExW` 返回 NULL 而**没有任何错误提示** ⇒ 底栏 6 个按钮（自定义 / 恢复默认 / 导入 / 导出 / 取消 / 保存）
+一个都没建出来。症状极具迷惑性：对话框能打开、表格有 12 行、搜索框能用，**唯独底栏空空**，
+界面路径根本走不到「保存」。
+
+**怎么用**：
+- 在 `WM_CREATE` / `OnCreate` 里建子控件，父窗口**一律用 `OnCreate` 的入参 `hwnd`**，
+  绝不用「即将被赋值的静态句柄」——赋值发生在 `CreateWindowExW` 返回之后，**晚于** `WM_CREATE`。
+- `CreateWindowExW` 返回 NULL 要**当成错误处理**（至少记一笔），不能默许：静默失败会让整个 UI 少一半控件，
+  而界面「看起来还是能开」。
+- 自检口径：**枚举子控件并按类名分组**（`GetClassNameW`）数一数 BUTTON 有几个 ——
+  本次就是靠「CHILDREN 里 0 个 BUTTON」而不是靠肉眼发现的。
+
+**推广**：任何「静态句柄 + 在其创建回调里用它当父/属主」的写法都有同一个坑；
+写完立刻枚举子控件核对数量，比等用户点「保存」才发现强得多。
+
+## L205 - `WM_KILLFOCUS` 会在焦点于**本窗口的子控件之间**转移时发给父窗口：无条件 `Hide()` ⇒ grace 期一过，点任意行面板自毁（2026-11-09）
+
+**证据**：2026-11-09 批次 N 真机验收：快捷键设置面板打开超过 `kShowGraceMs`(2s) 后，点表格任意一行 ⇒
+面板**当场消失**。根因不是点击逻辑，而是 `WndProc` 的 `WM_KILLFOCUS` 分支无条件 `Hide()`：
+焦点在对话框**自己的子控件之间**转移时，父窗口同样会收到 `WM_KILLFOCUS`（`wParam` = 获得焦点的那个子窗口），
+此时焦点**并没有离开本窗口**。后果是捕获用的 popover 刚创建就被销毁，后面所有键捕获步骤都无从触发 ——
+表现为「面板能开但一点就没」，很容易被误判成「点击没送达」。
+
+**怎么用**：
+- `WM_KILLFOCUS` 的 `wParam` 是**即将获得焦点的窗口**。先判归属：
+  `HWND next = (HWND)wp; if (next == hwnd || IsChild(hwnd, next)) return 0;` ——
+  焦点还在自己家里就别隐藏；真正离开才走 auto-hide 的 grace 逻辑。
+- 配对的 `WM_ACTIVATEAPP(FALSE)` 才是「整个应用失去前台」的正确判据，两者不要互相替代。
+- 症状辨识：**「打开后先静止一会儿，再点任何控件就消失」** ⇒ 焦点归属问题；
+  **「一打开就消失」** ⇒ 才是 grace/计时器问题。两者的时间特征完全不同。
+
+## L206 - librime 的 `patch:` 是**按 key 覆盖**而不是「增量追加」：`key_binder/bindings` 普通键 = 整表覆盖，`key_binder/bindings/+` 才是追加；而且 `default.custom.yaml` 的 `patch:` 会落到**全局预设** `default.yaml`（2026-11-09）
+
+**证据**：2026-11-09 批次 N。快捷键设置面板的托管块写出的是普通键 `key_binder/bindings:`。查 librime 源码：
+- `librime/src/rime/config/config_compiler.cc`：`ADD_SUFFIX_OPERATOR = "/+"`；`IsAppending/IsMerging` 只认
+  `/+` 后缀（`merge_tree=false` 时）；`EditNode()` 里普通键走 `*target = value` ⇒ **整表覆盖**，
+  只有 `/+` 才走 `AppendToList`。
+- `librime/src/rime/config/auto_patch_config_plugin.cc`：`resource_id="default"` ⇒ 套用
+  `default.custom` 的 `patch` 节点 ⇒ **补丁落在全局预设 `default.yaml` 本身**。
+- `librime/src/rime/config/legacy_preset_config_plugin.cc`：各方案用
+  `key_binder/import_preset: default` 继承全局预设的 key_binder。
+⇒ 面板只写 **1 条** binding，就把 `default.yaml` 的整张快捷键表（Shift+space 中英切换 / comma·period 翻页 /
+  Control+1·2 选候选 / Tab·Shift+Tab / Alt+←→ / KP_0..9 …）**覆盖成 1 条**，用户默认快捷键全部消失。
+真机证据：`build/default.yaml` 的 `key_binder/bindings` 只剩面板写的那 1 条。
+此前 T106 的推理「不写空 `bindings` 就能避免清空 key_binder」**不成立**：只要写了一条，就是整表覆盖。
+
+**怎么用**：
+- 在 librime 里改**列表型**配置项（`key_binder/bindings`、`menu`、`switches`…）时，
+  `patch:` 里的普通键 = **替换整个列表**。想「加一条」用 `xxx/+`；想「只改某一条」**做不到** ——
+  只能把**完整列表**写回去。
+- 「只写需要 override 的行」这种直觉在**树形 map** 上成立，在**列表**上不成立。
+- 写列表型 patch 前先问一句：**这个列表的其它项从哪来？** 默认值在哪个文件？把它**原样带回**，
+  只替换真正改动的那几条。
+- 验证不能只看「我写的那条生效了」，要看**没动的那些还在不在**：
+  部署后检查 `build/<resource>.yaml` 里该列表的**条数**，而不只是 grep 我写的那个键。

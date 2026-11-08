@@ -13,6 +13,8 @@
 - [x] **T004 导入/导出是假实现且危险** — 导入 = 重读同一个线上文件（丢未保存编辑）；导出 = **覆写同一个线上文件**（既不 deploy 又骗人）。改为走一对独立往返文件 `default.custom.exported.yaml`，线上配置只由「保存」按钮改。
 - [x] **T005「恢复默认」等于没做** — 还原的是 `m_defaults`，而 `m_defaults` = 打开时读到的内容 ⇒ 对有自定义的用户点「恢复默认」什么都不会变。改为真的回到 schema 内置默认表（`LoadDefaults`）。
 - [x] **T006 yaml 能打开但没有 bindings 段 ⇒ 表格 0 行** — 原来只判 `LoadHotkeys` 的返回值。改为「解析失败 **或** 结果为空」都回落到内置默认表。
+- [x] **T007 底栏 6 个按钮从未创建** — `OnCreate()` 的 `makeBtn` lambda 用 `ShortcutSettings::s_hwnd` 当父窗口，而 `s_hwnd` 是在 `CreateWindowExW` **返回之后**才被赋值 ⇒ `WM_CREATE` 期间它仍是 `nullptr` ⇒ `CreateWindowExW(WS_CHILD, 父=NULL)` 失败 ⇒ 「+ 自定义 / ⟳ 恢复默认 / 导入 / 导出 / 取消 / 保存」**一个都没建出来**（真机实测：对话框子控件里没有任何 BUTTON，界面路径根本走不到落盘）。**(2026-11-09 修: lambda 改捕获 `OnCreate` 的入参 `hwnd` 当父窗口; 注释标 v0.19.0.32)**
+- [x] **T008 打开超过 2 秒后点任意行 ⇒ 面板当场自毁** — `WndProc` 的 `WM_KILLFOCUS` 无条件 `Hide()`，但焦点在对话框**自身子控件之间**转移时，父窗口同样会收到 `WM_KILLFOCUS`（`wParam` = 获得焦点的那个子窗口）⇒ grace 期一过，点行即销毁面板，捕获 popover 刚建出来就被销毁，后面所有键捕获步骤无从触发。**(2026-11-09 修: 先取 `wParam` 的 `next`，`next == hwnd || IsChild(hwnd, next)` ⇒ 不隐藏；焦点真正离开本窗口才按 grace 隐藏（`WM_ACTIVATEAPP(FALSE)` 路径不变）；注释标 v0.19.0.33)**
 
 ## P1 — 功能接线缺失（实现已存在但零调用点）
 
@@ -23,6 +25,7 @@
 - [ ] **T105 design §2.3 自定义快捷键子 modal** — 「+ 自定义」当前只 push 一行 placeholder（`accept=""` / `custom: user_added`），没有动作类型 / 动作值 / 触发条件的选择。
 - [x] **T106 写盘是全量而非增量 patch** — 现在写出全部行（含默认行），且 `action_yaml` 为空的行会写出**无动作的坏 binding**。**(2026-11-08 完成: 托管块 `# >>> fluxing shortkey-managed` 只含需 override 的行; 无 `action_yaml` 一律跳过并计入状态文案; 零行不写空 `patch:`/`bindings:`; 首次接管先 `BackupFile`, 失败即不写; 旧文件已有顶层 `patch:` 且无托管块 ⇒ 拒写报「未写入」; 正文级真合并留 T107)**
 - [x] **T107 与既有 `patch:` 正文级真合并** — T106 当前对「旧文件已有顶层 `patch:` 且无托管块」采取**拒写**（避免 YAML 重复键毁配置）。需实现按 key 递归合并后再写，才能接管老用户配置。**(2026-11-08 完成: 托管块改为只含 `key_binder/bindings:` 子块、不再自带 `patch:`; A 形态=无顶层 `patch:` 时追加, B 形态=有顶层 `patch:` 时把子块插到 `patch:` 行之后（正文逐字节保留）; C 形态仍拒写, 拆成「已有手写 key_binder」与「`patch:` 内联写法」两条独立原因 + 精确中文文案。S1 同批修: 合并判据加 `when`, 命中即 `is_default=false`。单测 116 断言全绿, 主构建通过)**
+- [ ] **T110 保存即清空全局快捷键表（破坏性 patch）** — 托管块写出的键名是普通 `key_binder/bindings:`；librime `config_compiler.cc` 的 `EditNode()` 里**普通键 = 整表覆盖**（`*target = value`），只有以 `/+` 结尾才是追加（`ADD_SUFFIX_OPERATOR = "/+"`）。而 `AutoPatchConfigPlugin` 会把 `default.custom.yaml` 的 `patch:` 套到 `default.yaml`（**全局预设**）本身，各方案再经 `key_binder/import_preset: default` 继承 ⇒ 面板只写 1 条 binding 就把全局快捷键表**整表覆盖成 1 条**（Shift+space 中英切换 / comma·period 翻页 / Control+1·2 选候选 / Tab·Shift+Tab / Alt+←→ / KP_0..9 全部消失）。真机实测：`build/default.yaml` 的 `key_binder/bindings` 只剩 1 条。⇒ T106 的「不写空 `bindings` 就不会清空 key_binder」推理**不成立**：只要写了一条就是整表覆盖。**(根因已坐实；修法 = 写完整合并列表：落盘时把 `default.yaml` 的全量 binding 原样带回，只对用户改动的行做替换/追加 ⇒ 覆盖语义正确且零数据丢失；实施中)**
 
 ## P2 — 界面补全
 
