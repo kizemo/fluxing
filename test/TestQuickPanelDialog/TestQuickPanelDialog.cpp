@@ -1073,10 +1073,12 @@ int main() {
           "T26e: 中文态显示「中」");
     Check(wcscmp(fluxing::panel_status::AsciiModeText(true), L"英") == 0,
           "T26f: 英文态显示「英」");
-    Check(wcscmp(fluxing::panel_status::ShapeModeText(true), L"全") == 0,
-          "T26g: 全角显示「全」");
-    Check(wcscmp(fluxing::panel_status::ShapeModeText(false), L"半") == 0,
-          "T26h: 半角显示「半」");
+    // 批次 H 语义纠正(ADR 0041):槽 5 切的是**标点语言**,不是字符宽度
+    // ⇒ 文案从「全/半」改为「中文标点/英文标点」。
+    Check(wcscmp(fluxing::panel_status::PunctModeText(true), L"中文标点") == 0,
+          "T26g: 中文标点态显示「中文标点」");
+    Check(wcscmp(fluxing::panel_status::PunctModeText(false), L"英文标点") == 0,
+          "T26h: 英文标点态显示「英文标点」");
 
     // 生产回显通道:SetInputState → CurrentInputState。
     QuickPanelDialog::SetInputState(true, true);
@@ -1086,9 +1088,9 @@ int main() {
           "T26i: SetInputState 回读一致(英 + 全角)");
     Check(wcscmp(fluxing::panel_status::AsciiModeText(st.ascii_mode), L"英") ==
                   0 &&
-              wcscmp(fluxing::panel_status::ShapeModeText(st.fullwidth), L"全") ==
-                  0,
-          "T26j: 状态快照映射出「英」「全」");
+              wcscmp(fluxing::panel_status::PunctModeText(st.fullwidth),
+                     L"中文标点") == 0,
+          "T26j: 状态快照映射出「英」「中文标点」");
     QuickPanelDialog::SetInputState(false, false);
   }
 
@@ -1232,11 +1234,12 @@ int main() {
     Check(wcscmp(SlotName(2), L"快捷键设置") == 0, "T28c: 槽 2 名称 = 快捷键设置");
     Check(wcscmp(SlotName(3), L"关于 / 账号说明") == 0,
           "T28d: 槽 3 名称 = 关于 / 账号说明");
-    // v4 stage2: 槽 4/5 = 中英文切换 / 全半角切换;槽 6 才是越界。
+    // v4 stage2: 槽 4/5 = 中英文切换 / 中英文标点切换;槽 6 才是越界。
+    // 批次 H 语义纠正(ADR 0041):槽 5 不是字符**宽度**,是**标点语言**。
     Check(wcscmp(SlotName(4), L"中英文切换") == 0,
           "T28e: 槽 4 名称 = 中英文切换");
-    Check(wcscmp(SlotName(5), L"全半角切换") == 0,
-          "T28e2: 槽 5 名称 = 全半角切换");
+    Check(wcscmp(SlotName(5), L"中英文标点切换") == 0,
+          "T28e2: 槽 5 名称 = 中英文标点切换");
     Check(SlotName(6)[0] == L'\0', "T28e3: 越界槽名 = 空串");
 
     Check(BuildTooltip(0, st) == L"切换到下一个输入方案 · 当前:小狼毫",
@@ -1248,11 +1251,11 @@ int main() {
           "T28h: 槽 2 tooltip = 名称 + 常驻显示态");
     Check(BuildTooltip(3, st) == L"关于 / 账号说明 · 版本:1.1.9.0",
           "T28i: 槽 3 tooltip = 名称 + 版本号");
-    // v4 stage2: 槽 4/5 tooltip 承载中英 / 全半角当前态(需求⑤)。
+    // v4 stage2: 槽 4/5 tooltip 承载中英 / 标点语言当前态(需求⑤)。
     Check(BuildTooltip(4, st) == L"中英文切换 · 当前:中",
           "T28i2: 槽 4 tooltip = 中英文切换 + 当前态");
-    Check(BuildTooltip(5, st) == L"全半角切换 · 当前:全",
-          "T28i3: 槽 5 tooltip = 全半角切换 + 当前态");
+    Check(BuildTooltip(5, st) == L"中英文标点切换 · 当前:中文标点",
+          "T28i3: 槽 5 tooltip = 中英文标点切换 + 当前态");
     Check(BuildTooltip(9, st).empty(), "T28j: 越界槽 tooltip = 空串");
 
     fluxing::panel_status::PanelState en = st;
@@ -1262,8 +1265,8 @@ int main() {
 
     fluxing::panel_status::PanelState half = st;
     half.fullwidth = false;
-    Check(BuildTooltip(5, half) == L"全半角切换 · 当前:半",
-          "T28k2: 半角态 tooltip 显示「半」");
+    Check(BuildTooltip(5, half) == L"中英文标点切换 · 当前:英文标点",
+          "T28k2: 英文标点态 tooltip 显示「英文标点」");
 
     fluxing::panel_status::PanelState unk = st;
     unk.schema_name.clear();
@@ -1289,8 +1292,8 @@ int main() {
     // 也必须回显当前态(需求⑤)。
     Check(QuickPanelDialog::TooltipText(1) == L"中英文切换 · 当前:中",
           "T28o2: 生产 TooltipText(1) 回显中英态");
-    Check(QuickPanelDialog::TooltipText(2) == L"全半角切换 · 当前:半",
-          "T28o3: 生产 TooltipText(2) 回显全半角态");
+    Check(QuickPanelDialog::TooltipText(2) == L"中英文标点切换 · 当前:英文标点",
+          "T28o3: 生产 TooltipText(2) 回显标点语言态");
   }
 
   // ----------------------------------------------------------------
@@ -1418,7 +1421,16 @@ int main() {
   // v8 校正(同批真机人眼反馈):「句号(中英文)都偏大,而中文逗号则偏小,
   // 且变形,看不出是中文逗号。」
   // 判据: 墨迹盒远大于 v6 字形(全角 18x4 / 半角 8x5); 居中后中心恰为
-  // viewBox 中心; 句号收小、逗号放大且为**单一连续轮廓**; 对角方位不退化。
+  // viewBox 中心; 句号收小、对角方位不退化。
+  //
+  // ★ v10(用户指令 2026-11-07):「逗号仍然形状不佳,有锯齿,且圆形部分和
+  //   尾巴部分连接不圆滑。建议直接使用字符逗号」⇒ 逗号从 **12 点多边形**
+  //   换成**真字形**(全角 U+FF0C / 半角 U+002C),由 GDI 抗锯齿渲染。
+  //   为什么多边形必然有锯齿:Polygon 是扫描线填充、**无抗锯齿**,12 点轮廓
+  //   在 11×13 里每段边只跨 1~2 px ⇒ 台阶就是锯齿,加点只会把台阶切碎。
+  //   ⇒ 本块的逗号断言全部改为「码点 + 目标墨迹盒 + 环/逗号间隙」口径;
+  //     多边形顶点相关的断言(旧 T33k 尺寸 / T33l 点数 / T33q 12-10 点)
+  //     已被删,理由记录在 tasks.md(spec 099)。
   // ============================================================
   {
     const fluxing::panel_fwicon::Icon fw =
@@ -1461,15 +1473,18 @@ int main() {
       else
         ++hw_solid;
     }
-    Check(fw_hollow == 1 && fw_solid == 1,
-          "T33e: 全角 = 1 空心环 + 1 单一逗号轮廓(v8 合并 v7 头/尾)");
-    Check(hw_hollow == 0 && hw_solid == 2,
-          "T33f: 半角 = 0 空心 + 2 实心件(圆点 + 单一逗号轮廓)");
+    Check(fw.shapeCount == 1 && fw_hollow == 1 && fw_solid == 0,
+          "T33e: 全角 = 1 空心环图元 + 逗号字形(逗号不再占图元位)");
+    Check(hw.shapeCount == 1 && hw_hollow == 0 && hw_solid == 1,
+          "T33f: 半角 = 1 实心圆图元 + 逗号字形(同上)");
 
     // v8 句号收小(用户原话「句号(中英文)都偏大」)。环径按**墨迹覆盖**
     // 计,不是路径框边长 —— 且笔**不**向外溢出(见 ShapeInkBox 实测口径)。
     const RECT ring_ink = fluxing::panel_fwicon::ShapeInkBox(fw.shapes[0]);
     const RECT dot_ink = fluxing::panel_fwicon::ShapeInkBox(hw.shapes[0]);
+    // v10: 逗号墨迹盒是**目标框**(由 com 字形度量落位保证),不再是多边形包围盒。
+    const RECT fw_comma = fw.commaInk;
+    const RECT hw_comma = hw.commaInk;
     Check(ring_ink.right - ring_ink.left + 1 == 12,
           "T33g: 全角空心环外径 12 raw px (v7 的 16 被判偏大)");
 
@@ -1498,45 +1513,52 @@ int main() {
               fw_w <= 28 && hw_w <= 28,
           "T33h: 居中后墨迹盒落在 viewBox 内且不超 28 键帽");
 
-    // T33i: 对角方位 —— 环/点在右上、逗号轮廓在左下。10 点凹凸轮廓没有
-    // 解析重心,顶点均值足以区分方位(v7 的 3 点三角尾已不存在)。
-    auto poly_center = [](const fluxing::panel_fwicon::Shape& s) {
-      POINT c = {0, 0};
-      for (int i = 0; i < s.ptCount; ++i) {
-        c.x += s.pts[i].x;
-        c.y += s.pts[i].y;
-      }
-      c.x /= s.ptCount;
-      c.y /= s.ptCount;
-      return c;
-    };
+    // T33i: 对角方位 —— 环/点在右上、逗号在左下。
+    // v10 逗号是**字形目标框**(commaInk),取矩形中心即可;旧的
+    // 「多边形顶点均值」口径随 kSolidPolygon 一并删除。
     const int ring_cx = (ring_ink.left + ring_ink.right) / 2;
     const int ring_cy = (ring_ink.top + ring_ink.bottom) / 2;
-    const POINT fw_comma_c = poly_center(fw.shapes[1]);
+    const POINT fw_comma_c = {(fw_comma.left + fw_comma.right) / 2,
+                              (fw_comma.top + fw_comma.bottom) / 2};
     const int dot_cx = (dot_ink.left + dot_ink.right) / 2;
     const int dot_cy = (dot_ink.top + dot_ink.bottom) / 2;
-    const POINT hw_comma_c = poly_center(hw.shapes[1]);
+    const POINT hw_comma_c = {(hw_comma.left + hw_comma.right) / 2,
+                              (hw_comma.top + hw_comma.bottom) / 2};
     Check(ring_cx > fw_comma_c.x && ring_cy < fw_comma_c.y &&
               dot_cx > hw_comma_c.x && dot_cy < hw_comma_c.y,
-          "T33i: 环/点在右上、逗号轮廓在左下(对角线布局)");
+          "T33i: 环/点在右上、逗号在左下(对角线布局)");
 
-    // v8 逗号放大,且必须是**单一连续轮廓**: v7 的「头+尾」两块在 11x13
-    // 尺寸下读成「点 + 划痕」,即用户说的「变形,看不出是中文逗号」。
-    const RECT fw_comma = fluxing::panel_fwicon::ShapeInkBox(fw.shapes[1]);
-    const RECT hw_comma = fluxing::panel_fwicon::ShapeInkBox(hw.shapes[1]);
     Check(dot_ink.right - dot_ink.left + 1 == 7 &&
               dot_ink.bottom - dot_ink.top + 1 == 7,
           "T33j: 半角实心点 7x7 (v7 的 10 被判偏大)");
-    Check(fw_comma.right - fw_comma.left + 1 == 11 &&
-              fw_comma.bottom - fw_comma.top + 1 == 13 &&
-              hw_comma.right - hw_comma.left + 1 == 8 &&
-              hw_comma.bottom - hw_comma.top + 1 == 13,
-          "T33k: 逗号轮廓 全角 11x13 / 半角 8x13 (v7 全角仅 9x12)");
-    Check(fw.shapes[1].kind == fluxing::panel_fwicon::kSolidPolygon &&
-              fw.shapes[1].ptCount >= 8 &&
-              hw.shapes[1].kind == fluxing::panel_fwicon::kSolidPolygon &&
-              hw.shapes[1].ptCount >= 8,
-          "T33l: 逗号是单一 >=8 点多边形(非 v7 的头+尾两块)");
+
+    // v10(用户指令 2026-11-07):「逗号仍然形状不佳,有锯齿,且圆形部分和
+    // 尾巴部分连接不圆滑。建议直接使用字符逗号」⇒ 逗号改成**真字形渲染**,
+    // 不再有轮廓多边形。旧 T33k(11x13 / 8x13 多边形包围盒)与 T33l
+    // (>=8 点单轮廓)随之删除(tasks.md 有记录),改为钉住字形契约:
+    //   ① 两态的**目标**墨迹盒都是 7x13 = kCommaInkWidth x kCommaInkHeight;
+    //   ② 码点必须是中文逗号 / ASCII 逗号,别被换成句号。
+    // 真机落位由 DrawInkPlacedChar 的中心对齐保证,T33q 用往返断言兜住。
+    Check(fw_comma.right - fw_comma.left + 1 ==
+                  fluxing::panel_fwicon::kCommaInkWidthCn &&
+              fw_comma.bottom - fw_comma.top + 1 ==
+                  fluxing::panel_fwicon::kCommaInkHeightCn &&
+              hw_comma.right - hw_comma.left + 1 ==
+                  fluxing::panel_fwicon::kCommaInkWidthEn &&
+              hw_comma.bottom - hw_comma.top + 1 ==
+                  fluxing::panel_fwicon::kCommaInkHeightEn,
+          "T33k(v11): 两态逗号目标墨迹盒 中 8x13 / 英 6x9 (v10 两态同 7x13 像素几乎全同)");
+    Check(fw.commaChar == L'\xFF0C' && hw.commaChar == L',',
+          "T33l: 逗号码点 全角 U+FF0C / 半角 U+002C (改用字符逗号)");
+    // T33r(v11): 两态逗号必须用**不同字体** —— v10 两态都用 Microsoft YaHei,
+    // 而 YaHei 的「，」与「,」是同一个楔形 ⇒ 归一居中后像素几乎全同
+    // ⇒ 用户判「无法区分中英文逗号」(实测 tmp/v11b-sheet.png A 行)。
+    // v11 改用各自文字体系的正字:中文字体出中文逗号、拉丁字体出拉丁逗号。
+    Check(fw.commaFace != nullptr && hw.commaFace != nullptr &&
+              lstrcmpW(fw.commaFace, hw.commaFace) != 0 &&
+              lstrcmpW(fw.commaFace, fluxing::panel_fwicon::kCommaFaceCn) == 0 &&
+              lstrcmpW(hw.commaFace, fluxing::panel_fwicon::kCommaFaceEn) == 0,
+          "T33r(v11): 两态逗号用不同字体(中文字体出中文逗号/拉丁字体出拉丁逗号)");
 
     // ===== v9(用户指令 2026-11-07):「全半角符号不清晰,糊成一块的感觉」 =====
     // 病灶不是线粗(v8.1 已把空心环壁收到 1 px),而是**两个图元贴在一起**:
@@ -1552,29 +1574,65 @@ int main() {
           "T33o: 环/点 与 逗号之间 >=2 空列且 >=2 空行(v9 不再糊成一块)");
     Check(fw_gap_x > 0 && fw_gap_y > 0 && hw_gap_x > 0 && hw_gap_y > 0,
           "T33p: 两图元在 x、y 上互不相交(没有斜向相接的「糊」)");
-    Check(fw.shapes[1].ptCount == 12 && hw.shapes[1].ptCount == 10,
-          "T33q: 全角逗号 12 点(宽头→细尾是曲率)、半角 10 点");
+    // T33q(v10): 字形落位契约 ——
+    //   ① ScaleFontHeight 在「已达标」时幂等、度量失败时回落 seed
+    //      (防止有人把自校正改成「总是重算」,白多建一次字体);
+    //   ② GlyphPenPointForInk 走中心对齐,且由落笔点能**回推**出目标墨迹盒
+    //      左上角(往返一致) —— 这条把「落笔点公式」与「墨迹盒模型」两侧
+    //      同时钉死,任何一边改错都当场变红。
+    Check(fluxing::panel_fwicon::ScaleFontHeight(48, 13, 13) == 48 &&
+              fluxing::panel_fwicon::ScaleFontHeight(48, 0, 13) == 48,
+          "T33q: ScaleFontHeight 已达标/度量失败 均回落 seed 48");
+    {
+      using fluxing::panel_fwicon::GlyphInk;
+      using fluxing::panel_fwicon::GlyphPenPointForInk;
+      const RECT fw_target = {3, 16, 10, 28};
+      GlyphInk fw_m;
+      fw_m.width = 8;
+      fw_m.height = 13;
+      fw_m.originX = 6;   // SimSun 48px U+FF0C 实测
+      fw_m.originY = 11;
+      const POINT fw_pen = GlyphPenPointForInk(fw_target, fw_m);
+      const RECT hw_target = {5, 20, 10, 28};
+      GlyphInk hw_m;
+      hw_m.width = 6;
+      hw_m.height = 9;
+      hw_m.originX = 2;   // Times New Roman 39px U+002C 实测
+      hw_m.originY = 3;
+      const POINT hw_pen = GlyphPenPointForInk(hw_target, hw_m);
+      Check(fw_pen.x == -3 && fw_pen.y == 27 && hw_pen.x == 3 &&
+                hw_pen.y == 23,
+            "T33q2(v11): 落笔点 全角 (-3,27) / 半角 (3,23)(中心对齐)");
+      Check(fw_pen.x + fw_m.originX == fw_target.left &&
+                fw_pen.y - fw_m.originY == fw_target.top &&
+                hw_pen.x + hw_m.originX == hw_target.left &&
+                hw_pen.y - hw_m.originY == hw_target.top,
+            "T33q3: 落笔点 + 字体 origin 回推出目标墨迹盒左上角(往返一致)");
+    }
   }
 
   // ============================================================
-  // T34 · 批次 H:面板「全/半角」显示口径(纯函数,单一真相源)
+  // T34 · 批次 H:面板「中文标点 / 英文标点」显示口径(纯函数,单一真相源)
   //
-  // 口径:全角 = 生效标点是**中文全角标点** = !ascii_mode && !ascii_punct
-  //   - 英文态 ⇒ ascii_composer 直出 ASCII ⇒ 半角
-  //   - 中文态 + ascii_punct ⇒ punctuator kNoop ⇒ 原样 ASCII ⇒ 半角
+  // ★ 批次 H 语义纠正(用户 2026-11-07):面板这一槽切的是**标点语言**,
+  //   不是 librime 的 full_shape。函数名 ShapeIsFullwidth 沿用历史口径,
+  //   true = 中文标点模式;full_shape 永不置 1(见 ADR 0041)。
+  // 口径:中文标点 = !ascii_mode && !ascii_punct
+  //   - 英文态 ⇒ ascii_composer 直出 ASCII ⇒ 英文标点
+  //   - 中文态 + ascii_punct ⇒ punctuator kNoop ⇒ 原样 ASCII ⇒ 英文标点
   //     (用户需求②:「半角符号应该对应英文标点」)
-  //   - 中文态 + 无 ascii_punct ⇒ 中文标点表 ⇒ 全角
+  //   - 中文态 + 无 ascii_punct ⇒ 中文标点表 ⇒ 中文标点
   // ============================================================
   {
     using fluxing::panel_status::ShapeIsFullwidth;
     Check(ShapeIsFullwidth(false, false),
-          "T34a: 中文态 + 无 ascii_punct ⇒ 全角(中文标点)");
+          "T34a: 中文态 + 无 ascii_punct ⇒ 中文标点态");
     Check(!ShapeIsFullwidth(true, false),
-          "T34b: 英文态 ⇒ 半角(标点自然是英文)");
+          "T34b: 英文态 ⇒ 英文标点态(标点自然是 ASCII)");
     Check(!ShapeIsFullwidth(false, true),
-          "T34c: 中文态 + ascii_punct ⇒ 半角(半角 = 英文标点)");
+          "T34c: 中文态 + ascii_punct ⇒ 英文标点态");
     Check(!ShapeIsFullwidth(true, true),
-          "T34d: 英文态 + ascii_punct ⇒ 半角");
+          "T34d: 英文态 + ascii_punct ⇒ 英文标点态");
   }
 
   std::printf("\n=== %d / %d assertions passed ===\n", g_pass, g_pass + g_fail);

@@ -44,8 +44,10 @@ switcher:
     - ascii_punct
     - traditionalization
     - emoji
-    - full_shape
     - search_single_char
+    # full_shape 已移除(批次 H 语义纠正 / ADR 0041):它只让数字与符号变全角,
+    #   与「标点语言」无关,且面板已无任何入口能打开它;留在记忆列表里会被
+    #   user.yaml 持久化成全角空格。
   fold_options: true            # 呼出时是否折叠，多方案时建议折叠 true ，一个方案建议展开 false
   abbreviate_options: true      # 折叠时是否缩写选项
   option_list_separator: ' / '  # 折叠时的选项分隔符

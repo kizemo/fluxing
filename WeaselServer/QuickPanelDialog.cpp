@@ -400,18 +400,35 @@ void QuickPanelDialog::DrawIconAccount(HDC hdc,
 // GDI 实测):环墨量 50 px(2px 壁,洞 6×6)→ **32 px**(1px 壁,洞 10×10),
 // 壁比半角实心点轻,「空」与「实」才分得开。
 //
-// 为什么从 v6 的字体字形组合改成矢量图元:
-//   CJK 标点墨迹只占 em 盒约 0.2 ⇒ -15px 字号下全角墨迹仅 18×4 raw px、
-//   半角仅 8×5,浅灰压在浅蓝底上几乎不可见(用户原话「太小,不具有可视度」);
-//   放大字号长不大且会撑破 28 键帽。矢量图元可精确控制直径 ⇒ 23×25 raw px。
+// v10 把**逗号**从矢量多边形换成**真字形**(用户指令 2026-11-07:「逗号仍然
+// 形状不佳,有锯齿,且圆形部分和尾巴部分连接不圆滑。建议直接使用字符逗号」)。
+// 判据:GDI `Polygon` 的扫描线填充**没有抗锯齿** —— 12 点轮廓在 11×13 px 里
+// 每段边只跨 1~2 px,台阶就是肉眼看到的锯齿;增加点数只会把台阶切得更碎,
+// 变不出平滑边。字形自带抗锯齿与真正的笔画收笔,一次解决「锯齿 + 头尾不圆滑」。
+// 本轮**只换逗号**:环与点仍是矢量(v9 已定稿、用户未提异议),不动它们。
+//
+// v6 曾结论「字体方案不可行」,那条**是错的**:当时字号取 -15,而 CJK 标点墨迹
+// 只占 em 盒约 0.2 ⇒ 全角墨迹仅 18×4 raw px、半角仅 8×5。真相是**字号太小**,
+// 不是字体不成。v10 实测 -48px 时 YaHei 的 U+FF0C 与 U+002C 墨迹均恰为 7×13,
+// 正好落进目标盒(探针记录见文件头 v10 段)。
 //
 // 实现约束(均为已踩过的坑,勿简化):
-//   - 纯 GDI 矢量,**绝不**走 AlphaBlend(v4 品牌图标黑框前科);
+//   - 纯 GDI;**绝不**走 AlphaBlend(v4 品牌图标黑框前科)。字体抗锯齿是灰阶
+//     混入已有底色、alpha 恒 255,与那条半透明反向加权路径不是同一条 ⇒ 安全;
+//     但也**不要**因此改用 GDI+ FillPath(它会写 half-alpha,复发同一类问题);
 //   - 空心环必须配 NULL_BRUSH(内部留面板底色),实心件必须配 NULL_PEN
-//     (不描边,否则描边会把小逗号糊成一坨);
-//   - 只 DeleteObject 自己 Create 出来的 pen/brush:GetStockObject 取的
+//     (不描边,否则描边会把小图元糊成一坨);
+//   - 只 DeleteObject 自己 Create 出来的 pen/brush/font:GetStockObject 取的
 //     NULL_PEN / NULL_BRUSH 是共享 stock 对象,删不掉也不该删;
-//   - 图元表与居中公式在 fluxing::panel_fwicon(纯函数,生产与单测同源)。
+//   - 图元表、居中公式与字形落笔公式在 fluxing::panel_fwicon
+//     (纯函数,生产与单测同源)。
+namespace {
+// 前置声明:字形绘制实现在下方的匿名命名空间里(与 DrawInkCenteredChar 同一个),
+// 而本函数定义在它之前 —— 保持现有文件布局,不把整段搬上来。
+bool DrawInkPlacedChar(HDC hdc, wchar_t ch, const RECT& targetInk,
+                       COLORREF color, const wchar_t* face);
+}  // namespace
+
 void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
                                          int x,
                                          int y,
@@ -431,7 +448,7 @@ void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
   HGDIOBJ oldPen = SelectObject(hdc, pen);
   HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
 
-  // ① 空心环(仅全角态有):描边 + 内部不填充(留面板底色)。
+  // ① 空心环(仅中文标点态有):描边 + 内部不填充(留面板底色)。
   for (int i = 0; i < ic.shapeCount; ++i) {
     const fluxing::panel_fwicon::Shape& s = ic.shapes[i];
     if (s.kind == fluxing::panel_fwicon::kHollowEllipse)
@@ -439,7 +456,7 @@ void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
               oy + s.rect.bottom);
   }
 
-  // ② 实心件(实心点 / 逗号头 / 逗号尾):实心画刷 + NULL_PEN(不描边)。
+  // ② 实心点(仅英文标点态有):实心画刷 + NULL_PEN(不描边)。
   SelectObject(hdc, solid);
   SelectObject(hdc, GetStockObject(NULL_PEN));
   for (int i = 0; i < ic.shapeCount; ++i) {
@@ -453,21 +470,24 @@ void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
       const int ch = (s.rect.bottom - s.rect.top) / 2;
       RoundRect(hdc, ox + s.rect.left, oy + s.rect.top, ox + s.rect.right,
                 oy + s.rect.bottom, cw, ch);
-    } else if (s.kind == fluxing::panel_fwicon::kSolidPolygon) {
-      POINT pts[fluxing::panel_fwicon::kMaxPolyPoints];
-      for (int k = 0; k < s.ptCount; ++k) {
-        pts[k].x = ox + s.pts[k].x;
-        pts[k].y = oy + s.pts[k].y;
-      }
-      Polygon(hdc, pts, s.ptCount);
     }
   }
 
   // 还原调用方的 pen/brush;只删自己 Create 出来的对象。
+  // 字形不走 pen/brush(它用 SetTextColor),先把 DC 交还干净再画。
   SelectObject(hdc, oldBrush);
   SelectObject(hdc, oldPen);
   DeleteObject(solid);
   DeleteObject(pen);
+
+  // ③ 逗号:真字形。目标墨迹盒由 fluxing::panel_fwicon::Build 给出闭区间,
+  // 落笔点由 GlyphPenPointForInk 按中心对齐反推(见下方 DrawInkPlacedChar)。
+  RECT comma;
+  comma.left = ox + ic.commaInk.left;
+  comma.top = oy + ic.commaInk.top;
+  comma.right = ox + ic.commaInk.right;
+  comma.bottom = oy + ic.commaInk.bottom;
+  DrawInkPlacedChar(hdc, ic.commaChar, comma, penColor, ic.commaFace);
 }
 
 namespace {
@@ -551,6 +571,120 @@ bool DrawInkCenteredChar(HDC hdc, const wchar_t* text, const RECT& box) {
   TextOutW(hdc, tx, baseline, text, 1);
   SetTextAlign(hdc, oldAlign);
   return true;
+}
+
+// ===== v10:按**墨迹盒**落位画单个字形(供「全/半角」图标的逗号使用) =====
+//
+// 与上面 DrawInkCenteredChar 的分工:那个按**键帽盒**居中(文字键),这个按
+// **指定墨迹盒**落位(图标里的图元),落笔公式在
+// fluxing::panel_fwicon::GlyphPenPointForInk(纯函数,生产与单测同源)。
+
+// 建逗号字体的 LOGFONT:输入只有字号,不掺任何墨迹猜测。
+//   - lfHeight 取**负值** = 字高(正值是字宽/字符高度语义,会画小);
+//   - ANTIALIASED_QUALITY = 灰阶抗锯齿。**不用** CLEARTYPE_QUALITY:
+//     ClearType 假设背景是白底,在浅蓝面板底色上会出彩色边;
+//   - 字体缺失时 GDI 会做字体替换(不失败),所以调用方必须**量完再定位**,
+//     不能假设 48px 一定得到 13px 墨迹。
+HFONT CreateCommaFont(int px, const wchar_t* face) {
+  if (px <= 0)
+    return NULL;
+  LOGFONTW lf;
+  ZeroMemory(&lf, sizeof(lf));
+  lf.lfHeight = -px;
+  lf.lfWeight = FW_NORMAL;
+  lf.lfCharSet = DEFAULT_CHARSET;
+  lf.lfQuality = ANTIALIASED_QUALITY;
+  // v11:字体由调用方指定(中文字体出中文逗号 / 拉丁字体出拉丁逗号),
+  // 空指针时兜底回历史字体,不让「字体名写错」变成「画不出字形」。
+  lstrcpynW(lf.lfFaceName, face ? face : L"Microsoft YaHei", LF_FACESIZE);
+  return CreateFontIndirectW(&lf);
+}
+
+// 量「当前选中字体」下某个字符的墨迹盒。返回 false = 量不到。
+// ★ 必须传单位 MAT2:零矩阵会让 GetGlyphOutlineW 返回 GDI_ERROR,而被静默
+//   当成「字体没有该字形」⇒ 落笔公式永远不执行(记忆 #36 的原型事故)。
+bool MeasureCommaGlyph(HDC hdc,
+                       wchar_t ch,
+                       fluxing::panel_fwicon::GlyphInk* out) {
+  if (!hdc || !out)
+    return false;
+  *out = fluxing::panel_fwicon::GlyphInk();
+  MAT2 mat;
+  fluxing::panel_ink::FillUnitMat2(&mat);
+  GLYPHMETRICS gm;
+  ZeroMemory(&gm, sizeof(gm));
+  // 某些 GDI 版本在 GGO_METRICS 下仍要求非空缓冲,另一些要求空缓冲 ⇒ 两趟都试。
+  BYTE scratch[1024];
+  ZeroMemory(scratch, sizeof(scratch));
+  DWORD rc =
+      GetGlyphOutlineW(hdc, ch, GGO_METRICS, &gm, sizeof(scratch), scratch, &mat);
+  if (rc == GDI_ERROR) {
+    ZeroMemory(&gm, sizeof(gm));
+    rc = GetGlyphOutlineW(hdc, ch, GGO_METRICS, &gm, 0, nullptr, &mat);
+  }
+  if (rc == GDI_ERROR)
+    return false;
+  if ((int)gm.gmBlackBoxX <= 0 || (int)gm.gmBlackBoxY <= 0)
+    return false;
+  out->width = (int)gm.gmBlackBoxX;
+  out->height = (int)gm.gmBlackBoxY;
+  out->originX = (int)gm.gmptGlyphOrigin.x;
+  out->originY = (int)gm.gmptGlyphOrigin.y;
+  return true;
+}
+
+// 定义在 DrawIconFullwidth 之前已前置声明(同一匿名命名空间)。
+bool DrawInkPlacedChar(HDC hdc,
+                       wchar_t ch,
+                       const RECT& targetInk,
+                       COLORREF color,
+                       const wchar_t* face) {
+  if (!hdc)
+    return false;
+  const int targetH = targetInk.bottom - targetInk.top + 1;
+  const int seed = fluxing::panel_fwicon::kCommaFontHeight;
+  HFONT font = CreateCommaFont(seed, face);
+  if (!font)
+    return false;
+  const HGDIOBJ oldFont = SelectObject(hdc, font);
+
+  fluxing::panel_fwicon::GlyphInk m;
+  bool ok = MeasureCommaGlyph(hdc, ch, &m);
+  // 一次按比例自校正:目标机器若没有 Microsoft YaHei,GDI 会换成别的字体,
+  // 墨迹高就不等于 kCommaInkHeight ⇒ 按实测比例反推字号再来一趟。
+  // 正常机器上 px == seed,第二趟不会发生(是廉价死路径,不是主路径)。
+  if (ok) {
+    const int px =
+        fluxing::panel_fwicon::ScaleFontHeight(seed, m.height, targetH);
+    if (px != seed) {
+      HFONT scaled = CreateCommaFont(px, face);
+      if (scaled) {
+        SelectObject(hdc, scaled);  // 顶掉 seed 字体,GDI 不再引用它
+        DeleteObject(font);
+        font = scaled;
+        ok = MeasureCommaGlyph(hdc, ch, &m);  // 新字号必须重新量
+      }
+    }
+  }
+
+  bool drew = false;
+  if (ok) {
+    const POINT pen = fluxing::panel_fwicon::GlyphPenPointForInk(targetInk, m);
+    const COLORREF oldColor = SetTextColor(hdc, color);
+    // ★ 必须 TRANSPARENT:否则 TextOutW 会把字形单元格的底色填成白块。
+    //   (DrawInkCenteredChar 没设,那是依赖调用方已设;这里自给自足并还原。)
+    const int oldMode = SetBkMode(hdc, TRANSPARENT);
+    const UINT oldAlign = SetTextAlign(hdc, TA_LEFT | TA_BASELINE);
+    drew = TextOutW(hdc, pen.x, pen.y, &ch, 1) != FALSE;
+    SetTextAlign(hdc, oldAlign);
+    if (oldMode != 0)
+      SetBkMode(hdc, oldMode);
+    SetTextColor(hdc, oldColor);
+  }
+
+  SelectObject(hdc, oldFont);
+  DeleteObject(font);
+  return drew;
 }
 
 }  // namespace
@@ -1395,7 +1529,17 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
       // 时检查 s_activeIdx 是否释放前还在同一按钮)。
       // spec 099 P0-5: 用户**主动点击**面板 ⇒ 接管键盘焦点(面板平时是
       // WS_EX_NOACTIVATE,收不到按键)。收起时 RestoreKeyboardFocus() 归还。
-      CaptureKeyboardFocus(hwnd);
+      //
+      // ★ 批次 H 追加需求(2026-11-07,用户原话):「在快捷设置栏点击中英文／
+      //   全半角按钮后,焦点应该还在宿主窗口,可以继续输入。当前会失焦,导致需要
+      //   在输入窗口用鼠标点击之后,才能重新输入。」
+      //   根因就是下面这行**无条件**执行:按钮点击也把焦点抢到面板,而按钮点击
+      //   **不收起面板** ⇒ 没有 RestoreKeyboardFocus() 的时机 ⇒ 宿主窗口永远
+      //   拿不回焦点。修法:只在**空白/brand 区**(hit < 0,需要键盘导航与拖拽)
+      //   接管焦点;点按钮时不碰焦点链(WS_EX_NOACTIVATE 保证系统也不会激活
+      //   面板本身),宿主窗口继续保持前台。
+      if (hit < 0)
+        CaptureKeyboardFocus(hwnd);
       SetCapture(hwnd);
       s_dragging = TRUE;
       // L178-fix: GetCursorPos 可能失败(无输入设备 / 非交互 window station)。

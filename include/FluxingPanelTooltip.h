@@ -8,7 +8,8 @@
 //   槽 2 快捷键设置           · 常驻显示:开/关
 //   槽 3 关于 / 账号说明      · 版本:<x.y.z>
 //   槽 4 中英文切换           · 当前:中/英      ← v4 需求④⑤
-//   槽 5 全半角切换           · 当前:全/半      ← v4 需求③⑤
+//   槽 5 中英文标点切换       · 当前:中文标点/英文标点
+//                             ← 批次 H 语义纠正(原「全半角切换 · 当前:全/半」)
 //
 // v4 变更说明(QuickPanel 重设计 stage2):
 //   槽 1 原先借用「当前输入:中/英」回显中英状态 —— 但槽 1 实际是「用户短语」,
@@ -43,7 +44,7 @@ inline const wchar_t* SlotName(int slot) {
     case 4:
       return L"中英文切换";
     case 5:
-      return L"全半角切换";
+      return L"中英文标点切换";
     default:
       return L"";
   }
@@ -72,7 +73,9 @@ inline std::wstring SlotStateText(int slot,
     case 4:
       return std::wstring(L"当前:") + panel_status::AsciiModeText(st.ascii_mode);
     case 5:
-      return std::wstring(L"当前:") + panel_status::ShapeModeText(st.fullwidth);
+      // 槽 5 = 标点语言,不是字符宽度(ADR 0041:full_shape 永不开启,
+      // 数字与符号始终半角)。文案由 PunctModeText 给出「中文/英文标点」。
+      return std::wstring(L"当前:") + panel_status::PunctModeText(st.fullwidth);
     default:
       return L"";
   }
