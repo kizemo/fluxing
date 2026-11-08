@@ -11,6 +11,8 @@
 #include <KeyNameMapper.h>  // ADR 0011 D1: shared key name unit
 #include <WeaselUtility.h>  // WeaselUserDataPath: 用户目录单一事实源 (ADR 0020)
 
+#include "ShortcutSettingsT110.h"  // T110: 全局快捷键表基线 (default.yaml)
+
 #include <algorithm>
 #include <cassert>
 #include <commctrl.h>
@@ -42,6 +44,7 @@ std::wstring ShortcutSettings::s_pendingChord;
 
 std::vector<ShortcutSettings::Hotkey> ShortcutSettings::m_hotkeys;
 std::vector<ShortcutSettings::Hotkey> ShortcutSettings::m_defaults;
+std::vector<ShortcutSettings::Hotkey> ShortcutSettings::m_pristine;
 
 // T103: 搜索过滤词;T102: 状态行是否存在冲突
 std::wstring ShortcutSettings::s_filterQuery;
@@ -139,6 +142,16 @@ bool ContainsCI(const std::wstring& haystack, const std::wstring& needle) {
 
 // ===== Public API =====
 
+void ShortcutSettings::SetBaselinePath(const std::wstring& path) {
+  // T110: 显式注入基线文件 (单测用 fixture)。生产路径不需要调用 ——
+  // 基线由 <user_data>/default.yaml 或 <WeaselServer.exe 目录>/data/default.yaml
+  // 自动解析。换基线文件 ⇒ 清缓存, 下次 EnsureBaseline 重新加载。
+  fluxing::shortcut_baseline::State& s =
+      fluxing::shortcut_baseline::BaselineState();
+  s.override_path = path;
+  fluxing::shortcut_baseline::ResetBaseline();
+}
+
 void ShortcutSettings::Show() {
   if (s_hwnd && IsWindow(s_hwnd)) {
     SetForegroundWindow(s_hwnd);
@@ -171,7 +184,9 @@ void ShortcutSettings::Show() {
     m_hotkeys.clear();
     LoadDefaults(m_hotkeys);
   }
-  m_defaults = m_hotkeys;  // reset 用
+  // reset 用: T110 起「恢复默认 / 恢复这一行」的基准是基线原样行 (m_pristine),
+  // 不是「打开时读到的表」—— 后者带着用户自己的改动。
+  m_defaults = m_pristine.empty() ? m_hotkeys : m_pristine;
 
   // 2. 注册 ListView 控件
   INITCOMMONCONTROLSEX icc = {sizeof(icc),
@@ -431,8 +446,10 @@ bool ShortcutSettings::LoadHotkeys(const std::wstring& path,
                                    std::vector<Hotkey>& out) {
   std::ifstream f(path, std::ios::binary);
   if (!f) {
-    // file 不存在 → fallback 默认 (UI 启动行为,spec §3.1)
-    return LoadDefaults(out);
+    // file 不存在 ⇒ 面板显示「基线全局表 + 应用级默认」(T110)。
+    // 旧实现 fallback 到 LoadDefaults 的 12 条硬编码 —— 那不是全局表,
+    // 落盘时会被当成「完整列表」写进 patch ⇒ 覆盖掉真正的全局表。
+    return MergeHotkeys(std::vector<Hotkey>(), out);
   }
   std::string content((std::istreambuf_iterator<char>(f)),
                       std::istreambuf_iterator<char>());
@@ -453,7 +470,7 @@ bool ShortcutSettings::LoadHotkeys(const std::wstring& path,
     }
   }
 
-  out.clear();
+  std::vector<Hotkey> fileRows;
   // minimal parser: 找 "patch.key_binder/bindings:" 后的 -{ ... } 行
   // 每条 binding 是 inline dict: { when: ..., accept: ..., send|toggle: ... }
   size_t pos = 0;
@@ -548,7 +565,7 @@ bool ShortcutSettings::LoadHotkeys(const std::wstring& path,
               L"自定义";  // 自定义 (raw fallback)
           hk.accept_new.clear();
           hk.yaml_raw = trimmed;
-          out.push_back(hk);
+          fileRows.push_back(hk);
         }
       } else if (trimmed.empty()) {
         // 空行 - 继续
@@ -556,39 +573,241 @@ bool ShortcutSettings::LoadHotkeys(const std::wstring& path,
       continue;
     }
   }
-  // 解析后 out 是"附加"列表;合并 m_defaults (这就是当前 UI 总览)
-  std::vector<Hotkey> merged;
-  for (const auto& d : m_defaults)
-    merged.push_back(d);
-  // spec 045 §5.4: 把 custom 行覆盖 defaults 同 (accept, when);或追加新的
-  //
-  // T107 S1: 旧实现只比 accept, 有两处都是真数据丢失路径 ——
-  //  1) 同一个键位配在不同 when 下 (例如一直生效 + 只在中文态生效) 是合法的
-  //     两条 binding, 只比 accept 会把后一条折进前一条 ⇒ 用户的第二条没了。
-  //  2) 命中时没复位 is_default ⇒ 合并进来的 override 在落盘时被
-  //     「!edited && is_default 就跳过」当成没动过的内置默认行丢掉 ⇒
-  //     保存一次就把用户的绑定写没了。
-  // when 归一: 空的 when 在 librime 里等价于 always, 比较前先对齐。
-  auto whenOf = [](const Hotkey& h) -> std::wstring {
-    return h.when.empty() ? std::wstring(L"always") : h.when;
-  };
-  for (const auto& c : out) {
-    bool merged_in = false;
-    for (auto& d : merged) {
-      if (d.accept == c.accept && whenOf(d) == whenOf(c)) {
-        d.action_yaml = c.action_yaml;
-        d.when = whenOf(c);
-        d.yaml_raw = c.yaml_raw;
-        d.is_custom = true;
-        d.is_default = false;  // 来自文件 = 用户明确要的 override, 不是默认值
-        merged_in = true;
+  // T110: 面板行 = 基线全局表 (default.yaml) + 应用级默认 + 用户自定义行,
+  // 由 MergeHotkeys 统一合成。旧实现把文件行折进「打开时读到的表」,
+  // 落盘时又只写改动行 ⇒ librime 的 patch 对 key_binder/bindings 是整表覆盖
+  // ⇒ 一次保存就把全局快捷键表清成剩下的那几行 (T110 的破坏性 patch)。
+  return MergeHotkeys(fileRows, out);
+}
+
+// ===== T110: 基线 (全局快捷键表) 合成 =====
+//
+// 面板行 = 基线行 (default.yaml 的全局表, 按原顺序) + 基线没覆盖的应用级默认行
+//          + 用户文件里没被认领的自定义行。
+// 落盘时写的是「完整合并列表」—— librime 的 patch 对 key_binder/bindings 是
+// 整表覆盖, 只写改动行会把全局表清成剩下的那几行 (T110 的破坏性 patch)。
+
+namespace {
+
+// 文件路径 → 父目录 (基线优先从用户目录找)
+std::wstring ParentDirOf(const std::wstring& path) {
+  const size_t slash = path.find_last_of(L"\\/");
+  return slash == std::wstring::npos ? std::wstring() : path.substr(0, slash);
+}
+
+// 键位名大小写不敏感比较 (同一张表在不同文件里大小写可能不一致)
+bool EqualAcceptCI(const std::wstring& a, const std::wstring& b) {
+  if (a.size() != b.size())
+    return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    wchar_t ca = a[i];
+    wchar_t cb = b[i];
+    if (ca >= L'A' && ca <= L'Z')
+      ca = static_cast<wchar_t>(ca - L'A' + L'a');
+    if (cb >= L'A' && cb <= L'Z')
+      cb = static_cast<wchar_t>(cb - L'A' + L'a');
+    if (ca != cb)
+      return false;
+  }
+  return true;
+}
+
+// action_yaml → 界面描述 (基线行没有内建描述, 按动作翻)
+std::wstring DescribeActionYaml(const std::wstring& ay) {
+  if (ay == L"toggle: ascii_mode") return L"切换中英";
+  if (ay == L"toggle: full_shape") return L"全/半角切换";
+  if (ay == L"toggle: ascii_punct") return L"中英标点切换";
+  if (ay == L"toggle: traditionalization") return L"简繁切换";
+  if (ay == L"send: Page_Up") return L"翻页 - 上页";
+  if (ay == L"send: Page_Down") return L"翻页 - 下页";
+  if (ay == L"custom: open_quick_panel") return L"快捷面板";
+  if (ay == L"custom: open_phrases") return L"常用短语";
+  if (ay == L"custom: trigger_deploy") return L"重新部署";
+  if (ay.rfind(L"send: ", 0) == 0) {
+    const std::wstring n = ay.substr(5);
+    bool digits = !n.empty();
+    for (wchar_t c : n) {
+      if (c < L'0' || c > L'9') {
+        digits = false;
         break;
       }
     }
-    if (!merged_in)
-      merged.push_back(c);
+    if (digits)
+      return L"选第 " + n + L" 候选";
   }
-  out = merged;
+  return L"自定义";
+}
+
+// action_yaml → HotkeyAction
+ShortcutSettings::HotkeyAction ActionOfActionYaml(const std::wstring& ay) {
+  if (ay == L"toggle: ascii_mode")
+    return ShortcutSettings::Action_ToggleChinese;
+  if (ay == L"toggle: full_shape")
+    return ShortcutSettings::Action_ToggleFullHalf;
+  if (ay == L"toggle: ascii_punct")
+    return ShortcutSettings::Action_ToggleAsciiPunct;
+  if (ay == L"toggle: traditionalization")
+    return ShortcutSettings::Action_ToggleTrad;
+  if (ay == L"send: Page_Up")
+    return ShortcutSettings::Action_PageUp;
+  if (ay == L"send: Page_Down")
+    return ShortcutSettings::Action_PageDown;
+  if (ay == L"custom: open_quick_panel")
+    return ShortcutSettings::Action_OpenQuickPanel;
+  if (ay == L"custom: open_phrases")
+    return ShortcutSettings::Action_OpenPhrases;
+  if (ay == L"custom: trigger_deploy")
+    return ShortcutSettings::Action_TriggerDeploy;
+  if (ay.rfind(L"send: ", 0) == 0)
+    return ShortcutSettings::Action_SelectN;
+  return ShortcutSettings::Action_CustomUser;
+}
+
+// 基线原文里可能有块式写法的续行 (内含 \n) ⇒ 统一成 CRLF 再写 (L09)
+std::wstring NormalizeEol(const std::wstring& s) {
+  std::wstring out;
+  out.reserve(s.size() + 8);
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (s[i] == L'\n' && (i == 0 || s[i - 1] != L'\r'))
+      out += L"\r\n";
+    else
+      out += s[i];
+  }
+  return out;
+}
+
+}  // namespace
+
+bool ShortcutSettings::MergeHotkeys(std::vector<Hotkey> fileRows,
+                                    std::vector<Hotkey>& out) {
+  using namespace fluxing::shortcut_baseline;
+  out.clear();
+  m_pristine.clear();
+
+  // 1) 基线 = 全局快捷键表 (default.yaml 的 key_binder/bindings)
+  const std::wstring user_dir = ParentDirOf(s_yamlPath);
+  const bool have_base = EnsureBaseline(user_dir);
+  const std::vector<Binding>& base = BaselineState().bindings;
+
+  // 2) 应用级默认行 (WeaselServer 自己的 RegisterHotKey 热键, 不在 librime 表里)
+  std::vector<Hotkey> hardcoded;
+  LoadDefaults(hardcoded);
+
+  // 3) 认领: 把文件里的行挂到基线行上。
+  //    先按 (accept, when) 精确匹配; 再按「同动作 + 同 when」匹配 (用户在界面
+  //    上改键位就是这个形状), 同一动作有多条时用修饰键签名挑最像的一条。
+  std::vector<bool> taken(base.size(), false);
+  std::vector<int> file_to_base(fileRows.size(), -1);
+  for (size_t i = 0; i < fileRows.size(); ++i) {
+    const Hotkey& f = fileRows[i];
+    const std::wstring fw = WhenOf(f.when);
+    int hit = -1;
+    for (size_t j = 0; j < base.size() && hit < 0; ++j) {
+      if (taken[j] || !base[j].parsed)
+        continue;
+      if (f.accept == base[j].accept && fw == WhenOf(base[j].when))
+        hit = static_cast<int>(j);
+    }
+    if (hit < 0) {
+      int fallback = -1;
+      for (size_t j = 0; j < base.size(); ++j) {
+        if (taken[j] || !base[j].parsed)
+          continue;
+        if (f.action_yaml != base[j].action_yaml)
+          continue;
+        if (fw != WhenOf(base[j].when))
+          continue;
+        if (fallback < 0)
+          fallback = static_cast<int>(j);
+        if (ModifierSignature(f.accept) == ModifierSignature(base[j].accept)) {
+          hit = static_cast<int>(j);
+          break;
+        }
+      }
+      if (hit < 0)
+        hit = fallback;
+    }
+    if (hit >= 0) {
+      taken[hit] = true;
+      file_to_base[i] = hit;
+    }
+  }
+
+  // 4) 基线行 (按基线顺序): 面板里没被认领的就是基线原样
+  for (size_t j = 0; j < base.size(); ++j) {
+    if (!base[j].parsed)
+      continue;  // 解析不了的条目不进面板, 但落盘时逐字写回 (不丢行)
+    Hotkey row;
+    row.action = ActionOfActionYaml(base[j].action_yaml);
+    row.action_desc = DescribeActionYaml(base[j].action_yaml);
+    row.action_yaml = base[j].action_yaml;
+    row.when = WhenOf(base[j].when);
+    row.accept = base[j].accept;
+    row.accept_new.clear();
+    row.yaml_raw = base[j].raw;
+    row.is_custom = false;
+    row.is_default = true;
+    row.baseline_index = static_cast<int>(j);
+    out.push_back(row);
+    m_pristine.push_back(row);
+  }
+
+  // 5) 文件里的行覆盖被认领的基线行 (用户改过的键位)
+  for (size_t i = 0; i < fileRows.size(); ++i) {
+    const int j = file_to_base[i];
+    if (j < 0)
+      continue;
+    const Hotkey& f = fileRows[i];
+    Hotkey& row = out[j];
+    row.action = ActionOfActionYaml(f.action_yaml);
+    row.action_desc = DescribeActionYaml(f.action_yaml);
+    row.action_yaml = f.action_yaml;
+    row.when = WhenOf(f.when);
+    row.accept = f.accept;
+    row.accept_new.clear();
+    row.yaml_raw = f.yaml_raw;
+    row.is_custom = true;
+    row.is_default = false;
+  }
+
+  // 6) 应用级默认行: 基线已经有的不重复出现
+  for (const auto& h : hardcoded) {
+    bool covered = false;
+    for (const auto& b : base) {
+      if (!b.parsed)
+        continue;
+      if (b.action_yaml != h.action_yaml)
+        continue;
+      if (WhenOf(b.when) != WhenOf(h.when))
+        continue;
+      if (!EqualAcceptCI(b.accept, h.accept))
+        continue;
+      covered = true;
+      break;
+    }
+    if (covered)
+      continue;
+    Hotkey row = h;
+    row.baseline_index = -1;
+    out.push_back(row);
+    m_pristine.push_back(row);
+  }
+
+  // 7) 文件里没被认领的行 ⇒ 用户自定义行, 追加在最后
+  for (size_t i = 0; i < fileRows.size(); ++i) {
+    if (file_to_base[i] >= 0)
+      continue;
+    Hotkey row = fileRows[i];
+    row.action = ActionOfActionYaml(row.action_yaml);
+    row.action_desc = DescribeActionYaml(row.action_yaml);
+    row.when = WhenOf(row.when);
+    row.accept_new.clear();
+    row.is_custom = true;
+    row.is_default = false;
+    row.baseline_index = -1;
+    out.push_back(row);
+  }
+  (void)have_base;
   return true;
 }
 
@@ -620,6 +839,11 @@ struct SaveStats {
   bool refused = false;                      // 任一拒绝路径
   bool refused_has_manual_bindings = false;  // patch 段里有用户手写的 key_binder
   bool refused_inline_patch = false;         // patch: {…} 内联映射, 文本层插不进
+  // T110: 读不到全局快捷键表基线 (default.yaml) ⇒ 不写。宁可不写, 也不能
+  // 写出一份「不完整列表」把全局表覆盖掉。
+  bool refused_no_baseline = false;
+  // T110: 有效列表与基线完全一致 ⇒ 没有可写的 bindings (不碰全局表)。
+  bool no_change = false;
 };
 SaveStats g_saveStats;
 
@@ -757,10 +981,14 @@ struct ManagedBlock {
   std::string text;
   int rows = 0;
   int skipped_no_action = 0;
+  // T110: 这次落盘到底写不写 key_binder/bindings。false = 有效列表与基线
+  // 完全一致 (或没有可写的行) ⇒ 只留注释, 不碰全局快捷键表。
+  bool writes_bindings = false;
 };
 
-ManagedBlock BuildManagedSubBlock(
+ManagedBlock BuildManagedSubBlockV2(
     const std::vector<ShortcutSettings::Hotkey>& data) {
+  using namespace fluxing::shortcut_baseline;
   ManagedBlock block;
   auto appendAscii = [&block](const char* s) {
     block.text += s;
@@ -785,43 +1013,79 @@ ManagedBlock BuildManagedSubBlock(
   appendLine(L"# 本段由「快捷键设置」托管, 手工修改会被下次保存覆盖。");
   appendLine(L"# 生成者: spec 045 ShortcutSettings (v0.19.0.28)");
 
-  auto quoteIfNeeded = [](const std::wstring& s) -> std::wstring {
-    bool needQuote = false;
-    for (wchar_t c : s) {
-      if (c == L' ' || c == L':' || c == L'+' || c == L'-') {
-        needQuote = true;
-        break;
-      }
-    }
-    if (!needQuote)
-      return s;
-    return L"\"" + s + L"\"";
-  };
+  // T110: 写的是「完整合并列表」—— 基线全表 (未改的行逐字保留) + 用户的改动
+  // 行 + 用户自定义行。librime 的 patch 对 key_binder/bindings 是整表覆盖,
+  // 少写一行就是丢一行 (T110 的破坏性 patch)。旧实现只写改动行 ⇒ 全局表
+  // 被覆盖成剩下的那几行。
+  const State& bs = BaselineState();
+  const bool have_base = bs.ok;
+  const std::vector<Binding>& base = bs.bindings;
 
-  // 只写「需要 override 的行」: 用户改过的, 或本来就来自文件的 (自定义行 /
-  // 既有 override, 必须原样写回, 否则一次保存就把用户的绑定全删了)。
-  // 没动过的内置默认不该出现在 custom 文件里。
-  std::vector<std::wstring> rows;
+  // 面板行按 baseline_index 建索引 (基线行 → 面板行)
+  std::map<int, const ShortcutSettings::Hotkey*> byIndex;
   for (const auto& h : data) {
-    const std::wstring effectiveAccept =
-        h.accept_new.empty() ? h.accept : h.accept_new;
+    if (h.baseline_index >= 0 && h.baseline_index < (int)base.size())
+      byIndex[h.baseline_index] = &h;
+  }
+
+  std::vector<std::wstring> rows;
+  bool differs = false;
+
+  // 1) 基线行: 面板里没有的照抄原文; 改过的重渲染; 解析不了的也照抄 (不丢行)
+  for (size_t j = 0; j < base.size(); ++j) {
+    const Binding& b = base[j];
+    auto it = byIndex.find(static_cast<int>(j));
+    if (it == byIndex.end() || !b.parsed) {
+      rows.push_back(L"    " + b.raw);
+      continue;
+    }
+    const ShortcutSettings::Hotkey& h = *it->second;
+    const std::wstring eff = h.accept_new.empty() ? h.accept : h.accept_new;
+    const bool same = (eff == b.accept) && (h.action_yaml == b.action_yaml) &&
+                      (WhenOf(h.when) == WhenOf(b.when));
+    if (same) {
+      rows.push_back(L"    " + b.raw);
+      continue;
+    }
+    const std::wstring r = RenderRow(eff, h.when, h.action_yaml);
+    if (r.empty()) {
+      // 渲染不出来 (缺键或缺动作) ⇒ 退回基线原文, 绝不丢行
+      ++block.skipped_no_action;
+      rows.push_back(L"    " + b.raw);
+      differs = true;
+      continue;
+    }
+    rows.push_back(r);
+    differs = true;
+  }
+
+  // 2) 不属于基线的行: 应用级热键没改就不进 librime 的表; 用户自定义行写
+  for (const auto& h : data) {
+    if (h.baseline_index >= 0 && h.baseline_index < (int)base.size())
+      continue;
     const bool edited = !h.accept_new.empty() && h.accept_new != h.accept;
-    if (!edited && h.is_default)
+    if (!h.is_custom && !edited)
       continue;
-    if (effectiveAccept.empty())
-      continue;
-    if (h.action_yaml.empty()) {
-      // 没有 YAML 动作 ⇒ 写出来是 "- { when: X, accept: Y,  }" 这种坏
-      // binding, librime 直接忽略。跳过并记账, 由状态行说明, 不静默吞。
+    const std::wstring eff = h.accept_new.empty() ? h.accept : h.accept_new;
+    if (eff.empty() || h.action_yaml.empty()) {
       ++block.skipped_no_action;
       continue;
     }
-    rows.push_back(L"    - { when: " + (h.when.empty() ? L"always" : h.when) +
-                   L", accept: " + quoteIfNeeded(effectiveAccept) + L", " +
-                   h.action_yaml + L" }");
+    const std::wstring r = RenderRow(eff, h.when, h.action_yaml);
+    if (r.empty()) {
+      ++block.skipped_no_action;
+      continue;
+    }
+    rows.push_back(r);
+    differs = true;
   }
 
-  if (rows.empty()) {
+  // 没有基线时 rows 里只有用户自定义行 ⇒ 写下去等于把全局表清成那几行,
+  // 由调用方 (SaveHotkeys) 拒绝。
+  block.writes_bindings = have_base ? differs : !rows.empty();
+  block.rows = block.writes_bindings ? static_cast<int>(rows.size()) : 0;
+
+  if (!block.writes_bindings) {
     // 不写空的 bindings: —— patch 里的空 bindings 会把用户已配的 key_binder
     // 覆盖成空。这里只留注释, 让旧块被清掉的同时不改变任何语义。
     appendLine(L"  # 当前没有需要落盘的改动 (不写空 bindings, 避免清空 key_binder)。");
@@ -830,7 +1094,7 @@ ManagedBlock BuildManagedSubBlock(
     for (const auto& r : rows)
       appendLine(r);
   }
-  block.rows = static_cast<int>(rows.size());
+  block.rows = block.writes_bindings ? static_cast<int>(rows.size()) : 0;
   appendAscii(kManagedEnd);
   return block;
 }
@@ -855,6 +1119,11 @@ bool ShortcutSettings::SaveHotkeys(const std::wstring& path,
                                    bool overwrite_file) {
   g_saveStats = SaveStats();
 
+  // T110: 落盘写的是「完整合并列表」⇒ 必须先拿到全局快捷键表基线。
+  // 面板路径 (LoadHotkeys → MergeHotkeys) 已经加载过基线; 直接调用 SaveHotkeys
+  // 的路径 (单测 / 导出) 不能因为「没走加载」就被误判成「没有基线」。
+  fluxing::shortcut_baseline::EnsureBaseline(ParentDirOf(path));
+
   // ---- 1. 读旧文件 (T106: 只替换托管块, 块外内容原样保留) ----
   std::string existing;
   {
@@ -871,9 +1140,20 @@ bool ShortcutSettings::SaveHotkeys(const std::wstring& path,
   }
 
   // ---- 2. 组织托管子块 (只含 key_binder/bindings, 不含 patch:) ----
-  const ManagedBlock block = BuildManagedSubBlock(data);
+  const ManagedBlock block = BuildManagedSubBlockV2(data);
   g_saveStats.written = block.rows;
   g_saveStats.skipped_no_action = block.skipped_no_action;
+  g_saveStats.no_change = !block.writes_bindings;
+
+  // T110 fail-safe: 要写 bindings 却读不到基线 ⇒ 拒绝写。
+  // librime 的 patch 对 key_binder/bindings 是整表覆盖, 没有基线就拼不出
+  // 完整列表, 写下去等于把全局快捷键表清成剩下那几行。
+  if (block.writes_bindings &&
+      !fluxing::shortcut_baseline::BaselineState().ok) {
+    g_saveStats.refused = true;
+    g_saveStats.refused_no_baseline = true;
+    return false;
+  }
 
   // ---- 3. 组装 ----
   // 形态判定全部在写盘之前完成: 任一拒绝路径都不碰文件。
@@ -1740,7 +2020,9 @@ LRESULT ShortcutSettings::OnNotify(HWND hwnd, LPARAM lp) {
       DestroyMenu(hMenu);
       if (cmd == 1001) {
         if (row < static_cast<int>(m_defaults.size())) {
-          m_hotkeys[row].accept = m_defaults[row].accept;
+          // T110: 整行还原 (键位 + 动作 + when)。只还原 accept 会留下
+          // 「基线键位配了用户的动作」这种错配行。
+          m_hotkeys[row] = m_defaults[row];
         }
         m_hotkeys[row].accept_new.clear();
         PopulateTable();
@@ -1786,8 +2068,13 @@ LRESULT ShortcutSettings::OnCommand(HWND hwnd, WPARAM wp) {
         // spec 045 P0: 原来还原的是 m_defaults —— 而 m_defaults 是"打开时
         // 读到的内容",所以对有自定义的用户来说,"恢复默认"等于什么都没做。
         // 这里真的回到 schema 内置默认表。
-        m_hotkeys.clear();
-        LoadDefaults(m_hotkeys);
+        // T110: 恢复基线原样 (全局表) 并丢弃用户自定义行。
+        if (!m_pristine.empty()) {
+          m_hotkeys = m_pristine;
+        } else {
+          m_hotkeys.clear();
+          LoadDefaults(m_hotkeys);
+        }
         PopulateTable();
         RepaintLayered(hwnd);
       }
@@ -1916,12 +2203,21 @@ bool ShortcutSettings::SaveAndDeploy() {
       // 会走到这里的只剩「段里有手写 key_binder」与「patch 是内联写法」两种,
       // 各自给一句可执行的下一步。UI 不对自己做的事说谎。
       const wchar_t* reason =
-          g_saveStats.refused_has_manual_bindings
-              ? L"✗ 未写入：patch 段里已有手写的 key_binder，请先移除或手工合并"
-              : (g_saveStats.refused_inline_patch
-                     ? L"✗ 未写入：patch 用了内联写法（patch: {…}），请改成换行块写法"
-                     : L"✗ 保存失败：无法写入 default.custom.yaml");
+          g_saveStats.refused_no_baseline
+              ? L"✗ 未写入：读不到全局快捷键表基线（default.yaml），为避免清空全局快捷键表已放弃保存"
+              : (g_saveStats.refused_has_manual_bindings
+                     ? L"✗ 未写入：patch 段里已有手写的 key_binder，请先移除或手工合并"
+                     : (g_saveStats.refused_inline_patch
+                            ? L"✗ 未写入：patch 用了内联写法（patch: {…}），请改成换行块写法"
+                            : L"✗ 保存失败：无法写入 default.custom.yaml"));
       SetWindowTextW(s_hStatus, reason);
+    }
+    return false;
+  }
+  if (g_saveStats.no_change) {
+    // 有效列表与基线完全一致 ⇒ 没有可写的 bindings, 也就没必要触发部署。
+    if (s_hStatus && IsWindow(s_hStatus)) {
+      SetWindowTextW(s_hStatus, L"✓ 无改动 · 未触发部署");
     }
     return false;
   }

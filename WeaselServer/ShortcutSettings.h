@@ -63,6 +63,11 @@ class ShortcutSettings {
   // RimeGetUserDataDir)
   static void SetYamlPath(const std::wstring& path);
 
+  // T110: 设置全局快捷键表基线 (default.yaml) 的路径 —— 单测用 fixture 注入。
+  // 生产路径不需要调用: 基线由 <user_data>/default.yaml 或
+  // <WeaselServer.exe 目录>/data/default.yaml 自动解析。
+  static void SetBaselinePath(const std::wstring& path);
+
   // ===== 公开访问 (供 Track 3 / 测试) =====
 
   // Hotkey 行 (UI 内状态; 修改只改 in-memory, Save() 才落盘)
@@ -98,6 +103,10 @@ class ShortcutSettings {
     bool is_custom;           // 用户自定义行
     bool
         is_default;  // 来自 default.yaml 内置 (vs default.custom.yaml override)
+    // T110: 本行认领的基线行号 (default.yaml 的 key_binder/bindings 下标);
+    // -1 = 不属于基线 (用户自定义行 / 应用级硬编码行)。
+    // 落盘时靠它判断「这行替换基线的对应行」还是「追加到列表末尾」。
+    int baseline_index = -1;
   };
 
   // YAML 落盘 (T106 托管块)。public 是为了让 test/TestShortcutSettings 能直接
@@ -238,6 +247,10 @@ class ShortcutSettings {
   static bool LoadHotkeys(const std::wstring& path, std::vector<Hotkey>& out);
   // 加载 default.yaml 内置 (作为 fallback)
   static bool LoadDefaults(std::vector<Hotkey>& out);
+  // T110: 用「基线 (default.yaml 的全局快捷键表) + 文件里的 override 行」
+  // 合成面板行。fileRows = 从 default.custom.yaml 解析出来的行;
+  // out = 合成后的面板行 (基线行在前, 用户自定义行在后)。
+  static bool MergeHotkeys(std::vector<Hotkey> fileRows, std::vector<Hotkey>& out);
 
   // Save() 触发 deploy 链 (spec §7.1)
   static bool SaveAndDeploy();
@@ -257,6 +270,9 @@ class ShortcutSettings {
   // 数据 (in-memory)
   static std::vector<Hotkey> m_hotkeys;
   static std::vector<Hotkey> m_defaults;  // reset 时还原
+  // T110: 基线原样行 (default.yaml 的全局表 + 应用级硬编码行), 供「恢复默认 /
+  // 恢复这一行」用; 不含用户自定义行 (自定义行由「恢复默认」整体丢弃)。
+  static std::vector<Hotkey> m_pristine;
 
   // T103: 搜索框过滤词 (空 = 显示全部)。PopulateTable 按它重建列表 ⇒
   // 过滤是"真的不显示",而不是把匹配结果算完就丢掉。

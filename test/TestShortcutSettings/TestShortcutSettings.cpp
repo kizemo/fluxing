@@ -595,11 +595,194 @@ static void TestSaveHotkeysSkipsNoAction() {
   ::DeleteFileW(p.c_str());
 }
 
+// ===== T110: 全局快捷键表基线 (baseline) =====
+//
+// 一次保存把全局快捷键表清空 (T110) 的根因: librime 的 patch 对
+// key_binder/bindings 是整表覆盖, 而旧落盘器只写「改动行」⇒ 全局表被覆盖成
+// 剩下的那几行。修法 = 写「完整合并列表」: 基线全表 + 用户改动。
+// 下面几条判据都打在落盘字节上, 不看函数返回值自证。
+
+// 造一份基线 fixture 并注入 (生产路径靠 <user_data>/default.yaml 自动解析)
+static std::wstring UseBaselineFixture() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_baseline_default.yaml");
+  const std::wstring content =
+      L"key_binder:\r\n"
+      L"  bindings:\r\n"
+      L"    - { when: always, toggle: ascii_mode, accept: Shift+space }\r\n"
+      L"    - { when: has_menu, accept: Control+1, send: 2 }\r\n"
+      L"    - { when: always, toggle: ascii_punct, accept: Control+period }\r\n";
+  EXPECT(WriteUtf8(p, content));
+  ShortcutSettings::SetBaselinePath(p);
+  return p;
+}
+
+// 基线行 (面板里的一行, 认领了基线的第 idx 条)
+static ShortcutSettings::Hotkey MakeHkBase(const wchar_t* accept,
+                                            const wchar_t* when,
+                                            const wchar_t* action_yaml,
+                                            int baseline_index) {
+  ShortcutSettings::Hotkey h = MakeHk(accept, action_yaml, true);
+  h.when = when;
+  h.baseline_index = baseline_index;
+  return h;
+}
+
+// 数落盘文件里 "key_binder/bindings:" 下面有几条 binding 行
+static int CountBindingRows(const std::string& raw) {
+  const std::string tag = "key_binder/bindings:";
+  size_t p = raw.find(tag);
+  if (p == std::string::npos)
+    return 0;
+  p += tag.size();
+  int n = 0;
+  while (p < raw.size()) {
+    size_t eol = raw.find('\n', p);
+    if (eol == std::string::npos)
+      break;
+    std::string line = raw.substr(p, eol - p);
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+      line.pop_back();
+    if (line.size() >= 5 && line.compare(0, 5, "    -") == 0)
+      ++n;
+    p = eol + 1;
+  }
+  return n;
+}
+
+// T110-a — 改一行也不能少写其余基线行 (旧实现只写改动行 ⇒ 全局表被覆盖)
+static void TestT110KeepsWholeBaselineTable() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t110_a.yaml");
+  ::DeleteFileW(p.c_str());
+  UseBaselineFixture();
+
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(
+      MakeHkBase(L"Shift+space", L"always", L"toggle: ascii_mode", 0));
+  rows.push_back(MakeHkBase(L"Control+1", L"has_menu", L"send: 2", 1));
+  rows.push_back(
+      MakeHkBase(L"Control+period", L"always", L"toggle: ascii_punct", 2));
+  rows[0].accept_new = L"Control+space";  // 用户改了这一行
+
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  // 改掉的那一行换成新键
+  EXPECT(raw.find("Control+space") != std::string::npos);
+  EXPECT(raw.find("Shift+space") == std::string::npos);
+  // 没改的两行必须还在 —— 这就是 T110 的核心: 少一行就是丢一个用户的键位
+  EXPECT(raw.find("Control+1") != std::string::npos);
+  EXPECT(raw.find("send: 2") != std::string::npos);
+  EXPECT(raw.find("Control+period") != std::string::npos);
+  EXPECT(raw.find("toggle: ascii_punct") != std::string::npos);
+  EXPECT(CountBindingRows(raw) == 3);
+  ::DeleteFileW(p.c_str());
+}
+
+// T110-b — 用户自定义行必须跟着写出去, 且排在基线行后面
+static void TestT110KeepsCustomRows() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t110_b.yaml");
+  ::DeleteFileW(p.c_str());
+  UseBaselineFixture();
+
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(
+      MakeHkBase(L"Shift+space", L"always", L"toggle: ascii_mode", 0));
+  rows.push_back(MakeHkBase(L"Control+1", L"has_menu", L"send: 2", 1));
+  rows.push_back(
+      MakeHkBase(L"Control+period", L"always", L"toggle: ascii_punct", 2));
+  ShortcutSettings::Hotkey custom =
+      MakeHk(L"Control+Alt+K", L"custom: user_added", false);
+  custom.baseline_index = -1;
+  rows.push_back(custom);
+
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(raw.find("Control+Alt+K") != std::string::npos);
+  EXPECT(CountBindingRows(raw) == 4);
+  ::DeleteFileW(p.c_str());
+}
+
+// T110-c — 有效列表与基线完全一致 ⇒ 不写 bindings (不把全局表钉死在快照上)
+static void TestT110NoChangeWritesNoBindings() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t110_c.yaml");
+  ::DeleteFileW(p.c_str());
+  UseBaselineFixture();
+
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(
+      MakeHkBase(L"Shift+space", L"always", L"toggle: ascii_mode", 0));
+  rows.push_back(MakeHkBase(L"Control+1", L"has_menu", L"send: 2", 1));
+  rows.push_back(
+      MakeHkBase(L"Control+period", L"always", L"toggle: ascii_punct", 2));
+
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(CountOf(raw, "managed block") == 1);
+  EXPECT(raw.find("key_binder/bindings:") == std::string::npos);
+  EXPECT(raw.find("patch:") == std::string::npos);
+  ::DeleteFileW(p.c_str());
+}
+
+// T110-d — 读不到基线 ⇒ 拒绝写 (宁可不写, 也不能把全局表清掉)
+static void TestT110RefusesWithoutBaseline() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t110_d.yaml");
+  ::DeleteFileW(p.c_str());
+  DeleteBackups(p);
+  // 注入一个不存在的基线 ⇒ 基线不可用
+  ShortcutSettings::SetBaselinePath(
+      TempStatePath(L"fluxing_ts_no_such_baseline.yaml"));
+
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(MakeHk(L"Control+Alt+K", L"custom: user_added", false));
+  EXPECT(!ShortcutSettings::SaveHotkeys(p, rows));  // 明确拒绝
+
+  std::string raw;
+  EXPECT(!ReadRaw(p, raw));  // 一个字节都不许落
+  EXPECT(DeleteBackups(p) == 0);
+  ::DeleteFileW(p.c_str());
+  UseBaselineFixture();  // 复原, 后续用例还要基线
+}
+
+// T110-e — 基线里「解析不了的条目」(块式写法) 也必须逐字写回 —— 少一行就是丢一行
+static void TestT110KeepsUnparsedBaselineRows() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t110_e.yaml");
+  ::DeleteFileW(p.c_str());
+  const std::wstring bp = TempStatePath(L"fluxing_ts_t110_e_baseline.yaml");
+  const std::wstring content =
+      L"key_binder:\r\n"
+      L"  bindings:\r\n"
+      L"    - { when: always, toggle: ascii_mode, accept: Shift+space }\r\n"
+      L"    - when: always\r\n"
+      L"      accept: Control+9\r\n"
+      L"      send: 9\r\n";
+  EXPECT(WriteUtf8(bp, content));
+  ShortcutSettings::SetBaselinePath(bp);
+
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(
+      MakeHkBase(L"Shift+space", L"always", L"toggle: ascii_mode", 0));
+  rows[0].accept_new = L"Control+space";  // 改一行 ⇒ 必须写完整列表
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(raw.find("Control+space") != std::string::npos);
+  // 解析不了的那条也要原样写回去
+  EXPECT(raw.find("accept: Control+9") != std::string::npos);
+  EXPECT(raw.find("send: 9") != std::string::npos);
+  ::DeleteFileW(p.c_str());
+  UseBaselineFixture();  // 复原
+}
+
 }  // namespace test
 
 int wmain(int /*argc*/, wchar_t** /*argv*/) {
   using namespace test;
   std::wcout << L"[TestShortcutSettings] running..." << std::endl;
+  // T110: 注入基线 fixture (生产路径靠 <user_data>/default.yaml 自动解析;
+  // 单测环境没有那个文件 ⇒ 基线不可用 ⇒ 保存会被拒绝)
+  UseBaselineFixture();
   TestInitialState();
   TestSetYamlPath();
   TestHotkeysInitialEmpty();
@@ -621,6 +804,12 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
   TestSaveHotkeysRefusesInlinePatch();
   TestSaveHotkeysWritesFileSourcedOverride();
   TestSaveHotkeysSkipsNoAction();
+  // T110: 保存即清空全局快捷键表 —— 必须写完整合并列表
+  TestT110KeepsWholeBaselineTable();
+  TestT110KeepsCustomRows();
+  TestT110NoChangeWritesNoBindings();
+  TestT110KeepsUnparsedBaselineRows();
+  TestT110RefusesWithoutBaseline();
   std::wcout << L"[TestShortcutSettings] PASS=" << s_pass
               << L" FAIL=" << s_fail << std::endl;
   return s_fail == 0 ? 0 : 1;
