@@ -28,6 +28,8 @@
 #include <FluxingCandidateIgnore.h>
 // 批次 H: 面板「全/半角」的显示口径纯函数(单一事实源,constitution R7)。
 #include <FluxingPanelStatus.h>
+// 批次 I / ADR 0043: 半角标点(英文标点)状态下的标点语言转换(纯函数,单一事实源)。
+#include <FluxingPunctText.h>
 
 #define TRANSPARENT_COLOR 0x00000000
 #define ARGB2ABGR(value)                                 \
@@ -1385,9 +1387,26 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
   RIME_STRUCT(RimeCommit, commit);
   if (rime_api->get_commit(session_id, &commit)) {
     actions.push_back("commit");
-    std::wstring commit_text_w = escape_string(u8tow(commit.text));
-    body.append(L"commit=").append(commit_text_w).append(L"\n");
+    // ★ 批次 I / ADR 0043:半角标点(英文标点)状态下,引擎吐出来的仍然是中文
+    //   标点 —— librime 的标点表**只**由 full_shape 选项选,而本 fork 的两张
+    //   表(output/data/default.yaml)都映射中文标点;ascii_punct 只是让
+    //   punctuator 处理器短路,翻译路径根本不看它。
+    //   ⇒ 在**提交边界**(全仓唯一一处 get_commit)把纯标点提交里的中文标点
+    //     换成 ASCII。状态取 live status(与面板图标同一个事实源),读不到
+    //     才回落服务端镜像;get_status 是进程内读内存(无 I/O),且只在
+    //     「有提交」这一分支才多读一次。
+    std::string commit_text = commit.text ? commit.text : "";
     rime_api->free_commit(&commit);
+    bool ascii_punct = m_ascii_punct;
+    RIME_STRUCT(RimeStatus, punct_status);
+    if (rime_api->get_status(session_id, &punct_status)) {
+      ascii_punct = punct_status.is_ascii_punct != 0;
+      rime_api->free_status(&punct_status);
+    }
+    if (ascii_punct)
+      commit_text = fluxing::punct_text::ApplyAsciiPunctuation(commit_text);
+    std::wstring commit_text_w = escape_string(u8tow(commit_text.c_str()));
+    body.append(L"commit=").append(commit_text_w).append(L"\n");
   }
 
   bool is_composing = false;
@@ -2196,16 +2215,27 @@ void RimeWithWeaselHandler::_ApplyPunctWidth(RimeSessionId session_id,
   // ASCII**。这是既有开关里唯一能真正打出英文标点的那个
   // (full_shape / half_shape 两张表在本 fork 里都映射中文标点)。
   rime_api->set_option(session_id, "ascii_punct", halfwidth ? True : False);
-  // full_shape 与 ascii_punct 同向,保证「全/半角」在引擎里只有一套状态。
-  // 只在当前值不同才写:否则每次 Shift 都要多落一次 user.yaml。
-  const bool cur_full =
-      rime_api->get_option(session_id, "full_shape") != False;
-  const bool want_full = !halfwidth;
-  if (cur_full != want_full)
-    rime_api->set_option(session_id, "full_shape", want_full ? True : False);
+  // ★ 批次 H 语义纠正(2026-11-07,用户原话):「我希望的全角,只是中文标点
+  //   符号。但数字＼其他符号等,还应该和英文状态一致,应该还是半角的。
+  //   参照搜狗输入法等其他输入法的设置。」
+  //   ⇒ **标点宽度不再驱动 full_shape**。full_shape 一开,数字与符号会被
+  //     librime 换成全角形态,正是用户不要的那个行为。v9 / ADR 0040 把
+  //     「全角 = full_shape = !ascii_punct」耦合在一起,那条口径作废
+  //     (改由 ADR 0041 记录):「全角」从此**只表示中文标点** = ascii_punct 关。
+  //   ⇒ 仍然要**清 0**,不能只是「不写」:旧版本由面板按钮置上的
+  //     full_shape=true 已被 default.yaml 的 switcher/save_options 持久化进
+  //     user.yaml。librime 里 full_shape 一开,`punctuator/full_shape/` 那张
+  //     表就生效(空格变全角空格等),正是用户不要的行为。
+  //   ⇒ **两个分支都清**:不能只在「选中文标点」时清 —— 用户机器上残留的
+  //     full_shape=true,即使他先按「英文标点」也要一并清掉,否则按了英文
+  //     标点还会打出全角空格。清 0 幂等,不改变已经正确的状态。
+  //   ⇒ **永不置 1**:full_shape 只管数字/符号的形态,与「标点语言」无关。
+  //   ⇒ 只在当前值不同才写,否则每次 Shift 都要多落一次 user.yaml。
+  if (rime_api->get_option(session_id, "full_shape") != False)
+    rime_api->set_option(session_id, "full_shape", False);
+  m_full_shape = false;
   // 服务端镜像(面板读不到 live 状态时用它兜底)。
   m_ascii_punct = halfwidth;
-  m_full_shape = want_full;
 }
 
 // v6 需求② + 批次 H: 面板的「生效输入态」。
@@ -2420,10 +2450,20 @@ void RimeWithWeaselHandler::ShiftUp(bool is_left,
     // 标点原样直出 ASCII)。
     //
     // 作用域仍然限**当前会话**(ADR 0010 P2):裸 Shift 绝不广播到别的会话。
-    // 为什么这里不写 m_global_ascii_mode:那是**全局**镜像,ADR 0012 规定
-    // 它的传播判据由另一个开关(m_global_ascii_configured)决定;面板显示
-    // 由 GetPanelInputState 的 live 读取负责校正(读的就是本会话)。
     _ApplyPunctWidth(to_session_id(ipc_id), !ascii);
+    // ★ 批次 H 追加修复(2026-11-07,用户原话):「裸 Shift 切中英文后,设置栏
+    //   的全/半角图标同步变化,但「中/英」标志不同步」。
+    //   根因:本分支**只**写引擎的 live option,不写服务端镜像;而
+    //   _ApplyPunctWidth 顺手写了 m_ascii_punct ⇒ 镜像里「标点」是新的、
+    //   「中英文」还是旧的。只要 GetPanelInputState 拿不到 live 状态
+    //   (_ResolveTargetSession 四档全落空:FocusOut 已把 m_active_session
+    //   清零、m_last_focus_session 未设、会话数 ≠ 1),面板就回落镜像 ⇒
+    //   表现恰好就是「全半角变了、中/英 没变」。
+    //   补写镜像**不产生第二真相源**:GetPanelInputState 一旦拿到 live 状态
+    //   就整体覆盖镜像(见该函数里的 live 读取),镜像只在读不到 live 时兜底。
+    //   也不违反 ADR 0012:那条规定的是**跨会话广播**的传播判据
+    //   (m_global_ascii_configured),这里写的是显示兜底值,不推给别的会话。
+    m_global_ascii_mode = !ascii;
     DLOG(INFO) << "toggle ascii_mode -> " << !ascii << " ipc_id=" << ipc_id;
     // ADR 0012: answer with a body so that the client learns the new
     // status.ascii_mode and the language bar icon follows the input mode.
