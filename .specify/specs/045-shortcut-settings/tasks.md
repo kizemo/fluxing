@@ -22,7 +22,7 @@
 - [ ] **T104 design §7.3「立即验证」按钮** — `Action_VerifyHotkey` 只存在于枚举与一条断言，无 UI、无实现。**注意**：design §7.3 要求用 `SendInput` 模拟按键，须先过 P2 审查（AP-045-B：不在 hook 里做 IPC / 输入注入）。
 - [ ] **T105 design §2.3 自定义快捷键子 modal** — 「+ 自定义」当前只 push 一行 placeholder（`accept=""` / `custom: user_added`），没有动作类型 / 动作值 / 触发条件的选择。
 - [x] **T106 写盘是全量而非增量 patch** — 现在写出全部行（含默认行），且 `action_yaml` 为空的行会写出**无动作的坏 binding**。**(2026-11-08 完成: 托管块 `# >>> fluxing shortkey-managed` 只含需 override 的行; 无 `action_yaml` 一律跳过并计入状态文案; 零行不写空 `patch:`/`bindings:`; 首次接管先 `BackupFile`, 失败即不写; 旧文件已有顶层 `patch:` 且无托管块 ⇒ 拒写报「未写入」; 正文级真合并留 T107)**
-- [ ] **T107 与既有 `patch:` 正文级真合并** — T106 当前对「旧文件已有顶层 `patch:` 且无托管块」采取**拒写**（避免 YAML 重复键毁配置）。需实现按 key 递归合并后再写，才能接管老用户配置。
+- [x] **T107 与既有 `patch:` 正文级真合并** — T106 当前对「旧文件已有顶层 `patch:` 且无托管块」采取**拒写**（避免 YAML 重复键毁配置）。需实现按 key 递归合并后再写，才能接管老用户配置。**(2026-11-08 完成: 托管块改为只含 `key_binder/bindings:` 子块、不再自带 `patch:`; A 形态=无顶层 `patch:` 时追加, B 形态=有顶层 `patch:` 时把子块插到 `patch:` 行之后（正文逐字节保留）; C 形态仍拒写, 拆成「已有手写 key_binder」与「`patch:` 内联写法」两条独立原因 + 精确中文文案。S1 同批修: 合并判据加 `when`, 命中即 `is_default=false`。单测 116 断言全绿, 主构建通过)**
 
 ## P2 — 界面补全
 

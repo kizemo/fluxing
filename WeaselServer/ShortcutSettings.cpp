@@ -560,15 +560,27 @@ bool ShortcutSettings::LoadHotkeys(const std::wstring& path,
   std::vector<Hotkey> merged;
   for (const auto& d : m_defaults)
     merged.push_back(d);
-  // spec 045 §5.4: 把 custom 行覆盖 defaults 同 action+when;或追加新的
+  // spec 045 §5.4: 把 custom 行覆盖 defaults 同 (accept, when);或追加新的
+  //
+  // T107 S1: 旧实现只比 accept, 有两处都是真数据丢失路径 ——
+  //  1) 同一个键位配在不同 when 下 (例如一直生效 + 只在中文态生效) 是合法的
+  //     两条 binding, 只比 accept 会把后一条折进前一条 ⇒ 用户的第二条没了。
+  //  2) 命中时没复位 is_default ⇒ 合并进来的 override 在落盘时被
+  //     「!edited && is_default 就跳过」当成没动过的内置默认行丢掉 ⇒
+  //     保存一次就把用户的绑定写没了。
+  // when 归一: 空的 when 在 librime 里等价于 always, 比较前先对齐。
+  auto whenOf = [](const Hotkey& h) -> std::wstring {
+    return h.when.empty() ? std::wstring(L"always") : h.when;
+  };
   for (const auto& c : out) {
     bool merged_in = false;
     for (auto& d : merged) {
-      if (d.accept == c.accept) {
-        // 同 accept: 替换
-        d.accept = c.accept;
+      if (d.accept == c.accept && whenOf(d) == whenOf(c)) {
         d.action_yaml = c.action_yaml;
+        d.when = whenOf(c);
+        d.yaml_raw = c.yaml_raw;
         d.is_custom = true;
+        d.is_default = false;  // 来自文件 = 用户明确要的 override, 不是默认值
         merged_in = true;
         break;
       }
@@ -580,14 +592,20 @@ bool ShortcutSettings::LoadHotkeys(const std::wstring& path,
   return true;
 }
 
-// ===== T106: 托管块落盘 (default.custom.yaml) =====
+// ===== T106/T107: 托管块落盘 (default.custom.yaml) =====
 //
 // 旧实现把整张表 (含一行没改过的内置默认) 全量写进 default.custom.yaml, 并且
 // trunc 重写整份文件 —— 用户在这个文件里的 schema_list / menu / switcher 等段
 // 一次保存就没了; action_yaml 为空的行还会写成
 // "- { when: X, accept: Y,  }" 这种无动作 binding, librime 直接忽略。
 //
-// 现在只写「真正需要 override 的行」, 并且只替换文件里的托管块。
+// 现在只写「真正需要 override 的行」, 并且只动文件里的托管块。
+//
+// T107 (正文级真合并): 落盘按旧文件的形态分三条路 ——
+//   A 没有顶层 `patch:`   ⇒ 追加 patch: + 托管子块 (T106 行为);
+//   B 有顶层 `patch:` 段  ⇒ 把托管子块插进该段内部, 块外内容逐字节保留;
+//   C 段里有手写 key_binder 或 patch 是内联写法 ⇒ 明确拒绝, 文案说清原因。
+// 托管子块本身不含 patch:, A/B 共用同一份块体, 因此永远不会写出第二个 patch:。
 
 namespace {
 
@@ -597,7 +615,11 @@ struct SaveStats {
   int written = 0;            // 写进 bindings 的行数
   int skipped_no_action = 0;  // 改过但没有 YAML 动作 ⇒ 写出来是坏 binding
   bool backed_up = false;     // 首次接管前备份了旧文件
-  bool refused = false;       // 旧文件已有 patch 段且无托管块 ⇒ 拒绝写
+  // T107: 拒绝写入的两条真原因分开记账。用户看到的必须是「为什么没写」,
+  // 不是从前那句泛泛的「已有 patch 段」—— 那段现在本来就能写了。
+  bool refused = false;                      // 任一拒绝路径
+  bool refused_has_manual_bindings = false;  // patch 段里有用户手写的 key_binder
+  bool refused_inline_patch = false;         // patch: {…} 内联映射, 文本层插不进
 };
 SaveStats g_saveStats;
 
@@ -606,26 +628,211 @@ const char kManagedBegin[] =
     "# >>> fluxing-shortcuts (spec 045) managed block - do not edit";
 const char kManagedEnd[] = "# <<< fluxing-shortcuts (spec 045) end";
 
-// 顶层 `patch:` 键 (行首, 非注释)。存在时拒绝自动接管: 再追加一个 patch:
-// 就是 YAML 重复键, librime 会读错或整份失效。
-bool HasTopLevelPatch(const std::string& utf8) {
+// ---- T107: 行级模型 ----
+// 保留每行原有行尾: 混行尾的 YAML 合法, 一次保存不该顺手整份改写用户的文件。
+struct Line {
+  std::string text;  // 不含行尾
+  std::string eol;   // "\r\n" / "\n" / "" (末行没有换行)
+};
+
+std::vector<Line> SplitLines(const std::string& utf8) {
+  std::vector<Line> out;
   size_t pos = 0;
   while (pos < utf8.size()) {
-    const size_t lineStart = pos;
-    size_t eol = utf8.find('\n', pos);
-    if (eol == std::string::npos)
-      eol = utf8.size();
-    pos = eol + 1;
-    size_t a = lineStart;
-    while (a < eol && (utf8[a] == ' ' || utf8[a] == '\t'))
-      ++a;
-    // 只认「行首无缩进」的 patch: —— 缩进的 patch: 是别的段的子键, 追加不冲突。
-    if (a == lineStart && a < eol && utf8[a] != '#' && eol - a >= 6 &&
-        utf8.compare(a, 6, "patch:") == 0) {
-      return true;
+    const size_t eol = utf8.find('\n', pos);
+    Line ln;
+    if (eol == std::string::npos) {
+      ln.text = utf8.substr(pos);
+      out.push_back(ln);
+      break;
     }
+    ln.text = utf8.substr(pos, eol - pos);
+    if (!ln.text.empty() && ln.text.back() == '\r') {
+      ln.text.pop_back();
+      ln.eol = "\r\n";
+    } else {
+      ln.eol = "\n";
+    }
+    out.push_back(ln);
+    pos = eol + 1;
+  }
+  return out;
+}
+
+std::string JoinLines(const std::vector<Line>& lines) {
+  std::string out;
+  for (const auto& ln : lines) {
+    out += ln.text;
+    out += ln.eol.empty() ? "\r\n" : ln.eol;
+  }
+  return out;
+}
+
+std::string TrimAscii(const std::string& s) {
+  size_t a = 0;
+  size_t b = s.size();
+  while (a < b && (s[a] == ' ' || s[a] == '\t' || s[a] == '\r'))
+    ++a;
+  while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' || s[b - 1] == '\r'))
+    --b;
+  return s.substr(a, b - a);
+}
+
+// 摘掉历史托管块 —— 包括 T106 那种「追加在文件尾、块内自带 patch:」的形态。
+// 标记行按「去掉缩进后文本相等」匹配, 缩进怎么写都能自愈; 块体整段丢弃,
+// 所以重写后既不会留孤儿缩进键, 也不会出现第二个顶层 patch:。
+std::vector<Line> RemoveManagedBlock(const std::vector<Line>& lines) {
+  std::vector<Line> out;
+  bool in_block = false;
+  for (const auto& ln : lines) {
+    const std::string t = TrimAscii(ln.text);
+    if (!in_block && t == kManagedBegin) {
+      in_block = true;
+      continue;
+    }
+    if (in_block) {
+      if (t == kManagedEnd)
+        in_block = false;
+      continue;
+    }
+    out.push_back(ln);
+  }
+  return out;
+}
+
+// 顶层 `patch:` 行下标 (行首无缩进、非注释); 没有返回 -1。
+// inlineValue = true 表示 `patch:` 后面还跟着内容 (`patch: {…}`): 那是内联映射,
+// 文本层没法往里插子键 ⇒ 由调用方拒绝, 不猜。
+int FindTopLevelPatch(const std::vector<Line>& lines, bool& inlineValue) {
+  inlineValue = false;
+  for (size_t i = 0; i < lines.size(); ++i) {
+    const std::string& s = lines[i].text;
+    if (s.empty() || s[0] == ' ' || s[0] == '\t' || s[0] == '#')
+      continue;
+    if (s.compare(0, 6, "patch:") != 0)
+      continue;
+    const std::string rest = TrimAscii(s.substr(6));
+    if (!rest.empty() && rest[0] != '#')
+      inlineValue = true;
+    return static_cast<int>(i);
+  }
+  return -1;
+}
+
+// patch 段范围: patch 行之后, 到「第一个行首无缩进且非空非注释」的行之前。
+// 顶层注释不算段尾 —— 托管块自己的标记行就是列 0 注释。
+size_t PatchSectionEnd(const std::vector<Line>& lines, size_t patchIdx) {
+  for (size_t i = patchIdx + 1; i < lines.size(); ++i) {
+    const std::string& s = lines[i].text;
+    if (s.empty() || s[0] == ' ' || s[0] == '\t' || s[0] == '#')
+      continue;
+    return i;
+  }
+  return lines.size();
+}
+
+// patch 段里已有用户手写的 key_binder 配置 (整段 `key_binder:` 或裸 `bindings:`)。
+// 再插一个 key_binder/bindings: 就是同一 mapping 里的重复键 ⇒ librime 读错甚至
+// 整份失效。要让「手工项与托管项共存」得先定语义 (handoff §3.2 边界), 只拒绝。
+bool HasManualKeyBinder(const std::vector<Line>& lines,
+                        size_t patchIdx,
+                        size_t end) {
+  for (size_t i = patchIdx + 1; i < end; ++i) {
+    const std::string t = TrimAscii(lines[i].text);
+    if (t.empty() || t[0] == '#')
+      continue;
+    if (t.compare(0, 10, "key_binder") == 0)
+      return true;
+    if (t == "bindings:")
+      return true;
   }
   return false;
+}
+
+// 托管子块: 标记 + 中文注释 + (bindings 子块 或 空说明), 行尾 CRLF (L09)。
+// **不含 `patch:`** —— B 形态要把它插进用户已有的 patch: 段内部; A 形态与导出
+// 才由调用方补 patch:。返回结构体而不是顺手改 g_saveStats, 是为了让这块保持
+// 纯函数、结果可断言 (constitution R7: 生产与单测共用同一实现)。
+struct ManagedBlock {
+  std::string text;
+  int rows = 0;
+  int skipped_no_action = 0;
+};
+
+ManagedBlock BuildManagedSubBlock(
+    const std::vector<ShortcutSettings::Hotkey>& data) {
+  ManagedBlock block;
+  auto appendAscii = [&block](const char* s) {
+    block.text += s;
+    block.text += "\r\n";
+  };
+
+  auto appendLine = [&block](const std::wstring& wline) {
+    int len = WideCharToMultiByte(CP_UTF8, 0, wline.c_str(),
+                                  static_cast<int>(wline.size()), nullptr, 0,
+                                  nullptr, nullptr);
+    if (len > 0) {
+      std::string buf(len, 0);
+      WideCharToMultiByte(CP_UTF8, 0, wline.c_str(),
+                          static_cast<int>(wline.size()), &buf[0], len, nullptr,
+                          nullptr);
+      block.text += buf;
+    }
+    block.text += "\r\n";
+  };
+
+  appendAscii(kManagedBegin);
+  appendLine(L"# 本段由「快捷键设置」托管, 手工修改会被下次保存覆盖。");
+  appendLine(L"# 生成者: spec 045 ShortcutSettings (v0.19.0.28)");
+
+  auto quoteIfNeeded = [](const std::wstring& s) -> std::wstring {
+    bool needQuote = false;
+    for (wchar_t c : s) {
+      if (c == L' ' || c == L':' || c == L'+' || c == L'-') {
+        needQuote = true;
+        break;
+      }
+    }
+    if (!needQuote)
+      return s;
+    return L"\"" + s + L"\"";
+  };
+
+  // 只写「需要 override 的行」: 用户改过的, 或本来就来自文件的 (自定义行 /
+  // 既有 override, 必须原样写回, 否则一次保存就把用户的绑定全删了)。
+  // 没动过的内置默认不该出现在 custom 文件里。
+  std::vector<std::wstring> rows;
+  for (const auto& h : data) {
+    const std::wstring effectiveAccept =
+        h.accept_new.empty() ? h.accept : h.accept_new;
+    const bool edited = !h.accept_new.empty() && h.accept_new != h.accept;
+    if (!edited && h.is_default)
+      continue;
+    if (effectiveAccept.empty())
+      continue;
+    if (h.action_yaml.empty()) {
+      // 没有 YAML 动作 ⇒ 写出来是 "- { when: X, accept: Y,  }" 这种坏
+      // binding, librime 直接忽略。跳过并记账, 由状态行说明, 不静默吞。
+      ++block.skipped_no_action;
+      continue;
+    }
+    rows.push_back(L"    - { when: " + (h.when.empty() ? L"always" : h.when) +
+                   L", accept: " + quoteIfNeeded(effectiveAccept) + L", " +
+                   h.action_yaml + L" }");
+  }
+
+  if (rows.empty()) {
+    // 不写空的 bindings: —— patch 里的空 bindings 会把用户已配的 key_binder
+    // 覆盖成空。这里只留注释, 让旧块被清掉的同时不改变任何语义。
+    appendLine(L"  # 当前没有需要落盘的改动 (不写空 bindings, 避免清空 key_binder)。");
+  } else {
+    appendLine(L"  key_binder/bindings:");
+    for (const auto& r : rows)
+      appendLine(r);
+  }
+  block.rows = static_cast<int>(rows.size());
+  appendAscii(kManagedEnd);
+  return block;
 }
 
 // 首次接管前整份备份。备份失败就不写 —— 没有退路不该覆盖用户配置。
@@ -663,112 +870,66 @@ bool ShortcutSettings::SaveHotkeys(const std::wstring& path,
     existing = existing.substr(3);
   }
 
-  // ---- 2. 组织托管块 (BOM 不在这里加, 最后统一加在文件开头) ----
-  std::string utf8;
-  auto appendAscii = [&utf8](const char* s) {
-    utf8 += s;
-    utf8 += "\r\n";
-  };
+  // ---- 2. 组织托管子块 (只含 key_binder/bindings, 不含 patch:) ----
+  const ManagedBlock block = BuildManagedSubBlock(data);
+  g_saveStats.written = block.rows;
+  g_saveStats.skipped_no_action = block.skipped_no_action;
 
-  auto appendLine = [&utf8](const std::wstring& wline) {
-    int len = WideCharToMultiByte(CP_UTF8, 0, wline.c_str(),
-                                  static_cast<int>(wline.size()), nullptr, 0,
-                                  nullptr, nullptr);
-    if (len > 0) {
-      std::string buf(len, 0);
-      WideCharToMultiByte(CP_UTF8, 0, wline.c_str(),
-                          static_cast<int>(wline.size()), &buf[0], len, nullptr,
-                          nullptr);
-      utf8 += buf;
-    }
-    utf8 += "\r\n";
-  };
-
-  appendAscii(kManagedBegin);
-  appendLine(L"# 本段由「快捷键设置」托管, 手工修改会被下次保存覆盖。");
-  appendLine(L"# 生成者: spec 045 ShortcutSettings (v0.19.0.28)");
-
-  auto quoteIfNeeded = [](const std::wstring& s) -> std::wstring {
-    bool needQuote = false;
-    for (wchar_t c : s) {
-      if (c == L' ' || c == L':' || c == L'+' || c == L'-') {
-        needQuote = true;
-        break;
-      }
-    }
-    if (!needQuote)
-      return s;
-    return L"\"" + s + L"\"";
-  };
-
-  // 只写「需要 override 的行」: 用户改过的, 或本来就来自文件的 (自定义行 /
-  // 既有 override, 必须原样写回, 否则一次保存就把用户的绑定全删了)。
-  // 没动过的内置默认不该出现在 custom 文件里。
-  std::vector<std::wstring> rows;
-  for (const auto& h : data) {
-    const std::wstring effectiveAccept =
-        h.accept_new.empty() ? h.accept : h.accept_new;
-    const bool edited = !h.accept_new.empty() && h.accept_new != h.accept;
-    if (!edited && h.is_default)
-      continue;
-    if (effectiveAccept.empty())
-      continue;
-    if (h.action_yaml.empty()) {
-      // 没有 YAML 动作 ⇒ 写出来是 "- { when: X, accept: Y,  }" 这种坏
-      // binding, librime 直接忽略。跳过并记账, 由状态行说明, 不静默吞。
-      ++g_saveStats.skipped_no_action;
-      continue;
-    }
-    rows.push_back(L"    - { when: " + (h.when.empty() ? L"always" : h.when) +
-                   L", accept: " + quoteIfNeeded(effectiveAccept) + L", " +
-                   h.action_yaml + L" }");
-  }
-
-  if (rows.empty()) {
-    // 不写空的 patch:/bindings: —— patch 里的空 bindings 会把用户已配的
-    // key_binder 覆盖成空。
-    appendLine(L"# 当前没有需要落盘的改动 (不写空 patch, 避免清空 key_binder)。");
-  } else {
-    appendLine(L"patch:");
-    appendLine(L"  key_binder/bindings:");
-    for (const auto& r : rows)
-      appendLine(r);
-  }
-  g_saveStats.written = static_cast<int>(rows.size());
-  appendAscii(kManagedEnd);
-
-  // ---- 3. 组装: 只替换托管块, 块外内容原样保留 ----
+  // ---- 3. 组装 ----
+  // 形态判定全部在写盘之前完成: 任一拒绝路径都不碰文件。
   std::string out;
-  const size_t beg = existing.find(kManagedBegin);
-  if (overwrite_file || existing.empty()) {
-    // 导出 / 全新文件: 整份就是托管块
-    out = utf8;
-  } else if (beg != std::string::npos) {
-    size_t end = existing.find(kManagedEnd, beg);
-    if (end == std::string::npos) {
-      end = existing.size();  // 只有头没有尾 ⇒ 当成坏块吃到最后重写
-    } else {
-      end += sizeof(kManagedEnd) - 1;
-      while (end < existing.size() &&
-             (existing[end] == '\r' || existing[end] == '\n')) {
-        ++end;  // 顺带吃掉标记行余下的换行
+  if (overwrite_file) {
+    // 导出: 整份文件就是托管块, 所以要自带顶层 patch:
+    out = block.rows > 0 ? ("patch:\r\n" + block.text) : block.text;
+  } else {
+    // 先摘掉历史托管块 (T106 的形态是「追加在文件尾、块内含 patch:」), 再在
+    // 剩下的用户正文上判形态 —— 自愈不会留下第二个顶层 patch: 或孤儿缩进键。
+    const bool had_block = existing.find(kManagedBegin) != std::string::npos;
+    std::vector<Line> lines = RemoveManagedBlock(SplitLines(existing));
+
+    bool inline_patch = false;
+    const int patch_idx = FindTopLevelPatch(lines, inline_patch);
+
+    if (patch_idx >= 0 && inline_patch) {
+      // `patch: {…}` 是内联映射: 文本层插不进去, 也不该猜。
+      g_saveStats.refused = true;
+      g_saveStats.refused_inline_patch = true;
+      return false;
+    }
+
+    if (patch_idx >= 0) {
+      const size_t patch_end =
+          PatchSectionEnd(lines, static_cast<size_t>(patch_idx));
+      if (HasManualKeyBinder(lines, static_cast<size_t>(patch_idx), patch_end)) {
+        // 用户自己在 patch 段里手写了 key_binder: 再插一个同名键就是 YAML
+        // 重复键, librime 会读错或整份失效。放开这条属于 §3.2 边界, 要用户拍板。
+        g_saveStats.refused = true;
+        g_saveStats.refused_has_manual_bindings = true;
+        return false;
       }
     }
-    out = existing.substr(0, beg) + utf8 + existing.substr(end);
-  } else if (HasTopLevelPatch(existing)) {
-    // 旧文件已有顶层 `patch:` 段但没有托管块 ⇒ 再追加一个就是 YAML 重复键,
-    // librime 会读错甚至整份失效。不猜、不做半吊子合并, 明确拒绝并让用户
-    // 决定 (正文级真合并是 T107)。
-    g_saveStats.refused = true;
-    return false;
-  } else {
-    if (!BackupFile(path))
-      return false;  // 没有退路就不覆盖用户配置
-    g_saveStats.backed_up = true;
-    out = existing;
-    if (out.back() != '\n')
-      out += "\r\n";
-    out += utf8;
+
+    if (!had_block && !existing.empty()) {
+      if (!BackupFile(path))
+        return false;  // 没有退路就不覆盖用户配置
+      g_saveStats.backed_up = true;
+    }
+
+    if (patch_idx >= 0) {
+      // B 形态 (T107): 插到用户 patch: 段的最前面, 即 patch 行的下一行。
+      // 块外内容 (schema_list / menu / …) 逐字节原样保留。
+      std::vector<Line> sub = SplitLines(block.text);
+      lines.insert(lines.begin() + patch_idx + 1, sub.begin(), sub.end());
+      out = JoinLines(lines);
+    } else {
+      // A 形态: 文件里没有顶层 patch: ⇒ 追加一个 (T106 行为)。
+      out = JoinLines(lines);
+      if (!out.empty() && out.back() != '\n')
+        out += "\r\n";
+      if (block.rows > 0)
+        out += "patch:\r\n";
+      out += block.text;
+    }
   }
 
   std::ofstream f(path, std::ios::binary);
@@ -1735,13 +1896,17 @@ bool ShortcutSettings::SaveAndDeploy() {
     return false;
   if (!SaveHotkeys(s_yamlPath, m_hotkeys)) {
     if (s_hStatus && IsWindow(s_hStatus)) {
-      // 拒绝写入和写失败是两件事,文案不能混:前者要用户手工合并旧 patch,
-      // 后者是权限/占用问题。UI 不对自己做的事说谎。
-      SetWindowTextW(
-          s_hStatus,
-          g_saveStats.refused
-              ? L"✗ 未写入：default.custom.yaml 已有 patch 段，请手工合并后再保存"
-              : L"✗ 保存失败：无法写入 default.custom.yaml");
+      // 拒绝写入和写失败是两件事, 文案不能混; 两条拒绝原因也不能混。
+      // T107 起「已有 patch 段」不再是拒绝理由 (那种文件现在能正文级合并),
+      // 会走到这里的只剩「段里有手写 key_binder」与「patch 是内联写法」两种,
+      // 各自给一句可执行的下一步。UI 不对自己做的事说谎。
+      const wchar_t* reason =
+          g_saveStats.refused_has_manual_bindings
+              ? L"✗ 未写入：patch 段里已有手写的 key_binder，请先移除或手工合并"
+              : (g_saveStats.refused_inline_patch
+                     ? L"✗ 未写入：patch 用了内联写法（patch: {…}），请改成换行块写法"
+                     : L"✗ 保存失败：无法写入 default.custom.yaml");
+      SetWindowTextW(s_hStatus, reason);
     }
     return false;
   }

@@ -358,6 +358,25 @@ static int CountOf(const std::string& hay, const std::string& needle) {
   return n;
 }
 
+// 备份文件名 = <path>.bak-YYYYMMDD-HHMMSS。第一次接管用户文件前必须备份,
+// 拒绝写入时不该留备份; 用例据此断言「有没有退路」这件事真的发生了。
+static int DeleteBackups(const std::wstring& path) {
+  const size_t slash = path.find_last_of(L"\\/");
+  const std::wstring dir =
+      slash == std::wstring::npos ? std::wstring() : path.substr(0, slash + 1);
+  WIN32_FIND_DATAW fd{};
+  HANDLE h = ::FindFirstFileW((path + L".bak-*").c_str(), &fd);
+  if (h == INVALID_HANDLE_VALUE)
+    return 0;
+  int n = 0;
+  do {
+    ++n;
+    ::DeleteFileW((dir + fd.cFileName).c_str());
+  } while (::FindNextFileW(h, &fd));
+  ::FindClose(h);
+  return n;
+}
+
 static ShortcutSettings::Hotkey MakeHk(const wchar_t* accept,
                                        const wchar_t* action_yaml,
                                        bool is_default) {
@@ -390,13 +409,20 @@ static void TestSaveHotkeysWritesOnlyEdited() {
   EXPECT(raw.find("Control+Alt+L") != std::string::npos);
   // 没动过的内置默认不该出现在 custom 文件里
   EXPECT(raw.find("Shift+Space") == std::string::npos);
-  EXPECT(CountOf(raw, "\npatch:") == 1);
+  // T107: 托管子块不再自带 patch:, A 形态把顶层 patch: 补在正文最前面 ⇒
+  // 全文件只有一个 patch:, 且它在 BOM 之后的第一行。
+  EXPECT(CountOf(raw, "patch:") == 1);
+  EXPECT(raw.compare(3, 8, "patch:\r\n") == 0);
+  EXPECT(raw.find("patch:") < raw.find("managed block"));
   ::DeleteFileW(p.c_str());
 }
 
 // T106-b — 二次保存只替换托管块: 块外内容 (schema_list 等) 必须原样活着
 static void TestSaveHotkeysPreservesOutsideBlock() {
   const std::wstring p = TempStatePath(L"fluxing_ts_t106_b.yaml");
+  // 先清掉历史运行残留的备份: 本用例要断言「本次只备份一次」, 而旧版本代码
+  // 从不清理 .bak-*, %TEMP% 里会累积历次运行的备份, 混进来就数不清了。
+  DeleteBackups(p);
   const std::string outside =
       "\xEF\xBB\xBF"
       "schema_list:\r\n  - schema: rime_ice\r\n";
@@ -420,12 +446,75 @@ static void TestSaveHotkeysPreservesOutsideBlock() {
   EXPECT(raw.find("Control+Alt+K") != std::string::npos);
   EXPECT(raw.find("Control+Alt+L") == std::string::npos);
   EXPECT(raw.find("schema_list:") != std::string::npos);
+  EXPECT(DeleteBackups(p) == 1);  // 只有首次接管时备份
   ::DeleteFileW(p.c_str());
 }
 
-// T106-c — 旧文件已有顶层 patch: 且无托管块 ⇒ 拒绝写, 一个字节都不许动
-static void TestSaveHotkeysRefusesExistingPatch() {
-  const std::wstring p = TempStatePath(L"fluxing_ts_t106_c.yaml");
+// T107-b — 旧文件已有顶层 patch: 段 (段里没有手写 key_binder) ⇒ 托管子块插进
+// 该段最前面。这是 T107 的正面目标: 用户正文 (schema_list 等) 逐字节保留,
+// 全文件仍然只有一个顶层 patch:, 不追加第二个。
+static void TestSaveHotkeysInsertsIntoExistingPatch() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t107_b.yaml");
+  DeleteBackups(p);  // 同上: 清历史残留, 让「本次备份次数」可断言
+  const std::string manual =
+      "\xEF\xBB\xBF"
+      "patch:\r\n  schema_list:\r\n    - schema: rime_ice\r\n";
+  EXPECT(WriteRaw(p, manual));
+
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(MakeHk(L"Control+Shift+L", L"custom: open_quick_panel", true));
+  rows.back().accept_new = L"Control+Alt+L";
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(raw.size() > 3 && (unsigned char)raw[0] == 0xEF);
+  EXPECT(CountOf(raw, "patch:") == 1);  // 没有第二个 patch:
+  EXPECT(CountOf(raw, "managed block") == 1);
+  EXPECT(CountOf(raw, "(spec 045) end") == 1);
+  EXPECT(raw.find("Control+Alt+L") != std::string::npos);
+  // 块体在 patch: 之后、用户内容之前 ⇒ 插在段首而不是追加到文件尾
+  EXPECT(raw.find("patch:") < raw.find("managed block"));
+  EXPECT(raw.find("managed block") < raw.find("schema_list:"));
+  // 正文逐字节保留
+  EXPECT(raw.find("  schema_list:\r\n    - schema: rime_ice\r\n") !=
+         std::string::npos);
+  // 首次接管 ⇒ 先备份 (没有退路就不该覆盖用户配置)
+  EXPECT(DeleteBackups(p) == 1);
+  ::DeleteFileW(p.c_str());
+}
+
+// T107-i — 连存两次必须幂等: 第二次先摘旧块再插回去, 落盘字节一模一样
+static void TestSaveHotkeysIdempotent() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t107_i.yaml");
+  DeleteBackups(p);  // 同上
+  const std::string manual =
+      "\xEF\xBB\xBF"
+      "patch:\r\n  schema_list:\r\n    - schema: rime_ice\r\n";
+  EXPECT(WriteRaw(p, manual));
+
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(MakeHk(L"Control+Shift+L", L"custom: open_quick_panel", true));
+  rows.back().accept_new = L"Control+Alt+L";
+
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+  std::string first;
+  EXPECT(ReadRaw(p, first));
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+  std::string second;
+  EXPECT(ReadRaw(p, second));
+  EXPECT(first == second);
+  EXPECT(CountOf(second, "patch:") == 1);
+  EXPECT(CountOf(second, "managed block") == 1);
+  // 块已经接管过 ⇒ 第二次不再备份, 只留第一次那一份退路
+  EXPECT(DeleteBackups(p) == 1);
+  ::DeleteFileW(p.c_str());
+}
+
+// T107-c1 — patch 段里已有手写 key_binder ⇒ 拒绝写。再插一个同名键就是同一
+// mapping 里的重复键, librime 会读错甚至整份失效 (handoff §3.2 边界)。
+static void TestSaveHotkeysRefusesManualBindings() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t107_c1.yaml");
   const std::string manual =
       "\xEF\xBB\xBF"
       "patch:\r\n  key_binder/bindings:\r\n"
@@ -438,7 +527,53 @@ static void TestSaveHotkeysRefusesExistingPatch() {
 
   std::string raw;
   EXPECT(ReadRaw(p, raw));
+  EXPECT(raw == manual);  // 一个字节都不许动
+  // 拒绝必须发生在备份之前 ⇒ 不留垃圾文件
+  EXPECT(DeleteBackups(p) == 0);
+  ::DeleteFileW(p.c_str());
+}
+
+// T107-c2 — patch 是内联写法 (patch: {…}) ⇒ 文本层插不进子键, 拒绝而不猜
+static void TestSaveHotkeysRefusesInlinePatch() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t107_c2.yaml");
+  const std::string manual =
+      "\xEF\xBB\xBF"
+      "patch: { schema_list: [ rime_ice ] }\r\n";
+  EXPECT(WriteRaw(p, manual));
+
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(MakeHk(L"Control+Alt+L", L"custom: open_quick_panel", true));
+  EXPECT(!ShortcutSettings::SaveHotkeys(p, rows));
+
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
   EXPECT(raw == manual);
+  EXPECT(DeleteBackups(p) == 0);
+  ::DeleteFileW(p.c_str());
+}
+
+// T107-s1 — S1 的落盘后果: 从文件读回的 override 在合并时被复位成
+// is_default=false, 所以「用户没在界面上改过 (accept_new 为空)」也必须写盘。
+// 旧 S1 不复位 ⇒ 这一行保存时被当成没动过的内置默认丢掉: 打开界面点一次保存,
+// 用户的绑定就没了。下面再用同一份数据标成内置默认做反例对照, 两半合起来才
+// 证明 is_default 这一位真的在起作用。
+static void TestSaveHotkeysWritesFileSourcedOverride() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t107_s1.yaml");
+  ::DeleteFileW(p.c_str());
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(MakeHk(L"Control+Alt+L", L"custom: open_quick_panel", false));
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(raw.find("Control+Alt+L") != std::string::npos);
+  ::DeleteFileW(p.c_str());
+
+  std::vector<ShortcutSettings::Hotkey> builtin;
+  builtin.push_back(MakeHk(L"Control+Alt+L", L"custom: open_quick_panel", true));
+  EXPECT(ShortcutSettings::SaveHotkeys(p, builtin));
+  std::string raw2;
+  EXPECT(ReadRaw(p, raw2));
+  EXPECT(raw2.find("Control+Alt+L") == std::string::npos);
   ::DeleteFileW(p.c_str());
 }
 
@@ -480,7 +615,11 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
   TestAlwaysShowProductionApi();
   TestSaveHotkeysWritesOnlyEdited();
   TestSaveHotkeysPreservesOutsideBlock();
-  TestSaveHotkeysRefusesExistingPatch();
+  TestSaveHotkeysInsertsIntoExistingPatch();
+  TestSaveHotkeysIdempotent();
+  TestSaveHotkeysRefusesManualBindings();
+  TestSaveHotkeysRefusesInlinePatch();
+  TestSaveHotkeysWritesFileSourcedOverride();
   TestSaveHotkeysSkipsNoAction();
   std::wcout << L"[TestShortcutSettings] PASS=" << s_pass
               << L" FAIL=" << s_fail << std::endl;

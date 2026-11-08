@@ -39,7 +39,7 @@
 
 - **必须阶段收尾双产物**: 完成 `.specify/specs/NNN-*/tasks.md` 任一阶段任务时, 必须同步更新 `docs/archive/handoffs/handoff-YYYY-MM-DD-<slug>.md` 并就地改写 `docs/archive/prompts/prompt-next-session-YYYY-MM-DD-<slug>.md` (接力 prompt 只给全路径指针, 不复述 handoff 内容); 规则全文见 [`AGENTS.md` §9](AGENTS.md#9-handoff--relay-prompt-mandatory)。
 
-- **本批交接指针**: [批次 N · spec 045 T107 正文级真合并（勘察定稿 + 实施设计）](docs/archive/handoffs/handoff-2026-11-08-batch-n-t107-merge-design.md) · 接力 prompt: 见该 handoff 文档；按用户 2026-11-08 指示，接力 prompt 直接给在当轮回答正文、不另落文件
+- **本批交接指针**: [批次 N · spec 045 T107 正文级真合并（已实现，构建/单测/门禁全绿；缺提交与真机验收）](docs/archive/handoffs/handoff-2026-11-08-batch-n-t107-merge-design.md) · 接力 prompt: 见该 handoff 文档；按用户 2026-11-08 指示，接力 prompt 直接给在当轮回答正文、不另落文件
 - **上一批交接指针**: [批次 M · spec 045 快捷键设置 P1 收口（T101/T102/T103/T106）](docs/archive/handoffs/handoff-2026-11-08-batch-m-shortcut-settings-p1.md) · 接力 prompt: 见该 handoff 文档；按用户 2026-11-08 指示，接力 prompt 直接给在当轮回答正文、不另落文件
 - **更早批次交接指针（L）**: [批次 L · 快捷设置右键菜单「快捷键设置」+ 托盘「中英文」摘除上机 + 快捷键设置界面 P0 修复](docs/archive/handoffs/handoff-2026-11-08-batch-l-shortcut-settings-menu.md) · 接力 prompt: 见该 handoff 文档；按用户 2026-11-08 指示，接力 prompt 直接给在当轮回答正文、不另落文件
 - **更早批次交接指针（K）**: [批次 K · 快捷设置栏图标 v13 英文逗号左缘裁切](docs/archive/handoffs/handoff-2026-11-08-batch-k-v13-punct-comma-cut.md) · 接力 prompt: [prompt-next-session-2026-11-08-batch-k-v13-punct-comma-cut.md](docs/archive/prompts/prompt-next-session-2026-11-08-batch-k-v13-punct-comma-cut.md)
