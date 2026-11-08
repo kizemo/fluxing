@@ -1,4 +1,25 @@
 ## [Unreleased]
+### fix(WeaselServer): 快捷面板图标 v11 中英文逗号可区分 + 半角标点真出英文标点 + 开机首次切换卡顿修复（批次 I）
+
+- **用户原话**：①「面板『中英文标点』图标两态：句号可以达到要求，逗号形态仍然不好，且无法区分中英文逗号，请参考搜狗输入法的标点图标。建议直接使用输入字符」；②「开机后第一次切换到火流猩输入法时，会出现比较久的延时，才能正常使用输入法……请检查日志，是否存在 bug 导致卡顿」。
+- **图标 v11（指令 ①）**：逗号改用**输入字符**渲染 —— 中文态 **SimSun** `U+FF0C`（目标墨迹 8×13，origin=(6,11)）、英文态 **Times New Roman** `U+002C`（目标墨迹 6×9，origin=(2,3)），两态下沿同为 28 ⇒ **形状 + 尺寸**双重可区分；句号图元不动。根因：v10 两态都用 Microsoft YaHei，`U+FF0C` 与 `U+002C` 是同一个楔形，48px 下墨迹盒同为 7×13。单一事实源 `include/FluxingPanelFwIcon.h`（新增 `kCommaInkWidthCn/kCommaInkHeightCn/kCommaInkWidthEn/kCommaInkHeightEn/kCommaFaceCn/kCommaFaceEn/kCommaBottom`，`Icon` 增 `commaFace`）；`WeaselServer/QuickPanelDialog.cpp` 增 `CreateCommaFont(int px, const wchar_t* face)` / `DrawInkPlacedChar(..., const wchar_t* face)`；单测 T33k（按态断言 8×13 / 6×9）+ 新增 **T33r**（两态逗号字体必须不同）。
+- **半角 ⇒ 英文标点（指令 ③，ADR 0043）**：根因在引擎 —— `librime/src/rime/gear/punctuator.cc:23-30` 标点表**只**由 `full_shape` 选项选，`:102` 的 `ascii_punct` 只让处理器短路，翻译路径（`:329`）根本不看它；本 fork 两张表（`output/data/default.yaml`）**都**映射中文标点 ⇒ 引擎恒吐中文标点，而面板读 live `status.is_ascii_punct` ⇒ 图标翻转、输出不翻转。**修法**：不改 librime、不碰 `full_shape`（`shape.cc` 的 `ShapeFormatter` 会把数字/`@#%` 全角化，`PunctTranslator::formatter_` 会让「3.14」→「3．14」），改为在**唯一提交出口** `RimeWithWeasel.cpp::_Respond()` 做「纯标点提交」的标点语言转换（新增 `include/FluxingPunctText.h` 纯函数 `IsPunctuationOnly` / `ToAsciiPunctuation` / `ApplyAsciiPunctuation`，状态取 live `status.is_ascii_punct`，与面板图标同源）；词库短语里的标点**有意不转**。
+- **开机首次切换卡顿（指令 ②，ADR 0042）**：根因是**顺序错误** —— `WeaselServer/WeaselServer.cpp` 的「杀旧实例」先执行，而会话门禁在 `WeaselServerImpl::Start()` 里后执行 ⇒ 远程/RDP 会话实例先杀掉 console 会话的健康服务端、自己再被门禁拒掉（日志 `startup_refused allowed=0 reason=not_console_session current_session_id=2 console_session_id=1` 紧跟 `start_returned_false exit=-1`）⇒ **服务真空**（热键/面板/短语全失、TSF 连不上、中文打不出）。修法：**D1 门禁前置**（拒时写 `detail=pre_kill_gate` 并 `return -1`；新增纯函数 `fluxing::session::MayShutdownExisting(verdict, quit)`，`/quit` 运维语义仍放行）；**D2 前端补拉**阈值 `retry>=6` → **连续失败** `>=2`（连上即清零）+ 进程计数改**按会话**（`ProcessIdToSessionId` vs `CurrentSessionId`）；**D3 诊断日志**加毫秒时间戳（`include/FluxingDiagLog.h::DiagTimestamp()`，行形状 `[YYYY-MM-DD HH:MM:SS.mmm][tag] message`）。
+- **验收**：`TestQuickPanelDialog` **255/255**、`TestQuickPanelRefactor` **40/40**、`TestWeaselIPC` `TEST_EXIT=0`（含 §1b/§1c/§5 新断言）；全量构建 `ALL_STEPS_OK` / `NSIS_RC=0`；静默重装 `INSTALL_EXIT=0` + 四二进制 SHA256 全 `MATCH=True`。
+- **真机验收（5 项全绿）**：① 图标 v11 两态像素 **ink 67 / bbox 23×26（中文态）** vs **ink 41 / bbox 18×20（英文态）**，形态与尺寸双重可区分（待用户人眼终确认）；② 裸 Shift 切英文后「中/英」标志跟随（ink 198 → 274，DIFF=363）**PASS**；③ **面板「中英文标点」往返切换：中文态 `，`(U+FF0C) → 点一次 `,`(U+002C) → 点回 `，`(U+FF0C)**，槽 2 图标同步翻转 **PASS**；④ 中文标点态下 `123{#}{%}{@}` → `123#%@`（码位全 ASCII）**PASS**；⑤ 点「中英文」/「中英文标点」后不点宿主直接打字 **PASS**（`GetGUIThreadInfo`：点按钮前后前台窗口不变、`hwndFocus` 恒为宿主 EDIT、caret 也在该 EDIT ⇒ 焦点未丢）。
+- **未改**：`include/WeaselIPCData.h`、IPC 协议、`output/install.nsi`、`librime/`、面板几何常量（215×32）。
+
+### fix(WeaselServer): 快捷面板图标 v10 字符逗号 + 全角=中文标点 + 点按钮不失焦（批次 H2）
+
+- **用户原话**：①「全半角图标中，逗号仍然形状不佳，有锯齿，且圆形部分和尾巴部分连接不圆滑。建议直接使用字符逗号」；②「裸 Shift 切中英文后，设置栏的全/半角图标同步变化，但「中/英」标志不同步」；③「手点一次设置栏「全/半角」切半角，中文态打逗号变英文逗号」；④「我希望的全角，只是中文标点符号。但数字＼其他符号等，还应该和英文状态一致，应该还是半角的。参照搜狗输入法等其他输入法的设置」；⑤「在快捷设置栏点击中英文／全半角按钮后，焦点应该还在宿主窗口，可以继续输入。当前会失焦」。
+- **图标 v10（指令 ①）**：逗号不再用多边形，改**真字形渲染** —— `CreateFontIndirectW`（`lfHeight=-48`、`FW_NORMAL`、`DEFAULT_CHARSET`、`ANTIALIASED_QUALITY`、`Microsoft YaHei`）+ `GetGlyphOutlineW(GGO_METRICS)` 取墨迹盒 + `ScaleFontHeight` 自校正 + `TextOutW`（`SetBkMode(TRANSPARENT)`、`TA_LEFT|TA_BASELINE`）落笔；全角 `L'\xFF0C'`、半角 `L','`，`commaInk` 恒 **7×13**、`commaInk.top=16`，落笔用**中心对齐**把 ±1 px 误差对称摊开。环 / 点仍 `Ellipse` / `RoundRect`（小尺寸实心椭圆会光栅化成四角星）。v6「字体方案不可行」的结论作废，真因是字号取小。
+- **全角语义纠正（指令 ④，ADR 0041）**：**全角只等于中文标点**；数字、空格与其他符号**始终半角**（对齐搜狗）。`_ApplyPunctWidth` 只写 `ascii_punct`，`full_shape` 在**两个分支**都清 0（原来只在 `!halfwidth` 内清）；`default.yaml` 的 `switcher/save_options` 移除 `full_shape`（否则下次部署会把全角值写回）。用户可见文案 `ShapeModeText` → `PunctModeText` ⇒「中文标点 / 英文标点」，tooltip 与槽位名（`中英文标点切换`）同步。`full_shape` 保留 9 个 schema 的 switch 声明（默认 index 0，声明本身不打开它）。
+- **点按钮不失焦（指令 ⑤）**：`QuickPanelDialog` 的 `WM_LBUTTONDOWN` 里只有**没命中按钮**（`hit < 0`）时才 `CaptureKeyboardFocus(hwnd)` ⇒ 点完可直接在宿主窗口继续输入。
+- **「中/英」标志同步（指令 ②）**：`ShiftUp` 的 `kToggleAsciiMode` 分支补 `m_global_ascii_mode = !ascii;`。
+- **验收**：`TestQuickPanelDialog` **254/254**、`TestQuickPanelRefactor` **40/40**；L0 静态门禁 `checks=14 pass=12 fail=0 skip=2`；全量构建 `ALL_STEPS_OK` / `NSIS_RC=0`；静默重装 `INSTALL_EXIT=0` + 四个二进制 SHA256 全 `MATCH=True`；装机 `D:\Program Files\fluxing\weasel\data\default.yaml`（18448 B）实测 `save_options` 已无 `full_shape`。**未做人眼 / 手点真机验收**（验收时本机锁屏）。
+- **未改**：`include/WeaselIPCData.h`、IPC 协议、`output/install.nsi`、`librime/`、面板几何常量（215×32）。
+
+
 ### fix(WeaselServer): 快捷设置栏「全/半角」图标分离（v9）+ 半角对齐英文标点 + Shift 中英联动标点（批次 H）
 
 - **用户原话**：①「全半角符号不清晰，糊成一块的感觉。请再次调用 /frontend-ui-engineering 进行优化」；②「半角符号，应该对应英文标点。在中文状态，点击设置栏切换半角符号，输入的仍然是中文标点」；③「使用 shift 快捷键切换中英文，标点符号也会同步切换全半角，对应设置栏的全半角符号也应该切换。当前不仅全半角符号不切换，中英文标志也没有切换。」

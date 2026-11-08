@@ -212,6 +212,29 @@ L4  PASS  exit=0   1.4s  回归用例(fast) cases=1 pass=1 fail=0
   - 真机隔离实验 `Ctrl+.` 六段全绿（`tmp/probe-ctrl-punct.ps1` → `tmp/probe-ctrl-punct.txt`）
   - 打包链路：改 `output/data/*.yaml` 后必须**重打安装包 + 静默重装**（数据落在 `$INSTDIR\weasel\data`），本轮已重打（NSIS_RC=0）并重装（四二进制 MATCH=True）
 
+- [x] 追补 **v10 / 批次 H2**：字形逗号 + 「全角 = 中文标点」语义纠正 + 点按钮不抢焦点（用户五条指令）
+  - **图标 v10**：逗号弃 `kSolidPolygon` 手绘多边形（GDI `Polygon` 无抗锯齿 ⇒ 锯齿不可消除），
+    改为**字体字形**：`Icon` 新增 `commaInk` / `commaChar` 两字段，全角 `L'\xFF0C'`、半角 `L','`，
+    字体 Microsoft YaHei `ANTIALIASED_QUALITY` `lfHeight=-48`；`Icon.shapeCount` 2 → **1**（环/点各 1）
+  - 落笔用 `GetGlyphOutlineW(GGO_METRICS)` 的墨迹盒做**中心对齐**（`GlyphPenPointForInk`），
+    新增纯函数 `GlyphInk` / `ScaleFontHeight` / `GlyphPenPointForInk`，生产与单测同源；
+    `ScaleFontHeight` 一次自校正抗字体替换（正常机器是死路径）
+  - 判据（v6 结论修正）：v6 写「字体方案不可行」是**错的**，真因是字号取小；本轮 seed=48 实测两态墨迹均 **7×13**
+  - **语义（ADR 0041）**：全角 = **中文标点**，`full_shape` 永久关闭。`_ApplyPunctWidth` 只写 `ascii_punct`，
+    且 `full_shape=0` 从「仅 halfwidth 分支」提到**两个分支都清**（清用户机器上的历史残留，
+    否则「英文标点」态会打出全角空格）；`default.yaml` 的 `switcher/save_options` 移除 `full_shape`
+  - **文案**：`panel_status::ShapeModeText` 改名 **`PunctModeText`**（返回「中文标点 / 英文标点」）；
+    槽 5 名改「中英文标点切换」。`ShapeIsFullwidth` / `PanelState::fullwidth` / `onFullwidth` **保留旧名**只补注释
+  - **焦点**：`WM_LBUTTONDOWN` 的 `CaptureKeyboardFocus` 加 `if (hit < 0)` 前置 ——
+    点按钮不再抢焦点，点完可直接在宿主窗口继续输入
+  - **Shift 同步**：`kToggleAsciiMode` 补写 `m_global_ascii_mode`（面板「中/英」标志与全半角同步失配的根因）
+  - 单测：T33k/T33l/T33q 的**多边形断言已废**（`ptCount`/`pts[]`/`ShapeInkBox(shapes[1])` 在 v10 下是未初始化内存），
+    改为 `commaInk` 目标矩形 7×13 + `commaChar` 码点（U+FF0C / U+002C）+ 字形落笔往返断言 T33q2 / T33q3；
+    T26g/T26h/T26j、T34a–T34d、T28e2/T28i3/T28k2/T28o3 文案改新口径
+    ⇒ Dialog **254 / 254**（原 252 + 净 2）、Refactor **40 / 40**
+  - 构建：x64 TSF + x86 全解决方案 + NSIS 全绿（`ALL_STEPS_OK` / `NSIS_RC=0`），安装包 `fluxing-1.2.1-installer.exe` 已重打
+  - **未做**：真机像素验收（图标墨迹 / Shift 中英同步 / 点按钮后焦点 / 中文标点语义）需装机后人眼 + 手点确认
+
 ## P1 · 声明式槽位表（不排进 1.1.x）
 
 - [ ] ADR 草案：槽位表驱动（对齐 `UIPlugin.dll` 的 `AddUIFunction` 思路，自有实现，不抄代码）

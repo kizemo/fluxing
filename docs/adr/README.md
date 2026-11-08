@@ -54,6 +54,9 @@ Do not dump all ADRs into every prompt.
 | 0038 | 0038. 右键菜单唯一化：语言栏三套 MENU 资源下线，右键入口迁到「快捷设置栏」品牌图标 | `docs/adr/0038-single-context-menu-brand-icon-entry.md` | Accepted |
 | 0039 | 0039. 云端账号与多端同步：Cloudflare Workers + R2/D1 后端，客户端用系统自带能力，端到端加密，合并落在客户端 | `docs/adr/0039-cloud-account-sync-architecture.md` | Accepted |
 | 0040 | 0040. 快捷设置栏的全/半角状态源统一为 `ascii_punct`，并由中英切换联动标点宽度 | `docs/adr/0040-panel-fullwidth-state-source-and-shift-punct-linkage.md` | Accepted |
+| 0041 | 0041. 快捷面板的「全/半角」只驱动 `ascii_punct`（全角 = 中文标点），数字与其他符号恒半角；点按钮不抢宿主焦点 | `docs/adr/0041-punct-width-drives-ascii-punct-only.md` | Accepted |
+| 0042 | 0042. 会话门禁前置到「杀旧实例」之前；前端补拉改为连续失败阈值 + 按会话计数；诊断日志带毫秒时间戳 | `docs/adr/0042-session-gate-precedes-server-shutdown.md` | Accepted |
+| 0043 | 0043. 标点语言在提交边界转换：纯标点提交按 `ascii_punct` 转半角/全角，不引入 `full_shape` 选表 | `docs/adr/0043-punct-language-conversion-at-commit-boundary.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

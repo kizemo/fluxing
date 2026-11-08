@@ -14330,3 +14330,52 @@ handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四
 - **关联**：`librime/src/rime/gear/ascii_composer.cc:95-123`、`librime/src/rime/gear/punctuator.cc:102-104`、
   `output/data/default.yaml:272`、`output/install.nsi:31/513/547`、`RimeWithWeasel/RimeWithWeasel.cpp`、
   `WeaselServer/WeaselServerApp.cpp`；handoff-2026-11-07-quickpanel-v9-fwicon-batch-h.md。
+
+## L198 - **开机首次切换输入法长延时：不是「启动慢」，是「服务真空」—— 会话门禁排在「杀旧实例」之后**（2026-11-08）
+
+- **症状**：开机后第一次切到火流猩，要等比较久才能正常使用：快捷设置栏不显示、用户短语调不出、中文打不出；延时一段时间后恢复正常。
+- **根因（R1，架构性顺序错误）**：`WeaselServer/WeaselServer.cpp` 的 WinMain 里「杀旧实例」块（`Connect()` → `ShutdownServer()` → 轮询）**先**执行，而**会话门禁**（ADR 0031）在 `WeaselIPCServer/WeaselServerImpl.cpp::Start()` 里**后**执行。于是**远程/RDP 会话**拉起的实例先把 console 会话里健康的服务端杀掉，自己再被门禁以 `not_console_session` 拒掉并 `exit=-1` 退场 ⇒ **服务真空**：
+  - 热键是**会话级注册**（`RegisterHotKey`），服务端不在 ⇒ 热键全失 ⇒ 设置栏/用户短语调不出；
+  - TSF 客户端连不上服务端 ⇒ 中文打不出；
+  - 前端补拉要累计 6 次失败才触发（且 60s 节流）⇒ 真空期被进一步拉长 ⇒ 用户观感就是「卡很久，之后自愈」。
+- **证据链**：① `%TEMP%\fluxing-profile-notify.log` 中 `startup_refused allowed=0 reason=not_console_session current_session_id=2 console_session_id=1` 紧跟 `start_returned_false exit=-1`；② 每次补拉前 `server_process_count=0`（= 服务真空，不是"进程在但不响应"）；③ 无 crash dump、无 Application Error 1000 ⇒ 干净退出而非崩溃；④ `build/` 词表未重建、rime INFO 无 `changes detected` ⇒ 开机无部署；⑤ `win_sparkle` appcast 被注释 ⇒ 启动无网络 ⇒ 依次排除部署/网络/崩溃三类解释。
+- **修复（ADR 0042）**：① 把 `EvaluateCurrent()` 门禁**前置**到「杀旧实例」之前（新增纯函数 `MayShutdownExisting(verdict, quit)`；`/quit` 是运维显式停服语义，**仍然放行**）⇒ 从根上断掉「非 console 会话实例杀健康服务端」这条路径；② 前端补拉阈值从**累计** `retry >= 6` 改为**连续失败** `>= 2`（连上即清零），且服务端进程计数改为**按会话**统计（原为全系统计数，别的会话里的实例会被当成"本会话服务还活着"）；③ 诊断日志行首加**毫秒时间戳** `[YYYY-MM-DD HH:MM:SS.mmm][tag] message`（时间戳前置 ⇒ 既有 `[server] ` 子串口径不破）。
+- **推广**：① 看到「开机/切换后一段时间功能集体失效、之后自愈」，先查**服务真空**（有没有进程在、但服务在不在），别急着怀疑渲染/部署/网络；② **「先杀后判」**的顺序在多会话/多用户场景是经典陷阱——**校验必须排在杀伤动作之前**；③ 计数型重试阈值要区分**累计**与**连续**，前者会把偶发失败累积成长期卡死；④ 判断「某个服务是否活着」要**按会话/命名空间**统计，否则外部会话的实例会掩盖本会话的缺失。
+- **关联**：`WeaselServer/WeaselServer.cpp`（门禁前置）、`WeaselIPCServer/WeaselServerImpl.cpp:173-227`（原门禁位置）、`include/FluxingSessionPolicy.h`（`Evaluate`/`EvaluateCurrent`/`MayShutdownExisting`）、`WeaselTSF/WeaselTSF.cpp:521-655`（补拉阈值与按会话计数）、`include/FluxingDiagLog.h`（时间戳）；ADR 0031 / ADR 0042。
+
+## L199 - **取「面板像素」别抓屏：服务端自己有面板位图落盘；手动拉起的服务端没有托盘窗口，面板要用 `Alt+,` 全局热键唤出；PowerShell 变量名大小写不敏感会互相覆盖**（2026-11-08）
+
+- **坑①（屏幕抓屏抓到别的窗口）**：面板是弹出窗口，可能被其它窗口盖住；抓屏抓到的是**背后的文档**——本轮把「英文标点态」的裁片抓成了 Word 文档里的「英·当」字样，结论完全跑偏。
+  ⇒ 改用**服务端自己的面板位图**：环境变量 `FLUXING_QP_DIAG_DUMP=1` 时，服务端**每次重绘**都把面板内存位图写成 `qp-dump.bmp`（`WeaselServer/QuickPanelDialog.cpp:2316` 起，另出 `qp-logo.bmp` / `qp-state.txt`）。这是**运行时产物**，不受遮挡影响。
+- **坑②（手动拉起的服务端"一个窗口都没有"）**：`Start-Process WeaselServer.exe` 起的实例**没有任何可枚举的顶层窗口** —— 托盘图标窗口要等**客户端的注册消息**才创建，而客户端注册只在首次连接时发生一次；替换掉旧实例后不会重发 ⇒ 托盘命令通道（`WM_COMMAND 40018`）全部失效（`EnumWindows` 枚举不到消息窗口也是原因之一）。
+  ⇒ 面板要用**全局热键**唤出：`Alt+,`（`VK_OEM_COMMA`，注册在 IPC server 自己的窗口上，`WeaselIPCServer/WeaselServerImpl.cpp:81`）——**任何**实例都有效。
+  ⇒ 教训：**替换服务端实例会丢失"一次性的注册动作"**；凡依赖注册的 UI 通道，都要另找一个**可重复触发**的入口。
+- **坑③（PowerShell 变量名大小写不敏感）**：`$tB = Type-Host ...` 会**覆盖** `$tb`（同一个变量）⇒ 脚本跑到一半 `$tb.Focus()` 抛「[System.String] 不包含名为 'Focus' 的方法」。取名要带语义前缀（`$txtB` vs `$tb`）。
+- **推广**：① 验收「某个像素/字形」时优先找**运行时产物**（服务端位图落盘、接口返回值），其次才是截图；用截图必须**先验证抓到的确实是目标窗口**（本轮用「面板左端品牌 logo 的红色像素」做校验），且**按新帧时间戳下界**等一次真正的重绘，否则会把上一帧当成本次结果。② 阈值要按实际像素分布选：面板图标笔画亮度落在 110~170 区间，用 110 判「墨迹」会得到 `ink=0 (EMPTY)` 的假结论（本轮就中过一次）。
+- **关联**：`WeaselServer/QuickPanelDialog.cpp:2316-2380`、`WeaselIPCServer/WeaselServerImpl.cpp:81/157-166`、`include/FluxingPanelFwIcon.h`、ADR 0038 / ADR 0042。
+
+## L200 librime 的标点表只由 `full_shape` 选,`ascii_punct` 只短路处理器 —— 「半角 = 英文标点」在引擎层没有开关
+
+**证据**:2026-11-08 Fluxing 批次 I 验收项②「中文态点半角标点后打 `,` 应得半角逗号」失败。
+真机证据(`tmp/batch-i3.log`):三态打出的逗号**全是 U+FF0C**,而面板槽 2 图标像素**确实翻转**
+(ink 47→66,bbox 18×24→23×26)⇒ 面板读 live status、引擎不读 ⇒ 两者必然背离。
+
+**根因(源码级)**:`librime/src/rime/gear/punctuator.cc`
+- `:23-30` `LoadConfig` 选表**只看** `full_shape`:`shape(full_shape ? "full_shape" : "half_shape")`;
+- `:102` `ascii_punct` ⇒ `return kNoop`,**只**让处理器短路;翻译路径(`:329`)完全不看它;
+- 三条路径(处理器 `:116` / 分段器 `:249` / 翻译器 `:329`)每次都 `LoadConfig` ⇒ 表恒跟随 `full_shape`。
+⇒ 想换表只有 `full_shape` 一个杠杆;而 `full_shape` 一开,`shape.cc:16-36` 的 `ShapeFormatter`
+会把数字与 `@#%` 全角化(`PunctTranslator` 自带 `formatter_`,`punctuator.h:88`,在 `punct_number`
+分支 `:318-323` 生效 ⇒「3.14」→「3．14」),直接违反「数字与 `@#%` 恒半角」这条硬要求。
+
+**怎么用**:
+- 遇到「某个 option 换了但输出没变」,先分清它作用在**选表**还是**短路**上;
+  librime 里「选表」只有一个杠杆:`full_shape`。
+- 想拿 `full_shape` 当功能开关用,必须先确认两件事:①`shape` 组件**不在** schema 的 engine 链
+  (否则 ASCII 全变全角);②存在 `digit_separators` 时 `punct_number` 分支会不会走 `ShapeFormatter`
+  (会 ⇒ 小数点变全角)。本 fork 两条都踩过。
+- 引擎层做不到、又不许改 `librime`(P3)时,把「语言/形态」类转换放在**提交边界**:
+  全仓唯一一处 `get_commit` 就是最好的钩子;转换范围要收窄(只转「整串都是标点」的提交),
+  免得把词库短语里的标点也改掉。
+- **面板图标与引擎输出必须同源**:两者读同一个 live option 仍可能背离(该 option 只短路不换表);
+  验收要看**运行时像素 + 实际码位**,不能只看图标翻转。
