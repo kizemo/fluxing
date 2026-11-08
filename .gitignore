@@ -193,3 +193,10 @@ release/*.ilk
 # test/TestShortcutSettings (it used the process CWD). The test now writes into
 # tmp/; this entry keeps the root clean if an older build re-creates it.
 /_ts_yaml_fixture.yaml
+
+# 2026-11-08: batch L/N desktop probe artifacts (raw GDI dumps of the quick
+# panel + state snapshot). These are verification evidence, not source, and
+# must never enter the repo; they stay on disk so the probes can overwrite them.
+/qp-dump.bmp
+/qp-logo.bmp
+/qp-state.txt

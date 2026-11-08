@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+### feat(WeaselServer): 快捷设置右键菜单新增「快捷键设置」+ 快捷键设置界面 P0 数据链路修复 + 托盘「中英文」摘除上机（批次 L）
+
+- **用户原话**：①「在任务栏托盘区，仍然有『中英文』图标，注意系统的输入法位置的图标需要保留」；②「快捷设置栏中，中英文标点符号，英文标点逗号仍然不太好，但暂时把这个问题搁置，推进其它任务」；③「快捷设置栏中的快捷键设置按钮，对应的界面，是否已经编辑完？请在快捷设置右键菜单中，添加快捷键设置这个子菜单，点击也可以进入快捷键设置界面」。
+- **英文逗号按指示搁置**：批次 K 的 v13 裁切（`include/FluxingPanelFwIcon.h` 的 `kCommaCutLeftEn = 2`）**保持不动**，本批既未回退也未再改。
+- **托盘「中英文」摘除上机（ADR 0044 闭环一半）**：批次 J/K 因 `weaselx64.dll` 被 17 个宿主进程占用而始终未上机；本批改用 **Rename → Copy** 绕过文件锁替换 `D:\Program Files\fluxing\weasel\weaselx64.dll`（SHA256 **MATCH=True**）并重启 explorer。UIA 实测（`tmp/v-batchL5.txt`）：通知区域现存 2 项 = 「任务栏输入指示 中/英文」+「任务栏输入指示 简体中文(中国大陆) 搜狗拼音输入法」；**我们那一项（tooltip「左键切换模式，右键打开菜单」）0 命中**，而改前基线 `tmp/v12-tray-j.txt:43` 明确存在该项 ⇒ 我们的项已退出常驻托盘，**Windows 自带的红猿头 / 系统 IME 指示器保留**。**未闭环**：探针无法自动切回火流猩（Win+Space 只在「已禁用输入法 / 英语(美国)」间循环），存在「因为不是活动输入法所以不显示」的混淆项 ⇒ 需用户手动切回火流猩做一次人眼确认。
+- **「快捷键设置」界面是否编辑完 —— 结论：没有编辑完**：界面 chrome 完整，但**四条数据链路全断**（yaml 解析 off-by-two ⇒ 用户 bindings 从未被读到；落盘路径写 `%APPDATA%\Rime` 而非 `%APPDATA%\fluxing`；`SpawnDeploy()` 空实现但状态栏撒谎；导入/导出是假实现且覆写线上文件；「恢复默认」等于没做；yaml 无 bindings 段时表格 0 行）。审计与 P0→P2 清单落 `.specify/specs/045-shortcut-settings/tasks.md`。
+- **P0 六条已修（T001–T006）**：`WeaselServer/ShortcutSettings.cpp` —— YAML 解析器取尾 **18 → 20** 字符；落盘改用 `WeaselUserDataPath()`（`%APPDATA%\fluxing`，新增 `#include <WeaselUtility.h>`）；`SpawnDeploy()` 改为真的 `ShellExecuteW(<WeaselServer 同目录>\WeaselDeployer.exe, "/deploy")` 并按返回值给两态文案（新增 `<shellapi.h>`）；导入/导出改走独立往返文件 `default.custom.exported.yaml`（线上配置只由「保存」按钮改）；「恢复默认」改回 `LoadDefaults()` 内置默认表；解析失败**或**结果为空都回落内置默认表。
+- **新菜单项（需求 ③）**：新命令 ID `ID_WEASELTRAY_SHORTCUT_SETTINGS = 40023`（`WeaselServer/resource.h`）；`WeaselServer/WeaselServer.rc` 的 `IDR_MENU_POPUP` **三份语言版本**同步新增 `MENUITEM "快捷键设置 (&B)"`（助记符 B 空闲；S/K/A/D/G/N/I/C/P/L/H/J/U/R/Q 已占用）；`WeaselServer/WeaselServerApp.cpp::SetupMenuHandlers()` 注册 handler → `ShortcutSettings::Show()`，跨线程时按既有模式 `PostMessage` 弹回 UI 线程。依据 ADR 0038（托盘右键与快捷设置栏品牌图标右键**共用同一份菜单资源**）⇒ 一个菜单项同时覆盖两个入口。
+- **真机端到端证据（`tmp/v-batchL17.txt` / `tmp/v-batchL17-menu.png` / `tmp/v-batchL17-dialog.png`）**：① 快捷设置栏品牌区 `WM_RBUTTONDOWN` ⇒ 真实弹出菜单窗口（类 `#32768`，PID 归属 WeaselServer）；② 对该**运行时弹出菜单**做 Win32 枚举（`MN_GETHMENU` + `GetMenuStringW(MF_BYPOSITION)`）得 19 项，其中 `pos=3 id=40023 text='快捷键设置 (&B)'`；③ `WM_COMMAND(40023)` ⇒ 「设置」对话框打开（窗口类 `FluxingShortcutSettings`）。菜单点击 → 命令的映射由 `WeaselServer/SystemTraySDK.cpp:852` 的 `PostMessage(hTargetWnd, WM_COMMAND, uItem, 0)` 承担（`uItem` 即菜单项 ID 40023）。装机版 exe 的菜单资源解析（`tmp/v-batchL2.txt`）同样证出 `RT_MENU id=105 → 根 POPUP「Fluxing」→ pos=3 id=40023`。
+- **版本号推导修正（ADR 0045）**：`weasel.props` 的 `PRODUCT_VERSION` 与 `env.bat` 的 `FLUXING_VERSION` 打架 ⇒ L0 门禁 `version-consistency` 失败。改在**构建侧**：`build.bat` 补 `if not defined PRODUCT_VERSION` 守卫（`env.bat` 优先、脚本默认兜底），**门禁判据一字未改**；产物 `weasel.props` 现为 `PRODUCT_VERSION=1.2.1.0`。
+- **门禁 / 单测 / 装机**：`scripts/gate/L0-static.ps1 -Mode source` = `checks=14 pass=14 fail=0 skip=0`（含 `version-consistency` version=1.2.1 一致、`rc-utf16le`、`nsis-compile`、`guard-unit-test` TOTAL=16 MISMATCH=0）；`release\TestShortcutSettings.exe` **PASS=52 FAIL=0**（EXIT=0）；装机替换 `WeaselServer.exe` / `weasel.dll` / `weaselx64.dll` / `WeaselDeployer.exe` 四件（`tmp/install-batch-L.ps1`：KILL_OK + RENAME_OK + COPY_OK，哈希 MATCH=True），WeaselServer 重启 pid 606736。
+- **未改**：`include/WeaselIPCData.h`、IPC 协议、`output/install.nsi`、`librime/`、`output/data/**`、面板几何常量（215×32）。
+
 ### fix(WeaselServer): 快捷面板「中英文标点」图标 v13 —— 英文逗号圆头右移 + 尾巴缩短（批次 K）
 
 - **用户原话**：①「输入法中英文图标」= 通知区域的**方框「中」**（火流猩自己的语言栏项，tooltip「左键切换模式，右键打开菜单」；旁边那个**红猿头 logo 是 Windows 自带的 IME 指示器**，本仓库代码控制不了）；②「暂时没有发现 tooltip 遮挡槽位」⇒ **该项结案**（该 tooltip 是面板**自身的槽位说明气泡** `FluxingQuickPanel_Tooltip`，hover 槽位才出现）；③「英文逗号圆点部分过于偏左，可以右移一点，从而减少尾巴的长度，和中文逗号区分度更大」。

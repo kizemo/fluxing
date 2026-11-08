@@ -14402,3 +14402,67 @@ handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四
 这类空替换不会报错、不会让测试变红，只会让**新写的断言根本没存在过**——比编译失败危险得多。
 
 **关联**：`tmp/patch-v13.ps1`、`include/FluxingPanelFwIcon.h`（`GlyphClipRect`）、`WeaselServer/QuickPanelDialog.cpp`（`DrawInkPlacedChar` 裁切）、`test/TestQuickPanelDialog/TestQuickPanelDialog.cpp`（`T33s`）、批次 K 交接。
+
+## L202 构建脚本无条件覆盖 env.bat 的钉版：门禁恒红，但根因在构建侧不在门禁侧（2026-11-08）
+
+**证据**：2026-11-08 批次 L（托盘复验 + 快捷键设置菜单项），跑 `scripts/gate/L0-static.ps1 -Mode source`
+得到 `[FAIL] version-consistency  weasel.props PRODUCT_VERSION=1.2.1.2 != 1.2.1.0`。
+历史门禁日志（`tmp/gate-batch-j.log` 11-08 14:55、`tmp/gate-batch-h.log` 11-07 22:56、`tmp/gate-v10.log` 11-08 00:27）
+同一项都是 `[PASS] version-consistency  version=1.2.1 一致` —— 说明这不是「一直红」，而是某次变更之后才变红。
+
+**根因**：`build.bat` 第 50 行是一条**无条件赋值**::
+
+    set PRODUCT_VERSION=%FLUXING_VERSION%.%WEASEL_BUILD%
+
+`env.bat` 在第 23 行被 `call`，显式钉了 `PRODUCT_VERSION=1.2.1.0`，到这里被覆盖成 `1.2.1.2`
+（`env.bat` 里 `WEASEL_BUILD=2`）。`:render_props` 用 `cscript render.js` 把**进程环境**里的
+`PRODUCT_VERSION` 渲染进 `weasel.props` ⇒ **每跑一次 build.bat，props 就被写成 1.2.1.2**，门禁必红。
+批次 F（11-07）把 `WEASEL_BUILD` 从 1 提到 2 之前，`FLUXING_VERSION.WEASEL_BUILD` 恰好等于 `1.2.1.0`，
+两边一致所以问题隐形；提到 2 才分叉。
+而 `env.bat` 的注释写得很清楚：「PRODUCT_VERSION/FILE_VERSION stay 1.2.1.0 on purpose -- the version gate requires version.txt + ".0"」。
+**同一行的下一句（`FILE_VERSION`）本来就有 `if not defined` 守卫，`PRODUCT_VERSION` 漏了同一个守卫** —— 不一致，不是设计。
+
+**怎么用**：
+- 门禁红了先分清「**门禁判据错**」还是「**产出物错**」。本例判据是对的（`env.bat` 明写要 `version.txt + ".0"`），
+  错的是产出物 —— 所以修产出物，不放宽门禁。
+- `env.bat` / `weasel.props` 这类「机器本地、git-ignored」的文件，门禁对它们的比较必须留有「缺失即跳过」的分支
+  （门禁里已经这么做了）；反过来，**构建脚本读它们的方式也必须是「尊重显式值」**，
+  典型症状就是「构建脚本无条件赋值 ⇒ 把别人钉好的版本号冲掉」。
+- 排查这类「昨天还绿今天红了」：先 `git log` 找**上一次该门禁项变绿的构建**，
+  再对比两次之间的 **env.bat / build.bat / version.txt** 三件套，而不是直接改门禁。
+- 版本号推导链要一次问全：`version.txt` → `env.bat`(FLUXING_VERSION/WEASEL_BUILD/PRODUCT_VERSION) →
+  `build.bat`(是否覆盖) → `render.js` → `weasel.props` → `.vcxproj` → Windows 资源 → `install.nsi`。
+  本例的 `install.nsi` 只用 `.`，**不读 PRODUCT_VERSION** ⇒ 修版号推导不会动安装器行为。
+- 修复方向要选「让产出物满足已有判据」，不是「改判据去迁就产出物」——否则护栏被悄悄拆掉。
+
+**关联**：`docs/adr/0045-product-version-pinned-by-env-bat.md`、`build.bat`（:50 与 :render_props）、
+`env.bat`（:107-116）、`scripts/gate/lib/GateChecks.ps1`（`Test-VersionConsistency`）。
+
+## L203 「界面做完了」≠「功能能用」：快捷键设置窗是外壳完整、数据链路断裂的壳（2026-11-08）
+
+**证据**：2026-11-08 用户问「快捷设置栏里的快捷键设置按钮，对应的界面是否已经编辑完」。
+全量审计（`ShortcutSettings.{h,cpp}` + `.specify/specs/045-shortcut-settings/design.md`）结论：**不能称编辑完**。
+界面 chrome、3 列表格、键捕获（`WH_KEYBOARD_LL`）、冲突检测算法、恢复默认确认框、常驻勾选框都齐，
+但**四条数据链路是断的**：
+
+1. **YAML 解析器 off-by-two**：`trimmed.substr(size-18) == L"key_binder/bindings:"` —— 字面量 **20** 个字符却取尾 **18** 个
+   ⇒ 永远不相等 ⇒ 用户 yaml 的 bindings 段**从来没被解析到**，界面里的行全是内置默认值。
+2. **落盘路径写错目录**：硬编码 `%APPDATA%\\Rime\\default.custom.yaml`，而本 fork 的真实用户目录是
+   `%APPDATA%\\fluxing`（`include/FluxingUserPaths.h` / `WeaselUserDataPath()`，ADR 0020）⇒ **写完 librime 读不到**。
+3. **deploy 是空函数但状态栏在撒谎**：`SpawnDeploy()` 函数体只有注释，`SaveAndDeploy()` 却无条件写「✓ 已保存 · deploy 已触发」
+   ⇒ 新快捷键永远不生效，UI 却报成功。
+4. **导入/导出是假实现且危险**：导入 = 重读同一个线上文件（丢未保存编辑）；导出 = **覆写同一个线上文件**（既不 deploy 又骗人）。
+
+**怎么用**：
+- 判「某界面做完没有」**不能靠外观**，要逐条问：**数据从哪来 → 写到哪去 → 谁消费它 → 出错时用户看到什么**。
+  本例四条全断，但界面漂亮、按钮齐全、还有 13 个单测 52/52 绿。
+- **「实现存在」≠「被调用」**：`CheckConflict` / `GetBuiltinBindings` / `UpdateRow` / `Action_VerifyHotkey`
+  全都实现完整但**零调用点** ⇒ 冲突检测从来没生效过。审「半成品」时专门 grep「定义处 vs 调用处」的差集。
+- **状态栏文案是契约**：写了「已触发 / 已生效」就必须真的有那条路径，否则界面在说谎 —— 比功能缺失更伤信任。
+  同理，**空函数 + 成功文案** 是最典型的假完成形态。
+- **写盘路径要用单一事实源**（`WeaselUserDataPath()`），不要在第二个模块里再拼一次 `%APPDATA%`。
+- 测试要覆盖**数据链路**（读→改→写→重开能读回 / 写盘路径 == 引擎读盘路径），
+  只测「公开 API 初始态 + 枚举互异性」会漏掉上面 4 条中的 4 条。
+
+**关联**：`WeaselServer/ShortcutSettings.cpp`、`.specify/specs/045-shortcut-settings/tasks.md`、
+`WeaselDeployer/HotkeyEditorDialog.cpp`（同源正确写法参照）、批次 L 交接。
