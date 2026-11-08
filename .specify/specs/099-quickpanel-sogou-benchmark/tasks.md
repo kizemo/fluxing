@@ -281,6 +281,45 @@ L4  PASS  exit=0   1.4s  回归用例(fast) cases=1 pass=1 fail=0
       ① 英文逗号辨识度 — 运行时像素已分离（`tmp/v12b-*`：`P4 VERDICT punct_follows_state = PASS`，state0 `，` U+FF0C / state1、state2 `,` U+002C；slot2 墨迹 state0 `67px 23×26` vs state1 `59px 18×24`；`CJK-CHECK text=[你 ] cjk=True`），**待用户目视** `tmp/v12b-P4-slot2-state0.png` vs `tmp/v12b-P4-slot2-state1.png`。`P6` 那一步 FAIL 与批次 I 基线逐字符相同 ⇒ 探针既有缺陷、非本批回归。
       ② 通知区域不再常驻「中/英」— **代码已落地、真机未生效**：装机副本 `weaselx64.dll` 被 17 个在跑 64 位进程占用、无法替换（x86 `weasel.dll` 已替换成功），需注销 / 重启 Windows 后重装。
       ★ **判据修正（勿再用字形计数）**：UIA（`tmp/v12-tray-j.txt`）显示通知区域**并存两个「任务栏输入指示」** —— 火流猩自己的（tooltip「左键切换模式，右键打开菜单」，显示方框「中」，即本批摘除对象）与 Windows 自带 IME 指示器（红猿头 logo，**本仓库代码改不掉**，需 Windows 设置 / 组策略）。我们的项在 UIA 中以 tooltip 文案出现、glyph 名为空 ⇒ 按「英/中」计数必然 0 命中 = 假阴性。正确判据 = 按该 tooltip 匹配，或数按钮个数（改前 2 → 改后应 1），并与抓屏 `tmp/v12b-tray-ime.png` 互证。
-      ③ tooltip 是否遮挡面板槽位（批次 I 遗留，人眼项）。
+      ③ tooltip 是否遮挡面板槽位（批次 I 遗留，人眼项）—— **已结案**（用户 2026-11-08 答「暂时没有发现遮挡」；该 tooltip 是面板**自身的槽位说明气泡** `FluxingQuickPanel_Tooltip`，`QuickPanelDialog.cpp:1177-1336`，hover 槽位才出现，不是托盘系统气泡；详见「批次 K 追补」段 T-9K6）。
 - [ ] **T-9J7 开机首次切换卡顿复验**（ADR 0042 遗留）— 需重启 Windows，Agent 不可执行，交用户。
+
+## 批次 K 追补 · 英文逗号圆头右移 + 尾巴缩短（图标 v13）（2026-11-08）
+
+> 本轮三条反馈：①「输入法中英文图标」= 通知区域的**方框「中」**（火流猩自己的语言栏项；旁边的红猿头是
+> Windows 自带的 IME 指示器，本仓库改不掉）；②「暂时没有发现 tooltip 遮挡槽位」⇒ **T-9J6③ 结案**；
+> ③「英文逗号圆点部分过于偏左，可以右移一点，从而减少尾巴的长度，和中文逗号区分度更大」⇒ 图标 v13。
+
+- [x] **T-9K1 候选裁决（先证伪「换字体」路线）** — 离线 GDI 探针 `tmp/probe-fwicon-v13d.ps1`
+      ⇒ `tmp/v13-sheet2.png` + `tmp/v13-metrics.txt`：Times New Roman 52px `U+002C` = 8×12 origin=(2,3)
+      （圆头横跨墨迹盒整宽且偏左 + 长尾左钩）；SimSun 48px `U+FF0C` = 8×13 origin=(6,11)（大圆头 + 长弯尾）；
+      **Segoe UI 12 / Cambria 13 / Palatino 13 的 `U+002C` 结构反而更像宋体逗号（实测更差）** ⇒ 换字体路线否决；
+      唯一同时满足「圆头右移 + 尾巴缩短」的是 **TNR + 左缘裁切 2 列**（可见墨迹 7..12，质量 54→43）。
+- [x] **T-9K2 v13 几何（单一事实源 `include/FluxingPanelFwIcon.h`）** — 新增 `kCommaCutLeftEn = 2`、
+      `Icon::commaCutLeft`（中文态 0 / 英文态 2）、纯函数 `GlyphClipRect(pen, GlyphInk, cutLeft)`
+      （右/下 = GDI **开区间**；基准取落笔点推出的**实际**墨迹盒，避免缺字体被替换时的 ±1 px 漂移）。
+      生产侧 `WeaselServer/QuickPanelDialog.cpp::DrawInkPlacedChar` 用 `SaveDC` + `IntersectClipRect` +
+      `RestoreDC` 实现裁切（**不碰 AlphaBlend**）。中文态逗号 / 字体 / 目标盒尺寸 / 句号图元**全部未动**。
+- [x] **T-9K3 单测同源（R7）** — 新增 `T33s` / `T33s2` / `T33s3`（裁切列数 / 裁切矩形精确值 `(7,17)-(13,29)` /
+      往返 `clip.left == full.left + 2`）⇒ `TestQuickPanelDialog` **258/258**、`TestQuickPanelRefactor` 40/40、
+      `TestWeaselIPC` rc=0。
+- [x] **T-9K4 门禁 + 全量构建 + NSIS + 静默重装** — `tmp/build-v13.log`（x64 TSF / x86 SLN / NSIS 全 rc=0，
+      安装包 42,825,119 B @17:02:08）；`tmp/reinstall-v13.log`（`INSTALL_EXIT=0`；`WeaselServer.exe` /
+      `weasel.dll` / `WeaselDeployer.exe` **MATCH=True** ⇒ v13 已上机；`weaselx64.dll` **MATCH=False**，
+      仍被 64 位宿主占用 ⇒ ADR 0044 托盘摘除**未上机**）。L0 门禁 `checks=14 pass=14 fail=0 skip=0`。
+- [x] **T-9K5 运行时像素取证** — `tmp/probe-batch-i3.ps1 -OutBase batch-v13`：
+      `P4 VERDICT punct_follows_state = PASS`；slot2 英文态 **ink=56 / bbox 16×24**（v12 为 ink=59 / 18×24）
+      ⇒ 图标左边界**右移 2 物理像素**、尾巴变短。裁片 `tmp/batch-v13-P4-slot2-state0/1.png`，
+      对照拼图 `tmp/v13-runtime-sheet.png`（v12/v13 × 中文/英文 四格）。`P6` 两步仍 FAIL，与批次 I / J 基线
+      **逐字符相同** ⇒ 探针既有缺陷、非本批回归。
+- [x] **T-9K6 T-9J6③ tooltip 遮挡项结案** — 用户 2026-11-08 答「暂时没有发现遮挡」；该 tooltip 是
+      **面板自身的槽位说明气泡**（自绘顶层窗 `FluxingQuickPanel_Tooltip`，`QuickPanelDialog.cpp:1177-1336`，
+      hover 触发 `:1604/:1742`），不是托盘系统气泡 ⇒ 结案，不再追查。
+- [ ] **T-9K7 v13 辨识度人眼终确认（待用户）** — 看 `tmp/v13-runtime-sheet.png`：v13 英文逗号
+      （圆头右移 + 短尾）是否与中文态（大圆头 + 长弯尾）一眼可分。若仍不满意 ⇒ 只改
+      `kCommaCutLeftEn`（0~4 之间试）并**同步** `T33s/T33s2/T33s3` 期望值，重跑门禁 + 构建 + 重装
+      （R7：禁止在别处另抄公式）。
+- [ ] **T-9K8 托盘真机验收（需用户注销 / 重启 Windows）** — x64 `weaselx64.dll` 仍被占用 ⇒ 重装后跑
+      `pwsh -NoProfile -File tmp/probe-tray-j.ps1`（判据 = **「任务栏输入指示」按钮个数**，改前 2 → 改后应 1；
+      **不得**按「英/中」字形计数 —— UIA 里我们的项 glyph 名为空，必然假阴性）+ `tmp/grab-tray-j.ps1` 抓屏互证。
 

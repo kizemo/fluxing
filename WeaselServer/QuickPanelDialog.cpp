@@ -426,7 +426,7 @@ namespace {
 // 前置声明:字形绘制实现在下方的匿名命名空间里(与 DrawInkCenteredChar 同一个),
 // 而本函数定义在它之前 —— 保持现有文件布局,不把整段搬上来。
 bool DrawInkPlacedChar(HDC hdc, wchar_t ch, const RECT& targetInk,
-                       COLORREF color, const wchar_t* face);
+                       COLORREF color, const wchar_t* face, int cutLeft);
 }  // namespace
 
 void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
@@ -487,7 +487,8 @@ void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
   comma.top = oy + ic.commaInk.top;
   comma.right = ox + ic.commaInk.right;
   comma.bottom = oy + ic.commaInk.bottom;
-  DrawInkPlacedChar(hdc, ic.commaChar, comma, penColor, ic.commaFace);
+  DrawInkPlacedChar(hdc, ic.commaChar, comma, penColor, ic.commaFace,
+                    ic.commaCutLeft);
 }
 
 namespace {
@@ -638,7 +639,8 @@ bool DrawInkPlacedChar(HDC hdc,
                        wchar_t ch,
                        const RECT& targetInk,
                        COLORREF color,
-                       const wchar_t* face) {
+                       const wchar_t* face,
+                       int cutLeft) {
   if (!hdc)
     return false;
   const int targetH = targetInk.bottom - targetInk.top + 1;
@@ -675,7 +677,16 @@ bool DrawInkPlacedChar(HDC hdc,
     //   (DrawInkCenteredChar 没设,那是依赖调用方已设;这里自给自足并还原。)
     const int oldMode = SetBkMode(hdc, TRANSPARENT);
     const UINT oldAlign = SetTextAlign(hdc, TA_LEFT | TA_BASELINE);
+    // v13:英文态逗号左缘裁切(圆头右移、尾巴缩短)。裁剪矩形由纯函数
+    // fluxing::panel_fwicon::GlyphClipRect 给出(生产与单测同源,R7)。
+    const int savedDc = cutLeft > 0 ? SaveDC(hdc) : 0;
+    if (savedDc != 0) {
+      const RECT clip = fluxing::panel_fwicon::GlyphClipRect(pen, m, cutLeft);
+      IntersectClipRect(hdc, clip.left, clip.top, clip.right, clip.bottom);
+    }
     drew = TextOutW(hdc, pen.x, pen.y, &ch, 1) != FALSE;
+    if (savedDc != 0)
+      RestoreDC(hdc, savedDc);
     SetTextAlign(hdc, oldAlign);
     if (oldMode != 0)
       SetBkMode(hdc, oldMode);

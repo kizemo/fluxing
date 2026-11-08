@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+### fix(WeaselServer): 快捷面板「中英文标点」图标 v13 —— 英文逗号圆头右移 + 尾巴缩短（批次 K）
+
+- **用户原话**：①「输入法中英文图标」= 通知区域的**方框「中」**（火流猩自己的语言栏项，tooltip「左键切换模式，右键打开菜单」；旁边那个**红猿头 logo 是 Windows 自带的 IME 指示器**，本仓库代码控制不了）；②「暂时没有发现 tooltip 遮挡槽位」⇒ **该项结案**（该 tooltip 是面板**自身的槽位说明气泡** `FluxingQuickPanel_Tooltip`，hover 槽位才出现）；③「英文逗号圆点部分过于偏左，可以右移一点，从而减少尾巴的长度，和中文逗号区分度更大」。
+- **v13 修法（不换字体，改裁切）**：英文态逗号（Times New Roman 52px `U+002C`，墨迹 8×12，origin=(2,3)）的**圆头横跨墨迹盒整宽且偏左 + 长尾左钩**，与中文态宋体 `U+FF0C`（8×13，大圆头 + 长弯尾）轮廓相近 ⇒ 肉眼难分。候选裁决（离线 GDI 探针 `tmp/probe-fwicon-v13d.ps1` → `tmp/v13-sheet2.png` / `tmp/v13-metrics.txt`）显示 **Segoe UI / Cambria / Palatino 的 `U+002C` 结构反而更像宋体逗号**（斜直笔画，更差）⇒ 换字体路线被证伪；唯一同时满足「圆头右移 + 尾巴缩短」的是 **左缘裁切 2 列**（`kCommaCutLeftEn = 2`，可见墨迹 7..12，质量 54→43）。
+- **实现（R7 单一事实源）**：`include/FluxingPanelFwIcon.h` 新增 `kCommaCutLeftEn` / `Icon::commaCutLeft`（中文态 0、英文态 2）与纯函数 `GlyphClipRect(pen, GlyphInk, cutLeft)`；生产侧 `WeaselServer/QuickPanelDialog.cpp::DrawInkPlacedChar` 用 `SaveDC` + `IntersectClipRect` + `RestoreDC` 实现裁切（**不碰 AlphaBlend**）。裁切基准取**实际墨迹盒**（落笔点推出）而非目标盒 —— 目标机缺字体、GDI 替换造成的 ±1 px 漂移不会改变裁切位置；右/下边界按 GDI **开区间**返回。中文态逗号、字体、目标盒尺寸、句号图元**全部未动**。
+- **单测同步**：`T33s`（英文态裁切 2 列 / 中文态不裁）、`T33s2`（裁切矩形精确值 `(7,17)-(13,29)`）、`T33s3`（不裁切时 `(5,17)-(13,29)` 且 `clip.left == full.left + 2`）⇒ `TestQuickPanelDialog` **258/258**、`TestQuickPanelRefactor` 40/40、`TestWeaselIPC` rc=0。
+- **门禁 / 构建**：`scripts/gate/L0-static.ps1 -Mode source` = `checks=14 pass=14 fail=0 skip=0`；全量构建（x64 TSF + x86 SLN + NSIS）全 rc=0；安装包 `output/archives/fluxing-1.2.1-installer.exe` 42,825,119 B @2026-11-08 17:02:08。
+- **装机 + 运行时像素**：静默重装 `INSTALL_EXIT=0`；`WeaselServer.exe` / `weasel.dll` / `WeaselDeployer.exe` SHA256 **MATCH=True**（v13 已上机）；`weaselx64.dll` **MATCH=False**（仍被 64 位宿主占用 ⇒ ADR 0044 的托盘摘除**未上机**，需用户注销 / 重启后重装）。运行时取证 `tmp/probe-batch-i3.ps1 -OutBase batch-v13`：`P4 VERDICT punct_follows_state = PASS`；slot2 英文态 **ink=56 / bbox 16×24**（v12 为 ink=59 / 18×24）⇒ 图标左边界**右移 2 物理像素**、尾巴变短；对照拼图 `tmp/v13-runtime-sheet.png`（v12/v13 × 中文/英文 四格）。`P6` 两步仍 FAIL，与批次 I / J 基线**逐字符相同** ⇒ 探针既有缺陷，非本批回归。
+- **未闭环**：① v13 英文逗号辨识度的**人眼终确认**（用户，对照图已备）；② 托盘方框「中」消失（x64 未落地）；③ 开机首次切换卡顿（ADR 0042）需重启复验。
+
 ### feat(fluxing): 快捷面板英文标点逗号图标 v12 + 任务栏常驻「中英文」托盘图标摘除（批次 J）
 
 - **用户原话**：①「快捷设置栏中英文标点中，中文标点辨识度已经很高，但英文的逗号，辨识度仍然需要改进」；②「请去除在任务栏托盘区的输入法"中英文"图标，这个图标不需要常驻」。

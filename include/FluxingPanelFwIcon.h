@@ -25,6 +25,9 @@
 // v12 (用户指令 2026-11-08,批次 J):「中文标点辨识度已经很高,但英文的逗号,
 //    辨识度仍然需要改进」⇒ 英文态逗号目标墨迹盒 6×9 → **8×12**
 //    (Times New Roman 52px, origin=(2,3)),墨量 +78%,与中文态 8×13 同量级。
+// v13 (用户指令 2026-11-08,批次 J 续):「英文逗号圆点部分过于偏左,可以右移一点,
+//    从而减少尾巴的长度,和中文逗号区分度更大」⇒ 英文态逗号**左缘裁切 2 列**
+//    (圆头右移 2 px、尾巴左钩被切短),详见 kCommaCutLeftEn。
 //
 // ── 为什么 v9 的多边形一定有锯齿(别再用手绘轮廓修)─────────────────────
 // GDI 的 `Polygon` / 扫描线填充族**没有抗锯齿**:每条边都被光栅化成整像素台阶。
@@ -112,6 +115,18 @@ constexpr int kCommaInkHeightCn = 13;
 constexpr int kCommaInkWidthEn = 8;
 constexpr int kCommaInkHeightEn = 12;
 
+// ── v13:英文态逗号**左缘裁切**(raw px)──────────────────────────────────
+// 用户原话(2026-11-08):「英文逗号圆点部分过于偏左,可以右移一点,从而减少尾巴
+// 的长度,和中文逗号区分度更大」。
+// 病灶(像素证据 tmp/v13-metrics.txt / tmp/v13-sheet2.png):Times New Roman 的
+// U+002C 在 52px 下圆头**横跨墨迹盒整宽且偏左**,尾巴是一根向左下甩的长钩;
+// 宋体 U+FF0C 是「大圆头 + 长弯尾」⇒ 两态轮廓相近,肉眼难分。
+// 修法:**不换字体** —— Segoe UI / Cambria / Palatino 的 U+002C 圆头虽然右置,
+//   但尾巴是斜直笔画,整体结构反而更像宋体逗号(实测更差,见 tmp/v13-sheet2.png);
+//   「左缘裁切 2 列」同时做到:圆头右移 2 px、尾巴左钩被切短 ⇒ 两态一眼可分。
+// ★ 裁切用 GDI 裁剪矩形(SaveDC/IntersectClipRect/RestoreDC)实现,不碰 AlphaBlend。
+constexpr int kCommaCutLeftEn = 2;
+
 // 两态逗号各自用的字体(中文字体出中文逗号,拉丁字体出拉丁逗号)。
 constexpr const wchar_t* kCommaFaceCn = L"SimSun";  // 宋体
 constexpr const wchar_t* kCommaFaceEn = L"Times New Roman";
@@ -131,6 +146,7 @@ struct Icon {
   RECT commaInk;      // 逗号字形墨迹盒应落到哪里(闭区间,viewBox 局部坐标)
   wchar_t commaChar;  // 全角 U+FF0C「，」/ 半角 U+002C「,」
   const wchar_t* commaFace;  // v11:该态逗号用的字体(中文字体 / 拉丁字体)
+  int commaCutLeft;     // v13:字形左缘裁切列数(raw px;0 = 不裁切)
   RECT ink;           // 墨迹盒并集(= 各图元与逗号的实际覆盖,无外扩)
   bool hollow;        // true = 中文标点(空心环) / false = 英文标点(实心点)
 };
@@ -189,6 +205,21 @@ inline POINT GlyphPenPointForInk(const RECT& targetInk, const GlyphInk& m) {
   return p;
 }
 
+// v13:字形的**裁切矩形**(设备坐标)—— 把字形左缘 cutLeft 列切掉,
+// 用来把英文逗号的圆头右移、尾巴缩短(见 kCommaCutLeftEn)。
+//
+// ★ 右/下边界是**开区间**:GDI 的 IntersectClipRect 语义为
+//   x∈[left,right) / y∈[top,bottom),直接用它就不会把墨迹盒最后一行/列切掉。
+// ★ 基准是落笔点推出的**实际**墨迹盒(不是目标盒):目标机器若缺字体、
+//   GDI 替换后实际墨迹会与目标盒差 1 px,按实际墨迹裁才稳定。
+inline RECT GlyphClipRect(const POINT& pen, const GlyphInk& m, int cutLeft) {
+  const int l = pen.x + m.originX + (cutLeft > 0 ? cutLeft : 0);
+  const int t = pen.y - m.originY;
+  const int r = pen.x + m.originX + m.width;   // 开区间
+  const int b = pen.y - m.originY + m.height;  // 开区间
+  return RECT{l, t, r, b};
+}
+
 // 中文标点态(v11 墨迹 25×27):
 //   句号「。」= 空心环,路径框 (16,2)-(28,14) ⇒ 覆盖 16..27,外径 **12**
 //     (1px 描边 ⇒ 壁厚 1、洞径 10×10)。外径沿用 v8/v8.1(用户判「偏大」的是
@@ -216,6 +247,7 @@ inline Icon Build(bool fullwidth) {
     ic.shapes[0].rect = RECT{16, 2, 28, 14};
     ic.commaChar = L'\xFF0C';  // 全角逗号「，」
     ic.commaFace = kCommaFaceCn;
+    ic.commaCutLeft = 0;  // v13:中文态不裁切
     ic.commaInk.left = 3;
     ic.commaInk.top = kCommaBottom - kCommaInkHeightCn + 1;
     ic.commaInk.right = ic.commaInk.left + kCommaInkWidthCn - 1;
@@ -225,6 +257,7 @@ inline Icon Build(bool fullwidth) {
     ic.shapes[0].rect = RECT{17, 4, 24, 11};
     ic.commaChar = L',';  // 半角逗号
     ic.commaFace = kCommaFaceEn;
+    ic.commaCutLeft = kCommaCutLeftEn;  // v13:英文态左缘裁切 2 列
     ic.commaInk.left = 5;
     ic.commaInk.top = kCommaBottom - kCommaInkHeightEn + 1;
     ic.commaInk.right = ic.commaInk.left + kCommaInkWidthEn - 1;

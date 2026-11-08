@@ -1610,6 +1610,38 @@ int main() {
                 hw_pen.y - hw_m.originY == hw_target.top,
             "T33q3: 落笔点 + 字体 origin 回推出目标墨迹盒左上角(往返一致)");
     }
+    // ===== v13(用户指令 2026-11-08,批次 J 续):英文逗号**左缘裁切** =====
+    // 用户原话:「英文逗号圆点部分过于偏左,可以右移一点,从而减少尾巴的长度,
+    // 和中文逗号区分度更大」⇒ 英文态字形左缘裁掉 2 列。
+    // 判据三件套:
+    //   ① 裁切列数:英文态 = kCommaCutLeftEn(2),中文态 = 0;
+    //   ② 裁切矩形(设备坐标;GDI 右/下为**开区间**)精确值 (7,17)-(13,29);
+    //   ③ 往返:不裁切时裁切矩形 = 完整实际墨迹盒(5,17)-(13,29)
+    //      ⇒ 裁切后可见左边界 = 目标盒左 + 2 ⇒ 圆头确实右移 2 px。
+    Check(fw.commaCutLeft == 0 &&
+              hw.commaCutLeft == fluxing::panel_fwicon::kCommaCutLeftEn &&
+              fluxing::panel_fwicon::kCommaCutLeftEn == 2,
+          "T33s(v13): 英文态逗号左缘裁切 2 列,中文态不裁");
+    {
+      using fluxing::panel_fwicon::GlyphInk;
+      using fluxing::panel_fwicon::GlyphPenPointForInk;
+      using fluxing::panel_fwicon::GlyphClipRect;
+      const RECT hw_target = {5, 17, 12, 28};
+      GlyphInk hw_m;
+      hw_m.width = 8;
+      hw_m.height = 12;
+      hw_m.originX = 2;   // Times New Roman 52px U+002C 实测
+      hw_m.originY = 3;
+      const POINT hw_pen = GlyphPenPointForInk(hw_target, hw_m);
+      const RECT clip = GlyphClipRect(hw_pen, hw_m, hw.commaCutLeft);
+      const RECT full = GlyphClipRect(hw_pen, hw_m, 0);
+      Check(clip.left == 7 && clip.top == 17 && clip.right == 13 &&
+                clip.bottom == 29,
+            "T33s2(v13): 英文逗号裁切矩形 (7,17)-(13,29)(GDI 右/下开区间)");
+      Check(full.left == 5 && full.top == 17 && full.right == 13 &&
+                full.bottom == 29 && clip.left == full.left + 2,
+            "T33s3(v13): 裁切后可见左边界 = 目标盒左 + 2(圆头右移 2 px)");
+    }
   }
 
   // ============================================================

@@ -14379,3 +14379,26 @@ handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四
   免得把词库短语里的标点也改掉。
 - **面板图标与引擎输出必须同源**:两者读同一个 live option 仍可能背离(该 option 只短路不换表);
   验收要看**运行时像素 + 实际码位**,不能只看图标翻转。
+
+## L201 生成式补丁脚本：PowerShell 会把单元素数组展开 ⇒ 替换「自报成功」但内容根本没落盘（2026-11-08）
+
+**证据**：2026-11-08 Fluxing 批次 K（快捷面板图标 v13），`tmp/patch-v13.ps1` 用「替换对」列表做批量字符串替换。
+头文件 `include/FluxingPanelFwIcon.h` 的 6 对替换成功，测试文件 `test/TestQuickPanelDialog/TestQuickPanelDialog.cpp` 的 4 对**全部空替换**
+（脚本每对都打印 OK）⇒ 新增的 `T33s` 断言**根本没写进文件**，而此时「单测 255/255 全绿」看起来毫无破绽。
+
+**根因**：替换对放在数组里再遍历，**数组只有一个元素时 PowerShell 会把它当标量展开**（`$pairs` 退化成单个 hashtable / 字符串），
+`foreach` / `ForEach-Object` 拿到的 `$_` 不是 hashtable ⇒ `.old` / `.new` 为空 ⇒ 等价于「替换成空串」⇒ 文件没变，但脚本自报成功。
+
+**怎么用**：
+- 批量改文件时，**替换前先断言**：`old` 串非空、且在目标文件中**唯一命中**（`IndexOf` 计数 == 1）再执行替换；命中 0 次或多于 1 次都要**中止**。
+- 写完补丁**必须回读**：① `grep` 目标标识符（如 `T33s`）；② 核对**数量变化**（断言 255 → 258）。
+  **「脚本自报成功」不是证据，「目标标识符能被 grep 到 + 数量对得上」才是。**
+- 单点替换优先用 `edit` 工具或精确 `String.Replace()`，不要为了「一次改多处」把替换对塞进数组。
+
+**同源附带坑**：GDI `IntersectClipRect` 的右/下边界是**开区间**（`x∈[left,right)`）⇒ 写裁切矩形时右边界用 `pen.x+originX+width`（**不是** `width-1`），
+否则会多切掉最后一列 / 最后一行。
+
+**推广**：任何「脚本批量改文件」的工作，**落盘校验是交付的一部分**。
+这类空替换不会报错、不会让测试变红，只会让**新写的断言根本没存在过**——比编译失败危险得多。
+
+**关联**：`tmp/patch-v13.ps1`、`include/FluxingPanelFwIcon.h`（`GlyphClipRect`）、`WeaselServer/QuickPanelDialog.cpp`（`DrawInkPlacedChar` 裁切）、`test/TestQuickPanelDialog/TestQuickPanelDialog.cpp`（`T33s`）、批次 K 交接。
