@@ -64,6 +64,10 @@
 // spec 037: 导入搜狗输入法用户词库（托盘右键入口 -> WeaselDeployer.exe /sogou）
 #define ID_WEASELTRAY_SOGOU_IMPORT     40022
 
+// spec 045: 托盘右键 / 快捷设置栏品牌图标右键 -> 快捷键设置界面
+// （与 Ctrl+Shift+K、快捷设置栏齿轮槽共用 ShortcutSettings::Show()）
+#define ID_WEASELTRAY_SHORTCUT_SETTINGS 40023
+
 #define IDR_FLUXING_LOGO                108
 #define ID_QUICKPANEL_BTN_ASCII        41001
 #define ID_QUICKPANEL_BTN_DEPLOY       41002

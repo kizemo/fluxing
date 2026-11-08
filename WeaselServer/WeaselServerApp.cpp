@@ -480,6 +480,22 @@ void WeaselServerApp::SetupMenuHandlers() {
     return true;
   });
 
+  // spec 045: 托盘右键 / 快捷设置栏品牌图标右键 -> 快捷键设置界面。
+  // 菜单资源 IDR_MENU_POPUP 被托盘右键与快捷设置栏右键共用(ADR 0038),
+  // 所以这一个菜单项同时覆盖两个入口。
+  // 与 Ctrl+Shift+K(WeaselServerApp.cpp ID_HOTKEY_SHORTCUT)和快捷设置栏
+  // 齿轮槽(SetQuickPanelShortcutCallback)共用 ShortcutSettings::Show()。
+  m_server.AddMenuHandler(ID_WEASELTRAY_SHORTCUT_SETTINGS, [this] {
+    if (GetCurrentThreadId() != m_uiThreadId) {
+      // 菜单命令可能从 IPC 管道线程到达,弹回界面线程处理。
+      ::PostMessage(m_server.GetHWnd(), WM_COMMAND,
+                    MAKEWPARAM(ID_WEASELTRAY_SHORTCUT_SETTINGS, 0), 0);
+      return true;
+    }
+    ShortcutSettings::Show();
+    return true;
+  });
+
   // spec 084 / ADR 0013 D4: 托盘菜单勾选项 -> 快捷设置栏长显模式。
   m_server.AddMenuHandler(ID_QUICKPANEL_ALWAYS_SHOW, [this] {
     if (GetCurrentThreadId() != m_uiThreadId) {
