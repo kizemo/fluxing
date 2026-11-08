@@ -518,6 +518,14 @@ void WeaselTSF::_Reconnect() {
   }
 }
 
+// ADR 0042 决策 2: 补拉门槛 —— 连续失败 2 次即补拉。
+//
+// 旧口径是 "retry >= 6", 而且 retry **只增不减**(连上了也不清)⇒ 它其实是
+// "累计失败数"而不是"连续失败数": 曾经失败 5 次 → 成功 1 次 → 再失败 1 次
+// 也会立刻触发一次补拉。开机后第一次切到火流猩时, 用户得连按 6 次才可能
+// 把服务端拉起来 —— 这是"很久的延时"的另一半来源。
+static constexpr unsigned int kServerRelaunchFailureThreshold = 2;
+
 static unsigned int retry = 0;
 
 // ADR 0031 决策 4 — console 缺位自愈。
@@ -545,7 +553,7 @@ bool WeaselTSF::_EnsureServerConnected() {
   if (!m_client.Echo()) {
     _Reconnect();
     retry++;
-    if (retry >= 6) {
+    if (retry >= kServerRelaunchFailureThreshold) {
       const ULONGLONG now = ::GetTickCount64();
       const ULONGLONG last =
           g_serverRelaunchLastMs.load(std::memory_order_relaxed);
@@ -567,22 +575,34 @@ bool WeaselTSF::_EnsureServerConnected() {
             }
           } const releaseGuard;
 
-          const auto count_server_process = []() -> int {
-            int count = 0;
+          // ADR 0042 决策 3: 进程计数**按会话**统计。
+          //
+          // 旧口径是**全系统**统计: 别的会话(远程/RDP)里残留的 WeaselServer.exe
+          // 也被算进来 ⇒ 本会话误以为"服务端还活着" ⇒ 前端不补拉 ⇒ 服务真空
+          // 持续, 热键/面板/短语/中文全废。现在只数**与本进程同会话**的服务端。
+          // 取不到会话号的进程按"算它活着"处理(保守: 不重复拉起)。
+          const DWORD mySession = fluxing::session::CurrentSessionId();
+          int serverCount = 0;     // 同会话
+          int serverCountAll = 0;  // 全系统(只留痕)
+          {
             HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-            if (snap == INVALID_HANDLE_VALUE)
-              return 0;
-            PROCESSENTRY32 pe;
-            pe.dwSize = sizeof(pe);
-            if (Process32First(snap, &pe)) {
-              do {
-                if (_wcsicmp(pe.szExeFile, L"WeaselServer.exe") == 0)
-                  count++;
-              } while (Process32Next(snap, &pe));
+            if (snap != INVALID_HANDLE_VALUE) {
+              PROCESSENTRY32 pe;
+              pe.dwSize = sizeof(pe);
+              if (Process32First(snap, &pe)) {
+                do {
+                  if (_wcsicmp(pe.szExeFile, L"WeaselServer.exe") == 0) {
+                    serverCountAll++;
+                    DWORD sid = 0;
+                    if (!ProcessIdToSessionId(pe.th32ProcessID, &sid) ||
+                        sid == mySession)
+                      serverCount++;
+                  }
+                } while (Process32Next(snap, &pe));
+              }
+              CloseHandle(snap);
             }
-            CloseHandle(snap);
-            return count;
-          };
+          }
 
           HANDLE hMutex =
               CreateMutex(NULL, TRUE, L"WeaselDeployerExclusiveMutex");
@@ -590,11 +610,10 @@ bool WeaselTSF::_EnsureServerConnected() {
           const DWORD mutexError = ::GetLastError();
           const bool deployerBusy = (mutexError == ERROR_ALREADY_EXISTS);
           const bool stillDown = !m_client.Echo();
-          int serverCount = 0;
           bool launched = false;
           bool noTarget = false;
           if (stillDown && !deployerBusy) {
-            serverCount = count_server_process();
+            // serverCount / serverCountAll 已在上面按会话统计完毕。
             if (serverCount == 0) {
               // spec 088: 以前这里无条件拼 "<dir>\start_service.bat",而 dir
               // 来自 只读 "WeaselRoot" 的注册表查询 ⇒ 本 fork
@@ -630,6 +649,10 @@ bool WeaselTSF::_EnsureServerConnected() {
           line += (deployerBusy ? "1" : "0");
           line += " server_process_count=";
           line += std::to_string((long long)serverCount);
+          line += " server_process_count_all=";
+          line += std::to_string((long long)serverCountAll);
+          line += " server_session_id=";
+          line += std::to_string((unsigned long long)mySession);
           line += " mutex_error=";
           line += std::to_string((unsigned long long)mutexError);
           fluxing::diag::AppendLine("tsf", line);
@@ -645,6 +668,9 @@ bool WeaselTSF::_EnsureServerConnected() {
     }
     return (m_client.Echo() != 0);
   } else {
+    // 连续失败计数: 连上就清零。旧代码这里直接 return true, retry 一直挂着,
+    // 于是"失败 5 次 → 成功 1 次 → 再失败 1 次"也会立刻触发补拉。
+    retry = 0;
     return true;
   }
 }

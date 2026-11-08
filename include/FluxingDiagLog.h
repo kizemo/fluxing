@@ -46,6 +46,48 @@ inline bool DiagLogShouldWrite() {
   return size.QuadPart < (2ull * 1024 * 1024);
 }
 
+// 本地时间戳 "[YYYY-MM-DD HH:MM:SS.mmm]" —— ADR 0042 决策 3。
+//
+// 为什么加: 原实现只写 "[tag] message", **没有时间戳**, 于是跨进程的时序
+// 断言做不了: 2026-11-08 开机卡顿事故里, 只能看到"startup_refused 出现过
+// 5 次", 却无法说清"是哪个实例在什么时候杀掉了 console 会话的服务端"。
+// 有了毫秒级时间戳, 事件顺序与间隔可直接从文件读出。
+//
+// 口径: 时间戳**前置**在 tag 之前 ⇒ 行形状变成
+// "[2026-11-08 09:20:26.123][server] message",
+// 既有 grep 口径 "[server] " 仍然是子串, 不会打断存量取证脚本。
+inline std::string DiagTimestamp() {
+  SYSTEMTIME st;
+  ::GetLocalTime(&st);
+  char buf[32];
+  int n = 0;
+  const auto put2 = [&buf, &n](unsigned v) {
+    buf[n++] = (char)('0' + (v / 10) % 10);
+    buf[n++] = (char)('0' + v % 10);
+  };
+  const auto put3 = [&buf, &n](unsigned v) {
+    buf[n++] = (char)('0' + (v / 100) % 10);
+    buf[n++] = (char)('0' + (v / 10) % 10);
+    buf[n++] = (char)('0' + v % 10);
+  };
+  put2((st.wYear / 100) % 100);
+  put2(st.wYear % 100);
+  buf[n++] = '-';
+  put2(st.wMonth);
+  buf[n++] = '-';
+  put2(st.wDay);
+  buf[n++] = ' ';
+  put2(st.wHour);
+  buf[n++] = ':';
+  put2(st.wMinute);
+  buf[n++] = ':';
+  put2(st.wSecond);
+  buf[n++] = '.';
+  put3(st.wMilliseconds);
+  buf[n++] = ']';
+  return std::string(buf, (size_t)n);
+}
+
 // 追加一行。tag 区分来源(tsf / server)。
 inline void AppendLine(const char* tag, const std::string& message) {
   try {
@@ -59,7 +101,8 @@ inline void AppendLine(const char* tag, const std::string& message) {
                              OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE)
       return;
-    std::string line("[");
+    std::string line(DiagTimestamp());
+    line += "[";
     line += tag;
     line += "] ";
     line += message;

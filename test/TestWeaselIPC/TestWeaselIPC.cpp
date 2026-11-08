@@ -18,6 +18,9 @@ using namespace boost::interprocess;
 // 共用 include/FluxingSessionPolicy.h 同一实现 (constitution R7)。
 #include <FluxingDiagLog.h>
 #include <FluxingSessionPolicy.h>
+// ADR 0043: 半角标点(英文标点)的标点语言转换。生产代码(RimeWithWeasel 的
+// 提交边界)与本测试共用 include/FluxingPunctText.h 同一实现 (constitution R7)。
+#include <FluxingPunctText.h>
 
 CAppModule _Module;
 
@@ -1144,6 +1147,82 @@ int verify_console_session_main() {
   expect(failOpen.console_session == 0,
          "fail-open hides the unusable console id");
 
+  // --- 1b. ADR 0042 决策 1: 门禁前置的"杀伤许可"判定 ---
+  //
+  // 事故复刻(2026-11-08 开机首次切换卡顿): 远程会话(Session 2)的实例在**旧顺序**
+  // 下会先 Connect+ShutdownServer **杀掉** console 会话(Session 1)的健康服务端,
+  // 自己再被门禁拒掉并 exit=-1 ⇒ 服务真空 ⇒ 热键/面板/短语/中文一起消失, 要等
+  // 前端补拉成功才恢复。MayShutdownExisting() 就是把这条杀伤路径从根上断掉的
+  // 判定, 与生产代码 WeaselServer\WeaselServer.cpp 的 WinMain 用的是同一个函数
+  // (include/FluxingSessionPolicy.h, constitution R7)。
+  expect(fluxing::session::MayShutdownExisting(incident, false) == false,
+         "a non-console instance must NOT shut down the running server");
+  expect(fluxing::session::MayShutdownExisting(incident, true) == true,
+         "/quit stays an operator-only shutdown path");
+  expect(fluxing::session::MayShutdownExisting(match, false) == true,
+         "the console session may still restart its own server");
+  expect(fluxing::session::MayShutdownExisting(failOpen, false) == true,
+         "unknown console session fails open and may restart the server");
+  // 反向自检: 门禁结论必须真的改变决定(证明这不是恒真断言)。
+  expect(fluxing::session::MayShutdownExisting(incident, false) !=
+             fluxing::session::MayShutdownExisting(match, false),
+         "the gate verdict actually changes the shutdown decision");
+
+  // --- 1c. 批次 I / ADR 0043: 半角标点(英文标点)的标点语言转换 ---
+  // 用户 2026-11-08:「手点面板『中英文标点』切到半角 → 中文态打 , , 确认变成
+  // 半角逗号;再点回,确认变 ,」。根因: librime 的标点表**只**由 full_shape 选项
+  // 选(librime/src/rime/gear/punctuator.cc:23-30), ascii_punct 只让处理器短路
+  // (:102), 翻译路径(:329)根本不看它; 本 fork 两张表都映射中文标点 ⇒ 引擎永远
+  // 吐中文标点, 而面板图标读 live status 会翻转 ⇒ 图标与输出必然背离。
+  // ⇒ fork 在提交边界做转换(include/FluxingPunctText.h), 生产与测试同源 (R7)。
+  // 字面量一律用 UTF-8 字节转义, 避免源码编码影响断言。
+  {
+    using fluxing::punct_text::ApplyAsciiPunctuation;
+    using fluxing::punct_text::IsPunctuationOnly;
+    using fluxing::punct_text::ToAsciiPunctuation;
+    // 中文逗号 / 句号 → ASCII
+    expect(ApplyAsciiPunctuation("\xef\xbc\x8c") == ",",
+           "full-width comma becomes an ASCII comma");
+    expect(ApplyAsciiPunctuation("\xe3\x80\x82") == ".",
+           "full-width period becomes an ASCII period");
+    expect(ApplyAsciiPunctuation("\xef\xbc\x9f") == "?",
+           "full-width question mark becomes '?'");
+    // 引号 / 括号 / 书名号 /  lenticular 方括号
+    expect(ApplyAsciiPunctuation("\xe2\x80\x9c") == "\"",
+           "left curly quote becomes an ASCII double quote");
+    expect(ApplyAsciiPunctuation("\xef\xbc\x88") == "(",
+           "full-width left paren becomes an ASCII paren");
+    expect(ApplyAsciiPunctuation("\xe3\x80\x8a") == "<",
+           "left book title mark becomes '<'");
+    expect(ApplyAsciiPunctuation("\xe3\x80\x90") == "[",
+           "left lenticular bracket becomes '['");
+    expect(ApplyAsciiPunctuation("\xe3\x80\x8c") == "[",
+           "left corner bracket becomes '['");
+    // 省略号 / 破折号: 成对写法优先(…… → ..., —— → --)
+    expect(ApplyAsciiPunctuation("\xe2\x80\xa6\xe2\x80\xa6") == "...",
+           "Chinese ellipsis becomes three ASCII dots");
+    expect(ApplyAsciiPunctuation("\xe2\x80\x94\xe2\x80\x94") == "--",
+           "Chinese dash becomes two ASCII hyphens");
+    // 非纯标点文本必须原样返回(词库短语 / 数字 / 字母不受影响)
+    expect(ApplyAsciiPunctuation(
+               "\xe4\xbd\xa0\xe5\xa5\xbd\xef\xbc\x8c\xe4\xb8\x96\xe7\x95\x8c") ==
+               "\xe4\xbd\xa0\xe5\xa5\xbd\xef\xbc\x8c\xe4\xb8\x96\xe7\x95\x8c",
+           "dictionary phrases keep their own punctuation");
+    expect(ApplyAsciiPunctuation("123") == "123",
+           "digits stay untouched in half-punctuation mode");
+    expect(ApplyAsciiPunctuation("a,b") == "a,b",
+           "mixed text is not rewritten");
+    expect(IsPunctuationOnly("\xef\xbc\x8c") == true,
+           "a single full-width comma counts as punctuation-only");
+    expect(IsPunctuationOnly("123") == false,
+           "digits are not punctuation-only");
+    expect(IsPunctuationOnly("") == false,
+           "an empty commit is not punctuation-only");
+    // 反向自检: 转换必须真的改写文本(证明不是恒等断言)。
+    expect(ToAsciiPunctuation("\xe3\x80\x82") != "\xe3\x80\x82",
+           "the conversion actually rewrites the text");
+  }
+
   // --- 2. 生产日志行的确切形状 ---
   const std::string refusalLine =
       fluxing::session::Describe("startup_refused", incident);
@@ -1197,6 +1276,30 @@ int verify_console_session_main() {
   // 反向自检: 同一套查找必须能"查不到", 证明上一条命中不是恒真。
   expect(content.find(needle + "XX_NO_SUCH_MARKER_XX") == std::string::npos,
          "substring search can still miss (probe is not vacuous)");
+
+  // --- 5. ADR 0042 决策 3: 诊断行必须带毫秒级时间戳 ---
+  //
+  // 为什么有牙: 原实现只写 "[tag] message", **没有时间戳** ⇒ 跨进程的时序
+  // 断言做不了(2026-11-08 事故里只能看到"startup_refused 出现过 5 次",
+  // 却说不出"谁在什么时候杀掉了 console 会话的服务端")。现在行首必须是
+  // "[YYYY-MM-DD HH:MM:SS.mmm]", 且 tag 仍在时间戳之后 ⇒ 既有 grep 口径
+  // "[server] " 仍然是子串, 存量取证脚本不破。
+  {
+    const size_t at = content.find("[server] " + marker);
+    expect(at != std::string::npos, "probe line is present in the diag log");
+    if (at != std::string::npos) {
+      const size_t lineStart = content.rfind('\n', at);
+      const size_t start =
+          (lineStart == std::string::npos) ? 0 : lineStart + 1;
+      const std::string prefix = content.substr(start, at - start);
+      expect(prefix.size() == 25 && prefix.front() == '[' &&
+                 prefix.back() == ']',
+             "diag line carries a [YYYY-MM-DD HH:MM:SS.mmm] timestamp prefix");
+      expect(prefix[5] == '-' && prefix[8] == '-' && prefix[11] == ' ' &&
+                 prefix[14] == ':' && prefix[17] == ':' && prefix[20] == '.',
+             "timestamp prefix field separators are as expected");
+    }
+  }
 
   std::cout << (failures == 0 ? "verify-console-session: PASS"
                               : "verify-console-session: FAIL")

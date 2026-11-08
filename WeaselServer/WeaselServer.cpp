@@ -18,6 +18,8 @@
 #include <WinUser.h>
 #include <memory>
 #include <atlstr.h>
+#include <FluxingSessionPolicy.h>
+#include <FluxingDiagLog.h>
 #pragma comment(lib, "Shcore.lib")
 
 // L67-fix: unhandled-exception safety net. The release build had no
@@ -150,6 +152,27 @@ int WINAPI _tWinMain(HINSTANCE hInstance,
 
   // command line option /q stops the running server
   bool quit = (cmdOption == fluxing::servercmd::Option::Quit);
+
+  // ADR 0042 决策 1: 会话门禁**前置**到"杀旧实例"之前。
+  //
+  // 旧顺序 = 新实例先 Connect + ShutdownServer(**杀掉**在跑的服务端) → 之后
+  // 才过会话门禁(WeaselIPCServer\WeaselServerImpl.cpp:Start)。于是远程/RDP
+  // 会话拉起的实例先把 console 会话的健康服务端杀掉, 自己再被门禁拒掉并
+  // exit=-1 ⇒ 服务真空: 热键(会话级注册)、快捷设置栏、用户短语、中文输入
+  // 一起消失, 要等前端补拉成功才恢复 —— 用户观感就是"开机后第一次切到火流猩
+  // 会卡很久"。本条把门禁提前到杀伤动作之前, 从根上断掉这条路径。
+  //
+  // 判定与服务端 Start() 用的是**同一份** Evaluate()(constitution R7);
+  // /quit 是运维显式停服语义, 仍然放行。
+  const fluxing::session::Verdict preGate = fluxing::session::EvaluateCurrent();
+  if (!fluxing::session::MayShutdownExisting(preGate, quit)) {
+    std::string line = fluxing::session::Describe("startup_refused", preGate);
+    line += " detail=pre_kill_gate";
+    fluxing::diag::AppendLine("server", line);
+    // 不杀旧实例, 也不进消息循环: 本进程本来就会被 Start() 的门禁拒掉。
+    return -1;
+  }
+
   // restart if already running
   {
     weasel::Client client;

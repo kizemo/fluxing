@@ -95,6 +95,23 @@ inline Verdict EvaluateCurrent() {
   return Evaluate(CurrentSessionId(), console, known);
 }
 
+// ADR 0042 决策 1: 会话门禁**前置** —— 非 console 会话实例不许碰在跑的服务端。
+//
+// 为什么需要它(2026-11-08 开机首次切换卡顿事故): 旧顺序是
+// 「新实例先 Connect + ShutdownServer(**杀掉**旧实例) → 之后才过会话门禁」。
+// 于是远程/RDP 会话拉起的实例先把 console 会话的健康服务端杀掉, 自己再被
+// 门禁拒掉并 exit=-1 ⇒ **服务真空**: 热键(会话级注册)、快捷设置栏、用户短语、
+// 中文输入一起消失, 要等前端补拉成功才恢复 —— 用户观感就是"开机后第一次切到
+// 火流猩会卡很久才能用"。
+//
+// 口径: 与服务端 Start() 里用的是**同一个** Evaluate()/EvaluateCurrent()
+// (constitution R7), 差别只有一条: /quit 是运维显式停服语义, 仍然放行。
+inline bool MayShutdownExisting(const Verdict& v, bool quit) {
+  if (quit)
+    return true;   // 运维显式停服: 不受会话门禁约束
+  return v.allowed; // 门禁不通过 ⇒ 不许碰在跑的服务端
+}
+
 // "current_session_id=3 console_session_id=1" —— 取证要的就是这两个数。
 inline std::string SessionFields(const Verdict& v) {
   std::string s = "current_session_id=";
