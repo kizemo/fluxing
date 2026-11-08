@@ -2,10 +2,12 @@
 
 > 生成：2026-11-08 23:01 · 会话 `mvs_5a90523976724e12aede113520ad36b2`
 > 上一批：[批次 M · spec 045 快捷键设置 P1 收口（T101/T102/T103/T106）](handoff-2026-11-08-batch-m-shortcut-settings-p1.md)
-> **状态（2026-11-08 深夜就地更新）：T107 已实现并通过验证。** S1–S6 全部完成，单测
-> `PASS=116 FAIL=0`、主构建 `MAIN_BUILD_EXIT=0`、L0 门禁 `14/14` 通过、`tasks.md` T107 已勾选。
-> **仍缺：提交（改动未 commit）与真机界面验收（T101/T102/T103/T106/T107）。**
-> 新增内容见 §1.1 / §1.2 / §3.5 / §5 / §6 / §7。
+> **状态（2026-11-09 01:40 就地更新）：批次 N 收口。** T107 已提交（`1d47990`）；P0 UI 缺陷已修并提交
+> （`3e2b89d`）；**T110「保存即清空全局快捷键表」已实现 + 单测 + 真机验收 + 提交**（`0a8cbd9`）。
+> 单测 `PASS=149 FAIL=0`、L0 门禁 `14/14`；真机保存后落盘为**完整合并表**（基线 27 行逐字保留 + 改动行），
+> 部署后 `build/default.yaml` 仍是 27 行（修前被整表覆盖成 1 行）。
+> **仍缺：** 见 §5（部署器 `/deploy` 进程不退出、C 形态拒写未实测、T111 `custom:` 动作 librime 不认）。
+> 新增内容见 §1.1 / §1.2 / §1.3 / §3.5 / §5 / §6 / §7。
 
 ---
 
@@ -79,6 +81,59 @@
 
 另外一条顺手做的自愈：`RemoveManagedBlock` 先把旧格式托管块**整段摘除**（含其内部的 `patch:`），
 再在新的用户正文上跑 A/B/C 判定 ⇒ 不会产生第二个顶层 `patch:`。
+
+### 1.3 T110 收口轮（2026-11-09 01:00–01:40 · 同一 handoff 就地更新）
+
+**背景**：批次 N 真机验收发现**破坏性 patch**——面板保存一次，就把全局快捷键表清成剩下那几行。
+
+**根因（已坐实，勿再试探）**：
+
+- `librime/src/rime/config/config_compiler.cc`：`ADD_SUFFIX_OPERATOR = "/+"`；`EditNode()` 对普通键做
+  `*target = value` ⇒ `patch:` 里的 `key_binder/bindings` 是**整表覆盖**，只有 `/+` 才 `AppendToList`。
+- `librime/src/rime/config/auto_patch_config_plugin.cc`（全文 37 行）：`resource_id="default"` ⇒ 补丁落在
+  **全局预设** `default.yaml` 本身；`legacy_preset_config_plugin.cc` L22–41：各方案用
+  `key_binder/import_preset: default` 继承它。
+- `librime/src/rime/key_binder.cc` L271–287 `ProcessKeyEvent` 取**第一个**条件匹配的 binding
+  ⇒ 用 `/+` 追加**改不了**旧绑定（旧绑定继续生效）。
+- ⇒ 落盘必须写**完整合并列表**。
+
+**修法（T110）**：新增 `WeaselServer/ShortcutSettingsT110.h`（namespace `fluxing::shortcut_baseline`）
+
+- 基线来源：`SetBaselinePath()` 注入（单测）> `<用户目录>/default.yaml` > `<WeaselServer.exe 目录>/data/default.yaml`
+  （本机真实命中后者：`D:\Program Files\fluxing\weasel\data\default.yaml`，`key_binder:` L208 / `bindings:` L213 /
+  **27 条 live**）
+- 基线解析：顶层 `key_binder:` → 段内 `bindings:` → 缩进 ≥4 的条目；行尾注释保留；**块式写法 / 未知动作标
+  `parsed=false` 但保留 raw，落盘逐字写回**（解析不了 ≠ 可以丢）
+- 落盘（`BuildManagedSubBlockV2`）：**永远从完整基线出发**——面板里没有的基线行也照抄原文；被认领且被改的
+  行 canonical 渲染（`RenderRow`）；渲染失败退回基线原文并计 `skipped_no_action`；非基线行仅
+  `is_custom || edited` 才写
+- **fail-safe**：要写 bindings 却读不到基线 ⇒ `refused_no_baseline` **拒写**（宁可不写，也不能清空全局表）
+- **no-change**：有效列表与基线完全一致 ⇒ `writes_bindings=false`，不写 `key_binder/bindings:`、不触发部署
+- 面板：行 = 基线行（基线顺序）+ 基线未覆盖的应用级行 + 用户文件里未认领的自定义行；「恢复默认」=
+  基线原样行 + 应用级行（`m_pristine`）；「恢复这一行」= 整行还原
+
+**单测**：`test/TestShortcutSettings/TestShortcutSettings.cpp` 新增 5 条（改一行仍写全表 / 自定义行保留 /
+无改动不写 bindings / 块式基线条目逐字写回 / 无基线拒写）⇒ `PASS=149 FAIL=0`（原 116）
+
+**编译期踩坑**：`ShortcutSettingsT110.h:245` 把 `s[indent]` 写成了 `s[ind]`（变量名是 `indent`）
+⇒ `C2065` 报「未声明标识符 **nd**」——**报错只给尾字母**，全文搜 `\bind\b` 才找得到。
+
+**真机验收（`tmp/acceptance-t110/`，`tmp/` 不入库）**：
+
+- 面板保存后落盘的 `default.custom.yaml`（2183 B）= **完整合并表**：基线 27 行，首行 accept 被用户改成
+  `Control+Alt+F9`（canonical 渲染），其余 26 行**逐字保留**（含 `# 切换中英标点（Ctrl+.）` 行尾注释、
+  `- {accept: KP_0, send: 0, when: composing}` 无空格写法）
+- 部署后 `build/default.yaml`（01:32:16 写出）= **27 行**且含 `Control+Alt+F9`
+  ⇒ 与落盘清单**语义逐行一致**（仅 librime 重新序列化导致键序/引号/注释差异）
+  ⇒ **修前此处被覆盖成 1 行**（真机实测），T110 修后全局表完整
+- 探针判定全绿：`T103 filter rows 36 -> 8 -> 36` / `T102 status changed` / `T101 conflict differs` /
+  `T107 single patch + schema kept + new key + BOM` / `RESTORE_OK=True`
+- 用户配置已还原：311 B，sha256 `50A46CC77DBB08D26384A291E3CFD4A865E89977FEF1B65547F93ABF7876669D`
+
+**提交**：`0a8cbd9 fix(WeaselServer): 保存快捷键写完整合并列表避免清空全局表 (T110)`
+（`ShortcutSettingsT110.h` + `ShortcutSettings.h` + `ShortcutSettings.cpp` + 单测 + `tasks.md` + `lessons-learned.md`）
+
+**新增教训**：`lessons-learned.md` L207（落盘列表型配置前先拿基线全表；基线没到手就拒写）
 
 ---
 
@@ -267,12 +322,13 @@ msbuild test\TestShortcutSettings\TestShortcutSettings.vcxproj /t:Build ^
 
 ---
 
-## 5. 未验证缺口（2026-11-08 深夜更新：原第 3 条已消除，其余仍在）
+## 5. 未验证缺口（2026-11-09 01:40 更新）
 
-1. **真机界面零验收**：T101 / T102 / T103 / T106 / T107 只有单测 + 静态门禁证据，没人在真机上点过一次
-2. **真实 `default.custom.yaml` 从未被本代码写过**：测试落点是 `%TEMP%` **根目录**
-   （`TempStatePath` = `GetTempPathW` + 文件名，**不是**早前记录的 `%TEMP%\FluxingTestUserData`）
-   ⇒ B 形态在真实用户目录上的行为仍只有静态推理
+1. ~~**真机界面零验收**~~ ⇒ **已消除**（§1.3）：T101 / T102 / T103 / T107 在真机面板上跑通，
+   证据 `tmp/acceptance-t110/probe-t107b.log`：`T103 filter rows 36 -> 8 -> 36`、`T102 status changed after edit`、
+   `T101 conflict differs from clean`、`T107 single patch + schema kept + new key + BOM`、`RESTORE_OK=True`
+2. ~~**真实 `default.custom.yaml` 从未被本代码写过**~~ ⇒ **已消除**（§1.3）：真机保存写入
+   `D:\Program Files\fluxing\user1\fluxing\default.custom.yaml`（2183 B），形态 B，落盘 = 完整合并表
 3. ~~**`WeaselUserDataPath()` 实际返回目录未坐实**~~ ⇒ **已坐实**，见 §1.1 前置③：
    `D:\Program Files\fluxing\user1\fluxing`，真实存在，是形态 A→B 样本。
    **新开的未验证项**：该目录或其父目录不存在时谁负责创建 —— 本代码不创建父目录，
@@ -283,20 +339,29 @@ msbuild test\TestShortcutSettings\TestShortcutSettings.vcxproj /t:Build ^
    UIA `InvokePattern.Invoke()` 与 UIA 树枚举仍可用 ⇒ 锁屏不必然阻塞验收，但要把「点控件」改成 UIA 路径
 6. **`weaselx64.dll` 被 17 个进程占用**：批次 L 的清理 `CLEAN_FAIL`；静默安装 `EXIT=0` 也可能没替换成功
    ⇒ 真机验收必须核**装机副本的大小 + mtime**，不能只看安装器退出码
+7. **【新】部署器 `WeaselDeployer.exe /deploy` 进程不退出**：进程里挂着一个**隐藏**的
+   「【火流猩输入法】方案选单设定」对话框（`#32770`，`vis=False`）⇒ `WaitForExit` 永远等不到。
+   **但编译产物确实被写出**（UI 触发的部署在 01:32:16 写出了 `build/default.yaml`）
+   ⇒ 判「部署有没有生效」要看 `build/*.yaml` 的**内容与 mtime**，**不能**看部署器退出码。
+8. **【新】部署似乎要求 `WeaselServer` 在跑**：把服务器停掉后跑 `/deploy` ⇒ 进程挂起且**不写** `build/`；
+   服务器在跑时（面板触发的部署）⇒ 产物被写出。⇒ 收尾/重部署流程必须**先起服务器**。
+9. **【新】C 形态（`patch:` 段里已有手写 `key_binder/bindings`）拒写未在真机实测**：
+   只有单测覆盖（`TestSaveHotkeysRefusesManualBindings`），真机未构造该形态。
+10. **【新】T111**：librime 不认 `custom:` 动作（只跳过该条 binding，不清表）⇒ 应用级热键在 librime 侧
+    不生效，真正生效靠 WeaselServer 级 `RegisterHotKey`。
 
 ---
 
-## 6. 下阶段计划（2026-11-08 深夜更新）
+## 6. 下阶段计划（2026-11-09 01:40 更新）
 
-1. **提交 T107**：`WeaselServer/ShortcutSettings.cpp` + `test/TestShortcutSettings/TestShortcutSettings.cpp`
-   + `.specify/specs/045-shortcut-settings/tasks.md` + 本 handoff，一笔 `feat(WeaselServer): …`；
-   commit 前必须 `git status -sb` + `git diff --stat`，且**不要**把 ` m librime` 带上
-2. **真机界面验收（唯一硬缺口）**：T101 / T102 / T103 / T106 + T107 落盘；
-   真机目标 `D:\Program Files\fluxing\user1\fluxing\default.custom.yaml`（形态 B）；
-   开工前看 §5 第 5/6 条（锁屏态、`weaselx64.dll` 占用），并核装机副本大小 + mtime
+1. ~~**提交 T107**~~ ⇒ **已提交**（`1d47990`）；~~**真机界面验收**~~ ⇒ **已完成**（§1.3）
+2. **T111**（新登记）：librime 不认 `custom:` 动作 ⇒ 应用级热键在 librime 侧不生效，真正生效靠
+   WeaselServer 级 `RegisterHotKey`；落盘时把「应用级行」与「用户自定义行」区分开（或干脆不写进 librime 表）
 3. **T104「立即验证」**：必须先过 P2 / AP-045-B 审查（`WH_KEYBOARD_LL` hook 内禁止 `SendInput`）
 4. **T105** 自定义快捷键子 modal
 5. **P2 T201–T203** / 测试缺口 **T301–T304**
+6. **部署链路清理**（不阻塞 spec 045）：`/deploy` 挂起 + 隐藏「方案选单设定」对话框
+   ⇒ 面板「保存并部署」目前只能说「已触发」，不能说「已生效」；且重部署必须**先起 WeaselServer**（§5 第 7/8 条）
 
 ---
 
