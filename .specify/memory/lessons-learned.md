@@ -14550,3 +14550,25 @@ handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四
 - 单测要专门打「**没动的那些还在不在**」：断言落盘字节里基线条目的**条数**，
   而不是只 grep 我改的那一条；改一行之后其余基线行必须逐字还在。
 - 事故溯源模式见 `CONTEXT.md §5`（Recurring failure patterns）。
+## L208 - 还原用户配置后必须让 librime「看到」变更：重建判定看**时间戳**不看内容，旧 mtime ⇒ 静默跳过重编译 ⇒ `build/` 残留旧状态
+
+**证据**：2026-11-09 批次 N · T110 收尾。T110 真机验收把 `default.custom.yaml` 从补丁态
+（2183 B，含 `Control+Alt+F9`）还原回原始态（311 B，只有 `customization:` + `patch: schema_list`），
+连续两次 `WeaselDeployer.exe /deploy` 之后，`build/default.yaml` **仍是补丁态内容**
+（27 行、含 `Control+Alt+F9`），mtime 也停在 01:32:16 没动。
+根因：还原是 `Copy-Item` 回来的，**连 mtime 一起还原**（`LastWriteTime` 回到 2026/8/6 00:15:09，
+与文件内 `modified_time` 一致），而 librime 判定「schema 是否需要重建」用的是**文件时间戳**：
+`build_info_plugin.cc` 用 `filesystem::last_write_time` 记录源文件时间，
+`deployment_tasks.cc:414-422` 拿记录值与当前 `last_write_time` 比对
+⇒ **内容变了但时间戳没变 ⇒ 判定未修改 ⇒ 跳过重编译**（不报错、不提示、退出码照常 0）。
+
+**怎么用**：
+- 任何「还原用户配置 / 回出厂 / 换回原文件」的收尾动作之后，**必须显式让构建失效**：
+  ① `touch` 用户配置（`LastWriteTime = now`）；② 必要时删掉 `build/<schema>.yaml` 再部署。
+  光「用户配置内容对」**不等于**「编译产物对」。
+- 判「部署/重建到底生效没有」的权威判据 = **`build/*.yaml` 的内容 + mtime**；
+  既不是部署器退出码，也不是用户配置的内容。
+- `Copy-Item` 还原文件会**连时间戳一起还原**（这是「回到原状态」的隐形副作用）；
+  还原后要显式 `Set-ItemProperty -Name LastWriteTime`。
+- 部署器挂起（隐藏「方案选单设定」对话框，`#32770` vis=False）时，**编译仍会发生**，
+  所以判据要落在 `build/*.yaml` 上，不要等进程退出。

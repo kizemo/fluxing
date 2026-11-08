@@ -137,6 +137,49 @@
 
 ---
 
+### 1.4 机器状态收口轮（2026-11-09 01:41–01:45 · 同一 handoff 就地更新）
+
+**目标**：把验收机器还原成「出厂态」——用户配置回到原始 311 B、`build/` 编译产物与之一致、
+不留自动备份残留；并把过程中踩到的两个**部署/构建**坑固化下来。
+
+**坑 1：还原用户配置会连 mtime 一起还原 ⇒ librime 静默跳过重编译**
+
+- 还原是 `Copy-Item` 回来的 ⇒ `LastWriteTime` 回到 **2026/8/6 00:15:09**（与文件内 `modified_time` 一致），
+  而 `build/default.yaml` 的 mtime 是 2026/11/9 ⇒ librime 判定「schema 未变」⇒ **跳过重编译**
+- 证据：verify 脚本 PHASE1 / PHASE2 各跑了一次 `/deploy`，`build/default.yaml` 的**内容与 mtime 都没动**
+  （仍是补丁态 27 行、含 `Control+Alt+F9`，mtime 停在 01:32:16）
+- 机制（源码级）：`librime/src/rime/config/build_info_plugin.cc:39-40` 用 `filesystem::last_write_time`
+  记录源文件时间；`librime/src/rime/lever/deployment_tasks.cc:414-422` 拿记录值与当前 `last_write_time`
+  比对 ⇒ **重建判定看时间戳，不看内容**
+- 修法：还原后 `touch` 用户配置（`LastWriteTime = now`）+ 必要时删 `build/<schema>.yaml`
+
+**坑 2：`WeaselDeployer.exe /deploy` CLI 路径根本不会部署**
+
+- `/deploy` 进程挂起在**隐藏**的「【火流猩输入法】方案选单设定」对话框（`#32770`, `vis=False`），
+  等 180 s / 240 s 超时 kill 掉 ⇒ **产物一个字节都没写**（`BUILD_MISSING default.yaml`，脚本已从备份回滚）
+- ⇒ **能出产物的路径是 WeaselServer 自己的 librime 内部部署**（`RimeInitialize` → `Deployment::Deploy`）：
+  停掉服务器 → 删 `build/default.yaml` → 起服务器 ⇒ **6 s 内**（01:44:48）重编译出
+  `build/default.yaml`（4153 B）
+- ⇒ 面板「保存并部署」目前只能说「已触发」（`SpawnDeploy()` 只看 `ShellExecuteW` 返回值），
+  不能说「已生效」；要判生效只能看 `build/*.yaml` 的**内容 + mtime**
+
+**收口后的机器状态（干净）**：
+
+| 项 | 值 |
+|---|---|
+| `user1\fluxing\default.custom.yaml` | 311 B，sha256 `50A46CC77DBB08D26384A291E3CFD4A865E89977FEF1B65547F93ABF7876669D`（= 出厂原文） |
+| `user1\fluxing\build\default.yaml` | 4153 B，**27 行**，`has_F9=False`，ROW0 = `{accept: "Shift+Tab", send: "Shift+Left", when: composing}`（= 原始基线首行） |
+| `default.custom.yaml.bak-*` | **0 个**（3 个同 sha 残留已删） |
+| 装机 `WeaselServer.exe` | 2392064 B @ 2026-11-09 01:31:46（T110 版），进程在跑 |
+
+**证据**：`tmp/acceptance-t110/verify-t110.log`、`cleanup-t110.log`、`rebuild-clean.log`（`tmp/` 不入库）
+
+**新增教训**：`lessons-learned.md` L208（还原用户配置后必须让 librime「看到」变更：重建判定看时间戳不看内容）
+
+**文档提交**：`0e43af7 docs: 批次 N 交接文档补记 T110 收口与真机验收证据`
+
+---
+
 ## 2. 已验证事实（带证据）
 
 ### 2.1 工作树（动工前必须先决策）
@@ -339,16 +382,20 @@ msbuild test\TestShortcutSettings\TestShortcutSettings.vcxproj /t:Build ^
    UIA `InvokePattern.Invoke()` 与 UIA 树枚举仍可用 ⇒ 锁屏不必然阻塞验收，但要把「点控件」改成 UIA 路径
 6. **`weaselx64.dll` 被 17 个进程占用**：批次 L 的清理 `CLEAN_FAIL`；静默安装 `EXIT=0` 也可能没替换成功
    ⇒ 真机验收必须核**装机副本的大小 + mtime**，不能只看安装器退出码
-7. **【新】部署器 `WeaselDeployer.exe /deploy` 进程不退出**：进程里挂着一个**隐藏**的
-   「【火流猩输入法】方案选单设定」对话框（`#32770`，`vis=False`）⇒ `WaitForExit` 永远等不到。
-   **但编译产物确实被写出**（UI 触发的部署在 01:32:16 写出了 `build/default.yaml`）
-   ⇒ 判「部署有没有生效」要看 `build/*.yaml` 的**内容与 mtime**，**不能**看部署器退出码。
-8. **【新】部署似乎要求 `WeaselServer` 在跑**：把服务器停掉后跑 `/deploy` ⇒ 进程挂起且**不写** `build/`；
-   服务器在跑时（面板触发的部署）⇒ 产物被写出。⇒ 收尾/重部署流程必须**先起服务器**。
+7. **【已修订】部署器 `WeaselDeployer.exe /deploy` 进程不退出，且 CLI 路径**不部署**：
+   进程挂着一个**隐藏**的「【火流猩输入法】方案选单设定」对话框（`#32770`，`vis=False`），
+   等 180 s / 240 s 超时 kill ⇒ **产物一个字节都没写**（§1.4 坑 2）。
+   ⇒ 判「部署有没有生效」只能看 `build/*.yaml` 的**内容与 mtime**，**不能**看部署器退出码；
+   ⇒ 真要出产物就走 **WeaselServer 的内部部署**（重启服务器即可，§1.4）。
+8. **【已修订】真出产物的路径 = WeaselServer 的内部部署**（`RimeInitialize` → `Deployment::Deploy`）：
+   停服务器 → 删 `build/default.yaml` → 起服务器 ⇒ 6 s 内重编译完成（§1.4）。
+   面板「保存并部署」目前只能说「已触发」，不能说「已生效」。
 9. **【新】C 形态（`patch:` 段里已有手写 `key_binder/bindings`）拒写未在真机实测**：
    只有单测覆盖（`TestSaveHotkeysRefusesManualBindings`），真机未构造该形态。
 10. **【新】T111**：librime 不认 `custom:` 动作（只跳过该条 binding，不清表）⇒ 应用级热键在 librime 侧
     不生效，真正生效靠 WeaselServer 级 `RegisterHotKey`。
+11. **【新】还原用户配置后必须让构建失效**：`Copy-Item` 还原会连 mtime 一起还原（2026/8/6），
+    librime 的重建判定看时间戳不看内容 ⇒ **静默跳过重编译**，`build/` 残留旧状态（§1.4 坑 1 / L208）。
 
 ---
 
@@ -361,7 +408,11 @@ msbuild test\TestShortcutSettings\TestShortcutSettings.vcxproj /t:Build ^
 4. **T105** 自定义快捷键子 modal
 5. **P2 T201–T203** / 测试缺口 **T301–T304**
 6. **部署链路清理**（不阻塞 spec 045）：`/deploy` 挂起 + 隐藏「方案选单设定」对话框
-   ⇒ 面板「保存并部署」目前只能说「已触发」，不能说「已生效」；且重部署必须**先起 WeaselServer**（§5 第 7/8 条）
+   ⇒ 面板「保存并部署」目前只能说「已触发」，不能说「已生效」；且 CLI 路径根本不部署（§5 第 7/8 条）
+7. **【本轮已完成】机器状态收口**：用户配置回到出厂 311 B（sha `50A46C…6669D`）、
+   `build/default.yaml` 重编译回 27 行原始基线（无 `Control+Alt+F9`）、3 个 `.bak-*` 残留清零（§1.4）。
+   后续任何「改配置 → 部署」按 §1.4 三步走：**touch 用户配置 → 删 `build/<schema>.yaml` → 起 WeaselServer**
+   （或走面板，但面板会连保存一起做）。
 
 ---
 
@@ -384,3 +435,7 @@ msbuild test\TestShortcutSettings\TestShortcutSettings.vcxproj /t:Build ^
 - `xbuild.bat weasel` 不重建测试工程 ⇒ 判 PASS 前核 mtime
 - 同一文件的多处改动必须**分次 `edit`**（一次调用只接受一组 `old_string`/`new_string`，
   JSON 重复键被静默丢弃，`1 block(s)` 只证明那一处改了）
+- **还原用户配置后必查 `build/`**：librime 重建判定看 `last_write_time`（`build_info_plugin.cc` /
+  `deployment_tasks.cc`）⇒ 内容对但时间戳旧 ⇒ 静默跳过重编译 ⇒ `build/` 残留旧状态
+- **`WeaselDeployer.exe /deploy` CLI 不会部署**：卡在隐藏「方案选单设定」对话框（等它弹出，而不是等它退出）；
+  真要出产物就**重启 WeaselServer**（内部部署，实测 6 s 出 `build/default.yaml`）
