@@ -105,8 +105,15 @@ STDAPI_(ULONG) CLangBarItemButton::Release() {
 STDAPI CLangBarItemButton::GetInfo(TF_LANGBARITEMINFO* pInfo) {
   pInfo->clsidService = c_clsidTextService;
   pInfo->guidItem = _guid;
-  pInfo->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_BTN_MENU |
-                   TF_LBI_STYLE_SHOWNINTRAY;
+  // v12 / ADR 0044(用户指令 2026-11-08):「请去除在任务栏托盘区的输入法
+  // 『中英文』图标,这个图标不需要常驻。」
+  // 该图标就是本语言栏项:GetText() 返回「中/英」、GetIcon() 返回
+  // IDI_ZH / IDI_EN,**常驻托盘**由 dwStyle 里的 TF_LBI_STYLE_SHOWNINTRAY
+  // 决定(「the item is displayed in the system tray」)。
+  // ⇒ 去掉该标志 = 不再常驻通知区域;语言栏入口本身保留(系统语言列表里
+  // 仍可见,左键仍打开快捷设置栏),功能不丢。
+  // ⚠ 别改用 TF_LBI_STYLE_INVISIBLE:那会把语言栏里的入口也一并藏掉。
+  pInfo->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_BTN_MENU;
   pInfo->ulSort = 1;
   lstrcpyW(pInfo->szDescription, L"WeaselTSF Button");
   return S_OK;
