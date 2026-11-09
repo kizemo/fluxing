@@ -1846,17 +1846,33 @@ void ShortcutSettings::UpdateCaptureConflict() {
   RepaintLayered(s_hwnd);
 }
 
+// T203-fix: 「未保存修改」确认框存活期标记。
+// MessageBox 的 owner 就是面板本身 —— 面板一旦因失焦自毁(Hide -> DestroyWindow),
+// owner 被销毁会连带关闭确认框, 用户这一轮的修改就被静默丢弃。
+// 真机复现 (2026-11-09 批次 R): 脏态点右上角圆形 ✕, 面板 10ms 内消失,
+// 5 秒内没有任何确认框; 而点底栏「取消」在面板处于前台时又能正常弹框。
+// 标记期间 WM_ACTIVATEAPP / WM_KILLFOCUS 一律跳过 Hide()。
+static bool g_inConfirmDialog = false;
+
+// T203-fix: 未保存修改的统一计数 (状态行与关闭确认共用, 见 .h 声明)。
+int ShortcutSettings::CountDirtyChanges(const std::vector<Hotkey>& rows) {
+  int dirty = 0;
+  for (const Hotkey& h : rows) {
+    if (!h.accept_new.empty() && h.accept_new != h.accept)
+      ++dirty;
+  }
+  return dirty;
+}
+
 // T102: 状态行统一刷新
 void ShortcutSettings::RefreshStatus() {
   if (!s_hStatus || !IsWindow(s_hStatus))
     return;
-  int modified = 0;
+  const int modified = CountDirtyChanges(m_hotkeys);
   int conflicts = 0;
   for (int i = 0; i < static_cast<int>(m_hotkeys.size()); ++i) {
     const auto& h = m_hotkeys[i];
     const bool changed = !h.accept_new.empty() && h.accept_new != h.accept;
-    if (changed)
-      ++modified;
     const bool capturing = (i == s_capturingRow);
     // 未改动的行不参与冲突统计 —— 否则一开面板就报一片"覆盖默认行为"
     if (!changed && !capturing)
@@ -1980,6 +1996,9 @@ LRESULT CALLBACK ShortcutSettings::WndProc(HWND hwnd,
       return OnCtlColor(hwnd, wp, lp);
     case WM_ACTIVATEAPP: {
       if (wp == FALSE) {
+        // T203-fix: 确认框存活期间不许自毁 —— 否则 owner 被销毁会连带关掉确认框。
+        if (g_inConfirmDialog)
+          return 0;
         DWORD nowTick = GetTickCount();
         if ((nowTick - s_showTime) >= kShowGraceMs) {
           Hide();
@@ -1997,6 +2016,9 @@ LRESULT CALLBACK ShortcutSettings::WndProc(HWND hwnd,
       if (next == hwnd || (next && IsChild(hwnd, next))) {
         return 0;
       }
+      // T203-fix: 确认框存活期间不许自毁 (owner 销毁会连带关掉确认框)。
+      if (g_inConfirmDialog)
+        return 0;
       DWORD nowTick = GetTickCount();
       if ((nowTick - s_showTime) >= kShowGraceMs) {
         Hide();
@@ -2451,13 +2473,7 @@ LRESULT ShortcutSettings::OnCommand(HWND hwnd, WPARAM wp) {
       if (sel == g_schemePrevSel) {
         return 0;
       }
-      int dirty = 0;
-      for (size_t i = 0; i < m_hotkeys.size(); ++i) {
-        const Hotkey& h = m_hotkeys[i];
-        if (!h.accept_new.empty() && h.accept_new != h.accept) {
-          ++dirty;
-        }
-      }
+      int dirty = CountDirtyChanges(m_hotkeys);
       if (dirty > 0) {
         std::wstring msg = L"当前方案有 " + std::to_wstring(dirty) +
                            L" 处修改尚未保存，切换方案会丢弃这些修改。确定切换？";
@@ -2587,19 +2603,17 @@ LRESULT ShortcutSettings::OnCommand(HWND hwnd, WPARAM wp) {
 // 判据与 RefreshStatus 完全一致(accept_new 非空且与 accept 不同),
 // 否则会出现「状态行说有 N 处修改、点取消却直接关掉」的自相矛盾。
 void ShortcutSettings::RequestCancel() {
-  int dirty = 0;
-  for (size_t i = 0; i < m_hotkeys.size(); ++i) {
-    const Hotkey& h = m_hotkeys[i];
-    if (!h.accept_new.empty() && h.accept_new != h.accept) {
-      ++dirty;
-    }
-  }
+  const int dirty = CountDirtyChanges(m_hotkeys);
   if (dirty > 0) {
     std::wstring msg = L"有 " + std::to_wstring(dirty) +
                        L" 处快捷键修改尚未保存，关闭后将丢失。确定关闭？";
     // 默认按钮是「否」: 误按空格不该丢掉整轮编辑。
+    // T203-fix: 弹框期间禁止面板失焦自毁 —— MessageBox 的 owner 就是面板,
+    // 面板被销毁会连带把确认框带走, 用户这一轮修改会被静默丢弃。
+    g_inConfirmDialog = true;
     const int ok = MessageBoxW(s_hwnd, msg.c_str(), L"未保存的修改",
                                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+    g_inConfirmDialog = false;
     if (ok != IDYES) {
       return;
     }

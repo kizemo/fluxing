@@ -140,6 +140,11 @@ class ShortcutSettings {
                                              const std::wstring& combo,
                                              const std::wstring& when,
                                              int exclude_row);
+
+  // T203-fix: 「未保存修改」的唯一计数口径 —— 状态行(RefreshStatus)与关闭确认
+  // (RequestCancel)必须共用同一实现, 否则会出现「状态行说有 N 处修改、点取消
+  // 却直接关掉」的自相矛盾。抽成纯函数供生产与单测共用 (constitution R7)。
+  static int CountDirtyChanges(const std::vector<Hotkey>& rows);
   static ConflictReport CheckConflict(const std::wstring& combo,
                                       const std::wstring& when,
                                       int exclude_row);
