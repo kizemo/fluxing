@@ -14592,3 +14592,38 @@ handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四
 - 自动化探针用 `PostMessage(WM_LBUTTONDOWN/UP)` 点击**不会激活窗口**，与真机用户点击时的前台状态不同
   ⇒ 探针必须显式 `ForceForeground`（`AttachThreadInput` + `SetForegroundWindow`）才能复现前台路径；
   反过来，「探针抢不到前台」恰好会命中这条真实用户路径上的缺陷（本轮就是这样查出来的）。
+
+## L210 - 改了 TSF 前端却「装机文件没变」：`xbuild.bat weasel` 不刷新 `weaselx64.dll`，修复根本没上机
+
+**证据**：2026-11-09 批次 T 收尾复核。用户报「切换到搜狗双拼仍是全拼」，代码修复落在
+`RimeWithWeasel/RimeWithWeasel.cpp` —— 那就是 **TSF 前端**，编译进 **`weaselx64.dll`**。
+程序化证据全绿、静默装机报 `ALL HARD CHECKS PASSED`，但**装机目录 `weaselx64.dll` 的 mtime 仍是前一天**。
+根因：`tmp/build-installer.cmd` 只跑 `xbuild.bat weasel installer`，而 `xbuild.bat` 里明写
+「x64 build skipped: librime is Win32-only…」⇒ `xmake f -a x86` **只编 x86**，
+`output\weaselx64.dll` 根本没被重建；装机脚本照抄旧文件 ⇒ **用户加载的还是旧前端**。
+致命的一步是**误读否定证据**：把「装机 `weaselx64.dll` 未改动」解释成「TSF 前端本轮无改动」，
+方向判反了 —— `RimeWithWeasel` **就是** TSF 前端。
+
+**怎么用**：
+- 凡改到 `RimeWithWeasel/` 或 `WeaselTSF/` 的批次，**必须**显式编 x64：
+  `msbuild RimeWithWeasel\RimeWithWeasel.vcxproj /p:Platform=x64` → 再
+  `msbuild WeaselTSF\WeaselTSF.vcxproj /p:Platform=x64`（**顺序不能反**：
+  `WeaselTSF.vcxproj` 只通过 `AdditionalDependencies` 引用 `RimeWithWeasel`，**不是 ProjectReference**
+  ⇒ 单独编 WeaselTSF 会链接**陈旧 `.lib`**）→ `weasel.sln /p:Platform=Win32` → `makensis`。
+  仓库既有可复用脚本：`tmp/build-batch-i.cmd`（L128 配方，7 步全绿）。
+- 判「修复是否上机」**不看**装机脚本退出码、**也不看裸名文件**，**看注册表实际指向的那份 DLL**：
+  `reg query HKCR\CLSID /s /f weaselx64 /d` 取 64 位 CLSID
+  `{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}\InprocServer32`
+  ⇒ 它指向**版本化 shim** `weaselx64.<ver>.<build>.<seq>.dll`（`install.nsi` 把裸名改写成 shim
+  并对那一份 `regsvr32`）；裸名 `weaselx64.dll` 因被在跑进程占用而**可能仍是旧残留**（本轮即如此）。
+- 上机判据必须**哈希 + mtime 双证**：装机 shim 的 SHA256 == `output\weaselx64.dll` 的 SHA256
+  且 mtime == 本次构建时刻。批次 T 复核值：`0BC51EBDEBBD2A263D2C9DF0D694110420134F308EDD36793C584D424204D2F1`（22:02:32）。
+- 「时间戳没变」这种否定证据**不能**反推「该模块无改动」；先问「**哪个二进制承载了本次改动**」。
+- 换完 DLL 还要**注销 / 重启**才生效：已在跑的进程（explorer 等）仍持有旧 DLL，
+  新注册只对**新进程**生效（安装脚本末尾的 reminder 已写明这一点）。
+
+**次要缺陷（顺手记，未改）**：`scripts/install/acceptance-check.ps1` 的 C3 / C3b 用
+`^weasel(x64)?\.\d+\.\d+\.\d+\.dll$`（**3 段**）匹配，而现役命名是 **4 段**
+`weaselx64.<ver>.<build>.<seq>.dll` ⇒ 每次都误报「versioned shim : NONE FOUND」、
+「unexpected file name」。不影响装机成功（是 Note 不是硬检查），但它**会掩盖**真正的 shim 缺失，
+属于「验收判据本身失灵」类问题，应单独修（修完必须复跑一次装机验收）。

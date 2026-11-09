@@ -173,3 +173,71 @@ cmd /c "F:\soft\00selfmade\rime_claude\tmp\build-test-panel.cmd"      # -> Relea
 - `WM_DPICHANGED` 处理函数里形参名是 `w` / `l`（不是 `lParam`）⇒ 子代理初版用了
   `lParam` 导致 `C2065`，已修（`WeaselServer/QuickPanelDialog.cpp:1586`）。
 - `FindWindow` 找 `FluxingQuickPanel_v3` 在 IME 未激活时返回 0；`Win+Space` 切换后短暂存在。
+
+
+---
+
+## 7. 复核追加：双拼修复此前**并未上机**（x64 TSF 未重建）—— 已重建并重新装机
+
+上一轮写的「静默装机 ALL HARD CHECKS PASSED」**具有误导性**：装机确实成功，但**装的是旧前端**。
+
+### 7.1 证据链
+
+| 对象 | 复核时 mtime | 判读 |
+|---|---|---|
+| `output\weaselx64.dll` | 2026-11-08 21:47:59 | **11/8 旧构建**，不含双拼修复 |
+| `output\weasel.dll`（x86） | 2026-11-09 21:47:48 | 本轮构建（含修复） |
+| 装机 `weaselx64.dll`（裸名） | 2026-11-08 21:47:58 | 11/8 旧件（被在跑进程占用，覆盖失败） |
+| 装机 `weaselx64.1.2.1.2.0/.1.dll` | 2026-11-08 21:47:58 | 旧 shim |
+| 64 位 CLSID `InprocServer32` | 复核前指向 `weaselx64.1.2.1.2.0.dll` | **用户实际加载的是旧件** |
+
+### 7.2 根因
+
+`tmp/build-installer.cmd` 只跑 `xbuild.bat weasel installer`；`xbuild.bat` 里明写：
+
+```
+rem x64 build skipped: librime is Win32-only (rime.dll is 32-bit) ...
+xmake f -a x86 -m %build_config% %build_sdk_option%
+```
+
+⇒ **只编 x86**，`output\weaselx64.dll` 不会被刷新。而双拼修复在 `RimeWithWeasel/RimeWithWeasel.cpp`
+⇒ 编译进 **x64 TSF `weaselx64.dll`** ⇒ 用户（x64 Windows）加载的一直是没有修复的前端。
+
+误判点：把「装机 `weaselx64.dll` 未改动」读成「TSF 前端本轮无改动」——**方向判反**，
+`RimeWithWeasel` **就是** TSF 前端。已写入 `.specify/memory/lessons-learned.md` **L210**。
+
+### 7.3 已执行的修复动作（L128 配方）
+
+1. `msbuild RimeWithWeasel\RimeWithWeasel.vcxproj /p:Platform=x64`（**必须先编**，
+   否则 WeaselTSF 会链接陈旧 `.lib`）
+2. `msbuild WeaselTSF\WeaselTSF.vcxproj /p:Platform=x64` ⇒ `output\weaselx64.dll` @ **22:02:33**
+3. 同上 Win32 两步 + `msbuild weasel.sln /p:Platform=Win32` ⇒ `WeaselServer.exe` @ **22:03:34**
+4. `makensis output\install.nsi` ⇒ `output\archives\fluxing-1.2.1-installer.exe` @ **22:05:15**
+   （复用仓库既有 `tmp/build-batch-i.cmd`，7 步全绿，日志 `tmp/build-tsf-x64.log`）
+5. `scripts\install\silent-install.ps1 -InstallRoot 'D:\Program Files\fluxing'` ⇒
+   **ALL HARD CHECKS PASSED**（日志 `tmp/install-bT2.log`）
+6. 重启 `WeaselServer.exe` ⇒ pid **67864** @ 22:09:03
+
+### 7.4 上机判据（哈希 + mtime 双证，均已通过）
+
+- 64 位 CLSID `{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}\InprocServer32`
+  ⇒ `D:\Program Files\fluxing\weasel\weaselx64.1.2.1.2.2.dll`
+- 该 shim mtime **11-09 22:02:32**，SHA256
+  `0BC51EBDEBBD2A263D2C9DF0D694110420134F308EDD36793C584D424204D2F1`
+  = `output\weaselx64.dll` 的 SHA256 **完全一致**
+- 裸名 `weaselx64.dll` 仍是 11/8 旧件（被在跑进程占用）——**但注册指向的是新 shim**，
+  新进程用新前端；已在跑的进程（explorer 等）仍持有旧 DLL ⇒ **需注销 / 重启后**才全面换过来
+
+### 7.5 复跑门禁
+
+- `Release\TestShortcutSettings.exe` ⇒ **PASS=249 FAIL=0**
+- `Release\TestQuickPanelDialog.exe` ⇒ **258 / 258 assertions passed**
+- `scripts\gate\L0-static.ps1 -Mode all` ⇒ **checks=15 pass=15 fail=0 skip=0**
+- `git status -sb` ⇒ 仅基线 ` m librime`
+
+### 7.6 新增未决项
+
+6. `scripts/install/acceptance-check.ps1` 的 C3 / C3b 用 **3 段**正则匹配版本化 shim，
+   而现役命名是 **4 段**（`weaselx64.<ver>.<build>.<seq>.dll`）⇒ 每次误报
+   「versioned shim : NONE FOUND」/「unexpected file name」。属**验收判据自身失灵**（会掩盖真缺件），
+   本轮未改（改完必须复跑一次装机验收）。
