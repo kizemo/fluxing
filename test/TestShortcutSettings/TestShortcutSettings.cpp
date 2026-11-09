@@ -775,6 +775,151 @@ static void TestT110KeepsUnparsedBaselineRows() {
   UseBaselineFixture();  // 复原
 }
 
+// ===== T111: 应用级快捷键行 (快捷面板 Alt+comma / 常用短语 Alt+period) =====
+//
+// 方案 A 的落盘语义: 这两行由程序自己注册, 只读且永不写进托管 bindings 块 ——
+// 写进去等于与程序内注册并存双份, librime 还会在下次部署时把它们当真 binding
+// 装载。判据打在落盘字节上。
+
+// T111-a — 应用级行 (含历史污染行与用户改过键的行) 一律不进托管块;
+// 其余基线行与用户自定义行照常写完整列表。
+static void TestT111AppLevelNeverWritten() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t111_a.yaml");
+  ::DeleteFileW(p.c_str());
+  UseBaselineFixture();
+
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(
+      MakeHkBase(L"Shift+space", L"always", L"toggle: ascii_mode", 0));
+  rows[0].accept_new = L"Control+space";  // 改一行基线 ⇒ 必须写完整列表
+  rows.push_back(MakeHkBase(L"Control+1", L"has_menu", L"send: 2", 1));
+  rows.push_back(
+      MakeHkBase(L"Control+period", L"always", L"toggle: ascii_punct", 2));
+
+  // 历史污染行: 旧版本把 Alt+comma 写进过 bindings, 表里现在还有它
+  rows.push_back(MakeHk(L"Alt+comma", L"custom: open_quick_panel", false));
+  rows.back().action = ShortcutSettings::Action_OpenQuickPanel;
+  rows.back().baseline_index = -1;
+  // 常用短语行: 模拟用户在界面上把键改掉了 —— 依然不许落盘
+  rows.push_back(MakeHk(L"Alt+period", L"custom: open_phrases", false));
+  rows.back().action = ShortcutSettings::Action_OpenPhrases;
+  rows.back().baseline_index = -1;
+  rows.back().accept_new = L"Control+Alt+period";
+
+  // 普通用户自定义行: 照旧要写
+  rows.push_back(MakeHk(L"Control+Alt+K", L"custom: user_added", false));
+  rows.back().baseline_index = -1;
+
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(CountOf(raw, "open_quick_panel") == 0);
+  EXPECT(CountOf(raw, "open_phrases") == 0);
+  EXPECT(raw.find("Alt+comma") == std::string::npos);
+  EXPECT(raw.find("Control+Alt+period") == std::string::npos);
+  EXPECT(raw.find("Control+space") != std::string::npos);
+  EXPECT(raw.find("Control+1") != std::string::npos);
+  EXPECT(raw.find("Control+period") != std::string::npos);
+  EXPECT(raw.find("Control+Alt+K") != std::string::npos);
+  // 3 条基线 (含改键那条) + 1 条用户自定义; 应用级两行不在其中
+  EXPECT(CountBindingRows(raw) == 4);
+  ::DeleteFileW(p.c_str());
+}
+
+// T111-b — 自愈: 表里只剩历史污染的应用级行、其余没动 ⇒ differs=false ⇒
+// 不写 bindings, 托管块重写成干净形态, 旧污染随块替换消失。
+static void TestT111SelfHealsLegacyBlock() {
+  const std::wstring p = TempStatePath(L"fluxing_ts_t111_b.yaml");
+  ::DeleteFileW(p.c_str());
+  UseBaselineFixture();
+
+  std::vector<ShortcutSettings::Hotkey> rows;
+  rows.push_back(
+      MakeHkBase(L"Shift+space", L"always", L"toggle: ascii_mode", 0));
+  rows.push_back(MakeHkBase(L"Control+1", L"has_menu", L"send: 2", 1));
+  rows.push_back(
+      MakeHkBase(L"Control+period", L"always", L"toggle: ascii_punct", 2));
+  rows.push_back(MakeHk(L"Alt+comma", L"custom: open_quick_panel", false));
+  rows.back().action = ShortcutSettings::Action_OpenQuickPanel;
+  rows.back().baseline_index = -1;
+
+  EXPECT(ShortcutSettings::SaveHotkeys(p, rows));
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(CountOf(raw, "managed block") == 1);
+  EXPECT(raw.find("key_binder/bindings:") == std::string::npos);
+  EXPECT(CountOf(raw, "open_quick_panel") == 0);
+  ::DeleteFileW(p.c_str());
+}
+
+// T111-c — 应用级判定范围锁死: 只有快捷面板与常用短语两行。
+// trigger_deploy (Action_TriggerDeploy) 有自己的落盘语义, 不得并入本判定。
+static void TestT111AppLevelScope() {
+  EXPECT(ShortcutSettings::IsAppLevelAction(
+      ShortcutSettings::Action_OpenQuickPanel));
+  EXPECT(ShortcutSettings::IsAppLevelAction(
+      ShortcutSettings::Action_OpenPhrases));
+  EXPECT(!ShortcutSettings::IsAppLevelAction(
+      ShortcutSettings::Action_TriggerDeploy));
+  EXPECT(!ShortcutSettings::IsAppLevelAction(
+      ShortcutSettings::Action_ReselectCandidate));
+  EXPECT(!ShortcutSettings::IsAppLevelAction(
+      ShortcutSettings::Action_CustomUser));
+}
+
+// T111-d — popover 定位纯函数: 优先行右侧; 右侧放不下翻左; 两侧都放不下夹进工作区。
+// 真机缺陷: 控件用 CW_USEDEFAULT 创建且从无 SetWindowPos → 落在屏外, 提示与捕获框
+// 都看不见。本函数不碰 USER/GDI, 生产与单测共用同一实现 (constitution R7)。
+static void TestT111PopoverPlacement() {
+  using PS = ShortcutSettings::PopoverPlace;
+  const RECT work{0, 0, 1920, 1040};
+  const int pw = 240, ph = 108, gap = 8;
+  // 1) 常规: 右侧空间足够 → x = row.right + gap, y 垂直居中于行中线
+  {
+    const RECT row{100, 200, 700, 232};
+    PS p = ShortcutSettings::ComputePopoverPlace(row, work, pw, ph, gap);
+    EXPECT(p.x == 708);                    // 700 + 8
+    EXPECT(p.y == 162);                    // rowCy 216 - ph/2 54
+    EXPECT(p.x + pw <= work.right);        // 仍在工作区内
+    EXPECT(p.y + ph <= work.bottom);
+  }
+  // 2) 右侧越界 → 翻到行左缘之外
+  {
+    const RECT row{1600, 200, 1900, 232};
+    PS p = ShortcutSettings::ComputePopoverPlace(row, work, pw, ph, gap);
+    EXPECT(p.x == 1352);                   // 1600 - 8 - 240
+    EXPECT(p.x >= work.left);
+  }
+  // 3) 行占满整宽 (两侧都放不下) → 夹到工作区左缘, 保证窗口可见
+  {
+    const RECT row{0, 200, 1919, 232};
+    PS p = ShortcutSettings::ComputePopoverPlace(row, work, pw, ph, gap);
+    EXPECT(p.x == 0);                      // 翻左得 -248 → 夹回 work.left
+    EXPECT(p.x >= work.left);
+    EXPECT(p.x + pw <= work.right);        // 完整落在工作区内
+  }
+  // 3b) 行本身越出工作区右缘 (多屏 / 异常几何) → 翻左后仍越界 → 夹到工作区右缘
+  {
+    const RECT row{2000, 200, 2300, 232};
+    PS p = ShortcutSettings::ComputePopoverPlace(row, work, pw, ph, gap);
+    EXPECT(p.x == 1680);                   // 1920 - 240
+    EXPECT(p.x + pw == work.right);
+  }
+  // 4) 贴底的行 → y 夹进工作区下缘
+  {
+    const RECT row{100, 1000, 700, 1032};
+    PS p = ShortcutSettings::ComputePopoverPlace(row, work, pw, ph, gap);
+    EXPECT(p.y == 932);                    // 1040 - 108
+    EXPECT(p.x == 708);                    // 水平不受影响
+  }
+  // 5) 贴顶的行 → y 夹到工作区上缘
+  {
+    const RECT row{100, 0, 700, 20};
+    PS p = ShortcutSettings::ComputePopoverPlace(row, work, pw, ph, gap);
+    EXPECT(p.y == 0);
+  }
+}
+
 }  // namespace test
 
 int wmain(int /*argc*/, wchar_t** /*argv*/) {
@@ -810,6 +955,11 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
   TestT110NoChangeWritesNoBindings();
   TestT110KeepsUnparsedBaselineRows();
   TestT110RefusesWithoutBaseline();
+  // T111: 应用级快捷键行只读 + 永不写进托管 bindings 块
+  TestT111AppLevelNeverWritten();
+  TestT111SelfHealsLegacyBlock();
+  TestT111AppLevelScope();
+  TestT111PopoverPlacement();
   std::wcout << L"[TestShortcutSettings] PASS=" << s_pass
               << L" FAIL=" << s_fail << std::endl;
   return s_fail == 0 ? 0 : 1;

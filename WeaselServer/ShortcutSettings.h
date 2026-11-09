@@ -167,6 +167,11 @@ class ShortcutSettings {
   // Timer IDs (与 PhrasesDialog 错开; 8xxx 段)
   static constexpr UINT_PTR IDT_BLINK = 8501;
   static constexpr UINT_PTR IDT_POPOVER = 8502;
+  // T111 fix: 只读提示 popover 的一次性自动隐藏定时器。原 IDT_POPOVER 只负责
+  // fade-in 之后 KillTimer, 既不隐藏也不销毁 popover ⇒ 只读行的提示窗一旦弹出
+  // 就永久残留(真机 run2/run3 实测累计 26 个残留 Static)。
+  static constexpr UINT_PTR IDT_HINT_HIDE = 8503;
+  static constexpr DWORD kHintHideMs = 3000;
 
   // 子控件 ID (2100-2199 段; PhrasesDialog 用 1010-1205)
   static constexpr UINT ID_SEARCH = 2100;
@@ -180,6 +185,19 @@ class ShortcutSettings {
   static constexpr UINT ID_POPOVER = 2120;
   // spec 095: 「界面 > 快捷面板常驻」勾选框 ID(2130 段空闲)。
   static constexpr UINT ID_CHK_ALWAYS_SHOW = 2130;
+
+  // T111 fix: popover 定位。原实现 CreateWindowExW 传 CW_USEDEFAULT 且全文件没有任何
+  // MoveWindow / SetWindowPos ⇒ 提示窗落在系统默认位置(真机实测 x=2721, 已超出
+  // 2560 宽的屏幕工作区), 用户完全看不见"该快捷键由程序注册"这句提示。
+  // 定位算法抽成不碰 USER/GDI 的纯函数, 生产与单测共用同一实现 (constitution R7)。
+  struct PopoverPlace {
+    int x;
+    int y;
+  };
+  // rowScreen = 目标行(或列表区)的**屏幕**矩形; work = 所在显示器工作区。
+  // 优先放在行右侧 + gap 处、垂直居中; 右侧放不下翻到左侧; 仍越界则夹进工作区。
+  static PopoverPlace ComputePopoverPlace(RECT rowScreen, RECT work, int pw,
+                                          int ph, int gap);
 
   // 静态 hook proc (WH_KEYBOARD_LL)
   static LRESULT CALLBACK LowLevelKeyboardProc(int, WPARAM, LPARAM);
@@ -212,7 +230,13 @@ class ShortcutSettings {
 
   // T101: popover 单独更新 —— 状态行不再被捕获提示覆盖,改由 RefreshStatus()
   // 统一持有 ("● 未保存 (N 修改)" + 冲突计数)。
+  static void EnsurePopover();
   static void SetPopoverHint(const std::wstring& text);
+  // T111 fix: 定位并显示 popover (displayItem = ListView 的**显示**行号, <0 = 用列表区)
+  static void PositionPopover(int displayItem);
+  static void DestroyPopover();
+  // T103: 过滤后 显示行号 ≠ m_hotkeys 下标, 反查用 (lParam 存的是数据下标)
+  static int DisplayItemForRow(int row);
 
   // Conflict detection (spec §4.5)
   struct ConflictReport {

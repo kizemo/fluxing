@@ -76,6 +76,7 @@ constexpr int kPrefsY = kTitleH + kToolbarH;
 constexpr int kPopoverW = 240;  // size.shortcut.popover.w
 constexpr int kPopoverH = 100;  // size.shortcut.popover.h
 constexpr int kPopoverTailH = 8;
+constexpr int kPopoverGap = 8;  // T111: popover 与目标行的水平间距
 
 // 颜色 (color.modal.* + color.scheme.hotkey.*)
 constexpr COLORREF kBorderColor = RGB(217, 217, 217);
@@ -255,6 +256,7 @@ void ShortcutSettings::Hide() {
     }
     KillTimer(s_hwnd, IDT_BLINK);
     KillTimer(s_hwnd, IDT_POPOVER);
+    KillTimer(s_hwnd, IDT_HINT_HIDE);  // T111 fix: 只读提示定时器也要收口
     if (s_hKeyboardHook) {
       UnhookWindowsHookEx(s_hKeyboardHook);
       s_hKeyboardHook = nullptr;
@@ -1453,6 +1455,15 @@ void ShortcutSettings::EnterCapturing(int row) {
     return;
   s_capturingRow = row;
   s_pendingChord.clear();
+  // T111 fix: 进入捕获态前, 撤掉可能还在跑的只读提示隐藏定时器,
+  // 否则 3s 后它会把**捕获 popover** 当成提示窗销毁。
+  if (s_hwnd && IsWindow(s_hwnd))
+    KillTimer(s_hwnd, IDT_HINT_HIDE);
+  // T111 fix: 若残留只读提示 popover, 重建捕获 popover, 避免复用旧文案窗口
+  if (s_hPopover && IsWindow(s_hPopover)) {
+    DestroyWindow(s_hPopover);
+    s_hPopover = nullptr;
+  }
 
   // 启动 WH_KEYBOARD_LL hook (本进程线程范围)
   if (!s_hKeyboardHook) {
@@ -1461,15 +1472,9 @@ void ShortcutSettings::EnterCapturing(int row) {
   }
   SetTimer(s_hwnd, IDT_BLINK, kCaptureBlinkMs, nullptr);
   // 显示 popover
-  if (!s_hPopover || !IsWindow(s_hPopover)) {
-    s_hPopover =
-        CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"STATIC",
-                        L"请按快捷键"
-                        L"...",  // 请按快捷键...
-                        WS_POPUP | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
-                        kPopoverW, kPopoverH + kPopoverTailH, s_hwnd, nullptr,
-                        GetModuleHandle(nullptr), nullptr);
-  }
+  EnsurePopover();
+  // T111 fix: 创建完必须定位到"正在编辑的那一行"旁边, 否则提示出现在屏幕外。
+  PositionPopover(DisplayItemForRow(row));
   SetTimer(s_hwnd, IDT_POPOVER, kPopoverShowMs, nullptr);
   SetPopoverHint(L"请按快捷键…（Esc 还原 / Backspace 清空）");
   PopulateTable();  // refresh (no special UI marking - lParam remains, captured
@@ -1505,14 +1510,12 @@ void ShortcutSettings::ExitCapturing(bool save) {
 
   KillTimer(s_hwnd, IDT_BLINK);
   KillTimer(s_hwnd, IDT_POPOVER);
+  KillTimer(s_hwnd, IDT_HINT_HIDE);
   if (s_hKeyboardHook) {
     UnhookWindowsHookEx(s_hKeyboardHook);
     s_hKeyboardHook = nullptr;
   }
-  if (s_hPopover && IsWindow(s_hPopover)) {
-    DestroyWindow(s_hPopover);
-    s_hPopover = nullptr;
-  }
+  DestroyPopover();
   PopulateTable();
   RepaintLayered(s_hwnd);
 }
@@ -1537,6 +1540,121 @@ void ShortcutSettings::SetCaptureHint(const wchar_t* text) {
   // T101: 只写 popover。状态行现在由 RefreshStatus() 独占持有
   // ("● 未保存 (N 修改)" + 冲突计数),不再被一次性提示覆盖。
   SetPopoverHint(text);
+}
+
+// T111 fix: popover 窗口原本只在 EnterCapturing 创建。只读行永远进不了捕获态,
+// 点击后的 SetPopoverHint 因窗口不存在而静默 no-op —— 提示文案从未显示。
+// 把创建逻辑抽成 EnsurePopover(), 捕获路径与只读提示路径共用。
+// T111 fix: 兜底清扫 —— s_hPopover 指针一旦丢失(对话框重建 / Hide 批量置 null)
+// 而旧提示窗仍在, 就会累积成不可见也关不掉的残留顶层窗。创建前把**本对话框拥有的、
+// 尺寸正好等于 popover** 的 Static 全部销毁(只碰自己造的窗口, 不动别的控件)。
+static BOOL CALLBACK SweepStalePopover(HWND h, LPARAM owner) {
+  if (GetWindow(h, GW_OWNER) != reinterpret_cast<HWND>(owner))
+    return TRUE;
+  wchar_t cls[32] = {};
+  if (GetClassNameW(h, cls, 32) == 0 || lstrcmpiW(cls, L"Static") != 0)
+    return TRUE;
+  RECT r;
+  GetWindowRect(h, &r);
+  if (r.right - r.left == kPopoverW &&
+      r.bottom - r.top == kPopoverH + kPopoverTailH)
+    DestroyWindow(h);
+  return TRUE;
+}
+
+ShortcutSettings::PopoverPlace ShortcutSettings::ComputePopoverPlace(
+    RECT rowScreen, RECT work, int pw, int ph, int gap) {
+  PopoverPlace p;
+  const int rowCy = rowScreen.top + (rowScreen.bottom - rowScreen.top) / 2;
+  // 默认贴行右侧; 右侧放不下(或根本没给行宽)就翻到行左侧。
+  int x = rowScreen.right + gap;
+  if (x + pw > work.right)
+    x = rowScreen.left - gap - pw;
+  // 仍越界(例如整屏宽度都不够)则夹进工作区, 保证窗口至少可见。
+  if (x + pw > work.right)
+    x = work.right - pw;
+  if (x < work.left)
+    x = work.left;
+  int y = rowCy - ph / 2;
+  if (y + ph > work.bottom)
+    y = work.bottom - ph;
+  if (y < work.top)
+    y = work.top;
+  p.x = x;
+  p.y = y;
+  return p;
+}
+
+void ShortcutSettings::EnsurePopover() {
+  if (s_hPopover && IsWindow(s_hPopover)) {
+    SetWindowPos(s_hPopover, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    return;
+  }
+  if (s_hwnd && IsWindow(s_hwnd))
+    EnumWindows(&SweepStalePopover, reinterpret_cast<LPARAM>(s_hwnd));
+  s_hPopover = nullptr;
+  // T111 fix: 先**不带 WS_VISIBLE** 创建 —— 未定位就显示会在错误位置闪一帧。
+  // 位置由随后的 PositionPopover() 定, 定完才 ShowWindow。
+  s_hPopover =
+      CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"STATIC",
+                      L"请按快捷键"
+                      L"...",  // 请按快捷键...
+                      WS_POPUP, 0, 0, kPopoverW, kPopoverH + kPopoverTailH,
+                      s_hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
+}
+
+// T111 fix: 把 popover 摆到目标行旁边并显示。
+void ShortcutSettings::PositionPopover(int displayItem) {
+  if (!s_hPopover || !IsWindow(s_hPopover))
+    return;
+  RECT rr = {};
+  BOOL screenCoords = FALSE;
+  if (s_hTable && IsWindow(s_hTable)) {
+    if (displayItem >= 0 &&
+        SendMessageW(s_hTable, LVM_GETITEMRECT, static_cast<WPARAM>(displayItem),
+                     reinterpret_cast<LPARAM>(&rr)) == TRUE) {
+      ClientToScreen(s_hTable, reinterpret_cast<POINT*>(&rr.left));
+      ClientToScreen(s_hTable, reinterpret_cast<POINT*>(&rr.right));
+      screenCoords = TRUE;
+    } else {
+      // 空白处 / 取不到行矩形: 退回整个列表区右侧, 垂直居中。
+      GetWindowRect(s_hTable, &rr);
+      screenCoords = TRUE;
+    }
+  } else {
+    GetWindowRect(s_hwnd, &rr);
+    screenCoords = rr.left != 0 || rr.top != 0 || rr.right != 0 ||
+                   rr.bottom != 0;
+  }
+  if (!screenCoords)
+    return;
+  const HMONITOR mon = MonitorFromRect(&rr, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO mi = {sizeof(mi)};
+  GetMonitorInfoW(mon, &mi);
+  const PopoverPlace p = ComputePopoverPlace(
+      rr, mi.rcWork, kPopoverW, kPopoverH + kPopoverTailH, kPopoverGap);
+  SetWindowPos(s_hPopover, HWND_TOPMOST, p.x, p.y, 0, 0,
+               SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+void ShortcutSettings::DestroyPopover() {
+  if (s_hPopover && IsWindow(s_hPopover))
+    DestroyWindow(s_hPopover);
+  s_hPopover = nullptr;
+}
+
+// T103: 显示行号 → 数据下标已有 TableItemData(); 这里反查(行数 <= 几十, 直接扫)。
+int ShortcutSettings::DisplayItemForRow(int row) {
+  if (!s_hTable || !IsWindow(s_hTable) || row < 0)
+    return -1;
+  const int n = static_cast<int>(
+      SendMessageW(s_hTable, LVM_GETITEMCOUNT, 0, 0));
+  for (int i = 0; i < n; ++i) {
+    if (TableItemData(s_hTable, i) == row)
+      return i;
+  }
+  return -1;
 }
 
 void ShortcutSettings::SetPopoverHint(const std::wstring& text) {
@@ -2016,6 +2134,16 @@ LRESULT ShortcutSettings::OnNotify(HWND hwnd, LPARAM lp) {
     // T103: 搜索框过滤后 显示行号 ≠ m_hotkeys 下标 ⇒ 一律按 lParam 取数据下标
     int row = ia->iItem >= 0 ? TableItemData(s_hTable, ia->iItem) : -1;
     if (row >= 0 && row < static_cast<int>(m_hotkeys.size())) {
+      // T111: 应用级行只读, 不进键捕获; popover 给出原因。
+      if (m_hotkeys[row].read_only) {
+        EnsurePopover();
+        SetPopoverHint(L"该快捷键由程序注册，当前版本暂不支持自定义");
+        // T111 fix: 定位到**被点的那一行**旁边(否则提示落在屏外看不见),
+        // 并挂一次性定时器, 到点自动消失, 不再永久残留。
+        PositionPopover(ia->iItem);
+        SetTimer(s_hwnd, IDT_HINT_HIDE, kHintHideMs, nullptr);
+        return 1;
+      }
       EnterCapturing(row);
       return 1;
     }
@@ -2024,6 +2152,9 @@ LRESULT ShortcutSettings::OnNotify(HWND hwnd, LPARAM lp) {
     // T103: 同上 —— 右键命中的行也按 lParam 取数据下标
     int row = ia->iItem >= 0 ? TableItemData(s_hTable, ia->iItem) : -1;
     if (row >= 0 && row < static_cast<int>(m_hotkeys.size())) {
+      // T111: 应用级行连「重置此行」也没有 —— 它本来就不受本表管辖。
+      if (m_hotkeys[row].read_only)
+        return 1;
       // 弹简易菜单:重置此行
       HMENU hMenu = CreatePopupMenu();
       AppendMenuW(
@@ -2160,6 +2291,14 @@ LRESULT ShortcutSettings::OnTimer(HWND hwnd, WPARAM wp) {
   }
   if (wp == IDT_POPOVER) {
     KillTimer(hwnd, IDT_POPOVER);
+    return 0;
+  }
+  if (wp == IDT_HINT_HIDE) {
+    // T111 fix: 只读提示是**一次性**提示 —— 到点必须消失并释放窗口。
+    // 捕获态(IDT_BLINK 在跑)的 popover 由 ExitCapturing 管, 这里不能碰。
+    KillTimer(hwnd, IDT_HINT_HIDE);
+    if (s_capturingRow < 0)
+      DestroyPopover();
     return 0;
   }
   return 0;
