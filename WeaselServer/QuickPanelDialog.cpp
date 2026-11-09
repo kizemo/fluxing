@@ -104,6 +104,44 @@ PanelDpi QueryPanelDpi(POINT anchor) {
   return out;
 }
 
+// ===== 2026-11-09:窗口当前 DPI(运行时解析,绝不静态链接)=====
+//
+// GetDpiForWindow 是 Win10 1607+ 才有的 API。★ 必须**运行时解析**:
+//   静态导入 api-ms-win-shcore-scaling-l1-1-1.dll 在缺该 DLL 的系统上会让
+//   进程直接起不来(spec 064 教训;WeaselUI/WeaselPanel.cpp 同一手法)。
+//   这里用 GetModuleHandleW("user32.dll") —— user32 必然已被加载,
+//   不会失败,也不需要 LoadLibrary(免得泄漏模块句柄)。
+UINT GetDpiForWindowDynamic(HWND hwnd) {
+  typedef UINT(WINAPI* GetDpiForWindow_t)(HWND);
+  static GetDpiForWindow_t fn = []() -> GetDpiForWindow_t {
+    HMODULE h = GetModuleHandleW(L"user32.dll");
+    if (!h)
+      return nullptr;
+    return reinterpret_cast<GetDpiForWindow_t>(
+        GetProcAddress(h, "GetDpiForWindow"));
+  }();
+  if (!fn || !hwnd)
+    return 0;
+  return fn(hwnd);
+}
+
+// 窗口**当前** DPI:优先 GetDpiForWindow(窗口所在显示器的真实 DPI);
+// 拿不到(Win7 等旧系统)⇒ 退「窗口中心所在显示器」的有效 DPI。
+PanelDpi QueryWindowDpi(HWND hwnd) {
+  const UINT dpi = GetDpiForWindowDynamic(hwnd);
+  if (dpi) {
+    PanelDpi out = {dpi, dpi};
+    return out;
+  }
+  RECT rc = {};
+  POINT center = {0, 0};
+  if (GetWindowRect(hwnd, &rc)) {
+    center.x = (rc.left + rc.right) / 2;
+    center.y = (rc.top + rc.bottom) / 2;
+  }
+  return QueryPanelDpi(center);
+}
+
 // logical → physical。spec 099 P0-6: 缩放口径下沉到 include/FluxingPanelDpi.h,
 // 生产代码与单测读**同一份**公式(测试复制公式就是漂移源,constitution R7)。
 // 旧实现是 MulDiv(logical, dpi, 96);对正数它等价于 (logical*dpi + 48) / 96
@@ -119,6 +157,10 @@ inline int ScaleLogicalByDpi(int logical, UINT dpi) {
 struct PanelLayout {
   float dpr_x;
   float dpr_y;
+  // 2026-11-09: **统一缩放系数**(下限 1.0)—— 键帽与图标几何共用同一个,
+  //   否则 dpr<1 时符号会溢出键帽(用户真机反馈「符号偏大」)。
+  //   键帽是正方形(btn_size 宽 = 高,都按 dpr_x 缩放)⇒ 图标跟 dpr_x 即比例恒定。
+  float icon_scale;
   int padding;
   int brand_size;
   int btn_size;
@@ -133,10 +175,20 @@ int ScaleRound(int logical, float dpr) {
   return v < 1 ? 1 : v;
 }
 
+// 2026-11-09: 图标 raw 坐标 → 物理像素。
+// 与键帽**同一个缩放系数**(下限 1.0),raw 坐标保留为设计稿基准形状。
+inline int IconPx(int raw, float scale) {
+  return fluxing::panel_dpi::ScaleByFactor(raw, (double)scale);
+}
+
 PanelLayout ComputeLayout(int panel_w_phys, int panel_h_phys) {
   PanelLayout L;
   L.dpr_x = (float)panel_w_phys / (float)QuickPanelDialog::kPanelW;
   L.dpr_y = (float)panel_h_phys / (float)QuickPanelDialog::kPanelH;
+  // 缩放系数下限 1.0(低于 100% 不缩小)。窗口物理尺寸的下限由
+  // 「面板用 DPI 钳到 ≥96」保证(见 fluxing::panel_dpi::ClampPanelDpi),
+  // 两条约束必须**同时**成立:尺寸不小于逻辑尺寸、系数不小于 1.0。
+  L.icon_scale = L.dpr_x < 1.0f ? 1.0f : L.dpr_x;
   L.padding = ScaleRound(QuickPanelDialog::kPanelPadding, L.dpr_x);
   L.brand_size = ScaleRound(QuickPanelDialog::kBrandSize, L.dpr_x);
   L.btn_size = ScaleRound(QuickPanelDialog::kBtnSize, L.dpr_x);
@@ -271,44 +323,53 @@ constexpr COLORREF kWhiteC = RGB(255, 255, 255);   // 白色(active icon)
 void QuickPanelDialog::DrawIconSchema(HDC hdc,
                                       int x,
                                       int y,
-                                      COLORREF penColor) {
+                                      COLORREF penColor,
+                                      float scale) {
   // 双向切换箭头(viewBox 24x24,scale 到 30x30)
   // 上箭头 →: (4,9)→(17,9) + 箭头头
   // L86-fix: pen color 从 caller 传入(default 灰 / hover 橙 / active 白)
-  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
-  MoveToEx(hdc, x + 5, y + 11, nullptr);
-  LineTo(hdc, x + 23, y + 11);
-  MoveToEx(hdc, x + 19, y + 8, nullptr);
-  LineTo(hdc, x + 23, y + 11);
-  LineTo(hdc, x + 19, y + 14);
+  // 2026-11-09: 所有坐标与笔宽 × **面板缩放系数**(与键帽同一个系数)。
+  //   之前图标按 raw 像素画、键帽按 dpr 缩放 ⇒ dpr 下降时符号溢出键帽。
+  HPEN pen = (HPEN)SelectObject(
+      hdc, CreatePen(PS_SOLID, max(1, IconPx(2, scale)), penColor));
+  MoveToEx(hdc, x + IconPx(5, scale), y + IconPx(11, scale), nullptr);
+  LineTo(hdc, x + IconPx(23, scale), y + IconPx(11, scale));
+  MoveToEx(hdc, x + IconPx(19, scale), y + IconPx(8, scale), nullptr);
+  LineTo(hdc, x + IconPx(23, scale), y + IconPx(11, scale));
+  LineTo(hdc, x + IconPx(19, scale), y + IconPx(14, scale));
   // 下箭头 ←: (20,15)→(7,15) + 箭头头
-  MoveToEx(hdc, x + 25, y + 19, nullptr);
-  LineTo(hdc, x + 7, y + 19);
-  MoveToEx(hdc, x + 11, y + 16, nullptr);
-  LineTo(hdc, x + 7, y + 19);
-  LineTo(hdc, x + 11, y + 22);
+  MoveToEx(hdc, x + IconPx(25, scale), y + IconPx(19, scale), nullptr);
+  LineTo(hdc, x + IconPx(7, scale), y + IconPx(19, scale));
+  MoveToEx(hdc, x + IconPx(11, scale), y + IconPx(16, scale), nullptr);
+  LineTo(hdc, x + IconPx(7, scale), y + IconPx(19, scale));
+  LineTo(hdc, x + IconPx(11, scale), y + IconPx(22, scale));
   DeleteObject(SelectObject(hdc, pen));
 }
 
 void QuickPanelDialog::DrawIconPhrase(HDC hdc,
                                       int x,
                                       int y,
-                                      COLORREF penColor) {
+                                      COLORREF penColor,
+                                      float scale) {
   // 对话气泡:圆角矩形 + 尾巴
   // L86-fix: pen color 从 caller 传入
-  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
+  // 2026-11-09: 坐标 × 缩放系数(与键帽同一系数)。
+  HPEN pen = (HPEN)SelectObject(
+      hdc, CreatePen(PS_SOLID, max(1, IconPx(2, scale)), penColor));
   HBRUSH brush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
   // 主体:圆角矩形
-  RoundRect(hdc, x + 5, y + 5, x + 25, y + 20, 6, 6);
+  RoundRect(hdc, x + IconPx(5, scale), y + IconPx(5, scale),
+            x + IconPx(25, scale), y + IconPx(20, scale), IconPx(6, scale),
+            IconPx(6, scale));
   // 尾巴:斜线
-  MoveToEx(hdc, x + 10, y + 20, nullptr);
-  LineTo(hdc, x + 8, y + 25);
-  LineTo(hdc, x + 13, y + 20);
+  MoveToEx(hdc, x + IconPx(10, scale), y + IconPx(20, scale), nullptr);
+  LineTo(hdc, x + IconPx(8, scale), y + IconPx(25, scale));
+  LineTo(hdc, x + IconPx(13, scale), y + IconPx(20, scale));
   // 三条短横线代表文本
-  MoveToEx(hdc, x + 9, y + 10, nullptr);
-  LineTo(hdc, x + 21, y + 10);
-  MoveToEx(hdc, x + 9, y + 14, nullptr);
-  LineTo(hdc, x + 18, y + 14);
+  MoveToEx(hdc, x + IconPx(9, scale), y + IconPx(10, scale), nullptr);
+  LineTo(hdc, x + IconPx(21, scale), y + IconPx(10, scale));
+  MoveToEx(hdc, x + IconPx(9, scale), y + IconPx(14, scale), nullptr);
+  LineTo(hdc, x + IconPx(18, scale), y + IconPx(14, scale));
   DeleteObject(SelectObject(hdc, pen));
   DeleteObject(SelectObject(hdc, brush));
 }
@@ -316,35 +377,41 @@ void QuickPanelDialog::DrawIconPhrase(HDC hdc,
 void QuickPanelDialog::DrawIconSymbols(HDC hdc,
                                        int x,
                                        int y,
-                                       COLORREF penColor) {
+                                       COLORREF penColor,
+                                       float scale) {
   // 键盘(viewBox 24x24)
   // L86-fix: pen color 从 caller 传入
-  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
+  // 2026-11-09: 坐标 × 缩放系数(与键帽同一系数)。
+  HPEN pen = (HPEN)SelectObject(
+      hdc, CreatePen(PS_SOLID, max(1, IconPx(2, scale)), penColor));
   // 外壳
-  RoundRect(hdc, x + 3, y + 6, x + 27, y + 24, 2, 2);
+  RoundRect(hdc, x + IconPx(3, scale), y + IconPx(6, scale),
+            x + IconPx(27, scale), y + IconPx(24, scale), IconPx(2, scale),
+            IconPx(2, scale));
   // 顶行按键分隔(4个)
-  MoveToEx(hdc, x + 8, y + 6, nullptr);
-  LineTo(hdc, x + 8, y + 12);
-  MoveToEx(hdc, x + 13, y + 6, nullptr);
-  LineTo(hdc, x + 13, y + 12);
-  MoveToEx(hdc, x + 18, y + 6, nullptr);
-  LineTo(hdc, x + 18, y + 12);
-  MoveToEx(hdc, x + 22, y + 6, nullptr);
-  LineTo(hdc, x + 22, y + 12);
+  MoveToEx(hdc, x + IconPx(8, scale), y + IconPx(6, scale), nullptr);
+  LineTo(hdc, x + IconPx(8, scale), y + IconPx(12, scale));
+  MoveToEx(hdc, x + IconPx(13, scale), y + IconPx(6, scale), nullptr);
+  LineTo(hdc, x + IconPx(13, scale), y + IconPx(12, scale));
+  MoveToEx(hdc, x + IconPx(18, scale), y + IconPx(6, scale), nullptr);
+  LineTo(hdc, x + IconPx(18, scale), y + IconPx(12, scale));
+  MoveToEx(hdc, x + IconPx(22, scale), y + IconPx(6, scale), nullptr);
+  LineTo(hdc, x + IconPx(22, scale), y + IconPx(12, scale));
   // 中行分隔
-  MoveToEx(hdc, x + 3, y + 12, nullptr);
-  LineTo(hdc, x + 27, y + 12);
-  MoveToEx(hdc, x + 3, y + 16, nullptr);
-  LineTo(hdc, x + 27, y + 16);
+  MoveToEx(hdc, x + IconPx(3, scale), y + IconPx(12, scale), nullptr);
+  LineTo(hdc, x + IconPx(27, scale), y + IconPx(12, scale));
+  MoveToEx(hdc, x + IconPx(3, scale), y + IconPx(16, scale), nullptr);
+  LineTo(hdc, x + IconPx(27, scale), y + IconPx(16, scale));
   // 中行内部
-  MoveToEx(hdc, x + 11, y + 16, nullptr);
-  LineTo(hdc, x + 11, y + 20);
-  MoveToEx(hdc, x + 18, y + 16, nullptr);
-  LineTo(hdc, x + 18, y + 20);
+  MoveToEx(hdc, x + IconPx(11, scale), y + IconPx(16, scale), nullptr);
+  LineTo(hdc, x + IconPx(11, scale), y + IconPx(20, scale));
+  MoveToEx(hdc, x + IconPx(18, scale), y + IconPx(16, scale), nullptr);
+  LineTo(hdc, x + IconPx(18, scale), y + IconPx(20, scale));
   // 空格(底部加粗)
-  HPEN penBold = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 3, kIcoDimC));
-  MoveToEx(hdc, x + 8, y + 22, nullptr);
-  LineTo(hdc, x + 22, y + 22);
+  HPEN penBold = (HPEN)SelectObject(
+      hdc, CreatePen(PS_SOLID, max(1, IconPx(3, scale)), kIcoDimC));
+  MoveToEx(hdc, x + IconPx(8, scale), y + IconPx(22, scale), nullptr);
+  LineTo(hdc, x + IconPx(22, scale), y + IconPx(22, scale));
   DeleteObject(SelectObject(hdc, penBold));
   DeleteObject(SelectObject(hdc, pen));
 }
@@ -352,18 +419,26 @@ void QuickPanelDialog::DrawIconSymbols(HDC hdc,
 void QuickPanelDialog::DrawIconSettings(HDC hdc,
                                         int x,
                                         int y,
-                                        COLORREF penColor) {
+                                        COLORREF penColor,
+                                        float scale) {
   // 齿轮(中心圆 + 8 辐射线)
   // L86-fix: pen color 从 caller 传入
-  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
+  // 2026-11-09: 坐标与半径 × 缩放系数(与键帽同一系数)。
+  HPEN pen = (HPEN)SelectObject(
+      hdc, CreatePen(PS_SOLID, max(1, IconPx(2, scale)), penColor));
   // 中心圆
-  Ellipse(hdc, x + 9, y + 9, x + 21, y + 21);
+  Ellipse(hdc, x + IconPx(9, scale), y + IconPx(9, scale),
+          x + IconPx(21, scale), y + IconPx(21, scale));
   // 8 辐射线
+  const int cx = IconPx(15, scale);
+  const int cy = IconPx(15, scale);
+  const int r1 = IconPx(7, scale);
+  const int r2 = IconPx(11, scale);
   for (int i = 0; i < 8; i++) {
     double angle = i * 3.14159265 / 4.0;
     double dx = cos(angle), dy = sin(angle);
-    MoveToEx(hdc, int(x + 15 + dx * 7), int(y + 15 + dy * 7), nullptr);
-    LineTo(hdc, int(x + 15 + dx * 11), int(y + 15 + dy * 11));
+    MoveToEx(hdc, x + cx + int(dx * r1), y + cy + int(dy * r1), nullptr);
+    LineTo(hdc, x + cx + int(dx * r2), y + cy + int(dy * r2));
   }
   DeleteObject(SelectObject(hdc, pen));
 }
@@ -371,14 +446,20 @@ void QuickPanelDialog::DrawIconSettings(HDC hdc,
 void QuickPanelDialog::DrawIconAccount(HDC hdc,
                                        int x,
                                        int y,
-                                       COLORREF penColor) {
+                                       COLORREF penColor,
+                                       float scale) {
   // 头像(头 + 肩)
   // L86-fix: pen color 从 caller 传入
-  HPEN pen = (HPEN)SelectObject(hdc, CreatePen(PS_SOLID, 2, penColor));
+  // 2026-11-09: 坐标 × 缩放系数(与键帽同一系数)。
+  HPEN pen = (HPEN)SelectObject(
+      hdc, CreatePen(PS_SOLID, max(1, IconPx(2, scale)), penColor));
   // 头
-  Ellipse(hdc, x + 9, y + 5, x + 21, y + 17);
+  Ellipse(hdc, x + IconPx(9, scale), y + IconPx(5, scale),
+          x + IconPx(21, scale), y + IconPx(17, scale));
   // 肩(开口向下的弧) - Arc 需要 8 个 int
-  Arc(hdc, x + 5, y + 16, x + 25, y + 28, x + 5, y + 28, x + 25, y + 28);
+  Arc(hdc, x + IconPx(5, scale), y + IconPx(16, scale),
+      x + IconPx(25, scale), y + IconPx(28, scale), x + IconPx(5, scale),
+      y + IconPx(28, scale), x + IconPx(25, scale), y + IconPx(28, scale));
   DeleteObject(SelectObject(hdc, pen));
 }
 
@@ -433,17 +514,24 @@ void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
                                          int x,
                                          int y,
                                          COLORREF penColor,
-                                         bool fullwidth) {
+                                         bool fullwidth,
+                                         float scale) {
   if (!hdc)
     return;
-  const fluxing::panel_fwicon::Icon ic =
-      fluxing::panel_fwicon::Build(fullwidth);
-  const POINT off = fluxing::panel_fwicon::CenteringOffset(ic, kIconViewBox);
+  // 2026-11-09: 图标几何按**统一缩放系数**放大(与键帽同一个系数)。
+  //   病灶(用户真机反馈「符号偏大、溢出按钮」):本图标坐标是固定 raw 像素,
+  //   键帽却按 dpr 缩放 ⇒ dpr 下降时符号相对键帽越来越大。
+  //   纯函数在 include/FluxingPanelFwIcon.h(ScaleIcon),生产与单测同源。
+  const fluxing::panel_fwicon::Icon ic = fluxing::panel_fwicon::ScaleIcon(
+      fluxing::panel_fwicon::Build(fullwidth), (double)scale);
+  const int viewBox = IconPx(kIconViewBox, scale);
+  const POINT off = fluxing::panel_fwicon::CenteringOffset(ic, viewBox);
   const int ox = x + off.x;
   const int oy = y + off.y;
 
-  HPEN pen = (HPEN)CreatePen(PS_SOLID, fluxing::panel_fwicon::kStrokeWidth,
-                             penColor);
+  const int stroke =
+      max(1, IconPx(fluxing::panel_fwicon::kStrokeWidth, scale));
+  HPEN pen = (HPEN)CreatePen(PS_SOLID, stroke, penColor);
   HBRUSH solid = (HBRUSH)CreateSolidBrush(penColor);
   HGDIOBJ oldPen = SelectObject(hdc, pen);
   HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
@@ -800,6 +888,10 @@ int QuickPanelDialog::s_panelW_phys = 0;
 int QuickPanelDialog::s_panelH_phys = 0;
 float QuickPanelDialog::s_dpr_x = 1.0f;
 float QuickPanelDialog::s_dpr_y = 1.0f;
+// 2026-11-09: 统一缩放系数(键帽 / 图标几何共用;下限 1.0)。
+float QuickPanelDialog::s_iconScale = 1.0f;
+// 2026-11-09: 当前 logo 位图对应的 brand 物理尺寸(变了必须重建位图)。
+int QuickPanelDialog::s_logoSize_phys = 0;
 int QuickPanelDialog::s_panelPadding_phys = 0;
 int QuickPanelDialog::s_btnYOffset_phys = 0;  // v0.19.0.24 新增
 int QuickPanelDialog::s_btnSize_phys = 0;
@@ -1481,13 +1573,18 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
     case WM_DPICHANGED: {
       UINT dpiX = LOWORD(w);
       UINT dpiY = HIWORD(w);
-      if (dpiX == 0)
-        dpiX = 96;
-      if (dpiY == 0)
-        dpiY = 96;
+      // 2026-11-09: DPI 钳到 [96, 384] —— 缩放系数下限 1.0 ⇒ 面板物理尺寸
+      //   恒 ≥ 逻辑尺寸(键帽不会缩到亚像素、图标比例不会失衡、命中区可靠)。
+      dpiX = (UINT)fluxing::panel_dpi::ClampPanelDpi((int)dpiX);
+      dpiY = (UINT)fluxing::panel_dpi::ClampPanelDpi((int)dpiY);
       const int panelW = ScaleLogicalByDpi(kPanelW, dpiX);
       const int panelH = ScaleLogicalByDpi(kPanelH, dpiY);
       const int margin = ScaleLogicalByDpi(12, dpiX);
+      // 系统建议的 rect(WM_DPICHANGED 的 lParam):Windows 已按新 DPI 与新显示器
+      // 工作区算好窗口该待的位置 ⇒ 优先采用它,再钳回可见区(见下)。
+      RECT suggested = {};
+      if (l)
+        suggested = *reinterpret_cast<const RECT*>(l);
       // 新 monitor 的工作区 —— SPI_GETWORKAREA 只返回 primary,跨屏 DPI 切换
       // 时会算错,所以这里用 MonitorFromWindow + rcWork。
       RECT newRc = {};
@@ -1517,13 +1614,31 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
         } else {
           PlacePanelAtBottomRight(newRc, panelW, panelH, margin, &newX, &newY);
         }
+      } else if (suggested.right > suggested.left &&
+                 suggested.bottom > suggested.top) {
+        // 用系统建议的位置,并按同样的 margin 钳进新工作区(结果与右下角锚点
+        // 一致:面板仍然贴右下角,只是尺寸按新 DPI 走)。
+        newX = suggested.left;
+        newY = suggested.top;
+        const int rightLimit = newRc.right - margin;
+        const int bottomLimit = newRc.bottom - margin;
+        if (newX + panelW > rightLimit)
+          newX = rightLimit - panelW;
+        if (newY + panelH > bottomLimit)
+          newY = bottomLimit - panelH;
+        if (newX < newRc.left + margin)
+          newX = newRc.left + margin;
+        if (newY < newRc.top + margin)
+          newY = newRc.top + margin;
       } else {
         PlacePanelAtBottomRight(newRc, panelW, panelH, margin, &newX, &newY);
       }
       SetWindowPos(s_hwnd, HWND_TOPMOST, newX, newY, panelW, panelH,
                    SWP_NOZORDER | SWP_NOACTIVATE);
       // 尺寸变了: 重算 dpr / _phys 常量并重建 offscreen DIB,否则
-      // UpdateLayeredWindow 提交的是旧大小的 surface
+      // UpdateLayeredWindow 提交的是旧大小的 surface。
+      // ApplyPhysicalLayout 内部还会**重建 logo 位图**(brand 尺寸变了)——
+      // 这正是「品牌图标只显示一部分」的修复点。
       ApplyPhysicalLayout(hwnd);
       // 重新画 panel
       InvalidateRect(s_hwnd, NULL, FALSE);
@@ -1862,6 +1977,8 @@ bool QuickPanelDialog::ApplyPhysicalLayout(HWND hwnd) {
   s_panelH_phys = h;
   s_dpr_x = L.dpr_x;
   s_dpr_y = L.dpr_y;
+  // 2026-11-09: 统一缩放系数(键帽与图标几何共用同一个;下限 1.0)。
+  s_iconScale = L.icon_scale;
   s_panelPadding_phys = L.padding;
   // v0.19.0.24-fix(issue 1):Y 方向 padding 独立算,scale_y 让跨 DPI 跟随
   s_btnYOffset_phys = L.btn_y_offset;
@@ -1871,6 +1988,32 @@ bool QuickPanelDialog::ApplyPhysicalLayout(HWND hwnd) {
   s_brandSize_phys = L.brand_size;
   s_panelRadius_phys = ScaleRound(kPanelRadius, L.dpr_x);
   s_btnGap_phys = L.btn_gap;
+
+  // ===== 2026-11-09:品牌 logo 位图**随物理尺寸重建**(根因①)=====
+  //
+  // 病灶(用户真机反馈「品牌图标只显示一部分」):s_hBmpLogo 只在建窗时按当时的
+  // brand 尺寸用 WIC 预缩放解码**一次**;之后 DPI 变化只更新尺寸变量,
+  // 位图**从不重建**。绘制时又用 1:1 BitBlt 从旧位图取新矩形
+  // (GDI 的 BitBlt 不缩放)⇒ DPI 下降时新矩形比旧图小 ⇒ 只剩旧图一角。
+  //
+  // 修法:brand 物理尺寸一变就**重建位图**(旧位图必须 DeleteObject,
+  // 否则 GDI 对象泄漏)。重建走同一条 WIC 预缩放路径 ⇒ 仍是 1:1 贴图。
+  //
+  // ⚠ 耗时:LoadLogoWIC 会读一次 PNG(约 20×20,亚毫秒级)。它跑在
+  //   WeaselServer 的**窗口消息线程**上(不是 TSF 回调)⇒ 不违反 P2 红线。
+  if (s_logoSize_phys != s_brandSize_phys) {
+    if (s_hBmpLogo) {
+      DeleteObject(s_hBmpLogo);
+      s_hBmpLogo = NULL;
+    }
+    s_logoSize_phys = 0;
+    HBITMAP logo = NULL;
+    if (SUCCEEDED(LoadLogoWIC(hwnd, logo)) && logo) {
+      s_hBmpLogo = logo;
+      s_logoSize_phys = s_brandSize_phys;
+    }
+  }
+
   // spec 099 P0-4: 状态文字字体随 dpr 重建(旧字体必须先释放,否则 GDI 泄漏)。
   if (s_hFontStatus) {
     DeleteObject(s_hFontStatus);
@@ -1890,13 +2033,51 @@ bool QuickPanelDialog::ApplyPhysicalLayout(HWND hwnd) {
   return true;
 }
 
+// ===== 2026-11-09:按**窗口当前 DPI** 校正面板物理尺寸(根因③)=====
+//
+// 场景:面板已经存在(Show() 的复用路径),而在这期间 DPI 变了 ——
+//   远程桌面换分辨率 / 用户改显示缩放 / 换显示器。
+// 此时窗口尺寸、键帽尺寸、图标缩放系数、品牌 logo 位图**全都过时**。
+//
+// 本函数:
+//   1) 读窗口**当前** DPI(GetDpiForWindow,运行时解析;拿不到退显示器有效 DPI);
+//   2) 按 logical→physical 口径算出应有的窗口尺寸。DPI 先钳到 ≥96
+//      (面板缩放系数下限 1.0)⇒ 窗口物理尺寸恒 ≥ 逻辑尺寸,两条约束同时成立;
+//   3) 与当前尺寸不一致 ⇒ 改窗口尺寸 + ApplyPhysicalLayout
+//      (重建键帽 / 图标缩放 / logo 位图 / off-screen DIB)。
+//
+// 返回 true = 尺寸变了、布局已重建(调用方需要重画)。
+bool QuickPanelDialog::SyncPanelSizeToCurrentDpi(HWND hwnd) {
+  if (!hwnd || !IsWindow(hwnd))
+    return false;
+  RECT rc = {};
+  if (!GetWindowRect(hwnd, &rc))
+    return false;
+  const PanelDpi dpi = QueryWindowDpi(hwnd);
+  const int effX = fluxing::panel_dpi::ClampPanelDpi((int)dpi.x);
+  const int effY = fluxing::panel_dpi::ClampPanelDpi((int)dpi.y);
+  const int panelW = ScaleLogicalByDpi(kPanelW, (UINT)effX);
+  const int panelH = ScaleLogicalByDpi(kPanelH, (UINT)effY);
+  const int curW = rc.right - rc.left;
+  const int curH = rc.bottom - rc.top;
+  if (curW == panelW && curH == panelH)
+    return false;
+  // 只改尺寸,不改位置(位置归 RepairOffscreenPanel / WM_DPICHANGED 管)。
+  SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, panelW, panelH,
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  ApplyPhysicalLayout(hwnd);
+  return true;
+}
+
 LRESULT QuickPanelDialog::OnCreate(HWND hwnd) {
   s_hwnd = hwnd;
   if (!ApplyPhysicalLayout(hwnd))
     return 0;
 
-  // 创建资源
-  LoadLogoWIC(hwnd, s_hBmpLogo);
+  // 品牌 logo 位图**已由 ApplyPhysicalLayout 加载**(它知道当时的 brand 物理
+  // 尺寸;尺寸变了必须重建 ⇒ 加载逻辑必须与尺寸计算同处一处)。
+  // 以前这里单独调一次 LoadLogoWIC —— 那正是「位图尺寸与目标矩形脱钩」的
+  // 根源(WM_DPICHANGED 只改尺寸、不重建位图)。
   s_hBrushPanelBg = CreateSolidBrush(kBgTop);
   s_hBrushIconDim = CreateSolidBrush(kIcoDimC);
   s_hBrushIconAccent = CreateSolidBrush(kAccentC);
@@ -1935,6 +2116,7 @@ LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
     DeleteObject(s_hBmpLogo);
     s_hBmpLogo = NULL;
   }
+  s_logoSize_phys = 0;
   if (s_hBrushPanelBg) {
     DeleteObject(s_hBrushPanelBg);
     s_hBrushPanelBg = NULL;
@@ -2043,13 +2225,27 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // (BitBlt/AlphaBlend 都不支持拉伸, 预缩放在 WIC 阶段做)。
   // v5 需求⑤: 贴图矩形改由 BrandRect() 给出 —— 与 HitTest 的 -2(brand)判定、
   // ADR 0038 的右键命中区**同一份几何**(R7);品牌整体上移 kBrandYOffset。
+  //
+  // 2026-11-09 兜底(根因①的最后一道防线):**位图尺寸必须与目标矩形一致**。
+  // 不一致(尺寸刚变、位图还没来得及重建)时**绝不能**用 1:1 BitBlt ——
+  // 那正是「只显示一部分」的成因(GDI 的 BitBlt 不缩放,只会从旧图的一角
+  // 取新矩形)。改走 StretchBlt 拉伸 ⇒ 宁可轻微变形,也不能残缺。
   if (s_hBmpLogo) {
     int brandX = 0, brandY = 0, brandW = 0, brandH = 0;
     if (BrandRect(&brandX, &brandY, &brandW, &brandH)) {
+      BITMAP srcBmp = {};
+      const bool haveSize =
+          GetObject(s_hBmpLogo, sizeof(srcBmp), &srcBmp) != 0;
       HDC hdcMemLogo = CreateCompatibleDC(hdc);
       if (hdcMemLogo) {
         HGDIOBJ prev = SelectObject(hdcMemLogo, s_hBmpLogo);
-        BitBlt(hdc, brandX, brandY, brandW, brandH, hdcMemLogo, 0, 0, SRCCOPY);
+        if (haveSize && srcBmp.bmWidth == brandW && srcBmp.bmHeight == brandH) {
+          BitBlt(hdc, brandX, brandY, brandW, brandH, hdcMemLogo, 0, 0,
+                 SRCCOPY);
+        } else if (haveSize && srcBmp.bmWidth > 0 && srcBmp.bmHeight > 0) {
+          StretchBlt(hdc, brandX, brandY, brandW, brandH, hdcMemLogo, 0, 0,
+                     srcBmp.bmWidth, srcBmp.bmHeight, SRCCOPY);
+        }
         SelectObject(hdcMemLogo, prev);
         DeleteDC(hdcMemLogo);
       }
@@ -2172,23 +2368,32 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     // = 26.5,int mid = 26)。 跨 DPI 都对齐。注意:icon 描线 raw pixel
     // 不缩放,设计固定 5..25 宽度 (20 px) 在所有 DPI 都一样,designer 刻意 — 高
     // DPI 不会按比例放大,保持视觉清晰度。
-    int iconX = x0 + bw / 2 - kIconBboxCxOff;
-    int iconY = y0 + bh / 2 - kIconBboxCyOff;
+    //
+    // ★ 2026-11-09 修订(用户真机反馈「符号偏大、溢出按钮」):上面那条
+    //   「raw pixel 不缩放」的设计决定**正是病灶** —— 键帽按 dpr 缩放、符号不缩,
+    //   两者比例必然失衡。现在符号几何与键帽用**同一个缩放系数**
+    //   (L.icon_scale,下限 1.0):高 DPI 下符号按比例放大,低 DPI(钳到 100%)
+    //   下不缩小 ⇒ 任意 DPI 下「符号 : 键帽」比例恒定。
+    //   kIconBboxCx/CyOff 是 viewBox(30×30)内的 raw 坐标,缩放后同样要乘系数,
+    //   否则高 DPI 下图标整体偏左上。
+    const float iconScale = L.icon_scale;
+    int iconX = x0 + bw / 2 - IconPx(kIconBboxCxOff, iconScale);
+    int iconY = y0 + bh / 2 - IconPx(kIconBboxCyOff, iconScale);
     // v5 需求⑦: 视觉位置 → 逻辑槽位。switch 一律按**逻辑槽位**分支,几何
     // 坐标仍取视觉位置(i)。kVisualToLogical = {0, 4, 5, 1, 2, 3} ⇒ 视觉 0
     // 切换输入法 / 1 中英文 / 2 全半角 / 3 用户短语 / 4 快捷键设置 / 5 关于。
     switch (LogicalAtVisual(i)) {
       case 0:
-        DrawIconSchema(hdc, iconX, iconY, penRgb);
+        DrawIconSchema(hdc, iconX, iconY, penRgb, iconScale);
         break;
       case 1:
-        DrawIconPhrase(hdc, iconX, iconY, penRgb);
+        DrawIconPhrase(hdc, iconX, iconY, penRgb, iconScale);
         break;
       case 2:
-        DrawIconSettings(hdc, iconX, iconY, penRgb);
+        DrawIconSettings(hdc, iconX, iconY, penRgb, iconScale);
         break;
       case 3:
-        DrawIconAccount(hdc, iconX, iconY, penRgb);
+        DrawIconAccount(hdc, iconX, iconY, penRgb, iconScale);
         break;
       case 4: {
         // 中英文文字键:「中」/「英」。v5 需求⑥ —— 用**墨迹盒**垂直居中
@@ -2214,7 +2419,8 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
         // 全半角键:v7 需求 —— **对角线布局**的矢量图元,形状随当前生效宽度
         // 切换(全角 = 空心环 + 逗号尾 / 半角 = 实心点 + 小逗号尾)。
         // 纯 GDI 矢量,不走 GDI AlphaBlend。
-        DrawIconFullwidth(hdc, iconX, iconY, penRgb, s_inputState.fullwidth);
+        DrawIconFullwidth(hdc, iconX, iconY, penRgb, s_inputState.fullwidth,
+                          iconScale);
         break;
       }
     }
@@ -2532,6 +2738,10 @@ namespace {
 // 只在**零交集**时动手:部分可见(用户故意拖到半屏)不动,尊重用户位置。
 // 调用面是 WeaselServer 的窗口消息/拖动回调,不在 TSF 回调里 ⇒ 不触及 P2 红线。
 bool RepairOffscreenPanel(HWND hwnd) {
+  // 2026-11-09: 先按**当前 DPI** 校正尺寸。面板存活期间 DPI 可能变了,而
+  //   窗口尺寸还停在旧值 —— 用「旧尺寸 + 新 DPI 的边距」算落点会得到一个
+  //   错位的边距(面板贴边不紧/过紧)。尺寸同步内部还会重建键帽/图标/logo。
+  QuickPanelDialog::SyncPanelSizeToCurrentDpi(hwnd);
   RECT rc = {};
   if (!GetWindowRect(hwnd, &rc))
     return false;
@@ -2549,12 +2759,13 @@ bool RepairOffscreenPanel(HWND hwnd) {
     workArea.right = areas[0].right;
     workArea.bottom = areas[0].bottom;
   }
-  // 尺寸**沿用当前窗口**(DPI 缩放由 WM_DPICHANGED 负责),这里只搬位置。
+  // 尺寸**沿用当前窗口**(已由上面的 DPI 同步校正过),这里只搬位置。
   const int panelW = rc.right - rc.left;
   const int panelH = rc.bottom - rc.top;
-  const POINT anchor = {workArea.right - 1, workArea.bottom - 1};
-  const PanelDpi dpi = QueryPanelDpi(anchor);
-  const int margin = ScaleLogicalByDpi(12, dpi.x);
+  // 边距按**窗口当前 DPI** 算(不是锚点显示器的 DPI —— 两者可能不同)。
+  const PanelDpi dpi = QueryWindowDpi(hwnd);
+  const int margin = ScaleLogicalByDpi(
+      12, (UINT)fluxing::panel_dpi::ClampPanelDpi((int)dpi.x));
   int x = 0;
   int y = 0;
   PlacePanelAtBottomRight(workArea, panelW, panelH, margin, &x, &y);
@@ -2596,6 +2807,12 @@ void QuickPanelDialog::Show(bool currentFullwidth,
       AlwaysShowMode() ? fluxing::kAlphaFactorIdle : fluxing::kAlphaFactorFull;
   s_targetAlphaFactor = s_alphaFactor;
   if (s_hwnd) {
+    // 2026-11-09: 面板存活期间 DPI 可能已经变了(远程桌面换分辨率 / 用户改
+    //   显示缩放 / 换显示器)。复用路径以前**不重查 DPI、不重算尺寸** ⇒
+    //   窗口尺寸、键帽、图标缩放系数、logo 位图全都停在旧 DPI 上。
+    //   这里按窗口**当前** DPI 校正一次(尺寸变了会重建布局与 logo 位图)。
+    if (SyncPanelSizeToCurrentDpi(s_hwnd))
+      RepaintLayered(s_hwnd);
     // D0176 (2026-11-06): 复用路径原本零重定位 —— 面板矩形若已在屏外
     // (拖动落点被写盘 / 显示器布局变化),ShowWindow 只是把一个用户看不见的
     // 窗口设为可见,体感就是「Alt+, 没反应」。先自愈再显示,顺序不可交换。
@@ -2638,9 +2855,13 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   // 自己按 monitor DPI 放大窗口。锚点取面板将要落到的右下角,据此选 monitor。
   const POINT anchor = {workArea.right - 1, workArea.bottom - 1};
   const PanelDpi dpi = QueryPanelDpi(anchor);
-  const int panelW = ScaleLogicalByDpi(kPanelW, dpi.x);
-  const int panelH = ScaleLogicalByDpi(kPanelH, dpi.y);
-  const int margin = ScaleLogicalByDpi(12, dpi.x);
+  // 2026-11-09: 面板用 DPI 钳到 [96, 384] —— 缩放系数下限 1.0 ⇒ 面板物理尺寸
+  //   恒 ≥ 逻辑尺寸(键帽不会缩到亚像素、命中区可靠、图标比例不失衡)。
+  const int effDpiX = fluxing::panel_dpi::ClampPanelDpi((int)dpi.x);
+  const int effDpiY = fluxing::panel_dpi::ClampPanelDpi((int)dpi.y);
+  const int panelW = ScaleLogicalByDpi(kPanelW, (UINT)effDpiX);
+  const int panelH = ScaleLogicalByDpi(kPanelH, (UINT)effDpiY);
+  const int margin = ScaleLogicalByDpi(12, (UINT)effDpiX);
   // L92-fix: clamp 到 workArea,避免低分辨率下 panel 出屏(Phase 1 root cause)
   int x = 0;
   int y = 0;

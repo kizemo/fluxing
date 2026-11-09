@@ -127,6 +127,15 @@ class QuickPanelDialog {
                               int* y,
                               int* w,
                               int* h);
+  // ===== 2026-11-09: 按**当前窗口 DPI** 校正面板物理尺寸 =====
+  // 面板存活期间 DPI 可能变(远程桌面换分辨率 / 改显示缩放 / 换显示器),
+  // 而窗口尺寸、键帽尺寸、图标缩放系数、品牌 logo 位图都随尺寸走
+  // ⇒ 尺寸不变就等于「全部没跟上」。
+  // 本函数读**窗口当前 DPI**(GetDpiForWindow,运行时解析;拿不到则退窗口
+  // 中心所在显示器的有效 DPI),按 logical→physical 口径算出应有的尺寸;
+  // 不一致 ⇒ 改窗口尺寸并重建物理布局(键帽/图标/logo/offscreen 全部跟随)。
+  // 返回 true = 尺寸变了、布局已重建(调用方需要重画)。
+  static bool SyncPanelSizeToCurrentDpi(HWND hwnd);
   // Fluxing QuickPanel v4 需求⑥: 右侧竖排「中/英 · 全/半角」状态回显区
   // **已删除** —— 状态改由槽 4 / 槽 5 的键帽单字直接显示(需求⑤)。
   // 本函数保留(公共 API 与测试锚点不变), 但 v4 几何下槽位行铺满整宽
@@ -335,6 +344,15 @@ class QuickPanelDialog {
   // kPanelW,所有 _phys 常量按 dpr 缩放(整除,>=1)。
   static float s_dpr_x;  // panel dpr x = s_panelW_phys / kPanelW
   static float s_dpr_y;  // panel dpr y = s_panelH_phys / kPanelH
+  // 2026-11-09: **统一缩放系数**(键帽 / 槽位 / 图标几何 / fwicon 几何共用)。
+  //   = dpr_x,但**下限 1.0** —— 低于 100% 不缩小(否则图标比例失衡、符号溢出
+  //   键帽;用户真机反馈「符号偏大」)。键帽是正方形(btn_size × btn_size,
+  //   两者都按 dpr_x 缩放)⇒ 图标几何跟着 dpr_x 走即比例恒定。
+  static float s_iconScale;
+  // 2026-11-09: 当前 s_hBmpLogo **按多大的 brand 物理尺寸**解码出来的。
+  //   brand 尺寸变了必须重建位图(WIC 预缩放只做一次 ⇒ 位图不会自己变),
+  //   否则绘制时 1:1 BitBlt 会从旧图里取新矩形 ⇒ 「只显示一部分」。
+  static int s_logoSize_phys;
   static int s_panelPadding_phys;
   static int s_btnYOffset_phys;  // v0.19.0.24 新增:Y
                                  // 方向按钮起点(=(kPanelH-kBtnSize)/2,dpr 缩放)
@@ -520,12 +538,44 @@ class QuickPanelDialog {
   // L86-fix: 增加 COLORREF 参数传入 pen 颜色,让 hover/active 状态机生效。
   // 之前 v0.19.0.15 DrawIcon* hardcoded kIcoDimC (灰) 画 pen,完全忽略 caller
   // 选的 pen(hover 橙 / active 白)。L85-fix 没生效就是这个原因。
-  static void DrawIcon(HDC hdc, int idx, int x0, int y0, COLORREF penColor);
-  static void DrawIconSchema(HDC hdc, int x, int y, COLORREF penColor);
-  static void DrawIconPhrase(HDC hdc, int x, int y, COLORREF penColor);
-  static void DrawIconSymbols(HDC hdc, int x, int y, COLORREF penColor);
-  static void DrawIconSettings(HDC hdc, int x, int y, COLORREF penColor);
-  static void DrawIconAccount(HDC hdc, int x, int y, COLORREF penColor);
+  //
+  // 2026-11-09: 增加 **scale** 参数(图标几何缩放系数)。
+  //   病灶(用户真机反馈「符号偏大、溢出按钮」):键帽按 dpr 缩放,图标却按
+  //   **固定 raw 像素**画 ⇒ 两者比例必然失衡。
+  //   修法:图标坐标与笔宽**全部乘同一个系数**(与键帽同一个,
+  //   见 include/FluxingPanelDpi.h::ScaleByFactor,下限 1.0);
+  //   raw 坐标仍保留为**设计稿基准形状**,不做任何手工微调。
+  static void DrawIcon(HDC hdc,
+                       int idx,
+                       int x0,
+                       int y0,
+                       COLORREF penColor,
+                       float scale);
+  static void DrawIconSchema(HDC hdc,
+                              int x,
+                              int y,
+                              COLORREF penColor,
+                              float scale);
+  static void DrawIconPhrase(HDC hdc,
+                              int x,
+                              int y,
+                              COLORREF penColor,
+                              float scale);
+  static void DrawIconSymbols(HDC hdc,
+                               int x,
+                               int y,
+                               COLORREF penColor,
+                               float scale);
+  static void DrawIconSettings(HDC hdc,
+                                int x,
+                                int y,
+                                COLORREF penColor,
+                                float scale);
+  static void DrawIconAccount(HDC hdc,
+                               int x,
+                               int y,
+                               COLORREF penColor,
+                               float scale);
   // v7 需求(用户指令 2026-11-07): 全/半角键的图标 = **按钮内对角线布局**的
   // 矢量图元(参考搜狗输入法状态栏)。
   //   全角 = 右上**空心环**(宋体式「。」)+ 左下**逗号尾**(「，」)
@@ -540,7 +590,8 @@ class QuickPanelDialog {
                                 int x,
                                 int y,
                                 COLORREF penColor,
-                                bool fullwidth);
+                                bool fullwidth,
+                                float scale);
   // v0.19.0.61 (Phase L 调整 1.1): DrawIconUserDict 已彻底删除 — UserDictionary
   // 模块下线。 button 2 hit + paint 都 no-op (case 2 在 paint loop 跳过)。
 

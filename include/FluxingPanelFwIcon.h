@@ -303,5 +303,51 @@ inline POINT CenteringOffset(const Icon& ic, int viewBox) {
   return off;
 }
 
+// ===== 2026-11-09:按面板缩放系数放大图标几何 =====
+//
+// 起因(用户真机反馈):「全半角符号偏大、溢出按钮」。病灶 = 键帽按 dpr 缩放,
+// 而本图标的坐标是**固定 raw 像素**(设计稿 30×30 viewBox)⇒ dpr 下降时
+// 符号相对键帽越来越大。
+//
+// 修法:图标几何与键帽用**同一个缩放系数**(include/FluxingPanelDpi.h 的
+// ScaleByFactor,下限 1.0)⇒ 任意 DPI 下「符号 : 键帽」的比例恒定。
+//
+// 坐标系不变:raw viewBox 坐标 → 物理像素(等比放大,中心仍在 viewBox 中心)。
+inline int ScaleCoord(int raw, double factor) {
+  if (factor < 1.0)
+    factor = 1.0;
+  const double v = raw * factor;
+  return static_cast<int>(v >= 0 ? v + 0.5 : v - 0.5);
+}
+
+// 把整个图标(路径框 + 逗号墨迹盒 + 裁切列数)按系数等比放大。
+// 墨迹盒并集**重新求并**(不缩放旧并集)—— 与 Build() 同口径。
+inline Icon ScaleIcon(const Icon& ic, double factor) {
+  Icon out = ic;
+  for (int i = 0; i < out.shapeCount && i < 2; ++i) {
+    out.shapes[i].rect.left = ScaleCoord(out.shapes[i].rect.left, factor);
+    out.shapes[i].rect.top = ScaleCoord(out.shapes[i].rect.top, factor);
+    out.shapes[i].rect.right = ScaleCoord(out.shapes[i].rect.right, factor);
+    out.shapes[i].rect.bottom = ScaleCoord(out.shapes[i].rect.bottom, factor);
+  }
+  out.commaInk.left = ScaleCoord(out.commaInk.left, factor);
+  out.commaInk.top = ScaleCoord(out.commaInk.top, factor);
+  out.commaInk.right = ScaleCoord(out.commaInk.right, factor);
+  out.commaInk.bottom = ScaleCoord(out.commaInk.bottom, factor);
+  out.commaCutLeft = ScaleCoord(out.commaCutLeft, factor);
+  // 墨迹盒并集重算(与 Build() 同一算法)。
+  RECT ink = ShapeInkBox(out.shapes[0]);
+  if (out.commaInk.left < ink.left)
+    ink.left = out.commaInk.left;
+  if (out.commaInk.top < ink.top)
+    ink.top = out.commaInk.top;
+  if (out.commaInk.right > ink.right)
+    ink.right = out.commaInk.right;
+  if (out.commaInk.bottom > ink.bottom)
+    ink.bottom = out.commaInk.bottom;
+  out.ink = ink;
+  return out;
+}
+
 }  // namespace panel_fwicon
 }  // namespace fluxing
