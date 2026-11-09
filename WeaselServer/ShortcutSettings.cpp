@@ -2191,15 +2191,10 @@ LRESULT ShortcutSettings::OnCommand(HWND hwnd, WPARAM wp) {
       SaveAndDeploy();
       return 0;
     case ID_BTN_ADD:
-      // 简化: push 新行 placeholder,等 popover/capture
-      m_hotkeys.push_back(
-          MakeBuiltin(Action_CustomUser, L"always", L"",
-                      L"自定义 - "
-                      L"确认后记录"
-                      L"",  // 自定义 - 确认后记录
-                      L"custom: user_added", L"custom: user_added"));
-      PopulateTable();
-      RepaintLayered(hwnd);
+      // T105 (ADR 0046): 不再直接 push placeholder 行 —— 子 modal 收三要素
+      // (动作类型 / 动作值 / 触发条件) → BuildCustomRow 校验构造真实行 →
+      // PopulateTable 后 EnterCapturing 复用既有捕获 (含 popover 实时冲突检测)。
+      ShowAddModal();
       return 0;
     case ID_BTN_RESET: {
       // ⟳ 恢复默认: 弹确认后全 reset (spec §8 table decision)
@@ -2381,7 +2376,7 @@ bool ShortcutSettings::SaveAndDeploy() {
   // —— UI 在说谎,新快捷键其实永远不生效。现在按实际返回值给文案。
   if (s_hStatus && IsWindow(s_hStatus)) {
     std::wstring msg =
-        deployed ? L"✓ 已保存 · 已触发部署，新快捷键已生效"
+        deployed ? L"✓ 已保存 · 已触发部署，请在候选窗自按新快捷键验证"
                  : L"⚠ 已保存 · 部署未触发（新快捷键尚未生效）";
     // 跳过与备份也要说出来,静默处理等于悄悄丢用户的编辑。
     if (g_saveStats.skipped_no_action > 0) {
@@ -2453,4 +2448,317 @@ void ShortcutSettings::RepaintLayered(HWND hwnd) {
     RedrawWindow(hwnd, nullptr, nullptr,
                  RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
   }
+}
+
+// ============================================================================
+// T105 (ADR 0046 决策①②③) —「+ 自定义」子 modal + 自定义行构造
+// ============================================================================
+
+namespace {
+
+// send 的键名 / toggle 的选项名都会被 RenderRow 原样拼进 inline dict
+// (`- { when: X accept: "Y" send: Z }`) ⇒ 任何 YAML 结构字符或空白都会把
+// patch 打碎 (轻则部署失败, 重则吃掉整行)。构造阶段就拒掉, 不留到落盘。
+// 注意 `+` 是合法键名分隔符 (Control+Alt+K), 不能在坏字符集里。
+bool IsYamlUnsafeValue(const std::wstring& v) {
+  if (v.empty())
+    return true;
+  static const wchar_t kBad[] =
+      L"\"':{}[]`,?|><!%@&*#\t\r\n ";
+  return v.find_first_of(kBad) != std::wstring::npos;
+}
+
+// librime 的 option 名 (ascii_mode / full_shape / traditionalization ...)
+// 只含字母数字与 _ . —— 用它做 toggle 的合法性判据, 不放进未料到的字符。
+bool IsOptionName(const std::wstring& v) {
+  if (v.empty())
+    return false;
+  for (wchar_t c : v) {
+    const bool ok = (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') ||
+                    (c >= L'0' && c <= L'9') || c == L'_' || c == L'.';
+    if (!ok)
+      return false;
+  }
+  return true;
+}
+
+std::wstring TrimWs(const std::wstring& s) {
+  const size_t b = s.find_first_not_of(L" \t\r\n");
+  if (b == std::wstring::npos)
+    return std::wstring();
+  const size_t e = s.find_last_not_of(L" \t\r\n");
+  return s.substr(b, e - b + 1);
+}
+
+void SetModalError(HWND modal, const wchar_t* text) {
+  HWND e = GetDlgItem(modal, ShortcutSettings::ID_MODAL_ERR);
+  if (e)
+    SetWindowTextW(e, text ? text : L"");
+}
+
+}  // namespace
+
+HWND ShortcutSettings::s_hModal = nullptr;
+
+// 纯函数: 不碰 USER/GDI ⇒ 单测直接断言生产实现 (constitution R7)。
+bool ShortcutSettings::BuildCustomRow(const std::wstring& action_type,
+                                      const std::wstring& action_value,
+                                      const std::wstring& when, Hotkey* out) {
+  if (!out)
+    return false;
+  const std::wstring type = ToLower(TrimWs(action_type));
+  const std::wstring val = TrimWs(action_value);
+  std::wstring cond = ToLower(TrimWs(when));
+  if (cond.empty())
+    cond = L"always";
+  if (cond != L"always" && cond != L"composing" && cond != L"has_menu" &&
+      cond != L"paging")
+    return false;
+
+  Hotkey h{};
+  h.when = cond;
+  h.accept.clear();       // 键位留给随后的 EnterCapturing
+  h.accept_new.clear();   // 未定键 ⇒ SaveHotkeys 会跳过它, 不会凭空写 binding
+  h.baseline_index = -1;  // 自定义行不认领任何基线行
+  h.read_only = false;    // 可改键 / 可重置 (区别于 T111 的应用级只读行)
+  h.is_custom = true;
+  h.is_default = false;
+
+  if (type == L"select") {
+    // 与内置表写法保持一致: `send: 2` 选第 2 个候选 ⇒ 值是裸数字 1-9
+    if (val.size() != 1 || val[0] < L'1' || val[0] > L'9')
+      return false;
+    h.action = Action_SelectN;
+    h.action_desc = L"选择候选词 " + val;
+    h.action_yaml = L"send: " + val;
+  } else if (type == L"send") {
+    if (IsYamlUnsafeValue(val))
+      return false;
+    h.action = Action_CustomUser;
+    h.action_desc = L"发送按键 " + val;
+    h.action_yaml = L"send: " + val;
+  } else if (type == L"toggle") {
+    if (!IsOptionName(val))
+      return false;
+    h.action = Action_CustomUser;
+    h.action_desc = L"切换选项 " + val;
+    h.action_yaml = L"toggle: " + val;
+  } else {
+    return false;  // 未知动作类型
+  }
+  h.yaml_raw = h.action_yaml;  // 自定义行的 raw fallback (与 cpp:1080 惯例一致)
+  *out = h;
+  return true;
+}
+
+// 「+ 自定义」按钮的处理: 弹一个主窗的 WS_CHILD modal 收三要素。
+// ADR 0046 决策②: 不用 owned 顶层窗 —— 主面板是 WS_EX_LAYERED|TOPMOST, 顶层
+// 对话框会让主窗走 WM_KILLFOCUS / WM_ACTIVATEAPP 隐藏路径 (真机症状 = 一点
+// 「+ 自定义」整块面板消失)。子窗的焦点仍在同一顶层窗内, 面板不会走失。
+void ShortcutSettings::ShowAddModal() {
+  if (!s_hwnd || !IsWindow(s_hwnd))
+    return;
+  if (s_hModal && IsWindow(s_hModal))
+    return;  // 幂等: modal 已在 ⇒ 不重复创建
+
+  static bool s_modalClassRegistered = false;
+  if (!s_modalClassRegistered) {
+    WNDCLASSEXW wc = {};
+    wc.cbSize = sizeof(wc);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = &ShortcutSettings::AddModalProc;
+    wc.hInstance = GetModuleHandle(nullptr);
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = nullptr;  // 背景由 WM_PAINT 画 (ModalChrome)
+    wc.lpszClassName = L"FluxingShortcutAddModal";
+    if (!RegisterClassExW(&wc)) {
+      const DWORD err = GetLastError();
+      if (err != ERROR_CLASS_ALREADY_EXISTS) {
+        std::wcerr << L"[ShortcutSettings] add-modal RegisterClassEx failed, err="
+                   << err << std::endl;
+        return;
+      }
+    }
+    s_modalClassRegistered = true;
+  }
+
+  const int kW = 420;
+  const int kH = 286;
+  HWND parent = CreateWindowExW(
+      0, L"FluxingShortcutAddModal", L"",
+      WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, (kDialogW - kW) / 2,
+      (kDialogH - kH) / 2, kW, kH, s_hwnd, nullptr, GetModuleHandle(nullptr),
+      nullptr);
+  if (!parent) {
+    std::wcerr << L"[ShortcutSettings] add-modal CreateWindowExW failed, err="
+               << GetLastError() << std::endl;
+    return;
+  }
+  s_hModal = parent;
+
+  // 字体: 参数逐字仿 OnCreate (cpp:1875), 只创建一次复用, 避免每次开 modal
+  // 都泄漏一个 HFONT (主窗那份是每窗一次, modal 是每开一次)。
+  static HFONT hfUi = nullptr;
+  if (!hfUi) {
+    hfUi = CreateFontW(kUiFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                       CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                       VARIABLE_PITCH | FF_SWISS, L"Segoe UI Variable");
+  }
+  // hfUi 是静态存储局部 ⇒ 不能简单捕获 (C3495), 改为显式传参
+  auto setFont = [](HWND e, HFONT f) {
+    if (e && f)
+      SendMessageW(e, WM_SETFONT, reinterpret_cast<WPARAM>(f), TRUE);
+  };
+  auto makeStatic = [&](const wchar_t* text, UINT id, int x, int y, int w,
+                        int h) {
+    HWND e = CreateWindowExW(0, L"STATIC", text,
+                             WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, x, y, w,
+                             h, parent, reinterpret_cast<HMENU>(id),
+                             GetModuleHandle(nullptr), nullptr);
+    setFont(e, hfUi);
+    return e;
+  };
+  auto makeCombo = [&](UINT id, int x, int y, int w) {
+    HWND e = CreateWindowExW(
+        0, L"COMBOBOX", L"",
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP | CBS_DROPDOWNLIST |
+            CBS_HASSTRINGS | WS_VSCROLL,
+        x, y, w, 240, parent, reinterpret_cast<HMENU>(id),
+        GetModuleHandle(nullptr), nullptr);
+    setFont(e, hfUi);
+    return e;
+  };
+
+  const int kLabelX = 18;
+  const int kLabelW = 110;
+  const int kCtrlX = 134;
+  const int kCtrlW = kW - kCtrlX - 18;  // 右缘与左边距对称
+
+  makeStatic(L"添加自定义快捷键", 0, kLabelX, 14, kW - 2 * kLabelX, 24);
+  makeStatic(L"动作类型", 0, kLabelX, 54, kLabelW, 20);  // 动作类型
+  HWND hAct = makeCombo(ID_MODAL_ACTION, kCtrlX, 50, kCtrlW);
+  makeStatic(L"动作值", 0, kLabelX, 90, kLabelW, 20);  // 动作值
+  HWND hVal = CreateWindowExW(
+      0, L"EDIT", L"",
+      WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP | ES_AUTOHSCROLL,
+      kCtrlX, 88, kCtrlW, 24, parent, reinterpret_cast<HMENU>(ID_MODAL_VALUE),
+      GetModuleHandle(nullptr), nullptr);
+  setFont(hVal, hfUi);
+  makeStatic(L"触发条件", 0, kLabelX, 126, kLabelW, 20);  // 触发条件
+  HWND hWhen = makeCombo(ID_MODAL_WHEN, kCtrlX, 122, kCtrlW);
+  makeStatic(
+      L"send 填按键名（如 F7）；toggle 填选项名（如 ascii_mode）；"
+      L"选择候选词填 1-9",  // send/toggle/select 取值说明
+      0, kLabelX, 158, kW - 2 * kLabelX, 40);
+  HWND hErr = makeStatic(L"", ID_MODAL_ERR, kLabelX, 202, kW - 2 * kLabelX, 20);
+  (void)hErr;
+  (void)hAct;
+  (void)hWhen;
+  (void)hVal;
+
+  auto makeBtn = [&](const wchar_t* label, UINT id, int x, bool def) {
+    HWND e = CreateWindowExW(
+        0, L"BUTTON", label,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP |
+            (def ? BS_DEFPUSHBUTTON : BS_PUSHBUTTON),
+        x, 236, kBtnW, kBtnH, parent, reinterpret_cast<HMENU>(id),
+        GetModuleHandle(nullptr), nullptr);
+    setFont(e, hfUi);
+    return e;
+  };
+  const int kCancelX = kW - 18 - kBtnW;
+  makeBtn(L"确定", ID_MODAL_OK, kCancelX - kBtnGap - kBtnW, true);  // 确定
+  makeBtn(L"取消", ID_MODAL_CANCEL, kCancelX, false);               // 取消
+
+  if (hVal)
+    SetFocus(hVal);
+  RepaintLayered(s_hwnd);  // L97 fix: 新增子窗必须让分层父窗重合成
+}
+
+LRESULT CALLBACK ShortcutSettings::AddModalProc(HWND hwnd, UINT msg,
+                                                WPARAM wp, LPARAM lp) {
+  switch (msg) {
+    case WM_ERASEBKGND:
+      return 1;  // 背景由 WM_PAINT 一次画完, 避免闪白
+
+    case WM_PAINT: {
+      PAINTSTRUCT ps;
+      HDC hdc = BeginPaint(hwnd, &ps);
+      RECT rc;
+      GetClientRect(hwnd, &rc);
+      // 与主面板同一套圆角/渐变/描边, 不引入任何新颜色常量
+      ModalChrome::PaintBackgroundAndBorder(hdc, rc.right, rc.bottom, kBgTop,
+                                            kBgBot, kDlgRadius, kBorderColor);
+      EndPaint(hwnd, &ps);
+      return 0;
+    }
+
+    case WM_CTLCOLORSTATIC: {
+      HDC hdc = reinterpret_cast<HDC>(wp);
+      HWND target = reinterpret_cast<HWND>(lp);
+      SetBkColor(hdc, kBgTop);
+      SetTextColor(hdc, target == GetDlgItem(hwnd, ID_MODAL_ERR) ? kWarningText
+                                                                 : kTextColor);
+      static HBRUSH sb = nullptr;
+      if (!sb)
+        sb = CreateSolidBrush(kBgTop);
+      return reinterpret_cast<LRESULT>(sb);
+    }
+
+    case WM_CTLCOLOREDIT: {
+      HDC hdc = reinterpret_cast<HDC>(wp);
+      SetBkColor(hdc, kSearchBg);
+      SetTextColor(hdc, kTextColor);
+      static HBRUSH eb = nullptr;
+      if (!eb)
+        eb = CreateSolidBrush(kSearchBg);
+      return reinterpret_cast<LRESULT>(eb);
+    }
+
+    case WM_COMMAND: {
+      const WORD id = LOWORD(wp);
+      if (id == ID_MODAL_CANCEL) {
+        DestroyWindow(hwnd);
+        return 0;
+      }
+      if (id != ID_MODAL_OK)
+        return 0;
+      HWND hAct = GetDlgItem(hwnd, ID_MODAL_ACTION);
+      HWND hVal = GetDlgItem(hwnd, ID_MODAL_VALUE);
+      HWND hWhen = GetDlgItem(hwnd, ID_MODAL_WHEN);
+      static const wchar_t* kActionTypes[] = {L"send", L"toggle", L"select"};
+      static const wchar_t* kWhens[] = {L"always", L"composing", L"has_menu",
+                                        L"paging"};
+      const int ai = static_cast<int>(SendMessageW(hAct, CB_GETCURSEL, 0, 0));
+      const int wi = static_cast<int>(SendMessageW(hWhen, CB_GETCURSEL, 0, 0));
+      if (ai < 0 || ai > 2 || wi < 0 || wi > 3) {
+        SetModalError(hwnd, L"请先选择动作类型与触发条件");
+        return 0;
+      }
+      wchar_t buf[160] = {};
+      GetWindowTextW(hVal, buf, 159);
+      Hotkey row{};
+      if (!BuildCustomRow(kActionTypes[ai], buf, kWhens[wi], &row)) {
+        SetModalError(hwnd, L"动作值不合法：send 填按键名，toggle 填选项名，"
+                            L"选择候选词填 1-9");
+        return 0;
+      }
+      // 成功路径的顺序是硬性的: 先入表 → 关 modal → 重建列表 → 进入捕获态。
+      // PopulateTable() 必须在 EnterCapturing() 之前, 否则新行下标与表格行号
+      // 不同步, 捕获到的键会写到别的行上 (ADR 0046 决策③)。
+      m_hotkeys.push_back(row);
+      DestroyWindow(hwnd);
+      PopulateTable();
+      EnterCapturing(static_cast<int>(m_hotkeys.size()) - 1);
+      RepaintLayered(s_hwnd);
+      return 0;
+    }
+
+    case WM_DESTROY:
+      if (s_hModal == hwnd)
+        s_hModal = nullptr;
+      return 0;
+  }
+  return DefWindowProcW(hwnd, msg, wp, lp);
 }

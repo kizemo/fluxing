@@ -185,6 +185,15 @@ class ShortcutSettings {
   static constexpr UINT ID_POPOVER = 2120;
   // spec 095: 「界面 > 快捷面板常驻」勾选框 ID(2130 段空闲)。
   static constexpr UINT ID_CHK_ALWAYS_SHOW = 2130;
+  // T105 (ADR 0046 决策②③):「+ 自定义」子 modal 的控件 ID (2140 段空闲)。
+  // modal 收三要素 (动作类型 / 动作值 / 触发条件), 确定后交给 BuildCustomRow
+  // 构造真实自定义行, 再复用已上线的 EnterCapturing 捕获新键。
+  static constexpr UINT ID_MODAL_ACTION = 2140;
+  static constexpr UINT ID_MODAL_VALUE = 2141;
+  static constexpr UINT ID_MODAL_WHEN = 2142;
+  static constexpr UINT ID_MODAL_OK = 2143;
+  static constexpr UINT ID_MODAL_CANCEL = 2144;
+  static constexpr UINT ID_MODAL_ERR = 2145;
 
   // T111 fix: popover 定位。原实现 CreateWindowExW 传 CW_USEDEFAULT 且全文件没有任何
   // MoveWindow / SetWindowPos ⇒ 提示窗落在系统默认位置(真机实测 x=2721, 已超出
@@ -198,6 +207,15 @@ class ShortcutSettings {
   // 优先放在行右侧 + gap 处、垂直居中; 右侧放不下翻到左侧; 仍越界则夹进工作区。
   static PopoverPlace ComputePopoverPlace(RECT rowScreen, RECT work, int pw,
                                           int ph, int gap);
+
+  // T105 (ADR 0046 决策③):「+ 自定义」modal 确定后的行构造 —— 纯函数,
+  // 不碰 USER/GDI ⇒ 单测可直接调生产实现断言 (constitution R7)。
+  // action_type ∈ {send, toggle, select}; select 的 action_value 是 1-9 单个数字;
+  // when ∈ {always, composing, has_menu, paging} (空按 always 处理)。
+  // 校验不过 ⇒ false 且 *out 不写; 通过 ⇒ is_custom=true / accept 空 (待定键) 的行。
+  static bool BuildCustomRow(const std::wstring& action_type,
+                             const std::wstring& action_value,
+                             const std::wstring& when, Hotkey* out);
 
   // 静态 hook proc (WH_KEYBOARD_LL)
   static LRESULT CALLBACK LowLevelKeyboardProc(int, WPARAM, LPARAM);
@@ -298,6 +316,11 @@ class ShortcutSettings {
   static std::wstring ToLower(const std::wstring& s);
   static bool ContainsCI(const std::wstring& h, const std::wstring& n);
   static void RepaintLayered(HWND hwnd);  // L97 fix
+
+  // T105:「+ 自定义」子 modal (WS_CHILD, 不抢主窗前台 ⇒ 面板不会走失焦隐藏)
+  static void ShowAddModal();
+  static LRESULT CALLBACK AddModalProc(HWND, UINT, WPARAM, LPARAM);
+  static HWND s_hModal;
 
   // 数据 (in-memory)
   static std::vector<Hotkey> m_hotkeys;

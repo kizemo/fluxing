@@ -920,6 +920,81 @@ static void TestT111PopoverPlacement() {
   }
 }
 
+// ── T105: 「+ 自定义」modal 的行构造（纯函数，无窗口）+ 落盘 ────────────
+// spec 045 design §7.3「+ 自定义」；ADR 0046 决策③。
+// modal 只负责收集三要素，行由 BuildCustomRow 构造 ⇒ 本用例覆盖 modal 的
+// 全部业务效果（能构造出真实行 + 能被 SaveHotkeys 落盘 + 不泄漏应用级行）。
+static void TestT105BuildCustomRow() {
+  using HK = ShortcutSettings::Hotkey;
+  HK h;
+  // select: 数字 → send: N（与内置表 "send: 2" 同构）
+  EXPECT(ShortcutSettings::BuildCustomRow(L"select", L"9", L"paging", &h));
+  EXPECT(h.action == ShortcutSettings::Action_SelectN);
+  EXPECT(h.action_yaml == L"send: 9");
+  EXPECT(h.when == L"paging");
+  EXPECT(h.is_custom && !h.is_default);
+  EXPECT(h.baseline_index == -1 && !h.read_only);
+  EXPECT(h.accept.empty() && h.accept_new.empty());  // 待 popover 捕获
+  EXPECT(h.yaml_raw == h.action_yaml);               // 无 yaml 原文可回填
+
+  // toggle: 大小写与首尾空白被吃，空 when → always
+  EXPECT(ShortcutSettings::BuildCustomRow(L"TOGGLE", L"  ascii_mode ", L"", &h));
+  EXPECT(h.action == ShortcutSettings::Action_CustomUser);
+  EXPECT(h.action_yaml == L"toggle: ascii_mode");
+  EXPECT(h.when == L"always");
+
+  // send: 组合键透传
+  EXPECT(ShortcutSettings::BuildCustomRow(L"send", L"Control+Alt+F12", L"always", &h));
+  EXPECT(h.action == ShortcutSettings::Action_CustomUser);
+  EXPECT(h.action_yaml == L"send: Control+Alt+F12");
+  EXPECT(h.when == L"always");
+
+  // 反例：非法输入一律拒绝（modal 的校验全靠这里）
+  EXPECT(!ShortcutSettings::BuildCustomRow(L"select", L"   ", L"paging", &h));
+  EXPECT(!ShortcutSettings::BuildCustomRow(L"select", L"0", L"paging", &h));
+  EXPECT(!ShortcutSettings::BuildCustomRow(L"select", L"10", L"paging", &h));
+  EXPECT(!ShortcutSettings::BuildCustomRow(L"select", L"a", L"paging", &h));
+  EXPECT(!ShortcutSettings::BuildCustomRow(L"macro", L"Control+x", L"paging", &h));
+  EXPECT(!ShortcutSettings::BuildCustomRow(L"send", L"Control+x", L"never", &h));
+  EXPECT(!ShortcutSettings::BuildCustomRow(L"send", L"Control:x", L"paging", &h));
+  EXPECT(!ShortcutSettings::BuildCustomRow(L"send", L"a b", L"paging", &h));
+  EXPECT(!ShortcutSettings::BuildCustomRow(L"toggle", L"ascii punct", L"", &h));
+  EXPECT(!ShortcutSettings::BuildCustomRow(L"send", L"Control+x", L"paging", nullptr));
+}
+
+static void TestT105CustomRowPersistence() {
+  using SS = ShortcutSettings;
+  const std::wstring p = TempStatePath(L"fluxing_ts_t105_custom.yaml");
+  std::vector<SS::Hotkey> rows;
+  rows.push_back(MakeHk(L"Shift+space", L"toggle: ascii_mode", true));
+  rows.push_back(MakeHk(L"Control+comma", L"select_candidate: 2", true));
+  rows[1].read_only = true;   // 应用级快捷键行：只读，永不落盘（T111）
+  rows.push_back(MakeHk(L"Control+period", L"toggle: ascii_punct", true));
+
+  SS::Hotkey pending;
+  EXPECT(SS::BuildCustomRow(L"select", L"9", L"paging", &pending));
+  rows.push_back(pending);
+
+  // ① 只加行、尚未在 popover 里定键 ⇒ 保存成功但不写 bindings
+  EXPECT(SS::SaveHotkeys(p, rows));
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(raw.find("send: 9") == std::string::npos);
+
+  // ② 定键之后 ⇒ 落盘，且 when: paging 随行写出
+  rows.back().accept = L"Control+Alt+K";
+  EXPECT(SS::SaveHotkeys(p, rows));
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(raw.find("send: 9") != std::string::npos);
+  EXPECT(raw.find("when: paging") != std::string::npos);
+  EXPECT(raw.find("Control+Alt+K") != std::string::npos);
+
+  // ③ 只读的应用级行始终不泄漏进 bindings
+  EXPECT(raw.find("select_candidate") == std::string::npos);
+
+  ::DeleteFileW(p.c_str());
+}
+
 }  // namespace test
 
 int wmain(int /*argc*/, wchar_t** /*argv*/) {
@@ -960,6 +1035,9 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
   TestT111SelfHealsLegacyBlock();
   TestT111AppLevelScope();
   TestT111PopoverPlacement();
+  // T105: 「+ 自定义」modal 的行构造与落盘
+  TestT105BuildCustomRow();
+  TestT105CustomRowPersistence();
   std::wcout << L"[TestShortcutSettings] PASS=" << s_pass
               << L" FAIL=" << s_fail << std::endl;
   return s_fail == 0 ? 0 : 1;
