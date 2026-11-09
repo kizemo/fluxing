@@ -1107,6 +1107,29 @@ void TestT301ConflictDetectable() {
   EXPECT(SS::CheckConflictAgainst(rows, L"", L"always", -1).score == 0);
 }
 
+// T203-fix: 「未保存修改」计数口径 —— 状态行与关闭确认共用同一实现。
+// 回归目标: 状态行说「N 处修改」时, 点取消/点 ✕ 必须真的弹确认框
+// (真机事故: 状态行显示「● 未保存 (1 修改)」, 但点右上角 ✕ 面板直接消失,
+//  确认框被面板的失焦自毁连带关掉, 用户这一轮修改被静默丢弃)。
+void TestT203DirtyCount() {
+  std::vector<SS::Hotkey> rows(3);
+  rows[0].accept = L"Control+Alt+K";
+  rows[0].accept_new.clear();  // 未改
+  rows[1].accept = L"Control+Alt+Z";
+  rows[1].accept_new = L"Control+Alt+J";  // 改了
+  rows[2].accept = L"Control+Alt+M";
+  rows[2].accept_new = L"Control+Alt+M";  // accept_new == accept ⇒ 算未改
+
+  EXPECT(SS::CountDirtyChanges(rows) == 1);
+  EXPECT(SS::CountDirtyChanges(std::vector<SS::Hotkey>()) == 0);
+
+  // accept_new 为空(仅捕获中、尚未落定)不算修改
+  std::vector<SS::Hotkey> pending(1);
+  pending[0].accept = L"F7";
+  pending[0].accept_new.clear();
+  EXPECT(SS::CountDirtyChanges(pending) == 0);
+}
+
 // T302: 写出去的 YAML 必须能原样读回来 (round-trip)。
 void TestT302YamlRoundTrip() {
   const std::wstring p = TempYaml(L"t302");
@@ -1258,6 +1281,8 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
   TestT105CustomRowPersistence();
   // T301-T304: 判定 / 往返 / 同路径 / 保存即部署 (四条连起来才有意义)
   TestT301ConflictDetectable();
+  // T203-fix: 未保存修改计数口径 (状态行与关闭确认共用)
+  TestT203DirtyCount();
   TestT302YamlRoundTrip();
   TestT303SaveAndLoadSamePath();
   TestT304DeployTriggeredOnceAfterSave();
