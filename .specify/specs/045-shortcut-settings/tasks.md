@@ -30,16 +30,16 @@
 
 ## P2 — 界面补全
 
-- [ ] **T201 filter chips + luna_pinyin 下拉** — design §2.1 有「全部 / 编辑类 / …」筛选条与方案下拉，现在只建了 search EDIT，`s_hToolbar` 恒 `nullptr`。
-- [ ] **T202 圆形 ✕ 关闭键** — 画在标题栏右侧，但**没有 `WM_LBUTTONDOWN` 处理**，点了没反应。
-- [ ] **T203 取消时的未保存确认** — design T19 要求「取消」在有未保存修改时弹确认，当前无。
+- [x] **T201 filter chips + luna_pinyin 下拉** — design §2.1 有「全部 / 编辑类 / …」筛选条与方案下拉，现在只建了 search EDIT，`s_hToolbar` 恒 `nullptr`。 **(2026-11-09 完成: chips 五分类（全部/切换/选词/面板/自定义）= OnPaint 自绘 + WM_LBUTTONDOWN 命中，绘制与命中共用 ChipRect，错不开；s_filterCategory 参与 PopulateTable 前置过滤。方案下拉 = 主窗直接子控件 COMBOBOX（CBS_DROPDOWNLIST，ID_SCHEME=2160），首项固定「全局」→ default.custom.yaml，其余项取 ParentDirOf(s_yamlPath) 下 *.schema.yaml 词干；切换前统计 dirty 并弹中文确认，拒绝则回滚选中项。死成员 s_hToolbar 已删。已知限制: 用户数据目录下无 *.schema.yaml 时下拉只有「全局」一项。WeaselServer 构建通过）**
+- [x] **T202 圆形 ✕ 关闭键** — 画在标题栏右侧，但**没有 `WM_LBUTTONDOWN` 处理**，点了没反应。 **(2026-11-09 完成: WndProc 新增 case WM_LBUTTONDOWN，HitClose 以圆心 + 4px 容差判定，命中即 RequestCancel()；绘制由 Ellipse 改 RoundRect（小尺寸 Ellipse 会光栅化成四角星），圆心与命中判定共用 kCloseCx/kCloseCy/kCloseR 常量）**
+- [x] **T203 取消时的未保存确认** — design T19 要求「取消」在有未保存修改时弹确认，当前无。 **(2026-11-09 完成: 新增 ShortcutSettings::RequestCancel()，判据与 RefreshStatus 一致（accept_new 非空且 != accept）；ID_BTN_CANCEL 与圆形关闭键走同一入口；有未保存修改时弹中文 MessageBoxW 确认，默认按钮为「否」）**
 
 ## 测试缺口（design §11 矩阵）
 
-- [ ] **T301 把 `LoadHotkeys` / `SaveHotkeys` / `CheckConflict` 提到可测入口** — 三者当前是 private ⇒ **零测试**；这正是 T001/T002 没被发现的原因。
-- [ ] **T302 round-trip：写入后重开能读回** — 这条测试本可立刻抓到 T001 的 off-by-two。
-- [ ] **T303 写盘路径 == librime 读盘路径断言** — 抓 T002。
-- [ ] **T304 deploy 触发断言** — 抓 T003（现在 `SpawnDeploy` 会真的拉起 `WeaselDeployer.exe`，单测里需要可注入的替身）。
+- [x] **T301 把 `LoadHotkeys` / `SaveHotkeys` / `CheckConflict` 提到可测入口** — 三者当前是 private ⇒ **零测试**；这正是 T001/T002 没被发现的原因。 **(2026-11-09 完成: ShortcutSettings.h public 区新增 ConflictReport / CheckConflictAgainst / CheckConflict / LoadHotkeys / SaveAndDeploy；TestT301ConflictDetectable 六条断言 PASS）**
+- [x] **T302 round-trip：写入后重开能读回** — 这条测试本可立刻抓到 T001 的 off-by-two。 **(2026-11-09 完成: TestT302YamlRoundTrip 抓出并修掉一个真实 P0 —— RenderRow 写出的是 "- { when: ..."（连字符与左花括号之间有空格），而 LoadHotkeys 只认 trimmed[1] 即左花括号（紧贴）；自己写出的行永远读不回来，症状=保存成功但重开还是旧键位。改为 find 容错定位左花括号，不改写入端以避免破坏既存用户文件兼容性）**
+- [x] **T303 写盘路径 == librime 读盘路径断言** — 抓 T002。 **(2026-11-09 完成: TestT303SaveAndLoadSamePath 用 SetYamlPath + MutableHotkeys + SaveAndDeploy 断言写盘路径与读回路径一致）**
+- [x] **T304 deploy 触发断言** — 抓 T003（现在 `SpawnDeploy` 会真的拉起 `WeaselDeployer.exe`，单测里需要可注入的替身）。 **(2026-11-09 完成: 新增可注入替身 using DeployLauncher = bool (*)(const std::wstring&) + SetDeployLauncherForTest；TestT304DeployTriggeredOnceAfterSave 断言 g_deployCalls==1 且目标路径小写含 weaseldeployer.exe，SetYamlPath 传空后返回 false 且不部署）**
 
 ## 本批（批次 L）已交付的入口
 
