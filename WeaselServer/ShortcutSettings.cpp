@@ -25,7 +25,9 @@
 HWND ShortcutSettings::s_hwnd = nullptr;
 HWND ShortcutSettings::s_hTable = nullptr;
 HWND ShortcutSettings::s_hStatus = nullptr;
-HWND ShortcutSettings::s_hToolbar = nullptr;
+// T201: 筛选 chips 是自绘件, 没有控件句柄; 这里放方案下拉与当前分类。
+HWND ShortcutSettings::s_hComboScheme = nullptr;
+int ShortcutSettings::s_filterCategory = -1;
 HWND ShortcutSettings::s_hSearch = nullptr;
 HWND ShortcutSettings::s_hPopover = nullptr;
 HWND ShortcutSettings::s_hBtnAdd = nullptr;
@@ -72,6 +74,134 @@ constexpr int kDlgRadius = 14;  // radius.lg
 constexpr int kPrefsH = 30;
 // spec 095: 「界面」分组行 y —— 工具栏行之后、状态行之前。
 constexpr int kPrefsY = kTitleH + kToolbarH;
+
+// ===== T201: 工具栏行几何 (筛选 chips + 方案下拉 + 搜索框, 同一行) =====
+// 语义固定为「-1 = 全部, 1 = 切换, 2 = 选词, 3 = 面板, 4 = 自定义」,
+// 与 RowCategory 的返回值一一对应 ⇒ chip 下标与分类值只在 ChipCategory 里换算。
+constexpr int kChipX = kGap;         // 10
+constexpr int kChipY = kTitleH + kGap;
+constexpr int kChipW = 58;
+constexpr int kChipH = 28;
+constexpr int kChipGap = 4;
+constexpr int kChipCount = 5;
+constexpr int kChipRight = kChipX + kChipCount * (kChipW + kChipGap);  // 320
+constexpr int kComboX = kChipRight + kGap;                             // 330
+constexpr int kComboW = 148;
+constexpr int kSearchX = kComboX + kComboW + kGap;  // 488
+constexpr int kSearchW = kDialogW - kGap - kSearchX;
+// T202: 圆形 ✕ 的圆心/半径 —— 绘制与命中判定共用同一组常量 (避免两处各写一份)
+constexpr int kCloseCx = kDialogW - 24;
+constexpr int kCloseCy = 18;
+constexpr int kCloseR = 10;
+
+inline int ChipCategory(int chip) { return chip <= 0 ? -1 : chip; }
+
+inline RECT ChipRect(int chip) {
+  RECT r = {};
+  r.left = kChipX + chip * (kChipW + kChipGap);
+  r.top = kChipY;
+  r.right = r.left + kChipW;
+  r.bottom = r.top + kChipH;
+  return r;
+}
+
+inline const wchar_t* ChipLabel(int chip) {
+  switch (chip) {
+    case 0:
+      return L"全部";
+    case 1:
+      return L"切换";
+    case 2:
+      return L"选词";
+    case 3:
+      return L"面板";
+    case 4:
+      return L"自定义";
+    default:
+      return L"";
+  }
+}
+
+// 命中判定: 返回 chip 下标, 未命中 -1
+inline int HitChip(int x, int y) {
+  for (int i = 0; i < kChipCount; ++i) {
+    const RECT r = ChipRect(i);
+    if (x >= r.left && x < r.right && y >= r.top && y < r.bottom)
+      return i;
+  }
+  return -1;
+}
+
+// T202: 圆形 ✕ 命中 (半径放宽 4px, 20px 的小圆点按纯几何判定太难点中)
+inline bool HitClose(int x, int y) {
+  const int dx = x - kCloseCx;
+  const int dy = y - kCloseCy;
+  return dx * dx + dy * dy <= (kCloseR + 4) * (kCloseR + 4);
+}
+
+// 行 → 分类。1 切换 / 2 选词 / 3 面板 / 4 自定义; 0 = 未归类(只在「全部」显示)。
+inline int RowCategory(const ShortcutSettings::Hotkey& h) {
+  switch (h.action) {
+    case ShortcutSettings::Action_ToggleChinese:
+    case ShortcutSettings::Action_ToggleFullHalf:
+    case ShortcutSettings::Action_ToggleAsciiPunct:
+    case ShortcutSettings::Action_ToggleTrad:
+      return 1;
+    case ShortcutSettings::Action_PageUp:
+    case ShortcutSettings::Action_PageDown:
+    case ShortcutSettings::Action_SelectN:
+      return 2;
+    case ShortcutSettings::Action_OpenQuickPanel:
+    case ShortcutSettings::Action_OpenPhrases:
+    case ShortcutSettings::Action_ReselectCandidate:
+    case ShortcutSettings::Action_SecondCandidate:
+    case ShortcutSettings::Action_TriggerDeploy:
+    case ShortcutSettings::Action_VerifyHotkey:
+      return 3;
+    default:
+      break;
+  }
+  return h.is_custom ? 4 : 0;
+}
+
+inline std::wstring BaseNameOf(const std::wstring& path) {
+  const size_t pos = path.find_last_of(L"\\/");
+  return pos == std::wstring::npos ? path : path.substr(pos + 1);
+}
+
+// T201: 方案下拉的候选 —— <用户目录>\*.schema.yaml 的词干。
+// 文件系统枚举顺序不保证可复现, 这里冒泡排序, 让同一个目录每次给同样的顺序。
+inline std::vector<std::wstring> ListSchemaStems(const std::wstring& dir) {
+  std::vector<std::wstring> out;
+  if (dir.empty())
+    return out;
+  WIN32_FIND_DATAW fd = {};
+  HANDLE h = FindFirstFileW((dir + L"\\*.schema.yaml").c_str(), &fd);
+  if (h == INVALID_HANDLE_VALUE)
+    return out;
+  const std::wstring suffix = L".schema.yaml";
+  do {
+    const std::wstring name = fd.cFileName;
+    if (name.size() > suffix.size() &&
+        name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      out.push_back(name.substr(0, name.size() - suffix.size()));
+    }
+  } while (FindNextFileW(h, &fd));
+  FindClose(h);
+  for (size_t i = 0; i + 1 < out.size(); ++i) {
+    for (size_t j = i + 1; j < out.size(); ++j) {
+      if (out[j] < out[i]) {
+        const std::wstring t = out[i];
+        out[i] = out[j];
+        out[j] = t;
+      }
+    }
+  }
+  return out;
+}
+
+// 方案下拉当前选中项 (切换失败要能回指上一项)
+int g_schemePrevSel = 0;
 
 constexpr int kPopoverW = 240;  // size.shortcut.popover.w
 constexpr int kPopoverH = 100;  // size.shortcut.popover.h
@@ -230,6 +360,14 @@ void ShortcutSettings::Show() {
     return;
   }
 
+  // 3.5 必须显式开启分层合成 (spec 045 P0「点了完全没反应」根因):
+  // WS_EX_LAYERED 窗口在调用 SetLayeredWindowAttributes 或 UpdateLayeredWindow
+  // 之前不参与 DWM 合成 —— 窗口对象真实存在、UIA 能枚举到、探针能点中控件,
+  // 但屏幕上不绘制任何像素。本窗口走的是普通 GDI WM_PAINT 自绘(不是
+  // UpdateLayeredWindow 位图模型), 所以这里补 LWA_ALPHA=255 (完全不透明),
+  // 既恢复合成, 又不改变任何既有绘制结果。
+  SetLayeredWindowAttributes(s_hwnd, 0, 255, LWA_ALPHA);
+
   // 4. 居中 + 置顶
   CenterOnPrimaryMonitor(s_hwnd, kDialogW, kDialogH);
   SetWindowPos(s_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
@@ -264,7 +402,7 @@ void ShortcutSettings::Hide() {
     DestroyWindow(s_hwnd);
   }
   s_hwnd = nullptr;
-  s_hTable = s_hStatus = s_hToolbar = s_hSearch = s_hPopover = nullptr;
+  s_hTable = s_hStatus = s_hComboScheme = s_hSearch = s_hPopover = nullptr;
   s_hBtnAdd = s_hBtnReset = s_hBtnImport = s_hBtnExport = nullptr;
   s_hBtnCancel = s_hBtnSave = nullptr;
   s_hChkAlwaysShow = nullptr;
@@ -516,10 +654,15 @@ bool ShortcutSettings::LoadHotkeys(const std::wstring& path,
     // 已 inBindings: 找 "{ when: ..., accept: ..., ... }" 行
     if (trimmed.empty() || trimmed[0] == L'#' || trimmed[0] == L'-' ||
         trimmed[0] == L'[') {
-      // '-' 开头可能是 - { ... } 但这里简化: 看 { 紧跟 - 1 步
-      if (!trimmed.empty() && trimmed.size() >= 3 && trimmed[0] == L'-' &&
-          trimmed[1] == L'{' && trimmed.back() == L'}') {
-        std::wstring body = trimmed.substr(2, trimmed.size() - 3);
+      // T302: "- { ... }" 里 '-' 与 '{' 之间有无空白都得认。落盘走 RenderRow,
+      // 写出来的是 "- {" (带一个空格); 旧实现只认 "-{" 紧贴写法 ⇒ 自己写出去
+      // 的行永远读不回来 (症状: 保存成功、重新打开面板却还是旧键位)。
+      // 改为先定位第一个 '{', 再按最后一个 '}' 切出 inline dict 正文。
+      const size_t brace =
+          trimmed.empty() ? std::wstring::npos : trimmed.find(L'{', 1);
+      if (!trimmed.empty() && trimmed[0] == L'-' && trimmed.back() == L'}' &&
+          brace != std::wstring::npos && brace + 1 <= trimmed.size() - 1) {
+        std::wstring body = trimmed.substr(brace + 1, trimmed.size() - brace - 2);
         Hotkey hk;
         hk.is_custom = false;
         hk.is_default = false;
@@ -1299,7 +1442,10 @@ bool CaptureHookChord(const KBDLLHOOKSTRUCT* ks,
 
 // ===== Conflict detection =====
 
-ShortcutSettings::ConflictReport ShortcutSettings::CheckConflict(
+// T301: 判定逻辑只在这里有一份 —— 入参传行, 不读实例状态, 单测可直接构造
+// 行集合并断言「这个组合会不会撞」。CheckConflict() 只是它的生产薄包装。
+ShortcutSettings::ConflictReport ShortcutSettings::CheckConflictAgainst(
+    const std::vector<Hotkey>& rows,
     const std::wstring& combo,
     const std::wstring& when,
     int exclude_row) {
@@ -1321,10 +1467,10 @@ ShortcutSettings::ConflictReport ShortcutSettings::CheckConflict(
   }
 
   // 2) 同表 cross-row duplicate
-  for (int i = 0; i < static_cast<int>(m_hotkeys.size()); ++i) {
+  for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
     if (i == exclude_row)
       continue;
-    const auto& h = m_hotkeys[i];
+    const auto& h = rows[i];
     std::wstring eff = h.accept_new.empty() ? h.accept : h.accept_new;
     if (fluxing::AcceptEquals(eff, combo) && h.when == when) {
       r.score = 2;
@@ -1352,6 +1498,14 @@ ShortcutSettings::ConflictReport ShortcutSettings::CheckConflict(
   return r;
 }
 
+// T301: 生产路径薄包装 —— 面板用当前表调用, 判定逻辑复用 CheckConflictAgainst。
+ShortcutSettings::ConflictReport ShortcutSettings::CheckConflict(
+    const std::wstring& combo,
+    const std::wstring& when,
+    int exclude_row) {
+  return CheckConflictAgainst(m_hotkeys, combo, when, exclude_row);
+}
+
 // ===== Table populate / update =====
 
 void ShortcutSettings::PopulateTable() {
@@ -1367,6 +1521,10 @@ void ShortcutSettings::PopulateTable() {
   for (int i = 0; i < static_cast<int>(m_hotkeys.size()); ++i) {
     const auto& h = m_hotkeys[i];
     std::wstring eff = h.accept_new.empty() ? h.accept : h.accept_new;
+    // T201: 分类 chip 过滤。s_filterCategory <= 0 表示「全部」, 不过滤。
+    if (s_filterCategory > 0 && RowCategory(h) != s_filterCategory) {
+      continue;
+    }
     if (!s_filterQuery.empty() && !ContainsCI(h.action_desc, s_filterQuery) &&
         !ContainsCI(eff, s_filterQuery) && !ContainsCI(h.when, s_filterQuery) &&
         !ContainsCI(h.action_yaml, s_filterQuery)) {
@@ -1845,6 +2003,24 @@ LRESULT CALLBACK ShortcutSettings::WndProc(HWND hwnd,
       }
       return 0;
     }
+    case WM_LBUTTONDOWN: {
+      // T201/T202: chips 与圆形 ✕ 都是自绘的(没有子控件), 命中判定只能在这里做。
+      // 本 TU 没 include <windowsx.h> ⇒ 不能用 GET_X_LPARAM, 按 short 拆。
+      const int x = static_cast<short>(LOWORD(lp));
+      const int y = static_cast<short>(HIWORD(lp));
+      if (HitClose(x, y)) {
+        RequestCancel();
+        return 0;
+      }
+      const int chip = HitChip(x, y);
+      if (chip >= 0) {
+        s_filterCategory = ChipCategory(chip);
+        PopulateTable();
+        RepaintLayered(hwnd);
+        return 0;
+      }
+      return DefWindowProcW(hwnd, msg, wp, lp);
+    }
     case WM_NCDESTROY:
       return OnDestroy(hwnd);
     default:
@@ -1853,11 +2029,14 @@ LRESULT CALLBACK ShortcutSettings::WndProc(HWND hwnd,
 }
 
 LRESULT ShortcutSettings::OnCreate(HWND hwnd) {
-  // v0.19.0.31 fix: 删 SetLayeredWindowAttributes(LWA_ALPHA)。
-  // ShortcutSettings 没有 UpdateLayeredWindow 路径 (RedrawWindow),
-  // 但保留 LWA_ALPHA 跟后续可能在 WndProc 加的 ULW_ALPHA / memDc 画 chrome
-  // 路径互斥。原 v0.19.0.28-30 chrome 只画 title bar 30-56px, body 空。
-  // 修法:删 LWA_ALPHA + OnPaint 改画整 client (见 OnPaint fix)。
+  // 历史注记 —— 勿照抄旧结论: v0.19.0.31 曾「删掉
+  // SetLayeredWindowAttributes(LWA_ALPHA)」, 理由是当时 chrome 只画 title bar。
+  // 该结论对本窗口已经不成立: CreateWindowExW 仍带 WS_EX_LAYERED, 而全文件
+  // 没有任何 UpdateLayeredWindow 路径 ⇒ 只要缺 SetLayeredWindowAttributes,
+  // 分层窗口就不参与 DWM 合成: 窗口对象存在、UIA 能点到控件, 但屏幕一像素
+  // 都不显示(批次 R 真机症状「点快捷键设置完全没反应」即此)。
+  // 现在 Show() 在 CreateWindowExW 之后立刻调用 SetLayeredWindowAttributes,
+  // 两者必须成对存在, 不要单独删除其中任何一个。
 
   // 几何 (runtime)
   // spec 095: 「界面」分组行(kPrefsH)插在工具栏行与状态行之间 ⇒ 表格变矮、
@@ -1887,12 +2066,49 @@ LRESULT ShortcutSettings::OnCreate(HWND hwnd) {
   (void)hfMono;
   (void)hfTitle;  // set on controls below
 
-  // Toolbar row: filter chips (label only,非交互简化)+ search + 提示
+  // Toolbar row (T201): filter chips(自绘,见 OnPaint)+ 方案下拉 + 搜索框。
+  // chips 不是子控件 ⇒ 这里不创建任何 chip 窗口, 命中判定在 WndProc 的
+  // WM_LBUTTONDOWN 里做。
   int toolY = kTitleH + kGap;
+  s_filterCategory = -1;  // 每次打开都回到「全部」
+
+  // T201 方案下拉: 首项固定「全局」= default.custom.yaml(与 T110 基线机制
+  // 一致), 其余项来自同目录 *.schema.yaml 的词干。默认选中当前 s_yamlPath
+  // 对应的那一项 ⇒ 不改方案时行为与今天完全一致。
+  s_hComboScheme = CreateWindowExW(
+      0, L"COMBOBOX", L"",
+      WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST,
+      kComboX, toolY, kComboW, 200, hwnd, reinterpret_cast<HMENU>(ID_SCHEME),
+      GetModuleHandle(nullptr), nullptr);
+  if (s_hComboScheme) {
+    SendMessageW(s_hComboScheme, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(L"全局"));
+    const std::wstring schemeDir = ParentDirOf(s_yamlPath);
+    const std::vector<std::wstring> stems = ListSchemaStems(schemeDir);
+    for (size_t i = 0; i < stems.size(); ++i) {
+      SendMessageW(s_hComboScheme, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(stems[i].c_str()));
+    }
+    int sel = 0;
+    const std::wstring curStem = BaseNameOf(s_yamlPath);
+    for (size_t i = 0; i < stems.size(); ++i) {
+      if (_wcsicmp(stems[i].c_str(), curStem.c_str()) == 0) {
+        sel = static_cast<int>(i) + 1;
+        break;
+      }
+    }
+    SendMessageW(s_hComboScheme, CB_SETCURSEL, sel, 0);
+    g_schemePrevSel = sel;
+    if (hfUi) {
+      SendMessageW(s_hComboScheme, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi),
+                   TRUE);
+    }
+  }
+
   s_hSearch = CreateWindowExW(
       WS_EX_CLIENTEDGE, L"EDIT", L"",
-      WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, kDialogW / 2, toolY,
-      kDialogW / 2 - 2 * kGap, 28, hwnd, reinterpret_cast<HMENU>(ID_SEARCH),
+      WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, kSearchX, toolY,
+      kSearchW, 28, hwnd, reinterpret_cast<HMENU>(ID_SEARCH),
       GetModuleHandle(nullptr), nullptr);
   if (s_hSearch && hfUi) {
     SendMessageW(s_hSearch, WM_SETFONT, reinterpret_cast<WPARAM>(hfUi), TRUE);
@@ -2017,7 +2233,7 @@ LRESULT ShortcutSettings::OnDestroy(HWND hwnd) {
     s_hKeyboardHook = nullptr;
   }
   s_hwnd = nullptr;
-  s_hTable = s_hStatus = s_hToolbar = s_hSearch = s_hPopover = nullptr;
+  s_hTable = s_hStatus = s_hComboScheme = s_hSearch = s_hPopover = nullptr;
   s_hBtnAdd = s_hBtnReset = s_hBtnImport = s_hBtnExport = nullptr;
   s_hBtnCancel = s_hBtnSave = nullptr;
   s_hChkAlwaysShow = nullptr;
@@ -2093,14 +2309,51 @@ LRESULT ShortcutSettings::OnPaint(HWND hwnd) {
     DeleteObject(hLine);
   }
 
+  // T201: filter chips 自绘 —— 全部 / 切换 / 选词 / 面板 / 自定义。
+  // 不做子控件: 每颗 chip 一条 WM_COMMAND + owner-draw 回调的代价, 远大于
+  // 这里 5 个 RoundRect; 命中判定与绘制共用 ChipRect, 不会出现「看着在这儿
+  // 点着没反应」的错位。
+  {
+    HFONT hfChip = CreateFontW(
+        kSmallFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        VARIABLE_PITCH | FF_SWISS, L"Segoe UI Variable");
+    HFONT hfChipOld = static_cast<HFONT>(SelectObject(hdc, hfChip));
+    SetBkMode(hdc, TRANSPARENT);
+    for (int i = 0; i < kChipCount; ++i) {
+      const RECT r = ChipRect(i);
+      const bool on =
+          (i == 0) ? (s_filterCategory <= 0) : (s_filterCategory == ChipCategory(i));
+      HBRUSH hb = CreateSolidBrush(on ? kAccentPrimary : kSearchBg);
+      HPEN hp = CreatePen(PS_SOLID, 1, on ? kAccentPrimary : kSearchBorder);
+      HBRUSH hbOld = static_cast<HBRUSH>(SelectObject(hdc, hb));
+      HPEN hpOld = static_cast<HPEN>(SelectObject(hdc, hp));
+      RoundRect(hdc, r.left, r.top, r.right, r.bottom, 8, 8);
+      SelectObject(hdc, hbOld);
+      SelectObject(hdc, hpOld);
+      DeleteObject(hb);
+      DeleteObject(hp);
+
+      SetTextColor(hdc, on ? kButtonFgPrimary : kTextSecondary);
+      RECT tr = r;  // DrawTextW 的 RECT 形参不是 const, 必须给局部拷贝
+      DrawTextW(hdc, ChipLabel(i), -1, &tr,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    SelectObject(hdc, hfChipOld);
+    DeleteObject(hfChip);
+  }
+
   // 4) 圆形 X 按钮 (右上角)
   {
-    int cx = kDialogW - 24, cy = 18;
+    int cx = kCloseCx, cy = kCloseCy;
     HBRUSH hBrush = CreateSolidBrush(RGB(232, 90, 90));
     HPEN hPen = CreatePen(PS_NULL, 0, 0);
     HPEN hOldPen = static_cast<HPEN>(SelectObject(hdc, hPen));
     HBRUSH hOldBrush = static_cast<HBRUSH>(SelectObject(hdc, hBrush));
-    Ellipse(hdc, cx - 10, cy - 10, cx + 10, cy + 10);
+    // T202: 小尺寸实心 Ellipse 在 GDI 下会光栅化成四角星(顶点只有 1px),
+    // 圆角矩形 + 半径=边长 才是干净的正圆, 也与命中判定的 HitClose 一致。
+    RoundRect(hdc, cx - kCloseR, cy - kCloseR, cx + kCloseR, cy + kCloseR,
+              2 * kCloseR, 2 * kCloseR);
     SelectObject(hdc, hOldBrush);
     SelectObject(hdc, hOldPen);
     DeleteObject(hPen);
@@ -2184,8 +2437,62 @@ LRESULT ShortcutSettings::OnNotify(HWND hwnd, LPARAM lp) {
 LRESULT ShortcutSettings::OnCommand(HWND hwnd, WPARAM wp) {
   int id = LOWORD(wp);
   switch (id) {
+    case ID_SCHEME: {
+      // T201: 切换方案 = 换一个 .custom.yaml 装载。先按未保存修改确认,
+      // 用户拒绝就把下拉框选回原项, 避免「界面显示新方案、内容还是旧方案」。
+      if (HIWORD(wp) != CBN_SELCHANGE || !s_hComboScheme) {
+        return 0;
+      }
+      int sel =
+          static_cast<int>(SendMessageW(s_hComboScheme, CB_GETCURSEL, 0, 0));
+      if (sel < 0) {
+        sel = 0;
+      }
+      if (sel == g_schemePrevSel) {
+        return 0;
+      }
+      int dirty = 0;
+      for (size_t i = 0; i < m_hotkeys.size(); ++i) {
+        const Hotkey& h = m_hotkeys[i];
+        if (!h.accept_new.empty() && h.accept_new != h.accept) {
+          ++dirty;
+        }
+      }
+      if (dirty > 0) {
+        std::wstring msg = L"当前方案有 " + std::to_wstring(dirty) +
+                           L" 处修改尚未保存，切换方案会丢弃这些修改。确定切换？";
+        const int ok = MessageBoxW(s_hwnd, msg.c_str(), L"未保存的修改",
+                                   MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+        if (ok != IDYES) {
+          SendMessageW(s_hComboScheme, CB_SETCURSEL, g_schemePrevSel, 0);
+          return 0;
+        }
+      }
+      wchar_t stemBuf[128] = {};
+      if (sel > 0) {
+        SendMessageW(s_hComboScheme, CB_GETLBTEXT, sel,
+                     reinterpret_cast<LPARAM>(stemBuf));
+      }
+      const std::wstring dir = ParentDirOf(s_yamlPath);
+      s_yamlPath = dir + L"\\" +
+                   (sel == 0 ? std::wstring(L"default.custom.yaml")
+                             : std::wstring(stemBuf) + L".custom.yaml");
+      std::vector<Hotkey> rows;
+      if (!LoadHotkeys(s_yamlPath, rows)) {
+        rows.clear();
+        LoadDefaults(rows);
+      }
+      m_hotkeys = rows;
+      m_defaults = m_pristine.empty() ? m_hotkeys : m_pristine;
+      g_schemePrevSel = sel;
+      s_filterCategory = -1;
+      PopulateTable();
+      RepaintLayered(hwnd);
+      return 0;
+    }
     case ID_BTN_CANCEL:
-      Hide();
+      // T203: 有未保存修改时先确认, 避免一次误点丢掉整轮编辑。
+      RequestCancel();
       return 0;
     case ID_BTN_SAVE:
       SaveAndDeploy();
@@ -2274,6 +2581,30 @@ LRESULT ShortcutSettings::OnCommand(HWND hwnd, WPARAM wp) {
     }
   }
   return DefWindowProcW(hwnd, WM_COMMAND, wp, 0);
+}
+
+// T203: 关闭路径统一 —— 底栏「取消」与右上角圆形 ✕ 都走这里。
+// 判据与 RefreshStatus 完全一致(accept_new 非空且与 accept 不同),
+// 否则会出现「状态行说有 N 处修改、点取消却直接关掉」的自相矛盾。
+void ShortcutSettings::RequestCancel() {
+  int dirty = 0;
+  for (size_t i = 0; i < m_hotkeys.size(); ++i) {
+    const Hotkey& h = m_hotkeys[i];
+    if (!h.accept_new.empty() && h.accept_new != h.accept) {
+      ++dirty;
+    }
+  }
+  if (dirty > 0) {
+    std::wstring msg = L"有 " + std::to_wstring(dirty) +
+                       L" 处快捷键修改尚未保存，关闭后将丢失。确定关闭？";
+    // 默认按钮是「否」: 误按空格不该丢掉整轮编辑。
+    const int ok = MessageBoxW(s_hwnd, msg.c_str(), L"未保存的修改",
+                               MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+    if (ok != IDYES) {
+      return;
+    }
+  }
+  Hide();
 }
 
 LRESULT ShortcutSettings::OnTimer(HWND hwnd, WPARAM wp) {
@@ -2390,6 +2721,13 @@ bool ShortcutSettings::SaveAndDeploy() {
   return true;
 }
 
+// T304: deploy 启动替身。默认 nullptr ⇒ 生产路径行为完全不变。
+ShortcutSettings::DeployLauncher ShortcutSettings::s_deployLauncher = nullptr;
+
+void ShortcutSettings::SetDeployLauncherForTest(DeployLauncher fn) {
+  s_deployLauncher = fn;
+}
+
 bool ShortcutSettings::SpawnDeploy() {
   // spec §7.1: 触发 WeaselDeployer /deploy。spec AP-045-B: 不在 hook 做 IPC
   // —— 这里跑在按钮点击路径上,不在键盘 hook 里,合规。
@@ -2401,6 +2739,10 @@ bool ShortcutSettings::SpawnDeploy() {
   if (pos == std::wstring::npos)
     return false;
   const std::wstring deployer = dir.substr(0, pos + 1) + L"WeaselDeployer.exe";
+  // T304: 注入替身时跳过 exe 存在性检查 —— 测试环境没有 WeaselDeployer.exe,
+  // 否则断言永远只能拿到 false, 测不出「保存后到底有没有触发一次 deploy」。
+  if (s_deployLauncher)
+    return s_deployLauncher(deployer);
   if (GetFileAttributesW(deployer.c_str()) == INVALID_FILE_ATTRIBUTES)
     return false;
   const HINSTANCE rc = ShellExecuteW(nullptr, nullptr, deployer.c_str(),

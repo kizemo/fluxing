@@ -124,6 +124,41 @@ class ShortcutSettings {
                           const std::vector<Hotkey>& data,
                           bool overwrite_file = false);
 
+  // T301: 冲突判定结果 + 可测入口。原 CheckConflict 在 private 且直接读
+  // m_hotkeys 实例状态 ⇒ 单测既调不到, 也无法控制判定用的行表。现在把
+  // 「判定」抽成入参传行的纯比较函数 CheckConflictAgainst, 生产路径
+  // CheckConflict 只做薄包装 (constitution R7: 生产与单测共用同一实现)。
+  struct ConflictReport {
+    int score =
+        0;  // 0 = none, 1 = warn (builtin), 2 = error (L18/L19/duplicate)
+    std::wstring conflict_action;  // 冲突的 action desc (UI 显示)
+    std::wstring warning_action;   // builtin override 警告 (UI 显示)
+    bool l18_l19_error = false;
+    bool duplicate_error = false;
+  };
+  static ConflictReport CheckConflictAgainst(const std::vector<Hotkey>& rows,
+                                             const std::wstring& combo,
+                                             const std::wstring& when,
+                                             int exclude_row);
+  static ConflictReport CheckConflict(const std::wstring& combo,
+                                      const std::wstring& when,
+                                      int exclude_row);
+
+  // T301: YAML 读入提到 public —— round-trip 单测要能直接读回刚写出的文件。
+  // 旧位置在 private, 于是「写出去的格式读不回来」这类缺陷只能靠真机发现
+  // (T001-T003 当初正是这么漏掉的)。
+  static bool LoadHotkeys(const std::wstring& path, std::vector<Hotkey>& out);
+
+  // T304: 保存后触发的重新部署。提到 public 是为了让单测能断言
+  // 「有改动 ⇒ 恰好触发一次部署 / 没落盘 ⇒ 一次都不触发」。
+  static bool SaveAndDeploy();
+  // T304: deploy 启动替身注入点。s_deployLauncher 为空 ⇒ 走真实
+  // ShellExecuteW; 注入后只看替身返回值并跳过 exe 存在性检查 —— 单测二进制
+  // 旁边不会真的躺着 WeaselDeployer.exe。传 nullptr 即恢复生产行为。
+  using DeployLauncher = bool (*)(const std::wstring& deployer);
+  static void SetDeployLauncherForTest(DeployLauncher fn);
+  static DeployLauncher s_deployLauncher;
+
   static std::vector<Hotkey>& MutableHotkeys();
   static const std::vector<Hotkey>& Hotkeys();
 
@@ -139,7 +174,13 @@ class ShortcutSettings {
   static HWND s_hwnd;
   static HWND s_hTable;    // ListView (LVS_REPORT, 3 列)
   static HWND s_hStatus;   // 状态行 STATIC
-  static HWND s_hToolbar;  // 工具栏容器
+  // T201: 删掉恒为 nullptr 的死成员 s_hToolbar(「工具栏容器」)。
+  // 筛选 chips 不做成子控件 —— 它们走 OnPaint 自绘 + WndProc 命中判定,
+  // 与 T202 的圆形 ✕ 完全同一套做法(否则每个 chip 都要一条 WM_COMMAND
+  // 分支 + 一个 owner-draw 回调)。方案下拉则必须是主窗的直接子控件,
+  // WM_COMMAND 才会送到 OnCommand。
+  static HWND s_hComboScheme;   // T201: 方案下拉 COMBOBOX
+  static int s_filterCategory;  // -1=全部; 1=切换 2=选词 3=面板 4=自定义
   static HWND s_hSearch;   // 搜索框 EDIT
   static HWND s_hPopover;  // 键捕获 popover (子窗口)
   static HWND s_hBtnAdd;
@@ -182,6 +223,8 @@ class ShortcutSettings {
   static constexpr UINT ID_BTN_EXPORT = 2113;
   static constexpr UINT ID_BTN_CANCEL = 2114;
   static constexpr UINT ID_BTN_SAVE = 2115;
+  // T201: 方案下拉 (2160 段空闲; 筛选 chips 自绘, 没有控件 ID)。
+  static constexpr UINT ID_SCHEME = 2160;
   static constexpr UINT ID_POPOVER = 2120;
   // spec 095: 「界面 > 快捷面板常驻」勾选框 ID(2130 段空闲)。
   static constexpr UINT ID_CHK_ALWAYS_SHOW = 2130;
@@ -231,6 +274,10 @@ class ShortcutSettings {
   static LRESULT OnKeyDown(HWND, WPARAM);
   static LRESULT OnCtlColor(HWND, WPARAM, LPARAM);
 
+  // T203: 「取消」按钮与右上角圆形 ✕ 共用的关闭路径 —— 有未保存修改时先确认。
+  // 两条关闭路径必须同一实现, 否则会出现「✕ 直接丢改动、取消却提示」的割裂。
+  static void RequestCancel();
+
   // Table populate / rebuild
   static void PopulateTable();
   static void UpdateRow(int row);  // 局部更新一行 (Capturing 状态变化)
@@ -257,17 +304,8 @@ class ShortcutSettings {
   static int DisplayItemForRow(int row);
 
   // Conflict detection (spec §4.5)
-  struct ConflictReport {
-    int score =
-        0;  // 0 = none, 1 = warn (builtin), 2 = error (L18/L19/duplicate)
-    std::wstring conflict_action;  // 冲突的 action desc (UI 显示)
-    std::wstring warning_action;   // builtin override 警告 (UI 显示)
-    bool l18_l19_error = false;
-    bool duplicate_error = false;
-  };
-  static ConflictReport CheckConflict(const std::wstring& combo,
-                                      const std::wstring& when,
-                                      int exclude_row);
+  // T301: ConflictReport 与两个入口已提到 public 区(单测要直接调),
+  // 这里只剩 UI 侧文案翻译。
 
   // T101: 把 ConflictReport 翻成 design §4.5 的四档中文文案
   //   ✓ 无冲突
@@ -293,8 +331,8 @@ class ShortcutSettings {
   };
   static const std::vector<BuiltinBinding>& GetBuiltinBindings();
 
-  // YAML 读入 (SaveHotkeys 见 public 区: 单测要直接调)
-  static bool LoadHotkeys(const std::wstring& path, std::vector<Hotkey>& out);
+  // YAML 读入入口 LoadHotkeys / 保存部署 SaveAndDeploy 已提到 public 区
+  // (T301/T303/T304: 单测要直接调), 此处不再重复声明。
   // 加载 default.yaml 内置 (作为 fallback)
   static bool LoadDefaults(std::vector<Hotkey>& out);
   // T110: 用「基线 (default.yaml 的全局快捷键表) + 文件里的 override 行」
@@ -302,8 +340,7 @@ class ShortcutSettings {
   // out = 合成后的面板行 (基线行在前, 用户自定义行在后)。
   static bool MergeHotkeys(std::vector<Hotkey> fileRows, std::vector<Hotkey>& out);
 
-  // Save() 触发 deploy 链 (spec §7.1)
-  static bool SaveAndDeploy();
+  // Save() 触发 deploy 链 (spec §7.1) —— 声明在 public 区 (T304 单测要直接调)。
   // spec 045 P0: 原来 SpawnDeploy() 是空占位(状态栏却写"deploy 已触发")。
   // 现在真的去拉 WeaselDeployer.exe /deploy,并把成功与否返回给调用方。
   static bool SpawnDeploy();
