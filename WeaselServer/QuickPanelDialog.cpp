@@ -331,7 +331,8 @@ void QuickPanelDialog::DrawIconSchema(HDC hdc,
   // 2026-11-09: 所有坐标与笔宽 × **面板缩放系数**(与键帽同一个系数)。
   //   之前图标按 raw 像素画、键帽按 dpr 缩放 ⇒ dpr 下降时符号溢出键帽。
   HPEN pen = (HPEN)SelectObject(
-      hdc, CreatePen(PS_SOLID, max(1, IconPx(2, scale)), penColor));
+      hdc, CreatePen(PS_SOLID, fluxing::panel_icon_geom::ScaleStroke(2, scale),
+                     penColor));
   MoveToEx(hdc, x + IconPx(5, scale), y + IconPx(11, scale), nullptr);
   LineTo(hdc, x + IconPx(23, scale), y + IconPx(11, scale));
   MoveToEx(hdc, x + IconPx(19, scale), y + IconPx(8, scale), nullptr);
@@ -355,7 +356,8 @@ void QuickPanelDialog::DrawIconPhrase(HDC hdc,
   // L86-fix: pen color 从 caller 传入
   // 2026-11-09: 坐标 × 缩放系数(与键帽同一系数)。
   HPEN pen = (HPEN)SelectObject(
-      hdc, CreatePen(PS_SOLID, max(1, IconPx(2, scale)), penColor));
+      hdc, CreatePen(PS_SOLID, fluxing::panel_icon_geom::ScaleStroke(2, scale),
+                     penColor));
   HBRUSH brush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
   // 主体:圆角矩形
   RoundRect(hdc, x + IconPx(5, scale), y + IconPx(5, scale),
@@ -383,7 +385,8 @@ void QuickPanelDialog::DrawIconSymbols(HDC hdc,
   // L86-fix: pen color 从 caller 传入
   // 2026-11-09: 坐标 × 缩放系数(与键帽同一系数)。
   HPEN pen = (HPEN)SelectObject(
-      hdc, CreatePen(PS_SOLID, max(1, IconPx(2, scale)), penColor));
+      hdc, CreatePen(PS_SOLID, fluxing::panel_icon_geom::ScaleStroke(2, scale),
+                     penColor));
   // 外壳
   RoundRect(hdc, x + IconPx(3, scale), y + IconPx(6, scale),
             x + IconPx(27, scale), y + IconPx(24, scale), IconPx(2, scale),
@@ -409,7 +412,8 @@ void QuickPanelDialog::DrawIconSymbols(HDC hdc,
   LineTo(hdc, x + IconPx(18, scale), y + IconPx(20, scale));
   // 空格(底部加粗)
   HPEN penBold = (HPEN)SelectObject(
-      hdc, CreatePen(PS_SOLID, max(1, IconPx(3, scale)), kIcoDimC));
+      hdc, CreatePen(PS_SOLID, fluxing::panel_icon_geom::ScaleStroke(3, scale),
+                     kIcoDimC));
   MoveToEx(hdc, x + IconPx(8, scale), y + IconPx(22, scale), nullptr);
   LineTo(hdc, x + IconPx(22, scale), y + IconPx(22, scale));
   DeleteObject(SelectObject(hdc, penBold));
@@ -425,7 +429,8 @@ void QuickPanelDialog::DrawIconSettings(HDC hdc,
   // L86-fix: pen color 从 caller 传入
   // 2026-11-09: 坐标与半径 × 缩放系数(与键帽同一系数)。
   HPEN pen = (HPEN)SelectObject(
-      hdc, CreatePen(PS_SOLID, max(1, IconPx(2, scale)), penColor));
+      hdc, CreatePen(PS_SOLID, fluxing::panel_icon_geom::ScaleStroke(2, scale),
+                     penColor));
   // 中心圆
   Ellipse(hdc, x + IconPx(9, scale), y + IconPx(9, scale),
           x + IconPx(21, scale), y + IconPx(21, scale));
@@ -452,7 +457,8 @@ void QuickPanelDialog::DrawIconAccount(HDC hdc,
   // L86-fix: pen color 从 caller 传入
   // 2026-11-09: 坐标 × 缩放系数(与键帽同一系数)。
   HPEN pen = (HPEN)SelectObject(
-      hdc, CreatePen(PS_SOLID, max(1, IconPx(2, scale)), penColor));
+      hdc, CreatePen(PS_SOLID, fluxing::panel_icon_geom::ScaleStroke(2, scale),
+                     penColor));
   // 头
   Ellipse(hdc, x + IconPx(9, scale), y + IconPx(5, scale),
           x + IconPx(21, scale), y + IconPx(17, scale));
@@ -507,7 +513,8 @@ namespace {
 // 前置声明:字形绘制实现在下方的匿名命名空间里(与 DrawInkCenteredChar 同一个),
 // 而本函数定义在它之前 —— 保持现有文件布局,不把整段搬上来。
 bool DrawInkPlacedChar(HDC hdc, wchar_t ch, const RECT& targetInk,
-                       COLORREF color, const wchar_t* face, int cutLeft);
+                       COLORREF color, const wchar_t* face, int cutLeft,
+                       int fontPx = 0);
 }  // namespace
 
 void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
@@ -529,8 +536,12 @@ void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
   const int ox = x + off.x;
   const int oy = y + off.y;
 
-  const int stroke =
-      max(1, IconPx(fluxing::panel_fwicon::kStrokeWidth, scale));
+  // 2026-11-09: 笔宽走共享口径(include/FluxingPanelIconGeom.h)——
+  //   **向下取整**:raw 1px 的环在 150%(系数 1.5023)下取 1px 而不是 2px。
+  //   就近舍入会得 2px ⇒ 笔宽 2.0× 而几何只有 1.5× ⇒ 相对粗 33%
+  //   ⇒ 用户真机反馈「线条也还是偏粗」。
+  const int stroke = fluxing::panel_icon_geom::ScaleStroke(
+      fluxing::panel_fwicon::kStrokeWidth, scale);
   HPEN pen = (HPEN)CreatePen(PS_SOLID, stroke, penColor);
   HBRUSH solid = (HBRUSH)CreateSolidBrush(penColor);
   HGDIOBJ oldPen = SelectObject(hdc, pen);
@@ -576,7 +587,7 @@ void QuickPanelDialog::DrawIconFullwidth(HDC hdc,
   comma.right = ox + ic.commaInk.right;
   comma.bottom = oy + ic.commaInk.bottom;
   DrawInkPlacedChar(hdc, ic.commaChar, comma, penColor, ic.commaFace,
-                    ic.commaCutLeft);
+                    ic.commaCutLeft, ic.commaFontPx);
 }
 
 namespace {
@@ -728,11 +739,17 @@ bool DrawInkPlacedChar(HDC hdc,
                        const RECT& targetInk,
                        COLORREF color,
                        const wchar_t* face,
-                       int cutLeft) {
+                       int cutLeft,
+                       int fontPx) {
   if (!hdc)
     return false;
   const int targetH = targetInk.bottom - targetInk.top + 1;
-  const int seed = fluxing::panel_fwicon::kCommaFontHeight;
+  // 2026-11-09: 目标字号由调用方按**缩放系数**给出(ic.commaFontPx)
+  //   ⇒ 逗号字形与几何**严格同比**。
+  //   ★ 旧路径(fontPx <= 0)按「实测墨迹高 vs 目标墨迹高」反推字号,而目标
+  //     墨迹高取自**已被取整**的缩放墨迹盒(13 → 19)⇒ 48×19/13 = 70px
+  //     (理想 72px)⇒ 只有 1.46× ⇒ 用户看到的「符号没有同比缩放」。
+  const int seed = fontPx > 0 ? fontPx : fluxing::panel_fwicon::kCommaFontHeight;
   HFONT font = CreateCommaFont(seed, face);
   if (!font)
     return false;
@@ -743,7 +760,10 @@ bool DrawInkPlacedChar(HDC hdc,
   // 一次按比例自校正:目标机器若没有 Microsoft YaHei,GDI 会换成别的字体,
   // 墨迹高就不等于 kCommaInkHeight ⇒ 按实测比例反推字号再来一趟。
   // 正常机器上 px == seed,第二趟不会发生(是廉价死路径,不是主路径)。
-  if (ok) {
+  // 字号已按系数给定(fontPx > 0)时**不做**反推:反推会把「已按比例的字号」
+  //   按取整后的墨迹盒二次缩小(72px → 70px ⇒ 又退回 1.46×)。
+  //   fontPx <= 0(调用方未给目标字号)时才走自校正 —— 那条路径是字体缺失兜底。
+  if (ok && fontPx <= 0) {
     const int px =
         fluxing::panel_fwicon::ScaleFontHeight(seed, m.height, targetH);
     if (px != seed) {
@@ -2028,6 +2048,21 @@ bool QuickPanelDialog::ApplyPhysicalLayout(HWND hwnd) {
                                 DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei");
   }
 
+  // 2026-11-09: tooltip 字体也必须随 DPI 重建 —— 它原先只在**首次**显示
+  //   tooltip 时按当时的 s_dpr_y 建一次,面板活过 DPI 变化后字号就停在旧 DPI
+  //   (用户真机反馈的同一类「没跟着缩放」)。旧字体必须先释放,否则 GDI 泄漏。
+  if (s_hFontTooltip) {
+    DeleteObject(s_hFontTooltip);
+    s_hFontTooltip = NULL;
+  }
+  {
+    const int fh = ScaleRound(kTooltipFontHeightPx, L.dpr_y);
+    s_hFontTooltip = CreateFontW(-fh, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                 CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                                 DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei");
+  }
+
   // off-screen DC 尺寸必须跟着窗口走,否则 UpdateLayeredWindow 提交旧 surface
   CreateOffscreenDC(w, h);
   return true;
@@ -2380,8 +2415,8 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
     int iconX = x0 + bw / 2 - IconPx(kIconBboxCxOff, iconScale);
     int iconY = y0 + bh / 2 - IconPx(kIconBboxCyOff, iconScale);
     // v5 需求⑦: 视觉位置 → 逻辑槽位。switch 一律按**逻辑槽位**分支,几何
-    // 坐标仍取视觉位置(i)。kVisualToLogical = {0, 4, 5, 1, 2, 3} ⇒ 视觉 0
-    // 切换输入法 / 1 中英文 / 2 全半角 / 3 用户短语 / 4 快捷键设置 / 5 关于。
+    // 坐标仍取视觉位置(i)。kVisualToLogical = {0, 4, 5, 1}(2026-11-09 起
+    // 4 槽)⇒ 视觉 0 切换输入法 / 1 中英文 / 2 全半角 / 3 用户短语。
     switch (LogicalAtVisual(i)) {
       case 0:
         DrawIconSchema(hdc, iconX, iconY, penRgb, iconScale);

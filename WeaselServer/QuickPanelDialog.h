@@ -49,6 +49,8 @@
 // spec 099 P0-5: 键盘可达性状态机(单一真相源,constitution R7)。
 #include <FluxingPanelKeyboard.h>
 #include <FluxingPanelFwIcon.h>
+// 2026-11-09: 键帽符号的几何/笔宽缩放口径(生产与单测同源,constitution R7)。
+#include "FluxingPanelIconGeom.h"
 
 class QuickPanelDialog {
  public:
@@ -111,7 +113,7 @@ class QuickPanelDialog {
   // **index = 视觉位置**(与 SlotRect / HitTest 同一空间);内部只经
   // kVisualToLogical 换算成功能槽位后路由:
   //   视觉 0 切换输入法(切换到下一个输入方案) / 视觉 1 中英文切换
-  //   视觉 2 全半角切换 / 视觉 3 用户短语 / 视觉 4 快捷键设置 / 视觉 5 关于
+  //   视觉 2 全半角切换 / 视觉 3 用户短语(2026-11-09 起 4 槽,无视觉 4/5)
   static bool DispatchSlotClick(int index);
 
   // ===== spec 099 P0-6: 物理布局的单一事实源 =====
@@ -404,7 +406,11 @@ class QuickPanelDialog {
   static constexpr int kBrandSize = 26;      // 品牌图标(略小于键帽高,留呼吸位)
   static constexpr int kBrandGap = 3;        // 品牌区 → 按钮行呼吸位
   static constexpr int kPanelRadius = 14;
-  static constexpr int kPanelW = 215;
+  // 2026-11-09: 6 槽 → **4 槽** ⇒ 面板宽 215 → **155**(闭合式,不多不少):
+  //   padding 4 + brand 26 + brandGap 3 + 4×28(槽) + 3×2(槽间隙) + padding 4
+  //   = 4 + 26 + 3 + 112 + 6 + 4 = 155
+  //   (旧 6 槽:4 + 26 + 3 + 168 + 10 + 4 = 215)
+  static constexpr int kPanelW = 155;
   static constexpr int kPanelH = 32;
   // Fluxing QuickPanel v5 需求⑤: 品牌图标整体上移 1 logical px(正值 = 上移)。
   // 品牌矩形 y = padding − ScaleRound(kBrandYOffset, dpr_y)
@@ -414,7 +420,13 @@ class QuickPanelDialog {
   // 贴图(SRCCOPY,不走 alpha),重叠处会把边框啃掉一截。上移后 96/120/144/192%
   // 四档 DPI 下品牌位图都不再触及边框(已逐档核算)。
   static constexpr int kBrandYOffset = 1;
-  static constexpr int kButtonCount = 6;     // v4 stage2: 4 → 6 (新增中英文 / 全半角键)
+  // 2026-11-09: 6 槽 → **4 槽**(用户指定:摘掉「快捷键设置」与
+  //   「用户登录(关于·账号说明)」两个键帽)。视觉顺序:切换输入法 / 中英文 /
+  //   全半角 / 用户短语。
+  //   ★ 托盘右键菜单的「快捷键设置」入口**保留**(WeaselServer.rc +
+  //     WeaselServerApp.cpp):本轮只摘**面板键帽**,不动功能入口
+  //     (删入口属功能删减,超出本轮授权)。
+  static constexpr int kButtonCount = 4;
 
   // ===== 视觉位置 ⇄ 逻辑槽位:唯一映射表(单一事实源, constitution R7) =====
   // 「视觉位置」= 面板上从左到右的第 i+1 个按钮(0..5)。
@@ -427,7 +439,12 @@ class QuickPanelDialog {
   //
   // v5 需求⑦: 中英文、全半角两个按钮移到「切换输入法」之后、「用户短语」之前,
   // 于是视觉 0..5 = 切换输入法 / 中英文 / 全半角 / 用户短语 / 快捷键设置 / 关于。
-  static constexpr int kVisualToLogical[kButtonCount] = {0, 4, 5, 1, 2, 3};
+  // 2026-11-09: 6 槽 → **4 槽**(摘除「快捷键设置」「关于·账号说明」两个键帽)
+  //   ⇒ 视觉 0..3 = 切换输入法 / 中英文 / 全半角 / 用户短语。
+  //   逻辑槽位 2(快捷键设置)与 3(关于·账号说明)不再出现在映射表里
+  //   ⇒ VisualAtLogical(2/3) 返回 -1(面板上不再有这两个键帽)。
+  //   ★ 托盘右键菜单的「快捷键设置」入口**保留**(功能没删,只是面板上没键帽)。
+  static constexpr int kVisualToLogical[kButtonCount] = {0, 4, 5, 1};
 
   // 视觉位置 → 逻辑槽位(越界返回 -1)。
   static constexpr int LogicalAtVisual(int visual) {

@@ -387,7 +387,7 @@ int main() {
           "T17b: 窗口类名 == FluxingQuickPanel_v3");
 
     Check(CountAllDescendants(panel) == 0,
-          "T18a: 面板零子控件(6 按钮 GDI 直绘,不是子窗口)");
+          "T18a: 面板零子控件(4 按钮 GDI 直绘,不是子窗口)");
 
     QuickPanelDialog::Hide();
     Check(IsWindow(panel), "T19a: Hide() 后窗口句柄仍有效(未销毁)");
@@ -503,7 +503,7 @@ int main() {
   //
   // 判别性:改生产代码之前槽 0/3 的回调触发次数恒为 0 ⇒ T20g/T20j 必红。
   // ----------------------------------------------------------------
-  std::printf("\n[spec 099 P0-3] 6 槽点击路由\n");
+  std::printf("\n[spec 099 P0-3] 4 槽点击路由\n");
   {
     int n_schema = 0, n_phrases = 0, n_shortcut = 0, n_login = 0, n_userfolder = 0;
     QuickPanelDialog::SetOnShortcut([&n_shortcut]() { ++n_shortcut; });
@@ -590,12 +590,14 @@ int main() {
     // 2 全半角 / 3 用户短语 / 4 快捷键设置 / 5 关于。
     Check(click_slot(0, n_schema), "T20c: 槽 0 (Schema) 矩形可解析");
     Check(click_slot(3, n_phrases), "T20d: 槽 3 (Phrase) 矩形可解析");
-    Check(click_slot(4, n_shortcut), "T20e: 槽 4 (Settings) 矩形可解析");
-    Check(click_slot(5, n_login), "T20f: 槽 5 (Account) 矩形可解析");
     Check(n_schema == 1, "T20g: 槽 0 点击 → 方案切换回调恰好 1 次");
     Check(n_phrases == 1, "T20h: 槽 3 点击 → 短语库回调恰好 1 次");
-    Check(n_shortcut == 1, "T20i: 槽 4 点击 → 快捷键设置回调恰好 1 次");
-    Check(n_login == 1, "T20j: 槽 5 点击 → 关于页回调恰好 1 次");
+    // 2026-11-09(批次 T 收尾 P1):「快捷键设置」「关于·账号说明」两个键帽
+    // 已从面板摘除(6 槽 → 4 槽)⇒ 这两条回调在面板上**不再有触发路径**。
+    //   ★ 托盘右键菜单的「快捷键设置」入口保留(WeaselServerApp.cpp 直接调
+    //     ShortcutSettings::Show(),与面板槽位无关)。
+    Check(n_shortcut == 0, "T20i: 「快捷键设置」键帽已摘除 ⇒ 回调不被触发");
+    Check(n_login == 0, "T20j: 「关于·账号说明」键帽已摘除 ⇒ 回调不被触发");
     Check(n_userfolder == 0, "T20k: 未接槽位的回调不得被误触发");
 
     int bx = 0, by = 0, bw = 0, bh = 0;
@@ -604,6 +606,11 @@ int main() {
     Check(!QuickPanelDialog::SlotRect(QuickPanelDialog::kButtonCount, &bx, &by,
                                        &bw, &bh),
           "T20m: 槽位索引 == kButtonCount 无效");
+
+    // 2026-11-09(P1):面板上不再有第 5/6 个视觉槽位(快捷键设置 / 关于)。
+    Check(!QuickPanelDialog::SlotRect(4, &bx, &by, &bw, &bh) &&
+              !QuickPanelDialog::SlotRect(5, &bx, &by, &bw, &bh),
+          "T20r: 视觉槽 4/5 已摘除(4 槽面板)");
 
     // Fluxing v4 需求③④⑤ + v5 需求⑦: 中英文切换(视觉 1)/ 全半角切换(视觉 2)
     // 必须真的可点、且回调收到的是**目标值**而不是「翻转」标记。
@@ -945,15 +952,15 @@ int main() {
     int w = 0, h = 0;
     PanelPhysicalSize(QuickPanelDialog::kPanelW, QuickPanelDialog::kPanelH, 96,
                       96, &w, &h);
-    Check(w == 215 && h == 32, "T25a: 100% ⇒ 215×32");
+    Check(w == 155 && h == 32, "T25a: 100% ⇒ 155×32(4 槽面板)");
 
     PanelPhysicalSize(QuickPanelDialog::kPanelW, QuickPanelDialog::kPanelH, 144,
                       144, &w, &h);
-    Check(w == 323 && h == 48, "T25b: 150% ⇒ 323×48(P0-6 核心判据)");
+    Check(w == 233 && h == 48, "T25b: 150% ⇒ 233×48(4 槽 · P0-6 核心判据)");
 
     PanelPhysicalSize(QuickPanelDialog::kPanelW, QuickPanelDialog::kPanelH, 192,
                       192, &w, &h);
-    Check(w == 430 && h == 64, "T25c: 200% ⇒ 430×64");
+    Check(w == 310 && h == 64, "T25c: 200% ⇒ 310×64");
 
     // dpi <= 0 ⇒ 退化到 96(=100%),不塌成 0。
     Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 0) ==
@@ -968,12 +975,12 @@ int main() {
           "T25f: logical=0 ⇒ 0(不产生负数)");
 
     // 就近舍入(.5 向上)—— 变异点:改成整除(322.5→322 / 48→48)会红。
-    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 144) == 323,
-          "T25g: 215@144% 就近舍入 = 323(截断成 322 会红)");
+    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 144) == 233,
+          "T25g: 155@144% 就近舍入 = 233(截断成 232 会红)");
     Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelH, 144) == 48,
           "T25h: 32@144% = 48");
-    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 192) == 430,
-          "T25i: 215@200% = 430");
+    Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelW, 192) == 310,
+          "T25i: 155@200% = 310");
     Check(ScaleLogicalByDpi(QuickPanelDialog::kPanelH, 192) == 64,
           "T25j: 32@200% = 64");
 
@@ -998,11 +1005,76 @@ int main() {
       }
       const std::string lbl = "T25k" + std::to_string(k) + ": " +
                               std::to_string(dpi_list[k]) +
-                              "% 下 6 槽位都在面板内且互不重叠";
+                              "% 下 4 槽位都在面板内且互不重叠";
       Check(ok, lbl.c_str());
     }
   }
 
+  // ----------------------------------------------------------------
+  // T31 (批次 T 收尾 · P0): 键帽符号 / 笔宽的 DPI **同比**缩放口径。
+  //   单一真相源:include/FluxingPanelIconGeom.h(生产与本测试读同一份公式,
+  //   constitution R7 —— 测试不复制任何缩放算式)。
+  //   病灶(用户真机 2026-11-09):符号只放大 1.46×、线条偏粗 33%。
+  //   修法:笔宽**向下取整**(宁可略细不可略粗);逗号目标字号直接按系数给。
+  // ----------------------------------------------------------------
+  std::printf("\n[批次 T P0] 键帽符号/笔宽的 DPI 同比缩放\n");
+  {
+    using fluxing::panel_icon_geom::ScaleCoord;
+    using fluxing::panel_icon_geom::ScaleStroke;
+    using fluxing::panel_icon_geom::ScaledInkSize;
+    using fluxing::panel_icon_geom::SchemaInkBox;
+    const double f100 = 1.0;
+    const double f150 = 144.0 / 96.0;
+    const double f200 = 192.0 / 96.0;
+
+    // T31a: 坐标口径 = 就近舍入(.5 向上),与 panel_dpi::ScaleByFactor 同口径。
+    Check(ScaleCoord(10, f100) == 10 && ScaleCoord(10, f150) == 15 &&
+              ScaleCoord(10, f200) == 20,
+          "T31a: 坐标就近舍入(10 → 10/15/20)");
+    Check(ScaleCoord(1, f150) == 2 && ScaleCoord(3, f150) == 5,
+          "T31a2: .5 向上(1→2 / 3→5;截断会得 1/4)");
+
+    // T31b: 笔宽**向下取整**(下限 1)——「宁可略细不可略粗」。
+    Check(ScaleStroke(1, f100) == 1 && ScaleStroke(1, f150) == 1 &&
+              ScaleStroke(1, f200) == 2,
+          "T31b: raw1 笔宽 100/150/200% ⇒ 1/1/2(就近舍入会得 1/2/2 ⇒ 150% 偏粗 33%)");
+    Check(ScaleStroke(2, f100) == 2 && ScaleStroke(2, f150) == 3 &&
+              ScaleStroke(2, f200) == 4,
+          "T31c: raw2 笔宽严格同比 2/3/4");
+    Check(ScaleStroke(3, f100) == 3 && ScaleStroke(3, f150) == 4 &&
+              ScaleStroke(3, f200) == 6,
+          "T31d: raw3 笔宽 3/4/6");
+    Check(ScaleStroke(0, f150) == 1, "T31d2: raw0 笔宽兜底 1px(不塌成 0)");
+
+    // T31e: 符号几何同比(墨迹盒尺寸,闭区间 +1)。
+    int w100 = 0, h100 = 0, w150 = 0, h150 = 0, w200 = 0, h200 = 0;
+    ScaledInkSize(SchemaInkBox(), f100, &w100, &h100);
+    ScaledInkSize(SchemaInkBox(), f150, &w150, &h150);
+    ScaledInkSize(SchemaInkBox(), f200, &w200, &h200);
+    Check(w100 == 21 && h100 == 15, "T31e: Schema 100% 墨迹 21×15");
+    Check(w150 == 31 && h150 == 22, "T31f: Schema 150% 墨迹 31×22");
+    Check(w200 == 41 && h200 == 29, "T31g: Schema 200% 墨迹 41×29");
+
+    // T31h: 逗号目标字号 = 种子字号 × 系数(**严格同比**,不再二次取整)。
+    //   旧口径按「缩放后的墨迹盒」反推 ⇒ 48×19/13 = 70 ⇒ 只有 1.46×。
+    const fluxing::panel_fwicon::Icon fw = fluxing::panel_fwicon::Build(true);
+    const fluxing::panel_fwicon::Icon fw150 =
+        fluxing::panel_fwicon::ScaleIcon(fw, f150);
+    const fluxing::panel_fwicon::Icon fw200 =
+        fluxing::panel_fwicon::ScaleIcon(fw, f200);
+    Check(fw.commaFontPx == fluxing::panel_fwicon::kCommaFontHeight,
+          "T31h: 种子目标字号 = kCommaFontHeight");
+    Check(fw150.commaFontPx == 72 && fw150.commaFontPx == 48 * 1.5,
+          "T31i: 150% 目标字号 = 72 = 48×1.5(旧口径得 70 ⇒ 只 1.46×)");
+    Check(fw200.commaFontPx == 96 && fw200.commaFontPx == 48 * 2,
+          "T31j: 200% 目标字号 = 96");
+
+    // T31k: 生产用的 fwicon 笔宽必须走同一口径(raw1 ⇒ 150% 仍是 1px)。
+    Check(fluxing::panel_icon_geom::ScaleStroke(
+              fluxing::panel_fwicon::kStrokeWidth, f150) == 1 &&
+              fluxing::panel_fwicon::kStrokeWidth == 1,
+          "T31k: fwicon 空心环笔宽 150% = 1px(不粗于几何比例)");
+  }
   // ----------------------------------------------------------------
   // T26 (spec 099 P0-4 → QuickPanel v4): 面板几何 + 状态文字映射。
   //   v4 需求⑥ 已删除右侧竖排状态回显, 状态改由槽 4/5 键帽单字显示。
@@ -1170,7 +1242,7 @@ int main() {
     for (int i = 0; i < QuickPanelDialog::kButtonCount; ++i)
       HandleKey(st, vk::kTab, false);
     Check(st.focused == 0,
-          "T27f: 连按 6 次 Tab 绕回槽 0(6 槽循环)");
+          "T27f: 连按 4 次 Tab 绕回槽 0(4 槽循环)");
 
     HandleKey(st, vk::kTab, false);
     Check(st.focused == 1, "T27g: Tab 前进一步 ⇒ 槽 1");
@@ -1178,12 +1250,12 @@ int main() {
     Check(st.focused == 0, "T27h: Shift+Tab 后退一步 ⇒ 槽 0");
 
     HandleKey(st, vk::kLeft, false);
-    Check(st.focused == 5, "T27i: ← 从槽 0 回绕到槽 5");
+    Check(st.focused == 3, "T27i: ← 从槽 0 回绕到槽 3");
     HandleKey(st, vk::kRight, false);
     Check(st.focused == 0, "T27j: → 从槽 3 回到槽 0");
 
     HandleKey(st, vk::kEnd, false);
-    Check(st.focused == 5, "T27k: End ⇒ 末槽");
+    Check(st.focused == 3, "T27k: End ⇒ 末槽");
     HandleKey(st, vk::kHome, false);
     Check(st.focused == 0, "T27l: Home ⇒ 首槽");
 
@@ -1281,11 +1353,14 @@ int main() {
     // kVisualToLogical 换算,这里直接断言视觉位置。
     Check(QuickPanelDialog::TooltipText(3) == L"用户短语",
           "T28m: 生产 TooltipText(3) 与纯逻辑一致");
-    const std::wstring expect2 =
-        std::wstring(L"快捷键设置 · 常驻显示:") +
-        (QuickPanelDialog::AlwaysShowMode() ? L"开" : L"关");
-    Check(QuickPanelDialog::TooltipText(4) == expect2,
-          "T28n: 生产 TooltipText(4) 跟随唯一真相源 AlwaysShowMode()");
+    // 2026-11-09(P1):「快捷键设置」键帽已摘除 ⇒ 面板上没有它的 tooltip
+    //   (视觉 4 越界 ⇒ LogicalAtVisual 返回 -1 ⇒ 空串)。
+    //   ★ 托盘右键菜单的「快捷键设置」入口保留(功能没删,只是面板上没键帽)。
+    Check(QuickPanelDialog::TooltipText(4).empty(),
+          "T28n: 视觉槽 4(快捷键设置)已摘除 ⇒ 面板无该 tooltip");
+    Check(QuickPanelDialog::VisualAtLogical(2) == -1 &&
+              QuickPanelDialog::VisualAtLogical(3) == -1,
+          "T28n2: 逻辑槽 2/3(快捷键设置/关于)不在映射表内");
     Check(QuickPanelDialog::TooltipText(0) == L"切换到下一个输入方案 · 当前:未知",
           "T28o: 无 provider 时槽 0 tooltip 兜底「未知」");
     // v4 stage2 + v5 需求⑦: 生产通道的中英文(视觉 1)/ 全半角(视觉 2)

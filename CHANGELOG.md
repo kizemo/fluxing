@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+### fix(WeaselServer): 快捷面板键帽符号/笔宽严格同比缩放（P0）+ 面板 6 槽 → 4 槽（P1）（批次 U）
+
+- **用户原话**：①「改分辨率后，logo 完整，但键帽符号还是没有同比缩放，线条也还是偏粗」；②（指定）「去掉『快捷键设置』与『用户登录(关于·账号说明)』两个键帽」。
+- **P0 根因（已排除「没上机」）**：装机 `WeaselServer.exe` 与构建产物 SHA256 一致（`47B00A2B…6E59`），时间戳链 `QuickPanelDialog.cpp (21:47:07) < .obj (22:03:23) < .exe (22:03:34)` ⇒ 83d1820 的图标缩放**确实在机**。真病灶是**两处取整**：① **笔宽就近舍入** ⇒ raw1 的空心环在 150%（系数 1.5023）得 2px，笔宽 **2.0×** 而几何 1.5× ⇒ **相对粗 33%**；② **逗号目标字号二次取整** ⇒ 目标墨迹高取自**已取整**的缩放墨迹盒（13→19）⇒ `48×19/13 = 70px`（理想 72）⇒ 符号只有 **1.46×**。附带：tooltip 字体只在首次显示时创建，DPI 变化后不重建。
+- **P0 修法（ADR 0050）**：新建 `include/FluxingPanelIconGeom.h` 作为**符号几何与笔宽缩放的单一真相源**（`ScaleCoord` 就近舍入 .5 向上 / `ScaleStroke` **向下取整**下限 1 / 5 个图标 raw bbox / `ScaledInkBox` / `ScaledInkSize`），生产与单测同源（R7）；笔宽取「**宁可略细不可略粗**」（GDI 笔宽只能整数；raw≥2 的线在 100/150/200% 下正好 2/3/4px **严格同比**）；逗号目标字号**直接按系数给**（`Icon::commaFontPx`：48 → 72 → 96），字体自校正退化为「目标机缺字体」兜底路径（否则会把 72 拉回 70 ⇒ 退回 1.46×）；`FluxingPanelFwIcon.h` 原先自抄的取整公式改为转发共享实现（消第二份真相源）；tooltip 字体随 DPI 重建。
+- **P1 修法（6 槽 → 4 槽）**：`kButtonCount 6→4`、`kVisualToLogical {0,4,5,1,2,3}→{0,4,5,1}`、`kPanelW 215→155`（闭合式 4+26+3+112+6+4）；视觉顺序 = 切换输入法 / 中英文 / 全半角 / 用户短语；面板尺寸 100% 155×32 / 150% 233×48 / 200% 310×64。**只摘面板键帽**：托盘右键「快捷键设置」（`ID_WEASELTRAY_SHORTCUT_SETTINGS` → `ShortcutSettings::Show()`）与 Ctrl+Shift+K 热键**保留**；「关于 / 账号说明」页模块保留但面板侧不再有入口。
+- **验证**：`TestQuickPanelDialog` **269/269 assertions passed**（新增 T31：96/144/192 三档 DPI 的符号墨迹盒、笔宽、逗号目标字号断言）、`TestQuickPanelRefactor` **41/41**；`xbuild.bat weasel installer` rc=0；静默装机 `EXIT=0`，装机 `WeaselServer.exe` SHA256 `A5F2424F88EE1174894007BE7FE033B44FE70AE27A017FD135D0AFEF8C94A7DC` = 构建产物（2468352 B @2026-11-10 00:32）⇒ **已上机**；L0 静态门禁 `-Mode source` **checks=14 pass=14 fail=0**；装机验收 C2/C3/C4 PASS（C3 列 26 个版本化 shim、TIP 指向版本化 shim、HKLM Run 存在）。**C1 判据过期**（硬编码 18217 B / `917509f6…`，实际仓库与装机均为 18448 B / `05CC2DDB…` 且逐字节相同）⇒ 与本轮无关，下轮改为与仓库 `output\data\default.yaml` 比对。
+- **未闭环（需用户人工）**：P0 真机 DPI 复验必须**真实改一次分辨率**（面板是 IME 激活瞬间才存在的自绘顶层窗，跨进程自动化抓不到）；P1 需人眼确认 4 键帽顺序与托盘「快捷键设置」入口仍在。
+- **未改**：`include/WeaselIPCData.h`、IPC 协议、`output/install.nsi`、`librime/`、`output/data/**`；并发会话的 `RimeWithWeasel/RimeWithWeasel.cpp` 未动。
+
 ### fix(RimeWithWeasel): 「切到搜狗双拼仍是全拼」根因修复（显式选方案 = 全局广播 + 新会话继承）+ fix(WeaselServer): 快捷面板 DPI 适配（品牌位图随尺寸重建 + 图标几何统一缩放）（批次 T）
 
 - **用户原话**：①「在你进行编辑后，火流猩输入法在中文状态，只能全拼输入，切换到搜狗双拼，仍然是全拼输入」；②「在远程，更换了显示分辨率情况下，快捷设置栏的品牌图标和按钮符号显示都偏大，尤其品牌图标，只显示一部分。需要适应不同分辨率」。

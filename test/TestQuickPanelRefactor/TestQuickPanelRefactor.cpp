@@ -17,7 +17,7 @@
 //   - Show() 只建**一个** WS_POPUP 顶层窗口,类名 L"FluxingQuickPanel_v3",
 //     类风格 CS_OWNDC;
 //   - 扩展样式 WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_LAYERED|WS_EX_TOPMOST;
-//   - 几何 kPanelW x kPanelH = 239 x 36(DPI 由 OnCreate 换算成 *_phys 常量);
+//   - 几何 kPanelW x kPanelH = 155 x 32(DPI 由 OnCreate 换算成 *_phys 常量);
 //   - 面板**没有任何子窗口**(logo + 6 个按钮全是 GDI 自绘);
 //   - Hide() 只 KillTimer + SW_HIDE,**不销毁**窗口(供下次复用);
 //   - Show() 第二次走复用路径,**同一个 HWND**;
@@ -189,7 +189,7 @@ int RunRefactorTest() {
   //     这条是 spec 038 老断言「5 个子控件」的**反面**:事实是 0 个。
   // ----------------------------------------------------------------
   Check(CountDescendants(panel) == 0,
-        "T6: 面板 0 个子窗口(logo + 6 按钮全是 GDI 自绘)");
+        "T6: 面板 0 个子窗口(logo + 4 按钮全是 GDI 自绘)");
 
   // ----------------------------------------------------------------
   // T7: Hide() 只隐藏,不销毁(复用契约)。
@@ -224,14 +224,14 @@ int RunRefactorTest() {
   //      按钮中心按生产布局公式算出,因此这条同时钉住了布局与命中的一致性。
   // ----------------------------------------------------------------
   const ButtonLayout lay = CurrentLayout();
-  Check(QuickPanelDialog::kButtonCount == 6,
-        "T10a: kButtonCount == 6 (v4 新增中英文 / 全半角键)");
+  Check(QuickPanelDialog::kButtonCount == 4,
+        "T10a: kButtonCount == 4 (2026-11-09 摘除快捷键设置 / 关于两个键帽)");
   bool all_buttons_hit = true;
   for (int i = 0; i < QuickPanelDialog::kButtonCount; ++i) {
     if (QuickPanelDialog::HitTest(lay.center_x(i), lay.center_y()) != i)
       all_buttons_hit = false;
   }
-  Check(all_buttons_hit, "T10b: 6 个按钮中心各自命中自己的索引");
+  Check(all_buttons_hit, "T10b: 4 个按钮中心各自命中自己的索引");
   // 品牌矩形用**生产同源**的 BrandRect()(不复制布局公式,R7)——
   // v5 需求⑤ 品牌上移 1px 后,中心不再等于 padding + size/2。
   int brx = 0, bry = 0, brw = 0, brh = 0;
@@ -257,9 +257,10 @@ int RunRefactorTest() {
         "T11: Hide() 把 hover/active 索引复位为 -1");
 
   // ----------------------------------------------------------------
-  // T12: 按钮点击路由 —— 现行契约 hit==1 -> s_onPhrases、
-  //      hit==2 -> s_onShortcut、hit 0/3 是历史 placeholder(no-op)、
-  //      hit 4/5 = v4 新增的中英文切换 / 全半角切换。
+  // T12: 按钮点击路由 —— 现行契约:视觉 3 -> s_onPhrases、视觉 1/2 =
+  //      中英文 / 全半角切换;视觉 0(切换输入法)在本测试里不注入回调。
+  //      2026-11-09(P1):「快捷键设置」「关于·账号说明」两个键帽已摘除
+  //      ⇒ 面板上只剩视觉 0..3(切换输入法 / 中英文 / 全半角 / 用户短语)。
   //      模拟方式与 test/v0_19_0_32_e2e 相同:直接投递
   //      WM_LBUTTONDOWN / WM_LBUTTONUP 到面板窗口。
   //      生产在 LBUTTONDOWN 里无条件 s_dragging=TRUE(L88-fix),
@@ -277,31 +278,32 @@ int RunRefactorTest() {
     const ButtonLayout l2 = CurrentLayout();
 
     // v5 需求⑦: 索引 = **视觉位置**(左→右)。视觉 0 切换输入法 / 1 中英文 /
-    // 2 全半角 / 3 用户短语 / 4 快捷键设置 / 5 关于。
+    // 2 全半角 / 3 用户短语(2026-11-09 起 4 槽,无视觉 4/5)。
     LPARAM lp = MAKELPARAM(l2.center_x(3), l2.center_y());
     SendMessageW(qp, WM_LBUTTONDOWN, MK_LBUTTON, lp);
     SendMessageW(qp, WM_LBUTTONUP, 0, lp);
     Check(phrase_count == 1, "T12a: 点按钮 3 (用户短语) -> s_onPhrases 触发 1 次");
 
-    lp = MAKELPARAM(l2.center_x(4), l2.center_y());
-    SendMessageW(qp, WM_LBUTTONDOWN, MK_LBUTTON, lp);
-    SendMessageW(qp, WM_LBUTTONUP, 0,lp);
-    Check(shortcut_count == 1, "T12b: 点按钮 4 (快捷键设置) -> s_onShortcut 触发 1 次");
+    // 2026-11-09(P1):「快捷键设置」「关于·账号说明」两个键帽已从面板摘除
+    //   ⇒ 视觉槽 4/5 不存在(HitTest 返回 -1),点它们不派发任何回调。
+    //   ★ 托盘右键菜单的「快捷键设置」入口保留(与面板槽位无关)。
+    Check(QuickPanelDialog::HitTest(l2.center_x(4), l2.center_y()) == -1 &&
+              QuickPanelDialog::HitTest(l2.center_x(5), l2.center_y()) == -1,
+          "T12b: 视觉槽 4/5 已摘除 ⇒ HitTest 返回 -1");
+    Check(shortcut_count == 0,
+          "T12b2: 「快捷键设置」键帽已摘除 ⇒ s_onShortcut 不被触发");
 
-    // 视觉 0(切换输入法)/ 5(关于)在本测试里不注入回调 ⇒ 不应触发任何回调。
+    // 视觉 0(切换输入法)在本测试里不注入回调 ⇒ 不应触发任何回调。
     lp = MAKELPARAM(l2.center_x(0), l2.center_y());
     SendMessageW(qp, WM_LBUTTONDOWN, MK_LBUTTON, lp);
     SendMessageW(qp, WM_LBUTTONUP, 0, lp);
-    lp = MAKELPARAM(l2.center_x(5), l2.center_y());
-    SendMessageW(qp, WM_LBUTTONDOWN, MK_LBUTTON, lp);
-    SendMessageW(qp, WM_LBUTTONUP, 0, lp);
-    Check(phrase_count == 1 && shortcut_count == 1,
-          "T12c: 点按钮 0/5 不触发任何回调(未注入回调)");
+    Check(phrase_count == 1 && shortcut_count == 0,
+          "T12c: 点按钮 0 不触发任何回调(未注入回调)");
 
     // Fluxing v4 需求③④⑤ + v5 需求⑦: 中英文 / 全半角两个文字键必须真的可点,
     // 且回调收到的是**目标值**而不是「翻转」标记。
     // v5 重排后索引 = **视觉位置**:视觉 1 = 中英文、视觉 2 = 全半角
-    // (视觉 3 = 用户短语 / 4 = 快捷键设置 / 5 = 关于 / 0 = 切换输入法)。
+    // (视觉 3 = 用户短语 / 0 = 切换输入法;2026-11-09 起 4 槽)。
     {
       int ascii_toggle = 0;
       int full_toggle = 0;

@@ -58,6 +58,8 @@
 // 此处不复制那个常量,constitution R7)。
 //
 #include <windows.h>
+// 2026-11-09: 图标几何/笔宽的缩放口径下沉到共享头(生产与单测同源,constitution R7)。
+#include "FluxingPanelIconGeom.h"
 
 namespace fluxing {
 namespace panel_fwicon {
@@ -149,6 +151,12 @@ struct Icon {
   int commaCutLeft;     // v13:字形左缘裁切列数(raw px;0 = 不裁切)
   RECT ink;           // 墨迹盒并集(= 各图元与逗号的实际覆盖,无外扩)
   bool hollow;        // true = 中文标点(空心环) / false = 英文标点(实心点)
+  // 2026-11-09: 逗号字形的**目标字号**(px,传给 LOGFONT.lfHeight 取负)。
+  //   Build() 里是种子字号 kCommaFontHeight;ScaleIcon() 按缩放系数给出
+  //   「目标字号」⇒ 字形尺寸与几何**严格同比**,不再经「缩放后的墨迹盒」
+  //   二次取整反推(那会把 48×1.5 变成 70 而不是 72 ⇒ 只有 1.46×,
+  //   用户真机反馈「符号没有同比缩放」的一半根因)。
+  int commaFontPx;
 };
 
 // 字形的 GDI 度量快照 —— 把 GLYPHMETRICS 的三个字段摘出来,
@@ -242,6 +250,7 @@ inline Icon Build(bool fullwidth) {
   Icon ic = {};
   ic.shapeCount = 1;
   ic.hollow = fullwidth;
+  ic.commaFontPx = kCommaFontHeight;
   if (fullwidth) {
     ic.shapes[0].kind = kHollowEllipse;
     ic.shapes[0].rect = RECT{16, 2, 28, 14};
@@ -314,10 +323,10 @@ inline POINT CenteringOffset(const Icon& ic, int viewBox) {
 //
 // 坐标系不变:raw viewBox 坐标 → 物理像素(等比放大,中心仍在 viewBox 中心)。
 inline int ScaleCoord(int raw, double factor) {
-  if (factor < 1.0)
-    factor = 1.0;
-  const double v = raw * factor;
-  return static_cast<int>(v >= 0 ? v + 0.5 : v - 0.5);
+  // 2026-11-09: 转发到共享口径(include/FluxingPanelIconGeom.h)——
+  //   本文件原先自己抄了一份取整公式,与 panel_dpi::ScaleByFactor 是**两份**
+  //   真相源(constitution R7 违规:任一处改动另一处不会跟着变)。
+  return fluxing::panel_icon_geom::ScaleCoord(raw, factor);
 }
 
 // 把整个图标(路径框 + 逗号墨迹盒 + 裁切列数)按系数等比放大。
@@ -335,6 +344,8 @@ inline Icon ScaleIcon(const Icon& ic, double factor) {
   out.commaInk.right = ScaleCoord(out.commaInk.right, factor);
   out.commaInk.bottom = ScaleCoord(out.commaInk.bottom, factor);
   out.commaCutLeft = ScaleCoord(out.commaCutLeft, factor);
+  // 2026-11-09: 目标字号按系数缩放(严格同比),不再由「缩放后的墨迹盒」反推。
+  out.commaFontPx = fluxing::panel_icon_geom::ScaleCoord(out.commaFontPx, factor);
   // 墨迹盒并集重算(与 Build() 同一算法)。
   RECT ink = ShapeInkBox(out.shapes[0]);
   if (out.commaInk.left < ink.left)
