@@ -995,6 +995,224 @@ static void TestT105CustomRowPersistence() {
   ::DeleteFileW(p.c_str());
 }
 
+// ===== T301-T304: 冲突判定 / YAML 往返 / 读写同路径 / 保存即部署 =====
+//
+// 这四条正是当初 T001-T003 没被发现的根因: 判定、读、写、部署四段各自都
+// 「看起来对」, 但从没有一条断言把它们连起来跑一遍 —— 于是「写出去的格式
+// 读不回来」「保存后根本没部署」只能靠真机发现。
+
+// 本块用例都在 namespace test 作用域; 上面 966 行的 using 是
+// TestT105CustomRowPersistence 的函数局部别名, 在这里不可见, 必须自己声明一次。
+using SS = ShortcutSettings;
+
+// accept 归一化: 只用于「写出去再读回来还是不是同一个键」。
+// 生产判定走 fluxing::AcceptEquals (语义比较), 这里小写 + 修饰键排序就够,
+// 不为一个断言把 KeyNameMapper 的依赖拖进测试工程。
+std::wstring Lc(std::wstring s) {
+  for (auto& c : s) {
+    if (c >= L'A' && c <= L'Z') c = static_cast<wchar_t>(c - L'A' + L'a');
+  }
+  return s;
+}
+
+std::wstring ComboKey(const std::wstring& combo) {
+  std::vector<std::wstring> parts;
+  std::wstring cur;
+  for (wchar_t c : Lc(combo)) {
+    if (c == L'+') {
+      parts.push_back(cur);
+      cur.clear();
+    } else {
+      cur.push_back(c);
+    }
+  }
+  parts.push_back(cur);
+  for (size_t i = 0; i + 1 < parts.size(); ++i) {
+    for (size_t j = 0; j + 1 < parts.size() - i; ++j) {
+      if (parts[j] > parts[j + 1]) {
+        const std::wstring t = parts[j];
+        parts[j] = parts[j + 1];
+        parts[j + 1] = t;
+      }
+    }
+  }
+  std::wstring out;
+  for (const auto& p : parts) {
+    if (!out.empty()) out += L'+';
+    out += p;
+  }
+  return out;
+}
+
+std::wstring TempYaml(const wchar_t* name) {
+  wchar_t buf[MAX_PATH] = {0};
+  if (::GetTempPathW(MAX_PATH, buf) == 0) return std::wstring(name) + L".yaml";
+  std::wstring p(buf);
+  p += L"Fluxing045_";
+  p += name;
+  p += L".yaml";
+  return p;
+}
+
+int g_deployCalls = 0;
+std::wstring g_deployTarget;
+
+bool DeployStub(const std::wstring& deployer) {
+  ++g_deployCalls;
+  g_deployTarget = deployer;
+  return true;
+}
+
+// T301: 冲突判定必须能在「不打开面板、不读实例状态」的前提下被断言。
+void TestT301ConflictDetectable() {
+  std::vector<SS::Hotkey> rows(2);
+  rows[0].accept = L"Control+Alt+K";
+  rows[0].when = L"always";
+  rows[0].action_desc = L"切换中英";
+  rows[1].accept = L"Control+Alt+Z";       // 旧值
+  rows[1].accept_new = L"Control+Alt+J";   // 新值优先 (eff = accept_new)
+  rows[1].when = L"always";
+  rows[1].action_desc = L"上翻页";
+
+  // ① L18/L19 硬错误必须被判成 error, 且不带「与谁冲突」
+  const SS::ConflictReport l18 =
+      SS::CheckConflictAgainst(rows, L"Shift_L", L"always", -1);
+  EXPECT(l18.score == 2);
+  EXPECT(l18.l18_l19_error);
+  EXPECT(!l18.duplicate_error);
+
+  // ② 同表撞键 ⇒ duplicate_error, 文案里要能看见撞的是哪一行
+  const SS::ConflictReport dup =
+      SS::CheckConflictAgainst(rows, L"Control+Alt+J", L"always", -1);
+  EXPECT(dup.score == 2);
+  EXPECT(dup.duplicate_error);
+  EXPECT(dup.warning_action.find(L"上翻页") != std::wstring::npos);
+
+  // ③ accept_new 优先: 旧值 Control+Alt+Z 已经被新值替掉, 不该再算撞
+  const SS::ConflictReport old =
+      SS::CheckConflictAgainst(rows, L"Control+Alt+Z", L"always", -1);
+  EXPECT(!old.duplicate_error);
+
+  // ④ 自己那行不算「和自己冲突」
+  const SS::ConflictReport self =
+      SS::CheckConflictAgainst(rows, L"Control+Alt+K", L"always", 0);
+  EXPECT(!self.duplicate_error);
+
+  // ⑤ 同一个键、不同 when 不算撞 (作用域不同)
+  const SS::ConflictReport scope =
+      SS::CheckConflictAgainst(rows, L"Control+Alt+K", L"paging", -1);
+  EXPECT(!scope.duplicate_error);
+
+  // ⑥ 空组合一定安全返回, 不能崩
+  EXPECT(SS::CheckConflictAgainst(rows, L"", L"always", -1).score == 0);
+}
+
+// T302: 写出去的 YAML 必须能原样读回来 (round-trip)。
+void TestT302YamlRoundTrip() {
+  const std::wstring p = TempYaml(L"t302");
+  ::DeleteFileW(p.c_str());
+
+  std::vector<SS::Hotkey> rows;
+  SS::Hotkey a;
+  ASSERT_TRUE(SS::BuildCustomRow(L"toggle", L"ascii_punct", L"always", &a));
+  a.accept = L"Control+Alt+F9";
+  rows.push_back(a);
+
+  SS::Hotkey b;
+  ASSERT_TRUE(SS::BuildCustomRow(L"send", L"9", L"paging", &b));
+  b.accept = L"Control+Alt+F10";
+  rows.push_back(b);
+
+  EXPECT(SS::SaveHotkeys(p, rows));
+
+  std::vector<SS::Hotkey> back;
+  EXPECT(SS::LoadHotkeys(p, back));
+  int hitF9 = 0;
+  int hitF10 = 0;
+  for (const auto& h : back) {
+    const std::wstring eff = h.accept_new.empty() ? h.accept : h.accept_new;
+    if (ComboKey(eff) == ComboKey(L"Control+Alt+F9") &&
+        Lc(h.when) == L"always") {
+      ++hitF9;
+    }
+    if (ComboKey(eff) == ComboKey(L"Control+Alt+F10") &&
+        Lc(h.when) == L"paging") {
+      ++hitF10;
+    }
+  }
+  EXPECT(hitF9 == 1);   // 读不回来 = 「保存了但没生效」
+  EXPECT(hitF10 == 1);  // when: paging 也必须随行回来
+
+  ::DeleteFileW(p.c_str());
+}
+
+// T303: 保存写到哪个文件, 读回就必须读同一个文件。
+void TestT303SaveAndLoadSamePath() {
+  const std::wstring p = TempYaml(L"t303");
+  ::DeleteFileW(p.c_str());
+
+  SS::SetYamlPath(p);
+  std::vector<SS::Hotkey>& rows = SS::MutableHotkeys();
+  rows.clear();
+  SS::Hotkey row;
+  ASSERT_TRUE(SS::BuildCustomRow(L"send", L"7", L"paging", &row));
+  row.accept = L"Control+Alt+F11";
+  rows.push_back(row);
+
+  EXPECT(SS::SaveAndDeploy());
+
+  std::string raw;
+  EXPECT(ReadRaw(p, raw));
+  EXPECT(raw.find("Control+Alt+F11") != std::string::npos);
+
+  std::vector<SS::Hotkey> back;
+  EXPECT(SS::LoadHotkeys(p, back));
+  int hit = 0;
+  for (const auto& h : back) {
+    const std::wstring eff = h.accept_new.empty() ? h.accept : h.accept_new;
+    if (ComboKey(eff) == ComboKey(L"Control+Alt+F11") &&
+        Lc(h.when) == L"paging") {
+      ++hit;
+    }
+  }
+  EXPECT(hit == 1);
+
+  SS::SetYamlPath(L"");
+  ::DeleteFileW(p.c_str());
+}
+
+// T304: 保存成功 ⇒ 恰好触发一次重新部署; 没落盘 ⇒ 一次都不该触发。
+void TestT304DeployTriggeredOnceAfterSave() {
+  const std::wstring p = TempYaml(L"t304");
+  ::DeleteFileW(p.c_str());
+
+  SS::SetDeployLauncherForTest(&DeployStub);
+  g_deployCalls = 0;
+  g_deployTarget.clear();
+
+  SS::SetYamlPath(p);
+  std::vector<SS::Hotkey>& rows = SS::MutableHotkeys();
+  rows.clear();
+  SS::Hotkey row;
+  ASSERT_TRUE(SS::BuildCustomRow(L"send", L"6", L"paging", &row));
+  row.accept = L"Control+Alt+F12";
+  rows.push_back(row);
+
+  EXPECT(SS::SaveAndDeploy());
+  EXPECT(g_deployCalls == 1);  // 改完不部署 = 用户以为生效了其实没有
+  EXPECT(Lc(g_deployTarget).find(L"weaseldeployer.exe") !=
+         std::wstring::npos);
+
+  // 没有落盘目标 ⇒ 不能部署 (否则「保存失败」也会去重载一份没变的配置)
+  SS::SetYamlPath(L"");
+  g_deployCalls = 0;
+  EXPECT(!SS::SaveAndDeploy());
+  EXPECT(g_deployCalls == 0);
+
+  SS::SetDeployLauncherForTest(nullptr);
+  ::DeleteFileW(p.c_str());
+}
+
 }  // namespace test
 
 int wmain(int /*argc*/, wchar_t** /*argv*/) {
@@ -1038,6 +1256,11 @@ int wmain(int /*argc*/, wchar_t** /*argv*/) {
   // T105: 「+ 自定义」modal 的行构造与落盘
   TestT105BuildCustomRow();
   TestT105CustomRowPersistence();
+  // T301-T304: 判定 / 往返 / 同路径 / 保存即部署 (四条连起来才有意义)
+  TestT301ConflictDetectable();
+  TestT302YamlRoundTrip();
+  TestT303SaveAndLoadSamePath();
+  TestT304DeployTriggeredOnceAfterSave();
   std::wcout << L"[TestShortcutSettings] PASS=" << s_pass
               << L" FAIL=" << s_fail << std::endl;
   return s_fail == 0 ? 0 : 1;
