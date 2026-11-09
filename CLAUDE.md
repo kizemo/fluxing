@@ -39,7 +39,7 @@
 
 - **必须阶段收尾双产物**: 完成 `.specify/specs/NNN-*/tasks.md` 任一阶段任务时, 必须同步更新 `docs/archive/handoffs/handoff-YYYY-MM-DD-<slug>.md` 并就地改写 `docs/archive/prompts/prompt-next-session-YYYY-MM-DD-<slug>.md` (接力 prompt 只给全路径指针, 不复述 handoff 内容); 规则全文见 [`AGENTS.md` §9](AGENTS.md#9-handoff--relay-prompt-mandatory)。
 
-- **本批交接指针**: [批次 T · 搜狗双拼失效根因修复（显式选方案=全局广播+新会话继承，ADR 0048）+ 快捷面板 DPI 适配（logo 位图随尺寸重建+图标几何统一缩放，ADR 0049）；单测 249/258 全绿、L0 15/15、装机硬检查全过；真机端到端待用户手工复验](docs/archive/handoffs/handoff-2026-11-09-batch-t-sogou-dpi.md) · 接力 prompt: 见该 handoff 文档；按用户 2026-11-08 指示，接力 prompt 直接给在当轮回答正文、不另落文件
+- **本批交接指针**: [批次 T · 搜狗双拼失效根因修复（显式选方案=全局广播+新会话继承，ADR 0048）+ 快捷面板 DPI 适配（logo 位图随尺寸重建+图标几何统一缩放，ADR 0049）+ §7.7 验收判据 C3/C3b 失灵修复（shim 名改用 3–5 段区间正则、C3b 由打印升为硬检查，消除「掩盖真缺件」）；单测 249/258 全绿、L0 15/15、装机验收 EXIT=0（C3 列出 26 个 shim、C3b 命中版本化 shim）、正则正反例 8/8；真机端到端待用户手工复验](docs/archive/handoffs/handoff-2026-11-09-batch-t-sogou-dpi.md) · 接力 prompt: 见该 handoff 文档；按用户 2026-11-08 指示，接力 prompt 直接给在当轮回答正文、不另落文件
 - **上一批交接指针（S）**: [批次 S · spec 045 圆形 ✕ 脏态确认 P0 修复（确认框被面板失焦自毁吞掉导致修改静默丢失）+ T201 方案下拉候选源评估（单测 PASS=249、L0 15/15、装机真机复验全绿）](docs/archive/handoffs/handoff-2026-11-09-batch-s-close-x-confirm.md) · 接力 prompt: 见该 handoff 文档；按用户 2026-11-08 指示，接力 prompt 直接给在当轮回答正文、不另落文件
 - **上一批交接指针（R）**: [批次 R · spec 045 T301–T304 可测入口（抓出并修掉写读不一致 P0）+ T201/T202/T203 界面补全 + Fix A 分层窗口不合成根因（单测 PASS=246、WeaselServer 构建通过）](docs/archive/handoffs/handoff-2026-11-09-batch-r-t201-t304.md)
 - **上一批交接指针（Q）**: [批次 Q · spec 045 T104+T105「+ 自定义」子 modal 与验证指引文案（ADR 0046）](docs/archive/handoffs/handoff-2026-11-09-batch-q-t105-add-modal.md)

@@ -237,7 +237,50 @@ xmake f -a x86 -m %build_config% %build_sdk_option%
 
 ### 7.6 新增未决项
 
-6. `scripts/install/acceptance-check.ps1` 的 C3 / C3b 用 **3 段**正则匹配版本化 shim，
+6. ~~`scripts/install/acceptance-check.ps1` 的 C3 / C3b 用 **3 段**正则匹配版本化 shim，
    而现役命名是 **4 段**（`weaselx64.<ver>.<build>.<seq>.dll`）⇒ 每次误报
-   「versioned shim : NONE FOUND」/「unexpected file name」。属**验收判据自身失灵**（会掩盖真缺件），
-   本轮未改（改完必须复跑一次装机验收）。
+   「versioned shim : NONE FOUND」/「unexpected file name」。属**验收判据自身失灵**（会掩盖真缺件）。~~
+   **✅ 已修（见 §7.7）**。更正一处表述：现役命名不是固定 4 段，而是 **4–5 段数字**
+   （`FLUXING_VERSION` 自身是 `N.N.N`，再拼 `<WEASEL_BUILD>` 与 `<seq>` ⇒ 4 段；
+   若 `FLUXING_VERSION` 是 4 段则得 5 段，实机两者都存在：
+   `weaselx64.1.1.6.0.dll` 4 段、`weaselx64.1.2.1.2.2.dll` 5 段）。
+
+### 7.7 未决项 6 修复：验收判据 C3/C3b 失灵（2026-11-09 收尾）
+
+**结论**：`scripts/install/acceptance-check.ps1` 已修，装机验收 **EXIT=0 / ALL HARD CHECKS PASSED**。
+
+**改了什么**（两处，均已逐行复读核对落盘）：
+
+1. 头注释 Criteria 段：C3 说明改为「shim 名 3–5 段数字」，并标注旧 3 段正则永远匹配不到现役名；
+   C3b 标注为 **HARD CHECK**。
+2. C3/C3b 本体：
+   - 新增 `$ShimRx = '^weasel(x64)?(\.\d+){3,5}\.dll$'`、
+     `$X64ShimRx = '^weaselx64(\.\d+){3,5}\.dll$'`（用段数区间而非固定段数，兼容历史 4 段与现役 5 段）。
+   - **C3 保持信息性**（shim 为 0 是合法状态：没文件被锁时用裸名），仅把误导性文案改为
+     `NONE FOUND (nothing was locked; bare name is in use)`。
+   - **C3b 由 `Note` 升级为 `Pass`/`Fail` 硬判**：注册表未找到指向 `weaselx64` 的 TIP 路径 ⇒ Fail；
+     指向版本化 shim 且文件存在 ⇒ Pass；指向裸名且文件存在 ⇒ Pass；**文件缺失或文件名异常 ⇒ Fail**。
+     这一条直接消除「掩盖真缺件」的根因——此前无论注册坏成什么样都只打印不置位 `$fail`。
+
+**验证证据**（三路，改写后实跑）：
+
+- `acceptance-check.ps1` 实跑 ⇒ **EXIT=0**；C1 size/sha256 双 PASS；C2 PASS；
+  **C3 列出 26 个版本化 shim**（旧判据在这里必然 `NONE FOUND`，这就是 bug 的直接反证）；
+  **C3b 命中 `D:\Program Files\fluxing\weasel\weaselx64.1.2.1.2.2.dll` ⇒ PASS**；C4 命中 1 条自启项。
+- 正则正反例断言 **8/8 全绿**（`REGEX_ASSERT bad=0 of 8`）：
+  命中 `weaselx64.1.2.1.2.2.dll` / `weaselx64.1.1.6.0.dll` / `weasel.1.2.1.1.0.dll` / `weaselx64.1.2.1.dll`；
+  不命中 `weaselx64.dll`（裸名）/ `weaselx64.1.2.1.2.2.dll.tmp` / `weaselx64.1.2.1.2.3.4.5.dll`（6 段越界）/ `weaselx64.abc.dll`。
+- `scripts/install/verify-installed.ps1:150-166` 复查：它用宽容前缀 `^{stem}\..+\.dll$`，
+  **本来就没有这个 bug** ⇒ 失灵只发生在 `acceptance-check.ps1`，无需同步改。
+
+**踩到的坑（值得记）**：第一版断言里我把 `weaselx64.1.2.1.dll` 的预期写成「不该命中」，
+跑出 `bad=1` 差点判成正则坏了。实际它恰是 **3 段**、落在 `{3,5}` 区间内、**本该命中**；
+是我把「旧正则是 3 段式（固定 3 段、因此认不出 4–5 段）」误记成「3 段名非法」。
+⇒ 断言失败先分辨「生产代码错」还是「预期写错」，别直接去改正则。
+
+**第二个坑（行尾）**：本文档 HEAD 版本是**混合行尾**（65 行 CRLF + 其余 LF，无 `.gitattributes`、`core.autocrlf=false`
+⇒ 行尾即内容）。本轮 edit 后整文件统一为 **LF**，于是 `git diff` 显示 `104/68`，而
+`git diff -w` 与 `git diff --ignore-cr-at-eol` 都是 **`39/3`** —— 差额 65/65 全是行尾归一化，**不是内容重写**。
+判断 diff 是否有行尾噪音的判据就是这条：`--ignore-cr-at-eol` 后行数骤降 ⇒ 行尾变了。
+本次选择保留统一 LF（混合行尾→单一 LF 是改善，文档无功能影响，完美恢复需字节级对齐、成本高于收益）。
+`scripts/install/acceptance-check.ps1` 不受影响：**CRLF=137 / bareLF=0**，两种 diff 模式同为 `25/8`。

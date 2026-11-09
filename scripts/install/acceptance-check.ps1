@@ -16,8 +16,13 @@
   Criteria (from handoff-2026-11-03, "XIU-QIU-1" / requirement(1)):
     C1  data\default.yaml = 18217 bytes AND sha256 starts with 917509f6f2460230
     C2  no *.stage2 marker left behind
-    C3  versioned shim present; TIP / InprocServer32 path that points at weaselx64
-        -> reported as VERSIONED shim or BARE name (bare = the file was not locked)
+    C3  versioned shim present (informational; absent = nothing was locked)
+        shim name form: weasel[x64].<ver>.<build>[.<seq>].dll
+        => 3 to 5 numeric segments.  The old 3-segment regex never matched the
+        live names (weaselx64.1.2.1.2.2.dll) and printed "NONE FOUND" forever.
+    C3b TIP / InprocServer32 path that points at weaselx64 - HARD CHECK:
+        VERSIONED shim (file must exist) or BARE name both pass; a
+        registration pointing at an unexpected or missing file fails.
     C4  auto-start Run entry (HKLM 64-bit view / HKLM WOW6432Node view / HKCU)
 
   Exit code: 0 = all hard checks passed, 1 = at least one hard check failed.
@@ -71,10 +76,16 @@ if ($stage2.Count -eq 0) { Pass 'no stage2 marker' }
 else { $stage2 | ForEach-Object { Note ("stage2 marker: {0}" -f $_.Name) }; Fail 'stage2 marker present' }
 
 # ---- C3: versioned shim + TIP registration --------------------------------
+#  Shim naming comes from output/install.nsi:739 / 823
+#  'weasel[x64].<FLUXING_VERSION>.<WEASEL_BUILD>.<seq>.dll'.  FLUXING_VERSION is
+#  itself N.N.N, so the live name carries 4-5 numeric segments
+#  (weaselx64.1.2.1.2.2.dll).  Keep the range, do not pin one exact arity.
+$ShimRx     = '^weasel(x64)?(\.\d+){3,5}\.dll$'
+$X64ShimRx  = '^weaselx64(\.\d+){3,5}\.dll$'
 Section 'C3: versioned shim present'
 $shims = @(Get-ChildItem -LiteralPath $InstallDir -Filter 'weasel*.dll' -File -ErrorAction SilentlyContinue |
-           Where-Object { $_.Name -match '^weasel(x64)?\.\d+\.\d+\.\d+\.dll$' })
-if ($shims.Count -eq 0) { Note 'versioned shim : NONE FOUND' }
+           Where-Object { $_.Name -match $ShimRx })
+if ($shims.Count -eq 0) { Note 'versioned shim : NONE FOUND (nothing was locked; bare name is in use)' }
 else { $shims | ForEach-Object { Note $_.Name }; Note ("versioned shim count = {0}" -f $shims.Count) }
 
 Section 'C3b: TIP / InprocServer32 path that points at weaselx64'
@@ -91,14 +102,20 @@ foreach ($root in @('HKLM\SOFTWARE\Classes\CLSID', 'HKLM\SOFTWARE\WOW6432Node\Cl
   }
 }
 if ($tipPaths.Count -eq 0) {
-  Note 'TIP path pointing to weaselx64 : NOT FOUND'
+  Fail 'TIP path pointing to weaselx64 : NOT FOUND (TSF registration missing)'
 } else {
   foreach ($p in ($tipPaths | Select-Object -Unique)) {
     Note ("TIP path : {0}" -f $p)
     $leaf = Split-Path -Leaf $p
-    if ($leaf -match '^weaselx64\.\d+\.\d+\.\d+\.dll$') { Note '   -> points at a VERSIONED shim' }
-    elseif ($leaf -eq 'weaselx64.dll')             { Note '   -> points at the BARE name (file was not locked, no shim needed)' }
-    else                                           { Note '   -> unexpected file name' }
+    if ($leaf -match $X64ShimRx) {
+      if (Test-Path -LiteralPath $p) { Pass 'points at a VERSIONED shim (file exists)' }
+      else { Fail 'points at a VERSIONED shim but the file is MISSING' }
+    }
+    elseif ($leaf -eq 'weaselx64.dll') {
+      if (Test-Path -LiteralPath $p) { Pass 'points at the BARE name (file was not locked, no shim needed)' }
+      else { Fail 'points at the BARE name but the file is MISSING' }
+    }
+    else { Fail ("unexpected registered file name: {0}" -f $leaf) }
   }
 }
 
