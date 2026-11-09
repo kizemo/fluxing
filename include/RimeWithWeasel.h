@@ -108,7 +108,16 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   // 切换 button). The handler caches m_current_schema_id updated by
   // _GetStatus on each IPC roundtrip; this avoids needing to call
   // rime_api directly from the QP dialog.
-  std::string GetCurrentSchemaId() const { return m_current_schema_id; }
+  // spec 045 修(2026-11-09):不再返回「全局单值」,改为**按目标会话 live 读**。
+  //
+  // ★ 缺陷背景(用户报告「切换到搜狗双拼,仍然是全拼输入」):旧实现返回
+  //   m_current_schema_id —— 该值会被 AddSession 用**新会话的默认方案**
+  //   (rime_ice 全拼)覆盖,于是「用户已切到搜狗双拼」也会被面板显示成全拼,
+  //   且「下一个方案」的起点算错(可能算出的就是当前方案 ⇒ 看起来没切换)。
+  //
+  // 口径:目标会话(显式 ipc_id → 活动 → 最近焦点 → 唯一会话)的 live
+  // schema_id;读不到才回落到 m_current_schema_id 镜像。
+  std::string GetCurrentSchemaId();
   std::vector<std::string> GetAvailableSchemas() const {
     return m_available_schemas;
   }
@@ -240,6 +249,10 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   //   不存在时**插入**一个假会话,把「只有一个会话」这个事实破坏掉
   //   (SetOption 的唯一会话回退就靠它)。
   RimeSessionId _ResolveTargetSession(WeaselSessionId ipc_id);
+  // spec 045 修(2026-11-09):读某个 rime 会话当前的 schema_id(内存态,无 I/O)。
+  std::string _LiveSchemaId(RimeSessionId session_id);
+  // spec 045 修(2026-11-09):切换输入方案时的用户可见反馈(中文提示)。
+  void _NotifySchemaSwitch(const std::wstring& text);
   // 批次 H:把「标点宽度」落到某个会话,并同步服务端镜像。
   // halfwidth=true ⇒ ascii_punct=true(英文标点)且 full_shape=false;
   // halfwidth=false ⇒ ascii_punct=false(中文标点)且 full_shape=true。
@@ -260,6 +273,15 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   std::atomic<FluxingPresence> m_fluxing_presence;
   // spec 045: cached scheme + option bools (refreshed by _GetStatus).
   std::string m_current_schema_id;
+  // spec 045 修(2026-11-09):per-session 的当前方案(WeaselSessionId -> schema id)。
+  //
+  // 为什么需要:「用户选中的方案」在 librime 里是**每个会话各自持有**的,而
+  // 新建会话的默认方案 = schema_list 第一项(rime_ice 全拼)。用户显式选过
+  // 搜狗双拼之后,新窗口 / 新会话又回到全拼 ⇒ 「切了双拼还是全拼输入」。
+  //
+  // 这张表记录「每个会话实际在用哪个方案」,让新会话能继承用户的选择,
+  // 也让面板显示的方案名与实际输入会话一致。
+  std::map<WeaselSessionId, std::string> m_session_schema_ids;
   std::vector<std::string> m_available_schemas;
   mutable bool m_simplification = false;
   mutable bool m_full_shape = false;

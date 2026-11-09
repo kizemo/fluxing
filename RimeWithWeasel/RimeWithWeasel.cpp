@@ -257,18 +257,49 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
 
   RIME_STRUCT(RimeStatus, status);
   if (rime_api->get_status(session_id, &status)) {
-    std::string schema_id = status.schema_id;
+    std::string schema_id = status.schema_id ? status.schema_id : std::string();
+
+    // ★ spec 045 修(2026-11-09):新会话继承**用户当前选中的方案**。
+    //
+    // 缺陷背景(用户报告「切换到搜狗双拼,仍然是全拼输入」):
+    // 新会话的默认 schema 由 librime 决定(= schema_list 里的第一项,
+    // 本机是 rime_ice 全拼)。用户在面板上显式选过搜狗双拼之后,新开窗口 /
+    // 重新激活编辑框都会建出新会话 ⇒ 又回到全拼 ⇒ 用户看到「切了双拼,
+    // 还是只能全拼输入」。
+    //
+    // 只在**确实不一致**时才切(避免每次聚焦编辑框都重载方案组件);
+    // librime 侧的 var/previously_selected_schema 只在引擎内部生效,
+    // 不保证每个新会话都继承。
+    if (!m_current_schema_id.empty() && m_current_schema_id != schema_id &&
+        rime_api->select_schema(session_id, m_current_schema_id.c_str())) {
+      // ★ 2026-11-09 修:此处**不能**提前 free_status(&status) ——
+      //   下面第 299-300 行还会读 status.schema_id / 拷贝 status,
+      //   提前释放就是 use-after-free。status 统一在本块末尾(302 行)释放。
+      RIME_STRUCT(RimeStatus, status2);
+      if (rime_api->get_status(session_id, &status2)) {
+        schema_id = status2.schema_id ? status2.schema_id : std::string();
+        session_status.status = status2;
+        rime_api->free_status(&status2);
+      }
+    }
 
     // spec 045 v0.18.29.0: cache current schema id for QuickPanel Row 3 label.
-    m_current_schema_id = status.schema_id ? status.schema_id : std::string();
+    //
+    // ★ 2026-11-09:只在**全局镜像为空**时初始化它 —— 旧实现无条件覆盖,
+    //   于是任何一次新建会话都会把「用户选中的方案」冲回 rime_ice 全拼,
+    //   这正是「切了双拼还是全拼」的直接原因之一。
+    if (m_current_schema_id.empty())
+      m_current_schema_id = schema_id;
     if (m_available_schemas.empty())
       _RefreshSchemaList();
     m_last_schema_id = schema_id;
+    m_session_schema_ids[ipc_id] = schema_id;
     _LoadSchemaSpecificSettings(ipc_id, schema_id);
     _LoadAppInlinePreeditSet(ipc_id, true);
     _UpdateInlinePreeditStatus(ipc_id);
     _RefreshTrayIcon(session_id, _UpdateUICallback);
-    session_status.status = status;
+    if (session_status.status.schema_id == nullptr)
+      session_status.status = status;
     session_status.__synced = false;
     rime_api->free_status(&status);
   }
@@ -1013,38 +1044,92 @@ void RimeWithWeaselHandler::SetPunctuationWidth(bool halfwidth,
   _ApplyPunctWidth(target, halfwidth);
 }
 
+// spec 045 修(2026-11-09):读某个 rime 会话**当前**的 schema_id。
+//
+// 口径:进程内 C API(读内存),不碰文件 ⇒ 满足 constitution P2(显示路径零 I/O)。
+// 与 _GetStatus 里读到的 status.schema_id 同源,但**不依赖 IPC 往返** ——
+// 面板的 100ms 轮询与用户的点击都可能发生在任何 IPC 往返之前。
+std::string RimeWithWeaselHandler::_LiveSchemaId(RimeSessionId session_id) {
+  if (!rime_api || !session_id)
+    return std::string();
+  RIME_STRUCT(RimeStatus, status);
+  if (!rime_api->get_status(session_id, &status))
+    return std::string();
+  std::string schema_id = status.schema_id ? status.schema_id : std::string();
+  rime_api->free_status(&status);
+  return schema_id;
+}
+
+// spec 045 修(2026-11-09):面板显示的方案名必须是**目标会话**的 live 值。
+//
+// 缺陷背景(用户报告「切换到搜狗双拼,仍然是全拼输入」):旧实现返回全局单值
+// m_current_schema_id,而该值会被 AddSession 用**新会话的默认方案**(rime_ice
+// 全拼)覆盖 ⇒ 面板显示的方案名与实际输入会话脱节,且「下一个方案」的起点
+// 算错(可能算出来的就是当前方案 ⇒ 用户看到「点了没反应」)。
+std::string RimeWithWeaselHandler::GetCurrentSchemaId() {
+  const RimeSessionId target = _ResolveTargetSession(0);
+  if (target) {
+    std::string live = _LiveSchemaId(target);
+    if (!live.empty())
+      return live;
+  }
+  return m_current_schema_id;
+}
+
+// spec 045 修(2026-11-09):切换输入方案时的**用户可见反馈**。
+//
+// 背景:spec 099 的不变量是「每个可见槽位点击必产生确定的用户可见效果」。
+// 旧实现 select_schema 失败时**全程静默**(返回 False 就走人),用户在面板上
+// 点「切换到下一个输入方案」看不到任何变化,只能靠猜。
+// 现在:失败 / 无会话 / 无可用方案都给出中文提示(候选窗 aux 提示,与既有
+// 「部署完成」提示同一通道),成功时面板标签本身会变成新方案名。
+void RimeWithWeaselHandler::_NotifySchemaSwitch(const std::wstring& text) {
+  if (!m_ui || text.empty())
+    return;
+  fluxing::diag::AppendLine("server", "schema_switch notice");
+  weasel::Context ctx;
+  weasel::Status status;
+  ctx.aux.str = text;
+  m_ui->Update(ctx, status);
+  m_ui->ShowWithTimeout(1500);
+}
+
 void RimeWithWeaselHandler::SelectSchema(const std::string& schema_id) {
   // spec 045 v0.18.29.0: QuickPanel 切换 button handler.
-  // If schema_id is empty, cycle to next available (legacy behavior
-  // when the user pressed the button without specifying a target).
+  //
+  // ★ 2026-11-09 修(用户报告「切换到搜狗双拼,仍然是全拼输入」):
+  //   旧实现用 rime_api->create_session() 造一个**新会话**再 select_schema
+  //   —— 改的是那个没人用的新会话,对用户正在输入的窗口**没有任何可见效果**
+  //   (槽位点了没反应)。现在与 SwitchToNextSchema 同一口径:作用到目标会话,
+  //   并广播到全部活动会话(用户显式选方案 = 全局语义,见 ADR 0048)。
   if (!rime_api)
     return;
-  if (!schema_id.empty()) {
-    if (rime_api->select_schema(rime_api->create_session(),
-                                schema_id.c_str())) {
-      m_current_schema_id = schema_id;
-      if (_UpdateUICallback)
-        _UpdateUICallback();
-    }
+  if (schema_id.empty()) {
+    // 旧行为:不给目标就循环到下一个。
+    SwitchToNextSchema();
     return;
   }
-  // Cycle: find current schema index, advance.
-  if (m_available_schemas.empty())
-    _RefreshSchemaList();
-  if (m_available_schemas.empty())
+  const RimeSessionId target = _ResolveTargetSession(0);
+  if (!target) {
+    _NotifySchemaSwitch(L"没有可切换的输入会话");
     return;
-  auto it = std::find(m_available_schemas.begin(), m_available_schemas.end(),
-                      m_current_schema_id);
-  size_t next = (it == m_available_schemas.end())
-                    ? 0
-                    : ((it - m_available_schemas.begin() + 1) %
-                       m_available_schemas.size());
-  std::string next_id = m_available_schemas[next];
-  if (rime_api->select_schema(rime_api->create_session(), next_id.c_str())) {
-    m_current_schema_id = next_id;
-    if (_UpdateUICallback)
-      _UpdateUICallback();
   }
+  bool applied = false;
+  for (auto& pair : m_session_status_map) {
+    if (!pair.second.session_id)
+      continue;
+    if (rime_api->select_schema(pair.second.session_id, schema_id.c_str()))
+      applied = true;
+  }
+  if (!applied)
+    applied = rime_api->select_schema(target, schema_id.c_str()) ? true : false;
+  if (!applied) {
+    _NotifySchemaSwitch(L"切换输入方案失败");
+    return;
+  }
+  m_current_schema_id = schema_id;
+  if (_UpdateUICallback)
+    _UpdateUICallback();
 }
 
 // spec 099 P0-3: 快捷面板槽 0 = 「切换到下一个输入方案」。
@@ -1055,20 +1140,60 @@ void RimeWithWeaselHandler::SelectSchema(const std::string& schema_id) {
 //   会话**(to_session_id(m_active_session)),与 SetOption(0, ...) 同一形状。
 //   目标 id 的选择走 fluxing::NextSchemaId(纯函数,可单测)。
 void RimeWithWeaselHandler::SwitchToNextSchema() {
+  // spec 099 P0-3: 快捷面板槽 0 = 「切换到下一个输入方案」。
+  //
+  // ★ 2026-11-09 修(用户报告「切换到搜狗双拼,仍然是全拼输入」):
+  //   旧实现有三处致命缺陷,合起来正好复现用户看到的「点了没反应」:
+  //   ① 目标会话用 to_session_id(m_active_session) —— m_active_session 会被
+  //      FocusOut 清零,而 to_session_id 的 operator[] 会**插入**一个 key=0 的
+  //      假会话,拿 session_id=0 去 select_schema ⇒ librime 收到非法 session_id
+  //      ⇒ 返回 False,**全程静默**(没有任何用户可见反馈)。
+  //      现在统一走 _ResolveTargetSession(显式 → 活动 → 最近焦点 → 唯一会话)。
+  //   ② 起点方案取全局 m_current_schema_id —— 该值会被别的新会话覆盖
+  //      (AddSession 用新会话默认方案 rime_ice 全拼盖掉),于是算出的「下一个」
+  //      可能就是当前方案 ⇒ 看起来没切换。
+  //      现在起点取**目标会话 live 的 schema_id**。
+  //   ③ 只切一个会话 —— 用户在 A 窗口切到双拼、在 B 窗口输入(那个会话还是
+  //      rime_ice 全拼)⇒ 仍然是全拼输入。
+  //      用户显式选方案是**全局**语义(与商业输入法一致),故广播到全部活动会话。
   if (!rime_api)
     return;
+  const RimeSessionId target = _ResolveTargetSession(0);
+  if (!target) {
+    _NotifySchemaSwitch(L"没有可切换的输入会话");
+    return;
+  }
   if (m_available_schemas.empty())
     _RefreshSchemaList();
-  const std::string next_id =
-      fluxing::NextSchemaId(m_available_schemas, m_current_schema_id);
-  if (next_id.empty())
+  if (m_available_schemas.empty()) {
+    _NotifySchemaSwitch(L"没有可用的输入方案");
     return;
-  if (rime_api->select_schema(to_session_id(m_active_session),
-                              next_id.c_str())) {
-    m_current_schema_id = next_id;
-    if (_UpdateUICallback)
-      _UpdateUICallback();
   }
+  // 起点 = 目标会话当前的 live 方案(拿不到才回落全局镜像)。
+  std::string current = _LiveSchemaId(target);
+  if (current.empty())
+    current = m_current_schema_id;
+  const std::string next_id = fluxing::NextSchemaId(m_available_schemas, current);
+  if (next_id.empty()) {
+    _NotifySchemaSwitch(L"没有可用的输入方案");
+    return;
+  }
+  bool applied = false;
+  for (auto& pair : m_session_status_map) {
+    if (!pair.second.session_id)
+      continue;
+    if (rime_api->select_schema(pair.second.session_id, next_id.c_str()))
+      applied = true;
+  }
+  if (!applied)
+    applied = rime_api->select_schema(target, next_id.c_str()) ? true : false;
+  if (!applied) {
+    _NotifySchemaSwitch(L"切换输入方案失败");
+    return;
+  }
+  m_current_schema_id = next_id;
+  if (_UpdateUICallback)
+    _UpdateUICallback();
 }
 
 void RimeWithWeaselHandler::_RefreshSchemaList() {
@@ -2197,12 +2322,22 @@ RimeSessionId RimeWithWeaselHandler::_ResolveTargetSession(
   it = m_session_status_map.find(m_last_focus_session);
   if (it != m_session_status_map.end() && it->second.session_id)
     return it->second.session_id;
-  // 回退:只有恰好一个会话时,才能确定用户指的是谁。
-  if (m_session_status_map.size() == 1) {
-    auto only = m_session_status_map.begin();
-    if (only->second.session_id)
-      return only->second.session_id;
+  // 回退:只有恰好一个**有效**会话时,才能确定用户指的是谁。
+  //
+  // ★ 2026-11-09 修:不能直接用 m_session_status_map.size() == 1 ——
+  //   历史上 to_session_id() 的 operator[] 副作用会在 map 里插入 key=0 的
+  //   假会话(session_id=0),那时 size 变成 2 ⇒ 唯一会话回退永久失效。
+  //   改为**只统计 session_id 有效的条目**。
+  RimeSessionId only_session = 0;
+  size_t valid_count = 0;
+  for (const auto& pair : m_session_status_map) {
+    if (!pair.second.session_id)
+      continue;
+    ++valid_count;
+    only_session = pair.second.session_id;
   }
+  if (valid_count == 1)
+    return only_session;
   return 0;
 }
 
