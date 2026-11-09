@@ -44,15 +44,22 @@ if (-not (Test-Path -LiteralPath $InstallDir)) {
 }
 
 # ---- C1: data\default.yaml ------------------------------------------------
-Section 'C1: data\default.yaml must be 18217 bytes / sha256 917509f6f2460230'
 $dy = Join-Path $InstallDir 'data\default.yaml'
+$src = 'F:\soft\00selfmade\rime_claude\output\data\default.yaml'
+Section ("C1: data\default.yaml must match repo source: {0}" -f $src)
 if (Test-Path -LiteralPath $dy) {
   $fi = Get-Item -LiteralPath $dy
   Note ("size   = {0}" -f $fi.Length)
-  if ($fi.Length -eq 18217) { Pass 'size' } else { Fail ("size (expected 18217, got {0})" -f $fi.Length) }
   $sha = (Get-FileHash -LiteralPath $dy -Algorithm SHA256).Hash
   Note ("sha256 = {0}" -f $sha)
-  if ($sha.ToLower().StartsWith('917509f6f2460230')) { Pass 'sha256' } else { Fail 'sha256 prefix' }
+  if (-not (Test-Path -LiteralPath $src)) {
+    Fail ("missing repo source for comparison: {0}" -f $src)
+  } else {
+    $si = Get-Item -LiteralPath $src
+    $srcSha = (Get-FileHash -LiteralPath $src -Algorithm SHA256).Hash
+    if ($fi.Length -eq $si.Length) { Pass ("size (source {0})" -f $si.Length) } else { Fail ("size (source {0}, installed {1})" -f $si.Length, $fi.Length) }
+    if ($sha -eq $srcSha) { Pass 'sha256 == source' } else { Fail 'sha256 differs from repo source' }
+  }
 } else {
   Fail ("MISSING: {0}" -f $dy)
 }

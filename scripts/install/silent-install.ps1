@@ -59,13 +59,19 @@
 [CmdletBinding()]
 param(
     [string]$InstallRoot = 'D:\Program Files\fluxing',
+    [string]$Installer = '',
     [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Continue'
 
 $RepoRoot   = 'F:\soft\00selfmade\rime_claude'
-$Installer  = Join-Path $RepoRoot 'output\archives\fluxing-1.1.6-installer.exe'
+# installer auto-resolve: default = highest version in output\archives (was hardcoded 1.1.6)
+if (-not $Installer) {
+    $Installer = Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'output\archives') -Filter 'fluxing-*-installer.exe' -ErrorAction SilentlyContinue |
+        Sort-Object { [version]($_.BaseName -replace '^fluxing-' -replace '-installer$') } -Descending |
+        Select-Object -ExpandProperty FullName -First 1
+}
 $LauncherBat = Join-Path $RepoRoot 'scripts\install\silent-install.cmd'
 $Checker    = Join-Path $RepoRoot 'scripts\install\acceptance-check.ps1'
 $UserDirKey = 'HKCU:\Software\Fluxing\Weasel'
