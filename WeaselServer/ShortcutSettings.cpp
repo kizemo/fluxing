@@ -2496,6 +2496,33 @@ void SetModalError(HWND modal, const wchar_t* text) {
     SetWindowTextW(e, text ? text : L"");
 }
 
+// T105 真机验收发现: modal 里两个 CBS_DROPDOWNLIST 创建后从未 CB_ADDSTRING
+// ⇒ 下拉框永远为空 ⇒ CB_GETCURSEL 恒为 -1 ⇒ 点「确定」只弹中文错误, 一行
+// 自定义快捷键都加不出来 (单测只覆盖纯函数 BuildCustomRow, 故全绿)。
+// 修法: 把「索引 → 传给 BuildCustomRow 的键」与「界面中文标签」收进同一张表,
+// 填充 (CB_ADDSTRING) 与回读 (CB_GETCURSEL) 共用同一数组 ⇒ 索引与语义不可能
+// 漂移。修复前 WM_COMMAND 里另有一份同名 static 数组, 正是这个坑的另一半。
+struct ModalChoice {
+  const wchar_t* key;    // 传给 BuildCustomRow 的英文键
+  const wchar_t* label;  // 用户可见的中文标签 (constitution P2)
+};
+
+const ModalChoice kActionChoices[] = {
+    {L"send", L"发送按键 (send)"},
+    {L"toggle", L"切换选项 (toggle)"},
+    {L"select", L"选择候选词 (select)"},
+};
+const ModalChoice kWhenChoices[] = {
+    {L"always", L"总是 (always)"},
+    {L"composing", L"输入中 (composing)"},
+    {L"has_menu", L"有候选 (has_menu)"},
+    {L"paging", L"翻页中 (paging)"},
+};
+
+constexpr int kActionChoiceCount =
+    sizeof(kActionChoices) / sizeof(kActionChoices[0]);
+constexpr int kWhenChoiceCount = sizeof(kWhenChoices) / sizeof(kWhenChoices[0]);
+
 }  // namespace
 
 HWND ShortcutSettings::s_hModal = nullptr;
@@ -2647,6 +2674,17 @@ void ShortcutSettings::ShowAddModal() {
   setFont(hVal, hfUi);
   makeStatic(L"触发条件", 0, kLabelX, 126, kLabelW, 20);  // 触发条件
   HWND hWhen = makeCombo(ID_MODAL_WHEN, kCtrlX, 122, kCtrlW);
+  // 填充下拉框: 与 WM_COMMAND 的索引回读共用同一张表 (见 kActionChoices)。
+  auto fillCombo = [](HWND e, const ModalChoice* items, int n) {
+    if (!e)
+      return;
+    for (int i = 0; i < n; ++i)
+      SendMessageW(e, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(items[i].label));
+    SendMessageW(e, CB_SETCURSEL, 0, 0);  // 默认第一项, 不留"空选"语义
+  };
+  fillCombo(hAct, kActionChoices, kActionChoiceCount);
+  fillCombo(hWhen, kWhenChoices, kWhenChoiceCount);
   makeStatic(
       L"send 填按键名（如 F7）；toggle 填选项名（如 ascii_mode）；"
       L"选择候选词填 1-9",  // send/toggle/select 取值说明
@@ -2727,19 +2765,20 @@ LRESULT CALLBACK ShortcutSettings::AddModalProc(HWND hwnd, UINT msg,
       HWND hAct = GetDlgItem(hwnd, ID_MODAL_ACTION);
       HWND hVal = GetDlgItem(hwnd, ID_MODAL_VALUE);
       HWND hWhen = GetDlgItem(hwnd, ID_MODAL_WHEN);
-      static const wchar_t* kActionTypes[] = {L"send", L"toggle", L"select"};
-      static const wchar_t* kWhens[] = {L"always", L"composing", L"has_menu",
-                                        L"paging"};
+      // 索引 → 键 走与 CB_ADDSTRING 相同的表 (kActionChoices/kWhenChoices),
+      // 不再就地另写一份数组: 两份数组一旦顺序不同就会把 select 写成 toggle。
       const int ai = static_cast<int>(SendMessageW(hAct, CB_GETCURSEL, 0, 0));
       const int wi = static_cast<int>(SendMessageW(hWhen, CB_GETCURSEL, 0, 0));
-      if (ai < 0 || ai > 2 || wi < 0 || wi > 3) {
+      if (ai < 0 || ai >= kActionChoiceCount || wi < 0 ||
+          wi >= kWhenChoiceCount) {
         SetModalError(hwnd, L"请先选择动作类型与触发条件");
         return 0;
       }
       wchar_t buf[160] = {};
       GetWindowTextW(hVal, buf, 159);
       Hotkey row{};
-      if (!BuildCustomRow(kActionTypes[ai], buf, kWhens[wi], &row)) {
+      if (!BuildCustomRow(kActionChoices[ai].key, buf, kWhenChoices[wi].key,
+                          &row)) {
         SetModalError(hwnd, L"动作值不合法：send 填按键名，toggle 填选项名，"
                             L"选择候选词填 1-9");
         return 0;
