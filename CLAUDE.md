@@ -39,7 +39,8 @@
 
 - **必须阶段收尾双产物**: 完成 `.specify/specs/NNN-*/tasks.md` 任一阶段任务时, 必须同步更新 `docs/archive/handoffs/handoff-YYYY-MM-DD-<slug>.md` 并就地改写 `docs/archive/prompts/prompt-next-session-YYYY-MM-DD-<slug>.md` (接力 prompt 只给全路径指针, 不复述 handoff 内容); 规则全文见 [`AGENTS.md` §9](AGENTS.md#9-handoff--relay-prompt-mandatory)。
 
-- **本批交接指针**: [批次 R · spec 045 T301–T304 可测入口（抓出并修掉写读不一致 P0）+ T201/T202/T203 界面补全 + Fix A 分层窗口不合成根因（单测 PASS=246、WeaselServer 构建通过；未提交、未装机验收）](docs/archive/handoffs/handoff-2026-11-09-batch-r-t201-t304.md) · 接力 prompt: 见该 handoff 文档；按用户 2026-11-08 指示，接力 prompt 直接给在当轮回答正文、不另落文件
+- **本批交接指针**: [批次 S · spec 045 圆形 ✕ 脏态确认 P0 修复（确认框被面板失焦自毁吞掉导致修改静默丢失）+ T201 方案下拉候选源评估（单测 PASS=249、L0 15/15、装机真机复验全绿）](docs/archive/handoffs/handoff-2026-11-09-batch-s-close-x-confirm.md) · 接力 prompt: 见该 handoff 文档；按用户 2026-11-08 指示，接力 prompt 直接给在当轮回答正文、不另落文件
+- **上一批交接指针（R）**: [批次 R · spec 045 T301–T304 可测入口（抓出并修掉写读不一致 P0）+ T201/T202/T203 界面补全 + Fix A 分层窗口不合成根因（单测 PASS=246、WeaselServer 构建通过）](docs/archive/handoffs/handoff-2026-11-09-batch-r-t201-t304.md)
 - **上一批交接指针（Q）**: [批次 Q · spec 045 T104+T105「+ 自定义」子 modal 与验证指引文案（ADR 0046）](docs/archive/handoffs/handoff-2026-11-09-batch-q-t105-add-modal.md)
 - **上一批交接指针（P）**: [批次 P · spec 045 T111 真机验收闭环（run11 = 14/14 全绿，已提交）](docs/archive/handoffs/handoff-2026-11-09-batch-p-t111-acceptance.md) · 接力 prompt: 见该 handoff 文档；按用户 2026-11-08 指示，接力 prompt 直接给在当轮回答正文、不另落文件
 - **上一批交接指针**: [批次 O · spec 045 T111 范围定案（方案 A：应用级两行只读、永不写托管块）](docs/archive/handoffs/handoff-2026-11-09-batch-o-t111-scope.md) · 接力 prompt: 见该 handoff 文档；按用户 2026-11-08 指示，接力 prompt 直接给在当轮回答正文、不另落文件

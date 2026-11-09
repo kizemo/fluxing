@@ -14572,3 +14572,23 @@ handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四
   还原后要显式 `Set-ItemProperty -Name LastWriteTime`。
 - 部署器挂起（隐藏「方案选单设定」对话框，`#32770` vis=False）时，**编译仍会发生**，
   所以判据要落在 `build/*.yaml` 上，不要等进程退出。
+
+## L209 - `MessageBox(owner=面板)` 会被面板的失焦自毁连带吞掉：确认框必须「弹框期间禁止自毁」
+
+**证据**：2026-11-09 批次 S · spec 045 快捷键设置真机验收。脏态（状态行 `● 未保存 (1 修改)  ✓ 无冲突`）
+点右上角圆形 ✕ ⇒ 面板 10ms 内消失、5 秒内**没有任何确认框**，这一轮修改被静默丢弃；
+同一套代码点底栏「取消」在面板处于前台时又能正常弹框。根因：`RequestCancel()` 里
+`MessageBoxW(s_hwnd, ...)` 的 owner 就是面板本身，而面板在 `WM_ACTIVATEAPP(FALSE)` /
+`WM_KILLFOCUS` 里按 `kShowGraceMs` 宽限后调 `Hide()` → `DestroyWindow(s_hwnd)`；
+**owner 一旦被销毁，系统连带把那个 MessageBox 关掉**（框只活了 <10ms，探针 10ms 轮询都抓不到）。
+
+**怎么用**：
+- 任何「在瞬态浮层/面板上弹确认框」的实现，都必须有**弹框期间禁止该窗口自毁**的保护
+  （本仓做法：文件级 `g_inConfirmDialog` 标记 + `WM_ACTIVATEAPP` / `WM_KILLFOCUS` 里跳过 `Hide()`）。
+- 判「确认框没出现」先分两种：① 判据没抓到（弹窗 <10ms 就没了）；② 框被 owner 销毁带走。
+  要用「面板是否消失」+「框是否出现」两条证据一起判，别只看框。
+- 状态行的修改数与确认框文案里的数量必须**同一判据**（本仓：`ShortcutSettings::CountDirtyChanges`
+  纯函数，生产与单测共用），否则会出现「状态行说 2 处修改、框里却说 1 处」。
+- 自动化探针用 `PostMessage(WM_LBUTTONDOWN/UP)` 点击**不会激活窗口**，与真机用户点击时的前台状态不同
+  ⇒ 探针必须显式 `ForceForeground`（`AttachThreadInput` + `SetForegroundWindow`）才能复现前台路径；
+  反过来，「探针抢不到前台」恰好会命中这条真实用户路径上的缺陷（本轮就是这样查出来的）。
