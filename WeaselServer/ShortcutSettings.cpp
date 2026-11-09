@@ -789,6 +789,8 @@ bool ShortcutSettings::MergeHotkeys(std::vector<Hotkey> fileRows,
       continue;
     Hotkey row = h;
     row.baseline_index = -1;
+    // T111: 应用级行标只读, UI 不许改键/重置。
+    row.read_only = ShortcutSettings::IsAppLevelAction(row.action);
     out.push_back(row);
     m_pristine.push_back(row);
   }
@@ -805,10 +807,20 @@ bool ShortcutSettings::MergeHotkeys(std::vector<Hotkey> fileRows,
     row.is_custom = true;
     row.is_default = false;
     row.baseline_index = -1;
+    // T111: 历史污染行 (曾把应用级热键写进 bindings 的遗留行) 也按应用级
+    // 归一为只读 —— 否则它们在 UI 上表现为可编辑的重复行, 且会被继续写回。
+    row.read_only = ShortcutSettings::IsAppLevelAction(row.action);
     out.push_back(row);
   }
   (void)have_base;
   return true;
+}
+
+// T111 (方案 A): 快捷静态 / 常用短语由 WeaselServer 自身注册, 是程序行为,
+// 不是 librime 的 key_binder 键位; Action_TriggerDeploy 故意不并入 (见批次 O
+// 交接卡「待核」), sync 假动作同理不在本轮范围。
+bool ShortcutSettings::IsAppLevelAction(int action) {
+  return action == Action_OpenQuickPanel || action == Action_OpenPhrases;
 }
 
 // ===== T106/T107: 托管块落盘 (default.custom.yaml) =====
@@ -1062,6 +1074,10 @@ ManagedBlock BuildManagedSubBlockV2(
   // 2) 不属于基线的行: 应用级热键没改就不进 librime 的表; 用户自定义行写
   for (const auto& h : data) {
     if (h.baseline_index >= 0 && h.baseline_index < (int)base.size())
+      continue;
+    // T111 (方案 A): 应用级热键 (快捷静态 / 常用短语) 由程序注册, 永不写进
+    // 托管块 —— 含历史污染行与用户改过键的应用级行, 下次保存即自愈清污。
+    if (ShortcutSettings::IsAppLevelAction(h.action))
       continue;
     const bool edited = !h.accept_new.empty() && h.accept_new != h.accept;
     if (!h.is_custom && !edited)

@@ -107,7 +107,15 @@ class ShortcutSettings {
     // -1 = 不属于基线 (用户自定义行 / 应用级硬编码行)。
     // 落盘时靠它判断「这行替换基线的对应行」还是「追加到列表末尾」。
     int baseline_index = -1;
+    // T111 (方案 A): 只读行 —— 应用级热键 (快捷静态 / 常用短语) 由程序自己
+    // 注册, UI 不允许改键/重置, 落盘时也永不写进 key_binder/bindings 托管块。
+    bool read_only = false;
   };
+
+  // T111 (方案 A): 应用级热键动作 —— 由 WeaselServer 进程自己注册 (快捷静态
+  // Alt+comma / 常用短语 Alt+period), 不是 librime key_binder 的键位。这类行
+  // 在面板里只读, 且永不进托管块。注意 Action_TriggerDeploy 不在此列。
+  static bool IsAppLevelAction(int action);
 
   // YAML 落盘 (T106 托管块)。public 是为了让 test/TestShortcutSettings 能直接
   // 盯落盘逻辑;界面"保存"与"导出"共用同一实现,overwrite_file=true 表示整份
