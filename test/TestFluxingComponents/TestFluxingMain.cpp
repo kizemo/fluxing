@@ -16,6 +16,7 @@ int RunToggleTest();
 int RunPanelTest();
 int RunThemeTest();
 int RunInstallPathsTest();
+int RunLangBarTest();
 }
 
 int main() {
@@ -28,6 +29,7 @@ int main() {
     {"TestFluxingPanel",  fluxing_test::RunPanelTest},
     {"TestFluxingTheme",  fluxing_test::RunThemeTest},
     {"TestFluxingInstallPaths", fluxing_test::RunInstallPathsTest},
+    {"TestFluxingLangBar", fluxing_test::RunLangBarTest},
   };
   for (const auto& t : tests) {
     int rc = t.fn();

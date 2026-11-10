@@ -72,3 +72,20 @@
 Select-String -Path WeaselTSF\LanguageBar.cpp -Pattern 'SHOWNINTRAY|TF_LBI_STYLE'
 # 真机侧：重装后枚举通知区域，确认无「英/中」项（见 tmp/ 托盘取证脚本与截图）
 ```
+
+## 修订（ADR 0053, 2026-11-10）
+
+**本 ADR 的机制前提被证伪，由 [ADR 0053](0053-langbar-item-permanently-hidden.md) 修订。**
+
+- `TF_LBI_STYLE_SHOWNINTRAY` 在现代 Windows 上是 **no-op** —— 微软官方文档对该标志写明
+  「除语言栏外，项目还将显示在通知图标托盘中。**目前不支援此标志。**」
+  ⇒ 摘掉它**不会**让通知区域少一个图标。
+- 2026-11-10 真机复核：装机 `weaselx64.dll` / `weasel.dll` 的 SHA256 与构建产物**逐字节一致**、
+  注册表 CLSID `InprocServer32` 指向装机副本、x64 `LanguageBar.obj` 的 mtime 晚于源文件
+  ⇒ **本 ADR 的改动确实在机**，但通知区域里那个
+  「任务栏输入指示 左键切换模式，右键打开菜单」（= 方框「中」/「英」图标）**依然在**
+  ⇒ 再次证明「没上机」不是原因，**机制本身**才是。
+- 现行做法（ADR 0053）：`dwStyle` 置 `TF_LBI_STYLE_HIDDENSTATUSCONTROL`，
+  `Show()` 恒置 `TF_LBI_STATUS_HIDDEN` ⇒ 该项被文档化地隐藏。
+- 本 ADR 里仍然成立、继续生效的部分：**否决 `TF_LBI_STYLE_INVISIBLE`**（会删掉语言栏入口）
+  —— ADR 0053 同样不采用它。

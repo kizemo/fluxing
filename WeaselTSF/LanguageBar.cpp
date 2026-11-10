@@ -7,6 +7,7 @@
 #include "CandidateList.h"
 #include <WeaselUtility.h>
 #include <FluxingInstallPaths.h>
+#include <FluxingLangBarStyle.h>
 
 static const DWORD LANGBARITEMSINK_COOKIE = 0x42424242;
 
@@ -105,15 +106,21 @@ STDAPI_(ULONG) CLangBarItemButton::Release() {
 STDAPI CLangBarItemButton::GetInfo(TF_LANGBARITEMINFO* pInfo) {
   pInfo->clsidService = c_clsidTextService;
   pInfo->guidItem = _guid;
-  // v12 / ADR 0044(用户指令 2026-11-08):「请去除在任务栏托盘区的输入法
-  // 『中英文』图标,这个图标不需要常驻。」
-  // 该图标就是本语言栏项:GetText() 返回「中/英」、GetIcon() 返回
-  // IDI_ZH / IDI_EN,**常驻托盘**由 dwStyle 里的 TF_LBI_STYLE_SHOWNINTRAY
-  // 决定(「the item is displayed in the system tray」)。
-  // ⇒ 去掉该标志 = 不再常驻通知区域;语言栏入口本身保留(系统语言列表里
-  // 仍可见,左键仍打开快捷设置栏),功能不丢。
+  // ADR 0053(修订 ADR 0044):彻底把本语言栏项从通知区域(托盘)去掉。
+  //
+  // 事实链:
+  //   ① 通知区域里那个方框「中」/「英」图标 = 本语言栏项
+  //      (GetIcon 返回 IDI_ZH/IDI_EN,tooltip 为「左键切换模式，右键打开菜单」)。
+  //   ② ADR 0044 的做法 = 摘掉 dwStyle 里的 TF_LBI_STYLE_SHOWNINTRAY。
+  //      微软文档对该标志写明「目前不支援此标志」⇒ 摘掉它是 no-op,
+  //      图标不会消失(ADR 0044 前提被证伪,由 ADR 0053 修订)。
+  //   ③ 文档里唯一「动态隐藏语言栏项」的机制 = dwStyle 置
+  //      TF_LBI_STYLE_HIDDENSTATUSCONTROL,再经 SetLangbarStatus 置
+  //      TF_LBI_STATUS_HIDDEN。
+  //
   // ⚠ 别改用 TF_LBI_STYLE_INVISIBLE:那会把语言栏里的入口也一并藏掉。
-  pInfo->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_BTN_MENU;
+  // ⚠ 保留 BTN_BUTTON / BTN_MENU:左键行为(打开快捷设置栏)不变。
+  pInfo->dwStyle = fluxing::kLangBarItemStyle;
   pInfo->ulSort = 1;
   lstrcpyW(pInfo->szDescription, L"WeaselTSF Button");
   return S_OK;
@@ -125,7 +132,12 @@ STDAPI CLangBarItemButton::GetStatus(DWORD* pdwStatus) {
 }
 
 STDAPI CLangBarItemButton::Show(BOOL fShow) {
-  SetLangbarStatus(TF_LBI_STATUS_HIDDEN, fShow ? FALSE : TRUE);
+  // ADR 0053:永久隐藏 —— 通知区域(托盘)里那个方框「中」/「英」图标
+  // 就是本语言栏项,用户指令要求去除。
+  // ⚠ 忽略 fShow:用户可以在「语言栏选项」里重新启用本项,系统随后会
+  //   Show(TRUE) 把托盘图标复活 ⇒ 这里恒置隐藏位。
+  (void)fShow;
+  SetLangbarStatus(fluxing::kLangBarStatusHidden, TRUE);
   return S_OK;
 }
 
@@ -410,6 +422,21 @@ HWND WeaselTSF::_GetFocusedContextWindow() {
 }
 
 BOOL WeaselTSF::_InitLanguageBar() {
+  // v14 / ADR 0053 修订(2026-11-10 真机双证):通知区域那个方框「中」/「英」
+  // 就是本语言栏项。两条文档化的隐藏路径都已被真机证伪 ——
+  //   ① ADR 0044 摘 TF_LBI_STYLE_SHOWNINTRAY:微软文档标注「目前不支援此标志」;
+  //   ② ADR 0053 置 HIDDENSTATUSCONTROL + 恒 TF_LBI_STATUS_HIDDEN:装机副本
+  //      SHA256 与构建产物一致、注册表指向同一文件、explorer 已重启(跑新镜像)、
+  //      火流猩为活动 IME 的前提下,图标**依然在**。
+  // ⇒ 唯一有效手段:根本不注册该项(不 new、不 AddItem)。
+  // 代价:托盘上的左键「切换模式/开快捷设置栏」与右键菜单入口随项一起消失;
+  //      快捷设置栏仍可由热键打开,中英状态由 compartment 承担(见 _UpdateLanguageBar)。
+  // ⚠ 本函数必须返回 TRUE:WeaselTSF.cpp 的 ActivateEx 里
+  //   `if (!_InitLanguageBar()) goto ExitError;` 会走 Deactivate(),
+  //   整个文本服务失活、中文输入直接死掉。
+  if (!fluxing::kLangBarRegisterItem)
+    return TRUE;
+
   com_ptr<ITfLangBarItemMgr> pLangBarItemMgr;
   BOOL fRet = FALSE;
 
@@ -425,7 +452,11 @@ BOOL WeaselTSF::_InitLanguageBar() {
     return FALSE;
   }
 
-  _pLangBarButton->Show(TRUE);
+  // ADR 0053:注册后立即请求隐藏(Show(FALSE) = 隐藏语义)。
+  // ⚠ 绝不能因为隐藏而让本函数返回 FALSE —— WeaselTSF.cpp 的 ActivateEx 里
+  //   `if (!_InitLanguageBar()) goto ExitError;` 会走 Deactivate(),
+  //   整个文本服务失活、中文输入直接死掉。
+  _pLangBarButton->Show(FALSE);
   fRet = TRUE;
 
   return fRet;
@@ -445,8 +476,9 @@ void WeaselTSF::_UninitLanguageBar() {
 }
 
 void WeaselTSF::_UpdateLanguageBar(weasel::Status stat) {
-  if (!_pLangBarButton)
-    return;
+  // ADR 0053:compartment(中/英、全/半 对系统的声明)与语言栏项**解耦**。
+  // 以前这段代码挂在 `if (!_pLangBarButton) return;` 之后 —— 语言栏项一旦
+  // 不可用,系统就收不到 native / full shape 的状态声明(中英状态会丢)。
   DWORD flags;
   _GetCompartmentDWORD(flags, GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION);
   if (stat.ascii_mode)
@@ -459,7 +491,8 @@ void WeaselTSF::_UpdateLanguageBar(weasel::Status stat) {
     flags &= (~TF_CONVERSIONMODE_FULLSHAPE);
   _SetCompartmentDWORD(flags, GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION);
 
-  _pLangBarButton->UpdateWeaselStatus(stat);
+  if (_pLangBarButton)
+    _pLangBarButton->UpdateWeaselStatus(stat);
 }
 
 void WeaselTSF::_ShowLanguageBar(BOOL show) {
