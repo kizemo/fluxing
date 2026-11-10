@@ -87,21 +87,59 @@ OAuth 授权**已经成功**，凭据落在 `C:\Users\Duanyi\AppData\Roaming\xdg
 **第 4 步 · 填「令牌名称」(Token name)**
 建议 `fluxing-sync-deploy`。（名称以后可改，**令牌值不行**。）
 
-**第 5 步 · 配置「权限」(Permissions)** —— 点「添加权限」(Add permission) 逐行加，共 6 行：
+**第 5 步 · 配置「权限」(Permissions) —— 关键是「按作用域分条」**
 
-| 权限组 | 权限项 | 级别 | 为什么需要 |
+> ⚠️ **2026-11-11 实测澄清（照着旧版本这步会卡住）**
+>
+> 新版建令牌界面把权限拆成**按作用域分开的 policy 条**，第一屏只有两个入口：
+> - 「从头开始，使用**帐户**策略」(Start with an **account** policy)
+> - 「从头开始，使用**区域**策略」(Start with a **zone** policy)
+>
+> **某条策略的权限下拉只列该作用域下的权限组**：
+> - 帐户策略 → 只列**帐户 (Account)** 级权限组（D1、Workers Scripts、Workers R2 Storage、Account Settings…）
+> - 区域策略 → 只列**区域 (Zone)** 级权限组（DNS、Workers Routes、Zone Settings、Zone WAF…）
+>
+> 所以在帐户策略的权限下拉里**搜不到** `DNS` 与 `Workers 路由` —— 这不是界面缺项，
+> 而是它们属于区域作用域。同一个概念词在两个作用域下**英文动词写法还不一致**（据官方权限表）：
+>
+> | 作用域 | 英文权限名写法 | 例 |
+> |---|---|---|
+> | 帐户 (Account) | **Edit** | `D1 Edit`、`Workers Scripts Edit`、`Workers R2 Storage Edit` |
+> | 区域 (Zone) | **Write** | `DNS Write`、`Workers Routes Write`、`Zone Write` |
+>
+> 中文界面里两者都可能译作「编辑 / 写入」，**以英文原文的 Edit / Write 为准**。
+> 另：帐户策略里能搜到的 `DNS 防火墙`(DNS Firewall) 是**另一个**权限组，不是 DNS 记录权限。
+
+**5.1 第一条策略：帐户策略（本项目必须，4 行）**
+
+点「添加权限」(Add permission) 逐行加：
+
+| 作用域 | 权限组 | 级别（英文原文） | 为什么需要 |
 |---|---|---|---|
-| 帐户 (Account) | D1 | 编辑 (Edit) | `wrangler d1 create` / `migrations apply --remote` |
-| 帐户 (Account) | Workers R2 存储 (Workers R2 Storage) | 编辑 (Edit) | `wrangler r2 bucket create` |
-| 帐户 (Account) | Workers 脚本 (Workers Scripts) | 编辑 (Edit) | `wrangler deploy` / `secret put` |
-| 帐户 (Account) | 帐户设置 (Account Settings) | 读取 (Read) | 令牌模式下让 wrangler 能列出账号 |
-| 区域 (Zone) | DNS | 编辑 (Edit) | `custom_domain = true` 自动建 `api.aiec.fun` 记录 |
-| 区域 (Zone) | Workers 路由 (Workers Routes) | 编辑 (Edit) | 同上，Worker 路由绑定 |
+| 帐户 (Account) | D1 | 编辑 (**Edit**) | `wrangler d1 create` / `migrations apply --remote` |
+| 帐户 (Account) | Workers R2 存储 (Workers R2 Storage) | 编辑 (**Edit**) | `wrangler r2 bucket create` |
+| 帐户 (Account) | Workers 脚本 (Workers Scripts) | 编辑 (**Edit**) | `wrangler deploy` / `secret put` |
+| 帐户 (Account) | 帐户设置 (Account Settings) | 读取 (**Read**) | 令牌模式下让 wrangler 能列出账号 |
 
-**第 6 步 · 配置「资源」(Resources)**
-- 帐户 → 「特定帐户」(Specific account) → 选 `Kizemo@163.com's Account`（Account ID `016c8e736b685af88860034ea6eb1daa`）；
-- 区域 → 「特定区域」(Specific zone) → 选 `aiec.fun`。
-- 区域若显示「所有区域」(All zones) 也可以，但**收窄到 `aiec.fun` 更安全**。
+**5.2 第二条策略：区域策略（本项目**不需要**，可整条跳过）**
+
+历史上这里列过 `DNS Write` + `Workers Routes Write` 两行，**现已确认非必需**：
+`wrangler.toml` 用的是
+`routes = [{ pattern = "api.aiec.fun", custom_domain = true }]`，
+且 zone `aiec.fun` 与 Worker **同账号** ⇒ DNS 记录与路由绑定由 Workers 平台在 `deploy` 时
+**自动创建**。实证：2026-11-11 `wrangler deploy` 输出 `api.aiec.fun (custom domain)`，
+全程**未手工建任何 CNAME**，部署后 `https://api.aiec.fun/v1/health` 直接 200。
+
+> 若将来确实需要区域级权限（例如换用 `routes` 显式指定而非 `custom_domain`，
+> 或让令牌代管别的子域），做法是：在令牌编辑页点「添加策略 / Add policy」→
+> 选「区域」→ 「包含 / Include」→ 「特定区域 / Specific zone」→ `aiec.fun`
+> → 该策略的权限下拉里才会出现 `DNS Write` / `Workers Routes Write`。
+
+**第 6 步 · 配置策略的作用域（Resources / Include）**
+- 帐户策略 → 「包含 / Include」→ 「特定帐户 / Specific account」→ 选
+  `Kizemo@163.com's Account`（Account ID `016c8e736b685af88860034ea6eb1daa`）；
+  - 界面默认给的就是「所有帐户 / All accounts」，**能收窄就收窄**，但只有一个账号时两者等价。
+- 区域策略（若建了）→ 「包含 / Include」→ 「特定区域 / Specific zone」→ `aiec.fun`。
 
 **第 7 步 · 「客户端 IP 地址过滤」(Client IP Address Filtering)** —— **留空**。本机公网 IP 会变，填了就等于自锁。
 
@@ -132,6 +170,28 @@ cd F:\soft\00selfmade\rime_claude\cloud\fluxing-sync
 npx wrangler whoami
 ```
 看到账号邮箱与 Account ID 即成功（`.env` 里的令牌优先于已存在的 OAuth 凭据）。
+
+**第 12.1 步 · 实测验证记录（2026-11-11 22:30 · 🟢 全绿）**
+
+用户按本节建了「帐户策略 + 4 条权限」的自定义令牌，实测**四条能力全部用令牌身份跑通**：
+
+| 要验的权限 | 命令 | 结果 |
+|---|---|---|
+| 令牌本身 + `Account Settings Read` | `wrangler whoami` | ✅ 列出 Account ID `016c8e736b685af88860034ea6eb1daa` |
+| `D1 Edit` | `wrangler d1 list` / `d1 execute --remote` | ✅ 实查表名 users / devices / refresh_tokens / sync_items |
+| `Workers R2 Storage Edit` | `wrangler r2 bucket list` | ✅ 见 `fluxing-sync` |
+| `Workers Scripts Edit`（读） | `wrangler secret list` | ✅ 见 `AUTH_PEPPER` |
+| `Workers Scripts Edit`（**写**） | `wrangler deploy` | ✅ 退出码 0，Version `bf0305d3-…`，`api.aiec.fun (custom domain)` |
+
+- **身份确认**：`whoami` 输出 `You are logged in with an User API Token` +
+  `The API Token is read from the CLOUDFLARE_API_TOKEN environment variable`
+  ⇒ 确证走的是令牌，**不是 OAuth 回落**，测试有效。
+- 出现 `Unable to retrieve email for this user. Are you missing the User->User Details->Read permission?`
+  **属正常**：我们没勾 `User Details Read`，不影响任何部署能力。
+- **`DNS Write` / `Workers Routes Write` 不需要**：`deploy` 后 `api.aiec.fun` 绑定成功、
+  线上 `/v1/health` 返回 200，全程未手工建 DNS 记录。
+- ⚠️ 别拿 `d1 list` 的 `num_tables` 当「迁移没生效」的证据 —— 本次该字段显示 `0`，
+  但 `d1 execute --remote` 实查 `sqlite_master` 拿到全部业务表。以 `sqlite_master` 为准。
 
 > **机制实证（A/B，2026-11-10）**：wrangler **4.159.0 会自动读取当前工作目录的 `.env`** 里的
 > `CLOUDFLARE_API_TOKEN`。对照组放了一个假令牌 → 报

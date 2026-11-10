@@ -144,8 +144,21 @@ T405「账号与同步」右键菜单**判据已闭合**（运行时菜单项 id
    你 2026-11-10 21:57 点完启用，我随即代跑了 `r2 bucket create fluxing-sync` → `deploy` → `secret put AUTH_PEPPER` → `curl` 判据，
    `https://api.aiec.fun/v1/health` 返回 **200**。（历史步骤留档：控制台 → 「R2 对象存储」→ 「启用 R2」→ 绑支付方式。）
    *详细步骤见 `docs/ops/fluxing-cloud-external-prerequisites.md` §1.4。*
-3. **（可选）建 API Token**：OAuth 已可用，令牌不是阻塞点；建它的价值是「refresh_token 30 天到期免重授权 + CI 可用」。
-   *简体中文后台 13 步指引见 `docs/ops/fluxing-cloud-external-prerequisites.md` §1.3；令牌存 `cloud/fluxing-sync/.env`（已 gitignore）。*
+3. **建 API Token** —— 🟢 **已完成（2026-11-11 22:30）**。用户按 ops §1.3 建了**自定义令牌**
+   （「从头开始，使用帐户策略」一条 policy，4 条权限：`D1 Edit` / `Workers R2 Storage Edit` /
+   `Workers Scripts Edit` / `Account Settings Read`），存进 `cloud/fluxing-sync/.env`
+   （已 gitignore 覆盖，令牌 53 字符）。
+   **实测判据全绿，且确证本次走的是令牌身份**（`whoami` 明示 `User API Token` 且
+   `The API Token is read from the CLOUDFLARE_API_TOKEN environment variable`，不是 OAuth 回落）：
+   `whoami` 列出 Account ID `016c8e736b685af88860034ea6eb1daa` ✅ ·
+   `d1 list` + `d1 execute --remote`（表名实查 users/devices/refresh_tokens/sync_items）✅ ·
+   `r2 bucket list` 见 `fluxing-sync` ✅ · `secret list` 见 `AUTH_PEPPER` ✅ ·
+   `deploy` 退出码 **0**（Version `bf0305d3-b9ef-4e6c-80cb-7eeb9766b8fb`，
+   触发 `api.aiec.fun (custom domain)`，几秒后线上 `/v1/health` **200**）✅。
+   ⚠️ **区域（Zone）级权限 `DNS Write` / `Workers Routes Write` 用户没勾、也不需要** ——
+   这两项只在「区域策略」的作用域下才出现（帐户策略的权限下拉按作用域过滤，故搜不到）；
+   `custom_domain = true` + zone `aiec.fun` 与 Worker 同账号 ⇒ DNS 记录与路由绑定由 Workers 自动建。
+   *指引与本次复盘见 `docs/ops/fluxing-cloud-external-prerequisites.md` §1.3。*
 4. **T405 已闭合**，仅剩「是否满意视觉」这类主观确认，不再是阻塞项。
 
 ---
@@ -209,5 +222,7 @@ cd F:\soft\00selfmade\rime_claude\cloud\fluxing-sync
 - 托盘图标：用户结束 `MiniMax Code`（或注销 / 重启）后复跑 `scripts/install/check-tray-input-indicator.ps1` 拿 `OUR_HIT = 0`；若仍为 1，再查是否还有未识别的加载路径。
 - Cloudflare：🟢 **已闭环，无需再做**。R2 桶已建、Worker 已部署、`AUTH_PEPPER` 已入 Workers Secret、
   `https://api.aiec.fun/v1/health` 返回 **200**；`tasks.md` T407 已回写为 DONE（见 §7）。
-- Cloudflare（可选）：用户在后台建 API Token → 写进 `cloud/fluxing-sync/.env`（gitignored）→ 后续所有 wrangler 命令免 OAuth 刷新。
+- Cloudflare API Token：🟢 **已建成并实测通过（2026-11-11 22:30）** —— 已写进 `cloud/fluxing-sync/.env`
+  （gitignored）⇒ 后续所有 wrangler 命令免 OAuth 刷新；`whoami` / `d1` / `r2` / `secret` / `deploy`
+  五项均已用**令牌身份**跑通，线上 `/v1/health` 仍 200。
 - 阶段 E 剩余：账号页真机注册 / 登录、词库双端同步（AC-01 ~ AC-14）仍需两台设备或两套隔离用户数据目录。
