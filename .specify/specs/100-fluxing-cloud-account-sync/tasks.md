@@ -315,3 +315,28 @@
 | 输入历史跨设备回看 | 隐私红线，永不离开本机 |
 | `WeaselDeployer` 账号入口 | 首版不做；若做则触发 IPC 四边同步（见 T402） |
 | 服务端看明文 | 用户已拍板全量端到端加密，不做明文通道 |
+
+---
+
+## 批次 AD 收尾记录（2026-11-11 · 托盘「中/英」图标 + 阶段 E 入口）
+
+> 按实现回写（宪法 P3 文档治理）。批次 AD **零 C++ 改动**，只补诊断脚本 + 部署闭环。
+
+### T405 · 状态确认（已 DONE，不重做）
+- **代码**：HEAD `233dacb`「feat(WeaselServer): 右键菜单新增「账号与同步」入口 (spec 100 T405)」—— 3 文件 / +19 行（`WeaselServer/resource.h`：`ID_WEASELTRAY_CLOUD_ACCOUNT 40024`；`WeaselServer/WeaselServer.rc`：CHS/CHT/ENU 各 +1 MENUITEM；`WeaselServer/WeaselServerApp.cpp::SetupMenuHandlers()`）→ `fluxing::cloud::account_dialog::Show()`。
+- **门禁**：`build.bat weasel` 0 错误；产物 `LoadMenuW(105)` 自证 40024 恰好 1 处且顺序正确；云单测 `PASS=297 FAIL=0`；clang-format 干净。
+- **未闭环**：**真机截图**（IME 自绘窗跨进程抓不到）—— 需用户在场点一次托盘 / 快捷设置栏品牌图标的右键菜单，确认「账号与同步 (&Z)」出现并能打开账号页。
+
+### T406 · 托盘「中/英」图标去除 —— 根因第四次定位 + 部署闭环
+- **目标**：批次 J / W 两轮修法先后被证伪后，把通知区域的方框「中」/「英」彻底去掉。
+- **根因（最终）**：`include/FluxingLangBarStyle.h` 的 `kLangBarRegisterItem = false` 修复**正确且已上机**；复现是因为 **Windows 已加载映像不随磁盘文件替换而更新** —— `install.nsi` 在 DLL 被在跑进程占用时走 locked 分支，**只写 versioned shim、裸名文件原样留盘（仍是旧字节）**，而注册表早已指向修复版 shim ⇒ 旧字节被仍在跑的宿主加载 ⇒ 旧注册逻辑复现。
+- **证据**：注册表双视图 → 当前构建产物（`weaselx64.1.2.1.3.1.dll` sha16 `AB623A41EE447C5D` / `weasel.1.2.1.3.0.dll` sha16 `103802069CA84E7C`）；复现源 = 前台宿主 `msedge`(212880) 映射的裸名 `weaselx64.dll`（sha16 `2024059039231556`，mtime 11-10 12:24:30，**早于**修复编译 13:05:08 ⇒ 物理上不可能含修复）；活动 IME 切到搜狗拼音 / 美式键盘时 `OUR_HIT=0`、切回火流猩 ⇒ 1；新启动的 `notepad`（映射 fresh shim）成为前台**不能**清掉旧项 ⇒ CTF 不随宿主切换注销语言栏项。
+- **做法**：① 重建 x86 + x64 两条 TSF 链（批次 W 只重建 x64，是部署缺口）；② NSIS 打包；③ 静默装机 `ALL HARD CHECKS PASSED`；④ 把裸名 `weaselx64.dll` / `weasel.dll` 覆盖为当前构建产物（`match=True`，备份 `*.adv-20261110-204207.bak`）；⑤ 新增 `scripts/install/check-tray-input-indicator.ps1`（五段诊断 + 退出码 0/1/2）。
+- **Done 判据**：`check-tray-input-indicator.ps1` 输出 `OUR_HIT=0` 且 `VERDICT=PASS_OUR_ITEM_ABSENT`。
+- **未闭环（需用户）**：6 个进程仍持有修复前镜像（msedge / Weixin / DingTalk / Claude Code Haha / **MiniMax Code（本会话宿主）** / YXCalendar）⇒ 需结束它们或注销重登后再复测。**代码侧已无可做之事。**
+
+### T407 · 阶段 E 线上判据 —— 阻塞于用户 OAuth
+- **目标**：补齐 spec 100 线上判据（D1 / R2 / AUTH_PEPPER / deploy / DNS）。
+- **现状**：`npx wrangler whoami` ⇒ `You are not authenticated`；`CLOUDFLARE_*` / `CF_*` 环境变量全不存在；pepper 已生成（32 字节随机，存 `tmp/AD-auth-pepper.txt`，gitignored，**绝不入库**）；`wrangler.toml` 的 `database_id` 仍是占位全零 UUID。
+- **Done 判据**：`https://api.aiec.fun/v1/health` 返回 **200**；`d1 migrations apply --remote` 全绿；R2 桶 `fluxing-sync` 存在；`AUTH_PEPPER` 存为 Workers Secret（不是明文 var）。
+- **未闭环**：**用户未完成 `npx wrangler login`** ⇒ 全部命令无法执行 ⇒ 线上判据 **not verified**。
