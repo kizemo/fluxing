@@ -45,9 +45,14 @@
 #include "../../include/FluxingPanelFwIcon.h"
 #include "../../include/FluxingPanelTooltip.h"
 #include "../../include/FluxingPanelLogo.h"
+// 批次 V P1(方向 A):主题调色板 / 分层合成 / 圆角语义的**单一真相源**
+// (生产 WeaselServer/QuickPanelDialog.cpp 与本测试读同一份,R7)。
+#include "../../include/FluxingPanelTheme.h"
 #include "../../WeaselServer/AboutDialog.h"
 
+#include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <vector>
@@ -1741,6 +1746,391 @@ int main() {
           "T34c: 中文态 + ascii_punct ⇒ 英文标点态");
     Check(!ShapeIsFullwidth(true, true),
           "T34d: 英文态 + ascii_punct ⇒ 英文标点态");
+  }
+
+  // ============================================================
+  // T40 · 批次 V P0(2026-11-10):面板位置**锚点** ——
+  //   病灶(用户真机复验):面板位置按**绝对物理像素**落盘 ⇒ 分辨率变大时
+  //   工作区变大而坐标不变 ⇒ 面板相对屏幕**向左上偏移**(用户原话)。
+  //   根因不是 DPI、不是钳制算法(钳制只在出屏时兜底),而是「位置语义」。
+  //   修法:位置改按「相对所在工作区的比例」锚定 ⇒ 分辨率变化后按比例重映射。
+  //   单一真相源:include/FluxingPanelPosition.h(生产与本测试读同一份公式,R7)。
+  // ============================================================
+  std::printf("\n[批次 V P0] 位置锚点:分辨率变化时相对位置不漂\n");
+  {
+    namespace pp = fluxing::panel_position;
+    const int PW = QuickPanelDialog::kPanelW;  // 155
+    const int PH = QuickPanelDialog::kPanelH;  // 32
+    const pp::Rect wa_small{0, 0, 1920, 1040};  // 原分辨率工作区
+    const pp::Rect wa_big{0, 0, 2560, 1400};    // 放大后的工作区
+
+    // T40a: 贴右下角 ⇒ 锚点 (1,1)
+    pp::Anchor a = pp::ComputeAnchor(wa_small, 1920 - PW, 1040 - PH, PW, PH);
+    Check(a.fx == 1.0 && a.fy == 1.0, "T40a: 贴右下角 ⇒ 锚点 (1,1)");
+
+    // T40b: 贴左上角 ⇒ 锚点 (0,0)
+    a = pp::ComputeAnchor(wa_small, 0, 0, PW, PH);
+    Check(a.fx == 0.0 && a.fy == 0.0, "T40b: 贴左上角 ⇒ 锚点 (0,0)");
+
+    // T40c: 水平居中 ⇒ fx ≈ 0.5(可摆放空间 1765 为奇数 ⇒ 只能逼近)
+    a = pp::ComputeAnchor(wa_small, (1920 - PW) / 2, 0, PW, PH);
+    Check(std::fabs(a.fx - 0.5) < 0.001,
+          "T40c: 水平居中 ⇒ fx ≈ 0.5");
+
+    // T40d: 越界位置 ⇒ 锚点钳到 [0,1](越界本身由 ClampToVisibleArea 兜底)
+    a = pp::ComputeAnchor(wa_small, 5000, 5000, PW, PH);
+    Check(a.fx == 1.0 && a.fy == 1.0, "T40d: 越界坐标 ⇒ 锚点钳到 (1,1)");
+
+    // T40e: ★ 核心判据 —— 分辨率放大后面板仍在右下角(相对位置不漂)。
+    //   旧的绝对坐标口径会停在 1765/756 ⇒ 这里必然红。
+    const pp::Anchor a2 = pp::ComputeAnchor(wa_small, 1920 - PW, 756, PW, PH);
+    const pp::Point p_big = pp::AnchorToPosition(wa_big, a2, PW, PH);
+    Check(p_big.x == 2560 - PW && p_big.y == 1026,
+          "T40e: 1920x1040 → 2560x1400 ⇒ 面板仍在右下角(比例重映射)");
+
+    // T40f: 往返不变量 —— 按新工作区反算锚点必须还是原锚点(1px 量化容差内)。
+    {
+      const pp::Anchor back = pp::ComputeAnchor(wa_big, p_big.x, p_big.y, PW, PH);
+      const double eps = 1.0 / (2560 - PW);
+      Check(std::fabs(back.fx - a2.fx) <= eps &&
+                std::fabs(back.fy - a2.fy) <= eps,
+            "T40f: 往返不变量(反算锚点 == 原锚点 ⇒ 相对位置不漂)");
+    }
+
+    // T40g: 对照组 —— 新口径的结果必须不同于旧绝对坐标(否则说明没真重映射)
+    Check(p_big.x != 1920 - PW || p_big.y != 756,
+          "T40g: 对照组 —— 新口径 ≠ 旧绝对坐标(旧口径会留在 1765/756)");
+
+    // T40h: 舍入口径(.5 远离 0)
+    Check(pp::RoundHalfAwayFromZero(0.5) == 1 &&
+              pp::RoundHalfAwayFromZero(-0.5) == -1 &&
+              pp::RoundHalfAwayFromZero(1.5) == 2 &&
+              pp::RoundHalfAwayFromZero(-1.5) == -2 &&
+              pp::RoundHalfAwayFromZero(2.4) == 2,
+          "T40h: RoundHalfAwayFromZero 四舍五入(.5 远离 0)");
+
+    // T40i: 工作区尺寸恰好 == 面板 ⇒ 分母为 0 ⇒ 锚点 (0,0) 且落在工作区左上
+    {
+      const pp::Rect tight{100, 200, 100 + PW, 200 + PH};
+      const pp::Anchor at = pp::ComputeAnchor(tight, 100, 200, PW, PH);
+      const pp::Point pt = pp::AnchorToPosition(tight, at, PW, PH);
+      Check(at.fx == 0.0 && at.fy == 0.0 && pt.x == 100 && pt.y == 200,
+            "T40i: 工作区尺寸 == 面板 ⇒ 锚点 (0,0) 且贴左上");
+    }
+
+    // T40j/T40k/T40l: 落盘格式 v2 —— 前两行与 v1 完全一致(旧解析器照样能读)
+    {
+      pp::PositionRecord rec;
+      rec.pos = pp::Point{1765, 756};
+      rec.has_anchor = true;
+      rec.work_area = wa_small;
+      rec.panel_w = PW;
+      rec.panel_h = PH;
+      const std::string txt = pp::FormatPositionRecord(rec);
+      Check(txt.rfind("pos_x=1765\npos_y=756\n", 0) == 0,
+            "T40j: v2 前两行 = v1 文本(向后兼容)");
+      const auto back = pp::ParsePositionRecord(txt);
+      Check(back.has_value() && back->has_anchor && back->pos.x == 1765 &&
+                back->pos.y == 756 && back->work_area.right == 1920 &&
+                back->work_area.bottom == 1040 && back->panel_w == PW &&
+                back->panel_h == PH,
+            "T40k: v2 解析 ⇒ 锚点字段齐全还原");
+      const auto old = pp::ParsePosition(txt);
+      Check(old.has_value() && old->x == 1765 && old->y == 756,
+            "T40l: 旧接口 ParsePosition 读 v2 文件仍取到绝对坐标");
+    }
+
+    // T40m/T40n: v1 旧文件仍认(无锚点字段 ⇒ has_anchor=false,绝对坐标保留)
+    {
+      const auto rec = pp::ParsePositionRecord("pos_x=1765\npos_y=756\n");
+      Check(rec.has_value() && !rec->has_anchor && rec->pos.x == 1765 &&
+                rec->pos.y == 756,
+            "T40m: v1 旧文件仍认(缺锚点字段 ⇒ 按绝对坐标处理)");
+      Check(pp::FormatPosition(1765, 756) == "pos_x=1765\npos_y=756\n",
+            "T40n: v1 写盘文本不变");
+    }
+
+    // T40o: 锚点字段**缺一不可**(半截文件 ⇒ 按 v1 处理,不得半途解析)
+    {
+      const auto rec = pp::ParsePositionRecord(
+          "pos_x=1\npos_y=2\nwa_left=0\nwa_top=0\nwa_right=1920\n");
+      Check(rec.has_value() && !rec->has_anchor,
+            "T40o: 锚点字段缺一 ⇒ 按 v1 处理(不半途解析)");
+      const auto rec2 = pp::ParsePositionRecord(
+          "pos_x=1\npos_y=2\nwa_left=0\nwa_top=0\nwa_right=1920\n"
+          "wa_bottom=1040\npw=155\nph=0\n");
+      Check(rec2.has_value() && !rec2->has_anchor,
+            "T40o2: ph=0(非法面板高)⇒ 不认锚点");
+    }
+
+    // T40p: 认显示器 —— 原点相同优先(分辨率变了仍认得同一块屏)
+    {
+      std::vector<pp::Rect> areas;
+      areas.push_back(pp::Rect{0, 0, 2560, 1400});   // 主屏(分辨率变了)
+      areas.push_back(pp::Rect{-1920, 0, -1, 1000});  // 左侧副屏
+      const pp::Rect* m = pp::FindMatchingWorkArea(wa_small, areas);
+      Check(m != nullptr && m->left == 0 && m->top == 0 && m->right == 2560 &&
+                m->bottom == 1400,
+            "T40p: 原点相同 ⇒ 命中同一块屏(分辨率变了仍认得)");
+    }
+
+    // T40q: 认显示器 —— 原点不同 ⇒ 按中心距离兜底
+    {
+      std::vector<pp::Rect> areas;
+      areas.push_back(pp::Rect{0, 0, 1920, 1040});
+      areas.push_back(pp::Rect{3000, 0, 4000, 1000});
+      const pp::Rect* m =
+          pp::FindMatchingWorkArea(pp::Rect{10, 10, 1010, 1010}, areas);
+      Check(m != nullptr && m->left == 0,
+            "T40q: 原点不同 ⇒ 按中心距离兜底命中最近那块屏");
+    }
+
+    // T40r: 面板完全落在副屏 ⇒ 交集最大者 = 副屏
+    {
+      std::vector<pp::Rect> areas;
+      areas.push_back(pp::Rect{0, 0, 1920, 1040});
+      areas.push_back(pp::Rect{-1920, 0, -1, 1000});
+      const pp::Rect* wa = pp::FindBestWorkArea(areas, -1500, 500, PW, PH);
+      Check(wa != nullptr && wa->left == -1920,
+            "T40r: 面板在左侧副屏 ⇒ 认副屏(交集最大)");
+    }
+
+    // T40s/T40t: ResolveAnchoredPosition —— 有效锚点 + 新工作区 ⇒ 给出右下角位置
+    {
+      const pp::AnchorState st =
+          pp::MakeAnchorState({wa_small}, 1920 - PW, 756, PW, PH);
+      Check(st.valid && st.panel_w == PW,
+            "T40s: MakeAnchorState 由几何生成锚点状态");
+      const std::vector<pp::Rect> areas{wa_big};
+      pp::Point out{};
+      pp::Rect outwa{};
+      Check(pp::ResolveAnchoredPosition(st, areas, PW, PH, &out, &outwa) &&
+                out.x == 2560 - PW && outwa.right == 2560,
+            "T40t: ResolveAnchoredPosition 按锚点重映射到新工作区");
+    }
+
+    // T40u: 原点不匹配 + 还有别的屏 ⇒ 兜底命中最近那块屏(面板不会消失)
+    {
+      const pp::AnchorState st =
+          pp::MakeAnchorState({wa_small}, 1920 - PW, 756, PW, PH);
+      const std::vector<pp::Rect> areas{pp::Rect{5000, 0, 6000, 1000}};
+      pp::Point out{};
+      Check(pp::ResolveAnchoredPosition(st, areas, PW, PH, &out) &&
+                out.x == 6000 - PW && out.y == 726,
+            "T40u: 原屏不在列表 ⇒ 兜底到最近那块屏(不留到消失的屏上)");
+    }
+
+    // T40v: 无效锚点 / 空工作区 ⇒ 失败(调用方走原路径,不瞎猜)
+    {
+      const pp::AnchorState empty;
+      pp::Point out{};
+      Check(!pp::ResolveAnchoredPosition(empty, {wa_big}, PW, PH, &out),
+            "T40v: 无效锚点 ⇒ 重锚失败");
+      const pp::AnchorState st =
+          pp::MakeAnchorState({wa_small}, 0, 0, PW, PH);
+      Check(!pp::ResolveAnchoredPosition(st, {}, PW, PH, &out),
+            "T40v2: 工作区列表为空 ⇒ 重锚失败");
+    }
+
+    // T40w/T40x: 写盘往返(回读自证)
+    {
+      const std::wstring path =
+          std::filesystem::temp_directory_path().wstring() +
+          L"\\fluxing-batch-v-position-test.txt";
+      pp::PositionRecord rec;
+      rec.pos = pp::Point{1765, 756};
+      rec.has_anchor = true;
+      rec.work_area = wa_small;
+      rec.panel_w = PW;
+      rec.panel_h = PH;
+      Check(pp::WritePositionRecordFile(path, rec),
+            "T40w: v2 位置文件写盘成功(回读自证)");
+      const auto back = pp::ReadPositionRecordFile(path);
+      Check(back.has_value() && back->has_anchor && back->panel_w == PW &&
+                back->work_area.bottom == 1040,
+            "T40x: v2 位置文件回读 ⇒ 锚点字段齐全");
+      ::DeleteFileW(path.c_str());
+    }
+
+    // T40y: RestorePosition 还原锚点(v2 文件 ⇒ 运行期有锚点)
+    {
+      const std::wstring path =
+          std::filesystem::temp_directory_path().wstring() +
+          L"\\fluxing-batch-v-position-restore-test.txt";
+      pp::PositionRecord rec;
+      rec.pos = pp::Point{1765, 756};
+      rec.has_anchor = true;
+      rec.work_area = wa_small;
+      rec.panel_w = PW;
+      rec.panel_h = PH;
+      Check(pp::WritePositionRecordFile(path, rec), "T40y0: 准备 v2 位置文件");
+      QuickPanelDialog::SetPositionPath(path);
+      Check(QuickPanelDialog::RestorePosition(), "T40y1: v2 文件 ⇒ 还原成功");
+      Check(QuickPanelDialog::HasSavedAnchor(),
+            "T40y2: v2 文件 ⇒ 运行期锚点有效");
+      Check(QuickPanelDialog::SavedPosition().x == 1765 &&
+                QuickPanelDialog::SavedPosition().y == 756,
+            "T40y3: 绝对位置仍正确还原");
+      // v1 文件 ⇒ 无锚点(退回绝对坐标口径)
+      Check(pp::WritePositionFile(path, 100, 200), "T40y4: 准备 v1 位置文件");
+      Check(QuickPanelDialog::RestorePosition() && !QuickPanelDialog::HasSavedAnchor(),
+            "T40y5: v1 文件 ⇒ 无锚点(退回绝对坐标口径)");
+      QuickPanelDialog::SetPositionPath(L"");
+      ::DeleteFileW(path.c_str());
+    }
+  }
+
+  // ============================================================
+  // T41 · 批次 V P1(2026-11-10):方向 A 主题 —— 调色板 / 分层半透明合成 /
+  //   SVG 圆角语义 / hover 只描边。
+  //   单一真相源:include/FluxingPanelTheme.h —— 生产(QuickPanelDialog.cpp)
+  //   与本测试读**同一份**常量与公式(R7);测试**不复制**任何一条公式
+  //   (复制即漂移 —— spec 092 记的「假绿」死法)。
+  //   设计稿:docs/design/quickpanel-v6/design-demos/a-benchmark.html
+  //   批准记录:docs/design/quickpanel-v6/direction-approved.md
+  // ============================================================
+  std::printf("\n[批次 V P1] 方向 A 主题:调色板 / 分层合成 / SVG 圆角\n");
+  {
+    namespace pt = fluxing::panel_theme;
+
+    // --- 色值冻结(与已批准的设计稿逐位一致) ---
+    Check(pt::kBodyColor.r == 0xFA && pt::kBodyColor.g == 0xF7 &&
+              pt::kBodyColor.b == 0xF2,
+          "T41a: 面板体色 = #FAF7F2");
+    Check(pt::kAccentColor.r == 0xFF && pt::kAccentColor.g == 0x5F &&
+              pt::kAccentColor.b == 0x31,
+          "T41b: 品牌橙 = #FF5F31");
+    Check(pt::kIconInkColor.r == 0x6F && pt::kIconInkColor.g == 0x6A &&
+              pt::kIconInkColor.b == 0x62,
+          "T41c: 动作图标墨色 = #6F6A62");
+    Check(pt::kDarkColor.r == 0x24 && pt::kDarkColor.g == 0x1F &&
+              pt::kDarkColor.b == 0x1A,
+          "T41d: 英文侧深色 = #241F1A");
+
+    // --- 分层 alpha 冻结 ---
+    Check(pt::kAlphaBody == 184 && pt::kAlphaBorder == 71 &&
+              pt::kAlphaHighlight == 140 && pt::kAlphaSeparator == 46 &&
+              pt::kAlphaTrack == 18 && pt::kAlphaTrackStroke == 56 &&
+              pt::kAlphaHover == 128,
+          "T41e: 分层 alpha 冻结(体 .72 / 描边 .28 / 高光 .55 / 分隔 .18 / 轨道 .07 / 轨道描边 .22 / hover .50)");
+    Check(pt::kAlphaShadow[0] == 13 && pt::kAlphaShadow[1] == 10 &&
+              pt::kAlphaShadow[2] == 8,
+          "T41f: 三层投影 alpha = 13/10/8");
+
+    // --- SVG rx 语义(旧 GDI CreateRoundRectRgn 的角半径只有「值/2」) ---
+    Check(!pt::InsideRoundRect(0, 0, 0, 0, 155, 32, 14),
+          "T41g: rx=14 时左上角 (0,0) 在圆角外");
+    Check(pt::InsideRoundRect(7, 7, 0, 0, 155, 32, 14),
+          "T41h: rx=14 时 (7,7) 在圆角内");
+    Check(!pt::InsideRoundRect(0, 7, 0, 0, 155, 32, 14) &&
+              pt::InsideRoundRect(0, 7, 0, 0, 155, 32, 7),
+          "T41i: rx 语义判别 —— rx=14 排除 (0,7),旧 GDI 口径(值/2=7)才包含");
+
+    // --- 1px 发丝描边只在轮廓上 ---
+    Check(pt::OnRoundRectStroke(0, 16, 0, 0, 155, 32, 14, 1),
+          "T41j: 左边中段 (0,16) 落在 1px 描边上");
+    Check(!pt::OnRoundRectStroke(77, 16, 0, 0, 155, 32, 14, 1),
+          "T41k: 面板内部 (77,16) 不在描边上");
+    Check(!pt::OnRoundRectStroke(0, 0, 0, 0, 155, 32, 14, 1),
+          "T41l: 圆角外 (0,0) 不在描边上");
+
+    // --- src-over 预乘合成 + 反预乘往返(「容差 2」的来源) ---
+    {
+      const pt::Pixel dst = {0, 0, 0, 0};
+      const pt::Pixel body =
+          pt::Over(dst, pt::MakeLayer(pt::kBodyColor, pt::kAlphaBody));
+      Check(body.a == 184, "T41m: 面板体叠加后 alpha = 184");
+      unsigned char rgb[3] = {0, 0, 0};
+      unsigned char a = 0;
+      pt::Unpremultiply(body, rgb, &a);
+      Check(a == 184 && std::abs((int)rgb[0] - 250) <= 2 &&
+                std::abs((int)rgb[1] - 247) <= 2 &&
+                std::abs((int)rgb[2] - 242) <= 2,
+            "T41n: 反预乘还原面板体色(误差 ≤ 2 ⇒ logo 预合成底色不会被误判成内容)");
+      const pt::Pixel clear = {0, 0, 0, 0};
+      pt::Unpremultiply(clear, rgb, &a);
+      Check(a == 0 && rgb[0] == 0 && rgb[1] == 0 && rgb[2] == 0,
+            "T41o: 全透明像素反预乘 ⇒ RGB=0 alpha=0");
+    }
+
+    // --- chrome 规格(生产与单测共用的换算函数) ---
+    pt::ChromeInputs in;
+    in.canvas_w = QuickPanelDialog::kPanelW;  // 155
+    in.canvas_h =
+        QuickPanelDialog::kPanelH + QuickPanelDialog::kPanelShadowH;  // 38
+    in.body_w = QuickPanelDialog::kPanelW;
+    in.body_h = QuickPanelDialog::kPanelH;  // 32
+    in.body_r = QuickPanelDialog::kPanelRadius;  // 14
+    in.dpr_x = 1.0;
+    in.dpr_y = 1.0;
+    const pt::ChromeSpec spec = pt::BuildChromeSpec(in);
+    Check(spec.track_x == 61 && spec.track_y == 1 && spec.track_w == 62 &&
+              spec.track_h == 30 && spec.track_r == 11,
+          "T41p: 状态轨道几何 = 61,1,62,30,r11");
+    Check(spec.highlight_y == 1 && spec.highlight_x1 == 14 &&
+              spec.highlight_x2 == 141 && spec.separator_x == 32,
+          "T41q: 高光发丝(y=1,x 14..141)+ 品牌分隔发丝(x=32)");
+    Check(spec.shadow_offsets[0] == 2 && spec.shadow_offsets[1] == 4 &&
+              spec.shadow_offsets[2] == 6,
+          "T41r: 三层投影偏移 = 2/4/6(末层 = 投影带全高)");
+    Check(QuickPanelDialog::kPanelShadowH == pt::kShadowH,
+          "T41s: 窗口投影带高度与主题投影带高度一致(跨文件不漂)");
+
+    // --- 轨道必须包住视觉位 1(中/英)与视觉位 2(全/半角) ---
+    {
+      int x1 = 0, y1 = 0, w1 = 0, h1 = 0;
+      int x2 = 0, y2 = 0, w2 = 0, h2 = 0;
+      const bool ok1 = QuickPanelDialog::SlotRectForSize(in.body_w, in.body_h, 1,
+                                                         &x1, &y1, &w1, &h1);
+      const bool ok2 = QuickPanelDialog::SlotRectForSize(in.body_w, in.body_h, 2,
+                                                         &x2, &y2, &w2, &h2);
+      Check(ok1 && ok2, "T41t: 视觉位 1/2 的槽位矩形可推演");
+      Check(x1 >= spec.track_x && x1 + w1 <= spec.track_x + spec.track_w &&
+                x2 >= spec.track_x && x2 + w2 <= spec.track_x + spec.track_w,
+            "T41u: 状态轨道完整包住两个状态视觉位");
+    }
+
+    // --- 分层合成结果 ---
+    {
+      std::vector<pt::Pixel> px((size_t)spec.canvas_w * spec.canvas_h);
+      pt::RasterizeChrome(spec, px.data());
+      auto at = [&](int x, int y) -> const pt::Pixel& {
+        return px[(size_t)y * spec.canvas_w + x];
+      };
+      Check(at(40, 16).a == pt::kAlphaBody,
+            "T41v: 面板体普通像素 alpha = 184(纯面板体,未被任何层叠加)");
+      Check(at(70, 16).a > pt::kAlphaBody && at(70, 16).a < 255,
+            "T41w: 轨道底叠加后 alpha 上升(分层半透明,不是实色)");
+      Check(at(77, 33).a > 0 && at(77, 33).a < pt::kAlphaBody / 2,
+            "T41x: 底部投影带可见(面板体轮廓之外)");
+      Check(at(0, 37).a == 0, "T41y: 投影带角落全透明(没有矩形硬边)");
+      Check(at(154, 0).a == 0, "T41z: 面板体圆角外全透明");
+      Check(at(32, 12).a > pt::kAlphaBody && at(33, 12).a == pt::kAlphaBody,
+            "T41aa: 品牌分隔发丝只占 1 列(x=32)");
+      Check(at(40, 1).a > pt::kAlphaBody && at(40, 2).a == pt::kAlphaBody,
+            "T41ab: 顶部高光发丝只占 1 行(y=1)");
+
+      // hover:只做轮廓浮出 —— 守 L86 用户指令「hover 时底色不变,只 icon 线条变橙」
+      pt::ChromeInputs hin = in;
+      hin.has_hover = true;
+      hin.hover_x = 8;
+      hin.hover_y = 4;
+      hin.hover_w = 20;
+      hin.hover_h = 20;
+      hin.hover_r = 6;
+      const pt::ChromeSpec hspec = pt::BuildChromeSpec(hin);
+      std::vector<pt::Pixel> hpx((size_t)hspec.canvas_w * hspec.canvas_h);
+      pt::RasterizeChrome(hspec, hpx.data());
+      auto hat = [&](int x, int y) -> const pt::Pixel& {
+        return hpx[(size_t)y * hspec.canvas_w + x];
+      };
+      const pt::Pixel& p0 = at(18, 14);
+      const pt::Pixel& p1 = hat(18, 14);
+      Check(p0.r == p1.r && p0.g == p1.g && p0.b == p1.b && p0.a == p1.a,
+            "T41ac: hover 时键帽**底色不变**(只描边浮出,不铺橙底)");
+      Check(hat(8, 14).a > at(8, 14).a,
+            "T41ad: hover 键帽描边处 alpha 上升(橙色轮廓浮出)");
+    }
   }
 
   std::printf("\n=== %d / %d assertions passed ===\n", g_pass, g_pass + g_fail);

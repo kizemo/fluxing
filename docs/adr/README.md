@@ -59,6 +59,8 @@ Do not dump all ADRs into every prompt.
 | 0043 | 0043. 标点语言在提交边界转换：纯标点提交按 `ascii_punct` 转半角/全角，不引入 `full_shape` 选表 | `docs/adr/0043-punct-language-conversion-at-commit-boundary.md` | Accepted |
 | 0044 | 0044. 语言栏项退出常驻托盘：摘除 `TF_LBI_STYLE_SHOWNINTRAY`，保留语言栏项本身（状态文字 / 左键面板 / 右键菜单） | `docs/adr/0044-language-bar-item-exits-persistent-tray.md` | Accepted |
 | 0045 | 0045. 发布版本号由 `env.bat` 钉死，`build.bat` 不再无条件覆盖 | `docs/adr/0045-product-version-pinned-by-env-bat.md` | Accepted |
+| 0051 | 0051. 快捷设置栏位置按「工作区比例」锚定，分辨率/显示器变化时重锚，锚点以 v2 落盘 | `docs/adr/0051-quickpanel-position-anchored-to-workarea-ratio.md` | Accepted |
+| 0052 | 0052. 快捷设置栏按方向 A 重绘：32-bit BGRA DIB 自建 src-over 合成 + `UpdateLayeredWindow`，半透明面板体 / 发丝描边 / 分层软投影 | `docs/adr/0052-quickpanel-direction-a-layered-translucent-theme.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

@@ -51,6 +51,9 @@
 #include <FluxingPanelFwIcon.h>
 // 2026-11-09: 键帽符号的几何/笔宽缩放口径(生产与单测同源,constitution R7)。
 #include "FluxingPanelIconGeom.h"
+// 2026-11-10 批次 V P1: 方向 A(微软拼音 IME 工具栏 / Fluent 2 标杆迁移)的
+// 调色板 / 几何 / 分层合成 —— 单一真相源(生产与单测同源,constitution R7)。
+#include <FluxingPanelTheme.h>
 
 class QuickPanelDialog {
  public:
@@ -243,20 +246,41 @@ class QuickPanelDialog {
   }
   // 启动期读盘:成功 ⇒ 运行期缓存有位置。文件缺失/损坏 ⇒ 返回 false,
   // 缓存保持「无位置」⇒ 面板沿用右下角默认锚点(行为与本特性之前一致)。
+  // 批次 V P0 (2026-11-10):v2 文件额外还原**锚点**(相对工作区的比例)
+  // ⇒ 分辨率变化时按比例重映射,相对位置不漂;v1 旧文件仍认(无锚点)。
   static bool RestorePosition() {
     bool& has = fluxing::panel_position::HasSavedPositionRef();
     fluxing::panel_position::Point& pos =
         fluxing::panel_position::SavedPositionRef();
     has = false;
     pos = fluxing::panel_position::Point{0, 0};
-    auto p = fluxing::panel_position::ReadPositionFile(
+    fluxing::panel_position::AnchorStateRef() =
+        fluxing::panel_position::AnchorState();
+    auto rec = fluxing::panel_position::ReadPositionRecordFile(
         fluxing::panel_position::ResolvePositionPath());
-    if (!p.has_value())
+    if (!rec.has_value())
       return false;
-    pos = *p;
+    pos = rec->pos;
     has = true;
+    if (rec->has_anchor) {
+      fluxing::panel_position::AnchorState st;
+      st.valid = true;
+      st.anchor = fluxing::panel_position::ComputeAnchor(
+          rec->work_area, rec->pos.x, rec->pos.y, rec->panel_w, rec->panel_h);
+      st.work_area = rec->work_area;
+      st.panel_w = rec->panel_w;
+      st.panel_h = rec->panel_h;
+      fluxing::panel_position::AnchorStateRef() = st;
+    }
     return true;
   }
+  // 运行期锚点是否有效(测试锚点:批次 V P0)。
+  static bool HasSavedAnchor() {
+    return fluxing::panel_position::AnchorStateRef().valid;
+  }
+  // 批次 V P0:按锚点比例把面板重定位到当前工作区(分辨率/工作区变化时调用)。
+  // 返回 true = 位置真的动了。
+  static bool ReanchorPanelToCurrentWorkArea(HWND hwnd);
   // 写指定位置(拖动结束与测试注入共用同一条写盘路径)。
   static bool SavePositionAt(int x, int y) {
     const bool ok = fluxing::panel_position::WritePositionFile(
@@ -265,6 +289,11 @@ class QuickPanelDialog {
       fluxing::panel_position::SavedPositionRef() =
           fluxing::panel_position::Point{x, y};
       fluxing::panel_position::HasSavedPositionRef() = true;
+      // 本口写的是 **v1**(只有绝对坐标)⇒ 运行期锚点必须一并作废,
+      // 否则「磁盘上的绝对坐标」与「内存里的比例锚点」会各说各话
+      // (锚点描述的是另一个位置 ⇒ 分辨率变化时把面板挪到一个用户没放过的点)。
+      fluxing::panel_position::AnchorStateRef() =
+          fluxing::panel_position::AnchorState();
     }
     return ok;
   }
@@ -336,7 +365,9 @@ class QuickPanelDialog {
   static std::wstring s_tooltipText;
   static int s_tooltipSlot;
   static int s_panelW_phys;  // panel 物理像素宽
-  static int s_panelH_phys;  // panel 物理像素高
+  static int s_panelH_phys;  // panel 物理像素高(**面板体**,不含底部投影带)
+  // 2026-11-10 批次 V P1:底部投影带的物理高度(窗口高 = 面板体高 + 它)。
+  static int s_panelShadow_phys;
 
   // L83-fix: DPI 缩放(scale 全部几何常量到 physical pixels)
   // 之前 v0.19.0.0~0.12 直接用 logical kPanelW=360 / kBtnSize=56 等 GDI 坐标,在
@@ -412,6 +443,13 @@ class QuickPanelDialog {
   //   (旧 6 槽:4 + 26 + 3 + 168 + 10 + 4 = 215)
   static constexpr int kPanelW = 155;
   static constexpr int kPanelH = 32;
+  // 2026-11-10 批次 V P1(方向 A):**分层软投影**需要画布比面板体更高 ——
+  // 投影画在面板体轮廓之外(下方),若画布与面板体同高,投影会被面板体本身
+  // 盖住(只剩圆角缝里那一点点)。故窗口高度 = 面板体高 + kPanelShadowH,
+  // 面板体仍占顶部 kPanelH,阴影区在下方(kPanelShadowH logical px)。
+  // ⚠ 面板体的**布局**尺寸语义不变(仍是 155×32)⇒ 槽位几何 / 命中区 /
+  //   单测断言全部不受影响;只有**窗口**多出一条透明阴影带。
+  static constexpr int kPanelShadowH = 6;
   // Fluxing QuickPanel v5 需求⑤: 品牌图标整体上移 1 logical px(正值 = 上移)。
   // 品牌矩形 y = padding − ScaleRound(kBrandYOffset, dpr_y)
   //   100%: 5→4 / 125%: 6→5 / 150%: 8→6 / 200%: 10→8。
@@ -492,23 +530,23 @@ class QuickPanelDialog {
   static constexpr int kIconViewBox = 30;
 
   // 颜色(0xAABBGGRR)
-  // L90-fix: 边框颜色降低深度 — user 反馈"边框颜色深度太深"。
-  // v0.19.0.19 边框 kIcoDimC = RGB(50, 50, 60) 几乎纯黑,视觉突兀。
-  // 改用 RGB(130, 130, 140) 浅灰,任何背景下都不刺眼,仍能看出 panel 形状。
-  static constexpr COLORREF kBgTop = RGB(200, 225, 250);  // 浅冷蓝顶
-  static constexpr COLORREF kBgBot = RGB(155, 195, 240);  // 略深浅蓝底
+  // 2026-11-10 批次 V P1(方向 A):面板底色从「浅冷蓝渐变」换成「暖白半透明」
+  // #FAF7F2 —— 这是方向 A 的第一层观感(半透明纯色,毛玻璃退化版)。
+  // 其余层次(描边 / 高光 / 轨道 / 阴影)的**色值与 alpha 全部**下沉到
+  // include/FluxingPanelTheme.h(单一真相源,constitution R7),不在这里重复。
+  static constexpr COLORREF kBgTop = RGB(250, 247, 242);  // 面板体 #FAF7F2
+  // 动作图标墨色(方向 A):#6F6A62 暖灰,替代旧 RGB(130,130,140) 冷灰。
   static constexpr COLORREF kIconDim =
-      RGB(130, 130, 140);  // 浅灰(L90-fix:边框颜色降低深度,任何背景下不刺眼)
+      RGB(111, 106, 98);  // #6F6A62(方向 A 动作图标墨色)
   static constexpr COLORREF kAccent = RGB(255, 95, 49);       // 品牌橙
   static constexpr COLORREF kAccent2 = RGB(155, 81, 224);     // 品牌紫
   static constexpr COLORREF kHighlight = RGB(255, 255, 255);  // 顶部高光
 
-  // v0.19.0.10: per-pixel alpha gradient (替换 L77 uniform kAlphaPanel=220)
-  // spec 089 / ADR 0022: alpha 梯度已拉平为 255/255 — 这两个常量不再参与渐变,
-  // 观感梯度改由颜色梯度 kBgTop→kBgBot 与圆角掩码承担。历史: L87-fix 曾为
-  // 220→80。 圆角外 alpha = 0 (桌面可见)
-  static constexpr BYTE kAlphaPanelTop = 255;
-  static constexpr BYTE kAlphaPanelBot = 255;
+  // v0.19.0.10: per-pixel alpha gradient(旧路径)。
+  // 2026-11-10 批次 V P1:该「按颜色阈值猜 alpha」的模型已被方向 A 的
+  // **分层合成**取代 —— 面板体 / 描边 / 高光 / 轨道 / 阴影各有不同 alpha,
+  // 靠颜色阈值无法区分(深色描边会被误判成不透明)。新模型的 alpha 全部
+  // 由 fluxing::panel_theme::RasterizeChrome 逐层算出(见 FluxingPanelTheme.h)。
 
   // ===== Internal =====
   // spec 099 P0-4: 轮询状态提供者(在已有的 100ms timer 里调 ⇒ 显示路径

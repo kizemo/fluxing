@@ -315,7 +315,11 @@ inline bool IsInsideRoundedRect(int x, int y, int W, int H, int r) {
 // 形状。 L91-fix: kIcoDimC RGB(50,50,60) → RGB(130,130,140) 浅灰 — user
 // 反馈"边框颜色深度太深" 任何背景下不刺眼,仍能看出 panel 形状。DrawIcon* 全部用
 // kIcoDimC 创建 pen, 必须修这里(不在 header 那个 alias)。
-constexpr COLORREF kIcoDimC = RGB(130, 130, 140);  // L91-fix: 边框颜色降低深度
+constexpr COLORREF kIcoDimC = RGB(111, 106, 98);  // 方向 A 动作图标墨色 #6F6A62
+// 方向 A 主题色(RGB struct)→ COLORREF 的唯一转换点(生产与单测同源,R7)。
+inline COLORREF ToColorRef(const fluxing::panel_theme::Rgb& c) {
+  return RGB(c.r, c.g, c.b);
+}
 constexpr COLORREF kAccentC = RGB(255, 95, 49);    // 品牌橙
 constexpr COLORREF kAccent2C = RGB(155, 81, 224);  // 品牌紫
 constexpr COLORREF kWhiteC = RGB(255, 255, 255);   // 白色(active icon)
@@ -906,6 +910,7 @@ HDC QuickPanelDialog::s_hdcMem = NULL;
 HBITMAP QuickPanelDialog::s_hBmpMem = NULL;
 int QuickPanelDialog::s_panelW_phys = 0;
 int QuickPanelDialog::s_panelH_phys = 0;
+int QuickPanelDialog::s_panelShadow_phys = 0;
 float QuickPanelDialog::s_dpr_x = 1.0f;
 float QuickPanelDialog::s_dpr_y = 1.0f;
 // 2026-11-09: 统一缩放系数(键帽 / 图标几何共用;下限 1.0)。
@@ -1590,6 +1595,19 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
     // 之前的注释以为「保持 logical 尺寸不变,Windows 自动 scale」—— 那只对
     // DPI-unaware 进程成立;WeaselServer 是 PerMonitor aware,系统不会改窗口
     // 尺寸,所以必须自己按新 DPI 缩放,并重建随尺寸走的 physical 布局。
+    // 批次 V P0 (2026-11-10):显示模式(分辨率)变化 ⇒ 面板按**锚点比例**
+    // 重定位。旧行为:窗口保留绝对坐标 ⇒ 工作区变大后面板相对屏幕向左上偏移。
+    // WM_DISPLAYCHANGE 广播给所有顶层窗口(面板是 WS_POPUP 顶层窗,能收到)。
+    case WM_DISPLAYCHANGE: {
+      ReanchorPanelToCurrentWorkArea(hwnd);
+      return 0;
+    }
+    // 工作区变化(任务栏移动/自动隐藏)⇒ 同理重定位。
+    case WM_SETTINGCHANGE: {
+      if (w == SPI_SETWORKAREA)
+        ReanchorPanelToCurrentWorkArea(hwnd);
+      return 0;
+    }
     case WM_DPICHANGED: {
       UINT dpiX = LOWORD(w);
       UINT dpiY = HIWORD(w);
@@ -1598,7 +1616,7 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
       dpiX = (UINT)fluxing::panel_dpi::ClampPanelDpi((int)dpiX);
       dpiY = (UINT)fluxing::panel_dpi::ClampPanelDpi((int)dpiY);
       const int panelW = ScaleLogicalByDpi(kPanelW, dpiX);
-      const int panelH = ScaleLogicalByDpi(kPanelH, dpiY);
+      const int panelH = ScaleLogicalByDpi(kPanelH + kPanelShadowH, dpiY);
       const int margin = ScaleLogicalByDpi(12, dpiX);
       // 系统建议的 rect(WM_DPICHANGED 的 lParam):Windows 已按新 DPI 与新显示器
       // 工作区算好窗口该待的位置 ⇒ 优先采用它,再钳回可见区(见下)。
@@ -1617,14 +1635,25 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
         newRc = mi.rcWork;
       int newX = 0;
       int newY = 0;
-      if (HasSavedPosition()) {
+      // 批次 V P0 (2026-11-10):位置按**相对工作区的比例**锚定 ⇒ DPI/分辨率
+      // 变化时相对位置不漂。旧行为是「保留绝对坐标」⇒ 分辨率变大时工作区变大
+      // 而坐标不变 ⇒ 面板相对屏幕向左上偏移(用户真机复验:这仍需修)。
+      const std::vector<fluxing::panel_position::Rect> areas =
+          fluxing::panel_position::EnumerateWorkAreas();
+      fluxing::panel_position::Point anchored{};
+      fluxing::panel_position::Rect anchoredWa{};
+      if (fluxing::panel_position::ResolveAnchoredPosition(
+              fluxing::panel_position::AnchorStateRef(), areas, panelW, panelH,
+              &anchored, &anchoredWa)) {
+        // 锚点有效 ⇒ 按比例映射到当前工作区(同一块屏,尺寸变了也不漂)。
+        newX = anchored.x;
+        newY = anchored.y;
+      } else if (HasSavedPosition()) {
         // spec 099 P0-7: 用户自己摆过位置 ⇒ DPI 变化时**保留**用户位置,只把它
         // 钳回可见区(否则面板会跑到看不见的地方);没有持久化位置 ⇒ 沿用右下角
         // 默认锚点(行为与本特性之前一致)。
         RECT cur = {};
         GetWindowRect(hwnd, &cur);
-        const std::vector<fluxing::panel_position::Rect> areas =
-            fluxing::panel_position::EnumerateWorkAreas();
         if (!areas.empty()) {
           const fluxing::panel_position::Point p =
               fluxing::panel_position::ClampToVisibleArea(cur.left, cur.top,
@@ -1655,6 +1684,13 @@ LRESULT CALLBACK QuickPanelDialog::WndProc(HWND hwnd,
       }
       SetWindowPos(s_hwnd, HWND_TOPMOST, newX, newY, panelW, panelH,
                    SWP_NOZORDER | SWP_NOACTIVATE);
+      // 锚点按**新几何**刷新(面板尺寸变了 ⇒ 可摆放空间变了 ⇒ 比例基准要跟着走;
+      // 否则下一次分辨率变化会拿旧尺寸的基准去算比例 ⇒ 偏)。
+      if (!areas.empty()) {
+        fluxing::panel_position::AnchorStateRef() =
+            fluxing::panel_position::MakeAnchorState(areas, newX, newY, panelW,
+                                                     panelH);
+      }
       // 尺寸变了: 重算 dpr / _phys 常量并重建 offscreen DIB,否则
       // UpdateLayeredWindow 提交的是旧大小的 surface。
       // ApplyPhysicalLayout 内部还会**重建 logo 位图**(brand 尺寸变了)——
@@ -1992,9 +2028,18 @@ bool QuickPanelDialog::ApplyPhysicalLayout(HWND hwnd) {
   // 需要把常量放大到 1.5 倍物理像素。
   // spec 099 P0-6: 布局推演下沉到 ComputeLayout(单一真相源)—— 槽位矩形、
   // 状态区矩形、单测用的 *ForSize 全部读同一份。
-  const PanelLayout L = ComputeLayout(w, h);
+  // 2026-11-10 批次 V P1(方向 A):窗口比**面板体**多出一条底部投影带
+  //   (逻辑 kPanelShadowH px)—— 分层软投影必须画在面板体轮廓之外 ⇒ 画布要更高。
+  //   投影带高度按 x 方向 dpr 缩放(dpr_x 只依赖宽度 ⇒ 无循环依赖)。
+  //   ⚠ 面板体高度语义**不变**(仍是 kPanelH 逻辑高)⇒ 槽位几何 / 命中区 /
+  //     单测断言全部不受影响;只有窗口多出一条透明阴影带。
+  const float dpr_x0 = (float)w / (float)kPanelW;
+  const int shadow_phys = ScaleRound(kPanelShadowH, dpr_x0);
+  const int body_h = h - shadow_phys;
+  const PanelLayout L = ComputeLayout(w, body_h);
   s_panelW_phys = w;
-  s_panelH_phys = h;
+  s_panelH_phys = body_h;
+  s_panelShadow_phys = shadow_phys;
   s_dpr_x = L.dpr_x;
   s_dpr_y = L.dpr_y;
   // 2026-11-09: 统一缩放系数(键帽与图标几何共用同一个;下限 1.0)。
@@ -2065,6 +2110,11 @@ bool QuickPanelDialog::ApplyPhysicalLayout(HWND hwnd) {
 
   // off-screen DC 尺寸必须跟着窗口走,否则 UpdateLayeredWindow 提交旧 surface
   CreateOffscreenDC(w, h);
+  // CreateOffscreenDC 会把 s_panelW/s_panelH 写成**画布**尺寸(面板体+投影带)
+  // ⇒ 这里改回「面板体」语义(槽位几何 / 命中区 / 槽位绘制都以面板体为准)。
+  s_panelW_phys = w;
+  s_panelH_phys = body_h;
+  s_panelShadow_phys = shadow_phys;
   return true;
 }
 
@@ -2092,7 +2142,7 @@ bool QuickPanelDialog::SyncPanelSizeToCurrentDpi(HWND hwnd) {
   const int effX = fluxing::panel_dpi::ClampPanelDpi((int)dpi.x);
   const int effY = fluxing::panel_dpi::ClampPanelDpi((int)dpi.y);
   const int panelW = ScaleLogicalByDpi(kPanelW, (UINT)effX);
-  const int panelH = ScaleLogicalByDpi(kPanelH, (UINT)effY);
+  const int panelH = ScaleLogicalByDpi(kPanelH + kPanelShadowH, (UINT)effY);
   const int curW = rc.right - rc.left;
   const int curH = rc.bottom - rc.top;
   if (curW == panelW && curH == panelH)
@@ -2193,6 +2243,117 @@ LRESULT QuickPanelDialog::OnDestroy(HWND hwnd) {
   return 0;
 }
 
+namespace {
+
+// ===== 2026-11-10 批次 V P1(方向 A):分层 chrome 合成 =====
+//
+// 方向 A 的观感来自**层次**:面板体 0.72 / 外描边 0.28 / 顶部高光 0.55 /
+// 品牌分隔发丝 0.18 / 状态轨道底 0.07 / 轨道内描边 0.22 / 三层投影
+// 0.05+0.04+0.03。GDI 的画笔与画刷**没有 alpha**,而 GDI 的 AlphaBlend 走的
+// 是「半透明像素被当反向权重」那条雷区路径(品牌 logo 黑框前科)⇒ 绝不使用。
+// 自己按 src-over 预乘合成,把结果写进 DIB 的 alpha 字节,由 UpdateLayeredWindow
+// 按 per-pixel alpha 合成到桌面。
+//
+// 两份快照交给 FinalizeThemeAlpha:
+//   g_chrome_rgb[i]   = chrome 的直通 RGB(判定「这个像素有没有被 GDI 改过」)
+//   g_chrome_alpha[i] = chrome 的 alpha(未被内容覆盖时使用)
+std::vector<DWORD> g_chrome_rgb;
+std::vector<BYTE> g_chrome_alpha;
+
+void PaintThemeChrome(HDC hdc,
+                      const PanelLayout& L,
+                      int body_w,
+                      int body_h,
+                      int body_r) {
+  (void)hdc;
+  const int canvas_w = body_w;
+  const int canvas_h = body_h + QuickPanelDialog::s_panelShadow_phys;
+  BITMAP bm = {};
+  if (!GetObject(QuickPanelDialog::s_hBmpMem, sizeof(bm), &bm) || !bm.bmBits)
+    return;
+  const size_t n = (size_t)canvas_w * (size_t)canvas_h;
+  g_chrome_rgb.assign(n, 0);
+  g_chrome_alpha.assign(n, 0);
+  std::vector<fluxing::panel_theme::Pixel> px(n);
+  fluxing::panel_theme::ChromeInputs in;
+  in.canvas_w = canvas_w;
+  in.canvas_h = canvas_h;
+  in.body_w = body_w;
+  in.body_h = body_h;
+  in.body_r = body_r;
+  in.dpr_x = L.dpr_x;
+  in.dpr_y = L.dpr_y;
+  // hover 键帽轮廓浮出(只描边,不改键帽底色 —— 守 L86 用户指令「hover 时 bg 不变」)
+  if (QuickPanelDialog::s_hoveredIdx >= 0) {
+    int hx = 0, hy = 0, hw = 0, hh = 0;
+    if (SlotRectForLayout(L, QuickPanelDialog::s_hoveredIdx, &hx, &hy, &hw,
+                           &hh)) {
+      in.has_hover = true;
+      in.hover_x = hx;
+      in.hover_y = hy;
+      in.hover_w = hw;
+      in.hover_h = hh;
+      in.hover_r = ScaleRound(QuickPanelDialog::kBtnRadius, L.dpr_x);
+    }
+  }
+  // 几何换算的**单一真相源**在 include/FluxingPanelTheme.h(生产与单测同源,R7)。
+  const fluxing::panel_theme::ChromeSpec spec =
+      fluxing::panel_theme::BuildChromeSpec(in);
+  fluxing::panel_theme::RasterizeChrome(spec, px.data());
+  DWORD* dst = static_cast<DWORD*>(bm.bmBits);
+  const int stride = bm.bmWidthBytes / 4;
+  for (int y = 0; y < canvas_h; ++y) {
+    for (int x = 0; x < canvas_w; ++x) {
+      const size_t i = (size_t)y * (size_t)canvas_w + (size_t)x;
+      unsigned char rgb[3] = {0, 0, 0};
+      unsigned char a = 0;
+      fluxing::panel_theme::Unpremultiply(px[i], rgb, &a);
+      const DWORD c =
+          (DWORD)rgb[2] | ((DWORD)rgb[1] << 8) | ((DWORD)rgb[0] << 16);
+      dst[(size_t)y * (size_t)stride + (size_t)x] = c;
+      g_chrome_rgb[i] = c;
+      g_chrome_alpha[i] = a;
+    }
+  }
+}
+
+// chrome 之上由 GDI 画的内容(logo / 图标 / 文字)必须**不透明**。
+// 判定:该像素的 RGB 与 chrome 快照不同 ⇒ 被 GDI 改过 ⇒ 内容像素。
+// 容差 2:预乘→直通的往返取整有 ±1 误差(面板体 #FAF7F2 往返成 (250,246,241)),
+// 不留容差会把「logo 预合成底色」误判成内容 ⇒ logo 周围出现一圈不透明方块。
+void FinalizeThemeAlpha() {
+  BITMAP bm = {};
+  if (!GetObject(QuickPanelDialog::s_hBmpMem, sizeof(bm), &bm) || !bm.bmBits)
+    return;
+  DWORD* dst = static_cast<DWORD*>(bm.bmBits);
+  const int stride = bm.bmWidthBytes / 4;
+  const int rows = (bm.bmHeight < 0) ? -bm.bmHeight : bm.bmHeight;
+  const int cols = stride;
+  const size_t total = g_chrome_alpha.size();
+  for (int y = 0; y < rows; ++y) {
+    for (int x = 0; x < cols; ++x) {
+      const size_t i = (size_t)y * (size_t)cols + (size_t)x;
+      if (i >= total)
+        break;
+      const DWORD c = dst[i] & 0x00FFFFFFu;
+      const DWORD ch = g_chrome_rgb[i] & 0x00FFFFFFu;
+      bool differs = false;
+      for (int k = 0; k < 3; ++k) {
+        const int a = (int)((c >> (8 * k)) & 0xFFu);
+        const int b = (int)((ch >> (8 * k)) & 0xFFu);
+        if (a - b > 2 || b - a > 2) {
+          differs = true;
+          break;
+        }
+      }
+      const BYTE a = differs ? (BYTE)255 : g_chrome_alpha[i];
+      dst[i] = ((DWORD)a << 24) | c;
+    }
+  }
+}
+
+}  // namespace
+
 // PaintOpaqueContent: v0.19.0.10 新抽出。把原 OnPaint 的"画 opaque 内容到
 // s_hdcMem" 部分抽出来 — roundRgn WHITE bg + 1px border + top highlight + logo
 // + 5 icons。 不再 BitBlt 到 window DC (WS_EX_LAYERED 后双路径会闪烁,见 file
@@ -2203,45 +2364,15 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   const int W = s_panelW_phys;
   const int H = s_panelH_phys;
   const int radius = s_panelRadius_phys;
+  // 2026-11-10 批次 V P1(方向 A):布局提前算 —— chrome 必须按**同一份**布局
+  //   推演(单一真相源,R7),不能另算一份。
+  const PanelLayout L = ComputeLayout(s_panelW_phys, s_panelH_phys);
 
-  // 1a. 圆角 panel 背景 — 浅玻璃冷色,L82-fix:任何背景下都可见
-  HRGN panelRgn = CreateRoundRectRgn(0, 0, W, H, radius, radius);
-  FillRgn(hdc, panelRgn, s_hBrushPanelBg);
-  DeleteObject(panelRgn);
-
-  // 1b. 1px 深灰 border — L82-fix:border RGB(50,50,60) opaque 永远可见
-  // L83-fix: FrameRgn 在 sub-100% DPI scale (e.g. dpr=0.667) 下 1px brush =
-  // 0.667 physical = sub-pixel → GDI 不绘制。改用 **RoundRect() with pen +
-  // NULL_BRUSH** 画 outline。 RoundRect() 在所有 DPI 下都会画出
-  // outline(因为它是 line primitive,不是 brush fill)。注意 RoundRect 边界是
-  // (x1, y1) 到 (x2, y2) inclusive,不填内部。 border 宽度至少 1 physical
-  // pixel:对于 dpr=0.667,取 2 logical (1.33 physical); 对于 dpr=1.0,取 1
-  // logical (=1 physical);对于 dpr>=1.5,取 max(1, 1)=1 logical。
-  int borderW = max(1, (int)(1.0f * s_dpr_x + 0.5f));
-  HPEN borderPen = CreatePen(PS_SOLID, borderW, kIcoDimC);
-  if (borderPen) {
-    HPEN oldPen = (HPEN)SelectObject(hdc, borderPen);
-    HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
-    RoundRect(hdc, 0, 0, W - 1, H - 1, radius, radius);
-    SelectObject(hdc, oldBrush);
-    SelectObject(hdc, oldPen);
-    DeleteObject(borderPen);
-  }
-
-  // 1c. 顶部 1px 高光(L83 mac 风格:顶部反射,白色) — L93-fix(v0.19.0.23):
-  // 物理缩放:min 1px(低 DPI 不能画 0px)。
-  // 历史:v0.19.0.18 之前只占 1 物理像素(y=1 那行),v0.19.0.20 误改 2 px 让 icons
-  // 视觉偏下。L93 (v0.19.0.23 撤销的 wrong 方案) 也回 1 px — **v0.19.0.23 保留
-  // 这次 1 px 修改**(同时改了真正的 icon 居中算法,1px highlight 不再需要 ±1
-  // fudge)。
-  int hlHeight = max(1, (int)(1 * s_dpr_y + 0.5f));
-  RECT topHL = {radius, 1, W - radius, 1 + hlHeight};
-  FillRect(hdc, &topHL, s_hBrushHighlight);
-
-  // 1d. 底部 1px 阴影 (L83 mac 风格:底部阴影线)
-  int shHeight = max(1, (int)(1 * s_dpr_y + 0.5f));
-  RECT botShadow = {radius, H - 4 - shHeight, W - radius, H - 4};
-  FillRect(hdc, &botShadow, s_hBrushShadow);
+  // ① 方向 A 的分层 chrome:投影 → 面板体 → 顶部高光 → 外描边 → 品牌分隔发丝
+  //    → 状态轨道 → hover 轮廓。旧路径(1a~1d)是「GDI 画实色 + 事后按颜色
+  //    阈值猜 alpha」,表达不了分层半透明(面板体 0.72 / 描边 0.28 / 轨道 0.07)。
+  //    色值与几何的单一真相源:include/FluxingPanelTheme.h。
+  PaintThemeChrome(hdc, L, W, H, radius);
 
   // 2. 画 logo (Fluxing 红色猿猴)
   // v4 需求⑦: 改用 **BitBlt(SRCCOPY) 1:1 贴图**, 不再走 GDI 的 alpha 合成。
@@ -2299,7 +2430,6 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
   // 之前这里自己算 x0 = buttonStartX + i*(btn+gap),与 SlotRect / HitTest
   // 重复了同一份公式 —— 改一边漏一边就是 lessons-learned 的 AP-L93-B 耦合
   // 陷阱(v0.19.0.24 的 hover 错位就是这么来的)。
-  const PanelLayout L = ComputeLayout(s_panelW_phys, s_panelH_phys);
   for (int i = 0; i < kButtonCount; i++) {
     // i = **视觉位置**(面板上从左到右);功能语义经 LogicalAtVisual(i) 取。
     // v0.19.0.24-fix(issue 1):Y 起点来自同一份布局(= (kPanelH-kBtnSize)/2
@@ -2437,9 +2567,16 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
           break;
         const wchar_t* label =
             fluxing::panel_status::AsciiModeText(s_inputState.ascii_mode);
+        // 2026-11-10 批次 V P1(方向 A):「中/英」不再是普通图标,而是**状态
+        //   读数** —— 中文态用品牌橙 #FF5F31,英文态用深墨 #241F1A。
+        const COLORREF stateColor =
+            isActive ? kWhiteC
+                     : (s_inputState.ascii_mode
+                            ? ToColorRef(fluxing::panel_theme::kDarkColor)
+                            : ToColorRef(fluxing::panel_theme::kAccentColor));
         HGDIOBJ oldFont = SelectObject(hdc, s_hFontStatus);
         const int oldBk = SetBkMode(hdc, TRANSPARENT);
-        const COLORREF oldColor = SetTextColor(hdc, penRgb);
+        const COLORREF oldColor = SetTextColor(hdc, stateColor);
         RECT tr = {x0, y0, x0 + bw, y0 + bh};
         if (!DrawInkCenteredChar(hdc, label, tr)) {
           DrawTextW(hdc, label, -1, &tr,
@@ -2454,7 +2591,14 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
         // 全半角键:v7 需求 —— **对角线布局**的矢量图元,形状随当前生效宽度
         // 切换(全角 = 空心环 + 逗号尾 / 半角 = 实心点 + 小逗号尾)。
         // 纯 GDI 矢量,不走 GDI AlphaBlend。
-        DrawIconFullwidth(hdc, iconX, iconY, penRgb, s_inputState.fullwidth,
+        // 2026-11-10 批次 V P1(方向 A):环/点与逗号**按状态取色** ——
+        //   中文标点态 = 品牌橙 #FF5F31,英文标点态 = 深墨 #241F1A。
+        const COLORREF fwColor =
+            isActive ? kWhiteC
+                     : (s_inputState.fullwidth
+                            ? ToColorRef(fluxing::panel_theme::kAccentColor)
+                            : ToColorRef(fluxing::panel_theme::kDarkColor));
+        DrawIconFullwidth(hdc, iconX, iconY, fwColor, s_inputState.fullwidth,
                           iconScale);
         break;
       }
@@ -2483,55 +2627,13 @@ void QuickPanelDialog::PaintOpaqueContent(HDC hdc) {
 // outside 的 pixel,GDI 反而认为 inside — 已被 FillRgn 填 panel bg)。直接用
 // PtInRegion(rgn, x, y) 完全匹配 GDI 实际填充区域。
 void QuickPanelDialog::ApplyAlphaGradient() {
-  if (!s_hBmpMem || s_panelW_phys <= 0 || s_panelH_phys <= 0)
-    return;
-  BITMAP bm = {};
-  if (!GetObject(s_hBmpMem, sizeof(bm), &bm) || !bm.bmBits)
-    return;
-
-  DWORD* p = static_cast<DWORD*>(bm.bmBits);
-  const int W = s_panelW_phys;
-  const int H = s_panelH_phys;
-  const int r = s_panelRadius_phys;
-  const int Hminus1 = (H > 1) ? (H - 1) : 1;
-
-  // 复用 CreateRoundRectRgn 创建的 region,让 GDI 自己判断 inside/outside
-  HRGN panelRgn = CreateRoundRectRgn(0, 0, W, H, r, r);
-
-  // spec 084 / ADR 0013 D1/D2: 系数乘进逐像素 alpha。
-  // factor == 255 => final_alpha == base_alpha => 与 spec 084 之前逐像素
-  // 一致(零回归保证)。LWA_ALPHA uniform 仍然是雷区,不碰。
-  const int factor = s_alphaFactor;
-  for (int y = 0; y < H; y++) {
-    int aPanel =
-        kAlphaPanelTop + ((int)(kAlphaPanelBot - kAlphaPanelTop) * y / Hminus1);
-
-    for (int x = 0; x < W; x++) {
-      DWORD* px = &p[(size_t)y * W + x];
-      if (!PtInRegion(panelRgn, x, y)) {
-        *px = 0;
-        continue;
-      }
-      BYTE r8 = (*px >> 16) & 0xFF;
-      BYTE g8 = (*px >> 8) & 0xFF;
-      BYTE b8 = *px & 0xFF;
-      // L87-fix: 阈值从 r >= 240 改成 r >= 130 + g >= 150 + b >= 180。
-      // 之前 kBgTop = (255, 255, 255) 接近白,255 阈值 work。L87 改 kBgTop =
-      // (200, 225, 250) (浅冷蓝),200 < 240,else 分支 (alpha=255)
-      // 生效,**gradient 完全没作用**。 新阈值匹配 kBgBot = (155, 195, 240) — b8
-      // >= 180 确保 panel bg 像素 (含冷蓝) 命中 gradient alpha 分支。
-      if (r8 >= 130 && g8 >= 150 && b8 >= 180) {
-        *px = ((DWORD)fluxing::ScaleAlpha(aPanel, factor) << 24) | (r8 << 16) |
-              (g8 << 8) | b8;
-      } else {
-        *px = ((DWORD)fluxing::ScaleAlpha(255, factor) << 24) | (r8 << 16) |
-              (g8 << 8) | b8;
-      }
-    }
-  }
-  DeleteObject(panelRgn);
+  // 2026-11-10 批次 V P1(方向 A):旧实现(按颜色阈值猜 alpha + 竖直渐变)已被
+  //   **分层合成**取代 —— 各层 alpha 不同(面板体 0.72 / 描边 0.28 / 轨道底
+  //   0.07 / 高光 0.55),颜色阈值无法区分(深色描边会被当成不透明)。
+  //   新流程:PaintOpaqueContent 先把 chrome 的 alpha 逐像素算好并写进 DIB,
+  //   GDI 再画 logo / 图标 / 文字;本函数把「被 GDI 改过的像素」置为不透明。
+  FinalizeThemeAlpha();
 }
-
 // RepaintLayered: v0.19.0.10 新 layered surface 提交。
 // - PaintOpaqueContent → ApplyAlphaGradient → UpdateLayeredWindow
 // - UpdateLayeredWindow 从 s_hdcMem 读 32-bit BGRA → 提交整个 panel 到 screen,
@@ -2664,7 +2766,8 @@ void QuickPanelDialog::RepaintLayered(HWND hwnd) {
   ptPos.y = rcClient.top;
 
   POINT ptSrc = {0, 0};
-  SIZE sizeWnd = {s_panelW_phys, s_panelH_phys};
+  // 画布高 = 面板体高 + 底部投影带(方向 A 的分层软投影)。
+  SIZE sizeWnd = {s_panelW_phys, s_panelH_phys + s_panelShadow_phys};
   // AC_SRC_OVER + AC_SRC_ALPHA: source per-pixel alpha 通道生效
   BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
 
@@ -2895,27 +2998,49 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   const int effDpiX = fluxing::panel_dpi::ClampPanelDpi((int)dpi.x);
   const int effDpiY = fluxing::panel_dpi::ClampPanelDpi((int)dpi.y);
   const int panelW = ScaleLogicalByDpi(kPanelW, (UINT)effDpiX);
-  const int panelH = ScaleLogicalByDpi(kPanelH, (UINT)effDpiY);
+  const int panelH = ScaleLogicalByDpi(kPanelH + kPanelShadowH, (UINT)effDpiY);
   const int margin = ScaleLogicalByDpi(12, (UINT)effDpiX);
   // L92-fix: clamp 到 workArea,避免低分辨率下 panel 出屏(Phase 1 root cause)
   int x = 0;
   int y = 0;
   PlacePanelAtBottomRight(workArea, panelW, panelH, margin, &x, &y);
-  // spec 099 P0-7: 有持久化位置 ⇒ 用它(并钳制回当前可见区:分辨率/DPI 变化后
-  // 旧位置可能落到屏外)。没有持久化位置 ⇒ 保持右下角默认锚点(行为不变)。
+  // 批次 V P0 (2026-11-10):位置按**相对工作区的比例**锚定。
+  //   优先级 ① 有锚点(v2 文件还原 / 运行期缓存)⇒ 按比例映射到当前工作区
+  //           —— 分辨率变大时面板**相对位置不变**;旧行为是保留绝对坐标,
+  //              工作区变大而坐标不变 ⇒ 相对屏幕向左上偏移(用户真机复验的问题);
+  //           ② 只有绝对位置(旧版 v1 文件)⇒ 用它,并以当前几何补算锚点;
+  //           ③ 都没有 ⇒ 右下角默认锚点(上面 PlacePanelAtBottomRight 已算)。
   // D0176 (2026-11-06): 钳制改为**无条件**执行 —— 原写法把 ClampToVisibleArea
   // 关在 HasSavedPosition() 门内,一旦 EnumerateWorkAreas() 返回空,持久化的
   // 屏外坐标就直接进了 CreateWindowExW,没有任何兜底。
   {
     const std::vector<fluxing::panel_position::Rect> areas =
         fluxing::panel_position::EnumerateWorkAreas();
-    if (!areas.empty()) {
-      const POINT target = HasSavedPosition() ? SavedPosition() : POINT{x, y};
+    fluxing::panel_position::Point target{x, y};
+    bool has_target = false;
+    fluxing::panel_position::Point anchored{};
+    if (fluxing::panel_position::ResolveAnchoredPosition(
+            fluxing::panel_position::AnchorStateRef(), areas, panelW, panelH,
+            &anchored)) {
+      target = anchored;
+      has_target = true;
+    } else if (HasSavedPosition()) {
+      target = fluxing::panel_position::Point{SavedPosition().x,
+                                             SavedPosition().y};
+      has_target = true;
+    }
+    if (!areas.empty() && has_target) {
       const fluxing::panel_position::Point p =
           fluxing::panel_position::ClampToVisibleArea(target.x, target.y, panelW,
                                                       panelH, areas);
-      x = p.x;
-      y = p.y;
+      target = p;
+    }
+    x = target.x;
+    y = target.y;
+    // 以**当前几何**补算锚点 ⇒ 之后分辨率/DPI 变化可按比例重映射。
+    if (!areas.empty()) {
+      fluxing::panel_position::AnchorStateRef() =
+          fluxing::panel_position::MakeAnchorState(areas, x, y, panelW, panelH);
     }
   }
 
@@ -3035,7 +3160,60 @@ bool QuickPanelDialog::SavePosition() {
     return false;
   }
   // 枚举失败(areas 为空)⇒ 不拦:宁可照旧写盘,也不凭空否决用户的一次拖动。
-  return SavePositionAt(r.left, r.top);
+  // 批次 V P0 (2026-11-10):落盘时**连同锚点**(保存时所在工作区 + 面板物理
+  // 尺寸)⇒ 下次分辨率变化能按比例重映射,而不是死守绝对坐标。
+  const int pw = r.right - r.left;
+  const int ph = r.bottom - r.top;
+  fluxing::panel_position::PositionRecord rec;
+  rec.pos = fluxing::panel_position::Point{r.left, r.top};
+  const fluxing::panel_position::AnchorState st =
+      fluxing::panel_position::MakeAnchorState(areas, r.left, r.top, pw, ph);
+  if (st.valid) {
+    rec.has_anchor = true;
+    rec.work_area = st.work_area;
+    rec.panel_w = pw;
+    rec.panel_h = ph;
+  }
+  if (!fluxing::panel_position::WritePositionRecordFile(
+          fluxing::panel_position::ResolvePositionPath(), rec))
+    return false;
+  // 运行期缓存同步(绝对位置 + 锚点)。
+  fluxing::panel_position::SavedPositionRef() = rec.pos;
+  fluxing::panel_position::HasSavedPositionRef() = true;
+  fluxing::panel_position::AnchorStateRef() = st;
+  return true;
+}
+
+// 批次 V P0:分辨率变化(WM_DISPLAYCHANGE)/工作区变化 ⇒ 面板按**锚点比例**
+// 重定位。旧行为是「窗口保留绝对坐标」⇒ 工作区变大时面板相对屏幕向左上
+// 偏移(用户真机复验:这仍需修)。
+// 返回 true = 位置真的动了。
+bool QuickPanelDialog::ReanchorPanelToCurrentWorkArea(HWND hwnd) {
+  if (!hwnd || !IsWindow(hwnd))
+    return false;
+  const std::vector<fluxing::panel_position::Rect> areas =
+      fluxing::panel_position::EnumerateWorkAreas();
+  if (areas.empty())
+    return false;
+  RECT r = {};
+  if (!GetWindowRect(hwnd, &r))
+    return false;
+  const int pw = r.right - r.left;
+  const int ph = r.bottom - r.top;
+  fluxing::panel_position::Point p{};
+  if (!fluxing::panel_position::ResolveAnchoredPosition(
+          fluxing::panel_position::AnchorStateRef(), areas, pw, ph, &p))
+    return false;
+  // 锚点按**新几何**刷新(工作区变了 ⇒ 比例基准要跟着走,否则下一轮会偏)。
+  const fluxing::panel_position::AnchorState fresh =
+      fluxing::panel_position::MakeAnchorState(areas, p.x, p.y, pw, ph);
+  if (fresh.valid)
+    fluxing::panel_position::AnchorStateRef() = fresh;
+  if (p.x == r.left && p.y == r.top)
+    return false;
+  SetWindowPos(hwnd, nullptr, p.x, p.y, 0, 0,
+               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+  return true;
 }
 
 // 读一个状态文件的第一行。文件缺失/读不出 ⇒ false(由调用方决定是否兜底)。
