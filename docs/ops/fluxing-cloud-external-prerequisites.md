@@ -9,15 +9,16 @@
 
 | # | 事项 | 状态 | 谁做 | 阻塞什么 | 花钱吗 |
 |---|---|---|---|---|---|
-| 0 | **启用 R2**（账号级开关，后台点一次） | 🔴 **唯一硬阻塞**（2026-11-10 21:31 实测 `code 10042`「Please enable R2 through the Cloudflare Dashboard」） | **你**（后台点一次） | `wrangler deploy` / R2 桶 | 免费额度内；**启用时可能要求绑定支付方式**（仅作超额账单担保） |
+| 0 | **启用 R2**（账号级开关，后台点一次） | 🟢 **已完成**（用户 2026-11-10 21:57 确认「R2 已启用」；实测 `r2 bucket create` 不再返回 `code 10042`） | 你已点 | 已解除 | 免费额度内 |
 | 1 | Cloudflare 账号 + 授权 `wrangler` | 🟢 **已完成**（OAuth Token，凭据写入 2026-11-10 21:24；权限实测含 `d1 write` / `workers_scripts write` / `workers_routes write` / `zone read`） | — | 已解除 | 免费 |
 | 2 | 创建 D1 库 + 回填 `database_id` | 🟢 **已完成**（`e4ea114a-29b4-4abd-87e6-4e6cb20d86e4`，已回填 `wrangler.toml`） | — | 已解除 | 免费档内 |
 | 3 | D1 迁移 `0001_init.sql` | 🟢 **已完成**（远程执行 13 条命令，`sqlite_master` 计 9 张表） | — | 已解除 | 免费档内 |
-| 4 | 创建 R2 桶 `fluxing-sync` | 🔴 **待办**（解锁第 0 项后我可代跑） | 你启用 R2 → 我代跑 | 词库密文对象无存储 | 免费档内 |
-| 5 | 部署 Worker + 自动建 `api.aiec.fun` DNS | 🟡 配置已就绪（已确认 `aiec.fun` 在**同一账号**，`zone id = f686751b049e4270d1a4a1bcb4849852`，`status=active`） | 你启用 R2 → 我代跑 | 客户端连不上服务端 | 免费 |
+| 4 | 创建 R2 桶 `fluxing-sync` | 🟢 **已完成 2026-11-11**（`r2 bucket create fluxing-sync` → `✅ Created bucket`，`CREATE_EXIT=0`） | — | 已解除 | 免费档内 |
+| 5 | 部署 Worker + 自动建 `api.aiec.fun` DNS | 🟢 **已完成 2026-11-11**（`wrangler deploy` 成功，Version ID `c22a483d-0460-4d17-b46b-ac3347c2c138`；`api.aiec.fun (custom domain)` 自动建好；`/v1/health` = **200**） | — | 已解除 | 免费 |
 | 6 | 验证码发信通道 | 🟢 **已拍板：$0** | — | 已解除 | $0 |
 | 7 | 阶段 E 账号入口放哪 | 🟢 **已拍板：快捷设置栏的右键菜单** | — | 已解除 | 无关 |
 | 8 | `plan.md` / `tasks.md` 六处偏差回写 | 🟢 **已完成 2026-11-11** | — | 已解除 | 无关 |
+| 9 | 写入 Workers Secret `AUTH_PEPPER` | 🟢 **已完成 2026-11-11**（`secret put` 成功，`secret list` 见 `AUTH_PEPPER` / `secret_text`） | — | 已解除 | 免费 |
 
 > **令牌 vs OAuth（2026-11-10 实测结论）**：OAuth 授权**已经可用**，令牌不是当前的阻塞点。
 > 建 API Token 的真正价值是「**不依赖 30 天有效的 refresh_token**、可供 CI 使用」⇒ 可选但推荐，见 §1.3。
@@ -25,7 +26,7 @@
 ### 已替你做完的部分（2026-11-11）
 
 - **阶段 D 客户端运行时全量落地**（T301–T305 五任务全 DONE）：`WeaselServer/Cloud/` 新建 18 个文件；WeaselServer Win32 构建 **0 错误**产出 exe；阶段 D 单测追加 8 个测试函数、整包 **`PASS=297 FAIL=0`**（基线 134）。详见 `docs/archive/handoffs/handoff-2026-11-11-batch-aa-stage-d-not-started.md`。
-- **`wrangler.toml` 已填自有域名**：`routes = [{ pattern = "api.aiec.fun", custom_domain = true }]`、`MAIL_FROM = "no-reply@aiec.fun"`（**`database_id` 仍待回填**，见 §2）。
+- **`wrangler.toml` 已填自有域名**：`routes = [{ pattern = "api.aiec.fun", custom_domain = true }]`、`MAIL_FROM = "no-reply@aiec.fun"`、`database_id = e4ea114a-29b4-4abd-87e6-4e6cb20d86e4`（已回填，见 §2.2）。
 - **文档回写**：`plan.md` §3.1/§4.4/§5/§6.1/§6.2/§9/§13 与 `tasks.md` 各阶段状态行已按实做回写；新增 **ADR 0054**（客户端密钥派生与 salt 策略）。
 
 ---
@@ -143,9 +144,13 @@ setx CLOUDFLARE_API_TOKEN "<你的令牌>"
 ```
 （只写用户级环境变量；已开着的终端不会自动继承。）
 
-### 1.4 必做 · 启用 R2（与令牌无关，**当前唯一硬阻塞**）
+### 1.4 启用 R2（🟢 **已完成 2026-11-11** · 以下为历史留痕）
 
-2026-11-10 21:31 实测：`wrangler r2 bucket create` → `code 10042`
+> **当前状态**：你于 2026-11-10 21:57 在后台点完「启用 R2」，我于 2026-11-11 实测复核 ——
+> `r2 bucket create fluxing-sync` 返回 `✅ Created bucket 'fluxing-sync' with default storage class of Standard.`，
+> **不再出现 `code 10042`** ⇒ 该项已解除，本节仅作留档，不需要你再做任何操作。
+
+原阻塞现象（2026-11-10 21:31 实测）：`wrangler r2 bucket create` → `code 10042`
 「Please enable R2 through the Cloudflare Dashboard」。
 ⇒ 这是**账号级开关**，**API Token 绕不过去**，只能人去后台点一次：
 
@@ -156,38 +161,49 @@ setx CLOUDFLARE_API_TOKEN "<你的令牌>"
    但确实需要一张卡；不想绑卡的话，唯一替代是把密文对象改存 D1 BLOB ⇒ **需要改服务端代码**，属另一个决策。
 4. 启用后回一句「**R2 已启用**」，我立刻代跑：
    `wrangler r2 bucket create fluxing-sync` → `secret put AUTH_PEPPER` → `deploy` → `curl` 判据。
+   ⇒ 🟢 **2026-11-11 已全部代跑完毕**（见 §2 / §3.2）。
 
 ---
 
-## 2. 数据面资源（D1 / R2）—— D1 ✅ 已完成 / R2 🔴 等启用
+## 2. 数据面资源（D1 / R2）—— 🟢 **全部完成（2026-11-11）**
 
 ### 2.1 资源名（**以 `wrangler.toml` 为准，不是旧文档里的名字**）
 
 | 资源 | 名称 | 绑定名 | 用途 | 现状 |
 |---|---|---|---|---|
 | D1 数据库 | `fluxing-sync` | `DB` | 账号、设备、同步条目索引、验证码 | ✅ 已建：`e4ea114a-29b4-4abd-87e6-4e6cb20d86e4` |
-| R2 桶 | `fluxing-sync` | `BUCKET` | 密文对象 | 🔴 账号未启用 R2（`code 10042`），启用后可建 |
+| R2 桶 | `fluxing-sync` | `BUCKET` | 密文对象 | ✅ 已建（2026-11-11，`Standard` 存储类） |
 
-### 2.2 命令（剩余部分等 R2 启用后我代跑）
+### 2.2 命令（✅ 2026-11-11 已全部执行，无需重跑）
 
 ```
 cd F:\soft\00selfmade\rime_claude\cloud\fluxing-sync
-npx wrangler r2 bucket create fluxing-sync     # ← 需先在后台启用 R2
+npx wrangler r2 bucket create fluxing-sync     # ✅ Created bucket 'fluxing-sync'
 ```
 
 `wrangler d1 create` 已执行（2026-11-10 13:24:35Z），产出 `database_id = e4ea114a-29b4-4abd-87e6-4e6cb20d86e4`，
 **已回填进 `wrangler.toml`**（原为占位全零 UUID）。
 
-### 2.3 表结构与 pepper
+### 2.3 表结构与 pepper（✅ 均已落地）
 
 ```
 npx wrangler d1 migrations apply fluxing-sync --remote   # ✅ 已执行（13 条命令，sqlite_master 计 9 张表）
-npx wrangler secret put AUTH_PEPPER                      # ← 需 Worker 存在 ⇒ 排在 deploy 之后
+npx wrangler secret put AUTH_PEPPER                      # ✅ 已执行（2026-11-11，需 Worker 存在 ⇒ 排在 deploy 之后）
 ```
 
 - 迁移 SQL 在 `cloud/fluxing-sync/migrations/0001_init.sql`（**7 表 4 索引**）。
 - `AUTH_PEPPER` 是服务端的 pepper（Workers Secret，**绝不进代码库、不进 D1**）。缺失即 500 fail closed，**没有内置默认值可回退**。
 - 本机已备好 32 字节随机值，存于 **gitignored** 的 `tmp/AD-auth-pepper.txt`（64 位十六进制，实测 `isHex64=True`）⇒ 部署时由我读入并 `secret put`，**不入库**。
+- **已写入远程 Workers Secret**（2026-11-11）：`secret put` 回 `✨ Success! Uploaded secret AUTH_PEPPER`；`secret list` 回 `{"name":"AUTH_PEPPER","type":"secret_text"}`。
+- **两条功能判别（不只信元数据自证）**：
+  1. **只读路径** —— `POST /v1/auth/login` 打一个不存在的用户，回 **401** `{"error":{"code":"invalid_credentials",…}}`。
+     若 pepper 未加载，此处必然是 **500 `server_misconfigured`**（`src/auth.ts:73` `requirePepper()`，pepper < 16 字符即 fail closed）⇒ 反证 pepper 真实进入运行时。
+  2. **写入路径** —— `POST /v1/auth/register` 一个冒烟用户，回 **200** 且带 `account_id` / `salt` / `kdf:{algo:PBKDF2-SHA256,iters:600000}` / `need_email_verify:true`
+     ⇒ 凭据落库、KDF 参数、发信入队三条链路都通。
+- **D1 落库复核**：`sqlite_master` 9 张表（`_cf_KV` / `d1_migrations` / `devices` / `email_verifications` / `mail_outbox` / `refresh_tokens` / `sqlite_sequence` / `sync_items` / `users`）；
+  冒烟后计数 `users=1 devices=0 verifications=1 outbox=1` ⇒ 验证码进了 `mail_outbox`（`MAIL_MODE="outbox"` 的预期行为）。
+- **冒烟数据已清空**：按 `smoke-%@aiec.fun` 删 `email_verifications` / `mail_outbox`（按 `to_addr`）/ `devices` / `refresh_tokens` / `sync_items` / `users` 共 6 条，
+  复核 `users=0 verifications=0 outbox=0` ⇒ 生产库回到干净待测状态。
 
 ### 2.4 免费额度是否够
 
@@ -218,12 +234,27 @@ routes = [{ pattern = "api.aiec.fun", custom_domain = true }]
 
 > ⚠️ **不要**打开 `workers_dev` / `preview_urls`。T103 硬约束：境内 DNS 会污染平台默认子域，端点必须挂在自有域名下；`cloud/fluxing-sync/test/check-endpoint-policy.mjs` 是**零豁免**扫描，连文档措辞都算。
 
-### 3.2 部署与验证
+### 3.2 部署与验证（🟢 **已完成 2026-11-11**）
 
 ```
 cd F:\soft\00selfmade\rime_claude\cloud\fluxing-sync
 npx wrangler deploy
 ```
+
+**实测留痕（2026-11-11）**：
+
+```
+Total Upload: 42.65 KiB / gzip: 11.45 KiB
+Uploaded fluxing-sync (3.65 sec)
+Deployed fluxing-sync triggers (2.62 sec)
+  api.aiec.fun (custom domain)
+Current Version ID: c22a483d-0460-4d17-b46b-ac3347c2c138
+DEPLOY_EXIT=0
+```
+
+绑定全部解析成功：`env.DB (fluxing-sync)` · `env.BUCKET (fluxing-sync)` · `ENVIRONMENT=dev` ·
+`ACCESS_TOKEN_TTL=3600` · `REFRESH_TOKEN_TTL=2592000` · `KDF_ALGO=PBKDF2-SHA256` · `KDF_ITERS=600000` ·
+`MAIL_MODE=outbox` · `MAIL_FROM=no-reply@aiec.fun`。
 
 **判据（两条都要跑）**：
 
@@ -231,11 +262,20 @@ npx wrangler deploy
 curl -sS -o NUL -w "%{http_code}" https://api.aiec.fun/v1/health
 ```
 
-期望 **200**。
+期望 **200**。**实测结果**：
+
+```
+GET https://api.aiec.fun/v1/health ⇒ HTTP 200
+{"ok":true,"service":"fluxing-sync","environment":"dev","time":1794319132}
+```
+
+> ⇒ **线上判据已 verified**。`custom_domain = true` 确实自动建了 `api.aiec.fun` 的 DNS 记录，
+> §3.3 的手工 CNAME 兜底**不需要走**（此前担心的「OAuth 无 DNS 写权限」未成为阻塞 —— 自定义域由 Workers 侧接管）。
+
 - **522 / 523** ⇒ DNS 或 Worker 路由没绑上（多为「`aiec.fun` 不在同一账号」，或还没部署）。
 - **404** ⇒ Worker 起了但路由没匹配（检查 `routes` 行是否生效、`wrangler.toml` 有没有被改坏）。
 
-再从**另一台机器**跑同一条命令，验证不是本机缓存骗人。
+再从**另一台机器**跑同一条命令，验证不是本机缓存骗人。（**未做** —— 需第二台设备，见 §8。）
 
 ### 3.3 兜底：`aiec.fun` 不在同一 Cloudflare 账号时
 
@@ -321,3 +361,5 @@ curl -sS -o NUL -w "%{http_code}" https://api.aiec.fun/v1/health
 4. D1 免费档「5 GB total storage」是按账号还是按库 —— 官方原文措辞为总额，我按账号总额理解。
 5. 本地区（中国大陆）到 Cloudflare 边缘的**实际延迟与可用性** —— T103 只做了端点可达性设计，**没有真实链路测量**。这会影响真机体验，上线前需实测。
 6. **PBKDF2 60 万次在本机的实际耗时** —— 单测用 1000/2000 次 + 常量断言，登录路径走 600000 次但**未单独计时**。首次登录延迟需真机测量后再定 UI 反馈策略。
+7. **`api.aiec.fun` 从第二台机器 / 另一网络的可达性** —— 只在本机 PowerShell 7 上打到 200，**未做异地验证**（§3.2 要求的「另一台机器」判据未执行）。这关系到境内多端同步的实际可用性。
+8. **R2 密文对象的真实读写** —— 桶已建、绑定已解析，但**尚未跑过一次真实的 `PUT`/`GET`**（客户端还没联调）。「绑定存在」不等于「对象能写」。

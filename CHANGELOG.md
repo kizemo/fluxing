@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### feat(fluxing): 云端同步服务端**正式上线** —— Cloudflare 全链路部署闭环，`https://api.aiec.fun/v1/health` 返回 200（批次 AD）
+
+- **用户可见变化**：spec 100 的服务端**不再是纸面设计**。`https://api.aiec.fun/v1/health` 线上返回 `HTTP 200` + `{"ok":true,"service":"fluxing-sync","environment":"dev","time":...}`；D1 迁移在远程生产库生效；R2 桶 `fluxing-sync` 已建；`AUTH_PEPPER` 已作为 Workers Secret 注入；Worker 版本 `c22a483d-0460-4d17-b46b-ac3347c2c138`。此前三批（AA / AC / AD 前半）在 `tasks.md` 与 ops 文档里记的「Cloudflare 侧人工动作阻塞、线上仍无可用服务端」**已全部解除**。
+- **部署留痕**：`r2 bucket create fluxing-sync` ⇒ `Created bucket 'fluxing-sync'`；`wrangler deploy` ⇒ Upload 42.65 KiB / gzip 11.45 KiB、`api.aiec.fun (custom domain)` 自动接管（与 `aiec.fun` 同账号 ⇒ **DNS 记录由 Workers 侧自动创建，§3.3 手工 CNAME 兜底路径不需要走**）；`secret put AUTH_PEPPER` ⇒ `Success! Uploaded secret`（`secret list` 复核 `secret_text`）。绑定全部解析：`env.DB`(D1) · `env.BUCKET`(R2) · `MAIL_MODE=outbox` · `KDF_ALGO=PBKDF2-SHA256` / `KDF_ITERS=600000`。
+- **不靠元数据自证，做两条功能判别**：① **只读通**：`POST /v1/auth/login` 打不存在用户 ⇒ `HTTP 401 invalid_credentials`（`src/auth.ts:73` 的 `requirePepper()` 在 pepper 缺失时必 `500 server_misconfigured`）⇒ 证明 pepper **确实被运行时加载**；② **写入通**：`POST /v1/auth/register` ⇒ `HTTP 200` 返回 `account_id` / `salt` / `kdf:{algo,iters}` / `need_email_verify:true`。随后 D1 落库核对 `users=1 devices=0 verifications=1 outbox=1`，冒烟数据按 `smoke-%@aiec.fun` 全部删除并复核归零 ⇒ **生产库回到干净待测状态**。
+- **顺序更正（已写进文档）**：`secret put` **必须排在 `deploy` 之后** —— Worker 不存在时 secret 无处可挂。早期 ops 文档写的「deploy 前先 secret put」是错的，已改。
+- **本批只动文档**：`.specify/specs/100-fluxing-cloud-account-sync/tasks.md`（T407 → DONE · T405 阻塞点改写）、`docs/ops/fluxing-cloud-external-prerequisites.md`（§0 状态表 / §1.4 / §2.x / §3.2 / §8 全量回写）、本批 handoff。**未改任何 C++ 源码 / IPC 协议 / `install.nsi` / `output/data/**`**。
+- **仍未闭环**：① 客户端真机联调（注册 → 登录 → 词库双端同步 AC-01~AC-14）需两台设备或两套隔离用户数据目录 + 用户在场；② `api.aiec.fun` **异地可达性**未验证（只在构建机网络内打过）；③ R2 密文对象真实 `PUT`/`GET` 未跑过（客户端未联调）；④ 真实发信通道未启用（`MAIL_MODE="outbox"` 是 **$0 路线**的用户拍板结果，非缺陷）。
+
 ### feat(WeaselServer): 云端账号与多端同步 · 阶段 E 入口接线 T405 —— 右键菜单新增「账号与同步」（批次 AC）
 
 - **用户可见变化**：托盘右键菜单与快捷设置栏**品牌图标右键菜单**（两者共用 `IDR_MENU_POPUP`，ADR 0038）各新增一项 **「账号与同步 (&Z)」**，位置紧随「快捷键设置 (&B)」，点击打开批次 AB 已落地的账号页 `fluxing::cloud::account_dialog::Show()`。此前账号页**无任何入口可达**（阶段 D 遗留），本批补上。
@@ -8,7 +17,7 @@
 - **无需额外水化**：账号页自身在 `CloudAccountDialog.cpp:105-108` 构造 `CloudAccountService` 并 `RestoreFromStore()`（跑在控制器线程，`CloudTransport.h:10` 禁止 UI 线程调用），`Show()` 仅 `SetForegroundWindow` / `CreateWindowExW` ⇒ 不构成 constitution P2 阻塞 I/O。
 - **验证**：`build.bat weasel` ⇒ **0 个错误**（5 个既有 warning，38.93 s，日志 `tmp/T405-weaselserver-build.log`）；**构建产物二进制自证**（`tmp/T405-verify-menu.ps1`，`LoadLibraryExW(LOAD_LIBRARY_AS_DATAFILE)` + `LoadMenuW(hMod, 105)` + `GetMenuStringW`）⇒ `output\Win32\WeaselServer.exe`（2641920 B / SHA256 `094E54C1…CD50`）内 `id=40024 [Account and Sync (&Z)]` **恰好 1 处**且顺序正确，三语言文案在 exe 原始字节中**各命中 1 次**；云单测 `tmp\build-fluxing-cloud-tests.cmd` ⇒ `RESULT: PASS=297 FAIL=0` / `ALL PASS`（**与批次 AB 基线逐字一致，无回归**）；新增行 clang-format 干净（这两个遗留文件的既有基线违规不在本批清理范围）；`.rc` 保真 **UTF-16LE + BOM + CRLF**（410→413 行）。
 - **未改**：`include/WeaselIPCData.h`、IPC 协议（**未新增任何 IPC 消息**）、`output/install.nsi`、`librime/`、`output/data/**`、快捷面板 4 键帽几何；并发会话的 `RimeWithWeasel/RimeWithWeasel.cpp` 未动、未提交。
-- **⚠️ 未闭环**：① T405 Done 判据要求的**真机截图**（装机后人工点一次右键菜单；IME 自绘窗跨进程抓不到）；② `Show() → 登录成功 → CloudSyncService 首次 pull` 的后两步 —— 被 Cloudflare 侧人工动作（`wrangler login` / D1 / R2 / `AUTH_PEPPER` / `wrangler deploy` / `api.aiec.fun` DNS）阻塞，线上仍无可用服务端。
+- **⚠️ 未闭环**：① T405 Done 判据要求的**真机截图**（装机后人工点一次右键菜单；IME 自绘窗跨进程抓不到）；② ~~`Show() → 登录成功 → CloudSyncService 首次 pull` 的后两步 —— 被 Cloudflare 侧人工动作（`wrangler login` / D1 / R2 / `AUTH_PEPPER` / `wrangler deploy` / `api.aiec.fun` DNS）阻塞，线上仍无可用服务端~~ ⇒ **🟢 已解除（2026-11-11）**：Cloudflare 全链路部署完成、`/v1/health` 返回 200，详见本文件顶部「云端同步服务端正式上线」条目；剩余仅**客户端真机联调**。
 
 ### feat(WeaselServer): 云端账号与多端同步 · 阶段 D「客户端运行时」落地（**尚无用户可见入口**）
 
@@ -17,7 +26,7 @@
 - **关键实现决策（ADR 0054）**：① 密码学**自实现** PBKDF2-HMAC-SHA256 / HKDF-SHA256 —— CNG 的 `BCryptDeriveKeyPBKDF2` **默认 PRF=SHA-1**（与 WebCrypto 的 SHA256 不对齐）且**无 HKDF** 语义；**AES-256-GCM 仍走 CNG**（复用 `include/FluxingCloudEnvelope.h`，生产与单测同源）。② **salt 按邮箱确定性派生**（`SHA256("fluxing-enc-v1|" + lower(email))`）—— 服务端**从不用 salt 校验**，客户端登录前拿不到服务端随机 salt。③ **T102 快照通道**：词库导出 / 还原用 `backup_user_dict` / `restore_user_dict`（**不用** `export_user_dict` / `import_user_dict`），互斥经 `RimeWithWeaselHandler` 的维护态，且**只在后台线程**执行。
 - **验证**：`tmp\build-fluxing-cloud-tests.cmd` ⇒ `RESULT: PASS=297 FAIL=0` / `VERDICT: ALL PASS` / `TEST_FLUXINGCLOUD_EXIT=0`（日志 `tmp\stageD-build.log`，基线 134 → 297）；`build.bat weasel` ⇒ **0 个错误**，产出 `output\Win32\WeaselServer.exe`（日志 `tmp\stageD-weaselserver-build.log`）。密码学用**标准向量**钉死（SHA-256 FIPS 180-4 / HMAC RFC 4231 TC1·TC2·TC3·TC6 / PBKDF2 RFC 7914 §11 / HKDF 按 RFC 5869 公式复算 + .NET 独立实现），**期望值不凭记忆写**。
 - **本轮**未改：`include/WeaselIPCData.h`、IPC 协议、`output/install.nsi`、`librime/`、`output/data/**`；**未新增任何 IPC 消息**。
-- **⚠️ 尚无用户可见入口**：账号页界面已落地但**没有任何入口可达**（入口接线属阶段 E T405，位置已由用户拍板 = **快捷设置栏的右键菜单**，**不是**删掉右键菜单而是换地方）。云端同步**未上线**，未登录时不产生任何出向请求。真机联调依赖服务端部署（`wrangler deploy` + 自有域名 `api.aiec.fun`），**当前未做**。
+- **⚠️ 尚无用户可见入口**：账号页界面已落地但**没有任何入口可达**（入口接线属阶段 E T405，位置已由用户拍板 = **快捷设置栏的右键菜单**，**不是**删掉右键菜单而是换地方）。云端同步~~**未上线**~~ ⇒ **🟢 2026-11-11 服务端已上线**（`/v1/health` 200），未登录时仍不产生任何出向请求。真机联调依赖服务端部署 —— ~~`wrangler deploy` + 自有域名 `api.aiec.fun`，**当前未做**~~ ⇒ **🟢 已完成**。
 
 ### fix(WeaselTSF): 托盘「中英」语言栏项图标去除 —— 改为「根本不注册该语言栏项」（v14；批次 W）
 

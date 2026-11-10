@@ -229,7 +229,7 @@
 - **做法**：复用既有 `IDR_MENU_POPUP` 菜单路由；新增菜单项 ID `ID_WEASELTRAY_CLOUD_ACCOUNT 40024`（**不复用** `ID_WEASELTRAY_SYNC 40012`，后者承载 `WeaselDeployer.exe /sync` 的**本机**词库同步，挪用等于静默剥夺既有功能）；在 `SetupMenuHandlers()` 内注册 handler 调 `fluxing::cloud::account_dialog::Show()`，沿用 `m_uiThreadId` 判断 + `PostMessage(WM_COMMAND, MAKEWPARAM(40024, 0))` 弹回 UI 线程；**不改面板几何与状态真相源**（spec 099 边界）；**不新增任何 IPC 消息**（见 T402）；入口无需额外水化 —— 账号页自身已在控制器线程执行 `RestoreFromStore()`（`CloudAccountDialog.cpp:105-108`，`CloudTransport.h:10` 禁止 UI 线程调用），`Show()` 仅 `SetForegroundWindow` / `CreateWindowExW` ⇒ 不构成 constitution P2 阻塞 I/O。
 - **Done 判据**：贴右键菜单出现「账号与同步」并能打开账号页的真机截图。本批已交付**代码 + 构建产物自证**，**真机截图仍待用户装机后人工点一次**（IME 自绘顶层窗跨进程抓不到，见记忆 #43）。
 - **Verified（2026-11-11，均为实测）**：`build.bat weasel` ⇒ **0 个错误**（5 个既有 warning，日志 `tmp/T405-weaselserver-build.log`）；**产物二进制自证** `tmp/T405-verify-menu.ps1`（`LoadLibraryExW(LOAD_LIBRARY_AS_DATAFILE)` + `LoadMenuW(hMod, IDR_MENU_POPUP=105)` + `GetMenuStringW`）⇒ `id=40024 [Account and Sync (&Z)]` 在 `output\Win32\WeaselServer.exe`（2641920 B / SHA256 `094E54C1…CD50`）内**恰好 1 处**且顺序紧随 `40023 Shortcut settings (&B)`；CHS/CHT/ENU 三语言文案在 exe 原始字节中**各命中 1 次**；云单测 `tmp\build-fluxing-cloud-tests.cmd` ⇒ `RESULT: PASS=297 FAIL=0` / `ALL PASS`（**与批次 AB 基线逐字一致，无回归**）；新增行 clang-format 干净；`.rc` 保真 **UTF-16LE + BOM + CRLF**（410→413 行）。
-- **Still not verified**：① 真机右键菜单截图（需装机 `scripts\install\silent-install.ps1` + 用户在场点一次）；② `Show() → 登录成功 → CloudSyncService 首次 pull` 的后两步被 **Cloudflare 侧人工动作**（`wrangler login` / D1 建库 / R2 桶 / `d1 migrations apply --remote` / `wrangler secret put AUTH_PEPPER` / `wrangler deploy` / `api.aiec.fun` DNS）阻塞，`wrangler.toml` 的 `database_id` 仍是占位全零 UUID ⇒ **线上判据一律 not verified**。
+- **Still not verified**：① 真机右键菜单截图（需装机 `scripts\install\silent-install.ps1` + 用户在场点一次）；② `Show() → 登录成功 → CloudSyncService 首次 pull` 的后两步 —— **Cloudflare 侧阻塞已于 2026-11-11 全部解除**（见 T407：D1 / R2 / `AUTH_PEPPER` / `wrangler deploy` / `api.aiec.fun` DNS 全绿，`/v1/health` 返回 200），当前唯一阻塞是**客户端侧真机联调**（需两台设备或两套隔离用户数据目录，见 T405 ①）。
 - **依赖**：T401。
 
 ---
@@ -335,8 +335,16 @@
 - **Done 判据**：`check-tray-input-indicator.ps1` 输出 `OUR_HIT=0` 且 `VERDICT=PASS_OUR_ITEM_ABSENT`。
 - **未闭环（需用户）**：6 个进程仍持有修复前镜像（msedge / Weixin / DingTalk / Claude Code Haha / **MiniMax Code（本会话宿主）** / YXCalendar）⇒ 需结束它们或注销重登后再复测。**代码侧已无可做之事。**
 
-### T407 · 阶段 E 线上判据 —— 阻塞于用户 OAuth
+### T407 · 阶段 E 线上判据 —— **DONE 2026-11-11（Cloudflare 侧全绿）**
 - **目标**：补齐 spec 100 线上判据（D1 / R2 / AUTH_PEPPER / deploy / DNS）。
-- **现状**：`npx wrangler whoami` ⇒ `You are not authenticated`；`CLOUDFLARE_*` / `CF_*` 环境变量全不存在；pepper 已生成（32 字节随机，存 `tmp/AD-auth-pepper.txt`，gitignored，**绝不入库**）；`wrangler.toml` 的 `database_id` 仍是占位全零 UUID。
-- **Done 判据**：`https://api.aiec.fun/v1/health` 返回 **200**；`d1 migrations apply --remote` 全绿；R2 桶 `fluxing-sync` 存在；`AUTH_PEPPER` 存为 Workers Secret（不是明文 var）。
-- **未闭环**：**用户未完成 `npx wrangler login`** ⇒ 全部命令无法执行 ⇒ 线上判据 **not verified**。
+- **Done 判据（逐条实测命中）**：
+  ① `GET https://api.aiec.fun/v1/health` ⇒ **HTTP 200** `{"ok":true,"service":"fluxing-sync","environment":"dev","time":1794319132}`；
+  ② `d1 migrations apply fluxing-sync --remote` ⇒ 13 条命令全绿，`sqlite_master` **9 张表**（`_cf_KV` / `d1_migrations` / `users` / `devices` / `refresh_tokens` / `sync_items` / `email_verifications` / `mail_outbox` / `sqlite_sequence`）；
+  ③ R2 桶 `fluxing-sync` 存在（`r2 bucket create fluxing-sync` ⇒ `Created bucket 'fluxing-sync'`，绑定 `env.BUCKET`）；
+  ④ `AUTH_PEPPER` 存为 **Workers Secret**（`secret list` ⇒ `type: "secret_text"`，非明文 var）。
+- **附加功能判别（不只信元数据自证）**：
+  · 只读判别：`POST /v1/auth/login` 打一个不存在的用户 ⇒ **401 `invalid_credentials`**（若 pepper 缺失，此处必为 500 `server_misconfigured`）⇒ pepper 真实加载；
+  · 写入判别：`POST /v1/auth/register` 打一个冒烟用户 ⇒ **200** 返回 `account_id` / `salt` / `kdf{PBKDF2-SHA256, 600000}` / `need_email_verify:true` ⇒ D1 落库 `users+1`、`email_verifications+1`、`mail_outbox+1`（$0 路线 outbox 只入库不发信）；冒烟数据随后按 `smoke-%@aiec.fun` 清空，复核 `users=0 / verifications=0 / outbox=0`。
+- **执行留痕**：`wrangler deploy` ⇒ `Current Version ID c22a483d-0460-4d17-b46b-ac3347c2c138`、`api.aiec.fun (custom domain)`、Total Upload 42.65 KiB / gzip 11.45 KiB；`workers_dev=false` + `preview_urls=false` ⇒ **无 workers.dev 公网入口**；`npm run check`（端点策略 + vitest 20/20）与 `npm run typecheck` 在部署前已全绿。
+- **仍未做**：`MAIL_MODE="outbox"` 是用户 2026-11-11 拍板的 $0 路线结果，真实发信（`MAIL_MODE="cloudflare"` + `[[send_email]]`）**未启用**；`ENVIRONMENT="dev"` 未切 `production`；`AUTH_PEPPER` 值只存在于 `tmp/AD-auth-pepper.txt`（gitignored）与 Workers Secret **两处**，未入库、未进仓。
+- **历史阻塞（已解除）**：曾因 `wrangler whoami` ⇒ `You are not authenticated` + `wrangler.toml` 的 `database_id` 为占位全零 UUID ⇒ 线上判据 not verified；2026-11-11 实测 **OAuth 早已成功**（`kizemo@163.com`，account `016c8e736b685af88860034ea6eb1daa`，scope 含 `d1/workers/workers_scripts/workers_routes/zone:read` 等），此前「授权失败」结论系**过期观察**，已就地更正。

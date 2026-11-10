@@ -1,4 +1,4 @@
-# 批次 AD · 托盘「中/英」图标（复现源收敛到 1 个）+ T405 右键菜单判据闭合 + Cloudflare 授权待用户
+# 批次 AD · 托盘「中/英」图标（复现源收敛到 1 个）+ T405 右键菜单判据闭合 + **Cloudflare 全链路部署闭环（线上判据 200）**
 
 > 日期：2026-11-11 · 分支 `feat/100-cloud-sync` · 上游 HEAD `233dacb`（批次 AC / T405）
 > 本轮**零产品代码改动**；新增 2 个诊断脚本（托盘体检已入库、菜单探针在 `tmp/`）。
@@ -8,8 +8,9 @@
 ## 0. 一句话
 
 T405「账号与同步」右键菜单**判据已闭合**（运行时菜单项 id `40024` + 文本 `账号与同步 (&Z)` 硬证据 + 真机截图已落盘）；托盘「中/英」图标的复现源已从 **6 个宿主收敛到 1 个**（就是本会话宿主 `MiniMax Code`，它退出即自然解决）；
-**Cloudflare 授权已于 2026-11-10 21:24 完成（OAuth，非 API Token）**，D1 库已建 + 迁移已应用 + `database_id` 已回填 `wrangler.toml`，
-**唯一剩余硬阻塞 = 账号级「启用 R2」**（后台点一次；实测 `code 10042`）；secret / deploy / DNS 仍待 R2 解锁后执行，线上判据 not verified。
+**Cloudflare 授权已于 2026-11-10 21:24 完成（OAuth，非 API Token）**，D1 库已建 + 迁移已应用 + `database_id` 已回填 `wrangler.toml`。
+用户 2026-11-10 21:57 确认「R2 已启用」后，本轮把 `r2 bucket create` → `deploy` → `secret put AUTH_PEPPER` → 线上判据**全部跑完**，
+`https://api.aiec.fun/v1/health` 返回 **HTTP 200** ⇒ **spec 100 线上判据已 verified**（详见 §7）。
 
 ---
 
@@ -87,7 +88,12 @@ T405「账号与同步」右键菜单**判据已闭合**（运行时菜单项 id
 - **Cloudflare 账号已授权**（OAuth，`kizemo@163.com`，Account ID `016c8e736b685af88860034ea6eb1daa`）；scope 实测含 `d1 (write)` / `workers_scripts (write)` / `workers_routes (write)` / `zone (read)`。
 - **D1 库 `fluxing-sync` 已存在**：`database_id = e4ea114a-29b4-4abd-87e6-4e6cb20d86e4`（13:24:35Z 建），**已回填 `wrangler.toml`**。
 - **D1 远程迁移已应用**：`0001_init.sql` ✅（13 条命令，`sqlite_master` 计 9 张表）。
-- **R2 未开通**：`wrangler r2 bucket create` → `code 10042`（账号级开关，**API Token 无效**）。
+- **R2 已开通**（用户 2026-11-10 21:57 后台启用）：`r2 bucket create fluxing-sync` → `✅ Created bucket 'fluxing-sync' with default storage class of Standard.`（`CREATE_EXIT=0`），不再 `code 10042`。
+- **Worker 已部署**：`wrangler deploy` 成功，`api.aiec.fun (custom domain)` 自动建好，Version ID `c22a483d-0460-4d17-b46b-ac3347c2c138`。
+- **`AUTH_PEPPER` 已入 Workers Secret**：`secret put` 回 `✨ Success! Uploaded secret AUTH_PEPPER`；`secret list` 见 `{"name":"AUTH_PEPPER","type":"secret_text"}`。
+- **线上判据 verified**：`GET https://api.aiec.fun/v1/health` ⇒ **200** `{"ok":true,"service":"fluxing-sync","environment":"dev",…}`。
+- **两条功能判别**：`login` 打不存在用户 ⇒ 401（非 500）证明 pepper 真加载；`register` 冒烟用户 ⇒ 200 带 `account_id`/`salt`/`kdf` 证明写入链路通。
+- **D1 冒烟清空**：`users=0 verifications=0 outbox=0`（删除 6 条语句 `success:true`）。
 - **Worker 从未部署**：`wrangler deployments list` → `code 10007`。
 - **`aiec.fun` 与账号同属一家**：`GET /zones?name=aiec.fun` → `zones=1`、`status=active`、`zone id f686751b049e4270d1a4a1bcb4849852`。
 - **wrangler 4.159.0 自动读取 cwd 的 `.env`** 里的 `CLOUDFLARE_API_TOKEN`（A/B 实证）⇒ 令牌注入无需 `setx`。
@@ -102,7 +108,10 @@ T405「账号与同步」右键菜单**判据已闭合**（运行时菜单项 id
 ### 未验证（需用户参与或外部条件）
 
 - **托盘「中/英」图标彻底消失（`OUR_HIT = 0`）**：唯一剩余持有者是**本会话宿主**，在会话内结束它会直接中断会话 ⇒ 必须在**本会话结束后**由用户重启 MiniMax Code（或注销 / 重启 Windows），再复跑体检脚本。
-- **spec 100 线上判据**：授权 ✅ / D1 ✅ / 迁移 ✅ ⇒ **R2 未启用** ⇒ `r2 bucket create` / `secret put` / `deploy` / DNS **全部未执行** ⇒ `https://api.aiec.fun/v1/health` **not verified**。
+- ~~**spec 100 线上判据**：授权 ✅ / D1 ✅ / 迁移 ✅ ⇒ **R2 未启用** ⇒ `r2 bucket create` / `secret put` / `deploy` / DNS **全部未执行** ⇒ `https://api.aiec.fun/v1/health` **not verified**。~~
+  ⇒ **2026-11-11 已全部解除**：R2 桶已建、Worker 已部署、pepper 已入 Secret、`/v1/health` = **200**。
+  仍未取证的只剩：① `api.aiec.fun` **从第二台机器 / 另一网络**的可达性（只在本机打到 200）；
+  ② **R2 密文对象的真实 `PUT`/`GET`**（桶已建、绑定已解析，但客户端未联调，没跑过一次真实读写）。
 - 账号页真机注册 / 登录、词库双端同步（AC-01 ~ AC-14）仍需两台设备或两套隔离用户数据目录。
 
 ---
@@ -131,9 +140,9 @@ T405「账号与同步」右键菜单**判据已闭合**（运行时菜单项 id
 1. **让最后一个持旧镜像的宿主退出**（`MiniMax Code` = 本会话宿主）⇒ 最省事：**关掉 MiniMax Code 重开**，或注销 / 重启一次 Windows，然后跑
    `pwsh -NoProfile -ExecutionPolicy Bypass -File 'F:\soft\00selfmade\rime_claude\scripts\install\check-tray-input-indicator.ps1'`
    期望：`OUR_HIT = 0` / `VERDICT=PASS_OUR_ITEM_ABSENT` / 退出码 0。
-2. **启用 R2**（🔴 唯一硬阻塞 · 后台一次性操作）：
-   Cloudflare 控制台 → 左侧「R2 对象存储」→ 点「启用 R2」→ 绑定支付方式（免费额度内不扣费，仅超额担保）→ 回一句「**R2 已启用**」。
-   随后由我代跑：`wrangler r2 bucket create fluxing-sync` → `secret put AUTH_PEPPER`（值取自 `tmp/AD-auth-pepper.txt`）→ `deploy` → `curl` 判据。
+2. ~~**启用 R2**（🔴 唯一硬阻塞 · 后台一次性操作）~~ ⇒ 🟢 **2026-11-11 已完成，无需再做**：
+   你 2026-11-10 21:57 点完启用，我随即代跑了 `r2 bucket create fluxing-sync` → `deploy` → `secret put AUTH_PEPPER` → `curl` 判据，
+   `https://api.aiec.fun/v1/health` 返回 **200**。（历史步骤留档：控制台 → 「R2 对象存储」→ 「启用 R2」→ 绑支付方式。）
    *详细步骤见 `docs/ops/fluxing-cloud-external-prerequisites.md` §1.4。*
 3. **（可选）建 API Token**：OAuth 已可用，令牌不是阻塞点；建它的价值是「refresh_token 30 天到期免重授权 + CI 可用」。
    *简体中文后台 13 步指引见 `docs/ops/fluxing-cloud-external-prerequisites.md` §1.3；令牌存 `cloud/fluxing-sync/.env`（已 gitignore）。*
@@ -141,18 +150,37 @@ T405「账号与同步」右键菜单**判据已闭合**（运行时菜单项 id
 
 ---
 
-## 7. Cloudflare 线上判据执行序（授权后按序执行）
+## 7. Cloudflare 线上判据执行序 —— 🟢 **全部执行完毕（2026-11-11）**
+
+用户 2026-11-10 21:57 确认「R2 已启用」后，本轮代跑完全部剩余步骤，**线上判据已 verified**：
 
 ```
 cd F:\soft\00selfmade\rime_claude\cloud\fluxing-sync
-npx wrangler login                                          # 用户做（或注入 CLOUDFLARE_API_TOKEN）
-npx wrangler d1 create fluxing-sync                         # 把打印的 database_id 回填 wrangler.toml（现为占位全零 UUID）
-npx wrangler r2 bucket create fluxing-sync
-npx wrangler d1 migrations apply fluxing-sync --remote
-npx wrangler secret put AUTH_PEPPER                         # 值取自 tmp\AD-auth-pepper.txt（32 字节随机，绝不入库）
-npx wrangler deploy
-curl -sS -o NUL -w "%{http_code}" https://api.aiec.fun/v1/health   # 期望 200；522/523=DNS 未绑；404=路由未匹配
+.\node_modules\.bin\wrangler.cmd r2 bucket list             # ✅ 不再 code 10042
+.\node_modules\.bin\wrangler.cmd r2 bucket create fluxing-sync   # ✅ Created bucket（CREATE_EXIT=0）
+.\node_modules\.bin\wrangler.cmd deploy                     # ✅ Total Upload 42.65 KiB / gzip 11.45 KiB
+                                                            #    api.aiec.fun (custom domain) 自动建好
+                                                            #    Current Version ID c22a483d-0460-4d17-b46b-ac3347c2c138
+.\node_modules\.bin\wrangler.cmd secret put AUTH_PEPPER     # ✅ stdin 管道可用：✨ Success! Uploaded secret AUTH_PEPPER
+.\node_modules\.bin\wrangler.cmd secret list                # ✅ {"name":"AUTH_PEPPER","type":"secret_text"}
 ```
+
+**线上判据**：`GET https://api.aiec.fun/v1/health` ⇒ **HTTP 200**
+`{"ok":true,"service":"fluxing-sync","environment":"dev","time":1794319132}`。
+
+**两条功能判别（不只信元数据自证）**：
+
+1. **只读**：`POST /v1/auth/login` 打不存在用户 ⇒ **401** `invalid_credentials`
+   （若 pepper 未加载必为 500 `server_misconfigured`）⇒ 反证 pepper 真实进入运行时。
+2. **写入**：`POST /v1/auth/register` 冒烟用户 ⇒ **200** 且返回 `account_id` / `salt` /
+   `kdf:{algo:PBKDF2-SHA256,iters:600000}` / `need_email_verify:true` ⇒ 落库 + KDF + 发信入队三条链路都通。
+
+**D1 落库复核 + 清空**：`sqlite_master` 9 张表；冒烟后 `users=1 devices=0 verifications=1 outbox=1`；
+按 `smoke-%@aiec.fun` 删 6 张表相关行（`changes` 1/1/0/0/0/1，6 条语句 `success:true`）⇒ 复核 `users=0 verifications=0 outbox=0`，
+**生产库回到干净待测状态**。
+
+> ⚠️ **顺序更正**：`secret put` 必须排在 `deploy` **之后**（Worker 不存在时 secret 无处可挂）。
+> 早期文档里「deploy 前 secret put」的顺序是错的，`docs/ops/fluxing-cloud-external-prerequisites.md` §2.3 已修正。
 
 - `AUTH_PEPPER` 语义（`cloud/fluxing-sync/src/auth.ts:74-77`）：缺失或过短即 **fail closed**（500），**无内置默认值可回退**；落库的是 `HMAC-SHA256(AUTH_PEPPER, auth_key)` 的 verifier，不是 auth_key 本身。
 - DNS 不手工建：`routes = [{ pattern = "api.aiec.fun", custom_domain = true }]` ⇒ `wrangler deploy` 自动建记录（前提：`aiec.fun` 与 Worker 同属一个 Cloudflare 账号；否则照抄 deploy 输出的目标主机名手工加 CNAME `api`）。
@@ -179,6 +207,7 @@ curl -sS -o NUL -w "%{http_code}" https://api.aiec.fun/v1/health   # 期望 200�
 ## 9. 下一步（接力入口）
 
 - 托盘图标：用户结束 `MiniMax Code`（或注销 / 重启）后复跑 `scripts/install/check-tray-input-indicator.ps1` 拿 `OUR_HIT = 0`；若仍为 1，再查是否还有未识别的加载路径。
-- Cloudflare：**等用户在后台启用 R2**（不是等授权 —— 授权已于 2026-11-10 21:24 完成）→ 我按 §7 跑 `r2 bucket create` / `secret put` / `deploy` → 把 `https://api.aiec.fun/v1/health` 的 200 响应写回 `tasks.md` 阶段 E 的 Done 判据。
+- Cloudflare：🟢 **已闭环，无需再做**。R2 桶已建、Worker 已部署、`AUTH_PEPPER` 已入 Workers Secret、
+  `https://api.aiec.fun/v1/health` 返回 **200**；`tasks.md` T407 已回写为 DONE（见 §7）。
 - Cloudflare（可选）：用户在后台建 API Token → 写进 `cloud/fluxing-sync/.env`（gitignored）→ 后续所有 wrangler 命令免 OAuth 刷新。
 - 阶段 E 剩余：账号页真机注册 / 登录、词库双端同步（AC-01 ~ AC-14）仍需两台设备或两套隔离用户数据目录。
