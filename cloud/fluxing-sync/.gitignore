@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+dist/
+*.log
+# 本地密钥（AUTH_PEPPER 等），绝不入库
+.dev.vars
+.env

@@ -1,0 +1,24 @@
+{
+  "name": "fluxing-sync",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fluxing 火流猩输入法 · 用户资料云同步服务端（Cloudflare Workers + D1 + R2）",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "migrate:local": "wrangler d1 migrations apply fluxing-sync --local",
+    "migrate:remote": "wrangler d1 migrations apply fluxing-sync --remote",
+    "test": "vitest run",
+    "check:endpoint": "node test/check-endpoint-policy.mjs",
+    "check": "npm run check:endpoint && vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.23.0",
+    "@cloudflare/workers-types": "^5.20261109.1",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.159.0"
+  }
+}

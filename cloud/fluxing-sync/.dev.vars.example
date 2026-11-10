@@ -1,0 +1,14 @@
+# 本地开发用环境变量模板：复制成 .dev.vars（已在 .gitignore 里忽略）后按需改值。
+# 生产环境的同名值走 `wrangler secret put <NAME>`，不要写进 wrangler.toml 的 [vars]。
+#
+# AUTH_PEPPER 是登录 verifier 的 HMAC 密钥，服务端唯一必须自己拿着的秘密：
+# 丢失 ⇒ 所有客户端都无法登录（且无法从 D1 反推）；泄露 ⇒ 可用彩虹表反查弱口令。
+# 长度不足 16 字符时服务端一律 500 fail closed，不会回退到内置默认值。
+AUTH_PEPPER=replace-with-at-least-32-random-characters
+
+# outbox = 只写 mail_outbox 表，不发信（本地 / 测试默认值）
+# cloudflare = 走 send_email 绑定真发信（需要 Workers Paid 计划）
+MAIL_MODE=outbox
+
+# 仅 MAIL_MODE=cloudflare 时使用；域名必须已在 Cloudflare Email Routing 里验证过
+MAIL_FROM=noreply@example.com

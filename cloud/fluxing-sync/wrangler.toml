@@ -1,0 +1,53 @@
+# Fluxing 火流猩输入法 · 用户资料云同步服务端
+# Cloudflare Workers + D1 + R2
+#
+# T103 硬约束（见 docs/research/fluxing-cloud-2026-11/endpoint-reachability.md）：
+#   境内 DNS 会污染 Cloudflare 的默认免费子域，因此**必须**关闭该默认端点，
+#   生产端点只能是 https://api.<我方自有域名>/v1/...
+#   本仓库任何文件都不得出现该默认子域的域名字面量（test/check-endpoint-policy.mjs 会拦）。
+name = "fluxing-sync"
+main = "src/index.ts"
+# 必须 <= 本地 workerd 二进制支持的最新日期（本机实测上限 2026-08-22），
+# 否则 vitest-pool-workers 启动即报 "newest date supported by this server binary"。
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+
+workers_dev = false
+preview_urls = false
+
+# 生产路由：域名注册完成后取消注释，并把 <API_DOMAIN> 换成我方自有域名。
+# routes = [{ pattern = "api.<API_DOMAIN>", custom_domain = true }]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fluxing-sync"
+# 占位 UUID：`wrangler d1 create fluxing-sync` 后用真实 database_id 替换。
+# 本地 `wrangler dev` / 单测走 miniflare 本地 SQLite，不校验此值。
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "fluxing-sync"
+
+[vars]
+ENVIRONMENT = "dev"
+# 令牌寿命（秒）：access 1 小时 / refresh 30 天（plan §3.3）
+ACCESS_TOKEN_TTL = "3600"
+REFRESH_TOKEN_TTL = "2592000"
+# 客户端密钥派生参数（plan §3.1）。服务端只回显给客户端，绝不用它们派生任何东西。
+KDF_ALGO = "PBKDF2-SHA256"
+KDF_ITERS = "600000"
+# 发信通道：outbox = 只写 mail_outbox 表（本地 / 测试）；cloudflare = 走 send_email 绑定。
+# 生产必须改 "cloudflare" 并取消下面 [[send_email]] 段的注释。
+MAIL_MODE = "outbox"
+MAIL_FROM = "no-reply@<API_DOMAIN>"
+
+# 生产发信绑定（需 Workers Paid 计划，见 docs/research/.../email-verify-channel.md）。
+# [[send_email]]
+# name = "EMAIL"
+# destination_address = "*"
+
+# 服务端 pepper（AUTH_PEPPER）绝不写进本文件：用
+#   wrangler secret put AUTH_PEPPER
+# 注入；本地开发写进 .dev.vars（已被 .gitignore 忽略）。
