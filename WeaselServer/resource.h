@@ -67,6 +67,8 @@
 // spec 045: 托盘右键 / 快捷设置栏品牌图标右键 -> 快捷键设置界面
 // （与 Ctrl+Shift+K、快捷设置栏齿轮槽共用 ShortcutSettings::Show()）
 #define ID_WEASELTRAY_SHORTCUT_SETTINGS 40023
+// spec 100 T405: 云端账号与多端同步入口(托盘右键 / 快捷设置栏品牌图标右键共用).
+#define ID_WEASELTRAY_CLOUD_ACCOUNT 40024
 
 #define IDR_FLUXING_LOGO                108
 #define ID_QUICKPANEL_BTN_ASCII        41001

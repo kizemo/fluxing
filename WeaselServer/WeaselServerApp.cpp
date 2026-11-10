@@ -12,6 +12,8 @@
 
 // spec 100 阶段 D: 云同步的维护态宿主(备份/还原用户词典时与引擎互斥)。
 #include "Cloud/CloudMaintenanceHost.h"
+// spec 100 阶段 E T405: 云端账号页(modeless 窗口; 网络全部在控制器后台线程).
+#include "Cloud/CloudAccountDialog.h"
 
 #include "FluxingDiagLog.h"  // spec 097: 诊断日志（服务端 DLOG 被 no_logging.h 编译为空操作）// spec 070 T007: D2D factory 创建 (在 WeaselServerApp::Run 入口)
 #include <d2d1.h>
@@ -503,6 +505,21 @@ void WeaselServerApp::SetupMenuHandlers() {
   });
 
   // spec 084 / ADR 0013 D4: 托盘菜单勾选项 -> 快捷设置栏长显模式。
+  // spec 100 T405: 云端账号入口。菜单资源 IDR_MENU_POPUP 被托盘右键与快捷设置栏
+  // 品牌图标右键共用(ADR 0038), 所以这一个菜单项同时覆盖两个入口; 不新增 IPC
+  // 消息(T402), 因此不触发 WeaselIPCData.h 四边同步。
+  // 账号页自身会从 Windows 凭据库恢复登录态(CloudAccountDialog.cpp 的
+  // RestoreFromStore 跑在控制器线程), 所以这里只需把窗口拉起来。
+  m_server.AddMenuHandler(ID_WEASELTRAY_CLOUD_ACCOUNT, [this] {
+    if (GetCurrentThreadId() != m_uiThreadId) {
+      // 菜单命令可能从 IPC 管道线程到达,弹回界面线程处理。
+      ::PostMessage(m_server.GetHWnd(), WM_COMMAND,
+                    MAKEWPARAM(ID_WEASELTRAY_CLOUD_ACCOUNT, 0), 0);
+      return true;
+    }
+    fluxing::cloud::account_dialog::Show();
+    return true;
+  });
   m_server.AddMenuHandler(ID_QUICKPANEL_ALWAYS_SHOW, [this] {
     if (GetCurrentThreadId() != m_uiThreadId) {
       // 菜单命令可能从 IPC 管道线程到达,弹回界面线程处理。

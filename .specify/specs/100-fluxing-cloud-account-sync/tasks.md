@@ -223,11 +223,13 @@
 - **依赖**：T401、T403。
 
 ### T405 · 账号入口接线 [P1] [US1]
-- **状态**：**PENDING**（入口位置已由**用户 2026-11-11 拍板**：**快捷设置栏的右键菜单**，**不是**面板第 4 槽）。**注意**：右键菜单**不是被删除，而是换地方** —— 托盘语言栏项虽在批次 W 下线（ADR 0053），其右键菜单已迁到快捷设置栏品牌图标（ADR 0038），账号入口挂在**同一份菜单路由**上即可。账号页本身已可被程序调用：`fluxing::cloud::account_dialog::Show()`。
+- **状态**：**DONE 2026-11-11（批次 AC）**，**但真机判据未闭环**（见下）。入口位置按**用户 2026-11-11 拍板**：**快捷设置栏的右键菜单**，**不是**面板第 4 槽。右键菜单**不是被删除，而是换地方** —— 托盘语言栏项虽在批次 W 下线（ADR 0053），其右键菜单已迁到快捷设置栏品牌图标（ADR 0038），账号入口挂在**同一份菜单路由**上，一次同时覆盖品牌图标右键与托盘右键两个入口。账号页本身已可被程序调用：`fluxing::cloud::account_dialog::Show()`。
 - **目标**：在**快捷设置栏的右键菜单**加一项「账号与同步」，点击打开账号页。
-- **文件**：`WeaselServer/QuickPanelDialog.cpp`（改）、`WeaselServer/QuickPanelDialog.h`（改）。
-- **做法**：复用既有 `IDR_MENU_POPUP` 菜单路由（品牌图标右键与托盘右键共用同一份菜单）；新增菜单项 ID → 调 `fluxing::cloud::account_dialog::Show()`；**不改面板几何与状态真相源**（spec 099 边界）；**不新增任何 IPC 消息**（见 T402）。
-- **Done 判据**：贴右键菜单出现「账号与同步」并能打开账号页的真机截图。
+- **文件**：**实做与预估有偏差，按实做回写**：`WeaselServer/resource.h`（改，+2）、`WeaselServer/WeaselServer.rc`（改，CHS/CHT/ENU 三块各 +1 行 `MENUITEM`）、`WeaselServer/WeaselServerApp.cpp`（改，+17）。**原预估的 `WeaselServer/QuickPanelDialog.cpp` / `.h` 未改** —— 品牌图标右键与托盘右键共用 `IDR_MENU_POPUP`（ADR 0038），延用批次 L「快捷键设置」的落点先例即可达成同一效果，且零面板几何改动，比直接改 `QuickPanelDialog` 更贴合 spec 099 边界。
+- **做法**：复用既有 `IDR_MENU_POPUP` 菜单路由；新增菜单项 ID `ID_WEASELTRAY_CLOUD_ACCOUNT 40024`（**不复用** `ID_WEASELTRAY_SYNC 40012`，后者承载 `WeaselDeployer.exe /sync` 的**本机**词库同步，挪用等于静默剥夺既有功能）；在 `SetupMenuHandlers()` 内注册 handler 调 `fluxing::cloud::account_dialog::Show()`，沿用 `m_uiThreadId` 判断 + `PostMessage(WM_COMMAND, MAKEWPARAM(40024, 0))` 弹回 UI 线程；**不改面板几何与状态真相源**（spec 099 边界）；**不新增任何 IPC 消息**（见 T402）；入口无需额外水化 —— 账号页自身已在控制器线程执行 `RestoreFromStore()`（`CloudAccountDialog.cpp:105-108`，`CloudTransport.h:10` 禁止 UI 线程调用），`Show()` 仅 `SetForegroundWindow` / `CreateWindowExW` ⇒ 不构成 constitution P2 阻塞 I/O。
+- **Done 判据**：贴右键菜单出现「账号与同步」并能打开账号页的真机截图。本批已交付**代码 + 构建产物自证**，**真机截图仍待用户装机后人工点一次**（IME 自绘顶层窗跨进程抓不到，见记忆 #43）。
+- **Verified（2026-11-11，均为实测）**：`build.bat weasel` ⇒ **0 个错误**（5 个既有 warning，日志 `tmp/T405-weaselserver-build.log`）；**产物二进制自证** `tmp/T405-verify-menu.ps1`（`LoadLibraryExW(LOAD_LIBRARY_AS_DATAFILE)` + `LoadMenuW(hMod, IDR_MENU_POPUP=105)` + `GetMenuStringW`）⇒ `id=40024 [Account and Sync (&Z)]` 在 `output\Win32\WeaselServer.exe`（2641920 B / SHA256 `094E54C1…CD50`）内**恰好 1 处**且顺序紧随 `40023 Shortcut settings (&B)`；CHS/CHT/ENU 三语言文案在 exe 原始字节中**各命中 1 次**；云单测 `tmp\build-fluxing-cloud-tests.cmd` ⇒ `RESULT: PASS=297 FAIL=0` / `ALL PASS`（**与批次 AB 基线逐字一致，无回归**）；新增行 clang-format 干净；`.rc` 保真 **UTF-16LE + BOM + CRLF**（410→413 行）。
+- **Still not verified**：① 真机右键菜单截图（需装机 `scripts\install\silent-install.ps1` + 用户在场点一次）；② `Show() → 登录成功 → CloudSyncService 首次 pull` 的后两步被 **Cloudflare 侧人工动作**（`wrangler login` / D1 建库 / R2 桶 / `d1 migrations apply --remote` / `wrangler secret put AUTH_PEPPER` / `wrangler deploy` / `api.aiec.fun` DNS）阻塞，`wrangler.toml` 的 `database_id` 仍是占位全零 UUID ⇒ **线上判据一律 not verified**。
 - **依赖**：T401。
 
 ---

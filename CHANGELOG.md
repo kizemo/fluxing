@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+### feat(WeaselServer): 云端账号与多端同步 · 阶段 E 入口接线 T405 —— 右键菜单新增「账号与同步」（批次 AC）
+
+- **用户可见变化**：托盘右键菜单与快捷设置栏**品牌图标右键菜单**（两者共用 `IDR_MENU_POPUP`，ADR 0038）各新增一项 **「账号与同步 (&Z)」**，位置紧随「快捷键设置 (&B)」，点击打开批次 AB 已落地的账号页 `fluxing::cloud::account_dialog::Show()`。此前账号页**无任何入口可达**（阶段 D 遗留），本批补上。
+- **落点跟随批次 L 先例**（而非 `tasks.md` 原预估的 `QuickPanelDialog.cpp`/`.h`）：`WeaselServer/resource.h` 新增 `ID_WEASELTRAY_CLOUD_ACCOUNT 40024`；`WeaselServer/WeaselServer.rc` CHS/CHT/ENU 三块各 +1 行 `MENUITEM`；`WeaselServer/WeaselServerApp.cpp::SetupMenuHandlers()` 注册 handler（沿用 `m_uiThreadId` 判断 + `PostMessage` 自投递弹回 UI 线程）。合计 **3 文件 / +19 行**。
+- **刻意不复用 `ID_WEASELTRAY_SYNC`(40012)**：该 ID 承载 `WeaselDeployer.exe /sync`（**本机**词库同步，`WeaselServerApp.cpp:400-402`），与云端同步语义不同，挪用等于静默剥夺既有功能。
+- **无需额外水化**：账号页自身在 `CloudAccountDialog.cpp:105-108` 构造 `CloudAccountService` 并 `RestoreFromStore()`（跑在控制器线程，`CloudTransport.h:10` 禁止 UI 线程调用），`Show()` 仅 `SetForegroundWindow` / `CreateWindowExW` ⇒ 不构成 constitution P2 阻塞 I/O。
+- **验证**：`build.bat weasel` ⇒ **0 个错误**（5 个既有 warning，38.93 s，日志 `tmp/T405-weaselserver-build.log`）；**构建产物二进制自证**（`tmp/T405-verify-menu.ps1`，`LoadLibraryExW(LOAD_LIBRARY_AS_DATAFILE)` + `LoadMenuW(hMod, 105)` + `GetMenuStringW`）⇒ `output\Win32\WeaselServer.exe`（2641920 B / SHA256 `094E54C1…CD50`）内 `id=40024 [Account and Sync (&Z)]` **恰好 1 处**且顺序正确，三语言文案在 exe 原始字节中**各命中 1 次**；云单测 `tmp\build-fluxing-cloud-tests.cmd` ⇒ `RESULT: PASS=297 FAIL=0` / `ALL PASS`（**与批次 AB 基线逐字一致，无回归**）；新增行 clang-format 干净（这两个遗留文件的既有基线违规不在本批清理范围）；`.rc` 保真 **UTF-16LE + BOM + CRLF**（410→413 行）。
+- **未改**：`include/WeaselIPCData.h`、IPC 协议（**未新增任何 IPC 消息**）、`output/install.nsi`、`librime/`、`output/data/**`、快捷面板 4 键帽几何；并发会话的 `RimeWithWeasel/RimeWithWeasel.cpp` 未动、未提交。
+- **⚠️ 未闭环**：① T405 Done 判据要求的**真机截图**（装机后人工点一次右键菜单；IME 自绘窗跨进程抓不到）；② `Show() → 登录成功 → CloudSyncService 首次 pull` 的后两步 —— 被 Cloudflare 侧人工动作（`wrangler login` / D1 / R2 / `AUTH_PEPPER` / `wrangler deploy` / `api.aiec.fun` DNS）阻塞，线上仍无可用服务端。
+
 ### feat(WeaselServer): 云端账号与多端同步 · 阶段 D「客户端运行时」落地（**尚无用户可见入口**）
 
 - **本轮交付**：spec 100 阶段 D 的 **T301–T305 五任务全部 DONE** —— 新建 `WeaselServer/Cloud/`（**18 个文件** = 8 个模块的 `.h`/`.cpp` 共 16 个 + `CloudRimeUserDictBackend.cpp` + `CloudMaintenanceHost.h`）：`CloudJson`（自包含严格 JSON）· `CloudCrypto`（PBKDF2-HMAC-SHA256 60 万次 + HKDF 分离 `auth_key`/`enc_key`）· `CloudTransport`（`ICloudTransport` + WinHTTP 实现）· `CloudCredentialStore`（Windows Credential Manager）· `CloudAccount`（账户状态机 + 设备管理）· `CloudSyncService`（推拉编排 + 条目合并）· `CloudUserDictIo`（词库快照）· `CloudAccountDialog`（账号页）· `CloudRimeUserDictBackend.cpp` · `CloudMaintenanceHost.h`。
