@@ -21,13 +21,14 @@
 | **F** | 同步引擎与调度 | T501–T505 | 单机双用户目录同步收敛（并集 + 一致） |
 | **G** | 双机验收与发版 | T601–T604 | AC-01 ~ AC-14 全过；三数字未破线；门禁全绿 |
 
-**硬前置**：T102、T103 未出结论前，**禁止**写词库合并实现与端点硬编码（风险 R1 / R5）。
+**硬前置**：T102、T103 未出结论前，**禁止**写词库合并实现与端点硬编码（风险 R1 / R5）。　**→ 2026-11-10 已解除：两份结论均已落盘（见 `docs/research/fluxing-cloud-2026-11/`）。**
 
 ---
 
 ## 阶段 A · 取证与工程底座
 
 ### T101 · 邮箱验证码通道选型 [P1] [US1]
+- **状态**：**DONE 2026-11-10** · 交付 `docs/research/fluxing-cloud-2026-11/email-verify-channel.md`（9,305 B）；选型 = Cloudflare Email Service（Workers Paid 计划，3,000 封/月）；未实时核价项见 md §6
 - **目标**：定下「验证邮箱归属」的送达通道与成本口径，形成可执行结论。
 - **文件**：`docs/research/fluxing-cloud-2026-11/email-verify-channel.md`（新建）。
 - **做法**：① 查 Cloudflare 侧事务性邮件能力的当前可用性与免费/付费口径；② 至少对比 1 家外部事务性邮件服务（按量计费）；③ 写明「首版是否强制验证」「未验证账号的降级行为」（`plan.md` §4.4 的 `pending` 规则）。
@@ -35,6 +36,7 @@
 - **依赖**：无（**外部依赖，最早启动**）。
 
 ### T102 · 词库 / 短语导出·导入合并语义取证 [P1] [US3] [US4] [US8]
+- **状态**：**DONE 2026-11-10** · 交付 `docs/research/fluxing-cloud-2026-11/userdict-merge-semantics.md`（23,309 B）+ 探针 `tmp/t102/`（不入库）；**硬前置红线已解除**：T503 基座改用 `backup_user_dict` + `restore_user_dict`（`UserDbMerger`），`export` / `import` 不适合作合并原语
 - **目标**：坐实「同一词条在两端的词频如何合并」—— 这是 R1 风险，**不得凭推测写实现**。
 - **文件**：`docs/research/fluxing-cloud-2026-11/userdict-merge-semantics.md`（新建）+ 取证脚本落 `tmp/`（不入库）。
 - **做法**：① 用 `RimeLeversApi` 导出用户词库，观察导出格式（是否含词频、是否含时间戳）；② 在隔离用户数据目录里导入「同词条、不同词频」的两份词库，记录最终词频；③ 记录导入是否覆盖同名词条、导入期间 leveldb 锁行为；④ 确认短语（用户短语）的落盘格式与是否可按条目读改。
@@ -42,6 +44,7 @@
 - **依赖**：无。**结论未落盘前，T503（合并实现）不得开工**。
 
 ### T103 · 云端域名可达性与端点连通性取证 [P1] [US6] [US12]
+- **状态**：**DONE 2026-11-10** · 交付 `docs/research/fluxing-cloud-2026-11/endpoint-reachability.md`（13,597 B）+ 实测输出 `tmp/t103/endpoint-probe.txt`；拍板首版端点 `https://api.<自有域名>` + CF Worker，**明确排除 `*.workers.dev`**（DNS 污染指纹）
 - **目标**：确认「自有域名 + Cloudflare」在目标用户网络下的可达性与延迟，并确定首版端点策略。
 - **文件**：`docs/research/fluxing-cloud-2026-11/endpoint-reachability.md`（新建）。
 - **做法**：① 候选自有域名解析与握手耗时（境内多点）；② 与平台默认域名对照；③ 记录「同步失败时用户看到什么」的降级口径来源（写进 T501 的错误文案）；④ 确认是否需要在客户端保留「自定义端点」配置口子（默认不暴露 UI）。
@@ -49,6 +52,7 @@
 - **依赖**：无。
 
 ### T104 · 测试工程骨架与系统库链接接线 [P1] [US12]
+- **状态**：**DONE 2026-11-10** · `test/TestFluxingCloud`（cpp + vcxproj + xmake.lua）已接进根 `xmake.lua`；x86 Release 编译通过，冒烟 `RESULT: PASS=6 FAIL=0` / `VERDICT: ALL PASS` / `TEST_FLUXINGCLOUD_EXIT=0`（脚本 `tmp/build-fluxing-cloud-tests.cmd`）
 - **目标**：让 `test/TestFluxingCloud` 能编译运行，并把 WinHTTP / CNG / Credential Manager 三个系统库接进构建链。
 - **文件**：`test/TestFluxingCloud/TestFluxingCloud.cpp`（新建）、`test/TestFluxingCloud/TestFluxingCloud.vcxproj`（新建）、`xmake.lua`（改，加测试目标）。
 - **做法**：x86 Release；先放一条 `assert` 冒烟用例把工程跑通；链接 `winhttp.lib` / `bcrypt.lib` / `advapi32.lib`。

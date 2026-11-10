@@ -60,6 +60,7 @@ end
 if is_mode("debug") then
   includes("test/TestWeaselIPC")
   includes("test/TestResponseParser")
+  includes("test/TestFluxingCloud")
 else
   add_cxflags("/GL")
   add_ldflags("/LTCG:OFF /INCREMENTAL:NO", {force = true})
