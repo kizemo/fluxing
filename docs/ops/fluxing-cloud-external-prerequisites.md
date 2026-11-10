@@ -9,12 +9,18 @@
 
 | # | 事项 | 状态 | 谁做 | 阻塞什么 | 花钱吗 |
 |---|---|---|---|---|---|
-| 1 | Cloudflare 账号 + 授权 `wrangler` | 🔴 **待办（硬阻塞）** | 你（OAuth 登录不可代做） | 一切部署 | 免费 |
-| 2 | 创建 D1 库与 R2 桶 + 回填绑定 ID | 🔴 **待办**（授权后我可代跑） | 你授权 → 我代跑 | 服务端启动即报错 | 免费档内 |
-| 3 | 自有域名 `aiec.fun` + `api.aiec.fun` 路由 | 🟡 **配置已就绪**，等部署自动生效 | 你只需跑 `wrangler deploy` | 客户端连不上服务端 | 域名本身可能已付费 |
-| 4 | 验证码发信通道 | 🟢 **已拍板：$0** | — | 已解除 | $0 |
-| 5 | 阶段 E 账号入口放哪 | 🟢 **已拍板：快捷设置栏的右键菜单** | — | 已解除 | 无关 |
-| 6 | `plan.md` / `tasks.md` 六处偏差回写 | 🟢 **已完成 2026-11-11** | — | 已解除 | 无关 |
+| 0 | **启用 R2**（账号级开关，后台点一次） | 🔴 **唯一硬阻塞**（2026-11-10 21:31 实测 `code 10042`「Please enable R2 through the Cloudflare Dashboard」） | **你**（后台点一次） | `wrangler deploy` / R2 桶 | 免费额度内；**启用时可能要求绑定支付方式**（仅作超额账单担保） |
+| 1 | Cloudflare 账号 + 授权 `wrangler` | 🟢 **已完成**（OAuth Token，凭据写入 2026-11-10 21:24；权限实测含 `d1 write` / `workers_scripts write` / `workers_routes write` / `zone read`） | — | 已解除 | 免费 |
+| 2 | 创建 D1 库 + 回填 `database_id` | 🟢 **已完成**（`e4ea114a-29b4-4abd-87e6-4e6cb20d86e4`，已回填 `wrangler.toml`） | — | 已解除 | 免费档内 |
+| 3 | D1 迁移 `0001_init.sql` | 🟢 **已完成**（远程执行 13 条命令，`sqlite_master` 计 9 张表） | — | 已解除 | 免费档内 |
+| 4 | 创建 R2 桶 `fluxing-sync` | 🔴 **待办**（解锁第 0 项后我可代跑） | 你启用 R2 → 我代跑 | 词库密文对象无存储 | 免费档内 |
+| 5 | 部署 Worker + 自动建 `api.aiec.fun` DNS | 🟡 配置已就绪（已确认 `aiec.fun` 在**同一账号**，`zone id = f686751b049e4270d1a4a1bcb4849852`，`status=active`） | 你启用 R2 → 我代跑 | 客户端连不上服务端 | 免费 |
+| 6 | 验证码发信通道 | 🟢 **已拍板：$0** | — | 已解除 | $0 |
+| 7 | 阶段 E 账号入口放哪 | 🟢 **已拍板：快捷设置栏的右键菜单** | — | 已解除 | 无关 |
+| 8 | `plan.md` / `tasks.md` 六处偏差回写 | 🟢 **已完成 2026-11-11** | — | 已解除 | 无关 |
+
+> **令牌 vs OAuth（2026-11-10 实测结论）**：OAuth 授权**已经可用**，令牌不是当前的阻塞点。
+> 建 API Token 的真正价值是「**不依赖 30 天有效的 refresh_token**、可供 CI 使用」⇒ 可选但推荐，见 §1.3。
 
 ### 已替你做完的部分（2026-11-11）
 
@@ -24,70 +30,164 @@
 
 ---
 
-## 1. Cloudflare 账号与授权（🔴 硬阻塞 · 唯一需要你点浏览器的一步）
+## 1. Cloudflare 账号与授权（🟢 已完成 · 2026-11-10 21:24）
 
-### 1.1 你要做的
+### 1.1 当前状态（已实测，勿重做）
 
-1. 注册 / 登录 Cloudflare 账号（`aiec.fun` 域名若已托管在 Cloudflare，用**同一个**账号 —— 这很关键，见 §3）。
-2. 在本机终端执行：
-
-   ```
-   cd F:\soft\00selfmade\rime_claude\cloud\fluxing-sync
-   npx wrangler login
-   ```
-
-   浏览器弹出授权页 → 用你的账号点「Allow」。**这一步我无法代做**（OAuth 同意属人工动作，涉及你的账号凭据）。
-
-3. 授权成功后自证：
-
-   ```
-   npx wrangler whoami
-   ```
-
-   **判据**：输出里能看到你的账号邮箱与 Account ID，且**不出现**「You are not authenticated」。
-
-4. 回我一句「**已授权**」，剩下的 §2 / §3 / §4 我来跑。
-
-### 1.2 不想用 OAuth 的替代方案
-
-Cloudflare Dashboard → My Profile → API Tokens → Create Token，选 "Edit Cloudflare Workers" 模板，再补 D1 / R2 权限。拿到 token 后在**当前终端**设环境变量：
+OAuth 授权**已经成功**，凭据落在 `C:\Users\Duanyi\AppData\Roaming\xdg.config\.wrangler\config\default.toml`
+（`oauth_token` / `refresh_token` / `expiration_time` / `scopes` 四个键，写入时刻 **2026-11-10 21:24:37**）。
 
 ```
-$env:CLOUDFLARE_API_TOKEN = '<你的 token>'
+👋 You are logged in with an OAuth Token, associated with the email kizemo@163.com.
+┌──────────────────────────┬──────────────────────────────────┐
+│ Account Name             │ Account ID                       │
+├──────────────────────────┼──────────────────────────────────┤
+│ Kizemo@163.com's Account │ 016c8e736b685af88860034ea6eb1daa │
+└──────────────────────────┴──────────────────────────────────┘
 ```
 
-**不要**把 token 写进仓库任何文件。`.dev.vars` 可以放本地密钥，但要先确认它在 `.gitignore` 里（`cloud/fluxing-sync/` 已有 `.dev.vars.example`，真文件不入库）。
+实测权限范围（`whoami` 输出原文）：`user (read)` · `account (read)` · `zone (read)` · `d1 (write)` ·
+`workers (write)` · `workers_scripts (write)` · `workers_routes (write)` · `workers_kv (write)` ·
+`workers_tail (read)` · `pages (write)` · `ssl_certs (write)` · `offline_access` 等。
+
+⇒ **§2 / §3 的 D1 与部署命令已可代跑**（D1 库已建、迁移已应用，见 §2）。
+⇒ **令牌（API Token）不是当前阻塞点**；它解决的是「refresh_token 30 天到期后要重新授权」与「CI 无交互授权」两件事。
+
+### 1.2 为什么 handoff 里写的是「未授权」（已修正）
+
+批次 AD handoff 记录的 `whoami` = 「You are not authenticated」是**授权完成前**的快照。
+用户于 21:24 自行完成 `wrangler login` 并点 Allow ⇒ 以本节为准。
+
+### 1.3 建 API Token（可选但推荐 · 简体中文后台逐步指引）
+
+> Cloudflare 控制台支持简体中文界面。下文每一步都给了**中文文案 + 英文原文**两套标签；
+> 若你界面上的措辞与此处不同（文案随版本微调），**以英文原文为准**。
+> 直达链接：<https://dash.cloudflare.com/profile/api-tokens>
+
+**第 0 步 · 可选：切成简体中文界面**
+控制台左下角头像/账户名 → 「语言 / Language」→ 简体中文。
+
+**第 1 步 · 打开「API 令牌」页**
+左下角头像 → 「我的个人资料」(My Profile) → 左侧「API 令牌」(API Tokens)。
+（也可以直接开 <https://dash.cloudflare.com/profile/api-tokens>）
+
+**第 2 步 · 点「创建令牌」(Create Token)**
+页面顶部右侧蓝色按钮。点开后在「创建令牌」页看到两条路：
+- 「使用模板」(Use Template) —— 现成模板；
+- 「创建自定义令牌」(Create Custom Token) —— 自己配权限。
+
+**第 3 步 · 选「创建自定义令牌」(Create Custom Token)**
+
+> 为什么不直接用模板：官方模板「编辑 Cloudflare Workers」(Edit Cloudflare Workers) **不含 D1 权限**，
+> 而我们必须跑 `wrangler d1 create` / `d1 migrations apply --remote`。
+> 走模板的话，得先点「使用模板」再在下一步补 D1 —— 步骤反而更多。
+> ⚠️ **不要**选「编辑 Cloudflare 管理员」(Edit Cloudflare Administrator) 之类的全局管理员模板。
+
+**第 4 步 · 填「令牌名称」(Token name)**
+建议 `fluxing-sync-deploy`。（名称以后可改，**令牌值不行**。）
+
+**第 5 步 · 配置「权限」(Permissions)** —— 点「添加权限」(Add permission) 逐行加，共 6 行：
+
+| 权限组 | 权限项 | 级别 | 为什么需要 |
+|---|---|---|---|
+| 帐户 (Account) | D1 | 编辑 (Edit) | `wrangler d1 create` / `migrations apply --remote` |
+| 帐户 (Account) | Workers R2 存储 (Workers R2 Storage) | 编辑 (Edit) | `wrangler r2 bucket create` |
+| 帐户 (Account) | Workers 脚本 (Workers Scripts) | 编辑 (Edit) | `wrangler deploy` / `secret put` |
+| 帐户 (Account) | 帐户设置 (Account Settings) | 读取 (Read) | 令牌模式下让 wrangler 能列出账号 |
+| 区域 (Zone) | DNS | 编辑 (Edit) | `custom_domain = true` 自动建 `api.aiec.fun` 记录 |
+| 区域 (Zone) | Workers 路由 (Workers Routes) | 编辑 (Edit) | 同上，Worker 路由绑定 |
+
+**第 6 步 · 配置「资源」(Resources)**
+- 帐户 → 「特定帐户」(Specific account) → 选 `Kizemo@163.com's Account`（Account ID `016c8e736b685af88860034ea6eb1daa`）；
+- 区域 → 「特定区域」(Specific zone) → 选 `aiec.fun`。
+- 区域若显示「所有区域」(All zones) 也可以，但**收窄到 `aiec.fun` 更安全**。
+
+**第 7 步 · 「客户端 IP 地址过滤」(Client IP Address Filtering)** —— **留空**。本机公网 IP 会变，填了就等于自锁。
+
+**第 8 步 · 「期限」(TTL)** —— 选最长（例如 1 年）。到期后需重建，命令不变。
+
+**第 9 步 · 「继续以…摘要」(Continue to summary) → 「创建令牌」(Create Token)**。
+
+**第 10 步 · 立刻复制令牌值**
+弹窗明确提示令牌值**只显示这一次**，关闭后无法再查看（只能删了重建）。
+
+**第 11 步 · 存进项目（推荐路径，已被 .gitignore 覆盖）**
+
+```
+cloud\fluxing-sync\.env
+```
+内容一行：
+```
+CLOUDFLARE_API_TOKEN=<粘贴你的令牌>
+```
+
+安全性已实测：该目录 `.gitignore` 第 7 行忽略 `.env`（`git check-ignore -v` 命中
+`cloud/fluxing-sync/.gitignore:7:.env`）⇒ 不会入库。
+⚠️ 别把令牌写进 `wrangler.toml`、`.dev.vars.example`、任何文档或提交信息。
+
+**第 12 步 · 自证**
+```
+cd F:\soft\00selfmade\rime_claude\cloud\fluxing-sync
+npx wrangler whoami
+```
+看到账号邮箱与 Account ID 即成功（`.env` 里的令牌优先于已存在的 OAuth 凭据）。
+
+> **机制实证（A/B，2026-11-10）**：wrangler **4.159.0 会自动读取当前工作目录的 `.env`** 里的
+> `CLOUDFLARE_API_TOKEN`。对照组放了一个假令牌 → 报
+> `Invalid format for Authorization header [code: 6111]`；撤掉 `.env` → 回落到 OAuth 凭据并成功。
+> ⇒ **不需要** `setx`、也不需要把令牌塞进系统环境变量。
+
+**第 13 步（可选）** 想让令牌在你自己新开的终端里也生效：
+```
+setx CLOUDFLARE_API_TOKEN "<你的令牌>"
+```
+（只写用户级环境变量；已开着的终端不会自动继承。）
+
+### 1.4 必做 · 启用 R2（与令牌无关，**当前唯一硬阻塞**）
+
+2026-11-10 21:31 实测：`wrangler r2 bucket create` → `code 10042`
+「Please enable R2 through the Cloudflare Dashboard」。
+⇒ 这是**账号级开关**，**API Token 绕不过去**，只能人去后台点一次：
+
+1. 控制台左侧栏 → 「R2 对象存储」(R2 Object Storage)；
+2. 首次进入会显示未启用 → 点「启用 R2 / 购买」(Enable R2 / Purchase)；
+3. Cloudflare 会要求**绑定支付方式**（信用卡）—— 免费额度内不扣费，它只是超额计费的担保。
+   ⚠️ 这一步与 spec 100 的「$0 路线」不冲突（**不选 Workers Paid**，不产生月度最低消费），
+   但确实需要一张卡；不想绑卡的话，唯一替代是把密文对象改存 D1 BLOB ⇒ **需要改服务端代码**，属另一个决策。
+4. 启用后回一句「**R2 已启用**」，我立刻代跑：
+   `wrangler r2 bucket create fluxing-sync` → `secret put AUTH_PEPPER` → `deploy` → `curl` 判据。
 
 ---
 
-## 2. 数据面资源（D1 / R2）—— 授权后我可代跑
+## 2. 数据面资源（D1 / R2）—— D1 ✅ 已完成 / R2 🔴 等启用
 
 ### 2.1 资源名（**以 `wrangler.toml` 为准，不是旧文档里的名字**）
 
-| 资源 | 名称 | 绑定名 | 用途 |
-|---|---|---|---|
-| D1 数据库 | `fluxing-sync` | `DB` | 账号、设备、同步条目索引、验证码 |
-| R2 桶 | `fluxing-sync` | `BUCKET` | 密文对象 |
+| 资源 | 名称 | 绑定名 | 用途 | 现状 |
+|---|---|---|---|---|
+| D1 数据库 | `fluxing-sync` | `DB` | 账号、设备、同步条目索引、验证码 | ✅ 已建：`e4ea114a-29b4-4abd-87e6-4e6cb20d86e4` |
+| R2 桶 | `fluxing-sync` | `BUCKET` | 密文对象 | 🔴 账号未启用 R2（`code 10042`），启用后可建 |
 
-### 2.2 命令（授权后按序执行）
+### 2.2 命令（剩余部分等 R2 启用后我代跑）
 
 ```
 cd F:\soft\00selfmade\rime_claude\cloud\fluxing-sync
-npx wrangler d1 create fluxing-sync
-npx wrangler r2 bucket create fluxing-sync
+npx wrangler r2 bucket create fluxing-sync     # ← 需先在后台启用 R2
 ```
 
-`wrangler d1 create` 会打印 `database_id`（一串 UUID）。**把它填回 `wrangler.toml` 的 `database_id = "..."`**（现在是占位全零 UUID）。
+`wrangler d1 create` 已执行（2026-11-10 13:24:35Z），产出 `database_id = e4ea114a-29b4-4abd-87e6-4e6cb20d86e4`，
+**已回填进 `wrangler.toml`**（原为占位全零 UUID）。
 
 ### 2.3 表结构与 pepper
 
 ```
-npx wrangler d1 migrations apply fluxing-sync --remote
-npx wrangler secret put AUTH_PEPPER
+npx wrangler d1 migrations apply fluxing-sync --remote   # ✅ 已执行（13 条命令，sqlite_master 计 9 张表）
+npx wrangler secret put AUTH_PEPPER                      # ← 需 Worker 存在 ⇒ 排在 deploy 之后
 ```
 
 - 迁移 SQL 在 `cloud/fluxing-sync/migrations/0001_init.sql`（**7 表 4 索引**）。
-- `AUTH_PEPPER` 是服务端的 pepper（Workers Secret，**绝不进代码库、不进 D1**）。缺失即 500 fail closed，**没有内置默认值可回退**。请给一段 ≥32 字节的随机串（例：`openssl rand -hex 32`，或 PowerShell `[Convert]::ToHexString((1..32 | % { Get-Random -Maximum 256 }))`）。
+- `AUTH_PEPPER` 是服务端的 pepper（Workers Secret，**绝不进代码库、不进 D1**）。缺失即 500 fail closed，**没有内置默认值可回退**。
+- 本机已备好 32 字节随机值，存于 **gitignored** 的 `tmp/AD-auth-pepper.txt`（64 位十六进制，实测 `isHex64=True`）⇒ 部署时由我读入并 `secret put`，**不入库**。
 
 ### 2.4 免费额度是否够
 
@@ -108,6 +208,13 @@ routes = [{ pattern = "api.aiec.fun", custom_domain = true }]
 ```
 
 `custom_domain = true` 的含义：**`wrangler deploy` 会自动为 `api.aiec.fun` 创建 DNS 记录**（前提：`aiec.fun` 已托管在**同一个** Cloudflare 账号），指向部署目标主机名，并开启橙色云代理。**你不需要手工加 DNS 记录**（前提满足时）。
+
+> ✅ **前提已实测坐实（2026-11-10）**：用 OAuth 凭据查 `GET /zones?name=aiec.fun` ⇒
+> `success=true`、`zones=1`、`status=active`、`zone id = f686751b049e4270d1a4a1bcb4849852`，
+> 且与账号 `016c8e736b685af88860034ea6eb1daa` 同属一个 Cloudflare 账号
+> ⇒ **§3.3 的手工 CNAME 兜底不需要走**，`wrangler deploy` 会自动建 DNS。
+> （仍需注意：OAuth 令牌的 scope 里有 `zone (read)` 但**没有** DNS 写权限；
+> 真到部署那一步若报 DNS 权限不足，就走 §1.3 的 API Token —— 那里带 `Zone > DNS > Edit`。）
 
 > ⚠️ **不要**打开 `workers_dev` / `preview_urls`。T103 硬约束：境内 DNS 会污染平台默认子域，端点必须挂在自有域名下；`cloud/fluxing-sync/test/check-endpoint-policy.mjs` 是**零豁免**扫描，连文档措辞都算。
 

@@ -23,9 +23,9 @@ routes = [{ pattern = "api.aiec.fun", custom_domain = true }]
 [[d1_databases]]
 binding = "DB"
 database_name = "fluxing-sync"
-# 占位 UUID：`wrangler d1 create fluxing-sync` 后用真实 database_id 替换。
+# 真实 database_id：2026-11-10 `wrangler d1 create fluxing-sync` 产出（账号 016c8e73…）。
 # 本地 `wrangler dev` / 单测走 miniflare 本地 SQLite，不校验此值。
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "e4ea114a-29b4-4abd-87e6-4e6cb20d86e4"
 migrations_dir = "migrations"
 
 [[r2_buckets]]

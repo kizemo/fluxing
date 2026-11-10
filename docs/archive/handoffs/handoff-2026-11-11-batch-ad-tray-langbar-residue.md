@@ -7,7 +7,9 @@
 
 ## 0. 一句话
 
-T405「账号与同步」右键菜单**判据已闭合**（运行时菜单项 id `40024` + 文本 `账号与同步 (&Z)` 硬证据 + 真机截图已落盘）；托盘「中/英」图标的复现源已从 **6 个宿主收敛到 1 个**（就是本会话宿主 `MiniMax Code`，它退出即自然解决）；**Cloudflare 仍卡在用户点 Allow 这一步**，D1 / R2 / secret / deploy / DNS 一条未跑，线上判据 not verified。
+T405「账号与同步」右键菜单**判据已闭合**（运行时菜单项 id `40024` + 文本 `账号与同步 (&Z)` 硬证据 + 真机截图已落盘）；托盘「中/英」图标的复现源已从 **6 个宿主收敛到 1 个**（就是本会话宿主 `MiniMax Code`，它退出即自然解决）；
+**Cloudflare 授权已于 2026-11-10 21:24 完成（OAuth，非 API Token）**，D1 库已建 + 迁移已应用 + `database_id` 已回填 `wrangler.toml`，
+**唯一剩余硬阻塞 = 账号级「启用 R2」**（后台点一次；实测 `code 10042`）；secret / deploy / DNS 仍待 R2 解锁后执行，线上判据 not verified。
 
 ---
 
@@ -54,6 +56,21 @@ T405「账号与同步」右键菜单**判据已闭合**（运行时菜单项 id
 
 **本轮未改任何产品代码** ⇒ 沿用批次 W / AC 的绿门禁基线。
 
+### 3.1 追加轮（2026-11-10 21:27–21:40）：Cloudflare 授权收口
+
+| # | 动作 | 结果 |
+|---|---|---|
+| 8 | 复核 `wrangler whoami` | **OAuth 已授权成功**（`kizemo@163.com`，Account ID `016c8e736b685af88860034ea6eb1daa`）。凭据 `default.toml` 写入时刻 **21:24:37** ⇒ **handoff §4「未授权」是过期快照，以本轮为准** |
+| 9 | A/B 实证 `.env` 注入机制 | cwd 有 `.env`（假令牌）→ `Invalid format for Authorization header [code: 6111]`；撤掉 → 回落 OAuth 成功 ⇒ **wrangler 4.159.0 自动读 cwd 的 `.env`** |
+| 10 | `wrangler d1 create fluxing-sync` | 「A database with that name already exists」⇒ 已于 13:24:35Z 建过：`e4ea114a-29b4-4abd-87e6-4e6cb20d86e4` |
+| 11 | `wrangler r2 bucket create fluxing-sync` | ❌ **`code 10042`「Please enable R2 through the Cloudflare Dashboard」** ⇒ 账号级未启用，**API Token 绕不过去** |
+| 12 | `wrangler deployments list` | `code 10007`「This Worker does not exist」⇒ Worker **从未部署过** |
+| 13 | 回填 `wrangler.toml` `database_id` | 全零占位 → `e4ea114a-29b4-4abd-87e6-4e6cb20d86e4`（**唯一产品配置文件改动**，LF 换行保持不变） |
+| 14 | `wrangler d1 migrations apply fluxing-sync --remote` | ✅ `0001_init.sql` 执行 13 条命令；`sqlite_master` 计 **9 张表** |
+| 15 | 查 `GET /zones?name=aiec.fun` | ✅ `success=true`、`zones=1`、`status=active`、zone id `f686751b049e4270d1a4a1bcb4849852` ⇒ **域名与账号同属一家** ⇒ §3.3 手工 CNAME 兜底**不需要走** |
+| 16 | 门禁 | `npm run check`（端点策略 + vitest **20/20**）✅ · `tsc --noEmit` ✅ · `wrangler deploy --dry-run` 打包成功（DB + BUCKET 绑定均解析）✅ |
+| 17 | 运维文档回写 | `docs/ops/fluxing-cloud-external-prerequisites.md`：§0 状态表重排（新增「启用 R2」为第 0 项）· §1 改写为「已完成 + API Token 简体中文后台 13 步指引」· §1.4 启用 R2 指引 · §2 D1/R2 现状 · §3.1 域名归属已坐实 |
+
 ---
 
 ## 4. 已验证 / 推断 / 未验证
@@ -66,7 +83,15 @@ T405「账号与同步」右键菜单**判据已闭合**（运行时菜单项 id
 - **持旧镜像宿主已从 6 个降到 1 个**，剩余唯一持有者是本会话宿主 `MiniMax Code`(163924)（启动于 11-10 12:00:57，早于裸名 DLL 替换时刻 11-10 20:35:48 ⇒ 物理上不可能加载到修复版）。
 - **T405 运行时菜单判据闭合**：菜单项数 20，第 5 项（pos=4）id = `40024` = `ID_WEASELTRAY_CLOUD_ACCOUNT`，文本 `账号与同步 (&Z)`；命令路由 `WeaselServer/WeaselServerApp.cpp:513-522` → `fluxing::cloud::account_dialog::Show()`。
 - **T405 真机截图已落盘**（`tmp/AD-T405-tray-menu.png`），菜单内容肉眼可辨。
-- `npx --no-install wrangler whoami` = **未授权**（"You are not authenticated"）。
+- ~~`npx --no-install wrangler whoami` = **未授权**（"You are not authenticated"）。~~ —— **该结论已过期**（2026-11-10 21:24 用户完成 OAuth 授权）。
+- **Cloudflare 账号已授权**（OAuth，`kizemo@163.com`，Account ID `016c8e736b685af88860034ea6eb1daa`）；scope 实测含 `d1 (write)` / `workers_scripts (write)` / `workers_routes (write)` / `zone (read)`。
+- **D1 库 `fluxing-sync` 已存在**：`database_id = e4ea114a-29b4-4abd-87e6-4e6cb20d86e4`（13:24:35Z 建），**已回填 `wrangler.toml`**。
+- **D1 远程迁移已应用**：`0001_init.sql` ✅（13 条命令，`sqlite_master` 计 9 张表）。
+- **R2 未开通**：`wrangler r2 bucket create` → `code 10042`（账号级开关，**API Token 无效**）。
+- **Worker 从未部署**：`wrangler deployments list` → `code 10007`。
+- **`aiec.fun` 与账号同属一家**：`GET /zones?name=aiec.fun` → `zones=1`、`status=active`、`zone id f686751b049e4270d1a4a1bcb4849852`。
+- **wrangler 4.159.0 自动读取 cwd 的 `.env`** 里的 `CLOUDFLARE_API_TOKEN`（A/B 实证）⇒ 令牌注入无需 `setx`。
+- **`cloud/fluxing-sync/.env` 被 gitignore 覆盖**（`git check-ignore -v` 命中 `cloud/fluxing-sync/.gitignore:7`）⇒ 令牌放这里安全。
 
 ### 推断（未直接观测，但证据强）
 
@@ -77,7 +102,7 @@ T405「账号与同步」右键菜单**判据已闭合**（运行时菜单项 id
 ### 未验证（需用户参与或外部条件）
 
 - **托盘「中/英」图标彻底消失（`OUR_HIT = 0`）**：唯一剩余持有者是**本会话宿主**，在会话内结束它会直接中断会话 ⇒ 必须在**本会话结束后**由用户重启 MiniMax Code（或注销 / 重启 Windows），再复跑体检脚本。
-- **spec 100 线上判据**：Cloudflare 账号未授权 ⇒ D1 / R2 / secret / deploy / DNS **全部未执行** ⇒ `https://api.aiec.fun/v1/health` **not verified**。
+- **spec 100 线上判据**：授权 ✅ / D1 ✅ / 迁移 ✅ ⇒ **R2 未启用** ⇒ `r2 bucket create` / `secret put` / `deploy` / DNS **全部未执行** ⇒ `https://api.aiec.fun/v1/health` **not verified**。
 - 账号页真机注册 / 登录、词库双端同步（AC-01 ~ AC-14）仍需两台设备或两套隔离用户数据目录。
 
 ---
@@ -106,11 +131,13 @@ T405「账号与同步」右键菜单**判据已闭合**（运行时菜单项 id
 1. **让最后一个持旧镜像的宿主退出**（`MiniMax Code` = 本会话宿主）⇒ 最省事：**关掉 MiniMax Code 重开**，或注销 / 重启一次 Windows，然后跑
    `pwsh -NoProfile -ExecutionPolicy Bypass -File 'F:\soft\00selfmade\rime_claude\scripts\install\check-tray-input-indicator.ps1'`
    期望：`OUR_HIT = 0` / `VERDICT=PASS_OUR_ITEM_ABSENT` / 退出码 0。
-2. **Cloudflare 授权**（自动化已试过一轮、失败；这次请人工点）：
-   `cd F:\soft\00selfmade\rime_claude\cloud\fluxing-sync` → `npx wrangler login` → 浏览器点 **Allow** → 回一句「已授权」，随后由我代跑 §7 全序列。
-   *注：`wrangler login` 的回调窗口只有约 2.5 分钟，超时会报 `ERROR Timed out waiting for authorization code`，重跑一次即可。*
-   *备选（更稳，绕开 OAuth 时限）：在 Cloudflare 后台建 API Token，把 `CLOUDFLARE_API_TOKEN` 注入环境变量，wrangler 直接用 token，无需浏览器。*
-3. **T405 已闭合**，仅剩「是否满意视觉」这类主观确认，不再是阻塞项。
+2. **启用 R2**（🔴 唯一硬阻塞 · 后台一次性操作）：
+   Cloudflare 控制台 → 左侧「R2 对象存储」→ 点「启用 R2」→ 绑定支付方式（免费额度内不扣费，仅超额担保）→ 回一句「**R2 已启用**」。
+   随后由我代跑：`wrangler r2 bucket create fluxing-sync` → `secret put AUTH_PEPPER`（值取自 `tmp/AD-auth-pepper.txt`）→ `deploy` → `curl` 判据。
+   *详细步骤见 `docs/ops/fluxing-cloud-external-prerequisites.md` §1.4。*
+3. **（可选）建 API Token**：OAuth 已可用，令牌不是阻塞点；建它的价值是「refresh_token 30 天到期免重授权 + CI 可用」。
+   *简体中文后台 13 步指引见 `docs/ops/fluxing-cloud-external-prerequisites.md` §1.3；令牌存 `cloud/fluxing-sync/.env`（已 gitignore）。*
+4. **T405 已闭合**，仅剩「是否满意视觉」这类主观确认，不再是阻塞项。
 
 ---
 
@@ -152,5 +179,6 @@ curl -sS -o NUL -w "%{http_code}" https://api.aiec.fun/v1/health   # 期望 200�
 ## 9. 下一步（接力入口）
 
 - 托盘图标：用户结束 `MiniMax Code`（或注销 / 重启）后复跑 `scripts/install/check-tray-input-indicator.ps1` 拿 `OUR_HIT = 0`；若仍为 1，再查是否还有未识别的加载路径。
-- Cloudflare：等用户完成授权（人工点 Allow 或注入 API Token）→ 按 §7 执行 → 把 `https://api.aiec.fun/v1/health` 的 200 响应写回 `tasks.md` 阶段 E 的 Done 判据。
+- Cloudflare：**等用户在后台启用 R2**（不是等授权 —— 授权已于 2026-11-10 21:24 完成）→ 我按 §7 跑 `r2 bucket create` / `secret put` / `deploy` → 把 `https://api.aiec.fun/v1/health` 的 200 响应写回 `tasks.md` 阶段 E 的 Done 判据。
+- Cloudflare（可选）：用户在后台建 API Token → 写进 `cloud/fluxing-sync/.env`（gitignored）→ 后续所有 wrangler 命令免 OAuth 刷新。
 - 阶段 E 剩余：账号页真机注册 / 登录、词库双端同步（AC-01 ~ AC-14）仍需两台设备或两套隔离用户数据目录。
