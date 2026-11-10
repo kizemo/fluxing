@@ -1,4 +1,4 @@
-// 认证：注册 / 邮箱验证 / 登录 / 续期 / 请求鉴权。
+// 认证：注册 / 邮箱验证 / 验证码重发 / 登录 / 续期 / 请求鉴权。
 //
 // 安全不变量（spec 100 + plan §3.2）：
 //   1. 服务端永不见明文口令、永不见 enc_key；只收到客户端派生的 auth_key。
@@ -333,6 +333,26 @@ export async function handleVerify(env: Env, body: Record<string, unknown>): Pro
     .bind(now, row.id)
     .run();
   await env.DB.prepare('UPDATE users SET email_verified = 1 WHERE email = ?').bind(email).run();
+
+  return { ok: true };
+}
+
+export async function handleResend(env: Env, body: Record<string, unknown>): Promise<unknown> {
+  // 缺 pepper 一律 fail closed（与其他认证端点一致）
+  requirePepper(env);
+  const email = normalizeEmail(body.email);
+
+  const user = await env.DB.prepare('SELECT id, email_verified FROM users WHERE email = ?')
+    .bind(email)
+    .first<{ id: string; email_verified: number }>();
+  if (!user) throw fail.notFound('该邮箱尚未注册，请先注册。', 'email_not_found');
+  if (user.email_verified === 1) {
+    throw fail.conflict('该邮箱已完成验证，无需重新获取验证码。', 'email_already_verified');
+  }
+
+  // issueVerificationCode 自带 60 秒频率闸（verify_too_frequent）、10 分钟 TTL、
+  // 5 次错误上限与 code_hash 落库；MAIL_MODE="outbox" 时只写 mail_outbox 不发信。
+  await issueVerificationCode(env, email);
 
   return { ok: true };
 }

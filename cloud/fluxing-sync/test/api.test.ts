@@ -62,6 +62,18 @@ async function latestCode(email: string): Promise<string> {
   return matched[1] as string;
 }
 
+/**
+ * 把该邮箱已发的验证码记录往前挪，绕开 60 秒重发闸（测试专用夹具）。
+ * 不这么做的话「注册 → 立刻重发」必然撞 429，测不到正常重发那条路径。
+ */
+async function backdateVerifications(email: string, seconds: number): Promise<void> {
+  await env.DB.prepare(
+    'UPDATE email_verifications SET created_at = created_at - ? WHERE email = ?',
+  )
+    .bind(seconds, email)
+    .run();
+}
+
 function item(itemKey: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     item_key: itemKey,
@@ -235,6 +247,98 @@ describe('认证', () => {
   });
 });
 
+// ---------------------------------------------------------------- 验证码重发
+//
+// 恢复路径：注册后验证码过期（TTL 600 秒）或 5 次错误用尽时，再调 register 会撞
+// 409 email_taken ⇒ 用户被锁死。POST /v1/auth/resend 提供重新获取的出口。
+
+describe('验证码重发', () => {
+  it('未注册邮箱重发返回 404 email_not_found', async () => {
+    const result = await api('POST', '/v1/auth/resend', {
+      body: { email: 'ghost@example.com' },
+    });
+    expect(result.status).toBe(404);
+    expect(result.body.error.code).toBe('email_not_found');
+    expect(result.body.error.message).toBe('该邮箱尚未注册，请先注册。');
+  });
+
+  it('已验证邮箱重发返回 409 email_already_verified', async () => {
+    const email = 'verified@example.com';
+    await signUpAndLogin(email, 'device-verified');
+
+    const result = await api('POST', '/v1/auth/resend', { body: { email } });
+    expect(result.status).toBe(409);
+    expect(result.body.error.code).toBe('email_already_verified');
+    expect(result.body.error.message).toBe('该邮箱已完成验证，无需重新获取验证码。');
+  });
+
+  it('未验证邮箱重发返回 200，且验证码与邮件都落库', async () => {
+    const email = 'resend@example.com';
+    const registered = await api('POST', '/v1/auth/register', {
+      body: { email, auth_key: 'auth-key-resend', device: 'device-resend' },
+    });
+    expect(registered.status).toBe(200);
+
+    // 注册刚发过一封 ⇒ 60 秒频率闸会拦；把已发记录往前挪，单独验证「正常重发」这条路径
+    await backdateVerifications(email, 120);
+
+    const result = await api('POST', '/v1/auth/resend', { body: { email } });
+    expect(result.status).toBe(200);
+    expect(result.body.ok).toBe(true);
+
+    const verifications = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM email_verifications WHERE email = ?',
+    )
+      .bind(email)
+      .first<{ n: number }>();
+    // 注册一条 + 重发一条
+    expect(verifications?.n).toBe(2);
+
+    const mails = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM mail_outbox WHERE to_addr = ?',
+    )
+      .bind(email)
+      .first<{ n: number }>();
+    expect(mails?.n).toBe(2);
+  });
+
+  it('60 秒内重复重发被频率闸拦下（429 verify_too_frequent）', async () => {
+    const email = 'frequent@example.com';
+    const registered = await api('POST', '/v1/auth/register', {
+      body: { email, auth_key: 'auth-key-frequent', device: 'device-frequent' },
+    });
+    expect(registered.status).toBe(200);
+
+    // 注册那一封还在 60 秒窗口内 ⇒ 重发被闸门拦下
+    const result = await api('POST', '/v1/auth/resend', { body: { email } });
+    expect(result.status).toBe(429);
+    expect(result.body.error.code).toBe('verify_too_frequent');
+  });
+
+  it('重发后可以用新验证码完成验证（恢复路径闭环）', async () => {
+    const email = 'recover@example.com';
+    const registered = await api('POST', '/v1/auth/register', {
+      body: { email, auth_key: 'auth-key-recover', device: 'device-recover' },
+    });
+    expect(registered.status).toBe(200);
+
+    await backdateVerifications(email, 120);
+    const resent = await api('POST', '/v1/auth/resend', { body: { email } });
+    expect(resent.status).toBe(200);
+
+    // 取最新那封邮件里的码（重发后 outbox 里是最新一封）
+    const code = await latestCode(email);
+    const verified = await api('POST', '/v1/auth/verify', { body: { email, code } });
+    expect(verified.status).toBe(200);
+
+    const login = await api('POST', '/v1/auth/login', {
+      body: { email, auth_key: 'auth-key-recover', device: 'device-recover' },
+    });
+    expect(login.status).toBe(200);
+    expect(login.body.email_verified).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------- 同步
 
 describe('同步', () => {
@@ -271,13 +375,23 @@ describe('同步', () => {
     });
     expect(configItem.server_seq).toBeGreaterThan(0);
 
-    // 同 item_key 重推：序号必须前进，否则客户端会以为「没变化」
+    // 同 item_key 重推（**HLC 更新**）：序号必须前进，否则客户端会以为「没变化」。
+    // HLC 不更新的重推会被服务端守卫跳过，见「HLC 守卫」那组用例。
     const newCipher = b64(new Uint8Array(50).fill(11));
     const repushed = await api('POST', '/v1/sync/push', {
       token,
-      body: { items: [item('config/main', { cipher: newCipher })] },
+      body: {
+        items: [
+          item('config/main', {
+            cipher: newCipher,
+            hlc: { ms: 1_700_000_000_001, counter: 0, device: 'device-a' },
+          }),
+        ],
+      },
     });
     expect(repushed.status).toBe(200);
+    expect(repushed.body.accepted).toEqual(['config/main']);
+    expect(repushed.body.skipped).toEqual([]);
     expect(repushed.body.server_seq).toBeGreaterThan(firstSeq);
 
     // 全量拉：仍然只有 2 条（同一 item_key 覆盖），内容已更新
@@ -415,6 +529,202 @@ describe('同步', () => {
     const cursor = await api('GET', '/v1/sync/pull?cursor=***', { token });
     expect(cursor.status).toBe(400);
     expect(cursor.body.error.code).toBe('bad_cursor');
+  });
+
+  it('拉取响应带顶层 server_seq（客户端据此推进增量游标）', async () => {
+    const { login } = await signUpAndLogin('seq@example.com', 'device-seq');
+    const token = login.access_token as string;
+
+    const pushed = await api('POST', '/v1/sync/push', {
+      token,
+      body: { items: [item('config/main')] },
+    });
+    expect(pushed.status).toBe(200);
+
+    const pulled = await api('GET', '/v1/sync/pull?since=0', { token });
+    expect(pulled.status).toBe(200);
+    expect(typeof pulled.body.server_seq).toBe('number');
+    expect(pulled.body.server_seq).toBeGreaterThan(0);
+    expect(pulled.body.server_seq).toBe(pushed.body.server_seq);
+    // 每条 item 也带自己的 server_seq
+    expect(pulled.body.items[0].server_seq).toBe(pulled.body.server_seq);
+  });
+});
+
+// ---------------------------------------------------------------- HLC 守卫
+//
+// 服务端 push 必须比较 HLC：客户端把「合并后的条目」回传时，若不带这道守卫，
+// 服务端较新的版本会被客户端手上那份旧版本覆盖 ⇒ 两端来回乒乓、永不收敛。
+// 比较规则逐字镜像 include/FluxingCloudEnvelope.h 的 CompareHlc：
+// ms → counter → device（device 按字典序 tiebreak）。
+
+describe('HLC 守卫', () => {
+  it('推送更旧的 HLC：该条被跳过，服务端版本不被回退', async () => {
+    const { login } = await signUpAndLogin('older@example.com', 'device-older');
+    const token = login.access_token as string;
+
+    const newerCipher = b64(new Uint8Array(50).fill(21));
+    const first = await api('POST', '/v1/sync/push', {
+      token,
+      body: {
+        items: [
+          item('config/main', {
+            cipher: newerCipher,
+            hlc: { ms: 2_000_000_000_000, counter: 5, device: 'device-b' },
+          }),
+        ],
+      },
+    });
+    expect(first.status).toBe(200);
+    expect(first.body.accepted).toEqual(['config/main']);
+    expect(first.body.skipped).toEqual([]);
+
+    // 同名、更旧的 HLC ⇒ 整条跳过（不写 R2 / D1 / 不推进 server_seq）
+    const olderCipher = b64(new Uint8Array(50).fill(22));
+    const second = await api('POST', '/v1/sync/push', {
+      token,
+      body: {
+        items: [
+          item('config/main', {
+            cipher: olderCipher,
+            hlc: { ms: 1_999_999_999_999, counter: 9, device: 'device-z' },
+          }),
+        ],
+      },
+    });
+    expect(second.status).toBe(200);
+    expect(second.body.skipped).toContain('config/main');
+    expect(second.body.accepted).not.toContain('config/main');
+    expect(second.body.accepted).toEqual([]);
+    // 跳过不推进 server_seq
+    expect(second.body.server_seq).toBe(first.body.server_seq);
+
+    // 拉回来的仍是较新版本（证明没有被回退）
+    const pulled = await api('GET', '/v1/sync/pull?since=0', { token });
+    expect(pulled.status).toBe(200);
+    const row = pulled.body.items.find((entry: any) => entry.item_key === 'config/main');
+    expect(row.cipher).toBe(newerCipher);
+    expect(row.hlc).toEqual({ ms: 2_000_000_000_000, counter: 5, device: 'device-b' });
+  });
+
+  it('推送更新的 HLC：该条被接受，拉取拿到新版本', async () => {
+    const { login } = await signUpAndLogin('newer@example.com', 'device-newer');
+    const token = login.access_token as string;
+
+    const oldCipher = b64(new Uint8Array(50).fill(31));
+    const first = await api('POST', '/v1/sync/push', {
+      token,
+      body: {
+        items: [
+          item('config/main', {
+            cipher: oldCipher,
+            hlc: { ms: 2_000_000_000_000, counter: 0, device: 'device-a' },
+          }),
+        ],
+      },
+    });
+    expect(first.status).toBe(200);
+    expect(first.body.accepted).toEqual(['config/main']);
+
+    // 同 ms、counter 更大 ⇒ 更新
+    const newCipher = b64(new Uint8Array(50).fill(32));
+    const second = await api('POST', '/v1/sync/push', {
+      token,
+      body: {
+        items: [
+          item('config/main', {
+            cipher: newCipher,
+            hlc: { ms: 2_000_000_000_000, counter: 1, device: 'device-a' },
+          }),
+        ],
+      },
+    });
+    expect(second.status).toBe(200);
+    expect(second.body.accepted).toEqual(['config/main']);
+    expect(second.body.skipped).toEqual([]);
+    expect(second.body.server_seq).toBeGreaterThan(first.body.server_seq);
+
+    const pulled = await api('GET', '/v1/sync/pull?since=0', { token });
+    const row = pulled.body.items.find((entry: any) => entry.item_key === 'config/main');
+    expect(row.cipher).toBe(newCipher);
+    expect(row.hlc).toEqual({ ms: 2_000_000_000_000, counter: 1, device: 'device-a' });
+  });
+
+  it('同 ms 同 counter 时按 device 字典序定胜负（与 CompareHlc 的 tiebreak 一致）', async () => {
+    const { login } = await signUpAndLogin('tiebreak@example.com', 'device-tiebreak');
+    const token = login.access_token as string;
+
+    const base = { ms: 2_000_000_000_000, counter: 3 };
+    const first = await api('POST', '/v1/sync/push', {
+      token,
+      body: {
+        items: [
+          item('config/main', {
+            cipher: b64(new Uint8Array(50).fill(41)),
+            hlc: { ...base, device: 'device-m' },
+          }),
+        ],
+      },
+    });
+    expect(first.body.accepted).toEqual(['config/main']);
+
+    // device 字典序更小 ⇒ 旧版本 ⇒ 跳过
+    const smaller = await api('POST', '/v1/sync/push', {
+      token,
+      body: {
+        items: [
+          item('config/main', {
+            cipher: b64(new Uint8Array(50).fill(42)),
+            hlc: { ...base, device: 'device-a' },
+          }),
+        ],
+      },
+    });
+    expect(smaller.body.skipped).toContain('config/main');
+    expect(smaller.body.accepted).toEqual([]);
+
+    // device 字典序更大 ⇒ 更新 ⇒ 接受
+    const greater = await api('POST', '/v1/sync/push', {
+      token,
+      body: {
+        items: [
+          item('config/main', {
+            cipher: b64(new Uint8Array(50).fill(43)),
+            hlc: { ...base, device: 'device-z' },
+          }),
+        ],
+      },
+    });
+    expect(greater.body.accepted).toEqual(['config/main']);
+    expect(greater.body.skipped).toEqual([]);
+  });
+
+  it('一批里新旧混排：新版写入、旧版跳过', async () => {
+    const { login } = await signUpAndLogin('mixed@example.com', 'device-mixed');
+    const token = login.access_token as string;
+
+    const first = await api('POST', '/v1/sync/push', {
+      token,
+      body: {
+        items: [
+          item('config/a', { hlc: { ms: 2_000_000_000_000, counter: 0, device: 'device-a' } }),
+          item('config/b', { hlc: { ms: 2_000_000_000_000, counter: 0, device: 'device-a' } }),
+        ],
+      },
+    });
+    expect(first.body.accepted).toEqual(['config/a', 'config/b']);
+
+    const second = await api('POST', '/v1/sync/push', {
+      token,
+      body: {
+        items: [
+          item('config/a', { hlc: { ms: 1_000_000_000_000, counter: 0, device: 'device-a' } }),
+          item('config/b', { hlc: { ms: 3_000_000_000_000, counter: 0, device: 'device-a' } }),
+        ],
+      },
+    });
+    expect(second.body.skipped).toEqual(['config/a']);
+    expect(second.body.accepted).toEqual(['config/b']);
   });
 });
 

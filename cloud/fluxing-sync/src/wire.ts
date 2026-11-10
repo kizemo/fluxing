@@ -38,6 +38,43 @@ export interface Hlc {
   device: string;
 }
 
+/**
+ * device 的字典序比较：按 **UTF-8 字节** 比，不按 JS 的字符串 `<`。
+ *
+ * 理由：客户端 `FluxingCloudEnvelope.h` 的 `CompareHlc` 用 `std::string::operator<`，
+ * 语义是「按字节无符号比较」。JS 的 `<` 比的是 UTF-16 码元，代理对区间
+ * （U+10000 及以上）与 U+E000–U+FFFF 的相对次序在两种编码下不同 ⇒ 会与服务端
+ * 判定出不同的赢家。生产 device 是 16 位十六进制（纯 ASCII，两种序一致），
+ * 但服务端接受任意 UTF-8 device，所以这里必须按字节比才能与客户端逐字一致。
+ */
+function compareUtf8Bytes(a: string, b: string): number {
+  if (a === b) return 0;
+  const bytesA = new TextEncoder().encode(a);
+  const bytesB = new TextEncoder().encode(b);
+  const shared = Math.min(bytesA.length, bytesB.length);
+  for (let i = 0; i < shared; i += 1) {
+    const x = bytesA[i] as number;
+    const y = bytesB[i] as number;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  if (bytesA.length === bytesB.length) return 0;
+  return bytesA.length < bytesB.length ? -1 : 1;
+}
+
+/**
+ * HLC 全序比较，返回 -1 / 0 / 1。
+ *
+ * **逐字镜像** `include/FluxingCloudEnvelope.h` 的 `CompareHlc`：
+ *   ms → counter → device（device 字典序 tiebreak）。
+ * 头文件原句：「`ms` → `counter` → `device` 字典序，**大者胜**」。
+ * 大者胜的语义落在调用方：本函数只回答「谁更新」。
+ */
+export function compareHlc(a: Hlc, b: Hlc): number {
+  if (a.ms !== b.ms) return a.ms < b.ms ? -1 : 1;
+  if (a.counter !== b.counter) return a.counter < b.counter ? -1 : 1;
+  return compareUtf8Bytes(a.device, b.device);
+}
+
 export interface ValidatedItem {
   itemKey: string;
   type: ItemType;

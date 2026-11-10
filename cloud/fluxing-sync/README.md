@@ -14,9 +14,9 @@ spec 100 阶段 C（T211–T215）的产物：Cloudflare Workers + D1 + R2 的�
 
 | 路径 | 作用 |
 |---|---|
-| `src/index.ts` | 路由（9 条契约端点 + `GET /v1/health`）与统一错误面 |
-| `src/auth.ts` | 注册 / 邮箱验证 / 登录 / 续期 / Bearer 鉴权 |
-| `src/sync.ts` | 推送与增量拉取，`server_seq` 语义 |
+| `src/index.ts` | 路由（9 条契约端点 + `POST /v1/auth/resend` + `GET /v1/health`）与统一错误面 |
+| `src/auth.ts` | 注册 / 邮箱验证 / 验证码重发 / 登录 / 续期 / Bearer 鉴权 |
+| `src/sync.ts` | 推送（HLC 守卫）与增量拉取，`server_seq` 语义 |
 | `src/devices.ts` | 设备列表与撤销 |
 | `src/account.ts` | 清空云端数据（不删账号） |
 | `src/wire.ts` | 信封字段校验；常量与头文件逐字对齐 |
@@ -100,6 +100,12 @@ Cloudflare 默认子域（`workers_dev` 那个域）不可用**，因此：
 >
 > 已实测（2026-11-10，本机）：`npm run check` 退出码 0 —— 端点门禁通过 + `test/api.test.ts` **20/20 PASS**（workerd 真实运行）；
 > `npm run typecheck` 通过。**未验证**：`wrangler deploy`、自定义域路由、`MAIL_MODE=cloudflare` 真实发信。
+>
+> 已实测（2026-11-11，本机，服务端加固批次）：`npm run check` 退出码 0 —— 端点门禁通过 +
+> `test/api.test.ts` **30/30 PASS**（workerd 真实运行，新增 10 条：HLC 守卫 4 条、验证码重发 5 条、
+> pull 顶层 `server_seq` 1 条）；`npm run typecheck` 通过。变异验证：把 HLC 守卫阈值改坏 / 去掉 pull
+> 顶层 `server_seq` / 去掉「已验证邮箱 ⇒ 409」守卫，各自命中对应用例失败 ⇒ 用例有牙。
+> **未验证**：`wrangler deploy`（本轮未执行，线上端点仍是加固前的版本）。
 
 ### 发信通道
 
@@ -124,6 +130,10 @@ Cloudflare 默认子域（`workers_dev` 那个域）不可用**，因此：
 - `GET /v1/devices` 列表项多返回 `id` / `revoked` / `current`：§6.1 原字段里没有可传给
   `DELETE /v1/devices/:id` 的句柄；`DELETE` 的路径参数同时接受 `devices.id` 与 `device_id`。
 
+（另有第三处：`POST /v1/sync/push` 多返回 `skipped`（被 HLC 守卫跳过的 `item_key` 数组，
+元素与 `accepted` 同构）；`accepted` 语义不变 = 真正写入的条目。另 `GET /v1/sync/pull`
+补上顶层 `server_seq`，逐条 `server_seq` 本来就有。）
+
 ## 安全不变量
 
 1. 服务端永不见明文口令与 `enc_key`；落库的是 `verifier = base64(HMAC-SHA256(AUTH_PEPPER, auth_key))`。
@@ -134,6 +144,14 @@ Cloudflare 默认子域（`workers_dev` 那个域）不可用**，因此：
 6. push 单条非法即整批 400（不做部分接受）；`server_seq` 取本次涉及条目的 `MAX(id)`，
    **不用** `meta.last_row_id`（连接级游标会越过客户端未见过的行号 ⇒ 永久漏推）。
 7. pull 遇 R2 对象缺失时自愈（删索引行 + 告警 + 跳过），不返回 500——否则客户端会卡在同一游标无限重试。
+8. **push 必比 HLC**（规则逐字镜像 `include/FluxingCloudEnvelope.h` 的 `CompareHlc`：
+   `ms` → `counter` → `device` 字典序）：同一 `(user_id, item_key)` 上，服务端已存版本
+   ≥ 客户端送上来的版本 ⇒ 该条整条跳过（不写 R2 / D1、不推进 `server_seq`），并在响应
+   的 `skipped` 里列出。没有这道守卫，「客户端把合并后的条目回传」会把服务端较新的版本
+   覆盖成旧版 ⇒ 两端乒乓、永不收敛。
+9. pull 响应必须带**顶层** `server_seq`（客户端契约 `WeaselServer/Cloud/CloudSyncService.h`
+   的 `ParsePullResponse` 要读它）：字段缺失时客户端把游标写成 0 ⇒ 每次重复拉同一批、
+   冲击每日拉取配额。
 
 ## 已知限制（首版不做）
 
@@ -141,3 +159,5 @@ Cloudflare 默认子域（`workers_dev` 那个域）不可用**，因此：
 - 无 Web 管理后台、无口令找回、无「重置账号」流程（`DELETE /v1/account/data` 只清数据）。
 - 无 CORS：客户端是原生进程，不存在浏览器源。
 - `POST /v1/auth/register` 在 60 秒内重复提交同一邮箱返回 **429**（重发节流先于查重），不是 409。
+- `POST /v1/auth/resend` 是**验证码**的恢复路径（未注册 404 / 已验证 409 / 60 秒内 429）；
+  它**不是**口令找回路径 —— 口令丢失仍无解（见上一条）。

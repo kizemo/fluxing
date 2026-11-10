@@ -1,14 +1,14 @@
 // Worker 入口：路由分发 + 统一错误面。
 //
-// 契约来源 plan §6.1（端点 9 条，另加 GET /v1/health 供巡活）：
+// 契约来源 plan §6.1（端点 9 条，另加 GET /v1/health 供巡活、POST /v1/auth/resend 供重发验证码）：
 //   POST   /v1/auth/register      POST /v1/auth/verify
-//   POST   /v1/auth/login         POST /v1/auth/refresh
+//   POST   /v1/auth/resend        POST /v1/auth/login      POST /v1/auth/refresh
 //   POST   /v1/sync/push          GET  /v1/sync/pull
 //   GET    /v1/devices            DELETE /v1/devices/:id
 //   DELETE /v1/account/data
 //
 // 约定：
-//   · 路由手写 switch + 一条正则，不引入框架：端点固定为 9 条，依赖越少越好。
+//   · 路由手写 switch + 一条正则，不引入框架：端点固定，依赖越少越好。
 //   · 方法不符 ⇒ 405（不设 Allow 头：统一错误面不带自定义 header，保持响应逐字可预期）。
 //   · 路径尾斜杠归一化（/v1/devices/ 与 /v1/devices 等价），不做大小写折叠。
 //   · 不做 CORS：客户端是原生进程，不存在浏览器源。
@@ -21,6 +21,7 @@ import {
   handleLogin,
   handleRefresh,
   handleRegister,
+  handleResend,
   handleVerify,
 } from './auth';
 import { handlePull, handlePush } from './sync';
@@ -66,6 +67,11 @@ async function route(request: Request, env: Env): Promise<Response> {
     case '/v1/auth/verify': {
       assertMethod(request, 'POST');
       return jsonResponse(await handleVerify(env, await readJsonObject(request)));
+    }
+
+    case '/v1/auth/resend': {
+      assertMethod(request, 'POST');
+      return jsonResponse(await handleResend(env, await readJsonObject(request)));
     }
 
     case '/v1/auth/login': {

@@ -8,6 +8,10 @@
 //      `meta.last_row_id`：后者是连接级游标，可能跨表取到客户端尚未见过的行号 ⇒
 //      客户端把 since 设过去就永久漏推。
 //   4. 单条非法 ⇒ 整批 400（不做部分接受）。客户端拿到的「全有或全无」比半成功好恢复。
+//   5. **HLC 守卫**（与客户端 `FluxingCloudEnvelope.h` 的 `CompareHlc` 同一套规则）：
+//      同一 (user_id, item_key) 上，服务端已存版本 ≥ 客户端送上来的版本 ⇒ 该条
+//      整条跳过（不写 R2、不写 D1、不推进 server_seq）。没有这条守卫，「客户端把
+//      合并后的条目回传」会把服务端较新的版本回退成旧版 ⇒ 两端乒乓，永不收敛。
 
 import type { Env } from './env';
 import type { AuthContext } from './auth';
@@ -20,7 +24,8 @@ import {
   toBase64Url,
   utf8,
 } from './crypto';
-import { MAX_PUSH_ITEMS, r2KeyFor, validatePushItem } from './wire';
+import { MAX_PUSH_ITEMS, compareHlc, r2KeyFor, validatePushItem } from './wire';
+import type { Hlc, ValidatedItem } from './wire';
 
 const DEFAULT_PULL_LIMIT = 50;
 const MAX_PULL_LIMIT = 100;
@@ -101,16 +106,54 @@ export async function handlePush(
   const items = rawItems.map((raw, index) => validatePushItem(raw, index));
 
   const now = nowSeconds();
+
+  // 取本批涉及的既有行，作为 HLC 守卫的比较基准
+  const uniqueKeys = [...new Set(items.map((item) => item.itemKey))];
+  const placeholders = uniqueKeys.map(() => '?').join(', ');
+  const existing = await env.DB.prepare(
+    `SELECT item_key, hlc_ms, hlc_counter, hlc_device
+       FROM sync_items
+      WHERE user_id = ? AND item_key IN (${placeholders})`,
+  )
+    .bind(auth.userId, ...uniqueKeys)
+    .all<{
+      item_key: string;
+      hlc_ms: number;
+      hlc_counter: number;
+      hlc_device: string;
+    }>();
+
+  // 逐条守卫：服务端已存版本 ≥ 客户端送上来的版本 ⇒ 整条跳过（不写 R2 / D1，
+  // 也不推进 server_seq）。`current` 随本批已接受的条目一起更新，因此同一批里
+  // 重复出现的 item_key 也按「先到先得、后到者与已接受版本比较」处理。
+  const current = new Map<string, Hlc>();
+  for (const row of existing.results ?? []) {
+    current.set(row.item_key, {
+      ms: row.hlc_ms,
+      counter: row.hlc_counter,
+      device: row.hlc_device,
+    });
+  }
+  const accepted: ValidatedItem[] = [];
+  const skipped: string[] = [];
+  for (const item of items) {
+    const stored = current.get(item.itemKey);
+    if (stored !== undefined && compareHlc(stored, item.hlc) >= 0) {
+      skipped.push(item.itemKey);
+      continue;
+    }
+    current.set(item.itemKey, item.hlc);
+    accepted.push(item);
+  }
+
+  // 1) 先写 R2（同 key 覆盖，天然幂等）；跳过的条目不写
   const staged: Array<{ itemKey: string; r2Key: string }> = [];
-  for (let i = 0; i < items.length; i += 1) {
-    const item = items[i]!;
+  for (const item of accepted) {
     const keyHash = await sha256Hex(utf8(item.itemKey));
     staged.push({ itemKey: item.itemKey, r2Key: await r2KeyFor(auth.userId, keyHash) });
   }
-
-  // 1) 先写 R2（同 key 覆盖，天然幂等）
-  for (let i = 0; i < items.length; i += 1) {
-    const item = items[i]!;
+  for (let i = 0; i < accepted.length; i += 1) {
+    const item = accepted[i]!;
     const target = staged[i]!;
     await env.BUCKET.put(target.r2Key, item.cipherBytes, {
       httpMetadata: { contentType: 'application/octet-stream' },
@@ -128,8 +171,8 @@ export async function handlePush(
   // 2) 再写 D1：DELETE + INSERT，让 UNIQUE(user_id, item_key) 下拿到新的自增 id，
   //    这样同一条目重推也能让 server_seq 前进（否则客户端会以为「没变化」）。
   const statements: D1PreparedStatement[] = [];
-  for (let i = 0; i < items.length; i += 1) {
-    const item = items[i]!;
+  for (let i = 0; i < accepted.length; i += 1) {
+    const item = accepted[i]!;
     statements.push(
       env.DB.prepare('DELETE FROM sync_items WHERE user_id = ? AND item_key = ?').bind(
         auth.userId,
@@ -157,21 +200,33 @@ export async function handlePush(
         ),
     );
   }
-  await env.DB.batch(statements);
+  if (statements.length > 0) await env.DB.batch(statements);
 
-  // 3) server_seq = 本次涉及条目的最大 id
-  const uniqueKeys = [...new Set(items.map((item) => item.itemKey))];
-  const placeholders = uniqueKeys.map(() => '?').join(', ');
-  const seqRow = await env.DB
-    .prepare(
-      `SELECT COALESCE(MAX(id), 0) AS seq FROM sync_items WHERE user_id = ? AND item_key IN (${placeholders})`,
-    )
-    .bind(auth.userId, ...uniqueKeys)
-    .first<{ seq: number }>();
+  // 3) server_seq = 本次**真正写入**条目的最大 id（跳过不推进）
+  const writtenKeys = [...new Set(accepted.map((item) => item.itemKey))];
+  let serverSeq = 0;
+  if (writtenKeys.length > 0) {
+    const writtenPlaceholders = writtenKeys.map(() => '?').join(', ');
+    const seqRow = await env.DB
+      .prepare(
+        `SELECT COALESCE(MAX(id), 0) AS seq FROM sync_items WHERE user_id = ? AND item_key IN (${writtenPlaceholders})`,
+      )
+      .bind(auth.userId, ...writtenKeys)
+      .first<{ seq: number }>();
+    serverSeq = seqRow?.seq ?? 0;
+  } else {
+    // 本批没有任何条目被写入（全部跳过）：游标不能倒退 ⇒ 取该用户当前已有的最大 id
+    const seqRow = await env.DB
+      .prepare('SELECT COALESCE(MAX(id), 0) AS seq FROM sync_items WHERE user_id = ?')
+      .bind(auth.userId)
+      .first<{ seq: number }>();
+    serverSeq = seqRow?.seq ?? 0;
+  }
 
   return {
-    accepted: items.map((item) => item.itemKey),
-    server_seq: seqRow?.seq ?? 0,
+    accepted: accepted.map((item) => item.itemKey),
+    skipped,
+    server_seq: serverSeq,
   };
 }
 
@@ -237,5 +292,10 @@ export async function handlePull(env: Env, auth: AuthContext, url: URL): Promise
     items,
     next_cursor: lastRow === null ? null : encodeCursor(lastRow.id),
     has_more: hasMore,
+    // 顶层 server_seq：本次响应覆盖到的最大序号。
+    // 客户端契约（WeaselServer/Cloud/CloudSyncService.h 的 ParsePullResponse）要求
+    // pull 响应带顶层 server_seq；字段缺失时客户端把游标写成 0 ⇒ 每次都重复拉同一批。
+    // 空页时沿用请求游标位置（after）：本次没有任何新条目，游标不能倒退。
+    server_seq: lastRow === null ? after : lastRow.id,
   };
 }
