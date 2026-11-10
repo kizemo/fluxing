@@ -201,7 +201,7 @@
     <ClCompile Include="TestFluxingCloud.cpp" />
   </ItemGroup>
   <ItemGroup>
-    
+    <ClInclude Include="..\..\include\FluxingCloudEnvelope.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

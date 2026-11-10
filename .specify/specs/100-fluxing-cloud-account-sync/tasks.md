@@ -66,6 +66,7 @@
 > 本阶段产出的纯逻辑（信封 / HLC / 合并）是**生产与单测同源**的单一事实源（宪法 R7），落在 `include/FluxingCloudEnvelope.h`。
 
 ### T201 · 信封编解码单测 [P1] [US7]
+- **状态**：**DONE 2026-11-10** · 单测段 [5]–[10] 共 71 条断言；整包 `RESULT: PASS=134 FAIL=0` / `VERDICT: ALL PASS` / `TEST_FLUXINGCLOUD_EXIT=0`。①–⑤ 全覆盖；反例断言清单（AAD 4 项 / 密文 2 项 / 错密钥 / nonce 3 项 / base64 2 项 / 线格式 10 项）见 `docs/archive/handoffs/handoff-2026-11-10-batch-y-cloud-stage-b.md` §4
 - **目标**：用判别性单测钉死条目信封的编解码行为（`plan.md` §4.1）。
 - **文件**：`test/TestFluxingCloud/TestFluxingCloud.cpp`（改）。
 - **做法**：覆盖 ① 正常往返一致；② **AAD 改动后解密必须失败**（防串位 / 防降级）；③ nonce 长度不符必须报错；④ base64 畸形输入必须报错；⑤ 空载荷与超长载荷（≥ 批次上限）的边界。
@@ -73,6 +74,7 @@
 - **依赖**：T104。
 
 ### T202 · 条目合并单测 [P1] [US8]
+- **状态**：**DONE 2026-11-10** · 单测段 [13]（合并 15 条）+ [14]（条目表序列化 16 条）= 31 条断言。收敛判据显式写成 `Check(fc::MergeEntries(b, a) == m, "⑤ 交换输入顺序结果相同（两端收敛）")`；另证 `merge(x,x) == x` 幂等 2 条、结合律 2 条、空集恒等 3 条
 - **目标**：钉死「按条目合并」的语义（同键取新 / 异键取并集 / 收敛）。
 - **文件**：`test/TestFluxingCloud/TestFluxingCloud.cpp`（改）。
 - **做法**：① 同键不同版本取大；② 同键同版本结果确定（不得依赖字典序偶然性）；③ 异键取并集；④ **合并满足幂等**（merge(merge(a,b),c) == merge(a,merge(b,c))）；⑤ 合并后两端收敛（对同一对输入，两个方向合并结果一致）。
@@ -80,6 +82,7 @@
 - **依赖**：T201。
 
 ### T203 · HLC 定序单测 [P1] [US8]
+- **状态**：**DONE 2026-11-10** · 单测段 [11]（全序 11 条：18 个版本笛卡尔积 / 324 项反对称 / 153 项可区分 / 5832 项传递）+ [12]（本机时钟 14 条，含 counter 打满 0xFFFF 与时钟回拨）= 25 条断言。严格弱序由「`std::sort(HlcLess)` 结果非降」+「正序与逆序排序互为镜像」双向确认
 - **目标**：钉死混合逻辑时钟的全序性质（`plan.md` §4.2）。
 - **文件**：`test/TestFluxingCloud/TestFluxingCloud.cpp`（改）。
 - **做法**：① `(ms,counter,device)` 比较满足**严格弱序**（用 std::sort 的等价类检查）；② 本机写入后 `ms >= last_ms`；③ 同毫秒自增 `counter`；④ 收到更远的远端 `ms` 后本机 `ms` 随之抬升；⑤ 两台设备对同一组版本算出**同一顺序**。
@@ -87,6 +90,7 @@
 - **依赖**：T201。
 
 ### T204 · 共享信封头落地 [P1] [US7]
+- **状态**：**DONE 2026-11-10** · 新建 `include/FluxingCloudEnvelope.h`（34.9 KB，`inline` 无状态无 I/O）；`test/TestFluxingCloud/TestFluxingCloud.cpp` 已改为 `#include "../../include/FluxingCloudEnvelope.h"`，整包 `PASS=134 FAIL=0`。**无第二份实现取证**：测试文件内 `^(struct|class|inline|static)\s.*(Hlc|Envelope|Entry|Merge|Base64|Seal|Open)` 零命中；`CompareHlc` / `HlcTick` / `MergeEntries` 全仓仅 `FluxingCloudEnvelope.h` 各 1 处定义（435 / 470 / 993 行），测试侧全部走 `fc::` 前缀（271 处）
 - **目标**：把 B 阶段单测所测的纯逻辑抽到生产头文件，供客户端与服务端契约对齐。
 - **文件**：`include/FluxingCloudEnvelope.h`（新建）、`test/TestFluxingCloud/TestFluxingCloud.cpp`（改）。
 - **做法**：把 T201–T203 验证过的实现迁入头文件（`inline`，无状态、无 I/O）；单测改为**直接 include 生产头**（生产与单测同源，禁止复制两份实现）。
