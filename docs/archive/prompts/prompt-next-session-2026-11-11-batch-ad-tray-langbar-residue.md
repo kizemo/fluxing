@@ -1,0 +1,1 @@
+接批次 AD 收口：先按全路径读 `F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-11-batch-ad-tray-langbar-residue.md`、`F:\soft\00selfmade\rime_claude\docs\ops\fluxing-cloud-external-prerequisites.md` 与 `F:\soft\00selfmade\rime_claude\AGENTS.md`（§9 接力规范），再按 handoff 的 §6 / §7 推进剩余项，不要重做已验证部分。
