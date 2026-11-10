@@ -10,6 +10,9 @@
 // = 宿主 exe 的 PE 版本资源(启动期读一次并缓存)。
 #include "AboutDialog.h"
 
+// spec 100 阶段 D: 云同步的维护态宿主(备份/还原用户词典时与引擎互斥)。
+#include "Cloud/CloudMaintenanceHost.h"
+
 #include "FluxingDiagLog.h"  // spec 097: 诊断日志（服务端 DLOG 被 no_logging.h 编译为空操作）// spec 070 T007: D2D factory 创建 (在 WeaselServerApp::Run 入口)
 #include <d2d1.h>
 #pragma comment(lib, "d2d1.lib")
@@ -41,6 +44,9 @@ WeaselServerApp::WeaselServerApp()
   });
   // m_handler.reset(new RimeWithWeaselHandler(&m_ui));
   m_server.SetRequestHandler(m_handler.get());
+  // spec 100 阶段 D: 把维护态宿主交给云模块 —— 备份/还原用户词典时必须先让
+  // rime 释放用户库(leveldb LOCK 红线)。只注册,不触发任何 I/O。
+  RegisterCloudMaintenanceHost(m_handler.get());
   SetupMenuHandlers();
   // spec 080: the request handler runs on the IPC pipe thread, so the
   // QuickPanel request is forwarded to the server UI thread (which owns

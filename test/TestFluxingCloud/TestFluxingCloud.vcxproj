@@ -199,6 +199,16 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="TestFluxingCloud.cpp" />
+    <!-- spec 100 阶段 D：单测**直接编译生产实现**（宪法 R7 生产与单测同源），
+         不复制一份逻辑到测试目录。CloudRimeUserDictBackend.cpp 不在此列 ——
+         它依赖 rime 引擎，不进测试工程。 -->
+    <ClCompile Include="..\..\WeaselServer\Cloud\CloudJson.cpp" />
+    <ClCompile Include="..\..\WeaselServer\Cloud\CloudCrypto.cpp" />
+    <ClCompile Include="..\..\WeaselServer\Cloud\CloudTransport.cpp" />
+    <ClCompile Include="..\..\WeaselServer\Cloud\CloudCredentialStore.cpp" />
+    <ClCompile Include="..\..\WeaselServer\Cloud\CloudAccount.cpp" />
+    <ClCompile Include="..\..\WeaselServer\Cloud\CloudSyncService.cpp" />
+    <ClCompile Include="..\..\WeaselServer\Cloud\CloudUserDictIo.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\include\FluxingCloudEnvelope.h" />

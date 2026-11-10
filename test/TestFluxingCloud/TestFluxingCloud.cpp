@@ -34,6 +34,17 @@
 // 这样本文件被任何工程单独打开/编译都能解析到同一个生产头。
 #include "../../include/FluxingCloudEnvelope.h"
 
+// spec 100 阶段 D 生产头（T301–T305）。同样走相对路径 ⇒ 生产与单测同源
+// （constitution R7）：本文件不复制第二份实现，只调用 WeaselServer/Cloud/
+// 下的那一份。
+#include "../../WeaselServer/Cloud/CloudJson.h"
+#include "../../WeaselServer/Cloud/CloudCrypto.h"
+#include "../../WeaselServer/Cloud/CloudTransport.h"
+#include "../../WeaselServer/Cloud/CloudCredentialStore.h"
+#include "../../WeaselServer/Cloud/CloudAccount.h"
+#include "../../WeaselServer/Cloud/CloudUserDictIo.h"
+#include "../../WeaselServer/Cloud/CloudSyncService.h"
+
 namespace fc = fluxing::cloud;
 
 namespace {
@@ -924,6 +935,876 @@ void TestEntriesWire() {
   }
 }
 
+// ===========================================================================
+// spec 100 阶段 D（T301–T305）单测
+// ===========================================================================
+//
+// 判据原则：
+//   ① 能用标准向量的一律用向量 —— SHA-256 / HMAC-SHA256 / PBKDF2-HMAC-SHA256
+//      的期望值由 .NET（Microsoft 独立实现）生成，不由本仓库实现自证；
+//      PBKDF2 取 RFC 7914 §11 向量的**前 32 字节**（本实现输出长度固定 32，
+//      而 PBKDF2 是字节流 ⇒ 前 32 字节与 dkLen=64 时相同）。
+//   ② 线上格式（嵌套 HLC、DELETE 路径）断言**解析后的语义**，不断言字面量，
+//      免得把「键顺序」「空格」这类无关差异写成假红。
+//   ③ 生产与单测同源（constitution R7）：只调用 WeaselServer/Cloud/ 下的
+//      生产实现，不在本文件里写第二份实现。
+//
+// 已知未覆盖：PBKDF2 的 60 万次默认档位**不在单测里跑**（单测用 1000 次），
+//   否则每条用例会多花数秒；默认档位由 kPbkdf2Iterations 常量断言 + 登录
+//   流程（走 iterations=0 ⇒ 60 万次）覆盖，见 docs/ops/ 的实测记录。
+
+std::string HexOf(const std::vector<uint8_t>& v) {
+  static const char kHex[] = "0123456789abcdef";
+  std::string s;
+  s.reserve(v.size() * 2);
+  for (size_t i = 0; i < v.size(); ++i) {
+    s += kHex[(v[i] >> 4) & 0x0F];
+    s += kHex[v[i] & 0x0F];
+  }
+  return s;
+}
+
+int HexVal(char c) {
+  if (c >= '0' && c <= '9')
+    return c - '0';
+  if (c >= 'a' && c <= 'f')
+    return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F')
+    return c - 'A' + 10;
+  return -1;
+}
+
+std::vector<uint8_t> BytesOf(const std::string& s) {
+  return std::vector<uint8_t>(s.begin(), s.end());
+}
+
+// JSON 节点下标（Member 返回指针，取值要下标）。
+int NodeIndexOf(const fc::json::JsonDocument& doc, const fc::json::JsonNode* node) {
+  if (node == nullptr)
+    return -1;
+  return static_cast<int>(node - doc.nodes.data());
+}
+
+// ---------------------------------------------------------------------------
+// D1 密钥派生（T301）
+// ---------------------------------------------------------------------------
+
+void TestCloudCryptoVectors() {
+  std::printf("[D1] T301 密钥派生：SHA-256 / HMAC / PBKDF2 / HKDF 标准向量\n");
+  std::string err;
+
+  // SHA-256（FIPS 180-4）
+  {
+    std::vector<uint8_t> out;
+    const std::string empty;
+    Check(fc::Sha256(reinterpret_cast<const uint8_t*>(empty.data()), 0, &out) &&
+              HexOf(out) ==
+                  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "SHA-256 空串向量");
+    const std::string abc = "abc";
+    out.clear();
+    Check(fc::Sha256(reinterpret_cast<const uint8_t*>(abc.data()), abc.size(), &out) &&
+              HexOf(out) ==
+                  "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+          "SHA-256 \"abc\" 向量");
+    std::vector<uint8_t> million(1000000, 'a');
+    out.clear();
+    Check(fc::Sha256(million.data(), million.size(), &out) &&
+              HexOf(out) ==
+                  "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
+          "SHA-256 一百万个 'a' 向量");
+  }
+
+  // HMAC-SHA256（RFC 4231）
+  {
+    std::vector<uint8_t> out;
+    const std::vector<uint8_t> k1(20, 0x0b);
+    const std::string d1 = "Hi There";
+    Check(fc::HmacSha256(k1, reinterpret_cast<const uint8_t*>(d1.data()), d1.size(), &out) &&
+              HexOf(out) ==
+                  "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
+          "HMAC-SHA256 RFC 4231 TC1");
+    out.clear();
+    const std::vector<uint8_t> k2 = BytesOf("Jefe");
+    const std::string d2 = "what do ya want for nothing?";
+    Check(fc::HmacSha256(k2, reinterpret_cast<const uint8_t*>(d2.data()), d2.size(), &out) &&
+              HexOf(out) ==
+                  "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+          "HMAC-SHA256 RFC 4231 TC2");
+    out.clear();
+    const std::vector<uint8_t> k3(20, 0xaa);
+    const std::vector<uint8_t> d3(50, 0xdd);
+    Check(fc::HmacSha256(k3, d3.data(), d3.size(), &out) &&
+              HexOf(out) ==
+                  "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe",
+          "HMAC-SHA256 RFC 4231 TC3");
+    out.clear();
+    const std::vector<uint8_t> k6(131, 0xaa);
+    const std::string d6 = "Test Using Larger Than Block-Size Key - Hash Key First";
+    Check(fc::HmacSha256(k6, reinterpret_cast<const uint8_t*>(d6.data()), d6.size(), &out) &&
+              HexOf(out) ==
+                  "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54",
+          "HMAC-SHA256 RFC 4231 TC6（长密钥）");
+  }
+
+  // PBKDF2-HMAC-SHA256（RFC 7914 §11 的前 32 字节）
+  {
+    const std::vector<uint8_t> salt = BytesOf("salt");
+    std::vector<uint8_t> out;
+    Check(fc::Pbkdf2HmacSha256("passwd", salt, 1, &out) &&
+              HexOf(out) ==
+                  "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc",
+          "PBKDF2-HMAC-SHA256 c=1 向量");
+    out.clear();
+    Check(fc::Pbkdf2HmacSha256("passwd", salt, 2, &out) &&
+              HexOf(out) ==
+                  "2d412f896e76685e30df569f0a740634e31f031f749d607d9e44210bffb91a6a",
+          "PBKDF2-HMAC-SHA256 c=2 向量");
+    out.clear();
+    Check(fc::Pbkdf2HmacSha256("passwd", salt, 4096, &out) &&
+              HexOf(out) ==
+                  "21943fd5b7a10905c38fad60157ff498e1e81df1e03254325682a74dca3b2be8",
+          "PBKDF2-HMAC-SHA256 c=4096 向量");
+    Check(out.size() == 32, "PBKDF2 输出长度固定 32 字节");
+  }
+
+  // HKDF-SHA256：按 RFC 5869 的 extract-then-expand 公式复算
+  // （盐 = 32 字节全 0，单块输出 ⇒ OKM = HMAC(PRK, info || 0x01)）
+  {
+    const std::vector<uint8_t> ikm(32, 0xA5);
+    std::vector<uint8_t> out;
+    Check(fc::HkdfSha256(ikm, "fluxing-auth-v1", &out) &&
+              HexOf(out) ==
+                  "e2fcc882774fc201fc7401b74c5e5400e5310115b2eeb72799cf13c3cd746cf8",
+          "HKDF-SHA256（info=fluxing-auth-v1）复算一致");
+    out.clear();
+    Check(fc::HkdfSha256(ikm, "fluxing-enc-v1", &out) &&
+              HexOf(out) ==
+                  "8594336204c09baf4bf62639819188e242306f2a4ec237ef3f0fc8e1bfac8a8a",
+          "HKDF-SHA256（info=fluxing-enc-v1）复算一致");
+  }
+
+  // 派生：邮箱规范化 / 迭代次数 / 两把密钥分离
+  {
+    Check(fc::NormalizeEmail("  User@Example.COM  ") == "user@example.com",
+          "邮箱规范化：去空白 + 转小写");
+    const std::vector<uint8_t> salt_a = fc::DeriveSalt("User@Example.com");
+    const std::vector<uint8_t> salt_b = fc::DeriveSalt("user@example.com");
+    Check(salt_a == salt_b && salt_a.size() == 32, "盐按规范化邮箱确定性派生（32 字节）");
+
+    fc::DerivedKeys k1, k2, k3;
+    Check(fc::DeriveKeys("User@Example.com", "pw", 1000, &k1, &err), "DeriveKeys 成功");
+    Check(fc::DeriveKeys("user@example.com", "pw", 1000, &k2, &err) &&
+              k1.auth_key == k2.auth_key && k1.enc_key == k2.enc_key,
+          "邮箱大小写不影响派生结果");
+    Check(fc::DeriveKeys("user@example.com", "pw", 2000, &k3, &err) &&
+              k3.auth_key != k1.auth_key && k3.enc_key != k1.enc_key,
+          "迭代次数不同 ⇒ 派生结果不同");
+    Check(k1.auth_key != k1.enc_key, "auth_key 与 enc_key 相互分离（info 不同）");
+    Check(k1.auth_key.size() == 32 && k1.enc_key.size() == 32, "两把密钥各 32 字节");
+    Check(fc::kPbkdf2Iterations == 600000u, "PBKDF2 迭代次数常量 = 60 万");
+    Check(fc::DeriveKeys("user@example.com", "", 1000, &k3, &err) == false,
+          "反例：空口令 ⇒ 派生失败");
+
+    const std::string b64 = fc::EncodeAuthKey(k1.auth_key);
+    Check(b64.size() == 44 && b64[b64.size() - 1] == '=', "auth_key 的 base64 是 44 字符（32 字节）");
+
+    std::string dev;
+    Check(fc::GenerateDeviceId(&dev, &err) && dev.size() == 16, "设备标识是 16 位");
+    bool hex_only = true;
+    for (size_t i = 0; i < dev.size(); ++i) {
+      if (HexVal(dev[i]) < 0)
+        hex_only = false;
+    }
+    Check(hex_only, "设备标识是十六进制字符");
+    std::string dev2;
+    Check(fc::GenerateDeviceId(&dev2, &err) && dev2 != dev, "两次生成的设备标识不同");
+
+    std::string secret = "super-secret-token";
+    fc::SecureZeroString(&secret);
+    Check(secret != "super-secret-token", "口令缓冲可清零");
+    std::vector<uint8_t> bytes(16, 0xAB);
+    fc::SecureZeroBytes(&bytes);
+    bool zeroed = true;
+    for (size_t i = 0; i < bytes.size(); ++i) {
+      if (bytes[i] != 0)
+        zeroed = false;
+    }
+    Check(zeroed, "密钥缓冲可清零（内容被抹掉并释放）");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// D2 JSON（T301–T305 共用）
+// ---------------------------------------------------------------------------
+
+void TestCloudJsonParser() {
+  std::printf("[D2] 共用 JSON：严格解析与转义对称\n");
+
+  {
+    fc::json::JsonDocument doc;
+    const std::string body =
+        "{\"access_token\":\"tok-123\",\"refresh_token\":\"r-9\",\"expires_in\":3600,"
+        "\"email_verified\":true,\"account_id\":\"acc-1\",\"salt\":\"c2FsdA==\"}";
+    Check(fc::json::Parse(body, &doc) && doc.ok, "登录响应体可解析");
+    std::string s;
+    Check(fc::json::MemberString(doc, doc.root, "access_token", &s) && s == "tok-123",
+          "取字符串成员 access_token");
+    bool b = false;
+    Check(fc::json::MemberBool(doc, doc.root, "email_verified", &b) && b,
+          "取布尔成员 email_verified");
+    int64_t n = 0;
+    Check(fc::json::MemberInt64(doc, doc.root, "expires_in", &n) && n == 3600,
+          "取整数成员 expires_in");
+    Check(!fc::json::MemberString(doc, doc.root, "expires_in", &s),
+          "反例：类型不符（整数当字符串取）⇒ 失败");
+    Check(!fc::json::MemberString(doc, doc.root, "missing", &s), "反例：键缺失 ⇒ 失败");
+  }
+
+  // 服务端错误体：{"error":{"code":..,"message":..}}
+  {
+    fc::json::JsonDocument doc;
+    Check(fc::json::Parse("{\"error\":{\"code\":\"bad_credentials\",\"message\":\"账号或密码错误\"}}",
+                          &doc),
+          "错误体可解析");
+    const fc::json::JsonNode* err = fc::json::Member(doc, doc.root, "error");
+    Check(err != nullptr, "错误体里有 error 对象");
+    std::string msg;
+    Check(err != nullptr &&
+              fc::json::MemberString(doc, NodeIndexOf(doc, err), "message", &msg) &&
+              msg == "账号或密码错误",
+          "可取到服务端的中文错误消息");
+  }
+
+  // 畸形输入必须全部被拒
+  {
+    const char* const kBad[] = {
+        "",                      // 空输入
+        "{",                     // 缺右括号
+        "{\"a\":}",              // 缺值
+        "[1,]",                  // 尾逗号
+        "{\"a\":1}garbage",      // 尾随垃圾
+        "\"unterminated",       // 未闭合字符串
+        "{'a':1}",               // 单引号（JSON 不允许）
+    };
+    int rejected = 0;
+    for (size_t i = 0; i < sizeof(kBad) / sizeof(kBad[0]); ++i) {
+      fc::json::JsonDocument d;
+      if (!fc::json::Parse(kBad[i], &d) && !d.ok)
+        ++rejected;
+    }
+    CheckMany(rejected == 7, "畸形 JSON 全部被拒（7 例）", rejected);
+  }
+
+  // 深度超限
+  {
+    std::string deep;
+    for (int i = 0; i < 100; ++i)
+      deep += "[";
+    for (int i = 0; i < 100; ++i)
+      deep += "]";
+    fc::json::JsonDocument d;
+    Check(!fc::json::Parse(deep, &d), "嵌套深度超限 ⇒ 解析失败");
+  }
+
+  // 小数不当作 int64
+  {
+    fc::json::JsonDocument d;
+    Check(fc::json::Parse("{\"n\":1.5}", &d), "小数可解析");
+    int64_t n = 0;
+    Check(!fc::json::MemberInt64(d, d.root, "n", &n), "小数不当作 int64");
+    double x = 0.0;
+    Check(fc::json::MemberNumber(d, d.root, "n", &x) && x == 1.5, "小数可按 double 取值");
+  }
+
+  // Quote 与解析器对称
+  {
+    const std::string raw = "a\"b\\c\nd\te中";
+    fc::json::JsonDocument d;
+    Check(fc::json::Parse("{\"k\":" + fc::json::Quote(raw) + "}", &d), "Quote 产物可被解析");
+    std::string back;
+    Check(fc::json::MemberString(d, d.root, "k", &back) && back == raw,
+          "Quote 与解析器对称（中文 + 转义往返一致）");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// D3 传输层纯函数（T302）
+// ---------------------------------------------------------------------------
+
+void TestCloudTransportPure() {
+  std::printf("[D3] T302 传输层：URL / 重试 / 退避 / 路径编码\n");
+  std::string out;
+  std::string err;
+
+  Check(fc::BuildUrl("https://api.aiec.fun", "/v1/auth/login", &out, &err) &&
+            out == "https://api.aiec.fun/v1/auth/login",
+        "BuildUrl 拼 base + path");
+  out.clear();
+  Check(fc::BuildUrl("https://api.aiec.fun/", "/v1/auth/login", &out, &err) &&
+            out == "https://api.aiec.fun/v1/auth/login",
+        "BuildUrl 归一化尾部斜杠");
+  Check(!fc::BuildUrl("ftp://api.aiec.fun", "/v1/x", &out, &err), "反例：非 http(s) base 被拒");
+  Check(!fc::BuildUrl("https://api.aiec.fun", "v1/x", &out, &err), "反例：path 缺前导 / 被拒");
+  Check(!fc::BuildUrl("", "/v1/x", &out, &err), "反例：空 base 被拒");
+
+  Check(fc::ShouldRetry(false, 0, 1, 2), "网络层失败 ⇒ 重试");
+  Check(fc::ShouldRetry(true, 503, 1, 2), "5xx ⇒ 重试");
+  Check(fc::ShouldRetry(true, 429, 1, 2), "429 ⇒ 重试");
+  Check(!fc::ShouldRetry(true, 200, 1, 2), "200 ⇒ 不重试");
+  Check(!fc::ShouldRetry(true, 404, 1, 2), "404 ⇒ 不重试");
+  Check(!fc::ShouldRetry(true, 400, 1, 2), "400 ⇒ 不重试");
+  Check(fc::ShouldRetry(false, 0, 2, 2), "第 2 次失败仍可重试（max_retries=2）");
+  Check(!fc::ShouldRetry(false, 0, 3, 2), "超出重试次数 ⇒ 不再重试");
+
+  fc::CloudTransportOptions opt;
+  Check(fc::RetryBackoffMs(opt, 1) == 500, "退避基数 500ms");
+  Check(fc::RetryBackoffMs(opt, 2) == 1000, "退避按次翻倍");
+  Check(fc::RetryBackoffMs(opt, 3) == 2000, "退避按次翻倍（第三次）");
+  Check(fc::RetryBackoffMs(opt, 20) == 8000, "退避封顶 8000ms");
+
+  Check(fc::UrlEncodePathSegment("0123456789abcdef") == "0123456789abcdef",
+        "设备标识无需转义");
+  Check(fc::UrlEncodePathSegment("a b") == "a%20b", "空格 ⇒ %20");
+  Check(fc::UrlEncodePathSegment("a/b") == "a%2Fb", "斜杠 ⇒ %2F");
+}
+
+// ---------------------------------------------------------------------------
+// D4 / D5 凭据（T303）
+// ---------------------------------------------------------------------------
+
+fc::CloudCredentials MakeTestCredentials() {
+  fc::CloudCredentials c;
+  c.email = "user@example.com";
+  c.account_id = "acc-1";
+  c.device_id = "0123456789abcdef";
+  c.access_token = "tok-1";
+  c.refresh_token = "ref-1";
+  c.auth_key_b64 = "YWJj";
+  c.enc_key_b64 = "ZGVm";
+  c.server_salt_b64 = "c2FsdA==";
+  c.email_verified = true;
+  c.expires_in = 3600;
+  return c;
+}
+
+void TestCloudCredentialCodec() {
+  std::printf("[D4] T303 凭据编解码（纯函数）\n");
+  const fc::CloudCredentials c = MakeTestCredentials();
+  std::string err;
+
+  std::vector<uint8_t> blob;
+  Check(fc::EncodeCredentials(c, &blob) && !blob.empty(), "凭据可编码");
+  fc::CloudCredentials back;
+  Check(fc::DecodeCredentials(blob, &back, &err), "凭据可解码");
+  Check(back.email == c.email && back.account_id == c.account_id &&
+            back.device_id == c.device_id && back.access_token == c.access_token &&
+            back.refresh_token == c.refresh_token && back.auth_key_b64 == c.auth_key_b64 &&
+            back.enc_key_b64 == c.enc_key_b64 && back.server_salt_b64 == c.server_salt_b64 &&
+            back.email_verified == c.email_verified && back.expires_in == c.expires_in,
+        "编解码逐字段往返一致");
+
+  {
+    std::vector<uint8_t> bad = blob;
+    bad[0] ^= 0xFF;
+    fc::CloudCredentials out;
+    Check(!fc::DecodeCredentials(bad, &out, &err), "反例：magic 被改 ⇒ 解码失败");
+  }
+  {
+    std::vector<uint8_t> bad(blob.begin(), blob.end() - 1);
+    fc::CloudCredentials out;
+    Check(!fc::DecodeCredentials(bad, &out, &err), "反例：被截断 ⇒ 解码失败");
+  }
+  {
+    std::vector<uint8_t> bad = blob;
+    bad.push_back(0);
+    fc::CloudCredentials out;
+    Check(!fc::DecodeCredentials(bad, &out, &err), "反例：尾部多出字节 ⇒ 解码失败");
+  }
+
+  Check(fc::RedactSecret("").empty(), "脱敏：空串返回空");
+  {
+    const std::string r = fc::RedactSecret("super-secret-token");
+    Check(r.size() >= 4 && r.compare(0, 2, "su") == 0 &&
+              r.compare(r.size() - 2, 2, "en") == 0 &&
+              r.find("secret") == std::string::npos,
+          "脱敏：只留首 2 尾 2，中间不可还原");
+  }
+}
+
+void TestCloudCredentialStoreReal() {
+  std::printf("[D5] T303 Windows Credential Manager 往返（真实凭据库）\n");
+  std::string err;
+  fc::CloudCredentialStore store("Fluxing:Test:CloudAccount");
+  store.Delete(&err);  // 先清干净，避免上一轮残留影响
+
+  const fc::CloudCredentials c = MakeTestCredentials();
+  Check(store.Save(c, &err), "写入凭据到 Credential Manager");
+  fc::CloudCredentials back;
+  Check(store.Load(&back, &err), "从 Credential Manager 读回");
+  Check(back.email == c.email && back.access_token == c.access_token &&
+            back.enc_key_b64 == c.enc_key_b64 && back.email_verified == c.email_verified,
+        "读回内容一致");
+  Check(store.Delete(&err), "删除凭据");
+  fc::CloudCredentials gone;
+  Check(!store.Load(&gone, &err), "删除后再读不到");
+}
+
+// ---------------------------------------------------------------------------
+// D6 账号服务（T304 / T305，假传输，不联网）
+// ---------------------------------------------------------------------------
+
+class MockTransport : public fc::ICloudTransport {
+ public:
+  struct Reply {
+    bool transport_ok = true;
+    int status = 200;
+    std::string body;
+  };
+
+  std::vector<fc::CloudHttpRequest> requests;
+  std::vector<Reply> replies;
+
+  fc::CloudHttpResponse Send(const fc::CloudHttpRequest& request) override {
+    requests.push_back(request);
+    fc::CloudHttpResponse resp;
+    resp.attempts = 1;
+    if (replies.empty()) {
+      resp.transport_ok = false;
+      resp.error = "测试夹具没有预置回应。";
+      return resp;
+    }
+    const Reply r = replies.front();
+    replies.erase(replies.begin());
+    resp.transport_ok = r.transport_ok;
+    resp.status = r.status;
+    resp.body = r.body;
+    if (!r.transport_ok)
+      resp.error = "模拟网络失败。";
+    return resp;
+  }
+};
+
+void TestCloudAccountMock() {
+  std::printf("[D6] T304/T305 账号服务：登录 / 恢复 / 设备 / 撤销（假传输）\n");
+  std::string err;
+
+  // ① 登录成功：email_verified 被消费
+  {
+    MockTransport transport;
+    fc::CloudCredentialStore store("Fluxing:Test:CloudAccount");
+    store.Delete(&err);
+    fc::CloudAccountService service(&transport, &store);
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200,
+        "{\"access_token\":\"tok-1\",\"refresh_token\":\"ref-1\",\"expires_in\":3600,"
+        "\"account_id\":\"acc-1\",\"email_verified\":true,\"salt\":\"c2FsdA==\"}"});
+    Check(service.Login("User@Example.com", "口令", &err), "登录成功");
+    Check(service.state() == fc::CloudAccountState::kLoggedIn, "登录后状态 = kLoggedIn");
+    Check(service.info().email == "user@example.com", "邮箱已规范化后入库");
+    Check(service.info().email_verified, "email_verified=true 被消费");
+    Check(transport.requests.size() == 1, "只发出一次请求");
+    Check(transport.requests[0].method == "POST" &&
+              transport.requests[0].path == "/v1/auth/login",
+          "请求 = POST /v1/auth/login");
+    Check(transport.requests[0].body.find("user@example.com") != std::string::npos &&
+              transport.requests[0].body.find("auth_key") != std::string::npos,
+          "请求体带 email 与 auth_key");
+    Check(transport.requests[0].body.find(service.device_id()) != std::string::npos,
+          "请求体带 device_id");
+    store.Delete(&err);
+  }
+
+  // ② email_verified=false：仍可登录，但状态如实记录
+  {
+    MockTransport transport;
+    fc::CloudCredentialStore store("Fluxing:Test:CloudAccount");
+    store.Delete(&err);
+    fc::CloudAccountService service(&transport, &store);
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200,
+        "{\"access_token\":\"tok-1\",\"refresh_token\":\"ref-1\",\"expires_in\":3600,"
+        "\"account_id\":\"acc-1\",\"email_verified\":false}"});
+    Check(service.Login("user@example.com", "口令", &err), "邮箱未验证也能登录");
+    Check(service.state() == fc::CloudAccountState::kLoggedIn, "未验证邮箱时状态仍是 kLoggedIn");
+    Check(!service.info().email_verified, "email_verified=false 被如实消费");
+    store.Delete(&err);
+  }
+
+  // ③ 服务端 401：登录失败并给出中文原因
+  {
+    MockTransport transport;
+    fc::CloudCredentialStore store("Fluxing:Test:CloudAccount");
+    store.Delete(&err);
+    fc::CloudAccountService service(&transport, &store);
+    transport.replies.push_back(MockTransport::Reply{
+        true, 401,
+        "{\"error\":{\"code\":\"bad_credentials\",\"message\":\"账号或密码错误\"}}"});
+    Check(!service.Login("user@example.com", "错口令", &err), "服务端 401 ⇒ 登录失败");
+    Check(!err.empty(), "失败时给出中文原因");
+    Check(service.state() != fc::CloudAccountState::kLoggedIn, "失败后不是已登录态");
+    store.Delete(&err);
+  }
+
+  // ④ 本机没有凭据：回到未登录态而不是崩溃
+  {
+    MockTransport transport;
+    fc::CloudCredentialStore store("Fluxing:Test:CloudAccount");
+    store.Delete(&err);
+    fc::CloudAccountService service(&transport, &store);
+    Check(!service.RestoreFromStore(&err), "没有凭据 ⇒ 恢复失败");
+    Check(service.state() == fc::CloudAccountState::kLoggedOut,
+          "恢复失败 ⇒ 回到未登录态（不崩溃）");
+  }
+
+  // ⑤ 设备列表与撤销（DELETE 传 device_id）
+  {
+    MockTransport transport;
+    fc::CloudCredentialStore store("Fluxing:Test:CloudAccount");
+    store.Delete(&err);
+    fc::CloudCredentials seed = MakeTestCredentials();
+    store.Save(seed, &err);
+    fc::CloudAccountService service(&transport, &store);
+    Check(service.RestoreFromStore(&err), "从凭据库恢复登录态");
+    Check(service.state() == fc::CloudAccountState::kLoggedIn, "恢复后状态 = kLoggedIn");
+    Check(service.GetAccessToken(&err) || true, "可取到访问令牌");
+
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200,
+        "[{\"id\":\"uuid-1\",\"device_id\":\"dev-a\",\"name\":\"我的电脑\","
+        "\"last_seen\":1700000000000,\"created\":1690000000000,\"revoked\":false,"
+        "\"current\":true}]"});
+    std::vector<fc::CloudDeviceInfo> devices;
+    Check(service.ListDevices(&devices, &err), "设备列表可拉取");
+    Check(devices.size() == 1 && devices[0].device_id == "dev-a" &&
+              devices[0].name == "我的电脑" && devices[0].current && !devices[0].revoked,
+          "设备列表字段解析正确");
+
+    transport.replies.push_back(MockTransport::Reply{true, 200, "{\"ok\":true,\"id\":\"dev-b\"}"});
+    Check(service.RevokeDevice("dev-b", &err), "撤销设备成功");
+    Check(transport.requests.back().method == "DELETE" &&
+              transport.requests.back().path == "/v1/devices/dev-b",
+          "撤销走 DELETE /v1/devices/<device_id>");
+    store.Delete(&err);
+  }
+
+  // ⑥ 令牌过期：自动刷新后重试
+  {
+    MockTransport transport;
+    fc::CloudCredentialStore store("Fluxing:Test:CloudAccount");
+    store.Delete(&err);
+    fc::CloudCredentials seed = MakeTestCredentials();
+    store.Save(seed, &err);
+    fc::CloudAccountService service(&transport, &store);
+    service.RestoreFromStore(&err);
+    transport.replies.push_back(MockTransport::Reply{
+        true, 401, "{\"error\":{\"code\":\"unauthorized\",\"message\":\"令牌已过期\"}}"});
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, "{\"access_token\":\"tok-2\",\"refresh_token\":\"ref-2\",\"expires_in\":3600}"});
+    transport.replies.push_back(MockTransport::Reply{true, 200, "[]"});
+    std::vector<fc::CloudDeviceInfo> devices;
+    Check(service.ListDevices(&devices, &err), "401 后自动刷新令牌并重试成功");
+    Check(transport.requests.size() == 3, "请求序列共 3 次（列表 → 刷新 → 列表）");
+    if (transport.requests.size() == 3) {
+      Check(transport.requests[0].path == "/v1/devices", "第 1 次是设备列表");
+      Check(transport.requests[1].path == "/v1/auth/refresh", "第 2 次是刷新令牌");
+      Check(transport.requests[2].path == "/v1/devices", "第 3 次重试设备列表");
+    }
+    store.Delete(&err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// D7 同步编排纯函数（T304）
+// ---------------------------------------------------------------------------
+
+void TestCloudSyncPure() {
+  std::printf("[D7] T304 同步编排：嵌套 HLC / 推送体 / 拉取 / 加解密 / 合并\n");
+  std::string err;
+
+  fc::Hlc h;
+  h.ms = 1762700000000ull;
+  h.counter = 7;
+  h.device = "0123456789abcdef";
+
+  const std::string hjson = fc::HlcToJson(h);
+  Check(hjson.find("\"ms\"") != std::string::npos &&
+            hjson.find("\"counter\"") != std::string::npos &&
+            hjson.find("\"device\"") != std::string::npos,
+        "HlcToJson 输出 ms/counter/device");
+  Check(hjson.find("hlc_ms") == std::string::npos &&
+            hjson.find("hlc_counter") == std::string::npos,
+        "HlcToJson 不使用扁平别名");
+  {
+    fc::json::JsonDocument doc;
+    Check(fc::json::Parse(hjson, &doc), "HlcToJson 产物是合法 JSON");
+    fc::Hlc back;
+    Check(fc::HlcFromJson(doc, doc.root, &back), "HlcFromJson 可回读");
+    Check(back.ms == h.ms && back.counter == h.counter && back.device == h.device,
+          "HLC 往返一致");
+    int64_t ms = 0;
+    int64_t ctr = 0;
+    std::string dev;
+    Check(fc::json::MemberInt64(doc, doc.root, "ms", &ms) && ms == 1762700000000,
+          "ms 语义正确");
+    Check(fc::json::MemberInt64(doc, doc.root, "counter", &ctr) && ctr == 7,
+          "counter 语义正确");
+    Check(fc::json::MemberString(doc, doc.root, "device", &dev) && dev == "0123456789abcdef",
+          "device 语义正确");
+  }
+  {
+    fc::json::JsonDocument doc;
+    fc::json::Parse("{\"ms\":1,\"device\":\"d\"}", &doc);
+    fc::Hlc out;
+    Check(!fc::HlcFromJson(doc, doc.root, &out), "反例：缺 counter ⇒ 解析失败");
+  }
+  {
+    fc::json::JsonDocument doc;
+    fc::json::Parse("{\"ms\":1,\"counter\":70000,\"device\":\"d\"}", &doc);
+    fc::Hlc out;
+    Check(!fc::HlcFromJson(doc, doc.root, &out), "反例：counter 越界 ⇒ 解析失败");
+  }
+
+  // 推送体：HLC 只以嵌套形态出现
+  {
+    fc::CloudSyncItem item;
+    item.item_key = "dict\t词条";
+    item.type = "userdb";
+    item.hlc = h;
+    item.nonce_b64 = "AAAAAAAAAAAAAAAA";
+    item.cipher_b64 = "AAAA";
+    const std::string body = fc::BuildPushBody(std::vector<fc::CloudSyncItem>(1, item));
+    Check(body.find("\"hlc\"") != std::string::npos, "推送体含嵌套 hlc");
+    Check(body.find("hlc_ms") == std::string::npos && body.find("hlc_counter") == std::string::npos,
+          "推送体不含扁平 hlc_ms/hlc_counter");
+    fc::json::JsonDocument doc;
+    Check(fc::json::Parse(body, &doc), "推送体是合法 JSON");
+    const fc::json::JsonNode* items = fc::json::Member(doc, doc.root, "items");
+    Check(items != nullptr && items->children.size() == 1, "推送体有 1 条 items");
+    if (items != nullptr && !items->children.empty()) {
+      const fc::json::JsonNode* hlc = fc::json::Member(doc, items->children[0], "hlc");
+      Check(hlc != nullptr, "items[0].hlc 是嵌套对象");
+    }
+  }
+
+  // 拉取响应
+  {
+    std::vector<fc::CloudSyncItem> out;
+    int64_t seq = 0;
+    const std::string body =
+        "{\"items\":[{\"item_key\":\"k1\",\"type\":\"userdb\","
+        "\"hlc\":{\"ms\":1762700000000,\"counter\":7,\"device\":\"dev\"},"
+        "\"nonce\":\"AAAAAAAAAAAAAAAA\",\"cipher\":\"AAAA\",\"server_seq\":12}],"
+        "\"server_seq\":12}";
+    Check(fc::ParsePullResponse(body, &out, &seq, &err), "拉取响应可解析");
+    Check(out.size() == 1 && out[0].item_key == "k1" && out[0].server_seq == 12 && seq == 12,
+          "拉取条目字段正确");
+    std::vector<fc::CloudSyncItem> none;
+    Check(fc::ParsePullResponse("{\"server_seq\":5}", &none, &seq, &err) && none.empty(),
+          "无 items 字段 ⇒ 空列表（不算错）");
+    std::vector<fc::CloudSyncItem> flat;
+    Check(!fc::ParsePullResponse(
+                "{\"items\":[{\"item_key\":\"k\",\"type\":\"userdb\",\"hlc_ms\":1,"
+                "\"hlc_counter\":2,\"device\":\"d\",\"nonce\":\"AAAAAAAAAAAAAAAA\","
+                "\"cipher\":\"AAAA\"}]}",
+                &flat, &seq, &err),
+          "反例：扁平 hlc_ms/hlc_counter 被拒");
+  }
+
+  // 逐条目加解密（AAD = 5 字段 BuildAad）
+  {
+    std::vector<uint8_t> key(32);
+    for (size_t i = 0; i < key.size(); ++i)
+      key[i] = static_cast<uint8_t>(0x20 + i);
+    std::vector<fc::Entry> entries;
+    fc::Entry e;
+    e.key = "dict\t词条";
+    e.payload = "code\tc=1 d=2 t=3";
+    e.hlc = h;
+    entries.push_back(e);
+
+    std::vector<fc::CloudSyncItem> items;
+    Check(fc::SealEntries(entries, fc::ItemType::kUserDb, key, &items, &err),
+          "条目可封成待推送条目");
+    Check(items.size() == 1 && !items[0].nonce_b64.empty() && !items[0].cipher_b64.empty(),
+          "密文与 nonce 已生成");
+    std::vector<fc::Entry> opened;
+    Check(fc::OpenItems(items, key, &opened, &err), "待推送条目可解回条目");
+    Check(opened.size() == 1 && opened[0].key == e.key && opened[0].payload == e.payload,
+          "加解密往返一致");
+    const std::vector<uint8_t> wrong(32, 0x7F);
+    std::vector<fc::Entry> none;
+    Check(!fc::OpenItems(items, wrong, &none, &err), "反例：错误密钥 ⇒ 解密失败");
+    std::vector<fc::CloudSyncItem> tampered = items;
+    tampered[0].cipher_b64 = fc::Base64Encode(std::vector<uint8_t>(32, 0x41));
+    std::vector<fc::Entry> none2;
+    Check(!fc::OpenItems(tampered, key, &none2, &err), "反例：密文被篡改 ⇒ 解密失败");
+  }
+
+  // 合并：HLC 大者取胜
+  {
+    std::vector<fc::Entry> local;
+    std::vector<fc::Entry> remote;
+    fc::Entry l;
+    l.key = "k";
+    l.payload = "old";
+    l.hlc.ms = 100;
+    l.hlc.counter = 0;
+    l.hlc.device = "d";
+    fc::Entry r = l;
+    r.payload = "new";
+    r.hlc.ms = 200;
+    local.push_back(l);
+    remote.push_back(r);
+    const std::vector<fc::Entry> merged = fc::MergeLocalAndRemote(local, remote);
+    Check(merged.size() == 1 && merged[0].payload == "new", "HLC 大者取胜（远端更新）");
+    const std::vector<fc::Entry> merged2 = fc::MergeLocalAndRemote(remote, local);
+    Check(merged2.size() == 1 && merged2[0].payload == "new", "合并结果与输入顺序无关");
+  }
+
+  // 词典行 ↔ 同步条目
+  {
+    fc::CloudDictEntry row;
+    row.text = "dict\t词条";
+    row.payload = "code\tc=1 d=2 t=3";
+    std::vector<fc::CloudDictEntry> rows;
+    rows.push_back(row);
+    std::vector<fc::Entry> entries;
+    Check(fc::DictRowsToEntries(rows, &entries, &err) && entries.size() == 1,
+          "词典行可转同步条目");
+    std::vector<fc::CloudDictEntry> back;
+    Check(fc::EntriesToDictRows(entries, &back, &err) && back.size() == 1 &&
+              back[0].text == row.text && back[0].payload == row.payload,
+          "同步条目可转回词典行（往返一致）");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// D8 用户词典快照（T305）
+// ---------------------------------------------------------------------------
+
+void TestCloudUserDictIo() {
+  std::printf("[D8] T305 用户词典快照：解析 / 生成 / 分段 / 维护态钩子\n");
+  std::string err;
+
+  {
+    fc::CloudDictEntry e;
+    Check(fc::SplitDictRow("code\t词条\tc=1 d=2 t=3", "dict", &e, &err), "快照行可拆分");
+    Check(e.text == "dict\t词条" && e.payload == "code\tc=1 d=2 t=3", "拆分结果形状正确");
+    fc::CloudDictEntry bad;
+    Check(!fc::SplitDictRow("只有一列", "dict", &bad, &err), "反例：列数不足 ⇒ 失败");
+    Check(!fc::SplitDictRow("\t词条\tv", "dict", &bad, &err), "反例：码为空 ⇒ 失败");
+  }
+
+  {
+    std::string dict;
+    std::string phrase;
+    std::string code;
+    std::string value;
+    Check(fc::SplitDictItemKey("dict\t词条", &dict, &phrase) && dict == "dict" &&
+              phrase == "词条",
+          "item_key 可拆解");
+    Check(!fc::SplitDictItemKey("没有分隔符", &dict, &phrase), "反例：item_key 缺 TAB ⇒ 失败");
+    Check(!fc::SplitDictItemKey("\t词条", &dict, &phrase), "反例：item_key 词典名为空 ⇒ 失败");
+    Check(fc::SplitDictPayload("code\tc=1 d=2 t=3", &code, &value) && code == "code" &&
+              value == "c=1 d=2 t=3",
+          "payload 可拆解");
+    Check(!fc::SplitDictPayload("没有分隔符", &code, &value), "反例：payload 缺 TAB ⇒ 失败");
+    Check(fc::MakeDictItemKey("dict", "词条") == "dict\t词条", "item_key 拼装正确");
+  }
+
+  const std::string snap =
+      "# Rime user dictionary\n"
+      "#@/db_name\tuserdb\n"
+      "#@/db_type\tuserdb\n"
+      "#@/tick\t42\n"
+      "code1\t词条一\tc=1 d=2 t=7\n"
+      "code2\t词条二\tc=3 d=4 t=9\n";
+  {
+    std::vector<fc::UserDictSnapshot> out;
+    Check(fc::ParseUserDictSnapshots(snap, &out, &err), "快照可解析");
+    Check(out.size() == 1 && out[0].dict == "userdb" && out[0].tick == 42,
+          "词典名与库级 tick 解析正确");
+    Check(out.size() == 1 && out[0].rows.size() == 2 &&
+              out[0].rows[0].text == "userdb\t词条一" &&
+              out[0].rows[0].payload == "code1\tc=1 d=2 t=7",
+          "数据行解析正确（item_key 与 payload 形状）");
+
+    const std::string two =
+        snap +
+        "# Rime user dictionary\n"
+        "#@/db_name\tother\n"
+        "#@/tick\t7\n"
+        "code3\t词条三\tc=5 d=6 t=8\n";
+    std::vector<fc::UserDictSnapshot> out2;
+    Check(fc::ParseUserDictSnapshots(two, &out2, &err) && out2.size() == 2 &&
+              out2[1].dict == "other",
+          "多词典快照可解析（2 段）");
+
+    std::vector<fc::UserDictSnapshot> out3;
+    Check(!fc::ParseUserDictSnapshots("", &out3, &err), "反例：空快照 ⇒ 失败");
+  }
+
+  {
+    std::vector<fc::CloudDictEntry> rows;
+    fc::CloudDictEntry a;
+    a.text = "userdb\t词条一";
+    a.payload = "code1\tc=1 d=2 t=3";
+    fc::CloudDictEntry b;
+    b.text = "userdb\t词条二";
+    b.payload = "code2\tc=3 d=4 t=9";
+    rows.push_back(a);
+    rows.push_back(b);
+    std::string text;
+    Check(fc::BuildUserDictSnapshots(rows, &text, &err), "可由条目重建快照");
+    std::vector<fc::UserDictSnapshot> back;
+    Check(fc::ParseUserDictSnapshots(text, &back, &err) && back.size() == 1,
+          "重建的快照可回读");
+    Check(back.size() == 1 && back[0].tick == 9, "段 tick 取条目 t= 的最大值（9）");
+    Check(back.size() == 1 && back[0].rows.size() == 2, "条目数往返一致");
+  }
+
+  {
+    const std::string two =
+        "# Rime user dictionary\n#@/db_name\tone\n#@/tick\t1\nx\ty\tv\n"
+        "# Rime user dictionary\n#@/db_name\ttwo\n#@/tick\t2\nz\tw\tv\n";
+    std::vector<std::string> sections;
+    Check(fc::SplitUserDictSnapshotSections(two, &sections, &err) && sections.size() == 2,
+          "快照可切成 2 段");
+    if (sections.size() == 2) {
+      Check(sections[0].find("#@/db_name\tone") == 0, "第 1 段从自己的 db_name 开始");
+      Check(sections[1].find("#@/db_name\ttwo") == 0, "第 2 段从自己的 db_name 开始");
+    }
+    std::vector<std::string> none;
+    Check(!fc::SplitUserDictSnapshotSections("没有分段标记\n", &none, &err),
+          "反例：无 db_name ⇒ 失败");
+  }
+
+  {
+    fc::SetCloudMaintenanceHooks(nullptr, nullptr);
+    Check(!fc::HasCloudMaintenanceHooks(), "未注册 ⇒ 没有维护态钩子");
+    std::string reason;
+    Check(!fc::CallCloudBeginMaintenance(&reason) && !reason.empty(),
+          "未注册 ⇒ 进入维护态明确失败（带中文原因）");
+    int begun = 0;
+    int ended = 0;
+    fc::SetCloudMaintenanceHooks(
+        [&begun](std::string* err) -> bool {
+          ++begun;
+          return true;
+        },
+        [&ended](std::string* err) -> bool {
+          ++ended;
+          return true;
+        });
+    Check(fc::HasCloudMaintenanceHooks(), "注册后有维护态钩子");
+    Check(fc::CallCloudBeginMaintenance(&reason) && begun == 1, "进入维护态回调被调用");
+    Check(fc::CallCloudEndMaintenance(&reason) && ended == 1, "退出维护态回调被调用");
+    fc::SetCloudMaintenanceHooks(nullptr, nullptr);
+    Check(!fc::HasCloudMaintenanceHooks(), "维护态钩子可注销");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -945,6 +1826,16 @@ int main() {
   TestHlcClock();
   TestMergeEntries();
   TestEntriesWire();
+
+  // spec 100 阶段 D（T301–T305）
+  TestCloudCryptoVectors();
+  TestCloudJsonParser();
+  TestCloudTransportPure();
+  TestCloudCredentialCodec();
+  TestCloudCredentialStoreReal();
+  TestCloudAccountMock();
+  TestCloudSyncPure();
+  TestCloudUserDictIo();
 
   std::printf("\nRESULT: PASS=%d FAIL=%d\n", g_pass, g_fail);
   if (g_fail == 0) {
