@@ -9,6 +9,10 @@
 //   · 清空云端数据（DELETE /v1/account/data）；
 //   · 消费 login 响应的 email_verified ——
 //   未验证时明确提示「请先完成邮箱验证」。
+//   · spec 100 阶段 F · T505：接入同步引擎 —— 顶部显示「最近同步」状态
+//     （时间 + 结果 + 原因），并提供「立即同步」按钮（手动推 + 拉一轮）；
+//   · spec 100 阶段 G 加固：提供「重新发送验证码」按钮
+//     （POST /v1/auth/resend，服务端已实现）。
 //
 // 线程纪律（宪法 P2）：
 //   · **所有网络调用都在后台线程**（CloudAccountController 的工作线程），
@@ -54,11 +58,22 @@ class CloudAccountController {
 
   // ---- 提交任务（UI 线程调用，立即返回） ----
   void SubmitLogin(const std::wstring& email, const std::wstring& password);
+
+  // 注册（服务端生成并投递邮箱验证码）与邮箱验证。
+  // 与 SubmitLogin 同样「提交即返回」：PBKDF2 与网络都在工作线程里跑，
+  // UI 线程不阻塞（宪法 P2）。
+  void SubmitRegister(const std::wstring& email, const std::wstring& password);
+  void SubmitVerifyEmail(const std::wstring& email, const std::wstring& code);
   void SubmitLogout();
   void SubmitRefresh();
   void SubmitListDevices();
   void SubmitRevokeDevice(size_t index);
   void SubmitDeleteCloudData();
+
+  // 重新发送邮箱验证码（阶段 G 加固）。
+  void SubmitResendVerification(const std::wstring& email);
+  // 立即同步：手动触发一轮「推 + 拉」。
+  void SubmitSyncNow();
 
   // ---- 读取状态（UI 线程调用，内部加锁） ----
   std::wstring status() const;
@@ -66,6 +81,8 @@ class CloudAccountController {
   bool logged_in() const;
   bool email_verified() const;
   std::wstring account_email() const;
+  // 最近一次同步的中文描述（时间 + 结果 + 原因）；未同步过时给占位文案。
+  std::wstring sync_status() const;
 
  private:
   CloudAccountController();

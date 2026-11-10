@@ -301,6 +301,169 @@ bool CloudAccountService::Login(const std::string& email,
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// 注册 / 邮箱验证（阶段 E 补口：此前客户端只有登录，注册链路完全缺失）
+// ---------------------------------------------------------------------------
+
+bool CloudAccountService::Register(const std::string& email,
+                                   const std::string& password,
+                                   std::string* out_account_id,
+                                   std::string* err) {
+  if (out_account_id != nullptr)
+    out_account_id->clear();
+  if (transport_ == nullptr) {
+    if (err)
+      *err = "云端服务尚未初始化。";
+    return false;
+  }
+
+  const std::string norm = NormalizeEmail(email);
+  if (norm.empty()) {
+    if (err)
+      *err = "请输入邮箱地址。";
+    return false;
+  }
+  if (norm.find('@') == std::string::npos ||
+      norm.find('.') == std::string::npos) {
+    if (err)
+      *err = "邮箱格式不正确。";
+    return false;
+  }
+  if (password.empty()) {
+    if (err)
+      *err = "请输入密码。";
+    return false;
+  }
+
+  // 与 Login 同一套派生参数（ADR 0054：PBKDF2-HMAC-SHA256 60 万次，
+  // salt 按邮箱确定性派生）。注册只上传 auth_key，口令本体不出本机。
+  std::string password_copy = password;
+  DerivedKeys keys;
+  std::string derive_err;
+  const bool derived = DeriveKeys(norm, password_copy, 0, &keys, &derive_err);
+  SecureZeroString(&password_copy);
+  if (!derived) {
+    if (err)
+      *err = derive_err.empty() ? "密钥派生失败。" : derive_err;
+    return false;
+  }
+
+  // 设备标识：本机已有就沿用（随后 Login 复用同一个），没有就生成并记住，
+  // 让「注册 → 验证 → 登录」三步在服务端看到的是同一台设备。
+  std::string device_id;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    device_id = info_.device_id;
+  }
+  if (device_id.empty()) {
+    if (!GenerateDeviceId(&device_id, &derive_err)) {
+      SecureZeroBytes(&keys.auth_key);
+      SecureZeroBytes(&keys.enc_key);
+      if (err)
+        *err = derive_err.empty() ? "无法生成设备标识。" : derive_err;
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    info_.device_id = device_id;
+  }
+
+  const std::string body =
+      "{\"email\":" + json::Quote(norm) +
+      ",\"auth_key\":" + json::Quote(EncodeAuthKey(keys.auth_key)) +
+      ",\"device\":{\"id\":" + json::Quote(device_id) +
+      ",\"name\":" + json::Quote(kDeviceName) + "}}";
+
+  int status = 0;
+  std::string response_body;
+  std::string send_err;
+  const bool ok = SendJson("POST", "/v1/auth/register", body, false, &status,
+                           &response_body, &send_err);
+  SecureZeroBytes(&keys.auth_key);
+  SecureZeroBytes(&keys.enc_key);
+  if (!ok) {
+    if (err)
+      *err = send_err.empty() ? "注册失败。" : send_err;
+    return false;
+  }
+
+  // 注册成功 = 服务端已建号并生成了邮箱验证码。
+  // **不落凭据、不改 state_**：必须 VerifyEmail + Login 才拿到令牌，
+  // 避免出现「半登录」脏态（服务端也是这个语义：need_email_verify）。
+  json::JsonDocument doc;
+  std::string account_id;
+  if (json::Parse(response_body, &doc) && doc.root >= 0)
+    json::MemberString(doc, doc.root, "account_id", &account_id);
+  if (out_account_id != nullptr)
+    *out_account_id = account_id;
+  return true;
+}
+
+bool CloudAccountService::VerifyEmail(const std::string& email,
+                                      const std::string& code,
+                                      std::string* err) {
+  if (transport_ == nullptr) {
+    if (err)
+      *err = "云端服务尚未初始化。";
+    return false;
+  }
+
+  const std::string norm = NormalizeEmail(email);
+  if (norm.empty()) {
+    if (err)
+      *err = "请输入邮箱地址。";
+    return false;
+  }
+  // 服务端 auth.ts handleVerify 只接受 /^\d{6}$/：本地先挡掉，省一次无效往返。
+  if (code.size() != 6 ||
+      code.find_first_not_of("0123456789") != std::string::npos) {
+    if (err)
+      *err = "验证码格式不正确（应为 6 位数字）。";
+    return false;
+  }
+
+  const std::string body = "{\"email\":" + json::Quote(norm) +
+                           ",\"code\":" + json::Quote(code) + "}";
+  int status = 0;
+  std::string response_body;
+  std::string send_err;
+  if (!SendJson("POST", "/v1/auth/verify", body, false, &status, &response_body,
+                &send_err)) {
+    if (err)
+      *err = send_err.empty() ? "邮箱验证失败。" : send_err;
+    return false;
+  }
+  return true;
+}
+
+bool CloudAccountService::ResendVerification(const std::string& email,
+                                             std::string* err) {
+  if (transport_ == nullptr) {
+    if (err)
+      *err = "云端服务尚未初始化。";
+    return false;
+  }
+
+  const std::string norm = NormalizeEmail(email);
+  if (norm.empty()) {
+    if (err)
+      *err = "请输入邮箱地址。";
+    return false;
+  }
+
+  // 不需要鉴权：重发只证明「这个邮箱存在且尚未验证」。
+  const std::string body = "{\"email\":" + json::Quote(norm) + "}";
+  int status = 0;
+  std::string response_body;
+  std::string send_err;
+  if (!SendJson("POST", "/v1/auth/resend", body, false, &status, &response_body,
+                &send_err)) {
+    if (err)
+      *err = send_err.empty() ? "重新发送验证码失败。" : send_err;
+    return false;
+  }
+  return true;
+}
+
 bool CloudAccountService::Logout(std::string* err) {
   std::string delete_err;
   const bool ok = store_ == nullptr ? true : store_->Delete(&delete_err);

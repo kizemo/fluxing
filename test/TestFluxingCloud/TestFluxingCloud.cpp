@@ -5,10 +5,17 @@
 //   T202 条目合并     （同键取大 / 同键同版本确定 / 异键并集 / 幂等结合律 / 两端收敛）
 //   T203 HLC 定序     （严格弱序 / 单调 / 同毫秒自增 / 抬升 / 双端同序）
 //   T204 共享生产头   （本文件直接 include include/FluxingCloudEnvelope.h）
+//   T501/T504 同步引擎（退避阶梯 / 每日配额 / 自然日翻篇 / 推送截止 /
+//                        触发优先级 / 引擎生命周期 —— 假 runner，不触网）
 //
 // T204 判据：生产与单测**同源**。本文件不定义任何信封编解码 / HLC / 条目合并
 // 的第二份实现，只调用 include/FluxingCloudEnvelope.h 里的 inline 函数
 // （constitution R7「生产与单测共用一套实现」）。
+//
+// T501/T504 判据：同理。本文件只 include WeaselServer/Cloud/CloudSyncEngine.h，
+// 直接调用它的 inline 纯函数（BackoffDelayMs / DailyPushAllowed /
+// DailyPullAllowed / DayIndexUtc / DayRolloverMs / ComputePushDeadline /
+// DecideNextAction）与 CloudSyncEngine 类，**不复制第二份实现**。
 
 // NOMINMAX 必须在 windows.h 之前：否则 <algorithm> 里的 std::min/std::max
 // 会被 windows.h 的 min/max 宏污染（本文件用到 std::sort / std::swap）。
@@ -17,11 +24,14 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -44,6 +54,10 @@
 #include "../../WeaselServer/Cloud/CloudAccount.h"
 #include "../../WeaselServer/Cloud/CloudUserDictIo.h"
 #include "../../WeaselServer/Cloud/CloudSyncService.h"
+
+// spec 100 阶段 F 生产头（T501/T504 同步引擎）。同样走相对路径 ⇒ 生产与单测同源
+// （constitution R7）：本文件不复制第二份退避 / 配额 / 触发决策实现。
+#include "../../WeaselServer/Cloud/CloudSyncEngine.h"
 
 namespace fc = fluxing::cloud;
 
@@ -1512,6 +1526,90 @@ void TestCloudAccountMock() {
     }
     store.Delete(&err);
   }
+
+  // ⑦ 注册 + 邮箱验证：建号不等于登录（need_email_verify 语义）
+  {
+    MockTransport transport;
+    fc::CloudCredentialStore store("Fluxing:Test:CloudAccount");
+    store.Delete(&err);
+    fc::CloudAccountService service(&transport, &store);
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200,
+        "{\"account_id\":\"acc-9\",\"salt\":\"c2FsdA==\","
+        "\"kdf\":{\"algo\":\"pbkdf2-sha256\",\"iters\":600000},"
+        "\"need_email_verify\":true}"});
+    std::string account_id;
+    Check(service.Register("New@Example.com", "口令", &account_id, &err),
+          "注册成功");
+    Check(account_id == "acc-9", "解析出 account_id");
+    Check(service.state() == fc::CloudAccountState::kLoggedOut,
+          "注册后仍是未登录态（注册 ≠ 登录）");
+    Check(service.info().email.empty(), "注册不写账号信息");
+    fc::CloudCredentials seeded;
+    Check(!store.Load(&seeded, &err), "注册不往凭据库写任何东西");
+    Check(!service.device_id().empty(), "注册顺带生成 device_id");
+    Check(transport.requests.size() == 1, "注册只发一次请求");
+    Check(transport.requests[0].method == "POST" &&
+              transport.requests[0].path == "/v1/auth/register",
+          "请求 = POST /v1/auth/register");
+    if (transport.requests.size() == 1) {
+      const std::string& body = transport.requests[0].body;
+      Check(body.find("new@example.com") != std::string::npos,
+            "邮箱已规范化进请求体");
+      Check(body.find("auth_key") != std::string::npos, "请求体带 auth_key");
+      Check(body.find("device") != std::string::npos, "请求体带 device");
+      Check(body.find("口令") == std::string::npos, "请求体不含口令明文");
+    }
+
+    // 验证码格式非法：本地拒掉，不发请求（与服务端 /^\d{6}$/ 对齐）
+    const size_t before = transport.requests.size();
+    Check(!service.VerifyEmail("new@example.com", "12345", &err),
+          "5 位验证码被本地拒掉");
+    Check(!err.empty(), "本地拒掉时给出中文原因");
+    Check(!service.VerifyEmail("new@example.com", "12345a", &err),
+          "非数字验证码被本地拒掉");
+    Check(transport.requests.size() == before, "非法验证码不发请求");
+    Check(service.state() == fc::CloudAccountState::kLoggedOut,
+          "非法验证码不改状态");
+
+    transport.replies.push_back(MockTransport::Reply{true, 200, "{\"ok\":true}"});
+    Check(service.VerifyEmail("new@example.com", "123456", &err),
+          "6 位验证码验证成功");
+    Check(transport.requests.back().method == "POST" &&
+              transport.requests.back().path == "/v1/auth/verify",
+          "验证走 POST /v1/auth/verify");
+    Check(transport.requests.back().body.find("123456") != std::string::npos,
+          "请求体带验证码");
+    Check(service.state() == fc::CloudAccountState::kLoggedOut,
+          "验证成功也不自动登录（仍需显式登录）");
+
+    // 非法邮箱同样本地拒掉
+    const size_t before2 = transport.requests.size();
+    std::string ignored_id;
+    Check(!service.Register("not-an-email", "口令", &ignored_id, &err),
+          "非法邮箱被本地拒掉");
+    Check(transport.requests.size() == before2, "非法邮箱不发请求");
+  }
+
+  // ⑧ 邮箱已注册：409 的中文原因透传，且不留半登录态
+  {
+    MockTransport transport;
+    fc::CloudCredentialStore store("Fluxing:Test:CloudAccount");
+    store.Delete(&err);
+    fc::CloudAccountService service(&transport, &store);
+    transport.replies.push_back(MockTransport::Reply{
+        true, 409,
+        "{\"error\":{\"code\":\"email_taken\","
+        "\"message\":\"该邮箱已注册，请直接登录。\"}}"});
+    std::string account_id;
+    Check(!service.Register("dup@example.com", "口令", &account_id, &err),
+          "已注册邮箱 ⇒ 注册失败");
+    Check(err.find("已注册") != std::string::npos, "服务端中文原因透传");
+    Check(service.state() == fc::CloudAccountState::kLoggedOut,
+          "失败后仍是未登录态");
+    fc::CloudCredentials cred;
+    Check(!store.Load(&cred, &err), "失败不写凭据");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1805,6 +1903,402 @@ void TestCloudUserDictIo() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// F1 同步引擎：退避阶梯与每日配额（T501）
+// ---------------------------------------------------------------------------
+
+void TestCloudSyncEngineBackoffAndQuota() {
+  std::printf("[F1] T501 同步引擎：退避阶梯 / 每日配额 / 自然日翻篇\n");
+
+  const fc::CloudSyncEngineOptions opts;
+
+  // 退避阶梯表本身：共 4 档，第 1/2/3 档 = 1 / 5 / 15 分钟。
+  Check(opts.backoff_ladder_ms.size() == 4, "退避阶梯共 4 档");
+  Check(opts.backoff_ladder_ms[0] == 60 * 1000, "退避阶梯第 1 档 = 1 分钟");
+  Check(opts.backoff_ladder_ms[1] == 5 * 60 * 1000, "退避阶梯第 2 档 = 5 分钟");
+  Check(opts.backoff_ladder_ms[2] == 15 * 60 * 1000,
+        "退避阶梯第 3 档 = 15 分钟");
+
+  // 第 n 次失败 ⇒ 取第 n 档；超出阶梯长度 ⇒ 取最后一档。
+  Check(fc::BackoffDelayMs(opts, 1) == opts.backoff_ladder_ms[0],
+        "退避第 1 阶梯 = 阶梯表第 1 档（1 分钟）");
+  Check(fc::BackoffDelayMs(opts, 2) == opts.backoff_ladder_ms[1],
+        "退避第 2 阶梯 = 阶梯表第 2 档（5 分钟）");
+  Check(fc::BackoffDelayMs(opts, 3) == opts.backoff_ladder_ms[2],
+        "退避第 3 阶梯 = 阶梯表第 3 档（15 分钟）");
+  Check(fc::BackoffDelayMs(opts, 4) == opts.backoff_ladder_ms[3],
+        "退避第 4 阶梯 = 阶梯表第 4 档（最后一档）");
+  Check(fc::BackoffDelayMs(opts, 5) == opts.backoff_ladder_ms.back(),
+        "超过 max_backoff_attempts ⇒ 取最后一个阶梯值");
+  Check(fc::BackoffDelayMs(opts, 9) == opts.backoff_ladder_ms.back(),
+        "远超 max_backoff_attempts ⇒ 仍取最后一个阶梯值");
+  Check(fc::BackoffDelayMs(opts, 0) == opts.backoff_ladder_ms[0],
+        "退避次数下溢（attempt=0）⇒ 取第 1 阶梯");
+
+  // 阶梯第 4 档必须与 CloudSyncEngine.h 顶部的触发矩阵「退避 1 / 5 / 15 / 60 分钟」
+  // 一致。开发过程中该档一度写成 60 秒（少了 * 60），比第 3 档的 15 分钟还短
+  // （等于「第 4 次失败几乎立刻重试」）；这里用**硬断言**钉死，回归时当场变红。
+  Check(opts.backoff_ladder_ms.back() == 60 * 60 * 1000,
+        "退避第 4 档必须是 60 分钟（曾误写成 60 秒）");
+  {
+    fc::CloudSyncEngineOptions empty;
+    empty.backoff_ladder_ms.clear();
+    Check(fc::BackoffDelayMs(empty, 1) == 0, "退避阶梯为空 ⇒ 退避时长为 0");
+  }
+
+  // 每日配额：推 100 次 / 拉 50 次。
+  Check(fc::DailyPushAllowed(opts, 0), "推送次数未超配额 ⇒ 允许");
+  Check(fc::DailyPushAllowed(opts, opts.daily_push_limit - 1),
+        "推送次数刚好未达配额上限 ⇒ 允许");
+  Check(!fc::DailyPushAllowed(opts, opts.daily_push_limit),
+        "推送次数达配额上限 ⇒ 禁止");
+  Check(!fc::DailyPushAllowed(opts, opts.daily_push_limit + 1),
+        "推送次数超配额上限 ⇒ 禁止");
+  Check(fc::DailyPullAllowed(opts, 0), "拉取次数未超配额 ⇒ 允许");
+  Check(fc::DailyPullAllowed(opts, opts.daily_pull_limit - 1),
+        "拉取次数刚好未达配额上限 ⇒ 允许");
+  Check(!fc::DailyPullAllowed(opts, opts.daily_pull_limit),
+        "拉取次数达配额上限 ⇒ 禁止");
+  {
+    fc::CloudSyncEngineOptions zero;
+    zero.daily_push_limit = 0;
+    zero.daily_pull_limit = 0;
+    Check(!fc::DailyPushAllowed(zero, 0), "推送配额上限为 0 ⇒ 一律禁止");
+    Check(!fc::DailyPullAllowed(zero, 0), "拉取配额上限为 0 ⇒ 一律禁止");
+  }
+
+  // 跨 UTC 自然日 ⇒ 当日计数归零 ⇒ 配额重新可用。
+  // （计数归零本身由引擎在自然日翻篇时做，纯函数只负责「给定计数是否还有余额」）
+  {
+    const int64_t base = 1762700000000LL;
+    const int64_t day0 = fc::DayIndexUtc(base);
+    const int64_t next_day = fc::DayRolloverMs(base);
+    Check(fc::DayIndexUtc(next_day) == day0 + 1, "跨 UTC 自然日 ⇒ 日序号 +1");
+    Check(!fc::DailyPushAllowed(opts, opts.daily_push_limit),
+          "当日推送打满 ⇒ 当日推送配额耗尽");
+    Check(!fc::DailyPullAllowed(opts, opts.daily_pull_limit),
+          "当日拉取打满 ⇒ 当日拉取配额耗尽");
+    Check(fc::DailyPushAllowed(opts, 0),
+          "跨 UTC 自然日 ⇒ 计数归零后推送配额重新可用");
+    Check(fc::DailyPullAllowed(opts, 0),
+          "跨 UTC 自然日 ⇒ 计数归零后拉取配额重新可用");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// F2 同步引擎：自然日边界与推送截止时刻（T501）
+// ---------------------------------------------------------------------------
+
+void TestCloudSyncEngineDayAndDeadline() {
+  std::printf(
+      "[F2] T501 同步引擎：自然日边界 / 推送截止时刻（防抖 + 全局间隔）\n");
+
+  const int64_t kDay = 24 * 60 * 60 * 1000;
+  const int64_t base = 1762700000000LL;
+
+  // 自然日边界
+  {
+    const int64_t idx = fc::DayIndexUtc(base);
+    Check(fc::DayIndexUtc(base) == idx, "同一时刻 ⇒ 同一 UTC 日序号");
+    Check(fc::DayIndexUtc(base + 3600 * 1000) == idx,
+          "同一天内 +1 小时 ⇒ 日序号不变");
+    Check(fc::DayIndexUtc(base + kDay) == idx + 1, "跨一天 ⇒ 日序号 +1");
+    Check(fc::DayIndexUtc(0) == 0, "Unix 纪元 ⇒ 日序号 0");
+
+    const int64_t midnight = idx * kDay;
+    const int64_t rollover = fc::DayRolloverMs(base);
+    Check(rollover > midnight, "翻篇时刻大于当日 0 点");
+    Check(rollover == midnight + kDay, "翻篇时刻 = 当日 0 点 + 24 小时");
+    Check(fc::DayIndexUtc(rollover) == idx + 1, "翻篇时刻本身属于次日");
+  }
+
+  // 推送截止时刻 = max(防抖窗口到期, 全局推送间隔到期)
+  {
+    const fc::CloudSyncEngineOptions opts;
+    const int64_t dirty = 1000000;  // 有本地改动
+    int64_t deadline = 0;
+
+    Check(!fc::ComputePushDeadline(opts, 0, 0, &deadline),
+          "没有本地改动 ⇒ 不产生推送截止时刻");
+    Check(!fc::ComputePushDeadline(opts, -1, 0, &deadline),
+          "本地改动时刻为负 ⇒ 不产生推送截止时刻");
+    Check(fc::ComputePushDeadline(opts, dirty, 0, &deadline),
+          "有本地改动 ⇒ 产生推送截止时刻");
+    Check(deadline == dirty + opts.local_change_debounce_ms,
+          "推送截止时刻 = 改动时刻 + 防抖窗口（5 分钟）");
+    Check(fc::ComputePushDeadline(opts, dirty, dirty + 1000, &deadline),
+          "有本地改动 ⇒ 限流场景下同样产生推送截止时刻");
+    Check(deadline == dirty + 1000 + opts.min_push_interval_ms,
+          "推送截止时刻取 防抖窗口 与 全局间隔 的较大者（15 分钟）");
+    Check(fc::ComputePushDeadline(opts, dirty, 0, nullptr),
+          "输出指针为空 ⇒ 仍可判定（不崩溃）");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// F3 同步引擎：触发优先级与配额/退避用尽（T504）
+// ---------------------------------------------------------------------------
+
+void TestCloudSyncEngineDecide() {
+  std::printf("[F3] T504 同步引擎：触发优先级 / 配额用尽 / 退避用尽\n");
+
+  const fc::CloudSyncEngineOptions opts;
+  const int64_t now = 1000000;  // 固定的「单调钟毫秒」，纯函数判定无抖动
+
+  // 手动同步：优先级最高，且不受每日配额限制。
+  {
+    fc::SyncScheduleInput in;
+    in.now_ms = now;
+    in.manual_requested = true;
+    in.push_count_today = opts.daily_push_limit;  // 已打满
+    in.pull_count_today = opts.daily_pull_limit;  // 已打满
+    Check(fc::DecideNextAction(opts, in) == fc::SyncAction::kRunBoth,
+          "手动触发优先级最高：配额打满也照常推 + 拉");
+  }
+  {
+    fc::SyncScheduleInput in;
+    in.now_ms = now;
+    in.manual_requested = true;
+    in.backoff_step = 2;
+    in.backoff_until_ms = now + 60000;
+    Check(fc::DecideNextAction(opts, in) == fc::SyncAction::kRunBoth,
+          "手动触发压过退避重试");
+  }
+
+  // 退避重试：优先于启动 / 本地脏推 / 定时拉取。
+  {
+    fc::SyncScheduleInput in;
+    in.now_ms = now;
+    in.backoff_step = 1;
+    in.backoff_until_ms = now + 60000;
+    Check(fc::DecideNextAction(opts, in) == fc::SyncAction::kWait,
+          "退避窗口未到 ⇒ 等待");
+  }
+  {
+    fc::SyncScheduleInput in;
+    in.now_ms = now;
+    in.backoff_step = 2;
+    in.backoff_until_ms = now - 1;
+    Check(fc::DecideNextAction(opts, in) == fc::SyncAction::kRunBoth,
+          "退避到期且未用尽 ⇒ 重试（推 + 拉）");
+  }
+  {
+    fc::SyncScheduleInput in;
+    in.now_ms = now;
+    in.backoff_step = opts.max_backoff_attempts;
+    in.backoff_until_ms = now - 1;
+    Check(fc::DecideNextAction(opts, in) == fc::SyncAction::kBackoffExhausted,
+          "退避次数用尽 ⇒ 交回定时触发");
+  }
+
+  // 启动触发：优先于定时拉取，且只拉不推。
+  {
+    fc::SyncScheduleInput in;
+    in.now_ms = now;
+    in.startup_pending = true;
+    in.startup_at_ms = now - 1;
+    in.last_pull_ms = 0;  // 定时拉取尚未到期（now < 0 + 60 分钟）
+    Check(fc::DecideNextAction(opts, in) == fc::SyncAction::kRunPull,
+          "启动触发 ⇒ 只拉不推");
+  }
+
+  // 本地改动推送：优先于定时拉取，且只推不拉。
+  {
+    fc::SyncScheduleInput in;
+    in.now_ms = now;
+    in.dirty_since_ms = 100000;  // 防抖窗口已过
+    in.last_pull_ms = 0;         // 定时拉取尚未到期
+    Check(fc::DecideNextAction(opts, in) == fc::SyncAction::kRunPush,
+          "本地改动到期 ⇒ 只推不拉");
+  }
+
+  // 本地改动 + 定时拉取同时到期 ⇒ 推 + 拉。
+  {
+    fc::SyncScheduleInput in;
+    in.now_ms = 5000000;  // 已超过 60 分钟定时周期
+    in.dirty_since_ms = 100000;
+    in.last_pull_ms = 0;
+    Check(fc::DecideNextAction(opts, in) == fc::SyncAction::kRunBoth,
+          "本地改动与定时拉取同时到期 ⇒ 推 + 拉");
+  }
+
+  // 一切未到期 ⇒ 等待。
+  {
+    fc::SyncScheduleInput in;
+    in.now_ms = now;
+    in.last_pull_ms = now;  // 定时刚跑过
+    Check(fc::DecideNextAction(opts, in) == fc::SyncAction::kWait,
+          "无任何到期 ⇒ 等待");
+  }
+
+  // 每日配额用尽 ⇒ 跳过（不是错误）。
+  {
+    fc::SyncScheduleInput in;
+    in.now_ms = now;
+    in.dirty_since_ms = 100000;
+    in.push_count_today = opts.daily_push_limit;
+    Check(fc::DecideNextAction(opts, in) == fc::SyncAction::kQuotaExceeded,
+          "推送配额用尽 ⇒ 跳过本轮（不是错误）");
+  }
+  {
+    fc::SyncScheduleInput in;
+    in.now_ms = 5000000;
+    in.last_pull_ms = 0;
+    in.pull_count_today = opts.daily_pull_limit;
+    Check(fc::DecideNextAction(opts, in) == fc::SyncAction::kQuotaExceeded,
+          "拉取配额用尽 ⇒ 跳过本轮（不是错误）");
+  }
+  {
+    fc::SyncScheduleInput in;
+    in.now_ms = 5000000;
+    in.dirty_since_ms = 100000;
+    in.push_count_today = opts.daily_push_limit;  // 推没了，拉还有余额
+    Check(fc::DecideNextAction(opts, in) == fc::SyncAction::kRunPull,
+          "推送配额用尽但拉取仍有余额 ⇒ 只拉不推");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// F4 同步引擎：生命周期（假 runner，不触网）（T504）
+// ---------------------------------------------------------------------------
+
+// 假 runner：只计数，不发起任何网络请求（单测不得触网）。
+// 上报 push_requests / pull_requests = 0 ⇒ 每日配额计数不前进，
+// 免得干扰本组断言。
+struct FakeSyncRunner {
+  std::atomic<int> calls{0};
+  std::atomic<int> pull_calls{0};
+  std::atomic<int> push_calls{0};
+
+  fc::CloudSyncEngine::SyncRunner Make() {
+    return [this](fc::SyncDirection dir, fc::CloudSyncRoundResult* out) {
+      calls.fetch_add(1);
+      if (dir == fc::SyncDirection::kPullOnly ||
+          dir == fc::SyncDirection::kBoth)
+        pull_calls.fetch_add(1);
+      if (dir == fc::SyncDirection::kPushOnly ||
+          dir == fc::SyncDirection::kBoth)
+        push_calls.fetch_add(1);
+      if (out != nullptr) {
+        out->ok = true;
+        out->push_requests = 0;
+        out->pull_requests = 0;
+        out->message = "假 runner 完成。";
+      }
+      return true;
+    };
+  }
+};
+
+// 轮询等待条件成立（引擎跑在后台线程里，单测不 sleep 死等）。
+template <typename Pred>
+bool WaitFor(Pred pred, int timeout_ms) {
+  const int kStepMs = 10;
+  for (int waited = 0; waited <= timeout_ms; waited += kStepMs) {
+    if (pred())
+      return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(kStepMs));
+  }
+  return pred();
+}
+
+void TestCloudSyncEngineRuntime() {
+  std::printf(
+      "[F4] T504 同步引擎：启动 / 手动触发 / 停止（假 runner，不触网）\n");
+
+  fc::CloudSyncEngineOptions opts;
+  opts.startup_delay_ms = 0;  // 启动即拉一次
+
+  // runner 为空 ⇒ 启动失败。
+  {
+    fc::CloudSyncEngine engine;
+    Check(!engine.Start(fc::CloudSyncEngine::SyncRunner(), opts),
+          "runner 为空 ⇒ Start 失败");
+    Check(!engine.running(), "Start 失败后不进入运行态");
+  }
+
+  // 未启动 ⇒ runner 一次都不执行。
+  {
+    FakeSyncRunner fake;
+    fc::CloudSyncEngine engine;
+    engine.NotifyLocalChange();
+    engine.RequestManualSync();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    Check(fake.calls.load() == 0, "未启动 ⇒ runner 一次都不执行");
+    Check(!engine.running(), "未启动 ⇒ running() 为假");
+    Check(!engine.enabled(), "未启动 ⇒ enabled() 为假");
+  }
+
+  // 启动 ⇒ 立即执行一轮（启动拉取）。
+  {
+    FakeSyncRunner fake;
+    fc::CloudSyncEngine engine;
+    Check(engine.Start(fake.Make(), opts), "首次 Start 成功");
+    Check(!engine.Start(fake.Make(), opts), "重复 Start 失败（已在运行）");
+    Check(engine.running(), "启动后 running() 为真");
+    Check(engine.enabled(), "启动后 enabled() 为真");
+    Check(WaitFor([&fake]() { return fake.calls.load() >= 1; }, 3000),
+          "启动后 runner 被调用（启动拉取）");
+    Check(fake.pull_calls.load() == 1 && fake.push_calls.load() == 0,
+          "启动拉取只拉不推");
+
+    // 手动同步 ⇒ 额外执行一轮（推 + 拉）。
+    const int before_manual = fake.calls.load();
+    engine.RequestManualSync();
+    Check(WaitFor(
+              [&fake, before_manual]() {
+                return fake.calls.load() >= before_manual + 1;
+              },
+              3000),
+          "RequestManualSync 触发一次额外执行");
+    Check(WaitFor(
+              [&engine]() {
+                return engine.status().last_trigger == fc::SyncTrigger::kManual;
+              },
+              3000),
+          "手动同步被引擎记为手动触发");
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    Check(fake.calls.load() == before_manual + 1,
+          "手动同步只额外执行一轮（不会连发）");
+    Check(fake.push_calls.load() >= 1, "手动同步包含推送方向");
+
+    // 状态快照
+    const fc::CloudSyncStatus st = engine.status();
+    Check(st.ever_synced, "同步过后 ever_synced 为真");
+    Check(st.last_outcome == fc::SyncOutcome::kSuccess,
+          "同步成功后 last_outcome = kSuccess");
+    Check(st.last_trigger == fc::SyncTrigger::kManual,
+          "手动同步后 last_trigger = kManual");
+    Check(st.last_message == "假 runner 完成。", "状态里保留中文说明");
+
+    // 停止 ⇒ 不再执行。
+    engine.Stop();
+    Check(!engine.running(), "停止后 running() 为假");
+    const int after_stop = fake.calls.load();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    Check(fake.calls.load() == after_stop, "停止后不再执行任何同步轮次");
+    engine.Stop();
+    Check(!engine.running(), "Stop 可重复调用（再次停止仍安全）");
+  }
+
+  // 关闭同步 ⇒ 不发起任何轮次。
+  {
+    FakeSyncRunner fake;
+    fc::CloudSyncEngine engine;
+    engine.Start(fake.Make(), opts);
+    WaitFor([&fake]() { return fake.calls.load() >= 1; }, 3000);
+    const int before = fake.calls.load();
+    engine.SetEnabled(false);
+    Check(!engine.enabled(), "SetEnabled(false) ⇒ enabled() 为假");
+    engine.RequestManualSync();
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    Check(fake.calls.load() == before, "关闭同步后不再发起任何轮次");
+    engine.SetEnabled(true);
+    Check(engine.enabled(), "SetEnabled(true) ⇒ enabled() 为真");
+    engine.Stop();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -1836,6 +2330,12 @@ int main() {
   TestCloudAccountMock();
   TestCloudSyncPure();
   TestCloudUserDictIo();
+
+  // spec 100 阶段 F（T501/T504 同步引擎）
+  TestCloudSyncEngineBackoffAndQuota();
+  TestCloudSyncEngineDayAndDeadline();
+  TestCloudSyncEngineDecide();
+  TestCloudSyncEngineRuntime();
 
   std::printf("\nRESULT: PASS=%d FAIL=%d\n", g_pass, g_fail);
   if (g_fail == 0) {

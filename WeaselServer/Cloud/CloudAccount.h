@@ -95,6 +95,31 @@ class CloudAccountService {
              const std::string& password,
              std::string* err);
 
+  // 注册：派生密钥 → POST /v1/auth/register
+  //   { email, auth_key, device:{id,name} }
+  //   → { account_id, salt, kdf:{algo,iters}, need_email_verify }
+  // 成功只代表服务端已建号并生成了邮箱验证码：**不落凭据、不改登录状态**
+  // （必须再 VerifyEmail + Login 才能拿到令牌）。out_account_id 可为 nullptr。
+  bool Register(const std::string& email,
+                const std::string& password,
+                std::string* out_account_id,
+                std::string* err);
+
+  // 邮箱验证：POST /v1/auth/verify { email, code } → { ok: true }。
+  // 服务端只接受 6 位数字验证码（auth.ts handleVerify 的正则），
+  // 非法格式在本地就拒掉、不发请求。本方法不改状态机。
+  bool VerifyEmail(const std::string& email,
+                   const std::string& code,
+                   std::string* err);
+
+  // 重新发送邮箱验证码：POST /v1/auth/resend { email } → { ok: true }。
+  // 服务端行为（真相源 cloud/fluxing-sync/src/auth.ts handleResend）：
+  //   404 email_not_found      —— 邮箱从未注册过
+  //   409 email_already_verified —— 邮箱已验证，无需再发
+  //   429 verify_too_frequent  —— 60 秒内重复发送
+  // 本方法不改状态机（重发不落凭据、不改登录态）；失败原因写进 err（中文）。
+  bool ResendVerification(const std::string& email, std::string* err);
+
   // 退出登录：清掉本机凭据，state = kLoggedOut。
   bool Logout(std::string* err);
 

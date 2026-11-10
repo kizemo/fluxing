@@ -1,16 +1,18 @@
 #pragma once
 //
 // spec 100 阶段 D · T304 同步编排（推 / 拉 / 合并 / HLC 嵌套输出）
+// spec 100 阶段 F · T502/T503 收敛修复（只推变化条目 + 游标修复 + 分批）
 //
 // 端点（真相源：cloud/fluxing-sync/src/index.ts + sync.ts）：
 //   POST /v1/sync/push   { items: [ { item_key, type, hlc:{ms,counter,device},
 //                                      nonce, cipher } ] }
-//                        → { accepted: [item_key...], server_seq }
+//                        → { accepted: [item_key...], skipped: [item_key...],
+//                            server_seq }
 //   GET  /v1/sync/pull?since=<n>&limit=<n>
 //                        → { items: [ { item_key, type,
 //                        hlc:{ms,counter,device},
 //                                      nonce, cipher, server_seq } ],
-//                            server_seq }
+//                            server_seq, next_cursor, has_more }
 //
 // **HLC 只以嵌套形态 {ms,counter,device} 出现**（tasks.md T304 的硬要求）：
 //   · 本模块的 BuildPushBody 只写 "hlc":{...}，不写扁平的 hlc_ms/hlc_counter；
@@ -19,6 +21,14 @@
 //
 // 冲突合并：本地条目与远端条目都带 HLC，逐条目按 HLC 大者取胜
 //   （复用 include/FluxingCloudEnvelope.h 的 MergeEntries）。
+//
+// ★ 阶段 F 的收敛约定（T502 / T503）：
+//   · **只推「本地改动过」的条目**（sidecar 里的载荷哈希变了才算改动）；
+//   · 远端胜出的条目**不回推** —— 服务端已经握着它；
+//   · 服务端 push 侧还有 HLC 守卫（存储版本 ≥ 入参版本 ⇒ 跳过），
+//     因此客户端回传也不会把服务端版本推回旧版；
+//   · 推请求按条目分批（单批 kPushBatchSize 条），拉请求按页分批
+//     （单页 100 条，单轮最多 kMaxPullPages 页），超出部分下一轮继续。
 //
 // PCH 注意：包含本头的 .cpp 必须是 `PrecompiledHeader=NotUsing` 且自带
 //   `#define NOMINMAX`（原因见 CloudJson.h 顶部注释）。
@@ -34,6 +44,7 @@
 #include "../../include/FluxingCloudEnvelope.h"
 
 #include "CloudJson.h"
+#include "CloudSyncEngine.h"
 #include "CloudUserDictIo.h"
 
 namespace fluxing {
@@ -68,10 +79,16 @@ bool HlcFromJson(const json::JsonDocument& doc, int node_index, Hlc* out);
 std::string BuildPushBody(const std::vector<CloudSyncItem>& items);
 
 // 解析拉取响应。失败 ⇒ false + err 中文原因。
+//
+// ★ server_seq 的语义（阶段 F 修复点）：
+//   字段缺失时**保留调用方传入的值**，不再写 0 —— 写 0 会让游标永不前进，
+//   每轮重复拉取同一批条目，直接冲击每日 50 次拉取配额。
+//   条目自带的 server_seq 也会参与推进（取最大值，只增不减）。
 bool ParsePullResponse(const std::string& body,
                        std::vector<CloudSyncItem>* out,
                        int64_t* server_seq,
-                       std::string* err);
+                       std::string* err,
+                       bool* has_more = nullptr);
 
 // 本地条目 → 待推送条目（逐条 AES-256-GCM 信封加密，AAD 用 5 字段 BuildAad）。
 bool SealEntries(const std::vector<Entry>& entries,
@@ -121,11 +138,13 @@ class CloudSyncService {
             std::string* err);
 
   // 拉取。since 是上次已处理的服务端序号。
+  // has_more 输出「服务端还有更多条目」（用于分批）。
   bool Pull(int64_t since,
             int64_t limit,
             std::vector<CloudSyncItem>* out,
             int64_t* new_server_seq,
-            std::string* err);
+            std::string* err,
+            bool* has_more = nullptr);
 
   const std::string& access_token() const { return access_token_; }
 
@@ -144,10 +163,16 @@ class CloudSyncService {
 // ---------------------------------------------------------------------------
 // 端到端编排（后台线程调用）
 // ---------------------------------------------------------------------------
-
-// 一轮同步：
-//   导出本地词典 → 给每行分配 / 复用 HLC → 加密推送 → 拉远端 →
-//   解密 → MergeEntries 合并 → 有变化才回写本地 → 记录序号。
+//
+// 一轮同步（阶段 F 之后的顺序）：
+//   1) 导出本地词典 → 给每行分配 / 复用 HLC（sidecar 哈希变了 ⇒ 新的 HLC，
+//      并标记为「本地改动」）；
+//   2) 拉远端（按页分批，游标只增不减）；
+//   3) 合并（MergeEntries：同键 HLC 大者胜）；
+//   4) 把合并结果回写本地（远端带来的新词 / 更新过的词条）；
+//   5) 推送「本地改动过、且合并后仍是本地版本」的条目（分批）；
+//   6) 更新 sidecar（只把「已同步」的条目标记为已同步；没推成功的保留
+//      旧行，下一轮继续推）。
 //
 // 本地 HLC 存放在 sidecar 文件里（明文，不含任何密钥）：
 //   第一行：#fluxing-cloud-sync-v1
@@ -165,7 +190,19 @@ class CloudSyncCoordinator {
                        std::string hlc_sidecar_path);
   ~CloudSyncCoordinator();
 
+  // 推 + 拉一轮（旧接口，保留兼容）。
   bool SyncOnce(std::string* err);
+
+  // 一轮同步（可指定方向）。result 回报本轮实际发出的请求数与条目数。
+  bool SyncOnce(SyncDirection direction,
+                CloudSyncRoundResult* result,
+                std::string* err);
+
+  // 清空本地同步状态（sidecar 里的行与游标）：下次同步会把全部本地条目
+  // 当作「新增」重新推上去。
+  // 用户点「清空云端数据」后**必须**调用 —— 否则云端已清空、本地 sidecar
+  // 仍标记「已同步」，本地词典再也传不上去。
+  bool ResetLocalSyncState(std::string* err);
 
   int64_t last_server_seq() const { return last_server_seq_; }
   const std::string& device_id() const { return device_id_; }

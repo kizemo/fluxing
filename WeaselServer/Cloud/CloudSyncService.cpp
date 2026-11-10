@@ -179,7 +179,8 @@ std::string BuildPushBody(const std::vector<CloudSyncItem>& items) {
 bool ParsePullResponse(const std::string& body,
                        std::vector<CloudSyncItem>* out,
                        int64_t* server_seq,
-                       std::string* err) {
+                       std::string* err,
+                       bool* has_more) {
   if (out == nullptr) {
     if (err)
       *err = "内部错误：拉取结果输出为空。";
@@ -201,10 +202,17 @@ bool ParsePullResponse(const std::string& body,
     return false;
   }
 
-  int64_t seq = 0;
-  json::MemberInt64(doc, doc.root, "server_seq", &seq);
-  if (server_seq)
-    *server_seq = seq;
+  // ★ 顶层 server_seq 缺失时**保留调用方传入的值**（旧实现无条件写 0）：
+  //   写 0 会让游标永不前进 ⇒ 每轮重复拉取同一批条目 ⇒ 直接冲击每日
+  //   50 次拉取配额。条目自带的 server_seq 更可靠，一并参与推进。
+  int64_t top_seq = 0;
+  const bool has_top_seq =
+      json::MemberInt64(doc, doc.root, "server_seq", &top_seq);
+  if (has_more != nullptr)
+    json::MemberBool(doc, doc.root, "has_more", has_more);
+
+  int64_t max_item_seq = 0;
+  bool has_item_seq = false;
 
   const json::JsonNode* items = json::Member(doc, doc.root, "items");
   const int items_index = NodeIndex(doc, items);
@@ -245,8 +253,23 @@ bool ParsePullResponse(const std::string& body,
         *err = "服务器返回的条目缺少 nonce 或 cipher。";
       return false;
     }
-    json::MemberInt64(doc, index, "server_seq", &item.server_seq);
+    if (json::MemberInt64(doc, index, "server_seq", &item.server_seq)) {
+      has_item_seq = true;
+      if (item.server_seq > max_item_seq)
+        max_item_seq = item.server_seq;
+    }
     out->push_back(item);
+  }
+
+  // 游标推进：条目自带的 server_seq 更可靠（顶层字段可能缺失）。
+  // 只增不减 —— 绝不把调用方已经推进过的游标退回去。
+  if (server_seq != nullptr) {
+    if (has_item_seq) {
+      if (max_item_seq > *server_seq)
+        *server_seq = max_item_seq;
+    } else if (has_top_seq && top_seq > *server_seq) {
+      *server_seq = top_seq;
+    }
   }
   return true;
 }
@@ -486,7 +509,8 @@ bool CloudSyncService::Pull(int64_t since,
                             int64_t limit,
                             std::vector<CloudSyncItem>* out,
                             int64_t* new_server_seq,
-                            std::string* err) {
+                            std::string* err,
+                            bool* has_more) {
   if (out == nullptr) {
     if (err)
       *err = "内部错误：拉取结果输出为空。";
@@ -505,7 +529,7 @@ bool CloudSyncService::Pull(int64_t since,
       *err = send_err.empty() ? "拉取失败。" : send_err;
     return false;
   }
-  return ParsePullResponse(response, out, new_server_seq, err);
+  return ParsePullResponse(response, out, new_server_seq, err, has_more);
 }
 
 // ---------------------------------------------------------------------------
@@ -590,15 +614,74 @@ bool CloudSyncCoordinator::SaveSidecar(std::string* err) {
   return true;
 }
 
+namespace {
+
+// 在条目表里找 key 的下标（找不到返回 static_cast<size_t>(-1)）。
+size_t FindEntryIndex(const std::vector<Entry>& entries,
+                      const std::string& key) {
+  for (size_t i = 0; i < entries.size(); ++i) {
+    if (entries[i].key == key)
+      return i;
+  }
+  return static_cast<size_t>(-1);
+}
+
+// 在 sidecar 行里找 key。
+const CloudSidecarRow* FindSidecarRow(const std::vector<CloudSidecarRow>& rows,
+                                      const std::string& key) {
+  for (size_t i = 0; i < rows.size(); ++i) {
+    if (rows[i].item_key == key)
+      return &rows[i];
+  }
+  return nullptr;
+}
+
+// 远端版本是否在合并里胜出。规则与 MergeEntries 一致：
+// 先比 HLC（ms → counter → device），HLC 完全相同时比 payload 字典序。
+bool RemoteWins(const Entry& remote, const Entry& local) {
+  const int c = CompareHlc(remote.hlc, local.hlc);
+  if (c != 0)
+    return c > 0;
+  return remote.payload > local.payload;
+}
+
+// 单次推送的条目上限（分批，避免超大请求）。
+constexpr size_t kPushBatchSize = 200;
+// 单次拉取的条目上限（服务端 MAX_PULL_LIMIT = 100）。
+constexpr int64_t kPullPageLimit = 100;
+// 单轮最多拉取的页数（超出部分留到下一轮，状态里说明「还有更多」）。
+constexpr int kMaxPullPages = 10;
+
+}  // namespace
+
 bool CloudSyncCoordinator::SyncOnce(std::string* err) {
+  CloudSyncRoundResult result;
+  return SyncOnce(SyncDirection::kBoth, &result, err);
+}
+
+bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
+                                    CloudSyncRoundResult* result,
+                                    std::string* err) {
+  CloudSyncRoundResult local_result;
+  CloudSyncRoundResult* out = result != nullptr ? result : &local_result;
+  out->ok = false;
+  out->push_requests = 0;
+  out->pull_requests = 0;
+  out->items_pushed = 0;
+  out->items_pulled = 0;
+  out->has_more = false;
+  out->message.clear();
+
   if (transport_ == nullptr || backend_ == nullptr) {
     if (err)
       *err = "云端服务尚未初始化。";
+    out->message = "云端服务尚未初始化。";
     return false;
   }
   if (access_token_.empty()) {
     if (err)
       *err = "尚未登录，无法同步。";
+    out->message = "尚未登录，无法同步。";
     return false;
   }
 
@@ -608,8 +691,11 @@ bool CloudSyncCoordinator::SyncOnce(std::string* err) {
   // 维护模式：锁住用户库（否则 leveldb LOCK 失败）。
   std::string begin_err;
   if (!backend_->BeginMaintenance(&begin_err)) {
+    const std::string reason =
+        begin_err.empty() ? "无法进入用户词典维护模式。" : begin_err;
     if (err)
-      *err = begin_err.empty() ? "无法进入用户词典维护模式。" : begin_err;
+      *err = reason;
+    out->message = reason;
     return false;
   }
 
@@ -617,8 +703,11 @@ bool CloudSyncCoordinator::SyncOnce(std::string* err) {
   std::string export_err;
   if (!backend_->ExportUserDict(&text, &export_err)) {
     backend_->EndMaintenance(&ignored);
+    const std::string reason =
+        export_err.empty() ? "导出用户词典失败。" : export_err;
     if (err)
-      *err = export_err.empty() ? "导出用户词典失败。" : export_err;
+      *err = reason;
+    out->message = reason;
     return false;
   }
 
@@ -628,6 +717,7 @@ bool CloudSyncCoordinator::SyncOnce(std::string* err) {
     backend_->EndMaintenance(&ignored);
     if (err)
       *err = parse_err;
+    out->message = parse_err;
     return false;
   }
 
@@ -643,23 +733,18 @@ bool CloudSyncCoordinator::SyncOnce(std::string* err) {
     backend_->EndMaintenance(&ignored);
     if (err)
       *err = parse_err;
+    out->message = parse_err;
     return false;
   }
 
-  // 给每行分配 / 复用 HLC：sidecar 里哈希没变 ⇒ 沿用旧 HLC；
-  // 变了 ⇒ 分配新的（本地改动比远端新）。
+  // 给每行分配 / 复用 HLC：sidecar 里哈希没变 ⇒ 沿用旧 HLC（本地没改过）；
+  // 变了 ⇒ 分配新的（本地改动比远端新），并标记为「待推送」。
   const uint64_t now_ms = UnixTimeMs();
-  std::vector<CloudSidecarRow> new_rows;
+  std::vector<bool> locally_modified(local_entries.size(), false);
   for (size_t i = 0; i < local_entries.size(); ++i) {
     Entry& entry = local_entries[i];
     const std::string hash = Sha256Hex(entry.payload);
-    const CloudSidecarRow* known = nullptr;
-    for (size_t k = 0; k < sidecar_rows_.size(); ++k) {
-      if (sidecar_rows_[k].item_key == entry.key) {
-        known = &sidecar_rows_[k];
-        break;
-      }
-    }
+    const CloudSidecarRow* known = FindSidecarRow(sidecar_rows_, entry.key);
     if (known != nullptr && known->payload_hash == hash) {
       entry.hlc.ms = known->ms;
       entry.hlc.counter = known->counter;
@@ -667,111 +752,255 @@ bool CloudSyncCoordinator::SyncOnce(std::string* err) {
       HlcObserve(&clock_, entry.hlc);
     } else {
       entry.hlc = HlcTick(&clock_, now_ms);
+      locally_modified[i] = true;
     }
-    CloudSidecarRow row;
-    row.item_key = entry.key;
-    row.ms = entry.hlc.ms;
-    row.counter = entry.hlc.counter;
-    row.device = entry.hlc.device;
-    row.payload_hash = hash;
-    new_rows.push_back(row);
   }
 
-  // 1) 推送本地条目。
-  CloudSyncService service(transport_, access_token_);
-  std::vector<CloudSyncItem> sealed;
-  std::string seal_err;
-  if (!SealEntries(local_entries, ItemType::kUserDb, enc_key_, &sealed,
-                   &seal_err)) {
-    backend_->EndMaintenance(&ignored);
-    if (err)
-      *err = seal_err;
-    return false;
-  }
-
-  int64_t pushed_seq = last_server_seq_;
-  std::string push_err;
-  if (!sealed.empty() && !service.Push(sealed, &pushed_seq, &push_err)) {
-    backend_->EndMaintenance(&ignored);
-    if (err)
-      *err = push_err.empty() ? "推送失败。" : push_err;
-    return false;
-  }
-
-  // 2) 拉远端条目。
-  std::vector<CloudSyncItem> pulled;
-  int64_t pulled_seq = pushed_seq;
-  std::string pull_err;
-  if (!service.Pull(pushed_seq, 100, &pulled, &pulled_seq, &pull_err)) {
-    backend_->EndMaintenance(&ignored);
-    if (err)
-      *err = pull_err.empty() ? "拉取失败。" : pull_err;
-    return false;
-  }
-
+  // 1) 拉远端条目（按页分批；游标只增不减）。
   std::vector<Entry> remote_entries;
-  if (!OpenItems(pulled, enc_key_, &remote_entries, &seal_err)) {
-    backend_->EndMaintenance(&ignored);
-    if (err)
-      *err = seal_err;
-    return false;
+  int64_t pulled_seq = last_server_seq_;
+  bool has_more = false;
+  if (direction == SyncDirection::kPullOnly ||
+      direction == SyncDirection::kBoth) {
+    CloudSyncService service(transport_, access_token_);
+    int64_t since = last_server_seq_;
+    for (int page = 0; page < kMaxPullPages; ++page) {
+      std::vector<CloudSyncItem> batch;
+      bool page_more = false;
+      int64_t next_seq = since;
+      std::string pull_err;
+      ++out->pull_requests;
+      if (!service.Pull(since, kPullPageLimit, &batch, &next_seq, &pull_err,
+                        &page_more)) {
+        backend_->EndMaintenance(&ignored);
+        const std::string reason = pull_err.empty() ? "拉取失败。" : pull_err;
+        if (err)
+          *err = reason;
+        out->message = reason;
+        return false;
+      }
+      out->items_pulled += static_cast<int>(batch.size());
+      std::vector<Entry> page_entries;
+      if (!OpenItems(batch, enc_key_, &page_entries, &parse_err)) {
+        backend_->EndMaintenance(&ignored);
+        if (err)
+          *err = parse_err;
+        out->message = parse_err;
+        return false;
+      }
+      remote_entries.insert(remote_entries.end(), page_entries.begin(),
+                            page_entries.end());
+      pulled_seq = next_seq;
+      has_more = page_more;
+      if (!page_more)
+        break;
+      if (next_seq <= since) {
+        // 游标没有前进 ⇒ 再拉也是同一批，停手（避免死循环刷配额）。
+        break;
+      }
+      since = next_seq;
+    }
   }
 
-  // 3) 合并 + 回写。
+  // 2) 合并本地与远端（逐条目 HLC 大者取胜）。
   const std::vector<Entry> merged =
       MergeLocalAndRemote(local_entries, remote_entries);
 
-  std::vector<CloudDictEntry> merged_rows;
-  if (!EntriesToDictRows(merged, &merged_rows, &seal_err)) {
-    backend_->EndMaintenance(&ignored);
-    if (err)
-      *err = seal_err;
-    return false;
-  }
-
+  // 3) 回写合并结果（远端带来的新词 / 更新过的词条）。
   bool changed = merged.size() != local_entries.size();
   if (!changed) {
     for (size_t i = 0; i < merged.size(); ++i) {
-      if (!(merged[i] == local_entries[i])) {
+      const size_t index = FindEntryIndex(local_entries, merged[i].key);
+      if (index == static_cast<size_t>(-1) ||
+          local_entries[index].payload != merged[i].payload) {
         changed = true;
         break;
       }
     }
   }
   if (changed) {
-    std::string tsv;
-    if (!BuildUserDictSnapshots(merged_rows, &tsv, &seal_err)) {
+    std::vector<CloudDictEntry> merged_rows;
+    if (!EntriesToDictRows(merged, &merged_rows, &parse_err)) {
       backend_->EndMaintenance(&ignored);
       if (err)
-        *err = seal_err;
+        *err = parse_err;
+      out->message = parse_err;
+      return false;
+    }
+    std::string tsv;
+    if (!BuildUserDictSnapshots(merged_rows, &tsv, &parse_err)) {
+      backend_->EndMaintenance(&ignored);
+      if (err)
+        *err = parse_err;
+      out->message = parse_err;
       return false;
     }
     int imported = 0;
     std::string import_err;
     if (!backend_->ImportUserDict(tsv, &imported, &import_err)) {
       backend_->EndMaintenance(&ignored);
+      const std::string reason =
+          import_err.empty() ? "回写用户词典失败。" : import_err;
       if (err)
-        *err = import_err.empty() ? "回写用户词典失败。" : import_err;
+        *err = reason;
+      out->message = reason;
       return false;
     }
   }
 
-  last_server_seq_ = pulled_seq > pushed_seq ? pulled_seq : pushed_seq;
-  sidecar_rows_ = new_rows;
+  // 4) 推送集合：只推「本地改动过、且合并后仍是本地版本」的条目。
+  //    · 本地没改过 ⇒ 服务端已有的就是同一份，不推（T502：只带变化条目）；
+  //    · 远端版本胜出 ⇒ 服务端已经握着它，不推（避免两端来回乒乓）；
+  //    · 其余（本地改动过 / 远端没有这条）⇒ 必须推。
+  std::vector<size_t> push_indices;  // 本轮要推送的**本地条目下标**
+  std::vector<bool> pushed(local_entries.size(), false);  // 本轮真的推成功的
+  if (direction == SyncDirection::kPushOnly ||
+      direction == SyncDirection::kBoth) {
+    for (size_t i = 0; i < local_entries.size(); ++i) {
+      if (!locally_modified[i])
+        continue;
+      const size_t remote_index =
+          FindEntryIndex(remote_entries, local_entries[i].key);
+      if (remote_index != static_cast<size_t>(-1) &&
+          RemoteWins(remote_entries[remote_index], local_entries[i])) {
+        continue;  // 远端胜出 ⇒ 服务端已有，不回推
+      }
+      push_indices.push_back(i);
+    }
+  }
+
+  // 5) 推送（分批：单批 kPushBatchSize 条）。
+  bool push_ok = true;
+  std::string push_err;
+  if (!push_indices.empty()) {
+    CloudSyncService service(transport_, access_token_);
+    for (size_t offset = 0; offset < push_indices.size();
+         offset += kPushBatchSize) {
+      const size_t rest = push_indices.size() - offset;
+      const size_t count = rest < kPushBatchSize ? rest : kPushBatchSize;
+      std::vector<Entry> chunk;
+      chunk.reserve(count);
+      for (size_t k = offset; k < offset + count; ++k)
+        chunk.push_back(local_entries[push_indices[k]]);
+      std::vector<CloudSyncItem> sealed;
+      std::string seal_err;
+      if (!SealEntries(chunk, ItemType::kUserDb, enc_key_, &sealed,
+                       &seal_err)) {
+        push_ok = false;
+        push_err = seal_err;
+        break;
+      }
+      int64_t pushed_seq = last_server_seq_;
+      ++out->push_requests;
+      if (!service.Push(sealed, &pushed_seq, &push_err)) {
+        push_ok = false;
+        break;
+      }
+      out->items_pushed += static_cast<int>(count);
+      // 只有**真的推上去**的条目才算「已同步」。
+      for (size_t k = offset; k < offset + count; ++k)
+        pushed[push_indices[k]] = true;
+      if (pushed_seq > last_server_seq_)
+        last_server_seq_ = pushed_seq;
+    }
+  }
+
+  // 6) 更新 sidecar：只把「已同步」的条目标记成已同步。
+  //    没推成功的条目保留旧行 ⇒ 下一轮仍被识别为「本地改动」并重推。
+  std::vector<CloudSidecarRow> rows;
+  for (size_t i = 0; i < merged.size(); ++i) {
+    const Entry& entry = merged[i];
+    const size_t local_index = FindEntryIndex(local_entries, entry.key);
+    const size_t remote_index = FindEntryIndex(remote_entries, entry.key);
+    bool synced = false;
+    if (remote_index != static_cast<size_t>(-1) &&
+        (local_index == static_cast<size_t>(-1) ||
+         RemoteWins(remote_entries[remote_index],
+                    local_entries[local_index]))) {
+      synced = true;  // 远端胜出 ⇒ 服务端已经握着它
+    }
+    if (!synced && local_index != static_cast<size_t>(-1) &&
+        pushed[local_index]) {
+      // 本地改动过、且合并后仍是本地版本、且**本轮真的推成功了** ⇒ 已同步。
+      // ★ 不能只看 locally_modified：只拉不推的轮次（启动轮）里本地改动
+      //   从未上传，若此时就标记成「已同步」，这条改动永远再也推不上去。
+      synced = true;
+    }
+    if (synced) {
+      CloudSidecarRow row;
+      row.item_key = entry.key;
+      row.ms = entry.hlc.ms;
+      row.counter = entry.hlc.counter;
+      row.device = entry.hlc.device;
+      row.payload_hash = Sha256Hex(entry.payload);
+      rows.push_back(row);
+    } else {
+      const CloudSidecarRow* old = FindSidecarRow(sidecar_rows_, entry.key);
+      if (old != nullptr)
+        rows.push_back(*old);
+    }
+  }
+
+  // 7) 落盘 sidecar（含游标）。
+  if (pulled_seq > last_server_seq_)
+    last_server_seq_ = pulled_seq;
+  sidecar_rows_ = rows;
   std::string save_err;
   if (!SaveSidecar(&save_err)) {
     backend_->EndMaintenance(&ignored);
     if (err)
       *err = save_err;
+    out->message = save_err;
     return false;
   }
 
   std::string end_err;
   if (!backend_->EndMaintenance(&end_err)) {
+    const std::string reason =
+        end_err.empty() ? "退出用户词典维护模式失败。" : end_err;
     if (err)
-      *err = end_err.empty() ? "退出用户词典维护模式失败。" : end_err;
+      *err = reason;
+    out->message = reason;
     return false;
   }
+
+  if (!push_ok) {
+    const std::string reason = push_err.empty() ? "推送失败。" : push_err;
+    if (err)
+      *err = reason;
+    out->message = reason;
+    return false;
+  }
+
+  out->ok = true;
+  out->has_more = has_more;
+  std::string message = "同步完成：推送 ";
+  message += std::to_string(out->items_pushed);
+  message += " 条，拉取 ";
+  message += std::to_string(out->items_pulled);
+  message += " 条";
+  if (has_more)
+    message += "（云端还有更多条目，下次同步继续）";
+  message += "。";
+  out->message = message;
+  return true;
+}
+
+bool CloudSyncCoordinator::ResetLocalSyncState(std::string* err) {
+  sidecar_rows_.clear();
+  last_server_seq_ = 0;
+  if (sidecar_path_.empty())
+    return true;
+  // 用「只有版本行 + 游标归零」覆盖 sidecar，而不是删文件 ——
+  // 路径可能含非 ASCII 字符，Win32 的 ANSI 版 API 会踩坑。
+  std::ofstream out(sidecar_path_.c_str(), std::ios::binary | std::ios::trunc);
+  if (!out) {
+    if (err)
+      *err = "无法重置同步状态文件：" + sidecar_path_;
+    return false;
+  }
+  out << "#fluxing-cloud-sync-v1\n";
+  out << "seq\t0\n";
   return true;
 }
 
