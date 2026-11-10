@@ -2,6 +2,14 @@
 
 > 配套 `spec.md`（用户视角）与 `tasks.md`（执行序）。技术选型、协议、算法、变更面、风险全在本文。
 > **取代** spec `010-cloud-sync` 的技术结论（后端选型 / 客户端依赖库 / 认证方案三项均已变）。
+>
+> **修订记录**
+>
+> | 日期 | 修订范围 | 依据 |
+> |---|---|---|
+> | 2026-11-11 | §3.1 密钥派生（CNG → 自实现 PBKDF2/HKDF + salt 策略）· §4.4 邮箱验证码（$0 路线）· §5 模块与线程模型（落地为 18 个文件 + 快照通道）· §6.1 线上契约补充 · §6.2 D1 表（7 表 + D1–D6）· §9 变更面 · §13 验证策略 | 阶段 D 实施结果；ADR 0054；handoff 批次 AA / AB |
+>
+> **本次修订的授权**：用户 2026-11-11 拍板「`plan.md` / `tasks.md` 是否按实现回写 6 处偏差」→ **回写**。本文件自此与代码同源。
 
 ---
 
@@ -48,17 +56,25 @@
 
 ## 3. 认证（用户拍板：邮箱 + 密码，客户端输入）
 
-### 3.1 密钥派生（客户端本地，PBKDF2-HMAC-SHA256 via CNG）
+### 3.1 密钥派生（客户端本地，PBKDF2-HMAC-SHA256 → HKDF-SHA256）
+
+> **2026-11-11 修订（ADR 0054）**：原式写「via CNG」，实做**自实现** PBKDF2 / HKDF —— CNG 的
+> `BCryptDeriveKeyPBKDF2` **默认 PRF = SHA-1**（不显式指定就是 SHA-1，与 WebCrypto 的
+> PBKDF2-HMAC-SHA256 不对齐），且 CNG **没有** HKDF 的 extract-then-expand 语义。
+> **AES-256-GCM 仍走 CNG**（复用 `include/FluxingCloudEnvelope.h` 的 `crypto::AesGcmSeal/Open`）。
 
 ```
 salt        = SHA256("fluxing-enc-v1|" + lower(email))        // 定值、可由客户端自算
-master      = PBKDF2-HMAC-SHA256(password, salt, iters=600000) // CNG: BCryptDeriveKeyPBKDF2
-auth_key    = HKDF-SHA256(master, info="fluxing-auth-v1")     // 登录凭证
-enc_key     = HKDF-SHA256(master, info="fluxing-enc-v1")      // 同步加密密钥
+master      = PBKDF2-HMAC-SHA256(password, salt, iters=600000) // 32 B，PRF = HMAC-SHA256
+auth_key    = HKDF-SHA256(master, info="fluxing-auth-v1")     // 32 B，登录凭证
+enc_key     = HKDF-SHA256(master, info="fluxing-enc-v1")      // 32 B，同步加密密钥
 ```
 
-- `iters=600000` 依据 OWASP 对 PBKDF2-HMAC-SHA256 的现行建议；**必须在后台线程跑**（老 CPU 上 600k 次约 0.3–1.5 s，绝不能放在 UI 线程）。
-- **为什么不用 Argon2id**：仓库无第三方依赖政策下不引入密码学库，自己实现 Argon2 属于「自己造轮子」，风险高于收益。代价是抗 GPU 弱于 Argon2id —— 用迭代次数 + 口令强度要求 + 可选独立「同步口令」补偿（见 §3.4）。
+- HKDF 细节：salt = **32 字节全零**、输出**单块 32 字节**（`PRK = HMAC(zeros32, ikm)`；`OKM = HMAC(PRK, info || 0x01)`）。
+- **salt 策略（ADR 0054）**：服务端**从不用 salt 做校验**（只比 `HMAC(pepper, auth_key)`），而客户端必须在登录**之前**算出 `auth_key` ⇒ 拿不到服务端随机 salt ⇒ salt 只能是**按邮箱确定性派生**的。服务端响应里的 `salt` 字段只作**诊断记录**，不参与派生。
+- **salt 不是熵**：它只提供域分离（防同一密钥跨用途复用），口令强度仍是唯一防线（见 §3.4）。
+- `iters=600000` 依据 OWASP 对 PBKDF2-HMAC-SHA256 的现行建议；**必须在后台线程跑**（绝不能放在 UI 线程）。
+- **为什么不用 Argon2id**：仓库无第三方依赖政策下不引入密码学库；PBKDF2 / HKDF 是**标准化原语**（RFC 8018 / RFC 5869），可用**官方向量**钉死，而 Argon2id 无官方向量、参数结构复杂 ⇒ 自己实现的风险显著更高。代价是抗 GPU 弱于 Argon2id —— 用迭代次数 + 口令强度要求 + 可选独立「同步口令」补偿（见 §3.4）。
 - **为什么不用 PAKE（OPAQUE/SRP）**：客户端要实现一套密码学协议，同样违反 NFR-004，且实现风险远大于收益。取舍记录在 ADR 0039。
 
 ### 3.2 服务端看到什么
@@ -123,25 +139,34 @@ cipher   : base64   // AES-256-GCM(master=enc_key, nonce, aad=item_key||type||hl
 - 词库条目的「键」与「词频如何合并」**不得凭推测**：先做取证（`tasks.md` T102）坐实导出 / 导入语义后再定实现（风险 R1）。
 - 收敛性判据：任何一轮 push/pull 之后，两端条目集与取值必相同（AC-08 / AC-09）。
 
-### 4.4 邮箱验证码
+### 4.4 邮箱验证码（**2026-11-11 用户拍板：$0**）
 
-首版**必须**验证邮箱归属（否则任何人都能抢注他人邮箱）。验证码通道二选一，实施前定：
-- Cloudflare 侧的事务性邮件能力（视其可用性与配额）；
-- 外部事务性邮件服务（按量计费）。
-未验证前的兜底：注册流程置 `pending`，**未验证账号不得写入同步数据**（只允许登录后待验证）。
+首版**必须**验证邮箱归属（否则任何人都能抢注他人邮箱）。
+
+**决策：走 $0 路线，不采购 Workers Paid。**
+
+- 开发 / 内测：`MAIL_MODE="outbox"` —— 验证码只写 `mail_outbox` 表、**不发信**（服务端已实现，`src/mail.ts`）。
+- 上线前：切到**第三方 HTTPS 邮件 API**（Workers Free 允许出站 `fetch`）—— 这**打破** T101「同厂商、不接第三方」的自定边界，代价 = 多一个第三方账号 + 一把 API key 的托管面；该第三方服务的免费额度与条款**尚未核价**（见 `docs/research/fluxing-cloud-2026-11/free-tier-verdict.md` 未取证清单）。
+- **不选** Cloudflare Email Service：官方原文「Arbitrary-recipient sending requires Workers Paid」⇒ **账号级最低消费 $5/月**，与「$0」目标直接冲突。
+
+**协议面不变**：服务端只**收**验证码结果、不参与发信 ⇒ 换发信通道**不改客户端协议**（T304 消费的 login 响应 `email_verified` 语义不变）。
+
+未验证前的兜底不变：注册流程置 `pending`，**未验证账号不得写入同步数据**（服务端对 `push` 返回 403 `email_not_verified`）。
 
 ## 5. 客户端模块与线程模型
 
 | 模块 | 落点 | 职责 |
 |---|---|---|
 | `include/FluxingCloudEnvelope.h` | 头文件、纯逻辑、`inline` | 信封编解码、base64、HLC 比较与自增、条目合并算法、版本序列化 —— **生产与单测同源**（宪法 R7） |
-| `WeaselServer/Cloud/CloudCrypto.{h,cpp}` | CNG | PBKDF2 / HKDF / AES-GCM；口令缓冲清零 |
-| `WeaselServer/Cloud/CloudTransport.{h,cpp}` | WinHTTP | 抽象成 `ICloudTransport`（可 mock）；超时、重试退避、代理自动探测 |
-| `WeaselServer/Cloud/CloudCredentialStore.{h,cpp}` | Credential Manager | 存 refresh token 与 `enc_key` |
-| `WeaselServer/Cloud/CloudAccount.{h,cpp}` | HTTP | 注册 / 登录 / 续期 / 登出 / 设备列表 / 清空云端 |
-| `WeaselServer/Cloud/CloudSyncEngine.{h,cpp}` | 后台线程 | 调度（启动拉、变更延迟推、定时拉、立即同步）、push / pull、合并、回传 |
-| `WeaselServer/Cloud/CloudUserDictIo.{h,cpp}` | librime | 词库导出 / 导入 + 与引擎的互斥协调（见 §5.2） |
-| `WeaselServer/Cloud/CloudAccountDialog.{h,cpp}` | WTL | 账号页：注册 / 登录 / 登出 / 设备列表 / 同步状态 / 清空云端 |
+| `WeaselServer/Cloud/CloudJson.{h,cpp}` | 自包含严格 JSON | 请求体拼装（`json::Quote`）与响应解析；不引第三方 JSON 库 |
+| `WeaselServer/Cloud/CloudCrypto.{h,cpp}` | **自实现 SHA-256 / HMAC / PBKDF2 / HKDF**（AES-GCM 走信封头的 CNG） | 派生 `auth_key` / `enc_key`；口令缓冲清零（ADR 0054） |
+| `WeaselServer/Cloud/CloudTransport.{h,cpp}` | WinHTTP | 抽象成 `ICloudTransport`（可 mock）；超时、重试退避、代理自动探测；证书校验不关 |
+| `WeaselServer/Cloud/CloudCredentialStore.{h,cpp}` | Credential Manager | 存 refresh token 与 `enc_key`；读失败 ⇒ 视为未登录 |
+| `WeaselServer/Cloud/CloudAccount.{h,cpp}` | HTTP | 注册 / 登录 / 续期 / 登出 / 设备列表 / 清空云端；消费 `email_verified` |
+| `WeaselServer/Cloud/CloudSyncService.{h,cpp}` | 纯逻辑 + 编排 | push / pull 信封封装（5 字段 AAD）、条目合并（复用 `MergeEntries`）、本地 HLC sidecar |
+| `WeaselServer/Cloud/CloudSyncEngine.{h,cpp}` | 后台线程（**阶段 F**） | 调度（启动拉、变更延迟推、定时拉、立即同步）—— **阶段 D 未落地** |
+| `WeaselServer/Cloud/CloudUserDictIo.{h,cpp}` | librime | 词库快照解析 / 生成 + 与引擎的互斥协调（见 §5.2） |
+| `WeaselServer/Cloud/CloudAccountDialog.{h,cpp}` | **普通 Win32 modeless 窗口**（与 `AboutDialog` 同栈，不引 WTL） | 账号页：登录 / 登出 / 设备列表 / 清空云端 / 状态栏 |
 
 ### 5.1 线程与生命周期
 
@@ -149,12 +174,13 @@ cipher   : base64   // AES-256-GCM(master=enc_key, nonce, aad=item_key||type||hl
 - **不在输入线程做 I/O**（宪法 P2）：同步引擎跑在自己的工作线程；TSF 侧**完全不知道同步存在** ⇒ **不新增任何 IPC 消息**（见 §5.3）。
 - 空闲开销：工作线程用事件等待 + 定时器唤醒（不使用轮询）⇒ NFR-002 的空闲 CPU 基线不被破坏。
 
-### 5.2 词库读写的互斥
+### 5.2 词库读写的互斥（**2026-11-11 修订**）
 
 用户词库是 leveldb，由常驻进程持有锁（CONTEXT.md §4 不变量 13）：
-- 同步引擎**在本进程内**调用导出 / 导入接口（不走 `StartMaintenance` 那一套 —— 那是给**进程外**工具用的）。
-- 但必须与引擎自身的读写**互斥**：`CloudUserDictIo` 在导出 / 导入期间挂起引擎对该用户库的访问（复用既有维护态机制），**且必须在 TSF 无关的后台线程完成**，不得在输入回调里做。
-- 实施前必须实测（`tasks.md` T102）：导出格式、导入是否会覆盖同名词条、导入期间引擎的行为。
+- **导出 / 导入原语用 T102 的取证结论**：`backup_user_dict`（导出快照）+ `restore_user_dict`（还原）。**不用** `export_user_dict` / `import_user_dict`（T102 已证伪：会丢词频、会覆盖同名词条）。
+- **互斥经既有维护态机制**：`RimeWithWeaselHandler` 的 `StartMaintenance` / `EndMaintenance`，由 `CloudMaintenanceHost.h` 在 `WeaselServerApp` 构造期注入钩子；**不得**绕过后台直接调 `rime_api->finalize()` / `initialize()`。
+- 导出 / 导入**只在后台线程**执行，绝不在输入 / TSF 回调里做（宪法 P2）。
+- **已知局限**：快照通道**不传播墓碑** ⇒ **跨设备删除不保证生效**（阶段 G 加固项，已在 `tasks.md` 记为偏差）。
 
 ### 5.3 IPC 影响评估
 
@@ -180,15 +206,37 @@ cipher   : base64   // AES-256-GCM(master=enc_key, nonce, aad=item_key||type||hl
 | DELETE | `/v1/devices/:id` | — | `{ok}`（该设备续期失效） |
 | DELETE | `/v1/account/data` | — | `{ok}`（清空 R2 对象 + D1 索引） |
 
-### 6.2 D1 表
+> **线上补充（阶段 C 实测，2026-11-11 回写）**：
+> ① `POST /v1/auth/login` 的响应**额外**含 `email_verified`（布尔）—— 对上表是 **additive** 扩展，客户端（T304）必须消费它来区分「需验证邮箱」与「口令错」；
+> ② `GET /v1/health` 是**第 10 条运维路由**（不是契约端点），原表里的 `/v1/ping` **不存在**；
+> ③ `DELETE /v1/devices/:id` 的 `:id` 同时接受 `devices.id` 与 `devices.device_id` —— 客户端传 **`device_id`**（`devices.id` 是库内自增，换库会变）。
+
+### 6.2 D1 表（**2026-11-11 按实现回写**）
+
+实做 **7 表 4 索引**（真相源 `cloud/fluxing-sync/migrations/0001_init.sql`）：
 
 ```sql
 users(id, email UNIQUE, verifier, salt, kdf_algo, kdf_iters, email_verified, created_at)
-devices(id, user_id, name, device_id, last_seen, revoked_at, created_at)
-refresh_tokens(id, user_id, device_id, token_hash, expires_at, revoked_at)
+devices(id, user_id, name, device_id, last_seen, revoked_at, created_at)   -- UNIQUE(user_id, device_id)
+refresh_tokens(id, user_id, device_id, token_hash, expires_at, revoked_at, kind)  -- kind = access|refresh
 sync_items(id, user_id, item_key, type, hlc_ms, hlc_counter, hlc_device,
-           r2_key, cipher_len, updated_at)   -- 索引，不含内容
+           r2_key, cipher_len, nonce_b64, updated_at)   -- 索引，不含内容
+email_verifications(id, user_id, code_hash, expires_at, consumed_at, created_at)
+mail_outbox(id, to_addr, subject, body, created_at)   -- 仅 MAIL_MODE=outbox 时写
 ```
+
+**对原式的 6 条偏差（D1–D6）**
+
+| 编号 | 偏差 | 理由 |
+|---|---|---|
+| **D1** | `refresh_tokens` 加 `kind` 列（`access` / `refresh`） | access token 也走「不透明随机串 + 只存哈希」⇒ 换「无签名密钥 / 无 JWT 库」+ **撤销设备立即失效** |
+| **D2** | 新增 `email_verifications` 表 | 首版必须邮箱验证码；`users` 里只留 `email_verified` 标志 |
+| **D3** | `sync_items.id` AUTOINCREMENT 充当 `server_seq` | 免自建序列表；`server_seq` 取本次推送涉及 item_key 集合上的 `MAX(id)`，**明确弃用 `meta.last_row_id`**（并发下会串号） |
+| **D4** | `sync_items` 加 `nonce_b64` 列 | GCM nonce 必须随密文一起回来，否则客户端解不开 |
+| **D5** | 新增 `mail_outbox` 表，**仅 `MAIL_MODE=outbox` 时写** | Workers Free 档不能出站；outbox 让「验证码链路」在无 Paid 计划时可取证 |
+| **D6** | `devices` 加 `UNIQUE(user_id, device_id)` | 同一设备重复注册应更新而非插新行 |
+
+**服务端从不用 salt 做校验**（只比 `HMAC(pepper, auth_key)`）—— 这是客户端 salt 策略（§3.1 / ADR 0054）的直接前提。
 
 ### 6.3 R2 布局
 
@@ -217,13 +265,15 @@ sync_items(id, user_id, item_key, type, hlc_ms, hlc_counter, hlc_device,
   - `WeaselServer/AboutDialog.cpp` 现文案「本输入法不含云端账号。词库、配置与用户数据全部保存在本机，不上传、不同步。」**必须改写**，否则与新功能自相矛盾。
   - 需新增免责说明：「口令遗忘后云端数据无法找回」「同步内容在离开本机前已加密」。
 
-## 9. 变更面清单（预估，实施时以实际为准）
+## 9. 变更面清单（**2026-11-11 按实做更新**）
 
-**新增**：`include/FluxingCloudEnvelope.h`、`WeaselServer/Cloud/*`（7 组文件）、`test/TestFluxingCloud/`、`cloud/fluxing-sync/*`、`docs/adr/0039-*.md`。
+**已新增**：`include/FluxingCloudEnvelope.h`（阶段 B）· `WeaselServer/Cloud/*`（阶段 D **18 个文件** = 8 个模块的 `.h`/`.cpp` 共 16 个 —— `CloudJson` / `CloudCrypto` / `CloudTransport` / `CloudCredentialStore` / `CloudAccount` / `CloudSyncService` / `CloudUserDictIo` / `CloudAccountDialog` —— 外加 `CloudRimeUserDictBackend.cpp` + `CloudMaintenanceHost.h`）· `test/TestFluxingCloud/` · `cloud/fluxing-sync/*`（阶段 C）· `docs/adr/0039-*.md` · `docs/adr/0054-*.md`。
 
-**修改**：`weasel.sln` 与 `xmake.lua`（新增测试工程与 winhttp 链接）、`WeaselServer/WeaselServer.vcxproj`（链接 `winhttp.lib` / `advapi32.lib` / `bcrypt.lib`）、`WeaselServer/AboutDialog.cpp`（文案）、`WeaselServer/WeaselServerApp.cpp`（账号页接线）、`CHANGELOG.md`。
+**已修改**：`weasel.sln` 与 `xmake.lua`（新增测试工程与系统库链接）· `WeaselServer/xmake.lua`（**`add_files("./Cloud/*.cpp")` + `add_links` 补 `bcrypt` / `winhttp` / `advapi32` / `crypt32`**）· `WeaselServer/WeaselServer.vcxproj`（**逐文件 `PrecompiledHeader=NotUsing`**（`stdafx.h` **无** `NOMINMAX`）+ 4 个系统库 + 全部 ItemDefinitionGroup 补 `/utf-8`）· `WeaselServer/WeaselServerApp.cpp`（注册云维护态宿主）· `test/TestFluxingCloud/TestFluxingCloud.vcxproj`（编入 7 个生产实现）· `CHANGELOG.md`。
 
-**不动**：`include/WeaselIPCData.h`（无 IPC 变更）、`librime/`、`.clang-format`、`output/install.nsi`（首版不新增文件到安装目录 ⇒ 安装包无需改；若后续加独立 exe 则必须改并跑 G-a/G-b/G-c 三道门禁）。
+**待改**：`WeaselServer/AboutDialog.cpp`（文案，阶段 E T403）· 快捷设置栏右键菜单接线（阶段 E T405）· `cloud/fluxing-sync/wrangler.toml`（D1 / R2 绑定 ID、域名路由、pepper secret —— 依赖外部资源）。
+
+**不动**：`include/WeaselIPCData.h`（无 IPC 变更）· `librime/` · `.clang-format` · `output/install.nsi`（首版不新增文件到安装目录 ⇒ 安装包无需改；若后续加独立 exe 则必须改并跑 G-a/G-b/G-c 三道门禁）。
 
 ## 10. 风险与对策
 
@@ -281,7 +331,7 @@ sync_items(id, user_id, item_key, type, hlc_ms, hlc_counter, hlc_device,
 | 层 | 手段 | 判据 |
 |---|---|---|
 | 纯逻辑 | `test/TestFluxingCloud`（新工程，x86 Release） | HLC 全序、条目合并、编解码、冲突收敛；**必须含反例断言**（乱序 / 同版本 / 空 / 超长输入） |
-| 服务端 | `wrangler dev` + 本地 D1/R2 集成测试（`cloud/fluxing-sync/test/`） | 注册 / 登录 / 续期 / 推 / 拉 / 设备撤销 / 清空 |
+| 服务端 | **vitest-pool-workers**（真 workerd 内跑）+ 本地 D1/R2 集成测试（`cloud/fluxing-sync/test/`）—— **不用 `wrangler dev`**（交互式进程 + 端口 + 手工 curl，产物不可复跑） | 注册 / 登录 / 续期 / 推 / 拉 / 设备撤销 / 清空；实测 **20/20 用例 PASS** + 变异验证 |
 | 端到端 | 两台设备（或两套用户数据目录）跑真实 Worker | AC-02 ~ AC-05、AC-08 ~ AC-09、AC-13 |
 | 性能 | ADR 0030 三数字命令 + 输入延迟对照 | NFR-001 ~ NFR-003 |
 | 合规 | 未登录态抓包计数 = 0；服务端存储抽查为密文 | AC-07、AC-12、R9 |

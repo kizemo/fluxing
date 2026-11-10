@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### feat(WeaselServer): 云端账号与多端同步 · 阶段 D「客户端运行时」落地（**尚无用户可见入口**）
+
+- **本轮交付**：spec 100 阶段 D 的 **T301–T305 五任务全部 DONE** —— 新建 `WeaselServer/Cloud/`（**18 个文件** = 8 个模块的 `.h`/`.cpp` 共 16 个 + `CloudRimeUserDictBackend.cpp` + `CloudMaintenanceHost.h`）：`CloudJson`（自包含严格 JSON）· `CloudCrypto`（PBKDF2-HMAC-SHA256 60 万次 + HKDF 分离 `auth_key`/`enc_key`）· `CloudTransport`（`ICloudTransport` + WinHTTP 实现）· `CloudCredentialStore`（Windows Credential Manager）· `CloudAccount`（账户状态机 + 设备管理）· `CloudSyncService`（推拉编排 + 条目合并）· `CloudUserDictIo`（词库快照）· `CloudAccountDialog`（账号页）· `CloudRimeUserDictBackend.cpp` · `CloudMaintenanceHost.h`。
+- **不引任何第三方依赖**（宪法 P3 / NFR-004）：WinHTTP / CNG / Credential Manager 全是操作系统组件；**明确不引 libcurl**（仓库实测零 HTTP 客户端）。密钥与令牌**不落明文文件**（凭据进 Credential Manager / DPAPI），口令缓冲用后清零，派生与登录路径**不写日志**。
+- **关键实现决策（ADR 0054）**：① 密码学**自实现** PBKDF2-HMAC-SHA256 / HKDF-SHA256 —— CNG 的 `BCryptDeriveKeyPBKDF2` **默认 PRF=SHA-1**（与 WebCrypto 的 SHA256 不对齐）且**无 HKDF** 语义；**AES-256-GCM 仍走 CNG**（复用 `include/FluxingCloudEnvelope.h`，生产与单测同源）。② **salt 按邮箱确定性派生**（`SHA256("fluxing-enc-v1|" + lower(email))`）—— 服务端**从不用 salt 校验**，客户端登录前拿不到服务端随机 salt。③ **T102 快照通道**：词库导出 / 还原用 `backup_user_dict` / `restore_user_dict`（**不用** `export_user_dict` / `import_user_dict`），互斥经 `RimeWithWeaselHandler` 的维护态，且**只在后台线程**执行。
+- **验证**：`tmp\build-fluxing-cloud-tests.cmd` ⇒ `RESULT: PASS=297 FAIL=0` / `VERDICT: ALL PASS` / `TEST_FLUXINGCLOUD_EXIT=0`（日志 `tmp\stageD-build.log`，基线 134 → 297）；`build.bat weasel` ⇒ **0 个错误**，产出 `output\Win32\WeaselServer.exe`（日志 `tmp\stageD-weaselserver-build.log`）。密码学用**标准向量**钉死（SHA-256 FIPS 180-4 / HMAC RFC 4231 TC1·TC2·TC3·TC6 / PBKDF2 RFC 7914 §11 / HKDF 按 RFC 5869 公式复算 + .NET 独立实现），**期望值不凭记忆写**。
+- **本轮**未改：`include/WeaselIPCData.h`、IPC 协议、`output/install.nsi`、`librime/`、`output/data/**`；**未新增任何 IPC 消息**。
+- **⚠️ 尚无用户可见入口**：账号页界面已落地但**没有任何入口可达**（入口接线属阶段 E T405，位置已由用户拍板 = **快捷设置栏的右键菜单**，**不是**删掉右键菜单而是换地方）。云端同步**未上线**，未登录时不产生任何出向请求。真机联调依赖服务端部署（`wrangler deploy` + 自有域名 `api.aiec.fun`），**当前未做**。
+
 ### fix(WeaselTSF): 托盘「中英」语言栏项图标去除 —— 改为「根本不注册该语言栏项」（v14；批次 W）
 
 - **用户原话**：「之前去除的托盘 “中英”图标，又出现了，需要去除。」

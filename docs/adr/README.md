@@ -62,6 +62,7 @@ Do not dump all ADRs into every prompt.
 | 0051 | 0051. 快捷设置栏位置按「工作区比例」锚定，分辨率/显示器变化时重锚，锚点以 v2 落盘 | `docs/adr/0051-quickpanel-position-anchored-to-workarea-ratio.md` | Accepted |
 | 0052 | 0052. 快捷设置栏按方向 A 重绘：32-bit BGRA DIB 自建 src-over 合成 + `UpdateLayeredWindow`，半透明面板体 / 发丝描边 / 分层软投影 | `docs/adr/0052-quickpanel-direction-a-layered-translucent-theme.md` | Accepted |
 | 0053 | 0053. 语言栏项永久隐藏：托盘「中英」图标改用 `TF_LBI_STYLE_HIDDENSTATUSCONTROL` + `TF_LBI_STATUS_HIDDEN`（修订 0044） | `docs/adr/0053-langbar-item-permanently-hidden.md` | Accepted |
+| 0054 | 0054. 客户端密钥派生：自实现 PBKDF2-HMAC-SHA256 + HKDF（CNG 的 PBKDF2 默认 PRF=SHA-1、且无 HKDF），salt 按邮箱确定性派生 | `docs/adr/0054-client-key-derivation-and-salt-strategy.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

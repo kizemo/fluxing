@@ -23,6 +23,8 @@
 
 **硬前置**：T102、T103 未出结论前，**禁止**写词库合并实现与端点硬编码（风险 R1 / R5）。　**→ 2026-11-10 已解除：两份结论均已落盘（见 `docs/research/fluxing-cloud-2026-11/`）。**
 
+**文档治理（2026-11-11，用户拍板「按实现回写」）**：阶段 A–C 的偏差 **A1–A3**（本文件字面 vs 实做）与 **D1–D6**（`plan.md` §6.2 的 D1 表）已按实做回写进 `plan.md` §6.1 / §6.2 / §5 / §13 与本文件各阶段的「状态」行；阶段 D 的实现偏差（T301 改自实现密码学、T305 改快照通道、T401 改普通 Win32 窗口、T405 入口改快捷设置栏右键菜单）同样已回写。**本文件与 `plan.md` 自此与代码同源** —— 后续会话只读一套真相。
+
 ---
 
 ## 阶段 A · 取证与工程底座
@@ -102,6 +104,8 @@
 ## 阶段 C · 服务端（Cloudflare）
 
 > 代码位置 `cloud/fluxing-sync/`；接口契约见 `plan.md` §6.1；D1 表见 §6.2；R2 布局见 §6.3。
+>
+> **状态：DONE 2026-11-10**（提交 `5495d52`）· **2026-11-11 回写**：T211 的「4 张表 / `wrangler dev` / `/v1/ping`」字面已按实做更正 —— 实做 = **7 表 4 索引**（**D1–D6**，见 `plan.md` §6.2）、**vitest-pool-workers 真 workerd** 20/20 用例（**没有** `wrangler dev` 启动日志）、探活端点 **`GET /v1/health`**（原 `/v1/ping` **不存在**）。**Done 判据换载体**：以 `npm run check` 退出码 0 + 20/20 用例 + 变异验证（改错一个错误码即 1 failed）为准。
 
 ### T211 · Worker 骨架与 D1 / R2 初始化 [P1] [US1]
 - **目标**：起一个能跑的空 Worker，带 D1 迁移与 R2 桶绑定。
@@ -142,14 +146,19 @@
 
 ## 阶段 D · 客户端运行时
 
-### T301 · CNG 加密模块 [P1] [US7]
+> 代码位置 `WeaselServer/Cloud/`（**18 个文件** = 8 个模块的 `.h`/`.cpp` 共 16 个 + `CloudRimeUserDictBackend.cpp` + `CloudMaintenanceHost.h`）；单测落 `test/TestFluxingCloud/`（**追加 8 个测试函数**，整包 `PASS=297 FAIL=0`）。
+> **2026-11-11 T301–T305 全部 DONE**（提交见 handoff 批次 AB）。
+
+### T301 · 密钥派生与信封加密 [P1] [US7]
+- **状态**：**DONE 2026-11-11** · `WeaselServer/Cloud/CloudCrypto.{h,cpp}`；决策见 **ADR 0054**。**实现偏差**（原写「`BCryptDeriveKeyPBKDF2` / CNG」）：PBKDF2-HMAC-SHA256 / HKDF-SHA256 **自实现**（CNG 的 PBKDF2 **默认 PRF=SHA-1**、且**无 HKDF** 语义）；**AES-256-GCM 仍复用** `include/FluxingCloudEnvelope.h` 的 `crypto::AesGcmSeal/Open` 与 **5 字段** `BuildAad`（`item_key|type|hlc_ms|hlc_counter|device`）。**salt 策略**：按邮箱确定性派生（`SHA256("fluxing-enc-v1|" + lower(email))`）—— 服务端**从不用 salt 校验**，客户端登录前拿不到服务端随机 salt。**Done 判据已达成**：标准向量（SHA-256 FIPS 180-4 / HMAC RFC 4231 TC1·TC2·TC3·TC6 / PBKDF2 RFC 7914 §11 / HKDF 公式复算 + .NET 独立实现）+ AAD 改动解密失败的反例，落在 `TestCloudCryptoVectors` / `TestCloudSyncPure`。
 - **目标**：实现 `plan.md` §3.1 的密钥派生与信封加密。
 - **文件**：`WeaselServer/Cloud/CloudCrypto.h`（新建）、`WeaselServer/Cloud/CloudCrypto.cpp`（新建）。
-- **做法**：① `BCryptDeriveKeyPBKDF2`（600000 次，HMAC-SHA256）派生 `master`；② HKDF-SHA256 分离 `auth_key` / `enc_key`；③ AES-256-GCM 加密，AAD = `item_key|type|hlc`；④ **口令缓冲用后清零**；⑤ 全程不落日志。
+- **做法**：① 派生 `master`（PBKDF2-HMAC-SHA256，600000 次，32 B）；② HKDF-SHA256 分离 `auth_key` / `enc_key`（info = `fluxing-auth-v1` / `fluxing-enc-v1`）；③ AES-256-GCM 加密，AAD = 5 字段；④ **口令缓冲用后清零**；⑤ 全程不落日志。
 - **Done 判据**：贴单测/探针输出（固定向量往返一致 + AAD 改动解密失败）+ 一条「日志中无口令 / 密钥」的 grep 证据。
 - **依赖**：T204、T102（口令强度下限规则）。
 
 ### T302 · WinHTTP 传输模块 [P1] [US6] [US8]
+- **状态**：**DONE 2026-11-11** · `WeaselServer/Cloud/CloudTransport.{h,cpp}`：`ICloudTransport` + `WinHttpTransport`；BaseUrl 可注入（环境变量 `FLUXING_CLOUD_BASE_URL`，默认 `https://api.aiec.fun`）；超时 15 s / 重试 2 次 / 指数退避 500→1000→2000→8000 ms 封顶；代理自动探测；**证书校验不关**（`WINHTTP_OPTION_DISABLE_FEATURE` + `WINHTTP_DISABLE_AUTHENTICATION` 只关**自动认证**，不关证书链校验）。**Done 判据部分达成**：纯函数 16 条断言（`BuildUrl` / `ShouldRetry` / `RetryBackoffMs` / `UrlEncodePathSegment`）；**未达成**：真实请求日志与代理环境降级日志 —— 依赖服务端部署（外部资源）。
 - **目标**：把网络层抽象成可 mock 的 `ICloudTransport`。
 - **文件**：`WeaselServer/Cloud/CloudTransport.h`（新建）、`WeaselServer/Cloud/CloudTransport.cpp`（新建）。
 - **做法**：超时、重试退避、代理自动探测、证书校验不得被关闭；**不得**在 UI 线程调用。
@@ -157,6 +166,7 @@
 - **依赖**：T104。
 
 ### T303 · 凭据存储 [P1] [US2] [US9]
+- **状态**：**DONE 2026-11-11** · `WeaselServer/Cloud/CloudCredentialStore.{h,cpp}`：target `Fluxing:CloudAccount`、`CRED_TYPE_GENERIC` + `CRED_PERSIST_LOCAL_MACHINE`（DPAPI 保护）；自带二进制编解码（magic `FLCRED1` + 8 字段长度前缀 + **无尾随字节**校验）。**Done 判据已达成**：真实 Credential Manager 的 Save/Load/Delete 往返 + 删除后读不到（`TestCloudCredentialStoreReal`，独立 target `Fluxing:Test:CloudAccount`）。
 - **目标**：refresh token 与 `enc_key` 存 Credential Manager（DPAPI 保护）。
 - **文件**：`WeaselServer/Cloud/CloudCredentialStore.h`（新建）、`WeaselServer/Cloud/CloudCredentialStore.cpp`（新建）。
 - **做法**：① 存 / 读 / 删三路径；② 读取失败（凭据被清）⇒ 视为未登录，回到登录态而非报错崩溃。
@@ -164,6 +174,7 @@
 - **依赖**：T301。
 
 ### T304 · 账户客户端 [P1] [US1] [US2] [US9]
+- **状态**：**DONE 2026-11-11** · `WeaselServer/Cloud/CloudAccount.{h,cpp}`：状态机 `未登录 → 登录中 → 已登录 → 需重新登录`；`POST /v1/auth/login` 体 = `{email, auth_key, device:{id,name}}`，响应**消费 `email_verified`**；`DELETE /v1/devices/{device_id}`（传 `device_id` 而非库内自增 id）；401 ⇒ 自动 `POST /v1/auth/refresh` 后**重试一次**。**Done 判据部分达成（mock 传输全链路）**：`TestCloudAccountMock` 覆盖 登录成功 / 401 失败 / 空凭据回未登录（不崩）/ 设备列表 / 撤销设备 / 401→刷新→重试（请求序列 3 次）；**未达成**：真实端点调用 —— 依赖服务端部署。
 - **目标**：注册 / 登录 / 续期 / 登出 / 设备列表 / 清空云端的客户端门面。
 - **文件**：`WeaselServer/Cloud/CloudAccount.h`（新建）、`WeaselServer/Cloud/CloudAccount.cpp`（新建）。
 - **做法**：状态机 `未登录 → 登录中 → 已登录 → 需重新登录`；续期失败自动重试一次，仍失败才落「需重新登录」。
@@ -171,6 +182,7 @@
 - **依赖**：T301、T302、T303、T212。
 
 ### T305 · 词库 / 短语导出导入协调 [P1] [US3] [US4]
+- **状态**：**DONE 2026-11-11** · `WeaselServer/Cloud/CloudUserDictIo.{h,cpp}` + `CloudRimeUserDictBackend.cpp`（rime 后端，**只进 WeaselServer 工程**）。**实现偏差（原「导出 / 导入」已按 T102 证伪改写）**：导出 = `backup_user_dict`，还原 = `restore_user_dict`（**不用** `export_user_dict` / `import_user_dict`）；行格式 `<code>\t<phrase>\t<c=.. d=.. t=..>`，云端 `item_key = "<词典名>\t<词条>"`、`payload = "<code>\t<c=.. d=.. t=..>"`；多词典快照按 `#@/db_name` 分段串联。**互斥经 `RimeWithWeaselHandler` 的 `StartMaintenance` / `EndMaintenance`**（`CloudMaintenanceHost.h` 在 `WeaselServerApp` 构造期注入；未注册 ⇒ 云同步**明确失败**，不静默降级）。**已知局限**：快照通道**不传播墓碑** ⇒ **跨设备删除不保证生效**（阶段 G 加固项）。**Done 判据部分达成**：解析 / 生成往返、tick 取最大、多词典分段、维护态钩子注册与调用（`TestCloudUserDictIo`）；**未达成**：真机「导入期间输入不卡顿」的时序记录（需用户在场）。
 - **目标**：在**进程内**导出与导入用户词库、短语，并与引擎读写互斥。
 - **文件**：`WeaselServer/Cloud/CloudUserDictIo.h`（新建）、`WeaselServer/Cloud/CloudUserDictIo.cpp`（新建）。
 - **做法**：① 复用既有维护态机制挂起引擎对该用户库的访问；② 导出 / 导入**在后台线程**完成，绝不在输入回调里做；③ 导出的条目化格式按 **T102 的取证结论**定（分隔符 / 字段数）。
@@ -182,9 +194,10 @@
 ## 阶段 E · 账号页与文案
 
 ### T401 · 账号页对话框 [P1] [US1] [US9] [US12]
-- **目标**：快捷设置栏第 4 槽升级为账号页（分区：登录状态 / 邮箱 / 设备列表 / 同步开关与最近同步时间 / 立即同步 / 登出 / 清空云端）。
+- **状态**：**界面层 DONE 2026-11-11**（`WeaselServer/Cloud/CloudAccountDialog.{h,cpp}` 已落地：普通 Win32 modeless 窗口 + `CloudAccountController` 后台工作线程；分区含 登录 / 登出 / 刷新 / 设备列表 / 撤销设备 / 清空云端数据 / 状态栏）；**入口接线未做**（见 T405）。**实现偏差**（原写「与 `QuickPanelDialog` 同栈（WTL）」）：仓库现状**无 WTL** ⇒ 改用**普通 Win32 modeless 窗口**（与 `AboutDialog` 同栈，不引新依赖）。**Done 判据部分达成**：错误口令的中文状态与「不进入登录态」有单测覆盖（`TestCloudAccountMock`）；**账号页截图（未登录 / 已登录）与真机联调未做**（依赖服务端部署 + 用户在场）。
+- **目标**：账号页（分区：登录状态 / 邮箱 / 设备列表 / 同步开关与最近同步时间 / 立即同步 / 登出 / 清空云端）。**入口不再挂面板第 4 槽**（用户 2026-11-11 拍板：挂**快捷设置栏的右键菜单**）。
 - **文件**：`WeaselServer/Cloud/CloudAccountDialog.h`（新建）、`WeaselServer/Cloud/CloudAccountDialog.cpp`（新建）。
-- **做法**：与既有 `QuickPanelDialog` 同栈（WTL）；**密码框不回显**；口令用后清零；错误一律「状态 + 中文原因」，不弹打断式错误框。
+- **做法**：普通 Win32 modeless 窗口（`AboutDialog` 同栈）；**密码框不回显**；口令用后清零；错误一律「状态 + 中文原因」，不弹打断式错误框；`login` 响应消费 `email_verified`。
 - **Done 判据**：贴账号页截图（未登录态 / 已登录态各一张）+ 一条「错误口令有中文提示且不进入登录态」的证据。
 - **依赖**：T304。
 
@@ -209,11 +222,12 @@
 - **Done 判据**：贴 CHANGELOG 新条目全文。
 - **依赖**：T401、T403。
 
-### T405 · 快捷面板第 4 槽接线 [P1] [US1]
-- **目标**：第 4 槽从「关于说明」升级为「账号页」入口，保留「关于」分区。
+### T405 · 账号入口接线 [P1] [US1]
+- **状态**：**PENDING**（入口位置已由**用户 2026-11-11 拍板**：**快捷设置栏的右键菜单**，**不是**面板第 4 槽）。**注意**：右键菜单**不是被删除，而是换地方** —— 托盘语言栏项虽在批次 W 下线（ADR 0053），其右键菜单已迁到快捷设置栏品牌图标（ADR 0038），账号入口挂在**同一份菜单路由**上即可。账号页本身已可被程序调用：`fluxing::cloud::account_dialog::Show()`。
+- **目标**：在**快捷设置栏的右键菜单**加一项「账号与同步」，点击打开账号页。
 - **文件**：`WeaselServer/QuickPanelDialog.cpp`（改）、`WeaselServer/QuickPanelDialog.h`（改）。
-- **做法**：**不改面板几何与状态真相源**（spec 099 边界）；「关于」分区保留原内容。
-- **Done 判据**：贴点击第 4 槽进入账号页的真机截图。
+- **做法**：复用既有 `IDR_MENU_POPUP` 菜单路由（品牌图标右键与托盘右键共用同一份菜单）；新增菜单项 ID → 调 `fluxing::cloud::account_dialog::Show()`；**不改面板几何与状态真相源**（spec 099 边界）；**不新增任何 IPC 消息**（见 T402）。
+- **Done 判据**：贴右键菜单出现「账号与同步」并能打开账号页的真机截图。
 - **依赖**：T401。
 
 ---
