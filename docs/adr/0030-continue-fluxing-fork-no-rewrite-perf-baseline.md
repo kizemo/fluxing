@@ -5,7 +5,7 @@
 - **Spec**: [098-cloud-candidates](../../.specify/specs/098-cloud-candidates/spec.md)（本定案后的第一个能力 spec）；既有 P0 修复见交接卡 `docs/archive/handoffs/handoff-2026-11-03-fluxing-quickpanel-session-and-alt-dot.md` §6
 - **Lessons**: —
 - **Research**: `docs/research/sogou-reverse-2026-11/REPORT.md`（含 `evidence/` 24 件）
-- **Supersedes / superseded by**: —（新增；与 ADR 0028「薄 TSF 壳 + IPC 只增不改」同向）
+- **Supersedes / superseded by**: —（新增；与 ADR 0028「薄 TSF 壳 + IPC 只增不改」同向）；**决策 2 的「空闲 CPU」行已由 [ADR 0060](0060-idle-cpu-single-core-window-and-attribution-method.md) 修订**（口径统一为「占单核」+ 窗口下限 16 s + 归因必须 A/B 对照；2026-11-12，批次 AP）
 
 ---
 
@@ -40,7 +40,7 @@
 |---|---|---|
 | 常驻进程数 | **1** | 仅 `WeaselServer.exe` 常驻；`WeaselTSF.dll` 注入宿主进程不计；`FluxingPhrasesDialog.exe` 仅用户唤起时计 |
 | Server 内存 | **Private Working Set < 40 MB** | `Get-Process WeaselServer | Measure PrivateMemorySize64` |
-| 空闲 CPU | **< 0.1%（占单核）** | 静止 ≥ 8s，两次 `CPU` 增量 / 窗口秒数 / 逻辑核折算，方法同 REPORT.md §5 |
+| 空闲 CPU | **< 0.1%（占单核）** | 静止 **≥ 16 s**，两次 `TotalProcessorTime` 增量 / 窗口**墙钟**秒数 / **不除逻辑核数** —— ⚠️ 本行已被 [ADR 0060](0060-idle-cpu-single-core-window-and-attribution-method.md) 修订：原文「静止 ≥ 8s … 逻辑核折算」与判据栏「占单核」互斥（本机 20 核 ⇒ 差 20 倍），且 `TotalProcessorTime` 记账步长 ≈ 15.625 ms ⇒ 8 s 窗口地板 0.195 %，**原理上判不了 < 0.1 %** |
 
 对照物：搜狗 6 进程 / 183.4 MB / 0.78%。基线是**发布验收条款**：后续每个能力 spec（含 098 云候选）的验收段必须引用它；任一超标即发布阻塞，除非有 ADR 修订本基线。
 

@@ -66,6 +66,9 @@ Do not dump all ADRs into every prompt.
 | 0055 | 0055. 同步引擎调度与收敛：单后台线程 + 事件唤醒（无轮询），防抖 5 分钟 / 推送全局间隔 15 分钟 / 定时 60 分钟拉取 | `docs/adr/0055-cloud-sync-engine-scheduling-and-convergence.md` | Accepted |
 | 0056 | 0056. 本地改动钩子：进程内直连（函数指针槽），不新增 IPC 消息 | `docs/adr/0056-local-change-hook-in-process-direct-link.md` | Accepted |
 | 0057 | 0057. item_key 的 TAB 分隔符是客户端既有契约，服务端字符集必须放行 TAB | `docs/adr/0057-item-key-tab-separator-contract.md` | Accepted |
+| 0058 | 0058 · 验证码发信通道改走第三方 HTTPS 邮件 API（Resend 兼容） | `docs/adr/0058-third-party-https-mail-api-channel.md` | Accepted |
+| 0059 | 0059. item_key 对服务端不透明：以口令派生的 HMAC 身份替代明文词条 | `docs/adr/0059-item-key-opaque-mac-identity.md` | Accepted |
+| 0060 | 0060. 空闲 CPU 判据口径统一为「占单核」；单核口径的测量窗口下限 16 s；性能归因必须以 A/B 对照为前提 | `docs/adr/0060-idle-cpu-single-core-window-and-attribution-method.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

@@ -165,12 +165,18 @@ $wsb = Join-Path $StagingRoot "fluxing-sandbox.wsb"
 #     WindowsSandbox.exe 是启动器: 如果已有实例在跑, 再次启动只会把旧实例
 #     拉到前台, LogonCommand 不再执行 —— 表现为「沙箱进程秒退 + 没有任何日志」。
 #     必须先清干净, 保证这一轮是全新的一次性虚机。
-$stale = @(Get-Process -Name 'WindowsSandboxClient','WindowsSandbox','vmmemWindowsSandbox' -ErrorAction SilentlyContinue)
+#
+#     清理名单必须覆盖**全部五个**进程名。WindowsSandboxRemoteSession 与
+#     WindowsSandboxServer 是**宿主机侧**残留 (2026-11-12 实测: 一对 pid 分别
+#     从 22:49 活到 00:53 之后), 它们不在这三个名字里 ⇒ $stale.Count == 0 ⇒
+#     下面「重启 vmcompute」的既定处置也被跳过 ⇒ 本轮 LogonCommand 静默不执行,
+#     logs\ 目录 0 文件, 门禁只能等到超时。漏名 = 门禁在本机不可靠。
+$stale = @(Get-Process -Name 'WindowsSandboxClient','WindowsSandbox','WindowsSandboxRemoteSession','WindowsSandboxServer','vmmemWindowsSandbox' -ErrorAction SilentlyContinue)
 if ($stale.Count) {
     Write-Host "[>] 清理上一轮遗留的沙箱实例 ($($stale.Count) 个)..." -ForegroundColor DarkGray
     foreach ($p in $stale) { try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {} }
     Start-Sleep -Seconds 5
-    $still = @(Get-Process -Name 'WindowsSandboxClient','WindowsSandbox','vmmemWindowsSandbox' -ErrorAction SilentlyContinue)
+    $still = @(Get-Process -Name 'WindowsSandboxClient','WindowsSandbox','WindowsSandboxRemoteSession','WindowsSandboxServer','vmmemWindowsSandbox' -ErrorAction SilentlyContinue)
     if ($still.Count) {
         Write-Host "[>] 强制重启 vmcompute (Win11 24H2 LogonCommand flake 的既定处置)" -ForegroundColor DarkGray
         Stop-Service vmcompute -Force -ErrorAction SilentlyContinue
@@ -252,11 +258,30 @@ Write-Host " 沙箱复验结果 (claims.json)" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 $report = Get-Content $jsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
+# 已知环境限制 (KEL) —— scripts\sandbox-gate\README.md「已知的沙箱限制」已明文声明:
+#   E.2 沙箱只有 C: 盘 (永远 FAIL, 环境事实, 不是缺陷; 存在意义是给「默认路径在 D 盘」提供对照)
+#   E.4 沙箱默认无外网 (永远 FAIL, 同上)
+# 这两条在任何 Windows Sandbox 上都必然 FAIL, 与被测产物无关。README 定的判据是
+# 「失败项集合没有意外扩大」而不是「零 FAIL」; 旧逻辑 failed>0 => exit 1 与该契约矛盾
+# => L5 在本仓永远不可能绿, 门禁事实上不可用。
+# 修法: KEL 单列为「已知环境限制」并完整打印 (绝不隐藏), 退出码只由非白名单失败决定。
+$KnownEnvLimits = @('E.2','E.4')
+$envLimitResults = @($report.results | Where-Object { $_.status -eq 'FAIL' -and $_.id -in $KnownEnvLimits })
+$realFailResults = @($report.results | Where-Object { $_.status -eq 'FAIL' -and $_.id -notin $KnownEnvLimits })
+
 Write-Host ("  通过 {0} / 未达标 {1} / 跳过 {2}  (共 {3} 项)" -f $report.passed, $report.failed, $report.skipped, $report.total) -ForegroundColor Yellow
+if ($envLimitResults.Count) {
+    Write-Host ("  其中 {0} 项为「已知环境限制」(KEL: {1}) —— 沙箱环境事实, 非产物缺陷" -f $envLimitResults.Count, ($envLimitResults.id -join ', ')) -ForegroundColor DarkYellow
+}
 Write-Host ""
 foreach ($r in $report.results) {
-    $color = switch ($r.status) { 'PASS' {'Green'} 'FAIL' {'Red'} 'SKIP' {'DarkYellow'} default {'Gray'} }
-    Write-Host ("  [{0}] {1}" -f $r.status, $r.claim) -ForegroundColor $color
+    $isKEL = ($r.status -eq 'FAIL' -and $r.id -in $KnownEnvLimits)
+    if ($isKEL) {
+        Write-Host ("  [KEL] {0}  (id={1})" -f $r.claim, $r.id) -ForegroundColor DarkYellow
+    } else {
+        $color = switch ($r.status) { 'PASS' {'Green'} 'FAIL' {'Red'} 'SKIP' {'DarkYellow'} default {'Gray'} }
+        Write-Host ("  [{0}] {1}" -f $r.status, $r.claim) -ForegroundColor $color
+    }
     if ($r.detail) { Write-Host ("         {0}" -f $r.detail) -ForegroundColor DarkGray }
 }
 Write-Host ""
@@ -264,12 +289,20 @@ Write-Host "  完整日志 : $logPath" -ForegroundColor DarkGray
 Write-Host "  JSON 报告: $jsonPath" -ForegroundColor DarkGray
 Write-Host "  截图     : $screens" -ForegroundColor DarkGray
 
-if ($report.failed -gt 0) {
+if ($envLimitResults.Count) {
     Write-Host ""
-    Write-Host "=== 未达标明细 ===" -ForegroundColor Red
-    foreach ($f in $report.failures) { Write-Host "  - $f" -ForegroundColor Red }
+    Write-Host "=== 已知环境限制明细 (不计入失败, 但完整列出) ===" -ForegroundColor DarkYellow
+    foreach ($kel in $envLimitResults) {
+        Write-Host ("  - [{0}] {1}" -f $kel.id, $kel.claim) -ForegroundColor DarkYellow
+        if ($kel.detail) { Write-Host ("    {0}" -f $kel.detail) -ForegroundColor DarkGray }
+    }
+}
+if ($realFailResults.Count -gt 0) {
+    Write-Host ""
+    Write-Host ("=== 未达标明细 ({0} 项) ===" -f $realFailResults.Count) -ForegroundColor Red
+    foreach ($f in $realFailResults) { Write-Host ("  - [{0}] {1}" -f $f.id, $f.claim) -ForegroundColor Red }
     exit 1
 }
 Write-Host ""
-Write-Host "=== 全部通过 ===" -ForegroundColor Green
+Write-Host "=== 全部通过 (已知环境限制项已单列, 无未达标项) ===" -ForegroundColor Green
 exit 0

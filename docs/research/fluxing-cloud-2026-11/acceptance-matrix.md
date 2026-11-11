@@ -25,7 +25,7 @@
 | **AC-08** | 并发编辑不同条目 → 两端并集且一致 | **不通过** | 服务端 HLC 守卫 + `skipped` 语义已上线；客户端**本轮修好**消费 `skipped`（AH-4 ⑤，见下） | **需两台设备** |
 | **AC-09** | 并发改同一条目 → 最终同版本，不出现永久不一致 | **不通过** | 同上 | **需两台设备** |
 | **AC-10** | 登出后本机/云端仍在；「清空云端数据」后服务端无可恢复内容 | **不通过** | 服务端 `src/account.ts` 注释与实现：清空只清同步内容，**不删账号**（users / devices / refresh_tokens / email_verifications 保留） | 未实测：需真机点「清空云端数据」后回查 D1/R2 |
-| **AC-11** | 三数字未破线；输入延迟无可感知变化 | **不通过** | `perf-baseline.md`：进程数 **1** ✅；私有内存 **138.5 MB** vs 基线 **< 40 MB** ❌ 破线 3.4×；空闲 CPU 逻辑核折算 0.039 % ✅ / 单核口径 0.7804 % ⚠️ 口径待裁定 | ① 内存归因未做（无 spec 100 前对照基线，**不能断言**由云模块造成）；② 输入延迟两组对照未测（需登录态 + 用户在场） |
+| **AC-11** | 三数字未破线；输入延迟无可感知变化 | **不通过（内存归因已闭环 ⇒ 非云同步回归；输入延迟仍未测）** | 进程数 **1** ✅ · **归因 A/B（批次 AP，`tmp/AP-ctrl4.txt`）**：同机 / 同用户数据 / 同脚本 / 同窗口下 A 含云 **24.8 MB** vs B pre-cloud **26.3 MB** ⇒ **云模块常驻开销 ≈ 0 MB**；空闲 CPU 同窗口 A **0.1192 %** vs B **0.1786 %**（56.5 s 窗口 B 0.1106 % vs A 0.1192 %）⇒ CPU 亦**不归因云模块**；对照件 = 装机目录 `WeaselServer.exe.bakL`，经 6 个云标记（`/v1/sync/push`、`/v1/auth/login`、`CloudSyncEngine`、`fluxing-itemkey-mac-v1`、`CloudAccountDialog`、`/v1/sync/pull`）判别**全部 False**，`tmp/AP-logcheck.txt` 复核 B 组四方案 `dictionary is ready`、**0 次** `missing input schema` ⇒ 对照有效；口径裁定见 ADR 0060 | ① 138.5 MB 与 ADR 0030 的 40 MB 属**口径错配**（40 MB = 无 TSF 会话稳态 ≈ 25 MB；138.5 MB = **TSF 会话 + 方案 / 词库加载**态，`tmp/AP-session-hist.txt`：AN 采样窗口 48 次 `focus_in`，对照测量期间 0 次）⇒ **不是云同步回归**；② **带 TSF 会话**的 A/B 差值仍未实测（自动化无法建立 TSF 会话）；③ 输入延迟两组对照未测（需登录态 + 用户在场） |
 | **AC-12** | 未登录全流程出向请求数 = 0 | **✅ 通过** | `compliance-check.md` §1：未登录态下 `Get-NetTCPConnection -State Established` 对 WeaselServer PID 257348 = **0 条**；全局到 Cloudflare 网段 = **0 条** | — |
 | **AC-13** | 新设备登录后同步恢复词库 / 短语 / 配置 | **不通过** | — | **需第二台设备**登录同一账号后拉取（并依赖 AC-01 登录态闭环） |
 | **AC-14** | 移除设备后该设备续期请求被拒绝 | **不通过** | 服务端**已实现**：`src/devices.ts` 提供 `GET /v1/devices` / `DELETE /v1/devices/:id`；`src/auth.ts:427` 续期时校验 `revoked_at` | 未实测：需两台设备，一台移除另一台后用旧 refresh token 续期 |
@@ -37,11 +37,12 @@
 | ✅ 通过 | **2** | AC-07、AC-12 |
 | ❌ 不通过（含「条件不具备」） | **12** | AC-01 ~ AC-06、AC-08 ~ AC-11、AC-13、AC-14 |
 
-**结构性阻塞（批次 AO 更新）**：14 条里 **7 条**（AC-03/04/05/08/09/13/14）需要**第二台设备**，
+**结构性阻塞（批次 AP 更新）**：14 条里 **7 条**（AC-03/04/05/08/09/13/14）需要**第二台设备**，
 AC-01/02/06/10 需要**登录态 + 用户在场**；这两类合计 11 条 ⇒ **单机 + 无人值守无法收敛到全绿**。
 纯机端可推进的两条已收口其一：**AC-07 于批次 AO 由不通过转通过**（方案 K：`item_key` 改送不透明 MAC 身份，见
-[ADR 0059](../../adr/0059-item-key-opaque-mac-identity.md)），**只剩 AC-11**（内存归因需不含云模块的对照构建；
-输入延迟两组对照需登录态）。
+[ADR 0059](../../adr/0059-item-key-opaque-mac-identity.md)）；**AC-11 的内存归因于批次 AP 闭环**（单变量 A/B ⇒
+云模块 ≈ 0 MB，138.5 MB 属会话态、与 40 MB 基线口径错配，**非云同步回归**），AC-11 仍记「不通过」的**唯一**剩余缺口是
+**输入延迟两组对照**（需登录态 + 用户在场）。
 
 ## 3. 证据索引
 
@@ -62,3 +63,10 @@ AC-01/02/06/10 需要**登录态 + 用户在场**；这两类合计 11 条 ⇒ *
 | T602 三数字实测 | `docs/research/fluxing-cloud-2026-11/perf-baseline.md` |
 | 合规核查全文 | `docs/research/fluxing-cloud-2026-11/compliance-check.md` |
 | 历史批次证据（AH 的 19/19 断言、AK 的四段判据、AM 的发信上线） | `docs/archive/handoffs/handoff-2026-11-11-batch-*.md` |
+| **AC-11 归因 A/B 实测**（A 含云 vs B pre-cloud，峰值 PrivMB / 单核 CPU / ΔCPU 节拍） | `tmp/AP-ctrl4.txt` |
+| **对照件甄别**（云标记 6 项全 False = 真 pre-cloud；1.2.1 归档件证伪） | `tmp/AP-ctrl4.txt`、`tmp/AP-ctrl3.txt`、`tmp/AP-probe2.txt` |
+| **对照组有效性**（四方案 `dictionary is ready` / 0 次 `missing input schema`） | `tmp/AP-logcheck.txt` |
+| **会话证据**（AN 窗口 48 次 `focus_in`；对照期 0 次） | `tmp/AP-session-hist.txt` |
+| **T604 出包产物**（1.3.0 installer 大小 / sha16 / 内嵌 WeaselServer 版本与云标记） | `tmp/AP-verify.txt` |
+| **门禁全量输出** | `tmp/AP-gate.txt` |
+| **ADR 0060 口径裁定**（占单核 / 窗口 ≥ 16 s / 归因必须 A/B 对照） | `docs/adr/0060-idle-cpu-single-core-window-and-attribution-method.md` |
