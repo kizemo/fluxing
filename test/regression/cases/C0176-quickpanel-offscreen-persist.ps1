@@ -64,10 +64,28 @@ try {
 
     # 首建钳制必须无条件：HasSavedPosition() 只能出现在「有则取保存值、无则取默认锚点」这一处，
     # 不能把 ClampToVisibleArea 整段关在门里（D0176 的原始写法）。
-    Assert-Case ($implText.Contains('const POINT target = HasSavedPosition() ? SavedPosition() : POINT{x, y};')) `
-        '首建钳制无条件化仍在位（HasSavedPosition 只决定初值，不决定是否钳制）'
+    # 批次 V 重构后位置解析改走 ResolveAnchoredPosition / HasSavedPosition 分支，
+    # 原断言绑的是**旧实现字面量**，已随重构失效 ⇒ 改为断言**语义**（不弱化、应加强）：
+    #   ① 首建路径确实调用 ClampToVisibleArea；
+    #   ② 工作区枚举为空时有兜底（WorkAreasWithFallback）⇒ 钳制基准恒存在。
+    #      这正是 D0176 的根因：枚举失败 ⇒ 首建钳制与建窗后自愈双双失效（事故同形复发）。
     Assert-Case ($implText.Contains('ClampToVisibleArea(target.x, target.y, panelW,')) `
         '首建钳制仍调用 ClampToVisibleArea'
+    $fallbackHits = ([regex]::Matches($implText, 'WorkAreasWithFallback\s*\(')).Count
+    Assert-Case ($fallbackHits -ge 3) `
+        "QuickPanelDialog.cpp 里 WorkAreasWithFallback 出现 $fallbackHits 次（期望 >=3：定义/首建钳制/建窗后自愈）"
+    $fallbackBody = Get-TopLevelBody -Path $impl -Signature 'std::vector<fluxing::panel_position::Rect> WorkAreasWithFallback()'
+    Assert-Case ($null -ne $fallbackBody) 'WorkAreasWithFallback 是顶层定义'
+    if ($null -ne $fallbackBody) {
+        Assert-Case ($fallbackBody -match 'EnumerateWorkAreas\s*\(') `
+            '兜底函数以 EnumerateWorkAreas() 为首选来源'
+        Assert-Case ($fallbackBody -match 'areas\.empty\s*\(\)') `
+            '兜底函数判空（只有枚举失败才走兜底）'
+        Assert-Case ($fallbackBody -match 'SPI_GETWORKAREA') `
+            '兜底工作区来自 SPI_GETWORKAREA（主显示器工作区）'
+        Assert-Case ($fallbackBody -match 'push_back') `
+            '兜底函数把主工作区补进 areas（保证钳制基准非空）'
+    }
 
     $saveBody = Get-TopLevelBody -Path $impl -Signature 'bool QuickPanelDialog::SavePosition()'
     Assert-Case ($null -ne $saveBody) 'SavePosition() 仍是顶层定义（落盘守卫的宿主）'

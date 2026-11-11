@@ -2873,6 +2873,28 @@ namespace {
 // 之后每次 Alt+, 都是「把一个不可见窗口设为可见」,用户的体感是快捷键坏了;
 // 只有重启 server 才被首建钳制救回。所以复用路径必须先自愈。
 //
+// D0176-fix (2026-11-11): 工作区枚举的**兜底**。
+// EnumerateWorkAreas() 失败(返回空)时,两处依赖 areas 的逻辑会同时失效:
+//   ① 首建路径的 ClampToVisibleArea —— 钳制算法没有基准 ⇒ 持久化的屏外坐标
+//      直接进 CreateWindowExW,面板建在用户看不见的地方;
+//   ② RepairOffscreenPanel —— 枚举为空就 return false,建窗后的自愈也一并放弃。
+// 两者叠加 ⇒ 用户体感「Alt+, 没反应」,与 D0176 事故同形(注释声称「无条件执行」
+// 而实现把 ClampToVisibleArea 关在 !areas.empty() 门内,故一并补齐)。
+// 兜底:用 SPI_GETWORKAREA(主显示器工作区)当唯一工作区 —— 枚举失败说明系统没给
+// 出可靠的多屏信息,但主工作区仍可用;拿它当基准,至少保证面板落在看得见的地方。
+std::vector<fluxing::panel_position::Rect> WorkAreasWithFallback() {
+  std::vector<fluxing::panel_position::Rect> areas =
+      fluxing::panel_position::EnumerateWorkAreas();
+  if (!areas.empty())
+    return areas;
+  RECT wa = {};
+  if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0))
+    return areas;  // 连主工作区都取不到 ⇒ 保持空(调用方按「无基准」处理,不猜)
+  areas.push_back(
+      fluxing::panel_position::Rect{wa.left, wa.top, wa.right, wa.bottom});
+  return areas;
+}
+
 // 只在**零交集**时动手:部分可见(用户故意拖到半屏)不动,尊重用户位置。
 // 调用面是 WeaselServer 的窗口消息/拖动回调,不在 TSF 回调里 ⇒ 不触及 P2 红线。
 bool RepairOffscreenPanel(HWND hwnd) {
@@ -2884,9 +2906,9 @@ bool RepairOffscreenPanel(HWND hwnd) {
   if (!GetWindowRect(hwnd, &rc))
     return false;
   const std::vector<fluxing::panel_position::Rect> areas =
-      fluxing::panel_position::EnumerateWorkAreas();
+      WorkAreasWithFallback();
   if (areas.empty())
-    return false;  // 枚举失败 ⇒ 不猜(钳制算法同样依赖 areas)
+    return false;  // 连主工作区都取不到 ⇒ 无基准,不猜(钳制算法同样依赖 areas)
   if (fluxing::panel_position::RectIntersectsVisibleArea(
           rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, areas))
     return false;
@@ -3013,9 +3035,13 @@ void QuickPanelDialog::Show(bool currentFullwidth,
   // D0176 (2026-11-06): 钳制改为**无条件**执行 —— 原写法把 ClampToVisibleArea
   // 关在 HasSavedPosition() 门内,一旦 EnumerateWorkAreas() 返回空,持久化的
   // 屏外坐标就直接进了 CreateWindowExW,没有任何兜底。
+  // D0176-fix (2026-11-11): 上一版的「无条件」只在注释里成立 —— 实现仍带着
+  //   !areas.empty() 关门,枚举失败时钳制与建窗后自愈双双失效(事故同形复发)。
+  //   现由 WorkAreasWithFallback() 兜底(枚举空 ⇒ 退回主显示器工作区)⇒
+  //   基准恒存在。
   {
     const std::vector<fluxing::panel_position::Rect> areas =
-        fluxing::panel_position::EnumerateWorkAreas();
+        WorkAreasWithFallback();
     fluxing::panel_position::Point target{x, y};
     bool has_target = false;
     fluxing::panel_position::Point anchored{};
