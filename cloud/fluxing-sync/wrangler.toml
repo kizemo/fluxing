@@ -40,10 +40,20 @@ REFRESH_TOKEN_TTL = "2592000"
 # 客户端密钥派生参数（plan §3.1）。服务端只回显给客户端，绝不用它们派生任何东西。
 KDF_ALGO = "PBKDF2-SHA256"
 KDF_ITERS = "600000"
-# 发信通道：outbox = 只写 mail_outbox 表（本地 / 测试）；cloudflare = 走 send_email 绑定。
-# 生产必须改 "cloudflare" 并取消下面 [[send_email]] 段的注释。
+# 发信通道（MAIL_MODE）：
+#   outbox = 只写 mail_outbox 表，不发信（本地 / 测试 / 内测）
+#   http   = 第三方 HTTPS 邮件 API（生产路线，2026-11-11 用户拍板 Resend，$0）
+#   cloudflare = Workers send_email 绑定（需 Workers Paid $5/月，**不启用**）
+# 切到 "http" 的前提：MAIL_HTTP_API_KEY 已作为 Secret 注入（否则线上注册返回 500 server_misconfigured）。
 MAIL_MODE = "outbox"
 MAIL_FROM = "no-reply@aiec.fun"
+# 发件人显示名（拼成「显示名 <地址>」）
+MAIL_FROM_NAME = "火流猩输入法"
+# 第三方 HTTPS 邮件 API 端点与鉴权约定（Resend 兼容；换服务商只改这里，不改代码）
+MAIL_HTTP_ENDPOINT = "https://api.resend.com/emails"
+MAIL_HTTP_AUTH_HEADER = "Authorization"
+MAIL_HTTP_AUTH_PREFIX = "Bearer "
+# MAIL_HTTP_API_KEY 绝不写进本文件：用 `wrangler secret put MAIL_HTTP_API_KEY` 注入。
 
 # 生产发信绑定（**需 Workers Paid 计划** —— 官方原文：向任意收件人发送需 Paid，账号级最低消费 $5/月）。
 # **2026-11-11 用户拍板走 $0 路线** ⇒ 首版**不启用**本绑定：开发 / 内测用 MAIL_MODE="outbox"（只写表不发信）；

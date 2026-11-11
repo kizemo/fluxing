@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+### feat(fluxing): 服务端新增 `MAIL_MODE="http"` 第三方 HTTPS 邮件 API 通道（Resend 兼容，$0 路线 · 批次 AL）
+
+- **背景**：spec 100 注册链路必须把 6 位验证码**真实投递**到用户邮箱。既有两条通道都不成立 —— Cloudflare `send_email` 需 **Workers Paid（账号级 $5/月）**，与用户 $0 路线冲突；`MAIL_MODE="outbox"` 只写 D1 表**根本不发信**，且生产库存下**明文验证码**。2026-11-11 用户拍板走 **Resend**。
+- **实现（服务端 3 文件 + 1 测试文件）**：`cloud/fluxing-sync/src/mail.ts` 新增 `MAIL_MODE="http"` 分支 —— 走**通用第三方 HTTPS 邮件 API**（端点 / 鉴权头名 / 鉴权前缀全部 env 可配，载荷用 Resend 形状 `{from, to[], subject, text, html}` ⇒ **换服务商只改配置不改代码**）；`src/env.ts` 新增 5 个 env 字段；`wrangler.toml` 新增 `MAIL_FROM_NAME` / `MAIL_HTTP_ENDPOINT` / `MAIL_HTTP_AUTH_HEADER` / `MAIL_HTTP_AUTH_PREFIX` 四个 vars（`MAIL_MODE` **仍为 `outbox`**，等 API Key 就位再切，避免线上注册直接 500）。
+- **错误分类（中文原因 + 稳定码，禁止静默降级 —— 批次 AK 教训）**：缺 key / 端点非 HTTPS / `MAIL_FROM` 非法 / 上游 401·403 ⇒ `500 server_misconfigured`；上游 429 ⇒ `503 mail_rate_limited`；其它 4xx/5xx/网络异常 ⇒ `503 mail_send_failed`。网络类失败重试 1 次（单次超时 10 s），业务类错误**不重试**。
+- **安全**：API Key 只走 Workers Secret（`wrangler secret put MAIL_HTTP_API_KEY`），**绝不**进代码库 / D1 / 日志；http 模式**不写 `mail_outbox`** ⇒ 生产库不留明文验证码。
+- **单测（新增 `test/mail-http.test.ts`，12 条）**：成功载荷与鉴权头 / `MAIL_FROM_NAME` 拼接 / 端点可配 / 缺 key / 非 HTTPS / `MAIL_FROM` 非法 / 401 / 403 / 429 / 500 / 网络重试次数 / 非法 `MAIL_MODE`，并断言 **http 模式不落 `mail_outbox`**。
+- **门禁**：`tsc --noEmit` = 0 · 端点策略扫描 = 0 · `vitest` **42 passed**（基线 30 + 新增 12）。**变异验证 4/4 有牙**：关重试 / 改 429 映射 / 关 http 分支 / 改限流码 四处定向破坏全部被捕获（EXIT=1），还原后全量仍 **42 passed**。
+- **新增运维资产**：`docs/ops/fluxing-cloud-resend-setup.md`（用户侧分步指南，含「CNAME 记录不可开橙云代理」这个头号坑）+ `scripts/cloud/resend-go-live.ps1`（一键上线：注入 Secret → 切 `MAIL_MODE=http` → 部署 → 巡活 → 可选发自检信，**不回显 key**）。
+- **⚠️ 未闭环**：① **真实邮件投递尚未发生** —— 需用户完成 Resend 注册 / 域名 DNS 记录（现有 Cloudflare 凭据**无 DNS 写权限**，只能手动加）/ 交付 API Key；② 生产 `MAIL_MODE` 仍是 `outbox`（⇒ 线上行为与部署前完全一致）；新代码**已部署**（Version ID `2e6db488-da38-4a3a-8ec7-7f302b167035`，`GET /v1/health` = 200），只差「注入 Secret + 切 `MAIL_MODE=http`」；③ 切 http 后 `scripts/cloud/live-e2e-probe.mjs` 的「从 `mail_outbox` 取码」步骤失效，取码来源须改为用户邮箱（**切换时同步改**）；④ AH-4 ②（双机 AC-08/AC-09）/ ⑤（客户端消费 `skipped`）与 T602–T604 仍待推进。
+- **未改**：客户端代码（**未新增任何 IPC 消息**，收发码协议不变）、`include/WeaselIPCData.h`、`output/install.nsi`、`output/data/**`、既有 `MAIL_MODE` 默认值。
+
 ### fix(WeaselServer): 账号页「注册失败：网络请求失败」根因修复 + 口令框不再被清空（批次 AK）
 
 - **用户可见变化**：① 账号页「注册并发送验证码」**不再报「注册失败，网络请求失败，网络请求失败」** —— 真机实测状态栏变成「注册成功：请在验证码框输入 6 位验证码完成邮箱验证。」，**整条链路（注册 → 验证邮箱 → 登录）首次在真机上跑通**；② **口令框不再被莫名清空** —— 注册失败、登录失败、以及「登录成功但邮箱尚未验证」三种情况都**保留**用户已输入的口令，只有**完全可用（已登录 + 邮箱已验证）**才清空。

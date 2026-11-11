@@ -397,6 +397,7 @@
 - **Done 判据（逐条实测）**：① 云单测 `RESULT: PASS=324 FAIL=0`（基线 297 ⇒ **+27**）、`VERDICT: ALL PASS`、`TEST_EXIT=0`；② `build.bat weasel` ⇒ `WEASEL_EXIT=0`、0 错误、产物 `WeaselServer.exe` sha16 `6CA1628D290D3DC8`；③ 4 个生产文件 clang-format 18.1.8 `diffLines=0`；④ 产物新鲜度 `CloudAccount.obj` / `CloudAccountDialog.obj` mtime 均晚于源文件（`FRESH=True`）。
 - **未闭环（需用户在场）**：账号页真机注册 → 收码 → 验证 → 登录的端到端 —— `MAIL_MODE="outbox"` 是 $0 路线，验证码只进 D1 `mail_outbox` / `email_verifications`（后者存 `code_hash`），**明文码无法直读**；真机截图亦需人工（IME 自绘顶层窗跨进程抓不到，见记忆 #43）。
 - **阶段 G 加固项（原「本批不做」，已于批次 AF 补齐）**：服务端缺 **resend** 端点 ⇒ 验证码过期 / 次数用尽后无恢复路径（再 `register` 会 409 `email_taken`）⇒ 用户被锁死。**批次 AF 已实现**：服务端 `POST /v1/auth/resend`（`src/auth.ts` + `src/index.ts`，+10 用例，服务端 30/30 PASS）+ 客户端 `CloudAccountService::ResendVerification` + 账号页「重新发送验证码」按钮 ⇒ 见上文 **T605**。**剩余缺口 = 真实账号端到端验证**（部署已于批次 AG 完成：`api.aiec.fun` / Version ID `0aaf933c-f832-4c64-a726-3570f32ed848`；`MAIL_MODE="outbox"` 下验证码明文不可直读，收码闭环需人工取码）。
+  **【批次 AL 更新 2026-11-11】** 服务端已实现 `MAIL_MODE="http"`（Resend 兼容的第三方 HTTPS 邮件 API）+ 12 条单测 + 4 处变异有牙 + ADR 0058 + 用户侧落地指南 `docs/ops/fluxing-cloud-resend-setup.md` + 一键上线脚本 `scripts/cloud/resend-go-live.ps1`。**生产 `MAIL_MODE` 仍为 `outbox`**（线上行为与部署前一致；新代码已部署 Version ID `2e6db488-da38-4a3a-8ec7-7f302b167035`，health 200） ⇒ 待用户交付 Resend API Key + 在 Cloudflare 手动加域名 DNS 记录（现有凭据无 DNS 写权限）后切换。⚠️ 切 http 后 **http 模式不写 `mail_outbox`** ⇒ 取码来源须从 D1 改为**用户邮箱**，`scripts/cloud/live-e2e-probe.mjs` 的取码步骤同步失效待改。
 - **交接文档**：`docs/archive/handoffs/handoff-2026-11-11-batch-ae-cloud-register-verify-chain.md`。
 
 ---

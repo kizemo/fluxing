@@ -142,3 +142,24 @@ UI 显示「注册失败：网络请求失败：网络请求失败」—— 与�
   唯一残留 = 验证码经 D1 `mail_outbox` 取用而非**真实邮箱收信** ⇒ 归入邮件通道拍板项。
 - **AH-4 ② 双机 AC-08/AC-09** 与 **AH-4 ⑤ 客户端消费 `skipped`**：依赖第二台设备 / 第二个 Windows 账号
   （`CloudCredentialStore` 是 Windows 用户级全局单例，同机两套用户目录**不构成双端**）⇒ 需用户在场，本机不可自动化。
+
+## 批次 AL 追加 · 发信通道 `MAIL_MODE="http"`（2026-11-11 16:40）
+
+> 目标：按用户 2026-11-11 拍板的 **$0 路线（第三方 HTTPS 邮件 API = Resend）** 打通「验证码真实投递」。
+
+### 已完成（verified）
+
+- **服务端实现**（4 文件）：`cloud/fluxing-sync/src/mail.ts` 新增 `MAIL_MODE="http"` 分支；`src/env.ts` 新增 5 个 env 字段；`wrangler.toml` 新增 4 个 vars；新增 `test/mail-http.test.ts`（12 条）。
+  - 通道形态：**通用第三方 HTTPS 邮件 API**（端点 / 鉴权头名 / 前缀全 env 可配，载荷用 Resend 形状）⇒ 换服务商不改代码。
+  - 错误分类：缺 key / 非 HTTPS / `MAIL_FROM` 非法 / 401·403 ⇒ `500 server_misconfigured`；429 ⇒ `503 mail_rate_limited`；其它 4xx/5xx/网络异常 ⇒ `503 mail_send_failed`；网络类重试 1 次，业务类不重试。
+  - 安全：`MAIL_HTTP_API_KEY` 只走 Workers Secret；http 模式**不写 `mail_outbox`**（生产库不留明文验证码）。
+- **门禁**：`tsc --noEmit` = 0 · 端点策略扫描 = 0 · `vitest` **42 passed**（基线 30 + 新增 12）。
+- **变异验证 4/4 有牙**：关重试 / 改 429 映射 / 关 http 分支 / 改限流码 四处破坏全部被捕获（EXIT=1）；还原后全量 **42 passed**，`src/mail.ts` diff 行数未变。
+- **新资产**：`docs/ops/fluxing-cloud-resend-setup.md`（用户分步指南）、`scripts/cloud/resend-go-live.ps1`（一键上线：注入 Secret → 切 `MAIL_MODE=http` → 部署 → 巡活 → 可选发自检信，**不回显 key**）、ADR `docs/adr/0058-third-party-https-mail-api-channel.md`。
+- **一次实测假红已修**：全量套件里「http 模式不写 `mail_outbox」曾失败，根因 = **miniflare 会把 `wrangler.toml` 的 `[vars]` 注入测试环境**，我新加的 `MAIL_FROM_NAME` 渗进断言（**不是**执行顺序问题）⇒ 单测改为显式覆盖全部相关 vars，与配置文件解耦。
+
+### 未闭环（not verified / 待用户在场）
+
+- **真实邮件投递尚未发生**：需 ① 用户注册 Resend 并把域名 `aiec.fun` 验通（DNS 记录必须**用户手动**加到 Cloudflare —— 本机现有凭据只有 zone 读 + Account 作用域，无 DNS Write）；② 用户交付 API Key。**生产 `MAIL_MODE` 仍是 `outbox`**（⇒ 线上行为与部署前完全一致）；新代码**已部署**（Version ID `2e6db488-da38-4a3a-8ec7-7f302b167035`，`GET /v1/health` = 200），只差「注入 Secret + 切 `MAIL_MODE=http`」两步。
+- **切换时必做**：`scripts/cloud/live-e2e-probe.mjs` 的取码来源从 D1 `mail_outbox` 改为**用户邮箱**（http 模式不再写该表）。
+- AH-4 ②（双机）/ ⑤（客户端消费 `skipped`）、T602–T604、批次 AI 托盘右键 DPI 目视复验 —— 仍需用户在场。

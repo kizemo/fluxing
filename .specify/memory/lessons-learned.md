@@ -14721,3 +14721,23 @@ handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四
   否则用户会在下一步被逼着重填。
 - 判「某个控件里还有没有东西」时，先确认**读取通道对该控件类型有效**：密码框 / 掩码控件跨进程读不到文本。
   **判据失灵 ≠ 被测对象回归**（本批第一次跑出来「口令被清空」就是这么误判的）。
+
+## L215 - 服务端单测的断言**不能依赖 `wrangler.toml` 的 `[vars]`**：miniflare 会把配置文件变量注入测试环境 ⇒ 改一次配置就让单测假红
+
+**证据**：2026-11-11 Fluxing 批次 AL（服务端 `MAIL_MODE="http"` 分支）。新增 `test/mail-http.test.ts` 时，
+该文件单独跑 **12/12 全绿**，但**全量套件**里「http 模式不写 `mail_outbox`」那条**红了**。
+第一反应以为是「执行顺序导致 `mail_outbox` 计数不为 0」⇒ 差点把断言改成「前后计数不变」这种**语义降级**的写法。
+**真因**：`@cloudflare/vitest-pool-workers` 的 miniflare 会把 `wrangler.toml` 的 `[vars]`（本例 `MAIL_FROM_NAME`）
+**合并进测试 env** ⇒ 我刚在配置文件里加的 `MAIL_FROM_NAME = "火流猩输入法"` 渗进了 `from` 字段，
+而单测断言写的是裸地址 `no-reply@aiec.fun` ⇒ 断言失败。**与执行顺序、与 D1 隔离都无关。**
+
+**怎么用**：
+- 服务端单测构造 env 时，**显式覆盖全部被断言的 var**（`MAIL_MODE` / `MAIL_FROM` / `MAIL_FROM_NAME` / 端点 / 鉴权头 / 前缀），
+  **不要**只靠 `...env` 展开 —— 否则**改一次 `wrangler.toml` 就假红**，且失败信息长得像业务 bug。
+- **「单跑绿 / 全量红」的第一排查项是「配置渗透」，不是「执行顺序」**：先问「这个断言依赖的字段是不是来自配置文件」。
+  真因不同 ⇒ 修法完全不同（前者：解耦断言；后者：隔离数据）。**先取到确切的 AssertionError 再改**，别猜。
+- 排查手法：`vitest run` 全量输出重定向到文件，再按 `AssertionError` 关键字截取上下文（本次一行输出就锁定了
+  `expected '火流猩输入法 <no-reply@aiec.fun>' to be 'no-reply@aiec.fun>'`）。
+
+**推广**：任何「用共享配置驱动的测试环境」都存在同类渗透面（`vitest.config.ts` 的 `miniflare.bindings`、
+`vite.config.ts` 的 `define`、CI 的 env）。**单测断言的对象必须由测试自己显式给出**，配置文件只做兜底默认值。
