@@ -62,6 +62,9 @@ const TAG_BYTES = 16;
 // 小工具
 // ---------------------------------------------------------------------------
 const keepData = process.argv.includes('--keep');
+// --register-only：只注册（把真实验证码发到信箱）就退出，等用户从信箱读出
+// 6 位码后，第二轮带 FLUXING_PROBE_CODE 回来跑完整闭环（恢复模式）。
+const registerOnly = process.argv.includes('--register-only');
 const results = [];
 let failed = 0;
 
@@ -219,7 +222,8 @@ async function main() {
   // 验证码不再落 mail_outbox，必须用真实可投递邮箱 + 人工提供的 6 位码。
   const email =
     process.env.FLUXING_PROBE_EMAIL?.trim() || `fluxing-probe-${stamp}@example.com`;
-  const password = `Probe-Pw-${stamp}`;
+  // 口令可外部指定 ⇒ 跨轮次保持一致（恢复模式的 login 必须用同一口令派生 auth_key）
+  const password = process.env.FLUXING_PROBE_PASSWORD?.trim() || `Probe-Pw-${stamp}`;
   const deviceId = randomBytes(8).toString('hex');
   const itemKey = `userdb\t探针词条-${stamp}`;
   const plainText = `探针明文载荷-${stamp}`;
@@ -256,13 +260,34 @@ async function main() {
     auth_key: authKey.toString('base64'),
     device: { id: deviceId, name: 'Fluxing' },
   });
-  if (reg.status !== 200) {
+  let accountId = reg.json?.account_id ?? null;
+  if (reg.status === 200) {
+    record('AC-01 · register 200 且返回 account_id', Boolean(accountId), `account_id=${accountId}`);
+  } else if (reg.status === 409 && /^\d{6}$/.test((process.env.FLUXING_PROBE_CODE || '').trim())) {
+    // 恢复模式：第二轮注入外部码时账号已存在 ⇒ 服务端在**发码之前**就 409
+    // （auth.ts：existing 检查早于发信）⇒ 不会把用户已读到的那枚码换掉。
+    const rows = d1Query(`SELECT id FROM users WHERE email = '${email}' LIMIT 1`);
+    accountId = rows.length > 0 ? String(rows[0].id) : null;
+    record(
+      'AC-01 · register 409（账号已存在）⇒ 转入恢复模式继续',
+      Boolean(accountId),
+      `account_id=${accountId}`,
+    );
+  } else {
     record('AC-01 · register 200', false, `${reg.status} ${reg.text.slice(0, 200)}`);
     cleanup(email, null);
     return;
   }
-  const accountId = reg.json?.account_id;
-  record('AC-01 · register 200 且返回 account_id', Boolean(accountId), `account_id=${accountId}`);
+
+  if (registerOnly) {
+    process.stdout.write(`\n--register-only：账号就绪（${email}），验证码已交由发信通道投递。\n`);
+    process.stdout.write(`口令：${password}（恢复模式必须用同一口令，请带 FLUXING_PROBE_PASSWORD 重跑）\n`);
+    process.stdout.write('下一步：读到 6 位码后执行\n');
+    process.stdout.write(
+      `  $env:FLUXING_PROBE_EMAIL='${email}'; $env:FLUXING_PROBE_PASSWORD='${password}'; $env:FLUXING_PROBE_CODE='123456'; node scripts/cloud/live-e2e-probe.mjs --keep\n`,
+    );
+    return;
+  }
 
   // --- 3. 取 6 位验证码 ----------------------------------------------------
   // 两条来源：
