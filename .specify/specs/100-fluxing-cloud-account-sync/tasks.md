@@ -429,3 +429,35 @@
 
 ### AH-5 · 交接文档
 - `docs/archive/handoffs/handoff-2026-11-11-batch-ah-live-e2e-probe-and-item-key-tab-fix.md`（接力 prompt 按 §9「one file per spec + day, updated in place」就地改写 `docs/archive/prompts/prompt-next-session-2026-11-11-batch-ad-tray-langbar-residue.md`，未新建重复文件）。
+
+---
+
+## 批次 AI 收尾记录（2026-11-11 · 快捷设置栏右键菜单「变小」根因 + DPI 对齐修复）
+
+> 用户报告：「快捷设置栏的右键菜单，变得非常小，文字也比之前缩小很多，可视度降低。请恢复之前的右键菜单大小设置。」
+> 本批**不改云同步链路**、**不新增 IPC 消息**、**不改菜单项**、**不做自绘菜单**、**不动 manifest**；
+> 唯一生产改动 = `WeaselServer/SystemTraySDK.cpp` 一个文件。批次 AH 成果一律引用、未重做。
+
+### AI-1 · 根因（verified，判据独立成立）
+- 弹出链 = `QuickPanelDialog.cpp:1752-1767` → `WeaselServerApp.cpp:319-325`（**ADR 0038 共用回调** ⇒ 一处修覆盖「品牌图标右键」+「托盘右键」两条入口）→ `SystemTraySDK.cpp::ShowPopupMenuAt`（`LoadMenu` → `GetSubMenu(0)` → `SetMenuDefaultItem` → `CustomizeMenu` → `SetForegroundWindow` → `TrackPopupMenu(hSubMenu, ..., hTargetWnd, NULL)` → `PostMessage(WM_NULL)` → `DestroyMenu`）。
+- **全仓 `OWNERDRAW` / `WM_MEASUREITEM` / `WM_DRAWITEM` 在生产菜单路径零命中** ⇒ 这是**系统资源菜单**，仓库里**不存在「菜单字号」可调项**；「改配置恢复字号」是死路。
+- 实测：面板窗 `GetDpiForWindow=144`（150%），但**同进程内三个隐藏/Popup 属主窗 `dpiWin=96`**（`tmp\AI-dpi-probe.txt`）；菜单 **20 项 / 内框 222×407 ⇒ 20.35 px·项⁻¹ = 96 逻辑行高** ⇒ 行高与字号按 96 渲染，在 150% 屏上「整体缩小 2/3」。
+- 已排除：owner 近期未改（`git log --since=2026-11-06 -S 'SetTargetWnd' -- WeaselServer/` **空**）；manifest 近期未改；AppCompat `Layers` 无条目；装机 exe 内嵌清单 `dpiAware=True` / `dpiAwareness=False`（**PMv1**）；进程启动晚于文件替换 ⇒ 排除「跑旧映像」。
+
+### AI-2 · 修法（唯一生产改动）
+- `ShowPopupMenuAt` **弹出前**把 **target 窗 + 当前线程** 的 DPI context 对齐到「弹出点所在显示器」，`TrackPopupMenu` 返回后**反向还原**（先 thread 后 window）⇒ **长期 DPI 状态零残留**。
+- DPI API 经 `GetModuleHandleW(L"user32.dll")` + `GetProcAddress` **运行时解析**（沿用 `QuickPanelDialog.cpp:75` / `WeaselPanel.cpp:24` 既有范式）⇒ 不引头类型、不新增导入库，**老 Windows 自动退化为原行为**。
+
+### AI-3 · Done 判据（逐条实测）
+- 修前 `238×423 / 20 项 / 内框 20.35 px·项⁻¹` → 修后 **`334×650 / 20 项 / 外框 32.50 px·项⁻¹`（内框 ≈31.70）**，高度比 **1.537 ≈ 系统缩放 150%**；`PROBE_EXIT=0`；截屏目视文字恢复正常字号 ⇒ **`VERDICT=PASS_MENU_DPI_RESTORED`**。
+- `build.bat weasel` 连编两次 **0 警告 0 错误**（`BUILD_EXIT=0`）；clang-format 18.1.8 首轮 `TOTAL_HUNKS=3` 且 hunk 行号 **773/777/789 全落在新增区** ⇒ 局部 `--lines=770:860` 后复验 **`RECHECK_TOTAL_HUNKS=0`**，字节校验 `LF=1156 CR=0` ⇒ **LF 保真、无 BOM**。
+- 装机 = 备份改名 + `File::Copy` + SHA 双证 + 重启（**不跑 NSIS 安装器**，本仓 install.nsi 冒烟验收已作废）：`sha16 094E54C18D534F5C → 1B0EE23CD2531A7E`、**`MATCH=True`**、旧件留盘 `WeaselServer.exe.old-261111-101226`、新 pid **214300**；只替换 `WeaselServer.exe`、**不动 TSF DLL** ⇒ 无需重启宿主应用。
+
+### AI-4 · 本批未闭环
+- ① **未提交 / 未 push**（前缀 `WeaselServer`，正文引 ADR 0038 + 批次 AI；commit 前跑 `git status -sb` + `git diff --stat`）。
+- ② **`lessons-learned.md` 未开 `L##`** —— 本批属 bugfix 而非架构决策 ⇒ 按 §3 应入 lessons-learned，**不做 ADR**。
+- ③ **用户目视复验**：`Alt+,` 面板品牌图标右键（几何判据来自 `GetMenuItemRect`，`PrintWindow` 抓 Popup 只画出上半 ⇒ 截图仅作字号佐证）；**托盘图标右键未单独复测**。
+- ④ **备选方案未启用**：若复验仍有偏差 ⇒ `PerMonitorHighDPIAware.manifest` 升 **PerMonitorV2**（影响全进程所有窗口，需重编重装重验，风险更大）。
+
+### AI-5 · 交接文档
+- `docs/archive/handoffs/handoff-2026-11-11-batch-ai-quickpanel-menu-dpi.md`（含根因/证据路径/环境事实/工具坑/需用户在场的项）；接力 prompt 按用户 2026-11-08 指示**直接给在当轮回答正文**，不另落文件。

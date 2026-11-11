@@ -14627,3 +14627,32 @@ handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四
 `weaselx64.<ver>.<build>.<seq>.dll` ⇒ 每次都误报「versioned shim : NONE FOUND」、
 「unexpected file name」。不影响装机成功（是 Note 不是硬检查），但它**会掩盖**真正的 shim 缺失，
 属于「验收判据本身失灵」类问题，应单独修（修完必须复跑一次装机验收）。
+
+## L211 - 系统弹出的菜单字号由**属主窗口的 DPI awareness context**决定，不是进程 manifest：属主是隐藏的 `Popup` 窗 ⇒ 冻结在 96 DPI ⇒ 高分屏右键菜单整体缩小（2026-11-11）
+
+**证据**：2026-11-11 批次 AI。用户报「快捷设置栏的右键菜单变得非常小，文字也比之前缩小很多，可视度降低」。
+仓库里**没有任何「菜单字号」可调项**（全仓 `OWNERDRAW` / `WM_MEASUREITEM` / `WM_DRAWITEM` 在生产菜单路径
+零命中 ⇒ 弹的是系统资源菜单，字号完全由系统按 DPI 算），所以「恢复之前的设置」不能理解成改配置或造自绘菜单。
+探针 `tmp\AI-dpi-probe.ps1` 实测：快捷面板窗 `GetDpiForWindow = 144`（150% 屏），但同进程三个隐藏 / `Popup`
+属主窗 `dpiWin = 96` ⇒ `TrackPopupMenu(..., hTargetWnd)` 的**属主窗 DPI context 停留在 96**，菜单就按 96 排版。
+修前 20 项外框 `238x423` ⇒ **20.35 px/项**（150% 屏应 ~30 px）。修后同一判据 `334x650` ⇒ **32.50 px/项**
+（内框 ~31.70），高度比 1.537 ~ 系统缩放 1.5 ⇒ `VERDICT=PASS_MENU_DPI_RESTORED`。
+已排除的假因：owner 传参近期未改（`git log -S 'SetTargetWnd'` 空）、manifest 未改、AppCompat `Layers` 无条目、
+装机 exe 内嵌清单仍是 `dpiAware=True`（PMv1）、进程启动晚于文件替换（非「跑旧映像」，参见前一条 L210 同源坑）。
+
+**怎么用**：
+- 「菜单 / 弹出物字号变小」先看**属主窗的 DPI awareness context**，不要先找字号配置，也不要顺手造自绘菜单。
+- 判据必须能独立成立：**行高 = 外框高度 / 菜单项数**，再和**系统缩放比**对照（144/96 = 1.5）。
+  拿「和某张历史基线截图比」当判据必翻车 —— 本批快捷面板几何已被批次 U/V 重做过（239x36 -> 358x54），
+  那条互证**主动作废**，只用「行高 / 项数 + 系统缩放」这一条。
+- 修法 = 在**唯一弹出汇聚点**临时把**目标窗 + 当前线程**的 DPI context 对齐到菜单将要显示的位置，
+  弹完**反向还原**（先 thread 后 window）⇒ 长期 DPI 状态零残留、API 缺失时自动退化。
+  本批落在 `WeaselServer/SystemTraySDK.cpp::ShowPopupMenuAt`，因 ADR 0038 两条入口（品牌图标右键 + 托盘右键）
+  共用同一回调 ⇒ **一处修复覆盖两处**。
+- DPI API 一律**运行时解析**（`GetModuleHandleW(L"user32.dll")` + `GetProcAddress`），不引
+  `DPI_AWARENESS_CONTEXT` 头类型、不加导入库、不改 manifest（仓库既有范式 `QuickPanelDialog.cpp:75`、
+  `WeaselPanel.cpp:24`）。升 PerMonitorV2 清单是**风险更大的备选**：影响全进程所有窗口，需重编重装重验。
+- `PrintWindow` 抓 `Popup` 菜单**只画得出上半**（本批 20 项仅 9 项清晰、其余空白）⇒ 截图只能当**字号目视佐证**，
+  项数与尺寸判据必须用 `GetMenuItemRect` 枚举。
+- 只换 `WeaselServer.exe`、不动 TSF DLL ⇒ 无需重启宿主应用；但**必须 Kill 旧进程再起**，
+  否则「磁盘已是新文件」与「在跑的是新代码」是两件事（L210 / 批次 AD 同源坑）。

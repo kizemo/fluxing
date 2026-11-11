@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### fix(WeaselServer): 快捷设置栏 / 托盘右键菜单恢复 DPI 缩放尺寸（批次 AI）
+
+- **用户可见变化**：右键菜单从「小字、行高 20.35 px」恢复到 150% 屏应有的 **32.50 px/项**（内框 ~31.70），文字字号与可视度回到变小之前。两条入口（快捷设置栏品牌图标右键、托盘图标右键）**同时恢复**。
+- **根因（verified）**：仓库**没有**「菜单字号」配置项，弹的是系统资源菜单 ⇒ 字号由系统按**属主窗 DPI awareness context** 计算。`TrackPopupMenu` 的属主是 `CSystemTray` 自建的隐藏 `Popup` 窗，探针 `tmp\AI-dpi-probe.ps1` 实测该窗 `GetDpiForWindow = 96`（而快捷面板窗 = 144，系统 150%）⇒ 菜单按 96 DPI 排版。修前 20 项外框 `238x423` = **20.35 px/项**。已排除：owner 传参近期未改、manifest 未改、AppCompat `Layers` 无条目、内嵌清单 `dpiAware=True`（PMv1）、进程启动晚于文件替换（非旧映像）。
+- **修法（+72 行，唯一生产文件 `WeaselServer/SystemTraySDK.cpp`）**：在**唯一弹出汇聚点** `ShowPopupMenuAt` 弹出前把**目标窗 + 当前线程**的 DPI awareness context 对齐到菜单将要显示的位置，`TrackPopupMenu` 返回后**反向还原**（先 thread 后 window）⇒ 长期 DPI 状态零残留、API 缺失时自动退化。DPI API 全部运行时 `GetModuleHandleW(L"user32.dll") + GetProcAddress` 解析（沿用 `QuickPanelDialog.cpp:75` / `WeaselPanel.cpp:24` 既有范式），**不引新头类型、不加导入库、不改 manifest**。因 ADR 0038 两条入口共用同一回调，**一处修复覆盖两处**。沉淀为 `.specify/memory/lessons-learned.md` **L211**。
+- **门禁**：`build.bat weasel` 连编两次 ⇒ **0 个警告 0 个错误**；clang-format 18.1.8 首轮 3 处 hunk **全落新增行** ⇒ 改 `--lines=770:860` 局部格式化，复验 `RECHECK_TOTAL_HUNKS=0`，字节校验 `BYTES=34483 LF=1156 CR=0` ⇒ 该文件 **LF 与无 BOM 保真**（历史区不并入 diff）。
+- **装机 + 真机判据**：`D:\Program Files\fluxing\weasel\WeaselServer.exe` 由 sha16 `094E54C18D534F5C` → **`1B0EE23CD2531A7E`**（`MATCH=True`，回滚件改名留盘 `WeaselServer.exe.old-261111-101226`），Kill 旧 pid 225068 → 新 pid 214300。编排探针 `tmp\AI-activate-panel.ps1` 一次取齐：面板 `client=233x57` ⇒ 菜单 **20 项**（含 `pos=4 id=40024 账号与同步 (&Z)`）⇒ 外框 `334x650` ⇒ **32.50 px/项**，`PROBE_EXIT=0` / **`VERDICT=PASS_MENU_DPI_RESTORED`**；截图 `tmp\AI-menu-AFTER-31.7px.png`。
+- **未改**：`include/WeaselIPCData.h` 与 IPC 协议（**未新增任何 IPC 消息**）、`output/install.nsi`、`output/data/**`、快捷面板几何与自绘逻辑（**未造自绘菜单**）、进程级 DPI 设置 / manifest、服务端与云同步代码。
+- **⚠️ 未闭环**：① 用户**目视复验**（尤其托盘右键那条入口本批未单独复测）；② `PrintWindow` 抓 `Popup` 只画上半（20 项仅 9 项清晰）⇒ 截图只作字号目视佐证；③ 若复验仍有偏差，备选 = `PerMonitorHighDPIAware.manifest` 升 PerMonitorV2（影响全进程所有窗口，需重编重装重验，风险更大）。
 ### fix(fluxing): 线上真实账号闭环打通（register → verify → login → push → pull，19/19 断言通过）+ 修掉「`item_key` 带 TAB 被 400 拒绝」的真机生产缺陷（批次 AH）
 
 - **用户可见变化**：云同步的**线上链路首次真正跑通**。新增可复跑探针 `scripts/cloud/live-e2e-probe.mjs`（用 Node 标准 crypto **独立复刻**客户端的 KDF + GCM 布局 ⇒ 客户端自实现 / 标准实现 / 线上服务端三方一致性可证），在生产 D1 + `api.aiec.fun` 上完成 `注册 → 邮箱验证码验证 → 登录 → 推送 → 拉取` 全闭环，**19/19 断言全部通过**。此前 `push` 响应的 `skipped`、`pull` 顶层 `server_seq`、AC-01 服务端侧、AC-07 密文抽查一直挂在「需真实账号」（因 `MAIL_MODE="outbox"` 下 `email_verifications` 只存 `code_hash`、明文码不可直读）；本批查明 **`mail_outbox.body` 存的是明文验证码正文** ⇒ 闭环可全自动，**不需用户在场取码**。

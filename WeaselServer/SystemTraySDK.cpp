@@ -757,11 +757,46 @@ LRESULT CSystemTray::OnSettingChange(UINT uFlags, LPCTSTR lpszSection) {
 }
 #endif
 
-// spec 100 / ADR 0038: 弹出与托盘右键**完全同一份**菜单。
-// 托盘右键(OnTrayNotification)与「快捷设置栏品牌图标右键」
-// (WeaselServerApp → QuickPanelDialog::SetOnBrandRightClick → 本方法)
-// 走同一段代码 ⇒ 菜单资源(id = m_tnd.uID = IDR_MENU_POPUP)、命令目标窗口
-// (GetTargetWnd())、勾选态(CustomizeMenu)三者天然一致。
+// 批次 AI:系统资源菜单的**字号与行高**取自 TrackPopupMenu 的 owner 窗口
+// (以及调用线程)的 DPI context,菜单资源/rc 里没有任何尺寸可调。
+// 实测(150% 缩放 / 系统 DPI 144):
+//   · 面板窗 GetDpiForWindow = 144 ⇒ 面板文字正常;
+//   · WeaselServer 主窗口(菜单 owner,WS_POPUP 隐藏窗) = 96 ⇒ 菜单按 100% 绘制,
+//     行高实测 20.35 px = SM_CYMENU@96,比应有的 30 px 缩水整整 1.5 倍。
+// owner 窗在建好之前登录时 DPI 尚未落地,PM 感知进程里的隐藏窗会**冻结**在创建
+// 那一刻的 DPI,之后改缩放也不会收到 WM_DPICHANGED(它不在任何显示器上)。
+// 因此这里不碰字号,而是在弹出菜单的**那一瞬间**把 owner 窗口 + 线程的 DPI
+// context 对齐到「弹出点所在显示器」,弹完原样还原(微软针对 context menu 的
+// 官方做法)。老 Windows(无这些 API)自动退化为原行为。
+// DPI context API 按本仓既有约定(QuickPanelDialog.cpp:75、WeaselPanel.cpp:24)
+// **运行时解析**:不依赖 SDK 头里的 DPI_AWARENESS_CONTEXT 类型,也不新增导入库。
+typedef void* FluxDpiContext;
+typedef FluxDpiContext(WINAPI* SetThreadDpiAwarenessContext_t)(FluxDpiContext);
+typedef FluxDpiContext(WINAPI* SetWindowDpiAwarenessContext_t)(HWND,
+                                                               FluxDpiContext);
+typedef FluxDpiContext(WINAPI* GetDpiAwarenessContextForMonitor_t)(HMONITOR);
+
+template <typename Fn>
+static Fn ResolveUser32(LPCSTR name) {
+  HMODULE h = ::GetModuleHandleW(L"user32.dll");
+  if (!h)
+    return nullptr;
+  return reinterpret_cast<Fn>(::GetProcAddress(h, name));
+}
+
+// 弹出点所在显示器的 DPI context;取不到(老系统)返回 NULL ⇒ 调用方不动作。
+static FluxDpiContext FluxMenuDpiContext(POINT screenPos) {
+  static auto fnForMonitor = ResolveUser32<GetDpiAwarenessContextForMonitor_t>(
+      "GetDpiAwarenessContextForMonitor");
+  if (!fnForMonitor)
+    return nullptr;
+  HMONITOR mon =
+      ::MonitorFromPoint(screenPos, MONITOR_DEFAULTTONEAREST);  // Win98+ API
+  if (!mon)
+    return nullptr;
+  return fnForMonitor(mon);
+}
+
 BOOL CSystemTray::ShowPopupMenuAt(POINT screenPos) {
   HWND hTargetWnd = GetTargetWnd();
   if (!hTargetWnd)
@@ -784,8 +819,35 @@ BOOL CSystemTray::ShowPopupMenuAt(POINT screenPos) {
 
   CustomizeMenu(hSubMenu);
 
+  // 批次 AI:把 owner 窗口与当前线程的 DPI context 临时对齐到弹出点所在显示器,
+  // 让系统资源菜单按该显示器的 DPI 排版(字号/行高由此决定)。弹完原样还原,
+  // 进程的长期 DPI 状态逐字不变 ⇒ 不影响输入路径与其他窗口。
+  static auto fnSetWindowContext =
+      ResolveUser32<SetWindowDpiAwarenessContext_t>(
+          "SetWindowDpiAwarenessContext");
+  static auto fnSetThreadContext =
+      ResolveUser32<SetThreadDpiAwarenessContext_t>(
+          "SetThreadDpiAwarenessContext");
+
+  FluxDpiContext prevWindowContext = nullptr;
+  FluxDpiContext prevThreadContext = nullptr;
+  const FluxDpiContext targetContext = FluxMenuDpiContext(screenPos);
+  if (targetContext) {
+    if (fnSetWindowContext)
+      prevWindowContext = fnSetWindowContext(hTargetWnd, targetContext);
+    if (fnSetThreadContext)
+      prevThreadContext = fnSetThreadContext(targetContext);
+  }
+
   ::SetForegroundWindow(m_tnd.hWnd);
   ::TrackPopupMenu(hSubMenu, 0, screenPos.x, screenPos.y, 0, hTargetWnd, NULL);
+
+  if (targetContext) {
+    if (fnSetThreadContext && prevThreadContext)
+      fnSetThreadContext(prevThreadContext);
+    if (fnSetWindowContext && prevWindowContext)
+      fnSetWindowContext(hTargetWnd, prevWindowContext);
+  }
 
   // BUGFIX: See "PRB: Menus for Notification Icons Don't Work Correctly"
   ::PostMessage(m_tnd.hWnd, WM_NULL, 0, 0);
