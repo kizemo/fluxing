@@ -1,0 +1,56 @@
+# acceptance-matrix.md — 验收用例全跑（T601）
+
+> 批次 AN · 2026-11-11 实测 · 逐条跑 AC-01 ~ AC-14，**无「待定」**：每条给「通过 / 不通过」+ 证据路径 + 缺口。
+> 环境：线上 `https://api.aiec.fun`（`MAIL_MODE="http"`，Version ID `29d4e572-49d0-43c2-b091-dda3029edf00`）·
+> 客户端装机版 `D:\Program Files\fluxing\weasel`（`WeaselServer.exe` PID 257348）· 分支 `feat/100-cloud-sync`。
+> 证据文件在 `tmp/`（按任务书「证据不入库」不入 Git），结论同时落在本文件与收尾 handoff。
+
+## 0. 判读说明
+
+- **通过**：有可复跑的判别性证据（命令 + 输出）。
+- **不通过**：证据缺失、证据为负、或**前置条件不具备**（需两台设备 / 需登录态 / 需用户在场）⇒ 一律记「不通过」并写明缺什么，**不留「待定」**。
+- 服务端侧「已实现」不等于「AC 通过」：AC 的判据含客户端与端到端行为。
+
+## 1. 矩阵
+
+| AC | 判据摘要 | 结论 | 证据 | 缺口 / 失败原因 |
+|---|---|---|---|---|
+| **AC-01** | 注册 → 登录；口令错有中文提示 | **不通过（服务端已通，真机未闭环）** | 服务端 `register` **200** 且返回 `account_id=d42756f4-866c-465f-a9d4-aa6d47464426`（`tmp/AN-register-qq.txt`）；AK 批次真机状态栏已变「注册成功：请在验证码框输入 6 位验证码完成邮箱验证。」（handoff AK） | ① 用户**尚未亲手用原口令登录** `kizemo@163.com`（服务端已 `email_verified=1`，口令明文不存 ⇒ 无法代登）；② 探针侧「verify→login」需 6 位码回贴后补跑 |
+| **AC-02** | 免登：重启系统与服务后仍登录态、续期自动完成 | **不通过** | 服务端已实现 refresh token（`ACCESS_TOKEN_TTL=3600` / `REFRESH_TOKEN_TTL=2592000`，`wrangler.toml`）；`auth.ts:427` 校验 `revoked_at` | 未实测：需在**登录态**下重启输入法服务与系统后观察自动续期 |
+| **AC-03** | 双机词库：A 加词 → B 同步 → B 能打出并继续累积词频 | **不通过** | 合并语义结论已落盘 `docs/research/fluxing-cloud-2026-11/userdict-merge-semantics.md`；客户端推拉走 T102 快照通道 | **需两台设备**（本轮单机，条件不具备） |
+| **AC-04** | 双机短语：B 的短语界面可见同一条 | **不通过** | 同上 | **需两台设备** |
+| **AC-05** | 双机配置：A 改快捷键 → B 生效 | **不通过** | 配置项已纳入推拉集合（AF 批次） | **需两台设备** |
+| **AC-06** | 断网降级：断网期间输入正常、无重试风暴、恢复后自动补同步 | **不通过** | 代码层已有：退避第 4 档 60 分钟（AF 批次修）、维护态 `StartMaintenance`/`EndMaintenance` 包裹、节流 5 分钟 + 全局 15 分钟 | 未实测：需真机断网（按 exe 路径防火墙出站阻断）+ 恢复后观察补同步；**需用户在场** |
+| **AC-07** | 服务端存储与传输抓包均无明文词条 / 短语 / 配置 | **不通过** | R2 侧：服务端只 `BUCKET.put(cipherBytes)`、键为 `u/<userId>/<itemKeyHashHex>`；传输侧：信封密文（`FluxingCloudEnvelope.h`）—— 见 `compliance-check.md` §2.2/§2.4 | ❗ **D1 `sync_items.item_key` 明文存放 `<词典名>\t<词条>`** ⇒ D1 侧不满足判据（`compliance-check.md` §2.3）；另 R2 抽查脚本就绪但线上 `sync_items` 为空 ⇒ 本轮无对象可抽查 |
+| **AC-08** | 并发编辑不同条目 → 两端并集且一致 | **不通过** | 服务端 HLC 守卫 + `skipped` 语义已上线；客户端**本轮修好**消费 `skipped`（AH-4 ⑤，见下） | **需两台设备** |
+| **AC-09** | 并发改同一条目 → 最终同版本，不出现永久不一致 | **不通过** | 同上 | **需两台设备** |
+| **AC-10** | 登出后本机/云端仍在；「清空云端数据」后服务端无可恢复内容 | **不通过** | 服务端 `src/account.ts` 注释与实现：清空只清同步内容，**不删账号**（users / devices / refresh_tokens / email_verifications 保留） | 未实测：需真机点「清空云端数据」后回查 D1/R2 |
+| **AC-11** | 三数字未破线；输入延迟无可感知变化 | **不通过** | `perf-baseline.md`：进程数 **1** ✅；私有内存 **138.5 MB** vs 基线 **< 40 MB** ❌ 破线 3.4×；空闲 CPU 逻辑核折算 0.039 % ✅ / 单核口径 0.7804 % ⚠️ 口径待裁定 | ① 内存归因未做（无 spec 100 前对照基线，**不能断言**由云模块造成）；② 输入延迟两组对照未测（需登录态 + 用户在场） |
+| **AC-12** | 未登录全流程出向请求数 = 0 | **✅ 通过** | `compliance-check.md` §1：未登录态下 `Get-NetTCPConnection -State Established` 对 WeaselServer PID 257348 = **0 条**；全局到 Cloudflare 网段 = **0 条** | — |
+| **AC-13** | 新设备登录后同步恢复词库 / 短语 / 配置 | **不通过** | — | **需第二台设备**登录同一账号后拉取（并依赖 AC-01 登录态闭环） |
+| **AC-14** | 移除设备后该设备续期请求被拒绝 | **不通过** | 服务端**已实现**：`src/devices.ts` 提供 `GET /v1/devices` / `DELETE /v1/devices/:id`；`src/auth.ts:427` 续期时校验 `revoked_at` | 未实测：需两台设备，一台移除另一台后用旧 refresh token 续期 |
+
+## 2. 汇总
+
+| 结论 | 条数 | AC |
+|---|---|---|
+| ✅ 通过 | **1** | AC-12 |
+| ❌ 不通过（含「条件不具备」） | **13** | AC-01 ~ AC-11、AC-13、AC-14 |
+
+**结构性阻塞（本轮新增认知）**：14 条里 **7 条**（AC-03/04/05/08/09/13/14）需要**第二台设备**，
+AC-01/02/06/10 需要**登录态 + 用户在场**；这两类合计 11 条 ⇒ **单机 + 无人值守无法收敛到全绿**。
+剩余可在纯机端推进的只有 AC-07（D1 `item_key` 明文问题）、AC-11（内存归因）两条，均需独立一批。
+
+## 3. 证据索引
+
+| 证据 | 路径 |
+|---|---|
+| 线上注册 200 + `account_id` | `tmp/AN-register-qq.txt` |
+| Resend key 权限边界（列表 API 401 `restricted_api_key`） | `tmp/AN-resend-check.txt` |
+| 云单测门禁（基线 PASS=446 FAIL=0） | `tmp/AN-finish-ah4.txt` |
+| AH-4 ⑤ 有牙验证（`TEETH_VERDICT=PASS`） | `tmp/AN-finish-ah4.txt`、`tmp/AN-mutate-ah4.txt` |
+| 生产构建（0 警告 0 错误） | `tmp/AN-build-weasel.txt` |
+| T603 R2 抽查（线上 `sync_items` 为空 ⇒ `ROWS=0`） | `tmp/AN-t603-r2-check.txt` |
+| T602 三数字实测 | `docs/research/fluxing-cloud-2026-11/perf-baseline.md` |
+| 合规核查全文 | `docs/research/fluxing-cloud-2026-11/compliance-check.md` |
+| 历史批次证据（AH 的 19/19 断言、AK 的四段判据、AM 的发信上线） | `docs/archive/handoffs/handoff-2026-11-11-batch-*.md` |

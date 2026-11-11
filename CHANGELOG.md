@@ -1,4 +1,16 @@
 ## [Unreleased]
+### fix(WeaselServer): 客户端丢弃服务端 `skipped` 导致两端静默分叉（AH-4 ⑤ · 批次 AN）
+
+- **根因（verified，代码级）**：`WeaselServer/Cloud/CloudSyncService.cpp::CloudSyncService::Push` 只解析响应里的 `server_seq`，把服务端返回的 **`accepted` / `skipped` 整段丢弃**；协调器随后把该批次**全部**条目记成「已推送、已同步」⇒ **被服务端 HLC 守卫跳过的本地改动也被写进 sidecar 当作已同步** ⇒ 本地与云端**静默分叉**（本地那份改动永远推不上去，且客户端以为已同步）。
+- **修法**（`CloudSyncService.h/.cpp` + `CloudSyncEngine.h`，**未新增任何 IPC 消息**）：新增 `ParsePushResponse(...)`（解析 `accepted` / `skipped` 两个条目键数组）、`enum class PushDisposition { kUnknown, kAccepted, kSkipped }` 与纯函数 `ClassifyPushResult(...)`；`Push(...)` 增加 `accepted` / `skipped` 出参（默认 `nullptr`）；协调器改为 —— **只有 `accepted` 才 `++items_pushed` 且标记已同步**；**`skipped` 记 `items_skipped` 且在 sidecar 视作已同步**（云端版本 ≥ 本地，本地不必再推，下轮拉取会覆盖并重记 sidecar，避免无限重推）；**`kUnknown` 不算成功**，下一轮重试。同步完成消息追加「，云端已有更新版本跳过 N 条」。
+- **回归测试**：新增 `test/TestFluxingCloud/TestFluxingCloud.cpp::TestCloudPushSkipped()`（解析成功 / 缺字段 / 畸形 JSON / `accepted` 非数组 / 三种处置判定 / `Push` 交回 accepted+skipped+server_seq）。云单测门禁 ⇒ **`PASS=446 FAIL=0`**（批次 AK 基线 429 ⇒ **+17**），`TEST_FLUXINGCLOUD_EXIT=0`。
+- **有牙验证（`TEETH_VERDICT=PASS`）**：变异 1（`skipped` 不再交回调用方 = 精确复刻修复前行为）⇒ **2 处 FAIL**；变异 2（`ClassifyPushResult` 一律 `kAccepted`）⇒ **1 处 FAIL**；两次还原后均回到 `PASS=446 FAIL=0`。
+- **⚠️ 工具坑（本轮踩到并修掉，可复现）**：变异验证脚本用 `Copy-Item` 还原源码，而 **`Copy-Item` 保留原 `LastWriteTime`** ⇒ 还原后的源文件 mtime 早于变异期编出的 `.obj` ⇒ **MSBuild 判定「无需重编译」** ⇒ 「还原后」跑的仍是**变异版二进制** ⇒ 还原验证**永远红**（假红）。正解：**还原后必须 `touch`**（`LastWriteTime = Get-Date`）强制重编译。首版脚本因此报 `TEETH_VERDICT=FAIL`，修正版脚本 `tmp/AN-finish-ah4.ps1` 才有正确结论。
+- **格式门禁**：用 `clang-format --lines=<本批新增行区间>` **只格式化本批改动的行**（测试文件 HEAD 既有 **516 处**历史漂移，整文件格式化会污染提交）；复核方式用**内容对齐**（`git diff --no-index`）而非按行号比对 —— 按行号比对在历史漂移文件上会因行位移**全部失真**（一度误报 534 处）。复核结果：生产 3 文件 `myBadLines=0`、测试文件**我的新增行与漂移重叠 = 0**。
+- **构建**：`build.bat weasel` ⇒ **0 个警告 0 个错误**。
+- **本批新增文档**（T601 / T602 / T603 的落地产物）：`docs/research/fluxing-cloud-2026-11/acceptance-matrix.md`（AC-01 ~ AC-14 逐条判据，**通过 1 / 不通过 13**，无「待定」）、`perf-baseline.md`（三数字实测）、`compliance-check.md`（合规核查）。
+- **⚠️ 未闭环**：① 探针「验证 → 登录 → 推送 → 拉取」闭环缺 `25940969@qq.com` 的 6 位验证码（**用户回贴即可续跑**）；② **私有内存 138.5 MB ≫ ADR 0030 的 40 MB 基线（破线 3.4×）**，且无 spec 100 前对照基线 ⇒ 不能断言由云模块造成；③ **新发现合规问题**：D1 `sync_items.item_key` 明文存放 `<词典名>\t<词条>` ⇒ AC-07 字面判据在 D1 侧不满足；④ 双机 AC（AC-02/03/04/05/06/08/09/10/13/14）需第二台设备与用户在场。
+
 ### feat(fluxing): Resend 发信通道「上线」（`MAIL_MODE` 切 `http` · 批次 AM）
 
 - **上线**：`wrangler secret put MAIL_HTTP_API_KEY`（值不出现在任何输出里）→ `wrangler.toml` 的 `MAIL_MODE` 由 `outbox` 切 `http` → 部署 **Version ID `29d4e572-49d0-43c2-b091-dda3029edf00`** → `GET /v1/health` = 200 → 直调 Resend 自检信 **200**（邮件 id `01a1ca9f-…`）⇒ **真实投递通道已打开**（此前 `outbox` 只写表不发信）。
