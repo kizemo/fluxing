@@ -38,11 +38,15 @@
 
 // 测试友好的注入函数指针(默认 = mock RIME deploy,test 可换 mock)
 class UserDictionary;
-using UserDictDeployFn = bool (*)(const std::vector<class UserDictEntry>& entries,
+// 前置声明：下面两处函数指针的模板参数要用到的条目类型。
+//  ★ 必须与下方定义保持一致（`struct`）—— 若这里写成 `class UserDictEntry`，
+//    MSVC 会报 C4099（同一类型名先 class 后 struct）。
+struct UserDictEntry;
+using UserDictDeployFn = bool (*)(const std::vector<UserDictEntry>& entries,
                                   const std::wstring& dictName,
                                   std::wstring& errMsg);
 using UserDictYamlIoFn = bool (*)(const std::wstring& path,
-                                  std::vector<class UserDictEntry>& out,
+                                  std::vector<UserDictEntry>& out,
                                   bool load);
 using UserDictBackupFn = bool (*)(const std::wstring& path);
 

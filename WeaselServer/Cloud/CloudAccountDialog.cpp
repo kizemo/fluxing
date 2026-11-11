@@ -16,6 +16,7 @@
 // spec 100 阶段 F · T505：账号页接入同步引擎（最近同步状态 + 立即同步）。
 // spec 100 阶段 G 加固：重新发送邮箱验证码。
 #include "CloudSyncEngine.h"
+#include "CloudSyncNotifier.h"
 #include "CloudSyncService.h"
 #include "CloudUserDictIo.h"
 
@@ -272,20 +273,30 @@ class CloudAccountController::Impl {
     }
 
     if (!engine)
-      engine.reset(new CloudSyncEngine());
+      engine = std::make_shared<CloudSyncEngine>();
     CloudSyncEngineOptions options;
     options.startup_delay_ms = 30 * 1000;
     const CloudSyncEngine::SyncRunner runner =
         [this](SyncDirection direction, CloudSyncRoundResult* result) {
           return RunSyncRound(direction, result);
         };
-    if (!engine->Start(runner, options))
+    if (!engine->Start(runner, options)) {
       SetSyncStatus(L"最近同步：同步引擎启动失败。");
+      return;
+    }
+    // spec 100 阶段 F · T501: 把引擎挂到「本地改动通知宿主」上。
+    // 之后 rime 每次提交(词典可能变了)都会唤醒引擎 ⇒ 本地改动在防抖窗口
+    // 后被推上云端, 不再只靠 60 分钟定时轮兜底。
+    // 宿主用 shared_ptr 持有引擎 ⇒ 通知在飞行中时引擎不会先被析构。
+    CloudSyncNotifier::Instance().SetTarget(engine);
   }
 
   // 停掉同步引擎（幂等）。Stop() 会 join 引擎线程 ⇒ 它可能正在跑一轮同步。
   void StopEngine() {
-    std::unique_ptr<CloudSyncEngine> dying;
+    // ★ 顺序铁律：先摘掉宿主上的目标（此后不再有新通知进来），再停引擎。
+    // 已经在飞行中的通知由 shared_ptr 保活引擎 ⇒ 不会 use-after-free。
+    CloudSyncNotifier::Instance().SetTarget(nullptr);
+    std::shared_ptr<CloudSyncEngine> dying;
     {
       std::lock_guard<std::mutex> lock(engine_mutex);
       dying = std::move(engine);
@@ -376,7 +387,10 @@ class CloudAccountController::Impl {
 
   // ---- 同步引擎（阶段 F · T505） ----
   // engine 由 engine_mutex 保护；dict_backend 只在 sync_mutex 内创建 / 使用。
-  std::unique_ptr<CloudSyncEngine> engine;
+  // spec 100 阶段 F · T501: 用 shared_ptr —— 本地改动通知宿主
+  // (CloudSyncNotifier) 需要持有它, 保证「通知已在飞行中」时引擎对象仍然
+  // 存活(无 use-after-free)。
+  std::shared_ptr<CloudSyncEngine> engine;
   std::unique_ptr<IUserDictBackend> dict_backend;
   std::mutex engine_mutex;
   std::mutex sync_mutex;

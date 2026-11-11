@@ -14,6 +14,10 @@
 //   GetForegroundWindow() 是 session-global (跟 caller 进程无关),所以
 //   IPC worker thread 调 = 拿 user app 当前 foreground (= 最稳的 capture 点)。
 #include "ForegroundCapture.h"
+// spec 100 阶段 F · T501: 本地词典改动通知槽（进程内直连，不新增 IPC 消息）。
+//   提交边界在此通知云同步引擎：只做「置标志 + 唤醒」，
+//   不阻塞输入响应线程（宪法 P2）。
+#include <FluxingLocalChangeHook.h>
 // spec 097: 服务端侧的显隐链路诊断。写盘发生在 IPC 线程,不在 UI 线程。
 #include <FluxingDiagLog.h>
 
@@ -1532,6 +1536,12 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
       commit_text = fluxing::punct_text::ApplyAsciiPunctuation(commit_text);
     std::wstring commit_text_w = escape_string(u8tow(commit_text.c_str()));
     body.append(L"commit=").append(commit_text_w).append(L"\n");
+    // ★ spec 100 / ADR 0056:提交边界 = 「本地词典可能已改动」的唯一事件源。
+    //   get_commit 读后即清（librime ResetCommitText）⇒ 每笔提交恰好触发一次；
+    //   该处覆盖自动上屏 / 选词上屏 / 显式 commit 全部路径。
+    //   通知只做「置标志 + 唤醒」；网络 I/O 在引擎后台线程
+    //   ⇒ 不阻塞输入响应线程（P2）。
+    NotifyFluxingLocalChange();
   }
 
   bool is_composing = false;

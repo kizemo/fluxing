@@ -14,6 +14,10 @@
 #include "Cloud/CloudMaintenanceHost.h"
 // spec 100 阶段 E T405: 云端账号页(modeless 窗口; 网络全部在控制器后台线程).
 #include "Cloud/CloudAccountDialog.h"
+// spec 100 阶段 F · T501: 本地词典改动通知(进程内直连, 不新增 IPC 消息)
+// + 云同步的本地改动通知宿主。
+#include "Cloud/CloudSyncNotifier.h"
+#include "FluxingLocalChangeHook.h"
 
 #include "FluxingDiagLog.h"  // spec 097: 诊断日志（服务端 DLOG 被 no_logging.h 编译为空操作）// spec 070 T007: D2D factory 创建 (在 WeaselServerApp::Run 入口)
 #include <d2d1.h>
@@ -49,6 +53,15 @@ WeaselServerApp::WeaselServerApp()
   // spec 100 阶段 D: 把维护态宿主交给云模块 —— 备份/还原用户词典时必须先让
   // rime 释放用户库(leveldb LOCK 红线)。只注册,不触发任何 I/O。
   RegisterCloudMaintenanceHost(m_handler.get());
+  // spec 100 阶段 F · T501: 本地词典改动通知(进程内直连, **不新增 IPC 消息**)。
+  //   槽是无捕获的函数指针, 注册一次即可 —— 真正的目标(同步引擎)由云模块
+  //   自己挂 / 摘; 未登录时没有目标 ⇒ 通知是空操作(零出向请求)。
+  RegisterFluxingLocalChangeHook(
+      &fluxing::cloud::CloudSyncNotifier::NotifyLocalChange);
+  // 让云账号控制器在**启动期**就构造出来: 它恢复上次的登录态, 并在已登录时
+  // 启动同步引擎 ⇒ 云同步不再依赖「用户是否打开过账号页」。
+  // (只读本机凭据, 不触网; 未登录时不会发起任何请求。)
+  fluxing::cloud::CloudAccountController::Instance();
   SetupMenuHandlers();
   // spec 080: the request handler runs on the IPC pipe thread, so the
   // QuickPanel request is forwarded to the server UI thread (which owns
@@ -160,7 +173,7 @@ void WeaselServerApp::RegisterPhrasesHotkey() {
                                 L"app occupies this hotkey)"
                               : L" - see Win32 error codes";
     wchar_t wbuf[512];
-    int n = _snwprintf(wbuf, _countof(wbuf),
+    int n = _snwprintf_s(wbuf, _countof(wbuf), _TRUNCATE,
                        L"[%04d-%02d-%02d %02d:%02d:%02d] RegisterHotKey(%ls, "
                        L"id=%d) failed, err=%lu%ls\n",
                        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute,

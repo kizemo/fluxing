@@ -59,6 +59,11 @@
 // （constitution R7）：本文件不复制第二份退避 / 配额 / 触发决策实现。
 #include "../../WeaselServer/Cloud/CloudSyncEngine.h"
 
+// spec 100 阶段 F · T501 生产头（本地改动通知槽 + 通知宿主）。同样走相对
+// 路径 ⇒ 生产与单测同源（constitution R7）。
+#include "../../include/FluxingLocalChangeHook.h"
+#include "../../WeaselServer/Cloud/CloudSyncNotifier.h"
+
 namespace fc = fluxing::cloud;
 
 namespace {
@@ -2202,6 +2207,88 @@ bool WaitFor(Pred pred, int timeout_ms) {
   return pred();
 }
 
+// ---------------------------------------------------------------------------
+// F5 本地改动通知链（T501）：槽 → 通知宿主 → 同步引擎（假 runner，不触网）
+// ---------------------------------------------------------------------------
+
+// 槽是无捕获函数指针 ⇒ 回调状态只能放文件级。
+std::atomic<int> g_local_change_hook_calls{0};
+
+void CountLocalChangeHook() { g_local_change_hook_calls.fetch_add(1); }
+
+void TestFluxingLocalChangeHook() {
+  std::printf(
+      "[F5] T501 本地改动通知槽：注册 / 通知 / 注销\n");
+
+  // 未注册 ⇒ 通知是空操作（不崩、不计数）。
+  g_local_change_hook_calls.store(0);
+  NotifyFluxingLocalChange();
+  Check(g_local_change_hook_calls.load() == 0,
+        "未注册回调时通知是空操作");
+
+  // 注册 ⇒ 每次通知都回调一次。
+  RegisterFluxingLocalChangeHook(&CountLocalChangeHook);
+  NotifyFluxingLocalChange();
+  NotifyFluxingLocalChange();
+  Check(g_local_change_hook_calls.load() == 2,
+        "注册后每次通知都回调一次");
+
+  // 注销 ⇒ 回到空操作。
+  RegisterFluxingLocalChangeHook(nullptr);
+  NotifyFluxingLocalChange();
+  Check(g_local_change_hook_calls.load() == 2, "注销后通知不再回调");
+}
+
+void TestCloudSyncNotifierLocalChange() {
+  std::printf(
+      "[F5] T501 本地改动通知宿主：挂载 / 通知 / 摘除（假 runner，不触网）\n");
+
+  fc::CloudSyncNotifier& host = fc::CloudSyncNotifier::Instance();
+
+  // 无目标 ⇒ 通知是空操作（未登录 ⇒ 零出向请求）。
+  Check(!host.has_target(), "初始没有挂载目标");
+  fc::CloudSyncNotifier::NotifyLocalChange();
+
+  FakeSyncRunner fake;
+  fc::CloudSyncEngineOptions opts;
+  opts.startup_delay_ms = 0;         // 启动即拉一次
+  opts.local_change_debounce_ms = 0;  // 关掉防抖窗口（单测不等 5 分钟）
+  opts.min_push_interval_ms = 0;      // 关掉推送全局间隔
+  std::shared_ptr<fc::CloudSyncEngine> engine =
+      std::make_shared<fc::CloudSyncEngine>();
+  Check(engine->Start(fake.Make(), opts), "同步引擎启动成功");
+  Check(WaitFor([&fake]() { return fake.calls.load() >= 1; }, 3000),
+        "启动轮已执行");
+
+  host.SetTarget(engine);
+  Check(host.has_target(), "挂载后 has_target 为真");
+
+  const int before = fake.calls.load();
+  fc::CloudSyncNotifier::NotifyLocalChange();
+  Check(WaitFor(
+            [&fake, before]() { return fake.calls.load() >= before + 1; },
+            3000),
+        "本地改动通知触发了一轮同步");
+  Check(WaitFor(
+            [&engine]() {
+              return engine->status().last_trigger ==
+                     fc::SyncTrigger::kLocalChange;
+            },
+            3000),
+        "该轮被引擎记为本地改动触发");
+  Check(fake.push_calls.load() >= 1, "本地改动轮包含推送方向");
+
+  // 摘除目标 ⇒ 通知不再触发任何轮次。
+  host.SetTarget(nullptr);
+  Check(!host.has_target(), "摘除后 has_target 为假");
+  const int after = fake.calls.load();
+  fc::CloudSyncNotifier::NotifyLocalChange();
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  Check(fake.calls.load() == after, "摘除目标后通知不再触发同步");
+
+  engine->Stop();
+}
+
 void TestCloudSyncEngineRuntime() {
   std::printf(
       "[F4] T504 同步引擎：启动 / 手动触发 / 停止（假 runner，不触网）\n");
@@ -2336,6 +2423,10 @@ int main() {
   TestCloudSyncEngineDayAndDeadline();
   TestCloudSyncEngineDecide();
   TestCloudSyncEngineRuntime();
+
+  // spec 100 阶段 F · T501（本地改动通知链）
+  TestFluxingLocalChangeHook();
+  TestCloudSyncNotifierLocalChange();
 
   std::printf("\nRESULT: PASS=%d FAIL=%d\n", g_pass, g_fail);
   if (g_fail == 0) {

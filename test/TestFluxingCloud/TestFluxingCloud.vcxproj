@@ -212,10 +212,16 @@
          同样直接编译生产实现，测试与生产同源（宪法 R7）。 -->
     <ClCompile Include="..\..\WeaselServer\Cloud\CloudSyncEngine.cpp" />
     <ClCompile Include="..\..\WeaselServer\Cloud\CloudUserDictIo.cpp" />
+    <!-- spec 100 阶段 F（T501）：本地改动通知槽 + 通知宿主。
+         同样直接编译生产实现，测试与生产同源（宪法 R7）。 -->
+    <ClCompile Include="..\..\RimeWithWeasel\FluxingLocalChangeHook.cpp" />
+    <ClCompile Include="..\..\WeaselServer\Cloud\CloudSyncNotifier.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\include\FluxingCloudEnvelope.h" />
+    <ClInclude Include="..\..\include\FluxingLocalChangeHook.h" />
     <ClInclude Include="..\..\WeaselServer\Cloud\CloudSyncEngine.h" />
+    <ClInclude Include="..\..\WeaselServer\Cloud\CloudSyncNotifier.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

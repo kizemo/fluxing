@@ -557,6 +557,9 @@
     <ClCompile Include="Cloud\CloudRimeUserDictBackend.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="Cloud\CloudSyncNotifier.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Cloud\CloudJson.h" />
@@ -568,6 +571,7 @@
     <ClInclude Include="Cloud\CloudSyncEngine.h" />
     <ClInclude Include="Cloud\CloudUserDictIo.h" />
     <ClInclude Include="Cloud\CloudAccountDialog.h" />
+    <ClInclude Include="Cloud\CloudSyncNotifier.h" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AboutDialog.h" />

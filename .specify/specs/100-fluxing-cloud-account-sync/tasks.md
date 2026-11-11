@@ -245,7 +245,9 @@
 - **状态**：**代码 DONE**（批次 AF，2026-11-11）；运行期日志与空闲 CPU 采样仍待真机（见「Still not verified」）。
 - **Verified（2026-11-11，实测）**：`WeaselServer/Cloud/CloudSyncEngine.{h,cpp}` 新建并接入 `WeaselServer.vcxproj`（ClCompile `NotUsing` + 文件首行 `NOMINMAX`）；单后台线程 + `std::condition_variable`，`cv_.wait_until(deadline, pred{!running_||wakeup_})` ⇒ **事件唤醒 + 定时唤醒、无轮询**；调度用**单调钟**（steady_clock），墙钟只用于状态显示与 UTC 日配额翻篇；触发优先级 **手动 > 退避重试 > 启动 > 脏推 > 定时**；引擎与凭据解耦（注入 `SyncRunner` 回调，不持 token / enc_key / 端点）⇒ 未登录天然零出向请求（R9）。云单测 `tmp\build-fluxing-cloud-tests.cmd` ⇒ `RESULT: PASS=402 FAIL=0`（基线 324 ⇒ **+78**），含引擎 4 组用例 78 条断言（退避阶梯 / 日配额 / 自然日边界 / 推送截止 / 触发决策 / 运行时生命周期），**只 include 生产头、不复制第二份实现**（宪法 R7）；`build.bat weasel` ⇒ **0 错误 0 警告**；8 个生产文件 clang-format 逐行比对 `FORMAT_BAD_FILES=0`。
 - **本轮修掉的 3 个生产缺陷**：① `last_push_ms_ / last_pull_ms_` 初值为 0 ⇒ 定时条件恒成立、`startup_delay_ms` 形同虚设 ⇒ 改用 `SteadyNowMs()` 初始化；② 退避阶梯第 4 档写成 `60 * 1000`（= 60 秒，比第 3 档 15 分钟还短）⇒ 改为 `60 * 60 * 1000`（单测已加**硬断言**钉死该值）；③ `kWait` 分支无条件把 `last_outcome` 覆盖成 `kSkipped` ⇒ 上一轮成功 / 失败结果被吞 ⇒ 改为仅 `kQuotaExceeded` 才改写。
-- **Still not verified**：① 运行期调度日志（触发时刻 + 动作）需真机（IME 进程内）；② 空闲 CPU 基线采样（T602 范畴）；③ **本地改动钩子未接** —— `NotifyLocalChange()` 目前**无调用方**（rime 提交事件发生在 TSF 客户端进程，接入需新增 IPC 消息 ⇒ 触发 CLAUDE.md「IPC 四边同步」红线），本批记为**偏差**，由 60 分钟定时轮兜底。
+- **本地改动钩子（批次 AG，2026-11-11，已接 —— 偏差消除）**：开工前核实工程事实推翻了原判断 —— **提交事件与同步引擎同在 `WeaselServer.exe`**（`WeaselTSF` 不链接 librime；`RimeWithWeaselHandler` 归 `WeaselServerApp` 所有）⇒ **不新增 IPC 消息**（不触发四边同步红线）。落点 = `_Respond` 的 `get_commit` 成功处（**全仓唯一**提交边界，读后即清 ⇒ 每笔提交恰好一次）；链路 = 提交边界 → `FluxingLocalChangeHook` 槽（实现放在 `RimeWithWeasel` 静态库内，依赖方向 **Cloud → Rime**，否则 `TestWeaselIPC` 会 LNK2019）→ `CloudSyncNotifier`（`shared_ptr` 持引擎 ⇒ 无 UAF；`StopEngine()` 先摘目标再停引擎）→ `CloudSyncEngine::NotifyLocalChange()`（只置标志 + 唤醒；网络 I/O 在引擎后台线程 ⇒ 输入零阻塞，宪法 P2）。另：`WeaselServerApp` 构造期即构造云账号控制器 ⇒ 云同步不再依赖「用户是否打开过账号页」（未登录仍零出向请求）。详见 `docs/adr/0056-local-change-hook-in-process-direct-link.md`。
+- **批次 AG 门禁（实测）**：云单测 `RESULT: PASS=414 FAIL=0`（基线 402 ⇒ **+12**，F5 组断言覆盖槽的注册/通知/注销、宿主的挂载/摘除、`last_trigger == kLocalChange`、摘除后不再触发同步）；`build.bat weasel` ⇒ **0 错误 0 警告**（顺带修掉两处被本轮重编译暴露的**既有**警告：`WeaselServer/UserDictionary.h` 的 `class`/`struct` 不一致 C4099、`WeaselServerApp.cpp` 的 `_snwprintf` 弃用 C4996）；clang-format 12 个生产文件 `FORMAT_BAD_FILES=0` + 两个既有大文件的新增行 `FORMAT_NEWLINE_BAD=0`；`TestWeaselIPC.exe` 链接成功 ⇒ 依赖方向「Cloud → Rime」成立。
+- **Still not verified（批次 AG 复评）**：① 运行期调度日志（触发时刻 + 动作）需真机（IME 进程内）；② 空闲 CPU 基线采样（T602 范畴）；③ **钩子端到端时序**（打一个字 → 防抖 5 分钟 + 推送全局间隔 15 分钟 → 云端可见）需登录态 + 线上账号 + 用户在场。
 
 ### T502 · 推送与拉取 [P1] [US3] [US5]
 - **目标**：把变更条目推上去、把远端增量拉回来。
@@ -267,7 +269,7 @@
 - **状态**：**代码 DONE**（批次 AF）；AC-08 / AC-09 的「两端为并集且一致」仍需**真机双机**才能判定。
 - **Verified（2026-11-11，实测）**：合并规则**直接复用** `include/FluxingCloudEnvelope.h` 的 `MergeEntries`（批次 X 的 T102 结论落点），**未在客户端另写一份**；HLC 比较用同一文件的 `CompareHlc`（ms → counter → device 字典序）。**服务端侧新增收敛守卫**（本批 worker 交付）：`cloud/fluxing-sync/src/sync.ts` push 逐条比对 —— 存储中的 HLC ≥ 入参 ⇒ **跳过**（不写 R2 / D1、不推进 seq），响应新增 `skipped` 字段；`src/wire.ts` 新增 `compareHlc` + `compareUtf8Bytes`（按 **UTF-8 字节序**比 device，与客户端一致）。服务端门禁：`npm run typecheck` 退出码 **0**；`npx vitest run` ⇒ **30/30 PASS**（基线 20 ⇒ +10）。
 - **形状裁定（需用户知悉）**：服务端 `skipped` 实现为**字符串数组**（与既有 `accepted` 同构），**未**改成对象数组 —— 改 `accepted` 形状会破坏客户端既有契约。
-- **Still not verified**：① AC-08 / AC-09 真机双机并集一致性；② **服务端加固尚未部署**（`wrangler deploy` 是对外动作，需 Cloudflare 授权）⇒ 线上 `api.aiec.fun` 仍是加固前版本，`skipped` / 顶层 `server_seq` / `/v1/auth/resend` **均未生效**；③ **遗留风险（非本批引入）**：`restore_user_dict` 是「合并」语义（abs(commits) 择优、dee 取 max、tick 抬升），合并快照未必覆盖本地胜出的冲突条目。
+- **Still not verified**：① AC-08 / AC-09 真机双机并集一致性；② **服务端加固已部署**（批次 AG，2026-11-11：`npx wrangler deploy` ⇒ 成功，`api.aiec.fun` custom domain，Current Version ID `0aaf933c-f832-4c64-a726-3570f32ed848`，绑定 D1/R2 `fluxing-sync`）⇒ 线上 `/v1/auth/resend` 已生效（未知邮箱 ⇒ HTTP 404 `email_not_found`）；`push` 响应的 `skipped` 与 `pull` 顶层 `server_seq` **仍待真实账号**验证（需合法 `auth_key`）；③ **遗留风险（非本批引入）**：`restore_user_dict` 是「合并」语义（abs(commits) 择优、dee 取 max、tick 抬升），合并快照未必覆盖本地胜出的冲突条目。
 
 ### T504 · 降级与退避 [P1] [US6]
 - **目标**：断网 / 失败时静默降级，不阻断输入、不产生重试风暴。
@@ -330,9 +332,10 @@
 - **做法**：服务端按邮箱重发验证码（已验证邮箱 ⇒ 409 `email_already_verified`；不存在 ⇒ 404 `email_not_found`；过于频繁 ⇒ 429 `verify_too_frequent`）；客户端在账号页加「重新发送验证码」按钮（`kIdResend=1015`），**不清空验证码输入框**、失败时仍可改后重提。
 - **Done 判据**：服务端用例覆盖 + 客户端按钮可用 + 线上 `POST /v1/auth/resend` 返回 200。
 - **依赖**：T405、T406。
-- **状态**：**代码 DONE**（批次 AF，2026-11-11）；**线上未生效**（`wrangler deploy` 未执行）。
+- **状态**：**代码 DONE**（批次 AF，2026-11-11）+ **线上已生效**（批次 AG，2026-11-11 已 `wrangler deploy`，见下方实测）。
 - **Verified（2026-11-11，实测）**：服务端 `src/auth.ts` 新增 `handleResend`、`src/index.ts` 新增路由 `case '/v1/auth/resend'`；`npm run typecheck` 退出码 **0**、`npx vitest run` ⇒ **30/30 PASS**（基线 20 ⇒ **+10**，其中「已验证邮箱 ⇒ 409」「不存在 ⇒ 404」「过于频繁 ⇒ 429」齐备）；客户端 `CloudAccountService::ResendVerification(email, err*)`（**不改状态机**）已实现，错误走 `ExtractServerError` 给中文原因；账号页新增「重新发送验证码」按钮（`kIdResend=1015`，仅未登录态可用），口令 / 验证码仍走 `ReadControlText` + `SecureZeroWide`，**全程无 MessageBox**；`build.bat weasel` ⇒ 0 错误 0 警告。
-- **Still not verified**：**线上 `POST /v1/auth/resend` 未生效** —— `wrangler deploy` 属对外动作，需 Cloudflare 授权（`wrangler login --browser=false` 回调窗口仅约 2.5 分钟，自动化点 Allow 未命中，见批次 AD）；授权后需复跑 `POST /v1/auth/resend` 并核对 D1 `email_verifications` 落库。
+- **批次 AG 线上实测（2026-11-11）**：`npx wrangler deploy` ⇒ 成功（`api.aiec.fun`，Current Version ID `0aaf933c-f832-4c64-a726-3570f32ed848`）；`GET /v1/health` ⇒ **HTTP 200** `{"ok":true,...}`；`POST /v1/auth/resend`（未知邮箱）⇒ **HTTP 404** `{"error":{"code":"email_not_found","message":"该邮箱尚未注册，请先注册。"}}` ⇒ **端点线上已生效**（探针须用 `Invoke-WebRequest -SkipHttpErrorCheck`，PS7 下 `Exception.Response.GetResponseStream()` 不存在）。
+- **Still not verified**：① **真实邮箱的收码 → 验证 → 登录闭环**（`MAIL_MODE="outbox"` 不发真信，`email_verifications` 只存 `code_hash`，明文不可直读）；② D1 `email_verifications` 落库复核；③ `push` 响应的 `skipped` 与 `pull` 顶层 `server_seq` 需合法 `auth_key` 的真实账号才能验。
 
 ---
 
@@ -393,5 +396,5 @@
 - **设计定案**：**注册 ≠ 登录** —— `Register` 成功不落凭据、不改状态机，必须 `VerifyEmail` + `Login` 才拿令牌，与服务端 `need_email_verify` 语义一致，避免半登录脏态（单测用 `state()==kLoggedOut` + `store.Load` 失败双重坐实）。非法邮箱 / 非法验证码一律**本地拒掉不发请求**，与服务端正则对齐。
 - **Done 判据（逐条实测）**：① 云单测 `RESULT: PASS=324 FAIL=0`（基线 297 ⇒ **+27**）、`VERDICT: ALL PASS`、`TEST_EXIT=0`；② `build.bat weasel` ⇒ `WEASEL_EXIT=0`、0 错误、产物 `WeaselServer.exe` sha16 `6CA1628D290D3DC8`；③ 4 个生产文件 clang-format 18.1.8 `diffLines=0`；④ 产物新鲜度 `CloudAccount.obj` / `CloudAccountDialog.obj` mtime 均晚于源文件（`FRESH=True`）。
 - **未闭环（需用户在场）**：账号页真机注册 → 收码 → 验证 → 登录的端到端 —— `MAIL_MODE="outbox"` 是 $0 路线，验证码只进 D1 `mail_outbox` / `email_verifications`（后者存 `code_hash`），**明文码无法直读**；真机截图亦需人工（IME 自绘顶层窗跨进程抓不到，见记忆 #43）。
-- **阶段 G 加固项（原「本批不做」，已于批次 AF 补齐）**：服务端缺 **resend** 端点 ⇒ 验证码过期 / 次数用尽后无恢复路径（再 `register` 会 409 `email_taken`）⇒ 用户被锁死。**批次 AF 已实现**：服务端 `POST /v1/auth/resend`（`src/auth.ts` + `src/index.ts`，+10 用例，服务端 30/30 PASS）+ 客户端 `CloudAccountService::ResendVerification` + 账号页「重新发送验证码」按钮 ⇒ 见上文 **T605**。**剩余唯一缺口 = 部署**（`wrangler deploy` 未执行，线上仍是加固前版本）。
+- **阶段 G 加固项（原「本批不做」，已于批次 AF 补齐）**：服务端缺 **resend** 端点 ⇒ 验证码过期 / 次数用尽后无恢复路径（再 `register` 会 409 `email_taken`）⇒ 用户被锁死。**批次 AF 已实现**：服务端 `POST /v1/auth/resend`（`src/auth.ts` + `src/index.ts`，+10 用例，服务端 30/30 PASS）+ 客户端 `CloudAccountService::ResendVerification` + 账号页「重新发送验证码」按钮 ⇒ 见上文 **T605**。**剩余缺口 = 真实账号端到端验证**（部署已于批次 AG 完成：`api.aiec.fun` / Version ID `0aaf933c-f832-4c64-a726-3570f32ed848`；`MAIL_MODE="outbox"` 下验证码明文不可直读，收码闭环需人工取码）。
 - **交接文档**：`docs/archive/handoffs/handoff-2026-11-11-batch-ae-cloud-register-verify-chain.md`。
