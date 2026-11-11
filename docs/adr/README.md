@@ -63,6 +63,9 @@ Do not dump all ADRs into every prompt.
 | 0052 | 0052. 快捷设置栏按方向 A 重绘：32-bit BGRA DIB 自建 src-over 合成 + `UpdateLayeredWindow`，半透明面板体 / 发丝描边 / 分层软投影 | `docs/adr/0052-quickpanel-direction-a-layered-translucent-theme.md` | Accepted |
 | 0053 | 0053. 语言栏项永久隐藏：托盘「中英」图标改用 `TF_LBI_STYLE_HIDDENSTATUSCONTROL` + `TF_LBI_STATUS_HIDDEN`（修订 0044） | `docs/adr/0053-langbar-item-permanently-hidden.md` | Accepted |
 | 0054 | 0054. 客户端密钥派生：自实现 PBKDF2-HMAC-SHA256 + HKDF（CNG 的 PBKDF2 默认 PRF=SHA-1、且无 HKDF），salt 按邮箱确定性派生 | `docs/adr/0054-client-key-derivation-and-salt-strategy.md` | Accepted |
+| 0055 | 0055. 同步引擎调度与收敛：单后台线程 + 事件唤醒（无轮询），防抖 5 分钟 / 推送全局间隔 15 分钟 / 定时 60 分钟拉取 | `docs/adr/0055-cloud-sync-engine-scheduling-and-convergence.md` | Accepted |
+| 0056 | 0056. 本地改动钩子：进程内直连（函数指针槽），不新增 IPC 消息 | `docs/adr/0056-local-change-hook-in-process-direct-link.md` | Accepted |
+| 0057 | 0057. item_key 的 TAB 分隔符是客户端既有契约，服务端字符集必须放行 TAB | `docs/adr/0057-item-key-tab-separator-contract.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

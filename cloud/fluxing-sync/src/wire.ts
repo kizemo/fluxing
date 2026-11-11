@@ -92,13 +92,22 @@ function byteLength(s: string): number {
   return new TextEncoder().encode(s).length;
 }
 
-/** 信封头里的字符串字段共用的字符集约束：禁竖线（8 行格式的行内分隔符）、禁控制字符。 */
+/**
+ * 信封头里的字符串字段共用的字符集约束：禁竖线（8 行格式的行内分隔符）、
+ * 禁换行等控制字符（8 行格式的行分隔符）。
+ *
+ * **制表符（0x09）放行**：客户端的词典条目键就是 "<词典名>\t<词条>"
+ * （WeaselServer/Cloud/CloudUserDictIo.h 的 MakeDictItemKey），TAB 既不是
+ * 8 行格式的行分隔符、也不进 AAD 的分隔位（`|`）。若按「禁一切控制字符」
+ * 处理，真机每一次 userdb / phrases 推送都会被 400 拒绝（批次 AH 线上探针
+ * 实测：register→verify→login 全绿，首推即 400「不得包含控制字符或换行」）。
+ */
 function assertHeaderString(raw: unknown, field: string, maxBytes: number, label: string): string {
   if (typeof raw !== 'string') throw fail.badRequest(`${label}（${field}）必须是字符串。`);
   const value = raw;
   if (value.length === 0) throw fail.badRequest(`${label}（${field}）不能为空。`);
   // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f\u007f]/.test(value)) {
+  if (/[\u0000-\u0008\u000a-\u001f\u007f]/.test(value)) {
     throw fail.badRequest(`${label}（${field}）不得包含控制字符或换行。`);
   }
   if (value.includes('|')) {

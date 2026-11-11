@@ -462,6 +462,26 @@ describe('同步', () => {
     expect(pipe.status).toBe(400);
     expect(pipe.body.error.code).toBe('bad_request');
 
+    // item_key 含制表符必须放行：客户端词典条目键就是 "<词典名>\t<词条>"
+    // （WeaselServer/Cloud/CloudUserDictIo.h 的 MakeDictItemKey）。用独立账号
+    // 单独走一遍，避免污染上面那条用例共享账号的条目集合。
+    const tabUser = await signUpAndLogin('tabkey@example.com', 'device-tabkey');
+    const tabKey = '默认词典\t你好';
+    const tab = await api('POST', '/v1/sync/push', {
+      token: tabUser.login.access_token as string,
+      body: { items: [item(tabKey, { type: 'userdb' })] },
+    });
+    expect(tab.status).toBe(200);
+    expect(tab.body.accepted).toContain(tabKey);
+
+    // 放行的同时，换行仍然必须被拒（8 行格式的行分隔符不能进 item_key）
+    const newline = await api('POST', '/v1/sync/push', {
+      token: tabUser.login.access_token as string,
+      body: { items: [item('config/ma\nin')] },
+    });
+    expect(newline.status).toBe(400);
+    expect(newline.body.error.code).toBe('bad_request');
+
     const badType = await api('POST', '/v1/sync/push', {
       token,
       body: { items: [item('config/main', { type: 'exe' })] },
