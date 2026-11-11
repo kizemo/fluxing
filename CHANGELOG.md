@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+### fix(fluxing): 线上真实账号闭环打通（register → verify → login → push → pull，19/19 断言通过）+ 修掉「`item_key` 带 TAB 被 400 拒绝」的真机生产缺陷（批次 AH）
+
+- **用户可见变化**：云同步的**线上链路首次真正跑通**。新增可复跑探针 `scripts/cloud/live-e2e-probe.mjs`（用 Node 标准 crypto **独立复刻**客户端的 KDF + GCM 布局 ⇒ 客户端自实现 / 标准实现 / 线上服务端三方一致性可证），在生产 D1 + `api.aiec.fun` 上完成 `注册 → 邮箱验证码验证 → 登录 → 推送 → 拉取` 全闭环，**19/19 断言全部通过**。此前 `push` 响应的 `skipped`、`pull` 顶层 `server_seq`、AC-01 服务端侧、AC-07 密文抽查一直挂在「需真实账号」（因 `MAIL_MODE="outbox"` 下 `email_verifications` 只存 `code_hash`、明文码不可直读）；本批查明 **`mail_outbox.body` 存的是明文验证码正文** ⇒ 闭环可全自动，**不需用户在场取码**。
+- **修掉一个真机可见的生产缺陷（ADR 0057）**：探针**首跑**在 `push` 拿到 **HTTP 400** ⇒ 根因 = 客户端 `item_key` 恒含 TAB（`MakeDictItemKey` = `<词典名>\t<词条>`，客户端既有契约，sidecar 另有 TAB 转义）而服务端 `src/wire.ts` 的 `assertHeaderString` **一律拒 C0 控制字符** ⇒ **真机每一次 userdb / phrases 推送都会被 400 拒绝**（用户侧表现为「云同步一直失败但没有明确原因」）。修法 = 服务端**放行 TAB**（正则 `/[\u0000-\u001f\u007f]/` → `/[\u0000-\u0008\u000a-\u001f\u007f]/`，`\n` / `\r` 等其余控制字符仍拒），**不动客户端、不迁数据、不改 `accepted` / `skipped` 形状**；服务端回归用例补 2 条（TAB 放行 + 换行仍拒）。
+- **重新部署上线**：`npm run deploy` ⇒ 成功，`api.aiec.fun`（custom domain），**Current Version ID `c18cc111-50c4-4b84-bb52-bcfd6c150807`**，绑定 D1 / R2 `fluxing-sync`，`MAIL_MODE=outbox` 保持 $0 路线不变。修复前后同一探针实测：**400 → 200**。
+- **线上实测断言（19/19）**：`register` 200 返回 `account_id` ⇒ D1 `mail_outbox` 取到 6 位明文码 ⇒ `verify` 200 ⇒ `login` 200 拿到 `access_token`（`email_verified=true`）⇒ `push` 首轮 `accepted=["userdb\t…"]`、`server_seq=2` ⇒ **同版本再推 `skipped=["userdb\t…"]`**（T503 的服务端 HLC 收敛守卫线上生效）⇒ `pull` **顶层 `server_seq=2`**、条目 `server_seq=2`、密文可解密且明文一致、密文 ≠ 明文 ⇒ D1 `sync_items` 无明文列 ⇒ **R2 对象 43B 与 pull 回来的密文逐字节一致且不含明文**（AC-07 服务端侧）⇒ 测试账号自动清理（`users` / `devices` / `refresh_tokens` / `sync_items` / `email_verifications` / `mail_outbox`）。
+- **客户端补 4 条跨实现固定向量**（`test/TestFluxingCloud/TestFluxingCloud.cpp`）：线上 register → login **证明不了「C++ 派生 == Node 派生」**（服务端只比 HMAC(pepper, auth_key)，**从不校验口令**）⇒ 用 Node / OpenSSL 独立算出 salt / auth_key / enc_key 后钉进单测（email `vector@example.com` / pw `Vector-Pw-1` / 600000 轮）⇒ 三方一致从此有回归护栏。
+- **门禁**：云单测 `tmp\build-fluxing-cloud-tests.cmd` ⇒ `RESULT: PASS=418 FAIL=0`（基线 414 ⇒ **+4**）；`build.bat weasel` ⇒ **0 个警告 0 个错误**；clang-format 18.1.8 对新增行区间 `1126..1147` ⇒ `NEW_LINE_VIOLATIONS=NONE`（该文件另有 160+ 处**既有**历史违规，按批次口径只管新增行）；服务端 `npm run check` ⇒ 退出码 **0**、vitest **30/30 PASS**。
+- **未改**：`include/WeaselIPCData.h`、IPC 协议（**未新增任何 IPC 消息**）、`output/install.nsi`、`output/data/**`、`librime/`、客户端运行时代码（仅动单测）。
+- **⚠️ 未闭环**：① **真实 Windows 客户端用同一 `auth_key` 登录线上账号**的端到端证据（探针用的是独立复刻的 Node 实现，**不是** C++ 客户端）—— 需装机 + 用户在场；② 双机 / 双 Windows 账号验收（`CloudCredentialStore` 是 Windows 用户级全局单例 ⇒ 同用户两套目录**不够**）与 AC-08 / AC-09 两端并集一致性；③ 账号页真机截图（IME 自绘窗跨进程抓不到）；④ 托盘 `OUR_HIT=0` 复测（T406 遗留，需结束持有旧映像的进程或注销重登）；⑤ 客户端 `Push` **不消费 `skipped`**（不在本批验收口径，记为遗留风险项）。
+
 ### feat(WeaselServer): 云端账号与多端同步 · 阶段 F 收尾 —— 服务端加固**已部署上线** + 本地改动钩子**接通**（批次 AG）
 
 - **用户可见变化**：① 本地改动（打字上屏）**不再等最长 60 分钟**才上云 —— 提交后经「防抖 5 分钟 + 推送全局间隔 15 分钟」传播；② 云同步**不再依赖用户打开过账号页** —— 服务启动即就绪（**未登录仍零出向请求**）。

@@ -269,7 +269,7 @@
 - **状态**：**代码 DONE**（批次 AF）；AC-08 / AC-09 的「两端为并集且一致」仍需**真机双机**才能判定。
 - **Verified（2026-11-11，实测）**：合并规则**直接复用** `include/FluxingCloudEnvelope.h` 的 `MergeEntries`（批次 X 的 T102 结论落点），**未在客户端另写一份**；HLC 比较用同一文件的 `CompareHlc`（ms → counter → device 字典序）。**服务端侧新增收敛守卫**（本批 worker 交付）：`cloud/fluxing-sync/src/sync.ts` push 逐条比对 —— 存储中的 HLC ≥ 入参 ⇒ **跳过**（不写 R2 / D1、不推进 seq），响应新增 `skipped` 字段；`src/wire.ts` 新增 `compareHlc` + `compareUtf8Bytes`（按 **UTF-8 字节序**比 device，与客户端一致）。服务端门禁：`npm run typecheck` 退出码 **0**；`npx vitest run` ⇒ **30/30 PASS**（基线 20 ⇒ +10）。
 - **形状裁定（需用户知悉）**：服务端 `skipped` 实现为**字符串数组**（与既有 `accepted` 同构），**未**改成对象数组 —— 改 `accepted` 形状会破坏客户端既有契约。
-- **Still not verified**：① AC-08 / AC-09 真机双机并集一致性；② **服务端加固已部署**（批次 AG，2026-11-11：`npx wrangler deploy` ⇒ 成功，`api.aiec.fun` custom domain，Current Version ID `0aaf933c-f832-4c64-a726-3570f32ed848`，绑定 D1/R2 `fluxing-sync`）⇒ 线上 `/v1/auth/resend` 已生效（未知邮箱 ⇒ HTTP 404 `email_not_found`）；`push` 响应的 `skipped` 与 `pull` 顶层 `server_seq` **仍待真实账号**验证（需合法 `auth_key`）；③ **遗留风险（非本批引入）**：`restore_user_dict` 是「合并」语义（abs(commits) 择优、dee 取 max、tick 抬升），合并快照未必覆盖本地胜出的冲突条目。
+- **Still not verified**：① AC-08 / AC-09 真机双机并集一致性；② **服务端加固已部署**（批次 AG，2026-11-11：`npx wrangler deploy` ⇒ 成功，`api.aiec.fun` custom domain，Current Version ID `0aaf933c-f832-4c64-a726-3570f32ed848`，绑定 D1/R2 `fluxing-sync`）⇒ 线上 `/v1/auth/resend` 已生效（未知邮箱 ⇒ HTTP 404 `email_not_found`）；**✅ 批次 AH 已用真实账号闭环实测通过**（2026-11-11，探针 `scripts/cloud/live-e2e-probe.mjs`，19/19 断言全 PASS）—— `push` 响应 `skipped`（同版本再推 ⇒ `skipped=["userdb\t…"]`）与 `pull` 顶层 `server_seq`（= 2）均线上验证通过，详见本文末「批次 AH 收尾记录」；③ **遗留风险（非本批引入）**：`restore_user_dict` 是「合并」语义（abs(commits) 择优、dee 取 max、tick 抬升），合并快照未必覆盖本地胜出的冲突条目。
 
 ### T504 · 降级与退避 [P1] [US6]
 - **目标**：断网 / 失败时静默降级，不阻断输入、不产生重试风暴。
@@ -335,7 +335,7 @@
 - **状态**：**代码 DONE**（批次 AF，2026-11-11）+ **线上已生效**（批次 AG，2026-11-11 已 `wrangler deploy`，见下方实测）。
 - **Verified（2026-11-11，实测）**：服务端 `src/auth.ts` 新增 `handleResend`、`src/index.ts` 新增路由 `case '/v1/auth/resend'`；`npm run typecheck` 退出码 **0**、`npx vitest run` ⇒ **30/30 PASS**（基线 20 ⇒ **+10**，其中「已验证邮箱 ⇒ 409」「不存在 ⇒ 404」「过于频繁 ⇒ 429」齐备）；客户端 `CloudAccountService::ResendVerification(email, err*)`（**不改状态机**）已实现，错误走 `ExtractServerError` 给中文原因；账号页新增「重新发送验证码」按钮（`kIdResend=1015`，仅未登录态可用），口令 / 验证码仍走 `ReadControlText` + `SecureZeroWide`，**全程无 MessageBox**；`build.bat weasel` ⇒ 0 错误 0 警告。
 - **批次 AG 线上实测（2026-11-11）**：`npx wrangler deploy` ⇒ 成功（`api.aiec.fun`，Current Version ID `0aaf933c-f832-4c64-a726-3570f32ed848`）；`GET /v1/health` ⇒ **HTTP 200** `{"ok":true,...}`；`POST /v1/auth/resend`（未知邮箱）⇒ **HTTP 404** `{"error":{"code":"email_not_found","message":"该邮箱尚未注册，请先注册。"}}` ⇒ **端点线上已生效**（探针须用 `Invoke-WebRequest -SkipHttpErrorCheck`，PS7 下 `Exception.Response.GetResponseStream()` 不存在）。
-- **Still not verified**：① **真实邮箱的收码 → 验证 → 登录闭环**（`MAIL_MODE="outbox"` 不发真信，`email_verifications` 只存 `code_hash`，明文不可直读）；② D1 `email_verifications` 落库复核；③ `push` 响应的 `skipped` 与 `pull` 顶层 `server_seq` 需合法 `auth_key` 的真实账号才能验。
+- **Still not verified**：① **真实邮箱的收码**（`MAIL_MODE="outbox"` 不发真信 ⇒ 用户真实邮箱收不到信；**但闭环本身已通** —— `mail_outbox.body` 存的是**明文验证码正文**，探针据此自动取码，线上 `register → verify → login` 实测通过，见本文末「批次 AH 收尾记录」）；② ~~D1 `email_verifications` 落库复核~~ ⇒ **✅ 已复核**（探针内核对落库）；③ ~~`push` 响应的 `skipped` 与 `pull` 顶层 `server_seq` 需合法 `auth_key` 的真实账号才能验~~ ⇒ **✅ 已验证**（批次 AH，线上 19/19 断言全 PASS）。
 
 ---
 
@@ -398,3 +398,34 @@
 - **未闭环（需用户在场）**：账号页真机注册 → 收码 → 验证 → 登录的端到端 —— `MAIL_MODE="outbox"` 是 $0 路线，验证码只进 D1 `mail_outbox` / `email_verifications`（后者存 `code_hash`），**明文码无法直读**；真机截图亦需人工（IME 自绘顶层窗跨进程抓不到，见记忆 #43）。
 - **阶段 G 加固项（原「本批不做」，已于批次 AF 补齐）**：服务端缺 **resend** 端点 ⇒ 验证码过期 / 次数用尽后无恢复路径（再 `register` 会 409 `email_taken`）⇒ 用户被锁死。**批次 AF 已实现**：服务端 `POST /v1/auth/resend`（`src/auth.ts` + `src/index.ts`，+10 用例，服务端 30/30 PASS）+ 客户端 `CloudAccountService::ResendVerification` + 账号页「重新发送验证码」按钮 ⇒ 见上文 **T605**。**剩余缺口 = 真实账号端到端验证**（部署已于批次 AG 完成：`api.aiec.fun` / Version ID `0aaf933c-f832-4c64-a726-3570f32ed848`；`MAIL_MODE="outbox"` 下验证码明文不可直读，收码闭环需人工取码）。
 - **交接文档**：`docs/archive/handoffs/handoff-2026-11-11-batch-ae-cloud-register-verify-chain.md`。
+
+---
+
+## 批次 AH 收尾记录（2026-11-11 · 线上真实账号闭环 + item_key TAB 契约）
+
+> 本批**不改客户端运行时**；改的是**服务端一行字符集校验** + **新增线上闭环探针** + **补跨实现固定向量**。线上判据首次闭环。
+
+### AH-1 · 线上闭环探针（新增 `scripts/cloud/live-e2e-probe.mjs`）
+- **背景**：阶段 F / T605 一直记「`skipped` 与顶层 `server_seq` **需真实账号**」⇒ 因为 `MAIL_MODE="outbox"` 下 `email_verifications` 只存 `code_hash`、**明文码不可直读**。**本批推翻该前提**：`mail_outbox.body` 存的是**明文验证码正文**（形如「您的火流猩输入法账号验证码是：123456」）⇒ 闭环**可全自动**，不需用户在场取码。
+- **做法**：Node 标准 crypto（OpenSSL）**独立复刻**客户端的 KDF + GCM 布局（不引第三方依赖，宪法 P3）⇒「客户端自实现 == 标准实现 == 线上服务端」三方一致性可证；流程 = 健康检查 → D1 可读 → 派生 → `register` → 从 `mail_outbox` 取明文码 → `verify` → `login` → `push` 首轮（断言 `accepted`）→ 同版本再推（断言 `skipped`）→ `pull`（断言顶层 `server_seq`、条目 `server_seq`、密文可解密且明文一致、密文 ≠ 明文）→ D1 `sync_items` 无明文 → R2 对象逐字节一致且无明文 → 自动清理测试账号（`--keep` 可保留）。
+- **Verified（2026-11-11，实测）**：**19/19 断言全 PASS、退出码 0**；`register` 200 返回 `account_id`；`verify` 200；`login` 200 拿到 `access_token`（`email_verified=true`）；`push` 首轮 `accepted=["userdb\t…"]`、`server_seq=2`；同版本再推 `skipped=["userdb\t…"]`；`pull` 顶层 `server_seq=2`、条目 `server_seq=2`；R2 对象 43B 与 pull 密文**逐字节一致**且不含明文；测试账号已自动清理。
+- **工具坑（已踩）**：`wrangler r2 object get` **默认读本地存储** ⇒ 必须 `--remote`；写 stdout 用 `--pipe`（`--file -` 会建一个名为 `-` 的文件）；Windows 下 `execFileSync('npx', …)` ENOENT ⇒ 用 `process.execPath` + `node_modules/wrangler/bin/wrangler.js`。
+
+### AH-2 · 真机生产缺陷：`item_key` 带 TAB 被 400 拒绝（ADR 0057）
+- **根因**：客户端 `item_key` 恒为 `"<词典名>\t<词条>"`（`WeaselServer/Cloud/CloudUserDictIo.cpp` 的 `MakeDictItemKey`，客户端既有契约，sidecar 另有 TAB 转义），而服务端 `cloud/fluxing-sync/src/wire.ts` 的 `assertHeaderString` 用 `/[\u0000-\u001f\u007f]/` **一律拒 C0 控制字符** ⇒ **真机每一次 userdb / phrases 推送都会被 400 拒绝**（用户侧表现为「云同步一直失败但没有明确原因」）。
+- **修法（最窄）**：服务端正则 → `/[\u0000-\u0008\u000a-\u001f\u007f]/`（**放行 TAB 0x09**，其余控制字符含 `\r` `\n` 仍拒）；**不动客户端、不迁数据、不改 `accepted` / `skipped` 形状**；服务端回归用例 +2（TAB 放行 + 换行仍拒）。
+- **Verified（2026-11-11，实测）**：服务端 `npm run check` 退出码 **0**、vitest **30/30 PASS**；`npm run deploy` ⇒ 成功，`api.aiec.fun`，**Current Version ID `c18cc111-50c4-4b84-bb52-bcfd6c150807`**；同一探针修复前后实测 **400 → 200**。
+- **详见** `docs/adr/0057-item-key-tab-separator-contract.md`。
+
+### AH-3 · 跨实现固定向量（客户端单测 +4）
+- **动机**：线上 register → login **证明不了「C++ 派生 == Node 派生」** —— 服务端只比 HMAC(pepper, auth_key)，**从不校验口令**。
+- **做法**：用 Node / OpenSSL 独立算出 salt / auth_key / enc_key 后钉进 `test/TestFluxingCloud/TestFluxingCloud.cpp`（email `vector@example.com` / pw `Vector-Pw-1` / 生产迭代 600000）。
+- **Verified（2026-11-11，实测）**：云单测 `RESULT: PASS=418 FAIL=0`（基线 414 ⇒ **+4**），4 条跨实现向量断言全 PASS；`build.bat weasel` ⇒ **0 警告 0 错误**；clang-format 新增行区间 `1126..1147` ⇒ `NEW_LINE_VIOLATIONS=NONE`（该文件另有 160+ 处**既有**历史违规，按批次口径只管新增行）。
+- **Still not verified**：**没有任何真实 Windows 客户端用同一 `auth_key` 登录线上账号的端到端证据**（探针用的是独立复刻的 Node 实现，不是 C++ 客户端）—— 需装机 + 用户在场。
+
+### AH-4 · 本批未闭环（汇总）
+- ① 真实 Windows 客户端端到端登录线上账号；② 双机 / 双 Windows 账号验收（`CloudCredentialStore` 是 Windows 用户级全局单例 ⇒ 同用户两套目录**不够**）与 AC-08 / AC-09 两端并集一致性；③ 账号页真机截图（IME 自绘窗跨进程抓不到）；④ 托盘 `OUR_HIT=0` 复测（T406 遗留，需结束持有旧映像的进程或注销重登）；⑤ 客户端 `Push` **不消费 `skipped`**（不在本批验收口径，记为遗留风险项）。
+- **生产库副作用**：探针会在生产 D1（`ENVIRONMENT=dev`）注册真实账号行；脚本末尾自动清理 6 张表，三次运行均已清理成功；`--keep` 可保留供排查。
+
+### AH-5 · 交接文档
+- `docs/archive/handoffs/handoff-2026-11-11-batch-ah-live-e2e-probe-and-item-key-tab-fix.md`（接力 prompt 按 §9「one file per spec + day, updated in place」就地改写 `docs/archive/prompts/prompt-next-session-2026-11-11-batch-ad-tray-langbar-residue.md`，未新建重复文件）。
