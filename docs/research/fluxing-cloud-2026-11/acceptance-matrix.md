@@ -21,7 +21,7 @@
 | **AC-04** | 双机短语：B 的短语界面可见同一条 | **不通过** | 同上 | **需两台设备** |
 | **AC-05** | 双机配置：A 改快捷键 → B 生效 | **不通过** | 配置项已纳入推拉集合（AF 批次） | **需两台设备** |
 | **AC-06** | 断网降级：断网期间输入正常、无重试风暴、恢复后自动补同步 | **不通过** | 代码层已有：退避第 4 档 60 分钟（AF 批次修）、维护态 `StartMaintenance`/`EndMaintenance` 包裹、节流 5 分钟 + 全局 15 分钟 | 未实测：需真机断网（按 exe 路径防火墙出站阻断）+ 恢复后观察补同步；**需用户在场** |
-| **AC-07** | 服务端存储与传输抓包均无明文词条 / 短语 / 配置 | **不通过** | R2 侧：服务端只 `BUCKET.put(cipherBytes)`、键为 `u/<userId>/<itemKeyHashHex>`；传输侧：信封密文（`FluxingCloudEnvelope.h`）—— 见 `compliance-check.md` §2.2/§2.4 | ❗ **D1 `sync_items.item_key` 明文存放 `<词典名>\t<词条>`** ⇒ D1 侧不满足判据（`compliance-check.md` §2.3）；另 R2 抽查脚本就绪但线上 `sync_items` 为空 ⇒ 本轮无对象可抽查 |
+| **AC-07** | 服务端存储与传输抓包均无明文词条 / 短语 / 配置 | **✅ 通过**（存储侧线上实测 + 传输侧代码级） | **R2 实测密文**：75 B 对象四项判据全过（长度==`cipher_len` / `cjk=0` / `printable ratio=0.3067` / ASCII 连续串 0 段）· **D1 实测无明文**：`item_key` 全部 64 位小写 hex、非 hex **0 行**、无明文残留行 · **线上条目身份** `id=cd3cc4e9af…` 长度 64 且 ≠ 明文键 · 证据 `tmp/AO-t603-r2-check.txt`、`tmp/AO-probe-closure-5.log` | **批次 AO 已修（方案 K，ADR 0059）**：线上身份改送 HMAC 后 64 位 hex，明文键搬进 AEAD 内长度前缀封包 ⇒ D1 与传输侧同时不再有明文。**真实客户端 HTTPS 抓包未做**（补强项，不改结论） |
 | **AC-08** | 并发编辑不同条目 → 两端并集且一致 | **不通过** | 服务端 HLC 守卫 + `skipped` 语义已上线；客户端**本轮修好**消费 `skipped`（AH-4 ⑤，见下） | **需两台设备** |
 | **AC-09** | 并发改同一条目 → 最终同版本，不出现永久不一致 | **不通过** | 同上 | **需两台设备** |
 | **AC-10** | 登出后本机/云端仍在；「清空云端数据」后服务端无可恢复内容 | **不通过** | 服务端 `src/account.ts` 注释与实现：清空只清同步内容，**不删账号**（users / devices / refresh_tokens / email_verifications 保留） | 未实测：需真机点「清空云端数据」后回查 D1/R2 |
@@ -34,12 +34,14 @@
 
 | 结论 | 条数 | AC |
 |---|---|---|
-| ✅ 通过 | **1** | AC-12 |
-| ❌ 不通过（含「条件不具备」） | **13** | AC-01 ~ AC-11、AC-13、AC-14 |
+| ✅ 通过 | **2** | AC-07、AC-12 |
+| ❌ 不通过（含「条件不具备」） | **12** | AC-01 ~ AC-06、AC-08 ~ AC-11、AC-13、AC-14 |
 
-**结构性阻塞（本轮新增认知）**：14 条里 **7 条**（AC-03/04/05/08/09/13/14）需要**第二台设备**，
+**结构性阻塞（批次 AO 更新）**：14 条里 **7 条**（AC-03/04/05/08/09/13/14）需要**第二台设备**，
 AC-01/02/06/10 需要**登录态 + 用户在场**；这两类合计 11 条 ⇒ **单机 + 无人值守无法收敛到全绿**。
-剩余可在纯机端推进的只有 AC-07（D1 `item_key` 明文问题）、AC-11（内存归因）两条，均需独立一批。
+纯机端可推进的两条已收口其一：**AC-07 于批次 AO 由不通过转通过**（方案 K：`item_key` 改送不透明 MAC 身份，见
+[ADR 0059](../../adr/0059-item-key-opaque-mac-identity.md)），**只剩 AC-11**（内存归因需不含云模块的对照构建；
+输入延迟两组对照需登录态）。
 
 ## 3. 证据索引
 
@@ -50,7 +52,13 @@ AC-01/02/06/10 需要**登录态 + 用户在场**；这两类合计 11 条 ⇒ *
 | 云单测门禁（基线 PASS=446 FAIL=0） | `tmp/AN-finish-ah4.txt` |
 | AH-4 ⑤ 有牙验证（`TEETH_VERDICT=PASS`） | `tmp/AN-finish-ah4.txt`、`tmp/AN-mutate-ah4.txt` |
 | 生产构建（0 警告 0 错误） | `tmp/AN-build-weasel.txt` |
-| T603 R2 抽查（线上 `sync_items` 为空 ⇒ `ROWS=0`） | `tmp/AN-t603-r2-check.txt` |
+| 线上探针闭环（23 断言 / 失败 0 / `VERDICT: ALL PASS`） | `tmp/AO-probe-closure-5.log` |
+| T603 R2 对象内容抽查（75B 密文，5 断言全 PASS / `T603_VERDICT=PASS`） | `tmp/AO-t603-r2-check.txt`、`tmp/AO-t603-r2-check.mjs` |
+| AC-07 客户端侧断言（`id` 64 位 hex 且 ≠ 明文键） | `tmp/AO-probe-closure-5.log` |
+| 云单测门禁（基线 446 ⇒ **PASS=453 FAIL=0**，+7 条 AC-07 断言） | `tmp/AO-ut-run.log`、`tmp/AO-ut-build.log` |
+| 生产构建（0 警告 0 错误） | `tmp/AO-build-weasel.log` |
+| 验证码自助还原（按 `AUTH_PEPPER` 重算 `code_hash`，退出码 0 = FOUND） | `tmp/AO-pepper-verify.log`、`tmp/AO-pepper-verify.mjs` |
+| T603 R2 抽查（**历史**：线上 `sync_items` 为空 ⇒ `ROWS=0`，批次 AN） | `tmp/AN-t603-r2-check.txt` |
 | T602 三数字实测 | `docs/research/fluxing-cloud-2026-11/perf-baseline.md` |
 | 合规核查全文 | `docs/research/fluxing-cloud-2026-11/compliance-check.md` |
 | 历史批次证据（AH 的 19/19 断言、AK 的四段判据、AM 的发信上线） | `docs/archive/handoffs/handoff-2026-11-11-batch-*.md` |

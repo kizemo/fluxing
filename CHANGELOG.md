@@ -1,4 +1,18 @@
 ## [Unreleased]
+### fix(WeaselServer): D1 `item_key` 明文身份改为不透明 MAC 标识，AC-07 由不通过转通过（批次 AO）
+
+- **缺陷（verified，线上实测）**：批次 AN 的 T603 合规抽查发现 D1 `sync_items.item_key` **明文存放 `<词典名>\t<词条>`** —— 用户词条内容在服务端数据库里可直读，AC-07「服务端不得持有可解读的明文内容」字面判据在 D1 侧不满足。
+- **修法（方案 K，客户端单侧改造，**零服务端改动** / 零表结构改动 / 零重新部署 / **未新增任何 IPC 消息**）**：`WeaselServer/Cloud/CloudSyncService.{h,cpp}` 新增 `PackIdentityKey(...)` + `DeriveItemIdentity(...)`，把上行身份键替换为 **HMAC-SHA256(master_key, 封包)** 的 64 位小写 hex 串。服务端对 `item_key` **只做 `assertHeaderString` + 等值比较 + 原样回传**，无任何语义解析 ⇒ 换不透明串天然合法。
+- **两个关键选型**：① 用 **HMAC 而非裸 SHA-256** —— 用户词条熵极低（「你好」「的」这类），裸哈希可被字典穷举反查；带密钥 MAC 在不知道 master_key 的前提下不可反推。② 封包用 **4 字节大端长度前缀** 而非分隔符 —— 词条本身可能含 TAB，且 ADR 0057 已把 TAB 定为合法字符，用分隔符会产生二元歧义（`a\tb` + `c` 与 `a` + `b\tc` 撞同一键）。
+- **兼容性（一次性断代，不做兼容分支）**：旧行 AAD 绑定明文身份 ⇒ 方案 K 下必然解不开；服务端算不出旧行 MAC ⇒ 无法回填迁移 ⇒ 旧数据一次性清空。
+- **回归测试**：`test/TestFluxingCloud/TestFluxingCloud.cpp` 新增 7 条（MAC 定长/小写 hex、同输入同输出、不同词条不同键、TAB 歧义不撞键、空串与含分隔符边界、上行键全为 hex）；云单测 ⇒ **`PASS=453 FAIL=0`**（批次 AN 基线 446 ⇒ **+7**）。
+- **探针幂等化（两处，此前导致复跑必 `409 abort`）**：① `POST /v1/auth/verify` 改为先查 D1 `users.email_verified`，已验证则记录「AC-01 · verify 跳过（账号已处于已验证状态）」而不是无条件重发；② 第 2 步 register 复用闸从 `409 && 有外部验证码` 解耦为 `409 && email_taken`（原条件把「账号已存在」与「有外部注入码」错误耦合），`SELECT` 增加 `email_verified` 以便分流。
+- **线上闭环（首次全绿）**：`node scripts/cloud/live-e2e-probe.mjs --keep` ⇒ **断言 23 / 失败 0 / `VERDICT: ALL PASS` / `PROBE_EXIT=0`**，设备标识 `a651f3d8fcb3ab8a`；关键判据 `email_verified=1`、`auth_key` 长度 64 且 ≠ 明文键、`push accepted server_seq=3`、同版本再推 `skipped`、`pull` 顶层 `server_seq=3`、D1 无明文载荷列、R2 对象与 `pull` 密文逐字节一致 75 B。
+- **R2 合规抽查（AC-07 存储侧硬判据）**：新脚本 `tmp/AO-t603-r2-check.mjs`（Node `execFileSync` 驱动 wrangler `--file` 落盘，避开 pwsh 7 改写内嵌引号）⇒ **5 断言 0 失败 / `T603_VERDICT=PASS`**：`item_key` 全部 64 位 hex（非 hex 0 行）、`r2` 长度 75 B == `cipher_len`、CJK 字符 0、可打印比 `0.3067` < 阈值 0.35、ASCII 连续串 0 段。
+- **门禁**：`build.bat weasel` ⇒ **0 个警告 0 个错误**（`BUILD_EXIT=0`）；clang-format 本批改动行 **0 漂移**。
+- **文档**：新增 `docs/adr/0059-item-key-opaque-mac-identity.md`；回写 `docs/research/fluxing-cloud-2026-11/{acceptance-matrix,compliance-check}.md`（AC-07 四行全 ✅，汇总由「通过 1 / 不通过 13」改为 **「通过 2 / 不通过 12」**）与 `.specify/specs/100-fluxing-cloud-account-sync/tasks.md`（T601 / T603）。
+- **⚠️ 未闭环**：① AC-07「真实客户端 HTTPS 抓包」项未做（现为**存储侧线上实测 + 传输侧代码级/探针同形态**证据，已登记为补强项，不改结论）；② AC-11 私有内存 138.5 MB ≫ ADR 0030 的 40 MB 基线（破线 3.4×），缺「不含云模块」的对照构建，未归因；③ 双机 AC（AC-03/04/05/08/09/13/14）需第二台设备；④ T604 出包发版未做（`WeaselServer.exe` 是 PPL ⇒ 装机前需注销/重启）。
+
 ### fix(WeaselServer): 快捷栏屏外位置自愈补工作区兜底 + C0176 用例改语义断言（批次 AN 追加）
 
 - **根因（verified，代码级）**：D0176 **同形复发** —— 代码注释宣称「首建钳制无条件执行」，实现却仍把 `ClampToVisibleArea` 关在 `!areas.empty()` 门内；而 `RepairOffscreenPanel` 在 `EnumerateWorkAreas()` 返回空时直接 `return false`（自愈一并放弃）⇒ 「枚举失败 + 持久化屏外坐标」这条路上**钳制与自愈双双失效**，面板建在用户看不见的地方，体感仍是「Alt+, 没反应」。

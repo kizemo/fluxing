@@ -116,14 +116,70 @@ PushDisposition ClassifyPushResult(const std::vector<std::string>& accepted,
                                    const std::vector<std::string>& skipped,
                                    const std::string& item_key);
 
+// ---------------------------------------------------------------------------
+// item_key 的线上身份（spec 100 AC-07 / ADR 0059）
+// ---------------------------------------------------------------------------
+//
+// AC-07 判据（spec.md）：服务端存储与传输抓包中**均无明文词条 / 短语 /
+// 配置内容**；无口令时无法还原。
+//
+// 旧实现的缺陷：item_key = MakeDictItemKey(...) = "<词典名>\t<词条>"
+//   （例如 `luna_pinyin\t你好`）以**明文**出现在三处：
+//     · push 请求体的 `item_key` 字段（抓包即可读）；
+//     · D1 `sync_items.item_key` 列（查库即可读）；
+//     · R2 对象键 = sha256Hex(item_key)（可被字典穷举反推）。
+//   载荷虽是密文，但「用户装了哪些词、查过哪些词」已由键名泄露 ⇒ AC-07 不通过。
+//
+// 修法（零服务端改动 · 零表结构改动 · 零重新部署）：
+//   服务端只把 item_key 当**不透明字符串**用（唯一身份维度 / HLC 守卫比较
+//   基准 / R2 键的输入），因此客户端把「线上身份」换成：
+//       item_key_id = HMAC-SHA256(item_key_mac_key, item_key)
+//                     → 64 位小写十六进制
+//   并把明文 item_key **移入已加密载荷内部**（AEAD 覆盖范围），pull 时解密
+//   还原。服务端 `wire.ts` 的 `assertHeaderString` 只关心「是字符串且不含
+//   控制字符」，64 位十六进制完全合规 ⇒ 服务端一行不改。
+//
+// 为什么用 MAC 而不是裸 SHA-256：
+//   词条熵极低（常用词 + 固定词典名），裸哈希可被字典穷举还原；MAC 密钥
+//   只由用户口令派生（口令不出本机）⇒ 满足 AC-07「无口令时无法还原」。
+//
+// 密钥链：master → HKDF("fluxing-enc-v1") → enc_key
+//                → HKDF("fluxing-itemkey-mac-v1") → item_key_mac_key
+//   复用现成 HkdfSha256，不引入独立密钥管理；enc_key 换口令即整体轮换。
+
+// 派生 item_key 的 MAC 密钥（32 字节）。
+// enc_key 长度不为 kKeyBytes 或 HKDF 失败 ⇒ false + 中文原因。
+bool DeriveItemKeyMacKey(const std::vector<uint8_t>& enc_key,
+                         std::vector<uint8_t>* out,
+                         std::string* err);
+
+// item_key → 线上身份（64 位小写十六进制）。
+// 同一 enc_key + 同一 item_key 恒定输出 ⇒ 服务端去重与 HLC 守卫跨轮次稳定。
+// item_key 为空 / enc_key 非法 ⇒ 返回空串（调用方按错误处理）。
+std::string ComputeItemKeyId(const std::vector<uint8_t>& enc_key,
+                             const std::string& item_key);
+
 // 本地条目 → 待推送条目（逐条 AES-256-GCM 信封加密，AAD 用 5 字段 BuildAad）。
+//
+// ★ AC-07 之后的线格式：
+//   · item.item_key      = ComputeItemKeyId(enc_key, entry.key)（MAC 十六进制）
+//   · AAD                = BuildAad(MAC, type, hlc)
+//   · 被加密的明文       = [4 字节大端 key_len][明文 item_key][entry.payload]
+//   ⇒ 明文键只存在于密文内部；entry.payload 在密文内保持原样（不加壳），
+//     封包/拆包完全封闭在本函数的密码学边界内。
 bool SealEntries(const std::vector<Entry>& entries,
                  ItemType type,
                  const std::vector<uint8_t>& enc_key,
                  std::vector<CloudSyncItem>* out,
                  std::string* err);
 
-// 待拉取条目 → 本地条目（逐条解密）。解密失败 ⇒ false + err 中文原因。
+// 待拉取条目 → 本地条目（逐条解密 + 拆封 + 身份自校验）。
+//
+// 顺序：AAD = BuildAad(item.item_key, type, hlc) → AES-GCM 解密 → 拆出明文
+//   item_key 与 payload → **重算 MAC 并与 item.item_key 比对**。
+// 最后一步防的是「把 A 条目的密文配上 B 条目的身份」这类替换：AAD 只绑定
+//   传输身份，若不重算 MAC，两条合法条目互换身份后 AEAD 依然校验通过。
+// 解密失败 / 封包格式非法 / 身份不一致 ⇒ false + err 中文原因。
 bool OpenItems(const std::vector<CloudSyncItem>& items,
                const std::vector<uint8_t>& enc_key,
                std::vector<Entry>* out,

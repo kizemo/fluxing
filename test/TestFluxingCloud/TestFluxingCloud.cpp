@@ -1759,17 +1759,41 @@ void TestCloudSyncPure() {
           "条目可封成待推送条目");
     Check(items.size() == 1 && !items[0].nonce_b64.empty() && !items[0].cipher_b64.empty(),
           "密文与 nonce 已生成");
+    // AC-07：线上身份必须是 MAC（64 位小写十六进制），明文键绝不上线。
+    const std::string& wire_key = items[0].item_key;
+    Check(wire_key.size() == 64 && wire_key != e.key,
+          "AC-07：推送条目的 item_key 是 64 位摘要、不等于明文键");
+    bool hex_ok = wire_key.size() == 64;
+    for (size_t i = 0; i < wire_key.size() && hex_ok; ++i) {
+      const char c = wire_key[i];
+      hex_ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+    }
+    Check(hex_ok, "AC-07：线上身份是小写十六进制");
+    Check(fc::ComputeItemKeyId(key, e.key) == wire_key,
+          "AC-07：身份可确定性复算（HKDF+HMAC 同一密钥链）");
+    Check(fc::ComputeItemKeyId(key, e.key) !=
+              fc::ComputeItemKeyId(key, "dict\t另一个词条"),
+          "AC-07：不同词条 ⇒ 不同身份");
+    const std::vector<uint8_t> wrong(32, 0x7F);
+    Check(fc::ComputeItemKeyId(wrong, e.key) != wire_key,
+          "AC-07：身份绑密钥（换密钥 ⇒ 换身份，否则可跨账号字典反查）");
+    Check(fc::ComputeItemKeyId(key, "").empty(), "反例：空条目键 ⇒ 空身份");
     std::vector<fc::Entry> opened;
     Check(fc::OpenItems(items, key, &opened, &err), "待推送条目可解回条目");
     Check(opened.size() == 1 && opened[0].key == e.key && opened[0].payload == e.payload,
-          "加解密往返一致");
-    const std::vector<uint8_t> wrong(32, 0x7F);
+          "加解密往返一致（明文键从密文内部还原）");
     std::vector<fc::Entry> none;
     Check(!fc::OpenItems(items, wrong, &none, &err), "反例：错误密钥 ⇒ 解密失败");
     std::vector<fc::CloudSyncItem> tampered = items;
     tampered[0].cipher_b64 = fc::Base64Encode(std::vector<uint8_t>(32, 0x41));
     std::vector<fc::Entry> none2;
     Check(!fc::OpenItems(tampered, key, &none2, &err), "反例：密文被篡改 ⇒ 解密失败");
+    // 反例：身份被换成另一个词的摘要（AAD 绑身份 ⇒ 解不开）。
+    std::vector<fc::CloudSyncItem> swapped = items;
+    swapped[0].item_key = fc::ComputeItemKeyId(key, "dict\t另一个词条");
+    std::vector<fc::Entry> none3;
+    Check(!fc::OpenItems(swapped, key, &none3, &err),
+          "反例：身份被换成别的词的摘要 ⇒ 解密失败（AAD 绑定）");
   }
 
   // 合并：HLC 大者取胜

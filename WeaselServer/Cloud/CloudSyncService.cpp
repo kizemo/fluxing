@@ -297,6 +297,125 @@ static bool ReadItemKeyArray(const json::JsonDocument& doc,
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// item_key 的线上身份（spec 100 AC-07 / ADR 0059）
+// ---------------------------------------------------------------------------
+
+// HKDF info 标签：enc_key → item_key 的 MAC 密钥。
+// ★ 必须与 ADR 0059 及 scripts/cloud/live-e2e-probe.mjs 里的第三份独立实现
+//   逐字一致；任何一侧漂移都会导致「服务端认得、客户端认不得」的静默分叉。
+static constexpr char kItemKeyMacInfo[] = "fluxing-itemkey-mac-v1";
+
+// 摘要 → 64 位小写十六进制。
+static std::string ToLowerHex(const std::vector<uint8_t>& bytes) {
+  static const char kHex[] = "0123456789abcdef";
+  std::string out(bytes.size() * 2, '\0');
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    out[2 * i] = kHex[(bytes[i] >> 4) & 0x0F];
+    out[2 * i + 1] = kHex[bytes[i] & 0x0F];
+  }
+  return out;
+}
+
+// HMAC-SHA256(mac_key, text) → 十六进制。text 为空 ⇒ 空串（调用方当错误）。
+static std::string HmacHex(const std::vector<uint8_t>& mac_key,
+                           const std::string& text) {
+  if (text.empty())
+    return std::string();
+  std::vector<uint8_t> digest;
+  if (!HmacSha256(mac_key, reinterpret_cast<const uint8_t*>(text.data()),
+                  text.size(), &digest))
+    return std::string();
+  if (digest.size() != 32) {
+    SecureZeroBytes(&digest);
+    return std::string();
+  }
+  std::string out = ToLowerHex(digest);
+  SecureZeroBytes(&digest);
+  return out;
+}
+
+bool DeriveItemKeyMacKey(const std::vector<uint8_t>& enc_key,
+                         std::vector<uint8_t>* out,
+                         std::string* err) {
+  if (out == nullptr) {
+    if (err)
+      *err = "内部错误：条目标识密钥输出为空。";
+    return false;
+  }
+  out->clear();
+  if (enc_key.size() != kKeyBytes) {
+    if (err)
+      *err = "加密密钥长度不正确，无法派生条目标识密钥。";
+    return false;
+  }
+  if (!HkdfSha256(enc_key, kItemKeyMacInfo, out) || out->size() != kKeyBytes) {
+    out->clear();
+    if (err)
+      *err = "派生条目标识密钥失败。";
+    return false;
+  }
+  return true;
+}
+
+std::string ComputeItemKeyId(const std::vector<uint8_t>& enc_key,
+                             const std::string& item_key) {
+  if (item_key.empty())
+    return std::string();
+  std::vector<uint8_t> mac_key;
+  if (!DeriveItemKeyMacKey(enc_key, &mac_key, nullptr))
+    return std::string();
+  std::string id = HmacHex(mac_key, item_key);
+  SecureZeroBytes(&mac_key);
+  return id;
+}
+
+// 密封载荷内部的封包：[4 字节大端 key_len][明文 item_key][payload]。
+// 用长度前缀而不是分隔符：词条里可能出现任意字节（含 TAB），分隔符不可靠。
+static void PackSealedPlain(const std::string& key,
+                            const std::string& payload,
+                            std::string* out) {
+  out->clear();
+  const uint32_t n = static_cast<uint32_t>(key.size());
+  out->reserve(4 + key.size() + payload.size());
+  out->push_back(static_cast<char>((n >> 24) & 0xFFu));
+  out->push_back(static_cast<char>((n >> 16) & 0xFFu));
+  out->push_back(static_cast<char>((n >> 8) & 0xFFu));
+  out->push_back(static_cast<char>(n & 0xFFu));
+  out->append(key);
+  out->append(payload);
+}
+
+static bool UnpackSealedPlain(const std::string& plain,
+                              std::string* key,
+                              std::string* payload,
+                              std::string* err) {
+  if (plain.size() < 4) {
+    if (err)
+      *err = "云端条目的明文过短，无法还原条目键。";
+    return false;
+  }
+  const uint32_t n = (static_cast<uint32_t>(
+                          static_cast<uint8_t>(plain[0]))
+                      << 24) |
+                     (static_cast<uint32_t>(
+                          static_cast<uint8_t>(plain[1]))
+                      << 16) |
+                     (static_cast<uint32_t>(
+                          static_cast<uint8_t>(plain[2]))
+                      << 8) |
+                     static_cast<uint32_t>(static_cast<uint8_t>(plain[3]));
+  if (n == 0 || plain.size() < 4 + static_cast<size_t>(n)) {
+    if (err)
+      *err = "云端条目的明文结构不合法。";
+    return false;
+  }
+  key->assign(plain, 4, n);
+  payload->assign(plain, 4 + static_cast<size_t>(n),
+                  plain.size() - 4 - static_cast<size_t>(n));
+  return true;
+}
+
 // item_key 列表里是否含某个键（比对服务端返回的 accepted / skipped 用）。
 static bool ContainsItemKey(const std::vector<std::string>& keys,
                             const std::string& key) {
@@ -370,18 +489,28 @@ bool SealEntries(const std::vector<Entry>& entries,
         *err = "无法生成随机数。";
       return false;
     }
-    const std::string aad = BuildAad(entry.key, type, entry.hlc);
+    // AC-07：明文键换成 MAC 线上身份，明文键本身移入密文内部。
+    const std::string item_key_id = ComputeItemKeyId(enc_key, entry.key);
+    if (item_key_id.empty()) {
+      if (err)
+        *err = "无法计算条目在云端的标识。";
+      return false;
+    }
+    std::string packed;
+    PackSealedPlain(entry.key, entry.payload, &packed);
+    const std::string aad = BuildAad(item_key_id, type, entry.hlc);
     std::vector<uint8_t> cipher;
     std::string seal_err;
-    if (!crypto::AesGcmSeal(enc_key, nonce, aad, entry.payload, &cipher,
-                            &seal_err)) {
+    if (!crypto::AesGcmSeal(enc_key, nonce, aad, packed, &cipher, &seal_err)) {
+      SecureZeroString(&packed);
       if (err)
         *err = "加密条目失败：" +
                (seal_err.empty() ? std::string("未知原因") : seal_err);
       return false;
     }
+    SecureZeroString(&packed);
     CloudSyncItem item;
-    item.item_key = entry.key;
+    item.item_key = item_key_id;
     item.type = ItemTypeName(type);
     item.hlc = entry.hlc;
     item.nonce_b64 = Base64Encode(nonce);
@@ -438,9 +567,24 @@ bool OpenItems(const std::vector<CloudSyncItem>& items,
                (open_err.empty() ? std::string("未知原因") : open_err);
       return false;
     }
+    // AC-07：明文键封在密文内部；线上的 item_key 只是 MAC 身份。
+    // 拆封后必须重算 MAC 并与线值比对：AAD 里绑的是 item.item_key，
+    // 若不复核，「A 的密文 + B 的身份」这种替换就解不出来也发现不了。
     Entry entry;
-    entry.key = item.item_key;
-    entry.payload = plain;
+    std::string unpack_err;
+    if (!UnpackSealedPlain(plain, &entry.key, &entry.payload, &unpack_err)) {
+      SecureZeroString(&plain);
+      if (err)
+        *err = unpack_err;
+      return false;
+    }
+    SecureZeroString(&plain);
+    if (ComputeItemKeyId(enc_key, entry.key) != item.item_key) {
+      SecureZeroString(&entry.payload);
+      if (err)
+        *err = "云端条目的标识与其内容不一致，已拒绝该条目。";
+      return false;
+    }
     entry.hlc = item.hlc;
     out->push_back(entry);
   }
@@ -966,11 +1110,12 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
       }
       // ★ 只有服务端**真的收下**的条目（accepted）才算「已推送」；
       //   skipped = 云端已有更新版本（HLC 守卫）⇒ 不计入推送数，但也不算失败。
-      // ★ 只有服务端**真的收下**的条目（accepted）才算「已推送」；
-      //   skipped = 云端已有更新版本（HLC 守卫）⇒ 不计入推送数，但也不算失败。
+      // ★ 服务端回传的是**线上身份**（AC-07 的 MAC 值），本地必须换算后再比，
+      //   否则每一条都落进 kUnknown ⇒ 永不标记已同步 ⇒ 无限重推。
       for (size_t k = offset; k < offset + count; ++k) {
         const std::string& key = local_entries[push_indices[k]].key;
-        switch (ClassifyPushResult(accepted_keys, skipped_keys, key)) {
+        const std::string key_id = ComputeItemKeyId(enc_key_, key);
+        switch (ClassifyPushResult(accepted_keys, skipped_keys, key_id)) {
           case PushDisposition::kAccepted:
             ++out->items_pushed;
             pushed[push_indices[k]] = true;  // 服务端收下了 ⇒ 已同步

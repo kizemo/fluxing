@@ -32,6 +32,7 @@ import {
   createCipheriv,
   createDecipheriv,
   createHash,
+  createHmac,
   hkdfSync,
   pbkdf2Sync,
   randomBytes,
@@ -54,6 +55,9 @@ const PBKDF2_ITERS = 600000;
 const SALT_PREFIX = 'fluxing-enc-v1|';
 const AUTH_KEY_INFO = 'fluxing-auth-v1';
 const ENC_KEY_INFO = 'fluxing-enc-v1';
+// AC-07 方案 K：线上条目身份 = HMAC-SHA256(HKDF(enc_key, 本 info), utf8(明文条目键))
+// 逐字对齐 WeaselServer/Cloud/CloudSyncService.cpp::kItemKeyMacInfo
+const ITEM_KEY_MAC_INFO = 'fluxing-itemkey-mac-v1';
 const KEY_BYTES = 32;
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
@@ -98,22 +102,61 @@ function buildAad(itemKey, type, hlc) {
   return `${itemKey}|${type}|${hlc.ms}|${hlc.counter}|${hlc.device}`;
 }
 
+/**
+ * AC-07 方案 K：线上条目身份（第三份独立实现，禁止复用客户端代码）。
+ * 逐字对齐 CloudSyncService.cpp::ComputeItemKeyId：
+ *   mac_key = HKDF-SHA256(enc_key, salt = 32 × 0x00, info = "fluxing-itemkey-mac-v1", 32B)
+ *   id      = lowercase_hex(HMAC-SHA256(mac_key, utf8(item_key)))
+ */
+function computeItemKeyId(encKey, itemKey) {
+  const macKey = Buffer.from(
+    hkdfSync('sha256', encKey, Buffer.alloc(KEY_BYTES, 0), ITEM_KEY_MAC_INFO, KEY_BYTES),
+  );
+  const id = createHmac('sha256', macKey).update(Buffer.from(itemKey, 'utf8')).digest('hex');
+  macKey.fill(0);
+  return id;
+}
+
+/**
+ * 对齐 CloudSyncService.cpp::PackSealedPlain：
+ *   明文载荷 = [4 字节大端 key_len][utf8 item_key][utf8 payload]
+ * 词条含任意字节（含 TAB），故用长度前缀而非分隔符。
+ */
+function packSealedPlain(itemKey, payloadText) {
+  const keyBuf = Buffer.from(itemKey, 'utf8');
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(keyBuf.length, 0);
+  return Buffer.concat([len, keyBuf, Buffer.from(payloadText, 'utf8')]);
+}
+
+/** 对齐 CloudSyncService.cpp::UnpackSealedPlain ⇒ { key, payload:Buffer } */
+function unpackSealedPlain(buf) {
+  if (buf.length < 4) throw new Error('封包不足 4 字节');
+  const keyLen = buf.readUInt32BE(0);
+  if (keyLen === 0) throw new Error('封包条目键长度为 0');
+  if (buf.length < 4 + keyLen) throw new Error('封包条目键长度越界');
+  return {
+    key: buf.subarray(4, 4 + keyLen).toString('utf8'),
+    payload: buf.subarray(4 + keyLen),
+  };
+}
+
 /** 封装：cipher = 密文 || tag（对齐 AesGcmSeal 的输出布局） */
-function seal(encKey, nonce, aad, plainText) {
+function seal(encKey, nonce, aad, plainBuf) {
   const cipher = createCipheriv('aes-256-gcm', encKey, nonce);
   cipher.setAAD(Buffer.from(aad, 'utf8'));
-  const body = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
+  const body = Buffer.concat([cipher.update(plainBuf), cipher.final()]);
   return Buffer.concat([body, cipher.getAuthTag()]);
 }
 
-/** 解封：验证布局真的能被客户端的 AesGcmOpen 口径还原 */
+/** 解封：验证布局真的能被客户端的 AesGcmOpen 口径还原（返回 Buffer） */
 function open(encKey, nonce, aad, cipherBuf) {
   const body = cipherBuf.subarray(0, cipherBuf.length - TAG_BYTES);
   const tag = cipherBuf.subarray(cipherBuf.length - TAG_BYTES);
   const d = createDecipheriv('aes-256-gcm', encKey, nonce);
   d.setAAD(Buffer.from(aad, 'utf8'));
   d.setAuthTag(tag);
-  return Buffer.concat([d.update(body), d.final()]).toString('utf8');
+  return Buffer.concat([d.update(body), d.final()]);
 }
 
 async function api(method, path, body, token) {
@@ -263,15 +306,18 @@ async function main() {
   let accountId = reg.json?.account_id ?? null;
   if (reg.status === 200) {
     record('AC-01 · register 200 且返回 account_id', Boolean(accountId), `account_id=${accountId}`);
-  } else if (reg.status === 409 && /^\d{6}$/.test((process.env.FLUXING_PROBE_CODE || '').trim())) {
-    // 恢复模式：第二轮注入外部码时账号已存在 ⇒ 服务端在**发码之前**就 409
-    // （auth.ts：existing 检查早于发信）⇒ 不会把用户已读到的那枚码换掉。
-    const rows = d1Query(`SELECT id FROM users WHERE email = '${email}' LIMIT 1`);
+  } else if (reg.status === 409 && /email_taken/.test(reg.text)) {
+    // 复用模式：账号已存在 ⇒ 直接借用，不再要求「必须先注入外部验证码」。
+    // 两条子情形都成立：
+    //   ① 账号已 email_verified=1 ⇒ 第 3、4 步由幂等闸跳过，直接 login；
+    //   ② 账号未验证且已注入外部码 ⇒ 服务端 409 发生在**发码之前**
+    //      （auth.ts：existing 检查早于发信）⇒ 不会把用户已读到的那枚码换掉。
+    const rows = d1Query(`SELECT id, email_verified FROM users WHERE email = '${email}' LIMIT 1`);
     accountId = rows.length > 0 ? String(rows[0].id) : null;
     record(
-      'AC-01 · register 409（账号已存在）⇒ 转入恢复模式继续',
+      'AC-01 · register 409（账号已存在）⇒ 复用已有账号继续',
       Boolean(accountId),
-      `account_id=${accountId}`,
+      `account_id=${accountId} email_verified=${rows.length > 0 ? rows[0].email_verified : '?'}`,
     );
   } else {
     record('AC-01 · register 200', false, `${reg.status} ${reg.text.slice(0, 200)}`);
@@ -289,6 +335,12 @@ async function main() {
     return;
   }
 
+  // 幂等闸：账号若已处于已验证状态就跳过第 3、4 步（探针必须可复跑）。
+  // 依据（auth.ts）：handleResend 对已验证邮箱永久 409 email_already_verified
+  // ⇒ 拿不到新码；而上一轮的验证行已 consumed ⇒ verify 必 400 verify_code_used。
+  const verifiedRows = d1Query(`SELECT email_verified FROM users WHERE email = '${email}' LIMIT 1`);
+  const alreadyVerified = verifiedRows.length > 0 && Number(verifiedRows[0].email_verified) === 1;
+
   // --- 3. 取 6 位验证码 ----------------------------------------------------
   // 两条来源：
   //   ① FLUXING_PROBE_CODE（MAIL_MODE="http" 时唯一可行来源）：
@@ -297,7 +349,9 @@ async function main() {
   //      验证码正文（明文）落在 mail_outbox.body；email_verifications 只存 code_hash。
   const manualCode = (process.env.FLUXING_PROBE_CODE || '').trim();
   let code = '';
-  if (/^\d{6}$/.test(manualCode)) {
+  if (alreadyVerified) {
+    record('验证码 · 跳过（账号已处于已验证状态）', true, 'users.email_verified=1，无需取码');
+  } else if (/^\d{6}$/.test(manualCode)) {
     code = manualCode;
     record('验证码 · 用外部注入的 6 位码（第三方发信通道）', true, `code=${code}`);
   } else {
@@ -319,8 +373,12 @@ async function main() {
   }
 
   // --- 4. 验证邮箱 ---------------------------------------------------------
-  const ver = await api('POST', '/v1/auth/verify', { email, code });
-  record('AC-01 · verify 200', ver.status === 200, `${ver.status} ${ver.text.slice(0, 160)}`);
+  if (alreadyVerified) {
+    record('AC-01 · verify 跳过（账号已处于已验证状态）', true, 'users.email_verified=1，无需重新验证');
+  } else {
+    const ver = await api('POST', '/v1/auth/verify', { email, code });
+    record('AC-01 · verify 200', ver.status === 200, `${ver.status} ${ver.text.slice(0, 160)}`);
+  }
 
   // --- 5. 登录 -------------------------------------------------------------
   const login = await api('POST', '/v1/auth/login', {
@@ -338,9 +396,21 @@ async function main() {
 
   // --- 6. 推送（第一轮：新版本 ⇒ 应被 accepted）-----------------------------
   const hlc = { ms: Date.now(), counter: 0, device: deviceId };
+  const itemKeyId = computeItemKeyId(encKey, itemKey);
+  record(
+    'AC-07 · 线上条目身份是 64 位小写十六进制',
+    /^[0-9a-f]{64}$/.test(itemKeyId),
+    `id=${itemKeyId.slice(0, 16)}… 长度=${itemKeyId.length}`,
+  );
+  record(
+    'AC-07 · 线上条目身份 ≠ 明文词条（不含词典名/词条子串）',
+    itemKeyId !== itemKey && !itemKeyId.includes('userdb') && !itemKeyId.includes('探针词条'),
+    `明文键=${JSON.stringify(itemKey)}`,
+  );
+  const sealedPlain = packSealedPlain(itemKey, plainText);
   const nonce = randomBytes(NONCE_BYTES);
-  const aad = buildAad(itemKey, 'userdb', hlc);
-  const cipher = seal(encKey, nonce, aad, plainText);
+  const aad = buildAad(itemKeyId, 'userdb', hlc);
+  const cipher = seal(encKey, nonce, aad, sealedPlain);
 
   const push1 = await api(
     'POST',
@@ -348,7 +418,7 @@ async function main() {
     {
       items: [
         {
-          item_key: itemKey,
+          item_key: itemKeyId,
           type: 'userdb',
           hlc,
           nonce: nonce.toString('base64'),
@@ -362,7 +432,7 @@ async function main() {
   const skipped1 = push1.json?.skipped ?? [];
   record(
     'T502 · push 首轮 accepted 含该条目',
-    push1.status === 200 && accepted1.includes(itemKey),
+    push1.status === 200 && accepted1.includes(itemKeyId),
     `status=${push1.status} accepted=${JSON.stringify(accepted1)} skipped=${JSON.stringify(skipped1)}`,
   );
   record(
@@ -381,7 +451,7 @@ async function main() {
     {
       items: [
         {
-          item_key: itemKey,
+          item_key: itemKeyId,
           type: 'userdb',
           hlc,
           nonce: nonce.toString('base64'),
@@ -395,7 +465,7 @@ async function main() {
   const accepted2 = push2.json?.accepted ?? [];
   record(
     'T503 · 同版本再推 ⇒ 该条目进 skipped（服务端 HLC 守卫生效）',
-    push2.status === 200 && skipped2.includes(itemKey),
+    push2.status === 200 && skipped2.includes(itemKeyId),
     `status=${push2.status} skipped=${JSON.stringify(skipped2)} accepted=${JSON.stringify(accepted2)}`,
   );
 
@@ -409,7 +479,7 @@ async function main() {
     `status=${pull.status} top_server_seq=${topSeq}`,
   );
   let pulledCipherBytes = null;
-  const pulled = pullItems.find((it) => it.item_key === itemKey);
+  const pulled = pullItems.find((it) => it.item_key === itemKeyId);
   record('T502 · pull 拉回刚才推的条目', Boolean(pulled), `items=${pullItems.length}`);
   if (pulled) {
     record(
@@ -423,16 +493,21 @@ async function main() {
     pulledCipherBytes = roundCipher;
     const roundHlc = pulled.hlc;
     const roundAad = buildAad(pulled.item_key, pulled.type, roundHlc);
-    let decrypted = null;
+    let unpacked = null;
+    let openErr = '';
     try {
-      decrypted = open(encKey, roundNonce, roundAad, roundCipher);
+      unpacked = unpackSealedPlain(open(encKey, roundNonce, roundAad, roundCipher));
     } catch (err) {
-      decrypted = `解密异常：${err.message}`;
+      openErr = String(err.message || err);
     }
     record(
-      '端到端 · 拉回密文可用派生密钥解密且明文一致',
-      decrypted === plainText,
-      `明文=${String(decrypted).slice(0, 60)}`,
+      '端到端 · 拉回密文可用派生密钥解密，且 item_key 与载荷双一致',
+      unpacked !== null &&
+        unpacked.key === itemKey &&
+        unpacked.payload.toString('utf8') === plainText,
+      unpacked === null
+        ? `解密异常：${openErr.slice(0, 160)}`
+        : `key=${JSON.stringify(unpacked.key)} 载荷=${JSON.stringify(unpacked.payload.toString('utf8').slice(0, 60))}`,
     );
     record(
       'AC-07 · 线上密文 ≠ 明文（存储的是密文）',
@@ -450,6 +525,24 @@ async function main() {
     'AC-07 · D1 sync_items 无明文载荷列',
     itemRows.length > 0 && !rowText.includes(plainText),
     `行数=${itemRows.length} 列=${itemRows.length > 0 ? Object.keys(itemRows[0]).join(',') : ''}`,
+  );
+  // 方案 K 判据一：本次条目必须以 MAC 身份（64 位小写 hex）落库，且与客户端算法一致。
+  record(
+    'AC-07 · 本次条目在 D1 以 MAC 身份（64 位 hex）落库',
+    itemRows.some((r) => r.item_key === itemKeyId),
+    `期望=${itemKeyId.slice(0, 20)}… 命中=${itemRows.filter((r) => r.item_key === itemKeyId).length}`,
+  );
+  // 方案 K 判据二：整表不得残留明文身份行（残留行在方案 K 下 AAD 不匹配、必然解不开，
+  // 属必须清理的旧数据 —— 命中就说明清理没做完，不能让它藏在新代码背后）。
+  const plainIdentityRows = itemRows.filter(
+    (r) => typeof r.item_key !== 'string' || !/^[0-9a-f]{64}$/.test(r.item_key),
+  );
+  record(
+    'AC-07 · D1 无明文 item_key 残留行（词典名/词条不可见）',
+    itemRows.length > 0 && plainIdentityRows.length === 0,
+    plainIdentityRows.length === 0
+      ? `全部 ${itemRows.length} 行均为 64 位 hex`
+      : `残留 ${plainIdentityRows.length} 行：${JSON.stringify(plainIdentityRows.slice(0, 3).map((r) => r.item_key))}`,
   );
 
   const r2Rows = d1Query(

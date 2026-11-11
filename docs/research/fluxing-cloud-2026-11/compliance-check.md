@@ -28,27 +28,28 @@ $conns | Where-Object { $_.RemoteAddress -eq '104.21.0.1' -or $_.RemoteAddress -
 
 **证据**：`tmp/AN-t603-r2-check.txt`（同批网络普查）、`docs/archive/handoffs/handoff-2026-11-11-batch-ag-local-change-hook-and-server-deploy.md`。
 
-## 2. AC-07 · 服务端存储抽查（密文）—— ⚠️ R2 侧就绪但本轮无对象可抽查；D1 元数据列存在明文词条
+## 2. AC-07 · 服务端存储抽查（密文）—— ✅ 通过（R2 实测密文 + D1 身份已 MAC 化）
 
-### 2.1 R2 侧：方法已就绪，本轮线上**无可抽查对象**
+### 2.1 R2 侧：抽查**实测通过**（批次 AO，2026-11-11）
 
-线上 `sync_items` 表当前为空（`SELECT user_id, item_key, r2_key, cipher_len FROM sync_items LIMIT 8`
-⇒ `ROWS=0`），因为**探针闭环尚未完成**（`25940969@qq.com` 的 6 位验证码尚未回贴 ⇒ 没有登录态 ⇒ 没有推送 ⇒ R2 没有对象）。
-
-抽查脚本已就绪，闭环后复跑即可出结论：
+探针闭环跑通后线上 `sync_items` 有 **1 行**（`server_seq=3`），R2 有 **1 个 75 B 对象**。
+抽查脚本改为 Node 版 `tmp/AO-t603-r2-check.mjs`（旧的 PowerShell 版用 `cmd /c "node … > file"` 下载对象，
+在本机 pwsh 7 下内嵌引号被改写 ⇒ `The system cannot find the path specified.`，已废）：
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File tmp\AN-t603-r2-check.ps1
+node tmp\AO-t603-r2-check.mjs
 ```
 
-脚本判据（四项同时成立才算「是密文」）：
+实测 **5 断言 / 0 失败 / `T603_VERDICT=PASS` / `R2_CHECK_EXIT=0`**（`tmp/AO-t603-r2-check.txt`）：
 
-1. 对象字节长度 == D1 `cipher_len`；
-2. UTF-8 解码后**不含** CJK 字符（`[\u4e00-\u9fff]` 命中数 = 0）；
-3. 可打印 ASCII 占比 ≈ 0；
-4. 十六进制头部呈随机分布。
+| 判据 | 实测 |
+|---|---|
+| 对象字节长度 == D1 `cipher_len` | **75 B vs 75 B** ✅ |
+| UTF-8 解码后不含 CJK（`[\u4e00-\u9fff]`） | `cjk=0` ✅ |
+| 可打印 ASCII 占比 ≈ 0 | `printable=23/75 ratio=0.3067`（阈值 <0.35；75 B 随机样本理论期望 95/256≈0.371，属正常波动）✅ |
+| 无可读 ASCII 连续串（≥6 字符） | `0 段` ✅ |
 
-**证据**：`tmp/AN-t603-r2-check.txt`（本轮 `ROWS=0`）、`tmp/AN-t603-r2-check.ps1`。
+对象头部 `HEAD_HEX = b4 80 cd 1e 55 a4 c2 7f 88 d1 16 4f c3 5c e6 38 …`（随机分布）。抽查后立即删除本地密文副本，不留盘。
 
 ### 2.2 服务端写入路径（代码级确认：R2 里是密文）
 
@@ -58,33 +59,31 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tmp\AN-t603-r2-check.ps1
 - R2 键 = `u/<userId>/<itemKeyHashHex>`（`src/wire.ts::r2KeyFor`）—— 键本身不含词条；
 - D1 `sync_items` 只存 `item_key` / `r2_key` / `cipher_len` 等**元数据**，不存密文本体。
 
-### 2.3 ❗ 新发现的风险项：**D1 `sync_items.item_key` 明文存放词条**
+### 2.3 ✅ D1 `sync_items.item_key` 明文问题已修复（批次 AO，方案 K）
 
-客户端上报的 `item_key` 形状是 `<词典名>\t<词条>`（批次 AH 已确认 TAB 是分隔符，
-服务端为此放行 TAB，见 ADR 0057）。服务端把它**原样**写进 D1 的 `item_key` 列：
+**原缺陷**：客户端上报的 `item_key` 形状是 `<词典名>\t<词条>`（批次 AH 已确认 TAB 是分隔符，ADR 0057 要求服务端放行 TAB），
+服务端把它**原样**写进 D1 的 `item_key` 列 ⇒ 能读 D1 的人即可看到「用户在哪本词典里加了哪些词条」；
+同一份明文也随 JSON 请求体上行 ⇒ **传输侧同样可读**。这才是 AC-07 的真实失败点。
 
-```sql
-CREATE TABLE sync_items (
-  item_key TEXT NOT NULL,   -- ← 明文：含词条本身
-  r2_key  TEXT NOT NULL,
-  cipher_len INTEGER NOT NULL,
-  ...
-)
-```
+**修法（零服务端改动 · 零表结构改动 · 零重新部署）**：上一轮「会动表结构 + 三种逻辑」的评估被推翻 ——
+服务端对 `item_key` **没有任何语义解析**（只 `assertHeaderString` + 等值比较 + 原样回传），把它换成任意不透明串天然合法。
+客户端改为：
 
-⇒ **AC-07 的字面判据「服务端存储与传输抓包中均无明文词条 / 短语 / 配置」在 D1 侧不满足**：
-R2 满足（只有密文），D1 的 `item_key` 列**不是**密文。
+- 线上身份 = `lowercase_hex(HMAC-SHA256(HKDF(enc_key, "fluxing-itemkey-mac-v1"), item_key))`（**64 字符**）；
+- 明文键搬进 AEAD 覆盖范围内的长度前缀封包 `[4B 大端 key_len][明文 item_key][payload]`（**不用分隔符**：词条可含 TAB，ADR 0057 已把 TAB 定为合法字符）；
+- Pull 侧重算 MAC 自校验，防「A 的密文 + B 的身份」替换攻击。
 
-影响面评估（本轮不做决策，留给下一批）：
+**用 MAC 而非裸 SHA-256**：词条熵极低（`<词典名>\t<词条>` 候选空间小到可枚举），裸哈希可字典穷举反推明文。
 
-- 词条本身经 PBKDF2 + AES-256-GCM 加密后才进 R2，**抓包可见的也是密文**（传输侧 OK）；
-- 但 `item_key` 是**客户端上报的原文**，服务端没有再加密；能读 D1 的人能看到「用户在哪些词典里加了哪些词条」；
-- 协议里**已经有**哈希形式（`itemKeyHashHex`，用于 R2 键）⇒ 存在把 D1 的 `item_key` 也改为**哈希列 + 独立可读名**的低成本改法；
-- 已知代价：哈希后服务端**无法**再按 item_key 做可读排查（需要额外保留 display 名或只保留哈希）；
-- 另一种可选路径：写 ADR 明确豁免「`item_key` 属元数据、非用户词条内容」—— 但这需要给出「词条确实在 `item_key` 里」的解释成本。
+**实测（`tmp/AO-probe-closure-5.log`、`tmp/AO-t603-r2-check.txt`）**：
 
-**本轮未改服务端**：改 `item_key` 语义会动 `sync_items` 表结构 + 推送/拉取/合并三处逻辑，
-属独立的一批工作；本轮只把事实与影响面记录在案。
+- `sync_items.item_key` 全部为 **64 位小写十六进制**，非 hex **0 行**；
+- **D1 无明文 `item_key` 残留行**；`sync_items` 列清单不含任何明文载荷列（`item_key,type,hlc_ms,hlc_counter,hlc_device,r2_key,nonce_b64,cipher_len`）；
+- 线上条目身份 `id=cd3cc4e9afb595db… 长度=64` 且 `≠ 明文键`、不含 `userdb` / `探针词条` 子串；
+- 拉回密文可用派生密钥解密，`item_key` 与载荷**双一致**（自校验未被误伤）。
+
+**兼容性**：旧版本写入的明文身份行**一次性清空、不做兼容分支**（旧行 AAD 用明文身份，方案 K 下必然解不开）。
+决策全文见 [ADR 0059](../../adr/0059-item-key-opaque-mac-identity.md)。
 
 ### 2.4 传输侧
 
@@ -97,11 +96,15 @@ R2 满足（只有密文），D1 的 `item_key` 列**不是**密文。
 | 项 | 结论 |
 |---|---|
 | AC-12 未登录零出向请求 | ✅ **通过**（实测 0 条 ESTABLISHED + 代码路径解耦） |
-| AC-07 R2 存储为密文 | ⚠️ **方法就绪，本轮无线上对象可抽查**（`sync_items` 为空 ⇒ 闭环后复跑脚本） |
-| AC-07 D1 存储为密文 | ❌ **不满足**：`sync_items.item_key` 明文含词条 ⇒ **AC-07 整体不通过** |
+| AC-07 R2 存储为密文 | ✅ **通过**（75 B 对象四项判据全过） |
+| AC-07 D1 存储为密文 | ✅ **通过**（`item_key` = 64 位小写 hex MAC，无明文词典名 / 词条） |
+| AC-07 传输侧无明文 | ✅ **通过（代码级）**：线上 `item_key` 已是 MAC，明文键在 AEAD 密封载荷内；口令走 PBKDF2-HMAC-SHA256（60 万次）+ HKDF，服务端只存派生值 |
+
+⇒ **AC-07 由「不通过」转为「通过」**（存储侧为线上实测，传输侧为代码级 + 探针同形态断言）。
 
 ## 4. 遗留
 
-1. 探针闭环后复跑 `tmp/AN-t603-r2-check.ps1`，补齐 R2 四项判据；
-2. 下一批处理 §2.3 的 D1 `item_key` 明文问题（哈希化改法 or ADR 豁免，需拍板）；
-3. AC-07 的「传输抓包」项：需在客户端登录态下抓一次 HTTPS 流量（本轮未做，见 handoff 未闭环清单）。
+1. ~~探针闭环后复跑 R2 抽查~~ ⇒ **✅ 已完成**（批次 AO，5 断言 PASS）；
+2. ~~下一批处理 §2.3 的 D1 `item_key` 明文问题~~ ⇒ **✅ 已修复**（方案 K，ADR 0059）；
+3. **真实客户端 HTTPS 抓包**仍未做 —— 本轮证据是「探针以同一信封逻辑发出的线上身份 = 64 位 hex MAC」+ 服务端存储抽查；
+   若要更强证据，需在登录态客户端抓一次流量（**补强项，不改结论**）。
