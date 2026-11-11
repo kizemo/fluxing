@@ -337,6 +337,8 @@
 - **Done 判据**：贴门禁输出（全绿）+ 收尾 handoff 与接力 prompt 的路径。
 - **依赖**：T601、T602、T603。
 - **状态**：**门禁 + 收尾文档 DONE · 出包未做**（批次 AN，2026-11-11）。**命令更正**：本仓门禁总入口的开关是 `-SkipL0/-SkipL1/-SkipL3/-SkipCases/-SkipSandboxGate`，**没有 `-Level` 参数**（任务书原文 `-Level L0` 会报「找不到与参数名称 'Level' 匹配的参数」）⇒ 直接不带参数即跑 L0/L1/L3/L4/L5 全量。
+- **门禁实测（批次 AN，2026-11-11）**：L0 静态 **15/15 PASS（exit 0）** · L1 快捷设置栏 **15/15 PASS（exit 0）** · L3 变异自检 **9/9 KILLED（exit 0）** · **L4 回归 3/3 PASS（exit 0）**（改前 2/3，唯一红的 `C0176` 已修，见下）· L5 Windows Sandbox（**发版前项，本批不出包** ⇒ 未作为本批门禁项）。
+- **本轮修掉的 L4 红灯 `C0176`**（**既存失败**、与 spec 100 无关，但卡在 T604「门禁全绿」判据内）：① 用例断言批次 V 重构**前**的字面量（实现已改走 `ResolveAnchoredPosition` / `HasSavedPosition` 分支）⇒ 字面量失效；② 顺带查出**真实代码缺口** —— `WeaselServer/QuickPanelDialog.cpp` 注释宣称「首建钳制无条件执行」，实现却仍带 `!areas.empty() && has_target` 关门，且 `RepairOffscreenPanel` 在枚举为空时直接放弃自愈 ⇒ D0176 同形复发路径仍在。修法 = 新增 `WorkAreasWithFallback()`（枚举空 ⇒ 退回 `SPI_GETWORKAREA` 主显示器工作区）+ 用例改**语义断言**（不弱化、应加强）。提交 `41164a9`，`C0176` PASS（1.1s），L4 ⇒ 3/3。
 - **Still not verified**：**未出包**（发版流程未启动；`WeaselServer.exe` 是 PPL ⇒ 装机前先注销 / 重启，R4）；接力 prompt 按用户 2026-11-08 指示**直接写在当轮回答正文**、不另落文件（`docs/archive/prompts/` 不新建）。
 
 ### T605 · 账号链路加固 · resend 端点 [P1] [US1]（原阶段 G 加固项，提前到批次 AF 实现）

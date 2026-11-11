@@ -1,4 +1,11 @@
 ## [Unreleased]
+### fix(WeaselServer): 快捷栏屏外位置自愈补工作区兜底 + C0176 用例改语义断言（批次 AN 追加）
+
+- **根因（verified，代码级）**：D0176 **同形复发** —— 代码注释宣称「首建钳制无条件执行」，实现却仍把 `ClampToVisibleArea` 关在 `!areas.empty()` 门内；而 `RepairOffscreenPanel` 在 `EnumerateWorkAreas()` 返回空时直接 `return false`（自愈一并放弃）⇒ 「枚举失败 + 持久化屏外坐标」这条路上**钳制与自愈双双失效**，面板建在用户看不见的地方，体感仍是「Alt+, 没反应」。
+- **修法**：`WeaselServer/QuickPanelDialog.cpp` 新增 `WorkAreasWithFallback()`（枚举为空 ⇒ 退回 `SPI_GETWORKAREA` 主显示器工作区，保证钳制基准恒存在）；`RepairOffscreenPanel` 与首建路径统一改用它；仅在连主工作区都取不到时按「无基准」放弃（不猜）。注释与实现对齐。
+- **用例**：`test/regression/cases/C0176-quickpanel-offscreen-persist.ps1` 原先断言批次 V 重构**前**的字面量（已随重构失效）⇒ 改为**语义断言**（不弱化、应加强）：首建仍调 `ClampToVisibleArea`、`WorkAreasWithFallback` 出现 ≥3 次、兜底函数必须以 `EnumerateWorkAreas` 为首选 / 判空 / 走 `SPI_GETWORKAREA` / `push_back` 补基准；既有 `RepairOffscreenPanel` ≥4 次与单测二进制全绿判据原样保留。
+- **门禁**：`C0176` **PASS（1.1s）**；L4 回归 **3/3 PASS（exit 0）**（改前 2/3，唯一红的即 C0176）；`build.bat weasel` **0 警告 0 错误**；clang-format 定向格式化本批行，diff 仅 **29/3 行**（无历史漂移）。
+
 ### fix(WeaselServer): 客户端丢弃服务端 `skipped` 导致两端静默分叉（AH-4 ⑤ · 批次 AN）
 
 - **根因（verified，代码级）**：`WeaselServer/Cloud/CloudSyncService.cpp::CloudSyncService::Push` 只解析响应里的 `server_seq`，把服务端返回的 **`accepted` / `skipped` 整段丢弃**；协调器随后把该批次**全部**条目记成「已推送、已同步」⇒ **被服务端 HLC 守卫跳过的本地改动也被写进 sidecar 当作已同步** ⇒ 本地与云端**静默分叉**（本地那份改动永远推不上去，且客户端以为已同步）。

@@ -163,3 +163,14 @@
 - 本批改动：`WeaselServer/Cloud/CloudSyncService.{h,cpp}`、`CloudSyncEngine.h`、`test/TestFluxingCloud/TestFluxingCloud.cpp`、`scripts/cloud/live-e2e-probe.mjs`、`docs/research/fluxing-cloud-2026-11/{acceptance-matrix,perf-baseline,compliance-check}.md`、`.specify/specs/100-fluxing-cloud-account-sync/tasks.md`、`CHANGELOG.md`、`CLAUDE.md`。
 - **未 push**（与前几批一致）。
 - **工作树里非本批的改动（勿混入提交）**：`RimeWithWeasel/RimeWithWeasel.cpp`（他人/前批遗留）、`librime` 子模块 dirty、`docs/design/quickpanel-v6/design-demos/*.html`（未跟踪）。
+
+---
+
+## 10. 批次 AN 追加（2026-11-11 晚）：L4 红灯 `C0176` 收口 + 四次提交完成
+
+- **背景**：全量门禁 `scripts/gate/run-all.ps1`（**无 `-Level` 参数**）跑下来 L0 / L1 / L3 全绿，**L4 回归 2/3** —— 唯一红的 `C0176` 是**既存失败**（用例只读 `include/FluxingPanelPosition.h` + `WeaselServer/QuickPanelDialog.cpp`（本批未改）+ `Release\TestQuickPanelDialog.exe`），与 spec 100 无关，但卡住 T604「门禁全绿」。
+- **诊断（两条独立发现）**：① 用例断言批次 V 重构**前**的字面量 `const POINT target = HasSavedPosition() ? SavedPosition() : POINT{x, y};` ⇒ 实现已改走 `ResolveAnchoredPosition` / `HasSavedPosition` 分支，字面量失效；② 顺带查出**真实代码缺口** —— 注释宣称「首建钳制无条件执行」，实现却仍带 `!areas.empty() && has_target` 关门，且 `RepairOffscreenPanel` 在 `EnumerateWorkAreas()` 返回空时直接 `return false` ⇒ 「枚举失败 + 持久化屏外坐标」这条路上**钳制与自愈双双失效**（D0176 同形复发）。
+- **修法**：`WeaselServer/QuickPanelDialog.cpp` 新增 `WorkAreasWithFallback()`（枚举为空 ⇒ 退回 `SPI_GETWORKAREA` 主显示器工作区 ⇒ 钳制基准恒存在）；`RepairOffscreenPanel` 与首建路径统一改用它；仅在连主工作区都取不到时按「无基准」放弃（不猜）。用例改为**语义断言**（不弱化、应加强）：`ClampToVisibleArea` 仍在首建路径、`WorkAreasWithFallback` 出现 ≥3 次、兜底函数必须以 `EnumerateWorkAreas` 为首选 / 判空 / 走 `SPI_GETWORKAREA` / `push_back` 补基准；既有 `RepairOffscreenPanel` ≥4 次、单测二进制全绿 ≥190 断言原样保留。
+- **门禁（实测）**：`C0176` **PASS（1.1s）**；L4 **3/3 PASS（exit 0）**；`build.bat weasel` **0 警告 0 错误**（Win32 + x64 全链，QuickPanelDialog.cpp 已重编）；clang-format 定向格式化本批行 ⇒ diff 仅 **29/3 行**（无历史漂移）。
+- **批次 AN 提交清单（均未 push）**：`ad1e202`（AH-4 ⑤ 消费服务端 `skipped`）/ `fec21fc`（探针外部注入 6 位码 + 409 恢复模式）/ `ec1e8d6`（T601–T603 文档 + 收尾 handoff + CHANGELOG + CLAUDE 指针）/ `41164a9`（C0176 兜底 + 用例语义化）。
+- **本轮新增工具坑**：① `Set-Location` 后再写文件（含 `Out-File` / `clang-format -i`）会被本机硬安全策略拦（*"write/delete targets cannot be verified safely after a command working directory change"*）⇒ 改用 `git -C <repo>` + **绝对路径**，全程不切目录；② `test/regression/run-cases.ps1` 支持 `-Case C0176` 单跑（不必全量回归），单例耗时 ~1 s。
