@@ -13,7 +13,9 @@
 修后 **334×650 / 20 项 / 外框 32.50 px·项⁻¹（内框 ≈31.70）**，高度比 **1.537 ≈ 系统缩放 150%**，
 截屏目视文字已恢复正常字号且清晰可读。构建 `build.bat weasel` **0 警告 0 错误**、clang-format 新增行区间复验 **0 hunk**、
 装机副本 SHA 与构建产物一致（`1B0EE23CD2531A7E`）、WeaselServer 已重启（pid **214300**，确定跑新映像）。
-**未闭合**：本批改动**未提交、未 push**；批次 AH 的 AH-4 五项仍全部需用户在场。
+**收尾状态**：代码 + 构建/格式门禁 + 装机 + 修后真机判据 + `L211` + CHANGELOG + commit `110887f`（**未 push**）全部 DONE，
+云单测回归 **`PASS=418 FAIL=0`** 与批次 AH 基线逐字一致（无回归）。
+**未闭合**：仅剩「用户目视复验」与批次 AH 的 AH-4 五项 —— 两者都需用户在场。
 
 ---
 
@@ -44,31 +46,27 @@
 | AI-6 格式门禁（只管新增行） | **DONE / verified** | 首轮 diff `TOTAL_HUNKS=3`，hunk 行号 **773/777/789 全落在新增区** ⇒ 历史行零违规；`clang-format -i --lines=770:860` 局部格式化后复验 **`RECHECK_TOTAL_HUNKS=0`**；字节校验 `BYTES=34483 LF=1156 CR=0` ⇒ **LF 保真、无 BOM**（该 vendored 文件本就是 LF） |
 | AI-7 装机上机 | **DONE / verified** | `tmp\AI-install-menu-dpi.ps1` ⇒ `tmp\AI-install-menu-dpi.txt`：`INSTALLED-BEFORE sha16=094E54C18D534F5C (2641920)` → `INSTALLED-AFTER sha16=1B0EE23CD2531A7E **MATCH=True**`；旧件备份留盘 `WeaselServer.exe.old-261111-101226`；只替换 `WeaselServer.exe` 一个文件、**不动 TSF DLL** ⇒ 无需重启宿主应用 |
 | AI-8 修后真机判据 | **DONE / verified** | `tmp\AI-activate-panel.ps1`（起 notepad 宿主 → `Win+Space` 切输入法 → `Alt+,` 开面板 → 轮询 `EnumWindows` 找可见面板 → 调 T405 探针）⇒ `tmp\AI-activate-panel.txt`：**`PANEL_FOUND hwnd=526336` / `PROBE_EXIT=0` / 菜单 20 项 / 334×650**；截图 `tmp\AI-menu-AFTER-31.7px.png` 目视文字正常大小 |
-| AI-9 提交 | **PENDING** | 未 `git add` / 未 commit。Conventional Commits 前缀应为 `WeaselServer`，正文引 ADR 0038 与批次 AI；commit 前必跑 `git status -sb` + `git diff --stat` 挡住 `weasel.props` / `env.bat` / `*.obj` / `docs/design/quickpanel-v6/design-demos/*.html` |
-| AI-10 是否需要 ADR | **inferred：不需要** | 本批未改 IPC / 架构 / 构建链，属缺陷修复 ⇒ 按 §3「事故/bugfix」应进 `.specify/memory/lessons-learned.md` 新开 `L##`（**未做**，见 §5 排序理由） |
+| AI-9 提交 | **DONE / verified** | 提交 `110887f` — `fix(WeaselServer): 快捷设置栏/托盘右键菜单恢复 DPI 缩放尺寸（批次 AI）`，6 files / **+271 −7**，`COMMIT_EXIT=0`；提交前 `git diff --cached --stat` + `git status -sb` 已核对 ⇒ 并发会话产物（`RimeWithWeasel/RimeWithWeasel.cpp`、`librime` 子模块、`docs/design/quickpanel-v6/design-demos/*.html`）**一律未入库**；**未 push**（未获授权，不在本批范围） |
+| AI-10 事故条目（非 ADR） | **DONE / verified** | 本批未改 IPC / 架构 / 构建链，属缺陷修复 ⇒ 按 §3 分流应进 lessons-learned，**不做 ADR**；已开 **`L211`**（`F:/soft/00selfmade/rime_claude/.specify/memory/lessons-learned.md:14631`），并在 `CHANGELOG.md:3` 首位插入批次 AI 条目；写后字节校验 ⇒ lessons **UTF-8 BOM + CRLF**、CHANGELOG **无 BOM + CRLF** 逐档保真；云单测回归 `PASS=418 FAIL=0` |
 
 ---
 
 ## 4. 下阶段计划（按序 + 排序理由）
 
-1. **先补 `lessons-learned.md` 的 `L##` 条目，再提交本批改动**（AI-9/AI-10）。
-   理由：这条根因（「系统资源菜单的行高/字号来自**属主窗 + 线程 DPI context**，与同进程其它窗口各自冻结」）
-   是本仓反复踩的类别（记忆 #41/#43 同源），且**代码里看不出来**；§9 要求「同一变更留两份产物」，
-   handoff 已落盘，`L##` 与 commit 应同批，否则下一个 agent 会再去造自绘菜单。
-2. **请用户目视复验一次**（`Alt+,` 开面板 → 品牌图标右键；以及托盘图标右键）。
+1. **请用户目视复验一次**（`Alt+,` 开面板 → 品牌图标右键；以及托盘图标右键）。
    理由：本批判据是几何 + 单张 PrintWindow 裁片，**「可视度」是主观验收项**；两条入口共用回调（ADR 0038）
    但触发点不同，托盘那条本批未单独复测。
-3. **批次 AH 的 AH-4 ①：真实 Windows 客户端注册 → 收码 → 验证 → 登录线上账号端到端**（需用户在场）。
+2. **批次 AH 的 AH-4 ①：真实 Windows 客户端注册 → 收码 → 验证 → 登录线上账号端到端**（需用户在场）。
    理由：这是 spec 100 唯一「代码已对但线上判据缺」的硬缺口；AH-3 已明确
    「线上通过证明不了 C++ 派生一致」⇒ 只有真机能闭合。
-4. **AH-4 ④：托盘 `OUR_HIT=0` 复测** —— 跑 `scripts/install/check-tray-input-indicator.ps1`。
+3. **AH-4 ④：托盘 `OUR_HIT=0` 复测** —— 跑 `scripts/install/check-tray-input-indicator.ps1`。
    理由：批次 AD/W 遗留项，且**本批已重启 WeaselServer**，是复测的最佳时机（旧映像宿主进程已减少）。
-5. **AH-4 ②：双机 AC-08/AC-09** ⇒ 之后才做 **AH-4 ⑤ 客户端消费 `skipped`**。
+4. **AH-4 ②：双机 AC-08/AC-09** ⇒ 之后才做 **AH-4 ⑤ 客户端消费 `skipped`**。
    理由：`CloudCredentialStore` 是 Windows 用户级全局单例 ⇒ 同机两套目录不够；
    `skipped` 的语义只有双机并集验收才能证伪，先改代码等于在没有判据的地方加风险。
-6. **T602 性能三数字 / T603 未登录零出向请求抓包 / T604 发版门禁 L0/L4/L5**（阶段 G 收尾）。
-   理由：这三项不依赖 3–5，但需要真机 + 抓包环境；排在真机链闭合之后一次做完，避免反复装机。
-7. **备选方案（仅当用户复验发现仍有偏差才启用）**：把 `PerMonitorHighDPIAware.manifest` 升 **PerMonitorV2**。
+5. **T602 性能三数字 / T603 未登录零出向请求抓包 / T604 发版门禁 L0/L4/L5**（阶段 G 收尾）。
+   理由：这三项不依赖 2–4，但需要真机 + 抓包环境；排在真机链闭合之后一次做完，避免反复装机。
+6. **备选方案（仅当用户复验发现仍有偏差才启用）**：把 `PerMonitorHighDPIAware.manifest` 升 **PerMonitorV2**。
    理由：影响**全进程所有窗口**（候选窗 / 面板 / 属性页），需重编重装重验，风险远大于本批单点对齐。
 
 ---

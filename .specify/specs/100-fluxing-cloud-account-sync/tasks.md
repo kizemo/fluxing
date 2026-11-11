@@ -453,9 +453,9 @@
 - `build.bat weasel` 连编两次 **0 警告 0 错误**（`BUILD_EXIT=0`）；clang-format 18.1.8 首轮 `TOTAL_HUNKS=3` 且 hunk 行号 **773/777/789 全落在新增区** ⇒ 局部 `--lines=770:860` 后复验 **`RECHECK_TOTAL_HUNKS=0`**，字节校验 `LF=1156 CR=0` ⇒ **LF 保真、无 BOM**。
 - 装机 = 备份改名 + `File::Copy` + SHA 双证 + 重启（**不跑 NSIS 安装器**，本仓 install.nsi 冒烟验收已作废）：`sha16 094E54C18D534F5C → 1B0EE23CD2531A7E`、**`MATCH=True`**、旧件留盘 `WeaselServer.exe.old-261111-101226`、新 pid **214300**；只替换 `WeaselServer.exe`、**不动 TSF DLL** ⇒ 无需重启宿主应用。
 
-### AI-4 · 本批未闭环
-- ① **未提交 / 未 push**（前缀 `WeaselServer`，正文引 ADR 0038 + 批次 AI；commit 前跑 `git status -sb` + `git diff --stat`）。
-- ② **`lessons-learned.md` 未开 `L##`** —— 本批属 bugfix 而非架构决策 ⇒ 按 §3 应入 lessons-learned，**不做 ADR**。
+### AI-4 · 本批收尾与剩余未闭环项
+- ① 未提交 / 未 push —— **已闭合**：提交 `110887f`（`fix(WeaselServer): 快捷设置栏/托盘右键菜单恢复 DPI 缩放尺寸（批次 AI）`，6 files / **+271 −7**）；**仍未 push**（未获授权）。
+- ② **已闭合**：事故条目 **`L211`**（`F:/soft/00selfmade/rime_claude/.specify/memory/lessons-learned.md:14631`）+ `CHANGELOG.md:3` 首位插入批次 AI 条目；本批属 bugfix 而非架构决策 ⇒ 按 §3 分流应入 lessons-learned，**不做 ADR**；云单测回归 `PASS=418 FAIL=0` 与批次 AH 基线逐字一致。
 - ③ **用户目视复验**：`Alt+,` 面板品牌图标右键（几何判据来自 `GetMenuItemRect`，`PrintWindow` 抓 Popup 只画出上半 ⇒ 截图仅作字号佐证）；**托盘图标右键未单独复测**。
 - ④ **备选方案未启用**：若复验仍有偏差 ⇒ `PerMonitorHighDPIAware.manifest` 升 **PerMonitorV2**（影响全进程所有窗口，需重编重装重验，风险更大）。
 
