@@ -1122,6 +1122,31 @@ void TestCloudCryptoVectors() {
     Check(k1.auth_key != k1.enc_key, "auth_key 与 enc_key 相互分离（info 不同）");
     Check(k1.auth_key.size() == 32 && k1.enc_key.size() == 32, "两把密钥各 32 字节");
     Check(fc::kPbkdf2Iterations == 600000u, "PBKDF2 迭代次数常量 = 60 万");
+
+    // 跨实现固定向量（批次 AH）：把「自实现 == 独立标准实现」钉死。
+    //   期望值由 Node(OpenSSL) 标准库**独立**算出（同一套派生链见
+    //   scripts/cloud/live-e2e-probe.mjs），不是本实现自己算的。
+    //   为什么必须有：服务端**从不校验口令**（只比 HMAC(pepper,auth_key)），
+    //   线上 register/login 通过**证明不了**「C++ 派生 == Node 派生」。
+    {
+      const char* kSaltVec =
+          "cc69c0486427ed37786fedbe2336954496570451637f19603a4451328591c604";
+      const char* kAuthVec =
+          "9ebd0c40469bc5083ffb81c5e94e170fb88fe458ba2dce57e9fe1cd68b51"
+          "fdef";
+      const char* kEncVec =
+          "6d1e161c1dbc23b91e4cfd6698e9d5e8c737df1a273f91a69d18494a271b2519";
+      fc::DerivedKeys kv;
+      Check(fc::DeriveKeys("vector@example.com", "Vector-Pw-1", 0, &kv, &err),
+            "跨实现向量：DeriveKeys（生产迭代次数 60 万）成功");
+      Check(HexOf(fc::DeriveSalt("vector@example.com")) == kSaltVec,
+            "跨实现向量：盐与独立标准实现一致");
+      Check(HexOf(kv.auth_key) == kAuthVec,
+            "跨实现向量：auth_key 与独立标准实现一致");
+      Check(HexOf(kv.enc_key) == kEncVec,
+            "跨实现向量：enc_key 与独立标准实现一致");
+    }
+
     Check(fc::DeriveKeys("user@example.com", "", 1000, &k3, &err) == false,
           "反例：空口令 ⇒ 派生失败");
 
