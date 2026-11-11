@@ -71,6 +71,8 @@ struct CloudSyncRoundResult {
   int pull_requests = 0;  // 实际发出的拉取请求数
   int items_pushed = 0;
   int items_pulled = 0;
+  // 被服务端跳过的条目数（云端已有更新版本）—— 不是失败，也不是推送成功。
+  int items_skipped = 0;
   bool has_more = false;  // 服务端还有更多条目（分批未取完）
   std::string message;    // 中文说明
 };

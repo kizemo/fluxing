@@ -274,6 +274,75 @@ bool ParsePullResponse(const std::string& body,
   return true;
 }
 
+// 读一个 item_key 字符串数组（缺字段 ⇒ 空数组；类型不符 ⇒ false）。
+static bool ReadItemKeyArray(const json::JsonDocument& doc,
+                             const char* key,
+                             std::vector<std::string>* out) {
+  if (out != nullptr)
+    out->clear();
+  const json::JsonNode* node = json::Member(doc, doc.root, key);
+  const int index = NodeIndex(doc, node);
+  if (index < 0)
+    return true;  // 字段缺失 ⇒ 空数组（老服务端没有该字段）
+  const json::JsonNode* array = doc.Node(index);
+  if (array == nullptr || array->type != json::JsonType::kArray)
+    return false;
+  for (size_t i = 0; i < array->children.size(); ++i) {
+    const json::JsonNode* item = doc.Node(array->children[i]);
+    if (item == nullptr || item->type != json::JsonType::kString)
+      return false;
+    if (out != nullptr)
+      out->push_back(item->string_value);
+  }
+  return true;
+}
+
+// item_key 列表里是否含某个键（比对服务端返回的 accepted / skipped 用）。
+static bool ContainsItemKey(const std::vector<std::string>& keys,
+                            const std::string& key) {
+  for (size_t i = 0; i < keys.size(); ++i) {
+    if (keys[i] == key)
+      return true;
+  }
+  return false;
+}
+
+PushDisposition ClassifyPushResult(const std::vector<std::string>& accepted,
+                                   const std::vector<std::string>& skipped,
+                                   const std::string& item_key) {
+  if (ContainsItemKey(accepted, item_key))
+    return PushDisposition::kAccepted;
+  if (ContainsItemKey(skipped, item_key))
+    return PushDisposition::kSkipped;
+  return PushDisposition::kUnknown;
+}
+
+bool ParsePushResponse(const std::string& body,
+                       std::vector<std::string>* accepted,
+                       std::vector<std::string>* skipped,
+                       int64_t* server_seq,
+                       std::string* err) {
+  json::JsonDocument doc;
+  if (!json::Parse(body, &doc) || doc.root < 0) {
+    if (err)
+      *err = "服务器返回的数据无法解析。";
+    return false;
+  }
+  if (server_seq != nullptr) {
+    int64_t seq = 0;
+    json::MemberInt64(doc, doc.root, "server_seq", &seq);
+    *server_seq = seq;
+  }
+  const bool ok_accepted = ReadItemKeyArray(doc, "accepted", accepted);
+  const bool ok_skipped = ReadItemKeyArray(doc, "skipped", skipped);
+  if (!ok_accepted || !ok_skipped) {
+    if (err)
+      *err = "服务器返回的推送结果格式不正确。";
+    return false;
+  }
+  return true;
+}
+
 bool SealEntries(const std::vector<Entry>& entries,
                  ItemType type,
                  const std::vector<uint8_t>& enc_key,
@@ -478,7 +547,9 @@ bool CloudSyncService::SendJson(const std::string& method,
 
 bool CloudSyncService::Push(const std::vector<CloudSyncItem>& items,
                             int64_t* server_seq,
-                            std::string* err) {
+                            std::string* err,
+                            std::vector<std::string>* accepted,
+                            std::vector<std::string>* skipped) {
   if (items.empty())
     return true;  // 服务端拒绝空数组
 
@@ -492,17 +563,9 @@ bool CloudSyncService::Push(const std::vector<CloudSyncItem>& items,
     return false;
   }
 
-  json::JsonDocument doc;
-  if (!json::Parse(response, &doc) || doc.root < 0) {
-    if (err)
-      *err = "服务器返回的数据无法解析。";
-    return false;
-  }
-  int64_t seq = 0;
-  json::MemberInt64(doc, doc.root, "server_seq", &seq);
-  if (server_seq)
-    *server_seq = seq;
-  return true;
+  // ★ 必须把 accepted / skipped 解析出来（AH-4 ⑤）：服务端 HLC 守卫会把
+  //   「存储版本 ≥ 入参版本」的条目放进 skipped，客户端不能当成功。
+  return ParsePushResponse(response, accepted, skipped, server_seq, err);
 }
 
 bool CloudSyncService::Pull(int64_t since,
@@ -854,6 +917,8 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   //    · 其余（本地改动过 / 远端没有这条）⇒ 必须推。
   std::vector<size_t> push_indices;  // 本轮要推送的**本地条目下标**
   std::vector<bool> pushed(local_entries.size(), false);  // 本轮真的推成功的
+  // 本轮被服务端跳过的（云端已有更新版本）—— 不是失败，但也不能算「推送」。
+  std::vector<bool> skipped_flags(local_entries.size(), false);
   if (direction == SyncDirection::kPushOnly ||
       direction == SyncDirection::kBoth) {
     for (size_t i = 0; i < local_entries.size(); ++i) {
@@ -892,14 +957,33 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
       }
       int64_t pushed_seq = last_server_seq_;
       ++out->push_requests;
-      if (!service.Push(sealed, &pushed_seq, &push_err)) {
+      std::vector<std::string> accepted_keys;
+      std::vector<std::string> skipped_keys;
+      if (!service.Push(sealed, &pushed_seq, &push_err, &accepted_keys,
+                        &skipped_keys)) {
         push_ok = false;
         break;
       }
-      out->items_pushed += static_cast<int>(count);
-      // 只有**真的推上去**的条目才算「已同步」。
-      for (size_t k = offset; k < offset + count; ++k)
-        pushed[push_indices[k]] = true;
+      // ★ 只有服务端**真的收下**的条目（accepted）才算「已推送」；
+      //   skipped = 云端已有更新版本（HLC 守卫）⇒ 不计入推送数，但也不算失败。
+      // ★ 只有服务端**真的收下**的条目（accepted）才算「已推送」；
+      //   skipped = 云端已有更新版本（HLC 守卫）⇒ 不计入推送数，但也不算失败。
+      for (size_t k = offset; k < offset + count; ++k) {
+        const std::string& key = local_entries[push_indices[k]].key;
+        switch (ClassifyPushResult(accepted_keys, skipped_keys, key)) {
+          case PushDisposition::kAccepted:
+            ++out->items_pushed;
+            pushed[push_indices[k]] = true;  // 服务端收下了 ⇒ 已同步
+            break;
+          case PushDisposition::kSkipped:
+            ++out->items_skipped;
+            skipped_flags[push_indices[k]] =
+                true;  // 云端版本更新 ⇒ 本地不必再推
+            break;
+          case PushDisposition::kUnknown:
+            break;  // 服务端没提这条 ⇒ 不算推送成功，下一轮重试
+        }
+      }
       if (pushed_seq > last_server_seq_)
         last_server_seq_ = pushed_seq;
     }
@@ -920,8 +1004,10 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
       synced = true;  // 远端胜出 ⇒ 服务端已经握着它
     }
     if (!synced && local_index != static_cast<size_t>(-1) &&
-        pushed[local_index]) {
+        (pushed[local_index] || skipped_flags[local_index])) {
       // 本地改动过、且合并后仍是本地版本、且**本轮真的推成功了** ⇒ 已同步。
+      // skipped 也算「已同步」：云端握着的版本 ≥ 本地这条 ⇒ 本地不必再推；
+      // 下一轮拉取会把云端版本带回来覆盖本地，并按云端版本重记 sidecar。
       // ★ 不能只看 locally_modified：只拉不推的轮次（启动轮）里本地改动
       //   从未上传，若此时就标记成「已同步」，这条改动永远再也推不上去。
       synced = true;
@@ -979,6 +1065,11 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   message += " 条，拉取 ";
   message += std::to_string(out->items_pulled);
   message += " 条";
+  if (out->items_skipped > 0) {
+    message += "，云端已有更新版本跳过 ";
+    message += std::to_string(out->items_skipped);
+    message += " 条";
+  }
   if (has_more)
     message += "（云端还有更多条目，下次同步继续）";
   message += "。";

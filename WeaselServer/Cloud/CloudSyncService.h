@@ -90,6 +90,32 @@ bool ParsePullResponse(const std::string& body,
                        std::string* err,
                        bool* has_more = nullptr);
 
+// 解析推送响应：accepted / skipped（item_key 数组）+ 顶层 server_seq。
+//
+// ★ 为什么客户端必须消费 skipped（AH-4 ⑤）：
+//   服务端的 HLC 守卫会把「存储版本 ≥ 入参版本」的条目放进 skipped（既不写
+//   R2 也不写 D1）。客户端若把 skipped 当成 accepted，就会把**服务端根本没
+//   收下**的本地改动记成「已同步」⇒ sidecar 写进本地载荷的哈希，而云端
+//   握着的是另一个版本 ⇒ 两端静默分叉、本地改动再也推不上去。
+//   字段缺失一律视作空数组（老服务端没有 skipped 时等价于「全部接受」）。
+bool ParsePushResponse(const std::string& body,
+                       std::vector<std::string>* accepted,
+                       std::vector<std::string>* skipped,
+                       int64_t* server_seq,
+                       std::string* err);
+
+// 服务端对某一条目的处置（AH-4 ⑤）。
+enum class PushDisposition {
+  kUnknown = 0,  // 服务端既没 accepted 也没 skipped（异常）⇒ 视为没推上去
+  kAccepted,  // 服务端收下了
+  kSkipped,   // 服务端跳过（云端已有 ≥ 本地的版本）
+};
+
+// 判定服务端对某个条目键的处置。纯函数 ⇒ 可单测精确覆盖。
+PushDisposition ClassifyPushResult(const std::vector<std::string>& accepted,
+                                   const std::vector<std::string>& skipped,
+                                   const std::string& item_key);
+
 // 本地条目 → 待推送条目（逐条 AES-256-GCM 信封加密，AAD 用 5 字段 BuildAad）。
 bool SealEntries(const std::vector<Entry>& entries,
                  ItemType type,
@@ -133,9 +159,12 @@ class CloudSyncService {
   CloudSyncService(ICloudTransport* transport, std::string access_token);
 
   // 推送。server_seq 输出本次推送后的服务端序号（没有条目时保持原值）。
+  // accepted / skipped 输出服务端对每条目的处置（item_key 列表，可为空）。
   bool Push(const std::vector<CloudSyncItem>& items,
             int64_t* server_seq,
-            std::string* err);
+            std::string* err,
+            std::vector<std::string>* accepted = nullptr,
+            std::vector<std::string>* skipped = nullptr);
 
   // 拉取。since 是上次已处理的服务端序号。
   // has_more 输出「服务端还有更多条目」（用于分批）。

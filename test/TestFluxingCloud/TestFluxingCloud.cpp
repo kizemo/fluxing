@@ -2414,6 +2414,104 @@ void TestCloudSyncEngineRuntime() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 批次 AN · AH-4 ⑤：客户端消费服务端的 skipped（推送结果契约）
+//
+// 修复前：CloudSyncService::Push 只解析 server_seq，把 accepted / skipped
+// 整段丢弃 ⇒ 协调器把**被服务端跳过**的条目也记成「已推送、已同步」。
+// ---------------------------------------------------------------------------
+
+void TestCloudPushSkipped() {
+  std::printf("[AN] AH-4 ⑤ 推送结果契约：accepted / skipped 的解析与消费\n");
+  std::string err;
+
+  // ① 纯函数：完整响应体 ⇒ accepted / skipped / server_seq 全部解析出来。
+  {
+    std::vector<std::string> accepted;
+    std::vector<std::string> skipped;
+    int64_t seq = 0;
+    const bool ok = fc::ParsePushResponse(
+        "{\"accepted\":[\"userdb\\tA\"],\"skipped\":[\"userdb\\tB\"],\"server_"
+        "seq\":7}",
+        &accepted, &skipped, &seq, &err);
+    Check(ok, "ParsePushResponse：合法响应体解析成功");
+    Check(accepted.size() == 1 && accepted[0] == "userdb\tA",
+          "accepted 解析出服务端收下的条目键");
+    Check(skipped.size() == 1 && skipped[0] == "userdb\tB",
+          "skipped 解析出服务端跳过的条目键");
+    Check(seq == 7, "顶层 server_seq 解析成功");
+  }
+
+  // ② 缺字段 ⇒ 空数组（老服务端没有 skipped 时等价于「全部接受」）。
+  {
+    std::vector<std::string> accepted;
+    std::vector<std::string> skipped;
+    int64_t seq = 0;
+    const bool ok = fc::ParsePushResponse("{\"accepted\":[],\"server_seq\":3}",
+                                          &accepted, &skipped, &seq, &err);
+    Check(ok, "ParsePushResponse：缺 skipped 字段仍解析成功");
+    Check(skipped.empty(), "缺 skipped 字段 ⇒ 空数组");
+    Check(accepted.empty() && seq == 3, "accepted 为空且 server_seq 照常解析");
+  }
+
+  // ③ 畸形响应 ⇒ false + 中文原因。
+  {
+    std::vector<std::string> accepted;
+    std::vector<std::string> skipped;
+    int64_t seq = 0;
+    err.clear();
+    Check(!fc::ParsePushResponse("{不是 JSON", &accepted, &skipped, &seq, &err),
+          "ParsePushResponse：畸形 JSON ⇒ 失败");
+    Check(!err.empty(), "ParsePushResponse：失败时给出中文原因");
+    err.clear();
+    Check(!fc::ParsePushResponse("{\"accepted\":\"不是数组\"}", &accepted,
+                                 &skipped, &seq, &err),
+          "ParsePushResponse：accepted 不是数组 ⇒ 失败");
+  }
+
+  // ④ 处置判定：accepted / skipped / 都没提到。
+  {
+    const std::vector<std::string> accepted = {"userdb\tA"};
+    const std::vector<std::string> skipped = {"userdb\tB"};
+    Check(fc::ClassifyPushResult(accepted, skipped, "userdb\tA") ==
+              fc::PushDisposition::kAccepted,
+          "服务端收下的条目 ⇒ kAccepted");
+    Check(fc::ClassifyPushResult(accepted, skipped, "userdb\tB") ==
+              fc::PushDisposition::kSkipped,
+          "服务端跳过的条目 ⇒ kSkipped");
+    Check(fc::ClassifyPushResult(accepted, skipped, "userdb\tC") ==
+              fc::PushDisposition::kUnknown,
+          "服务端没提到的条目 ⇒ kUnknown（不算推送成功）");
+  }
+
+  // ⑤ 服务点级：Push 必须把 accepted / skipped 交回调用方（修复前被丢弃）。
+  {
+    MockTransport transport;
+    transport.replies.push_back(
+        MockTransport::Reply{true, 200,
+                             "{\"accepted\":[\"userdb\\tA\"],\"skipped\":["
+                             "\"userdb\\tB\"],\"server_seq\":11}"});
+    fc::CloudSyncService service(&transport, "tok-an");
+    fc::CloudSyncItem item;
+    item.item_key = "userdb\tA";
+    item.type = "userdb";
+    item.nonce_b64 = "AAAAAAAAAAAAAAAA";
+    item.cipher_b64 = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=";
+    std::vector<fc::CloudSyncItem> items;
+    items.push_back(item);
+    std::vector<std::string> accepted;
+    std::vector<std::string> skipped;
+    int64_t seq = 0;
+    const bool ok = service.Push(items, &seq, &err, &accepted, &skipped);
+    Check(ok, "Push：服务端 200 ⇒ 成功");
+    Check(accepted.size() == 1 && accepted[0] == "userdb\tA",
+          "Push：accepted 交回调用方");
+    Check(skipped.size() == 1 && skipped[0] == "userdb\tB",
+          "Push：skipped 交回调用方（修复前被整段丢弃）");
+    Check(seq == 11, "Push：server_seq 交回调用方");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -2455,6 +2553,9 @@ int main() {
   // spec 100 阶段 F · T501（本地改动通知链）
   TestFluxingLocalChangeHook();
   TestCloudSyncNotifierLocalChange();
+
+  // 批次 AN：AH-4 ⑤ 客户端消费 skipped（推送结果契约）。
+  TestCloudPushSkipped();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。
