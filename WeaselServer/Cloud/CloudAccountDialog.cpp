@@ -380,6 +380,8 @@ class CloudAccountController::Impl {
   bool email_verified = false;
   std::wstring account_email;
   std::wstring base_url;
+  // 「请 UI 清空口令框」的一次性请求（**只在登录成功**时置位）。
+  bool clear_password_request = false;
 
   std::unique_ptr<ICloudTransport> transport;
   std::unique_ptr<CloudAccountService> service;
@@ -438,6 +440,15 @@ bool CloudAccountController::logged_in() const {
   return impl_->logged_in;
 }
 
+// 消费「请清空口令框」的一次性请求（UI 线程调用）。
+// 读取即消费 ⇒ 不会重复清空用户随后新输入的内容。
+bool CloudAccountController::ConsumeClearPasswordRequest() {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  const bool requested = impl_->clear_password_request;
+  impl_->clear_password_request = false;
+  return requested;
+}
+
 bool CloudAccountController::email_verified() const {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   return impl_->email_verified;
@@ -473,6 +484,11 @@ void CloudAccountController::SubmitLogin(const std::wstring& email,
         impl->status = impl->email_verified
                            ? L"登录成功。"
                            : L"登录成功，但邮箱尚未验证，请先完成邮箱验证。";
+        // 只有「已登录**且**邮箱已验证」才清口令框：
+        // ① 失败时保留 ⇒ 用户可改错重试；
+        // ② 「登录成功但邮箱未验证」也保留 ⇒ 用户验证完邮箱还要用**同一口令**
+        //    再登录一次，提前清掉会逼他重敲一遍（真机闭环实测踩到过）。
+        impl->clear_password_request = impl->email_verified;
       } else {
         impl->logged_in = false;
         impl->status = L"登录失败：" + ToWide(err);
@@ -739,6 +755,11 @@ void RefreshUi(HWND hwnd) {
   ::SetWindowTextW(::GetDlgItem(hwnd, kIdStatus), controller.status().c_str());
   ::SetWindowTextW(::GetDlgItem(hwnd, kIdSyncStatus),
                    controller.sync_status().c_str());
+  // 「已登录且邮箱已验证」⇒ 清空口令框（一次性请求，读取即消费）。
+  // 失败 / 注册 / 「已登录但邮箱未验证」路径**不**清 ⇒ 用户可以直接改错重试，
+  // 验证完邮箱后也能用同一口令直接登录。
+  if (controller.ConsumeClearPasswordRequest())
+    ::SetWindowTextW(::GetDlgItem(hwnd, kIdPassword), L"");
 
   HWND list = ::GetDlgItem(hwnd, kIdDevices);
   if (list != nullptr) {
@@ -824,9 +845,10 @@ LRESULT CALLBACK WndProc(HWND hwnd,
           const std::wstring email = ReadControlText(hwnd, kIdEmail);
           std::wstring password = ReadControlText(hwnd, kIdPassword);
           controller.SubmitLogin(email, password);
-          // 口令用完立刻抹掉两处副本：堆上的宽字符串 + 输入框。
+          // 口令用完立刻抹掉**堆上**的宽字符串副本。
+          // 输入框**不**在此清空：登录失败时要能改错重试（否则用户得
+          // 重新敲一遍口令）；成功后再由 RefreshUi 统一清空。
           SecureZeroWide(&password);
-          ::SetWindowTextW(::GetDlgItem(hwnd, kIdPassword), L"");
           return 0;
         }
         case kIdRegister: {
@@ -835,8 +857,9 @@ LRESULT CALLBACK WndProc(HWND hwnd,
           const std::wstring email = ReadControlText(hwnd, kIdEmail);
           std::wstring password = ReadControlText(hwnd, kIdPassword);
           controller.SubmitRegister(email, password);
+          // 同上：注册失败保留口令便于重试；注册成功后用户还要用**同一**
+          // 口令登录，因此输入框一律不在这里清空。
           SecureZeroWide(&password);
-          ::SetWindowTextW(::GetDlgItem(hwnd, kIdPassword), L"");
           return 0;
         }
         case kIdVerify: {

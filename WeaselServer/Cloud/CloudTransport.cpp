@@ -367,11 +367,19 @@ CloudHttpResponse WinHttpTransport::SendOnce(const CloudHttpRequest& request) {
   ::WinHttpCloseHandle(connect);
   ::WinHttpCloseHandle(session);
 
-  if (!response.transport_ok && response.error.empty())
-    response.error = "网络请求失败";
+  // ★ 传输成功判定：整个响应读取过程中没有产生任何错误 ⇒ transport_ok=true。
+  //   修复前这里**从未**把 transport_ok 置 true（结构体默认值是 false），
+  //   于是**任何**正常响应都被上层（CloudAccountService / CloudSyncService）
+  //   判成「网络层失败」，原因被兜底成「网络请求失败」，
+  //   账号页最终显示「注册失败：网络请求失败：网络请求失败」。
+  //   见 .specify/memory/lessons-learned.md L213。
+  response.transport_ok = response.error.empty();
   response.body = std::move(body);
-  if (response.transport_ok)
+  if (response.transport_ok) {
     response.error.clear();
+  } else if (response.error.empty()) {
+    response.error = "网络请求失败";
+  }
   return response;
 }
 

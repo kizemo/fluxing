@@ -64,6 +64,9 @@
 #include "../../include/FluxingLocalChangeHook.h"
 #include "../../WeaselServer/Cloud/CloudSyncNotifier.h"
 
+// 批次 AK：真实 WinHTTP 传输层的回环回归用例（单独文件，见其头注释）。
+int RunFluxingCloudNetTests(int* out_pass);
+
 namespace fc = fluxing::cloud;
 
 namespace {
@@ -2452,6 +2455,15 @@ int main() {
   // spec 100 阶段 F · T501（本地改动通知链）
   TestFluxingLocalChangeHook();
   TestCloudSyncNotifierLocalChange();
+
+  // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
+  // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。
+  {
+    int net_pass = 0;
+    const int net_fail = RunFluxingCloudNetTests(&net_pass);
+    g_pass += net_pass;
+    g_fail += net_fail;
+  }
 
   std::printf("\nRESULT: PASS=%d FAIL=%d\n", g_pass, g_fail);
   if (g_fail == 0) {

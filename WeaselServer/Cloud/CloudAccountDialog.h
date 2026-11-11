@@ -83,6 +83,9 @@ class CloudAccountController {
   std::wstring account_email() const;
   // 最近一次同步的中文描述（时间 + 结果 + 原因）；未同步过时给占位文案。
   std::wstring sync_status() const;
+  // 消费「请清空口令框」的一次性请求（UI 线程调用）。
+  // 只有**登录成功**才会置位；失败时口令留在输入框里，便于改错重试。
+  bool ConsumeClearPasswordRequest();
 
  private:
   CloudAccountController();
