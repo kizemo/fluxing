@@ -1,4 +1,12 @@
 ## [Unreleased]
+### feat(fluxing): Resend 发信通道「上线」（`MAIL_MODE` 切 `http` · 批次 AM）
+
+- **上线**：`wrangler secret put MAIL_HTTP_API_KEY`（值不出现在任何输出里）→ `wrangler.toml` 的 `MAIL_MODE` 由 `outbox` 切 `http` → 部署 **Version ID `29d4e572-49d0-43c2-b091-dda3029edf00`** → `GET /v1/health` = 200 → 直调 Resend 自检信 **200**（邮件 id `01a1ca9f-…`）⇒ **真实投递通道已打开**（此前 `outbox` 只写表不发信）。
+- **DNS（用户手动，已核验）**：Cloudflare `aiec.fun` 加 3 条 —— CNAME `rsend` → `rsend.forge.rmta.net`（DNS only）、CNAME `send` → `send.forge.rmta.net`（DNS only）、TXT `_dmarc` → `v=DMARC1; p=none;`；DKIM `resend._domainkey` 先前已在位，未重复添加。**教训**：`rmta.net` 是 Resend 自有基础设施域（AWS Route 53 托管），SPF 走 **CNAME 间接** ⇒ 后台记录表**没有 MX 属正常**。
+- **服务端 E2E**：探针在 http 模式下 **register 200 且返回 account_id** ⇒ 证明验证码确实经 Resend 发出；随后的「mail_outbox 取码」失败即 **模式判别器**（http 模式不写明文码，生产库无明文验证码）。
+- **探针改造**：`scripts/cloud/live-e2e-probe.mjs` 新增 `FLUXING_PROBE_EMAIL` / `FLUXING_PROBE_CODE`，取码改为「外部注入优先 → 回落 D1 outbox」。
+- **密钥防护**：key 落地目录 `cloud/fluxing-sync/.key/` 原先**未被 gitignore** ⇒ 已追加忽略规则（`git check-ignore` 命中，status 无残留）。
+- **⚠️ 未闭环**：完整「验证→登录→推送→拉取」闭环尚缺一个真实信箱的 6 位码；客户端端到端注册需用户用**未注册过**的邮箱；AH-4 ②⑤ 与 T602–T604 仍待推进。
 
 ### feat(fluxing): 服务端新增 `MAIL_MODE="http"` 第三方 HTTPS 邮件 API 通道（Resend 兼容，$0 路线 · 批次 AL）
 

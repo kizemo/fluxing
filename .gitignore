@@ -200,3 +200,4 @@ release/*.ilk
 /qp-dump.bmp
 /qp-logo.bmp
 /qp-state.txt
+/.wrangler/

@@ -163,3 +163,23 @@ UI 显示「注册失败：网络请求失败：网络请求失败」—— 与�
 - **真实邮件投递尚未发生**：需 ① 用户注册 Resend 并把域名 `aiec.fun` 验通（DNS 记录必须**用户手动**加到 Cloudflare —— 本机现有凭据只有 zone 读 + Account 作用域，无 DNS Write）；② 用户交付 API Key。**生产 `MAIL_MODE` 仍是 `outbox`**（⇒ 线上行为与部署前完全一致）；新代码**已部署**（Version ID `2e6db488-da38-4a3a-8ec7-7f302b167035`，`GET /v1/health` = 200），只差「注入 Secret + 切 `MAIL_MODE=http`」两步。
 - **切换时必做**：`scripts/cloud/live-e2e-probe.mjs` 的取码来源从 D1 `mail_outbox` 改为**用户邮箱**（http 模式不再写该表）。
 - AH-4 ②（双机）/ ⑤（客户端消费 `skipped`）、T602–T604、批次 AI 托盘右键 DPI 目视复验 —— 仍需用户在场。
+
+## 批次 AM · Resend 发信通道「已上线」（2026-11-11 20:45）
+
+> 承接批次 AL：用户完成 `aiec.fun` 域名验通并交付 API Key，本批把通道真正打开。
+
+### 已完成（verified）
+
+- **DNS（用户手动，已核验）**：Cloudflare `aiec.fun` zone 新增 3 条 —— CNAME `rsend` → `rsend.forge.rmta.net`（**DNS only 灰云**）、CNAME `send` → `send.forge.rmta.net`（**DNS only 灰云**）、TXT `_dmarc` → `v=DMARC1; p=none;`。DKIM（TXT `resend._domainkey`）**先前已在位**，实测值长 218 字符、头 `p=MIGfMA0GCSqGSIb3DQEBAQ`、尾 `KGI6+xx/BQIDAQAB`，与后台一致 ⇒ 未重复添加。三条 `Resolve-DnsName` 全部命中。
+- **实测澄清（推翻 AL 文档旧形态）**：`rmta.net` / `forge.rmta.net` 是 **Resend 自有基础设施域**（权威 NS = AWS Route 53），**不是用户 zone** ⇒ Resend 的 SPF 采用 **CNAME 间接**，后台记录表里**没有 MX 属正常**；`send.forge.rmta.net` / `rsend.forge.rmta.net` 的 `v=spf1` TXT 由 Resend 侧持有。
+- **上线（`scripts/cloud/resend-go-live.ps1`，GO_LIVE_EXIT=0）**：`wrangler secret put MAIL_HTTP_API_KEY` 成功（**值不出现在任何输出里**）→ `wrangler.toml` 的 `MAIL_MODE` 由 `outbox` 切 `http` → `wrangler deploy` ⇒ **Version ID `29d4e572-49d0-43c2-b091-dda3029edf00`**（绑定表已显示 `env.MAIL_MODE ("http")`）→ `GET /v1/health` = **200** → 直调 Resend 向 `kizemo@163.com` 发自检信 ⇒ **HTTP 200**，邮件 id `01a1ca9f-c112-7238-ac45-9e8baaf57686` ⇒ **发信域名 `no-reply@aiec.fun` 验证通过、key 有权发信**。
+- **服务端 E2E（关键判据）**：探针在 http 模式下 **register 200 且返回 account_id**（`c5980ad8-bbfd-400e-894d-617737e18ed0`）⇒ 证明 Worker 的 http 分支**确实**把验证码交给了 Resend（发信失败时端点抛 500/503，注册不可能返回 200）；紧随其后的 FAIL「mail_outbox 取码」**正是模式判别器**（http 模式不写明文码）⇒ 线上已不在 outbox 模式。
+- **密钥防护（补）**：用户把 key 放在 `cloud/fluxing-sync/.key/resent-key.txt`（避开 `tmp/` 被清理）。该目录**原先未被 gitignore**（`git status` 曾显示 `?? cloud/fluxing-sync/.key/resent-key.txt`）⇒ 本批在 `cloud/fluxing-sync/.gitignore` 追加 `.key/`，复核 `git check-ignore` 命中、status 已无 key 条目。`wrangler.toml` **无 assets/public 配置** ⇒ `.key` 不会被静态上传。
+- **探针改造（`scripts/cloud/live-e2e-probe.mjs`）**：新增 `FLUXING_PROBE_EMAIL`（邮箱可外部指定）与 `FLUXING_PROBE_CODE`（6 位码外部注入）；取码改为「外部码优先 → 回落 D1 `mail_outbox` 旧路径（兼容 outbox 模式）」。
+
+### 未闭环（not verified / 待用户在场）
+
+- **完整闭环（验证→登录→推送→拉取）尚差一个 6 位验证码**：http 模式下验证码只在真实信箱 / Resend 后台，探针需外部注入 ⇒ 已向用户给出三种取码方式（提供另一个真实邮箱 / 读 Resend 后台那封测试邮件 / 用户自己在客户端注册）。
+- **客户端端到端**：用户需用**未注册过**的邮箱在「账号与同步」页注册一次（`kizemo@163.com` 已被占用，服务端回 `email_taken`），确认收到验证码并完成验证。
+- **Resend 侧风险提示**：历史探针账号用的 `@example.com` 属 Resend **明确拒绝**的域（回 422）⇒ 自动化探针须改用 `delivered+label@resend.dev` 这类安全测试地址。
+- AH-4 ②（双机）/ ⑤（客户端消费 `skipped`）、T602–T604、批次 AI 托盘右键 DPI 目视复验 —— 仍需用户在场。

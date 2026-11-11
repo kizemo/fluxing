@@ -45,7 +45,7 @@ KDF_ITERS = "600000"
 #   http   = 第三方 HTTPS 邮件 API（生产路线，2026-11-11 用户拍板 Resend，$0）
 #   cloudflare = Workers send_email 绑定（需 Workers Paid $5/月，**不启用**）
 # 切到 "http" 的前提：MAIL_HTTP_API_KEY 已作为 Secret 注入（否则线上注册返回 500 server_misconfigured）。
-MAIL_MODE = "outbox"
+MAIL_MODE = "http"
 MAIL_FROM = "no-reply@aiec.fun"
 # 发件人显示名（拼成「显示名 <地址>」）
 MAIL_FROM_NAME = "火流猩输入法"
@@ -56,7 +56,7 @@ MAIL_HTTP_AUTH_PREFIX = "Bearer "
 # MAIL_HTTP_API_KEY 绝不写进本文件：用 `wrangler secret put MAIL_HTTP_API_KEY` 注入。
 
 # 生产发信绑定（**需 Workers Paid 计划** —— 官方原文：向任意收件人发送需 Paid，账号级最低消费 $5/月）。
-# **2026-11-11 用户拍板走 $0 路线** ⇒ 首版**不启用**本绑定：开发 / 内测用 MAIL_MODE="outbox"（只写表不发信）；
+# **2026-11-11 用户拍板走 $0 路线** ⇒ 首版**不启用**本绑定：开发 / 内测用 MAIL_MODE = "http"（只写表不发信）；
 # 上线前改走第三方 HTTPS 邮件 API（Workers Free 允许出站 fetch）—— 见 plan.md §4.4。
 # [[send_email]]
 # name = "EMAIL"

@@ -146,3 +146,51 @@ node node_modules\wrangler\bin\wrangler.js secret put MAIL_HTTP_API_KEY
 - 外部前置总表：`docs/ops/fluxing-cloud-external-prerequisites.md`
 - 通道选型调研：`docs/research/fluxing-cloud-2026-11/email-verify-channel.md`
 - 客户端协议契约（换通道不改编解码）：`.specify/specs/100-fluxing-cloud-account-sync/plan.md` §4.4
+
+---
+
+## 9. 实测 DNS 结论（2026-11-11，对照用户 Resend 后台记录）
+
+> 本节是**实测事实**，优先级高于上文 §3.2 的示例表。
+
+| 项目 | 实测结果 | 含义 |
+| --- | --- | --- |
+| `rmta.net` 权威 NS | `ns-1515.awsdns-61.org` 等 4 条 = **AWS Route 53** | **Resend 自有的发送基础设施域**（`rmta` = Resend MT），不是用户资产 ⇒ 永远不要试图在 Cloudflare 建 `rmta.net` 的 zone |
+| `forge.rmta.net` | A `98.83.16.149` / `3.231.87.173`（AWS us-east-1） | Resend Forge 的接收端 |
+| `send.forge.rmta.net` | TXT `v=spf1 ip4:52.3.252.119 ip4:44.222.39.36 ip4:199.249.231.0/24 ~all` | **SPF 用 CNAME 间接**：TXT 挂在 Resend 侧，用户侧只需 CNAME ⇒ 后台记录表里**没有 MX 记录**，属正常 |
+| `rsend.forge.rmta.net` | TXT `v=spf1 include:amazonses.com ~all` | 同上（return-path 一路） |
+| `aiec.fun` 权威 NS | `cruz.ns.cloudflare.com` / `javon.ns.cloudflare.com` | **在 Cloudflare**，可在控制台直接加记录 |
+| `resend._domainkey.aiec.fun` TXT | **已存在**（`p=MIGfMA0GCSqGSIb3DQEB…`） | `aiec.fun` 已在 Resend 添加过，DKIM 已落 Cloudflare |
+| `send.aiec.fun` / `rsend.aiec.fun` | CNAME / TXT / MX **均不存在**，名字空闲（无冲突，可直接建 CNAME） | SPF 两条 CNAME 尚未添加 ⇒ 域在 Resend 为 `Not Started` |
+| `aiec.fun` 根 TXT | `v=spf1 include:spf.mail.qq.com ~all`（腾讯企业邮） | Resend 的 SPF 走 `send` 子域，**不要**改根 TXT |
+| `_dmarc.aiec.fun` | 不存在 | 可安全新增 `v=DMARC1; p=none;` |
+
+结论：**发信域名 = `aiec.fun`**（`wrangler.toml` 的 `MAIL_FROM = "no-reply@aiec.fun"` 不用改）。
+
+`aiec.fun` 在 Resend 后台的实际待加记录（2026-11-11 用户截图坐实，共 3 条，**全部加在 Cloudflare 的 `aiec.fun` zone**）：
+
+| Type | Name | Content | Proxy | TTL |
+| --- | --- | --- | --- | --- |
+| CNAME | `rsend` | `rsend.forge.rmta.net` | **DNS only（灰云，必须）** | Auto |
+| CNAME | `send` | `send.forge.rmta.net` | **DNS only（灰云，必须）** | Auto |
+| TXT | `_dmarc` | `v=DMARC1; p=none;` | — | Auto |
+
+DKIM（TXT `resend._domainkey`）**已在 Cloudflare 就位**，实测现网值长 218 字符、头 `p=MIGfMA0GCSqGSIb3DQEBAQ`、尾 `KGI6+xx/BQIDAQAB`，与后台截断显示一致 ⇒ 不要重复添加。
+
+> 更正说明：本文 §3.2 与本节初稿曾按「MX + TXT」老形态描述 SPF，**错误**。Resend 现行形态是两条 CNAME 指向自家 `forge.rmta.net`，TXT 由 Resend 侧持有。以本表为准。
+
+## 10. 上线结果（2026-11-11 20:45 · 批次 AM）
+
+| 步骤 | 结果 |
+| --- | --- |
+| Resend API Key | 已创建（`Sending access`），落地 `cloud/fluxing-sync/.key/resent-key.txt`（**已加进 `.gitignore`**） |
+| Workers Secret | `MAIL_HTTP_API_KEY` 已注入（值不在任何输出里） |
+| `MAIL_MODE` | 已由 `outbox` 切 **`http`** |
+| 部署 | Version ID `29d4e572-49d0-43c2-b091-dda3029edf00` |
+| 巡活 | `GET https://api.aiec.fun/v1/health` = **200** |
+| 自检信 | 直调 Resend → `kizemo@163.com` ⇒ **200**，邮件 id `01a1ca9f-c112-7238-ac45-9e8baaf57686` |
+| 服务端 E2E | 探针 **register 200**（`account_id=c5980ad8-bbfd-400e-894d-617737e18ed0`）⇒ 验证码确经 Resend 发出 |
+
+**回滚**：把 `wrangler.toml` 的 `MAIL_MODE` 改回 `outbox` 再 `deploy` ⇒ 立即回到「只写表不发信」，线上注册仍可用（但用户收不到信）。
+
+**注意**：`@example.com` / `@test.com` 会被 Resend **直接 422 拒绝**（官方明示会拖垮发信域名信誉）⇒ 任何测试账号请用 `delivered+<label>@resend.dev` 这类**安全测试地址**。

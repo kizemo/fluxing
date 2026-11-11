@@ -402,6 +402,7 @@
 
 ---
 
+- **批次 AM 更新（2026-11-11 20:45）**：**发信通道已真正上线** —— DNS 由用户在 Cloudflare 手动加 3 条（CNAME `rsend`/`send` → `*.forge.rmta.net` **DNS only 灰云** + TXT `_dmarc`；DKIM 先前已在位）并交付 API Key ⇒ `secret put MAIL_HTTP_API_KEY` → `MAIL_MODE` **outbox→http** → 部署 **Version `29d4e572-49d0-43c2-b091-dda3029edf00`** → health 200 → 直调 Resend 自检信 **200**（id `01a1ca9f-…`）；**服务端 E2E = register 200 且返回 account_id**（证明验证码确经 Resend 发出），「mail_outbox 取码」FAIL 即模式判别器；探针新增 `FLUXING_PROBE_EMAIL` / `FLUXING_PROBE_CODE`；`.key/` 已补进 `cloud/fluxing-sync/.gitignore`。**未闭环**：完整「验证→登录→推送→拉取」闭环缺一个真实信箱 6 位码 + 客户端端到端注册（需未注册过的邮箱）。
 ## 批次 AH 收尾记录（2026-11-11 · 线上真实账号闭环 + item_key TAB 契约）
 
 > 本批**不改客户端运行时**；改的是**服务端一行字符集校验** + **新增线上闭环探针** + **补跨实现固定向量**。线上判据首次闭环。

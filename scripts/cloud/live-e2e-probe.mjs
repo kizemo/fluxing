@@ -215,7 +215,10 @@ function d1Exec(sql) {
 // ---------------------------------------------------------------------------
 async function main() {
   const stamp = Date.now().toString(36);
-  const email = `fluxing-probe-${stamp}@example.com`;
+  // 邮箱可外部指定：MAIL_MODE="http"（Resend 等第三方通道）下，
+  // 验证码不再落 mail_outbox，必须用真实可投递邮箱 + 人工提供的 6 位码。
+  const email =
+    process.env.FLUXING_PROBE_EMAIL?.trim() || `fluxing-probe-${stamp}@example.com`;
   const password = `Probe-Pw-${stamp}`;
   const deviceId = randomBytes(8).toString('hex');
   const itemKey = `userdb\t探针词条-${stamp}`;
@@ -261,21 +264,34 @@ async function main() {
   const accountId = reg.json?.account_id;
   record('AC-01 · register 200 且返回 account_id', Boolean(accountId), `account_id=${accountId}`);
 
-  // --- 3. 从 D1 outbox 取明文验证码 ---------------------------------------
-  // MAIL_MODE="outbox" ⇒ 验证码正文（明文）落在 mail_outbox.body；
-  // email_verifications 只存 code_hash（不可直读）。
-  const rows = d1Query(
-    `SELECT body FROM mail_outbox WHERE to_addr = '${email}' ORDER BY id DESC LIMIT 1`,
-  );
-  const body = rows.length > 0 ? String(rows[0].body ?? '') : '';
-  const codeMatch = /验证码是：(\d{6})/.exec(body);
-  if (!codeMatch) {
-    record('验证码 · mail_outbox 里取到 6 位明文码', false, `body 前 120 字：${body.slice(0, 120)}`);
-    cleanup(email, accountId);
-    return;
+  // --- 3. 取 6 位验证码 ----------------------------------------------------
+  // 两条来源：
+  //   ① FLUXING_PROBE_CODE（MAIL_MODE="http" 时唯一可行来源）：
+  //      第三方通道不写 mail_outbox，验证码只存在于用户邮箱，需人工读出后注入。
+  //   ② D1 mail_outbox（MAIL_MODE="outbox" 时的旧路径，保留兼容）：
+  //      验证码正文（明文）落在 mail_outbox.body；email_verifications 只存 code_hash。
+  const manualCode = (process.env.FLUXING_PROBE_CODE || '').trim();
+  let code = '';
+  if (/^\d{6}$/.test(manualCode)) {
+    code = manualCode;
+    record('验证码 · 用外部注入的 6 位码（第三方发信通道）', true, `code=${code}`);
+  } else {
+    if (manualCode) {
+      record('验证码 · 外部注入的码格式不对（应为 6 位数字）', false, `传入=${manualCode.slice(0, 12)}`);
+    }
+    const rows = d1Query(
+      `SELECT body FROM mail_outbox WHERE to_addr = '${email}' ORDER BY id DESC LIMIT 1`,
+    );
+    const body = rows.length > 0 ? String(rows[0].body ?? '') : '';
+    const codeMatch = /验证码是：(\d{6})/.exec(body);
+    if (!codeMatch) {
+      record('验证码 · mail_outbox 里取到 6 位明文码', false, `body 前 120 字：${body.slice(0, 120)}（http 模式不写 outbox ⇒ 需设 FLUXING_PROBE_CODE）`);
+      cleanup(email, accountId);
+      return;
+    }
+    code = codeMatch[1];
+    record('验证码 · mail_outbox 里取到 6 位明文码', true, `code=${code}`);
   }
-  const code = codeMatch[1];
-  record('验证码 · mail_outbox 里取到 6 位明文码', true, `code=${code}`);
 
   // --- 4. 验证邮箱 ---------------------------------------------------------
   const ver = await api('POST', '/v1/auth/verify', { email, code });
