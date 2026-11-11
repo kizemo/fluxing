@@ -120,3 +120,11 @@ UI 显示「注册失败：网络请求失败：网络请求失败」—— 与�
 | 继续 `outbox`（现状） | $0 | 无 | **只适合内测**：验证码只进 D1 表，真实用户收不到 ⇒ 注册流程无法完成 |
 
 **在拿到决策前，本批不动服务端发信配置**（避免擅自付费 / 擅自引入第三方账号）。
+
+## 追加收尾（2026-11-11 15:45）
+
+- 探针账号 `ak.probe2.261111@example.com` 留在本机 Windows 凭据管理器（`LegacyGeneric:target=Fluxing:CloudAccount`）里的登录态，**已清**。
+  证据：`tmp/AK-logout.txt` ⇒ `STATUS_BEFORE=已恢复上次的登录状态。` / `STATUS_AFTER_LOGOUT=已退出登录。`
+  走的是 UI `kIdLogout=1004` 按钮（不是直接删凭据）⇒ 顺带验证了此前从未跑过的「退出登录」代码路径。
+- 服务端线上 D1 仍留两个探针账号 `ak.probe.261111@example.com` / `ak.probe2.261111@example.com`（`email_verified=1`），**未清理**（避免误触外键孤儿；不影响用户自己的账号）。
+- 用户自己的线上账号 `kizemo@163.com` 仍为 `email_verified=1`，待用户亲手用原口令登录一次（口令客户端与服务端都不存明文，无法代登）。
