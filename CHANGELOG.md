@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+### fix(WeaselServer): 「账号与同步」菜单项点击无反应 —— 账号页窗口早已建好却永久隐藏（批次 AJ）
+
+- **用户可见变化**：快捷设置栏品牌图标右键 / 托盘右键 →「账号与同步 (&Z)」现在**一点就出现在前台**。修前该菜单项**完全没反应**：窗口句柄其实早在进程里建好了（探针实测 `IS_WINDOW=True VISIBLE=False`），只是**从未被显示过**，且此后每次点击都复用同一个隐藏句柄 ⇒ 永久不可见、也永不再重建。
+- **根因（verified）**：`CloudAccountDialog::Show()` 的创建分支用 `::ShowWindow(hwnd, SW_SHOW)` 显示窗口，而**进程首次**调用 `ShowWindow` 时，若进程带 `STARTUPINFO` 且含 `STARTF_USESHOWWINDOW`，系统会用启动信息里的 `wShowWindow` **覆盖**本次 `nCmdShow`（`WeaselServer.exe` 由托盘常驻 / 输入法激活拉起，该路径实得 `SW_HIDE`）⇒ 窗口建成但不可见；`Show()` 的复用分支只做 `SetForegroundWindow`，**没有任何再次显示的动作** ⇒ 一个隐藏句柄被反复复用，缺陷自锁。已排除：菜单弹出侧（`SystemTraySDK.cpp:800-857`，`TrackPopupMenu` flags=0，命令以 `WM_COMMAND` 回发目标窗）、派发侧（`WeaselServerImpl.h:22-32` + `WeaselServerImpl.cpp:122-144`）、handler 注册（`WeaselServerApp.cpp:526-535`）、`Show()` 逻辑分支与条件编译（全文件无 `#if`）—— 同一条 `WM_COMMAND` 打 `40023`「快捷键设置」能正常新建可见窗口，**只有账号页失效**；全仓 `ShowWindow|SW_HIDE|SW_SHOW` 检索确认**没有任何代码隐藏账号页**。
+- **修法（+32 行，唯一生产文件 `WeaselServer/Cloud/CloudAccountDialog.cpp`）**：新增匿名 namespace 内 `EnsureWindowShown(HWND)` —— `IsWindow` 判活 → `IsIconic` 则 `ShowWindow(SW_RESTORE)` → `!IsWindowVisible` 则 **`SetWindowPos(..., SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)`** → `UpdateWindow`。**显示一律不用 `ShowWindow`**：`SetWindowPos(SWP_SHOWWINDOW)` 直接置 `WS_VISIBLE`，**绕开 STARTUPINFO 首发 `nCmdShow` 覆盖**。两条分支都收敛到它：创建分支替换原 `ShowWindow(hwnd, SW_SHOW)`；复用分支先 `!IsWindow(g_window)` 丢失效句柄，再 `EnsureWindowShown` + `SetForegroundWindow`。
+- **门禁**：`build.bat weasel` ⇒ **0 个警告 0 个错误**（17.78s）；云单测 `tmp\build-fluxing-cloud-tests.cmd` ⇒ **`RESULT: PASS=418 FAIL=0`**（与基线逐字一致，无退化）；clang-format 18.1.8 全文件 `--output-replacements-xml` ⇒ **`FORMAT_REPLACEMENTS=0`**。
+- **装机 + 真机判据**：`D:\Program Files\fluxing\weasel\WeaselServer.exe` 由 sha16 `1B0EE23CD2531A7E` → **`E03DE0280498C63F`**（`MATCH=True`，回滚件 `WeaselServer.exe.old-261111-141042`），Kill 旧 pid 214300 → 新 pid 23260。进程内探针 `tmp\AJ-account-show-probe.ps1`：修前 `BASE ACCOUNT_WINDOW=GONE`（无残留隐藏窗）→ `POST1`（`WM_COMMAND 40024`）⇒ `IS_WINDOW=True VISIBLE=True WS_VISIBLE=True rect=418,418,920,946` ⇒ `POST2` 复点仍 `VISIBLE=True` ⇒ `FG_AFTER=0x1040E94`（已置前）。**创建分支与复用分支双双修复生效**；`PrintWindow` 截图 `tmp\AJ-account-dialog-visible.png`（502×528，非空白帧）。
+- **未改**：`include/WeaselIPCData.h` 与 IPC 协议（**未新增任何 IPC 消息**）、菜单资源与 `WeaselServerApp.cpp`、快捷面板几何与自绘逻辑、`output/install.nsi`、`output/data/**`、云同步服务端。沉淀为 `.specify/memory/lessons-learned.md` **L212**。
+- **⚠️ 未闭环**：用户**亲手点一次**该菜单项做目视复验（IME 自绘窗跨进程抓不到，本轮以降级证据替代）。
+
 ### fix(WeaselServer): 快捷设置栏 / 托盘右键菜单恢复 DPI 缩放尺寸（批次 AI）
 
 - **用户可见变化**：右键菜单从「小字、行高 20.35 px」恢复到 150% 屏应有的 **32.50 px/项**（内框 ~31.70），文字字号与可视度回到变小之前。两条入口（快捷设置栏品牌图标右键、托盘图标右键）**同时恢复**。

@@ -925,10 +925,36 @@ bool EnsureClass() {
   return true;
 }
 
+// 保证窗口真的可见。**不用 ShowWindow 来显示**:
+//   进程内**首次** ShowWindow 的 nCmdShow 会被启动信息
+//   (STARTUPINFO + STARTF_USESHOWWINDOW)覆盖 —— WeaselServer 以隐藏/最小化
+//   方式拉起时, 首次 ShowWindow(SW_SHOW) 被改写成 SW_HIDE, 窗口从此停在
+//   隐藏态, 而 g_window 已被缓存 ⇒ 之后每次点击都只是"对一个隐藏窗
+//   SetForegroundWindow", 用户看到的就是"点菜单毫无反应"(2026-11-11 真机
+//   缺陷, 探针实证: 窗口存在但 WS_VISIBLE=0)。
+//   SetWindowPos(SWP_SHOWWINDOW) 直接置 WS_VISIBLE 位, 不走 ShowWindow 的
+//   nCmdShow 语义, 因此不受该覆盖影响。
+void EnsureWindowShown(HWND hwnd) {
+  if (hwnd == nullptr || !::IsWindow(hwnd))
+    return;
+  if (::IsIconic(hwnd))
+    ::ShowWindow(hwnd, SW_RESTORE);
+  if (!::IsWindowVisible(hwnd))
+    ::SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+  ::UpdateWindow(hwnd);
+}
+
 }  // namespace
 
 HWND Show() {
+  if (g_window != nullptr && !::IsWindow(g_window)) {
+    // 缓存的句柄已失效(窗口被销毁但 WM_DESTROY 没走到本缓存): 丢掉重建,
+    // 否则此后每次点击都只是对一个死句柄置前。
+    g_window = nullptr;
+  }
   if (g_window != nullptr) {
+    EnsureWindowShown(g_window);
     ::SetForegroundWindow(g_window);
     return g_window;
   }
@@ -947,10 +973,10 @@ HWND Show() {
                         nullptr, ::GetModuleHandleW(nullptr), nullptr);
   if (hwnd == nullptr)
     return nullptr;
-  ::ShowWindow(hwnd, SW_SHOW);
-  ::UpdateWindow(hwnd);
+  EnsureWindowShown(hwnd);
   g_window = hwnd;
-  return hwnd;
+  ::SetForegroundWindow(g_window);
+  return g_window;
 }
 
 HWND ActiveHwnd() {

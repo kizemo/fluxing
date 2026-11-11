@@ -14656,3 +14656,23 @@ handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四
   项数与尺寸判据必须用 `GetMenuItemRect` 枚举。
 - 只换 `WeaselServer.exe`、不动 TSF DLL ⇒ 无需重启宿主应用；但**必须 Kill 旧进程再起**，
   否则「磁盘已是新文件」与「在跑的是新代码」是两件事（L210 / 批次 AD 同源坑）。
+
+## L212 - 窗口「已创建但永久不可见」：`ShowWindow` 首次调用的 `nCmdShow` 会被 `STARTUPINFO` 覆盖；缓存 HWND 的复用分支若只置前不再显示，缺陷自锁
+
+**症状**：点击菜单项 → **毫无反应**，但窗口句柄真实存在（`IS_WINDOW=True` / `VISIBLE=False` / `WS_VISIBLE` 未置位），外部强行 `ShowWindow(h, SW_SHOW)` 能立刻显示、几何也在屏内 ⇒ 窗口本身健康。之后每次点击都复用同一个隐藏句柄 ⇒ **永久失效，且永不重建**。
+
+**根因（两条叠加，缺一不可）**：
+1. **首次 `ShowWindow` 的 `nCmdShow` 会被启动信息覆盖** —— 进程若带 `STARTUPINFO` 且 `dwFlags` 含 `STARTF_USESHOWWINDOW`，系统用 `wShowWindow` 替换**本次**的显示方式（本例实得 `SW_HIDE`）。托盘常驻 / 输入法激活拉起的进程是这条路径的典型受害者。
+2. **复用分支只置前不显示** —— 若 `Show()` 缓存 `static HWND`，复用路径只做 `SetForegroundWindow`，那第一次没显示成功之后再无任何补救点。
+
+**判据（怎么快速认出这一类）**：
+- 「点了没反应」先问**窗口到底建了没有**：`EnumWindows` + `GetClassNameW` 过滤，读 `IsWindow` / `IsWindowVisible` / `GetWindowLong(GWL_STYLE) & WS_VISIBLE` / `GetWindowRect`。`IS_WINDOW=True VISIBLE=False` 直接指向本类缺陷，别去查菜单、命令映射、handler。
+- **同一条链路做对照组**：拿另一个走同样 `WM_COMMAND` 派发的菜单项（本例 `40023`）打一次，它能新建可见窗口 ⇒ 派发链路健康，问题在**目标窗口自身的显示动作**。
+- 全仓 `grep ShowWindow|SW_HIDE|SW_SHOW` 确认**没有别处隐藏它**，才能把「隐藏态」归因到创建时的首发覆盖。
+
+**修法**：
+- **显示一律用 `SetWindowPos(hwnd, HWND_TOP, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)`** —— 它不经 `STARTUPINFO` 的 `nCmdShow` 通道，直接置 `WS_VISIBLE`。`ShowWindow` 只保留给 `SW_RESTORE`（最小化还原）。
+- 收敛成一个 `EnsureWindowShown()`：`IsWindow` 判活 → `IsIconic` 则 `SW_RESTORE` → `!IsWindowVisible` 则 `SWP_SHOWWINDOW` → `UpdateWindow`。**两条分支（新建 / 复用）都调它**。
+- 复用分支前加 `if (g != nullptr && !IsWindow(g)) g = nullptr;` —— 缓存句柄可能是死的，否则永远只对死句柄置前。
+
+**推广**：任何「后台常驻进程 + 缓存窗口 + 按需显示」的组合都要查一遍这条。同源坑：`SW_SHOW` 在**非首次**调用时是可靠的，所以本地调试（进程已跑很久、或从 IDE 启动不带 `STARTF_USESHOWWINDOW`）**测不出来** —— 必须用**真实拉起路径**（托盘 / 输入法激活 / 计划任务）复验。
