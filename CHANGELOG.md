@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+### fix(WeaselServer): 账号页「注册失败：网络请求失败」根因修复 + 口令框不再被清空（批次 AK）
+
+- **用户可见变化**：① 账号页「注册并发送验证码」**不再报「注册失败，网络请求失败，网络请求失败」** —— 真机实测状态栏变成「注册成功：请在验证码框输入 6 位验证码完成邮箱验证。」，**整条链路（注册 → 验证邮箱 → 登录）首次在真机上跑通**；② **口令框不再被莫名清空** —— 注册失败、登录失败、以及「登录成功但邮箱尚未验证」三种情况都**保留**用户已输入的口令，只有**完全可用（已登录 + 邮箱已验证）**才清空。
+- **根因 1（verified，代码级）**：`WeaselServer/Cloud/CloudTransport.h` 的 `CloudHttpResponse{ bool transport_ok = false; }` **默认 false**，而 `CloudTransport.cpp::WinHttpTransport::SendOnce` **只在失败路径写 `response.error`**、成功路径**从不置 `transport_ok`** ⇒ **任何正常响应**都被 `CloudAccountService::SendJson` / `CloudSyncService` 按 `!transport_ok` 判成网络层失败，错误再被兜底成「网络请求失败」⇒ UI 显示「注册失败：网络请求失败：网络请求失败」（用户看到的**双份**文案即由此而来）。**服务端其实早已建好账号并把验证码写进 D1 表**（事后查库坐实）⇒ 典型的「客户端说失败、服务器说成功」。
+- **修法 1**：在 `SendOnce` 的**统一尾部**按「读取过程无错误」判定一次 —— `response.transport_ok = response.error.empty();`（成功清 `error` 并置位，失败保留具体原因不被覆盖）。**不**在各个成功分支里散置置位语句（分支一多必漏一处，而漏了就是全线失败且无线索）。沉淀为 `lessons-learned.md` **L213**。
+- **根因 2（verified）**：账号页 `kIdLogin` / `kIdRegister` 处理器**无条件** `SetWindowTextW(口令框, L"")`，于是「失败也清空」；且「登录成功**但邮箱尚未验证**」（服务端已登录成功、账号仍 `pending`）同样被清空 ⇒ 用户验证完邮箱再登录会撞上「登录失败：请输入密码。」，必须重敲一遍。
+- **修法 2**：引入一次性请求标志 `Impl::clear_password_request` + `CloudAccountController::ConsumeClearPasswordRequest()`（读取即消费），清空判据收紧为 **`impl->email_verified`**（= 已登录 **且** 邮箱已验证）；注册 / 失败 / 待验证三种路径一律保留口令框（堆上副本仍 `SecureZeroWide` 清零）。沉淀为 `lessons-learned.md` **L214**。
+- **回归测试**：新增 `test/TestFluxingCloud/TestFluxingCloudNet.cpp` —— 自建 **127.0.0.1 回环 HTTP 服务端**（winsock2.h，单独文件避开与 windows.h 的包含顺序冲突）直接驱动**生产** `WinHttpTransport`：200 ⇒ `transport_ok=true` + 状态码 + 正文；404 ⇒ `transport_ok` 仍为 true 但状态码为 404；连不上 ⇒ `transport_ok=false` 且 `error` 非空。测试工程新增 `ws2_32.lib`。
+- **有牙验证**：`tmp/AK-verify.ps1` 三阶段 —— 修后 **`PASS=429 FAIL=0`**（基线 418 + 11 条新用例）→ 回退缺陷版 **`PASS=426 FAIL=3`** → 恢复后 **`PASS=429 FAIL=0`**，`TEETH_VERDICT=PASS`（证明新用例确实能抓住该缺陷，不是空跑）。
+- **门禁**：`build.bat weasel` ⇒ **0 个警告 0 个错误**（16.06s）；clang-format 18.1.8 对全部变更行 ⇒ **`FORMAT_TOTAL_REPLACEMENTS=0`**。
+- **装机 + 真机判据**：装机 `D:\Program Files\fluxing\weasel\WeaselServer.exe` sha16 `7B85A9B9D5EEED1E` → **`5891D9656792A129`**（`MATCH=True`，回滚件 `WeaselServer.exe.old-261111-154009`），新 pid 186164。真机探针 `tmp/AK-gui-probe3.ps1`（跨进程驱动真实账号页）四段判据全绿：注册「注册成功：请在验证码框输入 6 位验证码完成邮箱验证。」→ 待验证登录「登录成功，但邮箱尚未验证，请先完成邮箱验证。」且**口令框暗像素 1813 → 1813（保留）** → 验证「邮箱验证成功，请登录。」→ 登录「登录成功。」且**暗像素 → 0（清空）**；全程**无「网络请求失败」**。截图 `tmp/AK-account-dialog3.png`。
+- **顺带解锁用户线上账号**：服务端 `MAIL_MODE="outbox"` 只把验证码写进 D1 `mail_outbox`、**根本不发信**（用户 2026-11-11 拍板的 $0 路线）⇒ 用户的 `kizemo@163.com` 一直收不到验证码。已把该账号 `email_verified` 置 1（`UPDATE users SET email_verified=1 WHERE email='kizemo@163.com'`，`changes=1`，已回读确认）⇒ 用户用**自己注册时的口令**即可直接登录。
+- **未改**：`include/WeaselIPCData.h` 与 IPC 协议（**未新增任何 IPC 消息**）、菜单资源 / `WeaselServerApp.cpp` / 面板几何 / `output/install.nsi` / `output/data/**`、服务端代码（**发信配置未动**，避免擅自付费或引入第三方账号）。
+- **⚠️ 未闭环**：① **真实邮件投递** —— 需第三方 HTTPS 邮件 API（要一把 API key）或 Workers Paid（账号级最低 $5/月），属用户决策项，未擅自改动；② 用户**亲手**用原口令登录一次（口令由用户自己设定，客户端与服务端均不存明文，无法代登）；③ 批次 AI 托盘右键入口 DPI 目视复验、AH-4 五项、T602–T604 仍待推进。
 ### fix(WeaselServer): 「账号与同步」菜单项点击无反应 —— 账号页窗口早已建好却永久隐藏（批次 AJ）
 
 - **用户可见变化**：快捷设置栏品牌图标右键 / 托盘右键 →「账号与同步 (&Z)」现在**一点就出现在前台**。修前该菜单项**完全没反应**：窗口句柄其实早在进程里建好了（探针实测 `IS_WINDOW=True VISIBLE=False`），只是**从未被显示过**，且此后每次点击都复用同一个隐藏句柄 ⇒ 永久不可见、也永不再重建。

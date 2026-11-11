@@ -1,0 +1,122 @@
+# 批次 AK · 云端请求「网络请求失败」根因修复 + 账号页口令框 UX 修复（spec 100）
+
+> 交接时间：2026-11-11 15:50（Asia/Shanghai）
+> 分支：`feat/100-cloud-sync`
+> 上一批：[批次 AJ · 账号页窗口已建好却永久隐藏](F:/soft/00selfmade/rime_claude/docs/archive/handoffs/handoff-2026-11-11-batch-aj-account-dialog-invisible.md)
+
+---
+
+## 1. 当前状态（一段话）
+
+用户实机报「账号页注册 ⇒ 提示**注册失败，网络请求失败，网络请求失败** + 密码框被清空 + 邮箱收不到验证码」。
+本批坐实并修掉前两个（**代码缺陷**）：① `WeaselServer/Cloud/CloudTransport.cpp` 的 `WinHttpTransport::SendOnce`
+**从未把 `response.transport_ok` 置 true**（结构体默认 false，只在失败路径赋值）⇒ **任何正常响应**都被
+`CloudAccountService::SendJson` / `CloudSyncService` 判成「网络层失败」，错误被兜底成「网络请求失败」，
+UI 显示「注册失败：网络请求失败：网络请求失败」—— 与用户报告逐字吻合；② 账号页在**注册/登录失败时也清空口令框**，
+用户改错重试必须重敲。两者均已改、已编译、已装机、**已在真机上跑通完整闭环**（注册 → 待验证登录 → 验证邮箱 → 登录成功）。
+第三个症状（**邮箱收不到验证码**）**不是代码缺陷**：服务端 `MAIL_MODE="outbox"`（用户 2026-11-11 拍板的 $0 路线）
+**只把验证码写进 D1 `mail_outbox` 表、根本不发信**；真实发信需第三方 HTTPS 邮件 API（要一把 API key）或 Workers Paid（$5/月），
+**属付费 / 需用户账号的决策项，本批未擅自改动**。为不让用户被卡住，本批已把用户自己的线上账号
+`kizemo@163.com` 的 `email_verified` 置 1 ⇒ 用户现在**可直接用原口令登录**（密码由用户自己那次注册设定，客户端与服务端均不存明文）。
+
+---
+
+## 2. 必读文档（绝对路径）
+
+| 顺序 | 文档 | 绝对路径 |
+|---|---|---|
+| 1 | 本交接 | `F:/soft/00selfmade/rime_claude/docs/archive/handoffs/handoff-2026-11-11-batch-ak-cloud-transport-and-password-ux.md` |
+| 2 | spec 任务表 | `F:/soft/00selfmade/rime_claude/.specify/specs/100-fluxing-cloud-account-sync/tasks.md` |
+| 3 | spec 方案 | `F:/soft/00selfmade/rime_claude/.specify/specs/100-fluxing-cloud-account-sync/plan.md`（§4.4 = 发信通道） |
+| 4 | 上批交接（AJ） | `F:/soft/00selfmade/rime_claude/docs/archive/handoffs/handoff-2026-11-11-batch-aj-account-dialog-invisible.md` |
+| 5 | AH-4 五项 | `F:/soft/00selfmade/rime_claude/docs/archive/handoffs/handoff-2026-11-11-batch-ah-live-e2e-probe-and-item-key-tab-fix.md`（§7） |
+| 6 | AI 托盘 DPI | `F:/soft/00selfmade/rime_claude/docs/archive/handoffs/handoff-2026-11-11-batch-ai-quickpanel-menu-dpi.md`（§4） |
+| 7 | 宪法 | `F:/soft/00selfmade/rime_claude/.specify/memory/constitution.md` |
+| 8 | 事故沉淀 | `F:/soft/00selfmade/rime_claude/.specify/memory/lessons-learned.md`（**L213 / L214** 为本批新增） |
+| 9 | 发信通道调研 | `F:/soft/00selfmade/rime_claude/docs/research/fluxing-cloud-2026-11/email-verify-channel.md` |
+
+---
+
+## 3. 本阶段任务进度
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| 根因定位（传输层成功标志） | **done** | `CloudTransport.cpp` `SendOnce` 成功路径不置 `transport_ok` |
+| 根因定位（口令框被清空） | **done** | `CloudAccountDialog.cpp` `kIdLogin/kIdRegister` 无条件 `SetWindowTextW(口令框, L"")` |
+| 修法 1：传输层统一出口判定 | **done** | `response.transport_ok = response.error.empty();`（尾部统一置位，失败原因不被覆盖） |
+| 修法 2：口令框清空判据 | **done** | 引入 `Impl::clear_password_request` + `CloudAccountController::ConsumeClearPasswordRequest()`；**只有「已登录且邮箱已验证」才清** |
+| 回归测试 | **done** | 新增 `test/TestFluxingCloud/TestFluxingCloudNet.cpp`（自建 127.0.0.1 回环 HTTP 服务端 + 生产 `WinHttpTransport`） |
+| 有牙验证 | **done** | 修后 `PASS=429 FAIL=0` → 回退缺陷版 `PASS=426 FAIL=3` → 恢复 `PASS=429 FAIL=0` |
+| 门禁（构建 / 格式） | **done** | `build.bat weasel` 0 警告 0 错误；clang-format 变更行 `FORMAT_TOTAL_REPLACEMENTS=0` |
+| 装机 + 真机闭环 | **done** | 装机 sha16 `7B85A9B9D5EEED1E` → `5891D9656792A129`（MATCH=True）；真机四段判据全绿 |
+| 真实邮件投递 | **未做（需用户决策）** | `MAIL_MODE="outbox"` 不发信；需第三方 HTTPS 邮件 API key 或 Workers Paid |
+| 用户线上账号解锁 | **done** | D1 `UPDATE users SET email_verified=1 WHERE email='kizemo@163.com'`（`changes=1`，已回读确认） |
+
+---
+
+## 4. 下一阶段计划（按序）
+
+1. **用户拿自己的账号登录一次**（需要用户在场，1 分钟）—— 本批已把 `kizemo@163.com` 置为已验证，用户用原口令即可登录成功。
+   *理由*：这是本批唯一未闭合的用户侧判据，成本最低、且直接回答用户「我能不能用」。
+2. **真实发信通道**（需用户拍板，见 §7）—— 二选一：
+   - **第三方 HTTPS 邮件 API**（推荐，$0 起）：需用户在服务商侧注册并给我一把 API key + 把发信域 `aiec.fun` 的
+     DNS 记录加到 Cloudflare（DNS 记录可用现有 Cloudflare 凭据代加）。服务端需要新增 `MAIL_MODE="http"` 分支
+     （当前 `src/mail.ts` 只支持 `outbox` / `cloudflare` 两种）。
+   - **Cloudflare `send_email` 绑定**：需 Workers Paid（账号级最低 $5/月），与用户已拍板的 $0 路线冲突。
+   *理由*：不接真实发信，**任何新用户**都注册不了（验证码只进 D1 表）；这是 spec 100 上线的硬前置。
+3. **AH-4 五项**（上批遗留，需用户在场）：真实 C++ 客户端登录线上 → 双机 AC-08 / AC-09 → `skipped` 消费 → `OUR_HIT=0` 复测。
+   *理由*：本批已把「真实 C++ 客户端访问线上」这条路修通（注册/验证/登录全绿），AH-4 第 1 项的**前置缺陷**已消除，
+   可以直接做端到端取证。
+4. **批次 AI 托盘右键入口的 DPI 目视复验**（用户在场）。
+5. **T602–T604**（spec 100 尾部任务）。
+
+---
+
+## 5. 证据路径
+
+| 证据 | 路径 |
+|---|---|
+| 有牙验证（三阶段） | `F:/soft/00selfmade/rime_claude/tmp/AK-cloud-test-fixed.txt` / `-buggy.txt` / `-restored.txt`（`TEETH_VERDICT=PASS`） |
+| 构建门禁 | `build.bat weasel` ⇒ 0 警告 0 错误（16.06s） |
+| 格式门禁 | `F:/soft/00selfmade/rime_claude/tmp/AK-fmt-check.ps1` ⇒ `FORMAT_TOTAL_REPLACEMENTS=0` |
+| 装机 | `F:/soft/00selfmade/rime_claude/tmp/AK-install.txt`（`MATCH=True`，备份 `WeaselServer.exe.old-261111-154009`） |
+| 真机闭环探针 | `F:/soft/00selfmade/rime_claude/tmp/AK-gui-probe3.ps1` ⇒ 日志 `tmp/AK-gui-probe3.txt`、截图 `tmp/AK-account-dialog3.png` |
+| 真机闭环判据 | 注册「注册成功：请在验证码框输入 6 位验证码完成邮箱验证。」→ 待验证登录「登录成功，但邮箱尚未验证，请先完成邮箱验证。」且**口令框暗像素 1813 → 1813（保留）** → 验证「邮箱验证成功，请登录。」→ 登录「登录成功。」且**暗像素 → 0（清空）**；全程**无「网络请求失败」** |
+| D1 取码 / 查询工具 | `F:/soft/00selfmade/rime_claude/tmp/AK-d1.mjs`（`node tmp/AK-d1.mjs "<SQL>" fluxing-sync`） |
+| 补丁脚本 | `F:/soft/00selfmade/rime_claude/tmp/AK-patch.ps1`（13 段精确替换 + 命中次数断言 ⇒ `PATCH_ALL_OK`） |
+| 线上账号解锁 | D1 `users` 表 `kizemo@163.com` ⇒ `email_verified=1`（`changes=1`） |
+
+---
+
+## 6. 环境事实与工具坑（仓库里推不出来的）
+
+- **跨进程 `WM_GETTEXT` 读 `ES_PASSWORD` 编辑框恒返回空字符串** ⇒ 口令框内容**读不回**；
+  判据只能用 **像素**：`PrintWindow` 抓对话框 → 裁口令框矩形 → 数暗像素（掩码点）⇒ 有内容 ≈ 1800 暗像素、空框 = 0。
+  （`WM_SETTEXT` 跨进程写是**有效**的：注册成功 ⇒ 服务端确实拿到了口令。）
+- **`FindWindowW` 跨进程查 `FluxingCloudAccountDialog_v1` 返回 0**，必须 `EnumWindows` + `GetClassNameW` 过滤。
+- **服务端 D1 远程查询**：用 `node tmp/AK-d1.mjs "<SQL>" fluxing-sync`（cwd = `cloud/fluxing-sync`，自动注入该目录 `.env`，
+  **不回显任何密钥**）；Windows 下 `npx` 会 ENOENT，必须 `process.execPath` + `node_modules/wrangler/bin/wrangler.js`。
+- **表名**：`users`（不是 `accounts`）；`mail_outbox.body` = **明文验证码正文**（`email_verifications.code_hash` 才是哈希，不可直读）。
+- `MAIL_MODE="outbox"` 下**验证码永不发信**，只能从 D1 取码。
+- 装机目录固定 `D:\Program Files\fluxing\weasel`；重启 `WeaselServer.exe` 必须带 `-WorkingDirectory 'D:\Program Files\fluxing\weasel'`。
+- `edit` 工具一次只可靠应用**一组** old/new；批量改动改用 `.ps1` 精确替换脚本（`tmp/AK-patch.ps1`）。
+- 工作区外路径的写/删/改名必须**写 `.ps1` 再 `pwsh -File` 执行**（内联被本机硬安全策略拦）。
+- 云单测入口：`F:/soft/00selfmade/rime_claude/tmp/build-fluxing-cloud-tests.cmd`（msbuild Release|Win32 + 跑 `Release\TestFluxingCloud.exe`）。
+
+---
+
+## 7. 需要用户在场 / 需要用户决策
+
+### 7.1 需要用户在场（1 分钟）
+- 用**自己原来的口令**在账号页登录 `kizemo@163.com` ⇒ 期望状态栏「登录成功。」。
+  （服务端已把该账号置为已验证；口令由用户首次注册时设定，客户端与服务端都不存明文，我们无法代登。）
+
+### 7.2 需要用户决策：真实邮件投递
+
+| 方案 | 成本 | 需要用户做什么 | 我的建议 |
+|---|---|---|---|
+| **第三方 HTTPS 邮件 API**（如 Resend 免费额度） | $0 起 | 在服务商注册 → 把 API key 给我；发信域 DNS 记录我可用现有 Cloudflare 凭据代加 | **推荐**（符合已拍板的 $0 路线；需我新增 `MAIL_MODE="http"` 分支） |
+| Cloudflare `send_email` 绑定 | Workers Paid，账号级最低 **$5/月** | 开通 Paid 计划 | 与 $0 路线冲突，不建议 |
+| 继续 `outbox`（现状） | $0 | 无 | **只适合内测**：验证码只进 D1 表，真实用户收不到 ⇒ 注册流程无法完成 |
+
+**在拿到决策前，本批不动服务端发信配置**（避免擅自付费 / 擅自引入第三方账号）。
