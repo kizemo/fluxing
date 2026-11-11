@@ -128,3 +128,17 @@ UI 显示「注册失败：网络请求失败：网络请求失败」—— 与�
   走的是 UI `kIdLogout=1004` 按钮（不是直接删凭据）⇒ 顺带验证了此前从未跑过的「退出登录」代码路径。
 - 服务端线上 D1 仍留两个探针账号 `ak.probe.261111@example.com` / `ak.probe2.261111@example.com`（`email_verified=1`），**未清理**（避免误触外键孤儿；不影响用户自己的账号）。
 - 用户自己的线上账号 `kizemo@163.com` 仍为 `email_verified=1`，待用户亲手用原口令登录一次（口令客户端与服务端都不存明文，无法代登）。
+
+## AH-4 进展更新（2026-11-11 15:52）
+
+- **AH-4 ④ 托盘 `OUR_HIT=0` 复测 ⇒ 已闭合**。实跑 `scripts/install/check-tray-input-indicator.ps1` 得：
+  - `仍持有修复前镜像的进程数 = 0` —— 批次 AD/AI 的老阻塞（持旧映像的宿主进程）已自然清零；
+  - `我方语言栏项命中（tooltip 含「左键切换模式」）= 0`；
+  - `VERDICT=PASS_OUR_ITEM_ABSENT` —— 通知区剩下的那一个是 Windows 自带 IME 指示器，本仓库代码管不了。
+
+  ⇒ 批次 AI 遗留的「托盘 `OUR_HIT=0` 复测」随之闭合；**仍需用户目视**的只剩**批次 AI 的托盘右键 DPI**（字号/行高，人眼判据）。
+- **AH-4 ① 真实客户端端到端**：批次 AK 已用**真实 C++ 客户端**（装机 `WeaselServer.exe`）对**线上 `api.aiec.fun`**
+  跑通 `注册 → 取码 → 验证 → 登录`，全链路无「网络请求失败」（证据 `tmp/AK-gui-probe3.txt`、截图 `tmp/AK-account-dialog3.png`）。
+  唯一残留 = 验证码经 D1 `mail_outbox` 取用而非**真实邮箱收信** ⇒ 归入邮件通道拍板项。
+- **AH-4 ② 双机 AC-08/AC-09** 与 **AH-4 ⑤ 客户端消费 `skipped`**：依赖第二台设备 / 第二个 Windows 账号
+  （`CloudCredentialStore` 是 Windows 用户级全局单例，同机两套用户目录**不构成双端**）⇒ 需用户在场，本机不可自动化。
