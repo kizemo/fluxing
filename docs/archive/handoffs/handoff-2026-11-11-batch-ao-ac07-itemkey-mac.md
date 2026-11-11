@@ -190,8 +190,8 @@ AN 留下的探针**不可复跑**，两个闸都写死了：
 
 ## 10. 提交与推送状态
 
-- 本批**已提交**：`c451b9b` —— `fix(WeaselServer): D1 身份键改为不透明 MAC 标识，AC-07 转为通过（批次 AO）`，
-  **11 files / +700 −89**（含新增 `docs/adr/0059-…md` 与本文档），分支 `feat/100-cloud-sync`
-- 批次 AN 的 4 个提交（`ad1e202` / `fec21fc` / `ec1e8d6` / `41164a9`）与本批 `c451b9b` **均未 push**
+- 本批**已提交**：`3b23f60` —— `fix(WeaselServer): D1 身份键改为不透明 MAC 标识，AC-07 转为通过（批次 AO）`，
+  **11 files / +701 −89**（含新增 `docs/adr/0059-…md` 与本文档），分支 `feat/100-cloud-sync`
+- 批次 AN 的 4 个提交（`ad1e202` / `fec21fc` / `ec1e8d6` / `41164a9`）与本批 `3b23f60` **均未 push**
 - 工作树中**非本批**改动（**勿混入**）：`RimeWithWeasel/RimeWithWeasel.cpp`、`librime` 子模块 dirty、
   `docs/design/quickpanel-v6/design-demos/*.html`（3 个未跟踪）
