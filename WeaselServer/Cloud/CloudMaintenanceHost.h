@@ -8,6 +8,14 @@
 //   （它会一并清掉会话表），而 handler 归 WeaselServerApp 所有 ⇒ 由宿主在
 //   构造期把 handler 注册进来。
 //
+// ★ ADR 0061 之后的新语义（务必按这个口径理解）：
+//   这两个钩子被**成对**调用 —— Start 之后**立刻** End。End 在 m_disabled 为真时
+//   会 Initialize() ⇒ rime 回到可用态、组件重新注册 ⇒ 调用方随后在
+//   「rime 可用 + 用户库无人占用」的窗口里做备份 / 还原。
+//   （旧语义「finalize 之后 levers 仍可用」已被证伪：Registry 一清空，
+//    UserDb::Require("userdb") 返回 nullptr ⇒ 空指针解引用 = 0xC0000005。）
+//   任何残留的并发访问冲突，由调用方的 SEH 护栏降级为「本轮失败」，进程不崩。
+//
 // ★ 本头**故意**不包含任何标准库 / windows 头：WeaselServerApp.cpp 走预编译
 //   头（stdafx.h 先引入 windows.h 的 min/max 宏），再包含 <algorithm> 之类
 //   会被污染。需要这些头时用 WeaselServer/Cloud/ 下自带

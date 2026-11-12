@@ -44,6 +44,22 @@ AC-01/02/06/10 需要**登录态 + 用户在场**；这两类合计 11 条 ⇒ *
 云模块 ≈ 0 MB，138.5 MB 属会话态、与 40 MB 基线口径错配，**非云同步回归**），AC-11 仍记「不通过」的**唯一**剩余缺口是
 **输入延迟两组对照**（需登录态 + 用户在场）。
 
+## 2.1 批次 AQ 追加（2026-11-12）：含云构建「启动约 30.2 s 自退」已闭环
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| 缺陷性质 | **不是优雅退出，是访问冲突崩溃 `0xC0000005`**（修复前必崩：30.6–30.9 s；minidump `fluxing-20261112-195402-c0000005.dmp`） | `tmp/AQ-trace-probe.txt`、`%LOCALAPPDATA%\fluxing\crash` |
+| 归因 | **只由含云二进制产生**，与 PPL / 注册表 / 安装目录 / 工作区副本无关 | 探针 A/B：含云 30.2 s 崩 vs pre-cloud 存活 ≥ 70 s |
+| 根因（源码 + trace 双证） | 云同步 `BeginMaintenance` → `StartMaintenance()` → `Finalize()` → `rime_api->finalize()` → `Registry::Clear()` 销毁 `userdb` ⇒ 紧随的 levers `user_dict_iterator_init` → `UserDb::Require("userdb")` 返回 nullptr → 空指针解引用；`RimeFindModule("levers")` 非空是因为 `UnloadModules` 只清 `loaded_`、`modules_` 保留 ⇒ 拿到已卸载模块空壳 ⇒ 调用点判空挡不住 | [ADR 0061](../../adr/0061-rime-lifecycle-paired-maintenance-and-seh-guards.md) |
+| 修复 | ① `BeginMaintenance` = 命名信号量锁 → `StartMaintenance()` → **立即 `EndMaintenance()`**（恢复 rime 可用态）再导出/回写；② `EndMaintenance` 只释放锁；③ 5 个 **POD-only SEH 护栏**覆盖全部 levers 调用（访问冲突 ⇒ 本轮失败 + 中文错误，进程永不崩）；④ 新增 `include/FluxingRimeLifecycle.h`（Win32 命名信号量 `Local\Fluxing.RimeLifecycle`）做跨模块唯一互斥 | `WeaselServer/Cloud/CloudRimeUserDictBackend.cpp`、`include/FluxingRimeLifecycle.h` |
+| 验证 | 修复后进程**存活 ≥ 60 s 未退出**（trace 诊断版 + 去 trace 发布件各一轮）；trace 走完整链路 `begin_maintenance_enter → begin_maintenance_done ok=1 → export_enter → export_levers acquired=1 → export_iter_init_ok → export_dicts n=1 → export_backup rime_ice ok=1 → export_done exported=1 → end_maintenance_enter → end_maintenance_done ok=1` ⇒ **备份路径首次真实跑通**；crash 目录**无新增 dump** | `tmp/AQ-trace-probe.txt` |
+| 门禁 | 云单测 **`PASS=453 FAIL=0`**（与 AO/AP 基线逐字一致）；`build.bat weasel` **0 警告 0 错误**；makensis 8 条 `warning 7010`（既有可选产物告警） | `tmp/AQ-cloudtest.log`、`tmp/AQ-build3.log`、`tmp/AQ-installer.log` |
+| 发版 | **1.3.0 作废**（含崩溃缺陷；重出同名同版本 = L107 发布事故）⇒ 重新出包 **1.3.1**：`output/archives/fluxing-1.3.1-installer.exe` = 42 963 252 B · sha16 `71286E7671052F37` · 内嵌 `WeaselServer.exe` 2 700 800 B / FileVersion 与 ProductVersion 均 `1.3.1.0` | `tmp/AQ-installer.log` |
+| 残留缺陷（未修） | 每轮同步仍 finalize + Initialize rime ⇒ **当前 TSF 会话被清空**（用户进行中的输入可能被中断）；彻底解法需「复制 userdb 目录后另开 leveldb」或「独立进程执行备份」（需另立 ADR）。**restore（回写）路径未在真实云数据上端到端验证**（需第二台设备产生云端版本更新的拉取场景）；代码侧已由 `SafeRestoreUserDict` 护栏覆盖 | ADR 0061「未闭环」段 |
+
+⚠️ **装机前置（必须）**：`WeaselServer.exe` 是 **PPL 签名进程** ⇒ 装机 1.3.1 前必须**注销 / 重启系统**，否则仍在跑旧映像（磁盘哈希不能证明在跑的是新码）。
+当前装机版仍为 **1.2.1.0**（`D:\Program Files\fluxing\weasel\WeaselServer.exe`，sha16 `5891D9656792A129`，含云）⇒ **每启动约 30 s 崩溃一次**。
+
 ## 3. 证据索引
 
 | 证据 | 路径 |

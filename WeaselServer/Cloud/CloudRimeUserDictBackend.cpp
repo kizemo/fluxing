@@ -28,6 +28,9 @@
 #include "CloudMaintenanceHost.h"
 #include <RimeWithWeasel.h>
 
+// 批次 AQ · rime 生命周期互斥体（ADR 0061）。
+#include "FluxingRimeLifecycle.h"
+
 #include <windows.h>
 
 #include <cstdio>
@@ -95,6 +98,70 @@ RimeLeversApi* GetLevers() {
   return reinterpret_cast<RimeLeversApi*>(module->get_api());
 }
 
+// ---------------------------------------------------------------------------
+// ★ SEH 护栏（ADR 0061）
+//
+// 崩溃根因：rime 一旦 finalize，Registry 被清空 ⇒ levers 里的
+// UserDb::Require("userdb") 返回 nullptr ⇒ UserDictManager::GetUserDictList
+// 里 component->extension() 空指针解引用 ⇒ 0xC0000005。
+//
+// 这里把每个 levers 调用都包进 __try/__except：访问冲突一律降级成
+// 「本轮失败 + 中文错误」，**绝不让它变成进程崩溃**。
+//
+// ⚠ MSVC 规定：含 __try 的函数不能有需要对象展开的局部变量 ⇒ 这些函数
+//   刻意只收指针 / 整数，不放任何 C++ 对象。
+// ---------------------------------------------------------------------------
+
+// 返回 1 = 初始化成功，0 = 正常返回「没有词典」，-1 = 访问冲突。
+int SafeUserDictIteratorInit(RimeLeversApi* levers, RimeUserDictIterator* iter) {
+  __try {
+    return levers->user_dict_iterator_init(iter) ? 1 : 0;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return -1;
+  }
+}
+
+// 返回 1 = 取到名字，0 = 枚举结束，-1 = 访问冲突。
+int SafeNextUserDict(RimeLeversApi* levers,
+                      RimeUserDictIterator* iter,
+                      const char** name) {
+  __try {
+    const char* n = levers->next_user_dict(iter);
+    if (name != nullptr)
+      *name = n;
+    return n != nullptr ? 1 : 0;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    if (name != nullptr)
+      *name = nullptr;
+    return -1;
+  }
+}
+
+void SafeUserDictIteratorDestroy(RimeLeversApi* levers,
+                                 RimeUserDictIterator* iter) {
+  __try {
+    levers->user_dict_iterator_destroy(iter);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    // 访问冲突：忽略（迭代器已经不可用）。
+  }
+}
+
+bool SafeBackupUserDict(RimeLeversApi* levers, const char* dict) {
+  __try {
+    return levers->backup_user_dict(dict) ? true : false;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+}
+
+bool SafeRestoreUserDict(RimeLeversApi* levers, const char* snapshot) {
+  __try {
+    return levers->restore_user_dict(snapshot) ? true : false;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+}
+
 std::string RimeUserId() {
   RimeApi* rime = rime_get_api();
   if (rime == nullptr || rime->get_user_id == nullptr)
@@ -154,6 +221,11 @@ std::wstring FindSnapshotFile(const std::string& dict) {
   return std::wstring();
 }
 
+// rime 生命周期锁（进程内唯一）：云同步轮之间、以及云同步轮与部署器维护之间
+// 互斥（ADR 0061）。拿不到就跳过本轮，绝不阻塞用户输入。
+constexpr DWORD kLifecycleWaitMs = 2000;
+fluxing::rime_lifecycle::ScopedRimeLifecycleLock g_rime_lifecycle_lock;
+
 std::wstring TempSnapshotPath(const std::string& dict) {
   wchar_t tmp[MAX_PATH];
   tmp[0] = L'\0';
@@ -170,11 +242,47 @@ std::wstring TempSnapshotPath(const std::string& dict) {
 class RimeUserDictBackend : public IUserDictBackend {
  public:
   bool BeginMaintenance(std::string* err) override {
-    return CallCloudBeginMaintenance(err);
+    // ★ 修复（ADR 0061 · 崩溃根因）：
+    //   旧实现只调 StartMaintenance()（= rime_api->finalize()，会清空 Registry）
+    //   就去用 levers ⇒ UserDb::Require("userdb") 返回 nullptr ⇒ 0xC0000005。
+    //   现在 Start 之后**立刻 End**：EndMaintenance 在 m_disabled 时会
+    //   Initialize() ⇒ 组件重新注册、rime 回到可用态 ⇒ levers 拿得到有效的
+    //   userdb 组件；而且此刻没有会话，用户库处于「无人占用」的独占态，
+    //   leveldb 的 LOCK 不会与我们自己打开的实例冲突。
+    //
+    // ★ 另加一把 rime 生命周期锁：同一时刻只允许一轮「需要独占用户库」的操作。
+    if (!g_rime_lifecycle_lock.Acquire(
+            fluxing::rime_lifecycle::DefaultLockName(), kLifecycleWaitMs)) {
+      if (err)
+        *err = "输入法引擎正忙（可能正在部署或上一轮同步尚未结束），本轮跳过用户词典同步。";
+      return false;
+    }
+    std::string begin_err;
+    if (!CallCloudBeginMaintenance(&begin_err)) {
+      g_rime_lifecycle_lock.Release();
+      if (err)
+        *err = begin_err.empty() ? "无法进入用户词典维护模式。" : begin_err;
+      return false;
+    }
+    std::string end_err;
+    if (!CallCloudEndMaintenance(&end_err)) {
+      g_rime_lifecycle_lock.Release();
+      if (err)
+        *err = end_err.empty() ? "输入法引擎未能回到可用状态。" : end_err;
+      return false;
+    }
+    return true;
   }
 
   bool EndMaintenance(std::string* err) override {
-    return CallCloudEndMaintenance(err);
+    // rime 已在 Begin 里回到可用态，这里只释放生命周期锁。
+    if (!g_rime_lifecycle_lock.held()) {
+      if (err)
+        *err = "用户词典维护态未持有。";
+      return false;
+    }
+    g_rime_lifecycle_lock.Release();
+    return true;
   }
 
   bool ExportUserDict(std::string* out, std::string* err) override {
@@ -201,21 +309,39 @@ class RimeUserDictBackend : public IUserDictBackend {
     }
 
     RimeUserDictIterator iter;
-    if (!levers->user_dict_iterator_init(&iter)) {
+    const int init = SafeUserDictIteratorInit(levers, &iter);
+    if (init < 0) {
+      // 访问冲突：rime 刚被 finalize（Registry 已清空）⇒ 本轮放弃，绝不崩进程。
+      if (err)
+        *err = "输入法引擎当前不可用（可能正在部署），本轮跳过用户词典同步。";
+      return false;
+    }
+    if (init == 0) {
       if (err)
         *err = "没有找到可同步的用户词典。";
       return false;
     }
     std::vector<std::string> dicts;
     const char* name = nullptr;
-    while ((name = levers->next_user_dict(&iter)) != nullptr)
+    for (;;) {
+      const int step = SafeNextUserDict(levers, &iter, &name);
+      if (step < 0) {
+        SafeUserDictIteratorDestroy(levers, &iter);
+        if (err)
+          *err = "输入法引擎当前不可用（可能正在部署），本轮跳过用户词典同步。";
+        return false;
+      }
+      if (step == 0)
+        break;
       dicts.push_back(std::string(name));
-    levers->user_dict_iterator_destroy(&iter);
+    }
+    SafeUserDictIteratorDestroy(levers, &iter);
 
     int exported = 0;
     for (size_t i = 0; i < dicts.size(); ++i) {
       // 备份失败的词典（不存在 / 锁不住）直接跳过，不算整体失败。
-      if (!levers->backup_user_dict(dicts[i].c_str()))
+      const bool backup_ok = SafeBackupUserDict(levers, dicts[i].c_str());
+      if (!backup_ok)
         continue;
       const std::wstring path = FindSnapshotFile(dicts[i]);
       if (path.empty())
@@ -284,7 +410,9 @@ class RimeUserDictBackend : public IUserDictBackend {
         last_err = "写入临时快照失败。";
         continue;
       }
-      const bool ok = levers->restore_user_dict(WideToUtf8(path).c_str());
+      // 批次 AQ · ADR 0061：restore 同样走 SEH 护栏 ⇒ rime 被 finalize
+      // 期间访问冲突只会让本段失败，绝不崩进程。
+      const bool ok = SafeRestoreUserDict(levers, WideToUtf8(path).c_str());
       DeleteFileW(path.c_str());
       if (!ok) {
         last_err = "还原词典「" + dict + "」失败。";

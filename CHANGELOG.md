@@ -1,3 +1,16 @@
+## [1.3.1]
+### fix(WeaselServer): 云同步用户词典备份在 rime finalize 之后再调 levers ⇒ 空指针解引用、进程崩溃（批次 AQ）
+
+- **缺陷（verified，退出码 + 行级 trace 双证）**：含云构建启动约 **30.2 s** 后 `WeaselServer.exe` 自行退出。退出码 `-1073741819 (0xC0000005)` ⇒ **访问冲突崩溃，不是优雅退出**。2×2 缺格实验（`tmp/AQ-selfexit.ps1`）一次证伪「PPL / 注册表 / 安装目录 / 工作区副本」四个方向（崩溃**只与含云二进制相关**）；崩溃时刻 = 云引擎 `startup_delay_ms = 30 s` 触发的首轮同步。
+- **根因链（源码逐行锁定 + trace 实证吻合）**：云同步 `BeginMaintenance` → `RimeWithWeaselHandler::StartMaintenance()` → `Finalize()` → `rime_api->finalize()` → `Registry::Clear()` **销毁 `userdb` 组件**；紧随其后的 levers `user_dict_iterator_init` 内部 `UserDb::Require("userdb")` 返回 **nullptr** ⇒ `UserDictManager::GetUserDictList` 的 `component->extension()` **空指针解引用**。trace 停在 `export_iter_init_call`（无 `export_iter_init_ok`），与推导完全一致。**为什么判空挡不住**：崩溃在库内部，`RimeFindModule("levers")` 仍返回**非空**（`UnloadModules` 只清 `loaded_`、`modules_` 保留）⇒ 拿到的是**已卸载模块的空壳**。
+- **取证安全网自身有缺陷（已修）**：`WeaselServer.cpp::WriteMinidumpOnCrash` 原来只建**一级**目录 ⇒ 父目录 `%LOCALAPPDATA%\fluxing` 不存在 ⇒ **dump 从未落盘**（且 PPL 进程不受 WER 报告）⇒ 此前「查不到任何证据」。改为**两级建目录**后本批首次拿到 15.2 MB minidump。
+- **修法（[ADR 0061](docs/adr/0061-rime-lifecycle-paired-maintenance-and-seh-guards.md) · 新增 · Accepted）**：① **Start/End 配对** —— `BeginMaintenance` 改为 Start（finalize 释放 leveldb 用户库）后**立刻** End（`m_disabled` 时 `Initialize()` ⇒ 组件重新注册、Registry 恢复），使备份/还原发生在「rime 可用 + 用户库无人占用」的窗口；② **rime 生命周期互斥** —— 新增 `include/FluxingRimeLifecycle.h`，用 Win32 **命名信号量** `Local\Fluxing.RimeLifecycle`（跨模块唯一；信号量可由别的线程释放；进程退出内核复位），取锁上限 2 s，拿不到就**跳过本轮 + 中文提示**；③ **levers 调用一律 SEH 护栏** —— 5 个 POD-only 护栏（`__try/__except`），访问冲突一律降级为「本轮失败 + 中文提示」，**进程永不崩**（⚠️ MSVC C2712：含 `__try` 的函数不得有需展开的局部变量）。
+- **实测**：修复后含云构建**存活 ≥ 60 s 未退出**（修复前 30.6–30.9 s 必崩 `0xC0000005`），备份路径**首次真实跑通**（`export_backup rime_ice ok=1` / `export_done exported=1`），crash 目录**无新增 minidump**；去 trace 的发布件复跑同样存活 ≥ 60 s。
+- **门禁**：云单测 **`PASS=453 FAIL=0`**（与批次 AO / AP 基线逐字一致 ⇒ 无回归）；`build.bat weasel` **0 警告 0 错误**。
+- **⚠️ 残留缺陷（本版不修，已登记进 ADR 0061）**：**每轮同步仍会 finalize + Initialize rime** ⇒ 当前 TSF 会话被清空（用户进行中的输入可能被中断）。根因 = 「独占 leveldb 用户库」在 rime 架构下必须先 finalize；彻底解法需改为「复制 userdb 目录后另开 leveldb」或「独立进程执行备份」（需另立 ADR）。
+- **⚠️ 版本说明**：1.3.0 安装包已产出过且**含本缺陷** ⇒ 本修复版发布为 **1.3.1**（不重出同名同版本，避免 L107「同版本号 + 不同内容」发布事故）。**1.3.0 安装包作废，请勿安装。**
+- **⚠️ 装机前置**：`WeaselServer.exe` 是 **PPL** 签名进程 ⇒ 装机前必须**注销 / 重启系统**，否则仍跑旧映像（磁盘哈希不能证明在跑的是新码）。**当前装机版 1.2.1.0 含云 ⇒ 每次启动约 30 s 后崩溃**（本批实测 19:54:02 的 minidump 即由它产生）⇒ 修复后应尽快覆盖安装。
+
 ## [1.3.0]
 ### feat(fluxing): 云账号同步 spec 100 收尾（批次 AP）—— AC-11 私有内存归因闭环 + 空闲 CPU 口径裁定 + 1.3.0 出包
 

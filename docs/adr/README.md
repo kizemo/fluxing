@@ -69,6 +69,7 @@ Do not dump all ADRs into every prompt.
 | 0058 | 0058 · 验证码发信通道改走第三方 HTTPS 邮件 API（Resend 兼容） | `docs/adr/0058-third-party-https-mail-api-channel.md` | Accepted |
 | 0059 | 0059. item_key 对服务端不透明：以口令派生的 HMAC 身份替代明文词条 | `docs/adr/0059-item-key-opaque-mac-identity.md` | Accepted |
 | 0060 | 0060. 空闲 CPU 判据口径统一为「占单核」；单核口径的测量窗口下限 16 s；性能归因必须以 A/B 对照为前提 | `docs/adr/0060-idle-cpu-single-core-window-and-attribution-method.md` | Accepted |
+| 0061 | 0061. 用户词典同步的 rime 生命周期口径：Start/End 必须配对，levers 调用一律加 SEH 护栏，生命周期操作必须互斥 | `docs/adr/0061-rime-lifecycle-paired-maintenance-and-seh-guards.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

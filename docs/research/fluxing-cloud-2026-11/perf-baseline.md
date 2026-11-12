@@ -121,5 +121,5 @@ ADR 0030 判据栏写「占单核」、做法栏写「逻辑核折算」，两�
 3. **ADR 0030 内存基线口径补正**：40 MB 应显式限定为「无 TSF 会话稳态」并补一条会话态参考值（约 135–140 MB），否则后续批次会重复踩同一口径坑；
 4. **「带 TSF 会话」的 A/B 差值仍未实测** —— 自动化无法建立 TSF 会话（Notepad 启动成功但**不产生 `focus_in`**，Threads 21→18 说明未 attach）⇒ 需真实 TSF 宿主 + 用户在场；
 5. **严格同状态 A/B**：本轮 B 组处于「工作区重建」态、A 组为稳态，方向性结论（pre-cloud 不低于含云）已成立；若要升级为「严格同状态 ≈ 0」，需在 `tmp\AP-ctl-run4\data\build` 稳定后复跑一次 B（**须在构建任务之外**）；
-6. **含云构建无会话态约 30.2 s 自退**（v3/v4 两次一致；pre-cloud 同条件存活 ≥ 70 s），原因未查明，已登记；
+6. ~~**含云构建无会话态约 30.2 s 自退**（v3/v4 两次一致；pre-cloud 同条件存活 ≥ 70 s），原因未查明，已登记~~ ⇒ **✅ 已闭环**（批次 AQ，[ADR 0061](../../adr/0061-rime-lifecycle-paired-maintenance-and-seh-guards.md)）：根因 = 云同步 `BeginMaintenance` 调 `rime_api->finalize()` ⇒ `Registry::Clear()` 销毁 `userdb` 组件，紧随其后的 levers `user_dict_iterator_init` 内部 `UserDb::Require("userdb")` 返回 nullptr ⇒ `component->extension()` **空指针解引用 = 0xC0000005**（**不是优雅退出**）。修法 = Start/End **配对**（Start 释放用户库 → 立刻 End 让 `Initialize()` 恢复注册表）+ rime 生命周期**命名信号量**互斥 + levers 调用一律 **SEH 护栏**（访问冲突 ⇒ 本轮失败 + 中文提示，进程不崩）。**实测**：修复后含云构建**存活 ≥ 60 s 未退出**，备份路径首次真实跑通（`export_backup rime_ice ok=1` / `export_done exported=1`），crash 目录无新增 minidump；云单测 `PASS=453 FAIL=0` 无回归；
 7. 输入延迟两组对照（需登录态 + 用户在场）。

@@ -138,5 +138,5 @@ node tmp\AO-t603-r2-check.mjs
 
 1. **带 TSF 会话**的 A/B 差值未实测（自动化无法建立 TSF 会话：Notepad 启动成功但不产生 `focus_in`，Threads 21→18 说明未 attach）；
 2. **严格同状态** A/B 待做（本轮 B 组处于「工作区重建」态，方向性结论已成立）；
-3. **含云构建无会话态约 30.2 s 自退**（v3 / v4 两次一致，pre-cloud 同条件存活 ≥ 70 s），原因未查明；
+3. ~~**含云构建无会话态约 30.2 s 自退**（v3 / v4 两次一致，pre-cloud 同条件存活 ≥ 70 s），原因未查明~~ ⇒ **✅ 已闭环**（批次 AQ）：根因 = `rime_api->finalize()` 清空 `Registry` 后，levers 内部 `UserDb::Require("userdb")` 返回 nullptr ⇒ `component->extension()` **空指针解引用 = 0xC0000005**；修法与证据见 [ADR 0061](../../adr/0061-rime-lifecycle-paired-maintenance-and-seh-guards.md)（Start/End 配对 + 命名信号量互斥 + levers SEH 护栏）⇒ 修复后含云构建**存活 ≥ 60 s 未退出**、无新增 minidump；
 4. **对照实验副作用**：B 组对用户数据目录 `D:\Program Files\fluxing\user1\fluxing` 触发了一次工作区重建，改写 5 个文件（`build/rime_ice.prism.bin`、`build/rime_ice.schema.yaml`、`build/radical_pinyin.prism.bin`、`build/radical_pinyin.schema.yaml`、`user.yaml`）—— 均为**派生缓存**与 `last_build_time` / `schema_access_time` 时间戳，`previously_selected_schema: double_pinyin_sogou` 保留、**无任何 `.custom.yaml` 被改写** ⇒ 影响可忽略，但下轮开工前须告知用户。

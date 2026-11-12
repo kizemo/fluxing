@@ -35,11 +35,19 @@ namespace {
 
 LONG WINAPI WriteMinidumpOnCrash(EXCEPTION_POINTERS* ex) {
   // Pick a writable location: %LOCALAPPDATA%\fluxing\crash
-  wchar_t dir[MAX_PATH] = {0};
-  if (!GetEnvironmentVariableW(L"LOCALAPPDATA", dir, _countof(dir)))
+  wchar_t local_appdata[MAX_PATH] = {0};
+  if (!GetEnvironmentVariableW(L"LOCALAPPDATA", local_appdata,
+                              _countof(local_appdata)))
     return EXCEPTION_EXECUTE_HANDLER;
-  wcscat_s(dir, L"\\fluxing\\crash");
-  CreateDirectoryW(dir, NULL);  // ignore failure - if it exists, that's fine
+  // CreateDirectoryW 只会建**一级**目录 ⇒ 必须先建父目录 %LOCALAPPDATA%\fluxing,
+  // 否则 crash 子目录创建失败，minidump 永远落不了盘（2026-11-12 修：
+  // 上一轮排查「含云构建 30 s 崩溃」时发现该安全网形同虚设，dump 目录为空）。
+  wchar_t parent[MAX_PATH] = {0};
+  wchar_t dir[MAX_PATH] = {0};
+  _snwprintf_s(parent, _TRUNCATE, L"%s\\fluxing", local_appdata);
+  _snwprintf_s(dir, _TRUNCATE, L"%s\\fluxing\\crash", local_appdata);
+  CreateDirectoryW(parent, NULL);  // ignore failure - if it exists, that's fine
+  CreateDirectoryW(dir, NULL);    // ignore failure - if it exists, that's fine
 
   wchar_t path[MAX_PATH];
   SYSTEMTIME st;
