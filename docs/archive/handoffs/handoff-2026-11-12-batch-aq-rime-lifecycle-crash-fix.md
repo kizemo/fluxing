@@ -85,7 +85,15 @@ begin_maintenance_enter → begin_maintenance_done ok=1 → export_enter
 
 ⇒ **备份路径首次真实跑通**（真实导出 1 个词典 `rime_ice`）。
 
-- crash 目录**无新增 dump**。
+- **修复件运行期间无新增 dump**；探针收尾于 19:57:05 拉起**旧装机版 1.2.1**（`WeaselServer.exe /quit` 停旧实例 → 拉起新实例），该实例于 **19:57:35** 崩溃并落第 4 枚 dump —— **minidump 内嵌模块路径判定**（`ModuleListStream` 的 UTF-16LE 路径）= `D:\Program Files\fluxing\weasel\WeaselServer.exe` ⇒ **该 dump 来自旧装机版，不是修复件**；且拉起→崩溃间隔 ≈ **30 s**，与修复前判据逐字吻合。**⇒ 同场次自然 A/B**：修复件存活 ≥ 60 s，旧装机版 30 s 必崩。
+- **四枚 dump 的归属（按内嵌模块路径逐一判定）**：
+
+  | dump | 内嵌 exe 路径 | 归属 |
+  |---|---|---|
+  | 19:42:12 | `F:\soft\00selfmade\rime_claude\tmp\AP-ctl-run4\WeaselServer.exe` | **修复前**的工作区副本（崩溃的那次） |
+  | 19:42:44 | `D:\Program Files\fluxing\weasel\WeaselServer.exe` | 旧装机版 1.2.1 |
+  | 19:54:02 | `D:\Program Files\fluxing\weasel\WeaselServer.exe` | 旧装机版 1.2.1 |
+  | 19:57:35 | `D:\Program Files\fluxing\weasel\WeaselServer.exe` | 旧装机版 1.2.1（探针收尾拉起的那次，**修复后仍崩**） |
 - **二进制自证**：新中文提示与 `Local\Fluxing.RimeLifecycle` 以 **UTF-8 字节**在 `output\Win32\WeaselServer.exe` 中命中（`/utf-8` + 窄字符串字面量 ⇒ 产物里是 UTF-8 字节，**用 UTF-16 搜索会假红**）；临时 trace 标记 `fluxing-cloud-trace.log` 在发布件中 **0 命中**（trace 已移除）。
 
 ### 2.5 临时 trace 通道已移除
