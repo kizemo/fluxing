@@ -34,6 +34,64 @@
 #include <FluxingPanelStatus.h>
 // 批次 I / ADR 0043: 半角标点(英文标点)状态下的标点语言转换(纯函数,单一事实源)。
 #include <FluxingPunctText.h>
+#include <fstream>
+
+// ★ spec 045 修(2026-11-09 · 第三轮):用户显式选定的输入方案必须**持久化**。
+//
+// 缺陷背景(用户两次报告,第二次是「输入法进行了重启,但仍然只能使用全拼输入」):
+//   m_current_schema_id 只活在进程内存里,WeaselServer 一重启就空,于是第一笔
+//   AddSession 又把全局镜像设成 librime 的默认方案(schema_list 首项,本机是
+//   rime_ice 全拼)。ADR 0048 的第 ⑤ 条因此落不了地 —— 没有持久化就没有
+//   「用户显式选方案」的跨进程语义。
+//
+// 存哪儿:用户数据目录下的单行纯文本,不碰任何 Rime 配置的解析/序列化路径
+//   (绝不与 librime switcher 的 var/previously_selected_schema 打架 —— 那是
+//   librime 的私有状态,只用于它自己的菜单排序)。
+namespace {
+
+const char kPreferredSchemaFile[] = "fluxing.preferred_schema.txt";
+
+std::filesystem::path _PreferredSchemaPath() {
+  const std::filesystem::path dir = WeaselUserDataPath();
+  if (dir.empty())
+    return std::filesystem::path();
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);  // 已存在时无副作用
+  return dir / kPreferredSchemaFile;
+}
+
+// 返回空串 = 从未显式选过方案(调用方必须保持旧行为,不许猜)。
+std::string _LoadPreferredSchemaFromDisk() {
+  const std::filesystem::path path = _PreferredSchemaPath();
+  if (path.empty())
+    return std::string();
+  std::error_code ec;
+  if (!std::filesystem::exists(path, ec) || ec)
+    return std::string();
+  std::ifstream in(path, std::ios::binary);
+  if (!in)
+    return std::string();
+  std::string id;
+  std::getline(in, id);
+  while (!id.empty() && (id.back() == '\r' || id.back() == '\n' ||
+                         id.back() == ' ' || id.back() == '\t'))
+    id.pop_back();
+  return id;
+}
+
+void _SavePreferredSchemaToDisk(const std::string& schema_id) {
+  if (schema_id.empty())
+    return;
+  const std::filesystem::path path = _PreferredSchemaPath();
+  if (path.empty())
+    return;
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out)
+    return;
+  out << schema_id << "\n";
+}
+
+}  // namespace
 
 #define TRANSPARENT_COLOR 0x00000000
 #define ARGB2ABGR(value)                                 \
@@ -262,6 +320,29 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
   RIME_STRUCT(RimeStatus, status);
   if (rime_api->get_status(session_id, &status)) {
     std::string schema_id = status.schema_id ? status.schema_id : std::string();
+
+    // ★ 2026-11-09 修(第三轮):服务器重启后恢复用户上次**显式选定**的方案。
+    //   m_current_schema_id 是内存镜像,进程重启后为空 ⇒ 下面的新会话继承逻辑
+    //   无从继承 ⇒ 每个新会话都回落 librime 默认(schema_list 首项 rime_ice
+    //   全拼)⇒ 用户看到「输入法重启后还是只能全拼」。持久化文件是唯一事实来源。
+    //   只接受**当前仍然存在**的方案 id(用户可能删过 custom 文件),否则保持
+    //   旧行为 —— 绝不把不存在的方案灌进 select_schema。
+    if (m_available_schemas.empty())
+      _RefreshSchemaList();
+    if (m_current_schema_id.empty()) {
+      const std::string persisted = _LoadPreferredSchemaFromDisk();
+      if (!persisted.empty()) {
+        bool still_available = false;
+        for (const auto& id : m_available_schemas) {
+          if (id == persisted) {
+            still_available = true;
+            break;
+          }
+        }
+        if (still_available)
+          m_current_schema_id = persisted;
+      }
+    }
 
     // ★ spec 045 修(2026-11-09):新会话继承**用户当前选中的方案**。
     //
@@ -1088,9 +1169,13 @@ std::string RimeWithWeaselHandler::GetCurrentSchemaId() {
 // 现在:失败 / 无会话 / 无可用方案都给出中文提示(候选窗 aux 提示,与既有
 // 「部署完成」提示同一通道),成功时面板标签本身会变成新方案名。
 void RimeWithWeaselHandler::_NotifySchemaSwitch(const std::wstring& text) {
+  // ★ 2026-11-09 修(第三轮):诊断行移到**早退之前**。
+  //   旧位置在 `if (!m_ui)` 之后 ⇒ m_ui 为空时整条切换链在日志里彻底消失,
+  //   上一轮据此误判成「切换请求没到服务端」(成功路径也不写行)。现在无论
+  //   成败、无论有无 UI,都留下一条不可伪造的事实。
+  fluxing::diag::AppendLine("server", "schema_switch notice");
   if (!m_ui || text.empty())
     return;
-  fluxing::diag::AppendLine("server", "schema_switch notice");
   weasel::Context ctx;
   weasel::Status status;
   ctx.aux.str = text;
@@ -1127,11 +1212,25 @@ void RimeWithWeaselHandler::SelectSchema(const std::string& schema_id) {
   }
   if (!applied)
     applied = rime_api->select_schema(target, schema_id.c_str()) ? true : false;
-  if (!applied) {
+  // ★ 2026-11-09 修(第三轮):「广播里任意一个会话成功」**不等于**用户成功。
+  //   用户正在输入的那个会话就是 target;它没切过去,用户看到的仍然是旧方案。
+  //   判据只认**目标会话 live 的 schema_id**,不认 C API 的返回值。
+  if (_LiveSchemaId(target) != schema_id)
+    rime_api->select_schema(target, schema_id.c_str());
+  const std::string live = _LiveSchemaId(target);
+  fluxing::diag::AppendLine(
+      "server", "schema_switch_requested to=" + schema_id + " target_live=" +
+                    (live.empty() ? std::string("<unknown>") : live) +
+                    " broadcast_any=" + (applied ? "1" : "0"));
+  // live 为空 = get_status 取不到(会话刚好销毁),此时只能信任 C API 返回值。
+  const bool verified = live.empty() ? applied : (live == schema_id);
+  if (!verified) {
     _NotifySchemaSwitch(L"切换输入方案失败");
     return;
   }
   m_current_schema_id = schema_id;
+  // ★ 2026-11-09 修(第三轮):持久化 ⇒ WeaselServer 重启后仍然生效。
+  _SavePreferredSchemaToDisk(schema_id);
   if (_UpdateUICallback)
     _UpdateUICallback();
 }
@@ -1191,11 +1290,24 @@ void RimeWithWeaselHandler::SwitchToNextSchema() {
   }
   if (!applied)
     applied = rime_api->select_schema(target, next_id.c_str()) ? true : false;
-  if (!applied) {
+  // ★ 2026-11-09 修(第三轮):同 SelectSchema —— 只认目标会话 live 的方案。
+  //   旧实现的 `applied` 语义是「任意会话成功即算成功」,于是 target 失败时
+  //   会被别的会话的成功掩盖 ⇒ 用户面板上点了,自己窗口里还是全拼。
+  if (_LiveSchemaId(target) != next_id)
+    rime_api->select_schema(target, next_id.c_str());
+  const std::string live = _LiveSchemaId(target);
+  fluxing::diag::AppendLine(
+      "server", "schema_switch_requested to=" + next_id + " target_live=" +
+                    (live.empty() ? std::string("<unknown>") : live) +
+                    " broadcast_any=" + (applied ? "1" : "0"));
+  const bool verified = live.empty() ? applied : (live == next_id);
+  if (!verified) {
     _NotifySchemaSwitch(L"切换输入方案失败");
     return;
   }
   m_current_schema_id = next_id;
+  // ★ 2026-11-09 修(第三轮):持久化 ⇒ WeaselServer 重启后仍然生效。
+  _SavePreferredSchemaToDisk(next_id);
   if (_UpdateUICallback)
     _UpdateUICallback();
 }
