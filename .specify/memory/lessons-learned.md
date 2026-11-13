@@ -14811,3 +14811,39 @@ handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四
 - 跨进程 / 跨模块的锁名要带**产品前缀**（本项目 `Local\Fluxing.RimeLifecycle`），否则会和别的软件抢。
 - 拿不到锁时的默认动作应是「**跳过本轮 + 中文提示**」，不是「阻塞」也不是「强来」——
   同步是后台便利功能，绝不能因此卡住用户输入。
+## L219 — librime 用户库是独占 leveldb：`OpenReadOnly()` 不是真只读；finalize 会清会话表 ⇒ 按键被吞
+**证据**：2026-11-14 Fluxing 批次 AR（ADR 0062 取证）。
+
+**事实**：
+
+- `librime/src/rime/dict/level_db.cc:54-58`：`LevelDbWrapper::Open(file_path, readonly)` 的 `readonly` **只影响 `create_if_missing`** ⇒ `OpenReadOnly()` 仍以读写方式打开、**仍吃 LOCK** ⇒ librime **没有真只读路径**。
+- `librime/src/rime/lever/user_dict_manager.cc:51-71`：`UserDictManager::Backup` **自己新建一个 leveldb 实例** ⇒ 备份必须独占用户库。
+- `librime/src/rime/dict/user_dictionary.cc:168-177`：`UserDictionary::Load()` 在字典加载时就 `db_->Open()` ⇒ 引擎持锁直到字典卸载。
+
+⇒ **「备份成功」与「会话存活」在当前 librime 设计下互斥**：想备份就得 finalize，而 finalize 会清会话表。
+
+**为什么「热拷贝 userdb 目录再另开 leveldb」不可行**：拷贝一个**活着的** leveldb 目录**没有一致性保证**（memtable / WAL 可能在拷贝中途变化）；且**回写方向**仍需独占写入 ⇒ 仍然要 finalize。
+
+**会话被打断的真实后果**（比「组合串丢失」严重）：`RimeWithWeasel.cpp:258-264` `Finalize()` 清 `m_session_status_map` ⇒ `:234-236` `to_session_id()` 用 `operator[]` 返回 **0** ⇒ `:482-492` `ProcessKeyEvent()` 把 0 传给 `process_key` ⇒ **按键被吞**；客户端只在连接/激活时 `StartSession()` 一次（`WeaselClientImpl.cpp:196-201`），**只有 `_Reconnect()` 才重建**（`WeaselTSF.cpp:501-504`）⇒ 孤儿 `ipc_id` ⇒ 该窗口**哑到重新聚焦为止**。
+
+**怎么用**：
+
+- 判「某个 rime 操作会不会打断输入」**不要看 API 名**，要看它是否触发 `finalize()` / 清会话表。
+- 需要「只读打开一个已有 leveldb」时，先确认目标库的 `Open` 是否真支持只读；本仓 librime **不支持**。
+- 想靠「调用点判空」兜住的方案，先查失败是否发生在**库内部**（库内部失败 ⇒ 调用点拿不到可判别信号）。
+
+**推广**：跨进程复制一个正在被写入的存储目录**没有一致性保证**；除非该存储自带快照 / 转储机制（leveldb 的 `Backup` API 才是正解，但它要求独占源库）。
+## L220 — 「维护不可用」必须表达为「跳过」而非「失败」；机会性同步是用户可见口径变更
+**证据**：2026-11-14 Fluxing 批次 AR（ADR 0062 决策 2 / 决策 5）。
+
+**为什么「跳过」不能记成「失败」**：失败语义会递增 `consecutive_failures_` 并进入退避阶梯（本仓末档 60 min）。若「用户正在打字」这种**正常状态**被记成失败，用户一次长时间打字就会把同步彻底停摆，而且**没有任何报错** ⇒ 表现为「云端永远不更新」。
+
+**正确做法（三件套）**：
+
+1. 用**独立的 `kSkipped` 语义**（本仓 `SyncOutcome::kSkipped` 已存在，无需新增枚举）⇒ 不污染失败计数、不进退避。
+2. 跳过 ⇒ 改**短间隔重试**（本仓取 5 min），而不是等下一个 60 min 定时槽。
+3. 给**用户可见中文提示**（「本轮已跳过…稍后会自动重试」），不要让后台行为变成静默。
+
+**顺带一条口径纪律**：功能从「定时必然发生」变成「**机会性**（在用户没有活跃输入会话时发生）」是**用户可见的行为变更** ⇒ 必须写进用户可见文案与发版说明，**不能静默改**（否则用户会以为「云端没更新 = 坏了」）。
+
+**推广**：任何后台同步 / 备份 / 索引类后台任务，遇到「现在不方便做」的正确反应是 **skip + 短间隔重试**，不是 error + 长退避。

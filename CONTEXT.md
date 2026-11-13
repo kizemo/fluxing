@@ -91,6 +91,8 @@ specs. Use these strings verbatim when searching or filing issues.
 | **WinSparkle** | Third-party auto-updater; driven by `update/appcast.xml` |
 | **PPL** | Protected Process Light. `WeaselServer.exe` runs as PPL; `taskkill` cannot terminate it |
 | **Maintenance mode** | `WeaselIPC::Client::StartMaintenance() / EndMaintenance()` — temporarily releases the userdb lock so other tools can `export_user_dict` / `import_user_dict` |
+| **Maintenance gate** | 维护准入闸门 — `RimeWithWeaselHandler::CanEnterMaintenance()`：仅当会话表中**不存在有效会话**（`session_id != 0`）时，才允许进入维护态（finalize + 用户词典导出 / 回写）；否则整轮跳过、绝不打断输入。ADR 0062 |
+| **Opportunistic sync** | 机会性同步 — 云端同步不再保证「固定周期内一定完成」，改为**在用户没有活跃输入会话时**完成；用户持续输入时云端可能滞后（**用户可见口径变更**）。ADR 0062 |
 
 ### 3.2 Configuration terms
 

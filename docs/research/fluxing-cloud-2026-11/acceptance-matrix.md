@@ -60,6 +60,16 @@ AC-01/02/06/10 需要**登录态 + 用户在场**；这两类合计 11 条 ⇒ *
 ⚠️ **装机前置（必须）**：`WeaselServer.exe` 是 **PPL 签名进程** ⇒ 装机 1.3.1 前必须**注销 / 重启系统**，否则仍在跑旧映像（磁盘哈希不能证明在跑的是新码）。
 当前装机版仍为 **1.2.1.0**（`D:\Program Files\fluxing\weasel\WeaselServer.exe`，sha16 `5891D9656792A129`，含云）⇒ **每启动约 30 s 崩溃一次**。
 
+## 2.2 批次 AR 追加（2026-11-14）：残留缺陷「每轮同步清空当前 TSF 会话」已立 ADR 0062（**实现未做**）
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| 缺陷性质 | **不是「组合串丢失」，是「按键被吞直到重新聚焦」**：`Finalize()` 清 `m_session_status_map`（`RimeWithWeasel.cpp:258-264`）⇒ `to_session_id()` 用 `operator[]` 返回 **session_id = 0**（`:234-236`）⇒ `ProcessKeyEvent()` 把 0 传给 `process_key`（`:482-492`）⇒ 客户端 `ipc_id` 成**孤儿**（`StartSession` 只在连接/激活时发一次、`WeaselClientImpl.cpp:196-201`；只有 `_Reconnect()` 才重建，`WeaselTSF.cpp:501-504`）⇒ 该窗口**哑到重新聚焦为止** | `docs/adr/0062-cloud-sync-maintenance-gate-and-session-preservation.md`「事实 1」 |
+| 根因 | librime 硬约束：`OpenReadOnly()` 的 `readonly` **只影响 `create_if_missing`**（`level_db.cc:54-58`）⇒ 仍吃 LOCK；`UserDictManager::Backup` 自建 leveldb 实例（`user_dict_manager.cc:51-71`）⇒ 必须先 finalize ⇒ **「备份成功」与「会话存活」互斥** | 同上「事实 2」 |
+| 决策 | **[ADR 0062](docs/adr/0062-cloud-sync-maintenance-gate-and-session-preservation.md)（Proposed）**：① 维护准入闸门（会话表中无 `session_id != 0` 才放行；只读 / 无 I/O / 不加锁）；② **跳过 ≠ 失败**（复用已有 `SyncOutcome::kSkipped`，不递增 `consecutive_failures_`、不进 60 min 退避，改 **5 min 短间隔重试**）；③ 手动「立即同步」**不绕过**闸门（中文提示 + 指引「请先切换到其他窗口」）；④ 驳回三替代方案（复制 userdb 另开 leveldb 无一致性保证 / 独立进程备份 / 改 submodule）；⑤ **口径变更为「机会性同步」**（用户可见）；⑥ 不新增 IPC 消息 ⇒ 不触发 IPC 四边同步红线 | ADR 0062 |
+| 状态 | **决策已落盘，实现未做** ⇒ 本批**未改任何产品代码、未重跑构建与单测**（AQ 基线 `PASS=453 FAIL=0` / `build.bat weasel` 0 警告 0 错误 仍有效）；实现硬前置 = 先单独提交或 stash `RimeWithWeasel/RimeWithWeasel.cpp` 的 spec 045 脏改动（+118 行，未提交）；ADR 现为 **Proposed**，待用户确认「机会性同步」用户可见口径后转 Accepted | 本批 handoff §3 / §4 |
+| 残留缺陷（未修） | 「每轮同步清空当前 TSF 会话」**仍未消除** —— 修复路径已定（闸门），但**代码未落地** ⇒ 运行时行为与 1.3.1 一致 | 同上 |
+
 ## 3. 证据索引
 
 | 证据 | 路径 |
