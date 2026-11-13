@@ -34,6 +34,8 @@
 #include <FluxingPanelStatus.h>
 // 批次 I / ADR 0043: 半角标点(英文标点)状态下的标点语言转换(纯函数,单一事实源)。
 #include <FluxingPunctText.h>
+// ADR 0062: 维护准入闸门的判据纯函数（**只含 ASCII**，原因见头文件注释）。
+#include <FluxingMaintenanceGate.h>
 #include <fstream>
 
 // ★ spec 045 修(2026-11-09 · 第三轮):用户显式选定的输入方案必须**持久化**。
@@ -147,6 +149,8 @@ RimeWithWeaselHandler::RimeWithWeaselHandler(UI* ui)
 RimeWithWeaselHandler::~RimeWithWeaselHandler() {
   m_show_notifications.clear();
   m_session_status_map.clear();
+  // ADR 0062: 会话表清空 => 活跃会话数归零。
+  m_live_session_count.store(0, std::memory_order_relaxed);
   m_app_options.clear();
 }
 
@@ -259,8 +263,42 @@ void RimeWithWeaselHandler::Finalize() {
   m_active_session = 0;
   m_disabled = true;
   m_session_status_map.clear();
+  // ADR 0062: 会话表清空 => 没有活跃会话 => 闸门放行。
+  m_live_session_count.store(0, std::memory_order_relaxed);
   LOG(INFO) << "Finalizing la rime.";
   rime_api->finalize();
+}
+
+// ADR 0062: 重算「活跃输入会话数」。
+//
+// 活跃 = 会话表里存在 session_id != 0 的条目。
+// ★ 必须显式排除 session_id == 0：to_session_id() 用 operator[] 访问会话表，
+//   键不存在时会**插入**一个空 status（session_id = 0）=> 那些是假条目；
+//   若不排除，一个从没存在过的 ipc_id 就能把云同步永久堵死。
+//
+// 只在会话生命周期事件（增 / 删 / 清表）上调用 —— 都是低频事件。
+void RimeWithWeaselHandler::_RefreshLiveSessionCount() {
+  int live = 0;
+  for (const auto& pair : m_session_status_map) {
+    if (pair.second.session_id != 0)
+      ++live;
+  }
+  m_live_session_count.store(live, std::memory_order_relaxed);
+}
+
+// ADR 0062 决策 1: 维护准入闸门。
+//
+// 只读原子量、无 I/O、不加锁 => 可从云同步的后台线程安全调用（宪法 P2）。
+bool RimeWithWeaselHandler::CanEnterMaintenance(std::string* reason) {
+  const int live = m_live_session_count.load(std::memory_order_relaxed);
+  if (fluxing::maintenance_gate::MaintenanceGateAllows(live)) {
+    if (reason != nullptr)
+      reason->clear();
+    return true;
+  }
+  if (reason != nullptr)
+    *reason = fluxing::maintenance_gate::MaintenanceGateReasonLiveSession();
+  return false;
 }
 
 DWORD RimeWithWeaselHandler::FindSession(WeaselSessionId ipc_id) {
@@ -303,6 +341,8 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
   SessionStatus& session_status = new_session_status(ipc_id);
   session_status.style = m_base_style;
   session_status.session_id = session_id;
+  // ADR 0062: 会话表变化 => 重算活跃会话数（闸门的输入）。
+  _RefreshLiveSessionCount();
   // spec 077: ensure ShiftState is fresh per session (R2 cross-session safety).
   m_shiftState[ipc_id] = ShiftState{};
   // ADR 0032: 记录本次会话的客户端身份。ipc_id 会被回收复用
@@ -434,6 +474,8 @@ DWORD RimeWithWeaselHandler::RemoveSession(WeaselSessionId ipc_id) {
   // TODO: force committing? otherwise current composition would be lost
   rime_api->destroy_session(to_session_id(ipc_id));
   m_session_status_map.erase(ipc_id);
+  // ADR 0062: 会话已移除 => 重算活跃会话数。
+  _RefreshLiveSessionCount();
   // spec 077: drop ShiftState so no stale state remains if TSF holds a
   // WeaselSessionId that maps to a recycled ipc_id later.
   m_shiftState.erase(ipc_id);
@@ -1040,6 +1082,8 @@ bool RimeWithWeaselHandler::_MapVisibleIndexToEngine(size_t visible_index,
 
 void RimeWithWeaselHandler::StartMaintenance() {
   m_session_status_map.clear();
+  // ADR 0062: 清表 => 活跃会话数归零（Finalize 里还会再置一次）。
+  _RefreshLiveSessionCount();
   Finalize();
   _UpdateUI(0);
 }
@@ -1050,6 +1094,8 @@ void RimeWithWeaselHandler::EndMaintenance() {
     _UpdateUI(0);
   }
   m_session_status_map.clear();
+  // ADR 0062: 清表 => 活跃会话数归零。
+  _RefreshLiveSessionCount();
 }
 
 void RimeWithWeaselHandler::SetOption(WeaselSessionId ipc_id,

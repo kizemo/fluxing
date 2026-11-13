@@ -43,6 +43,9 @@
 // 生产头（T204）。用相对路径而不是 $(SolutionDir)\include，
 // 这样本文件被任何工程单独打开/编译都能解析到同一个生产头。
 #include "../../include/FluxingCloudEnvelope.h"
+// ADR 0062 生产头（维护准入闸门的判据纯函数）。同样走相对路径 => 生产与
+// 单测同源（constitution R7）。
+#include "../../include/FluxingMaintenanceGate.h"
 
 // spec 100 阶段 D 生产头（T301–T305）。同样走相对路径 ⇒ 生产与单测同源
 // （constitution R7）：本文件不复制第二份实现，只调用 WeaselServer/Cloud/
@@ -2536,6 +2539,144 @@ void TestCloudPushSkipped() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 批次 AR · ADR 0062：维护准入闸门
+//   ① 判据纯函数（生产与单测同源）；
+//   ② 协调器整轮跳过（零 I/O：不导出、不备份、不回写、不发请求）；
+//   ③ 引擎把「跳过」当「跳过」：不累计失败、不进退避阶梯、短间隔重试。
+// ---------------------------------------------------------------------------
+
+// 假后端：闸门可开可关；记录是否被要求进入维护 / 导出（跳过时都不该发生）。
+struct FakeGateBackend : public fc::IUserDictBackend {
+  bool gate_open = true;
+  int begin_calls = 0;
+  int export_calls = 0;
+
+  bool CheckMaintenanceGate(std::string* reason) const override {
+    if (reason != nullptr)
+      reason->clear();
+    return gate_open;
+  }
+  bool BeginMaintenance(std::string* err) override {
+    ++begin_calls;
+    if (!gate_open) {
+      if (err != nullptr)
+        *err = fc::MaintenanceGateSkipMessage();
+      return false;
+    }
+    return true;
+  }
+  bool EndMaintenance(std::string* err) override { return true; }
+  bool ExportUserDict(std::string* out, std::string* err) override {
+    ++export_calls;
+    if (out != nullptr)
+      out->clear();
+    return true;
+  }
+  bool ImportUserDict(const std::string& text,
+                      int* imported,
+                      std::string* err) override {
+    if (imported != nullptr)
+      *imported = 0;
+    return true;
+  }
+};
+
+// 假 runner：模拟「闸门关闭 => 本轮被跳过」。
+struct SkippingSyncRunner {
+  std::atomic<int> calls{0};
+  std::atomic<bool> skip{true};
+
+  fc::CloudSyncEngine::SyncRunner Make() {
+    return [this](fc::SyncDirection dir, fc::CloudSyncRoundResult* out) {
+      calls.fetch_add(1);
+      const bool skipped = skip.load();
+      if (out != nullptr) {
+        out->ok = !skipped;
+        out->skipped = skipped;
+        out->message = skipped ? std::string(fc::MaintenanceGateSkipMessage())
+                               : std::string("假 runner 完成。");
+      }
+      return !skipped;
+    };
+  }
+};
+
+void TestCloudMaintenanceGate() {
+  std::printf("[AR] ADR 0062 维护准入闸门：判据 / 整轮跳过 / 跳过 ≠ 失败\n");
+
+  // ① 判据纯函数（include/FluxingMaintenanceGate.h）。
+  {
+    Check(fluxing::maintenance_gate::MaintenanceGateAllows(0),
+          "闸门：无活跃会话 => 放行");
+    Check(!fluxing::maintenance_gate::MaintenanceGateAllows(1),
+          "闸门：有活跃会话 => 关闭");
+    Check(!fluxing::maintenance_gate::MaintenanceGateAllows(3),
+          "闸门：多个活跃会话 => 关闭");
+    Check(std::string(
+              fluxing::maintenance_gate::MaintenanceGateReasonLiveSession()) ==
+              "live_input_session",
+          "闸门：关闭原因是 ASCII 令牌（中文文案在云侧翻译）");
+    Check(fluxing::maintenance_gate::kMaintenanceSkipRetryIntervalMs ==
+              5 * 60 * 1000,
+          "闸门：跳过后短间隔重试 = 5 分钟（不是失败退避的 60 分钟）");
+  }
+
+  // ② 协调器：闸门关闭 => 整轮跳过，且**零 I/O**。
+  {
+    MockTransport transport;
+    FakeGateBackend backend;
+    backend.gate_open = false;
+    fc::CloudSyncCoordinator coordinator(
+        &transport, &backend, "tok-gate", "dev-gate",
+        std::vector<uint8_t>(32, 0x01), std::string("gate-test-sidecar.state"));
+    fc::CloudSyncRoundResult result;
+    std::string err;
+    const bool ok =
+        coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &err);
+    Check(!ok, "闸门关闭 => 本轮不成功");
+    Check(result.skipped, "闸门关闭 => 结果标记为「已跳过」（不是失败）");
+    Check(result.message == fc::MaintenanceGateSkipMessage(),
+          "闸门关闭 => 给出中文提示");
+    Check(backend.begin_calls == 0,
+          "闸门关闭 => 从未进入维护态（不 finalize）");
+    Check(backend.export_calls == 0, "闸门关闭 => 从未导出用户词典（不备份）");
+    Check(transport.requests.empty(), "闸门关闭 => 一个网络请求都没发");
+    Check(result.push_requests == 0 && result.pull_requests == 0,
+          "闸门关闭 => 零推送 / 零拉取（不消耗配额）");
+  }
+
+  // ③ 引擎：跳过 ≠ 失败（不累计失败、不进退避、短间隔重试）。
+  {
+    SkippingSyncRunner fake;
+    fc::CloudSyncEngineOptions opts;
+    opts.startup_delay_ms = 0;
+    opts.local_change_debounce_ms = 0;
+    opts.min_push_interval_ms = 0;
+    opts.skip_retry_interval_ms = 50;  // 单测不等 5 分钟
+    fc::CloudSyncEngine engine;
+    Check(engine.Start(fake.Make(), opts), "引擎启动成功（假 runner，不触网）");
+    Check(WaitFor([&fake]() { return fake.calls.load() >= 1; }, 3000),
+          "启动轮已执行");
+    const fc::CloudSyncStatus st = engine.status();
+    Check(st.last_outcome == fc::SyncOutcome::kSkipped,
+          "跳过 => last_outcome = kSkipped（不是 kFailed）");
+    Check(st.backoff_step == 0, "跳过 => 不进失败退避阶梯");
+    Check(!st.ever_synced, "跳过 => 不算「已同步过」");
+    Check(st.waiting_for_idle, "跳过 => 状态标记「等待你停止输入」");
+    Check(st.last_message == fc::MaintenanceGateSkipMessage(),
+          "跳过 => 状态里保留中文提示");
+
+    // 短间隔重试：跳过之后按 skip_retry_interval_ms 再判一次闸门。
+    const int after_first = fake.calls.load();
+    Check(WaitFor([&fake,
+                   after_first]() { return fake.calls.load() > after_first; },
+                  3000),
+          "跳过后按短间隔自动重试（不是等 60 分钟退避）");
+    engine.Stop();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -2580,6 +2721,9 @@ int main() {
 
   // 批次 AN：AH-4 ⑤ 客户端消费 skipped（推送结果契约）。
   TestCloudPushSkipped();
+
+  // 批次 AR · ADR 0062：维护准入闸门（判据 / 整轮跳过 / 跳过 ≠ 失败）。
+  TestCloudMaintenanceGate();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。

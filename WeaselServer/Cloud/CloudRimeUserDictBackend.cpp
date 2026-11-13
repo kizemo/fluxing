@@ -241,7 +241,29 @@ std::wstring TempSnapshotPath(const std::string& dict) {
 
 class RimeUserDictBackend : public IUserDictBackend {
  public:
+  // ADR 0062: 维护准入闸门 —— 问维护态宿主（= RimeWithWeaselHandler）。
+  //
+  // 宿主没注册时**放行**：那时的失败会被 BeginMaintenance 用既有的中文
+  // 原因报出来（「输入法引擎尚未就绪，无法进入维护模式。」），不必在这里
+  // 改口径。
+  bool CheckMaintenanceGate(std::string* reason) const override {
+    if (reason != nullptr)
+      reason->clear();
+    if (g_maintenance_host == nullptr)
+      return true;
+    return g_maintenance_host->CanEnterMaintenance(reason);
+  }
+
   bool BeginMaintenance(std::string* err) override {
+    // ADR 0062 纵深防御：进入维护前再问一次闸门。
+    // 正常路径上协调器已在 SyncOnce 最前面挡过一次；这里防的是别的调用方
+    // 直接摸到本后端。失败时由协调器复查闸门 => 归类为「跳过」而非「失败」。
+    std::string gate_reason;
+    if (!CheckMaintenanceGate(&gate_reason)) {
+      if (err)
+        *err = MaintenanceGateSkipMessage();
+      return false;
+    }
     // ★ 修复（ADR 0061 · 崩溃根因）：
     //   旧实现只调 StartMaintenance()（= rime_api->finalize()，会清空 Registry）
     //   就去用 levers ⇒ UserDb::Require("userdb") 返回 nullptr ⇒ 0xC0000005。

@@ -490,3 +490,19 @@
 
 ### AI-5 · 交接文档
 - `docs/archive/handoffs/handoff-2026-11-11-batch-ai-quickpanel-menu-dpi.md`（含根因/证据路径/环境事实/工具坑/需用户在场的项）；接力 prompt 按用户 2026-11-08 指示**直接给在当轮回答正文**，不另落文件。
+## 批次 AS 收尾记录（2026-11-14 · ADR 0062 实现落地：维护准入闸门 + 会话保护）
+
+### AS-1 · 实现落码（ADR 0062 决策 1–6）
+- **落码范围**：9 个文件 + 1 个新头（`include/FluxingMaintenanceGate.h`），共 33 处补丁；**未改 `librime/`、未改 IPC 协议、未新增第三方依赖**（⇒ 不触发 CLAUDE.md「IPC 四边同步」红线）。
+- **判据口径（刻意偏离 ADR 字面）**：ADR 写「只读扫描 `m_session_status_map`」；实现改为「**`std::atomic<int>` 计数 + 会话生命周期事件上由拥有者线程重算**」⇒ 读者绝不碰 `std::map`（数据竞争 + 踩穿 constitution P2）。**必须显式排除 `session_id == 0`**（`to_session_id()` 用 `operator[]` 会插入假条目 ⇒ 否则一个从未存在的 `ipc_id` 就能把同步永久堵死）。
+- **跳过语义**：`SyncOutcome::kSkipped`；**不**递增 `consecutive_failures_`、**不**进 60 min 失败退避阶梯；改 **5 min 短间隔重试**（`SyncTrigger::kSkippedRetry` + `status.waiting_for_idle`）；**启动轮被跳过须恢复 `startup_pending_`**（否则启动拉取永久丢失）。
+- **闸门位置**：协调器 `SyncOnce` 在 **`LoadSidecar` 之前**查 ⇒ 闸门关闭时**整轮跳过**：零 I/O、零配额、不 finalize、不导出 / 备份 / 回写、不打断任何输入。
+- **门禁**：云单测 `PASS=473 FAIL=0`（基线 453 ⇒ **+20**）；有牙验证 `TEETH_VERDICT=PASS`（MUT_A 协调器闸门失效 ⇒ FAIL=2 / MUT_B 跳过被记成失败 ⇒ FAIL=2 / 还原 ⇒ 473-0）；`build.bat weasel` **0 警告 0 错误**（格式化前后各一次）；clang-format 只格式化本次新增行范围。
+
+### AS-2 · 本批未闭环
+- ① **用户可见口径待用户确认**（问卷发出后未答复）⇒ ADR 0062 仍为 **Proposed**；当前**按推荐项实现**（跳过提示 / 手动指引 / 账号页「机会性同步」说明行三处文案见 ADR 0062）。
+- ② **未装机**：本批**未出包**（1.3.1 产物**不含**本批代码）⇒ 需 1.3.2 或更高；`WeaselServer.exe` 是 **PPL** ⇒ 装机前必须注销 / 重启。
+- ③ 用户在场 AC 4 条（AC-01/02/06/10）+ 输入延迟两组对照；双机 AC 7 条（AC-03/04/05/08/09/13/14）+ restore 端到端；**闸门通过率**未知；客户端**孤儿 `ipc_id`** 的真机表现未验。
+
+### AS-3 · 交接文档
+- `docs/archive/handoffs/handoff-2026-11-14-batch-as-adr0062-maintenance-gate.md`（含落码表 / 证据路径 / 已验证·推断·未验证 / 工具坑 8 条 / 下一批建议顺序）。

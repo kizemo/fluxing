@@ -347,6 +347,14 @@ class CloudAccountController::Impl {
       SetSyncStatus(L"最近同步：" + when + L" · 成功（推送 " +
                     std::to_wstring(out->items_pushed) + L" 条，拉取 " +
                     std::to_wstring(out->items_pulled) + L" 条）");
+    } else if (out->skipped) {
+      // ADR 0062 决策 2: 跳过 ≠ 失败 —— 用「已跳过」措辞，别吓人。
+      std::string reason = err.empty() ? out->message : err;
+      if (reason.empty())
+        reason = MaintenanceGateSkipMessage();
+      out->message = reason;
+      SetSyncStatus(L"最近同步：" + when + L" · 已跳过（" + ToWide(reason) +
+                    L"）");
     } else {
       std::string reason = err.empty() ? out->message : err;
       if (reason.empty())
@@ -667,6 +675,11 @@ void CloudAccountController::SubmitSyncNow() {
       impl->SetStatus(L"同步完成：推送 " +
                       std::to_wstring(result.items_pushed) + L" 条，拉取 " +
                       std::to_wstring(result.items_pulled) + L" 条。");
+    } else if (result.skipped) {
+      // ADR 0062 决策 3: 手动同步**不绕过**闸门 —— 给明确提示 + 指引。
+      impl->SetStatus(std::wstring(L"同步已跳过：") +
+                      ToWide(MaintenanceGateSkipMessage()) +
+                      ToWide(MaintenanceGateManualHint()));
     } else {
       const std::wstring reason = result.message.empty()
                                       ? std::wstring(L"未知原因")
@@ -689,7 +702,9 @@ constexpr int kClientWidth = 480;
 // 依次下移，避免与状态框重叠。
 // 410 → 472（阶段 F · T505 / 阶段 G）：新增「重新发送验证码」按钮与
 // 「最近同步」状态行，设备列表与底部按钮整体下移，底部按钮拆成两行。
-constexpr int kClientHeight = 472;
+// 472 → 490（ADR 0062 决策 5）：新增「机会性同步」口径说明行，设备列表与
+// 底部两行按钮再整体下移 16 px（不得与已有控件重叠）。
+constexpr int kClientHeight = 490;
 
 HWND g_window = nullptr;
 HFONT g_font = nullptr;
@@ -817,19 +832,24 @@ LRESULT CALLBACK WndProc(HWND hwnd,
       AddControl(hwnd, L"STATIC", L"", 0, 12, 188, 456, 40, kIdStatus);
       AddControl(hwnd, L"STATIC", L"最近同步：尚未同步。", 0, 12, 234, 456, 20,
                  kIdSyncStatus);
+      // ADR 0062 决策 5: 「机会性同步」的用户可见口径（必须让用户看见，
+      // 不能静默改变他对同步时效的预期）。
+      AddControl(hwnd, L"STATIC",
+                 L"你正在输入时同步会自动延后，停止输入后自动完成。", 0, 12,
+                 256, 456, 18, -1);
       AddControl(hwnd, L"LISTBOX", L"", LBS_NOTIFY | WS_VSCROLL | WS_BORDER, 12,
-                 262, 456, 130, kIdDevices);
-      AddControl(hwnd, L"BUTTON", L"撤销所选设备", BS_PUSHBUTTON, 12, 398, 140,
+                 278, 456, 130, kIdDevices);
+      AddControl(hwnd, L"BUTTON", L"撤销所选设备", BS_PUSHBUTTON, 12, 414, 140,
                  28, kIdRevoke);
-      AddControl(hwnd, L"BUTTON", L"刷新设备列表", BS_PUSHBUTTON, 168, 398, 140,
+      AddControl(hwnd, L"BUTTON", L"刷新设备列表", BS_PUSHBUTTON, 168, 414, 140,
                  28, kIdRefreshDevices);
-      AddControl(hwnd, L"BUTTON", L"刷新登录状态", BS_PUSHBUTTON, 324, 398, 144,
+      AddControl(hwnd, L"BUTTON", L"刷新登录状态", BS_PUSHBUTTON, 324, 414, 144,
                  28, kIdRefresh);
-      AddControl(hwnd, L"BUTTON", L"清空云端数据", BS_PUSHBUTTON, 12, 432, 140,
+      AddControl(hwnd, L"BUTTON", L"清空云端数据", BS_PUSHBUTTON, 12, 448, 140,
                  28, kIdDeleteData);
-      AddControl(hwnd, L"BUTTON", L"立即同步", BS_PUSHBUTTON, 168, 432, 140, 28,
+      AddControl(hwnd, L"BUTTON", L"立即同步", BS_PUSHBUTTON, 168, 448, 140, 28,
                  kIdSyncNow);
-      AddControl(hwnd, L"BUTTON", L"关闭", BS_PUSHBUTTON, 324, 432, 144, 28,
+      AddControl(hwnd, L"BUTTON", L"关闭", BS_PUSHBUTTON, 324, 448, 144, 28,
                  kIdClose);
 
       RefreshUi(hwnd);

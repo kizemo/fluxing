@@ -61,6 +61,17 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   virtual ~RimeWithWeaselHandler();
   virtual void Initialize();
   virtual void Finalize();
+  // ADR 0062: 维护准入闸门。
+  //
+  // 进入维护态（StartMaintenance -> rime_api->finalize()）会清空会话表
+  // => 客户端缓存的 ipc_id 变成孤儿 => to_session_id() 返回 0 =>
+  // ProcessKeyEvent() 把 0 交给 process_key => 按键被吞。
+  // 因此：**没有活跃输入会话**时才允许进入维护。
+  //
+  // 只读一个无锁原子量：不碰会话表、不做 I/O、不加锁（宪法 P2）=>
+  // 可从云同步的后台线程安全调用。
+  // reason 写入 ASCII 原因令牌（中文文案在云侧翻译，见 CloudUserDictIo.h）。
+  bool CanEnterMaintenance(std::string* reason);
   virtual DWORD FindSession(WeaselSessionId ipc_id);
   virtual DWORD AddSession(LPWSTR buffer, EatLine eat = 0);
   virtual DWORD RemoveSession(WeaselSessionId ipc_id);
@@ -271,6 +282,15 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   // spec 097: 「火流猩是否在场」的服务端状态。IPC 线程写、UI 线程读,
   // 必须是无锁原子(宪法 P2:不得在 TSF/IO 路径上加锁)。
   std::atomic<FluxingPresence> m_fluxing_presence;
+  // ADR 0062: 活跃输入会话数（会话表里 session_id != 0 的条目个数）。
+  //
+  // 会话表由 IPC 线程写、云同步后台线程读 => **读者绝不碰 std::map**
+  // （那既是数据竞争，也会把「不得在 TSF 路径上加锁」这条红线踩穿）。
+  // 改为：会话生命周期事件（增 / 删 / 清表）时在**拥有者线程**上重算一次，
+  // 把计数写进无锁原子量；读者只 load()。
+  std::atomic<int> m_live_session_count{0};
+  // ADR 0062: 重算活跃会话数（只在会话生命周期事件上调用）。
+  void _RefreshLiveSessionCount();
   // spec 045: cached scheme + option bools (refreshed by _GetStatus).
   std::string m_current_schema_id;
   // spec 045 修(2026-11-09):per-session 的当前方案(WeaselSessionId -> schema id)。

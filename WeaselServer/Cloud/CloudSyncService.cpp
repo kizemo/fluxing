@@ -877,6 +877,8 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   out->items_pushed = 0;
   out->items_pulled = 0;
   out->has_more = false;
+  // ADR 0062: 「跳过」标记（闸门关闭 => 整轮跳过，不是失败）。
+  out->skipped = false;
   out->message.clear();
 
   if (transport_ == nullptr || backend_ == nullptr) {
@@ -892,12 +894,40 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
     return false;
   }
 
+  // ADR 0062 决策 1: 维护准入闸门 —— **整轮跳过**。
+  //
+  // 检查放在 LoadSidecar 之前 => 闸门关闭时**零 I/O、零配额消耗**：
+  // 不读 sidecar、不 finalize、不导出 / 备份 / 回写、不发任何网络请求，
+  // 也**不打断用户正在进行的输入**。
+  {
+    std::string gate_reason;
+    if (!backend_->CheckMaintenanceGate(&gate_reason)) {
+      const std::string reason = MaintenanceGateSkipMessage();
+      if (err)
+        *err = reason;
+      out->message = reason;
+      out->skipped = true;
+      return false;
+    }
+  }
+
   std::string ignored;
   LoadSidecar(&ignored);
 
   // 维护模式：锁住用户库（否则 leveldb LOCK 失败）。
   std::string begin_err;
   if (!backend_->BeginMaintenance(&begin_err)) {
+    // ADR 0062: 进入维护失败时再问一次闸门 —— 若失败是因为「此刻有活跃
+    // 输入会话」，本轮算**跳过**（不是失败）：不累计失败次数、不进退避。
+    std::string gate_reason;
+    if (!backend_->CheckMaintenanceGate(&gate_reason)) {
+      const std::string reason = MaintenanceGateSkipMessage();
+      if (err)
+        *err = reason;
+      out->message = reason;
+      out->skipped = true;
+      return false;
+    }
     const std::string reason =
         begin_err.empty() ? "无法进入用户词典维护模式。" : begin_err;
     if (err)

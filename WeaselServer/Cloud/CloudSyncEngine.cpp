@@ -253,6 +253,8 @@ class CloudSyncEngine::Impl {
     in.push_count_today = push_count_today_;
     in.pull_count_today = pull_count_today_;
     in.manual_requested = manual_requested_;
+    in.skip_pending = skip_pending_;
+    in.skip_retry_at_ms = skip_retry_at_ms_;
     return in;
   }
 
@@ -264,6 +266,8 @@ class CloudSyncEngine::Impl {
       return SyncTrigger::kRetry;
     if (in.startup_pending)
       return SyncTrigger::kStartup;
+    if (in.skip_pending)
+      return SyncTrigger::kSkippedRetry;
     int64_t deadline = 0;
     if (ComputePushDeadline(options_, in.dirty_since_ms, in.last_push_ms,
                             &deadline) &&
@@ -301,6 +305,9 @@ class CloudSyncEngine::Impl {
 
     if (backoff_step_ > 0)
       consider(backoff_until_ms_);
+    // ADR 0062: 闸门跳过的短间隔重试（比定时轮早得多 => 取最小值即命中）。
+    if (skip_pending_)
+      consider(skip_retry_at_ms_);
     if (startup_pending_)
       consider(startup_at_ms_);
     int64_t push_deadline = 0;
@@ -329,6 +336,34 @@ class CloudSyncEngine::Impl {
                              bool ok,
                              const CloudSyncRoundResult& result) {
     const int64_t now = SteadyNowMs();
+
+    // ADR 0062 决策 2: 「跳过」不是「失败」。
+    //
+    // 闸门关闭（有活跃输入会话）=> 本轮整轮跳过：不 finalize、不导出 / 回写、
+    // 不打断用户正在进行的输入。此时**不**累计失败次数、**不**进失败退避
+    // 阶梯（否则用户连续打一会儿字就能把同步彻底停摆），改为短间隔重试。
+    if (!ok && result.skipped) {
+      status_.last_outcome = SyncOutcome::kSkipped;
+      status_.last_message = result.message.empty()
+                                 ? "本轮已跳过，稍后会自动重试。"
+                                 : result.message;
+      status_.last_trigger = trigger;
+      status_.running = running_;
+      status_.enabled = enabled_;
+      status_.waiting_for_idle = true;
+      status_.next_attempt_ms = WallNowMs() + options_.skip_retry_interval_ms;
+      // 启动轮被跳过 => 恢复「待启动拉取」标记，否则启动拉取永远丢掉。
+      if (trigger == SyncTrigger::kStartup)
+        startup_pending_ = true;
+      skip_pending_ = true;
+      skip_retry_at_ms_ = now + options_.skip_retry_interval_ms;
+      // ★ 不动 ever_synced / last_sync_ms：这一轮并没有同步成功。
+      return;
+    }
+
+    status_.waiting_for_idle = false;
+    skip_pending_ = false;
+    skip_retry_at_ms_ = 0;
     status_.ever_synced = true;
     status_.last_sync_ms = WallNowMs();
     status_.last_trigger = trigger;
@@ -377,6 +412,9 @@ class CloudSyncEngine::Impl {
   bool running_ = false;
   bool enabled_ = false;
   bool wakeup_ = false;
+  // ADR 0062: 闸门跳过的短间隔重试窗口。
+  bool skip_pending_ = false;
+  int64_t skip_retry_at_ms_ = 0;
   bool manual_requested_ = false;
   bool startup_pending_ = false;
   bool push_quota_blocked_ = false;

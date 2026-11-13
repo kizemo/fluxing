@@ -84,7 +84,45 @@ class IUserDictBackend {
   virtual bool ImportUserDict(const std::string& text,
                               int* imported,
                               std::string* err) = 0;
+
+  // ADR 0062: 维护准入闸门。
+  //
+  // 语义：**没有活跃输入会话**时才允许进入维护态（finalize 会清空会话表
+  // => 客户端缓存的 ipc_id 变成孤儿 => 按键被吞）。
+  //
+  // 默认实现放行：单测用的假后端不必关心会话；生产实现
+  // （CloudRimeUserDictBackend）转问 RimeWithWeaselHandler::
+  // CanEnterMaintenance。
+  // 只读、无 I/O、不加锁（宪法 P2）=> 可从同步后台线程调用。
+  virtual bool CheckMaintenanceGate(std::string* reason) const {
+    if (reason != nullptr)
+      reason->clear();
+    return true;
+  }
 };
+
+// ---------------------------------------------------------------------------
+// ADR 0062 · 用户可见文案（简体中文）
+//
+// ★ 只放在本头的原因：RimeWithWeasel.vcxproj **没有** /utf-8，
+//   窄字符串里的中文在那个编译单元里会乱码；本头只被 WeaselServer 与
+//   TestFluxingCloud 编译（两者都有 /utf-8）。
+// ---------------------------------------------------------------------------
+
+// 闸门关闭时的用户可见提示（ADR 0062 决策 2）。
+inline const char* MaintenanceGateSkipMessage() {
+  return "你正在输入，本轮已跳过用户词典同步，稍后会自动重试。";
+}
+
+// 手动「立即同步」被闸门拦下时的指引（ADR 0062 决策 3）。
+inline const char* MaintenanceGateManualHint() {
+  return "请先切换到其他窗口，稍后会自动完成同步。";
+}
+
+// 「机会性同步」的用户可见口径（ADR 0062 决策 5）—— 账号页静态说明行。
+inline const char* MaintenanceGateOpportunisticStatement() {
+  return "你正在输入时同步会自动延后，停止输入后自动完成。";
+}
 
 // ---------------------------------------------------------------------------
 // 纯函数（不依赖引擎，可单测）

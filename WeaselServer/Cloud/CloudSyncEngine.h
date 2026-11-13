@@ -50,11 +50,12 @@ enum class SyncDirection {
 // 触发来源（状态展示 + 单测断言用）。
 enum class SyncTrigger {
   kNone = 0,
-  kStartup,      // 启动后拉一次
-  kLocalChange,  // 本地词典改动（防抖窗口后）
-  kPeriodic,     // 定时拉取
-  kManual,       // 用户点「立即同步」
-  kRetry,        // 失败后的退避重试
+  kStartup,       // 启动后拉一次
+  kLocalChange,   // 本地词典改动（防抖窗口后）
+  kPeriodic,      // 定时拉取
+  kManual,        // 用户点「立即同步」
+  kRetry,         // 失败后的退避重试
+  kSkippedRetry,  // ADR 0062: 闸门关闭被跳过后，短间隔重试
 };
 
 // 一轮同步的结果。
@@ -74,6 +75,8 @@ struct CloudSyncRoundResult {
   // 被服务端跳过的条目数（云端已有更新版本）—— 不是失败，也不是推送成功。
   int items_skipped = 0;
   bool has_more = false;  // 服务端还有更多条目（分批未取完）
+  // ADR 0062: 本轮被「维护准入闸门」跳过（**不是失败**）。
+  bool skipped = false;
   std::string message;    // 中文说明
 };
 
@@ -90,6 +93,8 @@ struct CloudSyncStatus {
   int64_t next_attempt_ms = 0;  // 下次尝试的 Unix 毫秒（估计）
   bool running = false;
   bool enabled = false;
+  // ADR 0062: 正处于「等待用户停止输入」状态（闸门关闭，等短间隔重试）。
+  bool waiting_for_idle = false;
 };
 
 // 调度参数。默认值 = plan.md §7 的触发矩阵。
@@ -101,6 +106,8 @@ struct CloudSyncEngineOptions {
   std::vector<int64_t> backoff_ladder_ms = {           // 退避阶梯
       60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000};
   int max_backoff_attempts = 4;  // 最多退避重试 4 次
+  // ADR 0062: 闸门关闭被跳过后的短间隔重试（不是失败退避）。
+  int64_t skip_retry_interval_ms = 5 * 60 * 1000;
   int daily_push_limit = 100;
   int daily_pull_limit = 50;
 };
@@ -188,6 +195,9 @@ struct SyncScheduleInput {
   int push_count_today = 0;
   int pull_count_today = 0;
   bool manual_requested = false;
+  // ADR 0062: 闸门跳过后的短间隔重试窗口。
+  bool skip_pending = false;
+  int64_t skip_retry_at_ms = 0;
 };
 
 // 触发优先级：手动 > 退避重试 > 启动 > 本地改动推送 > 定时拉取。
@@ -203,6 +213,17 @@ inline SyncAction DecideNextAction(const CloudSyncEngineOptions& options,
     if (in.backoff_step >= options.max_backoff_attempts)
       return SyncAction::kBackoffExhausted;
     return SyncAction::kRunBoth;  // 退避到期 ⇒ 重试
+  }
+
+  // ADR 0062: 闸门跳过窗口。
+  //   · 手动同步**不绕过**闸门（决策 3）：手动仍然发起一轮，由闸门去挡，
+  //     这样用户能立刻看到「本轮被跳过」的提示，而不是按钮点了没反应。
+  //   · 跳过后按**短间隔**（默认 5 分钟）重试，而不是失败退避的 60 分钟
+  //     （决策 2）—— 否则用户连续打一会儿字就能把同步彻底停摆。
+  if (in.skip_pending) {
+    if (in.now_ms < in.skip_retry_at_ms)
+      return SyncAction::kWait;   // 还在短间隔窗口里
+    return SyncAction::kRunBoth;  // 短间隔到期 ⇒ 再判一次闸门
   }
 
   bool want_push = false;
