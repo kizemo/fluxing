@@ -501,8 +501,14 @@
 
 ### AS-2 · 本批未闭环
 - ① **用户可见口径待用户确认**（问卷发出后未答复）⇒ ADR 0062 仍为 **Proposed**；当前**按推荐项实现**（跳过提示 / 手动指引 / 账号页「机会性同步」说明行三处文案见 ADR 0062）。
-- ② **未装机**：本批**未出包**（1.3.1 产物**不含**本批代码）⇒ 需 1.3.2 或更高；`WeaselServer.exe` 是 **PPL** ⇒ 装机前必须注销 / 重启。
+- ② **已出包 1.3.2、未装机**：产物 `output/archives/fluxing-1.3.2-installer.exe`（**42 952 698 B · sha16 `B96F2534636C7296`**，内嵌 `WeaselServer.exe` 2 704 384 B / filever `1.3.2.0`，含 ADR 0062 独有令牌 `live_input_session`；1.3.1 同场对照不含）；当前装机版仍是 **1.2.1.0**；`WeaselServer.exe` 是 **PPL** ⇒ 装机前必须注销 / 重启。
 - ③ 用户在场 AC 4 条（AC-01/02/06/10）+ 输入延迟两组对照；双机 AC 7 条（AC-03/04/05/08/09/13/14）+ restore 端到端；**闸门通过率**未知；客户端**孤儿 `ipc_id`** 的真机表现未验。
 
 ### AS-3 · 交接文档
 - `docs/archive/handoffs/handoff-2026-11-14-batch-as-adr0062-maintenance-gate.md`（含落码表 / 证据路径 / 已验证·推断·未验证 / 工具坑 8 条 / 下一批建议顺序）。
+
+### AS-4 · 出包 1.3.2（含本批 ADR 0062 代码）
+- **版本真相源**：`version.txt` / `env.bat` / `weasel.props` 四处同步 1.3.1 → 1.3.2（`WEASEL_BUILD` 保持 0 ⇒ `weaselx64.1.3.2.0.dll` 从未存在 ⇒ 无 L107 风险；`env.bat` / `weasel.props` 被 gitignore ⇒ 不入提交）。
+- **构建**：`build.bat weasel installer` ⇒ BUILD_EXIT=0；makensis 8 条 `warning 7010`（既有可选产物告警）。
+- **产物**：`output/archives/fluxing-1.3.2-installer.exe` —— **42 952 698 B** · sha16 `B96F2534636C7296`；内嵌 `WeaselServer.exe` 2 704 384 B / filever `1.3.2.0`；内含 ADR 0062 独有令牌 `live_input_session`（1.3.1 同场对照不含 ⇒ 判别通过）。
+- **未闭环**：装机（须注销 / 重启，PPL）+ 用户在场 AC 4 条 + 输入延迟两组对照 + 双机 AC 7 条 + restore 端到端。

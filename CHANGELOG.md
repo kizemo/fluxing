@@ -1,11 +1,13 @@
 ## [Unreleased]
+
+## [1.3.2]
 ### fix(fluxing): 云同步不再打断用户输入 —— ADR 0062「维护准入闸门」实现落地（批次 AS）
 
 - **缺陷（源码级取证 · 已闭环）**：每轮云同步都会 `finalize` + `Initialize` rime ⇒ `RimeWithWeaselHandler::Finalize()` 清空会话表 ⇒ 客户端缓存的 `ipc_id` 变孤儿 ⇒ `to_session_id()`（用 `operator[]`）返回 **0** ⇒ `ProcessKeyEvent()` 把 0 交给 `process_key` ⇒ **按键被吞**，该输入窗口哑到重新聚焦为止。根因 = librime 的用户库是**独占 leveldb**（`OpenReadOnly()` 不是真只读、仍吃 LOCK）⇒ 「备份成功」与「会话存活」在当前设计下**互斥** ⇒ 只能靠「准入」而非「安排顺序」。
 - **修法（[ADR 0062](docs/adr/0062-cloud-sync-maintenance-gate-and-session-preservation.md) · Proposed · 口径待用户确认）**：① **维护准入闸门** —— 新增 `RimeWithWeaselHandler::CanEnterMaintenance()`：**没有活跃输入会话**（会话表中 `session_id != 0` 的条目数为 0）才允许进入维护态；② 闸门检查放在协调器 `SyncOnce` 的 **`LoadSidecar` 之前** ⇒ 闸门关闭时**整轮跳过**：零 I/O、零配额、不 finalize、不导出 / 备份 / 回写、**不打断任何输入**；③ **「跳过」不是「失败」** —— 用已有的 `SyncOutcome::kSkipped` 表达，**不**递增 `consecutive_failures_`、**不**进 60 min 失败退避阶梯，改 **5 min 短间隔重试**（否则用户连续打一会儿字就能把同步彻底停摆）；④ 手动「立即同步」**不绕过**闸门，但给明确中文提示与指引；⑤ 判据用「`std::atomic<int>` 计数 + 会话生命周期事件上由拥有者线程重算」，读者只 `load()` ⇒ **只读、无 I/O、不加锁**（constitution P2），且**显式排除 `session_id == 0`** 的假条目。
 - **用户可见口径变更（重要）**：云端同步从「固定间隔内必然完成」变为「**机会性**」—— 用户正在输入时同步自动延后，停止输入后自动完成。账号页已加说明行「你正在输入时同步会自动延后，停止输入后自动完成。」；跳过提示「你正在输入，本轮已跳过用户词典同步，稍后会自动重试。」；手动指引「请先切换到其他窗口，稍后会自动完成同步。」。**该口径尚待用户确认** ⇒ ADR 0062 仍为 Proposed。
 - **门禁**：云单测 **`PASS=473 FAIL=0`**（基线 453 ⇒ **+20**）；**有牙验证 `TEETH_VERDICT=PASS`**（注入「协调器闸门失效」⇒ FAIL=2、注入「跳过被记成失败」⇒ FAIL=2、还原 ⇒ 473-0）；`build.bat weasel` **0 警告 0 错误**（格式化前后各一次）；clang-format 只格式化本次新增行范围。
-- **⚠️ 未装机**：当前装机版仍是 **1.2.1.0**，本批代码**从未在真机跑过** ⇒ 需用户注销 / 重启后安装新包（`WeaselServer.exe` 是 **PPL** 签名进程 ⇒ 必须注销 / 重启，否则仍跑旧映像；**1.3.1 产物不含本批代码**）后再跑用户在场 AC 4 条与输入延迟两组对照。
+- **⚠️ 未装机**：当前装机版仍是 **1.2.1.0**，本批代码**从未在真机跑过** ⇒ 需用户注销 / 重启后安装 **1.3.2**（`WeaselServer.exe` 是 **PPL** 签名进程 ⇒ 必须注销 / 重启，否则仍跑旧映像；**1.3.0 / 1.3.1 产物均不含本批代码**）后再跑用户在场 AC 4 条与输入延迟两组对照。**本批产物**：`output/archives/fluxing-1.3.2-installer.exe`（**42 952 698 B · sha256 `B96F2534636C72962F86FEE31B707E151F61D5A541B2A2551CF4C31231588563` · sha16 `B96F2534636C7296`**，内嵌 `WeaselServer.exe` **2 704 384 B** / filever `1.3.2.0`；**判别性证据**：内嵌二进制含 ADR 0062 独有 ASCII 令牌 `live_input_session` = True，同场 1.3.1 包 = False ⇒ 本批代码确在包内）；makensis 8 条 `warning 7010`（既有可选产物告警）。
 - **⚠️ 未闭环**：双机 AC 7 条 + restore 端到端（需第二台设备或第二个 Windows 账户）；**闸门在真实宿主上的通过率未知**；客户端**孤儿 `ipc_id`** 的真机表现未验。
 ## [1.3.1]
 ### fix(WeaselServer): 云同步用户词典备份在 rime finalize 之后再调 levers ⇒ 空指针解引用、进程崩溃（批次 AQ）

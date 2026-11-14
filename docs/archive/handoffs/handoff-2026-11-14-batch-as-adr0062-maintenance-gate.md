@@ -128,6 +128,14 @@ ADR 写的是「只读扫描 `m_session_status_map`」。**实现没这么做**�
 ## 7. 下一批建议顺序
 
 1. **用户先拍板「机会性同步」口径** ⇒ ADR 0062 转 Accepted（或按新口径改文案）。
-2. **用户注销 / 重启 → 装 1.3.2（本批代码）** → 跑用户在场 AC 4 条（AC-01/02/06/10）+ 输入延迟两组对照。
+2. **用户注销 / 重启 → 装 1.3.2（已出包，含本批代码）** → 跑用户在场 AC 4 条（AC-01/02/06/10）+ 输入延迟两组对照。
 3. **提供第二台设备或第二个 Windows 账户** → 双机 AC 7 条（AC-03/04/05/08/09/13/14）+ restore 端到端。
 4. 依据 2/3 的真机结果回写 ADR 0062 的「未闭环」段与 CHANGELOG。
+
+### AS-4 · 出包 1.3.2（含本批 ADR 0062 代码）
+
+- **版本真相源（四处同步，1.3.1 → 1.3.2）**：`version.txt`（5 字节无尾换行 ⇒ **等长字节替换**，`1.3.1` → `1.3.2`）；`env.bat`（`FLUXING_VERSION` / `PRODUCT_VERSION` / `FILE_VERSION` / `VERSION_PATCH`）；`weasel.props`（`VERSION_PATCH` / `PRODUCT_VERSION` / `FILE_VERSION`）。`WEASEL_BUILD` 保持 **0** ⇒ shim 名 `weaselx64.1.3.2.0.dll` 从未存在 ⇒ 无 L107 风险。`env.bat` / `weasel.props` 被 `.gitignore` ⇒ **不入提交**；只有 `version.txt` 受版本控制。
+- **构建**：`build.bat weasel installer` ⇒ **BUILD_EXIT=0**；makensis **8 条 `warning 7010`**（ARM/ARM64/ARM64X dll ×6 + `data\*.gram` + `data\lua\*.txt`，既有可选产物告警，与 AQ 批逐条一致）。
+- **产物**：`output/archives/fluxing-1.3.2-installer.exe` —— **42 952 698 B** · sha256 `B96F2534636C72962F86FEE31B707E151F61D5A541B2A2551CF4C31231588563` · **sha16 `B96F2534636C7296`**；内嵌 `WeaselServer.exe` **2 704 384 B** / filever `1.3.2.0` / prodver `1.3.2.0`。
+- **判别性证据（双向）**：内嵌 `WeaselServer.exe` 含 ADR 0062 独有 ASCII 令牌 **`live_input_session` = True**；同场对照 1.3.1 包（内嵌 **2 700 800 B** / filever `1.3.1.0`）= **False** ⇒ 本批代码**确在 1.3.2 包内**，1.3.1 不含。
+- **装机前置（不变）**：`WeaselServer.exe` 是 **PPL** 签名进程 ⇒ **必须注销 / 重启系统**再装，否则仍跑旧映像（磁盘哈希不能证明在跑的是新码）。当前装机版仍是 **1.2.1.0**（含云 ⇒ 每启动约 30 s 崩一次；AQ 批已修但未装）。
