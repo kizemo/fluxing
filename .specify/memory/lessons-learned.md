@@ -14896,3 +14896,33 @@ handoff-2026-11-07-import-cancel-bug-ime-switch-window-quickpanel-v5 §三/§四
 - `.rc` / `.vcxproj` / 其它 BOM+CRLF 文件**一律脚本改写**，改完立刻做字节健康校验：BOM 存在、CRLF 计数、`BARE_LF == 0`、并与 HEAD 版本对比。
 - 统计 `.rc` 的裸 LF **不能直接扫字节 `0x0A`** —— UTF-16LE 的换行落盘是字节 `0x0A 0x00`，必须**先解码再统计**。
 - 追加到既有文件时要**区别处理编码**：`lessons-learned.md` 是 UTF-8+BOM+CRLF（追加用 `AppendAllText` + `UTF8Encoding($false)`，行尾显式 CRLF），`docs/**` 与 `tasks.md` 是 UTF-8 无 BOM + LF。
+
+## L226 — 改 `.props` 的版本宏**不触发** MSBuild 重编译 ⇒ `.rc` 版本资源停在旧版本号（2026-11-19）
+
+**症状**：出包 1.3.3 时，`version.txt` / `env.bat` / `weasel.props` 全改成 1.3.3，构建 EXIT=0、包也生成了，但 **7z 解出包内 `WeaselServer.exe` 的 filever 仍是 `1.3.2.0`** —— 版本闸门 `Test-VersionConsistency` 只比文本（绿），**测不出二进制里的版本号**。
+
+**规则**：
+
+- 改版本宏后**必须 touch 全部含版本宏的 `.rc`**（本项目 4 个：`WeaselServer` / `WeaselDeployer` / `WeaselSetup` / `WeaselTSF`）**再重建**；只改 mtime、不改内容（`.rc` 是 UTF-16LE+BOM+CRLF，重写会毁文件）。
+- 版本闸门绿**不等于**产物版本对 ⇒ 交付前必须用 **7z 解包**看内嵌 exe 的 `VersionInfo.FileVersion`（本轮做法：`7z e <pkg> -o<dir> WeaselServer.exe`）。
+- 判别性对照：同法解 **上一个版本**的包（1.3.2 ⇒ `1.3.2.0`），两者不同才算版本资源真重编。
+
+## L227 — 版本真相源是**四个键位**，不是三个（本轮真漏过）（2026-11-19）
+
+**症状**：只改了 `env.bat` 的 `FLUXING_VERSION` 与 `version.txt`，忘了 `PRODUCT_VERSION` / `FILE_VERSION` / `VERSION_PATCH` ⇒ 版本闸门 `Get-VersionFacts` 直接报不一致（幸而闸门存在）。
+
+**规则**：
+
+- 改版本时把四处真相源一次列全：`version.txt`（3 段）/ `env.bat`（`FLUXING_VERSION` + `PRODUCT_VERSION` + `FILE_VERSION` + `VERSION_PATCH`）/ `weasel.props`（`VERSION_MAJOR|MINOR|PATCH` + `PRODUCT_VERSION` + `FILE_VERSION`）/ `CHANGELOG.md` 顶部。
+- `env.bat` / `weasel.props` 被 gitignore ⇒ 不入提交，**但必须改**（闸门与构建都读它）。
+- **Latin1(28591) 字节往返**做替换最安全：`[System.Text.Encoding]::GetEncoding(28591)` 解码 → `.Replace()` → 同编码回写 ⇒ 除替换外**字节逐字不变**（BOM / 行尾 / 中文注释全保住）。
+
+## L228 — 二进制判别令牌：中文窄字符串是 **UTF-8** 字节、宽字符串是 **UTF-16LE**（2026-11-19）
+
+**症状**：要在产物里证明「本批代码确实在包里」，但按 ASCII 搜中文串一律 0 命中。
+
+**规则**：
+
+- 产物里的中文：**窄字符串**（`L"…"` 的 C++ 窄串 + `/utf-8`）落盘为 **UTF-8 字节**；**宽字符串**落盘为 **UTF-16LE** ⇒ 两种编码都要试。
+- 最省事的判别法 = **差集法**：把源码里所有含 CJK 的字符串字面量逐个在「新版二进制」与「旧版二进制」里查，**新版有、旧版无**的那些就是本批的判别性令牌（本轮据此坐实 AU 代码确在 1.3.3 包内）。
+- 反例（本轮真踩）：拿**格式化后的旧包**做对照 → 新旧都含 ⇒ 假红；对照包必须是**上一版本的真实产物**。
