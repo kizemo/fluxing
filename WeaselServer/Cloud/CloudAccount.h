@@ -91,9 +91,16 @@ class CloudAccountService {
   // 登录：派生密钥 → POST /v1/auth/login → 落盘凭据。成功后 state = kLoggedIn。
   // email_verified 为 false 时也会登录成功，但 info().email_verified 会是 false
   // （账号页据此提示「请先完成邮箱验证」）。
+  //
+  // persist（批次 AT-1 新增，默认 true = 旧行为）：
+  //   true  —— 登录成功后写凭据存储（Windows 凭据库），下次启动自动恢复。
+  //   false —— **不写**凭据存储：登录仍然成功，但本次登录只在**内存会话**
+  //            生效；已有的凭据记录**原样保留**（不覆盖、也不删除）。
+  //            账号页的「保存账号」复选框未勾选时走这条路径。
   bool Login(const std::string& email,
              const std::string& password,
-             std::string* err);
+             std::string* err,
+             bool persist = true);
 
   // 注册：派生密钥 → POST /v1/auth/register
   //   { email, auth_key, device:{id,name} }
@@ -119,6 +126,16 @@ class CloudAccountService {
   //   429 verify_too_frequent  —— 60 秒内重复发送
   // 本方法不改状态机（重发不落凭据、不改登录态）；失败原因写进 err（中文）。
   bool ResendVerification(const std::string& email, std::string* err);
+
+  // 重置口令（批次 AT-1）：POST /v1/auth/password-reset
+  //   { email, code, auth_key } → { ok: true }
+  // ⚠️ **服务端端点尚不存在**（批次 AT-2 实现）⇒ 当前必然 404，
+  //    失败原因写进 err（中文），由调用方转成状态行。
+  // 本方法不改状态机（不落凭据、不改登录态）。
+  bool ResetPassword(const std::string& email,
+                     const std::string& code,
+                     const std::string& new_password,
+                     std::string* err);
 
   // 退出登录：清掉本机凭据，state = kLoggedOut。
   bool Logout(std::string* err);
@@ -166,6 +183,12 @@ class CloudAccountService {
   CloudAccountInfo info_;
   CloudCredentials creds_;
   bool has_creds_ = false;
+  // 当前会话的凭据**是否落过盘**（批次 AT-1）。
+  //   · Login(persist=true) / RestoreFromStore / Refresh ⇒ true
+  //   · Login(persist=false)（账号页「保存账号」未勾选）⇒ false
+  // Logout 只在 true 时才删凭据存储记录 ⇒ 一次「不保存」的登录**不会**
+  // 把别人（或另一个账号）留在凭据库里的记录一起清掉。
+  bool creds_persisted_ = false;
 };
 
 }  // namespace cloud

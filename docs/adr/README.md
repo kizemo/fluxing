@@ -71,6 +71,7 @@ Do not dump all ADRs into every prompt.
 | 0060 | 0060. 空闲 CPU 判据口径统一为「占单核」；单核口径的测量窗口下限 16 s；性能归因必须以 A/B 对照为前提 | `docs/adr/0060-idle-cpu-single-core-window-and-attribution-method.md` | Accepted |
 | 0061 | 0061. 用户词典同步的 rime 生命周期口径：Start/End 必须配对，levers 调用一律加 SEH 护栏，生命周期操作必须互斥 | `docs/adr/0061-rime-lifecycle-paired-maintenance-and-seh-guards.md` | Accepted |
 | 0062 | 0062. 云同步的维护准入闸门：无活跃输入会话才允许 finalize，用户会话不得被同步打断 | `docs/adr/0062-cloud-sync-maintenance-gate-and-session-preservation.md` | Accepted |
+| 0063 | 0063. 账号页信息架构：按登录态互斥的两套视图 + 四个独立子窗口（验证码 / 注册 / 找回口令 / 设备与云数据） | `docs/adr/0063-account-page-information-architecture-and-state-views.md` | Proposed |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

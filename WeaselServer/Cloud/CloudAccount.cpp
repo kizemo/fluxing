@@ -164,7 +164,8 @@ bool CloudAccountService::SendJson(const std::string& method,
 
 bool CloudAccountService::Login(const std::string& email,
                                 const std::string& password,
-                                std::string* err) {
+                                std::string* err,
+                                bool persist) {
   if (transport_ == nullptr || store_ == nullptr) {
     if (err)
       *err = "云端服务尚未初始化。";
@@ -279,19 +280,24 @@ bool CloudAccountService::Login(const std::string& email,
   json::MemberBool(doc, doc.root, "email_verified", &creds.email_verified);
   SecureZeroBytes(&keys.enc_key);
 
-  std::string save_err;
-  if (!store_->Save(creds, &save_err)) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    state_ = CloudAccountState::kLoggedOut;
-    if (err)
-      *err = save_err.empty() ? "保存云端凭据失败。" : save_err;
-    return false;
+  // 落盘（批次 AT-1）：persist=false 时**不写**凭据存储 —— 登录照样成功，
+  // 但本次登录只在内存会话生效；已有的凭据记录原样保留（不覆盖、不删除）。
+  if (persist) {
+    std::string save_err;
+    if (!store_->Save(creds, &save_err)) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      state_ = CloudAccountState::kLoggedOut;
+      if (err)
+        *err = save_err.empty() ? "保存云端凭据失败。" : save_err;
+      return false;
+    }
   }
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
     creds_ = creds;
     has_creds_ = true;
+    creds_persisted_ = persist;
     state_ = CloudAccountState::kLoggedIn;
     info_.email = creds.email;
     info_.account_id = creds.account_id;
@@ -464,13 +470,103 @@ bool CloudAccountService::ResendVerification(const std::string& email,
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// 重置口令（批次 AT-1 · 占位实现）
+// ---------------------------------------------------------------------------
+//
+// ⚠️ **服务端端点尚不存在**（批次 AT-2 实现）⇒ 当前必然 404。
+//    本方法只负责把请求按约定发出去，并把服务端的失败原样转成中文。
+//
+// 约定（AT-2 需要照此实现服务端）：
+//   POST /v1/auth/password-reset  { email, code, auth_key } → { ok: true }
+//   · code  ：6 位数字邮箱验证码（与 /v1/auth/verify 同一套码）
+//   · auth_key：用**新口令**按 ADR 0054 派生的 auth_key（服务端只收派生值，
+//              永不见明文口令；落库口径与登录一致：
+//              verifier = HMAC-SHA256(AUTH_PEPPER, auth_key)）。
+bool CloudAccountService::ResetPassword(const std::string& email,
+                                        const std::string& code,
+                                        const std::string& new_password,
+                                        std::string* err) {
+  if (transport_ == nullptr) {
+    if (err)
+      *err = "云端服务尚未初始化。";
+    return false;
+  }
+
+  const std::string norm = NormalizeEmail(email);
+  if (norm.empty()) {
+    if (err)
+      *err = "请输入邮箱地址。";
+    return false;
+  }
+  if (code.size() != 6 ||
+      code.find_first_not_of("0123456789") != std::string::npos) {
+    if (err)
+      *err = "验证码格式不正确（应为 6 位数字）。";
+    return false;
+  }
+  if (new_password.empty()) {
+    if (err)
+      *err = "请输入新密码。";
+    return false;
+  }
+
+  // 与登录同一套派生参数（ADR 0054：PBKDF2-HMAC-SHA256，盐按邮箱确定性派生）。
+  std::string password_copy = new_password;
+  DerivedKeys keys;
+  std::string derive_err;
+  const bool derived = DeriveKeys(norm, password_copy, 0, &keys, &derive_err);
+  SecureZeroString(&password_copy);
+  if (!derived) {
+    if (err)
+      *err = derive_err.empty() ? "密钥派生失败。" : derive_err;
+    return false;
+  }
+
+  const std::string body = "{\"email\":" + json::Quote(norm) +
+                           ",\"code\":" + json::Quote(code) +
+                           ",\"auth_key\":" +
+                           json::Quote(EncodeAuthKey(keys.auth_key)) + "}";
+
+  int status = 0;
+  std::string response_body;
+  std::string send_err;
+  const bool ok = SendJson("POST", "/v1/auth/password-reset", body, false,
+                            &status, &response_body, &send_err);
+  SecureZeroBytes(&keys.auth_key);
+  SecureZeroBytes(&keys.enc_key);
+  if (!ok) {
+    if (err) {
+      std::string reason = send_err;
+      // 服务端尚未实现该端点 ⇒ 404 且没有 JSON 错误体 ⇒ 把兜底文案换成
+      // 更准确的中文（「原样转成中文状态行」：服务端真给了消息就原样透传）。
+      if (status == 404 &&
+          (reason.empty() || reason == "服务器返回错误（HTTP 404）。"))
+        reason = "服务端未支持该功能（404）。";
+      *err = reason.empty() ? "重置口令失败。" : reason;
+    }
+    return false;
+  }
+  return true;
+}
+
 bool CloudAccountService::Logout(std::string* err) {
+  // 批次 AT-1：只在**本次会话的凭据确实落过盘**时才删凭据库记录。
+  //   「保存账号」未勾选的登录（persist=false）不落盘 ⇒ 退出登录**不能**
+  //   把凭据库里原有的那条记录一起删掉（那可能是另一个账号）。
+  bool persisted = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    persisted = creds_persisted_;
+  }
   std::string delete_err;
-  const bool ok = store_ == nullptr ? true : store_->Delete(&delete_err);
+  const bool ok =
+      (store_ == nullptr || !persisted) ? true : store_->Delete(&delete_err);
   {
     std::lock_guard<std::mutex> lock(mutex_);
     creds_ = CloudCredentials();
     has_creds_ = false;
+    creds_persisted_ = false;
     state_ = CloudAccountState::kLoggedOut;
     info_ = CloudAccountInfo();
   }
@@ -519,9 +615,11 @@ bool CloudAccountService::Refresh(std::string* err) {
   }
 
   CloudCredentials updated;
+  bool persisted = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     updated = creds_;
+    persisted = creds_persisted_;
   }
   if (!json::MemberString(doc, doc.root, "access_token", &updated.access_token))
     updated.access_token.clear();
@@ -537,8 +635,10 @@ bool CloudAccountService::Refresh(std::string* err) {
     return false;
   }
 
+  // 批次 AT-1：「保存账号」未勾选的会话（persisted=false）**不写**凭据存储 ——
+  // 否则一次后台的令牌刷新就把用户明确不想保存的凭据落盘了。
   std::string save_err;
-  if (store_ != nullptr && !store_->Save(updated, &save_err)) {
+  if (persisted && store_ != nullptr && !store_->Save(updated, &save_err)) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_ = CloudAccountState::kNeedsRelogin;
     if (err)
@@ -577,6 +677,8 @@ bool CloudAccountService::RestoreFromStore(std::string* err) {
     std::lock_guard<std::mutex> lock(mutex_);
     creds_ = creds;
     has_creds_ = true;
+    // 从凭据库恢复 ⇒ 这条记录确实在盘上。
+    creds_persisted_ = true;
     state_ = CloudAccountState::kLoggedIn;
     info_.email = creds.email;
     info_.account_id = creds.account_id;

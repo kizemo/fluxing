@@ -209,6 +209,7 @@
     <ClCompile Include="..\..\WeaselServer\Cloud\CloudTransport.cpp" />
     <ClCompile Include="..\..\WeaselServer\Cloud\CloudCredentialStore.cpp" />
     <ClCompile Include="..\..\WeaselServer\Cloud\CloudAccount.cpp" />
+    <ClCompile Include="..\..\WeaselServer\Cloud\CloudAccountHistory.cpp" />
     <ClCompile Include="..\..\WeaselServer\Cloud\CloudSyncService.cpp" />
     <!-- spec 100 阶段 F（T501/T504）：同步引擎（调度 + 退避 + 配额）。
          同样直接编译生产实现，测试与生产同源（宪法 R7）。 -->
@@ -224,6 +225,8 @@
     <ClInclude Include="..\..\include\FluxingLocalChangeHook.h" />
     <ClInclude Include="..\..\WeaselServer\Cloud\CloudSyncEngine.h" />
     <ClInclude Include="..\..\WeaselServer\Cloud\CloudSyncNotifier.h" />
+    <ClInclude Include="..\..\WeaselServer\Cloud\CloudAccountHistory.h" />
+    <ClInclude Include="..\..\WeaselServer\Cloud\CloudAccountUi.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

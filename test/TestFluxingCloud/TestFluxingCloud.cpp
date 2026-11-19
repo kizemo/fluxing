@@ -67,6 +67,12 @@
 #include "../../include/FluxingLocalChangeHook.h"
 #include "../../WeaselServer/Cloud/CloudSyncNotifier.h"
 
+// 批次 AT-1（ADR 0063）生产头：账号页布局真相源 + 历史邮箱存储。同样走
+// 相对路径 ⇒ 生产与单测同源（constitution R7）：本文件不复制第二份
+// 「可见性 / 几何」实现，只调用 WeaselServer/Cloud/ 下的那一份。
+#include "../../WeaselServer/Cloud/CloudAccountUi.h"
+#include "../../WeaselServer/Cloud/CloudAccountHistory.h"
+
 // 批次 AK：真实 WinHTTP 传输层的回环回归用例（单独文件，见其头注释）。
 int RunFluxingCloudNetTests(int* out_pass);
 
@@ -2602,6 +2608,235 @@ struct SkippingSyncRunner {
   }
 };
 
+// ---------------------------------------------------------------------------
+// 批次 AT-1 · ADR 0063：账号页信息架构
+// ---------------------------------------------------------------------------
+//
+// 账号页的 UI 本体跨进程抓不到，但「哪个登录态下哪些控件可见」「控件摆在哪」
+// 这两条规则可以（且必须）被断言 —— 判据全部来自生产头 CloudAccountUi.h。
+
+bool AtUiHasId(const std::vector<int>& ids, int id) {
+  return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+void TestAccountPageUi() {
+  const std::vector<int> logged_out = fc::AccountVisibleControlIds(false);
+  const std::vector<int> logged_in = fc::AccountVisibleControlIds(true);
+
+  // 1) 未登录态：用户点名的六项齐全。
+  Check(AtUiHasId(logged_out, fc::kIdEmail) &&
+            AtUiHasId(logged_out, fc::kIdPassword) &&
+            AtUiHasId(logged_out, fc::kIdLogin) &&
+            AtUiHasId(logged_out, fc::kIdRegister) &&
+            AtUiHasId(logged_out, fc::kIdForgotPassword) &&
+            AtUiHasId(logged_out, fc::kIdClose),
+        "AT-1 未登录态：邮箱 / 密码 / 登录 / 注册 / 忘记密码 / 关闭 全部可见");
+
+  // 2) 未登录态：不得出现已登录态的控件。
+  Check(!AtUiHasId(logged_out, fc::kIdLogout) &&
+            !AtUiHasId(logged_out, fc::kIdSyncNow) &&
+            !AtUiHasId(logged_out, fc::kIdAccountLabel),
+        "AT-1 未登录态：退出登录 / 立即同步 / 当前账号 不可见");
+
+  // 3) 已登录态：用户点名的四项齐全。
+  Check(AtUiHasId(logged_in, fc::kIdAccountLabel) &&
+            AtUiHasId(logged_in, fc::kIdLogout) &&
+            AtUiHasId(logged_in, fc::kIdSyncNow) &&
+            AtUiHasId(logged_in, fc::kIdClose),
+        "AT-1 已登录态：当前账号 / 退出登录 / 立即同步 / 关闭 全部可见");
+
+  // 4) 已登录态：不得出现登录表单的控件（两态互斥）。
+  Check(!AtUiHasId(logged_in, fc::kIdEmail) &&
+            !AtUiHasId(logged_in, fc::kIdPassword) &&
+            !AtUiHasId(logged_in, fc::kIdLogin) &&
+            !AtUiHasId(logged_in, fc::kIdRegister) &&
+            !AtUiHasId(logged_in, fc::kIdForgotPassword) &&
+            !AtUiHasId(logged_in, fc::kIdHistoryCombo) &&
+            !AtUiHasId(logged_in, fc::kIdSaveAccount),
+        "AT-1 已登录态：邮箱 / 密码 / 登录 / 注册 / 忘记密码 / 历史 / 保存账号 不可见");
+
+  // 5) 两态交集只允许状态行与关闭按钮。
+  {
+    std::vector<int> both;
+    for (size_t i = 0; i < logged_out.size(); ++i) {
+      if (AtUiHasId(logged_in, logged_out[i]))
+        both.push_back(logged_out[i]);
+    }
+    Check(both.size() == 2 && AtUiHasId(both, fc::kIdStatus) &&
+              AtUiHasId(both, fc::kIdClose),
+          "AT-1 两态交集只有状态行与关闭按钮");
+  }
+
+  // 6) 历史邮箱下拉 + 保存账号只在未登录态。
+  Check(AtUiHasId(logged_out, fc::kIdHistoryCombo) &&
+            AtUiHasId(logged_out, fc::kIdSaveAccount),
+        "AT-1 未登录态：历史邮箱下拉与「保存账号」可见");
+
+  // 7) 四个子窗口各自只承载自己的控件。
+  Check(AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kVerify, true),
+                  fc::kIdVerifyCode) &&
+            !AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kVerify, true),
+                       fc::kIdLogin) &&
+            AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kRegister, true),
+                      fc::kIdRegister) &&
+            // 验证码输入框只住在「验证码窗」里（用户要求：不再内嵌主窗口）。
+            !AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kRegister, true),
+                       fc::kIdVerifyCode) &&
+            AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kForgot, true),
+                      fc::kIdResetPassword) &&
+            AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kDevice, true),
+                      fc::kIdDevices),
+        "AT-1 四个子窗口各自只承载自己的控件");
+
+  // 8) 控件类别映射（口令框必须是口令框、验证码框限数字）。
+  Check(fc::AccountWidgetClassOf(fc::kIdEmail) ==
+            fc::AccountWidgetClass::kEdit &&
+            fc::AccountWidgetClassOf(fc::kIdPassword) ==
+                fc::AccountWidgetClass::kPasswordEdit &&
+            fc::AccountWidgetClassOf(fc::kIdNewPassword) ==
+                fc::AccountWidgetClass::kPasswordEdit &&
+            fc::AccountWidgetClassOf(fc::kIdVerifyCode) ==
+                fc::AccountWidgetClass::kNumberEdit &&
+            fc::AccountWidgetClassOf(fc::kIdSaveAccount) ==
+                fc::AccountWidgetClass::kCheckbox &&
+            fc::AccountWidgetClassOf(fc::kIdHistoryCombo) ==
+                fc::AccountWidgetClass::kCombo &&
+            fc::AccountWidgetClassOf(fc::kIdDevices) ==
+                fc::AccountWidgetClass::kListBox,
+        "AT-1 控件类别映射正确");
+
+  // 9) 几何不越界：任何可见控件都不得被客户区裁掉。
+  {
+    bool all_fit = true;
+    int checked = 0;
+    for (int r = 0; r < static_cast<int>(fc::AccountWindowRole::kCount); ++r) {
+      const fc::AccountWindowRole role = static_cast<fc::AccountWindowRole>(r);
+      int w = 0;
+      int h = 0;
+      fc::AccountClientSize(role, &w, &h);
+      for (int st = 0; st < 2; ++st) {
+        const std::vector<fc::AccountLayoutEntry> layout =
+            fc::AccountVisibleLayout(role, st == 1);
+        for (size_t i = 0; i < layout.size(); ++i) {
+          ++checked;
+          if (layout[i].x < 0 || layout[i].y < 0 || layout[i].w <= 0 ||
+              layout[i].h <= 0 || layout[i].x + layout[i].w > w ||
+              layout[i].y + layout[i].h > h) {
+            all_fit = false;
+          }
+        }
+      }
+    }
+    CheckMany(all_fit, "AT-1 可见控件全部落在客户区内", checked);
+  }
+
+  // 10) 账号窗口的控件全集 = 两态可见集之并（不会多建、也不会漏建）。
+  {
+    const std::vector<fc::AccountWidgetSpec> widgets =
+        fc::AccountWidgets(fc::AccountWindowRole::kAccount);
+    bool same = true;
+    for (size_t i = 0; i < widgets.size(); ++i) {
+      if (!AtUiHasId(logged_out, widgets[i].id) &&
+          !AtUiHasId(logged_in, widgets[i].id)) {
+        same = false;
+      }
+    }
+    Check(same, "AT-1 账号窗口控件全集 = 两态可见集之并");
+  }
+
+  // 11) 设备窗口：未登录时全部置灰。
+  Check(fc::DeviceDialogEnabledControlIds(false).empty() &&
+            AtUiHasId(fc::DeviceDialogEnabledControlIds(true), fc::kIdDeleteData) &&
+            AtUiHasId(fc::DeviceDialogEnabledControlIds(true), fc::kIdRevoke),
+        "AT-1 设备窗口未登录时全部置灰");
+}
+
+// ---------------------------------------------------------------------------
+// 批次 AT-1 · ADR 0063：历史邮箱存储
+// ---------------------------------------------------------------------------
+
+void TestAccountHistory() {
+  namespace ah = fc::account_history;
+
+  // 1) 新邮箱置顶（最近在前）。
+  {
+    std::vector<std::string> h;
+    h.push_back("a@x.com");
+    const std::vector<std::string> out = ah::MergeHistory(h, "b@y.com");
+    Check(out.size() == 2 && out[0] == "b@y.com" && out[1] == "a@x.com",
+          "AT-1 历史邮箱：新邮箱置顶（最近在前）");
+  }
+
+  // 2) 大小写不敏感去重，且采用最新形态。
+  {
+    std::vector<std::string> base;
+    base.push_back("A@X.com");
+    const std::vector<std::string> out = ah::MergeHistory(base, "a@x.com");
+    Check(out.size() == 1 && out[0] == "a@x.com",
+          "AT-1 历史邮箱：大小写不敏感去重并采用最新形态");
+  }
+
+  // 3) 上限 10 条。
+  {
+    std::vector<std::string> h;
+    for (int i = 0; i < 12; ++i) {
+      char buf[64];
+      std::snprintf(buf, sizeof(buf), "u%d@x.com", i);
+      h = ah::MergeHistory(h, buf);
+    }
+    Check(h.size() == ah::kMaxHistoryEntries && h[0] == "u11@x.com",
+          "AT-1 历史邮箱：上限 10 条且最新在最前");
+  }
+
+  // 4) 空邮箱不改变列表。
+  {
+    std::vector<std::string> base;
+    base.push_back("a@x.com");
+    const std::vector<std::string> out = ah::MergeHistory(base, "   ");
+    Check(out.size() == 1 && out[0] == "a@x.com",
+          "AT-1 历史邮箱：空邮箱不改变列表");
+  }
+
+  // 5) 序列化 → 解析 往返。
+  {
+    std::vector<std::string> h;
+    h.push_back("a@x.com");
+    h.push_back("b@y.com");
+    const std::vector<std::string> back = ah::ParseHistory(ah::SerializeHistory(h));
+    Check(back.size() == 2 && back[0] == "a@x.com" && back[1] == "b@y.com",
+          "AT-1 历史邮箱：序列化 → 解析 往返一致");
+  }
+
+  // 6) 解析：空文本 / 空行 / 重复行。
+  {
+    Check(ah::ParseHistory("").empty(), "AT-1 历史邮箱：空文本解析为空列表");
+    const std::vector<std::string> out =
+        ah::ParseHistory("a@x.com\n\n  \nb@x.com\na@x.com\n");
+    Check(out.size() == 2 && out[0] == "a@x.com" && out[1] == "b@x.com",
+          "AT-1 历史邮箱：空行被忽略、重复行被去重");
+  }
+
+  // 7) 落盘 → 读回（真实文件）。
+  {
+    wchar_t tmpdir[MAX_PATH];
+    const DWORD n = ::GetTempPathW(MAX_PATH, tmpdir);
+    std::wstring path;
+    if (n > 0 && n < MAX_PATH)
+      path = std::wstring(tmpdir) + L"fluxing-at1-history-test.txt";
+    std::string err;
+    std::vector<std::string> h;
+    h.push_back("a@x.com");
+    h.push_back("b@y.com");
+    const bool saved = !path.empty() && ah::SaveHistoryFile(path, h, &err);
+    const std::vector<std::string> back = ah::LoadHistoryFile(path);
+    if (!path.empty())
+      ::DeleteFileW(path.c_str());
+    Check(saved && back.size() == 2 && back[0] == "a@x.com" &&
+              back[1] == "b@y.com",
+          "AT-1 历史邮箱：落盘 → 读回 一致");
+  }
+}
+
 void TestCloudMaintenanceGate() {
   std::printf("[AR] ADR 0062 维护准入闸门：判据 / 整轮跳过 / 跳过 ≠ 失败\n");
 
@@ -2724,6 +2959,10 @@ int main() {
 
   // 批次 AR · ADR 0062：维护准入闸门（判据 / 整轮跳过 / 跳过 ≠ 失败）。
   TestCloudMaintenanceGate();
+
+  // 批次 AT-1 · ADR 0063：账号页信息架构（两态可见性 / 几何 / 历史邮箱）。
+  TestAccountPageUi();
+  TestAccountHistory();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。

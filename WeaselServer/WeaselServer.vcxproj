@@ -554,6 +554,9 @@
     <ClCompile Include="Cloud\CloudAccountDialog.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="Cloud\CloudAccountHistory.cpp">
+    <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="Cloud\CloudRimeUserDictBackend.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -570,7 +573,10 @@
     <ClInclude Include="Cloud\CloudSyncService.h" />
     <ClInclude Include="Cloud\CloudSyncEngine.h" />
     <ClInclude Include="Cloud\CloudUserDictIo.h" />
-    <ClInclude Include="Cloud\CloudAccountDialog.h" />
+    <ClInclude Include="Cloud\CloudAccountDialog.h" />
+    <ClInclude Include="Cloud\CloudAccountHistory.h" />
+    <ClInclude Include="Cloud\CloudAccountUi.h" />
+    <ClInclude Include="Cloud\CloudAccountWidgets.h" />
     <ClInclude Include="Cloud\CloudSyncNotifier.h" />
   </ItemGroup>
   <ItemGroup>

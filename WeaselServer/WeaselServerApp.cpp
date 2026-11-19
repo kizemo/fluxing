@@ -533,6 +533,22 @@ void WeaselServerApp::SetupMenuHandlers() {
     fluxing::cloud::account_dialog::Show();
     return true;
   });
+
+  // 批次 AT-1:「设备与云数据」独立窗口入口。设备列表 / 撤销设备 / 清空云端
+  // 数据从账号页主窗搬到这里 —— 主窗只留「登录账号 / 退出登录 / 立即同步 /
+  // 关闭」。未登录时窗口照样能打开(菜单项常在),但会改云端数据的按钮置灰。
+  // 不新增 IPC 消息(T402),因此不触发 WeaselIPCData.h 四边同步。
+  m_server.AddMenuHandler(ID_WEASELTRAY_CLOUD_DEVICE, [this] {
+    if (GetCurrentThreadId() != m_uiThreadId) {
+      // 菜单命令可能从 IPC 管道线程到达,弹回界面线程处理。
+      ::PostMessage(m_server.GetHWnd(), WM_COMMAND,
+                    MAKEWPARAM(ID_WEASELTRAY_CLOUD_DEVICE, 0), 0);
+      return true;
+    }
+    fluxing::cloud::account_dialog::ShowDevice();
+    return true;
+  });
+
   m_server.AddMenuHandler(ID_QUICKPANEL_ALWAYS_SHOW, [this] {
     if (GetCurrentThreadId() != m_uiThreadId) {
       // 菜单命令可能从 IPC 管道线程到达,弹回界面线程处理。

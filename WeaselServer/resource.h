@@ -69,6 +69,8 @@
 #define ID_WEASELTRAY_SHORTCUT_SETTINGS 40023
 // spec 100 T405: 云端账号与多端同步入口(托盘右键 / 快捷设置栏品牌图标右键共用).
 #define ID_WEASELTRAY_CLOUD_ACCOUNT 40024
+// 批次 AT-1:「设备与云数据」独立窗口入口（托盘 / 快捷设置栏右键共用）。
+#define ID_WEASELTRAY_CLOUD_DEVICE 40025
 
 #define IDR_FLUXING_LOGO                108
 #define ID_QUICKPANEL_BTN_ASCII        41001

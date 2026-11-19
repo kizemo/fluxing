@@ -512,3 +512,32 @@
 - **构建**：`build.bat weasel installer` ⇒ BUILD_EXIT=0；makensis 8 条 `warning 7010`（既有可选产物告警）。
 - **产物**：`output/archives/fluxing-1.3.2-installer.exe` —— **42 952 698 B** · sha16 `B96F2534636C7296`；内嵌 `WeaselServer.exe` 2 704 384 B / filever `1.3.2.0`；内含 ADR 0062 独有令牌 `live_input_session`（1.3.1 同场对照不含 ⇒ 判别通过）。
 - **未闭环**：装机（须注销 / 重启，PPL）+ 用户在场 AC 4 条 + 输入延迟两组对照 + 双机 AC 7 条 + restore 端到端。
+
+## 批次 AT 收尾记录（2026-11-19 · 账号页 UI 重构 + 注册 / 找回密码入口）
+
+### AT-1 · 客户端落码（已完成 · 门禁全绿）
+- **范围**：账号页拆成 **1 个 WndProc + 5 个角色窗口**（`kAccount / kVerify / kRegister / kForgot / kDevice`，角色值与 `CloudStatusScope` 一一对应）；可见性与几何**同源于一份真相源** `WeaselServer/Cloud/CloudAccountUi.h`（生产代码与单测共用 ⇒ constitution R7）；新增 `CloudAccountHistory.{h,cpp}`（历史邮箱落盘）+ `CloudAccountWidgets.h`（共用 Win32 helper）；**未改 `librime/`、未改 IPC 协议、未新增第三方依赖**（⇒ 不触发四边同步红线）。
+- **登录态互斥**：未登录态 12 项 / 已登录态 8 项，两套控件**互斥**（交集只有状态行与「关闭」）⇒ 用户一眼可辨；已登录态保留 ADR 0062 已定稿的「机会性同步」说明行与「最近同步」行。
+- **验证码独立窗口**：① 登录成功但该账号邮箱尚未验证 ⇒ 自动弹**独立**验证码窗；② 注册成功 ⇒ 同样弹独立验证码窗。**内嵌在主窗里的验证码框已移除**。
+- **历史邮箱**：`<用户数据目录>\fluxing-cloud-accounts.history` 纯文本、最近在前、去重（大小写不敏感）、上限 10 条；**与 Credential Manager 解耦** ⇒ 「退出登录」不再连带清掉历史。
+- **「保存账号」**：复选框默认选中；不勾选时登录**仍然成功**，只是不写凭据、不清已有凭据（`CloudAccount` 的 `creds_persisted_` 门控）。
+- **缺陷修复（verified，源码级取证）**：`ShowVerifyWindow()` / `ConsumeVerifyRequest()` **无任何调用者** ⇒ 一次性请求置位却无人消费 ⇒ 验证码窗**永远弹不出来**（登录未验证路径与注册路径同时失效）。修法 = UI 刷新入口 `RefreshUi()` 消费一次性请求 ⇒ 弹独立验证码窗（取走即清，多窗口同时刷新只弹一次）。
+- **文案与状态修正**：注册成功提示从「请在验证码框输入」改为「请在弹出的验证码窗口输入」；验证成功后同步 `email_verified` 内存状态 + 账号页状态行，并清掉口令框。
+- **门禁**：云单测 **`PASS=492 FAIL=0`**（基线 473 ⇒ **+19**）；`build.bat weasel` **0 警告 0 错误**；clang-format 6 个改动文件 **0 漂移**。
+- **ADR 0063（新增 · Proposed）**：`docs/adr/0063-account-page-information-architecture-and-state-views.md`（10 条决策 + 4 条事实 + 7 条已驳回备选方案）；索引已入 `docs/adr/README.md`。
+
+### AT-2 · 「忘记密码」服务端端点（**未做 · 被用户决策阻塞**）
+- **服务端完全没有找回密码端点**：`cloud/fluxing-sync/src/index.ts` 的 auth 路由只有 register / verify / resend / login / refresh；历史上明确「首版不做找回密码」（spec 100 `spec.md:53` / `tasks.md:373` / ADR 0039）。
+- **AT-1 已就位的临时耦合**：找回窗的「发送验证码」调用**现有** `POST /v1/auth/resend`（今天就能真发信，Resend `MAIL_MODE=http`）；「重置密码」调用 `POST /v1/auth/password-reset` ⇒ **AT-2 前必然 404**（客户端如实转中文状态行，不假装成功）。
+- **阻塞项（需用户决策）**：重置口令 ⇒ `auth_key` 与 `enc_key` **都变**（二者都由 `HKDF(master, …)` 派生，master 依赖口令）⇒ **旧 R2 密文解不开**；而服务端**永不见** `enc_key` ⇒ 无法在服务端重加密。建议 **A. 重置即清空云端**（属不可逆数据删除 ⇒ 需用户明确同意）；备选 C. 两段式（客户端拿新 `enc_key` 重推）；**B. 只换 `auth_key` 保留 `enc_key` 违反红线，不建议**。
+- **服务端另有一处必须隔离**：`email_verifications` 表**无 `purpose` 列**且 `codeHash` 不含用途 ⇒ 直接复用会让「注册码可当重置码用」；`handleVerify` 的副作用固定为 `SET email_verified = 1` 不可复用 ⇒ AT-2 必须按 purpose 隔离验证码（迁移 `0002` 加 `purpose` 列并混入 `codeHash`，或另起新表）。
+- **闭环还需**：部署线上 Worker + D1 迁移 + 用户在信箱收一封真实重置验证码邮件（**不代跑**）。
+
+### AT-3 · 本批未闭环 / 需用户在场
+- ① **未装机、未做真机验收**：`WeaselServer.exe` 是 **PPL** ⇒ 装机前必须注销 / 重启；当前装机版仍是 1.2.1.0；**1.3.2 包不含本批代码** ⇒ 本批需**重新出包**才能真机验收。
+- ② 用户在场：账号页两态**目视**验收 + 「保存账号」勾 / 不勾两次登录 + 忘记密码发信 + 注册发信 + 验证码窗弹出。
+- ③ 本批**已提交**（`feat(fluxing)` · 批次 AT-1）；截至 AT 收尾累计 **6 个提交仍未 push**（未获 push 授权）。
+- ④ 双机 AC 7 条 + restore 端到端 + 输入延迟两组对照仍挂在后面批次。
+
+### AT-4 · 交接文档
+- `docs/archive/handoffs/handoff-2026-11-19-batch-at-account-page-ui-refactor.md`（含落码表 / 缺陷取证链 / 门禁数字 / 已验证·推断·未验证 / 工具坑 / 下一批建议顺序）；接力 prompt 按用户 2026-11-08 指示**直接给在当轮回答正文**，不另落文件。

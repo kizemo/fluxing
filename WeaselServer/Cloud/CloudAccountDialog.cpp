@@ -1,4 +1,5 @@
 // spec 100 阶段 D · T305 云端账号页实现
+// 批次 AT-1 · 账号页 UI 重构（登录态区分 + 独立子窗口）
 //
 // PCH 纪律：本文件不使用预编译头（WeaselServer.vcxproj 逐文件设
 // PrecompiledHeader=NotUsing），并在第一行 #define NOMINMAX ——
@@ -9,6 +10,9 @@
 #include "CloudAccountDialog.h"
 
 #include "CloudAccount.h"
+#include "CloudAccountHistory.h"
+#include "CloudAccountUi.h"
+#include "CloudAccountWidgets.h"
 #include "CloudCredentialStore.h"
 #include "CloudCrypto.h"
 #include "CloudTransport.h"
@@ -20,17 +24,20 @@
 #include "CloudSyncService.h"
 #include "CloudUserDictIo.h"
 
-// 用户数据目录真相源（同步 sidecar 的落点）。
+// 用户数据目录真相源（同步 sidecar 与历史邮箱的落点）。
 #include "../../include/FluxingUserPaths.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace fluxing {
 namespace cloud {
@@ -45,53 +52,13 @@ constexpr wchar_t kBaseUrlEnvVar[] = L"FLUXING_CLOUD_BASE_URL";
 
 constexpr UINT WM_APP_REFRESH = WM_APP + 1;
 
-enum ControlId {
-  kIdEmail = 1001,
-  kIdPassword = 1002,
-  kIdLogin = 1003,
-  kIdLogout = 1004,
-  kIdRefresh = 1005,
-  kIdStatus = 1006,
-  kIdDevices = 1007,
-  kIdRevoke = 1008,
-  kIdDeleteData = 1009,
-  kIdClose = 1010,
-  kIdRefreshDevices = 1011,
-  kIdVerifyCode = 1012,
-  kIdRegister = 1013,
-  kIdVerify = 1014,
-  // spec 100 阶段 F · T505 / 阶段 G：追加在末尾，**不要**改动已有值。
-  kIdResend = 1015,
-  kIdSyncNow = 1016,
-  kIdSyncStatus = 1017,
-};
-
-std::wstring ToWide(const std::string& s) {
-  if (s.empty())
-    return std::wstring();
-  const int need = ::MultiByteToWideChar(
-      CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), nullptr, 0);
-  if (need <= 0)
-    return std::wstring();
-  std::wstring w(static_cast<size_t>(need), L'\0');
-  ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()),
-                        &w[0], need);
-  return w;
-}
-
-std::string ToUtf8(const std::wstring& w) {
-  if (w.empty())
-    return std::string();
-  const int need =
-      ::WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()),
-                            nullptr, 0, nullptr, nullptr);
-  if (need <= 0)
-    return std::string();
-  std::string s(static_cast<size_t>(need), '\0');
-  ::WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()),
-                        &s[0], need, nullptr, nullptr);
-  return s;
-}
+// 账号页共用的 Win32 小工具（CloudAccountWidgets.h）。
+using widgets::AddControl;
+using widgets::EnsureWindowShown;
+using widgets::ReadControlText;
+using widgets::SecureZeroWide;
+using widgets::ToUtf8;
+using widgets::ToWide;
 
 std::wstring EnvBaseUrl() {
   wchar_t buf[512] = {0};
@@ -166,16 +133,26 @@ class CloudAccountController::Impl {
     std::string restore_err;
     bool restored = false;
     if (service->RestoreFromStore(&restore_err)) {
-      status = L"已恢复上次的登录状态。";
+      status_text[static_cast<int>(CloudStatusScope::kAccount)] =
+          L"已恢复上次的登录状态。";
       logged_in = true;
       email_verified = service->info().email_verified;
       account_email = ToWide(service->info().email);
       restored = true;
     } else {
-      status = L"未登录。";
+      status_text[static_cast<int>(CloudStatusScope::kAccount)] = L"未登录。";
     }
 
     worker = std::thread([this]() { WorkerLoop(); });
+
+    // 历史邮箱在**工作线程**上读盘（UI 线程不做磁盘 I/O，宪法 P2）。
+    Post([this]() {
+      const std::wstring path = account_history::DefaultHistoryPath();
+      const std::vector<std::string> loaded =
+          account_history::LoadHistoryFile(path);
+      std::lock_guard<std::mutex> lock(mutex);
+      history = loaded;
+    });
 
     // 恢复态已是登录 ⇒ 构造完成后启动同步引擎（幂等）。
     if (restored)
@@ -213,13 +190,7 @@ class CloudAccountController::Impl {
       }
       if (task)
         task();
-      HWND hwnd = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(mutex);
-        hwnd = owner;
-      }
-      if (hwnd != nullptr)
-        ::PostMessageW(hwnd, WM_APP_REFRESH, 0, 0);
+      NotifyWindows();
     }
   }
 
@@ -231,9 +202,10 @@ class CloudAccountController::Impl {
     cv.notify_one();
   }
 
-  void SetStatus(const std::wstring& text) {
+  // 写状态文案（**调用方不得持有 mutex**）。
+  void SetStatus(CloudStatusScope scope, const std::wstring& text) {
     std::lock_guard<std::mutex> lock(mutex);
-    status = text;
+    status_text[static_cast<int>(scope)] = text;
   }
 
   // 写「最近同步」文案（UI 线程可读）。
@@ -242,6 +214,35 @@ class CloudAccountController::Impl {
   void SetSyncStatus(const std::wstring& text) {
     std::lock_guard<std::mutex> lock(mutex);
     sync_status_text = text;
+  }
+
+  // 通知所有已登记窗口刷新（后台任务完成 → UI 重绘）。
+  void NotifyWindows() {
+    std::vector<HWND> targets;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      targets.reserve(windows.size());
+      for (std::map<HWND, int>::const_iterator it = windows.begin();
+           it != windows.end(); ++it)
+        targets.push_back(it->first);
+    }
+    for (size_t i = 0; i < targets.size(); ++i) {
+      if (::IsWindow(targets[i]))
+        ::PostMessageW(targets[i], WM_APP_REFRESH, 0, 0);
+    }
+  }
+
+  // 记录历史邮箱（登录 / 注册成功后调用；在工作线程上做磁盘 I/O）。
+  void RecordHistory(const std::string& email_utf8) {
+    std::vector<std::string> merged;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      merged = account_history::MergeHistory(history, email_utf8);
+      history = merged;
+    }
+    std::string err;
+    account_history::SaveHistoryFile(account_history::DefaultHistoryPath(),
+                                     merged, &err);
   }
 
   // 惰性创建用户词典后端（WeaselServer 里是 rime levers 实现）。
@@ -364,14 +365,8 @@ class CloudAccountController::Impl {
                     L"）");
     }
 
-    // 通知账号页刷新（窗口可能已经关了 ⇒ owner 为空时跳过）。
-    HWND hwnd = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(mutex);
-      hwnd = owner;
-    }
-    if (hwnd != nullptr)
-      ::PostMessageW(hwnd, WM_APP_REFRESH, 0, 0);
+    // 通知账号页系列窗口刷新。
+    NotifyWindows();
     return ok;
   }
 
@@ -381,13 +376,19 @@ class CloudAccountController::Impl {
   std::thread worker;
   std::atomic<bool> running{true};
 
-  HWND owner = nullptr;
-  std::wstring status = L"未登录。";
+  // 已登记窗口 → 作用域（一个作用域一个窗口）。
+  std::map<HWND, int> windows;
+  // 每个作用域各有一行状态文案（互不覆盖）。
+  std::wstring status_text[static_cast<int>(CloudStatusScope::kCount)];
   std::vector<CloudDeviceInfo> devices;
   bool logged_in = false;
   bool email_verified = false;
   std::wstring account_email;
   std::wstring base_url;
+  // 历史邮箱（最近在前；由工作线程维护）。
+  std::vector<std::string> history;
+  // 「请弹出验证码窗口」的一次性请求（邮箱）。
+  std::wstring verify_request_email;
   // 「请 UI 清空口令框」的一次性请求（**只在登录成功**时置位）。
   bool clear_password_request = false;
 
@@ -418,14 +419,24 @@ CloudAccountController& CloudAccountController::Instance() {
   return instance;
 }
 
-void CloudAccountController::SetOwnerWindow(HWND hwnd) {
+void CloudAccountController::RegisterWindow(HWND hwnd, CloudStatusScope scope) {
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  impl_->owner = hwnd;
+  impl_->windows[hwnd] = static_cast<int>(scope);
+}
+
+void CloudAccountController::UnregisterWindow(HWND hwnd) {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  impl_->windows.erase(hwnd);
 }
 
 HWND CloudAccountController::owner_window() const {
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  return impl_->owner;
+  for (std::map<HWND, int>::const_iterator it = impl_->windows.begin();
+       it != impl_->windows.end(); ++it) {
+    if (it->second == static_cast<int>(CloudStatusScope::kAccount))
+      return it->first;
+  }
+  return nullptr;
 }
 
 std::wstring CloudAccountController::base_url() const {
@@ -434,8 +445,12 @@ std::wstring CloudAccountController::base_url() const {
 }
 
 std::wstring CloudAccountController::status() const {
+  return status(CloudStatusScope::kAccount);
+}
+
+std::wstring CloudAccountController::status(CloudStatusScope scope) const {
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  return impl_->status;
+  return impl_->status_text[static_cast<int>(scope)];
 }
 
 std::vector<CloudDeviceInfo> CloudAccountController::devices() const {
@@ -472,40 +487,73 @@ std::wstring CloudAccountController::sync_status() const {
   return impl_->sync_status_text;
 }
 
+// 历史邮箱（最近在前）。
+std::vector<std::string> CloudAccountController::history() const {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  return impl_->history;
+}
+
+// 消费「请弹出验证码窗口」的一次性请求（返回要验证的邮箱；空 = 无请求）。
+std::wstring CloudAccountController::ConsumeVerifyRequest() {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  const std::wstring value = impl_->verify_request_email;
+  impl_->verify_request_email.clear();
+  return value;
+}
+
 void CloudAccountController::SubmitLogin(const std::wstring& email,
-                                         const std::wstring& password) {
+                                         const std::wstring& password,
+                                         bool save_account) {
   const std::string email_utf8 = ToUtf8(email);
   std::string password_utf8 = ToUtf8(password);
   Impl* impl = impl_;
-  impl->Post([impl, email_utf8, password_utf8]() mutable {
+  impl->Post([impl, email_utf8, password_utf8, save_account]() mutable {
     std::string err;
-    const bool ok = impl->service->Login(email_utf8, password_utf8, &err);
+    const bool ok =
+        impl->service->Login(email_utf8, password_utf8, &err, save_account);
     // 口令用后清零（不落日志、不留副本）。lambda 必须是 mutable：
     // 捕获的 password_utf8 默认是 const，清零函数要的是可写指针。
     SecureZeroString(&password_utf8);
+    bool need_verify = false;
     {
       std::lock_guard<std::mutex> lock(impl->mutex);
       if (ok) {
         impl->logged_in = true;
         impl->email_verified = impl->service->info().email_verified;
         impl->account_email = ToWide(impl->service->info().email);
-        impl->status = impl->email_verified
-                           ? L"登录成功。"
-                           : L"登录成功，但邮箱尚未验证，请先完成邮箱验证。";
+        impl->status_text[static_cast<int>(CloudStatusScope::kAccount)] =
+            impl->email_verified
+                ? L"登录成功。"
+                : L"登录成功，但邮箱尚未验证，请完成邮箱验证。";
         // 只有「已登录**且**邮箱已验证」才清口令框：
         // ① 失败时保留 ⇒ 用户可改错重试；
         // ② 「登录成功但邮箱未验证」也保留 ⇒ 用户验证完邮箱还要用**同一口令**
         //    再登录一次，提前清掉会逼他重敲一遍（真机闭环实测踩到过）。
         impl->clear_password_request = impl->email_verified;
+        need_verify = !impl->email_verified;
       } else {
         impl->logged_in = false;
-        impl->status = L"登录失败：" + ToWide(err);
+        impl->status_text[static_cast<int>(CloudStatusScope::kAccount)] =
+            L"登录失败：" + ToWide(err);
       }
     }
     if (!ok)
       return;
     // 登录成功 ⇒ 启动同步引擎（幂等：已在跑就直接返回）。
     impl->StartEngine();
+    // 记住这个邮箱（下次登录可以直接从「历史」里选）。
+    impl->RecordHistory(email_utf8);
+    // 「首次登录某个账号」需要邮箱验证 ⇒ 弹**独立**验证码窗口
+    // （不再是主窗口里内嵌的一行）。
+    if (need_verify) {
+      {
+        std::lock_guard<std::mutex> lock(impl->mutex);
+        impl->verify_request_email = impl->account_email;
+      }
+      // 顺手发一次验证码（best-effort：失败时用户可在验证码窗口里点重发）。
+      std::string resend_err;
+      impl->service->ResendVerification(email_utf8, &resend_err);
+    }
     // 登录成功后顺手刷新设备列表。
     std::vector<CloudDeviceInfo> list;
     std::string list_err;
@@ -517,11 +565,12 @@ void CloudAccountController::SubmitLogin(const std::wstring& email,
 }
 
 void CloudAccountController::SubmitRegister(const std::wstring& email,
-                                            const std::wstring& password) {
+                                            const std::wstring& password,
+                                            CloudStatusScope scope) {
   const std::string email_utf8 = ToUtf8(email);
   std::string password_utf8 = ToUtf8(password);
   Impl* impl = impl_;
-  impl->Post([impl, email_utf8, password_utf8]() mutable {
+  impl->Post([impl, email_utf8, password_utf8, scope]() mutable {
     std::string account_id;
     std::string err;
     const bool ok =
@@ -530,22 +579,44 @@ void CloudAccountController::SubmitRegister(const std::wstring& email,
     SecureZeroString(&password_utf8);
     // 注册成功**不**置 logged_in：服务端返回 need_email_verify=true，
     // 必须先完成邮箱验证再登录，避免出现「已登录但邮箱未验证」的脏态。
-    impl->SetStatus(ok ? L"注册成功：请在验证码框输入 6 位验证码完成邮箱验证。"
+    impl->SetStatus(scope,
+                    ok ? L"注册成功：请在弹出的验证码窗口输入 6 位验证码，完成邮箱验证。"
                        : (L"注册失败：" + ToWide(err)));
+    if (ok) {
+      impl->RecordHistory(email_utf8);
+      // 注册成功 ⇒ 直接弹验证码窗口（独立窗口），用户不必回主窗口。
+      {
+        std::lock_guard<std::mutex> lock(impl->mutex);
+        impl->verify_request_email = ToWide(email_utf8);
+      }
+    }
   });
 }
 
 void CloudAccountController::SubmitVerifyEmail(const std::wstring& email,
-                                               const std::wstring& code) {
+                                               const std::wstring& code,
+                                               CloudStatusScope scope) {
   const std::string email_utf8 = ToUtf8(email);
   const std::string code_utf8 = ToUtf8(code);
   Impl* impl = impl_;
-  impl->Post([impl, email_utf8, code_utf8]() {
+  impl->Post([impl, email_utf8, code_utf8, scope]() {
     std::string err;
     const bool ok = impl->service->VerifyEmail(email_utf8, code_utf8, &err);
     // 验证同样不改登录态：验证通过后由用户点「登录」拿令牌。
-    impl->SetStatus(ok ? L"邮箱验证成功，请登录。"
-                       : (L"邮箱验证失败：" + ToWide(err)));
+    impl->SetStatus(scope, ok ? L"邮箱验证成功，请登录。"
+                              : (L"邮箱验证失败：" + ToWide(err)));
+    if (!ok)
+      return;
+    // 验证通过 ⇒ 服务端已把 email_verified 置 1。同步客户端内存状态，
+    // 否则账号页会一直挂着「登录成功，但邮箱尚未验证」的旧文案。
+    std::lock_guard<std::mutex> lock(impl->mutex);
+    impl->email_verified = true;
+    // 口令此时已无用途（登录路径下口令框在已登录视图里是隐藏的）⇒ 清掉，
+    // 避免明文口令长期滞留在内存控件里。
+    impl->clear_password_request = true;
+    impl->status_text[static_cast<int>(CloudStatusScope::kAccount)] =
+        impl->logged_in ? L"邮箱验证成功。"
+                         : L"邮箱验证成功，请回到账号页登录。";
   });
 }
 
@@ -564,7 +635,8 @@ void CloudAccountController::SubmitLogout() {
     impl->email_verified = false;
     impl->account_email.clear();
     impl->devices.clear();
-    impl->status = ok ? L"已退出登录。" : (L"退出登录失败：" + ToWide(err));
+    impl->status_text[static_cast<int>(CloudStatusScope::kAccount)] =
+        ok ? L"已退出登录。" : (L"退出登录失败：" + ToWide(err));
   });
 }
 
@@ -575,7 +647,8 @@ void CloudAccountController::SubmitRefresh() {
     const bool ok = impl->service->Refresh(&err);
     std::lock_guard<std::mutex> lock(impl->mutex);
     impl->logged_in = ok;
-    impl->status = ok ? L"登录状态已刷新。" : (L"刷新失败：" + ToWide(err));
+    impl->status_text[static_cast<int>(CloudStatusScope::kDevice)] =
+        ok ? L"登录状态已刷新。" : (L"刷新失败：" + ToWide(err));
   });
 }
 
@@ -588,9 +661,11 @@ void CloudAccountController::SubmitListDevices() {
     std::lock_guard<std::mutex> lock(impl->mutex);
     if (ok) {
       impl->devices = list;
-      impl->status = L"已刷新设备列表。";
+      impl->status_text[static_cast<int>(CloudStatusScope::kDevice)] =
+          L"已刷新设备列表。";
     } else {
-      impl->status = L"获取设备列表失败：" + ToWide(err);
+      impl->status_text[static_cast<int>(CloudStatusScope::kDevice)] =
+          L"获取设备列表失败：" + ToWide(err);
     }
   });
 }
@@ -608,8 +683,9 @@ void CloudAccountController::SubmitRevokeDevice(size_t index) {
     std::string err;
     const bool ok = impl->service->RevokeDevice(device_id, &err);
     std::lock_guard<std::mutex> lock(impl->mutex);
-    impl->status = ok ? (L"已撤销设备 " + ToWide(device_id))
-                      : (L"撤销设备失败：" + ToWide(err));
+    impl->status_text[static_cast<int>(CloudStatusScope::kDevice)] =
+        ok ? (L"已撤销设备 " + ToWide(device_id))
+           : (L"撤销设备失败：" + ToWide(err));
     if (!ok)
       return;
     std::vector<CloudDeviceInfo> list;
@@ -627,22 +703,43 @@ void CloudAccountController::SubmitDeleteCloudData() {
     std::string err;
     const bool ok = impl->service->DeleteCloudData(&err);
     std::lock_guard<std::mutex> lock(impl->mutex);
-    impl->status = ok ? L"云端数据已清空（账号本身保留）。"
-                      : (L"清空云端数据失败：" + ToWide(err));
+    impl->status_text[static_cast<int>(CloudStatusScope::kDevice)] =
+        ok ? L"云端数据已清空（账号本身保留）。"
+           : (L"清空云端数据失败：" + ToWide(err));
   });
 }
 
 void CloudAccountController::SubmitResendVerification(
-    const std::wstring& email) {
+    const std::wstring& email,
+    CloudStatusScope scope) {
   const std::string email_utf8 = ToUtf8(email);
   Impl* impl = impl_;
-  impl->Post([impl, email_utf8]() {
+  impl->Post([impl, email_utf8, scope]() {
     std::string err;
     const bool ok = impl->service->ResendVerification(email_utf8, &err);
     // 重发不改登录态，也**不清空验证码输入框**：失败时（码过期 / 已被
     // 用掉）用户还能改了再提交。
-    impl->SetStatus(ok ? L"验证码已重新发送，请查收。"
-                       : (L"重新发送验证码失败：" + ToWide(err)));
+    impl->SetStatus(scope, ok ? L"验证码已重新发送，请查收。"
+                               : (L"重新发送验证码失败：" + ToWide(err)));
+  });
+}
+
+void CloudAccountController::SubmitResetPassword(const std::wstring& email,
+                                                 const std::wstring& code,
+                                                 const std::wstring& new_password,
+                                                 CloudStatusScope scope) {
+  const std::string email_utf8 = ToUtf8(email);
+  const std::string code_utf8 = ToUtf8(code);
+  std::string new_password_utf8 = ToUtf8(new_password);
+  Impl* impl = impl_;
+  impl->Post([impl, email_utf8, code_utf8, new_password_utf8, scope]() mutable {
+    std::string err;
+    const bool ok = impl->service->ResetPassword(
+        email_utf8, code_utf8, new_password_utf8, &err);
+    // 新口令用后清零。
+    SecureZeroString(&new_password_utf8);
+    impl->SetStatus(scope, ok ? L"密码已重置，请用新密码登录。"
+                              : (L"重置密码失败：" + ToWide(err)));
   });
 }
 
@@ -663,7 +760,8 @@ void CloudAccountController::SubmitSyncNow() {
       }
     }
     if (delegated) {
-      impl->SetStatus(L"手动同步已提交，完成后见下方「最近同步」。");
+      impl->SetStatus(CloudStatusScope::kAccount,
+                      L"手动同步已提交，完成后见下方「最近同步」。");
       return;
     }
 
@@ -672,19 +770,21 @@ void CloudAccountController::SubmitSyncNow() {
     CloudSyncRoundResult result;
     const bool ok = impl->RunSyncRound(SyncDirection::kBoth, &result);
     if (ok) {
-      impl->SetStatus(L"同步完成：推送 " +
-                      std::to_wstring(result.items_pushed) + L" 条，拉取 " +
-                      std::to_wstring(result.items_pulled) + L" 条。");
+      impl->SetStatus(CloudStatusScope::kAccount,
+                      L"同步完成：推送 " +
+                          std::to_wstring(result.items_pushed) + L" 条，拉取 " +
+                          std::to_wstring(result.items_pulled) + L" 条。");
     } else if (result.skipped) {
       // ADR 0062 决策 3: 手动同步**不绕过**闸门 —— 给明确提示 + 指引。
-      impl->SetStatus(std::wstring(L"同步已跳过：") +
-                      ToWide(MaintenanceGateSkipMessage()) +
-                      ToWide(MaintenanceGateManualHint()));
+      impl->SetStatus(CloudStatusScope::kAccount,
+                      std::wstring(L"同步已跳过：") +
+                          ToWide(MaintenanceGateSkipMessage()) +
+                          ToWide(MaintenanceGateManualHint()));
     } else {
       const std::wstring reason = result.message.empty()
                                       ? std::wstring(L"未知原因")
                                       : ToWide(result.message);
-      impl->SetStatus(L"同步失败：" + reason);
+      impl->SetStatus(CloudStatusScope::kAccount, L"同步失败：" + reason);
     }
   });
 }
@@ -696,39 +796,160 @@ void CloudAccountController::SubmitSyncNow() {
 namespace account_dialog {
 namespace {
 
-constexpr wchar_t kClassName[] = L"FluxingCloudAccountDialog_v1";
-constexpr int kClientWidth = 480;
-// 高度 320 → 410：新增「验证码」一行后，状态框、设备列表与底部两行按钮
-// 依次下移，避免与状态框重叠。
-// 410 → 472（阶段 F · T505 / 阶段 G）：新增「重新发送验证码」按钮与
-// 「最近同步」状态行，设备列表与底部按钮整体下移，底部按钮拆成两行。
-// 472 → 490（ADR 0062 决策 5）：新增「机会性同步」口径说明行，设备列表与
-// 底部两行按钮再整体下移 16 px（不得与已有控件重叠）。
-constexpr int kClientHeight = 490;
+using Role = AccountWindowRole;
 
-HWND g_window = nullptr;
-HFONT g_font = nullptr;
+// 角色枚举与作用域枚举一一对应（同一套 5 个窗口）。
+static_assert(static_cast<int>(Role::kAccount) ==
+                  static_cast<int>(CloudStatusScope::kAccount),
+              "role/scope 必须一一对应");
+static_assert(static_cast<int>(Role::kVerify) ==
+                  static_cast<int>(CloudStatusScope::kVerify),
+              "role/scope 必须一一对应");
+static_assert(static_cast<int>(Role::kRegister) ==
+                  static_cast<int>(CloudStatusScope::kRegister),
+              "role/scope 必须一一对应");
+static_assert(static_cast<int>(Role::kForgot) ==
+                  static_cast<int>(CloudStatusScope::kForgot),
+              "role/scope 必须一一对应");
+static_assert(static_cast<int>(Role::kDevice) ==
+                  static_cast<int>(CloudStatusScope::kDevice),
+              "role/scope 必须一一对应");
 
-void ApplyFont(HWND hwnd) {
-  if (g_font != nullptr && hwnd != nullptr)
-    ::SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
+CloudStatusScope ScopeOf(Role role) {
+  return static_cast<CloudStatusScope>(static_cast<int>(role));
 }
 
-HWND AddControl(HWND parent,
-                const wchar_t* cls,
-                const wchar_t* text,
-                DWORD style,
-                int x,
-                int y,
-                int w,
-                int h,
-                int id) {
-  HWND hwnd = ::CreateWindowExW(
-      0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h, parent,
-      reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
-      ::GetModuleHandleW(nullptr), nullptr);
-  ApplyFont(hwnd);
-  return hwnd;
+const wchar_t* ClassNameFor(Role role) {
+  switch (role) {
+    case Role::kVerify:
+      return L"FluxingCloudVerifyDialog_v1";
+    case Role::kRegister:
+      return L"FluxingCloudRegisterDialog_v1";
+    case Role::kForgot:
+      return L"FluxingCloudForgotDialog_v1";
+    case Role::kDevice:
+      return L"FluxingCloudDeviceDialog_v1";
+    case Role::kAccount:
+    default:
+      return L"FluxingCloudAccountDialog_v1";
+  }
+}
+
+const wchar_t* TitleFor(Role role) {
+  switch (role) {
+    case Role::kVerify:
+      return L"Fluxing 邮箱验证";
+    case Role::kRegister:
+      return L"Fluxing 注册账号";
+    case Role::kForgot:
+      return L"Fluxing 找回密码";
+    case Role::kDevice:
+      return L"Fluxing 设备与云数据";
+    case Role::kAccount:
+    default:
+      return L"Fluxing 云端账号";
+  }
+}
+
+// 控件文案（用户可见 ⇒ 简体中文，宪法 P2/P5）。
+std::wstring WidgetText(Role role, int id) {
+  switch (id) {
+    case kIdEmailLabel:
+      return L"邮箱地址";
+    case kIdPasswordLabel:
+      return L"密码";
+    case kIdVerifyCodeLabel:
+      return L"验证码";
+    case kIdNewPasswordLabel:
+      return L"新密码";
+    case kIdHistoryLabel:
+      return L"历史";
+    case kIdAccountCaption:
+      return L"当前登录账号";
+    case kIdSaveAccount:
+      return L"保存账号（下次启动自动登录）";
+    case kIdLogin:
+      return L"登录";
+    case kIdLogout:
+      return L"退出登录";
+    case kIdSyncNow:
+      return L"立即同步";
+    case kIdClose:
+      return L"关闭";
+    case kIdVerify:
+      return L"验证";
+    case kIdForgotPassword:
+      return L"忘记密码";
+    case kIdResetPassword:
+      return L"重置密码";
+    case kIdRevoke:
+      return L"撤销所选设备";
+    case kIdRefreshDevices:
+      return L"刷新设备列表";
+    case kIdRefresh:
+      return L"刷新登录状态";
+    case kIdDeleteData:
+      return L"清空云端数据";
+    case kIdSyncStatus:
+      return L"最近同步：尚未同步。";
+    case kIdOpportunityNote:
+      return L"你正在输入时同步会自动延后，停止输入后自动完成。";
+    case kIdRegister:
+      return role == Role::kRegister ? L"注册并发送验证码" : L"注册";
+    case kIdResend:
+      return role == Role::kForgot ? L"发送验证码" : L"重新发送验证码";
+    case kIdVerifyCaption:
+      return L"验证码已发送到该邮箱，请输入 6 位验证码。";
+    case kIdRegisterCaption:
+      return L"注册新账号（注册后需完成邮箱验证）。";
+    case kIdForgotCaption:
+      return L"通过邮箱验证码重置密码。";
+    case kIdDeviceCaption:
+      return L"已登录设备与云端数据。";
+    default:
+      return L"";
+  }
+}
+
+const wchar_t* WinClassFor(AccountWidgetClass cls) {
+  switch (cls) {
+    case AccountWidgetClass::kEdit:
+    case AccountWidgetClass::kPasswordEdit:
+    case AccountWidgetClass::kNumberEdit:
+      return L"EDIT";
+    case AccountWidgetClass::kButton:
+    case AccountWidgetClass::kCheckbox:
+      return L"BUTTON";
+    case AccountWidgetClass::kCombo:
+      return L"COMBOBOX";
+    case AccountWidgetClass::kListBox:
+      return L"LISTBOX";
+    case AccountWidgetClass::kStatic:
+    default:
+      return L"STATIC";
+  }
+}
+
+DWORD StyleFor(AccountWidgetClass cls) {
+  switch (cls) {
+    case AccountWidgetClass::kEdit:
+      return ES_AUTOHSCROLL;
+    case AccountWidgetClass::kPasswordEdit:
+      return ES_AUTOHSCROLL | ES_PASSWORD;
+    case AccountWidgetClass::kNumberEdit:
+      return ES_AUTOHSCROLL | ES_NUMBER;
+    case AccountWidgetClass::kButton:
+      return BS_PUSHBUTTON;
+    case AccountWidgetClass::kCheckbox:
+      return BS_AUTOCHECKBOX;
+    case AccountWidgetClass::kCombo:
+      return CBS_DROPDOWNLIST | WS_VSCROLL;
+    case AccountWidgetClass::kListBox:
+      return LBS_NOTIFY | WS_VSCROLL | WS_BORDER;
+    case AccountWidgetClass::kStatic:
+    default:
+      return 0;
+  }
 }
 
 std::wstring DeviceLabel(const CloudDeviceInfo& device) {
@@ -744,62 +965,137 @@ std::wstring DeviceLabel(const CloudDeviceInfo& device) {
   return label;
 }
 
-// 读取控件文本（宽字符）。缓冲区用后立刻抹掉 —— 口令与验证码都走这条路。
-std::wstring ReadControlText(HWND parent, int id) {
-  HWND ctrl = ::GetDlgItem(parent, id);
-  if (ctrl == nullptr)
-    return std::wstring();
-  wchar_t buf[256] = {0};
-  ::GetWindowTextW(ctrl, buf, 256);
-  std::wstring value(buf);
-  ::SecureZeroMemory(buf, sizeof(buf));
-  return value;
+// 窗口句柄 → 角色（GWLP_USERDATA 在 WM_CREATE 里第一件事就写好了）。
+Role RoleOf(HWND hwnd) {
+  return static_cast<Role>(
+      static_cast<int>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA)));
 }
 
-// 主动清零宽字符串本体：std::wstring 析构不清堆内存，口令会留在页里。
-void SecureZeroWide(std::wstring* s) {
-  if (s == nullptr || s->empty())
+HWND g_windows[static_cast<int>(Role::kCount)] = {nullptr};
+// 验证码窗口对应的邮箱（UI 线程独占，不需要加锁）。
+std::wstring g_verify_email;
+
+void CreateWidgets(HWND hwnd, Role role) {
+  const std::vector<AccountWidgetSpec> specs = AccountWidgets(role);
+  for (size_t i = 0; i < specs.size(); ++i) {
+    const AccountWidgetSpec& spec = specs[i];
+    const std::wstring text = WidgetText(role, spec.id);
+    AddControl(hwnd, WinClassFor(spec.cls), text.c_str(), StyleFor(spec.cls),
+               spec.x, spec.y, spec.w, spec.h, spec.id);
+  }
+}
+
+// 按登录态切换控件的可见性与几何（**不重建控件** —— 重建会丢输入内容）。
+void ApplyLayout(HWND hwnd, Role role, bool logged_in) {
+  const std::vector<AccountWidgetSpec> specs = AccountWidgets(role);
+  const std::vector<AccountLayoutEntry> layout =
+      AccountVisibleLayout(role, logged_in);
+  for (size_t i = 0; i < specs.size(); ++i) {
+    HWND ctrl = ::GetDlgItem(hwnd, specs[i].id);
+    if (ctrl == nullptr)
+      continue;
+    const AccountLayoutEntry* target = nullptr;
+    for (size_t j = 0; j < layout.size(); ++j) {
+      if (layout[j].id == specs[i].id) {
+        target = &layout[j];
+        break;
+      }
+    }
+    if (target == nullptr) {
+      ::ShowWindow(ctrl, SW_HIDE);
+      continue;
+    }
+    ::SetWindowPos(ctrl, nullptr, target->x, target->y, target->w, target->h,
+                   SWP_NOZORDER | SWP_NOACTIVATE);
+    ::ShowWindow(ctrl, SW_SHOW);
+  }
+}
+
+// 刷新历史邮箱下拉（保留用户已选的项）。
+void RefreshHistoryCombo(HWND hwnd, CloudAccountController& controller) {
+  HWND combo = ::GetDlgItem(hwnd, kIdHistoryCombo);
+  if (combo == nullptr)
     return;
-  ::SecureZeroMemory(&(*s)[0], s->size() * sizeof(wchar_t));
-  s->clear();
+  wchar_t buf[256] = {0};
+  ::GetWindowTextW(combo, buf, 256);
+  const std::wstring current(buf);
+  ::SecureZeroMemory(buf, sizeof(buf));
+
+  const std::vector<std::string> history = controller.history();
+  ::SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+  int restored = CB_ERR;
+  for (size_t i = 0; i < history.size(); ++i) {
+    const std::wstring item = ToWide(history[i]);
+    ::SendMessageW(combo, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(item.c_str()));
+    if (!current.empty() && item == current)
+      restored = static_cast<int>(i);
+  }
+  ::SendMessageW(combo, CB_SETCURSEL, restored, 0);
 }
 
-void RefreshUi(HWND hwnd) {
+// 「弹验证码窗口」的前置声明（实现在文件后半段；RefreshUi 要用它）。
+void ShowVerifyWindow(const std::wstring& email);
+
+void RefreshUi(HWND hwnd, Role role) {
   CloudAccountController& controller = CloudAccountController::Instance();
 
-  ::SetWindowTextW(::GetDlgItem(hwnd, kIdStatus), controller.status().c_str());
-  ::SetWindowTextW(::GetDlgItem(hwnd, kIdSyncStatus),
-                   controller.sync_status().c_str());
-  // 「已登录且邮箱已验证」⇒ 清空口令框（一次性请求，读取即消费）。
-  // 失败 / 注册 / 「已登录但邮箱未验证」路径**不**清 ⇒ 用户可以直接改错重试，
-  // 验证完邮箱后也能用同一口令直接登录。
-  if (controller.ConsumeClearPasswordRequest())
-    ::SetWindowTextW(::GetDlgItem(hwnd, kIdPassword), L"");
-
-  HWND list = ::GetDlgItem(hwnd, kIdDevices);
-  if (list != nullptr) {
-    ::SendMessageW(list, LB_RESETCONTENT, 0, 0);
-    const std::vector<CloudDeviceInfo> devices = controller.devices();
-    for (size_t i = 0; i < devices.size(); ++i)
-      ::SendMessageW(list, LB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(DeviceLabel(devices[i]).c_str()));
-  }
+  // 一次性请求：① 登录成功但该账号邮箱尚未验证 ② 注册成功
+  // ⇒ 弹**独立**验证码窗口（不再内嵌在账号页主窗口里）。
+  // ConsumeVerifyRequest 取走即清 ⇒ 即使多个窗口同时刷新也只会弹一次。
+  const std::wstring verify_email = controller.ConsumeVerifyRequest();
+  if (!verify_email.empty())
+    ShowVerifyWindow(verify_email);
 
   const bool logged_in = controller.logged_in();
-  ::EnableWindow(::GetDlgItem(hwnd, kIdLogout), logged_in);
-  ::EnableWindow(::GetDlgItem(hwnd, kIdRefresh), logged_in);
-  ::EnableWindow(::GetDlgItem(hwnd, kIdDeleteData), logged_in);
-  ::EnableWindow(::GetDlgItem(hwnd, kIdLogin), !logged_in);
-  ::EnableWindow(::GetDlgItem(hwnd, kIdRevoke), logged_in);
-  // 注册与邮箱验证只在未登录时可用：已登录状态下它们没有意义，
-  // 也避免用另一个邮箱重复注册把当前会话搅乱。
-  ::EnableWindow(::GetDlgItem(hwnd, kIdRegister), !logged_in);
-  ::EnableWindow(::GetDlgItem(hwnd, kIdVerify), !logged_in);
-  // 重新发送验证码与注册 / 邮箱验证同属「未登录」一组。
-  ::EnableWindow(::GetDlgItem(hwnd, kIdResend), !logged_in);
-  // 「立即同步」只在已登录时可用（未登录时点了只会得到「尚未登录」提示）。
-  ::EnableWindow(::GetDlgItem(hwnd, kIdSyncNow), logged_in);
+
+  HWND status = ::GetDlgItem(hwnd, kIdStatus);
+  if (status != nullptr)
+    ::SetWindowTextW(status, controller.status(ScopeOf(role)).c_str());
+
+  if (role == Role::kAccount) {
+    // 「已登录且邮箱已验证」⇒ 清空口令框（一次性请求，读取即消费）。
+    if (controller.ConsumeClearPasswordRequest()) {
+      HWND pwd = ::GetDlgItem(hwnd, kIdPassword);
+      if (pwd != nullptr)
+        ::SetWindowTextW(pwd, L"");
+    }
+    HWND account = ::GetDlgItem(hwnd, kIdAccountLabel);
+    if (account != nullptr)
+      ::SetWindowTextW(account, controller.account_email().c_str());
+    RefreshHistoryCombo(hwnd, controller);
+    // ★ 登录态区分：两套控件互斥，切换靠 ShowWindow，不重建。
+    ApplyLayout(hwnd, role, logged_in);
+  } else if (role == Role::kDevice) {
+    HWND list = ::GetDlgItem(hwnd, kIdDevices);
+    if (list != nullptr) {
+      ::SendMessageW(list, LB_RESETCONTENT, 0, 0);
+      const std::vector<CloudDeviceInfo> devices = controller.devices();
+      for (size_t i = 0; i < devices.size(); ++i) {
+        const std::wstring label = DeviceLabel(devices[i]);
+        ::SendMessageW(list, LB_ADDSTRING, 0,
+                       reinterpret_cast<LPARAM>(label.c_str()));
+      }
+    }
+    // 未登录 ⇒ 设备相关操作全部置灰（窗口照样能打开）。
+    const std::vector<int> enabled = DeviceDialogEnabledControlIds(logged_in);
+    const int device_ids[4] = {kIdDeleteData, kIdRefresh, kIdRefreshDevices,
+                               kIdRevoke};
+    for (int i = 0; i < 4; ++i) {
+      HWND ctrl = ::GetDlgItem(hwnd, device_ids[i]);
+      if (ctrl == nullptr)
+        continue;
+      const bool on = std::find(enabled.begin(), enabled.end(),
+                                device_ids[i]) != enabled.end();
+      ::EnableWindow(ctrl, on ? TRUE : FALSE);
+    }
+  }
 }
+
+HWND CreateOrShow(Role role);
+void ShowVerifyWindow(const std::wstring& email);
+void ShowRegisterWindow();
+void ShowForgotWindow();
 
 LRESULT CALLBACK WndProc(HWND hwnd,
                          UINT message,
@@ -807,123 +1103,172 @@ LRESULT CALLBACK WndProc(HWND hwnd,
                          LPARAM lparam) {
   switch (message) {
     case WM_CREATE: {
-      CloudAccountController& controller = CloudAccountController::Instance();
-      controller.SetOwnerWindow(hwnd);
-      g_window = hwnd;
-
-      AddControl(hwnd, L"STATIC", L"邮箱地址", 0, 12, 20, 70, 20, -1);
-      AddControl(hwnd, L"EDIT", L"", ES_AUTOHSCROLL, 88, 16, 240, 26, kIdEmail);
-      AddControl(hwnd, L"BUTTON", L"登录", BS_PUSHBUTTON, 340, 16, 128, 28,
-                 kIdLogin);
-      AddControl(hwnd, L"STATIC", L"密码", 0, 12, 54, 70, 20, -1);
-      AddControl(hwnd, L"EDIT", L"", ES_AUTOHSCROLL | ES_PASSWORD, 88, 50, 240,
-                 26, kIdPassword);
-      AddControl(hwnd, L"BUTTON", L"退出登录", BS_PUSHBUTTON, 340, 50, 128, 28,
-                 kIdLogout);
-      AddControl(hwnd, L"STATIC", L"验证码", 0, 12, 88, 70, 20, -1);
-      AddControl(hwnd, L"EDIT", L"", ES_AUTOHSCROLL | ES_NUMBER, 88, 84, 240,
-                 26, kIdVerifyCode);
-      AddControl(hwnd, L"BUTTON", L"注册并发送验证码", BS_PUSHBUTTON, 340, 84,
-                 128, 28, kIdRegister);
-      AddControl(hwnd, L"BUTTON", L"验证邮箱", BS_PUSHBUTTON, 340, 118, 128, 28,
-                 kIdVerify);
-      AddControl(hwnd, L"BUTTON", L"重新发送验证码", BS_PUSHBUTTON, 340, 152,
-                 128, 28, kIdResend);
-      AddControl(hwnd, L"STATIC", L"", 0, 12, 188, 456, 40, kIdStatus);
-      AddControl(hwnd, L"STATIC", L"最近同步：尚未同步。", 0, 12, 234, 456, 20,
-                 kIdSyncStatus);
-      // ADR 0062 决策 5: 「机会性同步」的用户可见口径（必须让用户看见，
-      // 不能静默改变他对同步时效的预期）。
-      AddControl(hwnd, L"STATIC",
-                 L"你正在输入时同步会自动延后，停止输入后自动完成。", 0, 12,
-                 256, 456, 18, -1);
-      AddControl(hwnd, L"LISTBOX", L"", LBS_NOTIFY | WS_VSCROLL | WS_BORDER, 12,
-                 278, 456, 130, kIdDevices);
-      AddControl(hwnd, L"BUTTON", L"撤销所选设备", BS_PUSHBUTTON, 12, 414, 140,
-                 28, kIdRevoke);
-      AddControl(hwnd, L"BUTTON", L"刷新设备列表", BS_PUSHBUTTON, 168, 414, 140,
-                 28, kIdRefreshDevices);
-      AddControl(hwnd, L"BUTTON", L"刷新登录状态", BS_PUSHBUTTON, 324, 414, 144,
-                 28, kIdRefresh);
-      AddControl(hwnd, L"BUTTON", L"清空云端数据", BS_PUSHBUTTON, 12, 448, 140,
-                 28, kIdDeleteData);
-      AddControl(hwnd, L"BUTTON", L"立即同步", BS_PUSHBUTTON, 168, 448, 140, 28,
-                 kIdSyncNow);
-      AddControl(hwnd, L"BUTTON", L"关闭", BS_PUSHBUTTON, 324, 448, 144, 28,
-                 kIdClose);
-
-      RefreshUi(hwnd);
+      CREATESTRUCTW* cs = reinterpret_cast<CREATESTRUCTW*>(lparam);
+      const Role role =
+          static_cast<Role>(reinterpret_cast<INT_PTR>(cs->lpCreateParams));
+      ::SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                          static_cast<LONG_PTR>(static_cast<int>(role)));
+      CloudAccountController::Instance().RegisterWindow(hwnd, ScopeOf(role));
+      CreateWidgets(hwnd, role);
+      RefreshUi(hwnd, role);
       return 0;
     }
 
     case WM_COMMAND: {
       const int id = LOWORD(wparam);
+      const int code = HIWORD(wparam);
+      const Role role = RoleOf(hwnd);
       CloudAccountController& controller = CloudAccountController::Instance();
-      switch (id) {
-        case kIdLogin: {
-          // 邮箱保持宽字符：SubmitLogin 内部再转 UTF-8 交给云端服务。
-          const std::wstring email = ReadControlText(hwnd, kIdEmail);
-          std::wstring password = ReadControlText(hwnd, kIdPassword);
-          controller.SubmitLogin(email, password);
-          // 口令用完立刻抹掉**堆上**的宽字符串副本。
-          // 输入框**不**在此清空：登录失败时要能改错重试（否则用户得
-          // 重新敲一遍口令）；成功后再由 RefreshUi 统一清空。
-          SecureZeroWide(&password);
-          return 0;
-        }
-        case kIdRegister: {
-          // 注册只请求服务端建号并发验证码，**不**建立登录态；
-          // 必须「验证邮箱 → 登录」两步才能拿到令牌（need_email_verify）。
-          const std::wstring email = ReadControlText(hwnd, kIdEmail);
-          std::wstring password = ReadControlText(hwnd, kIdPassword);
-          controller.SubmitRegister(email, password);
-          // 同上：注册失败保留口令便于重试；注册成功后用户还要用**同一**
-          // 口令登录，因此输入框一律不在这里清空。
-          SecureZeroWide(&password);
-          return 0;
-        }
-        case kIdVerify: {
-          const std::wstring email = ReadControlText(hwnd, kIdEmail);
-          std::wstring code = ReadControlText(hwnd, kIdVerifyCode);
-          controller.SubmitVerifyEmail(email, code);
-          // 验证码用后清零本地副本，但保留输入框内容：
-          // 验证失败（码错/过期）时用户还能改了再提交。
-          SecureZeroWide(&code);
-          return 0;
-        }
-        case kIdLogout:
-          controller.SubmitLogout();
-          return 0;
-        case kIdRefresh:
-          controller.SubmitRefresh();
-          return 0;
-        case kIdDeleteData:
-          controller.SubmitDeleteCloudData();
-          return 0;
-        case kIdRevoke: {
-          HWND list = ::GetDlgItem(hwnd, kIdDevices);
-          const LRESULT index =
-              list ? ::SendMessageW(list, LB_GETCURSEL, 0, 0) : -1;
-          if (index >= 0)
-            controller.SubmitRevokeDevice(static_cast<size_t>(index));
-          return 0;
-        }
-        case kIdRefreshDevices:
-          controller.SubmitListDevices();
-          return 0;
-        case kIdResend: {
-          // 重发验证码：读邮箱框 → 后台线程发请求（不在 UI 线程做网络 I/O）。
-          // **不清空验证码输入框**：失败时用户还能改了再提交。
-          const std::wstring email = ReadControlText(hwnd, kIdEmail);
-          controller.SubmitResendVerification(email);
-          return 0;
-        }
-        case kIdSyncNow:
-          controller.SubmitSyncNow();
-          return 0;
-        case kIdClose:
-          ::DestroyWindow(hwnd);
-          return 0;
+      switch (role) {
+        case Role::kAccount:
+          switch (id) {
+            case kIdLogin: {
+              // 邮箱保持宽字符：SubmitLogin 内部再转 UTF-8 交给云端服务。
+              const std::wstring email = ReadControlText(hwnd, kIdEmail);
+              std::wstring password = ReadControlText(hwnd, kIdPassword);
+              HWND save_box = ::GetDlgItem(hwnd, kIdSaveAccount);
+              const bool save_account =
+                  save_box != nullptr &&
+                  ::SendMessageW(save_box, BM_GETCHECK, 0, 0) == BST_CHECKED;
+              controller.SubmitLogin(email, password, save_account);
+              // 口令用完立刻抹掉**堆上**的宽字符串副本。
+              // 输入框**不**在此清空：登录失败时要能改错重试（否则用户得
+              // 重新敲一遍口令）；成功后再由 RefreshUi 统一清空。
+              SecureZeroWide(&password);
+              return 0;
+            }
+            case kIdRegister:
+              ShowRegisterWindow();
+              return 0;
+            case kIdForgotPassword:
+              ShowForgotWindow();
+              return 0;
+            case kIdLogout:
+              controller.SubmitLogout();
+              return 0;
+            case kIdSyncNow:
+              controller.SubmitSyncNow();
+              return 0;
+            case kIdHistoryCombo: {
+              if (code == CBN_SELCHANGE) {
+                HWND combo = ::GetDlgItem(hwnd, kIdHistoryCombo);
+                const LRESULT sel =
+                    combo ? ::SendMessageW(combo, CB_GETCURSEL, 0, 0) : -1;
+                if (sel >= 0) {
+                  wchar_t buf[256] = {0};
+                  ::SendMessageW(combo, CB_GETLBTEXT,
+                                 static_cast<LPARAM>(sel),
+                                 reinterpret_cast<LPARAM>(buf));
+                  HWND email = ::GetDlgItem(hwnd, kIdEmail);
+                  if (email != nullptr)
+                    ::SetWindowTextW(email, buf);
+                  ::SecureZeroMemory(buf, sizeof(buf));
+                }
+              }
+              return 0;
+            }
+            case kIdClose:
+              ::DestroyWindow(hwnd);
+              return 0;
+            default:
+              break;
+          }
+          break;
+
+        case Role::kVerify:
+          switch (id) {
+            case kIdVerify: {
+              std::wstring code_text = ReadControlText(hwnd, kIdVerifyCode);
+              controller.SubmitVerifyEmail(g_verify_email, code_text,
+                                          CloudStatusScope::kVerify);
+              // 验证码用后清零本地副本，但保留输入框内容：
+              // 验证失败（码错/过期）时用户还能改了再提交。
+              SecureZeroWide(&code_text);
+              return 0;
+            }
+            case kIdResend:
+              controller.SubmitResendVerification(g_verify_email,
+                                                 CloudStatusScope::kVerify);
+              return 0;
+            case kIdClose:
+              ::DestroyWindow(hwnd);
+              return 0;
+            default:
+              break;
+          }
+          break;
+
+        case Role::kRegister:
+          switch (id) {
+            case kIdRegister: {
+              const std::wstring email = ReadControlText(hwnd, kIdEmail);
+              std::wstring password = ReadControlText(hwnd, kIdPassword);
+              controller.SubmitRegister(email, password,
+                                        CloudStatusScope::kRegister);
+              // 同上：注册失败保留口令便于重试；注册成功后用户还要用**同一**
+              // 口令登录，因此输入框一律不在这里清空。
+              SecureZeroWide(&password);
+              return 0;
+            }
+            case kIdClose:
+              ::DestroyWindow(hwnd);
+              return 0;
+            default:
+              break;
+          }
+          break;
+
+        case Role::kForgot:
+          switch (id) {
+            case kIdResend:
+              controller.SubmitResendVerification(ReadControlText(hwnd, kIdEmail),
+                                                 CloudStatusScope::kForgot);
+              return 0;
+            case kIdResetPassword: {
+              const std::wstring email = ReadControlText(hwnd, kIdEmail);
+              std::wstring code_text = ReadControlText(hwnd, kIdVerifyCode);
+              std::wstring new_password = ReadControlText(hwnd, kIdNewPassword);
+              controller.SubmitResetPassword(email, code_text, new_password,
+                                            CloudStatusScope::kForgot);
+              SecureZeroWide(&code_text);
+              SecureZeroWide(&new_password);
+              return 0;
+            }
+            case kIdClose:
+              ::DestroyWindow(hwnd);
+              return 0;
+            default:
+              break;
+          }
+          break;
+
+        case Role::kDevice:
+          switch (id) {
+            case kIdRevoke: {
+              HWND list = ::GetDlgItem(hwnd, kIdDevices);
+              const LRESULT index =
+                  list ? ::SendMessageW(list, LB_GETCURSEL, 0, 0) : -1;
+              if (index >= 0)
+                controller.SubmitRevokeDevice(static_cast<size_t>(index));
+              return 0;
+            }
+            case kIdRefreshDevices:
+              controller.SubmitListDevices();
+              return 0;
+            case kIdRefresh:
+              controller.SubmitRefresh();
+              return 0;
+            case kIdDeleteData:
+              controller.SubmitDeleteCloudData();
+              return 0;
+            case kIdClose:
+              ::DestroyWindow(hwnd);
+              return 0;
+            default:
+              break;
+          }
+          break;
+
         default:
           break;
       }
@@ -931,7 +1276,7 @@ LRESULT CALLBACK WndProc(HWND hwnd,
     }
 
     case WM_APP_REFRESH:
-      RefreshUi(hwnd);
+      RefreshUi(hwnd, RoleOf(hwnd));
       return 0;
 
     case WM_CLOSE:
@@ -939,10 +1284,11 @@ LRESULT CALLBACK WndProc(HWND hwnd,
       return 0;
 
     case WM_DESTROY: {
-      CloudAccountController& controller = CloudAccountController::Instance();
-      if (controller.owner_window() == hwnd)
-        controller.SetOwnerWindow(nullptr);
-      g_window = nullptr;
+      const Role role = RoleOf(hwnd);
+      CloudAccountController::Instance().UnregisterWindow(hwnd);
+      HWND& slot = g_windows[static_cast<int>(role)];
+      if (slot == hwnd)
+        slot = nullptr;
       return 0;
     }
   }
@@ -953,77 +1299,109 @@ bool EnsureClass() {
   static bool registered = false;
   if (registered)
     return true;
-  WNDCLASSEXW wc;
-  ::ZeroMemory(&wc, sizeof(wc));
-  wc.cbSize = sizeof(wc);
-  wc.lpfnWndProc = WndProc;
-  wc.hInstance = ::GetModuleHandleW(nullptr);
-  wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
-  wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
-  wc.lpszClassName = kClassName;
-  wc.hIcon = ::LoadIconW(nullptr, IDI_APPLICATION);
-  if (::RegisterClassExW(&wc) == 0)
-    return false;
+  for (int i = 0; i < static_cast<int>(Role::kCount); ++i) {
+    const Role role = static_cast<Role>(i);
+    WNDCLASSEXW wc;
+    ::ZeroMemory(&wc, sizeof(wc));
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = ::GetModuleHandleW(nullptr);
+    wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    wc.lpszClassName = ClassNameFor(role);
+    wc.hIcon = ::LoadIconW(nullptr, IDI_APPLICATION);
+    if (::RegisterClassExW(&wc) == 0 &&
+        ::GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+      return false;
+  }
   registered = true;
   return true;
 }
 
-// 保证窗口真的可见。**不用 ShowWindow 来显示**:
-//   进程内**首次** ShowWindow 的 nCmdShow 会被启动信息
-//   (STARTUPINFO + STARTF_USESHOWWINDOW)覆盖 —— WeaselServer 以隐藏/最小化
-//   方式拉起时, 首次 ShowWindow(SW_SHOW) 被改写成 SW_HIDE, 窗口从此停在
-//   隐藏态, 而 g_window 已被缓存 ⇒ 之后每次点击都只是"对一个隐藏窗
-//   SetForegroundWindow", 用户看到的就是"点菜单毫无反应"(2026-11-11 真机
-//   缺陷, 探针实证: 窗口存在但 WS_VISIBLE=0)。
-//   SetWindowPos(SWP_SHOWWINDOW) 直接置 WS_VISIBLE 位, 不走 ShowWindow 的
-//   nCmdShow 语义, 因此不受该覆盖影响。
-void EnsureWindowShown(HWND hwnd) {
-  if (hwnd == nullptr || !::IsWindow(hwnd))
+HWND CreateOrShow(Role role) {
+  HWND& hwnd = g_windows[static_cast<int>(role)];
+  if (hwnd != nullptr && !::IsWindow(hwnd)) {
+    // 缓存的句柄已失效(窗口被销毁但 WM_DESTROY 没走到本缓存): 丢掉重建,
+    // 否则此后每次点击都只是对一个死句柄置前。
+    hwnd = nullptr;
+  }
+  if (hwnd != nullptr) {
+    EnsureWindowShown(hwnd);
+    ::SetForegroundWindow(hwnd);
+    return hwnd;
+  }
+  if (!EnsureClass())
+    return nullptr;
+
+  int width = 480;
+  int height = 250;
+  AccountClientSize(role, &width, &height);
+  RECT rect = {0, 0, width, height};
+  ::AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+  hwnd = ::CreateWindowExW(
+      WS_EX_APPWINDOW, ClassNameFor(role), TitleFor(role), WS_OVERLAPPEDWINDOW,
+      CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left,
+      rect.bottom - rect.top, nullptr, nullptr, ::GetModuleHandleW(nullptr),
+      reinterpret_cast<LPVOID>(static_cast<INT_PTR>(role)));
+  if (hwnd == nullptr)
+    return nullptr;
+  EnsureWindowShown(hwnd);
+  if (role != Role::kAccount) {
+    // 子窗口摆在主窗口正中（否则会跟主窗口叠在一起，找不到）。
+    widgets::CenterOnOwner(hwnd, g_windows[static_cast<int>(Role::kAccount)]);
+  }
+  ::SetForegroundWindow(hwnd);
+  return hwnd;
+}
+
+void ShowVerifyWindow(const std::wstring& email) {
+  g_verify_email = email;
+  HWND hwnd = CreateOrShow(Role::kVerify);
+  if (hwnd == nullptr)
     return;
-  if (::IsIconic(hwnd))
-    ::ShowWindow(hwnd, SW_RESTORE);
-  if (!::IsWindowVisible(hwnd))
-    ::SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
-                   SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-  ::UpdateWindow(hwnd);
+  HWND caption = ::GetDlgItem(hwnd, kIdVerifyCaption);
+  if (caption != nullptr) {
+    const std::wstring text =
+        L"验证码已发送到 " + email + L"，请输入 6 位验证码。";
+    ::SetWindowTextW(caption, text.c_str());
+  }
+  HWND code = ::GetDlgItem(hwnd, kIdVerifyCode);
+  if (code != nullptr)
+    ::SetWindowTextW(code, L"");
+}
+
+void ShowRegisterWindow() {
+  HWND hwnd = CreateOrShow(Role::kRegister);
+  if (hwnd == nullptr)
+    return;
+  HWND owner = g_windows[static_cast<int>(Role::kAccount)];
+  HWND email = ::GetDlgItem(hwnd, kIdEmail);
+  if (email != nullptr && owner != nullptr)
+    ::SetWindowTextW(email, ReadControlText(owner, kIdEmail).c_str());
+}
+
+void ShowForgotWindow() {
+  HWND hwnd = CreateOrShow(Role::kForgot);
+  if (hwnd == nullptr)
+    return;
+  HWND owner = g_windows[static_cast<int>(Role::kAccount)];
+  HWND email = ::GetDlgItem(hwnd, kIdEmail);
+  if (email != nullptr && owner != nullptr)
+    ::SetWindowTextW(email, ReadControlText(owner, kIdEmail).c_str());
 }
 
 }  // namespace
 
 HWND Show() {
-  if (g_window != nullptr && !::IsWindow(g_window)) {
-    // 缓存的句柄已失效(窗口被销毁但 WM_DESTROY 没走到本缓存): 丢掉重建,
-    // 否则此后每次点击都只是对一个死句柄置前。
-    g_window = nullptr;
-  }
-  if (g_window != nullptr) {
-    EnsureWindowShown(g_window);
-    ::SetForegroundWindow(g_window);
-    return g_window;
-  }
-  if (!EnsureClass())
-    return nullptr;
+  return CreateOrShow(Role::kAccount);
+}
 
-  if (g_font == nullptr)
-    g_font = reinterpret_cast<HFONT>(::GetStockObject(DEFAULT_GUI_FONT));
-
-  RECT rect = {0, 0, kClientWidth, kClientHeight};
-  ::AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
-  HWND hwnd =
-      ::CreateWindowExW(WS_EX_APPWINDOW, kClassName, L"Fluxing 云端账号",
-                        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                        rect.right - rect.left, rect.bottom - rect.top, nullptr,
-                        nullptr, ::GetModuleHandleW(nullptr), nullptr);
-  if (hwnd == nullptr)
-    return nullptr;
-  EnsureWindowShown(hwnd);
-  g_window = hwnd;
-  ::SetForegroundWindow(g_window);
-  return g_window;
+HWND ShowDevice() {
+  return CreateOrShow(Role::kDevice);
 }
 
 HWND ActiveHwnd() {
-  return g_window;
+  return g_windows[static_cast<int>(Role::kAccount)];
 }
 
 }  // namespace account_dialog
