@@ -101,4 +101,4 @@
 1. **装机 1.3.4 并做用户在场验收**（**PPL ⇒ 必须先注销 / 重启**），核心判据 = 「重置口令 → 重新登录 → 观察是否自动全量重推（本地词库重新出现在云端）」。
 2. 双击确认「换钥后旧行仍在云端但不可解」这一**已知代价**是否需要给用户一句提示（产品口径决定，不代决）。
 3. 双机 AC 7 条 + restore 端到端 + 输入延迟两组对照（需第二台设备 / 第二个 Windows 账户；`CloudCredentialStore` 是 **Windows 用户级全局单例**）。
-4. 仓库累计 **7 个提交未 push**（提交 AV 后为 8 个）—— **待用户授权**。
+4. ~~仓库累计 7 个提交未 push（提交 AV 后为 8 个）~~ —— **已闭环**：2026-11-20 换代理节点后推送成功，`feat/100-cloud-sync` 已新建于 `kizemo` 远端，`f52e902` = 远端 HEAD，upstream = `kizemo/feat/100-cloud-sync`，`ahead=0 / behind=0`。PR 入口：`https://github.com/kizemo/fluxing/pull/new/feat/100-cloud-sync`。
