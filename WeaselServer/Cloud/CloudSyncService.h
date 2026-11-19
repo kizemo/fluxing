@@ -265,6 +265,18 @@ class CloudSyncService {
 //   其后每行：row\t<item_key>\t<ms>\t<counter>\t<device>\t<payload 的 sha256>
 // 有了 payload 的哈希，本地行是否被改过就能判定；改过才分配新的 HLC，
 // 否则本地永远盖过远端。
+// 重置本地同步状态文件（sidecar）：覆盖成「版本行 + 游标归零」。
+//
+// 何时**必须**调用：用户点「清空云端数据」之后 —— 否则云端已清空、本地
+// sidecar 仍标记「已同步」，本地词典再也传不上去（与
+// CloudSyncCoordinator::ResetLocalSyncState 是同一条契约）。
+//
+// 为什么是自由函数而不只是协调器成员：协调器是**每轮同步现建现用**的
+// （见 CloudAccountDialog.cpp 的 RunSyncRound），UI 侧没有长期持有的实例
+// 可调；sidecar 是文件态的，重置语义只依赖落盘内容 ⇒ 抽成自由函数，
+// 成员函数与 UI 复用同一份实现，不会各写一遍。
+bool ResetCloudSyncSidecarFile(const std::string& sidecar_path, std::string* err);
+
 class CloudSyncCoordinator {
  public:
   CloudSyncCoordinator(ICloudTransport* transport,

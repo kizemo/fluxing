@@ -565,3 +565,29 @@
 - **门禁（本轮独立复跑）**：服务端 `typecheck` 0／`vitest` 57 passed／`check:endpoint` 0；客户端 `build.bat weasel` EXIT=0·0 警告·0 错误／云单测 `RESULT: PASS=492 FAIL=0`。
 - **仍待用户拍板**：AT-2 产品级决策 A/B/C（重置口令 ⇒ `enc_key` 变 ⇒ 云端旧密文不可解）—— 已向用户发问。
 - **仍待真机**：客户端 AT-2 代码未装机（需出包 1.3.3 + 注销 / 重启，因 `WeaselServer.exe` 是 PPL）。
+
+## 批次 AU 收尾记录（2026-11-19 晚 · sidecar 重置修复 + 出包 1.3.3 + 重置口令恢复指引）
+
+### AU-1 · 缺陷修复：「清空云端数据」后本地词典再也传不上去（已闭环）
+- **根因（源码级取证）**：UI 路径 `CloudAccountController::SubmitDeleteCloudData` 只调 `DeleteCloudData`，**从不重置本地同步状态 sidecar**（`fluxing-cloud-sync.state`）⇒ 本地词条仍标记「已同步」⇒ 不再作为新增推送。`CloudSyncCoordinator::ResetLocalSyncState` **零调用者零测试** ⇒ 缺陷长期潜伏。
+- **修法**：新增自由函数 `ResetCloudSyncSidecarFile(sidecar_path, err)`（`WeaselServer/Cloud/CloudSyncService.{h,cpp}`），协调器成员 `ResetLocalSyncState` 委托它、UI 复用同一份实现；新增 `CloudSyncSidecarPath()`（`CloudAccountDialog.cpp`）保证 UI 与协调器指向同一文件（真相源 `ResolveFluxingUserDataPath()`）；清空成功 ⇒ 重置 sidecar ⇒ `NotifyLocalChange()` ⇒ 本地词库整库重推。
+- **不自动删数据**：清空云端属不可逆删除，**仅由用户显式点击发起**；程序不代劳。
+- **门禁**：云单测 **`PASS=502 FAIL=0`**（基线 492 ⇒ **+10**，新增 `TestCloudSidecarReset` 6 组断言）。
+
+### AU-2 · 恢复指引：「重置口令后云端旧密文不可解」
+- **事实**：重置口令 ⇒ 服务端换 `auth_key` ⇒ 本地 `enc_key` 变化 ⇒ R2 上旧密文**永不可解**（服务端永不见 `enc_key`、不参与 KDF，无代解余地）。
+- **可执行路径（本批落好）**：用新口令登录 → 「设备与云数据」→ 点「清空云端数据」→ 本地 sidecar 重置 → 本地词库重新上传（AU-1 已把这条路径修通）。
+- **文案**：找回口令窗状态行改为「密码已重置，请用新密码登录。旧云端数据已无法解密，可登录后在「设备与云数据」清空后重传。」。
+- **仍待用户拍板**：是否改为服务端**自动**清空云端（A）／只换 `auth_key` 保留 `enc_key`（B，违反红线）／客户端两段式重推（C）。本批**不代决**。
+
+### AU-3 · 出包 1.3.3
+- **版本真相源**：`version.txt` / `env.bat` / `weasel.props` / `CHANGELOG.md` 四处同步 1.3.2 → 1.3.3（`WEASEL_BUILD` 保持 0 ⇒ `weaselx64.1.3.3.0.dll` 从未存在 ⇒ 无 L107 风险；`env.bat` / `weasel.props` 被 gitignore ⇒ 不入提交）。
+- **工程坑（已踩）**：改 `weasel.props` 的 `PreprocessorDefinitions` **不触发** MSBuild 重编译 ⇒ `.rc` 不重编 ⇒ 版本资源停在 1.3.2.0；必须 **touch 4 个 `.rc`**（只改 mtime、保住 UTF-16LE+BOM+CRLF）后重建。
+- **构建**：`build.bat weasel installer` ⇒ EXIT=0；MSBuild **0 警告 0 错误**；makensis 8 条 `warning 7010`（既有可选产物告警）。
+- **产物**：`output/archives/fluxing-1.3.3-installer.exe` —— 42968958 B · sha16 `20A8B6754ED3C656`；内嵌 `WeaselServer.exe` 2748416 B / filever `1.3.3.0`（1.3.2 包内为 `1.3.2.0` ⇒ 判别通过）；AU 新文案在 1.3.3 包内可检出、1.3.2 包内无 ⇒ 本批代码确在包内。
+
+### AU-4 · 未闭环
+- ① **AT-2 产品级决策 A/B/C 待用户拍板**；② **未装机**（`WeaselServer.exe` 是 PPL ⇒ 须注销 / 重启）⇒ 用户在场 AC（账号页两态目视 / 验证码窗 / 注册 / 找回密码 / 保存账号两次登录 / 重置口令后重新登录与清空重推）仍待做；③ 双机 AC 7 条 + restore 端到端 + 输入延迟两组对照；④ 仓库累计提交仍未 push（无授权）。
+
+### AU-5 · 交接文档
+- `docs/archive/handoffs/handoff-2026-11-19-batch-au-sidecar-reset-and-1-3-3-release.md`（含落码表 / 取证链 / 门禁数字 / 已验证·推断·未验证 / 工具坑 / 下一批建议）；接力 prompt 按用户 2026-11-08 指示**直接给在当轮回答正文**，不另落文件。

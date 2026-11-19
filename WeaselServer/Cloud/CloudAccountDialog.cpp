@@ -60,6 +60,14 @@ using widgets::SecureZeroWide;
 using widgets::ToUtf8;
 using widgets::ToWide;
 
+// sidecar 落点（用户数据目录 / 窄路径）：真相源 = ResolveFluxingUserDataPath
+// （读注册表 RimeUserDir，回退 %AppData%\fluxing）。
+// 协调器内部用窄路径 API（std::ofstream / std::ifstream），落点必须是 ASCII。
+// 抽成函数：清空云端数据后要重置**同一份** sidecar ⇒ 两处必须指向同一个文件。
+std::string CloudSyncSidecarPath() {
+  return ToUtf8(ResolveFluxingUserDataPath() / L"fluxing-cloud-sync.state");
+}
+
 std::wstring EnvBaseUrl() {
   wchar_t buf[512] = {0};
   const DWORD len = ::GetEnvironmentVariableW(
@@ -334,9 +342,7 @@ class CloudAccountController::Impl {
     // 回退 %AppData%\fluxing）。
     // 协调器内部用窄路径 API（std::ofstream / std::ifstream），
     // 落点必须是 ASCII。当前实际落点：D:\Program Files\fluxing\user1\fluxing。
-    const std::wstring sidecar_wide =
-        ResolveFluxingUserDataPath() / L"fluxing-cloud-sync.state";
-    const std::string sidecar = ToUtf8(sidecar_wide);
+    const std::string sidecar = CloudSyncSidecarPath();
 
     CloudSyncCoordinator coordinator(transport.get(), EnsureDictBackend(),
                                      token, device, enc_key, sidecar);
@@ -702,10 +708,35 @@ void CloudAccountController::SubmitDeleteCloudData() {
   impl->Post([impl]() {
     std::string err;
     const bool ok = impl->service->DeleteCloudData(&err);
+    std::string sidecar_err;
+    bool sidecar_ok = true;
+    if (ok) {
+      // 云端已清空 ⇒ 本地 sidecar **必须**重置：否则本地词条仍被标记
+      // 「已同步」，再也不会被推上去（CloudSyncService.h 的契约）。
+      // 这是「清空云端 + 重新同步」能真正生效的前提，也是重置口令后
+      // （旧 enc_key 密文解不开）的恢复路径。
+      sidecar_ok =
+          ResetCloudSyncSidecarFile(CloudSyncSidecarPath(), &sidecar_err);
+      if (sidecar_ok) {
+        // 通知引擎「本地有改动」⇒ 下一轮把本地词条当新增重推。
+        std::lock_guard<std::mutex> engine_lock(impl->engine_mutex);
+        if (impl->engine && impl->engine->running())
+          impl->engine->NotifyLocalChange();
+      }
+    }
     std::lock_guard<std::mutex> lock(impl->mutex);
-    impl->status_text[static_cast<int>(CloudStatusScope::kDevice)] =
-        ok ? L"云端数据已清空（账号本身保留）。"
-           : (L"清空云端数据失败：" + ToWide(err));
+    std::wstring text;
+    if (!ok) {
+      text = L"清空云端数据失败：" + ToWide(err);
+    } else if (!sidecar_ok) {
+      text = L"云端数据已清空（账号本身保留），但本地同步状态重置失败：" +
+             ToWide(sidecar_err) + L" 请点「立即同步」重试。";
+    } else {
+      text =
+          L"云端数据已清空（账号本身保留）。本地词库会重新上传，"
+          L"也可点「立即同步」立即上传。";
+    }
+    impl->status_text[static_cast<int>(CloudStatusScope::kDevice)] = text;
   });
 }
 
@@ -752,8 +783,15 @@ void CloudAccountController::SubmitResetPassword(const std::wstring& email,
         email_utf8, code_utf8, new_password_utf8, &err);
     // 新口令用后清零。
     SecureZeroString(&new_password_utf8);
-    impl->SetStatus(scope, ok ? L"密码已重置，请用新密码登录。"
-                              : (L"重置密码失败：" + ToWide(err)));
+    // 重置口令 ⇒ 服务端换 auth_key ⇒ 本地 enc_key 随之变化 ⇒ 云端旧密文
+    // **永不可解**（服务端从不保存 enc_key、也从不参与 KDF ⇒ 没有代解的余地）。
+    // 唯一可执行的恢复路径：用户显式清空云端数据（不可逆删除，但由用户亲手
+    // 点击发起），本地 sidecar 随之重置 ⇒ 本地词库整库重推。
+    // 文案必须给到「在哪点」，否则用户只看到一句无解的失败。
+    impl->SetStatus(scope,
+                    ok ? L"密码已重置，请用新密码登录。旧云端数据已无法解密，"
+                         L"可登录后在「设备与云数据」清空后重传。"
+                       : (L"重置密码失败：" + ToWide(err)));
   });
 }
 

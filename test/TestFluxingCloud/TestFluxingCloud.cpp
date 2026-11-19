@@ -2912,6 +2912,86 @@ void TestCloudMaintenanceGate() {
   }
 }
 
+// 批次 AU：「清空云端数据」必须重置本地 sidecar —— 否则云端已清空、本地词典
+// 仍被标记「已同步」，再也传不上去（CloudSyncService.h 里的同款契约）。
+void TestCloudSidecarReset() {
+  std::printf("[AU] 清空云端后本地同步状态重置（sidecar）\n");
+
+  const std::string path = "au-test-sidecar.state";
+  const char* kSeed = "#fluxing-cloud-sync-v1\n"
+                      "seq\t42\n"
+                      "row\tkey-1\t1700000000000\t1\tdev-a\tdeadbeef\n"
+                      "row\tkey-2\t1700000000001\t2\tdev-b\tc0ffee\n";
+
+  // ① 重置后：历史行全部消失、游标归零、版本行保留。
+  {
+    FILE* f = std::fopen(path.c_str(), "wb");
+    Check(f != nullptr, "测试用 sidecar 可写");
+    if (f != nullptr) {
+      std::fputs(kSeed, f);
+      std::fclose(f);
+    }
+  }
+  std::string err;
+  Check(fc::ResetCloudSyncSidecarFile(path, &err), "重置 sidecar 成功");
+  {
+    std::string all;
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (f != nullptr) {
+      char buf[512] = {0};
+      size_t n = 0;
+      while ((n = std::fread(buf, 1, sizeof(buf) - 1, f)) > 0) {
+        buf[n] = '\0';
+        all += buf;
+      }
+      std::fclose(f);
+    }
+    Check(all.find("row\t") == std::string::npos,
+          "重置后历史行（row 行）全部消失");
+    Check(all.find("seq\t0") != std::string::npos, "重置后游标归零");
+    Check(all.find("#fluxing-cloud-sync-v1") != std::string::npos,
+          "重置后保留版本行");
+  }
+
+  // ② 空路径 ⇒ 没有 sidecar 可重置 ⇒ 直接成功。
+  Check(fc::ResetCloudSyncSidecarFile("", &err), "空路径 => 视为成功");
+
+  // ③ 落点不可写 ⇒ 失败并给出中文原因（不静默吞掉）。
+  {
+    std::string err2;
+    const bool ok =
+        fc::ResetCloudSyncSidecarFile("au-no-such-dir/au.state", &err2);
+    Check(!ok, "不可写路径 => 失败");
+    Check(!err2.empty(), "失败时给出中文原因");
+  }
+
+  // ④ 协调器成员函数与自由函数同语义。
+  {
+    MockTransport transport;
+    FakeGateBackend backend;
+    fc::CloudSyncCoordinator coordinator(
+        &transport, &backend, "tok-au", "dev-au",
+        std::vector<uint8_t>(32, 0x01), path);
+    std::string err3;
+    Check(coordinator.ResetLocalSyncState(&err3),
+          "协调器 ResetLocalSyncState 成功");
+    std::string all;
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (f != nullptr) {
+      char buf[512] = {0};
+      size_t n = 0;
+      while ((n = std::fread(buf, 1, sizeof(buf) - 1, f)) > 0) {
+        buf[n] = '\0';
+        all += buf;
+      }
+      std::fclose(f);
+    }
+    Check(all.find("row\t") == std::string::npos,
+          "协调器重置后历史行也消失");
+  }
+  std::remove(path.c_str());
+}
+
 }  // namespace
 
 int main() {
@@ -2959,6 +3039,9 @@ int main() {
 
   // 批次 AR · ADR 0062：维护准入闸门（判据 / 整轮跳过 / 跳过 ≠ 失败）。
   TestCloudMaintenanceGate();
+
+  // 批次 AU：清空云端后本地同步状态重置（sidecar）。
+  TestCloudSidecarReset();
 
   // 批次 AT-1 · ADR 0063：账号页信息架构（两态可见性 / 几何 / 历史邮箱）。
   TestAccountPageUi();

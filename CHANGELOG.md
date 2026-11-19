@@ -1,4 +1,12 @@
-## [Unreleased]
+## [1.3.3]
+### fix(fluxing): 「清空云端数据」后本地词典再也传不上去 —— sidecar 未重置（批次 AU）
+
+- **缺陷（源码级取证 · 已闭环）**：清空云端的 UI 路径 `CloudAccountController::SubmitDeleteCloudData` 只调 `DeleteCloudData`（`DELETE /v1/account/data`），**从不重置本地同步状态 sidecar**（`fluxing-cloud-sync.state`）⇒ 本地词条仍被标记「已同步」⇒ 下一轮同步**不会**把它们当新增推送 ⇒ **清空云端后本地词典再也传不上去**。`CloudSyncCoordinator::ResetLocalSyncState` 此前**零调用者、零测试**（全树只有定义与声明）⇒ 该缺陷长期潜伏。
+- **修法**：① 抽出自由函数 `ResetCloudSyncSidecarFile(sidecar_path, err)`（覆盖 sidecar 为版本行 + `seq\t0`），协调器成员 `ResetLocalSyncState` 与 UI 复用**同一份实现**（避免两处各写一遍）；② 新增 `CloudSyncSidecarPath()` helper，让 UI 与协调器指向**同一个** sidecar 文件（真相源 = `ResolveFluxingUserDataPath()`）；③ 清空云端成功后重置 sidecar，再 `NotifyLocalChange()` ⇒ 下一轮把本地词库整库重推。**清空云端是用户显式点击发起的不可逆删除，程序不自动执行**。
+- **恢复指引（补上「重置口令后云端旧密文不可解」的可执行路径）**：重置口令 ⇒ 服务端换 `auth_key` ⇒ 本地 `enc_key` 变化 ⇒ 云端旧密文**永不可解**（服务端永不见 `enc_key`、不参与 KDF）⇒ 找回口令窗状态行改为「密码已重置，请用新密码登录。旧云端数据已无法解密，可登录后在「设备与云数据」清空后重传。」，把**在哪点**说清楚（设备与云数据窗 →「清空云端数据」→ 本地词库重传）。
+- **门禁**：云单测 **`PASS=502 FAIL=0`**（基线 492 ⇒ **+10**；新增 `TestCloudSidecarReset`：重置后行全消失 / `seq` 归零 / 版本行保留 / 空路径视为成功 / 不可写路径失败并有中文原因 / 协调器成员同语义）；`build.bat weasel installer` **0 警告 0 错误**（makensis 8 条既有 `warning 7010`）。
+- **出包 1.3.3**：版本真相源四处同步 1.3.2 → 1.3.3（`version.txt` / `env.bat` / `weasel.props` / 本文件）；**改 `.props` 不触发 MSBuild 重编译** ⇒ 必须 touch 4 个 `.rc`（`WeaselServer` / `WeaselDeployer` / `WeaselSetup` / `WeaselTSF`）后重建，否则版本资源仍停在 1.3.2.0（撞 L107 与版本闸门）。产物 `output/archives/fluxing-1.3.3-installer.exe`（42968958 B · sha16 `20A8B6754ED3C656`）；内嵌 `WeaselServer.exe` **2748416 B / filever `1.3.3.0`**（1.3.2 包内为 `1.3.2.0` ⇒ 判别通过）；AU 新文案在 1.3.3 包内可检出、1.3.2 包内**无** ⇒ 本批代码确在包内。
+- **⚠️ 未闭环**：AT-2 产品级决策 **A/B/C 仍待用户拍板**（本批只把不依赖该决策的部分落好：清空 + 重推路径可用、指引给到「在哪点」）；**未装机**（`WeaselServer.exe` 是 **PPL** ⇒ 装机前必须注销 / 重启）；双机 AC 7 条 + restore 端到端 + 输入延迟两组对照；仓库累计提交仍未 push（无授权）。
 ### feat(fluxing): 服务端「忘记密码 / 重置口令」端点 + 客户端接线（批次 AT-2）
 
 - **服务端端点（[ADR 0064](docs/adr/0064-server-password-reset-endpoints.md) · Proposed）**：新增 `POST /v1/auth/password-reset/start`（发重置验证码）与 `POST /v1/auth/password-reset/confirm`（校验验证码 + 用新口令派生的 `auth_key` 改口令）两条端点；**重置码落独立表 `password_resets`**（`migrations/0002_password_resets.sql`，未改已上线的 0001）⇒ **注册验证码与重置验证码在存储层就不可互换**（此前 `email_verifications` 无 purpose 列、注册码可当重置码用）。

@@ -1252,22 +1252,26 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   return true;
 }
 
-bool CloudSyncCoordinator::ResetLocalSyncState(std::string* err) {
-  sidecar_rows_.clear();
-  last_server_seq_ = 0;
-  if (sidecar_path_.empty())
+bool ResetCloudSyncSidecarFile(const std::string& sidecar_path, std::string* err) {
+  if (sidecar_path.empty())
     return true;
   // 用「只有版本行 + 游标归零」覆盖 sidecar，而不是删文件 ——
   // 路径可能含非 ASCII 字符，Win32 的 ANSI 版 API 会踩坑。
-  std::ofstream out(sidecar_path_.c_str(), std::ios::binary | std::ios::trunc);
+  std::ofstream out(sidecar_path.c_str(), std::ios::binary | std::ios::trunc);
   if (!out) {
     if (err)
-      *err = "无法重置同步状态文件：" + sidecar_path_;
+      *err = "无法重置同步状态文件：" + sidecar_path;
     return false;
   }
   out << "#fluxing-cloud-sync-v1\n";
   out << "seq\t0\n";
   return true;
+}
+
+bool CloudSyncCoordinator::ResetLocalSyncState(std::string* err) {
+  sidecar_rows_.clear();
+  last_server_seq_ = 0;
+  return ResetCloudSyncSidecarFile(sidecar_path_, err);
 }
 
 }  // namespace cloud
