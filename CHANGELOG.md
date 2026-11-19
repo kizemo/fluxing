@@ -1,4 +1,13 @@
 ## [Unreleased]
+### feat(fluxing): 服务端「忘记密码 / 重置口令」端点 + 客户端接线（批次 AT-2）
+
+- **服务端端点（[ADR 0064](docs/adr/0064-server-password-reset-endpoints.md) · Proposed）**：新增 `POST /v1/auth/password-reset/start`（发重置验证码）与 `POST /v1/auth/password-reset/confirm`（校验验证码 + 用新口令派生的 `auth_key` 改口令）两条端点；**重置码落独立表 `password_resets`**（`migrations/0002_password_resets.sql`，未改已上线的 0001）⇒ **注册验证码与重置验证码在存储层就不可互换**（此前 `email_verifications` 无 purpose 列、注册码可当重置码用）。
+- **安全红线不变**：服务端**永不见明文口令、永不见 `enc_key`、不参与任何 KDF**；`auth_key` 由客户端按 ADR 0054 派生后送上来，落库仍是 `verifier = base64(HMAC-SHA256(AUTH_PEPPER, auth_key))`；响应体只回 `{ ok, email }`，**不回显验证码或任何口令相关字段**。
+- **重置成功即吊销该账号全部令牌** ⇒ 改密后所有设备都要用新口令重新登录。
+- **客户端接线**：`CloudAccountService::StartPasswordReset` 新增、`ResetPassword` 端点改到 `/confirm`；账号页「忘记密码」窗的「发送验证码」改走重置端点（原先复用注册用的 `/v1/auth/resend`，发的是注册用途的码，重置端点会拒收）。
+- **门禁**：服务端 `typecheck` 0 / `vitest` **57 passed**（基线 42 ⇒ +15）/ `check:endpoint` 通过；客户端 `build.bat weasel` **0 警告 0 错误** / 云单测 **PASS=492 FAIL=0**。
+- **⚠️ 未闭环**：重置口令后 `enc_key` 变化 ⇒ R2 上的历史密文**无法解密**（服务端无 `enc_key` 可代解）⇒ **「重置后云端旧数据怎么办」仍待产品决策**（A 重置即清空云端 / B 只换 `auth_key` 保留 `enc_key`〔违反红线〕/ C 客户端两段式重推）；**线上部署已完成**（D1 `0002` 迁移已应用、Worker Version ID `40b2f9d9-4655-497b-842b-266e1bf27af9`、线上六条判别全绿、真实重置邮件已投递）；**真机验收未做**（本段客户端改动需重新出包 1.3.3，且 `WeaselServer.exe` 是 PPL ⇒ 装机前必须注销 / 重启）。
+
 ### feat(fluxing): 账号页按登录态互斥两套视图 + 验证码独立窗口 + 注册/找回密码入口（批次 AT-1）
 
 - **账号页重构（[ADR 0063](docs/adr/0063-account-page-information-architecture-and-state-views.md) · Proposed）**：① **登录态互斥** —— 未登录态 12 项（邮箱地址 / 历史下拉 / 密码 / 保存账号 / 登录 / 注册 / 忘记密码 / 状态行 / 关闭），已登录态 8 项（当前登录账号 / 退出登录 / 立即同步 / 最近同步 / 机会性同步说明 / 状态行 / 关闭）⇒ 两套控件互斥，用户**一眼可辨**（不再「一屏全堆 + 灰亮」）；② **验证码独立窗口** —— 首次登录未验证账号、或注册成功后，自动弹出**独立**验证码窗，不再内嵌主窗口；③ **注册窗**与**找回密码窗**（邮箱 + 验证码 + 新密码 + 重置密码）各自独立成窗；④ **设备与云数据** 搬进独立窗口，托盘 / 快捷设置栏右键菜单新增入口「设备与云数据」（未登录也可打开，改云端数据的按钮置灰）。

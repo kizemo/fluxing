@@ -72,6 +72,7 @@ Do not dump all ADRs into every prompt.
 | 0061 | 0061. 用户词典同步的 rime 生命周期口径：Start/End 必须配对，levers 调用一律加 SEH 护栏，生命周期操作必须互斥 | `docs/adr/0061-rime-lifecycle-paired-maintenance-and-seh-guards.md` | Accepted |
 | 0062 | 0062. 云同步的维护准入闸门：无活跃输入会话才允许 finalize，用户会话不得被同步打断 | `docs/adr/0062-cloud-sync-maintenance-gate-and-session-preservation.md` | Accepted |
 | 0063 | 0063. 账号页信息架构：按登录态互斥的两套视图 + 四个独立子窗口（验证码 / 注册 / 找回口令 / 设备与云数据） | `docs/adr/0063-account-page-information-architecture-and-state-views.md` | Proposed |
+| 0064 | 0064. 服务端「忘记密码 / 重置口令」端点：两段式 start/confirm + 独立重置码表（用途隔离）+ 服务端只收派生 auth_key | `docs/adr/0064-server-password-reset-endpoints.md` | Proposed |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

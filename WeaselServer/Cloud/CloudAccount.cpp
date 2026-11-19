@@ -471,15 +471,48 @@ bool CloudAccountService::ResendVerification(const std::string& email,
 }
 
 // ---------------------------------------------------------------------------
-// 重置口令（批次 AT-1 · 占位实现）
+// 发起口令重置（批次 AT-2）
 // ---------------------------------------------------------------------------
 //
-// ⚠️ **服务端端点尚不存在**（批次 AT-2 实现）⇒ 当前必然 404。
-//    本方法只负责把请求按约定发出去，并把服务端的失败原样转成中文。
+//   POST /v1/auth/password-reset/start  { email } → { ok: true, email }
 //
-// 约定（AT-2 需要照此实现服务端）：
-//   POST /v1/auth/password-reset  { email, code, auth_key } → { ok: true }
-//   · code  ：6 位数字邮箱验证码（与 /v1/auth/verify 同一套码）
+// 发出的验证码用途为 **reset**，与注册验证码（purpose=register）隔离。
+// 本方法不改状态机（不落凭据、不改登录态）；失败原因写进 err（中文）。
+bool CloudAccountService::StartPasswordReset(const std::string& email,
+                                             std::string* err) {
+  if (transport_ == nullptr) {
+    if (err)
+      *err = "云端服务尚未初始化。";
+    return false;
+  }
+
+  const std::string norm = NormalizeEmail(email);
+  if (norm.empty()) {
+    if (err)
+      *err = "请输入邮箱地址。";
+    return false;
+  }
+
+  const std::string body = "{\"email\":" + json::Quote(norm) + "}";
+  int status = 0;
+  std::string response_body;
+  std::string send_err;
+  if (!SendJson("POST", "/v1/auth/password-reset/start", body, false, &status,
+                &response_body, &send_err)) {
+    if (err)
+      *err = send_err.empty() ? "发送重置验证码失败。" : send_err;
+    return false;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// 重置口令（批次 AT-2）
+// ---------------------------------------------------------------------------
+//
+//   POST /v1/auth/password-reset/confirm
+//     { email, code, auth_key } → { ok: true, email }
+//   · code  ：6 位数字邮箱验证码（用途必须为 reset）
 //   · auth_key：用**新口令**按 ADR 0054 派生的 auth_key（服务端只收派生值，
 //              永不见明文口令；落库口径与登录一致：
 //              verifier = HMAC-SHA256(AUTH_PEPPER, auth_key)）。
@@ -531,18 +564,18 @@ bool CloudAccountService::ResetPassword(const std::string& email,
   int status = 0;
   std::string response_body;
   std::string send_err;
-  const bool ok = SendJson("POST", "/v1/auth/password-reset", body, false,
-                            &status, &response_body, &send_err);
+  const bool ok = SendJson("POST", "/v1/auth/password-reset/confirm", body,
+                            false, &status, &response_body, &send_err);
   SecureZeroBytes(&keys.auth_key);
   SecureZeroBytes(&keys.enc_key);
   if (!ok) {
     if (err) {
       std::string reason = send_err;
-      // 服务端尚未实现该端点 ⇒ 404 且没有 JSON 错误体 ⇒ 把兜底文案换成
+      // 服务端若尚未部署该端点 ⇒ 404 且没有 JSON 错误体 ⇒ 把兜底文案换成
       // 更准确的中文（「原样转成中文状态行」：服务端真给了消息就原样透传）。
       if (status == 404 &&
           (reason.empty() || reason == "服务器返回错误（HTTP 404）。"))
-        reason = "服务端未支持该功能（404）。";
+        reason = "服务端未支持重置口令功能（404），请确认已更新到最新版本。";
       *err = reason.empty() ? "重置口令失败。" : reason;
     }
     return false;

@@ -724,6 +724,20 @@ void CloudAccountController::SubmitResendVerification(
   });
 }
 
+void CloudAccountController::SubmitStartPasswordReset(
+    const std::wstring& email,
+    CloudStatusScope scope) {
+  const std::string email_utf8 = ToUtf8(email);
+  Impl* impl = impl_;
+  impl->Post([impl, email_utf8, scope]() {
+    std::string err;
+    const bool ok = impl->service->StartPasswordReset(email_utf8, &err);
+    // 发码不改登录态，也**不清空验证码输入框**：失败时用户还能改了再提交。
+    impl->SetStatus(scope, ok ? L"重置验证码已发送，请查收邮件。"
+                               : (L"发送重置验证码失败：" + ToWide(err)));
+  });
+}
+
 void CloudAccountController::SubmitResetPassword(const std::wstring& email,
                                                  const std::wstring& code,
                                                  const std::wstring& new_password,
@@ -1221,8 +1235,11 @@ LRESULT CALLBACK WndProc(HWND hwnd,
         case Role::kForgot:
           switch (id) {
             case kIdResend:
-              controller.SubmitResendVerification(ReadControlText(hwnd, kIdEmail),
-                                                 CloudStatusScope::kForgot);
+              // 找回口令的验证码用途与注册验证码**不同**（purpose=reset）
+              // ⇒ 必须走 /v1/auth/password-reset/start，不能复用 resend
+              // （resend 发的是 purpose=register 的码，confirm 会拒收）。
+              controller.SubmitStartPasswordReset(
+                  ReadControlText(hwnd, kIdEmail), CloudStatusScope::kForgot);
               return 0;
             case kIdResetPassword: {
               const std::wstring email = ReadControlText(hwnd, kIdEmail);

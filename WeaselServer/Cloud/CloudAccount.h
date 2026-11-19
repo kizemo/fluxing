@@ -127,10 +127,19 @@ class CloudAccountService {
   // 本方法不改状态机（重发不落凭据、不改登录态）；失败原因写进 err（中文）。
   bool ResendVerification(const std::string& email, std::string* err);
 
-  // 重置口令（批次 AT-1）：POST /v1/auth/password-reset
-  //   { email, code, auth_key } → { ok: true }
-  // ⚠️ **服务端端点尚不存在**（批次 AT-2 实现）⇒ 当前必然 404，
-  //    失败原因写进 err（中文），由调用方转成状态行。
+  // 发起口令重置（批次 AT-2）：POST /v1/auth/password-reset/start
+  //   { email } → { ok: true, email }
+  // 发出的是**用途为 reset** 的验证码，与注册验证码（purpose=register）
+  // 互不通用：注册码不能用来重置口令，重置码也不能用来完成注册验证。
+  // 本方法不改状态机（不落凭据、不改登录态）。
+  bool StartPasswordReset(const std::string& email, std::string* err);
+
+  // 重置口令（批次 AT-2）：POST /v1/auth/password-reset/confirm
+  //   { email, code, auth_key } → { ok: true, email }
+  //   · code   ：6 位数字邮箱验证码（用途必须为 reset）
+  //   · auth_key：用**新口令**按 ADR 0054 派生的 auth_key（服务端只收派生值，
+  //              永不见明文口令；落库口径与登录一致：
+  //              verifier = HMAC-SHA256(AUTH_PEPPER, auth_key)）。
   // 本方法不改状态机（不落凭据、不改登录态）。
   bool ResetPassword(const std::string& email,
                      const std::string& code,

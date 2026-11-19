@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { env } from 'cloudflare:test';
-import { sendVerificationMail, type FetchLike } from '../src/mail';
+import { sendPasswordResetMail, sendVerificationMail, MAIL_SUBJECT, RESET_SUBJECT, type FetchLike } from '../src/mail';
 import type { Env } from '../src/env';
 
 interface Call {
@@ -201,6 +201,17 @@ describe('MAIL_MODE="http" 第三方 HTTPS 邮件 API', () => {
       sendVerificationMail(makeEnv(), 'user@example.com', '123456', fetchImpl),
     ).rejects.toMatchObject({ status: 503, code: 'mail_send_failed' });
     expect(calls.length).toBe(2);
+  });
+
+  it('重置口令邮件：主题与正文都点明「重置口令」，与注册验证码模板区分开', async () => {
+    const { calls, fetchImpl } = okResponder();
+    await sendPasswordResetMail(makeEnv(), 'user@example.com', '654321', fetchImpl);
+
+    const payload = payloadOf(calls[0]);
+    expect(payload.subject).toBe(RESET_SUBJECT);
+    expect(payload.subject).not.toBe(MAIL_SUBJECT);
+    expect(payload.text).toContain('重置口令验证码是：654321');
+    expect(payload.html).toContain('重置口令验证码');
   });
 
   it('MAIL_MODE 非法 ⇒ 500 server_misconfigured', async () => {

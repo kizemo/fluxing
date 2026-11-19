@@ -3,7 +3,7 @@
 - **日期**：2026-11-19
 - **分支**：`feat/100-cloud-sync`；HEAD = `3b74783`（其上 `9070f38` ← `d49a0ca` ← `38c78a7` ← `8da2f72`）
 - **本批性质**：**代码实现批次**（客户端 UI 重构 + 一处真缺陷修复）；**未改 `librime/`、未改 IPC 协议、未新增第三方依赖**（⇒ 不触发 CLAUDE.md「IPC 四边同步」红线）
-- **子批次**：**AT-1 客户端（已完成 · 门禁全绿）** / **AT-2 服务端「忘记密码」端点（未做 · 被用户决策阻塞）**
+- **子批次**：**AT-1 客户端（已完成 · 门禁全绿）** / **AT-2 服务端「忘记密码」端点（已落码 + 已部署 + 线上判别全绿 · 待用户拍板 A/B/C + 待真机验收）**
 - **ADR**：`0063`（新增 · **Proposed**）账号页信息架构
 
 ---
@@ -166,3 +166,102 @@
 ## 11. 接力 prompt
 
 见当轮回答正文（按用户 2026-11-08 指示，**接力 prompt 直接写在回答里，不另落文件**）。
+
+---
+
+# 附：批次 AT-2 追加（2026-11-19 续 · 服务端重置口令端点 + 客户端接线）
+
+## A1. 本段性质
+**代码实现批次 · 未提交**。服务端 5 文件（新增 2 / 改 3）+ 客户端 4 文件（改）+
+ADR 0064（新增）+ ADR 索引（改）+ lessons L223–L225（新增）。
+**未 commit、未 push**；AT-2 的产品级决策（重置后云端密文怎么办）仍待用户拍板。
+
+## A2. 服务端新增端点（客户端接线唯一依据）
+| 端点 | 请求体 | 响应体 |
+| --- | --- | --- |
+| `POST /v1/auth/password-reset/start` | `{ email }` | `{ ok: true, email }` |
+| `POST /v1/auth/password-reset/confirm` | `{ email, code, auth_key }` | `{ ok: true, email }` |
+
+- 字段名统一 `auth_key`（与 `/v1/auth/login` 一致）；`auth_key` = 客户端用**新口令**派生的值，
+  服务端不参与 KDF、不见明文口令、不见 enc_key（红线不变）。
+- 响应体只有 `ok` / `email` 两个键，**不回显验证码或任何口令相关字段**。
+- 错误面沿用 `{ error: { code, message } }`；新码：`reset_too_frequent`(429) /
+  `reset_no_code` / `reset_code_used` / `reset_code_expired` / `reset_code_locked` /
+  `reset_code_mismatch` / `reset_no_account`（均 400）。
+- ⚠️ **重置成功即吊销该账号全部令牌** ⇒ 客户端必须用新口令重新登录。
+
+## A3. 服务端改动文件
+- `migrations/0002_password_resets.sql`（新增）— 独立表 `password_resets`；**未改 0001**
+  （线上 D1 `e4ea114a-29b4-4abd-87e6-4e6cb20d86e4` 已应用过 0001）。
+- `src/auth.ts`（+152）— `handlePasswordResetStart` / `handlePasswordResetConfirm` +
+  重置码哈希与节流；`handleVerify` 等既有函数**逐字未动**。
+- `src/mail.ts`（+102/−38）— 抽出 `sendMail`，新增 `RESET_SUBJECT` / `resetBody` / `resetHtml` /
+  `sendPasswordResetMail`。
+- `src/index.ts`（+16）— 注册两条路由。
+- `src/errors.ts` — **未改**（错误码按既有风格写在调用点）。
+- `test/password-reset.test.ts`（新增 14 例）、`test/mail-http.test.ts`（+1 例）。
+
+## A4. 服务端关键取舍
+1. **独立表**而非给 `email_verifications` 加 purpose 列 ⇒ 注册主路径零改动，隔离是结构性的。
+2. **重置码哈希前缀 `password-reset-v1|`** ≠ 注册码 `email-verify-v1|`（双保险）。
+3. **不存在邮箱统一返回成功**（防邮箱枚举）。
+4. **重置成功即吊销全部令牌** ⇒ 客户端须重新登录。
+
+## A5. 客户端接线（根会话落码）
+- `WeaselServer/Cloud/CloudAccount.h` / `.cpp`：新增 `StartPasswordReset()`
+  → `POST /v1/auth/password-reset/start`；`ResetPassword()` 端点改
+  `/v1/auth/password-reset` → `/v1/auth/password-reset/confirm`；404 兜底文案改为
+  「服务端未支持重置口令功能（404），请确认已更新到最新版本。」
+- `WeaselServer/Cloud/CloudAccountDialog.h` / `.cpp`：新增 `SubmitStartPasswordReset()`；
+  找回口令窗的「发送验证码」从 `SubmitResendVerification` 改为 `SubmitStartPasswordReset`
+  （⚠️ resend 发的是 purpose=register 的码，confirm 会拒收）。
+- **契约对齐已独立核对**（非采信子会话自述）：服务端 `index.ts:81-87` 路由、
+  `auth.ts:362-369` 两段式注释、`auth.ts:382` 哈希式、`auth.ts:452-453` 入参校验，
+  与客户端 `CloudAccount.cpp` 的路径与字段名逐字一致。
+
+## A6. 门禁（独立复跑，非子会话自报）
+| 门禁 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 退出码 0 |
+| `npx vitest run` | **57 passed / 0 failed**（3 files，基线 42 ⇒ **+15**） |
+| `npm run check:endpoint` | 通过（T103 红线） |
+| 有牙变异验证 | 7 个变异全部被捕获、还原 `RESTORED=IDENTICAL`（子会话自述，未独立复跑） |
+| `build.bat weasel` | **EXIT=0 · 0 警告 · 0 错误**（2026-11-19 本轮**独立复跑**，同一工作区树） |
+| `tmp\build-fluxing-cloud-tests.cmd` | **`RESULT: PASS=492 FAIL=0`** / `VERDICT: ALL PASS`（本轮独立复跑） |
+
+### A6.1 线上部署与判别（2026-11-19 本轮新增）
+| 项 | 结果 |
+| --- | --- |
+| 服务端门禁（本轮独立复跑） | `npm run typecheck` **0** / `npm run test`（vitest）**57 passed** / `npm run check:endpoint` **0** |
+| D1 远程迁移 | `npm run migrate:remote` **exit 0**（1 个 migration 已应用）⇒ 线上表 `password_resets` **实测存在**（`sqlite_master` 查询命中） |
+| Worker 部署 | **exit 0** ⇒ `Current Version ID: 40b2f9d9-4655-497b-842b-266e1bf27af9`（`Total Upload: 57.18 KiB`） |
+| 线上功能判别（6 条） | ① 不存在邮箱 start → **200** `{ok:true,email}`（防枚举成立，不发信不落库）② 真实账号 `25940969@qq.com` start → **200**（**真实重置邮件已投递**）③ `example.com` 探针账号 start → **503** `mail_send_failed`（Resend 拒收该域，与既往口径一致）④ 错码 confirm → **400** `reset_code_mismatch`「还可尝试 4 次」⑤ 缺 `code` → **400** `bad_request` ⑥ GET start → **405** |
+| 数据面副作用核验 | 两个账号的 `users.verifier` **前后逐字未变**（`VERIFIER_UNCHANGED=True`）；`password_resets` 行：真实账号 `attempts=0`（用户那枚码**未被消耗**）、探针账号 `attempts=1` |
+
+## A7. 未闭环
+1. **AT-2 产品级决策待用户拍板**：重置口令 ⇒ `enc_key` 变 ⇒ R2 上的旧密文**永远解不开**
+   （服务端永不见 enc_key，无法代解）。候选 A（重置即清空云端，推荐）/ B（只换 auth_key
+   保留 enc_key，**违反红线**）/ C（两段式客户端重推）。客户端当前只实现到「confirm 成功 →
+   提示用新口令重新登录」，**不擅自清数据**。
+2. ~~**线上部署未做**~~ ⇒ **本轮已做**：D1 `0002` 迁移已应用、Worker 已部署
+   （Version ID `40b2f9d9-4655-497b-842b-266e1bf27af9`），**真实重置邮件已投递**
+   到 `25940969@qq.com`（码 TTL 600 s ⇒ 过期后在客户端点「发送验证码」可重发）。
+3. **start 的外呼发信构成时序侧信道**（未修，理由见 `tmp/AT2-server-report.md`）。
+4. **客户端未提交**；真机验收需重新出包（1.3.2 不含本段代码）。
+5. **未 push**：仓库累计 6 个提交（AT-1 及此前）仍未 push。
+
+## A8. 证据路径
+- 服务端完整报告：`F:\soft\00selfmade\rime_claude\tmp\AT2-server-report.md`（20 097 B）
+- ADR：`docs/adr/0064-server-password-reset-endpoints.md`（Proposed）
+- 教训：`.specify/memory/lessons-learned.md` L223–L225
+- 本轮部署日志：`F:\soft\00selfmade\rime_claude\tmp\at2-deploy-1.log`
+- 本轮线上判别：`F:\soft\00selfmade\rime_claude\tmp\at2-live-1.log` / `tmp\at2-live-2.log`
+- 本轮客户端门禁：`F:\soft\00selfmade\rime_claude\tmp\at2-client-gate-1.log`
+
+## A9. 本轮提交与遗留（2026-11-19 晚）
+
+- **提交**：AT-2（服务端 + 客户端 + ADR 0064 + 测试 + 文档）**已提交**，未 push。
+- **仍未闭环**：① AT-2 产品级决策 A/B/C（重置后云端旧密文不可解）—— 已向用户发问，等答复；
+  ② 客户端本段**未装机**（需出包 1.3.3 + **注销 / 重启**，因 `WeaselServer.exe` 是 **PPL**）
+  ⇒ 账号页两态目视 / 验证码窗 / 注册 / 找回密码 / 保存账号两次登录仍需用户在场；
+  ③ 双机 AC 7 条 + restore 端到端 + 输入延迟两组对照仍在后面批次。

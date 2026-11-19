@@ -541,3 +541,27 @@
 
 ### AT-4 · 交接文档
 - `docs/archive/handoffs/handoff-2026-11-19-batch-at-account-page-ui-refactor.md`（含落码表 / 缺陷取证链 / 门禁数字 / 已验证·推断·未验证 / 工具坑 / 下一批建议顺序）；接力 prompt 按用户 2026-11-08 指示**直接给在当轮回答正文**，不另落文件。
+## 批次 AT-2 追加记录（2026-11-19 · 服务端重置口令端点 + 客户端接线）
+
+- **AT-2a 服务端**：`POST /v1/auth/password-reset/{start,confirm}` 落码（新增独立表
+  `password_resets` 隔离注册码 / 重置码；服务端只收客户端派生的 `auth_key`，红线不变）；
+  改动 5 文件 + 新增 2 测试文件。
+- **AT-2b 客户端接线**：`CloudAccountService::StartPasswordReset` 新增、
+  `ResetPassword` 端点改 `/confirm`、找回窗「发送验证码」改走 reset 端点（4 文件）。
+- **AT-2c ADR**：`docs/adr/0064-server-password-reset-endpoints.md`（Proposed）+
+  `docs/adr/README.md` 索引行。
+- **AT-2d 教训**：`.specify/memory/lessons-learned.md` L223–L225（补上 ADR 0063 悬空的引用）。
+- **门禁**：服务端 typecheck 0 / vitest **57 passed**（42 ⇒ +15）/ check:endpoint 通过；
+  客户端 `build.bat weasel` **0 警告 0 错误** / 云单测 **PASS=492 FAIL=0**。
+- **未闭环**：重置后 `enc_key` 变 ⇒ 旧云端密文解不开 ⇒ **AT-2 产品级决策待用户拍板**
+  （A 重置即清空云端 / B 违反红线 / C 客户端两段式重推）；线上 D1 migration + deploy 未做；
+  真实重置邮件未投递；客户端改动**未提交**。
+
+### AT-2 收尾追加（2026-11-19 晚 · 线上部署 + 判别 + 提交）
+
+- **服务端线上部署 DONE**：D1 `0002` 迁移已应用（线上表 `password_resets` 实测存在）；Worker 部署 exit 0 ⇒ Version ID `40b2f9d9-4655-497b-842b-266e1bf27af9`。
+- **线上功能判别 6 条全绿**：不存在邮箱 start→200（防枚举）／真实账号 start→200（**真实重置邮件已投递**到 `25940969@qq.com`）／`example.com` 探针账号→503 `mail_send_failed`（Resend 拒收该域）／错码 confirm→400 `reset_code_mismatch`／缺 `code`→400 `bad_request`／GET start→405。
+- **数据面副作用核验**：两个账号 `users.verifier` 前后逐字未变；`password_resets` 行：真实账号 `attempts=0`（用户那枚码未被消耗）、探针账号 `attempts=1`。
+- **门禁（本轮独立复跑）**：服务端 `typecheck` 0／`vitest` 57 passed／`check:endpoint` 0；客户端 `build.bat weasel` EXIT=0·0 警告·0 错误／云单测 `RESULT: PASS=492 FAIL=0`。
+- **仍待用户拍板**：AT-2 产品级决策 A/B/C（重置口令 ⇒ `enc_key` 变 ⇒ 云端旧密文不可解）—— 已向用户发问。
+- **仍待真机**：客户端 AT-2 代码未装机（需出包 1.3.3 + 注销 / 重启，因 `WeaselServer.exe` 是 PPL）。

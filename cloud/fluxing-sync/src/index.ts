@@ -1,8 +1,10 @@
 // Worker 入口：路由分发 + 统一错误面。
 //
-// 契约来源 plan §6.1（端点 9 条，另加 GET /v1/health 供巡活、POST /v1/auth/resend 供重发验证码）：
+// 契约来源 plan §6.1（端点 9 条，另加 GET /v1/health 供巡活、POST /v1/auth/resend 供重发验证码、
+// POST /v1/auth/password-reset/{start,confirm} 供忘记密码）：
 //   POST   /v1/auth/register      POST /v1/auth/verify
 //   POST   /v1/auth/resend        POST /v1/auth/login      POST /v1/auth/refresh
+//   POST   /v1/auth/password-reset/start                   POST /v1/auth/password-reset/confirm
 //   POST   /v1/sync/push          GET  /v1/sync/pull
 //   GET    /v1/devices            DELETE /v1/devices/:id
 //   DELETE /v1/account/data
@@ -19,6 +21,8 @@ import { nowSeconds } from './crypto';
 import {
   authenticate,
   handleLogin,
+  handlePasswordResetConfirm,
+  handlePasswordResetStart,
   handleRefresh,
   handleRegister,
   handleResend,
@@ -72,6 +76,16 @@ async function route(request: Request, env: Env): Promise<Response> {
     case '/v1/auth/resend': {
       assertMethod(request, 'POST');
       return jsonResponse(await handleResend(env, await readJsonObject(request)));
+    }
+
+    case '/v1/auth/password-reset/start': {
+      assertMethod(request, 'POST');
+      return jsonResponse(await handlePasswordResetStart(env, await readJsonObject(request)));
+    }
+
+    case '/v1/auth/password-reset/confirm': {
+      assertMethod(request, 'POST');
+      return jsonResponse(await handlePasswordResetConfirm(env, await readJsonObject(request)));
     }
 
     case '/v1/auth/login': {

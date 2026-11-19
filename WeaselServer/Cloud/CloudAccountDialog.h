@@ -108,9 +108,12 @@ class CloudAccountController {
   // 立即同步：手动触发一轮「推 + 拉」。
   void SubmitSyncNow();
 
-  // 重置口令（批次 AT-1）：POST /v1/auth/password-reset。
-  // ⚠️ **服务端端点尚不存在**（由批次 AT-2 实现）⇒ 当前必然 404，
-  //    客户端把服务端返回的失败原样转成中文状态行。
+  // 发起口令重置（批次 AT-2）：POST /v1/auth/password-reset/start。
+  // 发出的是**用途为 reset** 的验证码（与注册验证码互不通用）。
+  void SubmitStartPasswordReset(const std::wstring& email,
+                                CloudStatusScope scope);
+  // 重置口令（批次 AT-2）：POST /v1/auth/password-reset/confirm。
+  // 客户端把服务端返回的失败原样转成中文状态行。
   void SubmitResetPassword(const std::wstring& email,
                            const std::wstring& code,
                            const std::wstring& new_password,

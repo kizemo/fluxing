@@ -19,7 +19,7 @@ import {
   toBase64,
   utf8,
 } from './crypto';
-import { sendVerificationMail } from './mail';
+import { sendPasswordResetMail, sendVerificationMail } from './mail';
 
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@.]+(?:\.[^\s@.]+)+$/;
 const MAX_EMAIL_LENGTH = 254;
@@ -355,6 +355,156 @@ export async function handleResend(env: Env, body: Record<string, unknown>): Pro
   await issueVerificationCode(env, email);
 
   return { ok: true };
+}
+
+// ---------------------------------------------------------------- 重置口令
+//
+// 「忘记密码 / 重置口令」的两段式流程：
+//   POST /v1/auth/password-reset/start   { email }                    → { ok, email }
+//   POST /v1/auth/password-reset/confirm { email, code, auth_key }    → { ok, email }
+//
+// 安全不变量（与注册流程同一套红线）：
+//   1. 服务端永不见明文口令、永不见 enc_key；confirm 收的是客户端派生好的新 auth_key。
+//   2. 落库仍是 verifier = base64(HMAC-SHA256(AUTH_PEPPER, auth_key))。
+//   3. 重置码落在**独立表** password_resets（见 migrations/0002_password_resets.sql），
+//      与注册码的 email_verifications 物理分表 ⇒ 两类码互不通用（硬要求）。
+//      因此 handleVerify 一行都不用改，注册流程语义逐字不变。
+//   4. 限流口径与注册码一致：60 秒重发窗口 / 10 分钟 TTL / 5 次错误上限，
+//      但窗口只看 password_resets ⇒ 与注册码的窗口互不影响。
+
+/** 重置码哈希：前缀串与注册码（"email-verify-v1|..."）不同 ⇒ 跨用途绝不可能通用。 */
+async function resetCodeHash(
+  pepper: Uint8Array,
+  email: string,
+  code: string,
+  createdAt: number,
+): Promise<string> {
+  return toBase64(await hmacSha256(pepper, utf8(`password-reset-v1|${email}|${code}|${createdAt}`)));
+}
+
+/** 重置码的重发节流：只看 password_resets，注册码不参与。 */
+async function assertResetAllowed(env: Env, email: string): Promise<void> {
+  const latest = await env.DB.prepare(
+    'SELECT created_at FROM password_resets WHERE email = ? ORDER BY created_at DESC LIMIT 1',
+  )
+    .bind(email)
+    .first<{ created_at: number }>();
+  if (latest) {
+    const elapsed = nowSeconds() - latest.created_at;
+    if (elapsed < RESEND_INTERVAL_SECONDS) {
+      const wait = RESEND_INTERVAL_SECONDS - elapsed;
+      throw fail.tooFrequent(`验证码发送过于频繁，请 ${wait} 秒后再试。`, 'reset_too_frequent');
+    }
+  }
+}
+
+async function issueResetCode(env: Env, email: string): Promise<void> {
+  const pepper = requirePepper(env);
+  await assertResetAllowed(env, email);
+  const now = nowSeconds();
+  const code = String(randomInt(1_000_000)).padStart(6, '0');
+  const hash = await resetCodeHash(pepper, email, code, now);
+  await env.DB.prepare(
+    'INSERT INTO password_resets (id, email, code_hash, attempts, expires_at, consumed_at, created_at) VALUES (?, ?, ?, 0, ?, NULL, ?)',
+  )
+    .bind(crypto.randomUUID(), email, hash, now + CODE_TTL_SECONDS, now)
+    .run();
+  await sendPasswordResetMail(env, email, code);
+}
+
+/**
+ * 发起重置口令：查账号 → 发重置码。
+ *
+ * 不存在的邮箱**统一返回成功**（与 handleLogin 的防枚举口径一致）：
+ * 不发信、不落库，响应与真实账号完全同形 ⇒ 接口不泄露「哪些邮箱已注册」。
+ * 代价是用户会一直等一封不会到的信；这是为换取不泄露账号存在性而刻意接受的。
+ */
+export async function handlePasswordResetStart(
+  env: Env,
+  body: Record<string, unknown>,
+): Promise<unknown> {
+  requirePepper(env);
+  const email = normalizeEmail(body.email);
+
+  const user = await env.DB.prepare('SELECT id FROM users WHERE email = ?')
+    .bind(email)
+    .first<{ id: string }>();
+  if (!user) return { ok: true, email };
+
+  await issueResetCode(env, email);
+
+  return { ok: true, email };
+}
+
+/**
+ * 确认重置口令：校验 purpose='reset' 的验证码（独立表 ⇒ 注册码进不来），
+ * 成功后把 users.verifier 换成 HMAC(AUTH_PEPPER, 新 auth_key)。
+ */
+export async function handlePasswordResetConfirm(
+  env: Env,
+  body: Record<string, unknown>,
+): Promise<unknown> {
+  const pepper = requirePepper(env);
+  const email = normalizeEmail(body.email);
+  const rawCode = body.code;
+  if (typeof rawCode !== 'string') throw fail.badRequest('验证码（code）必须是字符串。');
+  const code = rawCode.trim();
+  if (!/^\d{6}$/.test(code)) throw fail.badRequest('验证码格式不正确（应为 6 位数字）。');
+  const authKey = requireAuthKey(body.auth_key);
+
+  const now = nowSeconds();
+  const row = await env.DB.prepare(
+    'SELECT id, code_hash, attempts, expires_at, consumed_at, created_at FROM password_resets WHERE email = ? ORDER BY created_at DESC LIMIT 1',
+  )
+    .bind(email)
+    .first<{
+      id: string;
+      code_hash: string;
+      attempts: number;
+      expires_at: number;
+      consumed_at: number | null;
+      created_at: number;
+    }>();
+
+  if (!row) throw fail.badRequest('没有待用的重置验证码，请重新获取。', 'reset_no_code');
+  if (row.consumed_at !== null) throw fail.badRequest('重置验证码已使用，请重新获取。', 'reset_code_used');
+  if (now > row.expires_at) throw fail.badRequest('重置验证码已过期，请重新获取。', 'reset_code_expired');
+  if (row.attempts >= MAX_VERIFY_ATTEMPTS) {
+    throw fail.badRequest('重置验证码错误次数过多，请重新获取。', 'reset_code_locked');
+  }
+
+  const expected = await resetCodeHash(pepper, email, code, row.created_at);
+  if (!sameString(expected, row.code_hash)) {
+    await env.DB.prepare('UPDATE password_resets SET attempts = attempts + 1 WHERE id = ?')
+      .bind(row.id)
+      .run();
+    const left = MAX_VERIFY_ATTEMPTS - (row.attempts + 1);
+    throw fail.badRequest(
+      left > 0 ? `验证码不正确，还可尝试 ${left} 次。` : '验证码不正确，且已达错误次数上限，请重新获取。',
+      'reset_code_mismatch',
+    );
+  }
+
+  // 账号是否存在放在**验证码校验之后**判断：先查账号会让错误码泄露「该邮箱已注册」。
+  const user = await env.DB.prepare('SELECT id FROM users WHERE email = ?')
+    .bind(email)
+    .first<{ id: string }>();
+  if (!user) throw fail.badRequest('该邮箱尚未注册，无法重置口令。', 'reset_no_account');
+
+  // 先消费验证码再改口令：改口令失败时代码已作废 ⇒ 宁可让用户重新申请，也不留可重放的码。
+  await env.DB.prepare('UPDATE password_resets SET consumed_at = ? WHERE id = ?')
+    .bind(now, row.id)
+    .run();
+  const verifier = await computeVerifier(pepper, authKey);
+  await env.DB.prepare('UPDATE users SET verifier = ? WHERE email = ?').bind(verifier, email).run();
+  // 口令已变 ⇒ 该账号全部令牌（access / refresh）立即失效，客户端必须重新登录。
+  await env.DB.prepare(
+    'UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL',
+  )
+    .bind(now, user.id)
+    .run();
+
+  return { ok: true, email };
 }
 
 export async function handleLogin(env: Env, body: Record<string, unknown>): Promise<unknown> {

@@ -14,12 +14,26 @@
 //     （批次 AK 的教训：静默降级会让用户收到「网络请求失败」却查不到原因）。
 //
 // 关键性质：http 模式**不写 mail_outbox** ⇒ 生产库里不留明文验证码。
+//
+// 模板口径（批次 AT-2 起有两套，**不得混用**）：
+//   · MAIL_SUBJECT  = 注册 / 邮箱验证验证码
+//   · RESET_SUBJECT = 重置口令验证码（主题与正文都点明「重置口令」，
+//     避免用户把重置码当成注册码去注册流程里用，反之亦然）。
 
 import type { Env } from './env';
 import { ApiError, fail } from './errors';
 import { nowSeconds } from './crypto';
 
 export const MAIL_SUBJECT = '火流猩输入法 · 邮箱验证码';
+export const RESET_SUBJECT = '火流猩输入法 · 重置口令验证码';
+
+/** 一封信的完整内容（主题 + 纯文本 + HTML）。 */
+export interface MailMessage {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+}
 
 const DEFAULT_HTTP_ENDPOINT = 'https://api.resend.com/emails';
 const DEFAULT_AUTH_HEADER = 'Authorization';
@@ -58,6 +72,33 @@ export function verificationHtml(code: string): string {
     `<p>您的火流猩输入法账号验证码是：<b style="font-size:20px;letter-spacing:2px">${escapeHtml(code)}</b></p>`,
     '<p>验证码 10 分钟内有效，请勿转告他人。</p>',
     '<p>本次操作由您本人发起；如非本人操作，请忽略本邮件。</p>',
+    '<p>—— 火流猩输入法</p>',
+    '</div>',
+  ].join('');
+}
+
+/** 重置口令验证码正文：明确点明是「重置口令」，与注册验证码区分。 */
+export function resetBody(code: string): string {
+  return [
+    '您好，',
+    '',
+    `您的火流猩输入法重置口令验证码是：${code}`,
+    '',
+    '验证码 10 分钟内有效，请勿转告他人。',
+    '如非本人申请重置口令，请忽略本邮件，您的口令不会被更改。',
+    '',
+    '—— 火流猩输入法',
+  ].join('\n');
+}
+
+/** 重置口令验证码 HTML 版（与 resetBody 文案一致）。 */
+export function resetHtml(code: string): string {
+  return [
+    '<div style="font-family:system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.7;color:#222">',
+    '<p>您好，</p>',
+    `<p>您的火流猩输入法重置口令验证码是：<b style="font-size:20px;letter-spacing:2px">${escapeHtml(code)}</b></p>`,
+    '<p>验证码 10 分钟内有效，请勿转告他人。</p>',
+    '<p>如非本人申请重置口令，请忽略本邮件，您的口令不会被更改。</p>',
     '<p>—— 火流猩输入法</p>',
     '</div>',
   ].join('');
@@ -115,8 +156,7 @@ function buildFromAddress(env: Env): string {
  */
 async function sendViaHttp(
   env: Env,
-  to: string,
-  code: string,
+  message: MailMessage,
   fetchImpl: FetchLike,
 ): Promise<void> {
   const endpoint = (env.MAIL_HTTP_ENDPOINT ?? DEFAULT_HTTP_ENDPOINT).trim();
@@ -133,10 +173,10 @@ async function sendViaHttp(
   const from = buildFromAddress(env);
   const payload = {
     from,
-    to: [to],
-    subject: MAIL_SUBJECT,
-    text: verificationBody(code),
-    html: verificationHtml(code),
+    to: [message.to],
+    subject: message.subject,
+    text: message.text,
+    html: message.html,
   };
   const body = JSON.stringify(payload);
 
@@ -183,20 +223,20 @@ async function sendViaHttp(
   throw fail.unavailable('验证码邮件发送失败，请稍后重试。', 'mail_send_failed');
 }
 
-export async function sendVerificationMail(
-  env: Env,
-  to: string,
-  code: string,
-  fetchImpl?: FetchLike,
-): Promise<void> {
-  const body = verificationBody(code);
+/**
+ * 按 MAIL_MODE 投递一封信（三条通道共用同一份报文）。
+ *   outbox     = 只写 mail_outbox 表（本地 / 测试 / 内测）
+ *   http       = 第三方 HTTPS 邮件 API（生产路线）
+ *   cloudflare = Workers send_email 绑定
+ */
+export async function sendMail(env: Env, message: MailMessage, fetchImpl?: FetchLike): Promise<void> {
   const mode = (env.MAIL_MODE ?? 'outbox').toLowerCase();
 
   if (mode === 'outbox') {
     await env.DB.prepare(
       'INSERT INTO mail_outbox (to_addr, subject, body, created_at) VALUES (?, ?, ?, ?)',
     )
-      .bind(to, MAIL_SUBJECT, body, nowSeconds())
+      .bind(message.to, message.subject, message.text, nowSeconds())
       .run();
     return;
   }
@@ -204,7 +244,7 @@ export async function sendVerificationMail(
   if (mode === 'http') {
     const doFetch: FetchLike =
       fetchImpl ?? ((input: string, init: RequestInit) => fetch(input, init));
-    await sendViaHttp(env, to, code, doFetch);
+    await sendViaHttp(env, message, doFetch);
     return;
   }
 
@@ -223,10 +263,38 @@ export async function sendVerificationMail(
   try {
     // Workers 内置模块；只在真正发信时加载，本地 / 测试不会走到这里
     const { EmailMessage } = await import('cloudflare:email');
-    const raw = buildRawMime(from, to, MAIL_SUBJECT, body);
-    await env.EMAIL.send(new EmailMessage(from, to, raw));
+    const raw = buildRawMime(from, message.to, message.subject, message.text);
+    await env.EMAIL.send(new EmailMessage(from, message.to, raw));
   } catch (error) {
     console.error('[fluxing-sync] 发送验证码邮件失败：', error);
     throw fail.unavailable('验证码邮件发送失败，请稍后重试。', 'mail_send_failed');
   }
+}
+
+/** 注册 / 邮箱验证验证码。 */
+export async function sendVerificationMail(
+  env: Env,
+  to: string,
+  code: string,
+  fetchImpl?: FetchLike,
+): Promise<void> {
+  await sendMail(
+    env,
+    { to, subject: MAIL_SUBJECT, text: verificationBody(code), html: verificationHtml(code) },
+    fetchImpl,
+  );
+}
+
+/** 重置口令验证码：主题与正文都与注册验证码区分开。 */
+export async function sendPasswordResetMail(
+  env: Env,
+  to: string,
+  code: string,
+  fetchImpl?: FetchLike,
+): Promise<void> {
+  await sendMail(
+    env,
+    { to, subject: RESET_SUBJECT, text: resetBody(code), html: resetHtml(code) },
+    fetchImpl,
+  );
 }
