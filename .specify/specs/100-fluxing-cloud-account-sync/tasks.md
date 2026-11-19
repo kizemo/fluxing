@@ -591,3 +591,36 @@
 
 ### AU-5 · 交接文档
 - `docs/archive/handoffs/handoff-2026-11-19-batch-au-sidecar-reset-and-1-3-3-release.md`（含落码表 / 取证链 / 门禁数字 / 已验证·推断·未验证 / 工具坑 / 下一批建议）；接力 prompt 按用户 2026-11-08 指示**直接给在当轮回答正文**，不另落文件。
+
+## 批次 AV 收尾记录（2026-11-19 夜 · AT-2 方案 C「客户端两段式全量重推」+ 出包 1.3.4）
+
+### AV-1 · 决策：AT-2 产品口径定为方案 C（用户拍板）
+- **背景**：重置口令 ⇒ 本地 `enc_key` 变 ⇒ R2 旧密文永不可解（服务端从不见 `enc_key`，无代解余地）。
+- **三案对比**：A「服务端自动清空云端」= 不可逆删除由程序代劳，违反「删除只由用户显式发起」；A'「维持现状」= 用户每次重置都要手动清空一次，痛点未解；B「只换 `auth_key` 保留 `enc_key`」= 会让新旧口令共享同一 `enc_key`，**违反红线**。
+- **选定 C · 客户端两段式全量重推**：① `enc_key` 变化 ⇒ 客户端自行检测（sidecar 新增 `keyfp` 指纹行）并重置本地 sidecar；② 下一轮把整库当新增数据、用新身份 + 新 HLC 全量重推。**不调用 `DeleteCloudData`**，云端清空仍只由用户显式点击发起。
+- **语义边界（务必记住）**：`item_key` 由 `enc_key` MAC 派生 ⇒ 换钥后**不可能在行级真正「覆盖」旧密文**，只能「旧行作废 + 新行承载全量数据」。因此**拉取必须容忍解不开的旧行**（只计数并跳过，不判整轮失败），否则重推后的第一轮拉取就会失败。
+- **已知代价（非缺陷）**：云端旧行仍在且不可解，云端不会自动收敛，需用户显式「清空云端数据」才彻底清掉。
+
+### AV-2 · 落码（3 文件，未改 `librime/`、未新增 IPC 消息、未新增依赖）
+- **`keyfp` 指纹行**：指纹值 = `ComputeItemKeyId(enc_key, "fluxing-cloud-sync-keyfp-v1")`（复用已有 HKDF+MAC 派生，零新密码学常量、**不对密钥本体做裸哈希**）；`enc_key` 长度 ≠ 32 ⇒ 写 `"-"`（显式「未绑定密钥」标记），绝不用裸哈希顶替。
+- **sidecar 序列化/解析抽成纯函数**：`BuildSidecarText(rows, server_seq, enc_key)` + `ParseSidecarText(text, enc_key, rows, server_seq, key_rotated, err)`，`LoadSidecar` / `SaveSidecar` 改为薄封装（单测走纯函数，不依赖 `MockTransport` 的完整 `SyncOnce`）。
+- **轮换判定**：老 sidecar 无 `keyfp` 行 ⇒ 有内容即判不匹配 ⇒ 重置；空文件 / 仅版本行 / `rows` 空且 `seq==0` ⇒ 不算轮换；`keyfp == "-"` 亦不算轮换。**不升版本行**（仍 `#fluxing-cloud-sync-v1`，老客户端读到 `keyfp` 行静默忽略）。
+- **重置只清内存、不落盘**：判定轮换 ⇒ 清 `rows` + `server_seq=0` + `key_rotated=true`；本轮结束 `SaveSidecar` 自然写入当前 `keyfp` ⇒ `ResetCloudSyncSidecarFile` **签名不变**，AU 的两个调用点无需改。
+- **拉取容错**：新增 `OpenItemsTolerant`（**不改 `OpenItems` 既有签名与语义**）——密钥长度不对 ⇒ false；否则逐条 `OpenItems({item}, …)`，解不开则 `++(*undecryptable)` 跳过。跳过条数拼进 `SyncOnce` 尾部 `message`，**不新增 `CloudSyncRoundResult` 字段**（`items_skipped` 保持「HLC 守卫跳过」原义）。
+- **文案**：协调器新增成员 `bool key_rotated_ = false;`，供 `SyncOnce` 生成前缀「加密密钥已变化，已重置本地同步状态并全量重推。」。
+
+### AV-3 · 门禁
+- **云单测 `PASS=526 FAIL=0` / `VERDICT: ALL PASS`**（基线 502 ⇒ **+24**）；新增 `TestCloudSidecarKeyRotation` 六组：同密钥恢复 / 换密钥作废 / 老 sidecar 无 `keyfp` / 空 sidecar 不轮换 / 未绑定标记不轮换 / 空密钥写 `-`。仅剩 3 条既有 `warning C4996: 'fopen'`（AU 的 `TestCloudSidecarReset` 引入，非本批）。
+- **构建 `build.bat weasel`：0 警告 0 错误**（格式化前、格式化后各一次）。
+- **定点 clang-format**：按 `git diff -U0` 解析变更行区间，三文件全部 `exit=0`（`.cpp` 首次 exit=1 的三目对齐 + 测试文件 2 处已在 `-i` 后修平）。
+
+### AV-4 · 出包 1.3.4
+- **版本真相源**：`version.txt`（5 字节无尾换行）/ `env.bat`（4 个键位）/ `weasel.props` / `CHANGELOG.md` 四处同步 1.3.3 → 1.3.4；`WEASEL_BUILD` 保持 0 ⇒ `fluxing.1.3.4.0.dll` 不存在 ⇒ **无 L107 风险**。
+- **仍须 touch 4 个 `.rc`**（改 `.props` 不触发 MSBuild 重编译 ⇒ 版本资源停旧号）。
+- **构建**：`build.bat weasel installer` ⇒ `WARN=0 ERR=0`，makensis 8 条 `warning 7010`（既有）。5 个二进制 filever **全 `1.3.4.0`**。
+- **产物**：`output/archives/fluxing-1.3.4-installer.exe` —— **42990667 B · sha16 `A1EEEEB377088233`**；内嵌 `WeaselServer.exe` **2755072 B / `1.3.4.0`**（1.3.3 包内 2748416 B / `1.3.3.0` ⇒ 判别通过）；包内文案差集 **`TOKEN_134=True` / `TOKEN_133=False`** ⇒ 本批代码确在包内。
+- **版本闸门**：`Test-VersionConsistency` ⇒ **`Ok=True` / `version=1.3.4 一致`**。
+
+### AV-5 · 未闭环
+- ① **未装机**（`WeaselServer.exe` 是 PPL ⇒ 须注销 / 重启后装 1.3.4）；② 真机核心判据 = **重置口令后用新口令登录 ⇒ 自动全量重推**（方案 C 唯一能证伪的一步，自动化无法覆盖）；③ 账号页两态目视 / 验证码独立窗 / 注册 / 找回密码发信 / 「保存账号」勾与不勾两次登录；④ 双机 AC 7 条 + restore 端到端 + 输入延迟两组对照；⑤ **产品口径待用户决定**：换钥后旧行仍留云端且不可解，是否给用户一句提示（不代决）；⑥ 仓库累计提交仍未 push（无授权）。
+- **交接文档**：`docs/archive/handoffs/handoff-2026-11-19-batch-av-key-rotation-full-repush.md`（七节：背景与决策表 / 落码文件级表 / 门禁 / 出包 1.3.4 / 已验证·推断·未验证 / 工具坑 / 下一批建议）；接力 prompt 按用户 2026-11-08 指示**直接给在当轮回答正文**，不另落文件。

@@ -763,6 +763,7 @@ CloudSyncCoordinator::~CloudSyncCoordinator() = default;
 bool CloudSyncCoordinator::LoadSidecar(std::string* err) {
   sidecar_rows_.clear();
   last_server_seq_ = 0;
+  key_rotated_ = false;
   if (sidecar_path_.empty())
     return true;
 
@@ -770,35 +771,10 @@ bool CloudSyncCoordinator::LoadSidecar(std::string* err) {
   if (!in)
     return true;  // 没有 sidecar 是正常的（第一次同步）
 
-  std::string line;
-  bool first = true;
-  while (std::getline(in, line)) {
-    if (!line.empty() && line.back() == '\r')
-      line.pop_back();
-    if (first) {
-      first = false;
-      continue;  // 版本行
-    }
-    if (line.empty())
-      continue;
-    const std::vector<std::string> cols = SplitTab(line);
-    if (cols.size() >= 2 && cols[0] == "seq") {
-      last_server_seq_ = std::strtoll(cols[1].c_str(), nullptr, 10);
-      continue;
-    }
-    if (cols.size() >= 6 && cols[0] == "row") {
-      CloudSidecarRow row;
-      row.item_key = UnescapeKey(cols[1]);
-      row.ms = std::strtoull(cols[2].c_str(), nullptr, 10);
-      row.counter =
-          static_cast<uint32_t>(std::strtoul(cols[3].c_str(), nullptr, 10));
-      row.device = cols[4];
-      row.payload_hash = cols[5];
-      sidecar_rows_.push_back(row);
-      continue;
-    }
-  }
-  return true;
+  std::stringstream buf;
+  buf << in.rdbuf();
+  return ParseSidecarText(buf.str(), enc_key_, &sidecar_rows_,
+                          &last_server_seq_, &key_rotated_, err);
 }
 
 bool CloudSyncCoordinator::SaveSidecar(std::string* err) {
@@ -810,13 +786,11 @@ bool CloudSyncCoordinator::SaveSidecar(std::string* err) {
       *err = "无法写入同步状态文件：" + sidecar_path_;
     return false;
   }
-  out << "#fluxing-cloud-sync-v1\n";
-  out << "seq\t" << last_server_seq_ << "\n";
-  for (size_t i = 0; i < sidecar_rows_.size(); ++i) {
-    const CloudSidecarRow& row = sidecar_rows_[i];
-    out << "row\t" << EscapeKey(row.item_key) << "\t" << row.ms << "\t"
-        << row.counter << "\t" << row.device << "\t" << row.payload_hash
-        << "\n";
+  out << BuildSidecarText(sidecar_rows_, last_server_seq_, enc_key_);
+  if (!out) {
+    if (err)
+      *err = "写入同步状态文件失败：" + sidecar_path_;
+    return false;
   }
   return true;
 }
@@ -997,6 +971,8 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   std::vector<Entry> remote_entries;
   int64_t pulled_seq = last_server_seq_;
   bool has_more = false;
+  // 旧密钥加密、解不开的云端行数（换口令后的正常现象：只计数、不报错）
+  int undecryptable = 0;
   if (direction == SyncDirection::kPullOnly ||
       direction == SyncDirection::kBoth) {
     CloudSyncService service(transport_, access_token_);
@@ -1018,7 +994,8 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
       }
       out->items_pulled += static_cast<int>(batch.size());
       std::vector<Entry> page_entries;
-      if (!OpenItems(batch, enc_key_, &page_entries, &parse_err)) {
+      if (!OpenItemsTolerant(batch, enc_key_, &page_entries, &undecryptable,
+                             &parse_err)) {
         backend_->EndMaintenance(&ignored);
         if (err)
           *err = parse_err;
@@ -1235,7 +1212,12 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
 
   out->ok = true;
   out->has_more = has_more;
-  std::string message = "同步完成：推送 ";
+  std::string message;
+  if (key_rotated_) {
+    // 换口令 ⇒ enc_key 变 ⇒ 旧 sidecar 的「已同步」标记全部作废。
+    message += "加密密钥已变化，已重置本地同步状态并全量重推。";
+  }
+  message += "同步完成：推送 ";
   message += std::to_string(out->items_pushed);
   message += " 条，拉取 ";
   message += std::to_string(out->items_pulled);
@@ -1245,10 +1227,156 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
     message += std::to_string(out->items_skipped);
     message += " 条";
   }
+  if (undecryptable > 0) {
+    message += "，旧密钥加密的行无法解密跳过 ";
+    message += std::to_string(undecryptable);
+    message += " 条";
+  }
   if (has_more)
     message += "（云端还有更多条目，下次同步继续）";
   message += "。";
   out->message = message;
+  return true;
+}
+
+bool OpenItemsTolerant(const std::vector<CloudSyncItem>& items,
+                       const std::vector<uint8_t>& enc_key,
+                       std::vector<Entry>* out,
+                       int* undecryptable,
+                       std::string* err) {
+  if (out == nullptr || undecryptable == nullptr) {
+    if (err)
+      *err = "内部错误：解密输出参数为空";
+    return false;
+  }
+  out->clear();
+  *undecryptable = 0;
+  if (items.empty())
+    return true;
+  if (enc_key.size() != 32) {
+    if (err)
+      *err = "内部错误：加密密钥长度不是 32 字节";
+    return false;
+  }
+  for (size_t i = 0; i < items.size(); ++i) {
+    const std::vector<CloudSyncItem> one(1, items[i]);
+    std::vector<Entry> opened;
+    std::string one_err;
+    if (!OpenItems(one, enc_key, &opened, &one_err)) {
+      ++(*undecryptable);
+      continue;
+    }
+    out->insert(out->end(), opened.begin(), opened.end());
+  }
+  return true;
+}
+
+namespace {
+
+// sidecar 的 keyfp 行内容：enc_key 的指纹（只落指纹，不落密钥本体）。
+// 复用条目身份的 HKDF + MAC 派生，不引入新的密码学常量。
+const char kSidecarKeyFpProbe[] = "fluxing-cloud-sync-keyfp-v1";
+// 显式「尚未绑定密钥」标记：ResetCloudSyncSidecarFile 写它，使
+// 「清空云端后的第一轮」不会被误判成密钥轮换。
+const char kSidecarKeyFpUnbound[] = "-";
+
+std::string SidecarKeyFp(const std::vector<uint8_t>& enc_key) {
+  if (enc_key.size() != 32)
+    return kSidecarKeyFpUnbound;
+  return ComputeItemKeyId(enc_key, kSidecarKeyFpProbe);
+}
+
+}  // namespace
+
+std::string BuildSidecarText(const std::vector<CloudSidecarRow>& rows,
+                             int64_t server_seq,
+                             const std::vector<uint8_t>& enc_key) {
+  std::string out;
+  out.reserve(64 + rows.size() * 128);
+  out += "#fluxing-cloud-sync-v1\n";
+  out += "seq\t";
+  out += std::to_string(server_seq);
+  out += "\n";
+  out += "keyfp\t";
+  out += SidecarKeyFp(enc_key);
+  out += "\n";
+  for (size_t i = 0; i < rows.size(); ++i) {
+    out += "row\t";
+    out += EscapeKey(rows[i].item_key);
+    out += "\t";
+    out += std::to_string(rows[i].ms);
+    out += "\t";
+    out += std::to_string(rows[i].counter);
+    out += "\t";
+    out += rows[i].device;
+    out += "\t";
+    out += rows[i].payload_hash;
+    out += "\n";
+  }
+  return out;
+}
+
+bool ParseSidecarText(const std::string& text,
+                      const std::vector<uint8_t>& enc_key,
+                      std::vector<CloudSidecarRow>* rows,
+                      int64_t* server_seq,
+                      bool* key_rotated,
+                      std::string* err) {
+  if (rows == nullptr || server_seq == nullptr || key_rotated == nullptr) {
+    if (err)
+      *err = "内部错误：sidecar 解析输出参数为空";
+    return false;
+  }
+  rows->clear();
+  *server_seq = 0;
+  *key_rotated = false;
+
+  std::string stored_keyfp;
+  bool seen_keyfp = false;
+  std::stringstream in(text);
+  std::string line;
+  bool first = true;
+  while (std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
+    if (first) {
+      first = false;
+      continue;  // 版本行
+    }
+    if (line.empty())
+      continue;
+    const std::vector<std::string> cols = SplitTab(line);
+    if (cols.size() >= 2 && cols[0] == "seq") {
+      *server_seq = std::strtoll(cols[1].c_str(), nullptr, 10);
+      continue;
+    }
+    if (cols.size() >= 2 && cols[0] == "keyfp") {
+      stored_keyfp = cols[1];
+      seen_keyfp = true;
+      continue;
+    }
+    if (cols.size() >= 6 && cols[0] == "row") {
+      CloudSidecarRow row;
+      row.item_key = UnescapeKey(cols[1]);
+      row.ms = std::strtoull(cols[2].c_str(), nullptr, 10);
+      row.counter =
+          static_cast<uint32_t>(std::strtoul(cols[3].c_str(), nullptr, 10));
+      row.device = cols[4];
+      row.payload_hash = cols[5];
+      rows->push_back(row);
+      continue;
+    }
+  }
+
+  if (seen_keyfp && stored_keyfp == kSidecarKeyFpUnbound)
+    return true;  // 「未绑定密钥」：不是轮换
+  const bool rotated = seen_keyfp ? (stored_keyfp != SidecarKeyFp(enc_key))
+                                  : !(rows->empty() && *server_seq == 0);
+  if (!rotated)
+    return true;
+  rows->clear();
+  *server_seq = 0;
+  *key_rotated = true;
   return true;
 }
 
@@ -1265,6 +1393,8 @@ bool ResetCloudSyncSidecarFile(const std::string& sidecar_path, std::string* err
   }
   out << "#fluxing-cloud-sync-v1\n";
   out << "seq\t0\n";
+  // 显式「未绑定密钥」：下一轮 LoadSidecar 不会把这次重置误判成密钥轮换。
+  out << "keyfp\t-\n";
   return true;
 }
 

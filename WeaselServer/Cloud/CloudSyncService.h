@@ -185,6 +185,17 @@ bool OpenItems(const std::vector<CloudSyncItem>& items,
                std::vector<Entry>* out,
                std::string* err);
 
+// 容忍旧密钥的变体：enc_key 换过之后，云端仍躺着用上一把密钥加密的行 ——
+// 它们**永远解不开**；若照 OpenItems 的语义整批失败，同步会被这些作废数据
+// 永久卡死（换口令后自动全量重推的必要条件）。
+// 逐条解密：解得开的进 out，解不开的只计数（undecryptable），不报错。
+// 只有「密钥长度不对」这类配置错误才返回 false。
+bool OpenItemsTolerant(const std::vector<CloudSyncItem>& items,
+                       const std::vector<uint8_t>& enc_key,
+                       std::vector<Entry>* out,
+                       int* undecryptable,
+                       std::string* err);
+
 // 合并本地与远端（逐条目 HLC 大者取胜）。
 std::vector<Entry> MergeLocalAndRemote(const std::vector<Entry>& local,
                                        const std::vector<Entry>& remote);
@@ -277,6 +288,24 @@ class CloudSyncService {
 // 成员函数与 UI 复用同一份实现，不会各写一遍。
 bool ResetCloudSyncSidecarFile(const std::string& sidecar_path, std::string* err);
 
+// sidecar 文本的序列化 / 解析（纯函数，便于单测与排障）。
+// keyfp 行记录写出该 sidecar 的 enc_key 指纹：用户重置口令后 enc_key 变化，
+// 旧 sidecar 里的「已同步」标记全部作废 —— 见 ParseSidecarText 的 key_rotated。
+std::string BuildSidecarText(const std::vector<CloudSidecarRow>& rows,
+                             int64_t server_seq,
+                             const std::vector<uint8_t>& enc_key);
+
+// 解析 sidecar 文本。key_rotated 为 true 时 rows / server_seq 已被清空
+// （调用方据此把全部本地条目当新增重推）。
+// keyfp 行缺失（老版本写的 sidecar）⇒ 有内容就判轮换；空 sidecar 不算。
+// keyfp 为 "-"（ResetCloudSyncSidecarFile 写的「未绑定密钥」）⇒ 不轮换。
+bool ParseSidecarText(const std::string& text,
+                      const std::vector<uint8_t>& enc_key,
+                      std::vector<CloudSidecarRow>* rows,
+                      int64_t* server_seq,
+                      bool* key_rotated,
+                      std::string* err);
+
 class CloudSyncCoordinator {
  public:
   CloudSyncCoordinator(ICloudTransport* transport,
@@ -318,6 +347,8 @@ class CloudSyncCoordinator {
   HlcClock clock_;
   // item_key → (ms, counter, device, payload 的 sha256)
   std::vector<CloudSidecarRow> sidecar_rows_;
+  // 本轮 LoadSidecar 是否判定「enc_key 已变化 ⇒ sidecar 作废」
+  bool key_rotated_ = false;
 };
 
 }  // namespace cloud

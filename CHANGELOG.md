@@ -1,3 +1,14 @@
+## [1.3.4]
+### feat(fluxing): 重置口令后客户端两段式全量重推 —— 换密钥即重置本地同步状态（批次 AV · AT-2 方案 C）
+
+- **产品决策落地（用户拍板方案 C）**：重置口令 ⇒ `enc_key` 变化 ⇒ 云端旧密文**永不可解**（服务端永不见 `enc_key`、不参与 KDF）。方案 C **不自动清空云端**（清空仍是用户显式点击发起的不可逆删除），改由客户端**自行检测密钥变化**，在下一轮把本地词库**整库当新增**、用新 `item_key` 与新 HLC 全量重推。
+- **实现（源码级）**：① sidecar 新增 `keyfp\t<fp>` 行，指纹 = `ComputeItemKeyId(enc_key, "fluxing-cloud-sync-keyfp-v1")` —— 复用既有 HKDF+MAC 派生，**不对密钥本体做裸哈希**；密钥长度 ≠ 32 时写 `-` 表示「未绑定密钥」。② sidecar 序列化 / 解析抽成纯函数 `BuildSidecarText` / `ParseSidecarText`，`LoadSidecar` / `SaveSidecar` 退化为薄封装。③ 判定密钥已轮换 ⇒ **只在内存重置**（清 `rows` + `server_seq = 0` + `key_rotated = true`），本轮结束由 `SaveSidecar` 自然写入当前 `keyfp` ⇒ `ResetCloudSyncSidecarFile` **签名不变**、批次 AU 的两个调用点零改动。④ 老 sidecar 无 `keyfp` 行 ⇒ 有内容即判不匹配 ⇒ 重置；空文件 / 仅版本行 / `rows` 空且 `seq == 0` **不算轮换**；`keyfp == "-"`（清空云端后的首轮）也**不算轮换** ⇒ 不误报「密钥已变化」。
+- **拉取容错（否则换钥后整轮失败）**：新增纯函数 `OpenItemsTolerant`（**不改** `OpenItems` 既有签名与语义），逐条尝试解密，**解不开的旧密钥行只计数并跳过**，不判整轮失败；跳过条数拼进本轮 `message`。
+- **零 API 变更**：不新增 `CloudSyncRoundResult` 字段、不新增 IPC 消息 ⇒ **不触发「IPC 四边同步」红线**。
+- **用户可见文案（简体中文）**：前缀「加密密钥已变化，已重置本地同步状态并全量重推。」＋ 尾部「，旧密钥加密的行无法解密跳过 N 条」。
+- **门禁**：云单测 **`PASS=526 FAIL=0`**（基线 502 ⇒ **+24**；新增 `TestCloudSidecarKeyRotation` 六组：同密钥恢复 / 换密钥作废 / 老 sidecar 无 `keyfp` / 空 sidecar 不轮换 / 未绑定标记不轮换 / 空密钥写 `-`）；`build.bat weasel` **0 警告 0 错误**；clang-format 本次改动行区间 **0 violation**（仓库既有历史漂移未动）。
+- **出包 1.3.4**：版本真相源四处同步 1.3.3 → 1.3.4（`version.txt` / `env.bat` / `weasel.props` / 本文件）；**改 `.props` 不触发 MSBuild 重编译** ⇒ 必须 touch 4 个 `.rc` 后重建。产物 `output/archives/fluxing-1.3.4-installer.exe` —— **42 990 667 B · sha16 `A1EEEEB377088233`**（sha256 `A1EEEEB3770882338F40AE57B13E867335E47CF372F4EF33DAB24F644396CD8A`）；内嵌 `WeaselServer.exe` **2755072 B / filever `1.3.4.0`**（1.3.3 包内为 2748416 B / `1.3.3.0` ⇒ 判别通过）；AV 独有文案 `加密密钥已变化` 在 1.3.4 包内 = **True**、1.3.3 包内 = **False** ⇒ 本批代码确在包内；makensis 8 条既有 `warning 7010`。
+- **⚠️ 未闭环**：**未装机**（`WeaselServer.exe` 是 **PPL** ⇒ 装机前必须注销 / 重启）；真机判据「重置口令 → 自动全量重推」未验；双机 AC 7 条 + restore 端到端 + 输入延迟两组对照；仓库累计提交仍未 push（无授权）。
 ## [1.3.3]
 ### fix(fluxing): 「清空云端数据」后本地词典再也传不上去 —— sidecar 未重置（批次 AU）
 

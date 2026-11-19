@@ -2992,6 +2992,118 @@ void TestCloudSidecarReset() {
   std::remove(path.c_str());
 }
 
+// 批次 AV：换口令 ⇒ enc_key 变 ⇒ 旧 sidecar 作废、整库当新增全量重推（方案
+// C）。
+void TestCloudSidecarKeyRotation() {
+  std::printf("[AV] 换密钥后 sidecar 作废（两段式全量重推）\n");
+
+  const std::vector<uint8_t> key_a(32, 0x01);
+  const std::vector<uint8_t> key_b(32, 0x02);
+
+  fc::CloudSidecarRow row;
+  row.item_key = "rime_ice\t词条";
+  row.ms = 1700000000000ULL;
+  row.counter = 3;
+  row.device = "dev-a";
+  row.payload_hash = "deadbeef";
+  std::vector<fc::CloudSidecarRow> rows;
+  rows.push_back(row);
+
+  const std::string text = fc::BuildSidecarText(rows, 42, key_a);
+  Check(text.find("#fluxing-cloud-sync-v1\n") == 0, "sidecar 首行仍是版本行");
+  Check(text.find("keyfp\t") != std::string::npos, "sidecar 落 keyfp 行");
+  Check(text.find("keyfp\t-") == std::string::npos, "有密钥时不写未绑定标记");
+
+  // ① 同一把密钥：行与游标照常恢复，不判轮换。
+  {
+    std::vector<fc::CloudSidecarRow> out_rows;
+    int64_t seq = -1;
+    bool rotated = true;
+    std::string err;
+    Check(fc::ParseSidecarText(text, key_a, &out_rows, &seq, &rotated, &err),
+          "同密钥解析成功");
+    Check(!rotated, "同密钥不判轮换");
+    Check(seq == 42, "游标恢复为 42");
+    Check(out_rows.size() == 1, "恢复 1 行");
+    if (out_rows.size() == 1) {
+      Check(out_rows[0].item_key == row.item_key,
+            "item_key 转义往返一致（含制表符）");
+      Check(out_rows[0].payload_hash == row.payload_hash, "payload_hash 一致");
+      Check(out_rows[0].counter == 3, "counter 一致");
+    }
+  }
+
+  // ② 换密钥：行与游标一律作废（⇒ 下一轮整库当新增重推）。
+  {
+    std::vector<fc::CloudSidecarRow> out_rows;
+    int64_t seq = -1;
+    bool rotated = false;
+    std::string err;
+    Check(fc::ParseSidecarText(text, key_b, &out_rows, &seq, &rotated, &err),
+          "换密钥解析成功");
+    Check(rotated, "换密钥 ⇒ 判为轮换");
+    Check(out_rows.empty(), "轮换后不留历史行");
+    Check(seq == 0, "轮换后游标归零");
+  }
+
+  // ③ 老版本 sidecar（无 keyfp 行）且有内容 ⇒ 保守判轮换。
+  {
+    const std::string old_text =
+        "#fluxing-cloud-sync-v1\n"
+        "seq\t7\n"
+        "row\tkey-1\t1700000000000\t1\tdev-a\tdead\n";
+    std::vector<fc::CloudSidecarRow> out_rows;
+    int64_t seq = -1;
+    bool rotated = false;
+    std::string err;
+    Check(
+        fc::ParseSidecarText(old_text, key_a, &out_rows, &seq, &rotated, &err),
+        "老 sidecar 解析成功");
+    Check(rotated, "无 keyfp 且有内容 ⇒ 判轮换");
+    Check(out_rows.empty(), "老 sidecar 的行作废");
+  }
+
+  // ④ 空 sidecar（只有版本行 + 游标 0）⇒ 第一次同步不是轮换。
+  {
+    const std::string empty_text = "#fluxing-cloud-sync-v1\nseq\t0\n";
+    std::vector<fc::CloudSidecarRow> out_rows;
+    int64_t seq = -1;
+    bool rotated = true;
+    std::string err;
+    Check(fc::ParseSidecarText(empty_text, key_a, &out_rows, &seq, &rotated,
+                               &err),
+          "空 sidecar 解析成功");
+    Check(!rotated, "空 sidecar 不判轮换");
+  }
+
+  // ⑤ 「未绑定密钥」标记（清空云端后由 ResetCloudSyncSidecarFile 写的）。
+  {
+    const std::string unbound = "#fluxing-cloud-sync-v1\nseq\t0\nkeyfp\t-\n";
+    std::vector<fc::CloudSidecarRow> out_rows;
+    int64_t seq = -1;
+    bool rotated = true;
+    std::string err;
+    Check(fc::ParseSidecarText(unbound, key_a, &out_rows, &seq, &rotated, &err),
+          "未绑定标记解析成功");
+    Check(!rotated, "未绑定密钥标记不判轮换（清空云端→重传不被误伤）");
+  }
+
+  // ⑥ 空密钥（配置缺失）⇒ 指纹给未绑定，绝不用裸哈希顶替。
+  {
+    std::vector<fc::CloudSidecarRow> out_rows;
+    int64_t seq = -1;
+    bool rotated = true;
+    std::string err;
+    const std::string unbound = fc::BuildSidecarText(
+        std::vector<fc::CloudSidecarRow>(), 0, std::vector<uint8_t>());
+    Check(unbound.find("keyfp\t-\n") != std::string::npos,
+          "空密钥 ⇒ keyfp 写未绑定标记");
+    Check(fc::ParseSidecarText(unbound, key_a, &out_rows, &seq, &rotated, &err),
+          "空密钥 sidecar 可解析");
+    Check(!rotated, "空密钥 sidecar 不判轮换");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -3042,6 +3154,8 @@ int main() {
 
   // 批次 AU：清空云端后本地同步状态重置（sidecar）。
   TestCloudSidecarReset();
+  // 批次 AV：换口令后 sidecar 作废、整库全量重推（方案 C）。
+  TestCloudSidecarKeyRotation();
 
   // 批次 AT-1 · ADR 0063：账号页信息架构（两态可见性 / 几何 / 历史邮箱）。
   TestAccountPageUi();
