@@ -1,3 +1,16 @@
+## [1.3.7]
+### fix(fluxing): 账号页「换钥提示」DPI 感知布局 —— 修缺陷 C（>150% 系统缩放裁掉末行）（批次 BB · ADR 0068）
+
+- **缺陷 C（批次 BA 实测登记）**：账号页换钥提示控件 `kIdKeyRotationNote = 1035` 的几何是**固定物理像素**（`456×36`），而 UI 字体 `DEFAULT_GUI_FONT` 按**系统 DPI** 光栅化 ⇒ 144 dpi 下 37 个全角字整行 `666 px` > `456 px` ⇒ 折 2 行需 `36 px` ⇒ **余量 0**；175% 需 42 px、200% 需 48 px ⇒ **>150% 缩放的机器必然裁掉末行**。根因不是单个控件 —— 所有静态文案行 / 输入框 / 按钮同一形态（200% 下 26 px 输入框配 24 px 字高）。
+- **修法（[ADR 0068](docs/adr/0068-account-ui-dpi-proportional-scaling.md)）**：布局表以 **96 dpi 为基准**、**整表按 DPI 等比缩放**（`AccountScale(v,dpi)=MulDiv(v,dpi,96)`），缩放入口**唯一化**（`AccountScaleLayout`）⇒ 结构上不可能有控件漏缩；客户区尺寸同表缩放；`WM_DPICHANGED` **显式吞掉**（窗口与控件永远来自同一份缩放）；**不保留「无 dpi」兼容重载**（那个形态**就是**本缺陷的形态，留着就是复发入口）；文案迁入真相源 `AccountKeyRotationNoteText()`（生产与单测同源，R7）。**96 dpi 下逐像素不变**（`AccountScale(v,96)==v` ⇒ 零行为变化）。
+- **缩放系数取自系统 DPI**：`GetDpiForSystem()`（user32，**动态 `GetProcAddress` 取** ⇒ Win8.1 及更早系统不炸）→ 回退 gdi32 `GetDeviceCaps(LOGPIXELSX)`。⚠️ **禁用 `GetDpiForMonitor`**（`api-ms-win-shcore-scaling` 依赖，教训 L122）。**不按窗口所在屏 DPI 缩放**：stock 字体是进程级资源、按系统 DPI 光栅化，按窗口 DPI 缩放会与实际渲染失配 ⇒ 反而裁字。
+- **⚠️ 实施期推翻「量真实字体反推 DPI」**：本机实测 `GetDpiForSystem=144`、stock 字体 `tm` 行高 **21 px**，而 144 dpi 下**控件**单行高才是 **18 px** ⇒ 用行高反推得 **168 dpi（+17%）**、96 dpi 机器同理得 112 dpi ⇒ **违反「96 dpi 逐像素不变」**。字体度量降级为**交叉校验告警**（偏差 > 12.5% ⇒ 记 `acctdlg` 日志，不影响布局）。
+- **用户可见文案零改动**：37 字提示逐字不动（账号页文案与 `docs/release/restart-checklist-1.3.6.md` A-1 期望值逐字比对）。
+- **门禁**：云单测 `RESULT: PASS=585 FAIL=0 / VERDICT: ALL PASS`（基线 577 ⇒ **+8**；新增 `TestAccountPageUiDpiScale` 8 条判据：96dpi 逐像素不变 / 144dpi 等比缩放 / 换钥文案装得下 / 余量 ≥ 1 行；`exe.mtime 20:27:14 > src.mtime 20:21:15` ⇒ 确为新二进制、非假绿；IPC 回环 `PASS=11 FAIL=0`）· `build.bat weasel installer` **0 错误**（8 条既有 makensis `warning 7010` = ARM/ARM64 可选产物 + `data\*.gram` + `data\lua\*.txt`）· 定点 `clang-format` 3 文件 **0 漂移** · `L0-static.ps1` **15/15**（`version-consistency version=1.3.7 一致`、`artifact-version-resource 5 个产物 FileVersion 均为 1.3.7.0`）
+- **产物**：`output/archives/fluxing-1.3.7-installer.exe` = **42 975 921 B** · sha16 `F91A7A108252CF91`；内嵌 `output\Win32\WeaselServer.exe` = **2 785 280 B** · `FileVersion 1.3.7.0` · sha16 `38316DCEFC8C502E`；**令牌差集**（UTF-16LE 宽串）`dpi-mismatch system=` / `note-margin-short dpi=` = 新构建 **True** / 装机版 1.3.6 **False** ⇒ 本批代码确在产物内。
+- **装机实证（本批关键闭环）**：`INSTALL_EXIT=0` ⇒ 运行中服务映像换成 **1.3.7.0**（pid 77332 / start 20:37:56 / sha16 `38316DCEFC8C502E` 与构建产物**逐字一致**）、**无 stage2 残留**、用户数据未动；复跑 BA 探针 ⇒ 控件 `1035` 由 `456×36` 变 **`684×54`**（= ×1.5）、客户区 `480×290` → `720×435`（整表等比缩放落地）⇒ 37 字提示**单行排下**（文本 w=666 ≤ 盒宽 684）、需求 **18 px** / 盒高 **54 px** ⇒ **余量 36 px**，墨迹带 `0–16` 单带且 `lastBandTouchesBottom=False` ⇒ **`VERDICT=A1_NOT_CLIPPED`（缺陷 C 关闭）**。
+- **诊断日志实测**：`[acctdlg] dpi-mismatch system=144 font_px=21 derived=168` ⇒ 字体度量交叉校验**按设计告警**（反推 168dpi 会 +17% 超缩，这正是本批放弃「量字体反推 DPI」的直接原因）；全程**无** `note-margin-short` ⇒ 余量充足不裁。
+- **⚠️ 未闭环**：① **175% / 200% 缩放真机未验**（本机 144dpi 已实证不裁；>150% 的机器仍是推断）② **A-4 / A-5 未登录态未测**（需登出改账号状态，探针不自行发起）③ **AZ §6 第 2 项 B-1/B-2/B-3 孤儿会话回收端到端**未做（下一批第 1 项）④ AZ §6 第 3 项「已运行 TSF 宿主逐 pid 枚举模块验证」、AZ §6 第 4 项「`TestWeaselIPC.exe /verify-client-pid` 需先 `WeaselServer.exe /quit` 抢管道」未做 ⑤ 双机 AC 7 条 + restore 端到端 + 输入延迟两组对照 + 缺陷 A 反向判据 G-3/G-5 未做 ⑥ 本批 / AZ / BA 的文档改动**未 push**（push 需用户授权）
 ## [1.3.6]
 ### feat(fluxing): 孤儿 IPC 会话回收（ADR 0067）+ 账号页「换钥后果」常驻提示 + `[FluxingAccountDlg]` 诊断日志改接文件（批次 AX / AY）
 

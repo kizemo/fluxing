@@ -7,6 +7,11 @@
 
 #define NOMINMAX
 
+// WM_DPICHANGED（Win8.1+）：旧 SDK 未必声明 ⇒ 兜底定义（值固定不变）。
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
+
 #include "CloudAccountDialog.h"
 
 #include "CloudAccount.h"
@@ -40,6 +45,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -954,7 +960,9 @@ std::wstring WidgetText(Role role, int id) {
       // ADR 0063 补充（用户拍板「加一句提示」）：重置口令 ⇒ enc_key 变 ⇒
       // 云端旧密文永不可解（R2 服务端永不见 enc_key，无法代解）。口径与
       // 「找回密码」窗的补救指引一致（批次 AV），此处为常驻说明。
-      return L"重置登录口令后，云端旧条目将无法再解开，可在「设备与云数据」清空云端数据。";
+      // ⚠️ 文案本体在真相源 CloudAccountUi.h（批次 BB）：单测要拿它判定
+      //    「控件装不装得下这行字」⇒ 生产与单测必须是同一份（R7）。
+      return std::wstring(AccountKeyRotationNoteText());
     case kIdRegister:
       return role == Role::kRegister ? L"注册并发送验证码" : L"注册";
     case kIdResend:
@@ -1114,8 +1122,88 @@ void DiscardStaleWindow(Role role, HWND hwnd) {
     ::PostMessageW(hwnd, WM_CLOSE, 0, 0);
 }
 
-void CreateWidgets(HWND hwnd, Role role) {
-  const std::vector<AccountWidgetSpec> specs = AccountWidgets(role);
+// ---------------------------------------------------------------------------
+// 有效 DPI（批次 BB · 修缺陷 C）
+// ---------------------------------------------------------------------------
+//
+// UI 字体是 **DEFAULT_GUI_FONT**（进程级 stock 对象，按系统 DPI 光栅化）。
+// 账号页的控件几何若不跟着放大，文字就会被裁（批次 BA 实测：144 dpi 下
+// 37 个全角字折两行正好 36 px，而控件高度字面量也是 36 ⇒ 余量 0；
+// >150% 缩放的机器必然裁掉末行）。
+//
+// 口径 = **系统 DPI**（user32 `GetDpiForSystem`；Win8.1 及更早回退 gdi32
+// `GetDeviceCaps(LOGPIXELSX)`）—— 与 stock 字体的光栅化口径**同源** ⇒
+// 「盒子 : 文字」的比值在任何缩放下恒定 ⇒ 裁不到。
+//
+// ⚠️ **不能**用「量字体行高反推 DPI」：本机实测（系统 144 dpi）DEFAULT_GUI_FONT
+//    的真实行高 = 21 px（宋体 9pt），而 144 dpi 下**控件**单行高才是 18 px
+//    ⇒ 用 tm 行高反推会得到 168 dpi（+17%）；96 dpi 机器上同理得到 112 dpi
+//    ⇒ 违反「96 dpi 逐像素不变」不变量。字体度量只保留作**交叉校验**
+//    （发现异常环境时记一行诊断日志），**不参与布局**。
+//
+// ⚠️ 禁用 GetDpiForMonitor：它会引入 api-ms-win-shcore-scaling-l1-1-1.dll
+//    依赖，Win10 24H2 上该 DLL 缺失 ⇒ regsvr32 退出码 3（教训 L122）。
+//    `GetDpiForSystem` 虽同属 Win10 1607+，但它是 user32 **已有导出**
+//    （不引入新 DLL 依赖）⇒ 动态取，老系统直接回退，**绝不静态导入**
+//    （静态导入会让 Win8.1 及更早系统整个进程加载失败）。
+int AccountUiDpi() {
+  static int cached = 0;
+  if (cached > 0)
+    return cached;
+  int dpi = 0;
+  // ① GetDpiForSystem（动态取 ⇒ 老系统不炸）
+  typedef UINT(WINAPI * GetDpiForSystemFn)();
+  HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
+  if (user32 != nullptr) {
+    GetDpiForSystemFn fn = reinterpret_cast<GetDpiForSystemFn>(
+        reinterpret_cast<void*>(::GetProcAddress(user32, "GetDpiForSystem")));
+    if (fn != nullptr) {
+      const UINT value = fn();
+      if (value >= 48)
+        dpi = static_cast<int>(value);
+    }
+  }
+  // ② 回退：gdi32 GetDeviceCaps(LOGPIXELSX)（Win95+ ⇒ 永远可用）
+  if (dpi <= 0) {
+    HDC dc = ::GetDC(nullptr);
+    if (dc != nullptr) {
+      const int lx = ::GetDeviceCaps(dc, LOGPIXELSX);
+      ::ReleaseDC(nullptr, dc);
+      if (lx >= 48)
+        dpi = lx;
+    }
+  }
+  if (dpi <= 0)
+    dpi = kAccountBaseDpi;
+  cached = dpi;
+  // 交叉校验：系统 DPI 与 stock 字体度量推得的 DPI 偏差过大 ⇒ 记一行诊断
+  // （不改变布局：布局只认系统 DPI）。
+  {
+    HDC dc = ::GetDC(nullptr);
+    if (dc != nullptr) {
+      HGDIOBJ old_font = ::SelectObject(dc, widgets::DefaultUiFont());
+      TEXTMETRICW tm;
+      ::ZeroMemory(&tm, sizeof(tm));
+      if (::GetTextMetricsW(dc, &tm)) {
+        const int line_px = tm.tmHeight + tm.tmExternalLeading;
+        const int derived = AccountEffectiveDpiFromFontPx(line_px);
+        const int delta = derived > dpi ? derived - dpi : dpi - derived;
+        if (delta * 8 > dpi) {  // 偏差 > 12.5%
+          std::wstring msg = L"dpi-mismatch system=" + std::to_wstring(dpi) +
+                             L" font_px=" + std::to_wstring(line_px) +
+                             L" derived=" + std::to_wstring(derived);
+          LogAccountDlg(msg);
+        }
+      }
+      ::SelectObject(dc, old_font);
+      ::ReleaseDC(nullptr, dc);
+    }
+  }
+  return dpi;
+}
+
+void CreateWidgets(HWND hwnd, Role role, int dpi) {
+  const std::vector<AccountWidgetSpec> specs = AccountWidgets(role, dpi);
   for (size_t i = 0; i < specs.size(); ++i) {
     const AccountWidgetSpec& spec = specs[i];
     const std::wstring text = WidgetText(role, spec.id);
@@ -1125,10 +1213,37 @@ void CreateWidgets(HWND hwnd, Role role) {
 }
 
 // 按登录态切换控件的可见性与几何（**不重建控件** —— 重建会丢输入内容）。
-void ApplyLayout(HWND hwnd, Role role, bool logged_in) {
-  const std::vector<AccountWidgetSpec> specs = AccountWidgets(role);
+void ApplyLayout(HWND hwnd, Role role, bool logged_in, int dpi) {
+  const std::vector<AccountWidgetSpec> specs = AccountWidgets(role, dpi);
   const std::vector<AccountLayoutEntry> layout =
-      AccountVisibleLayout(role, logged_in);
+      AccountVisibleLayout(role, logged_in, dpi);
+  // 余量校验（ADR 0068 决策 5）：换钥提示是唯一的多行长文案控件，必须有
+  // ≥1 行余量。判据函数与单测**共用同一份**（R7）⇒ 单测验的就是这里跑的
+  // 逻辑。不足 ⇒ 只记诊断日志告警（布局表是唯一真相源，不在这里改几何）。
+  {
+    const AccountLayoutEntry* note = nullptr;
+    for (size_t j = 0; j < layout.size(); ++j) {
+      if (layout[j].id == kIdKeyRotationNote) {
+        note = &layout[j];
+        break;
+      }
+    }
+    if (note != nullptr) {
+      const int chars = AccountWideCharCount(AccountKeyRotationNoteText());
+      const int required = AccountRequiredHeightForText(chars, note->w, dpi);
+      const int lines =
+          AccountTextLineCount(AccountTextWidthEm(chars, dpi), note->w);
+      const int min_h = AccountMinHeightForText(lines, dpi);
+      if (note->h < min_h) {
+        std::wstring msg = L"note-margin-short dpi=" + std::to_wstring(dpi) +
+                           L" w=" + std::to_wstring(note->w) + L" h=" +
+                           std::to_wstring(note->h) + L" need=" +
+                           std::to_wstring(required) + L" min=" +
+                           std::to_wstring(min_h);
+        LogAccountDlg(msg);
+      }
+    }
+  }
   for (size_t i = 0; i < specs.size(); ++i) {
     HWND ctrl = ::GetDlgItem(hwnd, specs[i].id);
     if (ctrl == nullptr)
@@ -1204,7 +1319,7 @@ void RefreshUi(HWND hwnd, Role role) {
       ::SetWindowTextW(account, controller.account_email().c_str());
     RefreshHistoryCombo(hwnd, controller);
     // ★ 登录态区分：两套控件互斥，切换靠 ShowWindow，不重建。
-    ApplyLayout(hwnd, role, logged_in);
+    ApplyLayout(hwnd, role, logged_in, AccountUiDpi());
   } else if (role == Role::kDevice) {
     HWND list = ::GetDlgItem(hwnd, kIdDevices);
     if (list != nullptr) {
@@ -1248,7 +1363,7 @@ LRESULT CALLBACK WndProc(HWND hwnd,
       ::SetWindowLongPtrW(hwnd, GWLP_USERDATA,
                           static_cast<LONG_PTR>(static_cast<int>(role)));
       CloudAccountController::Instance().RegisterWindow(hwnd, ScopeOf(role));
-      CreateWidgets(hwnd, role);
+      CreateWidgets(hwnd, role, AccountUiDpi());
       RefreshUi(hwnd, role);
       return 0;
     }
@@ -1446,6 +1561,22 @@ LRESULT CALLBACK WndProc(HWND hwnd,
       RefreshUi(hwnd, RoleOf(hwnd));
       return 0;
 
+    case WM_DPICHANGED: {
+      // **故意不跟随** 屏幕 DPI 缩放（批次 BB）：
+      //   · UI 字体是进程级 stock 对象（按系统 DPI 光栅化），窗口挪到另一块
+      //     屏也不会变大 ⇒ 跟着屏幕 DPI 放大会让「盒子 : 文字」失配 ⇒ 反而
+      //     裁字；
+      //   · 若交给 DefWindowProc 默认处理，它会按系统给的建议矩形缩放窗口，
+      //     而子控件仍按创建时的缩放摆位 ⇒ 客户区与控件对不上（控件会被
+      //     窗口边缘裁掉）。
+      // ⇒ 显式吞掉该消息：窗口尺寸与控件布局始终来自**同一份**缩放，
+      //   两者永远配套。
+      // 彻底修好（按所在屏缩放 + 按屏建字体）需要 per-window font
+      // （CreateFontIndirectW + SystemParametersInfoForDpi），见 ADR 0068
+      // 的「已知限制」。
+      return 0;
+    }
+
     case WM_CLOSE:
       // 唯一的销毁入口：所有关闭触发点（关闭按钮 / 标题栏 X）都投递 WM_CLOSE
       // 到这里，由本处理器统一 DestroyWindow（不再有第二条销毁路径）。
@@ -1533,9 +1664,11 @@ HWND CreateOrShow(Role role) {
   if (!EnsureClass())
     return nullptr;
 
+  // 客户区尺寸同样按 DPI 放大（缺陷 C 的教训：盒子不放大 ⇒ 文字被裁）。
+  const int dpi = AccountUiDpi();
   int width = 480;
   int height = 250;
-  AccountClientSize(role, &width, &height);
+  AccountClientSize(role, dpi, &width, &height);
   RECT rect = {0, 0, width, height};
   ::AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
   HWND hwnd = ::CreateWindowExW(

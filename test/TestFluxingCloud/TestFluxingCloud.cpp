@@ -2623,8 +2623,10 @@ bool AtUiHasId(const std::vector<int>& ids, int id) {
 }
 
 void TestAccountPageUi() {
-  const std::vector<int> logged_out = fc::AccountVisibleControlIds(false);
-  const std::vector<int> logged_in = fc::AccountVisibleControlIds(true);
+  const std::vector<int> logged_out =
+      fc::AccountVisibleControlIds(false, fc::kAccountBaseDpi);
+  const std::vector<int> logged_in =
+      fc::AccountVisibleControlIds(true, fc::kAccountBaseDpi);
 
   // 1) 未登录态：用户点名的六项齐全。
   Check(AtUiHasId(logged_out, fc::kIdEmail) &&
@@ -2676,18 +2678,24 @@ void TestAccountPageUi() {
         "AT-1 未登录态：历史邮箱下拉与「保存账号」可见");
 
   // 7) 四个子窗口各自只承载自己的控件。
-  Check(AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kVerify, true),
+  Check(AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kVerify, true,
+                                        fc::kAccountBaseDpi),
                   fc::kIdVerifyCode) &&
-            !AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kVerify, true),
+            !AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kVerify,
+                                             true, fc::kAccountBaseDpi),
                        fc::kIdLogin) &&
-            AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kRegister, true),
+            AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kRegister,
+                                            true, fc::kAccountBaseDpi),
                       fc::kIdRegister) &&
             // 验证码输入框只住在「验证码窗」里（用户要求：不再内嵌主窗口）。
-            !AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kRegister, true),
+            !AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kRegister,
+                                             true, fc::kAccountBaseDpi),
                        fc::kIdVerifyCode) &&
-            AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kForgot, true),
+            AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kForgot,
+                                            true, fc::kAccountBaseDpi),
                       fc::kIdResetPassword) &&
-            AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kDevice, true),
+            AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kDevice,
+                                            true, fc::kAccountBaseDpi),
                       fc::kIdDevices),
         "AT-1 四个子窗口各自只承载自己的控件");
 
@@ -2712,12 +2720,13 @@ void TestAccountPageUi() {
   //     旧密文永不可解（R2），账号页「已登录」态必须常驻说明这一点。
   //     判据用共享真相源（R7），不在测试里复制几何。
   {
-    const std::vector<fc::AccountLayoutEntry> logged =
-        fc::AccountVisibleLayout(fc::AccountWindowRole::kAccount, true);
+    const std::vector<fc::AccountLayoutEntry> logged = fc::AccountVisibleLayout(
+        fc::AccountWindowRole::kAccount, true, fc::kAccountBaseDpi);
     const std::vector<fc::AccountLayoutEntry> anonymous =
-        fc::AccountVisibleLayout(fc::AccountWindowRole::kAccount, false);
-    const std::vector<fc::AccountLayoutEntry> device =
-        fc::AccountVisibleLayout(fc::AccountWindowRole::kDevice, true);
+        fc::AccountVisibleLayout(fc::AccountWindowRole::kAccount, false,
+                                 fc::kAccountBaseDpi);
+    const std::vector<fc::AccountLayoutEntry> device = fc::AccountVisibleLayout(
+        fc::AccountWindowRole::kDevice, true, fc::kAccountBaseDpi);
     fc::AccountLayoutEntry note = {-1, -1, -1, -1, -1};
     fc::AccountLayoutEntry hint = {-1, -1, -1, -1, -1};
     fc::AccountLayoutEntry status = {-1, -1, -1, -1, -1};
@@ -2737,7 +2746,8 @@ void TestAccountPageUi() {
     }
     int client_w = 0;
     int client_h = 0;
-    fc::AccountClientSize(fc::AccountWindowRole::kAccount, &client_w, &client_h);
+    fc::AccountClientSize(fc::AccountWindowRole::kAccount, fc::kAccountBaseDpi,
+                          &client_w, &client_h);
     Check(note.id == fc::kIdKeyRotationNote &&
               fc::AccountWidgetClassOf(fc::kIdKeyRotationNote) ==
                   fc::AccountWidgetClass::kStatic &&
@@ -2758,10 +2768,10 @@ void TestAccountPageUi() {
       const fc::AccountWindowRole role = static_cast<fc::AccountWindowRole>(r);
       int w = 0;
       int h = 0;
-      fc::AccountClientSize(role, &w, &h);
+      fc::AccountClientSize(role, fc::kAccountBaseDpi, &w, &h);
       for (int st = 0; st < 2; ++st) {
         const std::vector<fc::AccountLayoutEntry> layout =
-            fc::AccountVisibleLayout(role, st == 1);
+            fc::AccountVisibleLayout(role, st == 1, fc::kAccountBaseDpi);
         for (size_t i = 0; i < layout.size(); ++i) {
           ++checked;
           if (layout[i].x < 0 || layout[i].y < 0 || layout[i].w <= 0 ||
@@ -2777,8 +2787,8 @@ void TestAccountPageUi() {
 
   // 10) 账号窗口的控件全集 = 两态可见集之并（不会多建、也不会漏建）。
   {
-    const std::vector<fc::AccountWidgetSpec> widgets =
-        fc::AccountWidgets(fc::AccountWindowRole::kAccount);
+    const std::vector<fc::AccountWidgetSpec> widgets = fc::AccountWidgets(
+        fc::AccountWindowRole::kAccount, fc::kAccountBaseDpi);
     bool same = true;
     for (size_t i = 0; i < widgets.size(); ++i) {
       if (!AtUiHasId(logged_out, widgets[i].id) &&
@@ -2796,6 +2806,164 @@ void TestAccountPageUi() {
         "AT-1 设备窗口未登录时全部置灰");
 }
 
+// ---------------------------------------------------------------------------
+// 批次 BB · ADR 0068：账号页 DPI 感知布局（修缺陷 C）
+// ---------------------------------------------------------------------------
+//
+// 缺陷 C（批次 BA 真机实测）：144 dpi（150% 缩放）下「换钥提示」的 37 个全角字
+// 折成两行、需 36 px，而控件高度字面量也是 36 ⇒ **余量 0 px** ⇒ >150% 缩放的
+// 机器必然裁掉末行（175% 需 42 px、200% 需 48 px）。
+//
+// 修法（真相源 CloudAccountUi.h）：**整表按 DPI 等比缩放** ⇒「文字 : 盒子」的
+// 比值与 DPI 无关 ⇒ 任何缩放下都裁不到；96 dpi 下逐像素等于旧布局（零行为
+// 变化）。判据全部取自生产头（R7：生产与单测共用同一份实现）。
+
+void TestAccountPageUiDpiScale() {
+  std::printf("[BB] ADR 0068 账号页 DPI 感知布局（缺陷 C）\n");
+
+  const int kDpis[] = {96, 120, 144, 168, 192, 240, 288};
+  const int kDpiCount = 7;
+  const int note_chars =
+      fc::AccountWideCharCount(fc::AccountKeyRotationNoteText());
+
+  // 1) 字体行高 → 有效 DPI 的映射（生产侧量 DEFAULT_GUI_FONT 得到的口径）。
+  Check(fc::AccountEffectiveDpiFromFontPx(12) == 96 &&
+            fc::AccountEffectiveDpiFromFontPx(15) == 120 &&
+            fc::AccountEffectiveDpiFromFontPx(18) == 144 &&
+            fc::AccountEffectiveDpiFromFontPx(21) == 168 &&
+            fc::AccountEffectiveDpiFromFontPx(24) == 192 &&
+            fc::AccountEffectiveDpiFromFontPx(30) == 240 &&
+            fc::AccountEffectiveDpiFromFontPx(36) == 288 &&
+            fc::AccountEffectiveDpiFromFontPx(0) == 96,
+        "BB 字体行高 → 有效 DPI 映射（12→96 … 36→288）");
+
+  // 2) 换钥提示文案 = 37 个全角字（与批次 BA 真机实测逐字一致）。
+  Check(note_chars == 37, "BB 换钥提示文案 = 37 个全角字（与真机实测一致）");
+
+  // 3) 100% 缩放下**逐像素不变**（零行为变化；坐标取自 ADR 0063 冻结合同）。
+  {
+    const std::vector<fc::AccountLayoutEntry> logged =
+        fc::AccountVisibleLayout(fc::AccountWindowRole::kAccount, true, 96);
+    fc::AccountLayoutEntry note = {-1, -1, -1, -1, -1};
+    fc::AccountLayoutEntry status = {-1, -1, -1, -1, -1};
+    fc::AccountLayoutEntry close = {-1, -1, -1, -1, -1};
+    for (size_t i = 0; i < logged.size(); ++i) {
+      if (logged[i].id == fc::kIdKeyRotationNote)
+        note = logged[i];
+      if (logged[i].id == fc::kIdStatus)
+        status = logged[i];
+      if (logged[i].id == fc::kIdClose)
+        close = logged[i];
+    }
+    int cw = 0;
+    int ch = 0;
+    fc::AccountClientSize(fc::AccountWindowRole::kAccount, 96, &cw, &ch);
+    Check(note.x == 12 && note.y == 156 && note.w == 456 && note.h == 36 &&
+              status.x == 12 && status.y == 198 && status.w == 456 &&
+              status.h == 40 && close.x == 368 && close.y == 250 &&
+              close.w == 100 && close.h == 28 && cw == 480 && ch == 290,
+          "BB 100% 缩放下账号页几何逐像素不变（零行为变化）");
+  }
+
+  // 4) 多 DPI：所有可见控件都不得越出客户区（客户区同样按 DPI 放大）。
+  {
+    bool all_fit = true;
+    int checked = 0;
+    for (int d = 0; d < kDpiCount; ++d) {
+      const int dpi = kDpis[d];
+      for (int r = 0; r < static_cast<int>(fc::AccountWindowRole::kCount);
+           ++r) {
+        const fc::AccountWindowRole role =
+            static_cast<fc::AccountWindowRole>(r);
+        int w = 0;
+        int h = 0;
+        fc::AccountClientSize(role, dpi, &w, &h);
+        for (int st = 0; st < 2; ++st) {
+          const std::vector<fc::AccountLayoutEntry> layout =
+              fc::AccountVisibleLayout(role, st == 1, dpi);
+          for (size_t i = 0; i < layout.size(); ++i) {
+            ++checked;
+            if (layout[i].x < 0 || layout[i].y < 0 || layout[i].w <= 0 ||
+                layout[i].h <= 0 || layout[i].x + layout[i].w > w ||
+                layout[i].y + layout[i].h > h) {
+              all_fit = false;
+            }
+          }
+        }
+      }
+    }
+    CheckMany(all_fit, "BB 7 档 DPI × 5 窗口 × 两态：控件全部落在客户区内",
+              checked);
+  }
+
+  // 5) 核心判据：换钥提示在**每档** DPI 下都装得下，且至少留 1 行余量
+  //    （缺陷 C 的现场余量 = 0 ⇒ 必然判红）。
+  {
+    bool ok = true;
+    int checked = 0;
+    for (int d = 0; d < kDpiCount; ++d) {
+      const int dpi = kDpis[d];
+      const std::vector<fc::AccountLayoutEntry> logged =
+          fc::AccountVisibleLayout(fc::AccountWindowRole::kAccount, true, dpi);
+      for (size_t i = 0; i < logged.size(); ++i) {
+        if (logged[i].id != fc::kIdKeyRotationNote)
+          continue;
+        ++checked;
+        const int required =
+            fc::AccountRequiredHeightForText(note_chars, logged[i].w, dpi);
+        if (logged[i].h < required + fc::AccountLineHeightPx(dpi))
+          ok = false;
+      }
+    }
+    CheckMany(ok, "BB 换钥提示在 7 档 DPI 下都装得下且留 ≥1 行余量", checked);
+  }
+
+  // 6) **判据有牙**：用缺陷 C 的现场几何（144 dpi 下未缩放的 456×36）算余量
+  //    ⇒ 必须是 0（判红）。若这条变成「通过」，说明判据本身失效。
+  {
+    const int dpi = 144;
+    const int old_w = 456;  // 未缩放的盒子宽（字面量）
+    const int old_h = 36;   // 未缩放的盒子高（字面量）
+    const int required =
+        fc::AccountRequiredHeightForText(note_chars, old_w, dpi);
+    const int margin = old_h - required;
+    Check(required == 36 && margin == 0,
+          "BB 反向判据：缺陷 C 现场（144 dpi 未缩放）余量 = 0（判红）");
+  }
+
+  // 7) 等比性：144 dpi 下盒子与文字同比放大 ⇒ 折行数恒为 1（不再新增折行）。
+  {
+    const int w96 = fc::AccountTextWidthEm(note_chars, 96);
+    const int w144 = fc::AccountTextWidthEm(note_chars, 144);
+    const std::vector<fc::AccountLayoutEntry> logged144 =
+        fc::AccountVisibleLayout(fc::AccountWindowRole::kAccount, true, 144);
+    int box144 = 0;
+    for (size_t i = 0; i < logged144.size(); ++i) {
+      if (logged144[i].id == fc::kIdKeyRotationNote)
+        box144 = logged144[i].w;
+    }
+    // BA 真机实测：144 dpi 下 37 个全角字单行宽 = 666 px。
+    Check(
+        w96 == 444 && w144 == 666 &&
+            fc::AccountTextLineCount(w144, box144) == 1 &&
+            fc::AccountTextLineCount(w144, 456) == 2,
+        "BB 换钥提示：144 dpi 单行宽 666 px（与真机实测一致）且缩放后不再折行");
+  }
+
+  // 8) 缩放入口唯一：客户区尺寸与控件几何同源于 AccountScale（同一把尺子）。
+  {
+    bool ok = true;
+    for (int d = 0; d < kDpiCount; ++d) {
+      const int dpi = kDpis[d];
+      int w = 0;
+      int h = 0;
+      fc::AccountClientSize(fc::AccountWindowRole::kAccount, dpi, &w, &h);
+      if (w != fc::AccountScale(480, dpi) || h != fc::AccountScale(290, dpi))
+        ok = false;
+    }
+    Check(ok, "BB 客户区尺寸 = 基准 × dpi/96（与控件同一把尺子）");
+  }
+}
 // ---------------------------------------------------------------------------
 // 批次 AT-1 · ADR 0063：历史邮箱存储
 // ---------------------------------------------------------------------------
@@ -3392,6 +3560,7 @@ int main() {
 
   // 批次 AT-1 · ADR 0063：账号页信息架构（两态可见性 / 几何 / 历史邮箱）。
   TestAccountPageUi();
+  TestAccountPageUiDpiScale();
   TestAccountHistory();
 
   // 批次 AW · ADR 0065 / ADR 0066：闸门空闲宽限期判据 + 账号窗口槽位状态机。

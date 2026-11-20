@@ -1,6 +1,7 @@
 #pragma once
 //
 // 批次 AT-1 · 账号页 UI 重构（登录态区分 + 独立子窗口）
+// 批次 BB · 账号页 DPI 感知布局（修缺陷 C：>150% 缩放下「换钥提示」被裁）
 //
 // 本头是「账号页控件可见性 + 布局」的**唯一真相源**：生产实现
 // （WeaselServer/Cloud/CloudAccountDialog.cpp）与单测
@@ -14,7 +15,8 @@
 //
 // 编码注意：本头允许中文注释 —— 生产工程 WeaselServer.vcxproj 与单测工程
 // TestFluxingCloud.vcxproj 的**全部**配置都开了 /utf-8（MSVC AdditionalOptions
-// /utf-8），不会按系统代码页解释。真正的硬约束是上面那条「不包含 <windows.h>」。
+// /utf-8），不会按系统代码页解释。真正的硬约束是上面那条「不包含
+// <windows.h>」。
 //
 
 #include <algorithm>
@@ -121,11 +123,133 @@ struct AccountLayoutEntry {
 };
 
 // ---------------------------------------------------------------------------
+// DPI 缩放（布局字面量的基准）
+// ---------------------------------------------------------------------------
+//
+// 布局表里的字面量一律按 **96 dpi（= 100% 缩放）** 书写。UI 字体（系统
+// message 字体，DEFAULT_GUI_FONT，9pt）会随 DPI 放大，而盒子若不跟着放大，
+// 文字就会被裁：
+//
+//   · 批次 BA 实测（缺陷 C）：144 dpi 下「换钥提示」的 37 个全角字折成两行，
+//     两行正好 36 px，而控件高度字面量也是 36 ⇒ **余量 0 px**；
+//     >150% 缩放的机器必然裁掉末行（175% 需 42 px、200% 需 48 px）。
+//
+// 因此本文件的铁律：**所有几何 × dpi/96**。于是「文字 : 盒子」的比例与
+// DPI 无关 ⇒ 任何缩放下都不会裁切；96 dpi 下逐像素等于旧布局（零行为变化）。
+//
+// 缩放语义 = MulDiv(v, dpi, 96)（四舍五入），与 WeaselUI 的 Scale()
+// 惯用法一致。
+inline constexpr int kAccountBaseDpi = 96;
+
+// 96 dpi 的布局字面量 → 目标 DPI（dpi ≤ 0 视作 96）。
+inline int AccountScale(int value, int dpi) {
+  if (dpi <= 0)
+    dpi = kAccountBaseDpi;
+  return (value * dpi + kAccountBaseDpi / 2) / kAccountBaseDpi;
+}
+
+// 整表等比缩放（**唯一的缩放入口** ⇒ 结构上保证没有哪个控件漏缩）。
+inline std::vector<AccountLayoutEntry> AccountScaleLayout(
+    const std::vector<AccountLayoutEntry>& base,
+    int dpi) {
+  std::vector<AccountLayoutEntry> scaled;
+  scaled.reserve(base.size());
+  for (size_t i = 0; i < base.size(); ++i) {
+    AccountLayoutEntry entry;
+    entry.id = base[i].id;
+    entry.x = AccountScale(base[i].x, dpi);
+    entry.y = AccountScale(base[i].y, dpi);
+    entry.w = AccountScale(base[i].w, dpi);
+    entry.h = AccountScale(base[i].h, dpi);
+    scaled.push_back(entry);
+  }
+  return scaled;
+}
+
+// ---------------------------------------------------------------------------
+// 字体度量模型（判定「控件装不装得下这行字」用）
+// ---------------------------------------------------------------------------
+//
+// UI 字体 = 系统 message 字体（DEFAULT_GUI_FONT，9pt）。**全角字步进宽**
+// 在 96 dpi 下 = 12 px（实测：144 dpi 下 37 个全角字整行 666 px ⇒ 18 px/字
+// ⇒ 96 dpi 12 px/字）；行高同值 ⇒ 文字宽度 = 全角字数 × 字高。
+inline constexpr int kAccountUiEmPx96 = 12;
+
+// 96 dpi 下 DEFAULT_GUI_FONT 的**行高**（px）。生产侧用
+// GetTextMetrics 量真实字体（tmHeight + tmExternalLeading）再按本常数
+// 反推有效 DPI ⇒ 布局永远跟着**实际渲染出来的字体**走，而不是猜一个 DPI。
+inline constexpr int kAccountUiFontPx96 = 12;
+
+// 真实字体行高（px）→ 有效 DPI。
+//   12 px → 96、15 px → 120、18 px → 144、21 px → 168、24 px → 192、
+//   30 px → 240、36 px → 288。
+inline int AccountEffectiveDpiFromFontPx(int font_px) {
+  if (font_px <= 0)
+    return kAccountBaseDpi;
+  return (font_px * kAccountBaseDpi + kAccountUiFontPx96 / 2) /
+         kAccountUiFontPx96;
+}
+
+// 换钥提示文案（ADR 0063 补充）。放在这里而不是 .cpp：单测要拿它判定
+// 「控件装不装得下这行字」（R7：生产与单测共用同一份实现）。
+// ⚠️ 逐字不得改动 —— 账号页文案与重启清单 A-1 的期望值逐字比对。
+inline const wchar_t* AccountKeyRotationNoteText() {
+  return L"重置登录口令后，云端旧条目将无法再解开，可在「设备与云数据」清空云端"
+         L"数据。";
+}
+
+// 字符串长度（wchar_t 个数；不含结尾 '\0'）。
+inline int AccountWideCharCount(const wchar_t* text) {
+  int count = 0;
+  if (text == nullptr)
+    return count;
+  for (const wchar_t* p = text; *p != L'\0'; ++p)
+    ++count;
+  return count;
+}
+
+// 一行文字在给定 DPI 下的宽度（全角字模型）。
+inline int AccountTextWidthEm(int char_count, int dpi) {
+  return char_count * AccountScale(kAccountUiEmPx96, dpi);
+}
+
+// 文字在给定宽度里折成几行（向上取整；至少 1 行）。
+inline int AccountTextLineCount(int text_width, int box_width) {
+  if (box_width <= 0 || text_width <= 0)
+    return 1;
+  return (text_width + box_width - 1) / box_width;
+}
+
+// 一行的高度（px）。
+inline int AccountLineHeightPx(int dpi) {
+  return AccountScale(kAccountUiEmPx96, dpi);
+}
+
+// 文字在给定盒子宽度里**实际需要的**高度（px）。
+inline int AccountRequiredHeightForText(int char_count,
+                                        int box_width,
+                                        int dpi) {
+  const int width = AccountTextWidthEm(char_count, dpi);
+  const int lines = AccountTextLineCount(width, box_width);
+  return lines * AccountLineHeightPx(dpi);
+}
+
+// 控件的**最小安全高度**：文字行数 + 1 行余量。
+// ⚠️ 「余量 ≥ 1 行」正是缺陷 C 的判据（150% 现场余量 0 ⇒ 判红）。
+inline int AccountMinHeightForText(int lines, int dpi) {
+  return (lines + 1) * AccountLineHeightPx(dpi);
+}
+
+// ---------------------------------------------------------------------------
 // 几何表（唯一真相源）
 // ---------------------------------------------------------------------------
+//
+// ⚠️ 以下五张表是 **96 dpi 基准**（不做任何缩放）；对外的取用函数一律
+//    显式带 dpi 参数并统一走 AccountScaleLayout —— **不保留「无 dpi」的
+//    兼容重载**：无 dpi 版正是本缺陷（缺陷 C）的形态，留着就是复发入口。
 
-// 账号页主窗口 · 未登录态。
-inline std::vector<AccountLayoutEntry> AccountLoginLayout() {
+// 账号页主窗口 · 未登录态（96 dpi 基准）。
+inline std::vector<AccountLayoutEntry> AccountLoginLayoutBase() {
   std::vector<AccountLayoutEntry> v;
   v.push_back({kIdEmailLabel, 12, 14, 70, 20});
   v.push_back({kIdEmail, 88, 10, 186, 26});
@@ -145,7 +269,7 @@ inline std::vector<AccountLayoutEntry> AccountLoginLayout() {
 }
 
 // 账号页主窗口 · 已登录态。
-inline std::vector<AccountLayoutEntry> AccountLoggedInLayout() {
+inline std::vector<AccountLayoutEntry> AccountLoggedInLayoutBase() {
   std::vector<AccountLayoutEntry> v;
   v.push_back({kIdAccountCaption, 12, 14, 456, 20});
   v.push_back({kIdAccountLabel, 12, 38, 456, 22});
@@ -153,9 +277,10 @@ inline std::vector<AccountLayoutEntry> AccountLoggedInLayout() {
   v.push_back({kIdSyncNow, 160, 70, 140, 28});
   v.push_back({kIdSyncStatus, 12, 108, 456, 20});
   v.push_back({kIdOpportunityNote, 12, 132, 456, 18});
-  // 换钥提示（ADR 0063 补充）：h=36 按「8pt DEFAULT_GUI_FONT 折两行」留足
-  // 余量（单行实测参照 = 上一行 23 个中文字在 456 px 内不折行）；宁可留白也
-  // 不能裁掉安全文案。
+  // 换钥提示（ADR 0063 补充）：h=36 是**按 96 dpi 基准**写的（= 3 行行高）。
+  // 缺陷 C 的教训：盒子若不随 DPI 一起放大，37 个全角字在 144 dpi 下折成
+  // 两行正好 36 px ⇒ 余量 0 ⇒ >150% 必裁。修法见本文件「DPI 缩放」一节：
+  // 整表等比放大 ⇒ 文字:盒子比值恒定，永远裁不到。
   v.push_back({kIdKeyRotationNote, 12, 156, 456, 36});
   v.push_back({kIdStatus, 12, 198, 456, 40});
   v.push_back({kIdClose, 368, 250, 100, 28});
@@ -163,7 +288,7 @@ inline std::vector<AccountLayoutEntry> AccountLoggedInLayout() {
 }
 
 // 验证码窗口。
-inline std::vector<AccountLayoutEntry> VerifyLayout() {
+inline std::vector<AccountLayoutEntry> VerifyLayoutBase() {
   std::vector<AccountLayoutEntry> v;
   v.push_back({kIdVerifyCaption, 12, 14, 376, 32});
   v.push_back({kIdVerifyCodeLabel, 12, 58, 70, 18});
@@ -176,7 +301,7 @@ inline std::vector<AccountLayoutEntry> VerifyLayout() {
 }
 
 // 注册窗口。
-inline std::vector<AccountLayoutEntry> RegisterLayout() {
+inline std::vector<AccountLayoutEntry> RegisterLayoutBase() {
   std::vector<AccountLayoutEntry> v;
   v.push_back({kIdRegisterCaption, 12, 14, 376, 20});
   v.push_back({kIdEmailLabel, 12, 48, 70, 18});
@@ -190,7 +315,7 @@ inline std::vector<AccountLayoutEntry> RegisterLayout() {
 }
 
 // 找回口令窗口。
-inline std::vector<AccountLayoutEntry> ForgotLayout() {
+inline std::vector<AccountLayoutEntry> ForgotLayoutBase() {
   std::vector<AccountLayoutEntry> v;
   v.push_back({kIdForgotCaption, 12, 14, 376, 20});
   v.push_back({kIdEmailLabel, 12, 48, 70, 18});
@@ -207,7 +332,7 @@ inline std::vector<AccountLayoutEntry> ForgotLayout() {
 }
 
 // 设备与云数据窗口。
-inline std::vector<AccountLayoutEntry> DeviceLayout() {
+inline std::vector<AccountLayoutEntry> DeviceLayoutBase() {
   std::vector<AccountLayoutEntry> v;
   v.push_back({kIdDeviceCaption, 12, 12, 456, 20});
   v.push_back({kIdDevices, 12, 36, 456, 140});
@@ -220,13 +345,14 @@ inline std::vector<AccountLayoutEntry> DeviceLayout() {
   return v;
 }
 
-// 某角色的**全部**布局条目（= 该窗口要创建的控件集合）。
-inline std::vector<AccountLayoutEntry> AccountRoleLayout(
-    AccountWindowRole role) {
+// 某角色的**全部**布局条目（= 该窗口要创建的控件集合），已按 dpi 缩放。
+inline std::vector<AccountLayoutEntry> AccountRoleLayout(AccountWindowRole role,
+                                                         int dpi) {
   switch (role) {
     case AccountWindowRole::kAccount: {
-      std::vector<AccountLayoutEntry> v = AccountLoginLayout();
-      const std::vector<AccountLayoutEntry> logged = AccountLoggedInLayout();
+      std::vector<AccountLayoutEntry> v = AccountLoginLayoutBase();
+      const std::vector<AccountLayoutEntry> logged =
+          AccountLoggedInLayoutBase();
       for (size_t i = 0; i < logged.size(); ++i) {
         bool exists = false;
         for (size_t j = 0; j < v.size(); ++j) {
@@ -238,38 +364,40 @@ inline std::vector<AccountLayoutEntry> AccountRoleLayout(
         if (!exists)
           v.push_back(logged[i]);
       }
-      return v;
+      return AccountScaleLayout(v, dpi);
     }
     case AccountWindowRole::kVerify:
-      return VerifyLayout();
+      return AccountScaleLayout(VerifyLayoutBase(), dpi);
     case AccountWindowRole::kRegister:
-      return RegisterLayout();
+      return AccountScaleLayout(RegisterLayoutBase(), dpi);
     case AccountWindowRole::kForgot:
-      return ForgotLayout();
+      return AccountScaleLayout(ForgotLayoutBase(), dpi);
     case AccountWindowRole::kDevice:
-      return DeviceLayout();
+      return AccountScaleLayout(DeviceLayoutBase(), dpi);
     default:
       break;
   }
   return std::vector<AccountLayoutEntry>();
 }
 
-// 某角色窗口在给定登录态下**可见**的布局条目。
+// 某角色窗口在给定登录态下**可见**的布局条目（已按 dpi 缩放）。
 //   · 主窗口随登录态切换（两套布局互斥）；
 //   · 其余窗口与登录态无关（全部可见）。
-inline std::vector<AccountLayoutEntry> AccountVisibleLayout(
-    AccountWindowRole role,
-    bool logged_in) {
-  if (role == AccountWindowRole::kAccount)
-    return logged_in ? AccountLoggedInLayout() : AccountLoginLayout();
-  return AccountRoleLayout(role);
+inline std::vector<AccountLayoutEntry>
+AccountVisibleLayout(AccountWindowRole role, bool logged_in, int dpi) {
+  if (role == AccountWindowRole::kAccount) {
+    return logged_in ? AccountScaleLayout(AccountLoggedInLayoutBase(), dpi)
+                     : AccountScaleLayout(AccountLoginLayoutBase(), dpi);
+  }
+  return AccountRoleLayout(role, dpi);
 }
 
 // 某角色窗口在给定登录态下**可见**的控件 ID（升序、去重）。
 inline std::vector<int> AccountVisibleIds(AccountWindowRole role,
-                                          bool logged_in) {
+                                          bool logged_in,
+                                          int dpi) {
   const std::vector<AccountLayoutEntry> layout =
-      AccountVisibleLayout(role, logged_in);
+      AccountVisibleLayout(role, logged_in, dpi);
   std::vector<int> ids;
   ids.reserve(layout.size());
   for (size_t i = 0; i < layout.size(); ++i)
@@ -284,10 +412,10 @@ inline std::vector<int> AccountVisibleIds(AccountWindowRole role,
 // 两态的控件集合**互斥**（除了共用的状态行与「关闭」）—— 用户的要求是
 // 「按登录态区分」，不是「全部堆在一屏再灰掉一部分」。
 //
-// ⚠️ 与 AccountLoginLayout / AccountLoggedInLayout 同源（不是另抄一份），
-//    这样「可见性」与「几何」永远不会漂移（单测会断言两者一致）。
-inline std::vector<int> AccountVisibleControlIds(bool logged_in) {
-  return AccountVisibleIds(AccountWindowRole::kAccount, logged_in);
+// ⚠️ 与 AccountLoginLayoutBase / AccountLoggedInLayoutBase 同源（不是另抄
+//    一份），这样「可见性」与「几何」永远不会漂移（单测会断言两者一致）。
+inline std::vector<int> AccountVisibleControlIds(bool logged_in, int dpi) {
+  return AccountVisibleIds(AccountWindowRole::kAccount, logged_in, dpi);
 }
 
 // 控件 ID → 控件类别。
@@ -325,9 +453,10 @@ inline AccountWidgetClass AccountWidgetClassOf(int id) {
   }
 }
 
-// 某角色窗口要创建的**全部**控件（id 唯一；几何取首次出现处）。
-inline std::vector<AccountWidgetSpec> AccountWidgets(AccountWindowRole role) {
-  const std::vector<AccountLayoutEntry> layout = AccountRoleLayout(role);
+// 某角色窗口要创建的**全部**控件（id 唯一；几何取首次出现处；已缩放）。
+inline std::vector<AccountWidgetSpec> AccountWidgets(AccountWindowRole role,
+                                                     int dpi) {
+  const std::vector<AccountLayoutEntry> layout = AccountRoleLayout(role, dpi);
   std::vector<AccountWidgetSpec> specs;
   specs.reserve(layout.size());
   for (size_t i = 0; i < layout.size(); ++i) {
@@ -343,38 +472,43 @@ inline std::vector<AccountWidgetSpec> AccountWidgets(AccountWindowRole role) {
   return specs;
 }
 
-// 窗口客户区尺寸。
+// 窗口客户区尺寸（已按 dpi 缩放）。
 inline void AccountClientSize(AccountWindowRole role,
-                               int* width,
-                               int* height) {
+                              int dpi,
+                              int* width,
+                              int* height) {
+  int base_width = 480;
+  int base_height = 250;
   switch (role) {
     case AccountWindowRole::kAccount:
       // 250 → 290：已登录态新增「换钥提示」多占一行（ADR 0063 补充），
       // 关闭按钮两态统一下移到 y=250；高度 = 最大底边 278 + 底部余量。
-      *width = 480;
-      *height = 290;
-      return;
+      base_width = 480;
+      base_height = 290;
+      break;
     case AccountWindowRole::kVerify:
-      *width = 400;
-      *height = 214;
-      return;
+      base_width = 400;
+      base_height = 214;
+      break;
     case AccountWindowRole::kRegister:
-      *width = 400;
-      *height = 236;
-      return;
+      base_width = 400;
+      base_height = 236;
+      break;
     case AccountWindowRole::kForgot:
-      *width = 400;
-      *height = 270;
-      return;
+      base_width = 400;
+      base_height = 270;
+      break;
     case AccountWindowRole::kDevice:
-      *width = 480;
-      *height = 346;
-      return;
+      base_width = 480;
+      base_height = 346;
+      break;
     default:
       break;
   }
-  *width = 480;
-  *height = 250;
+  if (width != nullptr)
+    *width = AccountScale(base_width, dpi);
+  if (height != nullptr)
+    *height = AccountScale(base_height, dpi);
 }
 
 // 「设备与云数据」窗口在指定登录态下**可交互**（EnableWindow）的控件 ID

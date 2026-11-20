@@ -1,0 +1,1 @@
+读 `F:\soft\00selfmade\rime_claude\CLAUDE.md` 的最新交接指针，再按全路径读 `F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-20-batch-bb-account-ui-dpi-scale.md` 及其 §8 证据路径所列文档，自行掌握背景/目标/进度/下阶段；从该 handoff §7 未闭环清单第 1 项开始，不要从零重做已完成的事。
