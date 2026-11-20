@@ -72,6 +72,14 @@ AX 批次把 ADR 0067（孤儿 IPC 会话回收）与「账号页换钥后果提
 
 ⇒ ADR 0067 与换钥提示**确在 1.3.6 载荷内**。
 
+**判据口径（比「必然假红」更准确）**：installer.exe 内的文本令牌搜索**只能证真、不能证伪**——
+`reclaim orphan session` 在 **1.3.5 包里实测 True**（说明部分字面量确实可见、AX 那轮不是造假），
+但在 **1.3.6 包里实测 False**（同一令牌、同一压缩容器）⇒ 包级 False **不得**写成「码不在包内」。
+根因是压缩流里字面量可能被切开。因此**包级令牌差集不再是出包判据**；
+出包判据改为三条实测：① `output\Win32\WeaselServer.exe` 的 `FileVersion == 1.3.6.0`（本批实测）
+② L0 的 `artifact-version-resource` 判据覆盖 **5 个产物 FileVersion**（本批 15/15 内已 PASS）
+③ 载荷 exe 的令牌搜索（本批 §2.3，ASCII + UTF-16LE 都 True）。
+
 ### 2.4 假提交哈希 `a33c203` 的更正（本批前半段完成）
 
 AX 曾向用户登记提交 `a33c203` = 「账号页换钥提示」，**该提交不存在** ⇒ 三条实测判据全灭：
@@ -106,7 +114,8 @@ AX 曾向用户登记提交 `a33c203` = 「账号页换钥提示」，**该提�
 
 - `build.bat weasel installer` **exit=0**（产物三条实测支持，但 exit 行未读回）。
 - 1.3.6 安装包在**干净机器**上可正常安装（本批未做装机，装机版仍是 **1.3.5.0**）。
-- NSIS 采用压缩载荷 ⇒ installer 级文本搜索必然假红（依据 = 1.3.5 包对**确实含码**的 `reclaim orphan session` 实测 False）。
+- ~~NSIS 采用压缩载荷 ⇒ installer 级文本搜索必然假红~~ —— **该推断已被本批实测否证**（见 §2.3）：包级文本令牌搜索
+  **只能证真、不能证伪**，同一令牌 `reclaim orphan session` 在 **1.3.5 包 True / 1.3.6 包 False**，而两版都含该码。
 
 ## 5. 未验证（不得当 PASS 用）
 
@@ -125,9 +134,10 @@ AX 曾向用户登记提交 `a33c203` = 「账号页换钥提示」，**该提�
 
 ## 6. 本轮工具坑（务必带走）
 
-1. **NSIS installer 是压缩容器 ⇒ 在 `.exe` 包里搜文本令牌必然假红**。
+1. **NSIS installer 是压缩容器 ⇒ 在 `.exe` 包里搜文本令牌「只能证真、不能证伪」**（旧措辞「必然假红」已被本批实测否证）。
    正确口径：搜 **zip 载荷** `output\Win32\WeaselServer.exe`；宽字符串按 **UTF-16LE** 搜，中文文案同理。
-   反向自证：1.3.5 包对 `reclaim orphan session` 实测 False，而 1.3.5 确实含该码 ⇒ 证明「包内 False」不等于「码不在」。
+   实测证据：同一令牌 `reclaim orphan session` 在 **1.3.5 包 True**、在 **1.3.6 包 False**，而两版都含该码
+   ⇒ 「包内 True」可用于证真，「包内 False」**不得**写成「码不在包内」（字面量可能被压缩流切开）。
 2. **PS 5.1 `*>` 重定向建的日志是 UTF-16LE**，之后再 `Out-File -Append -Encoding utf8` ⇒ 文件内**混合编码**，
    用 `-Encoding Unicode` 读会读不到后追加的 ASCII 行（本轮 `RELEASE_BUILD_EXIT=` 就这样丢了）。
    做法：**一次调用只用一个编码**建日志；要读 exit 就在同一脚本里 `$LASTEXITCODE` 直接打印到 stdout，别靠回读日志。
