@@ -216,12 +216,28 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   bool _ShowMessage(weasel::Context& ctx, weasel::Status& status);
   bool _Respond(WeaselSessionId ipc_id, EatLine eat);
   // ADR 0032: 读出本次会话的客户端身份(小写 exe 名),供「自家 UI 进程」判定。
-  std::string _ReadClientInfo(WeaselSessionId ipc_id, LPWSTR buffer);
+  // ADR 0067: 一并读出客户端自报的宿主进程 pid(缺失 / 非法 = 0 = 未知)。
+  std::string _ReadClientInfo(WeaselSessionId ipc_id, LPWSTR buffer,
+                              DWORD* client_pid);
   // ADR 0032: 记录 / 查询 IPC 会话的客户端归属。
   // 身份必须活过 RemoveSession(TSF 的 Deactivate 先 EndSession 再发 FocusOut),
   // 因此 RemoveSession 不删这张表;ipc_id 会被回收复用,所以 AddSession 先清同 id 旧值。
   void _RememberClientKind(WeaselSessionId ipc_id, fluxing::IpcClientKind kind);
   fluxing::IpcClientKind _ClientKind(WeaselSessionId ipc_id) const;
+  // ADR 0067: 记录 IPC 会话宿主进程的 pid。与 ADR 0032 的身份表同口径:
+  // 身份必须活过 RemoveSession(TSF 的 Deactivate 先 EndSession 再发 FocusOut),
+  // 因此 RemoveSession 不删这张表;ipc_id 会被回收复用,所以 AddSession 先清同 id
+  // 旧值;表本身有容量上限(kMaxRememberedOwnerPids),防无界增长。
+  void _RememberOwnerPid(WeaselSessionId ipc_id, DWORD pid);
+  // ADR 0067: 惰性清扫 —— 宿主进程已经不在了的孤儿会话,在 AddSession 内部
+  // (IPC 线程,与 RemoveSession 同线程语义)用**既有** RemoveSession 回收。
+  void _ReclaimOrphanSessions(WeaselSessionId current_ipc_id);
+  // ADR 0067: 宿主进程是否还活着。只在能**证明**进程已经不在时才报死。
+  bool _IsProcessAlive(DWORD pid) const;
+  // ADR 0067: RemoveSession 的内部实现。is_orphan_reclaim = true 表示这次
+  // 会话结束来自「宿主进程已经没了」的清扫,不是用户真的结束了会话 ——
+  // 两种情况对在场状态与活动会话指针的处理必须不同。
+  DWORD _RemoveSessionInternal(WeaselSessionId ipc_id, bool is_orphan_reclaim);
   // spec 090: 入参多带一个会话标识,用于按当前方案加载对应的屏蔽名单,并在
   // 同一次遍历里产出「可见页内索引 -> 引擎页内索引」映射(FR-005 / FR-006)。
   void _GetCandidateInfo(weasel::CandidateInfo& cinfo,
@@ -380,6 +396,11 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   // 其后到达),所以不随会话结束删除;用容量上限(kMaxRememberedClientKinds)
   // 防无界增长。
   std::map<WeaselSessionId, fluxing::IpcClientKind> m_session_client_kinds;
+  // ADR 0067: IPC 会话 -> 宿主进程 pid。与 m_session_client_kinds 同口径:
+  // 身份必须活过 RemoveSession(TSF 的 Deactivate 先 EndSession 再发 FocusOut),
+  // 所以不随会话结束删除;ipc_id 会被回收复用,所以 AddSession 先清同 id 旧值;
+  // 用容量上限(kMaxRememberedOwnerPids)防无界增长。
+  std::map<WeaselSessionId, DWORD> m_session_owner_pids;
   // spec 077: per-session Shift state machine for release-only select.
   std::unordered_map<WeaselSessionId, ShiftState> m_shiftState;
   bool m_current_dark_mode;

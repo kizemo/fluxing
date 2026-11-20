@@ -34,6 +34,7 @@ int verify_quickpanel_main();
 int verify_quickpanel_presence_main();
 int verify_focusout_flags_main();
 int verify_focusin_flags_main();
+int verify_client_pid_main();
 int verify_shift_body_main();
 int verify_delete_body_main();
 int verify_tsf_profile_main(bool allow_profile_switch,
@@ -88,6 +89,10 @@ int _tmain(int argc, _TCHAR* argv[]) {
     return verify_focusout_flags_main();
   } else if (argc > 1 && !wcscmp(L"/verify-focusin-flags", argv[1])) {
     return verify_focusin_flags_main();
+  } else if (argc > 1 && !wcscmp(L"/verify-client-pid", argv[1])) {
+    // ADR 0067: the client request body must carry session.client_pid= and
+    // the value must be the pid of the process that sent it.
+    return verify_client_pid_main();
   } else if (argc > 1 && !wcscmp(L"/verify-delete-body", argv[1])) {
     return verify_delete_body_main();
   } else if (argc > 1 && !wcscmp(L"/verify-tsf-profile", argv[1])) {
@@ -512,6 +517,108 @@ bool wait_focusout_lines(const std::wstring& path,
   return false;
 }
 
+// ADR 0067: the client must report its host process id inside the request
+// body (session.client_pid=), so the server can reclaim the session of a
+// host that crashed (a crashed host never sends remove_session).
+//
+// The mock server records the reported value next to the exe; the client
+// reads the record back and compares it with its own pid.
+std::wstring client_pid_record_path() {
+  wchar_t exe_path[MAX_PATH] = {0};
+  DWORD exe_len = GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+  if (exe_len == 0 || exe_len >= MAX_PATH)
+    return std::wstring();
+  std::wstring exe_dir(exe_path, exe_len);
+  size_t slash = exe_dir.find_last_of(L"\\/");
+  if (slash == std::wstring::npos)
+    return std::wstring();
+  return exe_dir.substr(0, slash + 1) + L"client_pid.txt";
+}
+
+// Parse "session.client_pid=<digits>" out of the request text and append
+// the value to the record file. Returns the parsed value (0 when the key is
+// absent or malformed).
+unsigned long record_client_pid(LPWSTR buffer) {
+  const std::wstring text(buffer ? buffer : L"");
+  const std::wstring key = L"session.client_pid=";
+  unsigned long value = 0;
+  const size_t pos = text.find(key);
+  if (pos != std::wstring::npos) {
+    size_t i = pos + key.size();
+    while (i < text.size() && text[i] >= L'0' && text[i] <= L'9') {
+      value = value * 10 + static_cast<unsigned long>(text[i] - L'0');
+      ++i;
+    }
+  }
+  const std::wstring path = client_pid_record_path();
+  if (!path.empty()) {
+    // FILE_APPEND_DATA, not GENERIC_WRITE: a freshly opened GENERIC_WRITE
+    // handle starts at offset 0 and would overwrite the previous line.
+    HANDLE h = CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+      std::string line = std::to_string(value) + "\n";
+      DWORD written = 0;
+      WriteFile(h, line.c_str(), static_cast<DWORD>(line.size()), &written,
+                NULL);
+      FlushFileBuffers(h);
+      CloseHandle(h);
+    }
+  }
+  return value;
+}
+
+// ADR 0067: the request body must carry session.client_pid= and the value
+// must be the pid of the process that sent it.
+//
+// Identity trap (the same one /verify-shift-body guards against, L151): if
+// the record never shows up, the named pipe was served by another process
+// (a real WeaselServer.exe) instead of the mock server - the test then
+// reports FAIL instead of silently measuring the wrong process.
+int verify_client_pid_main() {
+  const std::wstring record = client_pid_record_path();
+  const int baseline = count_lines(read_text_file(record));
+  weasel::Client client;
+  if (!client.Connect()) {
+    std::cerr << "[CLIENTPID] connect failed" << std::endl;
+    return -2;
+  }
+  client.StartSession();
+  if (!client.Echo()) {
+    std::cerr << "[CLIENTPID] session failed" << std::endl;
+    return -3;
+  }
+  const bool got = wait_focusout_lines(record, baseline + 1, 5000);
+  std::string value;
+  if (got)
+    value = nth_line(read_text_file(record), baseline);
+  client.EndSession();
+
+  const unsigned long reported =
+      value.empty() ? 0 : strtoul(value.c_str(), NULL, 10);
+  const unsigned long self =
+      static_cast<unsigned long>(GetCurrentProcessId());
+  std::cout << "[CLIENTPID] reported=" << reported << " self=" << self
+            << std::endl;
+  if (!got) {
+    std::cerr << "[CLIENTPID] FAIL: the mock server never recorded a client "
+                 "pid. The named pipe is probably served by another process "
+                 "(a real WeaselServer.exe); stop it and re-run."
+              << std::endl;
+    return -4;
+  }
+  if (reported == 0 || reported != self) {
+    std::cerr << "[CLIENTPID] FAIL: the request body carried the wrong pid"
+              << std::endl;
+    return -5;
+  }
+  std::cout << "[CLIENTPID] PASS: the request body carries "
+               "session.client_pid= and the value is this process"
+            << std::endl;
+  return 0;
+}
+
 // spec 091: the FocusOut event kinds must be distinguishable end to end.
 //
 // The mock server records the raw wParam of every FocusOut it receives into
@@ -654,6 +761,9 @@ class TestRequestHandler : public weasel::RequestHandler {
     return (session_id <= m_counter ? session_id : 0);
   }
   virtual DWORD AddSession(LPWSTR buffer, EatLine eat = 0) override {
+    // ADR 0067: record the host pid the client reported in the request
+    // body (see verify_client_pid_main).
+    record_client_pid(buffer);
     std::cerr << "AddSession: " << m_counter + 1 << std::endl;
     return ++m_counter;
   }

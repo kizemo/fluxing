@@ -28,6 +28,9 @@
 // 用户数据目录真相源（同步 sidecar 与历史邮箱的落点）。
 #include "../../include/FluxingUserPaths.h"
 
+// 文件型诊断日志（批次 AX：让账号窗诊断在无调试器时也能取证）。
+#include "../../include/FluxingDiagLog.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -1043,8 +1046,23 @@ std::mutex g_windows_mutex;
 
 // 诊断日志（ASCII）。本文件没有既有日志设施 ⇒ 用 OutputDebugStringW，
 // 做法与 WeaselServer/PhrasesDialogIPC.cpp 保持一致。
+//
+// ADR 0066 残余风险（批次 AX 坐实）：OutputDebugStringW **必须挂调试器**才抓得到，
+// 而本机没有可用调试器（cdb / windbg / procdump / dumpchk 全缺）⇒
+// 「缺陷复发时用 [FluxingAccountDlg] 日志取证」这条路**不可用**。
+// ⇒ 这里同时写文件型诊断日志（%TEMP%\fluxing-profile-notify.log），
+//    诊断通道永远不能成为故障源（写失败静默忽略）。
 void LogAccountDlg(const std::wstring& message) {
   ::OutputDebugStringW((L"[FluxingAccountDlg] " + message + L"\n").c_str());
+  const int need = ::WideCharToMultiByte(CP_UTF8, 0, message.c_str(), -1, nullptr, 0,
+                                         nullptr, nullptr);
+  if (need > 1) {
+    std::string utf8(static_cast<size_t>(need), '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, message.c_str(), -1, &utf8[0], need, nullptr,
+                          nullptr);
+    utf8.resize(static_cast<size_t>(need - 1));  // 去掉结尾的 '\0'
+    fluxing::diag::AppendLine("acctdlg", utf8);
+  }
 }
 
 // 读槽位（锁内拷出；调用方**不**持锁）。

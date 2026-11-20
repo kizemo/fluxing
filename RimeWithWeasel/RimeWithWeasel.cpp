@@ -36,6 +36,8 @@
 #include <FluxingPunctText.h>
 // ADR 0062: 维护准入闸门的判据纯函数（**只含 ASCII**，原因见头文件注释）。
 #include <FluxingMaintenanceGate.h>
+// ADR 0067: 孤儿 IPC 会话回收的判据纯函数（**只含 ASCII**，原因见头文件注释）。
+#include <FluxingSessionReclaim.h>
 // ADR 0065: rime 生命周期互斥体（云同步回合进行中时**不许**碰 rime）。
 #include <FluxingRimeLifecycle.h>
 #include <fstream>
@@ -466,7 +468,8 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
   // ADR 0032: 记录本次会话的客户端身份。ipc_id 会被回收复用
   // (见 _GenerateNewWeaselSessionId),所以必须先清掉同 id 的旧身份,
   // 否则复用后的用户应用会被误判成自家 UI。
-  const std::string client_app = _ReadClientInfo(ipc_id, buffer);
+  DWORD client_pid = 0;
+  const std::string client_app = _ReadClientInfo(ipc_id, buffer, &client_pid);
   _RememberClientKind(ipc_id, fluxing::ClassifyIpcClient(client_app));
   if (fluxing::IsOwnUiClient(_ClientKind(ipc_id))) {
     fluxing::diag::AppendLine(
@@ -474,6 +477,17 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
         "own_ui_session ipc_id=" + std::to_string(ipc_id) + " app=" +
             client_app);
   }
+  // ADR 0067: 记住宿主进程 pid(孤儿回收的事实来源)。同 ADR 0032 的口径:
+  // ipc_id 会被回收复用,所以先清同 id 旧值再记新值。
+  _RememberOwnerPid(ipc_id, client_pid);
+  // ADR 0067: 惰性清扫宿主进程已经不在了的孤儿会话(宿主崩溃 ⇒ 不会发
+  // remove_session ⇒ 会话条目与 rime 会话永久残留)。
+  // 为什么放在 AddSession 内部而不是定时器 / 后台线程:会话表只在 IPC 线程被改,
+  // AddSession 与 RemoveSession 由 g_api_mutex 串行 ⇒ 与正常 RemoveSession
+  // 同线程同语义;后台线程扫这张表是数据竞争(且违反 P2)。
+  // 放在这里(而不是会话末尾)是为了让 RemoveSession 里的 UI Hide 发生在新会话
+  // 的 UI 更新之前,不会把刚建好的候选窗一起收掉。
+  _ReclaimOrphanSessions(ipc_id);
 
   RIME_STRUCT(RimeStatus, status);
   if (rime_api->get_status(session_id, &status)) {
@@ -564,6 +578,21 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
 }
 
 DWORD RimeWithWeaselHandler::RemoveSession(WeaselSessionId ipc_id) {
+  return _RemoveSessionInternal(ipc_id, false);
+}
+
+// ADR 0067: RemoveSession 的内部实现。
+//
+// is_orphan_reclaim = true 表示这次会话结束来自「宿主进程已经不在」的清扫
+// (ADR 0067 惰性回收),**不是**用户真的结束了会话。两种情况必须区别对待:
+//   - 在场状态(presence):只有真实会话结束才可能把「火流猩在场」翻成「离场」。
+//     孤儿回收发生在 AddSession 内部、且紧接着就在注册一条**活**会话 ⇒ 翻成
+//     离场会把正在打字的用户的面板收掉(与 ADR 0032 同一类判断)。
+//   - 活动会话指针(m_active_session):普通会话结束无条件清零(既有行为不变);
+//     孤儿回收只有在「被回收的就是活动会话」时才清,否则会把**活**会话的
+//     指针一起抹掉。
+DWORD RimeWithWeaselHandler::_RemoveSessionInternal(WeaselSessionId ipc_id,
+                                                    bool is_orphan_reclaim) {
   if (m_ui)
     m_ui->Hide();
   // spec 097: 活动会话结束 = 「火流猩离场」的兜底信号。
@@ -572,16 +601,25 @@ DWORD RimeWithWeaselHandler::RemoveSession(WeaselSessionId ipc_id) {
   // 错误静默吞成 0)。会话消失本身是不可伪造的事实:活动会话没了,火流猩就
   // 不在场了,快捷面板必须收起。
   if (ipc_id == m_active_session) {
+    // ADR 0067: 孤儿回收(宿主进程已经不在)**不是**「用户切走了输入法」的信号:
+    // 它发生在 AddSession 内部、紧接着就在注册一条活会话 ⇒ 此时把在场状态翻成
+    // 「离场」会把正在打字的用户的面板收掉。
+    const bool may_flip_presence =
+        fluxing::session_reclaim::MayFlipPresenceOnSessionEnd(is_orphan_reclaim);
     // ADR 0032: 自家 UI(用户短语窗口)的会话结束**不代表**「用户切走了输入法」。
     // 它只是自家窗口被销毁,必须既不改在场状态,也不收起快捷设置栏(L171)。
     const fluxing::IpcClientKind client_kind = _ClientKind(ipc_id);
-    if (fluxing::ShouldTreatSessionEndAsFluxingAbsent(client_kind)) {
+    if (may_flip_presence &&
+        fluxing::ShouldTreatSessionEndAsFluxingAbsent(client_kind)) {
       m_fluxing_presence.store(FluxingPresence::kAbsent,
                                 std::memory_order_relaxed);
       if (m_onHideQuickPanel)
         m_onHideQuickPanel();
       fluxing::diag::AppendLine("server",
                                  "remove_session active presence=absent");
+    } else if (!may_flip_presence) {
+      fluxing::diag::AppendLine(
+          "server", "remove_session active orphan_reclaim presence=kept");
     } else {
       fluxing::diag::AppendLine("server",
                                  "remove_session active own_ui presence=kept");
@@ -616,7 +654,13 @@ DWORD RimeWithWeaselHandler::RemoveSession(WeaselSessionId ipc_id) {
   // spec 077: drop ShiftState so no stale state remains if TSF holds a
   // WeaselSessionId that maps to a recycled ipc_id later.
   m_shiftState.erase(ipc_id);
-  m_active_session = 0;
+  // ADR 0067: 普通会话结束一律清零(既有行为);孤儿回收只在「被回收的就是
+  // 活动会话」时才清 —— 否则会把**活**会话的指针一起抹掉。
+  if (fluxing::session_reclaim::ShouldClearActiveSessionOnEnd(
+          is_orphan_reclaim, static_cast<unsigned long>(m_active_session),
+          static_cast<unsigned long>(ipc_id))) {
+    m_active_session = 0;
+  }
   // 批次 H:会话真的没了,「最近焦点会话」这档回退也就失效了 ⇒ 清掉。
   // (FocusOut **不**清 —— 面板轮询要靠它读 live 状态。)
   if (m_last_focus_session == ipc_id)
@@ -1042,8 +1086,10 @@ void RimeWithWeaselHandler::OnNotify(void* context_object,
 }
 
 std::string RimeWithWeaselHandler::_ReadClientInfo(WeaselSessionId ipc_id,
-                                                   LPWSTR buffer) {
+                                                   LPWSTR buffer,
+                                                   DWORD* client_pid) {
   std::string app_name;
+  DWORD owner_pid = 0;
   // parse request text
   wbufferstream bs(buffer, WEASEL_IPC_BUFFER_LENGTH);
   std::wstring line;
@@ -1059,6 +1105,27 @@ std::string RimeWithWeaselHandler::_ReadClientInfo(WeaselSessionId ipc_id,
       std::wstring lwr = line;
       to_lower(lwr);
       app_name = wtou8(lwr.substr(kClientAppKey.length()));
+    }
+    // ADR 0067: 客户端自报的宿主进程 pid(十进制)。缺失 / 非法 = 0 = 未知。
+    // 只接受「整串都是十进制数字」:解析不了就当未知,绝不猜。
+    const std::wstring kClientPidKey = L"session.client_pid=";
+    if (starts_with(line, kClientPidKey)) {
+      const std::wstring value = line.substr(kClientPidKey.length());
+      unsigned long parsed = 0;
+      bool valid = !value.empty();
+      for (wchar_t ch : value) {
+        if (ch < L'0' || ch > L'9') {
+          valid = false;
+          break;
+        }
+        parsed = parsed * 10 + static_cast<unsigned long>(ch - L'0');
+        if (parsed > 0xFFFFFFFFul) {  // 超出 DWORD 范围 => 非法
+          valid = false;
+          break;
+        }
+      }
+      if (valid)
+        owner_pid = static_cast<DWORD>(parsed);
     }
   }
   SessionStatus& session_status = get_session_status(ipc_id);
@@ -1082,6 +1149,9 @@ std::string RimeWithWeaselHandler::_ReadClientInfo(WeaselSessionId ipc_id,
   // show soft cursor on weasel panel but not inline
   rime_api->set_option(session_id, "soft_cursor", Bool(!inline_preedit));
   // ADR 0032: 把客户端自报的名字交回去,调用方据此判定「自家 UI 进程」。
+  // ADR 0067: 一并交回客户端自报的宿主进程 pid(0 = 未知)。
+  if (client_pid)
+    *client_pid = owner_pid;
   return app_name;
 }
 
@@ -1089,6 +1159,9 @@ namespace {
 // ADR 0032: 客户端身份表的容量上限。身份表不随会话结束删除(必须活过
 // RemoveSession),所以自己封顶,防长时间运行无界增长。
 const size_t kMaxRememberedClientKinds = 256;
+// ADR 0067: 宿主进程 pid 表的容量上限。与身份表同口径:pid 表也不随会话结束
+// 删除(必须活过 RemoveSession),所以自己封顶,防长时间运行无界增长。
+const size_t kMaxRememberedOwnerPids = 256;
 }  // namespace
 
 // ADR 0032: 记住某个 IPC 会话的客户端归属。
@@ -1114,6 +1187,102 @@ fluxing::IpcClientKind RimeWithWeaselHandler::_ClientKind(
   if (it == m_session_client_kinds.end())
     return fluxing::IpcClientKind::kUserApp;  // 未知 = 保持既有行为
   return it->second;
+}
+
+// ADR 0067: 记住某个 IPC 会话宿主进程的 pid。
+//
+// 与 ADR 0032 的身份表同口径:
+//   - ipc_id 会被回收复用,所以必须先清掉同 id 的旧值,否则复用后的会话会带着
+//     **上一个宿主**的 pid ⇒ 清扫会把一条活会话当成孤儿回收掉(最坏失败方向:
+//     误杀活会话 ⇒ 按键被吞)。
+//   - 身份必须活过 RemoveSession(TSF 的 Deactivate 先 EndSession 再发
+//     FocusOut),所以这里**不**删表,只靠容量上限防无界增长。
+void RimeWithWeaselHandler::_RememberOwnerPid(WeaselSessionId ipc_id,
+                                              DWORD pid) {
+  m_session_owner_pids.erase(ipc_id);
+  m_session_owner_pids[ipc_id] = pid;
+  if (m_session_owner_pids.size() > kMaxRememberedOwnerPids) {
+    // 删最小的 id(最老的会话)。最坏情况只是某条会话的 pid 丢失,退回到
+    // 「pid 未知 => 永不回收」—— 那是安全方向(行为与改动前一致)。
+    m_session_owner_pids.erase(m_session_owner_pids.begin());
+  }
+}
+
+// ADR 0067: 宿主进程是否还活着。
+//
+// 只在能**证明**进程已经不在时才报死:
+//   - 句柄拿不到:可能只是权限不够(宿主以管理员身份运行时,非提权的服务端
+//     连 SYNCHRONIZE 都拿不到)⇒ 进程可能还活着 ⇒ 报活(不回收)。
+//     只有「这个 pid 根本不存在」(ERROR_INVALID_PARAMETER)才报死。
+//   - 句柄拿到了:WaitForSingleObject(h, 0) == WAIT_TIMEOUT ⇒ 还在跑;
+//     == WAIT_OBJECT_0 ⇒ 已经退出(崩溃也算)。
+//   - 其余情况(WAIT_FAILED 等)一律按活着处理 —— 唯一允许的失败方向是
+//     「漏回收」(无害),不是「误杀活会话」(灾难)。
+bool RimeWithWeaselHandler::_IsProcessAlive(DWORD pid) const {
+  if (pid == 0)
+    return true;  // 未知 pid => 按活着处理(永不回收)
+  HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, pid);
+  if (h == NULL) {
+    const DWORD err = GetLastError();
+    // ERROR_INVALID_PARAMETER: 这个 pid 根本不存在(宿主已退出,进程对象也
+    // 已被回收)⇒ 确实死了。其余错误(尤其 ERROR_ACCESS_DENIED)只说明
+    // 「我们打不开」,不说明「它不在了」⇒ 报活。
+    return !(err == ERROR_INVALID_PARAMETER || err == ERROR_NOT_FOUND);
+  }
+  const DWORD wait = WaitForSingleObject(h, 0);
+  CloseHandle(h);
+  return wait != WAIT_OBJECT_0;
+}
+
+// ADR 0067: 惰性清扫孤儿会话(宿主进程已经不在了的会话)。
+//
+// 判据:纯函数 include/FluxingSessionReclaim.h(constitution R7 单一事实源):
+//   只有「pid 已知 且 该进程确实已经不在了」才回收;pid 未知 ⇒ 永不回收。
+//   pid 复用只可能造成「假活」(漏回收,无害),不可能造成「假死」(误杀活会话)。
+//
+// 回收动作:调用**既有** RemoveSession(ipc_id) —— 不另写一套清理逻辑。
+// 会话表只在 IPC 线程被改(AddSession / RemoveSession 由 g_api_mutex 串行),
+// 所以本函数只从 AddSession(IPC 线程)调用。
+void RimeWithWeaselHandler::_ReclaimOrphanSessions(
+    WeaselSessionId current_ipc_id) {
+  // 维护窗口内不碰会话(会抢 userdb 的 leveldb LOCK,破坏 export / import)。
+  if (m_maintenance_active.load(std::memory_order_relaxed))
+    return;
+  // 只有一条会话时没什么可回收的(而且那条可能就是正在创建的这条)。
+  if (m_session_status_map.size() <= 1)
+    return;
+  const unsigned long self_pid =
+      static_cast<unsigned long>(GetCurrentProcessId());
+  std::vector<std::pair<WeaselSessionId, fluxing::session_reclaim::SessionOwner> >
+      table;
+  table.reserve(m_session_status_map.size());
+  for (const auto& pair : m_session_status_map) {
+    const WeaselSessionId ipc_id = pair.first;
+    // 跳过正在创建的本次会话。
+    if (ipc_id == current_ipc_id)
+      continue;
+    auto pid_it = m_session_owner_pids.find(ipc_id);
+    if (pid_it == m_session_owner_pids.end())
+      continue;  // pid 未知 => 永不回收
+    fluxing::session_reclaim::SessionOwner owner;
+    owner.pid = static_cast<unsigned long>(pid_it->second);
+    owner.process_alive = true;  // 默认按活着处理
+    if (fluxing::session_reclaim::OwnerPidKnown(owner.pid, self_pid))
+      owner.process_alive = _IsProcessAlive(pid_it->second);
+    table.push_back(std::make_pair(ipc_id, owner));
+  }
+  std::vector<unsigned long> victims;
+  fluxing::session_reclaim::SelectReclaimableSessionIds(table, self_pid,
+                                                         &victims);
+  for (unsigned long victim : victims) {
+    const WeaselSessionId ipc_id = static_cast<WeaselSessionId>(victim);
+    DLOG(INFO) << "reclaim orphan session: ipc_id = " << ipc_id;
+    fluxing::diag::AppendLine(
+        "server", "reclaim orphan session ipc_id=" + std::to_string(ipc_id));
+    // ADR 0067: 走内部实现并标记「孤儿回收」⇒ 不翻转在场状态、不误清
+    // 活动会话指针(判据见 include/FluxingSessionReclaim.h)。
+    _RemoveSessionInternal(ipc_id, true);
+  }
 }
 
 void RimeWithWeaselHandler::_GetCandidateInfo(CandidateInfo& cinfo,

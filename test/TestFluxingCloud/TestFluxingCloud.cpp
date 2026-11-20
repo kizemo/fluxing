@@ -46,6 +46,8 @@
 // ADR 0062 生产头（维护准入闸门的判据纯函数）。同样走相对路径 => 生产与
 // 单测同源（constitution R7）。
 #include "../../include/FluxingMaintenanceGate.h"
+// ADR 0067：孤儿 IPC 会话回收的判据纯函数（生产与单测共用，R7）。
+#include "../../include/FluxingSessionReclaim.h"
 
 // spec 100 阶段 D 生产头（T301–T305）。同样走相对路径 ⇒ 生产与单测同源
 // （constitution R7）：本文件不复制第二份实现，只调用 WeaselServer/Cloud/
@@ -3196,6 +3198,103 @@ void TestAccountWindowSlotState() {
         "槽位：空槽位无需清");
 }
 
+// ADR 0067：孤儿 IPC 会话回收的判据。
+//
+// 缺陷：宿主进程崩溃时不会发 remove_session ⇒ 服务端的会话表 / rime 会话
+// 永久残留 ⇒ 活跃会话数、组合串宽限期长期偏高（ADR 0065 残余风险第 3 条）。
+// 修法核心：客户端在**既有**文本请求体里自报宿主 pid，服务端只在
+// 「pid 已知 且 该进程确实已经不在了」时才回收；pid 未知 ⇒ 永不回收。
+// 判据来自生产头 include/FluxingSessionReclaim.h（R7：单一事实源）。
+void TestSessionReclaimCriteria() {
+  std::printf("[ADR 0067] 孤儿 IPC 会话回收判据\n");
+  namespace sr = fluxing::session_reclaim;
+  const unsigned long kSelf = 1000;  // 「服务端自己」的 pid（测试里取个假值）
+
+  // ① 判据本体：pid 未知 ⇒ 永不回收（哪怕进程「看起来不在」）。
+  Check(!sr::ShouldReclaimSession(false, false),
+        "判据：pid 未知 ⇒ 不回收");
+  Check(!sr::ShouldReclaimSession(false, true), "判据：pid 未知 ⇒ 不回收");
+  // ② pid 已知且进程还活着 ⇒ 不回收。
+  Check(!sr::ShouldReclaimSession(true, true),
+        "判据：pid 已知且存活 ⇒ 不回收");
+  // ③ pid 已知且进程确实已经不在了 ⇒ 回收。
+  Check(sr::ShouldReclaimSession(true, false),
+        "判据：pid 已知且已死 ⇒ 回收");
+
+  // ④ pid 豁免：pid <= 4（0 = 未知，1..4 不是宿主进程）与服务端自身 pid
+  //    一律当作「不回收」。
+  Check(!sr::OwnerPidKnown(0, kSelf), "豁免：pid = 0（未知）⇒ 不可探测");
+  Check(!sr::OwnerPidKnown(1, kSelf), "豁免：pid = 1 ⇒ 不可探测");
+  Check(!sr::OwnerPidKnown(4, kSelf), "豁免：pid = 4 ⇒ 不可探测");
+  Check(!sr::OwnerPidKnown(kSelf, kSelf), "豁免：自身 pid ⇒ 不可探测");
+  Check(sr::OwnerPidKnown(1234, kSelf), "豁免：普通 pid ⇒ 可探测");
+
+  // ⑤ 行级判定（生产清扫用的就是它）。
+  sr::SessionOwner dead;
+  dead.pid = 4321;
+  dead.process_alive = false;
+  Check(sr::ShouldReclaimOwner(dead, kSelf), "行判定：pid 已知且已死 ⇒ 回收");
+  sr::SessionOwner alive = dead;
+  alive.process_alive = true;
+  Check(!sr::ShouldReclaimOwner(alive, kSelf),
+        "行判定：pid 已知且存活 ⇒ 不回收");
+  sr::SessionOwner unknown;
+  unknown.pid = 0;
+  unknown.process_alive = false;
+  Check(!sr::ShouldReclaimOwner(unknown, kSelf), "行判定：pid 未知 ⇒ 不回收");
+  sr::SessionOwner self_owner = dead;
+  self_owner.pid = kSelf;
+  Check(!sr::ShouldReclaimOwner(self_owner, kSelf),
+        "行判定：自身 pid ⇒ 不回收");
+  sr::SessionOwner low = dead;
+  low.pid = 3;
+  Check(!sr::ShouldReclaimOwner(low, kSelf), "行判定：pid <= 4 ⇒ 不回收");
+
+  // ⑥ 表级选择（生产清扫与本测试共用同一份实现）。
+  std::vector<std::pair<unsigned long, sr::SessionOwner> > table;
+  std::vector<unsigned long> victims;
+  // 空表 ⇒ 不回收任何会话。
+  sr::SelectReclaimableSessionIds(table, kSelf, &victims);
+  Check(victims.empty(), "表级：空表 ⇒ 不回收任何会话");
+  // 单条表（已死）⇒ 回收那一条。
+  table.push_back(std::make_pair(11ul, dead));
+  sr::SelectReclaimableSessionIds(table, kSelf, &victims);
+  Check(victims.size() == 1 && victims[0] == 11ul,
+        "表级：单条表（已死）⇒ 回收该条");
+  // 单条表（存活）⇒ 不动。
+  table.clear();
+  table.push_back(std::make_pair(12ul, alive));
+  sr::SelectReclaimableSessionIds(table, kSelf, &victims);
+  Check(victims.empty(), "表级：单条表（存活）⇒ 不回收");
+  // 单条表（pid 未知）⇒ 不动。
+  table.clear();
+  table.push_back(std::make_pair(13ul, unknown));
+  sr::SelectReclaimableSessionIds(table, kSelf, &victims);
+  Check(victims.empty(), "表级：单条表（pid 未知）⇒ 不回收");
+  // 混合表：只回收「已死且 pid 已知」的那一条。
+  table.clear();
+  table.push_back(std::make_pair(21ul, dead));
+  table.push_back(std::make_pair(22ul, alive));
+  table.push_back(std::make_pair(23ul, unknown));
+  sr::SelectReclaimableSessionIds(table, kSelf, &victims);
+  Check(victims.size() == 1 && victims[0] == 21ul,
+        "表级：混合表 ⇒ 只回收「已死且 pid 已知」的那一条");
+
+  // ⑦ 孤儿回收**不得**翻转在场状态（ADR 0067）：宿主崩了不等于用户切走了。
+  Check(!sr::MayFlipPresenceOnSessionEnd(true),
+        "在场状态：孤儿回收 ⇒ 不翻转在场状态");
+  Check(sr::MayFlipPresenceOnSessionEnd(false),
+        "在场状态：真实会话结束 ⇒ 允许翻转在场状态");
+
+  // ⑧ 活动会话指针：孤儿回收只清「被回收的那条就是活动会话」的情况。
+  Check(!sr::ShouldClearActiveSessionOnEnd(true, 500, 400),
+        "活动会话：孤儿回收不动别人的活动会话指针");
+  Check(sr::ShouldClearActiveSessionOnEnd(true, 400, 400),
+        "活动会话：孤儿回收的就是活动会话 ⇒ 清");
+  Check(sr::ShouldClearActiveSessionOnEnd(false, 500, 400),
+        "活动会话：真实会话结束 ⇒ 一律清（既有行为）");
+}
+
 }  // namespace
 
 int main() {
@@ -3256,6 +3355,9 @@ int main() {
   // 批次 AW · ADR 0065 / ADR 0066：闸门空闲宽限期判据 + 账号窗口槽位状态机。
   TestMaintenanceGateIdleCriteria();
   TestAccountWindowSlotState();
+
+  // ADR 0067：孤儿 IPC 会话回收判据（pid 未知 ⇒ 永不回收）。
+  TestSessionReclaimCriteria();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。

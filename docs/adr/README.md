@@ -75,6 +75,7 @@ Do not dump all ADRs into every prompt.
 | 0064 | 0064. 服务端「忘记密码 / 重置口令」端点：两段式 start/confirm + 独立重置码表（用途隔离）+ 服务端只收派生 auth_key | `docs/adr/0064-server-password-reset-endpoints.md` | Proposed |
 | 0065 | 0065. 云同步维护准入闸门的新判据：「最近有输入」+ 未上屏组合串 + 会话惰性复活（修订 0062 决策 1） | `docs/adr/0065-cloud-sync-gate-idle-criteria-and-session-revival.md` | Accepted |
 | 0066 | 0066. 账号与同步窗口的槽位状态机：清槽位提前于反注册 + 复用前探活 + 关闭统一走 WM_CLOSE | `docs/adr/0066-account-window-slot-state-machine.md` | Accepted |
+| 0067 | 0067. 孤儿 IPC 会话回收：客户端自报宿主 pid + 服务端惰性清扫（只在「pid 已知且该进程确实不在」时回收） | `docs/adr/0067-orphan-ipc-session-reclaim.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

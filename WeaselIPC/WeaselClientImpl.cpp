@@ -237,6 +237,12 @@ bool ClientImpl::_WriteClientInfo() {
   channel << L"action=session\n";
   channel << L"session.client_app=" << app_name.c_str() << L"\n";
   channel << L"session.client_type=" << (is_ime ? L"ime" : L"tsf") << L"\n";
+  // ADR 0067: 自报宿主进程 pid。宿主崩溃时不会发 remove_session，服务端据此
+  // 判定「这条会话的宿主已经不在了」并回收孤儿会话（判据在
+  // include/FluxingSessionReclaim.h）。沿用 ADR 0032 的老办法：只在既有文本
+  // 请求体里多写一行 key，不改 include/WeaselIPCData.h、不新增消息类型。
+  channel << L"session.client_pid=" << std::to_wstring(GetCurrentProcessId()).c_str()
+           << L"\n";
   channel << L".\n";
   return true;
 }
