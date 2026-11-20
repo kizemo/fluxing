@@ -1,0 +1,4 @@
+2026-11-21 00:33:54.450][acctdlg] dpi-mismatch system=144 font_px=21 derived=168
+2026-11-21 00:34:17.826][server] remove_session active orphan_reclaim presence=kept
+2026-11-21 00:34:17.827][server] reclaim orphan session ipc_id=2493775873 client_pid=439656 live=1
+

@@ -1,0 +1,30 @@
+REPO_ROOT=F:\soft\00selfmade\rime_claude
+OUT_DIR=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\ipc-chain-20261121-002839
+TOOL=F:\soft\00selfmade\rime_claude\Release\TestOrphanReclaimE2E.exe
+DIAG_LOG=C:\Users\Duanyi\AppData\Local\Temp\fluxing-profile-notify.log
+SERVER pid=304416 path=D:\Program Files\fluxing\weasel\WeaselServer.exe
+LOG_BASELINE_BYTES=296115
+HOLD_STARTED pid=207096
+ORPHAN_IPC_ID=2493775873
+ORPHAN_PID=207096
+ECHO_RAW=ECHO=2493775873 (exit=0)
+ECHO_BEFORE=2493775873 (non zero => session really alive)
+HOLD_KILLED=1
+TRIGGER_STARTED pid=215060
+TRIGGER_EXIT=0
+TRIGGER_STDOUT=TRIGGER_STARTED ipc_id=2493775874
+TRIGGER_DONE ipc_id=2493775874
+
+TRIGGER_IPC_ID=2493775874
+ECHO_RAW=ECHO=0 (exit=0)
+ECHO_AFTER=0 (orphan session is gone on the server)
+LOG_SLICE_BYTES=183
+LOG_SLICE_FILE=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\ipc-chain-20261121-002839\log-slice.txt
+CRITERION_1_RECLAIM_LINE count=1 pattern='reclaim orphan session ipc_id=2493775873 client_pid=207096 live=\d+'
+INFO_RECLAIM_PREFIX_ONLY count=1 (prefix-only hits; if > 0 but CRITERION_1 = 0 the line lacks client_pid/live)
+CRITERION_2_ORPHAN_PRESENCE_KEPT count=1
+CRITERION_3_NO_ABSENT_FLIP count=0 (must be 0)
+RECLAIM_LINE=reclaim orphan session ipc_id=2493775873 client_pid=207096 live=1
+RECLAIM_PREFIX_LINE=reclaim orphan session ipc_id=2493775873
+VERDICT=ORPHAN_RECLAIM_OK
+EXIT=0

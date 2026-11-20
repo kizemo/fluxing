@@ -1,0 +1,18 @@
+REPO_ROOT=F:\soft\00selfmade\rime_claude
+OUT_DIR=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\gate-sync-20261121-003540
+TOOL=F:\soft\00selfmade\rime_claude\release\TestOrphanReclaimE2E.exe
+DIAG_LOG=C:\Users\Duanyi\AppData\Local\Temp\fluxing-profile-notify.log
+SERVER pid=304416 path=D:\Program Files\fluxing\weasel\WeaselServer.exe ver=1.3.8.0
+LOG_BASELINE_BYTES=296562
+TOP_LEVEL_WINDOWS=6
+  WIN hwnd=0x7B072C class='ATL:002B9DE0' visible=False rect=0,0,48x48 title=''
+  WIN hwnd=0x5A0A58 class='FluxingCloudAccountDialog_v1' visible=True rect=76,76,742x491 title='Fluxing 云端账号'
+  WIN hwnd=0xF1152C class='ComboLBox' visible=False rect=0,26,207x2 title=''
+  WIN hwnd=0xCF0662 class='TrayIconClass' visible=False rect=0,0,0x0 title=''
+  WIN hwnd=0x23065A class='WeaselIPCWindow_1.0' visible=False rect=494,494,2880x1537 title='WeaselIPCWindow_1.0'
+  WIN hwnd=0x230654 class='GDI+ Hook Window Class' visible=False rect=0,0,1x1 title='GDI+ Window (WeaselServer.exe)'
+ACCOUNT_WINDOW_PREEXISTING=1
+ACCOUNT_HWND=0x5A0A58 visible=True rect=76,76,742x491 title='Fluxing 云端账号'
+SYNC_NOW_HWND=0x9404AC visible=True enabled=True
+SYNC_STATUS_HWND=0x110C12 visible=True enabled=True
+ACCOUNT_STATUS(id 1006)=手动同步已提交，完成后见下方「最近同步」。

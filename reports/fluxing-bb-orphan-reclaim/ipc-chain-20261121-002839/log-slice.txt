@@ -1,0 +1,3 @@
+2026-11-21 00:28:42.146][server] remove_session active orphan_reclaim presence=kept
+2026-11-21 00:28:42.148][server] reclaim orphan session ipc_id=2493775873 client_pid=207096 live=1
+

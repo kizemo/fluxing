@@ -1,0 +1,7 @@
+REPO_ROOT=F:\soft\00selfmade\rime_claude
+OUT_DIR=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\ipc-chain-20261121-002724
+TOOL=F:\soft\00selfmade\rime_claude\Release\TestOrphanReclaimE2E.exe
+DIAG_LOG=C:\Users\Duanyi\AppData\Local\Temp\fluxing-profile-notify.log
+SERVER pid=77332 path=D:\Program Files\fluxing\weasel\WeaselServer.exe
+LOG_BASELINE_BYTES=295985
+HOLD_STARTED pid=410192

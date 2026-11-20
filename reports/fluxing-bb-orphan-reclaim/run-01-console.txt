@@ -1,0 +1,5 @@
+server pid=77332 ver=1.3.7.0
+host1 pid=420460
+ABORT host1 window not enumerable
+REPORT F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\report.json
+VERDICT ABORT_HOST_WINDOW_MISSING

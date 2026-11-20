@@ -1,0 +1,63 @@
+﻿{
+  "started_local": "2026-11-20 23:33:27",
+  "verdict": "INCONCLUSIVE_WINDOW",
+  "notes": [
+    "server pid=77332 ver=1.3.7.0",
+    "host1 pid=333452",
+    "host1 hwnd=0x1e0cd6 rect=502x276 visible=True marker.visible=1",
+    "t0 last-key epoch=1795188812286",
+    "leg A_recent_input: idle=192ms blocked=False advanced=True skip=False db=2026-11-20 23:33:33.322",
+    "leg B_orphan_composing: idle=7770ms blocked=False advanced=True skip=False db=2026-11-20 23:33:40.893",
+    "ABORT Leg B landed beyond composition grace"
+  ],
+  "legs": {
+    "A_recent_input": {
+      "name": "A_recent_input",
+      "click_local": "23:33:39",
+      "ms_since_last_key": 192,
+      "blocked": false,
+      "db_mtime_before": "2026-11-20 23:26:37.833",
+      "db_mtime_after": "2026-11-20 23:33:33.322",
+      "db_bytes": 4138942,
+      "status_text": "[1017]最近同步：尚未同步。 [1006]手动同步已提交，完成后见下方「最近同步」。",
+      "log_slice_file": "F:\\soft\\00selfmade\\rime_claude\\reports\\fluxing-bb-orphan-reclaim\\log-slice-A_recent_input.txt",
+      "has_skip_line": false,
+      "has_sync_ok_line": false
+    },
+    "B_orphan_composing": {
+      "name": "B_orphan_composing",
+      "click_local": "23:33:47",
+      "ms_since_last_key": 7770,
+      "blocked": false,
+      "db_mtime_before": "2026-11-20 23:33:33.322",
+      "db_mtime_after": "2026-11-20 23:33:40.893",
+      "db_bytes": 4138942,
+      "status_text": "[1017]最近同步：尚未同步。 [1006]手动同步已提交，完成后见下方「最近同步」。",
+      "log_slice_file": "F:\\soft\\00selfmade\\rime_claude\\reports\\fluxing-bb-orphan-reclaim\\log-slice-B_orphan_composing.txt",
+      "has_skip_line": false,
+      "has_sync_ok_line": false
+    }
+  },
+  "desktop": "Default",
+  "server_pid": 77332,
+  "server_ver": "1.3.7.0",
+  "log_bytes_start": 295893,
+  "host1_pid": 333452,
+  "host1_hwnd": "0x1e0cd6",
+  "host1_rect": "502x276",
+  "host1_marker_visible": "1",
+  "host1_visible": true,
+  "db_baseline_mtime": "2026-11-20 23:26:37.833",
+  "log_bytes_baseline": 295893,
+  "open_dlg_targets": [
+    "0x35027c",
+    "0xa811b0",
+    "0x100c12",
+    "0x9304ac",
+    "0x440220"
+  ],
+  "dlg_opened_before_typing": true,
+  "host1_killed": true,
+  "host1_kill_ms_since_t0": 7250,
+  "finished_local": "2026-11-20 23:33:48"
+}

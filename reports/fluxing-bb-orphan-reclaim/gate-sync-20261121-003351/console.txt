@@ -1,0 +1,42 @@
+REPO_ROOT=F:\soft\00selfmade\rime_claude
+OUT_DIR=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\gate-sync-20261121-003351
+TOOL=F:\soft\00selfmade\rime_claude\release\TestOrphanReclaimE2E.exe
+DIAG_LOG=C:\Users\Duanyi\AppData\Local\Temp\fluxing-profile-notify.log
+SERVER pid=304416 path=D:\Program Files\fluxing\weasel\WeaselServer.exe ver=1.3.8.0
+LOG_BASELINE_BYTES=296298
+TOP_LEVEL_WINDOWS=4
+  WIN hwnd=0x7B072C class='ATL:002B9DE0' visible=False rect=0,0,48x48 title=''
+  WIN hwnd=0xCF0662 class='TrayIconClass' visible=False rect=0,0,0x0 title=''
+  WIN hwnd=0x23065A class='WeaselIPCWindow_1.0' visible=False rect=494,494,2880x1537 title='WeaselIPCWindow_1.0'
+  WIN hwnd=0x230654 class='GDI+ Hook Window Class' visible=False rect=0,0,1x1 title='GDI+ Window (WeaselServer.exe)'
+ACCOUNT_WINDOW_PREEXISTING=0 (posting WM_COMMAND 40024 to every candidate window)
+ACCOUNT_WINDOW_OPENED_BY_CLASS='WeaselIPCWindow_1.0'
+ACCOUNT_HWND=0x5A0A58 visible=True rect=76,76,742x491
+BASELINE_STATUS=最近同步：尚未同步。
+HOLD_STARTED pid=439656
+ORPHAN_IPC_ID=2493775873
+ORPHAN_PID=439656
+ECHO_BEFORE=2493775873 (non zero => session really alive)
+CLICK_SYNC_NOW_A=1 ok=True
+TIMELINE_FILE=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\gate-sync-20261121-003351\timeline-A-gate-closed.txt
+  00:33:56.577 | 最近同步：尚未同步。
+HOLD_KILLED=1
+TRIGGER_STARTED pid=319152
+TRIGGER_EXIT=0
+TRIGGER_IPC_ID=2493775874
+ECHO_AFTER=0 (orphan session is gone on the server)
+CLICK_SYNC_NOW_B=1 ok=True
+TIMELINE_FILE=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\gate-sync-20261121-003351\timeline-B-after-reclaim.txt
+  00:34:20.924 | 最近同步：尚未同步。
+LOG_SLICE_BYTES=264
+CRITERION_B2_RECLAIM_LINE count=1 pattern='reclaim orphan session ipc_id=2493775873 client_pid=439656 live=\d+'
+CRITERION_B3_PRESENCE_KEPT count=1
+CRITERION_B3_NO_ABSENT_FLIP count=0 (must be 0)
+RECLAIM_LINE=reclaim orphan session ipc_id=2493775873 client_pid=439656 live=1
+B1A_SKIP_LINES count=0
+B1B_SKIP_LINES count=0 (must be 0)
+B1B_ROUND_LINES count=1 (a real round result must show up)
+LOGIN_PROBLEM_LINES count=0
+FAIL=B1A_FAILED (the round was not skipped while the synthetic host was alive; no skip text in the timeline)
+VERDICT=GATE_SYNC_E2E_FAIL
+EXIT=4

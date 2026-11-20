@@ -1,0 +1,85 @@
+=== A. AppendLine sites ===
+[FluxingDiagLog.h:92] inline void AppendLine(const char* tag, const std::string& message) {
+[RimeWithWeasel.cpp:475] fluxing::diag::AppendLine(
+[RimeWithWeasel.cpp:618] fluxing::diag::AppendLine("server",
+[RimeWithWeasel.cpp:621] fluxing::diag::AppendLine(
+[RimeWithWeasel.cpp:624] fluxing::diag::AppendLine("server",
+[RimeWithWeasel.cpp:935] fluxing::diag::AppendLine("server",
+[RimeWithWeasel.cpp:953] fluxing::diag::AppendLine("server", "focus_in profile presence=present");
+[RimeWithWeasel.cpp:997] fluxing::diag::AppendLine(
+[RimeWithWeasel.cpp:1027] fluxing::diag::AppendLine(
+[RimeWithWeasel.cpp:1280] fluxing::diag::AppendLine(
+[RimeWithWeasel.cpp:1559] fluxing::diag::AppendLine("server", "schema_switch notice");
+[RimeWithWeasel.cpp:1604] fluxing::diag::AppendLine(
+[RimeWithWeasel.cpp:1682] fluxing::diag::AppendLine(
+[CloudAccountDialog.cpp:1077] fluxing::diag::AppendLine("acctdlg", utf8);
+[PhrasesDialogIPC.cpp:459] auto appendLine = [&utf8](const std::wstring& wline) {
+[PhrasesDialogIPC.cpp:474] appendLine(L"- category: \"" + p.category + L"\"");
+[PhrasesDialogIPC.cpp:475] appendLine(L"  text: \"" + p.text + L"\"");
+[PhrasesDialogIPC.cpp:477] appendLine(L"- text: \"" + p.text + L"\"");
+[QuickPanelDialog.cpp:2792] fluxing::diag::AppendLine("server", line);
+[ShortcutSettings.cpp:1155] auto appendLine = [&block](const std::wstring& wline) {
+[ShortcutSettings.cpp:1170] appendLine(L"# 本段由「快捷键设置」托管, 手工修改会被下次保存覆盖。");
+[ShortcutSettings.cpp:1171] appendLine(L"# 生成者: spec 045 ShortcutSettings (v0.19.0.28)");
+[ShortcutSettings.cpp:1252] appendLine(L"  # 当前没有需要落盘的改动 (不写空 bindings, 避免清空 key_binder)。");
+[ShortcutSettings.cpp:1254] appendLine(L"  key_binder/bindings:");
+[ShortcutSettings.cpp:1256] appendLine(r);
+[WeaselServer.cpp:179] fluxing::diag::AppendLine("server", line);
+[WeaselServerApp.cpp:246] fluxing::diag::AppendLine("server", "start_returned_false exit=-1");
+[WeaselServerApp.cpp:485] fluxing::diag::AppendLine("server", "quickpanel_show_cancelled absent");
+[WeaselTSF.cpp:447] fluxing::diag::AppendLine(
+[WeaselTSF.cpp:658] fluxing::diag::AppendLine("tsf", line);
+
+=== B. Cloud gate/skip/export ===
+CloudSyncService.cpp:419: // item_key 列表里是否含某个键（比对服务端返回的 accepted / skipped 用）。
+CloudSyncService.cpp:430: const std::vector<std::string>& skipped,
+CloudSyncService.cpp:434: if (ContainsItemKey(skipped, item_key))
+CloudSyncService.cpp:435: return PushDisposition::kSkipped;
+CloudSyncService.cpp:441: std::vector<std::string>* skipped,
+CloudSyncService.cpp:456: const bool ok_skipped = ReadItemKeyArray(doc, "skipped", skipped);
+CloudSyncService.cpp:457: if (!ok_accepted || !ok_skipped) {
+CloudSyncService.cpp:696: std::vector<std::string>* skipped) {
+CloudSyncService.cpp:710: // ★ 必须把 accepted / skipped 解析出来（AH-4 ⑤）：服务端 HLC 守卫会把
+CloudSyncService.cpp:711: //   「存储版本 ≥ 入参版本」的条目放进 skipped，客户端不能当成功。
+CloudSyncService.cpp:712: return ParsePushResponse(response, accepted, skipped, server_seq, err);
+CloudSyncService.cpp:855: out->skipped = false;
+CloudSyncService.cpp:878: if (!backend_->CheckMaintenanceGate(&gate_reason)) {
+CloudSyncService.cpp:883: out->skipped = true;
+CloudSyncService.cpp:897: if (!backend_->CheckMaintenanceGate(&gate_reason)) {
+CloudSyncService.cpp:902: out->skipped = true;
+CloudSyncService.cpp:914: std::string export_err;
+CloudSyncService.cpp:915: if (!backend_->ExportUserDict(&text, &export_err)) {
+CloudSyncService.cpp:918: export_err.empty() ? "导出用户词典失败。" : export_err;
+CloudSyncService.cpp:1072: std::vector<bool> skipped_flags(local_entries.size(), false);
+CloudSyncService.cpp:1112: std::vector<std::string> skipped_keys;
+CloudSyncService.cpp:1114: &skipped_keys)) {
+CloudSyncService.cpp:1119: //   skipped = 云端已有更新版本（HLC 守卫）⇒ 不计入推送数，但也不算失败。
+CloudSyncService.cpp:1125: switch (ClassifyPushResult(accepted_keys, skipped_keys, key_id)) {
+CloudSyncService.cpp:1130: case PushDisposition::kSkipped:
+CloudSyncService.cpp:1131: ++out->items_skipped;
+CloudSyncService.cpp:1132: skipped_flags[push_indices[k]] =
+CloudSyncService.cpp:1159: (pushed[local_index] || skipped_flags[local_index])) {
+CloudSyncService.cpp:1161: // skipped 也算「已同步」：云端握着的版本 ≥ 本地这条 ⇒ 本地不必再推；
+CloudSyncService.cpp:1225: if (out->items_skipped > 0) {
+CloudSyncService.cpp:1227: message += std::to_string(out->items_skipped);
+CloudRimeUserDictBackend.cpp:10: //   **不用** export/import：那对原语会丢 dee/tick、跳过墓碑、把 -1 放大成
+CloudRimeUserDictBackend.cpp:249: bool CheckMaintenanceGate(std::string* reason) const override {
+CloudRimeUserDictBackend.cpp:262: if (!CheckMaintenanceGate(&gate_reason)) {
+CloudRimeUserDictBackend.cpp:310: bool ExportUserDict(std::string* out, std::string* err) override {
+CloudRimeUserDictBackend.cpp:362: int exported = 0;
+CloudRimeUserDictBackend.cpp:377: ++exported;
+CloudRimeUserDictBackend.cpp:380: if (exported == 0) {
+
+=== C. RimeWithWeasel logging ===
+L475: fluxing::diag::AppendLine(  ~~  "server",         "own_ui_session ipc_id=" + std::to_string(ipc_id) + " app=" +
+L618: fluxing::diag::AppendLine("server",  ~~  "remove_session active presence=absent");     } else if (!may_flip_presence) {
+L621: fluxing::diag::AppendLine(  ~~  "server", "remove_session active orphan_reclaim presence=kept");     } else {
+L624: fluxing::diag::AppendLine("server",  ~~  "remove_session active own_ui presence=kept");     }
+L935: fluxing::diag::AppendLine("server",  ~~  "focus_in own_ui profile presence=kept");     return;
+L953: fluxing::diag::AppendLine("server", "focus_in profile presence=present");  ~~  if (m_onShowQuickPanel)       m_onShowQuickPanel();
+L997: fluxing::diag::AppendLine(  ~~  "server",         std::string("focus_out param=") + std::to_string(param) +
+L1027: fluxing::diag::AppendLine(  ~~  "server",       std::string("focus_out param=") + std::to_string(param) +
+L1280: fluxing::diag::AppendLine(  ~~  "server", "reclaim orphan session ipc_id=" + std::to_string(ipc_id));     // ADR 0067: 走内部实现并标记「孤儿回收」⇒ 不翻转在场状态、不误清
+L1559: fluxing::diag::AppendLine("server", "schema_switch notice");  ~~  if (!m_ui || text.empty())     return;
+L1604: fluxing::diag::AppendLine(  ~~  "server", "schema_switch_requested to=" + schema_id + " target_live=" +                     (live.empty() ? std::string("<unknown>") : live) +
+L1682: fluxing::diag::AppendLine(  ~~  "server", "schema_switch_requested to=" + next_id + " target_live=" +                     (live.empty() ? std::string("<unknown>") : live) +
