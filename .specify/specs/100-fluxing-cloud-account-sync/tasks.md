@@ -624,3 +624,35 @@
 ### AV-5 · 未闭环
 - ① **未装机**（`WeaselServer.exe` 是 PPL ⇒ 须注销 / 重启后装 1.3.4）；② 真机核心判据 = **重置口令后用新口令登录 ⇒ 自动全量重推**（方案 C 唯一能证伪的一步，自动化无法覆盖）；③ 账号页两态目视 / 验证码独立窗 / 注册 / 找回密码发信 / 「保存账号」勾与不勾两次登录；④ 双机 AC 7 条 + restore 端到端 + 输入延迟两组对照；⑤ **产品口径待用户决定**：换钥后旧行仍留云端且不可解，是否给用户一句提示（不代决）；⑥ 仓库累计提交仍未 push（无授权）。
 - **交接文档**：`docs/archive/handoffs/handoff-2026-11-19-batch-av-key-rotation-full-repush.md`（七节：背景与决策表 / 落码文件级表 / 门禁 / 出包 1.3.4 / 已验证·推断·未验证 / 工具坑 / 下一批建议）；接力 prompt 按用户 2026-11-08 指示**直接给在当轮回答正文**，不另落文件。
+
+## 批次 AW 收尾记录（2026-11-20 · 闸门空闲判据 ADR 0065 + 账号窗槽位状态机 ADR 0066 + 出包 1.3.5）
+
+### AW-1 · 缺陷 A：「仅开启输入法」就拒绝同步（用户原话：「希望开启输入法，不要影响同步」）
+- **根因（源码级已坐实）**：ADR 0062 判据 `MaintenanceGateAllows(int live_sessions){return live_sessions<=0;}` 把「**有活跃会话**」当「**用户在打字**」。TSF `ActivateEx`→`StartSession` **激活即建会话**（与按键无关）；`FocusOut` 只清 `m_active_session`、`EndSession` 仅 `Deactivate` 时触发；本机唯一加载 `weasel.dll` 的进程是 `YXCalendar`（pid 180284）⇒ `live_sessions` **恒 ≥ 1** ⇒ 闸门**恒关闭**。消费侧 `CloudSyncService.cpp` 在 `LoadSidecar` **之前**查闸门 ⇒ 关闭即 `skipped=true`、**零 I/O / 零配额**；`CloudSyncEngine.cpp:353-357` 走 `waiting_for_idle` + 5 min 短重试 ⇒ 用户看到「你正在输入，本轮已跳过用户词典同步，稍后会自动重试。」
+- **修法（[ADR 0065](docs/adr/0065-cloud-sync-gate-idle-criteria-and-session-revival.md) · 修订 0062 决策 1）**：判据改为「**最近有输入**（空闲宽限 **10 s**）**或未上屏组合串**（宽限 **60 s**）才阻塞」。① 共享纯函数头 `include/FluxingMaintenanceGate.h` 新增 `kMaintenanceIdleGraceMs` / `kMaintenanceCompositionGraceMs` / `MaintenanceGateIdleMs` / `MaintenanceGateAllowsWithIdle`；**旧三符号（`MaintenanceGateAllows` / `MaintenanceGateReasonLiveSession` / `kMaintenanceSkipRetryIntervalMs`）一字未改** ⇒ 既有单测不破。② 生产侧新增 `m_last_input_tick` / `m_composing_session_count` / `m_maintenance_active` 三个原子量 + 组合串 / ascii 镜像表（读者侧只 `load()` ⇒ **只读、无 I/O、不加锁**，符合 P2）。③ **会话复活**：放宽后维护会真销毁会话 ⇒ 孤儿 `ipc_id` 首次按键时 `_TryResurrectSession` **惰性复活**（`TryAcquire(DefaultLockName(),0)` 探测回合进行中；**不在 `EndMaintenance` 复活**，否则抢 userdb leveldb LOCK）。④ 会话回收漏洞修复：`RemoveSession` 把 erase + 重算计数提到早退检查之前；`to_session_id` 改 `find`，不再插入 `session_id==0` 假条目。
+- **边界**：**不放宽到「忽略组合串」**（组合串会被 finalize 丢弃、代价高）；**不放宽到「放弃维护」**；**用户可见文案不动**（0062 已定稿「保留当前文案」，原因令牌沿用唯一 `live_input_session`）；**零 IPC 变更** ⇒ 不触发四边同步红线；**未改 `librime/`**。
+
+### AW-2 · 缺陷 B：「账号与同步」窗口第二次进入后已登录窗口无法关闭
+- **已排除**：modal 阻塞 / 关闭按钮被隐藏 / 菜单 toggle / `EnableWindow(FALSE)` 致残。**未 100% 坐实**的三分支：① 复用半死窗 ② 新建即坏 ③ UI 线程卡在 `WM_DESTROY` 的 `impl_->mutex` ⇒ 本批用**防御性全覆盖 + 诊断日志**修，**不阻塞落码**。
+- **已坐实的两个真缺陷**：① `WM_DESTROY` **先** `UnregisterWindow`（取 `impl_->mutex`）**后**清槽位 ⇒ 一旦阻塞，槽位残留**半死 HWND** ⇒ 第二次进入菜单复用它；② 关闭按钮在自身 `WM_LBUTTONUP` **尚未返回**时，由父窗 `WM_COMMAND` 同步 `DestroyWindow(parent)` ⇒ 把**正在处理消息的那个按钮控件**一起销毁 ⇒ 按钮失灵。
+- **修法（[ADR 0066](docs/adr/0066-account-window-slot-state-machine.md)）**：① 抽**纯函数头** `WeaselServer/Cloud/CloudAccountWindowState.h`（纯 ASCII、无 `windows.h`）承载槽位状态机 `SlotState{kEmpty,kStale,kLive}` / `ClassifySlot` / `SlotReusable` / `MustClearSlotBeforeUnregister` / `kSlotProbeTimeoutMs=200` ⇒ 生产与单测**共用同一份**（R7）。② 槽位表**独立 mutex**（**不复用** `impl_->mutex`——UnregisterWindow 会取它，同锁即自锁）；纪律：**任何 Win32 调用都在不持锁时进行**。③ `WM_DESTROY` **先清槽位后 Unregister**；`WM_NCDESTROY` 双保险兜底。④ 复用前 `SendMessageTimeoutW(WM_NULL, SMTO_ABORTIFHUNG, 200ms)` 探活 ⇒ 半死窗判 `kStale` ⇒ 丢弃重建。⑤ 关闭统一 `PostMessage(WM_CLOSE)`（唯一销毁入口 = `WM_CLOSE` → `DestroyWindow`）。⑥ 诊断日志前缀 `[FluxingAccountDlg]`。
+
+### AW-3 · 门禁
+- **云单测 `PASS=552 FAIL=0` / `VERDICT: ALL PASS`**（基线 526 ⇒ **+26**；新增 `TestMaintenanceGateIdleCriteria` 12 条断言 + `TestAccountWindowSlotState` 10 条断言；既有 `TestCloudMaintenanceGate()` 未动）。
+- **变异有牙 `PASS`**：注入 `kMaintenanceIdleGraceMs=0` + `kMaintenanceCompositionGraceMs=0` + `SlotReusable` 恒真 ⇒ `PASS=544 FAIL=8`（恰好抓住三处缺陷）⇒ 还原 + **touch**（`Copy-Item` 保留 mtime ⇒ 不重编译 ⇒ 假红）⇒ 回到 `PASS=552 FAIL=0`。
+- **`build.bat weasel` 0 警告 0 错误**（`RimeWithWeasel.cpp` 与 `CloudAccountDialog.cpp` 真编译通过）。
+- **定点 clang-format**：5 个改动文件按 `git diff -U0` 解析的变更行区间格式化，**复核重算区间后 `--dry-run --Werror` 全部 `exit=0`**（`FORMAT_BAD=0`）；新文件整体格式化。
+- **L0 静态门禁**：15 项 **14 过 1 失败** ⇒ 唯一失败项 = `version-consistency`（`CHANGELOG.md` 顶部仍 1.3.4，补写 1.3.5 条目后复跑）。
+
+### AW-4 · 出包 1.3.5
+- **版本真相源**：`version.txt`（5 字节无尾换行）/ `env.bat`（4 个键位）/ `weasel.props` / `CHANGELOG.md` 四处同步 1.3.4 → 1.3.5；`WEASEL_BUILD` 保持 0 ⇒ 无 L107 风险。
+- **已 touch 4 个 `.rc`**（`WeaselServer` / `WeaselDeployer` / `WeaselSetup` / `WeaselTSF`）—— 改 `.props` 不触发 MSBuild 重编译，版本资源否则停在 1.3.4.0。
+- **构建**：`build.bat weasel installer` ⇒ **0 警告 0 错误**；makensis 8 条既有 `warning 7010`。
+- **产物**：`output/archives/fluxing-1.3.5-installer.exe` —— **42 973 772 B · sha16 `471C7C9B255D1E33`**（sha256 `471C7C9B255D1E3360E5B62280F7BEB740A2F02154B29B634AD25611D035D809`）；内嵌 `WeaselServer.exe` **2 766 336 B / filever `1.3.5.0`**（1.3.4 包内 2 755 072 B / `1.3.4.0` ⇒ 判别通过）；包内 `WeaselServer.exe` sha16 与 `output\Win32\WeaselServer.exe` 逐字一致（`741C13F78170D856`）⇒ 包内容即本次构建产物。
+- **包内令牌差集（判别证据）**：`resurrect session`（ASCII · 缺陷 A 新代码）1.3.5 **True** / 1.3.4 **False**；`FluxingAccountDlg`（**UTF-16LE 宽字符** · 缺陷 B 新代码）1.3.5 **True** / 1.3.4 **False** ⇒ 两个修复**确在包内**。⚠️ 宽字符串必须按 **UTF-16LE** 搜（按 ASCII 搜会**假红**）。
+- ⚠️ **判别要看 `WeaselServer.exe`，不是 `weasel.dll`**：`RimeWithWeasel` 是**静态库**，只链进 `WeaselServer.exe`；TSF 前端 `weasel.dll` 与 1.3.4 包内**仅差 17 字节**（只有版本资源）⇒ 属正常，不是「代码没进包」。
+- **版本闸门**：`Test-VersionConsistency`（补写 CHANGELOG 1.3.5 条目后复跑）⇒ `Ok=True` / `version=1.3.5 一致`。
+
+### AW-5 · 未闭环 + 交接
+- ① **未装机**（`WeaselServer.exe` 是 **PPL** ⇒ 须注销 / 重启后装 1.3.5）；② **用户在场 AC**（清单正文 = `docs/release/restart-checklist-1.3.5.md`，含缺陷 A / B 判据与**反向判据**）；③ 双机 AC 7 条（`CloudCredentialStore` 为 Windows 用户级全局单例 ⇒ **两套 Profile 目录不够**）+ restore 端到端 + 输入延迟两组对照；④ **产品口径待用户拍板**：换钥后旧行仍留且**永不可解** ⇒ 是否在账号页给一句提示（本批**不代决**）；⑤ **管道异常断开的孤儿会话回收暂缓**（放宽闸门后它不再阻塞同步）；⑥ 缺陷 B 第三分支取证靠 `[FluxingAccountDlg]` 诊断日志。
+- **交接文档**：`docs/archive/handoffs/handoff-2026-11-20-batch-aw-gate-idle-criteria-and-account-window-fix.md`（七节：背景与决策 / 落码文件级表 / 门禁 / 出包 / 已验证·推断·未验证 / 工具坑 / 下一批建议）；接力 prompt 按用户 2026-11-08 指示**直接给在当轮回答正文**，不另落文件。

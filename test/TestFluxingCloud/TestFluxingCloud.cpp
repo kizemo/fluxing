@@ -72,6 +72,7 @@
 // 「可见性 / 几何」实现，只调用 WeaselServer/Cloud/ 下的那一份。
 #include "../../WeaselServer/Cloud/CloudAccountUi.h"
 #include "../../WeaselServer/Cloud/CloudAccountHistory.h"
+#include "../../WeaselServer/Cloud/CloudAccountWindowState.h"
 
 // 批次 AK：真实 WinHTTP 传输层的回环回归用例（单独文件，见其头注释）。
 int RunFluxingCloudNetTests(int* out_pass);
@@ -3104,6 +3105,97 @@ void TestCloudSidecarKeyRotation() {
   }
 }
 
+// 批次 AW · ADR
+// 0065：维护准入闸门的新判据（「最近有输入」而不是「有无会话」）。
+//
+// 真机缺陷：输入法仅仅处于开启状态（一个字都没打），云同步就被闸门挡住，
+// 账号页报「你正在输入，本轮已跳过用户词典同步，稍后会自动重试。」
+// 根因：ADR 0062 决策 1 的判据是「无活跃输入会话」，而 TSF
+// 文本服务**激活即建会话**
+// （与是否按键无关）⇒ 长期驻留的宿主（实测 YXCalendar）持有一个会话 ⇒
+// 闸门恒关闭。
+//
+// 判据来自生产头 include/FluxingMaintenanceGate.h（constitution
+// R7：单一事实源， 单测不复制第二份判据）。
+void TestMaintenanceGateIdleCriteria() {
+  std::printf("[AW] ADR 0065 维护准入闸门：空闲宽限期判据\n");
+  namespace mg = fluxing::maintenance_gate;
+
+  // ① 常量：空闲宽限期 10 秒；组合串宽限期 60 秒（组合串要活得更久）。
+  Check(mg::kMaintenanceIdleGraceMs == 10 * 1000, "新判据：空闲宽限期 = 10 秒");
+  Check(mg::kMaintenanceCompositionGraceMs == 60 * 1000,
+        "新判据：组合串宽限期 = 60 秒（比空闲宽限期长）");
+  Check(mg::kMaintenanceCompositionGraceMs > mg::kMaintenanceIdleGraceMs,
+        "新判据：组合串宽限期必须长于空闲宽限期");
+
+  // ② 空闲毫秒助手：0 = 从未按过键；时钟回拨按 0 处理（不得误判为长时间空闲）。
+  Check(mg::MaintenanceGateIdleMs(100000, 0) == 0, "空闲毫秒：从未按过键 => 0");
+  Check(mg::MaintenanceGateIdleMs(100000, 90000) == 10000,
+        "空闲毫秒：距上次按键 10 秒");
+  Check(mg::MaintenanceGateIdleMs(100000, 200000) == 0,
+        "空闲毫秒：时钟回拨 => 0（不误判为已空闲很久）");
+
+  // ③ 没有会话 => 一律放行。
+  Check(mg::MaintenanceGateAllowsWithIdle(0, false, 0, 0),
+        "新判据：无会话 => 放行");
+  Check(mg::MaintenanceGateAllowsWithIdle(0, true, 0, 0),
+        "新判据：无会话（即便按过键）=> 放行");
+
+  // ④ ★ 缺陷核心：IME 已激活但从未按键 => 放行（开启输入法不再阻塞同步）。
+  Check(mg::MaintenanceGateAllowsWithIdle(1, false, 0, 0),
+        "新判据：IME 已激活但没打字 => 放行（缺陷核心）");
+  Check(mg::MaintenanceGateAllowsWithIdle(3, false, 0, 0),
+        "新判据：多个会话但都没打字 => 放行");
+
+  // ⑤ 刚打完字 => 关闭；超过空闲宽限期 => 放行。
+  Check(!mg::MaintenanceGateAllowsWithIdle(1, true, 0, 0),
+        "新判据：刚按键 => 关闭");
+  Check(!mg::MaintenanceGateAllowsWithIdle(1, true, 5000, 0),
+        "新判据：5 秒前按键 => 关闭（未过空闲宽限期）");
+  Check(mg::MaintenanceGateAllowsWithIdle(1, true, 15000, 0),
+        "新判据：15 秒前按键 => 放行（已过 10 秒空闲宽限期）");
+
+  // ⑥ 未上屏组合串：按更长的宽限期判定（过宽限期后也放行）。
+  Check(!mg::MaintenanceGateAllowsWithIdle(1, true, 15000, 1),
+        "新判据：15 秒前按键 + 有未上屏组合串 => 关闭（组合串用 60 秒宽限期）");
+  Check(!mg::MaintenanceGateAllowsWithIdle(1, true, 55000, 1),
+        "新判据：55 秒前按键 + 有组合串 => 关闭（未过 60 秒）");
+  Check(mg::MaintenanceGateAllowsWithIdle(1, true, 65000, 1),
+        "新判据：65 秒前按键 + 有组合串 => 放行（已过 60 秒组合串宽限期）");
+}
+
+// 批次 AW · ADR 0066：账号与同步窗口的槽位状态机。
+//
+// 真机缺陷：第二次进入「账号与同步」后，已登录窗口点关闭按钮关不掉。
+// 修法核心：槽位复用前必须**探活**（陈旧槽位不可复用），
+// 且销毁时**先清槽位、后 UnregisterWindow**（清槽位晚于一次可能阻塞的取锁）。
+// 判据来自生产头
+// WeaselServer/Cloud/CloudAccountWindowState.h（R7：单一事实源）。
+void TestAccountWindowSlotState() {
+  std::printf("[AW] ADR 0066 账号窗口槽位状态机\n");
+  namespace aw = fluxing::account_window;
+
+  Check(aw::ClassifySlot(false, false, false) == aw::SlotState::kEmpty,
+        "槽位：没有句柄 => 空");
+  Check(aw::ClassifySlot(true, false, false) == aw::SlotState::kStale,
+        "槽位：句柄已失效（IsWindow 为假）=> 陈旧");
+  Check(aw::ClassifySlot(true, true, false) == aw::SlotState::kStale,
+        "槽位：窗口还在但探活无响应 => 陈旧");
+  Check(aw::ClassifySlot(true, true, true) == aw::SlotState::kLive,
+        "槽位：窗口在且探活有响应 => 存活");
+
+  Check(aw::SlotReusable(aw::SlotState::kLive), "槽位：只有存活槽位可复用");
+  Check(!aw::SlotReusable(aw::SlotState::kStale), "槽位：陈旧槽位不可复用");
+  Check(!aw::SlotReusable(aw::SlotState::kEmpty), "槽位：空槽位不可复用");
+
+  Check(aw::MustClearSlotBeforeUnregister(aw::SlotState::kLive),
+        "槽位：销毁时先清槽位（存活槽位也要清）");
+  Check(aw::MustClearSlotBeforeUnregister(aw::SlotState::kStale),
+        "槽位：销毁时先清槽位（陈旧槽位也要清）");
+  Check(!aw::MustClearSlotBeforeUnregister(aw::SlotState::kEmpty),
+        "槽位：空槽位无需清");
+}
+
 }  // namespace
 
 int main() {
@@ -3160,6 +3252,10 @@ int main() {
   // 批次 AT-1 · ADR 0063：账号页信息架构（两态可见性 / 几何 / 历史邮箱）。
   TestAccountPageUi();
   TestAccountHistory();
+
+  // 批次 AW · ADR 0065 / ADR 0066：闸门空闲宽限期判据 + 账号窗口槽位状态机。
+  TestMaintenanceGateIdleCriteria();
+  TestAccountWindowSlotState();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。

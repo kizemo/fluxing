@@ -39,6 +39,50 @@ inline const char* MaintenanceGateReasonLiveSession() {
   return "live_input_session";
 }
 
+// ADR 0065: idle-grace criteria. A live IME session alone must NOT block a
+// cloud sync round; only recent typing or an unfinished composition does.
+//
+// kMaintenanceIdleGraceMs: no keystroke for this long => the user is idle
+//   => the round may proceed (the IME session gets revived afterwards).
+// kMaintenanceCompositionGraceMs: an unfinished composition blocks for longer,
+//   because finalize() would drop the composing text.
+constexpr int64_t kMaintenanceIdleGraceMs = 10 * 1000;
+constexpr int64_t kMaintenanceCompositionGraceMs = 60 * 1000;
+
+// Milliseconds elapsed since the last keystroke. 0 when the user never typed
+// (last_input_tick <= 0 means "never") or when the clock went backwards.
+inline int64_t MaintenanceGateIdleMs(int64_t now_tick,
+                                     int64_t last_input_tick) {
+  if (last_input_tick <= 0 || now_tick < last_input_tick) {
+    return 0;
+  }
+  return now_tick - last_input_tick;
+}
+
+// The gate itself.
+//   live_sessions      : sessions with session_id != 0 (orphan-safe count)
+//   has_input_history  : the user pressed a key at least once in this IME
+//   ms_since_last_input: ms since that last keystroke
+//   composing_sessions : sessions currently holding an unfinished composition
+inline bool MaintenanceGateAllowsWithIdle(int live_sessions,
+                                          bool has_input_history,
+                                          int64_t ms_since_last_input,
+                                          int composing_sessions) {
+  if (live_sessions <= 0) {
+    return true;
+  }
+  if (!has_input_history) {
+    // IME activated but the user never typed: nothing to lose.
+    return true;
+  }
+  const int64_t idle_ms = ms_since_last_input < 0 ? 0 : ms_since_last_input;
+  if (composing_sessions > 0) {
+    // An unfinished composition survives longer than a plain keystroke.
+    return idle_ms > kMaintenanceCompositionGraceMs;
+  }
+  return idle_ms > kMaintenanceIdleGraceMs;
+}
+
 // 闸门关闭被跳过后，短间隔重试的等待时长（ADR 0062 决策 2）。
 //
 // ★ 必须是**短**间隔（5 分钟），不是失败退避阶梯的末档（60 分钟）：

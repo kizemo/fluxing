@@ -36,6 +36,8 @@
 #include <FluxingPunctText.h>
 // ADR 0062: 维护准入闸门的判据纯函数（**只含 ASCII**，原因见头文件注释）。
 #include <FluxingMaintenanceGate.h>
+// ADR 0065: rime 生命周期互斥体（云同步回合进行中时**不许**碰 rime）。
+#include <FluxingRimeLifecycle.h>
 #include <fstream>
 
 // ★ spec 045 修(2026-11-09 · 第三轮):用户显式选定的输入方案必须**持久化**。
@@ -265,6 +267,9 @@ void RimeWithWeaselHandler::Finalize() {
   m_session_status_map.clear();
   // ADR 0062: 会话表清空 => 没有活跃会话 => 闸门放行。
   m_live_session_count.store(0, std::memory_order_relaxed);
+  // ADR 0065: 组合串随会话一起没了 => 计数一并归零。
+  m_session_composing.clear();
+  m_composing_session_count.store(0, std::memory_order_relaxed);
   LOG(INFO) << "Finalizing la rime.";
   rime_api->finalize();
 }
@@ -286,12 +291,26 @@ void RimeWithWeaselHandler::_RefreshLiveSessionCount() {
   m_live_session_count.store(live, std::memory_order_relaxed);
 }
 
-// ADR 0062 决策 1: 维护准入闸门。
+// ADR 0062 决策 1 / ADR 0065 修订: 维护准入闸门。
+//
+// ★ ADR 0065：「有会话」不等于「用户在打字」。TSF 文本服务**激活即建会话**
+//   （与是否按键无关），且长期驻留的宿主进程（如日历程序）会一直持有一个会话
+//   ⇒ 老判据「live_sessions > 0 就挡住」会让云同步**永远**被挡住。
+//   新判据：「最近有输入」或「有未上屏组合串」才关闭闸门。
+//
+// 判据纯函数在 include/FluxingMaintenanceGate.h（单一事实源，constitution
+// R7）， 这里**只提供事实**，绝不复制第二份判据。
 //
 // 只读原子量、无 I/O、不加锁 => 可从云同步的后台线程安全调用（宪法 P2）。
 bool RimeWithWeaselHandler::CanEnterMaintenance(std::string* reason) {
   const int live = m_live_session_count.load(std::memory_order_relaxed);
-  if (fluxing::maintenance_gate::MaintenanceGateAllows(live)) {
+  const int64_t last_tick = m_last_input_tick.load(std::memory_order_relaxed);
+  const int64_t idle_ms = fluxing::maintenance_gate::MaintenanceGateIdleMs(
+      static_cast<int64_t>(GetTickCount64()), last_tick);
+  const int composing =
+      m_composing_session_count.load(std::memory_order_relaxed);
+  if (fluxing::maintenance_gate::MaintenanceGateAllowsWithIdle(
+          live, last_tick != 0, idle_ms, composing)) {
     if (reason != nullptr)
       reason->clear();
     return true;
@@ -299,6 +318,96 @@ bool RimeWithWeaselHandler::CanEnterMaintenance(std::string* reason) {
   if (reason != nullptr)
     *reason = fluxing::maintenance_gate::MaintenanceGateReasonLiveSession();
   return false;
+}
+
+// ADR 0065: 重算「持有未上屏组合串的会话数」。
+//
+// 只在组合串状态变化（增 / 删 / 清表）上调用 —— 都是低频事件。
+void RimeWithWeaselHandler::_RefreshComposingSessionCount() {
+  int composing = 0;
+  for (const auto& pair : m_session_composing) {
+    if (pair.second)
+      ++composing;
+  }
+  m_composing_session_count.store(composing, std::memory_order_relaxed);
+}
+
+// ADR 0065: 记录 / 清除某个会话的「有未上屏组合串」状态。
+void RimeWithWeaselHandler::_SetSessionComposing(WeaselSessionId ipc_id,
+                                                 bool composing) {
+  auto it = m_session_composing.find(ipc_id);
+  if (it != m_session_composing.end() && it->second == composing)
+    return;
+  m_session_composing[ipc_id] = composing;
+  _RefreshComposingSessionCount();
+}
+
+// ADR 0065: 读一次引擎状态（进程内 C API，不做 I/O），同步组合串标记与
+// ascii 模式镜像。session_id == 0（会话不存在）时什么都不做。
+void RimeWithWeaselHandler::_SyncSessionComposing(WeaselSessionId ipc_id,
+                                                  RimeSessionId session_id) {
+  if (session_id == 0)
+    return;
+  RIME_STRUCT(RimeStatus, status);
+  if (!rime_api->get_status(session_id, &status))
+    return;
+  _SetSessionComposing(ipc_id, !!status.is_composing);
+  m_session_ascii_modes[ipc_id] = !!status.is_ascii_mode;
+  rime_api->free_status(&status);
+}
+
+// ADR 0065: 惰性复活孤儿会话。
+//
+// 维护（StartMaintenance -> rime_api->finalize()）会清空会话表 ⇒ 客户端缓存的
+// ipc_id 变成孤儿 ⇒ to_session_id() 返回 0 ⇒ process_key(0) ⇒ 按键被吞。
+// 放宽闸门后维护会真的发生 ⇒ 必须在这里把会话复活。
+//
+// ★ 绝不与云同步回合抢 userdb 的 leveldb LOCK：
+//   云同步回合（CloudRimeUserDictBackend）全程持有命名信号量
+//   Local\Fluxing.RimeLifecycle ⇒ 这里用 0 超时 TryAcquire：
+//   拿不到 ⇒ 回合进行中 ⇒ 不复活（宁可这一次按键被吞）。
+//   拿到了 ⇒ 持有该句柄完成复活，再释放。
+RimeSessionId RimeWithWeaselHandler::_TryResurrectSession(
+    WeaselSessionId ipc_id) {
+  if (m_maintenance_active.load(std::memory_order_relaxed))
+    return 0;
+  HANDLE lifecycle = fluxing::rime_lifecycle::TryAcquire(
+      fluxing::rime_lifecycle::DefaultLockName(), 0);
+  if (lifecycle == nullptr)
+    return 0;
+  RimeSessionId session_id = 0;
+  // 方案 id 存在 m_session_schema_ids 里，**跨维护保留**（维护只清会话表）。
+  auto schema_it = m_session_schema_ids.find(ipc_id);
+  if (schema_it != m_session_schema_ids.end() && !schema_it->second.empty()) {
+    const RimeSessionId new_session_id =
+        (RimeSessionId)rime_api->create_session();
+    if (new_session_id != 0) {
+      if (!rime_api->select_schema(new_session_id, schema_it->second.c_str())) {
+        DLOG(INFO) << "resurrect: select_schema failed, schema = "
+                   << schema_it->second;
+      }
+      // 恢复该会话原来的中 / 英状态（跨维护保留的副本）。
+      auto ascii_it = m_session_ascii_modes.find(ipc_id);
+      if (ascii_it != m_session_ascii_modes.end()) {
+        rime_api->set_option(new_session_id, "ascii_mode",
+                             ascii_it->second ? True : False);
+      }
+      // 会话表在 finalize 时被清空 ⇒ 这里重新插入该条目。
+      SessionStatus& session_status = new_session_status(ipc_id);
+      session_status.style = m_base_style;
+      session_status.session_id = new_session_id;
+      session_status.__synced = false;
+      _RefreshLiveSessionCount();
+      // 新会话没有组合串。
+      m_session_composing[ipc_id] = false;
+      _RefreshComposingSessionCount();
+      session_id = new_session_id;
+      DLOG(INFO) << "resurrect session: ipc_id = " << ipc_id
+                 << ", session_id = " << new_session_id;
+    }
+  }
+  fluxing::rime_lifecycle::ReleaseSemaphoreHandle(lifecycle);
+  return session_id;
 }
 
 DWORD RimeWithWeaselHandler::FindSession(WeaselSessionId ipc_id) {
@@ -319,6 +428,12 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
   TryLazyRecovery();
   if (m_disabled) {
     DLOG(INFO) << "AddSession: m_disabled still true after TryLazyRecovery";
+    return 0;
+  }
+  // ADR 0065: 维护窗口内**绝不**创建 rime 会话 —— 那会去抢 userdb 的
+  // leveldb LOCK，破坏云同步正在做的 export / import。
+  if (m_maintenance_active.load(std::memory_order_relaxed)) {
+    DLOG(INFO) << "AddSession: in maintenance, skip create_session";
     return 0;
   }
   RimeSessionId session_id = (RimeSessionId)rime_api->create_session();
@@ -343,6 +458,9 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
   session_status.session_id = session_id;
   // ADR 0062: 会话表变化 => 重算活跃会话数（闸门的输入）。
   _RefreshLiveSessionCount();
+  // ADR 0065: 新会话没有未上屏组合串。
+  m_session_composing[ipc_id] = false;
+  _RefreshComposingSessionCount();
   // spec 077: ensure ShiftState is fresh per session (R2 cross-session safety).
   m_shiftState[ipc_id] = ShiftState{};
   // ADR 0032: 记录本次会话的客户端身份。ipc_id 会被回收复用
@@ -426,6 +544,8 @@ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
     if (session_status.status.schema_id == nullptr)
       session_status.status = status;
     session_status.__synced = false;
+    // ADR 0065: 记下该会话的 ascii 模式（跨维护保留，复活时恢复用）。
+    m_session_ascii_modes[ipc_id] = !!status.is_ascii_mode;
     rime_api->free_status(&status);
   }
   m_ui->style() = session_status.style;
@@ -468,14 +588,31 @@ DWORD RimeWithWeaselHandler::RemoveSession(WeaselSessionId ipc_id) {
     }
   }
   TryLazyRecovery();  // spec 053 R6 fix
-  if (m_disabled)
-    return 0;
-  DLOG(INFO) << "Remove session: session_id = " << to_session_id(ipc_id);
-  // TODO: force committing? otherwise current composition would be lost
-  rime_api->destroy_session(to_session_id(ipc_id));
+  // ADR 0065: 无论恢复是否成功，**都要**回收会话条目并重算计数。
+  //
+  // 老实现在这里 early-return（m_disabled 分支）⇒ 会话条目与活跃会话计数都留在
+  // 表里 ⇒ 孤儿会话永久驻留 ⇒ 闸门被永久堵死。
+  //
+  // ★ 查找条目一律用 find（to_session_id 内部也是 find）—— operator[]
+  // 会**插入**
+  //   一个 session_id == 0 的假条目。
+  const RimeSessionId session_id = to_session_id(ipc_id);
   m_session_status_map.erase(ipc_id);
   // ADR 0062: 会话已移除 => 重算活跃会话数。
   _RefreshLiveSessionCount();
+  // ADR 0065: 该会话的组合串状态与 ascii 模式镜像一并回收。
+  m_session_composing.erase(ipc_id);
+  _RefreshComposingSessionCount();
+  m_session_ascii_modes.erase(ipc_id);
+  if (m_disabled)
+    return 0;
+  // ADR 0065: 维护窗口内不销毁 rime 会话（会抢 userdb 的 leveldb LOCK）。
+  if (m_maintenance_active.load(std::memory_order_relaxed))
+    return 0;
+  DLOG(INFO) << "Remove session: session_id = " << session_id;
+  // TODO: force committing? otherwise current composition would be lost
+  if (session_id != 0)
+    rime_api->destroy_session(session_id);
   // spec 077: drop ShiftState so no stale state remains if TSF holds a
   // WeaselSessionId that maps to a recycled ipc_id later.
   m_shiftState.erase(ipc_id);
@@ -529,7 +666,16 @@ BOOL RimeWithWeaselHandler::ProcessKeyEvent(KeyEvent keyEvent,
   TryLazyRecovery();  // spec 053 R6 fix: auto-recover if deployer died
   if (m_disabled)
     return FALSE;
+  // ADR 0065: 记录「最近一次输入」—— 闸门判据的事实来源。
+  // 0 保留给「从未按过键」，所以真值写成 1。
+  const int64_t now_tick = static_cast<int64_t>(GetTickCount64());
+  m_last_input_tick.store(now_tick != 0 ? now_tick : 1,
+                          std::memory_order_relaxed);
   RimeSessionId session_id = to_session_id(ipc_id);
+  // ADR 0065: 孤儿会话（维护清空会话表后客户端缓存的 ipc_id）=> 惰性复活。
+  // 复活失败就沿用旧行为（session_id 仍为 0），不引入新的失败路径。
+  if (session_id == 0)
+    session_id = _TryResurrectSession(ipc_id);
   Bool handled = rime_api->process_key(session_id, keyEvent.keycode,
                                        expand_ibus_modifier(keyEvent.mask));
   // vim_mode when keydown only
@@ -546,6 +692,8 @@ BOOL RimeWithWeaselHandler::ProcessKeyEvent(KeyEvent keyEvent,
       rime_api->set_option(session_id, "ascii_mode", True);
     }
   }
+  // ADR 0065: 组合串状态变化 => 更新「有未上屏组合串的会话数」（闸门判据）。
+  _SyncSessionComposing(ipc_id, session_id);
   _Respond(ipc_id, eat);
   _UpdateUI(ipc_id);
   m_active_session = ipc_id;
@@ -572,7 +720,10 @@ void RimeWithWeaselHandler::CommitComposition(WeaselSessionId ipc_id) {
   TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return;
-  rime_api->commit_composition(to_session_id(ipc_id));
+  const RimeSessionId session_id = to_session_id(ipc_id);
+  rime_api->commit_composition(session_id);
+  // ADR 0065: 上屏之后没有未上屏组合串了（闸门判据的第三个事实）。
+  _SetSessionComposing(ipc_id, false);
   _UpdateUI(ipc_id);
   m_active_session = ipc_id;
 }
@@ -582,7 +733,10 @@ void RimeWithWeaselHandler::ClearComposition(WeaselSessionId ipc_id) {
   TryLazyRecovery();  // spec 053 R6 fix
   if (m_disabled)
     return;
-  rime_api->clear_composition(to_session_id(ipc_id));
+  const RimeSessionId session_id = to_session_id(ipc_id);
+  rime_api->clear_composition(session_id);
+  // ADR 0065: 组合串被清掉 => 不再阻塞同步。
+  _SetSessionComposing(ipc_id, false);
   _UpdateUI(ipc_id);
   m_active_session = ipc_id;
 }
@@ -1081,9 +1235,18 @@ bool RimeWithWeaselHandler::_MapVisibleIndexToEngine(size_t visible_index,
 }
 
 void RimeWithWeaselHandler::StartMaintenance() {
+  // ADR 0065: **先**置维护态标志，再清会话表。
+  //
+  // 维护窗口内 IPC 线程不许创建 / 销毁 rime 会话：云同步正在独占 userdb 的
+  // leveldb LOCK，这时 create_session / destroy_session 会去抢它 ⇒ 破坏
+  // export / import（与 ADR 0061 的 0xC0000005 同一类死法）。
+  m_maintenance_active.store(true, std::memory_order_relaxed);
   m_session_status_map.clear();
   // ADR 0062: 清表 => 活跃会话数归零（Finalize 里还会再置一次）。
   _RefreshLiveSessionCount();
+  // ADR 0065: 组合串随会话表一起清掉 => 计数归零。
+  m_session_composing.clear();
+  _RefreshComposingSessionCount();
   Finalize();
   _UpdateUI(0);
 }
@@ -1096,6 +1259,11 @@ void RimeWithWeaselHandler::EndMaintenance() {
   m_session_status_map.clear();
   // ADR 0062: 清表 => 活跃会话数归零。
   _RefreshLiveSessionCount();
+  // ADR 0065: 组合串计数归零。
+  m_session_composing.clear();
+  _RefreshComposingSessionCount();
+  // ADR 0065: 重新初始化完成之后才解除维护态。
+  m_maintenance_active.store(false, std::memory_order_relaxed);
 }
 
 void RimeWithWeaselHandler::SetOption(WeaselSessionId ipc_id,
@@ -1427,6 +1595,11 @@ bool RimeWithWeaselHandler::_IsDeployerRunning() {
 // m_disabled. Called at the top of every public m_disabled early-return
 // path so the user does not have to reboot WeaselServer to recover.
 void RimeWithWeaselHandler::TryLazyRecovery() {
+  // ADR 0065: 维护窗口内**绝不能** Initialize() —— 那会在云同步导出用户词典的
+  // 半途重新初始化 rime，去抢 userdb 的 leveldb LOCK，破坏本轮 export /
+  // import。
+  if (m_maintenance_active.load(std::memory_order_relaxed))
+    return;
   if (!m_disabled)
     return;
   if (_IsDeployerRunning()) {

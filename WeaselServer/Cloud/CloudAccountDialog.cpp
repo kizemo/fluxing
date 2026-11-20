@@ -13,6 +13,7 @@
 #include "CloudAccountHistory.h"
 #include "CloudAccountUi.h"
 #include "CloudAccountWidgets.h"
+#include "CloudAccountWindowState.h"
 #include "CloudCredentialStore.h"
 #include "CloudCrypto.h"
 #include "CloudTransport.h"
@@ -1027,6 +1028,69 @@ HWND g_windows[static_cast<int>(Role::kCount)] = {nullptr};
 // 验证码窗口对应的邮箱（UI 线程独占，不需要加锁）。
 std::wstring g_verify_email;
 
+// ---------------------------------------------------------------------------
+// 窗口槽位表（ADR 0066）
+// ---------------------------------------------------------------------------
+//
+// 槽位表**独立**一把锁，只保护 g_windows[]：
+//   · 不能复用 impl_->mutex（那是控制器状态锁）—— UnregisterWindow 会取它，
+//     在同一把锁下调用就是自锁；反过来「持槽位锁再去取控制器锁」也会把
+//     锁序问题引进这条路径。
+//   · 纪律：**任何** Win32 调用（IsWindow / SendMessageTimeout / PostMessage
+//     / DestroyWindow）都必须在**不持有**本锁时进行，否则被回调的窗口过程
+//     反过来要取本锁就会自死锁。
+std::mutex g_windows_mutex;
+
+// 诊断日志（ASCII）。本文件没有既有日志设施 ⇒ 用 OutputDebugStringW，
+// 做法与 WeaselServer/PhrasesDialogIPC.cpp 保持一致。
+void LogAccountDlg(const std::wstring& message) {
+  ::OutputDebugStringW((L"[FluxingAccountDlg] " + message + L"\n").c_str());
+}
+
+// 读槽位（锁内拷出；调用方**不**持锁）。
+HWND SlotGet(Role role) {
+  std::lock_guard<std::mutex> lock(g_windows_mutex);
+  return g_windows[static_cast<int>(role)];
+}
+
+// 写槽位（锁内）。
+void SlotSet(Role role, HWND hwnd) {
+  std::lock_guard<std::mutex> lock(g_windows_mutex);
+  g_windows[static_cast<int>(role)] = hwnd;
+}
+
+// 只在槽位**确实指向** hwnd 时清（幂等）。
+// 旧窗口晚到的 WM_DESTROY 因此不会误清新窗口的槽位。
+bool SlotClearIfMatches(Role role, HWND hwnd) {
+  std::lock_guard<std::mutex> lock(g_windows_mutex);
+  HWND& slot = g_windows[static_cast<int>(role)];
+  if (slot != hwnd)
+    return false;
+  slot = nullptr;
+  return true;
+}
+
+// 探活：给窗口发 WM_NULL，kSlotProbeTimeoutMs 内不答应就当作「不响应」。
+// 阈值 200 ms 来自 CloudAccountWindowState.h（生产与单测共用同一份）。
+// 正常窗口的 WM_NULL 是同步直达（微秒级），200 ms 只在窗口真的卡住时才耗满。
+bool ProbeResponsive(HWND hwnd) {
+  if (hwnd == nullptr)
+    return false;
+  const DWORD_PTR result = ::SendMessageTimeoutW(
+      hwnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG,
+      ::fluxing::account_window::kSlotProbeTimeoutMs, nullptr);
+  return result != 0;
+}
+
+// 丢弃陈旧槽位里的旧句柄：先清槽位（幂等），再**异步**请它关闭。
+// 刻意不直接 DestroyWindow —— 探活失败意味着它可能正卡住，同步销毁会把
+// UI 线程一起挂住；PostMessage 只排队，不阻塞。
+void DiscardStaleWindow(Role role, HWND hwnd) {
+  SlotClearIfMatches(role, hwnd);
+  if (::IsWindow(hwnd))
+    ::PostMessageW(hwnd, WM_CLOSE, 0, 0);
+}
+
 void CreateWidgets(HWND hwnd, Role role) {
   const std::vector<AccountWidgetSpec> specs = AccountWidgets(role);
   for (size_t i = 0; i < specs.size(); ++i) {
@@ -1220,7 +1284,12 @@ LRESULT CALLBACK WndProc(HWND hwnd,
               return 0;
             }
             case kIdClose:
-              ::DestroyWindow(hwnd);
+              // 统一走「投递 WM_CLOSE」这一条路（2026-11-20 真机缺陷）：
+              // 在按钮自己的 WM_LBUTTONUP 尚未返回时同步 DestroyWindow(parent)
+              // 会把**正在处理消息的那个按钮控件**一起销毁，关闭按钮因此失灵。
+              // PostMessage 只排队 ⇒ 等按钮这条消息走完，WM_CLOSE 才被派发，
+              // 由 WM_CLOSE → DestroyWindow 完成销毁。
+              ::PostMessageW(hwnd, WM_CLOSE, 0, 0);
               return 0;
             default:
               break;
@@ -1243,7 +1312,12 @@ LRESULT CALLBACK WndProc(HWND hwnd,
                                                  CloudStatusScope::kVerify);
               return 0;
             case kIdClose:
-              ::DestroyWindow(hwnd);
+              // 统一走「投递 WM_CLOSE」这一条路（2026-11-20 真机缺陷）：
+              // 在按钮自己的 WM_LBUTTONUP 尚未返回时同步 DestroyWindow(parent)
+              // 会把**正在处理消息的那个按钮控件**一起销毁，关闭按钮因此失灵。
+              // PostMessage 只排队 ⇒ 等按钮这条消息走完，WM_CLOSE 才被派发，
+              // 由 WM_CLOSE → DestroyWindow 完成销毁。
+              ::PostMessageW(hwnd, WM_CLOSE, 0, 0);
               return 0;
             default:
               break;
@@ -1263,7 +1337,12 @@ LRESULT CALLBACK WndProc(HWND hwnd,
               return 0;
             }
             case kIdClose:
-              ::DestroyWindow(hwnd);
+              // 统一走「投递 WM_CLOSE」这一条路（2026-11-20 真机缺陷）：
+              // 在按钮自己的 WM_LBUTTONUP 尚未返回时同步 DestroyWindow(parent)
+              // 会把**正在处理消息的那个按钮控件**一起销毁，关闭按钮因此失灵。
+              // PostMessage 只排队 ⇒ 等按钮这条消息走完，WM_CLOSE 才被派发，
+              // 由 WM_CLOSE → DestroyWindow 完成销毁。
+              ::PostMessageW(hwnd, WM_CLOSE, 0, 0);
               return 0;
             default:
               break;
@@ -1290,7 +1369,12 @@ LRESULT CALLBACK WndProc(HWND hwnd,
               return 0;
             }
             case kIdClose:
-              ::DestroyWindow(hwnd);
+              // 统一走「投递 WM_CLOSE」这一条路（2026-11-20 真机缺陷）：
+              // 在按钮自己的 WM_LBUTTONUP 尚未返回时同步 DestroyWindow(parent)
+              // 会把**正在处理消息的那个按钮控件**一起销毁，关闭按钮因此失灵。
+              // PostMessage 只排队 ⇒ 等按钮这条消息走完，WM_CLOSE 才被派发，
+              // 由 WM_CLOSE → DestroyWindow 完成销毁。
+              ::PostMessageW(hwnd, WM_CLOSE, 0, 0);
               return 0;
             default:
               break;
@@ -1317,7 +1401,12 @@ LRESULT CALLBACK WndProc(HWND hwnd,
               controller.SubmitDeleteCloudData();
               return 0;
             case kIdClose:
-              ::DestroyWindow(hwnd);
+              // 统一走「投递 WM_CLOSE」这一条路（2026-11-20 真机缺陷）：
+              // 在按钮自己的 WM_LBUTTONUP 尚未返回时同步 DestroyWindow(parent)
+              // 会把**正在处理消息的那个按钮控件**一起销毁，关闭按钮因此失灵。
+              // PostMessage 只排队 ⇒ 等按钮这条消息走完，WM_CLOSE 才被派发，
+              // 由 WM_CLOSE → DestroyWindow 完成销毁。
+              ::PostMessageW(hwnd, WM_CLOSE, 0, 0);
               return 0;
             default:
               break;
@@ -1335,16 +1424,35 @@ LRESULT CALLBACK WndProc(HWND hwnd,
       return 0;
 
     case WM_CLOSE:
+      // 唯一的销毁入口：所有关闭触发点（关闭按钮 / 标题栏 X）都投递 WM_CLOSE
+      // 到这里，由本处理器统一 DestroyWindow（不再有第二条销毁路径）。
       ::DestroyWindow(hwnd);
       return 0;
 
     case WM_DESTROY: {
       const Role role = RoleOf(hwnd);
+      // ① **先**清槽位：UnregisterWindow 要取控制器状态锁（impl_->mutex），
+      //    它一旦阻塞，槽位还没清 ⇒ 第二次进入菜单就会复用这个半死窗口
+      //    （2026-11-20 真机缺陷：已登录窗口点关闭关不掉）。
+      if (SlotClearIfMatches(role, hwnd)) {
+        LogAccountDlg(std::wstring(L"WM_DESTROY: cleared slot for ") +
+                      ClassNameFor(role));
+      }
+      // ② 再从控制器登记表注销（取 impl_->mutex）。此刻**不持有**槽位锁
+      //    ⇒ 不存在「槽位锁 → 控制器锁」的嵌套取锁。
       CloudAccountController::Instance().UnregisterWindow(hwnd);
-      HWND& slot = g_windows[static_cast<int>(role)];
-      if (slot == hwnd)
-        slot = nullptr;
       return 0;
+    }
+
+    case WM_NCDESTROY: {
+      // 双保险：即使 WM_DESTROY 没走到（例如窗口在创建过程中被销毁），
+      // 槽位也不能残留指向死句柄。
+      const Role role = RoleOf(hwnd);
+      if (SlotClearIfMatches(role, hwnd)) {
+        LogAccountDlg(std::wstring(L"WM_NCDESTROY: cleared slot for ") +
+                      ClassNameFor(role));
+      }
+      return ::DefWindowProcW(hwnd, message, wparam, lparam);
     }
   }
   return ::DefWindowProcW(hwnd, message, wparam, lparam);
@@ -1374,16 +1482,30 @@ bool EnsureClass() {
 }
 
 HWND CreateOrShow(Role role) {
-  HWND& hwnd = g_windows[static_cast<int>(role)];
-  if (hwnd != nullptr && !::IsWindow(hwnd)) {
-    // 缓存的句柄已失效(窗口被销毁但 WM_DESTROY 没走到本缓存): 丢掉重建,
-    // 否则此后每次点击都只是对一个死句柄置前。
-    hwnd = nullptr;
-  }
-  if (hwnd != nullptr) {
-    EnsureWindowShown(hwnd);
-    ::SetForegroundWindow(hwnd);
-    return hwnd;
+  bool rebuilt = false;
+  HWND existing = SlotGet(role);
+  if (existing != nullptr) {
+    // 复用前**探活**：光判 IsWindow 不够 —— 半死窗口（销毁流程卡住 / 消息
+    // 循环挂起）仍然 IsWindow==TRUE，但关闭按钮已经点不动了。
+    const bool is_window = ::IsWindow(existing) != FALSE;
+    const bool responsive = is_window ? ProbeResponsive(existing) : false;
+    const ::fluxing::account_window::SlotState state =
+        ::fluxing::account_window::ClassifySlot(true, is_window, responsive);
+    if (::fluxing::account_window::SlotReusable(state)) {
+      EnsureWindowShown(existing);
+      ::SetForegroundWindow(existing);
+      return existing;
+    }
+    // 陈旧槽位：丢弃旧句柄并重建（诊断留痕）。
+    std::wstring detail = L"stale slot detected (is_window=";
+    detail += (is_window ? L"1" : L"0");
+    detail += L", responsive=";
+    detail += (responsive ? L"1" : L"0");
+    detail += L"), discarding ";
+    detail += ClassNameFor(role);
+    LogAccountDlg(detail);
+    DiscardStaleWindow(role, existing);
+    rebuilt = true;
   }
   if (!EnsureClass())
     return nullptr;
@@ -1393,17 +1515,22 @@ HWND CreateOrShow(Role role) {
   AccountClientSize(role, &width, &height);
   RECT rect = {0, 0, width, height};
   ::AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
-  hwnd = ::CreateWindowExW(
+  HWND hwnd = ::CreateWindowExW(
       WS_EX_APPWINDOW, ClassNameFor(role), TitleFor(role), WS_OVERLAPPEDWINDOW,
       CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left,
       rect.bottom - rect.top, nullptr, nullptr, ::GetModuleHandleW(nullptr),
       reinterpret_cast<LPVOID>(static_cast<INT_PTR>(role)));
   if (hwnd == nullptr)
     return nullptr;
+  // 新窗口登记进槽位表（锁内写；锁外做一切 Win32 调用）。
+  SlotSet(role, hwnd);
+  if (rebuilt) {
+    LogAccountDlg(std::wstring(L"rebuilt window: ") + ClassNameFor(role));
+  }
   EnsureWindowShown(hwnd);
   if (role != Role::kAccount) {
     // 子窗口摆在主窗口正中（否则会跟主窗口叠在一起，找不到）。
-    widgets::CenterOnOwner(hwnd, g_windows[static_cast<int>(Role::kAccount)]);
+    widgets::CenterOnOwner(hwnd, SlotGet(Role::kAccount));
   }
   ::SetForegroundWindow(hwnd);
   return hwnd;
@@ -1429,7 +1556,7 @@ void ShowRegisterWindow() {
   HWND hwnd = CreateOrShow(Role::kRegister);
   if (hwnd == nullptr)
     return;
-  HWND owner = g_windows[static_cast<int>(Role::kAccount)];
+  HWND owner = SlotGet(Role::kAccount);
   HWND email = ::GetDlgItem(hwnd, kIdEmail);
   if (email != nullptr && owner != nullptr)
     ::SetWindowTextW(email, ReadControlText(owner, kIdEmail).c_str());
@@ -1439,7 +1566,7 @@ void ShowForgotWindow() {
   HWND hwnd = CreateOrShow(Role::kForgot);
   if (hwnd == nullptr)
     return;
-  HWND owner = g_windows[static_cast<int>(Role::kAccount)];
+  HWND owner = SlotGet(Role::kAccount);
   HWND email = ::GetDlgItem(hwnd, kIdEmail);
   if (email != nullptr && owner != nullptr)
     ::SetWindowTextW(email, ReadControlText(owner, kIdEmail).c_str());
@@ -1456,7 +1583,7 @@ HWND ShowDevice() {
 }
 
 HWND ActiveHwnd() {
-  return g_windows[static_cast<int>(Role::kAccount)];
+  return SlotGet(Role::kAccount);
 }
 
 }  // namespace account_dialog

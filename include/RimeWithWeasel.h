@@ -5,6 +5,7 @@
 #include <string>
 #include <mutex>
 #include <atomic>
+#include <cstdint>
 #include <unordered_map>
 // spec 090: 候选词屏蔽名单(std::unordered_set)与页内索引映射(std::vector)。
 #include <unordered_set>
@@ -68,7 +69,12 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   // ProcessKeyEvent() 把 0 交给 process_key => 按键被吞。
   // 因此：**没有活跃输入会话**时才允许进入维护。
   //
-  // 只读一个无锁原子量：不碰会话表、不做 I/O、不加锁（宪法 P2）=>
+  // ADR 0065 修订 ADR 0062 决策 1：判据改为「**最近有输入** 或 **有未上屏
+  // 组合串**」才关闭闸门 ——
+  // 单纯激活输入法（有会话但一个键都没打）不再阻塞同步。 判据纯函数在
+  // include/FluxingMaintenanceGate.h（单一事实源，constitution R7）。
+  //
+  // 只读无锁原子量：不碰会话表、不做 I/O、不加锁（宪法 P2）=>
   // 可从云同步的后台线程安全调用。
   // reason 写入 ASCII 原因令牌（中文文案在云侧翻译，见 CloudUserDictIo.h）。
   bool CanEnterMaintenance(std::string* reason);
@@ -242,8 +248,15 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   bool _MapVisibleIndexToEngine(size_t visible_index, size_t* engine_index);
   std::wstring _CurrentSchemaIdW(RimeSessionId session_id);
 
+  // ADR 0065: 用 find 而不是 operator[]。
+  // operator[] 在键不存在时会**插入**一个 session_id == 0 的假条目 —— 那正是
+  // 「一个从不存在的 ipc_id 就能把同步永久堵死」的来源之一。找不到就返回 0，
+  // 绝不插入。
   RimeSessionId to_session_id(WeaselSessionId ipc_id) {
-    return m_session_status_map[ipc_id].session_id;
+    auto it = m_session_status_map.find(ipc_id);
+    if (it == m_session_status_map.end())
+      return 0;
+    return it->second.session_id;
   }
   // 批次 H:解析「这次操作该作用到哪个 rime 会话」。
   //
@@ -291,6 +304,32 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   std::atomic<int> m_live_session_count{0};
   // ADR 0062: 重算活跃会话数（只在会话生命周期事件上调用）。
   void _RefreshLiveSessionCount();
+  // ADR 0065: 最近一次按键的 GetTickCount64() 毫秒值。0 = 从未按过键。
+  //
+  // 闸门判据的事实来源之一：TSF 文本服务**激活即建会话**（与是否按键无关），
+  // 且长期驻留的宿主进程会一直持有一个会话 =>「有会话」不等于「用户在打字」。
+  // 改为「最近有输入」才阻塞同步（判据纯函数在 FluxingMaintenanceGate.h）。
+  std::atomic<int64_t> m_last_input_tick{0};
+  // ADR 0065: 当前持有未上屏组合串的会话数（闸门判据的第三个事实）。
+  std::atomic<int> m_composing_session_count{0};
+  // ADR 0065: 维护态进行中标志。维护窗口内 IPC 线程不许创建 / 销毁 rime 会话
+  // （否则会抢 userdb 的 leveldb LOCK，破坏 export / import）。
+  std::atomic<bool> m_maintenance_active{false};
+  // ADR 0065: per-session「有未上屏组合串」标记（ipc_id -> 是否正在组合）。
+  // 组合串的存活期比普通按键长（finalize() 会把它丢掉），故单独成事实。
+  std::map<WeaselSessionId, bool> m_session_composing;
+  // ADR 0065: per-session ascii 模式（跨维护保留）。维护会清空会话表，复活时
+  // 需要用它把该会话原来的中 / 英状态恢复回去。
+  std::map<WeaselSessionId, bool> m_session_ascii_modes;
+  // ADR 0065: 重算组合串计数（只在组合串状态变化时调用）。
+  void _RefreshComposingSessionCount();
+  // ADR 0065: 记录 / 清除某个会话的「有未上屏组合串」状态。
+  void _SetSessionComposing(WeaselSessionId ipc_id, bool composing);
+  // ADR 0065: 读一次引擎状态，同步组合串标记与 ascii 模式镜像。
+  void _SyncSessionComposing(WeaselSessionId ipc_id, RimeSessionId session_id);
+  // ADR 0065: 惰性复活 —— 维护清空会话表后，客户端缓存的 ipc_id 成了孤儿。
+  // 在这里用保留的方案 id 重新建一个 rime 会话；失败就返回 0（保持旧行为）。
+  RimeSessionId _TryResurrectSession(WeaselSessionId ipc_id);
   // spec 045: cached scheme + option bools (refreshed by _GetStatus).
   std::string m_current_schema_id;
   // spec 045 修(2026-11-09):per-session 的当前方案(WeaselSessionId -> schema id)。
