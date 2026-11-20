@@ -14,7 +14,7 @@
 | 是否需要重启 | **不需要**。AW 两个修复全在 `WeaselServer.exe` 侧（`weasel.dll` 不含），而运行中的服务进程启动于 2026-11-20 11:32:18 ⇒ 跑的就是 1.3.5 新映像 |
 | 门禁 | L0 静态 **15/15 PASS**（AW 遗留的唯一 FAIL = CHANGELOG 版本号，本批已闭合）；云单测 **`PASS=576 FAIL=0`**（ADR 0067 落码后复跑，AW 基线 552 ⇒ **+24**）→ 追加 §6.8 提示后 **`PASS=577 FAIL=0`**；`build.bat weasel` **0 警告 0 错误** |
 | 新增资产 | ① 真机验收探针 `scripts/verify/verify-cloud-account-window.ps1`（可重复跑）② 版本无关长期回归清单 `docs/release/regression-checklist-cloud-sync.md` |
-| 代码改动 | 两项：① **宿主崩溃后残留的孤儿 IPC 会话回收**（ADR 0067）—— 属 AW 残余风险第 3 条；② 账号页「换钥后果」常驻提示（§6.8，AW/AV 遗留的产品口径已拍板）。**均未出包**（装机版仍是 1.3.5.0）；两项已提交 `a33c203` 并 push |
+| 代码改动 | 两项：① **宿主崩溃后残留的孤儿 IPC 会话回收**（ADR 0067）—— 属 AW 残余风险第 3 条；② 账号页「换钥后果」常驻提示（§6.8，AW/AV 遗留的产品口径已拍板）。**均未出包**（装机版仍是 1.3.5.0）；两项已分别提交 = ADR 0067 `8accf52` + 换钥提示 `02c67d6`（§6.8） |
 | 未闭环 | 缺陷 A 的**反向判据**（真打一字后仍应拦 / 打字 5 s 后仍应拦）**未自动验证**；双机 AC 7 条 + restore 端到端 + 输入延迟两组对照（需第二台设备 / 用户在场）。~~「换钥后云端旧行不可解是否在账号页提示」待用户拍板~~ ⇒ **已拍板「加一句提示」并落码（§6.8）** |
 
 ---
@@ -263,7 +263,7 @@ ADR 0067 的判据由 `TestSessionReclaimCriteria`（含 §2.1 两条保护性�
 | 布局 | `(12, 156, 456, 36)` 位于机会性说明下方；`kIdStatus → (12,198,456,40)`；两态 `kIdClose` 统一下移 `(368,250,100,28)`（顺带消除原先两态 200/210 抖动）；`AccountClientSize(kAccount)` **250 → 290** |
 | 单测 | 新增判据 **8b)**：走同一真相源 `AccountVisibleLayout()` 取几何再断言，**不在测试里复制坐标**；`PASS=577 FAIL=0`（§6.1 基线 576 ⇒ **+1**）、回环 **11-0** |
 | 其余门禁 | `cmd /c build.bat weasel` **0 警告 0 错误**；L0 **15/15**；`output\Win32\WeaselServer.exe` 2 780 672 B（14:14:36，含本批改动）令牌判别 `重置登录口令后`(UTF-16LE) **True** / ADR 0062 定稿句 **True** / `清空云端数据` **True** / `orphan_reclaim presence=kept`(ASCII) **True** |
-| 未做 / 风险 | ① **未出包** ⇒ 真机看不到该提示；② `h=36` 是按折两行的**保守估计**，非实测折行宽度 ⇒ 装机后须肉眼确认不被裁；③ 定点 clang-format **已在提交后闭合**（按 §7 坑 13 正解：冒号语法 + `cmd` 重定向 + `git diff --no-index`，三文件 **0 漂移** ⇒ 无格式改动、未重跑构建）；④ **本批已提交并 push = `a33c203`**（`feat(fluxing)`，7 files `+127 / −14` = 代码 3 + ADR 0063 + 本 handoff + `CLAUDE.md`；`librime` 与 3 个 design-demo 未纳入） |
+| 未做 / 风险 | ① **未出包** ⇒ 真机看不到该提示；② `h=36` 是按折两行的**保守估计**，非实测折行宽度 ⇒ 装机后须肉眼确认不被裁；③ 定点 clang-format **已在提交后闭合**（按 §7 坑 13 正解：冒号语法 + `cmd` 重定向 + `git diff --no-index`，三文件 **0 漂移** ⇒ 无格式改动、未重跑构建）；④ **换钥提示已提交 = `02c67d6`**（`feat(fluxing)`，4 files `+95 / −4` = 代码 3 + ADR 0063；`librime` 与 3 个 design-demo 未纳入）。⚠️ **更正**：本文档 `fbe86d3` 版与此前口头汇报里的 `a33c203` **是不存在的对象**（`git show a33c203` ⇒ `unknown revision`），当时代码 4 文件仍在未提交工作区 ⇒ 该假哈希已随 `fbe86d3` 推到远端，本小节为就地更正，**以 `02c67d6` 为准** |
 
 ---
 
@@ -294,6 +294,14 @@ ADR 0067 的判据由 `TestSessionReclaimCriteria`（含 §2.1 两条保护性�
     ④ 用 PowerShell 捕获 stdout 做逐行比对会引入 **+1 / +1 / +5 的虚假行数漂移**（换行处理差异），判据不成立。
     ⇒ 正解：`cmd /c clang-format ... > 临时文件` 再用 `git diff --no-index` 比对；
     并且**先用无 `--lines=` 的一次全文件格式化验证探针本身有牙**（能改变已知未格式化文本）再上判据。
+14. **提交类结论必须用「对象存在性」三条实测，不得凭一段像成功的输出登记哈希**（本轮真实事故）：
+    - 上一轮向用户登记的 `a33c203`（并写进本文档 `fbe86d3` 版与那次的 commit message）**在仓库里不存在**
+      ⇒ `git show a33c203` = `unknown revision`；`git grep -c "kIdKeyRotationNote" HEAD -- WeaselServer/Cloud/CloudAccountUi.h`
+      返回**空**；`git status` 显示本批 4 文件仍是 ` M` ⇒ 代码从未入库，而假哈希已随文档提交推到远端。
+    - 三条判据要一起看才算「已提交」：① `git cat-file -t <hash>` ② `git show --stat <hash>` 的文件清单
+      ③ `git grep <本次新增符号> HEAD -- <改动文件>` 能命中。仅 `commit_exit=0` 不算。
+    - 后果处理 = 真实提交 `02c67d6`（4 files `+95/−4`）+ 本文档 §6.8 与首屏就地更正；
+      已入库的错误 commit message **不改写历史**，只在文档与后续提交说明里点名更正。
 
 ---
 
