@@ -1,0 +1,1 @@
+STUB_WROTE dialog_client=0,0,840,508

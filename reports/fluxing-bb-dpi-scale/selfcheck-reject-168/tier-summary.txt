@@ -1,0 +1,6 @@
+TIER_OUTDIR=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-dpi-scale\selfcheck-reject-168
+EXPECTED_DPI=168  (scale=175%)
+DESKTOP=Default
+ACTUAL_DPI=96  LOGPIXELSX=96  REG_LogPixels=168  REG_AppliedDPI=144
+ABORT_WRONG_DPI applieddpi=144 expected=168
+  the scale is registered but not applied -- set the preset, and sign out/in if AppliedDPI still disagrees

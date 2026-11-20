@@ -1,0 +1,5 @@
+TIER_OUTDIR=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-dpi-scale\selftest-guard
+EXPECTED_DPI=168  (scale=175%)
+DESKTOP=Default
+ACTUAL_DPI=144  LOGPIXELSX=144  REG_LogPixels=168  REG_AppliedDPI=144
+ABORT_WRONG_DPI current=144 expected=168

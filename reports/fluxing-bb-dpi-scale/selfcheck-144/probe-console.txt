@@ -1,0 +1,37 @@
+[OK] desktop-guard :: thread desktop = Default
+[OK] precondition :: pid=77332 started=2026-11-20 20:37:56 ver=1.3.7.0
+[INFO] server-window :: hwnd=3474044 class='FluxingQuickPanel_v3'
+[INFO] server-window :: hwnd=11014576 class='ATL:00F19DE0'
+[INFO] server-window :: hwnd=1051666 class='TrayIconClass'
+[INFO] server-window :: hwnd=9634988 class='WeaselIPCWindow_1.0'
+[INFO] server-window :: hwnd=4456992 class='GDI+ Hook Window Class'
+[OK] open :: hwnd=1376834 window=38,38,780,529 client=0,0,720,435 clientW=720 clientH=435 dpi=96
+[INFO] child :: id=1001 cls=Edit vis=False rect=181,98,279x39 len=0
+[INFO] child :: id=1002 cls=Edit vis=False rect=181,149,366x39 len=0
+[INFO] child :: id=1003 cls=Button vis=False rect=67,245,210x42 len=2
+[INFO] child :: id=1004 cls=Button vis=True rect=67,188,210x42 len=4
+[INFO] child :: id=1006 cls=Static vis=True rect=67,380,684x60 len=11
+[INFO] child :: id=1010 cls=Button vis=True rect=601,458,150x42 len=2
+[INFO] child :: id=1013 cls=Button vis=False rect=289,245,210x42 len=2
+[INFO] child :: id=1016 cls=Button vis=True rect=289,188,210x42 len=4
+[INFO] child :: id=1017 cls=Static vis=True rect=67,245,684x30 len=10
+[INFO] child :: id=1018 cls=ComboBox vis=False rect=544,98,207x26 len=0
+[INFO] child :: id=1019 cls=Button vis=False rect=181,200,366x30 len=14
+[INFO] child :: id=1020 cls=Static vis=True rect=67,140,684x33 len=15
+[INFO] child :: id=1021 cls=Button vis=False rect=511,245,240x42 len=4
+[INFO] child :: id=1022 cls=Static vis=True rect=67,281,684x27 len=24
+[INFO] child :: id=1025 cls=Static vis=False rect=67,104,105x30 len=4
+[INFO] child :: id=1026 cls=Static vis=False rect=67,155,105x30 len=2
+[INFO] child :: id=1027 cls=Static vis=True rect=67,104,684x30 len=6
+[INFO] child :: id=1034 cls=Static vis=False rect=466,104,72x30 len=2
+[INFO] child :: id=1035 cls=Static vis=True rect=67,317,684x54 len=37
+[OK] note :: found id=1035 cls=Static vis=True rect=67,317,684x54 chars=37
+[INFO] measure :: face='宋体' dpi=96 font=25821625
+[OK] measure :: single-line w=666 h=18 | wordbreak w=0 h=0 | editcontrol+wordbreak w=0 h=0 | wrapped-into-real-box(684) w=666 h=18
+[OK] measure :: lineHeight=18 -> lines(wordbreak)=0 lines(edit)=0 lines(inBox)=1 | controlH=54
+[PASS] judge-A1 :: TEXT NEEDS 18px, BOX GIVES 54px -> HEADROOM 36px -> NOT CLIPPED
+[INFO] control-method :: id=1022 chars=24 box=684x27 singleW=432 singleH=18 inBoxH=18 lines=1 -> matches the documented single-line fact (method has teeth)
+[OK] pixels-note :: height=54 bg=240,240,240 bands=0-16 bandCount=1 lastBandTouchesBottom=False
+[INFO] cleanup :: window closed, IsWindow=False
+REPORT: F:\soft\00selfmade\rime_claude\reports\fluxing-bb-dpi-scale\selfcheck-144\report.json
+VERDICT=A1_NOT_CLIPPED

@@ -1,0 +1,629 @@
+==== TestFluxingCloud · spec 100 阶段 B（契约与客户端纯逻辑）====
+T201 信封编解码 / T202 条目合并 / T203 HLC 定序 / T204 共享生产头
+[1] 冒烟：测试工程可运行
+  [PASS] 算术基线
+  [PASS] UTF-8 字面量为 3 字节（/utf-8 生效）
+  [PASS] 生产头 FluxingCloudEnvelope.h 已被 include（非空错误名）
+[2] 链接：winhttp.lib
+  [PASS] WinHttpOpen 返回有效会话句柄
+[3] 链接：bcrypt.lib
+  [PASS] BCryptOpenAlgorithmProvider(SHA256)
+  [PASS] BCryptGetProperty(OBJECT_LENGTH) 返回正数
+[4] 链接：advapi32.lib
+  [PASS] RegOpenKeyExW(HKCU\Software) 成功
+[5] base64 严格模式
+  [PASS] 256 字节全量往返一致
+  [PASS] 长度 0/1/2/3/4 字节往返一致（三种 padding 分支都覆盖）（5 项）
+  [PASS] 严格模式接受合法 padding「QQ==」
+  [PASS] 严格模式接受合法 padding「QUI=」
+  [PASS] 反例：长度非 4 的倍数「abc」被拒
+  [PASS] 反例：非法字符「ab$d」被拒
+  [PASS] 反例：填充位非 0「QR==」被拒
+  [PASS] 反例：'=' 出现在组内前两位「Q=Q=」被拒
+  [PASS] 反例：以 '=' 打头「====」被拒
+  [PASS] 空串解出空内容
+[6] 条目类型与错误名
+  [PASS] ItemTypeName(kConfig) == config
+  [PASS] ItemTypeName(kPhrases) == phrases
+  [PASS] ItemTypeName(kUserDb) == userdb
+  [PASS] ParseItemType(userdb) 往返
+  [PASS] 反例：ParseItemType(bogus) 被拒
+  [PASS] config 整份覆盖（不逐条合并）
+  [PASS] phrases 逐条合并
+  [PASS] userdb 逐条合并
+[7] 信封往返（T201 ①）
+  [PASS] SealEnvelope 返回 kOk
+  [PASS] nonce 为 12 字节
+  [PASS] cipher 长度 == 明文 + 16B tag
+  [PASS] 信封携带的 item_key / type / hlc 与入参一致
+  [PASS] SerializeEnvelope 返回 kOk
+  [PASS] 线格式首行为 magic「v1」
+  [PASS] ParseEnvelope 返回 kOk（正向基线）
+  [PASS] 解析后 item_key 一致
+  [PASS] 解析后 type 一致
+  [PASS] 解析后 hlc 一致
+  [PASS] 解析后 nonce 一致
+  [PASS] 解析后 cipher 一致
+  [PASS] OpenEnvelope 返回 kOk
+  [PASS] 解密后明文逐字节一致
+[8] 字段转义（反斜杠 / TAB / LF）
+  [PASS] 含反斜杠 / TAB / LF 的字段可封装
+  [PASS] device 里的 '\' 与 TAB 被转义（未污染行结构）
+  [PASS] 含转义字段的线格式可解析
+  [PASS] item_key 转义往返一致
+  [PASS] device 转义往返一致
+  [PASS] 转义字段仍能解密
+  [PASS] 转义字段明文一致
+[9] 信封反例：AAD 篡改 / 密文 / nonce / 载荷边界（T201 ②③④⑤）
+  [PASS] 基线信封已封好
+  [PASS] 反例②：hlc_ms +1 ⇒ kAuthFailed
+  [PASS] 反例②：hlc_counter +1 ⇒ kAuthFailed
+  [PASS] 反例②：type phrases→userdb ⇒ kAuthFailed
+  [PASS] 反例②：item_key 换文件名 ⇒ kAuthFailed
+  [PASS] 反例：密文首字节翻转 ⇒ kAuthFailed
+  [PASS] 反例：tag 末字节翻转 ⇒ kAuthFailed
+  [PASS] 反例：错误 enc_key ⇒ kAuthFailed
+  [PASS] 反例③：nonce 11 字节 ⇒ SerializeEnvelope 报 kBadNonce
+  [PASS] 反例③：nonce 11 字节 ⇒ OpenEnvelope 报 kBadNonce
+  [PASS] 线格式基行为 8 行
+  [PASS] 反例③：线格式 nonce 解出 8 字节 ⇒ kBadNonce
+  [PASS] 反例④：cipher 含非法 base64 字符 ⇒ kBadBase64
+  [PASS] 反例④：cipher base64 被截断一个字符 ⇒ kBadBase64
+  [PASS] 边界⑤：空载荷可封装（kOk）
+  [PASS] 边界⑤：空载荷 cipher 恰为 16B tag
+  [PASS] 边界⑤：空载荷可解封
+  [PASS] 边界⑤：空载荷解出空串
+  [PASS] 边界⑤：kMaxPayloadBytes + 1 ⇒ kTooLong
+  [PASS] 边界⑤：恰好 kMaxPayloadBytes ⇒ kOk（上限判定不能写成 >=）
+  [PASS] 边界⑤：上限载荷可解封
+  [PASS] 边界⑤：上限载荷逐字节还原
+[10] 信封线格式反例
+  [PASS] 基线 8 行线格式可解析（正向基线，下面每条失败才可归因）
+  [PASS] 反例：空输入 ⇒ kEmpty
+  [PASS] 反例：magic v2 ⇒ kBadMagic
+  [PASS] 反例：缺 cipher 行（7 行）⇒ kBadField
+  [PASS] 反例：多出一行（9 行）⇒ kBadField
+  [PASS] 反例：item_key / type 两行交换 ⇒ kBadField（行序严格）
+  [PASS] 反例：type=bogus ⇒ kBadType
+  [PASS] 反例：hlc_ms=abc ⇒ kBadNumber
+  [PASS] 反例：hlc_counter=70000 溢出 u16 ⇒ kBadNumber
+  [PASS] 反例：未知转义 \q ⇒ kBadEscape
+[11] HLC 全序（T203 ①⑤）
+  [PASS] 构造 3×3×2 = 18 个版本号（三维度全组合）
+  [PASS] ① 不可自反：!less(x,x)（18 项）
+  [PASS] ① 反对称：cmp(a,b) == -cmp(b,a)（324 项）
+  [PASS] ① 18 个版本两两可区分（无并列）（153 项）
+  [PASS] ① 传递：less(a,b) && less(b,c) ⇒ less(a,c)（5832 项）
+  [PASS] ① 仅 ms 不同也能定序
+  [PASS] ① 仅 counter 不同也能定序
+  [PASS] ① 仅 device 不同也能定序
+  [PASS] ① std::sort(HlcLess) 结果非降
+  [PASS] ① 正序与逆序排序互为镜像（全序无并列）
+  [PASS] ⑤ 两台设备对同一组版本算出同一顺序（与到达排列无关）
+[12] HLC 本机时钟（T203 ②③④）
+  [PASS] ② 首次写入 ms = now_ms，counter = 0
+  [PASS] ② 写入携带本机 device
+  [PASS] ② 写入后 ms >= last_ms
+  [PASS] ③ 同毫秒再写 counter 自增到 1
+  [PASS] ③ 同毫秒第二次写入严格大于第一次
+  [PASS] ③ 墙钟抖动（含两次回拨）下版本号仍严格递增（5 项）
+  [PASS] ② ms 永不回退（回拨时沿用 last_ms）
+  [PASS] ③ counter 打满 0xFFFF ⇒ 推进 1ms 并归零
+  [PASS] ③ counter 打满后新版本仍严格大于旧版本
+  [PASS] ④ 收到更远的远端 ms 后本机 last_ms 抬升
+  [PASS] ④ 抬升后本机写入的 ms >= 远端 ms
+  [PASS] ④ 抬升后本机新版本严格大于远端版本
+  [PASS] ④ 同 ms 下远端 counter 更大 ⇒ 本机 counter 抬到远端值
+  [PASS] ④ 远端 counter 更小时本机 counter 不下调
+[13] 条目合并（T202 ①–⑤）
+  [PASS] ③ 异键取并集：3 + 2 ⇒ 4 个键
+  [PASS] 输出恒按 key 升序且每键只出现一次
+  [PASS] ① 同键不同版本取 HLC 更大者（a.txt 取 v2，ms 200 > 100）
+  [PASS] ⑤ 交换输入顺序结果相同（两端收敛）
+  [PASS] ② 同键同版本只保留一条
+  [PASS] ② 结果与输入顺序无关（确定性）
+  [PASS] ② 兜底规则确定：payload 字典序大者胜
+  [PASS] ④ 幂等：merge(x,x) == x
+  [PASS] ④ 幂等：对已升序集合仍成立
+  [PASS] ④ 结合律：merge(merge(a,b),c) == merge(a,merge(b,c))
+  [PASS] ④ 结合律结果仍是规范形态（升序唯一）
+  [PASS] 空 ⊕ 空 = 空
+  [PASS] a ⊕ 空 = a
+  [PASS] a ⊕ 空 == 空 ⊕ a
+  [PASS] ⑤ 两台设备交换全量后状态逐条一致
+[14] 条目表序列化
+  [PASS] 首行为 magic「fluxing-entries-v1」
+  [PASS] 每行（含末行）以 LF 结束
+  [PASS] 条目表往返解析 kOk
+  [PASS] 含 TAB/LF/CR/NUL 的 payload 与空 payload 都逐字节往返
+  [PASS] 逆序写入可解析
+  [PASS] 序列化不做隐式排序（顺序如实保留）
+  [PASS] 空表序列化为只有 magic 一行
+  [PASS] 空表可解析
+  [PASS] 空表解析为空
+  [PASS] 反例：空输入 ⇒ kEmpty
+  [PASS] 反例：magic v2 ⇒ kBadMagic
+  [PASS] 反例：字段不足 5 个 ⇒ kBadField
+  [PASS] 反例：空行 ⇒ kBadField（不静默跳过）
+  [PASS] 反例：payload 非 base64 ⇒ kBadBase64
+  [PASS] 反例：device 未知转义 ⇒ kBadEscape
+  [PASS] 反例：ms 溢出 u64 ⇒ kBadNumber
+[D1] T301 密钥派生：SHA-256 / HMAC / PBKDF2 / HKDF 标准向量
+  [PASS] SHA-256 空串向量
+  [PASS] SHA-256 "abc" 向量
+  [PASS] SHA-256 一百万个 'a' 向量
+  [PASS] HMAC-SHA256 RFC 4231 TC1
+  [PASS] HMAC-SHA256 RFC 4231 TC2
+  [PASS] HMAC-SHA256 RFC 4231 TC3
+  [PASS] HMAC-SHA256 RFC 4231 TC6（长密钥）
+  [PASS] PBKDF2-HMAC-SHA256 c=1 向量
+  [PASS] PBKDF2-HMAC-SHA256 c=2 向量
+  [PASS] PBKDF2-HMAC-SHA256 c=4096 向量
+  [PASS] PBKDF2 输出长度固定 32 字节
+  [PASS] HKDF-SHA256（info=fluxing-auth-v1）复算一致
+  [PASS] HKDF-SHA256（info=fluxing-enc-v1）复算一致
+  [PASS] 邮箱规范化：去空白 + 转小写
+  [PASS] 盐按规范化邮箱确定性派生（32 字节）
+  [PASS] DeriveKeys 成功
+  [PASS] 邮箱大小写不影响派生结果
+  [PASS] 迭代次数不同 ⇒ 派生结果不同
+  [PASS] auth_key 与 enc_key 相互分离（info 不同）
+  [PASS] 两把密钥各 32 字节
+  [PASS] PBKDF2 迭代次数常量 = 60 万
+  [PASS] 跨实现向量：DeriveKeys（生产迭代次数 60 万）成功
+  [PASS] 跨实现向量：盐与独立标准实现一致
+  [PASS] 跨实现向量：auth_key 与独立标准实现一致
+  [PASS] 跨实现向量：enc_key 与独立标准实现一致
+  [PASS] 反例：空口令 ⇒ 派生失败
+  [PASS] auth_key 的 base64 是 44 字符（32 字节）
+  [PASS] 设备标识是 16 位
+  [PASS] 设备标识是十六进制字符
+  [PASS] 两次生成的设备标识不同
+  [PASS] 口令缓冲可清零
+  [PASS] 密钥缓冲可清零（内容被抹掉并释放）
+[D2] 共用 JSON：严格解析与转义对称
+  [PASS] 登录响应体可解析
+  [PASS] 取字符串成员 access_token
+  [PASS] 取布尔成员 email_verified
+  [PASS] 取整数成员 expires_in
+  [PASS] 反例：类型不符（整数当字符串取）⇒ 失败
+  [PASS] 反例：键缺失 ⇒ 失败
+  [PASS] 错误体可解析
+  [PASS] 错误体里有 error 对象
+  [PASS] 可取到服务端的中文错误消息
+  [PASS] 畸形 JSON 全部被拒（7 例）（7 项）
+  [PASS] 嵌套深度超限 ⇒ 解析失败
+  [PASS] 小数可解析
+  [PASS] 小数不当作 int64
+  [PASS] 小数可按 double 取值
+  [PASS] Quote 产物可被解析
+  [PASS] Quote 与解析器对称（中文 + 转义往返一致）
+[D3] T302 传输层：URL / 重试 / 退避 / 路径编码
+  [PASS] BuildUrl 拼 base + path
+  [PASS] BuildUrl 归一化尾部斜杠
+  [PASS] 反例：非 http(s) base 被拒
+  [PASS] 反例：path 缺前导 / 被拒
+  [PASS] 反例：空 base 被拒
+  [PASS] 网络层失败 ⇒ 重试
+  [PASS] 5xx ⇒ 重试
+  [PASS] 429 ⇒ 重试
+  [PASS] 200 ⇒ 不重试
+  [PASS] 404 ⇒ 不重试
+  [PASS] 400 ⇒ 不重试
+  [PASS] 第 2 次失败仍可重试（max_retries=2）
+  [PASS] 超出重试次数 ⇒ 不再重试
+  [PASS] 退避基数 500ms
+  [PASS] 退避按次翻倍
+  [PASS] 退避按次翻倍（第三次）
+  [PASS] 退避封顶 8000ms
+  [PASS] 设备标识无需转义
+  [PASS] 空格 ⇒ %20
+  [PASS] 斜杠 ⇒ %2F
+[D4] T303 凭据编解码（纯函数）
+  [PASS] 凭据可编码
+  [PASS] 凭据可解码
+  [PASS] 编解码逐字段往返一致
+  [PASS] 反例：magic 被改 ⇒ 解码失败
+  [PASS] 反例：被截断 ⇒ 解码失败
+  [PASS] 反例：尾部多出字节 ⇒ 解码失败
+  [PASS] 脱敏：空串返回空
+  [PASS] 脱敏：只留首 2 尾 2，中间不可还原
+[D5] T303 Windows Credential Manager 往返（真实凭据库）
+  [PASS] 写入凭据到 Credential Manager
+  [PASS] 从 Credential Manager 读回
+  [PASS] 读回内容一致
+  [PASS] 删除凭据
+  [PASS] 删除后再读不到
+[D6] T304/T305 账号服务：登录 / 恢复 / 设备 / 撤销（假传输）
+  [PASS] 登录成功
+  [PASS] 登录后状态 = kLoggedIn
+  [PASS] 邮箱已规范化后入库
+  [PASS] email_verified=true 被消费
+  [PASS] 只发出一次请求
+  [PASS] 请求 = POST /v1/auth/login
+  [PASS] 请求体带 email 与 auth_key
+  [PASS] 请求体带 device_id
+  [PASS] 邮箱未验证也能登录
+  [PASS] 未验证邮箱时状态仍是 kLoggedIn
+  [PASS] email_verified=false 被如实消费
+  [PASS] 服务端 401 ⇒ 登录失败
+  [PASS] 失败时给出中文原因
+  [PASS] 失败后不是已登录态
+  [PASS] 没有凭据 ⇒ 恢复失败
+  [PASS] 恢复失败 ⇒ 回到未登录态（不崩溃）
+  [PASS] 从凭据库恢复登录态
+  [PASS] 恢复后状态 = kLoggedIn
+  [PASS] 可取到访问令牌
+  [PASS] 设备列表可拉取
+  [PASS] 设备列表字段解析正确
+  [PASS] 撤销设备成功
+  [PASS] 撤销走 DELETE /v1/devices/<device_id>
+  [PASS] 401 后自动刷新令牌并重试成功
+  [PASS] 请求序列共 3 次（列表 → 刷新 → 列表）
+  [PASS] 第 1 次是设备列表
+  [PASS] 第 2 次是刷新令牌
+  [PASS] 第 3 次重试设备列表
+  [PASS] 注册成功
+  [PASS] 解析出 account_id
+  [PASS] 注册后仍是未登录态（注册 ≠ 登录）
+  [PASS] 注册不写账号信息
+  [PASS] 注册不往凭据库写任何东西
+  [PASS] 注册顺带生成 device_id
+  [PASS] 注册只发一次请求
+  [PASS] 请求 = POST /v1/auth/register
+  [PASS] 邮箱已规范化进请求体
+  [PASS] 请求体带 auth_key
+  [PASS] 请求体带 device
+  [PASS] 请求体不含口令明文
+  [PASS] 5 位验证码被本地拒掉
+  [PASS] 本地拒掉时给出中文原因
+  [PASS] 非数字验证码被本地拒掉
+  [PASS] 非法验证码不发请求
+  [PASS] 非法验证码不改状态
+  [PASS] 6 位验证码验证成功
+  [PASS] 验证走 POST /v1/auth/verify
+  [PASS] 请求体带验证码
+  [PASS] 验证成功也不自动登录（仍需显式登录）
+  [PASS] 非法邮箱被本地拒掉
+  [PASS] 非法邮箱不发请求
+  [PASS] 已注册邮箱 ⇒ 注册失败
+  [PASS] 服务端中文原因透传
+  [PASS] 失败后仍是未登录态
+  [PASS] 失败不写凭据
+[D7] T304 同步编排：嵌套 HLC / 推送体 / 拉取 / 加解密 / 合并
+  [PASS] HlcToJson 输出 ms/counter/device
+  [PASS] HlcToJson 不使用扁平别名
+  [PASS] HlcToJson 产物是合法 JSON
+  [PASS] HlcFromJson 可回读
+  [PASS] HLC 往返一致
+  [PASS] ms 语义正确
+  [PASS] counter 语义正确
+  [PASS] device 语义正确
+  [PASS] 反例：缺 counter ⇒ 解析失败
+  [PASS] 反例：counter 越界 ⇒ 解析失败
+  [PASS] 推送体含嵌套 hlc
+  [PASS] 推送体不含扁平 hlc_ms/hlc_counter
+  [PASS] 推送体是合法 JSON
+  [PASS] 推送体有 1 条 items
+  [PASS] items[0].hlc 是嵌套对象
+  [PASS] 拉取响应可解析
+  [PASS] 拉取条目字段正确
+  [PASS] 无 items 字段 ⇒ 空列表（不算错）
+  [PASS] 反例：扁平 hlc_ms/hlc_counter 被拒
+  [PASS] 条目可封成待推送条目
+  [PASS] 密文与 nonce 已生成
+  [PASS] AC-07：推送条目的 item_key 是 64 位摘要、不等于明文键
+  [PASS] AC-07：线上身份是小写十六进制
+  [PASS] AC-07：身份可确定性复算（HKDF+HMAC 同一密钥链）
+  [PASS] AC-07：不同词条 ⇒ 不同身份
+  [PASS] AC-07：身份绑密钥（换密钥 ⇒ 换身份，否则可跨账号字典反查）
+  [PASS] 反例：空条目键 ⇒ 空身份
+  [PASS] 待推送条目可解回条目
+  [PASS] 加解密往返一致（明文键从密文内部还原）
+  [PASS] 反例：错误密钥 ⇒ 解密失败
+  [PASS] 反例：密文被篡改 ⇒ 解密失败
+  [PASS] 反例：身份被换成别的词的摘要 ⇒ 解密失败（AAD 绑定）
+  [PASS] HLC 大者取胜（远端更新）
+  [PASS] 合并结果与输入顺序无关
+  [PASS] 词典行可转同步条目
+  [PASS] 同步条目可转回词典行（往返一致）
+[D8] T305 用户词典快照：解析 / 生成 / 分段 / 维护态钩子
+  [PASS] 快照行可拆分
+  [PASS] 拆分结果形状正确
+  [PASS] 反例：列数不足 ⇒ 失败
+  [PASS] 反例：码为空 ⇒ 失败
+  [PASS] item_key 可拆解
+  [PASS] 反例：item_key 缺 TAB ⇒ 失败
+  [PASS] 反例：item_key 词典名为空 ⇒ 失败
+  [PASS] payload 可拆解
+  [PASS] 反例：payload 缺 TAB ⇒ 失败
+  [PASS] item_key 拼装正确
+  [PASS] 快照可解析
+  [PASS] 词典名与库级 tick 解析正确
+  [PASS] 数据行解析正确（item_key 与 payload 形状）
+  [PASS] 多词典快照可解析（2 段）
+  [PASS] 反例：空快照 ⇒ 失败
+  [PASS] 可由条目重建快照
+  [PASS] 重建的快照可回读
+  [PASS] 段 tick 取条目 t= 的最大值（9）
+  [PASS] 条目数往返一致
+  [PASS] 快照可切成 2 段
+  [PASS] 第 1 段从自己的 db_name 开始
+  [PASS] 第 2 段从自己的 db_name 开始
+  [PASS] 反例：无 db_name ⇒ 失败
+  [PASS] 未注册 ⇒ 没有维护态钩子
+  [PASS] 未注册 ⇒ 进入维护态明确失败（带中文原因）
+  [PASS] 注册后有维护态钩子
+  [PASS] 进入维护态回调被调用
+  [PASS] 退出维护态回调被调用
+  [PASS] 维护态钩子可注销
+[F1] T501 同步引擎：退避阶梯 / 每日配额 / 自然日翻篇
+  [PASS] 退避阶梯共 4 档
+  [PASS] 退避阶梯第 1 档 = 1 分钟
+  [PASS] 退避阶梯第 2 档 = 5 分钟
+  [PASS] 退避阶梯第 3 档 = 15 分钟
+  [PASS] 退避第 1 阶梯 = 阶梯表第 1 档（1 分钟）
+  [PASS] 退避第 2 阶梯 = 阶梯表第 2 档（5 分钟）
+  [PASS] 退避第 3 阶梯 = 阶梯表第 3 档（15 分钟）
+  [PASS] 退避第 4 阶梯 = 阶梯表第 4 档（最后一档）
+  [PASS] 超过 max_backoff_attempts ⇒ 取最后一个阶梯值
+  [PASS] 远超 max_backoff_attempts ⇒ 仍取最后一个阶梯值
+  [PASS] 退避次数下溢（attempt=0）⇒ 取第 1 阶梯
+  [PASS] 退避第 4 档必须是 60 分钟（曾误写成 60 秒）
+  [PASS] 退避阶梯为空 ⇒ 退避时长为 0
+  [PASS] 推送次数未超配额 ⇒ 允许
+  [PASS] 推送次数刚好未达配额上限 ⇒ 允许
+  [PASS] 推送次数达配额上限 ⇒ 禁止
+  [PASS] 推送次数超配额上限 ⇒ 禁止
+  [PASS] 拉取次数未超配额 ⇒ 允许
+  [PASS] 拉取次数刚好未达配额上限 ⇒ 允许
+  [PASS] 拉取次数达配额上限 ⇒ 禁止
+  [PASS] 推送配额上限为 0 ⇒ 一律禁止
+  [PASS] 拉取配额上限为 0 ⇒ 一律禁止
+  [PASS] 跨 UTC 自然日 ⇒ 日序号 +1
+  [PASS] 当日推送打满 ⇒ 当日推送配额耗尽
+  [PASS] 当日拉取打满 ⇒ 当日拉取配额耗尽
+  [PASS] 跨 UTC 自然日 ⇒ 计数归零后推送配额重新可用
+  [PASS] 跨 UTC 自然日 ⇒ 计数归零后拉取配额重新可用
+[F2] T501 同步引擎：自然日边界 / 推送截止时刻（防抖 + 全局间隔）
+  [PASS] 同一时刻 ⇒ 同一 UTC 日序号
+  [PASS] 同一天内 +1 小时 ⇒ 日序号不变
+  [PASS] 跨一天 ⇒ 日序号 +1
+  [PASS] Unix 纪元 ⇒ 日序号 0
+  [PASS] 翻篇时刻大于当日 0 点
+  [PASS] 翻篇时刻 = 当日 0 点 + 24 小时
+  [PASS] 翻篇时刻本身属于次日
+  [PASS] 没有本地改动 ⇒ 不产生推送截止时刻
+  [PASS] 本地改动时刻为负 ⇒ 不产生推送截止时刻
+  [PASS] 有本地改动 ⇒ 产生推送截止时刻
+  [PASS] 推送截止时刻 = 改动时刻 + 防抖窗口（5 分钟）
+  [PASS] 有本地改动 ⇒ 限流场景下同样产生推送截止时刻
+  [PASS] 推送截止时刻取 防抖窗口 与 全局间隔 的较大者（15 分钟）
+  [PASS] 输出指针为空 ⇒ 仍可判定（不崩溃）
+[F3] T504 同步引擎：触发优先级 / 配额用尽 / 退避用尽
+  [PASS] 手动触发优先级最高：配额打满也照常推 + 拉
+  [PASS] 手动触发压过退避重试
+  [PASS] 退避窗口未到 ⇒ 等待
+  [PASS] 退避到期且未用尽 ⇒ 重试（推 + 拉）
+  [PASS] 退避次数用尽 ⇒ 交回定时触发
+  [PASS] 启动触发 ⇒ 只拉不推
+  [PASS] 本地改动到期 ⇒ 只推不拉
+  [PASS] 本地改动与定时拉取同时到期 ⇒ 推 + 拉
+  [PASS] 无任何到期 ⇒ 等待
+  [PASS] 推送配额用尽 ⇒ 跳过本轮（不是错误）
+  [PASS] 拉取配额用尽 ⇒ 跳过本轮（不是错误）
+  [PASS] 推送配额用尽但拉取仍有余额 ⇒ 只拉不推
+[F4] T504 同步引擎：启动 / 手动触发 / 停止（假 runner，不触网）
+  [PASS] runner 为空 ⇒ Start 失败
+  [PASS] Start 失败后不进入运行态
+  [PASS] 未启动 ⇒ runner 一次都不执行
+  [PASS] 未启动 ⇒ running() 为假
+  [PASS] 未启动 ⇒ enabled() 为假
+  [PASS] 首次 Start 成功
+  [PASS] 重复 Start 失败（已在运行）
+  [PASS] 启动后 running() 为真
+  [PASS] 启动后 enabled() 为真
+  [PASS] 启动后 runner 被调用（启动拉取）
+  [PASS] 启动拉取只拉不推
+  [PASS] RequestManualSync 触发一次额外执行
+  [PASS] 手动同步被引擎记为手动触发
+  [PASS] 手动同步只额外执行一轮（不会连发）
+  [PASS] 手动同步包含推送方向
+  [PASS] 同步过后 ever_synced 为真
+  [PASS] 同步成功后 last_outcome = kSuccess
+  [PASS] 手动同步后 last_trigger = kManual
+  [PASS] 状态里保留中文说明
+  [PASS] 停止后 running() 为假
+  [PASS] 停止后不再执行任何同步轮次
+  [PASS] Stop 可重复调用（再次停止仍安全）
+  [PASS] SetEnabled(false) ⇒ enabled() 为假
+  [PASS] 关闭同步后不再发起任何轮次
+  [PASS] SetEnabled(true) ⇒ enabled() 为真
+[F5] T501 本地改动通知槽：注册 / 通知 / 注销
+  [PASS] 未注册回调时通知是空操作
+  [PASS] 注册后每次通知都回调一次
+  [PASS] 注销后通知不再回调
+[F5] T501 本地改动通知宿主：挂载 / 通知 / 摘除（假 runner，不触网）
+  [PASS] 初始没有挂载目标
+  [PASS] 同步引擎启动成功
+  [PASS] 启动轮已执行
+  [PASS] 挂载后 has_target 为真
+  [PASS] 本地改动通知触发了一轮同步
+  [PASS] 该轮被引擎记为本地改动触发
+  [PASS] 本地改动轮包含推送方向
+  [PASS] 摘除后 has_target 为假
+  [PASS] 摘除目标后通知不再触发同步
+[AN] AH-4 ⑤ 推送结果契约：accepted / skipped 的解析与消费
+  [PASS] ParsePushResponse：合法响应体解析成功
+  [PASS] accepted 解析出服务端收下的条目键
+  [PASS] skipped 解析出服务端跳过的条目键
+  [PASS] 顶层 server_seq 解析成功
+  [PASS] ParsePushResponse：缺 skipped 字段仍解析成功
+  [PASS] 缺 skipped 字段 ⇒ 空数组
+  [PASS] accepted 为空且 server_seq 照常解析
+  [PASS] ParsePushResponse：畸形 JSON ⇒ 失败
+  [PASS] ParsePushResponse：失败时给出中文原因
+  [PASS] ParsePushResponse：accepted 不是数组 ⇒ 失败
+  [PASS] 服务端收下的条目 ⇒ kAccepted
+  [PASS] 服务端跳过的条目 ⇒ kSkipped
+  [PASS] 服务端没提到的条目 ⇒ kUnknown（不算推送成功）
+  [PASS] Push：服务端 200 ⇒ 成功
+  [PASS] Push：accepted 交回调用方
+  [PASS] Push：skipped 交回调用方（修复前被整段丢弃）
+  [PASS] Push：server_seq 交回调用方
+[AR] ADR 0062 维护准入闸门：判据 / 整轮跳过 / 跳过 ≠ 失败
+  [PASS] 闸门：无活跃会话 => 放行
+  [PASS] 闸门：有活跃会话 => 关闭
+  [PASS] 闸门：多个活跃会话 => 关闭
+  [PASS] 闸门：关闭原因是 ASCII 令牌（中文文案在云侧翻译）
+  [PASS] 闸门：跳过后短间隔重试 = 5 分钟（不是失败退避的 60 分钟）
+  [PASS] 闸门关闭 => 本轮不成功
+  [PASS] 闸门关闭 => 结果标记为「已跳过」（不是失败）
+  [PASS] 闸门关闭 => 给出中文提示
+  [PASS] 闸门关闭 => 从未进入维护态（不 finalize）
+  [PASS] 闸门关闭 => 从未导出用户词典（不备份）
+  [PASS] 闸门关闭 => 一个网络请求都没发
+  [PASS] 闸门关闭 => 零推送 / 零拉取（不消耗配额）
+  [PASS] 引擎启动成功（假 runner，不触网）
+  [PASS] 启动轮已执行
+  [PASS] 跳过 => last_outcome = kSkipped（不是 kFailed）
+  [PASS] 跳过 => 不进失败退避阶梯
+  [PASS] 跳过 => 不算「已同步过」
+  [PASS] 跳过 => 状态标记「等待你停止输入」
+  [PASS] 跳过 => 状态里保留中文提示
+  [PASS] 跳过后按短间隔自动重试（不是等 60 分钟退避）
+[AU] 清空云端后本地同步状态重置（sidecar）
+  [PASS] 测试用 sidecar 可写
+  [PASS] 重置 sidecar 成功
+  [PASS] 重置后历史行（row 行）全部消失
+  [PASS] 重置后游标归零
+  [PASS] 重置后保留版本行
+  [PASS] 空路径 => 视为成功
+  [PASS] 不可写路径 => 失败
+  [PASS] 失败时给出中文原因
+  [PASS] 协调器 ResetLocalSyncState 成功
+  [PASS] 协调器重置后历史行也消失
+[AV] 换密钥后 sidecar 作废（两段式全量重推）
+  [PASS] sidecar 首行仍是版本行
+  [PASS] sidecar 落 keyfp 行
+  [PASS] 有密钥时不写未绑定标记
+  [PASS] 同密钥解析成功
+  [PASS] 同密钥不判轮换
+  [PASS] 游标恢复为 42
+  [PASS] 恢复 1 行
+  [PASS] item_key 转义往返一致（含制表符）
+  [PASS] payload_hash 一致
+  [PASS] counter 一致
+  [PASS] 换密钥解析成功
+  [PASS] 换密钥 ⇒ 判为轮换
+  [PASS] 轮换后不留历史行
+  [PASS] 轮换后游标归零
+  [PASS] 老 sidecar 解析成功
+  [PASS] 无 keyfp 且有内容 ⇒ 判轮换
+  [PASS] 老 sidecar 的行作废
+  [PASS] 空 sidecar 解析成功
+  [PASS] 空 sidecar 不判轮换
+  [PASS] 未绑定标记解析成功
+  [PASS] 未绑定密钥标记不判轮换（清空云端→重传不被误伤）
+  [PASS] 空密钥 ⇒ keyfp 写未绑定标记
+  [PASS] 空密钥 sidecar 可解析
+  [PASS] 空密钥 sidecar 不判轮换
+  [PASS] AT-1 未登录态：邮箱 / 密码 / 登录 / 注册 / 忘记密码 / 关闭 全部可见
+  [PASS] AT-1 未登录态：退出登录 / 立即同步 / 当前账号 不可见
+  [PASS] AT-1 已登录态：当前账号 / 退出登录 / 立即同步 / 关闭 全部可见
+  [PASS] AT-1 已登录态：邮箱 / 密码 / 登录 / 注册 / 忘记密码 / 历史 / 保存账号 不可见
+  [PASS] AT-1 两态交集只有状态行与关闭按钮
+  [PASS] AT-1 未登录态：历史邮箱下拉与「保存账号」可见
+  [PASS] AT-1 四个子窗口各自只承载自己的控件
+  [PASS] AT-1 控件类别映射正确
+  [PASS] AT-1 换钥提示只在账号页已登录态出现且不与相邻行重叠
+  [PASS] AT-1 可见控件全部落在客户区内（89 项）
+  [PASS] AT-1 账号窗口控件全集 = 两态可见集之并
+  [PASS] AT-1 设备窗口未登录时全部置灰
+[BB] ADR 0068 账号页 DPI 感知布局（缺陷 C）
+  [PASS] BB 字体行高 → 有效 DPI 映射（12→96 … 36→288）
+  [PASS] BB 换钥提示文案 = 37 个全角字（与真机实测一致）
+  [PASS] BB 100% 缩放下账号页几何逐像素不变（零行为变化）
+  [PASS] BB 7 档 DPI × 5 窗口 × 两态：控件全部落在客户区内（623 项）
+  [PASS] BB 换钥提示在 7 档 DPI 下都装得下且留 ≥1 行余量（7 项）
+  [PASS] BB 反向判据：缺陷 C 现场（144 dpi 未缩放）余量 = 0（判红）
+  [PASS] BB 换钥提示：144 dpi 单行宽 666 px（与真机实测一致）且缩放后不再折行
+  [PASS] BB 客户区尺寸 = 基准 × dpi/96（与控件同一把尺子）
+  [PASS] BB 缺陷 D：系统 DPI 归一化（越界回退 96，48~960 原样透传）
+  [PASS] AT-1 历史邮箱：新邮箱置顶（最近在前）
+  [PASS] AT-1 历史邮箱：大小写不敏感去重并采用最新形态
+  [PASS] AT-1 历史邮箱：上限 10 条且最新在最前
+  [PASS] AT-1 历史邮箱：空邮箱不改变列表
+  [PASS] AT-1 历史邮箱：序列化 → 解析 往返一致
+  [PASS] AT-1 历史邮箱：空文本解析为空列表
+  [PASS] AT-1 历史邮箱：空行被忽略、重复行被去重
+  [PASS] AT-1 历史邮箱：落盘 → 读回 一致
+[AW] ADR 0065 维护准入闸门：空闲宽限期判据
+  [PASS] 新判据：空闲宽限期 = 10 秒
+  [PASS] 新判据：组合串宽限期 = 60 秒（比空闲宽限期长）
+  [PASS] 新判据：组合串宽限期必须长于空闲宽限期
+  [PASS] 空闲毫秒：从未按过键 => 0
+  [PASS] 空闲毫秒：距上次按键 10 秒
+  [PASS] 空闲毫秒：时钟回拨 => 0（不误判为已空闲很久）
+  [PASS] 新判据：无会话 => 放行
+  [PASS] 新判据：无会话（即便按过键）=> 放行
+  [PASS] 新判据：IME 已激活但没打字 => 放行（缺陷核心）
+  [PASS] 新判据：多个会话但都没打字 => 放行
+  [PASS] 新判据：刚按键 => 关闭
+  [PASS] 新判据：5 秒前按键 => 关闭（未过空闲宽限期）
+  [PASS] 新判据：15 秒前按键 => 放行（已过 10 秒空闲宽限期）
+  [PASS] 新判据：15 秒前按键 + 有未上屏组合串 => 关闭（组合串用 60 秒宽限期）
+  [PASS] 新判据：55 秒前按键 + 有组合串 => 关闭（未过 60 秒）
+  [PASS] 新判据：65 秒前按键 + 有组合串 => 放行（已过 60 秒组合串宽限期）
+[AW] ADR 0066 账号窗口槽位状态机
+  [PASS] 槽位：没有句柄 => 空
+  [PASS] 槽位：句柄已失效（IsWindow 为假）=> 陈旧
+  [PASS] 槽位：窗口还在但探活无响应 => 陈旧
+  [PASS] 槽位：窗口在且探活有响应 => 存活
+  [PASS] 槽位：只有存活槽位可复用
+  [PASS] 槽位：陈旧槽位不可复用
+  [PASS] 槽位：空槽位不可复用
+  [PASS] 槽位：销毁时先清槽位（存活槽位也要清）
+  [PASS] 槽位：销毁时先清槽位（陈旧槽位也要清）
+  [PASS] 槽位：空槽位无需清
+[ADR 0067] 孤儿 IPC 会话回收判据
+  [PASS] 判据：pid 未知 ⇒ 不回收
+  [PASS] 判据：pid 未知 ⇒ 不回收
+  [PASS] 判据：pid 已知且存活 ⇒ 不回收
+  [PASS] 判据：pid 已知且已死 ⇒ 回收
+  [PASS] 豁免：pid = 0（未知）⇒ 不可探测
+  [PASS] 豁免：pid = 1 ⇒ 不可探测
+  [PASS] 豁免：pid = 4 ⇒ 不可探测
+  [PASS] 豁免：自身 pid ⇒ 不可探测
+  [PASS] 豁免：普通 pid ⇒ 可探测
+  [PASS] 行判定：pid 已知且已死 ⇒ 回收
+  [PASS] 行判定：pid 已知且存活 ⇒ 不回收
+  [PASS] 行判定：pid 未知 ⇒ 不回收
+  [PASS] 行判定：自身 pid ⇒ 不回收
+  [PASS] 行判定：pid <= 4 ⇒ 不回收
+  [PASS] 表级：空表 ⇒ 不回收任何会话
+  [PASS] 表级：单条表（已死）⇒ 回收该条
+  [PASS] 表级：单条表（存活）⇒ 不回收
+  [PASS] 表级：单条表（pid 未知）⇒ 不回收
+  [PASS] 表级：混合表 ⇒ 只回收「已死且 pid 已知」的那一条
+  [PASS] 在场状态：孤儿回收 ⇒ 不翻转在场状态
+  [PASS] 在场状态：真实会话结束 ⇒ 允许翻转在场状态
+  [PASS] 活动会话：孤儿回收不动别人的活动会话指针
+  [PASS] 活动会话：孤儿回收的就是活动会话 ⇒ 清
+  [PASS] 活动会话：真实会话结束 ⇒ 一律清（既有行为）
+---- 批次 AK：WinHTTP 传输层回环回归（不连外网）----
+  [PASS] 回环服务端已监听随机端口
+  [PASS] HTTP 200 ⇒ transport_ok 为真
+  [PASS] HTTP 200 ⇒ status 为 200
+  [PASS] HTTP 200 ⇒ 响应体逐字相符
+  [PASS] HTTP 200 ⇒ error 为空
+  [PASS] max_retries=0 ⇒ 只发一次
+  [PASS] HTTP 404 ⇒ transport_ok 仍为真
+  [PASS] HTTP 404 ⇒ status 为 404
+  [PASS] HTTP 404 ⇒ 响应体含错误码
+  [PASS] 连不上 ⇒ transport_ok 为假
+  [PASS] 连不上 ⇒ error 非空（中文原因）
+  回环回归：PASS=11 FAIL=0
+
+RESULT: PASS=586 FAIL=0
+VERDICT: ALL PASS
