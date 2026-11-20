@@ -1,3 +1,14 @@
+## [1.3.6]
+### feat(fluxing): 孤儿 IPC 会话回收（ADR 0067）+ 账号页「换钥后果」常驻提示 + `[FluxingAccountDlg]` 诊断日志改接文件（批次 AX / AY）
+
+- **孤儿 IPC 会话回收（ADR 0067）**：宿主（TSF 所在进程）崩溃或被强杀后，服务端会话表里残留的 `ipc_id` 永久计入 `live_sessions` ⇒ ADR 0062/0065 的维护准入闸门被**永久占坑**，云同步再也无法放行。修法 = ① 客户端 `Hello` 握手多写一行纯文本 `session.client_pid=`（**不改 `include/WeaselIPCData.h`、不新增消息类型** ⇒ 旧客户端读不到即「pid 未知」⇒ **不回收**，deployer 零改动，不触发 IPC 四边同步红线）；② 服务端 `_RememberOwnerPid` / `_IsProcessAlive`（`OpenProcess(SYNCHRONIZE)` + `WaitForSingleObject(0)`，**仅** `ERROR_INVALID_PARAMETER` / `ERROR_NOT_FOUND` 判死）；③ `AddSession` 内**惰性清扫** `_ReclaimOrphanSessions`（不做定时器、不起后台线程，绕开 P2「TSF 路径不做阻塞 I/O」）；④ 判据落纯函数头 `include/FluxingSessionReclaim.h`（R7 生产与单测同源，**须全 ASCII**——`RimeWithWeasel.vcxproj` 无 `/utf-8`）。
+- **回收路径不得冒充「用户切走」**：`RemoveSession` 原有两个副作用（活动会话结束 ⇒ 翻「火流猩不在场」+ 收起快捷面板；无条件清 `m_active_session`），而回收恰好发生在 `AddSession` 内、紧接着又注册一个活会话 ⇒ 若照原样调用，**宿主崩溃会被误读成用户切换输入法**。拆出 `_RemoveSessionInternal(ipc_id, is_orphan_reclaim)` + 两条判据 `MayFlipPresenceOnSessionEnd` / `ShouldClearActiveSessionOnEnd`，回收分支保留在场态。
+- **账号页「换钥后果」常驻提示**（用户 2026-11-20 拍板「加一句提示」）：已登录态新增控件 `kIdKeyRotationNote = 1035` 文案「重置口令后，云端旧数据无法再解开。如需重新同步，请到「设备与云数据」清空云端数据。」，账号页窗口高度 472 ⇒ 290（几何真相源单点 `WeaselServer\Cloud\CloudAccountUi.h`，单测不复制几何，R7）；ADR 0062 已定稿文案一字未改。补 `TestAccountPageUi()` 8) 断言（云单测 576 ⇒ **577**）。
+- **诊断日志改接**：`[FluxingAccountDlg]` 由 `OutputDebugStringW`（本机无调试器 ⇒ 取证通道实际不可用）改接 `fluxing::diag::AppendLine("acctdlg", …)` ⇒ 落 `%TEMP%\fluxing-profile-notify.log`，缺陷 B 第三分支复发时可直接取证。
+- **门禁**：云单测 `RESULT: PASS=577 FAIL=0 / VERDICT: ALL PASS`（IPC 回环 11-0）· `build.bat weasel installer` **0 警告 0 错误**（makensis 仅 8 条既有 `warning 7010`：ARM/ARM64 可选产物 + `data\*.gram` + `data\lua\*.txt`）· `L0-static.ps1` 15/15 · 定点 `clang-format` 0 漂移。
+- **产物**：`output/archives/fluxing-1.3.6-installer.exe` = 42 951 049 B · sha16 `47909B9174D30483`（sha256 `47909B9174D304838C0A21A7383441D1C0033B75B750F9DD290BE369A54B7ED1`）；内嵌 `output\Win32\WeaselServer.exe` = 2 780 672 B · `FileVersion 1.3.6.0` · sha16 `3CF15A582B2453F1`，令牌实测 `orphan_reclaim presence=kept` / `reclaim orphan session` = True，`重置登录口令后` / `清空云端数据` / `无法再解开` = True。
+- **装机判别**：`WeaselServer.exe` 是 PPL ⇒ 须**注销/重启**后安装，验收口径 = **运行中服务进程映像版本**；重启后测试清单见 `docs/release/restart-checklist-1.3.6.md`。
+
 ## [1.3.5]
 ### fix(fluxing): 仅开启输入法不再阻塞云同步 +「账号与同步」窗口第二次进入后可关闭（批次 AW · ADR 0065 / 0066）
 
