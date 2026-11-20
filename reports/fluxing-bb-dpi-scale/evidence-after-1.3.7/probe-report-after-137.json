@@ -1,0 +1,261 @@
+{
+  "started_at": "2026-11-20 20:38:04",
+  "outdir": "C:\\Users\\Duanyi\\AppData\\Local\\Temp\\fluxing-a1-note-20261120-203803",
+  "steps": [
+    {
+      "step": "desktop-guard",
+      "state": "OK",
+      "detail": "thread desktop = Default"
+    },
+    {
+      "step": "precondition",
+      "state": "OK",
+      "detail": "pid=77332 started=2026-11-20 20:37:56 ver=1.3.7.0"
+    },
+    {
+      "step": "server-window",
+      "state": "INFO",
+      "detail": "hwnd=11014576 class='ATL:00F19DE0'"
+    },
+    {
+      "step": "server-window",
+      "state": "INFO",
+      "detail": "hwnd=1051666 class='TrayIconClass'"
+    },
+    {
+      "step": "server-window",
+      "state": "INFO",
+      "detail": "hwnd=9634988 class='WeaselIPCWindow_1.0'"
+    },
+    {
+      "step": "server-window",
+      "state": "INFO",
+      "detail": "hwnd=4456992 class='GDI+ Hook Window Class'"
+    },
+    {
+      "step": "open",
+      "state": "OK",
+      "detail": "hwnd=5704730 window=304,304,1046,795 client=0,0,720,435 clientW=720 clientH=435 dpi=144"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1001 cls=Edit vis=False rect=447,364,279x39 len=0"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1002 cls=Edit vis=False rect=447,415,366x39 len=0"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1003 cls=Button vis=False rect=333,511,210x42 len=2"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1004 cls=Button vis=True rect=333,454,210x42 len=4"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1006 cls=Static vis=True rect=333,646,684x60 len=11"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1010 cls=Button vis=True rect=867,724,150x42 len=2"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1013 cls=Button vis=False rect=555,511,210x42 len=2"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1016 cls=Button vis=True rect=555,454,210x42 len=4"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1017 cls=Static vis=True rect=333,511,684x30 len=10"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1018 cls=ComboBox vis=False rect=810,364,207x26 len=0"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1019 cls=Button vis=False rect=447,466,366x30 len=14"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1020 cls=Static vis=True rect=333,406,684x33 len=15"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1021 cls=Button vis=False rect=777,511,240x42 len=4"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1022 cls=Static vis=True rect=333,547,684x27 len=24"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1025 cls=Static vis=False rect=333,370,105x30 len=4"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1026 cls=Static vis=False rect=333,421,105x30 len=2"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1027 cls=Static vis=True rect=333,370,684x30 len=6"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1034 cls=Static vis=False rect=732,370,72x30 len=2"
+    },
+    {
+      "step": "child",
+      "state": "INFO",
+      "detail": "id=1035 cls=Static vis=True rect=333,583,684x54 len=37"
+    },
+    {
+      "step": "note",
+      "state": "OK",
+      "detail": "found id=1035 cls=Static vis=True rect=333,583,684x54 chars=37"
+    },
+    {
+      "step": "measure",
+      "state": "INFO",
+      "detail": "face='宋体' dpi=144 font=25821625"
+    },
+    {
+      "step": "measure",
+      "state": "OK",
+      "detail": "single-line w=666 h=18 | wordbreak w=0 h=0 | editcontrol+wordbreak w=0 h=0 | wrapped-into-real-box(684) w=666 h=18"
+    },
+    {
+      "step": "measure",
+      "state": "OK",
+      "detail": "lineHeight=18 -> lines(wordbreak)=0 lines(edit)=0 lines(inBox)=1 | controlH=54"
+    },
+    {
+      "step": "judge-A1",
+      "state": "PASS",
+      "detail": "TEXT NEEDS 18px, BOX GIVES 54px -> HEADROOM 36px -> NOT CLIPPED"
+    },
+    {
+      "step": "pixels-note",
+      "state": "OK",
+      "detail": "height=54 bg=240,240,240 bands=0-16 bandCount=1 lastBandTouchesBottom=False"
+    },
+    {
+      "step": "cleanup",
+      "state": "INFO",
+      "detail": "window closed, IsWindow=False"
+    }
+  ],
+  "verdict": "A1_NOT_CLIPPED",
+  "logged_in": true,
+  "note_pixels": {
+    "height": 54,
+    "bg": "240,240,240",
+    "bands": "0-16",
+    "bandCount": 1,
+    "lastBandTouchesBottom": null
+  },
+  "dpi": 144,
+  "dialog_client": "0,0,720,435",
+  "note": {
+    "id": 1035,
+    "chars": 37,
+    "box_w": 684,
+    "box_h": 54,
+    "single_w": 666,
+    "line_h": 18,
+    "wrap_h_wordbreak": 0,
+    "wrap_h_edit": 0,
+    "in_box_h": 18,
+    "lines": 1.0,
+    "deficit_px": -36,
+    "clipped": false
+  },
+  "controls": [
+    {
+      "id": 1006,
+      "cls": "Static",
+      "w": 684,
+      "h": 60,
+      "chars": 11
+    },
+    {
+      "id": 1010,
+      "cls": "Button",
+      "w": 150,
+      "h": 42,
+      "chars": 2
+    },
+    {
+      "id": 1027,
+      "cls": "Static",
+      "w": 684,
+      "h": 30,
+      "chars": 6
+    },
+    {
+      "id": 1020,
+      "cls": "Static",
+      "w": 684,
+      "h": 33,
+      "chars": 15
+    },
+    {
+      "id": 1004,
+      "cls": "Button",
+      "w": 210,
+      "h": 42,
+      "chars": 4
+    },
+    {
+      "id": 1016,
+      "cls": "Button",
+      "w": 210,
+      "h": 42,
+      "chars": 4
+    },
+    {
+      "id": 1017,
+      "cls": "Static",
+      "w": 684,
+      "h": 30,
+      "chars": 10
+    },
+    {
+      "id": 1022,
+      "cls": "Static",
+      "w": 684,
+      "h": 27,
+      "chars": 24
+    },
+    {
+      "id": 1035,
+      "cls": "Static",
+      "w": 684,
+      "h": 54,
+      "chars": 37
+    }
+  ]
+}
