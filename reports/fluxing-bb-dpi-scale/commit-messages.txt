@@ -1,0 +1,54 @@
+===MSG1===
+docs(fluxing): 补齐 AZ/BA 批次交接文档与 1.3.6 重启后测试清单
+
+AZ（装机 1.3.6）与 BA（换钥提示折行实测）两个批次的 handoff、接力 prompt
+以及 1.3.6 重启后测试清单此前一直未入库，导致 CLAUDE.md 里的交接指针指向
+不存在的文件。本次按路径显式补齐，文档内容一字未改。
+
+- docs/archive/handoffs/handoff-2026-11-20-batch-az-install-1-3-6.md
+- docs/archive/handoffs/handoff-2026-11-20-batch-ba-a1-note-wrap-measured.md
+- docs/archive/prompts/prompt-next-session-2026-11-20-batch-az-install-1-3-6.md
+- docs/archive/prompts/prompt-next-session-2026-11-20-batch-ba-a1-note-wrap-measured.md
+- docs/release/restart-checklist-1.3.6.md
+
+===MSG2===
+fix(fluxing): 账号页换钥提示 DPI 感知布局 —— 修缺陷 C（>150% 缩放裁切）
+
+账号页换钥提示控件 kIdKeyRotationNote=1035 的几何是固定物理像素（456x36），
+而 UI 字体 DEFAULT_GUI_FONT 按系统 DPI 光栅化：144dpi 下 37 个全角字整行
+666px > 456px，折 2 行需 36px ⇒ 余量 0；175% 需 42px、200% 需 48px ⇒
+>150% 缩放的机器必然裁掉末行。根因不是单个控件 —— 所有静态文案行 / 输入框 /
+按钮同一形态。
+
+修法（ADR 0068）：
+- 布局表以 96dpi 为基准、整表按 DPI 等比缩放（AccountScale = MulDiv(v,dpi,96)），
+  缩放入口唯一化（AccountScaleLayout）⇒ 结构上不可能有控件漏缩；96dpi 逐像素不变。
+- 缩放系数取自系统 DPI（GetDpiForSystem 动态取 ⇒ 回退 GetDeviceCaps(LOGPIXELSX)）。
+  不按窗口所在屏 DPI 缩放（stock 字体是进程级资源）；禁用 GetDpiForMonitor（L122）。
+- 实施期推翻「量真实字体反推 DPI」：tm 行高 21px ≠ 控件单行高 18px，反推得
+  168dpi（+17%）会违反 96dpi 不变量；字体度量降级为交叉校验告警。
+- 不保留「无 dpi」兼容重载（那个形态就是本缺陷的形态）；文案迁入真相源
+  AccountKeyRotationNoteText()（生产与单测同源，R7）；用户可见 37 字一字未改。
+- 余量判据接入生产侧 ApplyLayout（告警式），避免单测测死代码。
+
+门禁：云单测 PASS=585 FAIL=0（基线 577 ⇒ +8）· build.bat weasel installer
+0 错误 · 定点 clang-format 0 漂移 · L0 15/15。
+
+装机：INSTALL_EXIT=0 ⇒ 运行中服务映像 1.3.7.0（sha16 38316DCEFC8C502E 与
+构建产物逐字一致）· BA 探针复跑 VERDICT=A1_NOT_CLIPPED（控件 456x36 → 684x54，
+余量 36px）⇒ 缺陷 C 关闭。
+
+未闭环：175%/200% 缩放真机未验 · A-4/A-5 未登录态未测 · 孤儿会话回收端到端未做。
+
+未改 librime/、未改 IPC 协议（不触发四边同步红线）、未新增第三方依赖。
+
+===MSG3===
+ci(fluxing): 账号页换钥提示折行与 DPI 取证探针
+
+- reports/fluxing-ba-a1-note-wrap/：BA 探针（EnumChildWindows + GetDlgCtrlID
+  按 id=1035 定位、DT_CALCRECT 量文本需求高 vs 控件高、PrintWindow 取帧做逐行
+  墨迹剖面；判据动态计算、不硬编码几何 ⇒ 换 DPI 后仍然有效）+ 现场截图与 report.json。
+- reports/fluxing-bb-dpi-scale/：本批门禁全流程（定点 clang-format + 构建 +
+  云单测 + L0）、版本 bump、补丁脚本、出包/覆盖装机/复跑探针一体化脚本及日志。
+
+两者均为纯取证脚本，不改产品行为。
