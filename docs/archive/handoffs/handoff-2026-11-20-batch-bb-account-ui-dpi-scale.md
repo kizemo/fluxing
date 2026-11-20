@@ -194,3 +194,18 @@ ADR 0068 早期版本写「缩放系数取自真实字体度量（`GetTextMetric
 4. **AZ §6 第 3 / 4 项** —— 逐 pid 枚举已运行 TSF 宿主的模块以验证实际加载的 shim 版本；`TestWeaselIPC.exe /verify-client-pid` 需先 `WeaselServer.exe /quit` 让出命名管道（真服务端在跑时 mock 必假红）。
 5. **双机 AC 7 条 + restore 端到端 + 输入延迟两组对照 + 缺陷 A 反向判据 G-3/G-5** —— 用户在场时执行。
 6. **提交与 push** —— 本批只做了本地提交；`feat/100-cloud-sync` → `kizemo/feat/100-cloud-sync` 的 push 需用户授权后执行。
+
+---
+
+## 11. 提交哈希补记
+
+| # | 哈希 | 提交信息 |
+|---|---|---|
+| 1 | `b1c9c7b` | `docs(fluxing): 补齐 AZ/BA 批次交接文档与 1.3.6 重启后测试清单` |
+| 2 | `255af0b` | `fix(fluxing): 账号页换钥提示 DPI 感知布局 —— 修缺陷 C（>150% 缩放裁切）` |
+| 3 | `77dc265` | `ci(fluxing): 账号页换钥提示折行与 DPI 取证探针` |
+
+- 分支 `feat/100-cloud-sync` 相对 `kizemo/feat/100-cloud-sync` **ahead 3** ⇒ **未 push**（push 需用户授权）。
+- 本小节随收口提交（`docs(fluxing): 补记批次 BB 提交哈希与真机复验结论`）落库，其自身哈希见 `git log -1`。
+- `librime/` 子模块工作区仍脏（`m librime`）⇒ **未入库**（全程按路径显式 `git add`，未用 `git add .`）。
+- `docs/design/quickpanel-v6/design-demos/*.html`（他任务遗留）**未入库**。
