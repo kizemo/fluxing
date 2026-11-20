@@ -2963,6 +2963,29 @@ void TestAccountPageUiDpiScale() {
     }
     Check(ok, "BB 客户区尺寸 = 基准 × dpi/96（与控件同一把尺子）");
   }
+
+  // 9) 缺陷 D：系统 DPI 归一化纯函数 —— 越界回退 96，合法值原样透传。
+  //    生产侧 AccountUiDpi() 只缓存 GetDpiForSystem 的**函数指针**、绝不缓存
+  //    返回值（本函数无状态 ⇒ 同一进程内改了缩放能立刻拿到新值）。
+  //    注意：`不缓存值` 这个属性无法用单测直接证明（同一进程内系统 DPI 不变），
+  //    此处只覆盖可测的纯函数分支，避免留下「测了但测不到」的假覆盖。
+  {
+    const bool ok = fc::AccountNormalizeSystemDpi(0) == 96 &&
+                    fc::AccountNormalizeSystemDpi(-1) == 96 &&
+                    fc::AccountNormalizeSystemDpi(47) == 96 &&
+                    fc::AccountNormalizeSystemDpi(961) == 96 &&
+                    fc::AccountNormalizeSystemDpi(4000) == 96 &&
+                    fc::AccountNormalizeSystemDpi(48) == 48 &&
+                    fc::AccountNormalizeSystemDpi(120) == 120 &&
+                    fc::AccountNormalizeSystemDpi(144) == 144 &&
+                    fc::AccountNormalizeSystemDpi(168) == 168 &&
+                    fc::AccountNormalizeSystemDpi(192) == 192 &&
+                    fc::AccountNormalizeSystemDpi(240) == 240 &&
+                    fc::AccountNormalizeSystemDpi(288) == 288 &&
+                    fc::AccountNormalizeSystemDpi(480) == 480 &&
+                    fc::AccountNormalizeSystemDpi(960) == 960;
+    Check(ok, "BB 缺陷 D：系统 DPI 归一化（越界回退 96，48~960 原样透传）");
+  }
 }
 // ---------------------------------------------------------------------------
 // 批次 AT-1 · ADR 0063：历史邮箱存储

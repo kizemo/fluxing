@@ -1147,35 +1147,37 @@ void DiscardStaleWindow(Role role, HWND hwnd) {
 //    （不引入新 DLL 依赖）⇒ 动态取，老系统直接回退，**绝不静态导入**
 //    （静态导入会让 Win8.1 及更早系统整个进程加载失败）。
 int AccountUiDpi() {
-  static int cached = 0;
-  if (cached > 0)
-    return cached;
-  int dpi = 0;
-  // ① GetDpiForSystem（动态取 ⇒ 老系统不炸）
+  // ⚠️ 缺陷 D（本批修）：**只缓存函数指针，不缓存 DPI 值**。
+  //    官方文档（GetDpiForSystem，2024-02-22）明写 "You should not cache the
+  //    system DPI, but should use GetDpiForSystem whenever you need the system
+  //    DPI value."。历史实现用 `static int cached` 缓存**值** ⇒ 用户改缩放后
+  //    账号页一直按旧 DPI 排版（可见症状：改了缩放、重开账号页仍被裁），
+  //    直到 WeaselServer 重启才自愈。
   typedef UINT(WINAPI * GetDpiForSystemFn)();
-  HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
-  if (user32 != nullptr) {
-    GetDpiForSystemFn fn = reinterpret_cast<GetDpiForSystemFn>(
-        reinterpret_cast<void*>(::GetProcAddress(user32, "GetDpiForSystem")));
-    if (fn != nullptr) {
-      const UINT value = fn();
-      if (value >= 48)
-        dpi = static_cast<int>(value);
+  static GetDpiForSystemFn fn = nullptr;
+  static bool fn_resolved = false;
+  if (!fn_resolved) {
+    fn_resolved = true;
+    HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
+    if (user32 != nullptr) {
+      fn = reinterpret_cast<GetDpiForSystemFn>(
+          reinterpret_cast<void*>(::GetProcAddress(user32, "GetDpiForSystem")));
     }
   }
+  // ① GetDpiForSystem（动态取 ⇒ 老系统不炸）
+  long raw = 0;
+  if (fn != nullptr)
+    raw = static_cast<long>(fn());
   // ② 回退：gdi32 GetDeviceCaps(LOGPIXELSX)（Win95+ ⇒ 永远可用）
-  if (dpi <= 0) {
+  if (raw < 48) {
+    raw = 0;
     HDC dc = ::GetDC(nullptr);
     if (dc != nullptr) {
-      const int lx = ::GetDeviceCaps(dc, LOGPIXELSX);
+      raw = static_cast<long>(::GetDeviceCaps(dc, LOGPIXELSX));
       ::ReleaseDC(nullptr, dc);
-      if (lx >= 48)
-        dpi = lx;
     }
   }
-  if (dpi <= 0)
-    dpi = kAccountBaseDpi;
-  cached = dpi;
+  const int dpi = AccountNormalizeSystemDpi(raw);
   // 交叉校验：系统 DPI 与 stock 字体度量推得的 DPI 偏差过大 ⇒ 记一行诊断
   // （不改变布局：布局只认系统 DPI）。
   {
@@ -1188,7 +1190,10 @@ int AccountUiDpi() {
         const int line_px = tm.tmHeight + tm.tmExternalLeading;
         const int derived = AccountEffectiveDpiFromFontPx(line_px);
         const int delta = derived > dpi ? derived - dpi : dpi - derived;
-        if (delta * 8 > dpi) {  // 偏差 > 12.5%
+        // 只记一次：本函数每轮布局都会走，但**值不缓存**（缺陷 D）。
+        static bool mismatch_logged = false;
+        if (!mismatch_logged && delta * 8 > dpi) {  // 偏差 > 12.5%
+          mismatch_logged = true;
           std::wstring msg = L"dpi-mismatch system=" + std::to_wstring(dpi) +
                              L" font_px=" + std::to_wstring(line_px) +
                              L" derived=" + std::to_wstring(derived);

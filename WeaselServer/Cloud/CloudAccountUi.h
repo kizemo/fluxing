@@ -148,6 +148,18 @@ inline int AccountScale(int value, int dpi) {
   return (value * dpi + kAccountBaseDpi / 2) / kAccountBaseDpi;
 }
 
+// 系统 DPI 归一化（**纯函数、无状态**）：探测值不合理 ⇒ 回退 96。
+//   合法区间 [48, 960]（50% ~ 1000%）：下界沿用旧实现的两处 `>= 48`，
+//   上界只防「探测值荒诞」（Windows 上限 = 500%）。
+// ⚠️ 与批次 BB 缺陷 D 配套：`AccountUiDpi()` 只允许缓存**函数指针**，
+//    绝不允许缓存本函数的返回值 —— 用户改缩放后同一进程内必须立刻拿到新值
+//    （官方文档 GetDpiForSystem：You should not cache the system DPI）。
+inline int AccountNormalizeSystemDpi(long raw) {
+  if (raw < 48 || raw > 960)
+    return kAccountBaseDpi;
+  return static_cast<int>(raw);
+}
+
 // 整表等比缩放（**唯一的缩放入口** ⇒ 结构上保证没有哪个控件漏缩）。
 inline std::vector<AccountLayoutEntry> AccountScaleLayout(
     const std::vector<AccountLayoutEntry>& base,
