@@ -950,6 +950,11 @@ std::wstring WidgetText(Role role, int id) {
       return L"最近同步：尚未同步。";
     case kIdOpportunityNote:
       return L"你正在输入时同步会自动延后，停止输入后自动完成。";
+    case kIdKeyRotationNote:
+      // ADR 0063 补充（用户拍板「加一句提示」）：重置口令 ⇒ enc_key 变 ⇒
+      // 云端旧密文永不可解（R2 服务端永不见 enc_key，无法代解）。口径与
+      // 「找回密码」窗的补救指引一致（批次 AV），此处为常驻说明。
+      return L"重置登录口令后，云端旧条目将无法再解开，可在「设备与云数据」清空云端数据。";
     case kIdRegister:
       return role == Role::kRegister ? L"注册并发送验证码" : L"注册";
     case kIdResend:

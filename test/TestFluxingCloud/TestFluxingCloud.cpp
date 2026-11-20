@@ -2708,6 +2708,48 @@ void TestAccountPageUi() {
                 fc::AccountWidgetClass::kListBox,
         "AT-1 控件类别映射正确");
 
+  // 8b) 换钥提示（ADR 0063 补充 · 用户拍板「加一句提示」）：重置口令会让云端
+  //     旧密文永不可解（R2），账号页「已登录」态必须常驻说明这一点。
+  //     判据用共享真相源（R7），不在测试里复制几何。
+  {
+    const std::vector<fc::AccountLayoutEntry> logged =
+        fc::AccountVisibleLayout(fc::AccountWindowRole::kAccount, true);
+    const std::vector<fc::AccountLayoutEntry> anonymous =
+        fc::AccountVisibleLayout(fc::AccountWindowRole::kAccount, false);
+    const std::vector<fc::AccountLayoutEntry> device =
+        fc::AccountVisibleLayout(fc::AccountWindowRole::kDevice, true);
+    fc::AccountLayoutEntry note = {-1, -1, -1, -1, -1};
+    fc::AccountLayoutEntry hint = {-1, -1, -1, -1, -1};
+    fc::AccountLayoutEntry status = {-1, -1, -1, -1, -1};
+    bool note_hidden_when_anonymous = true;
+    bool note_absent_on_device = true;
+    for (size_t i = 0; i < logged.size(); ++i) {
+      if (logged[i].id == fc::kIdKeyRotationNote) note = logged[i];
+      if (logged[i].id == fc::kIdOpportunityNote) hint = logged[i];
+      if (logged[i].id == fc::kIdStatus) status = logged[i];
+    }
+    for (size_t i = 0; i < anonymous.size(); ++i) {
+      if (anonymous[i].id == fc::kIdKeyRotationNote)
+        note_hidden_when_anonymous = false;
+    }
+    for (size_t i = 0; i < device.size(); ++i) {
+      if (device[i].id == fc::kIdKeyRotationNote) note_absent_on_device = false;
+    }
+    int client_w = 0;
+    int client_h = 0;
+    fc::AccountClientSize(fc::AccountWindowRole::kAccount, &client_w, &client_h);
+    Check(note.id == fc::kIdKeyRotationNote &&
+              fc::AccountWidgetClassOf(fc::kIdKeyRotationNote) ==
+                  fc::AccountWidgetClass::kStatic &&
+              note_hidden_when_anonymous && note_absent_on_device &&
+              // 静态文案必须占满内容宽（与既有静态行同口径，不缩进）。
+              note.x == 12 && note.w == 456 &&
+              // 纵向不得压行：机会性同步说明 → 换钥提示 → 状态行。
+              note.y >= hint.y + hint.h && status.y >= note.y + note.h &&
+              note.y + note.h <= client_h,
+        "AT-1 换钥提示只在账号页已登录态出现且不与相邻行重叠");
+  }
+
   // 9) 几何不越界：任何可见控件都不得被客户区裁掉。
   {
     bool all_fit = true;

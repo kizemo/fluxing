@@ -67,6 +67,9 @@ enum AccountControlId : int {
   kIdVerifyCodeLabel = 1032,  // 「验证码」静态标签
   kIdNewPasswordLabel = 1033, // 「新密码」静态标签
   kIdHistoryLabel = 1034,     // 「历史」静态标签（历史邮箱下拉左侧）
+  // 换钥提示（ADR 0063 补充）：已登录态常驻说明「重置口令后云端旧条目
+  // 再也解不开」+ 补救指引。只在已登录态可见 ⇒ 不进两态交集。
+  kIdKeyRotationNote = 1035,
 };
 
 // ---------------------------------------------------------------------------
@@ -135,7 +138,9 @@ inline std::vector<AccountLayoutEntry> AccountLoginLayout() {
   v.push_back({kIdRegister, 160, 108, 140, 28});
   v.push_back({kIdForgotPassword, 308, 108, 160, 28});
   v.push_back({kIdStatus, 12, 148, 456, 40});
-  v.push_back({kIdClose, 368, 200, 100, 28});
+  // 「关闭」两态同一底锚 y=250（客户区抬高到 290 是为了容纳已登录态的
+  // 换钥提示；若只挪已登录态，未登录态会在底部多出 40 px 留白）。
+  v.push_back({kIdClose, 368, 250, 100, 28});
   return v;
 }
 
@@ -148,8 +153,12 @@ inline std::vector<AccountLayoutEntry> AccountLoggedInLayout() {
   v.push_back({kIdSyncNow, 160, 70, 140, 28});
   v.push_back({kIdSyncStatus, 12, 108, 456, 20});
   v.push_back({kIdOpportunityNote, 12, 132, 456, 18});
-  v.push_back({kIdStatus, 12, 158, 456, 40});
-  v.push_back({kIdClose, 368, 210, 100, 28});
+  // 换钥提示（ADR 0063 补充）：h=36 按「8pt DEFAULT_GUI_FONT 折两行」留足
+  // 余量（单行实测参照 = 上一行 23 个中文字在 456 px 内不折行）；宁可留白也
+  // 不能裁掉安全文案。
+  v.push_back({kIdKeyRotationNote, 12, 156, 456, 36});
+  v.push_back({kIdStatus, 12, 198, 456, 40});
+  v.push_back({kIdClose, 368, 250, 100, 28});
   return v;
 }
 
@@ -340,8 +349,10 @@ inline void AccountClientSize(AccountWindowRole role,
                                int* height) {
   switch (role) {
     case AccountWindowRole::kAccount:
+      // 250 → 290：已登录态新增「换钥提示」多占一行（ADR 0063 补充），
+      // 关闭按钮两态统一下移到 y=250；高度 = 最大底边 278 + 底部余量。
       *width = 480;
-      *height = 250;
+      *height = 290;
       return;
     case AccountWindowRole::kVerify:
       *width = 400;
