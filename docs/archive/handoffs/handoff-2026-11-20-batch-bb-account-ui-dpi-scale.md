@@ -146,7 +146,7 @@ ADR 0068 早期版本写「缩放系数取自真实字体度量（`GetTextMetric
 
 | # | 项 | 来源 | 状态 |
 |---|---|---|---|
-| 1 | **175% / 200% 真机像素证据** | BA §6 第 3 项 | 本批仍**未验**（本机只有 150% 一档；更高档位由单测缩放律覆盖几何等价，但无像素证据） |
+| 1 | **175% / 200% 真机像素证据** | BA §6 第 3 项 | **未闭环（用户 2026-11-20 拍板「先不切，按未闭环收口」）** —— 本机 `AppliedDPI` 恒 144，免注销切档五条路径全排除（§12.2）；已闭环的是 **144 档真机像素证据**（§12.4 两份独立）+ 整表等比缩放律（云单测 586-0）。缺的只是 168/192 两档像素级确认；重新发起须先真切档再跑 `run-dpi-tier.ps1 -ExpectedDpi 168/192`（脚本侧已就绪，见状态正本 §10.4） |
 | 2 | **A-4 / A-5 未登录态实测** | BA §6 | **未测**（需登出 = 用户账号状态变更，探针不自行发起） |
 | 3 | **AZ §6 第 2 项 B-1/B-2/B-3 孤儿会话回收端到端** | AZ | **未做**（建议作为下一批第 1 项） |
 | 4 | **AZ §6 第 3 项：已运行 TSF 宿主逐 pid 枚举模块验证** | AZ | 未做 |
@@ -209,3 +209,54 @@ ADR 0068 早期版本写「缩放系数取自真实字体度量（`GetTextMetric
 - 本小节随收口提交（`docs(fluxing): 补记批次 BB 提交哈希与真机复验结论`）落库，其自身哈希见 `git log -1`。
 - `librime/` 子模块工作区仍脏（`m librime`）⇒ **未入库**（全程按路径显式 `git add`，未用 `git add .`）。
 - `docs/design/quickpanel-v6/design-demos/*.html`（他任务遗留）**未入库**。
+
+---
+
+## 12. 收口追加（BB 出包后 · 缺陷 D + 175%/200% 取证阻塞）
+
+本节由 BB 出包装机后的续接回合补记，**未经用户授权提交**。
+
+### 12.1 缺陷 D 已修（`AccountUiDpi()` 缓存系统 DPI 值）
+
+- **定性**：`CloudAccountDialog.cpp` 的 `AccountUiDpi()` 用 `static int cached = 0; if (cached > 0) return cached;` **永久缓存系统 DPI 值**，违反官方 `GetDpiForSystem` 页原文「You should not cache the system DPI, but should use `GetDpiForSystem` whenever you need the system DPI value.」（Microsoft Learn，2024-02-22 版）。后果：用户改缩放后账号页仍按旧 DPI 排版，直到服务进程重启；而 `WeaselServer.exe` 是 **PPL，不能 kill** ⇒ 实际表现为「改了缩放却看不出变化」。
+- **修法**（结构上不再存在值缓存）：
+  - `WeaselServer/Cloud/CloudAccountUi.h` 新增纯函数 `inline int AccountNormalizeSystemDpi(long raw)`：合法区间 `[48, 960]`，越界回退 `kAccountBaseDpi = 96`。
+  - `WeaselServer/Cloud/CloudAccountDialog.cpp::AccountUiDpi()` 删除值缓存；`static GetDpiForSystemFn fn` + `static bool fn_resolved` **只缓存函数指针**；探测用 `long raw`，`raw < 48` 回退 `GetDeviceCaps(LOGPIXELSX)`；末行 `const int dpi = AccountNormalizeSystemDpi(raw);`。
+  - 交叉校验日志加 `static bool mismatch_logged` **只记一次**（保留既有 `delta * 8 > dpi` 判据）。
+- **新增判据 9**（`TestAccountPageUiDpiScale()` 末尾）：`AccountNormalizeSystemDpi(0/-1/47/961/4000) == 96`；`(48/120/144/168/192/240/288/480/960)` 原样透传。测试注释已写明「**不缓存值**无法用单测直接证明（同一进程内系统 DPI 恒定）⇒ 生产侧改成结构上不存在值缓存，单测只覆盖可测分支」，避免留下假覆盖。
+- **门禁**（实测）：云单测 **`PASS=586 FAIL=0` / `VERDICT: ALL PASS`**（AX/AY 基线 577 + BB 判据 1–8 = 585 + 本轮判据 9 = **586**，计数自洽），回环回归 11-0；`build.bat weasel` **exit 0 / 0 警告 0 错误 / 25.79 s**；`CloudAccountDialog.obj` mtime 晚于源码 ⇒ 确实重编译；clang-format 定点 `CloudAccountUi.h:151-162` 与 `CloudAccountDialog.cpp:1150-1196` 均 exit 0，判据 9 区间格式化一次后 exit 0。
+- **既有噪声（非本轮引入）**：`TestFluxingCloud.cpp` 3 条 `warning C4996 'fopen'`（第 3164/3175/3215 行），距本轮改动的 2966-2988 行很远。
+- ~~**未出包**：缺陷 D 修复目前只在 `output/Win32/WeaselServer.exe`（未出包、未装机）；`fluxing-1.3.7-installer.exe` **不含**该修复；须 bump 1.3.8 + 重新出包 + 覆盖安装才能真机生效。~~ **本条已作废（2026-11-20 21:5x 磁盘/进程实测更正）**：`output/archives/fluxing-1.3.7-installer.exe`（42 975 921 B）**含**该修复且**已装机** —— 装机件 `D:\Program Files\fluxing\weasel\WeaselServer.exe` 20:30:28 写入、服务进程 pid 77332 于 20:37:56 启动且 `FileVersion=1.3.7.0`，装机后真机探针读出的正是**缩放后**几何（客户区 720×435、`id=1035` 684×54 = 96 dpi 基准 480×290 / 456×36 的 1.5 倍）⇒ **缺陷 D 已在真机生效，不需要 bump 1.3.8**。完整实测链见状态正本 §10.1–§10.3。
+
+### 12.2 §10 第 3 项（175%/200% 真机复验）**已登记未闭环**（用户拍板不切档）
+
+**免注销切档五条路径全部实测排除**（别再试）：
+
+1. DisplayConfig 私有 `GET/SET_DPI_SCALE`（`-3`/`-4`）⇒ 本机返 `87 = ERROR_INVALID_PARAMETER`；SDK `10.0.26100.0\um\wingdi.h:3046-3052` 的 `DISPLAYCONFIG_DEVICE_INFO_TYPE` 只到 `SET_WCG_STATE = 17`，两版 SDK 的 `um`/`shared` 均无 `displayconfig.h`。
+2. `SPI_SETLOGICALDPIOVERRIDE`（正确常量 **`0x009F`**，首测因正则把 `0x009F` 截成 `0` 而作废重跑）⇒ 四档全 `ok=True` 但 `EFF` 恒 144（`v=+2` 另返 `err=1460 ERROR_TIMEOUT`），还原后与 BEFORE 逐字相同。
+3. 注册表 `PerMonitorSettings\<mon>\DpiValue`（-1/-2/+1）+ `WM_SETTINGCHANGE("Display")` 广播 ⇒ `EFF` 恒 144。
+4. 注册表直改 `HKCU\Control Panel\Desktop\LogPixels` ⇒ 只注销/重登后生效。
+5. `SPI_SETWORKAREA` 类广播 ⇒ 无效。
+
+**当前本机状态**：`EFF/SYSTEM/LOGPIXELSX/AppliedDPI` 全部 **144**，但 `HKCU\Control Panel\Desktop\LogPixels=168`、`Win8DpiScaling=1` ⇒ **175% 已登记未生效**（与「走了自定义缩放路径」吻合；`PerMonitorSettings` 两条 `DpiValue` 已还原为 0）。
+
+**已拍板（2026-11-20）**：用户选 **②** —— 原话「**先不切，按未闭环收口**」。168/192 两档真机像素证据**登记为未闭环**（不是「待办」、不是「阻塞」），本批不再要求任何物理动作，也不再重试上面五条切档路径。替代判据见状态正本 §5（等价判据）与 §10.2（144 档两份独立像素证据 + 等比自证 `480×290×1.5=720×435`、`456×36×1.5=684×54`）。将来若要补证，仍走「预设 175%/200%」路线，脚本侧无需再改。
+
+### 12.3 状态正本与新增资产
+
+- 状态正本：`reports/fluxing-bb-dpi-scale/dpi-tier-probe-status.md`（§1 实测表、§2 资产与用法、§3 已排除路径、§4 未闭环、§5 等价判据、§7 缺陷 D 全记录）。
+- 新增：`run-dpi-tier.ps1`（单档一键，桌面守卫 + **错档拒绝退出码 3**，守卫自检已验）、`retest-spi-override.ps1` + `spi-override-retest.txt`、`cloudtest-defect-d.txt`、`build-weasel-defect-d.log`；`dpi-scale.ps1` **作废留档**。
+- `run-dpi-tier.ps1` 内 installer 路径**写死 1.3.7**，换包须同步改。
+
+### 12.4 收口追加：测量侧两处守卫已修 + 144 档证据闭环 + 未闭环清单定稿
+
+**测量侧（本轮新增，属探针代码、非产品代码；未改 `librime/`、未改 IPC 协议、未新增依赖）**
+
+- `run-dpi-tier.ps1` **guard 2 判源改为注册表 `AppliedDPI`**。原实现拿 `GetDpiForSystem() -ne ExpectedDpi` 判档，而该值在本机任何宿主恒返 **96** ⇒ 任何人切到 175% 也会被 `ABORT_WRONG_DPI`（退出码 3）**假拒**。`GetDpiForSystem`/`LOGPIXELSX`/`LogPixels` 降级为信息行，与宿主读数不一致时打 `WARN_HOST_DPI`（宿主不感知，非档位问题）。
+- **新增 guard 3：几何本档校验**。以 96 dpi 基准 480×290 按 `MidpointRounding::AwayFromZero` 缩放到目标档（96⇒480×290 / 144⇒720×435 / 168⇒840×508 / 192⇒960×580），与 `report.json` 的 `dialog_client` 实测比对：等于基准宽 ⇒ `ABORT_DPI_VIRTUALIZED`，等于别档宽 ⇒ `ABORT_STALE_DPI`（点名匹配到的档），两者均**退出码 7**；取不到几何 ⇒ 退出码 6。头部 exit-code 文档已同步。
+- **四方向实测（不是纸面推断）**：拒绝路径 `EXIT=3`、144 档整链 `EXIT=0`（`CLIENT=720x435 EXPECTED=720x435` + `CLIENT_MATCHES_TIER`）、虚拟化有牙 `EXIT=7`、stale 别档有牙 `EXIT=7`；证据目录 `selfcheck-reject-168\` `selfcheck-144\` `selfcheck-teeth-virt\` `selfcheck-teeth-stale\`，合成数据由 `selfcheck-stub-probe.ps1` 经 `STUB_CLIENT` 注入（**只写合成 `report.json`，不用于取证**）。
+- **rect 未虚拟化的实测自证**：`probe-dpi-awareness.ps1` 在同一机器同一时刻跑 pwsh 7（`THREAD_AWARENESS=1`）与 powershell 5.1（`=2`），账号窗客户区均 **720×435**、`id=1035` 均 **684×54**、`id=1006` 均 684×60，**逐字相同**且等于 144 dpi 设计表、不等于 96 空间（480×290 / 456×36）⇒ 现有宿主可直接做高 dpi 取证，无需先解决「宿主不感知」。
+
+**144 档真机证据（已闭环，两份独立来源）**：`evidence-after-1.3.7\probe-report-after-137.json`（`dpi=144` / `dialog_client=0,0,720,435` / `id=1035` 684×54 / `verdict=A1_NOT_CLIPPED` / `logged_in=True`）与 `selfcheck-144`（探针 `note.chars=37 / box_w=684 / box_h=54 / line_h=18 / lines=1 / deficit_px=-36 / clipped=False`）。
+
+**未闭环定稿**：175%/200% 两档像素证据按用户拍板登记未闭环，口径与「将来重跑」命令见状态正本 §10.4。状态正本 `dpi-tier-probe-status.md` 现为 §1–§10（§9 测量侧自证、§10 收口核实），§9.4 已加「后记」指向 §10.4。
