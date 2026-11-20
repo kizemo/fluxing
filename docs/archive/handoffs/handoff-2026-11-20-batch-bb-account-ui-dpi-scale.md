@@ -148,7 +148,7 @@ ADR 0068 早期版本写「缩放系数取自真实字体度量（`GetTextMetric
 |---|---|---|---|
 | 1 | **175% / 200% 真机像素证据** | BA §6 第 3 项 | **未闭环（用户 2026-11-20 拍板「先不切，按未闭环收口」）** —— 本机 `AppliedDPI` 恒 144，免注销切档五条路径全排除（§12.2）；已闭环的是 **144 档真机像素证据**（§12.4 两份独立）+ 整表等比缩放律（云单测 586-0）。缺的只是 168/192 两档像素级确认；重新发起须先真切档再跑 `run-dpi-tier.ps1 -ExpectedDpi 168/192`（脚本侧已就绪，见状态正本 §10.4） |
 | 2 | **A-4 / A-5 未登录态实测** | BA §6 | **未测**（需登出 = 用户账号状态变更，探针不自行发起） |
-| 3 | **AZ §6 第 2 项 B-1/B-2/B-3 孤儿会话回收端到端** | AZ | **未做**（建议作为下一批第 1 项） |
+| 3 | **AZ §6 第 2 项 B-1/B-2/B-3 孤儿会话回收端到端** | AZ | **未判定**（探针三轮 run-01/02/03 的全部阻塞点已逐个坐实并修掉，run-03 已跑通「宿主窗可见 + 账号窗打开 + 合成键入 + 两轮手动同步」全链；**差最后一条硬前置：探针宿主上 Fluxing 不是当前文本服务 ⇒ 键入没进 Fluxing ⇒ 闸门正当放行**。取证零成功，三条判据仍零证据；根因、修法与拍板项见 §13。建议作为下一批第 1 项） |
 | 4 | **AZ §6 第 3 项：已运行 TSF 宿主逐 pid 枚举模块验证** | AZ | 未做 |
 | 5 | **AZ §6 第 4 项：`TestWeaselIPC.exe /verify-client-pid`** | AZ | 未跑（需先 `WeaselServer.exe /quit` 抢管道，否则必然假红） |
 | 6 | 双机 AC 7 条 + restore 端到端 + 输入延迟两组对照 | 多批 | 未做 |
@@ -260,3 +260,136 @@ ADR 0068 早期版本写「缩放系数取自真实字体度量（`GetTextMetric
 **144 档真机证据（已闭环，两份独立来源）**：`evidence-after-1.3.7\probe-report-after-137.json`（`dpi=144` / `dialog_client=0,0,720,435` / `id=1035` 684×54 / `verdict=A1_NOT_CLIPPED` / `logged_in=True`）与 `selfcheck-144`（探针 `note.chars=37 / box_w=684 / box_h=54 / line_h=18 / lines=1 / deficit_px=-36 / clipped=False`）。
 
 **未闭环定稿**：175%/200% 两档像素证据按用户拍板登记未闭环，口径与「将来重跑」命令见状态正本 §10.4。状态正本 `dpi-tier-probe-status.md` 现为 §1–§10（§9 测量侧自证、§10 收口核实），§9.4 已加「后记」指向 §10.4。
+
+---
+
+## 13. 收口追加（续轮 · §7 第 3 项 B-1/B-2/B-3 孤儿会话回收端到端 = **未判定**，三轮探针根因全部坐实）
+
+**本段性质** = 纯取证轮（**未改任何产品代码、未改 `librime/`、未改 IPC 协议、未新增依赖、未出包、未装机、未提交**）。装机版仍是 1.3.7.0。
+
+### 13.1 三轮探针的阻塞点逐个坐实并修掉（改的都是 `scripts/verify/` 探针码）
+
+| run | 断点 | 根因（实测，非推断） | 修法（已落码） |
+|---|---|---|---|
+| 01 | `ABORT_HOST_WINDOW_MISSING`（exit 7） | 宿主窗**确实存在**（`128480\|vis=0\|sz=502x276\|WindowsForms10.Window…`），marker 的 `host_pid` 与 `Start-Process .Id` **逐字相同 ⇒ pid 归属口径没错**；父侧 `Top()` **硬要求 `IsWindowVisible`** ⇒ 枚举恒空。`Start-Process -WindowStyle Hidden` 起的子进程里裸 `Form.Show()` 不产生可见窗 | 宿主侧强制可见（`WindowState=Normal` + `ShowWindow(SW_SHOWNORMAL)` + `SetWindowPos(0x43 含 SWP_SHOWWINDOW)` + `SetForegroundWindow` + marker 记 `hwnd/host_class/visible/ws/ex`）；父侧新增**不要求可见**的 `TopAny(cls)`（保留 `Top()` 原语义供账号窗查找） |
+| 02 | `ERROR tray window not found on server pid` | `Open-Dlg` 把 `WM_COMMAND(40024)` 投给**托盘壳窗**且用 `Top()` 查（该窗常不可见）⇒ 必假红。同族已证实形态在 `scripts/verify/verify-cloud-account-window.ps1:311-320`：40024 只由**服务端自身主窗**处理，`CSystemTray` 的 WndProc 不管它 | 改为向**服务端 pid 的全部顶层窗**逐个 post 40024（只有 40024 有注册处理器，其余 post 无害），并把 `open_dlg_targets` 落 `report.json` 作证据 |
+| 03 | `INCONCLUSIVE_WINDOW`，Leg A/B 均 `blocked=False` | 见 §13.2 —— **键入没进 Fluxing**，闸门正当放行；不是产品回归 | 未修（需用户拍板，§13.4） |
+
+### 13.2 run-03 实测：取证链已跑通到最后一步，但**宿主没有 Fluxing 会话**
+
+- 运行态（当场回读）：`server pid=77332 ver=1.3.7.0`；`host1 pid=333452 hwnd=0x1e0cd6 rect=502x276 visible=True marker.visible=1`；`dlg_opened_before_typing=true`；`open_dlg_targets` 5 个窗；账号窗关闭钮 `BM_CLICK(1016)` 生效（状态文本回读到「手动同步已提交…」）。
+- Leg A `ms_since_last_key=192` ⇒ `blocked=False`；Leg B `ms_since_last_key=7770` ⇒ `blocked=False`，且 7770 < `IdleGraceMs=10000` ⇒ Leg B **落在无判别力窗口**（「最近输入」还没过期，与 Leg A 无法区分）⇒ 脚本按设计判 `INCONCLUSIVE_WINDOW` 作废，**不记 PASS/FAIL**。
+- 🔑 **决定性证据 = 服务端诊断日志整轮几乎没长**：`295893 B → 295985 B`（**+92 B**），新增的**唯一一行**是 `23:33:47.894][acctdlg] WM_DESTROY: cleared slot for FluxingCloudAccountDialog_v1`（= 本探针 `finally` 关账号窗）。⇒ 全轮**没有** `focus_in profile presence=present`、**没有** `own_ui_session`、**没有** `remove_session`、**没有**任何闸门/skip 行。两条日志切片 `log-slice-A/B_*.txt` 各 **3 B（空）**。
+- 与诊断枚举吻合：宿主进程上挂着 **`Sogou_TSF_UI` / `SoPY_Status` / `SoPY_Hint` / `SoPY_UI`（vis=1）** ⇒ 本机当前文本服务是**搜狗**，`SendKeys 'zhongguo'` 被搜狗吃掉，**Fluxing 侧连会话都没建** ⇒ `live_sessions=0` ⇒ `MaintenanceGateAllowsWithIdle(live<=0)` 放行是**正确行为**。
+- **闸门通过率仍未知**（本批不能否证 ADR 0065 的实现，只能说这条真机路径没测到）。
+
+### 13.3 本轮新增的固化判据（下次直接用，别再踩）
+
+1. ✅ **`reclaim orphan session ipc_id=` 是文件可见的**：`RimeWithWeasel.cpp:1281` 用 `fluxing::diag::AppendLine("server", …)`；`:1279` 那条 `DLOG(INFO) << "reclaim orphan session: ipc_id = "` 无调试器不可见。**B-2 判据通道成立**，全日志当前命中 **0 次**（历史上从未回收过，符合 ADR 0067「崩溃后若无新会话 ⇒ 残留永不清」）。
+2. ⚠️ **B-2 判据文本按清单字面必假红**（源码级坐实）：清单要 `… client_pid=<pid> live=<m>`，实现只写 `reclaim orphan session ipc_id=<n>` ⇒ 客户端 pid **全链路不落日志**；ipc_id ↔ 探针宿主也无直接通道 ⇒ 只能靠「sweep 窗口内恰好 N 条 reclaim 行」间接归因。**待用户拍板**：降级取证 or 补日志字段后重新出包 + 覆盖装机（代价 ≈ 一次出包 + 41 s 装机）。
+3. 🚨 **`db mtime 前进` 单独不成牙齿**：run-03 里 Leg A 点击于 `23:33:39`，而 `db_mtime_after=23:33:33` **早于点击** ⇒ 该前进来自 librime 自身的 userdb 落盘，与「立即同步」无关。**判据必须收紧为 `mtime_after >= 点击时刻`**（并优先以日志行定性），否则任何一次后台导出都会伪造「放行」。`advanced` 的语义因此作废，`report.json` 里的 `advanced=True` 本轮**不得引用**。
+4. ⚠️ `own_ui_session ipc_id=`（`:474-479`）**只对自家 UI 客户端打印** ⇒ 不能用来证明「探针宿主建了 Fluxing 会话」；`Add session: created session_id=` 走 `DLOG` ⇒ **宿主是否建会话没有直接日志通道**，只能靠「日志增长量 / focus_in presence=present」反证。本轮用的就是这个反证。
+5. Leg B 的合法窗口比 = 必须让 `IdleGraceMs < ms_since_last_key < CompGraceMs`（本机 10 s < idle < 60 s），且脚本边沿 8 s 内作废；本轮 `7770 ms` 是**等待时长算错**（超 `$CompGraceMs` 前太早就点）⇒ 下一轮把 Leg B 的等待改成**显式等到 idle ≥ 15 s**。
+
+### 13.4 唯一剩下的硬前置 + 待拍板（下一批第 1 项的门槛）
+
+**硬前置** = 探针宿主进程上 **Fluxing 必须是当前文本服务**（否则永远测不到闸门，也永远造不出孤儿会话）。三条路：
+
+- **甲（最省，需用户在场，推荐先试这条）**：探针把宿主窗置前后，**由用户手动把输入法切到火流猩**（一次常规切换），脚本再键入。副作用 = 改动用户当前输入法选择，须用户同意并当场在场；测完用户自己切回。
+- **乙（无需用户在场，探针侧写 TSF 绑定）**：在宿主子进程里用 TSF API 显式激活 Fluxing 的 TIP（CLSID `{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}` / profile `{3D02CAB6-…}`，见 `install.nsi:1154/1163` 与 `docs/release/restart-checklist-1.3.6.md`）。代价 = 新增探针码 + 需查证正确的接口序列（**本项目尚无已证实形态，不得凭记忆猜 API**）。
+- **丙（放弃真机端到端）**：B-1/B-2/B-3 长期登记「单测覆盖 + 真机未判定」，把 §7 第 3 项按「受环境限制、不追」收口。
+
+**探针已就绪、无需重写**：`scripts/verify/orphan-probe-host.ps1`（7,569 B，实测 `visible=1`）+ `scripts/verify/verify-orphan-session-reclaim.ps1`（4 处修复全落码、`PARSE_OK`）。下一轮**只需**：加 Leg B 等待修正（§13.3 第 5 条）+ 收紧 `advanced`（第 3 条）+ 走 §13.4 甲或乙，然后跑 run-04。
+另需知：跑之前**确认用户不在打字**（Leg C 必须在宿主最后一次键入后 60 s 内点击，期间用户任何真实键入都会把闸门正当关掉 ⇒ 假 FAIL）。
+
+### 13.5 证据路径（本轮全部产物）
+
+`reports/fluxing-bb-orphan-reclaim/` = `evidence-log-vocab.txt`（判据字面量真源）、`diag-enum-01.md`（run-01 一次取齐诊断：marker 全文 + 全桌面窗口清单 + 宿主 stdout/stderr + 残留核对）、`report-run01.json` / `report.json`（= run-03 快照，已另存 `report-run03.json`）/ `notes.txt`、`run-02-console.txt` / `run-03-console.txt`、`log-slice-A_recent_input.txt`（3 B）/ `log-slice-B_orphan_composing.txt`（3 B）。
+
+**本轮工具坑（新增）**：① 判「日志本轮有没有长」要**同时**看字节增量与新增行的**时间戳**，只看命中数会把「历史累计 483 条 `remove_session`」误读成本轮事件；② `& pwsh -File` 里脚本用 `exit` 会杀掉整个 pwsh ⇒ 探针必须起子进程跑；③ 三腿同处一个 60 s 组合宽限窗口，**任何一次 Leg 的等待时长要按 `ms_since_last_key` 现算而非按 `Start-Sleep` 秒数推算**（本轮 Leg B 就是这么落进无判别力窗口的）；④ **写取证/诊断脚本时 P/Invoke 的 DLL 归属要逐个核**（`GetWindowRect`/`ShowWindow`/`SetWindowPos` 都在 **`user32`** 不在 `kernel32`；`GetCurrentThreadId` 在 `kernel32`）⇒ 写错是**运行期** `EntryPointNotFoundException`，不是编译期错误，本轮踩过；⑤ `Start-Process -RedirectStandardOutput/Error` 的落地文件被子进程持有 ⇒ 读取必须用共享模式 `File.Open(p,'Open','Read','ReadWrite')`，`ReadAllText` 会抛 `IOException`。
+
+**推送口径更正（本轮实测）**：§11 收口状态登记的「分支 ahead 3 未 push」**已不成立**。本轮 `git rev-list --left-right --count HEAD...kizemo/feat/100-cloud-sync` = **`0	0`**，`git log kizemo/feat/100-cloud-sync..HEAD` **空** ⇒ `feat/100-cloud-sync` 与上游**完全同步**（此前某轮已完成 push）。**本轮新增未提交改动**（均未 `git add`）：`scripts/verify/orphan-probe-host.ps1`、`scripts/verify/verify-orphan-session-reclaim.ps1`、`scripts/verify/diag-host-window-enum.ps1`（三个均 untracked 探针）+ 本 handoff + `docs/archive/prompts/prompt-next-session-2026-11-20-batch-bb-account-ui-dpi-scale.md`（接力 prompt 已就地改写为本轮口径）+ `reports/fluxing-bb-orphan-reclaim/*` 与 `reports/fluxing-bb-dpi-scale/dpi-tier-probe-status.md`。**push 仍需用户授权**。
+
+## 14. 收口追加（批次 BC · AZ §6 第 2 项 B-1/B-2/B-3 孤儿会话回收端到端 = **实测闭环 PASS**）
+
+### 14.1 本批性质 = 代码实现（**仅日志字段**）+ 取证批次
+
+未改 `librime/`、未改 IPC 协议消息类型、未新增第三方依赖、用户可见中文文案零改动。
+产品码改动只有一处：`include/FluxingSessionReclaim.h` 新增纯函数 `FormatReclaimLogLine(ipc_id, client_pid, live_after)`（**全 ASCII**——`RimeWithWeasel.vcxproj` 无 `/utf-8`；R7 生产与单测同源），服务端 `RimeWithWeasel/RimeWithWeasel.cpp::_ReclaimOrphanSessions` 在 `_RemoveSessionInternal(ipc_id, true)` **之后**写该行 ⇒ `live=` = **回收后**存活会话数、`client_pid=` = 被回收会话上报的宿主 pid。
+⇒ **未走「加同步轮次诊断日志 + bump 1.3.9 重出包装机」那条路**（见 §14.3：不需要）。
+
+### 14.2 B-2 / B-3 端到端 PASS
+
+探针 `scripts/verify/orphan-ipc-chain.ps1`，打真机 **1.3.8.0** 服务端（pid 304416 / `D:\Program Files\fluxing\weasel\WeaselServer.exe`）：
+孤儿会话 `ipc_id=2493775873` / `client_pid=207096` → 强杀宿主 → `--trigger` 客户端触发 `AddSession` 惰性清扫 ⇒
+`reclaim orphan session ipc_id=2493775873 client_pid=207096 live=1`（**B-2 字面量命中**）+
+`remove_session active orphan_reclaim presence=kept`（**B-3**）+ `presence=absent` **0 次**（**B-3 反向判据**）⇒ `VERDICT=ORPHAN_RECLAIM_OK` / `EXIT=0`。
+`WEASEL_IPC_ECHO` 探活：存活时 `ECHO=2493775873`、回收后 `ECHO=0`。
+
+### 14.3 ⚠️ 本轮最大认知 = B-1 的「账号页观测面」在产品侧**根本不存在**（不是判据写错）
+
+- 账号页「最近同步」控件 `kIdSyncStatus = 1017` 的文案取自 `WidgetText()` 的**静态字面量**「最近同步：尚未同步。」；`RefreshUi()`（`WeaselServer/Cloud/CloudAccountDialog.cpp:1299-1352`）**只**刷新 1006 状态行 / 账号标签 / 历史下拉 / 设备列表，**从不写 1017**。
+- 轮次结果只存在 `Impl::sync_status_text` 成员里（`SetSyncStatus` → `impl_->sync_status_text`，:232-235），**没有任何可见控件承载** ⇒ 「读 1017 看是否被跳过」这条路**在结构上不可能成立**。
+- 前两轮探针（`scripts/verify/orphan-gate-sync-e2e.ps1` v1/v2）据此判 `FAIL=B1A_FAILED` 属**判据无效**，**不是产品缺陷**。
+- ⇒ 改用**项目自己的官方口径**：`docs/release/restart-checklist-1.3.6.md` §4 明写「闸门是否放行 = **维护导出文件 mtime 是否前进**（状态文案不可作判据）」，观测面 = `<RimeUserDir>\sync\<账号>\rime_ice.userdb.txt`（本机 = `D:\Program Files\fluxing\user1\fluxing\sync\adbd9f3b-d5b9-4dfc-9929-85eac8509db6\rime_ice.userdb.txt`，4 138 942 B）。
+- ⇒ **因此不需要改产品代码、不需要 bump 1.3.9、不需要重新出包装机**（原计划的「加同步轮次诊断日志」路线作废）。
+
+### 14.4 闸门语义与 B-1 的判别力来源（`include/FluxingMaintenanceGate.h`，ADR 0065，R7 真相源）
+
+`allows = live<=0 || !has_input_history || idle>60s(有未上屏组合串) || idle>10s(无组合串)`；
+`idle` 取**全局** `m_last_input_tick`（`ProcessKeyEvent` 每次按键都写，:713-717）。
+⇒ **回收前后 `live_sessions` 数量其实不变**（回收方客户端自己占一个槽）⇒ B-1 的判别力**只能来自 `composing_sessions` 归零**（`_RemoveSessionInternal` :642-643 同时清 live 与 composing 两个闸门输入）。
+⇒ 合成客户端必须真的持有「未上屏组合串」（`_SyncSessionComposing` → `status.is_composing`）才造得出「残留会话把闸门顶住」的状态；本轮把 `--hold` 改成**每 1.5 s 按一键**且支持 `<marker>.pause` 暂停打字才造出来。
+⇒ **判别窗口**：`idle` 必须落在 **(10 s, 60 s]**——>10 s 才排除「最近有输入」判据，≤60 s 才排除「组合串宽限已过期」判据。本批 A2 用 idle≈13 s、B 用 idle=28.8 s ⇒ 两侧都在窗口内。
+
+### 14.5 B-1 端到端 PASS（三段式对照）
+
+探针 `scripts/verify/orphan-gate-export-mtime.ps1`（21 762 B），跑批 `reports/fluxing-bb-orphan-reclaim/gate-export-20261121-004132/`：
+
+| 段 | 状态 | 结果 |
+|---|---|---|
+| **C 对照** | 无合成会话 | 触发一轮 ⇒ 导出文件 **0.4 s 推进**（证明触发链路 + 判据都有效） |
+| **A2 残留** | 合成宿主存活、停打、idle > 10 s | 触发一轮 ⇒ **12 s 内零推进** ⇒ 闸门被残留会话顶住（B-1 的「之前」） |
+| **B 回收后** | 强杀宿主 → `--trigger` 触发惰性清扫 | `ECHO_AFTER=0`、`IDLE_BEFORE_B_SEC=28.8` ⇒ 再触发一轮 ⇒ 导出文件 **0.4 s 推进** ⇒ **不再被跳过** |
+
+⇒ `CRITERION_B1_CONTROL_ADVANCED=1` / `CRITERION_B1_RESIDUAL_BLOCKED=1` / `CRITERION_B1_RECLAIMED_ADVANCED=1` ⇒ `VERDICT=GATE_EXPORT_E2E_OK` / `EXIT=0`。
+同轮 B-2/B-3 复核：`reclaim orphan session ipc_id=2493775873 client_pid=244760 live=1` ×1、`presence=kept` ×1、`presence=absent` ×0。
+
+### 14.6 覆盖边界（不夸大）
+
+- 被验对象是**合成 IPC 客户端**（与 TSF 宿主共用服务端同一条 `ProcessKeyEvent` → 会话/组合串记账 → 闸门输入 → 惰性回收路径）⇒ 证明的是**服务端 ADR 0067 路径确实释放了维护闸门**，**不等于**「真实 TSF 宿主崩溃现场原貌」已被复现。
+- **B-4**（正常切窗 / 用户主动切走 ⇒ 表现与批次 AW 前一致）、**B-5**（旧客户端不写 `session.client_pid=` ⇒ 按「pid 未知」不回收、不得误杀）本批**未做**（B-4 需真实宿主、B-5 需旧版客户端）。
+
+### 14.7 本轮工具坑（新增，务必带走）
+
+1. **`RefreshUi` 不写 1017** ⇒ 「读账号页控件判跳过/不跳过」结构上不成立（两轮假 FAIL 的根因）。**先确认观测面真的被刷新，再信它。**
+2. **导出文件 mtime 在轮次早期就推进**（对照轮 **0.4 s**）⇒ 判据极灵敏，「是否被跳过」1 s 内可判；**不必**等整轮网络往返。
+3. **回收前后 `live_sessions` 不变** ⇒ 判别力只来自 `composing_sessions` ⇒ 合成客户端必须**持续按键**（一次性按键在 idle>10 s 后闸门即放行 ⇒ 探针无判别力）。
+4. **idle 判别窗口 (10 s, 60 s]**：A2 与 B 的触发时刻都要落在窗口内，否则「B 轮推进」证明不了任何东西（组合串宽限过期后闸门本来就会放行）。
+5. **合成客户端暂停打字** = 父脚本创建 `<marker>.pause` 文件，工具侧轮询文件是否存在。
+6. PowerShell：`Log "fmt" -f a,b` 里的 `-f` 必须**加括号**或改插值；`-f` 参数跨行且行尾带逗号会抛「Index must be >= 0」。
+
+### 14.8 证据路径（本批全部产物）
+
+`reports/fluxing-bb-orphan-reclaim/gate-export-20261121-004132/`（**B-1 主证据**：`console.txt` / `account-children.txt` / `log-slice.txt` / `hold.*` / `trigger.*`）·
+`reports/fluxing-bb-orphan-reclaim/ipc-chain-20261121-002839/`（**B-2/B-3**）·
+`reports/fluxing-bb-orphan-reclaim/gate-sync-20261121-003351/` 与 `gate-sync-20261121-003540/`（**1017 文案判据的两次假 FAIL**，留作反例）·
+`reports/bb-orphan-reclaim/`（1.3.8 构建/装机日志 + `install-138.cmd`）·
+新脚本 `scripts/verify/orphan-gate-export-mtime.ps1`（B-1 新探针）/ `orphan-ipc-chain.ps1`（B-2/B-3）/ `orphan-gate-sync-e2e.ps1`（**旧 1017 判据探针，留作反例**）/ `test/TestOrphanReclaimE2E/`（合成客户端）。
+产物：`output/archives/fluxing-1.3.8-installer.exe` = 42 967 778 B · sha16 `AB009C20F6304098`；`output\Win32\WeaselServer.exe` = 2 785 792 B · `FileVersion 1.3.8.0`。
+
+### 14.9 未闭环清单（本批新增，沿用旧项不重复）
+
+① **B-4 / B-5 未做**（B-4 需真实 TSF 宿主产生 FocusOut；B-5 需旧版客户端）；② 「换钥后旧行不可解是否在账号页提示」待用户拍板；③ 175% / 200% DPI 两档、A-4 / A-5（需用户在场登出）、双机 AC 7 条、restore 端到端、输入延迟两组对照、缺陷 A 反向判据 G-3/G-5、`/verify-client-pid`（需授权停服窗口）均**沿用未闭环**；④ **B-1/B-2/B-3 只覆盖服务端路径**，真实 TSF 宿主崩溃现场未复现；⑤ 本批 + BB + AZ 的文档与脚本改动**未 push**（需用户授权）。
+
+### 14.10 提交哈希补记（本批已本地落库，push 需用户授权）
+
+| # | 哈希 | 提交信息 |
+|---|---|---|
+| 1 | `5ef9a23` | `fix(fluxing): 孤儿会话回收日志补 client_pid/live 字段 —— 支撑 B-2 判据` |
+| 2 | `86efdab` | `ci(fluxing): 合成 IPC 客户端探针 —— B-1/B-2/B-3 孤儿回收端到端取证` |
+| 3 | 见 `git log -1` | `docs(fluxing): 1.3.8 孤儿回收端到端闭环收口（CHANGELOG + handoff §14 + 接力 prompt）` —— 本小节随其落库，故其自身哈希以 `git log -1` 为准 |
+
+- 分支状态：`feat/100-cloud-sync` 相对 `kizemo/feat/100-cloud-sync` **ahead 3 / behind 0** ⇒ 本批**已本地提交、未 push**（push 需用户授权）。
+- 提交纪律：`librime/` 子模块工作区脏（`m librime`）⇒ 全程**按路径显式 `git add`**，未用 `git add .`，子模块改动未入库；`docs/design/quickpanel-v6/design-demos/*.html` 与批次 BB 旧轮三个探针脚本保持 untracked，未入库。
+
