@@ -3528,6 +3528,40 @@ void TestSessionReclaimCriteria() {
         "活动会话：真实会话结束 ⇒ 一律清（既有行为）");
 }
 
+// 重启清单 §B-2 的判据：服务端回收孤儿会话时写进诊断日志的那一行，必须
+// 逐字是
+//   reclaim orphan session ipc_id=<n> client_pid=<pid> live=<m>
+// 格式串在生产头里（R7），本测试断言的就是生产会写出的那一行。
+void TestSessionReclaimLogLine() {
+  std::printf("[ADR 0067 / B-2] 孤儿回收诊断行格式\n");
+  namespace sr = fluxing::session_reclaim;
+
+  // ① 常规形态：三字段齐全、顺序固定、分隔符是单空格。
+  Check(sr::FormatReclaimLogLine(7, 4321, 2) ==
+            "reclaim orphan session ipc_id=7 client_pid=4321 live=2",
+        "B-2 行：ipc_id/client_pid/live 三字段逐字相符");
+  // ② pid 未知时**照样**写 client_pid=0（缺字段会让清单里的 grep 失配）。
+  Check(sr::FormatReclaimLogLine(9, 0, 1) ==
+            "reclaim orphan session ipc_id=9 client_pid=0 live=1",
+        "B-2 行：pid 未知 ⇒ 仍写 client_pid=0，不许缺字段");
+  // ③ 前缀固定（清单按这个前缀 grep）。
+  Check(sr::FormatReclaimLogLine(123, 456, 7).find(
+            "reclaim orphan session ipc_id=") == 0,
+        "B-2 行：前缀固定");
+  // ④ 字段之间用单空格分隔（不许粘连，否则字段值看不出边界）。
+  Check(sr::FormatReclaimLogLine(123, 456, 7).find(" client_pid=456 ") !=
+            std::string::npos,
+        "B-2 行：client_pid 字段前后各有单空格");
+  // ⑤ live= 是最后一个字段（清单按行尾取值）。
+  const std::string line = sr::FormatReclaimLogLine(123, 456, 7);
+  Check(line.size() >= 6 && line.compare(line.size() - 6, 6, "live=7") == 0,
+        "B-2 行：live= 是行尾最后一个字段");
+  // ⑥ 一行一条记录：不许带换行（否则 grep 到的行会被截断）。
+  Check(line.find('\n') == std::string::npos &&
+            line.find('\r') == std::string::npos,
+        "B-2 行：不含换行符");
+}
+
 }  // namespace
 
 int main() {
@@ -3592,6 +3626,8 @@ int main() {
 
   // ADR 0067：孤儿 IPC 会话回收判据（pid 未知 ⇒ 永不回收）。
   TestSessionReclaimCriteria();
+  // ADR 0067 / B-2：回收诊断行的逐字格式（重启清单 grep 用）。
+  TestSessionReclaimLogLine();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。

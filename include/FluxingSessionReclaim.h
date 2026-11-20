@@ -32,11 +32,36 @@
 //   "dead" verdict, because a reused pid belongs to a running process.
 //
 
+#include <string>
 #include <utility>
 #include <vector>
 
 namespace fluxing {
 namespace session_reclaim {
+
+// The diagnostic line the server writes when it reclaims an orphan
+// session (ADR 0067, release restart checklist item B-2).
+//
+// The checklist greps the server log for the EXACT shape
+//   reclaim orphan session ipc_id=<n> client_pid=<pid> live=<m>
+// so the format lives HERE (single source of truth, R7) and the unit
+// test asserts the very same string.
+//
+//   ipc_id     : the reclaimed session id
+//   client_pid : the host pid the client reported for that session
+//                (0 when the client never reported one)
+//   live       : number of live sessions AFTER the reclaim
+inline std::string FormatReclaimLogLine(unsigned long ipc_id,
+                                         unsigned long client_pid,
+                                         unsigned long live_after) {
+  std::string line = "reclaim orphan session ipc_id=";
+  line += std::to_string(ipc_id);
+  line += " client_pid=";
+  line += std::to_string(client_pid);
+  line += " live=";
+  line += std::to_string(live_after);
+  return line;
+}
 
 // A reported owner pid may only be probed when it can be a real host
 // process:

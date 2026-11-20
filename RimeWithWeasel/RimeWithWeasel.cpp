@@ -1277,11 +1277,24 @@ void RimeWithWeaselHandler::_ReclaimOrphanSessions(
   for (unsigned long victim : victims) {
     const WeaselSessionId ipc_id = static_cast<WeaselSessionId>(victim);
     DLOG(INFO) << "reclaim orphan session: ipc_id = " << ipc_id;
-    fluxing::diag::AppendLine(
-        "server", "reclaim orphan session ipc_id=" + std::to_string(ipc_id));
+    // 先取出被回收会话上报的宿主 pid —— _RemoveSessionInternal 会清掉会话
+    // 条目,事后查不到。
+    unsigned long owner_pid = 0;
+    auto pid_it = m_session_owner_pids.find(ipc_id);
+    if (pid_it != m_session_owner_pids.end())
+      owner_pid = static_cast<unsigned long>(pid_it->second);
     // ADR 0067: 走内部实现并标记「孤儿回收」⇒ 不翻转在场状态、不误清
     // 活动会话指针(判据见 include/FluxingSessionReclaim.h)。
     _RemoveSessionInternal(ipc_id, true);
+    // 重启清单 §B-2 的判据行:回收**之后**才写 ⇒ live= 是回收后的存活会话
+    // 数;client_pid= 是被回收会话上报的宿主 pid(未知时写 0,不许缺字段)。
+    // 格式串在共享头里(R7),单测断言的就是生产会写出的那一行。
+    fluxing::diag::AppendLine(
+        "server",
+        fluxing::session_reclaim::FormatReclaimLogLine(
+            static_cast<unsigned long>(ipc_id), owner_pid,
+            static_cast<unsigned long>(
+                m_live_session_count.load(std::memory_order_relaxed))));
   }
 }
 
