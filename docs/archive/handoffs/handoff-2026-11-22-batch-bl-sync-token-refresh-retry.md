@@ -160,6 +160,14 @@ BK 批把账号页「最近同步」状态行(1017)变成真实同步结果后�
 
 ---
 
-## 12. 提交实况
+## 12. 提交实况（按实际 `git log` 回填）
 
-见 §9 与本文末尾「提交记录」小节（由收工会话按实际 `git log` 回填，**不得凭印象写**）。
+| # | commit | 内容 |
+|---|---|---|
+| 1 | `d9d8a55` | `fix(WeaselServer): 同步路径补 401→续期→重试 —— 访问令牌过期不再让同步持续失败（ADR 0070）` —— 代码 3 文件 + 云单测 + ADR 0070 + `docs/adr/README.md` 索引 + `CHANGELOG.md` 条目 + `reports/bl-code-diff.txt` |
+| 2 | `0639fd3` | `docs(fluxing): 批次 BL 交接文档与交接指针` —— 本 handoff + 接力 prompt + `CLAUDE.md` §2 指针 |
+
+- 分支 `feat/100-cloud-sync`，基线 `ab4e350`（BK 批）。
+- **提交范围刻意收窄**：只 `git add` 本批自己的文件 ⇒ `librime` 子模块的 ` m`（**非本批改动**）、`release/`（构建产物）、`docs/design/quickpanel-v6/design-demos/*.html`、`reports/fluxing-bh-ui/probe-bh.ps1.bak-pass8`、`scripts/verify/diag-host-window-enum.ps1`、`scripts/verify/orphan-probe-host.ps1`、`scripts/verify/verify-orphan-session-reclaim.ps1` **全部留在工作区未入库**（属其它批次/待用户定，**不夹带**）。
+- **⚠️ 本批唯一的机读证据缺口**：三个 `.log`（`bl-build-verify.log` / `bl-l0-gate.log` / `bl-install-verify.log`）命中 `.gitignore` 的 `*.log` ⇒ **未入库**，只在本机工作区（`git add -f` 属待用户拍板项）。
+- 本批**未 push 之前**先做 `git status -sb` + `git diff --stat` 复核（AGENTS.md §3），确认无 `weasel.props` / `env.bat` / `*.obj` 误入。
