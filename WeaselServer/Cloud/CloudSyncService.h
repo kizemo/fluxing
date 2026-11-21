@@ -38,6 +38,7 @@
 #endif
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -221,9 +222,23 @@ struct CloudSidecarRow {
 // 网络
 // ---------------------------------------------------------------------------
 
+// 令牌续期回调（可选）：同步请求收到 401 时调用一次；成功时把**新的访问
+// 令牌**写进 out_token（调用方负责去账号服务取 —— 刷新令牌只在本机）。
+// ★ 为什么放在这一层：同步路径（推 / 拉）此前**没有** 401→续期→重试，
+//   访问令牌一过期同步就持续失败（批次 BK 真机实测：两轮同步都报
+//   「访问令牌已过期，请用刷新令牌续期。」）；只有设备管理三处有这层。
+using AccessTokenRefresher =
+    std::function<bool(std::string* out_token, std::string* err)>;
+
 class CloudSyncService {
  public:
   CloudSyncService(ICloudTransport* transport, std::string access_token);
+
+  // 设置令牌续期回调（可选）。设了之后，请求收到 401 会续期一次，
+  // 并用**新令牌**重发同一个请求（最多重试一次，不循环）。
+  void SetAccessTokenRefresher(const AccessTokenRefresher& refresher) {
+    refresher_ = refresher;
+  }
 
   // 推送。server_seq 输出本次推送后的服务端序号（没有条目时保持原值）。
   // accepted / skipped 输出服务端对每条目的处置（item_key 列表，可为空）。
@@ -254,6 +269,7 @@ class CloudSyncService {
 
   ICloudTransport* transport_ = nullptr;
   std::string access_token_;
+  AccessTokenRefresher refresher_;
 };
 
 // ---------------------------------------------------------------------------
@@ -316,6 +332,12 @@ class CloudSyncCoordinator {
                        std::string hlc_sidecar_path);
   ~CloudSyncCoordinator();
 
+  // 同 CloudSyncService：设置令牌续期回调（可选），透传给内部创建的
+  // CloudSyncService（推 / 拉各一个）⇒ 同步请求遇到 401 时续期并重试。
+  void SetAccessTokenRefresher(const AccessTokenRefresher& refresher) {
+    refresher_ = refresher;
+  }
+
   // 推 + 拉一轮（旧接口，保留兼容）。
   bool SyncOnce(std::string* err);
 
@@ -343,6 +365,8 @@ class CloudSyncCoordinator {
   std::string device_id_;
   std::vector<uint8_t> enc_key_;
   std::string sidecar_path_;
+  // 令牌续期回调（可选）：透传给内部创建的 CloudSyncService。
+  AccessTokenRefresher refresher_;
   int64_t last_server_seq_ = 0;
   HlcClock clock_;
   // item_key → (ms, counter, device, payload 的 sha256)

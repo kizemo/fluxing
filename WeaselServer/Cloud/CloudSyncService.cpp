@@ -651,40 +651,64 @@ bool CloudSyncService::SendJson(const std::string& method,
       *err = "云端服务尚未初始化。";
     return false;
   }
-  CloudHttpRequest req;
-  req.method = method;
-  req.path = path;
-  req.headers.push_back({"Accept", "application/json"});
-  if (!body.empty())
-    req.headers.push_back({"Content-Type", "application/json"});
-  if (!access_token_.empty())
-    req.headers.push_back({"Authorization", "Bearer " + access_token_});
-  req.body = body;
+  // ★ 401 → 续期 → 重试（最多一次）：同步路径此前**没有**这层，访问令牌一过期
+  //   同步就持续失败（批次 BK 真机实测：两轮同步都报「访问令牌已过期，请用
+  //   刷新令牌续期。」）；只有设备管理三处（ListDevices / RevokeDevice /
+  //   DeleteCloudData）有。续期回调由账号页注入（刷新令牌只在本机）。
+  //   · 续期成功 ⇒ 用**新令牌**重发同一个请求；
+  //   · 续期失败 ⇒ 直接把中文原因交给界面（不再重试，避免死循环）；
+  //   · 重试后仍是 401 ⇒ 走下面的通用错误分支（如实报服务端原因）。
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    CloudHttpRequest req;
+    req.method = method;
+    req.path = path;
+    req.headers.push_back({"Accept", "application/json"});
+    if (!body.empty())
+      req.headers.push_back({"Content-Type", "application/json"});
+    if (!access_token_.empty())
+      req.headers.push_back({"Authorization", "Bearer " + access_token_});
+    req.body = body;
 
-  const CloudHttpResponse resp = transport_->Send(req);
-  if (!resp.transport_ok) {
-    if (err)
-      *err = "网络请求失败：" + (resp.error.empty() ? "未知原因" : resp.error);
-    return false;
-  }
-  if (status)
-    *status = resp.status;
-  if (response_body)
-    *response_body = resp.body;
-  if (resp.status >= 200 && resp.status < 300)
-    return true;
-  if (err) {
-    json::JsonDocument doc;
-    std::string message;
-    if (json::Parse(resp.body, &doc) && doc.root >= 0) {
-      const json::JsonNode* error_node = json::Member(doc, doc.root, "error");
-      const int error_index = NodeIndex(doc, error_node);
-      if (error_index >= 0)
-        json::MemberString(doc, error_index, "message", &message);
+    const CloudHttpResponse resp = transport_->Send(req);
+    if (!resp.transport_ok) {
+      if (err)
+        *err =
+            "网络请求失败：" + (resp.error.empty() ? "未知原因" : resp.error);
+      return false;
     }
-    if (message.empty())
-      message = "服务器返回错误（HTTP " + std::to_string(resp.status) + "）。";
-    *err = message;
+    if (status)
+      *status = resp.status;
+    if (response_body)
+      *response_body = resp.body;
+    if (resp.status >= 200 && resp.status < 300)
+      return true;
+    if (resp.status == 401 && attempt == 0 && refresher_) {
+      std::string new_token;
+      std::string refresh_err;
+      if (!refresher_(&new_token, &refresh_err) || new_token.empty()) {
+        if (err)
+          *err = refresh_err.empty() ? "访问令牌已过期，请重新登录。"
+                                     : refresh_err;
+        return false;
+      }
+      access_token_ = new_token;
+      continue;  // 用新令牌重发同一个请求
+    }
+    if (err) {
+      json::JsonDocument doc;
+      std::string message;
+      if (json::Parse(resp.body, &doc) && doc.root >= 0) {
+        const json::JsonNode* error_node = json::Member(doc, doc.root, "error");
+        const int error_index = NodeIndex(doc, error_node);
+        if (error_index >= 0)
+          json::MemberString(doc, error_index, "message", &message);
+      }
+      if (message.empty())
+        message =
+            "服务器返回错误（HTTP " + std::to_string(resp.status) + "）。";
+      *err = message;
+    }
+    return false;
   }
   return false;
 }
@@ -976,6 +1000,7 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   if (direction == SyncDirection::kPullOnly ||
       direction == SyncDirection::kBoth) {
     CloudSyncService service(transport_, access_token_);
+    service.SetAccessTokenRefresher(refresher_);
     int64_t since = last_server_seq_;
     for (int page = 0; page < kMaxPullPages; ++page) {
       std::vector<CloudSyncItem> batch;
@@ -1090,6 +1115,7 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   std::string push_err;
   if (!push_indices.empty()) {
     CloudSyncService service(transport_, access_token_);
+    service.SetAccessTokenRefresher(refresher_);
     for (size_t offset = 0; offset < push_indices.size();
          offset += kPushBatchSize) {
       const size_t rest = push_indices.size() - offset;

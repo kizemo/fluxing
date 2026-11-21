@@ -1,0 +1,212 @@
+diff --git a/WeaselServer/Cloud/CloudAccountDialog.cpp b/WeaselServer/Cloud/CloudAccountDialog.cpp
+index 533f894..c01ebd4 100644
+--- a/WeaselServer/Cloud/CloudAccountDialog.cpp
++++ b/WeaselServer/Cloud/CloudAccountDialog.cpp
+@@ -356,6 +356,22 @@ class CloudAccountController::Impl {
+ 
+     CloudSyncCoordinator coordinator(transport.get(), EnsureDictBackend(),
+                                      token, device, enc_key, sidecar);
++    // ★ 批次 BL：同步路径补 401→续期→重试（批次 BK 副产物缺陷）。
++    //   刷新令牌只在账号服务手里 ⇒ 由它续期；续期成功后把新的访问令牌交给
++    //   同步服务，同步服务用新令牌重发刚才那个请求（最多重试一次）。
++    //   续期失败（刷新令牌也过期）⇒ 账号服务转入 kNeedsRelogin，中文原因
++    //   直接落到「最近同步」那一行。
++    coordinator.SetAccessTokenRefresher(
++        [this](std::string* out_token, std::string* err) -> bool {
++          std::string refresh_err;
++          if (!service || !service->Refresh(&refresh_err)) {
++            if (err)
++              *err = refresh_err.empty() ? "访问令牌已过期，请重新登录。"
++                                         : refresh_err;
++            return false;
++          }
++          return service->GetAccessToken(out_token);
++        });
+     std::string err;
+     const bool ok = coordinator.SyncOnce(direction, out, &err);
+ 
+diff --git a/WeaselServer/Cloud/CloudSyncService.cpp b/WeaselServer/Cloud/CloudSyncService.cpp
+index 6ff9007..387bd51 100644
+--- a/WeaselServer/Cloud/CloudSyncService.cpp
++++ b/WeaselServer/Cloud/CloudSyncService.cpp
+@@ -651,40 +651,64 @@ bool CloudSyncService::SendJson(const std::string& method,
+       *err = "云端服务尚未初始化。";
+     return false;
+   }
+-  CloudHttpRequest req;
+-  req.method = method;
+-  req.path = path;
+-  req.headers.push_back({"Accept", "application/json"});
+-  if (!body.empty())
+-    req.headers.push_back({"Content-Type", "application/json"});
+-  if (!access_token_.empty())
+-    req.headers.push_back({"Authorization", "Bearer " + access_token_});
+-  req.body = body;
+-
+-  const CloudHttpResponse resp = transport_->Send(req);
+-  if (!resp.transport_ok) {
+-    if (err)
+-      *err = "网络请求失败：" + (resp.error.empty() ? "未知原因" : resp.error);
+-    return false;
+-  }
+-  if (status)
+-    *status = resp.status;
+-  if (response_body)
+-    *response_body = resp.body;
+-  if (resp.status >= 200 && resp.status < 300)
+-    return true;
+-  if (err) {
+-    json::JsonDocument doc;
+-    std::string message;
+-    if (json::Parse(resp.body, &doc) && doc.root >= 0) {
+-      const json::JsonNode* error_node = json::Member(doc, doc.root, "error");
+-      const int error_index = NodeIndex(doc, error_node);
+-      if (error_index >= 0)
+-        json::MemberString(doc, error_index, "message", &message);
++  // ★ 401 → 续期 → 重试（最多一次）：同步路径此前**没有**这层，访问令牌一过期
++  //   同步就持续失败（批次 BK 真机实测：两轮同步都报「访问令牌已过期，请用
++  //   刷新令牌续期。」）；只有设备管理三处（ListDevices / RevokeDevice /
++  //   DeleteCloudData）有。续期回调由账号页注入（刷新令牌只在本机）。
++  //   · 续期成功 ⇒ 用**新令牌**重发同一个请求；
++  //   · 续期失败 ⇒ 直接把中文原因交给界面（不再重试，避免死循环）；
++  //   · 重试后仍是 401 ⇒ 走下面的通用错误分支（如实报服务端原因）。
++  for (int attempt = 0; attempt < 2; ++attempt) {
++    CloudHttpRequest req;
++    req.method = method;
++    req.path = path;
++    req.headers.push_back({"Accept", "application/json"});
++    if (!body.empty())
++      req.headers.push_back({"Content-Type", "application/json"});
++    if (!access_token_.empty())
++      req.headers.push_back({"Authorization", "Bearer " + access_token_});
++    req.body = body;
++
++    const CloudHttpResponse resp = transport_->Send(req);
++    if (!resp.transport_ok) {
++      if (err)
++        *err =
++            "网络请求失败：" + (resp.error.empty() ? "未知原因" : resp.error);
++      return false;
++    }
++    if (status)
++      *status = resp.status;
++    if (response_body)
++      *response_body = resp.body;
++    if (resp.status >= 200 && resp.status < 300)
++      return true;
++    if (resp.status == 401 && attempt == 0 && refresher_) {
++      std::string new_token;
++      std::string refresh_err;
++      if (!refresher_(&new_token, &refresh_err) || new_token.empty()) {
++        if (err)
++          *err = refresh_err.empty() ? "访问令牌已过期，请重新登录。"
++                                     : refresh_err;
++        return false;
++      }
++      access_token_ = new_token;
++      continue;  // 用新令牌重发同一个请求
+     }
+-    if (message.empty())
+-      message = "服务器返回错误（HTTP " + std::to_string(resp.status) + "）。";
+-    *err = message;
++    if (err) {
++      json::JsonDocument doc;
++      std::string message;
++      if (json::Parse(resp.body, &doc) && doc.root >= 0) {
++        const json::JsonNode* error_node = json::Member(doc, doc.root, "error");
++        const int error_index = NodeIndex(doc, error_node);
++        if (error_index >= 0)
++          json::MemberString(doc, error_index, "message", &message);
++      }
++      if (message.empty())
++        message =
++            "服务器返回错误（HTTP " + std::to_string(resp.status) + "）。";
++      *err = message;
++    }
++    return false;
+   }
+   return false;
+ }
+@@ -976,6 +1000,7 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
+   if (direction == SyncDirection::kPullOnly ||
+       direction == SyncDirection::kBoth) {
+     CloudSyncService service(transport_, access_token_);
++    service.SetAccessTokenRefresher(refresher_);
+     int64_t since = last_server_seq_;
+     for (int page = 0; page < kMaxPullPages; ++page) {
+       std::vector<CloudSyncItem> batch;
+@@ -1090,6 +1115,7 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
+   std::string push_err;
+   if (!push_indices.empty()) {
+     CloudSyncService service(transport_, access_token_);
++    service.SetAccessTokenRefresher(refresher_);
+     for (size_t offset = 0; offset < push_indices.size();
+          offset += kPushBatchSize) {
+       const size_t rest = push_indices.size() - offset;
+diff --git a/WeaselServer/Cloud/CloudSyncService.h b/WeaselServer/Cloud/CloudSyncService.h
+index db97d1f..e8f3106 100644
+--- a/WeaselServer/Cloud/CloudSyncService.h
++++ b/WeaselServer/Cloud/CloudSyncService.h
+@@ -38,6 +38,7 @@
+ #endif
+ 
+ #include <cstdint>
++#include <functional>
+ #include <string>
+ #include <vector>
+ 
+@@ -221,10 +222,24 @@ struct CloudSidecarRow {
+ // 网络
+ // ---------------------------------------------------------------------------
+ 
++// 令牌续期回调（可选）：同步请求收到 401 时调用一次；成功时把**新的访问
++// 令牌**写进 out_token（调用方负责去账号服务取 —— 刷新令牌只在本机）。
++// ★ 为什么放在这一层：同步路径（推 / 拉）此前**没有** 401→续期→重试，
++//   访问令牌一过期同步就持续失败（批次 BK 真机实测：两轮同步都报
++//   「访问令牌已过期，请用刷新令牌续期。」）；只有设备管理三处有这层。
++using AccessTokenRefresher =
++    std::function<bool(std::string* out_token, std::string* err)>;
++
+ class CloudSyncService {
+  public:
+   CloudSyncService(ICloudTransport* transport, std::string access_token);
+ 
++  // 设置令牌续期回调（可选）。设了之后，请求收到 401 会续期一次，
++  // 并用**新令牌**重发同一个请求（最多重试一次，不循环）。
++  void SetAccessTokenRefresher(const AccessTokenRefresher& refresher) {
++    refresher_ = refresher;
++  }
++
+   // 推送。server_seq 输出本次推送后的服务端序号（没有条目时保持原值）。
+   // accepted / skipped 输出服务端对每条目的处置（item_key 列表，可为空）。
+   bool Push(const std::vector<CloudSyncItem>& items,
+@@ -254,6 +269,7 @@ class CloudSyncService {
+ 
+   ICloudTransport* transport_ = nullptr;
+   std::string access_token_;
++  AccessTokenRefresher refresher_;
+ };
+ 
+ // ---------------------------------------------------------------------------
+@@ -316,6 +332,12 @@ class CloudSyncCoordinator {
+                        std::string hlc_sidecar_path);
+   ~CloudSyncCoordinator();
+ 
++  // 同 CloudSyncService：设置令牌续期回调（可选），透传给内部创建的
++  // CloudSyncService（推 / 拉各一个）⇒ 同步请求遇到 401 时续期并重试。
++  void SetAccessTokenRefresher(const AccessTokenRefresher& refresher) {
++    refresher_ = refresher;
++  }
++
+   // 推 + 拉一轮（旧接口，保留兼容）。
+   bool SyncOnce(std::string* err);
+ 
+@@ -343,6 +365,8 @@ class CloudSyncCoordinator {
+   std::string device_id_;
+   std::vector<uint8_t> enc_key_;
+   std::string sidecar_path_;
++  // 令牌续期回调（可选）：透传给内部创建的 CloudSyncService。
++  AccessTokenRefresher refresher_;
+   int64_t last_server_seq_ = 0;
+   HlcClock clock_;
+   // item_key → (ms, counter, device, payload 的 sha256)

@@ -356,6 +356,22 @@ class CloudAccountController::Impl {
 
     CloudSyncCoordinator coordinator(transport.get(), EnsureDictBackend(),
                                      token, device, enc_key, sidecar);
+    // ★ 批次 BL：同步路径补 401→续期→重试（批次 BK 副产物缺陷）。
+    //   刷新令牌只在账号服务手里 ⇒ 由它续期；续期成功后把新的访问令牌交给
+    //   同步服务，同步服务用新令牌重发刚才那个请求（最多重试一次）。
+    //   续期失败（刷新令牌也过期）⇒ 账号服务转入 kNeedsRelogin，中文原因
+    //   直接落到「最近同步」那一行。
+    coordinator.SetAccessTokenRefresher(
+        [this](std::string* out_token, std::string* err) -> bool {
+          std::string refresh_err;
+          if (!service || !service->Refresh(&refresh_err)) {
+            if (err)
+              *err = refresh_err.empty() ? "访问令牌已过期，请重新登录。"
+                                         : refresh_err;
+            return false;
+          }
+          return service->GetAccessToken(out_token);
+        });
     std::string err;
     const bool ok = coordinator.SyncOnce(direction, out, &err);
 

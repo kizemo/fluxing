@@ -3780,6 +3780,245 @@ void TestClientPidParse() {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// 批次 BL：同步路径的 401 → 续期 → 重试（批次 BK 副产物缺陷）
+//
+// 修复前：CloudSyncService 只带一份 access_token 快照，推 / 拉遇到 401 直接
+// 失败 ⇒ 访问令牌一过期，同步就持续失败（真机实测两轮都报「访问令牌已过期，
+// 请用刷新令牌续期。」）。设备管理三处（ListDevices / RevokeDevice /
+// DeleteCloudData）有 401→续期→重试，同步路径没有。
+// 修复后：同步服务带一个「令牌续期回调」，401 时续期一次并用新令牌重试。
+// ---------------------------------------------------------------------------
+
+// 取请求里的 Authorization 头（断言「重试用的是新令牌」）。
+std::string BlAuthHeaderOf(const fc::CloudHttpRequest& req) {
+  for (size_t i = 0; i < req.headers.size(); ++i) {
+    if (req.headers[i].name == "Authorization")
+      return req.headers[i].value;
+  }
+  return std::string();
+}
+
+// 一条待推送条目（字段形状与 AN 组保持一致）。
+fc::CloudSyncItem MakeBlItem(const std::string& key) {
+  fc::CloudSyncItem item;
+  item.item_key = key;
+  item.type = "userdb";
+  item.nonce_b64 = "AAAAAAAAAAAAAAAA";
+  item.cipher_b64 = "AAAAAAAAAAAAAAAA";
+  return item;
+}
+
+// 假后端（BL）：导出**可解析**的快照文本 —— 空快照会被
+// ParseUserDictSnapshots 判失败（生产里「导出为空」是一种失败，
+// 不等于「本地没有条目」），所以这里给一段最小可解析快照。
+struct BlGateBackend : public fc::IUserDictBackend {
+  bool CheckMaintenanceGate(std::string* reason) const override {
+    if (reason != nullptr)
+      reason->clear();
+    return true;
+  }
+  bool BeginMaintenance(std::string* err) override { return true; }
+  bool EndMaintenance(std::string* err) override { return true; }
+  bool ExportUserDict(std::string* out, std::string* err) override {
+    if (out != nullptr)
+      *out =
+          "# Rime user dictionary\n#@/db_name\tuserdb\n#@/tick\t1\n"
+          "code1\t词条一\tc=1 d=2 t=3\n";
+    return true;
+  }
+  bool ImportUserDict(const std::string& text,
+                      int* imported,
+                      std::string* err) override {
+    if (imported != nullptr)
+      *imported = 0;
+    return true;
+  }
+};
+
+void TestCloudSync401RefreshRetry() {
+  std::printf("[BL] 同步路径 401 → 续期 → 重试（推 / 拉 / 协调器透传）\n");
+  std::string err;
+
+  // ① 推送：首发 401 ⇒ 续期一次 ⇒ 用新令牌重试成功。
+  {
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 401,
+        "{\"error\":{\"code\":\"token_expired\","
+        "\"message\":\"访问令牌已过期，请用刷新令牌续期。\"}}"});
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, "{\"accepted\":[\"k1\"],\"skipped\":[],\"server_seq\":7}"});
+    fc::CloudSyncService service(&transport, "tok-old");
+    int refresh_calls = 0;
+    service.SetAccessTokenRefresher(
+        [&refresh_calls](std::string* out_token, std::string*) -> bool {
+          ++refresh_calls;
+          if (out_token != nullptr)
+            *out_token = "tok-new";
+          return true;
+        });
+    int64_t seq = 0;
+    std::vector<std::string> accepted;
+    std::vector<std::string> skipped;
+    Check(service.Push({MakeBlItem("k1")}, &seq, &err, &accepted, &skipped),
+          "BL 推送：401 续期后重试成功");
+    Check(refresh_calls == 1, "BL 推送：续期回调只被调用一次");
+    Check(transport.requests.size() == 2,
+          "BL 推送：共发出两次请求（首发 + 重试）");
+    Check(transport.requests.size() == 2 &&
+              BlAuthHeaderOf(transport.requests[0]) == "Bearer tok-old",
+          "BL 推送：首次请求带旧令牌");
+    Check(transport.requests.size() == 2 &&
+              BlAuthHeaderOf(transport.requests[1]) == "Bearer tok-new",
+          "BL 推送：重试请求带新令牌");
+    Check(seq == 7, "BL 推送：重试后的 server_seq 被消费");
+    Check(accepted.size() == 1 && accepted[0] == "k1",
+          "BL 推送：accepted 被解析");
+    Check(service.access_token() == "tok-new", "BL 推送：续期后的令牌被记住");
+  }
+
+  // ② 拉取：首发 401 ⇒ 续期一次 ⇒ 用新令牌重试成功。
+  {
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 401,
+        "{\"error\":{\"code\":\"token_expired\","
+        "\"message\":\"访问令牌已过期，请用刷新令牌续期。\"}}"});
+    transport.replies.push_back(
+        MockTransport::Reply{true, 200,
+                             "{\"items\":[],\"server_seq\":5,\"next_cursor\":5,"
+                             "\"has_more\":false}"});
+    fc::CloudSyncService service(&transport, "tok-old");
+    int refresh_calls = 0;
+    service.SetAccessTokenRefresher(
+        [&refresh_calls](std::string* out_token, std::string*) -> bool {
+          ++refresh_calls;
+          if (out_token != nullptr)
+            *out_token = "tok-new";
+          return true;
+        });
+    std::vector<fc::CloudSyncItem> items;
+    int64_t seq = 0;
+    bool has_more = true;
+    Check(service.Pull(0, 100, &items, &seq, &err, &has_more),
+          "BL 拉取：401 续期后重试成功");
+    Check(refresh_calls == 1, "BL 拉取：续期回调只被调用一次");
+    Check(transport.requests.size() == 2,
+          "BL 拉取：共发出两次请求（首发 + 重试）");
+    Check(transport.requests.size() == 2 &&
+              BlAuthHeaderOf(transport.requests[1]) == "Bearer tok-new",
+          "BL 拉取：重试请求带新令牌");
+    Check(seq == 5, "BL 拉取：重试后的 server_seq 被消费");
+    Check(!has_more, "BL 拉取：has_more 被解析为 false");
+  }
+
+  // ③ 没有续期回调：401 直接失败，**不重试**（保持旧行为，不静默重发）。
+  {
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 401,
+        "{\"error\":{\"code\":\"token_expired\","
+        "\"message\":\"访问令牌已过期，请用刷新令牌续期。\"}}"});
+    fc::CloudSyncService service(&transport, "tok-old");
+    int64_t seq = 0;
+    Check(!service.Push({MakeBlItem("k1")}, &seq, &err),
+          "BL 无续期回调：401 直接失败");
+    Check(transport.requests.size() == 1,
+          "BL 无续期回调：只发出一次请求（不重试）");
+    Check(err.find("访问令牌已过期") != std::string::npos,
+          "BL 无续期回调：失败原因如实来自服务端");
+  }
+
+  // ④ 续期失败：失败原因取自续期回调，且**不再重试**（不刷请求）。
+  {
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 401,
+        "{\"error\":{\"code\":\"token_expired\","
+        "\"message\":\"访问令牌已过期，请用刷新令牌续期。\"}}"});
+    fc::CloudSyncService service(&transport, "tok-old");
+    int refresh_calls = 0;
+    service.SetAccessTokenRefresher(
+        [&refresh_calls](std::string*, std::string* refresh_err) -> bool {
+          ++refresh_calls;
+          if (refresh_err != nullptr)
+            *refresh_err = "刷新令牌已过期，请重新登录。";
+          return false;
+        });
+    int64_t seq = 0;
+    Check(!service.Push({MakeBlItem("k1")}, &seq, &err),
+          "BL 续期失败：推送失败");
+    Check(refresh_calls == 1, "BL 续期失败：续期回调只被调用一次");
+    Check(transport.requests.size() == 1, "BL 续期失败：续期失败后不再重试");
+    Check(err == "刷新令牌已过期，请重新登录。",
+          "BL 续期失败：失败原因取自续期回调");
+  }
+
+  // ⑤ 重试后仍是 401：只续期一次（不循环），失败原因仍来自服务端。
+  {
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 401,
+        "{\"error\":{\"code\":\"token_expired\","
+        "\"message\":\"访问令牌已过期，请用刷新令牌续期。\"}}"});
+    transport.replies.push_back(MockTransport::Reply{
+        true, 401,
+        "{\"error\":{\"code\":\"token_expired\","
+        "\"message\":\"访问令牌已过期，请用刷新令牌续期。\"}}"});
+    fc::CloudSyncService service(&transport, "tok-old");
+    int refresh_calls = 0;
+    service.SetAccessTokenRefresher(
+        [&refresh_calls](std::string* out_token, std::string*) -> bool {
+          ++refresh_calls;
+          if (out_token != nullptr)
+            *out_token = "tok-new";
+          return true;
+        });
+    int64_t seq = 0;
+    Check(!service.Push({MakeBlItem("k1")}, &seq, &err),
+          "BL 连续 401：推送失败");
+    Check(refresh_calls == 1, "BL 连续 401：只续期一次（不循环）");
+    Check(transport.requests.size() == 2, "BL 连续 401：最多两次请求");
+    Check(err.find("访问令牌已过期") != std::string::npos,
+          "BL 连续 401：失败原因如实来自服务端");
+  }
+
+  // ⑥ 协调器透传：回调经协调器传到内部的同步服务 ⇒ 拉取遇到 401 也能续期重试。
+  {
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 401,
+        "{\"error\":{\"code\":\"token_expired\","
+        "\"message\":\"访问令牌已过期，请用刷新令牌续期。\"}}"});
+    transport.replies.push_back(
+        MockTransport::Reply{true, 200,
+                             "{\"items\":[],\"server_seq\":3,\"next_cursor\":3,"
+                             "\"has_more\":false}"});
+    BlGateBackend backend;
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-old",
+                                         "dev-bl", std::vector<uint8_t>(32, 7),
+                                         std::string());
+    int refresh_calls = 0;
+    coordinator.SetAccessTokenRefresher(
+        [&refresh_calls](std::string* out_token, std::string*) -> bool {
+          ++refresh_calls;
+          if (out_token != nullptr)
+            *out_token = "tok-new";
+          return true;
+        });
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(
+        coordinator.SyncOnce(fc::SyncDirection::kPullOnly, &result, &round_err),
+        "BL 协调器：401 续期后重试成功");
+    Check(refresh_calls == 1, "BL 协调器：续期回调被透传并调用一次");
+    Check(transport.requests.size() == 2,
+          "BL 协调器：共发出两次请求（首发 + 重试）");
+    Check(result.pull_requests == 1, "BL 协调器：本轮只算一次拉取请求");
+  }
+}
+
 int main() {
   ::SetConsoleOutputCP(CP_UTF8);
   std::printf("==== TestFluxingCloud · spec 100 阶段 B（契约与客户端纯逻辑）====\n");
@@ -3848,6 +4087,9 @@ int main() {
   // ADR 0067 / B-5：握手里的 client pid 解析（旧客户端不写这一行 ⇒
   // pid 未知 ⇒ 绝不回收）。
   TestClientPidParse();
+
+  // 批次 BL：同步路径的 401 → 续期 → 重试（批次 BK 副产物缺陷）。
+  TestCloudSync401RefreshRetry();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。
