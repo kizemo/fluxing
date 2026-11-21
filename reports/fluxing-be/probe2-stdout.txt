@@ -1,0 +1,2 @@
+[CLIENTPID] reported=1026796 self=1026796
+[CLIENTPID] PASS: the request body carries session.client_pid= and the value is this process

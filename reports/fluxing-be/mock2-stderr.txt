@@ -1,0 +1,7 @@
+handler ctor.
+server running.
+AddSession: 1
+FindSession: 1
+RemoveClient: 1
+server quitting.
+handler dtor: 1

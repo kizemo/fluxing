@@ -94,16 +94,35 @@ Get-Item 'D:\Program Files\fluxing\user1\fluxing\sync\adbd9f3b-d5b9-4dfc-9929-85
 
 ## 5. 环境受限项：`/verify-client-pid`
 
-IPC 管道名**全局固定**（`\\.\pipe\<用户名>\WeaselNamedPipe`）⇒ 真实服务端在跑时 mock server 抢不到管道，
-必然假红。要跑必须先 `/quit` 真实服务：
+IPC 管道名**全局固定**（`include/WeaselIPC.h:490-496` ⇒ `\\.\pipe\<用户名>\WeaselNamedPipe`）
+⇒ 真实服务端在跑时 mock server 抢不到管道，必然假红。要跑必须先 `/quit` 真实服务。
+
+**⚠️ 本节配方 1.3.6 原文有缺陷（批次 BE 2026-11-21 实测坐实并改正）**：
+`/verify-client-pid` 是**纯客户端**（`test/TestWeaselIPC/TestWeaselIPC.cpp:584-591`，只做 `Client::Connect()`），
+记录文件 `client_pid.txt` 由**服务端侧**写入（`TestRequestHandler::AddSession` → `record_client_pid()` :771/:554-575，
+落到 **exe 同目录** :539）。原配方里 `/quit` 之后**没有任何进程在管道上服务端** ⇒ 必然 `EXIT=-2 [CLIENTPID] connect failed`。
+那个服务端 = 同一个 exe 的 `/start` 模式（`server_main()` :876-893，阻塞在 `server.Run()`）。
 
 ```powershell
+$exe = 'F:\soft\00selfmade\rime_claude\Release\TestWeaselIPC.exe'   # 云单测/探针 exe 在仓库根 Release\，不是 test\TestWeaselIPC\x64\Release\
 & 'D:\Program Files\fluxing\weasel\WeaselServer.exe' /quit
-& 'F:\soft\00selfmade\rime_claude\test\TestWeaselIPC\x64\Release\TestWeaselIPC.exe' /verify-client-pid   # 期望 EXIT=0
-# 跑完重新拉起 WeaselServer
+while ((@(Get-Process WeaselServer -EA SilentlyContinue).Count) -gt 0) { Start-Sleep -Milliseconds 200 }   # 等真服务真的退出
+$mock = Start-Process $exe -ArgumentList '/start' -PassThru -NoNewWindow      # ← 原配方漏掉的 mock 服务端
+Start-Sleep -Milliseconds 1500
+& $exe /verify-client-pid; "EXIT=$LASTEXITCODE"        # 期望 EXIT=0
+& $exe /stop                                           # 关 mock（走 ShutdownServer）
+Start-Process 'D:\Program Files\fluxing\weasel\WeaselServer.exe'   # 重新拉起
 ```
 
-本批登记为 **未验证**，不是 FAIL。
+退出码语义（读码所得，勿混用）：`-2` = 管道上**没有任何服务端**（配方漏起 mock，或真服务没停干净）；
+`-3` = `Echo()` 会话失败；`-4` = mock 从未记录 pid ⇒ **真服务端抢走了管道**；`-5` = 记录到的 pid 与本进程不符。
+判别性：`record_client_pid` 对「键缺失/畸形」记 **0**，所以 `reported=self≠0` 才证明生产解析器真在请求体上命中。
+
+**批次 BE 状态注（2026-11-21）**：本项**已实测通过** = `EXIT=0` +
+`[CLIENTPID] reported=1026796 self=1026796` + `[CLIENTPID] PASS: the request body carries session.client_pid= and the value is this process`；
+`SRV_DURING_MOCK=0`（窗口内无真服务端）⇒ 首跑的 `-2` **不是竞态而是配方缺步骤**。
+证据：`reports/fluxing-be/verify-client-pid-run2.txt`（整窗时间线 13:38:03.9→13:38:12.3，停服 8.4 s，跑完服务恢复 1.3.8.0 唯一）
++ 同目录 `verify-client-pid-raw.txt`（首跑 `-2` 留证）。判据由「推断」升「实测」的口径见 BE handoff §3。
 
 ## 6. 「不是缺陷」的已知现象（勿误报）
 
