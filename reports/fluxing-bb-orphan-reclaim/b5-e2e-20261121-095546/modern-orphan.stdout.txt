@@ -1,0 +1,4 @@
+CLIENT_MODE=modern handshake_client_pid_line=1 pid=637776
+SESSION_STARTED ipc_id=2829320194 pid=637776
+FOCUS_IN_SENT caps=2 ipc_id=2829320194
+ABRUPT_EXIT ipc_id=2829320194 (no END_SESSION)

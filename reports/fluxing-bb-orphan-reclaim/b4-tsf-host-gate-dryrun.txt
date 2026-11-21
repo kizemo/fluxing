@@ -1,0 +1,33 @@
+DESKTOP=Default
+DESKTOP_GUARD=PASS
+AUTH_SWITCH=0 AUTH_ENV=
+CONCURRENCY_GUARD=PASS
+SERVER pid=43172 ver=1.3.8.0 expect=1.3.8.0
+OK   server image version is 1.3.8.0
+BUILD=UP_TO_DATE
+OK   exe is at least as new as the source (no stale binary)
+EXE=F:\soft\00selfmade\rime_claude\Release\TestTsFocusOutHost.exe bytes=166912 mtime=2026-11-21T09:59:41
+LOG=C:\Users\Duanyi\AppData\Local\Temp\fluxing-profile-notify.log LOG_BYTES_BEFORE=302217
+PROBE_EXIT=0 MODE=DryRun
+SLICE_BYTES=319
+SLICE_FOCUS_OUT_PARAM1=1
+SLICE_FOCUS_OUT_PARAM2=1
+SLICE_REMOVE_SESSION_ABSENT=1
+SLICE_ORPHAN_RECLAIM_KEPT=0
+SLICE_RECLAIM_ORPHAN_SESSION=0
+SLICE_TSF_DEACTIVATED_SENT1=1
+SLICE_TSF_DEACTIVATED_SENT0=0
+OK   probe itself is on the Default desktop
+OK   ITfThreadMgr obtained and activated
+OK   Fluxing TIP is registered with TSF
+OK   probe reported an active keyboard profile
+OK   probe verdict PASS (exit 0)
+OK   probe internal FAILURE_COUNT=0
+PROFILE_BEFORE={A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A} {3D02CAB6-2B8E-4781-BA20-1C9267529467}
+PROFILE_AFTER ={A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A} {3D02CAB6-2B8E-4781-BA20-1C9267529467}
+OK   active profile is unchanged after the run
+SIGNATURE_SEEN=1
+NOTE the dry run only reads TSF state, but ITfThreadMgr::Activate can still make the OS load the active shim into the probe process; if SIGNATURE_SEEN=1 in dry-run mode that is the cheapest way to close B-4 path 2 and it still needs a second, isolated confirmation before being treated as proof
+FAILURE_COUNT=0
+B4_VERDICT=PATH2_SIGNATURE_SEEN_IN_READ_ONLY_MODE
+EXIT=0

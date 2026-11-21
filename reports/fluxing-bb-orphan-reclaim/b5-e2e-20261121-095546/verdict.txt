@@ -1,0 +1,4 @@
+B5_VERDICT=PASS_E2E
+FAILURE_COUNT=0
+EXIT=0
+OUT_DIR=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\b5-e2e-20261121-095546

@@ -62,6 +62,19 @@ Get-Process WeaselServer | Select-Object Id,StartTime,@{n='ver';e={$_.MainModule
 ⚠️ 判据 B-3 是本轮主会话复核抓出的真缺陷所在：`RemoveSession` 带两个副作用（翻 presence、无条件清 `m_active_session`），
 而回收发生在 `AddSession` 内紧接着注册新活动会话的当口 ⇒ 若不做区分，**宿主崩溃会被误读成用户切走**。
 
+**批次 BD 状态注（2026-11-21，判据原文不改，只补口径）**
+
+- **B-5 已闭环** = `PASS_E2E`（`reports/fluxing-bb-orphan-reclaim/b5-e2e.md`，目录 `b5-e2e-20261121-095546/`，
+  `FAILURE_COUNT=0` / `EXIT=0`；阴性判据由父会话独立计数复算：日志尾 3000 行内 `reclaim orphan session` 命中 8、
+  旧客户端 id `2829320193` 命中 **0** ⇒ 未被误杀）。
+- **B-4 已按「宿主退出触发源」口径闭环**（用户 2026-11-21 拍板「按宿主退出口径闭环，不再真跑」）：真 TSF 宿主探针
+  `test/TestTsFocusOutHost/TestTsFocusOutHost.cpp` + 门禁 `scripts/verify/b4-tsf-host.ps1` 复现四组完整签名。
+  ⇒ 本表 B-4 原写的「**用户主动切走 IME**」这一触发源**登记为已知未覆盖面**（非 FAIL、非待拍板、BE 不重跑）。
+- **真实消息到达序已实测更正** = 宿主退出时服务端实到 `focus_out param=2` → `remove_session` → `focus_out param=1`
+  （三条夹心）。⇒ `reports/fluxing-bb-orphan-reclaim/b4-focusout.md` §2 原「先收 END_SESSION、后收 FOCUS_OUT」是**错的推断**，
+  已就地更正；路径 1（合成探针）只覆盖服务端各 handler 逻辑、**不覆盖真实到达序**，真实到达序由路径 2 覆盖
+  ⇒ **B-4「服务端路径已闭环」的结论不受影响**。
+
 ## 3. 账号窗缺陷 B 第三分支复现取证（AX 未复现项）
 
 复发「第二次打开的窗关不掉」时：`Get-WindowInfo` 看 `IsWindow` / `IsVisible` / 窗是否启用；

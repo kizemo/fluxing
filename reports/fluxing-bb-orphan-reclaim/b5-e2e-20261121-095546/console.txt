@@ -1,0 +1,84 @@
+REPO_ROOT=F:\soft\00selfmade\rime_claude
+OUT_DIR=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\b5-e2e-20261121-095546
+TOOL=F:\soft\00selfmade\rime_claude\Release\TestFocusOutE2E.exe
+CPP=F:\soft\00selfmade\rime_claude\test\TestOrphanReclaimE2E\TestFocusOutE2E.cpp
+SERVER pid=43172 path=D:\Program Files\fluxing\weasel\WeaselServer.exe ver=1.3.8.0
+LOG_BASELINE_BYTES=300782
+TOOL_BYTES=197632 TOOL_MTIME=2026/11/21 9:51:07
+=== PHASE 1: legacy client abrupt exit (no session.client_pid line) ===
+legacy-orphan exit=0 pid=637708 argv=[--abrupt-exit F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\b5-e2e-20261121-095546\legacy.marker -Legacy]
+  legacy-orphan | CLIENT_MODE=legacy handshake_client_pid_line=0 pid=637708
+  legacy-orphan | SESSION_STARTED ipc_id=2829320193 pid=637708
+  legacy-orphan | FOCUS_IN_SENT caps=2 ipc_id=2829320193
+  legacy-orphan | ABRUPT_EXIT ipc_id=2829320193 (no END_SESSION)
+LEGACY_IPC_ID=2829320193 LEGACY_CLIENT_PID=637708
+echo-legacy-before exit=0 pid=637444 argv=[--echo 2829320193]
+  echo-legacy-before | ECHO=2829320193
+LEGACY_ECHO_BEFORE=2829320193 (session really is registered on the server)
+=== PHASE 2: modern client abrupt exit (pid reported) ===
+modern-orphan exit=0 pid=637776 argv=[--abrupt-exit F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\b5-e2e-20261121-095546\modern.marker]
+  modern-orphan | CLIENT_MODE=modern handshake_client_pid_line=1 pid=637776
+  modern-orphan | SESSION_STARTED ipc_id=2829320194 pid=637776
+  modern-orphan | FOCUS_IN_SENT caps=2 ipc_id=2829320194
+  modern-orphan | ABRUPT_EXIT ipc_id=2829320194 (no END_SESSION)
+MODERN_IPC_ID=2829320194 MODERN_CLIENT_PID=637776
+echo-modern-before exit=0 pid=637300 argv=[--echo 2829320194]
+  echo-modern-before | ECHO=2829320194
+MODERN_ECHO_BEFORE=2829320194
+=== PHASE 3: sweep trigger (AddSession) => positive control ===
+sweep-trigger-1 exit=0 pid=637872 argv=[--sweep-trigger F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\b5-e2e-20261121-095546\trigger1.marker]
+  sweep-trigger-1 | CLIENT_MODE=modern handshake_client_pid_line=1 pid=637872
+  sweep-trigger-1 | SESSION_STARTED ipc_id=2829320195 pid=637872
+  sweep-trigger-1 | SWEEP_TRIGGERED ipc_id=2829320195
+  sweep-trigger-1 | SWEEP_TRIGGER_DONE ipc_id=2829320195
+SWEEP_ATTEMPT=1 slice_bytes=183 reclaim_for_modern=1
+POSITIVE_CONTROL=OBSERVED attempt=1 ipc_id=2829320194
+=== PHASE 4: negative criterion - the legacy orphan must survive ===
+RECLAIM_LINES_FOR_LEGACY=0 (must be 0)
+RECLAIM_LINES_CARRYING_LEGACY_PID=0 (must be 0)
+ORPHAN_RECLAIM_PRESENCE_KEPT_LINES=1
+PRESENCE_ABSENT_LINES=0 (must be 0: a reclaim must never read as 'Fluxing left')
+echo-legacy-after-sweep exit=0 pid=637344 argv=[--echo 2829320193]
+  echo-legacy-after-sweep | ECHO=2829320193
+LEGACY_ECHO_AFTER=2829320193 (still alive => not reclaimed, second evidence channel)
+echo-modern-after-sweep exit=0 pid=614392 argv=[--echo 2829320194]
+  echo-modern-after-sweep | ECHO=0
+MODERN_ECHO_AFTER=0 (reclaimed => positive control confirmed on the second channel)
+=== PHASE 5: sweep while the legacy orphan is the only foreign session ===
+cleanup-trigger-2829320195 exit=0 pid=636604 argv=[--end-session-by-id 2829320195]
+  cleanup-trigger-2829320195 | END_SESSION_SENT ipc_id=2829320195
+sweep-trigger-bare exit=0 pid=617204 argv=[--sweep-trigger F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\b5-e2e-20261121-095546\trigger-bare.marker]
+  sweep-trigger-bare | CLIENT_MODE=modern handshake_client_pid_line=1 pid=617204
+  sweep-trigger-bare | SESSION_STARTED ipc_id=2829320194 pid=617204
+  sweep-trigger-bare | SWEEP_TRIGGERED ipc_id=2829320194
+  sweep-trigger-bare | SWEEP_TRIGGER_DONE ipc_id=2829320194
+BARE_TRIGGER_IPC_ID=2829320194
+BARE_SWEEP_RECLAIM_LINES=0
+echo-legacy-after-bare-sweep exit=0 pid=637780 argv=[--echo 2829320193]
+  echo-legacy-after-bare-sweep | ECHO=2829320193
+LEGACY_ECHO_BARE=2829320193 (survived a sweep that had it as its only candidate)
+=== PHASE 6: side observation - legacy residual vs the sync gate ===
+GATE_EXPORT_FILE=D:\Program Files\fluxing\user1\fluxing\sync\adbd9f3b-d5b9-4dfc-9929-85eac8509db6\rime_ice.userdb.txt
+GATE_ACCOUNT_HWND=0x301284 opened_by_us=False title='Fluxing 云端账号'
+GATE_ENGINE_SETTLE_SEC=30
+GATE_CONTROL_EXPORT_ADVANCED_SEC=48.6
+GATE_LEGACY_IPC_ID_STILL_ALIVE=2829320193
+GATE_OBS=ADVANCED_WITH_LEGACY_RESIDUAL after_sec=0 (the leftover legacy orphan session does not block the round)
+=== PHASE 7: cleanup - only an explicit END_SESSION clears a legacy orphan ===
+echo-legacy-before-end exit=0 pid=642556 argv=[--echo 2829320193]
+  echo-legacy-before-end | ECHO=0
+LEGACY_GONE_WITHOUT_END_SESSION=1 (echo=0 before we ended it => something else removed ipc_id=2829320193)
+end-legacy-orphan exit=0 pid=642640 argv=[--end-session-by-id 2829320193]
+  end-legacy-orphan | END_SESSION_SENT ipc_id=2829320193
+echo-legacy-after-end exit=0 pid=642812 argv=[--echo 2829320193]
+  echo-legacy-after-end | ECHO=0
+LEGACY_ECHO_AFTER_END_SESSION=0 (0 => END_SESSION is what finishes a legacy orphan; ADR 0067 never does)
+final-cleanup-2829320195 exit=0 pid=642896 argv=[--end-session-by-id 2829320195]
+  final-cleanup-2829320195 | END_SESSION_SENT ipc_id=2829320195
+final-cleanup-2829320194 exit=0 pid=642996 argv=[--end-session-by-id 2829320194]
+  final-cleanup-2829320194 | END_SESSION_SENT ipc_id=2829320194
+RUN_RECLAIM_LINES=1
+  reclaim orphan session ipc_id=2829320194 client_pid=637776 live=2
+FAILURE_COUNT=0
+B5_VERDICT=PASS_E2E
+EXIT=0

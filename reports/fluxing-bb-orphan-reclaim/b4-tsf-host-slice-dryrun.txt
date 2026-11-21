@@ -1,0 +1,5 @@
+2026-11-21 10:08:56.746][server] focus_in profile presence=present
+2026-11-21 10:08:56.749][server] focus_out param=2 presence=kept
+2026-11-21 10:08:56.750][server] remove_session active presence=absent
+2026-11-21 10:08:56.751][server] focus_out param=1 presence=absent
+2026-11-21 10:08:56.753][tsf] deactivated sent=1

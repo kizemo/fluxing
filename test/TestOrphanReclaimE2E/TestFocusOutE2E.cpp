@@ -52,6 +52,17 @@
 //   --sweep-trigger <marker>     START_SESSION only (this is what makes the
 //                                server run its lazy orphan sweep), exit
 //                                WITHOUT END_SESSION.
+//
+// Flag (combinable with any mode above; the mode keeps its argument order):
+//   -Legacy                      omit the "session.client_pid=<pid>" line
+//                                from the START_SESSION body, byte for byte.
+//                                Everything else (the other body lines, the
+//                                message order, the typing, the abrupt exit)
+//                                stays identical.  That IS the old client
+//                                ADR 0067 must leave untouched (checklist
+//                                item B-5). Without this flag the handshake
+//                                reports the pid, so the server may reclaim
+//                                the session once the client is provably dead.
 //   --end-session-by-id <id>     END_SESSION for an existing ipc_id (cleanup).
 //   --echo <sessionId>           raw ECHO probe; ECHO=0 means the session is
 //                                gone on the server.
@@ -170,19 +181,25 @@ class IpcClient {
     return true;
   }
 
-  bool StartSession(DWORD* ipc_id, std::wstring* err) {
+  bool StartSession(DWORD* ipc_id, std::wstring* err, bool legacy = false) {
     // Same body as weasel::ClientImpl::_WriteClientInfo(). session.client_pid
     // is the fact source for ADR 0067: the server may only reclaim a session
     // whose owner pid is known and provably dead. Reporting it here is what
     // makes the orphan control run meaningful (the pid IS known, so the
     // reclaim criteria are applicable - the only difference to the normal
     // path is the missing END_SESSION).
+    //
+    // legacy=true drops exactly that one line: the body becomes what a client
+    // built before ADR 0067 sends, so the server must file the session as
+    // "pid unknown" and never reclaim it (item B-5).
     std::wstring body;
     body += L"action=session\n";
     body += L"session.client_app=" + ClientAppName() + L"\n";
     body += L"session.client_type=tsf\n";
-    body += L"session.client_pid=" +
-            std::to_wstring(::GetCurrentProcessId()) + L"\n";
+    if (!legacy) {
+      body += L"session.client_pid=" +
+              std::to_wstring(::GetCurrentProcessId()) + L"\n";
+    }
     body += L".\n";
     DWORD result = 0;
     if (!Transact(WEASEL_IPC_START_SESSION, 0, 0, body, &result, err))
@@ -322,15 +339,21 @@ enum class Scenario {
   kSweepTrigger,        // START_SESSION only (triggers the orphan sweep)
 };
 
-int RunScenario(Scenario scenario, const std::wstring& marker) {
+int RunScenario(Scenario scenario, const std::wstring& marker, bool legacy) {
   IpcClient client;
   std::wstring err;
   if (!client.Connect(&err)) {
     wprintf(L"ERROR connect failed: %s\n", err.c_str());
     return 1;
   }
+  // The script asserts on this line: a -Legacy flag that silently did nothing
+  // would turn the negative criterion into an empty test.
+  wprintf(L"CLIENT_MODE=%s handshake_client_pid_line=%d pid=%lu\n",
+          legacy ? L"legacy" : L"modern", legacy ? 0 : 1,
+          static_cast<unsigned long>(::GetCurrentProcessId()));
+  fflush(stdout);
   DWORD ipc_id = 0;
-  if (!client.StartSession(&ipc_id, &err)) {
+  if (!client.StartSession(&ipc_id, &err, legacy)) {
     wprintf(L"ERROR start_session failed: %s\n", err.c_str());
     return 1;
   }
@@ -511,6 +534,8 @@ void PrintHelp() {
   wprintf(L"  --focusout-appfocus <m>      FOCUS_OUT(app focus lost) then END_SESSION\n");
   wprintf(L"  --abrupt-exit <marker>       session end without END_SESSION (orphan)\n");
   wprintf(L"  --sweep-trigger <marker>     new session only (triggers orphan sweep)\n");
+  wprintf(L"  -Legacy                      with any mode above: do not send the\n");
+  wprintf(L"                               session.client_pid line (old client, B-5)\n");
   wprintf(L"  --end-session-by-id <id>     END_SESSION for an existing ipc_id\n");
   wprintf(L"  --echo <sessionId>           raw ECHO probe, 0 means the session is gone\n");
   wprintf(L"  --help                       this text.\n");
@@ -546,23 +571,35 @@ int wmain(int argc, wchar_t** argv) {
         static_cast<DWORD>(::wcstoul(argv[2], NULL, 10));
     return RunEndSessionById(session_id);
   }
-  if (argc < 3) {
-    wprintf(L"ERROR usage: TestFocusOutE2E %s <markerFile>\n", mode.c_str());
+  // -Legacy may appear in any position; the marker is the first argument that
+  // is neither the mode nor a flag.
+  bool legacy = false;
+  std::wstring marker;
+  for (int i = 2; i < argc; ++i) {
+    if (_wcsicmp(argv[i], L"-Legacy") == 0 || _wcsicmp(argv[i], L"/Legacy") == 0) {
+      legacy = true;
+      continue;
+    }
+    if (marker.empty())
+      marker = argv[i];
+  }
+  if (marker.empty()) {
+    wprintf(L"ERROR usage: TestFocusOutE2E %s <markerFile> [-Legacy]\n",
+            mode.c_str());
     return 2;
   }
-  const std::wstring marker = argv[2];
   if (mode == L"--end-session")
-    return RunScenario(Scenario::kEndSessionOnly, marker);
+    return RunScenario(Scenario::kEndSessionOnly, marker, legacy);
   if (mode == L"--focusout-deactivate")
-    return RunScenario(Scenario::kDeactivateOrder, marker);
+    return RunScenario(Scenario::kDeactivateOrder, marker, legacy);
   if (mode == L"--focusout-only")
-    return RunScenario(Scenario::kFocusOutOnly, marker);
+    return RunScenario(Scenario::kFocusOutOnly, marker, legacy);
   if (mode == L"--focusout-appfocus")
-    return RunScenario(Scenario::kAppFocusLost, marker);
+    return RunScenario(Scenario::kAppFocusLost, marker, legacy);
   if (mode == L"--abrupt-exit")
-    return RunScenario(Scenario::kAbruptExit, marker);
+    return RunScenario(Scenario::kAbruptExit, marker, legacy);
   if (mode == L"--sweep-trigger")
-    return RunScenario(Scenario::kSweepTrigger, marker);
+    return RunScenario(Scenario::kSweepTrigger, marker, legacy);
   wprintf(L"ERROR unknown mode: %s\n", mode.c_str());
   PrintHelp();
   return 2;

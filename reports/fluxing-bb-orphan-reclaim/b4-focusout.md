@@ -57,10 +57,17 @@
 | 本批是否做 | ✅ 已做 | ❌ 未做 |
 | 结论 | 服务端路径已闭环；**TSF 侧发射顺序仍是「按代码阅读推断」，未在真机 TSF 宿主上取证** | 见 §7.1 的精确缺口 |
 
-路径 1 的覆盖度之所以够，是因为本批**主动复刻了真实 TSF 的消息顺序**：
-`WeaselTSF::Deactivate()`（`WeaselTSF/WeaselTSF.cpp:114-126`）先同步 `m_client.EndSession()`、
-再异步投递 profile-deactivated 通知 ⇒ 服务端**先收 END_SESSION、后收 FOCUS_OUT(PROFILE_DEACTIVATED)**。
-阶段 B 就是按这个顺序发的。
+> ⚠️ **2026-11-21（BD）就地更正：本段原推断被真机实测否证。**
+> 原文称「本批主动复刻了真实 TSF 的消息顺序 —— `Deactivate()` 先同步 `EndSession()`、再异步投递
+> profile-deactivated 通知 ⇒ 服务端先收 END_SESSION、后收 FOCUS_OUT」。**两处都不成立**：
+> 源码 `WeaselTSF/WeaselTSF.cpp:124` 是 `_PostProfileNotify(kProfileNotifyDeactivated)`（**投递在前**，
+> 且 spec 094 注释 `:119-123` 明确要求「必须在 `EndSession()` **之前** 投递」），`:125` 才是 `m_client.EndSession()`。
+> 真机 TSF 宿主（`TestTsFocusOutHost.exe`，四组逐字一致）服务端的**到达序是三条消息夹心**：
+> `focus_out param=2`（PROFILE_DEACTIVATED）→ `remove_session`（END_SESSION）→ `focus_out param=1`（APP_FOCUS_LOST）。
+> 即 **deactivated 通知早于 END_SESSION、`param=1` 晚于 END_SESSION**；本探针阶段 B 复刻的是
+> `END_SESSION → FOCUS_OUT`，**与真实发射序相反**，故路径 1 覆盖的是「服务端各 handler 的处理逻辑」，
+> **不覆盖**真实到达序 —— 真实到达序由路径 2 的实测签名覆盖（见 `b4-path2-prep.md` §4）。
+> 本节结论「服务端路径已闭环」不受影响（`OnFocusOut` / `EndSession` 逻辑本身已被直接驱动并取证）。
 
 ---
 
@@ -261,9 +268,10 @@ E_CLEANUP=END_SESSION_SENT ipc_id=12
 
 ## 7. 未验证清单
 
-- [ ] **路径 2：真实 TSF 宿主产生真实 FocusOut**（详见 §7.1）
-- [ ] 真实 TSF 侧的消息**发射顺序**（END_SESSION 先、FOCUS_OUT 后）目前仍是**代码阅读推断**
-      （`WeaselTSF/WeaselTSF.cpp:114-126`），未在真机 TSF 宿主上取证
+- [x] **路径 2：真实 TSF 宿主产生真实 FocusOut** —— BD 批闭环（`b4-path2-prep.md` §4；宿主 `TestTsFocusOutHost.exe` 退出触发）
+- [x] 真实 TSF 侧的消息**到达序** —— BD 真机四组实测**已定案**，且**否证**本文件原先「END_SESSION 先、FOCUS_OUT 后」的推断：
+      真实顺序是 `focus_out param=2`（PROFILE_DEACTIVATED，**早于** END_SESSION）→ `remove_session`（END_SESSION）
+      → `focus_out param=1`（APP_FOCUS_LOST，**晚于** END_SESSION）⇒ 见 §2 顶部的就地更正
 - [ ] 阶段 D（`APP_FOCUS_LOST`）下快捷面板「收起」的可见性证据（该场景面板本轮未曾可见）
 - [ ] 「面板常驻」开关（`AlwaysShowMode()`）**打开**时的行为（受用户设置约束，本轮未覆盖）
 - [ ] 用户在场的人工验收（视觉确认「切走后状态文案变为火流猩不在场」）
