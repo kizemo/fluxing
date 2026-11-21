@@ -20,12 +20,12 @@ Add-Type -AssemblyName System.Drawing
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
 
 # ---------------- expected layout tables (96 dpi base) ----------------
-$LOGIN_TABLE = [ordered]@{
+$LOGIN_TABLE = @{
     1027 = @(12, 14, 456, 20); 1020 = @(12, 38, 456, 22); 1004 = @(12, 70, 140, 28); 1016 = @(160, 70, 140, 28)
     1017 = @(12, 108, 456, 20); 1022 = @(12, 132, 456, 18); 1035 = @(12, 156, 456, 36); 1006 = @(12, 198, 456, 40)
     1010 = @(368, 250, 100, 28)
 }
-$LOGOUT_TABLE = [ordered]@{
+$LOGOUT_TABLE = @{
     1025 = @(12, 14, 70, 20); 1001 = @(88, 10, 186, 26); 1034 = @(278, 14, 48, 20); 1018 = @(330, 10, 138, 26)
     1026 = @(12, 48, 70, 20); 1002 = @(88, 44, 244, 26); 1019 = @(88, 78, 244, 20); 1003 = @(12, 108, 140, 28)
     1013 = @(160, 108, 140, 28); 1021 = @(308, 108, 160, 28); 1006 = @(12, 148, 456, 40); 1010 = @(368, 250, 100, 28)
@@ -304,7 +304,9 @@ switch ($Mode) {
         }
         $ink = Row-Ink $bmp $bg
         $rows = @(); for ($y = 0; $y -lt $ink.Count; $y++) { if ($ink[$y] -gt 3) { $rows += $y } }
-        L "ROWS_WITH_INK=$($rows.Count) FIRST=$($rows[0]) LAST=$($rows[-1])"
+        $inkFirst = if ($rows.Count -gt 0) { $rows[0] } else { -1 }
+        $inkLast = if ($rows.Count -gt 0) { $rows[-1] } else { -1 }
+        L "ROWS_WITH_INK=$($rows.Count) FIRST=$inkFirst LAST=$inkLast"
         $bmp.Dispose()
         if ($o.openedByUs) { [void][W.U]::PostMessageW($dlg, $WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero); L 'DIALOG_CLOSED=1' }
     }
@@ -405,8 +407,13 @@ switch ($Mode) {
         $geoFail = 0
         foreach ($k in $expect) {
             if (-not $map.ContainsKey($k)) { L "G_$k=ABSENT"; $geoFail++; continue }
+            # NOTE: $table MUST be a plain Hashtable, not [ordered]@{}: OrderedDictionary
+            # implements IList, so PowerShell resolves $table[1004] as an ORDINAL index
+            # (out of range -> null) instead of a key lookup, and $b[0] then throws
+            # "Cannot index into a null array". Keep @{} in the table literals above.
             $got = Phys-Rect $dlg $map[$k]; $b = $table[$k]
-            $ex = @(MulDiv96 $b[0] $dpiW, MulDiv96 $b[1] $dpiW, MulDiv96 $b[2] $dpiW, MulDiv96 $b[3] $dpiW)
+            if ($null -eq $b) { L "G_$k=TABLE_ENTRY_MISSING"; $geoFail++; continue }
+            $ex = @((MulDiv96 $b[0] $dpiW), (MulDiv96 $b[1] $dpiW), (MulDiv96 $b[2] $dpiW), (MulDiv96 $b[3] $dpiW))
             $okg = ($got.x -eq $ex[0] -and $got.y -eq $ex[1] -and $got.w -eq $ex[2] -and $got.h -eq $ex[3])
             if (-not $okg) { $geoFail++ }
             L "G_$k exp=$($ex -join ',') got=$($got.x),$($got.y),$($got.w),$($got.h) ok=$okg"
@@ -425,13 +432,15 @@ switch ($Mode) {
         L "BG_RGB=$($bg -join ',')"
         $ink = Row-Ink $bmp $bg
         $rows = @(); for ($y = 0; $y -lt $ink.Count; $y++) { if ($ink[$y] -gt 3) { $rows += $y } }
-        L "ROWS_TOTAL=$($ink.Count) ROWS_WITH_INK=$($rows.Count) FIRST_INK=$($rows[0]) LAST_INK=$($rows[-1])"
+        $inkFirst = if ($rows.Count -gt 0) { $rows[0] } else { -1 }
+        $inkLast = if ($rows.Count -gt 0) { $rows[-1] } else { -1 }
+        L "ROWS_TOTAL=$($ink.Count) ROWS_WITH_INK=$($rows.Count) FIRST_INK=$inkFirst LAST_INK=$inkLast"
         L "A5_contentBottom=$contentBottom closeTop=$closeTop closeBottom=$closeBottom clientBottom=$custBottom"
         $g1 = @($rows | Where-Object { $_ -ge $contentBottom -and $_ -lt $closeTop })
         $g2 = @($rows | Where-Object { $_ -ge $closeBottom -and $_ -lt $custBottom })
         L "A5_gap1=$(( $closeTop - $contentBottom ))px inkRowsInGap1=$($g1.Count)"
         L "A5_gap2=$(( $custBottom - $closeBottom ))px inkRowsInGap2=$($g2.Count)"
-        L "A5_trailing_blank_below_last_ink=$($custBottom - 1 - $rows[-1])"
+        L "A5_trailing_blank_below_last_ink=$(if ($rows.Count -gt 0) { $custBottom - 1 - $inkLast } else { -1 })"
         [void](Save-Crop $bmp 0 $contentBottom $bmp.Width ($custBottom - $contentBottom) (Join-Path $OutDir "evidence-$($Mode.ToLower())-bottom.png"))
         L "PNG=evidence-$($Mode.ToLower())-bottom.png"
         $bmp.Dispose()
