@@ -5,7 +5,7 @@
 
 ## 一句话 prompt（可直接复制）
 
-先读 `F:\soft\00selfmade\rime_claude\CLAUDE.md` 的进站 5 份与「本批交接指针（BL）」，再读本批真源 `F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-22-batch-bl-sync-token-refresh-retry.md`（重点 §3 根因、§5 门禁数字、§7 已验证/推断/未验证、§8 下一步计划、§9 证据路径、§10 本轮工具坑、§11 需要用户在场的事），背景与决策看 `F:\soft\00selfmade\rime_claude\docs\adr\0070-sync-path-token-refresh-retry.md`，缺陷现场回看 `F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-21-batch-bk-sync-status-1017-visibility.md`；**不要重做已完成的工作**（同步路径 401→续期→重试的代码、单测、门禁、出包装机、装机实证都已闭环），直接接着 §8 的第 1 项做。
+先读 `F:\soft\00selfmade\rime_claude\CLAUDE.md` 的进站 5 份与「本批交接指针（BL）」及「BL 后续（BM 候选）」，再读本批真源 `F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-22-batch-bl-sync-token-refresh-retry.md`（重点 §3 根因、§5 门禁数字、§7 已验证/推断/未验证、§8 下一步计划、§9 证据路径、§10 本轮工具坑、§11 需要用户在场的事、**§13 真机复验结果、§14 新缺陷（BM 候选）**），背景与决策看 `F:\soft\00selfmade\rime_claude\docs\adr\0070-sync-path-token-refresh-retry.md`，真机复验报告看 `F:\soft\00selfmade\rime_claude\reports\fluxing-bl-syncstatus\analysis-20261122.md`，缺陷现场回看 `F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-21-batch-bk-sync-status-1017-visibility.md`；**不要重做已完成的工作**（同步路径 401→续期→重试的代码、单测、门禁、出包装机、装机实证、真机复验都已闭环），**直接接着 §13/§14 开的批次 BM 做**（修「云端一条 payload 非法的旧条目毒化整轮同步」；§8 原计划仍有效，但优先级让位给 BM）。
 
 ## 交接要点（只列指针，不复述内容）
 

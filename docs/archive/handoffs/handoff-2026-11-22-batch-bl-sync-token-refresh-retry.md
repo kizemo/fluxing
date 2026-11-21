@@ -173,3 +173,57 @@ BK 批把账号页「最近同步」状态行(1017)变成真实同步结果后�
 - 本批**未 push 之前**先做 `git status -sb` + `git diff --stat` 复核（AGENTS.md §3），确认无 `weasel.props` / `env.bat` / `*.obj` 误入。
 - **推送（已闭环）**：远端名是 **`kizemo`**（**没有 `origin`** ⇒ `git push origin` 必报 `'origin' does not appear to be a git repository`，别当成网络问题）。直连先试：`git -c http.proxy= -c https.proxy= push kizemo feat/100-cloud-sync` ⇒ **失败** `fatal: unable to access ...: Recv failure: Connection was reset` ⇒ 改走**默认代理**再推 ⇒ **一次成功**（`ab4e350..168d0f1`，`PUSH_EXIT=0`）；`git ls-remote kizemo feat/100-cloud-sync` = `168d0f13a6abe8de233207db5926d7aaabb85350` = 本地 HEAD ⇒ **本地与远端一致**。
 - 本小节的回填本身构成**第 4 个提交**（`docs(fluxing): 批次 BL 交接文档补记推送实况`），紧随 §12 其余内容一并推送；它自身不在上表内。
+
+---
+
+## 13. 真机复验（2026-11-22 00:30–00:31）——BL 修复在真机生效，同时暴露新缺陷
+
+**完整报告**：`reports/fluxing-bl-syncstatus/analysis-20261122.md`（6 980 B）
+**原始输出**：`reports/fluxing-bl-syncstatus/probe-run.log`、`reports/fluxing-bl-syncstatus/sync-status-20261122-003114.txt`
+（`*.log` 命中 `.gitignore` ⇒ 未入库；`analysis-20261122.md` 已入库）
+
+- **可做性**：本项**不需要双机、不需要用户在场**（BK 原先标注「需用户在场」属过度保守）——
+  访问令牌在 BK 之后只会更过期，探针纯自动（打开账号窗 → `BM_CLICK` 1016 → 轮询 1017）。
+- **环境**：装机件 `D:\Program Files\fluxing\weasel\WeaselServer.exe` 2 795 008 B / sha16 `70C965EF62F5B2C8`
+  （与本批构建产物**逐字相等** ⇒ 跑的确实是含 BL 修复的二进制）；服务端 pid **94448**（00:23:53 起，ver 1.3.8.0）；
+  全程未 `/quit`、未杀宿主、未改注册表。
+- **实测**：探针判据 `VERDICT=SYNC_STATUS_OBSERVABLE` / `EXIT=0` / `CHANGED=True` / `HAS_TIMESTAMP=True` /
+  `HAS_RESULT=True` / `IS_PLACEHOLDER=False`。
+  - 修复前（BK，2026-11-21 22:24:54）1017 = 失败（**访问令牌已过期，请用刷新令牌续期。**）
+  - 修复后第 1 轮（2026-11-22 00:30:34）1017 = 失败（**词典条目载荷格式不正确。**）
+  - 修复后第 2 轮（探针点击，2026-11-22 00:31:13）1017 = 失败（**词典条目载荷格式不正确。**）
+- **判定（强推断，非日志直证）**：失败**阶段前移** ⇒ 鉴权不再阻塞该轮。依据：
+  ① `SyncOnce` 顺序为「导出解析 → HLC → **拉取(网络, `CloudSyncService.cpp:1000-1042`)** → 合并 →
+    **写回(`:1048-1076`)** → 推送(`:1113-1143`)」，而新错误文案产自写回阶段 ⇒ 网络阶段已走通；
+  ② BK 同期在同一过期令牌下**正是卡在 401** ⇒ 若另有自动续期路径，BK 当轮不该报 401 ⇒ 唯一新增路径即 BL 的续期回调。
+  **⚠️ 缺口**：BL 修复**未加日志行**（`CloudSyncService.cpp:654-691` 只有注释与分支），
+  凭据存于 Windows Credential Manager（`CredWriteW`，`CloudCredentialStore.cpp:210`）⇒ 拿不到「令牌被改写」的文件级物证。
+  要升级为直证 ⇒ 在续期分支加一条**无条件打印**的日志行（已列为 BM 可选项 A）。
+- **口径维持**：1017 仍是**人眼可见观测面**；「导出文件 mtime 是否前进」的机读口径继续有效；**1017 不升级为闸门判据**。
+- **同步整体仍不成功** ⇒ BL 只解决了「令牌过期」这一个成因，**不是**端到端同步成功。
+
+## 14. 新缺陷（BM 候选，本批未修）——一条脏云端条目永久卡死每一轮同步
+
+- **现象**：写回阶段失败，1017 报「词典条目载荷格式不正确。」。
+- **根因链（逐环坐实）**：
+  ① 该文案全仓唯一产点 = `WeaselServer/Cloud/CloudUserDictIo.cpp:145`（`BuildUserDictSnapshots` 里
+     `SplitDictPayload` 失败 ⇒ payload 内无制表符）；
+  ② `BuildUserDictSnapshots` 在 `WeaselServer/Cloud` 内**只有一个调用点** `CloudSyncService.cpp:1070`（合并后写回）
+     ⇒ 失败行属于**合并集**；
+  ③ **本地行已被证伪**：本轮导出快照 94 607 行中数据行 **94 601 行全 3 列**，6 行非 3 列**全是 `#` 元信息/头行**
+     ⇒ 无 2 列数据行 ⇒ 本地 payload 均含制表符
+     （**本报告早期「本地有 1 行 2 列」的假设已证伪，勿沿用**）；
+  ④ `changed == true` 才走写回 ⇒ **云端确有条目**（远端为空则 merged == local、不写回）；
+  ⑤ 合并集里远端条目 payload 来自 `OpenItems`（`CloudSyncService.cpp:1268-1298`）：解密/拆封/MAC 自校验通过即收，
+     **不校验 payload 形态** ⇒ 一条 payload 无制表符的**云端旧条目**被 `OpenItemsTolerant` 放进合并集，炸掉整轮。
+- **连带隐患（同源）**：`JoinDictRow`（`CloudUserDictIo.cpp:235-250`）遇形态非法**返回空串**，
+  调用方会把它**写成空行** ⇒ 静默丢数据。
+- **推荐修法（BM）**：
+  ① 主修 = 开箱侧（`OpenItems`/`OpenItemsTolerant`）对**用户词典类**条目做与 `SplitDictPayload` 一致的形态校验，
+     形态不合法者按「不可用」计入 `undecryptable` 并跳过，**不再让单条脏条目毒化整轮合并**
+     （先例：旧密钥加密的行本就按 `undecryptable` 跳过，`CloudSyncService.h:189-198`）；
+  ② 配套 = `JoinDictRow` 形态非法改为**报错**而非返回空串；
+  ③ 可选 A = 续期分支加**无条件打印**的日志行（把 §13 的强推断升级为直证）；
+  ④ 配套测试 = `test/TestFluxingCloud` 增「云端混入 payload 无制表符条目 ⇒ 该轮**不失败**、该条被跳过计数」用例
+     （BL 组基线 653 断言全绿，基线只增不减）。
+- **未查证**：脏云端条目**如何清除**（是否已有「删条目」API，本批未查）；BM 的出包装机与复验尚未做。
