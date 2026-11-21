@@ -1,0 +1,18 @@
+REPO_ROOT=F:\soft\00selfmade\rime_claude
+OUT_DIR=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\b4-focusout-20261121-091248
+TOOL=F:\soft\00selfmade\rime_claude\Release\TestFocusOutE2E.exe
+DIAG_LOG=C:\Users\Duanyi\AppData\Local\Temp\fluxing-profile-notify.log
+SERVER pid=43172 path=D:\Program Files\fluxing\weasel\WeaselServer.exe
+
+=== PHASE A: session end only (no focus-out) ===
+CLIENT_STARTED mode=--end-session pid=523716
+CLIENT_STDOUT mode=--end-session exit=0 SESSION_STARTED ipc_id=11 pid=523716 | FOCUS_IN_SENT caps=2 ipc_id=11 | END_SESSION_SENT ipc_id=11 | SCENARIO_DONE ipc_id=11
+CLIENT_PANEL mode=--end-session seen_visible=False after_found=True after_visible=False
+A_IPC_ID=11
+A_NORMAL_PATH_ABSENT count=1 (expected >= 1)
+A_FOCUS_OUT_LINES count=0 (expected 0 - negative control)
+A_RECLAIM_LINES count=0 (expected 0)
+A_ORPHAN_KEPT_LINES count=0 (expected 0)
+A_ABSENT_LINE=remove_session active presence=absent
+
+=== PHASE B: real IME-switch order (END_SESSION then FOCUS_OUT) ===

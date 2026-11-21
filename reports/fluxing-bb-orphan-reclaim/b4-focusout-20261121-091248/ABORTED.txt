@@ -1,0 +1,11 @@
+本目录是**已中断的废弃运行**，不含有效判据，请勿引用。
+
+原因：2026-11-21 09:12:48 首次运行探针脚本时，`Invoke-Client` 的 `-WatchPanel` 形参
+用的是 `[bool]`（不能用 `-Switch` 形式传值），脚本在阶段 A 之后报
+「参数 'WatchPanel' 缺少自变量」并中断。
+
+已修：`[bool]$WatchPanel` → `[switch]$WatchPanel`；`Invoke-Client` 由阻塞 `WaitForExit`
+改为轮询 `$proc.HasExited`（否则面板可见性轮询永不执行 ⇒ 假阴性）。
+
+权威运行请看同级目录 `b4-focusout-20261121-091312/`（FAILURE_COUNT=0 /
+B4_VERDICT=PASS_SERVER_PATH / EXIT=0），报告见 `reports/fluxing-bb-orphan-reclaim/b4-focusout.md`。

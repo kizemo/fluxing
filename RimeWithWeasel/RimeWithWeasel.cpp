@@ -1090,6 +1090,9 @@ std::string RimeWithWeaselHandler::_ReadClientInfo(WeaselSessionId ipc_id,
                                                    DWORD* client_pid) {
   std::string app_name;
   DWORD owner_pid = 0;
+  // ADR 0067: 握手文本逐行原样收集(每行补回一个 '\n'),交给共享解析器去找
+  // 客户端自报的 pid 行。收集范围与改动前逐行扫描的范围完全一致(到 "." 行为止)。
+  std::wstring handshake_body;
   // parse request text
   wbufferstream bs(buffer, WEASEL_IPC_BUFFER_LENGTH);
   std::wstring line;
@@ -1100,33 +1103,22 @@ std::string RimeWithWeaselHandler::_ReadClientInfo(WeaselSessionId ipc_id,
     // file ends
     if (line == L".")
       break;
+    handshake_body += line;
+    handshake_body += L'\n';
     const std::wstring kClientAppKey = L"session.client_app=";
     if (starts_with(line, kClientAppKey)) {
       std::wstring lwr = line;
       to_lower(lwr);
       app_name = wtou8(lwr.substr(kClientAppKey.length()));
     }
-    // ADR 0067: 客户端自报的宿主进程 pid(十进制)。缺失 / 非法 = 0 = 未知。
-    // 只接受「整串都是十进制数字」:解析不了就当未知,绝不猜。
-    const std::wstring kClientPidKey = L"session.client_pid=";
-    if (starts_with(line, kClientPidKey)) {
-      const std::wstring value = line.substr(kClientPidKey.length());
-      unsigned long parsed = 0;
-      bool valid = !value.empty();
-      for (wchar_t ch : value) {
-        if (ch < L'0' || ch > L'9') {
-          valid = false;
-          break;
-        }
-        parsed = parsed * 10 + static_cast<unsigned long>(ch - L'0');
-        if (parsed > 0xFFFFFFFFul) {  // 超出 DWORD 范围 => 非法
-          valid = false;
-          break;
-        }
-      }
-      if (valid)
-        owner_pid = static_cast<DWORD>(parsed);
-    }
+  }
+  // ADR 0067: 客户端自报的宿主进程 pid(十进制)。缺失 / 非法 = 0 = 未知。
+  // 解析规则落在共享头 include/FluxingSessionReclaim.h(R7:生产与单测同源):
+  // 旧客户端不写这一行 ⇒ 解析不出来 ⇒ pid 未知 ⇒ 永不回收(只泄漏,不误杀)。
+  {
+    unsigned long parsed_pid = 0;
+    fluxing::session_reclaim::ParseClientPid(handshake_body, &parsed_pid);
+    owner_pid = static_cast<DWORD>(parsed_pid);
   }
   SessionStatus& session_status = get_session_status(ipc_id);
   RimeSessionId session_id = session_status.session_id;

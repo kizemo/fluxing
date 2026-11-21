@@ -1,0 +1,72 @@
+REPO_ROOT=F:\soft\00selfmade\rime_claude
+OUT_DIR=F:\soft\00selfmade\rime_claude\reports\fluxing-bb-orphan-reclaim\b4-focusout-20261121-091312
+TOOL=F:\soft\00selfmade\rime_claude\Release\TestFocusOutE2E.exe
+DIAG_LOG=C:\Users\Duanyi\AppData\Local\Temp\fluxing-profile-notify.log
+SERVER pid=43172 path=D:\Program Files\fluxing\weasel\WeaselServer.exe
+
+=== PHASE A: session end only (no focus-out) ===
+CLIENT_STARTED mode=--end-session pid=512456
+CLIENT_STDOUT mode=--end-session exit=0 SESSION_STARTED ipc_id=11 pid=512456 | FOCUS_IN_SENT caps=2 ipc_id=11 | END_SESSION_SENT ipc_id=11 | SCENARIO_DONE ipc_id=11
+CLIENT_PANEL mode=--end-session seen_visible=False after_found=True after_visible=False
+A_IPC_ID=11
+A_NORMAL_PATH_ABSENT count=1 (expected >= 1)
+A_FOCUS_OUT_LINES count=0 (expected 0 - negative control)
+A_RECLAIM_LINES count=0 (expected 0)
+A_ORPHAN_KEPT_LINES count=0 (expected 0)
+A_ABSENT_LINE=remove_session active presence=absent
+
+=== PHASE B: real IME-switch order (END_SESSION then FOCUS_OUT) ===
+CLIENT_STARTED mode=--focusout-deactivate pid=531976
+CLIENT_STDOUT mode=--focusout-deactivate exit=0 SESSION_STARTED ipc_id=11 pid=531976 | FOCUS_IN_SENT caps=1 ipc_id=11 | END_SESSION_SENT ipc_id=11 | FOCUS_OUT_SENT caps=1 ipc_id=11 | SCENARIO_DONE ipc_id=11
+CLIENT_PANEL mode=--focusout-deactivate seen_visible=True after_found=True after_visible=False
+B_IPC_ID=11
+B_FOCUS_IN_PRESENT count=1 (expected >= 1)
+B_NORMAL_PATH_ABSENT count=1 (expected >= 1)
+B_FOCUS_OUT_ABSENT count=1 (expected >= 1)
+B_RECLAIM_LINES count=0 (expected 0)
+B_ORPHAN_KEPT_LINES count=0 (expected 0)
+B_PANEL_FOUND=True B_PANEL_VISIBLE_AFTER=False (expected hidden) B_PANEL_SEEN_VISIBLE=True
+B_FOCUS_OUT_LINE=focus_out param=1 presence=absent
+
+=== PHASE C: focus-out alone flips presence ===
+CLIENT_STARTED mode=--focusout-only pid=533396
+CLIENT_STDOUT mode=--focusout-only exit=0 SESSION_STARTED ipc_id=11 pid=533396 | FOCUS_IN_SENT caps=1 ipc_id=11 | FOCUS_OUT_SENT caps=1 ipc_id=11 | END_SESSION_SENT ipc_id=11 | SCENARIO_DONE ipc_id=11
+CLIENT_PANEL mode=--focusout-only seen_visible=True after_found=True after_visible=False
+C_IPC_ID=11
+C_FOCUS_IN_PRESENT count=1 (expected >= 1)
+C_FOCUS_OUT_ABSENT count=1 (expected >= 1)
+C_RECLAIM_LINES count=0 (expected 0 - the session ended normally)
+C_ORPHAN_KEPT_LINES count=0 (expected 0)
+C_ECHO_AFTER=0 (expected 0 - the session is gone)
+C_PANEL_FOUND=True C_PANEL_VISIBLE_AFTER=False (expected hidden) C_PANEL_SEEN_VISIBLE=True
+C_FOCUS_OUT_LINE=focus_out param=1 presence=absent
+
+=== PHASE D: window switch (APP_FOCUS_LOST) ===
+CLIENT_STARTED mode=--focusout-appfocus pid=532980
+CLIENT_STDOUT mode=--focusout-appfocus exit=0 SESSION_STARTED ipc_id=11 pid=532980 | FOCUS_IN_SENT caps=2 ipc_id=11 | FOCUS_OUT_SENT caps=2 ipc_id=11 | END_SESSION_SENT ipc_id=11 | SCENARIO_DONE ipc_id=11
+CLIENT_PANEL mode=--focusout-appfocus seen_visible=False after_found=True after_visible=False
+D_IPC_ID=11
+D_FOCUS_OUT_KEPT count=1 (expected >= 1)
+D_FOCUS_OUT_ABSENT count=0 (expected 0 - no profile deactivation here)
+D_RECLAIM_LINES count=0 (expected 0)
+D_ORPHAN_KEPT_LINES count=0 (expected 0)
+D_FOCUS_OUT_LINE=focus_out param=2 presence=kept
+
+=== PHASE E: orphan control (no END_SESSION) ===
+CLIENT_STARTED mode=--abrupt-exit pid=532592
+CLIENT_STDOUT mode=--abrupt-exit exit=0 SESSION_STARTED ipc_id=11 pid=532592 | FOCUS_IN_SENT caps=2 ipc_id=11 | ABRUPT_EXIT ipc_id=11 (no END_SESSION)
+CLIENT_PANEL mode=--abrupt-exit seen_visible=False after_found=True after_visible=False
+CLIENT_STARTED mode=--sweep-trigger pid=517432
+CLIENT_STDOUT mode=--sweep-trigger exit=0 SESSION_STARTED ipc_id=12 pid=517432 | SWEEP_TRIGGERED ipc_id=12
+CLIENT_PANEL mode=--sweep-trigger seen_visible=False after_found=True after_visible=False
+E_IPC_ID=11 E_HOST_PID=532592 E_SWEEP_IPC_ID=12
+E_RECLAIM_LINE count=1 (expected >= 1)
+E_ORPHAN_KEPT_LINES count=1 (expected >= 1)
+E_ABSENT_LINES count=0 (expected 0 - the orphan path must not flip presence)
+E_RECLAIM_LINE=reclaim orphan session ipc_id=11 client_pid=532592 live=9
+E_ORPHAN_KEPT_LINE=remove_session active orphan_reclaim presence=kept
+E_CLEANUP=END_SESSION_SENT ipc_id=12
+
+FAILURE_COUNT=0
+B4_VERDICT=PASS_SERVER_PATH
+EXIT=0

@@ -1,0 +1,3 @@
+2026-11-21 09:13:20.370][server] focus_in profile presence=present
+2026-11-21 09:13:22.535][server] focus_out param=1 presence=absent
+

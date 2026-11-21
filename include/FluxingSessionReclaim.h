@@ -32,6 +32,7 @@
 //   "dead" verdict, because a reused pid belongs to a running process.
 //
 
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
@@ -61,6 +62,76 @@ inline std::string FormatReclaimLogLine(unsigned long ipc_id,
   line += " live=";
   line += std::to_string(live_after);
   return line;
+}
+
+// ADR 0067: the client reports the pid of its host process inside the
+// existing text request body, as one extra line:
+//
+//   session.client_pid=<decimal pid>
+//
+// An OLD client does not write that line at all. Such a client MUST be
+// treated as "pid unknown" (never as "pid 0", never as reclaimable), so
+// the parser below reports "not found" for a body without that line.
+//
+//   body    : the handshake text, lines separated by '\n'
+//   out_pid : receives the parsed pid (only when the return value is true)
+//
+// Returns true when the body carried at least one WELL FORMED pid line,
+// and *out_pid holds the LAST well formed value. Returns false when the
+// line is absent or when every pid line was malformed; *out_pid is then
+// left untouched, so the caller keeps "pid unknown".
+//
+// Strictness (never guess a number):
+//   - the value must be a non empty run of ASCII decimal digits;
+//   - the value must fit in a DWORD (<= 0xFFFFFFFF);
+//   - anything else is malformed => unknown, never a guessed number.
+inline bool ParseClientPid(const std::wstring& body,
+                            unsigned long* out_pid) {
+  static const wchar_t kKey[] = L"session.client_pid=";
+  const size_t kKeyLen = sizeof(kKey) / sizeof(kKey[0]) - 1;
+  bool found = false;
+  unsigned long last_valid = 0;
+  size_t pos = 0;
+  while (pos <= body.size()) {
+    size_t eol = body.find(L'\n', pos);
+    const bool last_line = (eol == std::wstring::npos);
+    if (last_line)
+      eol = body.size();
+    const std::wstring line = body.substr(pos, eol - pos);
+    pos = eol + 1;
+    if (line.size() >= kKeyLen &&
+        std::equal(kKey, kKey + kKeyLen, line.begin())) {
+      const std::wstring value = line.substr(kKeyLen);
+      unsigned long parsed = 0;
+      bool valid = !value.empty();
+      for (wchar_t ch : value) {
+        if (ch < L'0' || ch > L'9') {
+          valid = false;
+          break;
+        }
+        // Accumulate in 64 bits so the DWORD range check below is live:
+        // 'unsigned long' is 32 bit on Windows, so accumulating there
+        // would wrap around instead of rejecting an out of range value.
+        const unsigned long long next =
+            static_cast<unsigned long long>(parsed) * 10ull +
+            static_cast<unsigned long long>(ch - L'0');
+        if (next > 0xFFFFFFFFull) {  // out of DWORD range => malformed
+          valid = false;
+          break;
+        }
+        parsed = static_cast<unsigned long>(next);
+      }
+      if (valid) {
+        last_valid = parsed;
+        found = true;
+      }
+    }
+    if (last_line)
+      break;
+  }
+  if (found && out_pid)
+    *out_pid = last_valid;
+  return found;
 }
 
 // A reported owner pid may only be probed when it can be a real host

@@ -1,0 +1,2 @@
+2026-11-21 09:12:51.392][server] remove_session active presence=absent
+

@@ -3562,6 +3562,124 @@ void TestSessionReclaimLogLine() {
         "B-2 行：不含换行符");
 }
 
+// ADR 0067 / B-5：握手文本里「客户端自报宿主 pid」那一行的**解析层**。
+//
+// 判据层（TestSessionReclaimCriteria）已经证明「pid 未知 ⇒ 永不回收」，
+// 但此前没有任何用例覆盖解析层：旧客户端（握手里根本没有
+// session.client_pid= 这一行）解析出来必须真的是「未知」(0)，
+// 绝不能被当成可回收的 pid，更不能被误杀。
+//
+// 解析实现来自生产头 include/FluxingSessionReclaim.h（R7：生产与单测同源），
+// 本用例断言的就是生产 RimeWithWeasel.cpp 里调用的那一个函数。
+void TestClientPidParse() {
+  std::printf("[ADR 0067 / B-5] 握手里的 client pid 解析\n");
+  namespace sr = fluxing::session_reclaim;
+  const unsigned long kSelf = 1000;  // 「服务端自己」的 pid（测试里取个假值）
+
+  // 解析并把「没解析出来」记成 -1：一条断言同时覆盖返回值与取值。
+  auto parsed_or_unknown = [](const std::wstring& body) -> long long {
+    unsigned long pid = 0;
+    if (!sr::ParseClientPid(body, &pid))
+      return -1;
+    return static_cast<long long>(pid);
+  };
+
+  // ① 旧客户端的握手文本：没有 session.client_pid= 这一行。
+  const std::wstring kOldClientBody =
+      L"action=session\n"
+      L"session.client_app=notepad\n"
+      L"session.client_type=ime\n"
+      L".\n";
+  Check(parsed_or_unknown(kOldClientBody) == -1,
+        "B-5：旧客户端（无 client_pid 行）⇒ 解析不出来");
+  Check(parsed_or_unknown(std::wstring()) == -1, "B-5：空握手文本 ⇒ 解析不出来");
+
+  // ② 解析不出来时出参必须原样不动（调用方据此保持「pid 未知」）。
+  unsigned long untouched = 777;
+  Check(!sr::ParseClientPid(kOldClientBody, &untouched) && untouched == 777ul,
+        "B-5：解析失败 ⇒ 不改写出参（调用方保持 pid 未知）");
+
+  // ③ 旧客户端的 pid = 0 ⇒ 判据层必须判「未知」（不可探测 ⇒ 永不回收）。
+  unsigned long old_pid = 0;
+  sr::ParseClientPid(kOldClientBody, &old_pid);
+  Check(old_pid == 0ul, "B-5：旧客户端 ⇒ pid 保持 0（未知）");
+  Check(!sr::OwnerPidKnown(old_pid, kSelf),
+        "B-5：旧客户端 ⇒ pid 未知 ⇒ 不可探测");
+
+  // ④ 空值：key 后面什么都没有 ⇒ 非法。
+  Check(parsed_or_unknown(L"session.client_pid=\n") == -1, "B-5：空值 ⇒ 非法");
+
+  // ⑤ 非纯十进制 ⇒ 非法（穷举一批常见坏值）。
+  struct BadValue {
+    const wchar_t* value;
+  };
+  const BadValue kBadValues[] = {
+      {L"abc"},       {L"12x"},      {L" 12"},   {L"12 "},
+      {L"-1"},        {L"1 2"},      {L"0x10"},  {L"+7"},
+      {L"\uff11\uff12\uff13"},
+  };
+  bool all_bad = true;
+  int bad_count = 0;
+  for (const BadValue& bv : kBadValues) {
+    const std::wstring body =
+        std::wstring(L"session.client_pid=") + bv.value + L"\n";
+    if (parsed_or_unknown(body) != -1)
+      all_bad = false;
+    ++bad_count;
+  }
+  CheckMany(all_bad,
+            "B-5：非纯十进制值（abc/12x/空格/-1/0x10/+7/全角…）⇒ 一律非法",
+            bad_count);
+
+  // ⑥ 纯十进制 ⇒ 正确解析。
+  Check(parsed_or_unknown(L"session.client_pid=4321\n") == 4321,
+        "B-5：纯十进制 ⇒ 解析出 4321");
+  Check(parsed_or_unknown(L"session.client_pid=0\n") == 0,
+        "B-5：0 ⇒ 解析出 0");
+  Check(!sr::OwnerPidKnown(0ul, kSelf),
+        "B-5：0 ⇒ 判据层仍判「未知 pid」（不可探测）");
+  Check(parsed_or_unknown(L"session.client_pid=4294967295\n") == 4294967295,
+        "B-5：0xFFFFFFFF ⇒ 合法上界");
+
+  // ⑦ 超出 DWORD 范围 ⇒ 非法（绝不猜一个数出来）。
+  Check(parsed_or_unknown(L"session.client_pid=4294967296\n") == -1,
+        "B-5：> 0xFFFFFFFF ⇒ 非法");
+  Check(parsed_or_unknown(L"session.client_pid=99999999999\n") == -1,
+        "B-5：远超 DWORD 范围 ⇒ 非法");
+
+  // ⑧ 多个 pid 行 ⇒ 最后一个**合法**值生效（与改动前的逐行扫描同口径）。
+  Check(parsed_or_unknown(L"session.client_pid=111\nsession.client_pid=222\n") ==
+            222,
+        "B-5：两个合法 pid 行 ⇒ 取最后一个");
+  Check(parsed_or_unknown(L"session.client_pid=111\nsession.client_pid=abc\n") ==
+            111,
+        "B-5：后一个非法 ⇒ 保留前一个合法值");
+  Check(parsed_or_unknown(L"session.client_pid=abc\nsession.client_pid=222\n") ==
+            222,
+        "B-5：前一个非法 ⇒ 取后一个合法值");
+
+  // ⑨ key 必须在行首。
+  Check(parsed_or_unknown(L"x session.client_pid=4321\n") == -1,
+        "B-5：key 不在行首 ⇒ 不认");
+
+  // ⑩ 关键场景：旧客户端的会话绝不能被回收。
+  std::vector<std::pair<unsigned long, sr::SessionOwner> > table;
+  std::vector<unsigned long> victims;
+  sr::SessionOwner old_owner;
+  old_owner.pid = old_pid;         // 解析层给出的就是 0（未知）
+  old_owner.process_alive = false; // 就算探测说「进程不在了」也不许回收
+  sr::SessionOwner dead_owner;
+  dead_owner.pid = 4321;
+  dead_owner.process_alive = false;
+  table.push_back(std::make_pair(101ul, old_owner));
+  sr::SelectReclaimableSessionIds(table, kSelf, &victims);
+  Check(victims.empty(), "B-5：旧客户端会话 ⇒ 不回收（绝不误杀）");
+  table.push_back(std::make_pair(102ul, dead_owner));
+  sr::SelectReclaimableSessionIds(table, kSelf, &victims);
+  Check(victims.size() == 1 && victims[0] == 102ul,
+        "B-5：混表 ⇒ 只回收「pid 已知且已死」那条，旧客户端那条不动");
+}
+
 }  // namespace
 
 int main() {
@@ -3628,6 +3746,9 @@ int main() {
   TestSessionReclaimCriteria();
   // ADR 0067 / B-2：回收诊断行的逐字格式（重启清单 grep 用）。
   TestSessionReclaimLogLine();
+  // ADR 0067 / B-5：握手里的 client pid 解析（旧客户端不写这一行 ⇒
+  // pid 未知 ⇒ 绝不回收）。
+  TestClientPidParse();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。
