@@ -8,7 +8,7 @@
 
 ## 0. 一句话结论
 
-BC §5 计划里的三件事全部到手：**B-5 真机端到端 = `PASS_E2E`**（父会话另做了独立复核）；**B-4 路径 2 的判据签名已在「只读、零权限改动」模式下被两轮独立复现**，且 BC 登记的那条阻塞前提（激活 Fluxing profile = 把用户正在用的搜狗切走）**实测不成立**；**R7 同源缺口已补**（`TestWeaselIPC` 的 client_pid 解析副本删除，改调生产侧共享头）。本批**未改产品代码、未改 `librime/`、未改 IPC 协议、未新增依赖、未出包、未装机、未提交**。装机版仍是 **1.3.8.0**（`WeaselServer.exe` pid 43172，StartTime 2026-11-21 07:55:35，全程未被 `/quit` 或重启）。
+BC §5 计划里的三件事全部到手：**B-5 真机端到端 = `PASS_E2E`**（父会话另做了独立复核）；**B-4 路径 2 的判据签名已在「只读、零权限改动」模式下被两轮独立复现**，且 BC 登记的那条阻塞前提（激活 Fluxing profile = 把用户正在用的搜狗切走）**实测不成立**；**R7 同源缺口已补**（`TestWeaselIPC` 的 client_pid 解析副本删除，改调生产侧共享头）。本批**未改产品代码、未改 `librime/`、未改 IPC 协议、未新增依赖、未出包、未装机**；改动**已提交**：`af0195b`（R7）+ `fbf643f`（BD 收口，本批代码 / 探针 / 证据 / 正本）+ 收口后的**正本同步 docs commit**（把「未提交」登记改成本条真值，即含本文件当前版本的 commit），分支 `feat/100-cloud-sync` **尚未 push**（ahead 数以 `git status -sb` 为准，不在此钉死以免自引用失真）。装机版仍是 **1.3.8.0**（`WeaselServer.exe` pid 43172，StartTime 2026-11-21 07:55:35，全程未被 `/quit` 或重启）。
 
 ---
 
@@ -123,12 +123,12 @@ SDK 签名核对结论（两份 `msctf.h` 均在；实际编译依据 = `10.0.26
 | 3 | A-4 / A-5 未登录态 | 需用户**明确授权登出**探针账号；探针不得自行登出 |
 | 4 | 175% / 200% DPI 真机像素证据 | 用户 2026-11-20 已拍板「先不切，按未闭环收口」，免注销切档五条路径已实测排除 ⇒ **勿再试** |
 | 5 | 双机 AC 7 条 + restore 端到端 + 输入延迟两组对照 + 缺陷 A 反向判据 G-3/G-5 | 需两台机器 + 用户在场 |
-| 6 | 本批全部代码/文档改动**未提交、未 push** | 建议 BE 首批第一件事（§7） |
+| 6 | push | 本批已按用户拍板提交（`af0195b` R7 / `fbf643f` BD 收口 / 另加一个正本同步 docs commit），领先 `kizemo/feat/100-cloud-sync`；**push 未获授权 ⇒ 未做**，配方见 §8。工作区残留 = ` m librime`（既有脏指针，有意不动）+ 三个早于本批的未跟踪 `scripts/verify/*.ps1` 与 `docs/design/quickpanel-v6/design-demos/*.html`、`release/`（不在本批清单内，有意未提交） |
 | 7 | 出包 | 本批无用户可见变更 ⇒ 按 BC 口径**不出包**；现有产物 `output/archives/fluxing-1.3.8-installer.exe`（42 967 778 B / sha16 `AB009C20F6304098`） |
 
 ## 7. 下一批（BE）有序计划
 
-1. **提交本批**：`test/TestWeaselIPC/TestWeaselIPC.cpp`（R7 同源）+ `test/TestTsFocusOutHost/*` + `test/TestOrphanReclaimE2E/TestFocusOutE2E.cpp`（B-5）+ `scripts/verify/b4-tsf-host.ps1` / `b5-legacy-client-e2e.ps1` + `reports/fluxing-bb-orphan-reclaim/*` + 本批 handoff/prompt。建议拆两个 commit：`test(fluxing): share client_pid parsing with production header (R7)` 与 `test(fluxing): close B-5 legacy-client e2e and B-4 path-2 tsf host probe`。提交前 **必须** `git status -sb` + `git diff --stat`（拦 `weasel.props` / `env.bat` / `*.obj` / `librime` 子模块指针）；`TestTsFocusOutHost` 新工程**不得进 `weasel.sln`**。
+1. ~~**提交本批**~~ —— **已在本批收口时完成**（用户 2026-11-21 拍板「现在就提交，拆两个 commit」）：`af0195b` `test(fluxing): R7 同源 —— TestWeaselIPC 改调生产侧 client_pid 解析器`（2 files / +37 −11）+ `fbf643f` `test(fluxing): 批次 BD 收口 —— B-5 旧客户端端到端闭环 + B-4 真 TSF 宿主探针与宿主退出口径 + 消息序定案`（59 files / +2 859 −22）。此后另有一个 `docs(fluxing)` 小 commit，只把本批正本里「未提交」的过期登记改写为提交真值 —— 因为 `af0195b` / `fbf643f` 的哈希必须写进正本，而正本自身是被记录对象，折回前两个 commit 会让 HEAD 哈希变化、文档引用立即失真；用户口径「拆两个 commit」针对本批代码 + 探针 + 证据 + 文档主体，仍成立。提交前已过禁提项判别（`librime` / `weasel.props` / `env.bat` / `*.obj` / `weasel.sln` 零命中），`TestTsFocusOutHost` 新工程**确实未进 `weasel.sln`**。**BE 第一件事改为 push**：`git -C 'F:\soft\00selfmade\rime_claude' -c http.proxy= -c https.proxy= push kizemo feat/100-cloud-sync`（须用户授权；首次 `EXIT=128` 属瞬时，重跑即成）。
 2. ~~按 §3.3 的用户选择收 B-4 路径 2~~ —— **已在本批收口时闭环**（用户拍板「按宿主退出口径闭环，不再真跑」；§3.3 拍板记录 + §6 第 1 项 + `restart-checklist-1.3.6.md` B-4 状态注三处已同步）。**BE 不再重跑该项**。若将来要补「主动切窗口」触发源的证据，直接抄 §8 配方，并记住真跑须在**独占时间窗**内留档 `LOG_BYTES_BEFORE`（门禁并发守卫只按进程名判断，兄弟会话用别的进程驱动同一日志仍会把行落进切片窗口）。
 3. 用户在场时跑 `/verify-client-pid`（先 `/quit` 抢管道，跑完确认 `WeaselServer` 重新拉起且 `FileVersion` 仍是装机版）。
 4. 若 §4 调用路径端到端通过 ⇒ 把「record_client_pid 走生产解析器」从推断升级为实测，并考虑给 `TestClientPidParse` 补「任意位置匹配」与「DWORD 越界回绕」两条**反向**断言（证明收紧有牙）。
@@ -154,8 +154,8 @@ git -C 'F:\soft\00selfmade\rime_claude' -c http.proxy= -c https.proxy= push kize
 
 ## 9. 状态快照 & 代码指针
 
-- HEAD 起点 `78416a8`（docs BC 收口）→ `833d512` → `78e74f4` → `86efdab` → `5ef9a23` → `9e45174`，与 `kizemo/feat/100-cloud-sync` 同步；本批改动全部**未提交**。
-- `git status` 非未跟踪项 = ` m librime`（既有子模块脏）+ ` M test/TestOrphanReclaimE2E/TestFocusOutE2E.cpp`（B-5）+ ` M test/TestWeaselIPC/TestWeaselIPC.cpp`（R7）⇒ **产品代码零改动**。
+- HEAD 起点 `78416a8`（docs BC 收口）→ `833d512` → `78e74f4` → `86efdab` → `5ef9a23` → `9e45174`，与 `kizemo/feat/100-cloud-sync` 同步；本批改动已提交 `af0195b` → `fbf643f`（+ 一个正本同步 docs commit），**尚未 push**。
+- 提交后 `git status` 非未跟踪项 = ` m librime`（既有子模块脏，有意不碰）⇒ **产品代码零改动**（两次提交的改动集只含测试代码、探针脚本、reports 证据与文档正本）。
 - 装机版 1.3.8.0；`HKCU\Software\Fluxing\Weasel\RimeUserDir = D:\Program Files\fluxing\user1\fluxing` **未动**（绝对禁止：写 `C:\Program Files\fluxing\`、改 `user1\`）。
 - 测试账号口令等「具体值」只按真相源 `tmp/AN-register-qq.txt` 第 10 行**当场回读**并带校验位（长度 / sha16 前 16 位 / 尾 4 字符），**禁止凭形态脑补**（2026-11-19 曾因此交付假口令）。
 - 代码指针：`test/TestWeaselIPC/TestWeaselIPC.cpp:24-27`（新 include）`:542-557`（同源解析）`:584`（`verify_client_pid_main`）；`include/FluxingSessionReclaim.h:55-65`（`FormatReclaimLogLine`）`:88-135`（`ParseClientPid`）`:142-144`（`OwnerPidKnown`，口径 `pid > 4 && pid != self_pid`）；`RimeWithWeasel/RimeWithWeasel.cpp:40/1093-1123/1120/1248-1286/608/659`；`WeaselTSF/WeaselTSF.cpp:114-126` + `:426/:445` —— **真机到达序已定案为「三条夹心」**：`:124` 只是**异步投递** `_PostProfileNotify(kProfileNotifyDeactivated)`，真实的 `FocusOut(PROFILE_DEACTIVATED)` 由**通知线程** `:445` 发射（**早于** `:125 m_client.EndSession()`），服务端实到序 = `focus_out param=2` → `remove_session` → `focus_out param=1`（四组逐字一致，§3.2）⇒ **先前两种口径同时作废**：`b4-focusout.md` §2「先收 END_SESSION、后收 FOCUS_OUT」是**错的推断，不是笔误**；`b4-path2-prep.md` §4.1「升级为有实测支持」**只对 `param=1` 成立** ⇒ 两处均已就地更正；`WeaselServer/Cloud/CloudAccountUi.h:209`（换钥提示文案，真相源）/ `:159`（缺陷 C 的未缩放 `36`）。
