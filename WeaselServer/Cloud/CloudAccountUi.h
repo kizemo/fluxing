@@ -253,6 +253,60 @@ inline int AccountMinHeightForText(int lines, int dpi) {
 }
 
 // ---------------------------------------------------------------------------
+// 「最近同步」状态行（kIdSyncStatus = 1017）文案 —— FR-016 的可见性落地
+// ---------------------------------------------------------------------------
+//
+// spec 100 FR-016：「账号页可查看登录状态、账号邮箱、设备列表（可移除设备）、
+// **最近一次同步时间与结果**」⇒ 账号页的 1017 就是 FR-016 的落点。
+//
+// ⚠️ 唯一真相源：生产侧（CloudAccountDialog.cpp 的 WidgetText / SetSyncStatus
+//    / RefreshUi）与单测共用本组函数（constitution R7）—— 单测**不得**复制
+//    第二份字面量。
+//
+// ⚠️ 逐字不得改动：账号页文案与探针期望值逐字比对。分隔符「·」是 U+00B7
+//    （中间点），**不是**全角句点「。」。
+
+// 初始 / 登出复位 / 控件创建时的占位文案。
+inline const wchar_t* AccountSyncStatusTextNeverSynced() {
+  return L"最近同步：尚未同步。";
+}
+
+// 启动引擎时缺令牌 / 缺加密密钥 / 缺设备号。
+inline const wchar_t* AccountSyncStatusTextNotLoggedIn() {
+  return L"最近同步：未登录，无法同步。";
+}
+
+// 引擎启动失败。
+inline const wchar_t* AccountSyncStatusTextEngineStartFailed() {
+  return L"最近同步：同步引擎启动失败。";
+}
+
+// 同步轮次开始前未登录（与上一句措辞不同，**逐字保留原样**，勿合并）。
+inline const wchar_t* AccountSyncStatusTextRoundNotLoggedIn() {
+  return L"最近同步：尚未登录，无法同步。";
+}
+
+// 一轮同步成功：时间 · 成功（推送 N 条，拉取 N 条）。
+inline std::wstring AccountSyncStatusTextSuccess(const std::wstring& when,
+                                                 int pushed,
+                                                 int pulled) {
+  return L"最近同步：" + when + L" · 成功（推送 " + std::to_wstring(pushed) +
+         L" 条，拉取 " + std::to_wstring(pulled) + L" 条）";
+}
+
+// 一轮同步被维护闸门跳过（ADR 0062 决策 2：跳过 ≠ 失败，措辞不许吓人）。
+inline std::wstring AccountSyncStatusTextSkipped(const std::wstring& when,
+                                                 const std::wstring& reason) {
+  return L"最近同步：" + when + L" · 已跳过（" + reason + L"）";
+}
+
+// 一轮同步失败。
+inline std::wstring AccountSyncStatusTextFailed(const std::wstring& when,
+                                                const std::wstring& reason) {
+  return L"最近同步：" + when + L" · 失败（" + reason + L"）";
+}
+
+// ---------------------------------------------------------------------------
 // 几何表（唯一真相源）
 // ---------------------------------------------------------------------------
 //

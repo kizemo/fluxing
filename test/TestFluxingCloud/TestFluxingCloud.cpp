@@ -2622,6 +2622,64 @@ bool AtUiHasId(const std::vector<int>& ids, int id) {
   return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 
+// 批次 BK · ADR 0069：账号页 FR-016「最近一次同步时间与结果」的可见性。
+// 判据全部取自生产头（R7：生产与单测共用同一份实现）：
+//   ① 1017 在已登录态可见、未登录态不可见（可见性表）；
+//   ② 1017 属于账号页要创建的控件集合（控件真的存在，不只是布局条目）；
+//   ③ 「最近同步」文案七种形态逐字相符（占位 / 未登录 / 轮次未登录 /
+//      引擎启动失败 / 成功 / 已跳过 / 失败）—— 生产侧由
+//      CloudAccountDialog.cpp 调用同一组函数生成，单测**不**复制第二份字面量。
+void TestSyncStatusVisibility() {
+  std::printf("[BK] ADR 0069 账号页「最近同步」可见性（FR-016）\n");
+
+  const std::vector<int> logged_out =
+      fc::AccountVisibleControlIds(false, fc::kAccountBaseDpi);
+  const std::vector<int> logged_in =
+      fc::AccountVisibleControlIds(true, fc::kAccountBaseDpi);
+
+  Check(AtUiHasId(logged_in, fc::kIdSyncStatus),
+        "BK 已登录态：「最近同步」状态行(1017)可见");
+  Check(!AtUiHasId(logged_out, fc::kIdSyncStatus),
+        "BK 未登录态：「最近同步」状态行(1017)不可见");
+
+  // 控件必须真的被创建（否则界面上没有可写的落点）。
+  {
+    const std::vector<fc::AccountWidgetSpec> specs = fc::AccountWidgets(
+        fc::AccountWindowRole::kAccount, fc::kAccountBaseDpi);
+    bool found = false;
+    for (size_t i = 0; i < specs.size(); ++i) {
+      if (specs[i].id == fc::kIdSyncStatus)
+        found = true;
+    }
+    Check(found, "BK 账号页控件集合含 1017（控件被创建）");
+  }
+
+  // 文案逐字（七种形态）。
+  Check(std::wstring(fc::AccountSyncStatusTextNeverSynced()) ==
+            L"最近同步：尚未同步。",
+        "BK 占位文案逐字相符");
+  Check(std::wstring(fc::AccountSyncStatusTextNotLoggedIn()) ==
+            L"最近同步：未登录，无法同步。",
+        "BK 未登录文案逐字相符");
+  Check(std::wstring(fc::AccountSyncStatusTextRoundNotLoggedIn()) ==
+            L"最近同步：尚未登录，无法同步。",
+        "BK 轮次未登录文案逐字相符");
+  Check(std::wstring(fc::AccountSyncStatusTextEngineStartFailed()) ==
+            L"最近同步：同步引擎启动失败。",
+        "BK 引擎启动失败文案逐字相符");
+  Check(fc::AccountSyncStatusTextSuccess(L"2026-11-21 22:30:00", 3, 7) ==
+            L"最近同步：2026-11-21 22:30:00 · 成功（推送 3 条，拉取 7 条）",
+        "BK 成功文案逐字相符");
+  Check(fc::AccountSyncStatusTextSkipped(L"2026-11-21 22:30:00",
+                                         L"维护闸门未放行") ==
+            L"最近同步：2026-11-21 22:30:00 · 已跳过（维护闸门未放行）",
+        "BK 已跳过文案逐字相符");
+  Check(
+      fc::AccountSyncStatusTextFailed(L"2026-11-21 22:30:00", L"网络不可用") ==
+          L"最近同步：2026-11-21 22:30:00 · 失败（网络不可用）",
+      "BK 失败文案逐字相符");
+}
+
 void TestAccountPageUi() {
   const std::vector<int> logged_out =
       fc::AccountVisibleControlIds(false, fc::kAccountBaseDpi);
@@ -3776,6 +3834,7 @@ int main() {
   // 批次 AT-1 · ADR 0063：账号页信息架构（两态可见性 / 几何 / 历史邮箱）。
   TestAccountPageUi();
   TestAccountPageUiDpiScale();
+  TestSyncStatusVisibility();
   TestAccountHistory();
 
   // 批次 AW · ADR 0065 / ADR 0066：闸门空闲宽限期判据 + 账号窗口槽位状态机。

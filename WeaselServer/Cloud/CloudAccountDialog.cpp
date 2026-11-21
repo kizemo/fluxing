@@ -287,7 +287,7 @@ class CloudAccountController::Impl {
     const bool has_key = service && service->GetEncKey(&enc_key);
     if (!has_token || !has_key || token.empty() || enc_key.empty() ||
         device.empty()) {
-      SetSyncStatus(L"最近同步：未登录，无法同步。");
+      SetSyncStatus(AccountSyncStatusTextNotLoggedIn());
       return;
     }
 
@@ -300,7 +300,7 @@ class CloudAccountController::Impl {
           return RunSyncRound(direction, result);
         };
     if (!engine->Start(runner, options)) {
-      SetSyncStatus(L"最近同步：同步引擎启动失败。");
+      SetSyncStatus(AccountSyncStatusTextEngineStartFailed());
       return;
     }
     // spec 100 阶段 F · T501: 把引擎挂到「本地改动通知宿主」上。
@@ -343,7 +343,7 @@ class CloudAccountController::Impl {
         !service->GetEncKey(&enc_key) || enc_key.empty() || device.empty()) {
       out->ok = false;
       out->message = "尚未登录，无法同步。";
-      SetSyncStatus(L"最近同步：尚未登录，无法同步。");
+      SetSyncStatus(AccountSyncStatusTextRoundNotLoggedIn());
       return false;
     }
 
@@ -361,24 +361,21 @@ class CloudAccountController::Impl {
 
     const std::wstring when = FormatLocalTimeMs(NowUnixMs());
     if (ok) {
-      SetSyncStatus(L"最近同步：" + when + L" · 成功（推送 " +
-                    std::to_wstring(out->items_pushed) + L" 条，拉取 " +
-                    std::to_wstring(out->items_pulled) + L" 条）");
+      SetSyncStatus(AccountSyncStatusTextSuccess(when, out->items_pushed,
+                                                 out->items_pulled));
     } else if (out->skipped) {
       // ADR 0062 决策 2: 跳过 ≠ 失败 —— 用「已跳过」措辞，别吓人。
       std::string reason = err.empty() ? out->message : err;
       if (reason.empty())
         reason = MaintenanceGateSkipMessage();
       out->message = reason;
-      SetSyncStatus(L"最近同步：" + when + L" · 已跳过（" + ToWide(reason) +
-                    L"）");
+      SetSyncStatus(AccountSyncStatusTextSkipped(when, ToWide(reason)));
     } else {
       std::string reason = err.empty() ? out->message : err;
       if (reason.empty())
         reason = "未知原因";
       out->message = reason;
-      SetSyncStatus(L"最近同步：" + when + L" · 失败（" + ToWide(reason) +
-                    L"）");
+      SetSyncStatus(AccountSyncStatusTextFailed(when, ToWide(reason)));
     }
 
     // 通知账号页系列窗口刷新。
@@ -421,7 +418,7 @@ class CloudAccountController::Impl {
   std::unique_ptr<IUserDictBackend> dict_backend;
   std::mutex engine_mutex;
   std::mutex sync_mutex;
-  std::wstring sync_status_text = L"最近同步：尚未同步。";
+  std::wstring sync_status_text = AccountSyncStatusTextNeverSynced();
 };
 
 CloudAccountController::CloudAccountController() : impl_(new Impl()) {}
@@ -645,7 +642,7 @@ void CloudAccountController::SubmitLogout() {
     // 并把「最近同步」文案复位。**先**停引擎再改状态：StopEngine 会
     // join 引擎线程，不能持有 impl->mutex（锁序：engine_mutex → mutex）。
     impl->StopEngine();
-    impl->SetSyncStatus(L"最近同步：尚未同步。");
+    impl->SetSyncStatus(AccountSyncStatusTextNeverSynced());
     std::lock_guard<std::mutex> lock(impl->mutex);
     impl->logged_in = false;
     impl->email_verified = false;
@@ -953,7 +950,7 @@ std::wstring WidgetText(Role role, int id) {
     case kIdDeleteData:
       return L"清空云端数据";
     case kIdSyncStatus:
-      return L"最近同步：尚未同步。";
+      return AccountSyncStatusTextNeverSynced();
     case kIdOpportunityNote:
       return L"你正在输入时同步会自动延后，停止输入后自动完成。";
     case kIdKeyRotationNote:
@@ -1482,6 +1479,16 @@ void RefreshUi(HWND hwnd, Role role) {
     HWND account = ::GetDlgItem(hwnd, kIdAccountLabel);
     if (account != nullptr)
       ::SetWindowTextW(account, controller.account_email().c_str());
+    // 「最近同步」状态行（kIdSyncStatus = 1017 · spec 100 FR-016）：
+    // 文案由 controller.sync_status() 提供 —— 它在每轮同步结束后由
+    // SetSyncStatus 更新（成功 / 已跳过 / 失败），登出时复位。
+    // ⚠️ 此前本函数**只**写了 1006 状态行 ⇒ 1017 永远停在创建时的占位文案
+    // 「最近同步：尚未同步。」⇒ FR-016 的「最近一次同步时间与结果」在界面上
+    // **从不可见**（批次 BK 修）。控件在两态都创建（未登录态隐藏）⇒ 这里
+    // 无条件写；隐藏态写文本不影响可见性，登录后即为最新值。
+    HWND sync_status = ::GetDlgItem(hwnd, kIdSyncStatus);
+    if (sync_status != nullptr)
+      ::SetWindowTextW(sync_status, controller.sync_status().c_str());
     RefreshHistoryCombo(hwnd, controller);
     // ★ 登录态区分：两套控件互斥，切换靠 ShowWindow，不重建。
     ApplyLayout(hwnd, role, logged_in, AccountUiDpi());
