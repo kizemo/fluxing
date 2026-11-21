@@ -2672,10 +2672,50 @@ void TestAccountPageUi() {
           "AT-1 两态交集只有状态行与关闭按钮");
   }
 
-  // 6) 历史邮箱下拉 + 保存账号只在未登录态。
-  Check(AtUiHasId(logged_out, fc::kIdHistoryCombo) &&
+  // 6) 2026-11-21 需求：已保存账号改成「点选账号填写框时由邮箱框自身弹出建议」
+  //    ⇒ 独立的「历史」标签与历史下拉不再出现在未登录态布局里（1034/1018
+  //    退出布局表，故也不可枚举）；「保存账号」仍是唯一的勾选项。
+  Check(!AtUiHasId(logged_out, fc::kIdHistoryCombo) &&
+            !AtUiHasId(logged_out, fc::kIdHistoryLabel) &&
             AtUiHasId(logged_out, fc::kIdSaveAccount),
-        "AT-1 未登录态：历史邮箱下拉与「保存账号」可见");
+        "AT-1 未登录态：无独立历史下拉，「保存账号」可见");
+
+  // 6b) 2026-11-21 需求：填写框内文字与填写框标题垂直对齐。
+  //     判据 = 两条**墨迹中心线**重合：label 带 SS_CENTERIMAGE ⇒ 墨迹中心 =
+  //     框高中线；单行 EDIT 的文字在客户区贴顶绘制 ⇒ 墨迹中心 = 框顶 +
+  //     AccountEditInkCenterOffsetBase()（96dpi 基准）。几何与偏移都取自共享
+  //     真相源，不在测试里复制（R7）。
+  {
+    const std::vector<fc::AccountLayoutEntry> anonymous =
+        fc::AccountVisibleLayout(fc::AccountWindowRole::kAccount, false,
+                                 fc::kAccountBaseDpi);
+    fc::AccountLayoutEntry email_label = {-1, -1, -1, -1, -1};
+    fc::AccountLayoutEntry email_box = {-1, -1, -1, -1, -1};
+    fc::AccountLayoutEntry pwd_label = {-1, -1, -1, -1, -1};
+    fc::AccountLayoutEntry pwd_box = {-1, -1, -1, -1, -1};
+    for (size_t i = 0; i < anonymous.size(); ++i) {
+      const int id = anonymous[i].id;
+      if (id == fc::kIdEmailLabel) email_label = anonymous[i];
+      if (id == fc::kIdEmail) email_box = anonymous[i];
+      if (id == fc::kIdPasswordLabel) pwd_label = anonymous[i];
+      if (id == fc::kIdPassword) pwd_box = anonymous[i];
+    }
+    const int ink = fc::AccountEditInkCenterOffsetBase();
+    Check(email_box.y + ink == email_label.y + email_label.h / 2 &&
+              pwd_box.y + ink == pwd_label.y + pwd_label.h / 2,
+          "AT-1 邮箱/密码框内文字墨迹中心线与标题中心线重合");
+    Check(email_box.h >= 14 && pwd_box.h >= 14,
+          "AT-1 填写框高度 >= 14 base ⇒ 96dpi 下不裁 descender");
+    // 邮箱框独占整行：右沿贴到右边距（12 px @96dpi），不再被历史下拉挤窄。
+    int client_w = 0;
+    int client_h = 0;
+    fc::AccountClientSize(fc::AccountWindowRole::kAccount, fc::kAccountBaseDpi,
+                          &client_w, &client_h);
+    (void)client_h;
+    Check(email_box.w > pwd_box.w && email_box.x == email_label.x + 76 &&
+              email_box.x + email_box.w == client_w - 12,
+          "AT-1 邮箱填写框独占整行（右沿 = 客户区宽 - 12）");
+  }
 
   // 7) 四个子窗口各自只承载自己的控件。
   Check(AtUiHasId(fc::AccountVisibleIds(fc::AccountWindowRole::kVerify, true,

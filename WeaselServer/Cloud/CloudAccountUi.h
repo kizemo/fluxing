@@ -261,14 +261,30 @@ inline int AccountMinHeightForText(int lines, int dpi) {
 //    兼容重载**：无 dpi 版正是本缺陷（缺陷 C）的形态，留着就是复发入口。
 
 // 账号页主窗口 · 未登录态（96 dpi 基准）。
+// 「单行 EDIT 的文字在客户区贴顶」这一 Windows 绘制行为的量化常量：墨迹中心
+// 距框顶恒为 7 base px（175% 真机实测 12 物理 px ÷ 1.75）。填写框与标题
+// 垂直对齐的正确几何是
+//   edit.y + AccountEditInkCenterOffsetBase() == label.y + label.h / 2
+// —— 把 EDIT 高度收缩到字体行高（h=15 base）即可让框内文字自然居中。
+// 生产侧与单测共用本函数，不复制魔数（R7）。
+inline int AccountEditInkCenterOffsetBase() { return 7; }
+
 inline std::vector<AccountLayoutEntry> AccountLoginLayoutBase() {
   std::vector<AccountLayoutEntry> v;
-  v.push_back({kIdEmailLabel, 12, 14, 70, 20});
-  v.push_back({kIdEmail, 88, 10, 186, 26});
-  v.push_back({kIdHistoryLabel, 278, 14, 48, 20});
-  v.push_back({kIdHistoryCombo, 330, 10, 138, 26});
-  v.push_back({kIdPasswordLabel, 12, 48, 70, 20});
-  v.push_back({kIdPassword, 88, 44, 244, 26});
+  // 邮箱/密码两行的**标签与输入框按中心线对齐**：label 保持 h=26（原基线），
+  // edit 收窄到 h=15 —— 单行 EDIT 的文字在客户区贴顶，墨迹中心距框顶恒为 7
+  // base（见 AccountEditInkCenterOffsetBase），故 edit.y + 7 == label 中心线。
+  // 标签再用 StyleFor(kStatic) 的 SS_CENTERIMAGE 在框内垂直居中，于是
+  // 「输入框里的文字」与「填写框标题」垂直对齐（用户 2026-11-21 要求）。
+  v.push_back({kIdEmailLabel, 12, 10, 70, 26});
+  // 邮箱框独占整行（右沿 468 与状态行/关闭钮对齐）：历史邮箱不再占用一条
+  // 独立的「历史」标签 + 下拉框（用户明确要求「不要另外增加一个下拉框
+  // 模块」），改由邮箱框自身在获焦/输入时弹出建议列表（见
+  // CloudAccountDialog.cpp 的 ShowSuggestIfAny）。⇒ kIdHistoryLabel(1034)
+  // 与 kIdHistoryCombo(1018) 保留编号与控件类别，但**不再进本布局表**。
+  v.push_back({kIdEmail, 88, 16, 380, 15});
+  v.push_back({kIdPasswordLabel, 12, 44, 70, 26});
+  v.push_back({kIdPassword, 88, 50, 244, 15});
   v.push_back({kIdSaveAccount, 88, 78, 244, 20});
   v.push_back({kIdLogin, 12, 108, 140, 28});
   v.push_back({kIdRegister, 160, 108, 140, 28});
@@ -304,7 +320,7 @@ inline std::vector<AccountLayoutEntry> VerifyLayoutBase() {
   std::vector<AccountLayoutEntry> v;
   v.push_back({kIdVerifyCaption, 12, 14, 376, 32});
   v.push_back({kIdVerifyCodeLabel, 12, 58, 70, 18});
-  v.push_back({kIdVerifyCode, 88, 54, 140, 26});
+  v.push_back({kIdVerifyCode, 88, 60, 140, 15});
   v.push_back({kIdVerify, 236, 52, 100, 28});
   v.push_back({kIdResend, 88, 88, 140, 28});
   v.push_back({kIdStatus, 12, 126, 376, 40});
@@ -317,9 +333,9 @@ inline std::vector<AccountLayoutEntry> RegisterLayoutBase() {
   std::vector<AccountLayoutEntry> v;
   v.push_back({kIdRegisterCaption, 12, 14, 376, 20});
   v.push_back({kIdEmailLabel, 12, 48, 70, 18});
-  v.push_back({kIdEmail, 88, 44, 240, 26});
+  v.push_back({kIdEmail, 88, 50, 240, 15});
   v.push_back({kIdPasswordLabel, 12, 82, 70, 18});
-  v.push_back({kIdPassword, 88, 78, 240, 26});
+  v.push_back({kIdPassword, 88, 84, 240, 15});
   v.push_back({kIdRegister, 88, 112, 160, 28});
   v.push_back({kIdStatus, 12, 148, 376, 40});
   v.push_back({kIdClose, 288, 196, 100, 28});
@@ -331,12 +347,12 @@ inline std::vector<AccountLayoutEntry> ForgotLayoutBase() {
   std::vector<AccountLayoutEntry> v;
   v.push_back({kIdForgotCaption, 12, 14, 376, 20});
   v.push_back({kIdEmailLabel, 12, 48, 70, 18});
-  v.push_back({kIdEmail, 88, 44, 240, 26});
+  v.push_back({kIdEmail, 88, 50, 240, 15});
   v.push_back({kIdVerifyCodeLabel, 12, 82, 70, 18});
-  v.push_back({kIdVerifyCode, 88, 78, 140, 26});
+  v.push_back({kIdVerifyCode, 88, 84, 140, 15});
   v.push_back({kIdResend, 236, 76, 152, 28});
   v.push_back({kIdNewPasswordLabel, 12, 116, 70, 18});
-  v.push_back({kIdNewPassword, 88, 112, 240, 26});
+  v.push_back({kIdNewPassword, 88, 118, 240, 15});
   v.push_back({kIdResetPassword, 88, 146, 140, 28});
   v.push_back({kIdStatus, 12, 182, 376, 40});
   v.push_back({kIdClose, 288, 230, 100, 28});

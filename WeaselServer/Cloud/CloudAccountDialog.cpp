@@ -999,7 +999,7 @@ const wchar_t* WinClassFor(AccountWidgetClass cls) {
   }
 }
 
-DWORD StyleFor(AccountWidgetClass cls) {
+DWORD StyleFor(AccountWidgetClass cls, int id) {
   switch (cls) {
     case AccountWidgetClass::kEdit:
       return ES_AUTOHSCROLL;
@@ -1017,6 +1017,18 @@ DWORD StyleFor(AccountWidgetClass cls) {
       return LBS_NOTIFY | WS_VSCROLL | WS_BORDER;
     case AccountWidgetClass::kStatic:
     default:
+      // 需求（2026-11-21）：**填写框标题**的文字在框内垂直居中。STATIC 加
+      // SS_CENTERIMAGE 后文字落在框高度中线上；单行 EDIT 的文字是在客户区
+      // 贴顶绘制的，所以布局表把成对 EDIT 收到 h=15、并令「edit.y + 7」等于
+      // label 中心线（7 = 墨迹中心到框顶的 96dpi 基准偏移，见
+      // AccountEditInkCenterOffsetBase()），两条墨迹中线于是重合。
+      //
+      // **只给与输入框成对的标签**加：SS_CENTERIMAGE 对多行 STATIC 是把
+      // 整块文字按客户区垂直居中，用到「换钥提示」这类多行说明或状态行上
+      // 会改变排版（甚至裁行）—— 那些控件保持默认顶部起排。
+      if (id == kIdEmailLabel || id == kIdPasswordLabel ||
+          id == kIdVerifyCodeLabel || id == kIdNewPasswordLabel)
+        return SS_CENTERIMAGE;
       return 0;
   }
 }
@@ -1207,13 +1219,176 @@ int AccountUiDpi() {
   return dpi;
 }
 
+// ── 邮箱建议列表（2026-11-21 需求：点选账号填写框时自动出现）──────────────
+// 这是**邮箱输入框自身的附属控件**，不是新增的下拉框模块：
+//   · ID 留在本翻译单元内（1099），**不写进 CloudAccountUi.h** ⇒ 不牵动
+//     AccountWidgetClassOf / AccountWidgets / AccountVisibleIds 的一致性断言；
+//   · **不进布局表** ⇒ ApplyLayout 不管它；几何在弹出瞬间按邮箱框的实测矩形
+//     计算（不用布局常量反推，避免再次出现「常量×DPI 冒充实测」）。
+//   · 登录态切换时由 HideSuggestList 收起（见 RefreshHistoryCombo）。
+constexpr int kIdAccountSuggest = 1099;
+constexpr int kSuggestMaxRows = 8;
+
+// 程序回填邮箱框会触发 EN_CHANGE 回声 ⇒ 置位期间不重开列表，否则「选中一条
+// 之后列表立刻又弹出来」。账号窗同一时刻只有一个，单标志足够。
+bool g_suppress_email_change = false;
+
+// 鼠标正按在建议列表上（按下到抬起之间）。清空判据不能只看
+// ::GetFocus()：WM_KILLFOCUS 是**先发给旧焦点窗口**、之后才切换焦点，
+// 那一刻 GetFocus() 未必已经指向列表 ⇒ 只按 GetFocus() 判会把「点列表
+// 选条目」误判成「点到别处」而当场把列表收掉（条目永远选不中）。
+bool g_list_mouse_down = false;
+
+HWND SuggestList(HWND hwnd) {
+  return ::GetDlgItem(hwnd, kIdAccountSuggest);
+}
+
+void HideSuggestList(HWND hwnd) {
+  // 列表一旦收起，「这一下是在选条目」的状态就不能残留：否则 g_list_mouse_down
+  // 会卡在 true，此后的 EN_KILLFOCUS 再也收不掉列表（列表又已被别的原因收起）。
+  g_list_mouse_down = false;
+  HWND list = SuggestList(hwnd);
+  if (list != nullptr)
+    ::ShowWindow(list, SW_HIDE);
+}
+
+// 大小写不敏感的前缀匹配（邮箱域名字面不区分大小写）。
+bool StartsWithNoCase(const std::wstring& text, const std::wstring& prefix) {
+  if (prefix.size() > text.size())
+    return false;
+  for (size_t i = 0; i < prefix.size(); ++i) {
+    wchar_t a = text[i];
+    wchar_t b = prefix[i];
+    if (a >= L'A' && a <= L'Z')
+      a = static_cast<wchar_t>(a - L'A' + L'a');
+    if (b >= L'A' && b <= L'Z')
+      b = static_cast<wchar_t>(b - L'A' + L'b');
+    if (a != b)
+      return false;
+  }
+  return true;
+}
+
+// 按邮箱框当前文本前缀过滤历史账号，返回条数。
+int FillSuggestList(HWND hwnd, CloudAccountController& controller) {
+  HWND list = SuggestList(hwnd);
+  if (list == nullptr)
+    return 0;
+  ::SendMessageW(list, LB_RESETCONTENT, 0, 0);
+  const std::wstring typed = ReadControlText(hwnd, kIdEmail);
+  const std::vector<std::string> history = controller.history();
+  int added = 0;
+  for (size_t i = 0; i < history.size(); ++i) {
+    const std::wstring item = ToWide(history[i]);
+    if (item.empty())
+      continue;
+    if (!typed.empty() && !StartsWithNoCase(item, typed))
+      continue;
+    ::SendMessageW(list, LB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(item.c_str()));
+    ++added;
+  }
+  return added;
+}
+
+// 有候选才弹出；贴着邮箱框下沿、宽度与邮箱框一致。
+void ShowSuggestIfAny(HWND hwnd, CloudAccountController& controller) {
+  HWND list = SuggestList(hwnd);
+  HWND email = ::GetDlgItem(hwnd, kIdEmail);
+  if (list == nullptr || email == nullptr)
+    return;
+  const int count = FillSuggestList(hwnd, controller);
+  if (count <= 0) {
+    HideSuggestList(hwnd);
+    return;
+  }
+  const int dpi = AccountUiDpi();
+  RECT er = {0};
+  ::GetWindowRect(email, &er);
+  ::MapWindowPoints(nullptr, hwnd, reinterpret_cast<POINT*>(&er), 2);
+  int row = static_cast<int>(::SendMessageW(list, LB_GETITEMHEIGHT, 0, 0));
+  if (row <= 0)
+    row = AccountScale(20, dpi);
+  const int rows = count < kSuggestMaxRows ? count : kSuggestMaxRows;
+  const int h = rows * row + AccountScale(6, dpi);
+  ::SetWindowPos(list, HWND_TOP, er.left, er.bottom + AccountScale(2, dpi),
+                 er.right - er.left, h, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+}
+
+// 需求（2026-11-21）：点选邮箱填写框时弹出已保存账号列表。
+//
+// 初版只靠父窗口 WM_PARENTNOTIFY + 子类化认 WM_LBUTTONDBLCLK，实测**不成立**
+// （批次 BH，reports/fluxing-bh-ui/run-uicheck5.log）：选中一条之后焦点已还给
+// 邮箱框，用户再点**第二下**（间隔 > GetDoubleClickTime，非双击）时 ——
+//   · 系统不再发 EN_SETFOCUS / EN_CHANGE（焦点没变、文字没变）；
+//   · 父窗那条 WM_PARENTNOTIFY 通道对「已持焦的 EDIT」没能起到作用。
+// 该轮三次点击全部送达（all_clicks_delivered=True、这一笔 C2_CLICK_email2_
+// after_hide FG_OK=True），下拉仍不重开 ⇒ C2_REOPEN_MISS，不是探针假红。
+//   ⇒ 单击通道改挂在 EDIT **自身**的消息流上（它必然收到自己的鼠标消息），
+//     抬起与双击都重开；父窗通知保留不动。
+// ShowSuggestIfAny 只做「重填列表 + 显示」，与 EN_SETFOCUS / EN_CHANGE /
+// WM_PARENTNOTIFY 重复触发都是幂等的，不构成竞态。
+WNDPROC g_email_old_proc = nullptr;
+
+LRESULT CALLBACK EmailEditProc(HWND hwnd, UINT message, WPARAM wparam,
+                               LPARAM lparam) {
+  if ((message == WM_LBUTTONUP || message == WM_LBUTTONDBLCLK) &&
+      hwnd != nullptr && !g_suppress_email_change)
+    ShowSuggestIfAny(::GetParent(hwnd), CloudAccountController::Instance());
+  if (g_email_old_proc != nullptr)
+    return ::CallWindowProcW(g_email_old_proc, hwnd, message, wparam, lparam);
+  return ::DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+// 幂等 + 自愈：布局切换不重建控件；窗口若被重建，WNDPROC 会回到类默认过程，
+// 此时重新挂上（只看当前 WNDPROC 是否已是我方过程，不依赖悬挂指针判断）。
+void InstallEmailClickHook(HWND email) {
+  if (email == nullptr)
+    return;
+  WNDPROC current =
+      reinterpret_cast<WNDPROC>(::GetWindowLongPtrW(email, GWLP_WNDPROC));
+  if (current == &EmailEditProc)
+    return;
+  g_email_old_proc = reinterpret_cast<WNDPROC>(
+      ::SetWindowLongPtrW(email, GWLP_WNDPROC,
+                          reinterpret_cast<LONG_PTR>(&EmailEditProc)));
+}
+
+void CreateSuggestList(HWND hwnd, int dpi) {
+  HWND list = ::CreateWindowExW(
+      0, L"LISTBOX", L"", WS_CHILD | LBS_NOTIFY | WS_VSCROLL | WS_BORDER, 0, 0,
+      AccountScale(120, dpi), AccountScale(20, dpi), hwnd,
+      reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdAccountSuggest)),
+      ::GetModuleHandleW(nullptr), nullptr);
+  if (list == nullptr)
+    return;
+  ::SendMessageW(list, WM_SETFONT,
+                 reinterpret_cast<WPARAM>(::GetStockObject(DEFAULT_GUI_FONT)),
+                 TRUE);
+  ::ShowWindow(list, SW_HIDE);
+}
+
 void CreateWidgets(HWND hwnd, Role role, int dpi) {
   const std::vector<AccountWidgetSpec> specs = AccountWidgets(role, dpi);
   for (size_t i = 0; i < specs.size(); ++i) {
     const AccountWidgetSpec& spec = specs[i];
     const std::wstring text = WidgetText(role, spec.id);
-    AddControl(hwnd, WinClassFor(spec.cls), text.c_str(), StyleFor(spec.cls),
-               spec.x, spec.y, spec.w, spec.h, spec.id);
+    AddControl(hwnd, WinClassFor(spec.cls), text.c_str(),
+               StyleFor(spec.cls, spec.id), spec.x, spec.y, spec.w, spec.h,
+               spec.id);
+    // 「保存账号」默认勾选：与改造前的行为等价（登录默认落盘凭据），
+    // 用户可取消勾选 ⇒ 走 Login(..., persist=false)，不写凭据存储。
+    if (spec.cls == AccountWidgetClass::kCheckbox &&
+        spec.id == kIdSaveAccount) {
+      HWND box = ::GetDlgItem(hwnd, kIdSaveAccount);
+      if (box != nullptr)
+        ::SendMessageW(box, BM_SETCHECK, BST_CHECKED, 0);
+    }
+  }
+  // 建议列表只有账号页才建（其余窗口没有邮箱填写框）。
+  if (role == Role::kAccount) {
+    CreateSuggestList(hwnd, dpi);
+    InstallEmailClickHook(::GetDlgItem(hwnd, kIdEmail));
   }
 }
 
@@ -1270,27 +1445,12 @@ void ApplyLayout(HWND hwnd, Role role, bool logged_in, int dpi) {
   }
 }
 
-// 刷新历史邮箱下拉（保留用户已选的项）。
+// 已保存账号改成「邮箱框自身在点选/获焦时弹出建议」（见 ShowSuggestIfAny）
+// ⇒ 这里只负责在界面刷新（含登录态切换）时把建议列表收起来。
+// **保留函数名与签名**：调用点（RefreshUi）不变。
 void RefreshHistoryCombo(HWND hwnd, CloudAccountController& controller) {
-  HWND combo = ::GetDlgItem(hwnd, kIdHistoryCombo);
-  if (combo == nullptr)
-    return;
-  wchar_t buf[256] = {0};
-  ::GetWindowTextW(combo, buf, 256);
-  const std::wstring current(buf);
-  ::SecureZeroMemory(buf, sizeof(buf));
-
-  const std::vector<std::string> history = controller.history();
-  ::SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-  int restored = CB_ERR;
-  for (size_t i = 0; i < history.size(); ++i) {
-    const std::wstring item = ToWide(history[i]);
-    ::SendMessageW(combo, CB_ADDSTRING, 0,
-                   reinterpret_cast<LPARAM>(item.c_str()));
-    if (!current.empty() && item == current)
-      restored = static_cast<int>(i);
-  }
-  ::SendMessageW(combo, CB_SETCURSEL, restored, 0);
+  (void)controller;
+  HideSuggestList(hwnd);
 }
 
 // 「弹验证码窗口」的前置声明（实现在文件后半段；RefreshUi 要用它）。
@@ -1408,19 +1568,47 @@ LRESULT CALLBACK WndProc(HWND hwnd,
             case kIdSyncNow:
               controller.SubmitSyncNow();
               return 0;
-            case kIdHistoryCombo: {
-              if (code == CBN_SELCHANGE) {
-                HWND combo = ::GetDlgItem(hwnd, kIdHistoryCombo);
+            case kIdEmail: {
+              if (code == EN_SETFOCUS) {
+                // 点选账号填写框 ⇒ 自动出现已保存账号的下拉。
+                if (!g_suppress_email_change)
+                  ShowSuggestIfAny(hwnd, controller);
+              } else if (code == EN_CHANGE) {
+                if (!g_suppress_email_change)
+                  ShowSuggestIfAny(hwnd, controller);
+              } else if (code == EN_KILLFOCUS) {
+                // 焦点若已交给建议列表就先别收，否则条目点不到。
+                // 判据两条并联：鼠标正按在列表上（g_list_mouse_down，见其
+                // 声明处：WM_KILLFOCUS 到达时 GetFocus() 未必已切换），或
+                // 焦点确已在列表上。
+                if (!g_list_mouse_down && ::GetFocus() != SuggestList(hwnd))
+                  HideSuggestList(hwnd);
+              }
+              return 0;
+            }
+            case kIdAccountSuggest: {
+              if (code == LBN_SELCHANGE || code == LBN_DBLCLK) {
+                HWND list = SuggestList(hwnd);
                 const LRESULT sel =
-                    combo ? ::SendMessageW(combo, CB_GETCURSEL, 0, 0) : -1;
-                if (sel >= 0) {
+                    list ? ::SendMessageW(list, LB_GETCURSEL, 0, 0) : -1;
+                HWND email = ::GetDlgItem(hwnd, kIdEmail);
+                if (sel >= 0 && email != nullptr) {
                   wchar_t buf[256] = {0};
-                  ::SendMessageW(combo, CB_GETLBTEXT,
-                                 static_cast<LPARAM>(sel),
+                  ::SendMessageW(list, LB_GETTEXT, static_cast<WPARAM>(sel),
                                  reinterpret_cast<LPARAM>(buf));
-                  HWND email = ::GetDlgItem(hwnd, kIdEmail);
-                  if (email != nullptr)
+                  if (buf[0] != L'\0') {
+                    // 抑制标志覆盖「回填 + 收列表 + 回焦」全过程：回填触发的
+                    // EN_CHANGE 与回焦触发的 EN_SETFOCUS 都会重开列表，不抑
+                    // 制就会变成「选完立刻又弹出来」。
+                    g_suppress_email_change = true;
                     ::SetWindowTextW(email, buf);
+                    const int len = ::GetWindowTextLengthW(email);
+                    ::SendMessageW(email, EM_SETSEL, static_cast<WPARAM>(len),
+                                   static_cast<LPARAM>(len));
+                    HideSuggestList(hwnd);
+                    ::SetFocus(email);
+                    g_suppress_email_change = false;
+                  }
                   ::SecureZeroMemory(buf, sizeof(buf));
                 }
               }
@@ -1560,6 +1748,61 @@ LRESULT CALLBACK WndProc(HWND hwnd,
           break;
       }
       return 0;
+    }
+
+    case WM_LBUTTONDOWN: {
+      // 「点到别处 ⇒ 收起下拉」不能只挂 WM_PARENTNOTIFY（批次 BH 第 7 轮实测
+      // c2d_hide_on_other=False 的根因）：
+      //   · WM_PARENTNOTIFY 只在鼠标消息**投递给子控件**时由系统补发给父窗；
+      //   · 静态标签（SS_LEFT 一类）对命中测试返回 HTTRANSPARENT ⇒ 这一下直接
+      //     变成父窗的普通 WM_LBUTTONDOWN，**不产生** WM_PARENTNOTIFY；
+      //   · 客户区空白处同理，本来就是父窗自己的 WM_LBUTTONDOWN。
+      //   ⇒ 上面 :1773 的 else 分支对这两类点击永不触发；而静态标签不吃焦点，
+      //     邮箱框没有 EN_KILLFOCUS，另一条收起路径同样不走 ⇒ 列表不收。
+      //   ⇒ 在父窗这一层补一条：账号角色下按在父窗自身区域（标签 / 空白）一律
+      //     收列表。EDIT 与 LISTBOX 不吃 HTTRANSPARENT，不会走到这里，
+      //     「点邮箱框重弹」「点列表选条目」两条既有路径不受影响。
+      if (RoleOf(hwnd) == Role::kAccount) {
+        LogAccountDlg(L"c2d parent lbuttondown hide");
+        HideSuggestList(hwnd);
+      }
+      return 0;
+    }
+
+    case WM_PARENTNOTIFY: {
+      // 「点选账号填写框 ⇒ 自动出现已保存账号」不能只靠 EN_SETFOCUS：
+      // 选中一条之后我们把焦点还给了邮箱框，用户再点**第二下**时它已经持有
+      // 焦点 ⇒ 系统既不再发 EN_SETFOCUS，也不发 EN_CHANGE ⇒ 下拉再也弹不
+      // 出来（用户会直接判定「功能坏了」）。
+      //   ⇒ 在父窗口这一层接 WM_PARENTNOTIFY：鼠标按在哪个子控件上都带着
+      //     该控件的 id（HIWORD(wparam)），与焦点状态无关。
+      if (RoleOf(hwnd) != Role::kAccount)
+        break;
+      const UINT mouse_event = LOWORD(wparam);
+      const int id = static_cast<int>(HIWORD(wparam));
+      // 双击的第二下只来 WM_LBUTTONDBLCLK（没有 WM_LBUTTONDOWN）⇒ 一并认。
+      if (mouse_event == WM_LBUTTONDOWN || mouse_event == WM_LBUTTONDBLCLK) {
+        // 判别性留证：本分支只在鼠标消息投递给子控件时才由系统发出。
+        LogAccountDlg(L"c2d parentnotify down evt=" +
+                      std::to_wstring(mouse_event) + L" id=" +
+                      std::to_wstring(id));
+        if (id == kIdEmail) {
+          if (!g_suppress_email_change)
+            ShowSuggestIfAny(hwnd, CloudAccountController::Instance());
+        } else if (id == kIdAccountSuggest) {
+          // 这一下就是要选条目：既不能收列表，也不能让随后的 EN_KILLFOCUS
+          // 收掉它（见 g_list_mouse_down 声明处）。
+          g_list_mouse_down = true;
+        } else {
+          // 点到别处（口令框 / 按钮 / 复选框…）⇒ 收列表。
+          LogAccountDlg(L"c2d parentnotify hide id=" + std::to_wstring(id));
+          HideSuggestList(hwnd);
+        }
+      } else if (mouse_event == WM_LBUTTONUP) {
+        // 抬起一律复位：拖出列表再松开时 id 可能不是列表，按 id 判会残留 true。
+        g_list_mouse_down = false;
+      }
+      break;
     }
 
     case WM_APP_REFRESH:
