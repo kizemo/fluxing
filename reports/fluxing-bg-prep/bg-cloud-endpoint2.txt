@@ -1,0 +1,106 @@
+=== base_url / transport construction ===
+Cloud\CloudAccountDialog.cpp:61: constexpr wchar_t kBaseUrlEnvVar[] = L"FLUXING_CLOUD_BASE_URL";
+Cloud\CloudAccountDialog.cpp:146: base_url = url;
+Cloud\CloudAccountDialog.cpp:148: transport.reset(new WinHttpTransport(ToUtf8(base_url)));
+Cloud\CloudAccountDialog.cpp:403: std::wstring base_url;
+Cloud\CloudAccountDialog.cpp:458: std::wstring CloudAccountController::base_url() const {
+Cloud\CloudAccountDialog.cpp:460: return impl_->base_url;
+Cloud\CloudAccountDialog.h:77: // 云端服务地址。默认取环境变量 FLUXING_CLOUD_BASE_URL；没有则用
+Cloud\CloudAccountDialog.h:80: std::wstring base_url() const;
+Cloud\CloudTransport.cpp:79: bool BuildUrl(const std::string& base_url,
+Cloud\CloudTransport.cpp:86: const bool https = base_url.rfind("https://", 0) == 0;
+Cloud\CloudTransport.cpp:87: const bool http = base_url.rfind("http://", 0) == 0;
+Cloud\CloudTransport.cpp:98: std::string base = base_url;
+Cloud\CloudTransport.cpp:150: WinHttpTransport::WinHttpTransport(std::string base_url,
+Cloud\CloudTransport.cpp:152: : base_url_(std::move(base_url)), options_(options) {
+Cloud\CloudTransport.cpp:187: if (!BuildUrl(base_url_, request.path, &url, &url_error)) {
+Cloud\CloudTransport.h:61: virtual ~ICloudTransport() = default;
+Cloud\CloudTransport.h:82: // base_url 形如 https://api.example.com（可带端口与路径前缀）。
+Cloud\CloudTransport.h:84: std::string base_url,
+Cloud\CloudTransport.h:93: const std::string& base_url() const { return base_url_; }
+Cloud\CloudTransport.h:100: std::string base_url_;
+Cloud\CloudTransport.h:109: // 把 base_url 与 path 拼成绝对 URL。
+Cloud\CloudTransport.h:110: //   · base_url 必须以 http:// 或 https:// 开头；
+Cloud\CloudTransport.h:112: //   · base_url 的尾部 '/' 与 path 的头部 '/' 归一化成一个。
+Cloud\CloudTransport.h:113: bool BuildUrl(const std::string& base_url,
+=== cloud dir top level ===
+TOP: fluxing-sync [d----]
+DIR: fluxing-sync
+  .dev.vars.example [877]
+  .env [74]
+  .gitignore [210]
+  package-lock.json [131488]
+  package.json [813]
+  README.md [10282]
+  tsconfig.json [422]
+  vitest.config.ts [1648]
+  wrangler.toml [3417]
+=== wrangler / deploy config content ===
+FILE: F:\soft\00selfmade\rime_claude\cloud\fluxing-sync\wrangler.toml
+# Fluxing 火流猩输入法 · 用户资料云同步服务端
+# Cloudflare Workers + D1 + R2
+#
+# T103 硬约束（见 docs/research/fluxing-cloud-2026-11/endpoint-reachability.md）：
+#   境内 DNS 会污染 Cloudflare 的默认免费子域，因此**必须**关闭该默认端点，
+#   生产端点只能是 https://api.<我方自有域名>/v1/...
+#   本仓库任何文件都不得出现该默认子域的域名字面量（test/check-endpoint-policy.mjs 会拦）。
+name = "fluxing-sync"
+main = "src/index.ts"
+# 必须 <= 本地 workerd 二进制支持的最新日期（本机实测上限 2026-08-22），
+# 否则 vitest-pool-workers 启动即报 "newest date supported by this server binary"。
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+
+workers_dev = false
+preview_urls = false
+
+# 生产路由：自有域名 = aiec.fun（用户 2026-11-11 拍板）。
+# custom_domain = true ⇒ `wrangler deploy` 会**自动**为 api.aiec.fun 创建 DNS 记录
+# （前提：aiec.fun 已托管在**同一个** Cloudflare 账号；否则需手工 CNAME，见 docs/ops/）。
+routes = [{ pattern = "api.aiec.fun", custom_domain = true }]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fluxing-sync"
+# 真实 database_id：2026-11-10 `wrangler d1 create fluxing-sync` 产出（账号 016c8e73…）。
+# 本地 `wrangler dev` / 单测走 miniflare 本地 SQLite，不校验此值。
+database_id = "e4ea114a-29b4-4abd-87e6-4e6cb20d86e4"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "fluxing-sync"
+
+[vars]
+ENVIRONMENT = "dev"
+# 令牌寿命（秒）：access 1 小时 / refresh 30 天（plan §3.3）
+ACCESS_TOKEN_TTL = "3600"
+REFRESH_TOKEN_TTL = "2592000"
+# 客户端密钥派生参数（plan §3.1）。服务端只回显给客户端，绝不用它们派生任何东西。
+KDF_ALGO = "PBKDF2-SHA256"
+KDF_ITERS = "600000"
+# 发信通道（MAIL_MODE）：
+#   outbox = 只写 mail_outbox 表，不发信（本地 / 测试 / 内测）
+#   http   = 第三方 HTTPS 邮件 API（生产路线，2026-11-11 用户拍板 Resend，$0）
+#   cloudflare = Workers send_email 绑定（需 Workers Paid $5/月，**不启用**）
+# 切到 "http" 的前提：MAIL_HTTP_API_KEY 已作为 Secret 注入（否则线上注册返回 500 server_misconfigured）。
+MAIL_MODE = "http"
+MAIL_FROM = "no-reply@aiec.fun"
+# 发件人显示名（拼成「显示名 <地址>」）
+MAIL_FROM_NAME = "火流猩输入法"
+# 第三方 HTTPS 邮件 API 端点与鉴权约定（Resend 兼容；换服务商只改这里，不改代码）
+MAIL_HTTP_ENDPOINT = "https://api.resend.com/emails"
+MAIL_HTTP_AUTH_HEADER = "Authorization"
+MAIL_HTTP_AUTH_PREFIX = "Bearer "
+# MAIL_HTTP_API_KEY 绝不写进本文件：用 `wrangler secret put MAIL_HTTP_API_KEY` 注入。
+
+# 生产发信绑定（**需 Workers Paid 计划** —— 官方原文：向任意收件人发送需 Paid，账号级最低消费 $5/月）。
+# **2026-11-11 用户拍板走 $0 路线** ⇒ 首版**不启用**本绑定：开发 / 内测用 MAIL_MODE = "http"（只写表不发信）；
+# 上线前改走第三方 HTTPS 邮件 API（Workers Free 允许出站 fetch）—— 见 plan.md §4.4。
+# [[send_email]]
+# name = "EMAIL"
+# destination_address = "*"
+
+# 服务端 pepper（AUTH_PEPPER）绝不写进本文件：用
+#   wrangler secret put AUTH_PEPPER
+# 注入；本地开发写进 .dev.vars（已被 .gitignore 忽略）。

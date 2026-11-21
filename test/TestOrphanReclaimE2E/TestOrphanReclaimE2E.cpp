@@ -30,6 +30,15 @@
 //                          pipe, exit. Deliberately no END_SESSION (see below).
 //   --echo <sessionId>     raw ECHO probe. Prints "ECHO=<value>"; 0 means the
 //                          session no longer exists on the server.
+//   --hold-commit <marker> <active|idle> [seconds]
+//                          Manufacture the maintenance gate input state for the
+//                          G-3 / G-5 reverse criteria: composing == 0, input
+//                          history present, session resident. "active" refreshes
+//                          the last keystroke every 1500 ms (idle < 10 s => the
+//                          gate must stay closed), "idle" stops typing (idle >
+//                          10 s => the gate must open). The composition state
+//                          is proven by "status.composing=" in the IPC
+//                          response body, not by a status text.
 //   --help
 //
 // Why --trigger does not send END_SESSION:
@@ -52,6 +61,19 @@ const DWORD kCmdEcho = 0x8001;
 const DWORD kCmdStartSession = 0x8002;
 const DWORD kCmdEndSession = 0x8003;
 const DWORD kCmdProcessKeyEvent = 0x8004;
+// include/WeaselIPC.h, enum WEASEL_IPC_COMMAND: ECHO is WM_APP+1, so
+// COMMIT_COMPOSITION is WM_APP+10 = 0x800B.
+const DWORD kCmdCommitComposition = 0x800B;
+
+// ibus::Keycode::Left (include/KeyEvent.h). The refresh key has to
+//  - refresh m_last_input_tick on the server (RimeWithWeasel.cpp:715-717:
+//    ANY key does that), and
+//  - NOT create a composition (librime editor.cc:46-62 only looks at key
+//    bindings while ctx->IsComposing()).
+// Shift is unusable (ascii_composer.cc:79-104 toggles the ascii mode within
+// 500 ms) and Escape is unusable (it would clear the composition and hide a
+// failed commit).
+const UINT kKeyLeft = 0xFF51;
 
 #pragma pack(push, 1)
 struct PipeHeader {
@@ -164,10 +186,21 @@ class IpcClient {
 
   bool Transact(DWORD msg, DWORD wparam, DWORD lparam, const std::wstring& body,
                 DWORD* result, std::wstring* err) {
+    std::wstring ignored;
+    return Transact(msg, wparam, lparam, body, result, &ignored, err);
+  }
+
+  // Same, but also returns the response body: the trailing UTF-16LE bytes of
+  // the single pipe message after the leading DWORD result. That body is what
+  // carries "status.composing=" (RimeWithWeasel.cpp:2061-2063), i.e. the self
+  // proof that the composition is really gone.
+  bool Transact(DWORD msg, DWORD wparam, DWORD lparam, const std::wstring& body,
+                DWORD* result, std::wstring* resp_body, std::wstring* err) {
     if (pipe_ == INVALID_HANDLE_VALUE) {
       *err = L"not connected";
       return false;
     }
+    resp_body->clear();
     const size_t body_bytes = body.size() * sizeof(wchar_t);
     std::vector<char> payload(sizeof(PipeHeader) + body_bytes);
     PipeHeader header;
@@ -200,6 +233,11 @@ class IpcClient {
     DWORD value = 0;
     memcpy(&value, resp.data(), sizeof(value));
     *result = value;
+    if (got > sizeof(DWORD)) {
+      const size_t wchars = (got - sizeof(DWORD)) / sizeof(wchar_t);
+      resp_body->assign(
+          reinterpret_cast<const wchar_t*>(resp.data() + sizeof(DWORD)), wchars);
+    }
     return true;
   }
 
@@ -225,9 +263,29 @@ class IpcClient {
   // is keycode | (mask << 16). The server unpacks it with KeyEvent(wParam) and feeds
   // it to rime_api->process_key(session_id, keycode, expand_ibus_modifier(mask)).
   bool SendKey(DWORD ipc_id, UINT keycode, UINT mask, std::wstring* err) {
+    return SendKey(ipc_id, keycode, mask, NULL, err);
+  }
+
+  // Same, but also returns the response body ("status.composing=" ...).
+  bool SendKey(DWORD ipc_id, UINT keycode, UINT mask, std::wstring* resp_body,
+               std::wstring* err) {
     const DWORD packed = (keycode & 0xFFFFu) | ((mask & 0xFFFFu) << 16);
     DWORD result = 0;
-    return Transact(kCmdProcessKeyEvent, packed, ipc_id, std::wstring(), &result, err);
+    if (resp_body == NULL)
+      return Transact(kCmdProcessKeyEvent, packed, ipc_id, std::wstring(), &result,
+                      err);
+    return Transact(kCmdProcessKeyEvent, packed, ipc_id, std::wstring(), &result,
+                    resp_body, err);
+  }
+
+  // WEASEL_IPC_COMMIT_COMPOSITION: the server calls rime_api->commit_composition
+  // and clears its composing mirror (RimeWithWeasel.cpp:762-773). The reply
+  // carries no body (WeaselServerImpl.cpp:382-388) but always the DWORD result
+  // (WeaselServerImpl.cpp:544), so the transaction stays balanced.
+  bool CommitComposition(DWORD ipc_id, std::wstring* err) {
+    DWORD result = 0;
+    return Transact(kCmdCommitComposition, 0, ipc_id, std::wstring(), &result,
+                    err);
   }
 
   bool EndSession(DWORD ipc_id, std::wstring* err) {
@@ -285,12 +343,216 @@ bool WriteMarker(const std::wstring& path,
   return true;
 }
 
+// Reads "<key>0" / "<key>1" out of a response body. Returns 1, 0, or -1 when
+// the field is not present (the server fills it only when
+// rime_api->get_status worked, RimeWithWeasel.cpp:2055-2063).
+int ParseBoolField(const std::wstring& body, const wchar_t* key) {
+  const size_t pos = body.find(key);
+  if (pos == std::wstring::npos)
+    return -1;
+  const size_t at = pos + ::wcslen(key);
+  if (at >= body.size())
+    return -1;
+  if (body[at] == L'1')
+    return 1;
+  if (body[at] == L'0')
+    return 0;
+  return -1;
+}
+
+// ---------------------------------------------------------------------------
+// --hold-commit: manufacture the maintenance gate input state for the G-3 /
+// G-5 reverse criteria (ADR 0065, include/FluxingMaintenanceGate.h:67-84).
+//
+// Target state: composing == 0, has_input_history == true, session resident.
+//   phase "active": one refresh key every 1500 ms => idle < 10 s => the gate
+//                   must stay CLOSED (G-3, the negative case).
+//   phase "idle"  : no key at all after the setup  => idle > 10 s => the gate
+//                   must OPEN (G-5, the positive case).
+//
+// How the state is built:
+//   1) START_SESSION
+//   2) type letters => the engine holds an unfinished composition
+//      (status.composing=1 in the response body is the proof)
+//   3) WEASEL_IPC_COMMIT_COMPOSITION => the composition is committed
+//   4) one refresh key => the server re-reads the REAL engine state
+//      (RimeWithWeasel.cpp:740 _SyncSessionComposing) and the response body
+//      proves status.composing=0.
+// The proof comes from the response body, never from a status text: that body
+// is produced by the same rime_api->get_status call that feeds the gate.
+//
+// The refresh key is ibus::Left: it refreshes m_last_input_tick (any key
+// does, RimeWithWeasel.cpp:715-717) and cannot create a composition
+// (librime editor.cc:46-62 handles keys only while ctx->IsComposing()).
+//
+// Marker files:
+//   <marker>        written once: ipc_id, pid, phase, composing flags
+//   <marker>.state  rewritten on every refresh: last_input_tick_ms
+//   <marker>.pause  when it exists the active phase stops refreshing, so the
+//                   idle grows and one process can cover both phases
+//
+// Never sends END_SESSION: the session has to stay resident.
+//
+// Exit codes: 0 ok, 1 connect/protocol error, 2 usage, 3 the state could not
+// be manufactured.
+// ---------------------------------------------------------------------------
+int RunHoldCommit(const std::wstring& marker, const std::wstring& phase,
+                  int seconds) {
+  IpcClient client;
+  std::wstring err;
+  if (!client.Connect(&err)) {
+    wprintf(L"ERROR connect failed: %s\n", err.c_str());
+    return 1;
+  }
+  DWORD ipc_id = 0;
+  if (!client.StartSession(&ipc_id, &err)) {
+    wprintf(L"ERROR start_session failed: %s\n", err.c_str());
+    return 1;
+  }
+  if (ipc_id == 0) {
+    wprintf(L"ERROR start_session returned ipc_id=0\n");
+    return 1;
+  }
+  wprintf(L"HOLDCOMMIT_SESSION ipc_id=%lu pid=%lu phase=%s\n",
+          static_cast<unsigned long>(ipc_id),
+          static_cast<unsigned long>(::GetCurrentProcessId()), phase.c_str());
+  fflush(stdout);
+
+  // (2) type letters until the engine really holds a composition.
+  std::wstring resp;
+  const char* keys = "fluxingorphan";
+  int composing = -1;
+  int ascii_mode = -1;
+  for (int round = 0; round < 2 && composing != 1; ++round) {
+    for (const char* p = keys; *p; ++p) {
+      if (!client.SendKey(ipc_id,
+                          static_cast<UINT>(static_cast<unsigned char>(*p)), 0,
+                          &resp, &err)) {
+        wprintf(L"ERROR key event failed: %s\n", err.c_str());
+        return 1;
+      }
+      ::Sleep(30);
+      composing = ParseBoolField(resp, L"status.composing=");
+      ascii_mode = ParseBoolField(resp, L"status.ascii_mode=");
+    }
+  }
+  wprintf(L"COMPOSING_AFTER_TYPING=%d ASCII_MODE=%d\n", composing, ascii_mode);
+  fflush(stdout);
+  if (composing != 1) {
+    wprintf(L"ERROR the engine holds no composition => the state cannot be manufactured\n");
+    return 3;
+  }
+
+  // (3) commit the composition.
+  if (!client.CommitComposition(ipc_id, &err)) {
+    wprintf(L"ERROR commit_composition failed: %s\n", err.c_str());
+    return 1;
+  }
+  wprintf(L"COMMIT_SENT=1\n");
+  fflush(stdout);
+
+  // (4) one refresh key: the server re-reads the real engine state and the
+  // response body proves that the composition is really gone.
+  int composing_after = -1;
+  for (int i = 0; i < 3 && composing_after != 0; ++i) {
+    if (!client.SendKey(ipc_id, kKeyLeft, 0, &resp, &err)) {
+      wprintf(L"ERROR refresh key failed: %s\n", err.c_str());
+      return 1;
+    }
+    ::Sleep(80);
+    composing_after = ParseBoolField(resp, L"status.composing=");
+  }
+  wprintf(L"COMPOSING_AFTER_COMMIT=%d\n", composing_after);
+  fflush(stdout);
+  if (composing_after != 0) {
+    wprintf(L"ERROR the composition survived the commit => the state cannot be manufactured\n");
+    return 3;
+  }
+
+  int64_t last_input_tick = static_cast<int64_t>(::GetTickCount64());
+  const std::wstring pause_file = marker + L".pause";
+  const std::wstring state_file = marker + L".state";
+
+  std::vector<std::pair<std::wstring, std::wstring> > kv;
+  kv.push_back(std::make_pair(std::wstring(L"ipc_id"), std::to_wstring(ipc_id)));
+  kv.push_back(std::make_pair(std::wstring(L"pid"),
+                               std::to_wstring(::GetCurrentProcessId())));
+  kv.push_back(std::make_pair(std::wstring(L"phase"), phase));
+  kv.push_back(std::make_pair(std::wstring(L"composing_after_commit"),
+                               std::to_wstring(composing_after)));
+  kv.push_back(std::make_pair(std::wstring(L"last_input_tick_ms"),
+                               std::to_wstring(last_input_tick)));
+  if (!WriteMarker(marker, kv, &err)) {
+    wprintf(L"ERROR marker failed: %s\n", err.c_str());
+    return 1;
+  }
+  std::vector<std::pair<std::wstring, std::wstring> > skv;
+  skv.push_back(std::make_pair(std::wstring(L"last_input_tick_ms"),
+                               std::to_wstring(last_input_tick)));
+  skv.push_back(std::make_pair(std::wstring(L"composing"),
+                               std::to_wstring(composing_after)));
+  std::wstring serr;
+  WriteMarker(state_file, skv, &serr);
+
+  wprintf(L"HOLDCOMMIT_STARTED ipc_id=%lu pid=%lu last_input_tick_ms=%lld\n",
+          static_cast<unsigned long>(ipc_id),
+          static_cast<unsigned long>(::GetCurrentProcessId()),
+          static_cast<long long>(last_input_tick));
+  fflush(stdout);
+
+  // ---------------------------------------------------------- steady state --
+  const bool refresh = (phase != L"idle");
+  const int64_t deadline =
+      seconds > 0 ? last_input_tick + static_cast<int64_t>(seconds) * 1000 : 0;
+  for (;;) {
+    ::Sleep(1500);
+    const int64_t now = static_cast<int64_t>(::GetTickCount64());
+    if (deadline != 0 && now >= deadline) {
+      wprintf(L"HOLDCOMMIT_DONE idle_ms=%lld\n",
+              static_cast<long long>(now - last_input_tick));
+      fflush(stdout);
+      return 0;
+    }
+    if (!refresh)
+      continue;
+    if (::GetFileAttributesW(pause_file.c_str()) != INVALID_FILE_ATTRIBUTES)
+      continue;
+    if (!client.SendKey(ipc_id, kKeyLeft, 0, &resp, &err)) {
+      wprintf(L"WARN refresh key failed: %s\n", err.c_str());
+      fflush(stdout);
+      continue;
+    }
+    const int c = ParseBoolField(resp, L"status.composing=");
+    if (c != 0) {
+      wprintf(L"ERROR a composition reappeared in the steady state (status.composing=%d)\n",
+              c);
+      fflush(stdout);
+      return 3;
+    }
+    last_input_tick = static_cast<int64_t>(::GetTickCount64());
+    std::vector<std::pair<std::wstring, std::wstring> > st;
+    st.push_back(std::make_pair(std::wstring(L"last_input_tick_ms"),
+                                std::to_wstring(last_input_tick)));
+    st.push_back(std::make_pair(std::wstring(L"composing"), std::to_wstring(c)));
+    std::wstring werr;
+    WriteMarker(state_file, st, &werr);
+  }
+}
+
 void PrintHelp() {
   wprintf(L"TestOrphanReclaimE2E -- synthetic WeaselServer IPC client (ADR 0067)\n");
   wprintf(L"\n");
   wprintf(L"  --hold <markerFile>     connect, START_SESSION, type letters, write\n");
   wprintf(L"                          ipc_id=<n> and pid=<n> to the marker, then sleep\n");
   wprintf(L"                          forever (killed by the parent script).\n");
+  wprintf(L"  --hold-commit <marker> <active|idle> [seconds]\n");
+  wprintf(L"                          manufacture the maintenance gate input state:\n");
+  wprintf(L"                          composing==0, input history, session resident.\n");
+  wprintf(L"                          active = refresh key every 1500 ms (idle < 10 s)\n");
+  wprintf(L"                          idle   = no key at all      (idle > 10 s)\n");
+  wprintf(L"                          [seconds] = exit after N s of steady state;\n");
+  wprintf(L"                          without it the process runs until it is killed.\n");
+  wprintf(L"                          Uses marker, marker.state and marker.pause.\n");
   wprintf(L"  --trigger <markerFile>  connect, START_SESSION (triggers the server side\n");
   wprintf(L"                          orphan sweep), write ipc_id=<n> to the marker,\n");
   wprintf(L"                          sleep 1 s, close the pipe, exit. No END_SESSION.\n");
@@ -445,6 +707,25 @@ int wmain(int argc, wchar_t** argv) {
       return 2;
     }
     return RunHold(argv[2]);
+  }
+  if (mode == L"--hold-commit") {
+    if (argc < 4) {
+      wprintf(L"ERROR usage: TestOrphanReclaimE2E --hold-commit <markerFile> <active|idle> [seconds]\n");
+      return 2;
+    }
+    const std::wstring phase = argv[3];
+    if (phase != L"active" && phase != L"idle") {
+      wprintf(L"ERROR usage: the phase must be active or idle, got: %s\n",
+              phase.c_str());
+      return 2;
+    }
+    int seconds = 0;
+    if (argc >= 5) {
+      seconds = static_cast<int>(::wcstol(argv[4], NULL, 10));
+      if (seconds < 0)
+        seconds = 0;
+    }
+    return RunHoldCommit(argv[2], phase, seconds);
   }
   if (mode == L"--trigger") {
     if (argc < 3) {

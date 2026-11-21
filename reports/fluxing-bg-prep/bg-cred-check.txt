@@ -1,0 +1,49 @@
+--- FULL cmdkey /list ---
+
+Currently stored credentials:
+
+    Target: MicrosoftAccount:target=SSO_POP_User:user=kizemo@hotmail.com
+    Type: Generic 
+    User: kizemo@hotmail.com
+    Saved for this logon only
+    
+    Target: MicrosoftAccount:target=SSO_POP_Device
+    Type: Generic 
+    User: 02uottxxxpvteosx
+    Saved for this logon only
+    
+    Target: LegacyGeneric:target=MicrosoftAccount:user=kizemo@hotmail.com
+    Type: Generic 
+    User: kizemo@hotmail.com
+    Local machine persistence
+    
+    Target: WindowsLive:target=virtualapp/didlogical
+    Type: Generic 
+    User: 02uottxxxpvteosx
+    Local machine persistence
+    
+
+CMDKEY_FLUXING_HITS=0
+--- targeted cmdkey /list:Fluxing:CloudAccount ---
+Currently stored credentials for Fluxing:CloudAccount:
+
+* NONE *
+--- cred-ish files under user dir ---
+D:\Program Files\fluxing\user1\fluxing\fluxing-cloud-accounts.history|16|2026-11-21T15:14:35
+HISTORY_LINES=1
+25940969@qq.com
+DIAG_TAIL_LINES=1044
+2026-11-20 19:52:16.905][acctdlg] WM_DESTROY: cleared slot for FluxingCloudAccountDialog_v1
+2026-11-20 20:38:04.449][acctdlg] dpi-mismatch system=144 font_px=21 derived=168
+2026-11-20 20:38:05.025][acctdlg] WM_DESTROY: cleared slot for FluxingCloudAccountDialog_v1
+2026-11-20 21:45:04.326][acctdlg] WM_DESTROY: cleared slot for FluxingCloudAccountDialog_v1
+2026-11-20 21:45:27.214][acctdlg] WM_DESTROY: cleared slot for FluxingCloudAccountDialog_v1
+2026-11-20 21:51:15.406][acctdlg] WM_DESTROY: cleared slot for FluxingCloudAccountDialog_v1
+2026-11-20 23:33:47.894][acctdlg] WM_DESTROY: cleared slot for FluxingCloudAccountDialog_v1
+2026-11-21 00:33:54.450][acctdlg] dpi-mismatch system=144 font_px=21 derived=168
+2026-11-21 08:39:35.369][acctdlg] dpi-mismatch system=168 font_px=24 derived=192
+2026-11-21 08:40:09.323][acctdlg] WM_DESTROY: cleared slot for FluxingCloudAccountDialog_v1
+2026-11-21 14:49:24.756][acctdlg] dpi-mismatch system=168 font_px=24 derived=192
+--- service + export ---
+WSEASELSERVER PID=1025692 START=2026-11-21T13:38:10
+EXPORT_BYTES=4139011 EXPORT_MTIME=2026-11-21T15:36:17

@@ -1,0 +1,14 @@
+ASCII F:\soft\00selfmade\rime_claude\scripts\verify\orphan-gate-g35-export-mtime.ps1 nonascii=0 bytes=25706
+ASCII F:\soft\00selfmade\rime_claude\test\TestOrphanReclaimE2E\TestOrphanReclaimE2E.cpp nonascii=0 bytes=29325
+PARSE_ERRORS=0
+CLOUDSYNCSERVICE 'live_input_session' at lines=
+DIALOG '1017/kIdSyncStatus' at lines=955
+SELFTEST_EXIT=0
+HOLDCOMMIT_SESSION ipc_id=11 pid=576924 phase=idle
+COMPOSING_AFTER_TYPING=1 ASCII_MODE=0
+COMMIT_SENT=1
+COMPOSING_AFTER_COMMIT=0
+HOLDCOMMIT_STARTED ipc_id=11 pid=576924 last_input_tick_ms=32389812
+HOLDCOMMIT_DONE idle_ms=6438
+FILE gc-verify-165409.marker :: ipc_id=11 | pid=576924 | phase=idle | composing_after_commit=0 | last_input_tick_ms=32389812
+FILE gc-verify-165409.marker.state :: last_input_tick_ms=32389812 | composing=0

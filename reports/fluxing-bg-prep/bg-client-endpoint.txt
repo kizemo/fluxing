@@ -1,0 +1,27 @@
+Cloud\CloudAccountDialog.cpp:57: // 默认云端地址（自有域名 api.aiec.fun）。
+      // 刻意**不用** Cloudflare 默认子域 —— 境内 DNS 会污染它
+      // （见 cloud/fluxing-sync/test/check-endpoint-policy.mjs 的 T103 红线）。
+      constexpr char kDefaultBaseUrl[] = "https://api.aiec.fun";
+Cloud\CloudAccountDialog.cpp:60: constexpr char kDefaultBaseUrl[] = "https://api.aiec.fun";
+      constexpr wchar_t kBaseUrlEnvVar[] = L"FLUXING_CLOUD_BASE_URL";
+      
+      constexpr UINT WM_APP_REFRESH = WM_APP + 1;
+Cloud\CloudAccountDialog.cpp:61: constexpr wchar_t kBaseUrlEnvVar[] = L"FLUXING_CLOUD_BASE_URL";
+      
+      constexpr UINT WM_APP_REFRESH = WM_APP + 1;
+      
+Cloud\CloudAccountDialog.cpp:145: url = ToWide(kDefaultBaseUrl);
+      base_url = url;
+      
+      transport.reset(new WinHttpTransport(ToUtf8(base_url)));
+Cloud\CloudAccountDialog.h:77: // 云端服务地址。默认取环境变量 FLUXING_CLOUD_BASE_URL；没有则用
+      // 自有域名 api.aiec.fun（**不是** Cloudflare 默认子域 —— 境内 DNS 会污染
+      // 那个，见 cloud/fluxing-sync/test/check-endpoint-policy.mjs）。
+      std::wstring base_url() const;
+Cloud\CloudAccountDialog.h:78: // 自有域名 api.aiec.fun（**不是** Cloudflare 默认子域 —— 境内 DNS 会污染
+      // 那个，见 cloud/fluxing-sync/test/check-endpoint-policy.mjs）。
+      std::wstring base_url() const;
+      
+=== reachability doc present? ===
+F:\soft\00selfmade\rime_claude\docs\research\fluxing-cloud-2026-11\endpoint-reachability.md EXISTS=True
+F:\soft\00selfmade\rime_claude\docs\ops EXISTS=True

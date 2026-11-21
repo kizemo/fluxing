@@ -1,0 +1,57 @@
+=== repo-wide live_input_session ===
+include\FluxingMaintenanceGate.h:39: return "live_input_session";
+test\TestFluxingCloud\TestFluxingCloud.cpp:3089: "live_input_session",
+tmp\aw-bak-gate.h:39: return "live_input_session";
+=== CloudSyncService gate handling (860-900) ===
+860:       *err = "云端服务尚未初始化。";
+861:     out->message = "云端服务尚未初始化。";
+862:     return false;
+863:   }
+864:   if (access_token_.empty()) {
+865:     if (err)
+866:       *err = "尚未登录，无法同步。";
+867:     out->message = "尚未登录，无法同步。";
+868:     return false;
+869:   }
+870: 
+871:   // ADR 0062 决策 1: 维护准入闸门 —— **整轮跳过**。
+872:   //
+873:   // 检查放在 LoadSidecar 之前 => 闸门关闭时**零 I/O、零配额消耗**：
+874:   // 不读 sidecar、不 finalize、不导出 / 备份 / 回写、不发任何网络请求，
+875:   // 也**不打断用户正在进行的输入**。
+876:   {
+877:     std::string gate_reason;
+878:     if (!backend_->CheckMaintenanceGate(&gate_reason)) {
+879:       const std::string reason = MaintenanceGateSkipMessage();
+880:       if (err)
+881:         *err = reason;
+882:       out->message = reason;
+883:       out->skipped = true;
+884:       return false;
+885:     }
+886:   }
+887: 
+888:   std::string ignored;
+889:   LoadSidecar(&ignored);
+890: 
+891:   // 维护模式：锁住用户库（否则 leveldb LOCK 失败）。
+892:   std::string begin_err;
+893:   if (!backend_->BeginMaintenance(&begin_err)) {
+894:     // ADR 0062: 进入维护失败时再问一次闸门 —— 若失败是因为「此刻有活跃
+895:     // 输入会话」，本轮算**跳过**（不是失败）：不累计失败次数、不进退避。
+896:     std::string gate_reason;
+897:     if (!backend_->CheckMaintenanceGate(&gate_reason)) {
+898:       const std::string reason = MaintenanceGateSkipMessage();
+899:       if (err)
+900:         *err = reason;
+=== gitignore for tmp/ and reports/ ===
+*.log
+*.log.err
+# graph.json / graph.html / GRAPH_REPORT.md plus the extraction cache. Regenerate
+/tmp/
+# tmp/; this entry keeps the root clean if an older build re-creates it.
+=== check-ignore ===
+tmp/bg-g35-harness-report.md => .gitignore:185:/tmp/	tmp/bg-g35-harness-report.md
+reports/fluxing-bg-g35/harness-report.md => NOT IGNORED
+scripts/verify/orphan-gate-g35-export-mtime.ps1 => NOT IGNORED
+test/TestOrphanReclaimE2E/TestOrphanReclaimE2E.cpp => NOT IGNORED

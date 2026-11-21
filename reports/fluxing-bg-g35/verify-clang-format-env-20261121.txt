@@ -1,0 +1,69 @@
+=== clang-format.ps1 ===
+param (
+    [switch]$n,
+    [switch]$i
+)
+
+$WEASEL_SOURCE_PATH = @("RimeWithWeasel", "WeaselDeployer",
+  "WeaselIPC", "WeaselIPCServer", "WeaselServer", "WeaselSetup",
+  "WeaselTSF", "WeaselUI", "include", "test")
+$excludePatterns = Get-Content .exclude_pattern.txt
+
+function ShouldExclude($filePath) {
+  foreach ($pattern in $excludePatterns) {
+    if ($filePath -like "*$pattern*") {
+      return $true
+    }
+  }
+  return $false
+}
+
+$filesToProcess = @()
+
+$WEASEL_SOURCE_PATH | ForEach-Object {
+  $filesToProcess += Get-ChildItem -Path $_ -Recurse -Include *.cpp, *.h |
+  Where-Object { $_.FullName -notmatch "include[\\/]wtl[\\/]" -and -not (ShouldExclude $_.FullName) } |
+  ForEach-Object { $_.FullName }
+}
+
+if ($filesToProcess.Count -gt 0) {
+  if ($n) {
+    clang-format --verbose -i $filesToProcess
+    Write-Host "Formatting done!"
+  } elseif ($i) {
+    clang-format --verbose -Werror --dry-run $filesToProcess
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "Please lint your code by './clang-format.ps1 -n'."
+      exit 1
+    }
+    Write-Host "Format checking pass!"
+  }
+} else {
+  Write-Host "No files to process."
+}
+
+=== locate clang-format binary ===
+CANDS=C:\Python314\Scripts\clang-format.exe
+BIN=C:\Python314\Scripts\clang-format.exe
+FORMAT_CLEAN=False
+orig_lines=741 fmt_lines=810
+DIFF L7:
+  orig: // because weasel::Client keeps its session id private (WeaselIPC/WeaselClientImpl.h
+  fmt : // because weasel::Client keeps its session id private
+DIFF L8:
+  orig: // :: session_id) and the whole point of this tool is to report the ipc_id of the
+  fmt : // (WeaselIPC/WeaselClientImpl.h
+DIFF L9:
+  orig: // synthetic session and to probe that id with a raw ECHO afterwards.
+  fmt : // :: session_id) and the whole point of this tool is to report the ipc_id of
+DIFF L10:
+  orig: //
+  fmt : // the synthetic session and to probe that id with a raw ECHO afterwards.
+DIFF L11:
+  orig: // Wire format (include/WeaselIPC.h + WeaselIPC/PipeChannel.cpp):
+  fmt : //
+DIFF L12:
+  orig: //   request  : 12 byte header {DWORD Msg, DWORD wParam, DWORD lParam}
+  fmt : // Wire format (include/WeaselIPC.h + WeaselIPC/PipeChannel.cpp):
+DIFF_LINE_COUNT=725
+PS1_FORMAT_CLEAN=False
