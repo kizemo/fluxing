@@ -1,6 +1,6 @@
 # 批次 BH · 账号页三需求改造（保存账号勾选 / 点邮箱框自动弹下拉 / 填写框文字垂直居中）+ 单击通道修复 + 真机取证
 
-> 日期：2026-11-21 · 分支 `feat/100-cloud-sync` · HEAD `e85259c`（本批产品改动**尚未提交**）
+> 日期：2026-11-21 · 分支 `feat/100-cloud-sync` · **⚠️ 原文标题行写「HEAD `e85259c`（本批产品改动尚未提交）」—— 该说法已过时且易误读**（`e85259c` 实为 **BG 批次**提交，见 §9.1）；**本批产品改动已入库 = `3450472`（代码）+ `76b9e70`（文档与证据），已 push**；§4.6 / §4.7 / §9 / §10 为 2026-11-21 由 BI 批次回写合并。
 > 上一批：[BF 账号页 A-4/A-5 未登录态实测闭环](handoff-2026-11-21-batch-bf-a4-a5-logout-measured.md)
 
 ---
@@ -110,6 +110,31 @@ NSIS 产物实际落在 **`output\archives\`**（构建日志有 `Output: "F:\..
   **下一批第 1 项**：换判靶（1010 关闭按钮 / 1002 口令 EDIT）各测一次，并在 `:1765` 的三条分支各加一行 `fluxing::diag::AppendLine("acctdlg", …)` ⇒ 一次真机轮即可区分「STATIC 不产生消息」与「产生了但没生效」。**不得据此写成「已修好」，也不得写成「点任何控件都不收」。
 - **③ `C3_VERDICT=NOT_JUDGED c3_setup=False`（§4.4 的探针门，本轮仍在）**，但三条实质判据全 True：`c3a_has_ink=True c3b_centered=True c3c_not_clipped=True`，`C3_email_CENTER_DELTA=1.5 / C3_pwd_CENTER_DELTA=1.5`（19:29 轮判 `PASS` 时同为 1.5 / 1.5）⇒ **不是产品回归**。
 
+### 4.6 ✅ 第 8 轮（`reports/fluxing-bh-ui/run-uicheck8.log`，20:58:42）—— **c2d 根因修复后首次真机复验**（**未改探针**）
+
+装机件 = 构建件逐字相等（`SHA_MATCH_BUILD_VS_INSTALLED=True`，装机载荷 `65565EF293F91236`），服务端唯一 pid **479804**（start 20:57:58，ver 1.3.8.0），本机自然 DPI 168（175%）。
+
+- **🔴 §4.5 暴露的 `c2d_hide_on_other=False` 已修**：`C2_VERDICT=PASS c2a_open=True c2b_pick=True c2c_reopen=True c2d_hide_on_other=True c2d_judged=True all_clicks_delivered=True`。
+  `c2d_judged=True` ⇒ 探针先确认「点之前列表可见」⇒ 这是**对「点他处收起」的第二次真测**，判据**有判别力**。
+  送达面已排除：`C2_CLICK_status_1006 at=520,434 FG_OK=True` + `all_clicks_delivered=True`。
+- **① `C1_VERDICT=PASS`**；**② 弹出 / 几何 / 回填 / 重弹 / 收起 五项全 True**。
+- **③ `C3_VERDICT=NOT_JUDGED c3_setup=False`**（§4.4 的探针门本轮仍在），但三条实质判据全 True：`c3a_has_ink=True c3b_centered=True c3c_not_clipped=True`，`C3_email_CENTER_DELTA=1.5 / C3_pwd_CENTER_DELTA=1.5`，正控制 `C3_POSCTL_OK=True`。
+- 同轮总判定 = **`BH_VERDICT=FAIL EXIT=4`** ⇒ **这不是需求失败，是探针门未满足**（`c3_setup=False` ⇒ 形式判据 `NOT_JUDGED` ⇒ 探针按设计判 FAIL）。**不得据此写成「需求 ③ 未通过」，也不得写成「c2d 修好前 8 轮失败」**。
+
+### 4.7 ✅ 第 9 轮（`reports/fluxing-bh-ui/run-uicheck9.log`，21:03:22）—— **全套 `BH_VERDICT=PASS`（权威终态）**
+
+**只改探针取样判据，不改产品码**：`probe-bh.ps1` L553–571（+13 行）把密码框「种子文本读回」由 `WM_GETTEXT` 改为 `EM_GETTEXTLEN(0x00C1)` + **同帧客户区裁剪 `Crop-Ink` 墨迹行数**双通道（**两向都成立才放行，不凑绿**）；改前留档 `probe-bh.ps1.bak-pass8`（630 行 / 36679 B / 20:17:00）。**`ES_PASSWORD` 跨进程 `WM_GETTEXT` 恒返空 ⇒ 原判据对任何构建永不成立**，这是探针缺陷不是产品缺陷。
+
+- **`C3_SEED_CAPTURE size=840x508 … email_after_hide_len=7 pwd_after_hide_len=0 pwd_EM_GETTEXTLEN=8 pwd_ink_rows=16 pwd_seeded=True list_visible_at_capture=False c3_setup=True`** ⇒ 探针门**首次满足**。
+- **`C3_VERDICT=PASS c3a_has_ink=True c3b_centered=True c3c_not_clipped=True c3_setup=True`**；`C3_email_CENTER_DELTA=1.5` / `C3_pwd_CENTER_DELTA=1.5` / `C3_POSCTL_OK=True`（与 19:29 轮、第 8 轮逐字一致）。
+- **`C2_VERDICT=PASS`（c2a–c2d 全 True）**、`C1_VERDICT=PASS` ⇒ **`BH_VERDICT=PASS EXIT=0`**。
+- **因果证据到手**（`%TEMP%\fluxing-profile-notify.log`，切片 319772→320372→320886 B）—— 两条收起分支**各被独立命中**：
+  - 子控件点击：`c2d parentnotify down evt=513 id=0` + `c2d parentnotify hide id=0`
+  - **c2d 判靶那一击（点 STATIC `1006`）走新分支**：`[20:58:41.385][acctdlg] c2d parent lbuttondown hide`（第 9 轮另见 21:03:20.020 / 21:03:21.454 两条）
+- 账号态已复原为**已登录**（`RELOGIN_OK_AFTER_SEC=4/5`、`A4_RESTORE_VERDICT=PASS`）；全程未 `/quit`、未杀宿主、未改注册表。
+
+**⇒ 三条需求 + c2d 修复在第 9 轮全部真机 PASS**（装机版 1.3.8.0，服务端唯一 pid 479804）。
+
 ## 5. 本轮新增工具坑（必须固化）
 
 1. **NSIS 包在 `output\archives\`，不在 `output\`** ⇒ 静默装机必须 `cmd /c "`"<abs>\output\archives\fluxing-1.3.8-installer.exe`" /S /D=D:\Program Files\fluxing"`；`INSTALL_EXIT=9009` 是「命令找不到」不是安装失败。**出包链若无 `SHA_MATCH_BUILD_VS_INSTALLED=True` 就等于没装机**（`INSTALL_EXIT=0` 也可能是假绿：实测 `Start-Process -Wait -PassThru` 对 NSIS **挂住不返回**但安装确实成功 ⇒ 一律以盘上 `sha16` + `mtime` + 服务端新 pid 判定）。
@@ -138,10 +163,15 @@ NSIS 产物实际落在 **`output\archives\`**（构建日志有 `Output: "F:\..
 
 ## 7. 下阶段（优先级，勿重复 4.1–4.2 已闭环项）
 
-> **以 §4.5（第 7 轮权威实测）为准**，本节原第 1 项（装机复验双击修复）**已闭环**；新的第 1 项 = **`c2d_hide_on_other=False` 定根因**：
-> 换判靶 1010 / 1002 各测一次 + 在 `CloudAccountDialog.cpp:1765` 三条分支各加一行 `acctdlg` 诊断日志 ⇒ 一次真机轮区分「STATIC 不产生 `WM_PARENTNOTIFY`」与「产生了但没生效」；
-> 修好之后才允许把需求 ② 写成端到端闭环。第 2 项 = C3 探针 `c3_setup` 门改「播种 → 点邮箱框收起 → 再取帧」。
-> **本批产品改动（三需求 + 双击修复 + 云单测）全在工作树、未 commit、未 push**（`git status -sb` ahead 1；`CloudAccountDialog.cpp` / `CloudAccountUi.h` / `TestFluxingCloud.cpp` 均 ` M`），是否入库待用户授权。
+> ⚠️ **本节已被 §4.6 / §4.7 覆盖 —— 原第 1、2 项均已闭环**：
+> 原第 1 项（c2d 定根因）= 已定根因（BI §3）并修复，真机第 8/9 轮 PASS；
+> 原第 2 项（C3 探针 `c3_setup` 门改「播种 → 点邮箱框收起 → 再取帧」）= 已改为 `EM_GETTEXTLEN` + 同帧墨迹双通道，第 9 轮 `c3_setup=True` / `C3_VERDICT=PASS`。
+> **本批产品改动（三需求 + 双击修复 + c2d 修复 + 云单测）已入库** = commit `3450472`（代码）+ `76b9e70`（文档与证据），**已 push** 到 `kizemo/feat/100-cloud-sync`；其后本会话又入库 `4ab2e1e`（A-4/A-5 探针索引修复）。
+> **下方第 1–5 项保留原样作历史记录；现役未闭环项以 §8 表 + §9 + §10 为准。**
+>
+> ~~原第 1 项：以 §4.5（第 7 轮权威实测）为准……~~
+> ~~原第 2 项 = C3 探针 `c3_setup` 门改「播种 → 点邮箱框收起 → 再取帧」。~~
+> ~~**本批产品改动（三需求 + 双击修复 + 云单测）全在工作树、未 commit、未 push**（`git status -sb` ahead 1；`CloudAccountDialog.cpp` / `CloudAccountUi.h` / `TestFluxingCloud.cpp` 均 ` M`），是否入库待用户授权。~~
 
 
 1. **读 `run-uicheck7.log`**（装机件应为 `1A60B28CD714F31F`）：`c2c_reopen=True` ⇒ 需求 ② 闭环；仍 False ⇒ 下一个候选根因是 `WM_LBUTTONUP` 被 `DefWindowProc` 分支吞掉或 `g_list_mouse_down` 复位过早，**先看 `C2_CLICK_email2_after_hide` 之后是否有 `SUGGEST_OPEN` 行**，不要先改产品码。
@@ -157,9 +187,45 @@ NSIS 产物实际落在 **`output\archives\`**（构建日志有 `Output: "F:\..
 
 | 项 | 状态 |
 |---|---|
-| 需求 ① 保存账号勾选 | **已验（真机 PASS）** |
-| 需求 ② 点邮箱框弹下拉（弹出/几何/回填/点他处收起） | **已验（真机 PASS）** |
-| 需求 ② 选完条目后**再单击**重新弹出 | 修复**在盘上工作树、未入库、未装机验证**；装机旧件三轮实测 `c2c_reopen=False`；第 7 轮待读 |
-| 需求 ③ 文字垂直居中 + 与标题对齐 | 19:29 轮**已验 `PASS`**；第 6/7 轮形式判据因探针缺陷 `NOT_JUDGED` |
-| 本批产品改动提交 / push | **未做**（未获要求） |
-| 装机版 | 1.3.8.0（判定一律用 `sha16`，版本号不可信） |
+| 需求 ① 保存账号勾选 | **已验（真机 PASS）**：第 8/9 轮 `C1_VERDICT=PASS`，`NO_LEGACY_HISTORY_WIDGET=True`，文案 sha16 `6A48109401C0EB6D` |
+| 需求 ② 点邮箱框弹下拉（弹出 / 几何 / 回填 / 重弹 / 点他处收起） | **已验（真机 PASS）**：第 8/9 轮 `C2_VERDICT=PASS`，`c2a_open / c2b_pick / c2c_reopen / c2d_hide_on_other` 全 True，`c2d_judged=True`，`all_clicks_delivered=True` |
+| 需求 ② 选完条目后**再单击**重新弹出（`c2c_reopen`） | **已验（真机 PASS）**：第 7 轮起为 True（第 5/6 轮旧件 `False` 是**修好前的真实缺口**，非探针问题） |
+| 需求 ③ 文字垂直居中 + 与标题对齐 | **已验（真机 PASS）**：第 9 轮 `C3_VERDICT=PASS c3_setup=True`，`CENTER_DELTA=1.5 / 1.5`，正控制 `C3_POSCTL_OK=True`；第 6/7/8 轮 `NOT_JUDGED` 属**探针门缺陷**（`ES_PASSWORD` 跨进程 `WM_GETTEXT` 恒空），已修探针 |
+| 本批产品改动提交 / push | **已做**：代码 `3450472` + 文档 `76b9e70`（**已 push** 到 `kizemo`）；其后 `4ab2e1e` = A-4/A-5 探针索引修复（见 §9.2 与 BJ handoff） |
+| 装机版 | 1.3.8.0（判定一律用 `sha16`，版本号不可信）：装机载荷 sha16 `65565EF293F91236`，包 sha16 `3532922B872B3C7C`，服务端唯一 pid 479804 |
+
+## 9. 🔴 提交实况与一条错误登记的更正（由 BI §8 回写合并，2026-11-21）
+
+> 本节来源 = 批次 BI handoff §8。BI §7 记载：**并行会话曾用 `Copy-Item` 还原把本 handoff 的 §4.6/§4.7 追加与 `CLAUDE.md` 的 BG 指针行抹掉**（还原保留源 mtime ⇒ mtime 早于编辑时刻即还原证据）。故判据文档**必须尽快入库**。
+
+### 9.1 🔴 更正：「BH 改动已提交 `e85259c`」为**假**
+
+- `e85259c` = `test(ci): 批次 BG · G-3/G-5 维护闸门造态能力与取证脚本`，**不含 `WeaselServer/` 任何文件**。
+- 硬证据：`git log -S 'ShowSuggestIfAny' -- WeaselServer/Cloud/CloudAccountDialog.cpp` **全历史 0 命中**；`git show HEAD:WeaselServer/Cloud/CloudAccountDialog.cpp` 内 `ShowSuggestIfAny` / `c2d parent` **均不存在**；`git show HEAD:WeaselServer/Cloud/CloudAccountUi.h` 内 `kIdAccountSuggest` **不存在**。
+- ⇒ **BH 三需求 + c2d 修复此前整体只存在于工作区**，从未入库；**真正入库 = `3450472`（代码）+ `76b9e70`（文档与证据）**。
+- ⚠️ **本 handoff 原文标题行的「HEAD `e85259c`」正是这条误解的来源** —— `e85259c` 实为 **BG 批次**（`test(ci)`）的提交，与本批产品改动**无关**；且原文同句已写「本批产品改动尚未提交」，二者并列易被读成「改动已入库在 e85259c」。标题行已按 §9.2 订正。
+
+### 9.2 提交实况
+
+- **commit A** = `3450472 feat(fluxing): 云端账号页三项 UI 需求 + 已保存账号下拉点他处收起` ⇒ **3 files changed, 346 insertions(+), 47 deletions(-)**：`WeaselServer/Cloud/CloudAccountDialog.cpp` +307、`CloudAccountUi.h` +40、`test/TestFluxingCloud/TestFluxingCloud.cpp` +46。（BH 三需求与 c2d 补丁在**同一份未提交 diff 里无法单独切出** ⇒ 合为一个 `feat(fluxing)`；提交范围属工程判断，按 2026-10-14 用户授权自行裁定并汇报，不发问卷。）
+- **commit B** = `76b9e70 docs(fluxing): 批次 BH/BI 交接文档、接力 prompt 与真机证据` ⇒ **25 files changed, 1440 insertions(+), 1 deletion(-)**：`CLAUDE.md` 指针 + BH/BI 两份 handoff + 两份接力 prompt + `reports/fluxing-bh-ui/`（10 张 PNG + `probe-bh.ps1` 643 行 + 9 份 `ui-*-UiCheck/SelfTest.txt`）。
+- **三条判据同轮一起取**（`commit_exit=0` **不算**判据）：`git cat-file -t` 两者均 `commit`；`git show --stat` 如上；`git grep -F 'c2d parent' HEAD` = **3 命中**；HEAD 内 `case WM_LBUTTONDOWN:` True、`c2d parentnotify hide id=` True、`ShowSuggestIfAny` 7 处、`保存账号（下次启动自动登录）` 在 `:932`、`kIdEmailLabel` cpp 2 / .h 4。
+- **push**：`d7722e2..76b9e70 → kizemo/feat/100-cloud-sync`，`PUSH_EXIT=0`；`git ls-remote kizemo refs/heads/feat/100-cloud-sync` = `76b9e7016771bd6c20d181fae95154cbfb7c3032`。
+- **其后**：本会话另入库 `4ab2e1e fix(fluxing): 修 A-4/A-5 探针有序字典整数索引越界并补真机复验证据`（BF 批次资产，**尚未 push**）。
+
+### 9.3 ⚠️ 两处早先不精确表述的订正
+
+1. 需求 ③ 的实现符号**不是** `CenterV(...)`：HEAD 内 `CenterV` **0 命中**，`CloudAccountUi.h:118` 那段声明是**注释掉的** ⇒ 真实现 = `CloudAccountDialog.cpp:1202` 的 `const int line_px = tm.tmHeight + tm.tmExternalLeading;`（配合不变式 `edit.y + AccountEditInkCenterOffsetBase() == label.y + label.h / 2`）。
+2. `c1_save_account` / `save account=checked` **不是代码字面量**（HEAD 源码 0 命中）⇒ 它们是**探针输出字段名**；入库判据以代码里的中文文案 `保存账号（下次启动自动登录）` + 盘上探针字段 `C1_SAVE_ACCOUNT check_state=1` 为准。
+
+### 9.4 ⚠️ `.gitignore` 挡住 18 份判据原文（**待用户定**）
+
+`reports/fluxing-bh-ui/run-uicheck.log … run-uicheck9.log`、`run-relogin.log … run-relogin9.log` 均未入库 ⇒ 第 9 轮权威原文 `run-uicheck9.log`（`BH_VERDICT=PASS / EXIT=0`）**只活在盘上**。已入库的同内容判据 = `ui-20261121-205842-UiCheck.txt`（55 行，第 8 轮）与 `ui-20261121-210322-UiCheck.txt`（56 行，第 9 轮；实测含 `c2d_hide_on_other=True` + `C3_VERDICT=PASS` + `BH_VERDICT=PASS`）。要让 `.log` 原文也入库需 `git add -f`，**待用户拍板**。
+
+## 10. 本批遗留（转交下一批）
+
+- **BG 遗留**（**需两台机器 + 用户在场**）：双机 AC 7 条、restore 端到端、输入延迟两组对照、G-3/G-5 真跑（配方 `maintenance\BG-G35-conditional-feasibility.md`）。判定口径 = **`BLOCKED_HARNESS_PRECONDITION`**（环境前置不可得，**非缺陷、非 PASS、也非 FAIL**），可行性 = **CONDITIONAL YES**。
+- **`kIdSyncStatus`(1017) 不可观测待拍板**：刷新路径只写 `kIdStatus`(1006)，从不写 1017；最小修法约 3 行产品码 ⇒ 属**独立 ADR 批次**。
+- **`.gitignore` 挡住 18 份 `run-*.log`**：入库需 `git add -f`，**待用户定**。
+- **`tmp\bh-c2d-fmt-check.cpp`（83767 B，clang-format 对照副本）删不掉**：本机 `Remove-Item` 被硬策略整条拒、`rm --` 报 `requires the targets-only trash marker` ⇒ **需用户手动处置**（资源管理器/回收站侧）。
+- **勿重跑**：A-1~A-5、B-1~B-5、`/verify-client-pid`、175%/200% DPI 切档（已拍板）、c2d 复验（已 PASS）、c3 量值（已 PASS）。
