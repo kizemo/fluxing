@@ -1,0 +1,1 @@
+请先按全路径读完 F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-21-batch-bc-orphan-reclaim-b4-b5.md（含其中的必读文档全路径表、已闭环项、未闭环清单与下一批计划）与 F:\soft\00selfmade\rime_claude\docs\release\restart-checklist-1.3.6.md（B-1 至 B-5 判据原文），再自行掌握背景、目标、进度与下阶段安排，并**不要重做** handoff 中标注为已闭环的项。
