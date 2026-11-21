@@ -22,7 +22,7 @@
 
 ⇒ 结论：**不存在「控件没建」这类问题**；缺的是刷新路径上的赋值。
 
-### 事实 2 — 真实同步结果一直��在，但只活在一个成员变量里
+### 事实 2 — 真实同步结果一直存在，但只活在一个成员变量里
 
 `CloudAccountController::sync_status()`（`CloudAccountDialog.cpp`）返回 `Impl::sync_status_text`；
 该成员由 `Impl::SetSyncStatus()` 在**七个**时点更新：
