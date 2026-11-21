@@ -21,6 +21,10 @@ using namespace boost::interprocess;
 // ADR 0043: 半角标点(英文标点)的标点语言转换。生产代码(RimeWithWeasel 的
 // 提交边界)与本测试共用 include/FluxingPunctText.h 同一实现 (constitution R7)。
 #include <FluxingPunctText.h>
+// ADR 0067: parsing of the "session.client_pid=" line. Production code
+// (RimeWithWeasel) and this test share include/FluxingSessionReclaim.h, the
+// very same implementation (constitution R7).
+#include <FluxingSessionReclaim.h>
 
 CAppModule _Module;
 
@@ -536,20 +540,21 @@ std::wstring client_pid_record_path() {
 }
 
 // Parse "session.client_pid=<digits>" out of the request text and append
-// the value to the record file. Returns the parsed value (0 when the key is
-// absent or malformed).
+// the value to the record file. Returns the parsed value, or 0 when the key
+// is absent or malformed.
+//
+// R7 (single source of truth): the parsing is the PRODUCTION implementation
+// in include/FluxingSessionReclaim.h -- the line must match the key at the
+// start of a line, the value must be a non-empty run of ASCII decimal digits
+// that fits in a DWORD, and the last well formed value wins.  This used to be
+// a local copy that matched the key anywhere in the body and accumulated in 32
+// bits (so an out-of-range value silently wrapped).  The mock server still
+// records 0 for "absent or malformed", so the record file format and the
+// assertions on it are unchanged.
 unsigned long record_client_pid(LPWSTR buffer) {
   const std::wstring text(buffer ? buffer : L"");
-  const std::wstring key = L"session.client_pid=";
   unsigned long value = 0;
-  const size_t pos = text.find(key);
-  if (pos != std::wstring::npos) {
-    size_t i = pos + key.size();
-    while (i < text.size() && text[i] >= L'0' && text[i] <= L'9') {
-      value = value * 10 + static_cast<unsigned long>(text[i] - L'0');
-      ++i;
-    }
-  }
+  fluxing::session_reclaim::ParseClientPid(text, &value);
   const std::wstring path = client_pid_record_path();
   if (!path.empty()) {
     // FILE_APPEND_DATA, not GENERIC_WRITE: a freshly opened GENERIC_WRITE

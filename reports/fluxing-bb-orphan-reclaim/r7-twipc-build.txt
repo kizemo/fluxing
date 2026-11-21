@@ -1,0 +1,21 @@
+
+  WeaselUI.vcxproj -> F:\soft\00selfmade\rime_claude\msbuild\Release\x64\WeaselUI.lib
+  RimeWithWeasel.cpp
+  RimeWithWeasel.vcxproj -> F:\soft\00selfmade\rime_claude\msbuild\Release\x64\RimeWithWeasel.lib
+  WeaselIPC.vcxproj -> F:\soft\00selfmade\rime_claude\msbuild\Release\x64\WeaselIPC.lib
+  WeaselIPCServer.vcxproj -> F:\soft\00selfmade\rime_claude\msbuild\Release\x64\WeaselIPCServer.lib
+  stdafx.cpp
+  TestWeaselIPC.cpp
+F:\soft\00selfmade\rime_claude\test\TestWeaselIPC\TestWeaselIPC.cpp(143,13): warning C4311: “类型强制转换”: 从“HINSTANCE”到“int”的指针截断 [F:\soft\00selfmade\rime_claude\test\TestWeaselIPC\TestWeaselIPC.vcxproj]
+  (编译源文件“/TestWeaselIPC.cpp”)
+  
+F:\soft\00selfmade\rime_claude\test\TestWeaselIPC\TestWeaselIPC.cpp(143,13): warning C4302: “类型强制转换”: 从“HINSTANCE”到“int”截断 [F:\soft\00selfmade\rime_claude\test\TestWeaselIPC\TestWeaselIPC.vcxproj]
+  (编译源文件“/TestWeaselIPC.cpp”)
+  
+  TsfProfileVerify.cpp
+    正在创建库 F:\soft\00selfmade\rime_claude\\Release\TestWeaselIPC.lib 和对象 F:\soft\00selfmade\rime_claude\\Release\TestWeaselIPC.exp
+  正在生成代码
+  Previous IPDB and IOBJ mismatch, fall back to full compilation.
+  All 3472 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  已完成代码的生成
+  TestWeaselIPC.vcxproj -> F:\soft\00selfmade\rime_claude\Release\TestWeaselIPC.exe
