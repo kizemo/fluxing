@@ -159,7 +159,8 @@ VERDICT=SYNC_STATUS_OBSERVABLE   EXIT=0
 | commit | 内容 |
 |---|---|
 | `6f464b5` | `fix(WeaselServer): 账号页「最近同步」状态行(1017)写入真实同步结果（ADR 0069）` —— 9 files changed, 880 insertions(+), 13 deletions(-)：产品码 2 文件 + 单测 1 文件 + ADR 0069 新建 + `docs/adr/README.md` 索引 + `CHANGELOG.md` + 探针与两轮原始证据 3 文件 |
-| （本文件） | `docs(fluxing): 批次 BK 交接文档与交接指针` |
+| `485e89f` | `docs(fluxing): 批次 BK 交接文档与交接指针` —— 新建本文件 + `CLAUDE.md` 插入 BK 指针行（BJ 降级为「上一批交接指针（BJ）」） |
+| `fbfce22` | `docs(fluxing): 修 ADR 0069 第 25 行「存在」乱码（U+FFFD）` —— 1 file changed, 1 insertion(+), 1 deletion(-)，成因与修法见 §9 第 8 条坑 |
 
 **三判据同取**（不认 `commit_exit=0`）：
 
@@ -169,9 +170,14 @@ git show --stat --oneline HEAD                        => 6f464b5 … 9 files cha
 git grep -F 'AccountSyncStatusTextSuccess' HEAD -- WeaselServer/Cloud/CloudAccountUi.h   => 1
 git grep -F 'kIdSyncStatus' HEAD -- WeaselServer/Cloud/CloudAccountDialog.cpp             => 3
 git grep -F '0069' HEAD -- docs/adr/README.md                                             => 1
+
+# fbfce22（ADR 0069 乱码修复）
+git cat-file -t HEAD                                  => commit
+git show --stat --oneline HEAD                        => fbfce22 … 1 file changed, 1 insertion(+), 1 deletion(-)
+git grep -F '事实 2 — 真实同步结果一直存在，但只活在一个成员变量里' HEAD -- docs/adr/0069-account-sync-status-observability.md   => 1
 ```
 
-**push**：通道探测（每轮重探）⇒ 直连 `-NoProxy` **timeout**、代理 `http://127.0.0.1:7897` **200**；`git push kizemo feat/100-cloud-sync` ⇒ `320c68b..6f464b5`，`PUSH_EXIT=0`；`git ls-remote kizemo refs/heads/feat/100-cloud-sync` = `6f464b5ed29c6b753d9c2798304c671f442f748f`。
+**push**：通道探测（每轮重探）⇒ 首轮直连 `-NoProxy` **timeout**、代理 `http://127.0.0.1:7897` **200**（末轮两条通道**均 200**）；三次 `git push kizemo feat/100-cloud-sync` ⇒ `320c68b..6f464b5`、`6f464b5..485e89f`、`485e89f..fbfce22`，三次 `PUSH_EXIT=0`；`git ls-remote kizemo refs/heads/feat/100-cloud-sync` = `fbfce223eb924d69e22797bda3eacfbf8f92eab8`（末轮实测）。
 
 ---
 
@@ -184,6 +190,7 @@ git grep -F '0069' HEAD -- docs/adr/README.md                                   
 5. **单测新增代码的格式漂移是真漂移**（本批 6 处）⇒ `clang-format -i --lines=` 就地修后必须再跑一次 `RECHECK_REPLACEMENTS=0` 才算收口。
 6. **`Get-Content` 对目录会抛错**，在 `$ErrorActionPreference='Stop'` 下会中断脚本 ⇒ 先 `Test-Path` + `-PSIsContainer` 判型。
 7. **`Add-Type` 在同一 PS 会话重复调用会类型重名** ⇒ 探针一律用独立 `pwsh -NoProfile -File` 跑。
+8. **中文文件落盘后必须做 U+FFFD 字节级扫描** —— 本批 `write`/`edit` 把 ADR 0069 第 25 行的「存」写成了 **2 个 U+FFFD**（字节 `EF BF BD EF BF BD`）⇒ 判据 = 用严格 UTF-8 解码后统计 `[char]0xFFFD` 出现次数（必须为 0）；修法 = **字节级**替换（`EF BF BD EF BF BD` → `E5 AD 98`，11019 B → 11016 B，行数不变 189）。**`docs/adr/0037-sogou-user-dictionary-import.md` 另有 3 个既有 FFFD（非本批产生，未动）**。
 
 ---
 
