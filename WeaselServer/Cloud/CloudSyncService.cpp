@@ -860,8 +860,8 @@ bool RemoteWins(const Entry& remote, const Entry& local) {
   return remote.payload > local.payload;
 }
 
-// 单次推送的条目上限（分批，避免超大请求）。
-constexpr size_t kPushBatchSize = 200;
+// 单次推送的条目上限见头文件（kPushBatchSize，与服务端 MAX_PUSH_ITEMS 对齐，
+// 那里有 static_assert 兜着「改大即编译失败」）。
 // 单次拉取的条目上限（服务端 MAX_PULL_LIMIT = 100）。
 constexpr int64_t kPullPageLimit = 100;
 // 单轮最多拉取的页数（超出部分留到下一轮，状态里说明「还有更多」）。

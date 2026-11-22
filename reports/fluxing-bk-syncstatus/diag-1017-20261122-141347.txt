@@ -1,0 +1,60 @@
+REPORT_TS=20261122-141347
+LOGONUI_PRESENT=False
+SRV_PID=1077296 START=14:07:45
+OPEN_BY_DIAG=True
+DLG=0x42073A CLASS=FluxingCloudAccountDialog_v1 VISIBLE=True HUNG=False
+--- CHILDREN BEFORE ---
+CHILD id=1025 hwnd=0x78146A cls=Static vis=False len=4 txt=[邮箱地址]
+CHILD id=1001 hwnd=0x13C150E cls=Edit vis=False len=0 txt=[]
+CHILD id=1026 hwnd=0x19610B0 cls=Static vis=False len=2 txt=[密码]
+CHILD id=1002 hwnd=0x5A0560 cls=Edit vis=False len=0 txt=[]
+CHILD id=1019 hwnd=0x2813F0 cls=Button vis=False len=14 txt=[保存账号（下次启动自动登录）]
+CHILD id=1003 hwnd=0xFC146E cls=Button vis=False len=2 txt=[登录]
+CHILD id=1013 hwnd=0x53034C cls=Button vis=False len=2 txt=[注册]
+CHILD id=1021 hwnd=0xA00EF0 cls=Button vis=False len=4 txt=[忘记密码]
+CHILD id=1006 hwnd=0x7713D6 cls=Static vis=True len=21 txt=[手动同步已提交，完成后见下方「最近同步」。]
+CHILD id=1010 hwnd=0x2FF0740 cls=Button vis=True len=2 txt=[关闭]
+CHILD id=1027 hwnd=0x8A06C6 cls=Static vis=True len=6 txt=[当前登录账号]
+CHILD id=1020 hwnd=0x1E1566 cls=Static vis=True len=15 txt=[25940969@qq.com]
+CHILD id=1004 hwnd=0x581480 cls=Button vis=True len=4 txt=[退出登录]
+CHILD id=1016 hwnd=0x4A15AC cls=Button vis=True len=4 txt=[立即同步]
+CHILD id=1017 hwnd=0xA115DC cls=Static vis=True len=54 txt=[最近同步：2026-11-22 14:11:16 · 失败（网络请求失败：接收响应失败：错误码 12002）]
+CHILD id=1022 hwnd=0x571462 cls=Static vis=True len=24 txt=[你正在输入时同步会自动延后，停止输入后自动完成。]
+CHILD id=1035 hwnd=0x751432 cls=Static vis=True len=37 txt=[重置登录口令后，云端旧条目将无法再解开，可在「设备与云数据」清空云端数据。]
+CHILD id=1099 hwnd=0x440C1A cls=ListBox vis=False len=0 txt=[]
+ANCHOR status=0xA115DC sync=0x4A15AC hint=0x7713D6 statusIsWindow=True
+BEFORE_DIRECT=[最近同步：2026-11-22 14:11:16 · 失败（网络请求失败：接收响应失败：错误码 12002）]
+BEFORE_TIMEOUT=[最近同步：2026-11-22 14:11:16 · 失败（网络请求失败：接收响应失败：错误码 12002）] ok=True
+HINT_BEFORE=[手动同步已提交，完成后见下方「最近同步」。]
+CLICK_SENT=True CLICK_OK=True CLICK_TS=14:13:47.370
+T 1s dlg=0x42073A dlgAlive=True dlgRecreated=False hung=False freshStatus=0xA115DC freshChanged=False cachedAlive=True len=54 toOk=True TO=[最近同步：2026-11-22 14:11:16 · 失败（网络请求失败：接收响应失败：错误码 12002）] DIRECT=[最近同步：2026-11-22 14:11:16 · 失败（网络请求失败：接收响应失败：错误码 12002）]
+      hint=[手动同步已提交，完成后见下方「最近同步」。]
+T 2s dlg=0x42073A dlgAlive=True dlgRecreated=False hung=False freshStatus=0xA115DC freshChanged=False cachedAlive=True len=54 toOk=True TO=[最近同步：2026-11-22 14:11:16 · 失败（网络请求失败：接收响应失败：错误码 12002）] DIRECT=[最近同步：2026-11-22 14:11:16 · 失败（网络请求失败：接收响应失败：错误码 12002）]
+      hint=[手动同步已提交，完成后见下方「最近同步」。]
+T 3s dlg=0x42073A dlgAlive=True dlgRecreated=False hung=False freshStatus=0xA115DC freshChanged=False cachedAlive=True len=54 toOk=True TO=[最近同步：2026-11-22 14:11:16 · 失败（网络请求失败：接收响应失败：错误码 12002）] DIRECT=[最近同步：2026-11-22 14:11:16 · 失败（网络请求失败：接收响应失败：错误码 12002）]
+      hint=[手动同步已提交，完成后见下方「最近同步」。]
+T 4s dlg=0x42073A dlgAlive=True dlgRecreated=False hung=False freshStatus=0xA115DC freshChanged=False cachedAlive=True len=54 toOk=True TO=[最近同步：2026-11-22 14:13:50 · 失败（网络请求失败：接收响应失败：错误码 12002）] DIRECT=[最近同步：2026-11-22 14:13:50 · 失败（网络请求失败：接收响应失败：错误码 12002）]
+      hint=[手动同步已提交，完成后见下方「最近同步」。]
+T 5s dlg=0x42073A dlgAlive=True dlgRecreated=False hung=False freshStatus=0xA115DC freshChanged=False cachedAlive=True len=54 toOk=True TO=[最近同步：2026-11-22 14:13:50 · 失败（网络请求失败：接收响应失败：错误码 12002）] DIRECT=[最近同步：2026-11-22 14:13:50 · 失败（网络请求失败：接收响应失败：错误码 12002）]
+      hint=[手动同步已提交，完成后见下方「最近同步」。]
+T60s dlg=0x42073A dlgAlive=True dlgRecreated=False hung=False freshStatus=0xA115DC freshChanged=False cachedAlive=True len=54 toOk=True TO=[最近同步：2026-11-22 14:13:50 · 失败（网络请求失败：接收响应失败：错误码 12002）] DIRECT=[最近同步：2026-11-22 14:13:50 · 失败（网络请求失败：接收响应失败：错误码 12002）]
+      hint=[手动同步已提交，完成后见下方「最近同步」。]
+FINAL_STATUS_DIRECT=[最近同步：2026-11-22 14:13:50 · 失败（网络请求失败：接收响应失败：错误码 12002）]
+FINAL_STATUS_TIMEOUT=[最近同步：2026-11-22 14:13:50 · 失败（网络请求失败：接收响应失败：错误码 12002）] ok=True
+FINAL_HINT=[手动同步已提交，完成后见下方「最近同步」。]
+LOG_CLOUDSYNC_TAIL_N=28
+  LOG 2026-11-22 14:00:35.787][cloudsync] access token refreshed after 401; retry with new token
+  LOG 2026-11-22 14:06:26.582][cloudsync] access token refreshed after 401; retry with new token
+  LOG 2026-11-22 14:06:26.582][cloudsync] access token refreshed after 401; retry with new token
+  LOG 2026-11-22 14:06:26.583][cloudsync] access token refreshed after 401; retry with new token
+  LOG 2026-11-22 14:06:26.583][cloudsync] access token refreshed after 401; retry with new token
+  LOG 2026-11-22 14:06:26.585][cloudsync] skipped malformed cloud userdb entry (payload shape invalid)
+  LOG 2026-11-22 14:06:26.585][cloudsync] skipped malformed cloud userdb entry (payload shape invalid)
+  LOG 2026-11-22 14:06:26.586][cloudsync] skipped malformed cloud userdb entry (payload shape invalid)
+  LOG 2026-11-22 14:06:26.586][cloudsync] skipped malformed cloud userdb entry (payload shape invalid)
+  LOG 2026-11-22 14:06:26.587][cloudsync] skipped malformed cloud userdb entry (payload shape invalid)
+  LOG 2026-11-22 14:06:26.588][cloudsync] access token refreshed after 401; retry with new token
+  LOG 2026-11-22 14:08:17.799][cloudsync] skipped malformed cloud userdb entry (payload shape invalid)
+  LOG 2026-11-22 14:09:43.963][cloudsync] skipped malformed cloud userdb entry (payload shape invalid)
+  LOG 2026-11-22 14:12:19.217][cloudsync] skipped malformed cloud userdb entry (payload shape invalid)
+  LOG 2026-11-22 14:13:54.239][cloudsync] skipped malformed cloud userdb entry (payload shape invalid)

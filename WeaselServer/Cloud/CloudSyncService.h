@@ -51,6 +51,19 @@
 namespace fluxing {
 namespace cloud {
 
+// ★ 与服务端的硬契约：单次推送条目上限。
+//   服务端真源：cloud/fluxing-sync/src/wire.ts 的 MAX_PUSH_ITEMS = 64。
+//   超出即整批 400 拒收（too_many_items：「单次推送条目数上限为 64（实收
+//   N）。」） —— 客户端曾按 200 分批，导致本地待推条目 >= 65
+//   的轮次**永久同步失败**。
+constexpr size_t kServerMaxPushItems = 64;
+
+// 单次推送的条目上限（分批，避免超大请求）。必须 <= kServerMaxPushItems。
+constexpr size_t kPushBatchSize = 64;
+
+static_assert(kPushBatchSize <= kServerMaxPushItems,
+              "推送单批不得超过服务端 MAX_PUSH_ITEMS，否则整批被拒");
+
 class ICloudTransport;
 
 // ---------------------------------------------------------------------------
