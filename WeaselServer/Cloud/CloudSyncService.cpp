@@ -118,6 +118,17 @@ std::vector<std::string> SplitTab(const std::string& line) {
   return cols;
 }
 
+// 诊断行里的错误文本截断：最多 max_bytes **字节**，且不把 UTF-8 多字节序列
+// 切一半（切一半会让日志里出现半个汉字）。
+std::string TruncateUtf8(const std::string& text, size_t max_bytes) {
+  if (text.size() <= max_bytes)
+    return text;
+  size_t cut = max_bytes;
+  while (cut > 0 && ((static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80))
+    --cut;
+  return text.substr(0, cut);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -727,7 +738,8 @@ bool CloudSyncService::Push(const std::vector<CloudSyncItem>& items,
                             int64_t* server_seq,
                             std::string* err,
                             std::vector<std::string>* accepted,
-                            std::vector<std::string>* skipped) {
+                            std::vector<std::string>* skipped,
+                            int* http_status) {
   if (items.empty())
     return true;  // 服务端拒绝空数组
 
@@ -736,10 +748,14 @@ bool CloudSyncService::Push(const std::vector<CloudSyncItem>& items,
   std::string send_err;
   if (!SendJson("POST", "/v1/sync/push", BuildPushBody(items), &status,
                 &response, &send_err)) {
+    if (http_status)
+      *http_status = status;  // 传输层失败 ⇒ 0；HTTP 错误 ⇒ 服务端状态码
     if (err)
       *err = send_err.empty() ? "推送失败。" : send_err;
     return false;
   }
+  if (http_status)
+    *http_status = status;
 
   // ★ 必须把 accepted / skipped 解析出来（AH-4 ⑤）：服务端 HLC 守卫会把
   //   「存储版本 ≥ 入参版本」的条目放进 skipped，客户端不能当成功。
@@ -1164,8 +1180,30 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
       ++out->push_requests;
       std::vector<std::string> accepted_keys;
       std::vector<std::string> skipped_keys;
-      if (!service.Push(sealed, &pushed_seq, &push_err, &accepted_keys,
-                        &skipped_keys)) {
+      // ★ ADR 0074：每推一批都落一条**无条件**诊断行（条目数 + 耗时 +
+      //   HTTP 状态）—— 12002（WinHTTP 超时）表现为「整批没回音」，没有这行
+      //   就分不清「没到服务端」与「到了但慢到超时」。失败也照打。
+      const unsigned long long batch_t0 = ::GetTickCount64();
+      int batch_http_status = 0;
+      const bool batch_ok =
+          service.Push(sealed, &pushed_seq, &push_err, &accepted_keys,
+                       &skipped_keys, &batch_http_status);
+      const unsigned long long batch_elapsed_ms = ::GetTickCount64() - batch_t0;
+      {
+        std::string diag_line =
+            "push batch items=" + std::to_string(sealed.size()) +
+            " elapsed_ms=" + std::to_string(batch_elapsed_ms) + " http=";
+        if (batch_http_status > 0)
+          diag_line += std::to_string(batch_http_status);
+        else
+          diag_line += "failed";
+        if (!batch_ok) {
+          diag_line += " err=";
+          diag_line += TruncateUtf8(push_err, 80);
+        }
+        diag::AppendLine("cloudsync", diag_line);
+      }
+      if (!batch_ok) {
         push_ok = false;
         break;
       }

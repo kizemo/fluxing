@@ -150,8 +150,10 @@ std::string UrlEncodePathSegment(const std::string& raw) {
 WinHttpTransport::WinHttpTransport(std::string base_url,
                                    CloudTransportOptions options)
     : base_url_(std::move(base_url)), options_(options) {
+  // 兜底必须与 CloudTransportOptions 的默认值保持一致（ADR 0074：30 s）——
+  //   否则显式传 0 / 负值会把超时退回旧口径。
   if (options_.timeout_ms <= 0)
-    options_.timeout_ms = 15000;
+    options_.timeout_ms = 30000;
   if (options_.max_retries < 0)
     options_.max_retries = 0;
   if (options_.retry_backoff_base_ms <= 0)

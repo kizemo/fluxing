@@ -69,7 +69,8 @@ class ICloudTransport {
 // ---------------------------------------------------------------------------
 
 struct CloudTransportOptions {
-  int timeout_ms = 15000;
+  // ADR 0074 决策：服务端单批 64 条并发化后为秒级，30 s 留余量。
+  int timeout_ms = 30000;
   // 额外重试次数（总尝试次数 = 1 + max_retries）。
   int max_retries = 2;
   int retry_backoff_base_ms = 500;  // 指数退避基数

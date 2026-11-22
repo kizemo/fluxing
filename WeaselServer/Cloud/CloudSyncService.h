@@ -58,8 +58,11 @@ namespace cloud {
 //   的轮次**永久同步失败**。
 constexpr size_t kServerMaxPushItems = 64;
 
-// 单次推送的条目上限（分批，避免超大请求）。必须 <= kServerMaxPushItems。
-constexpr size_t kPushBatchSize = 64;
+// ★ 客户端的**分批口径**（与服务端上限不是同一个数）：单批 32 条。
+//   理由（ADR 0074 决策）：服务端单批 64 条并发化后为秒级，客户端在
+//   30 s 接收超时窗口内仍留出余量 —— 单批越小，一批失败时的重试代价越小。
+//   必须 <= kServerMaxPushItems（服务端上限 64，超出即整批 400 拒收）。
+constexpr size_t kPushBatchSize = 32;
 
 static_assert(kPushBatchSize <= kServerMaxPushItems,
               "推送单批不得超过服务端 MAX_PUSH_ITEMS，否则整批被拒");
@@ -264,11 +267,13 @@ class CloudSyncService {
 
   // 推送。server_seq 输出本次推送后的服务端序号（没有条目时保持原值）。
   // accepted / skipped 输出服务端对每条目的处置（item_key 列表，可为空）。
+  // http_status 输出本次推送的 HTTP 状态码（传输层失败 ⇒ 0）。
   bool Push(const std::vector<CloudSyncItem>& items,
             int64_t* server_seq,
             std::string* err,
             std::vector<std::string>* accepted = nullptr,
-            std::vector<std::string>* skipped = nullptr);
+            std::vector<std::string>* skipped = nullptr,
+            int* http_status = nullptr);
 
   // 拉取。since 是上次已处理的服务端序号。
   // has_more 输出「服务端还有更多条目」（用于分批）。

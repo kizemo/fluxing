@@ -4478,6 +4478,29 @@ void TestSyncStatusNotices() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// ADR 0074（客户端侧）：推送分批口径 = 32、接收超时 = 30 s。
+// 判据直接取生产头（constitution R7：生产与单测同源，不复制第二份常量）。
+// ---------------------------------------------------------------------------
+
+void TestCloudPushBatchAndTimeout() {
+  std::printf("[ADR 0074] 客户端推送分批 32 条 / 接收超时 30 s\n");
+
+  const fc::CloudTransportOptions options;
+  Check(options.timeout_ms == 30000,
+        "传输层默认接收超时 = 30 s（服务端单批 64 条并发化后为秒级）");
+
+  fc::CloudTransportOptions zero_options;
+  zero_options.timeout_ms = 0;
+  const fc::WinHttpTransport fallback("https://api.example.com", zero_options);
+  Check(fallback.options().timeout_ms == 30000,
+        "传输层超时兜底（<= 0）同样回退 30 s");
+
+  Check(fc::kPushBatchSize == 32, "客户端推送分批口径 = 32 条");
+  Check(fc::kPushBatchSize <= fc::kServerMaxPushItems,
+        "客户端推送单批不超过服务端上限 64");
+}
+
 int main() {
   ::SetConsoleOutputCP(CP_UTF8);
   std::printf("==== TestFluxingCloud · spec 100 阶段 B（契约与客户端纯逻辑）====\n");
@@ -4556,6 +4579,9 @@ int main() {
   // 批次 BN · ADR 0072：成功态「最近同步」状态行吃下本轮提示
   // （notices ⇒ 界面文案，与 message 同源）。
   TestSyncStatusNotices();
+
+  // ADR 0074（客户端侧）：推送分批 32 条 / 接收超时 30 s。
+  TestCloudPushBatchAndTimeout();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。
