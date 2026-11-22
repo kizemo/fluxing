@@ -5,6 +5,7 @@
 - 分支：`feat/100-cloud-sync`（远程 `kizemo`）
 - 性质：**产品修复 + 门禁 + 出包装机 + 装机实证 + 真机复验 + 文档 + 提交**
 - 边界：**未改** `librime/`、**未改** IPC 协议消息类型、**未新增**第三方依赖、**未改** `.clang-format`、**未 bump** 版本号（装机版仍 1.3.8.0，判定一律用 sha16 / 字节数）
+- 提交：`ccf6477` `fix(WeaselServer)`（代码 + ADR 0073 + CHANGELOG + 5 份探针/诊断证据，9 文件 +381/−2）；`a68bfd4` `docs(fluxing)`（本 handoff + 接力 prompt）；回填本次提交实况为第 3 个提交。三者均已推 `kizemo/feat/100-cloud-sync`，推送后 `git status -sb` 无 ahead。
 
 ---
 
