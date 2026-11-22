@@ -82,7 +82,7 @@ Do not dump all ADRs into every prompt.
 | 0071 | 0071. 云端形态非法的旧条目不再毒化整轮同步：开箱侧按写回口径跳过并单独计数，本地解析侧同口径收窄，`JoinDictRow` 改为显式报错 | `docs/adr/0071-malformed-cloud-entry-skip-instead-of-poisoning-round.md` | Accepted |
 | 0072 | 0072. 成功态「最近同步」显示本轮提示：结构化 notices 通道（成功态 1017 不再丢弃轮次 message；无提示时文案逐字不变） | `docs/adr/0072-sync-round-notices-visible-in-success-status.md` | Accepted |
 | 0073 | 0073. 客户端推送分批对齐服务端上限：单批 64 条 + 编译期护栏（**决策 5 已被 0074 修订**） | `docs/adr/0073-client-push-batch-aligns-with-server-limit.md` | Accepted（决策 5 由 0074 修订） |
-| 0074 | 0074. 推送批量吞吐：服务端并发化 + 客户端批量/超时重估（修订 0073 决策 5） | `docs/adr/0074-push-batch-throughput-server-concurrency-and-client-timeout.md` | Proposed |
+| 0074 | 0074. 推送批量吞吐：服务端并发化 + 客户端批量/超时重估（修订 0073 决策 5） | `docs/adr/0074-push-batch-throughput-server-concurrency-and-client-timeout.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and
