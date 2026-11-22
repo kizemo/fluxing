@@ -210,3 +210,20 @@ BL handoff §14 与 `reports/fluxing-bl-syncstatus/analysis-20261122.md` 称「`
 1. 工作区里 18 份 `run-*.log` 被 `.gitignore` 挡住（`*.log`），是否 `git add -f` 入库。
 2. `tmp\bh-c2d-fmt-check.cpp`（83 767 B）本机策略删不掉，需用户手动处置。
 3. BL §8 原计划：**真机令牌过期 → 续期 → 同步成功**端到端直证（需制造**已过期访问令牌** + 点「立即同步」，判据用 BK 探针按控件 ID 1017 定位）；双机 AC 7 条 + restore 端到端 + 输入延迟两组对照 + G-3/G-5 真跑（**需两台机器 + 用户在场**）。
+
+---
+
+## 12. 提交实况
+
+| # | commit | subject | 收录文件 |
+|---|---|---|---|
+| 1 | `56b0698` | `fix(WeaselServer): 云端形态非法的旧条目不再毒化整轮同步 —— 跳过并单独计数（ADR 0071）` | 5 个改动文件 + ADR 0071 + `docs/adr/README.md` + `CHANGELOG.md` + `reports/bm-code-diff.txt` |
+| 2 | `7ebf1a2` | `docs(fluxing): 批次 BM 交接文档、接力 prompt 与交接指针` | 本文件 + 接力 prompt + `CLAUDE.md` |
+| 3 | `bad85a8` | `docs(fluxing): 批次 BM 真机复验原始探针输出入库` | `reports/fluxing-bm-syncstatus/sync-status-20261122-092051.txt` |
+| 4 | （本文件回填） | `docs(fluxing): 批次 BM 交接文档回填提交实况` | 本文件 §12 |
+
+- 分支 `feat/100-cloud-sync`，基线 `8c8a93d`；**未 push**（**push 未授权**，与 BL 批同口径 ⇒ 提交留在本地，落后远端 3 个 commit）。
+- **提交范围刻意收窄**：只 `git add` BM 自己的文件。
+- **工作区既有污染一律未夹带**（提交后 `git status -sb` 仍为未暂存 / 未跟踪）：
+  `m librime`（子模块脏标记）、`release/`、`docs/design/quickpanel-v6/design-demos/{a-benchmark,b-craft,c-roulette}.html`、`reports/fluxing-bh-ui/probe-bh.ps1.bak-pass8`、`scripts/verify/{diag-host-window-enum,orphan-probe-host,verify-orphan-session-reclaim}.ps1`。
+- ⚠️ **一次自纠**：首次提交时误把**正文当成 subject**（三次 commit 的主题行都不是 Conventional Commits 格式，违反 P4）⇒ 已 `git reset --mixed 8c8a93d`（**工作区与索引内容无损**）后用正确主题重做三次提交；上表即**重做后**的真实 commit hash（`577af96` / `cc3c12f` / `50d9561` 是被丢弃的坏版本，**不在任何分支上**）。
