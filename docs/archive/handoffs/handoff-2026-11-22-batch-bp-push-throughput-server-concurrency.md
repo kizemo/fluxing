@@ -151,11 +151,18 @@ BO 批把 12002 定案为「服务端串行 R2 put ⇒ 64 条 = 40 071 ms ≫ �
 
 ---
 
-## 5. 收尾清理口径（本批**未做**，待下一轮）
+## 5. 收尾清理（本轮**已执行**，结果如实登记）
 
-- 探针账号 `bo12002.probe.20261122154809@example.com`（uid `e3653ed8-ec8c-4dcc-be50-a2a5ded88e6b`，`email_verified=1`）：D1 `sync_items` **已清空**（164 行删除，复查 count = 0）；**R2 仍留孤儿对象**（第一轮 82 + 第二轮 82）⇒ `wrangler r2 object` **无 `list` 子命令** ⇒ 需按 key **逐个 delete**。
-- 另 3 个僵尸账号（第一轮前缀 `probe-bo12002-20261122154809-*`）⇒ 按 `SELECT email FROM users WHERE email LIKE '%probe%'` 列出后逐个清理。
-- `pwsh -NoProfile -File tmp/bo-push-probe.ps1 -Mode Cleanup`（先删 R2 对象 → 再删 D1 行 → 再删账号）；其状态文件**含明文凭据，禁止入库**。
+命令：`pwsh -NoProfile -File tmp\bo-push-probe.ps1 -Mode Cleanup`（**CLEANUP_EXIT=0**，脚本自带的僵尸账号清理 scope 严格限定 `bo12002.probe.%@example.com`，不碰真实账号）。
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| D1 `sync_items`（探针数据） | ✅ **已清空** | Cleanup 输出 `CLEANUP D1_ROWS=0` / `CLEANUP REMAIN=0`；复查 `SELECT user_id, type, cipher_len FROM sync_items` **只剩 1 行** = 真实账号 `d42756f4-866c-465f-a9d4-aa6d47464426`（`type=userdb`、`cipher_len=75`）—— 与 BM/BN 登记的「云端 1 条格式非法的条目」**吻合** |
+| 3 个 `bo12002.probe.*` 僵尸账号 | ✅ **已删** | 清理前 `SELECT email FROM users WHERE email LIKE '%probe%'` 返回 5 个（`ak.probe.261111` / `ak.probe2.261111` / `bo12002.probe.20261122154416` / `...154614` / `...154809`）；清理后**只剩 2 个 `ak.probe.*`**，`users` 总数 = 4 |
+| R2 孤儿对象（第一轮 82 + 第二轮 82 = 164 个） | 🔴 **无法删除** | ① 本批早前已 `DELETE FROM sync_items WHERE user_id='e3653ed8-…'`（rows_written=164）⇒ **D1 行不存在，Cleanup 的 `SELECT id, item_key, r2_key` 取不到 key**（Cleanup 实跑 `R2_DELETE_LINES=0`）；② 服务端 `r2KeyFor(userId, keyHash)` 的 key 形如 `u/<user_id>/<sha256hex(item_key)>`（`cloud/fluxing-sync/src/wire.ts:210-213`），**sha256 不可逆推**；③ 探针报告 `reports/fluxing-bo-12002/push-probe-report.txt` 只留了 **1 条** `D1_ROW` 样本 ⇒ **item_key 集合未留存**、无法重建；④ `wrangler r2 object` **无 `list` 子命令**，R2 侧无枚举入口 ⇒ **本批无法定位删除**，只能留作孤儿（每个 ≤ 4 MiB，多数 64 B）。**待用户定**：若能取回当时 item_key 集合，按 `sha256(item_key)` 重建 key 后逐个 `wrangler r2 object delete "fluxing-sync/u/<uid>/<hash>" --remote` 即可清掉 |
+| 2 个 `ak.probe.*@example.com` 账号 | 🟡 **未删（刻意）** | 不属本批口径（脚本 scope 只含 `bo12002.probe.`）⇒ 属**更早批次**遗留，**无法确认是否仍被使用** ⇒ 不越权删除，**待用户定** |
+
+口令纪律：探针账号口令 = `auth_key`（44 字符），明文只在 `tmp/bo-push-probe-state.json` 与 `tmp/AN-register-qq.txt` 内，**不入日志 / 报告 / 对话 / 提交**。
 
 ---
 
