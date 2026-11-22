@@ -211,12 +211,20 @@ REASON=OK
 
 ---
 
-## 12. 提交实况
+## 12. 提交实况（**verified**）
 
-- 分支：`feat/100-cloud-sync` → 远端 `kizemo/feat/100-cloud-sync`（本批**未 push**，push 未获授权）。
-- 提交信息按 P4 Conventional Commits + 模块前缀：`fix(fluxing): …（批次 BN · ADR 0072）`。
-- 提交前必查（AGENTS.md）：`git status -sb` + `git diff --stat` ⇒ 确认**未夹带** `weasel.props` / `env.bat` / `*.obj`。
-- 既有污染（本批**不**夹带）：`librime`（子模块指针）、`release/`、`docs/design/quickpanel-v6/design-demos/{a-benchmark,b-craft,c-roulette}.html`、`reports/fluxing-bh-ui/probe-bh.ps1.bak-pass8`、`scripts/verify/{diag-host-window-enum,orphan-probe-host,verify-orphan-session-reclaim}.ps1`。
+- 分支：`feat/100-cloud-sync` → 远端 `kizemo/feat/100-cloud-sync`；本批提交后 **`[ahead 7]`**，**未 push**（push 未获用户授权）。
+- 按 BM 的分提交惯例落 **3 个提交**：
+
+| commit | 类型 | 内容 | 规模 |
+|---|---|---|---|
+| `cab485a` | `fix(WeaselServer)` | 成功态「最近同步」吃下本轮提示 —— 同步轮次新增结构化 notices 通道（ADR 0072）：4 个生产文件 + 单测 + ADR 0072 + ADR 索引 + CHANGELOG | 8 files, +421/−10 |
+| `78726e7` | `docs(fluxing)` | 批次 BN 交接文档、接力 prompt 与交接指针（本文档 + prompt + `CLAUDE.md` §2） | 3 files, +256/−2 |
+| `f16a314` | `docs(fluxing)` | 批次 BN 真机复验原始探针输出入库（`reports/fluxing-bk-syncstatus/sync-status-20261122-102915.txt`） | 1 file, +31 |
+
+- 提交前必查（AGENTS.md §3）：`git status -sb` + `git diff --stat` + `git diff --cached --stat` ⇒ 待提交集合 **12 files / +708 / −12**，**未夹带** `weasel.props` / `env.bat` / `*.obj`。
+- 提交后工作区只剩**既有污染**（本批**未**夹带）：`librime`（子模块指针 dirty）、`release/`、`docs/design/quickpanel-v6/design-demos/{a-benchmark,b-craft,c-roulette}.html`、`reports/fluxing-bh-ui/probe-bh.ps1.bak-pass8`、`scripts/verify/{diag-host-window-enum,orphan-probe-host,verify-orphan-session-reclaim}.ps1`。
+- 提交信息一律经**消息文件**（`git commit -F <file>`）落盘写入 ⇒ 规避「命令行传中文」的编码风险（本轮**未**使用 `git commit -m` 传中文）。
 
 ---
 
