@@ -26,6 +26,7 @@ import {
 } from './crypto';
 import { MAX_PUSH_ITEMS, compareHlc, r2KeyFor, validatePushItem } from './wire';
 import type { Hlc, ValidatedItem } from './wire';
+import { putAllWithConcurrency } from './r2-write';
 
 const DEFAULT_PULL_LIMIT = 50;
 const MAX_PULL_LIMIT = 100;
@@ -152,21 +153,27 @@ export async function handlePush(
     const keyHash = await sha256Hex(utf8(item.itemKey));
     staged.push({ itemKey: item.itemKey, r2Key: await r2KeyFor(auth.userId, keyHash) });
   }
-  for (let i = 0; i < accepted.length; i += 1) {
-    const item = accepted[i]!;
-    const target = staged[i]!;
-    await env.BUCKET.put(target.r2Key, item.cipherBytes, {
-      httpMetadata: { contentType: 'application/octet-stream' },
-      // 自定义元数据只放纯 ASCII（item_key / hlc_device 可能是中文），
-      // nonce 的权威来源是 D1 的 nonce_b64 列，这里只是给运维排查用。
-      customMetadata: {
-        type: item.type,
-        hlc_ms: String(item.hlc.ms),
-        hlc_counter: String(item.hlc.counter),
-        nonce_b64: item.nonceB64,
+  // R2 阶段内部并发化（ADR 0074）：单条 put ≈ 626–706 ms，串行 64 条 = 40 071 ms，
+  // 超过客户端 15 s 接收超时 ⇒ 真机报 12002（WinHTTP ERROR_WINHTTP_TIMEOUT）。
+  // 并发度取 6，写序仍是「R2 先、D1 后」，条目数上限仍是 64。
+  await putAllWithConcurrency(
+    env.BUCKET,
+    accepted.map((item, i) => ({
+      key: staged[i]!.r2Key,
+      value: item.cipherBytes,
+      options: {
+        httpMetadata: { contentType: 'application/octet-stream' },
+        // 自定义元数据只放纯 ASCII（item_key / hlc_device 可能是中文），
+        // nonce 的权威来源是 D1 的 nonce_b64 列，这里只是给运维排查用。
+        customMetadata: {
+          type: item.type,
+          hlc_ms: String(item.hlc.ms),
+          hlc_counter: String(item.hlc.counter),
+          nonce_b64: item.nonceB64,
+        },
       },
-    });
-  }
+    })),
+  );
 
   // 2) 再写 D1：DELETE + INSERT，让 UNIQUE(user_id, item_key) 下拿到新的自增 id，
   //    这样同一条目重推也能让 server_seq 前进（否则客户端会以为「没变化」）。
