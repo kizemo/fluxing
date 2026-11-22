@@ -1,4 +1,19 @@
 ## [1.3.8]
+### fix(fluxing): 成功态「最近同步」吃下本轮提示 —— 同步轮次新增结构化 notices 通道（批次 BN · ADR 0072）
+
+- **根因（BM §7/§10.2 登记的观测面缺口，不是 BM 引入）**：成功态 1017 的文案由 `AccountSyncStatusTextSuccess(when, pushed, pulled)` **独立拼装**，**不消费**轮次 `out->message` ⇒ BM 新增的「云端有 N 条格式非法的条目已跳过」「访问令牌已自动续期」两条提示**在成功态界面不可见**（失败态走 `AccountSyncStatusTextFailed(when, reason)` ⇒ 可见）⇒ 根因在 BK 批次 ADR 0069 的「成功态独立拼装」设计。
+- **修法（[ADR 0072](docs/adr/0072-sync-round-notices-visible-in-success-status.md)，9 条决策）**：
+  - **结构化 notices 通道**：`CloudSyncRoundResult` 新增 `std::vector<std::string> notices;`（位于 `WeaselServer/Cloud/CloudSyncEngine.h` **模块内部头**，**非** `include/WeaselIPCData.h` ⇒ 不触发 IPC 四边同步红线）；**不**解析中文 message blob；
+  - **notices 与 message 同源**：`CloudSyncService::SyncOnce` 在既有 message 拼装处，每段可选信息**用同一个字符串变量**既拼进 message、又推进 notices（数字也共用同一个 `std::string`）⇒ **message 逐字不变**，且单测可逐字断言「每条 notice 都逐字出现在 message 中」（宪法 R7 单一真相源）；
+  - 覆盖 6 类片段：换口令「加密密钥已变化，已重置本地同步状态并全量重推」、`items_skipped`「云端已有更新版本跳过 N 条」、`undecryptable`「旧密钥加密的行无法解密跳过 N 条」、`malformed`「云端有 N 条格式非法的条目已跳过」、`token_refreshed`「访问令牌已自动续期」、`has_more`「云端还有更多条目，下次同步继续」；
+  - **条件追加（保底不变量）**：`CloudAccountUi.h` 新增 `AccountSyncStatusTextSuccessWithNotices` / `AccountSyncManualDoneTextWithNotices` ⇒ **无提示时与旧函数逐字相同**；既有七个文案函数**逐字未动** ⇒ BK 批单测断言与既有探针期望值**零影响**；多条提示用**全角分号「；」**连接（不用逗号，避免与「推送 N 条，拉取 M 条」内的逗号混淆）；
+  - 手动同步 1006 状态行**一并消费** notices（基础串「同步完成：推送 N 条，拉取 M 条。」逐字不变，句末「。」保留）—— 同一轮提示只在一处显示 = 口径漂移的入口；
+  - **不动** IPC 协议 / 控件 ID / 布局表 / `librime/` / 第三方依赖 / 版本号（装机版仍 1.3.8.0，判定一律用 sha16 / 字节数，版本号无判别力）。
+- **单测（新组 BN，18 条断言 = 16 Check + 2 CheckMany，7 段）**：云单测 **`RESULT: PASS=704 FAIL=0 / VERDICT: ALL PASS`**（BM 基线 686 ⇒ **+18**）—— 判据全来自生产实现（复用 BM 假后端 `BmGateBackend`），覆盖保底不变量 / 单条提示 / 多条提示 / 既有 BK 断言零改动 / 协调器级 notices↔message 同源。
+- **门禁**：`BUILD_EXIT=0`（weasel.sln Release|Win32 **0 个警告 0 个错误**；makensis 仅 8 条**既有** `warning 7010` = ARM/ARM64 可选产物 + `data\*.gram` + `data\lua\*.txt`）· L0 静态门禁 **15/15**（`checks=15 pass=15 fail=0 skip=0`）· 定点 `clang-format 18.1.8 --style=file --lines=…` **4 个**改动文件首轮抓到 **1 处真实漂移** ⇒ `clang-format -i --lines=` 就地修 ⇒ **重算区间复检 0 漂移**（整文件存在**既有**漂移，故必须按改动行区间定点检查）· 改动文件 **U+FFFD=0**、`CHANGELOG.md` **CRLF-only**。
+- **出包装机**：`output/archives/fluxing-1.3.8-installer.exe` = **42 994 250 B** / sha16 `BA42507D75A8157D`；内嵌载荷 `output\Win32\WeaselServer.exe` = **2 801 664 B** / sha16 `9F4C6E7C9806D302`。
+- **装机实证**：`/S /D=D:\Program Files\fluxing` 静默装机 ⇒ 装机件 `D:\Program Files\fluxing\weasel\WeaselServer.exe` = **2 801 664 B / sha16 `9F4C6E7C9806D302`** ⇒ **`SHA_MATCH_BUILD_VS_INSTALLED=True`**；服务进程换为 **pid 193484**（10:28:35 起，ver 1.3.8.0，由**安装器自己换掉**）；`HKCU\Software\Fluxing\Weasel\RimeUserDir = D:\Program Files\fluxing\user1\fluxing` **未动**；**未登出、未登录、未改注册表**。
+- **真机复验（端到端闭合 BM 登记的观测面缺口）**：复用 `reports/fluxing-bk-syncstatus/probe-sync-status.ps1`（**未改探针一行**）⇒ `VERDICT=SYNC_STATUS_OBSERVABLE EXIT=0`；1017 由 BM 轮的 **「成功（推送 0 条，拉取 1 条）」** 变为 **「最近同步：2026-11-22 10:29:14 · 成功（推送 0 条，拉取 1 条；云端有 1 条格式非法的条目已跳过）」** ⇒ **成功态首次吃下本轮提示**；`SYNC_STATUS_CHANGED=True` / `SYNC_STATUS_HAS_TIMESTAMP=True` / `SYNC_STATUS_RESULT_KIND=SUCCESS` / `STATUS_LINE_1006_CHANGED=True`（手动同步 1006 同源）；诊断文件同轮命中直证行 `[cloudsync] skipped malformed cloud userdb entry (payload shape invalid)`（10:28:39）。
 ### fix(fluxing): 云端形态非法的旧条目不再毒化整轮同步 —— 跳过并单独计数（批次 BM · ADR 0071）
 
 - **根因（BL §13/§14 真机新发现的独立缺陷）**：`WeaselServer/Cloud/CloudSyncService.cpp` 的 `OpenItemsTolerant`（容错解密层）**只判「解不开 / 类型不可识别」，不校验 payload 形态** ⇒ 云端一条**历史遗留**的 userdb 条目（payload 里没有制表符）被原样放进合并集 ⇒ 写回阶段 `WeaselServer/Cloud/CloudUserDictIo.cpp` 的 `BuildUserDictSnapshots` 判定「词典条目载荷格式不正确。」并 **fail loud** ⇒ **整轮同步失败**（本地 94 601 条数据行全 3 列 ⇒ **本地已被证伪，凶手在云端**；服务端**没有「删条目」API** ⇒ 脏条目只能靠客户端跳过）。

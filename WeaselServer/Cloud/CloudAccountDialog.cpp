@@ -70,6 +70,18 @@ using widgets::SecureZeroWide;
 using widgets::ToUtf8;
 using widgets::ToWide;
 
+// 轮次提示（窄字符 UTF-8）→ 宽字符（账号页文案用）。
+// ADR 0072：成功态 1017 / 手动同步 1006 都要显示本轮的**结构化提示**
+// （跳过计数 / 令牌已续期…），而不再只是解析中文 message blob。
+std::vector<std::wstring> ToWideNotices(
+    const std::vector<std::string>& narrow) {
+  std::vector<std::wstring> wide;
+  wide.reserve(narrow.size());
+  for (size_t i = 0; i < narrow.size(); ++i)
+    wide.push_back(ToWide(narrow[i]));
+  return wide;
+}
+
 // sidecar 落点（用户数据目录 / 窄路径）：真相源 = ResolveFluxingUserDataPath
 // （读注册表 RimeUserDir，回退 %AppData%\fluxing）。
 // 协调器内部用窄路径 API（std::ofstream / std::ifstream），落点必须是 ASCII。
@@ -377,8 +389,11 @@ class CloudAccountController::Impl {
 
     const std::wstring when = FormatLocalTimeMs(NowUnixMs());
     if (ok) {
-      SetSyncStatus(AccountSyncStatusTextSuccess(when, out->items_pushed,
-                                                 out->items_pulled));
+      // ADR 0072: 成功态也要显示本轮的**可选提示**（跳过计数 / 令牌已续期…）。
+      // 无提示时与既有文案逐字相同 ⇒ BK 单测与探针期望值零影响。
+      SetSyncStatus(AccountSyncStatusTextSuccessWithNotices(
+          when, out->items_pushed, out->items_pulled,
+          ToWideNotices(out->notices)));
     } else if (out->skipped) {
       // ADR 0062 决策 2: 跳过 ≠ 失败 —— 用「已跳过」措辞，别吓人。
       std::string reason = err.empty() ? out->message : err;
@@ -845,10 +860,11 @@ void CloudAccountController::SubmitSyncNow() {
     CloudSyncRoundResult result;
     const bool ok = impl->RunSyncRound(SyncDirection::kBoth, &result);
     if (ok) {
+      // ADR 0072: 同 1017，一并消费本轮的可选提示（基础串逐字不变）。
       impl->SetStatus(CloudStatusScope::kAccount,
-                      L"同步完成：推送 " +
-                          std::to_wstring(result.items_pushed) + L" 条，拉取 " +
-                          std::to_wstring(result.items_pulled) + L" 条。");
+                      AccountSyncManualDoneTextWithNotices(
+                          result.items_pushed, result.items_pulled,
+                          ToWideNotices(result.notices)));
     } else if (result.skipped) {
       // ADR 0062 决策 3: 手动同步**不绕过**闸门 —— 给明确提示 + 指引。
       impl->SetStatus(CloudStatusScope::kAccount,

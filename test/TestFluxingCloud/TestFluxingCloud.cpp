@@ -75,6 +75,9 @@
 #include "../../WeaselServer/Cloud/CloudAccountUi.h"
 #include "../../WeaselServer/Cloud/CloudAccountHistory.h"
 #include "../../WeaselServer/Cloud/CloudAccountWindowState.h"
+// 批次 BN（ADR 0072）：轮次提示是**窄字符**，界面文案要宽字符 ⇒ 转换用生产
+// 那份 widgets::ToWide，不在本文件里复制第二份（R7）。
+#include "../../WeaselServer/Cloud/CloudAccountWidgets.h"
 
 // 批次 AK：真实 WinHTTP 传输层的回环回归用例（单独文件，见其头注释）。
 int RunFluxingCloudNetTests(int* out_pass);
@@ -4282,6 +4285,199 @@ void TestCloudUserDictMalformedEntry() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 批次 BN · ADR 0072：成功态「最近同步」状态行要**吃下**本轮提示
+//
+// 缺口（批次 BM 真机复验发现）：成功态 1017 走
+// AccountSyncStatusTextSuccess(when, pushed, pulled) 独立拼装，**不消费**轮次
+// message ⇒ BM 拼进 message 的两条提示（「云端有 N 条格式非法的条目已跳过」
+// 「访问令牌已自动续期」）在**成功态界面看不到**（只有失败态看得到）。
+//
+// 修法：① 共享真相源新增 AccountSyncStatusTextSuccessWithNotices —— 既有七种
+// 文案**逐字不动**，没有提示时返回值与旧函数完全一致（这样旧调用方零改动）；
+// ② 轮次结果新增 notices（窄字符 UTF-8），由协调器在**拼 message 的同一处**
+// 填充 ⇒ 提示与 message **同源**，不会出现「两套措辞各说各话」。
+//
+// 判据全部取自**生产实现**（constitution R7），单测内写独立期望值逐字比对。
+// ---------------------------------------------------------------------------
+
+// notices 里有没有**逐字**等于 needle 的那一条。
+bool BnHasNotice(const std::vector<std::string>& notices,
+                 const std::string& needle) {
+  for (size_t i = 0; i < notices.size(); ++i) {
+    if (notices[i] == needle)
+      return true;
+  }
+  return false;
+}
+
+void TestSyncStatusNotices() {
+  std::printf("[BN] 成功态「最近同步」吃下本轮提示（notices ⇒ 界面文案）\n");
+
+  const std::wstring when = L"2026-11-22 09:20:49";
+
+  // ① 保底不变量：**没有提示**时，新函数必须与既有成功文案逐字相同 ——
+  //    既有七种文案是 BK 批次的地基，动它就是回归。
+  {
+    const std::vector<std::wstring> none;
+    const std::wstring got =
+        fc::AccountSyncStatusTextSuccessWithNotices(when, 0, 1, none);
+    Check(got == fc::AccountSyncStatusTextSuccess(when, 0, 1),
+          "BN 保底：无提示 ⇒ 与既有成功文案逐字相同");
+    Check(
+        got == L"最近同步：2026-11-22 09:20:49 · 成功（推送 0 条，拉取 1 条）",
+        "BN 保底：无提示 ⇒ 逐字等于既有成功文案");
+  }
+
+  // ② 单条提示：提示追加在「成功（…）」的括号内，分隔符是全角分号。
+  {
+    std::vector<std::wstring> notices;
+    notices.push_back(L"云端有 1 条格式非法的条目已跳过");
+    Check(fc::AccountSyncStatusTextSuccessWithNotices(when, 0, 1, notices) ==
+              L"最近同步：2026-11-22 09:20:49 · 成功（推送 0 条，拉取 1 条；"
+              L"云端有 1 条格式非法的条目已跳过）",
+          "BN 单条提示：逐字相符");
+  }
+
+  // ③ 多条提示：两条之间也是全角分号。
+  {
+    std::vector<std::wstring> notices;
+    notices.push_back(L"云端有 1 条格式非法的条目已跳过");
+    notices.push_back(L"访问令牌已自动续期");
+    Check(fc::AccountSyncStatusTextSuccessWithNotices(when, 0, 1, notices) ==
+              L"最近同步：2026-11-22 09:20:49 · 成功（推送 0 条，拉取 1 条；"
+              L"云端有 1 条格式非法的条目已跳过；访问令牌已自动续期）",
+          "BN 多条提示：逐字相符");
+  }
+
+  // ③' 同一批提示也要能进**手动同步**状态行(1006)：那是同一条链路的另一处
+  //    落点，基础串同样逐字不变（无提示时与既有文案完全一致）。
+  {
+    const std::vector<std::wstring> none;
+    Check(fc::AccountSyncManualDoneTextWithNotices(0, 1, none) ==
+              fc::AccountSyncManualDoneText(0, 1),
+          "BN 手动同步保底：无提示 ⇒ 与既有文案逐字相同");
+    std::vector<std::wstring> notices;
+    notices.push_back(L"云端有 1 条格式非法的条目已跳过");
+    Check(fc::AccountSyncManualDoneTextWithNotices(0, 1, notices) ==
+              L"同步完成：推送 0 条，拉取 1 条；云端有 1 "
+              L"条格式非法的条目已跳过。",
+          "BN 手动同步：提示逐字追加在句末「。」之前");
+  }
+
+  // ⑤ 协调器级「同源」见证：云端混入一条形态非法的 userdb 条目 ⇒ 本轮
+  //    **成功**，且那条提示既要进 notices、也要逐字出现在 message 里。
+  //    假后端复用 BM 组的 BmGateBackend —— 它导出的是**可解析**的快照文本
+  //    （空快照会被 ParseUserDictSnapshots 判失败：空 ≠ 本地没有条目），
+  //    这正是 BM 批踩过的坑，所以不另造假后端。
+  {
+    const std::vector<uint8_t> key(32, 0x35);
+    const fc::Hlc hlc = TestHlc();
+    std::vector<fc::Entry> entries;
+    entries.push_back(BmWellFormedEntry(hlc));
+    entries.push_back(BmMalformedEntry(hlc));
+    std::vector<fc::CloudSyncItem> sealed;
+    std::string err;
+    Check(fc::SealEntries(entries, fc::ItemType::kUserDb, key, &sealed, &err),
+          "BN 协调器：两条 userdb 条目可封包");
+    std::string body = "{\"items\":[";
+    body += BmPullItemJson(sealed[0]);
+    body += ",";
+    body += BmPullItemJson(sealed[1]);
+    body += "],\"server_seq\":11,\"next_cursor\":11,\"has_more\":false}";
+
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{true, 200, body});
+    BmGateBackend backend;
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-bn",
+                                         "dev-bn", key, std::string());
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(
+        coordinator.SyncOnce(fc::SyncDirection::kPullOnly, &result, &round_err),
+        "BN 协调器：云端混入脏条目 ⇒ 本轮成功");
+    Check(result.ok, "BN 协调器：结果标记为成功");
+
+    // notices 里逐字存在那条提示。
+    Check(BnHasNotice(result.notices, "云端有 1 条格式非法的条目已跳过"),
+          "BN 协调器：notices 里逐字有「云端有 1 条格式非法的条目已跳过」");
+    Check(result.message.find("云端有 1 条格式非法的条目已跳过") !=
+              std::string::npos,
+          "BN 协调器：同一条提示逐字出现在 message 里（notices 与 message "
+          "同源）");
+
+    // ⑥ 逐条判定：notices 的**每一条**都必须逐字出现在 message 里 ——
+    //    只查第一条会漏掉「后面几条另起炉灶」的分叉措辞。
+    bool all_in_message = !result.notices.empty();
+    for (size_t i = 0; i < result.notices.size(); ++i) {
+      if (result.message.find(result.notices[i]) == std::string::npos)
+        all_in_message = false;
+    }
+    CheckMany(all_in_message,
+              "BN 协调器：notices 的每一条都逐字出现在 message 里",
+              static_cast<int>(result.notices.size()));
+
+    // 界面侧：把这批提示喂给共享真相源 ⇒ 成功态 1017 真能看到它们。
+    //    这正是本批要补的缺口：提示此前只活在 message 里，界面看不见。
+    //    窄字符 → 宽字符用**生产**那份 widgets::ToWide（与账号页同一条路）。
+    std::vector<std::wstring> wide_notices;
+    for (size_t i = 0; i < result.notices.size(); ++i)
+      wide_notices.push_back(fc::widgets::ToWide(result.notices[i]));
+    const std::wstring ui_text = fc::AccountSyncStatusTextSuccessWithNotices(
+        when, result.items_pushed, result.items_pulled, wide_notices);
+    Check(
+        ui_text.find(L"云端有 1 条格式非法的条目已跳过") != std::wstring::npos,
+        "BN 界面：成功态文案里能看到「云端有 1 条格式非法的条目已跳过」");
+  }
+
+  // ⑦ 第二条提示的来源轮：401 → 续期 → 重试。「访问令牌已自动续期」这条
+  //    提示与 ⑤ 轮的「格式非法」同源（同一个 notices 通道）⇒ 两条提示在
+  //    成功态界面里必须**一起**出现，而不是各走各的。
+  {
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 401,
+        "{\"error\":{\"code\":\"token_expired\","
+        "\"message\":\"访问令牌已过期，请用刷新令牌续期。\"}}"});
+    transport.replies.push_back(
+        MockTransport::Reply{true, 200,
+                             "{\"items\":[],\"server_seq\":3,\"next_cursor\":3,"
+                             "\"has_more\":false}"});
+    BmGateBackend backend;
+    fc::CloudSyncCoordinator coordinator(
+        &transport, &backend, "tok-bn2", "dev-bn2",
+        std::vector<uint8_t>(32, 0x36), std::string());
+    int refresh_calls = 0;
+    coordinator.SetAccessTokenRefresher(
+        [&refresh_calls](std::string* out_token, std::string*) -> bool {
+          ++refresh_calls;
+          if (out_token != nullptr)
+            *out_token = "tok-bn2-new";
+          return true;
+        });
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(
+        coordinator.SyncOnce(fc::SyncDirection::kPullOnly, &result, &round_err),
+        "BN 协调器：401 续期后重试成功");
+    Check(refresh_calls == 1, "BN 协调器：续期回调被调用一次");
+    Check(result.message.find("访问令牌已自动续期") != std::string::npos,
+          "BN 协调器：message 里逐字有「访问令牌已自动续期」");
+    Check(BnHasNotice(result.notices, "访问令牌已自动续期"),
+          "BN 协调器：notices 里逐字有「访问令牌已自动续期」");
+    // 同源不变式：notices 的每一条都必须逐字出现在 message 里（判据空真时
+    //    不判红 —— 上面 ⑤ 轮则相反：那里提示必须存在，不许空）。
+    bool all_in_message = true;
+    for (size_t i = 0; i < result.notices.size(); ++i) {
+      if (result.message.find(result.notices[i]) == std::string::npos)
+        all_in_message = false;
+    }
+    CheckMany(all_in_message,
+              "BN 协调器（续期轮）：notices 的每一条都逐字出现在 message 里",
+              static_cast<int>(result.notices.size()));
+  }
+}
+
 int main() {
   ::SetConsoleOutputCP(CP_UTF8);
   std::printf("==== TestFluxingCloud · spec 100 阶段 B（契约与客户端纯逻辑）====\n");
@@ -4356,6 +4552,10 @@ int main() {
 
   // 批次 BM · ADR 0071：云端混入形态非法的条目 ⇒ 跳过它，不毒化整轮同步。
   TestCloudUserDictMalformedEntry();
+
+  // 批次 BN · ADR 0072：成功态「最近同步」状态行吃下本轮提示
+  // （notices ⇒ 界面文案，与 message 同源）。
+  TestSyncStatusNotices();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。

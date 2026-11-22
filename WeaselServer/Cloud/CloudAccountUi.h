@@ -294,6 +294,62 @@ inline std::wstring AccountSyncStatusTextSuccess(const std::wstring& when,
          L" 条，拉取 " + std::to_wstring(pulled) + L" 条）";
 }
 
+// ADR 0072: 一轮同步成功 + **可选提示**（notices）。
+//
+// ⚠️ 无提示时与 AccountSyncStatusTextSuccess **逐字相同**（保底不变量）——
+//    既有 BK 单测断言与既有探针期望值零影响。
+// ⚠️ 追加用全角分号「；」；既有七个文案函数逐字不动。
+// ⚠️ 提示文本来自 CloudSyncRoundResult::notices，与轮次 message 同源
+//    （同一批文案字符串）⇒ 单测可逐字断言「每条 notice 都出现在 message 里」。
+inline std::wstring AccountSyncStatusTextSuccessWithNotices(
+    const std::wstring& when,
+    int pushed,
+    int pulled,
+    const std::vector<std::wstring>& notices) {
+  std::wstring text = AccountSyncStatusTextSuccess(when, pushed, pulled);
+  std::wstring extra;
+  for (size_t i = 0; i < notices.size(); ++i) {
+    if (notices[i].empty())
+      continue;
+    if (!extra.empty())
+      extra += L"；";
+    extra += notices[i];
+  }
+  if (extra.empty() || text.empty())
+    return text;
+  // 成功文案以全角右括号「）」收尾 ⇒ 在其前插入提示。
+  text.insert(text.size() - 1, L"；" + extra);
+  return text;
+}
+
+// 手动同步（kIdStatus = 1006）完成文案 —— 基础串逐字不变。
+inline std::wstring AccountSyncManualDoneText(int pushed, int pulled) {
+  return L"同步完成：推送 " + std::to_wstring(pushed) + L" 条，拉取 " +
+         std::to_wstring(pulled) + L" 条。";
+}
+
+// ADR 0072: 手动同步完成文案 + 可选提示。
+// ⚠️ 无提示时与 AccountSyncManualDoneText **逐字相同**；追加时句末「。」保留。
+inline std::wstring AccountSyncManualDoneTextWithNotices(
+    int pushed,
+    int pulled,
+    const std::vector<std::wstring>& notices) {
+  std::wstring text = AccountSyncManualDoneText(pushed, pulled);
+  std::wstring extra;
+  for (size_t i = 0; i < notices.size(); ++i) {
+    if (notices[i].empty())
+      continue;
+    if (!extra.empty())
+      extra += L"；";
+    extra += notices[i];
+  }
+  if (extra.empty() || text.empty())
+    return text;
+  // 基础串以全角句点「。」收尾 ⇒ 在其前插入「；提示」。
+  text.insert(text.size() - 1, L"；" + extra);
+  return text;
+}
+
 // 一轮同步被维护闸门跳过（ADR 0062 决策 2：跳过 ≠ 失败，措辞不许吓人）。
 inline std::wstring AccountSyncStatusTextSkipped(const std::wstring& when,
                                                  const std::wstring& reason) {

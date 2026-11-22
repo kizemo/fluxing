@@ -78,6 +78,11 @@ struct CloudSyncRoundResult {
   // ADR 0062: 本轮被「维护准入闸门」跳过（**不是失败**）。
   bool skipped = false;
   std::string message;    // 中文说明
+  // ADR 0072: 本轮的**可选提示**（结构化，窄字符 UTF-8）。
+  // 与 message **同源**（同一批文案字符串）⇒ 成功态界面能直接显示
+  // 「云端有 N 条格式非法的条目已跳过」这类信息，而不必去解析中文
+  // message blob（constitution R7 单一真相源）。
+  std::vector<std::string> notices;
 };
 
 // 对外可读的状态快照（UI 线程安全读取）。

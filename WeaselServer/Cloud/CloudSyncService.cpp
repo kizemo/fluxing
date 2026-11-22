@@ -888,6 +888,8 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   // ADR 0062: 「跳过」标记（闸门关闭 => 整轮跳过，不是失败）。
   out->skipped = false;
   out->message.clear();
+  // ADR 0072: 本轮的可选提示（成功态界面要显示它们）。
+  out->notices.clear();
 
   if (transport_ == nullptr || backend_ == nullptr) {
     if (err)
@@ -1267,9 +1269,17 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   out->ok = true;
   out->has_more = has_more;
   std::string message;
+  // ★ 批次 BN / ADR 0072：本轮的**可选提示**（结构化）。
+  //    每条 notice 的文案与 message 里对应片段**逐字同源**（同一个字符串
+  //    变量）⇒ 单测可断言「每条 notice 都逐字出现在 message 中」。
+  //    ⚠️ message 的**逐字输出不变**（既有探针/日志期望值不受影响）。
+  std::vector<std::string> notices;
   if (key_rotated_) {
     // 换口令 ⇒ enc_key 变 ⇒ 旧 sidecar 的「已同步」标记全部作废。
-    message += "加密密钥已变化，已重置本地同步状态并全量重推。";
+    const std::string text = "加密密钥已变化，已重置本地同步状态并全量重推";
+    message += text;
+    message += "。";
+    notices.push_back(text);
   }
   message += "同步完成：推送 ";
   message += std::to_string(out->items_pushed);
@@ -1277,30 +1287,40 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   message += std::to_string(out->items_pulled);
   message += " 条";
   if (out->items_skipped > 0) {
+    const std::string count = std::to_string(out->items_skipped);
     message += "，云端已有更新版本跳过 ";
-    message += std::to_string(out->items_skipped);
+    message += count;
     message += " 条";
+    notices.push_back("云端已有更新版本跳过 " + count + " 条");
   }
   if (undecryptable > 0) {
+    const std::string count = std::to_string(undecryptable);
     message += "，旧密钥加密的行无法解密跳过 ";
-    message += std::to_string(undecryptable);
+    message += count;
     message += " 条";
+    notices.push_back("旧密钥加密的行无法解密跳过 " + count + " 条");
   }
   if (malformed > 0) {
     // ★ 批次 BM / ADR 0071：形态非法的云端条目**已跳过**，不再毒化整轮。
+    const std::string count = std::to_string(malformed);
     message += "，云端有 ";
-    message += std::to_string(malformed);
+    message += count;
     message += " 条格式非法的条目已跳过";
+    notices.push_back("云端有 " + count + " 条格式非法的条目已跳过");
   }
   if (token_refreshed) {
     // ★ 批次 BM / ADR 0071：把「401 → 续期 → 重试」变成**人眼可见的直接
     //   证据**（此前只有日志里的强推断）。
     message += "，访问令牌已自动续期";
+    notices.push_back("访问令牌已自动续期");
   }
-  if (has_more)
+  if (has_more) {
     message += "（云端还有更多条目，下次同步继续）";
+    notices.push_back("云端还有更多条目，下次同步继续");
+  }
   message += "。";
   out->message = message;
+  out->notices = notices;
   return true;
 }
 
