@@ -156,7 +156,14 @@ bool SplitDictRow(const std::string& row,
                   std::string* err);
 
 // 从「词条 + 其余列」还原出「一行快照」。
-std::string JoinDictRow(const CloudDictEntry& entry);
+// 形态非法 ⇒ false + err 中文原因。
+//
+// ★ 批次 BM / ADR 0071：旧签名在形态非法时返回**空串**，调用方会把它写成
+//   **空行**（静默丢数据）。该路径在当前调用链上**不可达**（写回阶段第一轮
+//   已 fail loud），但它仍是**公开 API 层面的陷阱** ⇒ 改成显式报错。
+bool JoinDictRow(const CloudDictEntry& entry,
+                 std::string* out,
+                 std::string* err);
 
 // item_key 拼装 / 拆解：item_key = "<词典名>\t<词条>"。
 std::string MakeDictItemKey(const std::string& dict, const std::string& phrase);
@@ -168,6 +175,18 @@ bool SplitDictItemKey(const std::string& item_key,
 bool SplitDictPayload(const std::string& payload,
                       std::string* code,
                       std::string* value);
+
+// 判定一条「用户词典条目」的形态是否合法：
+//   item_key = "<词典名>\t<词条>"   （可被 SplitDictItemKey 拆开）
+//   payload  = "<code>\t<value>"     （可被 SplitDictPayload 拆开）
+//
+// ★ 单一真相源（宪法 R7 · 批次 BM / ADR 0071）：写回阶段
+//   BuildUserDictSnapshots 的合法性判定就是这两条拆解，所以**开箱侧**
+//   （云端条目）与**解析侧**（本地快照）必须复用本函数 ——
+//   否则「谁能进合并集」与「谁能把合并集写回去」两套口径漂移，
+//   脏数据又会重新毒化整轮同步（BM 的结构性根因）。
+bool IsValidUserDictEntryShape(const std::string& item_key,
+                               const std::string& payload);
 
 // ---------------------------------------------------------------------------
 // 维护态钩子

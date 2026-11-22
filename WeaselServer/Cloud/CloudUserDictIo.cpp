@@ -106,6 +106,11 @@ bool ParseUserDictSnapshots(const std::string& text,
     entry.payload = cols[0];
     if (cols.size() >= 3)
       entry.payload += "\t" + cols[2];
+    // ★ 形态校验（批次 BM / ADR 0071）：**只有 2 列**的数据行会产出无制表符
+    //   的 payload —— 它会在写回阶段让 BuildUserDictSnapshots 整体失败
+    //   ⇒ 一条脏行毒化整轮同步。与开箱侧共用同一个判定函数（单一真相源）。
+    if (!IsValidUserDictEntryShape(entry.text, entry.payload))
+      continue;  // 形态非法的行跳过，不毒化整轮
     (*out)[current_index].rows.push_back(entry);
   }
 
@@ -178,7 +183,19 @@ bool BuildUserDictSnapshots(const std::vector<CloudDictEntry>& rows,
     out->append(std::to_string(max_tick));
     out->append("\n");
     for (size_t i = 0; i < items.size(); ++i) {
-      out->append(JoinDictRow(*items[i]));
+      std::string row;
+      std::string row_err;
+      if (!JoinDictRow(*items[i], &row, &row_err)) {
+        // ★ 批次 BM / ADR 0071：写回阶段保持 **fail loud**（不改成跳过）。
+        //   「跳过」只发生在两处关口 —— 开箱侧（OpenItemsTolerant）与本地
+        //   解析侧（ParseUserDictSnapshots）—— 它们保证合并集里**不会**有
+        //   形态非法的行。这里的失败信号是 canary：一旦它响了，说明上游
+        //   把关漏了，必须暴露，绝不能静默写出一行空数据。
+        if (err)
+          *err = row_err.empty() ? "词典条目载荷格式不正确。" : row_err;
+        return false;
+      }
+      out->append(row);
       out->append("\n");
     }
   }
@@ -232,21 +249,35 @@ bool SplitUserDictSnapshotSections(const std::string& text,
   return true;
 }
 
-std::string JoinDictRow(const CloudDictEntry& entry) {
+bool JoinDictRow(const CloudDictEntry& entry,
+                 std::string* out,
+                 std::string* err) {
+  if (out == nullptr) {
+    if (err)
+      *err = "内部错误：词典行输出为空。";
+    return false;
+  }
   std::string dict;
   std::string phrase;
-  if (!SplitDictItemKey(entry.text, &dict, &phrase))
-    return std::string();
+  if (!SplitDictItemKey(entry.text, &dict, &phrase)) {
+    if (err)
+      *err = "词典条目键格式不正确。";
+    return false;
+  }
   std::string code;
   std::string value;
-  if (!SplitDictPayload(entry.payload, &code, &value))
-    return std::string();
+  if (!SplitDictPayload(entry.payload, &code, &value)) {
+    if (err)
+      *err = "词典条目载荷格式不正确。";
+    return false;
+  }
   std::string row = code;
   row += "\t";
   row += phrase;
   row += "\t";
   row += value;
-  return row;
+  *out = row;
+  return true;
 }
 
 bool SplitDictRow(const std::string& row,
@@ -302,6 +333,33 @@ bool SplitDictPayload(const std::string& payload,
     return false;
   *code = payload.substr(0, tab);
   *value = payload.substr(tab + 1);
+  return true;
+}
+
+// ★ 批次 BM / ADR 0071：用户词典条目的**形态**判定（单一真相源 · 宪法 R7）。
+//
+// 词典条目的线格式（明文形态）：
+//   item_key = "<词典名>\t<词条>"   （由 MakeDictItemKey 造）
+//   payload  = "<码>\t<值>"         （值形如 "c=<n> d=<x> t=<tick>"）
+//
+// 为什么必须校验：payload 缺制表符的条目会在写回阶段让
+// BuildUserDictSnapshots 整体失败（「词典条目载荷格式不正确。」）
+// ⇒ **一条脏条目毒化每一轮同步**（批次 BK 真机复现：云端躺着一条旧条目，
+//   整轮同步永远失败）。开箱侧（OpenItemsTolerant）与本地解析侧
+//   （ParseUserDictSnapshots）复用本函数 ⇒ 两套口径永不漂移。
+//
+// 只对 **userdb** 类条目生效：phrases / config 的 payload 不是词典行形状，
+// 拿词典口径去卡它们会误伤（批次 BM 单测 ⑤ 是这条的正控制）。
+bool IsValidUserDictEntryShape(const std::string& item_key,
+                               const std::string& payload) {
+  std::string dict;
+  std::string phrase;
+  if (!SplitDictItemKey(item_key, &dict, &phrase))
+    return false;
+  std::string code;
+  std::string value;
+  if (!SplitDictPayload(payload, &code, &value))
+    return false;
   return true;
 }
 

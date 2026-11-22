@@ -4019,6 +4019,269 @@ void TestCloudSync401RefreshRetry() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 批次 BM / ADR 0071：云端混入形态非法的条目 ⇒ 跳过它，不让它毒化整轮同步
+//
+// 根因（批次 BK 真机复现）：云端躺着**一条 payload 无制表符的旧条目**，它经
+// OpenItemsTolerant（不校验 payload 形态）进入合并集 ⇒ 在写回阶段让
+// BuildUserDictSnapshots 报「词典条目载荷格式不正确。」⇒ **一条脏数据毒化
+// 每一轮同步**。
+//
+// 修法（ADR 0071）：① 形态判定收敛到**单一真相源** IsValidUserDictEntryShape；
+// ② 开箱侧对 **userdb** 条目按该口径校验，非法者跳过并**单独计数**
+// （malformed），不与「解不开」（undecryptable）混计；③ 本地解析侧同样跳过
+// 形态非法的数据行；④ JoinDictRow 改成显式报错（旧签名静默返回空串 ⇒
+// 静默丢数据）。
+//
+// 判据全部取自**生产实现**（constitution R7），单测内写独立期望值逐字比对。
+// ---------------------------------------------------------------------------
+
+// 一条形态非法的 userdb 条目：payload 缺制表符（旧云端条目的形态）。
+fc::Entry BmMalformedEntry(const fc::Hlc& hlc) {
+  fc::Entry e;
+  e.key = "luna_pinyin\t旧词条";
+  e.payload = "code9";  // ← 没有制表符 ⇒ 形态非法
+  e.hlc = hlc;
+  return e;
+}
+
+// 一条形态合法的 userdb 条目。
+fc::Entry BmWellFormedEntry(const fc::Hlc& hlc) {
+  fc::Entry e;
+  e.key = "luna_pinyin\t词条一";
+  e.payload = "code1\tc=1 d=0 t=1";
+  e.hlc = hlc;
+  return e;
+}
+
+// 已封好的条目 → 拉取响应里的 JSON 条目（字段名与 ParsePullResponse 一致）。
+// server_seq 是**条目级**游标：拉取响应的游标推进优先吃条目自带的 server_seq
+// （顶层 server_seq 只是「条目都没带」时的兜底）⇒ 多页用例必须逐页递增值，
+// 否则第二轮会因「游标没前进」而提前收手。
+std::string BmPullItemJson(const fc::CloudSyncItem& item,
+                           int64_t server_seq = 1) {
+  std::string s = "{\"item_key\":\"";
+  s += item.item_key;
+  s += "\",\"type\":\"";
+  s += item.type;
+  s += "\",\"hlc\":";
+  s += fc::HlcToJson(item.hlc);
+  s += ",\"nonce\":\"";
+  s += item.nonce_b64;
+  s += "\",\"cipher\":\"";
+  s += item.cipher_b64;
+  s += "\",\"server_seq\":";
+  s += std::to_string(server_seq);
+  s += "}";
+  return s;
+}
+
+// 假后端（BM）：与 BL 同款 —— 导出**可解析**的最小快照（空快照会被
+// ParseUserDictSnapshots 判失败：空 ≠ 没有本地条目），并记录回写文本
+// （用来断言脏条目没被写回本地）。
+struct BmGateBackend : public fc::IUserDictBackend {
+  bool CheckMaintenanceGate(std::string* reason) const override {
+    if (reason != nullptr)
+      reason->clear();
+    return true;
+  }
+  bool BeginMaintenance(std::string* err) override { return true; }
+  bool EndMaintenance(std::string* err) override { return true; }
+  bool ExportUserDict(std::string* out, std::string* err) override {
+    if (out != nullptr)
+      *out =
+          "# Rime user dictionary\n#@/db_name\tuserdb\n#@/tick\t1\n"
+          "code0\t本地词条\tc=0 d=0 t=1\n";
+    return true;
+  }
+  bool ImportUserDict(const std::string& text,
+                      int* imported,
+                      std::string* err) override {
+    imported_text = text;
+    if (imported != nullptr)
+      *imported = 1;
+    return true;
+  }
+  std::string imported_text;  // 最近一次回写本地库的快照文本
+};
+
+void TestCloudUserDictMalformedEntry() {
+  std::printf("[BM] 云端混入形态非法的条目 ⇒ 跳过它，不毒化整轮同步\n");
+  std::string err;
+
+  // ① 形态判定（单一真相源）。
+  Check(fc::IsValidUserDictEntryShape("luna_pinyin\t你好", "1234\tc=1 d=0 t=1"),
+        "BM 形态：合法条目通过");
+  Check(!fc::IsValidUserDictEntryShape("luna_pinyin你好", "1234\tc=1 d=0 t=1"),
+        "BM 形态：item_key 缺制表符 ⇒ 不通过");
+  Check(!fc::IsValidUserDictEntryShape("luna_pinyin\t你好", "1234"),
+        "BM 形态：payload 缺制表符 ⇒ 不通过");
+
+  // ② JoinDictRow：旧签名在形态非法时静默返回空串 ⇒ 静默丢数据。
+  {
+    fc::CloudDictEntry good;
+    good.text = "luna_pinyin\t你好";
+    good.payload = "1234\tc=1 d=0 t=1";
+    std::string row;
+    std::string row_err;
+    Check(fc::JoinDictRow(good, &row, &row_err),
+          "BM JoinDictRow：合法条目可拼行");
+    Check(row == "1234\t你好\tc=1 d=0 t=1", "BM JoinDictRow：拼出的行逐字正确");
+    Check(row_err.empty(), "BM JoinDictRow：合法条目没有错误原因");
+
+    fc::CloudDictEntry bad;
+    bad.text = "luna_pinyin\t你好";
+    bad.payload = "1234";  // ← 缺制表符
+    std::string bad_row = "未写入";
+    std::string bad_err;
+    Check(!fc::JoinDictRow(bad, &bad_row, &bad_err),
+          "BM JoinDictRow：形态非法 ⇒ 明确失败（旧签名会静默返回空串）");
+    Check(!bad_err.empty(), "BM JoinDictRow：形态非法 ⇒ 给出中文原因");
+    Check(bad_row == "未写入",
+          "BM JoinDictRow：形态非法 ⇒ 不写出空行（不静默丢数据）");
+  }
+
+  // ③ ParseUserDictSnapshots 收窄：2 列的脏数据行被跳过，其余行保留。
+  {
+    const std::string snap =
+        "# Rime user dictionary\n"
+        "#@/db_name\tluna_pinyin\n"
+        "#@/db_type\tuserdb\n"
+        "#@/tick\t0\n"
+        "code1\t词条一\tc=1 d=0 t=1\n"
+        "code2\t词条二\n";
+    std::vector<fc::UserDictSnapshot> out;
+    Check(fc::ParseUserDictSnapshots(snap, &out, &err),
+          "BM 解析：含脏数据行的快照仍可解析");
+    Check(out.size() == 1 && out[0].rows.size() == 1,
+          "BM 解析：2 列的脏数据行被跳过（其余行保留）");
+    Check(out.size() == 1 && out[0].rows.size() == 1 &&
+              out[0].rows[0].text == "luna_pinyin\t词条一" &&
+              out[0].rows[0].payload == "code1\tc=1 d=0 t=1",
+          "BM 解析：保留下来的是形态合法的那一行");
+  }
+
+  // ④ OpenItemsTolerant 主修：脏条目被跳过并单独计数。
+  //    修复前：脏条目会进合并集 ⇒ 写回阶段让整轮同步失败。
+  {
+    const std::vector<uint8_t> key(32, 0x35);
+    const fc::Hlc hlc = TestHlc();
+    std::vector<fc::Entry> entries;
+    entries.push_back(BmWellFormedEntry(hlc));
+    entries.push_back(BmMalformedEntry(hlc));
+    std::vector<fc::CloudSyncItem> sealed;
+    Check(fc::SealEntries(entries, fc::ItemType::kUserDb, key, &sealed, &err),
+          "BM 开箱：两条 userdb 条目可封包");
+    std::vector<fc::Entry> opened;
+    int undecryptable = -1;
+    int malformed = -1;
+    Check(fc::OpenItemsTolerant(sealed, key, &opened, &undecryptable,
+                                &malformed, &err),
+          "BM 开箱：容忍模式不因脏条目失败");
+    Check(opened.size() == 1, "BM 开箱：形态非法的条目没有进合并集");
+    Check(malformed == 1, "BM 开箱：脏条目被单独计数（malformed）");
+    Check(undecryptable == 0,
+          "BM 开箱：解不开的计数不受影响（undecryptable 仍为 0）");
+  }
+
+  // ⑤ 正控制（防误伤）：只有 userdb 才按词典口径校验 —— phrases 的 payload
+  //    不是词典行形状，拿词典口径去卡它会误伤。
+  {
+    const std::vector<uint8_t> key(32, 0x35);
+    const fc::Hlc hlc = TestHlc();
+    std::vector<fc::Entry> entries;
+    entries.push_back(BmMalformedEntry(hlc));
+    std::vector<fc::CloudSyncItem> sealed;
+    Check(fc::SealEntries(entries, fc::ItemType::kPhrases, key, &sealed, &err),
+          "BM 正控制：phrases 条目可封包");
+    std::vector<fc::Entry> opened;
+    int undecryptable = -1;
+    int malformed = -1;
+    Check(fc::OpenItemsTolerant(sealed, key, &opened, &undecryptable,
+                                &malformed, &err),
+          "BM 正控制：phrases 条目不被词典口径误伤");
+    Check(opened.size() == 1, "BM 正控制：phrases 条目照常进合并集");
+    Check(malformed == 0, "BM 正控制：phrases 不计入格式非法");
+    Check(undecryptable == 0, "BM 正控制：phrases 不计入解不开");
+  }
+
+  // ⑥ 协调器级回归见证：云端回一条封好的脏条目 ⇒ 本轮**成功**，且如实
+  //    报告跳过了几条。修复前：写回阶段报「词典条目载荷格式不正确。」
+  //    ⇒ 每一轮同步都失败。
+  {
+    const std::vector<uint8_t> key(32, 0x35);
+    const fc::Hlc hlc = TestHlc();
+    std::vector<fc::Entry> entries;
+    entries.push_back(BmWellFormedEntry(hlc));
+    entries.push_back(BmMalformedEntry(hlc));
+    std::vector<fc::CloudSyncItem> sealed;
+    fc::SealEntries(entries, fc::ItemType::kUserDb, key, &sealed, &err);
+    std::string body = "{\"items\":[";
+    body += BmPullItemJson(sealed[0]);
+    body += ",";
+    body += BmPullItemJson(sealed[1]);
+    body += "],\"server_seq\":11,\"next_cursor\":11,\"has_more\":false}";
+
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{true, 200, body});
+    BmGateBackend backend;
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-bm",
+                                         "dev-bm", key, std::string());
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(
+        coordinator.SyncOnce(fc::SyncDirection::kPullOnly, &result, &round_err),
+        "BM 协调器：云端混入脏条目 ⇒ 本轮不失败");
+    Check(round_err.empty(), "BM 协调器：失败原因为空");
+    Check(result.ok, "BM 协调器：结果标记为成功");
+    Check(result.message.find("格式非法") != std::string::npos,
+          "BM 协调器：本轮说明里如实报告「格式非法」");
+    Check(result.message.find("1 条格式非法的条目已跳过") != std::string::npos,
+          "BM 协调器：报告了被跳过的条数");
+    Check(backend.imported_text.find("旧词条") == std::string::npos,
+          "BM 协调器：脏条目没有被写回本地");
+    Check(
+        backend.imported_text.find("词条一\tc=1 d=0 t=1") != std::string::npos,
+        "BM 协调器：合法云端条目照常写回本地");
+  }
+
+  // ⑦ 多页累加：形态非法的条目**跨页**时，计数必须**累加**，不能被最后一页
+  //    覆盖。修复前：OpenItemsTolerant 每次调用都把出参清零（单次调用语义），
+  //    而协调器把同一个变量逐页传进去 ⇒ 多页拉取只报**最后一页**的条数。
+  {
+    const std::vector<uint8_t> key(32, 0x35);
+    const fc::Hlc hlc = TestHlc();
+    std::vector<fc::Entry> entries;
+    entries.push_back(BmMalformedEntry(hlc));
+    std::vector<fc::CloudSyncItem> sealed;
+    Check(fc::SealEntries(entries, fc::ItemType::kUserDb, key, &sealed, &err),
+          "BM 多页：脏条目可封包");
+    // 第 1 页：1 条脏条目，条目级 server_seq=1，还有下一页。
+    std::string page1 = "{\"items\":[";
+    page1 += BmPullItemJson(sealed[0], 1);
+    page1 += "],\"server_seq\":11,\"next_cursor\":11,\"has_more\":true}";
+    // 第 2 页：又 1 条脏条目，条目级 server_seq=2（必须递增，否则游标不前进）。
+    std::string page2 = "{\"items\":[";
+    page2 += BmPullItemJson(sealed[0], 2);
+    page2 += "],\"server_seq\":22,\"next_cursor\":22,\"has_more\":false}";
+
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{true, 200, page1});
+    transport.replies.push_back(MockTransport::Reply{true, 200, page2});
+    BmGateBackend backend;
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-bm2",
+                                         "dev-bm2", key, std::string());
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(
+        coordinator.SyncOnce(fc::SyncDirection::kPullOnly, &result, &round_err),
+        "BM 多页：两页各含一条脏条目 ⇒ 本轮不失败");
+    Check(result.ok, "BM 多页：结果标记为成功");
+    Check(result.message.find("2 条格式非法的条目已跳过") != std::string::npos,
+          "BM 多页：跨页计数被累加（2 条），不是只报最后一页");
+  }
+}
+
 int main() {
   ::SetConsoleOutputCP(CP_UTF8);
   std::printf("==== TestFluxingCloud · spec 100 阶段 B（契约与客户端纯逻辑）====\n");
@@ -4090,6 +4353,9 @@ int main() {
 
   // 批次 BL：同步路径的 401 → 续期 → 重试（批次 BK 副产物缺陷）。
   TestCloudSync401RefreshRetry();
+
+  // 批次 BM · ADR 0071：云端混入形态非法的条目 ⇒ 跳过它，不毒化整轮同步。
+  TestCloudUserDictMalformedEntry();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。

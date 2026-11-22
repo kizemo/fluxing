@@ -11,6 +11,9 @@
 #include "CloudCrypto.h"
 #include "CloudJson.h"
 #include "CloudTransport.h"
+#include "CloudUserDictIo.h"
+
+#include "../../include/FluxingDiagLog.h"
 
 #include <windows.h>
 
@@ -692,6 +695,13 @@ bool CloudSyncService::SendJson(const std::string& method,
         return false;
       }
       access_token_ = new_token;
+      token_refreshed_ = true;
+      // ★ 批次 BM / ADR 0071：无条件诊断行（不依赖调试器 —— ADR 0066 已坐实
+      //   OutputDebugStringW 在没有调试器的机器上抓不到）。
+      //   **绝不落任何条目明文**：只记录「发生过续期」这一事实。
+      diag::AppendLine(
+          "cloudsync",
+          "access token refreshed after 401; retry with new token");
       continue;  // 用新令牌重发同一个请求
     }
     if (err) {
@@ -997,6 +1007,11 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   bool has_more = false;
   // 旧密钥加密、解不开的云端行数（换口令后的正常现象：只计数、不报错）
   int undecryptable = 0;
+  // ★ 批次 BM / ADR 0071：云端**形态非法**（payload 无制表符）的条目数 ——
+  //   这类条目会被跳过（不再毒化整轮），但必须**单独计数**并如实报给用户。
+  int malformed = 0;
+  // ★ 批次 BM / ADR 0071：本轮是否发生过「访问令牌自动续期」。
+  bool token_refreshed = false;
   if (direction == SyncDirection::kPullOnly ||
       direction == SyncDirection::kBoth) {
     CloudSyncService service(transport_, access_token_);
@@ -1019,7 +1034,14 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
       }
       out->items_pulled += static_cast<int>(batch.size());
       std::vector<Entry> page_entries;
-      if (!OpenItemsTolerant(batch, enc_key_, &page_entries, &undecryptable,
+      // ★ 批次 BM：分页计数必须**累加**。OpenItemsTolerant 保留「单次调用把
+      //   出参清零」的语义，若把同一个变量直接传进去，多页拉取会**逐页覆盖**
+      //   前页计数 ⇒ 最终只报最后一页的条数（文案失真，且 undecryptable
+      //   这个既有计数同样受害）。
+      int page_undecryptable = 0;
+      int page_malformed = 0;
+      if (!OpenItemsTolerant(batch, enc_key_, &page_entries,
+                             &page_undecryptable, &page_malformed,
                              &parse_err)) {
         backend_->EndMaintenance(&ignored);
         if (err)
@@ -1027,6 +1049,8 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
         out->message = parse_err;
         return false;
       }
+      undecryptable += page_undecryptable;
+      malformed += page_malformed;
       remote_entries.insert(remote_entries.end(), page_entries.begin(),
                             page_entries.end());
       pulled_seq = next_seq;
@@ -1039,6 +1063,8 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
       }
       since = next_seq;
     }
+    if (service.token_refreshed())
+      token_refreshed = true;  // ★ 批次 BM：401 → 续期 → 重试真的发生过
   }
 
   // 2) 合并本地与远端（逐条目 HLC 大者取胜）。
@@ -1165,6 +1191,8 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
       if (pushed_seq > last_server_seq_)
         last_server_seq_ = pushed_seq;
     }
+    if (service.token_refreshed())
+      token_refreshed = true;  // ★ 批次 BM：401 → 续期 → 重试真的发生过
   }
 
   // 6) 更新 sidecar：只把「已同步」的条目标记成已同步。
@@ -1258,6 +1286,17 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
     message += std::to_string(undecryptable);
     message += " 条";
   }
+  if (malformed > 0) {
+    // ★ 批次 BM / ADR 0071：形态非法的云端条目**已跳过**，不再毒化整轮。
+    message += "，云端有 ";
+    message += std::to_string(malformed);
+    message += " 条格式非法的条目已跳过";
+  }
+  if (token_refreshed) {
+    // ★ 批次 BM / ADR 0071：把「401 → 续期 → 重试」变成**人眼可见的直接
+    //   证据**（此前只有日志里的强推断）。
+    message += "，访问令牌已自动续期";
+  }
   if (has_more)
     message += "（云端还有更多条目，下次同步继续）";
   message += "。";
@@ -1269,14 +1308,16 @@ bool OpenItemsTolerant(const std::vector<CloudSyncItem>& items,
                        const std::vector<uint8_t>& enc_key,
                        std::vector<Entry>* out,
                        int* undecryptable,
+                       int* malformed,
                        std::string* err) {
-  if (out == nullptr || undecryptable == nullptr) {
+  if (out == nullptr || undecryptable == nullptr || malformed == nullptr) {
     if (err)
       *err = "内部错误：解密输出参数为空";
     return false;
   }
   out->clear();
   *undecryptable = 0;
+  *malformed = 0;
   if (items.empty())
     return true;
   if (enc_key.size() != 32) {
@@ -1291,6 +1332,32 @@ bool OpenItemsTolerant(const std::vector<CloudSyncItem>& items,
     if (!OpenItems(one, enc_key, &opened, &one_err)) {
       ++(*undecryptable);
       continue;
+    }
+    // ★ 批次 BM / ADR 0071：解得开**还不算**可用 —— 云端可能躺着**形态
+    //   非法**的旧条目（payload 无制表符）。它会一路走到写回阶段，让
+    //   BuildUserDictSnapshots 整体失败 ⇒ 一条脏数据毒化**每一轮**同步
+    //   （批次 BK 真机复现：云端一条旧条目 ⇒ 每一轮同步都失败）。
+    //   故这里按**写回口径**校验形态，非法者跳过并**单独计数**
+    //   （malformed），不与「解不开」（undecryptable）混计。
+    //   ★ 只有 userdb 才按「词典行」校验：phrases / config 的 payload
+    //     不是词典行形状，拿词典口径去卡它们会误伤（BM 单测 ⑤ 正控制）。
+    ItemType item_type = ItemType::kConfig;
+    const bool type_known = ParseItemType(items[i].type, &item_type);
+    if (type_known && item_type == ItemType::kUserDb) {
+      bool shape_ok = true;
+      for (size_t k = 0; k < opened.size(); ++k) {
+        if (!IsValidUserDictEntryShape(opened[k].key, opened[k].payload)) {
+          shape_ok = false;
+          break;
+        }
+      }
+      if (!shape_ok) {
+        ++(*malformed);
+        diag::AppendLine(
+            "cloudsync",
+            "skipped malformed cloud userdb entry (payload shape invalid)");
+        continue;
+      }
     }
     out->insert(out->end(), opened.begin(), opened.end());
   }

@@ -191,10 +191,19 @@ bool OpenItems(const std::vector<CloudSyncItem>& items,
 // 永久卡死（换口令后自动全量重推的必要条件）。
 // 逐条解密：解得开的进 out，解不开的只计数（undecryptable），不报错。
 // 只有「密钥长度不对」这类配置错误才返回 false。
+//
+// ★ 批次 BM / ADR 0071：解得开**还不算**可用 —— 云端可能躺着**形态非法**的
+//   旧条目（payload 无制表符）。它会一路走到写回阶段，让
+//   BuildUserDictSnapshots 整体失败 ⇒ 一条脏数据毒化**每一轮**同步。
+//   故对 **userdb** 类条目额外做形态校验（与写回口径同一个函数），非法者
+//   跳过并**单独计数**（malformed），不与「解不开」混计。
+//   ★ 只有 userdb 才按「词典行」校验：phrases / config 的 payload 不是
+//     词典行形状，不能拿词典口径去卡它们。
 bool OpenItemsTolerant(const std::vector<CloudSyncItem>& items,
                        const std::vector<uint8_t>& enc_key,
                        std::vector<Entry>* out,
                        int* undecryptable,
+                       int* malformed,
                        std::string* err);
 
 // 合并本地与远端（逐条目 HLC 大者取胜）。
@@ -259,6 +268,12 @@ class CloudSyncService {
 
   const std::string& access_token() const { return access_token_; }
 
+  // ★ 批次 BM / ADR 0071：本实例（本轮同步）是否发生过「401 → 续期成功
+  //   → 用新令牌重试」。
+  //   账号页用它把「访问令牌已自动续期」写进本轮 message ——
+  //   把批次 BL §13 的**强推断**升级为 1017 上**人眼可见的直接证据**。
+  bool token_refreshed() const { return token_refreshed_; }
+
  private:
   bool SendJson(const std::string& method,
                 const std::string& path,
@@ -270,6 +285,8 @@ class CloudSyncService {
   ICloudTransport* transport_ = nullptr;
   std::string access_token_;
   AccessTokenRefresher refresher_;
+  // 本实例是否发生过「401 → 续期成功」（批次 BM / ADR 0071）。
+  bool token_refreshed_ = false;
 };
 
 // ---------------------------------------------------------------------------

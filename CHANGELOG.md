@@ -1,4 +1,20 @@
 ## [1.3.8]
+### fix(fluxing): 云端形态非法的旧条目不再毒化整轮同步 —— 跳过并单独计数（批次 BM · ADR 0071）
+
+- **根因（BL §13/§14 真机新发现的独立缺陷）**：`WeaselServer/Cloud/CloudSyncService.cpp` 的 `OpenItemsTolerant`（容错解密层）**只判「解不开 / 类型不可识别」，不校验 payload 形态** ⇒ 云端一条**历史遗留**的 userdb 条目（payload 里没有制表符）被原样放进合并集 ⇒ 写回阶段 `WeaselServer/Cloud/CloudUserDictIo.cpp` 的 `BuildUserDictSnapshots` 判定「词典条目载荷格式不正确。」并 **fail loud** ⇒ **整轮同步失败**（本地 94 601 条数据行全 3 列 ⇒ **本地已被证伪，凶手在云端**；服务端**没有「删条目」API** ⇒ 脏条目只能靠客户端跳过）。
+- **修法（ADR 0071，9 条决策）**：
+  - **开箱侧**新增 `IsValidUserDictEntryShape`（复用 `SplitDictItemKey` + `SplitDictPayload`），对 **userdb** 类条目做与写回口径**一致**的形态校验 ⇒ 形态不合法者按「不可用」**跳过**并**单独计数**，不再毒化整轮（计数走独立出参 `malformed`，与 `undecryptable` 分开，**不占用** `items_skipped`，**不新增** `CloudSyncRoundResult` 字段）；
+  - **本地侧** `ParseUserDictSnapshots` 用**同一个**判定函数跳过形态非法的数据行；
+  - `JoinDictRow` 由「返回空串」改为**报错**（`bool` + err）⇒ 消除「静默写空行」的潜在 API 陷阱（**当前调用链上该路径不可达**，本批**不是**当轮丢数据的修复）；
+  - 写回阶段**保持 fail loud** ⇒ 「开箱侧 + 本地侧」双关卡保证合并集无非法行，维持 canary 价值；
+  - **只对 `kUserDb` 生效**（phrases / config 的 payload 不是词典行形状，拿词典口径去卡会误伤）；
+  - **不动** IPC 协议 / 控件 ID / 布局表 / `librime/` / 第三方依赖 / 版本号。
+- **附带修复**：分页计数被逐页覆盖 —— `OpenItemsTolerant` 保留「单次调用清零出参」语义，改由拉取循环用**局部**计数器**累加**（同时修好本批引入的 `malformed` 与既有的 `undecryptable`）。
+- **直证**：401→续期分支加**无条件**诊断行（`[cloudsync] access token refreshed after 401; retry with new token`）+ 跳过脏条目加诊断行（`[cloudsync] skipped malformed cloud userdb entry (payload shape invalid)`）⇒ 落 `%TEMP%\fluxing-profile-notify.log`；本轮 message 追加「云端有 N 条格式非法的条目已跳过」与「访问令牌已自动续期」。
+- **门禁**：`BUILD_EXIT=0`（weasel.sln Release|Win32 **0 警告 0 错误** + makensis 仅 8 条**既有** `warning 7010`）+ 云单测 **`PASS=686 FAIL=0 / VERDICT: ALL PASS`**（BL 基线 653 ⇒ **+33**）+ L0 静态门禁 **15/15** + clang-format 18.1.8 定点 **5 个**改动文件 **0 漂移** + 改动文件 **U+FFFD=0**。
+- **出包装机**：`fluxing-1.3.8-installer.exe`（**42 989 923 B** / sha16 `24B47CF1A6CBCD25`）装机后载荷 sha16 `D9D4DB32962F9252` **与构建产物逐字相等** ⇒ **`SHA_MATCH_BUILD_VS_INSTALLED=True`**，服务端 pid 94448 → **678312**（09:19:33 起，安装器自己换掉），`RimeUserDir` **未动**、**未登出 / 未登录 / 未改注册表**。
+- **真机复验**：复用 `reports/fluxing-bk-syncstatus/probe-sync-status.ps1`（未改探针一行）⇒ `VERDICT=SYNC_STATUS_OBSERVABLE EXIT=0`；1017 由 BL 轮的 **「失败（词典条目载荷格式不正确。）」** 变为 **「成功（推送 0 条，拉取 1 条）」** ⇒ BM 主修端到端生效；诊断文件同轮命中两条直证行（09:19:57.471 / 09:19:58.378）。
+- **已知观测面缺口（本批未修，登记为下一批候选）**：成功态 1017 走 `CloudAccountDialog.cpp:380` 的 `AccountSyncStatusTextSuccess(when, pushed, pulled)`，**不消费 `out->message`** ⇒ 「跳过计数」「访问令牌已自动续期」在**成功态界面不可见**（失败态可见）。根因在 BK 批次 ADR 0069 的「成功态独立拼装」设计，**不是本批引入**。
 ### fix(fluxing): 同步路径补 401→续期→重试 —— 访问令牌过期不再让同步持续失败（批次 BL · ADR 0070）
 
 - **根因（批次 BK 副产物缺陷）**：`WeaselServer/Cloud/CloudAccount.cpp` 里 `EnsureFreshToken`（401 后用刷新令牌续期）的调用点**只有设备管理三处**（`GET /v1/devices` / `DELETE` 设备 / `DELETE /v1/account/data`）；**同步轮次的推 / 拉路径没有这层** —— `CloudSyncService` 只带一份 `access_token_` 快照，`SendJson` 收到 401 直接失败 ⇒ **访问令牌一过期，自动同步与手动同步全部持续失败**（BK 真机两轮都报「失败（访问令牌已过期，请用刷新令牌续期。）」；此前因 1017 无观测面而不可见）。

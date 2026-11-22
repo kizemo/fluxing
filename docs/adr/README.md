@@ -79,6 +79,7 @@ Do not dump all ADRs into every prompt.
 | 0068 | 0068. 账号页 UI 的 DPI 等比缩放：布局表以 96dpi 为基准、整表按有效 DPI 等比缩放（修复 >150% 缩放下换钥提示被裁，ADR 0063 几何口径修订） | `docs/adr/0068-account-ui-dpi-proportional-scaling.md` | Accepted |
 | 0069 | 0069. 账号页「最近一次同步时间与结果」的可见性：把 `sync_status()` 写进 `kIdSyncStatus`(1017)（补上 spec 100 FR-016 的实现缺失；1017 此前永远停在占位文案） | `docs/adr/0069-account-sync-status-observability.md` | Accepted |
 | 0070 | 0070. 同步路径补 401→续期→重试：访问令牌过期不再让同步持续失败（续期以回调注入，同步客户端不碰凭据） | `docs/adr/0070-sync-path-token-refresh-retry.md` | Accepted |
+| 0071 | 0071. 云端形态非法的旧条目不再毒化整轮同步：开箱侧按写回口径跳过并单独计数，本地解析侧同口径收窄，`JoinDictRow` 改为显式报错 | `docs/adr/0071-malformed-cloud-entry-skip-instead-of-poisoning-round.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and
