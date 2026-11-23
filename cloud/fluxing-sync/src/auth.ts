@@ -7,7 +7,7 @@
 //   4. 令牌一律「不透明随机串 + 只存哈希」；撤销设备即立刻切断其全部令牌。
 
 import type { Env } from './env';
-import { ApiError, fail } from './errors';
+import { ApiError, fail, isD1RowWriteQuotaError } from './errors';
 import {
   hmacSha256,
   newOpaqueToken,
@@ -535,15 +535,15 @@ function withRollbackStatus(error: unknown, report: RollbackReport, email: strin
 //   · UNIQUE 约束冲突（users.email）⇒ 并发注册的败者 ⇒ 409 email_taken
 
 /**
- * D1「每日行写入配额耗尽」的错误特征（Cloudflare code 7500）。
- * 与 errors.ts 里的同名判据保持一致（本文件无权改 errors.ts ⇒ 局部复制一份）。
+ * 是否 D1 行写入配额耗尽（⇒ 503 storage_quota_exceeded）。
+ *
+ * 与 errors.ts **共用同一份判据**（isD1RowWriteQuotaError）——
+ * 2026-11-23 批次 BR 生产实测坐实：Worker 内 D1 绑定抛出的文本**不带** `[code: 7500]`，
+ * 本文件原先那份「只认 REST 形态」的副本命中不了 ⇒ 登录等写路径对外报笼统 500。
+ * 两处各留一份判据正是那次漏配的根因 ⇒ 判据只留一份。
  */
-const D1_ROW_WRITE_QUOTA_PATTERN = /\[code:\s*7500\]/;
-
-/** 是否 D1 行写入配额耗尽（⇒ 503 storage_quota_exceeded）。 */
 function isD1QuotaError(error: unknown): boolean {
-  const detail = error instanceof Error ? error.message : String(error);
-  return D1_ROW_WRITE_QUOTA_PATTERN.test(detail);
+  return isD1RowWriteQuotaError(error);
 }
 
 /** 是否 UNIQUE 约束冲突（users.email 撞车 ⇒ 同邮箱并发注册的败者）。 */

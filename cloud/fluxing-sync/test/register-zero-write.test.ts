@@ -365,6 +365,26 @@ describe('D1-5 窄窗口：发信已成功、落库失败', () => {
     }
   });
 
+  it('Worker 内 D1 绑定形态（无 [code: 7500]）⇒ 同样 503 storage_quota_exceeded', async () => {
+    const email = 'narrow-quota-worker-form@example.com';
+    // Worker 内 D1 绑定抛出的文本**不带** `[code: 7500]`（生产实测 2026-11-23 批次 BR）。
+    const WORKER_QUOTA_ERROR =
+      "D1_ERROR: Your account has exceeded D1's free tier daily row write limit. Upgrade to a paid plan or wait until tomorrow (midnight UTC) to continue. See https://developers.cloudflare.com/d1/platform/limits/ for more details.";
+    const restore = installWriteFailures([
+      { prefix: 'INSERT INTO users', error: new Error(WORKER_QUOTA_ERROR) },
+    ]);
+    try {
+      const error = await catchError(handleRegister(makeEnv(), registerBody(email)));
+      expect(error.status).toBe(503);
+      expect(error.code).toBe('storage_quota_exceeded');
+      expect(error.message).toBe('服务端存储写入额度已用尽，请稍后重试。');
+      expect(await countRows('users', email)).toBe(0);
+      expect(await countRows('email_verifications', email)).toBe(0);
+    } finally {
+      restore();
+    }
+  });
+
   it('D1 配额耗尽（code 7500）⇒ 503 storage_quota_exceeded（D0-2 优先于 D1-5）', async () => {
     const email = 'narrow-quota@example.com';
     const restore = installWriteFailures([
