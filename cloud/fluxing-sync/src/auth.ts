@@ -7,7 +7,7 @@
 //   4. 令牌一律「不透明随机串 + 只存哈希」；撤销设备即立刻切断其全部令牌。
 
 import type { Env } from './env';
-import { fail } from './errors';
+import { ApiError, fail } from './errors';
 import {
   hmacSha256,
   newOpaqueToken,
@@ -236,23 +236,199 @@ async function assertResendAllowed(env: Env, email: string): Promise<void> {
   }
 }
 
-async function issueVerificationCode(env: Env, email: string): Promise<void> {
+/**
+ * 生成一枚验证码并落库（**不发信**）。
+ *
+ * 与发信拆成两步，是为了让调用方在发信失败时能**精确回滚**：
+ * 发信失败 ⇒ 删掉本次 email_verifications 行（注册还要连带删 users 行），
+ * 否则该邮箱会被「占号」+「吃掉 60 秒重发窗口」，用户重试只会撞 429 / 409。
+ *
+ * 返回 id（该行主键，供回滚按 id 精确删除）与 code（明文 6 位码，**仅用于发信**，
+ * 绝不落库、绝不进日志）。
+ */
+async function createVerificationCode(
+  env: Env,
+  email: string,
+): Promise<{ id: string; code: string }> {
   const pepper = requirePepper(env);
   await assertResendAllowed(env, email);
   const now = nowSeconds();
   const code = String(randomInt(1_000_000)).padStart(6, '0');
   const hash = await codeHash(pepper, email, code, now);
+  const id = crypto.randomUUID();
   await env.DB.prepare(
     'INSERT INTO email_verifications (id, email, code_hash, attempts, expires_at, consumed_at, created_at) VALUES (?, ?, ?, 0, ?, NULL, ?)',
   )
-    .bind(crypto.randomUUID(), email, hash, now + CODE_TTL_SECONDS, now)
+    .bind(id, email, hash, now + CODE_TTL_SECONDS, now)
     .run();
-  await sendVerificationMail(env, email, code);
+  return { id, code };
+}
+
+/**
+ * 回滚结果：
+ *   'ok'       = 残留已清干净（DELETE 成功）
+ *   'degraded' = DELETE 被拒，但已用 UPDATE 把行「失效化」，效果等价于删除
+ *   'failed'   = 彻底失败（库里可能还有可用残留）
+ */
+type RollbackOutcome = 'ok' | 'degraded' | 'failed';
+
+/** 回滚报告：结果 + 失败原因（原始文本，由调用方脱敏后使用）。 */
+interface RollbackReport {
+  outcome: RollbackOutcome;
+  error?: string;
+}
+
+/** 诊断文本脱敏：抹掉收件人邮箱与 6 位数字（验证码明文）。标记用 ASCII（要进 HTTP 头）。 */
+function scrubForDiagnostics(text: string, email: string): string {
+  let out = text.replace(/\d{6}/g, '[redacted]');
+  if (email.length > 0) out = out.split(email).join('[redacted]');
+  return out;
+}
+
+/**
+ * 删一行。成功返回 undefined；失败返回失败原因（调用方据此降级 / 汇总）。
+ */
+async function deleteRow(env: Env, sql: string, id: string): Promise<string | undefined> {
+  try {
+    await env.DB.prepare(sql).bind(id).run();
+    return undefined;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error('[fluxing-sync] 回滚删除失败：', sql, detail);
+    return detail;
+  }
+}
+
+/**
+ * 降级兜底（users 行）：DELETE 被拒时改用 UPDATE 把 email 改成唯一的占位地址。
+ * 效果 = 解除「占号」⇒ 用户用原邮箱重试不再撞 409 email_taken。
+ * 该账号本来就没验证过（email_verified=0），改 email 不影响任何真实数据。
+ */
+async function neutralizeUser(env: Env, userId: string): Promise<string | undefined> {
+  try {
+    await env.DB.prepare('UPDATE users SET email = ? WHERE id = ?')
+      .bind(`deleted+${userId}@invalid.local`, userId)
+      .run();
+    return undefined;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error('[fluxing-sync] 回滚降级（users 失效化）失败：', detail);
+    return detail;
+  }
+}
+
+/**
+ * 降级兜底（email_verifications 行）：DELETE 被拒时把 created_at 归零。
+ * 效果 = 解除 60 秒重发窗口（闸只看 created_at）⇒ 用户立刻重试不再撞 429 verify_too_frequent。
+ */
+async function neutralizeVerification(env: Env, verificationId: string): Promise<string | undefined> {
+  try {
+    await env.DB.prepare('UPDATE email_verifications SET created_at = 0 WHERE id = ?')
+      .bind(verificationId)
+      .run();
+    return undefined;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error('[fluxing-sync] 回滚降级（验证码行失效化）失败：', detail);
+    return detail;
+  }
+}
+
+/**
+ * 回滚一次失败注册留下的残留：删本次 email_verifications 行 + users 行。
+ *
+ * 2026-11-22 生产实测（BQ 批次）：失败注册后 users 行与验证码行都残留在库里 ⇒ 用户立刻重试
+ * 撞 429 verify_too_frequent。当时 D1 侧 DELETE 被拒（手工 DELETE 报 Cloudflare code 7500
+ * 「exceeded D1's free tier daily row write limit」）⇒ 纯 DELETE 回滚必然失败。
+ * 因此实现为「DELETE 优先，被拒则降级 UPDATE 失效化」：
+ *   · DELETE 成功 ⇒ 'ok'（真正零残留）
+ *   · DELETE 被拒但 UPDATE 成功 ⇒ 'degraded'（行还在，但已失效：不占号、不吃重发窗口）
+ *   · 两条都失败 ⇒ 'failed'（如实上报，诊断头里带 D1 原始错误）
+ * 删除顺序按「子表在前、父表在后」（将来若给 email_verifications 加外键也不会撞约束）。
+ */
+async function rollbackRegister(
+  env: Env,
+  userId: string,
+  verificationId: string | undefined,
+): Promise<RollbackReport> {
+  const problems: string[] = [];
+  let degraded = 0;
+  let failed = 0;
+
+  if (verificationId !== undefined) {
+    const delErr = await deleteRow(env, 'DELETE FROM email_verifications WHERE id = ?', verificationId);
+    if (delErr !== undefined) {
+      const updErr = await neutralizeVerification(env, verificationId);
+      if (updErr === undefined) {
+        degraded += 1;
+        problems.push(`email_verifications delete failed(${delErr}); neutralized`);
+      } else {
+        failed += 1;
+        problems.push(`email_verifications delete failed(${delErr}); neutralize failed(${updErr})`);
+      }
+    }
+  }
+
+  const delUserErr = await deleteRow(env, 'DELETE FROM users WHERE id = ?', userId);
+  if (delUserErr !== undefined) {
+    const updErr = await neutralizeUser(env, userId);
+    if (updErr === undefined) {
+      degraded += 1;
+      problems.push(`users delete failed(${delUserErr}); neutralized`);
+    } else {
+      failed += 1;
+      problems.push(`users delete failed(${delUserErr}); neutralize failed(${updErr})`);
+    }
+  }
+
+  if (failed > 0) return { outcome: 'failed', error: problems.join(' ; ') };
+  if (degraded > 0) return { outcome: 'degraded', error: problems.join(' ; ') };
+  return { outcome: 'ok' };
+}
+
+/** 回滚一次失败重发留下的残留：只处理本次 email_verifications 行，**保留 users 行**。 */
+async function rollbackVerification(
+  env: Env,
+  verificationId: string | undefined,
+): Promise<RollbackReport> {
+  if (verificationId === undefined) return { outcome: 'ok' };
+  const delErr = await deleteRow(env, 'DELETE FROM email_verifications WHERE id = ?', verificationId);
+  if (delErr === undefined) return { outcome: 'ok' };
+  const updErr = await neutralizeVerification(env, verificationId);
+  if (updErr === undefined) return { outcome: 'degraded', error: `delete failed(${delErr}); neutralized` };
+  return {
+    outcome: 'failed',
+    error: `delete failed(${delErr}); neutralize failed(${updErr})`,
+  };
+}
+
+/**
+ * 给错误附上回滚结果：**不改动**状态码 / 错误码 / 中文文案，
+ * 只多带诊断字段，让「残留是否清干净」在响应头（X-Fluxing-Mail-Rollback）里可见。
+ */
+function withRollbackStatus(error: unknown, report: RollbackReport, email: string): unknown {
+  if (error instanceof ApiError) {
+    const detail =
+      report.error === undefined ? undefined : scrubForDiagnostics(report.error, email);
+    return new ApiError(
+      error.status,
+      error.code,
+      error.message,
+      error.providerStatus,
+      report.outcome,
+      detail,
+    );
+  }
+  return error;
 }
 
 // ---------------------------------------------------------------- 端点实现
 
-export async function handleRegister(env: Env, body: Record<string, unknown>): Promise<unknown> {
+export async function handleRegister(
+  env: Env,
+  body: Record<string, unknown>,
+  doFetch?: typeof fetch,
+): Promise<unknown> {
   const pepper = requirePepper(env);
   const email = normalizeEmail(body.email);
   const authKey = requireAuthKey(body.auth_key);
@@ -278,7 +454,26 @@ export async function handleRegister(env: Env, body: Record<string, unknown>): P
     .bind(userId, email, verifier, salt, kdf.algo, kdf.iters, now)
     .run();
 
-  await issueVerificationCode(env, email);
+  // 发信失败 ⇒ 回滚本次注册的全部残留（users 行 + 本次验证码行），
+  // 否则该邮箱会被「占号」+「吃掉 60 秒重发窗口」，用户重试只会撞 429 / 409，
+  // 真正的根因（收件人被拒）会被掩盖成「验证码发送过于频繁」。
+  let verificationId: string | undefined;
+  let stage: 'code' | 'mail' = 'code';
+  try {
+    const created = await createVerificationCode(env, email);
+    verificationId = created.id;
+    stage = 'mail';
+    await sendVerificationMail(env, email, created.code, doFetch);
+  } catch (error) {
+    const report = await rollbackRegister(env, userId, verificationId);
+    console.error(
+      stage === 'mail'
+        ? '[fluxing-sync] 注册发信失败，已回滚本次注册残留。'
+        : '[fluxing-sync] 注册流程失败，已回滚本次注册残留。',
+      `rollback=${report.outcome}`,
+    );
+    throw withRollbackStatus(error, report, email);
+  }
 
   return {
     account_id: userId,
@@ -337,7 +532,11 @@ export async function handleVerify(env: Env, body: Record<string, unknown>): Pro
   return { ok: true };
 }
 
-export async function handleResend(env: Env, body: Record<string, unknown>): Promise<unknown> {
+export async function handleResend(
+  env: Env,
+  body: Record<string, unknown>,
+  doFetch?: typeof fetch,
+): Promise<unknown> {
   // 缺 pepper 一律 fail closed（与其他认证端点一致）
   requirePepper(env);
   const email = normalizeEmail(body.email);
@@ -350,9 +549,27 @@ export async function handleResend(env: Env, body: Record<string, unknown>): Pro
     throw fail.conflict('该邮箱已完成验证，无需重新获取验证码。', 'email_already_verified');
   }
 
-  // issueVerificationCode 自带 60 秒频率闸（verify_too_frequent）、10 分钟 TTL、
+  // createVerificationCode 自带 60 秒频率闸（verify_too_frequent）、10 分钟 TTL、
   // 5 次错误上限与 code_hash 落库；MAIL_MODE="outbox" 时只写 mail_outbox 不发信。
-  await issueVerificationCode(env, email);
+  // 发信失败 ⇒ 只删本次验证码行，**保留 users 行**（账号已存在，重发失败不该把账号删掉）；
+  // 同时不消耗 60 秒重发窗口 ⇒ 用户可立刻再试一次。
+  let verificationId: string | undefined;
+  let stage: 'code' | 'mail' = 'code';
+  try {
+    const created = await createVerificationCode(env, email);
+    verificationId = created.id;
+    stage = 'mail';
+    await sendVerificationMail(env, email, created.code, doFetch);
+  } catch (error) {
+    const report = await rollbackVerification(env, verificationId);
+    console.error(
+      stage === 'mail'
+        ? '[fluxing-sync] 重发发信失败，已回滚本次验证码残留。'
+        : '[fluxing-sync] 重发流程失败，已回滚本次验证码残留。',
+      `rollback=${report.outcome}`,
+    );
+    throw withRollbackStatus(error, report, email);
+  }
 
   return { ok: true };
 }

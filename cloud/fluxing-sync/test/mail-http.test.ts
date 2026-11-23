@@ -4,7 +4,9 @@
 // 判别力要点（变异验证打的就是这几处）：
 //   · 缺 key / 非 HTTPS 端点 / MAIL_FROM 非法 ⇒ 500 server_misconfigured
 //   · 401 / 403 ⇒ 500 server_misconfigured（鉴权失败），且**不重试**
-//   · 429 ⇒ 503 mail_rate_limited；其它 4xx / 5xx ⇒ 503 mail_send_failed
+//   · 429 ⇒ 503 mail_rate_limited；409 / >=500 / <400 ⇒ 503 mail_send_failed
+//   · 其余 4xx ⇒ 500 server_misconfigured（上游 name 属通道配置类）
+//              或 422 mail_recipient_rejected（收件人被拒 ⇒ 重试无用，换邮箱才有用）
 //   · 网络类异常重试一次（共 2 次调用）；业务类错误不重试（1 次调用）
 //   · http 模式**不写 mail_outbox** ⇒ 生产库不留明文验证码
 //   · 端点 / 鉴权头名 / 前缀可配 ⇒ 换服务商不改代码
@@ -220,5 +222,78 @@ describe('MAIL_MODE="http" 第三方 HTTPS 邮件 API', () => {
       sendVerificationMail(makeEnv({ MAIL_MODE: 'smtp' }), 'user@example.com', '123456', fetchImpl),
     ).rejects.toMatchObject({ status: 500, code: 'server_misconfigured' });
     expect(calls.length).toBe(0);
+  });
+
+  it('上游 400 + name=validation_error ⇒ 422 mail_recipient_rejected（收件人被拒），且只调 1 次', async () => {
+    const { calls, fetchImpl } = statusResponder(
+      400,
+      '{"statusCode":400,"name":"validation_error","message":"Invalid `to` field"}',
+    );
+    await expect(
+      sendVerificationMail(makeEnv(), 'user@example.com', '123456', fetchImpl),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: 'mail_recipient_rejected',
+      message: '验证码邮件被邮件服务拒绝：该邮箱地址无法接收验证码，请更换邮箱地址后重试。',
+      providerStatus: 400,
+    });
+    expect(calls.length).toBe(1);
+  });
+
+  it('上游 400 + name=validation_error（文案提到 API key）⇒ 仍走 422（只认 name，不认 message）', async () => {
+    const { calls, fetchImpl } = statusResponder(
+      400,
+      '{"statusCode":400,"name":"validation_error","message":"API key is invalid"}',
+    );
+    await expect(
+      sendVerificationMail(makeEnv(), 'user@example.com', '123456', fetchImpl),
+    ).rejects.toMatchObject({ status: 422, code: 'mail_recipient_rejected' });
+    expect(calls.length).toBe(1);
+  });
+
+  it('上游 422 + name=missing_required_field ⇒ 500 server_misconfigured（通道配置类），且只调 1 次', async () => {
+    const { calls, fetchImpl } = statusResponder(
+      422,
+      '{"statusCode":422,"name":"missing_required_field","message":"Missing `from` field"}',
+    );
+    await expect(
+      sendVerificationMail(makeEnv(), 'user@example.com', '123456', fetchImpl),
+    ).rejects.toMatchObject({ status: 500, code: 'server_misconfigured', providerStatus: 422 });
+    expect(calls.length).toBe(1);
+  });
+
+  it('上游 404 + name=not_found ⇒ 500 server_misconfigured，且只调 1 次', async () => {
+    const { calls, fetchImpl } = statusResponder(
+      404,
+      '{"statusCode":404,"name":"not_found","message":"..."}',
+    );
+    await expect(
+      sendVerificationMail(makeEnv(), 'user@example.com', '123456', fetchImpl),
+    ).rejects.toMatchObject({ status: 500, code: 'server_misconfigured' });
+    expect(calls.length).toBe(1);
+  });
+
+  it('上游 502 ⇒ 503 mail_send_failed，且只调 1 次', async () => {
+    const { calls, fetchImpl } = statusResponder(502, '{"message":"bad gateway"}');
+    await expect(
+      sendVerificationMail(makeEnv(), 'user@example.com', '123456', fetchImpl),
+    ).rejects.toMatchObject({ status: 503, code: 'mail_send_failed' });
+    expect(calls.length).toBe(1);
+  });
+
+  it('上游 400 + 非 JSON 响应体 ⇒ 解析不出 name ⇒ 422 mail_recipient_rejected', async () => {
+    const { calls, fetchImpl } = statusResponder(400, 'nope');
+    await expect(
+      sendVerificationMail(makeEnv(), 'user@example.com', '123456', fetchImpl),
+    ).rejects.toMatchObject({ status: 422, code: 'mail_recipient_rejected' });
+    expect(calls.length).toBe(1);
+  });
+
+  it('上游 409 ⇒ 503 mail_send_failed（上游语义是「稍后重试」），且只调 1 次', async () => {
+    const { calls, fetchImpl } = statusResponder(409, '{"statusCode":409,"name":"..."}');
+    await expect(
+      sendVerificationMail(makeEnv(), 'user@example.com', '123456', fetchImpl),
+    ).rejects.toMatchObject({ status: 503, code: 'mail_send_failed' });
+    expect(calls.length).toBe(1);
   });
 });
