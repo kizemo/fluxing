@@ -193,3 +193,69 @@
 - 【如实】**本轮门禁未重跑**（未改任何产品代码）⇒ 沿用 19:38 轮结论（`typecheck` 0 / `check` 0 = **11 文件 / 143 用例**）。
 - 【实测】**工作树现状**（本轮开始时）：`M CLAUDE.md`（上一轮未入库的 BR 指针回写）+ `m librime`（dirty submodule，**禁止 `git add librime`**）+ 未跟踪杂项（`release/` / `reports/**` / `scripts/verify/*.ps1` / `docs/design/quickpanel-v6/design-demos/*.html`）⇒ 按红线不入库。
 - **待用户拍板三项（本轮未动）**：Workers Paid 是否升级 / **BR-①c（客户端远端 HLC 沿用）是否授权** / **BR-②（护栏是否改全局口径或按活跃账号数分摊总额度）**。
+
+---
+
+### BR-①c 轮（2026-11-23 21:50 · 客户端「远端 HLC 沿用」根治 · ADR 0076 D2-5a）
+
+**本轮性质** = **用户已授权改客户端代码** ⇒ 客户端红线解除，动 `WeaselServer/Cloud/**`；交付链 = ADR 修订 → spec/plan/tasks 三件套 → 客户端实现 → 单测 → 门禁 → 出包装机 → 装机实证 → 真机判据（**本轮 = 未判定，见下**）→ 收尾双产物 → 入库 + push。
+**未动** = 服务端（判据 1/2/4 成果不返工）、`librime/`、IPC 协议与 `include/WeaselIPCData.h`、`output/install.nsi`（⇒ 不触发 G-a/G-b/G-c 与 Sandbox harness）、公开版本号（仍 1.3.8.0）。
+
+#### §A 本轮已达成（已验证）
+
+- 【已入库 + 已 push】ADR 0076 修订稿（D2-5a a-0…a-8）= commit **`d4b5108`**（`14635a5..d4b5108`，PUSH_EXIT=0）。
+- 【已落盘，**同 commit 入库**】ADR 二次修订：a-3 改**超集口径**（闸门触发 = `has_more == true`，解除 = 某轮 `has_more == false`）+ 副作用登记；a-8 新增 ⑤「新增本地词条上云被延后」。
+- 【已落盘】spec/plan/tasks 三件套 = `.specify/specs/101-cloud-sync-remote-hlc-reuse/{spec.md,plan.md,tasks.md}`。
+- 【已落盘 + 已复核】客户端实现（现役路径 = `WeaselServer/Cloud/CloudSyncService.cpp` 的 `CloudSyncCoordinator::SyncOnce`；`CloudSyncEngine.cpp` **未改**）：
+  - `CloudSyncService.h`：`CloudReconcileStats` :378、`FormatReconcileDiagLine` :391、`last_reconcile_stats()` :436、`SyncRound` :445、`last_stats_` :465。
+  - `CloudSyncService.cpp`：`SyncOnce` :888 调 `SyncRound` :904；**无条件**诊断行 :900；HLC 分配移到**拉远端之后**；**R1**（明文 payload 逐字节相等 ⇒ 沿用远端 HLC）:1135；**R2** 闸门 `inventory_unproven = has_more` :1107、deferred 判定 :1177、推送过滤 :1249；**R4** :1146；**R3** 侧车重建 :1360。
+- 【已跑 · 父会话亲跑全量门禁】`msbuild weasel.sln Release|Win32` BUILD_EXIT=0（23,590 ms）；`TestDefaultHotkeys` / `TestWeaselIPC` / `TestFluxingCloud` 全 EXIT=0 ⇒ **PASS=787 FAIL=0**（基线 708 ⇒ **+79**，零删除，新增用例组 `test/TestFluxingCloud/TestFluxingCloud.cpp` :4504 起）；U+FFFD=0（7 文件）；clang-format 18.1.8：`CloudSyncService.cpp/.h` **漂移 0**，`TestFluxingCloud.cpp` 261（= HEAD 自带历史债，新增块零新漂移）。日志 `tmp/br1c-parent-gate.log`。
+  - **既有遗留（本批不修）**：`release\TestResponseParser.exe` MISSING ⇒ `weasel.sln` Release|Win32 **未构建该工程**。
+- 【已落盘】实现报告 `reports/fluxing-br-1c/impl-report.md`（8,649 B：改动坐标 / 门禁表 / 已知边界 6 条 / 未闭环项 / 设计歧义点）。
+- 【已落盘】`CHANGELOG.md` `## [1.3.8]` 段顶部新增用户可见条目（简体中文，宪法 P2/P5）。
+- 【已出包 · 真出包】新安装包 `output\archives\fluxing-1.3.8-installer.exe` = **42,981,713 B / sha16 `017722F3FD0EC512` / 2026-11-23 21:39:38**（副本 `tmp\fluxing-1.3.8-br1c-installer.exe`；BP 旧包备份 `tmp\fluxing-1.3.8-installer.bp-20261122.bak.exe` = 42,984,891 B / sha16 `15B5DB6732B33E8C`）。
+  - **载荷三处 sha256 逐字节相等**（构建产物 `output\Win32\WeaselServer.exe` = 包内 = 装机后 `D:\Program Files\fluxing\weasel\WeaselServer.exe`）= `5201E31F2AD18CAADA8514C7A482A8A3961759C968E80A968566EBE5D375176D` ⇒ `SHA_MATCH_BUILD_VS_INSTALLED = True`。
+  - 新 shim `weaselx64.1.3.8.1.0.dll`（1,988,608 B / 21:37:58）⇒ **全新名，未覆盖任何在用映射**（规避 L107）。
+  - **版本闸门未破**：`weasel.props` 的 `PRODUCT_VERSION`/`FILE_VERSION` 仍 **1.3.8.0** = `version.txt`(1.3.8) + ".0"；本批只本地把 `env.bat` 的 `WEASEL_BUILD` 0→1（`env.bat` 未跟踪、**不入库**，备份 `tmp/env.bat.br1c.bak`）⇒ 正式发布（1.3.9 + `version.txt` + 版本线 + git tag）属**独立发布决策**，本批不做。
+- 【已装机实证】`cmd /c "<installer> /S /D=D:\Program Files\fluxing"` ⇒ **INSTALL_EXIT=0**（无需 `/FORCE`；`guard_install_path.nsh` 的 `SetErrorLevel 2` 只在**装到非注册表 InstallDir** 时触发）；WeaselServer 进程已换新（pid 285340 @11-22 16:16:09 → **pid 987684 @2026-11-23 21:40:53**）。
+
+#### §B 真机判据 AC-09 —— **本轮 = 未判定**（不是 PASS）
+
+- 【实测】2026-11-23 21:47 轮：探针移走侧车（`fluxing-cloud-sync.state` → `.ac09bak`，5,008,953 B）→ 触发同步 ⇒ **同步实际失败**：
+  - `SYNC_STATUS_AFTER=最近同步：2026-11-23 21:47:51 · 失败（服务端存储写入额度已用尽，请稍后重试。）`；
+  - 诊断日志三轮（21:41:29 / 21:42:43 / 21:47:51）均为 `reconcile scan_complete=0 matched=0 deferred=0 divergent=0 pushed=0` ⇒ **远端条目一条都没拉到**（`deferred=0` ⇒ 无条目进入比对）⇒ 拉取/鉴权在配额耗尽下直接失败。
+  - D1 `rows_written_24h` 122254 → 122254（增量 0）、`sync_items` 40061 → 40061（增量 0）。
+- 【**假绿根因（已定位并修）**】探针 v1 的 `$syncOk` 只判「BK UI 探针跑完 + 读到 1017 文本」，**未判同步成败** ⇒ 失败态被记成 `AC09_VERDICT=PASS`。
+  - **该零增量无判别力**：旧行为（sidecar 丢失 ⇒ 重分配 HLC ⇒ 整库重推）在配额耗尽下同样被拒 ⇒ 同样 delta=0 ⇒ **正反两种实现都给出相同数字**。
+- 【已修】探针 **v2**（`reports/fluxing-br-1c/probe-ac09.ps1`，纯 ASCII）：
+  - 判定依据从「UI 状态文本」改为**客户端诊断日志的无条件 reconcile 行**（每轮必打 ⇒ 不依赖 1017 的 10 秒观察窗口）；
+  - 三态：`PASS`（轮次确实跑了 且 D1 增量 = 0 且 `push batch` 行数 = 0）/ `FAIL`（轮次跑了但写入非 0 ⇒ 真回归）/ `UNDETERMINED`（轮次没跑起来 ⇒ 外部阻塞）；
+  - 非 PASS ⇒ **自动回滚侧车**（避免用户侧车缺失）；PASS ⇒ 保留客户端重建的新侧车，`.ac09bak` 留档。
+- 【已执行】21:50:08 用 `-RestoreSidecar` 把侧车**回滚到原位**（5,008,953 B / mtime 2026-11-23 10:39:09）⇒ 用户状态已复原，明早复跑从完整状态起步。
+- 【已排定】明早 **09:00** 一次性自动复跑（北京时间 2026-11-24），命令 `pwsh -NoProfile -File F:\soft\00selfmade\rime_claude\reports\fluxing-br-1c\probe-ac09.ps1`，日志 `reports/fluxing-br-1c/ac09-run.log`，判定 token `AC09_VERDICT=` + `AC09_SUMMARY`。
+  - **复跑前提**：生产 D1 免费额度在**北京时间 2026-11-24 08:00**（UTC 午夜）重置 ⇒ 08:00 前复跑必然 `UNDETERMINED`；判据 3 的补跑（08:10:46）会写 D1 ⇒ 排在它之后以免污染增量基线。
+
+#### §C 本轮查清的关键事实（判定强度限制，**必须知道**）
+
+- 【实测 · 源码】客户端单轮拉取上限 = `kPullPageLimit = 100`（`CloudSyncService.cpp:877`）× `kMaxPullPages = 10`（:879）⇒ **单轮最多 1,000 条**；游标 `since = last_server_seq_`（:1035）**持久化在侧车里**。
+- 【实测 · 数据】云端 `sync_items` = **40,061 条** ⇒ 删 sidecar 后 `has_more` **必然为 true** ⇒ R2 闸门（`inventory_unproven = has_more`，:1107）**必然生效** ⇒ 第一轮零写入。
+  - ⇒ **AC-09 一轮判据证明的是「闸门生效（不整库重推）」，不是「HLC 沿用逐条生效」**：后者需等库存扫完（`scan_complete = 1`，仅当 `has_more == false`，:1111-1113）。
+  - ⇒ **收敛代价（新增边界）**：删 sidecar 后需约 **41 轮**（40061 ÷ 1000）才能扫完库存 ⇒ **新增本地词条上云被延后到那之后**（不丢数据，但延迟大）⇒ 登记为 **BR-①e 候选**（可考虑「扫完前允许推送新条目」或「提高单轮页数」，两者各有权衡，**须独立 ADR + 用户拍板**）。
+- 【推断 · 已登记为间接证据】ADR a-7 要求的「服务端 `handlePull` 的 `healed` 自愈 DELETE 为空」**服务端未暴露计数接口** ⇒ 只能由「`sync_items` COUNT 增量 = 0」**间接**证明（healed 会 DELETE 远端畸形条目 ⇒ COUNT 会减少；COUNT 不变 ⇒ 未发生 healed DELETE）。
+- 【实测】诊断日志 `%TEMP%\fluxing-profile-notify.log`（行形 `[时间戳][cloudsync] …`，`include/FluxingDiagLog.h`）**2 MB 封顶后停止追加** ⇒ 当前 593,363 B（未满）⇒ 判据依赖它 ⇒ **复跑前必须先查 `bytes`，超限则先清日志**。
+- 【实测】用户数据目录 = HKCU `SOFTWARE\Fluxing\Weasel` :: `RimeUserDir` = `D:\Program Files\fluxing\user1\fluxing`；侧车 = `<该目录>\fluxing-cloud-sync.state`。
+
+#### §D 本轮工具坑（新增，勿重试）
+
+- **`xbuild.bat` 需 VS 开发环境**（:3-6 `if not defined include` 守卫 ⇒ `exit /b` **无错误码** ⇒ 从普通 PowerShell 调**必假绿**）：首次出包因此产出了**与 BP 旧包逐字节相同**的包（sha16 `15B5DB6732B33E8C`，根本没重打）。修法 = 落盘 `tmp/br1c-build-installer.cmd`（纯 ASCII：`VsDevCmd.bat` → x64 TSF → x86 sln → NSIS），并把 `env.bat` 的 `WEASEL_BUILD` 0→1。
+  - **判据提示**：`cmd //c "build.bat …"` 会假绿（被 MSYS 吞参数）⇒ 必须 `cmd /c`。
+- **判据设计铁律（本轮新增）**：**「失败态」也能给出全部为零的数字** ⇒ 涉及「写入增量 = 0」的判据，**必须同时证明动作真的发生了**（本轮用「诊断日志出现新的无条件 reconcile 行」代替 UI 状态文本）。
+- **UI 观察窗口不可靠**：BK 探针 `POLL_SECONDS=10`；服务端同步失败时 1017 文本会变（「失败（…）」）⇒ **只看「文本是否变化」会把失败当成功**。
+
+#### §E 本轮未闭环 / 下一步
+
+1. **判据 3（服务端写预算）**：定时任务 `self-2fd9cb456b4b1eb65b256941d0500f74`（北京时间 **2026-11-24 08:10:46**）自动补跑；回检 `self-390d58e2e3374a4d410517e7402a8902`（08:20 前后读 `tmp/br-c3-run.log` 四行）⇒ **只有 `FINAL_C3_VERDICT=PASS` 才可记 PASS**。
+2. **AC-09 客户端判据**：明早 **09:00** 自动复跑（定时任务 ID `80a9267f-eff9-4091-924c-9cc1d8f3a0bd`，`runAtMs=1795482000336`，`scheduleType=once`，`status=active`；探针 v2 已就位）⇒ **本轮记「未判定」，不得记 PASS**；复跑后若 `AC09_VERDICT=PASS` ⇒ 需补记「第二层判据」：库存扫完那一轮仍零写入（需再跑约 41 轮，见 §C）。
+3. **生产探针残留**：`br.probe.1795431653344@example.com` / `br.c2.1795431653344@example.com` ⇒ 删除行也计写入 ⇒ 等额度重置后按前缀清理并回读零残留。
+4. **待用户拍板（未动）**：Workers Paid 是否升级（维持不升级）/ **BR-②（护栏是否改全局口径或按活跃账号数分摊）** / **BR-①e（库存扫完前是否允许推送新条目 / 是否提高单轮页数）**。
+5. **入库存**：ADR 二次修订、客户端实现 + 单测、spec 三件套、`CHANGELOG.md` 条目、本 handoff 追加段、relay prompt 改写 ⇒ **显式按路径 `git add`**，**禁 `git add .`**，`librime` 禁 add。
