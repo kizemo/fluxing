@@ -37,7 +37,7 @@
 - **T2（服务端 · 子项①(a)）写预算护栏**：✅ **已落码**（见 §1 第 8 项）。**不做** `DELETE+INSERT` 改写（D2-4）、**不做** `seq` 列迁移。
 - **T3（服务端 · 子项①(b)）设备/令牌上限**：✅ **已落码**（见 §1 第 9 项）。**如实标注**：GC 不省额度（行删除同样计写入）。
 - **T4（单测）**：✅ **新增 4 个测试文件** + **既有 `test/register-mail-failure.test.ts` 按 D4-1a 迁注入点**（见 §1 第 10 项）；门禁数字见 §3。
-- **T5（父会话全量门禁复跑）**：`npm run typecheck` ⇒ TSC_EXIT=0；`npm run check` ⇒ CHECK_EXIT=0（BQ 基线 5 文件 / 86 用例逐条保留 + 本批新增组）；改动文件 U+FFFD = 0。
+- **T5（父会话全量门禁复跑）**：`npm run typecheck` ⇒ TSC_EXIT=0；`npm run check` ⇒ CHECK_EXIT=0（BQ 基线 5 文件 / 86 用例逐条保留 + 本批新增组）；改动文件 U+FFFD = 0。**19:38 轮最新门禁 = `typecheck` 0 / `check` 0 = 11 文件 / 143 用例**（基线 10 文件 / 138 用例 ⇒ **+1 文件 / +5 用例**，既有 138 条逐条保留）；本轮新增 `cloud/fluxing-sync/test/push-quota-error-mapping.test.ts`（**5 条**断言）。
 - **T6（部署 + 生产复验，需授权）**：✅ **已完成**（部署与复验均已执行；**但判据 3 未完成**）。
   - **部署**：`npm --prefix cloud/fluxing-sync run deploy` ⇒ **DEPLOY_EXIT=0**，新生产 Version ID = **`80385732-3473-4e78-b0ba-5a8e29ca1451`**（BQ 版回滚目标 = `96facaba-9277-4c77-b9f9-4df5cb6de41e`，对应 `314d03e`）；**本批无数据库迁移**（`migrations/` 未动 ⇒ 无需 `d1 migrations apply`）。
   - **判据 1 = PASS**（注册发信失败 ⇒ 零写入）：422 + `mail_recipient_rejected` + 中文文案「验证码邮件被邮件服务拒绝：该邮箱地址无法接收验证码，请更换邮箱地址后重试。」+ `X-Fluxing-Mail-Provider-Status: 422` + `X-Fluxing-Mail-Rollback: ok` + `users` / `email_verifications` **零增量**。
@@ -51,6 +51,11 @@
   - **push 已完成**：`git -c http.proxy= -c https.proxy= push kizemo feat/100-cloud-sync` ⇒ **PUSH_EXIT=0** ⇒ `3e32cb8..89f90fd feat/100-cloud-sync -> feat/100-cloud-sync` ⇒ **前 5 个 commit 已全部进入远程**（远程已含 `3e32cb8..89f90fd` 区间全部 5 笔）。
   - **本轮新增两笔提交**（服务端 D1 配额映射修复 + 本次文档回写）由收尾时**快进续推**（命令同上）；**显式按路径 `git add`，禁用 `git add .`**。
 - **T8（需用户授权才可开工）**：BR-①c 客户端「远端 HLC 沿用」（判据：删 sidecar 后同步一次，`sync_items` 今日写入增量 = 0）；BR-①d sidecar 落点加固（低优先）。
+- **T9（判据 3 自动补跑 · 已排定）**：定时任务 ID `self-2fd9cb456b4b1eb65b256941d0500f74`，触发时间 = 北京时间 **2026-11-24 08:10**（UTC 午夜 08:00 配额重置之后）；动作清单 = 阈值降到 10 → deploy → 跑 `node tmp/br-prod-verify.mjs c3` → 阈值恢复 80000 → 再 deploy → 校验 `cloud/fluxing-sync/wrangler.toml` 与 HEAD 逐字节一致 → 跑 `node tmp/br-prod-verify.mjs cleanup` 清理探针；**判据 3 只有在日志出现 429 `write_budget_exceeded` 且 R2/D1 零写入时才能记 PASS**（当前**不得**记为 PASS）。
+- **T10（探针 cleanup · 待配额重置后执行）**：`br.probe.1795431653344@example.com`（`users` 1 + `devices` 32 + `refresh_tokens` 64）与 `br.c2.1795431653344@example.com`（1 行）仍在生产 D1 ⇒ **删除行也是行写入** ⇒ 被 `code 7500` 阻塞 ⇒ 必须等重置后按前缀删除并**回读零残留**。
+- **BR-②（候选 · 待用户拍板 · 本批不做）**：写预算护栏是**每账号**口径（80,000 行 / 账号 / UTC 日），而 D1 免费额度是**每数据库（全局）**口径 ⇒ 护栏**不是**平台额度护盾，只是「单账号放大源刹车」⇒ 候选方向 = 改为全局口径 / 按活跃账号数分摊总额度（**两者都需用户拍板**）。
+- **Workers Paid（待用户拍板 · 未执行）**：D1 免费额度耗尽本身仍是生产事故级问题（影响面含真实用户登录写路径）⇒ 是否升级 Workers Paid **必须先获明确同意**，本轮**未执行**。
+- **BR-①c（待授权 · 未开工）**：客户端「远端 HLC 沿用」仍是根治最大放大源的手段（见 T8）⇒ **未获授权不动手**。
 
 ## §3 已验证 / 推断 / 未验证
 
@@ -65,11 +70,13 @@
 - 【读码】客户端 `CloudSyncService.cpp:1003-1019`：sidecar 命中且 payload 哈希未变 ⇒ 沿用旧 HLC；否则 `HlcTick(now)` 分配新 HLC（墙钟 ⇒ 必大于服务端旧值）。
 - 【读码】`GenerateDeviceId`（`CloudCrypto.cpp:403-425`）= `BCryptGenRandom` 8 字节随机；仅在凭据为空时生成，随凭据 blob 持久化 ⇒ device_id 绑定「凭据生命周期」而非「机器」。
 - 【读码】`upsertDevice` 仅同 `device_id` 走 UPDATE；`issueTokenPair` 每次 2 行；`handleRefresh` 轮换净增 2 行（旧行只标 `revoked_at`）；`devices` / `refresh_tokens` 无上限 / 无 GC。
+- 【实测】**推送写路径的 D1 配额错误映射已被单测锁住**：新增 `cloud/fluxing-sync/test/push-quota-error-mapping.test.ts`（**5 条**断言）—— 手法 = `SELF.fetch` 走**真请求路径**（`SELF.fetch` → `src/index.ts` 顶层 catch → `toErrorResponse`），只打断 `env.DB.batch`（推送落库的**唯一写入口**）⇒ 鉴权与读路径仍走真实本地 D1 ⇒ 测的确实是「推送写阶段失败」这条真路径；覆盖 = **Worker 内绑定形态**（`D1_ERROR:` 开头、无 `[code: 7500]`）/ **REST 形态**（带 `[code: 7500]`）/ **非 `Error` 实例**（普通对象）三种配额错误 ⇒ 均 **503 + `storage_quota_exceeded`** + 中文「服务端存储写入额度已用尽，请稍后重试。」；**无关错误仍 500 `internal_error`**（不误伤）；D1 **零落库**（batch 抛错 ⇒ `sync_items` 一行未增）且拉取为空；故障**非粘性**（恢复后同一条推送正常 200 并落库 1 行）；**门禁** = `typecheck` **0** / `check` **0** = **11 文件 / 143 用例**（基线 10 文件 / 138 用例 ⇒ **+1 文件 / +5 用例**，既有 138 条逐条保留）；日志 `tmp/br-push-quota-check.log`（`tmp/` 已 gitignore，**不入库**）。
 
 **推断（由实测 + 读码推导，未单独复验）**
 
 - sidecar 丢失 / 换机 / 重建用户数据目录 ⇒ 40,061 行全部重写（≈ 80,122 行写入）—— 推导链完整，但**未在真机制造 sidecar 丢失**验证过。
 - 写预算按「今日已写行数」估算 ⇒ 同一行当日反复写只计 1（护栏不是精确计费器）。
+- 【推断】写预算护栏是**每账号**口径（80,000 行 / 账号 / UTC 日），而 D1 免费额度是**每数据库（全局）**口径 ⇒ **多账号各自不超护栏、累计仍可打爆全局额度** ⇒ 护栏**不是**平台额度护盾，只是「单账号放大源刹车」（推导链 = D2-3 口径 + Cloudflare 套餐口径；**未在生产构造多账号并发超限验证**）。
 
 **未验证 / 未闭环**
 
@@ -81,6 +88,10 @@
 - `sync_items.seq` 列迁移**未做**（D2-4）。
 - D1 免费额度能否承载词典规模**未结论** ⇒ 付费议题仍未决（用户已定：不升级，等免费且可逆）。
 - 承接 BQ §12 未闭环项（18 份 `run-*.log` 是否入库、`tmp\bh-c2d-fmt-check.cpp` 处置、R2 残留 164 孤儿对象是否逐个删除、2 个 `ak.probe.*@example.com` 账号是否删除）本轮**未处理**。
+- **写预算护栏的口径边界（2026-11-23 19:38 轮登记的已知边界）**：D2-3 护栏上限是**每账号每 UTC 日 80,000 行**；Cloudflare D1 免费套餐的 10 万行/天是**每个 D1 数据库（全局）**额度 ⇒ 多账号各自不超自己的护栏、**累计仍可打爆全局额度** ⇒ 护栏**不是**「平台额度护盾」，而是「**单账号放大源刹车**」。2026-11-23 生产实测即属此类（全局 `rows_written_24h = 122254` 触发 `code 7500`，**该计数是全局口径**）。实现本身早已声明该近似（`src/sync.ts` 注释：护栏「**不宣称**它能精确计出 Cloudflare 的行写入账单」；`used` 只统计 `sync_items` 当日写入行数 ⇒ 行数**下界**，不含 `devices` / `refresh_tokens` 等行）。⇒ **本批不改实现**（改口径属设计变更，需独立 ADR + 用户拍板）⇒ 登记候选后续项 **BR-②**（改为全局口径 / 按活跃账号数分摊总额度；**待用户拍板**）。
+- **推送写序「R2 先、D1 后」在 D1 失败时留下 R2 孤儿对象（无害，2026-11-23 19:38 轮登记）**：D1 阶段因配额耗尽抛错 ⇒ **R2 已写**（留下孤儿对象）、**D1 零落库**（`sync_items` 一行未增）⇒ 无害原因 = 索引行不存在 ⇒ **拉取看不到任何条目**（客户端不会拿到半截数据）；重试时同 key 覆盖 ⇒ **孤儿自然被替换**。
+- **判据 3 的自动补跑已排定（尚未执行）**：定时任务 ID `self-2fd9cb456b4b1eb65b256941d0500f74`，北京时间 **2026-11-24 08:10** 触发（UTC 午夜 08:00 配额重置之后）⇒ 动作 = 阈值降到 10 → deploy → `node tmp/br-prod-verify.mjs c3` → 阈值恢复 80000 → 再 deploy → 校验 `cloud/fluxing-sync/wrangler.toml` 与 HEAD 逐字节一致 → `node tmp/br-prod-verify.mjs cleanup` 清理探针；**判据 3 只有在日志出现 429 `write_budget_exceeded` 且 R2/D1 零写入时才能记 PASS**。
+- **19:38 轮生产状态（现状）**：当前生产 Version = `8e0c3648-cd1e-4baa-b1ab-caa3bb0cc61a`（含 D1 配额错误可解释化修复；BR 主体版本 `80385732-3473-4e78-b0ba-5a8e29ca1451`；BR 之前的回滚目标仍是 BQ 版 `96facaba-9277-4c77-b9f9-4df5cb6de41e`）；生产仍处于 D1 免费额度耗尽（`code 7500`），19:36 复查 `rows_written_24h = 122254`（未重置）；真实用户登录当前返回**可解释的 503**（修复前是 500）；**判据 3 仍未完成 ⇒ 不得记为 PASS**。
 
 ### 改码轮补充（2026-11-23 · 服务端 T1–T4）
 
@@ -111,7 +122,7 @@
 - 【实测】**阈值恢复后状态一致**：已按 ADR 完成「阈值 10 → 部署 → 复验 → 恢复 80000 → 再部署」全流程；阈值已安全恢复为 `WRITE_BUDGET_ROWS_PER_DAY = "80000"`，`git status --porcelain -- cloud/fluxing-sync/wrangler.toml` **为空**（与 HEAD **逐字节一致**），恢复后的部署 **DEPLOY_EXIT=0**。
 - 【实测】**入库已完成**：5 个 commit = `a6ee188` / `ac23bfa` / `d628e53` / `314d03e` / `89f90fd`（区间 `3e32cb8..89f90fd`）。
 - 【实测】**push 已完成**：`git -c http.proxy= -c https.proxy= push kizemo feat/100-cloud-sync` ⇒ **PUSH_EXIT=0** ⇒ `3e32cb8..89f90fd feat/100-cloud-sync -> feat/100-cloud-sync` ⇒ **前 5 个 commit 已全部进入远程**。
-- 【实测】**D1 配额错误映射已修 + 补部署 + 生产活体验证 PASS**：**根因** = Worker 内 D1 绑定抛出的错误文本**不带** `[code: 7500]`（**只有 REST 通道带**）⇒ 旧判据 `/\[code:\s*7500\]/` 命中不了 ⇒ D1 写路径对外报笼统 **500 `internal_error`**；**修法** = `cloud/fluxing-sync/src/errors.ts` 新增 `errorText()` + `isD1RowWriteQuotaError()`（四路形态兼容 + 容忍抛出值非 `Error` 实例），`toErrorResponse` 改用该判据，`cloud/fluxing-sync/src/auth.ts` 删除本地重复副本统一走共享判据（**两处各留一份 = 漏配根因**）；**单测** = 新增 `test/d1-quota-error-mapping.test.ts`（10 条）+ `test/register-zero-write.test.ts` 追加 1 条；**门禁** = `typecheck` 0 / `check` 0 = **10 文件 / 138 用例**（原 9 文件 / 127 用例 ⇒ +1 文件 / +11 用例）；**部署** = DEPLOY_EXIT=0 ⇒ 新生产 Version **`8e0c3648-cd1e-4baa-b1ab-caa3bb0cc61a`**；**活体验证** = `tmp/br-quota-503-probe.mjs` ⇒ `LOGIN_STATUS=503` + `LOGIN_CODE=storage_quota_exceeded` + 中文「服务端存储写入额度已用尽，请稍后重试。」+ `VERDICT_QUOTA_503=PASS`（证据 `tmp/br-quota-503-probe.log`）⇒ 修复前同一路径是 **500 `internal_error`**。
+- 【实测】**D1 配额错误映射已修 + 补部署 + 生产活体验证 PASS**：**根因** = Worker 内 D1 绑定抛出的错误文本**不带** `[code: 7500]`（**只有 REST 通道带**）⇒ 旧判据 `/\[code:\s*7500\]/` 命中不了 ⇒ D1 写路径对外报笼统 **500 `internal_error`**；**修法** = `cloud/fluxing-sync/src/errors.ts` 新增 `errorText()` + `isD1RowWriteQuotaError()`（四路形态兼容 + 容忍抛出值非 `Error` 实例），`toErrorResponse` 改用该判据，`cloud/fluxing-sync/src/auth.ts` 删除本地重复副本统一走共享判据（**两处各留一份 = 漏配根因**）；**单测** = 新增 `test/d1-quota-error-mapping.test.ts`（10 条）+ `test/register-zero-write.test.ts` 追加 1 条；**门禁** = `typecheck` 0 / `check` 0 = **10 文件 / 138 用例**（原 9 文件 / 127 用例 ⇒ +1 文件 / +11 用例）；**部署** = DEPLOY_EXIT=0 ⇒ 新生产 Version **`8e0c3648-cd1e-4baa-b1ab-caa3bb0cc61a`**；**活体验证** = `tmp/br-quota-503-probe.mjs` ⇒ `LOGIN_STATUS=503` + `LOGIN_CODE=storage_quota_exceeded` + 中文「服务端存储写入额度已用尽，请稍后重试。」+ `VERDICT_QUOTA_503=PASS`（证据 `tmp/br-quota-503-probe.log`）⇒ 修复前同一路径是 **500 `internal_error`**。（本条记的是「配额错误可解释化轮」的历史门禁 **10 文件 / 138 用例**；**19:38 轮最新门禁 = 11 文件 / 143 用例**。）
 
 **未验证 / 未闭环（部署与生产复验轮）**
 
@@ -126,11 +137,11 @@
 ## §4 证据路径
 
 - ADR：`F:\soft\00selfmade\rime_claude\docs\adr\0076-cloud-write-amplification-governance-and-zero-write-registration.md`
-- 服务端：`F:\soft\00selfmade\rime_claude\cloud\fluxing-sync\src\{sync,auth,wire,devices,account,mail}.ts`、`migrations\0001_init.sql`
+- 服务端：`F:\soft\00selfmade\rime_claude\cloud\fluxing-sync\src\{sync,auth,wire,devices,account,mail}.ts`、`migrations\0001_init.sql`、`F:\soft\00selfmade\rime_claude\cloud\fluxing-sync\test\push-quota-error-mapping.test.ts`
 - 客户端（只读取证）：`F:\soft\00selfmade\rime_claude\WeaselServer\Cloud\{CloudCrypto,CloudSyncService,CloudSyncEngine,CloudAccount,CloudAccountDialog,CloudCredentialStore}.{h,cpp}`
 - 门禁：`npm --prefix F:\soft\00selfmade\rime_claude\cloud\fluxing-sync run typecheck` / `run check`
 - BQ 复验脚本（凭据只在 tmp，禁止入库）：`F:\soft\00selfmade\rime_claude\tmp\{bq-verify.ps1,bq-e2e-mailtm-v4.ps1,bq-v4-deploy-verify.ps1,bq-d1-cleanup.ps1}`
-- BR 部署与生产复验证据（**全部在 `tmp/`，禁止入库**）：`F:\soft\00selfmade\rime_claude\tmp\br-probe-{setup,c1,c2,c4}.log`、`tmp\br-probe-c3-run.log`、`tmp\br-deploy-1.log`、`tmp\br-d1-probe.log`、`tmp\br-d1-baseline-20261123.json`、`tmp\br-prod-verify.mjs`、`tmp\br-threshold.ps1`
+- BR 部署与生产复验证据（**全部在 `tmp/`，禁止入库**）：`F:\soft\00selfmade\rime_claude\tmp\br-probe-{setup,c1,c2,c4}.log`、`tmp\br-probe-c3-run.log`、`tmp\br-deploy-1.log`、`tmp\br-d1-probe.log`、`tmp\br-d1-baseline-20261123.json`、`tmp\br-prod-verify.mjs`、`tmp\br-threshold.ps1`、`tmp\br-push-quota-check.log`
 
 ## §5 本轮工具坑
 
