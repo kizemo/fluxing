@@ -311,14 +311,16 @@ class CloudSyncService {
 // 端到端编排（后台线程调用）
 // ---------------------------------------------------------------------------
 //
-// 一轮同步（阶段 F 之后的顺序）：
-//   1) 导出本地词典 → 给每行分配 / 复用 HLC（sidecar 哈希变了 ⇒ 新的 HLC，
-//      并标记为「本地改动」）；
+// 一轮同步（ADR 0076 D2-5a-1 改序后的顺序）：
+//   1) 导出本地词典；
 //   2) 拉远端（按页分批，游标只增不减）；
-//   3) 合并（MergeEntries：同键 HLC 大者胜）；
-//   4) 把合并结果回写本地（远端带来的新词 / 更新过的词条）；
-//   5) 推送「本地改动过、且合并后仍是本地版本」的条目（分批）；
-//   6) 更新 sidecar（只把「已同步」的条目标记为已同步；没推成功的保留
+//   3) 对账并分配 / 复用 HLC（R1 远端 HLC 沿用 / R2 库存未证实不推送 /
+//      R4 分歧条目本地胜出）—— 必须在**拉完之后**：现行顺序是「先分配 HLC
+//      后拉远端」⇒ 分配时看不到远端 ⇒ 侧车丢失后整库被盖上墙钟 HLC；
+//   4) 合并（MergeEntries：同键 HLC 大者胜）；
+//   5) 把合并结果回写本地（远端带来的新词 / 更新过的词条）；
+//   6) 推送「本地改动过、且合并后仍是本地版本」的条目（分批）；
+//   7) 更新 sidecar（只把「已同步」的条目标记为已同步；没推成功的保留
 //      旧行，下一轮继续推）。
 //
 // 本地 HLC 存放在 sidecar 文件里（明文，不含任何密钥）：
@@ -337,7 +339,8 @@ class CloudSyncService {
 // （见 CloudAccountDialog.cpp 的 RunSyncRound），UI 侧没有长期持有的实例
 // 可调；sidecar 是文件态的，重置语义只依赖落盘内容 ⇒ 抽成自由函数，
 // 成员函数与 UI 复用同一份实现，不会各写一遍。
-bool ResetCloudSyncSidecarFile(const std::string& sidecar_path, std::string* err);
+bool ResetCloudSyncSidecarFile(const std::string& sidecar_path,
+                               std::string* err);
 
 // sidecar 文本的序列化 / 解析（纯函数，便于单测与排障）。
 // keyfp 行记录写出该 sidecar 的 enc_key 指纹：用户重置口令后 enc_key 变化，
@@ -356,6 +359,43 @@ bool ParseSidecarText(const std::string& text,
                       int64_t* server_seq,
                       bool* key_rotated,
                       std::string* err);
+
+// ---------------------------------------------------------------------------
+// ADR 0076 · D2-5a：远端 HLC 沿用（BR-①c）· 对账统计与观测口径
+// ---------------------------------------------------------------------------
+//
+// ★ 计数口径（与 reports/fluxing-br-1c/impl-report.md 一致）：
+//   scan_complete = 本轮拉取**扫完了整个云端库存**（has_more == false）。
+//                   只拉不推的轮次也算「扫完」；只推不拉的轮次没有库存视图
+//                   ⇒ 记 0（不谎称扫完）。
+//   matched       = R1 命中条数：本地与远端同 item_key 且**明文 payload
+//                   逐字节一致** ⇒ 沿用远端 HLC、不进推送集合（零写入主体）。
+//   deferred      = R2 延后条数：既无侧车记录、又不在本轮远端集合里，且本轮
+//                   拉取**没有扫完整个云端库存** ⇒ 库存未证实 ⇒ 本轮不推送。
+//   divergent     = 本轮走「本地胜出 + 进推送集合」路径的分歧条数
+//                   （同 item_key 但明文 payload 不同）。
+//   pushed        = 本轮**被服务端接受**的条目数（accepted；skipped 不计）。
+struct CloudReconcileStats {
+  bool scan_complete = false;
+  int matched = 0;
+  int deferred = 0;
+  int divergent = 0;
+  int pushed = 0;
+};
+
+// 对账诊断行（ADR 0076 D2-5a-6 · R5 · 观测口径）：
+//   reconcile scan_complete=<0|1> matched=<n> deferred=<n> divergent=<n>
+//   pushed=<n>
+// ★ 逐字格式放在**生产头**里 ⇒ 单测断言的就是生产会写出的那一行（R7：
+//   生产与单测共用一套实现，不复制第二份格式串）。
+inline std::string FormatReconcileDiagLine(const CloudReconcileStats& stats) {
+  return "reconcile scan_complete=" +
+         std::to_string(stats.scan_complete ? 1 : 0) +
+         " matched=" + std::to_string(stats.matched) +
+         " deferred=" + std::to_string(stats.deferred) +
+         " divergent=" + std::to_string(stats.divergent) +
+         " pushed=" + std::to_string(stats.pushed);
+}
 
 class CloudSyncCoordinator {
  public:
@@ -389,10 +429,23 @@ class CloudSyncCoordinator {
 
   int64_t last_server_seq() const { return last_server_seq_; }
   const std::string& device_id() const { return device_id_; }
+  // 本轮的**对账计数**（ADR 0076 D2-5a-6 · R5 观测口径）。
+  // 每轮 SyncOnce 结束都会刷新（失败也刷新 ⇒ 与诊断行同源）⇒ 单测可直接
+  // 断言「生产会写出的那一行」里的四个计数。
+  const CloudReconcileStats& last_reconcile_stats() const {
+    return last_stats_;
+  }
 
  private:
   bool LoadSidecar(std::string* err);
   bool SaveSidecar(std::string* err);
+  // 一轮同步的**主体**（ADR 0076 D2-5a-1 改序后仍是同一段流程）。
+  // stats 收集本轮对账计数（R5 观测口径）；由 SyncOnce 在轮次结束后
+  // **无条件**打一条诊断行（本轮失败也照打）。
+  bool SyncRound(SyncDirection direction,
+                 CloudSyncRoundResult* result,
+                 std::string* err,
+                 CloudReconcileStats* stats);
 
   ICloudTransport* transport_ = nullptr;
   IUserDictBackend* backend_ = nullptr;
@@ -408,6 +461,8 @@ class CloudSyncCoordinator {
   std::vector<CloudSidecarRow> sidecar_rows_;
   // 本轮 LoadSidecar 是否判定「enc_key 已变化 ⇒ sidecar 作废」
   bool key_rotated_ = false;
+  // 最近一轮的对账计数（R5 观测口径；失败轮也会刷新）。
+  CloudReconcileStats last_stats_;
 };
 
 }  // namespace cloud

@@ -4501,6 +4501,588 @@ void TestCloudPushBatchAndTimeout() {
         "客户端推送单批不超过服务端上限 64");
 }
 
+// 批次 BR-①c · ADR 0076 D2-5a：远端 HLC 沿用（侧车丢失 ⇒ 零写入）
+//
+// 缺口（本批要根治的写放大）：侧车（sidecar）文件丢失后，同步会把**全部**
+// 本地条目当成「新增」，盖上新的墙钟 HLC 再推一遍 ⇒ 服务端的 HLC 守卫全部
+// 落空 ⇒ 整库重写（40,061 行账号 ⇒ ≈ 80k 行写入）。
+//
+// 修法（ADR 0076 D2-5a）：**先拉远端、后分配 HLC**，拉回来后逐条对账：
+//   R1 明文逐字节一致 ⇒ 沿用**远端 HLC**、不进推送集合、侧车记远端 HLC；
+//   R2 库存未证实（本轮没扫完云端库存）⇒ 本轮不推送「既无侧车记录、又不在
+//      远端集合里」的本地条目（延后，不丢数据）；
+//   R3 侧车重建：R1 命中条目 + 远端胜出条目都进侧车（带远端 HLC）；
+//   R4 同 item_key 但明文不同 ⇒ 本地胜出（新墙钟 HLC）+ 进推送集合；
+//   R5 观测口径：诊断行 reconcile scan_complete=… matched=… deferred=…
+//      divergent=… pushed=…（格式函数在**生产头**里 ⇒ 单测逐字断言）。
+//
+// ★ 判据全部取自**生产实现**（constitution R7）：本文件只搭夹具（假后端 /
+//   假传输 / 真侧车文件），不复制第二份判定逻辑。
+// ---------------------------------------------------------------------------
+
+// 远端 HLC（固定值 ⇒ 断言可逐字比对）。
+const uint64_t kBr1cRemoteMs = 1762700000000ull;
+const uint16_t kBr1cRemoteCounter = 7;
+const char* const kBr1cRemoteDevice = "0123456789abcdef";
+
+// 假后端（BR-①c）：导出**可解析**的最小快照（空快照会被
+// ParseUserDictSnapshots 判失败：空 ≠ 没有本地条目），并记录回写文本。
+struct Br1cBackend : public fc::IUserDictBackend {
+  bool CheckMaintenanceGate(std::string* reason) const override {
+    if (reason != nullptr)
+      reason->clear();
+    return true;
+  }
+  bool BeginMaintenance(std::string* err) override { return true; }
+  bool EndMaintenance(std::string* err) override { return true; }
+  bool ExportUserDict(std::string* out, std::string* err) override {
+    if (out != nullptr)
+      *out = snapshot;
+    return true;
+  }
+  bool ImportUserDict(const std::string& text,
+                      int* imported,
+                      std::string* err) override {
+    imported_text = text;
+    if (imported != nullptr)
+      *imported = 1;
+    return true;
+  }
+  // 词典名 userdb、本地一条词条。
+  std::string snapshot =
+      "# Rime user dictionary\n#@/db_name\tuserdb\n#@/tick\t1\n"
+      "code0\t本地词条\tc=0 d=0 t=1\n";
+  std::string imported_text;  // 最近一次回写本地库的快照文本
+};
+
+// 从快照里取第一条本地条目（**生产同一条**解析路径 ⇒ 明文 payload 逐字可比）。
+bool Br1cFirstRow(const std::string& snapshot,
+                  fc::CloudDictEntry* out,
+                  std::string* err) {
+  std::vector<fc::UserDictSnapshot> snaps;
+  if (!fc::ParseUserDictSnapshots(snapshot, &snaps, err))
+    return false;
+  if (snaps.empty() || snaps[0].rows.empty()) {
+    if (err != nullptr)
+      *err = "快照里没有条目。";
+    return false;
+  }
+  *out = snaps[0].rows[0];
+  return true;
+}
+
+// 造一条远端条目（明文 + HLC）。
+fc::Entry Br1cEntry(const std::string& key,
+                    const std::string& payload,
+                    uint64_t ms,
+                    uint16_t counter,
+                    const std::string& device) {
+  fc::Entry e;
+  e.key = key;
+  e.payload = payload;
+  e.hlc.ms = ms;
+  e.hlc.counter = counter;
+  e.hlc.device = device;
+  return e;
+}
+
+// 远端条目 → 拉取响应体（字段名与 ParsePullResponse 一致；条目级 server_seq
+// 递增 ⇒ 游标逐页前进）。
+std::string Br1cPullBody(const std::vector<fc::Entry>& entries,
+                         const std::vector<uint8_t>& enc_key,
+                         bool has_more,
+                         int64_t first_seq) {
+  std::string err;
+  std::vector<fc::CloudSyncItem> sealed;
+  if (!fc::SealEntries(entries, fc::ItemType::kUserDb, enc_key, &sealed, &err))
+    return std::string();
+  std::string body = "{\"items\":[";
+  for (size_t i = 0; i < sealed.size(); ++i) {
+    if (i != 0)
+      body += ",";
+    body += BmPullItemJson(sealed[i], first_seq + static_cast<int64_t>(i));
+  }
+  const int64_t last_seq =
+      sealed.empty() ? first_seq
+                     : first_seq + static_cast<int64_t>(sealed.size()) - 1;
+  body += "],\"server_seq\":";
+  body += std::to_string(last_seq);
+  body += ",\"next_cursor\":";
+  body += std::to_string(last_seq);
+  body += ",\"has_more\":";
+  body += has_more ? "true" : "false";
+  body += "}";
+  return body;
+}
+
+// 推回执里的 accepted 记的是**线上身份**（item_key 的 MAC）⇒ 用同一把密钥
+// 封一条同 key 的条目即可取到（与生产 ComputeItemKeyId 同一口径）。
+std::string Br1cItemId(const std::string& key,
+                       const std::string& payload,
+                       const std::vector<uint8_t>& enc_key) {
+  std::string err;
+  std::vector<fc::CloudSyncItem> sealed;
+  const fc::Entry probe = Br1cEntry(key, payload, kBr1cRemoteMs,
+                                    kBr1cRemoteCounter, kBr1cRemoteDevice);
+  if (!fc::SealEntries(std::vector<fc::Entry>(1, probe), fc::ItemType::kUserDb,
+                       enc_key, &sealed, &err))
+    return std::string();
+  return sealed.empty() ? std::string() : sealed[0].item_key;
+}
+
+// 写一个侧车文件（用生产的序列化函数 ⇒ 格式与生产一致）。
+bool Br1cWriteSidecar(const std::string& path, const std::string& text) {
+  FILE* f = std::fopen(path.c_str(), "wb");
+  if (f == nullptr)
+    return false;
+  const size_t n = std::fwrite(text.data(), 1, text.size(), f);
+  std::fclose(f);
+  return n == text.size();
+}
+
+// 读回侧车文件（用生产的解析函数）。
+bool Br1cReadSidecar(const std::string& path,
+                     const std::vector<uint8_t>& enc_key,
+                     std::vector<fc::CloudSidecarRow>* rows,
+                     int64_t* seq) {
+  FILE* f = std::fopen(path.c_str(), "rb");
+  if (f == nullptr)
+    return false;
+  std::string all;
+  char buf[512];
+  size_t n = 0;
+  while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+    all.append(buf, n);
+  std::fclose(f);
+  std::string err;
+  bool rotated = false;
+  return fc::ParseSidecarText(all, enc_key, rows, seq, &rotated, &err);
+}
+
+void TestCloudRemoteHlcReuse() {
+  std::printf("[BR-①c] 远端 HLC 沿用：侧车丢失后同步不再整库重写\n");
+  std::string err;
+  const std::vector<uint8_t> key(32, 0x41);
+
+  // ① R1：明文逐字节一致 ⇒ 沿用远端 HLC、不进推送集合、侧车记远端 HLC。
+  {
+    Br1cBackend backend;
+    fc::CloudDictEntry local_row;
+    Check(Br1cFirstRow(backend.snapshot, &local_row, &err),
+          "R1 夹具：假后端导出的快照可解析出本地条目");
+
+    const std::string sidecar = "br1c-r1-sidecar.state";
+    std::remove(sidecar.c_str());  // ★ 侧车丢失（本批的触发条件）
+
+    const std::vector<fc::Entry> remote_entries = {
+        Br1cEntry(local_row.text, local_row.payload, kBr1cRemoteMs,
+                  kBr1cRemoteCounter, kBr1cRemoteDevice)};
+    const std::string body = Br1cPullBody(remote_entries, key, false, 1);
+    Check(!body.empty(), "R1 夹具：远端条目可封包成拉取响应");
+
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{true, 200, body});
+    // ★ 不预置推送回应 ⇒ 一旦发生推送，传输层就失败 ⇒ 「没有推送」是硬判据。
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-r1",
+                                         "dev-br1c", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "R1：侧车丢失 + 本地与远端一致 ⇒ 本轮成功");
+    Check(round_err.empty(), "R1：失败原因为空");
+    Check(transport.requests.size() == 1,
+          "R1：只发出一次请求（拉取）⇒ 没有推送");
+    Check(transport.requests.size() == 1 &&
+              transport.requests[0].path.find("/v1/sync/pull") == 0,
+          "R1：那一次请求是拉取");
+    Check(result.items_pushed == 0, "R1：推送 0 条（零写入）");
+    Check(backend.imported_text.empty(),
+          "R1：本地词典没有被回写（合并结果与本地逐字一致）");
+
+    const fc::CloudReconcileStats& st = coordinator.last_reconcile_stats();
+    Check(st.matched == 1, "R1：matched = 1");
+    Check(st.divergent == 0 && st.deferred == 0,
+          "R1：divergent / deferred 都是 0");
+    Check(st.scan_complete, "R1：scan_complete = 1（本轮扫完了云端库存）");
+    Check(fc::FormatReconcileDiagLine(st) ==
+              "reconcile scan_complete=1 matched=1 deferred=0 divergent=0 "
+              "pushed=0",
+          "R1：诊断行逐字正确（R5 格式取自生产头）");
+
+    std::vector<fc::CloudSidecarRow> rows;
+    int64_t seq = -1;
+    Check(Br1cReadSidecar(sidecar, key, &rows, &seq), "R1：侧车文件可解析");
+    Check(rows.size() == 1, "R1：侧车重建后有 1 行");
+    if (rows.size() == 1) {
+      Check(rows[0].item_key == local_row.text, "R1：侧车行的 item_key 正确");
+      Check(rows[0].ms == kBr1cRemoteMs &&
+                rows[0].counter == kBr1cRemoteCounter &&
+                rows[0].device == kBr1cRemoteDevice,
+            "R1：侧车记的是**远端 HLC**（不是新墙钟 HLC）");
+      Check(rows[0].payload_hash.size() == 64,
+            "R1：侧车记的是载荷的 sha256（64 位十六进制）");
+    }
+    std::remove(sidecar.c_str());
+  }
+
+  // ② R2：库存未证实 ⇒ 本轮不推送「既无侧车记录、又不在远端集合里」的条目。
+  {
+    Br1cBackend backend;
+    fc::CloudDictEntry local_row;
+    Br1cFirstRow(backend.snapshot, &local_row, &err);
+
+    const std::string sidecar = "br1c-r2-sidecar.state";
+    std::remove(sidecar.c_str());
+
+    // 10 页 × 1 条远端条目，全部 has_more=true ⇒ 本轮**没扫完**云端库存
+    // （服务端单轮上限 1,000 条 ⇒ 大账号要 41 轮才扫完，见 ADR D2-5a-8 ①）。
+    MockTransport transport;
+    for (int page = 0; page < 10; ++page) {
+      const std::vector<fc::Entry> entries = {Br1cEntry(
+          "userdb\t远端词条" + std::to_string(page),
+          "code" + std::to_string(page) + "\tc=1 d=0 t=1", kBr1cRemoteMs,
+          static_cast<uint16_t>(page), kBr1cRemoteDevice)};
+      transport.replies.push_back(MockTransport::Reply{
+          true, 200, Br1cPullBody(entries, key, true, page + 1)});
+    }
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-r2",
+                                         "dev-br1c", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "R2：库存未扫完 ⇒ 本轮仍成功");
+    Check(transport.requests.size() == 10, "R2：十次请求全是拉取（没有推送）");
+    bool all_pull = transport.requests.size() == 10;
+    for (size_t i = 0; i < transport.requests.size(); ++i) {
+      if (transport.requests[i].path.find("/v1/sync/pull") != 0)
+        all_pull = false;
+    }
+    Check(all_pull, "R2：十次请求逐个都是拉取");
+    Check(result.items_pushed == 0, "R2：推送 0 条（库存未证实 ⇒ 不写）");
+    const fc::CloudReconcileStats& st = coordinator.last_reconcile_stats();
+    Check(st.deferred == 1, "R2：deferred = 1（本地新增条目被延后）");
+    Check(!st.scan_complete, "R2：scan_complete = 0（库存没扫完）");
+    Check(st.matched == 0 && st.divergent == 0,
+          "R2：matched / divergent 都是 0");
+
+    std::vector<fc::CloudSidecarRow> rows;
+    int64_t seq = -1;
+    Check(Br1cReadSidecar(sidecar, key, &rows, &seq), "R2：侧车文件可解析");
+    bool local_marked = false;
+    for (size_t i = 0; i < rows.size(); ++i) {
+      if (rows[i].item_key == local_row.text)
+        local_marked = true;
+    }
+    Check(!local_marked,
+          "R2：被延后的本地条目**没有**被标成已同步（下一轮再推）");
+    std::remove(sidecar.c_str());
+  }
+
+  // ③ R2b：游标 > 0 且库存已扫完 ⇒ 与现行一致（照常推送本地新增条目）。
+  {
+    Br1cBackend backend;
+    fc::CloudDictEntry local_row;
+    Br1cFirstRow(backend.snapshot, &local_row, &err);
+
+    const std::string sidecar = "br1c-r2b-sidecar.state";
+    std::remove(sidecar.c_str());
+    // 侧车完好、游标 = 5、但**没有**本地条目的行 ⇒ 本地条目算「新增」。
+    Check(Br1cWriteSidecar(
+              sidecar,
+              fc::BuildSidecarText(std::vector<fc::CloudSidecarRow>(), 5, key)),
+          "R2b 夹具：侧车文件可写（游标 5、无行）");
+
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, Br1cPullBody(std::vector<fc::Entry>(), key, false, 6)});
+    const std::string item_id =
+        Br1cItemId(local_row.text, local_row.payload, key);
+    Check(!item_id.empty(), "R2b 夹具：可算出线上身份（回执 accepted 用它）");
+    transport.replies.push_back(
+        MockTransport::Reply{true, 200,
+                             "{\"accepted\":[\"" + item_id +
+                                 "\"],\"skipped\":[],\"server_seq\":9}"});
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-r2b",
+                                         "dev-br1c", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "R2b：游标 > 0 + 库存已扫完 ⇒ 本轮成功");
+    Check(transport.requests.size() == 2, "R2b：两次请求（拉取 + 推送）");
+    Check(transport.requests.size() == 2 &&
+              transport.requests[0].path.find("since=5") != std::string::npos,
+          "R2b：拉取请求带上了侧车里的游标（since=5）");
+    Check(transport.requests.size() == 2 &&
+              transport.requests[1].path == "/v1/sync/push",
+          "R2b：第二次请求是推送");
+    Check(result.items_pushed == 1, "R2b：本地新增条目照现行推送（1 条）");
+    const fc::CloudReconcileStats& st = coordinator.last_reconcile_stats();
+    Check(st.deferred == 0, "R2b：deferred = 0（库存已扫完 ⇒ 不延后）");
+    Check(st.scan_complete, "R2b：scan_complete = 1");
+    std::remove(sidecar.c_str());
+  }
+
+  // ④ R3：侧车重建 ⇒ R1 命中条目 + 远端胜出条目都进侧车（带远端 HLC）。
+  {
+    Br1cBackend backend;
+    fc::CloudDictEntry local_row;
+    Br1cFirstRow(backend.snapshot, &local_row, &err);
+
+    const std::string sidecar = "br1c-r3-sidecar.state";
+    std::remove(sidecar.c_str());
+
+    const std::vector<fc::Entry> remote_entries = {
+        // R1 命中：同 key、同明文。
+        Br1cEntry(local_row.text, local_row.payload, kBr1cRemoteMs,
+                  kBr1cRemoteCounter, kBr1cRemoteDevice),
+        // 远端独有：远端胜出。
+        Br1cEntry("userdb\t远端词条", "code9\tc=9 d=0 t=1", kBr1cRemoteMs, 5,
+                  kBr1cRemoteDevice)};
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, Br1cPullBody(remote_entries, key, false, 1)});
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-r3",
+                                         "dev-br1c", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "R3：本轮成功");
+    Check(result.items_pushed == 0, "R3：推送 0 条");
+    Check(coordinator.last_reconcile_stats().matched == 1, "R3：matched = 1");
+
+    std::vector<fc::CloudSidecarRow> rows;
+    int64_t seq = -1;
+    Check(Br1cReadSidecar(sidecar, key, &rows, &seq), "R3：侧车文件可解析");
+    Check(rows.size() == 2, "R3：侧车有 2 行（R1 命中 + 远端胜出）");
+    const fc::CloudSidecarRow* matched_row = nullptr;
+    const fc::CloudSidecarRow* remote_row = nullptr;
+    for (size_t i = 0; i < rows.size(); ++i) {
+      if (rows[i].item_key == local_row.text)
+        matched_row = &rows[i];
+      if (rows[i].item_key == "userdb\t远端词条")
+        remote_row = &rows[i];
+    }
+    Check(matched_row != nullptr && matched_row->ms == kBr1cRemoteMs &&
+              matched_row->counter == kBr1cRemoteCounter &&
+              matched_row->device == kBr1cRemoteDevice,
+          "R3：R1 命中条目的侧车行带**远端 HLC**");
+    Check(remote_row != nullptr && remote_row->ms == kBr1cRemoteMs &&
+              remote_row->counter == 5 &&
+              remote_row->device == kBr1cRemoteDevice,
+          "R3：远端胜出条目的侧车行带远端 HLC");
+    std::remove(sidecar.c_str());
+  }
+
+  // ⑤ R4：同 item_key、明文不同 ⇒ 本地胜出（新墙钟 HLC）+ 进推送集合。
+  {
+    Br1cBackend backend;
+    fc::CloudDictEntry local_row;
+    Br1cFirstRow(backend.snapshot, &local_row, &err);
+
+    const std::string sidecar = "br1c-r4-sidecar.state";
+    std::remove(sidecar.c_str());
+
+    const std::vector<fc::Entry> remote_entries = {
+        Br1cEntry(local_row.text, "code0\tc=9 d=0 t=1", kBr1cRemoteMs,
+                  kBr1cRemoteCounter, kBr1cRemoteDevice)};
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, Br1cPullBody(remote_entries, key, false, 1)});
+    const std::string item_id =
+        Br1cItemId(local_row.text, local_row.payload, key);
+    transport.replies.push_back(
+        MockTransport::Reply{true, 200,
+                             "{\"accepted\":[\"" + item_id +
+                                 "\"],\"skipped\":[],\"server_seq\":9}"});
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-r4",
+                                         "dev-br1c", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "R4：本轮成功");
+    Check(result.items_pushed == 1, "R4：分歧条目被推送（1 条）");
+    Check(coordinator.last_reconcile_stats().divergent == 1,
+          "R4：divergent = 1");
+    Check(coordinator.last_reconcile_stats().matched == 0, "R4：matched = 0");
+    Check(backend.imported_text.empty(),
+          "R4：远端版本没有覆盖本地（本地胜出 ⇒ 合并后无需回写）");
+
+    std::vector<fc::CloudSidecarRow> rows;
+    int64_t seq = -1;
+    Check(Br1cReadSidecar(sidecar, key, &rows, &seq), "R4：侧车文件可解析");
+    Check(rows.size() == 1 && rows[0].ms > kBr1cRemoteMs,
+          "R4：侧车记的是**新的墙钟 HLC**（本地胜出）");
+    std::remove(sidecar.c_str());
+  }
+
+  // ⑥ R4a（分歧子情形① · ADR 0076 D2-5a-5）：侧车**有**记录、载荷哈希**未变**
+  //   （本地没改过）而远端改了 ⇒ **远端胜出、不回推**（与优化前行为逐字一致）。
+  //   做法：第 1 轮先把本地条目推上云（协调器自己写出**合法**侧车 ⇒ 不手搓
+  //   keyfp）⇒ 第 2 轮只改远端，本地一个字不动。
+  {
+    Br1cBackend backend;
+    fc::CloudDictEntry local_row;
+    Check(Br1cFirstRow(backend.snapshot, &local_row, &err),
+          "R4a 夹具：本地条目可解析");
+    const std::string sidecar = "br1c-r4a-sidecar.state";
+    std::remove(sidecar.c_str());
+    const std::string item_id =
+        Br1cItemId(local_row.text, local_row.payload, key);
+    Check(!item_id.empty(), "R4a 夹具：可算出线上身份（回执 accepted 用它）");
+
+    // 第 1 轮：远端为空 ⇒ 本地条目按「新增」推上云 ⇒ 协调器写出带行的侧车。
+    {
+      MockTransport transport;
+      transport.replies.push_back(MockTransport::Reply{
+          true, 200, Br1cPullBody(std::vector<fc::Entry>(), key, false, 0)});
+      transport.replies.push_back(
+          MockTransport::Reply{true, 200,
+                               "{\"accepted\":[\"" + item_id +
+                                   "\"],\"skipped\":[],\"server_seq\":1}"});
+      fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-r4a-1",
+                                           "dev-br1c", key, sidecar);
+      fc::CloudSyncRoundResult result;
+      std::string round_err;
+      Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+            "R4a：第 1 轮成功（本地条目上云）");
+      Check(result.items_pushed == 1, "R4a：第 1 轮推送 1 条");
+    }
+    std::vector<fc::CloudSidecarRow> rows0;
+    int64_t seq0 = -1;
+    Check(Br1cReadSidecar(sidecar, key, &rows0, &seq0),
+          "R4a：第 1 轮侧车可解析");
+    Check(rows0.size() == 1, "R4a：第 1 轮侧车有 1 行（本地没改过）");
+
+    // 第 2 轮：本地**没改**（哈希未变）、远端改了 ⇒ 远端胜出。
+    //   远端 HLC 取远期值（必须新于第 1 轮的墙钟 HLC ⇒ 合并时远端胜出）。
+    const uint64_t kBr1cFutureMs = 4000000000000ull;
+    const std::vector<fc::Entry> remote_entries = {
+        Br1cEntry(local_row.text, "code0\tc=5 d=0 t=1", kBr1cFutureMs,
+                  kBr1cRemoteCounter, kBr1cRemoteDevice)};
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, Br1cPullBody(remote_entries, key, false, 1)});
+    // ★ 不预置推送回应 ⇒ 一旦发生推送，传输层就失败 ⇒ 「没有推送」是硬判据。
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-r4a-2",
+                                         "dev-br1c", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "R4a：第 2 轮成功（远端胜出）");
+    Check(transport.requests.size() == 1,
+          "R4a：第 2 轮只有一次请求（拉取）⇒ 没有推送");
+    Check(result.items_pushed == 0, "R4a：远端胜出 ⇒ 不回推（推送 0 条）");
+    Check(coordinator.last_reconcile_stats().divergent == 0,
+          "R4a：divergent = 0（本地没改过 ⇒ 不是本地胜出的分歧）");
+    Check(coordinator.last_reconcile_stats().matched == 0,
+          "R4a：matched = 0（明文不同 ⇒ 不是 R1 命中）");
+    Check(!backend.imported_text.empty(),
+          "R4a：远端版本覆盖了本地（合并后回写本地词典）");
+    Check(backend.imported_text.find("c=5") != std::string::npos,
+          "R4a：回写进去的是**远端那一份**内容");
+
+    std::vector<fc::CloudSidecarRow> rows;
+    int64_t seq = -1;
+    Check(Br1cReadSidecar(sidecar, key, &rows, &seq), "R4a：第 2 轮侧车可解析");
+    Check(rows.size() == 1 && rows[0].ms == kBr1cFutureMs,
+          "R4a：侧车记的是**远端 HLC**（远端胜出）");
+    std::remove(sidecar.c_str());
+  }
+
+  // ⑦ R4b（分歧子情形② · ADR 0076 D2-5a-5）：侧车**有**记录但本地**改过**
+  //   （载荷哈希变了）⇒ **本地胜出**（新墙钟 HLC）+
+  //   进推送集合（逐字同优化前）。
+  {
+    Br1cBackend backend;
+    fc::CloudDictEntry local_row;
+    Br1cFirstRow(backend.snapshot, &local_row, &err);
+    const std::string sidecar = "br1c-r4b-sidecar.state";
+    std::remove(sidecar.c_str());
+    const std::string item_id =
+        Br1cItemId(local_row.text, local_row.payload, key);
+    Check(!item_id.empty(), "R4b 夹具：可算出线上身份（回执 accepted 用它）");
+
+    // 第 1 轮：同上 ⇒ 侧车记下「本地那一版的载荷哈希」。
+    {
+      MockTransport transport;
+      transport.replies.push_back(MockTransport::Reply{
+          true, 200, Br1cPullBody(std::vector<fc::Entry>(), key, false, 0)});
+      transport.replies.push_back(
+          MockTransport::Reply{true, 200,
+                               "{\"accepted\":[\"" + item_id +
+                                   "\"],\"skipped\":[],\"server_seq\":1}"});
+      fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-r4b-1",
+                                           "dev-br1c", key, sidecar);
+      fc::CloudSyncRoundResult result;
+      std::string round_err;
+      Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+            "R4b：第 1 轮成功（本地条目上云）");
+      Check(result.items_pushed == 1, "R4b：第 1 轮推送 1 条");
+    }
+    std::vector<fc::CloudSidecarRow> rows0;
+    int64_t seq0 = -1;
+    Check(Br1cReadSidecar(sidecar, key, &rows0, &seq0),
+          "R4b：第 1 轮侧车可解析");
+    Check(rows0.size() == 1, "R4b：第 1 轮侧车有 1 行");
+
+    // 第 2 轮：本地**改过**（载荷变了 ⇒ 哈希变了），远端也改了 ⇒ 本地胜出。
+    backend.snapshot =
+        "# Rime user dictionary\n#@/db_name\tuserdb\n#@/tick\t1\n"
+        "code0\t本地词条\tc=9 d=0 t=1\n";
+    const std::vector<fc::Entry> remote_entries = {
+        Br1cEntry(local_row.text, "code0\tc=5 d=0 t=1", kBr1cRemoteMs,
+                  kBr1cRemoteCounter, kBr1cRemoteDevice)};
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, Br1cPullBody(remote_entries, key, false, 1)});
+    transport.replies.push_back(
+        MockTransport::Reply{true, 200,
+                             "{\"accepted\":[\"" + item_id +
+                                 "\"],\"skipped\":[],\"server_seq\":9}"});
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-r4b-2",
+                                         "dev-br1c", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "R4b：第 2 轮成功（本地胜出）");
+    Check(result.items_pushed == 1, "R4b：本地改过的分歧条目被推送（1 条）");
+    Check(coordinator.last_reconcile_stats().divergent == 1,
+          "R4b：divergent = 1");
+    Check(coordinator.last_reconcile_stats().matched == 0,
+          "R4b：matched = 0（明文不同 ⇒ 不是 R1 命中）");
+    Check(backend.imported_text.empty(),
+          "R4b：远端版本没有覆盖本地（本地胜出 ⇒ 合并后无需回写）");
+
+    std::vector<fc::CloudSidecarRow> rows;
+    int64_t seq = -1;
+    Check(Br1cReadSidecar(sidecar, key, &rows, &seq), "R4b：第 2 轮侧车可解析");
+    Check(rows.size() == 1 && rows[0].ms > kBr1cRemoteMs,
+          "R4b：侧车记的是**新的墙钟 HLC**（本地胜出）");
+    Check(rows.size() == 1 && rows[0].payload_hash != rows0[0].payload_hash,
+          "R4b：侧车记的是**本地改后**那一版的载荷哈希");
+    std::remove(sidecar.c_str());
+  }
+
+  // ⑧ R5：诊断行格式（生产头里的那一份 ⇒ 逐字断言）。
+  {
+    fc::CloudReconcileStats stats;
+    stats.scan_complete = true;
+    stats.matched = 3;
+    stats.deferred = 2;
+    stats.divergent = 1;
+    stats.pushed = 4;
+    Check(fc::FormatReconcileDiagLine(stats) ==
+              "reconcile scan_complete=1 matched=3 deferred=2 divergent=1 "
+              "pushed=4",
+          "R5：诊断行格式逐字正确");
+    const fc::CloudReconcileStats zero;
+    Check(fc::FormatReconcileDiagLine(zero) ==
+              "reconcile scan_complete=0 matched=0 deferred=0 divergent=0 "
+              "pushed=0",
+          "R5：全零计数也有逐字格式（失败轮也照打）");
+  }
+}
+
 int main() {
   ::SetConsoleOutputCP(CP_UTF8);
   std::printf("==== TestFluxingCloud · spec 100 阶段 B（契约与客户端纯逻辑）====\n");
@@ -4582,6 +5164,9 @@ int main() {
 
   // ADR 0074（客户端侧）：推送分批 32 条 / 接收超时 30 s。
   TestCloudPushBatchAndTimeout();
+
+  // 批次 BR-①c · ADR 0076 D2-5a：远端 HLC 沿用（侧车丢失 ⇒ 零写入）。
+  TestCloudRemoteHlcReuse();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。

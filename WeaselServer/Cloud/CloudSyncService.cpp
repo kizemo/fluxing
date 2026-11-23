@@ -409,16 +409,11 @@ static bool UnpackSealedPlain(const std::string& plain,
       *err = "云端条目的明文过短，无法还原条目键。";
     return false;
   }
-  const uint32_t n = (static_cast<uint32_t>(
-                          static_cast<uint8_t>(plain[0]))
-                      << 24) |
-                     (static_cast<uint32_t>(
-                          static_cast<uint8_t>(plain[1]))
-                      << 16) |
-                     (static_cast<uint32_t>(
-                          static_cast<uint8_t>(plain[2]))
-                      << 8) |
-                     static_cast<uint32_t>(static_cast<uint8_t>(plain[3]));
+  const uint32_t n =
+      (static_cast<uint32_t>(static_cast<uint8_t>(plain[0])) << 24) |
+      (static_cast<uint32_t>(static_cast<uint8_t>(plain[1])) << 16) |
+      (static_cast<uint32_t>(static_cast<uint8_t>(plain[2])) << 8) |
+      static_cast<uint32_t>(static_cast<uint8_t>(plain[3]));
   if (n == 0 || plain.size() < 4 + static_cast<size_t>(n)) {
     if (err)
       *err = "云端条目的明文结构不合法。";
@@ -895,6 +890,23 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
                                     std::string* err) {
   CloudSyncRoundResult local_result;
   CloudSyncRoundResult* out = result != nullptr ? result : &local_result;
+  CloudReconcileStats stats;
+  const bool ok = SyncRound(direction, out, err, &stats);
+  stats.pushed = out->items_pushed;
+  // 本轮计数留存一份（失败轮也刷新）⇒ 对外读取口与诊断行**同源**。
+  last_stats_ = stats;
+  // ★ ADR 0076 D2-5a-6（R5 · 观测口径）：**无条件**诊断行（本轮失败也照打）
+  //   ⇒ 判据取证不依赖界面显示（1017 那行只显示成功态摘要）。
+  diag::AppendLine("cloudsync", FormatReconcileDiagLine(stats));
+  return ok;
+}
+
+bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
+                                     CloudSyncRoundResult* result,
+                                     std::string* err,
+                                     CloudReconcileStats* stats) {
+  CloudSyncRoundResult local_result;
+  CloudSyncRoundResult* out = result != nullptr ? result : &local_result;
   out->ok = false;
   out->push_requests = 0;
   out->pull_requests = 0;
@@ -1000,25 +1012,11 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
     return false;
   }
 
-  // 给每行分配 / 复用 HLC：sidecar 里哈希没变 ⇒ 沿用旧 HLC（本地没改过）；
-  // 变了 ⇒ 分配新的（本地改动比远端新），并标记为「待推送」。
-  const uint64_t now_ms = UnixTimeMs();
-  std::vector<bool> locally_modified(local_entries.size(), false);
-  for (size_t i = 0; i < local_entries.size(); ++i) {
-    Entry& entry = local_entries[i];
-    const std::string hash = Sha256Hex(entry.payload);
-    const CloudSidecarRow* known = FindSidecarRow(sidecar_rows_, entry.key);
-    if (known != nullptr && known->payload_hash == hash) {
-      entry.hlc.ms = known->ms;
-      entry.hlc.counter = known->counter;
-      entry.hlc.device = known->device;
-      HlcObserve(&clock_, entry.hlc);
-    } else {
-      entry.hlc = HlcTick(&clock_, now_ms);
-      locally_modified[i] = true;
-    }
-  }
-
+  // ★ ADR 0076 D2-5a-1：**先拉远端，后分配 HLC**。
+  //   HLC 的分配 / 复用挪到拉取之后（见下面「对账」段）：分配时必须**看得见
+  //   远端**，否则侧车丢失后全部本地条目都被盖上新的墙钟 HLC ⇒ 服务端 HLC
+  //   守卫全部落空 ⇒ 整库重写（本批要根治的写放大）。
+  //
   // 1) 拉远端条目（按页分批；游标只增不减）。
   std::vector<Entry> remote_entries;
   int64_t pulled_seq = last_server_seq_;
@@ -1085,7 +1083,111 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
       token_refreshed = true;  // ★ 批次 BM：401 → 续期 → 重试真的发生过
   }
 
-  // 2) 合并本地与远端（逐条目 HLC 大者取胜）。
+  // 2) ★ 对账并分配 / 复用 HLC（ADR 0076 D2-5a-2 / -3 / -5）。
+  //
+  //    先让本机 HLC 时钟**观测**本轮远端版本 ⇒ 之后分配的墙钟 HLC 必然新于
+  //    远端（否则设备时钟超前 / 本机时钟回拨时，本地分歧条目会输给远端，
+  //    R4「本地胜出」落空）。
+  for (size_t i = 0; i < remote_entries.size(); ++i)
+    HlcObserve(&clock_, remote_entries[i].hlc);
+
+  //    ★ R2 闸门（ADR D2-5a-3 · 库存未证实不推送）：闸门成立 ⇒ 本轮**不得**
+  //    推送「既无侧车记录、又不在本轮远端集合里」的本地条目（延后到后续轮次）。
+  //    闸门 = **本轮拉取没有扫完整个云端库存**（has_more == true）。
+  //    ADR 字面口径是「pull_start_cursor == 0（本轮从零做全量库存扫描）**且**
+  //    has_more == true」—— 本实现取其**超集**（pull_start_cursor == 0
+  //    是子情形： 第一轮从零扫描）。偏离理由见
+  //    reports/fluxing-br-1c/impl-report.md 「设计歧义点 ①」：服务端单轮只吐
+  //    1,000 条 ⇒ 大账号要**多轮**才扫完库存 （ADR D2-5a-8 ①
+  //    已登记）；若闸门只在第一轮成立，第二轮就会把「本轮尚未
+  //    见到」的条目全推上去 ⇒ 写放大原样复现 ⇒ D2-5a-7 的判据（今日写入增量
+  //    = 0）不成立。侧车完好时（游标 > 0）本闸门只在「云端库存比游标多出 1,000
+  //    条以上」时生效 ⇒ 新增本地词条被**延后**到扫描完成的那一轮才推送
+  //    （不丢数据，只延后）。
+  const bool inventory_unproven = has_more;
+  if (stats != nullptr) {
+    // scan_complete = 本轮拉取**扫完了整个云端库存**（只推不拉的轮次没有
+    // 库存视图 ⇒ 记 0，不谎称扫完）。
+    stats->scan_complete =
+        !has_more && (direction == SyncDirection::kPullOnly ||
+                      direction == SyncDirection::kBoth);
+  }
+
+  std::vector<bool> locally_modified(local_entries.size(), false);
+  std::vector<bool> deferred(local_entries.size(), false);
+  // R1 命中（沿用了远端 HLC）的本地条目下标 ⇒ 侧车重建时要写进去（R3）。
+  std::vector<bool> remote_matched(local_entries.size(), false);
+  const uint64_t now_ms = UnixTimeMs();
+  int matched = 0;
+  int divergent = 0;
+  int deferred_count = 0;
+
+  for (size_t i = 0; i < local_entries.size(); ++i) {
+    Entry& entry = local_entries[i];
+    const std::string hash = Sha256Hex(entry.payload);
+    const CloudSidecarRow* known = FindSidecarRow(sidecar_rows_, entry.key);
+    const size_t remote_index = FindEntryIndex(remote_entries, entry.key);
+    const Entry* remote = remote_index == static_cast<size_t>(-1)
+                              ? nullptr
+                              : &remote_entries[remote_index];
+
+    if (remote != nullptr && remote->payload == entry.payload) {
+      // ★ R1（ADR D2-5a-2）：明文 payload **逐字节一致** ⇒ 本地这条就是云端
+      //   那条的当前版本 ⇒ 沿用**远端 HLC**、不标记本地改动、**不进推送集合**
+      //   ⇒ 该条目**零写入**（服务端 HLC 守卫必然命中：stored == R.hlc）。
+      entry.hlc = remote->hlc;
+      HlcObserve(&clock_, entry.hlc);
+      remote_matched[i] = true;
+      ++matched;
+      continue;
+    }
+
+    if (remote != nullptr) {
+      // ★ R4（ADR D2-5a-5）：同 item_key 但明文不同 ⇒ 分歧。
+      //   · 侧车**有**记录且载荷哈希未变 ⇒ 本地没改过 ⇒ 远端胜出、不回推
+      //     （与现行行为逐字一致：侧车在 ⇒ 知道谁更新）。
+      //   · 其余（侧车无记录 / 本地改过）⇒ 视作本地改动：分配新墙钟 HLC
+      //     + 推送（与现行行为逐字一致）。已知代价见 ADR D2-5a-8 ②。
+      if (known == nullptr || known->payload_hash != hash) {
+        entry.hlc = HlcTick(&clock_, now_ms);
+        locally_modified[i] = true;
+        ++divergent;
+        continue;
+      }
+      entry.hlc.ms = known->ms;
+      entry.hlc.counter = known->counter;
+      entry.hlc.device = known->device;
+      HlcObserve(&clock_, entry.hlc);
+      continue;
+    }
+
+    if (known != nullptr && known->payload_hash == hash) {
+      // 侧车有记录且载荷哈希未变 ⇒ 本地没改过 ⇒ 沿用旧 HLC。
+      entry.hlc.ms = known->ms;
+      entry.hlc.counter = known->counter;
+      entry.hlc.device = known->device;
+      HlcObserve(&clock_, entry.hlc);
+      continue;
+    }
+
+    // 本地新增 / 本地改过（侧车无记录，或哈希变了）⇒ 分配新墙钟 HLC。
+    entry.hlc = HlcTick(&clock_, now_ms);
+    locally_modified[i] = true;
+    if (known == nullptr && inventory_unproven) {
+      // ★ R2（ADR D2-5a-3）：既无侧车记录、又不在本轮远端集合里，且本轮
+      //   拉取**没有扫完整个云端库存** ⇒ 库存未证实 ⇒ 本轮**不推送**
+      //   （延后到库存扫完后的轮次）。
+      deferred[i] = true;
+      ++deferred_count;
+    }
+  }
+  if (stats != nullptr) {
+    stats->matched = matched;
+    stats->divergent = divergent;
+    stats->deferred = deferred_count;
+  }
+
+  // 3) 合并本地与远端（逐条目 HLC 大者取胜）。
   const std::vector<Entry> merged =
       MergeLocalAndRemote(local_entries, remote_entries);
 
@@ -1143,6 +1245,10 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
       direction == SyncDirection::kBoth) {
     for (size_t i = 0; i < local_entries.size(); ++i) {
       if (!locally_modified[i])
+        continue;
+      // ★ R2（ADR D2-5a-3）：库存未证实的条目（deferred）本轮**不进推送集合**
+      //   ⇒ 既不写放大，也不丢数据（延后到库存扫完后的轮次再推）。
+      if (deferred[i])
         continue;
       const size_t remote_index =
           FindEntryIndex(remote_entries, local_entries[i].key);
@@ -1248,6 +1354,14 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
          RemoteWins(remote_entries[remote_index],
                     local_entries[local_index]))) {
       synced = true;  // 远端胜出 ⇒ 服务端已经握着它
+    }
+    if (!synced && local_index != static_cast<size_t>(-1) &&
+        remote_matched[local_index]) {
+      // ★ R3（ADR D2-5a-4）：R1 命中条目（本地明文与远端**逐字节一致**）⇒
+      //   云端握着的版本就是本地这条 ⇒ 记为「已同步」，侧车写入**远端 HLC**
+      //   （merged 条目的 HLC 此时已等于远端 HLC）。
+      //   侧车丢失后重建靠这一条 ⇒ 否则这些条目下一轮又会被当成「本地新增」。
+      synced = true;
     }
     if (!synced && local_index != static_cast<size_t>(-1) &&
         (pushed[local_index] || skipped_flags[local_index])) {
@@ -1531,7 +1645,8 @@ bool ParseSidecarText(const std::string& text,
   return true;
 }
 
-bool ResetCloudSyncSidecarFile(const std::string& sidecar_path, std::string* err) {
+bool ResetCloudSyncSidecarFile(const std::string& sidecar_path,
+                               std::string* err) {
   if (sidecar_path.empty())
     return true;
   // 用「只有版本行 + 游标归零」覆盖 sidecar，而不是删文件 ——

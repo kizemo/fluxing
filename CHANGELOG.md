@@ -1,5 +1,12 @@
 ## [1.3.8]
 
+### fix(fluxing): 云同步「远端 HLC 沿用」根治 —— 删除本地同步状态后不再整库重推（批次 BR-①c · ADR 0076 D2-5a）
+
+- **修的问题**：删除客户端本地同步状态文件后，下一次同步会把「本地有、云端同 key」的词条当成新增条目，重新分配新 HLC 并整批推送 ⇒ 云端 `sync_items` 被全量重写（实测 ≈ 40,061 行）⇒ 写放大把服务端存储写入额度打爆（生产 `code 7500`）。
+- **修法（[ADR 0076](docs/adr/0076-cloud-write-amplification-governance-and-zero-write-registration.md) D2-5a）**：① **同步顺序倒置**（HLC 分配移到拉取之后）；② **远端 HLC 沿用**（同一条目且内容逐字节一致 ⇒ 直接沿用云端 HLC，不标记本地改动、不进推送集合）；③ **库存未证实不推送**（本轮未扫完云端库存时，「本地有、云端尚未见过」的条目延后到库存扫完那一轮再推）；④ **分歧条目**按「云端有记录且本地未改 ⇒ 云端胜出；否则本地胜出」处理；⑤ 云端胜出的条目回写本地同步状态文件（**文件格式不变**）；⑥ 同步日志新增一行 `[cloudsync] reconcile scan_complete=… matched=… deferred=… divergent=… pushed=…`（成功与失败都会打印）。
+- **门禁**：客户端全量构建 **0 错误** + `TestFluxingCloud` **PASS=787 FAIL=0**（基线 708 ⇒ **+79** 条新断言，**零删除**）；`TestDefaultHotkeys` / `TestWeaselIPC` 均 EXIT=0；改动文件 U+FFFD=0；`CloudSyncService.cpp` / `.h` clang-format 零漂移。
+- **⚠️ 已知边界**：① **新增词条上云会延后**（库存未扫完时延后，延迟不丢数据；本批**不**通过放大单轮拉取页数来压缩该延迟）；② 本地同步状态文件格式**逐字不变**、扫描状态**不落盘**；③ 云端脏条目仍在（服务端暂无删除条目的接口 ⇒ 本批只保证「跳过不毒化整轮」，不承诺清除云端脏数据）；④ 正式发布（公开版本号 + 版本线 + git tag）属独立发布决策，本批不升公开版本号。
+
 ### test(fluxing): 推送写路径 D1 配额错误映射单测（503 storage_quota_exceeded）—— 批次 BR · ADR 0076
 
 - **覆盖点**：新增 `cloud/fluxing-sync/test/push-quota-error-mapping.test.ts`（**5 条**断言）；手法 = `SELF.fetch` 走**真请求路径**（`SELF.fetch` → `src/index.ts` 顶层 catch → `toErrorResponse`），只打断 `env.DB.batch`（推送落库的**唯一写入口**）⇒ 鉴权与读路径仍走真实本地 D1 ⇒ 测的确实是「推送写阶段失败」这条真路径；覆盖 **Worker 内绑定形态**（`D1_ERROR:` 开头、无 `[code: 7500]`）/ **REST 形态**（带 `[code: 7500]`）/ **非 `Error` 实例**（普通对象）三种配额错误 ⇒ 均返回 **503 + code `storage_quota_exceeded`** + 中文「服务端存储写入额度已用尽，请稍后重试。」；**无关错误仍 500 `internal_error`**（不误伤）；D1 **零落库**（batch 抛错 ⇒ `sync_items` 一行未增）且拉取为空；故障**非粘性**（恢复后同一条推送正常 200 并落库 1 行）。
