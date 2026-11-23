@@ -4,7 +4,7 @@
 
 ## Status
 
-**Proposed**（待实现 + 门禁 + 生产复验通过后转 Accepted）
+**Accepted**（2026-11-23：决策已采纳 + 服务端改码已落码入库 + 已部署生产；判据 1 / 2 / 4 达成，**判据 3 未完成**，详见文末「生产复验结果（2026-11-23）」）
 
 本 ADR **替代** ADR 0075 决策 3 在「注册 / 重发」路径上的**实现方式**（事后删除 ⇒ 事中不写）；
 ADR 0075 的**已发布契约**（错误语义、回滚三态、三个 ASCII 诊断头）全部保留，见 D0-2 / D1-5。
@@ -248,9 +248,28 @@ ADR 0075 的**已发布契约**（错误语义、回滚三态、三个 ASCII 诊
 
 - 同邮箱并发注册：败者会多发一封邮件（D1-4）。
 - 推送到一半被 429 截断：余下条目下轮续传（客户端既有语义，无需改动）。
-- 设备达到 32 台上限后**必须**由用户在账号页撤销旧设备才能继续登录（D3-1）——这是有意的硬约束，不是缺陷。
+- 设备达到 32 台上限后，**新设备**登录需先由用户在账号页撤销旧设备；**已登记 `device_id` 的重新登录不受该上限阻挠**（走 `UPDATE devices` 分支，设备行数不变）（D3-1 / D3-1a）——这是有意的硬约束，不是缺陷。
 - BR-①c（客户端远端 HLC 沿用）**未授权 ⇒ 本批不闭合最大放大源**；在它落地前，
   「删 sidecar / 换机」仍可能触发一次全量重写（现由 D2-3 护栏兜住）。
+- **生产复验暴露的新缺口（已在本批修掉）**：D1 免费额度耗尽会让**所有 D1 写路径**返回通用
+  **500 `internal_error`**（含**真实用户登录** —— 登录要写 `refresh_tokens`）
+  ⇒ 登录 / 推送路径原先**未把** D1 配额错误（`code 7500`）映射为可解释的 **503**
+  （BQ 批次只在注册回滚路径做了 `storage_quota_exceeded` 映射）⇒ 客户端只能看到通用 500。
+  - **根因**：Worker 内 D1 绑定抛出的错误文本**不带** `[code: 7500]`（**只有 REST 通道带**）
+    ⇒ 旧判据 `/\[code:\s*7500\]/` 命中不了 ⇒ 登录 / 续期 / 推送等 D1 写路径对外报笼统 **500 `internal_error`**。
+  - **修法**：`cloud/fluxing-sync/src/errors.ts` 新增 `errorText()` 与 `isD1RowWriteQuotaError()`
+    （同时接受 **REST 形态**、**带 `[code: 7500]` 形态**、**`D1_ERROR:` 绑定形态**、**纯句子形态**，
+    并容忍抛出值**不是** `Error` 实例）；`toErrorResponse` 改用该判据；
+    `cloud/fluxing-sync/src/auth.ts` **删除本地重复副本**、统一走 `errors.ts` 的共享判据
+    （**两处各留一份正是本次漏配的根因**）。
+  - **验证**：新增 `test/d1-quota-error-mapping.test.ts`（**10 条**断言），
+    `test/register-zero-write.test.ts` 追加 **1 条**（Worker 形态 ⇒ 503 `storage_quota_exceeded`）；
+    门禁 `typecheck` **0** / `check` **0** = **10 文件 / 138 用例**（原 9 文件 / 127 用例 ⇒ **+1 文件 / +11 用例**）；
+    补部署 **DEPLOY_EXIT=0** ⇒ 新生产 Version **`8e0c3648-cd1e-4baa-b1ab-caa3bb0cc61a`**；
+    生产**活体验证 PASS**（`tmp/br-quota-503-probe.mjs` ⇒ `LOGIN_STATUS=503` +
+    `LOGIN_CODE=storage_quota_exceeded` + 中文「服务端存储写入额度已用尽，请稍后重试。」+
+    `VERDICT_QUOTA_503=PASS`）⇒ 配额耗尽期真实用户登录现在拿到**可解释、可重试**的 503
+    （UTC 午夜自动恢复），不再被误判为代码缺陷。详见文末「补部署：配额错误可解释化（2026-11-23）」。
 
 ---
 
@@ -262,3 +281,104 @@ ADR 0075 的**已发布契约**（错误语义、回滚三态、三个 ASCII 诊
   D2-3 / D3 的护栏均为「超限即拒绝」⇒ 关掉阈值即恢复旧行为。
 - **未在本 ADR 闭合**：BR-①c（客户端）、BR-①d（sidecar 加固）、`seq` 列迁移、口令重置路径同构修复、
   D1 免费额度承载不了词典规模的付费决策 ⇒ 见批次 BR 交接文档「未闭环清单」。
+
+---
+
+## 生产复验结果（2026-11-23）
+
+**部署**：`npm --prefix cloud/fluxing-sync run deploy` ⇒ **DEPLOY_EXIT=0**，新生产 Version ID =
+**`80385732-3473-4e78-b0ba-5a8e29ca1451`**（BQ 版回滚目标 = `96facaba-9277-4c77-b9f9-4df5cb6de41e`，对应 commit `314d03e`）。
+
+**本批无数据库迁移**：`a6ee188` 只改 `src/{auth,devices,env,sync}.ts` + `test/*` + `vitest.config.ts` + `wrangler.toml`；
+`migrations/` 仍只有 `0001_init.sql` / `0002_password_resets.sql` 且工作树干净 ⇒ 部署**无需** `d1 migrations apply`。
+
+**门禁**：`npm run typecheck` ⇒ **TSC_EXIT=0**；`npm run check` ⇒ **CHECK_EXIT=0**（**9 文件 / 127 用例**，
+BQ 基线 5 文件 / 86 用例逐条保留 +41）。
+
+### ADR D4-2 四条判据的生产复验结果（如实登记）
+
+1. **判据 1（注册发信失败 ⇒ 零写入）= PASS**：HTTP **422** + `code=mail_recipient_rejected` + 中文文案
+   「验证码邮件被邮件服务拒绝：该邮箱地址无法接收验证码，请更换邮箱地址后重试。」+
+   `X-Fluxing-Mail-Provider-Status: 422` + `X-Fluxing-Mail-Rollback: ok`；
+   `users` / `email_verifications` **零增量**。
+2. **判据 2（重发失败 ⇒ 零写入）= PASS**：HTTP **422** + `X-Fluxing-Mail-Provider-Status: 422` +
+   `X-Fluxing-Mail-Rollback: ok`；`email_verifications` / `users` / `sync_items` **零增量**。
+3. **判据 3（写预算超限 ⇒ 429 + R2/D1 零写入）= 未完成（被平台配额阻塞）**：已按 ADR 完成
+   「阈值 10 → 部署 → 复验 → 恢复 80000 → 再部署」全流程，但复验步骤的**登录前置**即失败
+   （`C3_LOGIN_STATUS=500`）⇒ 拿不到 access_token ⇒ **推送判据本身没有跑到**。
+   阈值已安全恢复：`WRITE_BUDGET_ROWS_PER_DAY = "80000"`，
+   `git status --porcelain -- cloud/fluxing-sync/wrangler.toml` **为空**（与 HEAD **逐字节一致**），
+   恢复后的部署 **DEPLOY_EXIT=0**。**本条不得记为 PASS。**
+4. **判据 4（设备上限 32 台 ⇒ 429）= 行为达成**：第 32 台之后登录被拒，`code=device_limit_reached` +
+   中文文案「此账号的设备数已达上限（32 台），请在账号页撤销不用的设备后再登录。」；
+   `devices` 行数**恰好 32** = `MAX_DEVICES_PER_ACCOUNT`。
+
+### 复验过程中定位到的 500 根因（不是本批代码缺陷）
+
+- **现象**：**已登记 `device_id` 重新登录 ⇒ HTTP 500 `internal_error`**。
+- **定位**：对生产 D1 逐条打 SQL ⇒ Cloudflare 返回 **`code: 7500`**
+  「Your account has exceeded D1's free tier daily row write limit」
+  （`wrangler d1 info` 显示 `rows_written_24h: 122253`，免费额度 10 万行/天）
+  ⇒ **生产 D1 免费额度耗尽**。
+- **行为边界**：写 **0 行**的语句（`SELECT`、匹配 0 行的 `DELETE`）照常通过；
+  `UPDATE users` 与 `INSERT refresh_tokens` **均被拒**。
+- **影响面**：**不限于探针** —— 真实用户登录也要写 `refresh_tokens` ⇒ **同样 500**
+  ⇒ 属生产事故级问题；UTC 午夜（北京时间次日 08:00）重置。
+- **定性**：**不是** BR 代码缺陷，**也不是** IPC / 协议问题。
+- **待改进点（已在本批修掉）**：登录 / 推送等 D1 写路径原先**没有**把 D1 配额错误（`code 7500`）映射成可解释的
+  503（BQ 批次只在注册回滚路径做了 `storage_quota_exceeded` 映射）⇒ 客户端只能看到通用 500。
+  - **根因**：Worker 内 D1 绑定抛出的错误文本**不带** `[code: 7500]`（**只有 REST 通道带**）
+    ⇒ 旧判据 `/\[code:\s*7500\]/` 命中不了 ⇒ 统一报笼统 **500 `internal_error`**。
+  - **修法**：`cloud/fluxing-sync/src/errors.ts` 新增 `errorText()` + `isD1RowWriteQuotaError()`
+    （**REST 形态 / 带 `[code: 7500]` 形态 / `D1_ERROR:` 绑定形态 / 纯句子形态**四路兼容，
+    且容忍抛出值**不是** `Error` 实例）；`toErrorResponse` 改用该判据；
+    `cloud/fluxing-sync/src/auth.ts` 删除本地重复副本、统一走共享判据
+    （**两处各留一份 = 本次漏配根因**）。
+  - **验证结论**：补部署后生产**活体验证 PASS** —— 同一路径由 500 `internal_error` 变为
+    **503 `storage_quota_exceeded`** + 中文「服务端存储写入额度已用尽，请稍后重试。」
+    ⇒ 配额耗尽期真实用户登录拿到**可解释、可重试**的 503（UTC 午夜自动恢复），不再是「不明 500」。
+    详见文末「补部署：配额错误可解释化（2026-11-23）」。
+
+### 探针残留（未清理）
+
+- 复验用探针账号 `br.probe.1795431653344@example.com`
+  （`users` 1 行 + `devices` 32 行 + `refresh_tokens` 64 行）与
+  `br.c2.1795431653344@example.com`（1 行）仍留在生产 D1；
+  **清理同样被 D1 配额阻塞**（删除行也是行写入）⇒ 需等配额重置后按前缀删除。
+- 证据文件（均在 `tmp/`，**禁止入库**）：`tmp/br-probe-{setup,c1,c2,c4}.log`、`tmp/br-probe-c3-run.log`、
+  `tmp/br-deploy-1.log`、`tmp/br-d1-probe.log`、`tmp/br-d1-baseline-20261123.json`、
+  `tmp/br-prod-verify.mjs`、`tmp/br-threshold.ps1`。
+
+### 本批客户端零改动
+
+BR-①c（远端 HLC 沿用，根治写放大的客户端项）用户明确授权**本批不开工**；未改 IPC 协议与
+`include/WeaselIPCData.h`、未改 `librime/`、未 bump 版本号（装机版仍 1.3.8.0）。
+
+### 补部署：配额错误可解释化（2026-11-23）
+
+- **根因**：Worker 内 D1 绑定抛出的错误文本**不带** `[code: 7500]`（**只有 REST 通道带**）
+  ⇒ 旧判据 `/\[code:\s*7500\]/` 命中不了 ⇒ 登录 / 续期 / 推送等 D1 写路径对外一律报笼统
+  **500 `internal_error`**（用户看到的是「不明 500」，无法判断是「稍后重试」还是「代码缺陷」）。
+- **修法**：`cloud/fluxing-sync/src/errors.ts` 新增 `errorText()` 与 `isD1RowWriteQuotaError()`
+  （同时接受 **REST 形态**、**带 `[code: 7500]` 形态**、**`D1_ERROR:` 绑定形态**、**纯句子形态**，
+  并容忍抛出值**不是** `Error` 实例）；`toErrorResponse` 改用该判据；
+  `cloud/fluxing-sync/src/auth.ts` **删除本地重复副本**、统一走 `errors.ts` 的共享判据
+  （**两处各留一份正是本次漏配的根因**）。
+- **单测**：新增 `cloud/fluxing-sync/test/d1-quota-error-mapping.test.ts`（**10 条**断言）；
+  `test/register-zero-write.test.ts` 追加 **1 条**（Worker 形态 ⇒ 503 `storage_quota_exceeded`）。
+- **门禁**：`npm --prefix cloud/fluxing-sync run typecheck` ⇒ **0**；
+  `npm --prefix cloud/fluxing-sync run check` ⇒ **0** ⇒ **10 文件 / 138 用例**
+  （原 9 文件 / 127 用例 ⇒ **+1 文件 / +11 用例**）。
+- **部署**：`npm --prefix cloud/fluxing-sync run deploy` ⇒ **DEPLOY_EXIT=0** ⇒
+  新生产 Version ID = **`8e0c3648-cd1e-4baa-b1ab-caa3bb0cc61a`**
+  （BR 主体版本 = `80385732-3473-4e78-b0ba-5a8e29ca1451`；BR 之前的回滚目标仍是 BQ 版
+  `96facaba-9277-4c77-b9f9-4df5cb6de41e`，对应 commit `314d03e`）。
+- **生产活体验证 = PASS**：`tmp/br-quota-503-probe.mjs` ⇒ `LOGIN_STATUS=503` +
+  `LOGIN_CODE=storage_quota_exceeded` + 中文「服务端存储写入额度已用尽，请稍后重试。」+
+  `VERDICT_QUOTA_503=PASS`（证据 `tmp/br-quota-503-probe.log`）；
+  **修复前同一路径是 500 `internal_error`**。
+- **意义**：配额耗尽期真实用户登录现在拿到**可解释、可重试**的 503（UTC 午夜自动恢复），
+  不再被误判为代码缺陷。**D1 免费额度耗尽本身仍是生产事故级问题**（影响面含真实用户登录写路径；
+  是否升级 Workers Paid **需用户拍板，未执行**）。
+- **仍未闭环**：判据 3（写预算护栏 429）**仍待 D1 配额重置后补跑**；生产探针残留待清理；
+  BR-①c（客户端远端 HLC 沿用）**未授权、未开工**。

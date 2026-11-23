@@ -4,11 +4,11 @@
 - **分支**：`feat/100-cloud-sync`（远程 `kizemo/feat/100-cloud-sync`）
 - **上游**：`origin` 只读
 - **本批真源**：`F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-22-batch-bq-register-mail-rejection-semantics.md` §9-3
-- **本批决策源**：`F:\soft\00selfmade\rime_claude\docs\adr\0076-cloud-write-amplification-governance-and-zero-write-registration.md`（Status = **Proposed**）
+- **本批决策源**：`F:\soft\00selfmade\rime_claude\docs\adr\0076-cloud-write-amplification-governance-and-zero-write-registration.md`（Status = **Accepted**，2026-11-23 转正）
 
 ## §0 结论速览
 
-- **本批性质** = **ADR 0076 已落盘 + 取证完成 + 服务端改码已落工作树**（T1 零写入化 / T2 写预算护栏 / T3 设备与令牌上限 / T4 单测均已落码）；**未 commit / 未 push / 未 deploy / 未改客户端 / 未 bump 版本号**。
+- **本批性质** = **ADR 0076 已落盘并转 Accepted + 取证完成 + 服务端 T1-T4 改码与单测已入库 + 已部署生产（Version `80385732-3473-4e78-b0ba-5a8e29ca1451`）+ 判据 1 / 2 PASS、判据 4 行为达成 + D1 配额错误映射已修（补部署 Version `8e0c3648-cd1e-4baa-b1ab-caa3bb0cc61a`，生产活体验证 PASS）**（**已 push / 未改客户端 / 未 bump 版本号**；**判据 3 未完成**，被生产 D1 免费额度耗尽阻塞）。
 - **改码轮范围**：只改 `cloud/fluxing-sync/**`（服务端），**客户端零改动** ⇒ 不触发 IPC 四边同步红线；ADR 0075 已发布的错误语义与三个 ASCII 诊断头**逐字保留**。
 - **范围（交接 §9-3，两子项同批做）**：① 推送写放大治理，拆两条线（(a) `sync_items` 全量推送；(b) `devices` / `refresh_tokens` 无上限增长）；② 失败注册「零写入」化（`users` / `email_verifications` 落库挪到发信成功之后，重发路径同样覆盖）。
 - **核心事实（推翻了本轮开工时的初始假设）**：客户端**已经是增量推送**（`WeaselServer/Cloud/CloudSyncEngine.cpp:207-210` 注释：推送集合由 sidecar 差分算出）⇒ 真正的放大源不是「每次都推全量」，而是 **sidecar 丢失 / 换机 ⇒ 全部条目重分配新 HLC（ms = 墙钟，必然大于服务端旧 HLC）⇒ 服务端 HLC 守卫失效 ⇒ 40,061 行全部重写（≈ 80,122 行写入）**。
@@ -38,8 +38,18 @@
 - **T3（服务端 · 子项①(b)）设备/令牌上限**：✅ **已落码**（见 §1 第 9 项）。**如实标注**：GC 不省额度（行删除同样计写入）。
 - **T4（单测）**：✅ **新增 4 个测试文件** + **既有 `test/register-mail-failure.test.ts` 按 D4-1a 迁注入点**（见 §1 第 10 项）；门禁数字见 §3。
 - **T5（父会话全量门禁复跑）**：`npm run typecheck` ⇒ TSC_EXIT=0；`npm run check` ⇒ CHECK_EXIT=0（BQ 基线 5 文件 / 86 用例逐条保留 + 本批新增组）；改动文件 U+FFFD = 0。
-- **T6（部署 + 生产复验，需授权）**：`wrangler deploy` 后按 ADR D4-2 四条判据复验（保留域注册 422 且 `users`/`email_verifications` 零增量 / 重发失败零增量 / 写预算 429 且零写入 / 设备上限拒绝并给中文文案）。
-- **T7（入库，需授权）**：门禁全绿后一次性提交「服务端改码 + 新增测试 + 文档（ADR 0076 的 D4-1a 段 / README index / 本交接 / relay prompt / `CHANGELOG.md` 条目）」⇒ Conventional Commits + 模块前缀（服务端批只能 `fluxing` / `docs` / `ci`）；**显式按路径 `git add`，禁用 `git add .`**；**未获指令不得 push**。
+- **T6（部署 + 生产复验，需授权）**：✅ **已完成**（部署与复验均已执行；**但判据 3 未完成**）。
+  - **部署**：`npm --prefix cloud/fluxing-sync run deploy` ⇒ **DEPLOY_EXIT=0**，新生产 Version ID = **`80385732-3473-4e78-b0ba-5a8e29ca1451`**（BQ 版回滚目标 = `96facaba-9277-4c77-b9f9-4df5cb6de41e`，对应 `314d03e`）；**本批无数据库迁移**（`migrations/` 未动 ⇒ 无需 `d1 migrations apply`）。
+  - **判据 1 = PASS**（注册发信失败 ⇒ 零写入）：422 + `mail_recipient_rejected` + 中文文案「验证码邮件被邮件服务拒绝：该邮箱地址无法接收验证码，请更换邮箱地址后重试。」+ `X-Fluxing-Mail-Provider-Status: 422` + `X-Fluxing-Mail-Rollback: ok` + `users` / `email_verifications` **零增量**。
+  - **判据 2 = PASS**（重发失败 ⇒ 零写入）：422 + provider-status 422 + rollback ok + `email_verifications` / `users` / `sync_items` **零增量**。
+  - **判据 4 = 行为达成**（设备上限 32 台 ⇒ 429）：第 32 台后登录被拒 + `device_limit_reached` + 中文文案「此账号的设备数已达上限（32 台），请在账号页撤销不用的设备后再登录。」+ `devices` 行数**恰好 32**。
+  - **判据 3 = 未完成**（写预算超限 ⇒ 429 + R2/D1 零写入）：已按 ADR 完成「阈值 10 → 部署 → 复验 → 恢复 80000 → 再部署」全流程，但复验的**登录前置**即失败（`C3_LOGIN_STATUS=500`）⇒ 拿不到 access_token ⇒ **推送判据未跑到** ⇒ **不得记为 PASS**；阈值已恢复 `WRITE_BUDGET_ROWS_PER_DAY = "80000"`，`wrangler.toml` 与 HEAD **逐字节一致**，恢复后部署 DEPLOY_EXIT=0。
+  - **500 根因** = **生产 D1 免费额度耗尽**（Cloudflare `code 7500`）⇒ **不是本批代码缺陷**；**影响面含真实用户登录**（详见 §3 与 ADR 0076「生产复验结果（2026-11-23）」）。
+  - **D1 配额错误映射已在本批修掉**（补部署）：**根因** = Worker 内 D1 绑定抛出的错误文本**不带** `[code: 7500]`（**只有 REST 通道带**）⇒ 旧判据 `/\[code:\s*7500\]/` 命中不了 ⇒ 登录 / 续期 / 推送等 D1 写路径对外报笼统 **500 `internal_error`**；**修法** = `cloud/fluxing-sync/src/errors.ts` 新增 `errorText()` 与 `isD1RowWriteQuotaError()`（**REST 形态 / 带 `[code: 7500]` 形态 / `D1_ERROR:` 绑定形态 / 纯句子形态**四路兼容，并容忍抛出值**不是** `Error` 实例），`toErrorResponse` 改用该判据，`cloud/fluxing-sync/src/auth.ts` **删除本地重复副本**、统一走 `errors.ts` 的共享判据（**两处各留一份正是本次漏配的根因**）；**单测** = 新增 `test/d1-quota-error-mapping.test.ts`（**10 条**断言）+ `test/register-zero-write.test.ts` 追加 **1 条**（Worker 形态 ⇒ 503 `storage_quota_exceeded`）；**门禁** = `typecheck` **0** / `check` **0** = **10 文件 / 138 用例**（原 9 文件 / 127 用例 ⇒ **+1 文件 / +11 用例**）；**部署** = DEPLOY_EXIT=0 ⇒ 新生产 Version **`8e0c3648-cd1e-4baa-b1ab-caa3bb0cc61a`**；**生产活体验证 PASS** = `tmp/br-quota-503-probe.mjs` ⇒ `LOGIN_STATUS=503` + `LOGIN_CODE=storage_quota_exceeded` + 中文「服务端存储写入额度已用尽，请稍后重试。」+ `VERDICT_QUOTA_503=PASS`（证据 `tmp/br-quota-503-probe.log`；修复前同一路径是 **500 `internal_error`**）⇒ 配额耗尽期真实用户登录现在拿到**可解释、可重试**的 503（UTC 午夜自动恢复），不再被误判为代码缺陷。
+- **T7（入库 + push）**：✅ **入库已完成 / push 已完成**。
+  - **入库 = 5 个 commit**：`a6ee188`（服务端 T1-T4 改码，11 文件）、`ac23bfa`（ADR 0076）、`d628e53`（ADR 0075 + BQ handoff）、`314d03e`（BQ 修复）、`89f90fd`（回填 BR 实施进度 + `CHANGELOG.md`）。
+  - **push 已完成**：`git -c http.proxy= -c https.proxy= push kizemo feat/100-cloud-sync` ⇒ **PUSH_EXIT=0** ⇒ `3e32cb8..89f90fd feat/100-cloud-sync -> feat/100-cloud-sync` ⇒ **前 5 个 commit 已全部进入远程**（远程已含 `3e32cb8..89f90fd` 区间全部 5 笔）。
+  - **本轮新增两笔提交**（服务端 D1 配额映射修复 + 本次文档回写）由收尾时**快进续推**（命令同上）；**显式按路径 `git add`，禁用 `git add .`**。
 - **T8（需用户授权才可开工）**：BR-①c 客户端「远端 HLC 沿用」（判据：删 sidecar 后同步一次，`sync_items` 今日写入增量 = 0）；BR-①d sidecar 落点加固（低优先）。
 
 ## §3 已验证 / 推断 / 未验证
@@ -65,8 +75,8 @@
 
 - BR-①c 客户端「远端 HLC 沿用」**未实现、未授权** ⇒ 最大放大源在本批之后**仍未根治**（现由 T2 护栏兜住）。
 - ADR D1-5 窄窗口（发信成功但落库失败）**未在生产复验**（需构造 D1 配额耗尽 + 发信成功）。
-- ADR D2-3 写预算护栏的**拒绝路径**未在生产复验。
-- ADR D3 设备上限 / refresh 上限**未在生产复验**（需构造 32 台设备 / 64 个有效 refresh）。
+- ADR D2-3 写预算护栏的**拒绝路径仍未在生产复验**（判据 3 未跑到，见本节「部署与生产复验轮补充」）。
+- ADR D3 设备上限**已在生产复验（行为达成）**；**refresh token 上限 64 未单独复验**。
 - 口令重置路径（`password_resets` 先落库后发信）**同构缺陷仍在**（ADR 0075 决策 7 明确不碰；ADR 0076 D1-7 只记录平移配方）。
 - `sync_items.seq` 列迁移**未做**（D2-4）。
 - D1 免费额度能否承载词典规模**未结论** ⇒ 付费议题仍未决（用户已定：不升级，等免费且可逆）。
@@ -83,11 +93,35 @@
 
 **未验证 / 未闭环（改码轮）**
 
-- **生产复验（ADR D4-2 四条判据）仍未做** —— 需 `wrangler deploy` 授权：保留域注册 422 且 `users`/`email_verifications` 零增量 / 重发失败零增量 / 写预算 429 且零写入 / 设备上限拒绝并给中文文案。
-- **写预算护栏的真实阈值路径未在生产复验**（单测用可写 var 注入小阈值走完整 HTTP 路径）；`used` 是行数**下界**，不是精确计费器。
+- **生产复验（ADR D4-2 四条判据）**: **改码轮时点仍未做** —— 需 `wrangler deploy` 授权：保留域注册 422 且 `users`/`email_verifications` 零增量 / 重发失败零增量 / 写预算 429 且零写入 / 设备上限拒绝并给中文文案。**该项已在后续「部署与生产复验轮补充」中执行**（判据 1 / 2 PASS、判据 4 行为达成、**判据 3 未完成**）。
+- **写预算护栏的真实阈值路径仍未在生产复验**（判据 3 被平台配额阻塞，见下）；单测用可写 var 注入小阈值走完整 HTTP 路径；`used` 是行数**下界**，不是精确计费器。
 - **新增测试文件功能重叠**：`test/register-zero-write.test.ts`（10 例）、`test/device-token-limits.test.ts`（7 例）、`test/zero-write-register-and-limits.test.ts`（16 例）覆盖同一 D1+D3 范围；`test/write-budget.test.ts`（8 例）覆盖 D2-3 ⇒ 是否合并待用户定（本轮**未合并**，四个文件全部保留且全绿）。
 - **用例计数一律以父会话亲跑的 vitest JSON 报告为准**（逐文件实测）：基线 `api` 30 / `mail-http` 20 / `password-reset` 14 / `r2-write` 8 / `register-mail-failure` 14 = **86 逐条保留**；新增 `device-token-limits` 7 / `register-zero-write` 10 / `write-budget` 8 / `zero-write-register-and-limits` 16 = **+41**；**全量 127**。⇒ 本文档与子会话自报中出现的「17 例」「11 例」等计数**均已按实测订正**，不再保留。
 - **并发改动来源未查清**：改码轮期间 `src/auth.ts` 的 `upsertDevice` 与新增 `test/zero-write-register-and-limits.test.ts` 由**非本会话派出的执行体**落盘（子会话自报「非我所改」）⇒ 本会话已按「不采信自报」逐行复核其语义并亲跑全量门禁 ⇒ **commit 前必须逐文件 `git diff` 复核，避免把来源不明的改动一起入库**。
+
+### 部署与生产复验轮补充（2026-11-23 · T6 / T7）
+
+**已验证（生产实测）**
+
+- 【实测】**生产部署**：`npm --prefix cloud/fluxing-sync run deploy` ⇒ **DEPLOY_EXIT=0**，新生产 Version ID = **`80385732-3473-4e78-b0ba-5a8e29ca1451`**（BQ 版回滚目标 = `96facaba-9277-4c77-b9f9-4df5cb6de41e`，对应 `314d03e`）；**本批无数据库迁移**（`a6ee188` 只改 `src/{auth,devices,env,sync}.ts` + `test/*` + `vitest.config.ts` + `wrangler.toml`；`migrations/` 仍只有 `0001_init.sql` / `0002_password_resets.sql` 且工作树干净 ⇒ 无需 `d1 migrations apply`）。
+- 【实测】**判据 1 PASS**（注册发信失败 ⇒ 零写入）：HTTP **422** + `code=mail_recipient_rejected` + 中文文案「验证码邮件被邮件服务拒绝：该邮箱地址无法接收验证码，请更换邮箱地址后重试。」+ `X-Fluxing-Mail-Provider-Status: 422` + `X-Fluxing-Mail-Rollback: ok`；`users` / `email_verifications` **零增量**。
+- 【实测】**判据 2 PASS**（重发失败 ⇒ 零写入）：HTTP **422** + provider-status 422 + rollback ok；`email_verifications` / `users` / `sync_items` **零增量**。
+- 【实测】**判据 4 行为达成**（设备上限 32 台 ⇒ 429）：第 32 台之后登录被拒，`code=device_limit_reached` + 中文文案「此账号的设备数已达上限（32 台），请在账号页撤销不用的设备后再登录。」；`devices` 行数**恰好 32** = `MAX_DEVICES_PER_ACCOUNT`。
+- 【实测】**500 的根因 = 生产 D1 免费额度耗尽，不是本批代码缺陷**：已登记 `device_id` 重新登录 ⇒ HTTP 500 `internal_error`；对生产 D1 逐条打 SQL ⇒ Cloudflare 返回 **`code: 7500`**「Your account has exceeded D1's free tier daily row write limit」（`wrangler d1 info` 显示 `rows_written_24h: 122253`，免费额度 10 万行/天）⇒ 写 **0 行**的语句（`SELECT`、匹配 0 行的 `DELETE`）照常通过，`UPDATE users` 与 `INSERT refresh_tokens` **均被拒** ⇒ **不是** BR 代码缺陷、**也不是** IPC / 协议问题；**影响面含真实用户登录**（登录要写 `refresh_tokens` ⇒ 同样 500）⇒ 生产事故级问题；UTC 午夜（北京时间次日 08:00）重置。
+- 【实测】**阈值恢复后状态一致**：已按 ADR 完成「阈值 10 → 部署 → 复验 → 恢复 80000 → 再部署」全流程；阈值已安全恢复为 `WRITE_BUDGET_ROWS_PER_DAY = "80000"`，`git status --porcelain -- cloud/fluxing-sync/wrangler.toml` **为空**（与 HEAD **逐字节一致**），恢复后的部署 **DEPLOY_EXIT=0**。
+- 【实测】**入库已完成**：5 个 commit = `a6ee188` / `ac23bfa` / `d628e53` / `314d03e` / `89f90fd`（区间 `3e32cb8..89f90fd`）。
+- 【实测】**push 已完成**：`git -c http.proxy= -c https.proxy= push kizemo feat/100-cloud-sync` ⇒ **PUSH_EXIT=0** ⇒ `3e32cb8..89f90fd feat/100-cloud-sync -> feat/100-cloud-sync` ⇒ **前 5 个 commit 已全部进入远程**。
+- 【实测】**D1 配额错误映射已修 + 补部署 + 生产活体验证 PASS**：**根因** = Worker 内 D1 绑定抛出的错误文本**不带** `[code: 7500]`（**只有 REST 通道带**）⇒ 旧判据 `/\[code:\s*7500\]/` 命中不了 ⇒ D1 写路径对外报笼统 **500 `internal_error`**；**修法** = `cloud/fluxing-sync/src/errors.ts` 新增 `errorText()` + `isD1RowWriteQuotaError()`（四路形态兼容 + 容忍抛出值非 `Error` 实例），`toErrorResponse` 改用该判据，`cloud/fluxing-sync/src/auth.ts` 删除本地重复副本统一走共享判据（**两处各留一份 = 漏配根因**）；**单测** = 新增 `test/d1-quota-error-mapping.test.ts`（10 条）+ `test/register-zero-write.test.ts` 追加 1 条；**门禁** = `typecheck` 0 / `check` 0 = **10 文件 / 138 用例**（原 9 文件 / 127 用例 ⇒ +1 文件 / +11 用例）；**部署** = DEPLOY_EXIT=0 ⇒ 新生产 Version **`8e0c3648-cd1e-4baa-b1ab-caa3bb0cc61a`**；**活体验证** = `tmp/br-quota-503-probe.mjs` ⇒ `LOGIN_STATUS=503` + `LOGIN_CODE=storage_quota_exceeded` + 中文「服务端存储写入额度已用尽，请稍后重试。」+ `VERDICT_QUOTA_503=PASS`（证据 `tmp/br-quota-503-probe.log`）⇒ 修复前同一路径是 **500 `internal_error`**。
+
+**未验证 / 未闭环（部署与生产复验轮）**
+
+- **判据 3（写预算超限 ⇒ 429 `write_budget_exceeded` + R2/D1 零写入）未跑到**：复验步骤的**登录前置**即失败（`C3_LOGIN_STATUS=500`）⇒ 拿不到 access_token ⇒ 推送判据本身没有跑到 ⇒ **不得记为 PASS**；需等 D1 配额重置后按「阈值 10 → 部署 → `node tmp/br-prod-verify.mjs c3` → 恢复 80000 → 再部署 → 校验 `wrangler.toml` 与 HEAD 一致」补跑。
+- **探针残留未清理**：`br.probe.1795431653344@example.com`（`users` 1 行 + `devices` 32 行 + `refresh_tokens` 64 行）与 `br.c2.1795431653344@example.com`（1 行）仍留在生产 D1；**清理同样被 D1 配额阻塞**（删除行也是行写入）⇒ 需等配额重置后按前缀删除。
+- **生产 push 已完成**：前 5 个 commit **已 push**（`3e32cb8..89f90fd`，PUSH_EXIT=0）⇒ 不再是待办；本轮新增的两笔提交（服务端配额映射修复 + 文档回写）由收尾**快进续推**。
+- **D1 配额错误映射（`code 7500` ⇒ 可解释 503）已在本批修掉**：旧判据只认带 `[code: 7500]` 的 **REST 形态**，而 **Worker 内 D1 绑定抛出的错误文本不带该标记** ⇒ 登录 / 续期 / 推送等写路径报笼统 500 ⇒ 现由 `cloud/fluxing-sync/src/errors.ts` 的共享判据（`errorText()` + `isD1RowWriteQuotaError()`）覆盖，**生产活体验证 PASS**（503 `storage_quota_exceeded` + 中文「服务端存储写入额度已用尽，请稍后重试。」）。
+- **D1 免费额度耗尽本身仍是生产事故级问题**：影响面含**真实用户登录写路径**（登录要写 `refresh_tokens`）⇒ UTC 午夜（北京时间次日 08:00）自动重置；**是否升级 Workers Paid 需用户拍板，本轮未执行**。
+- BR-①c 客户端「远端 HLC 沿用」**未实现、未授权**（用户明确**本批不开工**）⇒ 最大放大源仍未根治（现由 T2 护栏兜住）。
+- ADR D1-5 窄窗口（发信成功但落库失败）、D2-4 `seq` 列迁移、口令重置路径同构修复（ADR 0075 决策 7 明确不碰）**仍未做**。
 
 ## §4 证据路径
 
@@ -96,6 +130,7 @@
 - 客户端（只读取证）：`F:\soft\00selfmade\rime_claude\WeaselServer\Cloud\{CloudCrypto,CloudSyncService,CloudSyncEngine,CloudAccount,CloudAccountDialog,CloudCredentialStore}.{h,cpp}`
 - 门禁：`npm --prefix F:\soft\00selfmade\rime_claude\cloud\fluxing-sync run typecheck` / `run check`
 - BQ 复验脚本（凭据只在 tmp，禁止入库）：`F:\soft\00selfmade\rime_claude\tmp\{bq-verify.ps1,bq-e2e-mailtm-v4.ps1,bq-v4-deploy-verify.ps1,bq-d1-cleanup.ps1}`
+- BR 部署与生产复验证据（**全部在 `tmp/`，禁止入库**）：`F:\soft\00selfmade\rime_claude\tmp\br-probe-{setup,c1,c2,c4}.log`、`tmp\br-probe-c3-run.log`、`tmp\br-deploy-1.log`、`tmp\br-d1-probe.log`、`tmp\br-d1-baseline-20261123.json`、`tmp\br-prod-verify.mjs`、`tmp\br-threshold.ps1`
 
 ## §5 本轮工具坑
 
@@ -106,11 +141,30 @@
 - `wrangler d1 execute --command` 的 SQL 必须压成单行；Cloudflare API 与 mail.tm 必须直连（清代理变量）；`wrangler tail` 本机彻底不可用 ⇒ 诊断一律靠响应头自证。
 - 文件删除用本机受信任的可恢复删除器（路径见 `CLAUDE.md` 工具坑），不要用 `Remove-Item`（被本地硬安全策略拦截）。
 
+### 部署与生产复验轮新增（2026-11-23）
+
+- **`wrangler tail` 在本机不可用**：直连 `157.240.12.35:443` ETIMEDOUT ⇒ 生产 500 **拿不到服务端堆栈** ⇒ 只能靠「对生产 D1 逐条打 SQL」反推根因。
+- **判定「D1 配额耗尽」的定位手法**：用「**对生产 D1 逐条打 SQL** + `wrangler d1 info` 读 `rows_written_24h`」定位（写 0 行的 `SELECT` 照常通过，而 `UPDATE` / `INSERT` 被拒 ⇒ 据此反推是配额而非代码缺陷）—— 之所以只能走这条路，是因为本机 `wrangler tail` **直连 ETIMEDOUT 不可用**，拿不到服务端错误原文与堆栈。
+- PS7 `Invoke-WebRequest.Content` **可能是 `byte[]`** ⇒ 须 `[Text.Encoding]::UTF8.GetString($raw)` 解码，否则 JSON 解析必挂。
+- `wrangler d1 execute --command` 的 SQL **必须单行**（多行会被当成非法语句）。
+- Cloudflare API **必须直连**：清 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` **及小写变体**，并设 `NO_PROXY=*`。
+- D1 免费额度按「**行写入**」计 ⇒ 写 0 行不消耗；**删除行也是行写入** ⇒ 额度耗尽时连清理探针都做不了。
+- `cmd //c "build.bat …"` 会**假绿**（被 MSYS 吞参数）⇒ 必须 `cmd /c`。
+- 本地单测用**假后端**，**跑不出真实 D1 平台语义** ⇒ 本次生产 500 在本地单测同场景是 **200** ⇒ D1 配额类问题**必须**在生产验证。
+- 后台脚本**必须用绝对路径** ⇒ `Set-Location` **不改 .NET 进程 CWD**（同上文旧坑，本轮再次踩到）。
+- 长篇中文落盘用**字节级** `[IO.File]::WriteAllText(..., UTF8Encoding($false))` ⇒ bash 内联中文长脚本易被安全网关拦截。
+
 ## §6 Git 与提交现状
 
-- 分支：`## feat/100-cloud-sync...kizemo/feat/100-cloud-sync [ahead 3]`；HEAD = `ac23bfa`（`docs(fluxing): ADR 0076 推送写放大治理与失败注册零写入化`）；前两个是 BQ 的 `314d03e` fix + `d628e53` docs ⇒ **三个 commit 全部未 push**。
-- 工作树**已跟踪改动**：**已全部入库** —— 服务端源码 4 个 + 测试 5 个（1 改 4 增）+ `vitest.config.ts` + `wrangler.toml` ⇒ `a6ee188`；文档 4 件（ADR 0076 / `docs/adr/README.md` index / 本交接 / relay prompt）+ `CHANGELOG.md` ⇒ `docs(fluxing)` 那笔。
-- **禁入库杂项**（未跟踪，勿 `git add`）：`release/`、`reports/**`、`scripts/verify/*.ps1`、`docs/design/quickpanel-v6/design-demos/*.html`、`tmp/**`、`*.log`、`env.bat`、`weasel.props`；`librime` dirty（`m`，**不得 `git add librime`**）。
-- **本轮提交（两笔，均未 push）**：① `a6ee188` `fix(fluxing): 服务端写放大治理与失败注册零写入化（批次 BR · ADR 0076 · T1-T4）`（11 文件 / +2446 / -89）；② `docs(fluxing): 回填批次 BR 服务端 T1-T4 实施进度与 CHANGELOG 条目`（ADR 0076 补 D3-1a / D4-1a、`docs/adr/README.md` index、本交接、relay prompt、`CHANGELOG.md` 条目）⇒ 分支 **ahead 5**（含 BQ 的 `314d03e` + `d628e53`）。
-- **未 push / 未 deploy / 未改客户端 / 未 bump 版本号**。
+- 分支：`feat/100-cloud-sync`；**前 5 笔 commit 已 push**（远程 `3e32cb8..89f90fd`）⇒ `git -c http.proxy= -c https.proxy= push kizemo feat/100-cloud-sync` ⇒ **PUSH_EXIT=0** ⇒ `3e32cb8..89f90fd feat/100-cloud-sync -> feat/100-cloud-sync`。
+- **本批入库的 5 个 commit**（**已 push**）：
+  - `a6ee188` `fix(fluxing): 服务端写放大治理与失败注册零写入化（批次 BR · ADR 0076 · T1-T4）`（11 文件）；
+  - `ac23bfa` `docs(fluxing): ADR 0076 推送写放大治理与失败注册零写入化（批次 BR）`；
+  - `d628e53` `docs(fluxing): ADR 0075 + BQ batch handoff for register mail rejection semantics`；
+  - `314d03e` `fix(fluxing): register mail rejection semantics + failed registration rollback`；
+  - `89f90fd` `docs(fluxing): 回填批次 BR 服务端 T1-T4 实施进度与 CHANGELOG 条目`。
+- **本轮新增两笔提交**（服务端 D1 配额错误映射修复 + 本次文档回写）由**收尾时快进续推**（命令同上）⇒ 当前提交序列见 `git log --oneline -3`（**不写死 hash**，避免自指漂移）。
+- **工作树**：除 `librime`（dirty submodule，**不得 `git add librime`**）与下列未跟踪杂项外**干净** ⇒ **已跟踪改动全部入库**。
+- **禁入库杂项**（未跟踪，勿 `git add`）：`release/`、`reports/**`、`scripts/verify/*.ps1`、`docs/design/quickpanel-v6/design-demos/*.html`、`tmp/**`、`*.log`、`env.bat`、`weasel.props`。
+- **已部署 / 已 push / 未改客户端 / 未 bump 版本号**（装机版仍 1.3.8.0）。
 - **入库红线**：显式按路径 `git add <path>`，**禁用 `git add .`**；commit 前必须 `git status -sb` + `git diff --stat`；Conventional Commits + 模块前缀（服务端批只能 `fluxing` / `docs` / `ci`）。
