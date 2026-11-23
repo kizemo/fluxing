@@ -158,6 +158,11 @@ ADR 0075 的**已发布契约**（错误语义、回滚三态、三个 ASCII 诊
   （DELETE，1 行写入）；仍 ≥ 32 ⇒ **拒绝登录**并返回 **429 `device_limit_reached`** + 中文文案
   「此账号的设备数已达上限（32 台），请在账号页撤销不用的设备后再登录。」
   ⇒ **不自动删除任何仍在使用的设备**（不删用户数据）。
+- **D3-1a（2026-11-23 改码轮修订）设备上限只约束「新设备」**：改码轮发现 D3-1 的字面口径（≥32 ⇒ 拒绝**任何**登录，含已存在的 `device_id`）会造成**自锁**：账号恰好有 32 台活跃设备时，用户在**任何一台**上都登不上（access token 过期且 refresh 已被 GC 时需服务端人工介入）⇒ 与 D3-1「不删用户数据」的初衷相悖。
+  ⇒ **修订**：设备上限只在**新增设备行**的路径上判定（`upsertDevice` 的 INSERT 分支之前调 `enforceDeviceLimit`）；**同一 `device_id` 重新登录走 UPDATE 分支 ⇒ 不新增设备行 ⇒ 不受上限约束、不被拒**（顺带清掉该设备 `revoked_at`、刷新 `last_seen`）。
+  ⇒ **表增长上限不变**（`devices` 行数仍 ≤ 32 ⇒ 写放大源仍被封住）；**仍不自动删除任何活跃设备**（D3-1 的硬约束不变）。
+  ⇒ **本条取代 Consequences 段「设备达到 32 台上限后必须由用户在账号页撤销旧设备才能继续登录」的表述**：改为「**新设备**登录需先撤销旧设备；**已登记设备重新登录不受阻**」。
+  ⇒ 判据成对覆盖：新增用例「上限下同 `device_id` 重复登录 ⇒ 允许（走 UPDATE 分支，不被拒、不新增设备行）」与「新 `device_id` ⇒ 429 `device_limit_reached`」。
 - **D3-2 不删除用户同步数据**：设备回收只动 `devices` 行与该设备 `refresh_tokens` 的 `revoked_at`；
   **不动** `sync_items`、**不动** R2 对象（口径与 `cloud/fluxing-sync/src/devices.ts` 撤销语义一致）。
 - **D3-3 `refresh_tokens` 保留窗口 + GC 触发点**：登录 / 续期时顺带清理 `expires_at < now - 30 天` 的行
@@ -174,6 +179,16 @@ ADR 0075 的**已发布契约**（错误语义、回滚三态、三个 ASCII 诊
 - **D4-1 服务端门禁**：`npm run typecheck` ⇒ **TSC_EXIT=0**；`npm run check` ⇒ **CHECK_EXIT=0**，
   既有 **5 文件 / 86 用例**逐条保留（BQ 基线），本批新增组断言（目标 ≥ 20 条）全部针对 D1 / D2-3 / D3 的新分支；
   改动文件 **U+FFFD = 0**。
+- **D4-1a（2026-11-23 改码轮澄清）**：「逐条保留」指**用例数量与断言意图逐条保留**，**不指注入点冻结**。
+  D0-3 已把「失败注册的事后删除」实现方式替换为「事中不写」⇒ BQ 批 `test/register-mail-failure.test.ts` 中
+  **3 个编码旧回滚注入点**的用例（`degraded` / `failed` / 配额 503）必须把注入点迁到**窄窗口**
+  （发信成功但落库失败），**断言值逐字不变**（仍分别断言 `'degraded'` / `'failed'` / 503 `storage_quota_exceeded`）；
+  该文件用例数仍为 14，总用例数不减、不删。
+  - 注入点归属：`degraded` / `failed` 两例命中 **`email_verifications` 的 INSERT**（`users` 已插入 ⇒ 走真实 `rollbackRegister`）；
+    配额例命中 **`INSERT INTO users`**（users 未插入 ⇒ 天然零残留、无需回滚），且必须同时注入一个**能发成功的 `doFetch`**
+    （否则会撞上上游 401 ⇒ 500 `server_misconfigured`，到不了落库点）。
+  - 非配额类存储故障（⇒ 503 `storage_unavailable` + 「验证码已发送，但服务器存储暂时不可用，请稍后重试或重新获取验证码。」）
+    由本批**新增**用例覆盖，不占用既有 3 例。
 - **D4-2 生产复验（需 deploy 授权）**：
   1. 保留域探针注册 ⇒ **422** + `mail_recipient_rejected` + 中文文案 + `X-Fluxing-Mail-Provider-Status: 422`
      + **新增判据：`users` / `email_verifications` 行数前后对比 = 0 增量**；

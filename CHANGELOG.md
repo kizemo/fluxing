@@ -1,4 +1,15 @@
 ## [1.3.8]
+### fix(fluxing): 推送写放大治理与失败注册零写入化 —— 写预算护栏 + 设备/令牌上限 + 失败注册一行不写（批次 BR · ADR 0076）
+
+- **根因（推翻了开工时的初始假设）**：客户端**本来就是增量推送**（`WeaselServer/Cloud/CloudSyncEngine.cpp:207-210` 的 sidecar 差分）⇒ 真正的放大源不是「每次都推全量」，而是 **sidecar 丢失 / 换机 ⇒ 全部条目重分配新 HLC（ms = 墙钟，必然大于服务端旧 HLC）⇒ 服务端 HLC 守卫失效 ⇒ 40,061 行全部重写（≈ 80,122 行写入）**；**服务端无法在密文域去重**（AAD 含 `hlc` + nonce 随机 ⇒ 内容未变也判定不了；上传明文内容哈希会泄漏词条指纹、破坏端到端密文语义）⇒ 该路线在 ADR 0076 D2-2 明确关闭，不再反复讨论。
+- **修法（[ADR 0076](docs/adr/0076-cloud-write-amplification-governance-and-zero-write-registration.md)）**：
+  - **D1 失败注册「零写入」化**：拆出纯生成函数 `generateVerificationCode`（只产 `{code, codeHash, createdAt, expiresAt}`，不发信不落库）+ `persistVerificationCode`；`handleRegister` 新顺序 = 闸门 → 查重（只读）→ 纯生成 → **发信** → `INSERT users` → 落库验证码 ⇒ **发信失败 ⇒ 一行不写**（回滚头保持 `'ok'`，因为没有残留可回滚）；重发路径同构（失败只删本次验证码行、保留账号）；窄窗口「发信成功但落库失败」⇒ 503 `storage_unavailable` + 沿用 `rollbackRegister` 三态兜底；**ADR 0075 已发布的错误语义与三个 ASCII 诊断头逐字保留**；
+  - **D2-3 写预算护栏**：新增 `evaluateWriteBudget` / `planWriteRows` / `utcDayStartSeconds` / `countTodayWrittenRows` / `evaluatePushWriteBudget`；护栏插在 **HLC 守卫之后、R2 staging / put 之前** ⇒ 超限时 **R2 与 D1 双零写入**（含不推进 `server_seq`）；阈值 `WRITE_BUDGET_ROWS_PER_DAY` 默认 **80,000 行 / 账号 / UTC 日**（缺失或非法回落默认，不 fail closed）；**不改** `DELETE+INSERT` 写序、**不引入** `seq` 列（迁移需回填 40,061 行 = 打爆当日额度）；
+  - **D3 设备与令牌上限**：`MAX_DEVICES_PER_ACCOUNT = 32`（超限时先回收**已撤销**且最久未见的设备行，删行前先撤其 `refresh_tokens`，仍超 ⇒ 429 `device_limit_reached` + 中文文案）；`MAX_VALID_REFRESH_TOKENS = 64`；过期行 30 天保留窗口 + 登录 / 续期顺带 GC（单次 ≤ 200 行，**GC 不省额度**：行删除同样计写入）；**D3-1a 修订**：设备上限只约束**新增设备行**（同 `device_id` 重登走 UPDATE 分支，不被拒 ⇒ 消除「32 台活跃 ⇒ 全设备登不上」的自锁）；**绝不自动删活跃设备**；
+  - **不动** `librime/`、IPC 协议消息类型与 `include/WeaselIPCData.h`、`WeaselServer/**` 客户端、第三方依赖、版本号（装机版仍 1.3.8.0）。
+- **门禁**：服务端 `npm run typecheck` **TSC_EXIT=0** + `npm run check` **CHECK_EXIT=0**（**9 文件 / 127 用例通过**，BQ 基线 5 文件 / 86 用例**逐条保留** ⇒ **+4 文件 +41 用例**：零写入注册与设备令牌上限 16 例 / 零写入补充分支 10 例 / 设备令牌上限补充分支 7 例 / 写预算护栏 8 例）；改动文件 **U+FFFD=0**、CRLF=0。
+- **⚠️ 未闭环（如实登记）**：① **未部署 / 未生产复验** —— ADR D4-2 四条判据（保留域注册 422 且 `users`/`email_verifications` 零增量 / 重发失败零增量 / 写预算 429 且零写入 / 设备上限拒绝并给中文文案）**需用户授权 `wrangler deploy` 后执行**；② **未 push**（分支 `feat/100-cloud-sync` 领先远程）；③ **客户端 BR-①c「远端 HLC 沿用」未授权未开工** ⇒ 最大放大源（sidecar 丢失 ⇒ 全量重分配 HLC）**仍未根治**，服务端护栏只是兜底；④ 护栏的 `used` 是行数**下界**，不是精确计费器；⑤ 三个新增测试文件覆盖同一 D1+D3 范围，**功能重叠未合并**。
+
 ### fix(fluxing): 注册发信失败语义修正 + 失败注册回滚 —— 保留域收件人不再被伪装成可重试的 503（批次 BQ · ADR 0075）
 
 - **根因（对照实验定案）**：同上游 / 同时刻 / 同密钥 / 同 `from`，**只换收件人域** ⇒ `@example.com`（RFC 2606/6761 保留域、null MX）被上游**永久拒绝**（生产实测上游实际返回 **422**），而旧映射（`cloud/fluxing-sync/src/mail.ts:196-223` 把上游 4xx 一律伪装成 **503 `mail_send_failed`「请稍后重试」**）把它表述成临时故障 ⇒ **BO 批「注册链路不可用」口径被推翻**（真实域注册 **200**，body 含 `account_id` / `salt` / `kdf` / `need_email_verify=true`）⇒ **注册链路对真实邮箱可用**。

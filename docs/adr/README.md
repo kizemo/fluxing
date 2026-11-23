@@ -84,6 +84,7 @@ Do not dump all ADRs into every prompt.
 | 0073 | 0073. 客户端推送分批对齐服务端上限：单批 64 条 + 编译期护栏（**决策 5 已被 0074 修订**） | `docs/adr/0073-client-push-batch-aligns-with-server-limit.md` | Accepted（决策 5 由 0074 修订） |
 | 0074 | 0074. 推送批量吞吐：服务端并发化 + 客户端批量/超时重估（修订 0073 决策 5） | `docs/adr/0074-push-batch-throughput-server-concurrency-and-client-timeout.md` | Accepted |
 | 0075 | 0075. 注册发信失败按「永久拒绝 / 临时故障 / 配置错误」分流：上游 4xx ⇒ 422 `mail_recipient_rejected`，失败注册一律回滚（DELETE 优先、UPDATE 失效化降级），诊断头带上游 status 与回滚结果 | `docs/adr/0075-register-mail-rejection-semantics-and-failed-registration-rollback.md` | Accepted |
+| 0076 | 0076. 推送写放大治理与失败注册零写入化：写预算护栏（超限 429 零写入）、设备/令牌上限、失败注册与重发改「先发信后落库」（批次 BR） | `docs/adr/0076-cloud-write-amplification-governance-and-zero-write-registration.md` | Proposed |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and
