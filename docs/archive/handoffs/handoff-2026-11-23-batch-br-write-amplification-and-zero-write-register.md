@@ -179,3 +179,17 @@
 - **禁入库杂项**（未跟踪，勿 `git add`）：`release/`、`reports/**`、`scripts/verify/*.ps1`、`docs/design/quickpanel-v6/design-demos/*.html`、`tmp/**`、`*.log`、`env.bat`、`weasel.props`。
 - **已部署 / 已 push / 未改客户端 / 未 bump 版本号**（装机版仍 1.3.8.0）。
 - **入库红线**：显式按路径 `git add <path>`，**禁用 `git add .`**；commit 前必须 `git status -sb` + `git diff --stat`；Conventional Commits + 模块前缀（服务端批只能 `fluxing` / `docs` / `ci`）。
+
+### 接手核对轮补充（2026-11-23 20:25 · 新会话接手 · **未改产品代码**）
+
+**本轮只做「状态核对 + 定时任务指令订正 + 文档回写」**；取证 / 改码 / 部署 / 入库 / push **一律未重做**。
+
+- 【实测】**分支已完全同步**：本地 `HEAD` = `cedd19a` = 远程跟踪 `kizemo/feat/100-cloud-sync` ⇒ `git status -sb` 显示 `## feat/100-cloud-sync...kizemo/feat/100-cloud-sync` 且 **无 ahead/behind 标记** ⇒ **上一轮遗留的「2 个 commit 未推」已不存在**（cron 指令里那一步据此删去）。
+- 【实测】**明早补跑链路在位**：定时任务 `self-2fd9cb456b4b1eb65b256941d0500f74` = `scheduleType=once` / `runAtMs=1795479046336`（= 北京时间 **2026-11-24 08:10:46**）/ `enabled=true` / `status=active` / **运行历史为空 ⇒ 从未执行**；绑定会话 `mvs_a819329ea0b042f48e756cd8ef0fc84f`（**未归档** / idle）⇒ 补跑结果落在该会话。
+- 【实测】**本轮 `cron_update` 已改写任务指令**：删去已过时的「补推 2 个 commit」步骤；新增「第 4 步 · 收尾双产物」（要求补跑轮结束后就地改写本 handoff + `CLAUDE.md` BR 指针 + relay prompt）。
+- 【实测】**补跑脚本逐行核对在位**：`tmp/br-c3-run.ps1` 第 93-96 行输出四行 `FINAL_C3_VERDICT` / `FINAL_THRESHOLD_RESTORED` / `FINAL_WRANGLER_TOML_CLEAN` / `FINAL_CLEANUP_VERDICT`；第 86-90 行 STEP7 调 `node tmp/br-prod-verify.mjs cleanup` 并抓 `VERDICT_CLEANUP`；`tmp/br-prod-verify.mjs` 支持 `setup|c1|c2|c3|c4|cleanup|status|all` 全部 stage ⇒ **明早只需跑这一条脚本**（`pwsh -NoProfile -File tmp\br-c3-run.ps1`）。
+- 【实测】**接力 prompt 已存在且为最新**：`docs/archive/prompts/prompt-next-session-2026-11-23-batch-br-write-amplification-and-zero-write-register.md`。
+- 【实测】**本会话已设一次性回检**：`self-390d58e2e3374a4d410517e7402a8902` ⇒ 北京时间 **2026-11-24 08:20 前后**读 `tmp/br-c3-run.log` 四行 + `git status -sb` ⇒ 只有 `FINAL_C3_VERDICT=PASS` 才可记判据 3 PASS。
+- 【如实】**本轮门禁未重跑**（未改任何产品代码）⇒ 沿用 19:38 轮结论（`typecheck` 0 / `check` 0 = **11 文件 / 143 用例**）。
+- 【实测】**工作树现状**（本轮开始时）：`M CLAUDE.md`（上一轮未入库的 BR 指针回写）+ `m librime`（dirty submodule，**禁止 `git add librime`**）+ 未跟踪杂项（`release/` / `reports/**` / `scripts/verify/*.ps1` / `docs/design/quickpanel-v6/design-demos/*.html`）⇒ 按红线不入库。
+- **待用户拍板三项（本轮未动）**：Workers Paid 是否升级 / **BR-①c（客户端远端 HLC 沿用）是否授权** / **BR-②（护栏是否改全局口径或按活跃账号数分摊总额度）**。
