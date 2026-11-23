@@ -564,10 +564,12 @@ cmd /c 'rmdir /S /Q "D:\Program Files\fluxing\weasel\data"'
 cmd /c 'rmdir /S /Q "D:\Program Files\fluxing\weasel"'
 # user1 保留
 
-# 重新 install 到 D 盘（先清注册表 + 杀进程）
-Remove-Item "HKLM:\SOFTWARE\WOW6432Node\Fluxing" -Recurse -Force
-Remove-Item "HKCU:\Software\Fluxing" -Recurse -Force
-cmd /c "`"$installer`" /S /D=`"D:\Program Files\fluxing`""
+# 重新 install 到 D 盘（**不要清注册表**; 安装器会自己按映像名杀旧 WeaselServer）
+# 不要 Remove-Item "HKLM:\SOFTWARE\WOW6432Node\Fluxing"（丢 InstallDir ⇒ 安装路径不再持久）
+# 不要 Remove-Item "HKCU:\Software\Fluxing"（丢 RimeUserDir ⇒ 用户词典路径丢失）
+# /D= 必须是最后一个参数且不加引号（路径含空格, 不能用 cmd /c 拼接）; 静默装机用 Start-Process + Wait-Process -Timeout（Start-Process -Wait 对 NSIS 挂死）
+$proc = Start-Process -FilePath $installer -ArgumentList '/S','/D=D:\Program Files\fluxing' -PassThru
+Wait-Process -Id $proc.Id -Timeout 300
 
 # 验证 PE 架构
 $b = [System.IO.File]::ReadAllBytes("path\to\WeaselServer.exe")

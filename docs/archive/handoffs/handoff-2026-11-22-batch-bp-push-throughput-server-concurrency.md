@@ -9,6 +9,17 @@
 
 ---
 
+## 0. 接力结论速览（2026-11-22 20:45 · 本会话复核补记）
+
+- 本会话 = **BP 批收官复核 + 接力准备**：**零产品代码改动、零构建、零部署、零提交**。BP 的取证与修复已由 `cd4e370` / `3846b4c` / `d99ce30` / `3e32cb8` 落地并推送（远程 `kizemo/feat/100-cloud-sync` = `3e32cb8`），**下一会话不要重做**。
+- 复核结论：ADR 0074 / 本交接 / BO 交接与 4 个源码真源**逐条自洽、无偏差**（逐点对照见 §8.2）；现场复验与 BP 记录**逐字一致**（§8.3）。
+- **装机问题已定论：1.3.8 无需手动重装** —— 装机件 `WeaselServer.exe` 2 803 200 B / sha16 `BB5415258CB96A27` 与构建产物**逐字相等**，服务 pid 285340（16:16:09 起）正在运行（§8.3）。
+- 下一步首选：**BQ = `/v1/auth/register` 恒 503 `mail_send_failed` 的独立修复**（单机可闭环、不需用户在场、不碰账号态与用户词典）—— 排序与理由见 §9。
+- 本会话新发现 **6 处文档漂移**（进站必读文档与实测相左），其中**最高危一条已当场修掉**（“清注册表”会丢 `RimeUserDir`）；其余 5 条登记在 §10，待下一批顺手修订。
+- 未闭环清单以 §4 为准；本会话**未新增未闭环项**，只在 §9 给出下一步的优先级与授权边界。
+
+---
+
 ## 1. 当前状态（一段话）
 
 BO 批把 12002 定案为「服务端串行 R2 put ⇒ 64 条 = 40 071 ms ≫ 客户端 15 000 ms 接收超时」，但只留下根因、没动码。**本批已把修复落地并上线生产**：服务端 R2 阶段改为**波式并发**（`R2_WRITE_CONCURRENCY = 6`，写序「R2 先、D1 后」不变，`MAX_PUSH_ITEMS = 64` / HLC 守卫 / 幂等语义**一字未动**），`wrangler deploy` 直达生产（Version `fcdd38ed`）；同一探针复测 **n=64 由 40 071 ms 降到 10 330 ms**（3.88×，**低于旧客户端 15 s 超时**），n=16 由 11 300 降到 3 568 ms，n=200 仍被服务端 400 `too_many_items` 快速拒绝（闸门未松动），四档 `accepted` 与 D1 落库行数逐档吻合 ⇒ **HLC 守卫 / 幂等 / 写序未变**。客户端同步把接收超时 **15 000 → 30 000 ms**、推送单批 **64 → 32**（保留 `kServerMaxPushItems = 64` 与 `static_assert`），并新增**无条件**诊断行 `[cloudsync] push batch items=<n> elapsed_ms=<ms> http=<status>` ⇒ 下次再遇 12002 可直接读出「卡在哪一批、多少条、耗时多少」。全门禁绿（服务端 typecheck + check **4 文件 / 65 用例**；客户端 `BUILD_EXIT=0` **0 警告 0 错误**；云单测 **PASS=708 FAIL=0**；L0 **15/15**；clang-format 定点 **5 文件 0 漂移**；改动文件 **U+FFFD=0**），已出包装机、装机实证（sha16 `BB5415258CB96A27` 与构建产物逐字相等）、真机复验成功（1017 = **「最近同步：2026-11-22 16:17:11 · 成功（推送 0 条，拉取 1 条；云端有 1 条格式非法的条目已跳过）」**，日志**无 12002**）。**唯一未闭环**：客户端**批量推送路径未在真机压到**（真实账号本地无改动 ⇒ 推送 0 条 ⇒ 批次循环未进入 ⇒ 新诊断行按设计不打印，真机日志 0 命中），批量行为目前只有单测层证据。
@@ -192,3 +203,85 @@ BO 批把 12002 定案为「服务端串行 R2 put ⇒ 64 条 = 40 071 ms ≫ �
 - 本批**未新增**依赖、未改 `include/WeaselIPCData.h` ⇒ **不触发** IPC 四边同步红线。
 - `librime` 目录保持 dirty（`m`）是**既有**状态，**不要** `git add librime`。
 - 远程：`kizemo/feat/100-cloud-sync`（push 失败先试直连 `-c http.proxy= -c https.proxy=`，再试默认代理，**两条路都要走**）。
+
+---
+
+## 8. 本会话复核明细（2026-11-22 20:45）
+
+### 8.1 复核范围（读齐，不重做）
+
+- 进站 5 份：`CONTEXT.md`、`AGENTS.md`（§1/§4/§5/§7/§9/§10）、`.specify/memory/constitution.md`、`.specify/memory/project-knowledge.md`（§0/§1/§10/§11 + 全文标题地图）、`docs/agents/domain.md`。
+- 本批真源：本交接全文、ADR 0074 全文、BO 交接（§12/§13/§14）、`cloud/fluxing-sync/src/r2-write.ts` 全文 70 行、`cloud/fluxing-sync/src/sync.ts:130-214`、`WeaselServer/Cloud/CloudTransport.h:55-94`、`WeaselServer/Cloud/CloudSyncService.h:45-89`、`tmp/bo-push-probe.ps1` 全文 266 行。
+- 凭据纪律：本会话**未读取明文口令**，只核对 `auth_key` / `token` 的长度与 sha16；`tmp/bo-push-probe-state.json`、`tmp/AN-register-qq.txt` 仍**禁止入库**。
+
+### 8.2 源码逐点核对（文档 ↔ 代码，无偏差）
+
+| 文档口径 | 源码落点 | 结论 |
+|---|---|---|
+| ADR 0074 并发度 6 | `cloud/fluxing-sync/src/r2-write.ts:15` `R2_WRITE_CONCURRENCY = 6` | 一致 |
+| 波式 `Promise.all`、并发上界可证 | `r2-write.ts:57-70`（`limit = max(1, min(concurrency, targets.length))` + 每波 `slice` + `await Promise.all`） | 一致 |
+| 串行循环已替换 | `sync.ts:159-176` `await putAllWithConcurrency(env.BUCKET, accepted.map(...))` | 一致 |
+| 写序「R2 先、D1 后」不变 | `sync.ts:150-155` staged → `:159-176` R2 → `:178-210` D1 | 一致 |
+| `MAX_PUSH_ITEMS = 64` 不变 | `cloud/fluxing-sync/src/wire.ts:33` + `CloudSyncService.h:59` `kServerMaxPushItems = 64` | 一致 |
+| HLC 守卫 / 幂等不变 | `sync.ts:140-148`（`compareHlc(stored, item.hlc) >= 0` ⇒ `skipped`）、同 key 覆盖语义 | 一致 |
+| D1 阶段一字未动 | `sync.ts:178-210` `DELETE` + `INSERT` 成对语句 + `env.DB.batch` | 一致 |
+| 客户端接收超时 30 s（四相共用） | `CloudTransport.h:72` `timeout_ms = 30000`（`CloudTransport.cpp:153-157` 兜底同值） | 一致 |
+| 推送单批 32 条 + `static_assert` | `CloudSyncService.h:65` `kPushBatchSize = 32`、`:67-68` `static_assert` | 一致 |
+| 批次诊断行**无条件**打印 | `CloudSyncService.cpp:1183-1209` `[cloudsync] push batch items=<n> elapsed_ms=<ms> http=<status>` | 一致 |
+
+### 8.3 现场复验（本会话实测命令与数字）
+
+```
+git log --oneline -6                 → 3e32cb8 / d99ce30 / 3846b4c / cd4e370 / b8b3f7f / edd2080
+git log --oneline -1 kizemo/feat/100-cloud-sync → 3e32cb8     （本地 = 远程，未落后）
+git status -sb                       → 仅 " m librime" + BP 登记的未跟踪报告/探针；无待提交产品改动
+output\archives\fluxing-1.3.8-installer.exe        → 42 984 891 B / sha16 15B5DB6732B33E8C （= BP 记录）
+D:\Program Files\fluxing\weasel\WeaselServer.exe    →  2 803 200 B / sha16 BB5415258CB96A27（= BP 内嵌载荷）
+Get-Process WeaselServer             → pid 285340，StartTime 16:16:09（= BP 装机实证）
+```
+
+⇒ **装机版就是 BP 构建产物，逐字一致且正在运行 ⇒ 不需要手动重装 1.3.8。**（若将来要复验客户端批量推送路径，用的也是这一份 1.3.8，无需另装。）
+
+### 8.4 未闭环项（沿用 §4，本会话逐条复核后**未新增、未改写**）
+
+- 客户端**批量推送路径未在真机压到**：真实账号本地无改动 ⇒ 推送 0 条 ⇒ 批次循环未进入 ⇒ 新诊断行按设计不打印（真机日志 0 命中）；批量行为目前只有单测层 4 条断言证据。
+- **用户词典无可备份路径**（`userdb*` 在 `%APPDATA%` / `%LOCALAPPDATA%` / `D:\Program Files\fluxing` 深度 4 均未找到，`HKCU\Software\{Rime,Fluxing}` 下无 `RimeUserDir`）⇒「空云端探针账号 ⇒ 客户端被迫推全量」造样本测试**未执行**，且**在找到可备份路径前禁止执行**（会损坏用户个人词典）。
+- 服务端 **≤5 000 ms 目标未达成**（实测 10 330 ms；并发 6 = Cloudflare Workers 同时打开连接数硬上限 ⇒ 理论下限 ≈9–10 s，再上调会触发 `Network connection lost`）。
+- `/v1/auth/register` 恒 **503 `mail_send_failed`**（`mail_outbox` 无行）⇒ 新用户「注册 → 收码 → 验证」链路当前不可用；独立缺陷，另立批次。
+- 云端 **1 条畸形脏条目**仍在（服务端**没有「删条目」API** ⇒ BM/BN 只保证「跳过不毒化整轮」）。
+- **R2 残留 164 个孤儿对象**无法删除（D1 行已删 ⇒ Cleanup 取不到 key；`r2_key = u/<uid>/<sha256(item_key)>` 不可逆推；`wrangler r2 object` 无 `list` 子命令）；另 2 个 `ak.probe.*@example.com` 账号属更早批次遗留、刻意未删。
+- **`sync_items` ↔ R2 对象数一致性核对未做**（ADR 0074 Consequences 新增项，受上一条阻塞）。
+- **双机 AC 7 条 / restore 端到端 / 输入延迟两组对照 / G-3、G-5 真跑** ⇒ 需两台机器 + 用户在场。
+
+---
+
+## 9. 下一步计划（下一批 BQ 候选 · 按可执行性排序）
+
+1. **BQ 首选（建议下一批做）· `/v1/auth/register` 恒 503 `mail_send_failed` 的独立修复**：单机即可闭环、**不需用户在场**、不碰账号态与用户词典、不改客户端；用户可感知（新账号收不到验证码）。排查起点：`cloud/fluxing-sync/wrangler.toml` 的 `[vars]` `MAIL_*` 与「`mail_outbox` 无行」这一事实；**须新写 ADR**（独立缺陷 ⇒ 独立决策）。客户端侧若要补提示，可复用 ADR 0072 的 `notices` 通道。
+2. **零风险并行小项 · §10 剩余 5 条文档漂移修订**：只改 `AGENTS.md` / `.specify/memory/project-knowledge.md` / `cloud/fluxing-sync/src/r2-write.ts` 注释 / ADR 行号引用，纯文档、零产品风险。
+3. **需用户授权 · 真机批量推送路径压测**（闭合 §8.4 第 1 条）：两条互斥前置，**都需用户明确点头**——(i) 找到并备份用户词典路径（当前找不到）⇒ 会动用户个人词典；(ii) 把装机客户端换成探针账号登录 ⇒ 覆盖本机账号态。**未获授权前不得执行。**
+4. **阻塞中 · `sync_items` ↔ R2 对象数一致性核对**：需先定口径（另立小批给 R2 加列举能力，或让探针留存 item_key 集合以便重建 `sha256` key）。
+5. **需两台机器 + 用户在场**：双机 AC 7 条 / restore 端到端 / 输入延迟两组对照 / G-3、G-5 真跑。
+6. **待用户拍板（历史遗留、多轮未答复）**：18 份 `run-*.log` 是否 `git add -f` 入库；`tmp\bh-c2d-fmt-check.cpp`（83 767 B，本机策略删不掉）如何处置；R2 164 个孤儿对象是否走「重建 key 逐个 `wrangler r2 object delete`」；2 个 `ak.probe.*@example.com` 账号是否删除。
+
+---
+
+## 10. 本会话新发现（文档漂移 6 条 + 新增工具坑）
+
+### 10.1 文档漂移（进站必读文档 vs 实测，按危害排序）
+
+| # | 位置 | 文档写的 | 实测 / 真源 | 危害 |
+|---|---|---|---|---|
+| 1 | `CLAUDE.md`（“必须 `/D=<path>` 显式”条）+ `.specify/memory/project-knowledge.md` §11 装机配方 | silent-install 前**先清** `HKLM\Software\Fluxing\Weasel` 与 `HKCU\Software\Fluxing`，`/D=` **带引号** | `include/FluxingUserPaths.h:61` ⇒ `RimeUserDir` 正落在 `HKCU\Software\Fluxing\Weasel`；BL/BM/BN/BP 四轮实测 = **无需清**（清了反而丢 `RimeUserDir`）、`/D=` 必须**最后一个参数且不加引号** | **高**（新会话照做 ⇒ 丢用户词典路径）—— **本会话已修**（两处均改为“不清注册表”+ `Start-Process`/`Wait-Process -Timeout` 口径） |
+| 2 | `AGENTS.md` §5/§10 与 `project-knowledge.md` §0 | release 产物在 `output/` 根目录 | 实际在 `output\archives\fluxing-<ver>-installer.exe`（本会话实测 `output\archives\fluxing-1.3.8-installer.exe`） | 中（找不到产物） |
+| 3 | `project-knowledge.md` §0 | 分支 `Fluxing`、v0.21.0.8、最后更新 2026-10-26 | 实为 `feat/100-cloud-sync`、装机版 1.3.8.0、日期 2026-11-22 | 中（分支/版本口径过期） |
+| 4 | `cloud/fluxing-sync/src/r2-write.ts` 头注释 | 预期 ≈7 s | 实测 10 330 ms（64 条） | 低（预期偏乐观） |
+| 5 | ADR 0074 正文 | 引用 `sync.ts:155-201` | 该区间因本批改动已位移（现 `:150-176` 为 R2 段，`:178-210` 为 D1 段） | 低（行号引用失效） |
+| 6 | `CLAUDE.md` §1 第 4 份说明 | 「`project-knowledge.md` §A 与 §11 — 部署 + NSIS 配方」 | §A 实为 rimetrae cursor 经验附录；部署/NSIS 配方在 §11 | 低 |
+
+### 10.2 新增工具坑
+
+- **PowerShell `Get-ChildItem <dir>` 的表格输出会被本工具层吞掉** ⇒ 改用 `Get-ChildItem <dir> -Force | ForEach-Object { "$($_.Mode) $($_.Name) $($_.Length)" }` 即出内容（`-ErrorAction SilentlyContinue` 更会静默返回空）。
+- 多路径通配（`Get-ChildItem a\*.exe,b\*.exe`）在部分场景返回空 ⇒ 改 `-Recurse -Depth 2` 或分目录列举。
+- 文档类文件行尾分流再确认：handoff / ADR / prompt / `project-knowledge.md` = **LF-only、无 BOM**；`CHANGELOG.md` = **CRLF-only** ⇒ 插条目仍需字节级写入（`[IO.File]::ReadAllText` + `String.Replace` + `WriteAllText`，保留原 BOM 标志与 `\r\n`）。
+

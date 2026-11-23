@@ -119,6 +119,8 @@ BO 轮 §8「推断」栏写的「`12002` 是本机到 Worker 的链路/代理�
 
 `POST /v1/auth/register` 连续四次返回 **503 `mail_send_failed`**（1754 / 2884 / 5945 ms 等），且 `mail_outbox` **无任何行** ⇒ **当前新用户无法完成「注册 → 收码 → 验证」链路**（`users` 行会落，但验证码邮件发不出去）。与本批 12002 根因**无关**（push 不发信），但产品侧「注册验证」功能当前不可用。排查方向：`cloud/fluxing-sync/wrangler.toml` 的 `[vars]` 里 `MAIL_*` 配置（服务商 / 额度 / 密钥 / 出口网络）。
 
+> **已由批次 BQ 修订（2026-11-22 · ADR 0075 · `docs/archive/handoffs/handoff-2026-11-22-batch-bq-register-mail-rejection-semantics.md`）**：本节「注册验证功能当前不可用」的**口径不成立**。BO 当时的 503 只由**保留域**探针（`example.com` = RFC 2606/6761 保留域、null MX）支撑；BQ 用对照实验（同上游、同时刻、同密钥，**只换收件人域**）证明：**真实域收件人注册返回 200**（body 含 `account_id` / `salt` / `kdf` / `need_email_verify=true`），被拒的是**保留域收件人**，且上游实际返回 **422**（永久拒绝），被服务端的错误映射伪装成「可重试的 503」。BQ 已把该映射改为 **422 `mail_recipient_rejected`**（客户端不读 code、422 不在自动重试集合 ⇒ 语义自动正确），并给失败注册加了回滚与诊断头。**结论**：注册链路对**真实邮箱可用**；对**保留域 / 被上游拒收的邮箱**，正确行为是「明确报错让用户换邮箱」，而不是重试到 429。**遗留**：BQ 的「零残留 / 立即重试 / 真实域端到端」三条判据被生产 D1 每日行写入配额耗尽（Cloudflare `code 7500`）阻塞，待配额恢复后复验。
+
 ---
 
 ## 8. 已验证 / 推断 / 未验证
@@ -158,7 +160,7 @@ BO 轮 §8「推断」栏写的「`12002` 是本机到 Worker 的链路/代理�
 3. **客户端侧参数重估**（与 ADR 0074 一起定）：`CloudSyncService.h` 的 `kPushBatchSize` 与 `CloudTransport.h:72` 的 `timeout_ms`；建议同时加一条诊断行「每批条目数 + elapsed_ms + HTTP 状态」⇒ 把 §6 的推断变成直证。
 4. **真机复验（成功侧）**：真实账号 `25940969@qq.com` 登录态点「立即同步」，判据 = 1017 变成功态且诊断日志无 `12002`；或用探针账号 + 本地造 130 条改动，走客户端多批路径。
 5. **门禁（照 BO 批口径）**：`cmd /c "build.bat release weasel installer"` ⇒ `BUILD_EXIT=0`（0 警告 0 错误）；`TestFluxingCloud` 须显式 msbuild **且带 `/p:SolutionDir=F:\soft\00selfmade\rime_claude\`**、exe **在仓库根跑** ⇒ 相对当前基线 **704** 不回归；`scripts/gate/L0-static.ps1 -Mode all` ⇒ **15/15**；clang-format **18.1.8** 定点 `--lines=起:止` ⇒ **0 漂移**；改动文件 **U+FFFD=0**。顺序铁律：**格式化 → 复检 → 构建 → 单测 → 打包 → 装机 → 记 sha**。
-6. **独立批次修注册 503**（§7）：查 `MAIL_*` 配置 / 服务商额度 / 出口网络，修好前「注册验证」链路不可用。
+6. ~~**独立批次修注册 503**（§7）：查 `MAIL_*` 配置 / 服务商额度 / 出口网络，修好前「注册验证」链路不可用。~~ **已由批次 BQ 完成（2026-11-22 · ADR 0075）**：根因 = 上游对**保留域收件人**（`example.com` = RFC 2606/6761 保留域、null MX）返回**永久拒绝 422**，被旧错误映射伪装成「可重试的 503」；对照实验（同上游 / 同时刻 / 同密钥，**只换收件人域**）证明**真实域收件人注册返回 200** ⇒ BO §7 的「注册验证链路不可用」口径**过宽**，已在 §7 就地修订。BQ 已上线生产（Version `96facaba-9277-4c77-b9f9-4df5cb6de41e`）：上游失败改为**三类分流**（4xx 永久拒绝 ⇒ 422 `mail_recipient_rejected`；401/403 与配置类 name ⇒ 500 `server_misconfigured`；429 ⇒ 503 `mail_rate_limited`；409/5xx/网络 ⇒ 503 `mail_send_failed`），失败注册**回滚**（DELETE 优先，被拒则降级 UPDATE 失效化 ⇒ 三态 `ok`/`degraded`/`failed`），新增诊断头 `X-Fluxing-Mail-Provider-Status` / `X-Fluxing-Mail-Rollback` / `X-Fluxing-Mail-Rollback-Error`。**遗留**：BQ 门禁判据「零残留 / 立即重试 / 真实域端到端」三条**被生产 D1 每日行写入配额耗尽**（Cloudflare `code 7500`）阻塞，待配额恢复后复验 —— 详见 `F:\soft\00selfmade\rime_claude\docs\archive\handoffs\handoff-2026-11-22-batch-bq-register-mail-rejection-semantics.md`。
 7. **收尾**：探针数据清理（§13）+ `git status -sb` + `git diff --stat` + 提交（`docs` 前缀）+ 待用户拍板项（§12）。
 
 ---
@@ -190,7 +192,7 @@ BO 轮 §8「推断」栏写的「`12002` 是本机到 Worker 的链路/代理�
 3. `Invoke-D1` 解析 wrangler pretty-print JSON **必须**用 `[regex]::Match($raw,'(?s)\[\s*\{.*\}\s*\]')`；输出前还有含 `[` 的 `▲ [WARNING] Proxy environment variables detected.` 行。
 4. **D1 SQL 即使解析失败也已在服务端执行** ⇒ 不要把「解析失败」误判成「UPDATE 没生效」。
 5. `wrangler` 一切远端命令**必须先设** `HTTPS_PROXY` / `HTTP_PROXY` = `http://127.0.0.1:7897` 且 `NODE_USE_ENV_PROXY=1`（直连 `connect ETIMEDOUT 23.101.24.70:443`）；`wrangler tail` 通道要靠「打一条 `/v1/health` 看是否产出 invocation JSON」自证，**不能靠 banner**（`--format json` 下不打印）。
-6. `POST /v1/auth/register` 恒 503 `mail_send_failed` ⇒ 探针改走「注册后用 D1 把探针邮箱置 `email_verified=1`」+ `login`（`auth.ts:517` 登录不校验已验证，`auth.ts:543` 回显）。
+6. ~~`POST /v1/auth/register` 恒 503 `mail_send_failed` ⇒ 探针改走「注册后用 D1 把探针邮箱置 `email_verified=1`」+ `login`（`auth.ts:517` 登录不校验已验证，`auth.ts:543` 回显）。~~ **BQ 已修订（2026-11-22 · ADR 0075）**：该「恒 503」只在**保留域收件人**上成立（上游对 `example.com` 实际返回 **422 永久拒绝**，BQ 已改为 422 `mail_recipient_rejected` + 中文文案「该邮箱地址无法接收验证码，请更换邮箱地址后重试。」）；**真实域收件人注册返回 200**，探针可直接走正常注册 → 收码 → verify，不必再用 D1 置位。**但**保留域探针若仍要拿「可用账号」，本条的 D1 置位法继续有效 —— 前提是 D1 `UPDATE` 可用，**每日行写入配额耗尽期间会被拒**（Cloudflare `code 7500`，见 BQ 交接 §8 的 P0）。
 7. **`auth_key` 必须生成即落盘**（`tmp/bo-push-probe-state.json`）：任一 FATAL 都会留下永不可登录的僵尸账号（本轮此前已产生 3 个）。
 8. 每档 push **必须独立 `item_key` 前缀**（`{prefix}-n{n}-b{bytes}`），否则互相 upsert、计时与条数都会失真。
 9. 探针凭据纪律：只打印 `auth_key_len` / `auth_key_sha16` / `token_len` / `token_sha16`；响应体 `access_token` / `refresh_token` 脱敏为 `<masked>`；`auth_key` 明文只进 state 文件，**不进日志/报告/对话/入库**。

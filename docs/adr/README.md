@@ -83,6 +83,7 @@ Do not dump all ADRs into every prompt.
 | 0072 | 0072. 成功态「最近同步」显示本轮提示：结构化 notices 通道（成功态 1017 不再丢弃轮次 message；无提示时文案逐字不变） | `docs/adr/0072-sync-round-notices-visible-in-success-status.md` | Accepted |
 | 0073 | 0073. 客户端推送分批对齐服务端上限：单批 64 条 + 编译期护栏（**决策 5 已被 0074 修订**） | `docs/adr/0073-client-push-batch-aligns-with-server-limit.md` | Accepted（决策 5 由 0074 修订） |
 | 0074 | 0074. 推送批量吞吐：服务端并发化 + 客户端批量/超时重估（修订 0073 决策 5） | `docs/adr/0074-push-batch-throughput-server-concurrency-and-client-timeout.md` | Accepted |
+| 0075 | 0075. 注册发信失败按「永久拒绝 / 临时故障 / 配置错误」分流：上游 4xx ⇒ 422 `mail_recipient_rejected`，失败注册一律回滚（DELETE 优先、UPDATE 失效化降级），诊断头带上游 status 与回滚结果 | `docs/adr/0075-register-mail-rejection-semantics-and-failed-registration-rollback.md` | Accepted |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

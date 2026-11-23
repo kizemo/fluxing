@@ -1,4 +1,17 @@
 ## [1.3.8]
+### fix(fluxing): 注册发信失败语义修正 + 失败注册回滚 —— 保留域收件人不再被伪装成可重试的 503（批次 BQ · ADR 0075）
+
+- **根因（对照实验定案）**：同上游 / 同时刻 / 同密钥 / 同 `from`，**只换收件人域** ⇒ `@example.com`（RFC 2606/6761 保留域、null MX）被上游**永久拒绝**（生产实测上游实际返回 **422**），而旧映射（`cloud/fluxing-sync/src/mail.ts:196-223` 把上游 4xx 一律伪装成 **503 `mail_send_failed`「请稍后重试」**）把它表述成临时故障 ⇒ **BO 批「注册链路不可用」口径被推翻**（真实域注册 **200**，body 含 `account_id` / `salt` / `kdf` / `need_email_verify=true`）⇒ **注册链路对真实邮箱可用**。
+- **修法（[ADR 0075](docs/adr/0075-register-mail-rejection-semantics-and-failed-registration-rollback.md)，8 条决策）**：
+  - **上游失败三类分流**：4xx 永久拒绝 ⇒ **422 `mail_recipient_rejected`** + 中文文案「验证码邮件被邮件服务拒绝：该邮箱地址无法接收验证码，请更换邮箱地址后重试。」；401/403 与配置类 name ⇒ 500 `server_misconfigured`；429 ⇒ 503 `mail_rate_limited`；409/5xx/网络 ⇒ 503 `mail_send_failed` ⇒ **客户端只透传 `error.message` 且 422 不在自动重试集合 ⇒ 客户端零改动即语义正确**；
+  - **失败注册回滚**：**DELETE 优先、被拒则降级 UPDATE 失效化** ⇒ 三态 `ok` / `degraded` / `failed`；**绝不 `DB.batch`**（batch 是整体事务、一条被拒全部连坐，生产实测一条都没删掉）；重发失败只删本次验证码行、**保留账号**；
+  - **三个 ASCII 诊断头** `X-Fluxing-Mail-Provider-Status` / `X-Fluxing-Mail-Rollback` / `X-Fluxing-Mail-Rollback-Error` ⇒ **绕开 `wrangler tail` 不可用的死角**（上游 status 首次可从外部自证）；
+  - D1 配额错误（`[code: 7500]`）⇒ **503 `storage_quota_exceeded`**；
+  - **不动** `librime/`、IPC 协议消息类型与 `include/WeaselIPCData.h`、`WeaselServer/**` 客户端、第三方依赖、版本号（装机版仍 1.3.8.0，判定一律用 sha16 / 字节数）。
+- **门禁**：服务端 `npm run typecheck` **TSC_EXIT=0** + `npm run check` **CHECK_EXIT=0**（**5 文件 / 86 用例通过**，基线 4/65 ⇒ **+1 文件 +21 用例**，既有 65 条逐条保留）；改动文件 **U+FFFD=0**。
+- **生产部署**：`wrangler deploy` ⇒ **DEPLOY_EXIT=0**，Version ID **`96facaba-9277-4c77-b9f9-4df5cb6de41e`**（迭代 v1→v4），路由 `api.aiec.fun (custom domain)`。
+- **复验（2026-11-23 08:15 / 08:41 定时轮）**：保留域探针 ⇒ **HTTP 422** + `mail_recipient_rejected` + 上述中文文案 + `X-Fluxing-Mail-Provider-Status: 422` + `X-Fluxing-Mail-Rollback: ok` ⇒ **判据「不再是 503」达成**；**零残留**（`users` / `email_verifications` / `mail_outbox` 的 `bq.%` 计数全 0，逐行 DELETE 15/15 成功）与**立即重试不撞 429·409**（重试回到 422）**达成**；D1 写额度复测 **有余**（两条独立真实写各 1 行成功）。
+- **⚠️ 未闭环（如实登记）**：① **真实域端到端未完成** —— `mail.tm` token 端点对本探针地址持续 **401**（账号创建 201 成功），`mail.gw` 直连被拒 ⇒ 需真实邮箱人工取码；② **D1 免费额度每日行写入上限**曾被打爆（生产 D1 返回 `code 7500`）⇒ 根因是**客户端一次性全量词典推送**（40,061 行 `sync_items`）**不是本批代码** ⇒ 转下批（BR）治理写放大；③ **口令重置发信路径**（`password_resets` 先落库后发信）同构问题**未修**（ADR 0075 决策 7 明确不碰）；④ **云端脏条目仍在** —— 服务端**没有「删条目」API**，客户端只能跳过。
 ### fix(fluxing): 推送批量吞吐修复 12002 —— 服务端 R2 并发化 + 客户端批量 32 / 超时 30 s（批次 BP · ADR 0074）
 
 - **根因（BO 轮定案，本批落地修复）**：服务端 `cloud/fluxing-sync/src/sync.ts:155-201` 的**串行** `await env.BUCKET.put(...)`（写序「R2 先、D1 后」，每条一次 R2 往返）⇒ 单条 ≈ 626–706 ms，**64 条 = 40 071 ms** ≫ 客户端 `CloudTransport.h:72` 的 15 000 ms 接收超时 ⇒ `12002 ERROR_WINHTTP_TIMEOUT`。带令牌的 push **100% 到达服务端**（四档 `accepted` 与 D1 落库行数逐档吻合）⇒ 排除「没到达 / 到达但无响应」，坐实「**到达但处理超客户端超时**」。
