@@ -20,6 +20,7 @@ import {
   utf8,
 } from './crypto';
 import { sendPasswordResetMail, sendVerificationMail } from './mail';
+import { enforceDeviceLimit } from './devices';
 
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@.]+(?:\.[^\s@.]+)+$/;
 const MAX_EMAIL_LENGTH = 254;
@@ -36,6 +37,23 @@ const DEFAULT_KDF_ALGO = 'PBKDF2-SHA256';
 const DEFAULT_KDF_ITERS = 600000;
 /** 设备 last_seen 的写放大抑制窗口（秒）：同一设备 5 分钟内不重复写 */
 const LAST_SEEN_REFRESH_SECONDS = 300;
+
+// ---------------------------------------------------------------- ADR 0076 D3 上限
+//
+// D3-3：refresh_tokens 保留窗口（30 天）+ 单次 GC 上限（200 行）。
+// D3-4：每账号「未过期且未撤销」的 refresh token 上限（64 个）。
+//
+// **如实标注（ADR 0076 D3-3 原文）**：DELETE 同样计入 D1 行写入 ⇒ **GC 不省额度**。
+// 它解决的是「表只增不减」与「长期凭据面」，不是计费。
+
+/** D3-3：refresh token 过期后的保留窗口（秒）：超过该窗口的行在登录 / 续期时被清理。 */
+export const REFRESH_TOKEN_RETENTION_SECONDS = 30 * 24 * 3600;
+
+/** D3-3：单次 GC 最多删除的行数（保护 D1 额度）。 */
+export const REFRESH_TOKEN_GC_MAX_ROWS = 200;
+
+/** D3-4：每账号「未过期且未撤销」的 refresh token 行数上限。 */
+export const MAX_VALID_REFRESH_TOKENS = 64;
 
 export interface AuthContext {
   userId: string;
@@ -177,12 +195,19 @@ async function upsertDevice(env: Env, userId: string, device: DeviceInput): Prom
     .first<{ id: string }>();
 
   if (existing) {
-    // 重新登录即恢复该设备（清掉 revoked_at），并刷新展示名与 last_seen
+    // **已知设备**（同一 device_id）重新登录 ⇒ 走 UPDATE 分支 ⇒ **不新增设备行**
+    // ⇒ 设备行数不变 ⇒ **不受设备上限约束**（ADR 0076 D3-1 的上限只约束「新设备」）。
+    // 重新登录即恢复该设备（清掉 revoked_at），并刷新展示名与 last_seen。
     await env.DB.prepare('UPDATE devices SET name = ?, last_seen = ?, revoked_at = NULL WHERE id = ?')
       .bind(device.name, now, existing.id)
       .run();
     return existing.id;
   }
+
+  // D3-1：**新** device_id 才受设备行数上限（32 台/账号）约束。
+  // 超限时先回收「已撤销且最久未见」的设备行；回收后仍超限 ⇒ 拒绝登录
+  // （429 device_limit_reached）。口径与实现见 devices.ts 的 enforceDeviceLimit。
+  await enforceDeviceLimit(env, userId);
 
   const id = crypto.randomUUID();
   await env.DB.prepare(
@@ -214,9 +239,77 @@ async function issueToken(
 async function issueTokenPair(env: Env, userId: string, deviceRowId: string): Promise<IssuedTokens> {
   const accessTtl = intVar(env.ACCESS_TOKEN_TTL, DEFAULT_ACCESS_TTL, 60, 24 * 3600);
   const refreshTtl = intVar(env.REFRESH_TOKEN_TTL, DEFAULT_REFRESH_TTL, 3600, 365 * 24 * 3600);
+  // D3-4：签发新 refresh 前先把该账号的有效 refresh 行压到上限内。
+  await enforceRefreshTokenLimit(env, userId);
   const accessToken = await issueToken(env, userId, deviceRowId, 'access', accessTtl);
   const refreshToken = await issueToken(env, userId, deviceRowId, 'refresh', refreshTtl);
   return { access_token: accessToken, refresh_token: refreshToken, expires_in: accessTtl };
+}
+
+/**
+ * D3-4：统计该账号「未过期且未撤销」的 refresh 行数（access 行不计入本上限）。
+ *
+ * 口径：只算 kind='refresh' ⇒ 上限针对的是「可续期的长期凭据面」
+ * （ADR 0076 D3-4：上限 64 ≫ 已观测的 22 台设备 ⇒ 不破坏单台设备的正常续期）。
+ */
+async function countValidRefreshTokens(env: Env, userId: string, now: number): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM refresh_tokens
+      WHERE user_id = ? AND kind = 'refresh' AND revoked_at IS NULL AND expires_at > ?`,
+  )
+    .bind(userId, now)
+    .first<{ n: number }>();
+  return Number(row?.n ?? 0);
+}
+
+/**
+ * D3-4：有效 refresh token 上限护栏。
+ *
+ * 超限 ⇒ **撤销（标 revoked_at）最旧的有效 refresh 行**（不删行：保留审计痕迹），
+ * 撤销到「签发之后仍 ≤ 上限」为止 ⇒ 长期凭据面收敛。
+ * 撤销的是**别的设备**的 refresh 行时，那台设备需要重新登录一次
+ * （上限 64 ≫ 正常设备数 ⇒ 正常用户碰不到这条路径）。
+ */
+async function enforceRefreshTokenLimit(env: Env, userId: string): Promise<void> {
+  const now = nowSeconds();
+  let valid = await countValidRefreshTokens(env, userId, now);
+  // 目标：本次签发 1 个新 refresh 之后，有效行仍 ≤ 上限。
+  while (valid > MAX_VALID_REFRESH_TOKENS - 1) {
+    const oldest = await env.DB.prepare(
+      `SELECT id FROM refresh_tokens
+        WHERE user_id = ? AND kind = 'refresh' AND revoked_at IS NULL AND expires_at > ?
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1`,
+    )
+      .bind(userId, now)
+      .first<{ id: string }>();
+    if (!oldest) break;
+    await env.DB.prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?')
+      .bind(now, oldest.id)
+      .run();
+    valid -= 1;
+  }
+}
+
+/**
+ * D3-3：清理该账号「过期超过保留窗口（30 天）」的 refresh token 行。
+ *
+ * 触发点：登录 / 续期（各顺带一次）。每次最多删 REFRESH_TOKEN_GC_MAX_ROWS 行（保护额度）。
+ * **如实标注**：DELETE 同样计入 D1 行写入 ⇒ **GC 不省额度**；
+ * 它解决的是「表只增不减」与「长期凭据面」，不是计费。
+ */
+async function gcExpiredRefreshTokens(env: Env, userId: string): Promise<void> {
+  const cutoff = nowSeconds() - REFRESH_TOKEN_RETENTION_SECONDS;
+  await env.DB.prepare(
+    `DELETE FROM refresh_tokens
+      WHERE id IN (
+        SELECT id FROM refresh_tokens
+         WHERE user_id = ? AND expires_at < ?
+         LIMIT ?
+      )`,
+  )
+    .bind(userId, cutoff, REFRESH_TOKEN_GC_MAX_ROWS)
+    .run();
 }
 
 // ---------------------------------------------------------------- 验证码
@@ -237,31 +330,56 @@ async function assertResendAllowed(env: Env, email: string): Promise<void> {
 }
 
 /**
- * 生成一枚验证码并落库（**不发信**）。
+ * 验证码的**纯生成**（ADR 0076 D1-1）：只在内存里产出验证码与哈希，
+ * **不发信、不落库**。
  *
- * 与发信拆成两步，是为了让调用方在发信失败时能**精确回滚**：
- * 发信失败 ⇒ 删掉本次 email_verifications 行（注册还要连带删 users 行），
- * 否则该邮箱会被「占号」+「吃掉 60 秒重发窗口」，用户重试只会撞 429 / 409。
+ * 拆成「生成 / 落库」两步是 D1-2 的前提：落库挪到**发信成功之后** ⇒
+ * 发信失败时**一行都不写**（不再占号、不再吃掉 60 秒重发窗口）。
  *
- * 返回 id（该行主键，供回滚按 id 精确删除）与 code（明文 6 位码，**仅用于发信**，
- * 绝不落库、绝不进日志）。
+ * `code` 是明文 6 位码，**仅用于发信**：绝不落库、绝不进日志。
  */
-async function createVerificationCode(
-  env: Env,
-  email: string,
-): Promise<{ id: string; code: string }> {
+export interface GeneratedVerification {
+  /** 该验证码行的主键（随机 UUID）；纯生成阶段不触碰数据库。 */
+  id: string;
+  /** 明文 6 位码（仅用于发信）。 */
+  code: string;
+  /** pepper 哈希（落库用）。 */
+  codeHash: string;
+  /** 创建时间（秒）。 */
+  createdAt: number;
+  /** 过期时间（秒）。 */
+  expiresAt: number;
+}
+
+async function generateVerificationCode(env: Env, email: string): Promise<GeneratedVerification> {
   const pepper = requirePepper(env);
-  await assertResendAllowed(env, email);
   const now = nowSeconds();
   const code = String(randomInt(1_000_000)).padStart(6, '0');
   const hash = await codeHash(pepper, email, code, now);
-  const id = crypto.randomUUID();
+  return {
+    id: crypto.randomUUID(),
+    code,
+    codeHash: hash,
+    createdAt: now,
+    expiresAt: now + CODE_TTL_SECONDS,
+  };
+}
+
+/**
+ * 落库：把已生成的验证码写进 email_verifications。
+ *
+ * **只在发信成功之后调用**（ADR 0076 D1-2 / D1-3）⇒ 发信失败 ⇒ 零写入。
+ */
+async function persistVerificationCode(
+  env: Env,
+  email: string,
+  generated: GeneratedVerification,
+): Promise<void> {
   await env.DB.prepare(
     'INSERT INTO email_verifications (id, email, code_hash, attempts, expires_at, consumed_at, created_at) VALUES (?, ?, ?, 0, ?, NULL, ?)',
   )
-    .bind(id, email, hash, now + CODE_TTL_SECONDS, now)
+    .bind(generated.id, email, generated.codeHash, generated.expiresAt, generated.createdAt)
     .run();
-  return { id, code };
 }
 
 /**
@@ -335,7 +453,7 @@ async function neutralizeVerification(env: Env, verificationId: string): Promise
 }
 
 /**
- * 回滚一次失败注册留下的残留：删本次 email_verifications 行 + users 行。
+ * 回滚「发信已成功、落库失败」这一窄窗口留下的残留（ADR 0076 D1-5）。
  *
  * 2026-11-22 生产实测（BQ 批次）：失败注册后 users 行与验证码行都残留在库里 ⇒ 用户立刻重试
  * 撞 429 verify_too_frequent。当时 D1 侧 DELETE 被拒（手工 DELETE 报 Cloudflare code 7500
@@ -345,6 +463,9 @@ async function neutralizeVerification(env: Env, verificationId: string): Promise
  *   · DELETE 被拒但 UPDATE 成功 ⇒ 'degraded'（行还在，但已失效：不占号、不吃重发窗口）
  *   · 两条都失败 ⇒ 'failed'（如实上报，诊断头里带 D1 原始错误）
  * 删除顺序按「子表在前、父表在后」（将来若给 email_verifications 加外键也不会撞约束）。
+ *
+ * 注意（ADR 0076 D1-2）：**发信失败**这条路已经不需要回滚了（零写入 ⇒ 没有残留）；
+ * 本函数只在「邮件已发出、落库失败」的窄窗口里被调用。
  */
 async function rollbackRegister(
   env: Env,
@@ -386,22 +507,6 @@ async function rollbackRegister(
   return { outcome: 'ok' };
 }
 
-/** 回滚一次失败重发留下的残留：只处理本次 email_verifications 行，**保留 users 行**。 */
-async function rollbackVerification(
-  env: Env,
-  verificationId: string | undefined,
-): Promise<RollbackReport> {
-  if (verificationId === undefined) return { outcome: 'ok' };
-  const delErr = await deleteRow(env, 'DELETE FROM email_verifications WHERE id = ?', verificationId);
-  if (delErr === undefined) return { outcome: 'ok' };
-  const updErr = await neutralizeVerification(env, verificationId);
-  if (updErr === undefined) return { outcome: 'degraded', error: `delete failed(${delErr}); neutralized` };
-  return {
-    outcome: 'failed',
-    error: `delete failed(${delErr}); neutralize failed(${updErr})`,
-  };
-}
-
 /**
  * 给错误附上回滚结果：**不改动**状态码 / 错误码 / 中文文案，
  * 只多带诊断字段，让「残留是否清干净」在响应头（X-Fluxing-Mail-Rollback）里可见。
@@ -420,6 +525,51 @@ function withRollbackStatus(error: unknown, report: RollbackReport, email: strin
     );
   }
   return error;
+}
+
+// ---------------------------------------------------------------- 存储故障分类
+//
+// ADR 0076 D0-2 / D1-4 / D1-5：
+//   · D1 配额耗尽（Cloudflare code 7500）⇒ 503 storage_quota_exceeded（更具体、可运维定位）
+//   · 其它存储故障 ⇒ 503 storage_unavailable（窄窗口：邮件已发出去，但验证码没落库）
+//   · UNIQUE 约束冲突（users.email）⇒ 并发注册的败者 ⇒ 409 email_taken
+
+/**
+ * D1「每日行写入配额耗尽」的错误特征（Cloudflare code 7500）。
+ * 与 errors.ts 里的同名判据保持一致（本文件无权改 errors.ts ⇒ 局部复制一份）。
+ */
+const D1_ROW_WRITE_QUOTA_PATTERN = /\[code:\s*7500\]/;
+
+/** 是否 D1 行写入配额耗尽（⇒ 503 storage_quota_exceeded）。 */
+function isD1QuotaError(error: unknown): boolean {
+  const detail = error instanceof Error ? error.message : String(error);
+  return D1_ROW_WRITE_QUOTA_PATTERN.test(detail);
+}
+
+/** 是否 UNIQUE 约束冲突（users.email 撞车 ⇒ 同邮箱并发注册的败者）。 */
+function isUniqueConstraintError(error: unknown): boolean {
+  const detail = error instanceof Error ? error.message : String(error);
+  return /unique constraint failed/i.test(detail);
+}
+
+/**
+ * 窄窗口（发信已成功、落库失败）的对外错误（ADR 0076 D1-5）。
+ *
+ * 错误码分两档（**D0-2 优先于 D1-5**）：
+ *   · D1 配额耗尽（code 7500）⇒ 503 storage_quota_exceeded（保留 ADR 0075 已发布的语义）
+ *   · 其它存储故障 ⇒ 503 storage_unavailable + 中文文案
+ *     「验证码已发送，但服务器存储暂时不可用，请稍后重试或重新获取验证码。」
+ *
+ * 两种都是 503、都如实说明「邮件已经发出去了」⇒ 用户手上的验证码可能用不了。
+ */
+function storageFailureError(error: unknown): ApiError {
+  if (isD1QuotaError(error)) {
+    return fail.unavailable('服务端存储写入额度已用尽，请稍后重试。', 'storage_quota_exceeded');
+  }
+  return fail.unavailable(
+    '验证码已发送，但服务器存储暂时不可用，请稍后重试或重新获取验证码。',
+    'storage_unavailable',
+  );
 }
 
 // ---------------------------------------------------------------- 端点实现
@@ -448,31 +598,54 @@ export async function handleRegister(
   const userId = crypto.randomUUID();
   const now = nowSeconds();
 
-  await env.DB.prepare(
-    'INSERT INTO users (id, email, verifier, salt, kdf_algo, kdf_iters, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)',
-  )
-    .bind(userId, email, verifier, salt, kdf.algo, kdf.iters, now)
-    .run();
+  // ADR 0076 D1-1 / D1-2：验证码在内存里**纯生成** ⇒ 先发信、发信成功才落库。
+  const generated = await generateVerificationCode(env, email);
 
-  // 发信失败 ⇒ 回滚本次注册的全部残留（users 行 + 本次验证码行），
-  // 否则该邮箱会被「占号」+「吃掉 60 秒重发窗口」，用户重试只会撞 429 / 409，
-  // 真正的根因（收件人被拒）会被掩盖成「验证码发送过于频繁」。
-  let verificationId: string | undefined;
-  let stage: 'code' | 'mail' = 'code';
   try {
-    const created = await createVerificationCode(env, email);
-    verificationId = created.id;
-    stage = 'mail';
-    await sendVerificationMail(env, email, created.code, doFetch);
+    await sendVerificationMail(env, email, generated.code, doFetch);
   } catch (error) {
-    const report = await rollbackRegister(env, userId, verificationId);
+    // **零写入**：发信失败 ⇒ users / email_verifications 一行都不写 ⇒
+    // 既不占号、也不吃掉 60 秒重发窗口 ⇒ 用户可以立刻重试（根因不会被掩盖）。
+    // 无残留 ⇒ 回滚诊断头固定 'ok'（头部契约保持稳定，兼容既有断言）。
+    console.error('[fluxing-sync] 注册发信失败：本次注册零写入（未落库，无残留）。');
+    throw withRollbackStatus(error, { outcome: 'ok' }, email);
+  }
+
+  // 落库顺序固定「先 users 后 email_verifications」（D1-4）：
+  // 同邮箱并发注册时败者卡在 users 的 UNIQUE(email) ⇒ 映射成 409 email_taken，
+  // 且不会留下验证码孤儿行。
+  try {
+    await env.DB.prepare(
+      'INSERT INTO users (id, email, verifier, salt, kdf_algo, kdf_iters, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)',
+    )
+      .bind(userId, email, verifier, salt, kdf.algo, kdf.iters, now)
+      .run();
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      // 并发注册：另一请求已占用该邮箱 ⇒ 409 email_taken。
+      // 本次请求一行都没写 ⇒ 无残留 ⇒ 回滚诊断头 'ok'。
+      console.error('[fluxing-sync] 注册并发落库冲突：该邮箱已被另一请求占用。');
+      throw withRollbackStatus(
+        fail.conflict('该邮箱已注册，请直接登录。', 'email_taken'),
+        { outcome: 'ok' },
+        email,
+      );
+    }
+    // D1-5 窄窗口：邮件已发出去，但 users 行没写进去 ⇒ 本次仍然零残留（无行可回滚）。
+    console.error('[fluxing-sync] 注册落库失败（窄窗口：邮件已发送）。');
+    throw withRollbackStatus(storageFailureError(error), { outcome: 'ok' }, email);
+  }
+
+  try {
+    await persistVerificationCode(env, email, generated);
+  } catch (error) {
+    // D1-5 窄窗口：users 行已写入、验证码行没写进去 ⇒ 尽力回滚 users 行
+    //（DELETE 优先、被拒则 UPDATE 失效化降级 ⇒ 三态 ok|degraded|failed）。
     console.error(
-      stage === 'mail'
-        ? '[fluxing-sync] 注册发信失败，已回滚本次注册残留。'
-        : '[fluxing-sync] 注册流程失败，已回滚本次注册残留。',
-      `rollback=${report.outcome}`,
+      '[fluxing-sync] 注册验证码落库失败（窄窗口：邮件已发送），已回滚本次注册残留。',
     );
-    throw withRollbackStatus(error, report, email);
+    const report = await rollbackRegister(env, userId, generated.id);
+    throw withRollbackStatus(storageFailureError(error), report, email);
   }
 
   return {
@@ -549,26 +722,29 @@ export async function handleResend(
     throw fail.conflict('该邮箱已完成验证，无需重新获取验证码。', 'email_already_verified');
   }
 
-  // createVerificationCode 自带 60 秒频率闸（verify_too_frequent）、10 分钟 TTL、
-  // 5 次错误上限与 code_hash 落库；MAIL_MODE="outbox" 时只写 mail_outbox 不发信。
-  // 发信失败 ⇒ 只删本次验证码行，**保留 users 行**（账号已存在，重发失败不该把账号删掉）；
-  // 同时不消耗 60 秒重发窗口 ⇒ 用户可立刻再试一次。
-  let verificationId: string | undefined;
-  let stage: 'code' | 'mail' = 'code';
+  // 频率闸口径不变（只看 email_verifications 的既有行 ⇒ D1-6）。
+  await assertResendAllowed(env, email);
+
+  // ADR 0076 D1-1 / D1-3：验证码在内存里纯生成 ⇒ 先发信、成功才落库。
+  const generated = await generateVerificationCode(env, email);
+
   try {
-    const created = await createVerificationCode(env, email);
-    verificationId = created.id;
-    stage = 'mail';
-    await sendVerificationMail(env, email, created.code, doFetch);
+    await sendVerificationMail(env, email, generated.code, doFetch);
   } catch (error) {
-    const report = await rollbackVerification(env, verificationId);
-    console.error(
-      stage === 'mail'
-        ? '[fluxing-sync] 重发发信失败，已回滚本次验证码残留。'
-        : '[fluxing-sync] 重发流程失败，已回滚本次验证码残留。',
-      `rollback=${report.outcome}`,
-    );
-    throw withRollbackStatus(error, report, email);
+    // **零写入**：发信失败 ⇒ 本次一行都不写；
+    // **旧验证码行保持不变、仍然有效**（与今天「失败只删本次行」的语义一致）。
+    // 无残留 ⇒ 回滚诊断头固定 'ok'。
+    console.error('[fluxing-sync] 重发发信失败：本次重发零写入（旧验证码行仍有效）。');
+    throw withRollbackStatus(error, { outcome: 'ok' }, email);
+  }
+
+  try {
+    await persistVerificationCode(env, email, generated);
+  } catch (error) {
+    // D1-5 窄窗口：邮件已发出去但新码没落库 ⇒ 用户手上的新码用不了；
+    // 旧码行仍在、仍有效 ⇒ 没有残留可回滚（回滚状态 'ok'）。
+    console.error('[fluxing-sync] 重发验证码落库失败（窄窗口：邮件已发送）。');
+    throw withRollbackStatus(storageFailureError(error), { outcome: 'ok' }, email);
   }
 
   return { ok: true };
@@ -747,6 +923,9 @@ export async function handleLogin(env: Env, body: Record<string, unknown>): Prom
     throw fail.unauthorized('邮箱或登录凭证不正确。', 'invalid_credentials');
   }
 
+  // D3-3：登录时顺带 GC 该账号过期超过保留窗口的 refresh token 行。
+  await gcExpiredRefreshTokens(env, user.id);
+
   const deviceRowId = await upsertDevice(env, user.id, device);
   const tokens = await issueTokenPair(env, user.id, deviceRowId);
 
@@ -800,6 +979,9 @@ export async function handleRefresh(env: Env, body: Record<string, unknown>): Pr
       .run();
     throw fail.unauthorized('该设备已被移除，请重新登录。', 'device_revoked');
   }
+
+  // D3-3：续期时顺带 GC 该账号过期超过保留窗口的 refresh token 行。
+  await gcExpiredRefreshTokens(env, row.user_id);
 
   // 令牌轮换：旧刷新令牌立即作废，避免重放
   await env.DB.prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?')

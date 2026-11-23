@@ -11,6 +11,11 @@
 //   2. 失败不占号、不消耗 60 秒重发窗口 ⇒ 立刻重试仍是 422，不是 429 / 409。
 //   3. 重发失败 ⇒ 保留 users 行（账号已存在），只删本次验证码行。
 //
+// ADR 0076 D0-3：「失败注册 ⇒ 事后删除残留」已被「发信成功才落库（事中不写）」**替代**；
+// 回滚能力本身**不撤销**，退化为「发信已成功但落库失败」这一**窄窗口**的兜底。
+// ⇒ 本文件有 3 个用例（回滚降级 / 回滚失败 / 落库失败语义）按 D0-3 把**注入点**迁到窄窗口、
+//    断言意图不变；其余 11 个用例逐字未动。
+//
 // 零真实网络：发信走注入的 fetch 替身（沿用 sendVerificationMail 既有的 doFetch 注入风格）。
 
 import { describe, it, expect, vi } from 'vitest';
@@ -234,9 +239,13 @@ describe('错误响应诊断头：X-Fluxing-Mail-Rollback', () => {
     expect(await countRows('email_verifications', email)).toBe(0);
   });
 
-  it('DELETE 被拒但 UPDATE 失效化成功 ⇒ 头为 degraded：占号解除、可立刻重试，根因仍是 422', async () => {
+  // ADR 0076 D0-3：失败注册的『事后删除』已被『事中不写』替代 ⇒ 注入点迁到窄窗口（发信成功但落库失败），断言意图不变。
+  it('DELETE 被拒但 UPDATE 失效化成功 ⇒ 头为 degraded：占号解除、可立刻重试，根因仍是存储失败（503）', async () => {
     const email = 'rollback-degraded@example.com';
-    const fetchImpl = stubFetch(400, RECIPIENT_REJECTED_BODY);
+    // 窄窗口的前提：发信**成功** ⇒ 换成 200 的 fetch（发信失败在新顺序下是零写入，不产生残留）。
+    const sentFetchImpl = stubFetch(200, '{"id":"mail-ok"}');
+    // 重试用：上游仍拒收收件人 ⇒ 立刻重试仍应暴露根因（422），而不是 429 / 409。
+    const rejectedFetchImpl = stubFetch(400, RECIPIENT_REJECTED_BODY);
 
     const db = env.DB as unknown as {
       prepare: (sql: string) => {
@@ -251,15 +260,20 @@ describe('错误响应诊断头：X-Fluxing-Mail-Rollback', () => {
       },
     };
     const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      // 窄窗口：验证码行落库失败（users 行已插入 ⇒ 走真实 rollbackRegister）。
+      if (sql.startsWith('INSERT INTO email_verifications')) {
+        return failingStatement as unknown as ReturnType<typeof db.prepare>;
+      }
       if (sql.startsWith('DELETE FROM')) return failingStatement as unknown as ReturnType<typeof db.prepare>;
       return originalPrepare(sql);
     });
 
     try {
-      const error = await catchError(handleRegister(makeEnv(), registerBody(email), fetchImpl));
-      // 根因不被覆盖：状态码与错误码仍是上游拒绝的语义。
-      expect(error.status).toBe(422);
-      expect(error.code).toBe('mail_recipient_rejected');
+      const error = await catchError(handleRegister(makeEnv(), registerBody(email), sentFetchImpl));
+      // 根因不被覆盖：状态码与错误码仍是落库失败的语义。
+      expect(error.status).toBe(503);
+      expect(error.code).toBe('storage_unavailable');
+      expect(error.message).toBe('验证码已发送，但服务器存储暂时不可用，请稍后重试或重新获取验证码。');
 
       const response = toErrorResponse(error);
       expect(response.headers.get('X-Fluxing-Mail-Rollback')).toBe('degraded');
@@ -270,14 +284,15 @@ describe('错误响应诊断头：X-Fluxing-Mail-Rollback', () => {
 
       // 降级效果一：users 行被改成占位地址 ⇒ 原邮箱不再占号。
       expect(await countRows('users', email)).toBe(0);
-      // 降级效果二：验证码行仍在，但 created_at 归零 ⇒ 不吃 60 秒重发窗口。
-      const row = await env.DB.prepare('SELECT created_at FROM email_verifications WHERE email = ?')
+      // 降级效果二：窄窗口里验证码行**从未落库** ⇒ 库里没有这一行 ⇒ 必然不吃 60 秒重发窗口。
+      const row = await env.DB.prepare('SELECT id, created_at FROM email_verifications WHERE email = ?')
         .bind(email)
-        .first<{ created_at: number }>();
-      expect(Number(row?.created_at)).toBe(0);
+        .first<{ id: string; created_at: number }>();
+      expect(row).toBeNull();
+      expect(Number(row?.created_at ?? 0)).toBe(0);
 
       // 立刻重试：不撞 409 / 429，仍是 422。
-      const again = await catchError(handleRegister(makeEnv(), registerBody(email), fetchImpl));
+      const again = await catchError(handleRegister(makeEnv(), registerBody(email), rejectedFetchImpl));
       expect(again.status).toBe(422);
       expect(again.code).not.toBe('email_taken');
       expect(again.code).not.toBe('verify_too_frequent');
@@ -286,9 +301,11 @@ describe('错误响应诊断头：X-Fluxing-Mail-Rollback', () => {
     }
   });
 
-  it('DELETE 与 UPDATE 都被拒 ⇒ 头为 failed，根因仍是 422，诊断头带失败原因', async () => {
+  // ADR 0076 D0-3：失败注册的『事后删除』已被『事中不写』替代 ⇒ 注入点迁到窄窗口（发信成功但落库失败），断言意图不变。
+  it('DELETE 与 UPDATE 都被拒 ⇒ 头为 failed，根因仍是存储失败（503），诊断头带失败原因', async () => {
     const email = 'rollback-fail@example.com';
-    const fetchImpl = stubFetch(400, RECIPIENT_REJECTED_BODY);
+    // 窄窗口的前提：发信**成功** ⇒ 换成 200 的 fetch。
+    const fetchImpl = stubFetch(200, '{"id":"mail-ok"}');
 
     const db = env.DB as unknown as {
       prepare: (sql: string) => {
@@ -303,6 +320,10 @@ describe('错误响应诊断头：X-Fluxing-Mail-Rollback', () => {
       },
     };
     const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      // 窄窗口：验证码行落库失败（users 行已插入 ⇒ 走真实 rollbackRegister）。
+      if (sql.startsWith('INSERT INTO email_verifications')) {
+        return failingStatement as unknown as ReturnType<typeof db.prepare>;
+      }
       if (sql.startsWith('DELETE FROM')) return failingStatement as unknown as ReturnType<typeof db.prepare>;
       if (sql.startsWith('UPDATE users SET email')) {
         return failingStatement as unknown as ReturnType<typeof db.prepare>;
@@ -315,9 +336,10 @@ describe('错误响应诊断头：X-Fluxing-Mail-Rollback', () => {
 
     try {
       const error = await catchError(handleRegister(makeEnv(), registerBody(email), fetchImpl));
-      // 根因不被覆盖：状态码与错误码仍是上游拒绝的语义。
-      expect(error.status).toBe(422);
-      expect(error.code).toBe('mail_recipient_rejected');
+      // 根因不被覆盖：状态码与错误码仍是落库失败的语义。
+      expect(error.status).toBe(503);
+      expect(error.code).toBe('storage_unavailable');
+      expect(error.message).toBe('验证码已发送，但服务器存储暂时不可用，请稍后重试或重新获取验证码。');
 
       const response = toErrorResponse(error);
       expect(response.headers.get('X-Fluxing-Mail-Rollback')).toBe('failed');
@@ -326,7 +348,7 @@ describe('错误响应诊断头：X-Fluxing-Mail-Rollback', () => {
       expect(/^[\x20-\x7e]*$/.test(rollbackError)).toBe(true);
       // 错误体不含内部细节（只有诊断头带）。
       const body = (await response.json()) as { error: { code: string; message: string } };
-      expect(body.error.code).toBe('mail_recipient_rejected');
+      expect(body.error.code).toBe('storage_unavailable');
       expect(body.error.message).not.toContain('D1');
     } finally {
       spy.mockRestore();
@@ -367,8 +389,11 @@ describe('D1 行写入配额耗尽（Cloudflare code 7500）⇒ 暂时性 503', 
     expect(body.error.message).toBe('服务端存储写入额度已用尽，请稍后重试。');
   });
 
+  // ADR 0076 D0-3：失败注册的『事后删除』已被『事中不写』替代 ⇒ 注入点迁到窄窗口（发信成功但落库失败），断言意图不变。
   it('注册写库被配额拒绝 ⇒ 同样 503 storage_quota_exceeded，且库里零残留', async () => {
     const email = 'quota@example.com';
+    // 窄窗口的前提：发信**成功** ⇒ 注入一个能发成功的 doFetch（否则会撞上游 401 ⇒ 500 server_misconfigured）。
+    const fetchImpl = stubFetch(200, '{"id":"mail-ok"}');
     const db = env.DB as unknown as {
       prepare: (sql: string) => { bind: (value: unknown) => { run: () => Promise<unknown> } };
     };
@@ -380,6 +405,7 @@ describe('D1 行写入配额耗尽（Cloudflare code 7500）⇒ 暂时性 503', 
       },
     };
     const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      // 注入点：users 落库被配额拒绝（验证码行还没写 ⇒ 天然零残留、无需回滚）。
       if (sql.startsWith('INSERT INTO users')) {
         return failingStatement as unknown as ReturnType<typeof db.prepare>;
       }
@@ -387,7 +413,7 @@ describe('D1 行写入配额耗尽（Cloudflare code 7500）⇒ 暂时性 503', 
     });
 
     try {
-      const error = await catchError(handleRegister(makeEnv(), registerBody(email)));
+      const error = await catchError(handleRegister(makeEnv(), registerBody(email), fetchImpl));
       const response = toErrorResponse(error);
       expect(response.status).toBe(503);
       const body = (await response.json()) as { error: { code: string } };

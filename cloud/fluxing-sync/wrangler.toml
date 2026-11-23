@@ -53,6 +53,11 @@ MAIL_FROM_NAME = "火流猩输入法"
 MAIL_HTTP_ENDPOINT = "https://api.resend.com/emails"
 MAIL_HTTP_AUTH_HEADER = "Authorization"
 MAIL_HTTP_AUTH_PREFIX = "Bearer "
+# 每账号每 UTC 日的 D1 行写入预算上限（行）。ADR 0076 D2-3 的写放大护栏：
+# 推送前先估算本批行写入数，超限整批拒绝（429 write_budget_exceeded，零写入）。
+# 80,000 行 ≈ 允许一次全量重推、不允许第二次（D1 免费额度按行写入计）。
+# 调大 / 调小都不改代码；读不到该变量时回落到代码内默认值 80,000。
+WRITE_BUDGET_ROWS_PER_DAY = "80000"
 # MAIL_HTTP_API_KEY 绝不写进本文件：用 `wrangler secret put MAIL_HTTP_API_KEY` 注入。
 
 # 生产发信绑定（**需 Workers Paid 计划** —— 官方原文：向任意收件人发送需 Paid，账号级最低消费 $5/月）。

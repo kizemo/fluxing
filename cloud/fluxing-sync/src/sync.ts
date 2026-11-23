@@ -14,6 +14,7 @@
 //      合并后的条目回传」会把服务端较新的版本回退成旧版 ⇒ 两端乒乓，永不收敛。
 
 import type { Env } from './env';
+import { writeBudgetRowsPerDay } from './env';
 import type { AuthContext } from './auth';
 import { fail } from './errors';
 import {
@@ -81,12 +82,165 @@ function encodeCursor(id: number): string {
   return toBase64Url(utf8(String(id)));
 }
 
+// ---------------------------------------------------------------- 写预算护栏
+//
+// ADR 0076 D2-3：每账号每 UTC 日的 D1 行写入预算护栏。
+//
+// 目的：把「一个人（或一台机器）一次性全量重推」这个写放大源，从
+// 「打爆全库 D1 免费额度 ⇒ 该库内**所有**账号的写操作一起失效」
+// 降级为「单账号可诊断的 429 write_budget_exceeded」。
+//
+// **口径（如实说明：这是估算，不是精确计费器）**：
+//   · used = 该用户**今日（UTC）**在 sync_items 里当前仍存在、且 updated_at 落在
+//     今日 00:00 UTC 之后的**行数**（纯读 COUNT）。同一行当日被反复写只计 1
+//     ⇒ 真实行写入数 ≥ used ⇒ 本护栏只会**低估**，不会高估。
+//   · planned = 本批**守卫放行**的条目预计产生的行写入数：
+//       - 该 item_key 在本批之前已存在于 sync_items ⇒ 2 行（DELETE + INSERT）；
+//       - 该 item_key 本批首次出现 ⇒ 1 行（INSERT；配套 DELETE 命中 0 行）；
+//       - 同一 item_key 在本批内重复出现 ⇒ 从第 2 次起按 2 行计（此时行已存在）。
+//     ⇒ 护栏针对的是「一次性全量 / 批量重推」这一真正的放大源，
+//     **不宣称**它能精确计出 Cloudflare 的行写入账单。
+//   · limit = 每账号每日 80,000 行（环境变量 WRITE_BUDGET_ROWS_PER_DAY 可覆盖）。
+//   · 判定：used + planned > limit ⇒ **整批拒绝**（429），且拒绝发生在
+//     **任何写动作之前** ⇒ R2 与 D1 都是**零写入**。
+
+/** 超限时返回的稳定错误码（客户端只读 message；code 供服务端与探针诊断）。 */
+export const WRITE_BUDGET_EXCEEDED_CODE = 'write_budget_exceeded';
+
+/** 超限时返回的中文文案（constitution P2/P5：用户可见字符串保持简体中文）。 */
+export const WRITE_BUDGET_EXCEEDED_MESSAGE = '今日云端写入已达上限，请明天再试或减少本机词典规模。';
+
+/** 预算判定输入。 */
+export interface WriteBudgetInput {
+  /** 该用户今日（UTC）已写行数（纯读取得）。 */
+  usedRows: number;
+  /** 本批预计产生的 D1 行写入数。 */
+  plannedRows: number;
+  /** 每账号每日上限（行）。 */
+  limitRows: number;
+}
+
+/** 预算判定结果。 */
+export interface WriteBudgetResult {
+  /** 是否放行。 */
+  allowed: boolean;
+  /** 判定原因：'within_budget' = 放行；'budget_exceeded' = 超限（整批拒绝）。 */
+  reason: 'within_budget' | 'budget_exceeded';
+  usedRows: number;
+  plannedRows: number;
+  limitRows: number;
+}
+
+/**
+ * 写预算判定（纯函数，无 IO）。
+ *
+ * 判定式：`usedRows + plannedRows > limitRows` ⇒ 超限。
+ * **恰好等于阈值放行**（`>` 而非 `>=`）：与 ADR 0076 D2-3 的原文
+ * 「估算值 + planned > 80,000 行 ⇒ 整批拒绝」逐字一致。
+ */
+export function evaluateWriteBudget(input: WriteBudgetInput): WriteBudgetResult {
+  const usedRows = input.usedRows;
+  const plannedRows = input.plannedRows;
+  const limitRows = input.limitRows;
+  const allowed = usedRows + plannedRows <= limitRows;
+  return {
+    allowed,
+    reason: allowed ? 'within_budget' : 'budget_exceeded',
+    usedRows,
+    plannedRows,
+    limitRows,
+  };
+}
+
+/**
+ * 估算本批将产生的 D1 行写入数（纯函数）。
+ *
+ * @param acceptedItemKeys 守卫放行的条目键（按写入顺序）
+ * @param existingItemKeys 本批之前已存在于 sync_items 的条目键
+ */
+export function planWriteRows(
+  acceptedItemKeys: readonly string[],
+  existingItemKeys: ReadonlySet<string>,
+): number {
+  let planned = 0;
+  const seen = new Set<string>();
+  for (const key of acceptedItemKeys) {
+    if (seen.has(key) || existingItemKeys.has(key)) {
+      // 行已存在 ⇒ DELETE 命中 1 行 + INSERT 1 行 = 2 行
+      planned += 2;
+    } else {
+      // 本批首次出现 ⇒ DELETE 命中 0 行 + INSERT 1 行 = 1 行
+      planned += 1;
+    }
+    seen.add(key);
+  }
+  return planned;
+}
+
+/** 今日 00:00 UTC 的 epoch 秒（epoch 本身与 UTC 对齐 ⇒ 直接整除 86400）。 */
+export function utcDayStartSeconds(now: number): number {
+  return now - (now % 86_400);
+}
+
+/**
+ * 取该用户今日（UTC）已写行数（**纯读**，不写任何一行）。
+ *
+ * 口径：sync_items 中 user_id 匹配、且 updated_at >= 今日 00:00 UTC 的行数。
+ * 列名以 migrations/0001_init.sql 为准（sync_items.updated_at，单位秒）。
+ */
+export async function countTodayWrittenRows(
+  env: Env,
+  userId: string,
+  now: number,
+): Promise<number> {
+  const dayStart = utcDayStartSeconds(now);
+  const row = await env.DB.prepare(
+    'SELECT COUNT(*) AS n FROM sync_items WHERE user_id = ? AND updated_at >= ?',
+  )
+    .bind(userId, dayStart)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/**
+ * 推送前的写预算判定（读 + 判定，不写任何一行）。
+ *
+ * @param limitRows 每日上限；缺省从环境变量读（读不到则回落默认常量）
+ */
+export async function evaluatePushWriteBudget(
+  env: Env,
+  userId: string,
+  acceptedItemKeys: readonly string[],
+  existingItemKeys: ReadonlySet<string>,
+  now: number,
+  limitRows: number = writeBudgetRowsPerDay(env),
+): Promise<WriteBudgetResult> {
+  const plannedRows = planWriteRows(acceptedItemKeys, existingItemKeys);
+  const usedRows = await countTodayWrittenRows(env, userId, now);
+  return evaluateWriteBudget({ usedRows, plannedRows, limitRows });
+}
+
 // ---------------------------------------------------------------- 推送
 
 export async function handlePush(
   env: Env,
   auth: AuthContext,
   body: Record<string, unknown>,
+): Promise<unknown> {
+  return handlePushWithLimit(env, auth, body, writeBudgetRowsPerDay(env));
+}
+
+/**
+ * 推送主流程（与 handlePush 同一条路径，只是把每日写预算上限显式传进来）。
+ *
+ * 单独暴露 limitRows 参数是为了让单测能在不改动 worker 绑定的前提下注入小阈值，
+ * 验证「超限 ⇒ 429 + 零写入」这条路径。生产调用方一律走 handlePush。
+ */
+export async function handlePushWithLimit(
+  env: Env,
+  auth: AuthContext,
+  body: Record<string, unknown>,
+  limitRows: number,
 ): Promise<unknown> {
   // T101：未验证邮箱的账号不得写入同步数据（只拦写，不拦读与设备管理）
   if (!auth.emailVerified) {
@@ -145,6 +299,22 @@ export async function handlePush(
     }
     current.set(item.itemKey, item.hlc);
     accepted.push(item);
+  }
+
+  // 写预算护栏（ADR 0076 D2-3）：**任何写动作之前**判定 ⇒ 超限时 R2 与 D1 都零写入。
+  // 口径见本文件「写预算护栏」小节：used = 今日已写行数（纯读），
+  // planned = 守卫放行条目的预计行写入数（新条目 1 行 / 已存在行 2 行）。
+  const existingItemKeys = new Set<string>((existing.results ?? []).map((row) => row.item_key));
+  const budget = await evaluatePushWriteBudget(
+    env,
+    auth.userId,
+    accepted.map((item) => item.itemKey),
+    existingItemKeys,
+    now,
+    limitRows,
+  );
+  if (!budget.allowed) {
+    throw fail.tooFrequent(WRITE_BUDGET_EXCEEDED_MESSAGE, WRITE_BUDGET_EXCEEDED_CODE);
   }
 
   // 1) 先写 R2（同 key 覆盖，天然幂等）；跳过的条目不写
