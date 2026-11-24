@@ -651,4 +651,143 @@
 - 前台 bash 里 `Start-Sleep` 超过 60 s 会被自动转后台并触发额度闸门 ⇒ **等待必须与有用检查合并成一条命令**。
 - **wrangler `migrations apply` 在 D1 读额度耗尽时同样被拒**（`[code: 7500]`）⇒ 部署前置判据要先看 `rows_read_24h < 5,000,000`，**不能只盯 `rows_written_24h`**。
 - `wrangler deployments list` 从**最旧**开始输出 ⇒ 查「当前生效 Version」要用 `wrangler deployments status`（本次据此核到 `5f3732e8`）。
+- **（下一轮勘查轮补记）同一命令的输出顺序坑同样适用于 `d1 migrations list`** —— 迁移按**版本号升序**输出，判断「哪几条未 apply」要看**末尾**而不是开头。
+- **本轮未改任何产品代码**（仅文档回写 + 勘查报告落盘）⇒ **门禁沿用 §H-6**（`typecheck` EXIT=0 / `check` EXIT=0 = 13 文件 / 164 用例）。
+
+---
+
+#### §I · 本轮（2026-11-24 13:30–15:10 · 腾讯云现机只读勘查 + `E:\storedata-upload` 盘查 + 服务器成本评估（含归因纠正））
+
+**本轮性质** = ① 只读盘查 `E:\storedata-upload` 是否存有腾讯云连接资料；② 经用户授权后用现成 SSH 通道对腾讯云现机 `124.223.115.201` 做**只读勘查**；③ 回答「Fluxing 同步服务部署到腾讯云要多少钱」，并**纠正 §G-10 里被我写错的一条归因**。**本轮未改任何产品代码、未 apply 迁移、未部署、未在生产写入任何东西。**
+
+##### §I-1 · `E:\storedata-upload` 盘查结论（严格只读，仓库文件零改动）
+
+| 项 | 实测 |
+|---|---|
+| 本机 SSH 配置真相源 | `C:\Users\Duanyi\.ssh\config`（**仓库之外**，非项目文件）：`Host 124.223.115.201` / `User ubuntu` / `IdentityFile E:\Users\Duanyi\.ssh\id_ed25519` / `IdentitiesOnly yes` / `StrictHostKeyChecking accept-new`；`known_hosts` 已含该 IP（3 条：ed25519/rsa/ecdsa） |
+| 项目内的云凭据 | `.env`（**untracked**）仅 PostgreSQL 连接五项：`PG_HOST_PROD=124.223.115.201` / `PG_PORT_PROD=5432` / `PG_USER_PROD=kizemo` / `PG_PASSWORD_PROD`（len=19、sha16 `11786780520D44E5`）/ `PG_DB_PROD=pgsql` |
+| 腾讯云控制台凭据 | **全仓零命中**（无 `SecretId` / `SecretKey` / `AKID`、无 `.pem` / `.ppk`）⇒ 只能走 SSH，**无法用 API 买/建/改云资源** |
+| 已有脱敏机制（本项目未做） | `scripts/scan_plaintext_secrets.py` + `scripts/_precommit_secret_scan.sh` + `tests/test_scan_plaintext_secrets.py`，覆盖 `AKID` / `SecretId\|SecretKey` / `sshpass -p` / `-----BEGIN [A-Z ]*PRIVATE KEY-----` ⇒ **GitHub 上的 `SKILL.md`（tracked）不含明文密钥** |
+| 真缺陷 A（应修） | **`.env` 与 `~/.ssh/` 都不在 git 仓库里** ⇒ 重装系统 / 换机即丢口令与 SSH 通道；项目自己的 `docs/handoffs/handoff-traffic-source-restructure-2026-11-03.md:100` 原话「**`.env` 不在 git 里，不能当作长期真相源**」 |
+| 真缺陷 B（应修） | `docs/env.example.md:5,8`（**tracked**）含两条**生产网明文口令**（均 len=16，sha16 `02428A51348B0F65` / `9605102F924C526D`），且**与 `.env` 里那条口令的哈希都对不上**（第三个值）⇒ 建议改为 1Password 引用并清洗历史 |
+
+##### §I-2 · 腾讯云现机勘查结论（VM-0-3-ubuntu，只读）
+
+**一句话结论 = 可以承载，但不建议现在切。**
+
+**已具备**：nginx 1.18.0（已跑 WordPress `jury.xin`，443 + certbot 自动续期 `certbot.timer` active）；Docker 29.1.3（跑 6 容器）；Node v22.23.2；**Cloudflare Tunnel 正在该机运行**（`cloudflared.service` enabled + `Restart=always`，`/etc/cloudflared/config.yml` 已有 ingress 与 `*.aiec.fun → http://localhost:8080` 一条 ⇒ 印证 §G-10 的「隧道绑在腾讯云这台机上」）；`sudo -n` 免密可用；psql 客户端 14.24；Python3 + 一堆 ETL 库；certbot / git / docker 齐；**磁盘剩 14 G**、内存剩 4.6 G、4 vCPU、负载有余量。
+
+**真实缺口（不是钱，是工程量）**：① **无 Postgres server**（`postgresql.service` not-found、无 `postgresql.conf`、无监听 5432 的服务进程）⇒ 需自建并维护 PG + 备份 + 迁移 + 连接池；② **R2 无现成替代**（该机只有本地磁盘与 MySQL）⇒ 密文包存储层要重写；③ **Worker 代码强绑 D1 + R2**（`env.DB.batch` / `env.BUCKET.put/get`）⇒ 自建 = **重写存储层**，不是「换台机」。
+
+**新增反证（勘查发现的风险）**：① 磁盘 `89% 已用（仅剩 14 G）` ⇒ 装 R2 替代品 + 数据库前**必须先清理**（`/var` 57 G 是大头）；② 该机已在跑 BI 生产栈（sales-bi-core / Grafana / Prometheus / Loki / 宝塔 / WordPress），**Fluxing 同步与 BI 同机 = 故障与负载耦合**；③ `/etc/cloudflared/config.yml` **权限 0666（全局可写）** ⇒ 该机任意本地用户可改 Tunnel 路由，**安全缺陷**（与本项目无关，但同机部署会被牵连）；④ `sales-bi-update.service` **failed** ⇒ 该机已有带病服务；⑤ 5432 / 3306 / 9100 **公网监听** ⇒ 腾讯云安全组未证实（本机无控制台凭据）；⑥ 境内域名 `*.aiec.fun` 的 ICP 备案主体归属未证实 ⇒ **切自建前必须先查备案**。
+
+**本轮未取到（4 项，如实登记，不得据此立项开工）**：PostgreSQL server 版本与 `postgresql.conf` 位置；实例带宽 / 计费方式 / 机型代号；`*.aiec.fun` 的 ICP 备案状态；该机出站 443 实际可用性。
+
+**成本回答口径（本轮据此立论）**：免费档（轻量 2C2G4M 首年 **¥40–48**）可跑通，但「**自建 = 用固定月费换回全部运维责任**」。生产建议 2 核 4 G / 50 G SSD / 6–8 M：**¥288–576/年**；带独立 PG：**¥636–912/年**；若用腾讯云自有域名做**境内 HTTPS 对外服务，ICP 备案 + 等保是硬前置**。完整估算表见 `docs/research/fluxing-cloud-2026-11/tencent-cloud-ecs-recon.md`。
+
+**建议路线（待用户拍板）**：**先零成本止血（已在 §G-10/§H 落地）→ 做 A 桶化 → 客户端 BR-①g → 协议冻结后再评估「是否把已冻结的服务搬到自建」**。「复用现机自建」列为候选 **BR-⑤**，排在 BR-①g / BR-①e 之后。
+
+##### §I-3 · 已验证 / 推断 / 未验证（本轮新增）
+
+| 状态 | 内容 |
+|---|---|
+| **已验证** | SSH 免密通道可用（`BatchMode=yes` 两轮均返回真实输出，含 `hostnamectl` / `df` / `docker ps` / `ss -lntp` / `systemctl`）；`E:\storedata-upload` 盘查 5 项表实（§I-1）；远端 nginx 与 cloudflared 配置内容（grep 原文取证） |
+| **推断** | 「同机部署可行」= 从 nginx 已跑 WordPress + Docker 已在跑推断；「磁盘需先清理」= 从 `89% 已用` 推断 |
+| **未验证** | §I-2 列的 4 项缺证；自建后的真实延迟与稳定性；腾讯云安全组端口暴露面；该机出站 443 |
+| **已否定** | 上一轮「复用现机几乎零边际成本 ⇒ 自建划算」的说法 ⇒ 真实成本是**存储层重写**，不是「换台机」 |
+
+##### §I-4 · `GITHUB_TOKEN` 进日志的根因、清理结果与红线落点（2026-11-24 追加）
+
+**用户决定**：**暂不轮换**，改为「**清理日志 + 在项目文档设红线**」。
+
+**根因（已坐实）**：令牌不是被 `git push -v` 打出来的，而是被**我自己写的诊断脚本整块 dump 环境变量**带出来的 —— 取证脚本里的 `=== GIT ENV ===` 段 `Get-ChildItem env:` 把全部环境变量（含密钥）写进输出，该输出又被写进会话历史。旁证 = 该段同时 dump 出的腾讯云 PostgreSQL 口令，在 `E:\storedata-upload\docs\memory\feedback_no_plaintext_secrets.md` 里正是被明令禁止的行为（「**NEVER dump env vars**」），该会话当年踩过同一个坑并立了自己的规矩，本项目这边却没有对应红线。
+
+**清理结果（实测）**：
+
+| 落点 | 结果 |
+|---|---|
+| 会话快照（`snapshots\...\g13\...\weasel\CLAUDE.md` 第 90 行 `github_token=...`，被压缩快照逐代复制） | **已掩码**（`[REDACTED-GITHUB-TOKEN]`，size 561595→561578、`hits=0 marks=1`，UTF-8 无 BOM / LF 不变、**不留 `.bak`**） |
+| 运行时 `v2\sessions` 全树 jsonl | **5,082 个文件 / 18 处命中已就地掩码**（`write_locked=0 read_failed=0`）⇒ **形态零残留** |
+| 运行时 `v2\sessions` 全树 `reports\tool-outputs\*.txt` | **补掩 4 处**（`POST_MASK_OCCURRENCES=4`）⇒ `rg -c` 整树复核 `VERIFY_EXIT=1`（**零命中**） |
+| 项目 `reports/` 与 `tmp/` | 扫描后**零明文命中**（`tmp/*` 命中的是变量名字面量，不是令牌）⇒ **项目产物无需清洗** |
+| PSReadLine 历史（`ConsoleHost_history.txt` 1,415 B / 18 行） | **干净** |
+| `%APPDATA%\GitHub CLI\hosts.yml` / `~\.config\gh\hosts.yml` / `cmdkey` / `git credential fill` / `logs\mavis.log` / `log\mavis.log` | 全部 MISSING 或空 ⇒ **无需处理** |
+
+**残留待用户授权（本轮不动）**：**`GITHUB_TOKEN` 仍作为环境变量常驻**（实测 **Process 与 User 两个作用域都有值**，len=40、`ghp_` 经典 PAT；Machine 空）⇒ 建议删除 User 级变量（属用户环境变更，非项目文件 ⇒ 需授权）；`gh auth status` 已实测「**The token in GITHUB_TOKEN is invalid**」⇒ 它连 gh 都用不上，留着只有泄露风险。**未轮换**（遵用户决定）。
+
+**红线落点（已写进项目文档）**：`AGENTS.md` **§4.6.1 红线：凭据值绝不允许进日志 / 输出 / 提交物**（紧接既有 §4.6 Secrets and tokens 就地扩写，避免另开新章撞号；禁止 dump 环境变量、禁止 verbose 推送、禁止凭据拼命令行与 URL、禁止令牌常驻环境变量）+ `CLAUDE.md` **§2 一条极短指针**。
+
+##### §I-5 · 本轮工具坑
+
+- **`Get-ChildItem env:` 是泄露放大器**（本轮根因）⇒ 诊断脚本只打印**需要的键**，或打印前统一掩码。
+- **单字母函数名撞 PowerShell 内置别名**：定义 `function H(...)` 求 sha16，被解析为 `Get-History` ⇒ 报错时**把环境变量值回显进异常文本**，等于二次泄露。脚本内**禁用单字母函数名**。
+- **PowerShell 全量扫运行时 sessions 树（11,505 文件 / 3.36 GB）必然超时**：`Select-String` 300 s 超时；后台 `rg` 扫 30+ 分钟无终态且**输出文件被 rg 独占打不开**。⇒ 改**定向读**已知落点，或用 `rg -c` 只取计数、或按日期子树分批。
+- **sessions 目录层级是 `v2\sessions\2026\11\23\…`（年\月\日），不是 `2026-11-23`** ⇒ 递归匹配要按真实层级写。
+- **远端勘查**：`docker` 必须 `sudo -n`；管道给 `bash -s` 的脚本**首行不能带 BOM**；`api.ipify.org` 在该机 **Connection refused**（出站可用性未判定，不得据此断定断网）；`169.254.169.254` metadata 被挡（curl 28）。
+- 上一轮自列的「`package.json` 绑定名缺陷」**已被实测推翻**：`wrangler.toml` 与 `package.json` 的绑定名均为 `BUCKET` ⇒ **不改**。
+
+
+---
+
+### §I · 本轮（2026-11-24 13:30–15:10）· `E:\storedata-upload` 盘查 + 腾讯云 ECS 只读勘查 + `GITHUB_TOKEN` 泄露面清理与凭据红线
+
+**本轮性质** = **未改任何服务端/客户端产品代码**；门禁沿用 §H-6（`typecheck` 0 / `check` 0 = 13 文件 / 164 用例）。两件事：① 用户否定「新购机 / aiec.fun 所在机」框架，要求盘查 `E:\storedata-upload` 是否存腾讯云连接资料（**严格只读、可复制**）并用现成 SSH 通道上机做**只读勘查**；② 用户拍板「`GITHUB_TOKEN` 曾被打进日志 —— **暂不轮换**，改为**清理日志 + 在项目文档设红线**」。
+
+#### §I-1 `E:\storedata-upload` 盘查结论（全程只读，一个文件都没改）
+
+| 判据 | 实测 |
+|---|---|
+| 机器地址 | `.env:3`（**untracked**）`PG_HOST_PROD=124.223.115.201` / `PG_PORT_PROD=5432` / `PG_USER_PROD=kizemo` / `PG_DB_PROD=pgsql` |
+| SSH 通道 | **不在项目里**，在仓库之外：`~/.ssh/config` 条目 `Host 124.223.115.201` + `IdentityFile E:\Users\Duanyi\.ssh\id_ed25519` + `IdentitiesOnly yes` + `User ubuntu` + `StrictHostKeyChecking accept-new`（免密已实测可用）；`known_hosts` 命中该 IP **3 条**、`aiec.fun` **0 条** ⇒ 佐证两者是**两台不同机器** |
+| 该机角色 | ubuntu + **宝塔** + PostgreSQL；同机跑 sales-bi / Evidence BI（`/opt/sales-bi`）；库 `taobao` / `jd` / `pdd` / `erp`；口令真相源 = **1Password** |
+| 不存在 | `.env.deploy`、`maintenance/` 目录、`scripts/ssh_retry.sh`；全仓 grep `sshpass` / `ssh -` / `IdentityFile` **零命中**；**无腾讯云控制台 `SecretId`/`SecretKey`/`AKID`、无 `.pem`/`.ppk`** ⇒ 只能走 SSH |
+| 风险登记 | `docs/env.example.md`（**tracked**）含 `PG_PASSWORD_CLOUD` / `PG_PASSWORD_LOCAL` 明文值（且与 `.env` 两值哈希都不同 = 第三个值）⇒ 与本轮红线直接冲突，已作为「同类问题在他仓也存在」的实证；`docs/superpowers/plans/2026-10-11-pdd-loader-and-subconfigs.md:17` 记 `.env` 曾丢失且 hook `guard-secret-files.js` 阻止重建 ⇒ **`.env` 属易失副本**，别当真相源 |
+
+#### §I-2 腾讯云 ECS `124.223.115.201` 只读勘查（两轮 SSH 实测，远端零写入）
+
+**完整报告（含全部实测数字）**：`docs/research/fluxing-cloud-2026-11/tencent-cloud-ecs-recon.md`
+
+- 机器 = `VM-0-3-ubuntu` / 4 vCPU / 7.5 GiB RAM（可用 4.6 GiB）+ 2 GiB swap / **`/` 118G 已用 100G = 89%（仅剩 14G）** / 免密 sudo 可用。
+- 已有基建（利好）：**nginx 1.18 + certbot（`jury.xin` LE 证书在续期）+ systemd + Docker（6 容器 sales-bi-core / Grafana / Prometheus / Alertmanager / Loki / Promtail）+ 已在跑的 cloudflared tunnel**。
+- 反证（风险，逐条见报告 §三/§六）：磁盘 89%、**5432 + 3306 + 9100 监听公网**（安全组未证实）、`/etc/cloudflared/config.yml` **0666 全局可写**、`sales-bi-update.service` **failed**、该机已承载 WordPress `jury.xin` 与整套 BI。
+- **未取到的 4 项**（不得据此立项）：PG server 版本（本地只有 psql client 14.24）、实例规格带宽/计费/机型代号（需控制台凭据）、**ICP 备案状态**、公网出站 443 实际可用性（`api.ipify.org` 被拒但 cloudflared 在线 ⇒ 判「未判定」）。
+- **结论 = 可以承载，但不建议现在切**：自建的真实成本不是「换台机器」，而是**存储层重写**（`src/sync.ts` / `src/sync-buckets.ts` / `src/wire.ts` / `src/account.ts` / `src/auth.ts` / `migrations/*.sql` 全部直接打在 D1 + R2 接口上，libsql/Turso/PG 需另写适配层）+ 协议未冻结需新旧端点并行 + 境内机 TLS 握手实测 200 ms、境内 CDN/证书/合规运维成本 ⇒ 列为 **BR-⑤**（桶化上线并验证后的独立评估批次）。
+- 顺带澄清：桶化方案**已消掉「条数 × 每条约 2 行」的写放大**（40,061 条词条密文进 R2，D1 只留设备 × 桶一行），所以「读放大 / 逐条索引」问题 A 与 B 一样能解决；**B 路线（Workers Paid $5/月）仍是当前最省事且零代码改动的止血选项**，只是它不解决读路径且是账号级全局池。
+
+#### §I-3 `GITHUB_TOKEN` 泄露面：根因坐实 + 清理结果（本轮核心）
+
+**根因（实测）**：① 早期一轮的**自写诊断脚本**用 `Get-ChildItem env:` / `${!v}` **整块 dump 环境变量** ⇒ 令牌值落进会话快照；② **`GITHUB_TOKEN` 同时存在于 Process 与 User 两个环境变量作用域**（len=40、`ghp_` 开头经典 PAT）⇒ 用户级持久值被所有子进程继承，任何 dump 都会带出；③ 另一次**取证脚本用单字母函数名 `H` 求哈希，撞内置别名 `H=Get-History`** ⇒ 报错回显了密钥全值（PowerShell 变量插值先展开，整串密钥进了异常文本）。**未出现**：`.git/config` remote url 内嵌凭据、PSReadLine 历史、`%APPDATA%\gh\hosts.yml`、运行时 `logs/`、`log/` 目录 ⇒ 这些**都不需要清理**；`gh auth status` 现报 **`The token in GITHUB_TOKEN is invalid.`** ⇒ 该 PAT 已失效。
+
+**清理口径（据实测确立）**：按**令牌形态正则**定位与替换，**不需要知道原值** ⇒ 原值不再出现在任何输出里；**不留 `.bak`**。
+
+| 范围 | 结果 |
+|---|---|
+| 运行时 sessions 全树（5,082 个 jsonl，11,505 文件 / 3,362.5 MB） | **掩掉 6 个文件 / 18 处**（`write_locked=0` `read_failed=0`）+ 补掩 `reports/tool-outputs/` 下 **4 处**（分属 10-16 / 10-24 两个**其他会话目录**，形态同 `ghp_` ⇒ 一并脱敏，未读未复述其值）⇒ 全树 `rg` 复核**零命中** |
+| 已掩样本 | 快照 `g000000000013` 第 90 行：`PRE size=561595 hits=1` → `POST size=561578 hits=0 marks=1`，UTF-8 无 BOM、LF 不变 |
+| 他树复核 | `v2`（sessions 之外）/ `maintenance` / `memory` / `plugins` / `logs` / `log` / `%LOCALAPPDATA%\Temp` 顶层 ⇒ **零命中** |
+| **项目 `F:\soft\00selfmade\rime_claude`** | tracked 仅 `docs/Fluxing-code-map/06-customization-points.md:126` 提到 `secrets.GITHUB_TOKEN`（GitHub Actions **合法文档提及，不是泄露**）；untracked 命中全是**变量名字面量**（`tmp/l170-head-check.txt`、`tmp/step2-backup/lessons-learned.md`、`tmp/step3-backup/AGENTS.md*`）⇒ **项目产物零明文令牌值，未改动任何项目文件** |
+
+**未闭环 / 需用户授权**：**删除 User 级 `GITHUB_TOKEN` 环境变量**属「用户环境变更」，本轮**没有动**；`gh` 已判其 invalid ⇒ 若其它工具仍依赖它会受影响，故报「建议删除 + 等授权」。轮换仍按用户拍板**暂不做**。
+
+#### §I-4 红线落点（已入库）
+
+- **`AGENTS.md` §4.6.1「红线：凭据值绝不允许进日志 / 输出 / 提交物」**（§4.6 原已存在 ⇒ **就地扩写子节，不新开编号、不撞号**；文件 40,667 B / 753 行 / **LF / 无 BOM**）：四条禁止动作 = ① 禁 dump 环境变量（只输出键名 + 长度 + sha16 前 16 位）② 禁把凭据拼进命令行 / URL ③ 禁在含凭据时开 `git push -v` / `curl -v` / `wrangler --debug` ④ 禁把令牌常驻 User 级环境变量；另登记**两条事故实证**与**处置口径**（形态正则定位不需原值、清理不留 `.bak`、运行时日志不在 git 仓库 ⇒ 清理不产生 commit、合法提及变量名的文档不算泄露）。
+- **`CLAUDE.md` §2** 加一条极短强制项指向该红线（注入预算仅 32,768 B ⇒ **不复述细节**）。
+
+#### §I-5 本轮工具坑（新增，勿重试）
+
+- PowerShell 里**函数名 / 变量名一律取长名**（`Get-Sha16`）：单字母 `H` 撞内置别名 `Get-History` ⇒ **异常文本回显密钥全值**。
+- `git show HEAD:<path>` / `Get-Content` 经**管道会规范化行尾** ⇒ 判 CRLF/LF 与尾部字节必须用 `[IO.File]::ReadAllText` / `ReadAllBytes`。
+- 全量扫描 3.3 GB 会话树：`Select-String` 前台 **300 s 超时**、后台 `rg` 全量 **30+ 分钟无终态**且输出文件被独占（`ReadAllLines` 报 being used by another process）⇒ 改为**一次后台调用内「掩码 + 就地 `rg -c` 复核」合并完成**，且**等待必须与有用检查合并成一条命令**。
+- 运行时会话目录层级是 `v2\sessions\2026\11\23\…`（**不是** `2026-11-23`）；`maintenance\task-state\LATEST.md` 属**另一项目**（Alpha File Manager），其「最近一条用户指令」字段不代表本批。
+- 远端勘查：宝塔 `vhost/nginx` 与 `/etc/caddy` **都不存在**（nginx 为 apt 包 + `sites-enabled` 托管）；`169.254.169.254` 元数据被挡（curl 28）；`docker` 需 `sudo -n`；管道给 `bash -s` 首行**带 BOM** ⇒ `command not found`；here-string 里 `awk 'NR==2{print $3"/"$2}'` 转义踩坑 ⇒ 改用 `grep`。
+
+#### §I-6 · 本轮 commit 的推送状态（未落，网络侧）
+
+- 本批文档 commit（含 §I 与红线、勘查报告、接力 prompt 订正）**已入库、未推送**：`git rev-list --count kizemo/feat/100-cloud-sync..HEAD` = **1**，远程 tip 仍在 `8a4f959`。
+- **失败形态（共 5 次尝试）**：代理 + 默认 SSL 后端 ⇒ `TLS connect error: error:0A000126:SSL routines::unexpected eof while reading`；代理 + `-c http.sslBackend=schannel` ⇒ `schannel: failed to receive handshake`；两者均 `PUSH_EXIT=128`。
+- **判据（一次取齐，别反复试）**：`curl.exe --noproxy '*' -o NUL -s -w "%{http_code}" --max-time 12 https://github.com/` 与 `curl.exe -x http://127.0.0.1:7897 ...` **同时返回 `000`** ⇒ 不是「代理坏了走直连」那条既有经验（那种是直连 200 / 代理握手失败），而是**两条路径同时不通** = 本机出口网络故障。
+- **纪律**：按既有记忆**带退避重试**（20–40 s）即可，**不得**为此改全局 git config、**不得**重启用户的 Clash Verge（`verge-mihomo`）；网络恢复后一条命令补推：
+  `git -C F:/soft/00selfmade/rime_claude -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 push kizemo feat/100-cloud-sync`
+- **不做的事**：本轮**不留**未终态的后台重试任务（后台任务完成会自动唤醒父会话烧额度）；把「补推」写进接力 prompt 首件事，由下一轮或用户手动执行。
 

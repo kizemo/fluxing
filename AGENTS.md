@@ -527,6 +527,46 @@ and hook the call into `build.bat` in the rime section. Never edit
   chat, code, or commit messages. If GitHub auth is needed, document
   the SSH config setup in `INSTALL.md` instead of inlining credentials.
 
+#### 4.6.1 红线:凭据值绝不允许进日志 / 输出 / 提交物
+
+**任何脚本、命令、诊断输出,都不得把凭据值(令牌、口令、密钥、带凭据的 URL)写进
+stdout、日志文件、会话记录、报告或 commit message。四条禁止动作:**
+
+1. **禁止 dump 环境变量** —— 排障脚本里不要
+   `Get-ChildItem env:` / `env | Select-String token` 这类"把整个环境打印出来"的写法。
+   要确认某个变量存不存在,只输出**键名 + 长度 + sha16 前 16 位**,永不输出值。
+2. **禁止把凭据拼进命令行与 URL** ——
+   `git push https://<token>@github.com/...` 之类内嵌凭据;认证一律走
+   `git credential` / `gh` / secret store,**不要**把令牌放进参数或 URL。
+3. **禁止在含凭据时开 verbose** —— `git push -v` / `curl -v` /
+   `wrangler --debug` 会把 header 与 URL 原样打进输出;需要证据就只取**退出码 + 状态行**。
+4. **禁止把令牌常驻用户级环境变量** —— 不要
+   `[Environment]::SetEnvironmentVariable('GITHUB_TOKEN', …, 'User')`。
+   常驻变量会被**每一个子进程继承**,于是任何一处第 1 条的打印都会泄露。
+   按次从 secret store 取、用完即弃。
+
+**事故实证(2026-11-24 · 本轮真实发生):**
+
+- 本机 `GITHUB_TOKEN` 曾被持久化进 **User 级环境变量**;一次 GitHub 网络排障脚本用
+  `Get-ChildItem env:` 把它**原样打进输出** ⇒ 令牌明文落进 MiniMax Code 会话压缩快照
+  `…\v2\sessions\2026\11\23\…\snapshots\g000000000013--ctx_f52ca787-*.jsonl` 第 90 行。
+  ⇒ **根因是第 1 条(dump 环境变量),不是第 3 条(`git push -v`)**;所以红线必须覆盖第 1 条。
+- 同轮还有一次**自伤**:取证脚本用单字母函数名 `H` 求哈希,撞上 PowerShell 内置别名
+  `H` = `Get-History`,报错文本把令牌**完整值回显**到工具输出(而哈希本身没算出来)。
+  ⇒ **脚本里禁止单字母函数名**(写 `Get-Sha16` 之类全名);密钥参与的任何插值 / 运算,
+  先赋给局部变量再处理,别把 `$env:SECRET` 直接放进字符串插值。
+
+**泄露后的处置口径(值不外泄也能清):**
+
+- 用**令牌形态正则**定位,**不需要知道原值**:
+  `\bgh[pousr]_[A-Za-z0-9]{20,}\b` / `\bgithub_pat_[A-Za-z0-9_]{20,}\b` ⇒ 掩码替换。
+- 清理**不留 `.bak`** —— 备份副本等于把密钥再存一份。
+- 运行时日志 / 会话快照属运行时数据,**不在 git 仓库**,清理不产生入库 commit;
+  但事故与红线必须写进本节。
+- 项目产物(代码 / 文档 / 报告)若出现凭据 ⇒ 按 §5 checklist 走 `docs` commit 清洗,
+  且**合法提及变量名的文档不算泄露**(例:`docs/Fluxing-code-map/06-customization-points.md:126`
+  讲的是 GitHub Actions secrets 的名字,删它反而是缺陷)。
+
 ### 4.7 `release/` directory
 
 - Committed: `release/fluxing-<X.Y.Z>-installer.exe` binaries — 装包文件名是

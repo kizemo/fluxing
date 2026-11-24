@@ -35,6 +35,7 @@
 - **必须 `/D=<path>` 显式** silent-install (L13 / L17): **`/D=` 必须是最后一个参数且不加引号**; **不要**清 `HKLM\Software\Fluxing\Weasel` / `HKCU\Software\Fluxing` (前者丢 `InstallDir`、后者丢 `RimeUserDir` = 用户词典路径; NSIS `InstallDirRegKey` 指向 32 位视图 ⇒ 无需清, 见 L54)。
 - **必须 Conventional Commits + 模块前缀** (`WeaselTSF | WeaselServer | WeaselDeployer | WeaselSetup | WeaselUI | WeaselIPC | RimeWithWeasel | installer | docs | fluxing | ci`), 否则 commit 不合 P4。
 - **必须 `git status -sb` + `git diff --stat`** 在 commit 前 — 阻止 `weasel.props` / `env.bat` / `*.obj` 误提交。
+- **必须：凭据值绝不进日志 / 输出 / 提交物** — 禁止整块 dump 环境变量（只输出键名 + 长度 + sha16 前 16 位）；令牌不拼命令行与 URL；带令牌时禁用 verbose；令牌不常驻 User 级环境变量。红线全文见 [`AGENTS.md`](AGENTS.md) §4.6.1（2026-11-24 `GITHUB_TOKEN` 入日志事故实证）。
 - **必须先读 [`Rime-设置说明书-重点快捷键.md`](Rime-设置说明书-重点快捷键.md)** 当修改 `output/data/**/*.yaml` / `output/data/**/*.custom.yaml` 的 `key_binder/bindings` / `editor/bindings` / `ascii_composer/switch_key` / `switches` / `recognizer/patterns` / `punctuator/*` / `translator/*` / `app_options` / `switcher/hotkeys`;遵循 §3 补靪语法、§6/§7 action 完整列表、§9.3 WeaselTSF `RELEASE_MASK` 坑。
 
 - **必须阶段收尾双产物**: 完成 `.specify/specs/NNN-*/tasks.md` 任一阶段任务时, 必须同步更新 `docs/archive/handoffs/handoff-YYYY-MM-DD-<slug>.md` 并就地改写 `docs/archive/prompts/prompt-next-session-YYYY-MM-DD-<slug>.md` (接力 prompt 只给全路径指针, 不复述 handoff 内容); 规则全文见 [`AGENTS.md` §9](AGENTS.md#9-handoff--relay-prompt-mandatory)。
