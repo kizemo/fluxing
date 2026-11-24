@@ -196,6 +196,21 @@
 
 ---
 
+### 判据 3 补跑轮（2026-11-24 08:12 · 无人值守自动补跑 · **判据 3 = PASS**）
+
+**本轮性质** = 生产 D1 免费额度 UTC 午夜（北京时间 08:00）重置后，**一键脚本无人值守补跑**（`tmp/br-c3-run.ps1`）⇒ 服务端写预算护栏判据 3 首次取得判定结果；**未改任何产品代码**。
+
+- 【脚本内实际输出（08:11:08 → 08:12:18）】：阈值 80000 → **10**（`WRITE_BUDGET_ROWS_PER_DAY = "10"`）→ `STEP2_DEPLOY_EXIT=0` → `node tmp/br-prod-verify.mjs c3` → **`C3_VERDICT=PASS`**（`STEP3_C3_EXIT=0`）→ 恢复 **80000**（`GIT_CLEAN=TRUE`，`THRESHOLD_RESTORE=script_ok`）→ `STEP5_DEPLOY_EXIT=0` → `WRANGLER_TOML_CLEAN=True` → `STEP7 cleanup` → `STEP7_CLEANUP_EXIT=0` → `C3_SCRIPT_EXIT=0`。
+- 【判定四行（只认这四行，退出码不作数）】：**`FINAL_C3_VERDICT=PASS`** / **`FINAL_THRESHOLD_RESTORED=True`** / **`FINAL_WRANGLER_TOML_CLEAN=True`** / **`FINAL_CLEANUP_VERDICT=PASS`**。
+  - ⇒ **判据 3「写预算超限 ⇒ 429 `write_budget_exceeded` 且 R2/D1 零写入」= PASS**（探针日志同时命中 HTTP 429 + `write_budget_exceeded`，且 D1 `sync_items` 行数零增长）。
+  - ⇒ **阈值已安全恢复 80000**（生产**不再**停在 10 行预算 ⇒ 真实用户推送不会被 429）。
+  - ⇒ **`cloud/fluxing-sync/wrangler.toml` 与 git HEAD 逐字节一致**（`GIT_CLEAN=TRUE`）。
+  - ⇒ **探针残留已清零**：【实测】`SELECT email FROM users WHERE email LIKE 'br.%'` 返回 **0 行**（`br.probe.*` / `br.c2.*` 已删）⇒ 前一轮登记的「生产探针残留未清理」**已闭环**。
+- 【实测 · 生产 D1 额度回读】（直连、清代理）：`rows_written_24h = 69428`（额度**确已重置**且未再耗尽，< 100,000 免费额度）/ `write_queries_24h = 27704` / `rows_read_24h = 5216989`。
+- 【实测 · 生产部署时刻】恢复部署（阈值 80000）于 **2026-11-24T00:11:50.899Z**（= 北京时间 **08:11:50**）⇒ 生产运行的即**阈值 80000 的恢复版**。
+- 【本轮未动】= 未改产品代码 / 未 bump 版本号 / 未手改 `wrangler.toml`（脚本自身恢复并校验）/ 未重做既有取证 ⇒ 门禁沿用前轮结论（`typecheck` 0 / `check` 0 = 11 文件 / 143 用例；客户端 PASS=787 FAIL=0）。
+- 【本轮附带发现】昨天为 BR-①c 建的 09:00 AC-09 复跑定时任务 `80a9267f-eff9-4091-924c-9cc1d8f3a0bd` 已变为 `status=deleted` / `enabled=false` ⇒ **09:00 不会自动触发** ⇒ 已改为在本会话直接复跑（AC-09 必须排在判据 3 收尾之后 —— 判据 3 的 cleanup 删行同样计入 `rows_written_24h`，两轮重叠会污染 AC-09 的零增量基线）。
+
 ### BR-①c 轮（2026-11-23 21:50 · 客户端「远端 HLC 沿用」根治 · ADR 0076 D2-5a）
 
 **本轮性质** = **用户已授权改客户端代码** ⇒ 客户端红线解除，动 `WeaselServer/Cloud/**`；交付链 = ADR 修订 → spec/plan/tasks 三件套 → 客户端实现 → 单测 → 门禁 → 出包装机 → 装机实证 → 真机判据（**本轮 = 未判定，见下**）→ 收尾双产物 → 入库 + push。
