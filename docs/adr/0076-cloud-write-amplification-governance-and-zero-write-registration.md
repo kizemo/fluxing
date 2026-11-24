@@ -201,6 +201,63 @@ ADR 0075 的**已发布契约**（错误语义、回滚三态、三个 ASCII 诊
     才推送 ⇒ **延迟，不丢数据**；该延迟是「服务端按 id 游标分页 + 单轮 1,000 条上限」的**结构性后果**，
     本批**不通过放大单轮页数**来消解（会显著拉长单轮耗时并放大 R2 读取量，收益不抵成本）；
     若后续要压缩延迟，属独立议题（BR-①e 候选），须另立 ADR。
+  - **D2-5a-9（a-9 · 语义指纹 · 易变字段剔除 · 2026-11-24 修订）**：在 a-8 之上**再追加一个子决策** ⇒ 把
+    「本地改动判定」与「回写判定」从**整条 payload 的 sha256** 改成**语义指纹**（剔除 `d=` / `t=` 两个易变字段）。
+    **触发事件**：2026-11-24 AC-09 真机判据**第 1 次复跑 = FAIL**（判据未达成），根因已坐实（详见
+    `docs/archive/handoffs/handoff-2026-11-23-batch-br-write-amplification-and-zero-write-register.md` 的 §F）。
+    - **根因（已坐实，2026-11-24 复跑取证 + 逐行读码）**：
+      1. **侧车哈希取的是整条 payload**：当前 payload 哈希 = `Sha256Hex(entry.payload)`
+        （`WeaselServer/Cloud/CloudSyncService.cpp:1127` 算当前值、`:1381` 写入侧车行、`:1578` 序列化落盘、
+        `:1630` 解析回读；字段定义 `WeaselServer/Cloud/CloudSyncService.h:243`、文件格式注释 `:329` / `:460`）。
+      2. **payload 形态** = `<码><空格><TAB>c=<commits> d=<dee> t=<tick>`
+        （装配 `WeaselServer/Cloud/CloudUserDictIo.cpp:97-108`；切分 `SplitDictPayload` `:326-337`；
+        形态注释 `:343`；`t=` 解析 `:169-174`）。
+      3. **回写改写 `d=` / `t=`**：客户端每轮同步都会把合并结果**回写本地词典**（`restore_user_dict` → rime
+        `UserDbMerger`，调用点 `WeaselServer/Cloud/CloudRimeUserDictBackend.cpp:157-159`）⇒ merger 重算 `d=`
+        （`librime/src/rime/dict/user_db.cc:208` / `:216`，`algo::formula_d(0, their_tick_, v.dee, v.tick)`）
+        并把 `t=` 改写成 db 当前 tick（`librime/src/rime/dict/user_db.cc:221`，`o.tick = max_tick_`）
+        ⇒ **同一未改词条的 payload 哈希每轮必变**。
+      4. **后果（a-8 ② 写放大的真实机理）**：本地改动判定（侧车哈希 vs 当前 payload 哈希，
+        `WeaselServer/Cloud/CloudSyncService.cpp:1151` 分歧分支 / `:1164` 沿用分支）**每轮都判「改过」**
+        ⇒ 每轮分配**新墙钟 HLC**（`HlcTick(&clock_, now_ms)`，`:1152` / `:1174`）⇒ 服务端 HLC 守卫失效
+        ⇒ 既有 `sync_items` 行被反复 UPDATE。
+      5. **回写判定是同一个病灶的第二处**（`WeaselServer/Cloud/CloudSyncService.cpp:1194-1205`：
+        `merged[i].payload != local_entries[index].payload` ⇒ `changed = true` ⇒ 整库回写）
+        ⇒ **漂移源头（回写）与受害面（哈希判定）互为因果** ⇒ 只改其一不断根 ⇒ 必须两端同改。
+    - **a-9① 语义指纹（新增口径）**：新增「语义指纹」= payload 的 **code 段 + 值段剔除 `d=` / `t=` token 后的剩余**
+      （**保留 `c=` 学习次数**）⇒ 指纹对回写导致的 `d=` / `t=` 漂移**不敏感**、对**真实学习**（`c=` 增长）**敏感**。
+      指纹实现仍复用既有切分函数 `SplitDictPayload`（`WeaselServer/Cloud/CloudUserDictIo.cpp:326-337`）
+      ⇒ **不新增 payload 形态解析器**（口径不漂移，宪法 R7）。
+    - **a-9② 判定口径统一（一处改，处处用）**：**本地改动判定**（`WeaselServer/Cloud/CloudSyncService.cpp:1135` 取语义指纹 /
+      `:1151` 基线四态）、**R1 远端一致判定**（`:1163`）、**R4 分歧判定**（基线态 `:1148-1161`）、
+      **回写判定**（`:1242-1249`）、**侧车哈希字段**（`:1433` 写行 / `:1451` 旧口径就地重锚 / `:1668` 序列化 /
+      `:1696` 解析）**一律改用语义指纹**；侧车哈希字段改存 **`s2:<sha256(语义指纹)>`**
+      （前缀标识口径版本 ⇒ 与旧裸 hex **天然可区分**，无需另开版本号）。
+      **实施后坐标（2026-11-24 a-9 落码）**；三个 helper = `:1625` `SemanticFingerprint`（复用
+      `SplitDictPayload` ⇒ 不新增第二套 payload 解析器）/ `:1657` `SemanticHashHex` / `:1664` `IsSemanticHash`。
+    - **a-9③ 旧口径兼容（旧侧车基线不可比）**：旧侧车行（**裸 64 位 hex、无 `s2:` 前缀**）的哈希**与语义指纹不可比**
+      ⇒ 本轮**不推送**（避免一次性 4 万条洪峰）+ **抬高本地 HLC**（本地胜出，防止云端旧版回灌覆盖本地）
+      + 侧车重建时把该行**升级**为 `s2:` 口径（重新锚定基线）⇒ **之后的真实改动仍能被发现**。
+    - **a-9④ 回写止血（漂移源头同时断掉）**：回写判定改语义口径 ⇒ `d=` / `t=` 差异**不再触发整库回写**
+      ⇒ rime 回写不再改写本地词典 ⇒ **漂移源头同时断掉**（双管齐下：判定侧不敏感 + 回写侧不产生漂移）。
+    - **a-9⑤ 已知边界（如实登记，不修）**：① 云端保留旧的 `d=` / `t=` 值、**不再随本地更新**（语义口径忽略它）；
+      ② 升级前发生、且**从未上云**的本地改动**不会自动上传**（推荐迁移 = 升级后**删一次侧车**，
+      走完整库存重扫、逐条与云端比对）；③ 本地 54,536 条**从未上云**的条目仍按 R2 闸门（a-3）**延后到库存扫完**
+      （约 41 轮）⇒ 属**独立议题 BR-①e**，需用户拍板（是否允许推送新条目 / 是否提高单轮拉取页数 / 是否升级 Workers Paid）；
+      ④ 修复后单轮写入量由「每轮 3,072+ 行」降为 **0**（AC-09 场景），但**库存扫完后会一次性补推那 54,536 条**
+      ⇒ 服务端**每账号每日 80,000 行预算**（D2-3）与 **D1 免费额度**需一并复核
+      （BR-② / Workers Paid **待用户拍板**）。
+- **D2-5a-9 实施状态（2026-11-24 · BR-①c 第二轮 · 已落码）**：a-9①…a-9⑤ **全部已实施**并通过门禁
+  （客户端 `TestFluxingCloud` **PASS=813 FAIL=0**，基线 787 ⇒ +26，既有 787 条逐条保留；构建 0 错误；改动文件 U+FFFD=0；
+  clang-format 改动 hunk 内 0 漂移）⇒ 出包 **43,001,594 B** / sha16 `1E955184BB1F099D`；装机 `INSTALL_EXIT=0`；
+  **三处 `WeaselServer.exe` sha256 逐字节相等** `A106522FD8F5AC31ABBF392FA906F76ABFD73032A73640E0FE45742057394A94`。
+  **但 AC-09 真机判据仍为 FAIL（未复跑）**：修复后真机两轮**在拉取阶段即 503 早退**（生产 D1 免费额度耗尽 `code 7500`；
+  且服务端 `cloud/fluxing-sync/src/auth.ts:1043-1045` 的 `devices.last_seen` 刷新是**读路径上的写** ⇒ 额度耗尽时**拉取也 503**）
+  ⇒ 未进对账循环 ⇒ `semantic legacy_rows` 诊断行**零出现** ⇒ **修复尚未取得真机证据**（先前「真机零推送 ⇒ 修复生效」的推断**已纠正**）。
+  复跑 = 定时任务 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`（北京时间 **2026-11-25 08:10:46**），**探针升 v4**
+  （`round_ran` 须**同见** `reconcile` 行**且** `semantic legacy_rows=` 行；主判据改 `sync_items` **表级**写入增量，
+  因 `devices.last_seen` 属读路径写、不得计入写放大 ⇒ `rows_written_24h` 全局计数降为严格变体）。
+  **只有 `AC09_VERDICT=PASS` 才可把 a-9 记为「判据达成」。**
 - **D2-6 sidecar 落点加固（客户端，低优先，BR-①d 候选）**：sidecar 与凭据 blob 同目录并纳入用户数据备份 / 迁移清单
   ⇒ 降低「重建用户数据目录 ⇒ 全量重推」的触发概率。
 

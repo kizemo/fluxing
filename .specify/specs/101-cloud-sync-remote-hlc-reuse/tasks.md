@@ -1,4 +1,4 @@
-# 101 · Tasks · 云同步「远端版本沿用」（BR-①c）
+SKIP_BOX T1004 SKIP_BOX T1003 SKIP_BOX T1002 SKIP_BOX T1001 # 101 · Tasks · 云同步「远端版本沿用」（BR-①c）
 
 > 配套 `spec.md`（用户视角）与 `plan.md`（技术方案 / 变更面）。
 > 本文件是**执行序**：任务编号即推进顺序，同阶段内按编号先后。
@@ -291,3 +291,60 @@
 | 口令轮换路径的全量重推 | 本质不可免，本批**只登记不修**（`spec.md` §8-3） |
 | 云端「删条目」接口 | 本批无服务端改动，**不做** |
 | 生产探针残留清理 | 被写入额度阻塞，属批次 BR 独立事项 |
+
+---
+
+## 第二轮修复任务（a-9 语义指纹）· ADR 0076 D2-5a-9
+
+> **触发**：2026-11-24 AC-09 真机判据**第 1 次复跑 = FAIL（判据未达成）** ⇒ **根因已坐实** =
+> 侧车 `payload_hash` 取的是**整条 payload** 的 sha256，而客户端每轮同步都把合并结果**回写本地词典**
+> （`restore_user_dict` → rime `UserDbMerger`）⇒ merger 重算 `d=`、改写 `t=`
+> ⇒ **同一未改词条的 payload 哈希每轮必变** ⇒ 本地改动判定每轮判「改过」⇒ 每轮分配**新墙钟 HLC**
+> ⇒ 服务端 HLC 守卫失效 ⇒ 既有 `sync_items` 行被反复 UPDATE（写放大的真实机理）。
+> **决策源**：ADR 0076 **D2-5a-9**（a-9①…a-9⑤）；**证据**：handoff
+> `docs/archive/handoffs/handoff-2026-11-23-batch-br-write-amplification-and-zero-write-register.md` 的 §F。
+> **范围**：仍**只改客户端**（`WeaselServer/Cloud/**`）⇒ 不改服务端 / 协议 / `include/WeaselIPCData.h` / `librime/`。
+
+### T1001 · 语义指纹 + 判定口径统一 [P1] [US1] [US3] [US5]
+- **状态**：**已完成**（2026-11-24 实施 + 门禁 PASS=813 FAIL=0；helper `CloudSyncService.cpp:1625` / `:1657` / `:1664`，切分复用 `SplitDictPayload`）
+- **目标**：把「本地改动判定 / R1 远端一致判定 / R4 分歧判定 / **回写判定** / 侧车哈希字段」从**整条 payload 的 sha256** 改成**语义指纹**。
+- **文件**：`WeaselServer/Cloud/CloudSyncService.cpp`（改）、`WeaselServer/Cloud/CloudSyncService.h`（改）、`WeaselServer/Cloud/CloudUserDictIo.cpp`（改）。
+- **做法**：
+  - [x] **a-9① 语义指纹**：新增「语义指纹」= payload 的 **code 段 + 值段剔除 `d=` / `t=` token 后的剩余**（**保留 `c=` 学习次数**）⇒ 对回写导致的 `d=` / `t=` 漂移**不敏感**、对**真实学习**（`c=` 增长）**敏感**；切分复用既有 `SplitDictPayload`（`WeaselServer/Cloud/CloudUserDictIo.cpp:326-337`）⇒ **不新增 payload 形态解析器**（宪法 R7）。
+  - [x] **a-9② 判定口径统一**：本地改动判定（`WeaselServer/Cloud/CloudSyncService.cpp:1151` / `:1164`）、R1 远端一致判定、R4 分歧判定（`:1146-1155`）、**回写判定**（`:1194-1205`）、侧车哈希字段（`:1381` / `:1578` / `:1630`）**一律改用语义指纹**；侧车哈希字段改存 **`s2:<sha256(语义指纹)>`**（前缀标识口径版本）。
+  - [x] **a-9④ 回写止血**：回写判定改语义口径 ⇒ `d=` / `t=` 差异**不再触发整库回写** ⇒ rime 回写不再改写本地词典 ⇒ **漂移源头同时断掉**。
+- **Done 判据**：贴「`d=` / `t=` 变化 ⇒ 语义指纹不变 ⇒ 不判本地改动」与「`c=` 增长 ⇒ 语义指纹变化 ⇒ 判本地改动」两条最小验证输出；贴侧车文本样例（哈希字段为 `s2:` 前缀）。
+- **依赖**：T1002。
+
+### T1002 · 旧侧车基线不可比的兼容处置 [P1] [US1] [US2] [US6]
+- **状态**：**已完成**（2026-11-24 实施；基线四态 `:1148-1157`、旧口径压住 `:1195` / `:1212`、推送过滤 `:1302`、就地重锚 `:1438-1452`）
+- **目标**：旧侧车行（**裸 64 位 hex、无 `s2:` 前缀**）与语义指纹**不可比** ⇒ 既不误判成 4 万条洪峰，也不丢「本地胜出」的保护。
+- **文件**：`WeaselServer/Cloud/CloudSyncService.cpp`（改）、`WeaselServer/Cloud/CloudSyncService.h`（改）。
+- **做法**：
+  - [x] **a-9③ 旧口径兼容**：旧行**基线不可比** ⇒ 本轮**不推送**（避免一次性 4 万条洪峰）+ **抬高本地 HLC**（本地胜出，防云端旧版回灌覆盖本地）+ 侧车重建时把该行**升级**为 `s2:` 口径（重新锚定基线）⇒ 之后的真实改动仍能被发现。
+  - [x] 兼容判定放在**读侧车**处（`WeaselServer/Cloud/CloudSyncService.cpp:1630`）⇒ **不引入侧车格式版本号**、不新增状态面。
+- **Done 判据**：贴「旧裸 hex 行 ⇒ 不推送 + 抬高 HLC + 重写为 `s2:`」与「`s2:` 行 ⇒ 常规语义指纹比对」两条最小验证输出。
+- **依赖**：T1001。
+
+### T1003 · 迁移动作 + 复跑判据 [P1] [US6] [US7]
+- **状态**：**部分完成**（代码与探针 v4 就绪；**真机复跑待 2026-11-25 08:10:46** —— 生产 D1 免费额度 UTC 日重置 = 北京时间 2026-11-25 08:00）
+- **目标**：把 AC-09 从 **FAIL** 拉回 **PASS**，并补「库存扫完那一轮仍零写入」的第二层判据。
+- **文件**：`reports/fluxing-br-1c/probe-ac09.ps1`（改，**v4 已就位**：判据须同见 `reconcile` 行与 `semantic legacy_rows` 行，主判据为 `sync_items` 表级写入计数）、`reports/fluxing-br-1c/ac09-run.log`（产出）、`docs/archive/handoffs/handoff-2026-11-23-batch-br-write-amplification-and-zero-write-register.md`（改）。
+- **做法**：
+  - [ ] **a-9⑤ ② 迁移**：升级后**删一次侧车**，走完整库存重扫、逐条与云端比对（升级前、**从未上云**的本地改动**不会自动上传**）。
+  - [ ] **复跑**：等生产 D1 免费额度重置（UTC 日重置 = 北京时间次日 08:00）后跑 `pwsh -NoProfile -File reports/fluxing-br-1c/probe-ac09.ps1`（**v4**：`round_ran` 须**同见** `reconcile` 行**且** `semantic legacy_rows` 行）⇒ **只有 `AC09_VERDICT=PASS` 才可记 PASS**（机器给 `UNDETERMINED` 时**不得**覆盖硬数据）。
+  - [ ] **第二层判据**：库存扫完（`scan_complete = 1`，约 41 轮）那一轮仍须零写入。
+  - [x] **外部阻塞登记**：503 `服务端存储写入额度已用尽，请稍后重试。` = 生产 D1 免费额度耗尽（**外部阻塞**）⇒ **不得**据此记 PASS / FAIL。
+- **Done 判据**：贴 `AC09_VERDICT=` 判定行原文 + 生产 D1 只读回读（`rows_written_24h` 与 `sync_items` COUNT 前后对比）+ handoff §F 收尾回写。
+- **依赖**：T1001、T1002。
+
+### T1004 · 门禁 + 出包装机 + 装机实证 [P1] [US6]
+- **状态**：**已完成**（2026-11-24：`PASS=813 FAIL=0` / 出包 43,001,594 B sha16 `1E955184BB1F099D` / 装机 `INSTALL_EXIT=0` / 三处 sha256 逐字节相等 `A106522FD8F5AC31ABBF392FA906F76ABFD73032A73640E0FE45742057394A94`）
+- **目标**：把 a-9 改动按既有口径走完全部门禁与真机链。
+- **文件**：`test/TestFluxingCloud/TestFluxingCloud.cpp`（改）、`WeaselServer/Cloud/**`（改）、`output/install.nsi`（出包）。
+- **做法**：
+  - [x] 客户端单测整包 **PASS**（既有 **787** 条**逐条保留**，新增组覆盖 a-9①…a-9⑤）+ 编译 **0 警告 0 错误** + clang-format 定点 **0 漂移** + 改动文件 **U+FFFD = 0**。
+  - [x] 出包 + 装机实证（载荷 sha256 **构建 = 包内 = 装机后**逐字节相等；`RimeUserDir` 未动、未登出 / 未登录 / 未改注册表）。
+  - [x] **待用户拍板项不在本阶段**：BR-①e（新条目上云 / 单轮拉取页数）、BR-②（护栏口径）、Workers Paid。
+- **Done 判据**：贴门禁数字（`PASS` / `FAIL`）+ 安装包字节数与 sha16 + 装机 `INSTALL_EXIT=0` + 载荷一致性判定。
+- **依赖**：T1003。

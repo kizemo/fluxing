@@ -274,3 +274,212 @@
 3. **生产探针残留**：`br.probe.1795431653344@example.com` / `br.c2.1795431653344@example.com` ⇒ 删除行也计写入 ⇒ 等额度重置后按前缀清理并回读零残留。
 4. **待用户拍板（未动）**：Workers Paid 是否升级（维持不升级）/ **BR-②（护栏是否改全局口径或按活跃账号数分摊）** / **BR-①e（库存扫完前是否允许推送新条目 / 是否提高单轮页数）**。
 5. **入库存**：ADR 二次修订、客户端实现 + 单测、spec 三件套、`CHANGELOG.md` 条目、本 handoff 追加段、relay prompt 改写 ⇒ **显式按路径 `git add`**，**禁 `git add .`**，`librime` 禁 add。
+
+---
+
+### §F · AC-09 真机判据复跑轮（第 1 次）—— 判据未达成（FAIL）
+
+**本轮性质** = 客户端判据 **AC-09** 的**第 1 次真机复跑**（BR-①c 轮收尾复验）⇒ **判据未达成 = FAIL**；
+**根因已坐实** ⇒ 修订决策落 ADR 0076 **D2-5a-9（a-9 语义指纹）** ⇒ **代码修复待实施**。
+**本轮未改任何产品代码**（仅文档回写 + 探针脚本修正）⇒ 门禁未重跑，沿用 BR-①c 轮结论
+（客户端 `PASS=787 FAIL=0`；服务端 `typecheck` 0 / `check` 0 = 11 文件 / 143 用例）。
+
+#### §F-1 判据结果
+
+- 【实测】**AC-09 真机判据第 1 次复跑 = FAIL（判据未达成）**。
+- 【实测 · 工具坑】**探针 v2 的正则缺陷**：探针 `reports/fluxing-br-1c/probe-ac09.ps1` 的 v2 版本用 `^\[` 匹配诊断行，
+  但真实诊断行**行首没有 `[`** ⇒ **`^\[` 永不匹配** ⇒ 机器判定 `AC09_VERDICT=UNDETERMINED`。
+  - ⇒ **UNDETERMINED 不覆盖硬数据** ⇒ 据硬数据登记 **FAIL**（**不是**「未判定」，**更不是** PASS）。
+  - 【已修】探针已修到 **v3**（正则改 `^\[?`）。
+- 【实测 · 生产 D1 只读回读】PRE `rows_written_24h = 69428`、`sync_items` COUNT = **40061**
+  ⇒ POST `rows_written_24h = 72420`（**+2,992**）、`sync_items` COUNT = **40061**（**+0**）
+  ⇒ **全是既有行 UPDATE、无新增行** ⇒ 判据「写入增量 = 0」**不成立**。
+- 【实测 · 诊断日志】`%TEMP%\fluxing-profile-notify.log`（**行首无 `[`**）：
+  - `2026-11-24 08:14:19.339][cloudsync] reconcile scan_complete=0 matched=0 deferred=54536 divergent=67 pushed=3424`
+  - `2026-11-24 08:29:53.568][cloudsync] reconcile scan_complete=0 matched=0 deferred=54536 divergent=67 pushed=3072`
+- 【实测】`2026-11-24 08:27:58.632][cloudsync] push batch items=32 elapsed_ms=2812 http=503 err=服务端存储写入额度已用尽，请稍后重试。`
+  ⇒ **外部阻塞** = 生产 D1 免费额度耗尽（UTC 日重置 = 北京时间 **2026-11-25 08:00**）⇒ **干净一轮须等重置后复跑**。
+- 【已排定】复跑定时任务 **`4d3e51f8-fdda-41bb-bbc1-12e844914dc5`**（`scheduleType=once` /
+  `runAtMs=1795565446336` = 北京时间 **2026-11-25 08:10:46**）。
+
+#### §F-2 根因（已坐实）
+
+- 【实测 · 源码】**侧车 `payload_hash` 取的是整条 payload 的 sha256**：当前哈希 = `Sha256Hex(entry.payload)`
+  （`WeaselServer/Cloud/CloudSyncService.cpp:1127` 算当前值、`:1381` 写入侧车行、`:1578` 序列化、`:1630` 解析回读）。
+- 【实测 · 源码】**payload 形态** = `<码><空格><TAB>c=<commits> d=<dee> t=<tick>`
+  （`WeaselServer/Cloud/CloudUserDictIo.cpp:97-108` 装配、`:326-337` `SplitDictPayload` 切分、`:343` 形态注释）。
+- 【实测 · 源码】**客户端每轮同步都会把合并结果回写本地词典**（`restore_user_dict` → rime `UserDbMerger`，
+  调用点 `WeaselServer/Cloud/CloudRimeUserDictBackend.cpp:157-159`）⇒ merger 重算 `d=`
+  （`librime/src/rime/dict/user_db.cc:208` / `:216`，`formula_d(0, their_tick_, v.dee, v.tick)`）
+  并把 `t=` 改写成 db 当前 tick（`librime/src/rime/dict/user_db.cc:221`，`o.tick = max_tick_`）
+  ⇒ **同一未改词条的 payload 哈希每轮必变**。
+- 【实测】**后果**：本地改动判定（侧车哈希 vs 当前 payload 哈希，`WeaselServer/Cloud/CloudSyncService.cpp:1151` /
+  `:1164`）**每轮都判「改过」** ⇒ 每轮分配**新墙钟 HLC**（`HlcTick(&clock_, now_ms)`，`:1152` / `:1174`）
+  ⇒ 服务端 HLC 守卫失效 ⇒ 既有 `sync_items` 行被反复 UPDATE ⇒ **写放大**（ADR 0076 D2-5a-8 ② 的**真实机理**）。
+- 【实测】**「每轮同一前缀 3,072 条」是截断假象**：本轮 **94,604** 条本地条目中，**54,536** 条 deferred
+  （无侧车记录 + 库存未证实）、**67** 条 divergent、**40,001** 条被判本地改动 ⇒ 待推集合 = **40,001** 条，
+  按本地（词典序）排列 ⇒ 推送被服务端 503 额度**截断在第 3,072 条** ⇒ 看起来像「同一批键反复 churn」
+  （实测 **OVERLAP = 3072 = 全含**）⇒ **侧车已知条目本轮 40,068 条全部被判本地改动**。
+- 【实测 · 旁证】侧车两版比对（`fluxing-cloud-sync.state` 08:29:53 vs `fluxing-cloud-sync.state.failed-ac09` 08:14:19）
+  ⇒ **HASH_DIFF = 3072 / HLC_DIFF = 3072**；全量哈希对齐（对当前导出快照）⇒ `.state` **fullMatch = 3072** /
+  **noMatch = 36,988**（其余条目自 11-23 起未刷新哈希）。
+- 【实测 · 已排除的解释】**导出快照不是陈旧文件**：全盘普查 `*.userdb.txt` 只有 1 个
+  （`…\sync\<uid>\rime_ice.userdb.txt`，mtime **2026-11-24 08:14:23**，**94,610** 行 = 4 头 + 94,604 数据行），
+  `FindSnapshotFile` 的候选顺序里**第 1 个不存在、第 2 个存在** ⇒ 导出读到的就是**最新快照**。
+- 【实测 · 快照】94,604 行中 `t=` 只有两个取值（**27610 × 94,588**、**27024 × 16**）⇒ tick 被回写归一；
+  `d=` 存在 **1.12192e-66** 量级的连续衰减值 ⇒ 与 `formula_d` 反复缩放一致。
+
+#### §F-3 修复设计（a-9，已定案；**代码由父会话实施**）
+
+决策全文落 ADR 0076 **D2-5a-9**（`docs/adr/0076-cloud-write-amplification-governance-and-zero-write-registration.md`）：
+
+- **a-9① 语义指纹**：payload 的 **code 段 + 值段剔除 `d=` / `t=` token 后的剩余**（**保留 `c=` 学习次数**）
+  ⇒ 对回写导致的 `d=` / `t=` 漂移**不敏感**、对**真实学习**（`c=` 增长）**敏感**。
+- **a-9② 判定口径统一**：本地改动判定 / R1 远端一致判定 / R4 分歧判定 / **回写判定** / 侧车哈希字段
+  **一律改用语义指纹**；侧车哈希字段改存 **`s2:<sha256(语义指纹)>`**。
+- **a-9③ 旧口径兼容**：旧侧车行（**裸 64 位 hex、无 `s2:` 前缀**）**基线不可比** ⇒ 本轮**不推送**
+  （避免一次性 4 万条洪峰）+ **抬高本地 HLC**（本地胜出，防云端旧版回灌覆盖本地）+ 侧车重建时把该行
+  **升级**为 `s2:` 口径（重新锚定基线）⇒ 之后的真实改动仍能被发现。
+- **a-9④ 回写止血**：回写判定改语义口径 ⇒ `d=` / `t=` 差异**不再触发整库回写** ⇒ rime 回写不再改写本地词典
+  ⇒ **漂移源头同时断掉**（双管齐下）。
+- **a-9⑤ 已知边界**：① 云端保留旧的 `d=` / `t=` 值、不再随本地更新（语义口径忽略它）；
+  ② 升级前发生、且从未上云的本地改动**不会自动上传**（推荐迁移 = 升级后删一次侧车，走完整库存重扫、逐条与云端比对）；
+  ③ 本地 **54,536** 条从未上云的条目仍按 R2 闸门延后到库存扫完（约 41 轮）⇒ 属**独立议题 BR-①e**，
+  需用户拍板（是否允许推送新条目 / 是否提高单轮拉取页数 / 是否升级 Workers Paid）；
+  ④ 修复后单轮写入量由「每轮 3,072+ 行」降为 **0**（AC-09 场景），但**库存扫完后会一次性补推那 54,536 条**
+  ⇒ 服务端每账号每日 **80,000** 行预算与 **D1 免费额度**需一并复核（BR-② / Workers Paid **待用户拍板**）。
+
+#### §F-4 已验证 / 推断 / 未验证
+
+**已验证（实测或逐行读码可复算）**
+
+- 【实测】AC-09 第 1 次复跑 = **FAIL**；探针 v2 因 `^\[` 永不匹配而给出 `AC09_VERDICT=UNDETERMINED`（已修 v3：`^\[?`）。
+- 【实测】生产 D1 只读回读：PRE `rows_written_24h=69428` / `sync_items` COUNT=40061 ⇒ POST `rows_written_24h=72420`
+  （**+2,992**）/ `sync_items` COUNT=40061（**+0**）⇒ 全是既有行 UPDATE、无新增行。
+- 【实测】诊断日志三行（08:14:19.339 / 08:29:53.568 / 08:27:58.632）逐字见 §F-1 ⇒ 本轮 94,604 条中
+  deferred=54536、divergent=67、待推 40,001 条、被 503 截断在第 3,072 条。
+- 【实测】侧车两版比对 HASH_DIFF=3072 / HLC_DIFF=3072；全量对齐 `.state` fullMatch=3072 / noMatch=36,988。
+- 【实测】全盘普查 `*.userdb.txt` **只有 1 个**（mtime 2026-11-24 08:14:23，94,610 行）⇒ 导出快照**不是陈旧文件**。
+- 【实测】快照 `t=` 只有两个取值（27610 × 94,588、27024 × 16）；`d=` 存在 1.12192e-66 量级连续衰减值。
+- 【读码】侧车哈希 = 整条 payload 的 sha256（`CloudSyncService.cpp:1127` / `:1381` / `:1578` / `:1630`）；
+  回写经 `restore_user_dict` → `UserDbMerger`（`CloudRimeUserDictBackend.cpp:157-159`），
+  merger 重算 `d=`（`librime/src/rime/dict/user_db.cc:208` / `:216`）并改写 `t=`（`:221`）。
+
+**推断（由实测 + 读码推导，未单独复验）**
+
+- 侧车已知条目 40,068 条「本轮全部被判本地改动」= 由「待推集合 40,001 条 + deferred 54,536 + divergent 67」
+  与 94,604 总数**反推**得到 ⇒ **未逐条枚举验证**。
+- 修复后「单轮写入量降为 0」= 由语义指纹口径 + 回写止血推导 ⇒ **未实施、未实测**。
+- 「库存扫完后一次性补推 54,536 条」= 由 deferred 条目数与 R2 闸门口径推导 ⇒ **未实测**。
+
+**未验证 / 未闭环**
+
+- **a-9 代码修复未实施** ⇒ AC-09 仍为 FAIL ⇒ **不得记 PASS**。
+- **干净一轮的 AC-09 复跑未跑**：本轮被生产 D1 免费额度耗尽阻塞（503 `服务端存储写入额度已用尽，请稍后重试。`）
+  ⇒ 重置 = 北京时间 **2026-11-25 08:00**；已排定定时任务 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`
+  （北京时间 **2026-11-25 08:10:46**）复跑。
+- **「HLC 逐条沿用」的第二层判据仍未跑**：需库存扫完（`scan_complete = 1`，约 41 轮）那一轮再验。
+- **服务端 `handlePull` 的 `healed` 自愈 DELETE 仍只能间接证明**（服务端未暴露计数接口，见 §C）。
+- **BR-①e / BR-② / Workers Paid** 三项**仍待用户拍板**，本轮未动。
+
+#### §F-5 未闭环 / 下一步
+
+1. **实施 a-9**（代码 + 单测 + 门禁 + 出包装机 + 装机实证）：决策见 ADR 0076 D2-5a-9；
+   任务清单见 `.specify/specs/101-cloud-sync-remote-hlc-reuse/tasks.md` 末尾「第二轮修复任务（a-9 语义指纹）」。
+2. **复跑 AC-09**：定时任务 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`（北京时间 2026-11-25 08:10:46），
+   探针 v3（`reports/fluxing-br-1c/probe-ac09.ps1`，正则 `^\[?`）⇒ **只有 `AC09_VERDICT=PASS` 才可记 PASS**。
+3. **库存扫完后的第二层判据**：约 41 轮后 `scan_complete = 1` 那一轮仍须零写入（见 §C / §F-4）。
+4. **待用户拍板（未动）**：Workers Paid 是否升级 / **BR-②**（护栏口径）/ **BR-①e**（新条目上云 / 单轮页数）。
+5. **入库存**：ADR 0076 D2-5a-9 修订 + 本 handoff §F + relay prompt 就地改写 + `CLAUDE.md` BR 指针追加
+   ⇒ **显式按路径 `git add`**，**禁 `git add .`**，`librime` 禁 add。
+
+---
+
+### §G · a-9 实施轮（2026-11-24）—— 客户端根治修复已落地并装机；**AC-09 真机判据仍未复跑**
+
+**本轮性质** = 客户端 **ADR 0076 D2-5a-9（a-9 语义指纹）** 的**实施 + 单测 + 门禁 + 出包装机 + 装机实证 + 文档回写**。
+**本轮改了产品代码**（`WeaselServer/Cloud/CloudSyncService.{h,cpp}` + `test/TestFluxingCloud/TestFluxingCloud.cpp`）⇒ 与 §F 轮（纯取证、零产品代码）性质不同。
+**本轮未提交、未 push**（见 §G-7 第 2 项）。
+
+#### §G-1 实施落点（a-9①…a-9⑤ 全部落码）
+
+- `WeaselServer/Cloud/CloudSyncService.h`：新增 3 个公开声明 + 口径注释（`SemanticFingerprint` / `SemanticHashHex` / `IsSemanticHash`）。
+- `WeaselServer/Cloud/CloudSyncService.cpp`：
+  - 三个 helper 落在 `}  // namespace`（:1622）之后、`BuildSidecarText`（:1668）之前 —— `SemanticFingerprint` **:1625**、`SemanticHashHex` **:1657**、`IsSemanticHash` **:1664**；
+  - `SemanticFingerprint` **复用既有导出函数 `SplitDictPayload`**（`fluxing::cloud` 同命名空间、非限定调用可直接解析；`CloudUserDictIo.h` 已 include；实现 `CloudUserDictIo.cpp:326-337` 首个 TAB 切分）⇒ **行为不变**（无 TAB 原样退化；剔除 `d=`/`t=` token、**保留 `c=`**）⇒ **不新增第二套 payload 形态解析器**（宪法 R7 · 单一真相源）；
+  - 对账主循环 :1116 起改写：新增 `legacy_baseline` 向量（:1124）、`legacy_rows` / `legacy_held` 计数（:1129-1130）、基线四态 `kNone/kMatch/kDiff/kLegacy`（:1148-1157）、语义指纹取用（:1135-1136）、R1 语义一致即命中（:1163）、旧口径抬高本地 HLC 并计入 `legacy_held`（:1195 / :1212）、**循环后无条件打印 `semantic legacy_rows=<n> legacy_held=<n>`**（:1228-1230）；
+  - 推送集合过滤新增 `if (legacy_baseline[i]) continue;`（:1302）；
+  - 回写判定（a-9④）:1242-1249 改用 `SemanticFingerprint` 比较 ⇒ `d=` / `t=` 差异**不再触发整库回写**（漂移源头同时断掉）；
+  - R3 侧车重建：:1433 改存 `SemanticHashHex`（`s2:<sha256>`）；旧口径行在 :1438-1452 **就地重锚**为 `s2:` + 当前条目 HLC。
+- `test/TestFluxingCloud/TestFluxingCloud.cpp`：R1 旧断言 `payload_hash.size()==64` → `67` + `s2:` 前缀；新增 `TestCloudSemanticFingerprint()`（:5088-5217，3 组共 **26** 条新断言 = 指纹性质 8 / **核心回归**（`d=`/`t=` 漂移 ⇒ 零推送零回写）/ 旧口径迁移（压住不推 + 就地重锚））；`main()` 在 `TestCloudRemoteHlcReuse();` 之后调用（:5303-5305）。
+- `CloudUserDictIo.{h,cpp}` / `CloudRimeUserDictBackend.cpp` **未改**（复用既有导出函数即可）。
+
+#### §G-2 门禁（父会话亲跑，全绿）
+
+- `weasel.sln` Release|Win32：`SLN_BUILD_EXIT=0`。
+- `TestFluxingCloud.vcxproj` **单独**构建（带 `/p:SolutionDir=F:\soft\00selfmade\rime_claude\`）：`TESTPROJ_BUILD_EXIT=0`。
+- `TestDefaultHotkeys` EXIT=0 / `TestWeaselIPC` EXIT=0 / `TestFluxingCloud` EXIT=0 ⇒ **`RESULT: PASS=813 FAIL=0` / `VERDICT: ALL PASS`**（基线 787 ⇒ **+26**，既有 787 条逐条保留）。
+- 改动文件 **U+FFFD = 0**；clang-format 定点：`.h` 漂移 **ERR=0**；测试文件 ERR=261 / UNIQUE=217（其余为既有遗留漂移）但**本轮改动 hunk 内 IN_MINE=0**。
+- **⚠ 门禁坑（务必记）**：`weasel.sln` **不含** `TestFluxingCloud` 工程 ⇒ 只跑 sln 会拿**上一轮旧 exe**（PASS 恒 787）⇒ 必须单独 msbuild 该 vcxproj 且**显式传 `SolutionDir`**（否则 `$(SolutionDir)` 未定义 ⇒ `FluxingLocalChangeHook.h` C1083）。
+- 门禁首跑 `TestWeaselIPC EXIT=-3`，单独复跑 EXIT=0 ⇒ **偶发，非回归**。
+
+#### §G-3 出包装机 + 装机实证
+
+- 出包：`tmp/br1c-build-installer.cmd` ⇒ `ALL_STEPS_OK` / `NSIS_RC=0` / EXIT=0。
+- 新包 `output\archives\fluxing-1.3.8-installer.exe` = **43,001,594 B** / sha256 `1E955184BB1F099D40E6B088ED8D0299398A1B2118DD48D8ECDD6B5FFEBEF569` / sha16 `1E955184BB1F099D` / mtime **2026-11-24 09:25:04**（与上轮 42,981,713 B / `017722F3FD0EC512` 不同 ⇒ **代码确实变更**）。
+- 装机 `INSTALL_EXIT=0`。
+- **三处 sha256 逐字节相等** = **`A106522FD8F5AC31ABBF392FA906F76ABFD73032A73640E0FE45742057394A94`**（2,810,880 B）：构建 `output\Win32\WeaselServer.exe` = 包内 `tmp\pkg-a9-20261124092826\WeaselServer.exe` = 装机后 `D:\Program Files\fluxing\weasel\WeaselServer.exe`。
+- **载荷落在 `<InstallDir>\weasel\`**（不是安装根目录）；旧备份 `WeaselServer.exe.bak*` / `engine-nested-fluxing-bak-20261103` 未动。
+- 新客户端已在跑：**PID 609072**，启动 **09:28:17**，`startup_allowed allowed=1 reason=console_session_match`。
+
+#### §G-4 ⚠ 纠正前一结论：真机两轮**不是「零推送」**，而是**拉取阶段 503 早退**
+
+- 【实测】真机诊断日志 `%TEMP%\fluxing-profile-notify.log`（629,000 B，行首**无** `[`）在 **09:28:56.452 / 09:30:02.423 / 09:34:37.107** 共 3 行 `reconcile scan_complete=0 matched=0 deferred=0 divergent=0 pushed=0`，**其间没有任何 `semantic legacy_rows=` 行**。
+- 【读码】`reconcile` 行由 `CloudSyncService.cpp:900`（`SyncOnce` 内）**无条件**打印 ⇒ `SyncRound` 早退**也会**有一行全 0；`semantic legacy_rows` 行在 :1228（**对账循环之后**）⇒ **只有真正跑完对账才有** ⇒ 三轮**根本没进对账循环**。
+- 【实测 · 失败原因】BK 探针读 1017：`最近同步：2026-11-24 09:30:02 · 失败（服务端存储写入额度已用尽，请稍后重试。）`（09:34:37 同文案）⇒ **生产 D1 免费额度耗尽（`code 7500`）阻塞拉取**。
+- 【读码 · 为什么「读」也会 503】`cloud/fluxing-sync/src/auth.ts:1043-1045`：`device_last_seen` 距今 ≥ `LAST_SEEN_REFRESH_SECONDS`（300 s）时执行 `UPDATE devices SET last_seen` ⇒ **认证路径带写** ⇒ 额度耗尽时**拉取（读语义）也 503**。
+- 【实测 · D1 读数（09:35）】`rows_written_24h = 79,941`（08:20 时 72,420，**仍在涨**）、`write_queries_24h = 31,872`、`rows_read_24h = 9,360,874`、`read_queries_24h = 2,514`、`database_size = 19,255,296`、`uuid = e4ea114a-29b4-4abd-87e6-4e6cb20d86e4`。
+- 【实测 · 用户词典快照】`…\sync\<uid>\rime_ice.userdb.txt` = 4,794,397 B / mtime 2026-11-24 09:29:57。
+- ⇒ **先前记的「真机零推送零分歧 ⇒ 修复生效」结论错误，本节予以纠正**；**AC-09 仍记 FAIL**。
+
+#### §G-5 真机侧车现状 + 探针 v3 假绿缺陷（本轮新发现）
+
+- 【实测】真机侧车 `D:\Program Files\fluxing\user1\fluxing\fluxing-cloud-sync.state` = **40,063 行**（**LEGACY64 = 40,061**、**S2 = 0**、首行 `#fluxing-cloud-sync-v1`）、mtime **08:29:53** ⇒ **真机侧车仍是旧口径**（裸 64 hex、无 `s2:`）⇒ 新客户端**从未成功跑完一轮** ⇒ **a-9③ 旧口径迁移路径尚未被真机证据覆盖**。
+- 【实测】另两份副本仍在：`fluxing-cloud-sync.state.failed-ac09`（08:14:19，同尺寸）；`.ac09bak` 不存在。
+- 【读码】`last_server_seq_` 随侧车持久化（`LoadSidecar` :810 置 0 / `ParseSidecarText` :821-822 / `SaveSidecar` :834 写出 / :1459-1460 落盘）⇒ **删侧车 ⇒ 拉取游标归零 ⇒ 从 seq 0 全量重扫**（单轮上限 `kPullPageLimit=100` × `kMaxPullPages=10` = 1,000 条 ⇒ 约 41 轮）。
+- **⚠ 探针 v3 假绿缺陷**：`round_ran` 只看 `reconcile` 行 ⇒ 早退轮也会被误判 PASS ⇒ **探针已升 v4**（`reports/fluxing-br-1c/probe-ac09.ps1`，**不入库**）：
+  1. `round_ran` 必须**同时**见到 `reconcile` 行**且** `semantic legacy_rows=` 行（后者只在跑完对账后打印 ⇒ 硬证据）；
+  2. 主判据改 **`sync_items` 表级写入计数**（`updated_at` 秒级，`>= pre 时刻` 计数；时间单位自动探测）⇒ **不把 `devices.last_seen` 那 1 行读路径写算进写放大**；`rows_written_24h` 全局计数改列为**严格变体** `AC09_VERDICT_STRICT`（服务端 DELETE+INSERT 写序 ⇒ 重写 1 条计 2 行写入）；
+  3. 记录 `legacy_rows` / `legacy_held` 实测值 + 侧车 `s2:` / 旧口径行数普查（迁移前后）；
+  4. 保留 `AC09_VERDICT=` / `AC09_SUMMARY=` 两行输出契约（cron 与人工读法不变）；新增 `STAGE_VERDICT[Legacy|Deleted]` 分段结论。
+
+#### §G-6 已验证 / 推断 / 未验证
+
+**已验证（实测或逐行读码可复算）**
+
+- 门禁数字（§G-2）、出包与三处 sha（§G-3）。
+- 真机 3 行 `reconcile` 全 0 且**无** `semantic` 行（§G-4）⇒ 两轮**未进对账循环**（早退）⇒ **「修复已在真机生效」未被证实**。
+- BK 探针读 1017 = **失败（服务端存储写入额度已用尽）**（§G-4）。
+- 真机侧车 40,061 条**旧口径**、`s2:` = 0（§G-5）。
+- D1 读数（§G-4）与 `auth.ts` 读路径写（§G-4）。
+
+**推断（读码 + 实测推导，未单独复验）**
+
+- a-9 修复合规 ⇒ AC-09 场景单轮写入降为 0 ⇒ **未实测**（真机未跑完对账）。
+- 旧口径迁移后侧车将以 `s2:` 口径重锚 ⇒ **未实测**。
+- 「库存扫完后一次性补推 54,536 条」⇒ **未实测**。
+
+**未验证 / 未闭环**
+
+- **AC-09 真机判据仍为 FAIL（未复跑）** ⇒ 重置 = 北京时间 **2026-11-25 08:00**；定时任务 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`（**2026-11-25 08:10:46**）用**探针 v4** 复跑。
+- **a-9③ 旧口径迁移未被真机覆盖**；**第二层判据**（`scan_complete = 1` 那轮零写入，约 41 轮后）未跑。
+- `devices.last_seen` 读路径写对 D1 全局额度的长期影响未量化。
+- **BR-①e / BR-② / Workers Paid** 三项仍待用户拍板，本轮未动。
+
+#### §G-7 下一步（顺序固定）
+
+1. **复跑 AC-09**（定时任务 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`，北京时间 **2026-11-25 08:10:46**）⇒ 探针 **v4** ⇒ **只有 `AC09_VERDICT=PASS` 才可把 AC-09 改记 PASS**；机器给 `UNDETERMINED` / `FAIL` 时**不得**覆盖硬数据，也**不得**据此记 PASS。
+2. **入库存**：显式按路径 `git add`（`WeaselServer/Cloud/CloudSyncService.cpp`、`.h`、`test/TestFluxingCloud/TestFluxingCloud.cpp`、`CHANGELOG.md`、ADR 0076、本 handoff、relay prompt、`CLAUDE.md`、spec 101 tasks）⇒ **禁 `git add .`**、`librime` **禁 add**；Conventional Commits + 模块前缀（客户端 `WeaselServer` / 文档 `docs`）⇒ `git commit -F <file>` ⇒ push（直连曾 `Recv failure: Connection was reset` ⇒ 失败则走默认代理）。
+3. **第二层判据**：库存扫完（`scan_complete = 1`）那一轮仍须零写入。
+4. **待用户拍板**：Workers Paid 是否升级 / BR-② / BR-①e。
+
