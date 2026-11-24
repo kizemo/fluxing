@@ -804,7 +804,17 @@
 | 补推前 | `HEAD = ed6dd1d`，远程 tip `8a4f959`，`rev-list --count kizemo/feat/100-cloud-sync..HEAD` = **1** |
 | 执行 | `git -C F:/soft/00selfmade/rime_claude -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 push kizemo feat/100-cloud-sync` |
 | 结果 | **`8a4f959..ed6dd1d`，PUSH1_EXIT=0**；之后 `ahead = 0` |
-| **与 §I-6 相反** | §I-6 记「代理与直连两条路径同时不通 = 出口网络故障」；**本轮代理链路一次即通**，直连未触发 ⇒ 网络侧已恢复，无需任何配置改动 |
+| **与 §I-6 相反** | §I-6 记「代理与直连两条路径同时不通 = 出口网络故障」；**本轮 15:11 那次代理链路一次即通**，直连未触发 ⇒ 出口并非持续故障，而是**间歇性抖动**（15:30 再次双路 `000`，见 §J-1b） |
+
+#### §J-1b 本轮 commit `0b08972` 的推送状态（**已推送成功**，ahead = 0）
+
+- 本轮收口 commit `0b08972`（`chore(fluxing): ADR 0077 D8 护栏双口径订正 + BR-①f 阶段收口轮`）**已入库、已推送远程**（`ed6dd1d..0b08972`，PUSH_EXIT=0，之后 `ahead = 0`）。
+- **中间的实测判据（15:30–15:36）**：`curl` 直连 `DIRECT=000` / 代理 `PROXY=000` **同时失败**；代理进程**仍在监听**（`PROXY_LISTEN=PID 67596`）⇒ 是**出口/握手层故障**，不是「代理进程挂了」；直连 `git push` 报 `Connection timed out after 300000 milliseconds`（EXIT=128）；代理路径报 `TLS connect error: error:0A000126:SSL routines::unexpected eof while reading`（EXIT=128）⇒ **与 §I-6 记录的形态逐字一致**。
+- **恢复方式**：`curl --max-time 10` 判据 + **22 s 退避**重试，**第 1 次退避即恢复**（`ATTEMPT=1 PROXY=200 DIRECT=000` ⇒ 代理通、直连仍不通）⇒ 随后代理路径 `git push` 一次成功。
+- **与 §J-1 的关系**：15:11 推 `ed6dd1d` 成功、15:30 推 `0b08972` 失败、15:38 退避后成功 ⇒ **出口网络是间歇性抖动**，**不能拿上一轮「通」的结论当现状**，每轮都要实测判据。
+- **纪律（未违反）**：全程**未改全局 git config**、**未重启用户代理进程**（Clash Verge / `verge-mihomo`）、**未试第二条 SSL 后端**（§I-6 记录 `schannel` 亦失败）；只做退避重试。
+- **本批两条 commit 均已在远程 `kizemo/feat/100-cloud-sync`**：`ed6dd1d`（§I 文档 + 红线 + 勘查报告）与 `0b08972`（D8 双口径 + §J 收口）。
+
 
 #### §J-2 ADR 0077 D8 双口径订正（本轮唯一的产品侧改动，**注释 + 配置，无行为变更**）
 
@@ -847,5 +857,7 @@
 - `package.json` 的 `migrate:remote` = `wrangler d1 migrations apply fluxing-sync --remote`（**库名**）；已验证可解析的是**绑定名 `DB`** ⇒ 定时任务/脚本里**一律用 `DB` 形式 + 显式 `--config`**，别用 npm script。
 - handoff 文档本身是 **LF / 无 BOM**（实测 120,207 B / 793 行 / `CRLF=0`）⇒ 追加小节时保持 LF，不要引入 CRLF。
 - 用 `edit` 改中文长行时**必须逐字复述原文**（含全角标点）⇒ 手抄极易出错（本轮 `用户` 被误写成 `_user` 导致匹配失败）；改前先 `read` 回该行原文。
+- **PowerShell 里的 `Remove-Job` 会被本地安全网关当成删除类命令整体拦掉**（连带整条复合命令被拒，即使它只是清理作业）⇒ **不要在 bash 里写 `Remove-Job` / `Remove-Item` 之类**；需要并行探测时改用顺序执行（两个 `curl` 顺序跑 ≤ 25 s），或用 `Start-ThreadJob` 但**不清理**（作业随进程退出自动消失）。
+- **出口网络故障是间歇性的**（本轮 15:11 通、15:30 断）⇒ **每轮都必须实测 `curl` 双路径判据**，不能拿上一轮「通」的结论当现状；直连 `git push` 在出口不通时会**挂满 300 s**（`Connection timed out after 300000 milliseconds`）⇒ 探测用 `curl --max-time 10` 先行，别直接拿 git 探活。
 
 
