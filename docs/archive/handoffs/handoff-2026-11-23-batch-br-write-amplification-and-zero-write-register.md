@@ -479,7 +479,17 @@
 #### §G-7 下一步（顺序固定）
 
 1. **复跑 AC-09**（定时任务 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`，北京时间 **2026-11-25 08:10:46**）⇒ 探针 **v4** ⇒ **只有 `AC09_VERDICT=PASS` 才可把 AC-09 改记 PASS**；机器给 `UNDETERMINED` / `FAIL` 时**不得**覆盖硬数据，也**不得**据此记 PASS。
-2. **入库存**：显式按路径 `git add`（`WeaselServer/Cloud/CloudSyncService.cpp`、`.h`、`test/TestFluxingCloud/TestFluxingCloud.cpp`、`CHANGELOG.md`、ADR 0076、本 handoff、relay prompt、`CLAUDE.md`、spec 101 tasks）⇒ **禁 `git add .`**、`librime` **禁 add**；Conventional Commits + 模块前缀（客户端 `WeaselServer` / 文档 `docs`）⇒ `git commit -F <file>` ⇒ push（直连曾 `Recv failure: Connection was reset` ⇒ 失败则走默认代理）。
+2. **入库存** ⇒ **2026-11-24 09:51 已完成**（明细见 §G-8）：`2b83cd6`（客户端）+ `feb02ad`（文档）已推送，远程 `kizemo/feat/100-cloud-sync` 与本地同步（`rev-list --left-right --count` = 0/0）。
 3. **第二层判据**：库存扫完（`scan_complete = 1`）那一轮仍须零写入。
 4. **待用户拍板**：Workers Paid 是否升级 / BR-② / BR-①e。
+
+#### §G-8 入库与推送记录（2026-11-24 09:51）
+
+- 提交前核对：`git status -sb` + `git diff --stat`（tracked 修改 9 个文件；`librime` 仍为 dirty submodule ⇒ **未 add**）；改动文件 **U+FFFD = 0**（9/9）；换行风格保持原样（`CHANGELOG.md` CRLF、其余 LF）。
+- **提交 1** `2b83cd6` `fix(WeaselServer): 云同步写放大根治 —— 语义指纹取代整条 payload 哈希` ⇒ 3 文件 / +301 / −24（`CloudSyncService.cpp` +156/−24、`CloudSyncService.h` +30、`TestFluxingCloud.cpp` +139/−6）。
+- **提交 2** `feb02ad` `docs(fluxing): BR-①c 第二轮文档同步 —— 语义指纹实施状态与判据复跑口径` ⇒ 6 文件 / +334 / −3（`tasks.md` +59/−1、`CHANGELOG.md` +7、`CLAUDE.md` +3/−1、ADR 0076 +57、本 handoff +209、relay prompt 改写）。
+- **推送**：默认链路（走代理）**失败** —— `fatal: unable to access 'https://github.com/kizemo/fluxing.git/': TLS connect error: error:0A000126:SSL routines::unexpected eof while reading`（EXIT=128）⇒ 改走**直连** `git -c http.proxy= -c https.proxy= push kizemo feat/100-cloud-sync` ⇒ **PUSH_EXIT=0**（`65c9669..feb02ad feat/100-cloud-sync -> feat/100-cloud-sync`）。⇒ **本轮链路与上一轮相反：代理断、直连通**（两条路都要试）。
+- 收尾状态：`git status -sb` ⇒ 分支与远程同步（0/0）；工作树只剩 `m librime`（dirty submodule）+ 既有 untracked（`release/`、`reports/**`、`scripts/verify/*.ps1`、`docs/design/quickpanel-v6/design-demos/*.html`）⇒ **按红线一律不入库**。
+- **定时任务已同步**：`4d3e51f8-fdda-41bb-bbc1-12e844914dc5` 的 prompt 已就地改写（新增：新客户端已装机 + 提交哈希、⚠ 上一轮「真机零推送」判读纠正、⚠ 读路径也会 503 的机理、探针 v4 双 Stage 与 `AC09_VERDICT_STRICT` 口径），复核 `enabled=true` / `status=active` / `runAtMs=1795565446336`（北京时间 **2026-11-25 08:10:46**）。
+- **§G-7 第 2 步（入库存）到此关闭**；剩余仅 ① AC-09 复跑 ② 第二层判据 ③ 待用户拍板三项。
 
