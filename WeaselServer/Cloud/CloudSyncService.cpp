@@ -1117,24 +1117,56 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
   std::vector<bool> deferred(local_entries.size(), false);
   // R1 命中（沿用了远端 HLC）的本地条目下标 ⇒ 侧车重建时要写进去（R3）。
   std::vector<bool> remote_matched(local_entries.size(), false);
+  // ★ ADR 0076 D2-5a-9 ③：侧车里存的是**旧口径**（全载荷哈希）的那条 ⇒
+  //   基线与语义指纹**不可比** ⇒ 这些条目本轮**不推送**（避免升级首轮一次性
+  //   4 万条洪峰），但要**抬高本地 HLC**（本地胜出 ⇒ 防云端旧版本回灌覆盖
+  //   本地），并在侧车重建时**就地重锚**为 s2: 口径（下一轮起恢复正常）。
+  std::vector<bool> legacy_baseline(local_entries.size(), false);
   const uint64_t now_ms = UnixTimeMs();
   int matched = 0;
   int divergent = 0;
   int deferred_count = 0;
+  int legacy_rows = 0;  // 旧口径基线条数
+  int legacy_held = 0;  // 其中「判成本地改动、但本轮压住不推」的条数
 
   for (size_t i = 0; i < local_entries.size(); ++i) {
     Entry& entry = local_entries[i];
-    const std::string hash = Sha256Hex(entry.payload);
+    // ★ ADR 0076 D2-5a-9 ①：一切「是否改过」的判定改用**语义指纹**。
+    const std::string sem = SemanticFingerprint(entry.payload);
+    const std::string sem_hash = SemanticHashHex(entry.payload);
     const CloudSidecarRow* known = FindSidecarRow(sidecar_rows_, entry.key);
     const size_t remote_index = FindEntryIndex(remote_entries, entry.key);
     const Entry* remote = remote_index == static_cast<size_t>(-1)
                               ? nullptr
                               : &remote_entries[remote_index];
 
-    if (remote != nullptr && remote->payload == entry.payload) {
-      // ★ R1（ADR D2-5a-2）：明文 payload **逐字节一致** ⇒ 本地这条就是云端
+    // 侧车基线（语义口径）：
+    //   kNone   = 侧车没这条 ⇒ 本地新增；
+    //   kMatch  = 侧车是 s2: 口径且与本地语义指纹一致 ⇒ 本地没改过；
+    //   kDiff   = 侧车是 s2: 口径但语义指纹变了 ⇒ 本地改过；
+    //   kLegacy = 侧车是**旧口径**（裸哈希）⇒ 与语义指纹不可比 ⇒ 未知。
+    enum class Baseline { kNone, kMatch, kDiff, kLegacy };
+    Baseline baseline = Baseline::kNone;
+    if (known != nullptr) {
+      if (!IsSemanticHash(known->payload_hash))
+        baseline = Baseline::kLegacy;
+      else if (known->payload_hash == sem_hash)
+        baseline = Baseline::kMatch;
+      else
+        baseline = Baseline::kDiff;
+    }
+    if (baseline == Baseline::kLegacy) {
+      legacy_baseline[i] = true;
+      ++legacy_rows;
+    }
+
+    if (remote != nullptr && SemanticFingerprint(remote->payload) == sem) {
+      // ★ R1（ADR D2-5a-2 + D2-5a-9 ①）：**语义**一致 ⇒ 本地这条就是云端
       //   那条的当前版本 ⇒ 沿用**远端 HLC**、不标记本地改动、**不进推送集合**
       //   ⇒ 该条目**零写入**（服务端 HLC 守卫必然命中：stored == R.hlc）。
+      //   ★ 口径变化：明文**逐字节一致**只是**充分条件**；回写重算出来的
+      //     d= / t= 差异**不是**用户改动 ⇒ 也算一致（否则每轮都判「本地
+      //     改动」⇒ 每轮新墙钟 HLC ⇒ 服务端 HLC 守卫失效 ⇒ 写放大）。
       entry.hlc = remote->hlc;
       HlcObserve(&clock_, entry.hlc);
       remote_matched[i] = true;
@@ -1143,17 +1175,29 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     }
 
     if (remote != nullptr) {
-      // ★ R4（ADR D2-5a-5）：同 item_key 但明文不同 ⇒ 分歧。
-      //   · 侧车**有**记录且载荷哈希未变 ⇒ 本地没改过 ⇒ 远端胜出、不回推
+      // ★ R4（ADR D2-5a-5 · 语义口径）：同 item_key 但语义不同 ⇒ 分歧。
+      //   · 侧车基线与本地一致（kMatch）⇒ 本地没改过 ⇒ 远端胜出、不回推
       //     （与现行行为逐字一致：侧车在 ⇒ 知道谁更新）。
-      //   · 其余（侧车无记录 / 本地改过）⇒ 视作本地改动：分配新墙钟 HLC
-      //     + 推送（与现行行为逐字一致）。已知代价见 ADR D2-5a-8 ②。
-      if (known == nullptr || known->payload_hash != hash) {
-        entry.hlc = HlcTick(&clock_, now_ms);
-        locally_modified[i] = true;
-        ++divergent;
+      //   · 其余（侧车无记录 / 本地改过 / 旧口径未知）⇒ 视作本地改动：分配
+      //     新墙钟 HLC + 推送（与现行行为逐字一致）。已知代价见
+      //     ADR D2-5a-8 ②。
+      if (baseline == Baseline::kMatch) {
+        entry.hlc.ms = known->ms;
+        entry.hlc.counter = known->counter;
+        entry.hlc.device = known->device;
+        HlcObserve(&clock_, entry.hlc);
         continue;
       }
+      entry.hlc = HlcTick(&clock_, now_ms);
+      locally_modified[i] = true;
+      ++divergent;
+      if (baseline == Baseline::kLegacy)
+        ++legacy_held;  // 旧口径 ⇒ 本轮压住不推（见 legacy_baseline）
+      continue;
+    }
+
+    if (baseline == Baseline::kMatch) {
+      // 侧车有记录且语义指纹未变 ⇒ 本地没改过 ⇒ 沿用旧 HLC。
       entry.hlc.ms = known->ms;
       entry.hlc.counter = known->counter;
       entry.hlc.device = known->device;
@@ -1161,18 +1205,11 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
       continue;
     }
 
-    if (known != nullptr && known->payload_hash == hash) {
-      // 侧车有记录且载荷哈希未变 ⇒ 本地没改过 ⇒ 沿用旧 HLC。
-      entry.hlc.ms = known->ms;
-      entry.hlc.counter = known->counter;
-      entry.hlc.device = known->device;
-      HlcObserve(&clock_, entry.hlc);
-      continue;
-    }
-
-    // 本地新增 / 本地改过（侧车无记录，或哈希变了）⇒ 分配新墙钟 HLC。
+    // 本地新增 / 本地改过（侧车无记录，或语义指纹变了）⇒ 分配新墙钟 HLC。
     entry.hlc = HlcTick(&clock_, now_ms);
     locally_modified[i] = true;
+    if (baseline == Baseline::kLegacy)
+      ++legacy_held;  // 旧口径 ⇒ 本轮压住不推（见 legacy_baseline）
     if (known == nullptr && inventory_unproven) {
       // ★ R2（ADR D2-5a-3）：既无侧车记录、又不在本轮远端集合里，且本轮
       //   拉取**没有扫完整个云端库存** ⇒ 库存未证实 ⇒ 本轮**不推送**
@@ -1186,18 +1223,27 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     stats->divergent = divergent;
     stats->deferred = deferred_count;
   }
+  // ★ ADR 0076 D2-5a-9 ③ 观测：旧口径基线条数 / 其中本轮被压住不推的条数。
+  //   （**无条件**打一行 ⇒ 判据可从诊断日志直接读出来，不靠推测。）
+  diag::AppendLine("cloudsync",
+                   "semantic legacy_rows=" + std::to_string(legacy_rows) +
+                       " legacy_held=" + std::to_string(legacy_held));
 
   // 3) 合并本地与远端（逐条目 HLC 大者取胜）。
   const std::vector<Entry> merged =
       MergeLocalAndRemote(local_entries, remote_entries);
 
   // 3) 回写合并结果（远端带来的新词 / 更新过的词条）。
+  //    ★ ADR 0076 D2-5a-9 ④：判定口径改成**语义指纹** —— 回写重算出来的
+  //      d= / t= 差异**不是**用户改动 ⇒ 不能触发回写。否则整库回写会不断
+  //      刷新本地载荷的派生字段 ⇒ 每轮都判「本地改动」⇒ 写放大（漂移源头）。
   bool changed = merged.size() != local_entries.size();
   if (!changed) {
     for (size_t i = 0; i < merged.size(); ++i) {
       const size_t index = FindEntryIndex(local_entries, merged[i].key);
       if (index == static_cast<size_t>(-1) ||
-          local_entries[index].payload != merged[i].payload) {
+          SemanticFingerprint(local_entries[index].payload) !=
+              SemanticFingerprint(merged[i].payload)) {
         changed = true;
         break;
       }
@@ -1249,6 +1295,11 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
       // ★ R2（ADR D2-5a-3）：库存未证实的条目（deferred）本轮**不进推送集合**
       //   ⇒ 既不写放大，也不丢数据（延后到库存扫完后的轮次再推）。
       if (deferred[i])
+        continue;
+      // ★ ADR 0076 D2-5a-9 ③：侧车基线是**旧口径**（全载荷哈希）⇒ 与语义
+      //   指纹不可比 ⇒ 本轮**压住不推**（升级首轮不产生 4 万条洪峰）。
+      //   本地 HLC 已抬高（本地胜出）⇒ 云端旧版本不会回灌覆盖本地。
+      if (legacy_baseline[i])
         continue;
       const size_t remote_index =
           FindEntryIndex(remote_entries, local_entries[i].key);
@@ -1378,12 +1429,29 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
       row.ms = entry.hlc.ms;
       row.counter = entry.hlc.counter;
       row.device = entry.hlc.device;
-      row.payload_hash = Sha256Hex(entry.payload);
+      // ★ ADR 0076 D2-5a-9 ②：侧车哈希字段改存**语义指纹**哈希（s2: 前缀）。
+      row.payload_hash = SemanticHashHex(entry.payload);
       rows.push_back(row);
     } else {
       const CloudSidecarRow* old = FindSidecarRow(sidecar_rows_, entry.key);
-      if (old != nullptr)
-        rows.push_back(*old);
+      if (old != nullptr) {
+        if (IsSemanticHash(old->payload_hash)) {
+          rows.push_back(*old);
+        } else {
+          // ★ ADR 0076 D2-5a-9 ③：旧口径行（裸哈希）与语义指纹**不可比**
+          //   ⇒ 不能继续沿用（否则每轮都判「本地改动」⇒ 每轮新墙钟 HLC ⇒
+          //   服务端 HLC 守卫失效 ⇒ 既有行被反复 UPDATE = 写放大）。
+          //   这里**就地重锚**：写语义指纹哈希 + 当前条目的 HLC（本地已抬高
+          //   ⇒ 本地胜出）⇒ 下一轮起走正常语义口径。
+          CloudSidecarRow row;
+          row.item_key = entry.key;
+          row.ms = entry.hlc.ms;
+          row.counter = entry.hlc.counter;
+          row.device = entry.hlc.device;
+          row.payload_hash = SemanticHashHex(entry.payload);
+          rows.push_back(row);
+        }
+      }
     }
   }
 
@@ -1552,6 +1620,50 @@ std::string SidecarKeyFp(const std::vector<uint8_t>& enc_key) {
 }
 
 }  // namespace
+
+// ADR 0076 · D2-5a-9：语义指纹（口径说明见 CloudSyncService.h）。
+std::string SemanticFingerprint(const std::string& payload) {
+  // ★ ADR 0076 D2-5a-9 ①：复用既有切分函数 SplitDictPayload
+  //   （WeaselServer/Cloud/CloudUserDictIo.cpp:326-337）⇒ 不新增第二套
+  //   payload 形态解析器（宪法 R7 · 单一真相源）。
+  std::string code;
+  std::string value;
+  if (!SplitDictPayload(payload, &code, &value))
+    return payload;  // 形状异常（无制表符）⇒ 原样退化（不丢信息、不误判）
+  std::string kept;
+  kept.reserve(value.size());
+  size_t pos = 0;
+  while (pos < value.size()) {
+    size_t end = value.find(' ', pos);
+    if (end == std::string::npos)
+      end = value.size();
+    const std::string token = value.substr(pos, end - pos);
+    // 只剔除**派生**的 d= / t= 两个 token；c=（commits）保留。
+    const bool derived = token.size() >= 2 && token[1] == '=' &&
+                         (token[0] == 'd' || token[0] == 't');
+    if (!derived) {
+      if (!kept.empty())
+        kept += ' ';
+      kept += token;
+    }
+    pos = end + 1;
+  }
+  std::string out = code;
+  out += '\t';
+  out += kept;
+  return out;
+}
+
+std::string SemanticHashHex(const std::string& payload) {
+  const std::string digest = Sha256Hex(SemanticFingerprint(payload));
+  if (digest.empty())
+    return std::string();  // 摘要失败 ⇒ 不产出「半截」标记
+  return "s2:" + digest;
+}
+
+bool IsSemanticHash(const std::string& payload_hash) {
+  return payload_hash.size() > 3 && payload_hash.compare(0, 3, "s2:") == 0;
+}
 
 std::string BuildSidecarText(const std::vector<CloudSidecarRow>& rows,
                              int64_t server_seq,

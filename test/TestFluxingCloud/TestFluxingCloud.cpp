@@ -4719,8 +4719,10 @@ void TestCloudRemoteHlcReuse() {
                 rows[0].counter == kBr1cRemoteCounter &&
                 rows[0].device == kBr1cRemoteDevice,
             "R1：侧车记的是**远端 HLC**（不是新墙钟 HLC）");
-      Check(rows[0].payload_hash.size() == 64,
-            "R1：侧车记的是载荷的 sha256（64 位十六进制）");
+      Check(rows[0].payload_hash.size() == 67 &&
+                rows[0].payload_hash.compare(0, 3, "s2:") == 0,
+            "R1：侧车记的是**语义指纹**哈希（s2: + 64 位十六进制 · ADR D2-5a-9 "
+            "②）");
     }
     std::remove(sidecar.c_str());
   }
@@ -5083,6 +5085,136 @@ void TestCloudRemoteHlcReuse() {
   }
 }
 
+// 批次 BR-①c · ADR 0076 D2-5a-9：语义指纹（semantic fingerprint）
+//
+// 缺口（AC-09 第 1 次复跑实测）：D1 行写入 +2,992 而 sync_items 行数 +0
+//   ⇒ 每轮把**既有行**重新 UPDATE ⇒ 服务端 HLC 守卫失效 ⇒ 写放大。
+//   根因 = rime 回写（UserDbMerger）每次都重算 d=、改写 t= ⇒ 同一条
+//   **用户没改过**的词条载荷字节每轮都变 ⇒ 用全载荷哈希当「是否改过」的
+//   判据 ⇒ 每轮都判成「本地改动」⇒ 每轮分配新墙钟 HLC。
+//
+// 修法：判据改用**语义指纹**（剔除派生的 d= / t=，保留 c= 学习次数）。
+// ---------------------------------------------------------------------------
+
+void TestCloudSemanticFingerprint() {
+  std::printf("[BR-①c] 语义指纹：d= / t= 漂移不再触发推送与整库回写\n");
+  std::string err;
+  const std::vector<uint8_t> key(32, 0x41);
+
+  // ① 语义指纹函数本身的性质。
+  {
+    Check(fc::SemanticFingerprint("code0\tc=3 d=1.5 t=99") == "code0\tc=3",
+          "S1：d= / t= 被剔除、c= 保留");
+    Check(fc::SemanticFingerprint("code0\tc=3 d=0 t=1") ==
+              fc::SemanticFingerprint("code0\tc=3 d=9.9 t=8765"),
+          "S1：只有 d= / t= 不同 ⇒ 语义指纹相同");
+    Check(fc::SemanticFingerprint("code0\tc=3 d=0 t=1") !=
+              fc::SemanticFingerprint("code0\tc=4 d=0 t=1"),
+          "S1：c= 不同 ⇒ 语义指纹不同（真实学习仍能触发推送）");
+    Check(fc::SemanticFingerprint("没有制表符") == "没有制表符",
+          "S1：形状异常 ⇒ 原样退化（不丢信息、不误判）");
+    const std::string sem_hash = fc::SemanticHashHex("code0\tc=3 d=1.5 t=99");
+    Check(sem_hash.size() == 67 && sem_hash.compare(0, 3, "s2:") == 0,
+          "S1：语义哈希带 s2: 版本标记（前缀 + 64 位十六进制）");
+    Check(fc::IsSemanticHash(sem_hash), "S1：s2: 前缀 ⇒ 语义口径");
+    Check(!fc::IsSemanticHash(std::string(64, 'a')),
+          "S1：裸 64 位十六进制（旧口径）⇒ 不是语义口径");
+    Check(fc::SemanticHashHex("code0\tc=3 d=1.5 t=99") ==
+              fc::SemanticHashHex("code0\tc=3 d=0 t=1"),
+          "S1：语义哈希对 d= / t= 漂移不敏感");
+  }
+
+  // ② ★ 核心回归判据：远端与本地只差 d= / t= ⇒ R1 命中 ⇒ 零推送、零回写。
+  {
+    Br1cBackend backend;
+    fc::CloudDictEntry local_row;
+    Check(Br1cFirstRow(backend.snapshot, &local_row, &err),
+          "S2 夹具：本地条目可解析");
+    const std::string sidecar = "br1c-sem-r1-sidecar.state";
+    std::remove(sidecar.c_str());  // 侧车丢失（本批触发条件）
+
+    // 远端 payload 与本地**只差 d= / t=**（回写重算出来的派生值）⇒ 语义相同。
+    const std::vector<fc::Entry> remote_entries = {
+        Br1cEntry(local_row.text, "code0\tc=0 d=1.5 t=999", kBr1cRemoteMs,
+                  kBr1cRemoteCounter, kBr1cRemoteDevice)};
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, Br1cPullBody(remote_entries, key, false, 1)});
+    // ★ 不预置推送回应 ⇒ 一旦发生推送，传输层就失败 ⇒ 「没有推送」是硬判据。
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-sem",
+                                         "dev-br1c", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "S2：d= / t= 漂移 ⇒ 本轮成功");
+    Check(transport.requests.size() == 1,
+          "S2：只发出一次请求（拉取）⇒ 没有推送（零写入）");
+    Check(result.items_pushed == 0, "S2：推送 0 条");
+    Check(coordinator.last_reconcile_stats().matched == 1,
+          "S2：matched = 1（语义一致 ⇒ R1 命中）");
+    Check(coordinator.last_reconcile_stats().divergent == 0,
+          "S2：divergent = 0（d= / t= 差异不算分歧）");
+    Check(backend.imported_text.empty(),
+          "S2：d= / t= 差异**不触发整库回写**（a-9④）");
+
+    std::vector<fc::CloudSidecarRow> rows;
+    int64_t seq = -1;
+    Check(Br1cReadSidecar(sidecar, key, &rows, &seq), "S2：侧车文件可解析");
+    Check(rows.size() == 1 && rows[0].ms == kBr1cRemoteMs,
+          "S2：侧车记的是**远端 HLC** ⇒ 服务端 HLC 守卫必然命中（零写入）");
+    Check(rows.size() == 1 && fc::IsSemanticHash(rows[0].payload_hash),
+          "S2：侧车哈希是 s2: 语义口径");
+    std::remove(sidecar.c_str());
+  }
+
+  // ③ ★ 旧口径侧车行（裸哈希）⇒ 本轮压住不推 + 就地重锚为 s2: 口径。
+  {
+    Br1cBackend backend;
+    fc::CloudDictEntry local_row;
+    Br1cFirstRow(backend.snapshot, &local_row, &err);
+    const std::string sidecar = "br1c-sem-legacy-sidecar.state";
+    std::remove(sidecar.c_str());
+    // 手搓一条**旧口径**侧车行：payload_hash 是裸 64 位十六进制（无 s2:
+    // 前缀）。
+    fc::CloudSidecarRow legacy_row;
+    legacy_row.item_key = local_row.text;
+    legacy_row.ms = kBr1cRemoteMs;
+    legacy_row.counter = kBr1cRemoteCounter;
+    legacy_row.device = kBr1cRemoteDevice;
+    legacy_row.payload_hash = std::string(64, 'a');
+    Check(Br1cWriteSidecar(
+              sidecar,
+              fc::BuildSidecarText(
+                  std::vector<fc::CloudSidecarRow>(1, legacy_row), 7, key)),
+          "S3 夹具：旧口径侧车文件可写（裸 64 位 hex）");
+
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, Br1cPullBody(std::vector<fc::Entry>(), key, false, 8)});
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-legacy",
+                                         "dev-br1c", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "S3：旧口径基线 ⇒ 本轮成功");
+    Check(transport.requests.size() == 1,
+          "S3：只发出一次请求（拉取）⇒ 旧口径条目本轮**不推送**（无 4 "
+          "万条洪峰）");
+    Check(result.items_pushed == 0, "S3：推送 0 条");
+    Check(coordinator.last_reconcile_stats().deferred == 0,
+          "S3：deferred = 0（侧车有记录 ⇒ 不是「本地新增」）");
+
+    std::vector<fc::CloudSidecarRow> rows;
+    int64_t seq = -1;
+    Check(Br1cReadSidecar(sidecar, key, &rows, &seq), "S3：侧车文件可解析");
+    Check(rows.size() == 1 && fc::IsSemanticHash(rows[0].payload_hash),
+          "S3：旧口径行已**就地重锚**为 s2: 语义口径");
+    Check(rows.size() == 1 && rows[0].ms > kBr1cRemoteMs,
+          "S3：重锚时写入**抬高的本地 HLC**（本地胜出 ⇒ 防云端旧版回灌）");
+    std::remove(sidecar.c_str());
+  }
+}
+
 int main() {
   ::SetConsoleOutputCP(CP_UTF8);
   std::printf("==== TestFluxingCloud · spec 100 阶段 B（契约与客户端纯逻辑）====\n");
@@ -5167,6 +5299,9 @@ int main() {
 
   // 批次 BR-①c · ADR 0076 D2-5a：远端 HLC 沿用（侧车丢失 ⇒ 零写入）。
   TestCloudRemoteHlcReuse();
+
+  // 批次 BR-①c · ADR 0076 D2-5a-9：语义指纹（d= / t= 漂移不再触发写放大）。
+  TestCloudSemanticFingerprint();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。

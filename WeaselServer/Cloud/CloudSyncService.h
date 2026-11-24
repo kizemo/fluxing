@@ -226,6 +226,36 @@ bool OpenItemsTolerant(const std::vector<CloudSyncItem>& items,
 std::vector<Entry> MergeLocalAndRemote(const std::vector<Entry>& local,
                                        const std::vector<Entry>& remote);
 
+// ADR 0076 · D2-5a-9：语义指纹（semantic
+// fingerprint）——「本地是否改过」的判据。
+//
+// ★ 背景（BR-①c · AC-09 第 1 次复跑定位到的写放大根因）：rime 每次回写
+//   （restore_user_dict → UserDbMerger）都会**重算** d=（formula_d）并把 t=
+//   改写成当前 db 的 tick ⇒ 同一条**用户没改过**的词条，每轮回写后载荷字节
+//   都不同 ⇒ 用**全载荷哈希**当判据 ⇒ 每轮都判成「本地改动」⇒ 每轮分配
+//   新墙钟 HLC ⇒ 服务端 HLC 守卫全部落空 ⇒ 既有行被反复 UPDATE（≈ 4 万行/轮）。
+//
+// ★ 口径：载荷形状是 "<code>\t<value>"，value 段是空格分隔的 token 列表
+//   （形如 "c=<commits> d=<dee> t=<tick>"）。语义指纹 = code 段 + value 段
+//   **剔除 d= 与 t= 两个 token** 后的剩余（**保留 c=**）。
+//   · c=（commits）：rime 的 merger / importer 两条路径都是 max 语义
+//     （UserDbMerger::Put / UserDbImporter::Put）⇒ 只在用户**真正学习**该词
+//     时增长 ⇒ 保留 c= 即保留「用户是否改过」的信息。
+//   · d=（dee）与 t=（tick）：回写重算出来的**派生值** ⇒ 与用户意图无关
+//     ⇒ 必须剔除，否则每轮都漂。
+//
+// 载荷形状异常（没有制表符）时**原样退化**为全载荷 ⇒ 不丢信息、不误判。
+std::string SemanticFingerprint(const std::string& payload);
+
+// 语义指纹的哈希（侧车里存的就是它）："s2:" + sha256(语义指纹)。
+//
+// ★ "s2:" 是**版本标记**：旧版侧车存的是**全载荷**哈希（裸 64 位十六进制），
+//   与语义指纹哈希**不可比** ⇒ 必须能区分（ADR 0076 D2-5a-9 ③ 的迁移依据）。
+std::string SemanticHashHex(const std::string& payload);
+
+// 侧车里的哈希字段是不是**语义口径**（带 "s2:" 前缀）。
+bool IsSemanticHash(const std::string& payload_hash);
+
 // 词典行 ↔ 同步条目。HLC 由调用方（协调器）填，这里只做形状转换。
 bool DictRowsToEntries(const std::vector<CloudDictEntry>& rows,
                        std::vector<Entry>* out,
