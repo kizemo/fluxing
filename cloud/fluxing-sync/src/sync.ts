@@ -103,6 +103,17 @@ function encodeCursor(id: number): string {
 //   · limit = 每账号每日 80,000 行（环境变量 WRITE_BUDGET_ROWS_PER_DAY 可覆盖）。
 //   · 判定：used + planned > limit ⇒ **整批拒绝**（429），且拒绝发生在
 //     **任何写动作之前** ⇒ R2 与 D1 都是**零写入**。
+//
+// **⚠ 口径订正（ADR 0077 D8 · 桶化后本小节只管逐条端点）**：
+//   · 本护栏的计量对象是 **sync_items 的行**，只对老逐条端点 /v1/sync/push 生效；
+//     桶端点 /v1/sync/buckets/push 走**独立口径**（sync_buckets 的行，每账号每日
+//     4,000 **桶行**，环境变量 WRITE_BUDGET_BUCKETS_PER_DAY），实现见
+//     src/sync-buckets.ts 与 src/env.ts。
+//   · 因此「80,000 行 ≈ 允许一次全量重推」这句**在桶化路径上已不成立**：
+//     全量重推在桶化路径上产生的是「设备数 × 桶数」量级的**桶行**
+//     （设备 ≤32 × 桶 64 = 2,048 行/账号），不是「词条数 × 行」。
+//   · 两道护栏都只是**单账号刹车**，不是 Cloudflare 全局额度护盾
+//     （全局额度按数据库计，跨账号累计仍可打穿）—— 见 ADR 0076 已登记的边界。
 
 /** 超限时返回的稳定错误码（客户端只读 message；code 供服务端与探针诊断）。 */
 export const WRITE_BUDGET_EXCEEDED_CODE = 'write_budget_exceeded';

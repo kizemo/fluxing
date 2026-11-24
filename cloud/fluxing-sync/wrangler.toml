@@ -53,11 +53,22 @@ MAIL_FROM_NAME = "火流猩输入法"
 MAIL_HTTP_ENDPOINT = "https://api.resend.com/emails"
 MAIL_HTTP_AUTH_HEADER = "Authorization"
 MAIL_HTTP_AUTH_PREFIX = "Bearer "
-# 每账号每 UTC 日的 D1 行写入预算上限（行）。ADR 0076 D2-3 的写放大护栏：
+# 每账号每 UTC 日的 D1 **逐条行**写入预算上限（行）。ADR 0076 D2-3 的写放大护栏。
+# 计量对象 = sync_items 的行 ⇒ **只对老逐条端点 /v1/sync/push 生效**。
 # 推送前先估算本批行写入数，超限整批拒绝（429 write_budget_exceeded，零写入）。
-# 80,000 行 ≈ 允许一次全量重推、不允许第二次（D1 免费额度按行写入计）。
+# ⚠ 口径订正（ADR 0077 D8）：桶化后本值**不再等于「允许一次全量重推」** ——
+#    全量重推在桶化路径上产生的是「设备数 × 桶数」量级的**桶行**，
+#    不再是「词条数 × 行」；桶化路径的独立口径见下面 WRITE_BUDGET_BUCKETS_PER_DAY。
 # 调大 / 调小都不改代码；读不到该变量时回落到代码内默认值 80,000。
 WRITE_BUDGET_ROWS_PER_DAY = "80000"
+# 每账号每 UTC 日的 D1 **桶行**写入预算上限（行）。ADR 0077 D8：护栏换表口径。
+# 计量对象 = sync_buckets 的行（设备 × 桶双维索引）⇒ **只对桶端点
+# /v1/sync/buckets/push 生效**；超限同样是 429 write_budget_exceeded + 零写入。
+# 桶行上界 = 设备数(≤32) × 桶数(64) = 2,048 行/账号 ⇒ 4,000 桶行/日 ≈
+# 允许一次全量桶重建、不允许第二次（D1 免费额度按行写入计）。
+# ⚠ 本护栏是**每账号**口径，不是 Cloudflare 全局额度护盾（ADR 0076 已登记的边界）。
+# 调大 / 调小都不改代码；读不到该变量时回落到代码内默认值 4,000。
+WRITE_BUDGET_BUCKETS_PER_DAY = "4000"
 # MAIL_HTTP_API_KEY 绝不写进本文件：用 `wrangler secret put MAIL_HTTP_API_KEY` 注入。
 
 # 生产发信绑定（**需 Workers Paid 计划** —— 官方原文：向任意收件人发送需 Paid，账号级最低消费 $5/月）。

@@ -784,10 +784,68 @@
 
 #### §I-6 · 本轮 commit 的推送状态（未落，网络侧）
 
-- 本批文档 commit（含 §I 与红线、勘查报告、接力 prompt 订正）**已入库、未推送**：`git rev-list --count kizemo/feat/100-cloud-sync..HEAD` = **1**，远程 tip 仍在 `8a4f959`。
+- 本批文档 commit（含 §I 与红线、勘查报告、接力 prompt 订正）**已入库、已于 2026-11-24 15:11 补推成功**（见 §J-1；本条「未推送」结论**已过时**，以 §J-1 为准）。
 - **失败形态（共 5 次尝试）**：代理 + 默认 SSL 后端 ⇒ `TLS connect error: error:0A000126:SSL routines::unexpected eof while reading`；代理 + `-c http.sslBackend=schannel` ⇒ `schannel: failed to receive handshake`；两者均 `PUSH_EXIT=128`。
 - **判据（一次取齐，别反复试）**：`curl.exe --noproxy '*' -o NUL -s -w "%{http_code}" --max-time 12 https://github.com/` 与 `curl.exe -x http://127.0.0.1:7897 ...` **同时返回 `000`** ⇒ 不是「代理坏了走直连」那条既有经验（那种是直连 200 / 代理握手失败），而是**两条路径同时不通** = 本机出口网络故障。
 - **纪律**：按既有记忆**带退避重试**（20–40 s）即可，**不得**为此改全局 git config、**不得**重启用户的 Clash Verge（`verge-mihomo`）；网络恢复后一条命令补推：
   `git -C F:/soft/00selfmade/rime_claude -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 push kizemo feat/100-cloud-sync`
 - **不做的事**：本轮**不留**未终态的后台重试任务（后台任务完成会自动唤醒父会话烧额度）；把「补推」写进接力 prompt 首件事，由下一轮或用户手动执行。
+
+---
+
+### §J · 本轮（2026-11-24 15:11–15:30 · BR-①f 阶段收口轮）—— 补推已落 + D8 口径订正入码 + 生产链自动轮扩写
+
+**本轮性质** = ① 补推本批末笔 docs commit（§I-6 的「未推送」结论作废）；② 按 ADR 0077 D8 把**写预算护栏的双口径**落到配置与代码注释（**仅注释/配置，无功能变更**）；③ 把生产链定时任务从「3 步」扩成「7 步全链路」（AC-09 → 迁移 → EXPLAIN → deploy → 冒烟 → BR-①g 开工 → 收尾双产物）；④ 收口双产物 + CLAUDE.md 指针更新。**本轮未 apply 迁移、未部署、未在生产写入任何东西、未改客户端。**
+
+#### §J-1 补推结果（已验证）
+
+| 项 | 实测 |
+|---|---|
+| 补推前 | `HEAD = ed6dd1d`，远程 tip `8a4f959`，`rev-list --count kizemo/feat/100-cloud-sync..HEAD` = **1** |
+| 执行 | `git -C F:/soft/00selfmade/rime_claude -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 push kizemo feat/100-cloud-sync` |
+| 结果 | **`8a4f959..ed6dd1d`，PUSH1_EXIT=0**；之后 `ahead = 0` |
+| **与 §I-6 相反** | §I-6 记「代理与直连两条路径同时不通 = 出口网络故障」；**本轮代理链路一次即通**，直连未触发 ⇒ 网络侧已恢复，无需任何配置改动 |
+
+#### §J-2 ADR 0077 D8 双口径订正（本轮唯一的产品侧改动，**注释 + 配置，无行为变更**）
+
+- **`cloud/fluxing-sync/wrangler.toml`**：新增 `WRITE_BUDGET_BUCKETS_PER_DAY = "4000"`（桶行口径上限，**与 `src/env.ts` 代码默认值 `4_000` 一致** ⇒ 运行行为等价）+ 订正 `WRITE_BUDGET_ROWS_PER_DAY` 的注释（「80,000 行 ≈ 允许一次全量重推」**在桶化路径上已不成立**：桶化路径产生的是「设备数 × 桶数」量级桶行，上界 32 × 64 = 2,048 行/账号）。
+- **`cloud/fluxing-sync/src/sync.ts`** 写预算护栏小节：追加「⚠ 口径订正（ADR 0077 D8 · 桶化后本小节只管逐条端点）」段，指明桶端点走 `sync_buckets` 行 / `WRITE_BUDGET_BUCKETS_PER_DAY` / 实现见 `src/sync-buckets.ts` 与 `src/env.ts`，并重申两道护栏都是**每账号刹车、非 Cloudflare 全局护盾**。
+- **门禁（父会话亲跑，非采信自报）**：`typecheck` **EXIT=0** / `check` **EXIT=0** = **13 文件 / 164 用例**（基线 §H-6 同值）。
+- **为何无需新增测试文件**：`test/bucket-sync.test.ts` 的「老逐条端点回归」(:648) 走**真实 `/v1/sync/push` + `/v1/sync/pull` 行为断言**（非字节 diff）⇒ 改注释安全；T13（`DELETE /v1/account/data` 清 `u/`+`b/` 两前缀与两表，:716）与 T14 等价项已由该文件合并覆盖。
+
+#### §J-3 生产链自动轮扩写（定时任务 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`，北京时间 2026-11-25 08:10:46）
+
+**订正前的 3 个缺口 → 已补齐**：
+
+| 缺口 | 订正后 |
+|---|---|
+| 迁移命令用了 `npm run migrate:remote`（内部用**库名** `fluxing-sync`） | 改为**已验证的绑定名 `DB` 形式** + 显式 `--config`；并写明「不要用 `migrate:remote`」 |
+| 只含迁移 0003，**缺 0004 / deploy / 生产冒烟** | 扩为 7 步：0 额度核查 → 1 AC-09 → 2 迁移(0003+0004) → 3 EXPLAIN → 4 deploy → 5 冒烟 → 6 BR-①g 开工 → 7 收尾双产物+入库+推送 |
+| 缺额度前置闸门 | 第 0 步强制 `rows_read_24h < 5,000,000` 才可进第 2 步，否则**如实登记并停** |
+
+**新增的硬性约束（写进任务 prompt）**：① 第 2 步前先 `migrations list` 看**末尾**哪些未 apply（0004 **无 `IF NOT EXISTS`** ⇒ 已 applied 就不许重跑 apply）；② 第 4 步 deploy **必须在**第 2 步 migrate 之后（`src/account.ts:94` 无条件 `DELETE FROM sync_buckets` ⇒ 0004 未 apply 就部署 ⇒ 「注销账号数据」对所有用户报错 = 生产回归）；③ 0003 迁移前读计划为 `idx_sync_user_id`（护栏 COUNT 每次推送扫该用户全部行），迁移后必须变 `idx_sync_user_updated`，否则**如实登记 FAIL**；④ 凭据红线（只输出键名 + 长度 + sha16 前 16 位）；⑤ 推送先直连后代理、**禁改全局 git config、禁重启用户代理**。
+
+**第 6 步的边界（本轮明确写死）**：BR-①g **只做「开工」**（设计落点 + 任务清单细化 + 客户端侧第一批**可门禁验证**的改动），**本轮不要求出包装机与真机判据**（留给下一轮有主会话在场时）；客户端门禁必须单独 msbuild `TestFluxingCloud` vcxproj 且显式传 `/p:SolutionDir=`（`weasel.sln` **不含**该工程 ⇒ 否则跑旧 exe、PASS 恒 787）。
+
+#### §J-4 生产阻塞现状（已验证，2026-11-24 15:11–15:19 实测）
+
+- `wrangler d1 info DB --json` ⇒ `rows_read_24h = 9,083,744`（**> 免费 5,000,000 行/日**）、`rows_written_24h = 33,043`、`read_queries_24h = 1,539`、`write_queries_24h = 13,110`、`database_size = 19,255,296`。
+- `wrangler d1 migrations list DB --remote` ⇒ **FAILED `[code: 7500]`**「exceeded D1's free tier daily row **read** limit ⇒ wait until tomorrow (midnight UTC)」⇒ **连 `migrations list` 都被读额度挡**。
+- 读计数 12:52 的 9,083,801 → 15:11 的 9,083,744 **基本静止** ⇒ a-9 修复后客户端已不再刷读，但旧读量仍留在当日 UTC 桶内 ⇒ **2026-11-25 08:00（北京）重置**。
+- 当前生效生产 Version = **`5f3732e8-f1d2-4829-a8dd-1c5b97a90039`**（Created 2026-11-24T04:04:12.850Z，止血版，**无桶级端点**）；迁移 0003/0004 **均未进生产**。
+
+#### §J-5 已验证 / 推断 / 未验证（本轮新增）
+
+| 状态 | 内容 |
+|---|---|
+| **已验证** | 补推 EXIT=0（ahead 0）；`typecheck` 0 / `check` 0 = 13 文件 164 用例；D1 额度四项读数；`migrations list` 被 `code 7500` 拒；当前生产 Version id；cron 任务 prompt 已扩写（7 步）且 `enabled=true`/`status=active`/`runAtMs` 未变；接力 prompt 已就地改写（2,580 B）；CLAUDE.md §2 已加 BR-①f 指针 |
+| **推断** | 「D1 读计数已静止 ⇒ a-9 后客户端不再刷读」（读计数差 57 行是控制面自身查询，非客户端批量）；「2026-11-25 08:00 重置后可跑完整链」（基于 UTC 日重置机制 + 任务排在重置之后 10 分钟） |
+| **未验证** | AC-09 复跑结果（**仍记 FAIL**，待 08:10:46 探针 v4）；迁移 0003+0004 的实际 apply；EXPLAIN 前后对比；新生产 Version id；桶端点生产冒烟；BR-①g 客户端任何产出；`WRITE_BUDGET_BUCKETS_PER_DAY` 在生产上的实际取值（**须在 deploy 后回读**） |
+
+#### §J-6 本轮新增工具坑（§H-11 已记的不重复）
+
+- `package.json` 的 `migrate:remote` = `wrangler d1 migrations apply fluxing-sync --remote`（**库名**）；已验证可解析的是**绑定名 `DB`** ⇒ 定时任务/脚本里**一律用 `DB` 形式 + 显式 `--config`**，别用 npm script。
+- handoff 文档本身是 **LF / 无 BOM**（实测 120,207 B / 793 行 / `CRLF=0`）⇒ 追加小节时保持 LF，不要引入 CRLF。
+- 用 `edit` 改中文长行时**必须逐字复述原文**（含全角标点）⇒ 手抄极易出错（本轮 `用户` 被误写成 `_user` 导致匹配失败）；改前先 `read` 回该行原文。
+
 
