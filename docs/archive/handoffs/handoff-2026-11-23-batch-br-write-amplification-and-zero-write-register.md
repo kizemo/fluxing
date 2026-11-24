@@ -860,4 +860,44 @@
 - **PowerShell 里的 `Remove-Job` 会被本地安全网关当成删除类命令整体拦掉**（连带整条复合命令被拒，即使它只是清理作业）⇒ **不要在 bash 里写 `Remove-Job` / `Remove-Item` 之类**；需要并行探测时改用顺序执行（两个 `curl` 顺序跑 ≤ 25 s），或用 `Start-ThreadJob` 但**不清理**（作业随进程退出自动消失）。
 - **出口网络故障是间歇性的**（本轮 15:11 通、15:30 断）⇒ **每轮都必须实测 `curl` 双路径判据**，不能拿上一轮「通」的结论当现状；直连 `git push` 在出口不通时会**挂满 300 s**（`Connection timed out after 300000 milliseconds`）⇒ 探测用 `curl --max-time 10` 先行，别直接拿 git 探活。
 
+#### §J-7 定时任务缺陷修复轮（2026-11-24 16:16，北京）
+
+**触发**：用户 2026-11-24 指示「你新建了两个明早的定时任务，请修复bug」。复核本会话新建的两个明早一次性任务（主链 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5` + 回检 `self-74142b51b3ab20d8a7a62216dabe0054`）⇒ **定位 5 个缺陷**（主链 4 个 + 回检 1 个，其中 3 个为跨任务缺陷）⇒ 本节记录逐条定位、修法与最终任务态。
+
+| # | 缺陷 | 证据 | 修法 | 状态 |
+|---|---|---|---|---|
+| 1 | **回检时机与主链时长错配**：旧回检 08:21:05 触发，而主链含探针两阶段（默认 `-Stage All`，每阶段 `WaitRoundSec=300` + `SettleSec=45`）+ 迁移 + EXPLAIN + deploy + 冒烟 + BR-①g + 收尾 ⇒ 必然撞在半截日志上 | 实测 `%TEMP%\fluxing-profile-notify.log` 单轮同步 1–15 分钟；主链 runAtMs=1795565446336（08:10:46）、旧回检 runAtMs=1795566065738（08:21:05），间隔仅 10 分 19 秒 | 回检**改到 2026-11-25 10:30:00**（runAtMs `1795573800336`），且判据改为读哨兵而非抢读半截日志 | 已修 |
+| 2 | **回检的「日志新鲜度闸门」形同虚设**：`Tee-Object -FilePath` 管道启动即创建/截断文件 ⇒ mtime 数秒内即 > 08:10:46；且旧轮 `reports/fluxing-br-1c/ac09-run.log`（2026-11-24 08:18）**含 `=== AC-09 v4 END ===`** ⇒ 会被误读为本轮结果 | 实测旧轮日志含收尾标记；mtime 闸门对 `Tee-Object` 失效 | 主链第 1 步改写**带时间戳新日志** `reports/fluxing-br-1f/ac09-run-<yyyyMMdd-HHmmss>.log`，并把路径写进哨兵 `AC09_LOG=`；回检**只认哨兵里的路径** + **完整性双标记**（`AC09_VERDICT=` **与** `=== AC-09 v4 END ===` 缺一即 UNDETERMINED）⇒ **禁 mtime 判新鲜度** | 已修 |
+| 3 | **主链 prompt 自相矛盾**：正文写「本轮六步」但实际列第 0–7 步（8 段）；收尾双产物排链尾 ⇒ 任一步失败则全部实测数字丢失 | 旧 prompt 正文与步骤列表不一致 | 改为「第 0–7 步（共 8 段）」+ 三条贯穿硬规矩（A 每段结束立刻追加一行 `reports/fluxing-br-1f/chain-progress.log` 纯 ASCII 进度；B 任何一段失败 / BLOCKED 也必须先写 handoff §K 再停；C 凭据红线） | 已修 |
+| 4 | **任务名与内容不符**：旧名「BR-1c 真机判据 AC-09 第二次复跑」/「Task follow-up (dabe0054)」⇒ 从名字看不出跑什么 | 任务名与实际链内容无关 | 主链改名「Fluxing BR-①f 生产链自动轮（第0-7步：AC-09复跑→迁移0003/0004→EXPLAIN→deploy→桶端点冒烟→BR-①g开工→收尾入库）2026-11-25 08:10」；回检改名「Fluxing BR-①f 生产链回检（哨兵判定 AC-09 + 迁移/部署/冒烟结果）2026-11-25 10:30」 | 已修 |
+| 5 | **冒烟缺鉴权路径 + BR-①g 缺前置闸门**：旧 prompt 只提只读助手 `tmp/AK-d1.mjs`（无鉴权、不能 push / pull），也未说明 `device_id` 服务端权威 ⇒ 冒烟步骤实际不可执行；且 BR-①g 无「上游未通过就不许改客户端代码」的闸门 | `tmp/AK-d1.mjs` 仅只读；`src/sync-buckets.ts:110-123` `resolvePushDeviceId` 以服务端 `auth.deviceRowId` 为权威，客户端自带 `device_id` 不等即 400 `bad_device_id` | 第 5 步补齐完整路径（`tmp/br-prod-verify.mjs setup` → `POST /v1/auth/login`（`auth_key`）→ **两台设备两个 `device.id`** → push / pull 断言 → `cleanup` 后额外删 `sync_buckets` 探针行）；缺鉴权路径 ⇒ 记 BLOCKED「冒烟未执行」，**禁止**把失败当通过；第 6 步加前置闸门（第 1–5 步全 PASS 才开工，否则 `STEP=6 STATUS=SKIP` 且不改客户端代码；改码前先跑门禁基线，红了回滚） | 已修 |
+
+**附带修正**：主链第 0 步的额度闸门口径由 `rows_read_24h < 5,000,000` 改为**「一条极小读命令能否成功」**（`SELECT COUNT(*) AS n FROM d1_migrations`）—— 理由：`rows_read_24h` 是**滚动 24 小时**计数，而 Cloudflare 额度按 **UTC 日**重置 ⇒ 08:10 时它可能仍显示昨日高峰值（> 500 万）而额度其实已重置 ⇒ 用它当硬闸门会白白停摆一整天（**已验证**：2026-11-24 15:11 实测 `rows_read_24h = 9,083,744` 但读计数已静止）。
+
+**最终任务态（已验证，`cron_read` 回读）**：
+
+| 任务 | ID | 触发 | 形态 |
+|---|---|---|---|
+| 主链（8 段） | `4d3e51f8-fdda-41bb-bbc1-12e844914dc5` | 2026-11-25 08:10:46（runAtMs 1795565446336） | once / enabled / active / session=new / model `minimax/MiniMax-M3.1-Flash` / project `F:\soft\00selfmade\rime_claude` |
+| 回检（哨兵判定） | `312fd16e-d687-4973-b636-f1044ad9cdd0` | 2026-11-25 10:30:00（runAtMs 1795573800336） | once / enabled / active / session=new / 同 model 与 project |
+| ~~旧回检~~ | ~~`self-74142b51b3ab20d8a7a62216dabe0054`~~ | ~~2026-11-25 08:21:05~~ | **已删除**（`cron_delete` ⇒ `success: true`） |
+
+**回检任务判据（要点）**：① 只读哨兵 `reports/fluxing-br-1f/chain-progress.log`，**禁 mtime 判新鲜度**；② AC-09 需**完整性双标记**齐备才可登记 PASS，缺一即 UNDETERMINED；③ 迁移 / 部署 / 冒烟按哨兵 `STEP=3/4/5` 的 STATUS 登记，缺失记 `MISSING`；④ **不改任何产品代码**、不重复主链工作；⑤ 未完成时**最多自排一次 +90 分钟补排**（补排轮不再续排）；⑥ 凭据红线照旧（只输出键名 + 长度 + sha16 前 16 位）。
+
+**交接小节编号约定（本轮新定，防撞号）**：**主链写 §K**（生产链实测），**回检写 §L**（回检结论）⇒ 两个定时任务不会写进同一节。
+
+**本轮新增工具坑（§J-6 不重复）**：
+- **`cron_update` 没有 `at` / `runAtMs` 字段**（只有 `schedule` / `timezone` / `prompt` / `session` / `enabled` 等）⇒ **改一次性任务的触发时间只能 `cron_delete` + `cron_create(at=…)`**。
+- **`cron_create` 的一次性任务不接受 `enabled` 字段** ⇒ 报 `CRON_INVALID_INPUT: enabled is available for recurring creation. Use cron_update to pause a one-time task.`（一次性任务默认即 enabled；要暂停得事后 `cron_update`）。
+- **`cron_create` 在 `session.mode=sessionId` 时必须省略 `agent_name`**（否则报 `validation: agent_name must be omitted when session.mode=sessionId`）；`mode=new` 时则**必须**给 `agent_name`（本次给 `mavis`）。
+- 一次性任务 `at` 传 **Unix 毫秒**（`1795573800336` = 2026-11-25 10:30:00 北京）⇒ 与 `cron_read` 回读的 `runAtMs` 一致，可用于对账。
+
+**§J-7 三态标注**：
+
+| 状态 | 内容 |
+|---|---|
+| **已验证** | 5 个缺陷逐条定位并已修（主链 `cron_update` 回读确认新名 + 8 段链 + 三条硬规矩 + 闸门口径订正 + 鉴权路径 + 前置闸门）；回检新任务建成（`cron_create` ⇒ `ok: true`，`runAtMs=1795573800336`、`enabled=true`、`status=active`）；旧回检已删（`cron_delete` ⇒ `success: true`）；`cron_read` 列表确认本项目仅剩这 2 个 enabled 任务，另 2 个（`b76b2dad…` filemanager / `f31f43cf…` practilog）仍 paused **未动**；本轮**未改任何产品代码**（工作树仅 `m librime` + 既有 untracked） |
+| **推断** | 回检 10:30 足以覆盖主链 8 段（按主链各段实测耗时估算）；补排机制在主链整体阻塞（额度未重置）时能给出第二次观察窗口 |
+| **未验证** | 两个任务的**实际运行结果**（尚未到触发时间）；主链第 1 步 AC-09 复跑结果（**仍记 FAIL**）；迁移 0003/0004 的实际 apply；EXPLAIN 前后对比；新生产 Version；桶端点生产冒烟；BR-①g 客户端产出 |
+
 
