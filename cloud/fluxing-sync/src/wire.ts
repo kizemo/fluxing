@@ -6,7 +6,7 @@
 // 因此本文件的每个常量都必须与头文件里的同名常量逐字对齐。
 
 import { fail } from './errors';
-import { fromBase64Strict, toBase64 } from './crypto';
+import { fromBase64Strict, sha256Hex, toBase64, utf8 } from './crypto';
 
 /** FluxingCloudEnvelope.h: kNonceBytes */
 export const NONCE_BYTES = 12;
@@ -129,9 +129,12 @@ function toSafeInteger(raw: unknown, field: string, label: string): number {
 /**
  * 解析 hlc。规范形态是 `hlc: { ms, counter, device }`；
  * 同时接受扁平别名 `hlc_ms` / `hlc_counter` / `device`，避免客户端拿错形态就整批失败。
+ *
+ * `label` 只影响错误文案（条目路径传 `undefined` ⇒ 文案逐字保持既有的「第 N 个条目的 HLC」，
+ * 桶路径传「第 N 个桶的 HLC」）。校验规则与取值域两套协议**完全共用**，不分叉。
  */
-function parseHlc(raw: Record<string, unknown>, index: number): Hlc {
-  const label = `第 ${index + 1} 个条目的 HLC`;
+function parseHlc(raw: Record<string, unknown>, index: number, hlcLabel?: string): Hlc {
+  const label = hlcLabel ?? `第 ${index + 1} 个条目的 HLC`;
   const nested = raw.hlc;
   let container: Record<string, unknown>;
   if (isPlainObject(nested)) {
@@ -210,4 +213,125 @@ export function validatePushItem(raw: unknown, index: number): ValidatedItem {
 /** R2 对象键：u/<account_id>/<sha256(item_key)>（plan §6.3）。 */
 export async function r2KeyFor(userId: string, itemKeyHashHex: string): Promise<string> {
   return `u/${userId}/${itemKeyHashHex}`;
+}
+
+// ---------------------------------------------------------------------------
+// 桶级协议（ADR 0077 D1–D9）
+//
+// 与条目级协议的关系：**并行**，不是替代。/v1/sync/push 与 /v1/sync/pull 的字段与
+// 取值域逐字不动（ADR 0077 D6「老端点保持原语义」），本节只服务
+// /v1/sync/buckets/push 与 /v1/sync/buckets/pull。
+//
+// 不变量（ADR 0077 D3）：桶 blob = N 个既有条目级 8 行信封文本块直接串接，
+// **不做桶级二次加密** ⇒ 桶级既没有 nonce 也没有桶级 AAD。服务端因此：
+//   · 不解析 blob（不数条目、不看 item_key、不比明文）；
+//   · item_count 只作「上界校验 + 运维观测」用，服务端**不**用它反推 blob 内容；
+//   · blob 原样落 R2、原样回吐，客户端是唯一的解密与逐条 HLC 裁决方。
+// ---------------------------------------------------------------------------
+
+/** bucket_key 上限（UTF-8 字节）。与 item_key 同口径：bucket_key 也是客户端 MAC 的十六进制串。 */
+export const MAX_BUCKET_KEY_BYTES = 512;
+
+/**
+ * 单次 push 的**桶数**上限。
+ *
+ * 与 MAX_PUSH_ITEMS 同值（64），但含义不同：这里 64 个「桶」= 64 个 R2 put。
+ * 取值依据（ADR 0077 D9 实测）：R2 单条 put ≈ 626–706 ms，并发 6 ⇒ 64 put ≈ 7.5 s，
+ * 仍在客户端 30 s 接收超时（CloudTransport.h）内 ⇒ 首导 852 桶 ≈ 14 个请求。
+ * 该上限与「默认桶大小 64 条」相乘 = 单请求 4,096 条，正好等于 D2 的桶内条目上限。
+ */
+export const MAX_PUSH_BUCKETS = 64;
+
+/** 桶内条目上限（ADR 0077 D2）。超限的词典客户端必须降级走老端点逐条推。 */
+export const MAX_BUCKET_ITEMS = 4096;
+
+/**
+ * 桶 blob 的字节上限：4 MiB。
+ *
+ * 推导：blob 是最坏 4,096 个信封文本块的串接，单块 = item_key(≤512 B) + 各头字段
+ * + 条目级 cipher 的 base64 ≈ 1 KiB ⇒ 4,096 × 1 KiB ≈ 4 MiB。
+ * 注意 MAX_CIPHER_BYTES（8 MiB + 16）**不适用**于桶 blob —— 那是「单条信封的密文」
+ * 的取值域，桶 blob 是多个信封的文本容器，不是单条密文（ADR 0077 D3）。
+ */
+export const MAX_BUCKET_BLOB_BYTES = 4 * 1024 * 1024;
+
+export interface ValidatedBucket {
+  bucketKey: string;
+  hlc: Hlc;
+  /** blob 解码后的字节，直接落 R2 */
+  blobBytes: Uint8Array;
+  /** 规范化的标准 base64，仅用于诊断日志的字节数核对 */
+  blobB64: string;
+  /** 该桶内的条目数（客户端上报，服务端只校验上界、不核验） */
+  itemCount: number;
+}
+
+/**
+ * 校验单个待推送桶；任何字段不合法都抛 400 中文错误，并指明是第几个桶。
+ *
+ * 校验面与 validatePushItem 逐字同构（同一套 assertHeaderString / parseHlc /
+ * fromBase64Strict），差别只有三处：
+ *   1. 键字段名是 bucket_key，不是 item_key；
+ *   2. 没有 nonce（D3：无桶级 AEAD）；
+ *   3. 多一个 item_count 上界校验（D2）。
+ */
+export function validatePushBucket(raw: unknown, index: number): ValidatedBucket {
+  const ordinal = index + 1;
+  if (!isPlainObject(raw)) throw fail.badRequest(`第 ${ordinal} 个桶必须是 JSON 对象。`);
+
+  const bucketKey = assertHeaderString(
+    raw.bucket_key,
+    'bucket_key',
+    MAX_BUCKET_KEY_BYTES,
+    `第 ${ordinal} 个桶的 bucket_key`,
+  );
+
+  const hlc = parseHlc(raw, index, `第 ${ordinal} 个桶的 HLC`);
+
+  const itemCount = toSafeInteger(raw.item_count, 'item_count', `第 ${ordinal} 个桶的条目数`);
+  if (itemCount < 0) {
+    throw fail.badRequest(`第 ${ordinal} 个桶的 item_count 不能为负。`);
+  }
+  if (itemCount > MAX_BUCKET_ITEMS) {
+    throw fail.badRequest(
+      `第 ${ordinal} 个桶的 item_count 超出上限 ${MAX_BUCKET_ITEMS}（实收 ${itemCount}），该桶应降级走逐条推送。`,
+    );
+  }
+
+  const blobBytes = fromBase64Strict(raw.cipher, MAX_BUCKET_BLOB_BYTES);
+  if (blobBytes === null) {
+    throw fail.badRequest(
+      `第 ${ordinal} 个桶的 cipher 不是合法 base64，或超过上限 ${MAX_BUCKET_BLOB_BYTES} 字节。`,
+    );
+  }
+
+  return {
+    bucketKey,
+    hlc,
+    blobBytes,
+    // 与条目级一致：统一按标准 base64 规范化，避免客户端 base64 / base64url 混用
+    blobB64: toBase64(blobBytes),
+    itemCount,
+  };
+}
+
+/**
+ * 桶级 R2 对象键：b/<account_id>/<sha256(device_id)>/<sha256(bucket_key)>。
+ *
+ * 为什么必须带设备维度（ADR 0077 D5 的直接推论）：同一 bucket_key 的哈希与设备无关，
+ * 若键里只有 bucket 哈希，设备 A 与设备 B 推同一桶会**互相覆盖成同一个对象**，
+ * 「每设备独立视图」在 D1 有两行、在 R2 却只有一个 blob ⇒ 后写者赢、前者的桶内容丢失。
+ * 老协议的 u/ 前缀键（r2KeyFor）不含设备维度是**有意**的：条目级行就是跨设备单视图。
+ *
+ * device_id 也取一次 sha256：账号 id 与设备 id 都是可枚举标识，键里落哈希值而不是明文，
+ * 与既有 r2KeyFor 对 item_key 的做法同一口径（避免 R2 键暴露设备行主键）。
+ */
+export async function bucketR2KeyFor(
+  userId: string,
+  deviceId: string,
+  bucketKey: string,
+): Promise<string> {
+  const deviceHash = await sha256Hex(utf8(deviceId));
+  const bucketHash = await sha256Hex(utf8(bucketKey));
+  return `b/${userId}/${deviceHash}/${bucketHash}`;
 }

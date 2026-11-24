@@ -5,10 +5,16 @@
 //     全部保留，清空后仍可继续登录与同步。
 //   · 「重置账号并清空云端」（spec 3.3 / R7）是另一条未纳入首版的流程。
 //
+// ADR 0077 之后这里要清**两套并存**的同步内容：
+//   · 逐条路径：R2 前缀 `u/<user_id>/`、D1 表 `sync_items`；
+//   · 桶级路径：R2 前缀 `b/<user_id>/`、D1 表 `sync_buckets`。
+//   两个前缀同桶同级 ⇒ 一次 list 一个前缀，清完逐条**不会**漏掉桶对象。
+//   注意：`sync_buckets` 由 migrations/0004 建表，**部署前必须先应用该迁移**，否则本接口报错。
+//
 // 不变量：
 //   1. 不吞失败：R2 批量删重试后仍失败 ⇒ 500 clear_incomplete，让客户端可原样重试；
 //      半清干净比报错更糟——客户端会以为云端已空。
-//   2. 成功前自证：再列一次前缀，非空即视为失败。
+//   2. 成功前自证：每个前缀都再列一次，非空即视为失败。
 //   3. 每轮都从「前缀起点」重新 list，不沿用上一轮的 cursor：批量删之后旧游标可能跳过对象。
 
 import type { Env } from './env';
@@ -43,8 +49,8 @@ async function deleteBatch(env: Env, keys: string[]): Promise<void> {
   throw fail.internal('云端数据未能完全清除，请稍后重试。', 'clear_incomplete');
 }
 
-export async function handleDeleteAccountData(env: Env, auth: AuthContext): Promise<unknown> {
-  const prefix = `u/${auth.userId}/`;
+/** 清空一个 R2 前缀下的全部对象，返回删除的对象数。 */
+async function clearPrefix(env: Env, prefix: string): Promise<number> {
   let deletedObjects = 0;
 
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
@@ -63,17 +69,37 @@ export async function handleDeleteAccountData(env: Env, auth: AuthContext): Prom
     }
   }
 
-  // D1 索引：sync_items 才是「云端有什么」的权威来源
-  const removed = await env.DB.prepare('DELETE FROM sync_items WHERE user_id = ?')
-    .bind(auth.userId)
-    .run();
-  const deletedItems = removed.meta?.changes ?? 0;
-
   // 自证：前缀必须为空，否则不报成功
   const probe = await env.BUCKET.list({ prefix, limit: 1 });
   if ((probe.objects ?? []).length > 0) {
     throw fail.internal('云端数据未完全清除，请稍后重试。', 'clear_incomplete');
   }
 
-  return { ok: true, deleted_objects: deletedObjects, deleted_items: deletedItems };
+  return deletedObjects;
+}
+
+export async function handleDeleteAccountData(env: Env, auth: AuthContext): Promise<unknown> {
+  // 逐条前缀 + 桶前缀（ADR 0077）：两个前缀都要清，且各自自证。
+  // deleted_objects 的字段名保持不变，含义扩为「两个前缀删除的对象总数」。
+  let deletedObjects = 0;
+  deletedObjects += await clearPrefix(env, `u/${auth.userId}/`);
+  deletedObjects += await clearPrefix(env, `b/${auth.userId}/`);
+
+  // D1 索引：sync_items / sync_buckets 才是「云端有什么」的权威来源
+  const removed = await env.DB.prepare('DELETE FROM sync_items WHERE user_id = ?')
+    .bind(auth.userId)
+    .run();
+  const deletedItems = removed.meta?.changes ?? 0;
+
+  const removedBuckets = await env.DB.prepare('DELETE FROM sync_buckets WHERE user_id = ?')
+    .bind(auth.userId)
+    .run();
+  const deletedBucketRows = removedBuckets.meta?.changes ?? 0;
+
+  return {
+    ok: true,
+    deleted_objects: deletedObjects,
+    deleted_items: deletedItems,
+    deleted_bucket_rows: deletedBucketRows,
+  };
 }

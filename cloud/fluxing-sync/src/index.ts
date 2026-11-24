@@ -6,6 +6,7 @@
 //   POST   /v1/auth/resend        POST /v1/auth/login      POST /v1/auth/refresh
 //   POST   /v1/auth/password-reset/start                   POST /v1/auth/password-reset/confirm
 //   POST   /v1/sync/push          GET  /v1/sync/pull
+//   POST   /v1/sync/buckets/push  GET  /v1/sync/buckets/pull   （ADR 0077 桶级，与上面两条并存）
 //   GET    /v1/devices            DELETE /v1/devices/:id
 //   DELETE /v1/account/data
 //
@@ -29,6 +30,7 @@ import {
   handleVerify,
 } from './auth';
 import { handlePull, handlePush } from './sync';
+import { handleBucketPull, handleBucketPush } from './sync-buckets';
 import { handleDeviceList, handleDeviceRevoke } from './devices';
 import { handleDeleteAccountData } from './account';
 
@@ -108,6 +110,20 @@ async function route(request: Request, env: Env): Promise<Response> {
       assertMethod(request, 'GET');
       const auth = await authenticate(env, request);
       return jsonResponse(await handlePull(env, auth, url));
+    }
+
+    // ADR 0077：桶级批量端点。与上面两条老端点并存、互不影响，
+    // 区别只在「一次往返搬多少条」，认证与错误面完全一致。
+    case '/v1/sync/buckets/push': {
+      assertMethod(request, 'POST');
+      const auth = await authenticate(env, request);
+      return jsonResponse(await handleBucketPush(env, auth, await readJsonObject(request)));
+    }
+
+    case '/v1/sync/buckets/pull': {
+      assertMethod(request, 'GET');
+      const auth = await authenticate(env, request);
+      return jsonResponse(await handleBucketPull(env, auth, url));
     }
 
     case '/v1/devices': {
