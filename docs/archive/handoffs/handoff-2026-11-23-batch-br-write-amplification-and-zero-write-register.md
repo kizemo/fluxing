@@ -533,3 +533,122 @@
    - `devices.last_seen` 刷新间隔 300 s → 1 h（288 → 24 行/设备/天），或改为「与其它写同批提交」，把它从**读路径**上摘掉。
 6. **官方来源**：Cloudflare Workers/D1 定价页（https://developers.cloudflare.com/workers/platform/pricing ）—— 免费 10 万行写入/日、付费 5,000 万行/月含 + $1.00/百万行；「索引写额外计 1 行写入」。
 
+---
+
+### §H · BR-①f 服务端桶化轮（2026-11-24 12:40）—— 服务端已实施 + 门禁 + 入库推送；**迁移与部署被 D1 免费「读」额度阻塞 ⇒ 生产尚无桶级端点，BR-①g 客户端无法联调**
+
+**本轮性质** = ADR 0077「路径 A 架构解」的**服务端落地**（spec 102 三件套 + `migrations/0004_sync_buckets.sql` + `src/sync-buckets.ts` + wire / env / index / account + 单测）⇒ **改了服务端产品代码**（`cloud/fluxing-sync/**`），**未改任何客户端代码**、**未 apply 迁移**、**未部署**。
+**用户拍板（2026-11-24）** = 「先零成本止血，再做 A 服务端改架构（D1 降级 + 词条包落 R2）」⇒ 止血项与 ADR 0077 本体由前轮完成（`2c46013` / `506d32b`，均已推送）。
+
+#### §H-1 本轮入库范围（commit `a7c61e0`，`git show --numstat` 实测）
+
+| 文件 | 增 / 删 | 备注 |
+|---|---|---|
+| `.specify/specs/102-bucket-level-sync-storage/spec.md` | +157 / −0 | 18,125 B |
+| `.specify/specs/102-bucket-level-sync-storage/plan.md` | +471 / −0 | **41,148 B** |
+| `.specify/specs/102-bucket-level-sync-storage/tasks.md` | +367 / −0 | **32,216 B** |
+| `cloud/fluxing-sync/migrations/0004_sync_buckets.sql` | +52 / −0 | 建表 + **三条**索引 |
+| `cloud/fluxing-sync/src/sync-buckets.ts` | +407 / −0 | `handleBucketPush` / `handleBucketPull` |
+| `cloud/fluxing-sync/src/wire.ts` | +127 / −3 | 桶入参契约 |
+| `cloud/fluxing-sync/src/env.ts` | +49 / −0 | 桶级写预算配置 |
+| `cloud/fluxing-sync/src/account.ts` | +36 / −10 | 注销账号连带清桶 |
+| `cloud/fluxing-sync/src/index.ts` | +16 / −0 | 两条新路由 |
+| `cloud/fluxing-sync/test/bucket-sync.test.ts` | +818 / −0 | **13 用例 / 172 断言** |
+| **合计** | **+2,500 / −13** | 10 files changed |
+
+- Commit **`a7c61e0`**（full `a7c61e0aedae81257bc32f6edbe10c4a25035969`）`feat(fluxing): 云同步桶级端点 —— sync_buckets 设备×桶双维索引 + R2 词条包（ADR 0077）`。
+- ⚠ **数字校正（以本表为准，覆盖开工指令的口径）**：`plan.md` 实测 **41,148 B**（指令写 36,344）、`tasks.md` **32,216 B**（指令写 31,088）、新单测 **13 用例**（指令写 14 ⇒ vitest 总数 164 = 基线 151 + 13 可反证）、逐文件增删行以 numstat 为准（`wire.ts` +127/−3 而非 +93、`env.ts` +49 而非 +11、`index.ts` +16 而非 +14、`account.ts` +36/−10 而非 +19）。
+
+#### §H-2 迁移 0004 实测内容（`cloud/fluxing-sync/migrations/0004_sync_buckets.sql`）
+
+- **L30 `CREATE TABLE sync_buckets (...)`** —— **没有 `IF NOT EXISTS`**（与开工指令描述不同 ⇒ 重复 apply 会报错，重跑前须先查 `d1_migrations` 记录）。
+- 列序逐字对齐 ADR 0077 D1（`docs/adr/0077-...md:64-67`）：`id INTEGER PRIMARY KEY AUTOINCREMENT` / `user_id` / `device_id` / `bucket_key` / `hlc_ms` / `hlc_counter` / `hlc_device` / `r2_key` / `cipher_len` / `item_count` / `updated_at`。
+- **三条**索引（开工指令只说两条）：L47 `CREATE UNIQUE INDEX idx_sync_buckets_user_device_item ON sync_buckets(user_id, device_id, bucket_key)`（I3 落点）、L50 `idx_sync_buckets_user_id (user_id, id)`（增量拉）、L52 `idx_sync_buckets_user_updated (user_id, updated_at)`（写预算 COUNT）。
+- 文件头注释 **B1–B6** 把「与 `sync_items` 的六处刻意差异」写进迁移本体：B1 多 `device_id` 且存 **`devices.id` 行主键**（口径引 `0001_init.sql:46-47`）、B2 **无 `nonce_b64` 列**（D3 不做桶级二次加密）、B3 多 `item_count`、B4 `cipher_len` 语义改为「桶 blob 字节数」、**B5 桶侧 `id` 是独立编号空间 ⇒ `server_seq` 禁止跨协议版本复用游标 ⇒ 客户端侧车必须按版本分区**、B6 额外 `(user_id, updated_at)` 索引。
+
+#### §H-3 实现落点（关键 file:line）
+
+- **推送** `src/sync-buckets.ts:150-322`：邮箱未验证先 403（:156-158）→ `resolvePushDeviceId`（:160）→ 桶数组上界（:163-170）→「**先整体校验，任一个非法就什么都不写**」（:172-173）→ 取同设备同桶既有行作 HLC 基准（:177-191）→ 逐桶守卫：服务端已存 ≥ 客户端 ⇒ **整桶 `skipped`**（:204-214）→ **写预算判定（:216-232，在任何写动作之前）** → R2 写（:234-258，并发度沿用 ADR 0074 的 6）→ D1 `DELETE + INSERT`（:260-292）→ `server_seq =` 本次**真正写入**桶行的最大 id（:294-315；全部跳过时取账号级 `MAX(id)` 防游标倒退）。
+- **拉取** `src/sync-buckets.ts:335-407`：`after = max(since, cursor)`（:344）→ `WHERE user_id = ? AND id > ? ORDER BY id ASC LIMIT limit+1`（:346-356）→ `has_more` 口径同逐条端点（:359-360）→ **单行 R2 对象缺失 = 跳过 + 批量删该行 + `console.warn` 自愈**（:366-372、:390-397）⇒ **不返 500**（抛错会让客户端卡在同一游标无限重试）→ 顶层三字段同名同义（:400-406）。
+- **`device_id` 服务端权威** `src/sync-buckets.ts:110-123`（设计说明与理由 :100-108）：一律取 access token 反查出的 `auth.deviceRowId`；客户端自带值**只允许相等**，否则 400 `bad_device_id`（:113-121）⇒ 防「伪造 device_id 让 A 设备整桶压制 B 设备行（永不收敛）」。ADR 0077 D7 的响应示例（`docs/adr/0077-...md:131`）只写 `"device_id": "<hex>"`、**未规定来源** ⇒ 本批定为服务端权威（与 `refresh_tokens.device_id` 先例同构）。
+- **路由** `src/index.ts:117` `POST /v1/sync/buckets/push`、`:123` `GET /v1/sync/buckets/pull`；老 `/v1/sync/push|pull` 逐字未动（§H-6 的「老逐条端点回归」describe 守着）。
+- **配置** `src/env.ts:39` `WRITE_BUDGET_BUCKETS_PER_DAY?`、`:92` 默认 **4_000**（合法区间 :95-96 = 1..10,000,000，越界回落默认 :107/:115）。⚠ `cloud/fluxing-sync/wrangler.toml` **未声明**该变量（只有 `WRITE_BUDGET_ROWS_PER_DAY = "80000"`，toml L60）⇒ 生产当前取代码默认 **4,000 桶行/账号/UTC 日**。
+- **注销账号** `src/account.ts:86` 清 R2 前缀 `b/<user_id>/`、`:94` `DELETE FROM sync_buckets WHERE user_id = ?`、`:103` 响应新增 `deleted_bucket_rows`；文件头 :10-12 已写明「**部署前必须先应用 0004 迁移，否则本接口报错**」。
+
+#### §H-4 不变量 I1–I5（逐行复核通过）
+
+- **blob 格式** = 既有条目级信封文本块**直接串接**（与 `/v1/user-dict/export` 文件体同构）⇒ **条目级 AAD 逐字不变**、**不做桶级二次 AEAD**（ADR 0077 D3；迁移头 B2 同记「无 nonce_b64」）。
+- **I1 服务端零明文**：pull 原样回吐 `cipher`（:383-384），服务端不解析 blob（`item_count` 只是客户端申报值 + 运维指标）。
+- **I2 `device_id` 服务端权威**：`sync-buckets.ts:110-123`（见 §H-3）。
+- **I3 `(user_id, device_id, bucket_key)` 三元键 UPDATE 整行替换**：DELETE（:267-269）+ INSERT（:270-290），R2 键含设备维度（`bucketR2KeyFor(auth.userId, deviceId, bucket.bucketKey)`，:238）。
+- **I4 写预算判定在任何写动作之前**：:216-232 先于 :234 的 R2 put 与 :292 的 D1 batch ⇒ 超限 **429 + D1/R2 零写入**，错误面复用 `WRITE_BUDGET_EXCEEDED_CODE` / `_MESSAGE`（:231）⇒ **不新增错误码，客户端无需新分支**。
+- **I5 pull 只返 `id > max(since, cursor)`**、按 id 升序、`has_more` 同口径、单行 R2 缺失自愈不返 500（:366-372）。
+
+#### §H-5 `MAX_BUCKET_ITEMS` 的**双重身份**（登记清楚，别当缺陷）
+
+- 「桶内**实际**条目数 ≤ 4096」**无法从密文域校验** ⇒ 服务端只见密文、解不开；硬判实际条数就得解密 ⇒ **与 I1 矛盾** ⇒ 因此它是 **wire 契约上限 + 客户端侧护栏**。
+- 服务端**可执行**的两条：① 客户端**申报**的 `item_count` 上界 400 硬拦（`src/wire.ts:291-299`，文案「…超出上限 4096（实收 N），该桶应降级走逐条推送。」）；② blob **字节**上限 `MAX_BUCKET_BLOB_BYTES = 4 * 1024 * 1024`（`src/wire.ts:256`）经 `fromBase64Strict(raw.cipher, MAX_BUCKET_BLOB_BYTES)`（**`src/wire.ts:301`** ⇒ 注意在 **wire.ts**，不是 sync-buckets.ts）执行，非法 base64 或超限在批量校验阶段 400 并回显上限（:302-306）。
+- 常量位置：`MAX_BUCKET_ITEMS = 4096`（`src/wire.ts:246`）、`MAX_PUSH_BUCKETS = 64`（:243，含义 = 单次 64 个 R2 put，与逐条端点 `MAX_PUSH_ITEMS = 64`（:33）**同值不同义**）。
+- base64 解码**逐字复用既有 `fromBase64Strict`** ⇒ 未新增第二套编解码器（宪法 R7 单一真相源）。
+
+#### §H-6 门禁（父会话独立复跑，**未采信子代理自报**）
+
+- `npm --prefix cloud\fluxing-sync run typecheck` ⇒ **`TYPECHECK_EXIT=0`**。
+- `npm --prefix cloud\fluxing-sync run check`（含 `check:endpoint`）⇒ **`CHECK_EXIT=0`**：**Test Files 13 passed (13) / Tests 164 passed (164)**，Start **2026-11-24 12:33:48**，Duration **13.05s**；`check:endpoint` 的 T103 红线通过（目录内无默认子域字面量，workers_dev / preview_urls 均关闭）。
+- 基线 12 文件 / 151 用例 ⇒ **+1 文件 / +13 用例**，既有 151 条无一走红。
+- 日志 **`reports/fluxing-br-1f/gate-1.log`**（1,450 B，**不入库**）。
+
+#### §H-7 ⚠ 部署未完成 —— 新发现的**第二个生产级阻塞：免费额度连「读」也挡**
+
+- `npx wrangler d1 migrations apply DB --remote` ⇒ **`MIGRATE_EXIT=1`**，错误原文：
+  > `Your account has exceeded D1's free tier daily row read limit. Upgrade to a paid plan or wait until tomorrow (midnight UTC) to continue. See https://developers.cloudflare.com/d1/platform/limits/ for more details. [code: 7500]`
+
+  （API 路径 `/accounts/016c8e736b685af88860034ea6eb1daa/d1/database/e4ea114a-29b4-4abd-87e6-4e6cb20d86e4/query` 失败；wrangler 4.159.0；日志 **`reports/fluxing-br-1f/deploy-1.log`**，797 B，不入库）
+- **推翻本轮开工时的判断**：此前认为「migration 是 DDL、只花几行 ⇒ 当天可 apply」⇒ **错**。wrangler 的 `migrations apply` 内部走 D1 **`/query` 通道** ⇒ 被**读额度**直接拒（免费 **5,000,000 行/日**）。
+- 【实测 · 额度】12:26 `rows_read_24h = 9,083,789` → 12:38 `9,083,795`；**本轮收尾（12:52）`wrangler d1 info DB --json` 复测 = `rows_read_24h = 9,083,801`（仍 > 5M ⇒ 读额度未恢复）、`rows_written_24h = 33,043`**（12:38 曾为 72,420 ⇒ 写计数随 24 小时滚动窗口已回落 ⇒ **当前瓶颈是读、不是写**）、`database_size = 19,255,296`。⇒ **「等 UTC 午夜写额度重置」不足以保证迁移能跑**；前置判据要改看 **`rows_read_24h < 5,000,000`**。
+- 【实测 · 生产现状】`npx wrangler deployments status` ⇒ 当前生效 Version = **`5f3732e8-f1d2-4829-a8dd-1c5b97a90039`**（Created 2026-11-24T04:04:12.850Z = 止血版，**无桶级端点**）。
+- 【实测 · 迁移】`migrations/0003`（`idx_sync_user_updated`）与 `0004`（`sync_buckets`）**均未 apply 到生产** ⇒ 读侧止血的收益也还没到账 ⇒ **客户端桶化（BR-①g）现在无法联调**。
+
+#### §H-8 硬前置：`migrations apply` 必须**先于** `deploy`（顺序不可颠倒）
+
+`src/account.ts:94` 的注销账号处理**无条件** `DELETE FROM sync_buckets` ⇒ 若 Worker 先上线而表不存在，**「注销账号数据」对所有用户直接报错**（生产回归）。⇒ 顺序固定：① 确认 `rows_read_24h < 5,000,000` → ② `npx wrangler d1 migrations apply DB --remote`（期望 `MIGRATE_EXIT=0`）→ ③ 复测迁移 EXPLAIN → ④ `npm --prefix cloud\fluxing-sync run deploy` → ⑤ 生产冒烟。**任何情况下不得跳过 ② 直接 ④。**
+
+#### §H-9 已验证 / 推断 / 未验证
+
+**已验证（本轮亲测，可复算）**
+
+- §H-1…§H-6 全部数字与行号（`git show --numstat` / Select-String / 逐行读码）；commit `a7c61e0` 已推送（`PUSH_EXIT=0`、`506d32b..a7c61e0`、`rev-list --count` = 0）。
+- 生产 Version `5f3732e8-f1d2-4829-a8dd-1c5b97a90039`（`wrangler deployments status` EXIT=0）与 D1 读数（`wrangler d1 info DB --json` EXIT=0）。
+- 迁移 apply 失败与错误原文（`deploy-1.log`）。
+
+**推断（未实测）**
+
+- 桶化后「单轮 D1 写入量与词条数解耦」⇒ 生产从未跑过桶端点，**零实证**（ADR 0077 D9 的估算）。
+- 4,000 桶行/日的护栏是否够用 ⇒ 未实测（且 `wrangler.toml` 未显式声明该变量）。
+
+**未验证 / 未闭环**
+
+- 迁移未 apply、Worker 未部署 ⇒ **桶端点在生产上不存在**；生产冒烟未做。
+- **AC-09 仍记 FAIL**（客户端语义指纹版，本轮未复跑）⇒ 定时任务 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`（`scheduleType=once`、`runAtMs=1795565446336` = 北京时间 **2026-11-25 08:10:46**）用探针 **v4** 复跑，**只有 `AC09_VERDICT=PASS` 才可改记 PASS**。
+- healed 自愈「丢一整桶条目」的粒度风险（ADR 0077 D10）本批**不解决**，登记为 BR-①g 已知边界。
+- ADR 0077 的 **Status 仍为 Proposed**（`docs/adr/0077-...md:8`）、「生产复验结果」小节仍空（:230）⇒ 本批红线不动 `docs/adr/`，待服务端生产可用后另轮回写。
+- **BR-①g 客户端桶化未开工**。
+
+#### §H-10 下一轮（顺序固定）
+
+1. **AC-09 定时复跑**（任务 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`，北京时间 **2026-11-25 08:10:46**）⇒ 探针 **v4** `reports/fluxing-br-1c/probe-ac09.ps1` ⇒ **只有日志出现 `AC09_VERDICT=PASS` 才可把 AC-09 改记 PASS**；`UNDETERMINED` / `FAIL` 不得覆盖硬数据。
+2. **先看 `rows_read_24h` 是否 < 5,000,000**，再 `npx wrangler d1 migrations apply DB --remote`（0003 + 0004，期望 **`MIGRATE_EXIT=0`**）。
+3. **复测迁移 EXPLAIN**：期望写预算护栏与增量拉取从全表扫描改走 **`idx_sync_user_updated`** / 桶侧 `idx_sync_buckets_user_id`、`idx_sync_buckets_user_updated`。
+4. **之后**才 `npm --prefix cloud\fluxing-sync run deploy`（新 Version id 回写 §H-7）。
+5. **生产冒烟**：新账号一对设备 → 走桶端点 push 1 桶 → pull → 断言 `skipped` / `has_more` / 游标推进。
+6. 再开工 **BR-①g 客户端桶化**：分桶打包 / 拆包、桶级 HLC 分配、**侧车 v2 升版 + 强制 `seq = 0`**（§H-2 的 B5 独立编号空间约束）、第二道条目数护栏（服务端不可判 ⇒ 客户端必判）、出包装机 + 真机判据。
+7. **待用户拍板**：Workers Paid 是否升级 / BR-②（护栏改全局口径或按活跃账号数分摊）/ **新增一项：D1 读额度已耗尽 ⇒ 老逐条端点的读放大是否也要止血**。
+
+#### §H-11 本轮工具坑（新增，勿重试）
+
+- `git show HEAD:<path> | Out-String` **不能**用来判文件尾部字节（管道会规范化行尾）⇒ 用 `[IO.File]::ReadAllBytes` 或先落文件再测。
+- 判「缺尾部换行要不要修」= 先看包内有无 lint/format 门禁：`cloud/fluxing-sync/package.json` scripts 只有 `test` / `check` / `check:endpoint` / `typecheck` ⇒ **无格式门禁**，且未改动的 `src/sync.ts` 同样缺尾换行（仓库既有状态）⇒ **不制造无谓 diff**。
+- 前台 bash 里 `Start-Sleep` 超过 60 s 会被自动转后台并触发额度闸门 ⇒ **等待必须与有用检查合并成一条命令**。
+- **wrangler `migrations apply` 在 D1 读额度耗尽时同样被拒**（`[code: 7500]`）⇒ 部署前置判据要先看 `rows_read_24h < 5,000,000`，**不能只盯 `rows_written_24h`**。
+- `wrangler deployments list` 从**最旧**开始输出 ⇒ 查「当前生效 Version」要用 `wrangler deployments status`（本次据此核到 `5f3732e8`）。
+
