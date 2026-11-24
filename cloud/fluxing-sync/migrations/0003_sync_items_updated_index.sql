@@ -1,0 +1,22 @@
+-- Fluxing 云同步 · D1 迁移 0003：sync_items 补齐「按今日写入时间」索引
+-- （ADR 0077 A-0 止血项 1 · 读侧零成本止血）
+--
+-- 为什么要这条（2026-11-24 生产实测坐实）：
+--   写预算护栏（src/sync.ts 的 countTodayWrittenRows）在**每次推送前**必跑
+--     SELECT COUNT(*) FROM sync_items WHERE user_id = ? AND updated_at >= ?
+--   而 0001 只建了 idx_sync_user_id(user_id, id) 与 idx_sync_user_item(user_id, item_key)，
+--   **没有任何索引覆盖 updated_at** ⇒ 这条 COUNT 只能沿 (user_id, id) 索引扫出
+--   该用户的**全部**行，再逐行过滤 updated_at ⇒ 每推一次就读一遍全表。
+--   实测：生产库 40,061 行 / 24 小时 rows_read = 9,360,874 ≈ 234 次全量扫描；
+--   而免费额度只有 500 万行/日 ⇒ 读侧已经越界。
+--
+-- 影响面（可逆）：
+--   · 建索引本身是一次性写：约 40,061 行索引行（免费额度 10 万行/日）⇒
+--     **必须在 UTC 日重置之后单独执行**（北京时间次日 08:00 之后），
+--     否则会撞当日配额（code 7500）而失败。
+--   · 加索引不改变任何查询语义、不改表数据 ⇒ 回滚 = DROP INDEX idx_sync_user_updated。
+--
+-- 注：pull 路径（WHERE user_id = ? AND id > ? ORDER BY id）已由 idx_sync_user_id 覆盖，
+--     **不是**本次读放大的来源；本次只补 updated_at 这一条。
+
+CREATE INDEX IF NOT EXISTS idx_sync_user_updated ON sync_items(user_id, updated_at);

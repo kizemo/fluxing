@@ -35,8 +35,15 @@ const DEFAULT_ACCESS_TTL = 3600;
 const DEFAULT_REFRESH_TTL = 30 * 24 * 3600;
 const DEFAULT_KDF_ALGO = 'PBKDF2-SHA256';
 const DEFAULT_KDF_ITERS = 600000;
-/** 设备 last_seen 的写放大抑制窗口（秒）：同一设备 5 分钟内不重复写 */
-const LAST_SEEN_REFRESH_SECONDS = 300;
+/**
+ * 设备 last_seen 的写放大抑制窗口（秒）：同一设备 1 小时内不重复写。
+ *
+ * 2026-11-24（ADR 0077 A-0 止血项 2）：由 300 秒放宽到 3600 秒。
+ * 理由：这是**读路径上的写**（每次鉴权都可能触发）⇒ 300 秒窗口 = 288 行/设备/日；
+ * 在 D1 免费额度（10 万行/日，账号级全局池）下 ≈「347 台设备/天就把池子写满」，
+ * 且写失败会连带把**读**语义请求一起打成 503（见下方 fail-open 处理）。
+ */
+export const LAST_SEEN_REFRESH_SECONDS = 3600;
 
 // ---------------------------------------------------------------- ADR 0076 D3 上限
 //
@@ -1041,7 +1048,17 @@ export async function authenticate(env: Env, request: Request): Promise<AuthCont
   }
 
   if (row.device_last_seen === null || now - row.device_last_seen >= LAST_SEEN_REFRESH_SECONDS) {
-    await env.DB.prepare('UPDATE devices SET last_seen = ? WHERE id = ?').bind(now, row.device_id).run();
+    // fail-open（ADR 0077 A-0 止血项 2）：last_seen 是**遥测字段**，不是安全相关状态。
+    // 这一行写发生在**鉴权读路径**上 ⇒ D1 额度耗尽（code 7500）时它会抛错，
+    // 而未捕获的异常会把**整个请求**（包括纯读的拉取）一起打成 503
+    // （生产实测 2026-11-24：真机两轮同步都因此失败，回写额度才恢复）。
+    // 因此这里吞掉写失败：最多丢一个遥测字段，不影响鉴权结论，也**不阻断**读路径。
+    try {
+      await env.DB.prepare('UPDATE devices SET last_seen = ? WHERE id = ?').bind(now, row.device_id).run();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.warn('[fluxing-sync] 刷新设备 last_seen 失败（已忽略，不阻断请求）:', detail);
+    }
   }
 
   return {
