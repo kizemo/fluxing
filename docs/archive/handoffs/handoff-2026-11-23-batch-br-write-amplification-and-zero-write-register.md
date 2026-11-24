@@ -481,7 +481,7 @@
 1. **复跑 AC-09**（定时任务 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`，北京时间 **2026-11-25 08:10:46**）⇒ 探针 **v4** ⇒ **只有 `AC09_VERDICT=PASS` 才可把 AC-09 改记 PASS**；机器给 `UNDETERMINED` / `FAIL` 时**不得**覆盖硬数据，也**不得**据此记 PASS。
 2. **入库存** ⇒ **2026-11-24 09:51 已完成**（明细见 §G-8）：`2b83cd6`（客户端）+ `feb02ad`（文档）已推送，远程 `kizemo/feat/100-cloud-sync` 与本地同步（`rev-list --left-right --count` = 0/0）。
 3. **第二层判据**：库存扫完（`scan_complete = 1`）那一轮仍须零写入。
-4. **待用户拍板**：Workers Paid 是否升级 / BR-② / BR-①e。
+4. **待用户拍板**：Workers Paid 是否升级 / BR-②（**BR-①e 已于 2026-11-24 拍板 = 维持现状**，见 §G-9）。
 
 #### §G-8 入库与推送记录（2026-11-24 09:51）
 
@@ -491,5 +491,15 @@
 - **推送**：默认链路（走代理）**失败** —— `fatal: unable to access 'https://github.com/kizemo/fluxing.git/': TLS connect error: error:0A000126:SSL routines::unexpected eof while reading`（EXIT=128）⇒ 改走**直连** `git -c http.proxy= -c https.proxy= push kizemo feat/100-cloud-sync` ⇒ **PUSH_EXIT=0**（`65c9669..feb02ad feat/100-cloud-sync -> feat/100-cloud-sync`）。⇒ **本轮链路与上一轮相反：代理断、直连通**（两条路都要试）。
 - 收尾状态：`git status -sb` ⇒ 分支与远程同步（0/0）；工作树只剩 `m librime`（dirty submodule）+ 既有 untracked（`release/`、`reports/**`、`scripts/verify/*.ps1`、`docs/design/quickpanel-v6/design-demos/*.html`）⇒ **按红线一律不入库**。
 - **定时任务已同步**：`4d3e51f8-fdda-41bb-bbc1-12e844914dc5` 的 prompt 已就地改写（新增：新客户端已装机 + 提交哈希、⚠ 上一轮「真机零推送」判读纠正、⚠ 读路径也会 503 的机理、探针 v4 双 Stage 与 `AC09_VERDICT_STRICT` 口径），复核 `enabled=true` / `status=active` / `runAtMs=1795565446336`（北京时间 **2026-11-25 08:10:46**）。
-- **§G-7 第 2 步（入库存）到此关闭**；剩余仅 ① AC-09 复跑 ② 第二层判据 ③ 待用户拍板三项。
+- **§G-7 第 2 步（入库存）到此关闭**；剩余仅 ① AC-09 复跑 ② 第二层判据 ③ 待用户拍板两项（BR-①e 已拍板，见 §G-9）。
+
+#### §G-9 用户拍板记录（2026-11-24 11:08）
+
+- **BR-①e = 维持现状**（用户明确选择「维持现状，等库存扫完」）⇒ **本议题关闭、不另立 ADR**：
+  - 库存扫完（`scan_complete = 1`，约 41 轮）前**不推送新条目**（R2「库存未证实不推送」闸门**保持收紧**）；
+  - **不提高**单轮拉取页数（维持 `kPullPageLimit = 100` × `kMaxPullPages = 10` = 1,000 条/轮）；
+  - 54,536 条从未上云条目**不做 pacing**（本批**不实现**推送 cap / 限速）⇒ 待库存扫完那轮自然发生一次性补推；
+  - 代价（已知并接受）：**真实本地改动的上云被延后约 41 轮**（不丢数据，只延迟）。
+- **仍待用户拍板两项**（本轮未动）：Workers Paid 是否升级（维持不升级）/ **BR-②**（写预算护栏是否改全局口径或按活跃账号数分摊）。
+- ⚠ **BR-①e 关闭后的连带风险（未闭环）**：库存扫完那轮一次性补推 54,536 条 ⇒ 服务端每账号每日写预算 **80,000 行** 与 D1 全局免费额度 **10 万行/日** 两个上限**在同一时刻逼近** ⇒ 可能再次触发 D1 额度耗尽 ⇒ 连带「登录 / 拉取也 503」（`auth.ts` 的 `devices.last_seen` 属读路径写）。**当前无缓解手段**：本批不做 pacing、Workers Paid 未升级 ⇒ 该窗口内额度告急只能等 UTC 日重置。⇒ **建议在库存扫完之前（即 AC-09 第二层判据那一轮之前）复核 BR-② 的口径**，否则补推窗口可能撞额度。
 
