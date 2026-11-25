@@ -1950,3 +1950,112 @@
    拍板值 ≠ 2,000 时**必须改实现常量并重出包装机**。
 7. 阶段 3 切读**仍禁**（硬前置：云端历史 40,061 条须先完成桶化覆盖；handoff §O-1.1 / ADR 0077:411-412）。
 8. AC-09 维持 **FAIL**；生产阈值 80,000→20,000、BR-②′ 全局熔断、BR-⑤、腾讯云收口、定时任务合并 —— **均未授权、未动**。
+
+
+### P-L —— v3 复跑结果、生产零写入对照轮、配额唯一值裁定（2026-11-25 18:30–19:15）
+
+> 本节是**本批最新事实**，与上文（§P-K 及更早）冲突时**以本节为准**。
+> 源：`reports/fluxing-br-1g/phase2-closeout-v3.ps1` + `phase2-closeout-v3-run.log`；台账源：`reports/fluxing-br-1g/section-p-l.md`。
+
+#### P-L.1 结论速览（4 条）
+
+1. **v3 判据修正后仍超时**：`ROUND_SUMMARY_SEEN=NO`、40 min 窗口内**没有任何推轮**（`FINAL round_seen=False summary_seen=False`）⇒ 「一轮推完」的**客户端自证（`bucket phase=2 pushed=N`，N>0）至今未取得**，§P-K.1 对应栏位维持「未取得」。
+2. 本轮是**生产零写入对照轮**：轮前 / 轮后 D1 三项**逐字相同**（见 P-L.3）。
+3. **回滚双判据 PASS**：日志 `bucket phase=0`（19:14:57.616）**且** 侧车 `phase` 行 = **0**（19:14:57 写回，size 11,939,758、`bseq=1011`、`brow` 行数 0）；User 级 `FLUXING_CLOUD_SYNC_BUCKET_PHASE` 已清（`USER_PHASE_CLEARED=[]`）。
+4. **每轮桶推行数配额的唯一值已裁定 = 2,000 行/轮**（= 1,000 桶/轮，每桶 2 行）⇒ **实现常量未改、未重出包装机**，与已验证的 1.3.10 运行时行为逐字一致（P-L.7）。
+
+#### P-L.2 v3 实测时间线（逐条回读自 `phase2-closeout-v3-run.log` 与 notify 日志）
+
+| 时刻 | 事件 | 数值 |
+|---|---|---|
+| 18:30:43 | `=== CLOSEOUT V3 START ===` | User 级变量启动前为空（`USER_PHASE_BEFORE=[]`） |
+| 18:30:47 | D1 轮前基线 · 桶表 | n=**1,000**、id 2..1011、1 device、Σ item_count=**92,353** |
+| 18:30:50 | D1 轮前基线 · 条目表 | n=**40,066**、max id=**71,124** |
+| 18:30:56 | D1 轮前基线 · 额度 | `rows_written_24h` = **45,862** |
+| 18:30:56 | 日志偏移 | `PHASE2_LOG_OFFSET=672340`（只认偏移后的行，避免误读历史轮） |
+| 18:30:57 | 重启（真 phase=2） | `RESTART[phase2] phase=2 proc_env=[2] user_env=[2]` |
+| 18:31:01 | 进程 | PID **31036** |
+| 18:41:07.035 | 启动轮 · 本地语义扫描 | `semantic legacy_rows=0 legacy_held=0` |
+| 18:42:26.611 | 启动轮 · 轮汇总 | `reconcile scan_complete=0 matched=92353 deferred=1310 divergent=8 pushed=0` |
+| 18:42:26.611 | 启动轮 · 轮汇总行 | `bucket phase=2 pushed=0 skipped=0 pulled_buckets=1000 pulled_items=92353` |
+| 19:11:15–19:11:21 | D1 轮后基线 | 三项与轮前**逐字相同**（P-L.3） |
+| 19:11:21 | 超时判定 | `ROUND_SUMMARY_SEEN=NO (no 'bucket phase=2 pushed>0' after the quota line within 40 min)` |
+| 19:11:22 | 回滚 | `RESTART[rollback] phase=0 proc_env=[0] user_env=[0]` |
+| 19:11:26 | 进程 | PID **12988** |
+| 19:14:57.616 | 回滚判据① | `bucket phase=0 pushed=0 skipped=0 pulled_buckets=0 pulled_items=0` |
+| 19:15:06 | 回滚判据① 结论 | `VERDICT[rollback]=PHASE0_OBSERVED` |
+| 19:15:07 | 清环境变量 | `USER_PHASE_CLEARED=[]` |
+| 19:15:07 | 回滚判据② | `SIDECAR_PHASE_LINE=phase	0`、`SIDECAR_MTIME=2026-11-25 19:14:57`、`SIDECAR_SIZE=11939758`、`SIDECAR_BROW_COUNT=0`、`SIDECAR_BSEQ=1011` |
+| 19:15:07 | 终判 | `FINAL round_seen=False summary_seen=False phase0_seen=True sidecar_phase=0 summary=[]` |
+| 19:15:07 | 收官 | `=== CLOSEOUT V3 END ===` |
+
+#### P-L.3 生产 D1 单轮差分 = **零**（本轮是干净的对照轮）
+
+| 指标 | 轮前（18:30） | 轮后（19:11） | 差分 |
+|---|---|---|---|
+| `sync_buckets` 行数 | 1,000 | 1,000 | **0** |
+| `sync_buckets` Σ item_count | 92,353 | 92,353 | **0** |
+| `sync_buckets` id 区间 | 2..1011 | 2..1011 | **0** |
+| `sync_items` 行数 | 40,066 | 40,066 | **0** |
+| `sync_items` max id | 71,124 | 71,124 | **0** |
+| `rows_written_24h` | 45,862 | 45,862 | **0** |
+
+⇒ 本轮**生产零写入**（连被截断的桶推轮都没发生）。**副作用**：§P-K.7 记的 `rows_written_24h` +1,613 **不可归因到本轮**，本轮不提供新的单轮写入量数据 ⇒ **AC-212 仍缺「单轮完整 D1 写入量」埋点**。
+
+#### P-L.4 新缺口：启动轮结束后 **29 分钟没有第二轮**（未坐实，**新增项**）
+
+- **上一轮**（pid 46764）：启动轮 18:14:34 结束 → **18:22:35 出现第二条 `semantic` 行**（= 推轮开始）→ 18:24:38 `bucket quota … quota_rows=2000` ⇒ 启动轮结束后 **≈8 分钟**起推轮。
+- **本轮**（pid 31036）：启动轮 18:42:26 结束 → 到 19:11:21 超时（**≈29 分钟**）**没有任何第二轮**：无 `semantic`、无 `quota_rows=`、无 reconcile 行。
+- ⇒ **轮次调度 / 触发链存在未坐实的行为差异**。候选成因（**均未验证**）：
+  1. 轮触发可能依赖「本地改动 dirty」标志，而本轮启动轮拉回 1,000 桶后**未产生 dirty**（上一轮拉回 500 桶后产生了）；
+  2. `min_push_interval_ms = 15 min`（推送全局间隔）/ `local_change_debounce_ms = 5 min`（防抖）与拉回量的交互推迟了唤醒；
+  3. 启动轮本轮耗时 **11 分钟**（18:31:01 → 18:42:26）改变了 dirty_since 与下一次唤醒的相对时序；
+  4. 桶指纹 brow 不落盘 ⇒ 候选集合恒定，但「是否 changed」的判定与第二轮触发条件耦合。
+- **判定路径**：在 `CloudSyncEngine` 的轮触发点加一行诊断（触发原因 + `dirty_since_ms` + 本次唤醒原因 + 距上轮时长），并把「本轮是否推轮」也打进轮汇总行 ⇒ **需改码 + 重出包装机 + 重跑真机轮 ⇒ 新批次**（本批不授权改码）。
+- ⚠ **不得据此记「桶推不可用」**：18:24:38 那一轮已证明**桶推路径会被执行**（`quota_rows=2000`），18:22:42 `push batch items=13 elapsed_ms=4813 http=200` 证明**阶段 2 的逐条端点双写通畅**。缺的是「**一轮推完**」的客户端自证与「**一轮完整写入量**」。
+
+#### P-L.5 拉取侧本轮**满拉** ⇒「500 vs 704」缺口本轮不复现
+
+| 轮次 | 云端桶行数 | 客户端拉回 | 结论 |
+|---|---|---|---|
+| 上一轮启动轮（18:14:34） | 704 | **500** 桶 / 46,229 items | 缺口（§P-K.6） |
+| 本轮启动轮（18:42:26） | 1,000 | **1,000** 桶 / 92,353 items | **满拉** |
+
+⇒ 该缺口**不是结构上限**（否则本轮也会被截到某个固定值），更像**游标 / 页数的时序现象**；但「有效 `after=205` 的来源」**仍未坐实** ⇒ **未闭环**（候选：客户端 `cursor`/`next_cursor` 路径、轮内内存游标被改写；需服务端/客户端加「有效 since / cursor / 首末 id」诊断）。
+
+#### P-L.6 侧车 `phase` 会被**启动轮写回 2**（新实测，容易踩坑）
+
+- 18:42:26 启动轮结束后的侧车：mtime **18:42:26**、size **11,939,758**、**`phase` = 2**、`bseq` 705 → **1,011**、`brow` 行数仍 **0**。
+  ⇒ 符合 FR-208「环境变量生效时必须写回侧车」；**回滚时只清环境变量是不够的**，必须让侧车 `phase` 归 0。
+- 19:14:57 phase-0 轮启动后侧车被写回 `phase` = **0**（size / `bseq` 不变）⇒ 回滚双判据成立。
+
+#### P-L.7 每轮桶推行数配额：唯一值**裁定 = 2,000 行/轮**
+
+- 用户 2026-11-25 拍板采纳推荐值 ⇒ **2,000 行/轮 = 1,000 桶/轮**（每桶 2 行，ADR 0077 D30）。
+- **执行方式**：**实现常量 `kBucketPushRowsPerRound = 2000` 保持不变** ⇒ **未改常量、未重出包装机** ⇒ 与已验证的 1.3.10（`WeaselServer.exe` sha256 `D7DFAC785CB1C2D262716D37DD21C19BDC6C02BD4A688E4CDB8446F519E8EB79`）**运行时行为逐字一致**；本轮只订正**注释与文档口径**（头文件注释 / **ADR 0077 D31** / spec 103 **AC-215** **四处逐字相等**）。
+- **落选候选留档**：4,096 ⇒ 2,048 桶/轮（一轮扫完一个词典的全量补推 ≈ 2,304 行）；8,000 ⇒ 4,000 桶/轮（导入更快但单轮写入上界更高）。再评估的前置 = **brow 落盘修好**且确需缩短补推轮数；届时必须改常量 + 重出包装机 + 重跑真机轮。
+- ⚠ **裁定不解除尾部饿死**：D30 的「**尾部 24 桶永久饿死**」与 AC-215 判据②「被截断的桶下一轮被重新选中」**仍未达成**（brow 不落盘，§P-H.4）⇒ **不得**用本裁定宣称桶化覆盖已完成。
+
+#### P-L.8 本轮改动文件与门禁
+
+- 改动（**5 个文件**）：`WeaselServer/Cloud/CloudSyncService.h`（**仅注释**：配额值由「待拍板」改为「已裁定 2,000」，常量未动）、`docs/adr/0077-bucket-level-sync-storage-architecture.md`（**+D31 配额唯一值裁定**）、`.specify/specs/103-client-bucket-sync/spec.md`（AC-215 口径改为「已裁定唯一值」）、本交接文档（本节）、`docs/archive/prompts/prompt-next-session-2026-11-23-batch-br-write-amplification-and-zero-write-register.md`（重写）。
+- 门禁：**PASS**（详见 P-L.8.1）。
+- **不入库**（红线照旧）：`librime`（submodule dirty）、`reports/**`、`release/`、`scripts/verify/*.ps1`、`env.bat`、`msbuild*.log`。
+
+#### P-L.8.1 门禁结果（本轮实跑，2026-11-25 19:16）
+
+- `test\TestFluxingCloud` **编译 + 运行 = PASS**：编译 `MSBUILD_EXIT=0`（产出 `release\TestFluxingCloud.exe`，mtime 2026-11-25 19:16:44）、运行 `RESULT: PASS=924 FAIL=0`（`TEST_EXIT=0`；回环回归 `PASS=11 FAIL=0`）⇒ 与上一轮基线 `PASS=924 FAIL=0` **逐字一致**。
+- 编译姿势（`weasel.sln` **不含** `test\TestFluxingCloud` ⇒ 必须单独 msbuild 且显式带 `/p:SolutionDir=`）：`"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe" test\TestFluxingCloud\TestFluxingCloud.vcxproj /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=F:\soft\00selfmade\rime_claude\ /m /v:minimal`（`RELEASE_BUILD=1`）。
+- `clang-format` 定点（`C:\Python314\Scripts\clang-format.exe` 18.1.8，`--dry-run --Werror --lines=580:600`）⇒ `CLANGFORMAT_EXIT=0`（**仅定点，不做全量格式化**）。
+- 说明：本轮**只改注释与文档、未改任何可执行代码** ⇒ 门禁数字与基线一致属预期；实现常量 `kBucketPushRowsPerRound = 2000` **未动** ⇒ 运行时行为与已验证 1.3.10 逐字一致（**未重出包装机**）。
+
+#### P-L.9 本轮未闭环项（承接 §P-K.8，**不要当成已完成**）
+
+1. **客户端 `bucket phase=2 pushed=N`（N>0）仍未取得**（本轮 `round_seen=False / summary_seen=False`）—— 触发链缺口见 P-L.4。
+2. **启动轮后无第二轮的触发链缺口**（P-L.4）—— **本轮新增**，需改码加诊断 ⇒ 新批次。
+3. 阶段 1「704/1,000」缺口成因未坐实（§P-K.4）。
+4. 「500 vs 704」拉取差异根因未坐实（§P-K.6；本轮不复现，P-L.5）。
+5. **尾部 24 桶结构性饿死**（D30 / AC-215 判据②）—— 修 §P-H.4（brow 落盘）前不会自愈。
+6. **AC-212 未判定**：缺「单轮完整 D1 写入量」与「桶包字节数 / 单桶写入耗时」埋点；本轮零写入对照轮**不提供**该数据。
+7. 阶段 3 切读**仍禁**（硬前置：云端历史 40,061 条须先完成桶化覆盖；handoff §O-1.1 / ADR 0077:411-412）。
+8. **AC-09 维持 FAIL**（不得改记）；生产阈值 80,000→20,000、BR-②′ 全局熔断、BR-⑤、腾讯云收口、定时任务合并 —— **均未授权、未动**。
