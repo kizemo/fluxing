@@ -1509,7 +1509,8 @@
 ### O-3 本轮边界与状态回读
 
 - 本轮 = **决策落档轮**：只写三份文档（本 handoff §O、`CLAUDE.md` §2 BR 指针、同批 relay prompt 就地改写）。
-- **未改任何产品代码 / 未跑门禁 / 未出包 / 未装机 / 未动生产 / 未 push**。状态原样：`AC-09 = FAIL`；客户端机器 `FLUXING_CLOUD_SYNC_BUCKET_PHASE` 已删 = **phase 0**；生产 Version `4f163326-f2a5-4c69-be56-24cb800e6915`；生产 `sync_buckets` 仍 **0 行**、`sync_items` 仍 **40,061 行**；门禁数字沿用 §M.7.3 的 `PASS=899 FAIL=0`（未重跑）；1.3.9 包与装机 exe sha256 不变。
+- **入库情况**：三份文档已按用户指令 commit 入库 = **`f8de78f`**（`docs(BR): 用户拍板落地轮 …`，`3 files changed, 58 insertions(+), 1 deletion(-)`；暂存前逐条核对仅 `CLAUDE.md` + handoff + prompt 三个文件，`librime` dirty submodule 与 `reports/**`、`scripts/verify/**`、`release/` 一律未 add）；**对 `kizemo/feat/100-cloud-sync` 仍 ahead 1、未 push**。
+- **未改任何产品代码 / 未跑门禁 / 未出包 / 未装机 / 未动生产**。状态原样：`AC-09 = FAIL`；客户端机器 `FLUXING_CLOUD_SYNC_BUCKET_PHASE` 已删 = **phase 0**；生产 Version `4f163326-f2a5-4c69-be56-24cb800e6915`；生产 `sync_buckets` 仍 **0 行**、`sync_items` 仍 **40,061 行**；门禁数字沿用 §M.7.3 的 `PASS=899 FAIL=0`（未重跑）；1.3.9 包与装机 exe sha256 不变。
 
 ### O-4 下一轮（BR-①g 实现轮）任务序与前置
 
