@@ -5619,6 +5619,90 @@ void TestBucketPageBudgetAndDiag() {
         "诊断行：全零行同样逐字");
 }
 
+namespace {
+
+// BR-1g / handoff M.8.4 rule 1 (inventory gate) + rule 2 (per-round row quota).
+void TestBucketInventoryGateAndQuota() {
+  // M.8.5 step 2: the existing diag line keeps its five verbatim fields.
+  {
+    fc::CloudBucketRoundStats s;
+    s.phase = 2;
+    s.pushed = 3;
+    s.skipped = 1;
+    const std::string line = fc::FormatBucketDiagLine(s);
+    Check(line == "bucket phase=2 pushed=3 skipped=1 pulled_buckets=0 pulled_items=0",
+          "diag line keeps five verbatim fields");
+  }
+
+  // Rule 2 constants: quota tracks the 20,000 row/day per-account budget at 10%.
+  Check(fc::kBucketPushRowsPerRound == 2000, "per-round bucket push quota is 2000 rows");
+  Check(fc::EstimateBucketWriteRows(1, false) == 2, "row estimate for one shard without tombstone");
+  Check(fc::EstimateBucketWriteRows(2, true) == 6, "row estimate for two shards with tombstone");
+
+  // Rule 1: a bucket holding any inventory-unproven entry is held back.
+  {
+    std::vector<fc::Entry> entries(3);
+    entries[0].key = "k0";
+    entries[1].key = "k1";
+    entries[2].key = "k2";
+    std::set<std::string> unproven;
+    Check(!fc::BucketHasUnprovenEntry(unproven, entries), "gate passes when inventory is proven");
+    unproven.insert("k1");
+    Check(fc::BucketHasUnprovenEntry(unproven, entries), "gate holds bucket with unproven entry");
+    unproven.clear();
+    unproven.insert("other");
+    Check(!fc::BucketHasUnprovenEntry(unproven, entries), "gate passes when unproven key is absent");
+    std::vector<fc::Entry> no_entries;
+    unproven.insert("k0");
+    Check(!fc::BucketHasUnprovenEntry(unproven, no_entries), "gate passes for empty bucket");
+  }
+
+  // Rule 2: quota selection truncates by whole buckets and keeps order.
+  {
+    size_t rows_used = 12345;
+    const std::vector<size_t> none_in;
+    Check(fc::SelectBucketsWithinQuota(none_in, 2000, &rows_used).empty(), "quota select on empty input");
+    Check(rows_used == 0, "quota select zeroes rows_used on empty input");
+
+    const std::vector<size_t> rows = {2, 2, 2, 2};
+    rows_used = 12345;
+    Check(fc::SelectBucketsWithinQuota(rows, 0, &rows_used).size() == 4, "quota 0 means unlimited");
+    Check(rows_used == 8, "quota 0 still reports rows_used");
+
+    rows_used = 12345;
+    Check(fc::SelectBucketsWithinQuota(rows, 8, &rows_used).size() == 4, "quota exactly fits every bucket");
+    Check(rows_used == 8, "quota exact fit reports full rows_used");
+
+    rows_used = 12345;
+    const std::vector<size_t> picked = fc::SelectBucketsWithinQuota(rows, 6, &rows_used);
+    Check(picked.size() == 3, "quota truncates the fourth bucket to next round");
+    Check(rows_used == 6, "quota truncation reports consumed rows");
+    bool ordered = true;
+    for (size_t i = 0; i < picked.size(); ++i) {
+      if (picked[i] != i) ordered = false;
+    }
+    Check(ordered, "quota selection keeps original bucket order");
+
+    const std::vector<size_t> big = {5000};
+    rows_used = 12345;
+    Check(fc::SelectBucketsWithinQuota(big, 2000, &rows_used).empty(), "oversized bucket is held, never partially pushed");
+    Check(rows_used == 0, "oversized bucket consumes no quota");
+  }
+
+  // Rule 2 authoritative diag line: a new line, the existing one is untouched.
+  {
+    const std::string line = fc::FormatBucketQuotaLine(7, 2, 4, 6, 2000);
+    Check(line.find("bucket quota ") == 0, "quota line starts with its own tag");
+    Check(line.find("held_unproven=7") != std::string::npos, "quota line reports held_unproven");
+    Check(line.find("held_quota=2") != std::string::npos, "quota line reports held_quota");
+    Check(line.find("rows_pushed=4") != std::string::npos, "quota line reports rows_pushed");
+    Check(line.find("rows_held=6") != std::string::npos, "quota line reports rows_held");
+    Check(line.find("quota_rows=2000") != std::string::npos, "quota line reports quota_rows");
+  }
+}
+
+}  // namespace
+
 int main() {
   ::SetConsoleOutputCP(CP_UTF8);
   std::printf("==== TestFluxingCloud · spec 100 阶段 B（契约与客户端纯逻辑）====\n");
@@ -5716,6 +5800,7 @@ int main() {
   TestBucketSidecarV2();
   TestBucketWireFormat();
   TestBucketPageBudgetAndDiag();
+  TestBucketInventoryGateAndQuota();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。

@@ -39,6 +39,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -534,6 +535,13 @@ struct CloudBucketRoundStats {
       0;  // 本轮发出的**桶级**推送请求数（AC-208 用它判「零请求」）
   int pull_requests = 0;  // 本轮发出的**桶级**拉取请求数
   int degraded = 0;  // 本轮降级（超限 ⇒ 改走逐条端点）的桶数
+  // ★ spec 103 · BR-①g 补排轮（ADR 0077 D12 / handoff §M.8.4）：两条生产闸门的
+  //   计数。**不进** FormatBucketDiagLine（既有五字段逐字不动 ⇒ AC-09 探针 v4
+  //   的前缀正则不破），改由 FormatBucketQuotaLine 另打一行。
+  int held_unproven = 0;  // 因「库存未证实」被整桶压住的桶数（规则 1）
+  int held_quota = 0;     // 因「每轮配额用尽」被延后的桶数（规则 2）
+  size_t rows_pushed = 0;  // 本轮**送出**的桶的行数估算（D1 写行口径）
+  size_t rows_held = 0;    // 本轮**因配额延后**的桶的行数估算
 };
 
 // ★ spec 103 · BR-①g：单页桶数上限（服务端 MAX_PULL_LIMIT = 100）。
@@ -563,6 +571,82 @@ inline std::string FormatBucketDiagLine(const CloudBucketRoundStats& s) {
          " skipped=" + std::to_string(s.skipped) +
          " pulled_buckets=" + std::to_string(s.pulled_buckets) +
          " pulled_items=" + std::to_string(s.pulled_items);
+}
+
+// ============================================================================
+// ★ spec 103 · BR-①g 补排轮（handoff §M.8.4 规则 1 / 规则 2 · ADR 0077 D12）
+//   生产闸门的**判定与算式**放在生产头里 ⇒ 单测断言的就是生产真正跑的东西
+//   （与 FormatBucketDiagLine / BucketPullMaxPages 同一手法）。
+// ============================================================================
+
+// 每轮桶推送的**行数配额**（D1 写行口径）。取 4,096 的理由：
+//   · 单词典全量补推 = 1,024 桶 = 64 分片 × 2 行 = **1,280 行**，删除批次再 +
+//     最多 1,024 行 ⇒ ≈2,304 行 ⇒ 一轮能扫完一个词典的全量补推；
+//   · 生产写预算护栏已定为 **每账号 20,000 行/日**（handoff §O-1.3）⇒
+//     4,096 行/轮 ⇒ 一天最多 8 轮触到配额上限，护栏不会被桶推送单独击穿；
+//   · D1 免费额度是**每个数据库 100,000 行/日**（全局口径，非每账号）⇒
+//     留出的余量要覆盖真实用户，客户端闸门是第一道防线。
+constexpr size_t kBucketPushRowsPerRound = 2000;
+
+// 规则 1 的**桶级压制判定**（handoff §M.8.4 规则 1）：桶内只要含**任一**未证实
+// 条目 ⇒ 整桶不推、侧车桶行不更新 ⇒ 下一轮仍判 changed ⇒ 自然续推。
+// 压制粒度取「整桶」而非「剔除单条」：桶是**整桶覆盖**的权威写（服务端按 bucket_id
+// 先 DELETE 后 INSERT），只剔除一条仍可能把本轮没拉到的远端条目抹掉。
+// unproven_keys 口径 = 本轮判定为 deferred 的条目**身份键集合**（Entry.key，
+// std::string）；库存已证实时集合为空 ⇒ 行为与本闸门之前逐字一致。
+// 墓碑（删除条目）不走逐键比对：其 item_key 是词典明文，与 64 位十六进制身份键
+// 不同属同一空间 ⇒ 库存未证实时由调用方整组压住（deleted.clear()）。
+inline bool BucketHasUnprovenEntry(
+    const std::set<std::string>& unproven_keys,
+    const std::vector<Entry>& entries) {
+  if (unproven_keys.empty())
+    return false;
+  for (size_t i = 0; i < entries.size(); ++i) {
+    if (unproven_keys.count(entries[i].key) != 0)
+      return true;
+  }
+  return false;
+}
+
+// 一个桶批次预计的 D1 **行写入数**（与规则 2 的配额同口径）：服务端每分片
+// 一次 DELETE+INSERT 计 2 行；墓碑按整桶一次 DELETE+INSERT 再计 2 行。
+inline size_t EstimateBucketWriteRows(size_t shard_count, bool has_deletions) {
+  return shard_count * 2 + (has_deletions ? 2 : 0);
+}
+
+// 规则 2「每轮桶推行数配额」的**选择算式**：按候选顺序（= 桶序，稳定可复现）
+// 逐个累加预计行数，**一旦某个桶批次会超出配额就停下**（后续桶一律延后，
+// 不做插队重排，⇒ 续传顺序与探针可预测）。返回被选中的下标。
+//   · rows_in_order：与候选桶同序的每桶预计行数；
+//   · quota_rows：本轮配额（0 = 不限）；
+//   · rows_used：出参，选中桶的行数合计。
+inline std::vector<size_t> SelectBucketsWithinQuota(
+    const std::vector<size_t>& rows_in_order, size_t quota_rows,
+    size_t* rows_used) {
+  std::vector<size_t> picked;
+  size_t used = 0;
+  for (size_t i = 0; i < rows_in_order.size(); ++i) {
+    if (quota_rows != 0 && used + rows_in_order[i] > quota_rows)
+      break;
+    used += rows_in_order[i];
+    picked.push_back(i);
+  }
+  if (rows_used)
+    *rows_used = used;
+  return picked;
+}
+
+// 两条闸门的诊断行（**无条件打印**，即使 pushed=0）：复跑探针要靠它区分
+// 「因未证实被压住」/「因配额被延后」/「因无改动零写」这三种零写。
+// 与 FormatBucketDiagLine 一样放在生产头里 ⇒ 单测断言生产写出的那一行。
+inline std::string FormatBucketQuotaLine(int held_unproven, int held_quota,
+                                         size_t rows_pushed, size_t rows_held,
+                                         size_t quota_rows) {
+  return "bucket quota held_unproven=" + std::to_string(held_unproven) +
+         " held_quota=" + std::to_string(held_quota) +
+         " rows_pushed=" + std::to_string(rows_pushed) +
+         " rows_held=" + std::to_string(rows_held) +
+         " quota_rows=" + std::to_string(quota_rows);
 }
 
 class CloudSyncCoordinator {
@@ -640,6 +724,7 @@ class CloudSyncCoordinator {
   // · legacy_endpoint_active：逐条端点是否仍可用（超限桶降级时用）。
   bool PushChangedBuckets(const std::vector<Entry>& merged,
                           const std::vector<Entry>& remote_entries,
+                          const std::set<std::string>& unproven_keys,
                           bool remote_complete,
                           bool legacy_endpoint_active,
                           CloudBucketRoundStats* stats,

@@ -1324,6 +1324,8 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
 
   std::vector<bool> locally_modified(local_entries.size(), false);
   std::vector<bool> deferred(local_entries.size(), false);
+  // ★ BR-①g 规则 1：记录被「库存未证实」压住的条目键（整桶判定的真相源）。
+  std::set<std::string> unproven_keys;
   // R1 命中（沿用了远端 HLC）的本地条目下标 ⇒ 侧车重建时要写进去（R3）。
   std::vector<bool> remote_matched(local_entries.size(), false);
   // ★ ADR 0076 D2-5a-9 ③：侧车里存的是**旧口径**（全载荷哈希）的那条 ⇒
@@ -1424,6 +1426,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
       //   拉取**没有扫完整个云端库存** ⇒ 库存未证实 ⇒ 本轮**不推送**
       //   （延后到库存扫完后的轮次）。
       deferred[i] = true;
+      unproven_keys.insert(entry.key);
       ++deferred_count;
     }
   }
@@ -1610,9 +1613,9 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
        direction == SyncDirection::kBoth) &&
       bucket_scan_complete) {
     std::string bucket_err;
-    if (!PushChangedBuckets(merged, remote_entries, bucket_scan_complete,
-                            legacy_endpoints, &last_bucket_stats_, out,
-                            &bucket_err)) {
+    if (!PushChangedBuckets(merged, remote_entries, unproven_keys,
+                            bucket_scan_complete, legacy_endpoints,
+                            &last_bucket_stats_, out, &bucket_err)) {
       backend_->EndMaintenance(&ignored);
       const std::string reason =
           bucket_err.empty() ? "推送云端桶失败。" : bucket_err;
@@ -1937,6 +1940,7 @@ bool CloudSyncCoordinator::PullBucketsIntoRemote(
 bool CloudSyncCoordinator::PushChangedBuckets(
     const std::vector<Entry>& merged,
     const std::vector<Entry>& remote_entries,
+    const std::set<std::string>& unproven_keys,
     bool remote_complete,
     bool legacy_endpoint_active,
     CloudBucketRoundStats* stats,
@@ -1948,6 +1952,13 @@ bool CloudSyncCoordinator::PushChangedBuckets(
     return false;
   }
   std::vector<uint8_t> bucket_mac_key;
+  // ★ BR-①g 规则 1：库存完整性闸门。阶段 3（切读）及以后老端点不再拉取库存，
+  // 此时仍必须要求桶扫完整；阶段 1/2 期间老端点在跑，其库存扫描已为每条本地
+  // 条目建立 HLC 基线（未证实者已被 R2 压住并登记进 unproven_keys），可作旁证。
+  bool inventory_complete = remote_complete;
+  // ★ BR-①g 规则 2：每轮桶推行数配额（估算写入行）。
+  const size_t quota_rows = kBucketPushRowsPerRound;
+  size_t held_unproven = 0, held_quota = 0, rows_pushed = 0, rows_held = 0;
   if (!DeriveBucketMacKey(enc_key_, &bucket_mac_key, err))
     return false;
 
@@ -2046,6 +2057,14 @@ bool CloudSyncCoordinator::PushChangedBuckets(
     }
     // 桶级时序 = 桶内条目时序的最大值；**必须严格大于**已存值，否则服务端的
     //   整桶守卫会把一次真实变更整桶跳过（AC-205）。
+    // ★ BR-①g 规则 1：桶内任一条目库存未证实 ⇒ 整桶本轮不推。
+    // 服务端按 bucket_id 先 DELETE 后 INSERT，未列出的远端条目会被静默删除，
+    // 因此宁可本轮零写入，也不允许「半库存」覆盖整桶。被压的桶不写 brow，
+    // 指纹保持旧值 ⇒ 下一轮自动续推（与既有「未推桶保留旧指纹」同一机制）。
+    if (!inventory_complete && BucketHasUnprovenEntry(unproven_keys, entries)) {
+      ++held_unproven;
+      continue;
+    }
     Hlc bucket_hlc = AggregateBucketHlc(envelopes);
     if (known) {
       Hlc stored;
@@ -2065,6 +2084,31 @@ bool CloudSyncCoordinator::PushChangedBuckets(
   }
 
   // 5) 分批推送（单请求 ≤ 64 桶 = 服务端 MAX_PUSH_BUCKETS）。
+  // ★ BR-①g 规则 2：每轮桶推行数配额。按声明序累计估算写入行，超出配额的
+  // 桶本轮不推；被压的桶同样不写 brow ⇒ 下一轮自动续推，无需另造水位。
+  std::vector<size_t> bucket_write_rows;
+  size_t bucket_rows_total = 0;
+  for (size_t i = 0; i < push_items.size(); ++i) {
+    const size_t est = EstimateBucketWriteRows(1, false);
+    bucket_write_rows.push_back(est);
+    bucket_rows_total += est;
+  }
+  size_t quota_rows_used = 0;
+  std::vector<size_t> quota_slots =
+      SelectBucketsWithinQuota(bucket_write_rows, quota_rows, &quota_rows_used);
+  rows_pushed = quota_rows_used;
+  rows_held = bucket_rows_total - quota_rows_used;
+  if (quota_slots.size() < push_items.size()) {
+    held_quota = push_items.size() - quota_slots.size();
+    std::vector<CloudBucketPushItem> quota_items;
+    std::vector<std::string> quota_fingerprints;
+    for (size_t i = 0; i < quota_slots.size(); ++i) {
+      quota_items.push_back(push_items[quota_slots[i]]);
+      quota_fingerprints.push_back(push_fingerprints[quota_slots[i]]);
+    }
+    push_items.swap(quota_items);
+    push_fingerprints.swap(quota_fingerprints);
+  }
   std::vector<CloudSidecarBucketRow> new_brow;
   bool push_ok = true;
   std::string push_err;
@@ -2204,6 +2248,13 @@ bool CloudSyncCoordinator::PushChangedBuckets(
       new_brow.push_back(row);
     }
   }
+  stats->rows_pushed = rows_pushed;
+  stats->rows_held = rows_held;
+  // ★ BR-①g 规则 1/2 的无条件诊断行（只新增，不删改既有 phase 行）。
+  diag::AppendLine("cloudsync",
+                   FormatBucketQuotaLine(static_cast<int>(held_unproven),
+                                         static_cast<int>(held_quota),
+                                         rows_pushed, rows_held, quota_rows));
   bucket_rows_ = new_brow;
 
   if (!push_ok) {
