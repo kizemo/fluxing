@@ -1814,3 +1814,29 @@
 3. runner 死因未坐实（外部终止，无 stderr 留存）。
 4. 配额唯一值仍待用户拍板；**AC-09 仍 FAIL**、**AC-212 仍未判定**（两者均未改记）。
 
+### P-J 【重大发现】User 级环境变量**不进入已运行父进程的环境块** ⇒ 所谓「阶段 2」实际跑成了「阶段 1」
+
+#### P-J.1 事实链（已实测坐实）
+
+- runner 在 17:45:59 执行 `Set-Phase 2`（User 级 + runner **自身进程级**）⇒ 注册表 `FLUXING_CLOUD_SYNC_BUCKET_PHASE = 2`。
+- 但 17:46:02 由 runner 拉起的实例（pid 86888）在 17:46:56 **自行消失**（§P-H.5，原因仍未坐实）。
+- 17:52:43 由**本会话的 shell** 手动拉起 pid 9328。本会话的 shell 进程是**更早**创建的（会话起始即在），其**环境块在进程创建时即固定**；Windows `CreateProcess`（`lpEnvironment = NULL`）**原样继承父进程环境块**，**不会**重新读注册表 ⇒ **子进程看不到 17:45:59 才写入注册表的 `phase=2`**。
+- 实测佐证：18:04:54 该实例的诊断行 = `bucket phase=1 pushed=0 skipped=0 pulled_buckets=704 pulled_items=65104` —— **打印的是 1 不是 2** ⇒ `std::getenv` 取到空值 ⇒ `ResolveBucketPhase` 走**回退分支**（`CloudBucketSync.cpp:256-259`：环境变量缺失或非法 ⇒ 忽略并回退侧车阶段）⇒ 生效阶段 = **侧车里的 `phase 1`**。
+- ⇒ **18:04:54 那一轮是阶段 1（双写），不是阶段 2（双写 + 交叉校验）** ⇒ **「阶段 2 真机轮」至今从未真正发生过**。
+- 旁证：阶段 1 的启动轮（16:41:49）同样只打 `bucket phase=1`；**704 桶拉取第一次发生在 18:04:54**，耗时约 **11 分钟**（17:53:37 → 18:04:54）—— 桶拉取是本轮新增的重负载。
+- ⇒ 本条**订正** §P-H.5 末段「已手动拉起 pid 9328（User 级变量仍是 2 ⇒ 继承阶段 2）」—— **该推断错误**，实测生效阶段是 1。
+
+#### P-J.2 同源缺陷：v1 回滚脚本的**回滚也会失效**（故已取消 v1）
+
+- `phase2-closeout.ps1`（v1）的回滚 = 「User 级设 0 → 重启 WeaselServer → 等 `bucket phase=0`」。但重启出的子进程**同样继承陈旧环境块**（看不到 User 级 0）⇒ 回退到**侧车 phase**（当时仍是 1）⇒ **永远等不到 `bucket phase=0`** ⇒ 回滚必然失败 ⇒ **机器会停在阶段 1**。
+- ⇒ 已**取消 v1**（后台任务 `bg_d3a3657a`），改用 **v2** `reports/fluxing-br-1g/phase2-closeout-v2.ps1`（**不入库**）：在**拉起子进程之前**显式设置**进程级** `$env:FLUXING_CLOUD_SYNC_BUCKET_PHASE`（子进程必然继承），并把「回滚后侧车 `phase` 若仍非 0 ⇒ 精确改写那一行」做成兜底（对应 §P-I.5 的硬前置）。
+- v2 行为：① 以**真 phase 2** 拉起（User=2 **且**进程级=2）→ 启动轮（kPullOnly，约 11 min 拉 704 桶）→ 定时 kBoth 轮推桶；② 等 `quota_rows=`（唯一可靠的推轮判据）；③ 取证（quota / `bucket phase=` / `reconcile ` / `push batch items=` / `semantic `）；④ 回滚：User=0 **且**进程级=0 → 重启 → 等 `bucket phase=0` → 清 User 级变量 → 回读侧车（必要时改写 `phase` 行）；⑤ 全程逐行落 `reports/fluxing-br-1g/phase2-closeout-v2-run.log`。
+- 附带健壮性：v2 每轮检测 WeaselServer 存活，进程消失则按真 phase 2 重拉（上限 3 次）—— 应对 §P-H.5 那个「自行消失」的老毛病。
+
+#### P-J.3 写给下一轮的硬规则
+
+1. **凡用「外部拉起 WeaselServer」做真机实验，必须在拉起命令自身里设好进程级环境变量**；不能依赖 User 级变量（除非拉起者进程本身是在变量写入**之后**才创建的）。
+2. 诊断行 `bucket phase=` 是**生效阶段**的权威回读；**不得用「User 级变量值」推断生效阶段**。
+3. 「阶段 2 是否真的跑过」的判据 = 日志里出现过 **`bucket phase=2`**；本轮之前**从未出现过** ⇒ 阶段 2 真机轮**仍待跑**（v2 正在跑）。
+4. 推轮判据仍是 `quota_rows=`（结构性只在 `PushChangedBuckets` 内打印）。
+
