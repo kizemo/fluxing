@@ -1596,7 +1596,7 @@
 5. **`.specify/specs/103-client-bucket-sync/tasks.md` 不可信**（与 §M 实测矛盾：基线仍写 813、实现仍写「未入版本控制」、无「R2 闸门进桶路径 / 每轮桶推行数配额」两条规则、AC 编号混用 spec 102 的 AC-108/AC-112）⇒ 判进度只认 handoff §M.8 / §O / §P + 磁盘实况。
 6. 旧坑仍有效：bash 里 `cd` 后写文件被硬安全策略拒绝（一律绝对路径 + `git -C`）；正则以 `\\` 开头被误判 UNC；单字母函数名被内置别名遮蔽（`h`=`Get-History`）；`Remove-Item` 删日志被整条拒；`verify-installed.ps1` 必须在 **pwsh 7** 下跑。
 7. **`reports/` 里的补丁脚本 ≠ 已落码的改动（新增）** — `reports/fluxing-br-1g/patch-cpp-rules.ps1` 是一份**从未应用**的补丁脚本（意图去掉 `bucket_scan_complete` 一票否决、只拦「拉取失败 / remote_entries 不可信」两类真风险）；**本轮源码 cpp:1611-1614 仍保留 `bucket_scan_complete` 条件** ⇒ **不要被 `reports/**` 里的 `.ps1` 误导成「已改」**；任何改动状态只认 `WeaselServer/**` 的源码与 `git diff`。
-8. **`AC-213` / `AC-214` 是悬空引用（新增）** — 全仓 `spec 103` 只到 **AC-212**（`.specify/specs/103-client-bucket-sync/spec.md`:119，`git show fdc71b9` 为该文件唯一提交）；客户端实现入库笔 `f7a62f6` **未触及** spec 103；唯��提及处是 `reports/fluxing-br-1g/section-p.md:72` 指称的 spec 版本 ⇒ **那份版本从未落盘** ⇒ 本轮**未改** spec 103。若阶段 1/2 真机判据要编号载体，须**新写** AC（不得引用 213/214）。
+8. **`AC-213` / `AC-214` 是悬空引用（新增）** — 全仓 `spec 103` 只到 **AC-212**（`.specify/specs/103-client-bucket-sync/spec.md`:119，`git show fdc71b9` 为该文件唯一提交）；客户端实现入库笔 `f7a62f6` **未触及** spec 103；唯一提及处是 `reports/fluxing-br-1g/section-p.md:72` 指称的 spec 版本 ⇒ **那份版本从未落盘** ⇒ 本轮**未改** spec 103。若阶段 1/2 真机判据要编号载体，须**新写** AC（不得引用 213/214）。
 9. **ADR 内部同一张表三名一物（新增）** — 「每桶条目数 / 桶数 / 单轮预估传输时长 / 超时窗口」在 ADR 0077:282/:395/:451/:460 记作 **AC-112**，在 spec 103:119 记作 **AC-212**，而 ADR 0077:460 末句却写「见 spec 103 的 **AC-203**」（AC-203 实际是分批参数）⇒ **以 `SPEC103:119`（AC-212）为准**，ADR 编号待订正。
 
 ### P-D. Git 现状（本轮收口）
@@ -1840,3 +1840,113 @@
 3. 「阶段 2 是否真的跑过」的判据 = 日志里出现过 **`bucket phase=2`**；本轮之前**从未出现过** ⇒ 阶段 2 真机轮**仍待跑**（v2 正在跑）。
 4. 推轮判据仍是 `quota_rows=`（结构性只在 `PushChangedBuckets` 内打印）。
 
+### P-K. 阶段 2 真机复跑 · 实证、工具缺陷与收尾（2026-11-25 18:10–19:xx）
+
+> 本节是 §P-I/§P-J 之后的**本轮最新事实**，与上文冲突处以本节为准。
+> 本轮**未改任何产品代码**（只读码 + 真机复跑 + 文档）；唯一新增的落盘产物是
+> `reports/fluxing-br-1g/phase2-closeout-v3.ps1`（看护脚本修正版，**不入库**）。
+
+#### P-K.1 结论速览
+
+| 判据 | 本轮结果 | 依据 |
+| --- | --- | --- |
+| 真 phase=2 生效 | **PASS** | 18:14:34.250 `bucket phase=2 ...`（进程级 env=2 的那一个 pid） |
+| 阶段 2 桶推轮真机执行 | **PASS** | 18:24:38.527 `bucket quota ... quota_rows=2000`（该行只在 `PushChangedBuckets` 内打印 ⇒ 结构性证明） |
+| 阶段 2 逐条端点双写 | **PASS** | 18:22:42.457 `push batch items=13 elapsed_ms=4813 http=200` |
+| 生产 D1 桶落库 | **PASS** | `sync_buckets` 704 → **1,000** 行（1,000 互异键、0 空行、item_count 65–120） |
+| 客户端自报 `bucket phase=2 pushed=N` | **未取得**（我方看护缺陷，见 P-K.5） | 汇总行落盘前进程被 v2 看护终止 |
+| 单轮 D1 写入量（AC-212） | **部分达成**（见 P-K.4 / P-K.6） | 轮前轮后差分被「中途截断轮」污染 |
+| 回滚双判据 | **PASS** | `bucket phase=0` 已见 + 侧车 `phase` 行 = 0 + User 级变量已清 |
+| AC-09 | **仍 FAIL，不改记** | 只有日志出现 `AC09_VERDICT=PASS` 才可改；本轮无此行 |
+| AC-212 | **未判定** | 缺「单轮完整写入量」与「桶包字节数 / 单桶耗时」埋点 |
+| AC-215（每轮桶推行数配额） | 概念已落 ADR 0077 D29 + spec 103；**唯一值待用户拍板** | 见 P-K.3 |
+
+#### P-K.2 阶段 2 真机证据链（逐行时间轴）
+
+| 时刻 | 日志行 | 含义 |
+| --- | --- | --- |
+| 18:10:05 | WeaselServer pid **46764** 启动 | **进程级** `FLUXING_CLOUD_SYNC_BUCKET_PHASE=2`（User 级同设 2）⇒ 阶段真伪**不靠 User 变量推断** |
+| 18:14:34.247 | `reconcile scan_complete=0 matched=0 deferred=0 divergent=0 pushed=0` | 启动轮 = kPullOnly（**桶推闸门结构性关闭**，方向源 `CloudSyncEngine.cpp:211-212`） |
+| 18:14:34.250 | **`bucket phase=2 pushed=0 skipped=0 pulled_buckets=500 pulled_items=46229`** | **真 phase=2 生效**（这是首个 phase=2 的 `bucket phase=` 行） |
+| 18:22:35.359 | `semantic legacy_rows=0 legacy_held=0` | 语义指纹口径下**无遗留旧口径行** ⇒ 无需抬高本地 HLC / 重锚 |
+| 18:22:42.457 | `push batch items=13 elapsed_ms=4813 http=200` | 阶段 2 的**逐条端点**（双写的一边）已通 |
+| **18:24:38.527** | **`bucket quota held_unproven=0 held_quota=24 rows_pushed=2000 rows_held=48 quota_rows=2000`** | **阶段 2 桶推轮真机执行**（本行只在 `CloudSyncService.cpp:2254-2257` 的 `PushChangedBuckets` 内打印）⇒ `held_unproven=0` ⇒ 规则 1 在阶段 1/2 恒不生效（与 §M.8.4 预期一致） |
+| 18:24:46 | v2 看护 `=== ROLLBACK TO PHASE 0 ===` | **工具缺陷**：判据选错（见 P-K.5） |
+| 18:24:51 | 新 pid **152852** 启动（phase=0） | 回滚重启 |
+| 18:28:41 | 侧车被新进程重写（size 9,944,635） | 侧车 `phase` 行写回 **0** |
+| 18:28:52 | 看护 `VERDICT[rollback]=PHASE0_OBSERVED` / `USER_PHASE_CLEARED=[]` / `SIDECAR_PHASE_LINE=phase\t0` | **回滚双判据 PASS** |
+
+#### P-K.3 配额记账口径 —— 本轮读码坐实的新事实（影响配额唯一值拍板）
+
+* `CloudSyncService.h:621-623` `EstimateBucketWriteRows(shard_count, has_deletions) = shard_count*2 + (has_deletions?2:0)`
+  ⇒ **一个桶 = 2 行**（服务端按分片先 DELETE 后 INSERT）。
+* `CloudSyncService.h:597` `kBucketPushRowsPerRound = 2000` ⇒ **每轮最多 1,000 个桶**。
+* `CloudSyncService.cpp:2096-2111`：`SelectBucketsWithinQuota` **按声明序累加、遇超即停、不插队重排**。
+* **候选数反推**：诊断行 `rows_pushed=2000 / rows_held=48` ⇒ 候选桶数 = (2000+48)/2 = **1,024**
+  = D15 的 64×16 全量分片空间 ⇒ **每轮候选恒为 1,024**（brow 不落盘 ⇒ 每轮都判「本地改动」）。
+* **结构性饿死**：1,024 候选 → 每轮只能送 1,000 ⇒ **尾部 24 桶每轮被同一位置截断、永远轮不到**
+  ⇒ 实证：阶段 1 落库 704、阶段 2 落库 1,000，**至今 `sync_buckets` 恒 1,000 ≠ 1,024 ⇒ 至少 24 桶从未上云**。
+  ⇒ 这是 §P-H.4（brow 不落盘）未修前的**结构性后果**，修 brow 落盘后本项自动缓解；
+  在此之前，**尾部桶永久不上云**（不是「下一轮续推」——下一轮还是同一批前 1,000）。
+* **口径失真（新登记）**：`rows_pushed` 记的是「**选中**桶数 × 2」，**不是**实际送出/落库行数；
+  中途请求失败时（`push_ok=false; break`，`:2129-2135`）护栏记账会**高于**实际写入（方向保守，不危险，但数字会骗人）。
+
+#### P-K.4 阶段 1 的「704 / 1,000」缺口 —— **未坐实**（如实登记）
+
+* 阶段 1（17:45:55.204）：配额记账 `rows_pushed=2000`（= 选中 1,000 桶），但
+  `bucket phase=1 pushed=704 skipped=0`（17:45:55.402），服务端 `sync_buckets` 落库 **704** 行
+  （704 互异键、Σ item_count=65,104、avg 92.48、max 120）。
+* 缺口 **296 桶**：服务端既未 accepted 也未 skipped（`skipped=0`）⇒ 候选成因：
+  ① 中途某次 `PushBuckets` 请求失败（`:2129-2135` 的 `break`）而错误**只进 UI、不进 notify 日志**
+  （本轮回查 17:45–18:00 日志无任何 error/fail 行）；
+  ② 服务端只回部分 accepted 键；
+  ③ 服务端写预算/配额在该请求点被拒但映射成了笼统错误。
+* **阶段 2 缺口消失**（1,000 / 1,000 落库）⇒ 不是结构性上限。
+* 未坐实 ⇒ 登记为**新未闭环项**，需在服务端桶推 handler 加一行「请求序号 / 桶数 / accepted / skipped / 错误码」诊断后复跑（属新批次）。
+
+#### P-K.5 工具缺陷（本轮最贵的教训）：v2 看护的「推轮判据」选错 ⇒ 客户端汇总行永久缺失
+
+* **根因**：`bucket quota ... quota_rows=` 行在 `PushChangedBuckets` **内部**打印
+  （`CloudSyncService.cpp:2254-2257`）；轮汇总行 `bucket phase=... pushed=N` 在**调用方**打印
+  （`:1054-1057`，位于 push 返回之后，中间还隔着 `EndMaintenance` 与侧车保存）。
+* **v2 的错**：`phase2-closeout-v2.ps1:86-92` 以「见到含 `quota_rows=` 的行」为推轮判据 ⇒
+  18:24:46 立即回滚 ⇒ 18:24:47 kill 进程 ⇒ 18:24:51 以 phase 0 重启 ⇒
+  **推轮在打印汇总行前被中途截断** ⇒ 客户端自报 `bucket phase=2 pushed=N` 永远拿不到。
+* **代价**：本轮 D1 差分（+1,613 行 `rows_written_24h`）属**被截断轮**，**不得登记为「完整单轮写入量」**。
+* **修正**：v3 看护 `reports/fluxing-br-1g/phase2-closeout-v3.ps1`
+  判据改为「**quota 行之后**出现 `bucket phase=2 pushed>0`」才回滚，并加**轮前 / 轮后 D1 差分**。
+* **通用教训（写给下一批）**：凡「诊断行在函数内、汇总行在调用方」的埋点，
+  **判据必须用汇总行**；用函数内埋点当「动作完成」判据 ⇒ 必然中途截断。
+
+#### P-K.6 「500 vs 704」拉取差异 —— **仍未坐实**
+
+* 阶段 1 同类轮拉到 **704 桶 / 65,104 条**；阶段 2 启动轮只拉到 **500 桶 / 46,229 条**（密度几乎相同 92.46 vs 92.48）。
+* 已钉死两端语义：客户端 `since = full_scan ? 0 : bucket_seq_`（`:1849`）；服务端 `after = max(since, cursor)`、
+  SQL `WHERE user_id=? AND id > ? ORDER BY id ASC LIMIT ?+1`（`sync-buckets.ts:344-356`）。
+* 已排除：页数上限（`BucketPullMaxPages` = max(16, 词典数×11+2)，硬顶 32 页）、服务端自愈删除（D1 恒 1,000 行、id 2..1011）、
+  侧车读写不对称（v2 解析器 `:2508-2528` 正确读 `bseq`）。
+* **数值上等价于服务端只回了 `id > 205` 的 500 行**，而客户端持久化游标是 **705** ⇒
+  **有效 `after` 实为 205 的来源仍未知**（候选：客户端实际发出的 `cursor`/`next_cursor` 路径、或轮内内存游标被别的路径改写）。
+* 下一步：在服务端桶拉 handler 或客户端加一行「有效 since / cursor / 返回首末 id」诊断（**需改码 + 重出包 + deploy ⇒ 新批次**）。
+
+#### P-K.7 回滚与收尾（本轮已完成）
+
+* 回滚流程：进程级 env=0 + User 级 env=0 → 重启 WeaselServer → 等 `bucket phase=0` → 清 User 级变量 → 校验侧车 `phase` 行。
+* **双判据均 PASS**：notify 日志出现 `bucket phase=0`（看护 `VERDICT[rollback]=PHASE0_OBSERVED`）
+  + 侧车头部 `phase` 行 = **0**（size 9,944,635、mtime 18:28:41、`bseq=705`、`brow` 行数 = **0**）。
+* User 级 `FLUXING_CLOUD_SYNC_BUCKET_PHASE` 已清（`USER_PHASE_CLEARED=[]`）。
+* 生产 D1 只读复核（18:27）：`sync_buckets` = **1,000** 行（id 2..1011、1 device、Σ item_count = 92,353、
+  1,000 互异键、**0 行 item_count=0**、item_count 65–120）；`sync_items` = **40,066**（max id 71,124）；
+  `rows_written_24h` = **45,862**（18:05 基线 44,249 ⇒ **+1,613**，含 18:22 的逐条推送与被截断的桶推轮）。
+
+#### P-K.8 本轮新增未闭环项（**不要当成已完成**）
+
+1. **阶段 1「704/1,000」缺口**成因未坐实（P-K.4）。
+2. **「500 vs 704」拉取差异**未坐实（P-K.6）。
+3. **尾部 24 桶结构性饿死**（P-K.3）—— 修 §P-H.4（brow 落盘）前不会自愈。
+4. **客户端 `bucket phase=2 pushed=N` 汇总行**本轮缺失（P-K.5）；v3 复跑若完成则补齐。
+5. **AC-212 未判定**：缺「单轮完整 D1 写入量」与「桶包字节数 / 单桶写入耗时」埋点。
+6. **配额唯一值待用户拍板**（2,000 / 4,096 / 8,000）：P-K.3 的口径（2 行/桶 ⇒ 1,000 桶/轮）是新依据，
+   拍板值 ≠ 2,000 时**必须改实现常量并重出包装机**。
+7. 阶段 3 切读**仍禁**（硬前置：云端历史 40,061 条须先完成桶化覆盖；handoff §O-1.1 / ADR 0077:411-412）。
+8. AC-09 维持 **FAIL**；生产阈值 80,000→20,000、BR-②′ 全局熔断、BR-⑤、腾讯云收口、定时任务合并 —— **均未授权、未动**。
