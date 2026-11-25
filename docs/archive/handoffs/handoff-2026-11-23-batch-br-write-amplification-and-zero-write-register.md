@@ -920,4 +920,72 @@
 - ⑥ 两个定时任务是否合并 —— **等用户拍板**；当前仍为「主链 08:10:46 + 回检 10:30」两个独立任务（推荐保持分离，理由见 §J-7）；
 - 本轮**未跑门禁**（无产品代码改动，沿用 §J-2 的 `typecheck` 0 / `check` 0 = 13 文件 / 164 用例）；**未部署、未迁移、未改生产**。
 
+#### §K BR-①f 生产链自动轮实测（2026-11-25 08:11–08:47，北京）
+
+**本轮性质** = **生产链第 0–7 步自动执行 + 生产变更（迁移 + 部署）+ 收尾双产物**（**本轮未改任何产品代码**；服务端桶化代码早在 `a7c61e0` 入库）。**执行者** = 一次性定时任务 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`（runAtMs 1795565446336 = 北京时间 2026-11-25 08:10:46）。
+
+**生产链八段结果总表**（哨兵 `reports/fluxing-br-1f/chain-progress.log`）：
+
+| 段 | STATUS | 关键实测数字 |
+|---|---|---|
+| STEP 0 额度活性探针 | DONE | `SELECT COUNT(*) FROM d1_migrations` ⇒ n=2、rows_read=2、rows_written=0、PROBE_EXIT=0、**无 `[code: 7500]`** ⇒ 额度已按 UTC 日重置；d1 info 当时 rows_read_24h=531 / rows_written_24h=12 / num_tables=8 / database_size=19,255,296 |
+| STEP 1 AC-09 复跑 | DONE（**判定 FAIL**） | `AC09_VERDICT=FAIL`、`AC09_SUMMARY stages=2 overall=FAIL strict=FAIL`；Legacy 段 table_write_delta=8 / count_delta=0 / rows24h_delta=40 / push=1；Deleted 段 table_write_delta=0 / count_delta=0 / rows24h_delta=0 / push=1；客户端 PID 57640、`WeaselServer.exe` sha256 `A106522FD8F5AC31ABBF392FA906F76ABFD73032A73640E0FE45742057394A94`（= a-9 语义指纹版期望值） |
+| STEP 2 迁移 0003+0004 | DONE | `wrangler d1 migrations apply DB --remote` ⇒ **MIGRATE_EXIT=0**，一次应用 0003+0004；`num_tables` 8→**9**；database_size 19,255,296→**21,295,104** |
+| STEP 3 EXPLAIN 复测 | DONE | `sync_items` 护栏 COUNT ⇒ `SEARCH sync_items USING COVERING INDEX idx_sync_user_updated (user_id=? AND updated_at>?)`；桶侧护栏 COUNT ⇒ `idx_sync_buckets_user_updated`；桶侧拉取真实形态（`user_id=? AND id>? ORDER BY id ASC`）⇒ `idx_sync_buckets_user_id (user_id=? AND id>?)` ⇒ **三条读计划全部命中新索引** |
+| STEP 4 部署 Worker | DONE | `npm run deploy` ⇒ **DEPLOY_EXIT=0**；**新生产 Version `4f163326-f2a5-4c69-be56-24cb800e6915`**（Created 2026-11-25T00:28:02.846Z）；绑定回读 `WRITE_BUDGET_ROWS_PER_DAY=80000` / `WRITE_BUDGET_BUCKETS_PER_DAY=4000` ⇒ ADR 0077 D8 双口径在生产生效 |
+| STEP 5 生产桶端点冒烟 | DONE | **9/9 全 PASS**：login A/B=200；push1200 ⇒ accepted 含目标 key / skipped=[] / server_seq=1；同 HLC 再推 ⇒ accepted=[] 且 skipped 含目标 key（**HLC 守卫生效**）；pull A=200 / buckets 含目标 / has_more=false / next_cursor 存在 / server_seq=1 / **cipher 原样往返=true** / item_count=1；**pull B 可见第一台推的桶（跨设备可见）**；清理 ⇒ 探针 `sync_buckets` 行 changes=1 → 残留 **0**、`br.%` users 残留 **0**、`VERDICT_CLEANUP=PASS`（`{"users":0,"ev":0,"devices":0,"rt":0,"sync":0}`） |
+| STEP 6 BR-①g 客户端桶化 | **SKIP** | 闸门「第 1–5 步全部 DONE 且关键判定 PASS」不满足（STEP 1 关键判定 AC-09 = FAIL）⇒ 记 `STEP=6 STATUS=SKIP BLOCKED_BY=STEP1 REASON=AC09_VERDICT_FAIL NO_CLIENT_CODE_CHANGED` ⇒ **未改任何客户端代码**（分桶打包 / 侧车 v2 / seq 归零均未开工） |
+| STEP 7 收尾双产物 | DONE | 本节 §K + 接力 prompt 就地改写 + `CLAUDE.md` §2 指针订正 + 文档入库推送 |
+
+**§K-1 AC-09 = FAIL 的性质拆分（本轮最重要的判定，必须区分两段）**：
+
+| 段 | 含义 | 硬数据 | 判读 |
+|---|---|---|---|
+| **Legacy 段**（侧车完好） | 真实本地改动 8 条的**正常增量推送** | table_write_delta=**8**、count_delta=**0**、rows24h_delta=**40**、push=1；诊断行 `08:15:22 push batch items=8 elapsed_ms=2469 http=200`；`08:17:14 reconcile scan_complete=0 matched=67 deferred=54536 divergent=0 pushed=8`；`08:18:49 semantic legacy_rows=0 legacy_held=0` | **属真实改动的正常写入**，量级比修复前「每轮重写 3,072–40,001 行」低两个数量级 ⇒ a-9 语义指纹修复在生产生效（`legacy_rows=0` ⇒ 旧口径行已全部锚定为 `s2:`，无遗留旧口径待推） |
+| **Deleted 段**（删侧车） | 侧车丢失场景 | table_write_delta=**0**、count_delta=**0**、rows24h_delta=**0**、push=1 | **a-7 字面判据成立**（生产 D1 零写入）⇒ 侧车丢失不再触发全量重推 |
+| **整体** | — | `AC09_VERDICT=FAIL` | 探针 PASS 判据（`probe-ac09.ps1:318`）= `table_write_delta==0 且 count_delta==0 且 pushCount==0` 三者**同时**成立 ⇒ 只要客户端发出过一条 `push batch` 日志行即判 FAIL ⇒ **整体判定 FAIL 的唯一触发项是 `push=1`（Legacy 段有真实改动要推）**，不是写放大复发 |
+
+⇒ **AC-09 不得改记 PASS**（只有 `AC09_VERDICT=PASS` 才可改记）。**已验证**：客户端诊断行 `08:19:37 reconcile matched=67 deferred=94537 divergent=0 pushed=0`、`semantic legacy_rows=0 legacy_held=0`；**未验证**：Deleted 段 push=1 为何出现（探针 per-stage 明细缺失，见 §K-4）。
+
+**§K-2 写放大核查（`rows_written_24h` 由 52 涨到 40,187 —— 已澄清，不是事故）**：
+- **已验证硬证据**：`sync_items` COUNT 仍 = **40,061**（未增）、`MAX(updated_at)` = **1795565719**（= 北京时间 08:15:19）⇒ **08:15:19 之后 `sync_items` 零写入**。
+- **归因（推断）**：`rows_written_24h` 的增量来自迁移 0003 的 `CREATE INDEX` 扫描 40,061 行（Cloudflare 计数延迟上报），**不是**写放大回流。
+- **处置**：不按事故处理；但**桶化后一次性补推约 54,536 条的洪峰**仍须先定分批策略（§J-8 拍板 ② 的前置，未闭环）。
+
+**§K-3 侧车与客户端现状（下一轮必须先看）**：
+- 现役侧车 `D:\Program Files\fluxing\user1\fluxing\fluxing-cloud-sync.state` = **5,129,103 B** / mtime 08:17:14（Legacy 段重建后的 `s2:` 口径）；
+- `.failed-ac09` = **8,714 B** / mtime 08:19:37（Deleted 段客户端自建的 67 条小侧车）；
+- 探针 FAIL 路径执行了 `SIDECAR_RESTORED_BECAUSE_NOT_PASSED` ⇒ **恢复的是 Deleted 段之前的 5 MB 侧车**；
+- **已验证**：客户端 PID 57640 存活（WS 49.7 MB）；诊断日志末次写入 08:19:37（此后无 cloudsync 行）。
+
+**§K-4 探针侧缺陷（未修，下一轮复跑前必须先修）**：
+- 本轮 AC-09 日志**只有全局 PRE 行 + 最终 verdict 行**，per-stage 明细行（PRE/POST、`DELTA_*`、`STAGE_SUMMARY`、`RECONCILE_LINES`）**全部缺失**；
+- `GetReconcileStat` / `GetSemanticStat` 解析返回 `legacy_rows=-1 / legacy_held=-1 / scan_complete=`（空）；
+- **已核代码**：`Log` 只 `Write-Output` 不落文件；`GetReconcileStat` 正则 `"{0}=(-?\d+)"` 与实际行 `...][cloudsync] reconcile scan_complete=0 matched=67 ...` 表面可匹配 ⇒ **根因未定位**（推断：per-stage 明细行因未落盘而无法被后续解析消费）。
+- **处置**：下一轮**先修探针再复跑**，否则 AC-09 永远只能拿到整体 FAIL / UNDETERMINED，无法逐段归因。
+
+**§K-5 待观察风险（未验证）**：探针 FAIL 路径恢复的 5 MB 侧车**不含**客户端 08:19:37 自建侧车时抬高的本地 HLC 水位 ⇒ 下一轮客户端推送可能被服务端 HLC 守卫跳过（云端胜）⇒ 存在「静默不推送」风险 ⇒ 需在下一轮客户端活动后复查 `pushed=` 是否恢复非零。
+
+**§K-6 本轮新增工具坑（§J-6 不重复）**：
+- **`wrangler d1 execute` 偶发 `fetch failed` 网络抖动** ⇒ 关键读数（残留行数）必须**重跑确认**，不能拿失败输出当 0（本轮已对 `sync_buckets` 残留重跑确认 = 0）。
+- **迁移只 apply 一次**：0004 建表**无 `IF NOT EXISTS`**，重复 apply 会报 duplicate table。
+- **`wrangler d1 migrations list` 按版本号升序输出**，判「未 apply」看**末尾**；**`wrangler deployments list` 从最旧开始**，查生效 Version 要用 `deployments status`。
+- **`npm run migrate:remote` 不可用**（用库名 `fluxing-sync` 而非绑定名 `DB`）⇒ 一律 `wrangler ... DB --remote --config`。
+- **PowerShell 自定义函数名带连字符并立即带参调用**（`function Add-Line([string]$s){...}` 后 `Add-Line ("...")`）被解析成类型转换 ⇒ 报「“(” 后应为表达式」，整段脚本未执行 ⇒ 改用 `Add-Content -LiteralPath $log -Value "..." -Encoding utf8` + `$ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'`。
+- **同一条命令里既 `Set-Location` 又带删除类目标** ⇒ 被本地安全网关整体拦截（`write/delete targets cannot be verified safely after a command working directory change`）⇒ 删除 / 清理须**单独成一条命令**且不改工作目录。
+
+**§K-7 三态标注**：
+
+| 状态 | 内容 |
+|---|---|
+| **已验证** | STEP 0 额度活性（无 `code: 7500`）/ STEP 2 迁移 0003+0004 MIGRATE_EXIT=0 且 num_tables 8→9 / STEP 3 三条 EXPLAIN 全命中新索引 / STEP 4 DEPLOY_EXIT=0 + 新生产 Version `4f163326-f2a5-4c69-be56-24cb800e6915` + D8 双绑定回读 / STEP 5 桶端点冒烟 9/9 PASS + HLC 守卫生效 + cipher 原样往返 + 跨设备可见 + 清理零残留 / STEP 1 AC-09 复跑 **FAIL**（两段硬数据）/ `sync_items` COUNT 40,061 未变 + MAX(updated_at) 冻结 08:15:19 / 客户端 exe sha256 与 a-9 版期望值逐字相等 / **本轮未改任何产品代码**（工作树仅 `m librime` + 既有 untracked） |
+| **推断** | `rows_written_24h` 增量来自 CREATE INDEX 扫描的延迟上报（非写放大回流）/ AC-09 整体 FAIL 的唯一触发项是 `push=1` / 探针 per-stage 明细缺失的根因是「明细行未落盘」 |
+| **未验证** | 探针 per-stage 解析根因（未定位）/ Deleted 段 `push=1` 的来源 / 侧车 HLC 水位丢失是否导致下一轮「静默不推送」 / 客户端 54,536 条从未上云条目的补推洪峰与分批策略 / BR-①g 客户端桶化的实际产出 / ⑤ 腾讯云两项安全问题与 ⑥ 两任务合并（§J-8 仍待用户拍板） |
+
+**§K-8 待用户裁定（两项，均影响下一轮是否开工）**：
+1. **BR-①g 闸门**：是否接受「Deleted 段零写入（a-7 字面判据成立）+ Legacy 段 8 行属正常增量」作为开闸依据，让下一轮启动客户端桶化（**推荐**），或维持严格判据（AC-09 整体 PASS）并要求用户空闲时复跑 AC-09。
+2. **探针缺陷修复归属**：是否在下一轮**先修** `reports/fluxing-br-1c/probe-ac09.ps1`（per-stage 日志不落盘 + reconcile / semantic 统计返回 -1 / 空）**再复跑**。
+
+**§K-9 ADR 0077 状态说明**：本轮**未改任何 ADR**（`docs/adr/0077-bucket-level-sync-storage-architecture.md` Status 仍为 Proposed）——服务端桶化已在生产生效并通过冒烟，但 ADR 0077 的 D9 / D10 / D11 涉及客户端侧分桶打包与侧车 v2，**BR-①g 未开工** ⇒ 是否转 Accepted 待 BR-①g 完成后按 ADR 自身的验收条件判定（**推断**，ADR 内验收条款未在本轮逐条复核）。
+
 
