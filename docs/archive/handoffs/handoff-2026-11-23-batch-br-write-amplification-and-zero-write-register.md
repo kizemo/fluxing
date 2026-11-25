@@ -1247,6 +1247,73 @@
 
 ---
 
+## L · 回检（2026-11-25 10:30）
+
+**本节性质** = 定时回检任务 `312fd16e-d687-4973-b636-f1044ad9cdd0`（2026-11-25 10:30 触发）对主链 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`（2026-11-25 08:10:46 触发）的**只读判定 + 文档回写**。
+本轮**未改任何产品代码**（`cloud/fluxing-sync/**` / `WeaselServer/**` 零改动）、**未重复主链工作**、**未自行启动主链**。
+
+### L.1 CHAIN_STATUS = COMPLETED（步骤层全终态）/ AC-09 = FAIL（判据层未达成）
+
+真相源 = 哨兵 `reports/fluxing-br-1f/chain-progress.log`，**逐行按内容解析**（未用 mtime 判新鲜度 —— `Tee-Object` 启动即截断文件，mtime 不可信）。
+
+| 哨兵行 | STATUS | 关键字段 | 本次回检判定 |
+|---|---|---|---|
+| `STEP=0` | DONE | `PROBE=d1_migrations_rows=2 CODE=7500=no ROWS_READ_24H=531 ROWS_WRITTEN_24H=12` | 额度活性通过（**无** `code: 7500`） |
+| `STEP=1` | DONE | `AC09_VERDICT=FAIL AC09_LOG=reports\fluxing-br-1f\ac09-run-20261125-081355.log LEGACY=twd=8,cd=0,push=1 DELETED=twd=0,cd=0,push=1 ROUND_RAN=both` | **AC-09 = FAIL**（见 L.2） |
+| `STEP=2` | DONE | `MIGRATE_EXIT=0 APPLIED=0003,0004` | 迁移 0003+0004 成功 |
+| `STEP=3` | DONE | `EXPLAIN_ITEMS=idx_sync_user_updated EXPLAIN_BUCKETS_USER=idx_sync_buckets_user_id EXPLAIN_BUCKETS_UPDATED=idx_sync_buckets_user_updated` | EXPLAIN **三条全命中新索引** |
+| `STEP=4` | DONE | `DEPLOY_EXIT=0` | Worker 部署成功（生产 Version 见 §K） |
+| `STEP=5` | DONE | `VERDICT_SMOKE=PASS SMOKE_EXIT=0 LOG=tmp\br-bucket-smoke-20261125.log` | 桶端点生产冒烟 PASS |
+| `STEP=5_CLEANUP` | DONE | `VERDICT_CLEANUP=PASS RESIDUAL_USERS=0 RESIDUAL_BUCKETS=0` | 探针残留清零 |
+| `STEP=6` | SKIP | `BLOCKED_BY=STEP1 REASON=AC09_VERDICT_FAIL NO_CLIENT_CODE_CHANGED` | 闸门未开（**设计内 SKIP**，非崩溃） |
+| `STEP=7` | DONE | `HANDOFF_SECTION=K RELAY_PROMPT=… CLAUDE_MD_UPDATED=yes NO_PRODUCT_CODE_CHANGED=yes` | 收尾双产物已出 |
+| `STEP=7B` | DONE | `PROBE_FIX_DOC_WRITEBACK COMMIT=0f36675 PARSE_ERRORS=0 UNITTEST=4CASE PASS` | 探针缺陷闭合（§K-4） |
+| `STEP=BR1G` ×3 | START / RUN / **DONE** | `COMMIT_CODE=f7a62f6 COMMIT_DOCS=fdc71b9 GATE_PASS=899 GATE_FAIL=0 VERSION=1.3.9 PACK_BUILD=RUNNING REALMACHINE=NOT_RUN` | **BR-①g 客户端轮**（另一写入者，非本主链 8 段） |
+
+**编号口径差异（必须记，避免下一轮误判）**：哨兵实际编号 = **迁移 `STEP=2` / EXPLAIN `STEP=3` / 部署 `STEP=4` / 冒烟 `STEP=5`**；
+而本回检任务正文写的是「STEP=3 迁移 / STEP=4 EXPLAIN / STEP=5 冒烟」⇒ **回检正文错位一位**（主链 prompt 的步号与哨兵一致，错的是回检正文的语义标注）。
+本节按**语义**登记（迁移 / EXPLAIN / 冒烟三项均存在且为 DONE），并同时保留哨兵原编号 ⇒ **无 MISSING**。
+（两种口径交叉验证：按字面 `STEP=3/4/5` 取 = EXPLAIN / 部署 / 冒烟，**同样三项全 DONE** ⇒ 结论一致。）
+
+### L.2 AC-09 判定 = FAIL（完整性双标记齐备，值原样登记）
+
+- 哨兵 `AC09_LOG=` 指向 `reports\fluxing-br-1f\ac09-run-20261125-081355.log` —— **本轮新文件**（带时间戳），**不是** 2026-11-24 旧轮 `reports/fluxing-br-1c/ac09-run.log`（该旧轮虽含收尾标记，但不在 `AC09_LOG=` 指向路径上 ⇒ 未读、未引用）。
+- **双标记核验**：① `AC09_VERDICT=` ✅ 存在（`[08:20:14] AC09_VERDICT=FAIL`）；② `=== AC-09 v4 END ===` ✅ 存在（`[08:20:14]`）⇒ **两标记齐备** ⇒ 判定值可采信（非 UNDETERMINED）。
+- **值 = `FAIL`**（`AC09_SUMMARY stages=2 overall=FAIL strict=FAIL`）：Legacy 段 `table_write_delta=8, count_delta=0, rows24h_delta=40, push=1`；Deleted 段 `table_write_delta=0, count_delta=0, rows24h_delta=0, push=1`；两段 `round_ran=True`。
+- **AC-09 保持 FAIL，不改记 PASS**（只有 `AC09_VERDICT=PASS` 才可改记）。
+
+### L.3 只读复核（未写生产）
+
+- `SELECT COUNT(*) AS buckets FROM sync_buckets` ⇒ **0 行**；返回 `success=true` / `changes=0` / `rows_written=0` ⇒ ① 桶表**存在且可查**（迁移 0004 已生效）② 生产 D1 额度**未耗尽**（无 `code: 7500`）③ 当前**无桶数据**（客户端桶化真机轮未跑 ⇒ 与 §M.7.7 第 4 项一致）。
+- 本轮**未执行任何写操作**：未 `DELETE` / 未 `INSERT` / 未 `deploy` / 未改 `wrangler.toml`。
+
+### L.4 三态标注
+
+| 结论 | 状态 | 依据 |
+|---|---|---|
+| 主链 8 段（+7B +5_CLEANUP）**全部到达终态**，无 `BLOCKED` / `MISSING` / `NOT_STARTED` 段 | **已验证** | 哨兵逐行解析（L.1） |
+| 迁移 0003+0004 成功 | **已验证** | `STEP=2 MIGRATE_EXIT=0 APPLIED=0003,0004` |
+| EXPLAIN 三条命中新索引 | **已验证** | `STEP=3` |
+| Worker 部署成功 | **已验证** | `STEP=4 DEPLOY_EXIT=0` |
+| 桶端点生产冒烟 PASS + 清理零残留 | **已验证** | `STEP=5` / `STEP=5_CLEANUP` |
+| AC-09 = FAIL（双标记齐备、原样登记） | **已验证** | L.2 |
+| 生产桶表存在且当前 0 行、额度未耗尽 | **已验证** | L.3 只读复核 |
+| 「整体 FAIL 的唯一触发项是 `push=1`、Deleted 段字面判据成立」 | **推断**（沿用 §K-1 的判读；本轮只读未重新拆解两段语义） | §K-1 + 本轮 `AC09_SUMMARY` |
+| BR-①g 真机阶段机 0→1→2→3 后 AC-09 能否转 PASS | **未验证**（真机轮未跑） | 哨兵 `STEP=BR1G … REALMACHINE=NOT_RUN`；§M.7.6 |
+| 补排轮能否改变 AC-09 结论 | **推断（大概率不能）** | 补排读的是同一哨兵 + 同一 AC09 日志；只有主链/真机轮重跑才会产生新证据 |
+| §M.7.7 未闭环 11 项 | **未闭环**（沿用，本轮未新增闭环项） | §M.7.7 |
+
+### L.5 结论一句话
+
+**CHAIN_STATUS = COMPLETED**（步骤层 11 行全终态、无 MISSING）；**AC-09 = FAIL**（双标记齐备、原样登记、**不改记 PASS**）；**迁移 0003+0004 = DONE / EXPLAIN = DONE / 桶端点冒烟 = DONE（PASS）/ 部署 = DONE** ⇒ **服务端桶化生产链已闭合**，客户端判据 AC-09 仍未达成，且 BR-①g 真机轮未跑。
+
+### L.6 补排（+90 分钟）
+
+本次 = **第一次**回检（此前无 §L），且哨兵内存在 `AC09_VERDICT=FAIL` ⇒ 按回检任务第 5 步**自排一次补排回检**：一次性任务，时间 = 本轮 + 90 min = **2026-11-25 12:01:56 +08:00**（`runAtMs=1795579316073`），任务名加「（补排）」，prompt 与本任务相同。
+**补排只是观察窗口**：它读的还是同一哨兵 + 同一 AC09 日志 ⇒ **除非 BR-①g 真机轮或主链重跑向哨兵追加新行，否则补排结论必然与本节相同**。补排轮**不再续排**。
+
+---
+
 ## §M.8 真机轮根因定位与「阶段 3 生产风险」拦截（2026-11-25 10:24–10:35 · 补记）
 
 > 本节是 §M.7.6「真机轮」的**续写**：把「阶段 1 `pushed=0`」从「现象」追到「代码行」，并在阶段 3 开跑前**主动拦截**了一次会打爆生产 D1 免费额度的推送。
