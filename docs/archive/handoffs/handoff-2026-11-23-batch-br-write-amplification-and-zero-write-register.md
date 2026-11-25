@@ -1312,6 +1312,72 @@
 本次 = **第一次**回检（此前无 §L），且哨兵内存在 `AC09_VERDICT=FAIL` ⇒ 按回检任务第 5 步**自排一次补排回检**：一次性任务，时间 = 本轮 + 90 min = **2026-11-25 12:01:56 +08:00**（`runAtMs=1795579316073`），任务名加「（补排）」，prompt 与本任务相同。
 **补排只是观察窗口**：它读的还是同一哨兵 + 同一 AC09 日志 ⇒ **除非 BR-①g 真机轮或主链重跑向哨兵追加新行，否则补排结论必然与本节相同**。补排轮**不再续排**。
 
+### L.7 补排轮复核（2026-11-25 12:02 · 观察窗口关闭）
+
+**本节性质** = 补排轮 cron `33ebe723-f6f4-4c4a-9f21-1fa5c8cb7986`（`runAtMs=1795579316073` = 2026-11-25 12:01:56 +08:00，由 §L.6 自排）对主链 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5` 的**只读判定 + 文档回写**。
+本轮**未改任何产品代码**（`cloud/fluxing-sync/**` / `WeaselServer/**` 零改动）、**未重复主链工作**、**未自行启动主链**。
+
+#### L.7.1 相对 10:30 首轮的唯一新增证据（已验证）
+
+哨兵 `reports/fluxing-br-1f/chain-progress.log` 现有 **14 行**（10:30 首轮读到 11 行）⇒ **新增 1 行**：
+
+```
+2026-11-25T10:37:33+08:00 STEP=BR1G REALMACHINE STATUS=DONE NOTE=PHASE0_BASE=OK PHASE1=OK(phase=1,pushed=0,skipped=0,pulled=0) PHASE2=NOT_OBSERVED PHASE3=INTERCEPTED_BEFORE_RUN PHASE4=SKIP ROOTCAUSE=bucket_scan_complete_gate(CloudSyncService.cpp:1608-1611) LEGACY_PULL_PER_ROUND=1000 CLOUD_ITEMS=40061 ROUNDS_TO_SCAN=41 PROD_SYNC_BUCKETS=0 PROD_ROWS_WRITTEN_24H=40281 BASE=40259 DELTA=22(非桶写) ROLLBACK=phase0@10:36:38 USER_ENV=REMOVED HAZARD=phase3_flood_94604_items_190000_rows NEXT=R2_GATE_INTO_BUCKET_PATH+PER_ROUND_QUOTA
+```
+
+该行 = §M.8 记录的 BR-①g 真机轮（10:24–10:35）收官行 ⇒ **与 §M.8 一致，不改变 §L 的任何判定**（AC-09 仍 FAIL、真机轮仍记「未判定」、生产 `sync_buckets` 仍 0）。
+
+#### L.7.2 AC-09 复核 = FAIL（已验证 · 双标记复验齐备）
+
+- 哨兵 `AC09_LOG=reports\fluxing-br-1f\ac09-run-20261125-081355.log` 未变；本轮**再次逐字复验**：`AC09_VERDICT=` 计数 = 1（`[08:20:14] AC09_VERDICT=FAIL`）、`=== AC-09 v4 END ===` 计数 = 1 ⇒ **双标记齐备** ⇒ 判定值可采信（非 UNDETERMINED）。
+- 值 = **`FAIL`**（原样登记，**不改记 PASS**）。2026-11-24 旧轮 `reports/fluxing-br-1c/ac09-run.log` 仍**未读、未引用**。
+
+#### L.7.3 迁移 / EXPLAIN / 部署 / 冒烟 判定（已验证 · 两种口径交叉验证）
+
+| 语义项 | 哨兵实际行 | STATUS | 关键字段 | 本轮判定 |
+|---|---|---|---|---|
+| 迁移 0003+0004 | `STEP=2` | DONE | `MIGRATE_EXIT=0 APPLIED=0003,0004` | **DONE** |
+| EXPLAIN 复测 | `STEP=3` | DONE | 三条命中 `idx_sync_user_updated` / `idx_sync_buckets_user_id` / `idx_sync_buckets_user_updated` | **DONE** |
+| 部署 Worker | `STEP=4` | DONE | `DEPLOY_EXIT=0` | **DONE** |
+| 桶端点生产冒烟 | `STEP=5` | DONE | `VERDICT_SMOKE=PASS SMOKE_EXIT=0` | **DONE / PASS** |
+
+按回检正文**字面**步号取（`STEP=3` / `STEP=4` / `STEP=5`）= EXPLAIN / 部署 / 冒烟 ⇒ **同样三项全 DONE** ⇒ **无 MISSING**（与 §L.1 的口径错位说明一致）。
+
+#### L.7.4 只读复核（未写生产 · 已验证）
+
+- `SELECT COUNT(*) AS buckets FROM sync_buckets` ⇒ **0 行**；返回 `success=true` / `changes=0` / `rows_written=0` / `rows_read=0` ⇒ ① 桶表**存在且可查**（迁移 0004 已生效）② 生产 D1 额度**未耗尽**（无 `code: 7500`）③ 当前**无桶数据**（与 §M.8 真机轮「生产 `sync_buckets` 恒 0」一致）。
+- 本轮**未执行任何写操作**：未 `DELETE` / 未 `INSERT` / 未 `deploy` / 未改 `wrangler.toml`。
+
+#### L.7.5 三态标注
+
+| 结论 | 状态 | 依据 |
+|---|---|---|
+| 主链 8 段（+7B +5_CLEANUP）仍全终态，无 `BLOCKED` / `MISSING` / `NOT_STARTED` | **已验证** | 哨兵 14 行逐行解析（L.7.1） |
+| AC-09 = FAIL（双标记齐备、原样登记、未改记 PASS） | **已验证** | L.7.2 |
+| 迁移 0003+0004 / EXPLAIN / 部署 / 桶端点冒烟 = 全 DONE | **已验证** | L.7.3 |
+| 生产桶表存在且当前 0 行、额度未耗尽、本轮零写操作 | **已验证** | L.7.4 只读复核 |
+| BR-①g 真机轮已收官且与 §M.8 一致（哨兵新增第 14 行） | **已验证** | L.7.1 |
+| 「整体 FAIL 的唯一触发项是 `push=1`、Deleted 段字面判据成立」 | **推断**（沿用 §K-1；本轮只读，未重新拆解两段语义） | §K-1 + 本轮 `AC09_SUMMARY` |
+| BR-①g 真机阶段机 0→1→2→3 后 AC-09 能否转 PASS | **未验证**（真机轮已跑，但阶段 2 未观测、阶段 3 被拦截 ⇒ 无新的对账证据） | §M.8 + 哨兵第 14 行 |
+| §M.7.7 未闭环 11 项 + §M.8.4 两条补齐规则（R2 闸门进桶路径 + 每轮桶推配额） | **未闭环**（本轮未新增闭环项） | §M.7.7 / §M.8.4 |
+
+#### L.7.6 结论一句话
+
+**CHAIN_STATUS = COMPLETED**（哨兵 14 行全终态、无 MISSING）；**AC-09 = FAIL**（双标记齐备、原样登记、**不改记 PASS**）；**迁移 0003+0004 = DONE / EXPLAIN = DONE / 部署 = DONE / 桶端点冒烟 = DONE（PASS）** ⇒ 与 §L 首轮结论**完全一致**：服务端桶化生产链仍闭合，客户端判据 AC-09 仍未达成，生产 `sync_buckets` 仍 0 行。
+
+#### L.7.7 补排收口（不再自排第三次）
+
+按回检任务第 5 步「**若本次已经是补排轮 ⇒ 不再补排，直接收口**」⇒ 本轮**不再自排第三次**。
+观察窗口关闭依据（已验证）：主链 STEP 1 与 AC-09 自 08:10 起**无新证据**；哨兵唯一增量（第 14 行）属 BR-①g 真机轮，不改变本判定。
+⇒ 后续 AC-09 转 PASS 的唯一路径 = **BR-①g 真机轮按 §M.8.4 两条补齐规则（R2「库存未证实不推送」进桶路径 + 每轮桶推行数配额）重跑并跑完对账循环**（或主链重跑 STEP 1）⇒ 需**有人值守的真机轮**，不是第三个定时回检能解决的。
+附带事实（已验证）：主链 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5`、首轮回检 `312fd16e-d687-4973-b636-f1044ad9cdd0`、本补排 `33ebe723-f6f4-4c4a-9f21-1fa5c8cb7986` 三个一次性任务均已 `enabled=false` / `status=paused` ⇒ **无残留定时任务会再触发**。
+
+#### L.7.8 本轮工具坑（已验证）
+
+1. 哨兵 mtime 仍不可信（`Tee-Object` 启动即截断文件）⇒ 继续**只按内容**判定新鲜度。
+2. `wrangler d1 execute` 只读命令须用**绝对路径** + `--config <绝对路径>/wrangler.toml`；返回体里 `rows_written=0` / `changes=0` 可直接当「未写生产」的证据。
+3. 本机首个 bash 调用会先做 **shell discovery**（PowerShell）：`cd /f/...` 形式会被解析成 `F:\f\...` ⇒ 一律用 `Set-Location 'F:\...'` 或全程绝对路径。
+
 ---
 
 ## §M.8 真机轮根因定位与「阶段 3 生产风险」拦截（2026-11-25 10:24–10:35 · 补记）
