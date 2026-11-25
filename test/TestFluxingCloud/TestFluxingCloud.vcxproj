@@ -211,6 +211,10 @@
     <ClCompile Include="..\..\WeaselServer\Cloud\CloudAccount.cpp" />
     <ClCompile Include="..\..\WeaselServer\Cloud\CloudAccountHistory.cpp" />
     <ClCompile Include="..\..\WeaselServer\Cloud\CloudSyncService.cpp" />
+    <!-- spec 103 · BR-①g：桶化同步的纯函数层（桶键派生 / blob 打包拆包 /
+         桶指纹 / 阶段机 / 桶线格式）。同样直接编译生产实现，测试与生产
+         同源（宪法 R7）。 -->
+    <ClCompile Include="..\..\WeaselServer\Cloud\CloudBucketSync.cpp" />
     <!-- spec 100 阶段 F（T501/T504）：同步引擎（调度 + 退避 + 配额）。
          同样直接编译生产实现，测试与生产同源（宪法 R7）。 -->
     <ClCompile Include="..\..\WeaselServer\Cloud\CloudSyncEngine.cpp" />
@@ -221,6 +225,7 @@
     <ClCompile Include="..\..\WeaselServer\Cloud\CloudSyncNotifier.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\WeaselServer\Cloud\CloudBucketSync.h" />
     <ClInclude Include="..\..\include\FluxingCloudEnvelope.h" />
     <ClInclude Include="..\..\include\FluxingLocalChangeHook.h" />
     <ClInclude Include="..\..\WeaselServer\Cloud\CloudSyncEngine.h" />

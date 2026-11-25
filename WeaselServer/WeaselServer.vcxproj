@@ -545,6 +545,9 @@
     <ClCompile Include="Cloud\CloudSyncService.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="Cloud\CloudBucketSync.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="Cloud\CloudSyncEngine.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -565,6 +568,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Cloud\CloudBucketSync.h" />
     <ClInclude Include="Cloud\CloudJson.h" />
     <ClInclude Include="Cloud\CloudCrypto.h" />
     <ClInclude Include="Cloud\CloudTransport.h" />
@@ -573,7 +577,8 @@
     <ClInclude Include="Cloud\CloudSyncService.h" />
     <ClInclude Include="Cloud\CloudSyncEngine.h" />
     <ClInclude Include="Cloud\CloudUserDictIo.h" />
-    <ClInclude Include="Cloud\CloudAccountDialog.h" />
+    <ClInclude Include="Cloud\CloudAccountDialog.h" />
+
     <ClInclude Include="Cloud\CloudAccountHistory.h" />
     <ClInclude Include="Cloud\CloudAccountUi.h" />
     <ClInclude Include="Cloud\CloudAccountWidgets.h" />

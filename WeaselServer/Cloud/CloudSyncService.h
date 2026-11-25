@@ -44,12 +44,24 @@
 
 #include "../../include/FluxingCloudEnvelope.h"
 
+#include "CloudBucketSync.h"
 #include "CloudJson.h"
 #include "CloudSyncEngine.h"
 #include "CloudUserDictIo.h"
 
 namespace fluxing {
 namespace cloud {
+
+// JSON 节点下标（nodes 是平铺数组，Member() 只回指针；需要「节点下标」时
+// 用它换算回来）。
+// ★ 公开成 inline：桶级解析（CloudBucketSync.cpp）与条目级解析共用**同一份**
+//   下标换算 ⇒ 不出现第二份实现（宪法 R7）。
+inline int CloudJsonNodeIndex(const json::JsonDocument& doc,
+                              const json::JsonNode* node) {
+  if (node == nullptr)
+    return -1;
+  return static_cast<int>(node - doc.nodes.data());
+}
 
 // ★ 与服务端的硬契约：单次推送条目上限。
 //   服务端真源：cloud/fluxing-sync/src/wire.ts 的 MAX_PUSH_ITEMS = 64。
@@ -314,6 +326,27 @@ class CloudSyncService {
             std::string* err,
             bool* has_more = nullptr);
 
+  // ★ spec 103 · BR-①g：桶级推送（POST /v1/sync/buckets/push）。
+  // accepted / skipped 输出服务端对每个**桶**的处置（bucket_key 列表）。
+  // device_id 客户端**一律不上报**（服务端与登录设备行主键比对，不等即 400）。
+  bool PushBuckets(const std::vector<CloudBucketPushItem>& buckets,
+                   int64_t* server_seq,
+                   std::string* err,
+                   std::vector<std::string>* accepted = nullptr,
+                   std::vector<std::string>* skipped = nullptr,
+                   int* http_status = nullptr);
+
+  // ★ spec 103 · BR-①g：桶级拉取（GET /v1/sync/buckets/pull）。
+  // cursor 是不透明续读位置（服务端给什么就原样回传）。
+  bool PullBuckets(int64_t since,
+                   int64_t limit,
+                   const std::string& cursor,
+                   std::vector<CloudBucketPullItem>* out,
+                   int64_t* new_server_seq,
+                   std::string* err,
+                   bool* has_more = nullptr,
+                   std::string* next_cursor = nullptr);
+
   const std::string& access_token() const { return access_token_; }
 
   // ★ 批次 BM / ADR 0071：本实例（本轮同步）是否发生过「401 → 续期成功
@@ -427,6 +460,111 @@ inline std::string FormatReconcileDiagLine(const CloudReconcileStats& stats) {
          " pushed=" + std::to_string(stats.pushed);
 }
 
+// ---------------------------------------------------------------------------
+// spec 103 · BR-①g：桶化同步新增（侧车 v2 / 信封 / 桶级计数）
+// ---------------------------------------------------------------------------
+//
+// ★ 侧车 v2（**新增**字段；老端点游标 seq 的语义与取值一律不变）：
+//   #fluxing-cloud-sync-v2
+//   seq\t<n>            ← 老端点游标（原义不变，**绝不归零**）
+//   bseq\t<n>           ← 桶端点游标（编号空间独立，从 0 起）
+//   phase\t<n>          ← 灰度阶段（0..4）
+//   keyfp\t<fp|->
+//   row\t...            ← 条目行（与 v1 逐字同格式）
+//   brow\t<bucket_key>\t<ms>\t<counter>\t<device>\t<item_count>\t<fingerprint>
+//
+//   v1 文件用**同一套**解析器读 ⇒ phase=0、bseq=0、无 brow（AC-109 字面口径）。
+//   ResetCloudSyncSidecarFile 保留 v1 版本行（既有单测断言），但**额外**把
+//   bseq 与 phase 一并归零。
+
+// 侧车 v2 的一行：桶键 + 桶级 HLC + 桶内条目数 + 桶内容指纹。
+struct CloudSidecarBucketRow {
+  std::string bucket_key;
+  uint64_t ms = 0;
+  uint32_t counter = 0;
+  std::string device;
+  size_t item_count = 0;
+  std::string fingerprint;
+};
+
+// 侧车 v2 文本（序列化）。
+std::string BuildSidecarTextV2(
+    const std::vector<CloudSidecarRow>& rows,
+    int64_t server_seq,
+    int64_t bucket_seq,
+    int bucket_phase,
+    const std::vector<CloudSidecarBucketRow>& bucket_rows,
+    const std::vector<uint8_t>& enc_key);
+
+// 解析侧车文本（v1 / v2 通用）。
+// · bucket_seq：桶端点游标（v1 ⇒ 0）；bucket_phase：灰度阶段（v1 ⇒ 0）。
+// · key_rotated 为 true 时 rows / server_seq 已被清空（与 v1 语义逐字一致）。
+bool ParseSidecarTextV2(const std::string& text,
+                        const std::vector<uint8_t>& enc_key,
+                        std::vector<CloudSidecarRow>* rows,
+                        int64_t* server_seq,
+                        int64_t* bucket_seq,
+                        int* bucket_phase,
+                        std::vector<CloudSidecarBucketRow>* bucket_rows,
+                        bool* key_rotated,
+                        std::string* err);
+
+// 单条本地条目 → 信封（线上身份用 MAC 身份；明文键封在密文内部）。
+bool SealEntryEnvelope(const Entry& entry,
+                       ItemType type,
+                       const std::vector<uint8_t>& enc_key,
+                       Envelope* out,
+                       std::string* err);
+
+// 信封 → 待推送条目（线上形态与 SealEntries 逐字一致 ⇒ 可直接喂
+// OpenItemsTolerant，与老端点同一条解密路径）。
+bool CloudSyncItemFromEnvelope(const Envelope& env,
+                               CloudSyncItem* out,
+                               std::string* err);
+
+// 本轮桶级计数（诊断行口径）。
+struct CloudBucketRoundStats {
+  int phase = 0;    // 本轮生效的灰度阶段（0 = 老端点单跑）
+  int pushed = 0;   // 本轮被服务端**接受**的桶数
+  int skipped = 0;  // 本轮被服务端跳过（HLC 守卫命中）的桶数
+  int pulled_buckets = 0;  // 本轮拉到的桶数
+  int pulled_items = 0;    // 本轮从桶里解出的条目数
+  // ↓ 以下三个**不进诊断行**（诊断行格式逐字固定），只供单测与排障断言。
+  int push_requests =
+      0;  // 本轮发出的**桶级**推送请求数（AC-208 用它判「零请求」）
+  int pull_requests = 0;  // 本轮发出的**桶级**拉取请求数
+  int degraded = 0;  // 本轮降级（超限 ⇒ 改走逐条端点）的桶数
+};
+
+// ★ spec 103 · BR-①g：单页桶数上限（服务端 MAX_PULL_LIMIT = 100）。
+constexpr int64_t kBucketPullPageLimit = 100;
+
+// ★ spec 103 · BR-①g：单轮桶拉取页数上限（AC-203 逐字口径）。
+//   max(16, 词典数 × 11 + 2)，硬上限 32 页。
+//   · 11 = ⌈1024 桶 / 100 桶每页⌉（每词典 1024 桶）；+2 是余量。
+//   · 单词典 ⇒ 16 页；词典数 ≥ 3 ⇒ 触到 32
+//   页硬上限（Q2：多词典可能扫不完库存）。
+inline int BucketPullMaxPages(size_t dict_count) {
+  int pages = 16;
+  if (dict_count > 0) {
+    const long long computed = static_cast<long long>(dict_count) * 11 + 2;
+    pages = computed > 16 ? static_cast<int>(computed) : 16;
+  }
+  if (pages > 32)
+    pages = 32;
+  return pages;
+}
+
+// 桶级诊断行（逐字格式放在**生产头**里 ⇒ 单测断言的就是生产会写出的那一行）。
+// 与既有 `reconcile ...` / `push batch items=.. elapsed_ms=..` 行并存。
+inline std::string FormatBucketDiagLine(const CloudBucketRoundStats& s) {
+  return "bucket phase=" + std::to_string(s.phase) +
+         " pushed=" + std::to_string(s.pushed) +
+         " skipped=" + std::to_string(s.skipped) +
+         " pulled_buckets=" + std::to_string(s.pulled_buckets) +
+         " pulled_items=" + std::to_string(s.pulled_items);
+}
+
 class CloudSyncCoordinator {
  public:
   CloudSyncCoordinator(ICloudTransport* transport,
@@ -466,6 +604,12 @@ class CloudSyncCoordinator {
     return last_stats_;
   }
 
+  // ★ spec 103 · BR-①g：本轮的**桶级计数**（ADR 0077 观测口径）。
+  //   每轮 SyncOnce 结束都会刷新（失败也刷新 ⇒ 与诊断行同源）。
+  const CloudBucketRoundStats& last_bucket_stats() const {
+    return last_bucket_stats_;
+  }
+
  private:
   bool LoadSidecar(std::string* err);
   bool SaveSidecar(std::string* err);
@@ -476,6 +620,31 @@ class CloudSyncCoordinator {
                  CloudSyncRoundResult* result,
                  std::string* err,
                  CloudReconcileStats* stats);
+
+  // ★ spec 103 · BR-①g：桶级拉取（分页 → 解包 → **复用逐条端点同一条解密
+  //   路径 OpenItemsTolerant** → 并入远端视图）。
+  // · dict_count：本地词典数（决定单轮页数上限，AC-203）。
+  // · has_more：服务端还有更多桶（⇒ 库存未扫完 ⇒ 本轮不推桶）。
+  // · 桶游标只从**拉取响应**推进（推送返回的 server_seq 不推进它）。
+  bool PullBucketsIntoRemote(size_t dict_count,
+                             std::vector<Entry>* remote_entries,
+                             bool* has_more,
+                             CloudBucketRoundStats* stats,
+                             int* undecryptable,
+                             int* malformed,
+                             std::string* err);
+
+  // ★ spec 103 · BR-①g：桶级推送（分桶 → 语义指纹 → **只推变化桶** → 写桶行）。
+  // · merged：合并后的本地视图全集（桶内容 = 它的分组，FR-206）。
+  // · remote_complete：本轮库存扫描是否完整（FR-215 判定的前提）。
+  // · legacy_endpoint_active：逐条端点是否仍可用（超限桶降级时用）。
+  bool PushChangedBuckets(const std::vector<Entry>& merged,
+                          const std::vector<Entry>& remote_entries,
+                          bool remote_complete,
+                          bool legacy_endpoint_active,
+                          CloudBucketRoundStats* stats,
+                          CloudSyncRoundResult* result,
+                          std::string* err);
 
   ICloudTransport* transport_ = nullptr;
   IUserDictBackend* backend_ = nullptr;
@@ -493,6 +662,20 @@ class CloudSyncCoordinator {
   bool key_rotated_ = false;
   // 最近一轮的对账计数（R5 观测口径；失败轮也会刷新）。
   CloudReconcileStats last_stats_;
+  // ★ spec 103 · BR-①g：桶端点游标（与老端点游标 last_server_seq_
+  //   **编号空间独立**：从 0 起，不沿用老游标，也绝不归零老游标）。
+  int64_t bucket_seq_ = 0;
+  // 灰度阶段（0 = 老端点单跑 ⇒ 行为与本批之前逐字一致）。
+  CloudBucketPhase bucket_phase_ = CloudBucketPhase::kLegacy;
+  // 本轮生效阶段是否来自环境变量（来自环境变量 ⇒ 本轮结束写回侧车 ⇒
+  // 回滚手段 = 把环境变量设成 0 再跑一轮）。
+  bool bucket_phase_from_env_ = false;
+  // 侧车里的桶行（bucket_key → 桶级 HLC + 桶内容指纹）。
+  std::vector<CloudSidecarBucketRow> bucket_rows_;
+  // 侧车文件是不是 v2 格式（决定这轮写 v1 还是 v2）。
+  bool sidecar_v2_ = false;
+  // 最近一轮的桶级计数（失败轮也会刷新 ⇒ 与诊断行同源）。
+  CloudBucketRoundStats last_bucket_stats_;
 };
 
 }  // namespace cloud

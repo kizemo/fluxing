@@ -19,6 +19,8 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <map>
+#include <set>
 #include <sstream>
 
 namespace fluxing {
@@ -27,10 +29,10 @@ namespace cloud {
 namespace {
 
 // nodes 是平铺数组，Member() 只回指针；需要「节点下标」时用它换算回来。
+// ★ 实现委托给公开的 CloudJsonNodeIndex ⇒ 桶级解析（CloudBucketSync.cpp）
+//   与条目级解析共用同一份换算逻辑（宪法 R7「不复制第二份实现」）。
 int NodeIndex(const json::JsonDocument& doc, const json::JsonNode* node) {
-  if (node == nullptr)
-    return -1;
-  return static_cast<int>(node - doc.nodes.data());
+  return CloudJsonNodeIndex(doc, node);
 }
 
 std::string HexLower(const std::vector<uint8_t>& bytes) {
@@ -127,6 +129,15 @@ std::string TruncateUtf8(const std::string& text, size_t max_bytes) {
   while (cut > 0 && ((static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80))
     --cut;
   return text.substr(0, cut);
+}
+
+// 侧车是不是 v2 格式：首行是 v2 版本行，**或**正文里出现 phase 行
+// （ResetCloudSyncSidecarFile 写的重置文件带 phase\t0 ⇒ 也算 v2）。
+// ⇒ 阶段 0 且侧车是 v1 时，这轮继续写 v1（与本批之前逐字一致）。
+bool IsSidecarV2Text(const std::string& text) {
+  if (text.compare(0, 22, "#fluxing-cloud-sync-v2") == 0)
+    return true;
+  return text.find("\nphase\t") != std::string::npos;
 }
 
 }  // namespace
@@ -471,6 +482,85 @@ bool ParsePushResponse(const std::string& body,
   return true;
 }
 
+// ★ spec 103 · BR-①g：单条条目 → 信封（桶级 blob 的构件）。
+//   与 SealEntries **同一套**密码学口径：AES-256-GCM +
+//   AAD = BuildAad(MAC 身份, type, hlc)，被加密的明文 =
+//   [4 字节大端 key_len][明文 item_key][payload]
+//   ⇒ 桶 blob 里**不出现明文词条**（AC-07 不破）。
+bool SealEntryEnvelope(const Entry& entry,
+                       ItemType type,
+                       const std::vector<uint8_t>& enc_key,
+                       Envelope* out,
+                       std::string* err) {
+  if (out == nullptr) {
+    if (err)
+      *err = "内部错误：信封输出为空。";
+    return false;
+  }
+  if (enc_key.size() != kKeyBytes) {
+    if (err)
+      *err = "加密密钥长度不正确，无法加密条目。";
+    return false;
+  }
+  std::vector<uint8_t> nonce;
+  if (!crypto::GenerateNonce(&nonce) || nonce.size() != kNonceBytes) {
+    if (err)
+      *err = "无法生成随机数。";
+    return false;
+  }
+  // AC-07：明文键换成 MAC 线上身份，明文键本身移入密文内部。
+  const std::string item_key_id = ComputeItemKeyId(enc_key, entry.key);
+  if (item_key_id.empty()) {
+    if (err)
+      *err = "无法计算条目在云端的标识。";
+    return false;
+  }
+  std::string packed;
+  PackSealedPlain(entry.key, entry.payload, &packed);
+  const std::string aad = BuildAad(item_key_id, type, entry.hlc);
+  std::vector<uint8_t> cipher;
+  std::string seal_err;
+  if (!crypto::AesGcmSeal(enc_key, nonce, aad, packed, &cipher, &seal_err)) {
+    SecureZeroString(&packed);
+    if (err)
+      *err = "加密条目失败：" +
+             (seal_err.empty() ? std::string("未知原因") : seal_err);
+    return false;
+  }
+  SecureZeroString(&packed);
+  out->item_key = item_key_id;
+  out->type = type;
+  out->hlc = entry.hlc;
+  out->nonce = nonce;
+  out->cipher = cipher;
+  return true;
+}
+
+// 信封 → 待推送条目（线上形态与 SealEntries **逐字一致** ⇒ 可直接喂
+// OpenItemsTolerant 解密，与老端点同一条解密路径）。
+bool CloudSyncItemFromEnvelope(const Envelope& env,
+                               CloudSyncItem* out,
+                               std::string* err) {
+  if (out == nullptr) {
+    if (err)
+      *err = "内部错误：条目输出为空。";
+    return false;
+  }
+  if (env.item_key.empty()) {
+    if (err)
+      *err = "云端条目的标识为空。";
+    return false;
+  }
+  CloudSyncItem item;
+  item.item_key = env.item_key;
+  item.type = ItemTypeName(env.type);
+  item.hlc = env.hlc;
+  item.nonce_b64 = Base64Encode(env.nonce);
+  item.cipher_b64 = Base64Encode(env.cipher);
+  *out = item;
+  return true;
+}
+
 bool SealEntries(const std::vector<Entry>& entries,
                  ItemType type,
                  const std::vector<uint8_t>& enc_key,
@@ -491,39 +581,16 @@ bool SealEntries(const std::vector<Entry>& entries,
   }
 
   for (size_t i = 0; i < entries.size(); ++i) {
-    const Entry& entry = entries[i];
-    std::vector<uint8_t> nonce;
-    if (!crypto::GenerateNonce(&nonce) || nonce.size() != kNonceBytes) {
-      if (err)
-        *err = "无法生成随机数。";
+    // ★ 委托给单条实现 ⇒ 条目级与桶级共用同一份密封逻辑（宪法 R7）。
+    Envelope env;
+    if (!SealEntryEnvelope(entries[i], type, enc_key, &env, err))
       return false;
-    }
-    // AC-07：明文键换成 MAC 线上身份，明文键本身移入密文内部。
-    const std::string item_key_id = ComputeItemKeyId(enc_key, entry.key);
-    if (item_key_id.empty()) {
-      if (err)
-        *err = "无法计算条目在云端的标识。";
-      return false;
-    }
-    std::string packed;
-    PackSealedPlain(entry.key, entry.payload, &packed);
-    const std::string aad = BuildAad(item_key_id, type, entry.hlc);
-    std::vector<uint8_t> cipher;
-    std::string seal_err;
-    if (!crypto::AesGcmSeal(enc_key, nonce, aad, packed, &cipher, &seal_err)) {
-      SecureZeroString(&packed);
-      if (err)
-        *err = "加密条目失败：" +
-               (seal_err.empty() ? std::string("未知原因") : seal_err);
-      return false;
-    }
-    SecureZeroString(&packed);
     CloudSyncItem item;
-    item.item_key = item_key_id;
-    item.type = ItemTypeName(type);
-    item.hlc = entry.hlc;
-    item.nonce_b64 = Base64Encode(nonce);
-    item.cipher_b64 = Base64Encode(cipher);
+    item.item_key = env.item_key;
+    item.type = ItemTypeName(env.type);
+    item.hlc = env.hlc;
+    item.nonce_b64 = Base64Encode(env.nonce);
+    item.cipher_b64 = Base64Encode(env.cipher);
     out->push_back(item);
   }
   return true;
@@ -785,6 +852,72 @@ bool CloudSyncService::Pull(int64_t since,
 }
 
 // ---------------------------------------------------------------------------
+// 桶级端点（spec 103 · BR-①g · ADR 0077）
+// ---------------------------------------------------------------------------
+//
+// ⚠ 回滚口径：桶端点与老端点**并存**，由灰度阶段决定这一轮发哪些请求
+//   （阶段 0 = 只走老端点 ⇒ 行为与本批之前逐字不变）。
+
+// 桶级推送：POST /v1/sync/buckets/push
+// device_id **一律不上报**（服务端拿它跟登录设备的行主键比对，不等即 400）。
+bool CloudSyncService::PushBuckets(
+    const std::vector<CloudBucketPushItem>& buckets,
+    int64_t* server_seq,
+    std::string* err,
+    std::vector<std::string>* accepted,
+    std::vector<std::string>* skipped,
+    int* http_status) {
+  if (buckets.empty())
+    return true;  // 服务端拒绝空数组
+
+  int status = 0;
+  std::string response;
+  std::string send_err;
+  if (!SendJson("POST", "/v1/sync/buckets/push",
+                BuildBucketPushBody(buckets, std::string()), &status, &response,
+                &send_err)) {
+    if (http_status)
+      *http_status = status;  // 传输层失败 ⇒ 0；HTTP 错误 ⇒ 服务端状态码
+    if (err)
+      *err = send_err.empty() ? "推送失败。" : send_err;
+    return false;
+  }
+  if (http_status)
+    *http_status = status;
+  // 复用条目级的响应解析（accepted / skipped 都是字符串数组；这里装的是
+  // bucket_key）⇒ 服务端整桶跳过（HLC 守卫命中）时客户端同样能识别。
+  return ParsePushResponse(response, accepted, skipped, server_seq, err);
+}
+
+// 桶级拉取：GET /v1/sync/buckets/pull?since=<n>&limit=<n>[&cursor=<c>]
+bool CloudSyncService::PullBuckets(int64_t since,
+                                   int64_t limit,
+                                   const std::string& cursor,
+                                   std::vector<CloudBucketPullItem>* out,
+                                   int64_t* new_server_seq,
+                                   std::string* err,
+                                   bool* has_more,
+                                   std::string* next_cursor) {
+  if (out == nullptr) {
+    if (err)
+      *err = "内部错误：拉取结果输出为空。";
+    return false;
+  }
+  const std::string path = BuildBucketPullPath(since, limit, cursor);
+
+  int status = 0;
+  std::string response;
+  std::string send_err;
+  if (!SendJson("GET", path, "", &status, &response, &send_err)) {
+    if (err)
+      *err = send_err.empty() ? "拉取失败。" : send_err;
+    return false;
+  }
+  return ParseBucketPullResponse(response, out, new_server_seq, err, has_more,
+                                 next_cursor);
+}
+
+// ---------------------------------------------------------------------------
 // 编排
 // ---------------------------------------------------------------------------
 
@@ -809,6 +942,10 @@ bool CloudSyncCoordinator::LoadSidecar(std::string* err) {
   sidecar_rows_.clear();
   last_server_seq_ = 0;
   key_rotated_ = false;
+  bucket_rows_.clear();
+  bucket_seq_ = 0;
+  bucket_phase_ = CloudBucketPhase::kLegacy;
+  sidecar_v2_ = false;
   if (sidecar_path_.empty())
     return true;
 
@@ -818,8 +955,17 @@ bool CloudSyncCoordinator::LoadSidecar(std::string* err) {
 
   std::stringstream buf;
   buf << in.rdbuf();
-  return ParseSidecarText(buf.str(), enc_key_, &sidecar_rows_,
-                          &last_server_seq_, &key_rotated_, err);
+  const std::string text = buf.str();
+  sidecar_v2_ = IsSidecarV2Text(text);
+  int phase = 0;
+  // ★ v1 / v2 同一套解析器 ⇒ v1 文件读出来 phase=0、bseq=0、无 brow。
+  const bool ok = ParseSidecarTextV2(text, enc_key_, &sidecar_rows_,
+                                     &last_server_seq_, &bucket_seq_, &phase,
+                                     &bucket_rows_, &key_rotated_, err);
+  if (phase < 0 || phase > 4)
+    phase = 0;
+  bucket_phase_ = static_cast<CloudBucketPhase>(phase);
+  return ok;
 }
 
 bool CloudSyncCoordinator::SaveSidecar(std::string* err) {
@@ -831,7 +977,15 @@ bool CloudSyncCoordinator::SaveSidecar(std::string* err) {
       *err = "无法写入同步状态文件：" + sidecar_path_;
     return false;
   }
-  out << BuildSidecarText(sidecar_rows_, last_server_seq_, enc_key_);
+  // ★ 阶段 0 且侧车仍是 v1 ⇒ 写 v1（与本批之前**逐字一致**）；
+  //   其余情形（阶段 ≠ 0，或侧车已经是 v2）⇒ 写 v2（带 bseq / phase / brow）。
+  if (sidecar_v2_ || bucket_phase_ != CloudBucketPhase::kLegacy) {
+    out << BuildSidecarTextV2(sidecar_rows_, last_server_seq_, bucket_seq_,
+                              BucketPhaseValue(bucket_phase_), bucket_rows_,
+                              enc_key_);
+  } else {
+    out << BuildSidecarText(sidecar_rows_, last_server_seq_, enc_key_);
+  }
   if (!out) {
     if (err)
       *err = "写入同步状态文件失败：" + sidecar_path_;
@@ -898,6 +1052,9 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   // ★ ADR 0076 D2-5a-6（R5 · 观测口径）：**无条件**诊断行（本轮失败也照打）
   //   ⇒ 判据取证不依赖界面显示（1017 那行只显示成功态摘要）。
   diag::AppendLine("cloudsync", FormatReconcileDiagLine(stats));
+  // ★ spec 103 · BR-①g：桶级诊断行（**无条件**打印，本轮失败也照打 ⇒
+  //   与既有 reconcile / push batch 行并存，判据取证不依赖界面显示）。
+  diag::AppendLine("cloudsync", FormatBucketDiagLine(last_bucket_stats_));
   return ok;
 }
 
@@ -918,6 +1075,8 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
   out->message.clear();
   // ADR 0072: 本轮的可选提示（成功态界面要显示它们）。
   out->notices.clear();
+  // ★ spec 103 · BR-①g：本轮桶计数先归零（失败轮也打一行 ⇒ 不能留上一轮的数）。
+  last_bucket_stats_ = CloudBucketRoundStats();
 
   if (transport_ == nullptr || backend_ == nullptr) {
     if (err)
@@ -951,6 +1110,29 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
 
   std::string ignored;
   LoadSidecar(&ignored);
+
+  // ★ spec 103 · BR-①g：解析本轮**生效**的灰度阶段。
+  //   口径（FR-208）：外部环境变量优先、否则侧车值、否则默认逐条；
+  //   环境变量生效 ⇒ 本轮结束时写回侧车 ⇒ 回滚 = 把变量设成 0 再跑一轮。
+  {
+    const char* env_raw = std::getenv(kBucketPhaseEnvVar);
+    CloudBucketPhase resolved = CloudBucketPhase::kLegacy;
+    bool from_env = false;
+    ResolveBucketPhase(
+        env_raw != nullptr ? std::string(env_raw) : std::string(),
+        env_raw != nullptr, bucket_phase_, &resolved, &from_env);
+    bucket_phase_ = resolved;
+    bucket_phase_from_env_ = from_env;
+  }
+  // 本轮生效阶段写进诊断行（阶段 0 ⇒ 「bucket phase=0 …」）。
+  last_bucket_stats_.phase = BucketPhaseValue(bucket_phase_);
+  // 阶段 0 = 逐条端点单跑（**默认**）⇒ 与本批之前逐字等价（AC-210）。
+  const bool bucket_mode = bucket_phase_ != CloudBucketPhase::kLegacy;
+  // 阶段 3 / 4 = 切读 / 退役 ⇒ 逐条端点完全不发。
+  const bool bucket_only = bucket_phase_ == CloudBucketPhase::kSwitchRead ||
+                           bucket_phase_ == CloudBucketPhase::kRetired;
+  // 逐条端点是否仍可用（阶段 0 / 1 / 2）。
+  const bool legacy_endpoints = !bucket_only;
 
   // 维护模式：锁住用户库（否则 leveldb LOCK 失败）。
   std::string begin_err;
@@ -1028,8 +1210,8 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
   int malformed = 0;
   // ★ 批次 BM / ADR 0071：本轮是否发生过「访问令牌自动续期」。
   bool token_refreshed = false;
-  if (direction == SyncDirection::kPullOnly ||
-      direction == SyncDirection::kBoth) {
+  if (legacy_endpoints && (direction == SyncDirection::kPullOnly ||
+                           direction == SyncDirection::kBoth)) {
     CloudSyncService service(transport_, access_token_);
     service.SetAccessTokenRefresher(refresher_);
     int64_t since = last_server_seq_;
@@ -1081,6 +1263,33 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     }
     if (service.token_refreshed())
       token_refreshed = true;  // ★ 批次 BM：401 → 续期 → 重试真的发生过
+  }
+
+  // 1.5) ★ spec 103 · BR-①g：桶级拉取（阶段 ≥ 1）。
+  //   · 桶端点与逐条端点**互不参照**（两套编号空间）；桶游标 bseq 只从
+  //     **拉取响应**推进。
+  //   · 桶内条目走**逐条端点同一条解密路径**（OpenItemsTolerant）⇒ 条目级
+  //     可验性与「解不开只计数」的语义逐字不变（R7 单一真相源）。
+  bool bucket_scan_complete = false;
+  if (bucket_mode && (direction == SyncDirection::kPullOnly ||
+                      direction == SyncDirection::kBoth)) {
+    bool bucket_more = false;
+    std::string bucket_err;
+    if (!PullBucketsIntoRemote(snapshots.size(), &remote_entries, &bucket_more,
+                               &last_bucket_stats_, &undecryptable, &malformed,
+                               &bucket_err)) {
+      backend_->EndMaintenance(&ignored);
+      const std::string reason =
+          bucket_err.empty() ? "拉取云端桶失败。" : bucket_err;
+      if (err)
+        *err = reason;
+      out->message = reason;
+      return false;
+    }
+    bucket_scan_complete = !bucket_more;
+    // 阶段 3 / 4：逐条端点不参与 ⇒ 「还有更多」的判定改由桶端点给出。
+    if (bucket_only)
+      has_more = bucket_more;
   }
 
   // 2) ★ 对账并分配 / 复用 HLC（ADR 0076 D2-5a-2 / -3 / -5）。
@@ -1287,8 +1496,8 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
   std::vector<bool> pushed(local_entries.size(), false);  // 本轮真的推成功的
   // 本轮被服务端跳过的（云端已有更新版本）—— 不是失败，但也不能算「推送」。
   std::vector<bool> skipped_flags(local_entries.size(), false);
-  if (direction == SyncDirection::kPushOnly ||
-      direction == SyncDirection::kBoth) {
+  if (legacy_endpoints && (direction == SyncDirection::kPushOnly ||
+                           direction == SyncDirection::kBoth)) {
     for (size_t i = 0; i < local_entries.size(); ++i) {
       if (!locally_modified[i])
         continue;
@@ -1390,6 +1599,28 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     }
     if (service.token_refreshed())
       token_refreshed = true;  // ★ 批次 BM：401 → 续期 → 重试真的发生过
+  }
+
+  // 5.5) ★ spec 103 · BR-①g：桶级推送（阶段 ≥ 1）。
+  //   · **库存扫描未完成 ⇒ 本轮不推桶**（整桶覆盖闸门）：桶内容 = 合并视图
+  //     的整桶，视图不完整时推上去会覆盖掉没看到的远端条目。
+  //   · 只推**指纹变化**的桶 ⇒ 稳态零请求、零写入（AC-206）。
+  if (bucket_mode &&
+      (direction == SyncDirection::kPushOnly ||
+       direction == SyncDirection::kBoth) &&
+      bucket_scan_complete) {
+    std::string bucket_err;
+    if (!PushChangedBuckets(merged, remote_entries, bucket_scan_complete,
+                            legacy_endpoints, &last_bucket_stats_, out,
+                            &bucket_err)) {
+      backend_->EndMaintenance(&ignored);
+      const std::string reason =
+          bucket_err.empty() ? "推送云端桶失败。" : bucket_err;
+      if (err)
+        *err = reason;
+      out->message = reason;
+      return false;
+    }
   }
 
   // 6) 更新 sidecar：只把「已同步」的条目标记成已同步。
@@ -1544,6 +1775,445 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// ★ spec 103 · BR-①g：桶级编排（拉取 / 分桶 / 指纹 / 推送）
+// ---------------------------------------------------------------------------
+//
+// ★ 三条不可破的边界：
+//   1) 桶 blob = **既有逐条信封块直接串接** ⇒ 条目级 AAD / 可验性逐字不变
+//      （I2 / I4），桶内条目走**逐条端点同一条**解密路径（OpenItemsTolerant）。
+//   2) 桶内容 = **合并后本地视图的全集**按 (词典名, 分片) 分组（FR-206）
+//      ⇒ 只推变化桶，服务端整桶覆盖也不会丢同桶其它条目。
+//   3) 桶游标 bseq 与逐条游标 seq **互不参照**（AC-211）：bseq 只从**拉取
+//      响应**推进，绝不归零 seq，也绝不从推送响应推进。
+
+namespace {
+
+// 桶内容指纹（语义口径，与逐条侧车**同源** ⇒ 只改 d= / t= 不变、只改 c= 变）。
+std::string ComputeBucketContentFingerprint(const std::vector<Entry>& entries) {
+  std::vector<CloudBucketFingerprintItem> items;
+  items.reserve(entries.size());
+  for (size_t i = 0; i < entries.size(); ++i) {
+    CloudBucketFingerprintItem item;
+    item.item_key = entries[i].key;
+    item.payload_hash = SemanticHashHex(entries[i].payload);
+    item.hlc = entries[i].hlc;
+    items.push_back(item);
+  }
+  return BucketFingerprint(items);
+}
+
+// 字符串数组里是否含某个值（accepted / skipped 的判定）。
+bool ContainsString(const std::vector<std::string>& list,
+                    const std::string& value) {
+  for (size_t i = 0; i < list.size(); ++i) {
+    if (list[i] == value)
+      return true;
+  }
+  return false;
+}
+
+// 桶行指纹的比较口径：降级桶的指纹带 "d:" 前缀（已改走逐条端点）⇒ 比较时
+//   剥掉前缀，避免每轮重复降级。
+std::string BucketFingerprintBase(const std::string& stored) {
+  if (stored.size() > 2 && stored[0] == 'd' && stored[1] == ':')
+    return stored.substr(2);
+  return stored;
+}
+
+}  // namespace
+
+bool CloudSyncCoordinator::PullBucketsIntoRemote(
+    size_t dict_count,
+    std::vector<Entry>* remote_entries,
+    bool* has_more,
+    CloudBucketRoundStats* stats,
+    int* undecryptable,
+    int* malformed,
+    std::string* err) {
+  if (remote_entries == nullptr || stats == nullptr) {
+    if (err)
+      *err = "内部错误：桶拉取输出为空。";
+    return false;
+  }
+  CloudSyncService service(transport_, access_token_);
+  service.SetAccessTokenRefresher(refresher_);
+
+  // ★ 切读阶段（3 / 4）必须**扫完整库存**：FR-215 的「云端视图缺失」判定
+  //   只有在全量视图上才成立 ⇒ 首屏 since = 0；其余阶段用 bseq 增量拉取。
+  const bool full_scan = (bucket_phase_ == CloudBucketPhase::kSwitchRead ||
+                          bucket_phase_ == CloudBucketPhase::kRetired);
+  int64_t since = full_scan ? 0 : bucket_seq_;
+  std::string cursor;
+  bool more = false;
+  const int max_pages = BucketPullMaxPages(dict_count);
+  int pages = 0;
+  while (pages < max_pages) {
+    std::vector<CloudBucketPullItem> page;
+    bool page_more = false;
+    int64_t next_seq = since;
+    std::string next_cursor;
+    std::string pull_err;
+    ++pages;
+    ++stats->pull_requests;
+    if (!service.PullBuckets(since, kBucketPullPageLimit, cursor, &page,
+                             &next_seq, &pull_err, &page_more, &next_cursor)) {
+      if (err)
+        *err = pull_err.empty() ? "拉取云端桶失败。" : pull_err;
+      return false;
+    }
+    for (size_t i = 0; i < page.size(); ++i) {
+      std::vector<Envelope> envelopes;
+      std::string unpack_err;
+      std::vector<uint8_t> blob_bytes;
+      if (!Base64Decode(page[i].cipher_b64, &blob_bytes)) {
+        // base64 畸形 ⇒ 跳过该桶（**不毒化整轮**），单独计数。
+        if (malformed != nullptr)
+          ++(*malformed);
+        continue;
+      }
+      const std::string blob =
+          blob_bytes.empty()
+              ? std::string()
+              : std::string(reinterpret_cast<const char*>(blob_bytes.data()),
+                            blob_bytes.size());
+      if (!UnpackBucketBlob(blob, &envelopes, &unpack_err)) {
+        // 单桶畸形 ⇒ 跳过该桶（**不毒化整轮**），单独计数。
+        if (malformed != nullptr)
+          ++(*malformed);
+        continue;
+      }
+      std::vector<CloudSyncItem> items;
+      bool item_bad = false;
+      for (size_t k = 0; k < envelopes.size(); ++k) {
+        CloudSyncItem item;
+        if (!CloudSyncItemFromEnvelope(envelopes[k], &item, &unpack_err)) {
+          item_bad = true;
+          break;
+        }
+        items.push_back(item);
+      }
+      if (item_bad) {
+        if (malformed != nullptr)
+          ++(*malformed);
+        continue;
+      }
+      std::vector<Entry> entries;
+      int page_undecryptable = 0;
+      int page_malformed = 0;
+      // ★ R7：桶内条目走**同一条**解密路径（OpenItemsTolerant）。
+      if (!OpenItemsTolerant(items, enc_key_, &entries, &page_undecryptable,
+                             &page_malformed, &unpack_err)) {
+        if (err)
+          *err = unpack_err;
+        return false;
+      }
+      if (undecryptable != nullptr)
+        *undecryptable += page_undecryptable;
+      if (malformed != nullptr)
+        *malformed += page_malformed;
+      stats->pulled_buckets += 1;
+      stats->pulled_items += static_cast<int>(entries.size());
+      remote_entries->insert(remote_entries->end(), entries.begin(),
+                             entries.end());
+    }
+    more = page_more;
+    if (next_seq > since)
+      since = next_seq;
+    if (!page_more)
+      break;
+    if (next_cursor.empty())
+      break;  // 没有续读位置 ⇒ 停手（避免死循环刷配额）
+    cursor = next_cursor;
+  }
+  if (has_more != nullptr)
+    *has_more = more;
+  // ★ bseq 只从**拉取响应**推进（推送返回的 server_seq 不推进它）。
+  if (since > bucket_seq_)
+    bucket_seq_ = since;
+  return true;
+}
+
+bool CloudSyncCoordinator::PushChangedBuckets(
+    const std::vector<Entry>& merged,
+    const std::vector<Entry>& remote_entries,
+    bool remote_complete,
+    bool legacy_endpoint_active,
+    CloudBucketRoundStats* stats,
+    CloudSyncRoundResult* result,
+    std::string* err) {
+  if (stats == nullptr) {
+    if (err)
+      *err = "内部错误：桶统计输出为空。";
+    return false;
+  }
+  std::vector<uint8_t> bucket_mac_key;
+  if (!DeriveBucketMacKey(enc_key_, &bucket_mac_key, err))
+    return false;
+
+  // 1) 分桶：桶键 = (词典名, 分片) ⇒ 改一条词条只重写 1 个桶（AC-201）。
+  std::map<std::string, std::vector<Entry> > groups;
+  for (size_t i = 0; i < merged.size(); ++i) {
+    const Entry& entry = merged[i];
+    std::string dict_name;
+    std::string phrase;
+    if (!SplitDictItemKey(entry.key, &dict_name, &phrase))
+      continue;  // 形态非法 ⇒ 不进桶（写回阶段另有闸门）
+    std::string bucket_key;
+    std::string key_err;
+    if (!ComputeBucketKeyForItem(bucket_mac_key, dict_name, entry.key,
+                                 &bucket_key, nullptr, nullptr, &key_err))
+      continue;
+    groups[bucket_key].push_back(entry);
+  }
+
+  // 2) 侧车里的桶行索引（bucket_key → 行）。
+  std::map<std::string, const CloudSidecarBucketRow*> brow_index;
+  for (size_t i = 0; i < bucket_rows_.size(); ++i)
+    brow_index[bucket_rows_[i].bucket_key] = &bucket_rows_[i];
+
+  // 3) FR-215：切读阶段检出「本地已同步但云端视图缺失」的条目 ⇒ 强制重推其桶。
+  //    该判定**仅在库存扫描完整时**生效（扫描不完整 ⇒ 云端视图不可信）。
+  std::set<std::string> missing_keys;
+  if (remote_complete && (bucket_phase_ == CloudBucketPhase::kSwitchRead ||
+                          bucket_phase_ == CloudBucketPhase::kRetired)) {
+    std::set<std::string> remote_keys;
+    for (size_t i = 0; i < remote_entries.size(); ++i)
+      remote_keys.insert(remote_entries[i].key);
+    for (size_t i = 0; i < sidecar_rows_.size(); ++i) {
+      if (remote_keys.find(sidecar_rows_[i].item_key) == remote_keys.end())
+        missing_keys.insert(sidecar_rows_[i].item_key);
+    }
+  }
+
+  // 4) 逐桶判定：指纹变化（或强制重推）才密封 ⇒ 稳态零 AES、零请求（AC-206）。
+  std::vector<CloudBucketPushItem> push_items;
+  std::vector<std::string> push_fingerprints;
+  std::vector<Entry> degraded_entries;
+  std::map<std::string, std::string> degraded_fingerprints;
+  for (std::map<std::string, std::vector<Entry> >::const_iterator it =
+           groups.begin();
+       it != groups.end(); ++it) {
+    const std::string& bucket_key = it->first;
+    const std::vector<Entry>& entries = it->second;
+    const std::string fingerprint = ComputeBucketContentFingerprint(entries);
+    std::map<std::string, const CloudSidecarBucketRow*>::const_iterator brow =
+        brow_index.find(bucket_key);
+    const bool known = (brow != brow_index.end());
+    bool changed = !known;
+    if (known)
+      changed = BucketFingerprintBase(brow->second->fingerprint) != fingerprint;
+    if (!changed && !missing_keys.empty()) {
+      for (size_t i = 0; i < entries.size(); ++i) {
+        if (missing_keys.find(entries[i].key) != missing_keys.end()) {
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (!changed)
+      continue;
+    // 超限降级（FR-214）：条目数或字节数超限 ⇒ 改走逐条端点推该桶条目，
+    //   且**不得**因此使整批失败。
+    if (entries.size() > kBucketMaxItems) {
+      degraded_entries.insert(degraded_entries.end(), entries.begin(),
+                              entries.end());
+      degraded_fingerprints[bucket_key] = fingerprint;
+      ++stats->degraded;
+      continue;
+    }
+    std::vector<Envelope> envelopes;
+    envelopes.reserve(entries.size());
+    for (size_t i = 0; i < entries.size(); ++i) {
+      Envelope env;
+      std::string seal_err;
+      if (!SealEntryEnvelope(entries[i], ItemType::kUserDb, enc_key_, &env,
+                             &seal_err)) {
+        if (err)
+          *err = seal_err;
+        return false;
+      }
+      envelopes.push_back(env);
+    }
+    const std::string blob = PackBucketBlob(envelopes);
+    if ((!envelopes.empty() && blob.empty()) ||
+        blob.size() > kBucketMaxBlobBytes) {
+      degraded_entries.insert(degraded_entries.end(), entries.begin(),
+                              entries.end());
+      degraded_fingerprints[bucket_key] = fingerprint;
+      ++stats->degraded;
+      continue;
+    }
+    // 桶级时序 = 桶内条目时序的最大值；**必须严格大于**已存值，否则服务端的
+    //   整桶守卫会把一次真实变更整桶跳过（AC-205）。
+    Hlc bucket_hlc = AggregateBucketHlc(envelopes);
+    if (known) {
+      Hlc stored;
+      stored.ms = brow->second->ms;
+      stored.counter = static_cast<uint16_t>(brow->second->counter);
+      stored.device = brow->second->device;
+      if (CompareHlc(bucket_hlc, stored) <= 0)
+        bucket_hlc = MakeHlcStrictlyGreater(stored);
+    }
+    CloudBucketPushItem item;
+    item.bucket_key = bucket_key;
+    item.item_count = envelopes.size();
+    item.cipher_b64 = Base64Encode(blob);
+    item.hlc = bucket_hlc;
+    push_items.push_back(item);
+    push_fingerprints.push_back(fingerprint);
+  }
+
+  // 5) 分批推送（单请求 ≤ 64 桶 = 服务端 MAX_PUSH_BUCKETS）。
+  std::vector<CloudSidecarBucketRow> new_brow;
+  bool push_ok = true;
+  std::string push_err;
+  if (!push_items.empty()) {
+    CloudSyncService service(transport_, access_token_);
+    service.SetAccessTokenRefresher(refresher_);
+    for (size_t offset = 0; offset < push_items.size();
+         offset += kBucketPushBatch) {
+      const size_t rest = push_items.size() - offset;
+      const size_t count = rest < kBucketPushBatch ? rest : kBucketPushBatch;
+      std::vector<CloudBucketPushItem> chunk(
+          push_items.begin() + offset, push_items.begin() + offset + count);
+      int64_t pushed_seq = bucket_seq_;
+      int http_status = 0;
+      std::vector<std::string> accepted_keys;
+      std::vector<std::string> skipped_keys;
+      ++stats->push_requests;
+      const bool ok =
+          service.PushBuckets(chunk, &pushed_seq, &push_err, &accepted_keys,
+                              &skipped_keys, &http_status);
+      if (!ok) {
+        push_ok = false;
+        break;
+      }
+      for (size_t k = offset; k < offset + count; ++k) {
+        const CloudBucketPushItem& item = push_items[k];
+        CloudSidecarBucketRow row;
+        row.bucket_key = item.bucket_key;
+        row.ms = item.hlc.ms;
+        row.counter = item.hlc.counter;
+        row.device = item.hlc.device;
+        row.item_count = item.item_count;
+        if (ContainsString(accepted_keys, item.bucket_key)) {
+          ++stats->pushed;
+          row.fingerprint = push_fingerprints[k - offset];
+          new_brow.push_back(row);
+        } else if (ContainsString(skipped_keys, item.bucket_key)) {
+          ++stats->skipped;
+          // ★ 服务端跳过 ⇒ 云端已存版本 ≥ 本次上报值 ⇒ 本次内容**未被采纳**
+          //   ⇒ 桶行指纹留空（未确认）⇒ 下一轮按更大的桶级时序重试。
+          row.fingerprint.clear();
+          new_brow.push_back(row);
+        }
+        // 服务端既没 accepted 也没 skipped ⇒ 不写桶行 ⇒ 下一轮重试。
+      }
+    }
+  }
+
+  // 6) 降级桶：改走逐条端点推该桶条目（FR-214），不因此使整批失败。
+  bool degraded_pushed = false;
+  if (!degraded_entries.empty() && legacy_endpoint_active) {
+    degraded_pushed = true;
+    CloudSyncService service(transport_, access_token_);
+    service.SetAccessTokenRefresher(refresher_);
+    for (size_t offset = 0; offset < degraded_entries.size();
+         offset += kPushBatchSize) {
+      const size_t rest = degraded_entries.size() - offset;
+      const size_t count = rest < kPushBatchSize ? rest : kPushBatchSize;
+      std::vector<Entry> chunk(degraded_entries.begin() + offset,
+                               degraded_entries.begin() + offset + count);
+      std::vector<CloudSyncItem> sealed;
+      std::string seal_err;
+      if (!SealEntries(chunk, ItemType::kUserDb, enc_key_, &sealed,
+                       &seal_err)) {
+        push_ok = false;
+        push_err = seal_err;
+        degraded_pushed = false;
+        break;
+      }
+      int64_t pushed_seq = last_server_seq_;
+      std::vector<std::string> accepted_keys;
+      std::vector<std::string> skipped_keys;
+      if (result != nullptr)
+        ++result->push_requests;
+      if (!service.Push(sealed, &pushed_seq, &push_err, &accepted_keys,
+                        &skipped_keys, nullptr)) {
+        push_ok = false;
+        degraded_pushed = false;
+        break;
+      }
+      if (result != nullptr) {
+        for (size_t k = 0; k < sealed.size(); ++k) {
+          const std::string key_id = ComputeItemKeyId(enc_key_, chunk[k].key);
+          switch (ClassifyPushResult(accepted_keys, skipped_keys, key_id)) {
+            case PushDisposition::kAccepted:
+              ++result->items_pushed;
+              break;
+            case PushDisposition::kSkipped:
+              ++result->items_skipped;
+              break;
+            case PushDisposition::kUnknown:
+              break;
+          }
+        }
+      }
+      if (pushed_seq > last_server_seq_)
+        last_server_seq_ = pushed_seq;
+    }
+  }
+
+  // 7) 重建桶行：推成功的记新指纹；没变的沿用旧行；失败的**不写**（下轮重试）。
+  for (std::map<std::string, std::vector<Entry> >::const_iterator it =
+           groups.begin();
+       it != groups.end(); ++it) {
+    bool written = false;
+    for (size_t i = 0; i < new_brow.size(); ++i) {
+      if (new_brow[i].bucket_key == it->first) {
+        written = true;
+        break;
+      }
+    }
+    if (written)
+      continue;
+    std::map<std::string, const CloudSidecarBucketRow*>::const_iterator brow =
+        brow_index.find(it->first);
+    if (brow != brow_index.end())
+      new_brow.push_back(*brow->second);
+  }
+  // 降级桶：只有在「已改走逐条端点且推送成功」时才记「已降级」（指纹带 "d:"
+  //   前缀）⇒ 不再每轮重复降级；逐条端点已退役时**不记** ⇒ 下一轮重试。
+  if (degraded_pushed) {
+    for (std::map<std::string, std::string>::const_iterator it =
+             degraded_fingerprints.begin();
+         it != degraded_fingerprints.end(); ++it) {
+      bool written = false;
+      for (size_t i = 0; i < new_brow.size(); ++i) {
+        if (new_brow[i].bucket_key == it->first) {
+          written = true;
+          break;
+        }
+      }
+      if (written)
+        continue;
+      CloudSidecarBucketRow row;
+      row.bucket_key = it->first;
+      row.fingerprint = "d:" + it->second;
+      new_brow.push_back(row);
+    }
+  }
+  bucket_rows_ = new_brow;
+
+  if (!push_ok) {
+    if (err)
+      *err = push_err.empty() ? "推送云端桶失败。" : push_err;
+    return false;
+  }
+  return true;
+}
+
 bool OpenItemsTolerant(const std::vector<CloudSyncItem>& items,
                        const std::vector<uint8_t>& enc_key,
                        std::vector<Entry>* out,
@@ -1693,12 +2363,73 @@ std::string BuildSidecarText(const std::vector<CloudSidecarRow>& rows,
   return out;
 }
 
-bool ParseSidecarText(const std::string& text,
-                      const std::vector<uint8_t>& enc_key,
-                      std::vector<CloudSidecarRow>* rows,
-                      int64_t* server_seq,
-                      bool* key_rotated,
-                      std::string* err) {
+// ★ spec 103 · BR-①g：侧车 v2 文本。
+//   **老端点游标 seq 的语义与取值一律不变**（绝不归零 ⇒ 老端点不会全量重扫）；
+//   新增 bseq（桶端点游标，编号空间独立）、phase（灰度阶段）与 brow（桶行）。
+std::string BuildSidecarTextV2(
+    const std::vector<CloudSidecarRow>& rows,
+    int64_t server_seq,
+    int64_t bucket_seq,
+    int bucket_phase,
+    const std::vector<CloudSidecarBucketRow>& bucket_rows,
+    const std::vector<uint8_t>& enc_key) {
+  std::string out;
+  out.reserve(96 + rows.size() * 128 + bucket_rows.size() * 160);
+  out += "#fluxing-cloud-sync-v2\n";
+  out += "seq\t";
+  out += std::to_string(server_seq);
+  out += "\n";
+  out += "bseq\t";
+  out += std::to_string(bucket_seq);
+  out += "\n";
+  out += "phase\t";
+  out += std::to_string(bucket_phase);
+  out += "\n";
+  out += "keyfp\t";
+  out += SidecarKeyFp(enc_key);
+  out += "\n";
+  for (size_t i = 0; i < rows.size(); ++i) {
+    out += "row\t";
+    out += EscapeKey(rows[i].item_key);
+    out += "\t";
+    out += std::to_string(rows[i].ms);
+    out += "\t";
+    out += std::to_string(rows[i].counter);
+    out += "\t";
+    out += rows[i].device;
+    out += "\t";
+    out += rows[i].payload_hash;
+    out += "\n";
+  }
+  for (size_t i = 0; i < bucket_rows.size(); ++i) {
+    out += "brow\t";
+    out += EscapeKey(bucket_rows[i].bucket_key);
+    out += "\t";
+    out += std::to_string(bucket_rows[i].ms);
+    out += "\t";
+    out += std::to_string(bucket_rows[i].counter);
+    out += "\t";
+    out += bucket_rows[i].device;
+    out += "\t";
+    out += std::to_string(bucket_rows[i].item_count);
+    out += "\t";
+    out += bucket_rows[i].fingerprint;
+    out += "\n";
+  }
+  return out;
+}
+
+// ★ 解析侧车文本（v1 / v2 通用）。
+//   v1 文件 ⇒ bucket_seq = 0、bucket_phase = 0、无 brow（AC-109 字面口径）。
+bool ParseSidecarTextV2(const std::string& text,
+                        const std::vector<uint8_t>& enc_key,
+                        std::vector<CloudSidecarRow>* rows,
+                        int64_t* server_seq,
+                        int64_t* bucket_seq,
+                        int* bucket_phase,
+                        std::vector<CloudSidecarBucketRow>* bucket_rows,
+                        bool* key_rotated,
+                        std::string* err) {
   if (rows == nullptr || server_seq == nullptr || key_rotated == nullptr) {
     if (err)
       *err = "内部错误：sidecar 解析输出参数为空";
@@ -1707,6 +2438,12 @@ bool ParseSidecarText(const std::string& text,
   rows->clear();
   *server_seq = 0;
   *key_rotated = false;
+  if (bucket_seq != nullptr)
+    *bucket_seq = 0;
+  if (bucket_phase != nullptr)
+    *bucket_phase = 0;
+  if (bucket_rows != nullptr)
+    bucket_rows->clear();
 
   std::string stored_keyfp;
   bool seen_keyfp = false;
@@ -1727,6 +2464,17 @@ bool ParseSidecarText(const std::string& text,
       *server_seq = std::strtoll(cols[1].c_str(), nullptr, 10);
       continue;
     }
+    if (cols.size() >= 2 && cols[0] == "bseq") {
+      if (bucket_seq != nullptr)
+        *bucket_seq = std::strtoll(cols[1].c_str(), nullptr, 10);
+      continue;
+    }
+    if (cols.size() >= 2 && cols[0] == "phase") {
+      const long value = std::strtol(cols[1].c_str(), nullptr, 10);
+      if (bucket_phase != nullptr && value >= 0 && value <= 4)
+        *bucket_phase = static_cast<int>(value);
+      continue;
+    }
     if (cols.size() >= 2 && cols[0] == "keyfp") {
       stored_keyfp = cols[1];
       seen_keyfp = true;
@@ -1743,6 +2491,20 @@ bool ParseSidecarText(const std::string& text,
       rows->push_back(row);
       continue;
     }
+    if (cols.size() >= 7 && cols[0] == "brow") {
+      CloudSidecarBucketRow brow;
+      brow.bucket_key = UnescapeKey(cols[1]);
+      brow.ms = std::strtoull(cols[2].c_str(), nullptr, 10);
+      brow.counter =
+          static_cast<uint32_t>(std::strtoul(cols[3].c_str(), nullptr, 10));
+      brow.device = cols[4];
+      brow.item_count =
+          static_cast<size_t>(std::strtoull(cols[5].c_str(), nullptr, 10));
+      brow.fingerprint = cols[6];
+      if (bucket_rows != nullptr)
+        bucket_rows->push_back(brow);
+      continue;
+    }
   }
 
   if (seen_keyfp && stored_keyfp == kSidecarKeyFpUnbound)
@@ -1754,7 +2516,27 @@ bool ParseSidecarText(const std::string& text,
   rows->clear();
   *server_seq = 0;
   *key_rotated = true;
+  // ★ 换口令 ⇒ 桶键的派生密钥也变了 ⇒ 桶行基线与桶端点游标一并作废
+  //   （旧桶用的是旧密钥，云端那批桶再也解不开 ⇒ 本机从头重扫 + 重推）。
+  if (bucket_rows != nullptr)
+    bucket_rows->clear();
+  if (bucket_seq != nullptr)
+    *bucket_seq = 0;
   return true;
+}
+
+// ★ v1 语义的薄封装：**签名与语义逐字不变**（既有调用方与单测不受影响）。
+bool ParseSidecarText(const std::string& text,
+                      const std::vector<uint8_t>& enc_key,
+                      std::vector<CloudSidecarRow>* rows,
+                      int64_t* server_seq,
+                      bool* key_rotated,
+                      std::string* err) {
+  int64_t bucket_seq = 0;
+  int bucket_phase = 0;
+  std::vector<CloudSidecarBucketRow> bucket_rows;
+  return ParseSidecarTextV2(text, enc_key, rows, server_seq, &bucket_seq,
+                            &bucket_phase, &bucket_rows, key_rotated, err);
 }
 
 bool ResetCloudSyncSidecarFile(const std::string& sidecar_path,
@@ -1771,6 +2553,10 @@ bool ResetCloudSyncSidecarFile(const std::string& sidecar_path,
   }
   out << "#fluxing-cloud-sync-v1\n";
   out << "seq\t0\n";
+  // ★ spec 103 · BR-①g：桶端点游标 bseq 与灰度阶段 phase **一并归零**。
+  //   （老端点游标 seq 本来就是 0；这里**不动**别的既有语义。）
+  out << "bseq\t0\n";
+  out << "phase\t0\n";
   // 显式「未绑定密钥」：下一轮 LoadSidecar 不会把这次重置误判成密钥轮换。
   out << "keyfp\t-\n";
   return true;

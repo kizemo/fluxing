@@ -5215,6 +5215,410 @@ void TestCloudSemanticFingerprint() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// spec 103 · BR-①g：客户端桶化同步（桶键派生 / blob 打包拆包 / 桶指纹 /
+//                灰度阶段状态机 / 侧车 v2 / 桶级线格式）
+// ---------------------------------------------------------------------------
+//
+// 全部断言都跑**生产实现**（WeaselServer/Cloud/CloudBucketSync.cpp 与
+// CloudSyncService.cpp）⇒ 宪法 R7「生产与单测同源」，不复制第二份实现。
+
+// 桶 MAC 密钥（由测试主密钥派生；失败时返回空向量 ⇒ 断言会失败）。
+std::vector<uint8_t> TestBucketMacKey() {
+  std::vector<uint8_t> mac;
+  std::string err;
+  fc::DeriveBucketMacKey(TestKey(), &mac, &err);
+  return mac;
+}
+
+// 造一条可密封的本地条目（明文键 = "<词典名>\t<词条>"）。
+fc::Entry MakeBucketEntry(const std::string& dict,
+                          const std::string& phrase,
+                          const std::string& payload) {
+  fc::Entry e;
+  e.key = dict + "\t" + phrase;
+  e.payload = payload;
+  e.hlc = TestHlc();
+  return e;
+}
+
+// ---- 桶键派生（AC-201 / AC-207）----
+void TestBucketKeyDerivation() {
+  const std::vector<uint8_t> enc = TestKey();
+  std::string err;
+  std::vector<uint8_t> mac;
+  Check(fc::DeriveBucketMacKey(enc, &mac, &err), "桶键：派生桶 MAC 密钥成功");
+  Check(mac.size() == fc::kKeyBytes, "桶键：桶 MAC 密钥 32 字节");
+
+  std::vector<uint8_t> bad;
+  Check(!fc::DeriveBucketMacKey(std::vector<uint8_t>(16), &bad, &err),
+        "桶键：主密钥长度非 32 字节 ⇒ 失败");
+  Check(!err.empty(), "桶键：失败带中文原因");
+
+  // ★ 桶键与条目身份**不复用同一把 MAC 密钥**（独立 HKDF 标签 ⇒ 不可互推）。
+  std::vector<uint8_t> item_mac;
+  Check(fc::DeriveItemKeyMacKey(enc, &item_mac, &err),
+        "桶键：派生 item_key MAC 密钥成功");
+  Check(mac != item_mac, "桶键：桶 MAC 密钥 ≠ item_key MAC 密钥（不可互推）");
+
+  // 同一输入 ⇒ 同一桶键（恒等）。
+  std::string k1, k2;
+  int l1 = 0, l2 = 0, l1b = 0, l2b = 0;
+  const std::string ik = "rime_ice\t你好";
+  Check(fc::ComputeBucketKeyForItem(mac, "rime_ice", ik, &k1, &l1, &l2, &err),
+        "桶键：条目 ⇒ 桶键成功");
+  Check(fc::ComputeBucketKeyForItem(mac, "rime_ice", ik, &k2, &l1b, &l2b, &err),
+        "桶键：重复调用成功");
+  Check(k1 == k2 && l1 == l1b && l2 == l2b, "桶键：同一输入 ⇒ 同一桶键");
+  Check(k1.size() == static_cast<size_t>(fc::kBucketKeyHexLength),
+        "桶键：桶键 64 位十六进制");
+  Check(l1 >= 0 && l1 < fc::kBucketShardCount && l2 >= 0 &&
+            l2 < fc::kBucketSubShardCount,
+        "桶键：分片落在 64×16 范围内");
+
+  // 不同条目 / 不同词典 ⇒ 不同桶键。
+  std::string k3, k4;
+  fc::ComputeBucketKeyForItem(mac, "rime_ice", "rime_ice\t世界", &k3, nullptr,
+                              nullptr, &err);
+  fc::ComputeBucketKeyForItem(mac, "other_dict", ik, &k4, nullptr, nullptr,
+                              &err);
+  Check(k1 != k3, "桶键：不同条目 ⇒ 不同桶键");
+  Check(k1 != k4, "桶键：不同词典 ⇒ 不同桶键");
+
+  // 桶密钥为空 ⇒ 失败（不静默产出垃圾桶键）。
+  std::string k5;
+  Check(!fc::ComputeBucketKeyForItem(std::vector<uint8_t>(), "rime_ice", ik,
+                                     &k5, nullptr, nullptr, &err),
+        "桶键：桶密钥为空 ⇒ 失败");
+}
+
+// ---- 桶 blob 打包 / 拆包 + 桶级 HLC + 同一解密路径 ----
+void TestBucketBlobRoundTrip() {
+  const std::vector<uint8_t> enc = TestKey();
+  std::string err;
+  std::vector<fc::Entry> entries;
+  std::vector<fc::Envelope> envs;
+  for (int i = 0; i < 3; ++i) {
+    entries.push_back(MakeBucketEntry("rime_ice", "词条" + std::to_string(i),
+                                      "code \tc=1 d=0.5 t=100"));
+    fc::Envelope env;
+    Check(fc::SealEntryEnvelope(entries.back(), fc::ItemType::kUserDb, enc,
+                                &env, &err),
+          "blob：单条密封成功");
+    envs.push_back(env);
+  }
+
+  const std::string blob = fc::PackBucketBlob(envs);
+  Check(!blob.empty(), "blob：打包非空");
+  std::vector<fc::Envelope> back;
+  Check(fc::UnpackBucketBlob(blob, &back, &err), "blob：拆包成功");
+  Check(back.size() == envs.size(), "blob：往返条目数一致");
+  Check(back.size() == envs.size() && back[0].item_key == envs[0].item_key &&
+            back[0].nonce == envs[0].nonce && back[0].cipher == envs[0].cipher,
+        "blob：往返内容逐字一致");
+
+  // 行数不是 8 的倍数 ⇒ 失败。
+  std::vector<fc::Envelope> out2;
+  Check(!fc::UnpackBucketBlob(blob + "x\n", &out2, &err),
+        "blob：行数非 8 倍数 ⇒ 失败");
+  Check(!err.empty(), "blob：失败带中文原因");
+
+  // 行数是 8 的倍数但内容畸形 ⇒ 失败。
+  const std::string junk = "a\nb\nc\nd\ne\nf\ng\nh\n";
+  std::vector<fc::Envelope> out3;
+  Check(!fc::UnpackBucketBlob(junk, &out3, &err), "blob：内容畸形 ⇒ 失败");
+
+  // 桶级 HLC = 桶内条目 HLC 的最大值；空桶 ⇒ 全零。
+  const fc::Hlc agg = fc::AggregateBucketHlc(envs);
+  Check(agg.ms == TestHlc().ms && agg.counter == TestHlc().counter,
+        "桶 HLC：取桶内条目 HLC");
+  const fc::Hlc empty = fc::AggregateBucketHlc(std::vector<fc::Envelope>());
+  Check(empty.ms == 0 && empty.counter == 0, "桶 HLC：空桶 ⇒ 全零");
+
+  // ★ 桶内条目走**同一条**解密路径：单条密封与批量密封产出的线上身份一致。
+  fc::CloudSyncItem single;
+  Check(fc::CloudSyncItemFromEnvelope(envs[0], &single, &err),
+        "blob：信封 ⇒ 待推送条目");
+  Check(single.item_key.size() == 64 && single.item_key != entries[0].key,
+        "blob：线上身份是 64 位 MAC 身份（≠ 明文键）");
+  std::vector<fc::CloudSyncItem> legacy_items;
+  Check(
+      fc::SealEntries(entries, fc::ItemType::kUserDb, enc, &legacy_items, &err),
+      "blob：批量密封成功");
+  Check(legacy_items.size() == 3 &&
+            legacy_items[0].item_key == single.item_key &&
+            legacy_items[0].type == single.type &&
+            fc::CompareHlc(legacy_items[0].hlc, single.hlc) == 0,
+        "blob：单条密封与批量密封线上身份一致（R7 同一真相源）");
+}
+
+// ---- 桶指纹语义口径（ADR 0076 D2-5a-9 · a-9）----
+void TestBucketFingerprintSemantics() {
+  const std::string p1 = "code \tc=3 d=0.5 t=100";
+  const std::string p2 = "code \tc=3 d=0.9 t=200";  // 只改 d= / t=
+  const std::string p3 = "code \tc=4 d=0.5 t=100";  // 只改 c=
+
+  Check(fc::SemanticHashHex(p1) == fc::SemanticHashHex(p2),
+        "指纹：只改 d= / t= ⇒ 语义哈希不变");
+  Check(fc::SemanticHashHex(p1) != fc::SemanticHashHex(p3),
+        "指纹：只改 c= ⇒ 语义哈希变化");
+  Check(fc::SemanticHashHex(p1).compare(0, 3, "s2:") == 0,
+        "指纹：语义哈希带 s2: 版本标记");
+  Check(fc::IsSemanticHash(fc::SemanticHashHex(p1)),
+        "指纹：IsSemanticHash 认得 s2: 口径");
+
+  std::vector<fc::CloudBucketFingerprintItem> a, b, c;
+  fc::CloudBucketFingerprintItem it;
+  it.item_key = "rime_ice\t词条";
+  it.hlc = TestHlc();
+  it.payload_hash = fc::SemanticHashHex(p1);
+  a.push_back(it);
+  it.payload_hash = fc::SemanticHashHex(p2);
+  b.push_back(it);
+  it.payload_hash = fc::SemanticHashHex(p3);
+  c.push_back(it);
+  Check(fc::BucketFingerprint(a) == fc::BucketFingerprint(b),
+        "桶指纹：只改 d= / t= ⇒ 桶指纹不变（稳态零推送）");
+  Check(fc::BucketFingerprint(a) != fc::BucketFingerprint(c),
+        "桶指纹：改 c= ⇒ 桶指纹变化（要重推）");
+  Check(fc::BucketFingerprint(a).size() == 64, "桶指纹：64 位十六进制");
+
+  // 与条目顺序无关（按 item_key 升序拼行）。
+  fc::CloudBucketFingerprintItem i1, i2;
+  i1.item_key = "k1";
+  i1.payload_hash = fc::SemanticHashHex(p1);
+  i1.hlc = TestHlc();
+  i2.item_key = "k2";
+  i2.payload_hash = fc::SemanticHashHex(p3);
+  i2.hlc = TestHlc();
+  std::vector<fc::CloudBucketFingerprintItem> o1, o2;
+  o1.push_back(i1);
+  o1.push_back(i2);
+  o2.push_back(i2);
+  o2.push_back(i1);
+  Check(fc::BucketFingerprint(o1) == fc::BucketFingerprint(o2),
+        "桶指纹：与条目顺序无关");
+}
+
+// ---- 灰度阶段状态机（FR-207 / FR-208）----
+void TestBucketPhaseStateMachine() {
+  fc::CloudBucketPhase p = fc::CloudBucketPhase::kLegacy;
+  Check(
+      fc::ParseBucketPhaseValue("0", &p) && p == fc::CloudBucketPhase::kLegacy,
+      "阶段机：'0' ⇒ 老端点单跑");
+  Check(fc::ParseBucketPhaseValue("3", &p) &&
+            p == fc::CloudBucketPhase::kSwitchRead,
+        "阶段机：'3' ⇒ 切读");
+  Check(
+      fc::ParseBucketPhaseValue("4", &p) && p == fc::CloudBucketPhase::kRetired,
+      "阶段机：'4' ⇒ 老端点退役");
+  Check(!fc::ParseBucketPhaseValue("5", &p), "阶段机：越界值非法");
+  Check(!fc::ParseBucketPhaseValue("", &p), "阶段机：空串非法");
+  Check(!fc::ParseBucketPhaseValue("-1", &p), "阶段机：负数非法");
+  Check(!fc::ParseBucketPhaseValue("10", &p), "阶段机：多位数非法");
+
+  fc::CloudBucketPhase out = fc::CloudBucketPhase::kLegacy;
+  bool from_env = false;
+  Check(fc::ResolveBucketPhase("2", true, fc::CloudBucketPhase::kLegacy, &out,
+                               &from_env) &&
+            out == fc::CloudBucketPhase::kVerify && from_env,
+        "阶段机：环境变量优先且标记来源为 env");
+  Check(fc::ResolveBucketPhase("9", true, fc::CloudBucketPhase::kSwitchRead,
+                               &out, &from_env) &&
+            out == fc::CloudBucketPhase::kSwitchRead && !from_env,
+        "阶段机：环境变量非法 ⇒ 回退侧车阶段");
+  Check(fc::ResolveBucketPhase("", false, fc::CloudBucketPhase::kRetired, &out,
+                               &from_env) &&
+            out == fc::CloudBucketPhase::kRetired && !from_env,
+        "阶段机：环境变量缺失 ⇒ 回退侧车阶段");
+  Check(
+      std::string(fc::kBucketPhaseEnvVar) == "FLUXING_CLOUD_SYNC_BUCKET_PHASE",
+      "阶段机：环境变量名逐字固定");
+}
+
+// ---- 侧车 v2 往返 / 读 v1 / 两套编号空间（AC-109 / FR-211）----
+void TestBucketSidecarV2() {
+  const std::vector<uint8_t> enc = TestKey();
+  std::vector<fc::CloudSidecarRow> rows;
+  fc::CloudSidecarRow r;
+  r.item_key = "rime_ice\t词条";
+  r.ms = 1762700000000ull;
+  r.counter = 7;
+  r.device = "0123456789abcdef";
+  r.payload_hash = fc::SemanticHashHex("code \tc=1 d=1 t=1");
+  rows.push_back(r);
+
+  std::vector<fc::CloudSidecarBucketRow> brows;
+  fc::CloudSidecarBucketRow b;
+  b.bucket_key = std::string(64, 'c');
+  b.ms = 1762700000001ull;
+  b.counter = 1;
+  b.device = "0123456789abcdef";
+  b.item_count = 53;
+  b.fingerprint = std::string(64, 'd');
+  brows.push_back(b);
+
+  const std::string v2 = fc::BuildSidecarTextV2(rows, 42, 77, 3, brows, enc);
+  Check(v2.find("bseq\t") != std::string::npos, "侧车 v2：写 bseq 行");
+  Check(v2.find("phase\t") != std::string::npos, "侧车 v2：写 phase 行");
+  Check(v2.find("brow\t") != std::string::npos, "侧车 v2：写 brow 行");
+
+  std::vector<fc::CloudSidecarRow> r2;
+  int64_t seq = 0;
+  int64_t bseq = 0;
+  int phase = -1;
+  std::vector<fc::CloudSidecarBucketRow> b2;
+  bool rotated = true;
+  std::string err;
+  Check(fc::ParseSidecarTextV2(v2, enc, &r2, &seq, &bseq, &phase, &b2, &rotated,
+                               &err),
+        "侧车 v2：可解析");
+  Check(!rotated, "侧车 v2：同一密钥 ⇒ 未轮换");
+  Check(seq == 42, "侧车 v2：老端点游标 seq 原义保留（不归零）");
+  Check(bseq == 77, "侧车 v2：桶端点游标 bseq 独立编号空间");
+  Check(phase == 3, "侧车 v2：灰度阶段 phase 落位");
+  Check(r2.size() == 1 && r2[0].item_key == r.item_key &&
+            r2[0].payload_hash == r.payload_hash,
+        "侧车 v2：条目行往返一致");
+  Check(b2.size() == 1 && b2[0].bucket_key == b.bucket_key &&
+            b2[0].item_count == 53 && b2[0].fingerprint == b.fingerprint,
+        "侧车 v2：桶行往返一致");
+
+  // ★ v1 文件 ⇒ phase = 0、bseq = 0、无 brow（AC-109 字面口径）。
+  const std::string v1 = fc::BuildSidecarText(rows, 42, enc);
+  std::vector<fc::CloudSidecarRow> r3;
+  int64_t seq3 = 0;
+  int64_t bseq3 = -1;
+  int phase3 = -1;
+  std::vector<fc::CloudSidecarBucketRow> b3;
+  bool rot3 = true;
+  std::string err3;
+  Check(fc::ParseSidecarTextV2(v1, enc, &r3, &seq3, &bseq3, &phase3, &b3, &rot3,
+                               &err3),
+        "侧车 v1：同一解析器可读 v1 文件");
+  Check(!rot3 && seq3 == 42 && r3.size() == 1,
+        "侧车 v1：老口径行与 seq 原义不变");
+  Check(bseq3 == 0 && phase3 == 0 && b3.empty(),
+        "侧车 v1：phase=0、bseq=0、无 brow");
+
+  // 既有 v1 公开接口语义逐字不变。
+  std::vector<fc::CloudSidecarRow> r4;
+  int64_t seq4 = 0;
+  bool rot4 = true;
+  std::string err4;
+  Check(fc::ParseSidecarText(v1, enc, &r4, &seq4, &rot4, &err4) && seq4 == 42 &&
+            r4.size() == 1 && !rot4,
+        "侧车 v1：公开接口语义逐字不变");
+}
+
+// ---- 桶级线格式（真相源：cloud/fluxing-sync/src/sync-buckets.ts）----
+void TestBucketWireFormat() {
+  fc::CloudBucketPushItem bi;
+  bi.bucket_key = std::string(64, 'a');
+  bi.item_count = 53;
+  bi.cipher_b64 = "AAAA";
+  bi.hlc = TestHlc();
+  std::vector<fc::CloudBucketPushItem> buckets;
+  buckets.push_back(bi);
+
+  const std::string body = fc::BuildBucketPushBody(buckets, "");
+  Check(body.find("\"buckets\"") != std::string::npos, "桶线：含 buckets 字段");
+  Check(body.find("\"bucket_key\"") != std::string::npos &&
+            body.find("\"item_count\"") != std::string::npos &&
+            body.find("\"cipher\"") != std::string::npos &&
+            body.find("\"hlc\"") != std::string::npos,
+        "桶线：四字段齐全（bucket_key/item_count/cipher/hlc）");
+  Check(body.find("device_id") == std::string::npos,
+        "桶线：device_id 为空 ⇒ 不带该字段（客户端一律不上报）");
+  Check(fc::BuildBucketPushBody(std::vector<fc::CloudBucketPushItem>(), "") ==
+            "{\"buckets\":[]}",
+        "桶线：空桶数组形状");
+
+  std::string err;
+  std::vector<fc::CloudBucketPullItem> items;
+  int64_t seq = 0;
+  bool more = false;
+  std::string cursor;
+  const std::string resp =
+      "{\"buckets\":[{\"bucket_key\":\"aaaa\",\"device_id\":\"d1\","
+      "\"hlc\":{\"ms\":1,\"counter\":2,\"device\":\"dev\"},\"cipher\":\"AAAA\","
+      "\"item_count\":3,\"server_seq\":9}],\"next_cursor\":\"Y3Vyc29y\","
+      "\"has_more\":true,\"server_seq\":9}";
+  Check(fc::ParseBucketPullResponse(resp, &items, &seq, &err, &more, &cursor),
+        "桶线：拉取响应可解析");
+  Check(items.size() == 1 && items[0].bucket_key == "aaaa" &&
+            items[0].item_count == 3 && items[0].server_seq == 9 &&
+            items[0].device_id == "d1",
+        "桶线：桶字段解析正确");
+  Check(seq == 9 && more && cursor == "Y3Vyc29y",
+        "桶线：server_seq / has_more / next_cursor 解析正确");
+
+  // 缺 bucket_key / 缺 hlc / 非法 JSON ⇒ 失败。
+  std::vector<fc::CloudBucketPullItem> bad_items;
+  int64_t bad_seq = 0;
+  bool bad_more = false;
+  std::string bad_cursor;
+  Check(!fc::ParseBucketPullResponse(
+            "{\"buckets\":[{\"hlc\":{\"ms\":1,\"counter\":2,\"device\":\"d\"},"
+            "\"cipher\":\"A\"}]}",
+            &bad_items, &bad_seq, &err, &bad_more, &bad_cursor),
+        "桶线：缺 bucket_key ⇒ 失败");
+  Check(!fc::ParseBucketPullResponse(
+            "{\"buckets\":[{\"bucket_key\":\"aa\",\"cipher\":\"A\"}]}",
+            &bad_items, &bad_seq, &err, &bad_more, &bad_cursor),
+        "桶线：缺 hlc ⇒ 失败");
+  Check(!fc::ParseBucketPullResponse("{oops", &bad_items, &bad_seq, &err,
+                                     &bad_more, &bad_cursor),
+        "桶线：非法 JSON ⇒ 失败");
+  Check(!err.empty(), "桶线：失败带中文原因");
+
+  // ★ AC-207：桶响应**不能**被逐条端点的解析器当成条目解析。
+  std::vector<fc::CloudSyncItem> legacy;
+  int64_t legacy_seq = 0;
+  std::string legacy_err;
+  const bool legacy_ok =
+      fc::ParsePullResponse(resp, &legacy, &legacy_seq, &legacy_err);
+  Check(!legacy_ok || legacy.empty(),
+        "AC-207：逐条解析器不产出桶条目（桶解析器独立）");
+
+  // 拉取路径。
+  Check(fc::BuildBucketPullPath(0, 100, "") ==
+            "/v1/sync/buckets/pull?since=0&limit=100",
+        "桶线：拉取路径形状（无 cursor）");
+  const std::string path = fc::BuildBucketPullPath(5, 100, "ab+/=cd");
+  Check(path.find("since=5") != std::string::npos &&
+            path.find("limit=100") != std::string::npos,
+        "桶线：拉取路径含 since / limit");
+  Check(path.find("cursor=ab%2B%2F%3Dcd") != std::string::npos,
+        "桶线：cursor 逐字百分号编码（只放行 unreserved）");
+}
+
+// ---- 单轮页数预算与诊断行（AC-203 / FR-210）----
+void TestBucketPageBudgetAndDiag() {
+  Check(fc::BucketPullMaxPages(0) == 16, "页数：词典数 0 ⇒ 16 页");
+  Check(fc::BucketPullMaxPages(1) == 16, "页数：单词典 ⇒ 16 页");
+  Check(fc::BucketPullMaxPages(2) == 24, "页数：2 词典 ⇒ 24 页");
+  Check(fc::BucketPullMaxPages(3) == 32, "页数：3 词典 ⇒ 32 页（硬上限）");
+  Check(fc::BucketPullMaxPages(10) == 32, "页数：10 词典 ⇒ 32 页（硬上限）");
+  Check(fc::kBucketPullPageLimit == 100,
+        "页数：单页桶数上限 100（与服务端一致）");
+
+  fc::CloudBucketRoundStats s;
+  s.phase = 3;
+  s.pushed = 5;
+  s.skipped = 1;
+  s.pulled_buckets = 7;
+  s.pulled_items = 123;
+  Check(
+      fc::FormatBucketDiagLine(s) ==
+          "bucket phase=3 pushed=5 skipped=1 pulled_buckets=7 pulled_items=123",
+      "诊断行：逐字格式固定");
+  fc::CloudBucketRoundStats zero;
+  Check(fc::FormatBucketDiagLine(zero) ==
+            "bucket phase=0 pushed=0 skipped=0 pulled_buckets=0 pulled_items=0",
+        "诊断行：全零行同样逐字");
+}
+
 int main() {
   ::SetConsoleOutputCP(CP_UTF8);
   std::printf("==== TestFluxingCloud · spec 100 阶段 B（契约与客户端纯逻辑）====\n");
@@ -5302,6 +5706,16 @@ int main() {
 
   // 批次 BR-①c · ADR 0076 D2-5a-9：语义指纹（d= / t= 漂移不再触发写放大）。
   TestCloudSemanticFingerprint();
+
+  // spec 103 · BR-①g：客户端桶化同步（桶键派生 / blob 打包拆包 / 桶指纹 /
+  //                灰度阶段状态机 / 侧车 v2 / 桶级线格式 / 页数预算与诊断行）。
+  TestBucketKeyDerivation();
+  TestBucketBlobRoundTrip();
+  TestBucketFingerprintSemantics();
+  TestBucketPhaseStateMachine();
+  TestBucketSidecarV2();
+  TestBucketWireFormat();
+  TestBucketPageBudgetAndDiag();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。
