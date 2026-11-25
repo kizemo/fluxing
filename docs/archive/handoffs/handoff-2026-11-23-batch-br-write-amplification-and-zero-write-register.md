@@ -995,4 +995,145 @@
 
 **§K-10 ADR 0077 状态说明**：本轮**未改任何 ADR**（`docs/adr/0077-bucket-level-sync-storage-architecture.md` Status 仍为 Proposed）——服务端桶化已在生产生效并通过冒烟，但 ADR 0077 的 D9 / D10 / D11 涉及客户端侧分桶打包与侧车 v2，**BR-①g 未开工** ⇒ 是否转 Accepted 待 BR-①g 完成后按 ADR 自身的验收条件判定（**推断**，ADR 内验收条款未在本轮逐条复核）。
 
+---
+
+## M · 批次 BR-①g（客户端桶化）· 文档与设计轮（2026-11-25）
+
+**本节性质** = **客户端桶化（BR-①g）的文档与设计轮**：落盘 ADR 0077 客户端段（D12–D28 + 四段退役路线 + 回滚预案 + 补推分批策略）、spec 103 三件套、handoff §M、接力 prompt、`CLAUDE.md` BR 指针。
+
+**本轮未写任何产品代码**（`WeaselServer/**` / `include/**` / `test/**` / `cloud/**` **零改动**）；**未执行**门禁、**未**出包、**未**装机、**未**部署、**未**执行 `git add` / `git commit` / `git push`。
+**客户端实现由另一写入者推进**（`WeaselServer/Cloud/CloudBucketSync.{h,cpp}` 已落盘、未入版本控制 ⇒ 未编译验证）⇒ **本节不含任何「客户端已实施 / 已验证 / PASS」类结论**；凡未产生实测数字处一律留 `TODO(主会话回填): <字段名>` 显式占位。
+**§L 由另一回检任务占用**，本节不触碰。
+**§K-10 记的「ADR 0077 Status 仍为 Proposed」是当时状态**；本轮已将 ADR 0077 Status 转 `Accepted`（服务端部分已部署生产）——**转 Accepted 不代表客户端功能已验证**（见 §M.6 第 1 行）。
+
+### M.1 本批目标与范围（10 项清单 · 逐条对应 spec 102 `tasks.md` §8）
+
+| # | spec 102 §8 条目 | 本批落点 | 本轮状态 |
+|---|---|---|---|
+| 1 | 客户端分桶打包 / 拆包、桶级 HLC 分配、`bucket_key` 计算 | spec 103 `tasks.md` **T2 / T3 / T4** | 进行中（`.cpp` 已落盘 8 个纯函数，**未编译验证**） |
+| 2 | 侧车 v2 升版与 `seq = 0` 强制重置 | **T7**（**偏离**：强制重置落在新增 `bseq`，老 `seq` 不归零） | 待开工 |
+| 3 | 桶内条目上限 4096 与「超限降级老端点」 | **T11** | 待开工 |
+| 4 | 桶大小 / 分片数取值调参与 R2 吞吐实测 | 取值 = **T2**（64 × 16 = 1024 桶）；吞吐实测 = **T16**（真机轮回填 AC-212） | 取值进行中 / 实测待开工 |
+| 5 | `healed` 自愈粒度变粗的部分恢复方案 | **T12** | 待开工 |
+| 6 | 出包装机与真机判据 | **T16**（AC-09 判据仍由既有定时任务 `4d3e51f8-fdda-41bb-bbc1-12e844914dc5` 负责，本批**不改**判据） | 待开工 |
+| 7 | `sync_items` 表与老端点的退役（**四段 + 回滚预案；只做「切读」就下老端点 = 不合格**） | **T5 / T10** 交付阶段状态机与回滚路径；四段路线 = 双写 → 校验 → 切读 → 退役（ADR 0077「四段退役路线 + 回滚预案」）；**服务端端点下线另立决策记录 + 需用户单独授权**（spec 103 Q3） | 待开工 |
+| 8 | `devices.last_seen` 读路径写占比上升的治理 | **不属本批**（登记为已知边界；阶段 3/4 才下降） | 不做 |
+| 9 | 写预算护栏改「全局口径 / 按活跃账号分摊」 | **不改实现**（已拍板维持每账号口径；BR-② 不立项，仅作已知边界登记） | 不做 |
+| 10 | 是否升级 Workers Paid | **不升级**（已拍板暂不升级）；**开工前须先定补推分批策略** —— 已定：轮内分批（≤ 64 桶/请求）+ 失败续传，**不需要分日 pacing**（ADR 0077 D20 / D22） | 已定 |
+
+**本批只改客户端**：`cloud/fluxing-sync/**` 零改动；服务端桶级端点已在生产（见 §K STEP 4 / STEP 5）。
+**本批不改既有判据**：AC-09 仍为 **FAIL**，**不改记 PASS**（§M.5）。
+
+### M.2 已定设计决策（13 条）
+
+1. **阶段状态机 0–4**：0 = 老端点单跑（**默认**）｜1 = 双写｜2 = 双写 + 交叉校验｜3 = 切读（老端点完全不发）｜4 = 老端点退役。
+2. **生效口径**：环境变量 `FLUXING_CLOUD_SYNC_BUCKET_PHASE` **优先** → 侧车 `phase` → 默认 0；环境变量生效时**写回侧车** ⇒ **回滚 = 设环境变量为 0 跑一轮**（不改代码、不重装、不删数据）。
+3. **阶段不得自动递增**：每次跃迁必须有人工判据。
+4. **桶键派生**：用**加密域** HMAC 摘要字节（**弃用**明文 `sha256(item_key)`，可被字典穷举反推）；独立 HKDF 标签 `fluxing-bucketkey-mac-v1`（**不**与 `fluxing-itemkey-mac-v1` 复用）；桶键 = 64 位小写 hex；桶键输入带词典名长度前缀消歧。
+5. **分桶粒度**：一级 64 × 二级 16 = **1024 桶 / 词典**（`64` 是**分片数**，**不是**每桶条目数上限）⇒ 每桶 ≈ **92** 条（本地全集 94,604 ÷ 1024；未上云口径 53 条），远低于服务端 `MAX_BUCKET_ITEMS = 4096`。
+6. **桶级 HLC** = 桶内条目 HLC **最大值**，且必须**严格大于**侧车已存桶 HLC（`MakeHlcStrictlyGreater` 抬升）⇒ 否则真实变更被服务端守卫整桶 `skipped`。
+7. **桶内容指纹用语义口径**（`s2:` / `SemanticHashHex` 与条目级侧车同源）⇒ **不用**密文哈希 / 整条 payload 哈希（否则 rime 每轮回写重算 `d=`/`t=` ⇒ 每轮重推，写放大复发）。
+8. **桶内容 = 合并后本地视图的全集**按 (词典名, 分片) 分组后的**整桶**（服务端是 `DELETE+INSERT` 覆盖语义 ⇒ 只推变更条目会丢同桶其它条目）；**只推指纹变化的桶** ⇒ 稳态零写；没推成功的桶**不写 `brow`** ⇒ 失败续传。
+9. **桶 blob 零新增密码学**：N 个既有 8 行信封文本块**直接串接**，不新增桶级 nonce / 桶级 AAD ⇒ 条目级可验证性逐字不变；拉取解包后**复用同一解密路径**（`OpenItemsTolerant` 语义，不新写第二套解密实现）。
+10. **桶级 pull 解析器独立实现**：桶对象字段 = {桶标识, 设备标识, 桶级时序, 桶密文, 条目数, 服务端序号}，**无 nonce** ⇒ 不可复用 `ParsePullResponse`（它在 `CloudSyncService.cpp:264` 对每个条目强制取 `nonce`）⇒ 喂老解析器**必失败**（AC-207 / AC-108）。条目级解析器**逐字不动**。
+11. **分批参数**：推 ≤ **64 桶 / 请求**（服务端 `MAX_PUSH_BUCKETS`）⇒ 1024 桶首导 = 16 个请求；拉 ≤ **100 桶 / 页**；**单轮页数上限 = max(16, 词典数 × 11 + 2)**，且**不超过 32 页**（硬上限）⇒ 单词典 16 页可一轮扫完 1024 桶；词典数 ≥ 3 时触到 32 页封顶 ⇒ 4 词典及以上可能扫不完库存（待实测，见 §M.5）。
+12. **超限降级**：单桶 `item_count > 4096` 或 blob > **4 MiB** ⇒ **该桶**改走条目级端点推，其余桶不受影响，整轮不失败。
+13. **侧车 v2**：头行 `#fluxing-cloud-sync-v2`；保留 v1 的 `seq` / `keyfp` / `row`（语义逐字不变）；新增 `bseq`（**独立编号空间、强制从 0 起**）/ `phase` / `brow`（`bucket_key` / `ms` / `counter` / `device` / `item_count` / `fingerprint`）；**必须能读 v1**（v1 ⇒ 阶段 = 0、`bseq` = 0、无 `brow`）。
+
+### M.3 偏离 ADR 0077 原文之处及理由（6 条）
+
+| # | ADR 0077 原文 | 本批口径 | 理由 |
+|---|---|---|---|
+| 1 | **D2**：分片用**明文**摘要（`sha256(item_key)[0] >> 2`） | 改用**加密域** HMAC 摘要字节 + **独立** HKDF 标签 | 明文摘要可被**字典穷举**反推「哪个词条落在哪个桶」⇒ 桶归属本身成侧信道 |
+| 2 | **D2**：固定 **64** 个一级分片 | 64 × 16 = **1024 桶 / 词典** | 64 桶 ⇒ 每桶约 852 条 ⇒ R2 单对象 put 时长超客户端 30 s 超时窗（D9 实测换算）；1024 桶 ⇒ 每桶约 92 条，且 D1 首导仍只 1,024 行（远低于 10 万额度） |
+| 3 | **D6**：侧车升版并**强制重置 `seq = 0`** | 保留 `seq` 给老端点 + **新增独立 `bseq` 从 0 起** | 四段渐进退役期间**老端点仍活跃**；重置 `seq` 会致老端点全量重拉重写 ⇒ 写放大回归。D6 原意（两编号空间互不解释）已达成 |
+| 4 | **D9**：默认桶大小取 **64 条**（⇒ 852 桶） | 「64」是**一级分片数**，**不是**每桶条目数上限 ⇒ 1024 桶 / 词典 | D2 与 D9 混用了「分片数」与「每桶条目数上限」两个层级（**回答 spec 102 §9 Q1**）；D9 的「64 条 ≈ 7.5 s」保留为**推算档位**，不作本粒度实测值 |
+| 5 | **D9**：单轮拉取覆盖 **64 桶** / 固定 16 页 | 单页 ≤ 100 桶；**单轮页数上限 = max(16, 词典数 × 11 + 2)**，硬上限 32 页 | 固定页数在多词典时**扫不完库存** ⇒ 客户端「库存未证实」闸门**永久压制推送**（新词条永远上不了云） |
+| 6 | **D9 表格**的「64 条/桶 ≈ 7.5 s」 | 本粒度（≈ 92 条/桶）单轮时长**未实测** ⇒ **记「未判定」** | D9 的 7.5 s 是**另一粒度**的换算值，不可直接引用；AC-212 需真机轮实测（§M.5） |
+
+### M.4 写入量两个口径（**不可混用**）
+
+| 口径 | 桶化前 | 桶化后（设计值） | 改善 |
+|---|---|---|---|
+| **D1 索引行数**（写预算护栏计的行） | 54,536 行（`sync_items`） | **1,024 行**（`sync_buckets`，1 设备 × 1024 桶） | ≈ **53 倍** |
+| **D1 实际写行数**（首导，R2 `put` ⇒ `DELETE+INSERT`） | ≈ 54,536 行 | ≈ **2,048 行**（1,024 桶 × 2） | ≈ **27 倍** |
+| **单请求**索引写行数上界 | — | ≤ **2 × 本轮桶数** = **128**（64 桶/请求） | — |
+
+- 两口径**分别**断言（AC-204），**不得**只测其一；「实际写行数」含 `DELETE+INSERT` 两条写入，故不等于索引行数。
+- 「53 倍 / 27 倍」是**设计值**（按 1024 桶与 2× 上界推算），**不是实测**；真机轮的实测写增量 = `TODO(主会话回填): 真机轮 D1 写增量行数`。
+- 首导对象数为**本地全集 94,604 条**（其中未上云 54,536 条）⇒ 每桶 ≈ 92 条（未上云口径 53 条）。
+
+### M.5 未验证 · 未闭环清单
+
+| # | 项 | 现状 / 缺什么 |
+|---|---|---|
+| 1 | **客户端桶化实现** | 由另一写入者推进（`CloudBucketSync.{h,cpp}` 已落盘、未入 git、未编译验证）；本节全部客户端条目均为**设计已定**，非**实现已达成** |
+| 2 | **门禁数字** | 本轮**未跑**门禁（无产品代码改动）⇒ `TODO(主会话回填): 单独 msbuild 的 PASS/FAIL 计数与用例总数` |
+| 3 | **出包 / 装机** | 本轮**未出包、未装机** ⇒ `TODO(主会话回填): 出包字节数 / sha16 / INSTALL_EXIT / 装机后 WeaselServer.exe sha256` |
+| 4 | **真机轮** | 本轮**未跑真机轮** ⇒ AC-201…AC-211 均**未在真机验证** ⇒ `TODO(主会话回填): 真机轮判据结果` |
+| 5 | **AC-112 单轮预估传输时长** | **未判定**（需要什么：真机轮的 `elapsed_ms` 序列 + 生产 D1 写增量读数 + 真实桶 blob 字节数抽样）；**不得**用 D9 的 7.5 s 推算值或合成 blob 压测代替 |
+| 6 | **AC-09** | 仍为 **FAIL**（`AC09_VERDICT=FAIL`）⇒ **不得改记 PASS**；本批不改其判据 |
+| 7 | **服务端存量** | `sync_items` 仍 **40,061 行**未迁桶 ⇒ 老端点仍在承载（桶化只影响**新写**路径） |
+| 8 | **多词典硬上限** | 词典数 ≥ 3 时单轮页数触到 **32 页**封顶 ⇒ 4 词典及以上可能扫不完库存 ⇒ 需**实测本机常见词典数**（硬上限是客户端常量，调整不需服务端改动） |
+| 9 | **R2 孤儿对象** | 生产 R2 **无生命周期规则** ⇒ 只删 D1 索引行会留孤儿对象；本机 `wrangler` 无 `r2 object list` ⇒ **无法证实也无法证伪**（未闭环） |
+| 10 | **Deleted 段 `push=1` 来源** | 未定位（探针 per-stage 明细缺失，见 §K-4） |
+| 11 | **侧车 HLC 水位** | 探针 FAIL 路径恢复的 5 MB 侧车**不含**客户端自建侧车时抬高的本地 HLC 水位 ⇒ 存在「静默不推送」风险，**未验证** |
+| 12 | **探针修复** | `reports/fluxing-br-1c/probe-ac09.ps1` 的 6 处修复**未在真实轮次端到端复跑**（下一轮复跑须先看日志行数是否从 9 涨到数十行） |
+| 13 | **客户端侧补推洪峰** | 桶化后一次性补推约 **94,604 条**（本地全集）的**分批执行**尚未在真机跑过 ⇒ 写入量回落幅度 = `TODO(主会话回填): 真机轮实测写增量` |
+
+### M.6 每条标注：已验证 · 推断 · 未验证
+
+| 项 | 状态 | 依据 |
+|---|---|---|
+| ADR 0077 Status 转 `Accepted`（**服务端部分**已部署生产） | **已验证** | §K STEP 4（`DEPLOY_EXIT=0`，生产 Version `4f163326-f2a5-4c69-be56-24cb800e6915`）+ STEP 5（桶端点冒烟 9/9 PASS） |
+| **「转 Accepted 不代表客户端功能已验证」** | **已验证**（文档事实） | ADR 0077 Status 处已明写；客户端代码未编译、未入 git、未进 `.vcxproj` |
+| 服务端契约常量（`MAX_PUSH_BUCKETS=64` / `MAX_PULL_LIMIT=100` / `MAX_BUCKET_ITEMS=4096` / `MAX_BUCKET_BLOB_BYTES=4 MiB` / `MAX_BUCKET_KEY_BYTES=512`） | **已验证** | `cloud/fluxing-sync/src/wire.ts:233/243/246/256`、`src/sync-buckets.ts:43` |
+| 客户端既有分页 / 分批常量（`kPullPageLimit=100` / `kMaxPullPages=10` / `kServerMaxPushItems=64` / `kPushBatchSize=32`） | **已验证** | `CloudSyncService.cpp:877/879`、`CloudSyncService.h:59/65` |
+| 桶响应**无 `nonce`** ⇒ 不可复用 `ParsePullResponse` | **已验证** | `CloudSyncService.cpp:193`（`ParsePullResponse`）/ `:264`（逐条目强制取 `nonce`）；ADR 0077 D26 桶对象字段集 |
+| 侧车 v1 现状（`BuildSidecarText` / `ParseSidecarText` / `ResetCloudSyncSidecarFile`） | **已验证** | `CloudSyncService.cpp:1668` / `:1696` / `:1760` |
+| `CloudBucketSync.{h,cpp}` 已落盘、`.cpp` 缺 4 个实现、未进 `.vcxproj` | **已验证** | grep 结果（`ParseBucketPhaseValue` / `ResolveBucketPhase` / `BuildBucketPushBody` / `ParseBucketPullResponse` 无命中）；`Select-String 'CloudBucketSync' WeaselServer.vcxproj` 无输出 |
+| **每桶 ≈ 92 条**（本地全集 94,604 ÷ 1024；未上云口径 53 条） | **已验证**（口径为派生值） | 94,604 = 本地词典条目行数（§F 快照实测 4 头 + 94,604 数据行）；54,536 = reconcile 的 `deferred` 计数 |
+| 「1024 桶 ⇒ 写入量改善 ≈ 53 倍 / 27 倍」 | **推断**（设计值，非实测） | 由 1,024 索引行与 2 × 桶数的 `DELETE+INSERT` 上界推算；真机实测 = M.5 第 13 项 |
+| 「多词典时固定页数会扫不完库存 ⇒ 永久压制推送」 | **推断**（机理成立，未实测） | 「库存未证实」闸门语义（ADR 0076 D2-5a R2）；4 词典及以上的实际词典数**未实测** |
+| 单轮预估传输时长 | **未判定** | AC-212；见 M.5 第 5 项 |
+| 客户端桶化代码可编译 / 单测绿 / 稳态零写 / 桶响应独立解析 | **未验证** | 代码子会话仍在实施；本节不含任何该类结论 |
+| AC-09 | **未验证**（判据仍 **FAIL**） | §K STEP 1（`AC09_VERDICT=FAIL`） |
+| 图谱降级 | **已验证**（降级理由成立） | `codebase-memory-mcp` 对 `WeaselServer/Cloud/**` 的 `search_graph` / `search_code` / `query_graph` 均**不命中** ⇒ 该目录**未入图谱索引** ⇒ 按 `.claude/rules/codebase-graph.md` 降级到 Grep / Read 取证 |
+
+### M.7 证据路径（均为仓库根相对路径，已逐个 `Test-Path` 通过）
+
+**设计与规格**
+- `docs/adr/0077-bucket-level-sync-storage-architecture.md`（客户端段 D12–D28、四段退役路线 + 回滚预案、补推分批策略、偏离登记、AC-112 四项数值）
+- `docs/adr/0076-cloud-write-amplification-governance-and-zero-write-registration.md`（D2-5a-9 语义指纹；写放大根因）
+- `.specify/specs/103-client-bucket-sync/spec.md`（FR-201…FR-216 / AC-201…AC-212 / Q1…Q4）
+- `.specify/specs/103-client-bucket-sync/plan.md`（Constitution Check、数据流、侧车 v2 格式、逐文件改造、参数速查）
+- `.specify/specs/103-client-bucket-sync/tasks.md`（T1…T16，含与 spec 102 §8 的 10 项对应）
+- `.specify/specs/102-bucket-level-sync-storage/tasks.md`（§8「本批不做什么」10 项原文）
+
+**客户端代码（实现由另一写入者推进，本轮未改）**
+- `WeaselServer/Cloud/CloudBucketSync.h`（已声明常量 / 五阶段枚举 / 线格式；含**未实现**声明）
+- `WeaselServer/Cloud/CloudBucketSync.cpp`（已实现 8 个纯函数；缺 4 个实现）
+- `WeaselServer/Cloud/CloudSyncService.h`（`kServerMaxPushItems` / `kPushBatchSize` / `OpenItemsTolerant` / `SemanticHashHex`）
+- `WeaselServer/Cloud/CloudSyncService.cpp`（`ParsePullResponse` / 分页常量 / 侧车 v1 三函数）
+- `WeaselServer/Cloud/CloudUserDictIo.cpp`（payload 装配与切分）
+- `WeaselServer/Cloud/CloudTransport.h`（客户端单次超时窗口 30 s）
+- `include/FluxingCloudEnvelope.h`（条目级附注，本批**零改动**）
+
+**服务端（已部署生产，本批零改动）**
+- `cloud/fluxing-sync/src/sync-buckets.ts`（桶级端点 + 分页常量）
+- `cloud/fluxing-sync/src/wire.ts`（桶级契约常量）
+- `cloud/fluxing-sync/src/account.ts`（账号数据清除：双前缀 + 自证）
+
+**取证与探针（`reports/**`、`scripts/verify/**` 按红线**不入库**）**
+- `reports/fluxing-br-1g/interim-state.md`（本轮中间状态与取证台账）
+- `reports/fluxing-br-1f/recon-blob-arch.md`（服务端改造清单与风险）
+- `reports/fluxing-br-1c/probe-ac09.ps1`（AC-09 探针，含 §K-4 的 6 处修复）
+- `scripts/verify/verify-br1g-bucket.ps1`（客户端门禁一键脚本）
+- `scripts/verify/probe-br1g-bucket-phase.ps1`（真机阶段切换探针）
+
+**本批产物**
+- `docs/archive/handoffs/handoff-2026-11-23-batch-br-write-amplification-and-zero-write-register.md`（本文件 §M）
+- `docs/archive/prompts/prompt-next-session-2026-11-23-batch-br-write-amplification-and-zero-write-register.md`（接力 prompt，就地改写）
+- `CLAUDE.md`（BR 指针追加 BR-①g 轮次要点）
+
 
