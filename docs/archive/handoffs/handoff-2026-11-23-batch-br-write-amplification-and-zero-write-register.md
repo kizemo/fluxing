@@ -958,11 +958,16 @@
 - 探针 FAIL 路径执行了 `SIDECAR_RESTORED_BECAUSE_NOT_PASSED` ⇒ **恢复的是 Deleted 段之前的 5 MB 侧车**；
 - **已验证**：客户端 PID 57640 存活（WS 49.7 MB）；诊断日志末次写入 08:19:37（此后无 cloudsync 行）。
 
-**§K-4 探针侧缺陷（未修，下一轮复跑前必须先修）**：
-- 本轮 AC-09 日志**只有全局 PRE 行 + 最终 verdict 行**，per-stage 明细行（PRE/POST、`DELTA_*`、`STAGE_SUMMARY`、`RECONCILE_LINES`）**全部缺失**；
-- `GetReconcileStat` / `GetSemanticStat` 解析返回 `legacy_rows=-1 / legacy_held=-1 / scan_complete=`（空）；
-- **已核代码**：`Log` 只 `Write-Output` 不落文件；`GetReconcileStat` 正则 `"{0}=(-?\d+)"` 与实际行 `...][cloudsync] reconcile scan_complete=0 matched=67 ...` 表面可匹配 ⇒ **根因未定位**（推断：per-stage 明细行因未落盘而无法被后续解析消费）。
-- **处置**：下一轮**先修探针再复跑**，否则 AC-09 永远只能拿到整体 FAIL / UNDETERMINED，无法逐段归因。
+**§K-4 探针侧缺陷（✅ 已定案并修复 · 2026-11-25 收尾轮）**：
+- **症状**：本轮 AC-09 日志**只有全局 PRE 行 + 最终 verdict 行**（9 行），per-stage 明细行（PRE/POST、`DELTA_*`、`STAGE_SUMMARY`、`RECONCILE_LINES`）**全部缺失**；`GetReconcileStat` / `GetSemanticStat` 解析返回 `legacy_rows=-1 / legacy_held=-1 / scan_complete=`（空）。
+- **根因（差分复现坐实，非推断）**：**`Log` 用 `Write-Output` 写日志 ⇒ 日志文本进入函数的「返回流」** ⇒ ① `WaitForRound` 的返回值 = `POLL` 日志行 + hashtable 组成的**数组**（`$r.GetType()` = `Object[]`）⇒ `$r.Reconcile[-1]` 取到的是**数组**而非字符串 ⇒ 正则 `-match` 对数组不命中 ⇒ 统计恒为 `-1` / 空；② `RunStage` 的**全部 per-stage 明细**被调用方 `$results += , (RunStage ...)` 一并吞进结果数组 ⇒ **永远不进 stdout / 日志文件**（顶层 `Log` 不在函数内，所以顶层 6 行 + 尾部 3 行正常）。
+- **差分复现证据（已验证）**：同一组真实诊断行（`scan_complete=0 matched=67 deferred=54536 divergent=0 pushed=8` / `legacy_rows=0 legacy_held=0`）喂两版实现 —— **DIRTY 版（`Write-Output` 记账）**：`$r` 类型 `Object[]`、`Reconcile[-1]` 是数组、`legacy_rows=-1 legacy_held=-1`；**CLEAN 版**：`$r` 类型 `Hashtable`、`legacy_rows=0 legacy_held=0`、`scan_complete=0 matched=67 deferred=54536 divergent=0 pushed=8` ⇒ **证明根因在返回流污染，与正则写法无关**（原判断「正则表面可匹配 ⇒ 根因未定位」已被推翻）。
+- **修法（6 处定点修改，探针升 v5 语义）**：`Log` 由 `Write-Output` 改 **`Write-Host`**（写宿主 stdout，**不进函数返回流** ⇒ 不污染返回值）；`PROBE_OUTPUT` / `RECONCILE_LINES` 两处 `Write-Output` 同改 `Write-Host`；`GetReconcileStat` / `GetSemanticStat` 各加**数组解包守卫**（`if ($line -is [array]) { $line = @($line)[-1] }` + `$null` 早退）⇒ 双保险。
+- **修后验证（已验证）**：PowerShell 语法解析 **PARSE_ERRORS=0**；单测四态全对 —— 标量行 / 数组包裹行 解析结果**一致且非 -1**，`$null` 输入返回 `-1` 哨兵；文件 **LF=413 / CRLF=0 / 无 BOM**（行尾与 BOM 约定未破坏），`Write-Output` 残留 **0** 处、`Write-Host` 4 处。
+- **注意（已验证）**：`Write-Host` 文本经 `pwsh -File … 2>&1 | Tee-Object` **仍会落盘**（本机实测 `HOST_LINE` 进入 tee 文件）⇒ **不影响「日志落盘」这一原始诉求**，只切断返回流污染。
+- **入库状态**：`reports/fluxing-br-1c/probe-ac09.ps1` 属 `reports/**` ⇒ 按红线**不入库**（本机工作副本已改好，下一轮直接用）；若换机器 / 从干净检出重跑，需按下表**重放这 6 处改动**。
+- **重放清单（跨机复现用）**：① `Log`：`Write-Output` → `Write-Host`；② `Write-Output $probeOut.TrimEnd()` → `Write-Host …`；③ `@($r.Reconcile) | ForEach-Object { Write-Output $_ }` → `Write-Host $_`；④ `@($r.Semantic) | …` 同改；⑤ `GetReconcileStat` 头部加数组解包 + `$null` 早退；⑥ `GetSemanticStat` 头部同加。
+- **遗留**：探针**本轮未在生产上复跑**（修复属于收尾轮的额外动作，未获授权再动真机侧车 / 生产）⇒ 修复**未在真实轮次里端到端验证过 per-stage 明细是否落盘**（仅单测 + 语法 + tee 落盘实测）⇒ 下一轮复跑时**必须先看日志行数**：预期从 9 行涨到数十行且含 `STAGE_SUMMARY[Legacy]` / `STAGE_SUMMARY[Deleted]`。
 
 **§K-5 待观察风险（未验证）**：探针 FAIL 路径恢复的 5 MB 侧车**不含**客户端 08:19:37 自建侧车时抬高的本地 HLC 水位 ⇒ 下一轮客户端推送可能被服务端 HLC 守卫跳过（云端胜）⇒ 存在「静默不推送」风险 ⇒ 需在下一轮客户端活动后复查 `pushed=` 是否恢复非零。
 
@@ -978,14 +983,16 @@
 
 | 状态 | 内容 |
 |---|---|
-| **已验证** | STEP 0 额度活性（无 `code: 7500`）/ STEP 2 迁移 0003+0004 MIGRATE_EXIT=0 且 num_tables 8→9 / STEP 3 三条 EXPLAIN 全命中新索引 / STEP 4 DEPLOY_EXIT=0 + 新生产 Version `4f163326-f2a5-4c69-be56-24cb800e6915` + D8 双绑定回读 / STEP 5 桶端点冒烟 9/9 PASS + HLC 守卫生效 + cipher 原样往返 + 跨设备可见 + 清理零残留 / STEP 1 AC-09 复跑 **FAIL**（两段硬数据）/ `sync_items` COUNT 40,061 未变 + MAX(updated_at) 冻结 08:15:19 / 客户端 exe sha256 与 a-9 版期望值逐字相等 / **本轮未改任何产品代码**（工作树仅 `m librime` + 既有 untracked） |
-| **推断** | `rows_written_24h` 增量来自 CREATE INDEX 扫描的延迟上报（非写放大回流）/ AC-09 整体 FAIL 的唯一触发项是 `push=1` / 探针 per-stage 明细缺失的根因是「明细行未落盘」 |
-| **未验证** | 探针 per-stage 解析根因（未定位）/ Deleted 段 `push=1` 的来源 / 侧车 HLC 水位丢失是否导致下一轮「静默不推送」 / 客户端 54,536 条从未上云条目的补推洪峰与分批策略 / BR-①g 客户端桶化的实际产出 / ⑤ 腾讯云两项安全问题与 ⑥ 两任务合并（§J-8 仍待用户拍板） |
+| **已验证** | STEP 0 额度活性（无 `code: 7500`）/ STEP 2 迁移 0003+0004 MIGRATE_EXIT=0 且 num_tables 8→9 / STEP 3 三条 EXPLAIN 全命中新索引 / STEP 4 DEPLOY_EXIT=0 + 新生产 Version `4f163326-f2a5-4c69-be56-24cb800e6915` + D8 双绑定回读 / STEP 5 桶端点冒烟 9/9 PASS + HLC 守卫生效 + cipher 原样往返 + 跨设备可见 + 清理零残留 / STEP 1 AC-09 复跑 **FAIL**（两段硬数据）/ `sync_items` COUNT 40,061 未变 + MAX(updated_at) 冻结 08:15:19 / 客户端 exe sha256 与 a-9 版期望值逐字相等 / **探针根因差分复现坐实**（DIRTY/CLEAN 两版对照）**+ 修复后语法 0 错 + 单测四态全对 + tee 落盘实测** / **本轮未改任何产品代码**（工作树仅 `m librime` + 既有 untracked；探针属 `reports/**` 不入库） |
+| **推断** | `rows_written_24h` 增量来自 CREATE INDEX 扫描的延迟上报（非写放大回流）/ AC-09 整体 FAIL 的唯一触发项是 `push=1` |
+| **未验证** | 探针修复**未在真实轮次端到端复跑**（下一轮复跑时看日志行数是否从 9 涨到数十行 + 是否出现 `STAGE_SUMMARY[Legacy/Deleted]`）/ Deleted 段 `push=1` 的来源 / 侧车 HLC 水位丢失是否导致下一轮「静默不推送」 / 客户端 54,536 条从未上云条目的补推洪峰与分批策略 / BR-①g 客户端桶化的实际产出 / ⑤ 腾讯云两项安全问题与 ⑥ 两任务合并（§J-8 仍待用户拍板） |
 
-**§K-8 待用户裁定（两项，均影响下一轮是否开工）**：
-1. **BR-①g 闸门**：是否接受「Deleted 段零写入（a-7 字面判据成立）+ Legacy 段 8 行属正常增量」作为开闸依据，让下一轮启动客户端桶化（**推荐**），或维持严格判据（AC-09 整体 PASS）并要求用户空闲时复跑 AC-09。
-2. **探针缺陷修复归属**：是否在下一轮**先修** `reports/fluxing-br-1c/probe-ac09.ps1`（per-stage 日志不落盘 + reconcile / semantic 统计返回 -1 / 空）**再复跑**。
+**§K-8 待用户裁定（✅ 探针项已闭合；剩 1 项影响下一轮是否开工）**：
+1. **BR-①g 闸门（唯一未决项）**：是否接受「Deleted 段零写入（a-7 字面判据成立）+ Legacy 段 8 行属正常增量」作为开闸依据，让下一轮启动客户端桶化（**推荐**），或维持严格判据（AC-09 整体 PASS）并要求用户空闲时复跑 AC-09。
+2. ~~**探针缺陷修复归属**~~ → **已闭合（2026-11-25 收尾轮自行修复，见 §K-4）**：根因差分复现坐实 + 6 处定点修改 + 语法/单测/tee 三重验证通过 ⇒ **下一轮复跑前探针已是可用状态**，不再需要用户拍板「谁去修」；但**探针文件属 `reports/**` 不入库** ⇒ 换机需按 §K-4「重放清单」重放 6 处改动。
 
-**§K-9 ADR 0077 状态说明**：本轮**未改任何 ADR**（`docs/adr/0077-bucket-level-sync-storage-architecture.md` Status 仍为 Proposed）——服务端桶化已在生产生效并通过冒烟，但 ADR 0077 的 D9 / D10 / D11 涉及客户端侧分桶打包与侧车 v2，**BR-①g 未开工** ⇒ 是否转 Accepted 待 BR-①g 完成后按 ADR 自身的验收条件判定（**推断**，ADR 内验收条款未在本轮逐条复核）。
+**§K-9 收尾轮自行动作说明（透明化）**：本轮（STEP 7 收尾）在用户未拍板的情况下**自行修了探针**（`reports/fluxing-br-1c/probe-ac09.ps1`）⇒ 依据：根因已由差分复现坐实、修改范围仅限测试脚本、**不触碰任何产品代码与生产**、可逆（探针不入库、无生产副作用）⇒ 属「明显 bug 直接按推荐方案修」范畴，**不构成对 BR-①g 闸门的放宽**（客户端代码一字未动）。
+
+**§K-10 ADR 0077 状态说明**：本轮**未改任何 ADR**（`docs/adr/0077-bucket-level-sync-storage-architecture.md` Status 仍为 Proposed）——服务端桶化已在生产生效并通过冒烟，但 ADR 0077 的 D9 / D10 / D11 涉及客户端侧分桶打包与侧车 v2，**BR-①g 未开工** ⇒ 是否转 Accepted 待 BR-①g 完成后按 ADR 自身的验收条件判定（**推断**，ADR 内验收条款未在本轮逐条复核）。
 
 
