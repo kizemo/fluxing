@@ -1651,3 +1651,58 @@
 **F-5 · 本轮 §P 的取证纪律复盘（供下一轮直接用）。**
 - 装机态复核**只读、可复现**：注册表三处（`HKLM\…\Fluxing\Weasel` 的 `InstallDir` = `D:\Program Files\fluxing`；`HKCU\Software\Fluxing\Weasel` 的 `RimeUserDir` = `D:\Program Files\fluxing\user1\fluxing`；卸载项 `DisplayVersion` = `1.3.10`）+ 文件（`D:\Program Files\fluxing\weasel\WeaselServer.exe`）+ 进程（`Win32_Process` 取 `ExecutablePath` + `Get-Process` 取 `StartTime`）⇒ **单路径成立**（`D:\Program Files\weasel` 不存在，`user1\fluxing\rime_ice.userdb` 在位）。
 - **三处哈希取法**：构建侧 `output\Win32\WeaselServer.exe`（**不是** `output\WeaselServer.exe`，后者不存在）；包内侧 `output\7z.exe e … -o<tmp> WeaselServer.exe`（绝对路径，**不要 `Set-Location`**）；装机侧 `Get-FileHash -LiteralPath`。
+
+### P-G. 真机阶段 1/2 轮（2026-11-25 16:36 起 · 进行中）
+
+- **runner** = `reports/fluxing-br-1g/run-phases-1-2.ps1`（**不入库**）；运行日志 = `reports/fluxing-br-1g/phases-1-2-run.log`；侧车取证快照 = `reports/fluxing-br-1g/phases-1-2/`。
+
+#### P-G.1 runner 判别式（修掉旧探针的假阴性）
+
+- 旧探针 `scripts/verify/probe-br1g-bucket-phase.ps1:71` 命中**首条** `bucket phase=` 即 `break` ⇒ 必然只抓到启动轮（kPullOnly）⇒ **结构性假阴性**。
+- 本轮 runner 改用**推轮专属诊断行** `quota_rows=`（`FormatBucketQuotaLine`）作判别式：该行只在内层 `PushChangedBuckets` 被调用时打印 ⇒ **只在 kPushOnly / kBoth 轮出现** ⇒ 见到它 = 推轮真的跑过。
+- runner 硬约束：phase 只允许 {0, 1, 2}，任何 ≥3 的值直接 `throw REFUSED`；`finally` 必清 User 级环境变量并回滚 phase 0（回滚判据 = 日志出现 `bucket phase=0`）。
+
+#### P-G.2 阶段 1 启动轮实测（**P-F-1 根因在真机侧坐实**）
+
+- 16:36:38 写 **User + Process 双处** `FLUXING_CLOUD_SYNC_BUCKET_PHASE=1`（只写 User 级时子进程继承不到）⇒ 16:36:43 重启 WeaselServer（pid 42080）。
+- **16:41:49 启动轮落地**：`reconcile scan_complete=0 matched=67 deferred=54536 divergent=0 pushed=0` ＋ `bucket phase=1 pushed=0 skipped=0 pulled_buckets=0 pulled_items=0`。
+- **关键判据**：该轮**没有** `quota_rows=` 行 ⇒ `PushChangedBuckets` **根本没被调用** ⇒ 与源码一致（`CloudSyncService.cpp:1611-1614` 的闸门要求 direction ∈ {kPushOnly, kBoth}；`CloudSyncEngine.cpp:211-212` 的启动轮固定 `kPullOnly`）⇒ **§P-F-1 的根因订正在真机侧得到独立佐证**；旧探针的假阴性就此排除（这次不是「没打印」，是**真没推**）。
+- 侧车 `D:\Program Files\fluxing\user1\fluxing\fluxing-cloud-sync.state` 落地 `phase 1` ✔（User 级变量与侧车双口径一致）；`bseq` 仍 0；**`brow` 行数 = 0**。
+- 侧车结构实测（**TSV v2 文本，不是 JSON**）：首行 `#fluxing-cloud-sync-v2`，头部 `seq=71103` / `bseq=0` / `phase=0→1` / `keyfp=<sha256>`，正文 **40,060 条 `row` 行**（条目级 legacy 侧车）＋ **0 条 `brow` 行** ⇒ **桶级侧车在本轮之前从未落过任何一行**（与「桶推从未成功过」一致）。
+
+#### P-G.3 新发现的成本事实（阶段 1 首轮比阶段 0 慢 ≈2.2 倍）
+
+- 阶段 0 同段（16:16:00 → 16:17:19）耗时 **79 s**；阶段 1 首轮（16:38:58 → 16:41:49）耗时 **171 s**，进程累计 CPU 达 **240 s**。
+- 采样复核：采样期 CPU 占用 **0.1%**（⇒ **计算密集**、不是挂死）；无 established TCP 连接（⇒ 不是网络等待）；`LogonUI` 计数 **0**（⇒ 未锁屏）。
+- 差异来源 = 阶段 0 走 `bucket_mode=false` ⇒ **桶侧机制整体不启用**（`bucket phase=0` 那行只是打印零值统计）；阶段 1 起「桶拉取 + 分桶 + 桶键 HMAC」首次在真机执行（`CloudSyncService.cpp:1965-1979` 对 54,603 条本地条目分桶）。
+- **待观察**：kBoth 轮还要额外做 1,024 桶的 AES 密封 + 打包 + 分批桶推送 ⇒ 单轮耗时可能进一步拉长（**推断，待实测**）。
+
+#### P-G.4 触发 kBoth 轮的条件（真机口径 · 本轮源码复核后订正）
+
+- 调度默认值（`CloudSyncEngine.h:105-118`）：启动 0 ms / 本地改动防抖 5 min / 推送全局间隔 15 min / 定时轮 60 min；每日推送 100 次 / 每日拉取 50 次。
+- **方向口径（本轮坐实）**：`CloudSyncEngine.cpp:211-212` 是**唯一生效**的方向赋值 —— `dir = startup_pending_ ? kPullOnly : kBoth`；`DirectionFor`（`:280-289`）**无人调用 = 死代码** ⇒ **除启动轮外，一切轮次都是 kBoth** ⇒ **定时轮本身就是推轮**，不需要任何本地改动。
+- `ComputePushDeadline`（`CloudSyncEngine.h:165-178`）要求 `dirty_since_ms > 0` ⇒ 「本地改动触发」这条路**必须先有本地词典改动**；它只是**加速手段**，不是必需条件。
+- **第三条路 = 手动同步（本轮新发现）**：`CloudAccountDialog.cpp:836-856` 的「立即同步」⇒ `RequestManualSync()` ⇒ `manual_requested_=true` ⇒ `DecideNextAction` 返回 `kRunBoth`（`CloudSyncEngine.h:211-213`，**手动同步不受每日配额限制**）⇒ 立即得到一个 kBoth 轮。
+- ⇒ **三条加速路径**（按触发速度）：① 点「立即同步」（**立即**，不改数据、不产生副作用）；② 新增/修改任一词条（≈5 min 防抖）；③ 等定时轮（60 min）。
+- **时间推算（实测口径）**：启动轮 16:41:49 成功结束、方向 kPullOnly ⇒ `last_pull_ms_ = 16:41:49` ⇒ **定时轮 = 17:41:49**。runner 阶段 1 等待窗 = 16:36 + 80 min = 17:56 ⇒ **定时轮落在窗内** ⇒ **即使完全无人干预，阶段 1 也能拿到推轮**。
+- ⚠ 换阶段会**重启进程** ⇒ 内存态 `dirty_since` / `last_pull_ms_` 归零 ⇒ 阶段 2 需再走一次（定时轮 ≈ 18:47，或手动点一次「立即同步」）。
+
+#### P-G.5 阶段 3 仍然关闭
+
+- runner 只写 {0, 1, 2}；本轮**未**触碰 phase ≥ 3；云端 40,061 条历史存量**仍未完成桶化覆盖**（侧车 `brow` = 0 行）⇒ §O-1.1 的硬前置**未满足** ⇒ **阶段 3 切读仍然禁止**。
+
+#### P-G.6 判据状态
+
+- **AC-09 仍 FAIL，未改记**（本轮尚未产出 `AC09_VERDICT=` 行）。
+- 生产 `sync_buckets` 真机轮前后需复核（**本轮尚未复核**）。
+
+#### P-G.7 本轮自动时序（**无需用户在场即可跑完阶段 1/2**）
+
+- **16:41:49** 阶段 1 启动轮（kPullOnly）落地 ⇒ `last_pull_ms_ = 16:41:49`。
+- **≈17:41:49** 阶段 1 的**定时轮 = kBoth 轮**（fallback 时段；用户若提前点「立即同步」则提前到即时）⇒ 命中判据 `quota_rows=` ⇒ runner 记 `VERDICT[1]=PUSH_ROUND_SEEN`。
+- **≈17:42** runner 切阶段 2 ⇒ 重启进程（`startup_pending_` / `last_pull_ms_` 归零）⇒ 启动轮（kPullOnly）≈17:47 落地。
+- **≈18:47** 阶段 2 的定时轮 = kBoth 轮 ⇒ 命中判据 ⇒ `VERDICT[2]=PUSH_ROUND_SEEN`。（阶段 2 等待窗 17:42+80 min = 19:02，**落在窗内**。）
+- **≈18:47–18:50** runner `finally` 回滚 phase 0 ⇒ 判据 = 日志出现 `bucket phase=0` ⇒ `VERDICT[rollback]=PHASE0_OBSERVED` ⇒ 清 User 级环境变量 ⇒ `RUN END`（runner 总超时 19:36，留 ≈45 min 余量）。
+- ⇒ **本轮不需要用户做任何操作**即可闭环；若用户在场想加速，只需在 Fluxing「账号」界面点一次「立即同步」（每阶段各一次），不改数据。
+- ⚠ **推轮本身是真实写**：阶段 1/2 的 kBoth 轮会向生产写桶（规则 2 每轮 ≤ `kBucketPushRowsPerRound = 2000` 行，D1 实际 ≈2,048 行），相对当日 80,000 行护栏有余量 ⇒ **在授权范围内**。
+
