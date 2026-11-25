@@ -1001,8 +1001,8 @@
 
 **本节性质** = **客户端桶化（BR-①g）的文档与设计轮**：落盘 ADR 0077 客户端段（D12–D28 + 四段退役路线 + 回滚预案 + 补推分批策略）、spec 103 三件套、handoff §M、接力 prompt、`CLAUDE.md` BR 指针。
 
-**本轮未写任何产品代码**（`WeaselServer/**` / `include/**` / `test/**` / `cloud/**` **零改动**）；**未执行**门禁、**未**出包、**未**装机、**未**部署、**未**执行 `git add` / `git commit` / `git push`。
-**客户端实现由另一写入者推进**（`WeaselServer/Cloud/CloudBucketSync.{h,cpp}` 已落盘、未入版本控制 ⇒ 未编译验证）⇒ **本节不含任何「客户端已实施 / 已验证 / PASS」类结论**；凡未产生实测数字处一律留 `TODO(主会话回填): <字段名>` 显式占位。
+**§M 段落成稿时（2026-11-25 上午）客户端尚未入库**；截至本轮收口：客户端实现提交 `f7a62f6`、文档提交 `fdc71b9`，**均已推送**（远端 `kizemo/feat/100-cloud-sync` HEAD = `fdc71b9`）；门禁**已跑**（`MSBUILD_EXIT=0` / `PASS=899 FAIL=0` / `UFFFD_COUNT=0` / `VCPROJ_REGISTRATION=OK`）；**服务端仍零改动**（`cloud/**` 零改动、**未部署**）；出包 / 装机 / 真机轮结论见 §M.7。
+**客户端实现已入库并通过编译与单测**（`f7a62f6`：新增 `WeaselServer/Cloud/CloudBucketSync.{h,cpp}` + 改 `CloudSyncService.{h,cpp}` + 两个 vcxproj 登记 + 7 组新单测；门禁 `PASS=899 FAIL=0`，基线 813 ⇒ **+86**）⇒ **但真机轮尚未跑** ⇒ 本节仍**不含**任何真机轮「已验证 / PASS」类结论；凡真机轮未产生实测数字处一律留 `TODO(主会话回填): <字段名>` 显式占位。
 **§L 由另一回检任务占用**，本节不触碰。
 **§K-10 记的「ADR 0077 Status 仍为 Proposed」是当时状态**；本轮已将 ADR 0077 Status 转 `Accepted`（服务端部分已部署生产）——**转 Accepted 不代表客户端功能已验证**（见 §M.6 第 1 行）。
 
@@ -1060,17 +1060,17 @@
 | **单请求**索引写行数上界 | — | ≤ **2 × 本轮桶数** = **128**（64 桶/请求） | — |
 
 - 两口径**分别**断言（AC-204），**不得**只测其一；「实际写行数」含 `DELETE+INSERT` 两条写入，故不等于索引行数。
-- 「53 倍 / 27 倍」是**设计值**（按 1024 桶与 2× 上界推算），**不是实测**；真机轮的实测写增量 = `TODO(主会话回填): 真机轮 D1 写增量行数`。
+- 「53 倍 / 27 倍」是**设计值**（按 1024 桶与 2× 上界推算），**不是实测**；真机轮的实测写增量 = `**+22 行**（阶段 1 实测：`rows_written_24h` 40,259 ⇒ 40,281；**桶推一次都没发**，这 +22 不是桶写）⇒ 桶写入量仍是**未判定**（见 §M.8）`。
 - 首导对象数为**本地全集 94,604 条**（其中未上云 54,536 条）⇒ 每桶 ≈ 92 条（未上云口径 53 条）。
 
 ### M.5 未验证 · 未闭环清单
 
 | # | 项 | 现状 / 缺什么 |
 |---|---|---|
-| 1 | **客户端桶化实现** | 由另一写入者推进（`CloudBucketSync.{h,cpp}` 已落盘、未入 git、未编译验证）；本节全部客户端条目均为**设计已定**，非**实现已达成** |
-| 2 | **门禁数字** | 本轮**未跑**门禁（无产品代码改动）⇒ `TODO(主会话回填): 单独 msbuild 的 PASS/FAIL 计数与用例总数` |
-| 3 | **出包 / 装机** | 本轮**未出包、未装机** ⇒ `TODO(主会话回填): 出包字节数 / sha16 / INSTALL_EXIT / 装机后 WeaselServer.exe sha256` |
-| 4 | **真机轮** | 本轮**未跑真机轮** ⇒ AC-201…AC-211 均**未在真机验证** ⇒ `TODO(主会话回填): 真机轮判据结果` |
+| 1 | **客户端桶化实现** | **已入库并编译通过**：实现提交 `f7a62f6`（已推送）；`CloudBucketSync.{h,cpp}` 新增 + `CloudSyncService.{h,cpp}` 改造 + 两个 vcxproj 登记 + 7 组新单测（`PASS=899 FAIL=0`）；本节客户端条目**已达「实现已落码 + 单测已绿」**，但**真机轮未验证** |
+| 2 | **门禁数字** | **已跑**（2026-11-25 独立复跑 `scripts/verify/verify-br1g-bucket.ps1`）⇒ `MSBUILD_EXIT=0`（TestFluxingCloud **独立 msbuild** + 显式 `/p:SolutionDir=`，`weasel.sln` 不含该工程） / `PASS=899 FAIL=0`（基线 813 ⇒ **+86**，只增不减） / `UFFFD_COUNT=0` / `VCPROJ_REGISTRATION=OK` / clang-format **改动 hunk 漂移 0**（整文件口径 `TestFluxingCloud.cpp` 261 = **既有基线**，非本批引入） |
+| 3 | **出包 / 装机** | 本轮**未出包、未装机** ⇒ `1.3.9 包 **43,023,508 B**（`output/archives/fluxing-1.3.9-installer.exe`）· `BUILD_EXIT=0` · `INSTALL_EXIT=0`（验收 C1–C4 全 PASS）· 三处 `WeaselServer.exe` sha256 **全等** = `BBBDC47C646E83A8A681718255E3F2B90C768F77472E09064310995332F17930`（2,894,848 B）· `verify-installed.ps1` ⇒ `ok=True problems=0`（**须用 pwsh 7**，5.1 会把 UTF-8 无 BOM 按 ANSI 读 ⇒ CJK 解析错）` |
+| 4 | **真机轮** | 本轮**未跑真机轮** ⇒ AC-201…AC-211 均**未在真机验证** ⇒ `**部分达成**：阶段 0 基线 + **阶段 1 双写**已在真机跑出诊断行（`bucket phase=1 pushed=0 skipped=0 pulled_buckets=0 pulled_items=0`、`LEGACY_PUSH_LINES=0`、`VERDICT=OK`）；**阶段 2 未观测到**（阶段机在等下一轮时被终止）；**阶段 3/4 未执行（主动拦截）**；**桶推一次都没发**（生产 `sync_buckets` 恒 0）⇒ AC-201…AC-211 **多数仍未在真机验证**（根因与处置见 §M.8）` |
 | 5 | **AC-112 单轮预估传输时长** | **未判定**（需要什么：真机轮的 `elapsed_ms` 序列 + 生产 D1 写增量读数 + 真实桶 blob 字节数抽样）；**不得**用 D9 的 7.5 s 推算值或合成 blob 压测代替 |
 | 6 | **AC-09** | 仍为 **FAIL**（`AC09_VERDICT=FAIL`）⇒ **不得改记 PASS**；本批不改其判据 |
 | 7 | **服务端存量** | `sync_items` 仍 **40,061 行**未迁桶 ⇒ 老端点仍在承载（桶化只影响**新写**路径） |
@@ -1079,7 +1079,9 @@
 | 10 | **Deleted 段 `push=1` 来源** | 未定位（探针 per-stage 明细缺失，见 §K-4） |
 | 11 | **侧车 HLC 水位** | 探针 FAIL 路径恢复的 5 MB 侧车**不含**客户端自建侧车时抬高的本地 HLC 水位 ⇒ 存在「静默不推送」风险，**未验证** |
 | 12 | **探针修复** | `reports/fluxing-br-1c/probe-ac09.ps1` 的 6 处修复**未在真实轮次端到端复跑**（下一轮复跑须先看日志行数是否从 9 涨到数十行） |
-| 13 | **客户端侧补推洪峰** | 桶化后一次性补推约 **94,604 条**（本地全集）的**分批执行**尚未在真机跑过 ⇒ 写入量回落幅度 = `TODO(主会话回填): 真机轮实测写增量` |
+| 13 | **客户端侧补推洪峰** | 已升级为**阶段 3/4 的硬前置**：阶段 3 关掉逐条端点后，桶路径会一次性放行约 **94,604 条**（≈ 190,000 行写入）⇒ 击穿 8 万行/账号预算与 D1 免费额度 ⇒ **已在阶段 3 开跑前主动拦截**（生产 `sync_buckets` 恒 0）；两条补齐规则见 §M.8.4 |
+| 14 | **R2 闸门未进桶路径** | `PushChangedBuckets`（`CloudSyncService.cpp:1954-1968`）对 `merged` **全部**条目分桶，**未**继承 ADR 0076 D2-5a-2 的「库存未证实不推送」⇒ 54,536 条 `deferred` 会被打包上云 ⇒ **已定位、未修**（§M.8.3） |
+| 15 | **每轮桶推配额闸门** | 缺失 ⇒ 无分批上传能力；**好消息**：桶行「本轮没推的保留旧指纹」（`CloudSyncService.cpp:2168-2185`）⇒ 加配额闸门即可天然续推，**不需要另造水位**（§M.8.4） |
 
 ### M.6 每条标注：已验证 · 推断 · 未验证
 
@@ -1137,3 +1139,195 @@
 - `CLAUDE.md`（BR 指针追加 BR-①g 轮次要点）
 
 
+
+---
+
+## M.7 主会话收口轮（2026-11-25 上午 · 客户端桶化落地 + 门禁 + 出包装机）
+
+> 本节由**主会话**回填，全部数字标注 **已验证 / 推断 / 未验证**。
+> §M 主体（§M.1–§M.6）由文档写入者成稿，本节只追加「落地后的事实」，**不回改 §M.1–§M.6 的历史陈述**。
+
+### M.7.1 本轮实际改动与入库（已验证）
+
+| 项 | 值 |
+|---|---|
+| 客户端实现提交 | **`f7a62f6`** `feat(WeaselServer): 客户端桶化同步 —— 分桶打包/桶级 HLC/侧车 v2/阶段机`（7 文件 **+2,138 / −48**） |
+| 文档提交 | **`fdc71b9`** `docs(fluxing): BR-①g 客户端桶化 —— ADR 0077 客户端段 D12-D28 + spec 103 三件套 + 交接 §M`（7 文件 **+1,187 / −6**） |
+| 推送结果 | 直连 `PUSH_EXIT_DIRECT=128`（`Recv failure: Connection was reset`）⇒ 回退代理 `PUSH_EXIT_PROXY=0` ⇒ 远端 `kizemo/feat/100-cloud-sync` HEAD = **`fdc71b9`** |
+| 服务端 | **零改动**（`cloud/**` 未动）、**未部署**（生产 Version 仍 `4f163326-f2a5-4c69-be56-24cb800e6915`） |
+| 客户端改动文件 | 新增 `WeaselServer/Cloud/CloudBucketSync.{h,cpp}`；改 `WeaselServer/Cloud/CloudSyncService.{h,cpp}`、`WeaselServer/WeaselServer.vcxproj`、`test/TestFluxingCloud/TestFluxingCloud.{cpp,vcxproj}` |
+
+新增单测 7 组（`TestFluxingCloud.cpp` `:5246/:5296/:5356/:5404/:5440/:5515/:5597`，`main()` 接入 `:5712-5718`）。
+
+### M.7.2 门禁实测数字（已验证 · 主会话独立复跑）
+
+复跑命令：`pwsh -File F:\soft\00selfmade\rime_claude\scripts\verify\verify-br1g-bucket.ps1`
+（日志落盘：`reports/fluxing-br-1g/verify-main.log`）
+
+| 指标 | 值 | 备注 |
+|---|---|---|
+| `MSBUILD_EXIT` | **0** | `TestFluxingCloud` **必须单独 msbuild** 且显式 `/p:SolutionDir=F:\soft\00selfmade\rime_claude\`（`weasel.sln` 不含该工程 ⇒ 否则跑旧 exe、PASS 恒 813 **假绿**） |
+| `EXE_EXIT` | **0** | 新 exe 真跑，未复用上一轮 |
+| 单测 | **`PASS=899 FAIL=0`**（`VERDICT: ALL PASS`） | 基线 **813** ⇒ **+86**，只增不减；另有回环回归 `PASS=11 FAIL=0` |
+| `UFFFD_COUNT` | **0** | 5 个改动文件均无替换字符 |
+| `VCPROJ_REGISTRATION` | **OK** | 两个 vcxproj 均登记 `CloudBucketSync.cpp` + `.h` |
+| clang-format | **改动 hunk 漂移 0** | `git clang-format --diff HEAD~2` ⇒ `clang-format did not modify any files`；4 个客户端文件**整文件 0 替换**；`TestFluxingCloud.cpp` 整文件 **261 替换 = 既有基线**（不在本批改动 hunk 内 ⇒ 非本批引入） |
+
+### M.7.3 门禁脚本自身口径缺陷（本轮发现并已修 · 已验证）
+
+`scripts/verify/verify-br1g-bucket.ps1` 原第 124–126 行：
+`$formatted = & $cf.Source --style=file $f` ⇒ 返回 **`string[]`**，却与 `[IO.File]::ReadAllText($f)`（`string`）做 `-ne` 比较 ⇒
+**每个文件都被判为漂移** ⇒ `CLANGFORMAT_DRIFT=5`（= 文件数）是**假红**，与「子会话自报 0 漂移」并不矛盾。
+
+已修为：`$formatted` 先 `-join [char]10`、原文先剔除 `CR` 再比较，并增打两个分口径：
+`CLANGFORMAT_WHOLEFILE_DRIFT=<n>`（整文件，含既有基线）与 `CLANGFORMAT_HUNK_DRIFT=<n>`（**改动 hunk 口径 = 行动口径**）。
+**未入库**（`scripts/verify/*.ps1` 按红线不入库）⇒ **换机须按 §K-4 惯例重放该脚本修正**。
+
+### M.7.4 版本升版口径事故与修正（已验证 · 本轮真实踩坑）
+
+`install.nsi:68` 的 `OutFile "archives\fluxing-${FLUXING_VERSION}-installer.exe"` ⇒ **归档名只吃 `FLUXING_VERSION`**。
+而版本钉分布在 **`env.bat` 四处**（`FLUXING_VERSION` / `WEASEL_BUILD` / `PRODUCT_VERSION` / `FILE_VERSION`）+ `VERSION_MAJOR/MINOR/PATCH` + 仓库根 `version.txt`。
+
+**首轮只改了 `VERSION_PATCH`（8→9）与 `PRODUCT_VERSION`（1.3.8.0→1.3.9.0）** ⇒ 构建日志实测
+`PRODUCT_VERSION=1.3.9.0` 而 **`FLUXING_VERSION=1.3.8` / `FILE_VERSION=1.3.8.0`** ⇒
+① 产物名仍是 `fluxing-1.3.8-installer.exe`；② Windows 版本资源仍 1.3.8 ⇒ **装机走不到「严格更高版本」升级路径**；
+③ **覆盖了上一轮（BR-①c）的 1.3.8 归档**（43,001,594 B → 43,012,822 B，BR-①c 那个包已不可复现）。
+
+**修正**：`env.bat` 的 `FLUXING_VERSION` ⇒ `1.3.9`、`FILE_VERSION` ⇒ `1.3.9.0`（连同已改的 `VERSION_PATCH=9` / `PRODUCT_VERSION=1.3.9.0` 与 `version.txt=1.3.9`）⇒ **重打 1.3.9**。
+⇒ **给下一轮的硬规则：版本升版必须改 `env.bat` 四个钉 + `version.txt` 五处，只改 `VERSION_PATCH` 是半升版。**
+
+### M.7.5 出包 / 装机（已验证）
+
+| 项 | 值 |
+|---|---|
+| 构建 | `build.bat weasel installer`（`RELEASE_BUILD=1` 已在 `env.bat`）⇒ 首轮 `BUILD_EXIT=0`（**半升版产物，已作废**）；1.3.9 重打中 |
+| 归档 | `output/archives/fluxing-1.3.9-installer.exe` = **43,023,508 B**（`build.bat weasel installer`，`BUILD_EXIT=0`；日志 `reports/fluxing-br-1g/build-package-1.3.9.log`） |
+| 装机 | **`INSTALL_EXIT=0`**（`scripts/install/silent-install.ps1 -InstallRoot "D:\Program Files\fluxing"` ⇒ `=== SILENT INSTALL OK - ALL HARD CHECKS PASSED ====`，验收 C1–C4 全 PASS；已装 `DisplayVersion=1.3.9`；`RimeUserDir` 已保存/恢复 = `D:\Program Files\fluxing\user1\fluxing`） |
+| 三处 sha256 相等（构建=包内=装机后） | **全等** = `BBBDC47C646E83A8A681718255E3F2B90C768F77472E09064310995332F17930`（2,894,848 B）：构建 `output/Win32/WeaselServer.exe` = 包内（`output/7z.exe` 解包出的 `$TEMP\fluxing-staged\WeaselServer.exe`）= 装机后 `D:\Program Files\fluxing\weasel\WeaselServer.exe`；整目录另跑 `verify-installed.ps1` ⇒ `ok=True problems=0 detail=安装状态与构建产物一致；DisplayVersion=1.3.9` |
+
+### M.7.6 真机轮（**未判定** —— 本轮未跑）
+
+阶段机 0→1→2→3 **尚未在真实轮次跑过**。机制已就位：`scripts/verify/probe-br1g-bucket-phase.ps1 -Phase <n>`
+（写 User 级 `FLUXING_CLOUD_SYNC_BUCKET_PHASE` ⇒ 重启 `WeaselServer` ⇒ 等一轮同步 ⇒ 读 `%TEMP%\fluxing-profile-notify.log` 的
+`bucket phase=.. pushed=.. skipped=.. pulled_buckets=.. pulled_items=..` 诊断行）。
+**回滚口径**：把该环境变量设为 `0` 跑一轮即回到老端点（客户端会把 `phase` 写回侧车）。
+
+**未判据与「需要什么」**：
+- AC-201…AC-211 ⇒ **未在真机验证** ⇒ **未判定**（真机轮未跑；判据清单与「需要什么」见 §M.7.6）；
+- 真机轮 D1 写增量行数（AC-204「实际写行数」口径） ⇒ **未判定**（真机轮未跑；需要什么见 §M.7.6）；
+- AC-112 单轮预估传输时长 ⇒ **仍未判定**（需要真机 `elapsed_ms` 序列 + 生产 D1 写增量读数 + 真实桶 blob 字节数抽样）；
+- **53 倍 / 27 倍仍是设计值，不是实测**。
+
+### M.7.7 本轮未闭环清单（逐条标注）
+
+| # | 项 | 状态 |
+|---|---|---|
+| 1 | 真机阶段机 0→1→2→3 未跑 | **未判定**（探针就位，见 §M.7.6） |
+| 2 | AC-112 单轮预估传输时长 | **未判定**（需真机回填） |
+| 3 | 「53 倍 / 27 倍」写入量降幅 | **推断（设计值）**，非实测 |
+| 4 | 生产桶表写入量回落 | **未验证**（桶表仍 0 行） |
+| 5 | `R2` 生命周期规则缺失 ⇒ 孤儿对象不可证 | **未闭环**（`wrangler.toml` 无 `[[r2_buckets.rules]]`；清理必须走 `POST /v1/account/data`） |
+| 6 | `device_id` 客户端一律不上报 | **推断**（服务端 body 省略 ⇒ 回落 `auth.deviceRowId`） |
+| 7 | 换口令 ⇒ 旧桶成孤儿 | **已知边界**（既解不开也删不掉） |
+| 8 | `brow` 丢失 ⇒ 不知服务端已存桶 HLC | **已知边界**（可能反复被整桶守卫 skipped） |
+| 9 | 阶段 3/4 每轮约 11 个拉取请求 | **推断**（按轮计配额余量待真机确认） |
+| 10 | BR-①f `AC-09` | 仍为 **FAIL** ⇒ **不得改记 PASS**（本批不改其判据） |
+| 11 | 侧车 HLC 水位 / 探针修复端到端复跑 | 沿用 BR-①f 未闭环项 |
+| 12 | 1.3.8 归档被覆盖（BR-①c 包不可复现） | **已发生**（见 §M.7.4） |
+
+### M.7.8 本轮工具坑（已验证）
+
+1. **`git clang-format` 只看改动行** ⇒ 整文件漂移 261 是既有基线，不要误判为本批引入。
+2. **`CLANGFORMAT_DRIFT` 原为假红**（数组 vs 字符串比较）⇒ 已修（§M.7.3）。
+3. **版本升版要改五处**（`env.bat` 四钉 + `version.txt`），只改 `VERSION_PATCH` ⇒ 半升版（§M.7.4）。
+4. `install.nsi` 归档名**不含 `WEASEL_BUILD`** ⇒ 同 `FLUXING_VERSION` 会**覆盖**既有归档。
+5. `wrangler d1 execute` 偶发 `fetch failed` ⇒ 关键读数必须重跑确认，不能把失败当 0。
+6. 前台 bash 超过 60s 会被自动转成后台任务 ⇒ 长构建要用 `run_in_background` + `task_output` 等待式轮询。
+7. 安全网关：同一命令既 `Set-Location` 又带写/删目标 ⇒ 整体拦截；全程用绝对路径、不切目录。
+
+---
+
+## §M.8 真机轮根因定位与「阶段 3 生产风险」拦截（2026-11-25 10:24–10:35 · 补记）
+
+> 本节是 §M.7.6「真机轮」的**续写**：把「阶段 1 `pushed=0`」从「现象」追到「代码行」，并在阶段 3 开跑前**主动拦截**了一次会打爆生产 D1 免费额度的推送。
+
+### M.8.1 现象（已验证）
+
+- 阶段 1 诊断行（`reports/fluxing-br-1g/phase1-probe.log` · `phases-summary.log`）：
+  `2026-11-25 10:27:41.769][cloudsync] bucket phase=1 pushed=0 skipped=0 pulled_buckets=0 pulled_items=0`
+  同期 `reconcile scan_complete=0 matched=67 deferred=54536 divergent=0 pushed=0`，`LEGACY_PUSH_LINES=0`，`VERDICT=OK`。
+- 生产回读（只读）：`sync_buckets = 0`、`sync_items = 40,061`、`users = 4`；
+  `wrangler d1 info` ⇒ `rows_written_24h = 40,281`（基线 40,259 ⇒ **+22**，非桶推产生：桶推一次都没发）。
+- 阶段 2（10:27:42 起）**未观测到**诊断行：阶段机在等下一轮同步时被我主动终止（见 M.8.4）。
+
+### M.8.2 根因：桶推被「库存扫描完整」闸门挡住（已验证 · 代码行级）
+
+- 闸门在 `WeaselServer/Cloud/CloudSyncService.cpp:1608-1611`：
+
+  ```cpp
+  if (bucket_mode &&
+      (direction == SyncDirection::kPushOnly ||
+       direction == SyncDirection::kBoth) &&
+      bucket_scan_complete) {           // ← 库存扫描未完成 ⇒ 本轮不推桶
+  ```
+
+  注释（同文件 1604-1607）写明理由：**桶内容 = 合并视图的整桶**，视图不完整时推上去会覆盖掉没看到的远端条目 ⇒ 这是「整桶覆盖闸门」，**不是** bug。
+- 为什么 `bucket_scan_complete` 恒为假（已验证）：库存扫描的完整性来自**逐条端点**的分页拉取，
+  上限 `kMaxPullPages = 10` × `kPullPageLimit = 100` = **每轮最多 1,000 条**，
+  而云端存量 `sync_items = 40,061` ⇒ **需要约 41 轮**才能扫完（与 BR-①e 登记的「41 轮」同源）。
+  实测 `scan_complete=0` ⇒ 闸门常闭 ⇒ 阶段 1/2 **一轮桶都不推** ⇒ `pushed=0 skipped=0`（**不是**推了空桶，是**根本没发请求**）。
+- 为什么不是「桶内容为空」：`PushChangedBuckets` 里 `changed = !known`（首次无桶行 ⇒ 必推），
+  而 `merged` 有 94,604 条 ⇒ 若闸门放开，首轮应推 **≈1,024 桶**（`kBucketShardCount=64` × `kBucketSubShardCount=16`）。
+
+### M.8.3 拦截：阶段 3 会一次性放行约 94,604 条 ⇒ 已主动掐断（已验证 · 风险评估 + 处置）
+
+**风险机理（推断，已由代码行坐实）**：
+
+1. 阶段 3/4 = `legacy_endpoints = false`（`CloudSyncService.cpp:1132-1135`）⇒ 逐条端点**完全不发**；
+   ⇒ 库存完整性再也无法由逐条扫描满足 ⇒ 闸门在阶段 3 变成「无扫描可依赖」。
+2. `PushChangedBuckets`（`CloudSyncService.cpp:1954-1968`）对 **`merged` 的全部条目**分桶，
+   **没有**继承 ADR 0076 D2-5a-2 的 **R2「库存未证实不推送」** 闸门 ⇒
+   54,536 条 `deferred`（从未上云）条目会**混进桶里被一次性上传**。
+3. 服务端是 `R2 put ⇒ D1 DELETE+INSERT`（覆盖语义）⇒ 每条条目 ≈2 行写入 ⇒
+   单轮写入量 ≈ **94,604 × 2 + 1,024 索引 ≈ 190,000 行**（远超单账号 80,000 行/日预算与 D1 免费额度 100,000 行/日）
+   ⇒ 服务端会返回 `429 write_budget_exceeded`，但**预算耗尽前的那批写入已经落库**
+   ⇒ **复现 BR 批次 2026-11-23 的生产事故**（D1 免费额度耗尽 ⇒ 登录写 `refresh_tokens` 被拒 ⇒ 真实用户登录 500）。
+
+**处置（已验证）**：
+
+- 10:31:4x 主动终止阶段机后台任务（`bg_f4f62f35`），**在阶段 3 开跑之前**；
+  ⇒ 本轮真机**从未进入阶段 3**，生产 `sync_buckets` 保持 **0 行**、`rows_written_24h` 仅 +22（与桶推无关）。
+- 机器已复位到 **phase=0**：User 级 `FLUXING_CLOUD_SYNC_BUCKET_PHASE` 置 0 → 重启 `WeaselServer` →
+  跑一轮让**侧车 `phase` 写回 0** ⇒ 再删除 User 级变量（回滚闭环证据：`reports/fluxing-br-1g/rollback-phase0.log`）。
+
+### M.8.4 因此，BR-①g 第 ⑩ 项（「桶化后一次性补推约 54,536 条」的分批策略）**不是可选项，而是阶段 3/4 的硬前置**
+
+**已验证的可落点（好消息）**：桶推**天然可续推**——`CloudSyncService.cpp:2168-2185` 里
+「本轮没推的桶保留旧指纹行」「推成功但服务端没认的桶不写行」⇒ 下一轮自动重试；
+⇒ 加一个「每轮最多推 N 桶 / M 行」的配额闸门即可把上传摊到多轮，无需另造水位。
+
+**必须补的两条规则（下一批落地）**：
+
+1. **R2 闸门进桶路径**：桶内容只能包含「库存已证实」的条目（云端已有 / 本轮拉到的），
+   **不得**把 54,536 条 `deferred` 条目打包上云；
+   否则桶化等于「把用户历史上敲过的每个词都上传」，与 ADR 0076 D2-5a-2 的原意相反。
+2. **每轮配额闸门**：单轮桶推的行数上限（建议 **≤ 8,000 行/轮**，对应 80,000 行/日预算的 10%，
+   留足登录写 `refresh_tokens` 与 `users` 的余量），超出的桶留给下一轮。
+
+**未闭环（明确记为「未判定」，不得记 PASS）**：
+
+- 桶推路径在真机上**从未真正发出过一次请求**（`sync_buckets` 恒 0）⇒
+  桶端点 push body / HLC 守卫 / R2 往返 / 桶级拉取解包（客户端解析器）在生产上**均未验证**；
+- 阶段 3/4 真机判据（切读、老端点退役、回滚）**未执行**；
+- 阶段 2（双写 + 交叉校验）诊断行**未观测到**（阶段机在等待下一轮时被终止）。
+
+### M.8.5 下一批的最小可执行路径（供接力会话直接开工）
+
+1. 客户端加「R2 闸门进桶路径」+「每轮桶推行数配额」两条规则（`CloudSyncService.cpp:1954-2065` 一带），
+   配套 `test/TestFluxingCloud/TestFluxingCloud.cpp` 用例 ⇒ 门禁复跑（基线 `PASS=899 FAIL=0`）。
+2. 升版 + 出包 + 装机 + 三处 sha256 对账（照 §M.7.5 的口径）。
+3. 真机：**只跑阶段 1/2**（此时逐条端点仍在 ⇒ 库存扫描仍在推进 ⇒ 桶推闸门仍闭 ⇒ 生产安全），
+   连续跑够 41 轮让库存扫描完成（每轮约 3 分钟 ⇒ 约 2 小时）⇒ 观察桶推是否按配额逐轮放行。
+4. 库存扫描完成后才允许阶段 3；阶段 3 首轮必须观测到 `pushed>0` 且 `sync_buckets` 行数按配额增长、
+   `rows_written_24h` 增量 **≤ 8,000**；再跑阶段 0 验证回滚。
+5. 服务端零改动的前提不变（桶端点已在生产，本批仍不需要 deploy）。
