@@ -365,4 +365,5 @@ esbuild external 元信息变化，自测项数未变（31/31 PASS）。node bun
 
 **门禁结果**（`reports/fluxing-br-1g/w6/gate-w6.ps1` → `gate-w6.txt`）：`GATE_VERDICT=PASS` / `TSC_LINES=0` / node 包 110,414 B（sha256 `668CB107…`，基线 109,104 B ⇒ +1,310 B）/ `SELFTEST_PASS=37 FAIL=0`（基线 31）/ Workers 包 91,912 B **逐字未变** + 九条零污染全 False / workerd 13 files · 164 tests / test-pg **3 files · 24 tests**（基线 1 文件 4 用例）/ 负路径 `NEG_EXIT=1` + 中文错 + **PG 文件确实失败且纯单元文件确实仍通过**。
 
-**仍未闭环**：push 未完成（本地 ahead 5，`ls-remote` 取不到）· `test-pg/**` 不在 `tsconfig.json` 的 `include`（新增测试无类型闸门）· §9.5 表内三条未证实项照旧。详见 handoff `## W`。
+**push 已完成（走直连）**：远端 `refs/heads/feat/100-cloud-sync` = `8645b2778125f26c66e586feeeb704485274b26d` = `git rev-parse HEAD`（逐字相等，ahead 0 / behind 0，快进推送 `442e0ba..8645b27`）。
+**仍未闭环**：**代理路线仍断**（`Recv failure: Connection was aborted`）⇒ 后续远端操作须显式 `-c http.proxy= -c https.proxy=` · `test-pg/**` 不在 `tsconfig.json` 的 `include`（新增测试无类型闸门）· §9.5 表内三条未证实项照旧。详见 handoff `## W`。

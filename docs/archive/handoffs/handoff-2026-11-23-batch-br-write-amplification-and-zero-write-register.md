@@ -3300,7 +3300,7 @@ $logs = Get-ChildItem -LiteralPath 'F:\soft\00selfmade\rime_claude\reports\fluxi
 | 更新 `reports/fluxing-br-1g/pg-port-selftest.ts`（31 → 37 项） | 不改客户端 C++ / 不升版 / 不出包 / 不装机 / 不启停 WeaselServer |
 | 门禁与审计脚本留在 `reports/**`（不入库） | 不动生产 D1 / R2 / ECS / Cloudflare / 远端 PG |
 
-**一句话状态**：W6 必改项**已落码 + 门禁全绿 + 已入库**（commit `5a65a69`），**但未 push**（本地 ahead 5，`git ls-remote` 取不到 ⇒ 推送硬判据不成立）；「145 个 `?`」过计数已订正为 **135**（recon §9.3 / §9.4 + shim 头注释三处同步）；W7 切源仍不可执行（§V-6 八条阻塞原样未解）。
+**一句话状态**：W6 必改项**已落码 + 门禁全绿 + 已入库**（commit `5a65a69`），**且已 push**（直连成功：远端 `refs/heads/feat/100-cloud-sync` = `8645b2778125f26c66e586feeeb704485274b26d`，与 `git rev-parse HEAD` **逐字相等**，ahead 0 / behind 0）；「145 个 `?`」过计数已订正为 **135**（recon §9.3 / §9.4 + shim 头注释三处同步）；W7 切源仍不可执行（§V-6 八条阻塞原样未解）。
 
 ### W-2 逐条对照（§V-11 第 ② 项 → 落地）
 
@@ -3384,7 +3384,7 @@ test-pg：Test Files 3 passed (3) / Tests 24 passed (24) / TESTPG_EXIT=0
 
 ### W-5 未闭环（7 条，逐条不得当已解决）
 
-1. **push 未完成**：本地 ahead 5，`git ls-remote` 四条路线全断（见 W-6.10）⇒ 硬判据取不到 ⇒ **不得声称已 push**。
+1. **代理路线仍断**（见 W-6.10）：本批 push 走**直连**才成功 ⇒ 后续任何远端操作必须显式带 `-c http.proxy= -c https.proxy=`，否则会误判成「网络不通」。
 2. **`.exec(` 3 处逐点核实**（口径不一致，见 W-4.4）。
 3. **`rowCount===null` 归一化是否覆盖全部 27 个 `run()` 站点**：shim 侧有归一化，**未逐点证实**。
 4. **`.first(` 23 处「无行返回值两端等价」**：shim 侧已实测 `null`，但 **D1 侧未跑对照** ⇒ 未证实。
@@ -3403,7 +3403,7 @@ test-pg：Test Files 3 passed (3) / Tests 24 passed (24) / TESTPG_EXIT=0
 7. 写工具拒绝覆盖未读过的文件 ⇒ 先 `read` 再 `write`。
 8. 安全策略拦「切目录 + 写盘」同条命令 ⇒ 全程绝对路径 + npm `--prefix`。
 9. **门禁脚本自身两处缺陷**：① 无显式 verdict（原先 `GATE_EXIT=1` 实为 npm 子进程退出码泄漏）② 负路径 `Tests \d+ passed` 对「2 failed | 1 passed」摘要假绿 ⇒ 改成显式 `GATE_VERDICT` + 显式 `exit`，负路径改判「PG 文件确实失败 **且** 纯单元文件确实仍通过」。
-10. 代理 `127.0.0.1:7897` 在监听但隧道仍断（`Recv failure: Connection was aborted`），直连同断（`Connection was reset`），SSH `Permission denied (publickey)`，HTTP/1.1 变体同断 ⇒ `git ls-remote` 读不回 ⇒ **推送硬判据取不到即不得声称成功**。
+10. **代理路线断、直连路线通（本批实测订正）**：全局 `http.proxy`/`https.proxy` = `127.0.0.1:7897` 在监听但隧道仍断（`Recv failure: Connection was aborted`）；**显式 `-c http.proxy= -c https.proxy=` 的直连在本批末段恢复成功**（快进推送 `442e0ba..8645b27`，`ls-remote` 回读 `8645b277…` = `rev-parse HEAD`）⇒ 远端操作**一律走直连**，代理路线当故障处理；SSH 路线 `Permission denied (publickey)` 不可用。**本条与本会话早前「四条路线全断」的登记冲突时以本条为准。**
 
 ### W-7 复跑命令（copy-ready）
 
@@ -3425,22 +3425,23 @@ $env:FLUXING_PG_URL = "postgres://postgres:$($line.Split(':')[4])@127.0.0.1:5432
 & npm --prefix 'F:\soft\00selfmade\rime_claude\cloud\fluxing-sync' run test:pg
 #   ⇒ Test Files 3 passed (3) / Tests 24 passed (24)
 
-# ④ push（网络恢复后；硬判据 = ls-remote 与 rev-parse HEAD 逐字相等）
-git -C 'F:\soft\00selfmade\rime_claude' push kizemo feat/100-cloud-sync
-git -C 'F:\soft\00selfmade\rime_claude' ls-remote kizemo refs/heads/feat/100-cloud-sync
+# ④ push（**走直连**；代理路线断 ⇒ 必须显式清空 proxy；硬判据 = ls-remote 与 rev-parse HEAD 逐字相等）
+git -C 'F:\soft\00selfmade\rime_claude' -c http.proxy= -c https.proxy= push kizemo feat/100-cloud-sync
+git -C 'F:\soft\00selfmade\rime_claude' -c http.proxy= -c https.proxy= ls-remote kizemo refs/heads/feat/100-cloud-sync
 git -C 'F:\soft\00selfmade\rime_claude' rev-parse HEAD
+#   ⇒ 本批实跑：442e0ba..8645b27 快进推送；ls-remote = 8645b2778125f26c66e586feeeb704485274b26d = rev-parse HEAD
 ```
 
 ### W-8 Git 现状
 
 - 分支 `feat/100-cloud-sync`，远端 `kizemo`（https://github.com/kizemo/fluxing.git）+ `kizemo-ssh`（ssh）。
-- **ahead 5**（`c7d6d1e`→`5a65a69` 已被 amend 替换；`ea15f05` §U 文档批、`f6f888a` §V 文档批、`5a65a69` 代码批等 5 个提交在本地未 push）。**当前 HEAD = `5a65a69`（本批代码批）；本批文档批（handoff `## W` + prompt + recon §9.6）为第 6 个待 push 提交。**
+- **已 push（直连）**：远端 `refs/heads/feat/100-cloud-sync` = `8645b2778125f26c66e586feeeb704485274b26d`，与 `git rev-parse HEAD` **逐字相等**（`VERBATIM_EQUAL=True`），`ahead 0 / behind 0`；推送前远端停在 `442e0ba`，本次为**快进**推送（`442e0ba..8645b27`，未用 force）。本批两次提交 = `5a65a69`（代码批：`d1-shim` 断言 + 20 条新用例 + ADR 0079）+ `8645b27`（文档批：handoff `## W` + 接力 prompt 改写 + recon §9.3/§9.4/§9.6）。
 - 工作区未入库杂项照旧：`librime`（子模块脏）、`release/`、`reports/**`、`scripts/verify/*.ps1`、`docs/design/quickpanel-v6/design-demos/*.html` 等 —— **本批一个都没 `git add`**。
 - 全局 `http.proxy` / `https.proxy` = `http://127.0.0.1:7897`（本批未改）。
 
 ### W-9 下一步（建议顺序）
 
-1. **网络恢复即补 push**（W-7 ④）：硬判据 = `git ls-remote kizemo refs/heads/feat/100-cloud-sync` 与 `git rev-parse HEAD` **逐字相等**；取不到就不许声称成功。
+1. **push 已完成**（直连，见 W-8）；后续任何远端操作沿用**直连参数** `-c http.proxy= -c https.proxy=`（代理路线断，见 W-6.10），复跑命令见 W-7 ④。
 2. **补 `tsconfig.json` 的 `include`**（W-5.6）：把 `test-pg/**/*.ts` 纳入类型检查，消除「新增测试无类型闸门」缺口；单独一批提交。
 3. **W6 残留逐点核实**（W-5.2–5.5）：`.exec(` 归属、`rowCount` 归一化覆盖 27 个 `run()` 站点、`.first()` 的 D1 侧对照、`batch()` 6 个业务调用点 —— 全部在 `test-pg/**` 内加对照用例，不动业务代码。
 4. **W7 前置 ①② 需用户出手**（§V-11 第 ① 项）：Cloudflare 删掉/放行 `*.jury.xin` → apex 的 301（至少放行 `api.jury.xin`），并决定 `api.jury.xin` 走橙云（定 SSL 模式）还是灰云（ECS 另签 certbot/LE 并开 80/443）。
