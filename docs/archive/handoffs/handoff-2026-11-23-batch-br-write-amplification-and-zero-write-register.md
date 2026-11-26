@@ -3283,3 +3283,168 @@ $logs = Get-ChildItem -LiteralPath 'F:\soft\00selfmade\rime_claude\reports\fluxi
 2. **W6 必改项落码**：`d1-shim.prepare()` 单点改写 `?`→`$n`，并补「绑定参数个数 == 占位符个数」断言 + 门禁用例（含 `first()` 返回值归一、`batch()` 原子性、`rowCount===null`）。
 3. **BR-①h** 独立批次（reconcile 诊断行 `early_exit`）。
 4. W7 本体按 §V-6 顺序解阻塞；**切源四段（双写→校验→切读→退役）不得跳段**。
+
+## W
+
+### W-1 指令与边界
+
+**指令**：§V-11 第 ② 项 ——「**W6 必改项落码**」：把 SQLite 的 `?` 占位符在 `d1-shim.prepare()` 单点改写成 PG 的 `$1..$n`，并补「**绑定参数个数 == 占位符个数**」断言 + 门禁用例（含 `first()` 返回值归一、`batch()` 原子性、`rowCount===null`）。
+
+**本批边界（自设，逐条遵守）**：
+
+| 做 | 不做 |
+| --- | --- |
+| `cloud/fluxing-sync/src/pg/d1-shim.ts` 落占位符改写 + 断言（单点收口） | **不改任何一处业务 SQL**（135 个 `?` 一字未动） |
+| 新增 `test-pg/d1-shim-unit.test.ts`（14 条纯单元）+ `test-pg/d1-shim-pg.test.ts`（6 条真 PG） | 不动 `test/`（workerd 13 files / 164 tests 原样保留） |
+| 补 ADR 0079（此前 `src/pg/**` 三文件头注释悬空引用） | **不改 R5 写预算语义**（ADR 0079 D7 记理由 + 触发条件） |
+| 更新 `reports/fluxing-br-1g/pg-port-selftest.ts`（31 → 37 项） | 不改客户端 C++ / 不升版 / 不出包 / 不装机 / 不启停 WeaselServer |
+| 门禁与审计脚本留在 `reports/**`（不入库） | 不动生产 D1 / R2 / ECS / Cloudflare / 远端 PG |
+
+**一句话状态**：W6 必改项**已落码 + 门禁全绿 + 已入库**（commit `5a65a69`），**但未 push**（本地 ahead 5，`git ls-remote` 取不到 ⇒ 推送硬判据不成立）；「145 个 `?`」过计数已订正为 **135**（recon §9.3 / §9.4 + shim 头注释三处同步）；W7 切源仍不可执行（§V-6 八条阻塞原样未解）。
+
+### W-2 逐条对照（§V-11 第 ② 项 → 落地）
+
+| §V-11 第 ② 项要求 | 落地位置 | 状态 |
+| --- | --- | --- |
+| `prepare()` 内单点改写 `?`→`$n` | `src/pg/d1-shim.ts` 的 `scanPlaceholders()`（唯一实现）+ `renumberPlaceholders()` 薄封装 | ✅ 已落码 |
+| 跳过字面量 / 双引号标识符 / 行注释 / 块注释 | `scanPlaceholders()` 同函数内处理；单测第 1 条覆盖 | ✅ 已落码 |
+| 「占位符个数 == 绑定参数个数」断言 | 断言落在 `PgCompatStatement.toQuery()`（唯一收口点，一次覆盖 all / first / run / batch） | ✅ 已落码 |
+| 断言失败要显式、且不泄露数据 | 错误信息**只给两个个数**（占位符数 / 绑定数），不含 SQL 正文、不含绑定值 | ✅ 已落码 |
+| `first()` 返回值归一 | shim 返回 `null`（非 `undefined`），无行 + 传列名两种路径都归一 | ✅ 已落码 + 单测 + 真 PG 实测 |
+| `batch()` 原子性 | 单连接 + `BEGIN`/`COMMIT` + 失败 `ROLLBACK` + 必 release | ✅ 已落码 + 单测 + 真 PG 实测 |
+| `rowCount===null` 归一 | `changes` 归一为 0（非 null / undefined） | ✅ 已落码 + 单测 + 真 PG 实测 |
+| 门禁用例 | `reports/fluxing-br-1g/w6/gate-w6.ps1`（7,083 B，不入库）+ 负路径判据 | ✅ 全绿 |
+
+### W-3 已证事实（本批盘上回读）
+
+**代码批（已入库）**：
+
+```
+5a65a6994832b4202486009613310c140d224848
+fluxing(sync): W6 占位符单点断言 + d1-shim 判据补齐
+
+ cloud/fluxing-sync/src/pg/d1-shim.ts               |  87 +++++--
+ cloud/fluxing-sync/test-pg/d1-shim-pg.test.ts      |  93 +++++++
+ cloud/fluxing-sync/test-pg/d1-shim-unit.test.ts    | 220 ++++++++++++++++
+ ...undary-replacement-and-placeholder-assertion.md | 282 +++++++++++++++++++++
+ 4 files changed, 663 insertions(+), 19 deletions(-)
+```
+
+**盘上产物**（`ReadAllLines().Count` + `Get-Item .Length`）：
+
+| 文件 | 行 | 字节 |
+| --- | ---: | ---: |
+| `cloud/fluxing-sync/src/pg/d1-shim.ts` | 433 | 17,506 |
+| `cloud/fluxing-sync/test-pg/d1-shim-unit.test.ts` | 220 | 8,280 |
+| `cloud/fluxing-sync/test-pg/d1-shim-pg.test.ts` | 93 | 3,874 |
+| `docs/adr/0079-pg-dialect-shim-boundary-replacement-and-placeholder-assertion.md` | 282 | 15,692 |
+| `docs/research/fluxing-cloud-2026-11/port-to-pg-recon.md`（本批订正后） | 345 | 22,236 |
+
+**双口径静态审计**（`reports/fluxing-br-1g/w6/audit-bind-count.mjs`，9,960 B，不入库；产物 `audit-bind-count.out.txt` 752 B + `bind-count.json` 882 B）：
+
+```
+PREPARE_SITES=65 / DYNAMIC_SITES=7 / TOTAL_PLACEHOLDERS=135 / NAIVE_TOTAL=135
+EXPR_NAIVE_TOTAL=141 / LITERAL_DELTA_SITES=0 / MISMATCH_SITES=0 / NOBIND_SITES=0 / AUDIT_EXIT=0
+```
+
+四个动态构造站点（运行时展开 `map(() => '?')`，占位符 = N+1 / N+2，与绑定数同构）：`src/sync-buckets.ts:180`（N+2）、`src/sync-buckets.ts:300`（N+2）、`src/sync.ts:279`（N+1）、`src/sync.ts:399`（N+1）；1 个变量透传站点 `src/auth.ts:418`（`prepare(sql)`，两个调用方 `auth.ts:487` / `auth.ts:500` 各 1 个 `?` + 1 绑定）。
+
+**门禁 v3 实跑（`reports/fluxing-br-1g/w6/gate-w6.ps1` → `gate-w6.txt` 2,917 B，mtime 20:22:35）**：
+
+```
+GATE_FAILS=（空）   GATE_VERDICT=PASS   （脚本显式 exit 0/1）
+TSC_EXIT=0 / TSC_LINES=0
+NODE_BUNDLE_BYTES=110414
+NODE_BUNDLE_SHA256=668CB10751C631134A6A5CFC8A1EC399B62A8B61B84DF8C5C7209EEA4A6DC8B0
+SELFTEST_PASS=37 / SELFTEST_FAIL=0 / SELFTEST_EXIT=0
+WORKERS_INDEX_BYTES=91912（逐字未变）+ 九条零污染断言全 False
+workerd：Test Files 13 passed (13) / Tests 164 passed (164) / WORKERD_EXIT=0
+test-pg：Test Files 3 passed (3) / Tests 24 passed (24) / TESTPG_EXIT=0
+负路径：NEG_EXIT=1 / NEG_HAS_CN_MSG=True / NEG_MENTIONS_ENV=True
+        NEG_PG_FILES_FAILED=True / NEG_UNIT_FILE_NOT_FAILED=True
+        （负路径摘要：Test Files 2 failed | 1 passed (3) / Tests 14 passed | 10 skipped (24)）
+```
+
+**基线对比（§U-5）**：node 包 109,104 B ⇒ **110,414 B（+1,310 B）**；selftest 31 ⇒ **37（+6）**；Workers 包 91,912 B **逐字未变** + 九条零污染仍全 False；workerd 13 files / 164 tests **不变**；test-pg **1 文件 / 4 用例 ⇒ 3 文件 / 24 用例**（+2 文件 +20 用例）。
+
+**新增用例清单**（14 单元 + 6 真 PG = 20）：
+
+- 纯单元（`d1-shim-unit.test.ts`）：按出现顺序编号且跳过字面量/注释/标识符里的问号 · 计数与改写结果自洽（`placeholderCount === $n` 个数）· 占位符数 ≠ 绑定数 ⇒ 显式失败且报中文错 · 有占位符却不绑定 ⇒ 同样失败 · **错误信息只给个数，不含 SQL 正文与绑定值** · 零占位符 + 零绑定 ⇒ 正常执行 · 无行 ⇒ 返回 `null` 且不是 `undefined` · 无行 + 传列名 ⇒ 同样 `null` · 有行 ⇒ 返回整行对象 · `rowCount===null` ⇒ `changes===0` · `rowCount` 为 0 ⇒ `changes===0` · 空数组 ⇒ 直接返回 `[]` 且不取连接 · 全部成功 ⇒ `BEGIN`+`COMMIT` 都在且每条语句各拿一次结果 · 中途失败 ⇒ `ROLLBACK` 且不 `COMMIT`。
+- 真 PG（`d1-shim-pg.test.ts`）：第二条违反唯一约束 ⇒ 整批回滚、第一条也不落库 · 全部成功 ⇒ 两条都落库且 `meta.changes` 各为 1 · `first()` 无行 ⇒ `null`（不是 `undefined`）· DDL（`rowCount===null`）⇒ `meta.changes===0` · `UPDATE` 影响 0 行 ⇒ `meta.changes===0` · 占位符数 ≠ 绑定数 ⇒ **真库上也先失败**，不把参数错位发出去。
+
+**ADR 0079 决策要点（D1–D10）**：边界替换（只动 `src/pg/**`，业务零改动）· 占位符单点改写 + `toQuery()` 唯一断言收口点 · 严格模式（个数不等即抛）· `first()` → `null` · batch 单连接真事务 · int8 归一 · **R5 写预算暂不改**（理由 + 触发条件）· 三条硬闸门一条都不解除 · 桶化 phase 0 冻结 · 外键不关 / 配额错误码不删。
+
+### W-4 本批订正（5 条，均已改源文件）
+
+1. **「145 个 `?`」是过计数，权威值 = 135**。构成：135（静态可计数）+ 6（动态站点内联）+ 4（`map(() => '?')` **构造行本身**里的字面 `?`）= 145 ⇒ 旧值把 4 行构造代码也算进了占位符。**已改**：`recon` §9.3、§9.4 与 `src/pg/d1-shim.ts` 头注释三处同步。
+2. **shim 头注释的站点计数 `64/63/5` → `65/65/6`**（`prepare` 站 / `bind` 站 / 动态站）；同一处「四处不能想当然的语义」**自纠为「三处」**（占位符 / BIGINT / batch 事务）。
+3. **真站点数 = 63**：65 处 `.prepare(` 标记里，`src/errors.ts:36` 与 `src/pg/d1-shim.ts:215` 是**文档注释假阳性** ⇒ 63 处真站点；135 个占位符不受影响（两个假阳性站点贡献 0）。
+4. **`.exec(` 3 处**：`src/pg/d1-shim.ts` 头注释（已入库）记为「经逐点核实**全是 `RegExp.prototype.exec`**，不是 D1 `stmt.exec()`」；而 `recon` §9.5 该行仍是「归属未确认」⇒ **本批未新增**逐点核实证据，两处口径不一致 ⇒ 以 ADR 0079 为准，`recon` §9.6 标注状态（未闭合项照旧不算闭合）。
+5. **test-pg 基线口径订正**：§U-5 记的「test-pg **4 / 4** 全绿」指的是 `harness.test.ts` 的 **4 条用例**，**不是 4 个文件** ⇒ 本批为 **3 文件 / 24 用例**。
+
+### W-5 未闭环（7 条，逐条不得当已解决）
+
+1. **push 未完成**：本地 ahead 5，`git ls-remote` 四条路线全断（见 W-6.10）⇒ 硬判据取不到 ⇒ **不得声称已 push**。
+2. **`.exec(` 3 处逐点核实**（口径不一致，见 W-4.4）。
+3. **`rowCount===null` 归一化是否覆盖全部 27 个 `run()` 站点**：shim 侧有归一化，**未逐点证实**。
+4. **`.first(` 23 处「无行返回值两端等价」**：shim 侧已实测 `null`，但 **D1 侧未跑对照** ⇒ 未证实。
+5. **`batch()` 6 处失败是否真原子**：shim 侧已实测（真 PG `ROLLBACK`），**6 个业务调用点未逐点验证**。
+6. **`test-pg/**` 不在 `tsconfig.json` 的 `include`**（只有 `src/**/*.ts`）⇒ 新增测试文件的类型错误**无闸门**（本批未修）。
+7. **R5 写预算语义本批不改**（ADR 0079 D7）：触发条件 = 切源同批 + 阶段状态机冻结 + `rows_written_24h` 基线回读 + 改前后行数差分。
+
+### W-6 工具坑（本批新增，10 条）
+
+1. 超长 here-string 内联 bash 写盘被安全策略拦 ⇒ 改用 `write` / `edit` 工具，或「先写中间文件再拼接」。
+2. `$msg | git commit -F -` 会把 **U+FEFF 写进提交标题** ⇒ 必须 `git commit -F <文件>`（UTF-8 无 BOM）；首提 `c7d6d1e` 即因此作废，已 `--amend` 成 `5a65a69`（标题首字符码 = 102 = `f`）。
+3. `Remove-Item` 被拦（删除不走回收站）⇒ 临时产物一律落 `reports/**`。
+4. 掩码正则 `'//[^/@]*@'` 被判 UNC 网络访问 ⇒ 改用 `($val -split '@')[-1]`。
+5. `indexOf('.prepare(')` 命中注释假阳性（2 处）⇒ 必须泛型感知正则 + 交叉验证。
+6. 读工具把超长中文行截断到 2,000 字符 ⇒ 台账长行要分次回读。
+7. 写工具拒绝覆盖未读过的文件 ⇒ 先 `read` 再 `write`。
+8. 安全策略拦「切目录 + 写盘」同条命令 ⇒ 全程绝对路径 + npm `--prefix`。
+9. **门禁脚本自身两处缺陷**：① 无显式 verdict（原先 `GATE_EXIT=1` 实为 npm 子进程退出码泄漏）② 负路径 `Tests \d+ passed` 对「2 failed | 1 passed」摘要假绿 ⇒ 改成显式 `GATE_VERDICT` + 显式 `exit`，负路径改判「PG 文件确实失败 **且** 纯单元文件确实仍通过」。
+10. 代理 `127.0.0.1:7897` 在监听但隧道仍断（`Recv failure: Connection was aborted`），直连同断（`Connection was reset`），SSH `Permission denied (publickey)`，HTTP/1.1 变体同断 ⇒ `git ls-remote` 读不回 ⇒ **推送硬判据取不到即不得声称成功**。
+
+### W-7 复跑命令（copy-ready）
+
+```powershell
+# ① 门禁（显式 verdict；口令只解析不打印）
+& 'F:\soft\00selfmade\rime_claude\reports\fluxing-br-1g\w6\gate-w6.ps1'
+#   ⇒ GATE_VERDICT=PASS / TSC_LINES=0 / NODE_BUNDLE_BYTES=110414
+#     SELFTEST_PASS=37 / WORKERS_INDEX_BYTES=91912 / workerd 13·164 / test-pg 3·24
+#     NEG_EXIT=1 + NEG_PG_FILES_FAILED=True + NEG_UNIT_FILE_NOT_FAILED=True
+
+# ② 双口径静态审计
+& node 'F:\soft\00selfmade\rime_claude\reports\fluxing-br-1g\w6\audit-bind-count.mjs'
+#   ⇒ PREPARE_SITES=65 / TOTAL_PLACEHOLDERS=135 / MISMATCH_SITES=0 / NOBIND_SITES=0 / AUDIT_EXIT=0
+
+# ③ 真 PG 套件（口令来自 %APPDATA%\postgresql\pgpass.conf，只解析不打印）
+$pgpass = Join-Path $env:APPDATA 'postgresql\pgpass.conf'
+$line = @(Get-Content -LiteralPath $pgpass | Where-Object { $_.Split(':')[3] -eq 'postgres' -and $_.Split(':')[1] -eq '5432' -and $_.Split(':')[0] -eq '127.0.0.1' })[0]
+$env:FLUXING_PG_URL = "postgres://postgres:$($line.Split(':')[4])@127.0.0.1:5432/fluxing_sync"
+& npm --prefix 'F:\soft\00selfmade\rime_claude\cloud\fluxing-sync' run test:pg
+#   ⇒ Test Files 3 passed (3) / Tests 24 passed (24)
+
+# ④ push（网络恢复后；硬判据 = ls-remote 与 rev-parse HEAD 逐字相等）
+git -C 'F:\soft\00selfmade\rime_claude' push kizemo feat/100-cloud-sync
+git -C 'F:\soft\00selfmade\rime_claude' ls-remote kizemo refs/heads/feat/100-cloud-sync
+git -C 'F:\soft\00selfmade\rime_claude' rev-parse HEAD
+```
+
+### W-8 Git 现状
+
+- 分支 `feat/100-cloud-sync`，远端 `kizemo`（https://github.com/kizemo/fluxing.git）+ `kizemo-ssh`（ssh）。
+- **ahead 5**（`c7d6d1e`→`5a65a69` 已被 amend 替换；`ea15f05` §U 文档批、`f6f888a` §V 文档批、`5a65a69` 代码批等 5 个提交在本地未 push）。**当前 HEAD = `5a65a69`（本批代码批）；本批文档批（handoff `## W` + prompt + recon §9.6）为第 6 个待 push 提交。**
+- 工作区未入库杂项照旧：`librime`（子模块脏）、`release/`、`reports/**`、`scripts/verify/*.ps1`、`docs/design/quickpanel-v6/design-demos/*.html` 等 —— **本批一个都没 `git add`**。
+- 全局 `http.proxy` / `https.proxy` = `http://127.0.0.1:7897`（本批未改）。
+
+### W-9 下一步（建议顺序）
+
+1. **网络恢复即补 push**（W-7 ④）：硬判据 = `git ls-remote kizemo refs/heads/feat/100-cloud-sync` 与 `git rev-parse HEAD` **逐字相等**；取不到就不许声称成功。
+2. **补 `tsconfig.json` 的 `include`**（W-5.6）：把 `test-pg/**/*.ts` 纳入类型检查，消除「新增测试无类型闸门」缺口；单独一批提交。
+3. **W6 残留逐点核实**（W-5.2–5.5）：`.exec(` 归属、`rowCount` 归一化覆盖 27 个 `run()` 站点、`.first()` 的 D1 侧对照、`batch()` 6 个业务调用点 —— 全部在 `test-pg/**` 内加对照用例，不动业务代码。
+4. **W7 前置 ①② 需用户出手**（§V-11 第 ① 项）：Cloudflare 删掉/放行 `*.jury.xin` → apex 的 301（至少放行 `api.jury.xin`），并决定 `api.jury.xin` 走橙云（定 SSL 模式）还是灰云（ECS 另签 certbot/LE 并开 80/443）。
+5. **W7 其余六条阻塞**（§V-6 原样）：ECS 零部署 · 根盘 89% 剩 ≈14 G · `5432` 公网监听收口到 `127.0.0.1` · ECS `psql --version` 核实 PG 大版本 · `jury.fun` / `jury.xin` 备案主体与备案号 · 干净目录 `npm ci` 实测。
+6. **BR-①h** 独立批次（C++ 侧 `FormatReconcileDiagLine` 增 `early_exit` + 早退原因），本批不启动。
+7. **切源四段（双写→校验→切读→退役）不得跳段**；桶化冻结 phase 0、阶段 3/4 永不启用。
+

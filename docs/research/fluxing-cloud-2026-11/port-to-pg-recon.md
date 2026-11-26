@@ -324,13 +324,13 @@ esbuild external 元信息变化，自测项数未变（31/31 PASS）。node bun
 `julianday` / `unixepoch` / `json_extract` / `json_each` / `json_object` / `PRAGMA` / `AUTOINCREMENT` /
 `WITHOUT ROWID` / `IFNULL` / `IIF(` / `COLLATE NOCASE` / `GROUP_CONCAT` / `last_insert_rowid` / `changes()`
 
-全部使用**位置占位符 `?`**：`prepare` 第一参内共 **145** 个。
-（整个文件朴素计数 386 个 `?`，含非 SQL 的三元运算与可选参数 ⇒ **不可用作迁移依据**。）
+全部使用**位置占位符 `?`**：`prepare` 第一参内**静态可计数**的共 **135** 个（扫描器口径与朴素口径差额 = 0 ⇒ 没有「字面量里的 `?`」陷阱）。
+另有 **4 个动态构造站点**在运行时展开 `map(() => '?')`（`src/sync-buckets.ts:180` / `:300` = N+2、`src/sync.ts:279` / `:399` = N+1，占位符数与绑定数同构）+ **1 个变量透传站点**（`src/auth.ts:418`，两个调用方 `src/auth.ts:487` / `:500` 各 1 个 `?` + 1 绑定）⇒ 这 5 个站点必须**逐点手核**。
+（**旧记的 145 是过计数** = 135 + 6（4 个动态站点运行时展开的 N+1 / N+2）+ 4（`map(() => '?')` **构造行本身**的字面量 —— 与前 6 个是同一批站点的重复计入）；整文件朴素计数 386 个 `?` 含三元运算与可选参数，**同样不可用作迁移依据**。）
 
 ### 9.4 移植判定
 
-1. **必改项只有占位符形态**：`pg` 不接受匿名 `?`，145 处需改成 `$1..$n`。两条路：改 145 处 SQL，
-   或在 `d1-shim.prepare()` 内做位置改写。后者只动一个收口点、零业务风险，推荐后者。
+1. **必改项只有占位符形态**：`pg` 不接受匿名 `?`，**135 处静态占位符 + 5 个动态/透传站点**需改成 `$1..$n`。两条路：逐处改 SQL，或在 `d1-shim.prepare()` 内做位置改写。后者只动一个收口点、零业务风险 ⇒ **已按此落码**（见 §9.6 / ADR 0079）。
 2. **零方言语法** ⇒ 不需要「SQL 重写轮」，不存在逐条重写 `ON CONFLICT` / 时间函数的工作。
 3. **`batch()` 6 处**仍是最大语义差异（R2 已定：单连接 + `BEGIN`/`COMMIT`），**未实测**。
 4. **`INSERT` 一律无 upsert**：8 处 `INSERT INTO` 全部按 UUID 主键新建行；`sync_items` / `sync_buckets`
@@ -343,3 +343,26 @@ esbuild external 元信息变化，自测项数未变（31/31 PASS）。node bun
 - `.exec(` 3 处归属未确认。
 - `batch()` 6 处失败是否真原子（R2 只是方案）。
 - `rowCount === null` 的归一化是否覆盖全部 27 个 `run()` 站点（shim 有归一化，未逐点证实）。
+
+### 9.6 W6 必改项已落码（2026-11-26）
+
+**§9.5 四项的当前状态**：
+
+| §9.5 原条目 | 当前状态 |
+| --- | --- |
+| `.first(` 23 处「无行」返回值两端是否等价 | **shim 侧已实测**（真 PG：`first()` 无行 ⇒ `null`，不是 `undefined`；无行 + 传列名同归一）；**D1 侧未跑对照** ⇒ 未证实 |
+| `.exec(` 3 处归属未确认 | **`src/pg/d1-shim.ts` 头注释记为「全是 `RegExp.prototype.exec`」**；本批**未新增**逐点核实证据 ⇒ 与本节旧口径不一致，以 ADR 0079 为准，**不算闭合** |
+| `batch()` 6 处失败是否真原子 | **shim 侧已实测**（真 PG：第二条违反唯一约束 ⇒ 整批 `ROLLBACK`、第一条不落库）；**6 个业务调用点未逐点验证** ⇒ 未证实 |
+| `rowCount === null` 归一化是否覆盖全部 27 个 `run()` 站点 | **仍未逐点证实**（shim 有归一化，本批只测了 DDL 与 UPDATE 两条路径） |
+
+**落码要点**（commit `5a65a6994832b4202486009613310c140d224848`，4 文件 +663 / −19）：
+
+- `scanPlaceholders()` = **唯一**扫描实现（跳过字符串字面量 / 双引号标识符 / 行注释 / 块注释），`renumberPlaceholders()` 是薄封装；审计脚本复用同一实现（esbuild 打包后 import）⇒ **不存在第二套 SQL 解析器**。
+- 断言落在 `PgCompatStatement.toQuery()`（唯一收口点，一次覆盖 all / first / run / batch）：**严格模式**，占位符个数 ≠ 绑定参数个数即抛；错误信息**只给两个个数**，不含 SQL 正文、不含绑定值。
+- 静态审计（`reports/fluxing-br-1g/w6/audit-bind-count.mjs`，不入库）：`PREPARE_SITES=65 / DYNAMIC_SITES=7 / TOTAL_PLACEHOLDERS=135 / NAIVE_TOTAL=135 / EXPR_NAIVE_TOTAL=141 / LITERAL_DELTA_SITES=0 / MISMATCH_SITES=0 / NOBIND_SITES=0 / AUDIT_EXIT=0`。
+- 65 处 `.prepare(` 里 **2 处是文档注释假阳性**（`src/errors.ts:36` / `src/pg/d1-shim.ts:215`）⇒ 真站点 **63**；两个假阳性站点贡献 0 个占位符，135 不受影响。
+- ADR 0079 = `docs/adr/0079-pg-dialect-shim-boundary-replacement-and-placeholder-assertion.md`（282 行 / 15,692 B），D1–D10 决策：**R5 写预算本批不改**（理由 + 触发条件）、三条硬闸门一条都不解除、桶化 phase 0 冻结、外键不关 / 配额错误码不删。
+
+**门禁结果**（`reports/fluxing-br-1g/w6/gate-w6.ps1` → `gate-w6.txt`）：`GATE_VERDICT=PASS` / `TSC_LINES=0` / node 包 110,414 B（sha256 `668CB107…`，基线 109,104 B ⇒ +1,310 B）/ `SELFTEST_PASS=37 FAIL=0`（基线 31）/ Workers 包 91,912 B **逐字未变** + 九条零污染全 False / workerd 13 files · 164 tests / test-pg **3 files · 24 tests**（基线 1 文件 4 用例）/ 负路径 `NEG_EXIT=1` + 中文错 + **PG 文件确实失败且纯单元文件确实仍通过**。
+
+**仍未闭环**：push 未完成（本地 ahead 5，`ls-remote` 取不到）· `test-pg/**` 不在 `tsconfig.json` 的 `include`（新增测试无类型闸门）· §9.5 表内三条未证实项照旧。详见 handoff `## W`。
