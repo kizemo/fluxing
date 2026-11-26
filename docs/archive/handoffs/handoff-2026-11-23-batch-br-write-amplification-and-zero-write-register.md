@@ -3607,7 +3607,7 @@ git -C 'F:\soft\00selfmade\rime_claude' rev-parse HEAD
 与 `miniflare` 依赖登记；② W6 残留四项逐点核实（**四项全闭合**）+ 台账数字三处订正；
 ③ W7 切源前置取证（本机侧零阻塞、开关点定位、10 条 ECS 阻塞 + 1 条用户拍板、2 条新风险）；
 ④ ADR 0079 增补 **D11** + 订正过时表述；`port-to-pg-recon.md` §9.5 / §9.6 状态订正 + 增补 **§9.7**；
-⑤ 本 handoff `## X` + 接力 prompt 就地改写；⑥ 两批提交入库 + 直连 push。
+⑤ 本 handoff `## X` + 接力 prompt 就地改写；⑥ 四批提交入库 + 直连 push。
 
 **没做（判断而非遗忘）**：
 
@@ -3672,9 +3672,10 @@ git -C 'F:\soft\00selfmade\rime_claude' rev-parse HEAD
 
 - 分支 `feat/100-cloud-sync`，远端 `kizemo`（https://github.com/kizemo/fluxing.git）。
 - **本批提交**：`a394ad4`（用例 + 类型修复，7 文件 +1380 / −6）、
-  `8b58149`（tsconfig + 硬断言 + 依赖登记，4 文件 +118 / −3）、
-  文档批（ADR 0079 D11 + recon §9.7 + 本 `## X` + prompt 改写）。
-- **远端状态**：见 X-10 的 push 回读（**SHA 以实时回读为准，不在台账里写死**）。
+  8b58149（tsconfig + 硬断言 + `@types/node` 登记，4 文件 +118 / −3）、
+  `f2168b6`（显式登记 `miniflare` 依赖，2 文件 +2）、
+  `4c19a88`（文档批：ADR 0079 D11 + recon §9.7 + 本 `## X` + prompt 改写，4 文件 +376 / −20）。
+- **远端状态**：本批四批提交均已**直连推送**（快进，**未用 force**）；硬判据 `git ls-remote kizemo refs/heads/feat/100-cloud-sync` 与 `git rev-parse HEAD` **逐字相等**（`VERBATIM_EQUAL=True`），`ahead 0 / behind 0`。**远端 SHA 随每批前进 ⇒ 以实时回读为准，不在台账里写死。**
 - 未入库杂项照旧：`librime`（子模块脏）、`release/`、`reports/**`、`scripts/verify/*.ps1`、
   `docs/design/quickpanel-v6/design-demos/*.html` 等 —— **本批一个都没 `git add`**。
 - 全局 `http.proxy` / `https.proxy` = `http://127.0.0.1:7897`（本批未改）；**远端操作一律直连**。
