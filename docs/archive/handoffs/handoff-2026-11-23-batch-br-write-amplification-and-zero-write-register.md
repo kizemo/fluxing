@@ -2552,3 +2552,10 @@ v5 脚本判据：`JUDGE kind=after-quota`（取 quota 行之后的那条汇总�
 - **复跑脚本选型（避免重复造轮）**：`reports/fluxing-br-1g/run-phases-1-2.ps1`（**7,667 B**）**已存在**且纪律更严 —— 头注显式写明「绝不在首条 `bucket phase=` 处 break」、以 `quota_rows=` 行识别推送轮、`param([int]$PhaseWaitMinutes = 80)`（80 min/阶段，远大于 2,100 s）、phase 被**钳制在 {0,1,2}**（≥3 直接 `throw 'REFUSED'`）、`finally` 清 User 级变量、只打印计数不打印词条与令牌。**若本轮 MISS，复跑优先用它，不要新写脚本**（它此前被误登记为「已删除」）。
 - **并发红线（本轮新立）**：`p0-phase12.ps1` 与 `phase2-steadystate-v5.ps1` **都执行「杀 WeaselServer + 起新进程」** ⇒ **两者绝不可并发**，否则互相重置 `startup_pending_` 让两轮同时作废。**本轮已把 v5 脚本修好但不启动**（改动 = `:31` exe 路径 `weasel\weasel\` → `weasel\`；`:122` 起新增**无条件时间锚** = 取历史 `bucket phase=` / `userdict export_empty_skipped=` / `bucket quota phase=` 行的最大时间戳，实测解析出 `2026-11-26 10:16:23.640` ⇒ 回退 `2026-11-26 03:00:00`，并**移除 `IsNativeImage` 门槛**，杜绝 v4「有 `userdict` 行即整体弃锚」的漏判）。
 - **下一步（未做）**：等 runner 走完 phase 1 → phase 2 → 回滚段（预计 60–120 min），回读 `p0-phase12-run.log` 的 VERDICT 块 + 按时间戳锚定 ≥ `2026-11-26 12:20:19` 的 notify 行，再回填 §P-P.7 / §P-P.8 的收官判据；**phase 3 仍不得自行开闸**。
+
+#### P-P.9 12:36–12:39 补记（加长窗口复跑变体已落盘 · 并发硬闸 · 首选次序订正）
+
+- **12:39:40 实况**：`bg_ce42430b-…` 仍 `running`、`p0-phase12-run.log` 仍 **46 B** ⇒ 现役轮**尚未进入 `finally`**（口径见 §P-P.8 订正 1），phase 1 判定**未出**，判据一律不动。
+- **新落盘（不入库，属 `reports/**`）**：`reports/fluxing-br-1g/p0-phase12-long.ps1` **8,903 B**，`Parser::ParseFile` 语法错误 **0**。相对 `p0-phase12.ps1` 的三处差异：① exe 写死**正确单路径** `D:\Program Files\fluxing\weasel\WeaselServer.exe` 并在杀进程前 `Test-Path` 自检（规避 v5 `:31` 缺陷）；② `$PhaseWaitSec` 默认 **4500 s（75 min）**、`$QuietRounds/$QuietSeconds/$RollbackWaitSec/$StartWaitSec` 全部参数化；③ **起跑前并发硬闸** —— 枚举 `pwsh.exe` 命令行，命中 `p0-phase12` / `phase2-steadystate-v5` / `run-phases-1-2` 任一（排除自身 `$PID`）即 `throw 'REFUSED: another P0/steady-state runner is live'`，把 §P-P.8 的并发红线**变成机器强制**。
+- **首选次序订正（覆盖 §P-P.8 第 4 条的字面表述）**：MISS 时**仍优先 `run-phases-1-2.ps1`**（7,667 B / 80 min 每阶段 / 纪律最严）；`p0-phase12-long.ps1` 是**备选**，唯一优势是自带并发硬闸与参数化窗口。**两个都不得与现役轮同时启动**。
+- **本轮仍未做**：未启动任何新 runner（红线）、未停 `bg_ce42430b-…`、未 push（ahead 23 待裁定）、未改任何产品代码与 ADR 0078 §6 判据。
