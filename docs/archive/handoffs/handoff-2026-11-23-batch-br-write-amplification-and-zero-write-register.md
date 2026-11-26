@@ -2671,3 +2671,136 @@ v5 脚本判据：`JUDGE kind=after-quota`（取 quota 行之后的那条汇总�
 - **推荐（需用户拍板）**：**冻结 A 的 D1 专属工作**（不立项规则 1 盲区、不进阶段 3；可逆 —— 客户端代码已在库 `f7a62f6`），并行推进两件互不冲突的事：① 修 **P0 假空**（两路都必需，唯一真关键路径）；② 做 **只读移植 recon**。拿到 recon 的工期数字后再在 A / B / C 之间拍板。**不建议**同时推进 A 与 B（会失去归因面，且桶化成果可能整体作废）。
 - **若拍板走 B，切换机制有两个变体（成本不同）**：**V1 = 源站改指**：把 `api.aiec.fun` 的 DNS 源站指向该 ECS ⇒ 客户端**零改动**；前提 = `aiec.fun` 已完成 ICP 备案 + ECS 上签发该域证书（两项均未回读证实）。**V2 = 换域 + 出包**：新默认基址（如 `sync.jury.xin`，`jury.xin` 已备案）⇒ 一次常规出包 + 装机；客户端已有 `FLUXING_CLOUD_BASE_URL` 可先内测再改默认值。
 - **本节不改任何既有登记**：AC-09 **仍 FAIL**；桶化**仍不宣称完成**；阶段 3 **仍禁**；`AC-213` / `AC-214` **仍退役**；未改产品代码 / 未跑门禁 / 未出包 / 未装机 / 未启停任何 runner / 未动生产 D1 与 R2 / 未做腾讯云远端变更 / 未 push。
+### Q-10 路线 B 可执行化（2026-11-26 · 只读 recon + PG DDL 草案 · 未改任何产品代码）
+
+**本节性质**：用户拍板 B（原话「**B：现在就切jury.xin**」）之后的第一个执行轮。本轮只把方向变成**可执行物**，不执行任何迁移。三件产物：
+
+1. `docs/research/fluxing-cloud-2026-11/port-to-pg-recon.md`（**14,853 B**，只读 recon，已全文回读复核）；
+2. `cloud/fluxing-sync/migrations-pg/0001_init.sql`（**16,500 B**，PG DDL 草案，**未在任何 PG 实例执行过**）；
+3. 本节台账。
+
+**本轮未做**：未执行 DDL / 未改 `cloud/fluxing-sync/src/**` / 未改客户端任何一行 / 未跑门禁 / 未出包 / 未装机 / 未启停任何 runner / 未动生产 D1 与 R2 / 未做腾讯云远端变更 / **未 push**（分支 `feat/100-cloud-sync` **ahead 27**）。
+
+---
+
+#### Q-10-1 一句话结论
+
+**这不是「131 处 Cloudflare 调用逐条改写」，而是「两个 shim + 一个进程入口」。** 三条盘上事实缺一条结论都不成立：
+
+1. **SQL 方言命中 = 0**。12 个源文件全文扫 `(?i)(insert or replace|insert or ignore|on conflict|strftime|julianday|json_extract|json_group|autoincrement|pragma|last_insert_rowid|changes()|collate nocase|glob|unixepoch|datetime()` ⇒ 0 行。全部语句是标准 `SELECT / INSERT / UPDATE / DELETE` + `?` 占位符 ⇒ `?`→`$n` 机械改写即可，**SQL 文本不需要重写**。
+2. **存储面只有两个对象**：`env.DB`（**69 处**）/ `env.BUCKET`（**8 处**）；handler 签名全为 `(env: Env, …) => Promise<Response>`；无 `c.executionCtx` / `waitUntil` / `DurableObject` / `KV` / `caches` / `scheduled` 依赖。
+3. **R2 已经是结构类型**：`src/r2-write.ts` 自己声明 `R2WriteBucket { put(key, value, options) }`，注释原文「这样单测可以传假桶」⇒ 换文件系统或本地 S3 只需满足同一签名。
+
+真正贵的不是源码，是**测试底座**：13 个 `*.test.ts` / **5,270 行**跑在 `@cloudflare/vitest-pool-workers`（miniflare 的 D1/R2 绑定）上，这套地基在 PG 上整体作废 ⇒ **W5 单独一批提交**，不与 W1–W4 混。
+
+#### Q-10-2 源码调用面（盘上统计，非估算）
+
+`src/` 共 12 个 `.ts` / **3,664 行**；合计 `prepare 64 / bind 63 / all 7 / first 23 / run 27 / batch 5 / env.DB 69 / env.BUCKET 8`；语句内占位符 `?` 共 **301** 个（shim 必须按出现顺序重编号 `$1..$n`）。
+
+- 早前「131 处」口径 = `prepare 64 + bind 63 + D1Database 1 + R2Bucket 3` 的并集，**数字对得上**；但它**不是**「131 处需要人工改写的地方」—— `prepare`/`bind` 是同一个表达式链，改写只发生在 shim 一侧。
+- 运行时**零第三方依赖**（`package.json` 无 `dependencies`）；devDeps 只有 `@cloudflare/vitest-pool-workers` / `@cloudflare/workers-types` / `typescript` / `vitest` / `wrangler` ⇒ **不需要拆依赖树**。
+- 唯一 Cloudflare 专有入口 = `src/index.ts:155-163` 的 `export default { async fetch(request, env) { … } } satisfies ExportedHandler<Env>`；`route()` 在 `src/index.ts:53`，手写 `if` + `url.pathname` 匹配，**无 Hono / itty-router**。
+- `src/env.ts:3-6` 的 `Env` 只有两个对象绑定，其余是字符串变量 + 可选发信对象。
+
+#### Q-10-3 移植形状（定案）
+
+```
+HTTP(nginx) → src/node-server.ts (新, ~120 行)  node:http → Request/Response
+                        │ route(request, env)   ← 原样不动
+              src/index.ts route() + 13 个 handler  ← 64 处 prepare/bind 全不动
+                        │ env.DB            │ env.BUCKET
+              src/pg/d1-shim.ts (~300)   src/pg/r2-fs.ts (~80)
+                        │                    │
+                     pg.Pool            本机目录（或 S3）
+```
+
+| 新文件 | 规模 | 职责 |
+|---|---|---|
+| `src/pg/d1-shim.ts` | **250–350 行** | `prepare(sql)` → `{ bind(...), all(), first(), run(), batch() }`；`?`→`$n`；复刻 `meta.changes` / `results` / `first` 返回 `null` 的语义 |
+| `src/pg/r2-fs.ts` | **60–100 行** | `put / get / delete`；key 直接映射为相对路径（**必须做 `..` 穿越防护**）；`get` 返回体的 `.arrayBuffer()` 形状要对齐 |
+| `src/node-server.ts` | **100–150 行** | `node:http` 收流 → 标准 `Request` → 调 `route()` → 回写 `Response`；`env` 从 `process.env` 装配（注意 `MAX_PAYLOAD_BYTES` 8 MiB） |
+
+**不变量**：`route()` 与 13 个 handler 的源码、`wire.ts` 的信封/校验、`crypto.ts` 的派生与比较、`errors.ts` 的错误码映射 —— 全部**逐字保留**。移植只发生在边界。
+
+**已确定不需要做**：不改客户端密钥派生、不重新加密任何数据（服务端是不透明密文存储，`wrangler.toml [vars]` 原文「服务端只回显给客户端，绝不用它们派生任何东西」）；不重写 64 处 `prepare` / 63 处 `bind`；不拆依赖树；不改协议 / 信封 / 错误码。
+
+#### Q-10-4 工作面 W1–W7（编号与 recon §3 严格一致）
+
+| # | 工作面 | 产物 | 估算 | 关键风险 |
+|---|---|---|---|---|
+| W1 | **D1 shim** | `src/pg/d1-shim.ts` | 250–350 行 | **`batch()` 原子性**：D1 `batch` 是事务；`pg.Pool` 必须 `connect()` 单连接 + `BEGIN/COMMIT`（R2） |
+| W2 | **R2 shim** | `src/pg/r2-fs.ts` | 60–100 行 | key 含 `/` 与十六进制串，需校验不含 `..`；`get` 形状对齐 |
+| W3 | **进程入口** | `src/node-server.ts` | 100–150 行 | 请求体大小上限与流式读取 |
+| W4 | **PG schema** | `migrations-pg/0001_init.sql`（本轮已出草案） | — | 见 Q-10-5 五条语义差异 |
+| W5 | **测试底座** | ① `@electric-sql/pglite` 或 ② 一次性 PG 跑集成；13 文件 / 5,270 行逐文件迁 | **本路线最大单项成本** | pglite 的 `meta.changes` 与 miniflare 不完全等价 |
+| W6 | **部署** | nginx vhost + certbot + systemd unit + pg 实例 + 备份 | 半天级 | 根盘 **89% 已用 / 仅剩 14 G**；`5432` **公网监听**须先收口；PG 大版本未证实 |
+| W7 | **切源** | `WeaselServer/Cloud/CloudAccountDialog.cpp:60-61` 的 `kDefaultBaseUrl` 改指新域名；重新出包 + 装机 | 小时级 | **硬闸门：P0 假空必须先修**（K1 / 闸门 1） |
+
+#### Q-10-5 五条语义差异 R1–R5（必须验证，不能假设等价）
+
+- **R1 · 外键是否强制**：D1/SQLite 默认**不强制** FK，PG **强制** ⇒ 任何「先删父行、后删子行」的既有路径在 PG 上会直接报错。受影响：`account.ts`（2 处 `DELETE FROM`）、`devices.ts`（1 处）。**处置 = 不关 FK**，用测试把删除顺序固定下来。
+- **R2 · `batch()` 原子性**：`pg.Pool.query` 每次可能取不同连接 ⇒ 在池上直接发 `BEGIN/COMMIT` **是错的**；必须 `const c = await pool.connect()` … `finally { c.release() }`。
+- **R3 · `run()` 的 `meta.changes`**：D1 给 `meta.changes`，`pg` 给 `rowCount`；shim 必须映射，且 `rowCount === null` 归一化为 **0**（否则 `if (res.meta.changes === 0)` 分支会静默走错）。
+- **R4 · 配额错误不再存在**：`errors.ts` 的 `isD1RowWriteQuotaError`（code 7500 三组正则）在 PG 上**永远为 false**；**保留代码不删**（无害），但 `storage_quota_exceeded` 这条 503 在 PG 侧成为死路。
+- **R5 · 写预算护栏失去原意**：`WRITE_BUDGET_ROWS_PER_DAY=80,000` / `WRITE_BUDGET_BUCKETS_PER_DAY=4,000`、`LAST_SEEN_REFRESH_SECONDS=3600`、`REFRESH_TOKEN_GC_MAX_ROWS=200` 全部是**为 D1 免费额度服务的**。PG 上额度约束消失 ⇒ 应回归正常语义（例：`last_seen` 回到 300 s），**但必须在 ADR 里显式记录「为什么改」**，不得顺手改掉。
+
+#### Q-10-6 风险登记 K1–K6
+
+| # | 风险 | 影响 | 处置 |
+|---|---|---|---|
+| K1 | **P0 假空未修就切源** | D1 上有 429 零写入当意外刹车；**PG 上没有等价刹车** ⇒ 可逆事故变不可逆删数据 | 硬闸门：先修假空 + 出门禁用例，再改 `kDefaultBaseUrl` |
+| K2 | 生产 D1 数据导出与会话一致性 | 40,069 行 `sync_items` + 1,000 行 `sync_buckets` + R2 对象；导出期间仍在写入 | 导出方案必须给出「导出的 id 上界」；R2 对象数与 DB 行数**双向核对** |
+| K3 | 测试底座替换 | 5,270 行测试可用性 | W5 单独一批，不进 W1–W4 提交 |
+| K4 | ECS 容量与端口暴露 | 根盘 89%（剩 14 G）、`5432` 公网监听、`sales-bi-update.service` failed | 部署前收口：`5432` 只监听 `127.0.0.1`、清盘、核实 PG 大版本 |
+| K5 | 域名 / 备案 / 证书 | 未证实 | 倾向 `api.jury.xin`（继承 `jury.xin` 已签发 LE 与备案主体）；**待回读证实** |
+| K6 | 桶化代码何去何从 | 客户端 1.3.11 已装机、默认 phase 0 | **保留不删**，长期冻结 phase 0；阶段 3/4 在 B 路线下**永不启用**（需 ADR 记录） |
+
+#### Q-10-7 三条硬闸门（挂在部署路径上，不靠人记得）
+
+1. **假空闸门**：`kDefaultBaseUrl` 改指新域名之前，必须已有 P0 假空的**失败复现用例** + 修复后的**通过用例**。
+2. **数据核对闸门**：`users` / `devices` / `refresh_tokens` / `sync_items` / `sync_buckets` **逐表行数**与 D1 侧只读回读一致；**R2 对象数与 DB 内 `r2_key` 去重计数一致**。
+3. **回滚闸门**：切源后保留「改回 `api.aiec.fun` 一个字符串」的回滚路径；**不得在同一批里删除旧端点代码**。
+
+#### Q-10-8 PG DDL 草案要点（`migrations-pg/0001_init.sql`）
+
+- **四份 D1 迁移合并**为单文件（`0001_init` 4,067 B / `0002_password_resets` 1,684 B / `0003_sync_items_updated_index` 1,508 B / `0004_sync_buckets` 3,703 B，合计 10,962 B）。
+- **9 张表 / 22 条索引**：8 张业务表（`users` / `devices` / `refresh_tokens` / `sync_items` / `email_verifications` / `mail_outbox` / `password_resets` / `sync_buckets`）+ 1 张 `schema_migrations` 账本（D1 时代由平台表 `d1_migrations` 承担，PG 无等价物）。索引 = 11 条显式 + 2 条列级 UNIQUE + 9 条 PK = **22**；与 D1 生产 `num_tables=9` **逐一对位**。
+- **四个类型硬决策**：`INTEGER PRIMARY KEY AUTOINCREMENT` → `BIGINT GENERATED BY **DEFAULT** AS IDENTITY`（`BY DEFAULT` 才能保号直插；导入后必须 `setval`）；epoch-ms 列 `INTEGER`→**`BIGINT`**（SQLite INTEGER 是 64 位，PG `INTEGER` 32 位会溢出 ≈1.79e12）；0/1 布尔位 → **`SMALLINT DEFAULT 0`，不用 `BOOLEAN`**（保 JSON 响应形状不变）；`TEXT` 不变。
+- **四条执行前置**：① `SELECT version()` 核实（最低 10，按 **≥14** 设计）；② 建库必须 **`LC_COLLATE 'C'`**（配 `TEMPLATE template0 / ENCODING 'UTF8' / LC_CTYPE 'C'`），否则 UNIQUE 判据被 libc 排序换掉；③ 独立角色 `fluxing_sync` + 密码进 `.env`，**不给 DDL 权限** + 7 条 GRANT；④ 执行后回读期望 **9 表 / 22 索引**。执行方式 `psql -v ON_ERROR_STOP=1 -1 -f`（单事务，失败整体回滚），**不用 `IF NOT EXISTS` 掩盖重跑**。
+- **附录 B 十条陷阱 B-1~B-10**：INTEGER 不是同一个 INTEGER / int8 默认以字符串回 JS（必须设 `type parser(20)`）/ 0-1 位不用 BOOLEAN / IDENTITY 必须 `BY DEFAULT` 且导入后 `setval`（三条语句已写出）/ FK 强制与删序 / collation 补丁写法 / `batch()` 单连接事务 / `rowCount===null` 归一化 0 / 时间值全部由 JS 传入不用 `now()` / 事务内 `CREATE INDEX`。
+- **纪律 = 只做等价映射、不做顺手优化**：例 `refresh_tokens.token_hash` 的列级 UNIQUE 与 `idx_tokens_hash` 在 D1 是重复索引，PG 侧**照旧保留两份**。
+
+#### Q-10-9 执行顺序约束（是顺序，不是否决）
+
+- **移植 W1–W6 可以现在做**（不碰生产、不碰客户端默认值）。
+- **W7 切源（改 `kDefaultBaseUrl`）必须先修好 P0 假空**：D1 的 429 零写入是**意外刹车**，PG 上没有等价刹车 ⇒ 会把「可逆的额度事故」变成「不可逆的删数据」（K1 / 闸门 1）。
+- 切换机制两变体**不因拍板而取消**：**V1 源站改指**（`api.aiec.fun` DNS 指向该 ECS ⇒ 客户端零改动；前提 = `aiec.fun` 已完成 ICP 备案 + ECS 已签发该域证书，**两项均未回读证实**）；**V2 换域 + 出包**（新默认基址如 `sync.jury.xin`，`jury.xin` 已备案 ⇒ 一次常规出包 + 装机；客户端已有 `FLUXING_CLOUD_BASE_URL` 可先内测再改默认值）。
+
+#### Q-10-10 未证实项（不得当结论）
+
+1. `jury.xin` / `jury.fun` 的 ICP 备案主体与 `api.jury.xin` 可用性 —— 未回读证实。
+2. ECS 上 PG 的**大版本**与是否已装（`5432` 监听 ≠ 已被本服务使用）。
+3. 生产 D1 的**当前**行数与 `rows_written_24h`（本轮零写操作，未回读）—— 迁移前必须重新只读回读。
+4. `env.BUCKET` 8 处中 **`get` 调用路径未逐处核实**（已确认 `put` 6 波并发与 `account.ts` 的 `delete`）—— W2 开工前必须逐处读过。
+5. `pglite` 能否完整复刻 D1 的 `batch` / `meta.changes` 语义 —— 未验证（决定 W5 方案）。
+
+#### Q-10-11 待裁定
+
+1. **`git push` 策略**：分支 `feat/100-cloud-sync` **ahead 27**，未推送 —— 仍未裁定。
+2. **阶段 3 / 4「B 路线下永不启用」**这条登记口径需用户确认（与 §O-1.1 的「阶段 3 硬前置」不冲突，是更强的结论）。
+3. **`§Q-3` 旧判定是否正式标注「已被 §Q-9 部分推翻」**（现做法 = 只追加不复写，保留原文）。
+4. **ADR 0079（拟）** = 路线 B 底座迁移 + 桶化退役；须记录阶段 3/4 永不启用、D1 时代参数改因（R5）。
+5. 旧待裁定项仍开口：① 是否立项「库存扫描不完整 ⇒ 桶推闸门常闭」；② 规则 1 盲区修复排期；⑥ BR-②′ 全局同步写熔断 / 腾讯云两项安全配置 / 定时任务合并。
+
+#### Q-10-12 本节不改任何既有登记
+
+`AC-09` **仍 FAIL**（只有日志出现 `AC09_VERDICT=PASS` 才可改记）；桶化**仍不宣称完成**；阶段 3 **仍禁**；`AC-213` / `AC-214` **仍永久退役**；`AC-212` / `AC-215` 判据② **仍未判定**；生产 `sync_buckets` 复核值仍按 §P-P.10（1,000 行 / 92,353 条 / MAX(id)=2027），本轮**零写操作、未重新回读**。
+
+#### Q-10-13 本轮工具坑（带走）
+
+1. **`read` 工具会把超长中文行截断到 2,000 字符**（本 prompt 的 line 7 / line 9 均被截断）⇒ **不能用 `read` 取「逐字长锚点」**；正确做法 = 用**短子串锚点** + `Contains` / 出现次数断言后再 `Replace`，或改用 `[System.IO.File]::ReadAllText`。
+2. `Get-Content` 与 `ReadAllText` 两种口径的**行数可能不同**（本 prompt 两者都是 9，但要分别打印核对，不能只认一种）。
+3. 大段中文追加仍用「单引号 here-string + `UTF8Encoding($false)` + `AppendAllText` + `Contains` 防重复」；写入后必须**独立回读**字节数 / 行数 / BOM，不信任生成装置自己的断言。
+
+---
+
