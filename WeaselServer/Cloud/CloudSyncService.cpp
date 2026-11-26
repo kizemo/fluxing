@@ -1178,6 +1178,15 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     return false;
   }
 
+  // ★ ADR 0078 D2：**本地导出为空**时，本轮**不推送任何用户词典内容**
+  //   （本地条目集为空 ⇒ 推送集合自然为空 ⇒ 空快照不会被推上云），
+  //   但**不判本轮失败** —— 因为「本地为空 + 云端有内容」正是
+  //   **新设备从云端还原**的正常路径（拉取侧必须能走通）。
+  //   ⇒ 这里只做**事件驱动的诊断登记**（计数，不含条目明文）。
+  const size_t local_data_rows = CountUserDictDataRows(text);
+  if (local_data_rows == 0)
+    diag::AppendLine("cloudsync", "userdict export_empty_local=1");
+
   // 多个词典的快照摊平成一组条目（item_key 里带词典名，避免跨词典撞键）。
   std::vector<CloudDictEntry> local_rows;
   for (size_t i = 0; i < snapshots.size(); ++i) {
@@ -1478,16 +1487,25 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
       out->message = parse_err;
       return false;
     }
-    int imported = 0;
-    std::string import_err;
-    if (!backend_->ImportUserDict(tsv, &imported, &import_err)) {
-      backend_->EndMaintenance(&ignored);
-      const std::string reason =
-          import_err.empty() ? "回写用户词典失败。" : import_err;
-      if (err)
-        *err = reason;
-      out->message = reason;
-      return false;
+    // ★ ADR 0078 D4：**空合并集不得覆盖本地词典**。
+    //   合并集为空却「有变化」（例如远端全胜出而本地本轮读成空）时，写回
+    //   会用一份空快照盖住本地 ⇒ 用户词典被清空。
+    //   ⇒ 0 数据行 ⇒ 跳过回写（**不是**整轮失败：拉取与推送仍可继续）。
+    const size_t tsv_data_rows = CountUserDictDataRows(tsv);
+    if (tsv_data_rows == 0) {
+      diag::AppendLine("cloudsync", "userdict import_empty_rejected=1");
+    } else {
+      int imported = 0;
+      std::string import_err;
+      if (!backend_->ImportUserDict(tsv, &imported, &import_err)) {
+        backend_->EndMaintenance(&ignored);
+        const std::string reason =
+            import_err.empty() ? "回写用户词典失败。" : import_err;
+        if (err)
+          *err = reason;
+        out->message = reason;
+        return false;
+      }
     }
   }
 

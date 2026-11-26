@@ -5701,6 +5701,220 @@ void TestBucketInventoryGateAndQuota() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 批次 P0 · ADR 0078：用户词典「假空 / 空快照还原」完整性护栏
+// ---------------------------------------------------------------------------
+//
+// 判据全部取自**生产实现**（R7：不复制第二份实现）：
+//   ① CountUserDictDataRows：空文本 / 只有元信息行 ⇒ 0 数据行；
+//      形态非法行（BM 口径）不计入；CRLF 不影响计数。
+//   ② FilterUserDictTextsByContent：导出侧与还原侧**共用**的过滤器
+//      （0 数据行的段被丢弃并计数；一段不留 ⇒ 返回 false）。
+//   ③ 服务层（CloudSyncCoordinator + 假后端 + 假传输）：
+//      · 本地导出为空 ⇒ 本轮**不失败**（「新设备从云端还原」路径必须走通）、
+//        零推送、空合并集**不覆盖**本地词典；
+//      · 正常路径不回归（合并保留本地条目 + 回写非空快照）。
+
+// 假后端（批次 P0）：导出文本可配置；记录回写文本与调用次数。
+struct P0Backend : public fc::IUserDictBackend {
+  bool CheckMaintenanceGate(std::string* reason) const override {
+    if (reason != nullptr)
+      reason->clear();
+    return true;
+  }
+  bool BeginMaintenance(std::string* err) override { return true; }
+  bool EndMaintenance(std::string* err) override { return true; }
+  bool ExportUserDict(std::string* out, std::string* err) override {
+    ++export_calls;
+    if (out != nullptr)
+      *out = snapshot;
+    return true;
+  }
+  bool ImportUserDict(const std::string& text,
+                      int* imported,
+                      std::string* err) override {
+    ++import_calls;
+    imported_text = text;
+    if (imported != nullptr)
+      *imported = 1;
+    return true;
+  }
+  std::string snapshot;  // 导出的快照文本
+  int export_calls = 0;
+  int import_calls = 0;
+  std::string imported_text;  // 最近一次回写本地库的快照文本
+};
+
+void TestUserDictIntegrityGuards() {
+  std::printf("[P0] ADR 0078 用户词典完整性：假空导出 / 空快照还原护栏\n");
+  std::string err;
+  const std::vector<uint8_t> key(32, 0x41);
+
+  // ① 数据行计数（导出侧与还原侧的共同判据）。
+  Check(fc::CountUserDictDataRows("") == 0, "P0 ①：空文本 ⇒ 0 数据行");
+  Check(fc::CountUserDictDataRows(
+            "# Rime user dictionary\n#@/db_name\tuserdb\n#@/tick\t1\n") == 0,
+        "P0 ①：只有元信息行 ⇒ 0 数据行（假空）");
+  Check(fc::CountUserDictDataRows(
+            "#@/db_name\tuserdb\ncode0\t本地词条\tc=0 d=0 t=1\n") == 1,
+        "P0 ①：一条有效数据行 ⇒ 1");
+  Check(fc::CountUserDictDataRows("#@/db_name\tuserdb\ncode0\t甲\tc=0 d=0 t=1\n"
+                                  "code1\t乙\tc=1 d=0 t=1\n") == 2,
+        "P0 ①：两条有效数据行 ⇒ 2");
+  Check(fc::CountUserDictDataRows(
+            "#@/db_name\tuserdb\r\ncode0\t甲\tc=0 d=0 t=1\r\n") == 1,
+        "P0 ①：CRLF 文本同样计数为 1");
+  Check(fc::CountUserDictDataRows("#@/db_name\tuserdb\ncode0\t只有两列\n"
+                                  "code1\t甲\tc=1 d=0 t=1\n") == 1,
+        "P0 ①：形态非法行不计入（BM 口径不回归）");
+  Check(fc::CountUserDictDataRows("code0\t甲\tc=0 d=0 t=1\n") == 0,
+        "P0 ①：没有 db_name 段 ⇒ 0（无法定位词典）");
+
+  // ② 过滤器（导出侧 / 还原侧共用）。
+  {
+    std::vector<std::string> texts;
+    texts.push_back("#@/db_name\t甲\n");                            // 假空
+    texts.push_back("#@/db_name\t乙\ncode0\t词条\tc=0 d=0 t=1\n");  // 有效
+    texts.push_back("");                                            // 完全空
+    std::vector<std::string> kept;
+    std::size_t skipped = 0;
+    Check(fc::FilterUserDictTextsByContent(texts, &kept, &skipped),
+          "P0 ②：过滤器保留有效段");
+    Check(kept.size() == 1, "P0 ②：只保留 1 段");
+    Check(skipped == 2, "P0 ②：2 段被判为空（计数正确）");
+
+    std::vector<std::string> none;
+    std::size_t skipped_all = 0;
+    Check(!fc::FilterUserDictTextsByContent(
+              std::vector<std::string>{"", "#@/db_name\t丙\n"}, &none,
+              &skipped_all),
+          "P0 ②：一段不留 ⇒ 返回 false（调用方据此判失败）");
+    Check(skipped_all == 2, "P0 ②：全部为空时计数正确");
+  }
+
+  // ③ 服务层：本地导出为空（假空）+ 远端为空 ⇒ 本轮成功、零推送、
+  //    且**不**用空快照覆盖本地词典。
+  {
+    P0Backend backend;
+    backend.snapshot =
+        "# Rime user dictionary\n#@/db_name\tuserdb\n#@/tick\t1\n";  // 假空
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, Br1cPullBody(std::vector<fc::Entry>(), key, false, 1)});
+    const std::string sidecar = "p0-empty-local-sidecar.state";
+    std::remove(sidecar.c_str());
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-p0",
+                                         "dev-p0", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "P0 ③：本地为空 + 远端为空 ⇒ 本轮成功（不判失败）");
+    Check(result.items_pushed == 0, "P0 ③：推送 0 条（空快照不会被推上云）");
+    Check(backend.import_calls == 0,
+          "P0 ③：空合并集**不**覆盖本地词典（不调 ImportUserDict）");
+    std::remove(sidecar.c_str());
+  }
+
+  // ④ 服务层：本地为空 + 远端有内容 ⇒ **还原路径必须走通**
+  //    （新设备首次同步；护栏不得掐断这条路径）。
+  {
+    P0Backend backend;
+    backend.snapshot =
+        "# Rime user dictionary\n#@/db_name\tuserdb\n#@/tick\t1\n";  // 假空
+    const std::vector<fc::Entry> remote_entries = {
+        Br1cEntry("userdb\t远端词条", "code9\tc=9 d=0 t=1", kBr1cRemoteMs, 5,
+                  kBr1cRemoteDevice)};
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, Br1cPullBody(remote_entries, key, false, 1)});
+    const std::string sidecar = "p0-restore-sidecar.state";
+    std::remove(sidecar.c_str());
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-p0b",
+                                         "dev-p0b", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "P0 ④：本地为空 + 远端有内容 ⇒ 本轮成功（还原路径未被掐断）");
+    Check(backend.import_calls == 1, "P0 ④：回写本地词典 1 次（还原走通）");
+    Check(fc::CountUserDictDataRows(backend.imported_text) == 1,
+          "P0 ④：回写文本含 1 条数据行（非空快照）");
+    std::remove(sidecar.c_str());
+  }
+
+  // ⑤ 服务层：正常路径不回归（本地 1 条 + 远端 1 条 ⇒ 合并 2 条 ⇒ 回写 2 行）。
+  {
+    P0Backend backend;
+    backend.snapshot =
+        "# Rime user dictionary\n#@/db_name\tuserdb\n#@/tick\t1\n"
+        "code0\t本地词条\tc=0 d=0 t=1\n";
+    fc::CloudDictEntry local_row;
+    Check(Br1cFirstRow(backend.snapshot, &local_row, &err),
+          "P0 ⑤ 夹具：本地条目可解析");
+    const std::string item_id =
+        Br1cItemId(local_row.text, local_row.payload, key);
+    const std::vector<fc::Entry> remote_entries = {
+        Br1cEntry("userdb\t远端词条", "code9\tc=9 d=0 t=1", kBr1cRemoteMs, 5,
+                  kBr1cRemoteDevice)};
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, Br1cPullBody(remote_entries, key, false, 1)});
+    // 预置推送回执（accepted 记的是线上身份 ⇒ 用同一把密钥算）。
+    transport.replies.push_back(
+        MockTransport::Reply{true, 200,
+                             "{\"accepted\":[\"" + item_id +
+                                 "\"],\"skipped\":[],\"server_seq\":9}"});
+    const std::string sidecar = "p0-normal-sidecar.state";
+    std::remove(sidecar.c_str());
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-p0c",
+                                         "dev-p0c", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "P0 ⑤：正常路径本轮成功");
+    Check(transport.requests.size() == 2,
+          "P0 ⑤：两次请求（拉取 + 推送）⇒ 本地条目照常进推送集合");
+    Check(result.items_pushed == 1, "P0 ⑤：推送 1 条（本地改动照常上云）");
+    Check(backend.import_calls == 1, "P0 ⑤：回写本地词典 1 次");
+    Check(fc::CountUserDictDataRows(backend.imported_text) == 2,
+          "P0 ⑤：回写文本含 2 条数据行（本地条目未被合并丢掉）");
+    std::remove(sidecar.c_str());
+  }
+
+  // ⑥ 服务层：形态非法行（BM 口径）仍跳过、不毒化整轮（不回归）。
+  {
+    P0Backend backend;
+    backend.snapshot =
+        "# Rime user dictionary\n#@/db_name\tuserdb\n#@/tick\t1\n"
+        "code0\t只有两列\ncode1\t本地词条\tc=1 d=0 t=1\n";
+    fc::CloudDictEntry local_row;
+    Check(Br1cFirstRow(backend.snapshot, &local_row, &err),
+          "P0 ⑥ 夹具：本地有效条目可解析（非法行被跳过）");
+    const std::string item_id =
+        Br1cItemId(local_row.text, local_row.payload, key);
+    const std::vector<fc::Entry> remote_entries = {
+        Br1cEntry("userdb\t远端词条", "code9\tc=9 d=0 t=1", kBr1cRemoteMs, 5,
+                  kBr1cRemoteDevice)};
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{
+        true, 200, Br1cPullBody(remote_entries, key, false, 1)});
+    transport.replies.push_back(
+        MockTransport::Reply{true, 200,
+                             "{\"accepted\":[\"" + item_id +
+                                 "\"],\"skipped\":[],\"server_seq\":9}"});
+    const std::string sidecar = "p0-malformed-sidecar.state";
+    std::remove(sidecar.c_str());
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-p0d",
+                                         "dev-p0d", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "P0 ⑥：含形态非法行时本轮仍成功（不毒化整轮）");
+    Check(fc::CountUserDictDataRows(backend.imported_text) == 2,
+          "P0 ⑥：回写文本含 2 条数据行（非法行被跳过、有效行保留）");
+    std::remove(sidecar.c_str());
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -5801,6 +6015,9 @@ int main() {
   TestBucketWireFormat();
   TestBucketPageBudgetAndDiag();
   TestBucketInventoryGateAndQuota();
+
+  // 批次 P0 · ADR 0078：用户词典完整性（假空导出 / 空快照还原护栏）。
+  TestUserDictIntegrityGuards();
 
   // 批次 AK：真实 WinHTTP 传输层的回环回归（自建本地 HTTP 服务端）。
   // 修复前 transport_ok 从未被置 true ⇒ 本组用例必然失败。

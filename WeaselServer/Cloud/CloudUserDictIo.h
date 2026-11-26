@@ -39,6 +39,7 @@
 #define NOMINMAX
 #endif
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -134,6 +135,29 @@ inline const char* MaintenanceGateOpportunisticStatement() {
 bool ParseUserDictSnapshots(const std::string& text,
                             std::vector<UserDictSnapshot>* out,
                             std::string* err);
+
+// ★ ADR 0078 D2/D3：统计快照文本里的**有效数据行**条数。
+//
+// 口径**完全复用** ParseUserDictSnapshots（单一真相源 · 宪法 R7）：
+//   · '#' 注释行 / 空行不算；
+//   · 形态非法的行不算（IsValidUserDictEntryShape 已判过）；
+//   · 文本里连一个 '#@/db_name' 段都没有 ⇒ 0 行。
+//
+// 用途（两处护栏的判据）：
+//   · 导出侧：备份文本 0 数据行 ⇒ 该词典的备份是空的 ⇒ 不算导出成功；
+//   · 还原侧：某一段 0 数据行 ⇒ 拒绝把这一段送进 rime 的 restore。
+std::size_t CountUserDictDataRows(const std::string& text);
+
+// ★ ADR 0078 D2/D3：把「若干段文本」过滤成「至少含一条数据行的段」。
+//
+// 导出侧（逐词典的备份文本）与还原侧（逐词典的快照段）**共用这一份口径**
+// （单一真相源 · 宪法 R7）：判据就是 CountUserDictDataRows。
+//   · out     = 保留下来的段（保持原顺序，调用方按序使用）；
+//   · skipped = 被丢弃的段数（0 数据行 ⇒ 空 / 退化快照）；
+//   · 返回值 = 是否至少留下了一段（false ⇒ 调用方应判失败）。
+bool FilterUserDictTextsByContent(const std::vector<std::string>& texts,
+                                  std::vector<std::string>* out,
+                                  std::size_t* skipped);
 
 // 由条目集合重建快照文本（供 restore_user_dict 用）。
 // 同一个词典的条目会归到同一段；段的 tick 取该词典条目里的最大 tick。

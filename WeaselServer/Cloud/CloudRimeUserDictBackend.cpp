@@ -21,6 +21,8 @@
 
 #include "CloudUserDictIo.h"
 
+#include "../../include/FluxingDiagLog.h"
+
 #include <rime_api.h>
 #include <rime_levers_api.h>
 
@@ -359,7 +361,8 @@ class RimeUserDictBackend : public IUserDictBackend {
     }
     SafeUserDictIteratorDestroy(levers, &iter);
 
-    int exported = 0;
+    // 逐词典收集备份文本（「空内容」的判定统一放在过滤器里 · 单一真相源）。
+    std::vector<std::string> backups;
     for (size_t i = 0; i < dicts.size(); ++i) {
       // 备份失败的词典（不存在 / 锁不住）直接跳过，不算整体失败。
       const bool backup_ok = SafeBackupUserDict(levers, dicts[i].c_str());
@@ -371,15 +374,31 @@ class RimeUserDictBackend : public IUserDictBackend {
       std::string text;
       if (!ReadFileText(path, &text))
         continue;
-      out->append(text);
+      backups.push_back(text);
+    }
+
+    // ★ ADR 0078 D2：**空内容不算导出成功**（空文件 / 只有元信息行）。
+    //   旧口径在这里无条件 ++exported ⇒ 空快照会被当成正常内容 ⇒ 另一台设备
+    //   还原它就可能把本地的用户词典清空。判据与还原侧同一份口径（R7）。
+    std::vector<std::string> kept;
+    std::size_t skipped_empty = 0;
+    FilterUserDictTextsByContent(backups, &kept, &skipped_empty);
+    for (std::size_t i = 0; i < kept.size(); ++i) {
+      out->append(kept[i]);
       if (!out->empty() && out->at(out->size() - 1) != '\n')
         out->append("\n");
-      ++exported;
     }
+    const int exported = static_cast<int>(kept.size());
+
+    // 诊断行（事件驱动、不依赖调试器；ADR 0066 已坐实 OutputDebugStringW
+    // 在无调试器机器上抓不到）。**只落计数，绝不落词条明文。**
+    diag::AppendLine("cloudsync", "userdict export_empty_skipped=" +
+                                      std::to_string(skipped_empty));
 
     if (exported == 0) {
       if (err)
-        *err = "用户词典备份失败：没有可导出的词典。";
+        *err = skipped_empty > 0 ? "用户词典备份失败：备份内容为空。"
+                                 : "用户词典备份失败：没有可导出的词典。";
       return false;
     }
     return true;
@@ -411,14 +430,21 @@ class RimeUserDictBackend : public IUserDictBackend {
       return false;
     }
 
+    // ★ ADR 0078 D3：**0 数据行的段拒绝还原**（不写临时文件、不调 restore）。
+    //   否则一份空快照会被送进 rime 的 UserDbMerger ⇒ 可能把本地的用户词典
+    //   清空。判据口径与导出侧同一个函数（单一真相源 · R7）。
+    std::vector<std::string> restorable;
+    std::size_t rejected_empty = 0;
+    FilterUserDictTextsByContent(sections, &restorable, &rejected_empty);
+
     int count = 0;
     std::string last_err;
-    for (size_t i = 0; i < sections.size(); ++i) {
+    for (size_t i = 0; i < restorable.size(); ++i) {
       // 段首的 "#@/db_name" 决定这一段还原到哪个词典。
       std::string dict;
-      const size_t nl = sections[i].find('\n');
-      const std::string first = sections[i].substr(
-          0, nl == std::string::npos ? sections[i].size() : nl);
+      const size_t nl = restorable[i].find('\n');
+      const std::string first = restorable[i].substr(
+          0, nl == std::string::npos ? restorable[i].size() : nl);
       const size_t tab = first.find('\t');
       if (tab != std::string::npos)
         dict = first.substr(tab + 1);
@@ -428,7 +454,7 @@ class RimeUserDictBackend : public IUserDictBackend {
         last_err = "无法定位临时目录。";
         continue;
       }
-      if (!WriteFileText(path, sections[i])) {
+      if (!WriteFileText(path, restorable[i])) {
         last_err = "写入临时快照失败。";
         continue;
       }
@@ -443,9 +469,15 @@ class RimeUserDictBackend : public IUserDictBackend {
       ++count;
     }
 
+    // 诊断行：事件驱动、只落计数（不落任何条目明文）。
+    diag::AppendLine("cloudsync", "userdict import_empty_rejected=" +
+                                      std::to_string(rejected_empty));
+
     if (count == 0) {
       if (err)
-        *err = last_err.empty() ? "词典还原失败。" : last_err;
+        *err = rejected_empty > 0
+                   ? "用户词典还原失败：快照内容为空。"
+                   : (last_err.empty() ? "词典还原失败。" : last_err);
       return false;
     }
     if (imported != nullptr)

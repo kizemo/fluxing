@@ -122,6 +122,43 @@ bool ParseUserDictSnapshots(const std::string& text,
   return true;
 }
 
+// ★ ADR 0078 D2/D3：统计有效数据行。
+// 口径复用 ParseUserDictSnapshots（不新增第二套行解析器 · 宪法 R7）。
+std::size_t CountUserDictDataRows(const std::string& text) {
+  std::vector<UserDictSnapshot> snaps;
+  std::string err;
+  if (!ParseUserDictSnapshots(text, &snaps, &err))
+    return 0;
+  std::size_t n = 0;
+  for (std::size_t i = 0; i < snaps.size(); ++i)
+    n += snaps[i].rows.size();
+  return n;
+}
+
+// ★ ADR 0078 D2/D3：过滤「0 数据行」的段。
+// 导出侧与还原侧共用（判据 = CountUserDictDataRows · 单一真相源 · 宪法 R7）。
+bool FilterUserDictTextsByContent(const std::vector<std::string>& texts,
+                                  std::vector<std::string>* out,
+                                  std::size_t* skipped) {
+  if (out != nullptr)
+    out->clear();
+  if (skipped != nullptr)
+    *skipped = 0;
+  if (out == nullptr)
+    return false;
+  std::size_t drop = 0;
+  for (std::size_t i = 0; i < texts.size(); ++i) {
+    if (CountUserDictDataRows(texts[i]) == 0) {
+      ++drop;
+      continue;
+    }
+    out->push_back(texts[i]);
+  }
+  if (skipped != nullptr)
+    *skipped = drop;
+  return !out->empty();
+}
+
 bool BuildUserDictSnapshots(const std::vector<CloudDictEntry>& rows,
                             std::string* out,
                             std::string* err) {
