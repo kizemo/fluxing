@@ -28,9 +28,9 @@ import { writeBudgetBucketRowsPerDay } from './env';
 import type { AuthContext } from './auth';
 import { fail } from './errors';
 import { nowSeconds, toBase64, toBase64Url, utf8, fromBase64Strict } from './crypto';
-import { MAX_PUSH_BUCKETS, bucketR2KeyFor, compareHlc, validatePushBucket } from './wire';
+import { MAX_PUSH_BUCKETS, bucketR2KeyForVersioned, compareHlc, validatePushBucket } from './wire';
 import type { Hlc, ValidatedBucket } from './wire';
-import { putAllWithConcurrency } from './r2-write';
+import { deleteAllQuietly, putAllWithConcurrency } from './r2-write';
 import {
   WRITE_BUDGET_EXCEEDED_CODE,
   WRITE_BUDGET_EXCEEDED_MESSAGE,
@@ -178,7 +178,7 @@ export async function handleBucketPush(
   const uniqueKeys = [...new Set(buckets.map((bucket) => bucket.bucketKey))];
   const placeholders = uniqueKeys.map(() => '?').join(', ');
   const existing = await env.DB.prepare(
-    `SELECT bucket_key, hlc_ms, hlc_counter, hlc_device
+    `SELECT bucket_key, hlc_ms, hlc_counter, hlc_device, r2_key
        FROM sync_buckets
       WHERE user_id = ? AND device_id = ? AND bucket_key IN (${placeholders})`,
   )
@@ -188,7 +188,18 @@ export async function handleBucketPush(
       hlc_ms: number;
       hlc_counter: number;
       hlc_device: string;
+      r2_key: string;
     }>();
+
+  // 变更前的对象键（ADR 0080 语义 3 的第二个条件）。必须从**预读**原始行取：下面的
+  // batch 是 DELETE + INSERT，跑完旧 r2_key 即被抹掉。与守卫基准 `current` 分开存，
+  // 否则本批 accepted 会把旧键覆盖成新键 ⇒ 删掉刚写的对象。作用域 = 同一设备同一桶。
+  const previousR2Keys = new Map<string, string>();
+  for (const row of existing.results ?? []) {
+    if (typeof row.r2_key === 'string' && row.r2_key.length > 0) {
+      previousR2Keys.set(row.bucket_key, row.r2_key);
+    }
+  }
 
   // 逐桶守卫：服务端已存版本 ≥ 客户端送上来的版本 ⇒ 整桶跳过。
   // `current` 随本批已接受的桶一起更新，因此同一批里重复出现的 bucket_key
@@ -231,11 +242,15 @@ export async function handleBucketPush(
     throw fail.tooFrequent(WRITE_BUDGET_EXCEEDED_MESSAGE, WRITE_BUDGET_EXCEEDED_CODE);
   }
 
-  // 1) 先写 R2（同 (设备, 桶) 覆盖，天然幂等）；跳过的桶不写。
+  // 1) 先写 R2（版本化键，ADR 0080 语义 2：新键先落，旧对象等 D1 提交成功再删）；
+  //    跳过的桶不写。混合态合法：存量桶行仍指非版本化键，读路径只用行内 r2_key ⇒
+  //    老桶不重推也照常可读，下次重推自然收敛到版本化键。
   //    R2 阶段内部并发度沿用 ADR 0074 的 6（D9 的 7.5 s / 64 put 实测据此成立）。
   const staged: Array<{ r2Key: string }> = [];
   for (const bucket of accepted) {
-    staged.push({ r2Key: await bucketR2KeyFor(auth.userId, deviceId, bucket.bucketKey) });
+    staged.push({
+      r2Key: await bucketR2KeyForVersioned(auth.userId, deviceId, bucket.bucketKey, bucket.hlc),
+    });
   }
   await putAllWithConcurrency(
     env.BUCKET,
@@ -290,6 +305,22 @@ export async function handleBucketPush(
     );
   }
   if (statements.length > 0) await env.DB.batch(statements);
+
+  // 2.5) 旧版本桶对象回收（ADR 0080 语义 3）：**只在 batch 返回之后**。
+  //      条件：batch 已成功 / 旧 r2_key 存在 / 旧 ≠ 新。删除不抛错（吞掉 + 逐键孤儿日志），
+  //      否则已提交的一批会被判失败 ⇒ 客户端重推 ⇒ 写放大。
+  if (statements.length > 0) {
+    const retired: string[] = [];
+    const seen = new Set<string>();
+    for (let i = 0; i < accepted.length; i += 1) {
+      const oldKey = previousR2Keys.get(accepted[i]!.bucketKey);
+      if (oldKey === undefined || oldKey === staged[i]!.r2Key) continue;
+      if (seen.has(oldKey)) continue;
+      seen.add(oldKey);
+      retired.push(oldKey);
+    }
+    await deleteAllQuietly(env.BUCKET, retired);
+  }
 
   // 3) server_seq = 本次**真正写入**桶行的最大 id（跳过不推进）
   const writtenKeys = [...new Set(accepted.map((bucket) => bucket.bucketKey))];

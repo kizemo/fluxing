@@ -76,21 +76,23 @@ const FIRST_SITES = [
   'auth.ts:1025',
   'devices.ts:35',
   'devices.ts:138',
+  // ADR 0080 U1 落码（版本化 key + 提交后删旧对象）在两处写路径插入行 ⇒ 以下 4 个行号
+  // 于 2026-11-26 按盘上真实行号回读刷新（站点数不变，仍 23 / 5）。改动写路径时必须同步。
   'sync-buckets.ts:144',
-  'sync-buckets.ts:305',
-  'sync-buckets.ts:313',
+  'sync-buckets.ts:336',
+  'sync-buckets.ts:344',
   'sync.ts:212',
-  'sync.ts:403',
-  'sync.ts:410',
+  'sync.ts:437',
+  'sync.ts:444',
 ];
 
 /** `.batch()` 业务调用点 5 个（台账 6，多出的是 `d1-shim.ts` 头注释里的 `DB.batch(stmts[])`）。 */
 const BATCH_SITES = [
   'devices.ts:143',
-  'sync-buckets.ts:292',
-  'sync-buckets.ts:394',
-  'sync.ts:391',
-  'sync.ts:473',
+  'sync-buckets.ts:307',
+  'sync-buckets.ts:425',
+  'sync.ts:408',
+  'sync.ts:507',
 ];
 
 /** `.exec(` 站点 3 个：全部是 `RegExp.prototype.exec`，**无一**是 D1 的 `stmt.exec()`。 */

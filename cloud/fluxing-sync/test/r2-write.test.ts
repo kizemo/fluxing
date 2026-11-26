@@ -8,8 +8,9 @@
 //   5. 空目标列表不触发任何 put；
 //   6. 任一 put 失败时整个调用抛错（不静默吞掉）。
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  deleteAllQuietly,
   putAllWithConcurrency,
   R2_WRITE_CONCURRENCY,
   type R2WriteBucket,
@@ -126,5 +127,84 @@ describe('putAllWithConcurrency', () => {
     await expect(putAllWithConcurrency(fake.bucket, makeTargets(5), 2)).rejects.toThrow(
       'boom:u/uid/k002',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deleteAllQuietly（ADR 0080 语义 3：旧版本回收必须「绝不抛错」）
+//
+// 判据刻意分两档，因为「没有异常」既可能是真的被吞掉、也可能是根本没人调用：
+//   · 失败用例除了断言不 reject，还必须断言**留痕**（orphan 日志逐键一条）；
+//   · 成功用例断言整批只发一次 delete 且回传键数，防止退化成逐键请求。
+// ---------------------------------------------------------------------------
+
+interface DeleteRecord {
+  keys: string[];
+}
+
+function makeDeletableBucket(mode: 'ok' | 'throw'): {
+  bucket: R2WriteBucket;
+  calls: DeleteRecord[];
+} {
+  const calls: DeleteRecord[] = [];
+  const bucket: R2WriteBucket = {
+    async put() {
+      return undefined;
+    },
+    async delete(keys) {
+      calls.push({ keys: [...keys] });
+      if (mode === 'throw') throw new Error('r2 delete unavailable');
+      return undefined;
+    },
+  };
+  return { bucket, calls };
+}
+
+describe('deleteAllQuietly', () => {
+  it('整批一次 delete，去重后按键数回传', async () => {
+    const { bucket, calls } = makeDeletableBucket('ok');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const n = await deleteAllQuietly(bucket, ['k/a', 'k/a', '', 'k/b']);
+    expect(n).toBe(2);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.keys).toEqual(['k/a', 'k/b']);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('delete 抛错时不上抛，返回 0 且逐键留孤儿日志（已提交批次不得被判失败）', async () => {
+    const { bucket, calls } = makeDeletableBucket('throw');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(deleteAllQuietly(bucket, ['k/a', 'k/b'])).resolves.toBe(0);
+    expect(calls).toHaveLength(1);
+    const orphanLines = warn.mock.calls
+      .map((args) => String(args[0]))
+      .filter((line) => line.includes('[fluxing-sync] orphan object left key='));
+    expect(orphanLines).toEqual([
+      '[fluxing-sync] orphan object left key=k/a',
+      '[fluxing-sync] orphan object left key=k/b',
+    ]);
+    // 失败本身也要有一条可检索的批量失败留痕（区分「删不掉」与「没删」）
+    expect(
+      warn.mock.calls.some((args) => String(args[0]).includes('orphan delete batch failed')),
+    ).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('桶不实现 delete ⇒ 不抛错、返回 0，并逐键留痕（退化路径必须可见）', async () => {
+    const bucket: R2WriteBucket = { async put() { return undefined; } };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(deleteAllQuietly(bucket, ['k/a'])).resolves.toBe(0);
+    expect(warn.mock.calls.map((args) => String(args[0]))).toContain(
+      '[fluxing-sync] orphan object left key=k/a',
+    );
+    warn.mockRestore();
+  });
+
+  it('空列表 / 全空键不触发 delete', async () => {
+    const { bucket, calls } = makeDeletableBucket('ok');
+    await expect(deleteAllQuietly(bucket, [])).resolves.toBe(0);
+    await expect(deleteAllQuietly(bucket, [''])).resolves.toBe(0);
+    expect(calls).toHaveLength(0);
   });
 });

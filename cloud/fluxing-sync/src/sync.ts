@@ -25,9 +25,9 @@ import {
   toBase64Url,
   utf8,
 } from './crypto';
-import { MAX_PUSH_ITEMS, compareHlc, r2KeyFor, validatePushItem } from './wire';
+import { MAX_PUSH_ITEMS, compareHlc, r2KeyForVersioned, validatePushItem } from './wire';
 import type { Hlc, ValidatedItem } from './wire';
-import { putAllWithConcurrency } from './r2-write';
+import { deleteAllQuietly, putAllWithConcurrency } from './r2-write';
 
 const DEFAULT_PULL_LIMIT = 50;
 const MAX_PULL_LIMIT = 100;
@@ -277,7 +277,7 @@ export async function handlePushWithLimit(
   const uniqueKeys = [...new Set(items.map((item) => item.itemKey))];
   const placeholders = uniqueKeys.map(() => '?').join(', ');
   const existing = await env.DB.prepare(
-    `SELECT item_key, hlc_ms, hlc_counter, hlc_device
+    `SELECT item_key, hlc_ms, hlc_counter, hlc_device, r2_key
        FROM sync_items
       WHERE user_id = ? AND item_key IN (${placeholders})`,
   )
@@ -287,7 +287,19 @@ export async function handlePushWithLimit(
       hlc_ms: number;
       hlc_counter: number;
       hlc_device: string;
+      r2_key: string;
     }>();
+
+  // 变更前的对象键（ADR 0080 语义 3 的第二个条件）。必须从**预读**原始行取：
+  // 下面这句 UPDATE 是 DELETE + INSERT，batch 跑完旧 r2_key 就被抹掉了，之后
+  // 再也无法知道该删哪个对象。这张表与 `current`（守卫基准，会被本批 accepted
+  // 覆盖）刻意分开存 —— 混用会把「本批新键」当成旧键，把刚写的对象删掉。
+  const previousR2Keys = new Map<string, string>();
+  for (const row of existing.results ?? []) {
+    if (typeof row.r2_key === 'string' && row.r2_key.length > 0) {
+      previousR2Keys.set(row.item_key, row.r2_key);
+    }
+  }
 
   // 逐条守卫：服务端已存版本 ≥ 客户端送上来的版本 ⇒ 整条跳过（不写 R2 / D1，
   // 也不推进 server_seq）。`current` 随本批已接受的条目一起更新，因此同一批里
@@ -328,11 +340,16 @@ export async function handlePushWithLimit(
     throw fail.tooFrequent(WRITE_BUDGET_EXCEEDED_MESSAGE, WRITE_BUDGET_EXCEEDED_CODE);
   }
 
-  // 1) 先写 R2（同 key 覆盖，天然幂等）；跳过的条目不写
+  // 1) 先写 R2（版本化键，ADR 0080 语义 2：每次写入落新键，旧对象留到 D1 提交成功
+  //    之后再删）；跳过的条目不写。混合态合法：存量行仍指着非版本化键，读路径只认
+  //    行内 r2_key，因此老行不重推也不会失效，重推后自然收敛到版本化键。
   const staged: Array<{ itemKey: string; r2Key: string }> = [];
   for (const item of accepted) {
     const keyHash = await sha256Hex(utf8(item.itemKey));
-    staged.push({ itemKey: item.itemKey, r2Key: await r2KeyFor(auth.userId, keyHash) });
+    staged.push({
+      itemKey: item.itemKey,
+      r2Key: await r2KeyForVersioned(auth.userId, keyHash, item.hlc),
+    });
   }
   // R2 阶段内部并发化（ADR 0074）：单条 put ≈ 626–706 ms，串行 64 条 = 40 071 ms，
   // 超过客户端 15 s 接收超时 ⇒ 真机报 12002（WinHTTP ERROR_WINHTTP_TIMEOUT）。
@@ -389,6 +406,23 @@ export async function handlePushWithLimit(
     );
   }
   if (statements.length > 0) await env.DB.batch(statements);
+
+  // 2.5) 旧版本对象回收（ADR 0080 语义 3）——**只在 batch 返回之后**执行。
+  //      三个条件同时成立才删：① batch 已成功（走到这里即成立）② 变更前旧 r2_key 存在
+  //      ③ 旧 key ≠ 新 key。删除**绝不抛错**（deleteAllQuietly 内部吞掉并逐键留孤儿日志）：
+  //      删除失败不得把已提交的一批判成失败，否则客户端重推 ⇒ 写放大。
+  if (statements.length > 0) {
+    const retired: string[] = [];
+    const seen = new Set<string>();
+    for (let i = 0; i < accepted.length; i += 1) {
+      const oldKey = previousR2Keys.get(accepted[i]!.itemKey);
+      if (oldKey === undefined || oldKey === staged[i]!.r2Key) continue;
+      if (seen.has(oldKey)) continue;
+      seen.add(oldKey);
+      retired.push(oldKey);
+    }
+    await deleteAllQuietly(env.BUCKET, retired);
+  }
 
   // 3) server_seq = 本次**真正写入**条目的最大 id（跳过不推进）
   const writtenKeys = [...new Set(accepted.map((item) => item.itemKey))];

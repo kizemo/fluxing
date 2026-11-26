@@ -39,6 +39,14 @@ export interface R2WriteTarget {
  */
 export interface R2WriteBucket {
   put(key: string, value: R2WriteValue, options?: R2WriteMetadata): Promise<unknown>;
+  /**
+   * 可选：删对象（ADR 0080 语义 3 的旧版本回收）。
+   *
+   * 声明为可选而不是必选，是为了让**只读/只写**的测试假桶继续满足契约；生产传
+   * `env.BUCKET`（`R2Bucket.delete` 支持单键与键数组，参数双向兼容）。
+   * 不实现 delete 的桶 ⇒ 回收退化为「留孤儿 + 日志」，不影响一致性。
+   */
+  delete?(keys: string[]): Promise<unknown>;
 }
 
 /**
@@ -66,5 +74,51 @@ export async function putAllWithConcurrency(
     await Promise.all(
       wave.map((target) => bucket.put(target.key, target.value, target.options)),
     );
+  }
+}
+
+/**
+ * 「尽力而为」地删一批 R2 对象（ADR 0080 语义 3：旧版本回收 / 孤儿兜底）。
+ *
+ * 三条硬约束，全部来自「删除失败不得污染已提交的那一批」：
+ *   1. **绝不抛错**：本函数对调用方永不 reject。删不掉的对象只是一份空间债
+ *      （读路径只认 D1 行内 r2_key，语义 5），但若让删除异常上抛，一次已提交的
+ *      D1 batch 会被判成失败 ⇒ 客户端重推 ⇒ 真正的写放大。
+ *   2. **单批一次 delete**：整批键一次性交给 `R2Bucket.delete(keys[])`，不给每条
+ *      开一个请求；ADR 0074 的并发结论（并发 6 / 15 s）不受影响。
+ *   3. **逐键留痕**：任何一个键没删掉都打一行
+ *      `[fluxing-sync] orphan object left key=<key>`，供运维按前缀兜底 GC。
+ *      桶不支持 delete 时同口径逐键留痕。
+ *
+ * @returns 实际「已交给 R2 且未抛错」的键数（仅用于诊断与单测断言，不参与业务判定）
+ */
+export async function deleteAllQuietly(
+  bucket: R2WriteBucket,
+  keys: readonly string[],
+): Promise<number> {
+  const unique = [...new Set(keys.filter((key) => key.length > 0))];
+  if (unique.length === 0) return 0;
+
+  const reportOrphans = (targets: readonly string[]): void => {
+    for (const key of targets) {
+      console.warn(`[fluxing-sync] orphan object left key=${key}`);
+    }
+  };
+
+  if (typeof bucket.delete !== 'function') {
+    reportOrphans(unique);
+    return 0;
+  }
+
+  try {
+    await bucket.delete(unique);
+    return unique.length;
+  } catch (error) {
+    // 批量删整体失败 ⇒ 无法知道哪个键成功，按「一个都没删掉」登记（保守口径：
+    // 多记孤儿不会造成数据问题，漏记则会留下无主对象且无人知晓）。
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(`[fluxing-sync] orphan delete batch failed keys=${unique.length}: ${reason}`);
+    reportOrphans(unique);
+    return 0;
   }
 }

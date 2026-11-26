@@ -335,3 +335,52 @@ export async function bucketR2KeyFor(
   const bucketHash = await sha256Hex(utf8(bucketKey));
   return `b/${userId}/${deviceHash}/${bucketHash}`;
 }
+
+// ---------------------------------------------------------------------------
+// 版本化对象键（ADR 0080 语义 1–2）
+//
+// 动机：旧键 u/<uid>/<hash> 是「一条目一对象」，同一条目重推直接覆盖 —— 当 D1 提交
+// 失败时，被覆盖掉的正是**上一次已提交版本**的 blob，而 D1 仍指着它 ⇒ 悬挂引用。
+// 版本化后每次写入落在**新键**上，旧对象在 D1 batch 提交成功之后才删（语义 2/3）：
+//   · D1 失败 ⇒ 旧对象原封不动，读路径仍然自洽（最坏多一个新孤儿）；
+//   · 提交成功 ⇒ 删旧对象；删除失败只留孤儿，一致性不受影响（语义 3）。
+//
+// 键形态（点号与原点分同层，**不进子目录**；r2_key 是 TEXT 列 ⇒ 零 DDL）：
+//   u/<uid>/<sha256(item_key)>.<ms>-<counter>-<dev12>
+//   b/<uid>/<sha256(device_id)>/<sha256(bucket_key)>.<ms>-<counter>-<dev12>
+// dev12 = sha256Hex(utf8(hlc.device))[0:12]
+// **必须含设备维度**：否则设备 A 与设备 B 在同一毫秒、同一计数器上算出同一个键，
+// 版本化就退化成覆盖（与 bucketR2KeyFor 里那段「为什么必须带设备维度」同一类错误）。
+// ---------------------------------------------------------------------------
+
+/**
+ * 版本后缀 `<ms>-<counter>-<dev12>`。
+ *
+ * 三个分量合起来与 HLC 全序一一对应：同一毫秒由 counter 区分，同一 (ms, counter)
+ * 由设备维度区分 ⇒ 任意两个不同 HLC 版本必得不同后缀（不同设备同名设备的哈希不同）。
+ */
+export async function hlcVersionSuffix(hlc: Hlc): Promise<string> {
+  const devHash = await sha256Hex(utf8(hlc.device));
+  return `${hlc.ms}-${hlc.counter}-${devHash.slice(0, 12)}`;
+}
+
+/** 条目级版本化 R2 键：`u/<uid>/<sha256(item_key)>.<ms>-<counter>-<dev12>`。 */
+export async function r2KeyForVersioned(
+  userId: string,
+  itemKeyHashHex: string,
+  hlc: Hlc,
+): Promise<string> {
+  return `u/${userId}/${itemKeyHashHex}.${await hlcVersionSuffix(hlc)}`;
+}
+
+/** 桶级版本化 R2 键：`b/<uid>/<sha256(device_id)>/<sha256(bucket_key)>.<ms>-<counter>-<dev12>`。 */
+export async function bucketR2KeyForVersioned(
+  userId: string,
+  deviceId: string,
+  bucketKey: string,
+  hlc: Hlc,
+): Promise<string> {
+  const deviceHash = await sha256Hex(utf8(deviceId));
+  const bucketHash = await sha256Hex(utf8(bucketKey));
+  return `b/${userId}/${deviceHash}/${bucketHash}.${await hlcVersionSuffix(hlc)}`;
+}

@@ -312,7 +312,17 @@ describe('桶推送与拉取', () => {
     expect(fresh.body.accepted).toEqual(['phrases/main#0']);
     expect(await bucketRows(userId)).toBe(1);
     expect(fresh.body.server_seq).toBeGreaterThan(seq1);
-    expect(await readObject(r2Key!)).toEqual(blobFor(4, 10));
+
+    // ADR 0080 语义 2/3：新版本写**新键**，旧对象在 D1 batch 提交成功之后删除
+    // ⇒ 本设备该桶前缀下只剩一个对象，且它就是新内容；旧键必须已消失。
+    const afterFresh = await listKeys(`b/${userId}/`);
+    expect(afterFresh).toHaveLength(1);
+    const newKey = afterFresh[0]!;
+    expect(newKey).not.toBe(r2Key);
+    // 版本后缀 <ms>-<counter>-<dev12>，点号与原点分同层（不进子目录）
+    expect(newKey).toMatch(/^b\/[^/]+\/[0-9a-f]{64}\/[0-9a-f]{64}\.\d+-\d+-[0-9a-f]{12}$/);
+    expect(await readObject(newKey)).toEqual(blobFor(4, 10));
+    expect(await readObject(r2Key!)).toBeNull();
   });
 
   it('同 bucket_key 跨设备互不压制，且 device_id = devices.id 行主键', async () => {
