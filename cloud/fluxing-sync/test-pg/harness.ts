@@ -23,8 +23,9 @@
 
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 import { setDynamicImport } from '../src/pg/dynamic-import';
 
@@ -40,7 +41,33 @@ import { createFsBucket } from '../src/pg/r2-fs';
 
 export const BASE = 'https://fluxing-sync.test';
 
-const MIGRATION = new URL('../migrations-pg/0001_init.sql', import.meta.url);
+/**
+ * 迁移脚本的绝对路径。
+ *
+ * 用 `fileURLToPath(import.meta.url)`（**字符串入参**，不构造 `URL` 对象）再 `join`：
+ * 直接把 `URL` 对象交给 `fileURLToPath` / `readFile` 会撞上 undici-types 的 `URL`
+ * 与 node 的 `URL` 之间的类型分歧（`Symbol.dispose` 缺失）——
+ * 那是**类型层**问题，换成路径字符串即可，运行期读的是同一个文件。
+ */
+const MIGRATION = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations-pg', '0001_init.sql');
+
+/**
+ * 测试底座用的 pg 单连接（建 schema / 跑迁移）。
+ *
+ * `src/pg/d1-shim.ts` 自声明的 `PgModuleLike` 只含 `Pool`（那是业务代码真正消费的最小契约），
+ * 测试底座额外要用 `Client` 起一条独立连接跑 DDL。这里**只在测试侧扩型**，
+ * **不改 `src/**`**（改了会动到业务契约）。
+ */
+interface PgAdminClientLike {
+  connect(): Promise<void>;
+  query(text: string): Promise<unknown>;
+  end(): Promise<void>;
+}
+
+/** 测试底座用的 pg 模块扩型：额外暴露 `Client`。 */
+interface PgAdminModuleLike {
+  Client: new (config: { connectionString: string }) => PgAdminClientLike;
+}
 
 /**
  * 与 `vitest.config.ts` 的 `TEST_PEPPER` 取同一个值：两套底座的 pepper 必须一致，
@@ -99,7 +126,7 @@ export async function createPgTestContext(slug: string): Promise<PgTestContext> 
   const pg = await loadPgModule();
   const url = baseUrl();
 
-  const admin = new pg.Client({ connectionString: url });
+  const admin = new (pg as unknown as PgAdminModuleLike).Client({ connectionString: url });
   await admin.connect();
   try {
     await admin.query(`DROP SCHEMA IF EXISTS ${quoteIdent(schema)} CASCADE`);
@@ -157,7 +184,9 @@ export async function createPgTestContext(slug: string): Promise<PgTestContext> 
   };
 
   const close = async (): Promise<void> => {
-    await pool.end();
+    // `PgPoolLike.end` 在仓库自声明的契约里是可选成员；真 pg Pool 一定带 `end`。
+    // 这里**只在类型层**收紧，运行期调用与之前完全一致（仍然真的关池）。
+    await (pool as { end(): Promise<void> }).end();
     await rm(root, { recursive: true, force: true });
   };
 

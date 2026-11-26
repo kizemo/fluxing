@@ -68,8 +68,16 @@ function makeFakePool(options: {
   return { calls, clientCalls, pool };
 }
 
-/** 没有 `types` 的假 pg 模块（`installTypeParsers` 只做可选调用）。 */
-const FAKE_PG: PgModuleLike = { Pool: function () {} as unknown as PgPoolLike['constructor'] };
+/**
+ * 没有 `types` 的假 pg 模块（`installTypeParsers` 只做可选调用）。
+ *
+ * `PgModuleLike['Pool']` 的真实类型是 `new (config: Record<string, unknown>) => PgPoolLike`；
+ * 直接写 `PgPoolLike['constructor']` 会被 TS 解析成 `Function`，与 `PgModuleLike` 不兼容。
+ * 这里显式写出构造签名 —— **纯类型层修正，运行期行为完全不变**。
+ */
+const FAKE_PG: PgModuleLike = {
+  Pool: function () {} as unknown as new (config: Record<string, unknown>) => PgPoolLike,
+};
 
 function makeDb(pool: PgPoolLike) {
   return createPgDatabase(FAKE_PG, pool);
