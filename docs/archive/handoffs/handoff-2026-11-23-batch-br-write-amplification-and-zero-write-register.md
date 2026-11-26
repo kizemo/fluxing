@@ -3718,3 +3718,666 @@ git -C 'F:\soft\00selfmade\rime_claude' rev-parse HEAD
    ⇒ 已用 `check:no-node` 硬断言**抵消**。
 9. **台账数字三处过时**：`.run()` 27→26、`.batch()` 6→5、`.first()` 23（shim 注释写 24）；
    `src/pg/d1-shim.ts:13`/`:14`/`:287` 三处注释**仅登记未改**。
+
+---
+
+## Y W7 自建运行时落地：ECS 服务常驻 + `api.jury.xin` 端到端 200（2026-11-26）
+
+> 本节自带完整背景与实测数字，**新会话不必回翻 §X**。所有值均在写入前从盘上/现场回读。
+
+### Y-1 一句话结论
+
+路线 B 的**运行时面已从「零部署」推进到「生产可用」**：Fluxing 云同步的 Node + PostgreSQL
+自建服务已在 jury.xin ECS 上以 systemd 常驻（`127.0.0.1:8787`），公网入口
+`https://api.jury.xin/v1/health` 在**过 Cloudflare 与本机直连两条路径上都返回 200**，
+Let's Encrypt 证书已签发并注册自动续期。**产品代码、门禁、安装包、客户端切源四段一律未动**，
+本批 HEAD 仍是 `a1f326b`（`a1f326ba02c4bde13cd3067612325c2a414100dc`，分支 `feat/100-cloud-sync`）。
+
+### Y-2 生产现状（可复验）
+
+| 项 | 值 | 复验方式 |
+|---|---|---|
+| 服务单元 | `fluxing-sync.service`，`enabled` + `active`，`MainPID=1630731` | `systemctl status fluxing-sync` |
+| 运行身份 | `fluxing`(UID 997) 跑 `/usr/bin/node /opt/fluxing-sync/dist/node-main.mjs` | `ps -o user,pid,args -C node` |
+| 监听 | 仅 `127.0.0.1:8787`（不直接对外） | `ss -ltnp \| grep 8787` |
+| Node | v22.23.2（`/usr/bin/node`） | `node -v` |
+| PG | PostgreSQL **18.0**，库 `fluxing_sync`，`datcollate=C`/`datctype=C`/`datlocprovider=c` | `psql -h 127.0.0.1 -p 5432 -U postgres -d fluxing_sync -c 'select version()'` |
+| 表 | 9 表 / 22 索引 / 3 序列，所有者 `fluxing` | `\dt` |
+| 迁移记录 | `schema_migrations` **4 行**（`0001_init` / `0002_password_resets` / `0003_sync_items_updated_index` / `0004_sync_buckets`，均 `applied_at=1795701102002`） | `select count(*) from schema_migrations` |
+| 公网入口 | `https://api.jury.xin` → CF 橙云 → 源站 nginx `:443` → `127.0.0.1:8787` | 见 Y-4 判据 |
+| 证书 | `CN=api.jury.xin`，SAN `DNS:api.jury.xin`，`notAfter=Feb 24 12:59:28 2027 GMT`，签发 `Let's Encrypt YR1` | `certbot certificates` |
+
+**关键判据四行（本轮末次实测，全绿）**
+
+```
+UNKNOWN_SNI_CODE=301        # 未知 SNI 恢复为「301 → https://jury.xin」的原有行为
+IP_SNI_CODE=301             # 直连 IP 同样 301（不再是同步服务）
+API_ORIGIN_CODE=200         # 源站直连（--resolve 绕过 CF）命中 {"ok":true,...}
+API_VIA_CF_CODE=200         # 过 CF 命中同一响应体
+```
+
+### Y-3 ECS 侧本批全部变更（增量清单，回滚即按此逆序）
+
+新增 / 变更，**没有任何一条改动了既有项目**：
+
+1. PG：`CREATE DATABASE fluxing_sync TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'`，
+   执行 `0001_init.sql`（16,500 B，md5 `33b7486711b41e7fcffe6992fd5821a9`）；
+   建角色 `fluxing` 并 `ALTER DATABASE … OWNER` / `ALTER SCHEMA public OWNER` / 逐表逐序列
+   `ALTER … OWNER TO fluxing`；角色口令已设（走 stdin，`-c` 不做 `:'pw'` 替换）。
+2. 系统用户与目录：用户 `fluxing`(997, `/usr/sbin/nologin`)；
+   `/opt/fluxing-sync`、`/opt/fluxing-sync/dist`、`/opt/fluxing-sync/scripts`、
+   `/var/lib/fluxing-sync`、`/var/lib/fluxing-sync/objects`(fluxing:fluxing 755)、
+   `/etc/fluxing-sync`(root:fluxing **750**)、`/var/log/fluxing-sync`。
+3. 代码形态：**本机 esbuild 打包 → scp 单文件**，ECS 只装 `pg` 生产依赖
+   （`npm ci --omit=dev` ⇒ `added 14 packages`，`node_modules` 1 MB）。
+   不走 ECS 全量 `npm ci`（426 MB / 82 包含 wrangler 等 devDeps，而磁盘仅余 14 G）。
+   `dist/node-main.mjs` = **110,091 B**，sha256 `86010B3D80CF3B153269BDB8094BBAA0EF21C53FA81D8E710075350806E9A5AC`
+   （远端 md5 `ccb7e4b96303b6b33af33ee28e0dee18`）。
+4. 配置：`/etc/fluxing-sync/fluxing-sync.env`，`root:fluxing` **640**，450 B，**11 键**
+   （`FLUXING_PG_URL` / `FLUXING_OBJECT_ROOT=/var/lib/fluxing-sync/objects` / `AUTH_PEPPER` /
+   `ENVIRONMENT=production` / `MAIL_MODE=outbox` / `WRITE_BUDGET_ROWS_PER_DAY=80000` /
+   `WRITE_BUDGET_BUCKETS_PER_DAY=4000` 等）。
+   **值不入库**：`PEPPER_NEW_LEN=64`、`PEPPER_SHA16=8ca1eab5008510fa`、`PGPW_LEN=48`、`PGPW_SHA16=a338bf8482e47bcc`。
+5. systemd：`/etc/systemd/system/fluxing-sync.service`（644，**515 B**），
+   `EnvironmentFile=` 上条 env，`Restart=on-failure`/`RestartSec=3`，
+   加固 `NoNewPrivileges`/`PrivateTmp`/`ProtectSystem=full`/`ProtectHome`/
+   `ReadWritePaths=/var/lib/fluxing-sync`。
+6. nginx：**只新增** `/etc/nginx/sites-available/api-jury-xin.conf` + `sites-enabled` 软链
+   （`:80` = ACME webroot + 301；`:443` = 反代 8787，`client_max_body_size 64m`、
+   `ssl_protocols TLSv1.2 TLSv1.3`、独立 `api-jury-xin.*.log`），
+   另建 `/var/www/_acme/.well-known/acme-challenge`。
+   **aaPanel 管理的 `/www/server/panel/vhost/nginx/**` 一行未改**。
+7. 证书：`/etc/letsencrypt/live/api.jury.xin/**`，`certbot certonly --webroot` 签发，
+   复用既有 LE 账号（`CERTBOT_EMAIL_LEN=0`），自动续期任务已注册。
+8. #9 能力：`/opt/fluxing-sync/scripts/migrate-pg.mjs`（**2,503 B**，
+   sha256 `6a3b7e21f41bfa7d1943dfa29e36ccb4b7250a7b34c7ee9a95761fa1c0a1f844`）+
+   `/opt/fluxing-sync/migrations-pg/0001_init.sql`（16,500 B）。
+
+**回滚口令（逆序）**：`systemctl disable --now fluxing-sync` → 删 unit → 删
+`/etc/nginx/sites-available/api-jury-xin.conf` 与软链 → `nginx -t && systemctl reload nginx`
+→ `certbot delete --cert-name api.jury.xin` → 删 `/opt/fluxing-sync`、`/etc/fluxing-sync`、
+`/var/lib/fluxing-sync` → `DROP DATABASE fluxing_sync; DROP ROLE fluxing;`。
+**动 `api.jury.xin` 之外任何东西都不在回滚范围内（不该动）。**
+
+### Y-4 关闭的阻塞（逐条证据）
+
+- **#1 `api.jury.xin` 被 301 占用** ⇒ ✅ 解除。源站精确 `server_name` 优先于默认 ⇒
+  仅靠新增独立 vhost 就实现「只放行 `api.jury.xin`」，**无需碰 Cloudflare**（印证用户拍板①）。
+- **#2 橙云 / SSL** ⇒ ✅ 证书已签、橙云已在；**443 隐式默认 server 回归已修**
+  （我们的文件按字母序排最前会隐式接管 443；已显式追加 `listen 443 ssl default_server` +
+  `server_name _` + `ip_redirect/ip.crt` + `return 301 https://jury.xin$request_uri`，
+  与 W7 之前行为一致；`nginx -t` 通过、`RELOAD_EXIT=0`、未知 SNI 复测 301）。
+- **#3 零部署面** ⇒ ✅ 全闭合（本机打包 / 骨架上机 / 生产依赖 / systemd / vhost / TLS）。
+- **#6 PG 大版本** ⇒ ✅ 实测 **PostgreSQL 18.0**（早前 recon 的「未证实」已修正），
+  14.24 客户端兼容。
+- **#8 ECS `npm ci`** ⇒ ✅ 通过（`NPM_CI_EXIT=0`，`PG_IMPORT_OK function`）。
+- **源站 443 直测取证不可信** ⇒ ✅ 排除。`PROXY_ENV_COUNT=0`（root 环境无代理变量），
+  改用 `--noproxy '*'` + `$$` 唯一临时名后，四行判据稳定可复现。
+
+### Y-5 仍然开口（**含三项必须用户裁决**）
+
+1. **#4 磁盘 89% / 仅余 14 G** —— 归因已完成（见 Y-6），但**回收需用户裁决**：
+   `evidence.bak-*` 是 **evidence BI 站的历史备份，属用户数据**，我无权删。
+2. **#5 `5432` 公网暴露**（`pg_hba host all all 0.0.0.0/0 md5`）—— **不可自行收口**：
+   `E:\storedata-upload` 与 `F:\soft\00selfmade\jsterp-upload` 都从本机经公网 5432 用
+   `kizemo` 连 `taobao` / `erp` / `jst_dw`。要收窄必须先定方案：
+   「按源 IP 白名单 / 只放行特定库 / 全改 SSH 隧道」三选一。**需用户裁决**。
+3. **#7 ICP 备案主体与备案号** —— 无查询凭据，仍未核实。
+4. **生产 `AUTH_PEPPER` 值不可获得**：本机无 `.dev.vars`，`wrangler secret` 只能列名字。
+   `users.verifier = HMAC(AUTH_PEPPER, auth_key)` ⇒ **换 pepper 就无法沿用旧 verifier**。
+   **下一步必须先测 D1 生产 `users` 行数**：行数少则重建成本可忽略、此项自动消解；
+   行数大则必须保持同一 pepper（否则切读后全体用户要重设密码）。
+5. **U1 补偿语义**（R2 不参与 D1 事务）—— 用户已说「同意你的建议」，但**具体是哪一条
+   （延迟提交 / 版本化 key / 失败回写旧对象）在 handoff / ADR / recon 盘上无明文**，
+   需在 ADR 里定稿后才能写代码。
+6. **BR-①h 未开工**（`FormatReconcileDiagLine` 增 `early_exit` + 早退原因）⇒
+   切源「校验段」前置未满足。用户已拍板它排在切源之前。
+7. **`package-lock.json` 钉死 `registry.npmmirror.com`**（241 行，npmjs 0 行，仓库无 `.npmrc`）⇒ 单点。
+8. **`migrate:local` / `migrate:remote` 仍是 D1 专用口径**：PG 侧执行器已建（Y-7），
+   但 npm script 未改口径（属产品代码，未动）。
+9. **#10 `README` 口径过时** —— 未动手（属产品代码）。
+10. 既有隐患（非本批引入）：`sales-bi-update.service` / `certbot.service` failed、
+    `/etc/cloudflared/config.yml` 权限 `0666`。
+
+### Y-6 #4 磁盘归因（唯一确定结论）
+
+```
+/dev/vda2  118G  100G  14G  89% /            （无独立数据盘）
+/var/www = 50G，其下 115 个子目录，CHILD_SUM=50G
+非 evidence.bak 内容合计仅 ≈ 750M：
+  /var/www/evidence                      189M
+  /var/www/evidence.torn-state-2026-10-07 183M
+  /var/www/evidence.broken-*              ~470M
+  /var/www/evidence.data.prod-2026-10-07   17M
+  /var/www/_acme（本轮 ACME webroot）      16K
+  /var/www/html                             8K
+```
+
+⇒ **`evidence.bak-*` 约 100 个、合计约 49 G 是唯一实质可回收量**（单目录 708M–2.3G，
+横跨 20260927–20261009）。**我不删**：属用户数据；且 `du` 单层明细只作了 tail 截取、
+逐目录精确清单尚未落盘（见 `reports/fluxing-br-1g/w7/disk-and-migrate-probe-out.txt`）。
+**建议**：保留最新 3–5 个 + `evidence.data.prod-2026-10-07`，其余归档到对象存储后删除，
+可一次性回落到 60% 以下。
+
+### Y-7 #9 迁移执行器（新能力，已实测）
+
+`/opt/fluxing-sync/scripts/migrate-pg.mjs` 语义：
+
+- 按文件名升序取 `NNNN_*.sql`；已记入 `schema_migrations` 的 **SKIP**；
+- 每个文件**单次 `client.query(sql)`** 提交（`0001_init.sql` 自带 `BEGIN;`/`COMMIT;`，
+  外层不再包事务，避免与文件内事务重复）；
+- 成功后补 `INSERT INTO schema_migrations(version) … ON CONFLICT DO NOTHING`
+  （兼容压平基线文件自身已写入记录的情况）；
+- **反向检查**：`schema_migrations` 有记录但目录无对应文件 ⇒ 打印 `MIGRATE_ORPHAN`
+  （压平基线属正常，仅告警不失败）；
+- 缺 `FLUXING_PG_URL` ⇒ `MIGRATE_FAIL` + exit 1（fail closed）。
+
+**实测（两次，幂等）**
+
+```
+MIGRATE_ORPHAN 0002_password_resets / 0003_sync_items_updated_index / 0004_sync_buckets
+MIGRATE_SKIP 0001_init
+MIGRATE_SUMMARY files=1 applied=0 skipped=1 failed=0
+MIGRATE_EXIT=0   MIGRATE_EXIT2=0   MIGRATIONS_ROWS=4
+```
+
+⚠ **口径提醒**：`migrations-pg/` 只有 `0001_init.sql` 一个文件，是**压平基线**——
+0002/0003/0004 的 DDL 已被合并进 0001 并同步写入 4 条记录。**不要**据此认为「缺 3 个文件是缺陷」。
+
+### Y-8 本轮工具坑（新增 7 条）
+
+1. **`curl --resolve` 在源站被机器级代理绕过** ⇒ 读到的是别的站响应体；且复用固定
+   `/tmp/t1.txt` 会残留污染 ⇒ **一律 `--noproxy '*'` + `$$` 唯一临时名**。
+2. **nginx 隐式默认 server 由 include 顺序决定**：新增 vhost 文件名按字母序靠前
+   就会**静默接管 443 默认 server**，把「IP/未知 SNI → 301」改成命中业务服务 ⇒
+   加 vhost 时**必须同时显式声明 `default_server`**（或确认既有默认块仍在）。
+3. **`psql -c` 不做 `:'pw'` 变量替换** ⇒ 设口令必须走 stdin 或 `-f`。
+4. **`REASSIGN OWNED BY postgres TO fluxing` 被拒** ⇒ 逐表逐序列 `ALTER … OWNER TO`。
+5. **`node` 脚本导入 `pg` 必须放在 `/opt/fluxing-sync/` 下**，`/tmp` 解析不到 `node_modules`
+   （`ERR_MODULE_NOT_FOUND`），曾因此误判「PG 校验失败」。
+6. **`pg` 的 `pool.query("create…; insert…; select…")` 返回结果数组**，取 `[0]` 会错位 ⇒
+   拆成三次独立 query。
+7. **测试脚本经 stdin 喂 `sudo bash -s` 时首行 BOM 会报**
+   `bash: line 1: #!/bin/bash: No such file or directory` —— **无害噪声**，后续行照常执行。
+
+### Y-9 下一步（下一会话的起手式）
+
+按优先级：
+
+1. **测 D1 生产 `users` 行数**（一条 `wrangler d1 execute --remote` 只读 COUNT）⇒
+   决定 `AUTH_PEPPER` 是否必须沿用（Y-5 第 4 条）。这一步不依赖任何裁决，**可立即做**。
+2. **把 U1 补偿语义写进 ADR**（Y-5 第 5 条）⇒ 定稿后才有资格写代码。
+3. **BR-①h**（`FormatReconcileDiagLine` 增 `early_exit` + 早退原因）⇒ 门禁用例 → 升版出包 → 装机。
+4. 等用户裁决 #4（备份清理方案）与 #5（5432 收口方案）。
+5. 切源四段（双写 → 校验 → 切读 → 退役）**不得跳段**；桶化长期冻结 phase 0，
+   阶段 3/4 永不启用；`AC-09` 仍 FAIL 不得改记。
+
+**证据文件**（`reports/**` 不入库，换机需重放）：
+`F:\soft\00selfmade\rime_claude\reports\fluxing-br-1g\w7\`
+下 `default-srv-fix-out.txt`（443 默认 server 四行判据绿）、
+`deploy-migrator-out.txt`（迁移执行器幂等 + 磁盘归因）、
+`disk-and-migrate-probe-out.txt`（`schema_migrations` 结构与 4 行、`/opt` 树）、
+`nginx-api-out.txt`（证书签发）、`tls-verify-out.txt`（SNI 三态）、
+`svc-install-out.txt`（systemd 常驻）、`fix-and-smoke-out.txt`（首次 200）。
+
+---
+
+## Z U1 补偿语义定稿：ADR 0080「版本化 key + 提交后删旧对象 + 孤儿兜底 GC」（2026-11-26）
+
+本节是**路线 B 切源四段的第一份交付物**（执行序经用户授权调整为
+`U1 ADR → BR-①h → 迁移演练 → 切源四段`，原依赖序把 BR-①h 排在前面）。
+U1 定稿前，切源「校验段」没有可判定的判据来源，所以必须先定语义。
+
+### Z-1 本轮产出（唯一产物）
+
+| 项 | 值 |
+| --- | --- |
+| 文件 | `docs/adr/0080-u1-object-write-compensation-versioned-key-and-orphan-gc.md` |
+| 规模 | **286 行 / 18,864 B** |
+| sha256 前 16 位 | `9EAD935E2C8EEF2B` |
+| 状态 | **Accepted**（语义定稿；**代码未改**，落码属后续独立批次） |
+
+**本轮未改任何产品代码、未跑门禁、未出包、未入库（未 commit / 未 push）**。
+工作区改动 = 本 ADR（新增）+ 本节（`M`）+ 接力 prompt 就地改写（`M`）。
+
+### Z-2 定稿语义（六条，逐条可判）
+
+1. **key 形态**（D1）：
+   - 条目级 `u/<uid>/<sha256(item_key)>.<hlc_ms>-<hlc_counter>-<dev12>`
+   - 桶级 `b/<uid>/<sha256(device_id)>/<sha256(bucket_key)>.<hlc_ms>-<hlc_counter>-<dev12>`
+   - `dev12 = sha256Hex(utf8(hlc.device))[0:12]`。**必须含设备维度**：条目级 key 本身不含设备
+     （`u/` 是跨设备单视图），版本号若只取 `ms-counter`，A/B 设备同毫秒同计数器会撞出同一 key ⇒
+     退化成覆盖 ⇒ U1 原地复活。
+   - **点号同层，不进子目录**：本地 fs 底座把 `/` 映射成目录，`u/<uid>/<hash>/<ver>` 会给 40,069
+     个条目各建一个目录；`<hash>.<ver>` 仍是单层文件。`encodeSegment` 只转义**段尾**的点，
+     `<hash>.<ver>` 的点不在段尾 ⇒ 编码可逆。
+   - 长度 103 → 约 138（条目）/ 168 → 约 203（桶）。`r2_key` 两侧底座都是 `TEXT` ⇒ **无需 DDL**。
+2. **写序五步**（D2）：预算护栏 → 算新 key → put R2 新对象 → D1 batch（DELETE+INSERT，行内
+   `r2_key` = 新 key，**这是提交点**）→ 提交成功后删旧 `r2_key`。
+3. **删除三条件**（D3，三条同时成立）：batch 返回成功 / 变更前 `r2_key` 存在 / **旧 key ≠ 新 key**。
+   第三条是唯一能造成数据丢失的写法（同版本重推时删了就等于删掉刚写的对象），必须显式排除。
+   删除失败**不得**让整批报错（提交已成功）：只记 `[fluxing-sync] orphan object left key=<key>`。
+   删除形态 = 单批一次 `delete(keys[])`（`account.ts:41` 已在用）⇒ 每批 R2 请求 +1，
+   不改变 ADR 0074 的「并发 6 / 15 s 客户端超时」结论。
+4. **幂等降级**（D4）：从「无条件幂等」降为「条件幂等」——重试同一请求体 ⇒ `(ms,counter,device)`
+   不变 ⇒ 同 key 覆盖（等价现状）；重试时 HLC 已前进 ⇒ 多一个对象，但 D1 单行、指针指向最后成功那次
+   ⇒ **数据仍一致**。净效果：把「一致性风险」结构性降级为「空间债」。
+5. **读路径零改动**（D7）：拉取只用行内指针（`sync.ts:448`、`sync-buckets.ts:365`），从不按规则拼 key
+   ⇒ key 变形对读透明。`account.ts` 按前缀 `u/<uid>/`、`b/<uid>/` 整体清 ⇒ 多版本对象都在前缀内，
+   「清完自证」不变量继续成立；`deleted_objects` 口径自动扩为含版本残留，**字段名不变**。
+6. **零迁移 + 混合态合法**（D8）：不改任何存量行的 `r2_key`、不重命名存量对象（红线：不清洗数据）。
+   旧行指针仍有效仍可读；任何条目/桶下次被成功推送时自动升级为版本化 key ⇒ 混合态**收敛**，
+   「一直没被再推送」的旧对象是允许的终态。
+
+### Z-3 为什么否掉另两个候选（写进 ADR §1.3，避免以后重复讨论）
+
+- **A 延迟提交**：R2 无原子 rename，「临时 key → 正式 key」的「提升」本身就是第二次写，
+  失败窗口只是搬家；且读路径要认两种 key。
+- **C 失败回写旧对象**：回写本身也会失败（同一个 R2）；要回写必须先留住旧内容 ⇒ 等于自建影子存储，
+  复杂度超过收益。
+- **B 版本化 key 的结构性收益**：索引与对象之间从「覆盖关系」变成「指针关系」⇒ 跨版本混搭
+  **在结构上不可能**。且回滚不需要数据清理（读路径只用指针）——这是相对 A 的额外优势。
+
+### Z-4 本轮读盘核实的事实（ADR 里引用前已逐条确认，勿从旧摘要抄）
+
+| 事实 | 位置 / 证据 |
+| --- | --- |
+| 现状 R2 覆盖语义 + 写序「R2 先 D1 后」 | `r2-write.ts` 头注释 + `:57-69`；**该文件实测 69 行**（旧摘要写的「128 行」有误） |
+| 预算护栏在任何写之前 | `sync.ts:315-329`、`sync-buckets.ts:225-232` |
+| 条目写 R2 / D1 batch / serverSeq | `sync.ts:331-357` / `:359-391` / `:393-412` |
+| 拉取用行内指针 | `sync.ts:430-439`（SELECT 含 `r2_key`）、`:448` |
+| 自愈「对象缺失即删索引行」 | `sync.ts:449-454`；桶侧 `sync-buckets.ts:366-372`（丢一整桶） |
+| `cipher_len` 不一致只 warn 不拦截 | `sync.ts:456-460`；桶侧 `sync-buckets.ts:374-378` |
+| 条目 key / 桶 key 生成 | `wire.ts:214-216`（`u/<uid>/<hash>`）/ `:329-336`（`b/<uid>/<devHash>/<bucketHash>`） |
+| 前缀 clear 与自证 | `account.ts:53-79`（`clearPrefix`）、`:73-76`（自证）、`:85-86`（两个前缀）、`:41`（数组 delete） |
+| `encodeSegment` 只转义段尾点 / 段首下划线 / 保留设备名 | `pg/r2-fs.ts:81-89`；往返 `:98-126` |
+| `r2_key` 列类型 = `TEXT`（无长度上限） | `migrations/0001_init.sql:65`、`migrations/0004_sync_buckets.sql:41`、`migrations-pg/0001_init.sql:123` 与 `:192` |
+
+### Z-5 落码清单（下一批次，尚未执行）
+
+改动面（预计）：`r2-write.ts`（新增版本号生成 + 删除步骤，或扩 `R2WriteBucket` 的 `delete`）、
+`wire.ts`（`r2KeyFor` / `bucketR2KeyFor` 增加版本参数）、`sync.ts:331-357`、
+`sync-buckets.ts:236-258`、`test/TestFluxingCloud`（ts 侧单测）与 `test:pg` 用例。
+
+门禁（ADR §3 的 I1–I8）：同 key 重推不删 / batch 失败不删 / 删除失败仍成功 / 版本号纯函数 /
+预算超限零写入 / 前缀 clear 清多版本 / 桶设备维度不被破坏。基线：`npm run check` 绿、
+`npm test` **PASS=951**、`npm run test:pg` 全绿、`wrangler deploy --dry-run` Workers 包 **91,912 B**。
+
+### Z-6 未做 / 未验证（不得当成已完成）
+
+- ADR 的语义**未落码**，因此 I1–I8 **一条都还没跑**；「混搭不可能」目前是**结构论证**，不是实测结论。
+- 未做真机验证（前置 = 落码 + BR-①h + 迁移演练）。
+- 未提交、未 push。
+- ADR §7 明确列为非目标、**本轮也未动**：R2 事务化 / 周期性自动 GC / 历史对象 key 迁移 /
+  `account.ts` 语义 / 桶化 phase（恒 0）/ `AC-09`（仍 FAIL）/ 规则 1 盲区。
+
+### Z-7 坑（本轮新增）
+
+1. **旧摘要的 `r2-write.ts` 行数（128）与实测（69）不符** ⇒ 任何进台账的规模数字必须当场
+   `ReadAllLines().Count` 回读，不得从压缩摘要抄（与 AGENTS.md §5「台账数字盘上回读」同源）。
+2. **`r2_key` 长度是设计前置**：版本化加长约 35 字符，若该列曾是 `VARCHAR(128)` 则方案直接不可行。
+   本轮先查列类型再定稿，避免把「写得出 ADR、落不了码」的设计写进台账。
+3. **`sync.ts` 的自愈逻辑与版本化有耦合**：`object === null` 会**删索引行** ⇒ 任何误删「当前指针」
+   的路径都会静默丢数据。GC 判据必须排除当前指针，且必须有必红阳性对照；不然「加了 GC」比
+   「没有 GC」更危险。
+4. 追加 handoff 前先探测编码：本文件是 **LF / 无 BOM / 有末尾换行**，不要按 CRLF 或加 BOM 写。
+
+### Z-8 下一步（按依赖序）
+
+1. **U1 落码批次**：按 ADR 0080 D1–D10 改上述四处 + 补 I1–I8 用例，跑 `npm test` / `test:pg` /
+   `wrangler deploy --dry-run`，登记包体积变化。
+2. **BR-①h**：`FormatReconcileDiagLine` 增 `early_exit` + 早退原因（含门禁用例）+ 升版 1.3.12 出包。
+3. **迁移演练**：D1 画像已取齐（`users=4 / devices=25 / refresh_tokens=234 / sync_items=40,069 /
+   sync_buckets=1,000 / email_verifications=8 / password_resets=2 / mail_outbox=4`，
+   库 22,007,808 B，证据 `reports/fluxing-br-1g/w7/d1-rowcounts.txt`）⇒ 全量搬进 PG 并做双向核对。
+4. **切源四段**：双写 → 校验 → 切读 → 退役；**不得跳段**，ADR 0079 D8 三条硬闸门一条不解除。
+   切读前必须解决三个已知洞：`sync_buckets` 1,000 行（Σ 92,353 条）必须搬进 PG；
+   `WRITE_BUDGET_ROWS_PER_DAY` 80000 与 §O 拍板的 20,000 不一致；规则 1 盲区。
+
+
+## AA U1 落码：ADR 0080「版本化 key + 提交后删旧对象 + 孤儿兜底」（2026-11-26）
+
+> 上承 `## Z`（ADR 0080 语义定稿，代码未改）。本机 HEAD = `a1f326ba02c4bde13cd3067612325c2a414100dc`，分支 `feat/100-cloud-sync`。
+> **本轮未 commit / 未 push**（用户未要求）。以下所有数字均为盘上回读值，不是估算。
+
+### §AA-1 产出表（7 改 + 1 新增，全部已落盘）
+
+| 文件 | 行数 | 字节 | sha16 |
+|---|---|---|---|
+| `cloud/fluxing-sync/src/wire.ts` | 386 | 16,842 | `2371400D6F0EC55B` |
+| `cloud/fluxing-sync/src/r2-write.ts` | 124 | 5,556 | `598A9DF8E62E9806` |
+| `cloud/fluxing-sync/src/sync.ts` | 523 | 21,632 | `BB368FB6EAED6F60` |
+| `cloud/fluxing-sync/src/sync-buckets.ts` | 438 | 19,068 | `553895C17CA50458` |
+| `cloud/fluxing-sync/test/bucket-sync.test.ts` | 828 | 34,093 | `DE8B7A639163767C` |
+| `cloud/fluxing-sync/test/r2-write.test.ts` | 210 | 7,499 | `FE05A05C699A691B` |
+| `cloud/fluxing-sync/test-pg/d1-api-surface-audit.test.ts` | 423 | 16,092 | `7EA8EF2A9DD1890A` |
+| `docs/adr/0080-…-orphan-gc.md`（`## Z` 轮产出，本轮未改） | 286 | 18,864 | `9EAD935E2C8EEF2B` |
+
+改动内容：
+
+1. `wire.ts`：新增一节「版本化对象键（ADR 0080 语义 1–2）」+ 三个纯函数
+   `hlcVersionSuffix(hlc)` / `r2KeyForVersioned(userId, itemKeyHashHex, hlc)` / `bucketR2KeyForVersioned(userId, deviceId, bucketKey, hlc)`。
+   形态 `u/<uid>/<sha256(item_key)>.<ms>-<counter>-<dev12>`、`b/<uid>/<sha256(device_id)>/<sha256(bucket_key)>.<ms>-<counter>-<dev12>`，
+   `dev12 = sha256Hex(utf8(hlc.device))[0:12]`。**旧 `r2KeyFor` / `bucketR2KeyFor` 保留不删**（存量测试/文档大量引用旧形状；混合态合法，ADR 0080 语义六）。
+2. `r2-write.ts`：`R2WriteBucket` 增**可选** `delete?(keys: string[]): Promise<unknown>`；新增 `deleteAllQuietly(bucket, keys): Promise<number>` ——
+   去重去空键 → 整批一次 `bucket.delete(unique)` → 成功回传键数；抛错则打 `[fluxing-sync] orphan delete batch failed keys=N: <reason>`
+   + 逐键 `[fluxing-sync] orphan object left key=<key>`，**永不上抛**，返回 0；桶未实现 `delete` 时同口径逐键留痕。
+3. `sync.ts`：import 切到 `r2KeyForVersioned` + `deleteAllQuietly`；预读 SELECT 增 `r2_key`（type 同步增 `r2_key: string`）；
+   紧随其后建 `previousR2Keys: Map<string,string>`（**只从预读原始行取**，与 HLC 守卫用的 `current` Map 分开存）；
+   `staged` 改用 `r2KeyForVersioned(auth.userId, keyHash, item.hlc)`；`await env.DB.batch(statements)` 之后新增「2.5) 旧版本对象回收」块。
+4. `sync-buckets.ts`：同构四处（版本化键 / 预读 `r2_key` / 旧键 Map 作用域 = 同设备同桶 / batch 后回收）。
+5. `test/bucket-sync.test.ts`：把「旧 HLC ⇒ 整桶跳过」用例末尾断言改成 ADR 0080 新语义 —— fresh 推后 `listKeys('b/<uid>/')` 长度 1、
+   新键 ≠ 旧键、键形状 `^b\/[^/]+\/[0-9a-f]{64}\/[0-9a-f]{64}\.\d+-\d+-[0-9a-f]{12}$`、新键内容 = `blobFor(4,10)`、**旧键 `readObject` 为 `null`**。
+6. `test/r2-write.test.ts`：新增 `describe('deleteAllQuietly')` 四条（成功去重且只一次 delete / delete 抛错 resolves 0 且逐键 orphan 日志 + batch failed 留痕 / 桶不实现 delete 时留痕 / 空列表与全空键不触发 delete）。
+
+### §AA-2 门禁实测
+
+- `npm run check`（= `check:endpoint` + `check:no-node` + `vitest run`）= **CHECK_EXIT=0**，`Test Files 13 passed (13)` / `Tests 168 passed (168)`；基线 164 ⇒ **+4**（`deleteAllQuietly` 四条）。日志 `reports/fluxing-br-1g/u1/check3.log`。
+- 首次跑（改动后、修测试前）曾 `CHECK_EXIT=1`，唯一失败 = `test/bucket-sync.test.ts:315` `expected null to deeply equal Uint8Array[…`(旧对象已被删，属**预期语义变化**)；按新语义改写断言后转绿。
+- `npm run test:pg` = **PG_EXIT=1**，但**零断言失败**：`Tests 32 passed | 23 skipped (55)` / `Test Files 4 failed | 3 passed (7)`。
+  4 个 failed 文件全部是加载期抛 `缺少环境变量 FLUXING_PG_URL`（`batch-atomicity` / `changes-normalization` / `d1-shim-pg` / `harness`），伴随 afterAll 的
+  `TypeError: Cannot read properties of undefined (reading 'close')` 二次报错 ⇒ **本机根本没有 PG，不是代码缺陷**。日志 `reports/fluxing-br-1g/u1/test-pg2.log`。
+- 上述 4 个 suite 在本机**不可复现**「7 files · 55 tests 全绿」基线；要复跑必须设 `FLUXING_PG_URL`（ECS 侧 `fluxing_sync` 存在，但本会话 SSH `Permission denied (publickey)`）。
+- **台账行号漂移已修**：`test-pg/d1-api-surface-audit.test.ts` 的 `W-5.4`（`.first()` 23 站点）与 `W-5.5`（`.batch()` 5 站点）期望表因本轮向两处写路径插行而失配。
+  按盘上真实行号刷新 8 处：`sync-buckets.ts` 305→336 / 313→344 / 292→307 / 394→425；`sync.ts` 403→437 / 410→444 / 391→408 / 473→507。
+  **站点总数不变**（`.first` 23、`.batch` 5、`.exec` 3），后续改这两文件的写路径必须同步刷新该表。
+
+### §AA-3 关键实现判断（六条，都是「错了会静默出事」的地方）
+
+1. **删除动作必须在 `env.DB.batch` 返回之后**：batch 是提交点；先删对象再提交，一旦提交失败就出现「行指向已删对象」= 客户端拉到 NULL ⇒ 自愈删行 ⇒ 丢数据。
+2. **删除异常必须吞掉**：删除失败若让整批报错，客户端会重推 ⇒ 真写放大（本批要治的正是这个）。
+3. **旧 `r2_key` 只能从预读 SELECT 取**：batch 是 `DELETE`+`INSERT`，提交后旧行已不存在，事后无从得知旧键。
+4. **`previousR2Keys` 与 HLC 守卫的 `current` Map 分开存**：若共用一个 Map，本批 accepted 的新键会覆盖旧键 ⇒ 回收块把**刚写的新对象**删掉。
+5. **批量删整体失败时按「一个都没删掉」保守登记**：多记孤儿不造成数据问题，漏记会留下无主对象且无人知晓。
+6. **`delete` 声明为可选而非必选**：让只读/只写测试假桶继续满足契约；不实现 ⇒ 退化为「留孤儿 + 日志」，不影响一致性。
+
+### §AA-4 新底座核对（路线 B 相关，已回读源码）
+
+`src/pg/r2-fs.ts:286` 已实现 `async delete(keys: string | readonly string[]): Promise<void>`（逐键 `rm({force:true})`，不存在视为成功），
+**收数组** ⇒ U1 的 `deleteAllQuietly` 在自建底座上**真删**，不会退化成「只留日志」。R2 原生 `delete` 同样收 `string | string[]`，
+所以 `delete?(keys: string[])` 这一个签名同时适配两条腿 —— 切源不需要再动这里。
+
+### §AA-5 未做 / 未验证（不得当成已完成）
+
+- **未 commit / 未 push**：工作区 7 个 `M` + 1 个 `?? docs/adr/0080-…`（另有 `m librime` 子模块脏、`?? release/` `?? reports/**` 不入库）。
+- **node 侧 esbuild 包未重打**：本轮没有重新生成 110,091 B / `86010B3D…` 那个基线包。缓解证据 = `npm run check` 内含 `check:no-node`
+  （禁 `node:` 内置导入），且新增代码只用 `Promise`/`Map`，无新平台依赖。**但「能打出来」与「打包体积」本轮均未实测**。
+- **`wrangler deploy --dry-run` 未跑**（基线 91,912 B）。路线 B 下 Workers 包已降级为「过渡期腿」，不再是要维护的发布物；
+  本轮不跑，记为**已知缺口**而非阻塞。
+- **PG 侧 4 个 suite 未跑通**（缺 `FLUXING_PG_URL`）；`d1-api-surface-audit` 的行号表只做了静态刷新，未经真库验证。
+- **真机未验**：U1 是服务端对象层改动，对客户端 1.3.11 无可观测变化；装机判据（三处 sha256 全等）本轮**不适用**。
+- **周期性自动 GC 未实现**（ADR 0080 明确不在本 ADR 范围）。
+
+### §AA-6 红线复述（本轮未触碰）
+
+桶化 phase 恒 0 · 阶段 3/4 **永不启用**（硬前置 = 云端历史 40,061 条先完成桶化覆盖，ADR 0077:411-412；且规则 1 盲区未修）·
+`AC-09` 仍 **FAIL** 不得改记 · `AC-213`/`AC-214` 永久退役 · `AC-212`/`AC-215②` 未判定 · 凭据值不进日志 · `jury.xin` apex 只动子域。
+
+### §AA-7 新增坑（下一会话直接用）
+
+- **`test:pg` 的行号台账会随写路径插行漂移**，且它**不在** `npm run check` 里 ⇒ 改 `sync*.ts` 后只跑 `check` 会漏掉这类红。
+- **本机没有 PG**：`npm run test:pg` 在本机永远 exit 1（4 个 suite 加载期抛错 + afterAll 二次 TypeError）。
+  **判「test:pg 是否真绿」只能看 `Tests` 行的 failed 数**，不能看退出码。
+- ADR 0080 的回收块插在 batch 之后 ⇒ 任何「在 batch 前后插代码」的改动都会再次移动 `W-5.4`/`W-5.5` 期望行号。
+
+### §AA-8 下一步依赖序（不变）
+
+① **BR-①h**：`FormatReconcileDiagLine`（`WeaselServer/Cloud/CloudSyncService.cpp:1054`，落在 `SyncOnce` 包装器里**无条件**打印）增
+`early_exit` + 早退原因（维护闸门 / 生命周期锁 / `ExportUserDict` 失败）+ 门禁用例 + 升版 **1.3.12** + 出包装机实证。
+机制已定案：`SyncRound()`（`:1061+`）在 `local_entries`（`:1198`）之前的任何早退都让 `stats` 保持默认 0 ⇒ 早退轮与真空轮日志**完全同形**，这是切源「校验段」的前置。
+② 首次生产数据迁移演练（D1 画像已取齐，见 `reports/fluxing-br-1g/w7/d1-rowcounts.txt`；PG 端 `fluxing_sync` 现为零业务数据）。
+③ 切源四段（双写→校验→切读→退役，不得跳段）。切读前必修三个洞：`sync_buckets` 1,000 行（Σ 92,353 条）搬进 PG /
+`WRITE_BUDGET_ROWS_PER_DAY` 80,000 与 §O 拍板 20,000 不一致 / 规则 1 盲区。
+
+### §AA-9 CLAUDE.md 未同步（有意）
+
+`CLAUDE.md` 已超注入预算（被 local-runtime-v2 截断在 32,768 B），本轮**不改它**：新增事实全部落在本 handoff 顶节，
+指针由接力 prompt 承担。若下一会话要改 `CLAUDE.md`，必须先做体积瘦身，否则改动会被截断吞掉。
+
+## AB（2026-11-26 23:20 · BR-①h 收口：`early_exit` 诊断字段落码 + 1.3.12 出包装机三处 sha256 全等；**真机 `early_exit` 行未取到**）
+
+### AB-1 为什么有这个批次（背景，新会话必读）
+
+`FormatReconcileDiagLine` 原先在 `CloudSyncService::SyncOnce` 里**无条件**打印 reconcile 统计行，
+而 `SyncRound` 一旦早退，`CloudReconcileStats` 保持默认 0 ⇒ **"早退没跑"和"真跑了但零变化"在日志里逐字同形**。
+BR-①g 的"稳态零写不成立"判定、以及多轮"pushed=0 skipped=0"都吃过这个亏（探针无法分辨"没推"与"没跑"）。
+**用户数据不受影响**：ADR 0078 三重护栏（export_empty_skipped / import_empty_rejected / semantic legacy_rows）+ ADR 0076 D2-5a-9 语义指纹仍在位。
+本批次**不立项为"修 bug"**，定性 = **诊断行语义缺陷**。
+
+### AB-2 代码落点（盘上已存在；**未 commit**）
+
+- `WeaselServer\Cloud\CloudSyncService.h`
+  - `enum class CloudSyncEarlyExit` **:454**，16 值：`kNone` / `kUnattributed` / `kNotReady` / `kNotLoggedIn` / `kMaintenanceGate` /
+    `kBeginMaintenanceGate` / `kBeginMaintenance` / `kExportUserDict` / `kParseUserDict` / `kDictRowsToEntries` /
+    `kPullFailed` / `kPullDecodeFailed` / `kBucketPullFailed` / `kSidecarSaveFailed` / `kEndMaintenanceFailed` / `kPushFailed`
+  - `EarlyExitCodeText` **:490-527**（单一真相源，R7）
+  - `CloudReconcileStats.early_exit` **:536**
+  - `FormatReconcileDiagLine` **:545**，追加逻辑 **:552-554** —— **只在早退轮**追加 `" early_exit=..."`，
+    既有五字段（`scan_complete` / `matched` / `deferred` / `divergent` / `pushed`）**逐字不变**（三处既有断言零改动）
+- `WeaselServer\Cloud\CloudSyncService.cpp`
+  - `MarkEarlyExit` 定义 **:1039**
+  - `diag::AppendLine("cloudsync", FormatReconcileDiagLine(stats))` **:1066**
+  - 14 处早退调用：**:1097 / :1104 / :1121 / :1164 / :1172 / :1185 / :1196 / :1222 / :1260 / :1278 / :1318 / :1743 / :1754 / :1763**
+  - `SyncOnce` 兜底 **:1060-1061**：`!ok && early_exit == kNone` ⇒ 强制 `kUnattributed`（防漏标）
+- `test\TestFluxingCloud\TestFluxingCloud.cpp`：夹具 `struct Br1hBackend` + 用例 `TestCloudEarlyExitDiag()`
+  （15 条文案表用**字面量**而非调用 `EarlyExitCodeText` + `kNone` 逐字断言 + 混合断言 + B1 fail_begin + B2 fail_export + 成功轮对照），main 已注册。
+
+**口径取舍（裁决，不得回退）**：`early_exit` **仅早退轮追加**（非恒定追加）⇒ ① 存量五字段口径零漂移；
+② 真机探针既有期望值不受影响；③ "无该字段" ≡ "已越过 `local_entries`"，语义无歧义。
+
+### AB-3 门禁（盘上回读）
+
+- 编译：`& 'C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\MSBuild.exe' 'test\TestFluxingCloud\TestFluxingCloud.vcxproj' /p:Configuration=Release /p:Platform=x64 '/p:SolutionDir=F:\soft\00selfmade\rime_claude\' /m /v:m /nologo` ⇒ 产物落**仓库根** `Release\TestFluxingCloud.exe`
+- 运行：`TOTAL_LINES=1040`、**`RESULT: PASS=986 FAIL=0`**、**`VERDICT: ALL PASS`**
+- 基线 `PASS=951` ⇒ **+35**。`FAIL_LINES=16` 全是**含 `kAuthFailed` 字面的用例名**，非失败行。
+- 坑（沿用）：`weasel.sln` **不含** `TestFluxingCloud` 工程 ⇒ 必须单独 msbuild + 显式 `/p:SolutionDir=`，否则跑的是上一轮旧 exe、PASS 恒为旧基线。
+
+### AB-4 出包装机（四处 sha256 全等，已达成）
+
+| 位置 | 尺寸 | 版本 | sha256 |
+|---|---|---|---|
+| `build\windows\x86\release\WeaselServer\WeaselServer.exe` | 3,104,256 B | 1.3.12.0 | `1AB2247913BAF454FAEB581DA7BB55BD6BC02FA73436020CD42C5D0873137500` |
+| `output\Win32\WeaselServer.exe`（NSIS 源） | 3,104,256 B | 1.3.12.0 | 同上 |
+| 包内（7z 提取，双条目同名同值） | 3,104,256 B | — | 同上 |
+| `D:\Program Files\fluxing\weasel\WeaselServer.exe`（装机后） | 3,104,256 B | 1.3.12.0 | 同上 |
+
+- 包：`output\archives\fluxing-1.3.12-installer.exe` = **43,150,852 B** / mtime **2026-11-26 23:10:47** / sha256
+  **`4B4C5063D92434456F191FDFF7D4E27350073028A0BCA3939334A467E495E263`**
+  （makensis 回读：`Total size: 43150852 / 157274069 bytes (27.4%)`；8 条 `warning 7010` = ARM 系列 dll 与 `data\*.gram` / `data\lua\*.txt` 缺失，**历史同形，无害**）
+- 装机：`tmp\br1h-install.bat`（`/S /D=D:\Program Files\fluxing`，`/D=` 无引号且为最后参数）⇒ **`INSTALL_EXIT=0`**
+- 装机后进程：`pid=118128` / start `2026-11-26 23:11:55` / path `D:\Program Files\fluxing\weasel\WeaselServer.exe`（已加载新镜像）
+- `WeaselDeployer.exe` 装机后 = 1,554,944 B / ver 1.3.12.0 / sha256 `01DBB0CF426D77452A622DF4FE4224A1421927455FA70CBB5BFC63A353D2826D`
+- **对照 1.3.11**（作废值登记）：2,901,504 B / sha256 `25F6D27CE521DDBB027009F38DB2F6CE09B2018D593E5DA6F751329059A6D08A`
+- 中间态（**已作废，勿引用**）：23:07:58 曾得到同尺寸 3,104,256 B / sha16 `17BB31ADF5B458D6`；
+  `xbuild.bat` 内部增量 `xmake` 在 23:09:05 重链覆盖为 `1AB22479…`（尺寸相同，差异来自 PE 内嵌时间戳/构建 ID）。**最终判据只认上表四处相等值。**
+
+### AB-5 上一轮"包内是旧件"的根因（三重 + 一条次生，全部坐实）
+
+1. **`xmake` 已升 v3.0.1+HEAD.3350cc5ab**：`xbuild.bat:213` 的 `xmake f -a x86 -m release` 在 v3 下 `-a` 语义变化 ⇒ 直接跑报 `error: invalid argument: -a`；
+   `.xmake\windows\x64\xmake.conf` 残留旧键 `builddir="build"`+`buildir="build"` ⇒ 触发 `warning: xmake f --buildir= has been deprecated`。
+2. **`xmake.lua:78-87` 的 `rule("add_rcfiles")` 在 `on_load` 里 5 处 `.. os.getenv(...)` 无 nil 兜底**（同文件 :103-107 都有 `or "0"`）⇒
+   未 `call env.bat` 时 `.\xmake.lua:81: attempt to concatenate a nil value`。**`call env.bat` 后消失。**
+3. **真正的链接失败 = MSVC 工具集混用**：编译侧走 VS18 BuildTools 的 MSVC **14.51.36231** 头文件（由上一轮 `tmp\br1h-build2.bat` 误调 VS18 `vcvars32.bat` 引入），
+   链接侧走 `xmake.conf` 的 `vs="2022"` ⇒ MSVC **14.44.35207** 的 `link.exe` ⇒
+   4 个 `LNK2019`（`___std_find_first_not_of_trivial_pos_2@16` / `…_1@16` / `___std_regex_transform_primary_wchar_t@20` 等）+ `LNK1120`。
+   **既定工具链 = VS2022**（`env.bat:146 DEVTOOLS_PATH`、`:147 CMAKE_GENERATOR="Visual Studio 17 2022"`）。
+4. **次生放大器**：链接失败 ⇒ 子工程 `after_build` 的复制不执行（`WeaselServer\xmake.lua:36-42` → `output/Win32`）⇒
+   `output\Win32` 保留 1.3.11 旧件 ⇒ NSIS 照打旧件、`xbuild.bat` 仍 `exit 0`。**`xbuild.bat` 对子目标产物完整性零校验，这是链条上最危险的一环。**
+
+**修复方式（不改 `xmake.lua`、不改 `xbuild.bat`）**：
+`tmp\br1h-buildfix.bat` = VS2022 `vcvars32.bat` + `env.bat` + `xmake f -a x86 -m release -c` + `xmake -r` ⇒ **`BUILD_EXIT=0` / `build ok, spent 89.594s`**；
+`tmp\br1h-pkg.bat` = 同一 vcvars 前缀 + `call xbuild.bat weasel installer` ⇒ **`XBUILD_EXIT=0`**。
+两个脚本都在 `tmp\` 下，均为**纯 ASCII**。
+
+### AB-6 真机判据：**未闭环**（下一个会话的第一件事）
+
+- 诊断日志真身 = **`%TEMP%\fluxing-profile-notify.log`**（`include\FluxingDiagLog.h:25-33` `DiagLogPath()`，上限 2 MB；本机实测 725,858 B / 10,186 行 / cloudsync 3,735 行）
+- 盘上确有 **3 行** `early_exit=`：
+  - `2026-11-26 22:53:44.273 … pushed=0 early_exit=maintenance_gate`
+  - `2026-11-26 22:53:45.363 … pushed=0 early_exit=begin_maintenance`
+  - `2026-11-26 22:53:45.364 … pushed=0 early_exit=export_userdict`
+- **但这 3 行不是装机版写的**：时间戳 **22:53:44–45 早于新 binary 启动的 23:11:55**，且与门禁用例 `TestCloudEarlyExitDiag`
+  的 B1/B2 路径（`fail_begin` / `fail_export`）逐条对应 ⇒ **是 `Release\TestFluxingCloud.exe` 进程写进同一日志的**。
+  **不得**把它们当真机证据（与"门禁撞并发写入必假红"同一性质的反向坑：**门禁写真实日志 ⇒ 假绿**）。
+- 新 binary 启动后（23:12:27 → 23:14:17）已走 `export_empty_skipped` → `skipped malformed` → `semantic legacy_rows` → `import_empty_rejected`，
+  **但到截稿（23:14:17）仍未打印 reconcile 行** ⇒ 装机版 `early_exit` 观测**为 0 次**。
+- 闭合路径（任一见即闭，且必须是 `pid` 来自 `D:\Program Files\fluxing\weasel\WeaselServer.exe` 的进程）：
+  ① 未登录态触发一轮同步 ⇒ `early_exit=not_logged_in`；
+  ② 断网触发 ⇒ `early_exit=pull_failed`；
+  ③ 维护门禁占用 ⇒ `early_exit=maintenance_gate`。
+- 反向对照已有（门禁侧）：成功轮 `… pushed=1` **不带** `early_exit` 字段 —— 22:53:45.392/.396 两行逐字可查。
+
+### AB-7 本轮纠正的路径事实（此前登记错误，**以此为准**）
+
+- 真实安装路径 = **`D:\Program Files\fluxing\weasel\`**（比注册表值**低一层 `weasel\` 子目录**）。
+  直接判 `D:\Program Files\fluxing\WeaselServer.exe` 存在性 ⇒ 必得 MISSING（历史误判来源）。
+- `HKLM:\SOFTWARE\WOW6432Node\Fluxing\Weasel` 的 `InstallDir` = `D:\Program Files\fluxing`（**64 位视图 `HKLM:\Software\Fluxing\Weasel` 为空**）。
+- `HKCU:\Software\Fluxing\Weasel` 的 `RimeUserDir` = `D:\Program Files\fluxing\user1\fluxing`（用户词典路径，**不得清**）。
+- `PRODUCT_VERSION` 口径偏差属**设计**：`xbuild.bat:36` 先清空、`:61` 重设为 `%FLUXING_VERSION%.%WEASEL_BUILD` ⇒ makensis 收到 `1.3.12.1`，
+  而 `FILE_VERSION` 因 `env.bat` 已定义保持 `1.3.12.0`（exe 内 FileVersion = 1.3.12.0，实测）。
+
+### AB-8 未闭环 / 阻塞（按依赖序）
+
+1. **BR-①h 真机 `early_exit` 行**（见 AB-6，零成本，下一轮同步即可判）。
+2. **首次生产数据迁移演练 —— 双硬阻塞，需用户出手**：
+   - 本机**无 PostgreSQL**（缺 `FLUXING_PG_URL`；本机 PG 18.4 ≠ ECS 实例，`test:pg` 的 4 个 suite 本机不可复现全绿，判绿只看 `Tests` 行 failed 数）；
+   - SSH 到 ECS **`Permission denied (publickey)`** ⇒ 既无法连库、也无法落 DDL/演练脚本。
+   - 素材已在盘：D1 画像 `users=4 / devices=25 / refresh_tokens=234 / sync_items=40,069 / sync_buckets=1,000 / email_verifications=8 / password_resets=2 / mail_outbox=4`（证据 `reports\fluxing-br-1g\w7\d1-rowcounts.txt`，库 22,007,808 B）；PG DDL `cloud\fluxing-sync\migrations-pg\0001_init.sql`（16,500 B / 9 表 22 索引，曾在本机 PG 18.4 以 `LC_COLLATE=C` 执行 `DDL_EXIT=0`）。
+3. **切源四段**（双写→校验→切读→退役）**不得跳段**；切读前三个已知洞仍在：`sync_buckets` 1,000 行（Σ 92,353 条）搬进 PG / `WRITE_BUDGET_ROWS_PER_DAY` 80,000 与 §O 拍板 20,000 不一致 / 规则 1 盲区。
+4. W7 的 10 条 ECS/Cloudflare 阻塞 + 1 条用户拍板（`api.jury.xin` 通配 301 占用；客户端全 POST ⇒ 301 降 GET 必失败；本机无 CF 凭据）全部**原样未动**。
+
+### AB-9 红线（本轮未破，下一会话继续守）
+
+桶化 **phase 恒 0**、阶段 3/4 **永不启用**（硬前置 = 云端历史 40,061 条先完成桶化覆盖，ADR 0077:411-412）、
+`AC-09` **仍 FAIL 不得改记**（只有日志出现 `AC09_VERDICT=PASS` 才可改）、`AC-212`/`AC-215②` **未判定**、
+`AC-213`/`AC-214` **永久退役**（悬空引用，不得引用）、凭据值不进日志（只报键名+长度+sha16 前 16 位）、
+`jury.xin` apex 只动子域、aaPanel 不改只新增 vhost、台账数字一律盘上回读。
+**本轮未动 D1 / R2 / ECS / Cloudflare；未 commit、未 push。**
+
+### AB-10 本轮工具坑（新增，勿重试）
+
+- **PowerShell 递归扫 `D:\Program Files\fluxing` 会挂住**（157 MB / 上万文件，`-Include *.log` 全树）⇒ 直接按已知绝对路径读 `%TEMP%\fluxing-profile-notify.log`。
+- **诊断日志被运行中的 server 持有**（`ReadAllLines` 报 "being used by another process"）⇒ 必须用 `[IO.File]::Open($p,'Open','Read','ReadWrite')` + `StreamReader` 共享读。
+- **`7z` 提 NSIS 包**：可用 `C:\Program Files\7-Zip\7z.exe`（`7za` 不存在）；包内同名条目**双份**：`WeaselServer.exe` 与 `$TEMP\fluxing-staged\WeaselServer.exe`（staging 副本），提取时用 `"-ir!*WeaselServer.exe"` 一次拿全，两者 sha 必须相等。
+- `xbuild.bat` 内部的 `xmake`（增量、无 `-c`）**会重链一次并覆盖产物** ⇒ 出包后必须**重新回读** `build\` 与 `output\Win32\` 的 sha，不能沿用出包前的值。
+- 装机判据必须取**装机后重新落盘的文件**，且要同时看 `VersionInfo.FileVersion`（1.3.12.0）与 sha256 —— 只看尺寸会被"同尺寸不同构建"骗过。
+
+## AC（2026-11-26 23:40 · 首次生产数据迁移演练：D1 → ECS `fluxing_sync` **实灌完成** + 凭据 / ECS 真实态勘查；**未 commit / 未 push / 未切源**）
+
+**背景**：路线 B（切自建 PG）已于 2026-11-26 拍板，`## AB-8` 登记的第 2 条「首次生产数据迁移演练」当时是**双硬阻塞**（本机无 PostgreSQL、缺 `FLUXING_PG_URL`；SSH 到 ECS `Permission denied (publickey)`）。本轮用户两条指令：① 「本机每天都在向 pg 上传数据，应该保存的有私钥，请查找」；② 「**直接灌 `fluxing_sync`**」（覆盖我原先推荐的「新建 rehearsal 库」，直接写现役库）。两条已全部执行完成。
+
+---
+
+### §AC-1 结论速览
+
+- **凭据假设被推翻**：ECS SSH 私钥**没丢**，真实位置 = `E:\Users\Duanyi\.ssh\id_ed25519`；`C:\Users\Duanyi\.ssh\` 下只有 `config` / `known_hosts` / `known_hosts.old`，**没有任何私钥**（旧判断「某处必有私钥」方向对、路径错）。
+- **「每天向 PG 上传」与私钥无关**：走的是**口令文件** `C:\Users\Duanyi\AppData\Roaming\postgresql\pgpass.conf`，4 条同源，目标 `127.0.0.1:5432` ⇒ **本机** PostgreSQL 18（服务 `postgresql-x64-18`），与 ECS 无任何关系。
+- **ECS 真实态与旧登记有 5 处差异**（见 §AC-3），其中「ECS 侧零部署」「根盘 89% / 剩 14 G」「PG 大版本未证实」三条**判定作废**；`fluxing-sync.service` 早已 **active + enabled**，`127.0.0.1:8787` 在内网服务。
+- **迁移已实跑完**：`wrangler d1 export --remote` 全量转储 → 自写 Node 转换器 → `psql` 单事务装载，`LOAD_EXIT=0`；**8 张业务表逐表行数与 D1 转储相等**，孤儿行 0，序列位置 = MAX(id)，换行改写与载荷元数据全部通过值级校验（见 §AC-5）。
+- **未做（不得当已完成）**：未切客户端指向 ECS、未改任何 `FLUXING_PG_URL` / env、未双写、未切读、未退役 D1、未 commit、未 push。D1 仍是**唯一现役写入端** ⇒ PG 侧是 **2026-11-26 23:36 快照**，从那一刻起开始落后。
+
+---
+
+### §AC-2 凭据现场勘查（值不落盘，只报键名 + 长度 + sha16 前 16 位）
+
+| 对象 | 路径 | 字节 | sha16 |
+|---|---|---|---|
+| ECS SSH 私钥 | `E:\Users\Duanyi\.ssh\id_ed25519` | 387 B | `45028DE247461C1F` |
+| ECS SSH 公钥 | `E:\Users\Duanyi\.ssh\id_ed25519.pub` | 81 B | `289AEDC7A2954235` |
+| PG 口令文件 | `C:\Users\Duanyi\AppData\Roaming\postgresql\pgpass.conf` | 198 B | `8C395FD8EC1BEB70` |
+
+- 私钥指纹 `SHA256:YRM0NY2EWLgmLPkIUQtURRJaxALa7RTF/q5j61Saf7I`；`C:\Users\Duanyi\.ssh\config` = `Host 124.223.115.201` / `IdentityFile E:\Users\Duanyi\.ssh\id_ed25519` / `IdentitiesOnly yes` / `User ubuntu` / `StrictHostKeyChecking accept-new`（146 B）。
+- 连通性实测：`SSH_OK` / `VM-0-3-ubuntu` / `ubuntu` / **exit 0**；远端 `~/.ssh/authorized_keys` = 10 行 ⇒ **`## AB-8` 的「SSH Permission denied (publickey)」阻塞已解除**（旧会话大概用了 `C:\Users\Duanyi\.ssh\` 路径）。
+- `pgpass.conf`：198 B / CR=4 / LF=4 / 无 BOM；4 条记录互为同源（`127.0.0.1:5432:jst_dw:kizemo`、`127.0.0.1:5432:*:postgres` 等），口令 len=**20** / sha16 `7F3C273F8B103DA7`。**该口令与 ECS 无关**，且本会话全程未把它写进任何命令行或日志。
+- 本机 `psql` 不在 PATH，`C:\Program Files\PostgreSQL\18\bin\psql.exe` **不存在** ⇒ 本机缺客户端二进制；本机环境变量 grep `PG|POSTGRES|DATABASE|FLUXING|SSH|TENCENT|DB_` 与 `CLOUDFLARE|CF_|WRANGLER` **两类全部零命中**。
+
+---
+
+### §AC-3 ECS 真实态勘查（推翻旧登记，全文见 `reports\fluxing-br-1g\w7\ecs-pg-and-key-recon-20261126-2345.md`）
+
+- **PG = 18.0**（`server_version_num=180000`），aaPanel 托管：`/www/server/pgsql/bin/postgres -D /www/server/pgsql/data`，pid 1448，socket **`/tmp/.s.PGSQL.5432`**（`/var/run/postgresql/` 目录**不存在**）。
+- 监听 `0.0.0.0:5432` + `[::]:5432` ⇒ **公网可达，收口未做**（本轮未动）。
+- 库清单：`erp` 4397 MB / `fluxing_sync` **8,142 kB（装载前）→ 32 MB（装载后）** / `jd` 810 MB / `jst_dw` 3370 MB / `jxc` 854 MB / `pdd` 15 MB / `pgsql` 1988 MB / `taobao` 1732 MB / `template0` / `template1`。
+- 磁盘 `/dev/vda2` 118G / 用 52G / **剩 62G（46%）** ⇒ 旧登记「89% 已用、剩 ≈14 G」**作废**。
+- **`fluxing-sync.service` 已部署并 active + enabled**：`User=fluxing` / `WorkingDirectory=/opt/fluxing-sync` / `EnvironmentFile=/etc/fluxing-sync/fluxing-sync.env` / `ExecStart=/usr/bin/node /opt/fluxing-sync/dist/node-main.mjs` / `Restart=on-failure` / `NoNewPrivileges=true` / `PrivateTmp=true` / `ProtectSystem=full` / `ReadWritePaths=/var/lib/fluxing-sync`；勘查时刻 `MainPID=1630731`，监听 `127.0.0.1:8787`。
+- env 键（值脱敏）：`FLUXING_PG_URL=postgres://***:***@127.0.0.1:5432/fluxing_sync` / `FLUXING_BIND_HOST=127.0.0.1` / `FLUXING_BIND_PORT=8787` / `FLUXING_PG_POOL_MAX=10` / `FLUXING_MAX_BODY_BYTES=67108864` / `FLUXING_OBJECT_ROOT=/var/lib/fluxing-sync/objects` / `ENVIRONMENT=production` / `MAIL_MODE=outbox` / **`WRITE_BUDGET_ROWS_PER_DAY=80000`** / **`WRITE_BUDGET_BUCKETS_PER_DAY=4000`** / `AUTH_PEPPER=<redacted>`。
+- `GET http://127.0.0.1:8787/health` ⇒ **404**（无该路由，**不是**服务异常）；nginx **无任何 vhost 引用 `8787` / `fluxing`** ⇒ `api.jury.xin` 未接入，对外未暴露。Docker 侧只有 `sales-bi-*` 六个容器，与 fluxing 无关。
+- **与旧登记的差异（判定作废项）**：① 「ECS 侧零部署」→ 服务已常驻；② 「根盘 89% / 剩 14 G」→ 实为剩 62G/46%；③ 「PG 大版本未证实」→ 18.0；④ 「SSH 不可用」→ 私钥在 E 盘、exit 0；⑤ 「5432 公网监听须收口」→ **仍成立**。
+
+---
+
+### §AC-4 迁移四步与盘上产物（全部不入库）
+
+1. **导出**：`wrangler d1 export fluxing-sync --remote --output=...\tmp\d1dump\d1-full.sql` ⇒ **18,701,672 B** / sha16 `F9092F38F1BE6BA3` / **41,369 条 INSERT** / 含 schema。
+   - D1 画像（导出时刻）：`users=4` / `devices=25` / `refresh_tokens=242` / `sync_items=40,076` / `sync_buckets=1,000` / `email_verifications=8` / `password_resets=2` / `mail_outbox=4` / `d1_migrations=4` / `sqlite_sequence=4`。
+   - **格式关键发现**：INSERT **自带显式列名**（`INSERT INTO "tbl" ("c1","c2",...) VALUES(...)`），且 D1 列清单与 PG **逐列同名同序** ⇒ 无需位置对齐，也不要去解析 `CREATE TABLE`（实测 `[regex]::Match` 对该转储的建表块**全部 NOT_FOUND**）。
+   - SQLite 方言：`mail_outbox.body` 用 `replace('...','\n',char(10))`；`d1_migrations` / `sqlite_sequence` 是 D1 自用表，**必须跳过**；`HAS_BLOB_LITERAL=True` 是**正则假阳性**（按 token 解析命中 **0 个** `X'..'`）。
+2. **转换**：`tmp\d1dump\d1-to-pg.mjs`（**5,489 B** / sha16 `7BC6A956DD7D3C47`，Node ESM，自写 SQL 语句分词器（感知单引号与 `''` 转义）+ 值元组分词器（跟踪括号深度）），按 PG 列清单**断言列名一致**、`char(n)`→`chr(n)`，输出含 `\set ON_ERROR_STOP on` / `SET client_encoding='UTF8'` / `SET standard_conforming_strings=on` / `BEGIN..COMMIT` / 三表 `setval` / `ANALYZE`，按 FK 依赖序 users→devices→refresh_tokens→email_verifications→password_resets→mail_outbox→sync_items→sync_buckets。
+   - 运行结果：`stmtCount=41369` / `outBytes=17,747,802` / `hex=[]` / `warn=[]`；产物 `d1-pg.sql` = **17,747,802 B** / sha16 `6D1809B19BAE4ED3`。
+3. **传送**：`scp` → `124.223.115.201:/tmp/d1-pg.sql`，`SCP_EXIT=0`，落盘 `-rw-rw-r-- 1 ubuntu ubuntu 17,747,802`。
+4. **装载**：`sudo -n -u postgres psql -h /tmp -d fluxing_sync -v ON_ERROR_STOP=1 -q -f /tmp/d1-pg.sql` ⇒ **`LOAD_EXIT=0`**（单事务，失败即整体回滚；FK 检查**保持开启**，未用 `session_replication_role=replica`）。
+
+**PG 侧结构事实（information_schema 回读）**：9 表均为 `text` / `bigint` 两型（`users.email_verified` 为 `smallint`），**无 `bytea`**；`schema_migrations` 只有 `version` / `applied_at` 两列（查 `name` 会报错），已应用 `0001_init` / `0002_password_resets` / `0003_sync_items_updated_index` / `0004_sync_buckets`（`applied_at` 均 1795701102002）；**4 条 FK 全部指向 `users(id)`**（devices / refresh_tokens / sync_buckets / sync_items）。
+
+---
+
+### §AC-5 判据与实测值（2026-11-26T15:40:11Z 二次回读，与装载时逐项一致）
+
+| 判据 | 实测 |
+|---|---|
+| 逐表行数 | `users=4` / `devices=25` / `refresh_tokens=242` / `sync_items=40,076` / `sync_buckets=1,000` / `email_verifications=8` / `password_resets=2` / `mail_outbox=4` ⇒ **与 D1 转储逐表相等** |
+| 孤儿行 | `orphan_items=0` / `orphan_buckets=0` / `orphan_devices=0` |
+| 桶总量 | `sum_item_count=92,353`（与 `## P-O` 记录的云端 Σ 92,353 一致）/ `max_bucket_id=2027` / `max_item_id=71,511` |
+| 序列 | `sync_items_id_seq.last_value=71,511` / `sync_buckets_id_seq=2,027` / `mail_outbox_id_seq=8` ⇒ **均 = MAX(id)**，下一 `nextval` 正确顺延 |
+| 换行改写 | `mail_nl=4`（`body like '%'||chr(10)||'%'`）/ `mail_literal_bslash_n=0` ⇒ `char(10)`→`chr(10)` 改写正确，**未把 `\n` 二字面误存** |
+| 载荷元数据 | `items_r2key_nonnull=40,076` / `distinct_item_key=40,076` / `sum_cipher_len=3,056,400`；`buckets_distinct_key=1,000` / `sum_cipher_len=26,437,636` / `max_hlc_ms=1,795,660,631,652` |
+| 迁移版本 | `0001_init` / `0002_password_resets` / `0003_sync_items_updated_index` / `0004_sync_buckets` 四行齐 |
+| 服务未受扰动 | `systemctl is-active fluxing-sync` = **active** |
+| 库体积 | 8,142 kB → **32 MB** |
+
+**值级校验（用户侧）**：4 行 `email_verified=1` / `vlen=44`，邮箱 = `25940969@qq.com`、`ak.probe.261111@example.com`、`ak.probe2.261111@example.com`、`kizemo@163.com` —— **后两条是历史探针账号，随迁移一并带入，是否清理未定**（需用户拍板，本轮未删）。
+
+---
+
+### §AC-6 未闭环 / 阻塞（按依赖序）
+
+1. **PG 是 23:36 快照且必然落后**：现役写入端仍是 D1（本机 WeaselServer 会继续往 D1 推）。任何一次演练前的**幂等前提 = 目标表先清空再重灌**（本轮未建脚本，重灌需重跑 §AC-4 四步）。
+2. **R2 对象体未迁移**（切读硬前置之一）：`sync_buckets` / `sync_items` 的 `r2_key` 只是**指针**，`FLUXING_OBJECT_ROOT=/var/lib/fluxing-sync/objects` 目录内容**尚未核对、未搬运** ⇒ 现在切读会读到 1,000 个不存在的对象。
+3. **`WRITE_BUDGET_ROWS_PER_DAY` 口径冲突未裁**：ECS 盘上 `80000`（本轮实测确认），而 `## O` 拍板记的是 `20000` ⇒ 差异登记，**未改 env**（改它要重启服务，本轮红线内不做）。
+4. **规则 1 盲区未修**（阶段 3 硬阻塞）：`inventory_complete` 只看「拉到底了」，`unproven_keys` 不收「远端桶读不出来」的键。
+5. **BR-①h 真机 `early_exit` 行仍为 0 次**：`## AB-6` 原样未动；盘上 3 行 `early_exit=` 是**门禁进程**（`Release\TestFluxingCloud.exe`）写的，**严禁当真机证据**。
+6. **未 commit / 未 push**：工作区仍有 BR-①h 四处改动（`CloudSyncService.{h,cpp}` / `TestFluxingCloud.cpp` / `version.txt`）+ U1 四处服务端改动 + 三处测试 + **未跟踪 `docs/adr/0080-…md`**（18,864 B / sha16 `9EAD935E2C8EEF2B`）；HEAD = `a1f326b`。
+
+---
+
+### §AC-7 红线（本轮未破）
+
+桶化 **phase 恒 0**、**阶段 3/4 永不启用**（硬前置 = 云端历史 40,061 条先完成桶化覆盖，ADR 0077:411-412；且规则 1 盲区未修 ⇒ 半库存回推会静默删云端条目、不可逆）；
+`AC-09` **仍 FAIL 不得改记**（只有日志出现 `AC09_VERDICT=PASS` 才可改）；`AC-212` / `AC-215②` **未判定**；`AC-213` / `AC-214` **永久退役**（悬空引用，不得引用）；
+**凭据值不进日志 / 输出 / 提交物**（只报键名 + 长度 + sha16 前 16 位）；`jury.xin` apex 只动子域；aaPanel 文件不改只新增 vhost；台账数字一律盘上回读。
+**本轮未切源、未改 any env、未重启 `fluxing-sync`、未动 D1 / R2 / Cloudflare / 5432 收口、未 commit、未 push。**
+
+---
+
+### §AC-8 本轮新增工具坑（勿重试）
+
+1. **`npx` 不能跨目录跑 wrangler**：必须 `cmd.exe /c 'cd /d <cloud/fluxing-sync> && npx --no-install wrangler …'`。
+2. **`wrangler d1 export` 会打印 1 小时有效的 R2 预签名下载 URL**（含签名串）⇒ **绝不写进任何落盘报告**；导出期间 D1 会短暂不可用。
+3. **不要解析该转储的 `CREATE TABLE`**：`[regex]::Match($t,'(?s)CREATE TABLE …\n\);')` 全 NOT_FOUND（换行/收尾格式与假设不同）；INSERT 已自带列名，直接按列名断言即可。
+4. **PowerShell 双引号串里写 `\"` 转义会让整段脚本解析失败**（报「三元表达式中缺少":"」，前面所有语句都不执行）⇒ 改用单引号正则 + `.Contains("X'")`。
+5. **`cd` / `Set-Location` 后再写相对路径会被权限门拦**（"write/delete targets cannot be verified safely after a command working directory change"）⇒ 一律绝对路径，或写成 `.bat` 再 `cmd /c`。
+6. **`sudo -u postgres psql` 必须带 `-h /tmp`**（socket 在 `/tmp`，`/var/run/postgresql/.s.PGSQL.5432` 不存在）；且**远端必须先 `cd /tmp`**，否则每条命令刷三行 `could not change directory to "/home/ubuntu": Permission denied`。
+7. **`-d postgres` 不存在**（`FATAL: database "postgres" does not exist`）⇒ 用 `template1` 或目标库；`select version, name from schema_migrations` 会报 `column "name" does not exist`。
+
+---
+
+### §AC-9 既有登记未改 / 下一步依赖序
+
+**未改**：`## AA`（U1 落码）、`## AB`（BR-①h 收口）、`## Z`（ADR 0080）、`## P-O`（v5 稳态轮「稳态零写不成立」）、`## Q`（桶化未完成 / 换服务器时机）**全部原样**，本节的「SSH 可用」只解除 `## AB-8` 第 2 条的一半（另一半「本机无 PG」仍成立 —— 本机只有 jst_dw 那条口令链对应的实例，`test:pg` 判绿仍只看 `Tests` 行 failed 数）。
+
+**下一步（依赖序，不得跳段）**：
+1. 取真机 `early_exit` 行（零成本，进程须来自 `D:\Program Files\fluxing\weasel\WeaselServer.exe`）；
+2. 决定是否 commit / push 现有两批（BR-①h + U1 + ADR 0080）；
+3. 把 `r2_key` 指向的对象体搬进 `FLUXING_OBJECT_ROOT`（或改为双读对账），否则切读必空；
+4. 定 `WRITE_BUDGET_ROWS_PER_DAY` 口径（80,000 vs 20,000）并落盘；
+5. 切源四段（双写 → 校验 → 切读 → 退役）**不得跳段**；切读前三洞 = 第 3 / 4 / 5 条未闭合。
