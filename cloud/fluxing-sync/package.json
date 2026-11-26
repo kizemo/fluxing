@@ -12,12 +12,14 @@
     "test": "vitest run",
     "test:pg": "vitest run --config vitest.pg.config.ts",
     "check:endpoint": "node test/check-endpoint-policy.mjs",
-    "check": "npm run check:endpoint && vitest run",
+    "check:no-node": "node test/check-no-node-imports.mjs",
+    "check": "npm run check:endpoint && npm run check:no-node && vitest run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.23.0",
     "@cloudflare/workers-types": "^5.20261109.1",
+    "@types/node": "^26.6.11",
     "typescript": "^5.9.2",
     "vitest": "^4.1.0",
     "wrangler": "^4.159.0"
