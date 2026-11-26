@@ -4659,6 +4659,229 @@ bool Br1cReadSidecar(const std::string& path,
   return fc::ParseSidecarText(all, enc_key, rows, seq, &rotated, &err);
 }
 
+// ---------------------------------------------------------------------------
+// 批次 BR-①h · 早退原因码（`early_exit`）：诊断行必须区分「没做」与「做了但为零」
+//
+// 缺陷（2026-11-24 实测）：对账诊断行由 SyncOnce **无条件**打印，而 SyncRound
+// 在 `local_entries` 计算点之前的任何早退都让 stats 保持默认 0 ⇒ 早退轮与
+// 真空轮日志完全同形（拉取阶段 503 早退被读成「零推送」）。
+//
+// 判据四块：
+//   ① 文案表逐字（期望值写成**字面量**，不调用 EarlyExitCodeText ⇒ 不让实现
+//      与断言一起错）；
+//   ② 早退轮端到端：真 SyncOnce 走 BeginMaintenance 失败分支 ⇒ 失败原因 /
+//      早退码 / 诊断行三者一致，且**零网络请求**；
+//   ③ 早退轮端到端：真 SyncOnce 走 ExportUserDict 失败分支 ⇒ 同上，且
+//      EndMaintenance 恰好一次（导出失败后必须退回维护模式）；
+//   ④ 成功轮对照：同一夹具跑通一轮 ⇒ early_exit 保持 kNone、行里没有该字段。
+// ---------------------------------------------------------------------------
+struct Br1hBackend : public fc::IUserDictBackend {
+  bool CheckMaintenanceGate(std::string* reason) const override {
+    if (reason != nullptr)
+      reason->clear();
+    // 闸门恒开 ⇒ BeginMaintenance 失败走「非跳过」分支（kBeginMaintenance）。
+    return true;
+  }
+  bool BeginMaintenance(std::string* err) override {
+    if (!fail_begin)
+      return true;
+    if (err != nullptr)
+      *err = begin_err;
+    return false;
+  }
+  bool EndMaintenance(std::string* err) override {
+    ++end_calls;  // 证明导出失败路径**确实**退出了维护模式
+    return true;
+  }
+  bool ExportUserDict(std::string* out, std::string* err) override {
+    if (fail_export) {
+      if (err != nullptr)
+        *err = export_err;
+      return false;
+    }
+    if (out != nullptr)
+      *out = snapshot;
+    return true;
+  }
+  bool ImportUserDict(const std::string& text,
+                      int* imported,
+                      std::string* err) override {
+    imported_text = text;
+    if (imported != nullptr)
+      *imported = 1;
+    return true;
+  }
+  bool fail_begin = false;
+  bool fail_export = false;
+  std::string begin_err = "维护模式进入失败夹具";
+  std::string export_err = "导出失败夹具";
+  int end_calls = 0;
+  std::string imported_text;
+  std::string snapshot =
+      "# Rime user dictionary\n#@/db_name\tuserdb\n#@/tick\t1\n"
+      "code0\t本地词条\tc=0 d=0 t=1\n";
+};
+
+void TestCloudEarlyExitDiag() {
+  std::printf("[BR-①h] 早退原因码：诊断行区分「没做」与「做了但为零」\n");
+
+  // ① 文案表逐字：15 个非 kNone 取值各一条断言。
+  {
+    struct CodeText {
+      fc::CloudSyncEarlyExit code;
+      const char* text;
+    };
+    const CodeText table[] = {
+        {fc::CloudSyncEarlyExit::kUnattributed, "unattributed"},
+        {fc::CloudSyncEarlyExit::kNotReady, "not_ready"},
+        {fc::CloudSyncEarlyExit::kNotLoggedIn, "not_logged_in"},
+        {fc::CloudSyncEarlyExit::kMaintenanceGate, "maintenance_gate"},
+        {fc::CloudSyncEarlyExit::kBeginMaintenanceGate,
+         "begin_maintenance_gate"},
+        {fc::CloudSyncEarlyExit::kBeginMaintenance, "begin_maintenance"},
+        {fc::CloudSyncEarlyExit::kExportUserDict, "export_userdict"},
+        {fc::CloudSyncEarlyExit::kParseUserDict, "parse_userdict"},
+        {fc::CloudSyncEarlyExit::kDictRowsToEntries, "dictrows_to_entries"},
+        {fc::CloudSyncEarlyExit::kPullFailed, "pull_failed"},
+        {fc::CloudSyncEarlyExit::kPullDecodeFailed, "pull_decode_failed"},
+        {fc::CloudSyncEarlyExit::kBucketPullFailed, "bucket_pull_failed"},
+        {fc::CloudSyncEarlyExit::kSidecarSaveFailed, "sidecar_save_failed"},
+        {fc::CloudSyncEarlyExit::kEndMaintenanceFailed,
+         "end_maintenance_failed"},
+        {fc::CloudSyncEarlyExit::kPushFailed, "push_failed"},
+    };
+    Check(sizeof(table) / sizeof(table[0]) == 15u,
+          "① 早退码闭集共 15 个非 kNone 取值（新增取值必须同步本表）");
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
+      fc::CloudReconcileStats st;
+      st.early_exit = table[i].code;
+      const std::string want =
+          std::string("reconcile scan_complete=0 matched=0 deferred=0 "
+                      "divergent=0 pushed=0 early_exit=") +
+          table[i].text;
+      const std::string got = fc::FormatReconcileDiagLine(st);
+      const std::string msg =
+          std::string("① 早退码文案逐字：") + table[i].text;
+      Check(got == want, msg.c_str());
+      if (got != want)
+        std::printf("    期望 %s\n    实际 %s\n", want.c_str(), got.c_str());
+    }
+
+    // kNone ⇒ 逐字等于既有五字段（既有断言与真机探针期望值不受影响）。
+    const std::string none_line =
+        "reconcile scan_complete=0 matched=0 deferred=0 divergent=0 pushed=0";
+    fc::CloudReconcileStats st_none;
+    Check(fc::FormatReconcileDiagLine(st_none) == none_line,
+          "① kNone ⇒ 诊断行**逐字等于**既有五字段（不追加 early_exit）");
+
+    // 非零计数与原因码同时出现时也必须逐字正确（防「早退时把计数清零」）。
+    fc::CloudReconcileStats st_mix;
+    st_mix.scan_complete = true;
+    st_mix.matched = 3;
+    st_mix.deferred = 4;
+    st_mix.divergent = 5;
+    st_mix.pushed = 6;
+    st_mix.early_exit = fc::CloudSyncEarlyExit::kPushFailed;
+    Check(fc::FormatReconcileDiagLine(st_mix) ==
+              "reconcile scan_complete=1 matched=3 deferred=4 divergent=5 "
+              "pushed=6 early_exit=push_failed",
+          "① 五字段数值与 early_exit 同时出现时逐字正确");
+  }
+
+  std::string err;
+  const std::vector<uint8_t> key(32, 0x41);
+
+  // ② B1：BeginMaintenance 失败且闸门开着 ⇒ kBeginMaintenance（零网络请求）。
+  {
+    Br1hBackend backend;
+    backend.fail_begin = true;
+    const std::string sidecar = "br1h-b1-sidecar.state";
+    std::remove(sidecar.c_str());
+
+    MockTransport transport;  // 不预置回应 ⇒ 一旦发请求就会失败
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-br1h",
+                                         "dev-br1h", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(!coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "② B1：进入维护失败 ⇒ 本轮失败");
+    Check(round_err == "维护模式进入失败夹具",
+          "② B1：失败原因取自后端（不是通用兜底文案）");
+    const fc::CloudReconcileStats& st = coordinator.last_reconcile_stats();
+    Check(st.early_exit == fc::CloudSyncEarlyExit::kBeginMaintenance,
+          "② B1：早退码 = kBeginMaintenance");
+    Check(fc::FormatReconcileDiagLine(st) ==
+              "reconcile scan_complete=0 matched=0 deferred=0 divergent=0 "
+              "pushed=0 early_exit=begin_maintenance",
+          "② B1：诊断行带原因码 ⇒ 不再与真空轮同形");
+    Check(!result.ok, "② B1：结果对象 ok = false");
+    Check(transport.requests.empty(), "② B1：零网络请求");
+    std::remove(sidecar.c_str());
+  }
+
+  // ③ B2：导出用户词典失败 ⇒ kExportUserDict，且已退回维护模式。
+  {
+    Br1hBackend backend;
+    backend.fail_export = true;
+    const std::string sidecar = "br1h-b2-sidecar.state";
+    std::remove(sidecar.c_str());
+
+    MockTransport transport;
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-br1h",
+                                         "dev-br1h", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(!coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "③ B2：导出失败 ⇒ 本轮失败");
+    Check(round_err == "导出失败夹具", "③ B2：失败原因取自后端");
+    const fc::CloudReconcileStats& st = coordinator.last_reconcile_stats();
+    Check(st.early_exit == fc::CloudSyncEarlyExit::kExportUserDict,
+          "③ B2：早退码 = kExportUserDict");
+    Check(fc::FormatReconcileDiagLine(st) ==
+              "reconcile scan_complete=0 matched=0 deferred=0 divergent=0 "
+              "pushed=0 early_exit=export_userdict",
+          "③ B2：诊断行带原因码");
+    Check(backend.end_calls == 1,
+          "③ B2：导出失败后**退回**了维护模式（EndMaintenance 恰好一次）");
+    Check(transport.requests.empty(), "③ B2：零网络请求");
+    std::remove(sidecar.c_str());
+  }
+
+  // ④ 成功轮对照：拉取与本地逐字节一致 ⇒ kNone，行里没有 early_exit 字段
+  //    （= 已越过 local_entries 计算点，口径无歧义）。
+  {
+    Br1hBackend backend;
+    fc::CloudDictEntry local_row;
+    Check(Br1cFirstRow(backend.snapshot, &local_row, &err),
+          "④ 成功轮夹具：快照可解析出本地条目");
+
+    const std::string sidecar = "br1h-ok-sidecar.state";
+    std::remove(sidecar.c_str());
+
+    const std::vector<fc::Entry> remote_entries = {
+        Br1cEntry(local_row.text, local_row.payload, kBr1cRemoteMs,
+                  kBr1cRemoteCounter, kBr1cRemoteDevice)};
+    const std::string body = Br1cPullBody(remote_entries, key, false, 1);
+    Check(!body.empty(), "④ 成功轮夹具：远端条目可封包成拉取响应");
+
+    MockTransport transport;
+    transport.replies.push_back(MockTransport::Reply{true, 200, body});
+    fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-br1h",
+                                         "dev-br1h", key, sidecar);
+    fc::CloudSyncRoundResult result;
+    std::string round_err;
+    Check(coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &round_err),
+          "④ 成功轮：本轮成功");
+    const fc::CloudReconcileStats& st = coordinator.last_reconcile_stats();
+    Check(st.early_exit == fc::CloudSyncEarlyExit::kNone,
+          "④ 成功轮：early_exit = kNone");
+    Check(fc::FormatReconcileDiagLine(st).find("early_exit") ==
+              std::string::npos,
+          "④ 成功轮：诊断行不含 early_exit 字段（既有五字段逐字不变）");
+    std::remove(sidecar.c_str());
+  }
+}
+
 void TestCloudRemoteHlcReuse() {
   std::printf("[BR-①c] 远端 HLC 沿用：侧车丢失后同步不再整库重写\n");
   std::string err;
@@ -6001,6 +6224,9 @@ int main() {
 
   // 批次 BR-①c · ADR 0076 D2-5a：远端 HLC 沿用（侧车丢失 ⇒ 零写入）。
   TestCloudRemoteHlcReuse();
+
+  // 批次 BR-①h：早退原因码（诊断行区分「没做」与「做了但为零」）。
+  TestCloudEarlyExitDiag();
 
   // 批次 BR-①c · ADR 0076 D2-5a-9：语义指纹（d= / t= 漂移不再触发写放大）。
   TestCloudSemanticFingerprint();

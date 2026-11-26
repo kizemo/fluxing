@@ -1032,6 +1032,14 @@ constexpr int64_t kPullPageLimit = 100;
 // 单轮最多拉取的页数（超出部分留到下一轮，状态里说明「还有更多」）。
 constexpr int kMaxPullPages = 10;
 
+// 批次 BR-1h: early-exit tagging. stats may be nullptr (sole call site passes &stats).
+// Codes come from the CloudSyncEarlyExit closed set; a new early-return branch that
+// forgets to tag is caught by SyncOnce fallback (records unattributed, never a fake
+// zero-write round).
+inline void MarkEarlyExit(CloudReconcileStats* stats, CloudSyncEarlyExit code) {
+  if (stats != nullptr)
+    stats->early_exit = code;
+}
 }  // namespace
 
 bool CloudSyncCoordinator::SyncOnce(std::string* err) {
@@ -1047,6 +1055,10 @@ bool CloudSyncCoordinator::SyncOnce(SyncDirection direction,
   CloudReconcileStats stats;
   const bool ok = SyncRound(direction, out, err, &stats);
   stats.pushed = out->items_pushed;
+  // ★ BR-①h：兜底归因 —— 本轮失败却没有任何早退打标 ⇒ 记 unattributed
+  //   （将来新增早退分支若漏打标，诊断行会**自曝**，绝不静默伪装成真空轮）。
+  if (!ok && stats.early_exit == CloudSyncEarlyExit::kNone)
+    stats.early_exit = CloudSyncEarlyExit::kUnattributed;
   // 本轮计数留存一份（失败轮也刷新）⇒ 对外读取口与诊断行**同源**。
   last_stats_ = stats;
   // ★ ADR 0076 D2-5a-6（R5 · 观测口径）：**无条件**诊断行（本轮失败也照打）
@@ -1082,12 +1094,14 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     if (err)
       *err = "云端服务尚未初始化。";
     out->message = "云端服务尚未初始化。";
+    MarkEarlyExit(stats, CloudSyncEarlyExit::kNotReady);
     return false;
   }
   if (access_token_.empty()) {
     if (err)
       *err = "尚未登录，无法同步。";
     out->message = "尚未登录，无法同步。";
+    MarkEarlyExit(stats, CloudSyncEarlyExit::kNotLoggedIn);
     return false;
   }
 
@@ -1104,6 +1118,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
         *err = reason;
       out->message = reason;
       out->skipped = true;
+      MarkEarlyExit(stats, CloudSyncEarlyExit::kMaintenanceGate);
       return false;
     }
   }
@@ -1146,6 +1161,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
         *err = reason;
       out->message = reason;
       out->skipped = true;
+      MarkEarlyExit(stats, CloudSyncEarlyExit::kBeginMaintenanceGate);
       return false;
     }
     const std::string reason =
@@ -1153,6 +1169,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     if (err)
       *err = reason;
     out->message = reason;
+    MarkEarlyExit(stats, CloudSyncEarlyExit::kBeginMaintenance);
     return false;
   }
 
@@ -1165,6 +1182,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     if (err)
       *err = reason;
     out->message = reason;
+    MarkEarlyExit(stats, CloudSyncEarlyExit::kExportUserDict);
     return false;
   }
 
@@ -1175,6 +1193,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     if (err)
       *err = parse_err;
     out->message = parse_err;
+    MarkEarlyExit(stats, CloudSyncEarlyExit::kParseUserDict);
     return false;
   }
 
@@ -1200,6 +1219,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     if (err)
       *err = parse_err;
     out->message = parse_err;
+    MarkEarlyExit(stats, CloudSyncEarlyExit::kDictRowsToEntries);
     return false;
   }
 
@@ -1237,6 +1257,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
         if (err)
           *err = reason;
         out->message = reason;
+        MarkEarlyExit(stats, CloudSyncEarlyExit::kPullFailed);
         return false;
       }
       out->items_pulled += static_cast<int>(batch.size());
@@ -1254,6 +1275,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
         if (err)
           *err = parse_err;
         out->message = parse_err;
+        MarkEarlyExit(stats, CloudSyncEarlyExit::kPullDecodeFailed);
         return false;
       }
       undecryptable += page_undecryptable;
@@ -1293,6 +1315,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
       if (err)
         *err = reason;
       out->message = reason;
+      MarkEarlyExit(stats, CloudSyncEarlyExit::kBucketPullFailed);
       return false;
     }
     bucket_scan_complete = !bucket_more;
@@ -1717,6 +1740,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     if (err)
       *err = save_err;
     out->message = save_err;
+    MarkEarlyExit(stats, CloudSyncEarlyExit::kSidecarSaveFailed);
     return false;
   }
 
@@ -1727,6 +1751,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     if (err)
       *err = reason;
     out->message = reason;
+    MarkEarlyExit(stats, CloudSyncEarlyExit::kEndMaintenanceFailed);
     return false;
   }
 
@@ -1735,6 +1760,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
     if (err)
       *err = reason;
     out->message = reason;
+    MarkEarlyExit(stats, CloudSyncEarlyExit::kPushFailed);
     return false;
   }
 

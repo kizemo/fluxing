@@ -439,26 +439,121 @@ bool ParseSidecarText(const std::string& text,
 //   divergent     = 本轮走「本地胜出 + 进推送集合」路径的分歧条数
 //                   （同 item_key 但明文 payload 不同）。
 //   pushed        = 本轮**被服务端接受**的条目数（accepted；skipped 不计）。
+// ★ 批次 BR-①h：本轮**早退**原因码（闭集）。
+//
+// 缺陷（写放大排查中被实证）：对账诊断行由 SyncOnce **无条件**打印，而
+// SyncRound 在 `local_entries` 计算点（DictRowsToEntries 成功）之前的任何早退
+// 都让 stats 保持默认 0 ⇒ **早退轮与真空轮日志完全同形**（2026-11-24 实测：
+// 拉取阶段 503 早退的两轮被读成「零推送」，真因是根本没走到对账段）。
+// 数据本身不受影响（ADR 0078 三重护栏 + ADR 0076 D2-5a-9 语义指纹已覆盖），
+// 缺陷纯粹在**观测面**：判据取证无法区分「没做」与「做了但为零」。
+//
+// 口径：诊断行**只在非 kNone 时**追加 ` early_exit=<code>` ⇒ 既有五字段逐字
+// 不变（既有断言与真机探针期望值不受影响），且「行里没有 early_exit」就等于
+// 「本轮已越过 local_entries 计算点」——无歧义。
+enum class CloudSyncEarlyExit {
+  // 未早退（本轮已越过 local_entries 计算点）
+  kNone = 0,
+  // 早退但未归因：新增早退分支漏打标时的**自曝**值（绝不伪装成真空轮）
+  kUnattributed,
+  // transport_ / backend_ 未初始化
+  kNotReady,
+  // access_token_ 为空
+  kNotLoggedIn,
+  // 维护闸门关闭（第一处检查：零 I/O、零配额消耗）
+  kMaintenanceGate,
+  // BeginMaintenance 失败且闸门已关闭（第二处检查：此前已读过侧车）
+  kBeginMaintenanceGate,
+  // BeginMaintenance 其它失败
+  kBeginMaintenance,
+  // 导出用户词典失败
+  kExportUserDict,
+  // 用户词典快照解析失败
+  kParseUserDict,
+  // 条目构造失败（local_entries 计算前的最后一处）
+  kDictRowsToEntries,
+  // 逐条端点拉取失败
+  kPullFailed,
+  // 拉取响应解密 / 形态失败
+  kPullDecodeFailed,
+  // 桶端点拉取失败
+  kBucketPullFailed,
+  // 侧车落盘失败
+  kSidecarSaveFailed,
+  // 退出用户词典维护模式失败
+  kEndMaintenanceFailed,
+  // 推送失败
+  kPushFailed,
+};
+
+// 早退码 → 诊断行取值（**单一真相源**：诊断行与单测共用本函数，不复制第二份）。
+inline const char* EarlyExitCodeText(CloudSyncEarlyExit code) {
+  switch (code) {
+    case CloudSyncEarlyExit::kNone:
+      return "none";
+    case CloudSyncEarlyExit::kUnattributed:
+      return "unattributed";
+    case CloudSyncEarlyExit::kNotReady:
+      return "not_ready";
+    case CloudSyncEarlyExit::kNotLoggedIn:
+      return "not_logged_in";
+    case CloudSyncEarlyExit::kMaintenanceGate:
+      return "maintenance_gate";
+    case CloudSyncEarlyExit::kBeginMaintenanceGate:
+      return "begin_maintenance_gate";
+    case CloudSyncEarlyExit::kBeginMaintenance:
+      return "begin_maintenance";
+    case CloudSyncEarlyExit::kExportUserDict:
+      return "export_userdict";
+    case CloudSyncEarlyExit::kParseUserDict:
+      return "parse_userdict";
+    case CloudSyncEarlyExit::kDictRowsToEntries:
+      return "dictrows_to_entries";
+    case CloudSyncEarlyExit::kPullFailed:
+      return "pull_failed";
+    case CloudSyncEarlyExit::kPullDecodeFailed:
+      return "pull_decode_failed";
+    case CloudSyncEarlyExit::kBucketPullFailed:
+      return "bucket_pull_failed";
+    case CloudSyncEarlyExit::kSidecarSaveFailed:
+      return "sidecar_save_failed";
+    case CloudSyncEarlyExit::kEndMaintenanceFailed:
+      return "end_maintenance_failed";
+    case CloudSyncEarlyExit::kPushFailed:
+      return "push_failed";
+  }
+  // 闭集外（含将来新增枚举却忘了补文案）⇒ 自曝，不静默回落到 none。
+  return "unattributed";
+}
+
 struct CloudReconcileStats {
   bool scan_complete = false;
   int matched = 0;
   int deferred = 0;
   int divergent = 0;
   int pushed = 0;
+  // ★ BR-①h：本轮早退原因（默认 kNone = 未早退）
+  CloudSyncEarlyExit early_exit = CloudSyncEarlyExit::kNone;
 };
 
 // 对账诊断行（ADR 0076 D2-5a-6 · R5 · 观测口径）：
 //   reconcile scan_complete=<0|1> matched=<n> deferred=<n> divergent=<n>
-//   pushed=<n>
+//   pushed=<n>[ early_exit=<code>]
 // ★ 逐字格式放在**生产头**里 ⇒ 单测断言的就是生产会写出的那一行（R7：
 //   生产与单测共用一套实现，不复制第二份格式串）。
+// ★ BR-①h：` early_exit=<code>` **仅早退轮**追加（kNone 不出现该字段）。
 inline std::string FormatReconcileDiagLine(const CloudReconcileStats& stats) {
-  return "reconcile scan_complete=" +
-         std::to_string(stats.scan_complete ? 1 : 0) +
-         " matched=" + std::to_string(stats.matched) +
-         " deferred=" + std::to_string(stats.deferred) +
-         " divergent=" + std::to_string(stats.divergent) +
-         " pushed=" + std::to_string(stats.pushed);
+  std::string line = "reconcile scan_complete=" +
+                     std::to_string(stats.scan_complete ? 1 : 0) +
+                     " matched=" + std::to_string(stats.matched) +
+                     " deferred=" + std::to_string(stats.deferred) +
+                     " divergent=" + std::to_string(stats.divergent) +
+                     " pushed=" + std::to_string(stats.pushed);
+  if (stats.early_exit != CloudSyncEarlyExit::kNone) {
+    line += " early_exit=";
+    line += EarlyExitCodeText(stats.early_exit);
+  }
+  return line;
 }
 
 // ---------------------------------------------------------------------------
