@@ -216,3 +216,64 @@
 4. R2 是否还有 `get` 调用路径（`env.BUCKET` 8 处中已确认 `put` 6 波并发与 `account.ts` 的
    `delete`；`get` 是否存在未逐处核实）—— W2 开工前必须逐处读过。
 5. `pglite` 能否完整复刻 D1 的 `batch` / `meta.changes` 语义 —— 未验证。
+
+---
+
+## 8 W0 依赖裁定：`pg` 登记为运行时依赖（2026-11-26 已执行并回读）
+
+### 8.1 裁定
+
+**`pg` 必须登记为 `dependencies`，精确版本 `8.23.1`（不加 `^`）。**
+不是 `devDependencies`（Node 运行时真的 `import('pg')`），
+不是 `optionalDependencies`（缺了它服务必须拒绝启动，不是降级运行）。
+
+盘上落点：
+
+- `cloud/fluxing-sync/package.json` → `"dependencies": { "pg": "8.23.1" }`
+- `cloud/fluxing-sync/package-lock.json` → `"node_modules/pg"` 条目存在；root `""` 包块同步记录 `"pg": "8.23.1"`；锁文件 131,488 B → **136,991 B**
+- `package.json` 的 `description` 同步订正为「双底座：Cloudflare Workers + D1 + R2 / 自建 Node + PostgreSQL + 本地对象存储」（原描述只写 Workers 路线，与路线 B 现状矛盾）
+
+### 8.2 为什么之前是 `--no-save`，以及为什么必须改
+
+W1–W4 当时的纪律是「运行时零 `dependencies`」，目的是让 `wrangler deploy` 不把 `pg` 吸进 Workers 包。
+该目的**由另外两层机制保证，与依赖清单无关**：
+
+1. `src/pg/dynamic-import.ts` 用 `new Function('return import(...)')` 隐藏 specifier ⇒ 静态分析看不到 `pg`；
+2. 打包门禁用 `--external:pg` ⇒ 即使可见也不进包体。
+
+而 `--no-save` 的实际后果是：**ECS 上 `npm ci` 装不到 `pg`，服务起不来**（缺 `pg` 时 `loadPgModule()` 抛错）。
+`--no-save` 拦不住任何东西，只拦住了自己部署。
+
+### 8.3 登记后门禁复跑（全部盘上回读，2026-11-26）
+
+| 门禁 | 命令 | 结果 |
+| --- | --- | --- |
+| 类型 | `node node_modules\typescript\lib\tsc.js --noEmit -p tsconfig.json` | `TSC_EXIT=0` / `TSC_LINES=0` |
+| node 打包 | esbuild `src/node-main.ts` `--external:pg` | `ESBUILD_EXIT=0` / `BUNDLE_BYTES=108734` / `BUNDLE_SHA256=1C2B0BB6CCEA4C56C8B56C481D398EDCFFDE753C507A6F603B5AFE0D892B9696`（与 §R 登记**逐字相等**） |
+| 运行期自测 | esbuild `pg-port-selftest.ts` → `node` | `SELFTEST_PASS=31 FAIL=0` |
+| **Workers 打包不变量** | `wrangler deploy --dry-run --outdir` | `WRANGLER_EXIT=0` / `index.js` **91,912 B** / gzip 20.53 KiB |
+
+### 8.4 Workers 包零污染断言（本轮新增判据）
+
+对 `wrangler deploy --dry-run` 产物 `index.js`（90,963 chars）逐串断言：
+
+```
+node_modules/pg = False    pg-protocol = False    pg-types = False    pg-pool = False
+from"pg"        = False    require("pg") = False  new Function = False
+```
+
+`new Function = False` 是本轮信息量最大的一条：它证明 **`src/pg/**` 整棵子树都不在 Workers 入口
+（`src/index.ts`）的依赖图里**，而不只是 `pg` 这一个包被 external 掉。所以「把 `pg` 加进
+`dependencies`」对 Workers 部署体积、冷启动、bundle 解析都零影响 —— 不是「影响很小」，是结构上不可达。
+
+### 8.5 已知的小差异（不掩盖）
+
+自测 bundle 字节数 19,578 → **19,533**（−45 B）。唯一变量是 `package.json` 依赖清单变化导致的
+esbuild external 元信息变化，自测项数未变（31/31 PASS）。node bundle 与 Workers bundle 的判据字节数
+**没有**变化。
+
+### 8.6 边界
+
+- 本裁定只解决「ECS 上能不能装上 `pg`」，**不证明 ECS 侧可部署**（§7 未证实项 1–3 仍在）。
+- `pg` 钉死 `8.23.1` 是为了与已跑通的 §S / §T 证据同源；升级需重跑 §S 的 DDL 与 §T 的端到端链。
+- `package.json` 的 `scripts` 在本节写就时未改动；**W5 随后新增了 `test:pg`**（`vitest run --config vitest.pg.config.ts`，见 handoff `§U-3`），本节其余结论不受影响。**`npm ci` 的可复现性仍未在干净目录实测**（登记为待验证）。
