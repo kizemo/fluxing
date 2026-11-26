@@ -18,12 +18,33 @@
 export type DynamicImport = (specifier: string) => Promise<unknown>;
 
 /**
- * 运行时 import。返回的模块形状由调用方声明的结构类型决定，本函数不做校验。
+ * `new Function` 造出来的运行时 import。返回的模块形状由调用方声明的结构类型决定。
  *
  * 注意：`new Function` 在 Workers 运行时里是被禁的（eval 类），但本模块只被
  * src/pg/** 与 src/node-*.ts 引用，从不进入 Workers 打包图。
  */
-export const dynamicImport: DynamicImport = new Function(
+let loader: DynamicImport = new Function(
   'specifier',
   'return import(specifier)',
 ) as DynamicImport;
+
+/**
+ * 运行时 import。返回的模块形状由调用方声明的结构类型决定，本函数不做校验。
+ *
+ * 这里只是**转发**给 `loader`，不为抽象而抽象：Vitest 的 ESM 运行器不给
+ * `new Function` 里的 `import()` 配 import callback，调用会抛
+ * `TypeError: A dynamic import callback was not specified.`，而测试底座（test-pg/）
+ * 必须能真的加载 pg 与 node:fs/promises。留这个注入口后，测试侧换成原生 import 即可，
+ * 生产路径仍是 `new Function`，行为逐字不变。
+ */
+export const dynamicImport: DynamicImport = (specifier) => loader(specifier);
+
+/**
+ * **测试专用**：替换运行时 import 实现。生产代码不要调用。
+ *
+ * 本文件不出现任何静态 `import(...)` 字面量，所以交换实现不会把 pg / node:fs
+ * 泄漏进 Workers 打包图。
+ */
+export function setDynamicImport(next: DynamicImport): void {
+  loader = next;
+}

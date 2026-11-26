@@ -40,6 +40,9 @@ export default defineConfig({
     })),
   ],
   test: {
+    // 只收 workerd 底座。`test-pg/**` 是 Node + 真 PostgreSQL 底座，
+    // 用 `npm run test:pg`（vitest.pg.config.ts）单独跑 —— 两者不能混在一个 runner 里。
+    include: ['test/**/*.{test,spec}.ts'],
     setupFiles: ['./test/apply-migrations.ts'],
   },
 });
