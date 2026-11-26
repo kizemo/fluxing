@@ -2144,7 +2144,7 @@ if (bucket_mode &&
 
 **预期时序**：启动轮 ≈09:56–10:06（kPullOnly，满拉 1,000 桶）→ 定时轮 ≈**10:58–11:08**（kBoth，桶推在此轮）→ 判据截止 11:30 → 回滚 ≤25 min ⇒ 预计 **12:00 前后**收官。
 
-**终态（待回填）**：`ROUND_SUMMARY_SEEN=YES pushed=N` 或 `NO`；D1 轮后三项差分；回滚双判据（日志 `bucket phase=0` + 侧车 `phase 0`）；`FINAL round_seen=… summary_seen=… phase0_seen=… sidecar_phase=…`。
+**终态（已回填，2026-11-26；证据见 §P-N）**：`ROUND_SUMMARY_SEEN=YES pushed=16`（10:11:22）；轮汇总行原文 `2026-11-26 10:11:08.040][cloudsync] bucket phase=2 pushed=16 skipped=984 pulled_buckets=1000 pulled_items=92353`；D1 轮后三项差分 = `sync_buckets` **1,000 行**（id 2–1,027，+16 新桶）/ Σ item_count **92,353 不变** / devs=1，`sync_items` 40,066 → **40,069**（max id 71,293 → 71,306），`rows_written_24h` 6,929 → **7,089（+160）** ⇒ 单轮桶推实际 D1 写入 ≈ **147 行**；回滚双判据 = 日志 `bucket phase=0`（10:16:23）+ 侧车 `phase\t0`（mtime 10:16:23 / size 12,052,333，**自然写回 0，未触发兜底改写**），User 级变量已删；`FINAL round_seen=True summary_seen=True phase0_seen=True sidecar_phase=0`。
 
 **v4b 上级看护（已起，2026-11-26 10:10）**：脚本 `reports/fluxing-br-1g/phase2-closeout-v4-supervisor.ps1`，日志 `phase2-closeout-v4-supervisor-run.log`。作用 = **只补窗口、不改行为**：等 v4 写出 `=== CLOSEOUT V4 END ===` ⇒ 查 notify 日志（自 v4 的 `PHASE2_LOG_OFFSET` 起）是否已有 `bucket phase=2 pushed=N`（N>0）⇒ 若无 ⇒ **复用同一份已验证的 v4 脚本再跑一轮**（自带回滚段）；两轮都无 ⇒ 记 `SUPERVISOR_END=NO_EVIDENCE_AFTER_CYCLES` 后退出。外层窗口 **150 min**、最多 **2 轮**。**看护自身不注入侧车、不改阶段、不做回滚** ⇒ 无副作用面。启动配方与回滚配方与 v3/v4 完全一致（进程级 + User 级 phase=2 → 重启 WeaselServer；侧车只读不写，除非 v4 的既有回滚段在 phase≠0 时兜底改写）。
 
@@ -2154,11 +2154,11 @@ if (bucket_mode &&
 
 **本轮新增**：
 
-9. **v4 终态未回填**（P-M.5 终态字段）—— v4 看护仍在跑，本节尚未收官。
+9. **v4 终态未回填**（P-M.5 终态字段）—— **已闭合**（本节上方「终态（已回填）」行；证据见 §P-N）：v4 已于 10:16:39 收官（`=== CLOSEOUT V4 END ===` / EXITCODE=0）。
 10. **§P-L.4 第 2 条「触发链缺口」作废**，由 P-M.1 订正为「窗口选错」；引用该条时以 P-M.1 为准。
 11. **隔夜跨零点取证坑**（P-M.7）：轮次必须按「轮末 + 60 min」解读，不能按整点/整小时对齐，否则会把启动轮误读成定时轮。
 12. **`CLAUDE.md` 的 BR-①g 指针行本轮未同步**（该文件指针块体量极大、改动风险高）⇒ 下轮补；**不影响**以 handoff §P-M 为权威进度源。
-13. **v4b 上级看护仍在跑**（P-M.5）⇒ 终态回填须等 v4（或 v4b 第二轮）收官；**若 v4 判 `NO_ROUND` 而 v4b 拿到证据**，以 **v4b 的证据 + notify 日志时间戳**为准，并在 §P-N 记「窗口仍偏紧 ⇒ 下一轮应按实测轮末时刻动态计算窗口」。
+13. **v4b 上级看护仍在跑**（P-M.5）⇒ 终态回填须等 v4（或 v4b 第二轮）收官；**若 v4 判 `NO_ROUND` 而 v4b 拿到证据**，以 **v4b 的证据 + notify 日志时间戳**为准，并在 §P-N 记「窗口仍偏紧 ⇒ 下一轮应按实测轮末时刻动态计算窗口」。**【已闭合】** v4 自身即拿到 `pushed=16` ⇒ v4b **未触发第二轮**，按设计收官（EXITCODE=0）；「窗口偏紧」由 §P-N 订正为**作废**——实测节律是「push-capable 轮在启动轮结束后 ≈82 s 出现」（推送待办未消费 ⇒ 引擎立即补跑 kBoth），**不是 60 min 周期** ⇒ v5 已把窗口压到 **45 min**。
 
 #### P-M.7 本轮工具坑与实测配方（2026-11-26 09:52–10:10）
 
@@ -2170,3 +2170,320 @@ if (bucket_mode &&
 - **本轮取数配方（可照抄）**：
   - notify 日志 + 进程 + 锁屏 + User 级变量：一次 `Get-Item` + `Select-String` + `Get-Process` + `[Environment]::GetEnvironmentVariable(...,'User')`。
   - 侧车：绝对路径 `Get-Content -TotalCount 6`（magic / `seq` / `bseq` / `phase` / `keyfp`）+ `Select-String '^brow\t'` 计数（**当前仍 0**）。
+
+#### P-M.8 启动轮实测（10:00:08）+ **两条新发现**（拉取截断 / 规则 1 盲区）
+
+**启动轮实测行**（v4 offset 688488 之后，全部诊断行只有两行）：
+
+```
+2026-11-26 10:00:08.696][cloudsync] reconcile scan_complete=0 matched=0 deferred=0 divergent=0 pushed=0
+2026-11-26 10:00:08.696][cloudsync] bucket phase=2 pushed=0 skipped=0 pulled_buckets=800 pulled_items=73921
+```
+
+⇒ 启动轮（kPullOnly）**只拉到 800 桶 / 73,921 条**，而云端 `sync_buckets` 实有 **1,000 行 / Σ item_count 92,353**（D1 读数：id 2–1011、单 device、`le211=209`、`mid(212..1011)=791`）⇒ **缺口 ≈ 200 桶 / 18,432 条**。
+
+**发现 ①（拉取截断，位置坐实）**：服务端分页**本身正确**（`cloud/fluxing-sync/src/sync-buckets.ts:344-360`：`WHERE user_id=? AND id>? ORDER BY id ASC LIMIT limit+1`，`hasMore = rows.length > limit`，`next_cursor = base64url(末行 id)`）；客户端循环（`CloudSyncService.cpp:1854-1931`）只在 **① 服务端说「没有更多」** 或 **② 空页 ⇒ next_cursor 为空** 时停手 ⇒ **800 桶是「拉到底」的边界，不是页数预算耗尽**（预算 = `max(16, 词典数×11+2)` = 16 页 × 100 = 1,600 桶 ⇒ 远未触顶）⇒ **⇒ `bucket_more=false` ⇒ `bucket_scan_complete=TRUE`（`:1289`）⇒ 桶推闸门在定时轮是「开」的**。
+⇒ 缺口成因只剩两类（**均未坐实**）：① 约 200 个桶的 blob 在客户端侧 base64/解包/条目形态失败 ⇒ 被计入 `malformed`/`undecryptable` 并跳过（`:1872-1902`）；② 云端索引行里存在客户端读不出的历史脏桶。
+⇒ **这就是 §P-K.6 / §P-H.2 那个「500 vs 704」「桶内容 65,104 vs 本地 54,603」悬案的新证据**：缺口**不是页数上限**，而是**内容级跳过**；历史观测值 500 / 704 / 800 / 1,000 为何各不相同**仍未坐实**。
+⇒ 另注：`reconcile scan_complete=0` **不是**桶库存不完整的信号 —— 该字段用的是**老端点**逐条拉取的 `has_more`（`:1316-1322`；阶段 1/2 老端点在跑、40,066 条一页拉不完 ⇒ 恒为 0）。**桶库存是否扫完只有 `bucket_scan_complete` 一个真相源，而它不进诊断行**（`:1054-1057` 的五行格式固定）⇒ 排障时不可用 `scan_complete` 代替。
+
+**发现 ②（规则 1 存在盲区 —— 本批最重要的代码级发现）**：规则 1 的整桶保护原文（`CloudSyncService.cpp:2060-2067`）：
+
+```
+if (!inventory_complete && BucketHasUnprovenEntry(unproven_keys, entries)) { ++held_unproven; continue; }
+```
+
+而 `inventory_complete = remote_complete = bucket_scan_complete`（`:1958`）⇒ **只要客户端认为「拉到底了」，规则 1 的整桶保护就被完全绕过**；且 `unproven_keys` **只**收「本地条目既无侧车记录、又不在本轮远端集合里」的键（`:1425-1430`），**从不收「远端桶内容读不出来」的键** ⇒ **半库存桶会被回推**，而服务端按 bucket_id **先 DELETE 后 INSERT**（`:2061` 注释自陈）⇒ **未列出的远端条目被静默删除**。
+
+- **风险量化**：本轮客户端视图缺 ≈200 桶 / ≈18,432 条云端条目；若这些桶进入回推集合 ⇒ 云端桶视图丢这 18,432 条。**阶段 1/2 下老端点仍在跑、`sync_items` 40,066 行未被桶化路径删除 ⇒ 数据仍可从老端点取回 ⇒ 本轮不是不可逆**；**阶段 3/4 老端点退役后会变成不可逆**。
+- **⇒ 阶段 3 硬阻塞清单再加一条**（除 `brow` 不落盘外）：**「读不出的桶必须记入 `unproven_keys`，或该桶本轮不推」**，否则切读后云端桶视图会被半库存内容覆盖。
+- 本轮**不改码**（改码 + 重出包装机 + 装机 + 重跑真机轮 ⇒ 独立批次 + ADR + 门禁用例）。
+
+**运维影响（给下一轮的判读提示）**：定时轮（预计 ≈11:02）若拿到 `bucket phase=2 pushed=N`（N>0）⇒ **N 可能接近 1,000 桶**（配额 2,000 行/轮 ÷ 每桶 2 行 = 1,000 桶/轮），**D1 写入量 ≈ 2,048 行**（当日余 ≈93,071 行 ⇒ 无压力）⇒ 拿到该证据后**必须**同时记录 `skipped=` 与 D1 轮后差分，用于判 AC-212（单轮完整 D1 写入量 + 单桶耗时）。
+
+### P-N —— 阶段 2 桶推路径真机自证取得 + 收官双判据达成（2026-11-26 09:55–10:17；本文档最新事实，与上文冲突以 §P-N 为准）
+
+> **§P-N 一句话**：本批头号未闭环项（阶段 2 客户端自证 `bucket phase=2 pushed=N`，N>0）**已闭合** —— 实测 `pushed=16`；同时 §P-M.8 发现 ① 的「800 桶截断」在本轮**不复现**，§P-H.4 的「`brow` 不落盘」被**订正为「桶推成功后已落盘 1,000 行」**，并新发现「本地词典为空 ⇒ 桶推必然 pushed=0」这第二重成因。**AC-09 仍 FAIL，不改记；AC-212 / AC-215 仍未判定；阶段 3 仍不放行。**
+
+#### P-N.1 头号未闭环项已闭合：桶推路径客户端自证 `pushed=16`
+
+**判据行（盘上原文，`%TEMP%\fluxing-profile-notify.log`）**：
+
+```
+2026-11-26 10:11:08.040][cloudsync] reconcile scan_complete=0 matched=92353 deferred=1310 divergent=13 pushed=13
+2026-11-26 10:11:08.040][cloudsync] bucket phase=2 pushed=16 skipped=984 pulled_buckets=1000 pulled_items=92353
+```
+
+**同轮桶推配额埋点（函数内，先于汇总行 2 分 07 秒）**：
+
+```
+2026-11-26 10:09:01.510][cloudsync] bucket quota held_unproven=0 held_quota=24 rows_pushed=2000 rows_held=48 quota_rows=2000
+```
+
+**v4 看护判据命中（`reports/fluxing-br-1g/phase2-closeout-v4-run.log`）**：
+
+```
+2026-11-26 10:11:22 ROUND_SUMMARY_SEEN=YES pushed=16
+2026-11-26 10:11:22 ROUND_SUMMARY 2026-11-26 10:11:08.040][cloudsync] bucket phase=2 pushed=16 skipped=984 pulled_buckets=1000 pulled_items=92353
+```
+
+⇒ **桶推路径在真机上真的执行了**（此前历轮只有函数内埋点、或桶推压根没跑）。**这是本批第一份「客户端自证」级证据**。
+
+- `matched=92353` ⇒ 本地词典已由导入重建，且与云端桶内容**逐条相等**。
+- `pushed=16 / skipped=984` ⇒ 客户端按配额推了 **1,000 桶（估算 2,000 行）**，其中 **984 桶被服务端挡下、16 桶被接受**（成因候选：服务端桶级 HLC 守卫「桶级 HLC 必须严格大于已存值」；次选：客户端指纹基线在首轮为空 ⇒ 把全部桶都当成「变了」）。**成因未坐实**，但两种成因都指向同一个结论：**客户端侧的「只推变化桶」在首轮不成立**（见 P-N.5 发现 ③）。
+- `held_quota=24 / rows_held=48` ⇒ **24 个桶被 2,000 行/轮配额挡住**（每桶 2 行 = `EstimateBucketWriteRows`）⇒ **这 24 个桶下一轮是否被重新选中 = AC-215 判据②的验证对象**（v5 轮在跑，见 P-N.8）。
+
+#### P-N.2 v4 配方（唯一改动 = 窗口 + 判据）与一个**新节律事实**
+
+- v4 相对 v3 只改两处：`$MaxWaitMinutes` 40 → **95**；判据由「`quota_rows=` 前置」改为**只认轮汇总行 `bucket phase=2 pushed=N`（N>0）**（守 §P-K.5：函数内埋点不可当「动作完成」判据）。
+- **新事实（推翻 §P-M.4 的「推轮要等 60 min」预期）**：push-capable 轮**在启动轮结束后 ≈82 秒就出现** —— 启动轮汇总 `10:00:08` → 下一轮起轮 `10:01:30`（老端点 legacy 拉取）→ `10:07:52` semantic → `10:07:58` legacy push → `10:09:01` 桶推 → `10:11:08` 轮汇总。
+  ⇒ **原因**：启动轮固定 `kPullOnly`（`CloudSyncEngine.cpp:205-213`）⇒ 桶推待办未被消费 ⇒ 引擎立即补跑一轮 `kBoth`；**不是** 60 min 周期到期。
+  ⇒ **下一轮脚本窗口可压到 45 min**（v5 已用 45 min）。
+- ⇒ **「启动轮 `pushed=0`」仍成立且仍然正确**（方向决定）⇒ 判「一轮推完」仍**只认轮汇总行**。
+
+#### P-N.3 收官双判据全部达成（v4 回滚段原样执行，无兜底改写）
+
+```
+2026-11-26 10:11:53 === ROLLBACK TO PHASE 0 ===
+2026-11-26 10:11:58 RESTART[rollback] PID=188804 START=2026-11-26 10:11:58
+2026-11-26 10:16:38 VERDICT[rollback]=PHASE0_OBSERVED
+2026-11-26 10:16:39 USER_PHASE_CLEARED=[]
+2026-11-26 10:16:39 SIDECAR MTIME=2026-11-26 10:16:23 SIZE=12052333
+2026-11-26 10:16:39 SIDECAR_PHASE_LINE=phase	0
+2026-11-26 10:16:39 SIDECAR_BROW_COUNT=1000
+2026-11-26 10:16:39 FINAL round_seen=True summary_seen=True phase0_seen=True sidecar_phase=0 summary=[…pushed=16…]
+2026-11-26 10:16:39 === CLOSEOUT V4 END ===
+```
+
+- **日志判据**：`VERDICT[rollback]=PHASE0_OBSERVED`（命中 `bucket phase=0`）✔
+- **侧车判据**：`SIDECAR_PHASE_LINE=phase	0`（mtime 10:16:23 / size 12,052,333）—— **自然写回 0，未触发兜底改写**（日志中无 `SIDECAR_PHASE_PATCHED`）✔
+- **User 级变量**：`USER_PHASE_CLEARED=[]` —— **已删除**（不是置 0）✔
+- ⇒ **本批「跑完必须清 User 级 `FLUXING_CLOUD_SYNC_BUCKET_PHASE` + 让侧车 `phase` 写回 0」双判据达成**。
+
+#### P-N.4 生产 D1 轮前轮后差分（**AC-212 的首个实测数据点**）
+
+| 指标 | 轮前（09:55） | 轮后（10:11） | 差分 |
+|---|---|---|---|
+| `sync_buckets` 行数 | 1,000 | 1,000 | 0 |
+| `sync_buckets` id 区间 | 2–1,011 | 2–**1,027** | **+16 行**（16 个新桶被写入） |
+| `sync_buckets` Σ item_count | 92,353 | 92,353 | **0** |
+| `sync_buckets` device 数 | 1 | 1 | 0 |
+| `sync_items` 行数 | 40,066 | **40,069** | **+13**（老端点 legacy 推 13 条） |
+| `sync_items` max id | 71,293 | **71,306** | +13 |
+| `rows_written_24h` | 6,929 | **7,089** | **+160 行** |
+
+⇒ **单轮「桶推 2,000 估算行」的实际 D1 写入 ≈ 147 行**（160 − legacy 13 条）⇒ **估算 : 实际 ≈ 13.6 : 1**，差额全部来自服务端挡掉 984 个桶。
+⇒ **AC-212 的「单轮完整 D1 写入量」有了首个实测值（桶推侧 ≈147 行/轮）**，但 **AC-212 仍未判定**：缺「单桶耗时」埋点、缺多轮样本（含稳态轮）。
+
+#### P-N.5 两条新发现（一条**订正**上文、一条**新增**代码级发现）
+
+**发现 ③（订正 §P-H.4：「`brow` 不落盘」不成立 —— 桶推成功后指纹已落盘）**
+
+- 侧车 `brow` 行数：轮前 **0** → 轮后 **1,000**（`SIDECAR_BROW_COUNT=1000`）；侧车 size 11,939,746 → **12,052,333（+112,587 B ≈ 1,000 行 × ~113 B）**。
+- ⇒ 前几轮 `brow=0` 的**真因 = 从未有一次桶推成功**（客户端**只在桶真的推出去时**才写指纹行）⇒ 本轮是**首次成功桶推**，指纹基线随之落盘。
+- ⇒ **D30「尾部 24 桶永久饿死」的成因前提被削弱**：有了指纹基线，下一轮应只推「指纹变化」的桶 ⇒ 被配额截断的 24 个桶（`held_quota=24`）下一轮应被重新选中 ⇒ **AC-215 判据②的验证条件已具备**（**但尚未真机验证**，v5 轮在跑）。
+- ⇒ **阶段 3 硬阻塞清单中「`brow` 不落盘」一条降级为「已具备基线，待稳态轮验证」**；**但 §P-M.8 发现 ② 的规则 1 盲区仍在**（见下）。
+
+**发现 ④（新增，本批第二个重要代码级发现）：本地词典为空 ⇒ 桶推必然 `pushed=0`（与方向无关的第二重成因）**
+
+- 现象：10:00:08 启动轮 `reconcile scan_complete=0 matched=0 deferred=0 divergent=0 pushed=0`。
+- **判据（代码级）**：`matched` / `deferred` / `divergent` 三个计数**只按 `local_entries` 的下标累加**（`CloudSyncService.cpp:1383-1384` 的 `remote_matched[i]=true; ++matched;`、`:1428-1430` 的 `++deferred_count;`、`:1404` 的 `++divergent;`）⇒ **三者同时为 0 ⇔ 本地条目表为空**（不是「恰好没匹配上」）。
+- 对照：同日 08:57:51 的 phase-0 轮 `matched=67 deferred=1316 divergent=0`（同一二进制、同一进程）⇒ **本地词典在 08:57 → 10:00 之间变空**。
+- **后果链**：`merged` 为空 ⇒ 桶推分桶（`:1967` 遍历 `merged`）无桶可分 ⇒ **任何方向下都 `pushed=0`** ⇒ 「桶推闸门开着却没推」有**第二重成因**（第一重 = 方向）。
+- ⇒ **「启动轮 `pushed=0`」不可只归因于 kPullOnly** —— 判读时必须同时看 `matched` 是否 > 0。
+- **最可能成因（未坐实）**：轮末**导入**（`CloudSyncService.cpp:1483 ImportUserDict`）会把整个 leveldb 重写（盘上实证：4 个 `.ldb` 2.1M/2.1M/716K/3.1M + 2.5M `.log`，mtime 10:07:53–54）⇒ **若此刻进程被 kill，leveldb 可能停在「清单指向已被重写的 SST」的中间态 ⇒ 下次启动读出空库**。嫌疑时间窗：08:57 轮次尾部的导入窗口（≈08:58–09:00）与 `09:00:43 startup_refused allowed=0 reason=not_console_session … detail=pre_kill_gate`（上一轮探针的启动尝试）相邻。**未坐实**（无 kill 与 import 的毫秒级对齐证据）。
+- ⇒ **新增运维铁律（不可误读第 ⑧ 条）**：**杀 WeaselServer 前必须等本地词典 leveldb 静默**（连续两次 60 s 快照的 文件名/大小/mtime 不变）。v5 脚本已内置 `Wait-ImportQuiet`（进入 phase 2 前 + 回滚 kill 前各一次）。**这是规避手段，不是根因修复**；根因（kill 落在导入窗口 ⇒ 本地词典读出为空）仍需独立批次 + ADR + 门禁用例坐实。
+
+#### P-N.6 「800 桶截断」本轮**不复现**（订正 §P-M.8 发现 ①）
+
+- 10:00:08 启动轮只拉到 **800 桶 / 73,921 条**；10:11:08 轮**拉满 1,000 桶 / 92,353 条**（与云端 `Σ item_count` **逐条相等**）。
+- ⇒ **800 不是结构上限**：页数预算 = `max(16, 词典数×11+2)` = 16 页 × 100 = 1,600 桶（未触顶）；服务端分页也正确（`sync-buckets.ts:344-360`：`hasMore = rows.length > limit`、`next_cursor = base64url(末行 id)`）。**同一天、同一二进制、两轮差 200 桶 ⇒ 坐实为「时序 / 本地状态」现象，不是分页结构缺陷。**
+- ⇒ 缺口 200 桶 / 18,432 条的**成因仍未坐实**（客户端解码跳过 vs 云端脏桶）；但本轮它**没有**造成库存截断（`pulled_buckets=1000` ⇒ `bucket_more=false` ⇒ `bucket_scan_complete=TRUE` ⇒ 桶推闸门是开的 ⇒ 与 10:11:08 真推成功**互相印证**）。
+- ⇒ 附带再确认：**`bucket_scan_complete` 是桶推闸门的唯一真相源，而它不进诊断行**（`:1054-1057` 五行格式固定）⇒ 排障只能用 `pulled_buckets` 与云端 `Σ item_count` 对比**推断**库存是否扫完。
+
+#### P-N.7 v4b 上级看护按设计收官
+
+- v4b（`phase2-closeout-v4-supervisor.ps1`）在 v4 写出 `=== CLOSEOUT V4 END ===` 后**未再自动补跑第二轮**（证据已存在 ⇒ 不触发重跑）⇒ 上级看护设计成立；v4b 任务 EXITCODE=0。
+
+#### P-N.8 本轮未闭环项（承 §P-M.6 全部仍在；以下为增量）
+
+- **AC-09 仍 FAIL** —— 本轮日志**没有** `AC09_VERDICT=PASS` ⇒ **不得改记**。
+- **AC-212 仍未判定** —— 有了单轮 D1 写入实测（桶推侧 ≈147 行/轮，见 P-N.4），但**缺「单桶耗时」埋点**、缺多轮样本（含稳态轮）。
+- **AC-215 判据②仍未判定** —— 「被截断的 24 个桶下一轮被重新选中」待稳态轮验证（**v5 轮在跑**：`reports/fluxing-br-1g/phase2-steadystate-v5.ps1` / `-run.log`）。
+- **阶段 3 硬阻塞**：① `brow` 项**降级**为「已具备基线，待验证」（P-N.5 发现 ③）；② **§P-M.8 发现 ② 的规则 1 盲区仍在**（读不出的桶不记入 `unproven_keys` ⇒ 半库存桶会被回推 ⇒ 服务端 DELETE+INSERT 静默删条目 ⇒ 阶段 3/4 后不可逆）；③ 新增「杀进程落在导入窗口 ⇒ 本地词典读出为空」的根因未坐实（发现 ④）。
+- 承继未坐实项（全部仍在）：阶段 1「704/1,000」缺口成因、「500 vs 704」根因、桶内容 65,104 vs 本地 54,603、D1 行写入 2,901 行未归因、runner 死因、**今日拉取缺 200 桶的成因**、历史截断值 500/704/800/1,000 差异来源。
+- `CLAUDE.md` 的 BR-①g 指针行**仍未同步**（§P-M.6 第 12 条，本轮仍未做）。
+- 待用户裁定（**不得自决**）：是否 push 18+ 笔 commit；`brow` / 规则 1 盲区 / 导入窗口 kill 三个代码级问题是否另立独立批次（ADR + 门禁用例）；阶段 3 开闸与否；BR-②′ 全局熔断 / BR-⑤ / 腾讯云两项安全配置 / 定时任务合并（四项）。
+
+#### P-N.9 本轮新增工具坑与实测配方（承 §P-M.7）
+
+- **坑（新增）**：`Get-ChildItem` 对**目录**也报 `Length=1` ⇒ **看到「1 字节」不要判定为「文件被清空」**；`[IO.File]::OpenRead()` 对**目录**抛 `Access to the path ... is denied`（不是权限问题）⇒ 本地词典 `rime_ice.userdb` 是 **leveldb 目录**（`002436.ldb` 2.1M / `002437.ldb` 2.1M / `002438.ldb` 716K / `002440.ldb` 3.1M / `002439.log` 2.5M / `MANIFEST-002434` / `CURRENT` / `LOCK` / `LOG`），**不是被清空**。本轮曾据此误判「数据事故」，已订正。
+- **坑（新增）**：`$all[688487..($all.Count-1)]` 这种按**行号**切片在日志行数变化后必然错位 ⇒ 取「新增行」应按**字节偏移**（脚本里的 `Read-From $offset`）或重新整读。
+- **配方（可照抄）**：判「本地词典是否为空」⇒ 看 `reconcile` 行三计数 `matched/deferred/divergent` 是否**同时为 0**（`CloudSyncService.cpp:1383-1384` / `:1404` / `:1428-1430`）⇒ 三者同时为 0 ⇔ 本地条目表为空 ⇒ 该轮**必然 `pushed=0`**，与方向无关。
+- **配方（可照抄）**：判「桶库存是否扫完」⇒ 比对轮汇总行 `pulled_buckets` 与生产 `SELECT SUM(item_count) FROM sync_buckets`；相等 ⇒ 扫完（`bucket_scan_complete=TRUE`）⇒ 桶推闸门必开。
+- **配方（可照抄）**：杀 WeaselServer 前等 leveldb 静默 ⇒ `Get-ChildItem <userdb> -Force | Sort-Object Name | % { "$($_.Name):$($_.Length):$($_.LastWriteTime.Ticks)" }` 连续两次 60 s 快照相同（v5 的 `Wait-ImportQuiet`）。
+### P-O —— v5 稳态轮：判据轮**全量重推 1,000 桶**（稳态零写不成立）+ v5 脚本路径缺陷处置 + §P-M.5 终态回填 + `CLAUDE.md` 指针同步（2026-11-26 10:18–11:0x；本文档最新事实，与上文冲突以 §P-O 为准）
+
+> 本节是**本批最新事实**；与 §P-N 及上文冲突时**以本节为准**。
+> 本轮**未改任何产品代码、未跑门禁、未出包、未 push**（门禁基线 `PASS=924 FAIL=0` 仍为 §P-L.8.1 的值，本轮不重复声称）；动作 = 真机取证（v5 稳态轮）+ 文档回写（§P-M.5 终态字段回填 + 本节 + 接力 prompt）+ `CLAUDE.md` 指针行同步。
+
+#### P-O.1 v5 的目标与判据设计
+
+v4 已把「阶段 2 桶推路径客户端自证」打穿（`pushed=16`）⇒ 本批剩余的真机缺口只剩**稳态**：
+
+| # | 待验问题 | 判据口径 |
+|---|---|---|
+| ① | 桶推过一次之后，下一轮是否**只推指纹变化的桶**（稳态零写）？ | 轮汇总行 `bucket phase=2 pushed=N`，**N=0** 才算稳态零写 |
+| ② | 被配额截断的桶（`held_quota=24`）下一轮**是否被重新选中**？ | **AC-215 判据②**（此前未判定） |
+| ③ | 稳态一轮的**真实 D1 写入量**是多少？ | `rows_written_24h` 轮前轮后差分（**AC-212** 输入） |
+
+**判据口径（沿用 v4 教训）**：只认**轮汇总行** `bucket phase=2 pushed=N`；函数内埋点 `quota_rows=` **不得**用作完成判据（§P-K.5）。
+**v5 判据选择规则**：若日志出现 `bucket quota …` 行 ⇒ 取**该 quota 行之后的那条汇总行**（= kBoth 轮）；若无 quota 行（稳态零写 ⇒ 一个桶都不推）⇒ 取**第 2 条汇总行**。
+**轮次窗口**：v5 = 45 min 窗口 / 25 min 回滚 / 12 min 静默上限（`WINDOW_MIN=45 ROLLBACK_MIN=25 QUIET_MAX_MIN=12`）。
+
+#### P-O.2 【工具坑 · 高危】v5 首跑是**无效轮**：runner 脚本的 exe 路径多了一层 `weasel`
+
+| 项 | 实况 |
+|---|---|
+| 现象 | v5 日志 `10:21:32 RESTART[phase2] FAILED: … 系统找不到指定的文件。` |
+| 根因 | 脚本第 31 行 `$serverExe = 'D:\Program Files\fluxing\weasel\weasel\WeaselServer.exe'` —— **多了一层 `weasel`**；真值 = `D:\Program Files\fluxing\weasel\WeaselServer.exe` |
+| 放大路径 | `Restart-WeaselServer` 的顺序是**先 kill 旧进程、再启动**（`phase2-steadystate-v5.ps1:66-71`）⇒ 启动失败 ⇒ **旧进程已被杀掉、新的没起来** ⇒ 整机无 WeaselServer |
+| 残留 | User 级 `FLUXING_CLOUD_SYNC_BUCKET_PHASE` 被脚本写成 `2`（`SetEnvironmentVariable(..., 'User')` 在 kill 之前执行）⇒ 违反「跑完必须清 User 级变量」硬约束 |
+| 处置 | ① `task_stop` 停掉看护；② 修 `$serverExe` 为单层路径；③ 清 User 级变量 + 删进程级变量；④ 无效轮日志另存为 `phase2-steadystate-v5-run-1-pathfail.log`（**保留作证据**），重跑另起 `phase2-steadystate-v5-run.log`；⑤ 全仓扫 `reports/fluxing-br-1g/` + `scripts/verify/` ⇒ **8 个 runner 的 `$serverExe` 全部正确** ⇒ **该缺陷是 v5 脚本独有** |
+| 新增铁律 | ① 改路径后必须先 `Test-Path` 自检再起跑（`Start-Process` 的报错不说是哪个路径）；② `Restart` 类函数应改成「**先确认新进程起得来，再杀旧进程**」 |
+
+#### P-O.3 v5 新增的安全闸：杀 WeaselServer 前必须等本地词典 leveldb 静默
+
+沿用 §P-N.6 发现 ②（本地词典被读成空 ⇒ `merged` 为空 ⇒ 桶推必然 `pushed=0`）。v5 脚本新增 `Wait-ImportQuiet`（`phase2-steadystate-v5.ps1:81-99`）：对 `rime_ice.userdb`（**leveldb 目录**）取「文件名:长度:LastWriteTime.Ticks」快照，**连续两次 60 s 快照完全一致**才算静默（`stable ≥ 2`），静默上限 12 min。**两个调用点**：① 进 phase 2 之前（kill 旧进程前）；② 回滚 kill 之前。
+v5 实测：preflight `stable=0 → 1 → 2`（10:24:52 / 10:25:52 / 10:26:52）⇒ `QUIET (safe to kill)`。
+
+#### P-O.4 【★ 本轮头号事实】v5 判据轮**全量重推了 1,000 个桶** ⇒ **稳态零写不成立**
+
+**判据轮原文（2026-11-26 10:45:50）**：
+
+```
+2026-11-26 10:43:57.608][cloudsync] bucket quota held_unproven=0 held_quota=24 rows_pushed=2000 rows_held=48 quota_rows=2000
+2026-11-26 10:45:50.236][cloudsync] reconcile scan_complete=0 matched=92353 deferred=1310 divergent=16 pushed=16
+2026-11-26 10:45:50.237][cloudsync] bucket phase=2 pushed=1000 skipped=0 pulled_buckets=1000 pulled_items=92353
+```
+
+v5 脚本判据：`JUDGE kind=after-quota`（取 quota 行之后的那条汇总行）⇒ **判据命中**。
+
+**结论三条（按证据强度排序）**：
+
+1. **稳态零写 = 不成立（本轮实测）**：桶推过一次之后，下一轮**不是零写**，而是把**整个云端库存 1,000 桶 / 92,353 条**重推了一遍（`pushed=1000 skipped=0`，`skipped=0` 说明服务端 HLC 守卫**一个都没挡**）。
+2. **触发链已坐实（此前是空白）**：`bucket quota …` 行 ⇒ **桶推路径确实被调用**（此前 v3 整轮都没出现 quota 行 ⇒ 被登记为「触发链缺口」，§P-M.1 订正为「窗口选错」后，**本轮首次拿到 quota 行的正面证据**）。⇒ **BR-①g 客户端桶化路径 = 真机可执行、可复现**。
+3. **写放大在桶化路径上复现**：单轮 1,000 桶 ⇒ D1 索引侧估算 **2,000 行**（`rows_pushed=2000`，正好等于配额上限 `kBucketPushRowsPerRound = 2,000`），另有 `held_quota=24` 桶 / `rows_held=48` 行**因配额用尽被延后** ⇒ **AC-215 判据②的「被截断桶下一轮被重新选中」需要下一轮才能验**（本轮只是被延后，尚未观察到重选）。
+
+#### P-O.5 【新发现 · 强】「全量重推」的机制假设：**轮末 `ImportUserDict` 覆盖式还原 ⇒ 下一轮全部桶指纹判变**
+
+**证据链**：
+
+| 环节 | 事实 | 位置 |
+|---|---|---|
+| ① 本地词典本轮被**整体还原** | 判据轮的 `reconcile matched=92353`（= 云端条目总数）⇒ 本地条目表在这一轮变成**云端全量**；此前启动轮是 `matched=0` | 日志 10:45:50 vs 10:31:45 |
+| ② 还原是**覆盖语义** | `ImportUserDict` 把合并后的 TSV 写成临时快照，再调 rime 的 `restore_user_dict` ⇒ **整库替换**，不是逐条 merge | `CloudRimeUserDictBackend.cpp:388-454`（`:437` `SafeRestoreUserDict`） |
+| ③ 桶指纹随之全变 | 桶指纹 `s2:` 由**本地条目**算出 ⇒ 整库替换后本地条目集合/内容改变 ⇒ 全部 1,000 个桶被判 `changed` ⇒ 全量重推 | `CloudSyncService.cpp:1940-1975`（`PushChangedBuckets` 分桶遍历 `merged`） |
+| ④ 结果 | `pushed=1000 skipped=0`：服务端一个都没挡 ⇒ **不是** HLC 守卫问题，而是客户端自己判「都变了」 | 日志 10:45:50 |
+
+⇒ **机制假设（待独立批次验证，尚未坐实）**：**「每轮末整库还原」本身会把本地词典改写成云端视图 ⇒ 下一轮所有桶指纹都变 ⇒ 每轮全量重推 1,000 桶 ⇒ 稳态零写无法成立、桶化写放大无法根治**。若成立 ⇒ **「只推指纹变化的桶」这条设计前提被自己的还原路径打破** ⇒ 必须把「还原」改成**只追加新条目 / 只更新被远端胜出的条目**（或让指纹只依赖**云端可验证的子集**）。
+⇒ **⚠ 口径边界**：`restore_user_dict` 的「覆盖」是 rime API 的既有语义，本轮**只读到了客户端调用点**，**未读 rime 侧实现** ⇒ 「覆盖」这一条是**推断**，不是坐实事实；`matched=92353` 与「指纹全变」之间的**因果链**也**未做差分验证**（本轮只有单点观测）⇒ 登记为**独立批次候选（优先级最高）**，不写成结论。
+
+#### P-O.6 【新发现】同一二进制同一配置下**桶拉取量不一致**（800 vs 1,000），且它直接决定桶推能否发生
+
+| 轮次 | 轮汇总行 | 桶推是否发生 |
+|---|---|---|
+| 启动轮（kPullOnly，10:31:45） | `bucket phase=2 pushed=0 skipped=0 pulled_buckets=800 pulled_items=73931` | **否**（方向不允许） |
+| **判据轮（kBoth，10:45:50）** | `bucket phase=2 pushed=1000 skipped=0 pulled_buckets=1000 pulled_items=92353` | **是** |
+
+- 判据轮**满拉 1,000 桶 / 92,353 条**，与生产 `sync_buckets` 的 `Σ item_count` **逐条相等** ⇒ 库存扫描完成 ⇒ 桶推闸门（R2「库存未证实不推送」）打开。
+- 启动轮只拿到 **800 桶 / 73,931 条**（少 200 桶 / 18,422 条）⇒ 库存**未扫完** ⇒ 闸门（结构性）关闭。
+- **代码口径**：单轮页数预算 = `BucketPullMaxPages(dict_count)` = `max(16, 词典数 × 11 + 2)`（硬上限 32）× `kBucketPullPageLimit = 100` ⇒ 单词典预算 **16 页 / 1,600 桶位**（`CloudSyncService.h:547-564`）⇒ **800 桶不是页数预算触顶**；停手只可能发生在 `:1923-1930` 的「服务端说没有更多（`page_more == false`）」或「`next_cursor` 为空」⇒ **停手点在页内/服务端侧，未坐实**。
+- **服务端侧有两条候选路径**（`cloud/fluxing-sync/src/sync-buckets.ts`）：① `after = Math.max(since, cursor ?? 0)` + `WHERE id > ?` ⇒ **增量起点 `since = bucket_seq_`（本设备侧车 bseq）与「桶行全局 id」语义不同**，可能**跳过**别人的/更早的桶；② **R2 对象缺失自愈**：`handleBucketPull` `:364-397` 会 `DELETE FROM sync_buckets` 删掉缺对象的桶索引行 ⇒ **一次拉取就可能在 D1 上产生写入**（删除也计行）⇒ 与「只读轮次零写入」的预期冲突。
+- ⇒ **这条差异不是无关的时序现象**：它**直接决定桶推闸门开不开**（库存没扫完 ⇒ 闸门关 ⇒ 该轮不可能推桶）⇒ **升级为阶段 2 的头号阻塞项之一**，与「规则 1 盲区」并列。
+
+#### P-O.7 【新发现 · 推翻旧假设】「本地词典读成空」**不是**「kill 落在导入窗口」
+
+- §P-N.6 发现 ② 曾把「本地词典为空」归因为「kill 落在导入窗口」；**本轮证据推翻该归因**：v5 的 kill **前已等过静默**（preflight `stable=2` ⇒ `QUIET (safe to kill)`），而判据轮依旧出现 `matched=0 deferred=0 divergent=0`（⇒ 本地条目表为空）。
+- 同时，**侧车与磁盘都不支持「词典真的空」**（10:36 取证）：侧车 `row` 行 **93,278 条** + `brow` 行 **1,000 行**；`rime_ice.userdb` 目录仍有 `002446/002447/002448/002450/002452.ldb`（合计 ≈ 8.2 MB）。
+- ⇒ 「本地条目表为空」是**导出/还原链路上的一次异常读出**，而非「磁盘上真的没有数据」。
+- **代码线索（未坐实）**：`ExportUserDict` 的实现是「rime 备份 → 读快照文件 → 追加到 text」，其中 **`exported` 计数在 `ReadFileText` 成功但文件为空时也会自增** ⇒ 可能出现「导出成功但文本为空 ⇒ 0 条目」的假空；另一侧 `ImportUserDict` 是**覆盖式还原**（P-O.5 ②）⇒ 若传入空快照，会**把词典清空**。
+- ⇒ **这是潜在的数据完整性缺陷（P0 待查）**：若「假空」+「覆盖还原」成立 ⇒ **一轮异常就能抹掉用户本地词条**。**须独立批次 + ADR + 门禁用例**（模拟「备份文件为空」与「空快照还原」两条路径），**本轮只登记、不下结论**。
+
+#### P-O.8 v5 稳态轮的生产 D1 差分
+
+| 指标 | 轮前（10:23:36–10:23:52） | 轮后（10:46:24–10:46:41；`sync_items` 由 10:55 只读补查） | 差分 |
+|---|---|---|---|
+| `sync_buckets` 行数 | 1,000 | 1,000 | **0** |
+| `sync_buckets` id 区间 | min 2 / max 1027 | min 1028 / max 2027 | **整表翻页（max +1,000）** |
+| `sync_buckets` Σ item_count | 92,353 | 92,353 | **0** |
+| `sync_buckets` 设备数 | 1 | 1 | 0 |
+| `sync_items` 行数 | 40,069 | 40,069 | **0** |
+| `sync_items` max id | 71,306 | 71,322 | **+16** |
+| `rows_written_24h` | 7,089 | 13,185 | **+6,096 行** |
+
+- **桶行计数不变、id 全量翻新**（2..1027 → 1028..2027）⇒ 服务端对 1,000 个桶执行了 `DELETE + INSERT`（ADR 0076 D2-4 既有模式，`id` = `server_seq` = pull 游标）⇒ 桶级重写**不增行数**，但**整表 id 翻页** ⇒ 再次印证 P-O.6 候选 ①：「桶行全局 id」与客户端侧车 `bucket_seq_`（增量起点）语义错位。
+- **`sync_items` 行数不变（40,069）** ⇒ **桶推路径不写条目级表**（本轮 92,353 条**没有**进 `sync_items`）；`max id +16` 恰对应 reconcile 的 `pushed=16`（legacy 条目级路径推的 16 条 ⇒ 16 DELETE + 16 INSERT）⇒ 桶化在**服务端写侧**确实与条目级路径分离（与 §P-N 的 `sync_items` 40,066 → 40,069 形态一致）。
+- **⚠ 写放大实测（本轮第二个独立证据）**：本轮**单轮**实际 D1 写入 **6,096 行**，而客户端配额估算是 **2,000 行**（`quota_rows=2000`，`kBucketPushRowsPerRound`）⇒ **实际 ≈ 估算的 3.05 倍**。已归因部分：`sync_buckets` 1,000 DELETE + 1,000 INSERT = 2,000 行；`sync_items` 16 + 16 = 32 行；**未归因 ≈ 4,064 行**（候选：`devices.last_seen` 的读路径刷新、`refresh_tokens`、Cloudflare 侧索引/触发器的行计数口径、或服务端桶推落库不止 1 行/桶）⇒ **未归因 4,064 行登记为新未闭环项**（承 §P-O.12 的「2,901 行未归因」同类）。
+- **对照护栏**：盘上 `cloud/fluxing-sync/wrangler.toml` 的 `WRITE_BUDGET_ROWS_PER_DAY = "80000"`（**盘上回读为准**；handoff §O 拍板记的 20,000 **未落盘**，两者差异登记为未闭环项）⇒ 本轮一次就把 **6,096 行 ≈ 日预算的 7.6%** 写掉 ⇒ 「一轮全量重推」在额度上是**日预算级事件**，不是可忽略的量级。
+- **⚠ 脚本侧缺陷（不影响结论）**：v5 脚本的 `D1_AFTER_ITEMS` 查询返回 `{"error":{"text":"fetch failed"}}`（10:46:37，瞬时网络失败）⇒ 本表 `sync_items` 轮后值由 **10:55 只读补查**取得（**只读 SELECT，未消耗写额度**）；该查询失败**不得**当作「表读不出来」的证据。
+
+#### P-O.9 v5 收官（回滚双判据）
+
+**收官双判据全部达成**（脚本自证，`phase2-steadystate-v5-run.log` 10:53:27）：
+
+| 判据 | 结果 | 证据 |
+|---|---|---|
+| 日志 `bucket phase=0` | ✅ `VERDICT[rollback]=PHASE0_OBSERVED` | 10:53:18 日志 `bucket phase=0 pushed=0 skipped=0 pulled_buckets=0 pulled_items=0` |
+| 侧车 `phase` = 0 | ✅ `SIDECAR_PHASE_LINE=phase	0`（**自然写回**，未触发兜底改写） | 侧车 mtime 10:53:18 / size 12,115,321 |
+| User 级环境变量 | ✅ `USER_PHASE_CLEARED=[]`（已删除；回滚前 `USER_PHASE_AT_ROLLBACK=[0]`） | 10:53:27 |
+| 脚本终态 | ✅ `FINAL judge_kind=after-quota judge=[… bucket phase=2 pushed=1000 skipped=0 pulled_buckets=1000 pulled_items=92353] summaries=2 quotas=1 phase0_seen=True sidecar_phase=0` + `=== STEADY-STATE V5 END ===` | 10:53:27 |
+
+- **判据取行正确**：`JUDGE kind=after-quota` 取的是**配额行（10:43:57）之后那条轮汇总行（10:45:50）** ⇒ 遵守「不可误读 ⑤」。
+- **副作用记录**：`SIDECAR_BROW_COUNT=1000`、`SIDECAR_BSEQ=1027`（bseq 1011 → **1027**，+16，与本轮 legacy `pushed=16` 同量，成因未坐实）⇒ 桶推后侧车 `brow` 仍为 1,000 行、`bseq` 继续推进 ⇒ **§P-H.4「brow 不落盘」在 v5 复跑中不复现**（与 §P-N 发现 ③ 一致）。
+- **收官后运行态**：WeaselServer **pid 201240**（10:49:46 起，phase=0 拉起）存活；**不得再杀该进程**（杀进程会重置 `startup_pending_`，把下一轮变成 kPullOnly 启动轮，§P-M.3）。
+- **⚠ 新观测（与 P-O.5 / P-O.7 互相印证，登记为待查）**：两次「回滚后 phase-0 轮」的 reconcile **完全同值** —— v4 的 10:16:23 `matched=67 deferred=1310 divergent=0 pushed=0`、v5 的 10:53:18 `matched=67 deferred=1310 divergent=0 pushed=0`。而判据轮（10:45:50）明明是 `matched=92353`。
+  - 若 `matched` 口径确为「按 `local_entries` 下标累加」（§P-N.5 发现 ④），则 ⇒ **回滚后的本地条目表只剩 67 条可比对**，与「本地词典被还原成云端全量 92,353 条」**不相容** ⇒ **P-O.5「整库还原 ⇒ 指纹全变 ⇒ 全量重推」的因果链**在「本地条目规模」这一环上**对不上**（现象成立、机制未定）。
+  - 同一信号也可解释为 **P-O.7 的「假空」不是偶发**：本地词典在多轮之后**稳定地只读出 67 条**（两次独立轮次同值 ⇒ 可复现，非时序噪声）⇒ **P0 数据完整性怀疑的优先级应从「待查」提到「头号」**：需独立批次实测「导出的 TSV 快照行数 / 还原后 leveldb 实际条目数 / reconcile 的 `local_entries` 长度」三者的差异。
+  - **本轮只登记，不下结论**：未读 rime `restore_user_dict` 实现、未做差分验证。
+
+#### P-O.10 §P-M.5 终态字段回填（v4）+ 两条未闭环项闭合
+
+| 位置 | 原状 | 本轮处置 |
+|---|---|---|
+| §P-M.5「终态（待回填）」行 | 留空 | **已回填** v4 全部终态（`ROUND_SUMMARY_SEEN=YES pushed=16` / D1 三项差分 / 回滚双判据 / `FINAL … sidecar_phase=0`），证据指向 §P-N |
+| §P-M.6 第 9 条「v4 终态未回填」 | 未闭合 | **已闭合**（v4 于 10:16:39 收官，`=== CLOSEOUT V4 END ===` / EXITCODE=0） |
+| §P-M.6 第 13 条「v4b 上级看护仍在跑」 | 未闭合 | **已闭合**：v4 自身拿到 `pushed=16` ⇒ v4b **未触发第二轮**，按设计收官；「窗口偏紧」由 §P-N 订正为**作废**（真实节律 ≈82 s，不是 60 min） |
+
+#### P-O.11 `CLAUDE.md` 指针行同步（承接 §P-M.6 第 12 条）
+
+`CLAUDE.md` 第 49 行 BR-①g 指针行**已就地改写**（1,114 B → 1,873 B；文件仍 **LF 无 BOM / 148 行不变**）。新指针块覆盖：阶段状态机 0–4 + 侧车 v2 + 1024 桶 + HMAC 桶键 + HLC 守卫 + 语义指纹 + 只推变化桶 + 拉取页数上限；**阶段 2 真机自证取得**（v4 `pushed=16`、单轮 D1 写入 ≈147 行、收官双判据达成）；**两条新发现**（`brow` 已落盘 1,000 行 ⇒ 订正 §P-H.4；本地词典为空 ⇒ `pushed=0` 第二重成因 ⇒ 杀进程前须等 leveldb 静默）；**未闭环**（AC-09 仍 FAIL / AC-212 / AC-215 判据② / 规则 1 盲区 / 阶段 3 仍禁）。
+**改写手法（可照抄）**：新指针行先落 `reports/fluxing-br-1g/claude-line49-new.md`，再用 `[IO.File]::ReadAllLines` 按前缀匹配 `- **BR-①g 客户端桶化（ADR 0077 客户端段 D12–D28*` 定位后替换整行，`WriteAllText(UTF8Encoding($false))` 写回 ⇒ **天然避免 CRLF / BOM 污染**。
+
+#### P-O.12 本轮未闭环项（承 §P-N.9，更新）
+
+- **AC-09 = FAIL**（不得改记；只有日志出现 `AC09_VERDICT=PASS` 才可改）。
+- **AC-212 未判定**（v4 桶推侧单轮 ≈147 行；v5 判据轮单轮 **1,000 桶 / 2,000 估算行**；仍缺「单桶耗时」埋点与多轮样本）。
+- **AC-215 判据②**（被截断的桶下一轮是否被重新选中）—— 本轮 `held_quota=24` 只是**被延后**，**尚未观察到下一轮重选** ⇒ **仍未判定**。
+- **稳态零写 = 不成立**（本轮实测全量重推 1,000 桶）⇒ §P-O.5 的机制假设（整库还原 ⇒ 指纹全变）成为**头号待查项**。
+- **规则 1 盲区**（§P-M.8 发现 ②）：`inventory_complete` 只看「拉到底了」，`unproven_keys` 不收「远端桶读不出来」的键 ⇒ 半库存桶会被回推 ⇒ 服务端 `DELETE+INSERT` 静默删条目 ⇒ **阶段 3/4 之后不可逆** ⇒ 须独立批次 + ADR + 门禁用例。
+- **桶拉取量不一致**（800 vs 1,000，P-O.6）⇒ 阶段 2 桶推无法常态化 ⇒ 须独立批次定位停手点。
+- **本地词典「假空」+ 覆盖式还原**（P-O.7）⇒ 潜在数据完整性缺陷（P0 待查）。
+- **阶段 3 仍禁**（硬前置 = 云端历史 40,061 条先完成桶化覆盖，§O-1.1 / ADR 0077:411-412）。
+- 承继未坐实项：阶段 1「704/1,000」缺口成因、「500 vs 704」拉取差异根因、桶内容 65,104 vs 本地 54,603、D1 行写入 2,901 行未归因、历史截断值 500/704/800/1,000 差异来源。
+
+#### P-O.13 本轮工具坑与配方（新增，须带走）
+
+1. **runner 脚本 exe 路径自检**：`Start-Process` 失败时 PowerShell 只说「系统找不到指定的文件。」，**不说是哪个路径** ⇒ 起跑前必须 `Test-Path` 打印 True/False。
+2. **`Restart` 先杀后起的顺序危险**：启动失败 ⇒ 整机无 WeaselServer（本轮实测）。
+3. **杀 WeaselServer 前等 leveldb 静默**（P-O.3）。
+4. **全仓 grep 必超时**：不带 `path` 收窄的 `rg` 在本仓库会超时 ⇒ 只扫 `reports/fluxing-br-1g/` + `scripts/verify/`；`Select-String` 默认**大小写不敏感** ⇒ 搜 `weasel\weasel` 会误命中 `weasel\WeaselServer.exe`，须逐行人眼确认。
+5. **交接卡不采信**（承 §P-M.7）：harness 注入的 `maintenance\task-state\LATEST.md` 属**别的项目**（PractiLog）⇒ 未读、未采信。
+6. **后台任务取消后必须自行收尾**：被 `task_stop` 的看护不会执行自己的回滚段 ⇒ 取消后**立即**核查「进程在不在 / User 级变量清没清 / 侧车 phase 是几」三项（本轮三项全部要手工复位）。
+7. **判据必须同时看 `matched`**：`matched=deferred=divergent=0` ⇔ 本地条目表为空 ⇔ 该轮必然 `pushed=0` ⇒ 任何「零写」结论前必须先排除本地词典为空。
+
+#### P-O.14 下一步建议与待用户裁定（**不自行决定**）
+
+- **建议 v6（下一轮真机轮）**：① 验 AC-215 判据② —— **必须连续跑两轮**（第一轮产生 `held_quota`，第二轮观察被延后的桶是否重选）；② 在两轮之间**不重启进程**（避免重启重置 `startup_pending_` 又变成 kPullOnly 轮）；③ 预期第二轮若仍是 `pushed=1000` ⇒ 稳态零写**确证不成立** ⇒ P-O.5 机制假设成立。
+- **建议独立批次立项**（优先级从高到低）：① **还原路径 ⇒ 桶指纹全变 ⇒ 每轮全量重推**（P-O.5，若成立则直接决定桶化能否落地）；② **本地词典「假空」+ 覆盖式还原**的数据完整性缺陷（P-O.7，P0）；③ 规则 1 盲区（**阶段 3 的硬阻塞**）；④ 桶拉取 800/1,000 停手点定位；⑤ `AC-212` 的单桶耗时埋点。
+- **待用户裁定**：是否 push（分支仍 ahead，未 push）；上述五项是否立项与优先级；阶段 3 开闸与否；**BR-②′ 全局同步写熔断 / BR-⑤（jury.xin 自建）/ 腾讯云两项安全配置 / 定时任务合并**四项仍未拍板。
