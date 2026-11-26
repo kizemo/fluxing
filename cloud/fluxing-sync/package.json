@@ -2,7 +2,7 @@
   "name": "fluxing-sync",
   "version": "0.1.0",
   "private": true,
-  "description": "Fluxing 火流猩输入法 · 用户资料云同步服务端（Cloudflare Workers + D1 + R2）",
+  "description": "Fluxing 火流猩输入法 · 用户资料云同步服务端（双底座：Cloudflare Workers + D1 + R2 / 自建 Node + PostgreSQL + 本地对象存储）",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
@@ -10,6 +10,7 @@
     "migrate:local": "wrangler d1 migrations apply fluxing-sync --local",
     "migrate:remote": "wrangler d1 migrations apply fluxing-sync --remote",
     "test": "vitest run",
+    "test:pg": "vitest run --config vitest.pg.config.ts",
     "check:endpoint": "node test/check-endpoint-policy.mjs",
     "check": "npm run check:endpoint && vitest run",
     "typecheck": "tsc --noEmit"
@@ -20,5 +21,8 @@
     "typescript": "^5.9.2",
     "vitest": "^4.1.0",
     "wrangler": "^4.159.0"
+  },
+  "dependencies": {
+    "pg": "8.23.1"
   }
 }
