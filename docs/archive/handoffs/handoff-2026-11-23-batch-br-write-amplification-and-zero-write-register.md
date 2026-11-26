@@ -3300,7 +3300,7 @@ $logs = Get-ChildItem -LiteralPath 'F:\soft\00selfmade\rime_claude\reports\fluxi
 | 更新 `reports/fluxing-br-1g/pg-port-selftest.ts`（31 → 37 项） | 不改客户端 C++ / 不升版 / 不出包 / 不装机 / 不启停 WeaselServer |
 | 门禁与审计脚本留在 `reports/**`（不入库） | 不动生产 D1 / R2 / ECS / Cloudflare / 远端 PG |
 
-**一句话状态**：W6 必改项**已落码 + 门禁全绿 + 已入库**（commit `5a65a69`），**且已 push**（直连成功：远端 `refs/heads/feat/100-cloud-sync` = `8645b2778125f26c66e586feeeb704485274b26d`，与 `git rev-parse HEAD` **逐字相等**，ahead 0 / behind 0）；「145 个 `?`」过计数已订正为 **135**（recon §9.3 / §9.4 + shim 头注释三处同步）；W7 切源仍不可执行（§V-6 八条阻塞原样未解）。
+**一句话状态**：W6 必改项**已落码 + 门禁全绿 + 已入库**（commit `5a65a69`），**且已 push**（直连成功；快进推送 `442e0ba..8645b27`，硬判据 `ls-remote` 与 `rev-parse HEAD` **逐字相等**、ahead 0 / behind 0；远端 SHA 随本节订正批前进 ⇒ **以 `git ls-remote kizemo refs/heads/feat/100-cloud-sync` 实时回读为准**）；「145 个 `?`」过计数已订正为 **135**（recon §9.3 / §9.4 + shim 头注释三处同步）；W7 切源仍不可执行（§V-6 八条阻塞原样未解）。
 
 ### W-2 逐条对照（§V-11 第 ② 项 → 落地）
 
@@ -3435,7 +3435,7 @@ git -C 'F:\soft\00selfmade\rime_claude' rev-parse HEAD
 ### W-8 Git 现状
 
 - 分支 `feat/100-cloud-sync`，远端 `kizemo`（https://github.com/kizemo/fluxing.git）+ `kizemo-ssh`（ssh）。
-- **已 push（直连）**：远端 `refs/heads/feat/100-cloud-sync` = `8645b2778125f26c66e586feeeb704485274b26d`，与 `git rev-parse HEAD` **逐字相等**（`VERBATIM_EQUAL=True`），`ahead 0 / behind 0`；推送前远端停在 `442e0ba`，本次为**快进**推送（`442e0ba..8645b27`，未用 force）。本批两次提交 = `5a65a69`（代码批：`d1-shim` 断言 + 20 条新用例 + ADR 0079）+ `8645b27`（文档批：handoff `## W` + 接力 prompt 改写 + recon §9.3/§9.4/§9.6）。
+- **已 push（直连）**：快进推送 `442e0ba..8645b27`，随后 `c1301f7`（本条订正批）亦已直连推送；硬判据 `git ls-remote kizemo refs/heads/feat/100-cloud-sync` 与 `git rev-parse HEAD` **逐字相等**（`VERBATIM_EQUAL=True`），`ahead 0 / behind 0`，未用 force。**远端 SHA 随订正批前进 ⇒ 实时回读为准，不在台账里写死。** 本批提交序列 = `5a65a69`（代码批：`d1-shim` 断言 + 20 条新用例 + ADR 0079）+ `8645b27`（文档批：handoff `## W` + 接力 prompt 改写 + recon §9.3/§9.4/§9.6）+ `c1301f7`（push 状态订正批）。
 - 工作区未入库杂项照旧：`librime`（子模块脏）、`release/`、`reports/**`、`scripts/verify/*.ps1`、`docs/design/quickpanel-v6/design-demos/*.html` 等 —— **本批一个都没 `git add`**。
 - 全局 `http.proxy` / `https.proxy` = `http://127.0.0.1:7897`（本批未改）。
 
