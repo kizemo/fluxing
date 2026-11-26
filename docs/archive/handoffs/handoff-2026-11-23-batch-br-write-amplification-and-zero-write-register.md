@@ -4381,3 +4381,31 @@ BR-①g 的"稳态零写不成立"判定、以及多轮"pushed=0 skipped=0"都�
 3. 把 `r2_key` 指向的对象体搬进 `FLUXING_OBJECT_ROOT`（或改为双读对账），否则切读必空；
 4. 定 `WRITE_BUDGET_ROWS_PER_DAY` 口径（80,000 vs 20,000）并落盘；
 5. 切源四段（双写 → 校验 → 切读 → 退役）**不得跳段**；切读前三洞 = 第 3 / 4 / 5 条未闭合。
+
+## AD（2026-11-26 23:52 · 入库推送回写：三提交 + 直连推送硬判据成立；切源仍未开始）
+
+**本节是 `## AC` 的 git 状态订正**：`## AC` 正文四处「未 commit / 未 push」（行 4265 / 4277 / 4349 / 4358）与 §AC-9 第 2 条「决定是否 commit/push」**均已作废，以本节为准**。除此之外 `## AC` 的技术结论（迁移实测值、ECS 真实态、凭据现场、切读前三洞）**全部仍然有效**。
+
+### AD-1 三个提交（按模块分，不做一次性大提交）
+
+| 序 | 提交 | 标题 | 范围 |
+|---|---|---|---|
+| 1 | `bfb978c` | `fluxing(sync): 对象写入补偿改为版本化键并回收旧版本（ADR 0080）` | 7 改 + ADR 0080 新增，8 files / +566 / −20 |
+| 2 | `3495840` | `WeaselServer: 同步诊断行新增早退原因 early_exit（BR-①h）` | 4 files / +355 / −8（含 `version.txt` 1.3.11→1.3.12） |
+| 3 | `7d23993` | `docs: 登记 U1 补偿落码与 D1→PG 首次生产迁移演练（handoff §AC）` | 2 files / +721 / −2 |
+
+拆分理由：U1 是云侧 TS（`cloud/fluxing-sync`）、BR-①h 是客户端 C++，模块前缀不同则 scope 不同；ADR 0080 与 U1 落码属同一决策，故随提交 1 入库。
+
+### AD-2 推送与硬判据（逐字相等）
+
+- 远端 `kizemo`（`https://github.com/kizemo/fluxing.git`），分支 `feat/100-cloud-sync`。
+- `git -c http.proxy= -c https.proxy= push kizemo feat/100-cloud-sync` ⇒ `a1f326b..7d23993`，**`PUSH_EXIT=0`**。
+- **`LOCAL_HEAD=7d239936bf734dfd24ea8c9e99b6a2ac7f12f829`**；**`LSREMOTE=7d239936bf734dfd24ea8c9e99b6a2ac7f12f829  refs/heads/feat/100-cloud-sync`** ⇒ **逐字相等，硬判据成立**（`LSREMOTE_EXIT=0`）。
+
+### AD-3 有意未入库（照旧规则，不得被下轮当遗漏）
+
+`librime`（submodule 脏）/ `reports/**`（`fluxing-bk-syncstatus` 12 份、`fluxing-bo-12002`、`fluxing-br-1c` / `-1f` / `-1g`、`fluxing-bh-ui` 的 `.bak-pass8`）/ `release/` / `scripts/verify/*.ps1` ×6 / `tmp/**`（`d1dump` 三件与 `cm1..3.txt`）/ `env.bat` / `docs/design/quickpanel-v6/design-demos/{a-benchmark,b-craft,c-roulette}.html`（设计稿，非本批范围）。
+
+### AD-4 状态一句话
+
+代码与文档**已在远端**；**切源四段一步未动** —— 客户端仍打 D1、`FLUXING_PG_URL` 未改、`fluxing-sync.service` 未重启，`fluxing_sync` 里仍是 **2026-11-26 23:36 快照**且**继续落后**（D1 仍是唯一现役写入端）。红线不变：桶化 phase 恒 0、阶段 3/4 永不启用、**AC-09 仍 FAIL 不得改记**、切读前三洞（R2 对象体 / 写预算 80k↔20k / 规则 1 盲区）未闭合。
