@@ -2679,7 +2679,7 @@ v5 脚本判据：`JUDGE kind=after-quota`（取 quota 行之后的那条汇总�
 2. `cloud/fluxing-sync/migrations-pg/0001_init.sql`（**16,500 B**，PG DDL 草案，**未在任何 PG 实例执行过**）；
 3. 本节台账。
 
-**本轮未做**：未执行 DDL / 未改 `cloud/fluxing-sync/src/**` / 未改客户端任何一行 / 未跑门禁 / 未出包 / 未装机 / 未启停任何 runner / 未动生产 D1 与 R2 / 未做腾讯云远端变更 / **未 push**（分支 `feat/100-cloud-sync` **ahead 29**）。
+**本轮未做**：未执行 DDL / 未改 `cloud/fluxing-sync/src/**` / 未改客户端任何一行 / 未跑门禁 / 未出包 / 未装机 / 未启停任何 runner / 未动生产 D1 与 R2 / 未做腾讯云远端变更 / **未 push**（分支 `feat/100-cloud-sync`；ahead 数以 `git status -sb` 盘上回读为准，本文件每追加一笔 docs 提交即 +1）。
 
 ---
 
@@ -2786,7 +2786,7 @@ HTTP(nginx) → src/node-server.ts (新, ~120 行)  node:http → Request/Respon
 
 #### Q-10-11 待裁定
 
-1. **`git push` 策略**：分支 `feat/100-cloud-sync` **ahead 29**，未推送 —— 仍未裁定。
+1. **`git push` 策略**：分支 `feat/100-cloud-sync` **未推送**（ahead 数以 `git status -sb` 盘上回读为准，不写死） —— 仍未裁定。
 2. **阶段 3 / 4「B 路线下永不启用」**这条登记口径需用户确认（与 §O-1.1 的「阶段 3 硬前置」不冲突，是更强的结论）。
 3. **`§Q-3` 旧判定是否正式标注「已被 §Q-9 部分推翻」**（现做法 = 只追加不复写，保留原文）。
 4. **ADR 0079（拟）** = 路线 B 底座迁移 + 桶化退役；须记录阶段 3/4 永不启用、D1 时代参数改因（R5）。
