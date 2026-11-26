@@ -2804,3 +2804,74 @@ HTTP(nginx) → src/node-server.ts (新, ~120 行)  node:http → Request/Respon
 
 ---
 
+
+## R W1–W4 移植收口（2026-11-26 · 路线 B 的第一批落地代码）
+
+### R-1 本轮指令与结论
+
+用户指令逐字：「先做 W1–W4 移植」。W1–W4 = 路线 B（自建 PostgreSQL + 本地对象存储）的四个**边界**文件，**不含**业务 handler 改写（`route()` / 13 个 handler / `wire.ts` / `crypto.ts` / `errors.ts` 逐字未动）。
+**结论：W1–W4 已完成并入库（`39cc4c4`，5 文件 1330 行），类型门禁 / 打包 / 运行期自测 / 启动冒烟四项全绿。**
+**但「可跑的生产服务」不成立**：`node_modules/pg` 不存在、`migrations-pg/0001_init.sql` 从未在任何 PG 实例执行 ⇒ **真实 PG 端到端链路一次都没跑过**，本轮绿的是「边界层行为 + 配置闸门」，不是「PG 能承载 4 万条同步」。
+
+### R-2 产物（盘上回读字节，全部入库）
+
+| 文件 | 字节 | 职责 |
+| --- | --- | --- |
+| `cloud/fluxing-sync/src/pg/dynamic-import.ts` | 1,695 | 运行期 `import()` 助手，避开静态 `import 'pg'` / `'node:*'` |
+| `cloud/fluxing-sync/src/pg/d1-shim.ts` | 14,656 | `D1Database` 兼容层（`prepare` / `bind` / `batch` / `meta.changes` / `first(col)`） |
+| `cloud/fluxing-sync/src/pg/r2-fs.ts` | 16,859 | `R2Bucket` 兼容层落本地目录（`get` / `put` / `delete` / `list` / `head`） |
+| `cloud/fluxing-sync/src/node-server.ts` | 17,226 | HTTP 进程入口，**只导出库函数、不自动起进程** |
+| `cloud/fluxing-sync/src/node-main.ts` | 1,101 | **唯一**自动启动点 |
+| `cloud/fluxing-sync/migrations-pg/0001_init.sql` | 16,500 | PG DDL 草案（9 表 / 22 索引），前一轮入库 `4a267e9`，**从未执行** |
+
+三个 shim 工厂的真实签名（逐字，不可再猜）：`createPgPool({connectionString,max}) → Promise<{pg,pool}>`（`d1-shim.ts:368`，内置 `pool.on?.('error',…)`）、`createPgDatabase(pg,pool) → PgCompatDatabase`（`:347`）、`loadPgModule()`（`:359`）、`createFsBucket(rootDir) → Promise<FsBucket>`（`r2-fs.ts:390`，内部 `dynamicImport('node:fs/promises')` 且 `await bucket.ready()`）。
+
+### R-3 门禁与自测（复跑轮，证据 `reports/fluxing-br-1g/pg-port-gate.txt`）
+
+- `TSC_EXIT=0` / `TSC_LINES=0`（`node node_modules\typescript\lib\tsc.js --noEmit -p tsconfig.json`）
+- `ESBUILD_EXIT=0` / `BUNDLE_BYTES=108734` / `BUNDLE_SHA256=1C2B0BB6CCEA4C56C8B56C481D398EDCFFDE753C507A6F603B5AFE0D892B9696`（`--external:pg`，pg 不进包体）
+- **运行期自测 `SELFTEST_PASS=31 SELFTEST_FAIL=0`**（`RUN_EXIT=0`，逐项输出 `reports/fluxing-br-1g/pg-port-selftest-run.txt`）
+- 上一轮曾 2 项红：`db-bind-object-json` = **我断言写错**（`normalizeBindValue` 只做 `undefined→null` / `boolean→1|0` / `bigint→串`，对象原样透传给 pg JSON 化；D1 会报类型错但仓库零处绑定对象 ⇒ 已改名 `db-bind-object-passthrough` 并注明刻意不模拟 D1 错误）；`r2-list-keys-verbatim` = **真缺陷**（见 §R-5）。
+- **本轮的强制动作**：`r2-fs.ts` 改动后**必须**复跑全链 —— 上一轮的绿只对修复前源码成立，不得沿用。
+
+### R-4 启动冒烟（缺配置闸门）
+
+`NODE_VERSION=v26.13.0`；`SMOKE_A_EXIT=1`；stderr = `[fluxing-sync] 启动失败：缺少必需的环境变量 FLUXING_PG_URL，拒绝启动。`
+三项同时成立才算过：**模块解析未崩**（否则会先报 `ERR_MODULE_NOT_FOUND`）+ **配置闸门有效** + **非零退出**。
+
+### R-5 两个真缺陷（`r2-fs.ts` 编码层，本轮唯一实质修复）
+
+实测得 `["users/u1/_con/edge%2E","users/u1/note.txt"]`，暴露两处：
+1. **`list()` 交出物理名**：`account.ts:58` 把 `object.key` 直接回喂 `delete`（`:254` 再走 `#absolute` 编码）⇒ **二次编码** ⇒ 删不掉 ⇒ `account.ts:73-75` 自证探针永远看到残留 ⇒ 用户看到「云端数据未完全清除」。
+2. **保留名与逻辑名撞名**：保留名 `con` 加 `_` 前缀后与逻辑 `_con` 落在**同一物理名** ⇒ **静默覆盖**。
+
+修法（7 组精确替换，计数断言全 =1）：`encodeSegment` 段首 `_` **先**转成 `%5F` **再**做保留名判定（单射且可逆）；新增私有 `decodeSegment` + **导出 `decodeObjectKey`**；`list()` 改为 `objects.push({ key: decodeObjectKey(relative), size })`；三处「从不解码 / 单向」注释订正为「可逆 + list 还原逻辑 key」，并登记前缀比对的已知偏差（`c` 前缀匹配不到 `con`，实际前缀 `users/<id>/` 不受影响）。自测新增 `r2-injective-reserved-vs-underscore`（`col/con/a`='A' 与 `col/_con/a`='B' 必须各读各的）。
+
+### R-6 未验证（不得当结论）
+
+1. **`PG_INSTALLED=False`** ⇒ `startServer` 走真实 PG 的链路从未运行；连通断网能否 `npm install pg` 未验证。
+2. `migrations-pg/0001_init.sql` **从未执行**；前置（`psql -v ON_ERROR_STOP=1 -1 -f` + 回读 9 表 / 22 索引）**无环境可跑**。
+3. 自测用**假 pool** 驱动 d1-shim ⇒ 验证的是「SQL 文本 + 参数形状」，**不是 PG 语法真的被接受**。
+4. **PG 方言差异未清点完毕**（`INSERT OR IGNORE` / `INSERT OR REPLACE` / `AUTOINCREMENT` / `PRAGMA` 在 PG 上直接报错，属 W6）—— `d1-shim.ts` **刻意不做**这批改写，全仓出现次数**尚未 grep 统计**。
+5. **P0 词典「假空」机制仍未定**：是 **W7 切源**的硬前置，**不是** W1–W4 的前置。
+6. `env.BUCKET` 的 `put` 调用点未逐处读原文（`get` 仅 `sync.ts:448` / `sync-buckets.ts:365`，都用 `object.arrayBuffer()`；`list` 只用 `objects`；`delete` 走数组形；`account.ts:53-79` 是 `list→delete` 清空前缀流程）。
+
+### R-7 下一步与硬前置
+
+- **W5（测试底座）单独一批提交**，不与 W1–W4 混 —— 它是最大单项成本；`pglite` 能否复刻 D1 的 `batch` / `meta.changes` 语义**未验证**，决定 W5 方案。
+- **W6** = PG 方言改写（`INSERT OR IGNORE` 等）→ 必须先 grep 统计出现次数。
+- **W7 切源**（改 `CloudAccountDialog.cpp:60-61` 的 `kDefaultBaseUrl`）**硬前置 = 先修好 P0 假空**：D1 的 429 零写入是**意外刹车**，PG 上无等价刹车 ⇒ 会把可逆事故变成**不可逆删数据**。
+- 三条闸门挂在部署路径上不变：**假空闸门** / **数据核对闸门**（逐表行数 + R2 对象数与 `r2_key` 去重一致）/ **回滚闸门**（改回 `api.aiec.fun` 一个字符串，不得同批删旧端点代码）。
+
+### R-8 本节不改任何既有登记
+
+`AC-09` **仍 FAIL**（只有日志出现 `AC09_VERDICT=PASS` 才可改记）；桶化仍不宣称完成；阶段 3 **仍禁**；`AC-213` / `AC-214` **永久退役**；`AC-212` / `AC-215` 判据② **仍未判定**；生产 `sync_buckets` 复核值仍按 §P-P.10（1,000 行 / 92,353 条 / MAX(id)=2027），本轮**零写操作、未重新回读**。
+`§Q-10-11` 剩余待裁定项（②阶段 3/4 登记口径 ③`§Q-3` 是否标注被部分推翻 ④ADR 0079 立项 ⑤旧开口项 ①/②/⑥）**本轮仍未回答，原样保留**。
+
+### R-9 本轮工具坑（带走）
+
+1. **注释里写字面量 `*/`**（如 `` `/* */` ``、`src/**/*.ts`）会**提前闭合块注释** ⇒ `tsc` 报 60+ 条「Module declaration names may only use ' or " quoted strings」「Unterminated template literal」等**无关**语法错、esbuild 报 `Unexpected "*"`。**不要**改 `tsconfig.json`、不要怀疑 workers-types，先搜 `*/`。
+2. **PowerShell 双引号里 `"$c:$x"` 会被当 scope 限定符**（`Variable reference is not valid`）⇒ 写 `"${c}:..."` 或 `+` 拼接。
+3. **PowerShell 双引号字符串会被反引号转义吃掉 markdown 反引号** ⇒ 多行中文一律 `@' … '@` 单引号 here-string + `-replace "\r\n","\n"`。
+4. **`write` 工具拒绝覆盖「本会话未读过」的文件** ⇒ 先 `read`（`limit=3` 即可）再 `write`。
+5. `git commit` 会伴随 `sh: warning: setlocale: LC_ALL: cannot change locale (zh-CN)`（无害，不影响退出码）。
