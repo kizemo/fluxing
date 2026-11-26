@@ -3449,3 +3449,271 @@ git -C 'F:\soft\00selfmade\rime_claude' rev-parse HEAD
 6. **BR-①h** 独立批次（C++ 侧 `FormatReconcileDiagLine` 增 `early_exit` + 早退原因），本批不启动。
 7. **切源四段（双写→校验→切读→退役）不得跳段**；桶化冻结 phase 0、阶段 3/4 永不启用。
 
+---
+
+## X · W6 残留四项逐点核实闭合 + 类型闸门补齐 + W7 切源前置取证（2026-11-26）
+
+> **本节是本轮（路线 B · W6/W7）的唯一权威收口条目**。上文 `## W` 及更早各节为历史登记；
+> 冲突时**以本节为准**。**下一新顶节 = `## Y`**（上文「下一新顶节 = `## X`」等均为历史行，不再有效）。
+
+### X-1 指令与本轮边界
+
+- **指令（用户）**：按 `## W` 的「下一步」推进路线 B 三件事 —— ① 补 `tsconfig.json` 的 `include`
+  （消除 `test-pg/**` 无类型闸门缺口）；② W6 残留四项逐点核实（`.exec(` 归属 /
+  `rowCount` 归一化覆盖 / `.first()` D1 侧对照 / `batch()` 业务调用点原子性）；
+  ③ W7 切源前置取证与切源准备。
+- **本轮边界**：**不改客户端 C++**（不升版 / 不出包 / 不装机 / 不启停 WeaselServer）、
+  **不动生产 D1 与 R2**、**不动 ECS 与 Cloudflare**、**不启用桶化 phase 3/4**、**不切源**。
+- **红线不变**：桶化冻结 phase 0、阶段 3/4 永不启用；`AC-09` 仍 FAIL **不得改记**
+  （只有日志出现 `AC09_VERDICT=PASS` 才可改）；`AC-213` / `AC-214` 永久退役；
+  `AC-212` / `AC-215` 判据② 仍未判定；台账数字一律**盘上回读**。
+- **子代理分工（防并发写冲突）**：worker A 只写 `test-pg/**` + `reports/fluxing-br-1g/w6/**`；
+  worker B 只写 `reports/fluxing-br-1g/w7/**`；主会话独占 `tsconfig.json` / `package.json` /
+  `package-lock.json` / `test/check-no-node-imports.mjs` / ADR / recon / handoff / prompt。
+  worker B 正确识别出并发改动归属并**未误改**主会话文件。
+- **提交序列**：`a394ad4`（用例 + 类型修复，7 文件 +1380 / −6）→ `8b58149`（tsconfig +
+  `@types/node` + 硬断言 + `miniflare` 登记，4 文件 +118 / −3）⇒ **提交顺序定为 A→B**，
+  保证每个提交自身内部一致（若 tsconfig 先入库，typecheck 会红）。
+
+### X-2 类型闸门缺口已修（§W-9 第 2 项 / §W-5.6）
+
+**修法**：**单一 `tsconfig.json`**（不另建 `tsconfig.test-pg.json`）—— 拆两个文件等于拆成两套闸门，
+漏掉哪个都不会有红灯。
+
+| 项 | 修前 | 修后（盘上回读） |
+| --- | --- | --- |
+| `include` | `["src/**/*.ts"]` | `["src/**/*.ts", "test-pg/**/*.ts"]` |
+| `types` | `["@cloudflare/workers-types"]` | `["@cloudflare/workers-types", "node"]` |
+| devDeps | 无 `@types/node`、无 `miniflare` | `@types/node@^26.6.11`、`miniflare@5.20260815.0-alpha`（精确） |
+| 硬断言 | 无 | `test/check-no-node-imports.mjs`（95 行 / 4,013 B）⇒ 串入 `npm run check` |
+
+- **`test/**`（workerd 套件）仍不进 `include`**：沿用 2026-11-10 batch Z 交接卡的假红理由
+  （`cloudflare:test` 的类型声明来源不确定 ⇒ 纳进去造假红）⇒ **不得「顺手补全」**。
+- **副作用对冲**：`types` 加 `node` 后 `src/**` 也看得见 node 全局类型 ⇒ 被抵消掉的
+  「Workers 侧不得静态导入 `node:` 内置模块」这条闸门必须补回 ⇒ 新增可入库硬断言
+  `cloud/fluxing-sync/test/check-no-node-imports.mjs`：扫描 `src/**/*.ts`，
+  **零静态 `node:` 导入**即通过；白名单 `src/pg`；`dynamicImport('node:…')`
+  （`src/node-server.ts:382`、`src/pg/r2-fs.ts:426`）属既定间接加载模式，放行并计数。
+  实测：扫描 17 个 `.ts`、间接加载 2 处、零违规。
+- **依赖登记**：`miniflare` 原先只由 `@cloudflare/vitest-pool-workers` 精确 pin 带入（传递依赖），
+  而 `test-pg/d1-side-contract.test.ts` 缺失时会**硬失败而非跳过** ⇒ 本轮**显式登记**为
+  `devDependencies` + 精确版本。锁文件实测：`node_modules/miniflare` = `5.20260815.0-alpha`（dev）、
+  `node_modules/wrangler/node_modules/miniflare` = `5.20261109.0-beta`（dev）。
+- **接上 tsc 后暴露的 4 处既有类型错误已修**（**仅测试侧，运行期行为零变化**）：
+  `test-pg/harness.ts` 三处（`import.meta.url`→`fileURLToPath` 的 `URL` 类型分歧 /
+  `pg.Client` 不在 `PgModuleLike` / `pool.end()` 可选成员）+ `test-pg/d1-shim-unit.test.ts:72`
+  （`PgPoolLike['constructor']` = `Function`）⇒ 修法用测试侧局部接口
+  （`PgAdminClientLike` / `PgAdminModuleLike`）+ `as unknown as` 断言。
+  ⇒ **「无闸门」时期的测试代码本身有瑕疵**，这是本项缺口的真实代价。
+
+### X-3 W6 残留四项逐点核实（§W-5.2–5.5 ⇒ **四项全部闭合**）
+
+**执行方式**：子代理执行，**主会话独立复核**；证据
+`reports/fluxing-br-1g/w6/residual-verify-w6-2026-11-26.md`（14,287 B，未入库）。
+
+| 项 | 结论（已坐实） |
+| --- | --- |
+| `.exec(` 3 处归属 | **全是 `RegExp.prototype.exec`**：`src/auth.ts:1007` / `src/index.ts:145` / `src/mail.ts:272` ⇒ D1 专有 `exec` 面**未被消费**；`.raw()` / `.last_row_id` **全仓 0 命中** ⇒ ADR 0079 D1 成立，recon §9.5「归属未确认」可闭合 |
+| `rowCount===null` 归一化覆盖 | 覆盖**全部 26 个 `.run()` 真站点**（原记 27 的多出项是 `src/errors.ts:36` 文档注释）；26 个中 25 个是字面量 SQL 且**全是 INSERT/UPDATE/DELETE**；唯一动态站点 `src/auth.ts:418`（`deleteRow`）的两个调用点 `auth.ts:487` / `auth.ts:500` 都是 `DELETE FROM …` ⇒ **全仓 `.run(` 无 DDL**；归一化实现点**唯一**：`src/pg/d1-shim.ts:299-306`（`:304` `rowCount ?? 0`） |
+| `.first()` 无行返回值两端等价 | **已真跑坐实**：miniflare 5 构造真 D1 绑定 ⇒ `D1_MISS_TYPE=null` / `D1_MISS_IS_NULL=true` / `D1_MISS_IS_UNDEFINED=false`，与 shim 侧 `src/pg/d1-shim.ts:290-296` 的 `null` **一致**；23 个 `.first()` 站点**无一例传列名** ⇒ 分歧面**不可达** |
+| `.batch()` 业务调用点原子性 | 真站点 **5 个**（原记 6 的多出项是 `src/pg/d1-shim.ts:14` 注释）：`src/devices.ts:143` / `src/sync.ts:391` / `src/sync.ts:473` / `src/sync-buckets.ts:292` / `src/sync-buckets.ts:394`；真 PG 用 **BEFORE 行触发器**在批次第 2 条注入 `RAISE EXCEPTION` ⇒ **5/5 整批零落库**；每个用例带**阳性对照**（撤触发器必须成功） |
+
+**台账数字订正（三处）**：`.run()` 27→**26**；`.batch()` 6→**5**；`.first()` **23**
+（`src/pg/d1-shim.ts:287` 注释写「24」不准）。
+`src/pg/d1-shim.ts:13` / `:14` / `:287` 三处注释**仅登记未改**（改 `src/**` 需另开批次）。
+
+**新增/修改的 `test-pg/**`（盘上回读，行数 / 字节）**：
+
+| 文件 | 行 | 字节 | 作用 |
+| --- | ---: | ---: | --- |
+| `batch-atomicity.test.ts` | 471 | 16,983 | 5 个业务调用点逐点真 PG 原子性（BEFORE 行触发器注入异常） |
+| `changes-normalization.test.ts` | 116 | 4,534 | `rowCount===null` ⇒ `changes===0` 的归一化覆盖 |
+| `d1-api-surface-audit.test.ts` | 421 | 15,851 | `.exec(` / `.run()` / `.first()` / `.batch()` 只读审计 |
+| `d1-side-contract.test.ts` | 104 | 3,871 | **D1 侧对照**（miniflare 真 D1 绑定） |
+| `d1-side-probe.mjs` | 225 | 7,570 | 上述 D1 侧探针本体（子进程调用） |
+| `harness.ts`（改） | 207 | 9,114 | 类型修复 + 迁移脚本路径少一层 `dirname` |
+| `d1-shim-unit.test.ts`（改） | 228 | 8,621 | 类型修复 |
+
+**`src/**`、`test/**`、`vitest*.config.ts` 一字未动**（本轮零业务代码改动）。
+
+### X-4 W7 切源前置取证结论（2026-11-26 · 只读 + 本机侧实测）
+
+**报告**：`reports/fluxing-br-1g/w7/preflight-2026-11-26.md`（29,978 B / 411 行，未入库）；
+配套 `clean-ci-run.log`（4,684 B）。
+
+**结论一：本机侧已无技术前置**（§W-6 阻塞 #8 已消除）
+
+- **干净目录真实 `npm ci` 实测通过**：exit 0 / **43,530 ms** / 106 包 / `pg` 8.23.1 /
+  esbuild 0.28.1 可执行 / workerd 落盘。
+- **`npm ci --dry-run` 不落盘已用探针实证**：marker 存活；真实目录前后 `node_modules`
+  逐字节相等（3,947 文件 / 447,022,905 B）。
+- **运行期探针 8 项全 true**（`LOAD_PG_MODULE_WOULD_SUCCEED` / `POOL_CONSTRUCTED` /
+  `POOL_ENDED_CLEANLY` / `INT8_PARSER_INSTALLED` 等）。
+- **清理**：干净目录 447 MB `node_modules` 已移入回收站（`mavis-trash`，可恢复，**回收站未清空**）。
+
+**结论二：切源开关点已定位（零改码可回滚）**
+
+- `WeaselServer/Cloud/CloudAccountDialog.cpp:60` `kDefaultBaseUrl="https://api.aiec.fun"`；
+  `:61` / `:155-158` ⇒ `FLUXING_CLOUD_BASE_URL` 优先。
+- ⇒ **换端点 = 改一个字符串 + 一次常规出包**，不需改同步逻辑，回滚 = 改回 + 重出包。
+
+**结论三：剩余阻塞全部在 ECS / Cloudflare 运维侧（10 条）+ 用户拍板（1 条）**
+
+| # | 阻塞 | 状态 |
+| --- | --- | --- |
+| 1 | `api.jury.xin` 被 `*.jury.xin` → apex 的 301 通配规则占用（客户端同步全是 POST，301 会降级成 GET ⇒ **切源必失败**） | **待用户拍板**：只放行 `api.jury.xin`（推荐）还是全部放行 `*.jury.xin` |
+| 2 | `api.jury.xin` 走橙云（定 SSL 模式）还是灰云（ECS 另签 certbot/LE 并开 80/443） | **待用户拍板**（边缘证书仅 `CN=jury.xin` / `*.jury.xin`，WE1，2026-10-31→2027-01-29，TLS1.3 ⇒ 灰云无源站证书） |
+| 3 | ECS 零部署面：nginx vhost / 源站证书 / systemd unit / PG 实例 / 备份 / esbuild 打包启动脚本**全缺** | 未动手 |
+| 4 | 根盘 89% 已用，仅剩 ≈14 G | 未动手 |
+| 5 | `5432`（及 `3306` / `9100`）公网监听待收口到 `127.0.0.1` | 未动手 |
+| 6 | ECS 只有 `psql` 客户端 14.24，**PG server 大版本未证实**（需 `SELECT version();`） | 未核实 |
+| 7 | `jury.fun` / `jury.xin` 备案主体与备案号未证实 | 未核实 |
+| 8 | ECS(Linux) 侧 `npm ci` 未实测 | 未实测 |
+| 9 | PG 迁移执行器缺位：`migrations-pg/0001_init.sql`（16,500 B / 296 行）**从未在任何 PG 实例执行过**；`migrate:local` / `migrate:remote` 仍是 D1 专用；无建库 `LC_COLLATE 'C'`、无 `setval` 脚本 | 未动手 |
+| 10 | `README` 口径过时（仍写单一 Workers 底座 + `<API_DOMAIN>` 占位） | 未动手 |
+
+**结论四：两条新风险（新登记）**
+
+- **锁文件钉死 npmmirror**：`package-lock.json` 241 行全指 `registry.npmmirror.com`、npmjs 0 行、
+  仓库无 `.npmrc` ⇒ **ECS 出网受限即 `npm ci` 失败**。
+- **`reports/**` 未被 git 忽略**（`git check-ignore` 三路径 exit 1）⇒ 必须**按路径 add**。
+
+**结论五：切源仍必须按四段执行**（双写→校验→切读→退役，**不得跳段**）；
+校验段的前置是**假空闸门 BR-①h**（`FormatReconcileDiagLine` 增 `early_exit` + 早退原因）**未开工**。
+本轮**不立项为「修 bug」**，登记为 BR-①h 独立批次。
+
+### X-5 门禁结果（盘上回读，`reports/fluxing-br-1g/w6/gate-w6.ps1`）
+
+| 判据 | 值 | 与基线对比 |
+| --- | --- | --- |
+| `GATE_VERDICT` / `GATE_FAILS` | **PASS** / （空） | — |
+| `GATE_SCRIPT_EXIT` | 0 | — |
+| `TSC_LINES` | **0** | 0 |
+| node 包字节 / sha256 | **110,414 B** / `668CB10751C631134A6A5CFC8A1EC399B62A8B61B84DF8C5C7209EEA4A6DC8B0` | **未变** |
+| `SELFTEST_PASS` / FAIL | **37** / 0 | 37（基线 37，未变） |
+| Workers `index.js` 字节 | **91,912 B** | **逐字未变** |
+| 九条零污染断言 | 全 False | 未变 |
+| workerd 套件 | **13 文件 / 164 用例** | 未变 |
+| **test-pg 套件** | **7 文件 / 55 用例** | 基线 3 文件 / 24 用例 ⇒ **+4 文件 / +31 用例** |
+| 负路径 | `NEG_EXIT=1` + 中文错 + `NEG_PG_FILES_FAILED=True` + `NEG_UNIT_FILE_NOT_FAILED=True` | 未变 |
+| 双口径静态审计 | `PREPARE_SITES=65` / `TOTAL_PLACEHOLDERS=135` / `MISMATCH_SITES=0` / `NOBIND_SITES=0` / `AUDIT_EXIT=0` | 未变 |
+
+**门禁脚本期望值已同步更新**：`$EXPECTED_TESTPG_FILES` 3→**7**、
+`$EXPECTED_TESTPG_TESTS` 24→**55**（脚本在 `reports/**`，**不入库**，换机器须按 §K-4 重放）。
+
+### X-6 本轮做了什么 / 没做什么
+
+**做了**：① `tsconfig.json` 类型闸门扩容 + `check-no-node-imports.mjs` 硬断言 + `@types/node`
+与 `miniflare` 依赖登记；② W6 残留四项逐点核实（**四项全闭合**）+ 台账数字三处订正；
+③ W7 切源前置取证（本机侧零阻塞、开关点定位、10 条 ECS 阻塞 + 1 条用户拍板、2 条新风险）；
+④ ADR 0079 增补 **D11** + 订正过时表述；`port-to-pg-recon.md` §9.5 / §9.6 状态订正 + 增补 **§9.7**；
+⑤ 本 handoff `## X` + 接力 prompt 就地改写；⑥ 两批提交入库 + 直连 push。
+
+**没做（判断而非遗忘）**：
+
+- **未改客户端 C++**（不升版 / 不出包 / 不装机 / 不启停 WeaselServer）；
+- **未动生产 D1 与 R2**（本轮零写操作；`AC-09` 仍 FAIL，不得改记）；
+- **未动 ECS 与 Cloudflare**（SSH 路线 `Permission denied (publickey)` 不可用 ⇒ 10 条阻塞需用户出手）；
+- **未切源**（切源四段不得跳段；校验段前置 BR-①h 未开工）；
+- **未修 P0 假空机制**（机制未定，ADR 0078 仅加护栏与诊断；本轮未复现 `matched=0`）；
+- **未立项 BR-①h**（登记为独立批次，不在本轮启动）；
+- **未改 `src/pg/d1-shim.ts` 的三处过时注释**（改 `src/**` 需另开批次）。
+
+### X-7 未闭环（本批新增 / 仍未判定）
+
+1. **U1（R2 不参与 D1 事务 · 产品语义）**：R2 对象写入不参与 D1 事务（push 先写 R2：
+   `src/sync.ts:340`、`src/sync-buckets.ts:240`，再写 D1 batch）⇒ 批次失败时 R2 已覆盖、
+   D1 仍是旧版，**密文与 HLC 可能短暂不一致**。需**独立批次 + ADR** 定补偿语义
+   （延迟提交 / 版本化 key / 失败回写旧对象）⇒ **本轮未立项、未动**。
+2. **W7 切源 10 条 ECS 阻塞 + 1 条用户拍板**（见 X-4 结论三）。
+3. **BR-①h**（诊断行早退语义）**未开工** ⇒ 切源「校验段」的前置未满足。
+4. **P0 假空机制未定**（本轮未复现）。
+5. **§O / §P / §Q 既有登记一律未改**（`AC-09` 仍 FAIL、`AC-212` 未判定、`AC-215` 判据② 未判定、
+   桶化冻结 phase 0、阶段 3/4 永不启用）。
+6. **R5 写预算语义本批不改**（ADR 0079 D7 触发条件未满足）。
+7. **回收站 447 MB 未清空**（`mavis-trash` 已回收，可恢复）。
+8. **`src/pg/d1-shim.ts` 三处过时注释未改**（需另开批次改 `src/**`）。
+
+### X-8 复跑命令（copy-ready）
+
+```powershell
+# ① 全量门禁（期望值已更新为 7 文件 / 55 用例）
+& 'F:\soft\00selfmade\rime_claude\reports\fluxing-br-1g\w6\gate-w6.ps1'
+#   ⇒ GATE_VERDICT=PASS / GATE_FAILS=(空) / TSC_LINES=0 / NODE_BUNDLE_BYTES=110414
+#     SELFTEST_PASS=37 / WORKERS_INDEX_BYTES=91912 / workerd 13·164 / test-pg 7·55
+#     NEG_EXIT=1 + NEG_PG_FILES_FAILED=True + NEG_UNIT_FILE_NOT_FAILED=True
+
+# ② 真 PG 套件（口令只解析不打印）
+$pgpass = Join-Path $env:APPDATA 'postgresql\pgpass.conf'
+$line = @(Get-Content -LiteralPath $pgpass | Where-Object { $_.Split(':')[3] -eq 'postgres' -and $_.Split(':')[1] -eq '5432' -and $_.Split(':')[0] -eq '127.0.0.1' })[0]
+$env:FLUXING_PG_URL = "postgres://postgres:$($line.Split(':')[4])@127.0.0.1:5432/fluxing_sync"
+& npm --prefix 'F:\soft\00selfmade\rime_claude\cloud\fluxing-sync' run test:pg
+#   ⇒ Test Files 7 passed (7) / Tests 55 passed (55)
+
+# ③ Workers 基线
+& npm --prefix 'F:\soft\00selfmade\rime_claude\cloud\fluxing-sync' test
+#   ⇒ Test Files 13 passed (13) / Tests 164 passed (164)
+
+# ④ node 静态导入硬断言
+& node 'F:\soft\00selfmade\rime_claude\cloud\fluxing-sync\test\check-no-node-imports.mjs'
+#   ⇒ 检查通过：src/** 零处静态 node: 内置模块导入（扫描 17 个 .ts；白名单 src/pg；间接加载 2 处放行）
+
+# ⑤ 双口径静态审计（占位符权威值 135）
+& node 'F:\soft\00selfmade\rime_claude\reports\fluxing-br-1g\w6\audit-bind-count.mjs'
+#   ⇒ PREPARE_SITES=65 / TOTAL_PLACEHOLDERS=135 / MISMATCH_SITES=0 / NOBIND_SITES=0 / AUDIT_EXIT=0
+
+# ⑥ push（直连；硬判据 = ls-remote 与 rev-parse HEAD 逐字相等）
+git -C 'F:\soft\00selfmade\rime_claude' -c http.proxy= -c https.proxy= push kizemo feat/100-cloud-sync
+git -C 'F:\soft\00selfmade\rime_claude' -c http.proxy= -c https.proxy= ls-remote kizemo refs/heads/feat/100-cloud-sync
+git -C 'F:\soft\00selfmade\rime_claude' rev-parse HEAD
+```
+
+### X-9 Git 现状
+
+- 分支 `feat/100-cloud-sync`，远端 `kizemo`（https://github.com/kizemo/fluxing.git）。
+- **本批提交**：`a394ad4`（用例 + 类型修复，7 文件 +1380 / −6）、
+  `8b58149`（tsconfig + 硬断言 + 依赖登记，4 文件 +118 / −3）、
+  文档批（ADR 0079 D11 + recon §9.7 + 本 `## X` + prompt 改写）。
+- **远端状态**：见 X-10 的 push 回读（**SHA 以实时回读为准，不在台账里写死**）。
+- 未入库杂项照旧：`librime`（子模块脏）、`release/`、`reports/**`、`scripts/verify/*.ps1`、
+  `docs/design/quickpanel-v6/design-demos/*.html` 等 —— **本批一个都没 `git add`**。
+- 全局 `http.proxy` / `https.proxy` = `http://127.0.0.1:7897`（本批未改）；**远端操作一律直连**。
+
+### X-10 下一步（建议顺序）
+
+1. **用户拍板 Cloudflare 放行范围**（X-4 阻塞 #1）：`api.jury.xin` 只单独放行（推荐，
+   其他子域名跳转照旧）还是全部放行 `*.jury.xin`；并定走橙云（定 SSL 模式）还是
+   灰云（ECS 另签 certbot/LE 并开 80/443）。
+2. **用户拍板 U1 补偿语义方向**（X-7 第 1 条）：延迟提交 / 版本化 key / 失败回写旧对象
+   （需独立 ADR）。
+3. **确认 BR-①h 排期**：`FormatReconcileDiagLine` 增 `early_exit` + 早退原因
+   （独立批次：门禁用例 → 升版出包 → 装机）—— 排在 W7 切源**之前**（校验段的前置）。
+4. **ECS 侧 10 条阻塞的出手方式**：本会话 SSH 不可用（`Permission denied (publickey)`），
+   需用户提供访问途径或代为执行（磁盘清理或扩容、`5432` 收口、PG 版本确认、
+   Linux 侧 `npm ci`、备案主体与备案号、nginx vhost + systemd unit + 备份）。
+5. **PG 迁移执行器补齐**：`migrations-pg/0001_init.sql` 从未在任何 PG 实例执行过 ⇒
+   需补建库 `LC_COLLATE 'C'` 与 `setval` 脚本，并把 `migrate:local` / `migrate:remote`
+   口径从 D1 专用改为可指 PG。
+6. **`package-lock.json` 的 npmmirror 钉死**：切源前须给 ECS 出网口径定方案（换 registry
+   或配 `.npmrc`）。
+7. **切源四段（双写→校验→切读→退役）不得跳段**；桶化冻结 phase 0、阶段 3/4 永不启用。
+
+### X-11 工具坑（本批新增，9 条）
+
+1. **门禁脚本把用例数写死** ⇒ 新增用例后「基线过期」会被误判成产品红灯
+   （实测 test-pg 7/55 全绿但 `GATE_VERDICT=FAIL`）⇒ **判据要区分「套件红」与「基线过期」**。
+2. **子代理刚收尾时立刻跑门禁 ⇒ 假红**：系统仍在卸载其进程，test-pg 出现 2 文件失败 /
+   13 跳过（189 s vs 空闲 19–64 s）⇒ **复跑前等子任务完全退出**。
+3. **「子代理自报绿」≠「盘上绿」**：本轮子代理报 7/55 全绿，主会话独立复跑**第一次即红**
+   ⇒ **复跑必须由主会话做**。
+4. **`reports/**` 未被 git 忽略**（`git check-ignore` exit 1）⇒ 禁 `git add -A`，**必须按路径 add**。
+5. **同一条 bash 内 `Set-Location` 后再写盘 ⇒ 被硬安全策略拦**
+   （`write/delete targets cannot be verified safely after a command working directory change`）
+   ⇒ 全程**绝对路径 + `npm --prefix`**；install / 门禁 / add-commit **拆成互不换目录的多条命令**。
+6. **`npm install` 会写 `package-lock.json` 并引入 devDep** ⇒ 属**依赖登记**，
+   必须在提交信息中写明（本轮 `@types/node` 已登记，`miniflare` 同批登记）。
+7. **tsc 接上 test-pg 后暴露 4 处既有类型错误** ⇒ 「无闸门」时期的测试代码本身有瑕疵。
+8. **tsc 侧副作用**：`types` 含 `node` 会让 `src/**` 看见 node 全局类型
+   ⇒ 已用 `check:no-node` 硬断言**抵消**。
+9. **台账数字三处过时**：`.run()` 27→26、`.batch()` 6→5、`.first()` 23（shim 注释写 24）；
+   `src/pg/d1-shim.ts:13`/`:14`/`:287` 三处注释**仅登记未改**。

@@ -32,9 +32,9 @@
 | `.prepare(` | 65 | 其中 58 个第一参是字符串字面量 SQL |
 | `.bind(` | 65 | 与 `prepare` 1:1 |
 | `.first(` | 23 | **无一例传列名** |
-| `.run(` | 27 | 只有 `account.ts:92` / `:97` 消费 `changes` |
+| `.run(` | 26 | 只有 `account.ts:92` / `:97` 消费 `changes`（2026-11-26 逐点核实后订正，见 D11） |
 | `.all(` | 7 | `{ results }` 形态 |
-| `DB.batch(` | 6 | sync 2 / buckets 2 / devices 1 / 其他 |
+| `DB.batch(` | 5 | sync 2 / buckets 2 / devices 1（2026-11-26 逐点核实后订正，见 D11） |
 | `env.DB` | 70 | 全部经 Env 注入 |
 | `env.BUCKET` | 9 | `r2-fs` 侧 |
 
@@ -153,6 +153,31 @@ node-postgres 默认把 int8 读成**字符串**。`hlc_ms` / `server_seq` / `id
 - **R4**：`errors.ts` 的 `isD1RowWriteQuotaError` 在 PG 上永远为 false ⇒
   **保留代码不删**（无害），但 `storage_quota_exceeded` 这条 503 分支在 PG 侧是死路。
 
+### D11 · 类型闸门扩到 `test-pg/**`，并对冲「node 全局类型」副作用（2026-11-26 增补）
+
+**背景**：`test-pg/**` 原先不在 `tsconfig.json` 的 `include` 里 ⇒ 新增测试文件**没有类型闸门**。
+「无闸门」时期的测试代码本身带瑕疵（接上 tsc 后一次暴露 4 处既有类型错误）。
+
+**决策（三条）**：
+
+1. **单一 `tsconfig.json`**：`include` = `["src/**/*.ts", "test-pg/**/*.ts"]`，
+   `types` = `["@cloudflare/workers-types", "node"]`。**不另建** `tsconfig.test-pg.json`
+   —— 拆两个文件等于拆成两套闸门，漏掉哪个都不会有红灯。
+   `test/**`（workerd 套件）**仍不进 `include`**：沿用 2026-11-10 batch Z 交接卡的假红理由
+   （`cloudflare:test` 的类型声明来源不确定 ⇒ 纳进去造假红）⇒ **不得「顺手补全」**。
+2. **对冲 `types` 加 `node` 的副作用**：`types` 含 `node` 后 `src/**` 也看得见 node 全局类型
+   ⇒ 被抵消掉的「Workers 侧不得静态导入 `node:` 内置模块」这条闸门必须补回 ⇒
+   新增**可入库**硬断言 `cloud/fluxing-sync/test/check-no-node-imports.mjs`
+   （扫描 `src/**/*.ts`，**零静态 `node:` 导入**即通过；白名单 `src/pg`；
+   `dynamicImport('node:…')` 属既定间接加载模式，放行并计数），并串入 `npm run check`。
+3. **依赖登记**：`test-pg/d1-side-contract.test.ts` 的 D1 侧对照以
+   `execFileSync(process.execPath, [PROBE])` 跑 `d1-side-probe.mjs`，**不静态 import miniflare**
+   ⇒ miniflare 缺失时该文件**硬失败而非跳过**。miniflare 原先只由
+   `@cloudflare/vitest-pool-workers` 精确 pin 带入（传递依赖）⇒ 本批**显式登记**为
+   `devDependencies` + 精确版本 `5.20260815.0-alpha`（依赖登记，非产品代码改动）。
+
+**边界**：本决策**不解除任何一条硬闸门**，也**不构成切源许可**；D7 的 R5 写预算语义仍未触发。
+
 ---
 
 ## 3. 占位符清点（本批实测，盘上回读）
@@ -214,11 +239,12 @@ recon §9.3 / `d1-shim.ts` 旧头注释记的「`prepare` 第一参内共 145 �
 | 运行期自测 | esbuild `pg-port-selftest.ts` → node | `SELFTEST_PASS` 由 31 升至 **37** / FAIL=0 |
 | **Workers 打包不变量** | `wrangler deploy --dry-run` | `index.js` **91,912 B 逐字未变** + 九条零污染全 False |
 | workerd 套件 | `npm test` | 13 files / 164 tests |
-| 真 PG 套件 | `npm run test:pg` | 3 files / **24 tests**（基线 1 file / 4 tests） |
+| 真 PG 套件 | `npm run test:pg` | **7 files / 55 tests**（基线 1 file / 4 tests；2026-11-26 增补后） |
 | 负路径 | 占位符 / 绑定数不符 | 退出码 1 + 中文错 |
+| **node 静态导入硬断言** | `npm run check:no-node` | `src/**` 零静态 `node:` 导入 |
 
-新增用例（`cloud/fluxing-sync/test-pg/`，`tsconfig` 的 `include` 只含 `src/**/*.ts`
-⇒ 这些文件**不进 tsc 门禁**，由 vitest 以 esbuild 转译运行）：
+新增用例（`cloud/fluxing-sync/test-pg/`；**2026-11-26 起已纳入 `tsconfig.json` 的 `include`
+⇒ 进 tsc 类型闸门**，由 vitest 以 esbuild 转译运行）：
 
 - `d1-shim-unit.test.ts` —— 14 条纯单元判据（不需 PG）：扫描器七例、计数自洽、
   绑定数不符抛中文错、有占位符未绑定也失败、错误信息**不含** `secret_column` /
@@ -228,6 +254,15 @@ recon §9.3 / `d1-shim.ts` 旧头注释记的「`prepare` 第一参内共 145 �
   第 1 条 INSERT 也不落库）、batch 成功两条落库、真 PG `first()` 无行 ⇒ `null` 且非 `undefined`、
   DDL（`rowCount===null`）⇒ `changes===0`、UPDATE 影响 0 行 ⇒ `changes===0`、
   真库上占位符 / 绑定数不符先失败。
+- **2026-11-26 增补**（W6 残留四项逐点核实，见 D11 与 handoff `## X`）：
+  - `d1-api-surface-audit.test.ts` —— `.exec(` 归属 / `.run()` 站点归一化覆盖 /
+    `.first()` 无行返回值 / `.batch()` 业务调用点清点的**只读审计**；
+  - `batch-atomicity.test.ts` —— 5 个业务调用点逐点真 PG 原子性（**BEFORE 行触发器**在批次第 2 条注入
+    `RAISE EXCEPTION` ⇒ 5/5 整批零落库；每个用例带阳性对照：撤触发器必须成功）；
+  - `changes-normalization.test.ts` —— `rowCount===null` ⇒ `changes===0` 的归一化覆盖；
+  - `d1-side-contract.test.ts` —— **D1 侧对照**：用 miniflare 构造真 D1 绑定，断言无行 `.first()`
+    返回 `null`（不是 `undefined`）；23 个 `.first()` 站点**无一例传列名** ⇒ 分歧面不可达；
+  - `d1-side-probe.mjs` —— 上述 D1 侧探针本体（被 `d1-side-contract.test.ts` 以子进程调用）。
 
 ---
 
@@ -247,8 +282,10 @@ recon §9.3 / `d1-shim.ts` 旧头注释记的「`prepare` 第一参内共 145 �
   任何绕过 shim 直连 PG 的新代码都会拿回字符串。
 - 断言只管**个数**，不管**类型**：`?` 绑成 text 还是 bigint 仍由 PG 判定。
 - 本 ADR **不解除任何一条硬闸门**，也**不构成切源许可**。
-  W7 切源仍被 §V-6 的八条阻塞（Cloudflare 301 / 证书 / ECS 零部署 / 根盘 / `5432` 收口 /
-  PG 大版本 / ICP 备案 / 干净目录 `npm ci`）卡住。
+  W7 切源仍被 §V-6 的阻塞卡住（Cloudflare 301 / 证书 / ECS 零部署 / 根盘 / `5432` 收口 /
+  PG 大版本 / ICP 备案 / 干净目录 `npm ci`）；**2026-11-26 取证后口径更新**：
+  其中「干净目录 `npm ci`」在**本机侧已消除**，剩余阻塞集中在 **ECS / Cloudflare 运维侧**
+  （10 条）+ **1 条用户拍板**（`api.jury.xin` 放行范围与橙云/灰云路线）。
 
 ---
 
@@ -272,7 +309,11 @@ recon §9.3 / `d1-shim.ts` 旧头注释记的「`prepare` 第一参内共 145 �
 ## 7. 未证实项（不得当结论）
 
 1. **ECS 侧可部署性未证实** —— 本批全部证据只覆盖**本机** PG 18.4；
-   ECS 的 PG 大版本（`psql --version`）未回读，`npm ci` 在干净目录的可复现性未实测。
+   ECS 的 PG 大版本（`psql --version`）未回读。
+   （**订正 2026-11-26**：`npm ci` 在**干净目录**的可复现性已实测通过 —— exit 0 / 43,530 ms /
+   106 包 / `pg` 8.23.1 / esbuild 0.28.1 可执行 / workerd 落盘 ⇒ **本机侧**该阻塞已消除；
+   **ECS(Linux) 侧仍未实测**，且锁文件 241 行全指 `registry.npmmirror.com`、仓库无 `.npmrc`
+   ⇒ ECS 出网受限即 `npm ci` 失败，属新登记风险。）
 2. **生产 D1 的当前行数与 `rows_written_24h` 未回读**（本批零写操作）—— 迁移前必须重新只读回读。
 3. **`isUniqueConstraintError` 的 PG 23505 映射未在生产量级实测**（8 处 `INSERT INTO` 全为
    UUID 主键新建，唯一键冲突属错误路径）。

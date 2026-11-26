@@ -339,10 +339,14 @@ esbuild external 元信息变化，自测项数未变（31/31 PASS）。node bun
 
 ### 9.5 本节未坐实
 
-- `.first(` 23 个站点的「无行」返回值两端是否等价（D1 `null` vs `pg` 的 `undefined`）。
-- `.exec(` 3 处归属未确认。
-- `batch()` 6 处失败是否真原子（R2 只是方案）。
-- `rowCount === null` 的归一化是否覆盖全部 27 个 `run()` 站点（shim 有归一化，未逐点证实）。
+> **2026-11-26 状态：四条全部闭合**（证据见 §9.7 与 handoff `## X`）。下表为历史登记，保留原文。
+
+| 原条目 | 当前状态 |
+| --- | --- |
+| `.first(` 23 个站点的「无行」返回值两端是否等价（D1 `null` vs `pg` 的 `undefined`） | **已闭合**：miniflare 构造真 D1 绑定实测 `null` / 非 `undefined`，与 shim 侧一致；23 个站点无一例传列名 ⇒ 分歧面不可达 |
+| `.exec(` 3 处归属未确认 | **已闭合**：3 处**全是 `RegExp.prototype.exec`**（`src/auth.ts:1007` / `src/index.ts:145` / `src/mail.ts:272`）⇒ D1 专有 `exec` 面未被消费；`.raw()` / `.last_row_id` 全仓 0 命中 |
+| `batch()` 6 处失败是否真原子（R2 只是方案） | **已闭合**：业务调用点真站点 **5 个**（`devices.ts:143` / `sync.ts:391` / `sync.ts:473` / `sync-buckets.ts:292` / `sync-buckets.ts:394`），真 PG 逐点验证 5/5 整批零落库 |
+| `rowCount === null` 的归一化是否覆盖全部 27 个 `run()` 站点 | **已闭合**：真站点 **26 个**（原 27 的多出项是 `src/errors.ts:36` 文档注释）；26 个中 25 个字面量 SQL 全是 INSERT/UPDATE/DELETE，唯一动态站点 `src/auth.ts:418` 的两个调用点也是 DELETE ⇒ 全仓 `.run(` 无 DDL；归一化实现点唯一（`src/pg/d1-shim.ts:299-306`） |
 
 ### 9.6 W6 必改项已落码（2026-11-26）
 
@@ -350,10 +354,10 @@ esbuild external 元信息变化，自测项数未变（31/31 PASS）。node bun
 
 | §9.5 原条目 | 当前状态 |
 | --- | --- |
-| `.first(` 23 处「无行」返回值两端是否等价 | **shim 侧已实测**（真 PG：`first()` 无行 ⇒ `null`，不是 `undefined`；无行 + 传列名同归一）；**D1 侧未跑对照** ⇒ 未证实 |
-| `.exec(` 3 处归属未确认 | **`src/pg/d1-shim.ts` 头注释记为「全是 `RegExp.prototype.exec`」**；本批**未新增**逐点核实证据 ⇒ 与本节旧口径不一致，以 ADR 0079 为准，**不算闭合** |
-| `batch()` 6 处失败是否真原子 | **shim 侧已实测**（真 PG：第二条违反唯一约束 ⇒ 整批 `ROLLBACK`、第一条不落库）；**6 个业务调用点未逐点验证** ⇒ 未证实 |
-| `rowCount === null` 归一化是否覆盖全部 27 个 `run()` 站点 | **仍未逐点证实**（shim 有归一化，本批只测了 DDL 与 UPDATE 两条路径） |
+| `.first(` 23 处「无行」返回值两端是否等价 | **已闭合**（2026-11-26）：shim 侧真 PG 实测 `null`；**D1 侧对照已跑**（miniflare 真 D1 绑定 ⇒ `null` / 非 `undefined`）⇒ 两端等价 |
+| `.exec(` 3 处归属未确认 | **已闭合**（2026-11-26）：3 处**全是 `RegExp.prototype.exec`**，D1 专有 `exec` 面零消费 |
+| `batch()` 6 处失败是否真原子 | **已闭合**（2026-11-26）：shim 侧真 PG 已实测；**5 个业务调用点逐点验证**（BEFORE 行触发器注入异常 ⇒ 5/5 整批零落库，带阳性对照）⇒ 真站点 5（原 6 的多出项是 `src/pg/d1-shim.ts:14` 注释） |
+| `rowCount === null` 归一化是否覆盖全部 27 个 `run()` 站点 | **已闭合**（2026-11-26）：真站点 26（原 27 的多出项是 `src/errors.ts:36` 注释），逐点核实无 DDL 站点 ⇒ 归一化覆盖完整 |
 
 **落码要点**（commit `5a65a6994832b4202486009613310c140d224848`，4 文件 +663 / −19）：
 
@@ -366,4 +370,35 @@ esbuild external 元信息变化，自测项数未变（31/31 PASS）。node bun
 **门禁结果**（`reports/fluxing-br-1g/w6/gate-w6.ps1` → `gate-w6.txt`）：`GATE_VERDICT=PASS` / `TSC_LINES=0` / node 包 110,414 B（sha256 `668CB107…`，基线 109,104 B ⇒ +1,310 B）/ `SELFTEST_PASS=37 FAIL=0`（基线 31）/ Workers 包 91,912 B **逐字未变** + 九条零污染全 False / workerd 13 files · 164 tests / test-pg **3 files · 24 tests**（基线 1 文件 4 用例）/ 负路径 `NEG_EXIT=1` + 中文错 + **PG 文件确实失败且纯单元文件确实仍通过**。
 
 **push 已完成（走直连）**：快进推送 `442e0ba..8645b27`；硬判据 `ls-remote` 与 `git rev-parse HEAD` **逐字相等**（ahead 0 / behind 0，未用 force）⇒ 远端 SHA 随订正批前进，**以实时回读为准**。
-**仍未闭环**：**代理路线仍断**（`Recv failure: Connection was aborted`）⇒ 后续远端操作须显式 `-c http.proxy= -c https.proxy=` · `test-pg/**` 不在 `tsconfig.json` 的 `include`（新增测试无类型闸门）· §9.5 表内三条未证实项照旧。详见 handoff `## W`。
+**仍未闭环（2026-11-26 订正）**：**代理路线仍断**（`Recv failure: Connection was aborted`）⇒ 后续远端操作须显式 `-c http.proxy= -c https.proxy=` · ~~`test-pg/**` 不在 `tsconfig.json` 的 `include`~~ **已消除**（2026-11-26 纳入类型闸门，见 §9.7）· ~~§9.5 表内三条未证实项~~ **已全部闭合**（见 §9.7）。详见 handoff `## W` / `## X`。
+
+### 9.7 W6 残留四项已逐点核实 + 类型闸门已补（2026-11-26）
+
+**四项闭合**（子代理执行，**主会话独立复核**；证据 `reports/fluxing-br-1g/w6/residual-verify-w6-2026-11-26.md`）：
+
+| 项 | 结论 |
+| --- | --- |
+| `.exec(` 3 处归属 | **全是 `RegExp.prototype.exec`**：`src/auth.ts:1007` / `src/index.ts:145` / `src/mail.ts:272` ⇒ D1 专有 `exec` 面未被消费；`.raw()` / `.last_row_id` 全仓 0 命中 |
+| `rowCount===null` 归一化覆盖 | 覆盖**全部 26 个 `.run()` 真站点**（原 27 的多出项是 `src/errors.ts:36` 文档注释）；25 个字面量 SQL 全是 INSERT/UPDATE/DELETE；唯一动态站点 `src/auth.ts:418`（`deleteRow`）的两个调用点 `auth.ts:487`/`:500` 都是 `DELETE FROM …` ⇒ 全仓 `.run(` 无 DDL；归一化实现点唯一：`src/pg/d1-shim.ts:299-306`（`:304` `rowCount ?? 0`） |
+| `.first()` 无行返回值两端等价 | **已真跑坐实**：miniflare 5 构造真 D1 绑定 ⇒ `D1_MISS_TYPE=null` / `D1_MISS_IS_NULL=true` / `D1_MISS_IS_UNDEFINED=false`，与 shim 侧 `src/pg/d1-shim.ts:290-296` 的 `null` 一致；23 个 `.first()` 站点**无一例传列名** ⇒ 分歧面不可达 |
+| `.batch()` 业务调用点原子性 | **5 个真站点**（`devices.ts:143` / `sync.ts:391` / `sync.ts:473` / `sync-buckets.ts:292` / `sync-buckets.ts:394`；原 6 的多出项是 `src/pg/d1-shim.ts:14` 注释）；真 PG 用 **BEFORE 行触发器**在批次第 2 条注入 `RAISE EXCEPTION` ⇒ **5/5 整批零落库**；每个用例带阳性对照（撤触发器必须成功） |
+
+**台账数字订正**：`.run()` 27→**26**；`.batch()` 6→**5**；`.first()` **23**（`src/pg/d1-shim.ts:287` 注释写「24」不准）。
+`src/pg/d1-shim.ts:13`/`:14`/`:287` 三处注释仅登记未改（改 `src/**` 需另开批次）。
+
+**类型闸门已补**：`tsconfig.json` 的 `include` = `["src/**/*.ts", "test-pg/**/*.ts"]`；
+`types` = `["@cloudflare/workers-types", "node"]`；新增 devDep `@types/node@^26.6.11`；
+新增可入库硬断言 `cloud/fluxing-sync/test/check-no-node-imports.mjs`（零静态 `node:` 导入；
+白名单 `src/pg`；`dynamicImport('node:…')` 间接加载 2 处放行）并串入 `npm run check`；
+显式登记 `miniflare@5.20260815.0-alpha`（原先只由 `@cloudflare/vitest-pool-workers` 传递带入）。
+
+**接上 tsc 后暴露的 4 处既有类型错误已修**（仅测试侧，运行期行为零变化）：`harness.ts` 三处
+（`import.meta.url`→`fileURLToPath` 的 `URL` 类型分歧 / `pg.Client` 不在 `PgModuleLike` /
+`pool.end()` 可选成员）+ `d1-shim-unit.test.ts:72`（`PgPoolLike['constructor']` = `Function`）
+⇒ 修法用测试侧局部接口（`PgAdminClientLike` / `PgAdminModuleLike`）+ `as unknown as` 断言。
+
+**门禁（全绿）**：`GATE_VERDICT=PASS` / `GATE_FAILS=`（空）/ `TSC_LINES=0` /
+node 包 110,414 B（sha256 `668CB107…`，未变）/ `SELFTEST_PASS=37 FAIL=0` /
+Workers 包 91,912 B（未变）+ 九条零污染全 False / workerd **13 files · 164 tests** /
+test-pg **7 files · 55 tests** / 负路径 `NEG_EXIT=1` + 中文错 +
+`NEG_PG_FILES_FAILED=True` + `NEG_UNIT_FILE_NOT_FAILED=True`。
