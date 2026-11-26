@@ -19,3 +19,12 @@
 handoff 新节 = `## S`：§S-1 指令与裁决 / §S-2 五步与判据 / §S-3 盘上产物 / §S-4 未验证六项 / §S-5 下一步 / §S-6 既有登记未改 / §S-7 工具坑。
 
 一句话状态：本机 PG 18.4 上 `fluxing_sync` 已建（9 表 22 索引，`LC_COLLATE=C`）+ `DDL_EXIT=0` + 服务进程真连库（`HEALTH=200`）+ 注册真写入（`users=1 verif=1 outbox=1`，stderr 空）；**verify / login / 同步端点一条都没真跑**，且本机实例 ≠ ECS 实例。
+## 最新批次（2026-11-26 · verify→login→sync 端到端打通）
+
+handoff 新节 = `## T`：§T-1 指令与结论 / §T-2 逐项证据 / §T-3 盘上产物 / §T-4 新发现与异常 / §T-5 仍未取得证据 / §T-6 下一步 / §T-7 既有登记未改 / §T-8 工具坑；**下一新顶节 = `## U`**（上文「下一新顶节 = `## R` / 新顶节 = `## S`」均为历史行，不再有效）。
+
+一句话状态：`pg-e2e-chain.ps1` **首次运行即 PASS**（退出 0 / 3 s / stderr 0 B）——`register 200` → `mail_outbox` 取 6 位码 → `verify 200` → `login 200`（`email_verified=True`，access/refresh 各 43 字符）→ `push 200`（`accepted:2` / `server_seq=2`）→ **更低 HLC 复推 ⇒ `skipped:["pgchain/config/one"]` 且库内仍是较高 HLC `1795684000000`**（HLC 守卫成立）→ `pull since=0` 回 2 条且 cipher 逐字节往返 → 库内 `sync_items=2` / `devices=1` / `refresh_tokens=2` / `email_verified=1` / R2 对象盘 2 个 32 B 文件。
+
+**仍未验证**：重复注册 409 `email_taken`（`isUniqueConstraintError`↔PG 23505 映射）、写预算 429、403 `email_not_verified`、令牌轮换、多设备、超限 `MAX_CIPHER_BYTES`、`has_more=true` 分页；**本机 PostgreSQL 18.4 ≠ ECS**；`pg` 仍未进 `package.json`；P0「假空」未修。
+
+**下一步顺序**：`pg` 依赖登记 → W5 测试底座（单独一批）→ P0 假空修复 → W6 方言清点 → W7 切源。**硬约束不变**：阶段 3 仍禁、`AC-09` 仍 FAIL 不得改记、台账数字一律盘上回读。

@@ -2935,3 +2935,70 @@ HTTP(nginx) → src/node-server.ts (新, ~120 行)  node:http → Request/Respon
 - `Invoke-WebRequest` 在 pwsh 7 用 **`-SkipHttpErrorCheck`** 直接取 4xx/5xx 响应体，比解 `$_.Exception.Response` 流稳且短。
 - `pg_hba.conf` 读不到（数据目录 ACL）⇒ 判认证方式只看 `pgpass.conf`，**不要反复试读 hba**。
 - `psql -1` + 文件内 `BEGIN;` ⇒ 必然一条 `WARNING: there is already a transaction in progress`，属预期，**不要当失败**、也不要因此改 DDL。
+## T
+
+### §T-1 指令与结论
+
+- **用户指令（2026-11-26，四选一里的推荐项）**：「补 verify→login→sync 端到端」。语义 = 在 `## S`（真实 PG 链路打通到「注册写入」）之后，把 `verify → login → sync/push → sync/pull` 四条真实跑通并取得盘上证据。
+- **结论：一次运行即 PASS。** 首次执行 `reports/fluxing-br-1g/pg-e2e-chain.ps1`（10,014 B，上一轮落盘后从未运行），脚本退出码 **0**、耗时 **3 s**、服务进程 stderr **0 B**，六项判定全 True：
+  `FINAL_CHAIN_VERDICT=PASS` / `JUDGE_register=True verify=True login=True push1=True pull=True db_rows=True`。
+- **本轮未改任何产品代码**（`cloud/fluxing-sync/**`、`WeaselServer/**` 零改动）；未跑门禁、未出包、未装机；未动生产 D1 / R2；未做腾讯云远端变更。入库仅 `docs/` 两文件（本 handoff 节 + 接力 prompt）。
+
+### §T-2 逐项证据（逐字抄自 `reports/fluxing-br-1g/pg-chain-run.txt`）
+
+| 环节 | 实测 | 说明 |
+|---|---|---|
+| 服务 | `HEALTH=200` | 端口 18788，`node node-main.mjs`，`SERIAL_PID` 见运行日志（`SERVER_PID=253108`） |
+| 注册 | `REGISTER_STATUS=200` | `account_id=668f4144-2cf9-425c-b1f9-bcad8729565a`、`salt=ZihNUQYm8FVOeRmdD2FalA==`、`kdf={PBKDF2-SHA256, 600000}`、`need_email_verify=true` |
+| 取码 | `CODE_SOURCE=mail_outbox bodylen=92 extract_ok=True CODE_LEN=6` | 明文取自 `mail_outbox.body`（`MAIL_MODE=outbox`），**未**从 `email_verifications.code_hash` 反推 |
+| 验证 | `VERIFY_STATUS=200` `{"ok":true}` | 6 位码被接受，`users.email_verified` 由 0 → 1 |
+| 登录 | `LOGIN_STATUS=200` | `email_verified=True`、`ACCESS_TOKEN_LEN=43`、`REFRESH_TOKEN_LEN=43`（32 B base64url）、`account_id` 与注册一致 |
+| 推送 | `PUSH1_STATUS=200` `{"accepted":["pgchain/config/one","pgchain/userdb/one"],"skipped":[],"server_seq":2}` | 两条 `item_key` 均 accepted，`server_seq` 一次推进到 2 |
+| HLC 守卫 | `PUSH2_STALE_STATUS=200` `{"accepted":[],"skipped":["pgchain/config/one"],...,"server_seq":2}` | 同 key 送**更低** HLC ⇒ 整条 skipped、`server_seq` 未推进 ⇒ **不覆盖** |
+| 拉取 | `PULL_STATUS=200` `PULL_COUNT=2` `PULL_KEYS=pgchain/config/one,pgchain/userdb/one` `PULL_CIPHER_ROUNDTRIP=True` `PULL_SERVER_SEQ=2` `PULL_HAS_MORE=False` | cipher 逐字节往返（32 B 全零 base64） |
+| 库内回读 | `DB_SYNC_ITEMS=2` | `pgchain/config/one|config|1795684000000|0|devA|32|AAAAAAAAAAAAAAAA` 与 `pgchain/userdb/one|userdb|1795684000001|0|devA|32|AAAAAAAAAAAAAAAA` ⇒ **存的是较高 HLC**（`1795684000000`），未被 stale 推送覆盖 |
+| 其它表 | `DB_DEVICES=1` `DB_REFRESH_TOKENS=2` `DB_USER_VERIFIED=1` | 见 §T-4 第 1 条（2 枚令牌的同秒成因待查） |
+| 对象盘 | `R2_OBJECT_FILES=2` | `\u\668f4144-…\<sha256>` 两枚 **32 B** 文件 ⇒ `BUCKET.put` 真落盘 |
+| 服务端错误 | `SERVER_STDERR_LEN=0` | 全程零 stderr |
+
+### §T-3 盘上产物（全部 `reports/**`，已 gitignore，不入库）
+
+- `reports/fluxing-br-1g/pg-e2e-chain.ps1`（10,014 B，本轮**首次执行**，未改一字）
+- `reports/fluxing-br-1g/pg-chain-run.txt`（脚本自落判定台账，`finally` 内写盘）
+- `reports/fluxing-br-1g/pg-chain-console.txt`（本轮外层捕获的控制台全文）
+- `reports/fluxing-br-1g/pg-chain-server.out.txt` / `pg-chain-server.err.txt`（后者 0 B）
+- `reports/fluxing-br-1g/pg-e2e-objects/u/668f4144-.../<sha256>` ×2（各 32 B）
+
+### §T-4 新发现与异常
+
+1. **`refresh_tokens` 出现 2 行，且同 `device_id`（`1055f7d9-79cd-40bb-8844-0c807d426c91`）、同 `created_at`（`1795683938`）**：本次流程只调用了一次 `login`，故两枚应由同一响应发出。补测定性：`select kind, count(*) ... group by kind` = **`access x1` / `refresh x1`** ⇒ 同一次 `login` 同时签发访问令牌与刷新令牌（两枚均 43 字符 base64url），**非缺陷**。
+2. **全局行数（实测）**：`users=2` / `sync_items=2` / `mail_outbox=2` / `email_verifications=2`。上一轮注册的旧账号 `pg-e2e-20261126165930@local.test` 仍是 `items=0 verified=0` ⇒ 同步写入**只落在本轮新账号**上，无串号。
+3. **PG 上的 `server_seq` 语义与 D1 一致**：`push` 返回 `server_seq=2`、`stale` 推送不推进、`pull` 回读 `server_seq=2` 且 `since=0` 全量 = 2 条 ⇒ 移植的序号口径在真实 PG 上成立。
+4. **此前登记的「上轮入参契约勘察」被证伪风险归零**：register / verify / login / push / pull 五处路径与 body 形状首跑即中，无需二次修脚本。
+
+### §T-5 本轮仍未取得证据（不得当结论）
+
+1. **重复注册 409 `email_taken`**：`assertResendAllowed` 在 users 查重之前 ⇒ 同邮箱 60 s 内先吃 429；`isUniqueConstraintError` 在 PG **23505** 上的映射**仍未证实**。
+2. **写预算 429 `write_budget_exceeded`**（PG 侧）与 **403 `email_not_verified`**（未验证邮箱只拦写）两条负路径均未触发。
+3. **令牌轮换 / refresh 端点**、**多设备 `devices` 与跨设备可见性**、**`MAX_CIPHER_BYTES` 超限拒绝**、**`pull` 的 `has_more=true` 分页路径**（本轮 `limit=50 > 2`，只走了一页）。
+4. **本机 ≠ ECS**：只证明代码在 PostgreSQL **18.4**（`127.0.0.1:5432`）上跑通；ECS 的 PG 大版本 / 是否已装 / 根盘仅剩 14 G / `5432` 公网监听，全部未变。
+5. **`pg` 仍未进 `package.json`**（安装时 `--no-save`）⇒ ECS 上 `npm ci` 装不到，「登记为运行时依赖」或「拆 node 侧独立 `package.json`」仍未决。
+6. **P0 词典「假空」机制仍未定** —— 仍是 W7 切源的硬前置；D1 的 429 零写入只是意外刹车，**PG 上没有等价刹车**。
+
+### §T-6 下一步（顺序未变，未获用户逐项确认）
+
+`pg` 依赖登记 → W5 测试底座（单独一批提交）→ P0 假空修复 → W6 PG 方言清点（`INSERT OR IGNORE` / `INSERT OR REPLACE` / `AUTOINCREMENT` / `PRAGMA`，全仓出现次数**尚未 grep 统计**）→ W7 切源。
+
+### §T-7 既有登记未改
+
+- **路线 B 已拍板**（2026-11-26）：桶化冻结 phase 0，阶段 3/4 在 B 下永不启用（待 ADR 0079 立项）。
+- **`AC-09` 仍 FAIL，不得改记**（只有日志出现 `AC09_VERDICT=PASS` 才可改）；`AC-212` / `AC-215` 判据② 仍未判定；`AC-213` / `AC-214` 永久退役。
+- 阶段 3 切读硬前置不变（云端历史 40,061 条先完成桶化覆盖 + 规则 1 盲区修复）。
+- 生产 `sync_buckets` 未复读，仍按 `§P-P.10`（1,000 行 / 92,353 条 / MAX(id)=2027）。
+
+### §T-8 工具坑（本轮新增）
+
+1. **`psql -Atc` 一次只喂一条语句**：多条要分开调用，不要指望 `;` 拼接后仍能干净取回。
+2. **`psql` 无密码可用是 `pgpass.conf` 在起作用**（`%APPDATA%\postgresql\pgpass.conf`，本轮 `pwdlen=20`）；`pg_hba.conf` 读不动，不要反复试读。
+3. **脚本体内 `exit N` 在 `try` 里仍会走 `finally`**（停服务 + 落盘）—— 本轮六条早退分支均未触发，属**未验证**假设，改脚本时不要据此删 `finally`。
+4. **首跑即 PASS 的反面教训**：上一轮把入参契约逐字从源码抄进脚本（而非猜），是零返工的直接原因；改端点前先去源码取形状，不要先跑再猜。
