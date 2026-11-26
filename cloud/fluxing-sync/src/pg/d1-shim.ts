@@ -2,23 +2,31 @@
 //
 // 目标：让 13 个 handler / wire.ts / crypto.ts / errors.ts **一个字都不改**地跑在自建 PG 上。
 // 手段：只替换边界 —— 复刻 `D1Database` 被实际消费的那一小块 API。刻意**不**逐条改写
-// 全仓 64 处 `prepare` / 63 处 `bind` / 5 处 `batch`：那样会把一次「换底座」变成一次
+// 全仓 65 处 `prepare` / 65 处 `bind` / 6 处 `batch`：那样会把一次「换底座」变成一次
 // 「重写同步逻辑」，而同步逻辑正是事故史最密的地方（ADR 0076 / 0077 / 0078）。
 //
-// 被消费的 API 面（2026-11-26 逐文件回读全仓 12 个 .ts / 3,664 行，逐项计数）：
-//   prepare(sql)            → PgCompatStatement                64 处
-//   stmt.bind(...)          → PgCompatStatement（不可变，D1 语义）   63 处
-//   all<T>()                → { results: T[] }                 3 个文件各 2 处
-//   first<T>()              → T | null                         24 处，**无一例传列名**
-//   run()                   → { meta: { changes } }            只有 account.ts:92 / :97 消费 changes
-//   DB.batch(stmts[])       → 事务内全成功或全不生效               5 处（devices 1 / sync 2 / buckets 2）
-//   **未使用**：`.raw()` / `.changes` / `.last_row_id` / `.duration`（全仓 0 命中 ⇒ 不实现，
-//   实现反而会造出「看着能用其实没测过」的假面）。
+// 被消费的 API 面（2026-11-26 W6 方言清点：泛型感知正则全仓 17 个 .ts / 5,019 行，逐项计数）：
+//   prepare(sql)            → PgCompatStatement                65 处
+//   stmt.bind(...)          → PgCompatStatement（不可变，D1 语义）   65 处
+//   all<T>()                → { results: T[] }                 7 处
+//   first<T>()              → T | null                         23 处，**无一例传列名**
+//   run()                   → { meta: { changes } }            27 处（只有 account.ts:92 / :97 消费 changes）
+//   DB.batch(stmts[])       → 事务内全成功或全不生效               6 处（devices 1 / sync 2 / buckets 2 / 其他）
+//   **未使用**：`.raw()` / `.changes` / `.last_row_id` / `.duration` / `.exec()`
+//   （全仓 0 命中 ⇒ 不实现。`exec` 的 3 处命中经逐点核实**全是 `RegExp.prototype.exec`**，
+//   不是 D1 的 `stmt.exec()` ⇒ D1 专有的 `exec` 面确实没被消费。）
 //
 // 三处不能想当然的语义：
-//   1. **占位符**：SQLite 用 `?`，PG 用 `$n`。全仓 301 个 `?`，必须按出现顺序重编号，
-//      且必须跳过字符串字面量 / 双引号标识符 / 行注释 / 块注释 —— 否则 `'?'` 这类
-//      字面量会把后面所有编号顶歪一位，症状是「参数类型不匹配」这种看不出根因的报错。
+//   1. **占位符**：SQLite 用 `?`，PG 用 `$n`。可静态计数的占位符共 **135** 个
+//      （58 个字符串字面量站点；扫描器口径与朴素口径差额 = 0 ⇒ 没有「字面量里的 `?`」陷阱）。
+//      另有 4 个动态站点在运行时展开 `map(() => '?')`（占位符 = N+1 / N+2，与绑定数同构）、
+//      1 个变量透传站点（`prepare(sql)`，两个调用方各 1 个 `?` + 1 绑定）。
+//      （早期清点记的 **145 是过计数** —— 把 4 处 `map(() => '?')` 构造行也算了进去；
+//      整文件朴素计数 386 个含三元运算与可选参数，同样**不可用作迁移依据**。）
+//      必须按出现顺序重编号，且必须跳过字符串字面量 / 双引号标识符 / 行注释 / 块注释 ——
+//      否则 `'?'` 这类字面量会把后面所有编号顶歪一位，症状是「参数类型不匹配」这种看不出根因的报错。
+//      **并在编译时断言「占位符个数 == 绑定参数个数」**（见 `toQuery()`）——
+//      这是把「两端口径不同」从静默事故降级成一次显式失败的唯一收口点。
 //   2. **BIGINT**：node-postgres 默认把 int8 读成**字符串**。`hlc_ms` / `server_seq` /
 //      `id` / `COUNT(*)` 在 Workers 上都是 JS number；不装类型解析器就会静默改变
 //      线上响应形状（客户端按 number 解析，字符串会一路传到比较运算）。
@@ -75,8 +83,16 @@ const PG_TYPE_OID_BIGINT = 20;
 // 占位符重编号
 // ---------------------------------------------------------------------------
 
+/** 占位符扫描结果。 */
+export interface ScannedSql {
+  /** 占位符已改写为 `$1..$n` 的 SQL。 */
+  text: string;
+  /** 真正参与编号的占位符个数（跳过字符串字面量 / 标识符 / 注释里的 `?`）。 */
+  placeholderCount: number;
+}
+
 /**
- * 把 SQLite 的 `?` 占位符按出现顺序改写成 PG 的 `$1..$n`。
+ * 把 SQLite 的 `?` 占位符按出现顺序改写成 PG 的 `$1..$n`，并回报占位符个数。
  *
  * 跳过四类区域（其中的 `?` 不是占位符）：
  *   · 单引号字符串字面量，`''` 为转义；
@@ -89,9 +105,9 @@ const PG_TYPE_OID_BIGINT = 20;
  * 不是「静默错位」，可接受。
  *
  * @param sql 原始 SQL
- * @returns 占位符已改写为 `$n` 的 SQL
+ * @returns 改写后的 SQL 与占位符个数
  */
-export function renumberPlaceholders(sql: string): string {
+export function scanPlaceholders(sql: string): ScannedSql {
   const parts: string[] = [];
   let ordinal = 0;
   let index = 0;
@@ -147,7 +163,17 @@ export function renumberPlaceholders(sql: string): string {
     index += 1;
   }
 
-  return parts.join('');
+  return { text: parts.join(''), placeholderCount: ordinal };
+}
+
+/**
+ * 只要改写后的 SQL（薄封装，保留旧调用面）。
+ *
+ * 断言那一侧用的是 `scanPlaceholders()` —— 两处共用同一个扫描器，
+ * 避免「计数用一套、改写用另一套」这种必然对不上的双实现。
+ */
+export function renumberPlaceholders(sql: string): string {
+  return scanPlaceholders(sql).text;
 }
 
 // ---------------------------------------------------------------------------
@@ -211,11 +237,34 @@ export class PgCompatStatement {
     return new PgCompatStatement(this.#database, this.#sql, values.map(normalizeBindValue));
   }
 
-  /** 编译（重编号一次并缓存）。batch 需要它，故为公开方法，但只在内部使用。 */
+  /**
+   * 编译（重编号一次并缓存）。batch 需要它，故为公开方法，但只在内部使用。
+   *
+   * **唯一的断言收口点**：占位符个数必须与绑定参数个数相等。
+   *
+   * 为什么要有：D1 自己也会拒绝参数个数不符的语句（"Not enough parameter values were provided"），
+   * 但 PG 的报错是「bind message supplies N parameters, but prepared statement requires M」——
+   * 与根因隔着两层。而且**在 PG 上参数个数不符不会静默错位**：pg 会直接拒发。
+   * 但如果 SQL 里的 `?` 落在字符串字面量里（`'?'`），扫描器不算它占位符，
+   * 而 D1 会算 —— 两端口径不同 ⇒ 这条断言把「口径不同」变成一次显式失败，
+   * 而不是一次「推上去才发现云端数据错位」的静默事故。
+   *
+   * 失败信息只给**个数**，不给 SQL 正文、更不给绑定值 ⇒ 不可能把用户数据写进日志。
+   */
   toQuery(): CompiledQuery {
     if (this.#compiled === null) {
+      const scanned = scanPlaceholders(this.#sql);
+      if (scanned.placeholderCount !== this.#values.length) {
+        throw new Error(
+          'SQL 占位符个数（' +
+            scanned.placeholderCount +
+            '）与绑定参数个数（' +
+            this.#values.length +
+            '）不一致：请检查该语句 bind() 的参数个数。',
+        );
+      }
       this.#compiled = {
-        text: renumberPlaceholders(this.#sql),
+        text: scanned.text,
         values: this.#values,
       };
     }
