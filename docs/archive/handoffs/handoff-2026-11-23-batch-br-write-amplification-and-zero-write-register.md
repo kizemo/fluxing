@@ -2059,3 +2059,111 @@
 6. **AC-212 未判定**：缺「单轮完整 D1 写入量」与「桶包字节数 / 单桶写入耗时」埋点；本轮零写入对照轮**不提供**该数据。
 7. 阶段 3 切读**仍禁**（硬前置：云端历史 40,061 条须先完成桶化覆盖；handoff §O-1.1 / ADR 0077:411-412）。
 8. **AC-09 维持 FAIL**（不得改记）；生产阈值 80,000→20,000、BR-②′ 全局熔断、BR-⑤、腾讯云收口、定时任务合并 —— **均未授权、未动**。
+
+### P-M —— §P-L.4 口径订正 + 隔夜盘上实证 + v4 复跑起跑（2026-11-26 09:52–10:10）
+
+> 本节是**本批最新事实**；与 §P-L 及上文冲突时**以本节为准**。
+> 本轮**未改任何产品代码、未跑门禁、未出包、未 push**（门禁基线 `PASS=924 FAIL=0` 仍为 §P-L.8.1 的值，本轮不重复声称）；唯一动作 = 落盘 §P-M + 改写接力 prompt + 起 v4 看护脚本。
+
+#### P-M.1 §P-L.4 口径订正：v3 的 `ROUND_SUMMARY_SEEN=NO` 是**窗口选错**，不是「触发链缺陷」
+
+§P-L.4 把「启动轮结束后 29 分钟没有第二轮」登记为**轮次调度/触发链存在未坐实的行为差异**（新缺口）。**本轮订正为：设计如此。** 三条代码事实：
+
+| # | 事实 | 代码位置 |
+|---|---|---|
+| ① | **启动轮固定 `kPullOnly`**（`dir = startup_pending_ ? SyncDirection::kPullOnly : SyncDirection::kBoth`），其余轮次一律 `kBoth` | `WeaselServer/Cloud/CloudSyncEngine.cpp:205-213` |
+| ② | 桶推闸门要求 `direction ∈ {kPushOnly, kBoth}` ⇒ **启动轮在结构上永远不可能推桶** | `WeaselServer/Cloud/CloudSyncService.cpp:1611-1614` |
+| ③ | 定时轮唤醒点 = `last_pull_ms_ + 3600000`，而 `last_pull_ms_` 在**轮末**记账（`OnRoundFinishedLocked`）；`NextWakeMsLocked` 的周期候选上限亦为 `now + 3600*1000` ⇒ 定时轮 = **上一轮结束时刻 + 60 min** | `CloudSyncEngine.cpp:292-304`、`:380-388` |
+
+⇒ **推轮最小间隔 = 启动轮结束 + 约 62 min**（62 = 60 min 周期 + 本轮自身耗时约 2 min）。
+⇒ **v3 的 `$MaxWaitMinutes = 40` 结构上不可能抓到推轮** ⇒ v3 判 `NO_ROUND` 是**窗口选错**，**不是**缺陷。**§P-L.4 第 2 条「触发链缺口」据此作废**（见 P-M.6 第 10 条）。
+
+**登记加重因素（仍属真实约束）**：桶推除方向外还要求**该轮自身**的桶库存扫描完成（phase 2 下先拉满 1,000 桶 ≈ 2 min，再推变更桶）⇒ 桶化覆盖进度**依赖轮次累积**；纯补推场景（用户不产生新改动）不会增加需要推送的桶数。
+
+#### P-M.2 隔夜盘上实证：定时轮 = 62 min，且定时轮**确实会推**（phase 0）
+
+回读 `C:\Users\Duanyi\AppData\Local\Temp\fluxing-profile-notify.log`（2026-11-26 09:00 时 size = **688,488 B** / mtime 09:00:43；匹配行 **650** 条，已落盘 `reports/fluxing-br-1g/rounds-scan-20261126.txt`）：
+
+| 轮次 | 轮末时刻 | `reconcile … pushed=` | `bucket phase=` | 与上一轮间隔 |
+|---|---|---|---|---|
+| 定时轮 | 02:35:01 | （该轮 reconcile 行不在取数窗口内） | 0 | — |
+| 定时轮 | 03:37:10 | **13** | 0 | 62 min |
+| 定时轮 | 04:39:31 | **13** | 0 | 62 min 08 s |
+| 定时轮 | 05:41:39 | **13** | 0 | 62 min 08 s |
+| 定时轮 | 06:43:49 | **13** | 0 | 62 min 10 s |
+| 定时轮 | 07:46:01 | **13** | 0 | 62 min 12 s |
+| **启动轮**（pid 36712 @ 07:51:47 重启插入） | 07:55:30 | **0** | 0 | 9 min 29 s |
+| 定时轮 | 08:57:51 | **13** | 0 | **62 min 21 s** |
+
+⇒ **决定性对照**：同一二进制、相邻两轮、唯一差异 = `startup_pending_`（`kPullOnly` vs `kBoth`）⇒ 启动轮 `pushed=0`、定时轮 `pushed=13`。**直接证伪「触发链缺陷」假设**，并把 §P-L.4 钉成「窗口选错」。
+⇒ 同时证实：**定时轮会走推送路径**（phase 0 下是老端点条目级推 13 条；phase 2 下同一位置即桶推）。
+⇒ 另一实证：`sync_buckets` 生产侧**恒为 1,000 行**（Σ item_count 92,353）⇒ 桶化覆盖的**云端侧**早已就位，缺的是**客户端桶推**。
+
+#### P-M.3 桶推闸门复核：**不要求 dirty**，只要求方向 + 库存扫完
+
+`CloudSyncService.cpp:1611-1614`（本轮逐行复核）：
+
+```
+if (bucket_mode &&
+    (direction == SyncDirection::kPushOnly ||
+     direction == SyncDirection::kBoth) &&
+    bucket_scan_complete) {
+  … PushChangedBuckets(merged, remote_entries, unproven_keys, bucket_scan_complete,
+                        legacy_endpoints, &last_bucket_stats_, out, &bucket_err) …
+}
+```
+
+⇒ **无 `dirty_since_ms_` 前提** ⇒ 定时轮（`kBoth`）只要该轮桶库存扫描完成就会进桶推。
+⇒ 老端点条目级推的闸门同理（`:1502-1503` 也只看 `legacy_endpoints` + 方向）。
+⇒ 故 v4 **不需要**用户打字来触发；但用户活跃度会通过「桶内容变化 ⇒ 指纹变化 ⇒ 待推桶数量」间接影响覆盖进度。
+
+#### P-M.4 v4 配方与窗口裁定（**唯一改动 = 窗口 + 判据**）
+
+脚本：`reports/fluxing-br-1g/phase2-closeout-v4.ps1`（**不入库**：reports/** 在禁入库清单）
+日志：`reports/fluxing-br-1g/phase2-closeout-v4-run.log`
+
+| 项 | v3 | **v4** | 理由 |
+|---|---|---|---|
+| `$MaxWaitMinutes` | 40 | **95** | 启动轮 2–11 min + 62 min 定时轮 + 余量；40 在结构上抓不到推轮 |
+| `$RollbackWaitMinutes` | 25 | 25（不变） | — |
+| `$MaxRestarts` | 3 | **2**（仅进程死亡时重启） | 重启会重置 `startup_pending_` ⇒ 连带重置 60 min 定时时钟 ⇒ 尽量不重启；日志已标注该语义 |
+| 判据 | 前置 `quota_rows=` + 后继 `bucket phase=2 pushed>0` | **只认 `bucket phase=2 pushed=N`（N>0）** | `quota_rows=` 是 `PushChangedBuckets` **函数内**埋点（§P-K.5），作前置会重演 v2 误判；v4 取消前置、仅留作诊断上下文 |
+| 启动配方 | 进程级 + User 级同时设 phase=2 → 杀全部 WeaselServer → `Start-Process` | 同 v3（不变） | §P-J：User 级变量不进已运行父进程环境块 |
+| 侧车注入 phase | 不做 | **不做**（不变） | 侧车 11.9 MB 由 `SaveSidecar`（`CloudSyncService.cpp:1697`）整体重写，外部写有竞争 |
+| 阶段 3 | 禁 | **禁**（不变） | §O-1.1 / ADR 0077:411-412 |
+
+#### P-M.5 v4 运行记录（2026-11-26 09:55 起跑）
+
+**起跑**：`2026-11-26 09:55:19 === CLOSEOUT V4 START (wait 95 min for the PERIODIC round summary) ===`；`WINDOW_MIN=95 ROLLBACK_MIN=25`；`USER_PHASE_BEFORE=[]`（干净起点）。
+
+**生产 D1 轮前基线（09:55 只读读数，不耗写额度）**：
+
+- `sync_buckets`：**n = 1,000**、id min 2 / max 1,011、`COUNT(DISTINCT device_id) = 1`、**Σ item_count = 92,353**
+- `sync_items`：**n = 40,066**、max id **71,293**
+- `rows_written_24h = 6,929**（UTC 午夜已重置；免费额度 10 万行/日 ⇒ **当日余 ≈ 93,071 行**）
+
+**预期时序**：启动轮 ≈09:56–10:06（kPullOnly，满拉 1,000 桶）→ 定时轮 ≈**10:58–11:08**（kBoth，桶推在此轮）→ 判据截止 11:30 → 回滚 ≤25 min ⇒ 预计 **12:00 前后**收官。
+
+**终态（待回填）**：`ROUND_SUMMARY_SEEN=YES pushed=N` 或 `NO`；D1 轮后三项差分；回滚双判据（日志 `bucket phase=0` + 侧车 `phase 0`）；`FINAL round_seen=… summary_seen=… phase0_seen=… sidecar_phase=…`。
+
+#### P-M.6 本轮未闭环项（承 §P-L.9 八条**全部仍在**，原文不改；本轮新增 4 条）
+
+**§P-L.9 的 1–8 条全部仍在**（客户端 `bucket phase=2 pushed=N` 尚未取得 / 「704/1,000」缺口成因 / 「500 vs 704」拉取差异根因 / 尾部 24 桶结构性饿死 / AC-212 未判定 / 阶段 3 仍禁 / AC-09 维持 FAIL + 四项未授权）。
+
+**本轮新增**：
+
+9. **v4 终态未回填**（P-M.5 终态字段）—— v4 看护仍在跑，本节尚未收官。
+10. **§P-L.4 第 2 条「触发链缺口」作废**，由 P-M.1 订正为「窗口选错」；引用该条时以 P-M.1 为准。
+11. **隔夜跨零点取证坑**（P-M.7）：轮次必须按「轮末 + 60 min」解读，不能按整点/整小时对齐，否则会把启动轮误读成定时轮。
+12. **`CLAUDE.md` 的 BR-①g 指针行本轮未同步**（该文件指针块体量极大、改动风险高）⇒ 下轮补；**不影响**以 handoff §P-M 为权威进度源。
+
+#### P-M.7 本轮工具坑与实测配方（2026-11-26 09:52–10:10）
+
+- **交接卡不采信**：harness 注入的 `E:\Users\Duanyi\.minimax\.minimax\maintenance\task-state\LATEST.md` 内容属**别的项目**（PractiLog）⇒ 按用户禁令**未读、未采信**（用户记忆：严禁跨项目目录读取交接卡）。
+- **v3 两个缺陷已在 v4 修掉**：① 判据前置 `quota_rows=`（§P-K.5）② 窗口 40 min（结构原因，P-M.1）。
+- **D1 只读取数**：`npx --prefix <proj> wrangler d1 execute DB --remote --config <proj>\wrangler.toml --command <sql> --json`（冷启动 ≈6 s/条）；须先清 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY` 并设 `NO_PROXY='*'`；只读 `SELECT` 不耗写行额度。
+- **日志增量读**：`FileShare ReadWrite` + `Seek`（v3 `:30-45` 实现）可避免与写入进程抢锁。
+- **隔夜取证**：一次 `Select-String` 导出全部匹配行落盘（650 行 ⇒ `reports/fluxing-br-1g/rounds-scan-20261126.txt`），对话里只留摘要表。
+- **本轮取数配方（可照抄）**：
+  - notify 日志 + 进程 + 锁屏 + User 级变量：一次 `Get-Item` + `Select-String` + `Get-Process` + `[Environment]::GetEnvironmentVariable(...,'User')`。
+  - 侧车：绝对路径 `Get-Content -TotalCount 6`（magic / `seq` / `bseq` / `phase` / `keyfp`）+ `Select-String '^brow\t'` 计数（**当前仍 0**）。
