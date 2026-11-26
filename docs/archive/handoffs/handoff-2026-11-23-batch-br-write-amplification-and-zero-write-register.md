@@ -2487,3 +2487,55 @@ v5 脚本判据：`JUDGE kind=after-quota`（取 quota 行之后的那条汇总�
 - **建议 v6（下一轮真机轮）**：① 验 AC-215 判据② —— **必须连续跑两轮**（第一轮产生 `held_quota`，第二轮观察被延后的桶是否重选）；② 在两轮之间**不重启进程**（避免重启重置 `startup_pending_` 又变成 kPullOnly 轮）；③ 预期第二轮若仍是 `pushed=1000` ⇒ 稳态零写**确证不成立** ⇒ P-O.5 机制假设成立。
 - **建议独立批次立项**（优先级从高到低）：① **还原路径 ⇒ 桶指纹全变 ⇒ 每轮全量重推**（P-O.5，若成立则直接决定桶化能否落地）；② **本地词典「假空」+ 覆盖式还原**的数据完整性缺陷（P-O.7，P0）；③ 规则 1 盲区（**阶段 3 的硬阻塞**）；④ 桶拉取 800/1,000 停手点定位；⑤ `AC-212` 的单桶耗时埋点。
 - **待用户裁定**：是否 push（分支仍 ahead，未 push）；上述五项是否立项与优先级；阶段 3 开闸与否；**BR-②′ 全局同步写熔断 / BR-⑤（jury.xin 自建）/ 腾讯云两项安全配置 / 定时任务合并**四项仍未拍板。
+
+### §P-P · P0 词典完整性批次（ADR 0078）——护栏落地 + 门禁全绿 + 1.3.11 出包装机（本批最新事实，最先读）
+
+**批次性质** = 从 BR-①g 客户端桶化派生的**独立 P0 批次**（ADR 0078），治理「本地词典导出为空 / 还原把整库读成空」的写放大与数据完整性隐患。本轮完成 **护栏 + 门禁用例落码 → 门禁全绿 → 升版 1.3.11 → 出包 → 静默装机 → 装机 sha256 三处对账**；真机 phase 1/2 自证轮**已起跑**（结果见下方 §P-P.7，待回填）。
+
+#### P-P.1 已达成（盘上回读）
+
+| 项 | 值 | 证据 |
+|---|---|---|
+| **门禁全绿** | `PASS=951 FAIL=0`（基线 924 ⇒ **+27**）、`VERDICT: ALL PASS`、`MSBUILD_EXIT=0`、`EXE_EXIT=0` | `reports/fluxing-br-1g/gate-p0-run2.out.txt`（596 B @ 11:59:17） |
+| **U+FFFD** | `UFFFD_COUNT=0` | 同上 |
+| **改动 hunk clang-format 漂移** | `CLANGFORMAT_HUNK_DRIFT=0`（第 1 次跑=2，定点改后归零） | 同上 |
+| 新测试 exe | `Release\TestFluxingCloud.exe` **1,032,704 B @ 11:59:00**（旧 1,032,192 ⇒ 确已重编译） | 门禁日志 |
+| **出包成功** | `BUILD_EXIT=0`，NSIS `Output: ...\output\archives\fluxing-1.3.11-installer.exe` | `reports/fluxing-br-1g/p0-build-1.3.11.log`（708 行） |
+| **安装包** | **43,021,075 B @ 12:14:42** / sha256 `1E21CC0D16C500AF36F8ECDC7C318C9C4B3E52D295740301D12479DCB08B7167` | 盘上回读（1.3.10 = 43,022,044 B） |
+| **静默装机** | `INSTALL_EXIT=0`、acceptance-check `ALL HARD CHECKS PASSED` | `reports/fluxing-br-1g/p0-silent-install.log` |
+| **装机三处 sha256 对账** | 构建 `output\Win32\WeaselServer.exe` = 包内解包 = 装机后 `D:\Program Files\fluxing\weasel\WeaselServer.exe` **逐字节相等** `25F6D27CE521DDBB027009F38DB2F6CE09B2018D593E5DA6F751329059A6D08A`（2,901,504 B / mtime 12:12:06 / FileVersion 1.3.11.0） | 盘上回读 |
+| 装机后运行镜像 | 1.3.11（旧 pid 201240 跑的是 1.3.10，真机 runner 已重启进程加载新镜像） | runner 日志 |
+
+#### P-P.2 `version.txt` 修复（本轮升版脚本写坏 → 直接修，未发问卷）
+
+- **根因**：本轮升版脚本用 `Patch-File $f @(@('1.3.10','1.3.11'))` 单组配对，PowerShell 把**单元素嵌套数组自动展平成字符串** ⇒ `$kv[0]`/`kv[1]` 取到字符 `'1'`/`'.'` ⇒ 两次「把 `1` 换成 `.`」⇒ `1.3.10 → ..3..1 → ..3..0`（`git diff -- version.txt` 坐实）。`env.bat` 那次 4 组配对未展平故侥幸正确。
+- **修法**：`[IO.File]::WriteAllText(..., "1.3.11`r`n", UTF8Encoding($false))` 直写 + 按字节回读断言 ⇒ **len=8 / text=`1.3.11` + CRLF**（version.txt 保持 CRLF）。
+- **新红线**：升版一律**直写 + 字节级回读**，禁用「配对数组 + 正则替换」处理**单组**配对。
+
+#### P-P.3 env.bat 盘上回读 = 1.3.11
+
+`:112 set "FLUXING_VERSION=1.3.11"` / `:135 PRODUCT_VERSION=1.3.11.0` / `:136 FILE_VERSION=1.3.11.0` / `:141 VERSION_PATCH=11` / `:142 RELEASE_BUILD=1` / `:133 WEASEL_BUILD=1`；`env.bat` **未被 git 跟踪**（`git ls-files` 空）⇒ 符合「env.bat 不入库」红线。`weasel.props` 版本闸门（PRODUCT/FILE == version.txt + `.0`）满足。
+
+#### P-P.4 整文件 clang-format 漂移定性 = 存量（§6 判据不受影响）
+
+- 门禁报 `CLANGFORMAT_WHOLEFILE_DRIFT=2`，命中 `CloudRimeUserDictBackend.cpp` 与 `TestFluxingCloud.cpp`。
+- 对 **HEAD 版本**同文件跑 `clang-format --output-replacements-xml`（PATH 上 `C:\Python314\Scripts\clang-format.exe`）：**HEAD 本身**就有 14 处 / 285 处替换（`CloudSyncService.cpp`=0、`CloudUserDictIo.cpp`=0）⇒ 整文件漂移是**仓库既有状态**，非本批引入。
+- **决策**：**不做整文件重排**（会造 6,000+ 行噪声 diff 污染提交）；§6 判据锁「**改动 hunk 0 漂移**」，本轮已达成（`CLANGFORMAT_HUNK_DRIFT=0`）。
+
+#### P-P.5 真机 runner 设计（`reports/fluxing-br-1g/p0-phase12.ps1`，9,001 B）
+
+逻辑：STEP -1 路径自检（exe/userdb/sidecar/notify 任一缺失即 `exit 2`，**不动进程**）→ `Wait-Quiet`（60 s 快照连续两次相同）→ `Restart-Server '1'`（进程级 + User 级双设变量、杀旧、起新、10×2 s 断言存活）→ 等 `bucket phase=1`（最长 2,100 s，覆盖第 2 轮 kBoth）→ 等 `reconcile` / `userdict` / `semantic legacy_rows` → phase 2 同构 → **回滚 phase=0**（等 `bucket phase=0` + 清 User 级变量 + 读侧车 `phase`）→ 收官输出七项 + `FINAL_P0_ROLLBACK=OK|NEEDS_ATTENTION`。
+- **铁律**：脚本内**绝不设 phase 3/4**；**只设 User 级不够**（旧 shell 拉子进程不继承）⇒ **进程级**设变量再 `Start-Process`；**不得裸杀 WeaselServer**（杀进程重置 `startup_pending_`，下一轮变 kPullOnly 启动轮）。
+- **取舍**（已写进脚本注释）：「先自检路径 → 杀 → 起 → 断言存活」替代字面「先起后杀」——WeaselServer 是单实例（互斥量），字面先起后杀不可行；真正防护 = 起跑前 `Test-Path` 断言 + 起后 20 s 内断言新 pid（避免 v5 那类「旧进程被杀、新进程没起」）。
+
+#### P-P.6 D10 边界（承 ADR 0078）
+
+本批**不清洗、不重建、不删除**任何用户词典数据；「整库统一 `c=100`」只登记 + 加护栏 + 加诊断，是否重建由用户**单独拍板**。判据口径唯一收敛到 `CloudUserDictIo`（`CountUserDictDataRows` / `FilterUserDictTextsByContent` 复用 `ParseUserDictSnapshots`）；**推翻**「本地导出为空 ⇒ 整轮失败」；**不改 librime**。
+
+#### P-P.7 真机 phase 1/2 轮（**待回填**）
+
+- runner 于 **12:18:14 起跑**（后台 task `bg_ce42430b-a33c-4133-8b26-71f3d140e1bd`），脚本对 exe / userdb / sidecar / notify 四项路径先 `Test-Path` 自检，再进 `Wait-Quiet`（60 s 快照连续两次相同才允许 kill）。
+- **12:24 盘上回读（真机轮进行中）**：装机镜像 `FileVersion = 1.3.11.0`；WeaselServer **pid 87608**（12:20:19 起）；notify 日志 `C:\Users\Duanyi\AppData\Local\Temp\fluxing-profile-notify.log` 707,973 B（mtime 12:21:11）；侧车 **`phase = 0` / `bseq = 1027`**；**尚未出现 `bucket phase=1` 行**（重启前最后一条是 `11:59:13 bucket phase=0 pushed=0 skipped=0 pulled_buckets=0 pulled_items=0`）⇒ **桶推路径真机仍未验证，不得宣称通过**（第 2 轮 kBoth 最早约 13:0x，推轮最小间隔 ≈62 min 的历史观测仍适用）。
+- **护栏诊断行已在运行时生效（§6 判据的「可见性」半边已确证）**：`2026-11-26 12:18:00.524 [cloudsync] userdict export_empty_skipped=0`、`12:19:06.646 [cloudsync] userdict import_empty_rejected=0`、`12:20:50.805 [cloudsync] userdict export_empty_skipped=0` ⇒ **N = 0**，与「盘上本地词典非空（`rime_ice.userdb` 11 文件 / 10,529,421 B，最新 mtime 11:54:50）」一致 ⇒ **护栏不误伤正常轮次**。
+- **本轮新坑（取证纪律）**：后台任务的**完成通知流**可能带出**上一轮遗留的缓冲文本**——本次出现时间戳为 `12:52:18` / `12:53:28` 的「FINAL P0_ROLLBACK_VERDICT=…」行，而本机当时仅 `12:23`（未来时间戳 ⇒ 不可能是本轮产物）⇒ **任何判据一律以盘上文件 + 当前时间回读为准**；通知流里的未来时间戳文本一律弃用、不得写入台账。
+- 其余判据（`bucket phase=1` / `bucket phase=2` 的 pushed/skipped、回滚段双判据）待 runner 收官后回填（预计 60–90 min）。
