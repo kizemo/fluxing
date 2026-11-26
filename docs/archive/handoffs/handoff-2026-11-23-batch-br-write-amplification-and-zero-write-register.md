@@ -2146,7 +2146,9 @@ if (bucket_mode &&
 
 **终态（待回填）**：`ROUND_SUMMARY_SEEN=YES pushed=N` 或 `NO`；D1 轮后三项差分；回滚双判据（日志 `bucket phase=0` + 侧车 `phase 0`）；`FINAL round_seen=… summary_seen=… phase0_seen=… sidecar_phase=…`。
 
-#### P-M.6 本轮未闭环项（承 §P-L.9 八条**全部仍在**，原文不改；本轮新增 4 条）
+**v4b 上级看护（已起，2026-11-26 10:10）**：脚本 `reports/fluxing-br-1g/phase2-closeout-v4-supervisor.ps1`，日志 `phase2-closeout-v4-supervisor-run.log`。作用 = **只补窗口、不改行为**：等 v4 写出 `=== CLOSEOUT V4 END ===` ⇒ 查 notify 日志（自 v4 的 `PHASE2_LOG_OFFSET` 起）是否已有 `bucket phase=2 pushed=N`（N>0）⇒ 若无 ⇒ **复用同一份已验证的 v4 脚本再跑一轮**（自带回滚段）；两轮都无 ⇒ 记 `SUPERVISOR_END=NO_EVIDENCE_AFTER_CYCLES` 后退出。外层窗口 **150 min**、最多 **2 轮**。**看护自身不注入侧车、不改阶段、不做回滚** ⇒ 无副作用面。启动配方与回滚配方与 v3/v4 完全一致（进程级 + User 级 phase=2 → 重启 WeaselServer；侧车只读不写，除非 v4 的既有回滚段在 phase≠0 时兜底改写）。
+
+#### P-M.6 本轮未闭环项（承 §P-L.9 八条**全部仍在**，原文不改；本轮新增 5 条）
 
 **§P-L.9 的 1–8 条全部仍在**（客户端 `bucket phase=2 pushed=N` 尚未取得 / 「704/1,000」缺口成因 / 「500 vs 704」拉取差异根因 / 尾部 24 桶结构性饿死 / AC-212 未判定 / 阶段 3 仍禁 / AC-09 维持 FAIL + 四项未授权）。
 
@@ -2156,6 +2158,7 @@ if (bucket_mode &&
 10. **§P-L.4 第 2 条「触发链缺口」作废**，由 P-M.1 订正为「窗口选错」；引用该条时以 P-M.1 为准。
 11. **隔夜跨零点取证坑**（P-M.7）：轮次必须按「轮末 + 60 min」解读，不能按整点/整小时对齐，否则会把启动轮误读成定时轮。
 12. **`CLAUDE.md` 的 BR-①g 指针行本轮未同步**（该文件指针块体量极大、改动风险高）⇒ 下轮补；**不影响**以 handoff §P-M 为权威进度源。
+13. **v4b 上级看护仍在跑**（P-M.5）⇒ 终态回填须等 v4（或 v4b 第二轮）收官；**若 v4 判 `NO_ROUND` 而 v4b 拿到证据**，以 **v4b 的证据 + notify 日志时间戳**为准，并在 §P-N 记「窗口仍偏紧 ⇒ 下一轮应按实测轮末时刻动态计算窗口」。
 
 #### P-M.7 本轮工具坑与实测配方（2026-11-26 09:52–10:10）
 
