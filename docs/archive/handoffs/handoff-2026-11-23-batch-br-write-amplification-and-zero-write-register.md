@@ -3130,3 +3130,156 @@ $env:FLUXING_PG_URL = $null
 **③ P0 词典「假空」→ ④ W6 PG 方言清点 → ⑤ W7 切源**。
 ③ 的开工前提是**先做出失败复现用例**（现有证据是一次 `matched=0`、两次 `matched=92353` ⇒ 不可重复）；④ 是只读清点、无产品风险，可与 ③ 并行；⑤ 三条前置见 §U-6。
 **硬约束不变**：B 路线下桶化冻结在 phase 0、阶段 3/4 永不启用；`AC-09` 仍 FAIL 不得改记；`AC-213` / `AC-214` 永久退役不得引用；台账数字一律盘上回读。
+
+## V · 路线 B ③ 闸门改判 + ④ W6 清点收口 + ⑤ W7 前置取证（2026-11-26 · 本批最新事实，先读这里）
+
+> **一句话**：③ P0「假空」**不立项修 bug**（改判为「诊断行缺早退标记」，登记 BR-①h）；④ W6 清点完成，**唯一必改项是 145 个 `?` 占位符**，SQLite 专有方言**零命中**；⑤ W7 仍不可执行，且本轮新查实两条硬前置（`api.jury.xin` 被 `*.jury.xin` 通配 301 占用、只有 Cloudflare 边缘证书、无源站证书）。本轮**未改 C++ / 未出包 / 未装机 / 未动生产 / 未 push**。
+
+### V-1 盘上回读基线（本节写就时，行数用 `ReadAllLines().Count`）
+
+| 产物 | 字节 | 行 | 换行 | BOM |
+| --- | ---: | ---: | --- | --- |
+| 本 handoff（追加本节前） | 429,347 | 3,132 | LF | 无 |
+| `port-to-pg-recon.md`（含 §9） | 22,236 | 345 | LF | 无 |
+| 接力 prompt（改写前） | 23,167 | 39 | LF | 无 |
+
+- 本地分支 `feat/100-cloud-sync` **ahead 3 未 push**：`5974394`（pg 依赖）/ `14a85d3`（W5 测试底座）/ `ea15f05`（§U 文档）。
+- 顶层章节定位：`## Q`@2574 / `## R`@2808 / `## S`@2878 / `## T`@2938 / `## U`@3006 / **本节 = `## V`（新章节，无 `## V` 重名）**。
+
+### V-2 ③ P0「假空」闸门取证（判定要不要改 C++）
+
+**背景**：§P-O 记「本地词典读成空」为潜在数据完整性 P0，现象是日志出现 `reconcile scan_complete=0 matched=0 deferred=0 divergent=0 pushed=0`。本批要判定该不该立项修。
+
+**(a) 现场 —— 盘上有数据**（本轮重跑，2026-11-26 17:2x）
+
+| 项 | 值 |
+| --- | --- |
+| `HKCU\Software\Fluxing\Weasel\RimeUserDir` | `D:\Program Files\fluxing\user1\fluxing` |
+| 同步快照 `rime_ice.userdb.txt` | **4,794,399 B**，mtime 2026-11-26 17:06:08 |
+| `rime_ice.userdb\` 目录 | **10 files / 10,529,573 B**，最新 17:07:41 |
+
+**(b) 日志 —— 假空不能当生效证据**
+
+- `reports/fluxing-br-1g/**/*.log` 共 **39** 个（含本轮新建 `w7/probe-tls.log`；不含它 38 个，与 §U 口径对齐）。
+- `export_empty` 命中 **0**（ADR 0078 的空导出触发器从未触发）。
+- `matched=0\b` 命中 **3**，但只有 **2 个真实事件**，且都是**四计数同时归零**：
+  - `phase2-closeout-v2-run.log:42` @ `2026-11-25 18:14:34.247`
+  - `phase2-steadystate-v5-run.log:16` 与 `:31`，同一行 @ `2026-11-26 10:31:45.692`（`:31` 是转录 CTX 行，非新事件）
+- 对照：同批正常轮 `deferred=1310`。四计数**同时**归零 ⇒ 条目集根本没建立，不是「有 92,353 条但匹配不上」。
+
+**(c) 机制 —— 打印点在早退路径上**
+
+- `WeaselServer/Cloud/CloudSyncService.cpp:1042-1059` `SyncOnce()` 是包装器：`stats` 由 `SyncRound()` 填，
+  `diag::AppendLine(FormatReconcileDiagLine(stats))` @ `:1054` **无条件执行**。
+- `SyncRound()` @ `:1061+` 在 `DictRowsToEntries` → `local_entries` @ `:1198` 之前任何早退
+  （维护闸门 / 生命周期锁 / `ExportUserDict` 失败）都会让 `stats` 保持默认 0 ⇒ **早退轮与真空轮日志完全同形**。
+- 导出链唯一来源：`CloudRimeUserDictBackend.cpp:312-405` `ExportUserDict` → `ParseUserDictSnapshots`
+  → `local_rows` @ `CloudSyncService.cpp:1159-1195`。没有第二条路径。
+- 附带观察（非本轮结论）：`FindSnapshotFile:217-224` 只判存在不判新鲜；`SnapshotCandidates:179-215`
+  三候选按固定优先级取第一个存在的（`get_user_data_sync_dir` → `user_data_dir\sync\<uid>` → `cwd\sync\<uid>`）。
+
+**(d) 后果已被覆盖**：ADR 0078 三重护栏 —— `ExportUserDict` 空内容不算成功（`:380-403`）、`ImportUserDict` 0 数据行拒绝还原（`:433-438`）、ADR 0076 D2-5a-9 语义指纹。「读成空」不会污染云端、也不会把本地清掉。
+
+### V-3 ③ 改判裁决（本批结论）
+
+**不立项为「修 bug」**。三条理由：
+
+1. 本轮与 §P-P 全量日志都取不到「导出为空」或「空库被还原」的阳性证据（`export_empty`=0、快照 4.79 MB、`.userdb` 10.5 MB）；
+2. 现象已被解释为**诊断行语义缺陷**，不是数据通路缺陷；
+3. §P-P 收官轮 `matched=92353` ⇒ 原症状未复现。
+
+**登记为 BR-①h（独立批次，未开工）**：给 `FormatReconcileDiagLine` 增加 `early_exit` 标记与早退原因（维护闸门 / 锁 / 导出失败），使早退轮与真空轮在日志上可区分。代价：改 `CloudSyncService.cpp` + 门禁用例 + 升版出包 + 装机实证 ⇒ **不在本批做**。
+
+### V-4 ④ W6 PG 方言清点（完整数据见 `docs/research/fluxing-cloud-2026-11/port-to-pg-recon.md` §9.1–§9.5）
+
+只读清点，未改产品代码。要点：
+
+- **规模**：17 个 `.ts` / **5,019 行**；`pg/` 三件 864 行、两个 Node 入口 487 行 ⇒ 业务 **3,668 行**。
+- **API 面**（泛型感知口径）：`.prepare` 65 / `.bind` 65 / `.first` 23 / `.run` 27 / `.all` 7 / `.batch` 6 / `env.DB` 70 / `env.BUCKET` 9。`.exec(` 3 处归属未确认，未入表。
+- **SQL 形态**：63 条可解析 = `SELECT` 30 / `UPDATE` 17 / `DELETE FROM` 8 / `INSERT INTO` 8。
+- **SQLite 专有方言零命中**（20 个 token 全 0，ripgrep 独立复核同为零）⇒ **不需要 SQL 重写轮**。
+- **唯一必改项 = 占位符**：`prepare` 第一参内 `?` 共 **145** 个（整文件朴素计数 386 含三元与可选参数，不可用）。推荐在 `src/pg/d1-shim.ts` 的 `prepare()` 内单点改写为 `$1..$n`，不改 145 处业务 SQL。
+- 统计脚本 `reports/fluxing-br-1g/w6/audit.mjs`；产物 `summary.json` / `api-hits.csv` / `dialect-hits.csv`（表头 + 0 行）/ `prepare-sql.jsonl`（`reports/**` 不入库）。
+
+**W6 未坐实四项**（recon §9.5）：`.first(` 的「无行」返回值 D1 `null` vs `pg` `undefined`；`.exec(` 3 处归属；`batch()` 6 处是否真原子；`rowCount===null` 归一化是否覆盖 27 个 `run()` 站点。
+
+### V-5 ⑤ W7 前置取证（本轮新增 · 只读网络探针，未改任何远端状态）
+
+脚本 `reports/fluxing-br-1g/w7/probe-tls.ps1`，日志 `reports/fluxing-br-1g/w7/probe-tls.log`（2,694 B / 60 行）。
+
+| 主机 | DNS | TLS | HTTP |
+| --- | --- | --- | --- |
+| `jury.xin` | Cloudflare 边缘（`104.21.61.45` / `172.67.206.3` 等）、NS = `javon.ns.cloudflare.com` / `cruz.ns.cloudflare.com` | `CN=jury.xin`，SAN `jury.xin, *.jury.xin`，**WE1 / Google Trust Services**，2026-10-31 → **2027-01-29**，TLS1.3 | **200**，`Link: <https://jury.xin/wp-json/>` ⇒ **WordPress 生产站** |
+| `api.jury.xin` | 同 `jury.xin` 边缘 IP | 同一张 `*.jury.xin` 证书（**边缘证书，非源站**） | **301 → `https://jury.xin/`**；`/health` → `https://jury.xin/health`（**保留路径**） |
+| `sync.jury.xin` | 同边缘 IP | 同一张证书 | 未单独测（同被通配覆盖） |
+| `api.aiec.fun` | Cloudflare 边缘（`172.67.165.46` / `104.21.11.54`） | `CN=aiec.fun`，SAN `aiec.fun, api.aiec.fun, *.api.aiec.fun`，2026-11-10 → 2027-02-08 | **404**（Workers 路由未匹配 ⇒ 现役生产仍在，回滚闸门有效） |
+
+**两条新硬前置（W7 之前必须先解）**：
+
+1. **`api.jury.xin` 当前没有服务**，被一条 `*.jury.xin` → apex 的 301 规则占用（大概率是 Cloudflare「Redirect all subdomains」模板或 Redirect Rule）。客户端请求全是 `POST`，301 会被降级成 `GET` ⇒ 不改这条规则，切源**不可能**成功。改它需要 Cloudflare 账户权限（**本机无 CF 凭据，需用户操作**）。
+2. **现在能拿到的是 Cloudflare 边缘证书，不是源站证书**。若按 V2 变体把子域改成 **DNS only（灰云）直连 ECS**，这张 `*.jury.xin` 用不上，必须在 ECS 上另签（certbot / Let's Encrypt）并开 80/443；若保留橙云，则要定 Cloudflare SSL 模式（Full strict 需 ECS 有可信源站证书）并放行 CF 回源段。
+
+**另两条约束**：`jury.xin` apex 是**在跑的生产 WordPress**，只可动子域；ICP 备案状态本轮**仍未回读证实**（工信部查询需交互式验证码，本机无法自动取证 ⇒ 需用户提供备案主体与备案号）。
+
+### V-6 W7 阻塞清单（更新版）
+
+| # | 阻塞 | 状态 | 谁能解 |
+| --- | --- | --- | --- |
+| 1 | `api.jury.xin` 被 `*.jury.xin` 通配 301 占用 | **本轮新查实** | 用户（Cloudflare 控制台） |
+| 2 | 无源站证书（只有 CF 边缘证书） | **本轮新查实** | 部署时 certbot，需 ECS 可写 80/443 |
+| 3 | ECS 侧零部署（nginx vhost / certbot / systemd / PG 实例 / 备份） | 未动 | 需 ECS 访问 + 用户授权 |
+| 4 | 根盘 **89% 已用，仅剩约 14 G** | 未变 | 需先清理或扩容 |
+| 5 | `5432` 公网监听须收口 | 未变 | 部署时改 `listen_addresses` + 防火墙 |
+| 6 | PG 大版本未证实 | 未变 | ECS 上 `psql --version` |
+| 7 | ICP 备案未回读证实 | 未变 | 用户提供 |
+| 8 | `npm ci` 可复现性未在干净目录实测 | 未变 | W7 前可本地验 |
+
+⇒ **W7 切源本轮不可执行**：八条里没有一条能只靠本机只读动作解开第 1–5 条。
+
+### V-7 本轮做了什么 / 没做什么
+
+**做了**：③ 现场取证 + 机制定位 + 改判；④ W6 清点 + recon §9 写盘；⑤ W7 前置只读探针 + 两条新硬前置；handoff 本节 + 接力 prompt 追加（本节 + commit）。
+
+**没做（判断而非遗忘）**：不改 `CloudSyncService.cpp`（无复现用例，见 §V-3）；不落实 145 个占位符改写（属 W7 前置代码，应与其门禁用例同批）；不碰 ECS / Cloudflare / 生产 D1；不升版不出包不装机；不启停 WeaselServer；**未 push**（仍 ahead 3）。
+
+### V-8 未闭环（本批新增 + 继承）
+
+- **BR-①h 未开工**：reconcile 诊断行缺 `early_exit`。
+- **W6 四项未坐实**（§V-4 末段）。
+- **W7 八条阻塞**（§V-6），其中第 1、2 条是本轮新查实，且都需要账户或 ECS 权限。
+- 继承：§T 负路径（重复注册 409 `email_taken` / 写预算 429 `write_budget_exceeded` / 403 `email_not_verified` / 令牌轮换 / 多设备可见性 / `MAX_CIPHER_BYTES` / `pull has_more` 分页）仍未取证；单桶耗时埋点（判 AC-212 所需）仍缺；阶段 3 硬前置（云端历史 40,061 条完成桶化覆盖）未变。
+- **不变的红线**：阶段 3/4 仍禁；`AC-09` 仍 **FAIL**（只有日志出现 `AC09_VERDICT=PASS` 才可改记）；`AC-213`/`AC-214` 永久退役；`AC-212`/`AC-215②` 仍未判定。
+
+### V-9 复跑命令（copy-ready，全程绝对路径、不切目录）
+
+③ 现场取证：
+
+```powershell
+$rd = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Fluxing\Weasel').RimeUserDir
+Get-ChildItem -LiteralPath (Join-Path $rd 'sync') -Recurse -Filter '*.userdb.txt' -File | ForEach-Object { 'SYNCSNAP {0,10} B {1} {2}' -f $_.Length,$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'),$_.FullName }
+Get-ChildItem -LiteralPath $rd -Directory -Filter '*.userdb' | ForEach-Object { $m=Get-ChildItem -LiteralPath $_.FullName -File | Measure-Object -Property Length -Sum; 'USERDB {0} files={1} bytes={2}' -f $_.Name,$m.Count,$m.Sum }
+$logs = Get-ChildItem -LiteralPath 'F:\soft\00selfmade\rime_claude\reports\fluxing-br-1g' -Filter '*.log' -File -Recurse
+'LOG_COUNT=' + $logs.Count; 'EXPORT_EMPTY_HITS=' + @($logs | Select-String 'export_empty').Count; 'MATCHED0_HITS=' + @($logs | Select-String 'matched=0\b').Count
+```
+
+④ W6 清点：`& node 'F:\soft\00selfmade\rime_claude\reports\fluxing-br-1g\w6\audit.mjs'`（纯只读，产物落同目录）。
+
+⑤ W7 探针：`& 'F:\soft\00selfmade\rime_claude\reports\fluxing-br-1g\w7\probe-tls.ps1'`（只读 DNS/TLS/HTTP，不改任何远端状态；输出宜另存 log 再比对）。
+
+### V-10 工具坑（本轮新增）
+
+1. `indexOf('.first(')` 漏 `.first<T>(`：报 0，真值 23 ⇒ 统计 D1 API 必须用泛型感知正则 `\.(first|all|run|batch|prepare)\s*(<[^>]*>)?\s*\(`。
+2. 整文件数 `?` 得 386，其中含三元运算与可选参数 ⇒ **只有 `prepare` 第一参内的 145 个可用**。
+3. `dialect-hits.csv` 只有表头是**正确结果**（零命中），不是脚本失败 ⇒ 零命中必须用 ripgrep 独立复核才算坐实。
+4. 日志里 `matched=0 deferred=0 divergent=0 pushed=0` 不能读成「数据为空」——先看打印点是否在早退路径上（本轮实测：在）。
+5. `LOG_COUNT` 口径会随新写日志变化（本轮 39 / 上一轮 38）⇒ 写台账必须说明「含/不含本轮新建的那一份」，否则与旧数字对不上。
+6. `Resolve-DnsName` 的 A 记录可能多值（Cloudflare 返回多个任意播地址），别把第一条当唯一 IP。
+7. 判断「有没有源站证书」不能只看证书摘要 —— 比 `Issuer`：Cloudflare 边缘是 `WE1 / Google Trust Services`，Let's Encrypt 源站是 `E5/E6/R10` 之类，一眼可分。
+8. 探针里取证书要走 `TcpClient.BeginConnect` + `AsyncWaitHandle.WaitOne(8000)`，直接 `Connect` 在域名不解析时会长时间阻塞。
+
+### V-11 下一步（建议顺序）
+
+1. **W7 前置 ①②**（需要用户出手）：Cloudflare 里删掉 `*.jury.xin` → apex 的 301 规则（或至少放行 `api.jury.xin`），并决定该子域走橙云还是灰云；这一步不做，切源会被 301 吃掉 `POST`。
+2. **W6 必改项落码**：`d1-shim.prepare()` 单点改写 `?`→`$n`，并补「绑定参数个数 == 占位符个数」断言 + 门禁用例（含 `first()` 返回值归一、`batch()` 原子性、`rowCount===null`）。
+3. **BR-①h** 独立批次（reconcile 诊断行 `early_exit`）。
+4. W7 本体按 §V-6 顺序解阻塞；**切源四段（双写→校验→切读→退役）不得跳段**。

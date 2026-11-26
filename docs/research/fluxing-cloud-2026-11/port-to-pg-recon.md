@@ -277,3 +277,69 @@ esbuild external 元信息变化，自测项数未变（31/31 PASS）。node bun
 - 本裁定只解决「ECS 上能不能装上 `pg`」，**不证明 ECS 侧可部署**（§7 未证实项 1–3 仍在）。
 - `pg` 钉死 `8.23.1` 是为了与已跑通的 §S / §T 证据同源；升级需重跑 §S 的 DDL 与 §T 的端到端链。
 - `package.json` 的 `scripts` 在本节写就时未改动；**W5 随后新增了 `test:pg`**（`vitest run --config vitest.pg.config.ts`，见 handoff `§U-3`），本节其余结论不受影响。**`npm ci` 的可复现性仍未在干净目录实测**（登记为待验证）。
+## 9 W6 · PG 方言清点（2026-11-26 · 只读清点 · 未改产品代码 / 未跑门禁 / 未出包）
+
+### 9.1 盘上回读基线
+
+- 服务端 TypeScript：**17 个文件 / 5,019 行**（`[System.IO.File]::ReadAllLines().Count` 口径）。
+  - `pg/` 三件 = `d1-shim.ts` 384 + `r2-fs.ts` 430 + `dynamic-import.ts` 50 = 864 行；
+    两个 Node 入口 = `node-server.ts` 465 + `node-main.ts` 22 = 487 行。
+  - 业务文件 12 个 = 5,019 − 864 − 487 = **3,668 行**（§0 曾记 3,664，差 4 行属统计口径差，以本轮为准）。
+- 清点脚本：`reports/fluxing-br-1g/w6/audit.mjs`（`reports/**` 一律不入库）。
+  产物：`summary.json` / `api-hits.csv` / `dialect-hits.csv`（表头 + **0 行**）/ `prepare-sql.jsonl`。
+
+### 9.2 D1 API 调用面（泛型感知口径）
+
+第一次统计用 `indexOf('.first(')`，漏掉了 `.first<T>(` 这类带类型参数的写法（报 0，真值 23）。
+改为正则 `\.(first|all|run|batch|prepare)\s*(<[^>]*>)?\s*\(` 重算：
+
+| API | 次数 | 备注 |
+| --- | ---: | --- |
+| `.prepare(` | 65 | 其中 63 个第一参可解析为字符串字面量 SQL |
+| `.bind(` | 65 | 与 `prepare` 基本 1:1 |
+| `.first(` | 23 | PG 侧返回 `row` 或 `undefined`，需与 D1 的 `null` 对齐 |
+| `.run(` | 27 | `meta.changes` ← `rowCount`（shim 已实现） |
+| `.all(` | 7 | `{ results }` 形态 |
+| `.batch(` | 6 | R2 方案：单连接 + `BEGIN`/`COMMIT` |
+| `env.DB` | 70 | 全部经 Env 注入 |
+| `env.BUCKET` | 9 | `r2-fs` 侧 |
+
+> 另有 `.exec(` 3 处命中，未逐点确认是否 D1 用法 ⇒ **不计入**本表。
+
+### 9.3 SQL 语句形态（本轮最重要发现）
+
+从 65 个 `.prepare(` 站点提取第一参、归一化空白后：
+
+| 动词 | 条数 |
+| --- | ---: |
+| `SELECT ` | 30 |
+| `UPDATE ` | 17 |
+| `DELETE FROM` | 8 |
+| `INSERT INTO` | 8 |
+| 合计 | **63** |
+
+**SQLite 专有方言零命中**（`cloud/fluxing-sync/src` 全量 ripgrep 复核同样为零）：
+
+`ON CONFLICT` / `INSERT OR REPLACE` / `INSERT OR IGNORE` / `RETURNING` / `strftime` / `datetime(` /
+`julianday` / `unixepoch` / `json_extract` / `json_each` / `json_object` / `PRAGMA` / `AUTOINCREMENT` /
+`WITHOUT ROWID` / `IFNULL` / `IIF(` / `COLLATE NOCASE` / `GROUP_CONCAT` / `last_insert_rowid` / `changes()`
+
+全部使用**位置占位符 `?`**：`prepare` 第一参内共 **145** 个。
+（整个文件朴素计数 386 个 `?`，含非 SQL 的三元运算与可选参数 ⇒ **不可用作迁移依据**。）
+
+### 9.4 移植判定
+
+1. **必改项只有占位符形态**：`pg` 不接受匿名 `?`，145 处需改成 `$1..$n`。两条路：改 145 处 SQL，
+   或在 `d1-shim.prepare()` 内做位置改写。后者只动一个收口点、零业务风险，推荐后者。
+2. **零方言语法** ⇒ 不需要「SQL 重写轮」，不存在逐条重写 `ON CONFLICT` / 时间函数的工作。
+3. **`batch()` 6 处**仍是最大语义差异（R2 已定：单连接 + `BEGIN`/`COMMIT`），**未实测**。
+4. **`INSERT` 一律无 upsert**：8 处 `INSERT INTO` 全部按 UUID 主键新建行；`sync_items` / `sync_buckets`
+   的覆盖写作走 `DELETE` + `INSERT`（见 `account.ts:89` / `account.ts:94`）⇒ 唯一键冲突属**错误路径**
+   而非正常路径，`isUniqueConstraintError` 的 PG 23505 映射必须实测（见 §7 未证实项）。
+
+### 9.5 本节未坐实
+
+- `.first(` 23 个站点的「无行」返回值两端是否等价（D1 `null` vs `pg` 的 `undefined`）。
+- `.exec(` 3 处归属未确认。
+- `batch()` 6 处失败是否真原子（R2 只是方案）。
+- `rowCount === null` 的归一化是否覆盖全部 27 个 `run()` 站点（shim 有归一化，未逐点证实）。
