@@ -2875,3 +2875,63 @@ HTTP(nginx) → src/node-server.ts (新, ~120 行)  node:http → Request/Respon
 3. **PowerShell 双引号字符串会被反引号转义吃掉 markdown 反引号** ⇒ 多行中文一律 `@' … '@` 单引号 here-string + `-replace "\r\n","\n"`。
 4. **`write` 工具拒绝覆盖「本会话未读过」的文件** ⇒ 先 `read`（`limit=3` 即可）再 `write`。
 5. `git commit` 会伴随 `sh: warning: setlocale: LC_ALL: cannot change locale (zh-CN)`（无害，不影响退出码）。
+## S · 真实 PG 链路打通（2026-11-26 17:00 · 本批最新事实，先读这里）
+
+### S-1 本批指令与裁决
+
+- 用户两轮原话：「先做 W1–W4 移植」（已收口入库，见 §R）⇒「**先打通真实 PG 链路**」（本节）。
+- 路线不变：用户已拍板 **B**（自建腾讯云 ECS + PostgreSQL，退役桶化）；A（继续 D1 桶化）/ C（升 Workers Paid）退出主线。
+- 本批结论：**真实 PG 链路已打通** —— 本机 PostgreSQL 18.4 上新建隔离库 `fluxing_sync`、真正执行 `migrations-pg/0001_init.sql`、服务进程连上真库、发出真请求，并取得**三表真写入**的盘上证据。**不是 stub，不是缺配置冒烟。**
+
+### S-2 五步执行与判据（全部来自本轮实跑输出）
+
+1. **环境**：node v26.13.0 / npm 11.20.0；`postgresql-x64-18` 服务 Running；`127.0.0.1:5432 - accepting connections`；`D:\Program Files\PostgreSQL\18\bin\{psql,pg_isready,createdb}.exe` 版本 **18.4**。`pg_hba.conf` **不可读**（数据目录受 ACL 保护）⇒ 认证方式改由 `%APPDATA%\postgresql\pgpass.conf` 判定（只解析前四段 + `pwdlen`，**密码值从未打印**）。
+2. **驱动**：`npm install pg --no-save --no-audit --no-fund` ⇒ `NPM_EXIT=0` / `PG_VERSION=8.23.1` / **`PKG_UNCHANGED=True`**（`package.json` 运行时零依赖纪律保住）。
+3. **建库**：`CREATE DATABASE fluxing_sync WITH TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C';` ⇒ `CREATE_EXIT=0`，回读 `C|C|UTF8`。**未触碰** `erp` / `jd` / `jst_dw` / `jxc` / `pdd` / `taobao`。
+4. **DDL**：`psql -v ON_ERROR_STOP=1 -1 -f migrations-pg\0001_init.sql` ⇒ **`DDL_EXIT=0`**；唯一非错输出 = `WARNING: there is already a transaction in progress`（`-1` 与文件内 `BEGIN;` 叠加，属预期）。回读 **`TABLES=9` / `INDEXES=22`**，表名与生产 D1 `num_tables=9` 完全对位；`schema_migrations` 4 行。
+5. **端到端**（脚本 `reports/fluxing-br-1g/pg-e2e.ps1`，日志 `reports/fluxing-br-1g/pg-e2e-run.txt`）：
+   - `HEALTH=200 {"ok":true,"service":"fluxing-sync","environment":"local-pg-e2e",...}` ⇒ **进程真连上 PG**。
+   - `POST /v1/auth/register` ⇒ **200**，`{"account_id":"4ef8e29d-1708-4736-affe-f8846812469c","salt":"…","kdf":{"algo":"PBKDF2-SHA256","iters":600000},"need_email_verify":true}`。
+   - psql 回读：**`users=1 verif=1 outbox=1 migrations=4`**；`users` 行 = `verified=0 | kdf=PBKDF2-SHA256/600000 | saltlen=24 | verifierlen=44`；`mail_outbox` 行 `subject=火流猩输入法 · 邮箱验证码 | bodylen=85`；`email_verifications` 行 `attempts=0 | code_hash len=44`。
+   - `SERVER_STDERR=`（**空**）⇒ 零异常、零中文报错。
+   ⇒ 结论：`src/pg/d1-shim.ts` 的 **prepare / bind / first / run**、三表 INSERT、自增主键列在真 PG 上**跑通**；`MAIL_MODE` 缺省 `outbox` 的落库分支也被真跑（不是只走发信分支）。
+
+### S-3 本轮新增的盘上产物（全部不入库）
+
+- `reports/fluxing-br-1g/pg-e2e.ps1`（5822 B，端到端脚本，口令只在进程内使用）。
+- `reports/fluxing-br-1g/pg-e2e-run.txt`（895 B，判据日志）。
+- `reports/fluxing-br-1g/pg-e2e-server.out.txt`（253 B）/ `pg-e2e-server.err.txt`（0 B，空）。
+- `reports/fluxing-br-1g/pg-ddl-run.txt`（445 B，DDL 首次真执行日志）。
+- `reports/fluxing-br-1g/pg-e2e-objects/`（R2 兼容根目录，本轮无对象写入）。
+- `reports/fluxing-br-1g/node-bundle/node_modules` = **NTFS 目录联接** → `cloud/fluxing-sync/node_modules`（让打包产物里的 `import('pg')` 在 reports 目录下解析得到）。
+- **零产品代码改动**；本批入库动作只有本节 + 接力 prompt 指针行。
+
+### S-4 未验证（不得宣称已通）
+
+1. **`/v1/auth/verify` → `/v1/auth/login` → `/v1/sync/push|pull`、两条桶端点：一条都没真跑** ⇒ 真实同步写入路径（UPSERT / `batch` / `meta.changes` / HLC 守卫）在 PG 上**仍未验证**。这是当前最大未验证面。
+2. **重复注册 → 409 `email_taken` 未测**：`handleRegister` 里 `assertResendAllowed` 在 users 查重之前，同邮箱 60 秒内重复注册先吃 429 ⇒ 要测得绕窗口，本轮未做 ⇒ **`isUniqueConstraintError` 在 PG 23505 上的映射未证实**。
+3. **本机 ≠ ECS**：只证明「代码能在 PG 18 上跑」，**不证明 ECS 侧可用**（ECS 的 PG 大版本/是否已装、根盘 89% 已用仅剩 14 G、`5432` 仍公网监听 —— 全部未变）。
+4. **`pg` 仍未进 `package.json`**（`--no-save`）⇒ ECS 上 `npm ci` 装不到 pg；「登记为运行时依赖 / 拆 node 侧独立 package.json」仍**未决**。
+5. **P0 词典「假空」机制未定** ⇒ 仍是 **W7 切源的硬前置**（D1 的 429 零写入是意外刹车，PG 上没有等价刹车，会把可逆事故变成不可逆删数据）。
+6. `api.jury.xin` 的备案 / 证书 / 可用性仍**未回读证实**（recon §7-1）。
+
+### S-5 下一步（按依赖顺序，不跳步）
+
+1. 补 `verify → login → sync push` 端到端（真实同步路径）。
+2. `pg` 依赖登记决策（直接决定 ECS 部署可行性）。
+3. W5 测试底座（最大单项成本，单独一批，不与其它混）。
+4. P0 假空修复 ⇒ 之后才允许 W7 切源。
+5. W6 PG 方言清点（`INSERT OR IGNORE` / `INSERT OR REPLACE` / `AUTOINCREMENT` / `PRAGMA`，**全仓出现次数尚未 grep 统计**）。
+
+### S-6 既有登记未改（逐条保持）
+
+- `AC-09` 仍 **FAIL**（只有日志出现 `AC09_VERDICT=PASS` 才可改记）。
+- `AC-212` / `AC-215` 判据② **未判定**；`AC-213` / `AC-214` **永久退役，不得引用**。
+- 桶化阶段 **3/4 仍禁**；生产 `sync_buckets` 数值仍以 §P-P.10 为准（本批**零写**，未重新回读）。
+
+### S-7 工具坑（本批新增）
+
+- 打包产物落在 `reports/` 下、`pg` 在 `cloud/fluxing-sync/node_modules` ⇒ ESM **解析不到**；用 NTFS 目录联接补一条解析路径，并把 `-WorkingDirectory` 设为包根（双保险）。
+- `Invoke-WebRequest` 在 pwsh 7 用 **`-SkipHttpErrorCheck`** 直接取 4xx/5xx 响应体，比解 `$_.Exception.Response` 流稳且短。
+- `pg_hba.conf` 读不到（数据目录 ACL）⇒ 判认证方式只看 `pgpass.conf`，**不要反复试读 hba**。
+- `psql -1` + 文件内 `BEGIN;` ⇒ 必然一条 `WARNING: there is already a transaction in progress`，属预期，**不要当失败**、也不要因此改 DDL。
