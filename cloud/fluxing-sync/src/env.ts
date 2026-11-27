@@ -27,7 +27,7 @@ export interface Env {
   EMAIL?: { send: (message: unknown) => Promise<unknown> };
   /**
    * 每账号每 UTC 日的 D1 行写入预算上限（ADR 0076 D2-3）。
-   * 缺省 80,000 行；读不到 / 非法值时回落到代码内常量（见 writeBudgetRowsPerDay）。
+   * 缺省 20,000 行；读不到 / 非法值时回落到代码内常量（见 writeBudgetRowsPerDay）。
    */
   WRITE_BUDGET_ROWS_PER_DAY?: string;
   /**
@@ -42,11 +42,12 @@ export interface Env {
 /**
  * 每日写预算护栏的默认上限（行 / 账号 / UTC 日）。
  *
- * 取值依据（ADR 0076 Context 1.1）：D1 免费额度按**行写入**计，实测一次全量推
- * （40,061 条）≈ 80k 行写入 ≈ 当日额度的 40% ⇒ 80,000 行 ≈「允许一次全量重推、
- * 但不允许第二次」。真值随 D1 套餐变化，改额度时改环境变量即可（不改代码）。
+ * 取值依据（ADR 0076 Context 1.1 + 2026-11-27 阶段 2 裁定 §5）：D1 免费额度按**行写入**计
+ * （10 万行 / 库 / UTC 日），一次全量推（40,061 条）≈ 80k 行 ≈ 额度的 80% ⇒ 旧 80,000 等于
+ * 「一次全量重推即吃八成额度」；落 20,000 = 单账号当日最多 20%，全量重推须摊到约 4 天。
+ * 真值随 D1 套餐变化，改额度时改环境变量即可（不改代码）。
  */
-export const DEFAULT_WRITE_BUDGET_ROWS_PER_DAY = 80_000;
+export const DEFAULT_WRITE_BUDGET_ROWS_PER_DAY = 20_000;
 
 /** 上限的可配置区间：1 行 ~ 10,000,000 行。超出区间视为配置非法 ⇒ 回落默认值。 */
 const WRITE_BUDGET_ROWS_PER_DAY_MIN = 1;
@@ -86,7 +87,7 @@ export function writeBudgetRowsPerDay(env: Env): number {
  *   · 取 4,000 ≈「允许一天把该账号的桶索引整体重写一遍，但不允许反复重写」，
  *     同时将单账号当日最坏写入压到 D1 免费额度（10 万行 / 库 / 日）的 **4%** 以内。
  *
- * 该值与老端点的 80,000 **不共用、不互相折算**：计量对象是两张不同的表，
+ * 该值与老端点的 20,000 **不共用、不互相折算**：计量对象是两张不同的表，
  * 编号空间也不同（D6「server_seq 编号空间在两套端点间不同」）。
  */
 export const DEFAULT_WRITE_BUDGET_BUCKETS_PER_DAY = 4_000;

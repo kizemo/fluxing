@@ -171,8 +171,8 @@ describe('写预算判定（纯函数）', () => {
     expect(utcDayStartSeconds(86_400 * 20_000)).toBe(86_400 * 20_000);
   });
 
-  it('上限读取：环境变量可覆盖，缺失或非法时回落到默认常量 80,000', () => {
-    expect(DEFAULT_WRITE_BUDGET_ROWS_PER_DAY).toBe(80_000);
+  it('上限读取：环境变量可覆盖，缺失或非法时回落到默认常量 20,000', () => {
+    expect(DEFAULT_WRITE_BUDGET_ROWS_PER_DAY).toBe(20_000);
     // 绑定缺失 ⇒ 回落默认值
     expect(writeBudgetRowsPerDay({} as never)).toBe(DEFAULT_WRITE_BUDGET_ROWS_PER_DAY);
     // 非法值（不是数字 / 越界）⇒ 回落默认值

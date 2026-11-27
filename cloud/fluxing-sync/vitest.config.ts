@@ -32,9 +32,9 @@ export default defineConfig({
           KDF_ALGO: 'PBKDF2-SHA256',
           KDF_ITERS: '600000',
           // 每账号每 UTC 日的 D1 行写入预算上限（ADR 0076 D2-3）。
-          // 取生产同值（80,000）：既有用例（api.test.ts 等）的小批量推送不受护栏影响，
+          // 取生产同值（20,000）：既有用例（api.test.ts 等）的小批量推送不受护栏影响，
           // 超限路径由 test/write-budget.test.ts 单独注入小阈值验证。
-          WRITE_BUDGET_ROWS_PER_DAY: '80000',
+          WRITE_BUDGET_ROWS_PER_DAY: '20000',
         },
       },
     })),

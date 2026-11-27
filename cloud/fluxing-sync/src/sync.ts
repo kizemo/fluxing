@@ -100,7 +100,7 @@ function encodeCursor(id: number): string {
 //       - 同一 item_key 在本批内重复出现 ⇒ 从第 2 次起按 2 行计（此时行已存在）。
 //     ⇒ 护栏针对的是「一次性全量 / 批量重推」这一真正的放大源，
 //     **不宣称**它能精确计出 Cloudflare 的行写入账单。
-//   · limit = 每账号每日 80,000 行（环境变量 WRITE_BUDGET_ROWS_PER_DAY 可覆盖）。
+//   · limit = 每账号每日 20,000 行（环境变量 WRITE_BUDGET_ROWS_PER_DAY 可覆盖）。
 //   · 判定：used + planned > limit ⇒ **整批拒绝**（429），且拒绝发生在
 //     **任何写动作之前** ⇒ R2 与 D1 都是**零写入**。
 //
@@ -109,7 +109,7 @@ function encodeCursor(id: number): string {
 //     桶端点 /v1/sync/buckets/push 走**独立口径**（sync_buckets 的行，每账号每日
 //     4,000 **桶行**，环境变量 WRITE_BUDGET_BUCKETS_PER_DAY），实现见
 //     src/sync-buckets.ts 与 src/env.ts。
-//   · 因此「80,000 行 ≈ 允许一次全量重推」这句**在桶化路径上已不成立**：
+//   · 因此「行数预算 ≈ 允许一次全量重推」这句**在桶化路径上已不成立**：
 //     全量重推在桶化路径上产生的是「设备数 × 桶数」量级的**桶行**
 //     （设备 ≤32 × 桶 64 = 2,048 行/账号），不是「词条数 × 行」。
 //   · 两道护栏都只是**单账号刹车**，不是 Cloudflare 全局额度护盾

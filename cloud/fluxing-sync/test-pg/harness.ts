@@ -159,7 +159,7 @@ export async function createPgTestContext(slug: string): Promise<PgTestContext> 
     MAIL_HTTP_ENDPOINT: 'https://example.invalid/emails',
     MAIL_HTTP_AUTH_HEADER: 'Authorization',
     MAIL_HTTP_AUTH_PREFIX: 'Bearer ',
-    WRITE_BUDGET_ROWS_PER_DAY: '80000',
+    WRITE_BUDGET_ROWS_PER_DAY: '20000',
     WRITE_BUDGET_BUCKETS_PER_DAY: '4000',
     AUTH_PEPPER: TEST_PEPPER,
   } as unknown as Env;

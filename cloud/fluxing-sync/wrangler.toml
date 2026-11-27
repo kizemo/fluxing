@@ -59,8 +59,8 @@ MAIL_HTTP_AUTH_PREFIX = "Bearer "
 # ⚠ 口径订正（ADR 0077 D8）：桶化后本值**不再等于「允许一次全量重推」** ——
 #    全量重推在桶化路径上产生的是「设备数 × 桶数」量级的**桶行**，
 #    不再是「词条数 × 行」；桶化路径的独立口径见下面 WRITE_BUDGET_BUCKETS_PER_DAY。
-# 调大 / 调小都不改代码；读不到该变量时回落到代码内默认值 80,000。
-WRITE_BUDGET_ROWS_PER_DAY = "80000"
+# 调大 / 调小都不改代码；读不到该变量时回落到代码内默认值 20,000。
+WRITE_BUDGET_ROWS_PER_DAY = "20000"
 # 每账号每 UTC 日的 D1 **桶行**写入预算上限（行）。ADR 0077 D8：护栏换表口径。
 # 计量对象 = sync_buckets 的行（设备 × 桶双维索引）⇒ **只对桶端点
 # /v1/sync/buckets/push 生效**；超限同样是 429 write_budget_exceeded + 零写入。
