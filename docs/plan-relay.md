@@ -50,7 +50,7 @@
   4. **规则 1 盲区修复** —— 让 `CloudSyncService.cpp:2108` 的整桶压制分支真正生效（现唯一调用点 `:1657-1659` 第 6 实参恒为 `bucket_scan_complete == true` ⇒ `if (!inventory_complete && BucketHasUnprovenEntry(...))` 恒不成立）；传参改为真实库存证据；新增**有鉴别力**的门禁用例（故意置 unproven 必须触发压制，好/坏样本各跑一次）。
 - **写集（唯一）**：`WeaselServer/Cloud/**` + `test/TestFluxingCloud/**` + `docs/adr/**`（新 ADR 草案）+ `reports/fluxing-br-1g/**`（证据，不入库）。**不得**触碰服务端 `cloud/fluxing-sync/**`、生产 D1/R2、用户词典数据。
 - **门禁**：先单独 msbuild `test\TestFluxingCloud\TestFluxingCloud.vcxproj`（**显式 `/p:SolutionDir=`**；`weasel.sln` 不含该工程 ⇒ 跑旧 exe 会假绿），再跑 `reports\fluxing-br-1g\gate-p0-run.ps1`；判绿 = `PASS=<n>` 且 `FAIL=0` + `UFFFD_COUNT=0` + `CLANGFORMAT_HUNK_DRIFT=0`（**不认 `$LASTEXITCODE`**）；改动 hunk 0 clang-format 漂移。
-- **产出**：`docs\relay\stage-2-inventory.md`（本段盘点与 ADR 草案索引）+ 926 条分类表 + 判据④ 口径 ADR 草案 + handoff 新顶节 + 门禁输出落盘。
+- **产出**：`docs\relay\stage-1-inventory.md`（**就地改写**：保留旧链取证节 + 追加「修复轮」节）+ 926 条分类表 + 判据④ 口径 ADR 草案 + handoff 新顶节 + 门禁输出落盘。
 - **红线**：只改判定逻辑 / 诊断 / 测试；**不切读、不动阶段、不写生产**；`AC-09` 仍 FAIL 不得改记。
 
 ### 阶段 2 — 复核轮：真机重跑 + 四道判据重判
@@ -58,7 +58,7 @@
 - **目标**：等 kBoth 轮（轮间隔实测 ≈62 分钟；进程启动后第 1 轮恒为 `kPullOnly`、第 2 轮才是 `kBoth`）出证据，按（修订后）口径**重判四道判据**，并做侧车 `brow`/`row` 与生产 `sync_buckets` 的只读差分。
 - **判据**：① 桶端点请求零 4xx/5xx；② 桶拉桶数 = 服务端 `sync_buckets` 该用户行数；③ 侧车 `brow` = 已推成功桶数；④ 按新口径重判（**判别力**：坏样本必须判红）。
 - **硬约束**：取证 runner 必须**只读**、自带落盘判据 + 心跳（detached runner 会被环境回收）；**不得并发**（都杀 `WeaselServer`，互重置 `startup_pending_`）；**切阶段/重启必须让新进程拿到新环境块**（User 级变量只写注册表，旧环境块拉起的进程读不到）。
-- **产出**：`docs\relay\stage-1-inventory.md` 就地改写（四判据裁定更新）+ handoff 新顶节 + 证据文件清单。
+- **产出**：`docs\relay\stage-2-inventory.md`（新建：四判据重判裁定）+ handoff 新顶节 + 证据文件清单。
 - **红线**：不切读、不动阶段（阶段 3/4 仍禁）；生产只读。
 
 ### 阶段 3 — 写预算阈值口径落盘

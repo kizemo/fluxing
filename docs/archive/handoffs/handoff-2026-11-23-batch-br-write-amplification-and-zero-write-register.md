@@ -4575,3 +4575,36 @@ BR-①g 的"稳态零写不成立"判定、以及多轮"pushed=0 skipped=0"都�
 - **台账换代（人类动作）**：闸门 `relay-ledger.ps1` **拒收** `set_status=running`（`status_running_is_human_only`），启动器对 `status=blocked` 台账 `exit 3`（`reason=ledger_blocked`），bootstrap 只在台账**不存在**时执行 ⇒ 恢复链的唯一受支持路径 = **归档旧台账留证 + 重跑 `start-relay.ps1` 重新 bootstrap**。旧台账归档为 `reports\fluxing-br-1g\relay-ledger-stage1-blocked-20261127.json`（不入库）。
 - **已验证 / 推断 / 未验证**：已验证 = 桶推真机首跑通（上述数字）、判据④ 三项计数、外部探针 `http_errors=0`、D1 ≡ 老端点交叉验证（`d1_missing=0` / `hlc_mismatch=0`）、桶信封 8 行块明文含 `item_key`/`hlc_ms`/`hlc_counter`；推断 = 926 条倾向「老端点僵尸条目」、桶侧 HLC 与本地侧车同源；未验证 = 926 条真实构成、桶推是否绕过 R1、F1 服务端 503 归属、F2 失败轮 `bucket_pull_failed` 的失败性质（4xx/5xx vs 网络层）、跨设备可见性。
 - **证据路径**：`docs\relay\stage-1-inventory.md`（盘点全文）· `reports\fluxing-br-1g\phase1-judge4-hlc-compare-20261127.md`（判据④ 明细）· `reports\fluxing-br-1g\` 其余日志（不入库）· `docs\plan-relay.md` §5（裁决全文）· `docs\RELAY-ADAPTATION.md` §6（项目覆盖：git 非人工检查点）· `docs\AGENT-RELAY.md`（协议）· `docs\adr\0077-bucket-level-sync-storage-architecture.md` `:436-454`（判据与回退）· `docs\archive\prompts\prompt-next-session-2026-11-23-batch-br-write-amplification-and-zero-write-register.md`（指针式接力 prompt）。
+## AJ（2026-11-27 09:5x · 链条换代执行记录 · 新链 stage 1 = 修复轮起跑）
+
+> 本节只记「上一链 blocked → 人类换代 → 新链 bootstrap」的实际执行与盘上事实。裁决全文在 `## AI` 与 `docs\plan-relay.md` §5（两者一字未改）；本节不改写任何既有顶节字节。
+
+### A. 为什么必须换代（协议性阻塞，非人为拖延）
+
+- 上一链（首环 session `mvs_81e9325c7a9d4d2b8a78d3c515c862b8`）在 stage 1 取证收口后，判据 **①绿 ②绿 ③绿 ④红** ⇒ 台账 `status=blocked`、`current_stage=1` 停链（证据 `docs\relay\stage-1-inventory.md`、`## AH`）。
+- 协议上**不能原地续链**，三条实测依据：① 台账闸门 `docs\relay\relay-ledger.ps1` 拒收 `set_status=running`（`status_running_is_human_only`，`running` 是人类专用）；② `docs\relay\start-relay.ps1:269-271` 对 `status=blocked` 的台账直接 `exit 3`（`reason=ledger_blocked` + HINT「blocked chains need a human decision first; do not silently resume」）；③ 同文件 `:362` 起 bootstrap **只在台账不存在时执行**（`:275` = `OK ledger_absent … will bootstrap`），且**没有任何重置/重开开关**（全文件仅 `bootstrap/Blocked/Force/Reset` 命中，无 reset 语义）。
+- ⇒ 唯一受支持路径 = **人类换代动作**：归档旧台账留证 → 移除台账 → 重跑启动器重新 bootstrap。授权来源 = 用户「调用 /relay-port 持续推进任务，自动进行会话交接」。
+
+### B. 本次换代实际动作（可回放）
+
+1. **归档旧台账（留证，不入库）**：`docs\relay.json` → `reports\fluxing-br-1g\relay-ledger-stage1-blocked-20261127.json`，sha256 `BFC234EFAB078F33253AB5F4230093576C3E37BCD5644D026F5D477624C0EC1B`，5,096 B，源/副本逐字节一致（`ARCHIVE_IDENTICAL=True`）。
+2. **移除旧台账**：`docs\relay.json` 已不存在（可恢复删除，走运行时受信任的 mavis-trash 通道）。旧链 `blocked_on` 事项**未结项**，随归档留证，**不得视为已关闭**（见 §D）。
+3. **重新 bootstrap 新链**：`pwsh -NoProfile -File docs\relay\start-relay.ps1 -Target 'BR-①g 桶化双写后续批次（2026-11-27 起 · 阶段序列已重排为修复轮优先）' -PlanDoc 'docs\plan-relay.md' -StageTitles '<6 段 ; 分隔>' -MaxStages 6 -WorkspaceDir 'F:\soft\00selfmade\rime_claude' -Runtime mcode -TtlSeconds 1800` ⇒ `exit 0`，新台账 2,624 B（`status=running` / `current_stage=1` / `max_stages=6` / `started_at=2026-11-27 09:57:37`），新提示词 `docs\relay\next-relay-prompt.txt` 4,488 B，启动日志落 `reports\fluxing-br-1g\relay-relaunch-20261127.log`。
+4. **阶段序列已重排**（内容见 `docs\plan-relay.md` §2 与 §5 的 C 条）：stage 1 = **修复轮**（判据④ 红因收敛：926 缺口定性 + A-0 事实核对 + F3 诊断行 + 规则 1 死分支修复，**客户端侧零生产写**）→ stage 2 = 复核轮（真机 kBoth 重判四判据）→ stage 3 写预算阈值落盘 → stage 4 R2 对象体 → stage 5 PG 重导重灌 → stage 6 切源 W7 四段与收口。原 3–6 段内容不变。
+5. **本轮 commit + push**：`08b381a`「docs(relay): 人工裁决 A/B/C 全文落盘 + 阶段序列重排（阶段 1 = 修复轮）+ 补入装置协议副本」⇒ 推送 `a252310..08b381a`，硬判据 `ls-remote` 与 `rev-parse HEAD` 逐字相等（`PUSH_MATCH=True`，`08b381a622f0b95f3326a5ce8860c49216aa751b`）。通道 = 仓库级 socks5h 代理，裸命令。
+
+### C. 本轮同时订正的两处文档错位（不影响产品代码）
+
+- `docs\plan-relay.md` 顶节指针原写死 `## AE`（已过期）⇒ 改为「最新顶节 = 文件中最后一个 `## [A-Z]` 顶节」。
+- `docs\plan-relay.md` §2 的**产出文件名两处互换**：原「stage 1 产出 `stage-2-inventory.md`」「stage 2 就地改写 `stage-1-inventory.md`」⇒ 已订正为 **stage 1 产出 `docs\relay\stage-1-inventory.md`（就地改写，保留旧链取证节 + 追加修复轮节）**、**stage 2 产出 `docs\relay\stage-2-inventory.md`（新建）**。通用协议里那句「On completion: write docs\relay\stage-1-inventory.md」对本链 stage 1 成立。
+
+### D. 未闭环项（随链继续，不因换代而关闭）
+
+- **判据④ 仍红**：`missing_in_bucket=926`（构成待 B 条定性）+ `hlc_mismatch=39043`（2026-11-26 桶化首导整库重分配条目 HLC，**结构性不可自愈**）⇒ **阶段 3/4 永不启用**，规则 1 盲区未修前不得切读。
+- **A1 的生产部分三选一仍悬置**（侧车 93,278 行 HLC 回退 / pull 时让 legacy 旧 HLC 覆盖本地新 HLC / 一次性迁移桶表写生产 D1）—— 三条均触红线 ⇒ **必须人工单独授权，链内环不得自行执行**。
+- `AC-09` 仍 FAIL 不得改记；`AC-212` / `AC-215②` 未判定；`AC-213` / `AC-214` 永久退役。
+- 写预算阈值（盘上 80,000 vs §O 拍板 20,000）排 stage 3 落盘；ECS `5432` 公网收口窗口、库内两条历史探针账号是否清理、`api.jury.xin` 放行范围与橙云/灰云路线 —— 仍待人工裁定。
+
+### E. 下一环起点
+
+- 新链首环 = **stage 1 修复轮**（锁由启动器取得后转交该环 session）；链内环自行 commit + push（git 写操作在本仓**非**人工检查点，见 `docs\plan-relay.md` §★），但**写生产 D1 / 改判据 / 切阶段 / 切读**仍必须人工单独授权。
