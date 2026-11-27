@@ -559,7 +559,7 @@ RULES:
 - $sessionRule
 - Concurrency: the lock file $lockPrompt is owned by you. Call relay-lock.ps1 -Action renew every few turns. Do not create a second chain while the ledger has an in_progress stage.
 $ledgerRule
-- Git write operations (commit, push, tag, stash, checkout) are a human checkpoint: never perform them, stop and report instead.
+- Git write operations: the generic rule that commit, push, tag, stash and checkout are a human checkpoint does NOT apply in this repository. plan-relay.md section 1 bullet 1 overrides it: once the gate is green a stage may commit and push to kizemo/feat/100-cloud-sync itself, with bare git commands (the repository level proxy is already socks5h, never add a proxy flag), explicit path adds only and never git add dot, and the push hard criterion is that git ls-remote equals git rev-parse HEAD. Still human checkpoints, so stop and report instead: a push failure or an unmet hard criterion, force-push, tags, branch deletion, changes to production D1 / R2 / Cloudflare data, and the stage 6 read switch scope.
 - Write intermediate artifacts to files. Keep the conversation to pointers and conclusions. Do not fabricate acceptance evidence.
 - $completionRule
 - $stopRule
