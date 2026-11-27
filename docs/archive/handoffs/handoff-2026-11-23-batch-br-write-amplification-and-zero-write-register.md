@@ -5090,3 +5090,49 @@ User 级 `1` ⇒ 一批 legacy 用例误入桶模式假红。**判绿不认 `$LA
 4. **`reports/**` 被忽略 ⇒ 专用 `grep` 工具可读显式给出的文件路径**（不受忽略规则影响），比在 PowerShell 里拼管道稳。
 
 **证据路径（`reports/**` 不入库）。** `reports\fluxing-br-1g\stage1-confirm-checks.ps1`（只读检查序列）/ `stage1-checks-out.txt`（含全量 porcelain `STATUS_LINES=4105`）/ `stage1-gate-run.ps1`（设相位 0 + renew 锁 + msbuild + gate + 四行提取）/ `stage1-gate-out.txt`（门禁转录全文）。阶段产物正文 = `docs/relay/stage-1-confirm-20261127.md`。
+
+## AN（2026-11-27 16:2x · 接力链 `relay-02of06` 阶段 2 **修复 + 重判轮**：缺陷 ①-1 已修 + 升版 1.3.14 出包装机 + `kBoth` 轮真机取证成功 ⇒ 四判据 **3 PASS / 1 FAIL** ⇒ **停链 `status=blocked`**）
+
+**背景。** 第 2 代链（`relay-01of06` 确认环 3/3 PASS，见 `## AM`）之后，本环 `relay-02of06`（会话 `mvs_f16dfeac5e2445b4a34f60f39d1dfc25`）按 `docs/plan-relay.md` §2 执行阶段 2：先修上一链 §6 登记的缺陷 **①-1**（`PullBucketsIntoRemote` 无有限重试 ⇒ 单次 5xx 即整轮桶拉取早退 ⇒ `bucket_scan_complete=0` ⇒ 规则 1「库存未证实不推送」闸门常闭 ⇒ 桶推永不发生），过门禁、升版出包装机，再等第 2 轮 `kBoth` 真机取证并按 `docs/relay/stage-2-rulings-20261127.md` 的 **v2** 口径重判四道判据。
+
+**进度 · 2A 修复轮（全部闭环）。**
+
+| 项 | 实测 |
+|---|---|
+| 代码改动 | `CloudSyncService.h`（`FormatBucketPullDiagLine` 增可选 ` retry=<n>`、`kBucketPullMaxRetries=2`、`BucketPullRetryable` / `BucketPullRetryDelayMs{1000,3000}`）、`CloudSyncService.cpp`（同页有限重试 `for(;;)`，每次尝试前复位 `page/page_more/next_seq/next_cursor/pull_err/page_http_status`，`++stats->pull_requests` 改按 **HTTP 尝试**计数）、`TestFluxingCloud.cpp`（`DiagMsgOf` / `RetryCountOf` / `BucketRetryRunRound` / `TestBucketPullRetry` 9 条断言） |
+| 门禁 | `MSBUILD_EXIT=0` / `GATE_EXIT=0` / **`PASS=1047 FAIL=0`** / `UFFFD_COUNT=0` / **`CLANGFORMAT_HUNK_DRIFT=0`**（基线 1,014 ⇒ **+33**）；旁证 `CLANGFORMAT_WHOLEFILE_DRIFT=3` = HEAD 存量，不计入判绿 |
+| 升版 | **1.3.14**（`version.txt` / `weasel.props` / `env.bat` 4 处 / `CHANGELOG.md` 字节级前插 1,180 B），回读 `VERSION_CONSISTENCY=PASS` |
+| 出包 | `output\archives\fluxing-1.3.14-installer.exe` = **43,149,679 B / 14:42:15 / sha256 `B979C46438CDB38F1ABEB5DB616F4997921CFDF334DE9B2850C947BAEA8B1BF2`** |
+| 三处全等 | 构建 = 包内 = 装机后 `WeaselServer.exe` = **3,111,424 B / mtime 14:39:46 / sha256 `2E38EBB30207BE816BD50FCB2F95A5C189467DBE577D86BD99C24A42F6E432DA`**；`OUT_FV=1.3.14.0` / `OUT_PV=1.3.14.1` |
+| 装机 | `INSTALL_EXIT=0 elapsed_s=52`；`post_pid=396228 @2026-11-27 14:43:59`；侧车 `12,284,871 B` 未被改动 |
+
+**进度 · 2B 重判轮（取证完成，四判据已判定）。** 第 1 轮（启动轮，恒 `kPullOnly`，14:44–14:55）：`bucket pull page=1..11` 全 `http=200`、末页 `buckets=24 items=2235 has_more=0`、**无 5xx / 无 `retry=`**；`14:55:20.196 bucket phase=1 pushed=0 skipped=0 pulled_buckets=1024 pulled_items=94589` ⇒ **启动轮桶推结构性关闭的实证**（非缺陷）。第 2 轮（`kBoth`，15:55–16:09）**桶推路径首次真机执行成功**：`16:02:49–16:06:02 bucket push page=1..15`，前 14 页 `buckets=64 accepted=64 skipped=0`、末页 `buckets=5 accepted=5 skipped=0` ⇒ **901 桶全部 accepted、零 skipped**；`16:06:02.410 bucket quota held_unproven=0 held_quota=0 rows_pushed=1802 rows_held=0 quota_rows=2000`；`16:09:05.705 reconcile scan_complete=0 matched=94589 deferred=0 divergent=0 pushed=0`；`16:09:05.706 bucket phase=1 pushed=901 skipped=0 pulled_buckets=1024 pulled_items=94589`。
+
+**四判据裁定（v2 口径，唯一权威 = `docs/relay/stage-2-rulings-20261127.md`）。**
+
+| 判据 | 实测 | 判定 |
+|---|---|---|
+| ① 无 5xx 早退 | 该轮全 `http=200`，零 4xx / 零 5xx，`RETRY_SEEN=0` | **PASS** |
+| ② 完整轮存在 | 15:55 轮 `page=1..11` 全 2xx + 末页 `has_more=0` | **PASS** |
+| ③ 桶推真实执行 | quota 行在位；`pushed + skipped = 901 >= 1`；`rows_pushed=1802 <= quota_rows=2000` | **PASS** |
+| ④ 桶侧不得旧于本地 | `unmapped=0` ✔ 但 **`bucket_older=6`**，6 条全 `RED_bucket_hlc_exceeds_cutoff` | **FAIL** |
+
+**判据④ 归因轮（只读，复用 `tmp\relay03\r2objs\` 缓存，未发 HTTP）。** `bucket_side=r2_direct rows=1024 buckets=1024 envelopes=94589 unique_keys=94589 item_count_mismatch=0 dup_keys=0 http_errors=0`；`map_sanity legacy_mapped_raw=0 legacy_mapped_unescaped=40111 legacy_total=40112`；`bucket_vs_sidecar equal=94583 bucket_newer=0 bucket_older_or_other=6 unmapped=0`；`older_attrib rows=6 residue=0 red=6 device_differs=0 cutoff_ms=1795565189774`。6 条红明细落 `reports\fluxing-br-1g\judge4-v2-older-attrib.tsv`（`item_key / local_hlc / bucket_hlc / 归因`）：`local_hlc` 全 `1795751392344:<5|7|9|10|11|15>:c7cc011f1b29de53`、`bucket_hlc` 全 `1795747588092:<对应计数>:c7cc011f1b29de53`，差值 −63.4 min，墙钟 local **2026-11-27 11:49:52** / bucket **10:46:28** / 阈值 **2026-11-25 08:06:29**；两侧设备 id 相同（非 `device_differs`）。**排除假红**：local 11:49:52 早于侧车快照 mtime `12:05:38`。**鉴别力三样本复现**：`good` ⇒ `equal=94583 newer=0 older=6 unmapped=0`；`bad-newer` ⇒ `bucket_newer=500`；`bad-older` ⇒ `bucket_older=506`（=6+500，精确）；键集规模恒等 94,589 ⇒ 探针能红、`older=6` 非恒零假绿。
+
+**裁决（停链）。** 判据④ 在上一链（13:19）与本链**两次** FAIL ⇒ 命中台账 `stop_conditions` 的「same acceptance failed twice」与「human checkpoint hit」 ⇒ 收口记 **`status=blocked`**、**不转交下一环**、停止链条。**不得改记 PASS**。
+
+**本环未改记 / 仍未闭环。** ① `AC-09` **仍 FAIL**（只有日志出现 `AC09_VERDICT=PASS` 才可改）；`AC-212` / `AC-215②` 未判定；`AC-213` / `AC-214` 永久退役。② **判据④ 6 条红的机制未取证** —— 现为假设：这 6 条本地 HLC 在 10:46→11:49 被本地抬升，最可能来自语义侧车「旧口径行抬高本地 HLC」的重锚分支（ADR 0076 D2-5a-9 第 ② 条修法）；本轮 901 桶已全部推上去 ⇒ **复看 `bucket_older` 是否归零即可证伪或坐实**，但**尚未复看**（需再跑一轮只读归因，属下一环或人工授权范围）。③ **规则 1 盲区未修**（`unproven_keys` 不收「远端桶读不出来」的键 ⇒ 半库存桶会被回推 ⇒ 服务端 `DELETE+INSERT` 静默删条目 ⇒ 阶段 3/4 后不可逆）⇒ **切读仍禁**。④ **阶段 3（P0 假空修复）未开工**（阶段语义以 `plan-relay.md` §2 为准；台账 `stage_titles[2]` 旧「写预算」文案已随 15:47 裁定作废且闸门不提供改写动作）。⑤ 台账闸门能力缺口：`set_status=running` 被拒（停链后不可续链）、`next_session_id` 无法清空 ⇒ 恢复只能走人类换代（归档旧台账 → 重跑 `start-relay.ps1`）。
+
+**运行时状态（收口时）。** User 级 `FLUXING_CLOUD_SYNC_BUCKET_PHASE` 已回滚 **`0`**（回读 `PHASE_USER_AFTER=[0]`）；运行中 `pid 396228` **未重启**（重启会重置 `startup_pending_`，把 `kBoth` 轮再推后 ≈60 min）⇒ 其**进程环境块快照仍为 `1`**，侧车 `phase` 写回 `0` **本环内不可验证**（已登记为未验证项）。相位来源坐实：`CloudSyncService.cpp:1138` 用 `std::getenv` ⇒ 读**进程环境块快照**，改 User 级注册表变量不影响运行中进程。
+
+**git 事实（收口时回读）。** 工作树新增 2A 改动未入库：`CHANGELOG.md` / `CloudSyncService.cpp` / `CloudSyncService.h` / `TestFluxingCloud.cpp` / `version.txt`（`git diff --stat` = 5 文件 / 33 insertions / 24 deletions，`librime` 为子模块指针噪声）。收口前 `git status -sb` **已无 `ahead` 标记** ⇒ 上一链遗留的 `e653ae4`（`docs: 阶段3换载P0假空修复并作废D1写预算口径`）**已由另一会话推送**，本环只需推自己的收口提交。查过的噪声（**禁 `git add .`、禁删**）：未跟踪的 `True`、仓库根 4 个 `.rc` 副本、`docs/design/quickpanel-v6/design-demos/*.html`、`docs/relay/archive/`、`docs/relay/patch-relay0{2,3}-*.json`、`release/`、`reports/**`、`scripts/verify/*.ps1`。
+
+**本环工具坑（5 条，新增）。**
+
+1. **改 User 级 `FLUXING_CLOUD_SYNC_BUCKET_PHASE` 不影响运行中进程**（`std::getenv` 读进程环境块快照）⇒ 「设变量 + 同进程观察」必然假阴性；生效要重启进程，代价 = `kBoth` 轮推后 ≈60 min。
+2. **等待器真值不能用「`bucket phase=1` 行数 ≥2」** —— 启动轮（`kPullOnly`）也打该行 ⇒ 假绿；可靠真值 = **`bucket quota ` 行** 或 **`bucket phase=… pushed=[1-9]`**（新脚本 `reports\fluxing-br-1g\stage2d-wait-kboth.ps1`）。
+3. **缺 BOM 的中文 `.ps1` 交 PS 5.1 = 解析失败**（`Unexpected token ')'` / `The assignment expression is not valid`）；无 BOM 但含中文的脚本必须用 `pwsh` 跑（`classify-r2.ps1` 即属此类）。
+4. **诊断行逐字比对必须先剥 `[时间戳][tag] ` 前缀** —— 行尾是**纯 LF 无 `\r`**（`include/FluxingDiagLog.h:104-116`）⇒ 「CRLF」是错误假说，真因是前缀。
+5. **`git clang-format HEAD` 要求工作树已 `git add` 该文件**（未暂存被拒）；复验口径 = `git clang-format --diff HEAD` 且 diff 必须为 0 行。
+
+**证据路径（`reports/**` 不入库）。** `reports\fluxing-br-1g\` 下：`gate-p0-run-stage2b.log`（门禁四行）/ `stage2b-build.1.3.14.log` + `.cmd`（构建出包）/ `stage2-install.log` + `stage2-install.ps1`（装机）/ `stage2-bump-1.3.14.ps1`（升版）/ `stage2d-wait-kboth.ps1` + `stage2d-wait-state.txt` + `stage2d-kb-evidence.txt`（等待器与 43 行命中证据）/ `stage2d-classify-attrib.log`（归因轮全文）/ `judge4-v2-older-attrib.tsv`（6 条红逐条）/ `stage2-judge4-verdict.md`（判据④ 裁定书）/ `stage2r2-judge4-hlc-compare-20261127.md` / `stage2d-progress.md`。阶段正文 = `docs/relay/stage-2-inventory.md` **§14**（append-only 追加，§1–§13 属第 1 代链、未改动）。
