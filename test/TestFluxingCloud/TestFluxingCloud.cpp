@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -48,6 +49,10 @@
 #include "../../include/FluxingMaintenanceGate.h"
 // ADR 0067：孤儿 IPC 会话回收的判据纯函数（生产与单测共用，R7）。
 #include "../../include/FluxingSessionReclaim.h"
+// BR-①g 规则 1
+// v2：生产诊断日志的**路径真相源**（%TEMP%\fluxing-profile-notify.log）。
+// 单测要按它定位生产写出的诊断行（cloudsync 标签）⇒ 生产与单测同源（R7）。
+#include "../../include/FluxingDiagLog.h"
 
 // spec 100 阶段 D 生产头（T301–T305）。同样走相对路径 ⇒ 生产与单测同源
 // （constitution R7）：本文件不复制第二份实现，只调用 WeaselServer/Cloud/
@@ -5924,6 +5929,402 @@ void TestBucketInventoryGateAndQuota() {
   }
 }
 
+// ===========================================================================
+// BR-①g · 规则 1 v2（relay-02of06）：桶空间「远端视图不完整 ⇒ 整桶不推」
+// ===========================================================================
+//
+// 判据全部取自**生产决策路径**（不是 helper 直测）：
+//   fc::CloudSyncCoordinator::SyncOnce（灰度阶段 1 = 双写）一轮里依次发：
+//     ① 逐条拉取 /v1/sync/pull
+//     ② 桶拉取   /v1/sync/buckets/pull
+//     ③ 桶推送   /v1/sync/buckets/push
+//   夹具 = MockTransport（假传输）+ 假后端（本地词典快照）+ 真侧车文件
+//   ⇒ 断言落在**生产可观测输出**上：last_bucket_stats() 的计数、假传输
+//     收到的桶推送请求体、以及生产自己写出的诊断行（cloudsync 标签）。
+//
+// 好样本：桶视图**完整**（客户端解出的条数 == 服务端 item_count）
+//         ⇒ 该桶**必须被推送**（桶推送请求真的发出去、服务端接受它）。
+// 坏样本：桶视图**不完整**（服务端多报 item_count）
+//         ⇒ 该桶**必须被压制**（整桶不推、不写桶行 ⇒ 下一轮自然续推）。
+//
+// ★ 鉴别力自证（把生产闸门去掉 ⇒ 本用例必红）：
+//   生产里唯一挡住坏样本那一桶的就是
+//   WeaselServer/Cloud/CloudSyncService.cpp:2159 的
+//     if (BucketRemoteViewIncomplete(incomplete_buckets, bucket_key)) {
+//       ++held_unproven;
+//       continue;
+//     }
+//   若该判定恒为 false（= 去掉规则 1 v2 的闸门），坏样本会变成：
+//     · 桶推送请求**照发**（push_requests = 1）
+//       ⇒ 「坏样本：桶推送请求一个都没发」变红；
+//     · 桶**被服务端接受**（pushed = 1）
+//       ⇒ 「坏样本：桶没有被推送」变红；
+//     · 桶推送请求体里**出现**该桶键
+//       ⇒ 「坏样本：桶推送请求体不含该桶键」变红；
+//     · 生产诊断行 `bucket quota held_unproven=1` 变成 0
+//       ⇒ 「坏样本：诊断行 held_unproven = 1」变红。
+//   好样本不受影响 ⇒ 两个样本的差异**只**可能来自那道闸门。
+//
+// ⚠ 已发现但**未改**（生产缺陷，见报告）：生产只把 held_unproven 写进诊断行，
+//   **没有**回填 CloudBucketRoundStats::held_unproven
+//   ⇒ last_bucket_stats().held_unproven 恒为 0。本用例因此从**生产诊断行**
+//   取该计数（诊断行才是生产真正写出的东西）；等生产回填统计结构体后，
+//   这条断言可以改挂到 last_bucket_stats() 上。
+
+// 宽字符 → UTF-8（诊断日志路径用）。
+std::string Rule1WideToUtf8(const std::wstring& w) {
+  if (w.empty())
+    return std::string();
+  const int n =
+      ::WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()),
+                            nullptr, 0, nullptr, nullptr);
+  if (n <= 0)
+    return std::string();
+  std::string out(static_cast<size_t>(n), '\0');
+  ::WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()),
+                        &out[0], n, nullptr, nullptr);
+  return out;
+}
+
+// 读文件全部内容（不存在 ⇒ 空串）。
+std::string Rule1ReadFile(const std::string& path) {
+  FILE* f = std::fopen(path.c_str(), "rb");
+  if (f == nullptr)
+    return std::string();
+  std::string out;
+  char buf[4096];
+  size_t n = 0;
+  while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+    out.append(buf, n);
+  std::fclose(f);
+  return out;
+}
+
+// 文本里**最后**一条含 needle 的行（生产诊断行 ⇒ 断它，而不是断语义）。
+std::string Rule1LastLineWith(const std::string& text,
+                              const std::string& needle) {
+  std::string found;
+  size_t pos = 0;
+  while (pos < text.size()) {
+    size_t eol = text.find('\n', pos);
+    if (eol == std::string::npos)
+      eol = text.size();
+    const std::string line = text.substr(pos, eol - pos);
+    if (line.find(needle) != std::string::npos)
+      found = line;
+    pos = eol + 1;
+  }
+  return found;
+}
+
+// 从诊断行里取 "key=N" 的 N（取不到 ⇒ -1）。
+int Rule1DiagInt(const std::string& line, const std::string& key) {
+  const size_t pos = line.find(key);
+  if (pos == std::string::npos)
+    return -1;
+  size_t i = pos + key.size();
+  if (i >= line.size() || line[i] < '0' || line[i] > '9')
+    return -1;
+  int v = 0;
+  while (i < line.size() && line[i] >= '0' && line[i] <= '9') {
+    v = v * 10 + (line[i] - '0');
+    ++i;
+  }
+  return v;
+}
+
+// 把生产诊断日志重定向到**本用例专属**的临时目录。
+//   生产诊断路径 =
+//   %TEMP%\fluxing-profile-notify.log（include/FluxingDiagLog.h）。
+//   不重定向的话，本机生产日志的 2 MB 上限与其它进程的并发写入都会让
+//   「诊断行断言」变得不稳定 ⇒ 用例只在该文件里取本轮的行。
+class Rule1DiagScope {
+ public:
+  Rule1DiagScope() {
+    wchar_t cwd[MAX_PATH] = {0};
+    const DWORD n = ::GetCurrentDirectoryW(MAX_PATH, cwd);
+    if (n == 0 || n >= MAX_PATH)
+      return;
+    dir_ = std::wstring(cwd, n) + L"\\rule1-diag-tmp";
+    ::CreateDirectoryW(dir_.c_str(), nullptr);
+    old_tmp_ = Rule1EnvW(L"TMP");
+    old_temp_ = Rule1EnvW(L"TEMP");
+    ::SetEnvironmentVariableW(L"TMP", dir_.c_str());
+    ::SetEnvironmentVariableW(L"TEMP", dir_.c_str());
+    active_ = true;
+  }
+
+  ~Rule1DiagScope() {
+    if (!active_)
+      return;
+    ::SetEnvironmentVariableW(L"TMP",
+                              old_tmp_.empty() ? nullptr : old_tmp_.c_str());
+    ::SetEnvironmentVariableW(L"TEMP",
+                              old_temp_.empty() ? nullptr : old_temp_.c_str());
+  }
+
+  bool active() const { return active_; }
+
+  // 诊断日志全文（生产路径 ⇒ 随重定向走）。
+  std::string read() const {
+    if (!active_)
+      return std::string();
+    return Rule1ReadFile(Rule1WideToUtf8(fluxing::diag::DiagLogPath()));
+  }
+
+  // 清理（诊断文件 + 目录）。
+  void cleanup() {
+    if (!active_)
+      return;
+    const std::string log = Rule1WideToUtf8(fluxing::diag::DiagLogPath());
+    if (!log.empty())
+      std::remove(log.c_str());
+    ::RemoveDirectoryW(dir_.c_str());
+  }
+
+ private:
+  static std::wstring Rule1EnvW(const wchar_t* name) {
+    wchar_t buf[1024] = {0};
+    const DWORD n = ::GetEnvironmentVariableW(name, buf, 1024);
+    if (n == 0 || n >= 1024)
+      return std::wstring();
+    return std::wstring(buf, n);
+  }
+
+  std::wstring dir_;
+  std::wstring old_tmp_;
+  std::wstring old_temp_;
+  bool active_ = false;
+};
+
+// 假后端（规则 1 v2）：本地词典快照固定为 1 条词条。
+struct Rule1Backend : public fc::IUserDictBackend {
+  bool CheckMaintenanceGate(std::string* reason) const override {
+    if (reason != nullptr)
+      reason->clear();
+    return true;
+  }
+  bool BeginMaintenance(std::string* err) override { return true; }
+  bool EndMaintenance(std::string* err) override { return true; }
+  bool ExportUserDict(std::string* out, std::string* err) override {
+    if (out != nullptr)
+      *out = snapshot;
+    return true;
+  }
+  bool ImportUserDict(const std::string& text,
+                      int* imported,
+                      std::string* err) override {
+    imported_text = text;
+    if (imported != nullptr)
+      *imported = 1;
+    return true;
+  }
+  std::string snapshot;
+  std::string imported_text;
+};
+
+// 桶拉取响应体（字段名与生产 ParseBucketPullResponse 一致）。
+//   · cipher：base64 的**桶内容包**（生产 PackBucketBlob 打包）。
+//   · item_count：服务端**声明**的条数（好样本 = 实际条数；坏样本故意多报）。
+std::string Rule1BucketPullBody(const std::string& bucket_key,
+                                const std::vector<fc::Entry>& entries,
+                                size_t declared_item_count,
+                                const std::vector<uint8_t>& enc_key) {
+  std::string err;
+  std::vector<fc::Envelope> envs;
+  for (size_t i = 0; i < entries.size(); ++i) {
+    fc::Envelope env;
+    if (!fc::SealEntryEnvelope(entries[i], fc::ItemType::kUserDb, enc_key, &env,
+                               &err))
+      return std::string();
+    envs.push_back(env);
+  }
+  const std::string blob = fc::PackBucketBlob(envs);
+  std::string body = "{\"buckets\":[{\"bucket_key\":\"";
+  body += bucket_key;
+  body +=
+      "\",\"device_id\":\"dev-remote\",\"hlc\":{\"ms\":1762700000000,"
+      "\"counter\":7,\"device\":\"0123456789abcdef\"},\"cipher\":\"";
+  body += fc::Base64Encode(blob);
+  body += "\",\"item_count\":";
+  body += std::to_string(declared_item_count);
+  body +=
+      ",\"server_seq\":7}],\"next_cursor\":\"\",\"has_more\":false,"
+      "\"server_seq\":7}";
+  return body;
+}
+
+// 一轮的**生产可观测输出**快照。
+struct Rule1Round {
+  bool ok = false;
+  std::string err;
+  fc::CloudBucketRoundStats stats;
+  int bucket_push_requests = 0;  // 假传输收到的桶推送请求数
+  int legacy_push_requests = 0;  // 逐条推送请求数（本用例应为 0）
+  std::string push_body;         // 桶推送请求体（第一个）
+  std::string sidecar;           // 轮次结束后的侧车内容
+};
+
+// 跑一轮（灰度阶段由环境变量决定 = 1 双写），返回生产可观测输出的快照。
+//   · bucket_entries：桶端点返回的桶内容。
+//   · declared_item_count：服务端声明的条数（与实际不符 ⇒ 视图不完整）。
+Rule1Round Rule1RunRound(const std::string& bucket_key,
+                         const std::vector<fc::Entry>& bucket_entries,
+                         size_t declared_item_count,
+                         const std::vector<uint8_t>& enc_key,
+                         const std::string& sidecar_path) {
+  Rule1Round out;
+  Rule1Backend backend;
+  backend.snapshot =
+      "# Rime user dictionary\n#@/db_name\tuserdb\n#@/tick\t1\n"
+      "code0\t本地词条\tc=0 d=0 t=1\n";
+
+  MockTransport transport;
+  // 回应按**生产请求顺序**排队（假传输按 replies 队列顺序消费）：
+  //   ① 逐条拉取（空库存）② 桶拉取 ③ 桶推送（只有好样本才会发出去）。
+  transport.replies.push_back(MockTransport::Reply{
+      true, 200, Br1cPullBody(std::vector<fc::Entry>(), enc_key, false, 1)});
+  transport.replies.push_back(
+      MockTransport::Reply{true, 200,
+                           Rule1BucketPullBody(bucket_key, bucket_entries,
+                                               declared_item_count, enc_key)});
+  transport.replies.push_back(
+      MockTransport::Reply{true, 200,
+                           "{\"accepted\":[\"" + bucket_key +
+                               "\"],\"skipped\":[],\"server_seq\":8}"});
+
+  fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-rule1",
+                                       "dev-rule1", enc_key, sidecar_path);
+  fc::CloudSyncRoundResult result;
+  std::string err;
+  out.ok = coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &err);
+  out.err = err;
+  out.stats = coordinator.last_bucket_stats();
+  for (size_t i = 0; i < transport.requests.size(); ++i) {
+    const std::string& path = transport.requests[i].path;
+    if (path.find("/v1/sync/buckets/push") == 0) {
+      ++out.bucket_push_requests;
+      if (out.push_body.empty())
+        out.push_body = transport.requests[i].body;
+    } else if (path.find("/v1/sync/push") == 0) {
+      ++out.legacy_push_requests;
+    }
+  }
+  out.sidecar = Rule1ReadFile(sidecar_path);
+  return out;
+}
+
+void TestBucketRule1RemoteViewGate() {
+  std::printf("[BR-①g 规则 1 v2] 桶视图不完整 ⇒ 整桶不推（生产决策路径）\n");
+  std::string err;
+  const std::vector<uint8_t> key = TestKey();
+
+  // 本地词条与它的**生产**桶键（本地桶键必须与远端返回的 bucket_key 一致，
+  // 否则规则 1 命中不到那个桶）。
+  const std::string dict = "userdb";
+  const std::string item_key = dict + "\t本地词条";
+  const std::string payload = "code0\tc=0 d=0 t=1";
+  std::vector<uint8_t> mac_key;
+  Check(fc::DeriveBucketMacKey(key, &mac_key, &err),
+        "规则 1 v2 夹具：派生桶 MAC 密钥成功");
+  std::string bucket_key;
+  Check(fc::ComputeBucketKeyForItem(mac_key, dict, item_key, &bucket_key,
+                                    nullptr, nullptr, &err),
+        "规则 1 v2 夹具：算出本地条目的桶键");
+  Check(bucket_key.size() == static_cast<size_t>(fc::kBucketKeyHexLength),
+        "规则 1 v2 夹具：桶键是 64 位十六进制");
+
+  // 桶内容里那条远端条目：与本地**同键同语义** ⇒ R1 命中 ⇒ 本轮不进逐条
+  // 推送集合 ⇒ 唯一的推送动作就是**桶推送**（断言不会被逐条端点稀释）。
+  std::vector<fc::Entry> bucket_entries;
+  bucket_entries.push_back(Br1cEntry(item_key, payload, kBr1cRemoteMs,
+                                     kBr1cRemoteCounter, kBr1cRemoteDevice));
+
+  // 灰度阶段：环境变量 = 1（双写）⇒ 逐条端点与桶端点**同轮**都发。
+  const char* old_phase = std::getenv(fc::kBucketPhaseEnvVar);
+  const std::string old_phase_str = old_phase != nullptr ? old_phase : "";
+  _putenv_s(fc::kBucketPhaseEnvVar, "1");
+  ::SetEnvironmentVariableA(fc::kBucketPhaseEnvVar, "1");
+
+  Rule1DiagScope diag;
+  Check(diag.active(), "规则 1 v2 夹具：诊断日志重定向就绪");
+
+  // ---- 好样本：桶视图完整 ⇒ 该桶必须被推送 ----
+  {
+    const std::string sidecar = "rule1-good-sidecar.state";
+    std::remove(sidecar.c_str());
+    const Rule1Round r =
+        Rule1RunRound(bucket_key, bucket_entries, 1, key, sidecar);
+    const std::string diag_text = diag.read();
+    const std::string quota_line =
+        Rule1LastLineWith(diag_text, "bucket quota ");
+    const std::string push_line = Rule1LastLineWith(diag_text, "bucket push ");
+
+    Check(r.ok, "好样本：视图完整的桶 ⇒ 本轮同步成功");
+    Check(r.stats.phase == 1, "好样本：生效阶段 = 1（双写）");
+    Check(r.stats.pull_requests == 1, "好样本：桶拉取请求 1 次");
+    Check(r.stats.pulled_buckets == 1 && r.stats.pulled_items == 1,
+          "好样本：桶拉取解出 1 桶 1 条");
+    Check(r.bucket_push_requests == 1, "好样本：桶推送请求真的发出（1 次）");
+    Check(r.stats.push_requests == 1, "好样本：桶级推送计数 = 1");
+    Check(r.stats.pushed == 1, "好样本：桶被服务端接受（pushed = 1）");
+    Check(r.stats.skipped == 0, "好样本：没有被服务端跳过（skipped = 0）");
+    Check(r.push_body.find(bucket_key) != std::string::npos,
+          "好样本：桶推送请求体含该桶键");
+    Check(r.legacy_push_requests == 0,
+          "好样本：本轮没有逐条推送请求（只走桶推）");
+    Check(Rule1DiagInt(quota_line, "held_unproven=") == 0,
+          "好样本：诊断行 held_unproven = 0（规则 1 未压制）");
+    Check(Rule1DiagInt(quota_line, "rows_pushed=") == 2,
+          "好样本：诊断行 rows_pushed = 2（1 桶 × 2 行）");
+    Check(push_line.find("accepted=1") != std::string::npos,
+          "好样本：诊断行 bucket push accepted=1");
+    Check(r.sidecar.find("brow\t" + bucket_key) != std::string::npos,
+          "好样本：侧车写下该桶的 brow 行（下一轮不再重推）");
+    std::remove(sidecar.c_str());
+  }
+
+  // ---- 坏样本：桶视图不完整（服务端多报 item_count）⇒ 该桶必须被压制 ----
+  {
+    const std::string sidecar = "rule1-bad-sidecar.state";
+    std::remove(sidecar.c_str());
+    const Rule1Round r =
+        Rule1RunRound(bucket_key, bucket_entries, 2, key, sidecar);
+    const std::string diag_text = diag.read();
+    const std::string quota_line =
+        Rule1LastLineWith(diag_text, "bucket quota ");
+
+    Check(r.ok, "坏样本：视图不完整的桶 ⇒ 本轮**仍然成功**（不判失败）");
+    Check(r.stats.pulled_buckets == 1 && r.stats.pulled_items == 1,
+          "坏样本：桶内容仍解开了 1 条（不完整的是**条数**，不是解不开）");
+    Check(r.bucket_push_requests == 0, "坏样本：桶推送请求一个都没发");
+    Check(r.stats.push_requests == 0, "坏样本：桶级推送计数 = 0");
+    Check(r.stats.pushed == 0, "坏样本：桶没有被推送（pushed = 0）");
+    Check(r.stats.skipped == 0,
+          "坏样本：桶不是被服务端跳过，而是被规则 1 压制");
+    Check(r.push_body.find(bucket_key) == std::string::npos,
+          "坏样本：桶推送请求体不含该桶键");
+    Check(Rule1DiagInt(quota_line, "held_unproven=") == 1,
+          "坏样本：诊断行 held_unproven = 1（规则 1 v2 生效）");
+    Check(Rule1DiagInt(quota_line, "rows_pushed=") == 0,
+          "坏样本：诊断行 rows_pushed = 0（整桶零写入）");
+    Check(r.sidecar.find("brow\t" + bucket_key) == std::string::npos,
+          "坏样本：侧车**不写**该桶的 brow 行（下一轮自动续推）");
+    std::remove(sidecar.c_str());
+  }
+
+  // 还原灰度阶段环境变量（用完即还原 ⇒ 不影响后续用例）。
+  if (old_phase != nullptr)
+    _putenv_s(fc::kBucketPhaseEnvVar, old_phase_str.c_str());
+  else
+    _putenv_s(fc::kBucketPhaseEnvVar, "");
+  ::SetEnvironmentVariableA(fc::kBucketPhaseEnvVar, old_phase != nullptr
+                                                        ? old_phase_str.c_str()
+                                                        : nullptr);
+
+  diag.cleanup();
+}
+
 // ---------------------------------------------------------------------------
 // 批次 P0 · ADR 0078：用户词典「假空 / 空快照还原」完整性护栏
 // ---------------------------------------------------------------------------
@@ -6241,6 +6642,9 @@ int main() {
   TestBucketWireFormat();
   TestBucketPageBudgetAndDiag();
   TestBucketInventoryGateAndQuota();
+  // BR-①g 规则 1 v2：桶空间「远端视图不完整 ⇒ 整桶不推」（生产决策路径，
+  //                好样本 / 坏样本各跑一轮 ⇒ 对生产闸门有鉴别力）。
+  TestBucketRule1RemoteViewGate();
 
   // 批次 P0 · ADR 0078：用户词典完整性（假空导出 / 空快照还原护栏）。
   TestUserDictIntegrityGuards();

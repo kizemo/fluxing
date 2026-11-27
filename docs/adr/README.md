@@ -86,6 +86,8 @@ Do not dump all ADRs into every prompt.
 | 0075 | 0075. 注册发信失败按「永久拒绝 / 临时故障 / 配置错误」分流：上游 4xx ⇒ 422 `mail_recipient_rejected`，失败注册一律回滚（DELETE 优先、UPDATE 失效化降级），诊断头带上游 status 与回滚结果 | `docs/adr/0075-register-mail-rejection-semantics-and-failed-registration-rollback.md` | Accepted |
 | 0076 | 0076. 推送写放大治理与失败注册零写入化：写预算护栏（超限 429 零写入）、设备/令牌上限、失败注册与重发改「先发信后落库」（批次 BR） | `docs/adr/0076-cloud-write-amplification-governance-and-zero-write-registration.md` | Accepted |
 | 0077 | 0077. 云同步存储架构改桶级索引：D1 从「逐条索引」降为「设备 × 桶」双维索引，词条包落 R2，写入量与词条数解耦（批次 BR-①f） | `docs/adr/0077-bucket-level-sync-storage-architecture.md` | Proposed |
+| 0080 | 0080. U1 对象写入补偿语义：版本化 key、提交后删旧对象、孤儿兜底 GC | `docs/adr/0080-u1-object-write-compensation-versioned-key-and-orphan-gc.md` | Accepted |
+| 0081 | 0081. 云同步判据④替代口径与 BR-①g 规则 1 v2（桶空间真实库存证据）+ F3 桶端点 HTTP 状态诊断行（**草案**，未生效） | `docs/adr/0081-cloud-sync-criterion-four-substitute-and-bucket-rule-one-v2-draft.md` | Draft |
 
 - Numbers `0002`-`0006` are **unused**: no ADR file has ever carried
   those numbers (`git log --diff-filter=D -- docs/adr/` returns nothing, and

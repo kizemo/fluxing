@@ -339,14 +339,19 @@ class CloudSyncService {
 
   // ★ spec 103 · BR-①g：桶级拉取（GET /v1/sync/buckets/pull）。
   // cursor 是不透明续读位置（服务端给什么就原样回传）。
-  bool PullBuckets(int64_t since,
-                   int64_t limit,
-                   const std::string& cursor,
-                   std::vector<CloudBucketPullItem>* out,
-                   int64_t* new_server_seq,
-                   std::string* err,
-                   bool* has_more = nullptr,
-                   std::string* next_cursor = nullptr);
+  bool PullBuckets(
+      int64_t since,
+      int64_t limit,
+      const std::string& cursor,
+      std::vector<CloudBucketPullItem>* out,
+      int64_t* new_server_seq,
+      std::string* err,
+      bool* has_more = nullptr,
+      std::string* next_cursor = nullptr,
+      // ★ F3（relay-02of06）：HTTP 状态出参（传输层失败 ⇒ 0）。
+      //   桶端点的状态码此前**不可观测** ⇒ 503 / 401 这类失败无法从
+      //   诊断日志区分（批次 BR-①f 判据链的取证缺口）。
+      int* http_status = nullptr);
 
   const std::string& access_token() const { return access_token_; }
 
@@ -668,6 +673,54 @@ inline std::string FormatBucketDiagLine(const CloudBucketRoundStats& s) {
          " pulled_items=" + std::to_string(s.pulled_items);
 }
 
+// ★ F3（relay-02of06 · 阶段 1 修复轮）：桶端点 **HTTP 状态**诊断行。
+//   与既有 `bucket phase=` / `bucket quota ` 行并存 ⇒ 前缀不冲突
+//   （AC-09 探针 v4 的 `bucket phase=` 前缀正则不破）。
+//   传输层失败 ⇒ http=0（与 PushBuckets 的既有口径逐字一致）。
+inline std::string FormatBucketPullDiagLine(int page,
+                                            int http_status,
+                                            int buckets,
+                                            int items,
+                                            bool has_more) {
+  return "bucket pull page=" + std::to_string(page) +
+         " http=" + std::to_string(http_status) +
+         " buckets=" + std::to_string(buckets) +
+         " items=" + std::to_string(items) +
+         " has_more=" + (has_more ? "1" : "0");
+}
+
+inline std::string FormatBucketPushDiagLine(int page,
+                                            int http_status,
+                                            int buckets,
+                                            int accepted,
+                                            int skipped) {
+  return "bucket push page=" + std::to_string(page) +
+         " http=" + std::to_string(http_status) +
+         " buckets=" + std::to_string(buckets) +
+         " accepted=" + std::to_string(accepted) +
+         " skipped=" + std::to_string(skipped);
+}
+
+// ★ 规则 1 v2（relay-02of06 · 阶段 1 修复轮）：桶空间的**真实库存证据**。
+//
+//   旧口径（legacy 编号空间的 unproven_keys）**恒不成立**：判定用的
+//   inventory_complete 直接取自 bucket_scan_complete，而调用方只在
+//   bucket_scan_complete 为真时才进 PushChangedBuckets ⇒ `!inventory_complete`
+//   恒假 ⇒ 规则 1 在阶段 1/2 下**从不生效**（真机日志 held_unproven=0 实证；
+//   handoff §P-B-2）。
+//
+//   新口径 = 「本轮拉到该桶、但**远端视图不完整**」：解出条数 != 服务端
+//   item_count，或该桶出现畸形 / 解不开条目 ⇒ 整桶不推（held_unproven++）。
+//   为什么证据必须取自**桶空间**：服务端按 bucket_id 先 DELETE 后 INSERT ⇒
+//   未列出的远端条目会被静默删除 ⇒ 风险方向是「服务器有、我们没读到」；
+//   legacy 空间的 unproven_keys 方向相反（「我们有、服务器可能没有」），
+//   且两套编号空间互不参照（ADR 0077 / handoff §P-B-4）⇒ 不可混用。
+inline bool BucketRemoteViewIncomplete(
+    const std::set<std::string>& incomplete_buckets,
+    const std::string& bucket_key) {
+  return incomplete_buckets.find(bucket_key) != incomplete_buckets.end();
+}
+
 // ============================================================================
 // ★ spec 103 · BR-①g 补排轮（handoff §M.8.4 规则 1 / 规则 2 · ADR 0077 D12）
 //   生产闸门的**判定与算式**放在生产头里 ⇒ 单测断言的就是生产真正跑的东西
@@ -815,21 +868,27 @@ class CloudSyncCoordinator {
   // · dict_count：本地词典数（决定单轮页数上限，AC-203）。
   // · has_more：服务端还有更多桶（⇒ 库存未扫完 ⇒ 本轮不推桶）。
   // · 桶游标只从**拉取响应**推进（推送返回的 server_seq 不推进它）。
-  bool PullBucketsIntoRemote(size_t dict_count,
-                             std::vector<Entry>* remote_entries,
-                             bool* has_more,
-                             CloudBucketRoundStats* stats,
-                             int* undecryptable,
-                             int* malformed,
-                             std::string* err);
+  bool PullBucketsIntoRemote(
+      size_t dict_count,
+      std::vector<Entry>* remote_entries,
+      bool* has_more,
+      CloudBucketRoundStats* stats,
+      int* undecryptable,
+      int* malformed,
+      // ★ 规则 1 v2（relay-02of06）：本轮**远端视图不完整**的
+      //   桶键集合（桶空间证据 ⇒ 与逐条端点的编号空间无关）。
+      std::set<std::string>* incomplete_buckets,
+      std::string* err);
 
   // ★ spec 103 · BR-①g：桶级推送（分桶 → 语义指纹 → **只推变化桶** → 写桶行）。
   // · merged：合并后的本地视图全集（桶内容 = 它的分组，FR-206）。
   // · remote_complete：本轮库存扫描是否完整（FR-215 判定的前提）。
   // · legacy_endpoint_active：逐条端点是否仍可用（超限桶降级时用）。
+  // · incomplete_buckets：★ 规则 1 v2 的**桶空间库存证据**（视图不完整的桶 ⇒
+  //   整桶不推）。取代旧口径 unproven_keys（legacy 编号空间 ⇒ 恒不成立）。
   bool PushChangedBuckets(const std::vector<Entry>& merged,
                           const std::vector<Entry>& remote_entries,
-                          const std::set<std::string>& unproven_keys,
+                          const std::set<std::string>& incomplete_buckets,
                           bool remote_complete,
                           bool legacy_endpoint_active,
                           CloudBucketRoundStats* stats,

@@ -897,7 +897,8 @@ bool CloudSyncService::PullBuckets(int64_t since,
                                    int64_t* new_server_seq,
                                    std::string* err,
                                    bool* has_more,
-                                   std::string* next_cursor) {
+                                   std::string* next_cursor,
+                                   int* http_status) {
   if (out == nullptr) {
     if (err)
       *err = "内部错误：拉取结果输出为空。";
@@ -909,10 +910,14 @@ bool CloudSyncService::PullBuckets(int64_t since,
   std::string response;
   std::string send_err;
   if (!SendJson("GET", path, "", &status, &response, &send_err)) {
+    if (http_status)
+      *http_status = status;  // 传输层失败 ⇒ 0；HTTP 错误 ⇒ 服务端状态码
     if (err)
       *err = send_err.empty() ? "拉取失败。" : send_err;
     return false;
   }
+  if (http_status)
+    *http_status = status;
   return ParseBucketPullResponse(response, out, new_server_seq, err, has_more,
                                  next_cursor);
 }
@@ -1302,13 +1307,18 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
   //   · 桶内条目走**逐条端点同一条解密路径**（OpenItemsTolerant）⇒ 条目级
   //     可验性与「解不开只计数」的语义逐字不变（R7 单一真相源）。
   bool bucket_scan_complete = false;
+  // ★ 规则 1 v2（relay-02of06 · 阶段 1 修复轮）：本轮拉到、但**远端视图不完整**
+  //   的桶键集合。证据取自**桶空间**（与服务端整桶覆盖的风险方向一致：服务端
+  //   按 bucket_id 先 DELETE 后 INSERT ⇒ 未列出的远端条目被静默删除）⇒ 与
+  //   legacy 编号空间的 unproven_keys 互不参照、不可混用（ADR 0077 / §P-B-4）。
+  std::set<std::string> incomplete_buckets;
   if (bucket_mode && (direction == SyncDirection::kPullOnly ||
                       direction == SyncDirection::kBoth)) {
     bool bucket_more = false;
     std::string bucket_err;
     if (!PullBucketsIntoRemote(snapshots.size(), &remote_entries, &bucket_more,
                                &last_bucket_stats_, &undecryptable, &malformed,
-                               &bucket_err)) {
+                               &incomplete_buckets, &bucket_err)) {
       backend_->EndMaintenance(&ignored);
       const std::string reason =
           bucket_err.empty() ? "拉取云端桶失败。" : bucket_err;
@@ -1356,7 +1366,10 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
 
   std::vector<bool> locally_modified(local_entries.size(), false);
   std::vector<bool> deferred(local_entries.size(), false);
-  // ★ BR-①g 规则 1：记录被「库存未证实」压住的条目键（整桶判定的真相源）。
+  // ★ BR-①g 规则 1（**legacy 编号空间**）：记录被「库存未证实」压住的条目键。
+  //   ⚠ relay-02of06 起，**桶路径不再消费本集合**：规则 1 v2 改用桶空间的
+  //     incomplete_buckets（真实库存证据）。本集合保留 ⇒ legacy 路径的 R2
+  //     延后语义与既有诊断口径不变；**不得**据此认为桶推受它保护。
   std::set<std::string> unproven_keys;
   // R1 命中（沿用了远端 HLC）的本地条目下标 ⇒ 侧车重建时要写进去（R3）。
   std::vector<bool> remote_matched(local_entries.size(), false);
@@ -1654,7 +1667,7 @@ bool CloudSyncCoordinator::SyncRound(SyncDirection direction,
        direction == SyncDirection::kBoth) &&
       bucket_scan_complete) {
     std::string bucket_err;
-    if (!PushChangedBuckets(merged, remote_entries, unproven_keys,
+    if (!PushChangedBuckets(merged, remote_entries, incomplete_buckets,
                             bucket_scan_complete, legacy_endpoints,
                             &last_bucket_stats_, out, &bucket_err)) {
       backend_->EndMaintenance(&ignored);
@@ -1877,6 +1890,7 @@ bool CloudSyncCoordinator::PullBucketsIntoRemote(
     CloudBucketRoundStats* stats,
     int* undecryptable,
     int* malformed,
+    std::set<std::string>* incomplete_buckets,
     std::string* err) {
   if (remote_entries == nullptr || stats == nullptr) {
     if (err)
@@ -1903,12 +1917,19 @@ bool CloudSyncCoordinator::PullBucketsIntoRemote(
     std::string pull_err;
     ++pages;
     ++stats->pull_requests;
+    // ★ F3（relay-02of06）：桶端点的 HTTP 状态此前**不可观测** ⇒ 503 / 401
+    //   这类失败无法从诊断日志区分。失败页也打状态行（传输层失败 ⇒ http=0）。
+    int page_http_status = 0;
     if (!service.PullBuckets(since, kBucketPullPageLimit, cursor, &page,
-                             &next_seq, &pull_err, &page_more, &next_cursor)) {
+                             &next_seq, &pull_err, &page_more, &next_cursor,
+                             &page_http_status)) {
+      diag::AppendLine("cloudsync", FormatBucketPullDiagLine(
+                                        pages, page_http_status, 0, 0, false));
       if (err)
         *err = pull_err.empty() ? "拉取云端桶失败。" : pull_err;
       return false;
     }
+    int page_items = 0;
     for (size_t i = 0; i < page.size(); ++i) {
       std::vector<Envelope> envelopes;
       std::string unpack_err;
@@ -1917,6 +1938,9 @@ bool CloudSyncCoordinator::PullBucketsIntoRemote(
         // base64 畸形 ⇒ 跳过该桶（**不毒化整轮**），单独计数。
         if (malformed != nullptr)
           ++(*malformed);
+        // ★ 规则 1 v2：该桶的远端视图**读不全** ⇒ 本轮整桶不推。
+        if (incomplete_buckets != nullptr)
+          incomplete_buckets->insert(page[i].bucket_key);
         continue;
       }
       const std::string blob =
@@ -1928,6 +1952,8 @@ bool CloudSyncCoordinator::PullBucketsIntoRemote(
         // 单桶畸形 ⇒ 跳过该桶（**不毒化整轮**），单独计数。
         if (malformed != nullptr)
           ++(*malformed);
+        if (incomplete_buckets != nullptr)
+          incomplete_buckets->insert(page[i].bucket_key);
         continue;
       }
       std::vector<CloudSyncItem> items;
@@ -1943,6 +1969,8 @@ bool CloudSyncCoordinator::PullBucketsIntoRemote(
       if (item_bad) {
         if (malformed != nullptr)
           ++(*malformed);
+        if (incomplete_buckets != nullptr)
+          incomplete_buckets->insert(page[i].bucket_key);
         continue;
       }
       std::vector<Entry> entries;
@@ -1955,15 +1983,33 @@ bool CloudSyncCoordinator::PullBucketsIntoRemote(
           *err = unpack_err;
         return false;
       }
+      // ★ 规则 1 v2：该桶的远端视图是否**完整** = 解出条数 == 服务端
+      // item_count，
+      //   且桶内没有解不开 / 畸形条目。视图不完整 ⇒ 本轮整桶不推（服务端按
+      //   bucket_id 先 DELETE 后 INSERT ⇒ 推上去会静默删掉没读到的远端条目）。
+      if (page[i].item_count > 0 && entries.size() != page[i].item_count) {
+        if (incomplete_buckets != nullptr)
+          incomplete_buckets->insert(page[i].bucket_key);
+      }
+      if (page_undecryptable > 0 || page_malformed > 0) {
+        if (incomplete_buckets != nullptr)
+          incomplete_buckets->insert(page[i].bucket_key);
+      }
       if (undecryptable != nullptr)
         *undecryptable += page_undecryptable;
       if (malformed != nullptr)
         *malformed += page_malformed;
       stats->pulled_buckets += 1;
       stats->pulled_items += static_cast<int>(entries.size());
+      page_items += static_cast<int>(entries.size());
       remote_entries->insert(remote_entries->end(), entries.begin(),
                              entries.end());
     }
+    // ★ F3：本页成功 ⇒ 打一条含 HTTP 状态的桶拉取诊断行（无条件打印）。
+    diag::AppendLine("cloudsync",
+                     FormatBucketPullDiagLine(pages, page_http_status,
+                                              static_cast<int>(page.size()),
+                                              page_items, page_more));
     more = page_more;
     if (next_seq > since)
       since = next_seq;
@@ -1984,7 +2030,7 @@ bool CloudSyncCoordinator::PullBucketsIntoRemote(
 bool CloudSyncCoordinator::PushChangedBuckets(
     const std::vector<Entry>& merged,
     const std::vector<Entry>& remote_entries,
-    const std::set<std::string>& unproven_keys,
+    const std::set<std::string>& incomplete_buckets,
     bool remote_complete,
     bool legacy_endpoint_active,
     CloudBucketRoundStats* stats,
@@ -1996,10 +2042,13 @@ bool CloudSyncCoordinator::PushChangedBuckets(
     return false;
   }
   std::vector<uint8_t> bucket_mac_key;
-  // ★ BR-①g 规则 1：库存完整性闸门。阶段 3（切读）及以后老端点不再拉取库存，
-  // 此时仍必须要求桶扫完整；阶段 1/2 期间老端点在跑，其库存扫描已为每条本地
-  // 条目建立 HLC 基线（未证实者已被 R2 压住并登记进 unproven_keys），可作旁证。
-  bool inventory_complete = remote_complete;
+  // ★ BR-①g 规则 1 v2（relay-02of06 · 阶段 1 修复轮）：闸门改用**桶空间的真实
+  //   库存证据**（incomplete_buckets），**不再**使用 legacy 空间的
+  //   unproven_keys。 旧口径恒不成立：inventory_complete 直接取自
+  //   bucket_scan_complete，而调用方 只在 bucket_scan_complete 为真时才进本函数
+  //   ⇒ `!inventory_complete` 恒假 ⇒ 规则 1 从未生效（真机 held_unproven=0
+  //   实证；handoff §P-B-2）。 remote_complete
+  //   仍保留：FR-215「云端视图缺失」判定需要它（切读阶段）。
   // ★ BR-①g 规则 2：每轮桶推行数配额（估算写入行）。
   const size_t quota_rows = kBucketPushRowsPerRound;
   size_t held_unproven = 0, held_quota = 0, rows_pushed = 0, rows_held = 0;
@@ -2101,11 +2150,13 @@ bool CloudSyncCoordinator::PushChangedBuckets(
     }
     // 桶级时序 = 桶内条目时序的最大值；**必须严格大于**已存值，否则服务端的
     //   整桶守卫会把一次真实变更整桶跳过（AC-205）。
-    // ★ BR-①g 规则 1：桶内任一条目库存未证实 ⇒ 整桶本轮不推。
+    // ★ BR-①g 规则 1 v2：桶的**远端视图不完整** ⇒ 整桶本轮不推。
     // 服务端按 bucket_id 先 DELETE 后 INSERT，未列出的远端条目会被静默删除，
     // 因此宁可本轮零写入，也不允许「半库存」覆盖整桶。被压的桶不写 brow，
     // 指纹保持旧值 ⇒ 下一轮自动续推（与既有「未推桶保留旧指纹」同一机制）。
-    if (!inventory_complete && BucketHasUnprovenEntry(unproven_keys, entries)) {
+    //   证据 = 本轮拉到该桶、但解出条数 != 服务端 item_count，或桶内出现畸形 /
+    //   解不开条目（由 PullBucketsIntoRemote 采集 ⇒ incomplete_buckets）。
+    if (BucketRemoteViewIncomplete(incomplete_buckets, bucket_key)) {
       ++held_unproven;
       continue;
     }
@@ -2159,8 +2210,10 @@ bool CloudSyncCoordinator::PushChangedBuckets(
   if (!push_items.empty()) {
     CloudSyncService service(transport_, access_token_);
     service.SetAccessTokenRefresher(refresher_);
+    int push_page = 0;
     for (size_t offset = 0; offset < push_items.size();
          offset += kBucketPushBatch) {
+      ++push_page;
       const size_t rest = push_items.size() - offset;
       const size_t count = rest < kBucketPushBatch ? rest : kBucketPushBatch;
       std::vector<CloudBucketPushItem> chunk(
@@ -2173,6 +2226,15 @@ bool CloudSyncCoordinator::PushChangedBuckets(
       const bool ok =
           service.PushBuckets(chunk, &pushed_seq, &push_err, &accepted_keys,
                               &skipped_keys, &http_status);
+      // ★ F3（relay-02of06 · 阶段 1 修复轮）：本页桶推诊断行（含 HTTP 状态）。
+      //   无条件打印 ⇒ 失败页也留痕；传输层失败 ⇒ http_status = 0（与
+      //   PushBuckets 的既有口径逐字一致）。前缀 `bucket push ` 与既有的
+      //   `bucket phase=` / `bucket quota ` / `bucket pull ` 均不冲突。
+      diag::AppendLine("cloudsync", FormatBucketPushDiagLine(
+                                        push_page, http_status,
+                                        static_cast<int>(chunk.size()),
+                                        static_cast<int>(accepted_keys.size()),
+                                        static_cast<int>(skipped_keys.size())));
       if (!ok) {
         push_ok = false;
         break;

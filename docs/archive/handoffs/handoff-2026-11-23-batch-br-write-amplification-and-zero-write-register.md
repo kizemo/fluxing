@@ -4608,3 +4608,159 @@ BR-①g 的"稳态零写不成立"判定、以及多轮"pushed=0 skipped=0"都�
 ### E. 下一环起点
 
 - 新链首环 = **stage 1 修复轮**（锁由启动器取得后转交该环 session）；链内环自行 commit + push（git 写操作在本仓**非**人工检查点，见 `docs\plan-relay.md` §★），但**写生产 D1 / 改判据 / 切阶段 / 切读**仍必须人工单独授权。
+
+## AK（2026-11-27 11:xx · 接力链 relay-02of06 阶段 1 **修复轮**：事实核对 + 926 缺口定性 + 规则 1 v2 + F3 + 判据④ 替代口径 **ADR 草案**）
+
+> **本节 = 本批最新事实，先读这里。** 上一节 `## AJ` = 链条换代执行记录。
+> 本环写集：`WeaselServer/Cloud/**` + `test/TestFluxingCloud/**` + `docs/adr/**`（新 ADR 草案）
+> + `docs/relay/**`。**零生产写**（生产 D1 只 SELECT、侧车只读、本地词典只读）。
+> **本环未改 ADR 0077、未改判据④ 原文、未动服务端 `cloud/fluxing-sync/**`、未 bump 版本号。**
+
+### AK.1 本环任务（人工裁决 A/B/C，2026-11-27 09:5x）
+
+| 裁决 | 结论 | 本环动作 |
+|---|---|---|
+| **A**（桶推 HLC 口径） | **先事实核对（A-0）**；本轮**既不改判据、也不动生产** | 产出事实结论 + 判据④ **替代口径 ADR 草案** |
+| **B**（926 条缺口定性） | **立即开工，并入阶段 1 修复轮**（全程只读） | 产出 926 分类表 |
+| **C**（是否放行下一段） | **放行，但重排链的阶段序列**（新链 6 段） | 本环 = 阶段 1 修复轮 |
+
+### AK.2 A-0 事实核对（**已坐实**）
+
+1. **R1（远端 HLC 沿用）没有被绕过**。桶推路径 `PushChangedBuckets` **不分配条目 HLC**，
+   直接消费对账循环产出的 `merged` HLC（R1 命中 ⇒ 沿用远端 HLC；R4 分歧 / 本地新增 ⇒ `HlcTick`）。
+   ⇒ 判据④ 的红**不可能**由「R1 被绕过」解释。
+2. **侧车 HLC 写回 = 无条件沿用**（远端更旧也照搬）；`HlcObserve` 只抬高**后续新分配**。
+   ⇒ 这直接解释 `hlc_mismatch=39043`：legacy 路径每轮把远端旧 HLC 写回侧车，
+   侧车被拖旧；桶路径拿到的是较新的桶级 HLC ⇒ 两路自然不同。
+3. **判据④替代口径在构造上成立**：对「桶侧与本地侧车**同时存在**」的键，
+   「桶侧条目 HLC == 本地侧车同 key HLC」应当成立（绕开 legacy 的拖旧效应，
+   直击切读真正关心的事）。
+4. **A1 三条替代路线均超红线，本链不做**：① 回退 ≈ 93,278 行写入；
+   ② pull 让旧 HLC 覆盖（破坏「本地胜出」）⇒ 数据正确性风险；
+   ③ 一次性迁移桶表 ≈ 94,604 条 ⇒ 约 190,000 行写入（复现 2026-11-23 事故）。
+
+### AK.3 B 定性：**926 条缺口已收敛为 1 条**
+
+| 项 | 09:28（上一环判据④ v3） | **10:48（本环）** |
+|---|---|---|
+| legacy 键数 | 40,112 | 40,112 |
+| 桶侧键数 | 92,354 | **94,589** |
+| legacy 键不在桶侧（缺口） | **926** | **1** |
+| 分类 | — | `A_local_known=0` / `B_local_unknown=1` / `C_unmappable=0` |
+
+剩余 1 条：`cd3cc4e9afb595db902b8eefcdb52e2c5edcd470a4075514c34b7428eada865f`
+（legacy_hlc `1794411631262:0:a651f3d8fcb3ab8a`）⇒ 本地侧车查不到
+⇒ **疑似本地已删、云端残留的僵尸行**。
+
+**归因边界（未坐实，不得当结论）**：桶侧键数从 92,354 增至 94,589 与客户端 09:25 /
+09:41 两轮桶推送（`pushed=896`、`pushed=84`）时间相关，但「legacy 键进入桶侧」的
+具体机制本轮**未逐条坐实** ⇒ 登记待坐实。
+
+对照数字（盘上回读 `tmp/relay02/gap-summary.txt`）：
+
+```
+legacy_vs_sidecar_legacy_older=39962   legacy_vs_sidecar_equal=149   legacy_vs_sidecar_unmapped=1
+bucket_vs_sidecar_equal=93279          bucket_vs_sidecar_bucket_newer=0
+bucket_vs_sidecar_bucket_older=0       bucket_vs_sidecar_unmapped=1310
+map_variant=unescaped                  http_errors=0
+```
+
+⇒ **桶侧 vs 侧车：两侧都存在的 93,279 个键 HLC 逐字相等**（newer=0、older=0）
+⇒ **判据④替代口径在 10:48 成立**。
+⇒ `bucket_vs_sidecar_unmapped=1310` 与真机 `deferred=1310` 逐字吻合 ⇒ 两侧口径自洽。
+⇒ `map_variant=unescaped` ⇒ 云端 `item_key` 是**未转义**口径的 HMAC 身份键
+（`legacy_mapped_unescaped=40111` / `legacy_mapped_raw=0`）。
+
+### AK.4 客户端实现层修复（**已落码 + 编译通过**）
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| **规则 1 闸门** | `if (!inventory_complete && BucketHasUnprovenEntry(unproven_keys, entries))`；`inventory_complete = remote_complete = bucket_scan_complete` ⇒ **恒假 ⇒ 从未生效**（真机 `held_unproven=0` 实证） | `if (BucketRemoteViewIncomplete(incomplete_buckets, bucket_key)) { ++held_unproven; continue; }` —— 证据取自**桶空间**：本轮拉到该桶、但解出条数 != 服务端 `item_count` / 解包失败 / 桶内畸形 ⇒ 整桶压制 |
+| **判定落点** | 散在 .cpp | 收敛到**生产头** inline `BucketRemoteViewIncomplete()`（生产与单测同源，宪法 R7） |
+| **`unproven_keys`** | 桶路径消费（实际恒空） | **保留**于 legacy 编号空间（legacy R2 延后语义不变）+ 注释「桶路径不再消费」 |
+| **F3 可观测性** | 桶端点 HTTP 状态**完全不可观测** | `PullBuckets` 增 `int* http_status` 出参；桶拉/桶推各打一条**无条件**诊断行 `bucket pull page=.. http=.. buckets=.. items=.. has_more=..` / `bucket push page=.. http=.. buckets=.. accepted=.. skipped=..`（前缀与 `bucket phase=` / `bucket quota ` 不冲突 ⇒ 探针 v4 正则不破） |
+
+**为什么证据必须取自桶空间**：服务端按 `bucket_id` **先 DELETE 后 INSERT**
+⇒ 未列出的远端条目被**静默删除** ⇒ 风险方向是「服务器有、我们没读到」；
+legacy `unproven_keys` 方向相反且两套编号空间**互不参照** ⇒ 混用会指向错误方向。
+
+**规则 1 v2 残留缺口（留档，不得声称已根治）**：阶段 1/2 桶拉取是**增量**
+（`since=bucket_seq_`），本轮**没拉到**的桶缺当轮证据 ⇒ 当前只压制「拉到但视图不完整」
+的桶。**禁止**把 `inventory_complete` 改成 legacy 库存完整性（`!has_more` 在阶段 1/2
+常态为 true ⇒ 会压制几乎所有桶）。收口路径 = 让桶视图完整性**跨轮累积**（独立批次 + ADR）。
+
+### AK.5 本轮订正的既有记载
+
+- **§P-H.4「brow 目前不落盘」⇒ 订正**：`brow` **已落盘**，实测 **1,024 行**
+  （侧车标签直方图 `brow:1024`）。ADR 0077 同源注释需在后续批次同步修订
+  （**本轮未改 ADR 0077**）。
+
+### AK.6 本轮产物
+
+| 产物 | 路径 | 入库 |
+|---|---|---|
+| 判据④ 替代口径 + 规则 1 v2 **ADR 草案** | `docs/adr/0081-cloud-sync-criterion-four-substitute-and-bucket-rule-one-v2-draft.md` | ✅ |
+| 926 缺口分类表 | `docs/relay/stage-1-legacy-gap-classification.md` | ✅ |
+| 阶段 1 盘点（就地改写：§0–§8 保留 + §9 修复轮） | `docs/relay/stage-1-inventory.md` | ✅ |
+| 生产代码 | `WeaselServer/Cloud/CloudSyncService.{h,cpp}` | ✅ |
+| 门禁用例 | `test/TestFluxingCloud/TestFluxingCloud.cpp` | ✅ |
+| B 定性脚本 | `reports/fluxing-br-1g/phase1-legacy-gap-classify.ps1` | ❌（reports 不入库） |
+| 中间产物 | `tmp/relay02/**` | ❌（tmp 不入库） |
+
+### AK.7 判据④ 的当前裁定状态（**不得改记**）
+
+| 判据 | 上一环 09:28 | 本环修复轮后 |
+|---|---|---|
+| ① 桶端点零 4xx/5xx | 🟢 | 🟢（`http_errors=0`，11 页全 200） |
+| ② 桶拉桶数 = 服务端行数 | 🟢 | 🟢（1,000 = 1,000） |
+| ③ `brow` 行数 = 已推成功桶数 | 🟢 | 🟢（`brow` 1,024 ≥ 1,000） |
+| ④ 两路拉取条目集合逐条 HLC 一致 | 🔴 | 🔴 **原文未改、仍按红记**；**替代口径** 10:48 成立（93,279/93,279 相等）⇒ **待人工批准口径修订** |
+
+⇒ **阶段 2（真机复核轮）不自动进入**；口径修订需人工看过 ADR 0081 草案再落。
+
+### AK.8 红线（不变）
+
+阶段 3/4 永不启用、阶段不得自动递增、规则 1 残留缺口未修前不得切读、
+生产 D1/R2/Cloudflare 只读、不动用户词典数据、`AC-09` 仍 FAIL **不得改记**、
+`AC-212` / `AC-215②` 未判定、`AC-213` / `AC-214` 永久退役、凭据值绝不进日志/输出/提交物。
+
+### AK.9 本轮新增工具坑（照抄勿重踩）
+
+1. **禁止从脚本调用服务端 `/v1/auth/refresh`** —— 成功即轮换并**撤销**旧
+   `refresh_token` ⇒ 运行中客户端永久失去续期能力。改为：401 时**只重读本机凭据库**
+   重试（上限 3 次）。本轮 B 定性脚本已按此改。
+2. **改生产头声明必须同步改 .cpp 定义签名** —— 本轮 `PullBuckets` 加 `int* http_status`
+   出参时漏改 .cpp 定义 ⇒ 编译报 C2511「没有找到重载的成员函数」+ C2065「未声明的标识符」。
+   ⇒ 加/改签名后**先单独 msbuild 一次**再往下走。
+3. **`PushBuckets` / `PullBuckets` 的 `http_status` 口径**：传输层失败 ⇒ `0`；
+   HTTP 错误 ⇒ 服务端状态码（沿用既有口径）。
+4. `New-Object Net.Http.StringContent(body, enc, type)` ⇒ 参数错位 ⇒ 用
+   `[Net.Http.StringContent]::new(...)`。
+5. 内联 bash 里 `Push-Location`/`Pop-Location` 之后写文件 ⇒ 被安全策略拦 ⇒
+   cwd 切换必须放进 `.ps1` 文件再 `pwsh -File`；`Set-Location` 后写文件 ⇒ 一律绝对路径。
+
+### AK.9 门禁结果（盘上回读 · 2026-11-27 11:08）
+
+| 指标 | 值 | 判据 |
+|---|---|---|
+| `PASS` | **1014**（基线 951 ⇒ **+63**） | ✅ |
+| `FAIL` | **0** | ✅ |
+| `UFFFD_COUNT` | **0** | ✅ |
+| `CLANGFORMAT_HUNK_DRIFT` | **0**（改动 hunk 口径） | ✅ |
+| `CLANGFORMAT_WHOLEFILE_DRIFT` | 3 | **HEAD 存量**（含本轮未改动文件）⇒ 不整文件重排 |
+| 门禁日志 | `reports/fluxing-br-1g/gate-relay02-20261127-110813.log`（703 B） | ❌ 不入库 |
+| 测试 exe | `Release/TestFluxingCloud.exe`（1,072,128 B · mtime 11:08:11） | ❌ 不入库 |
+
+**新增工具坑：门禁必须压掉 `FLUXING_CLOUD_SYNC_BUCKET_PHASE`**。本机 User 级该变量
+常驻 `1`（真机跑阶段 1 双写）⇒ 测试进程继承 ⇒ **全部 legacy 用例误入桶模式**
+⇒ **89 项假失败**（`PASS=922 FAIL=89`，首个失败组 =「BL 协调器」）。置 `0`
+（= 老端点单跑）后同一次构建 **`PASS=1014 FAIL=0` / `EXE_EXIT=0`** ⇒ **实现层无回归**；
+假红来自**环境变量泄漏**。`gate-p0-run.ps1` 本身不清环境 ⇒ 每轮跑门前必须先
+`$env:FLUXING_CLOUD_SYNC_BUCKET_PHASE='0'`。
+
+**鉴别力门禁用例**（`test/TestFluxingCloud/TestFluxingCloud.cpp` ·
+`TestBucketRule1RemoteViewGate`）：好样本（远端视图完整）⇒ 桶推送 **1 次** /
+`pushed=1` / `held_unproven=0` / `rows_pushed=2` / 侧车写出 `brow`；坏样本
+（服务端 `item_count` 多报 ⇒ 视图不完整）⇒ 桶推送 **0 次** / `pushed=0` /
+**`held_unproven=1`** / `rows_pushed=0` / 侧车**不**写 `brow` ⇒ 两样本**方向相反**
+⇒ 判据**有鉴别力**。
