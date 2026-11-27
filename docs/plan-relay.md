@@ -3,7 +3,7 @@
 > 本文件是接力链每一环的**唯一计划入口**。启动器已把它写进台账 `plan_doc`，每一环读同一个文件。
 > **权威进度源不是本文件**，而是 handoff 顶节：
 > `docs/archive/handoffs/handoff-2026-11-23-batch-br-write-amplification-and-zero-write-register.md`
-> （检索 `^## [A-Z]+`，**不要加 `$` 锚点**；最新顶节 = 本批最新事实；最新 = `## AE`，由 2026-11-26 23:59:53 的「进双写」轮追加）。
+> （检索 `^## [A-Z]+`，**不要加 `$` 锚点**；最新顶节 = 本批最新事实；**最新顶节 = 文件中最后一个 `## [A-Z]` 顶节**（不引用固定节号，避免过期））。
 > 接力 prompt 文件：`docs/archive/prompts/prompt-next-session-2026-11-23-batch-br-write-amplification-and-zero-write-register.md`（就地改写，不另建）。
 
 ## ★ 本项目覆盖（**优先于通用接力协议**，每环必读）
@@ -40,28 +40,26 @@
 
 ## 2. 阶段清单（6 段，按序推进；阶段不得自动前进，验收不过就停在当前段）
 
-### 阶段 1 — 阶段 1（双写）常驻取证收口
+### 阶段 1 — 修复轮：判据④ 红因收敛（客户端侧 · 零生产写）
 
-- **现状（2026-11-27 08:59 盘上回读）**：阶段 1 **已常驻生效**。User 级 `FLUXING_CLOUD_SYNC_BUCKET_PHASE=1`；`WeaselServer` pid **41800**，启动 2026-11-27 **08:02:34**；08:11:00 那轮 = `bucket phase=1 pushed=0 skipped=0 pulled_buckets=1000 pulled_items=92353`，同轮 reconcile `scan_complete=0 matched=92272 deferred=1311 divergent=10 pushed=0`。
-- **下一轮 ≈09:13 = 该进程的第 2 轮 = `kBoth` = 唯一具备推桶能力的轮**（轮间隔实测 ≈62 分钟：00:03:42 / 01:06:12 / 02:08:32 / 03:10:40 / 08:11:00）。本阶段第一件事就是取这一轮的证据。
-- **判据**（ADR 0077 `:436-443` 四道判据）：
-  - ① 桶端点请求零 4xx/5xx；
-  - ② 桶端点拉取桶数 = 服务端 `sync_buckets` 行数（已见 `pulled_buckets=1000` vs 1,000）；
-  - ③ 侧车 `brow` 行数 = 已推成功桶数（已见 `brow` = 1,000）；
-  - ④ 两路拉取条目集合逐条 HLC 一致（允许桶端点多，**不允许少**）——须**逐 key 比对**；计数相等不算数。⚠ 08:11:00 轮 `pulled_items=92353` 与 `matched=92272` **计数已不相等** ⇒ 口径存疑，**不得据此判绿**。
-- **取证据的硬约束**：
-  - 进程启动后第一轮恒为 `kPullOnly`（`CloudSyncEngine.cpp:205-213`），**第 2 轮才是 `kBoth`**；探针必须等**第 2 个**同 phase 行（不是第 1 个）。
-  - **切阶段 / 重启必须让新进程拿到新环境块**：User 级变量只写注册表，**由旧环境块拉起的进程读不到**（2026-11-26 23:59:53 那次重启后连 4 轮仍是 `phase=0`；直到 08:02:34 新登录拉起的进程才读到 `phase=1`）。要立即生效：先在当前进程刷新 `$env:FLUXING_CLOUD_SYNC_BUCKET_PHASE` 再 `Start-Process`。
-  - detached runner 会被环境回收（上一轮 runner pid 36928 已死、证据未落盘）⇒ 取证 runner 必须**自带落盘判据 + 心跳**，且不得并发（都杀 `WeaselServer`，互重置 `startup_pending_`）。
-- **产出**：`reports/fluxing-br-1g/phase1-enter-20261127-evidence.log`（**当前不存在，需重新生成**）+ handoff 新顶节 + 生产 `sync_buckets` 差分（只读）。
-- **门禁**：本段是取证段，不要求代码门禁，但 ADR 0077 `:436-443` 四道判据必须有盘上证据；全绿才进阶段 2。
+- **前情**：上一链的阶段 1 取证收口已完成 —— 四道判据 **①绿 ②绿 ③绿 ④红**（`missing_in_bucket=926` / `hlc_mismatch=39043` / `http_errors=0`），桶推路径**真机首次跑通**（`pushed=896` / `rows_pushed=1928` / `held_quota=0` / `held_unproven=0`）；判据④ 红因 = 2026-11-26 桶化首导**整库重分配条目 HLC**（桶侧 HLC 与本地侧车逐字相同，老端点 D1 永久持 11-24 旧批次）⇒ 两路差异**不可自愈**。完整证据见 `docs\relay\stage-1-inventory.md` 与 handoff `## AH`；**本轮人工裁决全文见本文件 §5**。
+- **目标（四件同批）**：
+  1. **B 定性** —— 建立「侧车文本键 ↔ 云端 `item_key`」hash 映射口径，把 926 条拆成「本地已删僵尸」/「本地现存未上桶」/「不可判定」；**只读**（生产 D1 只 SELECT、侧车只读、本地词典只读）。
+  2. **A-0 事实核对** —— 定位桶推路径的条目 HLC 分配点是否绕过 BR-①c 的 R1「远端 HLC 沿用」；核对侧车条目 HLC 的写回语义（pull 取 max 还是无条件沿用）；评估「桶侧 HLC == 本地侧车 HLC（逐 key）」能否作判据④ 的替代口径（切读安全性口径），并给出**鉴别力用例**（坏样本必须判红）；产出 A1 三条实现路线的代价对照。**不改判据、不改生产、不改侧车。**
+  3. **F3 可观测性** —— 补客户端桶端点 HTTP 状态诊断行（现缺 ⇒ `bucket_pull_failed` 的 4xx/5xx 面查不到）。
+  4. **规则 1 盲区修复** —— 让 `CloudSyncService.cpp:2108` 的整桶压制分支真正生效（现唯一调用点 `:1657-1659` 第 6 实参恒为 `bucket_scan_complete == true` ⇒ `if (!inventory_complete && BucketHasUnprovenEntry(...))` 恒不成立）；传参改为真实库存证据；新增**有鉴别力**的门禁用例（故意置 unproven 必须触发压制，好/坏样本各跑一次）。
+- **写集（唯一）**：`WeaselServer/Cloud/**` + `test/TestFluxingCloud/**` + `docs/adr/**`（新 ADR 草案）+ `reports/fluxing-br-1g/**`（证据，不入库）。**不得**触碰服务端 `cloud/fluxing-sync/**`、生产 D1/R2、用户词典数据。
+- **门禁**：先单独 msbuild `test\TestFluxingCloud\TestFluxingCloud.vcxproj`（**显式 `/p:SolutionDir=`**；`weasel.sln` 不含该工程 ⇒ 跑旧 exe 会假绿），再跑 `reports\fluxing-br-1g\gate-p0-run.ps1`；判绿 = `PASS=<n>` 且 `FAIL=0` + `UFFFD_COUNT=0` + `CLANGFORMAT_HUNK_DRIFT=0`（**不认 `$LASTEXITCODE`**）；改动 hunk 0 clang-format 漂移。
+- **产出**：`docs\relay\stage-2-inventory.md`（本段盘点与 ADR 草案索引）+ 926 条分类表 + 判据④ 口径 ADR 草案 + handoff 新顶节 + 门禁输出落盘。
+- **红线**：只改判定逻辑 / 诊断 / 测试；**不切读、不动阶段、不写生产**；`AC-09` 仍 FAIL 不得改记。
 
-### 阶段 2 — 规则 1 盲区修复（`inventory_complete` 死分支）
+### 阶段 2 — 复核轮：真机重跑 + 四道判据重判
 
-- **目标**：让 `CloudSyncService.cpp:2108` 的整桶压制分支**真正生效** —— 现在唯一调用点 `:1657-1659` 第 6 实参恒为 `bucket_scan_complete == true`，导致 `if (!inventory_complete && BucketHasUnprovenEntry(...))` 恒不成立。
-- **要求**：传参改为真实的库存证据；新增**有鉴别力**的门禁用例（故意置 unproven 时必须触发压制，且好/坏样本各跑一次）；新增 ADR（编号顺延）；改动 hunk 0 clang-format 漂移 + U+FFFD = 0。
-- **判据**：门禁 `PASS=<n> FAIL=0`；新用例在 unproven 场景下**压制生效**（不是只编译过）。
-- **红线**：本段只改判定逻辑与测试，**不切读、不动阶段**。
+- **目标**：等 kBoth 轮（轮间隔实测 ≈62 分钟；进程启动后第 1 轮恒为 `kPullOnly`、第 2 轮才是 `kBoth`）出证据，按（修订后）口径**重判四道判据**，并做侧车 `brow`/`row` 与生产 `sync_buckets` 的只读差分。
+- **判据**：① 桶端点请求零 4xx/5xx；② 桶拉桶数 = 服务端 `sync_buckets` 该用户行数；③ 侧车 `brow` = 已推成功桶数；④ 按新口径重判（**判别力**：坏样本必须判红）。
+- **硬约束**：取证 runner 必须**只读**、自带落盘判据 + 心跳（detached runner 会被环境回收）；**不得并发**（都杀 `WeaselServer`，互重置 `startup_pending_`）；**切阶段/重启必须让新进程拿到新环境块**（User 级变量只写注册表，旧环境块拉起的进程读不到）。
+- **产出**：`docs\relay\stage-1-inventory.md` 就地改写（四判据裁定更新）+ handoff 新顶节 + 证据文件清单。
+- **红线**：不切读、不动阶段（阶段 3/4 仍禁）；生产只读。
 
 ### 阶段 3 — 写预算阈值口径落盘
 
@@ -111,3 +109,43 @@
 - **detached runner 会被环境回收** ⇒ 取证 runner 必须自带落盘判据 + 心跳，不能只靠「后台进程还活着」当证据。
 - 起环 / 跨环交接时，`docs/relay.json` 与 `docs/relay/.relay.lock` 是**运行时状态**，**不入库**；入库的只有装置本体（`docs/relay/*.ps1`、`AGENT-RELAY.md`、`RELAY-SOP.md`、`ACTIVATION-PROMPT.txt`、`install-report.md`）+ `docs/RELAY-ADAPTATION.md` + `docs/plan-relay.md` + `AGENTS.md` 家规块 + `docs/relay/adaptation-answers.json`。
 - **GitHub 推送唯一可用通道 = SOCKS5**：`socks5h://127.0.0.1:7897` —— 2026-11-27 实测：`http://127.0.0.1:7897`（HTTP 形式）curl 返回 **000**；`--socks5-hostname 127.0.0.1:7897` 返回 **200**；直连 `Recv failure: Connection was reset` / `Failed to connect ... after 21070 ms`；`curl --resolve` 边缘 IP 全 000；`curl -6` 000；`api.github.com` 直连 200 而 `github.com` 不通 ⇒ 阻断在 `github.com` 域，非整机网络。**已处置**：仓库级 `http.proxy`/`https.proxy` = socks5h（仅本仓 `.git/config`，未动用户全局；全局那条恰是失效的 HTTP 形式）⇒ 裸 `git push` / `git ls-remote` 可用，**硬判据照旧** = `ls-remote` 与 `rev-parse HEAD` 逐字相等。
+- **停链后不可直接续链**：闸门 `relay-ledger.ps1` **拒收** `set_status=running`（`status_running_is_human_only`）；启动器对 `status=blocked` 的台账直接 `exit 3`（`reason=ledger_blocked`）；bootstrap 只在台账**不存在**时执行 ⇒ 恢复链的唯一受支持路径 = **人类换代动作**：归档旧台账（留证）→ 重跑 `start-relay.ps1` 重新 bootstrap。
+
+## 5. 人工裁决（2026-11-27 · 依用户「持续推进 + 自动会话交接」授权，由上游会话代为行使人类裁量）
+
+> 对上一链 `docs\relay\stage-1-inventory.md` §7.2 的 A/B/C 三项裁决全文。
+
+### A（桶推 HLC 口径）→ **先事实核对；本轮既不改判据、也不动生产**
+
+- **已坐实的事实链**：桶侧 HLC 与**本地侧车**逐字相同（样本 `legacy_hlc=1795339039468:14944:c7cc…` vs `bucket_hlc=1795565189774:14945:c7cc…`，桶侧 `ms` 恒为 1795565189774、counter 逐条 +1）⇒ **桶推既没篡改也没重分配 HLC**；是 2026-11-26 桶化首导时**本地侧车被整库重分配**了 HLC，老端点 D1 永久持 11-24 旧批次 ⇒ 两路差异**不可自愈**。
+- **不采纳 A1（桶推沿用老端点 HLC）**：桶推能沿用的三个来源此刻存的**都已是新值**（本地侧车 / 远端桶 / 远端 legacy 拉取值）⇒ 要两路逐字相等只能三选一：① 回退侧车 93,278 行条目 HLC（本地状态大规模重写，触碰「不动用户词典数据」边界）② pull 时让 legacy 旧 HLC 覆盖本地新 HLC（**违反 HLC 单调语义**，且削弱服务端防陈旧写守卫）③ 一次性迁移桶表把 HLC 改回 legacy 值（**写生产 D1**）⇒ 三条都超红线，**本链不做**。
+- **暂不采纳 A2（修订判据④）**：改判据必须先有 ① 926 条的真实构成（否则 = 用改口径掩盖真实漏数据）② 桶推 HLC 分配点的代码事实（是否绕过 R1）⇒ 现在改口径 = 把「还没查清」提前写成「已接受」。
+- **本轮裁定 = A-0（事实核对，零改判据、零生产写）**，核对清单：① 桶推路径的条目 HLC 分配点是否绕过 BR-①c 的 R1；② 侧车条目 HLC 的写回语义（pull 取 max 还是无条件沿用远端）；③ 「桶侧 HLC == 本地侧车 HLC（逐 key）」能否作判据④ 的替代口径（**切读安全性口径**：桶端点不得旧于本地）并给出**鉴别力用例**（坏样本：桶侧旧于本地 ⇒ 必须判红；好样本：相等 ⇒ 判绿）；④ 若最终仍要两路逐字相等，给出 A1 三条路线的**真实代价对照**，交人工再裁定。
+- **ADR**：阶段 1 修复轮只产出**判据④ 口径 ADR 草案**（含鉴别力用例 + 采纳/不采纳 A1 的代价对照），**不改 ADR 0077**；正式修订待人工看过草案再落。
+
+### B（926 条缺口定性）→ **立即开工，并入阶段 1 修复轮**（不单设批次）
+
+- **理由**：926 条里若含「本地现存但未上桶」= **真实漏数据**，优先级高于 HLC 口径；且它与规则 1 盲区（「库存未证实不推送」死分支）同属「库存未证实」家族 ⇒ 先定性再修，避免两盲区叠加放大（叠加会让半库存桶被回推 ⇒ 服务端 `DELETE+INSERT` 静默删条目）。
+- **交付**：① 云端 `item_key` 的 hash 口径（客户端侧生成函数的**确切算法**，含规范化与编码）②「侧车文本键 ↔ 云端 `item_key`」映射实现 ③ 926 条**逐条分类表**（本地已删僵尸 / 本地现存未上桶 / 不可判定）④ 据此重跑判据④ 的可复跑脚本。
+- **边界**：**只读** —— 生产 D1 只 SELECT、侧车只读、本地词典只读；不写任何生产表、不动本地词典数据。
+
+### C（是否放行下一段）→ **放行，但重排链的阶段序列**（新链 6 段）
+
+- **阶段 1（修复轮 · 客户端侧 · 零生产写）** = 上面 A-0 + B + F3 + 规则 1 死分支修复 + 判据④ 口径 ADR 草案。
+- **阶段 2（复核轮 · 真机）** = 等 kBoth 轮出证据，按（修订后）口径重判四道判据 + 侧车 `brow`/`row` 差分 + 生产 `sync_buckets` 只读差分 + 阶段 1 盘点就地改写。
+- **阶段 3 / 4 / 5 / 6** = 写预算阈值口径落盘（80,000 → 20,000）· R2 对象体核对与搬运 · PG 快照重导重灌与一致性核对 · 切源 W7 四段落地与收口交接（**原 3–6 段内容不变**）。
+- **为何把规则 1 死分支并进阶段 1**：它与 B / A-0 同一写集（`WeaselServer/Cloud/**` + `test/TestFluxingCloud/**`）⇒ 一次门禁、一次真机验证；分开会多等一轮 62 分钟。
+
+### 本轮新增红线
+
+- **任何服务端一次性迁移 / 写生产 D1 的动作（含 A1 的生产部分）必须先经人工单独授权**；链内环不得自行执行。
+- 阶段 3/4 永不启用；规则 1 盲区未修**且**判据④ 未重判前不得切读；阶段不得自动递增（人工放行 = 本节）。
+- 生产 D1/R2/Cloudflare 只读；不动用户词典数据；`AC-09` 仍 FAIL 不得改记；凭据值绝不进日志/输出/提交物。
+
+### 仍待人工裁定（等阶段 1/2 结论，本链不自行决定）
+
+1. A1 的生产部分是否执行（服务端一次性迁移 / 守卫放宽 / 侧车 HLC 回退）—— 三选一，均触及红线；
+2. `WRITE_BUDGET_ROWS_PER_DAY` 盘上 80,000 vs §O 拍板 20,000 —— 排在阶段 3 落盘；
+3. ECS `5432` 公网收口窗口与代执行授权范围；
+4. 库内两条历史探针账号（`ak.probe.261111@example.com` / `ak.probe2.261111@example.com`）是否清理；
+5. 切源 W7 的 `api.jury.xin` 放行范围（只放行 `api.jury.xin`，**不放行**全部 `*.jury.xin`）+ 橙云/灰云 + 证书路线（阶段 6 之前需定）。
