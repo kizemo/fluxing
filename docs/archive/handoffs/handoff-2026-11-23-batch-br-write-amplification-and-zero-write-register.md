@@ -5056,3 +5056,37 @@ User 级 `1` ⇒ 一批 legacy 用例误入桶模式假红。**判绿不认 `$LA
     未跟踪 ⇒ `git add` 一律**按路径显式**列，禁 `git add .`。
 11. **`make-r2-variants.ps1` 的自检会因为「说明注释里出现 `/v1/auth/refresh` 字样」而
     `throw`** ⇒ 判红线只能匹配**实际调用点**（`HttpMethod]::Post` + URL），不能匹配文本。
+## AM（2026-11-27 14:2x · 接力链 `relay-01of06` 阶段 1 **确认环**：三项只读判据 **3/3 PASS** ⇒ 链条推进到阶段 2；**零产品代码改动 / 零出包 / 零装机 / 零生产写**）
+
+**背景。** 上一链（`relay-03of06`，handoff §AL）阶段 2 复核轮把四条真机判据按**原文口径**重判为 ①FAIL ②PASS(附条件) ③UNDETERMINED ④FAIL，链落 `blocked`，人工裁决后换代（§AI/§AJ）：新链 `current_stage=1` 的定义改为「**确认环**」——对上一修复轮成果做**零改动复核**，不出包、不写代码、不碰生产。修复轮成果已入库 `1d86d8c`（`feat(WeaselServer): 规则 1 v2 改用桶空间库存证据 + F3 桶端点 HTTP 状态诊断行`，2026-11-27 11:10:49 +0800）。
+
+**目标。** 同批只读三条判据：① `git merge-base --is-ancestor 1d86d8c HEAD` 退出码 0；② 门禁四行复跑（单独 msbuild `TestFluxingCloud.vcxproj` + 显式 `/p:SolutionDir=`，跑前设 `$env:FLUXING_CLOUD_SYNC_BUCKET_PHASE='0'`，判绿 = `PASS>=1014` 且 `FAIL=0` 且 `UFFFD_COUNT=0` 且 `CLANGFORMAT_HUNK_DRIFT=0`，不认 `$LASTEXITCODE`）；③ 阶段 1 结论仍成立（`1d86d8c..HEAD` 在 `WeaselServer/Cloud` + `test/TestFluxingCloud` 面内无改动，或改动不推翻 `stage-1-inventory.md` 结论）。
+
+**进度 · 三项判据全部 PASS。**
+
+| 判据 | 实测 | 判定 |
+|---|---|---|
+| ① 祖先 | `ANCESTOR_EXIT=0`；HEAD = `572de94d6d5bc6b255b632b3fc4cacf43777977b`（`feat/100-cloud-sync`） | **PASS** |
+| ② 门禁 | `PASS=1014 FAIL=0` / `UFFFD_COUNT=0` / `CLANGFORMAT_HUNK_DRIFT=0` / `GATE_EXIT=0` / `EXE_EXIT=0`；`MSBUILD_EXIT=0`（4 s） | **PASS** |
+| ③ 结论面 | `LOG_LINES=0`（`1d86d8c..HEAD` 在结论面内 0 提交）；末次触及该面的提交即 `1d86d8c` | **PASS** |
+
+**①防假绿核验（本轮新增方法，勿丢）。** 门禁 exe `Release\TestFluxingCloud.exe` 的 mtime 是 `2026-11-27T11:08:11`、size `1,072,128`、sha256 `B4255B67C3104B8F33EB728F76B4BB36F5F000E9E09B7931DE657BBD9A146E93` —— **早于本轮 14:15 的 msbuild**。这不是旧 exe 复用，而是 msbuild 增量判定 up-to-date（若任一源新于 exe 必然重编并刷新 mtime）。三交叉：① msbuild 自身时间戳比较通过；② `git status --porcelain --untracked-files=no -- WeaselServer/Cloud test/TestFluxingCloud` = **0 行**；③ 末次触及该面的提交 = `1d86d8c` ⇒ 磁盘源码 == 生成该 exe 的源码。
+
+**旁证（不进判据）。** `CLANGFORMAT_WHOLEFILE_DRIFT=3` —— `CloudSyncService.cpp` / `CloudRimeUserDictBackend.cpp` / `TestFluxingCloud.cpp` 三份**整文件**漂移，属 HEAD 存量，判据只认 hunk 级漂移 = 0 ⇒ 本轮不重排、不整文件格式化。
+
+**判据性质限制（不得夸大）。** 判据③ 是「零改动 ⇒ 结论在结构上不可能被推翻」，**不是**对结论正确性的独立复验。要重新证伪结论必须在源码不变前提下另立批次。
+
+**未做 / 未验证。** 未跑真机四判据（属阶段 2）；未出包 / 未装机 / 未升版；未读写生产 D1 / R2 / Cloudflare；未动 `RimeUserDir` / `InstallDir`。
+
+**阶段 2 前置（交给 `relay-02of06`）。** ① 桶相位保持 `0`（**阶段 3/4 永不启用**，与接力阶段编号不同）；② 真机取证必须落 **`kBoth` 轮** —— 进程启动后第 1 轮恒为 `kPullOnly`、第 2 轮才是 `kBoth`，轮间隔 ≈62 min ⇒ 起跑后需等待，不得取首轮；③ 四个判据口径以 `stage-2-rulings-20261127.md` 为准（①`4xx=0` 硬红 + 5xx 逐条登记；②取最近一个「全分页 2xx + 末页 `has_more=0`」完整轮；③须见 `bucket quota ` 行且 `pushed + skipped >= 1` 且 `rows_pushed <= quota_rows`；④`unmapped=0` 且 `bucket_older=0`）；④ 写预算 20,000 落盘属**阶段 3**，需**单独人工授权**（一次生产写：改 Worker env + deploy 换 Version）；⑤ 红线不变：**AC-09 仍 FAIL，不得改记**（只有日志出现 `AC09_VERDICT=PASS` 才可改）、`AC-212` / `AC-215②` 未判定、`AC-213` / `AC-214` 永久退役、规则 1 盲区未修前不得切读。
+
+**口径订正（跨会话确认，已随 `572de94` 入库）。** 启动器旧模板里「Git write operations … are a human checkpoint」一句已删除（`docs/relay/start-relay.ps1:562`）。本仓正确口径以 `docs/plan-relay.md` §1 第 1 条为准：**链内环门禁绿后可自行 commit + push** 到 `kizemo/feat/100-cloud-sync`（裸命令、仓库级代理已是 `socks5h://127.0.0.1:7897`、按路径显式 `git add`、硬判据 = `git ls-remote` 与 `git rev-parse HEAD` 逐字相等）；仍须停链回报的只有：推送失败 / 硬判据不成立、force-push / tag / 删分支 / 改默认分支、生产 D1 / R2 / Cloudflare 数据写入、阶段 6 切读范围。
+
+**本轮工具坑（4 条，新增）。**
+
+1. **bash 工具外壳会把 `cd /f/soft/...` 交给 PowerShell `Set-Location` 解释** ⇒ 报「找不到路径 `F:\f\soft\...`」。一律写 `F:\...` Windows 绝对路径，**不要**用 msys 风格 `/f/...`。
+2. **`pwsh -NoProfile -Command "…$repo…"` 里的 `$` 会被外壳吞掉 / 转义坏**（`ParserError: 必须在"+"运算符后提供值表达式`、`术语 '\.Line' 不会被识别`）⇒ 复杂逻辑一律先落 `.ps1` 再用 `-File` 调；`Select-String | ForEach-Object { $_.Line }` 在双引号内必炸。
+3. **msbuild 判定 up-to-date 时不刷新 exe mtime** ⇒「exe mtime 早于本轮构建时刻」既可能是旧 exe 假绿、也可能是正常增量；必须按上面三交叉判定，不能只看 mtime。
+4. **`reports/**` 被忽略 ⇒ 专用 `grep` 工具可读显式给出的文件路径**（不受忽略规则影响），比在 PowerShell 里拼管道稳。
+
+**证据路径（`reports/**` 不入库）。** `reports\fluxing-br-1g\stage1-confirm-checks.ps1`（只读检查序列）/ `stage1-checks-out.txt`（含全量 porcelain `STATUS_LINES=4105`）/ `stage1-gate-run.ps1`（设相位 0 + renew 锁 + msbuild + gate + 四行提取）/ `stage1-gate-out.txt`（门禁转录全文）。阶段产物正文 = `docs/relay/stage-1-confirm-20261127.md`。
