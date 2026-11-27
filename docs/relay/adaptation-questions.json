@@ -1,0 +1,132 @@
+{
+  "schema": "relay-port/adaptation-questions@1",
+  "generated_at": "2026-11-27T00:04:02.9739183+08:00",
+  "repo": "F:\\soft\\00selfmade\\rime_claude",
+  "questions": [
+    {
+      "id": "write_set_allow",
+      "group": "write_set",
+      "section": 3,
+      "answer_key": "write_set_allow",
+      "type": "list",
+      "prompt": "哪些目录或文件允许被接力链里的 agent 修改？请逐条列全，不要写「看情况」。",
+      "default": [
+        "\".github\\",
+        "\".research\\",
+        "\"Fluxing-\\",
+        "\"Rime-\\",
+        "\"docs\\",
+        "\"rime-skill\\",
+        ".claude\\",
+        ".codebase-memory\\",
+        ".learnings\\",
+        ".loopx\\",
+        ".research\\",
+        ".specify\\",
+        "FluxingConfigEditor\\",
+        "FluxingPhrasesDialog\\",
+        "RimeWithWeasel\\",
+        "WeaselDeployer\\",
+        "WeaselIPC\\",
+        "WeaselIPCServer\\",
+        "WeaselServer\\",
+        "WeaselSetup\\",
+        "WeaselTSF\\",
+        "WeaselUI\\",
+        "arm64x_wrapper\\",
+        "cloud\\",
+        "docs\\",
+        "include\\",
+        "lib\\",
+        "lib64\\",
+        "maintenance\\",
+        "memory\\",
+        "output\\",
+        "reports\\",
+        "resource\\",
+        "rime-skill\\",
+        "scripts\\",
+        "test\\",
+        "thirdparty\\",
+        "tmp-race-diag\\",
+        "tools\\",
+        "update\\"
+      ]
+    },
+    {
+      "id": "write_set_deny",
+      "group": "write_set",
+      "section": 3,
+      "answer_key": "write_set_deny",
+      "type": "list",
+      "prompt": "哪些路径绝对禁止触碰？（发布/部署/签名脚本、CI、密钥、用户数据、门禁阈值）",
+      "default": [
+        ".github\\workflows\\",
+        "**\\.env*",
+        "**\\*.key",
+        "**\\*.pem",
+        "**\\*.pfx",
+        "scripts\\publish-*",
+        "scripts\\release-*",
+        "scripts\\deploy-*",
+        "scripts\\sign-*",
+        "**\\gate*.ps1",
+        "docs\\relay\\*.ps1"
+      ]
+    },
+    {
+      "id": "concurrency_check",
+      "group": "write_set",
+      "section": 3,
+      "answer_key": "concurrency_check",
+      "type": "text",
+      "prompt": "起环前先跑哪条命令来判断有没有别的会话正在跑？看到什么就停？",
+      "default": "pwsh -NoProfile -ExecutionPolicy Bypass -File docs\\relay\\relay-lock.ps1 -Action status"
+    },
+    {
+      "id": "gate_command",
+      "group": "gate",
+      "section": 4,
+      "answer_key": "gate_command",
+      "type": "text",
+      "prompt": "验收门禁跑哪条命令？请给可直接复制执行的完整命令。",
+      "default": "reports\\fluxing-br-1g\\gate-p0-run.ps1"
+    },
+    {
+      "id": "gate_verdict_field",
+      "group": "gate",
+      "section": 4,
+      "answer_key": "gate_verdict_field",
+      "type": "text",
+      "prompt": "判绿看产物文件里的哪个结论字段？例如 `GATE_VERDICT`、`FAIL=0`、`SUMMARY 里的 verdict`。",
+      "default": "none"
+    },
+    {
+      "id": "model_primary",
+      "group": "models",
+      "section": 5,
+      "answer_key": "model_primary",
+      "type": "text",
+      "prompt": "接力链首选哪个模型？（给 `<provider>/<model>` 全名）",
+      "default": "minimax/MiniMax-M3"
+    },
+    {
+      "id": "model_fallback_day",
+      "group": "models",
+      "section": 5,
+      "answer_key": "model_fallback_day",
+      "type": "text",
+      "prompt": "首选模型额度用尽时，日间回退到哪个模型？",
+      "default": "custom_provider:provider-aa5659/auto"
+    },
+    {
+      "id": "model_fallback_night",
+      "group": "models",
+      "section": 5,
+      "answer_key": "model_fallback_night",
+      "type": "text",
+      "prompt": "首选模型额度用尽时，夜间回退到哪个模型？",
+      "default": "custom_provider:provider-aa5659/deepseek-v4.1-flash-1017"
+    }
+  ]
+}

@@ -201,3 +201,10 @@ release/*.ilk
 /qp-logo.bmp
 /qp-state.txt
 /.wrangler/
+
+# relay-port runtime state (not versioned)
+docs/relay.json
+docs/relay/.relay.lock
+docs/relay/.ledger.lock
+docs/relay/next-relay-prompt.txt
+docs/relay/install-dryrun.txt

@@ -704,6 +704,8 @@ next agent (or future you) doesn't have to rediscover the fix.
 
 ---
 
+<!-- BEGIN RELAY-PORT -->
+
 ## 9. Handoff & Relay Prompt (mandatory)
 
 Every **stage task** completion in this repo — any item you tick off in
@@ -751,3 +753,6 @@ Rules:
   than claiming success.
 - Keep `docs/adr/README.md` "See also" links pointing at sections that
   actually exist (e.g. `AGENTS.md#9-handoff--relay-prompt-mandatory`).
+
+<!-- END RELAY-PORT -->
+

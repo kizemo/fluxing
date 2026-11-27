@@ -4409,3 +4409,133 @@ BR-①g 的"稳态零写不成立"判定、以及多轮"pushed=0 skipped=0"都�
 ### AD-4 状态一句话
 
 代码与文档**已在远端**；**切源四段一步未动** —— 客户端仍打 D1、`FLUXING_PG_URL` 未改、`fluxing-sync.service` 未重启，`fluxing_sync` 里仍是 **2026-11-26 23:36 快照**且**继续落后**（D1 仍是唯一现役写入端）。红线不变：桶化 phase 恒 0、阶段 3/4 永不启用、**AC-09 仍 FAIL 不得改记**、切读前三洞（R2 对象体 / 写预算 80k↔20k / 规则 1 盲区）未闭合。
+## AE
+
+> 2026-11-27 · BR-①g 阶段 1「进双写」开工轮：**旧归因作废 + 侧车硬读数 + 阶段 1 常住**。
+> 本轮**零代码改动**（C++ 侧仅复核，未编辑）；**未出包 / 未装机**；生产 D1 仅只读回读。
+
+### AE-1 侧车实测（本轮盘上回读，权威数字）
+
+- 路径：`D:\Program Files\fluxing\user1\fluxing\fluxing-cloud-sync.state`
+- `LEN=12,115,241 B` / `MTIME=2026-11-26 23:51:55` / `TOTAL_LINES=94,283`
+- `phase` = **0**（切换前 = 阶段 0 老端点单跑）
+- `bseq` = **2027**（= 生产 `sync_buckets` `MAX(id)`）
+- `brow` = **1,000 行**（= 生产 `sync_buckets` 行数）
+- `row` = 93,278 行 / `seq` = 71,549
+- 侧车落点真相源 = `CloudAccountDialog.cpp:89-91`（`ResolveFluxingUserDataPath() / L"fluxing-cloud-sync.state"`），`RimeUserDir`(HKCU) = `D:\Program Files\fluxing\user1\fluxing`。
+
+### AE-2 真机日志原文（本轮新取回，逐字）
+
+`reports/fluxing-br-1g/p0-phase12-run.log:4`（phase 1 段）：
+
+```
+2026-11-26 12:38:43.107][cloudsync] bucket phase=1 pushed=0 skipped=0 pulled_buckets=1000 pulled_items=92353
+2026-11-26 12:38:43.107][cloudsync] reconcile scan_complete=0 matched=92353 deferred=1310 divergent=10 pushed=0
+```
+
+`reports/fluxing-br-1g/p0-phase12-run.log:6`（phase 2 段）：
+
+```
+2026-11-26 12:49:12.117][cloudsync] bucket phase=2 pushed=0 skipped=0 pulled_buckets=1000 pulled_items=92353
+```
+
+`reports/fluxing-br-1g/phase1-pushprobe-20261125.log:16`（**真机桶推成功实证**）：
+
+```
+2026-11-25 17:45:55.402][cloudsync] bucket phase=1 pushed=704 skipped=0 pulled_buckets=0 pulled_items=0
+```
+
+### AE-3 代码层定论（本轮复核 `CloudSyncService.cpp` 后坐实）
+
+1. 桶推闸门 = `CloudSyncService.cpp:1652-1655`，三条件**同时**成立：
+   `bucket_mode && (direction ∈ {kPushOnly, kBoth}) && bucket_scan_complete`。
+2. `bucket_scan_complete` 初值 `false`（`:1304`），**唯一赋值点** `:1321`（`bucket_scan_complete = !bucket_more;`），
+   而该赋值只在 `:1305` 的条件分支内 —— `bucket_mode && (direction == kPullOnly || direction == kBoth)`。
+3. ⇒ **`kPullOnly` 轮可以被赋值、但闸门方向条件挡死；`kPushOnly` 轮连赋值都进不去（恒 false，结构性永不推桶）**。
+   唯一能推桶的轮 = **`kBoth` 且 `bucket_more == false`**。
+4. 结合 `CloudSyncEngine.cpp:205-213`「**启动轮固定 `kPullOnly`**」⇒ **进程启动后第一轮永不推桶**，必须等第 2 轮 `kBoth`。
+5. 反推 `2026-11-25 17:45:55 pushed=704`：该轮**必为 `kBoth` 且 `bucket_more=false`**；
+   `pulled_buckets=0` 的自洽解释 = 当时生产 `sync_buckets` 尚为 **0 行**（§P-P.10 记载桶表直至 2026-11-26 才变 1,000 行），
+   拉 0 桶 ⇒ `bucket_more=false` ⇒ 闸门开 ⇒ 首推 704 桶 ⇒ 桶表从 0 变 704 行。
+6. ⇒ **`pushed=0 skipped=0` 在 `kBoth` 稳态轮是「本轮零变化桶」的正常结果**（AC-206 稳态零写设计意图），
+   **不是「闸门常闭」**。`skipped=0` 亦不证明「函数未被调用」（零变化桶不进请求，两计数都停在 0）。
+
+### AE-4 **作废登记**（三处旧归因，后续会话不得再引用）
+
+| 编号 | 作废内容 | 出处 | 订正 |
+| --- | --- | --- | --- |
+| X-1 | 「桶推被『库存扫描完整』闸门挡住 ⇒ 老端点每轮仅拉 1,000 条 ⇒ 需约 41 轮 ⇒ 闸门常闭」 | `reports/fluxing-br-1g/finalize.cjs` / `finalize.mjs`；§P 早期登记 | 桶推闸门用的是 `bucket_scan_complete`（来自**桶端点** `bucket_more`），与老端点 `has_more` / `scan_complete` 无关。`41 轮`口径作废。 |
+| X-2 | 「`reconcile scan_complete=0` ⇒ 规则 1 闸门结构性常闭 ⇒ 桶推被压」 | §P-O / §P-P.10 | `scan_complete` 与 `bucket_scan_complete` 是两个量；2026-11-26 12:38 那行 `scan_complete=0` 与同轮 `pulled_buckets=1000` 并存 ⇒ 桶扫描其实**已完成**，`scan_complete=0` 只反映老端点库存未扫完。 |
+| X-3 | 「`bucket phase=` 行只在具备推送能力的 kBoth 轮打印」 | `reports/fluxing-br-1g/p0-prompt-patch2.ps1` | 该行由 `FormatBucketPhaseLine`（`CloudSyncService.h:664`）**每轮无条件**打印（阶段值来自本轮解析结果，与方向无关）⇒ 启动轮 `kPullOnly` 同样打印。 |
+| X-4 | `p0-phase12.ps1` 的 `Wait-Line 'bucket phase=1' 2100` 可捕获「具备推送能力的轮」 | `reports/fluxing-br-1g/p0-phase12.ps1:130-154` | **探针缺陷**：`phase` 是配置值不是轮次序号，启动轮即命中并退出 ⇒ 必然抓到 `kPullOnly` 轮 ⇒ `pushed=0` 被误读成缺陷。**修正 = 等第 2 个同 phase 行**（本轮 runner 已改）。 |
+
+### AE-5 阶段 1 → 2 四道判据（ADR 0077 `:436-443`）现状
+
+| 判据 | 要求 | 实测 | 结论 |
+| --- | --- | --- | --- |
+| ① | 桶端点请求零 4xx/5xx | 2026-11-25 17:45:55 `pushed=704` 无错误；2026-11-26 12:38/12:49 两轮 `pulled_buckets=1000` 无错误 | 历史轮**已满足**；本轮 runner 再取一次同轮证据 |
+| ② | 桶端点拉取的桶数 = 服务端 `sync_buckets` 行数 | `pulled_buckets=1000` vs 服务端 1,000 | **已达成** |
+| ③ | 侧车 `brow` 行数 = 已推成功桶数 | `brow`=1,000 vs 已推成功 1,000 | **已达成**（本轮 AE-1 实测） |
+| ④ | 两路拉取条目集合逐条 HLC 一致（允许桶端点多，不允许少） | `pulled_items=92353` 与 `reconcile matched=92353` 相等 | **疑似达成**，精确逐条比对口径待定 |
+
+### AE-6 本轮动作（阶段 1 常住，不回滚）
+
+- 设 **User 级** `FLUXING_CLOUD_SYNC_BUCKET_PHASE=1`（非系统级，可一键回滚）。
+- 重启 `WeaselServer.exe`（环境变量只在进程启动时复制进环境块 ⇒ 必须重启才生效）。
+- 等第 2 个 `bucket phase=1` 行（启动轮 `kPullOnly` 不计）⇒ 抓 `bucket phase=` / `reconcile` / `semantic` / `userdict` 全部诊断行。
+- **不自动递增阶段**（ADR 0077 D12 红线）；**不动阶段 3/4**（硬前置 = 规则 1 盲区闭合）。
+- 回滚口径不变：`[Environment]::SetEnvironmentVariable('FLUXING_CLOUD_SYNC_BUCKET_PHASE','0','User')` + 重启一轮。
+
+### AE-7 未闭环（本轮未动）
+
+- **规则 1 盲区仍在**：`CloudSyncService.cpp:2001-2005` `inventory_complete = remote_complete`，而唯一调用点 `:1657-1659` 的第 6 实参恒为 `bucket_scan_complete == true` ⇒ `:2108` 的 `if (!inventory_complete && BucketHasUnprovenEntry(...))` **在当前调用路径下恒不成立** ⇒ 整桶压制是死分支。阶段 1（双写）下老端点仍写 `sync_items`，故损害限于 `sync_buckets`；**阶段 3 起不可逆，仍禁**。
+- `AC-09` **仍 FAIL 未改记**；`AC-212` / `AC-215②` **未判定**；`AC-213` / `AC-214` 永久退役。
+- 写预算盘上 `WRITE_BUDGET_ROWS_PER_DAY=80000` vs §O 拍板 20,000 仍未裁。
+- R2 对象体未迁移（`r2_key` 仅指针）；ECS `5432` 公网监听未收口；`api.jury.xin` 放行未裁定。
+## AF
+
+> 2026-11-27 08:59 · BR-①g 接力链装置（relay-port）安装 + 阶段 1 常驻现状复核 + **新坑：环境块可见性**。
+> 本轮**零产品代码改动**、零出包、零装机；生产 D1 仅只读回读。
+
+### AF-1 接力链装置（relay-port）已装入本仓
+
+- 装入路径：`docs/relay/`（`start-relay.ps1` / `relay-lock.ps1` / `relay-ledger.ps1` / `relay-spawn.ps1` / `AGENT-RELAY.md` / `RELAY-SOP.md` / `ACTIVATION-PROMPT.txt`）+ `docs/RELAY-ADAPTATION.md` + `docs/plan-relay.md`；`AGENTS.md` 收编接力家规（`<!-- BEGIN RELAY-PORT -->` 标记 begin=1 end=1）。
+- 运行时 = **mcode**（下一环用内置 `session_create`，不是 CLI 子进程）；台账 = `docs/relay.json`（**只由启动器创建、只由闸门写，禁止手工编辑**）。
+- 三项裁决已由用户 2026-11-27 确认并回填 `docs/relay/adaptation-answers.json`（`applied=8/8`，`ADAPTATION_STATUS=confirmed`，`placeholders=0`，`WARN_COUNT=0`，`INSTALL_VERDICT=PASS`）：
+  - 门禁 = **先单独 msbuild `test/TestFluxingCloud/TestFluxingCloud.vcxproj`**（显式 `/p:SolutionDir=`）**再跑 `reports/fluxing-br-1g/gate-p0-run.ps1`**；判绿字段 = `PASS=<n>` 且 `FAIL=0` + `UFFFD_COUNT=0` + `CLANGFORMAT_HUNK_DRIFT=0`（**只认落盘输出，不认 `$LASTEXITCODE`**）。
+  - 模型 = `minimax/MiniMax-M3` 首选；日间回退 `custom_provider:provider-aa5659/auto`；夜间回退 `custom_provider:provider-aa5659/deepseek-v4.1-flash-1017`；**不传 `effort`**。
+  - 写集 = 探测默认全量顶层目录；禁集 = 默认项 + `env.bat` / `librime\` / `release\`。
+- 链的阶段 = 6 段，阶段清单与验收判据见 `docs/plan-relay.md` §2。
+
+### AF-2 **新坑（重要）**：User 级环境变量对「旧环境块拉起」的进程不可见
+
+- 现象：2026-11-26 23:59:53 设 User 级 `FLUXING_CLOUD_SYNC_BUCKET_PHASE=1` 并杀掉 `WeaselServer`（pid 118128），TSF 3 秒内拉起新进程（pid 73712）⇒ **该进程读到的仍是 `phase=0`**，随后连 4 轮日志都是 `bucket phase=0`（00:03:42 / 01:06:12 / 02:08:32 / 03:10:40）。
+- 根因：TSF 宿主进程早于变量设置就已运行 ⇒ 它拉起的子进程继承的是**旧环境块** ⇒ 新变量不可见。
+- 闭环：2026-11-27 **08:02:34** 由新登录拉起的进程（pid **41800**）读到 `phase=1` ⇒ **08:11:00** 那行 `bucket phase=1 pushed=0 skipped=0 pulled_buckets=1000 pulled_items=92353` 属实。
+- **铁律（新增）**：切阶段不能只「杀进程重启」，必须保证**新进程拿到新环境块** —— 要么等新登录/新 explorer，要么先在当前进程刷新 `$env:FLUXING_CLOUD_SYNC_BUCKET_PHASE` 再 `Start-Process`。否则「重启了却仍是旧阶段」会被误读成阶段没生效。
+
+### AF-3 上一轮 runner 已死（证据未落盘）
+
+- `reports/fluxing-br-1g/br-1g-phase1-enter.ps1` 的独立进程 pid **36928 已不在**（日志停在 `pid=73712 started=2026-11-26 23:59:53`，全文 1,445 B）⇒ 它的 2,700 秒等待与证据落盘**都没跑完**，`phase1-enter-20261127-evidence.log` **未生成**。
+- 教训：脱离会话的 detached runner 会被环境回收 ⇒ 取证 runner 必须自带落盘判据 + 心跳，或直接在接力链某一环里同步跑完。
+
+### AF-4 阶段 1 当前状态（2026-11-27 08:59 盘上回读）
+
+| 项 | 值 |
+| --- | --- |
+| User 级 `FLUXING_CLOUD_SYNC_BUCKET_PHASE` | **1** |
+| `WeaselServer` | pid **41800**，启动 2026-11-27 **08:02:34**，路径 `D:\Program Files\fluxing\weasel\WeaselServer.exe` |
+| 启动轮（08:11:00） | `bucket phase=1 pushed=0 skipped=0 pulled_buckets=1000 pulled_items=92353` |
+| 同轮 reconcile | `scan_complete=0 matched=92272 deferred=1311 divergent=10 pushed=0` |
+| 轮间隔 | ≈ 62 分钟（00:03 / 01:06 / 02:08 / 03:10 / 08:11 实测） |
+| **下一轮（≈09:13）** | = 该进程第 2 轮 = **`kBoth` = 唯一具备推桶能力的轮** |
+
+- ⇒ **阶段 1（双写）已常驻生效**；但「具备推桶能力的那一轮」的证据仍待取。
+- 判据②③仍成立（`pulled_buckets=1000` = 服务端 `sync_buckets` 1,000 行；侧车 `brow` = 1,000 行）。判据①待 09:13 轮确认无 4xx/5xx；判据④须**逐 key 比对**（`pulled_items=92353` 与 `matched=92272` 计数已不相等 ⇒ **口径存疑，阶段 1 不得据此判绿**）。
+
+### AF-5 未闭环（不变）
+
+- **AC-09 仍 FAIL 未改记**（只有日志出现 `AC09_VERDICT=PASS` 才可改）；`AC-212` / `AC-215②` **未判定**；`AC-213` / `AC-214` 永久退役。
+- **规则 1 盲区仍在**（`WeaselServer/Cloud/CloudSyncService.cpp:2001-2005` + `:2108` 死分支）⇒ **阶段 3/4 仍禁**。
+- 写预算盘上 `WRITE_BUDGET_ROWS_PER_DAY=80000` vs §O 拍板 20,000 未落盘（阶段 3 负责）。
+- R2 对象体未核对/未搬运（阶段 4）；PG 快照落后 D1（阶段 5）；切源 W7 四段 + `api.jury.xin` 放行范围 + ECS `5432` 公网收口 + 库内两条历史探针账号清理（阶段 6）。

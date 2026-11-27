@@ -1,0 +1,62 @@
+RELAY ACTIVATION PACKET (relay activation packet)
+=====================================
+repo        : F:\soft\00selfmade\rime_claude
+runtime     : mcode
+target      : BR-①g 桶化双写后续批次（2026-11-27 起）
+plan doc    : docs\plan-relay.md
+max stages  : 6
+workspace   : F:\soft\00selfmade\rime_claude
+ledger      : F:\soft\00selfmade\rime_claude\docs\relay.json
+launcher    : F:\soft\00selfmade\rime_claude\docs\relay\start-relay.ps1
+lock script : F:\soft\00selfmade\rime_claude\docs\relay\relay-lock.ps1
+spawn driver: F:\soft\00selfmade\rime_claude\docs\relay\relay-spawn.ps1
+prompt file : F:\soft\00selfmade\rime_claude\docs\relay\next-relay-prompt.txt
+
+The user only has to say this in a session whose workspace IS this repo:
+
+    follow docs\relay\ACTIVATION-PROMPT.txt to start the relay chain
+
+The session then executes the steps below.
+
+--- STEP 1: run the launcher (workspace check + concurrency gate + lock + prompt) ---
+
+pwsh -NoProfile -ExecutionPolicy Bypass -File "F:\soft\00selfmade\rime_claude\docs\relay\start-relay.ps1" -Target "BR-①g 桶化双写后续批次（2026-11-27 起）" -PlanDoc "docs\plan-relay.md" -MaxStages 6
+
+Exit code reading:
+  0 = the chain may start, continue with STEP 2
+  2 = invalid workspace, stop and report, DO NOT start a link
+  3 = a chain is already running / a stage is in_progress / the ledger is blocked or exhausted, stop and report, DO NOT start a link
+  4 = the lock is held by another session, stop and report, DO NOT start a link
+
+<!-- SPAWN_RULE_BEGIN -->
+Start the next link with the built-in `session_create` tool: pass only `agent_name` / `title` / `workspace_dir` (backslash absolute path) / `model` / `content`; never pass `effort` / `defer_first_turn` / `parent_session_id`.
+<!-- SPAWN_RULE_END -->
+
+--- STEP 2: start the first link session (runtime = mcode) ---
+
+Read F:\soft\00selfmade\rime_claude\docs\relay\next-relay-prompt.txt in full, then:
+
+mcp_invoke(tool_name="session_create", arguments={
+  agent_name   : "me",
+  title        : "relay-01of<MM>-<short stage name>",
+  workspace_dir: "F:\soft\00selfmade\rime_claude",
+  model        : "<model policy in section 5 of docs\RELAY-ADAPTATION.md>",
+  content      : "<full text of next-relay-prompt.txt>"
+})
+
+Never pass `effort` / `defer_first_turn` / `parent_session_id` (the schema has no such fields).
+`workspace_dir` must be the backslash absolute path above; a forward slash silently lands
+in a private workspace, which means the link never sees the repo.
+
+--- STEP 3: hand the lock over to the new session ---
+
+pwsh -NoProfile -ExecutionPolicy Bypass -File "F:\soft\00selfmade\rime_claude\docs\relay\relay-lock.ps1" -Action adopt -SessionId <new session id>
+
+--- STEP 4: read the session back and verify ---
+
+mavis session get {"session_id":"<new id>"} -- check `workspace_dir` / `effective_model` / `status`.
+
+
+If STEP 1 or STEP 2 fails: run
+pwsh -NoProfile -ExecutionPolicy Bypass -File "F:\soft\00selfmade\rime_claude\docs\relay\relay-lock.ps1" -Action release
+then report honestly. DO NOT retry starting a link.

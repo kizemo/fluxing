@@ -1,0 +1,11 @@
+{
+  "runtime": "mcode",
+  "next_link_mode": "session_tool",
+  "stage_titles": "1. 阶段 1 双写常驻取证收口（kBoth 轮四道判据 + 侧车 + 生产桶表差分 + handoff 回写）\n2. 规则 1 盲区修复（inventory_complete 死分支）+ ADR + 门禁用例\n3. 写预算阈值口径裁定落盘（盘上 80000 对齐拍板值）\n4. R2 对象体核对与搬运（切读硬前置一）\n5. PG 快照重导重灌与一致性核对（切读硬前置二）\n6. 切源 W7 四段落地（双写-校验-切读-退役）与收口交接",
+  "spawn_rule": "Start the next link with the built-in `session_create` tool: pass only `agent_name` / `title` / `workspace_dir` (backslash absolute path) / `model` / `content`; never pass `effort` / `defer_first_turn` / `parent_session_id`.",
+  "spawn_command": "",
+  "rule_files": [
+    "AGENTS.md"
+  ],
+  "installed_at": "2026-11-27T09:00:17.1235290+08:00"
+}
