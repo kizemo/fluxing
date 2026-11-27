@@ -10,7 +10,7 @@
 
 - **git 写操作在本仓不是人类检查点**：通用协议里「git 写操作（commit / push / tag / stash / checkout）是人类检查点」一条**在本仓不适用**。本仓宪法 P4 与本批规约要求**每阶段收尾必须 commit + push**，因此链内环可在**门禁绿**之后自行 commit + push 到 `kizemo/feat/100-cloud-sync`，无需等待人工确认。
 - commit 纪律照旧：Conventional Commits + 模块前缀（`WeaselServer | WeaselTSF | WeaselDeployer | cloud | docs | fluxing | installer | ci`）；**按路径显式 `git add`，禁 `git add .`**；提交前必跑 `git status -sb` + `git diff --stat`；`librime/`、`release/`、`env.bat`、`msbuild*.log`、`reports/**`、`scripts/verify/*.ps1`、`tmp/**` **不入库**。
-- push 硬判据 = `git ls-remote kizemo refs/heads/feat/100-cloud-sync` 与 `git rev-parse HEAD` **逐字相等**；远端操作直连（`-c http.proxy= -c https.proxy=`）。
+- push 硬判据 = `git ls-remote kizemo refs/heads/feat/100-cloud-sync` 与 `git rev-parse HEAD` **逐字相等**；远端通道 = **SOCKS5 代理 `socks5h://127.0.0.1:7897`**（2026-11-27 实测：直连 `Recv failure: Connection was reset` / connect timeout 均为证伪；**HTTP 代理形式 `http://127.0.0.1:7897` 同样不通**，只有 SOCKS5 形式 200）⇒ 仓库级 `http.proxy`/`https.proxy` 已设为 socks5h ⇒ **裸 `git push` / `git ls-remote` 即可**，**不要**再带 `-c http.proxy= -c https.proxy=`。
 - **仍属人类检查点（必须停链、回写台账 blocked）**：推送失败或硬判据不成立；需要 force-push / 打 tag / 删分支 / 改远端默认分支；需要改生产 D1 / R2 / Cloudflare 的数据；阶段 6 的切读与放行范围；任何超出本文件 §2 写集与 §1 红线的改动。
 - 通用协议其余条款照旧：台账只走闸门（只追加、不改写他人条目）、锁归本环持有并定期 renew、**每环只做一个阶段**、产物落盘、**不伪造验收证据**、缺料时 `blocked_on_append` + `set_status=blocked` + 释放锁。
 
@@ -34,7 +34,7 @@
 7. **不改 / 不入库**：`librime/`、`release/`、`env.bat`、`msbuild*.log`；`reports/**`、`scripts/verify/*.ps1`、`tmp/**` 不入库。
 8. 提交用 Conventional Commits + 模块前缀（`WeaselServer | WeaselTSF | WeaselDeployer | cloud | docs | fluxing | installer | ci`）；**按路径显式 `git add`，禁 `git add .`**。
 9. 提交前必跑 `git status -sb` + `git diff --stat`（挡 `weasel.props` / `env.bat` / `*.obj` 误提交）。
-10. 远端操作直连（`-c http.proxy= -c https.proxy=`），硬判据 = `git ls-remote` 与 `git rev-parse HEAD` **逐字相等**。
+10. 远端走 **SOCKS5 代理 `socks5h://127.0.0.1:7897`**（直连与 HTTP 代理形式均已证伪；仓库级代理已设好 ⇒ 裸命令即可，**不要**带 `-c http.proxy=`），硬判据 = `git ls-remote` 与 `git rev-parse HEAD` **逐字相等**。
 11. **台账数字一律盘上回读**（不抄摘要）；收口条目自带完整背景 / 目标 / 进度 / 计划 / 裁决，指针只作补充且须全路径可解析。
 12. 用户可见字符串保持简体中文（constitution P2/P5）；产出文档与日志中文，装置脚本 ASCII。
 
@@ -92,7 +92,7 @@
 2. **handoff 追加新顶节**（`## AF` / `## AG` …，UTF-8 无 BOM + 全 LF），正文自带完整背景 / 目标 / 进度 / 计划 / 裁决；**不改写既有顶节字节**。
 3. **就地改写接力 prompt** `docs/archive/prompts/prompt-next-session-2026-11-23-batch-br-write-amplification-and-zero-write-register.md`（只给全路径指针，不复述 handoff 内容）。
 4. **台账回写走闸门**：`docs\relay\relay-ledger.ps1 -Action status` 取在盘 sha256 → `-Action commit -ExpectSha256 <sha>`（先 `-DryRun`）。**禁止手工编辑 `docs/relay.json`**。
-5. **commit + push** 到 `kizemo/feat/100-cloud-sync`，硬判据 = `git ls-remote` 与 `git rev-parse HEAD` 逐字相等。
+5. **commit + push** 到 `kizemo/feat/100-cloud-sync`（**裸命令，不要加 `-c http.proxy=`**；仓库级 `http.proxy` = `socks5h://127.0.0.1:7897` 已设好），硬判据 = `git ls-remote` 与 `git rev-parse HEAD` 逐字相等。
 6. **转交下一环**：按 `docs/AGENT-RELAY.md` 的协议在目标项目内 `session_create` 下一环 + `relay-lock.ps1 -Action adopt` 转交锁 + `session get` 回读三要素（`workspace_dir` / `effective_model` / `status`）。
 
 ## 4. 已知工具坑（每环照抄，别重新踩）
@@ -110,3 +110,4 @@
 - **User 级环境变量对「旧环境块拉起」的进程不可见** ⇒ 「改完变量重启进程」≠ 生效；必须新登录，或先在当前进程刷新 `$env:` 再 `Start-Process`。
 - **detached runner 会被环境回收** ⇒ 取证 runner 必须自带落盘判据 + 心跳，不能只靠「后台进程还活着」当证据。
 - 起环 / 跨环交接时，`docs/relay.json` 与 `docs/relay/.relay.lock` 是**运行时状态**，**不入库**；入库的只有装置本体（`docs/relay/*.ps1`、`AGENT-RELAY.md`、`RELAY-SOP.md`、`ACTIVATION-PROMPT.txt`、`install-report.md`）+ `docs/RELAY-ADAPTATION.md` + `docs/plan-relay.md` + `AGENTS.md` 家规块 + `docs/relay/adaptation-answers.json`。
+- **GitHub 推送唯一可用通道 = SOCKS5**：`socks5h://127.0.0.1:7897` —— 2026-11-27 实测：`http://127.0.0.1:7897`（HTTP 形式）curl 返回 **000**；`--socks5-hostname 127.0.0.1:7897` 返回 **200**；直连 `Recv failure: Connection was reset` / `Failed to connect ... after 21070 ms`；`curl --resolve` 边缘 IP 全 000；`curl -6` 000；`api.github.com` 直连 200 而 `github.com` 不通 ⇒ 阻断在 `github.com` 域，非整机网络。**已处置**：仓库级 `http.proxy`/`https.proxy` = socks5h（仅本仓 `.git/config`，未动用户全局；全局那条恰是失效的 HTTP 形式）⇒ 裸 `git push` / `git ls-remote` 可用，**硬判据照旧** = `ls-remote` 与 `rev-parse HEAD` 逐字相等。

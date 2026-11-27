@@ -157,6 +157,6 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File 'reports\fluxing-br-1g\gate-p0-run
 
 - 依据：本仓宪法 P4（Conventional Commits + 模块前缀）与本批规约 —— **每阶段收尾必须 commit + push**；
   链内环在**门禁绿**（`PASS=<n>` 且 `FAIL=0`、`UFFFD_COUNT=0`、`CLANGFORMAT_HUNK_DRIFT=0`）之后可自行 commit + push 到 `kizemo/feat/100-cloud-sync`。
-- 硬判据：`git ls-remote kizemo refs/heads/feat/100-cloud-sync` 与 `git rev-parse HEAD` 逐字相等；远端直连（`-c http.proxy= -c https.proxy=`）。
+- 硬判据：`git ls-remote kizemo refs/heads/feat/100-cloud-sync` 与 `git rev-parse HEAD` 逐字相等；远端走 **SOCKS5 代理 `socks5h://127.0.0.1:7897`**（直连与 HTTP 代理形式均已证伪；仓库级 `http.proxy` 已设好 ⇒ 裸 `git push` 即可，**不要**带 `-c http.proxy=`）。
 - 仍属人类检查点：推送失败或硬判据不成立；force-push / tag / 删分支 / 改远端默认分支；生产 D1 / R2 / Cloudflare 数据写入；阶段 6 切读与放行范围；越出写集或红线的改动。
 - 完整条款见 `docs/plan-relay.md` 的「★ 本项目覆盖」小节；**本节与 §3/§4/§5 同等权威**。
