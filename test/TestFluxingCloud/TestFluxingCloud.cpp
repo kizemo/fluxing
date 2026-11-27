@@ -6326,6 +6326,239 @@ void TestBucketRule1RemoteViewGate() {
 }
 
 // ---------------------------------------------------------------------------
+// ★ 阶段 2 修复轮 · 缺陷 ①-1：桶拉取的**有限重试**（stage-2-rulings §4.4）
+//   · 同一 page 5xx 重试 ≤ 2 次（退避 1 s / 3 s）⇒
+//   后续尝试成功则本轮**不早退**； · 4xx **不重试** ⇒
+//   保持原有「直接早退」行为（诊断行不带 retry 字段）； · 重试用尽 ⇒
+//   早退，且诊断行带 `retry=<n>`（判据①取证口径）。
+// ---------------------------------------------------------------------------
+
+// 诊断行真身 = "[YYYY-MM-DD HH:MM:SS.mmm][tag] <message>\n"
+// （include/FluxingDiagLog.h:104-109：时间戳前置 + tag 前缀 + 纯 LF 收尾）
+// ⇒ 逐字比对**消息正文**前，先剥掉前缀与行尾换行。
+std::string DiagMsgOf(std::string line) {
+  const size_t tag_end = line.find("] ");
+  if (tag_end != std::string::npos)
+    line = line.substr(tag_end + 2);
+  while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+    line.pop_back();
+  return line;
+}
+
+int RetryCountOf(const std::string& hay, const std::string& needle) {
+  if (needle.empty())
+    return 0;
+  int n = 0;
+  for (size_t pos = hay.find(needle); pos != std::string::npos;
+       pos = hay.find(needle, pos + needle.size()))
+    ++n;
+  return n;
+}
+
+// 一轮的**生产可观测输出**（缺陷 ①-1 的验收面）。
+struct BucketRetryRound {
+  bool ok = false;
+  std::string err;
+  fc::CloudBucketRoundStats stats;
+  int bucket_pull_requests = 0;  // 假传输收到的桶拉取请求数（= HTTP 尝试数）
+  int bucket_push_requests = 0;
+};
+
+// 跑一轮 kBoth（灰度阶段由环境变量决定 = 1 双写）。
+//   bucket_pull_replies：桶拉取端点的回应**序列**（按尝试顺序消费）；
+//   序列用尽后假传输返回传输层失败 ⇒ 试图多次重试的实现在这里会露馅。
+BucketRetryRound BucketRetryRunRound(
+    const std::string& bucket_key,
+    const std::vector<fc::Entry>& bucket_entries,
+    const std::vector<uint8_t>& enc_key,
+    const std::vector<MockTransport::Reply>& bucket_pull_replies,
+    const std::string& sidecar_path) {
+  BucketRetryRound out;
+  Rule1Backend backend;
+  backend.snapshot =
+      "# Rime user dictionary\n#@/db_name\tuserdb\n#@/tick\t1\n"
+      "code0\t本地词条\tc=0 d=0 t=1\n";
+
+  MockTransport transport;
+  // ① 逐条拉取（空库存）② 桶拉取（调用方给序列）③ 桶推送成功
+  transport.replies.push_back(MockTransport::Reply{
+      true, 200, Br1cPullBody(std::vector<fc::Entry>(), enc_key, false, 1)});
+  for (size_t i = 0; i < bucket_pull_replies.size(); ++i)
+    transport.replies.push_back(bucket_pull_replies[i]);
+  transport.replies.push_back(
+      MockTransport::Reply{true, 200,
+                           "{\"accepted\":[\"" + bucket_key +
+                               "\"],\"skipped\":[],\"server_seq\":8}"});
+
+  fc::CloudSyncCoordinator coordinator(&transport, &backend, "tok-retry",
+                                       "dev-retry", enc_key, sidecar_path);
+  fc::CloudSyncRoundResult result;
+  std::string err;
+  out.ok = coordinator.SyncOnce(fc::SyncDirection::kBoth, &result, &err);
+  out.err = err;
+  out.stats = coordinator.last_bucket_stats();
+  for (size_t i = 0; i < transport.requests.size(); ++i) {
+    const std::string& path = transport.requests[i].path;
+    if (path.find("/v1/sync/buckets/pull") == 0)
+      ++out.bucket_pull_requests;
+    else if (path.find("/v1/sync/buckets/push") == 0)
+      ++out.bucket_push_requests;
+  }
+  return out;
+}
+
+void TestBucketPullRetry() {
+  std::printf(
+      "[阶段 2 · 缺陷 ①-1] 桶拉取有限重试：5xx 重试 / 4xx 不重试 / 用尽早退\n");
+
+  // ---- 0) 判定函数逐项断言（门禁断言的就是生产真正跑的判定）----
+  Check(fc::kBucketPullMaxRetries == 2, "重试预算：同一 page 额外重试上限 = 2");
+  Check(fc::BucketPullRetryDelayMs(0) == 1000, "退避：第 1 次重试前等 1 s");
+  Check(fc::BucketPullRetryDelayMs(1) == 3000, "退避：第 2 次重试前等 3 s");
+  Check(fc::BucketPullRetryable(0), "传输层失败（http=0）⇒ 可重试");
+  Check(fc::BucketPullRetryable(500) && fc::BucketPullRetryable(503) &&
+            fc::BucketPullRetryable(599),
+        "5xx ⇒ 可重试");
+  Check(!fc::BucketPullRetryable(400) && !fc::BucketPullRetryable(401) &&
+            !fc::BucketPullRetryable(403) && !fc::BucketPullRetryable(404) &&
+            !fc::BucketPullRetryable(429),
+        "4xx ⇒ 不重试（401 的续期重试由 SendJson 内层负责）");
+  Check(!fc::BucketPullRetryable(200), "2xx+解析失败 ⇒ 不重试（确定性错误）");
+  Check(fc::FormatBucketPullDiagLine(9, 503, 0, 0, false) ==
+            "bucket pull page=9 http=503 buckets=0 items=0 has_more=0",
+        "未重试的失败行与旧日志**逐字一致**（没有 retry 字段）");
+  Check(fc::FormatBucketPullDiagLine(9, 503, 0, 0, false, 2) ==
+            "bucket pull page=9 http=503 buckets=0 items=0 has_more=0 retry=2",
+        "重试过的行追加 ` retry=<n>`（前缀解析不破）");
+
+  // 生产夹具：本地条目的**生产桶键**（远端返回的 bucket_key 必须与之一致）。
+  std::string err;
+  const std::vector<uint8_t> key = TestKey();
+  const std::string dict = "userdb";
+  const std::string item_key = dict + "\t本地词条";
+  const std::string payload = "code0\tc=0 d=0 t=1";
+  std::vector<uint8_t> mac_key;
+  Check(fc::DeriveBucketMacKey(key, &mac_key, &err), "夹具：派生桶 MAC 密钥");
+  std::string bucket_key;
+  Check(fc::ComputeBucketKeyForItem(mac_key, dict, item_key, &bucket_key,
+                                    nullptr, nullptr, &err),
+        "夹具：算出本地条目的桶键");
+  std::vector<fc::Entry> bucket_entries;
+  bucket_entries.push_back(Br1cEntry(item_key, payload, kBr1cRemoteMs,
+                                     kBr1cRemoteCounter, kBr1cRemoteDevice));
+  const std::string bucket_body =
+      Rule1BucketPullBody(bucket_key, bucket_entries, 1, key);
+  Check(!bucket_body.empty(), "夹具：桶拉取成功页响应体就绪");
+
+  // 灰度阶段 = 1（双写）⇒ 逐条端点与桶端点同轮都发。
+  const char* old_phase = std::getenv(fc::kBucketPhaseEnvVar);
+  const std::string old_phase_str = old_phase != nullptr ? old_phase : "";
+  _putenv_s(fc::kBucketPhaseEnvVar, "1");
+  ::SetEnvironmentVariableA(fc::kBucketPhaseEnvVar, "1");
+  // 退避压到 0 ms ⇒ 门禁不空等 4 s。生产退避值已在上面的断言里逐项覆盖。
+  fc::SetBucketPullRetryDelayOverrideMsForTest(0);
+
+  Rule1DiagScope diag;
+  Check(diag.active(), "夹具：诊断日志重定向就绪");
+
+  // ---- ① 单次 5xx ⇒ 必须重试成功且**不早退** ----
+  {
+    const std::string sidecar = "retry-a-sidecar.state";
+    std::remove(sidecar.c_str());
+    std::vector<MockTransport::Reply> replies;
+    replies.push_back(MockTransport::Reply{
+        true, 503, "{\"error\":{\"code\":\"internal_error\"}}"});
+    replies.push_back(MockTransport::Reply{true, 200, bucket_body});
+    const BucketRetryRound r =
+        BucketRetryRunRound(bucket_key, bucket_entries, key, replies, sidecar);
+    const std::string text = diag.read();
+    const std::string last = Rule1LastLineWith(text, "bucket pull page=1 ");
+
+    Check(r.ok, "5xx 一次：重试成功 ⇒ 本轮**不早退**（ok = true）");
+    Check(r.bucket_pull_requests == 2,
+          "5xx 一次：桶拉取真的发了 2 次（首次 + 1 次重试）");
+    Check(r.stats.pull_requests == 2,
+          "5xx 一次：pull_requests = 2（按尝试计数）");
+    Check(r.stats.pulled_buckets == 1 && r.stats.pulled_items == 1,
+          "5xx 一次：重试后该页正常解出 1 桶 1 条");
+    Check(r.bucket_push_requests == 1 && r.stats.pushed == 1,
+          "5xx 一次：重试后整轮跑完（桶推送照常发出并被接受）");
+    Check(RetryCountOf(text, "bucket pull page=1 http=503") == 1,
+          "5xx 一次：失败尝试留下一条 http=503 诊断行（判据①取证）");
+    Check(last.find("http=200") != std::string::npos,
+          "5xx 一次：最后一次是成功页（http=200）");
+    Check(last.find("retry=1") != std::string::npos,
+          "5xx 一次：成功页诊断行标注 retry=1");
+    std::remove(sidecar.c_str());
+  }
+
+  // ---- ② 4xx ⇒ 必须**不重试**，保持原有直接早退 ----
+  {
+    const std::string sidecar = "retry-b-sidecar.state";
+    std::remove(sidecar.c_str());
+    std::vector<MockTransport::Reply> replies;
+    replies.push_back(MockTransport::Reply{
+        true, 400, "{\"error\":{\"code\":\"bad_request\"}}"});
+    replies.push_back(MockTransport::Reply{true, 200, bucket_body});
+    const BucketRetryRound r =
+        BucketRetryRunRound(bucket_key, bucket_entries, key, replies, sidecar);
+    const std::string text = diag.read();
+    const std::string last = Rule1LastLineWith(text, "bucket pull page=1 ");
+
+    Check(!r.ok, "4xx：本轮按原口径早退（ok = false）");
+    Check(!r.err.empty(), "4xx：给出非空中文原因");
+    Check(r.bucket_pull_requests == 1,
+          "4xx：**一次都不重试**（桶拉取只发 1 次）");
+    Check(r.stats.pull_requests == 1, "4xx：pull_requests = 1");
+    Check(r.bucket_push_requests == 0, "4xx：早退 ⇒ 本轮没有任何桶推送");
+    Check(DiagMsgOf(last) ==
+              "bucket pull page=1 http=400 buckets=0 items=0 has_more=0",
+          "4xx：失败行正文**不带** retry 字段（消息正文与旧日志逐字一致）");
+    std::remove(sidecar.c_str());
+  }
+
+  // ---- ③ 连续 5xx ⇒ 重试预算用尽后早退，并打印 retry=<n> ----
+  {
+    const std::string sidecar = "retry-c-sidecar.state";
+    std::remove(sidecar.c_str());
+    std::vector<MockTransport::Reply> replies;
+    for (int i = 0; i < 3; ++i)
+      replies.push_back(MockTransport::Reply{
+          true, 503, "{\"error\":{\"code\":\"internal_error\"}}"});
+    // 诊断文件跨 ①②③ 累积 ⇒ 计数用**本段增量**，不认绝对值。
+    const int before_503 =
+        RetryCountOf(diag.read(), "bucket pull page=1 http=503");
+    const BucketRetryRound r =
+        BucketRetryRunRound(bucket_key, bucket_entries, key, replies, sidecar);
+    const std::string text = diag.read();
+    const std::string last = Rule1LastLineWith(text, "bucket pull page=1 ");
+
+    Check(!r.ok, "连续 5xx：重试用尽 ⇒ 早退（ok = false）");
+    Check(r.bucket_pull_requests == 3,
+          "连续 5xx：总尝试次数 = 3（首次 + 2 次重试，不再多试）");
+    Check(r.stats.pull_requests == 3, "连续 5xx：pull_requests = 3");
+    Check(r.bucket_push_requests == 0, "连续 5xx：早退 ⇒ 没有桶推送");
+    Check(RetryCountOf(text, "bucket pull page=1 http=503") - before_503 == 3,
+          "连续 5xx：三次失败尝试各留一条 http=503 诊断行");
+    Check(last.find("retry=2") != std::string::npos,
+          "连续 5xx：早退诊断行带 retry=2（判据①的取证口径）");
+    std::remove(sidecar.c_str());
+  }
+
+  // 还原：退避开关与灰度阶段环境变量（用完即还原 ⇒ 不影响后续用例）。
+  fc::SetBucketPullRetryDelayOverrideMsForTest(-1);
+  if (old_phase != nullptr)
+    _putenv_s(fc::kBucketPhaseEnvVar, old_phase_str.c_str());
+  else
+    _putenv_s(fc::kBucketPhaseEnvVar, "");
+  ::SetEnvironmentVariableA(fc::kBucketPhaseEnvVar, old_phase != nullptr
+                                                        ? old_phase_str.c_str()
+                                                        : nullptr);
+
+  diag.cleanup();
+}
+
+// ---------------------------------------------------------------------------
 // 批次 P0 · ADR 0078：用户词典「假空 / 空快照还原」完整性护栏
 // ---------------------------------------------------------------------------
 //
@@ -6645,6 +6878,8 @@ int main() {
   // BR-①g 规则 1 v2：桶空间「远端视图不完整 ⇒ 整桶不推」（生产决策路径，
   //                好样本 / 坏样本各跑一轮 ⇒ 对生产闸门有鉴别力）。
   TestBucketRule1RemoteViewGate();
+  // 阶段 2 · 缺陷 ①-1：桶拉取同页有限重试（5xx / 传输层失败重试，4xx 不重试）。
+  TestBucketPullRetry();
 
   // 批次 P0 · ADR 0078：用户词典完整性（假空导出 / 空快照还原护栏）。
   TestUserDictIntegrityGuards();

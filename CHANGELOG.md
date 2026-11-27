@@ -1,3 +1,10 @@
+## [1.3.14]
+### fix(WeaselServer): 桶端点拉取加同页有限重试，消除单次 5xx 整轮早退（BR-①g 阶段 2 · 缺陷 ①-1）
+- **缺陷**：`PullBucketsIntoRemote` 翻页循环无重试 —— 桶端点任一分页返回 5xx 即整轮 `kBucketPullFailed` 早退，桶推路径因此长期无法在真机取证（2026-11-27 11:48 轮实测 `page=9 http=503`）。
+- **修复**：同页有限重试（`kBucketPullMaxRetries = 2`，退避 1000 ms / 3000 ms）；可重试 = 传输层失败（`http=0`）或 5xx，4xx 与「2xx + 解析失败」**不重试**（既有语义不变）。每次重试前复位页内状态，`pull_requests` 改按 **HTTP 尝试**计数。
+- **诊断**：`bucket pull page=.. http=.. ...` 行仅在**真发生重试**时追加 ` retry=<n>` 字段；未重试的行与旧格式逐字相同，既有探针前缀解析不受影响。
+- **门禁**：`TestFluxingCloud` **PASS=1047 FAIL=0**（基线 1014，+33）+ 改动文件 U+FFFD=0 + 改动 hunk clang-format 零漂移。
+- **未闭环**：`AC-09` 仍 **FAIL**（未出现 `AC09_VERDICT=PASS`）；`AC-212` / `AC-215` 判据② 未判定；桶阶段 3（切读）/ 4（退役）仍禁。
 ## [1.3.13]
 ### feat(WeaselServer): 云同步「规则 1 v2」改用桶空间库存证据 + 桶端点 HTTP 状态诊断行（BR-①g 阶段 1 · ADR 0081 Draft）
 - **规则 1 v2**：桶推闸门不再只看「拉到底了」，改为按**桶空间库存证据**（每桶 `incomplete_buckets`）判定；远端桶读不出来的键计入未证实集合，整桶压制推送，避免半库存桶被回推后服务端静默删条目。

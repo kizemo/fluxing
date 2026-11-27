@@ -1881,7 +1881,16 @@ std::string BucketFingerprintBase(const std::string& stored) {
   return stored;
 }
 
+// ★ 阶段 2 修复轮（缺陷 ①-1）：门禁用例的退避压缩开关。
+//   -1 = 用生产退避（BucketPullRetryDelayMs）；>= 0 = 固定等待该毫秒数。
+//   只改「等多久」，不改「重不重试 / 什么状态码重试」。
+int g_bucket_pull_retry_delay_override_ms = -1;
+
 }  // namespace
+
+void SetBucketPullRetryDelayOverrideMsForTest(int delay_ms) {
+  g_bucket_pull_retry_delay_override_ms = delay_ms;
+}
 
 bool CloudSyncCoordinator::PullBucketsIntoRemote(
     size_t dict_count,
@@ -1916,15 +1925,54 @@ bool CloudSyncCoordinator::PullBucketsIntoRemote(
     std::string next_cursor;
     std::string pull_err;
     ++pages;
-    ++stats->pull_requests;
     // ★ F3（relay-02of06）：桶端点的 HTTP 状态此前**不可观测** ⇒ 503 / 401
     //   这类失败无法从诊断日志区分。失败页也打状态行（传输层失败 ⇒ http=0）。
+    //
+    // ★ 阶段 2 修复轮（缺陷 ①-1 · §4.4）：同一 page 的**有限重试**。
+    //   旧行为 = 一次失败就 `return false` ⇒ 单次 5xx 让整轮作废。
+    //   新行为 = 5xx / 传输层失败在同 page 重试 ≤ kBucketPullMaxRetries 次
+    //   （退避 1 s / 3 s）；4xx 与
+    //   2xx+解析失败**不重试**（BucketPullRetryable）。 重试一律沿用**同一**
+    //   since / cursor（游标不推进，避免跳页丢桶）。 重试用尽 ⇒ 仍走既有
+    //   kBucketPullFailed 早退，诊断行带累计 `retry=<n>`。
     int page_http_status = 0;
-    if (!service.PullBuckets(since, kBucketPullPageLimit, cursor, &page,
-                             &next_seq, &pull_err, &page_more, &next_cursor,
-                             &page_http_status)) {
+    int page_retries = 0;
+    bool page_ok = false;
+    for (;;) {
+      // 每次尝试前复位 ⇒ 失败尝试的残留输出不会污染重试结果。
+      page.clear();
+      page_more = false;
+      next_seq = since;
+      next_cursor.clear();
+      pull_err.clear();
+      page_http_status = 0;
+      ++stats->pull_requests;  // 判据①按**HTTP 尝试**取证，不按页取证
+      page_ok = service.PullBuckets(since, kBucketPullPageLimit, cursor, &page,
+                                    &next_seq, &pull_err, &page_more,
+                                    &next_cursor, &page_http_status);
+      if (page_ok)
+        break;
+      if (page_retries >= kBucketPullMaxRetries)
+        break;  // 重试预算用尽
+      if (!BucketPullRetryable(page_http_status))
+        break;  // 4xx / 2xx+解析失败 ⇒ 不重试（保持原有直接早退）
+      // 记一次失败尝试（http 状态逐条留证），再退避重试同页。
+      diag::AppendLine("cloudsync",
+                       FormatBucketPullDiagLine(pages, page_http_status, 0, 0,
+                                                false, page_retries));
+      const int delay_ms = g_bucket_pull_retry_delay_override_ms >= 0
+                               ? g_bucket_pull_retry_delay_override_ms
+                               : BucketPullRetryDelayMs(page_retries);
+      ++page_retries;
+      if (delay_ms > 0)
+        ::Sleep(static_cast<DWORD>(delay_ms));
+    }
+    if (!page_ok) {
+      // 只有**真发生过重试**才追加 `
+      // retry=<n>`（未重试的失败行与旧日志逐字一致）。
       diag::AppendLine("cloudsync", FormatBucketPullDiagLine(
-                                        pages, page_http_status, 0, 0, false));
+                                        pages, page_http_status, 0, 0, false,
+                                        page_retries > 0 ? page_retries : -1));
       if (err)
         *err = pull_err.empty() ? "拉取云端桶失败。" : pull_err;
       return false;
@@ -2006,10 +2054,12 @@ bool CloudSyncCoordinator::PullBucketsIntoRemote(
                              entries.end());
     }
     // ★ F3：本页成功 ⇒ 打一条含 HTTP 状态的桶拉取诊断行（无条件打印）。
-    diag::AppendLine("cloudsync",
-                     FormatBucketPullDiagLine(pages, page_http_status,
-                                              static_cast<int>(page.size()),
-                                              page_items, page_more));
+    //   重试过的页追加 ` retry=<n>`（未重试的页与旧日志逐字一致）。
+    diag::AppendLine(
+        "cloudsync",
+        FormatBucketPullDiagLine(
+            pages, page_http_status, static_cast<int>(page.size()), page_items,
+            page_more, page_retries > 0 ? page_retries : -1));
     more = page_more;
     if (next_seq > since)
       since = next_seq;

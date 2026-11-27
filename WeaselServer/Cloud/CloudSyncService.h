@@ -677,17 +677,70 @@ inline std::string FormatBucketDiagLine(const CloudBucketRoundStats& s) {
 //   与既有 `bucket phase=` / `bucket quota ` 行并存 ⇒ 前缀不冲突
 //   （AC-09 探针 v4 的 `bucket phase=` 前缀正则不破）。
 //   传输层失败 ⇒ http=0（与 PushBuckets 的既有口径逐字一致）。
+//   ★ 阶段 2 修复轮（缺陷 ①-1）：新增**可选**第六字段 ` retry=<n>`。
+//     `retry < 0`（缺省）⇒ 第五字段之后**就此收尾** ⇒ 与旧日志逐字一致，
+//     既有探针 / 单测的五行解析不破；只有**发生过重试**的页才追加该字段。
 inline std::string FormatBucketPullDiagLine(int page,
                                             int http_status,
                                             int buckets,
                                             int items,
-                                            bool has_more) {
-  return "bucket pull page=" + std::to_string(page) +
-         " http=" + std::to_string(http_status) +
-         " buckets=" + std::to_string(buckets) +
-         " items=" + std::to_string(items) +
-         " has_more=" + (has_more ? "1" : "0");
+                                            bool has_more,
+                                            int retry = -1) {
+  std::string line = "bucket pull page=" + std::to_string(page) +
+                     " http=" + std::to_string(http_status) +
+                     " buckets=" + std::to_string(buckets) +
+                     " items=" + std::to_string(items) +
+                     " has_more=" + (has_more ? "1" : "0");
+  if (retry >= 0)
+    line += " retry=" + std::to_string(retry);
+  return line;
 }
+
+// ============================================================================
+// ★ 阶段 2 修复轮（缺陷 ①-1 · stage-2-rulings-20261127.md §4.4）
+//
+//   缺陷：`PullBucketsIntoRemote` 的翻页循环里，`PullBuckets` 一失败就
+//   `return false` ⇒ **单次 5xx 即整轮早退**（2026-11-27 真机
+//   `bucket pull page=9 http=503` ⇒ 整轮作废、判据②③④全部取不到证据）。
+//
+//   裁定口径（逐字）：
+//   · 同一 page 5xx 重试 **≤ 2 次**，退避 **1 s / 3 s**；
+//   · 仍失败 ⇒ 早退，并打印带 `retry=<n>` 的 `bucket pull ...` 诊断行；
+//   · **4xx 不重试**（保持原有「直接早退」行为）——鉴权 / 参数错误重试只会
+//     放大故障；401 的续期重试由 `SendJson` 内部路径负责，不在此层。
+//
+//   判定放在**生产头**里（与 FormatBucketDiagLine / BucketPullMaxPages 同
+//   一手法）⇒ 门禁用例断言的就是生产真正跑的那段判定。
+// ============================================================================
+
+// 同一 page 的**额外**重试上限（总尝试次数 = 1 + 本值 = 3）。
+constexpr int kBucketPullMaxRetries = 2;
+
+// 本页失败是否值得重试。
+//   · http = 0  ⇒ 传输层失败（连不上 / 超时 / 连接被重置）⇒ 可重试；
+//   · 5xx       ⇒ 服务端瞬时故障 ⇒ 可重试；
+//   · 4xx       ⇒ 请求本身有问题 ⇒ **不重试**；
+//   · 2xx+解析失败 ⇒ 响应体确定性地不合规 ⇒ 重试无意义 ⇒ 不重试。
+inline bool BucketPullRetryable(int http_status) {
+  if (http_status == 0)
+    return true;
+  return http_status >= 500 && http_status <= 599;
+}
+
+// 第 retry_index 次重试（从 0 起）之前的退避毫秒数：1 s / 3 s。
+inline int BucketPullRetryDelayMs(int retry_index) {
+  static const int kDelays[kBucketPullMaxRetries] = {1000, 3000};
+  if (retry_index < 0)
+    return kDelays[0];
+  if (retry_index >= kBucketPullMaxRetries)
+    return kDelays[kBucketPullMaxRetries - 1];
+  return kDelays[retry_index];
+}
+
+// ★ 门禁用例专用：把退避压到固定毫秒（`delay_ms < 0` ⇒ 恢复生产退避）。
+//   只影响**等待时长**，不影响「重试几次 / 什么状态码才重试」的判定 ——
+//   后者由 BucketPullRetryable / kBucketPullMaxRetries 决定，用例逐项断言。
+void SetBucketPullRetryDelayOverrideMsForTest(int delay_ms);
 
 inline std::string FormatBucketPushDiagLine(int page,
                                             int http_status,
